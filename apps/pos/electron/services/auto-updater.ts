@@ -130,17 +130,32 @@ export async function initAutoUpdater(): Promise<void> {
         diagLog('electron-updater import failed', err);
         return null;
       },
-    )) as null | {
-      autoUpdater: AutoUpdaterLike;
-    };
+    )) as null | Record<string, unknown>;
     diag.modLoaded = mod !== null;
     if (!mod) {
       log.warn('Auto-updater: electron-updater not installed; skipping');
       diagLog('mod was null — bailing');
       return;
     }
-    diagLog('electron-updater loaded ok');
-    const updater = mod.autoUpdater;
+    diagLog('electron-updater loaded ok', { keys: Object.keys(mod) });
+    // electron-updater is CJS. When imported via Node ESM dynamic import, the
+    // real exports land under `.default`. Try both so the code works regardless
+    // of how the bundler/runtime resolves the interop.
+    const candidate =
+      (mod['autoUpdater'] as AutoUpdaterLike | undefined) ??
+      ((mod['default'] as Record<string, unknown> | undefined)?.['autoUpdater'] as
+        | AutoUpdaterLike
+        | undefined);
+    if (!candidate) {
+      const err = new Error(
+        `electron-updater exported no autoUpdater (keys: ${Object.keys(mod).join(',')})`,
+      );
+      diag.lastError = toErrorRecord(err);
+      diagLog('autoUpdater missing on export', err);
+      log.warn('Auto-updater: autoUpdater export not found');
+      return;
+    }
+    const updater = candidate;
     updaterRef = updater;
 
     updater.logger = log;
@@ -284,9 +299,18 @@ export async function quitAndInstallUpdate(): Promise<void> {
   try {
     const mod = (await import(/* webpackIgnore: true */ 'electron-updater' as string).catch(
       () => null,
-    )) as null | { autoUpdater: AutoUpdaterLike };
+    )) as null | Record<string, unknown>;
     if (!mod) return;
-    mod.autoUpdater.quitAndInstall();
+    const updater =
+      (mod['autoUpdater'] as AutoUpdaterLike | undefined) ??
+      ((mod['default'] as Record<string, unknown> | undefined)?.['autoUpdater'] as
+        | AutoUpdaterLike
+        | undefined);
+    if (!updater) {
+      log.warn('Auto-updater: autoUpdater missing on install');
+      return;
+    }
+    updater.quitAndInstall();
   } catch (e) {
     log.warn('Auto-updater: install failed', e);
   }
