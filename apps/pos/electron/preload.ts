@@ -178,6 +178,23 @@ contextBridge.exposeInMainWorld('fbrEvents', {
   },
 });
 
+// Subscribe to auto-updater broadcasts so the UpdateBanner can react.
+contextBridge.exposeInMainWorld('updaterEvents', {
+  onAvailable: (cb: (payload: { version: string | null }) => void) => {
+    const listener = (_e: unknown, payload: { version: string | null }) => cb(payload);
+    ipcRenderer.on('updater:available', listener);
+    return () => ipcRenderer.removeListener('updater:available', listener);
+  },
+  onReady: (cb: (payload: { version: string | null }) => void) => {
+    const listener = (_e: unknown, payload: { version: string | null }) => cb(payload);
+    ipcRenderer.on('updater:ready', listener);
+    return () => ipcRenderer.removeListener('updater:ready', listener);
+  },
+  installNow: () => {
+    ipcRenderer.send('updater:install-now');
+  },
+});
+
 contextBridge.exposeInMainWorld('syncEvents', {
   onStatusChanged: (cb: () => void) => {
     const listener = () => cb();

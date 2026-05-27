@@ -2,6 +2,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
+import { UpdateBanner } from './UpdateBanner';
 import { useSessionStore } from '../../stores/sessionStore';
 import { onPrinterFailed } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -39,6 +40,7 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      <UpdateBanner />
     </div>
   );
 }

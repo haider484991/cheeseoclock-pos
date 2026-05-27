@@ -83,4 +83,9 @@ nsis:
 # `electron-updater` (loaded dynamically in the app) will then check this
 # provider every 4 hours.
 # -----------------------------------------------------------------------------
-publish: null
+publish:
+  provider: github
+  owner: haider484991
+  repo: cheeseoclock-pos
+  releaseType: release
+

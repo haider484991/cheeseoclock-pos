@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron/main';
+import { app, BrowserWindow, ipcMain } from 'electron/main';
 import log from 'electron-log/main';
 
 /**
@@ -18,6 +18,12 @@ import log from 'electron-log/main';
  *     no publish url).
  */
 export async function initAutoUpdater(): Promise<void> {
+  // One-way IPC: renderer clicks "Restart now" on the UpdateBanner → quit + apply.
+  ipcMain.removeAllListeners('updater:install-now');
+  ipcMain.on('updater:install-now', () => {
+    void quitAndInstallUpdate();
+  });
+
   if (!app.isPackaged) {
     log.info('Auto-updater: dev mode — skipping');
     return;
