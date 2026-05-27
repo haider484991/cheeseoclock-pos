@@ -24,16 +24,34 @@ export function UpdateBanner() {
       updaterEvents?: {
         onAvailable: (cb: (p: { version: string | null }) => void) => () => void;
         onReady: (cb: (p: { version: string | null }) => void) => () => void;
+        getState?: () => Promise<State>;
       };
     };
     const ev = w.updaterEvents;
     if (!ev) return;
+
+    // Pull the current state once on mount in case the broadcast fired before
+    // this component (or the renderer) was alive. Live events still drive
+    // updates after that.
+    let cancelled = false;
+    if (ev.getState) {
+      void ev.getState()
+        .then((s) => {
+          if (cancelled) return;
+          if (s.kind !== 'idle') setState(s);
+        })
+        .catch(() => {
+          // Older preload without getState — ignore, live events still work.
+        });
+    }
+
     const offA = ev.onAvailable((p) => setState({ kind: 'downloading', version: p.version }));
     const offR = ev.onReady((p) => {
       setState({ kind: 'ready', version: p.version });
       setDismissed(false);
     });
     return () => {
+      cancelled = true;
       offA();
       offR();
     };

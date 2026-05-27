@@ -17,12 +17,27 @@ import log from 'electron-log/main';
  *   - In dev mode we skip the whole check (updater would no-op anyway with
  *     no publish url).
  */
+
+type UpdaterState =
+  | { kind: 'idle' }
+  | { kind: 'downloading'; version: string | null }
+  | { kind: 'ready'; version: string | null };
+
+// Cached so a late-mounting renderer (or a renderer reload) can query the
+// current state via `updater:getState` instead of relying solely on the
+// broadcast it may have missed.
+let currentState: UpdaterState = { kind: 'idle' };
+
 export async function initAutoUpdater(): Promise<void> {
   // One-way IPC: renderer clicks "Restart now" on the UpdateBanner → quit + apply.
   ipcMain.removeAllListeners('updater:install-now');
   ipcMain.on('updater:install-now', () => {
     void quitAndInstallUpdate();
   });
+
+  // Pull-based query so the renderer can fetch state on mount.
+  ipcMain.removeHandler('updater:getState');
+  ipcMain.handle('updater:getState', () => currentState);
 
   if (!app.isPackaged) {
     log.info('Auto-updater: dev mode — skipping');
@@ -47,11 +62,13 @@ export async function initAutoUpdater(): Promise<void> {
     updater.on('update-available', (...args: unknown[]) => {
       const info = (args[0] ?? {}) as { version?: string };
       log.info('Auto-updater: update available', { version: info.version });
+      currentState = { kind: 'downloading', version: info.version ?? null };
       broadcast('updater:available', { version: info.version ?? null });
     });
     updater.on('update-downloaded', (...args: unknown[]) => {
       const info = (args[0] ?? {}) as { version?: string };
       log.info('Auto-updater: update downloaded', { version: info.version });
+      currentState = { kind: 'ready', version: info.version ?? null };
       broadcast('updater:ready', { version: info.version ?? null });
     });
     updater.on('error', (...args: unknown[]) => {

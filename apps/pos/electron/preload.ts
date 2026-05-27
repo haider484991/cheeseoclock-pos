@@ -190,6 +190,15 @@ contextBridge.exposeInMainWorld('updaterEvents', {
     ipcRenderer.on('updater:ready', listener);
     return () => ipcRenderer.removeListener('updater:ready', listener);
   },
+  // Pull the cached state on mount so a renderer that mounted *after* the
+  // broadcast still shows the banner (e.g. user was still on onboarding when
+  // the download finished).
+  getState: () =>
+    ipcRenderer.invoke('updater:getState') as Promise<
+      | { kind: 'idle' }
+      | { kind: 'downloading'; version: string | null }
+      | { kind: 'ready'; version: string | null }
+    >,
   installNow: () => {
     ipcRenderer.send('updater:install-now');
   },

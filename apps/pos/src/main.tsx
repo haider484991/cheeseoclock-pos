@@ -6,6 +6,7 @@ import { router } from './router';
 import { ToastProvider } from './components/toast/ToastProvider';
 import { ipc } from './ipc/client';
 import { OnboardingPage } from './features/onboarding/OnboardingPage';
+import { UpdateBanner } from './features/shell/UpdateBanner';
 import './styles/globals.css';
 
 // Renderer-side Sentry — captures React errors + unhandled rejections in the
@@ -53,17 +54,24 @@ function RootGate() {
     );
   }
 
-  if (!setupQ.data?.completed) {
-    return (
-      <OnboardingPage
-        onComplete={() => {
-          void qc.invalidateQueries({ queryKey: ['system', 'setupStatus'] });
-        }}
-      />
-    );
-  }
-
-  return <RouterProvider router={router} />;
+  // UpdateBanner is rendered at the root (not inside AppShell) so it surfaces
+  // on every screen — login, onboarding, and the authenticated app alike.
+  // The banner queries the cached state on mount, so it shows up even if the
+  // updater fired its broadcast before the renderer mounted.
+  return (
+    <>
+      {!setupQ.data?.completed ? (
+        <OnboardingPage
+          onComplete={() => {
+            void qc.invalidateQueries({ queryKey: ['system', 'setupStatus'] });
+          }}
+        />
+      ) : (
+        <RouterProvider router={router} />
+      )}
+      <UpdateBanner />
+    </>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
