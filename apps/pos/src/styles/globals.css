@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    /* Layered radial gradients give the canvas warmth + depth without distracting from the content. */
+    background-color: #fafaf9;
+    background-image:
+      radial-gradient(at 0% 0%, rgba(251, 191, 36, 0.08) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, rgba(244, 114, 182, 0.05) 0px, transparent 50%),
+      radial-gradient(at 50% 100%, rgba(59, 130, 246, 0.04) 0px, transparent 50%);
+    /* Disable user-select by default — POS app, not a doc reader.
+       Re-enable on .selectable for receipt previews, notes, etc. */
+    user-select: none;
+    -webkit-user-select: none;
+    overflow: hidden;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html.dark body {
+    background-color: #0a0908;
+    background-image:
+      radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.07) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(244, 114, 182, 0.04) 0px, transparent 50%);
+  }
+
+  .selectable, input, textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Native scrollbars styled to match the app palette. */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(168 162 158 / 0.35);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(120 113 108 / 0.55); background-clip: padding-box; }
+  html.dark ::-webkit-scrollbar-thumb { background: rgb(87 83 78 / 0.5); background-clip: padding-box; }
+  html.dark ::-webkit-scrollbar-thumb:hover { background: rgb(120 113 108 / 0.7); background-clip: padding-box; }
+
+  /* Tighter focus ring style across all interactives. */
+  *:focus-visible {
+    outline: 2px solid rgb(245 158 11 / 0.6);
+    outline-offset: 2px;
+    border-radius: inherit;
+  }
+}
+
+@layer utilities {
+  /* Reusable glass card surface — subtle gradient + ring. */
+  .glass-surface {
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.9));
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  html.dark .glass-surface {
+    background-image: linear-gradient(180deg, rgba(28, 25, 23, 0.7), rgba(28, 25, 23, 0.9));
+  }
+}

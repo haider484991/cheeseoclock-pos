@@ -1,0 +1,1024 @@
+import { v7 as uuidv7 } from 'uuid';
+import log from 'electron-log/main';
+import type { AppDatabase } from '../connection.js';
+import { writeWithSync, nowIso, type Actor } from './base.js';
+import { enqueueSync } from './sync-repo.js';
+import { writeAudit } from './audit-repo.js';
+import { computeTax } from '@cheeseoclock/pos-domain';
+import {
+  computeDiscountCents,
+  validateOrderForTender,
+  validateVoid,
+  validateDiscountInput,
+  requiresManagerApproval,
+} from '@cheeseoclock/pos-domain';
+import type {
+  Order,
+  OrderItem,
+  OrderItemModifier,
+  OrderMode,
+  OrderStatus,
+  Payment,
+  PaymentMethod,
+  OrderSnapshot,
+  PrepStation,
+} from '@cheeseoclock/shared-types';
+
+interface OrderRow {
+  id: string;
+  order_number: string;
+  mode: OrderMode;
+  status: OrderStatus;
+  table_id: string | null;
+  customer_id: string | null;
+  cashier_id: string;
+  shift_id: string | null;
+  source: 'pos' | 'web';
+  notes: string | null;
+  subtotal_cents: number;
+  discount_cents: number;
+  tax_cents: number;
+  total_cents: number;
+  paid_at: string | null;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
+  customer_name_snapshot: string | null;
+  customer_phone_snapshot: string | null;
+  delivery_address_snapshot: string | null;
+  delivery_notes: string | null;
+  created_at: string;
+  updated_at: string;
+  device_id: string;
+  version: number;
+}
+
+function rowToOrder(row: OrderRow): Order {
+  return {
+    id: row.id as Order['id'],
+    orderNumber: row.order_number as Order['orderNumber'],
+    mode: row.mode,
+    status: row.status,
+    tableId: (row.table_id ?? null) as Order['tableId'],
+    customerId: (row.customer_id ?? null) as Order['customerId'],
+    cashierId: row.cashier_id as Order['cashierId'],
+    shiftId: (row.shift_id ?? '') as Order['shiftId'],
+    source: row.source,
+    notes: row.notes,
+    subtotalCents: row.subtotal_cents as Order['subtotalCents'],
+    discountCents: row.discount_cents as Order['discountCents'],
+    taxCents: row.tax_cents as Order['taxCents'],
+    totalCents: row.total_cents as Order['totalCents'],
+    createdAt: row.created_at,
+    paidAt: row.paid_at,
+    voidedAt: row.voided_at,
+    voidedBy: row.voided_by as Order['voidedBy'],
+    voidReason: row.void_reason,
+  };
+}
+
+const ORDER_SELECT = `
+  id, order_number, mode, status, table_id, customer_id, cashier_id, shift_id, source, notes,
+  subtotal_cents, discount_cents, tax_cents, total_cents, paid_at, voided_at, voided_by, void_reason,
+  customer_name_snapshot, customer_phone_snapshot, delivery_address_snapshot, delivery_notes,
+  created_at, updated_at, device_id, version
+`;
+
+export function findOrder(db: AppDatabase, id: string): Order | null {
+  const row = db
+    .prepare(`SELECT ${ORDER_SELECT} FROM orders WHERE id = ? AND deleted_at IS NULL`)
+    .get(id) as OrderRow | undefined;
+  return row ? rowToOrder(row) : null;
+}
+
+export function listOrders(
+  db: AppDatabase,
+  opts?: { status?: OrderStatus; sinceIso?: string; limit?: number },
+): Order[] {
+  const conditions: string[] = ['deleted_at IS NULL'];
+  const params: unknown[] = [];
+  if (opts?.status) {
+    conditions.push('status = ?');
+    params.push(opts.status);
+  }
+  if (opts?.sinceIso) {
+    conditions.push('created_at >= ?');
+    params.push(opts.sinceIso);
+  }
+  const limit = opts?.limit ?? 200;
+  const rows = db
+    .prepare(
+      `SELECT ${ORDER_SELECT} FROM orders WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(...params, limit) as OrderRow[];
+  return rows.map(rowToOrder);
+}
+
+// -----------------------------------------------------------------------------
+// Daily order number — pure-local counter, format YYYYMMDD-NNNN.
+// -----------------------------------------------------------------------------
+
+function nextOrderNumber(db: AppDatabase): string {
+  const today = new Date();
+  const ymd = `${today.getUTCFullYear()}${String(today.getUTCMonth() + 1).padStart(2, '0')}${String(
+    today.getUTCDate(),
+  ).padStart(2, '0')}`;
+  const existing = db
+    .prepare(`SELECT next_value FROM order_number_counter WHERE day_ymd = ?`)
+    .get(ymd) as { next_value: number } | undefined;
+  let next: number;
+  if (!existing) {
+    db.prepare(`INSERT INTO order_number_counter (day_ymd, next_value) VALUES (?, 2)`).run(ymd);
+    next = 1;
+  } else {
+    next = existing.next_value;
+    db.prepare(`UPDATE order_number_counter SET next_value = next_value + 1 WHERE day_ymd = ?`).run(
+      ymd,
+    );
+  }
+  return `${ymd}-${String(next).padStart(4, '0')}`;
+}
+
+// -----------------------------------------------------------------------------
+// Create order
+// -----------------------------------------------------------------------------
+
+export interface CreateOrderInput {
+  mode: OrderMode;
+  tableId?: string | null;
+  customerId?: string | null;
+  notes?: string | null;
+  source?: 'pos' | 'web';
+}
+
+export function createOrder(
+  db: AppDatabase,
+  input: CreateOrderInput,
+  actor: Actor & { userId: string },
+): Order {
+  const id = uuidv7();
+  const now = nowIso();
+
+  let order!: Order;
+  const tx = db.transaction(() => {
+    const orderNumber = nextOrderNumber(db);
+    order = {
+      id: id as Order['id'],
+      orderNumber: orderNumber as Order['orderNumber'],
+      mode: input.mode,
+      status: 'open',
+      tableId: (input.tableId ?? null) as Order['tableId'],
+      customerId: (input.customerId ?? null) as Order['customerId'],
+      cashierId: actor.userId as Order['cashierId'],
+      shiftId: '' as Order['shiftId'], // shift wiring lands in Phase 4
+      source: input.source ?? 'pos',
+      notes: input.notes ?? null,
+      subtotalCents: 0 as Order['subtotalCents'],
+      discountCents: 0 as Order['discountCents'],
+      taxCents: 0 as Order['taxCents'],
+      totalCents: 0 as Order['totalCents'],
+      createdAt: now,
+      paidAt: null,
+      voidedAt: null,
+      voidedBy: null,
+      voidReason: null,
+    };
+
+    db.prepare(
+      `INSERT INTO orders
+         (id, order_number, mode, status, table_id, customer_id, cashier_id, shift_id, source,
+          notes, subtotal_cents, discount_cents, tax_cents, total_cents,
+          created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, 1)`,
+    ).run(
+      id,
+      orderNumber,
+      input.mode,
+      input.tableId ?? null,
+      input.customerId ?? null,
+      actor.userId,
+      null, // shift_id
+      input.source ?? 'pos',
+      input.notes ?? null,
+      now,
+      now,
+      actor.deviceId,
+    );
+
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: id,
+      op: 'upsert',
+      payload: order,
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: id,
+      action: 'create',
+      actorUserId: actor.userId,
+      before: null,
+      after: order,
+    });
+  });
+  tx();
+  log.info('Order created', { id, mode: input.mode });
+  return order;
+}
+
+// -----------------------------------------------------------------------------
+// Add / remove / update items
+// -----------------------------------------------------------------------------
+
+export interface AddItemInput {
+  orderId: string;
+  menuItemId: string;
+  quantity: number;
+  modifierIds: string[];
+  notes?: string | null;
+  /** For combo expansion — the parent combo order_item id. */
+  parentOrderItemId?: string | null;
+  /** Override base price (used by combo expansion). Otherwise menu_item.base_price. */
+  unitPriceOverrideCents?: number;
+}
+
+export function addOrderItem(
+  db: AppDatabase,
+  input: AddItemInput,
+  actor: Actor & { userId: string },
+): OrderItem {
+  let inserted!: OrderItem;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'open') throw new Error(`Cannot add items to ${order.status} order`);
+
+    const itemRow = db
+      .prepare(
+        `SELECT id, name, base_price_cents, prep_station, tax_category_id
+           FROM menu_items WHERE id = ? AND deleted_at IS NULL AND is_active = 1`,
+      )
+      .get(input.menuItemId) as
+      | {
+          id: string;
+          name: string;
+          base_price_cents: number;
+          prep_station: PrepStation;
+          tax_category_id: string;
+        }
+      | undefined;
+    if (!itemRow) throw new Error('Menu item not found or inactive');
+
+    const taxRow = db
+      .prepare(`SELECT rate_bps FROM tax_categories WHERE id = ? AND deleted_at IS NULL`)
+      .get(itemRow.tax_category_id) as { rate_bps: number } | undefined;
+    const rateBps = taxRow?.rate_bps ?? 0;
+
+    const unitPrice = input.unitPriceOverrideCents ?? itemRow.base_price_cents;
+
+    // Load selected modifiers (snapshot name + price_delta at insert time).
+    const modPlaceholders = input.modifierIds.map(() => '?').join(',') || 'NULL';
+    const modRows = input.modifierIds.length
+      ? (db
+          .prepare(
+            `SELECT id, name, price_delta_cents FROM modifiers
+              WHERE id IN (${modPlaceholders}) AND deleted_at IS NULL`,
+          )
+          .all(...input.modifierIds) as Array<{
+          id: string;
+          name: string;
+          price_delta_cents: number;
+        }>)
+      : [];
+
+    const modSum = modRows.reduce((sum, m) => sum + m.price_delta_cents, 0);
+    const lineTotal = (unitPrice + modSum) * input.quantity;
+
+    const now = nowIso();
+    const itemId = uuidv7();
+
+    const newItem: OrderItem = {
+      id: itemId as OrderItem['id'],
+      orderId: input.orderId as OrderItem['orderId'],
+      menuItemId: input.menuItemId as OrderItem['menuItemId'],
+      comboId: null,
+      parentOrderItemId: (input.parentOrderItemId ?? null) as OrderItem['parentOrderItemId'],
+      quantity: input.quantity,
+      unitPriceCents: unitPrice as OrderItem['unitPriceCents'],
+      lineTotalCents: lineTotal as OrderItem['lineTotalCents'],
+      taxCategoryId: itemRow.tax_category_id as OrderItem['taxCategoryId'],
+      notes: input.notes ?? null,
+      kitchenStatus: 'pending',
+    };
+
+    db.prepare(
+      `INSERT INTO order_items
+         (id, order_id, menu_item_id, menu_item_name, combo_id, parent_order_item_id,
+          quantity, unit_price_cents, line_total_cents, tax_category_id, tax_rate_bps_snapshot,
+          prep_station_snapshot, notes, kitchen_status,
+          created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 1)`,
+    ).run(
+      itemId,
+      input.orderId,
+      input.menuItemId,
+      itemRow.name,
+      input.parentOrderItemId ?? null,
+      input.quantity,
+      unitPrice,
+      lineTotal,
+      itemRow.tax_category_id,
+      rateBps,
+      itemRow.prep_station,
+      input.notes ?? null,
+      now,
+      now,
+      actor.deviceId,
+    );
+
+    enqueueSync(db, { entityType: 'order_items', entityId: itemId, op: 'upsert', payload: newItem });
+
+    // Insert modifier snapshots
+    for (const mr of modRows) {
+      const modOrderId = uuidv7();
+      db.prepare(
+        `INSERT INTO order_item_modifiers
+           (id, order_item_id, modifier_id, modifier_name, price_delta_cents,
+            created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(modOrderId, itemId, mr.id, mr.name, mr.price_delta_cents, now, now, actor.deviceId);
+      enqueueSync(db, {
+        entityType: 'order_item_modifiers',
+        entityId: modOrderId,
+        op: 'upsert',
+        payload: {
+          id: modOrderId,
+          orderItemId: itemId,
+          modifierId: mr.id,
+          modifierName: mr.name,
+          priceDeltaCents: mr.price_delta_cents,
+        },
+      });
+    }
+
+    recomputeOrderTotals(db, input.orderId, actor);
+    inserted = newItem;
+  });
+  tx();
+  return inserted;
+}
+
+export function removeOrderItem(
+  db: AppDatabase,
+  orderId: string,
+  orderItemId: string,
+  actor: Actor & { userId: string },
+): void {
+  const tx = db.transaction(() => {
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'open') throw new Error(`Cannot remove items from ${order.status} order`);
+
+    const item = db
+      .prepare(`SELECT * FROM order_items WHERE id = ? AND deleted_at IS NULL`)
+      .get(orderItemId) as { id: string } | undefined;
+    if (!item) throw new Error('Order item not found');
+
+    const now = nowIso();
+
+    // Soft-delete child items (combo children share parent_order_item_id)
+    db.prepare(
+      `UPDATE order_items SET deleted_at = ?, updated_at = ?, version = version + 1
+        WHERE (id = ? OR parent_order_item_id = ?) AND deleted_at IS NULL`,
+    ).run(now, now, orderItemId, orderItemId);
+
+    // Soft-delete modifiers for the removed item
+    db.prepare(
+      `UPDATE order_item_modifiers SET deleted_at = ?, updated_at = ?, version = version + 1
+        WHERE order_item_id IN (SELECT id FROM order_items WHERE id = ? OR parent_order_item_id = ?)
+          AND deleted_at IS NULL`,
+    ).run(now, now, orderItemId, orderItemId);
+
+    enqueueSync(db, {
+      entityType: 'order_items',
+      entityId: orderItemId,
+      op: 'delete',
+      payload: { id: orderItemId, deletedAt: now },
+    });
+    writeAudit(db, {
+      entityType: 'order_items',
+      entityId: orderItemId,
+      action: 'delete',
+      actorUserId: actor.userId,
+      before: { id: orderItemId },
+      after: null,
+    });
+
+    recomputeOrderTotals(db, orderId, actor);
+  });
+  tx();
+}
+
+export function updateOrderItemQuantity(
+  db: AppDatabase,
+  orderId: string,
+  orderItemId: string,
+  quantity: number,
+  actor: Actor & { userId: string },
+): void {
+  if (quantity <= 0) {
+    removeOrderItem(db, orderId, orderItemId, actor);
+    return;
+  }
+  const tx = db.transaction(() => {
+    const row = db
+      .prepare(
+        `SELECT unit_price_cents, quantity FROM order_items WHERE id = ? AND deleted_at IS NULL`,
+      )
+      .get(orderItemId) as { unit_price_cents: number; quantity: number } | undefined;
+    if (!row) throw new Error('Order item not found');
+
+    const modSumRow = db
+      .prepare(
+        `SELECT COALESCE(SUM(price_delta_cents), 0) AS s
+           FROM order_item_modifiers WHERE order_item_id = ? AND deleted_at IS NULL`,
+      )
+      .get(orderItemId) as { s: number };
+
+    const newLineTotal = (row.unit_price_cents + modSumRow.s) * quantity;
+    const now = nowIso();
+
+    db.prepare(
+      `UPDATE order_items SET quantity = ?, line_total_cents = ?, updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(quantity, newLineTotal, now, orderItemId);
+
+    enqueueSync(db, {
+      entityType: 'order_items',
+      entityId: orderItemId,
+      op: 'upsert',
+      payload: { id: orderItemId, quantity, lineTotalCents: newLineTotal },
+    });
+    writeAudit(db, {
+      entityType: 'order_items',
+      entityId: orderItemId,
+      action: 'update',
+      actorUserId: actor.userId,
+      before: { quantity: row.quantity },
+      after: { quantity, lineTotalCents: newLineTotal },
+    });
+
+    recomputeOrderTotals(db, orderId, actor);
+  });
+  tx();
+}
+
+// -----------------------------------------------------------------------------
+// Discounts
+// -----------------------------------------------------------------------------
+
+export interface ApplyDiscountInput {
+  orderId: string;
+  discountType: 'percent' | 'flat';
+  value: number;
+  reason?: string | null;
+  approverUserId?: string | null;
+}
+
+export function applyDiscount(
+  db: AppDatabase,
+  input: ApplyDiscountInput,
+  actor: Actor & { userId: string },
+): void {
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'open') throw new Error(`Cannot discount ${order.status} order`);
+
+    // Validate the discount input shape (percent 0-100, value >= 0).
+    const v = validateDiscountInput({ discountType: input.discountType, value: input.value });
+    if (!v.ok) throw new Error(v.missing.join('; '));
+
+    // Repo-level approval guard — defense in depth even if a future caller
+    // bypasses the IPC handler (which already enforces it via verifyManagerPin).
+    if (
+      requiresManagerApproval({ type: input.discountType, value: input.value }) &&
+      !input.approverUserId
+    ) {
+      throw new Error('Manager approval is required for this discount');
+    }
+
+    const amount = computeDiscountCents(order.subtotalCents, {
+      type: input.discountType,
+      value: input.value,
+    });
+
+    // Remove prior discounts on this order (single-discount model for Phase 2)
+    const now = nowIso();
+    db.prepare(
+      `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1
+        WHERE order_id = ? AND deleted_at IS NULL`,
+    ).run(now, now, input.orderId);
+
+    const discountId = uuidv7();
+    db.prepare(
+      `INSERT INTO order_discounts
+         (id, order_id, discount_type, value, reason, applied_by_user_id, approved_by_user_id,
+          amount_cents, created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    ).run(
+      discountId,
+      input.orderId,
+      input.discountType,
+      input.value,
+      input.reason ?? null,
+      actor.userId,
+      input.approverUserId ?? null,
+      amount,
+      now,
+      now,
+      actor.deviceId,
+    );
+
+    enqueueSync(db, {
+      entityType: 'order_discounts',
+      entityId: discountId,
+      op: 'upsert',
+      payload: { ...input, id: discountId, amountCents: amount },
+    });
+    writeAudit(db, {
+      entityType: 'order_discounts',
+      entityId: discountId,
+      action: 'create',
+      actorUserId: actor.userId,
+      before: null,
+      after: { ...input, amountCents: amount, approverUserId: input.approverUserId },
+    });
+
+    recomputeOrderTotals(db, input.orderId, actor);
+  });
+  tx();
+}
+
+export function clearDiscount(
+  db: AppDatabase,
+  orderId: string,
+  actor: Actor & { userId: string },
+): void {
+  const tx = db.transaction(() => {
+    const now = nowIso();
+    const existing = db
+      .prepare(
+        `SELECT id, discount_type, value, amount_cents
+           FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`,
+      )
+      .all(orderId) as Array<{
+      id: string;
+      discount_type: string;
+      value: number;
+      amount_cents: number;
+    }>;
+    if (existing.length === 0) return; // nothing to clear, no audit noise
+    db.prepare(
+      `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1
+        WHERE order_id = ? AND deleted_at IS NULL`,
+    ).run(now, now, orderId);
+    for (const row of existing) {
+      enqueueSync(db, {
+        entityType: 'order_discounts',
+        entityId: row.id,
+        op: 'delete',
+        payload: { id: row.id, deletedAt: now },
+      });
+    }
+    writeAudit(db, {
+      entityType: 'order_discounts',
+      entityId: orderId,
+      action: 'clear',
+      actorUserId: actor.userId,
+      before: existing,
+      after: null,
+    });
+    recomputeOrderTotals(db, orderId, actor);
+  });
+  tx();
+}
+
+// -----------------------------------------------------------------------------
+// Recompute totals (subtotal, discount, tax, total) — called after every mutation
+// -----------------------------------------------------------------------------
+
+function recomputeOrderTotals(
+  db: AppDatabase,
+  orderId: string,
+  actor: Actor,
+): void {
+  // Subtotal = sum of line_total_cents over non-deleted items
+  const subtotalRow = db
+    .prepare(
+      `SELECT COALESCE(SUM(line_total_cents), 0) AS s
+         FROM order_items WHERE order_id = ? AND deleted_at IS NULL`,
+    )
+    .get(orderId) as { s: number };
+  const subtotal = subtotalRow.s;
+
+  // Discount = single most recent (we enforce one discount per order in Phase 2)
+  const discountRow = db
+    .prepare(
+      `SELECT amount_cents FROM order_discounts
+         WHERE order_id = ? AND deleted_at IS NULL
+         ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(orderId) as { amount_cents: number } | undefined;
+  const discount = Math.min(discountRow?.amount_cents ?? 0, subtotal);
+
+  // Tax = per-line tax on (line_total - prorated discount) * rate
+  // Simple approach: prorate discount across lines by line_total weight,
+  // then apply each line's snapshotted rate to its discounted portion.
+  let tax = 0;
+  const lineRows = db
+    .prepare(
+      `SELECT line_total_cents, tax_rate_bps_snapshot
+         FROM order_items WHERE order_id = ? AND deleted_at IS NULL`,
+    )
+    .all(orderId) as Array<{ line_total_cents: number; tax_rate_bps_snapshot: number }>;
+  if (subtotal > 0) {
+    for (const line of lineRows) {
+      const lineWeight = line.line_total_cents / subtotal;
+      const lineDiscount = Math.round(discount * lineWeight);
+      const lineNet = Math.max(0, line.line_total_cents - lineDiscount);
+      const lineTax = computeTax(lineNet, line.tax_rate_bps_snapshot, 'exclusive').taxCents;
+      tax += lineTax as number;
+    }
+  }
+
+  const total = subtotal - discount + tax;
+  const now = nowIso();
+
+  db.prepare(
+    `UPDATE orders SET
+       subtotal_cents = ?, discount_cents = ?, tax_cents = ?, total_cents = ?,
+       updated_at = ?, version = version + 1
+     WHERE id = ?`,
+  ).run(subtotal, discount, tax, total, now, orderId);
+
+  enqueueSync(db, {
+    entityType: 'orders',
+    entityId: orderId,
+    op: 'upsert',
+    payload: { id: orderId, subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: total },
+  });
+  // Note: no audit_log for total recomputes — they're a side-effect, not a user action
+  void actor; // (reserved for future per-recompute audit if needed)
+}
+
+// -----------------------------------------------------------------------------
+// Tender (finalize)
+// -----------------------------------------------------------------------------
+
+export interface TenderInputItem {
+  method: PaymentMethod;
+  amountCents: number;
+  tenderedCents?: number | null;
+  referenceNo?: string | null;
+}
+
+export function tenderOrder(
+  db: AppDatabase,
+  input: { orderId: string; payments: TenderInputItem[] },
+  actor: Actor & { userId: string },
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'open') throw new Error(`Cannot tender ${order.status} order`);
+
+    // Snapshot the order again to pick up customer/address fields written by attachCustomer.
+    const orderRow = db
+      .prepare(`SELECT ${ORDER_SELECT} FROM orders WHERE id = ? AND deleted_at IS NULL`)
+      .get(input.orderId) as OrderRow | undefined;
+    const itemCount = (
+      db.prepare(
+        `SELECT COUNT(*) AS n FROM order_items WHERE order_id = ? AND deleted_at IS NULL`,
+      ).get(input.orderId) as { n: number }
+    ).n;
+
+    // Defense in depth: world-standard POS rules — checked here in addition to the UI.
+    const validation = validateOrderForTender({
+      mode: order.mode,
+      itemCount,
+      subtotalCents: order.subtotalCents,
+      tableId: order.tableId,
+      customerName: orderRow?.customer_name_snapshot ?? null,
+      customerPhone: orderRow?.customer_phone_snapshot ?? null,
+      deliveryAddress: orderRow?.delivery_address_snapshot ?? null,
+    });
+    if (!validation.ok) {
+      throw new Error(`Cannot tender: ${validation.missing.join('; ')}`);
+    }
+
+    const sum = input.payments.reduce((s, p) => s + p.amountCents, 0);
+    if (sum < order.totalCents) {
+      throw new Error(
+        `Tender (Rs ${sum / 100}) is less than order total (Rs ${order.totalCents / 100})`,
+      );
+    }
+    // Cash legs must satisfy tendered >= leg amount (UI enforces, server confirms).
+    for (const p of input.payments) {
+      if (p.amountCents <= 0) throw new Error('Payment amounts must be positive');
+      if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
+        throw new Error('Cash tendered cannot be less than the cash amount');
+      }
+    }
+
+    const now = nowIso();
+    for (const p of input.payments) {
+      const pid = uuidv7();
+      db.prepare(
+        `INSERT INTO payments
+           (id, order_id, method, amount_cents, tendered_cents, reference_no,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(
+        pid,
+        input.orderId,
+        p.method,
+        p.amountCents,
+        p.tenderedCents ?? null,
+        p.referenceNo ?? null,
+        actor.userId,
+        now,
+        now,
+        now,
+        actor.deviceId,
+      );
+      enqueueSync(db, {
+        entityType: 'payments',
+        entityId: pid,
+        op: 'upsert',
+        payload: { id: pid, orderId: input.orderId, ...p, paidAt: now, receivedByUserId: actor.userId },
+      });
+    }
+
+    db.prepare(
+      `UPDATE orders SET status = 'paid', paid_at = ?, updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(now, now, input.orderId);
+
+    const finalized = { ...order, status: 'paid' as OrderStatus, paidAt: now };
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      op: 'upsert',
+      payload: finalized,
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      action: 'tender',
+      actorUserId: actor.userId,
+      before: order,
+      after: finalized,
+    });
+
+    result = finalized;
+  });
+  tx();
+  log.info('Order tendered', { id: input.orderId, total: result.totalCents });
+  return result;
+}
+
+// -----------------------------------------------------------------------------
+// Void
+// -----------------------------------------------------------------------------
+
+export function voidOrder(
+  db: AppDatabase,
+  input: { orderId: string; reason: string; approverUserId: string },
+  actor: Actor & { userId: string },
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+
+    const v = validateVoid({ status: order.status, reason: input.reason });
+    if (!v.ok) throw new Error(v.missing.join('; '));
+
+    const now = nowIso();
+    db.prepare(
+      `UPDATE orders SET status = 'void', voided_at = ?, voided_by = ?, void_reason = ?,
+                          updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(now, input.approverUserId, input.reason, now, input.orderId);
+
+    const voided = {
+      ...order,
+      status: 'void' as OrderStatus,
+      voidedAt: now,
+      voidedBy: input.approverUserId as Order['voidedBy'],
+      voidReason: input.reason,
+    };
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      op: 'upsert',
+      payload: voided,
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      action: 'void',
+      actorUserId: actor.userId,
+      before: order,
+      after: voided,
+    });
+    result = voided;
+  });
+  tx();
+  return result;
+}
+
+// -----------------------------------------------------------------------------
+// Snapshot (for receipt + reports)
+// -----------------------------------------------------------------------------
+
+export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapshot | null {
+  const orderRow = db
+    .prepare(`SELECT ${ORDER_SELECT} FROM orders WHERE id = ? AND deleted_at IS NULL`)
+    .get(orderId) as OrderRow | undefined;
+  if (!orderRow) return null;
+
+  const order = rowToOrder(orderRow);
+
+  const itemRows = db
+    .prepare(
+      `SELECT oi.id, oi.order_id, oi.menu_item_id, oi.menu_item_name, oi.combo_id,
+              oi.parent_order_item_id, oi.quantity, oi.unit_price_cents, oi.line_total_cents,
+              oi.tax_category_id, oi.tax_rate_bps_snapshot, oi.prep_station_snapshot,
+              oi.notes, oi.kitchen_status, oi.created_at, oi.updated_at, oi.device_id, oi.version,
+              c.name AS category_name
+         FROM order_items oi
+    LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
+    LEFT JOIN categories c ON c.id = mi.category_id
+        WHERE oi.order_id = ? AND oi.deleted_at IS NULL
+        ORDER BY oi.created_at`,
+    )
+    .all(orderId) as Array<{
+    id: string;
+    menu_item_id: string | null;
+    menu_item_name: string;
+    combo_id: string | null;
+    parent_order_item_id: string | null;
+    quantity: number;
+    unit_price_cents: number;
+    line_total_cents: number;
+    tax_category_id: string;
+    prep_station_snapshot: PrepStation;
+    notes: string | null;
+    kitchen_status: OrderItem['kitchenStatus'];
+    category_name: string | null;
+  }>;
+
+  // Fetch modifiers for all items in one query
+  const modRows = itemRows.length
+    ? (db
+        .prepare(
+          `SELECT id, order_item_id, modifier_id, modifier_name, price_delta_cents
+             FROM order_item_modifiers
+            WHERE order_item_id IN (${itemRows.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+        )
+        .all(...itemRows.map((r) => r.id)) as Array<{
+        id: string;
+        order_item_id: string;
+        modifier_id: string | null;
+        modifier_name: string;
+        price_delta_cents: number;
+      }>)
+    : [];
+
+  const modsByItem = new Map<string, OrderItemModifier[]>();
+  for (const m of modRows) {
+    const arr = modsByItem.get(m.order_item_id) ?? [];
+    arr.push({
+      id: m.id as OrderItemModifier['id'],
+      orderItemId: m.order_item_id as OrderItemModifier['orderItemId'],
+      modifierId: (m.modifier_id ?? '') as OrderItemModifier['modifierId'],
+      modifierName: m.modifier_name,
+      priceDeltaCents: m.price_delta_cents as OrderItemModifier['priceDeltaCents'],
+    });
+    modsByItem.set(m.order_item_id, arr);
+  }
+
+  const items: OrderSnapshot['items'] = itemRows.map((r) => ({
+    id: r.id as OrderItem['id'],
+    orderId: orderId as OrderItem['orderId'],
+    menuItemId: r.menu_item_id as OrderItem['menuItemId'],
+    comboId: r.combo_id as OrderItem['comboId'],
+    parentOrderItemId: r.parent_order_item_id as OrderItem['parentOrderItemId'],
+    quantity: r.quantity,
+    unitPriceCents: r.unit_price_cents as OrderItem['unitPriceCents'],
+    lineTotalCents: r.line_total_cents as OrderItem['lineTotalCents'],
+    taxCategoryId: r.tax_category_id as OrderItem['taxCategoryId'],
+    notes: r.notes,
+    kitchenStatus: r.kitchen_status,
+    menuItemName: r.menu_item_name,
+    categoryName: r.category_name ?? '',
+    prepStation: r.prep_station_snapshot,
+    modifiers: modsByItem.get(r.id) ?? [],
+  }));
+
+  const paymentRows = db
+    .prepare(
+      `SELECT id, order_id, method, amount_cents, tendered_cents, reference_no,
+              received_by_user_id, paid_at
+         FROM payments WHERE order_id = ? AND deleted_at IS NULL ORDER BY paid_at`,
+    )
+    .all(orderId) as Array<{
+    id: string;
+    method: PaymentMethod;
+    amount_cents: number;
+    tendered_cents: number | null;
+    reference_no: string | null;
+    received_by_user_id: string;
+    paid_at: string;
+  }>;
+
+  const payments: Payment[] = paymentRows.map((p) => ({
+    id: p.id as Payment['id'],
+    orderId: orderId as Payment['orderId'],
+    method: p.method,
+    amountCents: p.amount_cents as Payment['amountCents'],
+    tenderedCents: p.tendered_cents as Payment['tenderedCents'],
+    referenceNo: p.reference_no,
+    receivedByUserId: p.received_by_user_id as Payment['receivedByUserId'],
+    paidAt: p.paid_at,
+  }));
+
+  const discountRows = db
+    .prepare(
+      `SELECT id, order_id, discount_type, value, reason, applied_by_user_id,
+              approved_by_user_id, amount_cents
+         FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`,
+    )
+    .all(orderId) as Array<{
+    id: string;
+    discount_type: 'percent' | 'flat';
+    value: number;
+    reason: string | null;
+    applied_by_user_id: string;
+    approved_by_user_id: string | null;
+    amount_cents: number;
+  }>;
+
+  const discounts: OrderSnapshot['discounts'] = discountRows.map((d) => ({
+    id: d.id as OrderSnapshot['discounts'][number]['id'],
+    orderId: orderId as OrderSnapshot['discounts'][number]['orderId'],
+    discountType: d.discount_type,
+    value: d.value,
+    reason: d.reason,
+    appliedByUserId: d.applied_by_user_id as OrderSnapshot['discounts'][number]['appliedByUserId'],
+    approvedByUserId: (d.approved_by_user_id ?? null) as OrderSnapshot['discounts'][number]['approvedByUserId'],
+    amountCents: d.amount_cents as OrderSnapshot['discounts'][number]['amountCents'],
+  }));
+
+  const cashier = db
+    .prepare(`SELECT full_name FROM users WHERE id = ?`)
+    .get(order.cashierId) as { full_name: string } | undefined;
+  const tableRow = order.tableId
+    ? (db.prepare(`SELECT label FROM tables WHERE id = ?`).get(order.tableId) as
+        | { label: string }
+        | undefined)
+    : undefined;
+
+  // Resolve delivery address from the snapshotted JSON if present.
+  let deliveryAddress: string | null = null;
+  if (orderRow.delivery_address_snapshot) {
+    try {
+      const a = JSON.parse(orderRow.delivery_address_snapshot) as {
+        label?: string;
+        addressLine?: string;
+        area?: string | null;
+        city?: string | null;
+        notes?: string | null;
+      };
+      const parts = [a.addressLine, a.area, a.city].filter(Boolean);
+      deliveryAddress = parts.join(', ');
+    } catch {
+      deliveryAddress = null;
+    }
+  }
+
+  return {
+    order,
+    items,
+    discounts,
+    payments,
+    cashierName: cashier?.full_name ?? 'Unknown',
+    tableLabel: tableRow?.label ?? null,
+    customerName: orderRow.customer_name_snapshot,
+    customerPhone: orderRow.customer_phone_snapshot,
+    deliveryAddress,
+  };
+}

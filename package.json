@@ -1,0 +1,31 @@
+{
+  "name": "cheeseoclock",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CheeseOclock POS + online ordering",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20.11.0",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rimraf node_modules/.cache",
+    "pos:dev": "pnpm --filter @cheeseoclock/pos dev",
+    "pos:build": "pnpm --filter @cheeseoclock/pos build",
+    "pos:build:dir": "pnpm --filter @cheeseoclock/pos build:dir",
+    "pos:rebuild": "pnpm --filter @cheeseoclock/pos rebuild",
+    "web:dev": "pnpm --filter @cheeseoclock/web dev"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "prettier": "^3.3.3",
+    "rimraf": "^6.0.1",
+    "turbo": "^2.1.0",
+    "typescript": "^5.5.4"
+  }
+}

@@ -1,0 +1,86 @@
+appId: pk.cheeseoclock.pos
+productName: CheeseOclock POS
+copyright: Copyright © 2026 CheeseOclock
+directories:
+  buildResources: build
+  output: release
+asar: true
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/@node-rs/argon2-*/**"
+files:
+  - out/**
+  - package.json
+  - "!**/.vscode/*"
+  - "!src/*"
+  - "!electron/*"
+  - "!**/{.eslintrc.cjs,.prettierrc,.prettierignore,tsconfig*.json,vite.config.*}"
+  - "!**/{.DS_Store,.git,.gitignore,CHANGELOG.md,README.md}"
+  # Workspace packages are pnpm symlinks pointing outside apps/pos.
+  # electron-vite already bundles their .ts source into out/main + out/renderer,
+  # so we don't need them in node_modules at runtime. Excluding the symlinks
+  # entirely avoids electron-builder's "must be under apps/pos" error.
+  - "!**/node_modules/@cheeseoclock/**"
+  # Also drop turbo cache directories anywhere.
+  - "!**/.turbo/**"
+
+# -----------------------------------------------------------------------------
+# Windows installer + code-signing slots.
+#
+# To produce a SIGNED build for distribution, set these env vars before running
+# `pnpm pos:build`:
+#   WIN_CSC_LINK   — path or HTTPS URL to a .pfx code-signing certificate
+#                    (Sectigo, DigiCert, etc. EV preferred for SmartScreen).
+#   WIN_CSC_KEY_PASSWORD — password for the .pfx.
+# Without them the installer still builds (unsigned). End users will see a
+# Windows SmartScreen warning until your cert builds reputation.
+# -----------------------------------------------------------------------------
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  signingHashAlgorithms: [sha256]
+  signAndEditExecutable: true
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: CheeseOclock POS
+  uninstallDisplayName: CheeseOclock POS
+
+# -----------------------------------------------------------------------------
+# macOS — uncomment + provide signing identity when shipping to Mac.
+# -----------------------------------------------------------------------------
+# mac:
+#   target:
+#     - target: dmg
+#       arch: [x64, arm64]
+#   category: public.app-category.business
+#   hardenedRuntime: true
+#   gatekeeperAssess: false
+
+# -----------------------------------------------------------------------------
+# Auto-update publish provider.
+#
+# Default: null (no publish, no auto-update — installer is local-only).
+# To enable auto-update:
+#   1. Set up a GitHub release (recommended) or S3 bucket.
+#   2. Replace `publish: null` with one of:
+#        publish:
+#          provider: github
+#          owner: <your-gh-user>
+#          repo: cheeseoclock-pos
+#      OR:
+#        publish:
+#          provider: s3
+#          bucket: cheeseoclock-pos-releases
+#          region: ap-south-1
+#   3. Make sure GH_TOKEN / AWS credentials are in the build env.
+# `electron-updater` (loaded dynamically in the app) will then check this
+# provider every 4 hours.
+# -----------------------------------------------------------------------------
+publish: null

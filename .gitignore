@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+out/
+build/
+!apps/pos/build/          # electron-builder resources (icon.svg/.ico/.png) — keep these
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.recommended.json
+.idea/
+
+# Electron build artifacts
+release/
+*.dmg
+*.exe
+*.AppImage
+*.deb
+*.rpm
+*.snap
+*.zip
+
+# SQLite local databases (never commit)
+*.sqlite
+*.sqlite-journal
+*.db
+*.db-journal
+
+# Native module rebuild artifacts
+/apps/pos/node_modules/better-sqlite3/build/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Misc
+.cache/
+tmp/
+*.tmp

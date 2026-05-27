@@ -1,0 +1,243 @@
+import type { HandlerContext } from '../registry.js';
+import { defineHandler, IpcGuardError } from '../registry.js';
+import { ok, hasCapability } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
+import {
+  getCurrentSession,
+  verifyManagerPin,
+} from '../../services/auth-service.js';
+import {
+  createOrder,
+  listOrders,
+  getOrderSnapshot,
+  addOrderItem,
+  removeOrderItem,
+  updateOrderItemQuantity,
+  applyDiscount,
+  clearDiscount,
+  tenderOrder,
+  voidOrder,
+} from '../../db/repositories/order-repo.js';
+import { requiresManagerApproval } from '@cheeseoclock/pos-domain';
+import { printSpooler } from '../../services/print-spooler.js';
+import { mapOrderToFbrPayload } from '@cheeseoclock/fbr-core';
+import { getFbrConfig, toSellerInfo } from '../../services/fbr-config.js';
+import { enqueueFbrSubmission } from '../../db/repositories/fbr-queue-repo.js';
+import { fbrWorker } from '../../services/fbr-worker.js';
+import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
+import { snapshotCustomerOntoOrder } from '../../db/repositories/customer-repo.js';
+import { nowIso } from '../../db/repositories/base.js';
+
+function requireOrderCreate(): AuthenticatedUser {
+  const session = getCurrentSession();
+  if (!session) throw new IpcGuardError({ code: 'unauthenticated', message: 'Not logged in' });
+  if (!hasCapability(session.role, 'order.create')) {
+    throw new IpcGuardError({ code: 'forbidden', message: 'Order creation not allowed' });
+  }
+  return session;
+}
+
+export function registerOrdersHandlers(ctx: HandlerContext): void {
+  defineHandler('orders:create', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const order = createOrder(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    // If the cashier already picked a customer, snapshot them onto the order now.
+    if (payload.customerId) {
+      snapshotCustomerOntoOrder(ctx.db, order.id, payload.customerId, payload.customerAddressId ?? null);
+    }
+    return ok(order);
+  });
+
+  defineHandler('orders:attachCustomer', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    snapshotCustomerOntoOrder(ctx.db, payload.orderId, payload.customerId, payload.addressId ?? null);
+    if (payload.deliveryNotes !== undefined) {
+      ctx.db
+        .prepare(
+          `UPDATE orders SET delivery_notes = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+        )
+        .run(payload.deliveryNotes ?? null, nowIso(), payload.orderId);
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:detachCustomer', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    ctx.db
+      .prepare(
+        `UPDATE orders SET
+            customer_id = NULL, customer_name_snapshot = NULL, customer_phone_snapshot = NULL,
+            delivery_address_snapshot = NULL, delivery_notes = NULL,
+            updated_at = ?, version = version + 1
+          WHERE id = ?`,
+      )
+      .run(nowIso(), payload.orderId);
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:list', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    return ok(listOrders(ctx.db, payload ?? {}));
+  });
+
+  defineHandler('orders:get', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    return ok(getOrderSnapshot(ctx.db, payload.id));
+  });
+
+  defineHandler('orders:addItem', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    addOrderItem(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found after add' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:updateItemQuantity', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    updateOrderItemQuantity(ctx.db, payload.orderId, payload.orderItemId, payload.quantity, {
+      userId: s.id,
+      deviceId: ctx.deviceId,
+    });
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:removeItem', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    removeOrderItem(ctx.db, payload.orderId, payload.orderItemId, {
+      userId: s.id,
+      deviceId: ctx.deviceId,
+    });
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:applyDiscount', ctx, async (_ctx, payload) => {
+    const s = requireOrderCreate();
+    let approverUserId: string | null = null;
+    if (requiresManagerApproval({ type: payload.discountType, value: payload.value })) {
+      if (!payload.approverPin) {
+        throw new IpcGuardError({
+          code: 'precondition_failed',
+          message: 'Manager approval required for this discount',
+        });
+      }
+      try {
+        const approver = await verifyManagerPin(ctx.db, payload.approverPin);
+        approverUserId = approver.approverUserId;
+      } catch (e) {
+        throw new IpcGuardError({
+          code: 'forbidden',
+          message: e instanceof Error ? e.message : 'Manager approval failed',
+        });
+      }
+    }
+
+    applyDiscount(
+      ctx.db,
+      {
+        orderId: payload.orderId,
+        discountType: payload.discountType,
+        value: payload.value,
+        reason: payload.reason ?? null,
+        approverUserId,
+      },
+      { userId: s.id, deviceId: ctx.deviceId },
+    );
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:clearDiscount', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    clearDiscount(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:tender', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      tenderOrder(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Tender failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found after tender' });
+    // Fire-and-forget receipt print — open drawer if there's any cash payment.
+    const openDrawer = payload.payments.some((p) => p.method === 'cash');
+    printSpooler.enqueueReceipt(payload.orderId, openDrawer);
+
+    // Decrement ingredient stock based on recipes. Idempotent — guards against
+    // double-decrement if a tender is somehow re-issued. Failures don't roll back the sale.
+    try {
+      decrementForOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('Stock decrement failed (sale not affected):', e);
+    }
+
+    // Enqueue an FBR submission. The worker picks it up asynchronously.
+    // Failure here must not block the sale — wrap in try.
+    try {
+      const cfg = getFbrConfig(ctx.db);
+      const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
+      enqueueFbrSubmission(ctx.db, payload.orderId, fbrPayload, cfg.mode);
+      fbrWorker.kick();
+    } catch (e) {
+      // Don't fail the tender if FBR mapping/enqueue fails.
+      // Log and continue — order is paid, the cashier saw success.
+      // eslint-disable-next-line no-console
+      console.warn('FBR enqueue failed (sale not affected):', e);
+    }
+
+    return ok(snap);
+  });
+
+  defineHandler('orders:void', ctx, async (_ctx, payload) => {
+    const s = requireOrderCreate();
+    if (!payload.reason || !payload.reason.trim()) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: 'Void reason is required',
+      });
+    }
+    let approverUserId: string;
+    try {
+      const approver = await verifyManagerPin(ctx.db, payload.approverPin);
+      approverUserId = approver.approverUserId;
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'forbidden',
+        message: e instanceof Error ? e.message : 'Manager approval failed',
+      });
+    }
+    try {
+      voidOrder(
+        ctx.db,
+        { orderId: payload.orderId, reason: payload.reason.trim(), approverUserId },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Void failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+}
