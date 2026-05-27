@@ -1,6 +1,6 @@
 appId: pk.cheeseoclock.pos
 productName: CheeseOclock POS
-copyright: Copyright © 2026 CheeseOclock
+copyright: Copyright © 2026 Haider Ali
 directories:
   buildResources: build
   output: release
@@ -42,6 +42,10 @@ win:
   artifactName: ${productName}-${version}-${arch}.${ext}
   signingHashAlgorithms: [sha256]
   signAndEditExecutable: true
+  # Publisher shown in Windows "Apps & features" + installer header. Without a
+  # code-signing cert this is purely cosmetic — SmartScreen still says
+  # "Unknown publisher" until a cert (and reputation) is attached.
+  publisherName: Haider Ali
 
 nsis:
   oneClick: false
