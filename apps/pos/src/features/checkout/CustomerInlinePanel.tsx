@@ -284,21 +284,42 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
           {savedAddresses.length > 0 && (
             <div className="mt-1 flex flex-wrap items-center gap-1">
               <span className="text-[10px] text-stone-500">Saved:</span>
-              {savedAddresses.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() => pickSavedAddress(a)}
-                  className={cn(
-                    'rounded-full px-2 py-0.5 text-[10px]',
-                    form.matchedAddressId === a.id
-                      ? 'bg-amber-500 text-stone-900'
-                      : 'bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-300',
-                  )}
-                >
-                  {a.label}
-                </button>
-              ))}
+              {savedAddresses.map((a) => {
+                const preview = [a.addressLine, a.area].filter(Boolean).join(', ');
+                const isSelected = form.matchedAddressId === a.id;
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => pickSavedAddress(a)}
+                    title={[a.label, a.addressLine, a.area, a.city]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    className={cn(
+                      'inline-flex max-w-[14rem] items-center gap-1 truncate rounded-full px-2 py-0.5 text-[10px]',
+                      isSelected
+                        ? 'bg-amber-500 text-stone-900'
+                        : 'bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-300',
+                    )}
+                  >
+                    {/* Show the address line itself — labels can collide
+                        ("Order", "Home" …); the line is what's distinguishing. */}
+                    <span className="truncate">{preview || a.label}</span>
+                    {a.isDefault && (
+                      <span
+                        className={cn(
+                          'rounded-sm px-1 text-[9px] uppercase tracking-wider',
+                          isSelected
+                            ? 'bg-stone-900/15 text-stone-800'
+                            : 'bg-amber-200 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+                        )}
+                      >
+                        default
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
           {form.matchedCustomerId && form.addressLine && !form.matchedAddressId && (

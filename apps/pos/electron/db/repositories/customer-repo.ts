@@ -276,6 +276,40 @@ export function createAddress(
   input: CreateAddressInput,
   actor: Actor,
 ): CustomerAddress {
+  // Idempotent: if an address with the same (line, area, city) already exists
+  // for this customer, return it instead of creating a duplicate. Without
+  // this, every order using the inline customer panel was creating another
+  // "Order" record — leading to chips that all looked the same in the picker.
+  const normLine = input.addressLine.trim().toLowerCase();
+  const normArea = (input.area ?? '').trim().toLowerCase();
+  const normCity = (input.city ?? '').trim().toLowerCase();
+  const existing = db
+    .prepare(
+      `SELECT ${ADDR_SELECT} FROM customer_addresses
+        WHERE customer_id = ? AND deleted_at IS NULL
+          AND LOWER(TRIM(address_line)) = ?
+          AND LOWER(TRIM(IFNULL(area, ''))) = ?
+          AND LOWER(TRIM(IFNULL(city, ''))) = ?
+        LIMIT 1`,
+    )
+    .get(input.customerId, normLine, normArea, normCity) as AddrRow | undefined;
+  if (existing) {
+    // Honor a fresh isDefault flag if asked, even on the reused row.
+    if (input.isDefault) {
+      const now = nowIso();
+      db.prepare(
+        `UPDATE customer_addresses SET is_default = 0, updated_at = ?, version = version + 1
+          WHERE customer_id = ? AND deleted_at IS NULL AND id != ?`,
+      ).run(now, input.customerId, existing.id);
+      db.prepare(
+        `UPDATE customer_addresses SET is_default = 1, updated_at = ?, version = version + 1
+          WHERE id = ?`,
+      ).run(now, existing.id);
+      return { ...rowToAddress(existing), isDefault: true };
+    }
+    return rowToAddress(existing);
+  }
+
   const id = uuidv7();
   const now = nowIso();
   const addr: CustomerAddress = {
