@@ -199,6 +199,11 @@ contextBridge.exposeInMainWorld('updaterEvents', {
       | { kind: 'downloading'; version: string | null }
       | { kind: 'ready'; version: string | null }
     >,
+  // Diagnostics: returns a snapshot of init state, last check result, last
+  // error, and feed URL. Use from DevTools to debug why the updater is idle.
+  getDiagnostics: () => ipcRenderer.invoke('updater:getDiagnostics') as Promise<unknown>,
+  // Manually trigger a check now. Resolves with { ok, result | error }.
+  checkNow: () => ipcRenderer.invoke('updater:checkNow') as Promise<unknown>,
   installNow: () => {
     ipcRenderer.send('updater:install-now');
   },
