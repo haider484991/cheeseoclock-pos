@@ -61,6 +61,11 @@ interface PanelProps {
 export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
   const [phoneOpen, setPhoneOpen] = useState(false);
   const phoneRef = useRef<HTMLInputElement | null>(null);
+  // Wraps both the input AND the suggestions dropdown, so click-outside only
+  // fires when the user clicks somewhere *truly* outside (a mousedown on a
+  // suggestion button used to unmount the button before its click event could
+  // run — that's the "selecting doesn't pre-fill" bug).
+  const phoneWrapRef = useRef<HTMLDivElement | null>(null);
 
   // Debounced lookup for phone autocomplete.
   const suggestionsQ = useQuery({
@@ -88,11 +93,37 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
     enabled: !!form.matchedCustomerId,
   });
 
-  // Close the dropdown when clicking outside.
+  // After matching a customer, auto-pick their default address for delivery
+  // mode so the cashier doesn't have to click a chip. Only runs when the
+  // address line is still empty (so we don't overwrite an in-progress edit).
+  useEffect(() => {
+    if (mode !== 'delivery') return;
+    if (!form.matchedCustomerId) return;
+    if (form.matchedAddressId) return;
+    if (form.addressLine.trim()) return; // user typed something already
+    const addrs = customerDetailQ.data?.addresses ?? [];
+    const def = addrs.find((a) => a.isDefault) ?? addrs[0];
+    if (def) {
+      setForm((prev) => ({
+        ...prev,
+        matchedAddressId: def.id,
+        addressLabel: def.label,
+        addressLine: def.addressLine,
+        area: def.area ?? '',
+        city: def.city ?? '',
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerDetailQ.data?.addresses, form.matchedCustomerId, mode]);
+
+  // Close the dropdown when clicking outside. Crucially, check against the
+  // *wrapper* (which contains both the input and the suggestion list) so
+  // clicking a suggestion doesn't trigger an "outside" close that unmounts
+  // the button before its onClick fires.
   useEffect(() => {
     function onClick(e: MouseEvent) {
-      if (!phoneRef.current) return;
-      if (!phoneRef.current.contains(e.target as Node)) setPhoneOpen(false);
+      if (!phoneWrapRef.current) return;
+      if (!phoneWrapRef.current.contains(e.target as Node)) setPhoneOpen(false);
     }
     if (phoneOpen) document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
@@ -139,7 +170,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
   return (
     <div className="flex flex-1 flex-wrap items-start gap-2 border-l border-stone-200 pl-3 dark:border-stone-700">
       {/* Phone with autocomplete */}
-      <div className="relative">
+      <div className="relative" ref={phoneWrapRef}>
         <div className="flex items-center gap-1">
           <Phone className="h-3 w-3 text-stone-400" />
           <span className="text-xs uppercase tracking-wider text-stone-500">Phone</span>

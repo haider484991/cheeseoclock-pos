@@ -16,6 +16,7 @@ import {
   Pizza,
   ClipboardList,
   Bike,
+  History,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -25,12 +26,15 @@ interface NavItem {
   icon: LucideIcon;
   capability?: Capability;
   comingSoon?: boolean;
+  /** Key for a live count badge (e.g. 'liveOrders'). */
+  badgeKey?: 'liveOrders';
 }
 
 const ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/checkout', label: 'Checkout', icon: ShoppingCart, capability: 'order.create' },
-  { to: '/orders', label: 'Live Orders', icon: ClipboardList, capability: 'order.create' },
+  { to: '/orders', label: 'Live Orders', icon: ClipboardList, capability: 'order.create', badgeKey: 'liveOrders' },
+  { to: '/orders/history', label: 'Order History', icon: History, capability: 'order.create' },
   { to: '/riders', label: 'Riders', icon: Bike, capability: 'order.create' },
   { to: '/menu', label: 'Menu', icon: UtensilsCrossed, capability: 'menu.manage' },
   { to: '/inventory', label: 'Inventory', icon: Boxes, capability: 'menu.manage' },
@@ -47,6 +51,15 @@ export function Sidebar() {
     queryFn: () => ipc.printer.getConfig(),
     staleTime: 60_000,
   });
+  // Live count of active orders for the sidebar badge. Refetches every 15s
+  // so it's roughly current without thrashing the DB.
+  const activeQ = useQuery({
+    queryKey: ['orders', 'active', 'sidebar-count'],
+    queryFn: () => ipc.orders.listActive(),
+    refetchInterval: 15_000,
+    enabled: can('order.create'),
+  });
+  const liveCount = activeQ.data?.length ?? 0;
   const logoUrl = cfgQ.data?.branding.logoUrl;
   const storeName = cfgQ.data?.branding.storeName ?? 'CheeseOclock';
 
@@ -106,6 +119,18 @@ export function Sidebar() {
                     )}
                   />
                   <span className="flex-1">{item.label}</span>
+                  {item.badgeKey === 'liveOrders' && liveCount > 0 && (
+                    <span
+                      className={cn(
+                        'flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] font-bold',
+                        'bg-amber-500 text-white shadow-soft-sm',
+                        'animate-pulse',
+                      )}
+                      title={`${liveCount} active order${liveCount === 1 ? '' : 's'}`}
+                    >
+                      {liveCount}
+                    </span>
+                  )}
                   {item.comingSoon && (
                     <span className="rounded-md bg-stone-200 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-stone-600 dark:bg-stone-700 dark:text-stone-300">
                       soon

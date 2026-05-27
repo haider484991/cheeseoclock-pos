@@ -123,6 +123,118 @@ export function listOrders(
   return rows.map(rowToOrder);
 }
 
+/**
+ * Richer list for the Order History page: includes the customer/table name
+ * snapshot, cashier name, item count, and payment method (first payment's).
+ * Filters: text search across order#/customer name/phone, status/mode/date.
+ */
+export interface OrderHistoryRow {
+  id: string;
+  orderNumber: string;
+  mode: OrderMode;
+  status: OrderStatus;
+  customerName: string | null;
+  customerPhone: string | null;
+  tableLabel: string | null;
+  cashierName: string;
+  itemCount: number;
+  totalCents: number;
+  paidAt: string | null;
+  createdAt: string;
+  primaryPaymentMethod: PaymentMethod | null;
+}
+
+export function listOrderHistory(
+  db: AppDatabase,
+  opts?: {
+    search?: string;
+    status?: OrderStatus | 'any';
+    mode?: OrderMode | 'any';
+    sinceIso?: string;
+    untilIso?: string;
+    limit?: number;
+  },
+): OrderHistoryRow[] {
+  const conditions: string[] = ['o.deleted_at IS NULL'];
+  const params: unknown[] = [];
+  if (opts?.status && opts.status !== 'any') {
+    conditions.push('o.status = ?');
+    params.push(opts.status);
+  }
+  if (opts?.mode && opts.mode !== 'any') {
+    conditions.push('o.mode = ?');
+    params.push(opts.mode);
+  }
+  if (opts?.sinceIso) {
+    conditions.push('o.created_at >= ?');
+    params.push(opts.sinceIso);
+  }
+  if (opts?.untilIso) {
+    conditions.push('o.created_at <= ?');
+    params.push(opts.untilIso);
+  }
+  if (opts?.search && opts.search.trim()) {
+    const q = `%${opts.search.trim().toLowerCase()}%`;
+    conditions.push(
+      `(LOWER(o.order_number) LIKE ?
+        OR LOWER(IFNULL(o.customer_name_snapshot, '')) LIKE ?
+        OR LOWER(IFNULL(o.customer_phone_snapshot, '')) LIKE ?)`,
+    );
+    params.push(q, q, q);
+  }
+  const limit = opts?.limit ?? 200;
+  const rows = db
+    .prepare(
+      `SELECT
+         o.id, o.order_number, o.mode, o.status,
+         o.customer_name_snapshot, o.customer_phone_snapshot,
+         o.total_cents, o.paid_at, o.created_at,
+         u.full_name AS cashier_name,
+         t.label AS table_label,
+         (SELECT COUNT(*) FROM order_items oi
+            WHERE oi.order_id = o.id AND oi.deleted_at IS NULL) AS item_count,
+         (SELECT method FROM payments p
+            WHERE p.order_id = o.id AND p.deleted_at IS NULL
+            ORDER BY p.paid_at LIMIT 1) AS first_payment_method
+        FROM orders o
+        LEFT JOIN users u ON u.id = o.cashier_id
+        LEFT JOIN tables t ON t.id = o.table_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY o.created_at DESC
+        LIMIT ?`,
+    )
+    .all(...params, limit) as Array<{
+    id: string;
+    order_number: string;
+    mode: OrderMode;
+    status: OrderStatus;
+    customer_name_snapshot: string | null;
+    customer_phone_snapshot: string | null;
+    total_cents: number;
+    paid_at: string | null;
+    created_at: string;
+    cashier_name: string | null;
+    table_label: string | null;
+    item_count: number;
+    first_payment_method: PaymentMethod | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    orderNumber: r.order_number,
+    mode: r.mode,
+    status: r.status,
+    customerName: r.customer_name_snapshot,
+    customerPhone: r.customer_phone_snapshot,
+    tableLabel: r.table_label,
+    cashierName: r.cashier_name ?? 'Unknown',
+    itemCount: r.item_count,
+    totalCents: r.total_cents,
+    paidAt: r.paid_at,
+    createdAt: r.created_at,
+    primaryPaymentMethod: r.first_payment_method,
+  }));
+}
+
 // -----------------------------------------------------------------------------
 // Daily order number — pure-local counter, format YYYYMMDD-NNNN.
 // -----------------------------------------------------------------------------
@@ -848,6 +960,108 @@ export function voidOrder(
     result = voided;
   });
   tx();
+  return result;
+}
+
+// -----------------------------------------------------------------------------
+// Refund (full)
+// -----------------------------------------------------------------------------
+
+/**
+ * Refund a paid order. Inserts a negative payment for each prior payment so
+ * the books balance, marks status='refunded', and records the manager who
+ * approved it. Partial refunds aren't supported yet — this is full-only.
+ */
+export function refundOrder(
+  db: AppDatabase,
+  input: { orderId: string; reason: string; approverUserId: string },
+  actor: Actor & { userId: string },
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'paid') {
+      throw new Error(
+        order.status === 'refunded'
+          ? 'Order already refunded'
+          : `Cannot refund ${order.status} order — only paid orders can be refunded`,
+      );
+    }
+    if (!input.reason.trim()) throw new Error('Refund reason is required');
+
+    const now = nowIso();
+    const payments = db
+      .prepare(
+        `SELECT id, method, amount_cents FROM payments
+          WHERE order_id = ? AND deleted_at IS NULL AND amount_cents > 0`,
+      )
+      .all(input.orderId) as Array<{
+      id: string;
+      method: PaymentMethod;
+      amount_cents: number;
+    }>;
+
+    for (const p of payments) {
+      const refundId = uuidv7();
+      db.prepare(
+        `INSERT INTO payments
+           (id, order_id, method, amount_cents, tendered_cents, reference_no,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(
+        refundId,
+        input.orderId,
+        p.method,
+        -p.amount_cents,
+        `refund-of:${p.id}`,
+        input.approverUserId,
+        now,
+        now,
+        now,
+        actor.deviceId,
+      );
+      enqueueSync(db, {
+        entityType: 'payments',
+        entityId: refundId,
+        op: 'upsert',
+        payload: {
+          id: refundId,
+          orderId: input.orderId,
+          method: p.method,
+          amountCents: -p.amount_cents,
+          referenceNo: `refund-of:${p.id}`,
+          receivedByUserId: input.approverUserId,
+          paidAt: now,
+        },
+      });
+    }
+
+    db.prepare(
+      `UPDATE orders SET status = 'refunded', voided_at = ?, voided_by = ?, void_reason = ?,
+                          updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(now, input.approverUserId, input.reason.trim(), now, input.orderId);
+
+    const after = findOrder(db, input.orderId)!;
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      op: 'upsert',
+      payload: after,
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      action: 'refund',
+      actorUserId: actor.userId,
+      before: order,
+      after,
+    });
+    result = after;
+  });
+  tx();
+  log.info('Order refunded', { id: input.orderId });
   return result;
 }
 

@@ -68,6 +68,7 @@ const api: RendererApi = {
   orders: {
     create: (req) => invoke('orders:create', req),
     list: (req) => invoke('orders:list', req),
+    history: (req) => invoke('orders:history', req),
     get: (req) => invoke('orders:get', req),
     addItem: (req) => invoke('orders:addItem', req),
     updateItemQuantity: (req) => invoke('orders:updateItemQuantity', req),
@@ -76,6 +77,7 @@ const api: RendererApi = {
     clearDiscount: (req) => invoke('orders:clearDiscount', req),
     tender: (req) => invoke('orders:tender', req),
     void: (req) => invoke('orders:void', req),
+    refund: (req) => invoke('orders:refund', req),
     attachCustomer: (req) => invoke('orders:attachCustomer', req),
     detachCustomer: (req) => invoke('orders:detachCustomer', req),
     listActive: (req) => invoke('orders:listActive', req),

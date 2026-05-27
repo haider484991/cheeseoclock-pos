@@ -12,15 +12,18 @@ import {
   Inbox,
   MapPin,
   Phone,
+  Printer,
   RefreshCw,
   Truck,
   UserRound,
+  XCircle,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
 import { AssignRiderDialog } from './AssignRiderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
+import { VoidOrderDialog } from './VoidOrderDialog';
 
 /**
  * Live Orders Board.
@@ -81,6 +84,7 @@ export function OrdersBoardPage() {
   const [modeFilter, setModeFilter] = useState<'all' | OrderMode>('all');
   const [assignFor, setAssignFor] = useState<OrderSnapshot | null>(null);
   const [deliverFor, setDeliverFor] = useState<OrderSnapshot | null>(null);
+  const [voidFor, setVoidFor] = useState<OrderSnapshot | null>(null);
   const qc = useQueryClient();
   const { toast } = useToast();
 
@@ -126,6 +130,16 @@ export function OrdersBoardPage() {
     onError: (e) =>
       toast({
         title: 'Action failed',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      }),
+  });
+  const reprint = useMutation({
+    mutationFn: (orderId: string) => ipc.printer.reprint(orderId),
+    onSuccess: () => toast({ title: 'Receipt sent to printer' }),
+    onError: (e) =>
+      toast({
+        title: 'Reprint failed',
         description: e instanceof Error ? e.message : 'Unknown error',
         variant: 'error',
       }),
@@ -228,6 +242,8 @@ export function OrdersBoardPage() {
                       onAssignRider={() => setAssignFor(snap)}
                       onUnassign={() => unassign.mutate(snap.order.id)}
                       onMarkDelivered={() => setDeliverFor(snap)}
+                      onReprint={() => reprint.mutate(snap.order.id)}
+                      onCancel={() => setVoidFor(snap)}
                     />
                   ))
                 )}
@@ -257,6 +273,16 @@ export function OrdersBoardPage() {
           }}
         />
       )}
+      {voidFor && (
+        <VoidOrderDialog
+          snap={voidFor}
+          onClose={() => setVoidFor(null)}
+          onDone={() => {
+            setVoidFor(null);
+            void qc.invalidateQueries({ queryKey: ['orders', 'active'] });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -272,6 +298,8 @@ interface OrderCardProps {
   onAssignRider: () => void;
   onUnassign: () => void;
   onMarkDelivered: () => void;
+  onReprint: () => void;
+  onCancel: () => void;
 }
 
 function OrderCard({
@@ -281,6 +309,8 @@ function OrderCard({
   onAssignRider,
   onUnassign,
   onMarkDelivered,
+  onReprint,
+  onCancel,
 }: OrderCardProps) {
   const { order } = snap;
   const itemCount = snap.items.reduce((s, i) => s + i.quantity, 0);
@@ -370,7 +400,7 @@ function OrderCard({
         </div>
       </footer>
 
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="mt-2 flex items-center gap-1.5">
         <OrderActions
           status={order.status}
           mode={order.mode}
@@ -380,6 +410,22 @@ function OrderCard({
           onMarkDelivered={onMarkDelivered}
           paid={order.paidAt !== null}
         />
+        <button
+          type="button"
+          onClick={onReprint}
+          title="Reprint receipt"
+          className="rounded-lg border border-stone-200 p-2 text-stone-500 transition-colors hover:bg-stone-50 hover:text-stone-700 dark:border-stone-700 dark:hover:bg-stone-700"
+        >
+          <Printer className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          title="Cancel order (manager PIN)"
+          className="rounded-lg border border-stone-200 p-2 text-stone-500 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 dark:border-stone-700 dark:hover:bg-red-950"
+        >
+          <XCircle className="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
   );

@@ -98,6 +98,7 @@ export const ipc = {
   orders: {
     create: (input: IpcRequest<'orders:create'>) => unwrap(window.api.orders.create(input)),
     list: (input?: IpcRequest<'orders:list'>) => unwrap(window.api.orders.list(input)),
+    history: (input?: IpcRequest<'orders:history'>) => unwrap(window.api.orders.history(input)),
     get: (id: string) => unwrap(window.api.orders.get({ id })),
     addItem: (input: IpcRequest<'orders:addItem'>) =>
       unwrap(window.api.orders.addItem(input)),
@@ -111,6 +112,7 @@ export const ipc = {
       unwrap(window.api.orders.clearDiscount({ orderId })),
     tender: (input: IpcRequest<'orders:tender'>) => unwrap(window.api.orders.tender(input)),
     void: (input: IpcRequest<'orders:void'>) => unwrap(window.api.orders.void(input)),
+    refund: (input: IpcRequest<'orders:refund'>) => unwrap(window.api.orders.refund(input)),
     attachCustomer: (input: IpcRequest<'orders:attachCustomer'>) =>
       unwrap(window.api.orders.attachCustomer(input)),
     detachCustomer: (orderId: string) =>

@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Button } from '@cheeseoclock/ui';
 import { useSessionStore } from '../../stores/sessionStore';
-import { LogOut, Clock } from 'lucide-react';
+import { LogOut, Clock, Calculator } from 'lucide-react';
+import { CalculatorPopover } from './CalculatorPopover';
 
 const ROLE_LABEL = {
   admin: 'Admin',
@@ -27,6 +29,7 @@ function initials(name: string): string {
 export function TopBar() {
   const user = useSessionStore((s) => s.user);
   const logout = useSessionStore((s) => s.logout);
+  const [calcOpen, setCalcOpen] = useState(false);
 
   return (
     <header className="flex h-16 items-center justify-between border-b border-stone-200/70 bg-white/70 px-8 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/70">
@@ -43,6 +46,14 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setCalcOpen(true)}
+          className="flex h-9 w-9 items-center justify-center rounded-xl text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-800 dark:hover:bg-stone-800 dark:hover:text-stone-100"
+          title="Calculator"
+        >
+          <Calculator className="h-4 w-4" />
+        </button>
         {user && (
           <div className="flex items-center gap-3 rounded-xl bg-stone-100/70 px-3 py-1.5 dark:bg-stone-800/70">
             <div
@@ -63,6 +74,7 @@ export function TopBar() {
           Log out
         </Button>
       </div>
+      <CalculatorPopover open={calcOpen} onClose={() => setCalcOpen(false)} />
     </header>
   );
 }

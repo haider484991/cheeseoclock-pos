@@ -9,6 +9,7 @@ import {
 import {
   createOrder,
   listOrders,
+  listOrderHistory,
   listActiveOrders,
   getOrderSnapshot,
   addOrderItem,
@@ -18,6 +19,7 @@ import {
   clearDiscount,
   tenderOrder,
   voidOrder,
+  refundOrder,
   sendOrderToKitchen,
   markOrderPreparing,
   markOrderReady,
@@ -89,6 +91,11 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:list', ctx, (_ctx, payload) => {
     requireOrderCreate();
     return ok(listOrders(ctx.db, payload ?? {}));
+  });
+
+  defineHandler('orders:history', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    return ok(listOrderHistory(ctx.db, payload ?? {}));
   });
 
   defineHandler('orders:get', ctx, (_ctx, payload) => {
@@ -334,6 +341,25 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // Fire-and-forget receipt print. When a COD payment was just captured we
+    // also pop the drawer (cash on board). For pre-paid orders this is a
+    // plain delivery confirmation reprint.
+    const openDrawer = payload.payment?.method === 'cash';
+    printSpooler.enqueueReceipt(payload.orderId, openDrawer);
+    // FBR enqueue for the just-captured COD payment (tender path normally
+    // does this — for COD, this is the first time payment is committed).
+    if (payload.payment) {
+      try {
+        const cfg = getFbrConfig(ctx.db);
+        const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
+        enqueueFbrSubmission(ctx.db, payload.orderId, fbrPayload, cfg.mode);
+        fbrWorker.kick();
+      } catch (e) {
+        // FBR mapping failure must not block the delivery flow.
+        // eslint-disable-next-line no-console
+        console.warn('FBR enqueue failed on delivery (sale not affected):', e);
+      }
+    }
     return ok(snap);
   });
 
@@ -369,6 +395,44 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:refund', ctx, async (_ctx, payload) => {
+    const s = requireOrderCreate();
+    if (!payload.reason || !payload.reason.trim()) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: 'Refund reason is required',
+      });
+    }
+    let approverUserId: string;
+    try {
+      const approver = await verifyManagerPin(ctx.db, payload.approverPin);
+      approverUserId = approver.approverUserId;
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'forbidden',
+        message: e instanceof Error ? e.message : 'Manager approval failed',
+      });
+    }
+    try {
+      refundOrder(
+        ctx.db,
+        { orderId: payload.orderId, reason: payload.reason.trim(), approverUserId },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Refund failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // Pop the drawer + reprint when there were cash payments to refund.
+    const hadCash = snap.payments.some((p) => p.method === 'cash');
+    printSpooler.enqueueReceipt(payload.orderId, hadCash);
     return ok(snap);
   });
 }

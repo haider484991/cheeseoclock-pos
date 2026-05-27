@@ -352,12 +352,50 @@ export interface IpcContract {
     request: { orderId: string; reason: string; approverPin: string };
     response: ApiResult<OrderSnapshot>;
   };
+  'orders:refund': {
+    request: { orderId: string; reason: string; approverPin: string };
+    response: ApiResult<OrderSnapshot>;
+  };
 
   // Live order tracking — state transitions for the Live Orders board.
   // Server enforces legal transitions; client passes the orderId only.
   'orders:listActive': {
     request: { mode?: OrderMode } | undefined;
     response: ApiResult<OrderSnapshot[]>;
+  };
+  /**
+   * Richer list for the Order History page: includes customer snapshot,
+   * cashier name, item count, and primary payment method. Supports text
+   * search + date/status/mode filters.
+   */
+  'orders:history': {
+    request:
+      | {
+          search?: string;
+          status?: Order['status'] | 'any';
+          mode?: OrderMode | 'any';
+          sinceIso?: string;
+          untilIso?: string;
+          limit?: number;
+        }
+      | undefined;
+    response: ApiResult<
+      Array<{
+        id: string;
+        orderNumber: string;
+        mode: OrderMode;
+        status: Order['status'];
+        customerName: string | null;
+        customerPhone: string | null;
+        tableLabel: string | null;
+        cashierName: string;
+        itemCount: number;
+        totalCents: number;
+        paidAt: string | null;
+        createdAt: string;
+        primaryPaymentMethod: PaymentMethod | null;
+      }>
+    >;
   };
   /**
    * Commit a still-open order without tendering. The COD entry path: cashier

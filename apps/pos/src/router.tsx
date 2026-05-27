@@ -10,6 +10,7 @@ import { ReportsPage } from './features/reports/ReportsPage';
 import { CustomersPage } from './features/customers/CustomersPage';
 import { UsersPage } from './features/users/UsersPage';
 import { OrdersBoardPage } from './features/orders/OrdersBoardPage';
+import { OrderHistoryPage } from './features/orders/OrderHistoryPage';
 import { RidersPage } from './features/riders/RidersPage';
 import { useSessionStore } from './stores/sessionStore';
 import { hasCapability, type Capability } from '@cheeseoclock/shared-types';
@@ -41,6 +42,11 @@ export const router: ReturnType<typeof createHashRouter> = createHashRouter([
       { index: true, element: <DashboardPage /> },
       { path: 'checkout', element: <CheckoutPage />, loader: requireCapability('order.create') },
       { path: 'orders', element: <OrdersBoardPage />, loader: requireCapability('order.create') },
+      {
+        path: 'orders/history',
+        element: <OrderHistoryPage />,
+        loader: requireCapability('order.create'),
+      },
       { path: 'riders', element: <RidersPage />, loader: requireCapability('order.create') },
       { path: 'menu', element: <MenuPage />, loader: requireCapability('menu.manage') },
       {
