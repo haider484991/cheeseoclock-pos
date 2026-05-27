@@ -797,6 +797,32 @@ export interface IpcContract {
       byReason: Array<{ reason: string; count: number; amountCents: number }>;
     }>;
   };
+  /**
+   * End-of-day cash reconciliation summary. Returns per-method totals
+   * (sales + refunds) plus a cash-specific roll-up. `openingCashCents`
+   * gets added to expected cash on hand — pass the float you opened with.
+   */
+  'reports:cashSummary': {
+    request: { sinceIso: string; untilIso: string; openingCashCents?: number };
+    response: ApiResult<{
+      byMethod: Array<{
+        method: string;
+        salesCents: number;
+        refundCents: number;
+        netCents: number;
+        paymentCount: number;
+        refundCount: number;
+      }>;
+      cashSalesCents: number;
+      cashRefundsCents: number;
+      expectedCashCents: number;
+      totalRevenueCents: number;
+      totalRefundsCents: number;
+      netRevenueCents: number;
+      paidOrderCount: number;
+      refundedOrderCount: number;
+    }>;
+  };
   'reports:lowStock': {
     request: undefined;
     response: ApiResult<

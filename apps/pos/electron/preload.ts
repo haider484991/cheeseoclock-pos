@@ -152,6 +152,7 @@ const api: RendererApi = {
     discounts: (req) => invoke('reports:discounts', req),
     lowStock: () => invoke('reports:lowStock', undefined),
     cogs: (req) => invoke('reports:cogs', req),
+    cashSummary: (req) => invoke('reports:cashSummary', req),
   },
   inventory: {
     listIngredients: (req) => invoke('inventory:listIngredients', req),

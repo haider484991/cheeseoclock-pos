@@ -18,10 +18,12 @@ import {
   ShoppingBag,
   Receipt,
   AlertTriangle,
+  Banknote,
+  Printer,
   type LucideIcon,
 } from 'lucide-react';
 
-type Tab = 'overview' | 'items' | 'cashiers' | 'payments' | 'discounts' | 'stock';
+type Tab = 'overview' | 'items' | 'cashiers' | 'payments' | 'cashDrawer' | 'discounts' | 'stock';
 
 const PRESETS: Array<{ id: RangePreset; label: string }> = [
   { id: 'today', label: 'Today' },
@@ -37,6 +39,7 @@ const TABS: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
   { id: 'items', label: 'Items & categories', icon: UtensilsCrossed },
   { id: 'cashiers', label: 'Cashiers', icon: Users },
   { id: 'payments', label: 'Payments & modes', icon: CreditCard },
+  { id: 'cashDrawer', label: 'Cash drawer', icon: Banknote },
   { id: 'discounts', label: 'Discounts', icon: Percent },
   { id: 'stock', label: 'Stock & COGS', icon: Boxes },
 ];
@@ -149,6 +152,7 @@ export function ReportsPage() {
       {tab === 'items' && <ItemsTab range={range} />}
       {tab === 'cashiers' && <CashiersTab range={range} />}
       {tab === 'payments' && <PaymentsTab range={range} />}
+      {tab === 'cashDrawer' && <CashDrawerTab range={range} />}
       {tab === 'discounts' && <DiscountsTab range={range} />}
       {tab === 'stock' && <StockTab range={range} />}
     </div>
@@ -365,6 +369,181 @@ function PaymentsTab({ range }: { range: { sinceIso: string; untilIso: string } 
           alignRight={[false, true, true]}
         />
       </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cash Drawer / End-of-Day reconciliation
+// ---------------------------------------------------------------------------
+
+function CashDrawerTab({ range }: { range: { sinceIso: string; untilIso: string } }) {
+  const [openingStr, setOpeningStr] = useState('0');
+  const [countedStr, setCountedStr] = useState('');
+  const openingCash = Math.round((parseFloat(openingStr) || 0) * 100);
+
+  const q = useQuery({
+    queryKey: ['reports', 'cashSummary', range, openingCash],
+    queryFn: () => ipc.reports.cashSummary({ ...range, openingCashCents: openingCash }),
+  });
+  const data = q.data;
+  const counted = countedStr === '' ? null : Math.round((parseFloat(countedStr) || 0) * 100);
+  const variance = counted !== null && data ? counted - data.expectedCashCents : null;
+
+  function handlePrint() {
+    if (typeof window !== 'undefined') window.print();
+  }
+
+  return (
+    <div className="space-y-4 print:m-0">
+      <Card>
+        <div className="mb-3 flex items-center justify-between">
+          <SectionLabel>End of day · cash count</SectionLabel>
+          <button
+            type="button"
+            onClick={handlePrint}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-600 hover:bg-stone-50 dark:border-stone-700 dark:hover:bg-stone-800"
+          >
+            <Printer className="h-3.5 w-3.5" />
+            Print summary
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="space-y-2 rounded-xl bg-stone-50 p-4 dark:bg-stone-800/50">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">
+                Opening float (cash)
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                value={openingStr}
+                onChange={(e) => setOpeningStr(e.target.value)}
+                className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-900"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">
+                Counted cash in drawer
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                value={countedStr}
+                onChange={(e) => setCountedStr(e.target.value)}
+                placeholder="0"
+                className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-900"
+              />
+            </label>
+          </div>
+
+          <div className="rounded-xl bg-emerald-50 p-4 dark:bg-emerald-950/30">
+            <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+              Cash flow today
+            </div>
+            <dl className="mt-2 space-y-1 text-sm">
+              <div className="flex justify-between">
+                <dt>Opening</dt>
+                <dd className="font-mono">{formatCents(openingCash)}</dd>
+              </div>
+              <div className="flex justify-between text-emerald-800 dark:text-emerald-100">
+                <dt>+ Cash sales</dt>
+                <dd className="font-mono">
+                  {formatCents(data?.cashSalesCents ?? 0)}
+                </dd>
+              </div>
+              <div className="flex justify-between text-red-700 dark:text-red-300">
+                <dt>− Cash refunds</dt>
+                <dd className="font-mono">
+                  {formatCents(data?.cashRefundsCents ?? 0)}
+                </dd>
+              </div>
+              <div className="mt-1 flex justify-between border-t border-emerald-200 pt-1 font-bold dark:border-emerald-800">
+                <dt>Expected</dt>
+                <dd className="font-mono text-base">
+                  {formatCents(data?.expectedCashCents ?? 0)}
+                </dd>
+              </div>
+            </dl>
+          </div>
+
+          <div
+            className={cn(
+              'rounded-xl p-4',
+              variance === null
+                ? 'bg-stone-100 dark:bg-stone-800/40'
+                : variance === 0
+                ? 'bg-emerald-100 dark:bg-emerald-950/40'
+                : variance > 0
+                ? 'bg-amber-100 dark:bg-amber-950/40'
+                : 'bg-red-100 dark:bg-red-950/40',
+            )}
+          >
+            <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">
+              Variance
+            </div>
+            <div className="mt-2 font-mono text-3xl font-bold">
+              {variance === null
+                ? '—'
+                : `${variance > 0 ? '+' : ''}${formatCents(variance)}`}
+            </div>
+            <div className="mt-1 text-xs text-stone-600 dark:text-stone-300">
+              {variance === null
+                ? 'Enter counted cash to compute'
+                : variance === 0
+                ? 'Drawer matches expected'
+                : variance > 0
+                ? 'Drawer has more than expected (over)'
+                : 'Drawer has less than expected (short)'}
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        <SectionLabel>Payments breakdown</SectionLabel>
+        <DataTable
+          headers={['Method', 'Sales', 'Refunds', 'Net', '# sales', '# refunds']}
+          rows={(data?.byMethod ?? []).map((m) => [
+            m.method.toUpperCase(),
+            formatCents(m.salesCents),
+            formatCents(m.refundCents),
+            formatCents(m.netCents),
+            String(m.paymentCount),
+            String(m.refundCount),
+          ])}
+          alignRight={[false, true, true, true, true, true]}
+          empty={q.isLoading ? 'Loading…' : 'No payments in this range yet.'}
+        />
+      </Card>
+
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <Stat
+          icon={DollarSign}
+          tone="emerald"
+          label="Net revenue"
+          value={formatCents(data?.netRevenueCents ?? 0)}
+        />
+        <Stat
+          icon={ShoppingBag}
+          tone="sky"
+          label="Paid orders"
+          value={String(data?.paidOrderCount ?? 0)}
+        />
+        <Stat
+          icon={Receipt}
+          tone="amber"
+          label="Refunds value"
+          value={formatCents(data?.totalRefundsCents ?? 0)}
+        />
+        <Stat
+          icon={AlertTriangle}
+          tone="red"
+          label="Refunded orders"
+          value={String(data?.refundedOrderCount ?? 0)}
+        />
+      </div>
     </div>
   );
 }

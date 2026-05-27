@@ -220,6 +220,8 @@ export const ipc = {
       unwrap(window.api.reports.discounts(input)),
     lowStock: () => unwrap(window.api.reports.lowStock()),
     cogs: (input: IpcRequest<'reports:cogs'>) => unwrap(window.api.reports.cogs(input)),
+    cashSummary: (input: IpcRequest<'reports:cashSummary'>) =>
+      unwrap(window.api.reports.cashSummary(input)),
   },
   inventory: {
     listIngredients: (input?: IpcRequest<'inventory:listIngredients'>) =>

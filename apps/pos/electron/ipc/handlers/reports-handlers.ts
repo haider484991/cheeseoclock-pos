@@ -15,6 +15,7 @@ import {
   getDiscountSummary,
   getLowStock,
   getCogs,
+  getCashSummary,
 } from '../../services/reports-service.js';
 
 function requireReportView(): AuthenticatedUser {
@@ -70,5 +71,15 @@ export function registerReportsHandlers(ctx: HandlerContext): void {
   defineHandler('reports:cogs', ctx, (_ctx, payload) => {
     requireReportView();
     return ok(getCogs(ctx.db, payload));
+  });
+  defineHandler('reports:cashSummary', ctx, (_ctx, payload) => {
+    requireReportView();
+    return ok(
+      getCashSummary(
+        ctx.db,
+        { sinceIso: payload.sinceIso, untilIso: payload.untilIso },
+        payload.openingCashCents ?? 0,
+      ),
+    );
   });
 }

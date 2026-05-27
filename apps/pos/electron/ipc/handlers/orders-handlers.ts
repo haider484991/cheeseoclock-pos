@@ -342,7 +342,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
-    // Receipt + FBR when a payment was just captured (takeaway COD).
+    // Receipt + FBR + inventory decrement when a payment was just captured
+    // (takeaway COD / dine-in collect-later).
     if (payload.payment) {
       const openDrawer = payload.payment.method === 'cash';
       printSpooler.enqueueReceipt(payload.orderId, openDrawer);
@@ -354,6 +355,15 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn('FBR enqueue failed on serve (sale not affected):', e);
+      }
+      // Decrement ingredient stock. decrementForOrder is idempotent, so even
+      // if tender ran earlier (it won't for COD, but defense-in-depth) the
+      // movements won't be double-counted.
+      try {
+        decrementForOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('Stock decrement failed on serve (sale not affected):', e);
       }
     }
     return ok(snap);
@@ -380,8 +390,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // plain delivery confirmation reprint.
     const openDrawer = payload.payment?.method === 'cash';
     printSpooler.enqueueReceipt(payload.orderId, openDrawer);
-    // FBR enqueue for the just-captured COD payment (tender path normally
-    // does this — for COD, this is the first time payment is committed).
+    // FBR + inventory decrement only fire when a payment was just captured
+    // (the tender path already covers prepay).
     if (payload.payment) {
       try {
         const cfg = getFbrConfig(ctx.db);
@@ -392,6 +402,12 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         // FBR mapping failure must not block the delivery flow.
         // eslint-disable-next-line no-console
         console.warn('FBR enqueue failed on delivery (sale not affected):', e);
+      }
+      try {
+        decrementForOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('Stock decrement failed on delivery (sale not affected):', e);
       }
     }
     return ok(snap);

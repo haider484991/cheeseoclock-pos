@@ -195,6 +195,101 @@ export interface SalesByPaymentMethod {
   amountCents: number;
 }
 
+export interface CashSummary {
+  /** Per-method breakdown including refunds. */
+  byMethod: Array<{
+    method: string;
+    salesCents: number; // sum of positive payments
+    refundCents: number; // abs sum of negative payments
+    netCents: number;
+    paymentCount: number;
+    refundCount: number;
+  }>;
+  cashSalesCents: number;
+  cashRefundsCents: number;
+  /** opening + cashSales - cashRefunds. Opening is supplied by caller. */
+  expectedCashCents: number;
+  totalRevenueCents: number;
+  totalRefundsCents: number;
+  netRevenueCents: number;
+  paidOrderCount: number;
+  refundedOrderCount: number;
+}
+
+/**
+ * End-of-day cash reconciliation summary. Returns per-method totals
+ * (positive payments vs negative refund entries), plus a cash-specific roll-up
+ * for the drawer count screen.
+ *
+ * `openingCashCents` is added to expected cash (the float you started with).
+ * Default 0.
+ */
+export function getCashSummary(
+  db: AppDatabase,
+  range: DateRange,
+  openingCashCents = 0,
+): CashSummary {
+  const rows = db
+    .prepare(
+      `SELECT method,
+              SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END) AS salesCents,
+              SUM(CASE WHEN amount_cents < 0 THEN -amount_cents ELSE 0 END) AS refundCents,
+              SUM(CASE WHEN amount_cents > 0 THEN 1 ELSE 0 END) AS paymentCount,
+              SUM(CASE WHEN amount_cents < 0 THEN 1 ELSE 0 END) AS refundCount
+         FROM payments
+        WHERE paid_at >= ? AND paid_at < ? AND deleted_at IS NULL
+        GROUP BY method
+        ORDER BY SUM(ABS(amount_cents)) DESC`,
+    )
+    .all(range.sinceIso, range.untilIso) as Array<{
+    method: string;
+    salesCents: number | null;
+    refundCents: number | null;
+    paymentCount: number;
+    refundCount: number;
+  }>;
+  const byMethod = rows.map((r) => ({
+    method: r.method,
+    salesCents: r.salesCents ?? 0,
+    refundCents: r.refundCents ?? 0,
+    netCents: (r.salesCents ?? 0) - (r.refundCents ?? 0),
+    paymentCount: r.paymentCount,
+    refundCount: r.refundCount,
+  }));
+  const cashLine = byMethod.find((m) => m.method === 'cash');
+  const cashSalesCents = cashLine?.salesCents ?? 0;
+  const cashRefundsCents = cashLine?.refundCents ?? 0;
+
+  const totalRevenueCents = byMethod.reduce((s, m) => s + m.salesCents, 0);
+  const totalRefundsCents = byMethod.reduce((s, m) => s + m.refundCents, 0);
+
+  // Distinct paid orders + refunded orders in the range.
+  const paidOrderCount = (db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM orders
+        WHERE paid_at >= ? AND paid_at < ? AND deleted_at IS NULL AND status = 'paid'`,
+    )
+    .get(range.sinceIso, range.untilIso) as { n: number }).n;
+  const refundedOrderCount = (db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM orders
+        WHERE voided_at >= ? AND voided_at < ? AND deleted_at IS NULL AND status = 'refunded'`,
+    )
+    .get(range.sinceIso, range.untilIso) as { n: number }).n;
+
+  return {
+    byMethod,
+    cashSalesCents,
+    cashRefundsCents,
+    expectedCashCents: openingCashCents + cashSalesCents - cashRefundsCents,
+    totalRevenueCents,
+    totalRefundsCents,
+    netRevenueCents: totalRevenueCents - totalRefundsCents,
+    paidOrderCount,
+    refundedOrderCount,
+  };
+}
+
 export function getSalesByPaymentMethod(
   db: AppDatabase,
   range: DateRange,
