@@ -78,6 +78,12 @@ const api: RendererApi = {
     void: (req) => invoke('orders:void', req),
     attachCustomer: (req) => invoke('orders:attachCustomer', req),
     detachCustomer: (req) => invoke('orders:detachCustomer', req),
+    listActive: (req) => invoke('orders:listActive', req),
+    markPreparing: (req) => invoke('orders:markPreparing', req),
+    markReady: (req) => invoke('orders:markReady', req),
+    assignRider: (req) => invoke('orders:assignRider', req),
+    unassignRider: (req) => invoke('orders:unassignRider', req),
+    markDelivered: (req) => invoke('orders:markDelivered', req),
   },
   sync: {
     getConfig: () => invoke('sync:getConfig', undefined),
@@ -109,6 +115,12 @@ const api: RendererApi = {
   tables: {
     listSections: () => invoke('tables:listSections', undefined),
     list: (req) => invoke('tables:list', req),
+  },
+  riders: {
+    list: (req) => invoke('riders:list', req),
+    create: (req) => invoke('riders:create', req),
+    update: (req) => invoke('riders:update', req),
+    deactivate: (req) => invoke('riders:deactivate', req),
   },
   printer: {
     getConfig: () => invoke('printer:getConfig', undefined),

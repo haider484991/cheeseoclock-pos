@@ -21,6 +21,7 @@ import { registerReportsHandlers } from './handlers/reports-handlers.js';
 import { registerCustomersHandlers } from './handlers/customers-handlers.js';
 import { registerBackupHandlers } from './handlers/backup-handlers.js';
 import { registerSyncHandlers } from './handlers/sync-handlers.js';
+import { registerRidersHandlers } from './handlers/riders-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
 
 export interface HandlerContext {
@@ -89,5 +90,6 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   registerCustomersHandlers(ctx);
   registerSyncHandlers(ctx);
   registerBackupHandlers(ctx);
+  registerRidersHandlers(ctx);
   log.info('IPC handlers registered');
 }

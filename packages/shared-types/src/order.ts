@@ -2,15 +2,41 @@ import type { Cents } from './money.js';
 import type { UUID, OrderNumber } from './ids.js';
 
 export type OrderMode = 'dine_in' | 'takeaway' | 'delivery' | 'online';
+/**
+ * Order lifecycle. The board groups these into 5 visible columns:
+ *   New             → open, sent_to_kitchen
+ *   Preparing       → preparing
+ *   Ready           → ready
+ *   Out for delivery→ out_for_delivery
+ *   Done            → delivered, served, paid
+ * void/refunded are hidden from the board (visible under filters).
+ */
 export type OrderStatus =
   | 'open'
   | 'sent_to_kitchen'
+  | 'preparing'
   | 'ready'
+  | 'out_for_delivery'
+  | 'delivered'
   | 'served'
   | 'paid'
   | 'void'
   | 'refunded';
 export type OrderSource = 'pos' | 'web';
+
+/**
+ * Delivery rider / driver. Lightweight roster managed in the Riders page.
+ * Inactive riders are hidden from the assignment picker but kept for history.
+ */
+export interface Rider {
+  id: UUID;
+  name: string;
+  phone: string;
+  isActive: boolean;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export type PaymentMethod =
   | 'cash'
@@ -39,6 +65,10 @@ export interface Order {
   voidedAt: string | null;
   voidedBy: UUID | null;
   voidReason: string | null;
+  // Delivery tracking (set only when applicable):
+  assignedRiderId: UUID | null;
+  dispatchedAt: string | null;
+  deliveredAt: string | null;
 }
 
 export type KitchenStatus = 'pending' | 'preparing' | 'ready' | 'served';
@@ -109,4 +139,6 @@ export interface OrderSnapshot {
   customerName: string | null;
   customerPhone: string | null;
   deliveryAddress: string | null;
+  /** Rider snapshot for the order — null until a rider is assigned. */
+  rider: { id: UUID; name: string; phone: string } | null;
 }

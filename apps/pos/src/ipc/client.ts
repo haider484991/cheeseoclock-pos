@@ -115,6 +115,24 @@ export const ipc = {
       unwrap(window.api.orders.attachCustomer(input)),
     detachCustomer: (orderId: string) =>
       unwrap(window.api.orders.detachCustomer({ orderId })),
+    // Live tracking
+    listActive: (input?: IpcRequest<'orders:listActive'>) =>
+      unwrap(window.api.orders.listActive(input)),
+    markPreparing: (orderId: string) =>
+      unwrap(window.api.orders.markPreparing({ orderId })),
+    markReady: (orderId: string) => unwrap(window.api.orders.markReady({ orderId })),
+    assignRider: (input: IpcRequest<'orders:assignRider'>) =>
+      unwrap(window.api.orders.assignRider(input)),
+    unassignRider: (orderId: string) =>
+      unwrap(window.api.orders.unassignRider({ orderId })),
+    markDelivered: (input: IpcRequest<'orders:markDelivered'>) =>
+      unwrap(window.api.orders.markDelivered(input)),
+  },
+  riders: {
+    list: (input?: IpcRequest<'riders:list'>) => unwrap(window.api.riders.list(input)),
+    create: (input: IpcRequest<'riders:create'>) => unwrap(window.api.riders.create(input)),
+    update: (input: IpcRequest<'riders:update'>) => unwrap(window.api.riders.update(input)),
+    deactivate: (id: string) => unwrap(window.api.riders.deactivate({ id })),
   },
   customers: {
     list: (input?: IpcRequest<'customers:list'>) => unwrap(window.api.customers.list(input)),

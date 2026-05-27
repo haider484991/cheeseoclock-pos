@@ -14,6 +14,8 @@ import {
   Contact,
   Settings,
   Pizza,
+  ClipboardList,
+  Bike,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -28,6 +30,8 @@ interface NavItem {
 const ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/checkout', label: 'Checkout', icon: ShoppingCart, capability: 'order.create' },
+  { to: '/orders', label: 'Live Orders', icon: ClipboardList, capability: 'order.create' },
+  { to: '/riders', label: 'Riders', icon: Bike, capability: 'order.create' },
   { to: '/menu', label: 'Menu', icon: UtensilsCrossed, capability: 'menu.manage' },
   { to: '/inventory', label: 'Inventory', icon: Boxes, capability: 'menu.manage' },
   { to: '/customers', label: 'Customers', icon: Contact, capability: 'order.create' },

@@ -23,6 +23,7 @@ import type {
   OrderMode,
   OrderSnapshot,
   PaymentMethod,
+  Rider,
 } from './order.js';
 import type {
   PrinterConnectionConfig,
@@ -350,6 +351,71 @@ export interface IpcContract {
   'orders:void': {
     request: { orderId: string; reason: string; approverPin: string };
     response: ApiResult<OrderSnapshot>;
+  };
+
+  // Live order tracking — state transitions for the Live Orders board.
+  // Server enforces legal transitions; client passes the orderId only.
+  'orders:listActive': {
+    request: { mode?: OrderMode } | undefined;
+    response: ApiResult<OrderSnapshot[]>;
+  };
+  'orders:markPreparing': {
+    request: { orderId: string };
+    response: ApiResult<OrderSnapshot>;
+  };
+  'orders:markReady': {
+    request: { orderId: string };
+    response: ApiResult<OrderSnapshot>;
+  };
+  'orders:assignRider': {
+    request: { orderId: string; riderId: string };
+    response: ApiResult<OrderSnapshot>;
+  };
+  'orders:unassignRider': {
+    request: { orderId: string };
+    response: ApiResult<OrderSnapshot>;
+  };
+  /**
+   * Mark a delivery order delivered. If `payment` is provided we also record
+   * the COD payment in the same transaction so the order moves directly to
+   * paid + delivered. If omitted, the order moves to `delivered` and a tender
+   * call is expected later.
+   */
+  'orders:markDelivered': {
+    request: {
+      orderId: string;
+      payment?: {
+        method: PaymentMethod;
+        amountCents: number;
+        tenderedCents?: number | null;
+        referenceNo?: string | null;
+      };
+    };
+    response: ApiResult<OrderSnapshot>;
+  };
+
+  // Riders / delivery staff
+  'riders:list': {
+    request: { activeOnly?: boolean } | undefined;
+    response: ApiResult<Rider[]>;
+  };
+  'riders:create': {
+    request: { name: string; phone: string; notes?: string | null };
+    response: ApiResult<Rider>;
+  };
+  'riders:update': {
+    request: {
+      id: string;
+      name?: string;
+      phone?: string;
+      notes?: string | null;
+      isActive?: boolean;
+    };
+    response: ApiResult<Rider>;
+  };
+  'riders:deactivate': {
+    request: { id: string };
+    response: ApiResult<{ id: string }>;
   };
 
   // Printer

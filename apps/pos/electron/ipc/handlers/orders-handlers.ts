@@ -9,6 +9,7 @@ import {
 import {
   createOrder,
   listOrders,
+  listActiveOrders,
   getOrderSnapshot,
   addOrderItem,
   removeOrderItem,
@@ -17,6 +18,11 @@ import {
   clearDiscount,
   tenderOrder,
   voidOrder,
+  markOrderPreparing,
+  markOrderReady,
+  assignRiderToOrder,
+  unassignRiderFromOrder,
+  markOrderDelivered,
 } from '../../db/repositories/order-repo.js';
 import { requiresManagerApproval } from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
@@ -203,6 +209,94 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       console.warn('FBR enqueue failed (sale not affected):', e);
     }
 
+    return ok(snap);
+  });
+
+  // ---- Live Orders board: status transitions ---------------------------
+  defineHandler('orders:listActive', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    return ok(listActiveOrders(ctx.db, payload ?? {}));
+  });
+
+  defineHandler('orders:markPreparing', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      markOrderPreparing(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Transition failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:markReady', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      markOrderReady(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Transition failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:assignRider', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      assignRiderToOrder(ctx.db, payload.orderId, payload.riderId, {
+        userId: s.id,
+        deviceId: ctx.deviceId,
+      });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Assign failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:unassignRider', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      unassignRiderFromOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Unassign failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:markDelivered', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      markOrderDelivered(
+        ctx.db,
+        { orderId: payload.orderId, payment: payload.payment },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Mark delivered failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
   });
 

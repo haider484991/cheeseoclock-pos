@@ -22,6 +22,7 @@ import type {
   PaymentMethod,
   OrderSnapshot,
   PrepStation,
+  UUID,
 } from '@cheeseoclock/shared-types';
 
 interface OrderRow {
@@ -47,6 +48,9 @@ interface OrderRow {
   customer_phone_snapshot: string | null;
   delivery_address_snapshot: string | null;
   delivery_notes: string | null;
+  assigned_rider_id: string | null;
+  dispatched_at: string | null;
+  delivered_at: string | null;
   created_at: string;
   updated_at: string;
   device_id: string;
@@ -74,6 +78,9 @@ function rowToOrder(row: OrderRow): Order {
     voidedAt: row.voided_at,
     voidedBy: row.voided_by as Order['voidedBy'],
     voidReason: row.void_reason,
+    assignedRiderId: (row.assigned_rider_id ?? null) as Order['assignedRiderId'],
+    dispatchedAt: row.dispatched_at,
+    deliveredAt: row.delivered_at,
   };
 }
 
@@ -81,6 +88,7 @@ const ORDER_SELECT = `
   id, order_number, mode, status, table_id, customer_id, cashier_id, shift_id, source, notes,
   subtotal_cents, discount_cents, tax_cents, total_cents, paid_at, voided_at, voided_by, void_reason,
   customer_name_snapshot, customer_phone_snapshot, delivery_address_snapshot, delivery_notes,
+  assigned_rider_id, dispatched_at, delivered_at,
   created_at, updated_at, device_id, version
 `;
 
@@ -183,6 +191,9 @@ export function createOrder(
       voidedAt: null,
       voidedBy: null,
       voidReason: null,
+      assignedRiderId: null,
+      dispatchedAt: null,
+      deliveredAt: null,
     };
 
     db.prepare(
@@ -1010,6 +1021,21 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     }
   }
 
+  // Resolve assigned rider (if any). We join soft-deleted riders too because
+  // an order assigned to a now-deactivated rider should still show who's
+  // holding it.
+  let rider: OrderSnapshot['rider'] = null;
+  if (orderRow.assigned_rider_id) {
+    const r = db
+      .prepare(`SELECT id, name, phone FROM riders WHERE id = ?`)
+      .get(orderRow.assigned_rider_id) as
+      | { id: string; name: string; phone: string }
+      | undefined;
+    if (r) {
+      rider = { id: r.id as UUID, name: r.name, phone: r.phone };
+    }
+  }
+
   return {
     order,
     items,
@@ -1020,5 +1046,325 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     customerName: orderRow.customer_name_snapshot,
     customerPhone: orderRow.customer_phone_snapshot,
     deliveryAddress,
+    rider,
   };
+}
+
+// -----------------------------------------------------------------------------
+// Live order tracking — status transitions for the Live Orders board.
+//
+// State machine (legal transitions enforced here, in addition to UI):
+//   open / sent_to_kitchen   → preparing
+//   preparing                → ready
+//   ready                    → out_for_delivery (delivery)  | served (dine-in/takeaway)
+//   out_for_delivery         → delivered
+//   delivered                → paid (via tenderOrder, COD case)
+//   any active               → void (via voidOrder)
+//
+// Each transition uses writeWithSync so sync + audit get the change.
+// -----------------------------------------------------------------------------
+
+const ACTIVE_STATUSES: OrderStatus[] = [
+  'open',
+  'sent_to_kitchen',
+  'preparing',
+  'ready',
+  'out_for_delivery',
+];
+
+/**
+ * Active orders for the Live Orders board: anything that isn't done, voided,
+ * or refunded. Returned as full snapshots so the UI doesn't need a second
+ * round-trip per card.
+ */
+export function listActiveOrders(
+  db: AppDatabase,
+  opts?: { mode?: OrderMode },
+): OrderSnapshot[] {
+  const conditions: string[] = ['deleted_at IS NULL'];
+  const params: unknown[] = [];
+  conditions.push(`status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`);
+  params.push(...ACTIVE_STATUSES);
+  if (opts?.mode) {
+    conditions.push('mode = ?');
+    params.push(opts.mode);
+  }
+  const rows = db
+    .prepare(
+      `SELECT id FROM orders WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at ASC LIMIT 200`,
+    )
+    .all(...params) as Array<{ id: string }>;
+  // Reuse getOrderSnapshot so the rider join + delivery address logic is
+  // identical to single-order reads.
+  const snaps: OrderSnapshot[] = [];
+  for (const r of rows) {
+    const s = getOrderSnapshot(db, r.id);
+    if (s) snaps.push(s);
+  }
+  return snaps;
+}
+
+function setOrderStatus(
+  db: AppDatabase,
+  orderId: string,
+  next: OrderStatus,
+  legalFrom: OrderStatus[],
+  extraSet: { col: string; value: string | null }[],
+  actor: Actor & { userId: string },
+  action: string,
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (!legalFrom.includes(order.status)) {
+      throw new Error(`Cannot transition from ${order.status} to ${next}`);
+    }
+    const now = nowIso();
+    const setParts = ['status = ?', 'updated_at = ?', 'version = version + 1'];
+    const setParams: unknown[] = [next, now];
+    for (const e of extraSet) {
+      setParts.push(`${e.col} = ?`);
+      setParams.push(e.value);
+    }
+    db.prepare(`UPDATE orders SET ${setParts.join(', ')} WHERE id = ?`).run(
+      ...setParams,
+      orderId,
+    );
+    // Re-read for the after-image (includes any column we set).
+    const after = findOrder(db, orderId)!;
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      op: 'upsert',
+      payload: after,
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      action,
+      actorUserId: actor.userId,
+      before: order,
+      after,
+    });
+    result = after;
+  });
+  tx();
+  return result;
+}
+
+export function markOrderPreparing(
+  db: AppDatabase,
+  orderId: string,
+  actor: Actor & { userId: string },
+): Order {
+  return setOrderStatus(
+    db,
+    orderId,
+    'preparing',
+    ['open', 'sent_to_kitchen'],
+    [],
+    actor,
+    'mark_preparing',
+  );
+}
+
+export function markOrderReady(
+  db: AppDatabase,
+  orderId: string,
+  actor: Actor & { userId: string },
+): Order {
+  return setOrderStatus(
+    db,
+    orderId,
+    'ready',
+    ['open', 'sent_to_kitchen', 'preparing'],
+    [],
+    actor,
+    'mark_ready',
+  );
+}
+
+/**
+ * Assign a rider to a delivery order. Moves the status to `out_for_delivery`
+ * and stamps `dispatched_at`. Allowed from `ready` (the usual path), but also
+ * from earlier states if the dispatcher wants to pre-assign.
+ */
+export function assignRiderToOrder(
+  db: AppDatabase,
+  orderId: string,
+  riderId: string,
+  actor: Actor & { userId: string },
+): Order {
+  // Verify the rider exists + is active.
+  const rider = db
+    .prepare(
+      `SELECT id, is_active FROM riders WHERE id = ? AND deleted_at IS NULL`,
+    )
+    .get(riderId) as { id: string; is_active: number } | undefined;
+  if (!rider) throw new Error('Rider not found');
+  if (rider.is_active !== 1) throw new Error('Rider is inactive');
+
+  const order = findOrder(db, orderId);
+  if (!order) throw new Error('Order not found');
+  if (order.mode !== 'delivery') {
+    throw new Error('Only delivery orders can be assigned to a rider');
+  }
+  return setOrderStatus(
+    db,
+    orderId,
+    'out_for_delivery',
+    ['open', 'sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'],
+    [
+      { col: 'assigned_rider_id', value: riderId },
+      { col: 'dispatched_at', value: nowIso() },
+    ],
+    actor,
+    'assign_rider',
+  );
+}
+
+/**
+ * Clear a rider assignment (mistakes happen). Reverts to `ready` so the
+ * dispatcher can re-assign. Does not clear `dispatched_at` — that's a
+ * historical fact even if it gets re-set.
+ */
+export function unassignRiderFromOrder(
+  db: AppDatabase,
+  orderId: string,
+  actor: Actor & { userId: string },
+): Order {
+  const order = findOrder(db, orderId);
+  if (!order) throw new Error('Order not found');
+  if (order.status !== 'out_for_delivery') {
+    throw new Error('Only out-for-delivery orders can be unassigned');
+  }
+  return setOrderStatus(
+    db,
+    orderId,
+    'ready',
+    ['out_for_delivery'],
+    [{ col: 'assigned_rider_id', value: null }],
+    actor,
+    'unassign_rider',
+  );
+}
+
+/**
+ * Mark a delivery order delivered. Optionally records a COD payment in the
+ * same transaction — when `payment` is provided we transition straight from
+ * `out_for_delivery` (or `ready`) through `delivered` to `paid`.
+ */
+export function markOrderDelivered(
+  db: AppDatabase,
+  input: {
+    orderId: string;
+    payment?: {
+      method: PaymentMethod;
+      amountCents: number;
+      tenderedCents?: number | null;
+      referenceNo?: string | null;
+    };
+  },
+  actor: Actor & { userId: string },
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.mode !== 'delivery') {
+      throw new Error('Only delivery orders can be marked delivered');
+    }
+    if (
+      order.status !== 'ready' &&
+      order.status !== 'out_for_delivery' &&
+      order.status !== 'delivered'
+    ) {
+      throw new Error(`Cannot mark ${order.status} delivery as delivered`);
+    }
+
+    const now = nowIso();
+
+    // If a payment was supplied, insert it and bump to `paid`. Otherwise just
+    // mark `delivered` and leave tendering for later.
+    let finalStatus: OrderStatus = 'delivered';
+    if (input.payment) {
+      const p = input.payment;
+      if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
+      if (p.amountCents < order.totalCents) {
+        throw new Error(
+          `COD payment (Rs ${p.amountCents / 100}) is less than total (Rs ${
+            order.totalCents / 100
+          })`,
+        );
+      }
+      const pid = uuidv7();
+      db.prepare(
+        `INSERT INTO payments
+           (id, order_id, method, amount_cents, tendered_cents, reference_no,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(
+        pid,
+        input.orderId,
+        p.method,
+        p.amountCents,
+        p.tenderedCents ?? null,
+        p.referenceNo ?? null,
+        actor.userId,
+        now,
+        now,
+        now,
+        actor.deviceId,
+      );
+      enqueueSync(db, {
+        entityType: 'payments',
+        entityId: pid,
+        op: 'upsert',
+        payload: {
+          id: pid,
+          orderId: input.orderId,
+          ...p,
+          paidAt: now,
+          receivedByUserId: actor.userId,
+        },
+      });
+      finalStatus = 'paid';
+    }
+
+    db.prepare(
+      `UPDATE orders SET status = ?, delivered_at = ?,
+                          ${input.payment ? 'paid_at = ?,' : ''}
+                          updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(
+      ...(input.payment
+        ? [finalStatus, now, now, now, input.orderId]
+        : [finalStatus, now, now, input.orderId]),
+    );
+
+    const after = findOrder(db, input.orderId)!;
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      op: 'upsert',
+      payload: after,
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      action: input.payment ? 'mark_delivered_with_payment' : 'mark_delivered',
+      actorUserId: actor.userId,
+      before: order,
+      after,
+    });
+    result = after;
+  });
+  tx();
+  log.info('Order delivered', {
+    id: input.orderId,
+    withPayment: !!input.payment,
+  });
+  return result;
 }
