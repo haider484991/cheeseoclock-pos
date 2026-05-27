@@ -18,13 +18,14 @@ import {
   clearDiscount,
   tenderOrder,
   voidOrder,
+  sendOrderToKitchen,
   markOrderPreparing,
   markOrderReady,
   assignRiderToOrder,
   unassignRiderFromOrder,
   markOrderDelivered,
 } from '../../db/repositories/order-repo.js';
-import { requiresManagerApproval } from '@cheeseoclock/pos-domain';
+import { requiresManagerApproval, validateOrderForTender } from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
 import { mapOrderToFbrPayload } from '@cheeseoclock/fbr-core';
 import { getFbrConfig, toSellerInfo } from '../../services/fbr-config.js';
@@ -213,6 +214,42 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   });
 
   // ---- Live Orders board: status transitions ---------------------------
+  defineHandler('orders:sendToKitchen', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    // Re-validate server-side that the order is shippable to the kitchen.
+    // Same rules as tender (needs items, customer for delivery, etc.) so the
+    // dispatcher isn't handed a half-typed order.
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    const itemCount = snap.items.reduce((n, i) => n + i.quantity, 0);
+    const v = validateOrderForTender({
+      mode: snap.order.mode,
+      itemCount,
+      subtotalCents: snap.order.subtotalCents,
+      tableId: snap.order.tableId,
+      customerName: snap.customerName,
+      customerPhone: snap.customerPhone,
+      deliveryAddress: snap.deliveryAddress,
+    });
+    if (!v.ok) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: v.missing.join('; '),
+      });
+    }
+    try {
+      sendOrderToKitchen(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Send to kitchen failed',
+      });
+    }
+    const next = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!next) throw new IpcGuardError({ code: 'not_found', message: 'Order vanished' });
+    return ok(next);
+  });
+
   defineHandler('orders:listActive', ctx, (_ctx, payload) => {
     requireOrderCreate();
     return ok(listActiveOrders(ctx.db, payload ?? {}));

@@ -1154,6 +1154,28 @@ function setOrderStatus(
   return result;
 }
 
+/**
+ * Cashier in Checkout clicks "Send to kitchen" — commits the order without
+ * tendering. Used primarily for delivery/COD where payment happens on
+ * delivery. Moves status `open` → `sent_to_kitchen`. The order then appears
+ * on the Live Orders board for the kitchen + dispatcher to drive forward.
+ */
+export function sendOrderToKitchen(
+  db: AppDatabase,
+  orderId: string,
+  actor: Actor & { userId: string },
+): Order {
+  return setOrderStatus(
+    db,
+    orderId,
+    'sent_to_kitchen',
+    ['open', 'sent_to_kitchen'], // idempotent — re-sending is a no-op transition
+    [],
+    actor,
+    'send_to_kitchen',
+  );
+}
+
 export function markOrderPreparing(
   db: AppDatabase,
   orderId: string,

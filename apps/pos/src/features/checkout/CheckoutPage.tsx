@@ -108,6 +108,23 @@ export function CheckoutPage() {
     reset();
   }
 
+  async function handleSendToKitchen() {
+    try {
+      const next = await useCheckoutStore.getState().sendToKitchen();
+      toast({
+        title: 'Sent to kitchen',
+        description: `Order #${next.order.orderNumber.split('-').pop()} is now on the Live Orders board.`,
+      });
+      reset();
+    } catch (e) {
+      toast({
+        title: 'Could not send',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      });
+    }
+  }
+
   return (
     // Escape the AppShell main padding so the checkout uses the full canvas.
     <div className="-m-8 flex h-[calc(100vh-4rem)] flex-col">
@@ -124,6 +141,7 @@ export function CheckoutPage() {
         <CartPane
           onPay={() => setTenderOpen(true)}
           onDiscount={() => setDiscountOpen(true)}
+          onSendToKitchen={handleSendToKitchen}
         />
       </div>
 

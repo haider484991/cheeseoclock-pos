@@ -118,6 +118,8 @@ export const ipc = {
     // Live tracking
     listActive: (input?: IpcRequest<'orders:listActive'>) =>
       unwrap(window.api.orders.listActive(input)),
+    sendToKitchen: (orderId: string) =>
+      unwrap(window.api.orders.sendToKitchen({ orderId })),
     markPreparing: (orderId: string) =>
       unwrap(window.api.orders.markPreparing({ orderId })),
     markReady: (orderId: string) => unwrap(window.api.orders.markReady({ orderId })),

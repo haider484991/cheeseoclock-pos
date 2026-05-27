@@ -359,6 +359,15 @@ export interface IpcContract {
     request: { mode?: OrderMode } | undefined;
     response: ApiResult<OrderSnapshot[]>;
   };
+  /**
+   * Commit a still-open order without tendering. The COD entry path: cashier
+   * builds a delivery order, hits "Send to kitchen", and the order goes onto
+   * the Live Orders board. Payment is captured later when the rider returns.
+   */
+  'orders:sendToKitchen': {
+    request: { orderId: string };
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:markPreparing': {
     request: { orderId: string };
     response: ApiResult<OrderSnapshot>;

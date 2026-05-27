@@ -1,21 +1,37 @@
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { Minus, Plus, X, Percent, CreditCard, Trash2, AlertTriangle, ShoppingBag } from 'lucide-react';
+import {
+  Minus,
+  Plus,
+  X,
+  Percent,
+  CreditCard,
+  Trash2,
+  AlertTriangle,
+  ShoppingBag,
+  ChefHat,
+} from 'lucide-react';
 import { useTenderGate } from './useTenderGate';
 
 interface Props {
   onPay: () => void;
   onDiscount: () => void;
+  onSendToKitchen: () => void;
 }
 
-export function CartPane({ onPay, onDiscount }: Props) {
+export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
+  const mode = useCheckoutStore((s) => s.mode);
   const updateItemQty = useCheckoutStore((s) => s.updateItemQty);
   const removeItem = useCheckoutStore((s) => s.removeItem);
   const clearDiscount = useCheckoutStore((s) => s.clearDiscount);
   const gate = useTenderGate();
+  // COD is the default for delivery + takeaway in Pakistani retail. Show
+  // "Send to kitchen" as the primary action; keep "Pay now" available for
+  // the prepay path (counter / pre-paid online).
+  const codFlow = mode === 'delivery' || mode === 'takeaway';
 
   const items = snapshot?.items ?? [];
   const order = snapshot?.order;
@@ -166,7 +182,7 @@ export function CartPane({ onPay, onDiscount }: Props) {
           <div className="mb-2 rounded-xl border border-amber-300 bg-amber-50 p-2.5 text-xs dark:border-amber-700 dark:bg-amber-950">
             <div className="mb-0.5 flex items-center gap-1 font-semibold text-amber-900 dark:text-amber-200">
               <AlertTriangle className="h-3 w-3" />
-              Before paying:
+              {codFlow ? 'Before sending:' : 'Before paying:'}
             </div>
             <ul className="ml-4 list-disc space-y-0.5 text-amber-800 dark:text-amber-200">
               {gate.missing.map((m) => (
@@ -176,29 +192,68 @@ export function CartPane({ onPay, onDiscount }: Props) {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-2">
-          <Button
-            variant="secondary"
-            size="lg"
-            disabled={items.length === 0 || busy}
-            onClick={onDiscount}
-          >
-            <Percent className="h-4 w-4" />
-            Discount
-            <kbd className="ml-1 rounded bg-stone-200 px-1 text-[10px] dark:bg-stone-700">F3</kbd>
-          </Button>
-          <Button
-            variant="success"
-            size="lg"
-            disabled={items.length === 0 || busy || !gate.ok}
-            onClick={onPay}
-            title={!gate.ok ? gate.missing.join(' · ') : undefined}
-          >
-            <CreditCard className="h-4 w-4" />
-            Pay
-            <kbd className="ml-1 rounded bg-emerald-700 px-1 text-[10px]">F1</kbd>
-          </Button>
-        </div>
+        {codFlow ? (
+          // COD-default layout: Send to kitchen is primary, Pay-now demoted
+          // to a secondary text link for the prepay scenario.
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant="secondary"
+                size="lg"
+                disabled={items.length === 0 || busy}
+                onClick={onDiscount}
+              >
+                <Percent className="h-4 w-4" />
+                Discount
+                <kbd className="ml-1 rounded bg-stone-200 px-1 text-[10px] dark:bg-stone-700">F3</kbd>
+              </Button>
+              <Button
+                variant="success"
+                size="lg"
+                disabled={items.length === 0 || busy || !gate.ok}
+                onClick={onSendToKitchen}
+                title={!gate.ok ? gate.missing.join(' · ') : undefined}
+              >
+                <ChefHat className="h-4 w-4" />
+                Send to kitchen
+              </Button>
+            </div>
+            <button
+              type="button"
+              disabled={items.length === 0 || busy || !gate.ok}
+              onClick={onPay}
+              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-stone-800 dark:hover:text-stone-200"
+            >
+              <CreditCard className="h-3.5 w-3.5" />
+              Customer paying now? Pay & dispatch
+            </button>
+          </>
+        ) : (
+          // Dine-in: classic Pay flow as the primary action.
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              variant="secondary"
+              size="lg"
+              disabled={items.length === 0 || busy}
+              onClick={onDiscount}
+            >
+              <Percent className="h-4 w-4" />
+              Discount
+              <kbd className="ml-1 rounded bg-stone-200 px-1 text-[10px] dark:bg-stone-700">F3</kbd>
+            </Button>
+            <Button
+              variant="success"
+              size="lg"
+              disabled={items.length === 0 || busy || !gate.ok}
+              onClick={onPay}
+              title={!gate.ok ? gate.missing.join(' · ') : undefined}
+            >
+              <CreditCard className="h-4 w-4" />
+              Pay
+              <kbd className="ml-1 rounded bg-emerald-700 px-1 text-[10px]">F1</kbd>
+            </Button>
+          </div>
+        )}
       </footer>
     </aside>
   );

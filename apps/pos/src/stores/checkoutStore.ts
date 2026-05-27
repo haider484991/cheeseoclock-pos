@@ -35,6 +35,13 @@ interface CheckoutState {
       referenceNo?: string | null;
     }>,
   ) => Promise<OrderSnapshot>;
+  /**
+   * Commit the order without tendering — for the COD entry path on delivery
+   * (and takeaway) orders. Validates the customer/address inline, calls
+   * sendToKitchen, returns the snapshot. After this the order shows on the
+   * Live Orders board.
+   */
+  sendToKitchen: () => Promise<OrderSnapshot>;
   voidCurrent: (reason: string, approverPin: string) => Promise<void>;
   /** Refetch the current order snapshot — used after side mutations like attachCustomer. */
   refreshSnapshot: () => Promise<void>;
@@ -171,6 +178,28 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => ({
         orderId: snap.order.id,
         payments,
       });
+      set({ snapshot: next });
+      return next;
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  async sendToKitchen() {
+    const snap = get().snapshot;
+    if (!snap) throw new Error('No open order to send');
+    set({ busy: true });
+    try {
+      // Commit any inline customer fields onto the order BEFORE handing off.
+      const { commitCustomerToOrder } = await import('../features/checkout/CustomerInlinePanel');
+      const { getCustomerFormSnapshot } = await import('../features/checkout/useCustomerForm');
+      try {
+        await commitCustomerToOrder(snap.order.id, get().mode, getCustomerFormSnapshot());
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('Customer commit failed (proceeding with send to kitchen):', e);
+      }
+      const next = await ipc.orders.sendToKitchen(snap.order.id);
       set({ snapshot: next });
       return next;
     } finally {

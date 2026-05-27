@@ -79,6 +79,7 @@ const api: RendererApi = {
     attachCustomer: (req) => invoke('orders:attachCustomer', req),
     detachCustomer: (req) => invoke('orders:detachCustomer', req),
     listActive: (req) => invoke('orders:listActive', req),
+    sendToKitchen: (req) => invoke('orders:sendToKitchen', req),
     markPreparing: (req) => invoke('orders:markPreparing', req),
     markReady: (req) => invoke('orders:markReady', req),
     assignRider: (req) => invoke('orders:assignRider', req),
