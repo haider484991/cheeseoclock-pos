@@ -27,6 +27,8 @@ import type {
 } from '@cheeseoclock/shared-types';
 import { VoidOrderDialog } from './VoidOrderDialog';
 import { RefundOrderDialog } from './RefundOrderDialog';
+import { MarkDeliveredDialog } from './MarkDeliveredDialog';
+import { CreditCard } from 'lucide-react';
 
 /**
  * Order History page — every order ever, filterable. Click a row for a
@@ -239,6 +241,7 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   const { toast } = useToast();
   const [voidOpen, setVoidOpen] = useState(false);
   const [refundOpen, setRefundOpen] = useState(false);
+  const [collectOpen, setCollectOpen] = useState(false);
 
   const snapQ = useQuery({
     queryKey: ['orders', 'detail', orderId],
@@ -410,7 +413,7 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
               )}
             </div>
 
-            <footer className="flex items-center gap-2 border-t border-stone-200 px-4 py-3 dark:border-stone-700">
+            <footer className="flex flex-wrap items-center gap-2 border-t border-stone-200 px-4 py-3 dark:border-stone-700">
               <Button
                 variant="secondary"
                 size="md"
@@ -421,6 +424,22 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                 <Printer className="h-4 w-4" />
                 Reprint
               </Button>
+              {/* Collect payment: for unpaid served/delivered orders — typical
+                  dine-in flow where customer eats first, pays later. */}
+              {snap.order.paidAt === null &&
+                (snap.order.status === 'served' ||
+                  snap.order.status === 'delivered' ||
+                  snap.order.status === 'ready') && (
+                  <Button
+                    variant="success"
+                    size="md"
+                    className="flex-1"
+                    onClick={() => setCollectOpen(true)}
+                  >
+                    <CreditCard className="h-4 w-4" />
+                    Collect payment
+                  </Button>
+                )}
               {snap.order.status === 'paid' && (
                 <Button
                   variant="danger"
@@ -467,6 +486,16 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
           onClose={() => setRefundOpen(false)}
           onDone={() => {
             setRefundOpen(false);
+            void qc.invalidateQueries({ queryKey: ['orders'] });
+          }}
+        />
+      )}
+      {collectOpen && snap && (
+        <MarkDeliveredDialog
+          snap={snap}
+          onClose={() => setCollectOpen(false)}
+          onDone={() => {
+            setCollectOpen(false);
             void qc.invalidateQueries({ queryKey: ['orders'] });
           }}
         />

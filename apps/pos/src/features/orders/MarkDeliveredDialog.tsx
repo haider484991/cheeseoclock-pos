@@ -14,14 +14,16 @@ interface Props {
 }
 
 /**
- * Confirm delivery + capture COD payment in one step. If the order is
- * already paid (rare — pre-pay flow) we just stamp `delivered_at`.
+ * Confirm delivery / pickup + capture COD payment in one step. Mode-aware:
+ *  - delivery  → calls `markDelivered` (stamps delivered_at)
+ *  - takeaway  → calls `markServed`
+ * If the order is already paid (pre-pay flow), we skip the payment block.
  *
- * The dispatcher picks the payment method (cash is default for COD).
  * For cash we also capture "tendered" so we can show change due.
  */
 export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
   const { order } = snap;
+  const isDelivery = order.mode === 'delivery';
   const alreadyPaid = order.paidAt !== null;
   const [method, setMethod] = useState<PaymentMethod>('cash');
   const [tendered, setTendered] = useState((order.totalCents / 100).toFixed(0));
@@ -33,28 +35,34 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
   const tenderedCents = Math.round(tenderedNum * 100);
   const changeCents = method === 'cash' ? Math.max(0, tenderedCents - order.totalCents) : 0;
 
+  // Wording switches based on mode — we reuse this dialog for takeaway pickup.
+  const verb = isDelivery ? 'delivered' : 'picked up';
+  const verbCap = isDelivery ? 'Delivered' : 'Picked up';
+
   const deliverMut = useMutation({
     mutationFn: () => {
-      if (alreadyPaid) {
-        return ipc.orders.markDelivered({ orderId: order.id });
-      }
-      return ipc.orders.markDelivered({
-        orderId: order.id,
-        payment: {
-          method,
-          amountCents: order.totalCents,
-          tenderedCents: method === 'cash' ? tenderedCents : null,
-          referenceNo: method !== 'cash' ? reference.trim() || null : null,
-        },
-      });
+      const payment = alreadyPaid
+        ? undefined
+        : {
+            method,
+            amountCents: order.totalCents,
+            tenderedCents: method === 'cash' ? tenderedCents : null,
+            referenceNo: method !== 'cash' ? reference.trim() || null : null,
+          };
+      const args = { orderId: order.id, ...(payment ? { payment } : {}) };
+      return isDelivery
+        ? ipc.orders.markDelivered(args)
+        : ipc.orders.markServed(args);
     },
     onSuccess: () => {
-      toast({ title: alreadyPaid ? 'Marked delivered' : 'Delivered + payment captured' });
+      toast({
+        title: alreadyPaid ? `Marked ${verb}` : `${verbCap} + payment captured`,
+      });
       onDone();
     },
     onError: (e) =>
       toast({
-        title: 'Could not mark delivered',
+        title: `Could not mark ${verb}`,
         description: e instanceof Error ? e.message : 'Unknown error',
         variant: 'error',
       }),
@@ -83,7 +91,9 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
           <header className="mb-4 flex items-start justify-between gap-3">
             <div>
               <Dialog.Title className="text-lg font-semibold">
-                {alreadyPaid ? 'Mark delivered' : 'Delivered + collect payment'}
+                {alreadyPaid
+                  ? `Mark ${verb}`
+                  : `${verbCap} + collect payment`}
               </Dialog.Title>
               <Dialog.Description className="mt-0.5 text-xs text-stone-500">
                 Order #{order.orderNumber.split('-').pop()} ·{' '}
@@ -184,7 +194,11 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
               disabled={deliverMut.isPending}
             >
               <CheckCircle2 className="h-4 w-4" />
-              {deliverMut.isPending ? 'Saving…' : alreadyPaid ? 'Mark delivered' : 'Confirm'}
+              {deliverMut.isPending
+                ? 'Saving…'
+                : alreadyPaid
+                ? `Mark ${verb}`
+                : 'Confirm'}
             </Button>
           </div>
         </Dialog.Content>

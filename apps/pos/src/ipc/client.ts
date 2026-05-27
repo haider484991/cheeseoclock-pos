@@ -129,6 +129,8 @@ export const ipc = {
       unwrap(window.api.orders.assignRider(input)),
     unassignRider: (orderId: string) =>
       unwrap(window.api.orders.unassignRider({ orderId })),
+    markServed: (input: IpcRequest<'orders:markServed'>) =>
+      unwrap(window.api.orders.markServed(input)),
     markDelivered: (input: IpcRequest<'orders:markDelivered'>) =>
       unwrap(window.api.orders.markDelivered(input)),
   },

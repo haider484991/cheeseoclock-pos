@@ -25,6 +25,7 @@ import {
   markOrderReady,
   assignRiderToOrder,
   unassignRiderFromOrder,
+  markOrderServed,
   markOrderDelivered,
 } from '../../db/repositories/order-repo.js';
 import { requiresManagerApproval, validateOrderForTender } from '@cheeseoclock/pos-domain';
@@ -322,6 +323,39 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:markServed', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      markOrderServed(
+        ctx.db,
+        { orderId: payload.orderId, payment: payload.payment },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Mark served failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // Receipt + FBR when a payment was just captured (takeaway COD).
+    if (payload.payment) {
+      const openDrawer = payload.payment.method === 'cash';
+      printSpooler.enqueueReceipt(payload.orderId, openDrawer);
+      try {
+        const cfg = getFbrConfig(ctx.db);
+        const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
+        enqueueFbrSubmission(ctx.db, payload.orderId, fbrPayload, cfg.mode);
+        fbrWorker.kick();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('FBR enqueue failed on serve (sale not affected):', e);
+      }
+    }
     return ok(snap);
   });
 

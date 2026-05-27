@@ -86,6 +86,7 @@ const api: RendererApi = {
     markReady: (req) => invoke('orders:markReady', req),
     assignRider: (req) => invoke('orders:assignRider', req),
     unassignRider: (req) => invoke('orders:unassignRider', req),
+    markServed: (req) => invoke('orders:markServed', req),
     markDelivered: (req) => invoke('orders:markDelivered', req),
   },
   sync: {

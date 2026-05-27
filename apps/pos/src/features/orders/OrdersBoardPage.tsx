@@ -121,6 +121,21 @@ export function OrdersBoardPage() {
         variant: 'error',
       }),
   });
+  // Dine-in served: no payment dialog. Just status change.
+  // (Cashier collects payment later via Order History → Tender.)
+  const markServedDineIn = useMutation({
+    mutationFn: (orderId: string) => ipc.orders.markServed({ orderId }),
+    onSuccess: () => {
+      toast({ title: 'Order served' });
+      void qc.invalidateQueries({ queryKey: ['orders', 'active'] });
+    },
+    onError: (e) =>
+      toast({
+        title: 'Could not mark served',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      }),
+  });
   const unassign = useMutation({
     mutationFn: (orderId: string) => ipc.orders.unassignRider(orderId),
     onSuccess: () => {
@@ -242,6 +257,7 @@ export function OrdersBoardPage() {
                       onAssignRider={() => setAssignFor(snap)}
                       onUnassign={() => unassign.mutate(snap.order.id)}
                       onMarkDelivered={() => setDeliverFor(snap)}
+                      onMarkServedDineIn={() => markServedDineIn.mutate(snap.order.id)}
                       onReprint={() => reprint.mutate(snap.order.id)}
                       onCancel={() => setVoidFor(snap)}
                     />
@@ -298,6 +314,7 @@ interface OrderCardProps {
   onAssignRider: () => void;
   onUnassign: () => void;
   onMarkDelivered: () => void;
+  onMarkServedDineIn: () => void;
   onReprint: () => void;
   onCancel: () => void;
 }
@@ -309,6 +326,7 @@ function OrderCard({
   onAssignRider,
   onUnassign,
   onMarkDelivered,
+  onMarkServedDineIn,
   onReprint,
   onCancel,
 }: OrderCardProps) {
@@ -408,6 +426,7 @@ function OrderCard({
           onMarkReady={onMarkReady}
           onAssignRider={onAssignRider}
           onMarkDelivered={onMarkDelivered}
+          onMarkServedDineIn={onMarkServedDineIn}
           paid={order.paidAt !== null}
         />
         <button
@@ -438,6 +457,7 @@ function OrderActions(props: {
   onMarkReady: () => void;
   onAssignRider: () => void;
   onMarkDelivered: () => void;
+  onMarkServedDineIn: () => void;
   paid: boolean;
 }) {
   const { status, mode } = props;
@@ -466,10 +486,20 @@ function OrderActions(props: {
         </Button>
       );
     }
+    if (mode === 'takeaway') {
+      // Takeaway: open payment dialog (COD at pickup is the default).
+      return (
+        <Button size="sm" variant="success" className="flex-1" onClick={props.onMarkDelivered}>
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          {props.paid ? 'Picked up' : 'Picked up + Collect cash'}
+        </Button>
+      );
+    }
+    // Dine-in: just status change; payment happens later via Order History.
     return (
-      <Button size="sm" variant="success" className="flex-1" onClick={props.onMarkDelivered}>
+      <Button size="sm" variant="success" className="flex-1" onClick={props.onMarkServedDineIn}>
         <CheckCircle2 className="h-3.5 w-3.5" />
-        {mode === 'dine_in' ? 'Served' : 'Picked up'}
+        Served
       </Button>
     );
   }

@@ -1488,6 +1488,125 @@ export function unassignRiderFromOrder(
 }
 
 /**
+ * Mark a takeaway or dine-in order served (i.e. handed to the customer).
+ * Optional payment param mirrors `markOrderDelivered` — for takeaway COD
+ * we capture cash + close the order in one step.
+ *
+ *  takeaway / dine_in:
+ *    ready                → served    (no payment)
+ *    ready                → paid      (with payment, COD-at-pickup)
+ *    served               → paid      (split flow: served first, paid later)
+ *
+ * Delivery uses `markOrderDelivered` instead — that path also sets
+ * `delivered_at` and gates on `out_for_delivery`.
+ */
+export function markOrderServed(
+  db: AppDatabase,
+  input: {
+    orderId: string;
+    payment?: {
+      method: PaymentMethod;
+      amountCents: number;
+      tenderedCents?: number | null;
+      referenceNo?: string | null;
+    };
+  },
+  actor: Actor & { userId: string },
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.mode === 'delivery') {
+      throw new Error(
+        'Use markOrderDelivered for delivery orders (it stamps delivered_at + handles rider state).',
+      );
+    }
+    if (order.status !== 'ready' && order.status !== 'served') {
+      throw new Error(`Cannot mark ${order.status} as served`);
+    }
+
+    const now = nowIso();
+    let finalStatus: OrderStatus = 'served';
+
+    if (input.payment) {
+      const p = input.payment;
+      if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
+      if (p.amountCents < order.totalCents) {
+        throw new Error(
+          `Payment (Rs ${p.amountCents / 100}) is less than total (Rs ${
+            order.totalCents / 100
+          })`,
+        );
+      }
+      const pid = uuidv7();
+      db.prepare(
+        `INSERT INTO payments
+           (id, order_id, method, amount_cents, tendered_cents, reference_no,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(
+        pid,
+        input.orderId,
+        p.method,
+        p.amountCents,
+        p.tenderedCents ?? null,
+        p.referenceNo ?? null,
+        actor.userId,
+        now,
+        now,
+        now,
+        actor.deviceId,
+      );
+      enqueueSync(db, {
+        entityType: 'payments',
+        entityId: pid,
+        op: 'upsert',
+        payload: {
+          id: pid,
+          orderId: input.orderId,
+          ...p,
+          paidAt: now,
+          receivedByUserId: actor.userId,
+        },
+      });
+      finalStatus = 'paid';
+    }
+
+    db.prepare(
+      `UPDATE orders SET status = ?,
+                          ${input.payment ? 'paid_at = ?,' : ''}
+                          updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(
+      ...(input.payment
+        ? [finalStatus, now, now, input.orderId]
+        : [finalStatus, now, input.orderId]),
+    );
+
+    const after = findOrder(db, input.orderId)!;
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      op: 'upsert',
+      payload: after,
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      action: input.payment ? 'mark_served_with_payment' : 'mark_served',
+      actorUserId: actor.userId,
+      before: order,
+      after,
+    });
+    result = after;
+  });
+  tx();
+  log.info('Order served', { id: input.orderId, withPayment: !!input.payment });
+  return result;
+}
+
+/**
  * Mark a delivery order delivered. Optionally records a COD payment in the
  * same transaction — when `payment` is provided we transition straight from
  * `out_for_delivery` (or `ready`) through `delivered` to `paid`.

@@ -423,6 +423,25 @@ export interface IpcContract {
     response: ApiResult<OrderSnapshot>;
   };
   /**
+   * Mark a takeaway/dine-in order served. Optional `payment` mirrors
+   * markDelivered: if provided, captures the COD payment in the same
+   * transaction and moves status straight to `paid`. Otherwise moves
+   * status to `served` and a tender call is expected later (typical for
+   * dine-in: customer eats, then asks for the bill).
+   */
+  'orders:markServed': {
+    request: {
+      orderId: string;
+      payment?: {
+        method: PaymentMethod;
+        amountCents: number;
+        tenderedCents?: number | null;
+        referenceNo?: string | null;
+      };
+    };
+    response: ApiResult<OrderSnapshot>;
+  };
+  /**
    * Mark a delivery order delivered. If `payment` is provided we also record
    * the COD payment in the same transaction so the order moves directly to
    * paid + delivered. If omitted, the order moves to `delivered` and a tender
