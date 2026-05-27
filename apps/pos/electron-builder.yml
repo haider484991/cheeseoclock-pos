@@ -42,10 +42,11 @@ win:
   artifactName: ${productName}-${version}-${arch}.${ext}
   signingHashAlgorithms: [sha256]
   signAndEditExecutable: true
-  # Publisher shown in Windows "Apps & features" + installer header. Without a
-  # code-signing cert this is purely cosmetic — SmartScreen still says
-  # "Unknown publisher" until a cert (and reputation) is attached.
-  publisherName: Haider Ali
+  # NOTE: do NOT set `publisherName` until we have a code-signing cert.
+  # electron-updater enforces an Authenticode publisher match on auto-updates;
+  # an unsigned build will always fail that check and the banner gets stuck at
+  # "Downloading…" forever. Once we have a cert (Sectigo/DigiCert EV), restore
+  # `publisherName: Haider Ali` so end users see your name in "Apps & features".
 
 nsis:
   oneClick: false
