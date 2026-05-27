@@ -413,19 +413,11 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
               )}
             </div>
 
-            <footer className="flex flex-wrap items-center gap-2 border-t border-stone-200 px-4 py-3 dark:border-stone-700">
-              <Button
-                variant="secondary"
-                size="md"
-                className="flex-1"
-                onClick={() => reprintMut.mutate()}
-                disabled={reprintMut.isPending}
-              >
-                <Printer className="h-4 w-4" />
-                Reprint
-              </Button>
-              {/* Collect payment: for unpaid served/delivered orders — typical
-                  dine-in flow where customer eats first, pays later. */}
+            {/* Footer: primary action on top (full-width), secondary row of
+                ghost buttons below. Avoids the 3-flex-1 wrap that crammed
+                "Collect payment" onto two lines. */}
+            <footer className="space-y-2 border-t border-stone-200 px-4 py-3 dark:border-stone-700">
+              {/* Primary: the most likely next action for this status. */}
               {snap.order.paidAt === null &&
                 (snap.order.status === 'served' ||
                   snap.order.status === 'delivered' ||
@@ -433,7 +425,7 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   <Button
                     variant="success"
                     size="md"
-                    className="flex-1"
+                    className="w-full whitespace-nowrap"
                     onClick={() => setCollectOpen(true)}
                   >
                     <CreditCard className="h-4 w-4" />
@@ -444,7 +436,7 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                 <Button
                   variant="danger"
                   size="md"
-                  className="flex-1"
+                  className="w-full whitespace-nowrap"
                   onClick={() => setRefundOpen(true)}
                   title="Issue a full refund"
                 >
@@ -452,19 +444,32 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   Refund
                 </Button>
               )}
-              {snap.order.status !== 'void' &&
-                snap.order.status !== 'refunded' &&
-                snap.order.paidAt === null && (
-                  <Button
-                    variant="danger"
-                    size="md"
-                    className="flex-1"
-                    onClick={() => setVoidOpen(true)}
-                  >
-                    <XCircle className="h-4 w-4" />
-                    Cancel
-                  </Button>
-                )}
+              {/* Secondary row: lower-impact actions, always present. */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="md"
+                  className="flex-1 whitespace-nowrap"
+                  onClick={() => reprintMut.mutate()}
+                  disabled={reprintMut.isPending}
+                >
+                  <Printer className="h-4 w-4" />
+                  {reprintMut.isPending ? 'Sending…' : 'Reprint'}
+                </Button>
+                {snap.order.status !== 'void' &&
+                  snap.order.status !== 'refunded' &&
+                  snap.order.paidAt === null && (
+                    <Button
+                      variant="ghost"
+                      size="md"
+                      className="flex-1 whitespace-nowrap text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+                      onClick={() => setVoidOpen(true)}
+                    >
+                      <XCircle className="h-4 w-4" />
+                      Cancel
+                    </Button>
+                  )}
+              </div>
             </footer>
           </>
         )}

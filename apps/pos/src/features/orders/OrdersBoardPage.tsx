@@ -418,7 +418,9 @@ function OrderCard({
         </div>
       </footer>
 
-      <div className="mt-2 flex items-center gap-1.5">
+      <div className="mt-2 space-y-1.5">
+        {/* Primary action gets its own row so longer labels (e.g. "Delivered
+            + Collect cash") never wrap inside a narrow kanban column. */}
         <OrderActions
           status={order.status}
           mode={order.mode}
@@ -429,22 +431,27 @@ function OrderCard({
           onMarkServedDineIn={onMarkServedDineIn}
           paid={order.paidAt !== null}
         />
-        <button
-          type="button"
-          onClick={onReprint}
-          title="Reprint receipt"
-          className="rounded-lg border border-stone-200 p-2 text-stone-500 transition-colors hover:bg-stone-50 hover:text-stone-700 dark:border-stone-700 dark:hover:bg-stone-700"
-        >
-          <Printer className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          title="Cancel order (manager PIN)"
-          className="rounded-lg border border-stone-200 p-2 text-stone-500 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 dark:border-stone-700 dark:hover:bg-red-950"
-        >
-          <XCircle className="h-3.5 w-3.5" />
-        </button>
+        {/* Secondary icons sit below, right-aligned, smaller, ghost. */}
+        <div className="flex justify-end gap-1">
+          <button
+            type="button"
+            onClick={onReprint}
+            aria-label="Reprint receipt"
+            title="Reprint receipt"
+            className="rounded-md p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-700 dark:hover:text-stone-200"
+          >
+            <Printer className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Cancel order"
+            title="Cancel order (manager PIN)"
+            className="rounded-md p-1.5 text-stone-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950 dark:hover:text-red-300"
+          >
+            <XCircle className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -463,7 +470,7 @@ function OrderActions(props: {
   const { status, mode } = props;
   if (status === 'open' || status === 'sent_to_kitchen') {
     return (
-      <Button size="sm" variant="primary" className="flex-1" onClick={props.onMarkPreparing}>
+      <Button size="sm" variant="primary" className="w-full whitespace-nowrap" onClick={props.onMarkPreparing}>
         <ChefHat className="h-3.5 w-3.5" />
         Start preparing
       </Button>
@@ -471,7 +478,7 @@ function OrderActions(props: {
   }
   if (status === 'preparing') {
     return (
-      <Button size="sm" variant="success" className="flex-1" onClick={props.onMarkReady}>
+      <Button size="sm" variant="success" className="w-full whitespace-nowrap" onClick={props.onMarkReady}>
         <CheckCircle2 className="h-3.5 w-3.5" />
         Mark ready
       </Button>
@@ -480,7 +487,7 @@ function OrderActions(props: {
   if (status === 'ready') {
     if (mode === 'delivery') {
       return (
-        <Button size="sm" variant="primary" className="flex-1" onClick={props.onAssignRider}>
+        <Button size="sm" variant="primary" className="w-full whitespace-nowrap" onClick={props.onAssignRider}>
           <Bike className="h-3.5 w-3.5" />
           Assign rider
         </Button>
@@ -489,15 +496,15 @@ function OrderActions(props: {
     if (mode === 'takeaway') {
       // Takeaway: open payment dialog (COD at pickup is the default).
       return (
-        <Button size="sm" variant="success" className="flex-1" onClick={props.onMarkDelivered}>
+        <Button size="sm" variant="success" className="w-full whitespace-nowrap" onClick={props.onMarkDelivered}>
           <CheckCircle2 className="h-3.5 w-3.5" />
-          {props.paid ? 'Picked up' : 'Picked up + Collect cash'}
+          {props.paid ? 'Picked up' : 'Picked up + Pay'}
         </Button>
       );
     }
     // Dine-in: just status change; payment happens later via Order History.
     return (
-      <Button size="sm" variant="success" className="flex-1" onClick={props.onMarkServedDineIn}>
+      <Button size="sm" variant="success" className="w-full whitespace-nowrap" onClick={props.onMarkServedDineIn}>
         <CheckCircle2 className="h-3.5 w-3.5" />
         Served
       </Button>
@@ -505,9 +512,9 @@ function OrderActions(props: {
   }
   if (status === 'out_for_delivery') {
     return (
-      <Button size="sm" variant="success" className="flex-1" onClick={props.onMarkDelivered}>
+      <Button size="sm" variant="success" className="w-full whitespace-nowrap" onClick={props.onMarkDelivered}>
         <CheckCircle2 className="h-3.5 w-3.5" />
-        {props.paid ? 'Delivered' : 'Delivered + Collect cash'}
+        {props.paid ? 'Delivered' : 'Delivered + Pay'}
       </Button>
     );
   }

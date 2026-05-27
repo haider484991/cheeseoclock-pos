@@ -26,7 +26,9 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
   const isDelivery = order.mode === 'delivery';
   const alreadyPaid = order.paidAt !== null;
   const [method, setMethod] = useState<PaymentMethod>('cash');
-  const [tendered, setTendered] = useState((order.totalCents / 100).toFixed(0));
+  // Default tendered to the exact total (with paisa) so the gate doesn't trip
+  // when the bill has a non-zero fractional part.
+  const [tendered, setTendered] = useState((order.totalCents / 100).toFixed(2));
   const [reference, setReference] = useState('');
   const { toast } = useToast();
 

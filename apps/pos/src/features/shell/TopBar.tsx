@@ -1,8 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@cheeseoclock/ui';
 import { useSessionStore } from '../../stores/sessionStore';
 import { LogOut, Clock, Calculator } from 'lucide-react';
 import { CalculatorPopover } from './CalculatorPopover';
+
+/** Re-render every minute so the wall clock stays current. */
+function useNowTick(intervalMs = 60_000): number {
+  const [tick, setTick] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setTick(Date.now()), intervalMs);
+    return () => clearInterval(t);
+  }, [intervalMs]);
+  return tick;
+}
 
 const ROLE_LABEL = {
   admin: 'Admin',
@@ -30,14 +40,22 @@ export function TopBar() {
   const user = useSessionStore((s) => s.user);
   const logout = useSessionStore((s) => s.logout);
   const [calcOpen, setCalcOpen] = useState(false);
+  const tick = useNowTick();
+  const now = new Date(tick);
 
   return (
     <header className="flex h-16 items-center justify-between border-b border-stone-200/70 bg-white/70 px-8 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/70">
       <div className="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
         <Clock className="h-4 w-4" />
-        <span className="font-medium">No active shift</span>
+        <span className="font-medium">
+          {now.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          })}
+        </span>
         <span className="ml-2 text-xs text-stone-400">
-          {new Date().toLocaleDateString('en-US', {
+          {now.toLocaleDateString('en-US', {
             weekday: 'long',
             month: 'short',
             day: 'numeric',

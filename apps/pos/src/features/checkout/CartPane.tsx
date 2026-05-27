@@ -200,19 +200,21 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
               <Button
                 variant="secondary"
                 size="lg"
+                className="whitespace-nowrap"
                 disabled={items.length === 0 || busy}
                 onClick={onDiscount}
+                title="Apply a discount (F3)"
               >
                 <Percent className="h-4 w-4" />
                 Discount
-                <kbd className="ml-1 rounded bg-stone-200 px-1 text-[10px] dark:bg-stone-700">F3</kbd>
               </Button>
               <Button
                 variant="success"
                 size="lg"
+                className="whitespace-nowrap"
                 disabled={items.length === 0 || busy || !gate.ok}
                 onClick={onSendToKitchen}
-                title={!gate.ok ? gate.missing.join(' · ') : undefined}
+                title={!gate.ok ? gate.missing.join(' · ') : 'Send to kitchen'}
               >
                 <ChefHat className="h-4 w-4" />
                 Send to kitchen
@@ -222,10 +224,10 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
               type="button"
               disabled={items.length === 0 || busy || !gate.ok}
               onClick={onPay}
-              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-stone-800 dark:hover:text-stone-200"
+              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-100"
             >
               <CreditCard className="h-3.5 w-3.5" />
-              Customer paying now? Pay & dispatch
+              Customer paying now? Pay &amp; dispatch
             </button>
           </>
         ) : (
@@ -234,24 +236,38 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
             <Button
               variant="secondary"
               size="lg"
+              className="whitespace-nowrap"
               disabled={items.length === 0 || busy}
               onClick={onDiscount}
+              title="Apply a discount (F3)"
             >
               <Percent className="h-4 w-4" />
               Discount
-              <kbd className="ml-1 rounded bg-stone-200 px-1 text-[10px] dark:bg-stone-700">F3</kbd>
             </Button>
             <Button
               variant="success"
               size="lg"
+              className="whitespace-nowrap"
               disabled={items.length === 0 || busy || !gate.ok}
               onClick={onPay}
-              title={!gate.ok ? gate.missing.join(' · ') : undefined}
+              title={!gate.ok ? gate.missing.join(' · ') : 'Tender payment (F1)'}
             >
               <CreditCard className="h-4 w-4" />
               Pay
-              <kbd className="ml-1 rounded bg-emerald-700 px-1 text-[10px]">F1</kbd>
             </Button>
+          </div>
+        )}
+        {/* Keyboard hints — out of the buttons so they don't crowd labels */}
+        {items.length > 0 && (
+          <div className="mt-2 flex justify-center gap-3 text-[10px] text-stone-400">
+            <span>
+              <kbd className="rounded bg-stone-200 px-1 font-mono dark:bg-stone-700">F1</kbd>{' '}
+              {codFlow ? 'Pay' : 'Pay'}
+            </span>
+            <span>
+              <kbd className="rounded bg-stone-200 px-1 font-mono dark:bg-stone-700">F3</kbd>{' '}
+              Discount
+            </span>
           </div>
         )}
       </footer>

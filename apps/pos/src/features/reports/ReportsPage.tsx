@@ -521,25 +521,25 @@ function CashDrawerTab({ range }: { range: { sinceIso: string; untilIso: string 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Stat
           icon={DollarSign}
-          tone="emerald"
+          tone="from-emerald-400 to-emerald-600"
           label="Net revenue"
           value={formatCents(data?.netRevenueCents ?? 0)}
         />
         <Stat
           icon={ShoppingBag}
-          tone="sky"
+          tone="from-sky-400 to-sky-600"
           label="Paid orders"
           value={String(data?.paidOrderCount ?? 0)}
         />
         <Stat
           icon={Receipt}
-          tone="amber"
+          tone="from-amber-400 to-amber-600"
           label="Refunds value"
           value={formatCents(data?.totalRefundsCents ?? 0)}
         />
         <Stat
           icon={AlertTriangle}
-          tone="red"
+          tone="from-red-400 to-red-600"
           label="Refunded orders"
           value={String(data?.refundedOrderCount ?? 0)}
         />

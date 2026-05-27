@@ -124,7 +124,6 @@ export function Sidebar() {
                       className={cn(
                         'flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] font-bold',
                         'bg-amber-500 text-white shadow-soft-sm',
-                        'animate-pulse',
                       )}
                       title={`${liveCount} active order${liveCount === 1 ? '' : 's'}`}
                     >
@@ -143,9 +142,20 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-stone-200/70 px-5 py-3 text-[10px] uppercase tracking-widest text-stone-400 dark:border-stone-800/70">
-        Built for restaurants · v0.1
-      </div>
+      <SidebarFooter />
     </aside>
+  );
+}
+
+function SidebarFooter() {
+  const versionQ = useQuery({
+    queryKey: ['system', 'version'],
+    queryFn: () => ipc.system.getVersion(),
+    staleTime: Infinity,
+  });
+  return (
+    <div className="border-t border-stone-200/70 px-5 py-3 text-[10px] uppercase tracking-widest text-stone-400 dark:border-stone-800/70">
+      Built for restaurants · v{versionQ.data?.version ?? '…'}
+    </div>
   );
 }
