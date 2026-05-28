@@ -126,6 +126,13 @@ const api: RendererApi = {
     update: (req) => invoke('riders:update', req),
     deactivate: (req) => invoke('riders:deactivate', req),
   },
+  shifts: {
+    current: () => invoke('shifts:current', undefined),
+    open: (req) => invoke('shifts:open', req),
+    close: (req) => invoke('shifts:close', req),
+    list: (req) => invoke('shifts:list', req),
+    summary: (req) => invoke('shifts:summary', req),
+  },
   printer: {
     getConfig: () => invoke('printer:getConfig', undefined),
     setConfig: (req) => invoke('printer:setConfig', req),

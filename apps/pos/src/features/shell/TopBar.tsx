@@ -3,6 +3,7 @@ import { Button } from '@cheeseoclock/ui';
 import { useSessionStore } from '../../stores/sessionStore';
 import { LogOut, Clock, Calculator } from 'lucide-react';
 import { CalculatorPopover } from './CalculatorPopover';
+import { ShiftWidget } from './ShiftWidget';
 
 /** Re-render every minute so the wall clock stays current. */
 function useNowTick(intervalMs = 60_000): number {
@@ -64,6 +65,7 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-3">
+        <ShiftWidget />
         <button
           type="button"
           onClick={() => setCalcOpen(true)}

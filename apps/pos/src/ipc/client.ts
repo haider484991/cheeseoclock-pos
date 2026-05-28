@@ -140,6 +140,13 @@ export const ipc = {
     update: (input: IpcRequest<'riders:update'>) => unwrap(window.api.riders.update(input)),
     deactivate: (id: string) => unwrap(window.api.riders.deactivate({ id })),
   },
+  shifts: {
+    current: () => unwrap(window.api.shifts.current()),
+    open: (input: IpcRequest<'shifts:open'>) => unwrap(window.api.shifts.open(input)),
+    close: (input: IpcRequest<'shifts:close'>) => unwrap(window.api.shifts.close(input)),
+    list: (input?: IpcRequest<'shifts:list'>) => unwrap(window.api.shifts.list(input)),
+    summary: (shiftId: string) => unwrap(window.api.shifts.summary({ shiftId })),
+  },
   customers: {
     list: (input?: IpcRequest<'customers:list'>) => unwrap(window.api.customers.list(input)),
     findByPhone: (phone: string) => unwrap(window.api.customers.findByPhone({ phone })),

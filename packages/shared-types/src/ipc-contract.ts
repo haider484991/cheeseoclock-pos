@@ -25,6 +25,7 @@ import type {
   PaymentMethod,
   Rider,
 } from './order.js';
+import type { Shift, ShiftSummary } from './shift.js';
 import type {
   PrinterConnectionConfig,
   PrintResult,
@@ -466,6 +467,28 @@ export interface IpcContract {
       };
     };
     response: ApiResult<OrderSnapshot>;
+  };
+
+  // Shifts (cashier cash-drawer reconciliation)
+  'shifts:current': {
+    request: undefined;
+    response: ApiResult<Shift | null>;
+  };
+  'shifts:open': {
+    request: { openingCashCents: number; notes?: string | null };
+    response: ApiResult<Shift>;
+  };
+  'shifts:close': {
+    request: { shiftId: string; countedCashCents: number; notes?: string | null };
+    response: ApiResult<Shift>;
+  };
+  'shifts:list': {
+    request: { sinceIso?: string; limit?: number; deviceId?: string } | undefined;
+    response: ApiResult<Shift[]>;
+  };
+  'shifts:summary': {
+    request: { shiftId: string };
+    response: ApiResult<ShiftSummary>;
   };
 
   // Riders / delivery staff

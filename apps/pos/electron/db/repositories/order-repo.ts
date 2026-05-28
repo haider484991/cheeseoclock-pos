@@ -283,6 +283,17 @@ export function createOrder(
   let order!: Order;
   const tx = db.transaction(() => {
     const orderNumber = nextOrderNumber(db);
+    // Link to the currently-open shift on this device, if any. Orders taken
+    // outside an open shift get null shift_id (managers can run the POS
+    // without shift discipline if they want — opening a shift is opt-in).
+    const openShift = db
+      .prepare(
+        `SELECT id FROM shifts
+          WHERE device_id = ? AND closed_at IS NULL AND deleted_at IS NULL
+          ORDER BY opened_at DESC LIMIT 1`,
+      )
+      .get(actor.deviceId) as { id: string } | undefined;
+    const shiftId = openShift?.id ?? null;
     order = {
       id: id as Order['id'],
       orderNumber: orderNumber as Order['orderNumber'],
@@ -291,7 +302,7 @@ export function createOrder(
       tableId: (input.tableId ?? null) as Order['tableId'],
       customerId: (input.customerId ?? null) as Order['customerId'],
       cashierId: actor.userId as Order['cashierId'],
-      shiftId: '' as Order['shiftId'], // shift wiring lands in Phase 4
+      shiftId: (shiftId ?? '') as Order['shiftId'],
       source: input.source ?? 'pos',
       notes: input.notes ?? null,
       subtotalCents: 0 as Order['subtotalCents'],
@@ -321,7 +332,7 @@ export function createOrder(
       input.tableId ?? null,
       input.customerId ?? null,
       actor.userId,
-      null, // shift_id
+      shiftId, // null if no shift open on this device
       input.source ?? 'pos',
       input.notes ?? null,
       now,
