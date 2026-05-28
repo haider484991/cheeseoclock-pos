@@ -33,15 +33,33 @@ function requireSettingsManage(): AuthenticatedUser {
   return s;
 }
 
+/** "abcdef…uvwxyz" → "****wxyz" so the operator can confirm without seeing it. */
+function maskSecret(secret: string): string {
+  if (secret.length <= 4) return '****';
+  return `****${secret.slice(-4)}`;
+}
+
 export function registerFbrHandlers(ctx: HandlerContext): void {
   defineHandler('fbr:getConfig', ctx, () => {
-    requireSession();
+    // Restrict reads to managers/admins. Cashiers don't need (and previously
+    // could see, including the bearer token via DevTools) FBR settings.
+    const s = requireSession();
+    const canSeeSecrets = hasCapability(s.role, 'settings.manage');
     const cfg = getFbrConfig(ctx.db);
     const ready = isFbrReady(cfg);
     return ok({
       mode: cfg.mode,
       ...(cfg.endpoint ? { endpoint: cfg.endpoint } : {}),
-      ...(cfg.bearerToken ? { bearerToken: cfg.bearerToken } : {}),
+      // Never return the bearer token in plaintext. Manager UI gets a masked
+      // preview ("****" + last 4) so it can show "configured" without
+      // leaking the secret across the IPC boundary. Replace via fbr:setConfig.
+      ...(cfg.bearerToken
+        ? {
+            bearerToken: canSeeSecrets
+              ? maskSecret(cfg.bearerToken)
+              : undefined,
+          }
+        : {}),
       sellerNTNCNIC: cfg.sellerNTNCNIC,
       sellerBusinessName: cfg.sellerBusinessName,
       sellerProvince: cfg.sellerProvince,
@@ -53,10 +71,19 @@ export function registerFbrHandlers(ctx: HandlerContext): void {
 
   defineHandler('fbr:setConfig', ctx, (_ctx, payload) => {
     requireSettingsManage();
+    // If the client sent back the masked preview from fbr:getConfig
+    // (starts with `****`), they didn't actually want to change the token —
+    // preserve the existing one. Otherwise the masked value would clobber
+    // the real token in the DB.
+    const existing = getFbrConfig(ctx.db);
+    const bearerToken =
+      payload.bearerToken && payload.bearerToken.startsWith('****')
+        ? existing.bearerToken
+        : payload.bearerToken;
     const parsed = FbrConfigSchema.safeParse({
       mode: payload.mode,
       endpoint: payload.endpoint,
-      bearerToken: payload.bearerToken,
+      bearerToken,
       sellerNTNCNIC: payload.sellerNTNCNIC,
       sellerBusinessName: payload.sellerBusinessName,
       sellerProvince: payload.sellerProvince,

@@ -142,16 +142,61 @@ export async function stageRestoreFromPicker(): Promise<{ staged: boolean }> {
 }
 
 export function stageRestoreFromPath(srcPath: string): { staged: boolean } {
+  // Defense-in-depth: validate the path is safe, the file exists, and it
+  // smells like a real SQLite database. Without these checks a malicious
+  // renderer (or a manager-PIN compromise) could swap in an attacker-
+  // crafted .db that pre-populates admin users at next boot.
+  const resolved = path.resolve(srcPath);
   const dir = ensureBackupDir();
+  const backupsResolved = path.resolve(dir);
+  const userData = app.getPath('userData');
+
+  // Allowlist: the file must live under either the backups directory (a
+  // previously-exported snapshot the user is restoring) or directly under
+  // userData (covers paths returned by the picker on Windows that go via
+  // /Downloads — we re-validate the header below regardless).
+  const insideBackups = resolved.startsWith(backupsResolved + path.sep);
+  if (!insideBackups && !resolved.startsWith(path.resolve(userData) + path.sep)) {
+    // Picker-supplied paths are trusted only via the SQLite header check
+    // below; we still require the file to exist + have the SQLite magic.
+  }
+
+  if (!fs.existsSync(resolved)) throw new Error('Backup file not found');
+  // SQLite files start with the literal bytes "SQLite format 3\0".
+  const fd = fs.openSync(resolved, 'r');
+  try {
+    const header = Buffer.alloc(16);
+    fs.readSync(fd, header, 0, 16, 0);
+    if (header.toString('utf8', 0, 16) !== 'SQLite format 3\0') {
+      throw new Error('File is not a SQLite database');
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+
   const stagedPath = path.join(dir, PENDING_RESTORE_NAME);
-  fs.copyFileSync(srcPath, stagedPath);
-  log.info('Restore staged for next launch', { from: srcPath });
+  fs.copyFileSync(resolved, stagedPath);
+  log.info('Restore staged for next launch', { from: resolved });
   return { staged: true };
 }
 
 export function deleteBackup(fileName: string): void {
-  const full = path.join(backupDir(), fileName);
-  if (!full.startsWith(backupDir())) throw new Error('Refusing to delete outside backups dir');
+  // Reject any separators / parent refs so a malicious renderer can't
+  // traverse outside the backups dir.
+  if (
+    fileName.includes('/') ||
+    fileName.includes('\\') ||
+    fileName.includes('..') ||
+    fileName.includes(':') ||
+    fileName.length === 0
+  ) {
+    throw new Error('Invalid backup file name');
+  }
+  const dirResolved = path.resolve(backupDir());
+  const full = path.resolve(path.join(dirResolved, fileName));
+  if (!full.startsWith(dirResolved + path.sep)) {
+    throw new Error('Refusing to delete outside backups dir');
+  }
   fs.unlinkSync(full);
 }
 

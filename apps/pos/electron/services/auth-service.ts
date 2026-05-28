@@ -1,4 +1,5 @@
 import { v7 as uuidv7 } from 'uuid';
+import { createHash } from 'node:crypto';
 import log from 'electron-log/main';
 import type { AppDatabase } from '../db/connection.js';
 import { findUserByPin, touchUserLogin } from '../db/repositories/user-repo.js';
@@ -22,6 +23,69 @@ interface SessionRow {
 
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h
 
+// Brute-force protection. Argon2id alone is insufficient at PIN entropy
+// (~10k combinations for a 4-digit PIN), so we layer a per-PIN-hash sliding
+// window counter on top. The lockout escalates with consecutive failures:
+//   5 failures → 30s lockout
+//   10 failures → 5 min lockout
+//   15+ failures → 30 min lockout
+// A successful login clears the row entirely.
+const PIN_LOCKOUT_TIERS = [
+  { threshold: 15, lockMs: 30 * 60 * 1000 }, // 30 min
+  { threshold: 10, lockMs: 5 * 60 * 1000 }, //  5 min
+  { threshold: 5, lockMs: 30 * 1000 }, // 30 s
+] as const;
+
+/** Hash the PIN so we never store/key on the raw value. */
+function hashPinForAttempts(pin: string): string {
+  return createHash('sha256').update(`attempts:${pin.trim()}`).digest('hex');
+}
+
+/**
+ * Throws "Too many failed attempts. Try again in <N>s." if this PIN is
+ * currently locked. Always call BEFORE the argon2 verify so a locked PIN
+ * doesn't even hit the hash check.
+ */
+function assertPinNotLocked(db: AppDatabase, pin: string): void {
+  const row = db
+    .prepare(
+      `SELECT locked_until FROM login_attempts WHERE pin_hash = ?`,
+    )
+    .get(hashPinForAttempts(pin)) as { locked_until: string | null } | undefined;
+  if (row?.locked_until) {
+    const until = Number(row.locked_until);
+    if (Number.isFinite(until) && until > Date.now()) {
+      const seconds = Math.ceil((until - Date.now()) / 1000);
+      const human = seconds >= 60 ? `${Math.ceil(seconds / 60)} min` : `${seconds}s`;
+      throw new Error(`Too many failed attempts. Try again in ${human}.`);
+    }
+  }
+}
+
+function recordPinFailure(db: AppDatabase, pin: string): void {
+  const key = hashPinForAttempts(pin);
+  const now = new Date().toISOString();
+  const row = db
+    .prepare(`SELECT failed_count FROM login_attempts WHERE pin_hash = ?`)
+    .get(key) as { failed_count: number } | undefined;
+  const next = (row?.failed_count ?? 0) + 1;
+  // Find the highest tier this count crosses.
+  const tier = PIN_LOCKOUT_TIERS.find((t) => next >= t.threshold);
+  const lockedUntil = tier ? String(Date.now() + tier.lockMs) : null;
+  db.prepare(
+    `INSERT INTO login_attempts (pin_hash, failed_count, last_failed_at, locked_until)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(pin_hash) DO UPDATE SET
+       failed_count = excluded.failed_count,
+       last_failed_at = excluded.last_failed_at,
+       locked_until = excluded.locked_until`,
+  ).run(key, next, now, lockedUntil);
+}
+
+function clearPinAttempts(db: AppDatabase, pin: string): void {
+  db.prepare(`DELETE FROM login_attempts WHERE pin_hash = ?`).run(hashPinForAttempts(pin));
+}
+
 let currentSession: AuthenticatedUser | null = null;
 
 export function getCurrentSession(): AuthenticatedUser | null {
@@ -33,8 +97,13 @@ export async function login(
   pin: string,
   deviceId: string,
 ): Promise<AuthenticatedUser> {
+  assertPinNotLocked(db, pin);
   const user = await findUserByPin(db, pin);
-  if (!user) throw new Error('Invalid PIN');
+  if (!user) {
+    recordPinFailure(db, pin);
+    throw new Error('Invalid PIN');
+  }
+  clearPinAttempts(db, pin);
 
   const sessionId = uuidv7();
   const now = new Date().toISOString();
@@ -134,11 +203,19 @@ export async function verifyManagerPin(
   db: AppDatabase,
   pin: string,
 ): Promise<{ approverUserId: string; approverName: string }> {
+  assertPinNotLocked(db, pin);
   const user = await findUserByPin(db, pin);
-  if (!user) throw new Error('Invalid PIN');
+  if (!user) {
+    recordPinFailure(db, pin);
+    throw new Error('Invalid PIN');
+  }
   if (user.role !== 'manager' && user.role !== 'admin') {
+    // Not authorized → still count as a failed attempt (someone is trying
+    // cashier PINs as manager overrides).
+    recordPinFailure(db, pin);
     throw new Error('Not authorized — manager PIN required');
   }
+  clearPinAttempts(db, pin);
   return { approverUserId: user.id, approverName: user.fullName };
 }
 

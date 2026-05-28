@@ -28,14 +28,24 @@ function requireSettingsManage(): AuthenticatedUser {
   return s;
 }
 
+function maskSecret(secret: string): string {
+  if (secret.length <= 4) return '****';
+  return `****${secret.slice(-4)}`;
+}
+
 export function registerSyncHandlers(ctx: HandlerContext): void {
   defineHandler('sync:getConfig', ctx, () => {
-    requireSession();
+    // Restrict secret visibility to managers/admins; cashiers only see mode +
+    // base URL + ready status. Never return deviceSecret in plaintext.
+    const s = requireSession();
+    const canSeeSecrets = hasCapability(s.role, 'settings.manage');
     const cfg = getSyncConfig(ctx.db);
     return ok({
       mode: cfg.mode,
       ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}),
-      ...(cfg.deviceSecret ? { deviceSecret: cfg.deviceSecret } : {}),
+      ...(cfg.deviceSecret && canSeeSecrets
+        ? { deviceSecret: maskSecret(cfg.deviceSecret) }
+        : {}),
       pollIntervalMs: cfg.pollIntervalMs,
       paused: cfg.paused,
       ready: isSyncReady(cfg),
@@ -44,10 +54,16 @@ export function registerSyncHandlers(ctx: HandlerContext): void {
 
   defineHandler('sync:setConfig', ctx, (_ctx, payload) => {
     requireSettingsManage();
+    // Preserve existing secret if the client re-submitted the masked preview.
+    const existing = getSyncConfig(ctx.db);
+    const deviceSecret =
+      payload.deviceSecret && payload.deviceSecret.startsWith('****')
+        ? existing.deviceSecret
+        : payload.deviceSecret;
     const parsed = SyncConfigSchema.safeParse({
       mode: payload.mode,
       baseUrl: payload.baseUrl,
-      deviceSecret: payload.deviceSecret,
+      deviceSecret,
       pollIntervalMs: payload.pollIntervalMs ?? 15_000,
       paused: payload.paused ?? false,
     });

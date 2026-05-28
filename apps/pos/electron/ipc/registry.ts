@@ -65,11 +65,19 @@ export function defineHandler<C extends IpcChannel>(
       if (err instanceof IpcGuardError) {
         return { ok: false, error: err.apiError } as IpcContract[C]['response'];
       }
-      const message = err instanceof Error ? err.message : String(err);
-      log.error(`IPC handler error [${channel}]`, err);
+      // Don't leak internals (SQL constraint names, column names, HTTP URLs
+      // with credentials in headers, etc.) to the renderer. Log everything
+      // server-side; return a correlation id the operator can quote.
+      const correlationId = `err_${Date.now().toString(36)}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+      log.error(`IPC handler error [${channel}] (${correlationId})`, err);
       return {
         ok: false,
-        error: { code: 'internal_error', message },
+        error: {
+          code: 'internal_error',
+          message: `Something went wrong. Reference: ${correlationId}`,
+        },
       } as IpcContract[C]['response'];
     }
   });
