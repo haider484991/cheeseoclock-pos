@@ -469,7 +469,13 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     try {
       refundOrder(
         ctx.db,
-        { orderId: payload.orderId, reason: payload.reason.trim(), approverUserId },
+        {
+          orderId: payload.orderId,
+          reason: payload.reason.trim(),
+          approverUserId,
+          ...(payload.amountCents !== undefined ? { amountCents: payload.amountCents } : {}),
+          ...(payload.method ? { method: payload.method } : {}),
+        },
         { userId: s.id, deviceId: ctx.deviceId },
       );
     } catch (e) {

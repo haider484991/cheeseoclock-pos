@@ -6,7 +6,6 @@ import {
   type PrinterAdapter,
   type PrintResult,
 } from '@cheeseoclock/printer-core';
-import type { OrderSnapshot } from '@cheeseoclock/shared-types';
 import { makePrinterAdapter } from '../adapters/printer/factory.js';
 import {
   DEFAULT_RECEIPT_CONFIG,
@@ -15,44 +14,50 @@ import {
 } from './printer-config.js';
 import { getOrderSnapshot } from '../db/repositories/order-repo.js';
 import { getFbrRowByOrder } from '../db/repositories/fbr-queue-repo.js';
+import {
+  claimNextPendingJob,
+  enqueueReceiptJob,
+  markJobDone,
+  markJobFailedPermanently,
+  recoverStuckInFlight,
+  rescheduleJob,
+  type PrintJobRow,
+} from '../db/repositories/print-queue-repo.js';
 
 /**
- * Background print queue. Adding a job is fire-and-forget — the spooler runs
- * jobs serially per device (single physical printer, single thread), retries
- * recoverable failures with backoff, and tells the UI about final failures.
+ * Background print queue — now backed by `print_queue` in SQLite so a crash
+ * between tender and print doesn't lose the receipt. The in-memory work loop
+ * polls the DB; enqueueReceipt is a single INSERT + kick.
  *
- * **Print failure never blocks the sale.** The order is already saved when a
- * print job is enqueued.
+ * **Print failure never blocks the sale.** The order is already saved when
+ * a print job is enqueued.
  */
 
-interface ReceiptJob {
-  kind: 'receipt';
-  orderId: string;
-  attempts: number;
-  enqueuedAt: number;
-  openDrawer: boolean;
-}
-interface BytesJob {
-  kind: 'bytes';
-  bytes: Uint8Array;
-  attempts: number;
-  enqueuedAt: number;
-  label: string;
-}
-type Job = ReceiptJob | BytesJob;
-
-const MAX_ATTEMPTS = 3;
-const BACKOFF_MS = [500, 2_000, 5_000];
+const MAX_ATTEMPTS = 5;
+// Backoff schedule: ~immediate, 5s, 30s, 2m, 10m. Past MAX_ATTEMPTS we
+// mark the job 'failed' and broadcast a toast.
+const BACKOFF_MS = [0, 5_000, 30_000, 120_000, 600_000];
+const TICK_INTERVAL_MS = 1_000;
 
 class PrintSpooler {
   private db: AppDatabase | null = null;
-  private queue: Job[] = [];
   private running = false;
+  private tickTimer: NodeJS.Timeout | null = null;
   private cachedAdapter: PrinterAdapter | null = null;
   private cachedAdapterConfigJson: string | null = null;
 
   init(db: AppDatabase): void {
     this.db = db;
+    // Recover any jobs that were mid-flight when the app last died.
+    const recovered = recoverStuckInFlight(db);
+    if (recovered > 0) {
+      log.info('Print spooler: recovered stuck in-flight jobs', { recovered });
+    }
+    // Periodic tick — picks up jobs whose next_attempt_at has come due.
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    this.tickTimer = setInterval(() => void this.drain(), TICK_INTERVAL_MS);
+    // Drain immediately on boot in case there are pending jobs already due.
+    void this.drain();
   }
 
   enqueueReceipt(orderId: string, openDrawer = false): void {
@@ -60,28 +65,14 @@ class PrintSpooler {
       log.warn('PrintSpooler not initialized; dropping receipt job');
       return;
     }
-    this.queue.push({
-      kind: 'receipt',
-      orderId,
-      attempts: 0,
-      enqueuedAt: Date.now(),
-      openDrawer,
-    });
+    enqueueReceiptJob(this.db, { orderId, openDrawer });
     void this.drain();
   }
 
-  enqueueBytes(bytes: Uint8Array, label = 'test'): void {
-    this.queue.push({
-      kind: 'bytes',
-      bytes,
-      attempts: 0,
-      enqueuedAt: Date.now(),
-      label,
-    });
-    void this.drain();
-  }
-
-  /** Synchronous test print for the settings page — returns the result. */
+  /**
+   * Synchronous test print for the settings page — bypasses the queue
+   * entirely so the manager can see immediate success/failure.
+   */
   async testPrintNow(): Promise<PrintResult> {
     if (!this.db) {
       return {
@@ -90,8 +81,20 @@ class PrintSpooler {
         error: { code: 'not_ready', message: 'Spooler not initialized', recoverable: false },
       };
     }
-    const adapter = this.getAdapter();
-    return adapter.testPrint();
+    try {
+      const adapter = this.getAdapter();
+      return await adapter.testPrint();
+    } catch (e) {
+      return {
+        ok: false,
+        durationMs: 0,
+        error: {
+          code: 'spooler_exception',
+          message: e instanceof Error ? e.message : String(e),
+          recoverable: false,
+        },
+      };
+    }
   }
 
   private getAdapter(): PrinterAdapter {
@@ -115,101 +118,102 @@ class PrintSpooler {
   }
 
   private async drain(): Promise<void> {
-    if (this.running) return;
+    if (this.running || !this.db) return;
     this.running = true;
     try {
-      while (this.queue.length > 0) {
-        const job = this.queue[0]!;
-        const result = await this.runJob(job);
-        if (result.ok) {
-          this.queue.shift();
-          continue;
-        }
-        if (!result.error?.recoverable || job.attempts >= MAX_ATTEMPTS) {
-          this.queue.shift();
-          notifyPrintFailure(job, result);
-          continue;
-        }
-        // Retry after backoff
-        job.attempts += 1;
-        const wait = BACKOFF_MS[Math.min(job.attempts - 1, BACKOFF_MS.length - 1)]!;
-        log.warn('Print job will retry', {
-          attempts: job.attempts,
-          inMs: wait,
-          error: result.error.message,
-        });
-        await new Promise((r) => setTimeout(r, wait));
+      // One claim per tick keeps things simple + serializes prints to a
+      // single physical printer.
+      while (true) {
+        const job = claimNextPendingJob(this.db);
+        if (!job) break;
+        await this.runJob(job);
       }
     } finally {
       this.running = false;
     }
   }
 
-  private async runJob(job: Job): Promise<PrintResult> {
-    if (!this.db) {
-      return {
-        ok: false,
-        durationMs: 0,
-        error: { code: 'not_ready', message: 'No DB', recoverable: false },
-      };
-    }
+  private async runJob(job: PrintJobRow): Promise<void> {
+    if (!this.db) return;
+    let result: PrintResult;
     try {
       const adapter = this.getAdapter();
-      if (job.kind === 'receipt') {
-        const snap = getOrderSnapshot(this.db, job.orderId);
-        if (!snap) {
-          return {
-            ok: false,
-            durationMs: 0,
-            error: { code: 'order_missing', message: 'Order vanished', recoverable: false },
-          };
-        }
-        const branding = getReceiptBranding(this.db);
-        // If the FBR worker has already resolved an IRN for this order, embed it on the printed
-        // receipt. Otherwise the receipt prints with the "pending" placeholder.
-        const fbrRow = getFbrRowByOrder(this.db, job.orderId);
-        const fbrBlock =
-          fbrRow && fbrRow.status === 'sent' && fbrRow.irn
-            ? { irn: fbrRow.irn, qrPayload: fbrRow.qrPayload }
-            : undefined;
-        const bytes = renderReceipt(snap, {
-          width: adapter.config.width ?? 48,
-          branding,
-          openDrawer: job.openDrawer,
-          cutPaper: true,
-          ...(fbrBlock ? { fbr: fbrBlock } : {}),
+      const snap = getOrderSnapshot(this.db, job.payload.orderId);
+      if (!snap) {
+        markJobFailedPermanently(this.db, job.id, 'Order no longer exists');
+        notifyPrintFailure(job, {
+          code: 'order_missing',
+          message: 'Order no longer exists',
         });
-        return adapter.send(bytes);
+        return;
       }
-      return adapter.send(job.bytes);
+      const branding = getReceiptBranding(this.db);
+      // Embed FBR IRN/QR if the worker has resolved one by now.
+      const fbrRow = getFbrRowByOrder(this.db, job.payload.orderId);
+      const fbrBlock =
+        fbrRow && fbrRow.status === 'sent' && fbrRow.irn
+          ? { irn: fbrRow.irn, qrPayload: fbrRow.qrPayload }
+          : undefined;
+      const bytes = renderReceipt(snap, {
+        width: adapter.config.width ?? 48,
+        branding,
+        openDrawer: job.payload.openDrawer,
+        cutPaper: true,
+        ...(fbrBlock ? { fbr: fbrBlock } : {}),
+      });
+      result = await adapter.send(bytes);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      return {
+      result = {
         ok: false,
         durationMs: 0,
         error: {
           code: 'spooler_exception',
-          message,
-          // Adapter selection errors (unsupported transport, bad config) are not recoverable.
+          message: e instanceof Error ? e.message : String(e),
           recoverable: false,
         },
       };
     }
+
+    if (result.ok) {
+      markJobDone(this.db, job.id);
+      return;
+    }
+    const attempts = job.attempts + 1;
+    if (!result.error?.recoverable || attempts >= MAX_ATTEMPTS) {
+      markJobFailedPermanently(
+        this.db,
+        job.id,
+        result.error?.message ?? 'Unknown print error',
+      );
+      notifyPrintFailure(job, result.error);
+      return;
+    }
+    const backoff = BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)]!;
+    rescheduleJob(this.db, job.id, result.error?.message ?? 'unknown', backoff);
+    log.warn('Print job will retry', {
+      jobId: job.id,
+      attempts,
+      inMs: backoff,
+      error: result.error?.message,
+    });
   }
 }
 
-function notifyPrintFailure(job: Job, result: PrintResult): void {
+function notifyPrintFailure(
+  job: PrintJobRow,
+  error?: { code: string; message: string },
+): void {
   log.error('Print job failed permanently', {
-    job: job.kind === 'receipt' ? `receipt:${job.orderId}` : `bytes:${job.label}`,
-    attempts: job.attempts,
-    error: result.error,
+    jobId: job.id,
+    orderId: job.orderId,
+    attempts: job.attempts + 1,
+    error,
   });
-  // Push a toast to every open renderer window. Renderer listens for 'printer:failed'.
   for (const w of BrowserWindow.getAllWindows()) {
     w.webContents.send('printer:failed', {
-      jobKind: job.kind,
-      orderId: job.kind === 'receipt' ? job.orderId : undefined,
-      error: result.error,
+      jobKind: job.jobKind,
+      orderId: job.orderId ?? undefined,
+      error,
     });
   }
 }

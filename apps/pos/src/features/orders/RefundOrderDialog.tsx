@@ -1,12 +1,12 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation } from '@tanstack/react-query';
-import { Button } from '@cheeseoclock/ui';
+import { Button, cn } from '@cheeseoclock/ui';
 import { Undo2, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { OrderSnapshot } from '@cheeseoclock/shared-types';
+import type { OrderSnapshot, PaymentMethod } from '@cheeseoclock/shared-types';
 
 interface Props {
   snap: OrderSnapshot;
@@ -24,9 +24,26 @@ interface Props {
  * subset/amount.
  */
 export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
+  // Compute remaining refundable balance from the payments ledger (mirrors
+  // the backend rule — sum of all payment amounts, positive minus negative).
+  const remainingCents = useMemo(
+    () => snap.payments.reduce((s, p) => s + p.amountCents, 0),
+    [snap.payments],
+  );
+  const positivePayments = snap.payments.filter((p) => p.amountCents > 0);
+  const dominantMethod: PaymentMethod =
+    positivePayments.slice().sort((a, b) => b.amountCents - a.amountCents)[0]?.method ??
+    'cash';
+
+  const [mode, setMode] = useState<'full' | 'partial'>('full');
+  const [partialStr, setPartialStr] = useState((remainingCents / 100).toFixed(2));
+  const [method, setMethod] = useState<PaymentMethod>(dominantMethod);
   const [reason, setReason] = useState('');
   const [pin, setPin] = useState('');
   const { toast } = useToast();
+
+  const partialCents = mode === 'partial' ? Math.round((parseFloat(partialStr) || 0) * 100) : 0;
+  const refundAmountCents = mode === 'full' ? remainingCents : partialCents;
 
   const refundMut = useMutation({
     mutationFn: () =>
@@ -34,9 +51,15 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
         orderId: snap.order.id,
         reason: reason.trim(),
         approverPin: pin.trim(),
+        ...(mode === 'partial'
+          ? { amountCents: partialCents, method }
+          : {}),
       }),
     onSuccess: () => {
-      toast({ title: 'Refund issued — receipt printed' });
+      toast({
+        title: mode === 'full' ? 'Full refund issued' : 'Partial refund issued',
+        description: 'Receipt sent to printer',
+      });
       onDone();
     },
     onError: (e) =>
@@ -48,6 +71,20 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
   });
 
   function submit() {
+    if (mode === 'partial') {
+      if (partialCents <= 0) {
+        toast({ title: 'Enter a positive refund amount', variant: 'warning' });
+        return;
+      }
+      if (partialCents > remainingCents) {
+        toast({
+          title: 'Amount exceeds remaining balance',
+          description: `Max refundable: ${formatCents(remainingCents)}`,
+          variant: 'warning',
+        });
+        return;
+      }
+    }
     if (!reason.trim()) {
       toast({ title: 'Reason is required', variant: 'warning' });
       return;
@@ -58,6 +95,13 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
     }
     refundMut.mutate();
   }
+
+  const methods: Array<{ key: PaymentMethod; label: string }> = [
+    { key: 'cash', label: 'Cash' },
+    { key: 'card', label: 'Card' },
+    { key: 'easypaisa', label: 'EasyPaisa' },
+    { key: 'jazzcash', label: 'JazzCash' },
+  ];
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -86,22 +130,89 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
             </button>
           </header>
 
+          {/* Full vs Partial toggle. If the order has already been partially
+              refunded, "remaining" reflects what's left. */}
+          <div className="mb-3 flex gap-1 rounded-lg bg-stone-100 p-1 dark:bg-stone-800">
+            <button
+              type="button"
+              onClick={() => setMode('full')}
+              className={cn(
+                'flex-1 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
+                mode === 'full'
+                  ? 'bg-white text-stone-900 shadow-soft-sm dark:bg-stone-700 dark:text-stone-100'
+                  : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300',
+              )}
+            >
+              Full refund
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('partial')}
+              className={cn(
+                'flex-1 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
+                mode === 'partial'
+                  ? 'bg-white text-stone-900 shadow-soft-sm dark:bg-stone-700 dark:text-stone-100'
+                  : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300',
+              )}
+            >
+              Partial refund
+            </button>
+          </div>
+
           <div className="mb-4 rounded-xl bg-orange-50 px-4 py-3 dark:bg-orange-950/30">
             <div className="flex items-baseline justify-between">
               <span className="text-xs font-semibold uppercase tracking-wider text-orange-700 dark:text-orange-300">
                 Refund amount
               </span>
               <span className="font-mono text-2xl font-bold text-orange-900 dark:text-orange-100">
-                {formatCents(snap.order.totalCents)}
+                {formatCents(refundAmountCents)}
               </span>
             </div>
             <div className="mt-1 text-xs text-orange-800 dark:text-orange-200">
-              Each original payment gets a matching negative entry. For cash
-              payments, the drawer pops so you can return notes.
+              {mode === 'full'
+                ? 'Each original payment gets a matching negative entry. Drawer pops for cash. Order moves to Refunded.'
+                : `Remaining refundable: ${formatCents(remainingCents)}. Order stays Paid until total refunded equals the order total.`}
             </div>
           </div>
 
           <div className="space-y-3">
+            {mode === 'partial' && (
+              <>
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
+                    Refund amount (Rs)
+                  </span>
+                  <input
+                    inputMode="decimal"
+                    value={partialStr}
+                    onChange={(e) => setPartialStr(e.target.value)}
+                    className="w-full rounded-lg border border-stone-200 px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
+                  />
+                </label>
+                <div>
+                  <span className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-200">
+                    Refund via
+                  </span>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {methods.map((m) => (
+                      <button
+                        key={m.key}
+                        type="button"
+                        onClick={() => setMethod(m.key)}
+                        className={cn(
+                          'rounded-lg border-2 px-2 py-1.5 text-xs font-semibold transition-colors',
+                          method === m.key
+                            ? 'border-amber-400 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-100'
+                            : 'border-stone-200 bg-white text-stone-600 hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300',
+                        )}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                 Reason
@@ -109,7 +220,7 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
               <input
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                autoFocus
+                autoFocus={mode === 'full'}
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
                 placeholder="Wrong order delivered, customer unhappy…"
               />
@@ -141,7 +252,7 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
               onClick={submit}
               disabled={refundMut.isPending}
             >
-              {refundMut.isPending ? 'Refunding…' : `Refund ${formatCents(snap.order.totalCents)}`}
+              {refundMut.isPending ? 'Refunding…' : `Refund ${formatCents(refundAmountCents)}`}
             </Button>
           </div>
         </Dialog.Content>

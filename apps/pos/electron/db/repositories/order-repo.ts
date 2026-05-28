@@ -964,17 +964,32 @@ export function voidOrder(
 }
 
 // -----------------------------------------------------------------------------
-// Refund (full)
+// Refund (full or partial)
 // -----------------------------------------------------------------------------
 
 /**
- * Refund a paid order. Inserts a negative payment for each prior payment so
- * the books balance, marks status='refunded', and records the manager who
- * approved it. Partial refunds aren't supported yet — this is full-only.
+ * Refund a paid order. Supports two modes:
+ *   1. Full refund (no `amountCents` given) — inserts one negative payment
+ *      per original positive payment so the books mirror perfectly. Status
+ *      moves to 'refunded'.
+ *   2. Partial refund (`amountCents` provided) — inserts a single negative
+ *      payment with the supplied method (or the dominant payment method on
+ *      the order if not specified). Status stays 'paid' until cumulative
+ *      refunds equal the order total, at which point it flips to 'refunded'.
+ *
+ * Partial-refund accumulation is computed from the payments ledger, so
+ * multiple partials add up correctly. Refund amount can't exceed the
+ * remaining refundable balance.
  */
 export function refundOrder(
   db: AppDatabase,
-  input: { orderId: string; reason: string; approverUserId: string },
+  input: {
+    orderId: string;
+    reason: string;
+    approverUserId: string;
+    amountCents?: number;
+    method?: PaymentMethod;
+  },
   actor: Actor & { userId: string },
 ): Order {
   let result!: Order;
@@ -984,7 +999,7 @@ export function refundOrder(
     if (order.status !== 'paid') {
       throw new Error(
         order.status === 'refunded'
-          ? 'Order already refunded'
+          ? 'Order already fully refunded'
           : `Cannot refund ${order.status} order — only paid orders can be refunded`,
       );
     }
@@ -994,15 +1009,107 @@ export function refundOrder(
     const payments = db
       .prepare(
         `SELECT id, method, amount_cents FROM payments
-          WHERE order_id = ? AND deleted_at IS NULL AND amount_cents > 0`,
+          WHERE order_id = ? AND deleted_at IS NULL`,
       )
       .all(input.orderId) as Array<{
       id: string;
       method: PaymentMethod;
       amount_cents: number;
     }>;
+    const positivePayments = payments.filter((p) => p.amount_cents > 0);
+    if (positivePayments.length === 0) {
+      throw new Error('No positive payments to refund against');
+    }
+    // Net amount paid so far (positive - already-refunded).
+    const netPaidCents = payments.reduce((s, p) => s + p.amount_cents, 0);
+    if (netPaidCents <= 0) {
+      throw new Error('Order has no refundable balance left');
+    }
 
-    for (const p of payments) {
+    // ---- PARTIAL REFUND PATH ----------------------------------------
+    if (input.amountCents !== undefined) {
+      const requested = Math.round(input.amountCents);
+      if (requested <= 0) throw new Error('Refund amount must be positive');
+      if (requested > netPaidCents) {
+        throw new Error(
+          `Refund (Rs ${requested / 100}) exceeds remaining balance (Rs ${
+            netPaidCents / 100
+          })`,
+        );
+      }
+      // Pick the method: caller's, else the largest positive payment's.
+      const dominant = positivePayments
+        .slice()
+        .sort((a, b) => b.amount_cents - a.amount_cents)[0]!;
+      const method: PaymentMethod = input.method ?? dominant.method;
+      const refundId = uuidv7();
+      db.prepare(
+        `INSERT INTO payments
+           (id, order_id, method, amount_cents, tendered_cents, reference_no,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(
+        refundId,
+        input.orderId,
+        method,
+        -requested,
+        `partial-refund: ${input.reason.trim()}`,
+        input.approverUserId,
+        now,
+        now,
+        now,
+        actor.deviceId,
+      );
+      enqueueSync(db, {
+        entityType: 'payments',
+        entityId: refundId,
+        op: 'upsert',
+        payload: {
+          id: refundId,
+          orderId: input.orderId,
+          method,
+          amountCents: -requested,
+          referenceNo: `partial-refund: ${input.reason.trim()}`,
+          receivedByUserId: input.approverUserId,
+          paidAt: now,
+        },
+      });
+
+      // Status flips to 'refunded' only when cumulative refunds hit total.
+      const remaining = netPaidCents - requested;
+      const fullyRefunded = remaining === 0;
+      const statusUpdate = fullyRefunded
+        ? `, status = 'refunded', voided_at = ?, voided_by = ?, void_reason = ?`
+        : '';
+      const statusParams = fullyRefunded
+        ? [now, input.approverUserId, input.reason.trim()]
+        : [];
+      db.prepare(
+        `UPDATE orders SET updated_at = ?, version = version + 1${statusUpdate}
+          WHERE id = ?`,
+      ).run(now, ...statusParams, input.orderId);
+
+      const after = findOrder(db, input.orderId)!;
+      enqueueSync(db, {
+        entityType: 'orders',
+        entityId: input.orderId,
+        op: 'upsert',
+        payload: after,
+      });
+      writeAudit(db, {
+        entityType: 'orders',
+        entityId: input.orderId,
+        action: fullyRefunded ? 'refund_partial_final' : 'refund_partial',
+        actorUserId: actor.userId,
+        before: order,
+        after,
+      });
+      result = after;
+      return;
+    }
+
+    // ---- FULL REFUND PATH (original behavior) -----------------------
+    for (const p of positivePayments) {
       const refundId = uuidv7();
       db.prepare(
         `INSERT INTO payments
@@ -1342,10 +1449,23 @@ function setOrderStatus(
       setParts.push(`${e.col} = ?`);
       setParams.push(e.value);
     }
-    db.prepare(`UPDATE orders SET ${setParts.join(', ')} WHERE id = ?`).run(
-      ...setParams,
-      orderId,
-    );
+    // Race-safe UPDATE: gate on the *current* status matching one of the
+    // legalFrom values. If two dispatchers click the same action within ms,
+    // the first wins and the second gets changes === 0 — we surface that as
+    // a precondition error and skip the audit/sync writes that would
+    // otherwise double-emit.
+    const placeholders = legalFrom.map(() => '?').join(',');
+    const upd = db
+      .prepare(
+        `UPDATE orders SET ${setParts.join(', ')}
+          WHERE id = ? AND status IN (${placeholders})`,
+      )
+      .run(...setParams, orderId, ...legalFrom);
+    if (upd.changes === 0) {
+      throw new Error(
+        `Order changed state before this action could complete. Refresh and try again.`,
+      );
+    }
     // Re-read for the after-image (includes any column we set).
     const after = findOrder(db, orderId)!;
     enqueueSync(db, {

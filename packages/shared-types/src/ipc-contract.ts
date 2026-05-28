@@ -353,7 +353,15 @@ export interface IpcContract {
     response: ApiResult<OrderSnapshot>;
   };
   'orders:refund': {
-    request: { orderId: string; reason: string; approverPin: string };
+    request: {
+      orderId: string;
+      reason: string;
+      approverPin: string;
+      /** Omit for a full refund; provide cents for a partial. */
+      amountCents?: number;
+      /** Override the auto-picked method (defaults to dominant payment method). */
+      method?: PaymentMethod;
+    };
     response: ApiResult<OrderSnapshot>;
   };
 
