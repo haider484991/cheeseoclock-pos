@@ -491,6 +491,48 @@ export interface IpcContract {
     response: ApiResult<ShiftSummary>;
   };
 
+  // Website bridge (online ordering ↔ POS)
+  'webBridge:getConfig': {
+    request: undefined;
+    response: ApiResult<{
+      enabled: boolean;
+      siteUrl?: string;
+      /** Masked (****1234) — never the raw secret. */
+      bridgeSecret?: string;
+      pollIntervalMs: number;
+      ready: { ok: boolean; missing: string[] };
+    }>;
+  };
+  'webBridge:setConfig': {
+    request: {
+      enabled: boolean;
+      siteUrl?: string;
+      bridgeSecret?: string;
+      pollIntervalMs?: number;
+    };
+    response: ApiResult<{ ok: true }>;
+  };
+  'webBridge:getStatus': {
+    request: undefined;
+    response: ApiResult<{
+      enabled: boolean;
+      ready: boolean;
+      lastPollAt: string | null;
+      lastError: string | null;
+      importedTotal: number;
+      consecutiveFails: number;
+    }>;
+  };
+  /** Serialize the active menu and PUT it to the website. */
+  'webBridge:publishMenu': {
+    request: undefined;
+    response: ApiResult<{ categories: number; items: number }>;
+  };
+  'webBridge:pollNow': {
+    request: undefined;
+    response: ApiResult<{ kicked: true }>;
+  };
+
   // Riders / delivery staff
   'riders:list': {
     request: { activeOnly?: boolean } | undefined;

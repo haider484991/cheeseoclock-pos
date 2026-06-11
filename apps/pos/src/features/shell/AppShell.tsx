@@ -3,13 +3,15 @@ import { useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { useSessionStore } from '../../stores/sessionStore';
-import { onPrinterFailed } from '../../ipc/client';
+import { onPrinterFailed, onWebOrderReceived } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { useQueryClient } from '@tanstack/react-query';
 
 export function AppShell() {
   const user = useSessionStore((s) => s.user);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const qc = useQueryClient();
 
   useEffect(() => {
     if (!user) navigate('/login', { replace: true });
@@ -27,6 +29,17 @@ export function AppShell() {
       });
     });
   }, [toast]);
+
+  // New online order from the website → loud toast + refresh the board.
+  useEffect(() => {
+    return onWebOrderReceived((payload) => {
+      toast({
+        title: '🌐 New online order!',
+        description: `#${payload.orderNumber.split('-').pop()} — ${payload.customerName}. Check Live Orders.`,
+      });
+      void qc.invalidateQueries({ queryKey: ['orders', 'active'] });
+    });
+  }, [toast, qc]);
 
   if (!user) return null;
 

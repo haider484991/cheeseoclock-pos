@@ -133,6 +133,13 @@ const api: RendererApi = {
     list: (req) => invoke('shifts:list', req),
     summary: (req) => invoke('shifts:summary', req),
   },
+  webBridge: {
+    getConfig: () => invoke('webBridge:getConfig', undefined),
+    setConfig: (req) => invoke('webBridge:setConfig', req),
+    getStatus: () => invoke('webBridge:getStatus', undefined),
+    publishMenu: () => invoke('webBridge:publishMenu', undefined),
+    pollNow: () => invoke('webBridge:pollNow', undefined),
+  },
   printer: {
     getConfig: () => invoke('printer:getConfig', undefined),
     setConfig: (req) => invoke('printer:setConfig', req),
@@ -238,5 +245,19 @@ contextBridge.exposeInMainWorld('syncEvents', {
     const listener = () => cb();
     ipcRenderer.on('sync:status-changed', listener);
     return () => ipcRenderer.removeListener('sync:status-changed', listener);
+  },
+});
+
+// New online orders arriving from the website bridge → toast + board refresh.
+contextBridge.exposeInMainWorld('webOrderEvents', {
+  onReceived: (
+    cb: (payload: { orderId: string; orderNumber: string; customerName: string }) => void,
+  ) => {
+    const listener = (
+      _e: unknown,
+      payload: { orderId: string; orderNumber: string; customerName: string },
+    ) => cb(payload);
+    ipcRenderer.on('web-order:received', listener);
+    return () => ipcRenderer.removeListener('web-order:received', listener);
   },
 });

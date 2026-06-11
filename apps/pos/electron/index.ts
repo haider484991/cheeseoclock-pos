@@ -11,6 +11,7 @@ import { registerAllIpcHandlers } from './ipc/registry.js';
 import { printSpooler } from './services/print-spooler.js';
 import { fbrWorker } from './services/fbr-worker.js';
 import { syncWorker } from './services/sync-worker.js';
+import { webOrdersBridge } from './services/web-orders-bridge.js';
 import { initErrorReporter } from './services/error-reporter.js';
 import { initAutoUpdater } from './services/auto-updater.js';
 import {
@@ -98,6 +99,7 @@ async function bootstrap() {
   printSpooler.init(db);
   fbrWorker.init(db);
   syncWorker.init(db, deviceInfo.deviceId);
+  webOrdersBridge.init(db, deviceInfo.deviceId);
   initBackupService(db);
 
   registerAllIpcHandlers({ db, deviceId: deviceInfo.deviceId });

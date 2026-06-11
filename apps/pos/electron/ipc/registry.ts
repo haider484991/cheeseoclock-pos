@@ -23,6 +23,7 @@ import { registerBackupHandlers } from './handlers/backup-handlers.js';
 import { registerSyncHandlers } from './handlers/sync-handlers.js';
 import { registerRidersHandlers } from './handlers/riders-handlers.js';
 import { registerShiftsHandlers } from './handlers/shifts-handlers.js';
+import { registerWebBridgeHandlers } from './handlers/web-bridge-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
 
 export interface HandlerContext {
@@ -101,5 +102,6 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   registerBackupHandlers(ctx);
   registerRidersHandlers(ctx);
   registerShiftsHandlers(ctx);
+  registerWebBridgeHandlers(ctx);
   log.info('IPC handlers registered');
 }

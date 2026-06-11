@@ -147,6 +147,14 @@ export const ipc = {
     list: (input?: IpcRequest<'shifts:list'>) => unwrap(window.api.shifts.list(input)),
     summary: (shiftId: string) => unwrap(window.api.shifts.summary({ shiftId })),
   },
+  webBridge: {
+    getConfig: () => unwrap(window.api.webBridge.getConfig()),
+    setConfig: (input: IpcRequest<'webBridge:setConfig'>) =>
+      unwrap(window.api.webBridge.setConfig(input)),
+    getStatus: () => unwrap(window.api.webBridge.getStatus()),
+    publishMenu: () => unwrap(window.api.webBridge.publishMenu()),
+    pollNow: () => unwrap(window.api.webBridge.pollNow()),
+  },
   customers: {
     list: (input?: IpcRequest<'customers:list'>) => unwrap(window.api.customers.list(input)),
     findByPhone: (phone: string) => unwrap(window.api.customers.findByPhone({ phone })),
@@ -280,6 +288,25 @@ export function onSyncStatusChanged(cb: () => void): () => void {
     syncEvents?: { onStatusChanged: (cb: () => void) => () => void };
   };
   return w.syncEvents?.onStatusChanged(cb) ?? (() => {});
+}
+
+/** Payload broadcast when the web bridge imports a new online order. */
+export interface WebOrderReceivedPayload {
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+}
+
+/** Listen for web-order:received broadcasts from the website bridge. */
+export function onWebOrderReceived(
+  cb: (payload: WebOrderReceivedPayload) => void,
+): () => void {
+  const w = window as unknown as {
+    webOrderEvents?: {
+      onReceived: (cb: (p: WebOrderReceivedPayload) => void) => () => void;
+    };
+  };
+  return w.webOrderEvents?.onReceived(cb) ?? (() => {});
 }
 
 /** Payload broadcast by the main process when a print job fails permanently. */
