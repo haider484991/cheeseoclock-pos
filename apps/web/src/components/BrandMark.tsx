@@ -26,7 +26,7 @@ export function BrandMark({
         src="/logo.png"
         alt="Cheese O'Clock"
         onError={() => setFailed(true)}
-        className={`${stacked ? 'h-56 w-auto' : 'h-11 w-auto'} ${className}`}
+        className={`${stacked ? 'h-56 w-auto' : 'h-12 w-auto'} ${className}`}
       />
     );
   }
