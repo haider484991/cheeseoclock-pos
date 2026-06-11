@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
+import { Logo } from '@/components/Logo';
 import { BUSINESS } from '@/lib/business';
 
 export default function HomePage() {
@@ -46,9 +47,9 @@ export default function HomePage() {
                 💵 Cash on delivery · 📞 {BUSINESS.phoneDisplay}
               </p>
             </div>
-            <div className="relative hidden select-none md:block" aria-hidden>
-              <div className="mx-auto flex h-80 w-80 items-center justify-center rounded-full bg-gradient-to-br from-amber-200 via-amber-100 to-orange-100 text-[10rem] shadow-soft-lg">
-                🍕
+            <div className="relative hidden select-none md:block">
+              <div className="mx-auto flex h-80 w-80 items-center justify-center rounded-[2.5rem] bg-stone-900 shadow-soft-lg ring-1 ring-stone-800">
+                <Logo stacked dark />
               </div>
               <div className="absolute -left-2 top-10 rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-soft-md">
                 🍔 Loaded burgers

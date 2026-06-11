@@ -186,7 +186,7 @@ export function WebsiteSettings() {
         <span className="font-medium text-stone-700 dark:text-stone-200">
           Accept online orders
         </span>
-        <span className="text-xs text-stone-400">(polls the website every 20s)</span>
+        <span className="text-xs text-stone-400">(checks for new orders every ~10 seconds)</span>
       </label>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">

@@ -56,6 +56,13 @@ import type {
  */
 
 const MAX_IMPORT_ATTEMPTS = 5;
+/**
+ * How often the bridge checks the website for new orders + pushes status
+ * updates. Fixed at 10s for a near-real-time feel regardless of the stored
+ * pollIntervalMs (which has no UI and older installs left at 20s). Gentle
+ * enough for the Neon/Vercel free tiers.
+ */
+const ORDER_POLL_MS = 10_000;
 /** The bridge's writes are attributed to this synthetic actor in audit logs. */
 const WEB_ACTOR_NAME = 'web-bridge';
 
@@ -108,7 +115,7 @@ class WebOrdersBridge {
     // scheduled cloud backups. Both require URL + secret.
     const anyFeatureOn = cfg.enabled || cfg.cloudBackupFrequency !== 'off';
     if (!anyFeatureOn || !isWebBridgeReady(cfg).ok) return;
-    this.timer = setInterval(() => void this.tick(), cfg.pollIntervalMs);
+    this.timer = setInterval(() => void this.tick(), ORDER_POLL_MS);
     void this.tick();
   }
 

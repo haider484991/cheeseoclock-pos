@@ -58,7 +58,8 @@ export function OrderTracker({ orderId }: { orderId: string }) {
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), 10_000);
+    // Poll fast so the status feels live as the kitchen advances the order.
+    const t = setInterval(() => void load(), 4_000);
     return () => clearInterval(t);
   }, [load]);
 
