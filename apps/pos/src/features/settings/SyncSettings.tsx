@@ -80,7 +80,10 @@ export function SyncSettings() {
     <Card>
       <div className="mb-4 flex items-center gap-2">
         <Cloud className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">Cloud sync</h2>
+        <h2 className="text-lg font-semibold">Multi-device sync</h2>
+        <span className="inline-flex items-center rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-stone-600 dark:bg-stone-700 dark:text-stone-300">
+          advanced
+        </span>
         {ready &&
           (ready.ok ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
@@ -92,6 +95,14 @@ export function SyncSettings() {
             </span>
           ))}
       </div>
+
+      <p className="mb-4 rounded-xl bg-stone-50 p-3 text-xs leading-relaxed text-stone-500 dark:bg-stone-800/50">
+        This replicates the database between <strong>multiple POS tills</strong> —
+        only needed when you add a second counter or an HQ dashboard. You do{' '}
+        <strong>not</strong> need it for website orders or cloud backups: those
+        are configured in <strong>Website — online ordering</strong> above and
+        run automatically. Leave this <strong>Off</strong> for a single till.
+      </p>
 
       <section className="space-y-4">
         <div>
