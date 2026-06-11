@@ -230,6 +230,71 @@ class WebOrdersBridge {
     }
   }
 
+  /**
+   * One-shot self-test for support: reports config, whether a staff user is
+   * found, the raw pull result, and — per pending order — the local import
+   * bookkeeping and whether the menu item still exists. Pinpoints exactly why
+   * orders aren't importing without needing to read the database by hand.
+   */
+  async diagnose(): Promise<Record<string, unknown>> {
+    if (!this.db) return { error: 'bridge not initialized' };
+    const cfg = getWebBridgeConfig(this.db);
+    const ready = isWebBridgeReady(cfg);
+    const actor = this.resolveActor();
+    const out: Record<string, unknown> = {
+      enabled: cfg.enabled,
+      ready: ready.ok,
+      missing: ready.missing,
+      siteUrl: cfg.siteUrl ?? null,
+      hasSecret: !!cfg.bridgeSecret,
+      deviceId: this.deviceId,
+      staffUser: actor ? `ok (${actor.userId})` : 'NONE — no active admin/manager/cashier user found',
+      lastPollAt: this.lastPollAt,
+      lastError: this.lastError,
+      lastImportError: this.lastImportError,
+      running: this.running,
+    };
+    try {
+      const res = await this.api(cfg, '/api/bridge/orders');
+      const text = await res.text();
+      type PullBody = { ok?: boolean; data?: WebOrder[] };
+      let parsed: PullBody | null = null;
+      try {
+        parsed = JSON.parse(text) as PullBody;
+      } catch {
+        /* keep raw */
+      }
+      out['pullHttpStatus'] = res.status;
+      out['pullOrderCount'] = parsed?.data?.length ?? null;
+      if (!parsed) out['pullRawBody'] = text.slice(0, 300);
+      if (parsed?.data) {
+        out['orders'] = parsed.data.map((o) => {
+          const existing = this.db!
+            .prepare(
+              `SELECT pos_order_id, status, attempts, last_error FROM web_order_imports WHERE web_order_id = ?`,
+            )
+            .get(o.id);
+          const firstItemId = o.items?.[0]?.posItemId;
+          const item = firstItemId
+            ? this.db!
+                .prepare(`SELECT id, is_active, deleted_at FROM menu_items WHERE id = ?`)
+                .get(firstItemId)
+            : null;
+          return {
+            name: o.customerName,
+            webId: o.id,
+            firstItemId,
+            itemFoundLocally: item ?? 'NOT FOUND in local menu_items',
+            priorImport: existing ?? 'none (fresh)',
+          };
+        });
+      }
+    } catch (e) {
+      out['pullError'] = e instanceof Error ? e.message : String(e);
+    }
+    return out;
+  }
+
   async listCloudBackups(): Promise<CloudBackupEntry[]> {
     if (!this.db) throw new Error('Bridge not initialized');
     const cfg = getWebBridgeConfig(this.db);

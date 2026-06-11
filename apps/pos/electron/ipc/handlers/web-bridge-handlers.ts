@@ -93,6 +93,11 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
     return ok({ kicked: true } as const);
   });
 
+  defineHandler('webBridge:diagnose', ctx, async () => {
+    requireSettingsManage();
+    return ok(await webOrdersBridge.diagnose());
+  });
+
   defineHandler('webBridge:backupNow', ctx, async () => {
     requireSettingsManage();
     try {

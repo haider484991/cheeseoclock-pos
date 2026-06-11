@@ -553,6 +553,11 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<{ kicked: true }>;
   };
+  /** One-shot self-test — reports why orders are/aren't importing. */
+  'webBridge:diagnose': {
+    request: undefined;
+    response: ApiResult<Record<string, unknown>>;
+  };
 
   // Riders / delivery staff
   'riders:list': {

@@ -154,6 +154,7 @@ export const ipc = {
     getStatus: () => unwrap(window.api.webBridge.getStatus()),
     publishMenu: () => unwrap(window.api.webBridge.publishMenu()),
     pollNow: () => unwrap(window.api.webBridge.pollNow()),
+    diagnose: () => unwrap(window.api.webBridge.diagnose()),
     backupNow: () => unwrap(window.api.webBridge.backupNow()),
     listCloudBackups: () => unwrap(window.api.webBridge.listCloudBackups()),
     restoreCloudBackup: (id: string) =>
