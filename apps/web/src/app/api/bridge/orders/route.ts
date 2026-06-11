@@ -10,26 +10,6 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
   try {
-    // Temporary diagnostic: ?debug=1 reports what THIS function's DB
-    // connection actually sees (total rows + status breakdown + which DB
-    // host), to explain why a correct query returns 0 while the rows exist.
-    const url = new URL(req.url);
-    if (url.searchParams.get('debug') === '1') {
-      const total = (await sql()`SELECT count(*)::int AS n FROM web_orders`) as Array<{
-        n: number;
-      }>;
-      const byStatus = (await sql()`
-        SELECT status, count(*)::int AS n FROM web_orders GROUP BY status
-      `) as Array<{ status: string; n: number }>;
-      const dbHost = (await sql()`SELECT inet_server_addr()::text AS addr, current_database() AS db`) as Array<{
-        addr: string | null;
-        db: string;
-      }>;
-      return Response.json({
-        ok: true,
-        debug: { total: total[0]?.n ?? null, byStatus, db: dbHost[0] ?? null },
-      });
-    }
     const rows = (await sql()`
       SELECT id, status, customer_name, customer_phone, address_line, area,
              notes, items_json, subtotal_cents, tax_cents, total_cents,
