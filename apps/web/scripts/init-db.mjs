@@ -17,13 +17,28 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const schema = readFileSync(path.join(here, '..', 'db', 'schema.sql'), 'utf8');
 
 const sql = neon(url);
-// Split on semicolons at line ends — fine for this simple schema file.
+
+/** Run a raw SQL string through the tagged-template client. */
+function run(text) {
+  const tpl = Object.assign([text], { raw: [text] });
+  return sql(tpl);
+}
+
+// Split on semicolons at line ends, then strip comment-only lines from each
+// chunk (dropping whole chunks that start with a comment would silently skip
+// the statement that follows the comment block).
 const statements = schema
   .split(/;\s*\n/)
-  .map((s) => s.trim())
-  .filter((s) => s.length > 0 && !s.startsWith('--'));
+  .map((s) =>
+    s
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('--'))
+      .join('\n')
+      .trim(),
+  )
+  .filter((s) => s.length > 0);
 
 for (const stmt of statements) {
-  await sql.query(stmt);
+  await run(stmt);
 }
 console.log(`Applied ${statements.length} statements. Database ready.`);
