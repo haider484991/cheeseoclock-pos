@@ -1,13 +1,13 @@
 import Link from 'next/link';
 import { BUSINESS } from '@/lib/business';
-import { Logo, ClockMark } from './Logo';
+import { BrandMark } from './BrandMark';
 
 export function SiteHeader() {
   return (
     <header className="sticky top-0 z-40 border-b border-stone-200/70 bg-white/80 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
         <Link href="/" aria-label="Cheese O'Clock home">
-          <Logo />
+          <BrandMark />
         </Link>
         <nav className="flex items-center gap-1 text-sm font-semibold">
           <Link
@@ -41,10 +41,7 @@ export function SiteFooter() {
     <footer className="mt-16 border-t border-stone-200 bg-white">
       <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 sm:grid-cols-3">
         <div>
-          <div className="flex items-center gap-2">
-            <ClockMark className="h-8 w-8 text-[#F5B301]" />
-            <span className="font-extrabold tracking-tight">Cheese O&rsquo;Clock</span>
-          </div>
+          <BrandMark className="!h-10" />
           <p className="mt-3 text-sm leading-relaxed text-stone-500">
             {BUSINESS.tagline}
           </p>

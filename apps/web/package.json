@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "db:init": "node scripts/init-db.mjs"
+    "db:init": "node scripts/init-db.mjs",
+    "logo:clean": "node scripts/remove-bg.mjs"
   },
   "dependencies": {
     "@cheeseoclock/shared-types": "workspace:*",
@@ -25,6 +26,7 @@
     "@types/react-dom": "^18.3.0",
     "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.20",
+    "jimp": "^1.6.0",
     "postcss": "^8.4.41",
     "tailwindcss": "^3.4.10",
     "typescript": "^5.5.4"
