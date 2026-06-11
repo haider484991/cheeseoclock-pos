@@ -72,8 +72,10 @@ export function Logo({
   dark?: boolean;
   stacked?: boolean;
 }) {
-  const textColor = dark ? 'text-[#F5B301]' : 'text-stone-900';
-  const script = { fontFamily: 'Pacifico, cursive' } as const;
+  // The site chrome is dark everywhere now — the fallback wordmark stays
+  // brand gold on both variants (`dark` kept for API compatibility).
+  const textColor = dark ? 'text-[#F5B301]' : 'text-[#F5B301]';
+  const script = { fontFamily: 'var(--font-display), Impact, sans-serif' } as const;
 
   if (stacked) {
     return (

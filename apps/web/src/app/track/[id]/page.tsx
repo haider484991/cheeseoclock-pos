@@ -4,7 +4,7 @@ import { OrderTracker } from '@/components/OrderTracker';
 
 export const metadata: Metadata = {
   title: 'Track your order',
-  robots: { index: false },
+  robots: { index: false, follow: false },
 };
 
 export default function TrackPage({ params }: { params: { id: string } }) {

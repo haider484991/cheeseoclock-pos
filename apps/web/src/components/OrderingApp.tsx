@@ -104,21 +104,23 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
   return (
     <div className="pb-28 lg:grid lg:grid-cols-[1fr_22rem] lg:gap-8 lg:pb-8">
       <div>
-        <h1 className="text-3xl font-black tracking-tight">Menu</h1>
-        <p className="mt-1 text-sm text-stone-500">
-          Tap an item to add it · 💵 cash on delivery
+        <h1 className="font-display text-5xl tracking-wide text-cream md:text-6xl">
+          THE MENU
+        </h1>
+        <p className="mt-1 text-sm text-smoke">
+          Tap an item to add it · 💵 cash on delivery · hot in 30–45 min
         </p>
 
         {/* Category rail */}
-        <nav className="sticky top-16 z-30 -mx-4 mt-4 flex gap-2 overflow-x-auto bg-stone-50/95 px-4 py-3 backdrop-blur-sm">
+        <nav className="scrollbar-hide sticky top-16 z-30 -mx-4 mt-4 flex gap-2 overflow-x-auto bg-night/90 px-4 py-3 backdrop-blur-md sm:top-[4.5rem]">
           {categories.map((c) => (
             <button
               key={c.posCategoryId}
               onClick={() => setActiveCat(c.posCategoryId)}
               className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold transition-colors ${
                 c.posCategoryId === active?.posCategoryId
-                  ? 'bg-stone-900 text-white'
-                  : 'bg-white text-stone-600 shadow-soft-sm ring-1 ring-stone-200 hover:bg-stone-100'
+                  ? 'bg-cheese text-night shadow-glow'
+                  : 'border border-white/10 bg-night-card text-cream/70 hover:border-cheese/40 hover:text-cream'
               }`}
             >
               {c.name}
@@ -135,32 +137,33 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
               <button
                 key={item.posItemId}
                 onClick={() => handleItemClick(item)}
-                className="group flex gap-3 rounded-2xl bg-white p-3 text-left shadow-soft-sm ring-1 ring-stone-100 transition-all hover:shadow-soft-md hover:ring-amber-200 active:scale-[0.99]"
+                className="group flex gap-3 rounded-2xl border border-white/10 bg-night-card p-3 text-left transition-all hover:border-cheese/50 active:scale-[0.99]"
               >
-                <div className="flex h-20 w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-amber-100 to-orange-100 text-3xl">
+                <div className="flex h-20 w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/5 bg-gradient-to-br from-night-edge to-night-soft text-3xl">
                   {item.imageUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={item.imageUrl}
                       alt=""
-                      className="h-full w-full object-cover"
+                      loading="lazy"
+                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-110"
                     />
                   ) : (
                     foodEmoji(item.name)
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <h3 className="font-bold leading-tight">{item.name}</h3>
+                  <h3 className="font-bold leading-tight text-cream">{item.name}</h3>
                   {item.description && (
-                    <p className="mt-0.5 line-clamp-2 text-xs text-stone-500">
+                    <p className="mt-0.5 line-clamp-2 text-xs text-smoke">
                       {item.description}
                     </p>
                   )}
                   <div className="mt-1.5 flex items-center justify-between">
-                    <span className="font-mono text-sm font-bold text-amber-700">
+                    <span className="font-mono text-sm font-bold tabular-nums text-cheese">
                       {formatCents(item.basePriceCents)}
                     </span>
-                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 opacity-0 transition-opacity group-hover:opacity-100">
+                    <span className="rounded-full bg-cheese px-2.5 py-1 text-xs font-bold text-night opacity-80 transition-all group-hover:opacity-100 group-hover:shadow-glow">
                       {item.modifierGroups.length > 0 ? 'Customize +' : 'Add +'}
                     </span>
                   </div>
@@ -172,7 +175,7 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
 
       {/* Cart — desktop side panel */}
       <aside className="hidden lg:block">
-        <div className="sticky top-24 rounded-2xl bg-white p-4 shadow-soft-md ring-1 ring-stone-100">
+        <div className="sticky top-24 rounded-2xl border border-white/10 bg-night-card p-4">
           <CartPanel
             cart={cart}
             lineUnitPrice={lineUnitPrice}
@@ -187,15 +190,15 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
 
       {/* Cart — mobile bottom bar */}
       {cartCount > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white p-3 shadow-soft-lg lg:hidden">
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-night/95 p-3 backdrop-blur lg:hidden">
           <button
             onClick={() => setCheckoutOpen(true)}
-            className="flex w-full items-center justify-between rounded-2xl bg-gradient-to-b from-amber-400 to-amber-500 px-5 py-4 font-bold text-stone-900 shadow-lift active:scale-[0.99]"
+            className="flex w-full items-center justify-between rounded-full bg-cheese px-6 py-4 font-bold text-night shadow-glow-lg active:scale-[0.99]"
           >
             <span>
               🛒 {cartCount} item{cartCount === 1 ? '' : 's'}
             </span>
-            <span className="font-mono">{formatCents(total)} →</span>
+            <span className="font-mono tabular-nums">{formatCents(total)} →</span>
           </button>
         </div>
       )}
@@ -240,9 +243,9 @@ function CartPanel(props: {
   const { cart } = props;
   return (
     <div>
-      <h2 className="font-black">Your order</h2>
+      <h2 className="font-display text-2xl tracking-wide text-cream">YOUR ORDER</h2>
       {cart.length === 0 ? (
-        <p className="mt-4 pb-2 text-center text-sm text-stone-400">
+        <p className="mt-4 pb-2 text-center text-sm text-smoke">
           Cart is empty — tap an item to add it.
         </p>
       ) : (
@@ -255,7 +258,7 @@ function CartPanel(props: {
           <Totals subtotal={props.subtotal} tax={props.tax} total={props.total} />
           <button
             onClick={props.onCheckout}
-            className="mt-3 w-full rounded-2xl bg-gradient-to-b from-amber-400 to-amber-500 py-3.5 font-bold text-stone-900 shadow-soft-sm transition-all hover:shadow-lift active:scale-[0.99]"
+            className="mt-3 w-full rounded-full bg-cheese py-3.5 font-bold text-night shadow-glow transition-all hover:bg-cheese-hot hover:shadow-glow-lg active:scale-[0.99]"
           >
             Checkout — {formatCents(props.total)}
           </button>
@@ -279,30 +282,30 @@ function CartLineRow({
     .map((id) => allMods.find((m) => m.posModifierId === id)?.name)
     .filter(Boolean);
   return (
-    <li className="flex items-start gap-2 rounded-xl bg-stone-50 p-2.5">
+    <li className="flex items-start gap-2 rounded-xl border border-white/5 bg-night-soft p-2.5">
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-bold leading-tight">{line.item.name}</div>
+        <div className="text-sm font-bold leading-tight text-cream">{line.item.name}</div>
         {names.length > 0 && (
-          <div className="mt-0.5 truncate text-xs text-stone-500">+ {names.join(', ')}</div>
+          <div className="mt-0.5 truncate text-xs text-smoke">+ {names.join(', ')}</div>
         )}
-        <div className="mt-1 font-mono text-xs font-bold text-amber-700">
+        <div className="mt-1 font-mono text-xs font-bold tabular-nums text-cheese">
           {formatCents(unit * line.quantity)}
         </div>
       </div>
-      <div className="flex items-center gap-1 rounded-lg bg-white p-0.5 shadow-soft-sm">
+      <div className="flex items-center gap-1 rounded-full border border-white/10 bg-night-card p-0.5">
         <button
           onClick={() => setQty(line.key, line.quantity - 1)}
-          className="h-7 w-7 rounded-md font-bold text-stone-500 hover:bg-stone-100"
+          className="h-7 w-7 rounded-full font-bold text-smoke hover:bg-white/5 hover:text-cream"
           aria-label="Decrease"
         >
           −
         </button>
-        <span className="min-w-[1.5ch] text-center font-mono text-sm font-bold">
+        <span className="min-w-[1.5ch] text-center font-mono text-sm font-bold text-cream">
           {line.quantity}
         </span>
         <button
           onClick={() => setQty(line.key, line.quantity + 1)}
-          className="h-7 w-7 rounded-md font-bold text-stone-500 hover:bg-stone-100"
+          className="h-7 w-7 rounded-full font-bold text-smoke hover:bg-white/5 hover:text-cream"
           aria-label="Increase"
         >
           +
@@ -314,18 +317,18 @@ function CartLineRow({
 
 function Totals({ subtotal, tax, total }: { subtotal: number; tax: number; total: number }) {
   return (
-    <dl className="mt-3 space-y-1 border-t border-stone-100 pt-3 text-sm">
-      <div className="flex justify-between text-stone-500">
+    <dl className="mt-3 space-y-1 border-t border-white/10 pt-3 text-sm">
+      <div className="flex justify-between text-smoke">
         <dt>Subtotal</dt>
-        <dd className="font-mono">{formatCents(subtotal)}</dd>
+        <dd className="font-mono tabular-nums">{formatCents(subtotal)}</dd>
       </div>
-      <div className="flex justify-between text-stone-500">
+      <div className="flex justify-between text-smoke">
         <dt>Tax (est.)</dt>
-        <dd className="font-mono">{formatCents(tax)}</dd>
+        <dd className="font-mono tabular-nums">{formatCents(tax)}</dd>
       </div>
-      <div className="flex justify-between text-base font-black">
+      <div className="flex justify-between text-base font-black text-cream">
         <dt>Total</dt>
-        <dd className="font-mono text-amber-700">{formatCents(total)}</dd>
+        <dd className="font-mono tabular-nums text-cheese">{formatCents(total)}</dd>
       </div>
     </dl>
   );
@@ -384,17 +387,17 @@ function ModifierSheet({
     .reduce((s, m) => s + m.priceDeltaCents, 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center" onClick={onClose}>
       <div
-        className="max-h-[85vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-soft-lg sm:max-w-md sm:rounded-3xl"
+        className="max-h-[85vh] w-full overflow-y-auto rounded-t-3xl border border-white/10 bg-night-soft p-5 sm:max-w-md sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-lg font-black">{item.name}</h3>
-            <p className="text-sm text-stone-500">Customize your order</p>
+            <h3 className="text-lg font-black text-cream">{item.name}</h3>
+            <p className="text-sm text-smoke">Customize your order</p>
           </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100" aria-label="Close">
+          <button onClick={onClose} className="rounded-lg p-1.5 text-smoke hover:bg-white/5 hover:text-cream" aria-label="Close">
             ✕
           </button>
         </div>
@@ -404,9 +407,9 @@ function ModifierSheet({
           .sort((a, b) => a.sortOrder - b.sortOrder)
           .map((g) => (
             <fieldset key={g.posGroupId} className="mt-4">
-              <legend className="text-sm font-bold">
+              <legend className="text-sm font-bold text-cream">
                 {g.name}{' '}
-                {g.isRequired && <span className="text-xs font-semibold text-amber-600">required</span>}
+                {g.isRequired && <span className="text-xs font-semibold text-cheese">required</span>}
               </legend>
               <div className="mt-2 space-y-1.5">
                 {g.modifiers
@@ -419,8 +422,8 @@ function ModifierSheet({
                         key={m.posModifierId}
                         className={`flex cursor-pointer items-center justify-between rounded-xl border-2 px-3 py-2.5 text-sm transition-colors ${
                           checked
-                            ? 'border-amber-400 bg-amber-50'
-                            : 'border-stone-100 bg-white hover:border-stone-200'
+                            ? 'border-cheese bg-cheese/10'
+                            : 'border-white/10 bg-night-card hover:border-white/25'
                         }`}
                       >
                         <span className="flex items-center gap-2">
@@ -428,12 +431,12 @@ function ModifierSheet({
                             type={g.selectionType === 'single' ? 'radio' : 'checkbox'}
                             checked={checked}
                             onChange={() => toggle(g.posGroupId, m.posModifierId)}
-                            className="h-4 w-4 accent-amber-500"
+                            className="h-4 w-4 accent-cheese"
                           />
-                          <span className="font-semibold">{m.name}</span>
+                          <span className="font-semibold text-cream">{m.name}</span>
                         </span>
                         {m.priceDeltaCents !== 0 && (
-                          <span className="font-mono text-xs text-stone-500">
+                          <span className="font-mono text-xs tabular-nums text-smoke">
                             +{formatCents(m.priceDeltaCents)}
                           </span>
                         )}
@@ -447,7 +450,7 @@ function ModifierSheet({
         <button
           disabled={unmetGroups.length > 0}
           onClick={() => onConfirm([...selected])}
-          className="mt-5 w-full rounded-2xl bg-gradient-to-b from-amber-400 to-amber-500 py-3.5 font-bold text-stone-900 shadow-soft-sm transition-all hover:shadow-lift active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-5 w-full rounded-full bg-cheese py-3.5 font-bold text-night shadow-glow transition-all hover:bg-cheese-hot active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {unmetGroups.length > 0
             ? `Choose ${unmetGroups[0]?.name ?? 'options'}`
@@ -526,17 +529,17 @@ function CheckoutSheet(props: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm sm:items-center" onClick={props.onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center" onClick={props.onClose}>
       <div
-        className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-soft-lg sm:max-w-lg sm:rounded-3xl"
+        className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl border border-white/10 bg-night-soft p-5 sm:max-w-lg sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-lg font-black">Checkout</h3>
-            <p className="text-sm text-stone-500">💵 Cash on delivery · pay the rider</p>
+            <h3 className="font-display text-2xl tracking-wide text-cream">CHECKOUT</h3>
+            <p className="text-sm text-smoke">💵 Cash on delivery · pay the rider</p>
           </div>
-          <button onClick={props.onClose} className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100" aria-label="Close">
+          <button onClick={props.onClose} className="rounded-lg p-1.5 text-smoke hover:bg-white/5 hover:text-cream" aria-label="Close">
             ✕
           </button>
         </div>
@@ -570,7 +573,7 @@ function CheckoutSheet(props: {
         </div>
 
         {error && (
-          <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+          <p className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300">
             {error}
           </p>
         )}
@@ -578,11 +581,11 @@ function CheckoutSheet(props: {
         <button
           onClick={() => void submit()}
           disabled={submitting || props.cart.length === 0}
-          className="mt-4 w-full rounded-2xl bg-gradient-to-b from-amber-400 to-amber-500 py-4 text-lg font-bold text-stone-900 shadow-lift transition-all hover:shadow-soft-lg active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-4 w-full rounded-full bg-cheese py-4 text-lg font-bold text-night shadow-glow-lg transition-all hover:bg-cheese-hot active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {submitting ? 'Placing your order…' : `Place order — ${formatCents(props.total)}`}
         </button>
-        <p className="mt-2 text-center text-xs text-stone-400">
+        <p className="mt-2 text-center text-xs text-smoke">
           By ordering you agree to pay cash on delivery. Final bill is confirmed by
           the restaurant.
         </p>
@@ -608,14 +611,14 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-bold text-stone-700">{label}</span>
+      <span className="mb-1 block text-sm font-bold text-cream/90">{label}</span>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         autoFocus={autoFocus}
-        className="w-full rounded-xl border-2 border-stone-200 px-3.5 py-2.5 text-sm font-medium outline-none transition-colors placeholder:text-stone-300 focus:border-amber-400"
+        className="w-full rounded-xl border-2 border-white/10 bg-night-card px-3.5 py-2.5 text-sm font-medium text-cream outline-none transition-colors placeholder:text-smoke/40 focus:border-cheese"
       />
     </label>
   );

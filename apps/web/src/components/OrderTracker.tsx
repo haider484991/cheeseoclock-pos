@@ -67,10 +67,10 @@ export function OrderTracker({ orderId }: { orderId: string }) {
     return (
       <div className="py-16 text-center">
         <div className="text-5xl">🤔</div>
-        <h1 className="mt-3 text-xl font-black">{error}</h1>
+        <h1 className="mt-3 text-xl font-black text-cream">{error}</h1>
         <a
           href={`tel:${BUSINESS.phoneE164}`}
-          className="mt-4 inline-block font-bold text-amber-600 hover:underline"
+          className="mt-4 inline-block font-bold text-cheese hover:text-cheese-hot"
         >
           📞 {BUSINESS.phoneDisplay}
         </a>
@@ -78,7 +78,7 @@ export function OrderTracker({ orderId }: { orderId: string }) {
     );
   }
   if (!order) {
-    return <div className="py-24 text-center text-stone-400">Loading your order…</div>;
+    return <div className="py-24 text-center text-smoke">Loading your order…</div>;
   }
 
   const cancelled = order.status === 'cancelled';
@@ -87,34 +87,34 @@ export function OrderTracker({ orderId }: { orderId: string }) {
   return (
     <div className="animate-fade-in">
       {justPlaced && (
-        <div className="mb-5 rounded-2xl bg-emerald-50 p-4 text-center ring-1 ring-emerald-200">
+        <div className="mb-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
           <div className="text-3xl">🎉</div>
-          <h1 className="mt-1 text-lg font-black text-emerald-900">
+          <h1 className="mt-1 text-lg font-black text-emerald-300">
             Order placed, {order.customerName.split(' ')[0]}!
           </h1>
-          <p className="text-sm text-emerald-700">
+          <p className="text-sm text-emerald-200/80">
             Keep this page open to follow your order live.
           </p>
         </div>
       )}
 
-      <div className="rounded-2xl bg-white p-5 shadow-soft-md ring-1 ring-stone-100">
+      <div className="rounded-2xl border border-white/10 bg-night-card p-5">
         <div className="flex items-baseline justify-between">
-          <h2 className="font-black">
+          <h2 className="font-black text-cream">
             {order.posOrderNumber
               ? `Order #${order.posOrderNumber.split('-').pop()}`
               : 'Your order'}
           </h2>
-          <span className="font-mono text-sm font-bold text-amber-700">
+          <span className="font-mono text-sm font-bold tabular-nums text-cheese">
             {formatCents(order.totalCents)}
           </span>
         </div>
 
         {cancelled ? (
-          <div className="mt-4 rounded-xl bg-red-50 p-4 text-center">
+          <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-center">
             <div className="text-3xl">😞</div>
-            <p className="mt-1 font-bold text-red-800">This order was cancelled.</p>
-            <p className="text-sm text-red-600">
+            <p className="mt-1 font-bold text-red-300">This order was cancelled.</p>
+            <p className="text-sm text-red-300/80">
               If that&rsquo;s unexpected, call us — {BUSINESS.phoneDisplay}.
             </p>
           </div>
@@ -129,23 +129,25 @@ export function OrderTracker({ orderId }: { orderId: string }) {
                     <div
                       className={`flex h-9 w-9 items-center justify-center rounded-full text-base transition-colors ${
                         reached
-                          ? 'bg-gradient-to-br from-amber-400 to-amber-500 shadow-soft-sm'
-                          : 'bg-stone-100 grayscale'
-                      } ${current ? 'ring-4 ring-amber-200' : ''}`}
+                          ? 'bg-cheese shadow-glow'
+                          : 'bg-white/5 grayscale'
+                      } ${current ? 'ring-4 ring-cheese/30' : ''}`}
                     >
                       {s.emoji}
                     </div>
                     {i < STEPS.length - 1 && (
                       <div
-                        className={`h-6 w-0.5 ${reached && i < idx ? 'bg-amber-400' : 'bg-stone-200'}`}
+                        className={`h-6 w-0.5 ${reached && i < idx ? 'bg-cheese' : 'bg-white/10'}`}
                       />
                     )}
                   </div>
-                  <div className={`pb-2 pt-1.5 ${current ? '' : 'opacity-70'}`}>
-                    <div className={`text-sm ${current ? 'font-black' : 'font-semibold'}`}>
+                  <div className={`pb-2 pt-1.5 ${current ? '' : 'opacity-60'}`}>
+                    <div
+                      className={`text-sm text-cream ${current ? 'font-black' : 'font-semibold'}`}
+                    >
                       {s.label}
                       {current && (
-                        <span className="ml-2 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                        <span className="ml-2 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
                       )}
                     </div>
                   </div>
@@ -155,21 +157,21 @@ export function OrderTracker({ orderId }: { orderId: string }) {
           </ol>
         )}
 
-        <div className="mt-4 border-t border-stone-100 pt-3">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-stone-400">Items</h3>
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-smoke">Items</h3>
           <ul className="mt-2 space-y-1 text-sm">
             {order.items.map((i, n) => (
-              <li key={n} className="flex justify-between">
+              <li key={n} className="flex justify-between text-cream/90">
                 <span>
                   <span className="font-bold">{i.quantity}×</span> {i.name}
                   {i.modifiers.length > 0 && (
-                    <span className="text-xs text-stone-400">
+                    <span className="text-xs text-smoke">
                       {' '}
                       (+{i.modifiers.map((m) => m.name).join(', ')})
                     </span>
                   )}
                 </span>
-                <span className="font-mono text-stone-500">
+                <span className="font-mono tabular-nums text-smoke">
                   {formatCents(i.unitPriceCents * i.quantity)}
                 </span>
               </li>
@@ -178,9 +180,9 @@ export function OrderTracker({ orderId }: { orderId: string }) {
         </div>
       </div>
 
-      <p className="mt-4 text-center text-sm text-stone-400">
+      <p className="mt-4 text-center text-sm text-smoke">
         Questions about your order?{' '}
-        <a href={BUSINESS.whatsappUrl} className="font-bold text-amber-600 hover:underline">
+        <a href={BUSINESS.whatsappUrl} className="font-bold text-cheese hover:text-cheese-hot">
           WhatsApp us
         </a>{' '}
         or call {BUSINESS.phoneDisplay}.

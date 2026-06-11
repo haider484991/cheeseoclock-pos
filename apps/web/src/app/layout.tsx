@@ -1,42 +1,66 @@
 import type { Metadata, Viewport } from 'next';
+import { Bebas_Neue, Inter } from 'next/font/google';
+import { JsonLd, restaurantNode, webSiteNode, SITE_URL } from '@/lib/seo';
 import './globals.css';
 
+const display = Bebas_Neue({
+  weight: '400',
+  subsets: ['latin'],
+  variable: '--font-display',
+  display: 'swap',
+});
+
+const sans = Inter({
+  subsets: ['latin'],
+  variable: '--font-sans',
+  display: 'swap',
+});
+
 export const metadata: Metadata = {
-  metadataBase: new URL('https://cheeseoclock.net'),
+  metadataBase: new URL(SITE_URL),
   title: {
-    default: "Cheese O'Clock — Gourmet Pizza & Fast Food in DHA Karachi",
+    default: "Pizza & Burger Delivery in DHA Karachi | Cheese O'Clock",
     template: "%s · Cheese O'Clock",
   },
   description:
-    "Oven-fresh signature pizzas, loaded gourmet burgers and premium fast food in Phase 6, DHA Karachi. Order online for cash-on-delivery — it's always Cheese O'Clock.",
-  keywords: [
-    'pizza DHA Karachi',
-    'fast food Phase 6',
-    'pizza delivery Karachi',
-    'Cheese O Clock',
-    'burgers DHA',
-  ],
+    'Oven-fresh signature pizzas & loaded smash burgers delivered across DHA Phases 1–8, Clifton & Gizri. Cash on delivery, open daily till 2am. Order online or on WhatsApp.',
+  alternates: { canonical: './' },
   openGraph: {
-    title: "Cheese O'Clock — Gourmet Pizza & Fast Food",
+    title: "Cheese O'Clock — Pizza & Burger Delivery in DHA Karachi",
     description:
-      'Order oven-fresh pizza and loaded burgers online. Cash on delivery in DHA, Karachi.',
-    url: 'https://cheeseoclock.net',
+      'Signature cheese-pull pizzas and smash burgers, hot at your door in 30–45 minutes. Cash on delivery across DHA & Clifton, open till 2am.',
+    url: SITE_URL,
     siteName: "Cheese O'Clock",
     locale: 'en_PK',
     type: 'website',
   },
+  twitter: {
+    card: 'summary_large_image',
+    title: "Cheese O'Clock — Pizza & Burger Delivery in DHA Karachi",
+    description:
+      'Signature cheese-pull pizzas and smash burgers, hot at your door. Cash on delivery, open till 2am.',
+  },
+  robots: { index: true, follow: true },
 };
 
 export const viewport: Viewport = {
-  themeColor: '#f59e0b',
+  themeColor: '#0C0A07',
   width: 'device-width',
   initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" className={`${display.variable} ${sans.variable}`}>
+      <body className="font-sans">
+        {children}
+        {/* Film grain over everything — subtle, pointer-transparent. */}
+        <div
+          aria-hidden
+          className="bg-noise pointer-events-none fixed inset-0 z-[90] opacity-[0.05] mix-blend-overlay"
+        />
+        <JsonLd nodes={[restaurantNode(), webSiteNode()]} />
+      </body>
     </html>
   );
 }
