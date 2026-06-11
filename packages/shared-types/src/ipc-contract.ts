@@ -525,6 +525,7 @@ export interface IpcContract {
       consecutiveFails: number;
       lastCloudBackupAt: string | null;
       lastCloudBackupError: string | null;
+      lastImportError: string | null;
     }>;
   };
   /** Upload a fresh gzipped database backup to the cloud right now. */

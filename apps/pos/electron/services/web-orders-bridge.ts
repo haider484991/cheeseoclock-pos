@@ -75,6 +75,8 @@ interface BridgeStatus {
   consecutiveFails: number;
   lastCloudBackupAt: string | null;
   lastCloudBackupError: string | null;
+  /** Last per-order import failure (caught inside the pull, not the tick). */
+  lastImportError: string | null;
 }
 
 const LAST_CLOUD_BACKUP_KEY = 'webBridge.lastCloudBackupAt';
@@ -97,6 +99,7 @@ class WebOrdersBridge {
   private importedTotal = 0;
   private consecutiveFails = 0;
   private lastCloudBackupError: string | null = null;
+  private lastImportError: string | null = null;
   private cloudBackupRunning = false;
 
   init(db: AppDatabase, deviceId: string): void {
@@ -133,6 +136,7 @@ class WebOrdersBridge {
       consecutiveFails: this.consecutiveFails,
       lastCloudBackupAt: typeof lastBackup === 'string' ? lastBackup : null,
       lastCloudBackupError: this.lastCloudBackupError,
+      lastImportError: this.lastImportError,
     };
   }
 
@@ -279,15 +283,25 @@ class WebOrdersBridge {
     path: string,
     init?: RequestInit,
   ): Promise<Response> {
-    const res = await fetch(`${cfg.siteUrl}${path}`, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.bridgeSecret}`,
-        ...(init?.headers ?? {}),
-      },
-    });
-    return res;
+    // Hard timeout so a hung connection can never wedge the poll loop. Without
+    // this, one stalled request left `this.running` true forever and the
+    // bridge silently stopped pulling orders (while manual actions kept
+    // working). 20s is generous for a ~3MB backup upload on shop Wi-Fi.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      return await fetch(`${cfg.siteUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cfg.bridgeSecret}`,
+          ...(init?.headers ?? {}),
+        },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -458,12 +472,17 @@ class WebOrdersBridge {
         orderNumber: order.orderNumber,
         customerName: web.customerName,
       });
+      this.lastImportError = null;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       db.prepare(
         `UPDATE web_order_imports SET last_error = ?, updated_at = ? WHERE web_order_id = ?`,
       ).run(message, nowIso(), web.id);
+      // Surface the reason so Settings → Website shows it and the operator
+      // isn't left guessing why an order didn't arrive.
+      this.lastImportError = `${web.customerName}: ${message}`;
       log.warn('Web order import failed (will retry)', { webOrderId: web.id, message });
+      notifyRenderer('web-order:import-failed', { webOrderId: web.id, message });
     }
   }
 
