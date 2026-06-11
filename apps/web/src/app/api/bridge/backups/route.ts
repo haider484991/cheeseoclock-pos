@@ -4,6 +4,8 @@ import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
 
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 export const maxDuration = 30;
 
 /** Keep only the newest N backups per device — bounds Neon storage. */

@@ -2,6 +2,11 @@ import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
 
 export const dynamic = 'force-dynamic';
+// Force every DB query in this route to hit the live database. Without this,
+// Next/Vercel caches the Neon driver's fetch (keyed by the SQL string) in the
+// persistent Data Cache and serves a stale empty result across deployments.
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 /**
  * Bridge: POS polls for new (not-yet-imported) web orders.

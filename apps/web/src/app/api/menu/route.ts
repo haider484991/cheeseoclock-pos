@@ -2,6 +2,8 @@ import { sql } from '@/lib/db';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 /** Public: the currently-published menu (or 404 until the POS publishes). */
 export async function GET(): Promise<Response> {

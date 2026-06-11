@@ -2,6 +2,8 @@ import { sql } from '@/lib/db';
 import { normalizePhone } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 /**
  * Public: order status for the tracking page. Requires the customer's phone
