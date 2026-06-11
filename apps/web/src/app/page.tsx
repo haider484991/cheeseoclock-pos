@@ -22,9 +22,9 @@ export default function HomePage() {
                 </span>
               </h1>
               <p className="mt-4 max-w-md text-lg leading-relaxed text-stone-600">
-                Handcrafted dough, secret sauces, premium mozzarella — oven-fresh
-                pizzas and loaded gourmet burgers, delivered hot to your door in
-                Phase 6, DHA.
+                Premium fast food done right — signature handcrafted pizzas,
+                loaded gourmet burgers, crispy sides and more, delivered hot to
+                your door in Phase 6, DHA.
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
                 <Link
@@ -53,6 +53,9 @@ export default function HomePage() {
               <div className="absolute -left-2 top-10 rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-soft-md">
                 🍔 Loaded burgers
               </div>
+              <div className="absolute -left-6 bottom-24 rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-soft-md">
+                🍟 Crispy sides
+              </div>
               <div className="absolute -right-2 bottom-12 rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-soft-md">
                 🧀 Extra cheesy
               </div>
@@ -66,8 +69,8 @@ export default function HomePage() {
             {[
               {
                 emoji: '🔥',
-                title: 'Oven-fresh, every time',
-                body: 'Handcrafted dough proofed daily, fired to order — never reheated.',
+                title: 'Fresh to order, every time',
+                body: 'Signature pizzas on daily-proofed dough, burgers grilled to order — never reheated.',
               },
               {
                 emoji: '🛵',

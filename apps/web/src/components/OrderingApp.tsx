@@ -23,6 +23,22 @@ interface CartLine {
   modifierIds: string[];
 }
 
+/** Placeholder emoji for items without a photo — keyed off the item name. */
+function foodEmoji(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes('pizza')) return '🍕';
+  if (n.includes('burger')) return '🍔';
+  if (n.includes('fries') || n.includes('chips')) return '🍟';
+  if (n.includes('wing') || n.includes('chicken') || n.includes('broast')) return '🍗';
+  if (n.includes('sandwich') || n.includes('shawarma') || n.includes('wrap') || n.includes('roll')) return '🌯';
+  if (n.includes('pasta') || n.includes('spaghetti') || n.includes('noodle')) return '🍝';
+  if (n.includes('shake') || n.includes('smoothie')) return '🥤';
+  if (n.includes('cola') || n.includes('drink') || n.includes('juice') || n.includes('water')) return '🥤';
+  if (n.includes('ice cream') || n.includes('dessert') || n.includes('cake') || n.includes('brownie')) return '🍰';
+  if (n.includes('salad')) return '🥗';
+  return '🍽️';
+}
+
 export function OrderingApp({ menu }: { menu: PublishedMenu }) {
   const categories = useMemo(
     () =>
@@ -130,7 +146,7 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
                       className="h-full w-full object-cover"
                     />
                   ) : (
-                    '🍕'
+                    foodEmoji(item.name)
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
