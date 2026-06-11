@@ -1,7 +1,12 @@
 import log from 'electron-log/main';
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { AppDatabase } from '../db/connection.js';
 import { nowIso } from '../db/repositories/base.js';
+import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
+import { createBackup, stageRestoreFromPath } from './backup-service.js';
 import {
   createOrder,
   addOrderItem,
@@ -18,6 +23,7 @@ import { printSpooler } from './print-spooler.js';
 import {
   getWebBridgeConfig,
   isWebBridgeReady,
+  CLOUD_BACKUP_INTERVALS_MS,
   type WebBridgeConfig,
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
@@ -60,6 +66,17 @@ interface BridgeStatus {
   lastError: string | null;
   importedTotal: number;
   consecutiveFails: number;
+  lastCloudBackupAt: string | null;
+  lastCloudBackupError: string | null;
+}
+
+const LAST_CLOUD_BACKUP_KEY = 'webBridge.lastCloudBackupAt';
+
+export interface CloudBackupEntry {
+  id: string;
+  fileName: string;
+  sizeBytes: number;
+  createdAt: string;
 }
 
 class WebOrdersBridge {
@@ -72,6 +89,8 @@ class WebOrdersBridge {
   private lastError: string | null = null;
   private importedTotal = 0;
   private consecutiveFails = 0;
+  private lastCloudBackupError: string | null = null;
+  private cloudBackupRunning = false;
 
   init(db: AppDatabase, deviceId: string): void {
     this.db = db;
@@ -85,13 +104,19 @@ class WebOrdersBridge {
     this.timer = null;
     if (!this.db) return;
     const cfg = getWebBridgeConfig(this.db);
-    if (!cfg.enabled || !isWebBridgeReady(cfg).ok) return;
+    // The loop runs when EITHER feature needs it: online orders, or
+    // scheduled cloud backups. Both require URL + secret.
+    const anyFeatureOn = cfg.enabled || cfg.cloudBackupFrequency !== 'off';
+    if (!anyFeatureOn || !isWebBridgeReady(cfg).ok) return;
     this.timer = setInterval(() => void this.tick(), cfg.pollIntervalMs);
     void this.tick();
   }
 
   status(): BridgeStatus {
     const cfg = this.db ? getWebBridgeConfig(this.db) : null;
+    const lastBackup = this.db
+      ? (getSettingRaw(this.db, LAST_CLOUD_BACKUP_KEY) as string | null)
+      : null;
     return {
       enabled: cfg?.enabled ?? false,
       ready: cfg ? isWebBridgeReady(cfg).ok : false,
@@ -99,6 +124,8 @@ class WebOrdersBridge {
       lastError: this.lastError,
       importedTotal: this.importedTotal,
       consecutiveFails: this.consecutiveFails,
+      lastCloudBackupAt: typeof lastBackup === 'string' ? lastBackup : null,
+      lastCloudBackupError: this.lastCloudBackupError,
     };
   }
 
@@ -111,11 +138,13 @@ class WebOrdersBridge {
   private async tick(): Promise<void> {
     if (this.running || !this.db) return;
     const cfg = getWebBridgeConfig(this.db);
-    if (!cfg.enabled || !isWebBridgeReady(cfg).ok) return;
+    if (!isWebBridgeReady(cfg).ok) return;
     this.running = true;
     try {
-      await this.pullNewOrders(cfg);
-      await this.pushStatusUpdates(cfg);
+      if (cfg.enabled) {
+        await this.pullNewOrders(cfg);
+        await this.pushStatusUpdates(cfg);
+      }
       this.lastPollAt = nowIso();
       this.lastError = null;
       this.consecutiveFails = 0;
@@ -126,6 +155,115 @@ class WebOrdersBridge {
       log.warn('Web bridge tick failed', { error: this.lastError });
     } finally {
       this.running = false;
+    }
+    // Scheduled cloud backup rides the same loop but never blocks order
+    // import — and runs even when online ordering is off.
+    void this.maybeCloudBackup(cfg);
+  }
+
+  // ---- cloud backups ------------------------------------------------------
+
+  private async maybeCloudBackup(cfg: WebBridgeConfig): Promise<void> {
+    if (!this.db || this.cloudBackupRunning) return;
+    if (cfg.cloudBackupFrequency === 'off') return;
+    const intervalMs = CLOUD_BACKUP_INTERVALS_MS[cfg.cloudBackupFrequency];
+    const lastRaw = getSettingRaw(this.db, LAST_CLOUD_BACKUP_KEY);
+    const last = typeof lastRaw === 'string' ? Date.parse(lastRaw) : 0;
+    if (Number.isFinite(last) && Date.now() - last < intervalMs) return;
+    await this.uploadBackupNow().catch(() => undefined); // error already recorded
+  }
+
+  /** Create a fresh VACUUM'd backup, gzip it, upload to the site. */
+  async uploadBackupNow(): Promise<{ fileName: string; sizeBytes: number }> {
+    if (!this.db) throw new Error('Bridge not initialized');
+    const cfg = getWebBridgeConfig(this.db);
+    const ready = isWebBridgeReady(cfg);
+    if (!ready.ok) throw new Error(`Configure first: ${ready.missing.join(', ')}`);
+    if (this.cloudBackupRunning) throw new Error('A cloud backup is already running');
+    this.cloudBackupRunning = true;
+    try {
+      const backup = createBackup({ kind: 'manual' });
+      const raw = fs.readFileSync(backup.fullPath);
+      const gz = gzipSync(raw, { level: 9 });
+      const dataBase64 = gz.toString('base64');
+      const res = await this.api(cfg, '/api/bridge/backups', {
+        method: 'POST',
+        body: JSON.stringify({
+          deviceId: this.deviceId,
+          fileName: `${backup.fileName}.gz`,
+          dataBase64,
+        }),
+      });
+      const json = (await res.json().catch(() => null)) as
+        | { ok: boolean; error?: string; message?: string }
+        | null;
+      if (!res.ok || !json?.ok) {
+        throw new Error(
+          json?.message ?? json?.error ?? `Upload failed: HTTP ${res.status}`,
+        );
+      }
+      setSetting(this.db, LAST_CLOUD_BACKUP_KEY, nowIso());
+      this.lastCloudBackupError = null;
+      log.info('Cloud backup uploaded', {
+        fileName: backup.fileName,
+        rawBytes: raw.length,
+        gzBytes: gz.length,
+      });
+      return { fileName: backup.fileName, sizeBytes: gz.length };
+    } catch (e) {
+      this.lastCloudBackupError = e instanceof Error ? e.message : String(e);
+      log.warn('Cloud backup failed', { error: this.lastCloudBackupError });
+      throw e;
+    } finally {
+      this.cloudBackupRunning = false;
+    }
+  }
+
+  async listCloudBackups(): Promise<CloudBackupEntry[]> {
+    if (!this.db) throw new Error('Bridge not initialized');
+    const cfg = getWebBridgeConfig(this.db);
+    const ready = isWebBridgeReady(cfg);
+    if (!ready.ok) throw new Error(`Configure first: ${ready.missing.join(', ')}`);
+    const res = await this.api(
+      cfg,
+      `/api/bridge/backups?deviceId=${encodeURIComponent(this.deviceId)}`,
+    );
+    if (!res.ok) throw new Error(`List failed: HTTP ${res.status}`);
+    const json = (await res.json()) as { ok: boolean; data?: CloudBackupEntry[] };
+    if (!json.ok || !json.data) throw new Error('List failed: bad response');
+    return json.data;
+  }
+
+  /**
+   * Download a cloud backup, gunzip, validate, and stage it as the pending
+   * restore (applied on next launch — same flow as local restore). The
+   * renderer then calls backup:applyAndRelaunch to confirm.
+   */
+  async restoreCloudBackup(id: string): Promise<{ staged: boolean }> {
+    if (!this.db) throw new Error('Bridge not initialized');
+    const cfg = getWebBridgeConfig(this.db);
+    const ready = isWebBridgeReady(cfg);
+    if (!ready.ok) throw new Error(`Configure first: ${ready.missing.join(', ')}`);
+    const res = await this.api(cfg, `/api/bridge/backups/${id}`);
+    if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+    const json = (await res.json()) as {
+      ok: boolean;
+      data?: { fileName: string; dataBase64: string };
+    };
+    if (!json.ok || !json.data) throw new Error('Download failed: bad response');
+    const gz = Buffer.from(json.data.dataBase64, 'base64');
+    const raw = gunzipSync(gz);
+    // Write to a temp file inside userData, then reuse the local staging flow
+    // (which validates the SQLite header before accepting).
+    const tmpPath = path.join(
+      app.getPath('userData'),
+      `cloud-restore-${Date.now()}.db`,
+    );
+    fs.writeFileSync(tmpPath, raw);
+    try {
+      return stageRestoreFromPath(tmpPath);
+    } finally {
+      fs.unlinkSync(tmpPath);
     }
   }
 

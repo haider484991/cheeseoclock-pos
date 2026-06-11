@@ -37,6 +37,7 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
       ...(cfg.siteUrl ? { siteUrl: cfg.siteUrl } : {}),
       ...(cfg.bridgeSecret ? { bridgeSecret: maskSecret(cfg.bridgeSecret) } : {}),
       pollIntervalMs: cfg.pollIntervalMs,
+      cloudBackupFrequency: cfg.cloudBackupFrequency,
       ready: isWebBridgeReady(cfg),
     });
   });
@@ -54,6 +55,8 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
       siteUrl: payload.siteUrl,
       bridgeSecret,
       pollIntervalMs: payload.pollIntervalMs ?? existing.pollIntervalMs,
+      cloudBackupFrequency:
+        payload.cloudBackupFrequency ?? existing.cloudBackupFrequency,
     });
     if (!parsed.success) {
       throw new IpcGuardError({
@@ -88,5 +91,41 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
     requireSettingsManage();
     webOrdersBridge.kick();
     return ok({ kicked: true } as const);
+  });
+
+  defineHandler('webBridge:backupNow', ctx, async () => {
+    requireSettingsManage();
+    try {
+      return ok(await webOrdersBridge.uploadBackupNow());
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Cloud backup failed',
+      });
+    }
+  });
+
+  defineHandler('webBridge:listCloudBackups', ctx, async () => {
+    requireSettingsManage();
+    try {
+      return ok(await webOrdersBridge.listCloudBackups());
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not list cloud backups',
+      });
+    }
+  });
+
+  defineHandler('webBridge:restoreCloudBackup', ctx, async (_ctx, payload) => {
+    requireSettingsManage();
+    try {
+      return ok(await webOrdersBridge.restoreCloudBackup(payload.id));
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Cloud restore failed',
+      });
+    }
   });
 }

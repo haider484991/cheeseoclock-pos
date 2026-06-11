@@ -139,6 +139,9 @@ const api: RendererApi = {
     getStatus: () => invoke('webBridge:getStatus', undefined),
     publishMenu: () => invoke('webBridge:publishMenu', undefined),
     pollNow: () => invoke('webBridge:pollNow', undefined),
+    backupNow: () => invoke('webBridge:backupNow', undefined),
+    listCloudBackups: () => invoke('webBridge:listCloudBackups', undefined),
+    restoreCloudBackup: (req) => invoke('webBridge:restoreCloudBackup', req),
   },
   printer: {
     getConfig: () => invoke('printer:getConfig', undefined),

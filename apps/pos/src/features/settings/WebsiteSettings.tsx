@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card } from '@cheeseoclock/ui';
-import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react';
+import {
+  Globe,
+  Send,
+  RefreshCw,
+  CheckCircle2,
+  AlertTriangle,
+  CloudUpload,
+  CloudDownload,
+} from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+
+type BackupFrequency = 'off' | 'daily' | 'weekly' | 'monthly';
 
 /**
  * Settings → Website. Connects this POS to cheeseoclock.net:
@@ -18,6 +28,8 @@ export function WebsiteSettings() {
   const [siteUrl, setSiteUrl] = useState('');
   const [secret, setSecret] = useState('');
   const [enabled, setEnabled] = useState(false);
+  const [backupFreq, setBackupFreq] = useState<BackupFrequency>('daily');
+  const [showCloudBackups, setShowCloudBackups] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   const cfgQ = useQuery({
@@ -36,6 +48,7 @@ export function WebsiteSettings() {
       setSiteUrl(cfgQ.data.siteUrl ?? '');
       setSecret(cfgQ.data.bridgeSecret ?? '');
       setEnabled(cfgQ.data.enabled);
+      setBackupFreq(cfgQ.data.cloudBackupFrequency);
       setHydrated(true);
     }
   }, [cfgQ.data, hydrated]);
@@ -46,6 +59,7 @@ export function WebsiteSettings() {
         enabled,
         siteUrl: siteUrl.trim() || undefined,
         bridgeSecret: secret.trim() || undefined,
+        cloudBackupFrequency: backupFreq,
       }),
     onSuccess: () => {
       toast({ title: 'Website settings saved' });
@@ -69,6 +83,47 @@ export function WebsiteSettings() {
     onError: (e) =>
       toast({
         title: 'Publish failed',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      }),
+  });
+
+  const backupNowMut = useMutation({
+    mutationFn: () => ipc.webBridge.backupNow(),
+    onSuccess: (r) => {
+      toast({
+        title: 'Backed up to cloud ☁️',
+        description: `${r.fileName} (${(r.sizeBytes / 1024).toFixed(0)} KB compressed)`,
+      });
+      void qc.invalidateQueries({ queryKey: ['webBridge'] });
+    },
+    onError: (e) =>
+      toast({
+        title: 'Cloud backup failed',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      }),
+  });
+
+  const cloudListQ = useQuery({
+    queryKey: ['webBridge', 'cloudBackups'],
+    queryFn: () => ipc.webBridge.listCloudBackups(),
+    enabled: showCloudBackups,
+  });
+
+  const restoreMut = useMutation({
+    mutationFn: (id: string) => ipc.webBridge.restoreCloudBackup(id),
+    onSuccess: async () => {
+      toast({
+        title: 'Restore staged',
+        description: 'The app will restart and apply the cloud backup.',
+      });
+      // Same confirm-then-relaunch flow as local restore.
+      await ipc.backup.applyAndRelaunch();
+    },
+    onError: (e) =>
+      toast({
+        title: 'Cloud restore failed',
         description: e instanceof Error ? e.message : 'Unknown error',
         variant: 'error',
       }),
@@ -155,6 +210,103 @@ export function WebsiteSettings() {
           <RefreshCw className="h-3.5 w-3.5" />
           Check for orders now
         </Button>
+      </div>
+
+      {/* Cloud backup */}
+      <div className="mt-5 border-t border-stone-200 pt-4 dark:border-stone-700">
+        <div className="mb-2 flex items-center gap-2">
+          <CloudUpload className="h-4 w-4 text-stone-500" />
+          <h3 className="text-sm font-semibold">Cloud backup</h3>
+          {status?.lastCloudBackupAt && (
+            <span className="text-xs text-stone-400">
+              last: {new Date(status.lastCloudBackupAt).toLocaleString()}
+            </span>
+          )}
+        </div>
+        <p className="mb-3 text-xs text-stone-500">
+          A compressed copy of the POS database is uploaded to your website&rsquo;s
+          cloud database on a schedule (the newest 8 are kept). This is your
+          off-site disaster recovery — works alongside the local daily backups.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={backupFreq}
+            onChange={(e) => setBackupFreq(e.target.value as BackupFrequency)}
+            className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800"
+            title="How often to upload (takes effect after Save settings)"
+          >
+            <option value="daily">Back up daily</option>
+            <option value="weekly">Back up weekly</option>
+            <option value="monthly">Back up monthly</option>
+            <option value="off">Cloud backup off</option>
+          </select>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => backupNowMut.mutate()}
+            disabled={backupNowMut.isPending}
+          >
+            <CloudUpload className="h-3.5 w-3.5" />
+            {backupNowMut.isPending ? 'Uploading…' : 'Back up to cloud now'}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowCloudBackups((v) => !v)}
+          >
+            <CloudDownload className="h-3.5 w-3.5" />
+            {showCloudBackups ? 'Hide cloud backups' : 'View cloud backups'}
+          </Button>
+        </div>
+        {status?.lastCloudBackupError && (
+          <p className="mt-2 text-xs text-red-600">
+            Last attempt failed: {status.lastCloudBackupError}
+          </p>
+        )}
+        {showCloudBackups && (
+          <div className="mt-3 overflow-hidden rounded-xl border border-stone-200 dark:border-stone-700">
+            {cloudListQ.isLoading ? (
+              <div className="p-4 text-center text-xs text-stone-400">Loading…</div>
+            ) : (cloudListQ.data ?? []).length === 0 ? (
+              <div className="p-4 text-center text-xs text-stone-400">
+                No cloud backups yet — click &ldquo;Back up to cloud now&rdquo;.
+              </div>
+            ) : (
+              <table className="w-full text-xs">
+                <tbody className="divide-y divide-stone-100 dark:divide-stone-700">
+                  {(cloudListQ.data ?? []).map((b) => (
+                    <tr key={b.id}>
+                      <td className="px-3 py-2 font-mono">{b.fileName}</td>
+                      <td className="px-3 py-2 text-stone-500">
+                        {(b.sizeBytes / 1024).toFixed(0)} KB
+                      </td>
+                      <td className="px-3 py-2 text-stone-500">
+                        {new Date(b.createdAt).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          type="button"
+                          className="font-semibold text-amber-600 hover:underline"
+                          onClick={() => {
+                            if (
+                              confirm(
+                                'Restore this cloud backup? Current data will be replaced and the app will restart.',
+                              )
+                            ) {
+                              restoreMut.mutate(b.id);
+                            }
+                          }}
+                        >
+                          Restore
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
 
       {status && (

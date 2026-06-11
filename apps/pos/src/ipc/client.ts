@@ -154,6 +154,10 @@ export const ipc = {
     getStatus: () => unwrap(window.api.webBridge.getStatus()),
     publishMenu: () => unwrap(window.api.webBridge.publishMenu()),
     pollNow: () => unwrap(window.api.webBridge.pollNow()),
+    backupNow: () => unwrap(window.api.webBridge.backupNow()),
+    listCloudBackups: () => unwrap(window.api.webBridge.listCloudBackups()),
+    restoreCloudBackup: (id: string) =>
+      unwrap(window.api.webBridge.restoreCloudBackup({ id })),
   },
   customers: {
     list: (input?: IpcRequest<'customers:list'>) => unwrap(window.api.customers.list(input)),

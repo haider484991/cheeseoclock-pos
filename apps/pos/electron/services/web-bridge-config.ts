@@ -19,7 +19,22 @@ export const WebBridgeConfigSchema = z.object({
   /** Must equal BRIDGE_SECRET on the Vercel deployment. */
   bridgeSecret: z.string().optional(),
   pollIntervalMs: z.number().int().min(5_000).default(20_000),
+  /**
+   * Scheduled upload of the (gzipped) SQLite database to the cloud.
+   * Independent of `enabled` (online ordering) — a shop can back up to the
+   * cloud without accepting web orders, as long as siteUrl + secret are set.
+   */
+  cloudBackupFrequency: z.enum(['off', 'daily', 'weekly', 'monthly']).default('daily'),
 });
+
+export const CLOUD_BACKUP_INTERVALS_MS: Record<
+  'daily' | 'weekly' | 'monthly',
+  number
+> = {
+  daily: 24 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000,
+  monthly: 30 * 24 * 60 * 60 * 1000,
+};
 
 export type WebBridgeConfig = z.infer<typeof WebBridgeConfigSchema>;
 

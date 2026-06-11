@@ -39,3 +39,19 @@ CREATE INDEX IF NOT EXISTS idx_web_orders_status
   ON web_orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_web_orders_phone
   ON web_orders(customer_phone, created_at);
+
+-- Cloud copies of the POS SQLite database, uploaded by the bridge on a
+-- schedule (daily/weekly/monthly). Stored gzipped + base64. The upload
+-- endpoint rotates: only the newest N per device are kept, so a small
+-- free-tier Postgres comfortably holds months of disaster-recovery points.
+CREATE TABLE IF NOT EXISTS pos_backups (
+  id           UUID PRIMARY KEY,
+  device_id    TEXT NOT NULL,
+  file_name    TEXT NOT NULL,
+  size_bytes   INT NOT NULL,
+  data_base64  TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pos_backups_device
+  ON pos_backups(device_id, created_at DESC);

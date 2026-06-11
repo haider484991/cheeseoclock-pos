@@ -500,6 +500,7 @@ export interface IpcContract {
       /** Masked (****1234) — never the raw secret. */
       bridgeSecret?: string;
       pollIntervalMs: number;
+      cloudBackupFrequency: 'off' | 'daily' | 'weekly' | 'monthly';
       ready: { ok: boolean; missing: string[] };
     }>;
   };
@@ -509,6 +510,7 @@ export interface IpcContract {
       siteUrl?: string;
       bridgeSecret?: string;
       pollIntervalMs?: number;
+      cloudBackupFrequency?: 'off' | 'daily' | 'weekly' | 'monthly';
     };
     response: ApiResult<{ ok: true }>;
   };
@@ -521,7 +523,25 @@ export interface IpcContract {
       lastError: string | null;
       importedTotal: number;
       consecutiveFails: number;
+      lastCloudBackupAt: string | null;
+      lastCloudBackupError: string | null;
     }>;
+  };
+  /** Upload a fresh gzipped database backup to the cloud right now. */
+  'webBridge:backupNow': {
+    request: undefined;
+    response: ApiResult<{ fileName: string; sizeBytes: number }>;
+  };
+  'webBridge:listCloudBackups': {
+    request: undefined;
+    response: ApiResult<
+      Array<{ id: string; fileName: string; sizeBytes: number; createdAt: string }>
+    >;
+  };
+  /** Download + stage a cloud backup; renderer confirms via backup:applyAndRelaunch. */
+  'webBridge:restoreCloudBackup': {
+    request: { id: string };
+    response: ApiResult<{ staged: boolean }>;
   };
   /** Serialize the active menu and PUT it to the website. */
   'webBridge:publishMenu': {
