@@ -15,7 +15,11 @@ import { DELIVERY_AREAS } from './areas';
  * - JSON-LD must mirror VISIBLE page content only.
  */
 
-export const SITE_URL = 'https://cheeseoclock.net';
+// Canonical host. MUST match the primary domain configured at the host
+// (Vercel): www.cheeseoclock.net serves 200; the bare domain 308-redirects to
+// it. Canonicals, sitemap, JSON-LD @ids and OG tags all derive from this — if
+// this and the host ever disagree, Search Console flags "Page with redirect".
+export const SITE_URL = 'https://www.cheeseoclock.net';
 const RESTAURANT_ID = `${SITE_URL}/#restaurant`;
 const WEBSITE_ID = `${SITE_URL}/#website`;
 const MENU_ID = `${SITE_URL}/menu#menu`;
