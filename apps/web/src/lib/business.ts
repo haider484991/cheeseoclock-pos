@@ -11,11 +11,13 @@
 export const BUSINESS = {
   name: "Cheese O'Clock",
   tagline: 'Gourmet pizza & fast food — it’s always Cheese O’Clock.',
-  phoneDisplay: '0333 2191726',
-  phoneE164: '+923332191726',
+  // Matches the Google Business Profile listing (verified 27 Jul 2026).
+  phoneDisplay: '0300 9367865',
+  phoneE164: '+923009367865',
 
-  // WhatsApp ordering line — separate from the call/NAP number above. Keep
-  // all three in sync if it ever changes: display, E.164 and the wa.me path.
+  // WhatsApp ordering line. Currently the same number as the call line above,
+  // but kept as its own field so a dedicated WhatsApp line can be split off
+  // without touching the NAP. Keep all three in sync: display, E.164, wa.me.
   whatsappDisplay: '0300 9367865',
   whatsappE164: '+923009367865',
   whatsappUrl: 'https://wa.me/923009367865',
