@@ -21,33 +21,41 @@ export const BUSINESS = {
   whatsappDisplay: '0300 9367865',
   whatsappE164: '+923009367865',
   whatsappUrl: 'https://wa.me/923009367865',
-  addressLine: 'Phase 6, DHA, Karachi',
+  // Short form for inline "name · address · hours" strips only. The full,
+  // GBP-exact address lives in streetAddress below and is what the footer
+  // <address> block and the JSON-LD PostalAddress render.
+  addressLine: 'Rahat Commercial, DHA Phase 6, Karachi',
   hours: 'Open daily · 12pm – 2am',
   openingDate: '15 June 2026',
 
   // --- Structured address (keep in sync with GBP, char-for-char) ---------
-  // TODO: set streetAddress to the exact GBP string once the listing is live
-  // (e.g. "Shop 4, Bukhari Commercial Lane 2, Phase 6 DHA").
-  streetAddress: 'Phase 6, DHA',
+  // Verified against the live listing 27 Jul 2026. Google formats it as:
+  //   "<streetAddress>, Karachi, 75500, Pakistan"
+  // so these fields reassemble into the GBP string exactly. `region` is not
+  // part of Google's formatted address (it omits Sindh) but is correct and
+  // valid for schema.org addressRegion.
+  streetAddress:
+    'SHOP-3 GROUND FLOOR, 41-C RAHAT Sehar Lane No. 3, D.H.A Phase 6 Rahat Commercial Area Phase 6 Defence Housing Authority',
   locality: 'Karachi',
   region: 'Sindh',
   postalCode: '75500',
   country: 'PK',
 
-  // TODO: replace with the exact kitchen pin from Google Maps (right-click
-  // your marker → copy coordinates). Approximate DHA Phase 6 centre for now.
-  latitude: 24.795,
-  longitude: 67.057,
+  // Exact listing pin (from the GBP place URL), not the phase centroid.
+  latitude: 24.8082972,
+  longitude: 67.0684383,
 
   /**
    * Google Business Profile links.
    * - mapsUrl: shown to humans (footer / delivery pages).
-   * - gbpCid: the strongest machine link between site and GBP. Find it via
-   *   https://lookup.fa.gd or GBP dashboard share link → set it and hasMap
-   *   in the JSON-LD upgrades from a search URL to your exact listing.
+   * - gbpCid: the strongest machine link between site and GBP — it makes the
+   *   JSON-LD `hasMap` point at the exact listing instead of a search URL.
+   *   Derived from the place URL's `!1s0x<fid>:0x<cid-hex>` pair: the second
+   *   hex value (0x55bcd1598d18e252) in decimal. Verified 27 Jul 2026 —
+   *   https://maps.google.com/?cid=... resolves to the Cheese O'Clock listing.
    */
-  mapsUrl: "https://www.google.com/maps/search/?api=1&query=Cheese+O'Clock+Phase+6+DHA+Karachi",
-  gbpCid: null as string | null, // e.g. '1234567890123456789'
+  mapsUrl: 'https://maps.google.com/?cid=6178042971394990674',
+  gbpCid: '6178042971394990674' as string | null,
 
   /**
    * Social / profile URLs for the JSON-LD `sameAs` array. Only real, live
