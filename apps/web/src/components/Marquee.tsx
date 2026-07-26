@@ -29,7 +29,7 @@ export function Marquee({
     </div>
   );
 
-  return (
+  const band = (
     <div
       className={`relative z-10 overflow-hidden bg-cheese py-2.5 ${
         tilted ? '-rotate-1 scale-[1.02]' : ''
@@ -41,4 +41,11 @@ export function Marquee({
       </div>
     </div>
   );
+
+  // The tilt's scale-[1.02] widens the band past both viewport edges (~4px a
+  // side at 375px), which adds horizontal page scroll on phones. Clip the
+  // overhang on the X axis only — `overflow-y` stays visible (clip + visible
+  // is the one pairing CSS doesn't coerce to auto) so the rotation's corners
+  // still bleed over the sections above and below, which is the point of it.
+  return tilted ? <div className="overflow-x-clip">{band}</div> : band;
 }
