@@ -13,7 +13,12 @@ export const BUSINESS = {
   tagline: 'Gourmet pizza & fast food — it’s always Cheese O’Clock.',
   phoneDisplay: '0333 2191726',
   phoneE164: '+923332191726',
-  whatsappUrl: 'https://wa.me/923332191726',
+
+  // WhatsApp ordering line — separate from the call/NAP number above. Keep
+  // all three in sync if it ever changes: display, E.164 and the wa.me path.
+  whatsappDisplay: '0300 9367865',
+  whatsappE164: '+923009367865',
+  whatsappUrl: 'https://wa.me/923009367865',
   addressLine: 'Phase 6, DHA, Karachi',
   hours: 'Open daily · 12pm – 2am',
   openingDate: '15 June 2026',

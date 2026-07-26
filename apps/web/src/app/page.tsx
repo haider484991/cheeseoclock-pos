@@ -78,7 +78,7 @@ const FAQS = [
   },
   {
     q: 'Can I order on WhatsApp instead?',
-    a: `Yes — message ${BUSINESS.phoneDisplay} on WhatsApp with what you want and your address, and we will confirm the total and ETA right away. Same kitchen, same prices.`,
+    a: `Yes — message ${BUSINESS.whatsappDisplay} on WhatsApp with what you want and your address, and we will confirm the total and ETA right away. Same kitchen, same prices.`,
   },
 ];
 
@@ -379,7 +379,7 @@ export default function HomePage() {
                 rel="noopener noreferrer"
                 className="rounded-full border-2 border-night/30 px-8 py-4 text-lg font-bold text-night transition-colors hover:border-night active:scale-95"
               >
-                💬 WhatsApp {BUSINESS.phoneDisplay}
+                💬 WhatsApp {BUSINESS.whatsappDisplay}
               </a>
             </div>
             <p className="text-sm font-semibold text-night/70">
