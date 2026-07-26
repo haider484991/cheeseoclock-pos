@@ -81,7 +81,7 @@ export function LoginPage() {
             <div className="relative">
               <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
                 {logoUrl ? (
-                  /* eslint-disable-next-line jsx-a11y/alt-text */
+                   
                   <img src={logoUrl} alt="" className="h-full w-full object-cover" />
                 ) : (
                   <Pizza className="h-10 w-10" />

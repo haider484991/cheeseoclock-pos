@@ -5,7 +5,7 @@ import { Button, Card, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { PurchaseOrder, PurchaseOrderStatus } from '@cheeseoclock/shared-types';
+import type { PurchaseOrderStatus } from '@cheeseoclock/shared-types';
 import { Plus, X, Trash2, PackageCheck, Send } from 'lucide-react';
 
 const STATUS_COLOR: Record<PurchaseOrderStatus, string> = {

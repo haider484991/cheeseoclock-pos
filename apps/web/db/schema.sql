@@ -40,6 +40,19 @@ CREATE INDEX IF NOT EXISTS idx_web_orders_status
 CREATE INDEX IF NOT EXISTS idx_web_orders_phone
   ON web_orders(customer_phone, created_at);
 
+-- Append-only counter behind the order endpoint's per-IP flood limit. Only a
+-- salted hash is stored, never a raw IP. src/lib/rate-limit.ts also creates
+-- this on demand, so an already-provisioned database picks the limit up
+-- without re-running db:init; it lives here for fresh installs.
+CREATE TABLE IF NOT EXISTS order_rate_events (
+  id           BIGSERIAL PRIMARY KEY,
+  ip_hash      TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_rate_events_ip
+  ON order_rate_events(ip_hash, created_at);
+
 -- Cloud copies of the POS SQLite database, uploaded by the bridge on a
 -- schedule (daily/weekly/monthly). Stored gzipped + base64. The upload
 -- endpoint rotates: only the newest N per device are kept, so a small

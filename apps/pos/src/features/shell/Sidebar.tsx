@@ -68,7 +68,7 @@ export function Sidebar() {
       <div className="flex items-center gap-3 px-5 py-5">
         <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
           {logoUrl ? (
-            /* eslint-disable-next-line jsx-a11y/alt-text */
+             
             <img src={logoUrl} alt="" className="h-full w-full object-cover" />
           ) : (
             <Pizza className="h-5 w-5" />

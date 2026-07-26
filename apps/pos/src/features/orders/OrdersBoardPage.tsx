@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card, cn } from '@cheeseoclock/ui';
+import { Button, cn } from '@cheeseoclock/ui';
 import {
   Bike,
   ChefHat,

@@ -4,7 +4,7 @@ import { ipc } from '../../ipc/client';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { PrinterConnectionConfig, PrinterTransport } from '@cheeseoclock/shared-types';
-import { Printer, Wifi, Usb, Bluetooth, FlaskConical, Check, X } from 'lucide-react';
+import { Printer, Wifi, Usb, Bluetooth, FlaskConical, Check } from 'lucide-react';
 
 interface TransportOption {
   id: PrinterTransport | 'mock';

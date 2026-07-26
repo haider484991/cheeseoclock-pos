@@ -64,7 +64,7 @@ export function ImagePicker({
         )}
       >
         {value ? (
-          // eslint-disable-next-line @next/next/no-img-element
+           
           <img
             src={value}
             alt=""

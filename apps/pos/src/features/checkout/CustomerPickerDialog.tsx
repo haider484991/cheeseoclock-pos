@@ -3,7 +3,6 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useQuery } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
-import { useToast } from '../../components/toast/ToastProvider';
 import { CustomerDialog, AddressDialog } from '../customers/CustomersPage';
 import type { Customer, CustomerAddress } from '@cheeseoclock/shared-types';
 import { X, Phone, Plus, UserPlus, MapPin } from 'lucide-react';

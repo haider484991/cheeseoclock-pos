@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronRight,
   CircleDot,
-  Eye,
   Phone,
   Printer,
   Search,
@@ -22,7 +21,6 @@ import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type {
   OrderMode,
-  OrderSnapshot,
   OrderStatus,
 } from '@cheeseoclock/shared-types';
 import { VoidOrderDialog } from './VoidOrderDialog';

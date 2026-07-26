@@ -200,7 +200,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     try {
       decrementForOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
     } catch (e) {
-      // eslint-disable-next-line no-console
+       
       console.warn('Stock decrement failed (sale not affected):', e);
     }
 
@@ -214,7 +214,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     } catch (e) {
       // Don't fail the tender if FBR mapping/enqueue fails.
       // Log and continue — order is paid, the cashier saw success.
-      // eslint-disable-next-line no-console
+       
       console.warn('FBR enqueue failed (sale not affected):', e);
     }
 
@@ -353,7 +353,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         enqueueFbrSubmission(ctx.db, payload.orderId, fbrPayload, cfg.mode);
         fbrWorker.kick();
       } catch (e) {
-        // eslint-disable-next-line no-console
+         
         console.warn('FBR enqueue failed on serve (sale not affected):', e);
       }
       // Decrement ingredient stock. decrementForOrder is idempotent, so even
@@ -362,7 +362,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       try {
         decrementForOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
       } catch (e) {
-        // eslint-disable-next-line no-console
+         
         console.warn('Stock decrement failed on serve (sale not affected):', e);
       }
     }
@@ -400,13 +400,13 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         fbrWorker.kick();
       } catch (e) {
         // FBR mapping failure must not block the delivery flow.
-        // eslint-disable-next-line no-console
+         
         console.warn('FBR enqueue failed on delivery (sale not affected):', e);
       }
       try {
         decrementForOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
       } catch (e) {
-        // eslint-disable-next-line no-console
+         
         console.warn('Stock decrement failed on delivery (sale not affected):', e);
       }
     }

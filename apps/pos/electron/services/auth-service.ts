@@ -6,14 +6,6 @@ import { findUserByPin, touchUserLogin } from '../db/repositories/user-repo.js';
 import { writeAudit } from '../db/repositories/audit-repo.js';
 import type { AuthenticatedUser, UUID } from '@cheeseoclock/shared-types';
 
-interface SessionRow {
-  id: string;
-  user_id: string;
-  device_id: string;
-  started_at: string;
-  ended_at: string | null;
-}
-
 /**
  * The auth service owns the single "currently logged-in user" for this device.
  * Sessions persist across app restarts so a closed laptop doesn't kick a cashier

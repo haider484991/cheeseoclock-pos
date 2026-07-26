@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "db:init": "node scripts/init-db.mjs",
     "logo:clean": "node scripts/remove-bg.mjs"
   },
@@ -29,6 +30,7 @@
     "jimp": "^1.6.0",
     "postcss": "^8.4.41",
     "tailwindcss": "^3.4.10",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
   }
 }

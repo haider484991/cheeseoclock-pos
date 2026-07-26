@@ -15,7 +15,6 @@
     "build:dir": "electron-vite build && rimraf node_modules/@cheeseoclock && electron-builder --win --x64 --dir",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "lint": "eslint . --ext .ts,.tsx",
     "test": "vitest run",
     "rebuild": "electron-builder install-app-deps",
     "postinstall": "electron-builder install-app-deps",

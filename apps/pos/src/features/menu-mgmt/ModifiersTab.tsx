@@ -8,8 +8,6 @@ import { useToast } from '../../components/toast/ToastProvider';
 import type { Modifier, ModifierGroup, ModifierSelectionType } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X, ChevronDown, ChevronRight } from 'lucide-react';
 
-type GroupWithMods = ModifierGroup & { modifiers: Modifier[] };
-
 export function ModifiersTab() {
   const qc = useQueryClient();
   const { toast } = useToast();

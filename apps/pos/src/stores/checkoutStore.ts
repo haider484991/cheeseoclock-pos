@@ -171,7 +171,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => ({
         await commitCustomerToOrder(snap.order.id, get().mode, getCustomerFormSnapshot());
       } catch (e) {
         // Don't block the sale on customer-write failure — surface via log.
-        // eslint-disable-next-line no-console
+         
         console.warn('Customer commit failed (proceeding with tender):', e);
       }
       const next = await ipc.orders.tender({
@@ -196,7 +196,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => ({
       try {
         await commitCustomerToOrder(snap.order.id, get().mode, getCustomerFormSnapshot());
       } catch (e) {
-        // eslint-disable-next-line no-console
+         
         console.warn('Customer commit failed (proceeding with send to kitchen):', e);
       }
       const next = await ipc.orders.sendToKitchen(snap.order.id);

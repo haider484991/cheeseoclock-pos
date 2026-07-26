@@ -56,7 +56,7 @@ function ItemTile({ item, onAdd }: { item: MenuItem; onAdd: () => void }) {
       {/* Photo / fallback */}
       <div className="relative aspect-[5/4] w-full overflow-hidden">
         {item.imageUrl ? (
-          /* eslint-disable-next-line jsx-a11y/alt-text */
+           
           <img
             src={item.imageUrl}
             alt=""

@@ -11,7 +11,6 @@ import type {
   PrinterTransport,
   PrinterStation,
   PrintResult,
-  OrderSnapshot,
 } from '@cheeseoclock/shared-types';
 
 export type {

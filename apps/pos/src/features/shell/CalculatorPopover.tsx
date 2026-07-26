@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Button, cn } from '@cheeseoclock/ui';
+import { cn } from '@cheeseoclock/ui';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Calculator as CalcIcon, X, Eraser, Delete } from 'lucide-react';
+import { Calculator as CalcIcon, X, Eraser } from 'lucide-react';
 
 /**
  * Calculator popover — always available from the TopBar.

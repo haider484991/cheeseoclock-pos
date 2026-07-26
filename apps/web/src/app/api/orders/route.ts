@@ -2,6 +2,8 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { sql } from '@/lib/db';
 import { normalizePhone } from '@/lib/format';
+import { validateModifierSelection } from '@/lib/order-validation';
+import { checkOrderRate, clientIpHash } from '@/lib/rate-limit';
 import type { PublishedMenu, WebOrderItem } from '@cheeseoclock/shared-types';
 
 export const dynamic = 'force-dynamic';
@@ -55,6 +57,20 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
+    // Flood check before any real work. Fails open — see lib/rate-limit.
+    const rate = await checkOrderRate(phone, clientIpHash(req));
+    if (!rate.allowed) {
+      return Response.json(
+        {
+          ok: false,
+          error: 'rate_limited',
+          message:
+            'That is a lot of orders in a short window. Please wait a few minutes, or call us and we will take it over the phone.',
+        },
+        { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } },
+      );
+    }
+
     // Load the published menu and re-price server-side.
     const menuRows = (await sql()`
       SELECT menu_json FROM site_menu WHERE id = 1
@@ -75,6 +91,13 @@ export async function POST(req: Request): Promise<Response> {
       if (!item) {
         return Response.json(
           { ok: false, error: 'item_not_on_menu', itemId: line.posItemId },
+          { status: 409 },
+        );
+      }
+      const groupError = validateModifierSelection(item, line.modifierIds);
+      if (groupError) {
+        return Response.json(
+          { ok: false, error: 'invalid_modifiers', message: groupError },
           { status: 409 },
         );
       }

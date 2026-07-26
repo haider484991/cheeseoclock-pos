@@ -2,7 +2,7 @@ import { v7 as uuidv7 } from 'uuid';
 import log from 'electron-log/main';
 import { BrowserWindow } from 'electron';
 import type { AppDatabase } from '../connection.js';
-import { writeWithSync, nowIso, type Actor } from './base.js';
+import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import type { StockMovement, StockMovementReason } from '@cheeseoclock/shared-types';

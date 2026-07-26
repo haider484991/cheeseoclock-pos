@@ -13,7 +13,6 @@ import type { PrinterWidth } from '@cheeseoclock/shared-types';
 const ESC = 0x1b;
 const GS = 0x1d;
 const LF = 0x0a;
-const CR = 0x0d;
 
 const INIT = [ESC, 0x40];
 const ALIGN_LEFT = [ESC, 0x61, 0x00];
