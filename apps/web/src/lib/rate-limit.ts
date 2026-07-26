@@ -78,12 +78,28 @@ function ensureRateTable(): Promise<void> {
   return tableReady;
 }
 
+/**
+ * The window start as an ISO timestamp, computed here rather than in SQL.
+ *
+ * The obvious `now() - make_interval(mins => ${n})` does not survive being
+ * parameterized: Postgres cannot infer the type of a bare parameter in
+ * named-argument position and errors out with "could not determine data type
+ * of parameter $1". Because this limiter fails open, that error was invisible
+ * — every request sailed through while the limit looked installed. Comparing
+ * against a plain timestamp parameter types cleanly off `created_at`.
+ */
+function windowStartIso(): string {
+  return new Date(
+    Date.now() - ORDER_RATE_LIMITS.windowMinutes * 60_000,
+  ).toISOString();
+}
+
 async function countRecentForPhone(phone: string): Promise<number> {
   const rows = (await sql()`
     SELECT count(*)::int AS n
       FROM web_orders
      WHERE customer_phone = ${phone}
-       AND created_at > now() - make_interval(mins => ${ORDER_RATE_LIMITS.windowMinutes})
+       AND created_at > ${windowStartIso()}
   `) as Array<{ n: number }>;
   return rows[0]?.n ?? 0;
 }
@@ -95,7 +111,7 @@ async function countRecentForIp(ipHash: string): Promise<number> {
     SELECT count(*)::int AS n
       FROM order_rate_events
      WHERE ip_hash = ${ipHash}
-       AND created_at > now() - make_interval(mins => ${ORDER_RATE_LIMITS.windowMinutes})
+       AND created_at > ${windowStartIso()}
   `) as Array<{ n: number }>;
   // Opportunistic pruning — the table is write-heavy and read-tiny, and a
   // day of events is far more history than the window needs.
