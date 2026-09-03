@@ -52,7 +52,7 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 ## 5. Connect the POS
 
 1. In the POS (v0.4.1+): **Settings → Website — online ordering**
-2. Website URL: `https://cheeseoclock.net` (or the vercel.app URL until DNS lands)
+2. Website URL: `https://www.cheeseoclock.net` — the **www** address exactly as the site answers on it (or the vercel.app URL until DNS lands). The apex `cheeseoclock.net` redirects to www; POS builds before v0.4.7 lose the bridge secret on that redirect and every call fails with HTTP 401.
 3. Bridge secret: paste the same secret from step 2
 4. Tick **Accept online orders** → Save
 5. Click **Publish menu to website** → you should see "Menu published 🎉"

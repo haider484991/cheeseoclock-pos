@@ -158,7 +158,7 @@ export function WebsiteSettings() {
           <input
             value={siteUrl}
             onChange={(e) => setSiteUrl(e.target.value)}
-            placeholder="https://cheeseoclock.net"
+            placeholder="https://www.cheeseoclock.net"
             className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
           />
         </label>
@@ -227,6 +227,9 @@ export function WebsiteSettings() {
           A compressed copy of the POS database is uploaded to your website&rsquo;s
           cloud database on a schedule (the newest 8 are kept). This is your
           off-site disaster recovery — works alongside the local daily backups.
+          Cloud copies keep the last 90 days of audit history and skip
+          multi-device sync rows so they stay under the 3 MB upload limit;
+          local backups and USB exports are complete.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <select

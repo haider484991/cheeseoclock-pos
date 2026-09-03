@@ -3,7 +3,9 @@ import { app, BrowserWindow } from 'electron';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import type { AppDatabase } from '../db/connection.js';
+import { getSyncConfig } from './sync-config.js';
 import { nowIso } from '../db/repositories/base.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import { createBackup, stageRestoreFromPath } from './backup-service.js';
@@ -65,6 +67,8 @@ const MAX_IMPORT_ATTEMPTS = 5;
 const ORDER_POLL_MS = 10_000;
 /** The bridge's writes are attributed to this synthetic actor in audit logs. */
 const WEB_ACTOR_NAME = 'web-bridge';
+/** Audit history kept in the cloud copy. Local and USB copies are complete. */
+const CLOUD_COPY_AUDIT_DAYS = 90;
 
 interface BridgeStatus {
   enabled: boolean;
@@ -101,6 +105,8 @@ class WebOrdersBridge {
   private lastCloudBackupError: string | null = null;
   private lastImportError: string | null = null;
   private cloudBackupRunning = false;
+  /** Where cfg.siteUrl really lives once a redirect has told us (apex → www). */
+  private canonicalOrigin: { for: string | undefined; origin: string } | null = null;
 
   init(db: AppDatabase, deviceId: string): void {
     this.db = db;
@@ -194,7 +200,18 @@ class WebOrdersBridge {
     this.cloudBackupRunning = true;
     try {
       const backup = createBackup({ kind: 'manual' });
+      const trimmed = slimCloudCopy(backup.fullPath, getSyncConfig(this.db).mode);
       const raw = fs.readFileSync(backup.fullPath);
+      // The snapshot exists only to be uploaded; local retention is the daily
+      // auto-backup. Manual files are never rotated, so leaving this one behind
+      // put an extra copy of the whole database on the shop PC every day.
+      for (const suffix of ['', '-wal', '-shm', '-journal']) {
+        try {
+          fs.unlinkSync(backup.fullPath + suffix);
+        } catch {
+          // best effort — a stray file is harmless, just untidy
+        }
+      }
       const gz = gzipSync(raw, { level: 9 });
       const dataBase64 = gz.toString('base64');
       const res = await this.api(cfg, '/api/bridge/backups', {
@@ -219,6 +236,8 @@ class WebOrdersBridge {
         fileName: backup.fileName,
         rawBytes: raw.length,
         gzBytes: gz.length,
+        removedSyncRows: trimmed.removedSync,
+        removedAuditRows: trimmed.removedAudit,
       });
       return { fileName: backup.fileName, sizeBytes: gz.length };
     } catch (e) {
@@ -355,15 +374,34 @@ class WebOrdersBridge {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20_000);
     try {
-      return await fetch(`${cfg.siteUrl}${path}`, {
+      const request: RequestInit = {
         ...init,
         signal: controller.signal,
+        // Redirects are followed by hand below. Left to fetch, a cross-origin
+        // redirect drops the Authorization header (per the Fetch spec), so a
+        // site URL of https://cheeseoclock.net — which 308s to www. — reached
+        // the API with no bearer and every call 401'd: no orders, no cloud
+        // backups, and only "Pull failed: HTTP 401" in Settings to show for it.
+        redirect: 'manual',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${cfg.bridgeSecret}`,
           ...(init?.headers ?? {}),
         },
-      });
+      };
+      const cached = this.canonicalOrigin;
+      const origin = cached && cached.for === cfg.siteUrl ? cached.origin : cfg.siteUrl;
+      const res = await fetch(`${origin}${path}`, request);
+      if (res.status < 300 || res.status >= 400) return res;
+      // Only honour a redirect that is plain host canonicalisation (apex → www,
+      // http → https). Anything that changes the path is not our API.
+      const location = res.headers.get('location');
+      if (!location) return res;
+      const target = new URL(location, `${origin}${path}`);
+      const requested = new URL(`${origin}${path}`);
+      if (target.protocol !== 'https:' || target.pathname !== requested.pathname) return res;
+      this.canonicalOrigin = { for: cfg.siteUrl, origin: target.origin };
+      return await fetch(`${target.origin}${path}`, request);
     } finally {
       clearTimeout(timer);
     }
@@ -612,6 +650,43 @@ class WebOrdersBridge {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Trim the throwaway snapshot before it goes to the cloud. The cloud copy is
+ * disaster recovery, not the ledger: it has to stay under the website's 3 MB
+ * upload cap, and the two tables that grow fastest carry nothing a restore
+ * needs. sync_queue rows are inert while multi-device sync is off (and already
+ * delivered once synced_at is set); audit_log older than CLOUD_COPY_AUDIT_DAYS
+ * is history that the local snapshots and USB exports keep in full. Measured
+ * on a real database these two tables were ~85% of every order's footprint,
+ * which moved the cap from ~2,700 orders to well past 15,000.
+ *
+ * Runs on the copy only. The live database is never touched.
+ */
+function slimCloudCopy(
+  copyPath: string,
+  syncMode: 'off' | 'mock' | 'http',
+): { removedSync: number; removedAudit: number } {
+  const copy = new Database(copyPath);
+  try {
+    // Rollback journal, so closing leaves no -wal/-shm siblings behind.
+    copy.pragma('journal_mode = DELETE');
+    const cutoff = new Date(
+      Date.now() - CLOUD_COPY_AUDIT_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const removedSync =
+      syncMode === 'off'
+        ? copy.prepare(`DELETE FROM sync_queue`).run().changes
+        : copy.prepare(`DELETE FROM sync_queue WHERE synced_at IS NOT NULL`).run().changes;
+    const removedAudit = copy
+      .prepare(`DELETE FROM audit_log WHERE created_at < ?`)
+      .run(cutoff).changes;
+    copy.exec('VACUUM');
+    return { removedSync, removedAudit };
+  } finally {
+    copy.close();
+  }
+}
 
 function mapPosStatusToWeb(pos: OrderStatus): Exclude<WebOrderStatus, 'new'> | null {
   switch (pos) {

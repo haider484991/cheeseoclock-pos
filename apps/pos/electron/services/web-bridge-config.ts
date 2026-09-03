@@ -10,7 +10,7 @@ export const WEB_BRIDGE_CONFIG_KEY = 'webBridge.config';
  */
 export const WebBridgeConfigSchema = z.object({
   enabled: z.boolean().default(false),
-  /** e.g. https://cheeseoclock.net — no trailing slash. */
+  /** e.g. https://www.cheeseoclock.net — the exact host the site lives on, no trailing slash. */
   siteUrl: z
     .string()
     .url()
