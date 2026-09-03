@@ -162,6 +162,12 @@ class WebOrdersBridge {
     void this.tick();
   }
 
+  /** Stop polling — called right before the app restarts for a restore. */
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
   status(): BridgeStatus {
     const cfg = this.db ? getWebBridgeConfig(this.db) : null;
     const lastBackup = this.db

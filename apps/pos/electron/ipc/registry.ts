@@ -32,6 +32,17 @@ export interface HandlerContext {
   deviceId: string;
 }
 
+let shuttingDown = false;
+
+/**
+ * Called right before the process restarts for a restore. From then on every
+ * handler answers "restarting" instead of reaching a database that is being
+ * closed underneath it.
+ */
+export function markShuttingDown(): void {
+  shuttingDown = true;
+}
+
 export type HandlerFn<C extends IpcChannel> = (
   ctx: HandlerContext,
   payload: IpcRequest<C>,
@@ -62,6 +73,12 @@ export function defineHandler<C extends IpcChannel>(
   fn: HandlerFn<C>,
 ): void {
   ipcMain.handle(channel, async (_event, payload: IpcRequest<C>) => {
+    if (shuttingDown) {
+      return {
+        ok: false,
+        error: { code: 'internal_error', message: 'The app is restarting' },
+      } as IpcContract[C]['response'];
+    }
     try {
       return await fn(ctx, payload);
     } catch (err) {

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import log from 'electron-log/main';
 import type { HandlerContext } from '../registry.js';
-import { defineHandler } from '../registry.js';
+import { defineHandler, markShuttingDown } from '../registry.js';
 import { ok } from '@cheeseoclock/shared-types';
 import { isSetupPhase, requireAdmin, requireAdminOrSetupPhase, requireSettingsManage } from '../guards.js';
 import {
@@ -12,6 +12,7 @@ import {
   stageRestoreFromPath,
   deleteBackup,
   applyPendingRestoreNowAndRelaunch,
+  stopBackupService,
 } from '../../services/backup-service.js';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 
@@ -76,6 +77,11 @@ export function registerBackupHandlers(ctx: HandlerContext): void {
         });
       }
     }
+    // Quiesce: no more polls, backups or handler calls may touch the database
+    // between closing it and the restart.
+    markShuttingDown();
+    webOrdersBridge.stop();
+    stopBackupService();
     applyPendingRestoreNowAndRelaunch();
     return ok({ relaunching: true } as const);
   });
