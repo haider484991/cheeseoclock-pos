@@ -51,6 +51,8 @@ export function AboutCard() {
         <dd className="font-mono font-medium">{versionQ.data?.version ?? '—'}</dd>
         <dt className="text-stone-500">Mode</dt>
         <dd>{versionQ.data?.isDev ? 'Development' : 'Production'}</dd>
+        <dt className="text-stone-500">Updates</dt>
+        <dd>Automatic: checked at launch and every 4 hours</dd>
         <dt className="text-stone-500">Device name</dt>
         <dd>{deviceQ.data?.displayName ?? '—'}</dd>
         <dt className="text-stone-500">Device ID</dt>

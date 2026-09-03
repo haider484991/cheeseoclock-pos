@@ -7,17 +7,18 @@ import { Cloud, AlertTriangle, CheckCircle2, Info, PauseCircle } from 'lucide-re
 
 type Mode = 'off' | 'mock' | 'http';
 
-const MODES: Array<{ id: Mode; label: string; description: string }> = [
-  { id: 'off', label: 'Off', description: 'No sync. All data stays on this device.' },
+const MODES: Array<{ id: Mode; label: string; description: string; devOnly?: boolean }> = [
+  { id: 'off', label: 'Off', description: 'One till. Everything stays on this PC.' },
   {
     id: 'mock',
-    label: 'Mock',
-    description: 'Pushes write to userData/sync-mock/; pulls drain inbox/. Local dev.',
+    label: 'Mock (developer)',
+    description: 'Writes sync payloads to userData/sync-mock/ instead of a server.',
+    devOnly: true,
   },
   {
     id: 'http',
-    label: 'Cloud (HTTP)',
-    description: 'POST/GET against your hosted Postgres-backed sync endpoint.',
+    label: 'Sync server',
+    description: 'Share data with other tills through a hosted sync server.',
   },
 ];
 
@@ -25,6 +26,11 @@ export function SyncSettings() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const cfgQ = useQuery({ queryKey: ['sync', 'config'], queryFn: () => ipc.sync.getConfig() });
+  const versionQ = useQuery({
+    queryKey: ['system', 'version'],
+    queryFn: () => ipc.system.getVersion(),
+    staleTime: Infinity,
+  });
 
   const [mode, setMode] = useState<Mode>('off');
   const [baseUrl, setBaseUrl] = useState('');
@@ -75,16 +81,16 @@ export function SyncSettings() {
   });
 
   const ready = cfgQ.data?.ready;
+  const isDev = versionQ.data?.isDev ?? false;
+  const modes = MODES.filter((m) => !m.devOnly || isDev || mode === m.id);
 
   return (
     <Card>
       <div className="mb-4 flex items-center gap-2">
         <Cloud className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">Multi-device sync</h2>
-        <span className="inline-flex items-center rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-stone-600 dark:bg-stone-700 dark:text-stone-300">
-          advanced
-        </span>
+        <h2 className="text-lg font-semibold">Second till (multi-device sync)</h2>
         {ready &&
+          mode !== 'off' &&
           (ready.ok ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
               <CheckCircle2 className="h-3 w-3" /> Ready
@@ -96,12 +102,11 @@ export function SyncSettings() {
           ))}
       </div>
 
-      <p className="mb-4 rounded-xl bg-stone-50 p-3 text-xs leading-relaxed text-stone-500 dark:bg-stone-800/50">
-        This replicates the database between <strong>multiple POS tills</strong> —
-        only needed when you add a second counter or an HQ dashboard. You do{' '}
-        <strong>not</strong> need it for website orders or cloud backups: those
-        are configured in <strong>Website — online ordering</strong> above and
-        run automatically. Leave this <strong>Off</strong> for a single till.
+      <p className="mb-4 rounded-xl bg-stone-50 p-3 text-sm leading-relaxed text-stone-600 dark:bg-stone-800/50 dark:text-stone-300">
+        Copies orders, menu and stock between two or more POS PCs. It is{' '}
+        <strong>not</strong> needed for one till, and it has nothing to do with
+        website orders or cloud backups (those live under Online orders and
+        Backups). Leave it <strong>Off</strong> unless you add a second counter.
       </p>
 
       <section className="space-y-4">
@@ -110,7 +115,7 @@ export function SyncSettings() {
             Mode
           </label>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-            {MODES.map((m) => (
+            {modes.map((m) => (
               <button
                 key={m.id}
                 type="button"
@@ -139,7 +144,7 @@ export function SyncSettings() {
                 type="text"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://sync.cheeseoclock.com"
+                placeholder="https://sync.example.com"
                 className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
               />
               <div className="mt-1 text-xs text-stone-500">

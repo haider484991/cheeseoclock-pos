@@ -42,7 +42,7 @@ export function BrandingSettings() {
         ...(logoUrl ? { logoUrl } : {}),
       }),
     onSuccess: () => {
-      toast({ title: 'Branding saved', variant: 'success' });
+      toast({ title: 'Store details saved', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['printer', 'config'] });
     },
     onError: (e) =>
@@ -57,8 +57,12 @@ export function BrandingSettings() {
     <Card>
       <div className="mb-4 flex items-center gap-2">
         <Store className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">Receipt branding</h2>
+        <h2 className="text-lg font-semibold">Store details</h2>
       </div>
+      <p className="mb-4 text-sm text-stone-500">
+        Printed at the top of every receipt, shown on the login screen, and sent
+        to the website as the store name and address when you publish the menu.
+      </p>
       <div className="space-y-4">
         <div>
           <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
@@ -79,29 +83,29 @@ export function BrandingSettings() {
           label="Tagline"
           value={storeTagline}
           onChange={setStoreTagline}
-          placeholder="Pakistani Pizza · Cafe"
+          placeholder="Pizza · Burgers · Late-night delivery"
         />
         <Field
           label="Branch / address"
           value={branchLine}
           onChange={setBranchLine}
-          placeholder="F-10 Markaz, Islamabad"
+          placeholder="DHA Phase 6, Karachi"
         />
         <Field
           label="Phone"
           value={phoneLine}
           onChange={setPhoneLine}
-          placeholder="+92 51 1234 5678"
+          placeholder="0300 9367865"
         />
         <Field
-          label="Footer"
+          label="Receipt footer"
           value={footerLine}
           onChange={setFooterLine}
-          placeholder="Thank you — visit us again!"
+          placeholder="Thank you — order again on www.cheeseoclock.net"
         />
         <div className="flex justify-end border-t border-stone-200 pt-3 dark:border-stone-700">
           <Button variant="primary" disabled={saveMut.isPending} onClick={() => saveMut.mutate()}>
-            {saveMut.isPending ? 'Saving…' : 'Save branding'}
+            {saveMut.isPending ? 'Saving…' : 'Save store details'}
           </Button>
         </div>
       </div>

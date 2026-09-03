@@ -11,6 +11,7 @@ import {
   Clock,
   AlertTriangle,
   RotateCcw,
+  Usb,
 } from 'lucide-react';
 
 function fmtBytes(n: number): string {
@@ -23,6 +24,14 @@ function fmtDate(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+const RESTORE_CONFIRM =
+  'Restore this snapshot? Everything on this PC will be replaced by it and the app will restart.\n\nThe current data is archived first (a before-restore-*.db file in the backups folder), so this can be undone.\n\nProceed?';
+
+/** Backups → Local snapshots: the automatic daily copies kept on this PC. */
 export function BackupSettings() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -37,84 +46,33 @@ export function BackupSettings() {
     mutationFn: () => ipc.backup.create(),
     onSuccess: (r) => {
       toast({
-        title: 'Backup created',
+        title: 'Snapshot saved',
         description: `${r.fileName} (${fmtBytes(r.sizeBytes)})`,
         variant: 'success',
       });
       void qc.invalidateQueries({ queryKey: ['backup'] });
     },
     onError: (e) =>
-      toast({
-        title: 'Backup failed',
-        description: e instanceof Error ? e.message : String(e),
-        variant: 'error',
-      }),
+      toast({ title: 'Snapshot failed', description: errorMessage(e), variant: 'error' }),
   });
 
-  const exportMut = useMutation({
-    mutationFn: () => ipc.backup.export(),
-    onSuccess: (r) => {
-      if (r.path) {
-        toast({
-          title: 'Backup exported',
-          description: `Saved to ${r.path}`,
-          variant: 'success',
-        });
-      }
-    },
-    onError: (e) =>
-      toast({
-        title: 'Export failed',
-        description: e instanceof Error ? e.message : String(e),
-        variant: 'error',
-      }),
-  });
-
-  const stageFromPickerMut = useMutation({
-    mutationFn: () => ipc.backup.stageRestoreFromPicker(),
-    onSuccess: (r) => {
-      if (!r.staged) return;
-      if (
-        confirm(
-          'Restore staged. The app will restart and replace the current database with the chosen backup.\n\nThe current data will be auto-archived first (you can recover it from the backups folder).\n\nProceed?',
-        )
-      ) {
-        void ipc.backup.applyAndRelaunch();
-      }
-    },
-    onError: (e) =>
-      toast({
-        title: 'Restore failed',
-        description: e instanceof Error ? e.message : String(e),
-        variant: 'error',
-      }),
-  });
-
-  const stageInternalMut = useMutation({
+  const restoreMut = useMutation({
     mutationFn: (path: string) => ipc.backup.stageRestoreFromPath(path),
     onSuccess: () => {
-      if (
-        confirm(
-          'Restore staged. The app will restart and replace the current database with the chosen backup.\n\nThe current data will be auto-archived first.\n\nProceed?',
-        )
-      ) {
-        void ipc.backup.applyAndRelaunch();
-      }
+      if (confirm(RESTORE_CONFIRM)) void ipc.backup.applyAndRelaunch();
     },
     onError: (e) =>
-      toast({
-        title: 'Restore failed',
-        description: e instanceof Error ? e.message : String(e),
-        variant: 'error',
-      }),
+      toast({ title: 'Restore failed', description: errorMessage(e), variant: 'error' }),
   });
 
   const deleteMut = useMutation({
     mutationFn: (fileName: string) => ipc.backup.delete(fileName),
     onSuccess: () => {
-      toast({ title: 'Backup deleted', variant: 'success' });
+      toast({ title: 'Snapshot deleted', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['backup'] });
     },
+    onError: (e) =>
+      toast({ title: 'Delete failed', description: errorMessage(e), variant: 'error' }),
   });
 
   const items = listQ.data ?? [];
@@ -122,54 +80,35 @@ export function BackupSettings() {
 
   return (
     <Card>
-      <div className="mb-4 flex items-start justify-between">
+      <div className="mb-2 flex items-start justify-between">
         <div className="flex items-center gap-2">
           <Database className="h-5 w-5" />
-          <h2 className="text-lg font-semibold">Local backup</h2>
+          <h2 className="text-lg font-semibold">Local snapshots</h2>
         </div>
         <div className="text-right text-xs text-stone-500">
-          {items.length} backups · {fmtBytes(totalSize)}
+          {items.length} on this PC · {fmtBytes(totalSize)}
         </div>
       </div>
+      <p className="mb-4 text-sm text-stone-500">
+        The app saves a complete copy of the database every day and keeps the
+        last 14. They live on this PC, so they protect against mistakes, not
+        against a disk failure; the cloud copy and USB copy below cover that.
+      </p>
 
-      <div className="mb-4 rounded-xl border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
-        <div className="flex items-start gap-2">
-          <Clock className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-          <div>
-            <strong>Daily auto-backup is on.</strong> The app keeps the last 14 days
-            inside the user-data folder. For real protection, also{' '}
-            <strong>export a copy</strong> to a USB stick or network drive every week —
-            local backups won't survive a disk crash.
-          </div>
-        </div>
-      </div>
-
-      <div className="mb-3 grid grid-cols-3 gap-2">
-        <Button variant="primary" onClick={() => createMut.mutate()} disabled={createMut.isPending}>
+      <div className="mb-3">
+        <Button
+          variant="secondary"
+          onClick={() => createMut.mutate()}
+          disabled={createMut.isPending}
+        >
           <Database className="h-4 w-4" />
-          {createMut.isPending ? 'Backing up…' : 'Back up now'}
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={() => exportMut.mutate()}
-          disabled={exportMut.isPending}
-        >
-          <Download className="h-4 w-4" />
-          Export copy…
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={() => stageFromPickerMut.mutate()}
-          disabled={stageFromPickerMut.isPending}
-        >
-          <Upload className="h-4 w-4" />
-          Restore from file…
+          {createMut.isPending ? 'Saving…' : 'Save a snapshot now'}
         </Button>
       </div>
 
       {items.length === 0 ? (
         <div className="rounded-lg border-2 border-dashed border-stone-200 py-8 text-center text-sm text-stone-500 dark:border-stone-700">
-          No backups yet. The first auto-backup runs within 24 hours.
+          No snapshots yet. The first one is saved automatically within 24 hours.
         </div>
       ) : (
         <table className="w-full text-sm">
@@ -192,7 +131,7 @@ export function BackupSettings() {
                   {b.kind === 'auto' ? (
                     <span className="inline-flex items-center gap-1 rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-700 dark:bg-stone-700 dark:text-stone-300">
                       <Clock className="h-3 w-3" />
-                      Auto
+                      Automatic
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
@@ -205,9 +144,9 @@ export function BackupSettings() {
                 <td className="py-2 text-right">
                   <button
                     type="button"
-                    onClick={() => stageInternalMut.mutate(b.fullPath)}
+                    onClick={() => restoreMut.mutate(b.fullPath)}
                     className="rounded p-1.5 text-stone-500 hover:bg-stone-100 hover:text-stone-900 dark:hover:bg-stone-800"
-                    title="Restore this backup"
+                    title="Restore this snapshot"
                     aria-label="Restore"
                   >
                     <RotateCcw className="h-4 w-4" />
@@ -215,9 +154,11 @@ export function BackupSettings() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (confirm(`Delete backup "${b.fileName}"?`)) deleteMut.mutate(b.fileName);
+                      if (confirm(`Delete the snapshot from ${fmtDate(b.createdAtIso)}?`))
+                        deleteMut.mutate(b.fileName);
                     }}
                     className="rounded p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
+                    title="Delete this snapshot"
                     aria-label="Delete"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -228,14 +169,68 @@ export function BackupSettings() {
           </tbody>
         </table>
       )}
+    </Card>
+  );
+}
 
+/** Backups → USB copy and restore: the off-site copy the owner makes by hand. */
+export function UsbRestoreSettings() {
+  const { toast } = useToast();
+
+  const exportMut = useMutation({
+    mutationFn: () => ipc.backup.export(),
+    onSuccess: (r) => {
+      if (r.path) {
+        toast({ title: 'Copy saved', description: `Saved to ${r.path}`, variant: 'success' });
+      }
+    },
+    onError: (e) =>
+      toast({ title: 'Export failed', description: errorMessage(e), variant: 'error' }),
+  });
+
+  const restoreFromFileMut = useMutation({
+    mutationFn: () => ipc.backup.stageRestoreFromPicker(),
+    onSuccess: (r) => {
+      if (!r.staged) return;
+      if (confirm(RESTORE_CONFIRM)) void ipc.backup.applyAndRelaunch();
+    },
+    onError: (e) =>
+      toast({ title: 'Restore failed', description: errorMessage(e), variant: 'error' }),
+  });
+
+  return (
+    <Card>
+      <div className="mb-2 flex items-center gap-2">
+        <Usb className="h-5 w-5" />
+        <h2 className="text-lg font-semibold">USB copy and restore</h2>
+      </div>
+      <p className="mb-4 text-sm text-stone-500">
+        Every Friday, save a copy to a USB stick and keep it away from the shop.
+        It is the only copy that survives this PC and the cloud account both
+        failing. Restore from file accepts any copy made here, from a USB stick
+        or from the backups folder.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="primary" onClick={() => exportMut.mutate()} disabled={exportMut.isPending}>
+          <Download className="h-4 w-4" />
+          Save a copy to USB…
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => restoreFromFileMut.mutate()}
+          disabled={restoreFromFileMut.isPending}
+        >
+          <Upload className="h-4 w-4" />
+          Restore from file…
+        </Button>
+      </div>
       <div className="mt-4 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
         <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
         <div>
-          <strong>Restore replaces everything.</strong> Current orders, customers, menu,
-          and inventory will be overwritten by the chosen backup. The current
-          database is auto-archived first so you can recover it if needed (look in
-          the user-data backups folder for a <code>before-restore-*.db</code> file).
+          <strong>Restore replaces everything.</strong> Orders, customers, menu and
+          stock on this PC are overwritten by the chosen copy. The current
+          database is archived first as a <code>before-restore-*.db</code> file in
+          the backups folder, so a restore can be undone.
         </div>
       </div>
     </Card>

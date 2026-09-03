@@ -22,11 +22,20 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const isDev = !app.isPackaged;
+
+// A dev run shares %APPDATA%\@cheeseoclock\pos with an installed build, which
+// makes it impossible to try a fresh database (onboarding, seed data, settings)
+// next to a real install. Point a dev run elsewhere with COC_USER_DATA_DIR.
+// Has to happen before electron-log resolves its file path. Production builds
+// never read it.
+if (isDev && process.env['COC_USER_DATA_DIR']) {
+  app.setPath('userData', process.env['COC_USER_DATA_DIR']);
+}
+
 log.transports.file.level = 'info';
 log.transports.console.level = 'debug';
 log.initialize();
-
-const isDev = !app.isPackaged;
 
 let mainWindow: BrowserWindow | null = null;
 

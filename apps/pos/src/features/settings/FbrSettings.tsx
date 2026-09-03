@@ -10,18 +10,19 @@ type Mode = 'noop' | 'sandbox' | 'production';
 const MODES: Array<{ id: Mode; label: string; description: string }> = [
   {
     id: 'noop',
-    label: 'Noop',
-    description: 'Dry-run: payloads dumped to disk. Default until credentials ready.',
+    label: 'Off',
+    description:
+      'Nothing is sent to FBR. Receipts print without an IRN or QR code. Use this until you have PRAL credentials.',
   },
   {
     id: 'sandbox',
-    label: 'Sandbox',
-    description: 'POST to a sandbox or local mock URL — for testing flows.',
+    label: 'Test',
+    description: 'Send invoices to a test address to check the setup before going live.',
   },
   {
     id: 'production',
-    label: 'Production',
-    description: 'Live FBR PRAL gateway. Requires registered SCO credentials.',
+    label: 'Live',
+    description: 'Every invoice goes to FBR through the PRAL gateway. Needs your registered token.',
   },
 ];
 
@@ -86,8 +87,8 @@ export function FbrSettings() {
     <Card>
       <div className="mb-4 flex items-center gap-2">
         <Building2 className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">FBR Digital Invoicing</h2>
-        {ready && (
+        <h2 className="text-lg font-semibold">FBR digital invoicing</h2>
+        {ready && mode !== 'noop' && (
           <span
             className={cn(
               'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
@@ -111,10 +112,15 @@ export function FbrSettings() {
         )}
       </div>
 
+      <p className="mb-4 text-sm text-stone-500">
+        Only needed if the shop is required to report sales to FBR. Leave it Off
+        otherwise; nothing else in the POS depends on it.
+      </p>
+
       <section className="space-y-4">
         <div>
           <label className="mb-2 block text-xs uppercase tracking-wider text-stone-500">
-            Submission mode
+            Sending
           </label>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             {MODES.map((m) => (
@@ -187,7 +193,7 @@ export function FbrSettings() {
             label="Province"
             value={sellerProvince}
             onChange={setSellerProvince}
-            placeholder="Punjab"
+            placeholder="Sindh"
           />
         </div>
         <Field
@@ -200,7 +206,7 @@ export function FbrSettings() {
           label="Seller address"
           value={sellerAddress}
           onChange={setSellerAddress}
-          placeholder="F-10 Markaz, Islamabad"
+          placeholder="DHA Phase 6, Karachi"
         />
 
         <label className="flex items-center gap-2 text-sm">
@@ -210,7 +216,7 @@ export function FbrSettings() {
             onChange={(e) => setPaused(e.target.checked)}
             className="h-4 w-4 rounded border-stone-300 dark:border-stone-700"
           />
-          Pause submissions (workers idle but queue keeps filling)
+          Pause sending (invoices queue up and go out when you unpause)
         </label>
 
         {ready && !ready.ok && mode !== 'noop' && (

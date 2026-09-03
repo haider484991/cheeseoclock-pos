@@ -11,7 +11,7 @@ export const FbrConfigSchema = z.object({
   bearerToken: z.string().optional(),
   sellerNTNCNIC: z.string().default(''),
   sellerBusinessName: z.string().default('Cheese O Clock'),
-  sellerProvince: z.string().default('Punjab'),
+  sellerProvince: z.string().default('Sindh'),
   sellerAddress: z.string().default(''),
   /** Pause the worker without changing mode (useful when reconfiguring). */
   paused: z.boolean().default(false),

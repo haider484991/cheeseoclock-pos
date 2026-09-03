@@ -15,15 +15,15 @@ interface TransportOption {
 }
 
 const TRANSPORTS: TransportOption[] = [
-  { id: 'mock', label: 'Mock (file)', icon: FlaskConical, available: true },
-  { id: 'network', label: 'Network', icon: Wifi, available: true },
-  { id: 'usb', label: 'USB', icon: Usb, available: false, disabledReason: 'Phase 3.5' },
+  { id: 'network', label: 'Wi-Fi / LAN', icon: Wifi, available: true },
+  { id: 'mock', label: 'No printer', icon: FlaskConical, available: true },
+  { id: 'usb', label: 'USB', icon: Usb, available: false, disabledReason: 'Not yet' },
   {
     id: 'bluetooth',
     label: 'Bluetooth',
     icon: Bluetooth,
     available: false,
-    disabledReason: 'Phase 3.5',
+    disabledReason: 'Not yet',
   },
 ];
 
@@ -127,8 +127,13 @@ export function PrinterSettings() {
     <Card>
       <div className="mb-4 flex items-center gap-2">
         <Printer className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">Receipt printer</h2>
+        <h2 className="text-lg font-semibold">Printer</h2>
       </div>
+      <p className="mb-4 text-sm text-stone-500">
+        Receipts, kitchen tickets and the cash drawer all go through this one
+        printer. Most Wi-Fi and LAN thermal printers work with the Wi-Fi / LAN
+        option on port 9100. USB and Bluetooth printers are not supported yet.
+      </p>
 
       <section className="space-y-4">
         <div>
@@ -197,11 +202,12 @@ export function PrinterSettings() {
 
         {uiTransport === 'mock' && (
           <div className="rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400">
-            Mock mode writes receipts to
-            <code className="ml-1 rounded bg-stone-200 px-1 py-0.5 font-mono text-xs dark:bg-stone-700">
-              userData/printer-mock/
+            No printer connected: receipts are saved as files in the app&rsquo;s
+            <code className="mx-1 rounded bg-stone-200 px-1 py-0.5 font-mono text-xs dark:bg-stone-700">
+              printer-mock
             </code>
-            . Perfect for development.
+            folder instead of printing. Sales still work. Switch to Wi-Fi / LAN
+            once the printer is on the shop network.
           </div>
         )}
 
@@ -256,8 +262,9 @@ export function PrinterSettings() {
 }
 
 function labelCurrent(c: PrinterConnectionConfig): string {
-  if (c.transport === 'network' && c.network?.host === 'mock') return 'Mock';
+  if (c.transport === 'network' && c.network?.host === 'mock')
+    return 'No printer (saving to file)';
   if (c.transport === 'network' && c.network)
-    return `Network · ${c.network.host}:${c.network.port}`;
+    return `Wi-Fi / LAN · ${c.network.host}:${c.network.port}`;
   return c.transport;
 }
