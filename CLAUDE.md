@@ -66,7 +66,13 @@ The rules below are **non-negotiable** — breaking any of them silently breaks 
 ## FBR
 
 - `FbrAdapter` is dumb: payload in, response out. **It does not own the queue.** The queue is owned by `apps/pos/electron/services/fbr-worker.ts`, which reads `fbr_submission_queue` and calls `submitInvoice`.
-- Default mode is `noop` until production credentials are configured. The settings UI toggles `noop` ↔ `sandbox` ↔ `production`. Credentials live in the encrypted `settings` table, never in code or env files.
+- Default mode is `noop` until production credentials are configured. The settings UI toggles `noop` ↔ `sandbox` ↔ `production`. Credentials live in the `settings` table **sealed with the OS keychain** (`services/secret-seal.ts`; DPAPI on Windows) — never in code or env files, and never in clear text inside a backup.
+
+## Audit trail & backups (tamper evidence)
+
+- `audit_log` is **hash-chained** (migration 0013, `db/audit-chain.ts`): every row's `row_hash` covers `prev_hash` + its content. Only `writeAudit` may insert audit rows; **never** delete or edit them, never insert around the chain. The verifier runs at boot and from Settings → Backups.
+- Every cloud copy uploads a **manifest** (device, order count, audit chain head); the server records its own SHA-256 and clock, has **no update/delete endpoint**, and rotates with a policy a burst of uploads cannot game (`apps/web/src/lib/backup-retention.ts`).
+- Restoring or deleting a backup needs the **owner (admin) login** (`ipc/guards.ts`), uploads a `before-restore` safety copy first, and leaves a `restore_applied` audit row inside the restored data (`services/restore-service.ts`).
 
 ## Auth
 

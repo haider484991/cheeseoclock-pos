@@ -3,6 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { Button, ImagePicker, cn } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { RestoreFromBackup } from './RestoreFromBackup';
 import {
   Store,
   Receipt,
@@ -45,6 +46,7 @@ interface Props {
 export function OnboardingPage({ onComplete }: Props) {
   const { toast } = useToast();
   const [step, setStep] = useState(0);
+  const [restoring, setRestoring] = useState(false);
 
   // Step 1
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
@@ -133,6 +135,10 @@ export function OnboardingPage({ onComplete }: Props) {
           </p>
         </div>
 
+        {restoring ? (
+          <RestoreFromBackup onBack={() => setRestoring(false)} />
+        ) : (
+          <>
         {/* Stepper */}
         <div className="mb-4 flex items-center justify-center gap-2">
           {steps.map((s, i) => {
@@ -173,6 +179,14 @@ export function OnboardingPage({ onComplete }: Props) {
               <p className="text-xs text-stone-500">
                 These details print on every receipt and show in the sidebar.
               </p>
+              <button
+                type="button"
+                onClick={() => setRestoring(true)}
+                data-testid="onboarding-restore-link"
+                className="text-xs font-semibold text-amber-600 hover:underline"
+              >
+                Replacing a PC or recovering after a crash? Restore from a backup instead →
+              </button>
 
               <div>
                 <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
@@ -381,6 +395,8 @@ export function OnboardingPage({ onComplete }: Props) {
             </Button>
           )}
         </div>
+          </>
+        )}
       </div>
     </div>
   );

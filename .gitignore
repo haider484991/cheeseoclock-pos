@@ -58,3 +58,9 @@ coverage/
 .cache/
 tmp/
 *.tmp
+
+# Local-only secrets (never committed)
+.local/
+
+# Vercel CLI project link
+.vercel/

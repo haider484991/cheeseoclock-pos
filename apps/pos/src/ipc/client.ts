@@ -159,6 +159,13 @@ export const ipc = {
     listCloudBackups: () => unwrap(window.api.webBridge.listCloudBackups()),
     restoreCloudBackup: (id: string) =>
       unwrap(window.api.webBridge.restoreCloudBackup({ id })),
+    previewCloudBackups: (input: IpcRequest<'webBridge:previewCloudBackups'>) =>
+      unwrap(window.api.webBridge.previewCloudBackups(input)),
+    restoreCloudBackupWith: (input: IpcRequest<'webBridge:restoreCloudBackupWith'>) =>
+      unwrap(window.api.webBridge.restoreCloudBackupWith(input)),
+  },
+  audit: {
+    verifyChain: () => unwrap(window.api.audit.verifyChain()),
   },
   customers: {
     list: (input?: IpcRequest<'customers:list'>) => unwrap(window.api.customers.list(input)),

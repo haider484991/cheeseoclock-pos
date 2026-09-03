@@ -20,7 +20,8 @@ A modern, **offline-first point-of-sale system for restaurants & cafés**, built
 | **Cloud sync** | `sync_queue` push + apply-remote dispatcher. Mock & HTTP adapters ready; bring your own Postgres-backed `/sync/push` + `/sync/pull` endpoint. |
 | **Users + auth** | PIN-based login (argon2id), three roles (admin / manager / cashier), capability gates. |
 | **Settings** | Printer config, receipt branding (logo + store info), FBR creds, sync config, local backup/restore, About. |
-| **Backup** | Daily auto-snapshots (keep last 14), manual export to USB, restore-from-file. |
+| **Backup** | Daily auto-snapshots (keep last 14), USB export with a checksum sidecar, restore-from-file, cloud copies listed from any PC, restore from the onboarding wizard on a replacement PC. |
+| **Tamper evidence** | Hash-chained audit trail verified at boot; every cloud copy carries a manifest and a server-recorded SHA-256; owner-only restore with a safety copy first and a permanent restore record; secrets sealed with the OS keychain so USB copies never carry the website password. |
 
 ---
 

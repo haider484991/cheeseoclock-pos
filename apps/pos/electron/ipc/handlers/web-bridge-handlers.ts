@@ -1,31 +1,43 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, hasCapability } from '@cheeseoclock/shared-types';
-import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
-import { getCurrentSession } from '../../services/auth-service.js';
+import { ok } from '@cheeseoclock/shared-types';
+import { requireAdmin, requireAdminOrSetupPhase, requireSettingsManage } from '../guards.js';
 import {
   WebBridgeConfigSchema,
   getWebBridgeConfig,
   isWebBridgeReady,
+  normaliseSiteUrl,
   setWebBridgeConfig,
 } from '../../services/web-bridge-config.js';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 
-function requireSettingsManage(): AuthenticatedUser {
-  const s = getCurrentSession();
-  if (!s) throw new IpcGuardError({ code: 'unauthenticated', message: 'Not logged in' });
-  if (!hasCapability(s.role, 'settings.manage')) {
-    throw new IpcGuardError({
-      code: 'forbidden',
-      message: 'Website settings require manager or admin',
-    });
-  }
-  return s;
-}
-
 function maskSecret(secret: string): string {
   if (secret.length <= 4) return '****';
   return `****${secret.slice(-4)}`;
+}
+
+function precondition(e: unknown, fallback: string): IpcGuardError {
+  return new IpcGuardError({
+    code: 'precondition_failed',
+    message: e instanceof Error ? e.message : fallback,
+  });
+}
+
+function connectionFrom(payload: { siteUrl: string; bridgeSecret: string }) {
+  let siteUrl: string;
+  try {
+    siteUrl = normaliseSiteUrl(payload.siteUrl);
+  } catch {
+    throw new IpcGuardError({
+      code: 'validation_failed',
+      message: 'Enter the full website address, starting with https://',
+    });
+  }
+  const bridgeSecret = payload.bridgeSecret.trim();
+  if (!bridgeSecret) {
+    throw new IpcGuardError({ code: 'validation_failed', message: 'Enter the bridge secret' });
+  }
+  return { siteUrl, bridgeSecret };
 }
 
 export function registerWebBridgeHandlers(ctx: HandlerContext): void {
@@ -38,6 +50,7 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
       ...(cfg.bridgeSecret ? { bridgeSecret: maskSecret(cfg.bridgeSecret) } : {}),
       pollIntervalMs: cfg.pollIntervalMs,
       cloudBackupFrequency: cfg.cloudBackupFrequency,
+      secretUnreadable: cfg.secretUnreadable,
       ready: isWebBridgeReady(cfg),
     });
   });
@@ -77,13 +90,9 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
   defineHandler('webBridge:publishMenu', ctx, async () => {
     requireSettingsManage();
     try {
-      const result = await webOrdersBridge.publishMenu();
-      return ok(result);
+      return ok(await webOrdersBridge.publishMenu());
     } catch (e) {
-      throw new IpcGuardError({
-        code: 'precondition_failed',
-        message: e instanceof Error ? e.message : 'Publish failed',
-      });
+      throw precondition(e, 'Publish failed');
     }
   });
 
@@ -101,12 +110,9 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
   defineHandler('webBridge:backupNow', ctx, async () => {
     requireSettingsManage();
     try {
-      return ok(await webOrdersBridge.uploadBackupNow());
+      return ok(await webOrdersBridge.uploadBackupNow({ reason: 'manual' }));
     } catch (e) {
-      throw new IpcGuardError({
-        code: 'precondition_failed',
-        message: e instanceof Error ? e.message : 'Cloud backup failed',
-      });
+      throw precondition(e, 'Cloud backup failed');
     }
   });
 
@@ -115,22 +121,46 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
     try {
       return ok(await webOrdersBridge.listCloudBackups());
     } catch (e) {
-      throw new IpcGuardError({
-        code: 'precondition_failed',
-        message: e instanceof Error ? e.message : 'Could not list cloud backups',
-      });
+      throw precondition(e, 'Could not list cloud backups');
     }
   });
 
   defineHandler('webBridge:restoreCloudBackup', ctx, async (_ctx, payload) => {
-    requireSettingsManage();
+    const session = requireAdmin('Restoring a cloud copy');
     try {
-      return ok(await webOrdersBridge.restoreCloudBackup(payload.id));
+      return ok(
+        await webOrdersBridge.restoreCloudBackup(payload.id, { byUserId: session.id }),
+      );
     } catch (e) {
-      throw new IpcGuardError({
-        code: 'precondition_failed',
-        message: e instanceof Error ? e.message : 'Cloud restore failed',
-      });
+      throw precondition(e, 'Cloud restore failed');
+    }
+  });
+
+  // Onboarding restore: a fresh install has no saved connection, so the wizard
+  // passes one. Also open to the owner on a configured PC.
+  defineHandler('webBridge:previewCloudBackups', ctx, async (_ctx, payload) => {
+    requireAdminOrSetupPhase(ctx.db, 'Reading cloud copies with another connection');
+    const conn = connectionFrom(payload);
+    try {
+      return ok(await webOrdersBridge.listCloudBackups(conn));
+    } catch (e) {
+      throw precondition(e, 'Could not reach the website');
+    }
+  });
+
+  defineHandler('webBridge:restoreCloudBackupWith', ctx, async (_ctx, payload) => {
+    const session = requireAdminOrSetupPhase(ctx.db, 'Restoring a cloud copy');
+    const conn = connectionFrom(payload);
+    try {
+      return ok(
+        await webOrdersBridge.restoreCloudBackup(payload.id, {
+          conn,
+          byUserId: session?.id ?? null,
+          captureConnection: true,
+        }),
+      );
+    } catch (e) {
+      throw precondition(e, 'Cloud restore failed');
     }
   });
 }

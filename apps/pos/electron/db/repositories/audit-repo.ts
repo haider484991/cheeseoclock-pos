@@ -1,6 +1,7 @@
 import { v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
 import { redactPhone } from '@cheeseoclock/pos-domain';
+import { AUDIT_CHAIN_GENESIS, hashAuditRow } from '../audit-chain.js';
 
 export interface AuditWrite {
   entityType: string;
@@ -62,23 +63,70 @@ function maskEmail(email: string): string {
  * mutates the business row — that's the only way to keep audit consistent.
  *
  * PII (phone, email, pin) is redacted from before/after JSON.
+ *
+ * Every row is chained: prev_hash is the hash of the row before it (rowid
+ * order) and row_hash covers prev_hash plus this row's content, so nothing in
+ * the history can be deleted, edited or reordered without breaking every hash
+ * after it. See audit-chain.ts for the verifier and the reasoning.
  */
 export function writeAudit(db: AppDatabase, w: AuditWrite): void {
-  const before = w.before === null || w.before === undefined ? null : JSON.stringify(redactPii(w.before));
-  const after = w.after === null || w.after === undefined ? null : JSON.stringify(redactPii(w.after));
+  const before =
+    w.before === null || w.before === undefined ? null : JSON.stringify(redactPii(w.before));
+  const after =
+    w.after === null || w.after === undefined ? null : JSON.stringify(redactPii(w.after));
+  const fields = {
+    id: uuidv7(),
+    entityType: w.entityType,
+    entityId: w.entityId,
+    action: w.action,
+    actorUserId: w.actorUserId,
+    beforeJson: before,
+    afterJson: after,
+    ip: w.ip ?? null,
+    createdAt: new Date().toISOString(),
+  };
+  const prevHash = previousHash(db);
+  const rowHash = hashAuditRow(prevHash, fields);
   db.prepare(
     `INSERT INTO audit_log
-       (id, entity_type, entity_id, action, actor_user_id, before_json, after_json, ip, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, entity_type, entity_id, action, actor_user_id, before_json, after_json, ip, created_at,
+        prev_hash, row_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    uuidv7(),
-    w.entityType,
-    w.entityId,
-    w.action,
-    w.actorUserId,
-    before,
-    after,
-    w.ip ?? null,
-    new Date().toISOString(),
+    fields.id,
+    fields.entityType,
+    fields.entityId,
+    fields.action,
+    fields.actorUserId,
+    fields.beforeJson,
+    fields.afterJson,
+    fields.ip,
+    fields.createdAt,
+    prevHash,
+    rowHash,
   );
+}
+
+/**
+ * The hash the next row links to: the newest hashed row; failing that, the
+ * anchor a trimmed cloud copy recorded at its cut; failing that, genesis
+ * (a fresh database, or history written before hashing existed).
+ */
+function previousHash(db: AppDatabase): string {
+  const last = db
+    .prepare(`SELECT row_hash FROM audit_log ORDER BY rowid DESC LIMIT 1`)
+    .get() as { row_hash: string | null } | undefined;
+  if (last?.row_hash) return last.row_hash;
+  const anchor = db
+    .prepare(`SELECT value_json FROM settings WHERE key = 'audit.chainAnchor'`)
+    .get() as { value_json: string } | undefined;
+  if (anchor) {
+    try {
+      const a = JSON.parse(anchor.value_json) as { prevHash?: string | null };
+      if (a.prevHash) return a.prevHash;
+    } catch {
+      // unreadable anchor: start from genesis
+    }
+  }
+  return AUDIT_CHAIN_GENESIS;
 }

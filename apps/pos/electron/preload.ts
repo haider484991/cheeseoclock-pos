@@ -143,6 +143,11 @@ const api: RendererApi = {
     backupNow: () => invoke('webBridge:backupNow', undefined),
     listCloudBackups: () => invoke('webBridge:listCloudBackups', undefined),
     restoreCloudBackup: (req) => invoke('webBridge:restoreCloudBackup', req),
+    previewCloudBackups: (req) => invoke('webBridge:previewCloudBackups', req),
+    restoreCloudBackupWith: (req) => invoke('webBridge:restoreCloudBackupWith', req),
+  },
+  audit: {
+    verifyChain: () => invoke('audit:verifyChain', undefined),
   },
   printer: {
     getConfig: () => invoke('printer:getConfig', undefined),

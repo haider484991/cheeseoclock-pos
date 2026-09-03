@@ -18,6 +18,9 @@ import {
   initBackupService,
   maybeApplyPendingRestoreSync,
 } from './services/backup-service.js';
+import { recordAppliedRestore } from './services/restore-service.js';
+import { sealAllStoredSecrets } from './services/secrets-bootstrap.js';
+import { auditChainService } from './services/audit-chain-service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -89,8 +92,9 @@ async function bootstrap() {
   // Initialize SQLite at userData/cheeseoclock.sqlite. If a pending restore
   // was staged by the previous session, apply it before opening any connection.
   const dbPath = path.join(app.getPath('userData'), 'cheeseoclock.sqlite');
-  if (maybeApplyPendingRestoreSync(dbPath)) {
-    log.info('Restore applied — running on restored database');
+  const restore = maybeApplyPendingRestoreSync(dbPath);
+  if (restore) {
+    log.info('Restore applied — running on restored database', { from: restore.info?.label });
   }
   log.info('SQLite path', { dbPath });
   const db = initDatabase(dbPath);
@@ -100,7 +104,14 @@ async function bootstrap() {
   const deviceInfo = ensureDeviceInfo(db);
   log.info('Device registered', { deviceId: deviceInfo.deviceId });
 
-  if (isDev) {
+  // Secrets stored in clear by older builds get sealed with the OS keychain;
+  // a restore leaves a permanent, hash-chained record inside the restored data.
+  sealAllStoredSecrets(db);
+  if (restore) recordAppliedRestore(db, restore);
+
+  // COC_NO_SEED=1 keeps a dev database empty so the onboarding wizard (and its
+  // restore path) can be exercised; production builds never seed.
+  if (isDev && !process.env['COC_NO_SEED']) {
     ensureSeedUsers(db, deviceInfo.deviceId);
     ensureSeedMenu(db, deviceInfo.deviceId);
   }
@@ -110,6 +121,7 @@ async function bootstrap() {
   syncWorker.init(db, deviceInfo.deviceId);
   webOrdersBridge.init(db, deviceInfo.deviceId);
   initBackupService(db);
+  auditChainService.verifyInBackground(db);
 
   registerAllIpcHandlers({ db, deviceId: deviceInfo.deviceId });
 

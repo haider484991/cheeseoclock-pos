@@ -99,6 +99,14 @@ export function WebsiteSettings() {
         on its own.
       </p>
 
+      {cfgQ.data?.secretUnreadable && (
+        <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <AlertTriangle className="mr-1 inline h-3 w-3" />
+          The saved bridge secret was sealed on another PC and cannot be read here. Enter it
+          again and save.
+        </p>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="block text-sm">
           <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">

@@ -1,6 +1,7 @@
 import log from 'electron-log/main';
 import { app, BrowserWindow } from 'electron';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -9,6 +10,7 @@ import { getSyncConfig } from './sync-config.js';
 import { nowIso } from '../db/repositories/base.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import { createBackup, stageRestoreFromPath } from './backup-service.js';
+import { sealSecret } from './secret-seal.js';
 import {
   createOrder,
   addOrderItem,
@@ -30,6 +32,7 @@ import {
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
 import type {
+  CloudBackupEntry,
   PublishedMenu,
   PublishedMenuCategory,
   WebOrder,
@@ -54,7 +57,9 @@ import type {
  *      customer's tracking page moves.
  *
  * Also owns "Publish menu" — serializes the active menu (categories, items,
- * modifiers, tax rates, images) and PUTs it to the site.
+ * modifiers, tax rates, images) and PUTs it to the site — and the cloud
+ * copies of the database (upload with a manifest, list from any PC, restore
+ * with checksum verification).
  */
 
 const MAX_IMPORT_ATTEMPTS = 5;
@@ -70,6 +75,25 @@ const WEB_ACTOR_NAME = 'web-bridge';
 /** Audit history kept in the cloud copy. Local and USB copies are complete. */
 const CLOUD_COPY_AUDIT_DAYS = 90;
 
+export type CloudCopyReason = 'scheduled' | 'manual' | 'before-restore';
+
+/** What a cloud copy says about itself. Stored by the server next to the blob. */
+interface CloudCopyManifest {
+  schema: 1;
+  deviceId: string;
+  deviceName: string | null;
+  appVersion: string;
+  reason: CloudCopyReason;
+  createdAtClient: string;
+  orderCount: number;
+  lastOrderAt: string | null;
+  auditRows: number;
+  auditHeadHash: string | null;
+  trimmed: { syncRowsDropped: number; auditRowsDropped: number; auditDaysKept: number };
+  rawBytes: number;
+  gzBytes: number;
+}
+
 interface BridgeStatus {
   enabled: boolean;
   ready: boolean;
@@ -83,13 +107,23 @@ interface BridgeStatus {
   lastImportError: string | null;
 }
 
-const LAST_CLOUD_BACKUP_KEY = 'webBridge.lastCloudBackupAt';
+/** Just enough to talk to the site: the saved config, or one typed into the onboarding wizard. */
+export interface BridgeConnection {
+  siteUrl?: string | undefined;
+  bridgeSecret?: string | undefined;
+}
 
-export interface CloudBackupEntry {
+const LAST_CLOUD_BACKUP_KEY = 'webBridge.lastCloudBackupAt';
+const LAST_CLOUD_META_KEY = 'webBridge.lastCloudBackupMeta';
+
+interface ServerBackupRow {
   id: string;
+  deviceId: string;
   fileName: string;
   sizeBytes: number;
   createdAt: string;
+  sha256: string | null;
+  meta: Partial<CloudCopyManifest> | null;
 }
 
 class WebOrdersBridge {
@@ -105,7 +139,7 @@ class WebOrdersBridge {
   private lastCloudBackupError: string | null = null;
   private lastImportError: string | null = null;
   private cloudBackupRunning = false;
-  /** Where cfg.siteUrl really lives once a redirect has told us (apex → www). */
+  /** Where a site URL really lives once a redirect has told us (apex → www). */
   private canonicalOrigin: { for: string | undefined; origin: string } | null = null;
 
   init(db: AppDatabase, deviceId: string): void {
@@ -187,12 +221,20 @@ class WebOrdersBridge {
     const lastRaw = getSettingRaw(this.db, LAST_CLOUD_BACKUP_KEY);
     const last = typeof lastRaw === 'string' ? Date.parse(lastRaw) : 0;
     if (Number.isFinite(last) && Date.now() - last < intervalMs) return;
-    await this.uploadBackupNow().catch(() => undefined); // error already recorded
+    await this.uploadBackupNow({ reason: 'scheduled' }).catch(() => undefined); // error already recorded
   }
 
-  /** Create a fresh VACUUM'd backup, gzip it, upload to the site. */
-  async uploadBackupNow(): Promise<{ fileName: string; sizeBytes: number }> {
+  /**
+   * Create a fresh VACUUM'd snapshot, slim it, gzip it, and upload it with a
+   * manifest. The server records its own SHA-256 of what arrived and the
+   * upload time from its own clock; nothing the POS sends can rewrite an
+   * existing copy.
+   */
+  async uploadBackupNow(
+    opts: { reason?: CloudCopyReason } = {},
+  ): Promise<{ fileName: string; sizeBytes: number }> {
     if (!this.db) throw new Error('Bridge not initialized');
+    const reason = opts.reason ?? 'manual';
     const cfg = getWebBridgeConfig(this.db);
     const ready = isWebBridgeReady(cfg);
     if (!ready.ok) throw new Error(`Configure first: ${ready.missing.join(', ')}`);
@@ -213,31 +255,45 @@ class WebOrdersBridge {
         }
       }
       const gz = gzipSync(raw, { level: 9 });
-      const dataBase64 = gz.toString('base64');
+      const sha256 = createHash('sha256').update(gz).digest('hex');
+      const meta = this.manifest(reason, trimmed, raw.length, gz.length);
       const res = await this.api(cfg, '/api/bridge/backups', {
         method: 'POST',
         body: JSON.stringify({
           deviceId: this.deviceId,
           fileName: `${backup.fileName}.gz`,
-          dataBase64,
+          dataBase64: gz.toString('base64'),
+          sha256,
+          meta,
         }),
       });
       const json = (await res.json().catch(() => null)) as
-        | { ok: boolean; error?: string; message?: string }
+        | { ok: boolean; error?: string; message?: string; data?: { id: string } }
         | null;
       if (!res.ok || !json?.ok) {
         throw new Error(
           json?.message ?? json?.error ?? `Upload failed: HTTP ${res.status}`,
         );
       }
-      setSetting(this.db, LAST_CLOUD_BACKUP_KEY, nowIso());
+      const uploadedAt = nowIso();
+      setSetting(this.db, LAST_CLOUD_BACKUP_KEY, uploadedAt);
+      setSetting(this.db, LAST_CLOUD_META_KEY, {
+        uploadedAt,
+        id: json.data?.id ?? null,
+        sha256,
+        reason,
+        auditHeadHash: meta.auditHeadHash,
+        auditRows: meta.auditRows,
+      });
       this.lastCloudBackupError = null;
       log.info('Cloud backup uploaded', {
         fileName: backup.fileName,
+        reason,
         rawBytes: raw.length,
         gzBytes: gz.length,
         removedSyncRows: trimmed.removedSync,
         removedAuditRows: trimmed.removedAudit,
+        auditHeadHash: meta.auditHeadHash,
       });
       return { fileName: backup.fileName, sizeBytes: gz.length };
     } catch (e) {
@@ -247,6 +303,44 @@ class WebOrdersBridge {
     } finally {
       this.cloudBackupRunning = false;
     }
+  }
+
+  private manifest(
+    reason: CloudCopyReason,
+    trimmed: { removedSync: number; removedAudit: number },
+    rawBytes: number,
+    gzBytes: number,
+  ): CloudCopyManifest {
+    const db = this.db!;
+    const device = db
+      .prepare(`SELECT display_name FROM device_info WHERE id = 'singleton'`)
+      .get() as { display_name: string | null } | undefined;
+    const orders = db
+      .prepare(`SELECT COUNT(*) AS n, MAX(created_at) AS last FROM orders WHERE deleted_at IS NULL`)
+      .get() as { n: number; last: string | null };
+    const audit = db.prepare(`SELECT COUNT(*) AS n FROM audit_log`).get() as { n: number };
+    const head = db
+      .prepare(`SELECT row_hash FROM audit_log WHERE row_hash IS NOT NULL ORDER BY rowid DESC LIMIT 1`)
+      .get() as { row_hash: string } | undefined;
+    return {
+      schema: 1,
+      deviceId: this.deviceId,
+      deviceName: device?.display_name ?? null,
+      appVersion: app.getVersion(),
+      reason,
+      createdAtClient: nowIso(),
+      orderCount: orders.n,
+      lastOrderAt: orders.last,
+      auditRows: audit.n,
+      auditHeadHash: head?.row_hash ?? null,
+      trimmed: {
+        syncRowsDropped: trimmed.removedSync,
+        auditRowsDropped: trimmed.removedAudit,
+        auditDaysKept: CLOUD_COPY_AUDIT_DAYS,
+      },
+      rawBytes,
+      gzBytes,
+    };
   }
 
   /**
@@ -266,6 +360,7 @@ class WebOrdersBridge {
       missing: ready.missing,
       siteUrl: cfg.siteUrl ?? null,
       hasSecret: !!cfg.bridgeSecret,
+      secretUnreadable: cfg.secretUnreadable,
       deviceId: this.deviceId,
       staffUser: actor ? `ok (${actor.userId})` : 'NONE — no active admin/manager/cashier user found',
       lastPollAt: this.lastPollAt,
@@ -314,56 +409,99 @@ class WebOrdersBridge {
     return out;
   }
 
-  async listCloudBackups(): Promise<CloudBackupEntry[]> {
+  /**
+   * Every copy the website holds, from every till — so a reinstalled PC (new
+   * device id) can find the copies its predecessor made. `conn` overrides the
+   * saved connection for the onboarding wizard.
+   */
+  async listCloudBackups(conn?: BridgeConnection): Promise<CloudBackupEntry[]> {
     if (!this.db) throw new Error('Bridge not initialized');
-    const cfg = getWebBridgeConfig(this.db);
-    const ready = isWebBridgeReady(cfg);
+    const c = conn ?? getWebBridgeConfig(this.db);
+    const ready = isWebBridgeReady(c as WebBridgeConfig);
     if (!ready.ok) throw new Error(`Configure first: ${ready.missing.join(', ')}`);
-    const res = await this.api(
-      cfg,
-      `/api/bridge/backups?deviceId=${encodeURIComponent(this.deviceId)}`,
-    );
+    const res = await this.api(c, '/api/bridge/backups');
+    if (res.status === 401) throw new Error('The website rejected the bridge secret');
     if (!res.ok) throw new Error(`List failed: HTTP ${res.status}`);
-    const json = (await res.json()) as { ok: boolean; data?: CloudBackupEntry[] };
+    const json = (await res.json()) as { ok: boolean; data?: ServerBackupRow[] };
     if (!json.ok || !json.data) throw new Error('List failed: bad response');
-    return json.data;
+    return json.data.map((r) => ({
+      id: r.id,
+      deviceId: r.deviceId,
+      fileName: r.fileName,
+      sizeBytes: r.sizeBytes,
+      createdAt: r.createdAt,
+      deviceName: r.meta?.deviceName ?? null,
+      isThisDevice: r.deviceId === this.deviceId,
+      orderCount: r.meta?.orderCount ?? null,
+      lastOrderAt: r.meta?.lastOrderAt ?? null,
+      reason: r.meta?.reason ?? null,
+      appVersion: r.meta?.appVersion ?? null,
+      sha256: r.sha256 ?? null,
+      auditHeadHash: r.meta?.auditHeadHash ?? null,
+    }));
   }
 
   /**
-   * Download a cloud backup, gunzip, validate, and stage it as the pending
-   * restore (applied on next launch — same flow as local restore). The
-   * renderer then calls backup:applyAndRelaunch to confirm.
+   * Download a cloud copy, verify it against the checksum the server recorded
+   * at upload, gunzip, and stage it as the pending restore (applied on next
+   * launch — same flow as local restore). The renderer then calls
+   * backup:applyAndRelaunch to confirm.
    */
-  async restoreCloudBackup(id: string): Promise<{ staged: boolean }> {
+  async restoreCloudBackup(
+    id: string,
+    opts: { conn?: BridgeConnection; byUserId: string | null; captureConnection?: boolean },
+  ): Promise<{ staged: boolean }> {
     if (!this.db) throw new Error('Bridge not initialized');
-    const cfg = getWebBridgeConfig(this.db);
-    const ready = isWebBridgeReady(cfg);
+    const c = opts.conn ?? getWebBridgeConfig(this.db);
+    const ready = isWebBridgeReady(c as WebBridgeConfig);
     if (!ready.ok) throw new Error(`Configure first: ${ready.missing.join(', ')}`);
-    const res = await this.api(cfg, `/api/bridge/backups/${id}`);
+    const res = await this.api(c, `/api/bridge/backups/${encodeURIComponent(id)}`);
+    if (res.status === 401) throw new Error('The website rejected the bridge secret');
     if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
     const json = (await res.json()) as {
       ok: boolean;
-      data?: { fileName: string; dataBase64: string };
+      data?: {
+        fileName: string;
+        dataBase64: string;
+        deviceId?: string;
+        sha256?: string | null;
+        meta?: Partial<CloudCopyManifest> | null;
+      };
     };
     if (!json.ok || !json.data) throw new Error('Download failed: bad response');
     const gz = Buffer.from(json.data.dataBase64, 'base64');
+    if (json.data.sha256) {
+      const digest = createHash('sha256').update(gz).digest('hex');
+      if (digest !== json.data.sha256) {
+        throw new Error(
+          'The cloud copy does not match the checksum the server recorded when it was uploaded. It is damaged or was altered; refusing to restore it. Pick another copy.',
+        );
+      }
+    }
     const raw = gunzipSync(gz);
+    const fromPc = json.data.meta?.deviceName ?? (json.data.deviceId === this.deviceId ? 'this PC' : 'another PC');
     // Write to a temp file inside userData, then reuse the local staging flow
     // (which validates the SQLite header before accepting).
-    const tmpPath = path.join(
-      app.getPath('userData'),
-      `cloud-restore-${Date.now()}.db`,
-    );
+    const tmpPath = path.join(app.getPath('userData'), `cloud-restore-${Date.now()}.db`);
     fs.writeFileSync(tmpPath, raw);
     try {
-      return stageRestoreFromPath(tmpPath);
+      return stageRestoreFromPath(tmpPath, {
+        source: 'cloud',
+        label: `cloud copy ${json.data.fileName} from ${fromPc}`,
+        fromDeviceId: json.data.deviceId ?? null,
+        byUserId: opts.byUserId,
+        connection:
+          opts.captureConnection && c.siteUrl && c.bridgeSecret
+            ? { siteUrl: c.siteUrl, bridgeSecretSealed: sealSecret(c.bridgeSecret) }
+            : null,
+      });
     } finally {
       fs.unlinkSync(tmpPath);
     }
   }
 
   private async api(
-    cfg: WebBridgeConfig,
+    conn: BridgeConnection,
     path: string,
     init?: RequestInit,
   ): Promise<Response> {
@@ -385,12 +523,12 @@ class WebOrdersBridge {
         redirect: 'manual',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${cfg.bridgeSecret}`,
+          Authorization: `Bearer ${conn.bridgeSecret}`,
           ...(init?.headers ?? {}),
         },
       };
       const cached = this.canonicalOrigin;
-      const origin = cached && cached.for === cfg.siteUrl ? cached.origin : cfg.siteUrl;
+      const origin = cached && cached.for === conn.siteUrl ? cached.origin : conn.siteUrl;
       const res = await fetch(`${origin}${path}`, request);
       if (res.status < 300 || res.status >= 400) return res;
       // Only honour a redirect that is plain host canonicalisation (apex → www,
@@ -400,7 +538,7 @@ class WebOrdersBridge {
       const target = new URL(location, `${origin}${path}`);
       const requested = new URL(`${origin}${path}`);
       if (target.protocol !== 'https:' || target.pathname !== requested.pathname) return res;
-      this.canonicalOrigin = { for: cfg.siteUrl, origin: target.origin };
+      this.canonicalOrigin = { for: conn.siteUrl, origin: target.origin };
       return await fetch(`${target.origin}${path}`, request);
     } finally {
       clearTimeout(timer);
@@ -661,6 +799,10 @@ class WebOrdersBridge {
  * on a real database these two tables were ~85% of every order's footprint,
  * which moved the cap from ~2,700 orders to well past 15,000.
  *
+ * Trimming cuts the audit hash chain, so the copy records the hash at the cut
+ * (settings "audit.chainAnchor") for the verifier to start from — and for new
+ * rows to link to if this copy is ever restored.
+ *
  * Runs on the copy only. The live database is never touched.
  */
 function slimCloudCopy(
@@ -681,6 +823,25 @@ function slimCloudCopy(
     const removedAudit = copy
       .prepare(`DELETE FROM audit_log WHERE created_at < ?`)
       .run(cutoff).changes;
+    if (removedAudit > 0) {
+      const first = copy
+        .prepare(`SELECT prev_hash FROM audit_log ORDER BY rowid LIMIT 1`)
+        .get() as { prev_hash: string | null } | undefined;
+      copy
+        .prepare(
+          `INSERT INTO settings (key, value_json, updated_at) VALUES ('audit.chainAnchor', ?, ?)
+             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+        )
+        .run(
+          JSON.stringify({
+            prevHash: first?.prev_hash ?? null,
+            trimmedAt: nowIso(),
+            auditRowsDropped: removedAudit,
+            note: `cloud copy keeps the last ${CLOUD_COPY_AUDIT_DAYS} days of audit history`,
+          }),
+          nowIso(),
+        );
+    }
     copy.exec('VACUUM');
     return { removedSync, removedAudit };
   } finally {

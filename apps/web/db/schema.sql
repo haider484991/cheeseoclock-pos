@@ -54,17 +54,28 @@ CREATE INDEX IF NOT EXISTS idx_order_rate_events_ip
   ON order_rate_events(ip_hash, created_at);
 
 -- Cloud copies of the POS SQLite database, uploaded by the bridge on a
--- schedule (daily/weekly/monthly). Stored gzipped + base64. The upload
--- endpoint rotates: only the newest N per device are kept, so a small
--- free-tier Postgres comfortably holds months of disaster-recovery points.
+-- schedule (daily/weekly/monthly). Stored gzipped + base64. Retention per
+-- device: the newest 3, the earliest copy of each of the last 14 days, and
+-- every before-restore safety copy for 30 days — a burst of uploads cannot
+-- evict history. There is no API to modify or delete a copy.
 CREATE TABLE IF NOT EXISTS pos_backups (
   id           UUID PRIMARY KEY,
   device_id    TEXT NOT NULL,
   file_name    TEXT NOT NULL,
   size_bytes   INT NOT NULL,
   data_base64  TEXT NOT NULL,
+  -- SHA-256 of the gzip bytes, computed by the server at upload. The POS
+  -- refuses to restore a copy whose bytes no longer match it.
+  sha256       TEXT,
+  -- What the copy says about itself: device name, order count, last sale,
+  -- app version, reason (scheduled / manual / before-restore), and the head of
+  -- the POS audit hash chain at upload time.
+  meta_json    JSONB,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Databases created before 0.4.9 (the route also does this lazily):
+ALTER TABLE pos_backups ADD COLUMN IF NOT EXISTS sha256 TEXT;
+ALTER TABLE pos_backups ADD COLUMN IF NOT EXISTS meta_json JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_pos_backups_device
   ON pos_backups(device_id, created_at DESC);

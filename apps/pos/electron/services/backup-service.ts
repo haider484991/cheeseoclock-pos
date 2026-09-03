@@ -1,8 +1,10 @@
 import { app, dialog } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import Database from 'better-sqlite3';
 import log from 'electron-log/main';
-import type { AppDatabase } from '../db/connection.js';
+import { closeDatabase, type AppDatabase } from '../db/connection.js';
 
 /**
  * Local backup / restore for the SQLite database.
@@ -10,16 +12,21 @@ import type { AppDatabase } from '../db/connection.js';
  *   - `createBackup` uses SQLite's `VACUUM INTO` which produces a clean,
  *     defragmented copy of the live DB without locking writers for long.
  *   - `listBackups` enumerates the on-disk auto-backup folder.
- *   - `restoreBackup` stages a chosen file to be swapped in on next launch
- *     (we can't safely overwrite the DB while it's open).
+ *   - `stageRestoreFromPath` stages a chosen file to be swapped in on next
+ *     launch (we can't safely overwrite the DB while it's open), together
+ *     with a sidecar describing who staged what — the boot code turns that
+ *     into a permanent audit entry inside the restored data.
  *
- * Without a cloud backend, this IS the recovery story — daily local snapshots
- * + the operator's own off-device copies (USB, network drive) are what protects
- * the business from a disk crash.
+ * Integrity: a USB export is written with a `.sha256` sidecar, and a restore
+ * from a file that still has its sidecar refuses to proceed if the file no
+ * longer matches. Restoring checkpoints the live database first so the
+ * "before-restore" archive is complete and no stale write-ahead frames can
+ * be replayed onto the restored file.
  */
 
 const BACKUP_DIR_NAME = 'backups';
 const PENDING_RESTORE_NAME = 'pending-restore.db';
+const PENDING_RESTORE_INFO = 'pending-restore.json';
 const AUTO_BACKUP_PREFIX = 'auto-';
 const MANUAL_BACKUP_PREFIX = 'manual-';
 const KEEP_AUTO_BACKUPS = 14;
@@ -30,8 +37,6 @@ let timer: NodeJS.Timeout | null = null;
 
 export function initBackupService(db: AppDatabase): void {
   dbRef = db;
-  // On startup, apply any pending-restore staged by the previous session.
-  void maybeApplyPendingRestore();
   // First check immediately, then daily.
   void runAutoBackupIfDue();
   timer = setInterval(() => void runAutoBackupIfDue(), AUTO_BACKUP_INTERVAL_MS);
@@ -107,10 +112,15 @@ export function createBackup(opts: { kind: 'auto' | 'manual' } = { kind: 'manual
   return { fileName, fullPath, sizeBytes };
 }
 
+export function sha256OfFile(filePath: string): string {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
 /**
  * Lets the user pick a destination outside the userData folder — for off-device
- * copies (USB stick, network share). Returns the destination path or null if
- * the user cancelled.
+ * copies (USB stick, network share). Writes a `.sha256` sidecar next to the
+ * file so a later restore can tell whether the file was changed on the way.
+ * Returns the destination path or null if the user cancelled.
  */
 export async function exportBackup(): Promise<string | null> {
   if (!dbRef) throw new Error('Backup service not initialised');
@@ -122,8 +132,36 @@ export async function exportBackup(): Promise<string | null> {
   });
   if (result.canceled || !result.filePath) return null;
   dbRef.exec(`VACUUM INTO '${result.filePath.replace(/'/g, "''")}'`);
-  log.info('Backup exported', { dest: result.filePath });
+  const digest = sha256OfFile(result.filePath);
+  try {
+    fs.writeFileSync(`${result.filePath}.sha256`, `${digest}  ${path.basename(result.filePath)}\n`);
+  } catch (e) {
+    log.warn('Could not write the checksum sidecar next to the export', e);
+  }
+  log.info('Backup exported', { dest: result.filePath, sha256: digest });
   return result.filePath;
+}
+
+export interface RestoreStagingInfo {
+  source: 'file' | 'snapshot' | 'cloud';
+  /** Human label: the file name, or "cloud copy … from <PC>". */
+  label: string;
+  fromDeviceId?: string | null;
+  byUserId: string | null;
+  /**
+   * Captured by an onboarding cloud restore so the replacement PC comes up
+   * connected to the website. The secret is sealed for THIS machine.
+   */
+  connection?: { siteUrl: string; bridgeSecretSealed: string } | null;
+}
+
+export interface PendingRestoreInfo extends RestoreStagingInfo {
+  stagedAt: string;
+}
+
+export interface AppliedRestore {
+  archivedTo: string | null;
+  info: PendingRestoreInfo | null;
 }
 
 /**
@@ -131,36 +169,29 @@ export async function exportBackup(): Promise<string | null> {
  * inside the backup folder, then ask the renderer to confirm a relaunch.
  * The actual swap happens on the next start (when the live DB isn't open).
  */
-export async function stageRestoreFromPicker(): Promise<{ staged: boolean }> {
+export async function stageRestoreFromPicker(
+  info: Omit<RestoreStagingInfo, 'label'>,
+): Promise<{ staged: boolean }> {
   const result = await dialog.showOpenDialog({
     title: 'Pick a backup to restore',
     properties: ['openFile'],
     filters: [{ name: 'SQLite database', extensions: ['db'] }],
   });
   if (result.canceled || !result.filePaths[0]) return { staged: false };
-  return stageRestoreFromPath(result.filePaths[0]);
+  return stageRestoreFromPath(result.filePaths[0], {
+    ...info,
+    label: path.basename(result.filePaths[0]),
+  });
 }
 
-export function stageRestoreFromPath(srcPath: string): { staged: boolean } {
-  // Defense-in-depth: validate the path is safe, the file exists, and it
-  // smells like a real SQLite database. Without these checks a malicious
-  // renderer (or a manager-PIN compromise) could swap in an attacker-
-  // crafted .db that pre-populates admin users at next boot.
+export function stageRestoreFromPath(
+  srcPath: string,
+  info: RestoreStagingInfo,
+): { staged: boolean } {
+  // Defense-in-depth: the file must exist and smell like a real SQLite
+  // database. Without this a malicious renderer could swap in an attacker-
+  // crafted file that pre-populates admin users at next boot.
   const resolved = path.resolve(srcPath);
-  const dir = ensureBackupDir();
-  const backupsResolved = path.resolve(dir);
-  const userData = app.getPath('userData');
-
-  // Allowlist: the file must live under either the backups directory (a
-  // previously-exported snapshot the user is restoring) or directly under
-  // userData (covers paths returned by the picker on Windows that go via
-  // /Downloads — we re-validate the header below regardless).
-  const insideBackups = resolved.startsWith(backupsResolved + path.sep);
-  if (!insideBackups && !resolved.startsWith(path.resolve(userData) + path.sep)) {
-    // Picker-supplied paths are trusted only via the SQLite header check
-    // below; we still require the file to exist + have the SQLite magic.
-  }
-
   if (!fs.existsSync(resolved)) throw new Error('Backup file not found');
   // SQLite files start with the literal bytes "SQLite format 3\0".
   const fd = fs.openSync(resolved, 'r');
@@ -174,9 +205,25 @@ export function stageRestoreFromPath(srcPath: string): { staged: boolean } {
     fs.closeSync(fd);
   }
 
+  // A USB export carries a checksum sidecar. If it is still there, the file
+  // has to match it; a changed or damaged copy is refused rather than
+  // silently restored.
+  const sidecar = `${resolved}.sha256`;
+  if (fs.existsSync(sidecar)) {
+    const recorded = fs.readFileSync(sidecar, 'utf8').trim().split(/\s+/)[0] ?? '';
+    if (/^[0-9a-f]{64}$/i.test(recorded) && recorded.toLowerCase() !== sha256OfFile(resolved)) {
+      throw new Error(
+        'This file does not match the checksum saved next to it when it was exported. It was changed or damaged afterwards; refusing to restore it.',
+      );
+    }
+  }
+
+  const dir = ensureBackupDir();
   const stagedPath = path.join(dir, PENDING_RESTORE_NAME);
   fs.copyFileSync(resolved, stagedPath);
-  log.info('Restore staged for next launch', { from: resolved });
+  const pending: PendingRestoreInfo = { ...info, stagedAt: new Date().toISOString() };
+  fs.writeFileSync(path.join(dir, PENDING_RESTORE_INFO), JSON.stringify(pending));
+  log.info('Restore staged for next launch', { from: resolved, source: info.source });
   return { staged: true };
 }
 
@@ -201,8 +248,9 @@ export function deleteBackup(fileName: string): void {
 }
 
 export function applyPendingRestoreNowAndRelaunch(): void {
-  // Used by IPC after the renderer confirms — flushes pending immediately by
-  // relaunching the app. Bootstrap on next launch picks up the staged file.
+  // Close cleanly so the write-ahead log is folded into the file before the
+  // next boot archives it and swaps the staged copy in.
+  closeDatabase();
   app.relaunch();
   app.exit(0);
 }
@@ -243,32 +291,59 @@ function runAutoBackupIfDue(): void {
  * Called at bootstrap BEFORE the live DB is opened. If a `pending-restore.db`
  * file exists, it replaces the main DB and is then deleted.
  *
- * Returns true if a restore was applied (caller can log it / show a toast).
+ * Returns what was applied (so the boot code can record it in the audit
+ * trail), or null when nothing was staged.
  */
-export function maybeApplyPendingRestoreSync(mainDbPath: string): boolean {
+export function maybeApplyPendingRestoreSync(mainDbPath: string): AppliedRestore | null {
   const dir = path.join(app.getPath('userData'), BACKUP_DIR_NAME);
   const staged = path.join(dir, PENDING_RESTORE_NAME);
-  if (!fs.existsSync(staged)) return false;
+  if (!fs.existsSync(staged)) return null;
+
+  let info: PendingRestoreInfo | null = null;
+  const infoPath = path.join(dir, PENDING_RESTORE_INFO);
   try {
-    // Sidecar the current DB to a "before-restore" backup so we can undo if needed.
-    const before = path.join(
-      dir,
-      `before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.db`,
-    );
+    if (fs.existsSync(infoPath)) info = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
+  } catch (e) {
+    log.warn('Could not read the pending-restore sidecar', e);
+  }
+
+  try {
     fs.mkdirSync(dir, { recursive: true });
-    if (fs.existsSync(mainDbPath)) fs.copyFileSync(mainDbPath, before);
+    let archivedTo: string | null = null;
+    if (fs.existsSync(mainDbPath)) {
+      // Fold the write-ahead log into the main file so the archive is complete
+      // and no stale frames can be replayed onto the restored database.
+      try {
+        const current = new Database(mainDbPath);
+        current.pragma('wal_checkpoint(TRUNCATE)');
+        current.close();
+      } catch (e) {
+        log.warn('Checkpoint before restore failed; archiving the main file as-is', e);
+      }
+      archivedTo = path.join(
+        dir,
+        `before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.db`,
+      );
+      fs.copyFileSync(mainDbPath, archivedTo);
+    }
+    for (const suffix of ['-wal', '-shm', '-journal']) {
+      try {
+        fs.unlinkSync(mainDbPath + suffix);
+      } catch {
+        // none present
+      }
+    }
     fs.copyFileSync(staged, mainDbPath);
     fs.unlinkSync(staged);
-    log.info('Restore applied at bootstrap', { restoredFrom: staged, sidecar: before });
-    return true;
+    try {
+      fs.unlinkSync(infoPath);
+    } catch {
+      // no sidecar
+    }
+    log.info('Restore applied at bootstrap', { restoredFrom: staged, archivedTo, source: info?.source });
+    return { archivedTo, info };
   } catch (e) {
     log.error('Restore at bootstrap failed', e);
-    return false;
+    return null;
   }
-}
-
-// Lazily-called variant used at runtime (post-bootstrap) — currently a no-op
-// because we only restore at bootstrap. Kept symmetric in case callers want it.
-async function maybeApplyPendingRestore(): Promise<void> {
-  // No-op at runtime; restore happens at bootstrap via maybeApplyPendingRestoreSync.
 }

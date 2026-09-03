@@ -20,6 +20,7 @@ import { FbrSettings } from './FbrSettings';
 import { SyncSettings } from './SyncSettings';
 import { BackupSettings, UsbRestoreSettings } from './BackupSettings';
 import { CloudBackupSettings } from './CloudBackupSettings';
+import { AuditTrailCard } from './AuditTrailCard';
 import { WebsiteSettings } from './WebsiteSettings';
 import { AboutCard } from './AboutCard';
 
@@ -130,10 +131,13 @@ export function SettingsPage() {
               Three copies protect the shop&rsquo;s data: a daily snapshot on this
               PC, a daily compressed copy in the cloud, and the USB copy you export
               yourself. If this PC dies, restore from the cloud or the USB copy.
+              Restoring or deleting a copy needs the owner login, a safety copy is
+              made first, and every restore is written into the audit trail.
             </p>
             <BackupSettings />
             <CloudBackupSettings onGoToOnline={() => setTab('online')} />
             <UsbRestoreSettings />
+            <AuditTrailCard />
           </>
         )}
         {tab === 'fbr' && <FbrSettings />}

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import type { FbrAdapterConfig, FbrMode } from '@cheeseoclock/fbr-core';
+import { openSecret, sealSecret } from './secret-seal.js';
 
 export const FBR_CONFIG_KEY = 'fbr.config';
 
@@ -24,11 +25,16 @@ const DEFAULT_CONFIG: FbrConfig = FbrConfigSchema.parse({ mode: 'noop' });
 export function getFbrConfig(db: AppDatabase): FbrConfig {
   const raw = getSettingRaw(db, FBR_CONFIG_KEY);
   const parsed = FbrConfigSchema.safeParse(raw ?? {});
-  return parsed.success ? parsed.data : DEFAULT_CONFIG;
+  const cfg = parsed.success ? parsed.data : DEFAULT_CONFIG;
+  // Sealed with the OS keychain at rest; unreadable on another PC → absent.
+  return { ...cfg, bearerToken: openSecret(cfg.bearerToken).value };
 }
 
 export function setFbrConfig(db: AppDatabase, config: FbrConfig): void {
-  setSetting(db, FBR_CONFIG_KEY, config);
+  setSetting(db, FBR_CONFIG_KEY, {
+    ...config,
+    bearerToken: config.bearerToken ? sealSecret(config.bearerToken) : undefined,
+  });
 }
 
 /** Convert the user-facing FbrConfig into an FbrAdapterConfig. */

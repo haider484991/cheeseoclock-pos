@@ -29,7 +29,7 @@ function errorMessage(e: unknown): string {
 }
 
 const RESTORE_CONFIRM =
-  'Restore this snapshot? Everything on this PC will be replaced by it and the app will restart.\n\nThe current data is archived first (a before-restore-*.db file in the backups folder), so this can be undone.\n\nProceed?';
+  'Restore this snapshot? Everything on this PC will be replaced by it and the app will restart.\n\nThe current data is archived first (a before-restore-*.db file in the backups folder) and a safety copy is uploaded to the cloud, so this can be undone. The restore is recorded in the audit trail.\n\nProceed?';
 
 /** Backups → Local snapshots: the automatic daily copies kept on this PC. */
 export function BackupSettings() {
@@ -93,6 +93,7 @@ export function BackupSettings() {
         The app saves a complete copy of the database every day and keeps the
         last 14. They live on this PC, so they protect against mistakes, not
         against a disk failure; the cloud copy and USB copy below cover that.
+        Restoring or deleting a snapshot needs the owner login.
       </p>
 
       <div className="mb-3">

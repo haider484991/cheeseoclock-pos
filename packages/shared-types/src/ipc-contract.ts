@@ -43,6 +43,36 @@ import type {
 } from './inventory.js';
 import type { Customer, CustomerAddress, CustomerWithAddresses } from './customer.js';
 
+/** One cloud copy as listed for the operator (from any till). */
+export interface CloudBackupEntry {
+  id: string;
+  deviceId: string;
+  fileName: string;
+  sizeBytes: number;
+  /** Server clock at upload. */
+  createdAt: string;
+  deviceName: string | null;
+  isThisDevice: boolean;
+  orderCount: number | null;
+  lastOrderAt: string | null;
+  reason: string | null;
+  appVersion: string | null;
+  sha256: string | null;
+  auditHeadHash: string | null;
+}
+
+/** Result of walking the hash-chained audit trail. */
+export interface AuditTrailStatus {
+  ok: boolean;
+  totalRows: number;
+  checkedRows: number;
+  legacyRows: number;
+  headHash: string | null;
+  brokenAt: { rowid: number; id: string; createdAt: string; reason: string } | null;
+  verifiedAt: string;
+  anchor: { uploadedAt: string; headHash: string; present: boolean } | null;
+}
+
 export interface IpcContract {
   // System
   'system:getVersion': {
@@ -501,6 +531,8 @@ export interface IpcContract {
       bridgeSecret?: string;
       pollIntervalMs: number;
       cloudBackupFrequency: 'off' | 'daily' | 'weekly' | 'monthly';
+      /** A secret is stored but was sealed on another PC; enter it again. */
+      secretUnreadable: boolean;
       ready: { ok: boolean; missing: string[] };
     }>;
   };
@@ -535,13 +567,21 @@ export interface IpcContract {
   };
   'webBridge:listCloudBackups': {
     request: undefined;
-    response: ApiResult<
-      Array<{ id: string; fileName: string; sizeBytes: number; createdAt: string }>
-    >;
+    response: ApiResult<CloudBackupEntry[]>;
   };
-  /** Download + stage a cloud backup; renderer confirms via backup:applyAndRelaunch. */
+  /** Download + stage a cloud backup; renderer confirms via backup:applyAndRelaunch. Owner only. */
   'webBridge:restoreCloudBackup': {
     request: { id: string };
+    response: ApiResult<{ staged: boolean }>;
+  };
+  /** List cloud copies with a connection that is not saved yet (onboarding restore). */
+  'webBridge:previewCloudBackups': {
+    request: { siteUrl: string; bridgeSecret: string };
+    response: ApiResult<CloudBackupEntry[]>;
+  };
+  /** Download + stage a cloud copy with an unsaved connection; it is re-attached after the restart. */
+  'webBridge:restoreCloudBackupWith': {
+    request: { siteUrl: string; bridgeSecret: string; id: string };
     response: ApiResult<{ staged: boolean }>;
   };
   /** Serialize the active menu and PUT it to the website. */
@@ -1097,6 +1137,12 @@ export interface IpcContract {
   'backup:applyAndRelaunch': {
     request: undefined;
     response: ApiResult<{ relaunching: true }>;
+  };
+
+  // Audit trail (hash-chained; see apps/pos/electron/db/audit-chain.ts)
+  'audit:verifyChain': {
+    request: undefined;
+    response: ApiResult<AuditTrailStatus>;
   };
 
   // Tables (floor sections + dine-in tables)

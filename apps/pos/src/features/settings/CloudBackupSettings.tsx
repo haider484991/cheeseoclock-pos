@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card } from '@cheeseoclock/ui';
-import { Cloud, CloudUpload, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Cloud, CloudUpload, AlertTriangle, ArrowRight, Monitor } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 
@@ -14,6 +14,9 @@ const FREQUENCIES: Array<{ id: BackupFrequency; label: string }> = [
   { id: 'off', label: 'Off' },
 ];
 
+const RESTORE_CONFIRM =
+  'Restore this cloud copy? A safety copy of the data on this PC is uploaded to the cloud first, then the app restarts on the chosen copy. Only the owner login can do this, and the restore is recorded in the audit trail.';
+
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -21,7 +24,8 @@ function errorMessage(e: unknown): string {
 /**
  * Backups → Cloud copy. Rides on the website connection (URL + bridge secret
  * from the Online orders tab): the POS compresses a slimmed snapshot and
- * uploads it to the website's database; the newest 8 per device are kept.
+ * uploads it with a manifest; the website keeps the newest three, one per day
+ * for two weeks, and every safety copy for a month — from every till.
  */
 export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void }) {
   const { toast } = useToast();
@@ -37,6 +41,7 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
     refetchInterval: 15_000,
   });
   const ready = statusQ.data?.ready ?? false;
+  const secretUnreadable = cfgQ.data?.secretUnreadable ?? false;
   const listQ = useQuery({
     queryKey: ['webBridge', 'cloudBackups'],
     queryFn: () => ipc.webBridge.listCloudBackups(),
@@ -87,6 +92,7 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
         variant: 'success',
       });
       void qc.invalidateQueries({ queryKey: ['webBridge'] });
+      void qc.invalidateQueries({ queryKey: ['audit'] });
     },
     onError: (e) =>
       toast({ title: 'Cloud copy failed', description: errorMessage(e), variant: 'error' }),
@@ -97,7 +103,7 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
     onSuccess: async () => {
       toast({
         title: 'Restore staged',
-        description: 'The app will restart on the cloud copy.',
+        description: 'Uploading a safety copy, then restarting on the chosen copy.',
       });
       await ipc.backup.applyAndRelaunch();
     },
@@ -106,6 +112,7 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
   });
 
   const status = statusQ.data;
+  const copies = listQ.data ?? [];
 
   return (
     <Card>
@@ -120,10 +127,11 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
       </div>
       <p className="mb-4 text-sm text-stone-500">
         A compressed copy of the database goes to your website&rsquo;s cloud
-        storage on a schedule; the newest 8 are kept. It holds orders,
-        customers, menu, stock, settings and the last 90 days of audit history
-        (the local snapshots and USB copies are complete), and it is the copy
-        that survives this PC.
+        storage on a schedule. The website keeps the newest three, the first copy
+        of each day for two weeks, and every safety copy for a month, from every
+        till, and nothing can change a copy once it is stored. Each copy holds
+        orders, customers, menu, stock, settings and the last 90 days of audit
+        history; local snapshots and USB copies are complete.
       </p>
 
       {status && !ready ? (
@@ -131,9 +139,9 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
           <div className="mb-3 flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
             <div>
-              Cloud copies travel over the website connection. Enter the Website
-              URL and bridge secret under Online orders first, then come back
-              here.
+              {secretUnreadable
+                ? 'The website secret saved in this data was sealed on another PC and cannot be read here. Enter it again under Online orders, then come back.'
+                : 'Cloud copies travel over the website connection. Enter the Website URL and bridge secret under Online orders first, then come back here.'}
             </div>
           </div>
           <Button size="sm" variant="secondary" onClick={onGoToOnline}>
@@ -188,26 +196,56 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
               <div className="p-4 text-center text-xs text-red-600">
                 Could not read the cloud list: {errorMessage(listQ.error)}
               </div>
-            ) : (listQ.data ?? []).length === 0 ? (
+            ) : copies.length === 0 ? (
               <div className="p-4 text-center text-xs text-stone-400">
                 No cloud copies yet. The first one uploads within a day, or click
                 &ldquo;Copy to cloud now&rdquo;.
               </div>
             ) : (
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" data-testid="cloud-copy-table">
                 <thead className="bg-stone-50 text-left text-xs uppercase tracking-wider text-stone-500 dark:bg-stone-800/60">
                   <tr>
                     <th className="px-3 py-2">When</th>
+                    <th className="px-3 py-2">PC</th>
+                    <th className="px-3 py-2 text-right">Orders</th>
                     <th className="px-3 py-2 text-right">Size</th>
                     <th className="px-3 py-2 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100 dark:divide-stone-700">
-                  {(listQ.data ?? []).map((b) => (
+                  {copies.map((b) => (
                     <tr key={b.id}>
                       <td className="px-3 py-2">
                         <div className="font-medium">{new Date(b.createdAt).toLocaleString()}</div>
-                        <div className="font-mono text-[10px] text-stone-500">{b.fileName}</div>
+                        <div className="text-[10px] text-stone-400">
+                          {b.reason === 'before-restore'
+                            ? 'safety copy before a restore'
+                            : b.reason === 'scheduled'
+                              ? 'scheduled'
+                              : b.reason === 'manual'
+                                ? 'made by hand'
+                                : 'earlier version'}
+                          {b.appVersion ? ` · v${b.appVersion}` : ''}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="inline-flex items-center gap-1">
+                          <Monitor className="h-3 w-3 text-stone-400" />
+                          {b.deviceName ?? 'unnamed PC'}
+                        </span>
+                        {b.isThisDevice && (
+                          <span className="ml-1 rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                            this PC
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono">
+                        {b.orderCount ?? '—'}
+                        {b.lastOrderAt && (
+                          <div className="text-[10px] font-sans text-stone-400">
+                            last sale {new Date(b.lastOrderAt).toLocaleDateString()}
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-stone-500">
                         {(b.sizeBytes / 1024).toFixed(0)} KB
@@ -218,13 +256,7 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
                           className="font-semibold text-amber-600 hover:underline"
                           disabled={restoreMut.isPending}
                           onClick={() => {
-                            if (
-                              confirm(
-                                'Restore this cloud copy? Everything on this PC will be replaced by it and the app will restart. The current data is archived first.',
-                              )
-                            ) {
-                              restoreMut.mutate(b.id);
-                            }
+                            if (confirm(RESTORE_CONFIRM)) restoreMut.mutate(b.id);
                           }}
                         >
                           Restore
@@ -236,6 +268,13 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
               </table>
             )}
           </div>
+          {copies.some((b) => !b.isThisDevice) && (
+            <p className="mt-2 text-xs text-stone-400">
+              Copies from another PC restore here too. Afterwards, enter the website
+              secret again under Online orders: secrets are sealed to the PC that saved
+              them.
+            </p>
+          )}
         </>
       )}
     </Card>

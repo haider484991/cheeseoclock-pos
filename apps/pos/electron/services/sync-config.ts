@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import type { SyncMode } from '../adapters/sync/factory.js';
+import { openSecret, sealSecret } from './secret-seal.js';
 
 export const SYNC_CONFIG_KEY = 'sync.config';
 
@@ -21,11 +22,16 @@ const DEFAULT: SyncConfig = SyncConfigSchema.parse({});
 export function getSyncConfig(db: AppDatabase): SyncConfig {
   const raw = getSettingRaw(db, SYNC_CONFIG_KEY);
   const parsed = SyncConfigSchema.safeParse(raw ?? {});
-  return parsed.success ? parsed.data : DEFAULT;
+  const cfg = parsed.success ? parsed.data : DEFAULT;
+  // Sealed with the OS keychain at rest; unreadable on another PC → absent.
+  return { ...cfg, deviceSecret: openSecret(cfg.deviceSecret).value };
 }
 
 export function setSyncConfig(db: AppDatabase, config: SyncConfig): void {
-  setSetting(db, SYNC_CONFIG_KEY, config);
+  setSetting(db, SYNC_CONFIG_KEY, {
+    ...config,
+    deviceSecret: config.deviceSecret ? sealSecret(config.deviceSecret) : undefined,
+  });
 }
 
 export function isSyncReady(c: SyncConfig): { ok: boolean; missing: string[] } {
