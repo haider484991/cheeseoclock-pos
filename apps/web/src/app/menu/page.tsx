@@ -4,6 +4,7 @@ import { OrderingApp } from '@/components/OrderingApp';
 import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
 import { sql } from '@/lib/db';
 import { JsonLd, menuNode, webPageNode } from '@/lib/seo';
+import { getStoreStatus } from '@/lib/store-status';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 
 export const metadata: Metadata = {
@@ -30,14 +31,14 @@ async function loadMenu(): Promise<PublishedMenu | null> {
 }
 
 export default async function MenuPage() {
-  const menu = await loadMenu();
+  const [menu, store] = await Promise.all([loadMenu(), getStoreStatus()]);
 
   return (
     <>
       <SiteHeader />
       <main className="mx-auto max-w-6xl px-4 py-8">
         {menu ? (
-          <OrderingApp menu={menu} />
+          <OrderingApp menu={menu} acceptingOrders={store.acceptingOrders} />
         ) : (
           <div className="mx-auto max-w-md py-24 text-center">
             <div className="text-6xl">🧀</div>

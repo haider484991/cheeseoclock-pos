@@ -4,12 +4,16 @@ import { sql } from '@/lib/db';
 import { normalizePhone } from '@/lib/format';
 import { validateModifierSelection } from '@/lib/order-validation';
 import { checkOrderRate, clientIpHash } from '@/lib/rate-limit';
+import { getStoreStatus } from '@/lib/store-status';
 import type { PublishedMenu, WebOrderItem } from '@cheeseoclock/shared-types';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * Public: place a COD order.
+ *
+ * Refused unless the POS is currently accepting online orders (see
+ * lib/store-status) — an order no till is watching never gets cooked.
  *
  * The client sends posItemId + modifier ids + quantities. We re-price
  * EVERYTHING server-side against the published menu — the client's totals
@@ -48,6 +52,23 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
     const input = parsed.data;
+
+    // The till is the authority on whether anyone is listening. Checked before
+    // any pricing work and regardless of what the page showed — a customer who
+    // loaded the menu while the shop was open must not slip an order through
+    // after it closed.
+    const store = await getStoreStatus();
+    if (!store.acceptingOrders) {
+      return Response.json(
+        {
+          ok: false,
+          error: 'store_closed',
+          message:
+            'We are not taking online orders at the moment. Please order on WhatsApp or give us a call — we will take it right away.',
+        },
+        { status: 409 },
+      );
+    }
 
     const phone = normalizePhone(input.customerPhone);
     if (!phone) {

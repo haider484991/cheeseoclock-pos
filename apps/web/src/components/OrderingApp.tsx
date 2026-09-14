@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { formatCents } from '@/lib/format';
+import { WA_ORDER_URL } from '@/lib/business';
 import type {
   PublishedMenu,
   PublishedMenuItem,
@@ -39,7 +40,43 @@ function foodEmoji(name: string): string {
   return '🍽️';
 }
 
-export function OrderingApp({ menu }: { menu: PublishedMenu }) {
+export function OrderingApp({
+  menu,
+  acceptingOrders,
+}: {
+  menu: PublishedMenu;
+  acceptingOrders: boolean;
+}) {
+  // Server-rendered starting point, then kept honest client-side: a customer
+  // can sit on this page long after the shop stops taking orders. The POST is
+  // the real gate (see api/orders) — this only keeps the buttons truthful.
+  const [open, setOpen] = useState(acceptingOrders);
+  useEffect(() => {
+    let cancelled = false;
+    async function check() {
+      try {
+        const res = await fetch('/api/store-status', { cache: 'no-store' });
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: { acceptingOrders: boolean };
+        };
+        if (!cancelled && json.ok && json.data) setOpen(json.data.acceptingOrders);
+      } catch {
+        // Keep the last known state; submitting is still guarded server-side.
+      }
+    }
+    const id = setInterval(() => void check(), 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void check();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+
   const categories = useMemo(
     () =>
       [...menu.categories]
@@ -110,6 +147,8 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
         <p className="mt-1 text-sm text-smoke">
           Tap an item to add it · 💵 cash on delivery · hot in 30–45 min
         </p>
+
+        {!open && <ClosedBanner />}
 
         {/* Category rail */}
         <nav className="scrollbar-hide sticky top-16 z-30 -mx-4 mt-4 flex gap-2 overflow-x-auto bg-night/90 px-4 py-3 backdrop-blur-md sm:top-[4.5rem]">
@@ -183,6 +222,7 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
             tax={tax}
             total={total}
             setQty={setQty}
+            acceptingOrders={open}
             onCheckout={() => setCheckoutOpen(true)}
           />
         </div>
@@ -193,12 +233,19 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-night/95 p-3 backdrop-blur lg:hidden">
           <button
             onClick={() => setCheckoutOpen(true)}
-            className="flex w-full items-center justify-between rounded-full bg-cheese px-6 py-4 font-bold text-night shadow-glow-lg active:scale-[0.99]"
+            disabled={!open}
+            className="flex w-full items-center justify-between rounded-full bg-cheese px-6 py-4 font-bold text-night shadow-glow-lg active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
           >
-            <span>
-              🛒 {cartCount} item{cartCount === 1 ? '' : 's'}
-            </span>
-            <span className="font-mono tabular-nums">{formatCents(total)} →</span>
+            {open ? (
+              <>
+                <span>
+                  🛒 {cartCount} item{cartCount === 1 ? '' : 's'}
+                </span>
+                <span className="font-mono tabular-nums">{formatCents(total)} →</span>
+              </>
+            ) : (
+              <span className="w-full text-center">Online ordering is closed right now</span>
+            )}
           </button>
         </div>
       )}
@@ -222,6 +269,7 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
           tax={tax}
           total={total}
           setQty={setQty}
+          acceptingOrders={open}
           onClose={() => setCheckoutOpen(false)}
         />
       )}
@@ -231,6 +279,33 @@ export function OrderingApp({ menu }: { menu: PublishedMenu }) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Shown when the till is not accepting online orders — the shop is closed, or
+ * the POS is switched off. The menu stays browsable and WhatsApp still works,
+ * so an interested customer is redirected rather than turned away.
+ */
+function ClosedBanner() {
+  return (
+    <div className="mt-4 rounded-2xl border border-cheese/30 bg-cheese/10 p-4">
+      <p className="font-display text-xl tracking-wide text-cream">
+        WE&rsquo;RE NOT TAKING ONLINE ORDERS RIGHT NOW
+      </p>
+      <p className="mt-1 text-sm text-smoke">
+        The kitchen isn&rsquo;t accepting website orders at the moment. Browse the
+        menu, and order on WhatsApp — we reply fast.
+      </p>
+      <a
+        href={WA_ORDER_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-3 inline-block rounded-full bg-cheese px-6 py-3 font-bold text-night shadow-glow transition-transform hover:scale-105"
+      >
+        💬 Order on WhatsApp
+      </a>
+    </div>
+  );
+}
+
 function CartPanel(props: {
   cart: CartLine[];
   lineUnitPrice: (l: CartLine) => number;
@@ -238,6 +313,7 @@ function CartPanel(props: {
   tax: number;
   total: number;
   setQty: (key: string, qty: number) => void;
+  acceptingOrders: boolean;
   onCheckout: () => void;
 }) {
   const { cart } = props;
@@ -258,9 +334,12 @@ function CartPanel(props: {
           <Totals subtotal={props.subtotal} tax={props.tax} total={props.total} />
           <button
             onClick={props.onCheckout}
-            className="mt-3 w-full rounded-full bg-cheese py-3.5 font-bold text-night shadow-glow transition-all hover:bg-cheese-hot hover:shadow-glow-lg active:scale-[0.99]"
+            disabled={!props.acceptingOrders}
+            className="mt-3 w-full rounded-full bg-cheese py-3.5 font-bold text-night shadow-glow transition-all hover:bg-cheese-hot hover:shadow-glow-lg active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
           >
-            Checkout — {formatCents(props.total)}
+            {props.acceptingOrders
+              ? `Checkout — ${formatCents(props.total)}`
+              : 'Online ordering is closed'}
           </button>
         </>
       )}
@@ -470,6 +549,7 @@ function CheckoutSheet(props: {
   tax: number;
   total: number;
   setQty: (key: string, qty: number) => void;
+  acceptingOrders: boolean;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -487,6 +567,9 @@ function CheckoutSheet(props: {
     if (phone.trim().length < 10) return setError('Please enter your mobile number.');
     if (address.trim().length < 5) return setError('Please enter your delivery address.');
     if (props.cart.length === 0) return setError('Your cart is empty.');
+    if (!props.acceptingOrders) {
+      return setError('We are not taking online orders right now.');
+    }
     setSubmitting(true);
     try {
       const res = await fetch('/api/orders', {
@@ -509,12 +592,18 @@ function CheckoutSheet(props: {
         ok: boolean;
         data?: { orderId: string };
         error?: string;
+        message?: string;
       };
       if (!json.ok || !json.data) {
+        // The shop can close between loading the page and pressing the button;
+        // the server says so and we repeat it rather than a generic failure.
         setError(
-          json.error === 'menu_not_published'
-            ? 'The menu was just updated — please refresh and try again.'
-            : 'Could not place the order. Please try again or order on WhatsApp.',
+          json.error === 'store_closed'
+            ? (json.message ??
+              'We are not taking online orders at the moment. Please order on WhatsApp.')
+            : json.error === 'menu_not_published'
+              ? 'The menu was just updated — please refresh and try again.'
+              : 'Could not place the order. Please try again or order on WhatsApp.',
         );
         setSubmitting(false);
         return;
@@ -578,12 +667,31 @@ function CheckoutSheet(props: {
           </p>
         )}
 
+        {!props.acceptingOrders && (
+          <p className="mt-3 rounded-xl border border-cheese/30 bg-cheese/10 px-3 py-2 text-sm font-semibold text-cream">
+            We&rsquo;re not taking online orders right now.{' '}
+            <a
+              href={WA_ORDER_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-cheese"
+            >
+              Order on WhatsApp
+            </a>{' '}
+            instead.
+          </p>
+        )}
+
         <button
           onClick={() => void submit()}
-          disabled={submitting || props.cart.length === 0}
+          disabled={submitting || props.cart.length === 0 || !props.acceptingOrders}
           className="mt-4 w-full rounded-full bg-cheese py-4 text-lg font-bold text-night shadow-glow-lg transition-all hover:bg-cheese-hot active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {submitting ? 'Placing your order…' : `Place order — ${formatCents(props.total)}`}
+          {!props.acceptingOrders
+            ? 'Online ordering is closed'
+            : submitting
+              ? 'Placing your order…'
+              : `Place order — ${formatCents(props.total)}`}
         </button>
         <p className="mt-2 text-center text-xs text-smoke">
           By ordering you agree to pay cash on delivery. Final bill is confirmed by

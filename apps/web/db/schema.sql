@@ -11,6 +11,19 @@ CREATE TABLE IF NOT EXISTS site_menu (
   published_at  TIMESTAMPTZ NOT NULL
 );
 
+-- Whether the shop is taking online orders right now. Single row, written
+-- only by the POS bridge heartbeat (PUT /api/bridge/status) and read by the
+-- checkout. Defaults to false so a site that has never heard from a till is
+-- closed rather than collecting orders nobody is watching. src/lib/
+-- store-status.ts also creates this on demand, so an already-provisioned
+-- database picks it up without re-running db:init.
+CREATE TABLE IF NOT EXISTS store_status (
+  id               INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  accepting_orders BOOLEAN NOT NULL DEFAULT false,
+  device_id        TEXT,
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Orders placed on the website. The POS bridge polls status='new', imports
 -- each into the local SQLite (source='web'), acks with the POS order number,
 -- then pushes status updates as the order moves across the Live Orders board.

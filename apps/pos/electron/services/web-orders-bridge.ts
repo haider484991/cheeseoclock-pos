@@ -154,6 +154,12 @@ class WebOrdersBridge {
     this.timer = null;
     if (!this.db) return;
     const cfg = getWebBridgeConfig(this.db);
+    // Tell the website at once, above all when this is a switch OFF: the site
+    // should stop taking orders the moment the cashier unticks the box, not
+    // whenever the last heartbeat happens to go stale.
+    if (isWebBridgeReady(cfg).ok) {
+      void this.pushStoreStatus(cfg).catch(() => undefined);
+    }
     // The loop runs when EITHER feature needs it: online orders, or
     // scheduled cloud backups. Both require URL + secret.
     const anyFeatureOn = cfg.enabled || cfg.cloudBackupFrequency !== 'off';
@@ -198,6 +204,14 @@ class WebOrdersBridge {
     if (!isWebBridgeReady(cfg).ok) return;
     this.running = true;
     try {
+      // Best-effort and first: keeps the website's "open for orders" flag
+      // fresh. Never fatal — a website that rejects it must not stop orders
+      // already placed from being pulled in.
+      await this.pushStoreStatus(cfg).catch((e: unknown) => {
+        log.warn('Store status heartbeat failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
       if (cfg.enabled) {
         await this.pullNewOrders(cfg);
         await this.pushStatusUpdates(cfg);
@@ -764,6 +778,32 @@ class WebOrdersBridge {
           `UPDATE web_order_imports SET last_pushed_status = ?, updated_at = ? WHERE web_order_id = ?`,
         ).run(webStatus, nowIso(), row.web_order_id);
       }
+    }
+  }
+
+  // ---- store status heartbeat ---------------------------------------------
+
+  /**
+   * Tell the website whether this till is accepting online orders. Sent on
+   * every tick and immediately whenever the setting changes, because the
+   * website refuses checkout unless a recent heartbeat says yes: an order
+   * placed while nobody is polling would be paid for on delivery and never
+   * cooked. Going quiet (laptop shut, no internet) closes the site by itself
+   * once the last beat goes stale.
+   */
+  private async pushStoreStatus(cfg: WebBridgeConfig): Promise<void> {
+    const res = await this.api(cfg, '/api/bridge/status', {
+      method: 'PUT',
+      body: JSON.stringify({
+        acceptingOrders: cfg.enabled,
+        deviceId: this.deviceId,
+      }),
+    });
+    if (!res.ok) {
+      // A website deployed before this feature has no such route. Nothing to
+      // do about it here — the gate lives on the site, so a site without the
+      // route simply has no gate and keeps behaving as it did.
+      log.warn('Store status heartbeat rejected', { status: res.status });
     }
   }
 
