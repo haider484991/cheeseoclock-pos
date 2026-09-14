@@ -5,10 +5,15 @@ import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
   DEFAULT_RECEIPT_CONFIG,
+  PrintPolicySchema,
   PrinterConnectionConfigSchema,
   ReceiptBrandingSchema,
+  getKitchenPrinterConfig,
+  getPrintPolicy,
   getReceiptBranding,
   getReceiptPrinterConfig,
+  setKitchenPrinterConfig,
+  setPrintPolicy,
   setReceiptBranding,
   setReceiptPrinterConfig,
 } from '../../services/printer-config.js';
@@ -42,6 +47,8 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
       branding,
       transports: ['network', 'usb', 'bluetooth', 'serial'] as const,
       mockEnabled: true,
+      policy: getPrintPolicy(ctx.db),
+      kitchenPrinter: getKitchenPrinterConfig(ctx.db),
     });
   });
 
@@ -72,9 +79,42 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
     return ok({ ok: true } as const);
   });
 
-  defineHandler('printer:test', ctx, async () => {
+  defineHandler('printer:setPolicy', ctx, (_ctx, payload) => {
+    requireSettingsManage();
+    const parsed = PrintPolicySchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({
+        code: 'validation_failed',
+        message: parsed.error.errors.map((e) => e.message).join(', '),
+      });
+    }
+    setPrintPolicy(ctx.db, parsed.data);
+    return ok({ ok: true } as const);
+  });
+
+  defineHandler('printer:setKitchenPrinter', ctx, (_ctx, payload) => {
+    requireSettingsManage();
+    if (payload.config === null) {
+      setKitchenPrinterConfig(ctx.db, null);
+    } else {
+      const parsed = PrinterConnectionConfigSchema.safeParse(payload.config);
+      if (!parsed.success) {
+        throw new IpcGuardError({
+          code: 'validation_failed',
+          message: parsed.error.errors.map((e) => e.message).join(', '),
+        });
+      }
+      setKitchenPrinterConfig(ctx.db, parsed.data);
+    }
+    printSpooler.resetAdapter();
+    return ok({ ok: true } as const);
+  });
+
+  defineHandler('printer:test', ctx, async (_ctx, payload) => {
     requireSession();
-    const result = await printSpooler.testPrintNow();
+    const result = await printSpooler.testPrintNow(
+      payload?.station === 'kitchen' ? 'kitchen' : 'receipt',
+    );
     return ok(result);
   });
 
@@ -87,7 +127,13 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
 
   defineHandler('printer:reprint', ctx, (_ctx, payload) => {
     requireSession();
-    printSpooler.enqueueReceipt(payload.orderId, false);
+    printSpooler.reprintReceipt(payload.orderId);
+    return ok({ enqueued: true } as const);
+  });
+
+  defineHandler('printer:reprintKitchen', ctx, (_ctx, payload) => {
+    requireSession();
+    printSpooler.reprintKitchenTicket(payload.orderId);
     return ok({ enqueued: true } as const);
   });
 }

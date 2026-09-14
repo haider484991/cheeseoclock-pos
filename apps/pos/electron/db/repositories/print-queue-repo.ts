@@ -1,34 +1,58 @@
 import { v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
+import type { ReceiptCopy } from '@cheeseoclock/shared-types';
 import { nowIso } from './base.js';
 
 /**
- * Persistent print queue. See migrations/0010_print_queue.sql for schema.
+ * Persistent print queue. See migrations/0010_print_queue.sql (+ 0015 for the
+ * job kinds).
  *
  * Pure-local (not synced) — print jobs are per-device by design. The repo
  * doesn't go through writeWithSync; we just write the row + index by
  * status/next_attempt_at and let the spooler service own the worker loop.
  */
 
-export type PrintJobKind = 'receipt';
+export type PrintJobKind = 'receipt' | 'kitchen' | 'drawer';
 export type PrintJobStatus = 'pending' | 'in_flight' | 'done' | 'failed';
+
+/** Why a receipt was printed — lets the spooler tell "the bill already went out with the rider". */
+export type ReceiptJobReason = 'payment' | 'dispatch' | 'refund' | 'reprint';
+
+export interface ReceiptJobPayload {
+  kind: 'receipt';
+  orderId: string;
+  openDrawer: boolean;
+  /** Printed in this order, on one strip; the drawer (if any) opens with the first copy. */
+  copies: ReceiptCopy[];
+  reason: ReceiptJobReason;
+}
+
+export interface KitchenJobPayload {
+  kind: 'kitchen';
+  orderId: string;
+  /** Stamped REPRINT on paper so the line doesn't cook it twice. */
+  reprint: boolean;
+}
+
+/** Just the drawer pulse — money in, no paper. */
+export interface DrawerJobPayload {
+  kind: 'drawer';
+  orderId: string;
+}
+
+export type PrintJobPayload = ReceiptJobPayload | KitchenJobPayload | DrawerJobPayload;
 
 export interface PrintJobRow {
   id: string;
   jobKind: PrintJobKind;
   orderId: string | null;
-  payload: ReceiptJobPayload;
+  payload: PrintJobPayload;
   status: PrintJobStatus;
   attempts: number;
   lastError: string | null;
   nextAttemptAt: string;
   createdAt: string;
   completedAt: string | null;
-}
-
-export interface ReceiptJobPayload {
-  orderId: string;
-  openDrawer: boolean;
 }
 
 interface RawRow {
@@ -44,12 +68,40 @@ interface RawRow {
   completed_at: string | null;
 }
 
+/** Whatever is on disk: today's payloads, or a pre-0.5.7 `{ orderId, openDrawer }`. */
+interface RawPayload {
+  orderId: string;
+  openDrawer?: boolean;
+  copies?: ReceiptCopy[];
+  reason?: ReceiptJobReason;
+  reprint?: boolean;
+}
+
+function parsePayload(kind: PrintJobKind, json: string): PrintJobPayload {
+  const raw = JSON.parse(json) as RawPayload;
+  switch (kind) {
+    case 'kitchen':
+      return { kind, orderId: raw.orderId, reprint: raw.reprint === true };
+    case 'drawer':
+      return { kind, orderId: raw.orderId };
+    default:
+      // Rows queued before 0.5.7 carry only { orderId, openDrawer }.
+      return {
+        kind: 'receipt',
+        orderId: raw.orderId,
+        openDrawer: raw.openDrawer === true,
+        copies: Array.isArray(raw.copies) && raw.copies.length > 0 ? raw.copies : ['customer'],
+        reason: raw.reason ?? 'payment',
+      };
+  }
+}
+
 function rowToJob(r: RawRow): PrintJobRow {
   return {
     id: r.id,
     jobKind: r.job_kind,
     orderId: r.order_id,
-    payload: JSON.parse(r.payload_json) as ReceiptJobPayload,
+    payload: parsePayload(r.job_kind, r.payload_json),
     status: r.status,
     attempts: r.attempts,
     lastError: r.last_error,
@@ -62,19 +114,45 @@ function rowToJob(r: RawRow): PrintJobRow {
 const SELECT = `id, job_kind, order_id, payload_json, status, attempts,
                  last_error, next_attempt_at, created_at, completed_at`;
 
-export function enqueueReceiptJob(
-  db: AppDatabase,
-  payload: ReceiptJobPayload,
-): PrintJobRow {
+export function enqueuePrintJob(db: AppDatabase, payload: PrintJobPayload): PrintJobRow {
   const id = uuidv7();
   const now = nowIso();
   db.prepare(
     `INSERT INTO print_queue
        (id, job_kind, order_id, payload_json, status, attempts, next_attempt_at, created_at, updated_at)
-     VALUES (?, 'receipt', ?, ?, 'pending', 0, ?, ?, ?)`,
-  ).run(id, payload.orderId, JSON.stringify(payload), now, now, now);
+     VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)`,
+  ).run(id, payload.kind, payload.orderId, JSON.stringify(payload), now, now, now);
   const row = db.prepare(`SELECT ${SELECT} FROM print_queue WHERE id = ?`).get(id) as RawRow;
   return rowToJob(row);
+}
+
+/**
+ * Has this order already had a job of this kind queued or printed? Jobs that
+ * failed for good don't count: once the printer is fixed the order should get
+ * its paper after all.
+ */
+export function hasPrintJob(
+  db: AppDatabase,
+  orderId: string,
+  kind: PrintJobKind,
+  reason?: ReceiptJobReason,
+): boolean {
+  const row =
+    reason === undefined
+      ? db
+          .prepare(
+            `SELECT 1 AS hit FROM print_queue
+              WHERE order_id = ? AND job_kind = ? AND status != 'failed' LIMIT 1`,
+          )
+          .get(orderId, kind)
+      : db
+          .prepare(
+            `SELECT 1 AS hit FROM print_queue
+              WHERE order_id = ? AND job_kind = ? AND status != 'failed'
+                AND json_extract(payload_json, '$.reason') = ? LIMIT 1`,
+          )
+          .get(orderId, kind, reason);
+  return row !== undefined;
 }
 
 /**

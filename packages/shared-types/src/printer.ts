@@ -21,6 +21,35 @@ export interface PrinterConnectionConfig {
   width?: PrinterWidth;
 }
 
+/** Which copy of a receipt is being printed. The shop copy carries a signature line. */
+export type ReceiptCopy = 'customer' | 'shop';
+
+/** When a second, SHOP COPY receipt prints alongside the customer's. */
+export type ShopCopyRule = 'never' | 'delivery' | 'always';
+
+/**
+ * What prints automatically, and when. Set under Settings → Printer.
+ *
+ *  - Kitchen ticket: no prices; printed once, the moment an order is sent to
+ *    the kitchen (Send to kitchen, Pay now at the counter, or a website order
+ *    arriving). Goes to the kitchen printer if one is set up, otherwise the
+ *    receipt printer.
+ *  - Customer receipt: printed when money is taken — Pay now, or a
+ *    cash-on-delivery order marked served / delivered with its payment. A
+ *    cash payment pops the drawer.
+ *  - Delivery bill: for delivery orders, the bill prints when the rider is
+ *    assigned so it travels with the food, showing the amount to collect (or
+ *    PAID). When the rider brings the cash back, only the drawer opens — the
+ *    customer already has the receipt.
+ *  - Shop copy: a second copy marked SHOP COPY with a "Received by" line,
+ *    printed with every delivery bill (default), every receipt, or never.
+ */
+export interface PrintPolicy {
+  kitchenTicket: boolean;
+  deliveryBillOnDispatch: boolean;
+  shopCopy: ShopCopyRule;
+}
+
 export interface PrinterAssignment {
   id: string;
   station: PrinterStation;

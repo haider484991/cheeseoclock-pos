@@ -247,9 +247,11 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found after tender' });
-    // Fire-and-forget receipt print — open drawer if there's any cash payment.
-    const openDrawer = payload.payments.some((p) => p.method === 'cash');
-    printSpooler.enqueueReceipt(payload.orderId, openDrawer);
+    // Paper per Settings → Printer: a kitchen ticket (the kitchen still has to
+    // cook a prepaid order) and the receipt; cash pops the drawer.
+    printSpooler.onOrderEvent(payload.orderId, 'paid', {
+      cash: payload.payments.some((p) => p.method === 'cash'),
+    });
 
     // Decrement ingredient stock based on recipes. Idempotent — guards against
     // double-decrement if a tender is somehow re-issued. Failures don't roll back the sale.
@@ -311,6 +313,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const next = getOrderSnapshot(ctx.db, payload.orderId);
     if (!next) throw new IpcGuardError({ code: 'not_found', message: 'Order vanished' });
+    // Kitchen ticket (once per order) per Settings → Printer.
+    printSpooler.onOrderEvent(payload.orderId, 'sent_to_kitchen');
     return ok(next);
   });
 
@@ -364,6 +368,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // The food is leaving: the bill goes with it (per Settings → Printer).
+    printSpooler.onOrderEvent(payload.orderId, 'dispatched');
     return ok(snap);
   });
 
@@ -401,8 +407,9 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // Receipt + FBR + inventory decrement when a payment was just captured
     // (takeaway COD / dine-in collect-later).
     if (payload.payment) {
-      const openDrawer = payload.payment.method === 'cash';
-      printSpooler.enqueueReceipt(payload.orderId, openDrawer);
+      printSpooler.onOrderEvent(payload.orderId, 'payment_captured', {
+        cash: payload.payment.method === 'cash',
+      });
       try {
         const cfg = getFbrConfig(ctx.db);
         const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
@@ -441,14 +448,13 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
-    // Fire-and-forget receipt print. When a COD payment was just captured we
-    // also pop the drawer (cash on board). For pre-paid orders this is a
-    // plain delivery confirmation reprint.
-    const openDrawer = payload.payment?.method === 'cash';
-    printSpooler.enqueueReceipt(payload.orderId, openDrawer);
-    // FBR + inventory decrement only fire when a payment was just captured
-    // (the tender path already covers prepay).
+    // Paper + drawer, FBR and inventory decrement only when a payment was
+    // just captured (the tender path already covers prepay). A pre-paid
+    // delivery prints nothing here: its bill left with the rider.
     if (payload.payment) {
+      printSpooler.onOrderEvent(payload.orderId, 'payment_captured', {
+        cash: payload.payment.method === 'cash',
+      });
       try {
         const cfg = getFbrConfig(ctx.db);
         const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
@@ -542,9 +548,9 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
-    // Pop the drawer + reprint when there were cash payments to refund.
+    // Refund receipt; the drawer pops when cash is going back out.
     const hadCash = snap.payments.some((p) => p.method === 'cash');
-    printSpooler.enqueueReceipt(payload.orderId, hadCash);
+    printSpooler.onOrderEvent(payload.orderId, 'refunded', { cash: hadCash });
     return ok(snap);
   });
 }

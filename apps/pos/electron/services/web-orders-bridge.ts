@@ -721,8 +721,9 @@ class WebOrdersBridge {
         return shell;
       })();
 
-      // 5. Kitchen copy so the team sees a paper ticket for web orders too.
-      printSpooler.enqueueReceipt(order.id, false);
+      // 5. Kitchen ticket (per Settings → Printer) so the team sees paper for
+      //    web orders too; the bill prints when the rider is assigned.
+      printSpooler.onOrderEvent(order.id, 'sent_to_kitchen');
       this.importedTotal += 1;
 
       // 6. Ack to the site (flips 'new' → 'accepted').

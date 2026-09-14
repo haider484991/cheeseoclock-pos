@@ -217,9 +217,16 @@ export const ipc = {
       unwrap(window.api.printer.setConfig(input)),
     setBranding: (input: IpcRequest<'printer:setBranding'>) =>
       unwrap(window.api.printer.setBranding(input)),
-    test: () => unwrap(window.api.printer.test()),
+    setPolicy: (input: IpcRequest<'printer:setPolicy'>) =>
+      unwrap(window.api.printer.setPolicy(input)),
+    setKitchenPrinter: (input: IpcRequest<'printer:setKitchenPrinter'>) =>
+      unwrap(window.api.printer.setKitchenPrinter(input)),
+    test: (station?: 'receipt' | 'kitchen') =>
+      unwrap(window.api.printer.test(station ? { station } : undefined)),
     listSystemPrinters: () => unwrap(window.api.printer.listSystemPrinters()),
     reprint: (orderId: string) => unwrap(window.api.printer.reprint({ orderId })),
+    reprintKitchen: (orderId: string) =>
+      unwrap(window.api.printer.reprintKitchen({ orderId })),
   },
   fbr: {
     getConfig: () => unwrap(window.api.fbr.getConfig()),

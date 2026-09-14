@@ -160,6 +160,16 @@ export function OrdersBoardPage() {
         variant: 'error',
       }),
   });
+  const reprintKitchen = useMutation({
+    mutationFn: (orderId: string) => ipc.printer.reprintKitchen(orderId),
+    onSuccess: () => toast({ title: 'Kitchen ticket sent to printer' }),
+    onError: (e) =>
+      toast({
+        title: 'Reprint failed',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      }),
+  });
 
   const grouped = useMemo(() => {
     const out: Record<ColumnKey, OrderSnapshot[]> = {
@@ -260,6 +270,7 @@ export function OrdersBoardPage() {
                       onMarkDelivered={() => setDeliverFor(snap)}
                       onMarkServedDineIn={() => markServedDineIn.mutate(snap.order.id)}
                       onReprint={() => reprint.mutate(snap.order.id)}
+                      onReprintKitchen={() => reprintKitchen.mutate(snap.order.id)}
                       onCancel={() => setVoidFor(snap)}
                     />
                   ))
@@ -317,6 +328,7 @@ interface OrderCardProps {
   onMarkDelivered: () => void;
   onMarkServedDineIn: () => void;
   onReprint: () => void;
+  onReprintKitchen: () => void;
   onCancel: () => void;
 }
 
@@ -329,6 +341,7 @@ function OrderCard({
   onMarkDelivered,
   onMarkServedDineIn,
   onReprint,
+  onReprintKitchen,
   onCancel,
 }: OrderCardProps) {
   const { order } = snap;
@@ -434,6 +447,15 @@ function OrderCard({
         />
         {/* Secondary icons sit below, right-aligned, smaller, ghost. */}
         <div className="flex justify-end gap-1">
+          <button
+            type="button"
+            onClick={onReprintKitchen}
+            aria-label="Reprint kitchen ticket"
+            title="Reprint kitchen ticket"
+            className="rounded-md p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-700 dark:hover:text-stone-200"
+          >
+            <ChefHat className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={onReprint}

@@ -24,7 +24,11 @@ export function AppShell() {
         title: 'Print failed',
         description:
           payload.error?.message ??
-          `Could not print ${payload.jobKind === 'receipt' ? 'receipt' : 'job'}`,
+          (payload.jobKind === 'kitchen'
+            ? 'Could not print kitchen ticket'
+            : payload.jobKind === 'drawer'
+              ? 'Could not open the cash drawer'
+              : 'Could not print receipt'),
         variant: 'error',
       });
     });

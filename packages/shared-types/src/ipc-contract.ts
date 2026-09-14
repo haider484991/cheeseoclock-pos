@@ -28,6 +28,7 @@ import type {
 import type { Shift, ShiftSummary } from './shift.js';
 import type {
   PrinterConnectionConfig,
+  PrintPolicy,
   PrintResult,
   PrinterTransport,
   SystemPrinterInfo,
@@ -660,7 +661,19 @@ export interface IpcContract {
       };
       transports: PrinterTransport[];
       mockEnabled: boolean;
+      /** What prints automatically, and when. */
+      policy: PrintPolicy;
+      /** Separate kitchen printer, or null when tickets share the receipt printer. */
+      kitchenPrinter: PrinterConnectionConfig | null;
     }>;
+  };
+  'printer:setPolicy': {
+    request: PrintPolicy;
+    response: ApiResult<{ ok: true }>;
+  };
+  'printer:setKitchenPrinter': {
+    request: { config: PrinterConnectionConfig | null };
+    response: ApiResult<{ ok: true }>;
   };
   'printer:setConfig': {
     request: {
@@ -679,8 +692,9 @@ export interface IpcContract {
     };
     response: ApiResult<{ ok: true }>;
   };
+  /** Test page on the receipt printer, or on the kitchen printer when asked. */
   'printer:test': {
-    request: undefined;
+    request: { station?: 'receipt' | 'kitchen' } | undefined;
     response: ApiResult<PrintResult>;
   };
   /**
@@ -693,6 +707,11 @@ export interface IpcContract {
     response: ApiResult<{ printers: SystemPrinterInfo[]; supported: boolean }>;
   };
   'printer:reprint': {
+    request: { orderId: string };
+    response: ApiResult<{ enqueued: true }>;
+  };
+  /** Kitchen ticket again, stamped REPRINT. */
+  'printer:reprintKitchen': {
     request: { orderId: string };
     response: ApiResult<{ enqueued: true }>;
   };

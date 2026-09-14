@@ -53,5 +53,9 @@ export interface PrinterAdapterFactory {
 export { EscPosBuilder, wrap, qrCode, toPrinterAscii, LINES_BEFORE_CUT } from './escpos.js';
 export { decodeEscPos, escPosToText, CUT_MARKER, QR_MARKER } from './escpos-decode.js';
 export type { DecodedLine } from './escpos-decode.js';
-export { renderReceipt } from './receipt-renderer.js';
-export type { RenderReceiptOpts, ReceiptBranding } from './receipt-renderer.js';
+export { renderReceipt, renderKitchenTicket, renderDrawerKick } from './receipt-renderer.js';
+export type {
+  RenderReceiptOpts,
+  RenderKitchenTicketOpts,
+  ReceiptBranding,
+} from './receipt-renderer.js';

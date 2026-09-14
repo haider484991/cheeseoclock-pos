@@ -173,10 +173,10 @@ export function PrinterSettings() {
         <h2 className="text-lg font-semibold">Printer</h2>
       </div>
       <p className="mb-4 text-sm text-stone-500">
-        Receipts, kitchen tickets and the cash drawer all go through this one printer. A USB printer
-        works as soon as Windows shows it under Printers &amp; scanners; most Wi-Fi and LAN thermal
-        printers work with the Wi-Fi / LAN option on port 9100. Bluetooth printers are not supported
-        yet.
+        Receipts and the cash drawer go through this printer — and kitchen tickets too, unless you
+        set up a separate kitchen printer below. A USB printer works as soon as Windows shows it
+        under Printers &amp; scanners; most Wi-Fi and LAN thermal printers work with the Wi-Fi / LAN
+        option on port 9100. Bluetooth printers are not supported yet.
       </p>
 
       <section className="space-y-4">

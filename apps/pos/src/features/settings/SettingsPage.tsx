@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { PrinterSettings } from './PrinterSettings';
+import { PrintingRulesSettings } from './PrintingRulesSettings';
+import { KitchenPrinterSettings } from './KitchenPrinterSettings';
 import { BrandingSettings } from './BrandingSettings';
 import { FbrSettings } from './FbrSettings';
 import { SyncSettings } from './SyncSettings';
@@ -123,7 +125,13 @@ export function SettingsPage() {
 
       <div role="tabpanel" className="space-y-6">
         {tab === 'store' && <BrandingSettings />}
-        {tab === 'printer' && <PrinterSettings />}
+        {tab === 'printer' && (
+          <>
+            <PrinterSettings />
+            <PrintingRulesSettings />
+            <KitchenPrinterSettings />
+          </>
+        )}
         {tab === 'online' && <WebsiteSettings />}
         {tab === 'backups' && (
           <>

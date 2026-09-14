@@ -32,7 +32,7 @@
  *           [FBR QR placeholder]
  */
 
-import type { OrderSnapshot, PrinterWidth } from '@cheeseoclock/shared-types';
+import type { OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode } from './escpos.js';
 
 export interface ReceiptBranding {
@@ -55,6 +55,12 @@ export interface RenderReceiptOpts {
     irn: string;
     qrPayload?: string | null;
   };
+  /**
+   * 'shop' prints the same receipt with a SHOP COPY banner and a "Received by"
+   * signature line, and leaves out the fiscal QR (the customer's copy carries
+   * it). Default 'customer'.
+   */
+  copy?: ReceiptCopy;
 }
 
 const MODE_LABEL: Record<OrderSnapshot['order']['mode'], string> = {
@@ -92,6 +98,12 @@ export function renderReceipt(
   if (opts.branding.phoneLine) b.wrappedText(opts.branding.phoneLine);
   b.newline();
 
+  const shopCopy = opts.copy === 'shop';
+  if (shopCopy) {
+    b.bold(true).doubleHeight(true).text('SHOP COPY').newline();
+    b.bold(false).doubleHeight(false).newline();
+  }
+
   // Order metadata block
   b.align('left');
   const orderTopRight = tableLabel
@@ -113,6 +125,9 @@ export function renderReceipt(
     for (const ln of wrap(snapshot.deliveryAddress, width - 2)) {
       b.text(`  ${ln}`).newline();
     }
+  }
+  if (snapshot.rider) {
+    b.line(`Rider: ${snapshot.rider.name}`, snapshot.rider.phone);
   }
   b.rule();
 
@@ -173,15 +188,41 @@ export function renderReceipt(
     b.line('Tendered', formatCentsForReceipt(cash.tenderedCents));
     b.line('Change', formatCentsForReceipt(cash.tenderedCents - order.totalCents));
   }
+
+  // Where the money stands. A bill that goes out with a delivery rider is
+  // printed before any payment, so it must say what to collect; a settled
+  // order says PAID so nobody asks twice.
+  const settled = order.status === 'void' || order.status === 'refunded';
+  if (!settled) {
+    const paidCents = payments.reduce((sum, p) => sum + p.amountCents, 0);
+    const dueCents = order.totalCents - paidCents;
+    if (dueCents > 0) {
+      b.bold(true).doubleHeight(true).line('TO PAY', `Rs ${formatCentsForReceipt(dueCents)}`);
+      b.bold(false).doubleHeight(false);
+    } else if (payments.length > 0) {
+      b.bold(true).text('PAID').newline().bold(false);
+    }
+  }
   b.newline();
+
+  if (shopCopy) {
+    // Room for the rider or customer to sign; the shop keeps this copy.
+    b.text(`Received by: ${'_'.repeat(Math.max(8, width - 13))}`).newline();
+    b.newline();
+  }
 
   // Footer
   b.align('center');
-  b.wrappedText(opts.branding.footerLine ?? 'Thank you — visit us again!');
-  b.newline();
+  if (!shopCopy) {
+    b.wrappedText(opts.branding.footerLine ?? 'Thank you — visit us again!');
+    b.newline();
+  }
 
   // FBR fiscal block (shown if the worker has resolved an IRN for this order).
-  if (opts.fbr?.irn) {
+  // The shop copy skips it: one fiscal QR per sale, on the customer's copy.
+  if (shopCopy) {
+    // nothing
+  } else if (opts.fbr?.irn) {
     b.rule();
     b.bold(true).text('FBR Digital Invoice').newline().bold(false);
     b.text(`IRN: ${opts.fbr.irn}`).newline();
@@ -199,7 +240,129 @@ export function renderReceipt(
   return b.build();
 }
 
+export interface RenderKitchenTicketOpts {
+  width?: PrinterWidth;
+  /** Cut paper after printing — default true. */
+  cutPaper?: boolean;
+  /** Stamps the ticket REPRINT so the kitchen doesn't cook the order twice. */
+  reprint?: boolean;
+  /** Clock for the "printed at" time — injectable for tests. */
+  now?: Date;
+}
+
+const MODE_SHOUT: Record<OrderSnapshot['order']['mode'], string> = {
+  dine_in: 'DINE-IN',
+  takeaway: 'TAKEAWAY',
+  delivery: 'DELIVERY',
+  online: 'ONLINE',
+  foodpanda: 'FOODPANDA',
+};
+
+/**
+ * The kitchen's copy: what to cook, big enough to read from the pass, and
+ * nothing about money. Order number and mode in double size, one double-height
+ * row per item with its modifiers and notes beneath, then any order notes and
+ * — for deliveries — the address, so the bag can be matched to its rider.
+ *
+ * Layout (80mm / 48 cols):
+ *
+ *                    KITCHEN
+ *                     #0042
+ *                    DELIVERY
+ *      14/09 19:35                     Ali Akbar
+ *      Customer: Hamza              0300 9367865
+ *      ----------------------------------------
+ *      2 x Chicken Tikka Pizza Large (15")
+ *          + Extra Cheese
+ *          + No onions
+ *          ** Extra crispy please
+ *      1 x Coke 500ml
+ *      ----------------------------------------
+ *      Deliver to:
+ *        House 12, Street 7, ...
+ */
+export function renderKitchenTicket(
+  snapshot: OrderSnapshot,
+  opts: RenderKitchenTicketOpts = {},
+): Uint8Array {
+  const width: PrinterWidth = opts.width ?? 48;
+  const half = width / 2; // double-size glyphs take two columns each
+  const b = new EscPosBuilder(width);
+  const { order, items } = snapshot;
+
+  b.align('center');
+  b.bold(true).doubleSize(true).wrappedText('KITCHEN', half);
+  if (opts.reprint) {
+    b.doubleSize(false).doubleHeight(true).wrappedText('* REPRINT *', width);
+  }
+  const short = order.orderNumber.split('-').pop() ?? order.orderNumber;
+  b.doubleSize(true).wrappedText(`#${short}`, half);
+  b.doubleSize(false).doubleHeight(true).wrappedText(MODE_SHOUT[order.mode], width);
+  b.doubleHeight(false).bold(false);
+
+  b.align('left');
+  const when = opts.now ?? new Date();
+  b.line(formatTicketTime(when), snapshot.cashierName);
+  if (snapshot.tableLabel) b.line(`Table: ${snapshot.tableLabel}`);
+  if (snapshot.customerName || snapshot.customerPhone) {
+    b.line(`Customer: ${snapshot.customerName ?? ''}`, snapshot.customerPhone ?? '');
+  }
+  b.rule();
+
+  for (const it of items) {
+    b.bold(true).doubleHeight(true);
+    b.wrappedText(`${it.quantity} x ${it.menuItemName}`, width);
+    b.bold(false).doubleHeight(false);
+    for (const mod of it.modifiers) {
+      for (const ln of wrap(`+ ${mod.modifierName}`, width - 4)) {
+        b.text(`    ${ln}`).newline();
+      }
+    }
+    if (it.notes) {
+      b.bold(true);
+      for (const ln of wrap(`** ${it.notes}`, width - 4)) {
+        b.text(`    ${ln}`).newline();
+      }
+      b.bold(false);
+    }
+  }
+  b.rule();
+
+  if (order.notes) {
+    b.bold(true);
+    b.wrappedText(`Note: ${order.notes}`, width);
+    b.bold(false);
+  }
+  if (snapshot.deliveryAddress) {
+    b.text('Deliver to:').newline();
+    for (const ln of wrap(snapshot.deliveryAddress, width - 2)) {
+      b.text(`  ${ln}`).newline();
+    }
+  }
+  b.newline();
+
+  if (opts.cutPaper !== false) b.cut(true);
+  return b.build();
+}
+
+/**
+ * Just the cash-drawer pulse — for taking money in when no paper is wanted,
+ * e.g. a rider handing over the cash for an order whose bill already left
+ * with the food.
+ */
+export function renderDrawerKick(): Uint8Array {
+  return new EscPosBuilder().openDrawer().build();
+}
+
 // Helpers ---------------------------------------------------------------------
+
+function formatTicketTime(d: Date): string {
+  const day = String(d.getDate()).padStart(2, '0');
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${day}/${m} ${hh}:${mm}`;
+}
 
 /** Format cents into "1,234.56" with thousands separators, no currency symbol. */
 function formatCentsForReceipt(cents: number): string {

@@ -2,8 +2,11 @@ import { z } from 'zod';
 import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import type { PrinterConnectionConfig } from '@cheeseoclock/printer-core';
+import type { PrintPolicy } from '@cheeseoclock/shared-types';
 
 export const PRINTER_RECEIPT_KEY = 'printer.receipt';
+export const PRINTER_KITCHEN_KEY = 'printer.kitchen';
+export const PRINT_POLICY_KEY = 'printer.policy';
 export const BRANDING_KEY = 'receipt.branding';
 
 const TransportSchema = z.enum(['usb', 'network', 'bluetooth', 'serial']);
@@ -92,3 +95,38 @@ export const DEFAULT_RECEIPT_CONFIG: PrinterConnectionConfig = {
   network: { host: 'mock', port: 9100 },
   width: 48,
 };
+
+/**
+ * A second printer for kitchen tickets — a LAN or USB printer at the pass.
+ * Unset (null) means kitchen tickets come out of the receipt printer.
+ */
+export function getKitchenPrinterConfig(db: AppDatabase): PrinterConnectionConfig | null {
+  const raw = getSettingRaw(db, PRINTER_KITCHEN_KEY);
+  if (!raw) return null;
+  const parsed = PrinterConnectionConfigSchema.safeParse(raw);
+  return parsed.success ? (parsed.data as PrinterConnectionConfig) : null;
+}
+
+export function setKitchenPrinterConfig(
+  db: AppDatabase,
+  config: PrinterConnectionConfig | null,
+): void {
+  setSetting(db, PRINTER_KITCHEN_KEY, config);
+}
+
+/** What prints automatically, and when — see PrintPolicy in shared-types. */
+export const PrintPolicySchema = z.object({
+  kitchenTicket: z.boolean().default(true),
+  deliveryBillOnDispatch: z.boolean().default(true),
+  shopCopy: z.enum(['never', 'delivery', 'always']).default('delivery'),
+});
+
+export function getPrintPolicy(db: AppDatabase): PrintPolicy {
+  const raw = getSettingRaw(db, PRINT_POLICY_KEY);
+  const parsed = PrintPolicySchema.safeParse(raw ?? {});
+  return parsed.success ? parsed.data : PrintPolicySchema.parse({});
+}
+
+export function setPrintPolicy(db: AppDatabase, policy: PrintPolicy): void {
+  setSetting(db, PRINT_POLICY_KEY, PrintPolicySchema.parse(policy));
+}
