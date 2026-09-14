@@ -1,13 +1,19 @@
 name: Release
 
-# Push a tag like `v0.1.1` to trigger an automated build + GitHub Release.
-# The release is initially a draft — review it and click "Publish release"
-# to make installed apps start auto-updating.
+# Two ways to cut a release; both build the installer and publish a GitHub
+# Release that installed apps pick up within ~4 hours:
+#
+#   1. Push a tag like `v0.4.9`.
+#   2. Actions → Release → "Run workflow" on `main`. The run tags the commit it
+#      checks out as `v<version from apps/pos/package.json>` and pushes that
+#      tag itself, then continues exactly like (1). Use this when you can't
+#      push tags from where you are.
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write   # required to create a GitHub Release
@@ -18,6 +24,33 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Tag this commit as v<version> (manual runs only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          # PowerShell 7.4+ turns a non-zero native exit into a terminating error
+          # under the runner's $ErrorActionPreference = 'stop'; probe with commands
+          # that exit 0 either way and check exit codes by hand.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $version = (Get-Content apps/pos/package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          git fetch --tags --quiet origin
+          $existing = @(git tag --list $tag)
+          if ($existing.Count -gt 0) {
+            $sha = (git rev-list -n 1 $tag).Trim()
+            if ($sha -ne $env:GITHUB_SHA) {
+              Write-Error "Tag $tag already exists at $sha, not at $env:GITHUB_SHA. Bump the version in apps/pos/package.json first."
+              exit 1
+            }
+            Write-Host "Tag $tag already points at this commit."
+            exit 0
+          }
+          git tag $tag $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin $tag
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Tagged $env:GITHUB_SHA as $tag"
 
       - uses: pnpm/action-setup@v4
         with:
