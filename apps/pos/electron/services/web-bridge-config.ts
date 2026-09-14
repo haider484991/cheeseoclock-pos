@@ -18,8 +18,15 @@ export const WebBridgeConfigSchema = z.object({
     .url()
     .transform((u) => u.replace(/\/+$/, ''))
     .optional(),
-  /** Must equal BRIDGE_SECRET on the Vercel deployment. */
-  bridgeSecret: z.string().optional(),
+  /**
+   * Must equal BRIDGE_SECRET on the Vercel deployment. Trimmed: a stray space
+   * pasted onto either end makes the bearer token a different length and the
+   * website answers every call with 401.
+   */
+  bridgeSecret: z
+    .string()
+    .transform((s) => s.trim())
+    .optional(),
   pollIntervalMs: z.number().int().min(5_000).default(20_000),
   /**
    * Scheduled upload of the (gzipped) SQLite database to the cloud.

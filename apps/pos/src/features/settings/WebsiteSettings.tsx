@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card } from '@cheeseoclock/ui';
-import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 
@@ -78,18 +78,30 @@ export function WebsiteSettings() {
   });
 
   const status = statusQ.data;
+  // "ready" only means a URL and secret are filled in — not that the website
+  // accepts them. A 401 means the secret here does not match BRIDGE_SECRET on
+  // the site, so the badge must never claim "Connected" while calls are failing.
+  const online = !!status?.enabled && !!status.ready;
+  const lastError = status?.lastError ?? null;
+  const authRejected = !!lastError && /\b401\b|unauthor/i.test(lastError);
 
   return (
     <Card>
       <div className="mb-4 flex items-center gap-2">
         <Globe className="h-5 w-5" />
         <h2 className="text-lg font-semibold">Online orders</h2>
-        {status?.enabled && status.ready && (
-          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:ring-emerald-800">
-            <CheckCircle2 className="h-3 w-3" />
-            Connected
-          </span>
-        )}
+        {online &&
+          (lastError ? (
+            <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-200 dark:bg-red-950 dark:text-red-200 dark:ring-red-800">
+              <XCircle className="h-3 w-3" />
+              {authRejected ? 'Secret rejected' : 'Not connecting'}
+            </span>
+          ) : (
+            <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:ring-emerald-800">
+              <CheckCircle2 className="h-3 w-3" />
+              Connected
+            </span>
+          ))}
       </div>
 
       <p className="mb-4 text-sm text-stone-500">
@@ -211,10 +223,21 @@ export function WebsiteSettings() {
       )}
 
       {status?.lastError && (
-        <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-200">
-          <AlertTriangle className="mr-1 inline h-3 w-3" />
-          Last check failed: {status.lastError}
-        </p>
+        <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-200">
+          <p>
+            <AlertTriangle className="mr-1 inline h-3 w-3" />
+            Last check failed: {status.lastError}
+          </p>
+          {authRejected && (
+            <p className="mt-1.5 border-t border-red-200 pt-1.5 dark:border-red-900">
+              The website rejected this secret (401). It must be the{' '}
+              <span className="font-semibold">exact same value</span> as{' '}
+              <code className="font-mono">BRIDGE_SECRET</code> in your website host (Vercel →
+              Project → Settings → Environment Variables), and the site must be redeployed after
+              you set or change it. Re-enter it above and Save if unsure.
+            </p>
+          )}
+        </div>
       )}
 
       {status?.lastImportError && (
