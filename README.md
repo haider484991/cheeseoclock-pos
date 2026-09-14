@@ -66,7 +66,9 @@ The dev seed populates a sample pizza menu, ingredients, suppliers, and tables s
 pnpm pos:build              # produces apps/pos/release/CheeseOclock POS-x.y.z-x64.exe
 ```
 
-The unsigned installer is ~84 MB. Windows SmartScreen will show "unrecognized app" the first time — click **More info → Run anyway**. The warning goes away once you have a code-signing cert (see below).
+The unsigned installer is ~88 MB. Windows SmartScreen will show "unrecognized app" the first time — click **More info → Run anyway**. The warning goes away once you have a code-signing cert (see below).
+
+The build bundles `vcruntime140.dll` next to the argon2 native binding (`scripts/after-pack.mjs`), so a brand-new Windows PC without the Visual C++ redistributable can start the app. The hook takes the DLL from Visual Studio / Build Tools (or System32) and fails the build if it can't find one.
 
 To regenerate the app icon after editing `apps/pos/build/icon.svg`:
 

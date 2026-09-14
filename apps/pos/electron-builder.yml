@@ -8,6 +8,10 @@ asar: true
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/@node-rs/argon2-*/**"
+# Ships vcruntime140.dll next to the argon2 binding so a fresh Windows PC
+# (no Visual C++ redistributable) can start the app. Fails the build if the
+# DLL can't be found or the layout above changes. See the script for the why.
+afterPack: ./scripts/after-pack.mjs
 files:
   - out/**
   - package.json
