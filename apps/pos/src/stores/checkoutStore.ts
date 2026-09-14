@@ -23,6 +23,11 @@ interface CheckoutState {
    * already in hand. Resolves with the draft, or null if there was none.
    */
   resumeDraft: () => Promise<OrderSnapshot | null>;
+  /**
+   * Drop the current open draft entirely — nothing has been sent or charged,
+   * so no approval is needed. Clears the screen for the next order.
+   */
+  discardDraft: () => Promise<void>;
   /** Begin a new order with the current mode/table. Idempotent if one exists. */
   ensureOrder: () => Promise<OrderSnapshot>;
   addItem: (menuItemId: string, quantity?: number, modifierIds?: string[]) => Promise<void>;
@@ -90,6 +95,18 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => ({
     const snap = await ipc.orders.resumeDraft();
     if (snap) set({ snapshot: snap, mode: snap.order.mode, tableId: snap.order.tableId });
     return snap;
+  },
+
+  async discardDraft() {
+    const snap = get().snapshot;
+    if (!snap) return;
+    set({ busy: true });
+    try {
+      await ipc.orders.discardDraft(snap.order.id);
+    } finally {
+      set({ busy: false });
+    }
+    get().reset();
   },
 
   async ensureOrder() {

@@ -475,6 +475,48 @@ export function discardEmptyDrafts(db: AppDatabase, actor: Actor & { userId: str
   return count;
 }
 
+/**
+ * Drop an open till draft entirely. Nothing has been sent to the kitchen or
+ * charged, so this is a cart being abandoned, not a void — which is why it
+ * needs no manager PIN. Anything past 'open' is refused: that is a void or a
+ * refund, with their approvals. Recorded as a soft delete with the full order
+ * image in the audit row.
+ */
+export function discardDraft(
+  db: AppDatabase,
+  orderId: string,
+  actor: Actor & { userId: string },
+): void {
+  const tx = db.transaction(() => {
+    const before = getOrderSnapshot(db, orderId);
+    if (!before) throw new Error('Order not found');
+    if (before.order.status !== 'open') {
+      throw new Error(`Cannot discard a ${before.order.status} order`);
+    }
+    if (before.order.source !== 'pos') throw new Error('Only till orders can be discarded');
+    if (before.payments.length > 0) throw new Error('Order has payments; refund it instead');
+    const now = nowIso();
+    db.prepare(
+      `UPDATE orders SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).run(now, now, orderId);
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      op: 'delete',
+      payload: { id: orderId, deletedAt: now },
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      action: 'discard_draft',
+      actorUserId: actor.userId,
+      before,
+      after: null,
+    });
+  });
+  tx();
+}
+
 // -----------------------------------------------------------------------------
 // Add / remove / update items
 // -----------------------------------------------------------------------------

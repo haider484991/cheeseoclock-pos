@@ -40,7 +40,7 @@ export function CheckoutPage() {
         if (!snap) return;
         toast({
           title: 'Unfinished order restored',
-          description: `Order #${snap.order.orderNumber} was still open from before — carry on, or remove its items to start fresh.`,
+          description: `Order #${snap.order.orderNumber} was still open from before — carry on, or discard it with the ✕ beside the order number.`,
         });
       })
       .catch(() => {

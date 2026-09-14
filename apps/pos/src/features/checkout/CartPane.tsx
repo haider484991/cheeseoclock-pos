@@ -13,6 +13,7 @@ import {
   ChefHat,
 } from 'lucide-react';
 import { useTenderGate } from './useTenderGate';
+import { useToast } from '../../components/toast/ToastProvider';
 
 interface Props {
   onPay: () => void;
@@ -27,7 +28,9 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   const updateItemQty = useCheckoutStore((s) => s.updateItemQty);
   const removeItem = useCheckoutStore((s) => s.removeItem);
   const clearDiscount = useCheckoutStore((s) => s.clearDiscount);
+  const discardDraft = useCheckoutStore((s) => s.discardDraft);
   const gate = useTenderGate();
+  const { toast } = useToast();
   // COD is the default for delivery + takeaway in Pakistani retail. Show
   // "Send to kitchen" as the primary action; keep "Pay now" available for
   // the prepay path (counter / pre-paid online).
@@ -40,6 +43,30 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   const discountCents = order?.discountCents ?? 0;
   const taxCents = order?.taxCents ?? 0;
 
+  async function handleDiscard() {
+    if (!order) return;
+    const lines =
+      items.length > 0
+        ? ` Its ${items.length} item${items.length === 1 ? '' : 's'} will be dropped.`
+        : '';
+    if (
+      !confirm(
+        `Discard order #${order.orderNumber}?${lines} Nothing has been sent to the kitchen or charged.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await discardDraft();
+    } catch (e) {
+      toast({
+        title: 'Could not discard order',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      });
+    }
+  }
+
   return (
     <aside className="flex w-[26rem] flex-col border-l border-stone-200/70 bg-white/80 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/80">
       <header className="flex items-center justify-between border-b border-stone-200/70 px-5 py-4 dark:border-stone-800/70">
@@ -51,11 +78,27 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
             {order ? `#${order.orderNumber}` : 'No order yet'}
           </div>
         </div>
-        {items.length > 0 && (
-          <div className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            {items.length} item{items.length === 1 ? '' : 's'}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {items.length > 0 && (
+            <div className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              {items.length} item{items.length === 1 ? '' : 's'}
+            </div>
+          )}
+          {order?.status === 'open' && (
+            // A draft is a cart, not a sale: dropping it needs no approval.
+            // Once sent or paid this disappears — those are voids/refunds.
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void handleDiscard()}
+              className="rounded-md p-1.5 text-stone-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950"
+              title="Discard this order"
+              aria-label="Discard this order"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="flex-1 overflow-auto px-3 py-2">

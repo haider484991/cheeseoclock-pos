@@ -20,6 +20,7 @@ import {
   setOrderMode,
   findResumableDraft,
   discardEmptyDrafts,
+  discardDraft,
   tenderOrder,
   voidOrder,
   refundOrder,
@@ -204,6 +205,19 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const s = requireOrderCreate();
     discardEmptyDrafts(ctx.db, { userId: s.id, deviceId: ctx.deviceId });
     return ok(findResumableDraft(ctx.db, ctx.deviceId));
+  });
+
+  defineHandler('orders:discardDraft', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      discardDraft(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not discard order',
+      });
+    }
+    return ok(null);
   });
 
   defineHandler('orders:setMode', ctx, (_ctx, payload) => {

@@ -376,6 +376,14 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<OrderSnapshot | null>;
   };
+  /**
+   * Drop an open till draft: the cart is abandoned, nothing sent or charged.
+   * Refused for anything past 'open' — those are voids, with a manager PIN.
+   */
+  'orders:discardDraft': {
+    request: { orderId: string };
+    response: ApiResult<null>;
+  };
   /** Change the mode of an open order (e.g. Takeaway → Delivery mid-order). */
   'orders:setMode': {
     request: { orderId: string; mode: OrderMode };
