@@ -223,3 +223,33 @@ describe('repository contract: replicable writes also sync and audit', () => {
     ).toBe(true);
   });
 });
+
+// ------------------------------------------------------- ledger writers -
+
+/**
+ * Only two functions may append to the ledgers: writeAudit computes the hash
+ * chain (a raw INSERT leaves prev_hash/row_hash NULL, and the verifier then
+ * reports the chain broken from that row on) and enqueueSync owns the queue
+ * row shape. shift-repo once inlined both — every shift close broke the chain.
+ */
+const LEDGER_WRITERS = new Set(['audit-repo.ts', 'sync-repo.ts']);
+
+const LEDGER_CLIENT_FILES = readdirSync(REPOSITORIES_DIR)
+  .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+  .filter((f) => !LEDGER_WRITERS.has(f))
+  .sort();
+
+describe('repository contract: only writeAudit / enqueueSync append to the ledgers', () => {
+  it.each(LEDGER_CLIENT_FILES)('%s', (file) => {
+    // Comments may well talk about the forbidden statement; only code counts.
+    const source = readFileSync(join(REPOSITORIES_DIR, file), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    const raw = source.match(/INSERT\s+(?:OR\s+\w+\s+)?INTO\s+"?(?:audit_log|sync_queue)"?\b/gi) ?? [];
+    expect(
+      raw,
+      `${file} inserts into a ledger table directly. Call writeAudit / enqueueSync ` +
+        `(or writeWithSync) so the audit row is hash-chained and the sync row is well-formed.`,
+    ).toEqual([]);
+  });
+});

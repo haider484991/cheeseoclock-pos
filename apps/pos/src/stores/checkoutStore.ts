@@ -17,6 +17,12 @@ interface CheckoutState {
   setMode: (mode: OrderMode) => Promise<void>;
   setTableId: (id: string | null) => void;
 
+  /**
+   * After a restart: pick the unfinished order back up from the database so
+   * it isn't orphaned as an 'open' row nobody can see. No-op when an order is
+   * already in hand. Resolves with the draft, or null if there was none.
+   */
+  resumeDraft: () => Promise<OrderSnapshot | null>;
   /** Begin a new order with the current mode/table. Idempotent if one exists. */
   ensureOrder: () => Promise<OrderSnapshot>;
   addItem: (menuItemId: string, quantity?: number, modifierIds?: string[]) => Promise<void>;
@@ -76,6 +82,14 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => ({
   },
   setTableId(id) {
     set({ tableId: id });
+  },
+
+  async resumeDraft() {
+    const existing = get().snapshot;
+    if (existing) return existing;
+    const snap = await ipc.orders.resumeDraft();
+    if (snap) set({ snapshot: snap, mode: snap.order.mode, tableId: snap.order.tableId });
+    return snap;
   },
 
   async ensureOrder() {

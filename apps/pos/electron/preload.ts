@@ -76,6 +76,7 @@ const api: RendererApi = {
     applyDiscount: (req) => invoke('orders:applyDiscount', req),
     clearDiscount: (req) => invoke('orders:clearDiscount', req),
     setMode: (req) => invoke('orders:setMode', req),
+    resumeDraft: () => invoke('orders:resumeDraft', undefined),
     tender: (req) => invoke('orders:tender', req),
     void: (req) => invoke('orders:void', req),
     refund: (req) => invoke('orders:refund', req),

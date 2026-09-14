@@ -3,6 +3,7 @@ import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
+import { findOrder } from './order-repo.js';
 import { normalizePhone } from '@cheeseoclock/pos-domain';
 import type {
   Customer,
@@ -458,19 +459,80 @@ export function getCustomerOrderHistory(
 // Snapshot helper — used by order tender to freeze customer info onto the order.
 // -----------------------------------------------------------------------------
 
+/** The customer-facing part of an order row — the audit before/after image. */
+interface OrderCustomerImage {
+  id: string;
+  status: string;
+  customerId: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  deliveryAddress: string | null;
+  deliveryNotes: string | null;
+  version: number;
+}
+
+function orderCustomerImage(db: AppDatabase, orderId: string): OrderCustomerImage | null {
+  const row = db
+    .prepare(
+      `SELECT id, status, customer_id, customer_name_snapshot, customer_phone_snapshot,
+              delivery_address_snapshot, delivery_notes, version
+         FROM orders WHERE id = ? AND deleted_at IS NULL`,
+    )
+    .get(orderId) as
+    | {
+        id: string;
+        status: string;
+        customer_id: string | null;
+        customer_name_snapshot: string | null;
+        customer_phone_snapshot: string | null;
+        delivery_address_snapshot: string | null;
+        delivery_notes: string | null;
+        version: number;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    customerId: row.customer_id,
+    customerName: row.customer_name_snapshot,
+    customerPhone: row.customer_phone_snapshot,
+    deliveryAddress: row.delivery_address_snapshot,
+    deliveryNotes: row.delivery_notes,
+    version: row.version,
+  };
+}
+
+export interface AttachCustomerInput {
+  orderId: string;
+  customerId: string;
+  addressId: string | null;
+  /** Omit to leave the notes alone; null clears them. */
+  deliveryNotes?: string | null;
+}
+
+/**
+ * Copy a customer (and optionally one of their saved addresses) onto an order.
+ * The snapshot columns are copies, not foreign keys: editing the customer
+ * later must not rewrite yesterday's order.
+ *
+ * A business write like any other — one transaction carrying the row update,
+ * the sync post-image and a hash-chained audit row. It used to be a bare
+ * UPDATE (and the IPC handler wrote delivery_notes on its own), so attaching a
+ * customer never reached the sync queue or the audit trail.
+ */
 export function snapshotCustomerOntoOrder(
   db: AppDatabase,
-  orderId: string,
-  customerId: string,
-  addressId: string | null,
+  input: AttachCustomerInput,
+  actor: Actor,
 ): void {
-  const customer = findCustomer(db, customerId);
-  if (!customer) return;
+  const customer = findCustomer(db, input.customerId);
+  if (!customer) throw new Error('Customer not found');
   let addressSnap: string | null = null;
-  if (addressId) {
+  if (input.addressId) {
     const addr = db
       .prepare(`SELECT ${ADDR_SELECT} FROM customer_addresses WHERE id = ?`)
-      .get(addressId) as AddrRow | undefined;
+      .get(input.addressId) as AddrRow | undefined;
     if (addr) {
       addressSnap = JSON.stringify({
         label: addr.label,
@@ -481,11 +543,67 @@ export function snapshotCustomerOntoOrder(
       });
     }
   }
-  const now = nowIso();
-  db.prepare(
-    `UPDATE orders SET
-        customer_id = ?, customer_name_snapshot = ?, customer_phone_snapshot = ?,
-        delivery_address_snapshot = ?, updated_at = ?, version = version + 1
-      WHERE id = ?`,
-  ).run(customerId, customer.name, customer.phone, addressSnap, now, orderId);
+  const tx = db.transaction(() => {
+    const before = orderCustomerImage(db, input.orderId);
+    if (!before) throw new Error('Order not found');
+    const now = nowIso();
+    const params: unknown[] = [customer.id, customer.name, customer.phone, addressSnap];
+    let notesClause = '';
+    if (input.deliveryNotes !== undefined) {
+      notesClause = ', delivery_notes = ?';
+      params.push(input.deliveryNotes);
+    }
+    db.prepare(
+      `UPDATE orders SET
+          customer_id = ?, customer_name_snapshot = ?, customer_phone_snapshot = ?,
+          delivery_address_snapshot = ?${notesClause},
+          updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(...params, now, input.orderId);
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      op: 'upsert',
+      payload: findOrder(db, input.orderId),
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      action: 'attach_customer',
+      actorUserId: actor.userId,
+      before,
+      after: orderCustomerImage(db, input.orderId),
+    });
+  });
+  tx();
+}
+
+/** Clear the customer snapshot (and delivery notes) from an order. */
+export function detachCustomerFromOrder(db: AppDatabase, orderId: string, actor: Actor): void {
+  const tx = db.transaction(() => {
+    const before = orderCustomerImage(db, orderId);
+    if (!before) throw new Error('Order not found');
+    db.prepare(
+      `UPDATE orders SET
+          customer_id = NULL, customer_name_snapshot = NULL, customer_phone_snapshot = NULL,
+          delivery_address_snapshot = NULL, delivery_notes = NULL,
+          updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(nowIso(), orderId);
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      op: 'upsert',
+      payload: findOrder(db, orderId),
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      action: 'detach_customer',
+      actorUserId: actor.userId,
+      before,
+      after: orderCustomerImage(db, orderId),
+    });
+  });
+  tx();
 }

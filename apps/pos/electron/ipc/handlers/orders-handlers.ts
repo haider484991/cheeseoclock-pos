@@ -18,6 +18,8 @@ import {
   applyDiscount,
   clearDiscount,
   setOrderMode,
+  findResumableDraft,
+  discardEmptyDrafts,
   tenderOrder,
   voidOrder,
   refundOrder,
@@ -36,8 +38,10 @@ import { getFbrConfig, toSellerInfo } from '../../services/fbr-config.js';
 import { enqueueFbrSubmission } from '../../db/repositories/fbr-queue-repo.js';
 import { fbrWorker } from '../../services/fbr-worker.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
-import { snapshotCustomerOntoOrder } from '../../db/repositories/customer-repo.js';
-import { nowIso } from '../../db/repositories/base.js';
+import {
+  snapshotCustomerOntoOrder,
+  detachCustomerFromOrder,
+} from '../../db/repositories/customer-repo.js';
 
 function requireOrderCreate(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -54,20 +58,37 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const order = createOrder(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
     // If the cashier already picked a customer, snapshot them onto the order now.
     if (payload.customerId) {
-      snapshotCustomerOntoOrder(ctx.db, order.id, payload.customerId, payload.customerAddressId ?? null);
+      snapshotCustomerOntoOrder(
+        ctx.db,
+        {
+          orderId: order.id,
+          customerId: payload.customerId,
+          addressId: payload.customerAddressId ?? null,
+        },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
     }
     return ok(order);
   });
 
   defineHandler('orders:attachCustomer', ctx, (_ctx, payload) => {
-    requireOrderCreate();
-    snapshotCustomerOntoOrder(ctx.db, payload.orderId, payload.customerId, payload.addressId ?? null);
-    if (payload.deliveryNotes !== undefined) {
-      ctx.db
-        .prepare(
-          `UPDATE orders SET delivery_notes = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
-        )
-        .run(payload.deliveryNotes ?? null, nowIso(), payload.orderId);
+    const s = requireOrderCreate();
+    try {
+      snapshotCustomerOntoOrder(
+        ctx.db,
+        {
+          orderId: payload.orderId,
+          customerId: payload.customerId,
+          addressId: payload.addressId ?? null,
+          ...(payload.deliveryNotes !== undefined ? { deliveryNotes: payload.deliveryNotes } : {}),
+        },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not attach customer',
+      });
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
@@ -75,16 +96,15 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('orders:detachCustomer', ctx, (_ctx, payload) => {
-    requireOrderCreate();
-    ctx.db
-      .prepare(
-        `UPDATE orders SET
-            customer_id = NULL, customer_name_snapshot = NULL, customer_phone_snapshot = NULL,
-            delivery_address_snapshot = NULL, delivery_notes = NULL,
-            updated_at = ?, version = version + 1
-          WHERE id = ?`,
-      )
-      .run(nowIso(), payload.orderId);
+    const s = requireOrderCreate();
+    try {
+      detachCustomerFromOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not detach customer',
+      });
+    }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
@@ -178,6 +198,12 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
+  });
+
+  defineHandler('orders:resumeDraft', ctx, () => {
+    const s = requireOrderCreate();
+    discardEmptyDrafts(ctx.db, { userId: s.id, deviceId: ctx.deviceId });
+    return ok(findResumableDraft(ctx.db, ctx.deviceId));
   });
 
   defineHandler('orders:setMode', ctx, (_ctx, payload) => {

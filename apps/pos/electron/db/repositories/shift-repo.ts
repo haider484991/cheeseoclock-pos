@@ -2,6 +2,8 @@ import { v7 as uuidv7 } from 'uuid';
 import log from 'electron-log/main';
 import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, type Actor } from './base.js';
+import { enqueueSync } from './sync-repo.js';
+import { writeAudit } from './audit-repo.js';
 import type { Shift, ShiftSummary, UUID } from '@cheeseoclock/shared-types';
 
 /**
@@ -239,15 +241,25 @@ export function closeShift(
     );
 
     const after = findShift(db, input.shiftId)!;
-    // Sync + audit for the close event.
-    db.prepare(
-      `INSERT INTO sync_queue (id, entity_type, entity_id, op, payload_json, created_at)
-       VALUES (?, ?, ?, 'upsert', ?, ?)`,
-    ).run(uuidv7(), 'shifts', input.shiftId, JSON.stringify(after), now);
-    db.prepare(
-      `INSERT INTO audit_log (id, entity_type, entity_id, action, actor_user_id, before_json, after_json, created_at)
-       VALUES (?, ?, ?, 'shift_close', ?, ?, ?, ?)`,
-    ).run(uuidv7(), 'shifts', input.shiftId, actor.userId, JSON.stringify(before), JSON.stringify(after), now);
+    // Sync + audit for the close event, through the shared writers: the sync
+    // row carries the post-image and the audit row joins the hash chain. A
+    // raw INSERT into audit_log leaves row_hash NULL, and the verifier then
+    // reports the chain broken from that row on — which is what every shift
+    // close used to do.
+    enqueueSync(db, {
+      entityType: 'shifts',
+      entityId: input.shiftId,
+      op: 'upsert',
+      payload: after,
+    });
+    writeAudit(db, {
+      entityType: 'shifts',
+      entityId: input.shiftId,
+      action: 'shift_close',
+      actorUserId: actor.userId,
+      before,
+      after,
+    });
 
     result = after;
   });

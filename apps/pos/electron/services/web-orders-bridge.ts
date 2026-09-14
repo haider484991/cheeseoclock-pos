@@ -654,64 +654,75 @@ class WebOrdersBridge {
     ).run(web.id, now, now);
 
     try {
-      // 1. Local order shell (delivery, source web).
-      const order = createOrder(
-        db,
-        {
-          mode: 'delivery',
-          source: 'web',
-          notes: web.notes ? `[web] ${web.notes}` : '[web order]',
-        },
-        actor,
-      );
-
-      // 2. Customer + address (both dedupe internally).
-      const customer = createCustomer(
-        db,
-        { name: web.customerName, phone: web.customerPhone },
-        actor,
-      );
-      const address = createAddress(
-        db,
-        {
-          customerId: customer.id,
-          label: 'Web order',
-          addressLine: web.addressLine,
-          area: web.area ?? null,
-        },
-        actor,
-      );
-      snapshotCustomerOntoOrder(db, order.id, customer.id, address.id);
-
-      // 3. Items. POS re-prices from its own menu (authoritative). If an item
-      //    vanished from the menu since publish, the whole import throws and
-      //    retries — after MAX_IMPORT_ATTEMPTS it's cancelled with a notice.
-      for (const line of web.items) {
-        addOrderItem(
+      // Steps 1–4 are one transaction: an import that fails halfway (an item
+      // gone from the menu, say) must leave nothing behind. It used to leave
+      // an 'open' shell — and another on every retry — that sat on the Live
+      // Orders board as a half-imported order.
+      const order = db.transaction(() => {
+        // 1. Local order shell (delivery, source web).
+        const shell = createOrder(
           db,
           {
-            orderId: order.id,
-            menuItemId: line.posItemId,
-            quantity: line.quantity,
-            modifierIds: line.modifiers.map((m) => m.posModifierId),
-            notes: line.notes,
+            mode: 'delivery',
+            source: 'web',
+            notes: web.notes ? `[web] ${web.notes}` : '[web order]',
           },
           actor,
         );
-      }
 
-      // 4. Onto the Live Orders board (also validates customer/address).
-      sendOrderToKitchen(db, order.id, actor);
+        // 2. Customer + address (both dedupe internally).
+        const customer = createCustomer(
+          db,
+          { name: web.customerName, phone: web.customerPhone },
+          actor,
+        );
+        const address = createAddress(
+          db,
+          {
+            customerId: customer.id,
+            label: 'Web order',
+            addressLine: web.addressLine,
+            area: web.area ?? null,
+          },
+          actor,
+        );
+        snapshotCustomerOntoOrder(
+          db,
+          { orderId: shell.id, customerId: customer.id, addressId: address.id },
+          actor,
+        );
+
+        // 3. Items. POS re-prices from its own menu (authoritative). If an item
+        //    vanished from the menu since publish, the whole import throws and
+        //    retries — after MAX_IMPORT_ATTEMPTS it's cancelled with a notice.
+        for (const line of web.items) {
+          addOrderItem(
+            db,
+            {
+              orderId: shell.id,
+              menuItemId: line.posItemId,
+              quantity: line.quantity,
+              modifierIds: line.modifiers.map((m) => m.posModifierId),
+              notes: line.notes,
+            },
+            actor,
+          );
+        }
+
+        // 4. Onto the Live Orders board (also validates customer/address).
+        sendOrderToKitchen(db, shell.id, actor);
+
+        db.prepare(
+          `UPDATE web_order_imports
+              SET pos_order_id = ?, status = 'imported', imported_at = ?,
+                  last_pushed_status = 'accepted', updated_at = ?
+            WHERE web_order_id = ?`,
+        ).run(shell.id, now, now, web.id);
+        return shell;
+      })();
 
       // 5. Kitchen copy so the team sees a paper ticket for web orders too.
       printSpooler.enqueueReceipt(order.id, false);
-
-      db.prepare(
-        `UPDATE web_order_imports
-            SET pos_order_id = ?, status = 'imported', imported_at = ?,
-                last_pushed_status = 'accepted', updated_at = ?
-          WHERE web_order_id = ?`,
-      ).run(order.id, now, now, web.id);
       this.importedTotal += 1;
 
       // 6. Ack to the site (flips 'new' → 'accepted').

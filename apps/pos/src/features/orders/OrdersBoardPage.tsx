@@ -46,7 +46,8 @@ const COLUMNS: Array<{
   {
     key: 'new',
     label: 'New',
-    statuses: ['open', 'sent_to_kitchen'],
+    // Not 'open': that is a draft still being built at the till.
+    statuses: ['sent_to_kitchen'],
     icon: Inbox,
     tone: 'from-sky-400 to-sky-500',
   },

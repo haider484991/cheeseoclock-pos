@@ -111,6 +111,7 @@ export const ipc = {
     clearDiscount: (orderId: string) =>
       unwrap(window.api.orders.clearDiscount({ orderId })),
     setMode: (input: IpcRequest<'orders:setMode'>) => unwrap(window.api.orders.setMode(input)),
+    resumeDraft: () => unwrap(window.api.orders.resumeDraft()),
     tender: (input: IpcRequest<'orders:tender'>) => unwrap(window.api.orders.tender(input)),
     void: (input: IpcRequest<'orders:void'>) => unwrap(window.api.orders.void(input)),
     refund: (input: IpcRequest<'orders:refund'>) => unwrap(window.api.orders.refund(input)),

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
 import { useCheckoutStore } from '../../stores/checkoutStore';
@@ -23,8 +23,30 @@ export function CheckoutPage() {
 
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const reset = useCheckoutStore((s) => s.reset);
+  const resumeDraft = useCheckoutStore((s) => s.resumeDraft);
   const gate = useTenderGate();
   const { toast } = useToast();
+
+  // After a restart the cashier's half-built order is still 'open' in the
+  // database but gone from the screen. Pick it back up once per mount so it is
+  // never orphaned — and so Pay / Send to kitchen act on the order they can see.
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (resumedRef.current) return;
+    resumedRef.current = true;
+    if (useCheckoutStore.getState().snapshot) return;
+    resumeDraft()
+      .then((snap) => {
+        if (!snap) return;
+        toast({
+          title: 'Unfinished order restored',
+          description: `Order #${snap.order.orderNumber} was still open from before — carry on, or remove its items to start fresh.`,
+        });
+      })
+      .catch(() => {
+        // Nothing to restore, or the till is not ready yet: start with an empty cart.
+      });
+  }, [resumeDraft, toast]);
 
   const categoriesQ = useQuery({
     queryKey: ['menu', 'categories', { activeOnly: true }],

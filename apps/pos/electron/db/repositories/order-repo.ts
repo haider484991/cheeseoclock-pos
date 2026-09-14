@@ -407,6 +407,74 @@ export function setOrderMode(
   return result;
 }
 
+/**
+ * The newest unfinished POS order with something in it — the cart a cashier
+ * was building when the app last closed. Without this, a restart orphaned the
+ * draft: still 'open' in the database, gone from the screen.
+ */
+export function findResumableDraft(db: AppDatabase, deviceId: string): OrderSnapshot | null {
+  // Scoped to this till: a draft another device is building (arrived via
+  // sync) belongs to that cashier's screen, not this one.
+  const row = db
+    .prepare(
+      `SELECT o.id FROM orders o
+        WHERE o.status = 'open' AND o.source = 'pos' AND o.device_id = ?
+          AND o.deleted_at IS NULL
+          AND EXISTS (SELECT 1 FROM order_items oi
+                       WHERE oi.order_id = o.id AND oi.deleted_at IS NULL)
+        ORDER BY o.created_at DESC LIMIT 1`,
+    )
+    .get(deviceId) as { id: string } | undefined;
+  return row ? getOrderSnapshot(db, row.id) : null;
+}
+
+/**
+ * Soft-delete open POS orders that have no items left — a product tapped and
+ * removed again, or a shell whose first add-item failed. Nothing of value is
+ * lost; left alone they sit in history as empty "open" orders forever. Called
+ * when the checkout resumes after a restart, so a draft the cashier is
+ * actively building is never touched.
+ */
+export function discardEmptyDrafts(db: AppDatabase, actor: Actor & { userId: string }): number {
+  let count = 0;
+  const tx = db.transaction(() => {
+    const rows = db
+      .prepare(
+        `SELECT o.id FROM orders o
+          WHERE o.status = 'open' AND o.source = 'pos' AND o.device_id = ?
+            AND o.deleted_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM order_items oi
+                             WHERE oi.order_id = o.id AND oi.deleted_at IS NULL)`,
+      )
+      .all(actor.deviceId) as Array<{ id: string }>;
+    const now = nowIso();
+    for (const { id } of rows) {
+      const before = findOrder(db, id);
+      if (!before) continue;
+      db.prepare(
+        `UPDATE orders SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(now, now, id);
+      enqueueSync(db, {
+        entityType: 'orders',
+        entityId: id,
+        op: 'delete',
+        payload: { id, deletedAt: now },
+      });
+      writeAudit(db, {
+        entityType: 'orders',
+        entityId: id,
+        action: 'discard_empty_draft',
+        actorUserId: actor.userId,
+        before,
+        after: null,
+      });
+      count += 1;
+    }
+  });
+  tx();
+  return count;
+}
+
 // -----------------------------------------------------------------------------
 // Add / remove / update items
 // -----------------------------------------------------------------------------
@@ -1443,8 +1511,10 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
 // Each transition uses writeWithSync so sync + audit get the change.
 // -----------------------------------------------------------------------------
 
+// 'open' is deliberately absent: an open order is a checkout draft still being
+// built at the till (web orders are committed with sendOrderToKitchen at
+// import). Drafts are not kitchen work and must not appear on the board.
 const ACTIVE_STATUSES: OrderStatus[] = [
-  'open',
   'sent_to_kitchen',
   'preparing',
   'ready',

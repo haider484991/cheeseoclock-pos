@@ -368,6 +368,14 @@ export interface IpcContract {
     request: { orderId: string };
     response: ApiResult<OrderSnapshot>;
   };
+  /**
+   * After a restart: the unfinished order the till was building, if any
+   * (drafts with no items are discarded on the way). Null when there is none.
+   */
+  'orders:resumeDraft': {
+    request: undefined;
+    response: ApiResult<OrderSnapshot | null>;
+  };
   /** Change the mode of an open order (e.g. Takeaway → Delivery mid-order). */
   'orders:setMode': {
     request: { orderId: string; mode: OrderMode };
