@@ -1,9 +1,14 @@
 import type { PrinterWidth } from '@cheeseoclock/shared-types';
 import { EscPosBuilder } from '@cheeseoclock/printer-core';
 
-/** A short test receipt to verify the printer cable, paper, and ESC/POS path. */
-export function renderTestPage(width: PrinterWidth): Uint8Array {
+/**
+ * A short page to prove the cable, the paper and the ESC/POS path. It names
+ * the connection it came through, so a test print from the wrong printer or
+ * the wrong setting is obvious on paper.
+ */
+export function renderTestPage(width: PrinterWidth, connection = 'not set'): Uint8Array {
   const b = new EscPosBuilder(width);
+
   b.align('center')
     .doubleSize(true)
     .bold(true)
@@ -13,16 +18,20 @@ export function renderTestPage(width: PrinterWidth): Uint8Array {
     .bold(false)
     .text('CheeseOclock POS')
     .newline()
-    .newline()
-    .align('left')
+    .newline();
+
+  b.align('left')
     .rule()
-    .line('Date', new Date().toISOString().slice(0, 19).replace('T', ' '))
-    .line('Width', `${width} cols`)
-    .line('Transport', 'OK')
+    .line('Printed', formatLocal(new Date()))
+    .line('Connection', connection)
+    .line('Paper', width === 48 ? '80 mm (48 columns)' : '58 mm (32 columns)')
     .rule()
+    .newline();
+
+  b.bold(true)
+    .text('Alignment')
     .newline()
-    .text('Alignment check:')
-    .newline()
+    .bold(false)
     .align('left')
     .text('LEFT')
     .newline()
@@ -33,9 +42,12 @@ export function renderTestPage(width: PrinterWidth): Uint8Array {
     .text('RIGHT')
     .newline()
     .align('left')
+    .newline();
+
+  b.bold(true)
+    .text('Styles')
     .newline()
-    .text('Styles:')
-    .newline()
+    .bold(false)
     .text('normal ')
     .bold(true)
     .text('bold ')
@@ -48,10 +60,20 @@ export function renderTestPage(width: PrinterWidth): Uint8Array {
     .text('BIG')
     .doubleSize(false)
     .newline()
-    .newline()
+    .newline();
+
+  b.rule()
     .align('center')
-    .text('If you can read this, your printer is wired correctly.')
-    .newline()
+    .wrappedText(
+      'If you can read this, the printer is wired correctly. Save the settings, then print a receipt to see the real layout.',
+    )
+    .align('left')
     .cut(true);
+
   return b.build();
+}
+
+function formatLocal(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }

@@ -83,6 +83,8 @@ export class UsbPrinterAdapter implements PrinterAdapter {
   }
 
   async testPrint(): Promise<PrintResult> {
-    return this.send(renderTestPage(this.config.width ?? 48));
+    return this.send(
+      renderTestPage(this.config.width ?? 48, `USB: ${this.config.usb?.printerName ?? ''}`),
+    );
   }
 }

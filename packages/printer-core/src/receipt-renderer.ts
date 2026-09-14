@@ -80,13 +80,15 @@ export function renderReceipt(
   const b = new EscPosBuilder(width);
   const { order, items, payments, discounts, cashierName, tableLabel } = snapshot;
 
-  // Header — large, centered store name + tagline
+  // Header — large, centered store name + tagline. Free text from settings,
+  // so every line is word-wrapped here rather than broken by the printer at
+  // the paper edge; double-size glyphs take two columns each.
   b.align('center');
-  b.doubleSize(true).bold(true).text(opts.branding.storeName).newline();
+  b.doubleSize(true).bold(true).wrappedText(opts.branding.storeName, width / 2);
   b.doubleSize(false).bold(false);
-  if (opts.branding.storeTagline) b.text(opts.branding.storeTagline).newline();
-  if (opts.branding.branchLine) b.newline().text(opts.branding.branchLine).newline();
-  if (opts.branding.phoneLine) b.text(opts.branding.phoneLine).newline();
+  if (opts.branding.storeTagline) b.wrappedText(opts.branding.storeTagline);
+  if (opts.branding.branchLine) b.newline().wrappedText(opts.branding.branchLine);
+  if (opts.branding.phoneLine) b.wrappedText(opts.branding.phoneLine);
   b.newline();
 
   // Order metadata block
@@ -174,7 +176,7 @@ export function renderReceipt(
 
   // Footer
   b.align('center');
-  b.text(opts.branding.footerLine ?? 'Thank you — visit us again!').newline();
+  b.wrappedText(opts.branding.footerLine ?? 'Thank you — visit us again!');
   b.newline();
 
   // FBR fiscal block (shown if the worker has resolved an IRN for this order).

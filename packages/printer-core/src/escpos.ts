@@ -30,9 +30,68 @@ const CUT_PARTIAL = [GS, 0x56, 0x01];
 const DRAWER_KICK = [ESC, 0x70, 0x00, 0x19, 0xfa]; // open drawer 1
 const FEED = (n: number) => [ESC, 0x64, n & 0xff];
 
+/**
+ * Lines fed before the blade drops. The print head sits above the cutter, so
+ * the last printed line only clears the blade after roughly three lines of
+ * feed — with fewer, the cut lands on the text. What's left over is the
+ * bottom margin the customer sees; six gives about a finger's width.
+ */
+export const LINES_BEFORE_CUT = 6;
+
 // Code Page 437 (default) — most thermal printers expect single-byte ASCII;
 // non-ASCII chars need transliteration. For Urdu/Arabic shop name, we'd swap
 // in a Code Page (e.g. 864) and re-encode — left for Phase 3.5.
+
+/**
+ * Typography that arrives from settings and menu text (curly quotes, dashes,
+ * ellipsis) but has no glyph on the printer's default code page. Each maps to
+ * a plain-ASCII stand-in; anything else outside ASCII prints as '?'.
+ */
+const TRANSLITERATIONS: Record<string, string> = {
+  '‐': '-',
+  '‑': '-',
+  '‒': '-',
+  '–': '-',
+  '—': '-',
+  '−': '-',
+  '·': '-',
+  '•': '*',
+  '‘': "'",
+  '’': "'",
+  '‚': "'",
+  '′': "'",
+  '“': '"',
+  '”': '"',
+  '„': '"',
+  '″': '"',
+  '…': '...',
+  ' ': ' ',
+  ' ': ' ',
+  ' ': ' ',
+  '×': 'x',
+  '₨': 'Rs',
+  '™': 'TM',
+  '®': '(R)',
+  '©': '(c)',
+};
+
+/**
+ * What the printer will actually put on paper for `s`: ASCII kept, known
+ * typography swapped for its stand-in, everything else '?'. Line feeds and
+ * tabs pass through; other control characters become '?'.
+ */
+export function toPrinterAscii(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0;
+    if ((code >= 0x20 && code < 0x7f) || ch === '\n' || ch === '\t') {
+      out += ch;
+    } else {
+      out += TRANSLITERATIONS[ch] ?? '?';
+    }
+  }
+  return out;
+}
 
 export class EscPosBuilder {
   private bytes: number[] = [];
@@ -55,10 +114,8 @@ export class EscPosBuilder {
   }
 
   private writeAscii(s: string) {
-    for (const ch of s) {
-      const code = ch.charCodeAt(0);
-      // Drop anything outside printable ASCII to avoid gibberish on default codepage.
-      this.bytes.push(code > 0 && code < 0x80 ? code : 0x3f /* '?' */);
+    for (const ch of toPrinterAscii(s)) {
+      this.bytes.push(ch.charCodeAt(0));
     }
     return this;
   }
@@ -87,17 +144,38 @@ export class EscPosBuilder {
     return this.writeAscii(s);
   }
 
+  /**
+   * Print `s` over as many rows as it needs, breaking between words. Without
+   * this the printer wraps at the paper edge itself, mid-word. `width` is the
+   * room available — pass half the configured width for double-size text.
+   */
+  wrappedText(s: string, width: number = this.width) {
+    for (const row of wrap(s, width)) this.writeAscii(row).newline();
+    return this;
+  }
+
   newline(n = 1) {
     for (let i = 0; i < n; i++) this.push(LF);
     return this;
   }
 
-  /** Print a label–value pair, padding to fill the configured width. */
+  /**
+   * Print a label–value pair, padding to fill the configured width. When the
+   * two can't share a row, the label wraps on rows of its own and the value
+   * sits right-aligned beneath it — never a row the printer has to break.
+   */
   line(left: string, right = '') {
     const l = sanitizeAscii(left);
     const r = sanitizeAscii(right);
-    const pad = Math.max(1, this.width - l.length - r.length);
-    return this.writeAscii(l + ' '.repeat(pad) + r).newline();
+    if (l.length + 1 + r.length <= this.width) {
+      return this.writeAscii(l + ' '.repeat(this.width - l.length - r.length) + r).newline();
+    }
+    for (const row of wrap(l, this.width)) this.writeAscii(row).newline();
+    if (r) {
+      const value = r.slice(0, this.width);
+      this.writeAscii(' '.repeat(this.width - value.length) + value).newline();
+    }
+    return this;
   }
 
   /** Horizontal rule at the configured width. */
@@ -110,7 +188,7 @@ export class EscPosBuilder {
   }
 
   cut(partial = true) {
-    return this.feed(3).push(...(partial ? CUT_PARTIAL : CUT_FULL));
+    return this.feed(LINES_BEFORE_CUT).push(...(partial ? CUT_PARTIAL : CUT_FULL));
   }
 
   openDrawer() {
@@ -122,9 +200,9 @@ export class EscPosBuilder {
   }
 }
 
-/** Strip non-ASCII so estimated lengths line up with what the printer prints. */
+/** One printable row's worth of text: transliterated, no line breaks or tabs. */
 function sanitizeAscii(s: string): string {
-  return s.replace(/[^\x20-\x7e]/g, '?');
+  return toPrinterAscii(s).replace(/[\n\t]/g, ' ');
 }
 
 /**
@@ -160,20 +238,26 @@ export function qrCode(b: EscPosBuilder, data: string, size = 6): EscPosBuilder 
   return b;
 }
 
-/** Wrap a long string to fit `width` columns, breaking on word boundaries. */
+/**
+ * Wrap a long string to fit `width` columns, breaking on word boundaries.
+ * Measures what the printer will print (see toPrinterAscii), so a curly
+ * quote or an em dash can't push a row over the edge.
+ */
 export function wrap(s: string, width: number): string[] {
+  const cols = Math.max(1, Math.floor(width));
   const out: string[] = [];
-  const words = s.split(/\s+/).filter(Boolean);
+  const words = toPrinterAscii(s).split(/\s+/).filter(Boolean);
   let line = '';
   for (const w of words) {
-    if (line.length + 1 + w.length <= width) {
+    if (line.length + 1 + w.length <= cols) {
       line = line ? `${line} ${w}` : w;
     } else {
       if (line) out.push(line);
-      if (w.length > width) {
-        // long word: hard-wrap
-        for (let i = 0; i < w.length; i += width) out.push(w.slice(i, i + width));
-        line = '';
+      if (w.length > cols) {
+        // Long word: hard-wrap it; the last piece keeps taking words after it.
+        let i = 0;
+        for (; i + cols < w.length; i += cols) out.push(w.slice(i, i + cols));
+        line = w.slice(i);
       } else {
         line = w;
       }

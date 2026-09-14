@@ -106,6 +106,8 @@ export class NetworkPrinterAdapter implements PrinterAdapter {
   }
 
   async testPrint(): Promise<PrintResult> {
-    return this.send(renderTestPage(this.config.width ?? 48));
+    const net = this.config.network;
+    const label = net ? `LAN ${net.host}:${net.port}` : 'LAN';
+    return this.send(renderTestPage(this.config.width ?? 48, label));
   }
 }

@@ -13,12 +13,7 @@ import type {
   PrintResult,
 } from '@cheeseoclock/shared-types';
 
-export type {
-  PrinterConnectionConfig,
-  PrinterTransport,
-  PrinterStation,
-  PrintResult,
-};
+export type { PrinterConnectionConfig, PrinterTransport, PrinterStation, PrintResult };
 
 export interface KOTContext {
   station: PrinterStation;
@@ -55,6 +50,8 @@ export interface PrinterAdapterFactory {
 }
 
 // Re-export the renderer + builder so consumers don't reach into subpaths.
-export { EscPosBuilder, wrap, qrCode } from './escpos.js';
+export { EscPosBuilder, wrap, qrCode, toPrinterAscii, LINES_BEFORE_CUT } from './escpos.js';
+export { decodeEscPos, escPosToText, CUT_MARKER, QR_MARKER } from './escpos-decode.js';
+export type { DecodedLine } from './escpos-decode.js';
 export { renderReceipt } from './receipt-renderer.js';
 export type { RenderReceiptOpts, ReceiptBranding } from './receipt-renderer.js';
