@@ -391,10 +391,10 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
  */
 export async function commitCustomerToOrder(
   orderId: string,
-  mode: 'dine_in' | 'takeaway' | 'delivery' | 'online',
+  mode: 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda',
   form: CustomerFormState,
 ): Promise<void> {
-  if (mode === 'dine_in' || mode === 'online') return;
+  if (mode === 'dine_in' || mode === 'online' || mode === 'foodpanda') return;
   if (!form.phone.trim() && !form.name.trim() && !form.addressLine.trim()) return;
 
   let customerId = form.matchedCustomerId;

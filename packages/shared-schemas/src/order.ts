@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { uuidSchema, centsSchema } from './common.js';
 
-export const orderModeSchema = z.enum(['dine_in', 'takeaway', 'delivery', 'online']);
+export const orderModeSchema = z.enum(['dine_in', 'takeaway', 'delivery', 'online', 'foodpanda']);
 export const orderStatusSchema = z.enum([
   'open',
   'sent_to_kitchen',

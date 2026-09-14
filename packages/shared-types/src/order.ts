@@ -1,7 +1,8 @@
 import type { Cents } from './money.js';
 import type { UUID, OrderNumber } from './ids.js';
 
-export type OrderMode = 'dine_in' | 'takeaway' | 'delivery' | 'online';
+// 'dine_in' is retained for historical orders; the POS no longer offers it.
+export type OrderMode = 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda';
 /**
  * Order lifecycle. The board groups these into 5 visible columns:
  *   New             → open, sent_to_kitchen

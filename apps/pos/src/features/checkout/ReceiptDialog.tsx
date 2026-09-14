@@ -18,6 +18,7 @@ const MODE_LABEL = {
   takeaway: 'Takeaway',
   delivery: 'Delivery',
   online: 'Online',
+  foodpanda: 'Foodpanda',
 } as const;
 
 const METHOD_LABEL = {

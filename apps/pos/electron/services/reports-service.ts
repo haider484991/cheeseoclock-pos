@@ -172,7 +172,7 @@ export function getTopItems(db: AppDatabase, range: DateRange, limit = 20): TopI
 }
 
 export interface SalesByMode {
-  mode: 'dine_in' | 'takeaway' | 'delivery' | 'online';
+  mode: 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda';
   orderCount: number;
   totalCents: number;
 }

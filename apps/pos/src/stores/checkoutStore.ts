@@ -12,7 +12,9 @@ interface CheckoutState {
   /** Mutation in flight (disables UI). */
   busy: boolean;
 
-  setMode: (mode: OrderMode) => void;
+  /** Set the mode; persists to the open order so the saved order, board and
+   *  reports agree with the on-screen choice. Rejects if the write fails. */
+  setMode: (mode: OrderMode) => Promise<void>;
   setTableId: (id: string | null) => void;
 
   /** Begin a new order with the current mode/table. Idempotent if one exists. */
@@ -51,12 +53,26 @@ interface CheckoutState {
 
 export const useCheckoutStore = create<CheckoutState>((set, get) => ({
   snapshot: null,
-  mode: 'dine_in',
+  mode: 'takeaway',
   tableId: null,
   busy: false,
 
-  setMode(mode) {
-    set({ mode });
+  async setMode(mode) {
+    const snap = get().snapshot;
+    // Reflect the choice immediately for the mode-bar highlight.
+    set({ mode, tableId: mode === 'dine_in' ? get().tableId : null });
+    if (snap && snap.order.status === 'open') {
+      try {
+        const next = await ipc.orders.setMode({ orderId: snap.order.id, mode });
+        set({ snapshot: next, mode: next.order.mode, tableId: next.order.tableId });
+      } catch (e) {
+        // Persist failed — snap the UI back to the order's real mode so the
+        // screen and the saved order can't disagree (that divergence was the
+        // bug where "Delivery" never reached the order and it stayed dine-in).
+        set({ mode: snap.order.mode, tableId: snap.order.tableId });
+        throw e;
+      }
+    }
   },
   setTableId(id) {
     set({ tableId: id });

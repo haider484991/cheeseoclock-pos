@@ -360,6 +360,53 @@ export function createOrder(
   return order;
 }
 
+/**
+ * Change the mode of an OPEN order (e.g. the cashier picked Takeaway, then
+ * switched to Delivery after adding items). Without this the mode was fixed at
+ * creation and a later switch only changed the on-screen selection, so the
+ * saved order — and therefore the kitchen ticket, the Live Orders board and
+ * the reports — kept the original mode. Leaving dine-in clears any table hold.
+ */
+export function setOrderMode(
+  db: AppDatabase,
+  orderId: string,
+  mode: OrderMode,
+  actor: Actor & { userId: string },
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'open') throw new Error(`Cannot change the mode of a ${order.status} order`);
+
+    const tableId = mode === 'dine_in' ? order.tableId : null;
+    const now = nowIso();
+    db.prepare(
+      `UPDATE orders SET mode = ?, table_id = ?, updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(mode, tableId, now, orderId);
+
+    const updated: Order = { ...order, mode, tableId: tableId as Order['tableId'] };
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      op: 'upsert',
+      payload: updated,
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      action: 'update',
+      actorUserId: actor.userId,
+      before: order,
+      after: updated,
+    });
+    result = updated;
+  });
+  tx();
+  return result;
+}
+
 // -----------------------------------------------------------------------------
 // Add / remove / update items
 // -----------------------------------------------------------------------------

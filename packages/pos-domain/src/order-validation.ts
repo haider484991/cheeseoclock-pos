@@ -33,6 +33,7 @@ export interface ValidationResult {
  *  - Takeaway: customer phone OR name required (so the order can be called out).
  *  - Delivery: customer name + phone + address required.
  *  - Online: same as delivery (web channel still needs the address).
+ *  - Foodpanda: aggregator channel — only needs items (platform owns the rest).
  */
 export function validateOrderForTender(ctx: OrderValidationContext): ValidationResult {
   const missing: string[] = [];
@@ -56,6 +57,10 @@ export function validateOrderForTender(ctx: OrderValidationContext): ValidationR
       if (!ctx.customerPhone) missing.push(`${labelMode(ctx.mode)} needs a customer phone`);
       if (!ctx.deliveryAddress)
         missing.push(`${labelMode(ctx.mode)} needs a delivery address`);
+      break;
+    case 'foodpanda':
+      // Aggregator channel: the platform owns the customer and the rider, so
+      // the POS only needs the items keyed in for the kitchen and the report.
       break;
   }
 
@@ -104,5 +109,7 @@ function labelMode(mode: OrderMode): string {
       return 'Delivery';
     case 'online':
       return 'Online';
+    case 'foodpanda':
+      return 'Foodpanda';
   }
 }

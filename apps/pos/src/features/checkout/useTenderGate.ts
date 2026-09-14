@@ -17,13 +17,17 @@ import { useCustomerForm } from './useCustomerForm';
  */
 export function useTenderGate(): ValidationResult {
   const snapshot = useCheckoutStore((s) => s.snapshot);
-  const mode = useCheckoutStore((s) => s.mode);
+  const storeMode = useCheckoutStore((s) => s.mode);
   const tableId = useCheckoutStore((s) => s.tableId);
   const { form } = useCustomerForm();
 
   return useMemo<ValidationResult>(() => {
     const itemCount = snapshot?.items.length ?? 0;
     const subtotalCents = snapshot?.order.subtotalCents ?? 0;
+    // The saved order's mode is the source of truth — the server validates
+    // against it too. Falling back to the store mode only before an order
+    // exists keeps the client gate and the server in agreement.
+    const mode = snapshot?.order.mode ?? storeMode;
 
     // Customer name/phone/address may be either committed on the snapshot OR
     // typed in the inline form — accept either.
@@ -44,5 +48,5 @@ export function useTenderGate(): ValidationResult {
       customerPhone,
       deliveryAddress,
     });
-  }, [snapshot, mode, tableId, form]);
+  }, [snapshot, storeMode, tableId, form]);
 }

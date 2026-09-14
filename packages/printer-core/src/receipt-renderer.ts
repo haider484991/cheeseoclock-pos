@@ -62,6 +62,7 @@ const MODE_LABEL: Record<OrderSnapshot['order']['mode'], string> = {
   takeaway: 'Takeaway',
   delivery: 'Delivery',
   online: 'Online',
+  foodpanda: 'Foodpanda',
 };
 
 const METHOD_LABEL: Record<string, string> = {

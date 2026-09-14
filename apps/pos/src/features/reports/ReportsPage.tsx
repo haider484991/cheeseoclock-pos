@@ -329,6 +329,7 @@ function PaymentsTab({ range }: { range: { sinceIso: string; untilIso: string } 
     takeaway: 'Takeaway',
     delivery: 'Delivery',
     online: 'Online',
+    foodpanda: 'Foodpanda',
   };
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

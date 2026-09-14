@@ -17,6 +17,7 @@ import {
   updateOrderItemQuantity,
   applyDiscount,
   clearDiscount,
+  setOrderMode,
   tenderOrder,
   voidOrder,
   refundOrder,
@@ -174,6 +175,21 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:clearDiscount', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
     clearDiscount(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:setMode', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      setOrderMode(ctx.db, payload.orderId, payload.mode, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not change mode',
+      });
+    }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);

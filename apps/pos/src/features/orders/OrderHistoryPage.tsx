@@ -136,10 +136,10 @@ export function OrderHistoryPage() {
             className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800"
           >
             <option value="any">Any mode</option>
-            <option value="dine_in">Dine-in</option>
             <option value="takeaway">Takeaway</option>
             <option value="delivery">Delivery</option>
             <option value="online">Online</option>
+            <option value="foodpanda">Foodpanda</option>
           </select>
         </div>
       </Card>
@@ -542,12 +542,14 @@ function ModeBadgeRow({ mode }: { mode: OrderMode }) {
     takeaway: 'bg-emerald-100 text-emerald-800',
     delivery: 'bg-violet-100 text-violet-800',
     online: 'bg-amber-100 text-amber-800',
+    foodpanda: 'bg-pink-100 text-pink-800',
   };
   const labels: Record<OrderMode, string> = {
     dine_in: 'Dine-in',
     takeaway: 'Takeaway',
     delivery: 'Delivery',
     online: 'Online',
+    foodpanda: 'Foodpanda',
   };
   return (
     <span

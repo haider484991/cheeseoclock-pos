@@ -368,6 +368,11 @@ export interface IpcContract {
     request: { orderId: string };
     response: ApiResult<OrderSnapshot>;
   };
+  /** Change the mode of an open order (e.g. Takeaway → Delivery mid-order). */
+  'orders:setMode': {
+    request: { orderId: string; mode: OrderMode };
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:tender': {
     request: {
       orderId: string;
@@ -916,7 +921,7 @@ export interface IpcContract {
     request: { sinceIso: string; untilIso: string };
     response: ApiResult<
       Array<{
-        mode: 'dine_in' | 'takeaway' | 'delivery' | 'online';
+        mode: OrderMode;
         orderCount: number;
         totalCents: number;
       }>

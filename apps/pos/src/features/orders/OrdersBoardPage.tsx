@@ -75,9 +75,9 @@ const COLUMNS: Array<{
 
 const MODE_FILTERS: Array<{ key: 'all' | OrderMode; label: string }> = [
   { key: 'all', label: 'All' },
-  { key: 'dine_in', label: 'Dine-in' },
   { key: 'takeaway', label: 'Takeaway' },
   { key: 'delivery', label: 'Delivery' },
+  { key: 'foodpanda', label: 'Foodpanda' },
 ];
 
 export function OrdersBoardPage() {
@@ -527,6 +527,7 @@ function ModeBadge({ mode }: { mode: OrderMode }) {
     takeaway: { text: 'Takeaway', tone: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
     delivery: { text: 'Delivery', tone: 'bg-violet-50 text-violet-700 ring-violet-200' },
     online: { text: 'Online', tone: 'bg-amber-50 text-amber-700 ring-amber-200' },
+    foodpanda: { text: 'Foodpanda', tone: 'bg-pink-50 text-pink-700 ring-pink-200' },
   };
   const m = labels[mode];
   return (
