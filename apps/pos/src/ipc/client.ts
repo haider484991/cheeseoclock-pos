@@ -215,6 +215,7 @@ export const ipc = {
     setBranding: (input: IpcRequest<'printer:setBranding'>) =>
       unwrap(window.api.printer.setBranding(input)),
     test: () => unwrap(window.api.printer.test()),
+    listSystemPrinters: () => unwrap(window.api.printer.listSystemPrinters()),
     reprint: (orderId: string) => unwrap(window.api.printer.reprint({ orderId })),
   },
   fbr: {

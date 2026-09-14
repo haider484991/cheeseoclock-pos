@@ -8,27 +8,49 @@ export const BRANDING_KEY = 'receipt.branding';
 
 const TransportSchema = z.enum(['usb', 'network', 'bluetooth', 'serial']);
 
-export const PrinterConnectionConfigSchema = z.object({
-  transport: TransportSchema,
-  network: z
-    .object({
-      host: z.string().min(1),
-      port: z.number().int().min(1).max(65535),
-      timeoutMs: z.number().int().positive().optional(),
-    })
-    .optional(),
-  usb: z
-    .object({ vendorId: z.number().int().nonnegative(), productId: z.number().int().nonnegative() })
-    .optional(),
-  bluetooth: z
-    .object({ address: z.string().min(1), channel: z.number().int().nonnegative().optional() })
-    .optional(),
-  serial: z
-    .object({ path: z.string().min(1), baudRate: z.number().int().positive().optional() })
-    .optional(),
-  codepage: z.string().optional(),
-  width: z.union([z.literal(32), z.literal(48)]).optional(),
-});
+export const PrinterConnectionConfigSchema = z
+  .object({
+    transport: TransportSchema,
+    network: z
+      .object({
+        host: z.string().min(1),
+        port: z.number().int().min(1).max(65535),
+        timeoutMs: z.number().int().positive().optional(),
+      })
+      .optional(),
+    usb: z
+      .object({
+        // The OS print-queue name (see PrinterConnectionConfig.usb). Kept
+        // short and free of control characters — it travels to the RAW
+        // print worker on a single line.
+        printerName: z
+          .string()
+          .trim()
+          .min(1, 'Pick the printer')
+          .max(220)
+          // eslint-disable-next-line no-control-regex
+          .regex(/^[^\u0000-\u001f\u007f]+$/, 'Printer name has unsupported characters'),
+        vendorId: z.number().int().nonnegative().optional(),
+        productId: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
+    bluetooth: z
+      .object({ address: z.string().min(1), channel: z.number().int().nonnegative().optional() })
+      .optional(),
+    serial: z
+      .object({ path: z.string().min(1), baudRate: z.number().int().positive().optional() })
+      .optional(),
+    codepage: z.string().optional(),
+    width: z.union([z.literal(32), z.literal(48)]).optional(),
+  })
+  .superRefine((c, ctx) => {
+    if (c.transport === 'network' && !c.network) {
+      ctx.addIssue({ code: 'custom', path: ['network'], message: 'Enter the printer address' });
+    }
+    if (c.transport === 'usb' && !c.usb) {
+      ctx.addIssue({ code: 'custom', path: ['usb'], message: 'Pick the printer' });
+    }
+  });
 
 export const ReceiptBrandingSchema = z.object({
   storeName: z.string().min(1).default('Cheese O Clock'),

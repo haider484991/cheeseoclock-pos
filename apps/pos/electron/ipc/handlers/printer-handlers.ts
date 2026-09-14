@@ -13,6 +13,7 @@ import {
   setReceiptPrinterConfig,
 } from '../../services/printer-config.js';
 import { printSpooler } from '../../services/print-spooler.js';
+import { isSystemPrintingSupported, listSystemPrinters } from '../../services/system-printers.js';
 
 function requireSession(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -75,6 +76,13 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
     requireSession();
     const result = await printSpooler.testPrintNow();
     return ok(result);
+  });
+
+  defineHandler('printer:listSystemPrinters', ctx, async () => {
+    requireSession();
+    const supported = isSystemPrintingSupported();
+    const printers = supported ? await listSystemPrinters() : [];
+    return ok({ printers, supported });
   });
 
   defineHandler('printer:reprint', ctx, (_ctx, payload) => {

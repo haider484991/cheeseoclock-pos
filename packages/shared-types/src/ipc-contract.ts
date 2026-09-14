@@ -30,6 +30,7 @@ import type {
   PrinterConnectionConfig,
   PrintResult,
   PrinterTransport,
+  SystemPrinterInfo,
 } from './printer.js';
 import type {
   Ingredient,
@@ -660,6 +661,15 @@ export interface IpcContract {
   'printer:test': {
     request: undefined;
     response: ApiResult<PrintResult>;
+  };
+  /**
+   * Printer queues installed in the OS, for the USB picker. `supported` is
+   * false on platforms where the USB transport isn't implemented (the list
+   * is then empty).
+   */
+  'printer:listSystemPrinters': {
+    request: undefined;
+    response: ApiResult<{ printers: SystemPrinterInfo[]; supported: boolean }>;
   };
   'printer:reprint': {
     request: { orderId: string };

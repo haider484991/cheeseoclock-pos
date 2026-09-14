@@ -15,7 +15,7 @@ A modern, **offline-first point-of-sale system for restaurants & cafés**, built
 | **Customers** | Phone-first lookup with autocomplete. Saved delivery addresses. Order history. Inline commit on tender — no modal interruptions. |
 | **Inventory** | Ingredients with units, recipes (bill of materials per menu item), auto-decrement on sale, stock movements ledger, suppliers, purchase orders (draft → ordered → received). |
 | **Reports** | Sales / items / cashiers / payments / order modes / discounts / stock + COGS, all date-range driven with inline SVG charts. |
-| **Receipt printing** | ESC/POS via network port 9100 or a mock-to-disk adapter for dev. Logo + FBR IRN + QR. |
+| **Receipt printing** | ESC/POS over USB (any printer Windows lists — sent RAW through its print queue, no driver tricks), network port 9100, or a mock-to-disk adapter for dev. Logo + FBR IRN + QR. |
 | **FBR Digital Invoicing** | Noop (dev) / sandbox / production adapters, persistent queue with retry, IRN + QR auto-attached to receipts. |
 | **Cloud sync** | `sync_queue` push + apply-remote dispatcher. Mock & HTTP adapters ready; bring your own Postgres-backed `/sync/push` + `/sync/pull` endpoint. |
 | **Users + auth** | PIN-based login (argon2id), three roles (admin / manager / cashier), capability gates. |
@@ -118,7 +118,7 @@ The `.github/workflows/release.yml` workflow then:
 2. Copy `apps/pos/release/CheeseOclock POS-x.y.z-x64.exe` to a USB stick or email it
 3. On the customer's PC: double-click → (SmartScreen → More info → Run anyway) → install
 4. First launch: **onboarding wizard** appears — collect store name, admin PIN, optional logo
-5. Set up: Settings → Printer (Mock or your network printer IP), Branding (store info), FBR (defaults to Noop = dry-run until you have PRAL credentials)
+5. Set up: Settings → Printer (USB: install the printer's Windows driver, plug it in, pick it from the list; LAN: its IP on port 9100), Branding (store info), FBR (defaults to Noop = dry-run until you have PRAL credentials)
 6. **Tell them**: "Every Friday, Settings → Backup → Export copy → save to your USB. That's your disaster recovery."
 
 ---

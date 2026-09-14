@@ -1,0 +1,88 @@
+import { v7 as uuidv7 } from 'uuid';
+import log from 'electron-log/main';
+import type {
+  PrinterAdapter,
+  PrintResult,
+  PrinterConnectionConfig,
+} from '@cheeseoclock/printer-core';
+import { renderTestPage } from './test-page.js';
+import { RawPrintError, RawPrintWorker } from './windows-raw-print-worker.js';
+
+/**
+ * USB printer adapter — Windows only for now.
+ *
+ * We don't talk USB ourselves. Windows already does, the moment the printer's
+ * driver is installed and it shows up under Settings → Printers & scanners.
+ * We hand that queue our ESC/POS bytes as a RAW job (see
+ * windows-raw-print-worker.ts), which the driver passes through untouched:
+ * cut, drawer kick and QR all work exactly as over the network.
+ *
+ * Same contract as the other adapters: print failure never blocks the sale.
+ * A queue that is missing or refusing the job comes back as a retryable
+ * result and the spooler backs off.
+ */
+export class UsbPrinterAdapter implements PrinterAdapter {
+  readonly id: string;
+  readonly config: PrinterConnectionConfig;
+  private readonly worker: RawPrintWorker;
+  private connected = false;
+
+  constructor(config: PrinterConnectionConfig, worker?: RawPrintWorker) {
+    if (config.transport !== 'usb' || !config.usb?.printerName) {
+      throw new Error('UsbPrinterAdapter requires transport=usb with a printer name');
+    }
+    this.id = uuidv7();
+    this.config = config;
+    this.worker =
+      worker ??
+      new RawPrintWorker(undefined, {
+        onEvent: (message, meta) => log.info(`USB printer: ${message}`, meta ?? {}),
+      });
+  }
+
+  async connect(): Promise<void> {
+    // The worker starts on the first print — nothing to open up front.
+    this.connected = true;
+  }
+
+  async disconnect(): Promise<void> {
+    this.connected = false;
+    this.worker.dispose();
+  }
+
+  isConnected(): boolean {
+    return this.connected;
+  }
+
+  async send(bytes: Uint8Array): Promise<PrintResult> {
+    const start = Date.now();
+    const printerName = this.config.usb?.printerName;
+    if (!printerName) {
+      return {
+        ok: false,
+        durationMs: 0,
+        error: { code: 'no_config', message: 'No USB printer selected', recoverable: false },
+      };
+    }
+    try {
+      const written = await this.worker.send(printerName, bytes);
+      log.info('USB printer job spooled', { printerName, bytes: written });
+      return { ok: true, durationMs: Date.now() - start };
+    } catch (err) {
+      const e =
+        err instanceof RawPrintError
+          ? err
+          : new RawPrintError('usb_error', err instanceof Error ? err.message : String(err), true);
+      log.warn('USB printer error', { printerName, code: e.code, err: e.message });
+      return {
+        ok: false,
+        durationMs: Date.now() - start,
+        error: { code: e.code, message: e.message, recoverable: e.recoverable },
+      };
+    }
+  }
+
+  async testPrint(): Promise<PrintResult> {
+    return this.send(renderTestPage(this.config.width ?? 48));
+  }
+}

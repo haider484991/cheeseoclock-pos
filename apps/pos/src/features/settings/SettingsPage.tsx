@@ -189,6 +189,8 @@ function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) => void }
       printerTile = { label: 'No printer, saving to file', tone: 'warn' };
     } else if (printer.transport === 'network' && printer.network) {
       printerTile = { label: `Wi-Fi / LAN · ${printer.network.host}`, tone: 'good' };
+    } else if (printer.transport === 'usb' && printer.usb?.printerName) {
+      printerTile = { label: `USB · ${printer.usb.printerName}`, tone: 'good' };
     } else {
       printerTile = { label: printer.transport, tone: 'warn' };
     }

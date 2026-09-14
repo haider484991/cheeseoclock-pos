@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { PrinterConnectionConfig, PrinterTransport } from '@cheeseoclock/shared-types';
-import { Printer, Wifi, Usb, Bluetooth, FlaskConical, Check } from 'lucide-react';
+import { Printer, Wifi, Usb, Bluetooth, FlaskConical, Check, RefreshCw } from 'lucide-react';
 
 interface TransportOption {
   id: PrinterTransport | 'mock';
@@ -15,9 +15,9 @@ interface TransportOption {
 }
 
 const TRANSPORTS: TransportOption[] = [
+  { id: 'usb', label: 'USB', icon: Usb, available: true },
   { id: 'network', label: 'Wi-Fi / LAN', icon: Wifi, available: true },
   { id: 'mock', label: 'No printer', icon: FlaskConical, available: true },
-  { id: 'usb', label: 'USB', icon: Usb, available: false, disabledReason: 'Not yet' },
   {
     id: 'bluetooth',
     label: 'Bluetooth',
@@ -32,6 +32,9 @@ function inferUiTransport(config: PrinterConnectionConfig): TransportOption['id'
   return config.transport;
 }
 
+const inputClass =
+  'w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800';
+
 export function PrinterSettings() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -44,6 +47,7 @@ export function PrinterSettings() {
   const [uiTransport, setUiTransport] = useState<TransportOption['id']>('mock');
   const [host, setHost] = useState('192.168.1.100');
   const [port, setPort] = useState('9100');
+  const [printerName, setPrinterName] = useState('');
   const [width, setWidth] = useState<32 | 48>(48);
 
   useEffect(() => {
@@ -52,8 +56,31 @@ export function PrinterSettings() {
     setUiTransport(inferUiTransport(cfg));
     setHost(cfg.network?.host && cfg.network.host !== 'mock' ? cfg.network.host : '192.168.1.100');
     setPort(String(cfg.network?.port ?? 9100));
+    setPrinterName(cfg.usb?.printerName ?? '');
     setWidth(cfg.width ?? 48);
   }, [cfgQ.data]);
+
+  // Printers Windows knows about — only asked for while the USB option is open.
+  const printersQ = useQuery({
+    queryKey: ['printer', 'system'],
+    queryFn: () => ipc.printer.listSystemPrinters(),
+    enabled: uiTransport === 'usb',
+    staleTime: 10_000,
+  });
+  const systemPrinters = useMemo(() => printersQ.data?.printers ?? [], [printersQ.data]);
+  const usbSupported = printersQ.data?.supported ?? true;
+
+  // First time in: pre-pick the queue that looks like a receipt printer so the
+  // usual case is "plug in → Save → Test print" with no dropdown at all. Once
+  // only — clearing the box afterwards must stay cleared.
+  const autoPicked = useRef(false);
+  useEffect(() => {
+    if (autoPicked.current || uiTransport !== 'usb' || systemPrinters.length === 0) return;
+    autoPicked.current = true;
+    if (printerName) return;
+    const guess = systemPrinters.find((p) => p.likelyReceiptPrinter);
+    if (guess) setPrinterName(guess.name);
+  }, [uiTransport, printerName, systemPrinters]);
 
   const saveMut = useMutation({
     mutationFn: (config: PrinterConnectionConfig) => ipc.printer.setConfig({ config }),
@@ -94,7 +121,7 @@ export function PrinterSettings() {
       }),
   });
 
-  function buildConfig(): PrinterConnectionConfig {
+  function buildConfig(): PrinterConnectionConfig | null {
     if (uiTransport === 'mock') {
       return { transport: 'network', network: { host: 'mock', port: 9100 }, width };
     }
@@ -110,18 +137,34 @@ export function PrinterSettings() {
         width,
       };
     }
-    // USB / Bluetooth are disabled at the option level — we shouldn't reach here.
+    if (uiTransport === 'usb') {
+      const name = printerName.trim();
+      if (!name) {
+        toast({
+          title: 'Pick the printer first',
+          description: 'Choose the printer from the list, then save.',
+          variant: 'error',
+        });
+        return null;
+      }
+      return { transport: 'usb', usb: { printerName: name }, width };
+    }
+    // Bluetooth is disabled at the option level — we shouldn't reach here.
     return { transport: 'network', network: { host: 'mock', port: 9100 }, width };
   }
 
   function save() {
-    saveMut.mutate(buildConfig());
+    const config = buildConfig();
+    if (config) saveMut.mutate(config);
   }
 
   function testPrint() {
-    // Save first if user just changed anything? Easier: just run with current saved config.
+    // Runs against the saved config, so the toast reflects what the till will do.
     testMut.mutate();
   }
+
+  const savedName = cfgQ.data?.config.usb?.printerName;
+  const selectedIsKnown = !printerName || systemPrinters.some((p) => p.name === printerName);
 
   return (
     <Card>
@@ -130,9 +173,10 @@ export function PrinterSettings() {
         <h2 className="text-lg font-semibold">Printer</h2>
       </div>
       <p className="mb-4 text-sm text-stone-500">
-        Receipts, kitchen tickets and the cash drawer all go through this one
-        printer. Most Wi-Fi and LAN thermal printers work with the Wi-Fi / LAN
-        option on port 9100. USB and Bluetooth printers are not supported yet.
+        Receipts, kitchen tickets and the cash drawer all go through this one printer. A USB printer
+        works as soon as Windows shows it under Printers &amp; scanners; most Wi-Fi and LAN thermal
+        printers work with the Wi-Fi / LAN option on port 9100. Bluetooth printers are not supported
+        yet.
       </p>
 
       <section className="space-y-4">
@@ -171,6 +215,66 @@ export function PrinterSettings() {
           </div>
         </div>
 
+        {uiTransport === 'usb' && (
+          <div className="space-y-2">
+            <label
+              htmlFor="usb-printer-select"
+              className="mb-1 block text-xs uppercase tracking-wider text-stone-500"
+            >
+              Printer
+            </label>
+            <div className="flex gap-2">
+              <select
+                id="usb-printer-select"
+                value={printerName}
+                onChange={(e) => setPrinterName(e.target.value)}
+                disabled={!usbSupported}
+                className={inputClass}
+              >
+                <option value="">
+                  {printersQ.isPending ? 'Looking for printers…' : '— pick the printer —'}
+                </option>
+                {!selectedIsKnown && (
+                  <option value={printerName}>{printerName} (not found right now)</option>
+                )}
+                {systemPrinters.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.displayName}
+                    {p.isDefault ? ' (Windows default)' : ''}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="secondary"
+                disabled={!usbSupported || printersQ.isFetching}
+                onClick={() => void printersQ.refetch()}
+                aria-label="Refresh printer list"
+              >
+                <RefreshCw className={cn('h-4 w-4', printersQ.isFetching && 'animate-spin')} />
+              </Button>
+            </div>
+            {!usbSupported ? (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                USB printing is available on Windows only.
+              </p>
+            ) : printersQ.isSuccess && systemPrinters.length === 0 ? (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                Windows hasn&rsquo;t found any printer yet. Check the USB cable and power, install
+                the driver from the printer&rsquo;s CD or the maker&rsquo;s website, then refresh.
+              </p>
+            ) : (
+              <p className="text-xs text-stone-500">
+                Plug the printer into this PC with its USB cable and switch it on. It must appear in
+                Windows under Settings → Bluetooth &amp; devices → Printers &amp; scanners (install
+                the driver from the printer&rsquo;s CD or the maker&rsquo;s website if it
+                doesn&rsquo;t). Pick it here, Save, then Test print. Receipts go through
+                Windows&rsquo; own print queue, so if the printer is off they print when it comes
+                back.
+              </p>
+            )}
+          </div>
+        )}
+
         {uiTransport === 'network' && (
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
@@ -182,7 +286,7 @@ export function PrinterSettings() {
                 value={host}
                 onChange={(e) => setHost(e.target.value)}
                 placeholder="192.168.1.100"
-                className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
+                className={inputClass}
               />
             </div>
             <div>
@@ -194,7 +298,7 @@ export function PrinterSettings() {
                 value={port}
                 onChange={(e) => setPort(e.target.value)}
                 placeholder="9100"
-                className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
+                className={inputClass}
               />
             </div>
           </div>
@@ -206,8 +310,8 @@ export function PrinterSettings() {
             <code className="mx-1 rounded bg-stone-200 px-1 py-0.5 font-mono text-xs dark:bg-stone-700">
               printer-mock
             </code>
-            folder instead of printing. Sales still work. Switch to Wi-Fi / LAN
-            once the printer is on the shop network.
+            folder instead of printing. Sales still work. Switch to USB or Wi-Fi / LAN once the
+            printer is connected.
           </div>
         )}
 
@@ -240,15 +344,16 @@ export function PrinterSettings() {
               <span className="inline-flex items-center gap-1">
                 <Check className="h-3 w-3 text-emerald-500" />
                 Current: {labelCurrent(cfgQ.data.config)}
+                {uiTransport === 'usb' && savedName && savedName !== printerName.trim() && (
+                  <span className="ml-1 text-amber-600 dark:text-amber-400">
+                    — save to use the new pick
+                  </span>
+                )}
               </span>
             )}
           </div>
           <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              disabled={testMut.isPending}
-              onClick={testPrint}
-            >
+            <Button variant="secondary" disabled={testMut.isPending} onClick={testPrint}>
               {testMut.isPending ? 'Sending…' : 'Test print'}
             </Button>
             <Button variant="primary" disabled={saveMut.isPending} onClick={save}>
@@ -262,9 +367,9 @@ export function PrinterSettings() {
 }
 
 function labelCurrent(c: PrinterConnectionConfig): string {
-  if (c.transport === 'network' && c.network?.host === 'mock')
-    return 'No printer (saving to file)';
+  if (c.transport === 'network' && c.network?.host === 'mock') return 'No printer (saving to file)';
   if (c.transport === 'network' && c.network)
     return `Wi-Fi / LAN · ${c.network.host}:${c.network.port}`;
+  if (c.transport === 'usb' && c.usb?.printerName) return `USB · ${c.usb.printerName}`;
   return c.transport;
 }

@@ -154,6 +154,7 @@ const api: RendererApi = {
     setConfig: (req) => invoke('printer:setConfig', req),
     setBranding: (req) => invoke('printer:setBranding', req),
     test: () => invoke('printer:test', undefined),
+    listSystemPrinters: () => invoke('printer:listSystemPrinters', undefined),
     reprint: (req) => invoke('printer:reprint', req),
   },
   fbr: {
