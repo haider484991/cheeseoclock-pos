@@ -30,7 +30,7 @@ export function ItemGrid({ items, onAdd }: Props) {
     );
   }
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+    <div className="checkout-item-grid">
       {items.map((item) => (
         <ItemTile key={item.id} item={item} onAdd={() => onAdd(item)} />
       ))}
@@ -46,8 +46,10 @@ function ItemTile({ item, onAdd }: { item: MenuItem; onAdd: () => void }) {
     <button
       type="button"
       onClick={onAdd}
+      aria-label={`Add ${item.name}, ${formatCents(item.basePriceCents)}`}
+      title={item.name}
       className={cn(
-        'group relative flex flex-col overflow-hidden rounded-2xl bg-white text-left shadow-soft ring-1 ring-stone-200/60 transition-all',
+        'checkout-item group relative flex flex-col overflow-hidden rounded-2xl bg-white text-left shadow-soft ring-1 ring-stone-200/60 transition-all',
         'hover:-translate-y-0.5 hover:shadow-soft-md hover:ring-amber-300',
         'active:translate-y-0 active:shadow-soft-sm',
         'dark:bg-stone-900 dark:ring-stone-800/80',
@@ -73,14 +75,14 @@ function ItemTile({ item, onAdd }: { item: MenuItem; onAdd: () => void }) {
           </div>
         )}
         {/* Price pill */}
-        <div className="absolute bottom-2 right-2 rounded-full bg-white/95 px-2.5 py-1 text-xs font-bold text-stone-900 shadow-soft-sm backdrop-blur dark:bg-stone-900/95 dark:text-stone-100">
+        <div className="absolute bottom-2 left-2 whitespace-nowrap rounded-lg bg-white/95 px-2.5 py-1 text-sm font-bold text-stone-900 shadow-soft-sm backdrop-blur dark:bg-stone-900/95 dark:text-stone-100">
           {formatCents(item.basePriceCents)}
         </div>
       </div>
 
       {/* Body */}
       <div className="flex flex-1 flex-col gap-0.5 p-3">
-        <div className="line-clamp-1 text-sm font-semibold tracking-tight text-stone-900 dark:text-stone-100">
+        <div className="min-h-10 break-words text-sm font-semibold leading-5 tracking-tight text-stone-900 dark:text-stone-100">
           {item.name}
         </div>
         {item.description && (
@@ -91,7 +93,7 @@ function ItemTile({ item, onAdd }: { item: MenuItem; onAdd: () => void }) {
       </div>
 
       {/* Plus indicator on hover */}
-      <div className="pointer-events-none absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-amber-500 text-stone-900 opacity-0 shadow-lift transition-opacity group-hover:opacity-100">
+      <div className="pointer-events-none absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-amber-500 text-stone-900 shadow-lift">
         <Plus className="h-4 w-4" />
       </div>
     </button>

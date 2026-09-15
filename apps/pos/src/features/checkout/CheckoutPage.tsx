@@ -13,6 +13,8 @@ import { DiscountDialog } from './DiscountDialog';
 import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { MenuItem } from '@cheeseoclock/shared-types';
+import { Search, X } from 'lucide-react';
+import { formatCents } from '@cheeseoclock/pos-domain';
 
 export function CheckoutPage() {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
@@ -20,6 +22,7 @@ export function CheckoutPage() {
   const [tenderOpen, setTenderOpen] = useState(false);
   const [discountOpen, setDiscountOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
+  const [search, setSearch] = useState('');
 
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const reset = useCheckoutStore((s) => s.reset);
@@ -61,12 +64,9 @@ export function CheckoutPage() {
       }),
   });
 
-  // Pick first category once categories load
-  useEffect(() => {
-    if (!selectedCategoryId && categoriesQ.data?.[0]) {
-      setSelectedCategoryId(categoriesQ.data[0].id);
-    }
-  }, [categoriesQ.data, selectedCategoryId]);
+  const visibleItems = (itemsQ.data ?? []).filter((item) =>
+    `${item.name} ${item.description ?? ''}`.toLowerCase().includes(search.trim().toLowerCase()),
+  );
 
   // F-key shortcuts. F1 = pay, F3 = discount, Esc = cancel modal.
   useEffect(() => {
@@ -148,18 +148,37 @@ export function CheckoutPage() {
   }
 
   return (
-    // Escape the AppShell main padding so the checkout uses the full canvas.
-    <div className="-m-8 flex h-[calc(100vh-4rem)] flex-col">
+    <div className="checkout-page">
       <OrderModeBar />
-      <div className="flex flex-1 overflow-hidden">
+      <button type="button" className="checkout-order-jump" onClick={() => document.getElementById('checkout-order')?.scrollIntoView({ block: 'start' })}>
+        <span>View order · {snapshot?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0} items</span>
+        <strong>{formatCents(snapshot?.order.totalCents ?? 0)}</strong>
+      </button>
+      <div className="checkout-workspace">
+        <section className="checkout-menu" aria-label="Menu">
+          <div className="checkout-menu-heading">
+            <div>
+              <h1 className="text-xl font-bold tracking-tight">Build an order</h1>
+              <p className="text-sm text-stone-500">Choose an item to add it to the order.</p>
+            </div>
+            <label className="checkout-search">
+              <Search className="h-4 w-4 shrink-0 text-stone-500" aria-hidden="true" />
+              <input aria-label="Search menu" placeholder="Search this menu…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              {search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X className="h-4 w-4" /></button>}
+            </label>
+          </div>
         <CategoryRail
           categories={categoriesQ.data ?? []}
           selectedId={selectedCategoryId}
           onSelect={setSelectedCategoryId}
         />
-        <div className="flex-1 overflow-auto p-5">
-          <ItemGrid items={itemsQ.data ?? []} onAdd={handleAddItem} />
+        <div className="checkout-items">
+          {itemsQ.isLoading ? <p role="status" className="p-6 text-stone-500">Loading menu…</p>
+            : itemsQ.isError || categoriesQ.isError ? <div role="alert" className="p-6 text-red-700">Could not load the menu. <button className="underline" onClick={() => { void itemsQ.refetch(); void categoriesQ.refetch(); }}>Try again</button></div>
+            : search && visibleItems.length === 0 ? <div role="status" className="py-12 text-center text-stone-500">No items match “{search}”. Try another name or category.</div>
+            : <ItemGrid items={visibleItems} onAdd={handleAddItem} />}
         </div>
+        </section>
         <CartPane
           onPay={() => setTenderOpen(true)}
           onDiscount={() => setDiscountOpen(true)}

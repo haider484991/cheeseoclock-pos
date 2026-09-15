@@ -1,4 +1,4 @@
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
@@ -10,6 +10,7 @@ import { useQueryClient } from '@tanstack/react-query';
 export function AppShell() {
   const user = useSessionStore((s) => s.user);
   const navigate = useNavigate();
+  const isCheckout = useLocation().pathname === '/checkout';
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -48,11 +49,11 @@ export function AppShell() {
   if (!user) return null;
 
   return (
-    <div className="flex h-full">
+    <div className="app-shell flex h-full">
       <Sidebar />
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar />
-        <main className="flex-1 overflow-auto p-8">
+        <main className={isCheckout ? 'checkout-main min-h-0 flex-1 overflow-auto' : 'min-h-0 flex-1 overflow-auto p-4 lg:p-8'}>
           <Outlet />
         </main>
       </div>

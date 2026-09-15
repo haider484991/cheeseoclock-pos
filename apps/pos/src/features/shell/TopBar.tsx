@@ -45,7 +45,7 @@ export function TopBar() {
   const now = new Date(tick);
 
   return (
-    <header className="flex h-16 items-center justify-between border-b border-stone-200/70 bg-white/70 px-8 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/70">
+    <header className="app-topbar flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-stone-200/70 bg-white/70 px-4 py-2 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/70">
       <div className="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
         <Clock className="h-4 w-4" />
         <span className="font-medium">
@@ -55,7 +55,7 @@ export function TopBar() {
             hour12: true,
           })}
         </span>
-        <span className="ml-2 text-xs text-stone-400">
+        <span className="ml-2 hidden text-xs text-stone-400 xl:inline">
           {now.toLocaleDateString('en-US', {
             weekday: 'long',
             month: 'short',
@@ -64,7 +64,7 @@ export function TopBar() {
         </span>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <ShiftWidget />
         <button
           type="button"
@@ -81,7 +81,7 @@ export function TopBar() {
             >
               {initials(user.fullName)}
             </div>
-            <div className="flex flex-col leading-tight">
+            <div className="app-user-name flex flex-col leading-tight">
               <span className="text-sm font-semibold">{user.fullName}</span>
               <span className="text-[10px] uppercase tracking-widest text-stone-500">
                 {ROLE_LABEL[user.role]}

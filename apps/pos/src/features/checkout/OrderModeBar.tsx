@@ -5,6 +5,7 @@ import { ShoppingBag, Bike, Smartphone } from 'lucide-react';
 import { CustomerInlinePanel } from './CustomerInlinePanel';
 import { useCustomerForm, resetCustomerForm } from './useCustomerForm';
 import { useToast } from '../../components/toast/ToastProvider';
+import { useState } from 'react';
 
 const MODES: Array<{ id: OrderMode; label: string; icon: typeof ShoppingBag }> = [
   { id: 'takeaway', label: 'Takeaway', icon: ShoppingBag },
@@ -19,6 +20,7 @@ export function OrderModeBar() {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
   const { form, setForm } = useCustomerForm();
+  const [customerExpanded, setCustomerExpanded] = useState(false);
 
   async function switchMode(next: OrderMode) {
     if (next === mode) return;
@@ -37,9 +39,9 @@ export function OrderModeBar() {
   }
 
   return (
-    <div className="flex flex-col gap-2 border-b border-stone-200 bg-white px-4 py-2 dark:border-stone-800 dark:bg-stone-900">
-      <div className="flex items-center gap-3">
-        <div className="flex gap-1">
+    <div className="checkout-details flex flex-col gap-3 border-b border-stone-200 bg-white p-4 dark:border-stone-800 dark:bg-stone-900">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Order type">
           {MODES.map((m) => {
             const Icon = m.icon;
             return (
@@ -47,9 +49,10 @@ export function OrderModeBar() {
                 key={m.id}
                 type="button"
                 disabled={busy}
+                aria-pressed={mode === m.id}
                 onClick={() => void switchMode(m.id)}
                 className={cn(
-                  'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors',
+                  'flex min-h-11 items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-colors',
                   'disabled:cursor-not-allowed disabled:opacity-50',
                   mode === m.id
                     ? 'bg-amber-500 text-stone-900'
@@ -72,7 +75,13 @@ export function OrderModeBar() {
       </div>
 
       {(mode === 'takeaway' || mode === 'delivery') && (
-        <CustomerInlinePanel mode={mode} form={form} setForm={setForm} />
+        <div className={cn('checkout-customer-container', customerExpanded && 'is-expanded')}>
+          <button type="button" className="checkout-customer-toggle" aria-expanded={customerExpanded} aria-controls="checkout-customer-fields" onClick={() => setCustomerExpanded(!customerExpanded)}>
+            <span>{form.name || (mode === 'delivery' ? 'Customer & delivery details' : 'Customer details')}</span>
+            <span>{customerExpanded ? 'Hide' : 'Edit'}</span>
+          </button>
+          <div id="checkout-customer-fields"><CustomerInlinePanel mode={mode} form={form} setForm={setForm} /></div>
+        </div>
       )}
     </div>
   );

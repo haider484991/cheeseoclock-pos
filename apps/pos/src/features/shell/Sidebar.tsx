@@ -64,7 +64,7 @@ export function Sidebar() {
   const storeName = cfgQ.data?.branding.storeName ?? 'CheeseOclock';
 
   return (
-    <aside className="flex w-60 flex-col border-r border-stone-200/70 bg-white/70 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/70">
+    <aside className="app-sidebar flex w-60 shrink-0 flex-col border-r border-stone-200/70 bg-white/70 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/70">
       <div className="flex items-center gap-3 px-5 py-5">
         <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
           {logoUrl ? (
@@ -92,6 +92,8 @@ export function Sidebar() {
             <NavLink
               key={item.to}
               to={item.to}
+              aria-label={item.label}
+              title={item.label}
               end={item.to === '/'}
               className={({ isActive }) =>
                 cn(

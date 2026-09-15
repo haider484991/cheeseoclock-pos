@@ -68,7 +68,7 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   }
 
   return (
-    <aside className="flex w-[26rem] flex-col border-l border-stone-200/70 bg-white/80 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/80">
+    <aside id="checkout-order" className="checkout-cart flex flex-col border-l border-stone-200/70 bg-white dark:border-stone-800/70 dark:bg-stone-900" aria-label="Current order">
       <header className="flex items-center justify-between border-b border-stone-200/70 px-5 py-4 dark:border-stone-800/70">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
@@ -101,9 +101,9 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
         </div>
       </header>
 
-      <div className="flex-1 overflow-auto px-3 py-2">
+      <div className="checkout-cart-lines flex-1 px-3 py-2">
         {items.length === 0 ? (
-          <div className="mt-16 flex flex-col items-center text-center">
+          <div className="flex flex-col items-center px-3 py-10 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-stone-100 text-stone-400 dark:bg-stone-800">
               <ShoppingBag className="h-7 w-7" />
             </div>
@@ -120,7 +120,7 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <div className="line-clamp-1 text-sm font-semibold leading-tight">
+                  <div className="break-words text-sm font-semibold leading-tight">
                     {item.menuItemName}
                   </div>
                   {item.modifiers.length > 0 && (

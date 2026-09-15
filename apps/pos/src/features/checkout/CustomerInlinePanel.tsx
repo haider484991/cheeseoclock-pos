@@ -168,7 +168,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
   const savedAddresses = customerDetailQ.data?.addresses ?? [];
 
   return (
-    <div className="flex flex-1 flex-wrap items-start gap-2 border-l border-stone-200 pl-3 dark:border-stone-700">
+    <div className="checkout-customer">
       {/* Phone with autocomplete */}
       <div className="relative" ref={phoneWrapRef}>
         <div className="flex items-center gap-1">
@@ -178,6 +178,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
         <input
           ref={phoneRef}
           type="tel"
+          aria-label="Customer phone"
           value={form.phone}
           onFocus={() => setPhoneOpen(true)}
           onChange={(e) => {
@@ -236,6 +237,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
         <input
           type="text"
           value={form.name}
+          aria-label="Customer name"
           onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
           placeholder="Customer name"
           className="w-44 rounded-md border border-stone-300 px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-800"
@@ -243,15 +245,16 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       </div>
 
       {showAddress && (
-        <div className="flex flex-col gap-1">
+        <div className="checkout-address flex flex-col gap-1">
           <div className="flex items-center gap-1">
             <MapPin className="h-3 w-3 text-stone-400" />
             <span className="text-xs uppercase tracking-wider text-stone-500">Address</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="checkout-address-fields">
             <input
               type="text"
               value={form.addressLine}
+              aria-label="Street address"
               onChange={(e) =>
                 setForm((p) => ({
                   ...p,
@@ -265,6 +268,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
             <input
               type="text"
               value={form.area}
+              aria-label="Delivery area"
               onChange={(e) =>
                 setForm((p) => ({ ...p, area: e.target.value, matchedAddressId: null }))
               }
@@ -274,6 +278,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
             <input
               type="text"
               value={form.city}
+              aria-label="City"
               onChange={(e) =>
                 setForm((p) => ({ ...p, city: e.target.value, matchedAddressId: null }))
               }
@@ -343,6 +348,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
         <input
           type="text"
           value={form.deliveryNotes}
+          aria-label="Order notes"
           onChange={(e) => setForm((p) => ({ ...p, deliveryNotes: e.target.value }))}
           placeholder={mode === 'delivery' ? 'ring upper bell' : 'collect by 7pm'}
           className="w-40 rounded-md border border-stone-300 px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-800"
