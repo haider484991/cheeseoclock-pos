@@ -114,6 +114,8 @@
   .checkout-workspace { grid-template-columns: minmax(0, 1fr) 340px; overflow: hidden; }
   .checkout-menu, .checkout-cart { overflow-y: auto; }
   .checkout-cart { border-top: 0; }
+  .checkout-cart-lines { min-height: 0; overflow-y: auto; }
+  .checkout-cart footer { flex-shrink: 0; }
   .checkout-customer { grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(240px, 2fr) minmax(150px, 1fr); }
   .checkout-address { grid-column: auto; }
   .checkout-address-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
