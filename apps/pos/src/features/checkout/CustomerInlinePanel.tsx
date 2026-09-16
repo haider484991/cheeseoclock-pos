@@ -6,7 +6,7 @@ import type { CustomerAddress } from '@cheeseoclock/shared-types';
 import { Phone, User, MapPin, Check, UserPlus, History } from 'lucide-react';
 
 /**
- * Inline customer + delivery panel — lives in the OrderModeBar (no modal).
+ * Inline customer + delivery panel — lives in the order ticket (no modal).
  *
  * The cashier fills in phone / name / address as part of the order. Nothing is
  * persisted until tender time, when `useCustomerForm` commits via
@@ -191,10 +191,10 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
             setPhoneOpen(true);
           }}
           placeholder="+92 300…"
-          className="w-40 rounded-md border border-stone-300 px-2 py-1 font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
+          className="cust-input is-mono"
         />
         {phoneOpen && form.phone.length >= 2 && !form.matchedCustomerId && (
-          <div className="absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-900">
+          <div className="absolute left-0 top-full z-30 mt-1 w-full min-w-[16rem] rounded-lg border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-900">
             {(suggestionsQ.data ?? []).length === 0 ? (
               <div className="p-2 text-xs text-stone-500">
                 No match. Fill name + address — we'll save this customer when you tender.
@@ -240,7 +240,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
           aria-label="Customer name"
           onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
           placeholder="Customer name"
-          className="w-44 rounded-md border border-stone-300 px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-800"
+          className="cust-input"
         />
       </div>
 
@@ -263,7 +263,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
                 }))
               }
               placeholder="House 12, Street 4"
-              className="w-56 rounded-md border border-stone-300 px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-800"
+              className="cust-input"
             />
             <input
               type="text"
@@ -273,7 +273,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
                 setForm((p) => ({ ...p, area: e.target.value, matchedAddressId: null }))
               }
               placeholder="Area"
-              className="w-24 rounded-md border border-stone-300 px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-800"
+              className="cust-input"
             />
             <input
               type="text"
@@ -283,7 +283,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
                 setForm((p) => ({ ...p, city: e.target.value, matchedAddressId: null }))
               }
               placeholder="City"
-              className="w-24 rounded-md border border-stone-300 px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-800"
+              className="cust-input"
             />
           </div>
           {savedAddresses.length > 0 && (
@@ -343,7 +343,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       )}
 
       {/* Delivery notes — both modes */}
-      <div className="flex flex-col gap-1">
+      <div className="checkout-notes flex flex-col gap-1">
         <span className="text-xs uppercase tracking-wider text-stone-500">Notes</span>
         <input
           type="text"
@@ -351,7 +351,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
           aria-label="Order notes"
           onChange={(e) => setForm((p) => ({ ...p, deliveryNotes: e.target.value }))}
           placeholder={mode === 'delivery' ? 'ring upper bell' : 'collect by 7pm'}
-          className="w-40 rounded-md border border-stone-300 px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-800"
+          className="cust-input"
         />
       </div>
 

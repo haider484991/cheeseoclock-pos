@@ -5,7 +5,6 @@ import { useCheckoutStore } from '../../stores/checkoutStore';
 import { CategoryRail } from './CategoryRail';
 import { ItemGrid } from './ItemGrid';
 import { CartPane } from './CartPane';
-import { OrderModeBar } from './OrderModeBar';
 import { ModifierModal } from './ModifierModal';
 import { TenderDialog } from './TenderDialog';
 import { ReceiptDialog } from './ReceiptDialog';
@@ -23,6 +22,7 @@ export function CheckoutPage() {
   const [discountOpen, setDiscountOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const reset = useCheckoutStore((s) => s.reset);
@@ -68,7 +68,25 @@ export function CheckoutPage() {
     `${item.name} ${item.description ?? ''}`.toLowerCase().includes(search.trim().toLowerCase()),
   );
 
-  // F-key shortcuts. F1 = pay, F3 = discount, Esc = cancel modal.
+  async function handleSendToKitchen() {
+    try {
+      const next = await useCheckoutStore.getState().sendToKitchen();
+      toast({
+        title: 'Sent to kitchen',
+        description: `Order #${next.order.orderNumber.split('-').pop()} is now on the Live Orders board.`,
+      });
+      reset();
+    } catch (e) {
+      toast({
+        title: 'Could not send',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      });
+    }
+  }
+
+  // Keys a cashier can hit without looking: F1 pay, F2 send, F3 discount,
+  // "/" jumps to search, Esc closes whatever is open.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (modifierForItem || tenderOpen || receiptOpen || discountOpen) {
@@ -82,24 +100,29 @@ export function CheckoutPage() {
         }
         return;
       }
-      if (e.key === 'F1' && snapshot && snapshot.items.length > 0) {
+      const hasItems = !!snapshot && snapshot.items.length > 0;
+      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') {
+        e.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      if (!hasItems) return;
+      if (e.key === 'F1' || e.key === 'F2') {
         e.preventDefault();
         if (!gate.ok) {
-          toast({
-            title: 'Cannot pay yet',
-            description: gate.missing.join(' · '),
-            variant: 'warning',
-          });
+          toast({ title: e.key === 'F1' ? 'Cannot pay yet' : 'Cannot send yet', description: gate.missing.join(' · '), variant: 'warning' });
           return;
         }
-        setTenderOpen(true);
-      } else if (e.key === 'F3' && snapshot && snapshot.items.length > 0) {
+        if (e.key === 'F1') setTenderOpen(true);
+        else void handleSendToKitchen();
+      } else if (e.key === 'F3') {
         e.preventDefault();
         setDiscountOpen(true);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modifierForItem, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast]);
 
   async function handleAddItem(item: MenuItem) {
@@ -130,61 +153,74 @@ export function CheckoutPage() {
     reset();
   }
 
-  async function handleSendToKitchen() {
-    try {
-      const next = await useCheckoutStore.getState().sendToKitchen();
-      toast({
-        title: 'Sent to kitchen',
-        description: `Order #${next.order.orderNumber.split('-').pop()} is now on the Live Orders board.`,
-      });
-      reset();
-    } catch (e) {
-      toast({
-        title: 'Could not send',
-        description: e instanceof Error ? e.message : 'Unknown error',
-        variant: 'error',
-      });
-    }
-  }
+  const itemCount = snapshot?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
 
   return (
-    <div className="checkout-page">
-      <OrderModeBar />
-      <button type="button" className="checkout-order-jump" onClick={() => document.getElementById('checkout-order')?.scrollIntoView({ block: 'start' })}>
-        <span>View order · {snapshot?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0} items</span>
+    <div className="checkout">
+      <section className="menu" aria-label="Menu">
+        <div className="menu-toolbar">
+          <label className="menu-search">
+            <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <input
+              ref={searchRef}
+              aria-label="Search menu"
+              placeholder="Search the menu  ( / )"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search && (
+              <button type="button" aria-label="Clear search" onClick={() => setSearch('')}>
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </label>
+          <CategoryRail categories={categoriesQ.data ?? []} selectedId={selectedCategoryId} onSelect={setSelectedCategoryId} />
+        </div>
+        <div className="menu-body">
+          {itemsQ.isLoading ? (
+            <p role="status" className="menu-empty">Loading the menu…</p>
+          ) : itemsQ.isError || categoriesQ.isError ? (
+            <div role="alert" className="menu-empty">
+              <p>Could not load the menu.</p>
+              <button type="button" className="ticket-link" onClick={() => { void itemsQ.refetch(); void categoriesQ.refetch(); }}>Try again</button>
+            </div>
+          ) : search && visibleItems.length === 0 ? (
+            <div role="status" className="menu-empty">
+              <p>Nothing called “{search}”.</p>
+              <p>Try another name, or clear the search.</p>
+            </div>
+          ) : !selectedCategoryId && !search.trim() ? (
+            // "All" reads as the printed menu does: section by section, in
+            // the shop's own category order, not one alphabetical heap.
+            <div className="menu-sections">
+              {(categoriesQ.data ?? []).map((c) => {
+                const inCat = visibleItems.filter((i) => i.categoryId === c.id);
+                if (inCat.length === 0) return null;
+                return (
+                  <section key={c.id} className="menu-section" aria-label={c.name}>
+                    <h2 className="menu-section-title">
+                      <span className="menu-tab-dot" style={{ background: c.colorHex }} aria-hidden="true" />
+                      {c.name}
+                    </h2>
+                    <ItemGrid items={inCat} categories={categoriesQ.data ?? []} onAdd={handleAddItem} />
+                  </section>
+                );
+              })}
+            </div>
+          ) : (
+            <ItemGrid items={visibleItems} categories={categoriesQ.data ?? []} onAdd={handleAddItem} />
+          )}
+        </div>
+      </section>
+
+      {/* Narrow screens stack the ticket under the menu; this bar keeps the
+          running total in view and jumps to it. */}
+      <button type="button" className="checkout-jump" onClick={() => document.getElementById('checkout-order')?.scrollIntoView({ block: 'start' })}>
+        <span>{itemCount === 0 ? 'Order' : `${itemCount} item${itemCount === 1 ? '' : 's'}`}</span>
         <strong>{formatCents(snapshot?.order.totalCents ?? 0)}</strong>
       </button>
-      <div className="checkout-workspace">
-        <section className="checkout-menu" aria-label="Menu">
-          <div className="checkout-menu-heading">
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">Build an order</h1>
-              <p className="text-sm text-stone-500">Choose an item to add it to the order.</p>
-            </div>
-            <label className="checkout-search">
-              <Search className="h-4 w-4 shrink-0 text-stone-500" aria-hidden="true" />
-              <input aria-label="Search menu" placeholder="Search this menu…" value={search} onChange={(e) => setSearch(e.target.value)} />
-              {search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X className="h-4 w-4" /></button>}
-            </label>
-          </div>
-        <CategoryRail
-          categories={categoriesQ.data ?? []}
-          selectedId={selectedCategoryId}
-          onSelect={setSelectedCategoryId}
-        />
-        <div className="checkout-items">
-          {itemsQ.isLoading ? <p role="status" className="p-6 text-stone-500">Loading menu…</p>
-            : itemsQ.isError || categoriesQ.isError ? <div role="alert" className="p-6 text-red-700">Could not load the menu. <button className="underline" onClick={() => { void itemsQ.refetch(); void categoriesQ.refetch(); }}>Try again</button></div>
-            : search && visibleItems.length === 0 ? <div role="status" className="py-12 text-center text-stone-500">No items match “{search}”. Try another name or category.</div>
-            : <ItemGrid items={visibleItems} onAdd={handleAddItem} />}
-        </div>
-        </section>
-        <CartPane
-          onPay={() => setTenderOpen(true)}
-          onDiscount={() => setDiscountOpen(true)}
-          onSendToKitchen={handleSendToKitchen}
-        />
-      </div>
+
+      <CartPane onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen(true)} onSendToKitchen={handleSendToKitchen} />
 
       {modifierForItem && (
         <ModifierModal
@@ -206,20 +242,12 @@ export function CheckoutPage() {
       )}
 
       {tenderOpen && snapshot && (
-        <TenderDialog
-          snapshot={snapshot}
-          onClose={() => setTenderOpen(false)}
-          onPaid={handlePaid}
-        />
+        <TenderDialog snapshot={snapshot} onClose={() => setTenderOpen(false)} onPaid={handlePaid} />
       )}
 
-      {discountOpen && snapshot && (
-        <DiscountDialog onClose={() => setDiscountOpen(false)} />
-      )}
+      {discountOpen && snapshot && <DiscountDialog onClose={() => setDiscountOpen(false)} />}
 
-      {receiptOpen && snapshot && (
-        <ReceiptDialog snapshot={snapshot} onClose={handleReceiptClose} />
-      )}
+      {receiptOpen && snapshot && <ReceiptDialog snapshot={snapshot} onClose={handleReceiptClose} />}
     </div>
   );
 }

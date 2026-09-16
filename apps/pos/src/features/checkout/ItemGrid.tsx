@@ -1,118 +1,49 @@
-import type { MenuItem } from '@cheeseoclock/shared-types';
+import type { MenuItem, Category } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { cn } from '@cheeseoclock/ui';
-import { Plus } from 'lucide-react';
 
 interface Props {
   items: MenuItem[];
+  categories: Category[];
   onAdd: (item: MenuItem) => void;
 }
 
 /**
- * Touch-friendly menu item grid. Each tile:
- *   - Square photo area (image if set, else a colored gradient with the first letter).
- *   - Item name + description below.
- *   - Price pill in the corner.
- *   - Hover lift + scale on tap.
+ * The menu as a cashier reads it: name and price, five across, every tile the
+ * same height so the eye can scan rows. The category's colour is a thin bar,
+ * not a fill — a menu of eighty items must not be eighty coloured blocks. A
+ * photo, when the shop has one, sits small at the side; it never decides the
+ * tile's size.
  */
-export function ItemGrid({ items, onAdd }: Props) {
+export function ItemGrid({ items, categories, onAdd }: Props) {
   if (items.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-center">
-          <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-2xl bg-stone-100 text-stone-400 dark:bg-stone-800">
-            <Plus className="h-7 w-7" />
-          </div>
-          <div className="text-sm font-medium text-stone-500">No items in this category</div>
-          <div className="mt-1 text-xs text-stone-400">Add some in the Menu page.</div>
-        </div>
+      <div className="menu-empty">
+        <p>No items here yet.</p>
+        <p>Add them under Menu, or pick another category.</p>
       </div>
     );
   }
+  const colourOf = new Map(categories.map((c) => [c.id, c.colorHex] as const));
   return (
-    <div className="checkout-item-grid">
+    <div className="menu-grid" role="list">
       {items.map((item) => (
-        <ItemTile key={item.id} item={item} onAdd={() => onAdd(item)} />
+        <button
+          key={item.id}
+          type="button"
+          role="listitem"
+          onClick={() => onAdd(item)}
+          aria-label={`Add ${item.name}, ${formatCents(item.basePriceCents)}`}
+          className={cn('menu-tile', item.imageUrl && 'has-photo')}
+          style={{ '--cat': colourOf.get(item.categoryId) ?? '#a8a29e' } as React.CSSProperties}
+        >
+          {item.imageUrl && (
+            <img src={item.imageUrl} alt="" className="menu-tile-photo" />
+          )}
+          <span className="menu-tile-name">{item.name}</span>
+          <span className="menu-tile-price">{formatCents(item.basePriceCents, { showSymbol: false })}</span>
+        </button>
       ))}
     </div>
   );
-}
-
-function ItemTile({ item, onAdd }: { item: MenuItem; onAdd: () => void }) {
-  const initial = item.name.trim().charAt(0).toUpperCase() || '·';
-  const tone = pickTone(item.id);
-
-  return (
-    <button
-      type="button"
-      onClick={onAdd}
-      aria-label={`Add ${item.name}, ${formatCents(item.basePriceCents)}`}
-      title={item.name}
-      className={cn(
-        'checkout-item group relative flex flex-col overflow-hidden rounded-2xl bg-white text-left shadow-soft ring-1 ring-stone-200/60 transition-all',
-        'hover:-translate-y-0.5 hover:shadow-soft-md hover:ring-amber-300',
-        'active:translate-y-0 active:shadow-soft-sm',
-        'dark:bg-stone-900 dark:ring-stone-800/80',
-      )}
-    >
-      {/* Photo / fallback */}
-      <div className="relative aspect-[5/4] w-full overflow-hidden">
-        {item.imageUrl ? (
-           
-          <img
-            src={item.imageUrl}
-            alt=""
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          />
-        ) : (
-          <div
-            className={cn(
-              'flex h-full w-full items-center justify-center bg-gradient-to-br text-5xl font-bold text-white/90',
-              tone,
-            )}
-          >
-            {initial}
-          </div>
-        )}
-        {/* Price pill */}
-        <div className="absolute bottom-2 left-2 whitespace-nowrap rounded-lg bg-white/95 px-2.5 py-1 text-sm font-bold text-stone-900 shadow-soft-sm backdrop-blur dark:bg-stone-900/95 dark:text-stone-100">
-          {formatCents(item.basePriceCents)}
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className="flex flex-1 flex-col gap-0.5 p-3">
-        <div className="min-h-10 break-words text-sm font-semibold leading-5 tracking-tight text-stone-900 dark:text-stone-100">
-          {item.name}
-        </div>
-        {item.description && (
-          <div className="line-clamp-2 text-[11px] leading-tight text-stone-500">
-            {item.description}
-          </div>
-        )}
-      </div>
-
-      {/* Plus indicator on hover */}
-      <div className="pointer-events-none absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-amber-500 text-stone-900 shadow-lift">
-        <Plus className="h-4 w-4" />
-      </div>
-    </button>
-  );
-}
-
-/** Deterministic gradient color per item id — same item always renders the same tone. */
-function pickTone(id: string): string {
-  const tones = [
-    'from-amber-400 to-orange-500',
-    'from-rose-400 to-pink-500',
-    'from-emerald-400 to-teal-500',
-    'from-sky-400 to-blue-500',
-    'from-violet-400 to-purple-500',
-    'from-fuchsia-400 to-pink-500',
-    'from-lime-400 to-green-500',
-    'from-stone-400 to-stone-600',
-  ];
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) & 0xffffffff;
-  return tones[Math.abs(hash) % tones.length]!;
 }

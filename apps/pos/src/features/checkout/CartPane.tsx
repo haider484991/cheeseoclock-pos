@@ -1,19 +1,27 @@
+import { useEffect, useState } from 'react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
-import { Button, cn } from '@cheeseoclock/ui';
+import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
+import type { OrderMode } from '@cheeseoclock/shared-types';
 import {
   Minus,
   Plus,
   X,
   Percent,
-  CreditCard,
-  Trash2,
-  AlertTriangle,
-  ShoppingBag,
   ChefHat,
+  Banknote,
+  ShoppingBag,
+  Bike,
+  Smartphone,
+  UserRound,
+  ChevronDown,
+  ChevronUp,
+  AlertTriangle,
 } from 'lucide-react';
 import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
+import { CustomerInlinePanel } from './CustomerInlinePanel';
+import { useCustomerForm, resetCustomerForm } from './useCustomerForm';
 
 interface Props {
   onPay: () => void;
@@ -21,20 +29,36 @@ interface Props {
   onSendToKitchen: () => void;
 }
 
+/** "Delivery needs a customer phone" → "customer phone"; the row already says "Still needed". */
+function shortMissing(missing: string[]): string {
+  return missing
+    .map((m) => m.replace(/^\w[\w-]* needs (a |an |the )?/i, '').replace(/^delivery /i, ''))
+    .join(', ');
+}
+
+const MODES: Array<{ id: OrderMode; label: string; icon: typeof ShoppingBag }> = [
+  { id: 'takeaway', label: 'Takeaway', icon: ShoppingBag },
+  { id: 'delivery', label: 'Delivery', icon: Bike },
+  { id: 'foodpanda', label: 'Foodpanda', icon: Smartphone },
+];
+
+/**
+ * The order ticket. Everything that describes *this* order lives here — how it
+ * leaves the shop, who it is for, what is on it, what it costs, and the one
+ * action that moves it on — so the cashier's eyes never leave the column that
+ * becomes the kitchen ticket.
+ */
 export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
   const mode = useCheckoutStore((s) => s.mode);
+  const setMode = useCheckoutStore((s) => s.setMode);
   const updateItemQty = useCheckoutStore((s) => s.updateItemQty);
-  const removeItem = useCheckoutStore((s) => s.removeItem);
   const clearDiscount = useCheckoutStore((s) => s.clearDiscount);
   const discardDraft = useCheckoutStore((s) => s.discardDraft);
   const gate = useTenderGate();
   const { toast } = useToast();
-  // COD is the default for delivery + takeaway in Pakistani retail. Show
-  // "Send to kitchen" as the primary action; keep "Pay now" available for
-  // the prepay path (counter / pre-paid online).
-  const codFlow = mode === 'delivery' || mode === 'takeaway';
+  const { form, setForm } = useCustomerForm();
 
   const items = snapshot?.items ?? [];
   const order = snapshot?.order;
@@ -42,22 +66,49 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   const subtotalCents = order?.subtotalCents ?? 0;
   const discountCents = order?.discountCents ?? 0;
   const taxCents = order?.taxCents ?? 0;
+  const itemCount = items.reduce((n, i) => n + i.quantity, 0);
+  const shortNumber = order?.orderNumber.split('-').pop() ?? null;
+
+  // Cash on delivery / pay at pickup is the norm here, so "Send to kitchen"
+  // leads for takeaway and delivery. Foodpanda is settled by the platform:
+  // the till records it as paid and sends it in one step.
+  const needsCustomer = mode === 'takeaway' || mode === 'delivery';
+  const sendFirst = needsCustomer;
+
+  // The customer block opens on its own while nothing is filled in, and folds
+  // to a one-line summary once there is something to summarise.
+  const hasCustomer = Boolean(form.name.trim() || form.phone.trim());
+  const empty = items.length === 0;
+  const [customerOpen, setCustomerOpen] = useState(true);
+  useEffect(() => {
+    // Open while the order is blank (a phone order starts with the number),
+    // folded once items are on the ticket so the lines stay in view. Never
+    // re-evaluated on a keystroke — collapsing mid-typing would be maddening.
+    setCustomerOpen(empty && !hasCustomer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, order?.id, empty]);
+
+  async function switchMode(next: OrderMode) {
+    if (next === mode) return;
+    try {
+      await setMode(next);
+      resetCustomerForm();
+    } catch (e) {
+      toast({
+        title: 'Could not change order type',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      });
+    }
+  }
 
   async function handleDiscard() {
     if (!order) return;
-    const lines =
-      items.length > 0
-        ? ` Its ${items.length} item${items.length === 1 ? '' : 's'} will be dropped.`
-        : '';
-    if (
-      !confirm(
-        `Discard order #${order.orderNumber}?${lines} Nothing has been sent to the kitchen or charged.`,
-      )
-    ) {
-      return;
-    }
+    const lines = items.length > 0 ? ` Its ${items.length} item${items.length === 1 ? '' : 's'} will be dropped.` : '';
+    if (!confirm(`Discard order #${order.orderNumber}?${lines} Nothing has been sent to the kitchen or charged.`)) return;
     try {
       await discardDraft();
+      resetCustomerForm();
     } catch (e) {
       toast({
         title: 'Could not discard order',
@@ -67,31 +118,41 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
     }
   }
 
+  const canAct = items.length > 0 && !busy && gate.ok;
+
   return (
-    <aside id="checkout-order" className="checkout-cart flex flex-col border-l border-stone-200/70 bg-white dark:border-stone-800/70 dark:bg-stone-900" aria-label="Current order">
-      <header className="flex items-center justify-between border-b border-stone-200/70 px-5 py-4 dark:border-stone-800/70">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
-            Current order
-          </div>
-          <div className="mt-0.5 font-mono text-sm font-semibold">
-            {order ? `#${order.orderNumber}` : 'No order yet'}
-          </div>
+    <aside id="checkout-order" className="ticket" aria-label="Current order">
+      <header className="ticket-head">
+        <div className="ticket-modes" role="group" aria-label="Order type">
+          {MODES.map((m) => {
+            const Icon = m.icon;
+            const active = mode === m.id;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                disabled={busy}
+                aria-pressed={active}
+                onClick={() => void switchMode(m.id)}
+                className={cn('ticket-mode', active && 'is-active')}
+              >
+                <Icon className="h-4 w-4" aria-hidden="true" />
+                <span>{m.label}</span>
+              </button>
+            );
+          })}
         </div>
-        <div className="flex items-center gap-2">
-          {items.length > 0 && (
-            <div className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-              {items.length} item{items.length === 1 ? '' : 's'}
-            </div>
-          )}
+        <div className="ticket-id">
+          <span className="ticket-number">{shortNumber ? `#${shortNumber}` : 'New order'}</span>
+          <span className="ticket-count">
+            {itemCount === 0 ? 'nothing yet' : `${itemCount} item${itemCount === 1 ? '' : 's'}`}
+          </span>
           {order?.status === 'open' && (
-            // A draft is a cart, not a sale: dropping it needs no approval.
-            // Once sent or paid this disappears — those are voids/refunds.
             <button
               type="button"
               disabled={busy}
               onClick={() => void handleDiscard()}
-              className="rounded-md p-1.5 text-stone-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950"
+              className="ticket-discard"
               title="Discard this order"
               aria-label="Discard this order"
             >
@@ -101,218 +162,174 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
         </div>
       </header>
 
-      <div className="checkout-cart-lines flex-1 px-3 py-2">
+      {needsCustomer && (
+        <section className={cn('ticket-customer', customerOpen && 'is-open')} aria-label="Customer">
+          <button
+            type="button"
+            className="ticket-customer-toggle"
+            aria-expanded={customerOpen}
+            aria-controls="ticket-customer-fields"
+            onClick={() => setCustomerOpen((o) => !o)}
+          >
+            <UserRound className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="ticket-customer-summary">
+              {hasCustomer ? (
+                <>
+                  <strong>{form.name.trim() || 'No name'}</strong>
+                  {form.phone.trim() && <span>{form.phone.trim()}</span>}
+                  {mode === 'delivery' && form.addressLine.trim() && (
+                    <span className="truncate">{form.addressLine.trim()}</span>
+                  )}
+                </>
+              ) : (
+                <strong>{mode === 'delivery' ? 'Who and where to?' : 'Who is it for?'}</strong>
+              )}
+            </span>
+            {customerOpen ? <ChevronUp className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
+          </button>
+          <div id="ticket-customer-fields" className="ticket-customer-fields" hidden={!customerOpen}>
+            <CustomerInlinePanel mode={mode} form={form} setForm={setForm} />
+          </div>
+        </section>
+      )}
+
+      <div className="ticket-lines">
         {items.length === 0 ? (
-          <div className="flex flex-col items-center px-3 py-10 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-stone-100 text-stone-400 dark:bg-stone-800">
-              <ShoppingBag className="h-7 w-7" />
-            </div>
-            <div className="mt-3 text-sm font-medium text-stone-500">Cart is empty</div>
-            <div className="mt-0.5 text-xs text-stone-400">
-              Tap a menu item to start an order.
-            </div>
+          <div className="ticket-empty">
+            <p>Tap a menu item to start the order.</p>
           </div>
         ) : (
-          items.map((item) => (
-            <div
-              key={item.id}
-              className="mb-1.5 rounded-xl p-2.5 transition-colors hover:bg-stone-50 dark:hover:bg-stone-800/60"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="break-words text-sm font-semibold leading-tight">
-                    {item.menuItemName}
-                  </div>
-                  {item.modifiers.length > 0 && (
-                    <ul className="ml-2 mt-1 space-y-0.5 text-[11px] text-stone-500">
-                      {item.modifiers.map((m) => (
-                        <li key={m.id} className="flex items-baseline gap-1">
-                          <span className="text-stone-400">+</span>
-                          <span className="flex-1 truncate">{m.modifierName}</span>
-                          {m.priceDeltaCents !== 0 && (
-                            <span className="font-mono text-stone-400">
-                              {formatCents(m.priceDeltaCents, { showSymbol: false })}
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="font-mono text-sm font-semibold">
-                  {formatCents(item.lineTotalCents)}
-                </div>
-              </div>
-              <div className="mt-2 flex items-center gap-1">
-                <div className="flex items-center rounded-lg bg-stone-100 p-0.5 dark:bg-stone-800">
+          <ul>
+            {items.map((item) => (
+              <li key={item.id} className="ticket-line">
+                <div className="ticket-qty" role="group" aria-label={`Quantity of ${item.menuItemName}`}>
                   <button
                     type="button"
                     disabled={busy}
                     onClick={() => void updateItemQty(item.id, item.quantity - 1)}
-                    className="rounded-md p-1 text-stone-600 hover:bg-white disabled:opacity-50 dark:text-stone-300 dark:hover:bg-stone-700"
-                    aria-label="Decrease quantity"
+                    aria-label={item.quantity === 1 ? `Remove ${item.menuItemName}` : 'One less'}
+                    title={item.quantity === 1 ? 'Remove' : 'One less'}
                   >
-                    <Minus className="h-3.5 w-3.5" />
+                    {item.quantity === 1 ? <X className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
                   </button>
-                  <span className="min-w-[2ch] px-1.5 text-center font-mono text-sm font-bold">
-                    {item.quantity}
-                  </span>
+                  <span aria-live="polite">{item.quantity}</span>
                   <button
                     type="button"
                     disabled={busy}
                     onClick={() => void updateItemQty(item.id, item.quantity + 1)}
-                    className="rounded-md p-1 text-stone-600 hover:bg-white disabled:opacity-50 dark:text-stone-300 dark:hover:bg-stone-700"
-                    aria-label="Increase quantity"
+                    aria-label="One more"
+                    title="One more"
                   >
-                    <Plus className="h-3.5 w-3.5" />
+                    <Plus className="h-4 w-4" />
                   </button>
                 </div>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void removeItem(item.id)}
-                  className="ml-auto rounded-md p-1.5 text-stone-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950"
-                  aria-label="Remove"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          ))
+                <div className="ticket-line-body">
+                  <div className="ticket-line-name">{item.menuItemName}</div>
+                  {item.modifiers.length > 0 && (
+                    <div className="ticket-line-mods">
+                      {item.modifiers.map((m) => (
+                        <span key={m.id}>
+                          {m.modifierName}
+                          {m.priceDeltaCents !== 0 && ` ${formatCents(m.priceDeltaCents, { showSymbol: false })}`}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {item.notes && <div className="ticket-line-note">{item.notes}</div>}
+                </div>
+                <div className="ticket-line-price">{formatCents(item.lineTotalCents, { showSymbol: false })}</div>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 
-      <footer
-        className={cn(
-          'border-t border-stone-200/70 px-4 py-3 dark:border-stone-800/70',
-          items.length === 0 && 'opacity-60',
-        )}
-      >
-        <dl className="mb-3 space-y-1 text-sm">
-          <div className="flex justify-between">
-            <dt className="text-stone-500">Subtotal</dt>
-            <dd className="font-mono">{formatCents(subtotalCents)}</dd>
+      <footer className="ticket-foot">
+        <dl className="ticket-totals">
+          <div>
+            <dt>Subtotal</dt>
+            <dd>{formatCents(subtotalCents, { showSymbol: false })}</dd>
           </div>
-          {discountCents > 0 && (
-            <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
-              <dt className="flex items-center gap-1">
+          {discountCents > 0 ? (
+            <div className="is-discount">
+              <dt>
                 Discount
-                <button
-                  type="button"
-                  onClick={() => void clearDiscount()}
-                  className="rounded p-0.5 hover:bg-emerald-100 dark:hover:bg-emerald-900"
-                  aria-label="Remove discount"
-                >
+                <button type="button" onClick={() => void clearDiscount()} aria-label="Remove discount" title="Remove discount">
                   <X className="h-3 w-3" />
                 </button>
               </dt>
-              <dd className="font-mono">−{formatCents(discountCents)}</dd>
+              <dd>−{formatCents(discountCents, { showSymbol: false })}</dd>
+            </div>
+          ) : (
+            <div>
+              <dt>
+                <button
+                  type="button"
+                  className="ticket-link"
+                  disabled={items.length === 0 || busy}
+                  onClick={onDiscount}
+                  title="Apply a discount (F3)"
+                >
+                  <Percent className="h-3 w-3" aria-hidden="true" />
+                  Add discount
+                </button>
+              </dt>
+              <dd />
             </div>
           )}
-          <div className="flex justify-between">
-            <dt className="text-stone-500">Tax</dt>
-            <dd className="font-mono">{formatCents(taxCents)}</dd>
+          <div>
+            <dt>Tax</dt>
+            <dd>{formatCents(taxCents, { showSymbol: false })}</dd>
           </div>
-          <div className="flex justify-between rounded-xl bg-gradient-to-r from-amber-50 to-amber-100/50 px-3 py-2 text-base dark:from-amber-950/60 dark:to-amber-900/30">
-            <dt className="font-semibold">Total</dt>
-            <dd className="font-mono text-xl font-bold text-amber-900 dark:text-amber-100">
-              {formatCents(totalCents)}
-            </dd>
+          <div className="is-total">
+            <dt>Total</dt>
+            <dd>{formatCents(totalCents)}</dd>
           </div>
         </dl>
 
         {items.length > 0 && !gate.ok && (
-          <div className="mb-2 rounded-xl border border-amber-300 bg-amber-50 p-2.5 text-xs dark:border-amber-700 dark:bg-amber-950">
-            <div className="mb-0.5 flex items-center gap-1 font-semibold text-amber-900 dark:text-amber-200">
-              <AlertTriangle className="h-3 w-3" />
-              {codFlow ? 'Before sending:' : 'Before paying:'}
-            </div>
-            <ul className="ml-4 list-disc space-y-0.5 text-amber-800 dark:text-amber-200">
-              {gate.missing.map((m) => (
-                <li key={m}>{m}</li>
-              ))}
-            </ul>
+          <div className="ticket-gate" role="status">
+            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Still needed: {shortMissing(gate.missing)}</span>
           </div>
         )}
 
-        {codFlow ? (
-          // COD-default layout: Send to kitchen is primary, Pay-now demoted
-          // to a secondary text link for the prepay scenario.
-          <>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant="secondary"
-                size="lg"
-                className="whitespace-nowrap"
-                disabled={items.length === 0 || busy}
-                onClick={onDiscount}
-                title="Apply a discount (F3)"
-              >
-                <Percent className="h-4 w-4" />
-                Discount
-              </Button>
-              <Button
-                variant="success"
-                size="lg"
-                className="whitespace-nowrap"
-                disabled={items.length === 0 || busy || !gate.ok}
+        <div className="ticket-actions">
+          {sendFirst ? (
+            <>
+              <button
+                type="button"
+                className="ticket-primary"
+                disabled={!canAct}
                 onClick={onSendToKitchen}
-                title={!gate.ok ? gate.missing.join(' · ') : 'Send to kitchen'}
+                title="Send to kitchen (F2)"
               >
-                <ChefHat className="h-4 w-4" />
+                <ChefHat className="h-5 w-5" aria-hidden="true" />
                 Send to kitchen
-              </Button>
-            </div>
-            <button
-              type="button"
-              disabled={items.length === 0 || busy || !gate.ok}
-              onClick={onPay}
-              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-semibold text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-100"
-            >
-              <CreditCard className="h-3.5 w-3.5" />
-              Customer paying now? Pay &amp; dispatch
+              </button>
+              <button
+                type="button"
+                className="ticket-secondary"
+                disabled={!canAct}
+                onClick={onPay}
+                title="Take payment now (F1)"
+              >
+                <Banknote className="h-5 w-5" aria-hidden="true" />
+                Pay now
+              </button>
+            </>
+          ) : (
+            <button type="button" className="ticket-primary" disabled={!canAct} onClick={onPay} title="Take payment (F1)">
+              <Banknote className="h-5 w-5" aria-hidden="true" />
+              Pay &amp; send to kitchen
             </button>
-          </>
-        ) : (
-          // Dine-in: classic Pay flow as the primary action.
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              variant="secondary"
-              size="lg"
-              className="whitespace-nowrap"
-              disabled={items.length === 0 || busy}
-              onClick={onDiscount}
-              title="Apply a discount (F3)"
-            >
-              <Percent className="h-4 w-4" />
-              Discount
-            </Button>
-            <Button
-              variant="success"
-              size="lg"
-              className="whitespace-nowrap"
-              disabled={items.length === 0 || busy || !gate.ok}
-              onClick={onPay}
-              title={!gate.ok ? gate.missing.join(' · ') : 'Tender payment (F1)'}
-            >
-              <CreditCard className="h-4 w-4" />
-              Pay
-            </Button>
-          </div>
-        )}
-        {/* Keyboard hints — out of the buttons so they don't crowd labels */}
-        {items.length > 0 && (
-          <div className="mt-2 flex justify-center gap-3 text-[10px] text-stone-400">
-            <span>
-              <kbd className="rounded bg-stone-200 px-1 font-mono dark:bg-stone-700">F1</kbd>{' '}
-              {codFlow ? 'Pay' : 'Pay'}
-            </span>
-            <span>
-              <kbd className="rounded bg-stone-200 px-1 font-mono dark:bg-stone-700">F3</kbd>{' '}
-              Discount
-            </span>
-          </div>
-        )}
+          )}
+        </div>
+        <div className="ticket-keys" aria-hidden="true">
+          <span><kbd>F2</kbd> Send</span>
+          <span><kbd>F1</kbd> Pay</span>
+          <span><kbd>F3</kbd> Discount</span>
+        </div>
       </footer>
     </aside>
   );

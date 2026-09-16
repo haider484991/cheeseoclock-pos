@@ -49,7 +49,7 @@ export function AppShell() {
   if (!user) return null;
 
   return (
-    <div className="app-shell flex h-full">
+    <div className={isCheckout ? 'app-shell app-shell--compact flex h-full' : 'app-shell flex h-full'}>
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar />

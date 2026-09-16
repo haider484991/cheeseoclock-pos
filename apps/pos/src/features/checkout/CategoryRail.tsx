@@ -7,10 +7,18 @@ interface Props {
   onSelect: (id: string | null) => void;
 }
 
+/** One row of category tabs; the colour dot is the same colour as the tile bar. */
 export function CategoryRail({ categories, selectedId, onSelect }: Props) {
   return (
-    <nav className="checkout-categories" aria-label="Menu categories">
-      <button type="button" aria-pressed={selectedId === null} onClick={() => onSelect(null)} className={cn('checkout-category', selectedId === null && 'is-active')}>All items</button>
+    <nav className="menu-tabs" aria-label="Menu categories">
+      <button
+        type="button"
+        aria-pressed={selectedId === null}
+        onClick={() => onSelect(null)}
+        className={cn('menu-tab', selectedId === null && 'is-active')}
+      >
+        All
+      </button>
       {categories.map((c) => {
         const active = selectedId === c.id;
         return (
@@ -19,25 +27,13 @@ export function CategoryRail({ categories, selectedId, onSelect }: Props) {
             type="button"
             onClick={() => onSelect(c.id)}
             aria-pressed={active}
-            className={cn(
-              'checkout-category', active && 'is-active',
-            )}
+            className={cn('menu-tab', active && 'is-active')}
           >
-            <span
-              className={cn(
-                'absolute left-0 top-1/2 -translate-y-1/2 rounded-r-full transition-all',
-                active ? 'h-8 w-1' : 'h-4 w-0.5',
-              )}
-              style={{ background: c.colorHex }}
-              aria-hidden
-            />
-            <span className="ml-2 block leading-tight">{c.name}</span>
+            <span className="menu-tab-dot" style={{ background: c.colorHex }} aria-hidden="true" />
+            {c.name}
           </button>
         );
       })}
-      {categories.length === 0 && (
-        <div className="mt-4 text-center text-xs text-stone-500">No categories yet</div>
-      )}
     </nav>
   );
 }

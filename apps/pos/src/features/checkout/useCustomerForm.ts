@@ -5,7 +5,7 @@ import {
 } from './CustomerInlinePanel';
 
 /**
- * Tiny Zustand store so OrderModeBar (which owns the inline customer panel)
+ * Tiny Zustand store so the order ticket (which owns the inline customer panel)
  * and TenderDialog (which commits the form at tender time) can share the same
  * form state — without lifting it all the way up to CheckoutPage.
  */
