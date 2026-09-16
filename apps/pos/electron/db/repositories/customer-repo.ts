@@ -6,6 +6,7 @@ import { writeAudit } from './audit-repo.js';
 import { findOrder } from './order-repo.js';
 import { normalizePhone, phoneSearchTerms } from '@cheeseoclock/pos-domain';
 import type {
+  CustomerAddressMatch,
   Customer,
   CustomerAddress,
   CustomerWithAddresses,
@@ -278,6 +279,40 @@ export function listAddresses(db: AppDatabase, customerId: string): CustomerAddr
     )
     .all(customerId) as AddrRow[];
   return rows.map(rowToAddress);
+}
+
+/**
+ * Saved addresses whose house/street starts with what was typed, newest first,
+ * with the customer they belong to. House numbers are what regulars are known
+ * by at the counter — "41-C" typed once brings back the whole address and the
+ * customer behind it.
+ */
+export function searchAddresses(
+  db: AppDatabase,
+  query: string,
+  limit = 6,
+): CustomerAddressMatch[] {
+  const q = query.trim().toLowerCase();
+  if (q.length < 2) return [];
+  const rows = db
+    .prepare(
+      `SELECT a.id, a.customer_id, a.label, a.address_line, a.area, a.city, a.notes, a.is_default,
+              c.name AS customer_name, c.phone AS customer_phone
+         FROM customer_addresses a
+         JOIN customers c ON c.id = a.customer_id
+        WHERE a.deleted_at IS NULL AND c.deleted_at IS NULL AND c.is_active = 1
+          AND LOWER(a.address_line) LIKE ? ESCAPE '\\'
+        ORDER BY a.updated_at DESC
+        LIMIT ?`,
+    )
+    .all(`${escapeLike(q)}%`, Math.min(Math.max(1, limit), 20)) as Array<
+    AddrRow & { customer_name: string; customer_phone: string | null }
+  >;
+  return rows.map((r) => ({
+    ...rowToAddress(r),
+    customerName: r.customer_name,
+    customerPhone: r.customer_phone,
+  }));
 }
 
 export interface CreateAddressInput {

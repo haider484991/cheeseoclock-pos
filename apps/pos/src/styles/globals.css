@@ -194,6 +194,20 @@ html.dark .menu-section-title { color: #a8a29e; }
 .cust-input { display: block; width: 100%; min-width: 0; min-height: 38px; margin-top: 4px; padding: 0 10px; border: 1px solid #d6d3d1; border-radius: 8px; background: #fff; font-size: 14px; color: #1c1917; }
 .cust-input:focus { outline: none; border-color: #f59e0b; box-shadow: 0 0 0 3px rgb(245 158 11 / .18); }
 .cust-input.is-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+/* Suggestion lists sit in the flow (the customer block scrolls, so a floating
+   list would be clipped); they push the fields below them down while open. */
+.cust-dropdown { margin: 4px 0 0; padding: 4px; list-style: none; max-height: 176px; overflow-y: auto; background: #fff; border: 1px solid #d6d3d1; border-radius: 8px; box-shadow: 0 4px 12px rgb(28 25 23 / .08); }
+.cust-dropdown-wrap { margin-top: 4px; background: #fff; border: 1px solid #d6d3d1; border-radius: 8px; box-shadow: 0 4px 12px rgb(28 25 23 / .08); }
+.cust-dropdown-wrap ul { max-height: 176px; overflow-y: auto; }
+html.dark .cust-dropdown-wrap { background: #1c1917; border-color: #44403c; }
+.cust-dropdown button { display: flex; flex-direction: column; gap: 1px; width: 100%; min-height: 40px; padding: 6px 10px; border-radius: 6px; text-align: left; font-size: 13px; font-weight: 600; color: #1c1917; }
+.cust-dropdown button:hover, .cust-dropdown button:focus-visible { background: #fef3c7; }
+.cust-dropdown small { font-size: 11px; font-weight: 500; color: #78716c; }
+.cust-dropdown li:first-child button { background: #fafaf9; }
+.cust-dropdown li:first-child button:hover { background: #fef3c7; }
+html.dark .cust-dropdown { background: #1c1917; border-color: #44403c; }
+html.dark .cust-dropdown button { color: #f5f5f4; }
+html.dark .cust-dropdown button:hover, html.dark .cust-dropdown li:first-child button { background: #292524; }
 
 /* Narrow: menu on top, ticket below, jump bar keeps the total in reach. */
 @container (max-width: 859px) {

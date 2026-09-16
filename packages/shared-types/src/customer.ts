@@ -22,6 +22,12 @@ export interface CustomerAddress {
   isDefault: boolean;
 }
 
+/** A saved address found by house number / street, with who it belongs to. */
+export interface CustomerAddressMatch extends CustomerAddress {
+  customerName: string;
+  customerPhone: string | null;
+}
+
 export interface CustomerWithAddresses extends Customer {
   addresses: CustomerAddress[];
 }

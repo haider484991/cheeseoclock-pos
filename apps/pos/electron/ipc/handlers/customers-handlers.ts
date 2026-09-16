@@ -10,6 +10,7 @@ import {
   createCustomer,
   updateCustomer,
   listAddresses,
+  searchAddresses,
   createAddress,
   setDefaultAddress,
   deleteAddress,
@@ -56,6 +57,11 @@ export function registerCustomersHandlers(ctx: HandlerContext): void {
   defineHandler('customers:listAddresses', ctx, (_ctx, payload) => {
     requireOrderCreate();
     return ok(listAddresses(ctx.db, payload.customerId));
+  });
+
+  defineHandler('customers:searchAddresses', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    return ok(searchAddresses(ctx.db, payload.query, payload.limit));
   });
 
   defineHandler('customers:createAddress', ctx, (_ctx, payload) => {

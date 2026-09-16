@@ -180,6 +180,8 @@ export const ipc = {
       unwrap(window.api.customers.update(input)),
     listAddresses: (customerId: string) =>
       unwrap(window.api.customers.listAddresses({ customerId })),
+    searchAddresses: (query: string, limit?: number) =>
+      unwrap(window.api.customers.searchAddresses({ query, ...(limit ? { limit } : {}) })),
     createAddress: (input: IpcRequest<'customers:createAddress'>) =>
       unwrap(window.api.customers.createAddress(input)),
     setDefaultAddress: (addressId: string) =>

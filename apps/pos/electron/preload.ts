@@ -114,6 +114,7 @@ const api: RendererApi = {
     create: (req) => invoke('customers:create', req),
     update: (req) => invoke('customers:update', req),
     listAddresses: (req) => invoke('customers:listAddresses', req),
+    searchAddresses: (req) => invoke('customers:searchAddresses', req),
     createAddress: (req) => invoke('customers:createAddress', req),
     setDefaultAddress: (req) => invoke('customers:setDefaultAddress', req),
     deleteAddress: (req) => invoke('customers:deleteAddress', req),

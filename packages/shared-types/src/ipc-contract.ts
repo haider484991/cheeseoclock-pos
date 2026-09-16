@@ -43,7 +43,7 @@ import type {
   PurchaseOrderStatus,
   PurchaseOrderWithItems,
 } from './inventory.js';
-import type { Customer, CustomerAddress, CustomerWithAddresses } from './customer.js';
+import type { Customer, CustomerAddress, CustomerAddressMatch, CustomerWithAddresses } from './customer.js';
 
 /** One cloud copy as listed for the operator (from any till). */
 export interface CloudBackupEntry {
@@ -1074,6 +1074,11 @@ export interface IpcContract {
   'customers:listAddresses': {
     request: { customerId: string };
     response: ApiResult<CustomerAddress[]>;
+  };
+  /** Saved addresses across all customers whose house/street starts with the text typed. */
+  'customers:searchAddresses': {
+    request: { query: string; limit?: number };
+    response: ApiResult<CustomerAddressMatch[]>;
   };
   'customers:createAddress': {
     request: {

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
-import type { CustomerAddress } from '@cheeseoclock/shared-types';
+import type { CustomerAddress, CustomerAddressMatch } from '@cheeseoclock/shared-types';
+import { suggestDhaAreas, formatDhaArea, DHA_CITY, type DhaPlace } from '@cheeseoclock/pos-domain';
 import { Phone, User, MapPin, Check, UserPlus, History } from 'lucide-react';
 
 /**
@@ -44,7 +45,8 @@ export function makeEmptyCustomerForm(): CustomerFormState {
     addressLabel: 'Order',
     addressLine: '',
     area: '',
-    city: '',
+    // The shop delivers inside DHA only; the city is never in question.
+    city: DHA_CITY,
     deliveryNotes: '',
     matchedCustomerId: null,
     matchedAddressId: null,
@@ -66,6 +68,10 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
   // suggestion button used to unmount the button before its click event could
   // run — that's the "selecting doesn't pre-fill" bug).
   const phoneWrapRef = useRef<HTMLDivElement | null>(null);
+  // Address typeahead: known addresses by house number, DHA places by name.
+  const [addrOpen, setAddrOpen] = useState(false);
+  const [areaOpen, setAreaOpen] = useState(false);
+  const addrWrapRef = useRef<HTMLDivElement | null>(null);
 
   // Debounced lookup for phone autocomplete.
   const suggestionsQ = useQuery({
@@ -92,6 +98,49 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
         : Promise.resolve([]),
     enabled: !!form.matchedCustomerId,
   });
+
+  // "41-C" typed at the counter → every saved address starting with it, with
+  // the customer it belongs to. Regulars are known by their house number.
+  const addrMatchesQ = useQuery({
+    queryKey: ['customers', 'addressSearch', form.addressLine.trim().toLowerCase()],
+    queryFn: () => ipc.customers.searchAddresses(form.addressLine.trim(), 6),
+    enabled: mode === 'delivery' && form.addressLine.trim().length >= 2 && !form.matchedAddressId,
+  });
+  const addrMatches = form.matchedAddressId ? [] : (addrMatchesQ.data ?? []);
+  const areaSuggestions = useMemo(() => suggestDhaAreas(form.area, 8), [form.area]);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (!addrWrapRef.current) return;
+      if (!addrWrapRef.current.contains(e.target as Node)) {
+        setAddrOpen(false);
+        setAreaOpen(false);
+      }
+    }
+    if (addrOpen || areaOpen) document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [addrOpen, areaOpen]);
+
+  function pickAddressMatch(a: CustomerAddressMatch) {
+    setAddrOpen(false);
+    setForm((prev) => ({
+      ...prev,
+      matchedAddressId: a.id,
+      addressLabel: a.label,
+      addressLine: a.addressLine,
+      area: a.area ?? '',
+      city: a.city ?? DHA_CITY,
+      // The house tells us who it is, unless the cashier already picked someone.
+      ...(prev.matchedCustomerId
+        ? {}
+        : { matchedCustomerId: a.customerId, name: a.customerName, phone: a.customerPhone ?? prev.phone }),
+    }));
+  }
+
+  function pickArea(p: DhaPlace) {
+    setAreaOpen(false);
+    setForm((prev) => ({ ...prev, area: formatDhaArea(p), city: DHA_CITY, matchedAddressId: null }));
+  }
 
   // After matching a customer, auto-pick their default address for delivery
   // mode so the cashier doesn't have to click a chip. Only runs when the
@@ -194,7 +243,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
           className="cust-input is-mono"
         />
         {phoneOpen && form.phone.length >= 2 && !form.matchedCustomerId && (
-          <div className="absolute left-0 top-full z-30 mt-1 w-full min-w-[16rem] rounded-lg border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-900">
+          <div className="cust-dropdown-wrap">
             {(suggestionsQ.data ?? []).length === 0 ? (
               <div className="p-2 text-xs text-stone-500">
                 No match. Fill name + address — we'll save this customer when you tender.
@@ -250,31 +299,81 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
             <MapPin className="h-3 w-3 text-stone-400" />
             <span className="text-xs uppercase tracking-wider text-stone-500">Address</span>
           </div>
-          <div className="checkout-address-fields">
-            <input
-              type="text"
-              value={form.addressLine}
-              aria-label="Street address"
-              onChange={(e) =>
-                setForm((p) => ({
-                  ...p,
-                  addressLine: e.target.value,
-                  matchedAddressId: null,
-                }))
-              }
-              placeholder="House 12, Street 4"
-              className="cust-input"
-            />
-            <input
-              type="text"
-              value={form.area}
-              aria-label="Delivery area"
-              onChange={(e) =>
-                setForm((p) => ({ ...p, area: e.target.value, matchedAddressId: null }))
-              }
-              placeholder="Area"
-              className="cust-input"
-            />
+          <div className="checkout-address-fields" ref={addrWrapRef}>
+            <div className="relative">
+              <input
+                type="text"
+                value={form.addressLine}
+                aria-label="House and street"
+                autoComplete="off"
+                onFocus={() => setAddrOpen(true)}
+                onBlur={() => setTimeout(() => setAddrOpen(false), 150)}
+                onChange={(e) => {
+                  setForm((p) => ({ ...p, addressLine: e.target.value, matchedAddressId: null }));
+                  setAddrOpen(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setAddrOpen(false);
+                  if (e.key === 'Enter' && addrOpen && addrMatches[0]) {
+                    e.preventDefault();
+                    pickAddressMatch(addrMatches[0]);
+                  }
+                }}
+                placeholder="House 41-C, Sehar Lane 3"
+                className="cust-input"
+              />
+              {addrOpen && addrMatches.length > 0 && (
+                <ul className="cust-dropdown" role="listbox" aria-label="Known addresses">
+                  {addrMatches.map((a) => (
+                    <li key={a.id}>
+                      <button type="button" onClick={() => pickAddressMatch(a)}>
+                        <span>{a.addressLine}</span>
+                        <small>{[a.area, a.city].filter(Boolean).join(', ')}</small>
+                        <small>
+                          {a.customerName}
+                          {a.customerPhone ? ` · ${a.customerPhone}` : ''}
+                        </small>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="relative">
+              <input
+                type="text"
+                value={form.area}
+                aria-label="Phase or commercial area"
+                autoComplete="off"
+                onFocus={() => setAreaOpen(true)}
+                onBlur={() => setTimeout(() => setAreaOpen(false), 150)}
+                onChange={(e) => {
+                  setForm((p) => ({ ...p, area: e.target.value, matchedAddressId: null }));
+                  setAreaOpen(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setAreaOpen(false);
+                  if (e.key === 'Enter' && areaOpen && areaSuggestions[0]) {
+                    e.preventDefault();
+                    pickArea(areaSuggestions[0]);
+                  }
+                }}
+                placeholder="Phase / commercial"
+                className="cust-input"
+              />
+              {areaOpen && areaSuggestions.length > 0 && (
+                <ul className="cust-dropdown" role="listbox" aria-label="DHA areas">
+                  {areaSuggestions.map((p) => (
+                    <li key={p.label}>
+                      <button type="button" onClick={() => pickArea(p)}>
+                        <span>{p.label}</span>
+                        {p.kind !== 'phase' && <small>{p.phase ? `DHA ${p.phase}` : 'DHA'}</small>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <input
               type="text"
               value={form.city}
