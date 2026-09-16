@@ -1,5 +1,6 @@
 import { sql } from '@/lib/db';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
+import { unconfirmedOrderCutoff } from '@/lib/store-status';
 
 export const dynamic = 'force-dynamic';
 // Force every DB query in this route to hit the live database. Without this,
@@ -15,6 +16,14 @@ export const revalidate = 0;
 export async function GET(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
   try {
+    // Expire orders nobody confirmed in time BEFORE handing out the list, so
+    // a till that comes back after a long outage never cooks a stale order.
+    // The customer's tracker shows "couldn't confirm — please call".
+    await sql()`
+      UPDATE web_orders
+         SET status = 'cancelled', updated_at = now()
+       WHERE status = 'new' AND created_at < ${unconfirmedOrderCutoff()}
+    `;
     const rows = (await sql()`
       SELECT id, status, customer_name, customer_phone, address_line, area,
              notes, items_json, subtotal_cents, tax_cents, total_cents,

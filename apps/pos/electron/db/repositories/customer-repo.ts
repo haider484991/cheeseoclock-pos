@@ -4,7 +4,7 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { findOrder } from './order-repo.js';
-import { normalizePhone } from '@cheeseoclock/pos-domain';
+import { normalizePhone, phoneSearchTerms } from '@cheeseoclock/pos-domain';
 import type {
   Customer,
   CustomerAddress,
@@ -62,6 +62,11 @@ function rowToAddress(r: AddrRow): CustomerAddress {
   };
 }
 
+/** Escape LIKE wildcards in user-typed text; pair with `ESCAPE '\'`. */
+function escapeLike(text: string): string {
+  return text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 // -----------------------------------------------------------------------------
 // Customer CRUD
 // -----------------------------------------------------------------------------
@@ -74,9 +79,22 @@ export function listCustomers(
   const params: unknown[] = [];
   if (opts?.activeOnly) where.push('is_active = 1');
   if (opts?.search && opts.search.trim()) {
-    where.push('(LOWER(name) LIKE ? OR phone LIKE ?)');
-    const q = `%${opts.search.trim().toLowerCase()}%`;
-    params.push(q, q);
+    const term = opts.search.trim();
+    const clauses = [`LOWER(name) LIKE ? ESCAPE '\\'`];
+    params.push(`%${escapeLike(term.toLowerCase())}%`);
+    // Phones are stored canonical ("+923001234567") while cashiers type the
+    // local form ("03001234567"), so a raw LIKE on the typed text never
+    // matched. Match the normalised number and the stripped digits instead.
+    const { canonical, digits } = phoneSearchTerms(term);
+    if (canonical) {
+      clauses.push('phone = ?', `phone LIKE ? ESCAPE '\\'`);
+      params.push(canonical, `${escapeLike(canonical)}%`);
+    }
+    if (digits) {
+      clauses.push(`phone LIKE ? ESCAPE '\\'`);
+      params.push(`%${digits}%`);
+    }
+    where.push(`(${clauses.join(' OR ')})`);
   }
   const limit = opts?.limit ?? 100;
   const rows = db
@@ -509,6 +527,12 @@ export interface AttachCustomerInput {
   addressId: string | null;
   /** Omit to leave the notes alone; null clears them. */
   deliveryNotes?: string | null;
+  /**
+   * Name to freeze onto this order instead of the customer's master name
+   * (what the till typed for this one delivery). Only the order snapshot
+   * sees it — a tender never rewrites the customer row.
+   */
+  nameOverride?: string;
 }
 
 /**
@@ -547,7 +571,8 @@ export function snapshotCustomerOntoOrder(
     const before = orderCustomerImage(db, input.orderId);
     if (!before) throw new Error('Order not found');
     const now = nowIso();
-    const params: unknown[] = [customer.id, customer.name, customer.phone, addressSnap];
+    const nameSnap = input.nameOverride?.trim() || customer.name;
+    const params: unknown[] = [customer.id, nameSnap, customer.phone, addressSnap];
     let notesClause = '';
     if (input.deliveryNotes !== undefined) {
       notesClause = ', delivery_notes = ?';

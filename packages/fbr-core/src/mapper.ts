@@ -47,20 +47,19 @@ export function mapOrderToFbrPayload(
     const weight = subtotal > 0 ? line.lineTotalCents / subtotal : 0;
     const lineDiscount = Math.round(discount * weight);
     const netCents = Math.max(0, line.lineTotalCents - lineDiscount);
-    // The order_item carries the snapshotted tax-rate basis points.
-    // We can reach back into the item snapshot for that — for now we approximate
-    // from the order totals so this mapper stays pure-snapshot.
-    // tax-bearing portion = netCents / (1 + rate). FBR wants the exclusive value.
-    // But we don't have per-line rate in the snapshot shape, so we approximate
-    // each line at the average effective rate of the order:
-    const overallNet = Math.max(0, subtotal - discount);
-    const effectiveRate = overallNet > 0 ? order.taxCents / overallNet : 0;
-    const lineTaxCents = Math.round(netCents * effectiveRate);
+    // Each line carries the tax rate snapshotted at order time (basis
+    // points). FBR validates `rate` against its reference list per line, so a
+    // blended order-average rate (16% pizza + 13% drink = "15.61%") is
+    // rejected outright. Fall back to the order-average only for legacy
+    // snapshots that predate the field.
+    const lineRateBps =
+      line.taxRateBps ?? Math.round((order.taxCents / Math.max(1, subtotal - discount)) * 10_000);
+    const lineTaxCents = Math.round((netCents * lineRateBps) / 10_000);
 
     return {
       hsCode: opts.defaultHsCode,
       productDescription: line.menuItemName,
-      rate: formatPercent(effectiveRate),
+      rate: formatPercent(lineRateBps / 10_000),
       uoM: opts.defaultUoM,
       quantity: line.quantity,
       totalValues: rupeesFromCents(netCents + lineTaxCents),
@@ -75,7 +74,7 @@ export function mapOrderToFbrPayload(
 
   return {
     invoiceType: 'Sale Invoice',
-    invoiceDate: (order.paidAt ?? order.createdAt).slice(0, 10), // YYYY-MM-DD
+    invoiceDate: karachiDate(order.paidAt ?? order.createdAt), // YYYY-MM-DD in Asia/Karachi
     sellerNTNCNIC: seller.sellerNTNCNIC,
     sellerBusinessName: seller.sellerBusinessName,
     sellerProvince: seller.sellerProvince,
@@ -83,6 +82,70 @@ export function mapOrderToFbrPayload(
     buyerRegistrationType: 'Unregistered',
     invoiceRefNo: order.orderNumber,
     items: fbrItems,
+  };
+}
+
+/**
+ * Calendar date of an instant in Asia/Karachi (UTC+5, no DST). Timestamps are
+ * stored in UTC, so a sale at 01:30 local would otherwise be reported on the
+ * previous day and the daily FBR totals would never match the shop's day.
+ */
+export function karachiDate(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso.slice(0, 10);
+  return new Date(ms + 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * A refund reaches FBR as a Debit Note that references the original sale
+ * invoice (`invoiceRefNo` = the IRN FBR returned for the sale). A full refund
+ * mirrors the sale line for line; a partial refund is spread across the lines
+ * by their weight in the order so each line keeps its own tax rate.
+ *
+ * ⚠ Field semantics for debit notes were taken from the DI spec as understood
+ * here and have NOT been validated against the PRAL sandbox — run one through
+ * sandbox mode before switching to production.
+ */
+export function mapRefundToFbrDebitNote(
+  snapshot: OrderSnapshot,
+  seller: FbrSellerInfo,
+  refund: {
+    /** IRN of the accepted sale invoice this note reverses. */
+    originalIrn: string;
+    /** Gross amount refunded (tax-inclusive), in cents. */
+    refundedCents: number;
+    /** When the refund was recorded (ISO, UTC). */
+    refundedAt: string;
+  },
+  opts: FbrMapOptions = DEFAULT_FBR_MAP_OPTS,
+): FbrInvoicePayload {
+  const sale = mapOrderToFbrPayload(snapshot, seller, opts);
+  const grossCents = Math.max(0, snapshot.order.totalCents);
+  const full = refund.refundedCents >= grossCents;
+  // Fraction of the order being reversed; a full refund is exactly 1.
+  const share = full || grossCents === 0 ? 1 : refund.refundedCents / grossCents;
+
+  const items: FbrInvoiceItem[] = sale.items.map((line) => {
+    const net = Math.round(line.valueSalesExcludingST * share * 100) / 100;
+    const tax = Math.round(line.salesTaxApplicable * share * 100) / 100;
+    return {
+      ...line,
+      productDescription: full ? line.productDescription : `Refund: ${line.productDescription}`,
+      quantity: full ? line.quantity : 1,
+      fixedNotifiedValueOrRetailPrice: full ? line.fixedNotifiedValueOrRetailPrice : net,
+      valueSalesExcludingST: net,
+      salesTaxApplicable: tax,
+      totalValues: Math.round((net + tax) * 100) / 100,
+      ...(line.discount !== undefined && !full ? { discount: Math.round(line.discount * share * 100) / 100 } : {}),
+    };
+  });
+
+  return {
+    ...sale,
+    invoiceType: 'Debit Note',
+    invoiceDate: karachiDate(refund.refundedAt),
+    invoiceRefNo: refund.originalIrn,
+    items,
   };
 }
 

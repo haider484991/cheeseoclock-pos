@@ -16,34 +16,36 @@ import type { AuthenticatedUser, UUID } from '@cheeseoclock/shared-types';
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h
 
 // Brute-force protection. Argon2id alone is insufficient at PIN entropy
-// (~10k combinations for a 4-digit PIN), so we layer a per-PIN-hash sliding
-// window counter on top. The lockout escalates with consecutive failures:
+// (~10k combinations for a 4-digit PIN), so we layer a sliding-window
+// counter on top. The lockout escalates with consecutive failures:
 //   5 failures → 30s lockout
 //   10 failures → 5 min lockout
 //   15+ failures → 30 min lockout
-// A successful login clears the row entirely.
+// Two counters share the same tiers and the same `login_attempts` table:
+//   - one keyed on the PIN hash (a stuck key on one PIN locks only that PIN);
+//   - one keyed on a fixed device-wide row, so walking 0000…9999 — where no
+//     single PIN is ever retried — still locks after five wrong guesses.
+// A successful login clears both rows.
 const PIN_LOCKOUT_TIERS = [
   { threshold: 15, lockMs: 30 * 60 * 1000 }, // 30 min
   { threshold: 10, lockMs: 5 * 60 * 1000 }, //  5 min
   { threshold: 5, lockMs: 30 * 1000 }, // 30 s
 ] as const;
 
+/** Fixed `login_attempts.pin_hash` for the device-wide counter. PINs are digits, so it can never collide with a real PIN hash. */
+const DEVICE_ATTEMPTS_KEY = '__device__';
+
 /** Hash the PIN so we never store/key on the raw value. */
 function hashPinForAttempts(pin: string): string {
   return createHash('sha256').update(`attempts:${pin.trim()}`).digest('hex');
 }
 
-/**
- * Throws "Too many failed attempts. Try again in <N>s." if this PIN is
- * currently locked. Always call BEFORE the argon2 verify so a locked PIN
- * doesn't even hit the hash check.
- */
-function assertPinNotLocked(db: AppDatabase, pin: string): void {
+function assertKeyNotLocked(db: AppDatabase, key: string): void {
   const row = db
     .prepare(
       `SELECT locked_until FROM login_attempts WHERE pin_hash = ?`,
     )
-    .get(hashPinForAttempts(pin)) as { locked_until: string | null } | undefined;
+    .get(key) as { locked_until: string | null } | undefined;
   if (row?.locked_until) {
     const until = Number(row.locked_until);
     if (Number.isFinite(until) && until > Date.now()) {
@@ -54,8 +56,7 @@ function assertPinNotLocked(db: AppDatabase, pin: string): void {
   }
 }
 
-function recordPinFailure(db: AppDatabase, pin: string): void {
-  const key = hashPinForAttempts(pin);
+function recordKeyFailure(db: AppDatabase, key: string): void {
   const now = new Date().toISOString();
   const row = db
     .prepare(`SELECT failed_count FROM login_attempts WHERE pin_hash = ?`)
@@ -74,8 +75,28 @@ function recordPinFailure(db: AppDatabase, pin: string): void {
   ).run(key, next, now, lockedUntil);
 }
 
+/**
+ * Throws "Too many failed attempts. Try again in <N>s." if this PIN, or the
+ * device as a whole, is currently locked. Always call BEFORE the argon2
+ * verify so a locked PIN doesn't even hit the hash check.
+ */
+function assertPinNotLocked(db: AppDatabase, pin: string): void {
+  assertKeyNotLocked(db, DEVICE_ATTEMPTS_KEY);
+  assertKeyNotLocked(db, hashPinForAttempts(pin));
+}
+
+function recordPinFailure(db: AppDatabase, pin: string): void {
+  db.transaction(() => {
+    recordKeyFailure(db, hashPinForAttempts(pin));
+    recordKeyFailure(db, DEVICE_ATTEMPTS_KEY);
+  })();
+}
+
 function clearPinAttempts(db: AppDatabase, pin: string): void {
-  db.prepare(`DELETE FROM login_attempts WHERE pin_hash = ?`).run(hashPinForAttempts(pin));
+  db.prepare(`DELETE FROM login_attempts WHERE pin_hash IN (?, ?)`).run(
+    hashPinForAttempts(pin),
+    DEVICE_ATTEMPTS_KEY,
+  );
 }
 
 let currentSession: AuthenticatedUser | null = null;

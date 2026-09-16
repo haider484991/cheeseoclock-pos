@@ -127,7 +127,7 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
   }
 
   const total = lines.reduce((sum, l) => {
-    const qty = parseFloat(l.qtyOrdered || '0');
+    const qty = parseInt(l.qtyOrdered || '0', 10);
     const cost = parseFloat(l.unitCostRupees || '0');
     return sum + qty * cost;
   }, 0);
@@ -135,7 +135,8 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
   const valid =
     supplierId &&
     lines.every(
-      (l) => l.ingredientId && parseFloat(l.qtyOrdered) > 0 && parseFloat(l.unitCostRupees) >= 0,
+      (l) =>
+        l.ingredientId && parseInt(l.qtyOrdered, 10) > 0 && parseFloat(l.unitCostRupees) >= 0,
     );
 
   const mut = useMutation({
@@ -146,7 +147,8 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
         expectedAt: expectedAt || null,
         items: lines.map((l) => ({
           ingredientId: l.ingredientId,
-          qtyOrdered: parseFloat(l.qtyOrdered),
+          // Quantities are whole base units (g / ml / pcs) — INTEGER in SQLite.
+          qtyOrdered: parseInt(l.qtyOrdered, 10),
           unitCostCents: Math.round(parseFloat(l.unitCostRupees) * 100),
         })),
       }),
@@ -221,7 +223,9 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
                     </select>
                     <input
                       type="number"
-                      step="0.01"
+                      step="1"
+                      min={1}
+                      inputMode="numeric"
                       value={line.qtyOrdered}
                       onChange={(e) => updateLine(i, { qtyOrdered: e.target.value })}
                       placeholder="qty"
@@ -300,7 +304,7 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
         purchaseOrderId: poId,
         updateCosts,
         receipts: Object.entries(receipts)
-          .map(([id, v]) => ({ purchaseOrderItemId: id, qtyReceivedNow: parseFloat(v) || 0 }))
+          .map(([id, v]) => ({ purchaseOrderItemId: id, qtyReceivedNow: parseInt(v, 10) || 0 }))
           .filter((r) => r.qtyReceivedNow > 0),
       }),
     onSuccess: () => {
@@ -383,7 +387,8 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
                           {remaining > 0 ? (
                             <input
                               type="number"
-                              step="0.01"
+                              step="1"
+                              inputMode="numeric"
                               max={remaining}
                               min={0}
                               value={receipts[item.id] ?? ''}
@@ -434,7 +439,7 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
                 variant="success"
                 disabled={
                   receiveMut.isPending ||
-                  Object.values(receipts).every((v) => !v || parseFloat(v) <= 0)
+                  Object.values(receipts).every((v) => !v || parseInt(v, 10) <= 0)
                 }
                 onClick={() => receiveMut.mutate()}
               >

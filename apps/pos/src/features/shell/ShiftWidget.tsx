@@ -16,7 +16,8 @@ import { useSessionStore } from '../../stores/sessionStore';
  */
 export function ShiftWidget() {
   const can = useSessionStore((s) => s.can);
-  const canManage = can('settings.manage');
+  const canOpen = can('shift.open');
+  const canClose = can('shift.close');
   const [openDlg, setOpenDlg] = useState<'open' | 'close' | null>(null);
 
   const shiftQ = useQuery({
@@ -40,13 +41,13 @@ export function ShiftWidget() {
       <>
         <button
           type="button"
-          disabled={!canManage}
+          disabled={!canOpen}
           onClick={() => setOpenDlg('open')}
-          title={canManage ? 'Open a shift to start tracking cash' : 'Manager must open the shift'}
+          title={canOpen ? 'Open a shift to start tracking cash' : 'Manager must open the shift'}
           className={cn(
             'flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors',
             'bg-stone-100 text-stone-600 hover:bg-amber-100 hover:text-amber-800 dark:bg-stone-800 dark:hover:bg-amber-950 dark:hover:text-amber-200',
-            !canManage && 'cursor-not-allowed opacity-60 hover:bg-stone-100 hover:text-stone-600',
+            !canOpen && 'cursor-not-allowed opacity-60 hover:bg-stone-100 hover:text-stone-600',
           )}
         >
           <Clock className="h-3.5 w-3.5" />
@@ -63,18 +64,18 @@ export function ShiftWidget() {
     <>
       <button
         type="button"
-        disabled={!canManage}
-        onClick={() => canManage && setOpenDlg('close')}
-        title={canManage ? 'Close shift + count cash' : 'Manager must close the shift'}
+        disabled={!canClose}
+        onClick={() => canClose && setOpenDlg('close')}
+        title={canClose ? 'Close shift + count cash' : 'Manager must close the shift'}
         className={cn(
           'flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors',
           'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:hover:bg-emerald-900/60',
-          !canManage && 'cursor-default hover:bg-emerald-100 dark:hover:bg-emerald-950/50',
+          !canClose && 'cursor-default hover:bg-emerald-100 dark:hover:bg-emerald-950/50',
         )}
       >
         <span className="flex h-2 w-2 rounded-full bg-emerald-500" />
         Shift {elapsed}
-        {canManage && <ChevronRight className="h-3 w-3" />}
+        {canClose && <ChevronRight className="h-3 w-3" />}
       </button>
       {openDlg === 'close' && (
         <CloseShiftDialog shiftId={shift.id} onClose={() => setOpenDlg(null)} />

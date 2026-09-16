@@ -61,10 +61,22 @@ function backupDir(): string {
   return path.join(app.getPath('userData'), BACKUP_DIR_NAME);
 }
 
-function ensureBackupDir(): string {
+export function ensureBackupDir(): string {
   const dir = backupDir();
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/**
+ * Write a clean, self-contained copy of an OPEN database to `destPath`.
+ * Folds the write-ahead log into the main file first so the copy carries
+ * every committed write, then `VACUUM INTO` — the only safe way to snapshot
+ * a database another connection is holding. `PASSIVE` never blocks readers;
+ * whatever it cannot fold is still read through the connection by the VACUUM.
+ */
+export function snapshotDatabaseTo(db: AppDatabase, destPath: string): void {
+  db.pragma('wal_checkpoint(PASSIVE)');
+  db.exec(`VACUUM INTO '${destPath.replace(/'/g, "''")}'`);
 }
 
 export function listBackups(): BackupEntry[] {
@@ -104,8 +116,7 @@ export function createBackup(opts: { kind: 'auto' | 'manual' } = { kind: 'manual
   const prefix = opts.kind === 'auto' ? AUTO_BACKUP_PREFIX : MANUAL_BACKUP_PREFIX;
   const fileName = `${prefix}${stamp}.db`;
   const fullPath = path.join(dir, fileName);
-  // VACUUM INTO produces a clean, compact copy of the DB.
-  dbRef.exec(`VACUUM INTO '${fullPath.replace(/'/g, "''")}'`);
+  snapshotDatabaseTo(dbRef, fullPath);
   const sizeBytes = fs.statSync(fullPath).size;
   log.info('Backup created', { fileName, sizeBytes });
   if (opts.kind === 'auto') rotateAutoBackups();
@@ -131,7 +142,7 @@ export async function exportBackup(): Promise<string | null> {
     filters: [{ name: 'SQLite database', extensions: ['db'] }],
   });
   if (result.canceled || !result.filePath) return null;
-  dbRef.exec(`VACUUM INTO '${result.filePath.replace(/'/g, "''")}'`);
+  snapshotDatabaseTo(dbRef, result.filePath);
   const digest = sha256OfFile(result.filePath);
   try {
     fs.writeFileSync(`${result.filePath}.sha256`, `${digest}  ${path.basename(result.filePath)}\n`);

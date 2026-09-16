@@ -218,9 +218,13 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
                 </select>
                 <input
                   type="number"
-                  step="0.01"
+                  step="1"
+                  min={1}
+                  inputMode="numeric"
                   value={line.qtyPerUnit}
-                  onChange={(e) => updateLine(i, { qtyPerUnit: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) =>
+                    updateLine(i, { qtyPerUnit: parseInt(e.target.value, 10) || 0 })
+                  }
                   className="w-24 rounded-lg border border-stone-300 px-3 py-2 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
                 />
                 <span className="w-12 text-sm text-stone-500">{ingUnit(line.ingredientId)}</span>

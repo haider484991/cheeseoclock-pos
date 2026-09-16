@@ -31,6 +31,7 @@ import {
   type WebBridgeConfig,
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
+import { isStaleWebOrder } from './web-order-age.js';
 import type {
   CloudBackupEntry,
   PublishedMenu,
@@ -70,6 +71,29 @@ const MAX_IMPORT_ATTEMPTS = 5;
  * enough for the Neon/Vercel free tiers.
  */
 const ORDER_POLL_MS = 10_000;
+// The website closes itself 3 minutes after the last heartbeat, so once a
+// minute is plenty. Every heartbeat is a database write on the site, and a
+// write every 10 s kept the (free-tier) database awake around the clock.
+const HEARTBEAT_MS = 60_000;
+/**
+ * A web order older than this when first seen is cancelled, not cooked. The
+ * website expires unconfirmed orders on the same clock (UNCONFIRMED_ORDER_TTL_MS
+ * in apps/web/src/lib/store-status.ts); this is the till's own refusal in case
+ * a site deployed before that sweep hands one over after a long outage.
+ */
+const MAX_IMPORT_AGE_MS = 45 * 60_000;
+/**
+ * Scheduled cloud backups: after any attempt (success or failure) wait at
+ * least this long before trying again, so a failing upload does not retry on
+ * every 10s tick. Manual uploads from Settings are not throttled.
+ */
+const CLOUD_BACKUP_RETRY_MS = 60 * 60_000;
+/**
+ * The website's upload cap, mirrored: its schema allows 4,000,000 base64
+ * characters (apps/web/src/app/api/bridge/backups/route.ts), which is exactly
+ * 3,000,000 gzip bytes. A larger body is refused here without a round trip.
+ */
+const CLOUD_BACKUP_MAX_GZ_BYTES = 3_000_000;
 /** The bridge's writes are attributed to this synthetic actor in audit logs. */
 const WEB_ACTOR_NAME = 'web-bridge';
 /** Audit history kept in the cloud copy. Local and USB copies are complete. */
@@ -115,6 +139,10 @@ export interface BridgeConnection {
 
 const LAST_CLOUD_BACKUP_KEY = 'webBridge.lastCloudBackupAt';
 const LAST_CLOUD_META_KEY = 'webBridge.lastCloudBackupMeta';
+/** When an upload was last tried, success or not — throttles scheduled retries. */
+const LAST_CLOUD_ATTEMPT_KEY = 'webBridge.lastCloudBackupAttemptAt';
+/** When the copy was last refused for size — no scheduled retry until the next full interval. */
+const LAST_CLOUD_TOO_LARGE_KEY = 'webBridge.lastCloudBackupTooLargeAt';
 
 interface ServerBackupRow {
   id: string;
@@ -133,12 +161,17 @@ class WebOrdersBridge {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private lastPollAt: string | null = null;
+  private lastHeartbeatAt = 0;
   private lastError: string | null = null;
   private importedTotal = 0;
   private consecutiveFails = 0;
   private lastCloudBackupError: string | null = null;
   private lastImportError: string | null = null;
   private cloudBackupRunning = false;
+  /** Which throttled attempt we last logged a "waiting until" line for — once per wait, not per tick. */
+  private cloudBackupWaitLoggedFor: number | null = null;
+  /** `enabled` as of the last reschedule, so a switch OFF can be told from a plain restart. */
+  private lastEnabled: boolean | null = null;
   /** Where a site URL really lives once a redirect has told us (apex → www). */
   private canonicalOrigin: { for: string | undefined; origin: string } | null = null;
 
@@ -157,8 +190,15 @@ class WebOrdersBridge {
     // Tell the website at once, above all when this is a switch OFF: the site
     // should stop taking orders the moment the cashier unticks the box, not
     // whenever the last heartbeat happens to go stale.
+    // Orders placed in the seconds before the switch-off are still 'new' on
+    // the site and would never be pulled again — cancel them once, after the
+    // status push, so the customer's tracker says "couldn't confirm, call us".
+    const turningOff = this.lastEnabled === true && !cfg.enabled;
+    this.lastEnabled = cfg.enabled;
     if (isWebBridgeReady(cfg).ok) {
-      void this.pushStoreStatus(cfg).catch(() => undefined);
+      void this.pushStoreStatus(cfg)
+        .catch(() => undefined)
+        .then(() => (turningOff ? this.cancelUnclaimedOrders(cfg) : undefined));
     }
     // The loop runs when EITHER feature needs it: online orders, or
     // scheduled cloud backups. Both require URL + secret.
@@ -207,11 +247,19 @@ class WebOrdersBridge {
       // Best-effort and first: keeps the website's "open for orders" flag
       // fresh. Never fatal — a website that rejects it must not stop orders
       // already placed from being pulled in.
-      await this.pushStoreStatus(cfg).catch((e: unknown) => {
-        log.warn('Store status heartbeat failed', {
-          error: e instanceof Error ? e.message : String(e),
+      // With ordering off the site is already closed (the switch-off pushed
+      // one final "not accepting", and the site fails closed when heartbeats
+      // stop), so nothing needs to be said — and saying nothing overnight
+      // lets the site's database go to sleep.
+      if (cfg.enabled && Date.now() - this.lastHeartbeatAt >= HEARTBEAT_MS) {
+        this.lastHeartbeatAt = Date.now();
+        await this.pushStoreStatus(cfg).catch((e: unknown) => {
+          this.lastHeartbeatAt = 0; // try again next tick
+          log.warn('Store status heartbeat failed', {
+            error: e instanceof Error ? e.message : String(e),
+          });
         });
-      });
+      }
       if (cfg.enabled) {
         await this.pullNewOrders(cfg);
         await this.pushStatusUpdates(cfg);
@@ -232,15 +280,102 @@ class WebOrdersBridge {
     void this.maybeCloudBackup(cfg);
   }
 
+  /**
+   * One final drain after "Accept online orders" is switched off: whatever is
+   * still 'new' on the site was placed while the shop was closing and nobody
+   * will pull it now. Anything already imported (ack lost) is re-acked
+   * instead — it is on the kitchen board. Never throws; a failed drain is
+   * logged and the site's own 45-minute sweep is the backstop.
+   */
+  private async cancelUnclaimedOrders(cfg: WebBridgeConfig): Promise<void> {
+    if (!this.db) return;
+    // Don't race a tick that read `enabled: true` and may be mid-import.
+    for (let waited = 0; this.running && waited < 20_000; waited += 250) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (this.running) {
+      log.warn('Web bridge: skipped the switch-off drain — a poll is still running');
+      return;
+    }
+    this.running = true;
+    try {
+      const db = this.db;
+      const res = await this.api(cfg, '/api/bridge/orders');
+      if (!res.ok) throw new Error(`Pull failed: HTTP ${res.status}`);
+      const json = (await res.json()) as { ok: boolean; data?: WebOrder[] };
+      if (!json.ok || !json.data) throw new Error('Pull failed: bad response');
+      let cancelled = 0;
+      for (const order of json.data) {
+        const existing = db
+          .prepare(`SELECT pos_order_id FROM web_order_imports WHERE web_order_id = ?`)
+          .get(order.id) as { pos_order_id: string | null } | undefined;
+        if (existing?.pos_order_id) {
+          await this.importOne(cfg, order); // already local → re-acks only
+          continue;
+        }
+        const push = await this.api(cfg, `/api/bridge/orders/${order.id}/status`, {
+          method: 'POST',
+          body: JSON.stringify({ status: 'cancelled' }),
+        });
+        if (!push.ok) {
+          log.warn('Web bridge: could not cancel an order on switch-off', {
+            webOrderId: order.id,
+            status: push.status,
+          });
+          continue;
+        }
+        const now = nowIso();
+        db.prepare(
+          `INSERT INTO web_order_imports (web_order_id, status, attempts, last_error, created_at, updated_at)
+           VALUES (?, 'failed', 0, 'shop_closed', ?, ?)
+           ON CONFLICT(web_order_id) DO UPDATE SET
+             status = 'failed', last_error = 'shop_closed', updated_at = excluded.updated_at`,
+        ).run(order.id, now, now);
+        cancelled += 1;
+      }
+      if (cancelled > 0) {
+        log.info('Web bridge: online orders switched off — cancelled unclaimed orders', {
+          cancelled,
+        });
+      }
+    } catch (e) {
+      log.warn('Web bridge: switch-off drain failed', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      this.running = false;
+    }
+  }
+
   // ---- cloud backups ------------------------------------------------------
 
   private async maybeCloudBackup(cfg: WebBridgeConfig): Promise<void> {
     if (!this.db || this.cloudBackupRunning) return;
     if (cfg.cloudBackupFrequency === 'off') return;
     const intervalMs = CLOUD_BACKUP_INTERVALS_MS[cfg.cloudBackupFrequency];
-    const lastRaw = getSettingRaw(this.db, LAST_CLOUD_BACKUP_KEY);
-    const last = typeof lastRaw === 'string' ? Date.parse(lastRaw) : 0;
-    if (Number.isFinite(last) && Date.now() - last < intervalMs) return;
+    const now = Date.now();
+    const readAt = (key: string): number => {
+      const raw = getSettingRaw(this.db!, key);
+      const t = typeof raw === 'string' ? Date.parse(raw) : NaN;
+      return Number.isFinite(t) ? t : 0;
+    };
+    if (now - readAt(LAST_CLOUD_BACKUP_KEY) < intervalMs) return;
+    // A copy the server refused for size will not shrink by the next tick:
+    // leave it until the next full interval rather than re-uploading 3 MB
+    // every hour to be told no again.
+    if (now - readAt(LAST_CLOUD_TOO_LARGE_KEY) < intervalMs) return;
+    // Any other failure (offline, 5xx): back off, don't retry every 10s.
+    const lastAttempt = readAt(LAST_CLOUD_ATTEMPT_KEY);
+    if (now - lastAttempt < CLOUD_BACKUP_RETRY_MS) {
+      if (this.cloudBackupWaitLoggedFor !== lastAttempt) {
+        this.cloudBackupWaitLoggedFor = lastAttempt;
+        log.info('Scheduled cloud backup waiting after a failed attempt', {
+          nextTryAfter: new Date(lastAttempt + CLOUD_BACKUP_RETRY_MS).toISOString(),
+          lastError: this.lastCloudBackupError,
+        });
+      }
+      return;
+    }
     await this.uploadBackupNow({ reason: 'scheduled' }).catch(() => undefined); // error already recorded
   }
 
@@ -260,6 +395,9 @@ class WebOrdersBridge {
     if (!ready.ok) throw new Error(`Configure first: ${ready.missing.join(', ')}`);
     if (this.cloudBackupRunning) throw new Error('A cloud backup is already running');
     this.cloudBackupRunning = true;
+    // Recorded before the attempt so a crash mid-upload still counts as one.
+    setSetting(this.db, LAST_CLOUD_ATTEMPT_KEY, nowIso());
+    let tooLarge = false;
     try {
       const backup = createBackup({ kind: 'manual' });
       const trimmed = slimCloudCopy(backup.fullPath, getSyncConfig(this.db).mode);
@@ -275,6 +413,12 @@ class WebOrdersBridge {
         }
       }
       const gz = gzipSync(raw, { level: 9 });
+      if (gz.length > CLOUD_BACKUP_MAX_GZ_BYTES) {
+        tooLarge = true;
+        throw new Error(
+          `Backup exceeds the 3MB cloud limit (${(gz.length / 1_000_000).toFixed(1)} MB gzipped) — keep using local backups and contact support.`,
+        );
+      }
       const sha256 = createHash('sha256').update(gz).digest('hex');
       const meta = this.manifest(reason, trimmed, raw.length, gz.length);
       const res = await this.api(cfg, '/api/bridge/backups', {
@@ -291,6 +435,7 @@ class WebOrdersBridge {
         | { ok: boolean; error?: string; message?: string; data?: { id: string } }
         | null;
       if (!res.ok || !json?.ok) {
+        tooLarge = json?.error === 'backup_too_large';
         throw new Error(
           json?.message ?? json?.error ?? `Upload failed: HTTP ${res.status}`,
         );
@@ -318,7 +463,8 @@ class WebOrdersBridge {
       return { fileName: backup.fileName, sizeBytes: gz.length };
     } catch (e) {
       this.lastCloudBackupError = e instanceof Error ? e.message : String(e);
-      log.warn('Cloud backup failed', { error: this.lastCloudBackupError });
+      if (tooLarge) setSetting(this.db, LAST_CLOUD_TOO_LARGE_KEY, nowIso());
+      log.warn('Cloud backup failed', { error: this.lastCloudBackupError, tooLarge });
       throw e;
     } finally {
       this.cloudBackupRunning = false;
@@ -626,6 +772,27 @@ class WebOrdersBridge {
       return;
     }
     if (existing && existing.status === 'failed') return;
+    if (isStaleWebOrder(web.createdAt, MAX_IMPORT_AGE_MS)) {
+      // Placed too long ago to cook now (the till was down when it arrived).
+      // Record it as failed so it is never retried, and tell the site so the
+      // customer's tracker shows "couldn't confirm — please call".
+      db.prepare(
+        `INSERT INTO web_order_imports (web_order_id, status, attempts, last_error, created_at, updated_at)
+         VALUES (?, 'failed', 0, 'stale', ?, ?)
+         ON CONFLICT(web_order_id) DO UPDATE SET
+           status = 'failed', last_error = 'stale', updated_at = excluded.updated_at`,
+      ).run(web.id, now, now);
+      await this.api(cfg, `/api/bridge/orders/${web.id}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status: 'cancelled' }),
+      }).catch(() => undefined);
+      log.info('Web order too old to cook — cancelled instead of imported', {
+        webOrderId: web.id,
+        createdAt: web.createdAt,
+        maxAgeMs: MAX_IMPORT_AGE_MS,
+      });
+      return;
+    }
     if (existing && existing.attempts >= MAX_IMPORT_ATTEMPTS) {
       db.prepare(
         `UPDATE web_order_imports SET status = 'failed', updated_at = ? WHERE web_order_id = ?`,
@@ -635,7 +802,11 @@ class WebOrdersBridge {
         method: 'POST',
         body: JSON.stringify({ status: 'cancelled' }),
       }).catch(() => undefined);
-      notifyRenderer('web-order:import-failed', { webOrderId: web.id });
+      notifyRenderer('web-order:import-failed', {
+        webOrderId: web.id,
+        customerName: web.customerName,
+        message: `gave up after ${MAX_IMPORT_ATTEMPTS} attempts`,
+      });
       return;
     }
 
@@ -755,7 +926,11 @@ class WebOrdersBridge {
       // isn't left guessing why an order didn't arrive.
       this.lastImportError = `${web.customerName}: ${message}`;
       log.warn('Web order import failed (will retry)', { webOrderId: web.id, message });
-      notifyRenderer('web-order:import-failed', { webOrderId: web.id, message });
+      notifyRenderer('web-order:import-failed', {
+        webOrderId: web.id,
+        customerName: web.customerName,
+        message,
+      });
     }
   }
 

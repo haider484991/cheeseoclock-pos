@@ -118,6 +118,7 @@ const api: RendererApi = {
     setDefaultAddress: (req) => invoke('customers:setDefaultAddress', req),
     deleteAddress: (req) => invoke('customers:deleteAddress', req),
     orderHistory: (req) => invoke('customers:orderHistory', req),
+    attachToOrder: (req) => invoke('customers:attachToOrder', req),
   },
   tables: {
     listSections: () => invoke('tables:listSections', undefined),
@@ -275,5 +276,15 @@ contextBridge.exposeInMainWorld('webOrderEvents', {
     ) => cb(payload);
     ipcRenderer.on('web-order:received', listener);
     return () => ipcRenderer.removeListener('web-order:received', listener);
+  },
+  onImportFailed: (
+    cb: (payload: { webOrderId: string; customerName: string; message: string }) => void,
+  ) => {
+    const listener = (
+      _e: unknown,
+      payload: { webOrderId: string; customerName: string; message: string },
+    ) => cb(payload);
+    ipcRenderer.on('web-order:import-failed', listener);
+    return () => ipcRenderer.removeListener('web-order:import-failed', listener);
   },
 });

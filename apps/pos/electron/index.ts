@@ -1,9 +1,9 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, Menu, dialog, shell } from 'electron';
 import log from 'electron-log/main';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initDatabase, closeDatabase } from './db/connection.js';
-import { runMigrations } from './db/migrator.js';
+import { runMigrations, MigrationFailedError } from './db/migrator.js';
 import { ensureDeviceInfo } from './db/repositories/device-repo.js';
 import { ensureSeedUsers } from './db/repositories/user-repo.js';
 import { ensureSeedMenu } from './db/seed.js';
@@ -43,6 +43,10 @@ log.initialize();
 let mainWindow: BrowserWindow | null = null;
 
 async function createMainWindow() {
+  // No File/Edit/View menu in production: it is the only way a cashier can
+  // reach reload / DevTools / zoom, and autoHideMenuBar merely hides it.
+  if (!isDev) Menu.setApplicationMenu(null);
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -58,6 +62,7 @@ async function createMainWindow() {
       nodeIntegration: false,
       sandbox: false, // preload uses Node APIs (ipcRenderer); contextIsolation keeps renderer safe
       spellcheck: false,
+      devTools: !app.isPackaged,
     },
   });
 
@@ -82,6 +87,21 @@ async function createMainWindow() {
 }
 
 async function bootstrap() {
+  // One POS per machine: two processes on the same SQLite file would fight
+  // over the WAL and the print/FBR queues. The second launch just fronts the
+  // first. (Called after setPath so the lock lives in the right userData.)
+  if (!app.requestSingleInstanceLock()) {
+    log.info('Another CheeseOclock POS instance is already running — quitting');
+    app.quit();
+    return;
+  }
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
   log.info('Bootstrapping CheeseOclock POS', { version: app.getVersion(), isDev });
 
   // Optional error reporting + auto-update. Both no-op gracefully when their
@@ -128,8 +148,18 @@ async function bootstrap() {
   await createMainWindow();
 }
 
-app.whenReady().then(bootstrap).catch((err) => {
+app.whenReady().then(bootstrap).catch((err: unknown) => {
   log.error('Failed to bootstrap', err);
+  // A silent exit code 1 looks like "the app doesn't open". Say what broke,
+  // and where the pre-update copy of the database is if a migration did.
+  const message = err instanceof Error ? err.message : String(err);
+  const copy = err instanceof MigrationFailedError ? err.preMigrateCopyPath : null;
+  dialog.showErrorBox(
+    'CheeseOclock POS could not start',
+    copy
+      ? `${message}\n\nA copy of the database taken before the update is at:\n${copy}\n\nDetails are in the log file.`
+      : `${message}\n\nDetails are in the log file.`,
+  );
   app.exit(1);
 });
 

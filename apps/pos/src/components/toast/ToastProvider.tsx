@@ -9,10 +9,17 @@ interface ToastItem {
   title: string;
   description?: string;
   variant: ToastVariant;
+  /** ms before auto-dismiss; `Infinity` keeps it until swiped/closed. */
+  duration: number;
 }
 
 interface ToastContextValue {
-  toast: (input: { title: string; description?: string; variant?: ToastVariant }) => void;
+  toast: (input: {
+    title: string;
+    description?: string;
+    variant?: ToastVariant;
+    duration?: number;
+  }) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -26,12 +33,15 @@ export function useToast(): ToastContextValue {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
 
-  const toast = useCallback<ToastContextValue['toast']>(({ title, description, variant = 'info' }) => {
-    setItems((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), title, description, variant },
-    ]);
-  }, []);
+  const toast = useCallback<ToastContextValue['toast']>(
+    ({ title, description, variant = 'info', duration = 5000 }) => {
+      setItems((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), title, description, variant, duration },
+      ]);
+    },
+    [],
+  );
 
   const dismiss = useCallback((id: string) => {
     setItems((prev) => prev.filter((t) => t.id !== id));
@@ -44,7 +54,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {items.map((t) => (
           <RadixToast.Root
             key={t.id}
-            duration={5000}
+            duration={t.duration}
             onOpenChange={(open) => !open && dismiss(t.id)}
             className={cn(
               'flex flex-col gap-1 rounded-lg border px-4 py-3 shadow-lg',

@@ -12,10 +12,9 @@ import {
 } from '../../db/repositories/shift-repo.js';
 
 /**
- * Shifts IPC. Open/close are manager+admin only (settings.manage capability
- * gates them since they touch cash drawer reconciliation). Read endpoints
- * are open to any logged-in user so the TopBar widget can show "Shift open"
- * to cashiers too.
+ * Shifts IPC. Open/close are gated on the `shift.open` / `shift.close`
+ * capabilities (see ROLE_CAPABILITIES). Read endpoints are open to any
+ * logged-in user so the TopBar widget can show "Shift open" to everyone.
  */
 
 function requireSession(): AuthenticatedUser {
@@ -24,9 +23,9 @@ function requireSession(): AuthenticatedUser {
   return s;
 }
 
-function requireShiftManage(): AuthenticatedUser {
+function requireShiftManage(capability: 'shift.open' | 'shift.close'): AuthenticatedUser {
   const s = requireSession();
-  if (!hasCapability(s.role, 'settings.manage')) {
+  if (!hasCapability(s.role, capability)) {
     throw new IpcGuardError({
       code: 'forbidden',
       message: 'Opening/closing shifts requires manager or admin',
@@ -42,7 +41,7 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('shifts:open', ctx, (_ctx, payload) => {
-    const s = requireShiftManage();
+    const s = requireShiftManage('shift.open');
     try {
       const shift = openShift(
         ctx.db,
@@ -62,7 +61,7 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('shifts:close', ctx, (_ctx, payload) => {
-    const s = requireShiftManage();
+    const s = requireShiftManage('shift.close');
     try {
       const shift = closeShift(
         ctx.db,

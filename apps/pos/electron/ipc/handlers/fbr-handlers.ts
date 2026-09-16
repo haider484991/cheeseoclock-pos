@@ -122,6 +122,11 @@ export function registerFbrHandlers(ctx: HandlerContext): void {
     if (!row) {
       return ok({ status: 'none' as const, attempts: 0 });
     }
+    // The noop adapter fabricates a NOOP-… number so the queue can be
+    // exercised; the UI must not present it as a fiscal invoice.
+    if (row.modeAtEnqueue === 'noop') {
+      return ok({ status: 'skipped' as const, attempts: row.attempts });
+    }
     return ok({
       status: row.status,
       attempts: row.attempts,

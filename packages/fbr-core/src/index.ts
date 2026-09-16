@@ -86,5 +86,5 @@ export const FBR_PRODUCTION_ENDPOINT =
 export const FBR_VALIDATE_ENDPOINT =
   'https://gw.fbr.gov.pk/di_data/v1/di/validateinvoicedata';
 
-export { mapOrderToFbrPayload, DEFAULT_FBR_MAP_OPTS } from './mapper.js';
+export { mapOrderToFbrPayload, mapRefundToFbrDebitNote, karachiDate, DEFAULT_FBR_MAP_OPTS } from './mapper.js';
 export type { FbrSellerInfo, FbrMapOptions } from './mapper.js';

@@ -27,6 +27,9 @@ const STEPS: Array<{ key: WebOrderStatus; label: string; emoji: string }> = [
   { key: 'delivered', label: 'Delivered — enjoy!', emoji: '🎉' },
 ];
 
+/** How long "Order placed" may sit unconfirmed before the page suggests calling. */
+const UNCONFIRMED_NOTICE_MS = 5 * 60_000;
+
 function stepIndex(status: WebOrderStatus): number {
   return STEPS.findIndex((s) => s.key === status);
 }
@@ -56,12 +59,32 @@ export function OrderTracker({ orderId }: { orderId: string }) {
     }
   }, [orderId, phone]);
 
+  const finished = order?.status === 'delivered' || order?.status === 'cancelled';
   useEffect(() => {
     void load();
-    // Poll fast so the status feels live as the kitchen advances the order.
-    const t = setInterval(() => void load(), 4_000);
+    if (finished) return;
+    // Poll while the order is moving; a tab in the background waits until it
+    // is looked at again, and a finished order stops asking altogether.
+    const t = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void load();
+    }, 6_000);
+    const onVisible = () => {
+      if (!document.hidden) void load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [load, finished]);
+
+  // Re-render once a minute so the "not confirmed yet" notice appears on time.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 60_000);
     return () => clearInterval(t);
-  }, [load]);
+  }, []);
 
   if (error && !order) {
     return (
@@ -82,6 +105,14 @@ export function OrderTracker({ orderId }: { orderId: string }) {
   }
 
   const cancelled = order.status === 'cancelled';
+  // Cancelled without ever being acked by the till: the restaurant never saw
+  // it (expired by the site's sweep, or the shop closed before it was pulled).
+  const unconfirmed = cancelled && !order.posOrderNumber;
+  // Placed but not picked up by the till within a few minutes: tell the
+  // customer to call rather than leave them staring at "Order placed".
+  const waitingTooLong =
+    order.status === 'new' &&
+    Date.now() - Date.parse(order.createdAt) > UNCONFIRMED_NOTICE_MS;
   const idx = stepIndex(order.status);
 
   return (
@@ -110,13 +141,45 @@ export function OrderTracker({ orderId }: { orderId: string }) {
           </span>
         </div>
 
+        {waitingTooLong && (
+          <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center text-sm">
+            <p className="font-bold text-amber-200">
+              The restaurant hasn&rsquo;t confirmed your order yet.
+            </p>
+            <p className="text-amber-200/80">
+              Please call{' '}
+              <a href={`tel:${BUSINESS.phoneE164}`} className="font-bold underline">
+                {BUSINESS.phoneDisplay}
+              </a>{' '}
+              to make sure it was received.
+            </p>
+          </div>
+        )}
+
         {cancelled ? (
           <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-center">
             <div className="text-3xl">😞</div>
-            <p className="mt-1 font-bold text-red-300">This order was cancelled.</p>
-            <p className="text-sm text-red-300/80">
-              If that&rsquo;s unexpected, call us — {BUSINESS.phoneDisplay}.
-            </p>
+            {unconfirmed ? (
+              <>
+                <p className="mt-1 font-bold text-red-300">
+                  The restaurant couldn&rsquo;t confirm this order.
+                </p>
+                <p className="text-sm text-red-300/80">
+                  Please call{' '}
+                  <a href={`tel:${BUSINESS.phoneE164}`} className="font-bold underline">
+                    {BUSINESS.phoneDisplay}
+                  </a>
+                  .
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-1 font-bold text-red-300">This order was cancelled.</p>
+                <p className="text-sm text-red-300/80">
+                  If that&rsquo;s unexpected, call us — {BUSINESS.phoneDisplay}.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <ol className="mt-4 space-y-0">

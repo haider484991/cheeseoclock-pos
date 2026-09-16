@@ -64,6 +64,9 @@ const MAX_ATTEMPTS = 5;
 // mark the job 'failed' and broadcast a toast.
 const BACKOFF_MS = [0, 5_000, 30_000, 120_000, 600_000];
 const TICK_INTERVAL_MS = 1_000;
+// How long a payment receipt waits for the FBR invoice number before printing
+// with the "pending" placeholder.
+const FBR_IRN_GRACE_MS = 4_000;
 
 class PrintSpooler {
   private db: AppDatabase | null = null;
@@ -154,6 +157,14 @@ class PrintSpooler {
 
   /** Manual reprint of the customer receipt (history, board, receipt dialog). */
   reprintReceipt(orderId: string): void {
+    if (!this.db) return;
+    // A draft has no bill. Printing one would hand the customer a "TO PAY"
+    // slip for an order that can still be discarded without a trace.
+    const snap = getOrderSnapshot(this.db, orderId);
+    if (!snap) throw new Error('Order not found');
+    if (snap.order.status === 'open') {
+      throw new Error('This order has not been sent or paid yet — there is no bill to reprint');
+    }
     this.enqueue({ kind: 'receipt', orderId, openDrawer: false, copies: ['customer'], reason: 'reprint' });
   }
 
@@ -263,6 +274,7 @@ class PrintSpooler {
         });
         return;
       }
+      await this.waitForFbrInvoice(job);
       const { adapter, bytes } = this.render(job.payload, snap);
       result = await adapter.send(bytes);
     } catch (e) {
@@ -301,6 +313,24 @@ class PrintSpooler {
     });
   }
 
+  /**
+   * A customer receipt should carry the FBR invoice number. The FBR worker
+   * runs right after the sale commits, so give it a moment before printing
+   * the payment receipt — but never hold the paper for long: after the grace
+   * period the receipt prints with the "pending" placeholder instead.
+   */
+  private async waitForFbrInvoice(job: PrintJobRow): Promise<void> {
+    if (!this.db || job.payload.kind !== 'receipt') return;
+    if (job.payload.reason !== 'payment' && job.payload.reason !== 'dispatch') return;
+    const deadline = Date.now() + FBR_IRN_GRACE_MS;
+    while (Date.now() < deadline) {
+      const row = getFbrRowByOrder(this.db, job.payload.orderId);
+      if (!row || row.modeAtEnqueue === 'noop') return;
+      if (row.status !== 'pending') return;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+
   /** Bytes for a job, and the printer they go to. */
   private render(
     payload: PrintJobPayload,
@@ -323,10 +353,12 @@ class PrintSpooler {
       default: {
         const adapter = this.getAdapter('receipt');
         const branding = getReceiptBranding(this.db);
-        // Embed FBR IRN/QR if the worker has resolved one by now.
+        // Embed FBR IRN/QR if the worker has resolved one by now. In `noop`
+        // mode the adapter fabricates a NOOP-… number so the queue can be
+        // exercised; that must never reach paper as a fiscal invoice.
         const fbrRow = getFbrRowByOrder(this.db, payload.orderId);
         const fbrBlock =
-          fbrRow && fbrRow.status === 'sent' && fbrRow.irn
+          fbrRow && fbrRow.status === 'sent' && fbrRow.irn && fbrRow.modeAtEnqueue !== 'noop'
             ? { irn: fbrRow.irn, qrPayload: fbrRow.qrPayload }
             : undefined;
         // All copies on one strip, one send: the drawer opens with the first.

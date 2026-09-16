@@ -4,10 +4,15 @@ import { nowIso } from './base.js';
 import type { FbrMode } from '@cheeseoclock/fbr-core';
 
 export type FbrQueueStatus = 'pending' | 'sent' | 'failed' | 'skipped';
+/** What the row submits: the sale invoice, or a debit note reversing a refund. */
+export type FbrQueueKind = 'sale' | 'debit_note';
 
 export interface FbrQueueRow {
   id: string;
   orderId: string;
+  kind: FbrQueueKind;
+  /** For debit notes: the refund payment id the note reverses. '' for sales. */
+  refId: string;
   status: FbrQueueStatus;
   attempts: number;
   lastError: string | null;
@@ -22,6 +27,8 @@ export interface FbrQueueRow {
 interface Row {
   id: string;
   order_id: string;
+  kind: FbrQueueKind;
+  ref_id: string;
   payload_json: string;
   status: FbrQueueStatus;
   attempts: number;
@@ -38,6 +45,8 @@ function toRow(r: Row): FbrQueueRow {
   return {
     id: r.id,
     orderId: r.order_id,
+    kind: r.kind,
+    refId: r.ref_id,
     status: r.status,
     attempts: r.attempts,
     lastError: r.last_error,
@@ -55,22 +64,26 @@ export function enqueueFbrSubmission(
   orderId: string,
   payload: unknown,
   modeAtEnqueue: FbrMode,
+  ref: { kind: FbrQueueKind; refId: string } = { kind: 'sale', refId: '' },
 ): void {
   const id = uuidv7();
   const now = nowIso();
   const json = JSON.stringify(payload);
+  // A row that FBR already accepted is never re-opened: re-submitting an
+  // accepted invoice would mint a second invoice number for the same sale.
   db.prepare(
     `INSERT INTO fbr_submission_queue
-       (id, order_id, payload_json, status, attempts, enqueued_at, next_attempt_at,
+       (id, order_id, kind, ref_id, payload_json, status, attempts, enqueued_at, next_attempt_at,
         mode_at_enqueue, created_at, updated_at)
-     VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)
-     ON CONFLICT(order_id) DO UPDATE SET
+     VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)
+     ON CONFLICT(order_id, kind, ref_id) DO UPDATE SET
        payload_json = excluded.payload_json,
        status = 'pending',
        last_error = NULL,
        next_attempt_at = excluded.next_attempt_at,
-       updated_at = excluded.updated_at`,
-  ).run(id, orderId, json, now, now, modeAtEnqueue, now, now);
+       updated_at = excluded.updated_at
+     WHERE fbr_submission_queue.status != 'sent'`,
+  ).run(id, orderId, ref.kind, ref.refId, json, now, now, modeAtEnqueue, now, now);
 }
 
 export interface PendingFbrJob {
@@ -182,10 +195,11 @@ export function getFbrQueueStats(db: AppDatabase): FbrQueueStats {
   return stats;
 }
 
+/** The order's sale invoice row (debit notes are looked up separately). */
 export function getFbrRowByOrder(db: AppDatabase, orderId: string): FbrQueueRow | null {
   const row = db
     .prepare(
-      `SELECT * FROM fbr_submission_queue WHERE order_id = ?`,
+      `SELECT * FROM fbr_submission_queue WHERE order_id = ? AND kind = 'sale'`,
     )
     .get(orderId) as Row | undefined;
   return row ? toRow(row) : null;

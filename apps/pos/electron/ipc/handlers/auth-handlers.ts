@@ -38,6 +38,11 @@ export function registerAuthHandlers(ctx: HandlerContext): void {
   defineHandler('auth:currentSession', ctx, () => ok(getCurrentSession()));
 
   defineHandler('auth:verifyManagerPin', ctx, async (_ctx, payload) => {
+    // Manager approval only makes sense on top of a cashier's session; without
+    // this the channel is a second, un-gated PIN oracle on the login screen.
+    if (!getCurrentSession()) {
+      return err({ code: 'unauthenticated', message: 'Not logged in' });
+    }
     const parsed = loginInputSchema.safeParse(payload);
     if (!parsed.success) {
       return err({

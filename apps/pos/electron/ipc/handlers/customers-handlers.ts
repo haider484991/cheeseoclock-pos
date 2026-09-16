@@ -14,7 +14,9 @@ import {
   setDefaultAddress,
   deleteAddress,
   getCustomerOrderHistory,
+  snapshotCustomerOntoOrder,
 } from '../../db/repositories/customer-repo.js';
+import { getOrderSnapshot } from '../../db/repositories/order-repo.js';
 
 function requireOrderCreate(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -76,5 +78,34 @@ export function registerCustomersHandlers(ctx: HandlerContext): void {
   defineHandler('customers:orderHistory', ctx, (_ctx, payload) => {
     requireOrderCreate();
     return ok(getCustomerOrderHistory(ctx.db, payload.customerId, payload.limit));
+  });
+
+  // Freeze a customer onto an order. Like orders:attachCustomer, plus an
+  // optional per-order name — the till can write "Ali (office)" on one
+  // delivery without renaming the customer's master record.
+  defineHandler('customers:attachToOrder', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const nameOverride = payload.nameOverride?.trim();
+    try {
+      snapshotCustomerOntoOrder(
+        ctx.db,
+        {
+          orderId: payload.orderId,
+          customerId: payload.customerId,
+          addressId: payload.addressId ?? null,
+          ...(payload.deliveryNotes !== undefined ? { deliveryNotes: payload.deliveryNotes } : {}),
+          ...(nameOverride ? { nameOverride } : {}),
+        },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not attach customer',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
   });
 }

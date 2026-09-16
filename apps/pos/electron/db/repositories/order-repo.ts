@@ -239,6 +239,24 @@ export function listOrderHistory(
 // Daily order number — pure-local counter, format YYYYMMDD-NNNN.
 // -----------------------------------------------------------------------------
 
+/**
+ * The shift that should be credited with money changing hands *now*: the
+ * shift open on this device, falling back to the order's own shift. Orders
+ * are linked to the shift they were created in, but a COD delivery is often
+ * paid after that shift closed — stamping the payment separately keeps the
+ * drawer reconciliation honest.
+ */
+function shiftForPayment(db: AppDatabase, deviceId: string, fallback: string | null): string | null {
+  const row = db
+    .prepare(
+      `SELECT id FROM shifts
+        WHERE device_id = ? AND closed_at IS NULL AND deleted_at IS NULL
+        ORDER BY opened_at DESC LIMIT 1`,
+    )
+    .get(deviceId) as { id: string } | undefined;
+  return row?.id ?? (fallback || null);
+}
+
 function nextOrderNumber(db: AppDatabase): string {
   const today = new Date();
   const ymd = `${today.getUTCFullYear()}${String(today.getUTCMonth() + 1).padStart(2, '0')}${String(
@@ -543,6 +561,9 @@ export function addOrderItem(
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
     if (order.status !== 'open') throw new Error(`Cannot add items to ${order.status} order`);
+    if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 999) {
+      throw new Error('Quantity must be a whole number between 1 and 999');
+    }
 
     const itemRow = db
       .prepare(
@@ -652,6 +673,26 @@ export function addOrderItem(
       });
     }
 
+    // The audit trail must show what was added at what price — the void /
+    // refund before-images only carry order totals, not lines.
+    writeAudit(db, {
+      entityType: 'order_items',
+      entityId: itemId,
+      action: 'create',
+      actorUserId: actor.userId,
+      before: null,
+      after: {
+        ...newItem,
+        menuItemName: itemRow.name,
+        taxRateBps: rateBps,
+        modifiers: modRows.map((m) => ({
+          modifierId: m.id,
+          modifierName: m.name,
+          priceDeltaCents: m.price_delta_cents,
+        })),
+      },
+    });
+
     recomputeOrderTotals(db, input.orderId, actor);
     inserted = newItem;
   });
@@ -671,8 +712,8 @@ export function removeOrderItem(
     if (order.status !== 'open') throw new Error(`Cannot remove items from ${order.status} order`);
 
     const item = db
-      .prepare(`SELECT * FROM order_items WHERE id = ? AND deleted_at IS NULL`)
-      .get(orderItemId) as { id: string } | undefined;
+      .prepare(`SELECT id FROM order_items WHERE id = ? AND order_id = ? AND deleted_at IS NULL`)
+      .get(orderItemId, orderId) as { id: string } | undefined;
     if (!item) throw new Error('Order item not found');
 
     const now = nowIso();
@@ -721,12 +762,21 @@ export function updateOrderItemQuantity(
     removeOrderItem(db, orderId, orderItemId, actor);
     return;
   }
+  if (!Number.isInteger(quantity) || quantity > 999) {
+    throw new Error('Quantity must be a whole number between 1 and 999');
+  }
   const tx = db.transaction(() => {
+    // Same gate as add/remove: only a draft can change shape. Without this a
+    // paid order's totals could be rewritten after the money was taken.
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'open') throw new Error(`Cannot change items on ${order.status} order`);
     const row = db
       .prepare(
-        `SELECT unit_price_cents, quantity FROM order_items WHERE id = ? AND deleted_at IS NULL`,
+        `SELECT unit_price_cents, quantity FROM order_items
+          WHERE id = ? AND order_id = ? AND deleted_at IS NULL`,
       )
-      .get(orderItemId) as { unit_price_cents: number; quantity: number } | undefined;
+      .get(orderItemId, orderId) as { unit_price_cents: number; quantity: number } | undefined;
     if (!row) throw new Error('Order item not found');
 
     const modSumRow = db
@@ -741,8 +791,8 @@ export function updateOrderItemQuantity(
 
     db.prepare(
       `UPDATE order_items SET quantity = ?, line_total_cents = ?, updated_at = ?, version = version + 1
-        WHERE id = ?`,
-    ).run(quantity, newLineTotal, now, orderItemId);
+        WHERE id = ? AND order_id = ?`,
+    ).run(quantity, newLineTotal, now, orderItemId, orderId);
 
     enqueueSync(db, {
       entityType: 'order_items',
@@ -1009,11 +1059,17 @@ export function tenderOrder(
       throw new Error(`Cannot tender: ${validation.missing.join('; ')}`);
     }
 
-    const sum = input.payments.reduce((s, p) => s + p.amountCents, 0);
-    if (sum < order.totalCents) {
-      throw new Error(
-        `Tender (Rs ${sum / 100}) is less than order total (Rs ${order.totalCents / 100})`,
-      );
+    // A fully discounted order (total 0) has nothing to collect: an empty
+    // payments array is valid and inserts no payment rows (payments has a
+    // CHECK (amount_cents != 0)). The order is still stamped paid below.
+    const nothingToPay = order.totalCents === 0 && input.payments.length === 0;
+    if (!nothingToPay) {
+      const sum = input.payments.reduce((s, p) => s + p.amountCents, 0);
+      if (sum < order.totalCents) {
+        throw new Error(
+          `Tender (Rs ${sum / 100}) is less than order total (Rs ${order.totalCents / 100})`,
+        );
+      }
     }
     // Cash legs must satisfy tendered >= leg amount (UI enforces, server confirms).
     for (const p of input.payments) {
@@ -1024,13 +1080,14 @@ export function tenderOrder(
     }
 
     const now = nowIso();
+    const shiftId = shiftForPayment(db, actor.deviceId, order.shiftId);
     for (const p of input.payments) {
       const pid = uuidv7();
       db.prepare(
         `INSERT INTO payments
            (id, order_id, method, amount_cents, tendered_cents, reference_no,
-            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       ).run(
         pid,
         input.orderId,
@@ -1043,6 +1100,7 @@ export function tenderOrder(
         now,
         now,
         actor.deviceId,
+        shiftId,
       );
       enqueueSync(db, {
         entityType: 'payments',
@@ -1052,12 +1110,19 @@ export function tenderOrder(
       });
     }
 
+    // Paying is not the end of the order's life: the kitchen still has to
+    // cook it and someone has to hand it over. A prepaid order therefore goes
+    // to the Live Orders board as `sent_to_kitchen` with `paid_at` set, and
+    // only becomes `paid` (terminal) when it is marked picked up / delivered.
+    // `paid` straight from tender used to make prepaid deliveries vanish from
+    // the board with no way to assign a rider.
+    const nextStatus: OrderStatus = 'sent_to_kitchen';
     db.prepare(
-      `UPDATE orders SET status = 'paid', paid_at = ?, updated_at = ?, version = version + 1
+      `UPDATE orders SET status = ?, paid_at = ?, updated_at = ?, version = version + 1
         WHERE id = ?`,
-    ).run(now, now, input.orderId);
+    ).run(nextStatus, now, now, input.orderId);
 
-    const finalized = { ...order, status: 'paid' as OrderStatus, paidAt: now };
+    const finalized = { ...order, status: nextStatus, paidAt: now };
     enqueueSync(db, {
       entityType: 'orders',
       entityId: input.orderId,
@@ -1094,7 +1159,7 @@ export function voidOrder(
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
 
-    const v = validateVoid({ status: order.status, reason: input.reason });
+    const v = validateVoid({ status: order.status, paidAt: order.paidAt, reason: input.reason });
     if (!v.ok) throw new Error(v.missing.join('; '));
 
     const now = nowIso();
@@ -1164,16 +1229,15 @@ export function refundOrder(
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'paid') {
-      throw new Error(
-        order.status === 'refunded'
-          ? 'Order already fully refunded'
-          : `Cannot refund ${order.status} order — only paid orders can be refunded`,
-      );
+    if (order.status === 'refunded') throw new Error('Order already fully refunded');
+    if (order.status === 'void') throw new Error('Cannot refund a voided order');
+    if (order.paidAt === null) {
+      throw new Error(`Cannot refund ${order.status} order — nothing has been paid yet`);
     }
     if (!input.reason.trim()) throw new Error('Refund reason is required');
 
     const now = nowIso();
+    const shiftId = shiftForPayment(db, actor.deviceId, order.shiftId);
     const payments = db
       .prepare(
         `SELECT id, method, amount_cents FROM payments
@@ -1214,8 +1278,8 @@ export function refundOrder(
       db.prepare(
         `INSERT INTO payments
            (id, order_id, method, amount_cents, tendered_cents, reference_no,
-            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1)`,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1, ?)`,
       ).run(
         refundId,
         input.orderId,
@@ -1227,6 +1291,7 @@ export function refundOrder(
         now,
         now,
         actor.deviceId,
+        shiftId,
       );
       enqueueSync(db, {
         entityType: 'payments',
@@ -1282,8 +1347,8 @@ export function refundOrder(
       db.prepare(
         `INSERT INTO payments
            (id, order_id, method, amount_cents, tendered_cents, reference_no,
-            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1)`,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1, ?)`,
       ).run(
         refundId,
         input.orderId,
@@ -1295,6 +1360,7 @@ export function refundOrder(
         now,
         now,
         actor.deviceId,
+        shiftId,
       );
       enqueueSync(db, {
         entityType: 'payments',
@@ -1375,6 +1441,7 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     unit_price_cents: number;
     line_total_cents: number;
     tax_category_id: string;
+    tax_rate_bps_snapshot: number | null;
     prep_station_snapshot: PrepStation;
     notes: string | null;
     kitchen_status: OrderItem['kitchenStatus'];
@@ -1421,6 +1488,7 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     unitPriceCents: r.unit_price_cents as OrderItem['unitPriceCents'],
     lineTotalCents: r.line_total_cents as OrderItem['lineTotalCents'],
     taxCategoryId: r.tax_category_id as OrderItem['taxCategoryId'],
+    taxRateBps: r.tax_rate_bps_snapshot ?? 0,
     notes: r.notes,
     kitchenStatus: r.kitchen_status,
     menuItemName: r.menu_item_name,
@@ -1815,9 +1883,14 @@ export function markOrderServed(
     if (order.status !== 'ready' && order.status !== 'served') {
       throw new Error(`Cannot mark ${order.status} as served`);
     }
+    // Prepaid (tendered at the till): handing it over closes the order. A
+    // second payment must not be recorded against it.
+    const alreadyPaid = order.paidAt !== null;
+    if (alreadyPaid && input.payment) throw new Error('Order is already paid');
 
     const now = nowIso();
-    let finalStatus: OrderStatus = 'served';
+    const shiftId = shiftForPayment(db, actor.deviceId, order.shiftId);
+    let finalStatus: OrderStatus = alreadyPaid ? 'paid' : 'served';
 
     if (input.payment) {
       const p = input.payment;
@@ -1833,8 +1906,8 @@ export function markOrderServed(
       db.prepare(
         `INSERT INTO payments
            (id, order_id, method, amount_cents, tendered_cents, reference_no,
-            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       ).run(
         pid,
         input.orderId,
@@ -1847,6 +1920,7 @@ export function markOrderServed(
         now,
         now,
         actor.deviceId,
+        shiftId,
       );
       enqueueSync(db, {
         entityType: 'payments',
@@ -1929,11 +2003,17 @@ export function markOrderDelivered(
       throw new Error(`Cannot mark ${order.status} delivery as delivered`);
     }
 
+    // Prepaid (tendered at the till): delivering it closes the order. A
+    // second payment must not be recorded against it.
+    const alreadyPaid = order.paidAt !== null;
+    if (alreadyPaid && input.payment) throw new Error('Order is already paid');
+
     const now = nowIso();
+    const shiftId = shiftForPayment(db, actor.deviceId, order.shiftId);
 
     // If a payment was supplied, insert it and bump to `paid`. Otherwise just
     // mark `delivered` and leave tendering for later.
-    let finalStatus: OrderStatus = 'delivered';
+    let finalStatus: OrderStatus = alreadyPaid ? 'paid' : 'delivered';
     if (input.payment) {
       const p = input.payment;
       if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
@@ -1948,8 +2028,8 @@ export function markOrderDelivered(
       db.prepare(
         `INSERT INTO payments
            (id, order_id, method, amount_cents, tendered_cents, reference_no,
-            received_by_user_id, paid_at, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       ).run(
         pid,
         input.orderId,
@@ -1962,6 +2042,7 @@ export function markOrderDelivered(
         now,
         now,
         actor.deviceId,
+        shiftId,
       );
       enqueueSync(db, {
         entityType: 'payments',

@@ -23,13 +23,19 @@ export const ORDER_RATE_LIMITS = {
   windowMinutes: 15,
   /** A household re-ordering a forgotten drink is normal; 4+ is not. */
   maxPerPhone: 3,
-  /** Offices and apartment blocks share an IP, so this is looser. */
-  maxPerIp: 6,
+  /**
+   * Jazz / Zong / Ufone mobile data sits behind carrier-grade NAT, so on a
+   * busy night dozens of genuine customers share one egress IP. This only
+   * has to stop a script, not a neighbourhood.
+   */
+  maxPerIp: 25,
+  /** The real flood stop: more placed orders than the kitchen could cook. */
+  maxSiteWide: 40,
 } as const;
 
 export interface RateVerdict {
   allowed: boolean;
-  reason?: 'phone' | 'ip';
+  reason?: 'phone' | 'ip' | 'site';
   retryAfterSec: number;
 }
 
@@ -106,26 +112,45 @@ async function countRecentForPhone(phone: string): Promise<number> {
 
 async function countRecentForIp(ipHash: string): Promise<number> {
   await ensureRateTable();
-  await sql()`INSERT INTO order_rate_events (ip_hash) VALUES (${ipHash})`;
   const rows = (await sql()`
     SELECT count(*)::int AS n
       FROM order_rate_events
      WHERE ip_hash = ${ipHash}
        AND created_at > ${windowStartIso()}
   `) as Array<{ n: number }>;
-  // Opportunistic pruning — the table is write-heavy and read-tiny, and a
-  // day of events is far more history than the window needs.
-  if (Math.random() < 0.02) {
-    await sql()`DELETE FROM order_rate_events WHERE created_at < now() - interval '1 day'`;
-  }
+  return rows[0]?.n ?? 0;
+}
+
+async function countRecentSiteWide(): Promise<number> {
+  const rows = (await sql()`
+    SELECT count(*)::int AS n
+      FROM web_orders
+     WHERE created_at > ${windowStartIso()}
+  `) as Array<{ n: number }>;
   return rows[0]?.n ?? 0;
 }
 
 /**
- * Attempts are counted, not just successes: the IP row is inserted before the
- * count, so a caller who is already being rejected still accrues against the
- * window rather than getting free retries.
+ * Called once an order is actually stored. Only placed orders count against
+ * the IP window — a customer fixing a typo three times must not spend three
+ * of their attempts, and a replayed (idempotent) submit stores nothing.
+ * Fails silently: the order is already saved.
  */
+export async function recordOrderPlaced(ipHash: string | null): Promise<void> {
+  if (!ipHash) return;
+  try {
+    await ensureRateTable();
+    await sql()`INSERT INTO order_rate_events (ip_hash) VALUES (${ipHash})`;
+    // Opportunistic pruning — the table is write-heavy and read-tiny, and a
+    // day of events is far more history than the window needs.
+    if (Math.random() < 0.02) {
+      await sql()`DELETE FROM order_rate_events WHERE created_at < now() - interval '1 day'`;
+    }
+  } catch (e) {
+    console.error('rate limit bookkeeping failed (order already saved)', e);
+  }
+}
+
 export async function checkOrderRate(
   phone: string,
   ipHash: string | null,
@@ -138,9 +163,13 @@ export async function checkOrderRate(
     }
     if (ipHash) {
       const recentForIp = await countRecentForIp(ipHash);
-      if (recentForIp > ORDER_RATE_LIMITS.maxPerIp) {
+      if (recentForIp >= ORDER_RATE_LIMITS.maxPerIp) {
         return { allowed: false, reason: 'ip', retryAfterSec };
       }
+    }
+    const recentSiteWide = await countRecentSiteWide();
+    if (recentSiteWide >= ORDER_RATE_LIMITS.maxSiteWide) {
+      return { allowed: false, reason: 'site', retryAfterSec };
     }
     return { allowed: true, retryAfterSec };
   } catch (e) {

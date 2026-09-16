@@ -1095,6 +1095,17 @@ export interface IpcContract {
     request: { addressId: string };
     response: ApiResult<{ addressId: string }>;
   };
+  'customers:attachToOrder': {
+    request: {
+      orderId: string;
+      customerId: string;
+      addressId?: string | null;
+      deliveryNotes?: string | null;
+      /** Per-order snapshot name; the customer's master record is left untouched. */
+      nameOverride?: string;
+    };
+    response: ApiResult<OrderSnapshot>;
+  };
   'customers:orderHistory': {
     request: { customerId: string; limit?: number };
     response: ApiResult<

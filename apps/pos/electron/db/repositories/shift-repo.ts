@@ -205,8 +205,9 @@ export function closeShift(
 
     // Compute expected cash from the payments ledger for this shift window.
     // Cash sales (positive cash payments) minus cash refunds (negative cash
-    // payments). The orders.shift_id link is set at order creation time, so
-    // we sum by shift_id rather than by date range.
+    // payments). A payment is credited to the shift that took the money
+    // (payments.shift_id, migration 0016); rows from before that column fall
+    // back to the shift the order was created in.
     const cashRow = db
       .prepare(
         `SELECT
@@ -214,7 +215,7 @@ export function closeShift(
            COALESCE(SUM(CASE WHEN p.amount_cents < 0 THEN -p.amount_cents ELSE 0 END), 0) AS refunds
           FROM payments p
           JOIN orders o ON o.id = p.order_id
-         WHERE o.shift_id = ? AND p.method = 'cash' AND p.deleted_at IS NULL`,
+         WHERE COALESCE(p.shift_id, o.shift_id) = ? AND p.method = 'cash' AND p.deleted_at IS NULL`,
       )
       .get(input.shiftId) as { sales: number; refunds: number };
     const expected = before.openingCashCents + cashRow.sales - cashRow.refunds;
@@ -284,7 +285,7 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
     .prepare(
       `SELECT
          COUNT(*) AS orderCount,
-         SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) AS paidOrderCount,
+         SUM(CASE WHEN paid_at IS NOT NULL AND status NOT IN ('void', 'refunded') THEN 1 ELSE 0 END) AS paidOrderCount,
          SUM(CASE WHEN status = 'refunded' THEN 1 ELSE 0 END) AS refundedOrderCount,
          SUM(CASE WHEN status = 'void' THEN 1 ELSE 0 END) AS voidedOrderCount
         FROM orders
@@ -304,7 +305,7 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
               COALESCE(SUM(CASE WHEN p.amount_cents < 0 THEN -p.amount_cents ELSE 0 END), 0) AS refunds
          FROM payments p
          JOIN orders o ON o.id = p.order_id
-        WHERE o.shift_id = ? AND p.deleted_at IS NULL
+        WHERE COALESCE(p.shift_id, o.shift_id) = ? AND p.deleted_at IS NULL
         GROUP BY p.method
         ORDER BY SUM(ABS(p.amount_cents)) DESC`,
     )

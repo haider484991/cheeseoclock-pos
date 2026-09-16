@@ -26,6 +26,21 @@ import { sql } from './db';
  */
 export const HEARTBEAT_STALE_MS = 3 * 60_000;
 
+/**
+ * How long a placed order may sit unconfirmed ('new', never acked by the
+ * till) before the site gives up on it. The same failure mode as a stale
+ * heartbeat, one step later: an order the POS never picked up — laptop shut
+ * right after checkout, bridge wedged — must not be cooked an hour on when
+ * the till comes back, and the customer must be told to call. Mirrored in
+ * the POS bridge as MAX_IMPORT_AGE_MS so a late pull refuses it too.
+ */
+export const UNCONFIRMED_ORDER_TTL_MS = 45 * 60_000;
+
+/** ISO cutoff for the unconfirmed-order sweep: anything created before it is expired. */
+export function unconfirmedOrderCutoff(now: number = Date.now()): string {
+  return new Date(now - UNCONFIRMED_ORDER_TTL_MS).toISOString();
+}
+
 export interface StoreStatus {
   /** The answer the checkout acts on: heartbeat says yes AND is fresh. */
   acceptingOrders: boolean;

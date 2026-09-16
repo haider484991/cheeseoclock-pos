@@ -35,11 +35,9 @@ export function getSalesSummary(db: AppDatabase, range: DateRange): SalesSummary
          COALESCE(SUM(subtotal_cents), 0) AS subtotalCents,
          COALESCE(SUM(discount_cents), 0) AS discountCents,
          COALESCE(SUM(tax_cents), 0) AS taxCents,
-         COALESCE(SUM(total_cents), 0) AS totalCents,
-         SUM(CASE WHEN status = 'void' THEN 1 ELSE 0 END) AS voidedCount,
-         COALESCE(SUM(CASE WHEN status = 'void' THEN total_cents ELSE 0 END), 0) AS voidedCents
+         COALESCE(SUM(total_cents), 0) AS totalCents
        FROM orders
-       WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND status = 'paid'`,
+       WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')`,
     )
     .get(range.sinceIso, range.untilIso) as
     | {
@@ -48,9 +46,19 @@ export function getSalesSummary(db: AppDatabase, range: DateRange): SalesSummary
         discountCents: number;
         taxCents: number;
         totalCents: number;
-        voidedCount: number;
-        voidedCents: number;
       }
+    | undefined;
+
+  // Voids are excluded from the sales query above, so count them separately.
+  const voidRow = db
+    .prepare(
+      `SELECT COUNT(*) AS voidedCount,
+              COALESCE(SUM(total_cents), 0) AS voidedCents
+         FROM orders
+        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND status = 'void'`,
+    )
+    .get(range.sinceIso, range.untilIso) as
+    | { voidedCount: number; voidedCents: number }
     | undefined;
 
   const itemsRow = db
@@ -58,7 +66,7 @@ export function getSalesSummary(db: AppDatabase, range: DateRange): SalesSummary
       `SELECT COALESCE(SUM(oi.quantity), 0) AS itemCount
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
-        WHERE o.created_at >= ? AND o.created_at < ? AND oi.deleted_at IS NULL AND o.status = 'paid'`,
+        WHERE o.created_at >= ? AND o.created_at < ? AND oi.deleted_at IS NULL AND o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded')`,
     )
     .get(range.sinceIso, range.untilIso) as { itemCount: number } | undefined;
 
@@ -68,13 +76,13 @@ export function getSalesSummary(db: AppDatabase, range: DateRange): SalesSummary
     discountCents: 0,
     taxCents: 0,
     totalCents: 0,
-    voidedCount: 0,
-    voidedCents: 0,
   };
   return {
     ...r,
     itemCount: itemsRow?.itemCount ?? 0,
     avgTicketCents: r.orderCount > 0 ? Math.round(r.totalCents / r.orderCount) : 0,
+    voidedCount: voidRow?.voidedCount ?? 0,
+    voidedCents: voidRow?.voidedCents ?? 0,
   };
 }
 
@@ -91,7 +99,7 @@ export function getSalesByDay(db: AppDatabase, range: DateRange): SalesByDay[] {
               COUNT(*) AS orderCount,
               SUM(total_cents) AS totalCents
          FROM orders
-        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND status = 'paid'
+        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')
         GROUP BY day
         ORDER BY day`,
     )
@@ -111,7 +119,7 @@ export function getSalesByHour(db: AppDatabase, range: DateRange): SalesByHour[]
               COUNT(*) AS orderCount,
               SUM(total_cents) AS totalCents
          FROM orders
-        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND status = 'paid'
+        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')
         GROUP BY hour
         ORDER BY hour`,
     )
@@ -135,7 +143,7 @@ export function getSalesByCategory(db: AppDatabase, range: DateRange): SalesByCa
          JOIN orders o ON o.id = oi.order_id
          JOIN menu_items mi ON mi.id = oi.menu_item_id
          JOIN categories c ON c.id = mi.category_id
-        WHERE o.created_at >= ? AND o.created_at < ? AND o.deleted_at IS NULL AND o.status = 'paid'
+        WHERE o.created_at >= ? AND o.created_at < ? AND o.deleted_at IS NULL AND o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded')
           AND oi.deleted_at IS NULL
         GROUP BY c.id, c.name
         ORDER BY revenueCents DESC`,
@@ -162,7 +170,7 @@ export function getTopItems(db: AppDatabase, range: DateRange, limit = 20): TopI
          JOIN orders o ON o.id = oi.order_id
          JOIN menu_items mi ON mi.id = oi.menu_item_id
          JOIN categories c ON c.id = mi.category_id
-        WHERE o.created_at >= ? AND o.created_at < ? AND o.deleted_at IS NULL AND o.status = 'paid'
+        WHERE o.created_at >= ? AND o.created_at < ? AND o.deleted_at IS NULL AND o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded')
           AND oi.deleted_at IS NULL
         GROUP BY mi.id, mi.name, c.name
         ORDER BY quantity DESC, revenueCents DESC
@@ -182,7 +190,7 @@ export function getSalesByMode(db: AppDatabase, range: DateRange): SalesByMode[]
     .prepare(
       `SELECT mode, COUNT(*) AS orderCount, SUM(total_cents) AS totalCents
          FROM orders
-        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND status = 'paid'
+        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')
         GROUP BY mode
         ORDER BY totalCents DESC`,
     )
@@ -267,7 +275,7 @@ export function getCashSummary(
   const paidOrderCount = (db
     .prepare(
       `SELECT COUNT(*) AS n FROM orders
-        WHERE paid_at >= ? AND paid_at < ? AND deleted_at IS NULL AND status = 'paid'`,
+        WHERE paid_at >= ? AND paid_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')`,
     )
     .get(range.sinceIso, range.untilIso) as { n: number }).n;
   const refundedOrderCount = (db
@@ -299,7 +307,7 @@ export function getSalesByPaymentMethod(
       `SELECT p.method, COUNT(*) AS paymentCount, SUM(p.amount_cents) AS amountCents
          FROM payments p
          JOIN orders o ON o.id = p.order_id
-        WHERE p.paid_at >= ? AND p.paid_at < ? AND p.deleted_at IS NULL AND o.status = 'paid'
+        WHERE p.paid_at >= ? AND p.paid_at < ? AND p.deleted_at IS NULL AND o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded')
         GROUP BY p.method
         ORDER BY amountCents DESC`,
     )
@@ -318,8 +326,8 @@ export function getSalesByCashier(db: AppDatabase, range: DateRange): SalesByCas
   return db
     .prepare(
       `SELECT u.id AS cashierId, u.full_name AS cashierName,
-              SUM(CASE WHEN o.status = 'paid' THEN 1 ELSE 0 END) AS orderCount,
-              COALESCE(SUM(CASE WHEN o.status = 'paid' THEN o.total_cents ELSE 0 END), 0) AS totalCents,
+              SUM(CASE WHEN o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded') THEN 1 ELSE 0 END) AS orderCount,
+              COALESCE(SUM(CASE WHEN o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded') THEN o.total_cents ELSE 0 END), 0) AS totalCents,
               SUM(CASE WHEN o.status = 'void' THEN 1 ELSE 0 END) AS voidedCount
          FROM orders o
          JOIN users u ON u.id = o.cashier_id
@@ -342,7 +350,7 @@ export function getDiscountSummary(db: AppDatabase, range: DateRange): DiscountS
       `SELECT COUNT(*) AS count, COALESCE(SUM(d.amount_cents), 0) AS totalAmountCents
          FROM order_discounts d
          JOIN orders o ON o.id = d.order_id
-        WHERE o.created_at >= ? AND o.created_at < ? AND d.deleted_at IS NULL AND o.status = 'paid'`,
+        WHERE o.created_at >= ? AND o.created_at < ? AND d.deleted_at IS NULL AND o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded')`,
     )
     .get(range.sinceIso, range.untilIso) as { count: number; totalAmountCents: number } | undefined;
 
@@ -353,7 +361,7 @@ export function getDiscountSummary(db: AppDatabase, range: DateRange): DiscountS
               SUM(d.amount_cents) AS amountCents
          FROM order_discounts d
          JOIN orders o ON o.id = d.order_id
-        WHERE o.created_at >= ? AND o.created_at < ? AND d.deleted_at IS NULL AND o.status = 'paid'
+        WHERE o.created_at >= ? AND o.created_at < ? AND d.deleted_at IS NULL AND o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded')
         GROUP BY d.reason
         ORDER BY amountCents DESC`,
     )

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, ImagePicker, cn } from '@cheeseoclock/ui';
@@ -176,10 +176,14 @@ function ItemDialog({
     () => new Set(attachedQ.data?.map((g) => g.id) ?? []),
   );
 
-  // Sync attached groups once they load (for existing item edit)
-  if (attachedQ.data && attachedGroupIds.size === 0 && attachedQ.data.length > 0) {
+  // Seed attached groups once they load (for existing item edit). Seeding
+  // only once lets the user detach the last group without it re-appearing.
+  const attachedInitialised = useRef(false);
+  useEffect(() => {
+    if (attachedInitialised.current || !attachedQ.data) return;
+    attachedInitialised.current = true;
     setAttachedGroupIds(new Set(attachedQ.data.map((g) => g.id)));
-  }
+  }, [attachedQ.data]);
 
   // Pick defaults when creating new
   if (!existing && !categoryId && catQ.data && catQ.data[0]) {

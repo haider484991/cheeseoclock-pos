@@ -254,6 +254,9 @@ function IngredientDialog({
                   <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Opening qty</label>
                   <input
                     type="number"
+                    step="1"
+                    min={0}
+                    inputMode="numeric"
                     value={currentQty}
                     onChange={(e) => setCurrentQty(e.target.value)}
                     className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
@@ -264,6 +267,9 @@ function IngredientDialog({
                 <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Low at</label>
                 <input
                   type="number"
+                  step="1"
+                  min={0}
+                  inputMode="numeric"
                   value={lowThreshold}
                   onChange={(e) => setLowThreshold(e.target.value)}
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
@@ -342,7 +348,10 @@ function MovementDialog({
   const [notes, setNotes] = useState('');
 
   const isCount = reason === 'count';
-  const numericDelta = parseInt(delta, 10) || 0;
+  // Every reason needs an explicit integer — an empty "count" must never be
+  // read as 0 (that would silently zero the ingredient).
+  const deltaValid = /^-?\d+$/.test(delta.trim());
+  const numericDelta = deltaValid ? parseInt(delta.trim(), 10) : 0;
   const computedDelta = isCount ? numericDelta - ingredient.currentQty : numericDelta;
 
   const mut = useMutation({
@@ -422,12 +431,14 @@ function MovementDialog({
               </label>
               <input
                 type="number"
+                step="1"
+                inputMode="numeric"
                 value={delta}
                 autoFocus
                 onChange={(e) => setDelta(e.target.value)}
                 className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono text-lg dark:border-stone-700 dark:bg-stone-800"
               />
-              {delta && (
+              {deltaValid && (
                 <div className="mt-1 text-xs text-stone-500">
                   Net change: {computedDelta > 0 ? '+' : ''}
                   {computedDelta} {ingredient.unit} →{' '}
@@ -450,7 +461,7 @@ function MovementDialog({
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button
               variant="primary"
-              disabled={mut.isPending || (!delta && reason !== 'count')}
+              disabled={mut.isPending || !deltaValid}
               onClick={() => {
                 let normalizedDelta = computedDelta;
                 if (reason === 'waste') normalizedDelta = -Math.abs(normalizedDelta);

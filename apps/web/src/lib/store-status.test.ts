@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CLOSED, HEARTBEAT_STALE_MS, evaluateStatus } from './store-status';
+import {
+  CLOSED,
+  HEARTBEAT_STALE_MS,
+  UNCONFIRMED_ORDER_TTL_MS,
+  evaluateStatus,
+  unconfirmedOrderCutoff,
+} from './store-status';
 
 const NOW = Date.parse('2026-09-14T18:00:00.000Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
@@ -57,5 +63,16 @@ describe('evaluateStatus', () => {
       NOW,
     );
     expect(ahead.acceptingOrders).toBe(true);
+  });
+});
+
+describe('unconfirmedOrderCutoff', () => {
+  it('expires orders older than 45 minutes and keeps younger ones', () => {
+    expect(UNCONFIRMED_ORDER_TTL_MS).toBe(45 * 60_000);
+    const cutoff = Date.parse(unconfirmedOrderCutoff(NOW));
+    expect(cutoff).toBe(NOW - UNCONFIRMED_ORDER_TTL_MS);
+    // The sweep is `created_at < cutoff`: 46 minutes old goes, 44 stays.
+    expect(NOW - 46 * 60_000 < cutoff).toBe(true);
+    expect(NOW - 44 * 60_000 < cutoff).toBe(false);
   });
 });

@@ -404,15 +404,22 @@ export async function commitCustomerToOrder(
   if (!form.phone.trim() && !form.name.trim() && !form.addressLine.trim()) return;
 
   let customerId = form.matchedCustomerId;
+  // The name on the reused customer's master record, to compare against
+  // what the till typed for this order.
+  let masterName: string | null = null;
 
-  if (!customerId) {
+  if (customerId) {
+    masterName = (await ipc.customers.get(customerId))?.name ?? null;
+  } else if (form.phone.trim()) {
     // Try one more lookup in case they typed without picking the suggestion
-    if (form.phone.trim()) {
-      const found = await ipc.customers.findByPhone(form.phone.trim());
-      if (found) customerId = found.id;
+    const found = await ipc.customers.findByPhone(form.phone.trim());
+    if (found) {
+      customerId = found.id;
+      masterName = found.name;
     }
   }
 
+  let nameOverride: string | undefined;
   if (!customerId) {
     // Create a new customer — name fallback to phone if empty
     const name = form.name.trim() || form.phone.trim() || 'Walk-in';
@@ -422,12 +429,11 @@ export async function commitCustomerToOrder(
     });
     customerId = created.id;
   } else {
-    // Update name/phone if changed
-    await ipc.customers.update({
-      id: customerId,
-      ...(form.name.trim() ? { name: form.name.trim() } : {}),
-      ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
-    });
+    // Existing customer: a different name typed here is frozen onto this
+    // order only. Tender never rewrites the master record — it used to
+    // rename the customer (for every past and future order) from the till.
+    const typed = form.name.trim();
+    if (typed && typed !== masterName) nameOverride = typed;
   }
 
   let addressId: string | null = form.matchedAddressId;
@@ -454,10 +460,11 @@ export async function commitCustomerToOrder(
     }
   }
 
-  await ipc.orders.attachCustomer({
+  await ipc.customers.attachToOrder({
     orderId,
     customerId,
     addressId,
     ...(form.deliveryNotes.trim() ? { deliveryNotes: form.deliveryNotes.trim() } : {}),
+    ...(nameOverride ? { nameOverride } : {}),
   });
 }

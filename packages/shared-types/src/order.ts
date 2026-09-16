@@ -130,6 +130,8 @@ export interface OrderSnapshot {
       menuItemName: string;
       categoryName: string;
       prepStation: 'kitchen' | 'bar' | 'cold';
+      /** Tax rate snapshotted on the line at order time (basis points). */
+      taxRateBps?: number;
       modifiers: OrderItemModifier[];
     }
   >;

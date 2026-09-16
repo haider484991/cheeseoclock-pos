@@ -64,7 +64,8 @@ export function OrderHistoryPage() {
     let count = 0;
     let revenueCents = 0;
     for (const r of rows) {
-      if (r.status === 'void' || r.status === 'refunded') continue;
+      // Revenue is money taken: drafts and unpaid COD orders are not sales yet.
+      if (r.status === 'void' || r.status === 'refunded' || r.paidAt === null) continue;
       count += 1;
       revenueCents += r.totalCents;
     }
@@ -430,7 +431,9 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                     Collect payment
                   </Button>
                 )}
-              {snap.order.status === 'paid' && (
+              {snap.order.paidAt !== null &&
+                snap.order.status !== 'refunded' &&
+                snap.order.status !== 'void' && (
                 <Button
                   variant="danger"
                   size="md"

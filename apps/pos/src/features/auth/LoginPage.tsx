@@ -20,6 +20,12 @@ export function LoginPage() {
     queryFn: () => ipc.printer.getConfig(),
     staleTime: 60_000,
   });
+  const versionQ = useQuery({
+    queryKey: ['system', 'version'],
+    queryFn: () => ipc.system.getVersion(),
+    staleTime: Infinity,
+  });
+  const isDev = versionQ.data?.isDev ?? false;
   const logoUrl = brandingQ.data?.branding.logoUrl;
   const storeName = brandingQ.data?.branding.storeName ?? 'CheeseOclock POS';
   const tagline = brandingQ.data?.branding.storeTagline;
@@ -103,11 +109,11 @@ export function LoginPage() {
             <p className="mt-4 text-center text-sm font-medium text-amber-700 dark:text-amber-300">
               Verifying…
             </p>
-          ) : (
+          ) : isDev ? (
             <p className="mt-4 text-center text-[11px] uppercase tracking-widest text-stone-400">
               Dev PINs · admin 9999 · manager 5678 · cashier 1234
             </p>
-          )}
+          ) : null}
         </div>
 
         <div className="mt-4 text-center text-[10px] uppercase tracking-widest text-stone-400">

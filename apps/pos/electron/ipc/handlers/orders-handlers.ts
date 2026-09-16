@@ -34,9 +34,9 @@ import {
 } from '../../db/repositories/order-repo.js';
 import { requiresManagerApproval, validateOrderForTender } from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
-import { mapOrderToFbrPayload } from '@cheeseoclock/fbr-core';
+import { mapOrderToFbrPayload, mapRefundToFbrDebitNote } from '@cheeseoclock/fbr-core';
 import { getFbrConfig, toSellerInfo } from '../../services/fbr-config.js';
-import { enqueueFbrSubmission } from '../../db/repositories/fbr-queue-repo.js';
+import { enqueueFbrSubmission, getFbrRowByOrder } from '../../db/repositories/fbr-queue-repo.js';
 import { fbrWorker } from '../../services/fbr-worker.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
 import {
@@ -128,7 +128,16 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:addItem', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
-    addOrderItem(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    // Only the fields the contract names. `unitPriceOverrideCents` and
+    // `parentOrderItemId` exist for a future server-side combo expander and
+    // must never be accepted from the renderer — a free item with a clean
+    // audit row is one DevTools call away otherwise.
+    const { orderId, menuItemId, quantity, modifierIds, notes } = payload;
+    addOrderItem(
+      ctx.db,
+      { orderId, menuItemId, quantity, modifierIds: modifierIds ?? [], notes: notes ?? null },
+      { userId: s.id, deviceId: ctx.deviceId },
+    );
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found after add' });
     return ok(snap);
@@ -551,6 +560,37 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // Refund receipt; the drawer pops when cash is going back out.
     const hadCash = snap.payments.some((p) => p.method === 'cash');
     printSpooler.onOrderEvent(payload.orderId, 'refunded', { cash: hadCash });
+
+    // Tell FBR: a refund is a Debit Note against the sale invoice. Only when
+    // FBR actually accepted the sale — otherwise there is nothing to reverse.
+    // Never blocks the refund.
+    try {
+      const sale = getFbrRowByOrder(ctx.db, payload.orderId);
+      if (sale && sale.status === 'sent' && sale.irn && sale.modeAtEnqueue !== 'noop') {
+        const refunds = snap.payments.filter((p) => p.amountCents < 0);
+        const latest = refunds.slice().sort((a, b) => b.paidAt.localeCompare(a.paidAt))[0];
+        if (latest) {
+          const refundedCents =
+            payload.amountCents !== undefined
+              ? Math.round(payload.amountCents)
+              : refunds.reduce((sum, p) => sum + -p.amountCents, 0);
+          const cfg = getFbrConfig(ctx.db);
+          const note = mapRefundToFbrDebitNote(snap, toSellerInfo(cfg), {
+            originalIrn: sale.irn,
+            refundedCents,
+            refundedAt: latest.paidAt,
+          });
+          enqueueFbrSubmission(ctx.db, payload.orderId, note, cfg.mode, {
+            kind: 'debit_note',
+            refId: latest.id,
+          });
+          fbrWorker.kick();
+        }
+      }
+    } catch (e) {
+
+      console.warn('FBR debit note enqueue failed (refund not affected):', e);
+    }
     return ok(snap);
   });
 }

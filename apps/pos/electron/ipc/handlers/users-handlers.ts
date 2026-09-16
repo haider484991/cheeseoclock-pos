@@ -64,21 +64,43 @@ export function registerUsersHandlers(ctx: HandlerContext): void {
       });
     }
     const actor = getCurrentSession();
-    const user = await updateUser(ctx.db, parsed.data, {
-      userId: actor?.id ?? null,
-      deviceId: ctx.deviceId,
-    });
-    return ok(user);
+    try {
+      const user = await updateUser(ctx.db, parsed.data, {
+        userId: actor?.id ?? null,
+        deviceId: ctx.deviceId,
+      });
+      return ok(user);
+    } catch (e) {
+      // Repo preconditions ("Cannot remove the last admin", "User not found")
+      // are user-facing; surface the real message instead of a correlation id.
+      return err({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Update user failed',
+      });
+    }
   });
 
   defineHandler('users:deactivate', ctx, (_ctx, payload) => {
     const session = requireAdmin();
     if ('ok' in session && !session.ok) return session;
     const actor = getCurrentSession();
-    deactivateUser(ctx.db, payload.id, {
-      userId: actor?.id ?? null,
-      deviceId: ctx.deviceId,
-    });
-    return ok({ id: payload.id });
+    if (actor && payload.id === actor.id) {
+      return err({
+        code: 'precondition_failed',
+        message: 'You cannot deactivate your own account',
+      });
+    }
+    try {
+      deactivateUser(ctx.db, payload.id, {
+        userId: actor?.id ?? null,
+        deviceId: ctx.deviceId,
+      });
+      return ok({ id: payload.id });
+    } catch (e) {
+      return err({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Deactivate user failed',
+      });
+    }
   });
 }

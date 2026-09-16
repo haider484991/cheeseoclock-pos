@@ -1,9 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { formatCents } from '@/lib/format';
 import { WA_ORDER_URL } from '@/lib/business';
+
+/** Idempotency key for one checkout; the server dedupes resends on it. */
+function newOrderId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Very old WebViews: still a valid v4 UUID, just from Math.random.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
 import type {
   PublishedMenu,
   PublishedMenuItem,
@@ -560,8 +572,15 @@ function CheckoutSheet(props: {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A double tap fires two clicks before React has re-rendered the disabled
+  // button; the ref closes that gap synchronously. The order id is minted
+  // once per checkout and reused on every retry, so the server can recognise
+  // a resend and return the order it already has instead of a second one.
+  const inFlight = useRef(false);
+  const clientOrderId = useRef<string | null>(null);
 
   async function submit() {
+    if (inFlight.current) return;
     setError(null);
     if (name.trim().length < 2) return setError('Please enter your name.');
     if (phone.trim().length < 10) return setError('Please enter your mobile number.');
@@ -570,12 +589,15 @@ function CheckoutSheet(props: {
     if (!props.acceptingOrders) {
       return setError('We are not taking online orders right now.');
     }
+    if (!clientOrderId.current) clientOrderId.current = newOrderId();
+    inFlight.current = true;
     setSubmitting(true);
     try {
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          clientOrderId: clientOrderId.current,
           customerName: name.trim(),
           customerPhone: phone.trim(),
           addressLine: address.trim(),
@@ -593,18 +615,27 @@ function CheckoutSheet(props: {
         data?: { orderId: string };
         error?: string;
         message?: string;
+        details?: Record<string, string[] | undefined>;
       };
       if (!json.ok || !json.data) {
-        // The shop can close between loading the page and pressing the button;
-        // the server says so and we repeat it rather than a generic failure.
+        // Say what the server said. The shop can close between loading the
+        // page and pressing the button, a phone number can be malformed, an
+        // item can leave the menu — each has its own message.
+        const fieldError = json.details
+          ? Object.values(json.details).flat().find((m): m is string => typeof m === 'string')
+          : undefined;
         setError(
-          json.error === 'store_closed'
-            ? (json.message ??
-              'We are not taking online orders at the moment. Please order on WhatsApp.')
-            : json.error === 'menu_not_published'
-              ? 'The menu was just updated — please refresh and try again.'
-              : 'Could not place the order. Please try again or order on WhatsApp.',
+          json.message ??
+            fieldError ??
+            (json.error === 'store_closed'
+              ? 'We are not taking online orders at the moment. Please order on WhatsApp.'
+              : json.error === 'menu_not_published' || json.error === 'item_not_on_menu'
+                ? 'The menu was just updated — please refresh and try again.'
+                : json.error === 'rate_limited'
+                  ? 'Too many orders in a short time. Please wait a few minutes or call us.'
+                  : 'Could not place the order. Please try again or order on WhatsApp.'),
         );
+        inFlight.current = false;
         setSubmitting(false);
         return;
       }
@@ -612,7 +643,8 @@ function CheckoutSheet(props: {
         `/track/${json.data.orderId}?phone=${encodeURIComponent(phone.trim())}&placed=1`,
       );
     } catch {
-      setError('Network problem — check your connection and try again.');
+      setError('Network problem — check your connection and tap Place order again.');
+      inFlight.current = false;
       setSubmitting(false);
     }
   }

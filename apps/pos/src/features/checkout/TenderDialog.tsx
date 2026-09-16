@@ -36,8 +36,10 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
 
   const tenderedCents = parseTenderedCents(tendered);
   const methodSpec = METHODS.find((m) => m.id === method)!;
+  // A 100%-discounted order has nothing to collect — no payment leg at all.
+  const nothingToPay = total === 0;
   // For cash: tendered must be >= total. For others: amount = total exactly.
-  const enough = methodSpec.showTendered ? tenderedCents >= total : true;
+  const enough = nothingToPay || (methodSpec.showTendered ? tenderedCents >= total : true);
   const changeCents = methodSpec.showTendered && tenderedCents >= total ? tenderedCents - total : 0;
 
   async function submit() {
@@ -46,13 +48,17 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
       return;
     }
     try {
-      await tender([
-        {
-          method,
-          amountCents: total,
-          tenderedCents: methodSpec.showTendered ? tenderedCents : null,
-        },
-      ]);
+      await tender(
+        nothingToPay
+          ? []
+          : [
+              {
+                method,
+                amountCents: total,
+                tenderedCents: methodSpec.showTendered ? tenderedCents : null,
+              },
+            ],
+      );
       onPaid();
     } catch (e) {
       toast({
@@ -164,7 +170,11 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
               Cancel
             </Button>
             <Button variant="success" disabled={!enough || busy} onClick={submit}>
-              {busy ? 'Processing…' : 'Confirm payment'}
+              {busy
+                ? 'Processing…'
+                : nothingToPay
+                  ? 'Nothing to pay — complete order'
+                  : 'Confirm payment'}
             </Button>
           </footer>
         </Dialog.Content>

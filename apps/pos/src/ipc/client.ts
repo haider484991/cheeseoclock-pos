@@ -188,6 +188,8 @@ export const ipc = {
       unwrap(window.api.customers.deleteAddress({ addressId })),
     orderHistory: (customerId: string, limit?: number) =>
       unwrap(window.api.customers.orderHistory({ customerId, ...(limit ? { limit } : {}) })),
+    attachToOrder: (input: IpcRequest<'customers:attachToOrder'>) =>
+      unwrap(window.api.customers.attachToOrder(input)),
   },
   sync: {
     getConfig: () => unwrap(window.api.sync.getConfig()),
@@ -330,6 +332,25 @@ export function onWebOrderReceived(
     };
   };
   return w.webOrderEvents?.onReceived(cb) ?? (() => {});
+}
+
+/** Payload broadcast when the web bridge could not import an online order. */
+export interface WebOrderImportFailedPayload {
+  webOrderId: string;
+  customerName: string;
+  message: string;
+}
+
+/** Listen for web-order:import-failed broadcasts from the website bridge. */
+export function onWebOrderImportFailed(
+  cb: (payload: WebOrderImportFailedPayload) => void,
+): () => void {
+  const w = window as unknown as {
+    webOrderEvents?: {
+      onImportFailed: (cb: (p: WebOrderImportFailedPayload) => void) => () => void;
+    };
+  };
+  return w.webOrderEvents?.onImportFailed(cb) ?? (() => {});
 }
 
 /** Payload broadcast by the main process when a print job fails permanently. */

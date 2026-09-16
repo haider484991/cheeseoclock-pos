@@ -146,6 +146,21 @@ export async function createUser(
   return newUser;
 }
 
+/**
+ * Refuse a change that would leave the device with no active admin — there
+ * would be nobody left who can manage users, restore backups, or undo it.
+ * Call inside the write transaction so the count and the write are one unit.
+ */
+function assertNotLastActiveAdmin(db: AppDatabase, exceptId: string): void {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM users
+        WHERE role = 'admin' AND is_active = 1 AND deleted_at IS NULL AND id != ?`,
+    )
+    .get(exceptId) as { n: number };
+  if (row.n === 0) throw new Error('Cannot remove the last admin');
+}
+
 export async function updateUser(
   db: AppDatabase,
   input: {
@@ -184,7 +199,12 @@ export async function updateUser(
     updatedAt: now,
   };
 
+  const wasActiveAdmin = existingRow.role === 'admin' && existingRow.is_active === 1;
+  const staysActiveAdmin = role === 'admin' && isActive;
+
   const tx = db.transaction(() => {
+    if (wasActiveAdmin && !staysActiveAdmin) assertNotLastActiveAdmin(db, input.id);
+
     db.prepare(
       `UPDATE users
           SET full_name = ?, role = ?, is_active = ?, pin_hash = ?, updated_at = ?, version = ?
@@ -224,6 +244,9 @@ export function deactivateUser(
 
   const now = new Date().toISOString();
   const tx = db.transaction(() => {
+    if (existingRow.role === 'admin' && existingRow.is_active === 1) {
+      assertNotLastActiveAdmin(db, id);
+    }
     db.prepare(
       `UPDATE users SET is_active = 0, deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
     ).run(now, now, id);

@@ -70,10 +70,12 @@ export function validateOrderForTender(ctx: OrderValidationContext): ValidationR
 /** Validates a void request — refunded orders cannot be voided, reason mandatory. */
 export function validateVoid(input: {
   status: string;
+  /** `paid_at` of the order — a prepaid order is still paid while it sits on the board. */
+  paidAt?: string | null;
   reason: string;
 }): ValidationResult {
   const missing: string[] = [];
-  if (input.status === 'paid')
+  if (input.status === 'paid' || (input.paidAt != null && input.status !== 'refunded'))
     missing.push('Paid orders must be refunded, not voided');
   if (input.status === 'refunded')
     missing.push('Refunded orders are final; they cannot be voided');

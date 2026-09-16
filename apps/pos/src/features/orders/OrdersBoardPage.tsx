@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
 import {
@@ -18,7 +18,7 @@ import {
   UserRound,
   XCircle,
 } from 'lucide-react';
-import { ipc } from '../../ipc/client';
+import { ipc, onWebOrderImportFailed } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
 import { AssignRiderDialog } from './AssignRiderDialog';
@@ -170,6 +170,20 @@ export function OrdersBoardPage() {
         variant: 'error',
       }),
   });
+
+  // A website order the bridge could not import never reaches the board, so
+  // staff would otherwise never know it existed. Keep the toast up until it
+  // is dismissed — the customer is waiting on a call.
+  useEffect(() => {
+    return onWebOrderImportFailed((payload) => {
+      toast({
+        title: 'Website order not imported',
+        description: `Website order from ${payload.customerName} could not be imported: ${payload.message} — call the customer`,
+        variant: 'error',
+        duration: Infinity,
+      });
+    });
+  }, [toast]);
 
   const grouped = useMemo(() => {
     const out: Record<ColumnKey, OrderSnapshot[]> = {

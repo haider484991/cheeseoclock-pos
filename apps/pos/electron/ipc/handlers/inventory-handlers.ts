@@ -1,7 +1,16 @@
+import type { ZodError } from 'zod';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, hasCapability } from '@cheeseoclock/shared-types';
+import { ok, err, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
+import {
+  createIngredientInputSchema,
+  updateIngredientInputSchema,
+  setRecipeInputSchema,
+  recordMovementInputSchema,
+  createPurchaseOrderInputSchema,
+  receiveDeliveryInputSchema,
+} from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
   listIngredients,
@@ -45,6 +54,21 @@ function requireInventoryManage(): AuthenticatedUser {
   return session;
 }
 
+/**
+ * Quantities and cents are INTEGER columns; a fractional value from the
+ * renderer would land in SQLite as REAL. Reject it here with the field named,
+ * before any repository runs.
+ */
+function validationFailed(error: ZodError) {
+  const first = error.issues[0];
+  const path = first?.path.join('.');
+  return err({
+    code: 'validation_failed',
+    message: first ? (path ? `${path}: ${first.message}` : first.message) : 'Invalid input',
+    details: error.flatten(),
+  });
+}
+
 export function registerInventoryHandlers(ctx: HandlerContext): void {
   // ---- Ingredients ----
   defineHandler('inventory:listIngredients', ctx, (_ctx, payload) => {
@@ -54,12 +78,16 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:createIngredient', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    return ok(createIngredient(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const parsed = createIngredientInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(createIngredient(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 
   defineHandler('inventory:updateIngredient', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    return ok(updateIngredient(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const parsed = updateIngredientInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(updateIngredient(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 
   defineHandler('inventory:deleteIngredient', ctx, (_ctx, payload) => {
@@ -76,11 +104,13 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:setRecipe', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    setRecipeForItem(ctx.db, payload.menuItemId, payload.lines, {
+    const parsed = setRecipeInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    setRecipeForItem(ctx.db, parsed.data.menuItemId, parsed.data.lines, {
       userId: s.id,
       deviceId: ctx.deviceId,
     });
-    return ok({ menuItemId: payload.menuItemId });
+    return ok({ menuItemId: parsed.data.menuItemId });
   });
 
   // ---- Movements ----
@@ -91,7 +121,9 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:recordMovement', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    return ok(recordStockMovement(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const parsed = recordMovementInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(recordStockMovement(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 
   // ---- Suppliers ----
@@ -123,7 +155,9 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:createPurchaseOrder', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    return ok(createPurchaseOrder(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const parsed = createPurchaseOrderInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(createPurchaseOrder(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 
   defineHandler('inventory:setPurchaseOrderStatus', ctx, (_ctx, payload) => {
@@ -137,6 +171,8 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:receiveDelivery', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    return ok(receiveDelivery(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const parsed = receiveDeliveryInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(receiveDelivery(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 }
