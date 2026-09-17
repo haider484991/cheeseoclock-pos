@@ -5,6 +5,7 @@ import { useCheckoutStore } from '../../stores/checkoutStore';
 import { CategoryRail } from './CategoryRail';
 import { ItemGrid } from './ItemGrid';
 import { CartPane } from './CartPane';
+import { OrderDetails } from './OrderDetails';
 import { ModifierModal } from './ModifierModal';
 import { TenderDialog } from './TenderDialog';
 import { ReceiptDialog } from './ReceiptDialog';
@@ -157,6 +158,13 @@ export function CheckoutPage() {
 
   return (
     <div className="checkout">
+      <OrderDetails />
+      {/* Narrow screens stack the ticket under the menu; this bar keeps the
+          running total in view and jumps to it. */}
+      <button type="button" className="checkout-jump" onClick={() => document.getElementById('checkout-order')?.scrollIntoView({ block: 'start' })}>
+        <span>{itemCount === 0 ? 'Order' : `${itemCount} item${itemCount === 1 ? '' : 's'}`}</span>
+        <strong>{formatCents(snapshot?.order.totalCents ?? 0)}</strong>
+      </button>
       <section className="menu" aria-label="Menu">
         <div className="menu-toolbar">
           <label className="menu-search">
@@ -212,13 +220,6 @@ export function CheckoutPage() {
           )}
         </div>
       </section>
-
-      {/* Narrow screens stack the ticket under the menu; this bar keeps the
-          running total in view and jumps to it. */}
-      <button type="button" className="checkout-jump" onClick={() => document.getElementById('checkout-order')?.scrollIntoView({ block: 'start' })}>
-        <span>{itemCount === 0 ? 'Order' : `${itemCount} item${itemCount === 1 ? '' : 's'}`}</span>
-        <strong>{formatCents(snapshot?.order.totalCents ?? 0)}</strong>
-      </button>
 
       <CartPane onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen(true)} onSendToKitchen={handleSendToKitchen} />
 

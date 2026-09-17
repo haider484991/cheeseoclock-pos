@@ -78,7 +78,13 @@
    dashed rules, a quantity column, a ruled-off total, one black button.
    ========================================================================== */
 .checkout-main { container-type: inline-size; background: #f3f2ee; }
-.checkout { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 100%; }
+.checkout { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; min-height: 100%; }
+.order-details { grid-column: 1 / -1; position: relative; z-index: 30; min-width: 0; padding: 10px 16px; background: #fff; border-bottom: 1px solid #e7e5e4; }
+.order-details-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.order-details-heading h1 { font-size: 13px; font-weight: 600; color: #78716c; }
+.order-details .ticket-modes { width: 330px; max-width: 100%; padding: 3px; }
+.order-details .ticket-mode { min-height: 36px; }
+.order-details .ticket-mode.is-active { background: #fbbf24; color: #292524; }
 .menu { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .menu-toolbar { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 0; background: #f3f2ee; }
 .menu-search { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 420px; min-height: 44px; padding: 0 12px; border: 1px solid #d6d3d1; border-radius: 10px; background: #fff; color: #78716c; }
@@ -93,15 +99,15 @@
 .menu-tab.is-active { background: #1c1917; color: #fff; }
 .menu-tab-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 2px rgb(255 255 255 / .6); }
 .menu-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 28px; }
-.menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
-.menu-tile { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; min-height: 92px; padding: 14px 12px 10px; border: 1px solid #e7e5e4; border-radius: 10px; background: #fff; text-align: left; box-shadow: 0 1px 0 rgb(28 25 23 / .04); transition: border-color .12s, transform .08s, background-color .12s; }
+.menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; }
+.menu-tile { position: relative; display: flex; flex-direction: column; justify-content: space-between; gap: 6px; min-height: 76px; padding: 10px 10px 8px; border: 1px solid #e7e5e4; border-radius: 8px; background: #fff; text-align: left; box-shadow: 0 1px 0 rgb(28 25 23 / .04); transition: border-color .12s, transform .08s, background-color .12s; }
 .menu-tile::before { content: ''; position: absolute; left: 12px; right: 12px; top: 0; height: 3px; border-radius: 0 0 3px 3px; background: var(--cat); }
 .menu-tile:hover { border-color: #a8a29e; }
 .menu-tile:active { transform: scale(.985); background: #fef3c7; border-color: #f59e0b; }
-.menu-tile-name { font-size: 14px; font-weight: 600; line-height: 1.25; color: #1c1917; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.menu-tile-price { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; color: #57534e; }
-.menu-tile.has-photo { padding-left: 66px; }
-.menu-tile-photo { position: absolute; left: 10px; top: 12px; width: 46px; height: 46px; border-radius: 8px; object-fit: cover; }
+.menu-tile-name { font-size: 13px; font-weight: 600; line-height: 1.25; color: #1c1917; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.menu-tile-price { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; color: #57534e; }
+.menu-tile.has-photo { padding-left: 56px; }
+.menu-tile-photo { position: absolute; left: 8px; top: 10px; width: 38px; height: 38px; border-radius: 6px; object-fit: cover; }
 .menu-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 200px; text-align: center; color: #78716c; font-size: 14px; }
 .menu-empty p:first-child { font-weight: 600; color: #57534e; }
 
@@ -114,20 +120,11 @@
 .ticket-mode:hover { color: #1c1917; }
 .ticket-mode.is-active { background: #fff; color: #1c1917; box-shadow: 0 1px 2px rgb(28 25 23 / .12), 0 0 0 1px rgb(28 25 23 / .04); }
 .ticket-mode:disabled { opacity: .5; cursor: not-allowed; }
-.ticket-id { display: flex; align-items: baseline; gap: 10px; margin-top: 12px; }
+.ticket-id { display: flex; align-items: baseline; gap: 10px; }
 .ticket-number { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 22px; font-weight: 700; letter-spacing: -.02em; color: #1c1917; }
 .ticket-count { flex: 1; font-size: 13px; color: #78716c; }
 .ticket-discard { display: grid; place-items: center; width: 36px; height: 36px; align-self: center; border-radius: 8px; color: #a8a29e; }
 .ticket-discard:hover { background: #fee2e2; color: #b91c1c; }
-.ticket-customer { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 48px; border-bottom: 1px dashed #d6d3d1; }
-.ticket-customer-toggle { flex-shrink: 0; }
-.ticket-customer-toggle { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 0 14px; text-align: left; color: #78716c; }
-.ticket-customer-toggle:hover { background: #fafaf9; }
-.ticket-customer-summary { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; white-space: nowrap; font-size: 13px; }
-.ticket-customer-summary > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.ticket-customer-summary strong { color: #1c1917; font-weight: 600; flex-shrink: 0; }
-.ticket-customer-fields { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 0 14px 12px; }
-.ticket-customer.is-open .ticket-customer-toggle { color: #1c1917; }
 .ticket-lines { flex: 1 1 140px; min-height: 88px; overflow-y: auto; padding: 4px 8px; }
 .ticket-lines ul { margin: 0; padding: 0; list-style: none; }
 .ticket-empty { display: flex; align-items: center; justify-content: center; min-height: 80px; padding: 12px 16px; text-align: center; color: #a8a29e; font-size: 14px; }
@@ -177,25 +174,28 @@ html.dark .menu-section-title { color: #a8a29e; }
 @media (max-height: 820px) {
   .ticket-keys { display: none; }
   .ticket-head { padding-top: 10px; padding-bottom: 8px; }
-  .ticket-id { margin-top: 8px; }
+  .ticket-id { margin-top: 0; }
   .ticket-number { font-size: 20px; }
   .ticket-primary { min-height: 52px; }
   .ticket-secondary { min-height: 42px; }
   .checkout-customer { gap: 6px 10px; }
 }
 
-/* The customer block inside the ticket: two short columns, then address, notes, status. */
-.checkout-customer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; align-items: start; }
+/* Full-width entry area: contact details, then the delivery address. */
+.checkout-customer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; align-items: start; }
 .checkout-customer > * { min-width: 0; }
-.checkout-address, .checkout-notes { grid-column: 1 / -1; }
+.checkout-address { grid-column: 1 / -1; }
+.checkout-notes { grid-column: 1; min-width: 0; }
+.checkout-notes summary { width: fit-content; padding: 3px 0; cursor: pointer; font-size: 12px; font-weight: 600; color: #78716c; }
+.checkout-notes[open] { grid-column: 1 / -1; }
 .checkout-address-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .checkout-address-fields > :first-child { grid-column: 1 / -1; }
-.checkout-customer > :last-child { grid-column: 1 / -1; display: flex; flex-direction: row; align-items: center; justify-content: space-between; margin-left: 0; }
-.cust-input { display: block; width: 100%; min-width: 0; min-height: 38px; margin-top: 4px; padding: 0 10px; border: 1px solid #d6d3d1; border-radius: 8px; background: #fff; font-size: 14px; color: #1c1917; }
+.checkout-customer > :last-child { grid-column: 2; display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-end; margin-left: 0; padding-top: 3px; }
+.cust-input { display: block; width: 100%; min-width: 0; min-height: 40px; margin-top: 3px; padding: 0 10px; border: 1px solid #d6d3d1; border-radius: 7px; background: #fff; font-size: 14px; color: #1c1917; }
 .cust-input:focus { outline: none; border-color: #f59e0b; box-shadow: 0 0 0 3px rgb(245 158 11 / .18); }
 .cust-input.is-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
-/* Suggestion lists sit in the flow (the customer block scrolls, so a floating
-   list would be clipped); they push the fields below them down while open. */
+/* Suggestions float over the menu without moving or hiding the entry fields. */
+.order-details .cust-dropdown, .order-details .cust-dropdown-wrap { position: absolute; top: 100%; left: 0; z-index: 40; width: 100%; min-width: min(280px, 100%); }
 .cust-dropdown { margin: 4px 0 0; padding: 4px; list-style: none; max-height: 176px; overflow-y: auto; background: #fff; border: 1px solid #d6d3d1; border-radius: 8px; box-shadow: 0 4px 12px rgb(28 25 23 / .08); }
 .cust-dropdown-wrap { margin-top: 4px; background: #fff; border: 1px solid #d6d3d1; border-radius: 8px; box-shadow: 0 4px 12px rgb(28 25 23 / .08); }
 .cust-dropdown-wrap ul { max-height: 176px; overflow-y: auto; }
@@ -217,20 +217,32 @@ html.dark .cust-dropdown button:hover, html.dark .cust-dropdown li:first-child b
 /* Wide: two columns, each scrolling on its own; nothing on the page scrolls. */
 @container (min-width: 860px) {
   .checkout-jump { display: none; }
-  .checkout { grid-template-columns: minmax(0, 1fr) 360px; height: 100%; min-height: 0; overflow: hidden; }
-  .ticket { border-top: 0; border-left: 1px solid #e7e5e4; }
+  .checkout { grid-template-columns: minmax(0, 1fr) 360px; grid-template-rows: auto minmax(150px, 1fr); height: 100%; min-height: 500px; }
+  .order-details { grid-column: 1; grid-row: 1; }
+  .menu { grid-column: 1; grid-row: 2; }
+  .checkout-address-fields { grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(80px, .7fr); }
+  .checkout-address-fields > :first-child { grid-column: auto; }
+  .ticket { grid-column: 2; grid-row: 1 / 3; border-top: 0; border-left: 1px solid #d6d3d1; }
+}
+@container (min-width: 1100px) {
+  .checkout { grid-template-columns: minmax(0, 1fr) 400px; }
 }
 @container (min-width: 1440px) {
-  .checkout { grid-template-columns: minmax(0, 1fr) 400px; }
+  .checkout { grid-template-columns: minmax(0, 1fr) 440px; }
   .menu-toolbar { padding: 14px 24px 0; }
   .menu-body { padding: 16px 24px 32px; }
-  .menu-grid { grid-template-columns: repeat(auto-fill, minmax(184px, 1fr)); gap: 12px; }
+  .menu-grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; }
 }
 @container (max-width: 450px) {
+  .order-details { padding: 14px 12px; }
+  .order-details-heading { flex-direction: column; align-items: stretch; }
+  .order-details .ticket-modes { width: 100%; }
   .menu-toolbar { padding: 10px 12px 0; }
   .menu-body { padding: 12px; }
   .menu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .checkout-customer { grid-template-columns: minmax(0, 1fr); }
+  .checkout-customer > :last-child { grid-column: 1 / -1; justify-content: flex-start; }
+  .checkout-notes { grid-column: 1 / -1; }
+  .cust-input { font-size: 16px; min-height: 44px; }
 }
 
 /* The order screen collapses the sidebar to an icon rail: the menu needs the width more than the labels do. */
@@ -262,6 +274,8 @@ html.dark .cust-dropdown button:hover, html.dark .cust-dropdown li:first-child b
 
 /* Dark theme: same structure, inverted paper. */
 html.dark .checkout-main, html.dark .menu-toolbar { background: #141210; }
+html.dark .order-details { background: #1c1917; border-color: #44403c; }
+html.dark .order-details-heading h1 { color: #f5f5f4; }
 html.dark .menu-search, html.dark .menu-tile, html.dark .ticket, html.dark .ticket-foot, html.dark .ticket-mode.is-active, html.dark .ticket-secondary, html.dark .cust-input { background: #1c1917; border-color: #44403c; color: #f5f5f4; }
 html.dark .menu-search input, html.dark .menu-tile-name, html.dark .ticket-number, html.dark .ticket-line-name, html.dark .ticket-line-price, html.dark .ticket-qty span, html.dark .ticket-totals .is-total dt, html.dark .ticket-totals .is-total dd, html.dark .ticket-customer-summary strong, html.dark .ticket-mode.is-active, html.dark .ticket-secondary, html.dark .cust-input { color: #f5f5f4; }
 html.dark .menu-tabs { border-color: #292524; }

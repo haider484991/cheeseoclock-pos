@@ -1,8 +1,5 @@
-import { useEffect, useState } from 'react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
-import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { OrderMode } from '@cheeseoclock/shared-types';
 import {
   Minus,
   Plus,
@@ -10,18 +7,11 @@ import {
   Percent,
   ChefHat,
   Banknote,
-  ShoppingBag,
-  Bike,
-  Smartphone,
-  UserRound,
-  ChevronDown,
-  ChevronUp,
   AlertTriangle,
 } from 'lucide-react';
 import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
-import { CustomerInlinePanel } from './CustomerInlinePanel';
-import { useCustomerForm, resetCustomerForm } from './useCustomerForm';
+import { resetCustomerForm } from './useCustomerForm';
 
 interface Props {
   onPay: () => void;
@@ -36,29 +26,16 @@ function shortMissing(missing: string[]): string {
     .join(', ');
 }
 
-const MODES: Array<{ id: OrderMode; label: string; icon: typeof ShoppingBag }> = [
-  { id: 'takeaway', label: 'Takeaway', icon: ShoppingBag },
-  { id: 'delivery', label: 'Delivery', icon: Bike },
-  { id: 'foodpanda', label: 'Foodpanda', icon: Smartphone },
-];
-
-/**
- * The order ticket. Everything that describes *this* order lives here — how it
- * leaves the shop, who it is for, what is on it, what it costs, and the one
- * action that moves it on — so the cashier's eyes never leave the column that
- * becomes the kitchen ticket.
- */
+/** The ticket contains items, totals and checkout actions. */
 export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
   const mode = useCheckoutStore((s) => s.mode);
-  const setMode = useCheckoutStore((s) => s.setMode);
   const updateItemQty = useCheckoutStore((s) => s.updateItemQty);
   const clearDiscount = useCheckoutStore((s) => s.clearDiscount);
   const discardDraft = useCheckoutStore((s) => s.discardDraft);
   const gate = useTenderGate();
   const { toast } = useToast();
-  const { form, setForm } = useCustomerForm();
 
   const items = snapshot?.items ?? [];
   const order = snapshot?.order;
@@ -74,33 +51,6 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   // the till records it as paid and sends it in one step.
   const needsCustomer = mode === 'takeaway' || mode === 'delivery';
   const sendFirst = needsCustomer;
-
-  // The customer block opens on its own while nothing is filled in, and folds
-  // to a one-line summary once there is something to summarise.
-  const hasCustomer = Boolean(form.name.trim() || form.phone.trim());
-  const empty = items.length === 0;
-  const [customerOpen, setCustomerOpen] = useState(true);
-  useEffect(() => {
-    // Open while the order is blank (a phone order starts with the number),
-    // folded once items are on the ticket so the lines stay in view. Never
-    // re-evaluated on a keystroke — collapsing mid-typing would be maddening.
-    setCustomerOpen(empty && !hasCustomer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, order?.id, empty]);
-
-  async function switchMode(next: OrderMode) {
-    if (next === mode) return;
-    try {
-      await setMode(next);
-      resetCustomerForm();
-    } catch (e) {
-      toast({
-        title: 'Could not change order type',
-        description: e instanceof Error ? e.message : 'Unknown error',
-        variant: 'error',
-      });
-    }
-  }
 
   async function handleDiscard() {
     if (!order) return;
@@ -123,25 +73,6 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   return (
     <aside id="checkout-order" className="ticket" aria-label="Current order">
       <header className="ticket-head">
-        <div className="ticket-modes" role="group" aria-label="Order type">
-          {MODES.map((m) => {
-            const Icon = m.icon;
-            const active = mode === m.id;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                disabled={busy}
-                aria-pressed={active}
-                onClick={() => void switchMode(m.id)}
-                className={cn('ticket-mode', active && 'is-active')}
-              >
-                <Icon className="h-4 w-4" aria-hidden="true" />
-                <span>{m.label}</span>
-              </button>
-            );
-          })}
-        </div>
         <div className="ticket-id">
           <span className="ticket-number">{shortNumber ? `#${shortNumber}` : 'New order'}</span>
           <span className="ticket-count">
@@ -161,37 +92,6 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
           )}
         </div>
       </header>
-
-      {needsCustomer && (
-        <section className={cn('ticket-customer', customerOpen && 'is-open')} aria-label="Customer">
-          <button
-            type="button"
-            className="ticket-customer-toggle"
-            aria-expanded={customerOpen}
-            aria-controls="ticket-customer-fields"
-            onClick={() => setCustomerOpen((o) => !o)}
-          >
-            <UserRound className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className="ticket-customer-summary">
-              {hasCustomer ? (
-                <>
-                  <strong>{form.name.trim() || 'No name'}</strong>
-                  {form.phone.trim() && <span>{form.phone.trim()}</span>}
-                  {mode === 'delivery' && form.addressLine.trim() && (
-                    <span className="truncate">{form.addressLine.trim()}</span>
-                  )}
-                </>
-              ) : (
-                <strong>{mode === 'delivery' ? 'Who and where to?' : 'Who is it for?'}</strong>
-              )}
-            </span>
-            {customerOpen ? <ChevronUp className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
-          </button>
-          <div id="ticket-customer-fields" className="ticket-customer-fields" hidden={!customerOpen}>
-            <CustomerInlinePanel mode={mode} form={form} setForm={setForm} />
-          </div>
-        </section>
-      )}
 
       <div className="ticket-lines">
         {items.length === 0 ? (

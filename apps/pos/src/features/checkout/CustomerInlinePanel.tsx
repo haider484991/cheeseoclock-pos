@@ -7,7 +7,7 @@ import { suggestDhaAreas, formatDhaArea, DHA_CITY, type DhaPlace } from '@cheese
 import { Phone, User, MapPin, Check, UserPlus, History } from 'lucide-react';
 
 /**
- * Inline customer + delivery panel — lives in the order ticket (no modal).
+ * Inline customer + delivery panel — lives above the menu (no modal).
  *
  * The cashier fills in phone / name / address as part of the order. Nothing is
  * persisted until tender time, when `useCustomerForm` commits via
@@ -442,8 +442,8 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       )}
 
       {/* Delivery notes — both modes */}
-      <div className="checkout-notes flex flex-col gap-1">
-        <span className="text-xs uppercase tracking-wider text-stone-500">Notes</span>
+      <details className="checkout-notes" open={!!form.deliveryNotes}>
+        <summary>Order notes</summary>
         <input
           type="text"
           value={form.deliveryNotes}
@@ -452,7 +452,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
           placeholder={mode === 'delivery' ? 'ring upper bell' : 'collect by 7pm'}
           className="cust-input"
         />
-      </div>
+      </details>
 
       {/* Status pill + history hint */}
       <div className="ml-auto flex flex-col items-end gap-1">
