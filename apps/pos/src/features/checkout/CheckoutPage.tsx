@@ -23,13 +23,22 @@ export function CheckoutPage() {
   const [discountOpen, setDiscountOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [checkoutStep, setCheckoutStep] = useState<'items' | 'details'>('items');
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   const snapshot = useCheckoutStore((s) => s.snapshot);
+  const mode = useCheckoutStore((s) => s.mode);
+  const busy = useCheckoutStore((s) => s.busy);
   const reset = useCheckoutStore((s) => s.reset);
   const resumeDraft = useCheckoutStore((s) => s.resumeDraft);
   const gate = useTenderGate();
   const { toast } = useToast();
+  const needsCustomer = mode === 'takeaway' || mode === 'delivery';
+  const hasItems = (snapshot?.items.length ?? 0) > 0;
+
+  useEffect(() => {
+    setCheckoutStep('items');
+  }, [snapshot?.order.id, mode, hasItems]);
 
   // After a restart the cashier's half-built order is still 'open' in the
   // database but gone from the screen. Pick it back up once per mount so it is
@@ -101,15 +110,22 @@ export function CheckoutPage() {
         }
         return;
       }
-      const hasItems = !!snapshot && snapshot.items.length > 0;
+      if (e.key === 'Escape' && checkoutStep === 'details' && !busy && document.activeElement?.tagName !== 'INPUT') {
+        setCheckoutStep('items');
+        return;
+      }
       if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') {
         e.preventDefault();
         searchRef.current?.focus();
         return;
       }
-      if (!hasItems) return;
+      if (!hasItems || busy) return;
       if (e.key === 'F1' || e.key === 'F2') {
         e.preventDefault();
+        if (needsCustomer && checkoutStep === 'items') {
+          setCheckoutStep('details');
+          return;
+        }
         if (!gate.ok) {
           toast({ title: e.key === 'F1' ? 'Cannot pay yet' : 'Cannot send yet', description: gate.missing.join(' · '), variant: 'warning' });
           return;
@@ -124,7 +140,7 @@ export function CheckoutPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modifierForItem, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast]);
+  }, [modifierForItem, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy]);
 
   async function handleAddItem(item: MenuItem) {
     // If the item has modifier groups, open the modal first.
@@ -135,6 +151,7 @@ export function CheckoutPage() {
     }
     try {
       await useCheckoutStore.getState().addItem(item.id);
+      setCheckoutStep('items');
     } catch (e) {
       toast({
         title: 'Could not add item',
@@ -221,7 +238,7 @@ export function CheckoutPage() {
         </div>
       </section>
 
-      <CartPane onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen(true)} onSendToKitchen={handleSendToKitchen} />
+      <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen(true)} onSendToKitchen={handleSendToKitchen} />
 
       {modifierForItem && (
         <ModifierModal
@@ -231,6 +248,7 @@ export function CheckoutPage() {
             setModifierForItem(null);
             try {
               await useCheckoutStore.getState().addItem(modifierForItem.id, 1, modifierIds);
+              setCheckoutStep('items');
             } catch (e) {
               toast({
                 title: 'Could not add item',

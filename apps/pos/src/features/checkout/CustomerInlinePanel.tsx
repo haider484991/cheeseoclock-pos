@@ -7,7 +7,7 @@ import { suggestDhaAreas, formatDhaArea, DHA_CITY, type DhaPlace } from '@cheese
 import { Phone, User, MapPin, Check, UserPlus, History } from 'lucide-react';
 
 /**
- * Inline customer + delivery panel — lives above the menu (no modal).
+ * Inline customer + delivery panel — lives in the second step of the order ticket (no modal).
  *
  * The cashier fills in phone / name / address as part of the order. Nothing is
  * persisted until tender time, when `useCustomerForm` commits via
@@ -246,7 +246,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
           <div className="cust-dropdown-wrap">
             {(suggestionsQ.data ?? []).length === 0 ? (
               <div className="p-2 text-xs text-stone-500">
-                No match. Fill name + address — we'll save this customer when you tender.
+                No match. Fill name + address — we'll save this customer with the order.
               </div>
             ) : (
               <ul className="max-h-56 overflow-auto">
@@ -469,7 +469,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
         ) : form.name || form.phone ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             <UserPlus className="h-3 w-3" />
-            New — saves on tender
+            New customer
           </span>
         ) : (
           <span className="text-[10px] text-stone-500">No customer yet</span>

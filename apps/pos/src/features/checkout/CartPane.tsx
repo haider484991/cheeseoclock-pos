@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import {
@@ -8,12 +9,18 @@ import {
   ChefHat,
   Banknote,
   AlertTriangle,
+  ArrowRight,
+  ArrowLeft,
 } from 'lucide-react';
 import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
-import { resetCustomerForm } from './useCustomerForm';
+import { resetCustomerForm, useCustomerForm } from './useCustomerForm';
+import { CustomerInlinePanel } from './CustomerInlinePanel';
 
 interface Props {
+  step: 'items' | 'details';
+  onContinue: () => void;
+  onBack: () => void;
   onPay: () => void;
   onDiscount: () => void;
   onSendToKitchen: () => void;
@@ -27,7 +34,7 @@ function shortMissing(missing: string[]): string {
 }
 
 /** The ticket contains items, totals and checkout actions. */
-export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
+export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendToKitchen }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
   const mode = useCheckoutStore((s) => s.mode);
@@ -36,6 +43,8 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   const discardDraft = useCheckoutStore((s) => s.discardDraft);
   const gate = useTenderGate();
   const { toast } = useToast();
+  const { form, setForm } = useCustomerForm();
+  const detailsHeading = useRef<HTMLHeadingElement>(null);
 
   const items = snapshot?.items ?? [];
   const order = snapshot?.order;
@@ -51,6 +60,14 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   // the till records it as paid and sends it in one step.
   const needsCustomer = mode === 'takeaway' || mode === 'delivery';
   const sendFirst = needsCustomer;
+  const showDetails = needsCustomer && step === 'details';
+
+  useEffect(() => {
+    if (showDetails) {
+      detailsHeading.current?.focus({ preventScroll: true });
+      detailsHeading.current?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [showDetails]);
 
   async function handleDiscard() {
     if (!order) return;
@@ -71,7 +88,7 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
   const canAct = items.length > 0 && !busy && gate.ok;
 
   return (
-    <aside id="checkout-order" className="ticket" aria-label="Current order">
+    <aside id="checkout-order" className={`ticket${showDetails ? ' is-details' : ''}`} aria-label="Current order">
       <header className="ticket-head">
         <div className="ticket-id">
           <span className="ticket-number">{shortNumber ? `#${shortNumber}` : 'New order'}</span>
@@ -91,10 +108,24 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
             </button>
           )}
         </div>
+        {needsCustomer && (
+          <ol className="ticket-steps" aria-label="Order progress">
+            <li aria-current={!showDetails ? 'step' : undefined}>1 · Review order</li>
+            <li aria-current={showDetails ? 'step' : undefined}>2 · {mode === 'delivery' ? 'Delivery details' : 'Customer details'}</li>
+          </ol>
+        )}
       </header>
 
-      <div className="ticket-lines">
-        {items.length === 0 ? (
+      <div className={showDetails ? 'ticket-details' : 'ticket-lines'}>
+        {showDetails ? (
+          <section aria-labelledby="ticket-details-title">
+            <div className="ticket-step-heading">
+              <h2 id="ticket-details-title" ref={detailsHeading} tabIndex={-1}>{mode === 'delivery' ? 'Delivery details' : 'Customer details'}</h2>
+              <button type="button" className="ticket-link" onClick={onBack} disabled={busy}><ArrowLeft className="h-3 w-3" />Edit order</button>
+            </div>
+            <CustomerInlinePanel mode={mode} form={form} setForm={setForm} />
+          </section>
+        ) : items.length === 0 ? (
           <div className="ticket-empty">
             <p>Tap a menu item to start the order.</p>
           </div>
@@ -187,7 +218,7 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
           </div>
         </dl>
 
-        {items.length > 0 && !gate.ok && (
+        {items.length > 0 && !gate.ok && (!needsCustomer || showDetails) && (
           <div className="ticket-gate" role="status">
             <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>Still needed: {shortMissing(gate.missing)}</span>
@@ -195,7 +226,11 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
         )}
 
         <div className="ticket-actions">
-          {sendFirst ? (
+          {needsCustomer && !showDetails ? (
+            <button type="button" className="ticket-primary" disabled={items.length === 0 || busy} onClick={onContinue} title="Continue to customer details (F2)">
+              Confirm order <ArrowRight className="h-5 w-5" aria-hidden="true" />
+            </button>
+          ) : sendFirst ? (
             <>
               <button
                 type="button"
@@ -225,9 +260,9 @@ export function CartPane({ onPay, onDiscount, onSendToKitchen }: Props) {
             </button>
           )}
         </div>
+        {needsCustomer && !showDetails && <p className="ticket-next">Next: {mode === 'delivery' ? 'customer & delivery details' : 'customer details'}</p>}
         <div className="ticket-keys" aria-hidden="true">
-          <span><kbd>F2</kbd> Send</span>
-          <span><kbd>F1</kbd> Pay</span>
+          {needsCustomer && !showDetails ? <span><kbd>F2</kbd> Continue</span> : <><span><kbd>F2</kbd> Send</span><span><kbd>F1</kbd> Pay</span></>}
           <span><kbd>F3</kbd> Discount</span>
         </div>
       </footer>
