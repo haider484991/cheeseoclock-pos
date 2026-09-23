@@ -58,7 +58,7 @@ export interface MenuSnapshot {
   }>;
   /** Live recipe lines per menu item id. */
   recipes: Map<string, Array<{ ingredientId: string; qtyPerUnit: number }>>;
-  taxCategories: Array<{ id: string; name: string }>;
+  taxCategories: Array<{ id: string; name: string; rateBps: number }>;
 }
 
 /** A reference to an ingredient that exists now, or one the import creates first. */
@@ -99,11 +99,15 @@ export interface MenuImportOps {
       description: string | null;
       sortOrder: number;
     } | null;
-    update: { basePriceCents?: number; description?: string } | null;
+    /** useImportTax: move the item onto the import's tax category (see taxCategoryId / createTaxCategory). */
+    update: { basePriceCents?: number; description?: string; useImportTax?: true } | null;
     /** Replace the item's recipe with these lines; null = leave the recipe alone. */
     recipe: Array<{ ingredient: IngredientRef; qty: number }> | null;
   }>;
+  /** Tax category for new items and useImportTax updates… */
   taxCategoryId: string | null;
+  /** …or, when the POS has none at the file's rate, the one to create first. */
+  createTaxCategory: { name: string; rateBps: number } | null;
 }
 
 export interface MenuImportPlan {
@@ -180,6 +184,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     newItems: 0,
     updatedItems: 0,
     priceChanges: 0,
+    taxChanges: 0,
     recipesSet: 0,
     newIngredients: 0,
     updatedIngredients: 0,
@@ -331,11 +336,24 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
   // ---- Items ---------------------------------------------------------------
   const counts = new Map<string, number>();
   for (const it of live.items) counts.set(it.taxCategoryId, (counts.get(it.taxCategoryId) ?? 0) + 1);
-  const busiestTax = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  const taxCategory =
-    live.taxCategories.find((t) => t.id === busiestTax) ??
-    [...live.taxCategories].sort((a, b) => a.name.localeCompare(b.name))[0] ??
-    null;
+  const byUse = (a: { id: string; name: string }, b: { id: string; name: string }) =>
+    (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0) || a.name.localeCompare(b.name);
+  const pct = (bps: number) => `${bps / 100}%`;
+  // With a tax in the file: a category at exactly that rate (same name first,
+  // then the most used), else one is created. Without: the most used one.
+  let taxCategory: { id: string; name: string; rateBps: number } | null;
+  let createTaxCategory: MenuImportOps['createTaxCategory'] = null;
+  if (file.tax) {
+    const atRate = live.taxCategories.filter((t) => t.rateBps === file.tax!.rateBps).sort(byUse);
+    taxCategory = atRate.find((t) => normalizeName(t.name) === normalizeName(file.tax!.name)) ?? atRate[0] ?? null;
+    if (!taxCategory) createTaxCategory = { name: file.tax.name, rateBps: file.tax.rateBps };
+  } else {
+    taxCategory = [...live.taxCategories].sort(byUse)[0] ?? null;
+  }
+  const taxRateById = new Map(live.taxCategories.map((t) => [t.id, t.rateBps]));
+  const importTaxName = taxCategory?.name ?? createTaxCategory?.name ?? null;
+  const importTaxRate = taxCategory?.rateBps ?? createTaxCategory?.rateBps ?? null;
+  const canCreateItems = importTaxName !== null;
 
   const categoryNameById = new Map(live.categories.map((c) => [c.id, c.name]));
   const itemPlans: MenuImportItemPlan[] = [];
@@ -399,7 +417,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     }
 
     if (!m.row) {
-      if (!taxCategory) {
+      if (!canCreateItems) {
         itemPlans.push({
           ...base,
           categoryName: categoryNameByKey.get(catKey) ?? item.category,
@@ -452,6 +470,12 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       changes.push('description added');
       update.description = item.description;
     }
+    if (file.tax && row.taxCategoryId !== taxCategory?.id) {
+      const was = taxRateById.get(row.taxCategoryId);
+      changes.push(`tax ${was !== undefined ? pct(was) : '?'} → ${pct(file.tax.rateBps)}`);
+      update.useImportTax = true;
+      summary.taxChanges++;
+    }
 
     let recipeChange: MenuImportItemPlan['recipeChange'] = item.recipe.length > 0 ? 'skip' : 'none';
     if (recipe) {
@@ -496,7 +520,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     .map((it) => (it.isActive ? it.name : `${it.name} (hidden)`))
     .sort((a, b) => a.localeCompare(b));
 
-  if (!taxCategory && file.items.length > 0) {
+  if (!canCreateItems && file.items.length > 0) {
     warnings.push('This POS has no tax category, so new items cannot be added yet (Menu → Tax).');
   }
 
@@ -508,7 +532,9 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
   return {
     preview: {
       source: file.source,
-      taxCategoryName: taxCategory?.name ?? null,
+      taxCategoryName: importTaxName && importTaxRate !== null ? `${importTaxName} (${pct(importTaxRate)})` : null,
+      taxCategoryIsNew: createTaxCategory !== null,
+      taxFromFile: file.tax !== null,
       categories: categoryPlans.filter((_, i) => keepCategory(i)),
       ingredients: ingredientPlans,
       items: itemPlans,
@@ -521,6 +547,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       ingredients: ingredientOps,
       items: itemOps,
       taxCategoryId: taxCategory?.id ?? null,
+      createTaxCategory,
     },
   };
 }

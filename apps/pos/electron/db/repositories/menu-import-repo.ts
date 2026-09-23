@@ -11,7 +11,7 @@ import {
   convertIngredientToBaseUnit,
   setRecipeForItem,
 } from './ingredient-repo.js';
-import { listTaxCategories } from './tax-category-repo.js';
+import { listTaxCategories, createTaxCategory } from './tax-category-repo.js';
 import { planMenuImport, type MenuImportPlan, type MenuSnapshot } from '../menu-import-plan.js';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
 import type { MenuImportSummary } from '@cheeseoclock/shared-types';
@@ -59,6 +59,10 @@ export function applyMenuImport(
   const tx = db.transaction((): MenuImportSummary => {
     const { ops, preview } = planMenuImportFromDb(db, file);
 
+    const taxCategoryId = ops.createTaxCategory
+      ? createTaxCategory(db, ops.createTaxCategory, actor).id
+      : ops.taxCategoryId;
+
     const categoryIds = new Map<string, string>();
     for (const c of ops.categories) {
       categoryIds.set(c.fileKey, c.existingId ?? createCategory(db, c.create!, actor).id);
@@ -79,7 +83,7 @@ export function applyMenuImport(
       let itemId = op.existingId;
       if (!itemId && op.create) {
         const categoryId = categoryIds.get(op.create.categoryFileKey);
-        if (!categoryId || !ops.taxCategoryId) throw new Error(`No category or tax for ${op.create.name}`);
+        if (!categoryId || !taxCategoryId) throw new Error(`No category or tax for ${op.create.name}`);
         itemId = createMenuItem(
           db,
           {
@@ -87,13 +91,15 @@ export function applyMenuImport(
             name: op.create.name,
             description: op.create.description,
             basePriceCents: op.create.basePriceCents,
-            taxCategoryId: ops.taxCategoryId,
+            taxCategoryId,
             sortOrder: op.create.sortOrder,
           },
           actor,
         ).id;
       } else if (itemId && op.update) {
-        updateMenuItem(db, { id: itemId, ...op.update }, actor);
+        const { useImportTax, ...fields } = op.update;
+        if (useImportTax && !taxCategoryId) throw new Error('No tax category to move items onto');
+        updateMenuItem(db, { id: itemId, ...fields, ...(useImportTax ? { taxCategoryId: taxCategoryId! } : {}) }, actor);
       }
       if (itemId && op.recipe) {
         setRecipeForItem(

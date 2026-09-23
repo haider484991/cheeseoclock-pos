@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { centsSchema } from './common.js';
+import { bpsSchema, centsSchema } from './common.js';
 
 /**
  * A menu file: the shop's menu, prices, ingredients and recipes in one JSON
@@ -60,6 +60,15 @@ export const menuImportFileSchema = z
     format: z.literal('cheeseoclock-menu-import'),
     version: z.literal(1),
     source: z.string().max(300).nullable().default(null),
+    /**
+     * The tax every item in the file is charged (added on top of the price —
+     * the POS computes tax exclusive). Items are moved onto a tax category at
+     * this rate, created if the POS has none. Null = leave tax as it is.
+     */
+    tax: z
+      .object({ name: z.string().trim().min(1).max(80), rateBps: bpsSchema })
+      .nullable()
+      .default(null),
     categories: z.array(menuImportCategorySchema).max(100),
     ingredients: z.array(menuImportIngredientSchema).max(1000),
     items: z.array(menuImportItemSchema).max(1000),

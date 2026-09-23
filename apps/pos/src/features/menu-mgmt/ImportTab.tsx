@@ -129,6 +129,7 @@ export function ImportTab() {
                 ['New items', s.newItems],
                 ['Items changed', s.updatedItems],
                 ['Price changes', s.priceChanges],
+                ['Tax changes', s.taxChanges],
                 ['Recipes set', s.recipesSet],
                 ['New ingredients', s.newIngredients],
                 ['Ingredients changed', s.updatedIngredients],
@@ -141,9 +142,11 @@ export function ImportTab() {
                 </div>
               ))}
             </dl>
-            {preview.taxCategoryName && s.newItems > 0 && (
+            {preview.taxCategoryName && (preview.taxFromFile || s.newItems > 0) && (
               <p className="mt-3 text-xs text-stone-500">
-                New items get the “{preview.taxCategoryName}” tax category, like most of the menu.
+                {preview.taxFromFile ? 'Tax for the file’s items' : 'New items are charged the tax most of the menu uses'}
+                : {preview.taxCategoryName}, added on top of the price
+                {preview.taxCategoryIsNew ? ' — this tax category will be created.' : '.'}
               </p>
             )}
             {preview.warnings.map((w) => (

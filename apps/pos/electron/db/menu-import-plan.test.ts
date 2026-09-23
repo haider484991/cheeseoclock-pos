@@ -35,8 +35,8 @@ function shop(partial: Partial<MenuSnapshot> = {}): MenuSnapshot {
     ingredients: [],
     recipes: new Map(),
     taxCategories: [
-      { id: 'tax-a', name: 'A' },
-      { id: 'tax-sindh', name: 'Sindh' },
+      { id: 'tax-a', name: 'A', rateBps: 1300 },
+      { id: 'tax-sindh', name: 'Sindh', rateBps: 1700 },
     ],
     ...partial,
   };
@@ -264,6 +264,37 @@ describe('planMenuImport', () => {
       'Malai Supreme — Large',
     ]);
     expect(plan.preview.items[1]).toMatchObject({ name: 'Fajita — Large', action: 'create' });
+  });
+
+  it('moves every file item onto the file tax rate, creating that tax category when missing', () => {
+    const f = menuImportFileSchema.parse({
+      ...file({}),
+      tax: { name: 'Sales Tax', rateBps: 1500 },
+      items: [
+        { name: 'Fajita Pizza — Medium', aliases: ['Fajita — Medium'], category: 'Pizza', priceCents: 170000 },
+        { name: 'Fajita Pizza — Large', category: 'Pizza', priceCents: 220000 },
+      ],
+    });
+    const plan = planMenuImport(f, shop({ items: [item('fm', 'Fajita — Medium'), item('d', 'Drink')] }));
+    expect(plan.ops.createTaxCategory).toEqual({ name: 'Sales Tax', rateBps: 1500 });
+    expect(plan.preview).toMatchObject({ taxCategoryName: 'Sales Tax (15%)', taxCategoryIsNew: true });
+    expect(plan.preview.items[0]?.changes).toEqual(['tax 17% → 15%']);
+    expect(plan.ops.items[0]?.update).toEqual({ useImportTax: true });
+    expect(plan.preview.summary.taxChanges).toBe(1);
+    // "Drink" is not in the file: its tax is left alone.
+    expect(plan.ops.items.some((o) => o.existingId === 'd')).toBe(false);
+  });
+
+  it('reuses a tax category already at the file rate and leaves items on it alone', () => {
+    const f = menuImportFileSchema.parse({
+      ...file({}),
+      tax: { name: 'Sales Tax', rateBps: 1700 },
+      items: [{ name: 'Fajita — Medium', category: 'Pizza', priceCents: 170000 }],
+    });
+    const plan = planMenuImport(f, shop({ items: [item('fm', 'Fajita — Medium')] }));
+    expect(plan.ops.createTaxCategory).toBeNull();
+    expect(plan.ops.taxCategoryId).toBe('tax-sindh');
+    expect(plan.preview.items[0]?.action).toBe('same');
   });
 
   it('cannot create items without a tax category, and says so', () => {

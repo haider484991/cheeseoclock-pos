@@ -46,6 +46,8 @@ export interface MenuImportSummary {
   newItems: number;
   updatedItems: number;
   priceChanges: number;
+  /** Items moved onto the file's tax rate. */
+  taxChanges: number;
   recipesSet: number;
   newIngredients: number;
   updatedIngredients: number;
@@ -56,8 +58,12 @@ export interface MenuImportSummary {
 export interface MenuImportPreview {
   fileName: string;
   source: string | null;
-  /** Tax category given to new items (the one most of the menu already uses). */
+  /** Tax category the file's items are charged, e.g. "Sales Tax (15%)". */
   taxCategoryName: string | null;
+  /** True when the import creates that tax category. */
+  taxCategoryIsNew: boolean;
+  /** True when the file sets the tax; false = new items get the tax most of the menu uses. */
+  taxFromFile: boolean;
   categories: MenuImportCategoryPlan[];
   ingredients: MenuImportIngredientPlan[];
   items: MenuImportItemPlan[];
