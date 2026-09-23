@@ -4,6 +4,8 @@ import { ipc } from '../../ipc/client';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { CategoryRail } from './CategoryRail';
 import { ItemGrid } from './ItemGrid';
+import { PizzaSizeDialog } from './PizzaSizeDialog';
+import type { MenuChoice } from './pizzaChoices';
 import { CartPane } from './CartPane';
 import { OrderDetails } from './OrderDetails';
 import { ModifierModal } from './ModifierModal';
@@ -19,6 +21,8 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 export function CheckoutPage() {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [modifierForItem, setModifierForItem] = useState<MenuItem | null>(null);
+  const [pizzaChoice, setPizzaChoice] = useState<MenuChoice | null>(null);
+  const sizeTriggerRef = useRef<HTMLElement | null>(null);
   const [tenderOpen, setTenderOpen] = useState(false);
   const [discountOpen, setDiscountOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
@@ -99,9 +103,10 @@ export function CheckoutPage() {
   // "/" jumps to search, Esc closes whatever is open.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (modifierForItem || tenderOpen || receiptOpen || discountOpen) {
+      if (pizzaChoice || modifierForItem || tenderOpen || receiptOpen || discountOpen) {
         if (e.key === 'Escape') {
-          if (receiptOpen) {
+          if (pizzaChoice) setPizzaChoice(null);
+          else if (receiptOpen) {
             setReceiptOpen(false);
             reset();
           } else if (tenderOpen) setTenderOpen(false);
@@ -140,16 +145,20 @@ export function CheckoutPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modifierForItem, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy]);
+  }, [pizzaChoice, modifierForItem, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy]);
+
+  function handleChooseSize(choice: MenuChoice) {
+    sizeTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPizzaChoice(choice);
+  }
 
   async function handleAddItem(item: MenuItem) {
-    // If the item has modifier groups, open the modal first.
-    const groups = await ipc.menu.listModifierGroupsForItem(item.id);
-    if (groups.length > 0) {
-      setModifierForItem(item);
-      return;
-    }
     try {
+      const groups = await ipc.menu.listModifierGroupsForItem(item.id);
+      if (groups.length > 0) {
+        setModifierForItem(item);
+        return;
+      }
       await useCheckoutStore.getState().addItem(item.id);
       setCheckoutStep('items');
     } catch (e) {
@@ -227,18 +236,22 @@ export function CheckoutPage() {
                       <span className="menu-tab-dot" style={{ background: c.colorHex }} aria-hidden="true" />
                       {c.name}
                     </h2>
-                    <ItemGrid items={inCat} categories={categoriesQ.data ?? []} onAdd={handleAddItem} />
+                    <ItemGrid items={inCat} categories={categoriesQ.data ?? []} onAdd={handleAddItem} onChooseSize={handleChooseSize} />
                   </section>
                 );
               })}
             </div>
           ) : (
-            <ItemGrid items={visibleItems} categories={categoriesQ.data ?? []} onAdd={handleAddItem} />
+            <ItemGrid items={visibleItems} categories={categoriesQ.data ?? []} onAdd={handleAddItem} onChooseSize={handleChooseSize} />
           )}
         </div>
       </section>
 
       <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen(true)} onSendToKitchen={handleSendToKitchen} />
+
+      {pizzaChoice && (
+        <PizzaSizeDialog choice={pizzaChoice} returnFocus={sizeTriggerRef.current} onClose={() => setPizzaChoice(null)} onSelect={(item) => { setPizzaChoice(null); void handleAddItem(item); }} />
+      )}
 
       {modifierForItem && (
         <ModifierModal
