@@ -19,6 +19,8 @@ export const lineQtySchema = wholeUnits.positive({ message: 'Quantity must be at
 export const movementQtySchema = wholeUnits;
 
 const idSchema = z.string().min(1);
+/** How many base units one pack holds: a whole number, at least 1. */
+const packSizeSchema = wholeUnits.positive({ message: 'Pack size must be at least 1' });
 const nullableText = z.string().nullable().optional();
 
 export const createIngredientInputSchema = z.object({
@@ -27,6 +29,8 @@ export const createIngredientInputSchema = z.object({
   currentQty: stockQtySchema.optional(),
   lowThreshold: stockQtySchema.optional(),
   costPerUnitCents: centsSchema.optional(),
+  packSize: packSizeSchema.nullable().optional(),
+  packPriceCents: centsSchema.nullable().optional(),
   defaultSupplierId: nullableText,
   sku: nullableText,
   notes: nullableText,
@@ -38,11 +42,16 @@ export const updateIngredientInputSchema = z.object({
   unit: z.string().min(1).optional(),
   lowThreshold: stockQtySchema.optional(),
   costPerUnitCents: centsSchema.optional(),
+  packSize: packSizeSchema.nullable().optional(),
+  packPriceCents: centsSchema.nullable().optional(),
   defaultSupplierId: nullableText,
   sku: nullableText,
   notes: nullableText,
   isActive: z.boolean().optional(),
 });
+
+/** Switch an ingredient counted in kg / litres to grams / ml (stock and recipes ×1000). */
+export const convertIngredientUnitInputSchema = z.object({ id: idSchema });
 
 export const setRecipeInputSchema = z.object({
   menuItemId: idSchema,

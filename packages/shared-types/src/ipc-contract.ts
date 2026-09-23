@@ -44,6 +44,7 @@ import type {
   PurchaseOrderWithItems,
 } from './inventory.js';
 import type { Customer, CustomerAddress, CustomerAddressMatch, CustomerWithAddresses } from './customer.js';
+import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
 
 /** One cloud copy as listed for the operator (from any till). */
 export interface CloudBackupEntry {
@@ -279,6 +280,18 @@ export interface IpcContract {
   'menu:deleteModifier': {
     request: { id: string };
     response: ApiResult<{ id: string }>;
+  };
+
+  // Menu — import from a menu file. Pick opens a file dialog in the main
+  // process and returns what the file would change (null when cancelled);
+  // apply writes the picked file, re-checked against the live menu.
+  'menu:importPick': {
+    request: undefined;
+    response: ApiResult<MenuImportPreview | null>;
+  };
+  'menu:importApply': {
+    request: undefined;
+    response: ApiResult<MenuImportSummary>;
   };
 
   // Menu — combos (high-level CRUD; structure managed separately in Phase 2.5)
@@ -784,6 +797,8 @@ export interface IpcContract {
       currentQty?: number;
       lowThreshold?: number;
       costPerUnitCents?: number;
+      packSize?: number | null;
+      packPriceCents?: number | null;
       defaultSupplierId?: string | null;
       sku?: string | null;
       notes?: string | null;
@@ -797,6 +812,8 @@ export interface IpcContract {
       unit?: string;
       lowThreshold?: number;
       costPerUnitCents?: number;
+      packSize?: number | null;
+      packPriceCents?: number | null;
       defaultSupplierId?: string | null;
       sku?: string | null;
       notes?: string | null;
@@ -807,6 +824,10 @@ export interface IpcContract {
   'inventory:deleteIngredient': {
     request: { id: string };
     response: ApiResult<{ id: string }>;
+  };
+  'inventory:convertIngredientUnit': {
+    request: { id: string };
+    response: ApiResult<Ingredient>;
   };
 
   // Inventory — recipes (per menu item)

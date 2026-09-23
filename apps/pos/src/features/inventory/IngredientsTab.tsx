@@ -2,11 +2,20 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import {
+  INGREDIENT_UNITS,
+  baseUnitConversion,
+  costPerUnitFromPack,
+  formatPack,
+  formatUnitCost,
+} from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Ingredient, StockMovementReason } from '@cheeseoclock/shared-types';
-import { Plus, Edit, Trash2, X, AlertTriangle, BarChart2 } from 'lucide-react';
+import { Plus, Edit, Trash2, X, AlertTriangle, BarChart2, Scale } from 'lucide-react';
+
+/** 25000 → "25,000" */
+const qty = (n: number) => new Intl.NumberFormat('en-PK').format(n);
 
 export function IngredientsTab() {
   const qc = useQueryClient();
@@ -38,6 +47,20 @@ export function IngredientsTab() {
       }),
   });
 
+  const convertMut = useMutation({
+    mutationFn: (id: string) => ipc.inventory.convertIngredientUnit(id),
+    onSuccess: (i) => {
+      toast({ title: `${i.name} is now counted in ${i.unit}`, variant: 'success' });
+      void qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+    onError: (e) =>
+      toast({
+        title: 'Cannot convert',
+        description: e instanceof IpcError ? e.message : String(e),
+        variant: 'error',
+      }),
+  });
+
   return (
     <Card>
       <div className="mb-3 flex items-center justify-between">
@@ -63,7 +86,7 @@ export function IngredientsTab() {
             <th className="pb-2 text-right">On hand</th>
             <th className="pb-2 text-right">Low at</th>
             <th className="pb-2 text-right">Unit cost</th>
-            <th className="pb-2">Supplier</th>
+            <th className="pb-2 pl-6">Supplier</th>
             <th className="pb-2" />
           </tr>
         </thead>
@@ -84,15 +107,34 @@ export function IngredientsTab() {
                   {i.sku && <div className="text-xs text-stone-500">SKU {i.sku}</div>}
                 </td>
                 <td className={cn('py-2 text-right font-mono', isLow && 'font-bold text-amber-700')}>
-                  {i.currentQty} {i.unit}
+                  {qty(i.currentQty)} {i.unit}
                 </td>
                 <td className="py-2 text-right font-mono text-stone-500">
-                  {i.lowThreshold} {i.unit}
+                  {qty(i.lowThreshold)} {i.unit}
                 </td>
-                <td className="py-2 text-right font-mono">
-                  {formatCents(i.costPerUnitCents)} / {i.unit}
+                <td className="py-2 text-right">
+                  <div className="font-mono">{formatUnitCost(i)}</div>
+                  {(i.packSize ?? 0) > 1 && <div className="text-xs text-stone-500">{formatPack(i)}</div>}
+                  {baseUnitConversion(i.unit) && (
+                    <button
+                      type="button"
+                      disabled={convertMut.isPending}
+                      onClick={() => {
+                        const to = baseUnitConversion(i.unit)!;
+                        if (
+                          confirm(
+                            `Count "${i.name}" in ${to.unit} instead of ${i.unit}?\n\nStock, low level and every recipe that uses it are multiplied by ${to.factor} — the same amounts, in ${to.unit}. Recipes can then say 300 ${to.unit}.`,
+                          )
+                        )
+                          convertMut.mutate(i.id);
+                      }}
+                      className="mt-1 inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-200"
+                    >
+                      <Scale className="h-3 w-3" /> Convert to {baseUnitConversion(i.unit)!.unit}
+                    </button>
+                  )}
                 </td>
-                <td className="py-2 text-stone-500">
+                <td className="py-2 pl-6 text-stone-500">
                   {sup.data?.find((s) => s.id === i.defaultSupplierId)?.name ?? '—'}
                 </td>
                 <td className="py-2 text-right">
@@ -161,6 +203,18 @@ function IngredientDialog({
   const [currentQty, setCurrentQty] = useState((existing?.currentQty ?? 0).toString());
   const [lowThreshold, setLowThreshold] = useState((existing?.lowThreshold ?? 0).toString());
   const [costPerUnit, setCostPerUnit] = useState(((existing?.costPerUnitCents ?? 0) / 100).toString());
+  const [packSize, setPackSize] = useState(existing?.packSize ? existing.packSize.toString() : '');
+  const [packPrice, setPackPrice] = useState(
+    existing?.packPriceCents !== null && existing?.packPriceCents !== undefined
+      ? (existing.packPriceCents / 100).toString()
+      : '',
+  );
+  const pack = {
+    size: parseInt(packSize, 10),
+    priceCents: Math.round(parseFloat(packPrice) * 100),
+  };
+  const hasPack = pack.size > 0 && Number.isFinite(pack.priceCents) && pack.priceCents >= 0 && packPrice.trim() !== '';
+  const unitChoices = [...new Set([...INGREDIENT_UNITS, ...(existing ? [existing.unit] : [])])];
   const [supplierId, setSupplierId] = useState(existing?.defaultSupplierId ?? '');
   const [sku, setSku] = useState(existing?.sku ?? '');
   const [notes, setNotes] = useState(existing?.notes ?? '');
@@ -172,7 +226,12 @@ function IngredientDialog({
 
   const mut = useMutation({
     mutationFn: () => {
-      const costPerUnitCents = Math.round(parseFloat(costPerUnit || '0') * 100);
+      const costPerUnitCents = hasPack
+        ? costPerUnitFromPack(pack.priceCents, pack.size)
+        : Math.round(parseFloat(costPerUnit || '0') * 100);
+      const packFields = hasPack
+        ? { packSize: pack.size, packPriceCents: pack.priceCents }
+        : { packSize: null, packPriceCents: null };
       const low = parseInt(lowThreshold, 10) || 0;
       if (existing) {
         return ipc.inventory.updateIngredient({
@@ -181,6 +240,7 @@ function IngredientDialog({
           unit,
           lowThreshold: low,
           costPerUnitCents,
+          ...packFields,
           defaultSupplierId: supplierId || null,
           sku: sku || null,
           notes: notes || null,
@@ -192,6 +252,7 @@ function IngredientDialog({
         currentQty: parseInt(currentQty, 10) || 0,
         lowThreshold: low,
         costPerUnitCents,
+        ...packFields,
         defaultSupplierId: supplierId || null,
         sku: sku || null,
         notes: notes || null,
@@ -239,13 +300,17 @@ function IngredientDialog({
               </div>
               <div>
                 <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Unit</label>
-                <input
-                  type="text"
+                <select
                   value={unit}
                   onChange={(e) => setUnit(e.target.value)}
-                  placeholder="g, ml, pcs…"
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
-                />
+                >
+                  {unitChoices.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3">
@@ -279,12 +344,48 @@ function IngredientDialog({
                 <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Cost per {unit}</label>
                 <input
                   type="number"
-                  step="0.01"
-                  value={costPerUnit}
+                  step="0.001"
+                  value={hasPack ? (pack.priceCents / pack.size / 100).toFixed(3) : costPerUnit}
+                  disabled={hasPack}
                   onChange={(e) => setCostPerUnit(e.target.value)}
-                  className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
+                  className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono disabled:bg-stone-100 disabled:text-stone-500 dark:border-stone-700 dark:bg-stone-800"
                 />
               </div>
+            </div>
+            <div className="rounded-lg bg-stone-50 p-3 dark:bg-stone-800/50">
+              <div className="mb-2 text-xs uppercase tracking-wider text-stone-500">Bought as (optional)</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs text-stone-500">Pack holds ({unit})</label>
+                  <input
+                    type="number"
+                    step="1"
+                    min={1}
+                    inputMode="numeric"
+                    value={packSize}
+                    placeholder="e.g. 6000"
+                    onChange={(e) => setPackSize(e.target.value)}
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-900"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-stone-500">Pack price (Rs)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    value={packPrice}
+                    placeholder="e.g. 2250"
+                    onChange={(e) => setPackPrice(e.target.value)}
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-900"
+                  />
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-stone-500">
+                {hasPack
+                  ? `= ${formatUnitCost({ unit, costPerUnitCents: 0, packSize: pack.size, packPriceCents: pack.priceCents })}`
+                  : 'Type the pack from the supplier bill and the cost per ' + unit + ' is worked out for you.'}
+              </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>

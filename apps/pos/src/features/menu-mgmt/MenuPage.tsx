@@ -4,15 +4,17 @@ import { CategoriesTab } from './CategoriesTab';
 import { ItemsTab } from './ItemsTab';
 import { ModifiersTab } from './ModifiersTab';
 import { TaxTab } from './TaxTab';
-import { Folder, Pizza, SlidersHorizontal, Receipt } from 'lucide-react';
+import { ImportTab } from './ImportTab';
+import { Folder, Pizza, SlidersHorizontal, Receipt, FileUp } from 'lucide-react';
 
-type Tab = 'items' | 'categories' | 'modifiers' | 'tax';
+type Tab = 'items' | 'categories' | 'modifiers' | 'tax' | 'import';
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof Folder }> = [
   { id: 'items', label: 'Items', icon: Pizza },
   { id: 'categories', label: 'Categories', icon: Folder },
   { id: 'modifiers', label: 'Modifiers', icon: SlidersHorizontal },
   { id: 'tax', label: 'Tax', icon: Receipt },
+  { id: 'import', label: 'Import', icon: FileUp },
 ];
 
 export function MenuPage() {
@@ -53,6 +55,7 @@ export function MenuPage() {
       {tab === 'categories' && <CategoriesTab />}
       {tab === 'modifiers' && <ModifiersTab />}
       {tab === 'tax' && <TaxTab />}
+      {tab === 'import' && <ImportTab />}
     </div>
   );
 }

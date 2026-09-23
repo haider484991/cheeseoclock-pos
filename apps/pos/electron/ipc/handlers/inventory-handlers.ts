@@ -6,6 +6,7 @@ import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import {
   createIngredientInputSchema,
   updateIngredientInputSchema,
+  convertIngredientUnitInputSchema,
   setRecipeInputSchema,
   recordMovementInputSchema,
   createPurchaseOrderInputSchema,
@@ -17,6 +18,7 @@ import {
   createIngredient,
   updateIngredient,
   deleteIngredient,
+  convertIngredientToBaseUnit,
   listRecipeForItem,
   setRecipeForItem,
 } from '../../db/repositories/ingredient-repo.js';
@@ -94,6 +96,13 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     const s = requireInventoryManage();
     deleteIngredient(ctx.db, payload.id, { userId: s.id, deviceId: ctx.deviceId });
     return ok({ id: payload.id });
+  });
+
+  defineHandler('inventory:convertIngredientUnit', ctx, (_ctx, payload) => {
+    const s = requireInventoryManage();
+    const parsed = convertIngredientUnitInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(convertIngredientToBaseUnit(ctx.db, parsed.data.id, { userId: s.id, deviceId: ctx.deviceId }));
   });
 
   // ---- Recipes ----

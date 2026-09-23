@@ -448,16 +448,18 @@ export function receiveDelivery(
         actor,
       );
 
-      // Optionally roll the unit cost forward
+      // Optionally roll the unit cost forward. The delivery's per-unit cost
+      // replaces any pack price, which would otherwise contradict it.
       if (input.updateCosts) {
         db.prepare(
-          `UPDATE ingredients SET cost_per_unit_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+          `UPDATE ingredients SET cost_per_unit_cents = ?, pack_size = NULL, pack_price_cents = NULL,
+                  updated_at = ?, version = version + 1 WHERE id = ?`,
         ).run(item.unitCostCents, now, item.ingredientId);
         enqueueSync(db, {
           entityType: 'ingredients',
           entityId: item.ingredientId,
           op: 'upsert',
-          payload: { id: item.ingredientId, costPerUnitCents: item.unitCostCents },
+          payload: { id: item.ingredientId, costPerUnitCents: item.unitCostCents, packSize: null, packPriceCents: null },
         });
       }
     }

@@ -1,6 +1,6 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, hasCapability } from '@cheeseoclock/shared-types';
+import { ok, err, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
@@ -35,6 +35,11 @@ import {
   deleteTaxCategory,
 } from '../../db/repositories/tax-category-repo.js';
 import { listCombos } from '../../db/repositories/combo-repo.js';
+import {
+  pickMenuImport,
+  applyPickedMenuImport,
+  MenuImportFileError,
+} from '../../services/menu-import-service.js';
 
 function requireSession(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -109,6 +114,27 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
         modifiers: listModifiersByGroup(ctx.db, g.id),
       })),
     );
+  });
+
+  // ---- Import from a menu file ----
+  defineHandler('menu:importPick', ctx, async () => {
+    requireMenuManage();
+    try {
+      return ok(await pickMenuImport(ctx.db));
+    } catch (e) {
+      if (e instanceof MenuImportFileError) return err({ code: 'validation_failed', message: e.message });
+      throw e;
+    }
+  });
+
+  defineHandler('menu:importApply', ctx, () => {
+    const s = requireMenuManage();
+    try {
+      return ok(applyPickedMenuImport(ctx.db, { userId: s.id, deviceId: ctx.deviceId }));
+    } catch (e) {
+      if (e instanceof MenuImportFileError) return err({ code: 'precondition_failed', message: e.message });
+      throw e;
+    }
   });
 
   defineHandler('menu:setItemModifierGroups', ctx, (_ctx, payload) => {

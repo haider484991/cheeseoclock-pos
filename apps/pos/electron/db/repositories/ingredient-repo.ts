@@ -4,6 +4,7 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import type { Ingredient, Recipe } from '@cheeseoclock/shared-types';
+import { baseUnitConversion, costPerUnitFromPack } from '@cheeseoclock/pos-domain';
 
 // -----------------------------------------------------------------------------
 // Ingredients
@@ -16,6 +17,8 @@ interface IngRow {
   current_qty: number;
   low_threshold: number;
   cost_per_unit_cents: number;
+  pack_size: number | null;
+  pack_price_cents: number | null;
   default_supplier_id: string | null;
   sku: string | null;
   notes: string | null;
@@ -24,7 +27,7 @@ interface IngRow {
 
 const ING_SELECT = `
   id, name, unit, current_qty, low_threshold, cost_per_unit_cents,
-  default_supplier_id, sku, notes, is_active
+  pack_size, pack_price_cents, default_supplier_id, sku, notes, is_active
 `;
 
 function rowToIngredient(r: IngRow): Ingredient {
@@ -35,6 +38,8 @@ function rowToIngredient(r: IngRow): Ingredient {
     currentQty: r.current_qty,
     lowThreshold: r.low_threshold,
     costPerUnitCents: r.cost_per_unit_cents,
+    packSize: r.pack_size,
+    packPriceCents: r.pack_price_cents,
     defaultSupplierId: r.default_supplier_id as Ingredient['defaultSupplierId'],
     sku: r.sku,
     notes: r.notes,
@@ -68,9 +73,24 @@ export interface CreateIngredientInput {
   currentQty?: number;
   lowThreshold?: number;
   costPerUnitCents?: number;
+  packSize?: number | null;
+  packPriceCents?: number | null;
   defaultSupplierId?: string | null;
   sku?: string | null;
   notes?: string | null;
+}
+
+/**
+ * A pack price, when there is one, decides the per-unit cost — the two can
+ * never disagree. Half a pack (size without price) is treated as no pack.
+ */
+function withPackCost<T extends { packSize: number | null; packPriceCents: number | null; costPerUnitCents: number }>(
+  ing: T,
+): T {
+  if (ing.packSize && ing.packSize > 0 && ing.packPriceCents !== null) {
+    return { ...ing, costPerUnitCents: costPerUnitFromPack(ing.packPriceCents, ing.packSize) };
+  }
+  return { ...ing, packSize: null, packPriceCents: null };
 }
 
 export function createIngredient(
@@ -80,18 +100,20 @@ export function createIngredient(
 ): Ingredient {
   const id = uuidv7();
   const now = nowIso();
-  const ing: Ingredient = {
+  const ing: Ingredient = withPackCost({
     id: id as Ingredient['id'],
     name: input.name,
     unit: input.unit,
     currentQty: input.currentQty ?? 0,
     lowThreshold: input.lowThreshold ?? 0,
     costPerUnitCents: input.costPerUnitCents ?? 0,
+    packSize: input.packSize ?? null,
+    packPriceCents: input.packPriceCents ?? null,
     defaultSupplierId: (input.defaultSupplierId ?? null) as Ingredient['defaultSupplierId'],
     sku: input.sku ?? null,
     notes: input.notes ?? null,
     isActive: true,
-  };
+  });
   writeWithSync({
     db,
     entityType: 'ingredients',
@@ -105,9 +127,9 @@ export function createIngredient(
       db.prepare(
         `INSERT INTO ingredients
            (id, name, unit, current_qty, low_threshold, cost_per_unit_cents,
-            default_supplier_id, sku, notes, is_active,
+            pack_size, pack_price_cents, default_supplier_id, sku, notes, is_active,
             created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
       ).run(
         id,
         ing.name,
@@ -115,6 +137,8 @@ export function createIngredient(
         ing.currentQty,
         ing.lowThreshold,
         ing.costPerUnitCents,
+        ing.packSize,
+        ing.packPriceCents,
         ing.defaultSupplierId,
         ing.sku,
         ing.notes,
@@ -133,6 +157,8 @@ export interface UpdateIngredientInput {
   unit?: string;
   lowThreshold?: number;
   costPerUnitCents?: number;
+  packSize?: number | null;
+  packPriceCents?: number | null;
   defaultSupplierId?: string | null;
   sku?: string | null;
   notes?: string | null;
@@ -149,12 +175,14 @@ export function updateIngredient(
     .get(input.id) as IngRow | undefined;
   if (!row) throw new Error('Ingredient not found');
   const before = rowToIngredient(row);
-  const after: Ingredient = {
+  const after: Ingredient = withPackCost({
     ...before,
     name: input.name ?? before.name,
     unit: input.unit ?? before.unit,
     lowThreshold: input.lowThreshold ?? before.lowThreshold,
     costPerUnitCents: input.costPerUnitCents ?? before.costPerUnitCents,
+    packSize: input.packSize !== undefined ? input.packSize : before.packSize,
+    packPriceCents: input.packPriceCents !== undefined ? input.packPriceCents : before.packPriceCents,
     defaultSupplierId:
       input.defaultSupplierId !== undefined
         ? (input.defaultSupplierId as Ingredient['defaultSupplierId'])
@@ -162,7 +190,7 @@ export function updateIngredient(
     sku: input.sku !== undefined ? input.sku : before.sku,
     notes: input.notes !== undefined ? input.notes : before.notes,
     isActive: input.isActive ?? before.isActive,
-  };
+  });
   const now = nowIso();
   writeWithSync({
     db,
@@ -177,6 +205,7 @@ export function updateIngredient(
       db.prepare(
         `UPDATE ingredients SET
            name = ?, unit = ?, low_threshold = ?, cost_per_unit_cents = ?,
+           pack_size = ?, pack_price_cents = ?,
            default_supplier_id = ?, sku = ?, notes = ?, is_active = ?,
            updated_at = ?, version = version + 1 WHERE id = ?`,
       ).run(
@@ -184,6 +213,8 @@ export function updateIngredient(
         after.unit,
         after.lowThreshold,
         after.costPerUnitCents,
+        after.packSize,
+        after.packPriceCents,
         after.defaultSupplierId,
         after.sku,
         after.notes,
@@ -223,6 +254,86 @@ export function deleteIngredient(db: AppDatabase, id: string, actor: Actor): voi
       ).run(now, now, id);
     },
   });
+}
+
+/**
+ * Switch an ingredient counted in kg (or litres) to grams (or ml): stock,
+ * low-stock level and pack size x1000, cost per unit /1000, and every recipe
+ * line that uses it x1000 — the same physical amounts, now in units a recipe
+ * can express ("300 g", which a whole-number kg column cannot hold).
+ * One transaction; the ingredient and each recipe row sync and audit.
+ */
+export function convertIngredientToBaseUnit(db: AppDatabase, id: string, actor: Actor): Ingredient {
+  const row = db
+    .prepare(`SELECT ${ING_SELECT} FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
+    .get(id) as IngRow | undefined;
+  if (!row) throw new Error('Ingredient not found');
+  const before = rowToIngredient(row);
+  const conv = baseUnitConversion(before.unit);
+  if (!conv) throw new Error(`"${before.name}" is already counted in ${before.unit}`);
+  const f = conv.factor;
+  const after: Ingredient = withPackCost({
+    ...before,
+    unit: conv.unit,
+    currentQty: before.currentQty * f,
+    lowThreshold: before.lowThreshold * f,
+    costPerUnitCents: Math.round(before.costPerUnitCents / f),
+    packSize: before.packSize !== null ? before.packSize * f : null,
+  });
+  const now = nowIso();
+  const tx = db.transaction(() => {
+    db.prepare(
+      `UPDATE ingredients SET unit = ?, current_qty = ?, low_threshold = ?, cost_per_unit_cents = ?,
+              pack_size = ?, pack_price_cents = ?, updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(
+      after.unit,
+      after.currentQty,
+      after.lowThreshold,
+      after.costPerUnitCents,
+      after.packSize,
+      after.packPriceCents,
+      now,
+      id,
+    );
+    enqueueSync(db, { entityType: 'ingredients', entityId: id, op: 'upsert', payload: after });
+    writeAudit(db, {
+      entityType: 'ingredients',
+      entityId: id,
+      action: 'convert_unit',
+      actorUserId: actor.userId,
+      before,
+      after,
+    });
+
+    const lines = db
+      .prepare(
+        `SELECT id, menu_item_id, qty_per_unit FROM recipes WHERE ingredient_id = ? AND deleted_at IS NULL`,
+      )
+      .all(id) as Array<{ id: string; menu_item_id: string; qty_per_unit: number }>;
+    for (const line of lines) {
+      const qty = line.qty_per_unit * f;
+      db.prepare(
+        `UPDATE recipes SET qty_per_unit = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(qty, now, line.id);
+      enqueueSync(db, {
+        entityType: 'recipes',
+        entityId: line.id,
+        op: 'upsert',
+        payload: { id: line.id, menuItemId: line.menu_item_id, ingredientId: id, qtyPerUnit: qty },
+      });
+      writeAudit(db, {
+        entityType: 'recipes',
+        entityId: line.id,
+        action: 'convert_unit',
+        actorUserId: actor.userId,
+        before: { qtyPerUnit: line.qty_per_unit, unit: before.unit },
+        after: { qtyPerUnit: qty, unit: after.unit },
+      });
+    }
+  });
+  tx();
+  return after;
 }
 
 // -----------------------------------------------------------------------------

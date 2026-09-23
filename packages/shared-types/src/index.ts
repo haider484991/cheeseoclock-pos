@@ -15,6 +15,7 @@ export * from './auth.js';
 export * from './sync.js';
 export * from './order.js';
 export * from './menu.js';
+export * from './menu-import.js';
 export * from './customer.js';
 export * from './shift.js';
 export * from './printer.js';

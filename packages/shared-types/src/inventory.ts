@@ -12,6 +12,10 @@ export interface Ingredient {
   currentQty: number;
   lowThreshold: number;
   costPerUnitCents: number;
+  /** Bought as a pack of this many base units (null = cost entered per unit). */
+  packSize: number | null;
+  /** Price of one such pack, in paisa. */
+  packPriceCents: number | null;
   defaultSupplierId: UUID | null;
   sku: string | null;
   notes: string | null;
