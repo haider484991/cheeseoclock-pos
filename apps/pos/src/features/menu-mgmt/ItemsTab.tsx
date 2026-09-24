@@ -7,6 +7,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { MenuItem, PrepStation } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 const PREP_STATIONS: PrepStation[] = ['kitchen', 'bar', 'cold'];
 
@@ -112,7 +113,9 @@ export function ItemsTab() {
                 </button>
                 <button
                   onClick={() => {
-                    if (confirm(`Delete "${i.name}"?`)) deleteMut.mutate(i.id);
+                    void askConfirm(`Delete "${i.name}"?`).then((ok) => {
+                      if (ok) deleteMut.mutate(i.id);
+                    });
                   }}
                   className="rounded p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                   aria-label="Delete"

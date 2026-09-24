@@ -11,6 +11,7 @@ import type {
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { FileUp, AlertTriangle } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 const ACTION_LABEL: Record<MenuImportAction, string> = {
   create: 'New',
@@ -138,7 +139,9 @@ export function ImportTab() {
                   const ask = f
                     ? `Replace the WHOLE menu with this file?\n\nRemoved: ${f.items.length} menu items, ${f.categories} categories, ${f.combos} combos, ${f.choiceGroups} choice groups and ${f.ingredients} ingredients, with their recipes and stock counts.\nLoaded: ${s.newItems} items, ${s.newIngredients} ingredients, ${s.recipesSet} recipes.\n\nSales history, customers, users, settings and tax stay. A backup is saved first (Settings → Backups).`
                     : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.`;
-                  if (confirm(ask)) applyMut.mutate(fresh);
+                  void askConfirm(ask).then((ok) => {
+                    if (ok) applyMut.mutate(fresh);
+                  });
                 }}
               >
                 {applyMut.isPending

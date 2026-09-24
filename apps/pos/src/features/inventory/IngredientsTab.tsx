@@ -13,6 +13,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Ingredient, StockMovementReason } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X, AlertTriangle, BarChart2, Scale } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 /** 25000 → "25,000" */
 const qty = (n: number) => new Intl.NumberFormat('en-PK').format(n);
@@ -121,12 +122,9 @@ export function IngredientsTab() {
                       disabled={convertMut.isPending}
                       onClick={() => {
                         const to = baseUnitConversion(i.unit)!;
-                        if (
-                          confirm(
-                            `Count "${i.name}" in ${to.unit} instead of ${i.unit}?\n\nStock, low level and every recipe that uses it are multiplied by ${to.factor} — the same amounts, in ${to.unit}. Recipes can then say 300 ${to.unit}.`,
-                          )
-                        )
-                          convertMut.mutate(i.id);
+                        void askConfirm(`Count "${i.name}" in ${to.unit} instead of ${i.unit}?\n\nStock, low level and every recipe that uses it are multiplied by ${to.factor} — the same amounts, in ${to.unit}. Recipes can then say 300 ${to.unit}.`).then((ok) => {
+                          if (ok) convertMut.mutate(i.id);
+                        });
                       }}
                       className="mt-1 inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-200"
                     >
@@ -154,7 +152,9 @@ export function IngredientsTab() {
                   </button>
                   <button
                     onClick={() => {
-                      if (confirm(`Delete "${i.name}"?`)) deleteMut.mutate(i.id);
+                      void askConfirm(`Delete "${i.name}"?`).then((ok) => {
+                        if (ok) deleteMut.mutate(i.id);
+                      });
                     }}
                     className="rounded p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                     aria-label="Delete"

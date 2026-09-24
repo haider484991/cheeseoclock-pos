@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Usb,
 } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -59,7 +60,9 @@ export function BackupSettings() {
   const restoreMut = useMutation({
     mutationFn: (path: string) => ipc.backup.stageRestoreFromPath(path),
     onSuccess: () => {
-      if (confirm(RESTORE_CONFIRM)) void ipc.backup.applyAndRelaunch();
+      void askConfirm(RESTORE_CONFIRM).then((ok) => {
+        if (ok) void ipc.backup.applyAndRelaunch();
+      });
     },
     onError: (e) =>
       toast({ title: 'Restore failed', description: errorMessage(e), variant: 'error' }),
@@ -155,8 +158,9 @@ export function BackupSettings() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (confirm(`Delete the snapshot from ${fmtDate(b.createdAtIso)}?`))
-                        deleteMut.mutate(b.fileName);
+                      void askConfirm(`Delete the snapshot from ${fmtDate(b.createdAtIso)}?`).then((ok) => {
+                        if (ok) deleteMut.mutate(b.fileName);
+                      });
                     }}
                     className="rounded p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                     title="Delete this snapshot"
@@ -193,7 +197,9 @@ export function UsbRestoreSettings() {
     mutationFn: () => ipc.backup.stageRestoreFromPicker(),
     onSuccess: (r) => {
       if (!r.staged) return;
-      if (confirm(RESTORE_CONFIRM)) void ipc.backup.applyAndRelaunch();
+      void askConfirm(RESTORE_CONFIRM).then((ok) => {
+        if (ok) void ipc.backup.applyAndRelaunch();
+      });
     },
     onError: (e) =>
       toast({ title: 'Restore failed', description: errorMessage(e), variant: 'error' }),

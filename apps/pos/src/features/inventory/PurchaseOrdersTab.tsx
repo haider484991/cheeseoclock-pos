@@ -7,6 +7,7 @@ import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { PurchaseOrderStatus } from '@cheeseoclock/shared-types';
 import { Plus, X, Trash2, PackageCheck, Send } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 const STATUS_COLOR: Record<PurchaseOrderStatus, string> = {
   draft: 'bg-stone-200 text-stone-700 dark:bg-stone-700 dark:text-stone-300',
@@ -450,7 +451,9 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
               <Button
                 variant="secondary"
                 onClick={() => {
-                  if (confirm('Cancel this PO?')) setStatusMut.mutate('cancelled');
+                  void askConfirm('Cancel this PO?').then((ok) => {
+                    if (ok) setStatusMut.mutate('cancelled');
+                  });
                 }}
               >
                 Cancel PO

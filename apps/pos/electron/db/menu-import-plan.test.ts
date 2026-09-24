@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { menuImportFileSchema, type MenuImportFile } from '@cheeseoclock/shared-schemas';
+import { menuImportFileSchema, setBatchRecipeInputSchema, type MenuImportFile } from '@cheeseoclock/shared-schemas';
 import { normalizeName, planMenuImport, type MenuSnapshot } from './menu-import-plan.js';
 
 function file(partial: Partial<Record<'categories' | 'ingredients' | 'items', unknown[]>>): MenuImportFile {
@@ -475,6 +475,21 @@ describe('batch recipes', () => {
       items: [],
     });
     expect(bad.success).toBe(false);
+  });
+});
+
+describe('setBatchRecipeInputSchema', () => {
+  const id = '01900000-0000-7000-8000-000000000001';
+  const input = '01900000-0000-7000-8000-000000000002';
+  const parse = (batchYield: number | null, lines: Array<{ inputIngredientId: string; qty: number }>) =>
+    setBatchRecipeInputSchema.safeParse({ ingredientId: id, batchYield, lines }).success;
+
+  it('needs a yield and at least one ingredient together — or neither (bought in again)', () => {
+    expect(parse(100, [{ inputIngredientId: input, qty: 50 }])).toBe(true);
+    expect(parse(null, [])).toBe(true);
+    // The empty "Baking Powder: makes 100 g" recipe a till saved by mistake.
+    expect(parse(100, [])).toBe(false);
+    expect(parse(null, [{ inputIngredientId: input, qty: 50 }])).toBe(false);
   });
 });
 

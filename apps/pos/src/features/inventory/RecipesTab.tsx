@@ -7,6 +7,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Ingredient, MenuItem } from '@cheeseoclock/shared-types';
 import { X, Plus, Trash2, Edit, BookOpen, ChefHat, Soup } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 type Mode = 'items' | 'batches';
 
@@ -422,11 +423,16 @@ function BatchCard({ ingredient, onEdit, onMake }: { ingredient: Ingredient; onE
           <Button variant="secondary" size="sm" onClick={onEdit}>
             <Edit className="h-3 w-3" /> Edit
           </Button>
-          <Button variant="primary" size="sm" onClick={onMake}>
+          <Button variant="primary" size="sm" onClick={onMake} disabled={!r || r.lines.length === 0}>
             <ChefHat className="h-3 w-3" /> Make a batch
           </Button>
         </div>
       </div>
+      {r && r.lines.length === 0 && (
+        <p className="mt-2 text-xs text-red-700 dark:text-red-400">
+          No ingredients in this batch yet — Edit to add them, or remove the batch recipe.
+        </p>
+      )}
       <ul className="mt-2 space-y-0.5 text-xs">
         {r?.lines.map((l) => (
           <li key={l.inputIngredientId} className="flex justify-between">
@@ -472,16 +478,30 @@ function BatchEditor({ ingredient, onClose }: { ingredient: Ingredient; onClose:
   }, [existingQ.data]);
 
   const inputs = (ingredientsQ.data ?? []).filter((i) => i.id !== ingredient.id);
+  const hasYield = parseInt(yieldQty, 10) > 0;
+  // A batch recipe is both: how much it makes, and what it uses.
+  const problem =
+    lines.length === 0
+      ? 'Add at least one ingredient the batch uses.'
+      : !hasYield
+        ? 'Say how much one batch makes.'
+        : lines.some((l) => l.qty <= 0)
+          ? 'Every ingredient needs a quantity.'
+          : null;
   const mut = useMutation({
-    mutationFn: () =>
-      ipc.inventory.setBatchRecipe({
-        ingredientId: ingredient.id,
-        batchYield: parseInt(yieldQty, 10) || null,
-        batchMethod: method.trim() || null,
-        lines,
-      }),
-    onSuccess: () => {
-      toast({ title: 'Batch recipe saved', variant: 'success' });
+    mutationFn: (remove: boolean) =>
+      ipc.inventory.setBatchRecipe(
+        remove
+          ? { ingredientId: ingredient.id, batchYield: null, batchMethod: null, lines: [] }
+          : {
+              ingredientId: ingredient.id,
+              batchYield: parseInt(yieldQty, 10) || null,
+              batchMethod: method.trim() || null,
+              lines,
+            },
+      ),
+    onSuccess: (_r, remove) => {
+      toast({ title: remove ? 'Batch recipe removed' : 'Batch recipe saved', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['inventory'] });
       onClose();
     },
@@ -578,15 +598,27 @@ function BatchEditor({ ingredient, onClose }: { ingredient: Ingredient; onClose:
               />
             </label>
           </div>
-          <footer className="flex justify-end gap-2 border-t border-stone-200 p-5 dark:border-stone-800">
+          <footer className="flex items-center gap-2 border-t border-stone-200 p-5 dark:border-stone-800">
+            {ingredient.batchYield !== null && (
+              <Button
+                variant="ghost"
+                disabled={mut.isPending}
+                onClick={() =>
+                  void askConfirm(
+                    `Remove the batch recipe for "${ingredient.name}"? It goes back to a bought-in ingredient; its stock stays.`,
+                  ).then((ok) => {
+                    if (ok) mut.mutate(true);
+                  })
+                }
+              >
+                <Trash2 className="h-4 w-4" /> Remove batch recipe
+              </Button>
+            )}
+            <span className="ml-auto text-xs text-stone-500">{problem}</span>
             <Button variant="secondary" onClick={onClose}>
               Cancel
             </Button>
-            <Button
-              variant="primary"
-              disabled={mut.isPending || lines.some((l) => l.qty <= 0) || (lines.length > 0 && !(parseInt(yieldQty, 10) > 0))}
-              onClick={() => mut.mutate()}
-            >
+            <Button variant="primary" disabled={mut.isPending || problem !== null} onClick={() => mut.mutate(false)}>
               {mut.isPending ? 'Saving…' : 'Save'}
             </Button>
           </footer>

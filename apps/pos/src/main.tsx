@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import { RouterProvider } from 'react-router-dom';
 import { router } from './router';
 import { ToastProvider } from './components/toast/ToastProvider';
+import { ConfirmHost } from './components/confirm/ConfirmHost';
 import { ipc } from './ipc/client';
 import { OnboardingPage } from './features/onboarding/OnboardingPage';
 import { UpdateBanner } from './features/shell/UpdateBanner';
@@ -79,6 +80,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <RootGate />
+        <ConfirmHost />
       </ToastProvider>
     </QueryClientProvider>
   </React.StrictMode>,

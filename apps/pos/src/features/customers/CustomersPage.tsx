@@ -7,6 +7,7 @@ import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Customer, CustomerAddress } from '@cheeseoclock/shared-types';
 import { Plus, Edit, X, Phone, Mail, MapPin, History, Star, Trash2 } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 export function CustomersPage() {
   const [search, setSearch] = useState('');
@@ -309,7 +310,9 @@ function CustomerDetailDialog({ customer, onClose }: { customer: Customer; onClo
                         <button
                           type="button"
                           onClick={() => {
-                            if (confirm('Delete address?')) deleteAddrMut.mutate(a.id);
+                            void askConfirm('Delete address?').then((ok) => {
+                              if (ok) deleteAddrMut.mutate(a.id);
+                            });
                           }}
                           className="rounded p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                           aria-label="Delete"

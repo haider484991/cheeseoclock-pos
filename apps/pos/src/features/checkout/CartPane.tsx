@@ -16,6 +16,7 @@ import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
 import { resetCustomerForm, useCustomerForm } from './useCustomerForm';
 import { CustomerInlinePanel } from './CustomerInlinePanel';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 interface Props {
   step: 'items' | 'details';
@@ -72,7 +73,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
   async function handleDiscard() {
     if (!order) return;
     const lines = items.length > 0 ? ` Its ${items.length} item${items.length === 1 ? '' : 's'} will be dropped.` : '';
-    if (!confirm(`Discard order #${order.orderNumber}?${lines} Nothing has been sent to the kitchen or charged.`)) return;
+    if (!(await askConfirm(`Discard order #${order.orderNumber}?${lines} Nothing has been sent to the kitchen or charged.`))) return;
     try {
       await discardDraft();
       resetCustomerForm();

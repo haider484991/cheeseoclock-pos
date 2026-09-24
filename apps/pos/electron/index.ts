@@ -71,6 +71,14 @@ async function createMainWindow() {
     if (isDev) mainWindow?.webContents.openDevTools({ mode: 'detach' });
   });
 
+  // After a native dialog (file picker, a stray confirm()) closes, Windows
+  // gives focus back to the window but not to the page inside it, so text
+  // boxes ignore typing until the window is clicked away and back. Hand the
+  // keyboard to the page whenever the window is focused.
+  mainWindow.on('focus', () => {
+    if (mainWindow && !mainWindow.webContents.isFocused()) mainWindow.webContents.focus();
+  });
+
   // External links open in the user's browser, never in-app.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);

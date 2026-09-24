@@ -60,12 +60,21 @@ export const setRecipeInputSchema = z.object({
   ),
 });
 
-export const setBatchRecipeInputSchema = z.object({
-  ingredientId: idSchema,
-  batchYield: wholeUnits.positive({ message: 'A batch must make at least 1 unit' }).nullable(),
-  batchMethod: z.string().max(4000).nullable().optional(),
-  lines: z.array(z.object({ inputIngredientId: idSchema, qty: lineQtySchema })).max(100),
-});
+/**
+ * A batch recipe is a yield AND at least one input — or neither (no yield, no
+ * inputs = bought in again). A yield with nothing in it is not a recipe.
+ */
+export const setBatchRecipeInputSchema = z
+  .object({
+    ingredientId: idSchema,
+    batchYield: wholeUnits.positive({ message: 'A batch must make at least 1 unit' }).nullable(),
+    batchMethod: z.string().max(4000).nullable().optional(),
+    lines: z.array(z.object({ inputIngredientId: idSchema, qty: lineQtySchema })).max(100),
+  })
+  .refine((r) => (r.batchYield === null) === (r.lines.length === 0), {
+    message: 'A batch recipe needs both how much it makes and at least one ingredient',
+    path: ['lines'],
+  });
 
 export const makeBatchInputSchema = z.object({
   ingredientId: idSchema,

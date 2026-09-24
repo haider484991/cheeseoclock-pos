@@ -4,6 +4,7 @@ import { Button, Card } from '@cheeseoclock/ui';
 import { Cloud, CloudUpload, AlertTriangle, ArrowRight, Monitor } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 type BackupFrequency = 'off' | 'daily' | 'weekly' | 'monthly';
 
@@ -256,7 +257,9 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
                           className="font-semibold text-amber-600 hover:underline"
                           disabled={restoreMut.isPending}
                           onClick={() => {
-                            if (confirm(RESTORE_CONFIRM)) restoreMut.mutate(b.id);
+                            void askConfirm(RESTORE_CONFIRM).then((ok) => {
+                              if (ok) restoreMut.mutate(b.id);
+                            });
                           }}
                         >
                           Restore

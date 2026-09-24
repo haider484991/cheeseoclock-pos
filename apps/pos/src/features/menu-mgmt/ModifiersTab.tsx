@@ -7,6 +7,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Modifier, ModifierGroup, ModifierSelectionType } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 export function ModifiersTab() {
   const qc = useQueryClient();
@@ -90,7 +91,9 @@ export function ModifiersTab() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (confirm(`Delete group "${g.name}"?`)) deleteGroupMut.mutate(g.id);
+                    void askConfirm(`Delete group "${g.name}"?`).then((ok) => {
+                      if (ok) deleteGroupMut.mutate(g.id);
+                    });
                   }}
                   className="rounded p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                   aria-label="Delete group"
@@ -140,7 +143,9 @@ export function ModifiersTab() {
                               </button>
                               <button
                                 onClick={() => {
-                                  if (confirm(`Delete option "${m.name}"?`)) deleteModMut.mutate(m.id);
+                                  void askConfirm(`Delete option "${m.name}"?`).then((ok) => {
+                                    if (ok) deleteModMut.mutate(m.id);
+                                  });
                                 }}
                                 className="rounded p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                                 aria-label="Delete option"

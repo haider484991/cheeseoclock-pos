@@ -97,6 +97,9 @@ export function setBatchRecipe(
       .get(input.ingredientId) as { batch_yield: number | null; batch_method: string | null } | undefined;
     if (!ing) throw new Error('Ingredient not found');
     if (input.lines.length > 0 && !input.batchYield) throw new Error('Say how much one batch makes');
+    if (input.batchYield && input.lines.length === 0) {
+      throw new Error('Add at least one ingredient the batch uses');
+    }
     const seenInputs = new Set<string>();
     for (const l of input.lines) {
       if (seenInputs.has(l.inputIngredientId)) throw new Error('The same input is listed twice');

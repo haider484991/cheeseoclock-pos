@@ -123,6 +123,21 @@ export default tseslint.config(
   },
 
   {
+    // The POS runs in Electron on Windows, where a native confirm()/alert()
+    // leaves text boxes ignoring the keyboard after it closes (the till could
+    // not take a customer's phone after "Discard order"). Ask in the app.
+    files: ['apps/pos/src/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        { name: 'confirm', message: 'Use askConfirm() from components/confirm/ConfirmHost.' },
+        { name: 'alert', message: 'Use a toast (useToast) instead.' },
+        { name: 'prompt', message: 'Use a dialog with an input instead.' },
+      ],
+    },
+  },
+
+  {
     // Config and build scripts are plain Node CLI code, not app source —
     // printing progress to stdout is their job.
     files: ['**/*.config.{js,mjs,cjs,ts}', '**/scripts/**/*.{js,mjs}'],

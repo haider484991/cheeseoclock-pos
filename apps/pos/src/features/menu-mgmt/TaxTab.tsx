@@ -6,6 +6,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { TaxCategory } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 export function TaxTab() {
   const qc = useQueryClient();
@@ -54,7 +55,9 @@ export function TaxTab() {
                 </button>
                 <button
                   onClick={() => {
-                    if (confirm(`Delete tax category "${t.name}"?`)) deleteMut.mutate(t.id);
+                    void askConfirm(`Delete tax category "${t.name}"?`).then((ok) => {
+                      if (ok) deleteMut.mutate(t.id);
+                    });
                   }}
                   className="rounded p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                   aria-label="Delete"

@@ -5,6 +5,7 @@ import { ArrowLeft, Cloud, Usb, RefreshCw, ShieldCheck } from 'lucide-react';
 import type { CloudBackupEntry } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 const CONFIRM =
   'Restore this copy onto this PC? The app will restart on it. Anything already on this PC is archived first, so this can be undone.';
@@ -28,7 +29,9 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
     mutationFn: () => ipc.backup.stageRestoreFromPicker(),
     onSuccess: (r) => {
       if (!r.staged) return;
-      if (confirm(CONFIRM)) void ipc.backup.applyAndRelaunch();
+      void askConfirm(CONFIRM).then((ok) => {
+        if (ok) void ipc.backup.applyAndRelaunch();
+      });
     },
     onError: (e) =>
       toast({ title: 'Restore failed', description: errorMessage(e), variant: 'error' }),
@@ -158,7 +161,9 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
                         className="font-semibold text-amber-600 hover:underline"
                         disabled={cloudMut.isPending}
                         onClick={() => {
-                          if (confirm(CONFIRM)) cloudMut.mutate(b.id);
+                          void askConfirm(CONFIRM).then((ok) => {
+                            if (ok) cloudMut.mutate(b.id);
+                          });
                         }}
                       >
                         Restore

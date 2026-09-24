@@ -15,6 +15,7 @@ import {
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Rider } from '@cheeseoclock/shared-types';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 /**
  * Riders roster. Cashiers see this list when assigning a delivery; managers
@@ -134,11 +135,11 @@ export function RidersPage() {
                         {r.isActive && (
                           <button
                             onClick={() => {
-                              if (
-                                confirm(`Deactivate ${r.name}? They will no longer appear when assigning new deliveries.`)
-                              ) {
-                                deactivateMut.mutate(r.id);
-                              }
+                              void askConfirm(`Deactivate ${r.name}? They will no longer appear when assigning new deliveries.`).then((ok) => {
+                                if (ok) {
+                                  deactivateMut.mutate(r.id);
+                                }
+                              });
                             }}
                             className="rounded-lg p-1.5 text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
                             title="Deactivate"

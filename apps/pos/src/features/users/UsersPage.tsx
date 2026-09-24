@@ -7,6 +7,7 @@ import { useToast } from '../../components/toast/ToastProvider';
 import type { User, Role } from '@cheeseoclock/shared-types';
 import { Plus, Edit, X, KeyRound, UserX, UserCheck, Shield, UserCog, ShieldCheck } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 
 const ROLES: Array<{ id: Role; label: string; icon: typeof Shield; description: string }> = [
   {
@@ -147,12 +148,9 @@ export function UsersPage() {
                       <button
                         disabled={isMe}
                         onClick={() => {
-                          if (
-                            confirm(
-                              `Deactivate "${u.fullName}"? They can be reactivated later.`,
-                            )
-                          )
-                            deactivateMut.mutate(u.id);
+                          void askConfirm(`Deactivate "${u.fullName}"? They can be reactivated later.`).then((ok) => {
+                            if (ok) deactivateMut.mutate(u.id);
+                          });
                         }}
                         className="rounded p-1 text-red-500 hover:bg-red-50 disabled:opacity-30 dark:hover:bg-red-950"
                         aria-label="Deactivate"
