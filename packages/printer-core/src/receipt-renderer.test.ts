@@ -52,7 +52,7 @@ function snapshot(): OrderSnapshot {
         taxCategoryId: id('t1'),
         notes: 'Extra crispy please — and cut into 8 slices',
         kitchenStatus: 'served',
-        menuItemName: 'Chicken Tikka Pizza Large (15") with Stuffed Crust',
+        menuItemName: 'Chicken Tikka Pizza Large (12") with Stuffed Crust',
         categoryName: 'Pizza',
         prepStation: 'kitchen',
         modifiers: [
@@ -172,7 +172,7 @@ describe('renderReceipt', () => {
       (r) => r.text,
     );
     expect(
-      rows.some((r) => /^2x Chicken Tikka Pizza Large \(15"\) with\s+2,998\.00$/.test(r)),
+      rows.some((r) => /^2x Chicken Tikka Pizza Large \(12"\) with\s+2,998\.00$/.test(r)),
     ).toBe(true);
     expect(rows).toContain('Stuffed Crust');
     expect(rows.some((r) => /^ {4}Extra Cheese\s+\+ 150\.00$/.test(r))).toBe(true);
@@ -277,7 +277,7 @@ describe('renderKitchenTicket', () => {
     expect(r).toContain('DELIVERY');
     expect(r.some((x) => /^14\/09 19:35\s+Ali Akbar$/.test(x))).toBe(true);
     expect(r.some((x) => /^Customer: Hamza\s+0300 9367865$/.test(x))).toBe(true);
-    expect(r.some((x) => x.startsWith('2 x Chicken Tikka Pizza Large (15")'))).toBe(true);
+    expect(r.some((x) => x.startsWith('2 x Chicken Tikka Pizza Large (12")'))).toBe(true);
     expect(r.join(' ')).toContain('with Stuffed Crust');
     expect(r).toContain('    + Extra Cheese');
     expect(r).toContain('    + No onions');

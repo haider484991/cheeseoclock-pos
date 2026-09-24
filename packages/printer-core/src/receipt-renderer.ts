@@ -14,7 +14,7 @@
  *      Cashier: Ali Akbar     2026-05-25 19:35
  *      ----------------------------------------
  *      1x Pepperoni Pizza               1,499.00
- *           Large (15")
+ *           Large (12")
  *           Stuffed Crust              + 200.00
  *           Extra Cheese               + 150.00
  *      ----------------------------------------
@@ -272,7 +272,7 @@ const MODE_SHOUT: Record<OrderSnapshot['order']['mode'], string> = {
  *      14/09 19:35                     Ali Akbar
  *      Customer: Hamza              0300 9367865
  *      ----------------------------------------
- *      2 x Chicken Tikka Pizza Large (15")
+ *      2 x Chicken Tikka Pizza Large (12")
  *          + Extra Cheese
  *          + No onions
  *          ** Extra crispy please

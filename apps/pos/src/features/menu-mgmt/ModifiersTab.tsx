@@ -374,7 +374,7 @@ function ModDialog({
                 value={name}
                 autoFocus
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Large (15&quot;)"
+                placeholder="Large (12&quot;)"
                 className="w-full rounded-lg border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
               />
             </div>

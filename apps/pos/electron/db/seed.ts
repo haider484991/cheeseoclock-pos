@@ -65,9 +65,9 @@ export function ensureSeedMenu(db: AppDatabase, deviceId: string): void {
     { name: 'Size', selectionType: 'single', minSelect: 1, maxSelect: 1, isRequired: true },
     actor,
   );
-  createModifier(db, { modifierGroupId: sizeGroup.id, name: 'Small (9")', priceDeltaCents: 0, isDefault: true, sortOrder: 0 }, actor);
-  createModifier(db, { modifierGroupId: sizeGroup.id, name: 'Medium (12")', priceDeltaCents: 30000, sortOrder: 1 }, actor);
-  createModifier(db, { modifierGroupId: sizeGroup.id, name: 'Large (15")', priceDeltaCents: 60000, sortOrder: 2 }, actor);
+  // The shop's sizes: Medium 9", Large 12" (no small).
+  createModifier(db, { modifierGroupId: sizeGroup.id, name: 'Medium (9")', priceDeltaCents: 0, isDefault: true, sortOrder: 0 }, actor);
+  createModifier(db, { modifierGroupId: sizeGroup.id, name: 'Large (12")', priceDeltaCents: 50000, sortOrder: 1 }, actor);
 
   const crustGroup = createModifierGroup(
     db,
