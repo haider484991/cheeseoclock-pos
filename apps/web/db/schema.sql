@@ -89,6 +89,24 @@ CREATE TABLE IF NOT EXISTS pos_backups (
 -- Databases created before 0.4.9 (the route also does this lazily):
 ALTER TABLE pos_backups ADD COLUMN IF NOT EXISTS sha256 TEXT;
 ALTER TABLE pos_backups ADD COLUMN IF NOT EXISTS meta_json JSONB;
+-- Chunked copies (0.6.6+, src/lib/backup-store.ts): no blob, just the ordered
+-- list of chunk hashes; sha256 is then the SHA-256 of the whole copy (the
+-- POS's row export, apps/pos/electron/services/cloud-copy-rows.ts).
+ALTER TABLE pos_backups ADD COLUMN IF NOT EXISTS format TEXT;
+ALTER TABLE pos_backups ADD COLUMN IF NOT EXISTS chunk_hashes JSONB;
+ALTER TABLE pos_backups ALTER COLUMN data_base64 DROP NOT NULL;
+
+-- One row per distinct chunk (named by the SHA-256 of its raw bytes, stored
+-- gzipped), shared by every copy that contains it. Chunks no copy refers to
+-- are removed a day after their last use.
+CREATE TABLE IF NOT EXISTS pos_backup_chunks (
+  hash          TEXT PRIMARY KEY,
+  size_raw      INT NOT NULL,
+  size_stored   INT NOT NULL,
+  data          BYTEA NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE INDEX IF NOT EXISTS idx_pos_backups_device
   ON pos_backups(device_id, created_at DESC);

@@ -32,6 +32,14 @@ import {
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
 import { isStaleWebOrder } from './web-order-age.js';
+import {
+  CHUNKS_FORMAT,
+  ChunksUnsupportedError,
+  downloadChunkedCopy,
+  uploadChunkedCopy,
+  type BridgeApi,
+} from './cloud-copy-chunks.js';
+import { dumpDatabase, rebuildDatabase, type RowSink, type RowSource } from './cloud-copy-rows.js';
 import type {
   CloudBackupEntry,
   PublishedMenu,
@@ -89,9 +97,9 @@ const MAX_IMPORT_AGE_MS = 45 * 60_000;
  */
 const CLOUD_BACKUP_RETRY_MS = 60 * 60_000;
 /**
- * The website's upload cap, mirrored: its schema allows 4,000,000 base64
- * characters (apps/web/src/app/api/bridge/backups/route.ts), which is exactly
- * 3,000,000 gzip bytes. A larger body is refused here without a round trip.
+ * The one-blob upload cap of a website that predates chunked copies: its
+ * schema allows 4,000,000 base64 characters, exactly 3,000,000 gzip bytes.
+ * Only the fallback path needs it — chunked copies have no size limit.
  */
 const CLOUD_BACKUP_MAX_GZ_BYTES = 3_000_000;
 /** The bridge's writes are attributed to this synthetic actor in audit logs. */
@@ -101,9 +109,14 @@ const CLOUD_COPY_AUDIT_DAYS = 90;
 
 export type CloudCopyReason = 'scheduled' | 'manual' | 'before-restore';
 
-/** What a cloud copy says about itself. Stored by the server next to the blob. */
+/** What a cloud copy says about itself. Stored by the server next to the copy. */
 interface CloudCopyManifest {
-  schema: 1;
+  schema: 2;
+  /**
+   * 'chunks-v1': a row export (cloud-copy-rows.ts) in chunks, only new ones
+   * sent; 'blob': the SQLite file in one gzip upload (sites before 0.6.6).
+   */
+  format: typeof CHUNKS_FORMAT | 'blob';
   deviceId: string;
   deviceName: string | null;
   appVersion: string;
@@ -115,7 +128,10 @@ interface CloudCopyManifest {
   auditHeadHash: string | null;
   trimmed: { syncRowsDropped: number; auditRowsDropped: number; auditDaysKept: number };
   rawBytes: number;
+  /** Gzip bytes sent this time (for a chunked copy: only the new chunks). */
   gzBytes: number;
+  chunkCount?: number;
+  newChunkCount?: number;
 }
 
 interface BridgeStatus {
@@ -380,9 +396,12 @@ class WebOrdersBridge {
   }
 
   /**
-   * Create a fresh VACUUM'd snapshot, slim it, gzip it, and upload it with a
-   * manifest. The server records its own SHA-256 of what arrived and the
-   * upload time from its own clock; nothing the POS sends can rewrite an
+   * Create a fresh VACUUM'd snapshot, slim it, and upload it with a manifest:
+   * as content-defined chunks, sending only those the website does not have
+   * (cloud-copy-chunks.ts) — so a copy of any size fits, and a day's upload is
+   * about a day's data. A website that predates chunks gets the old single
+   * gzip upload (≤ 3 MB). The server checks every chunk's hash and records
+   * the upload time from its own clock; nothing the POS sends can rewrite an
    * existing copy.
    */
   async uploadBackupNow(
@@ -402,6 +421,14 @@ class WebOrdersBridge {
       const backup = createBackup({ kind: 'manual' });
       const trimmed = slimCloudCopy(backup.fullPath, getSyncConfig(this.db).mode);
       const raw = fs.readFileSync(backup.fullPath);
+      // The row export the chunks are cut from (see cloud-copy-rows.ts).
+      const snapshot = new Database(backup.fullPath, { readonly: true });
+      let dump: Buffer;
+      try {
+        dump = await dumpDatabase(rowSource(snapshot));
+      } finally {
+        snapshot.close();
+      }
       // The snapshot exists only to be uploaded; local retention is the daily
       // auto-backup. Manual files are never rotated, so leaving this one behind
       // put an extra copy of the whole database on the shop PC every day.
@@ -412,55 +439,55 @@ class WebOrdersBridge {
           // best effort — a stray file is harmless, just untidy
         }
       }
-      const gz = gzipSync(raw, { level: 9 });
-      if (gz.length > CLOUD_BACKUP_MAX_GZ_BYTES) {
-        tooLarge = true;
-        throw new Error(
-          `Backup exceeds the 3MB cloud limit (${(gz.length / 1_000_000).toFixed(1)} MB gzipped) — keep using local backups and contact support.`,
-        );
-      }
-      const sha256 = createHash('sha256').update(gz).digest('hex');
-      const meta = this.manifest(reason, trimmed, raw.length, gz.length);
-      const res = await this.api(cfg, '/api/bridge/backups', {
-        method: 'POST',
-        body: JSON.stringify({
+      let sent: { id: string | null; sha256: string; gzBytes: number; meta: CloudCopyManifest };
+      try {
+        let meta: CloudCopyManifest | null = null;
+        const up = await uploadChunkedCopy(this.bridgeApi(cfg), dump, {
           deviceId: this.deviceId,
-          fileName: `${backup.fileName}.gz`,
-          dataBase64: gz.toString('base64'),
-          sha256,
-          meta,
-        }),
-      });
-      const json = (await res.json().catch(() => null)) as
-        | { ok: boolean; error?: string; message?: string; data?: { id: string } }
-        | null;
-      if (!res.ok || !json?.ok) {
-        tooLarge = json?.error === 'backup_too_large';
-        throw new Error(
-          json?.message ?? json?.error ?? `Upload failed: HTTP ${res.status}`,
-        );
+          fileName: backup.fileName,
+          meta: (s) => {
+            meta = {
+              ...this.manifest(reason, trimmed, raw.length, s.uploadedBytes, CHUNKS_FORMAT),
+              chunkCount: s.chunkCount,
+              newChunkCount: s.newChunkCount,
+            };
+            return { ...meta };
+          },
+        });
+        sent = { id: up.id, sha256: up.sha256, gzBytes: up.uploadedBytes, meta: meta! };
+      } catch (e) {
+        if (!(e instanceof ChunksUnsupportedError)) throw e;
+        const blob = await this.uploadBlob(cfg, raw, backup.fileName, reason, trimmed);
+        if (!blob.ok) {
+          tooLarge = blob.tooLarge;
+          throw new Error(blob.message);
+        }
+        sent = blob;
       }
       const uploadedAt = nowIso();
       setSetting(this.db, LAST_CLOUD_BACKUP_KEY, uploadedAt);
       setSetting(this.db, LAST_CLOUD_META_KEY, {
         uploadedAt,
-        id: json.data?.id ?? null,
-        sha256,
+        id: sent.id,
+        sha256: sent.sha256,
         reason,
-        auditHeadHash: meta.auditHeadHash,
-        auditRows: meta.auditRows,
+        auditHeadHash: sent.meta.auditHeadHash,
+        auditRows: sent.meta.auditRows,
       });
       this.lastCloudBackupError = null;
       log.info('Cloud backup uploaded', {
         fileName: backup.fileName,
         reason,
+        format: sent.meta.format,
         rawBytes: raw.length,
-        gzBytes: gz.length,
+        sentGzBytes: sent.gzBytes,
+        chunks: sent.meta.chunkCount,
+        newChunks: sent.meta.newChunkCount,
         removedSyncRows: trimmed.removedSync,
         removedAuditRows: trimmed.removedAudit,
-        auditHeadHash: meta.auditHeadHash,
+        auditHeadHash: sent.meta.auditHeadHash,
       });
-      return { fileName: backup.fileName, sizeBytes: gz.length };
+      return { fileName: backup.fileName, sizeBytes: sent.gzBytes };
     } catch (e) {
       this.lastCloudBackupError = e instanceof Error ? e.message : String(e);
       if (tooLarge) setSetting(this.db, LAST_CLOUD_TOO_LARGE_KEY, nowIso());
@@ -471,11 +498,64 @@ class WebOrdersBridge {
     }
   }
 
+  /** This bridge's connection, in the shape the chunk transfer expects. */
+  private bridgeApi(conn: BridgeConnection): BridgeApi {
+    return async (p, init) => {
+      const res = await this.api(conn, p, init ? { method: init.method, body: init.body } : undefined);
+      return { status: res.status, json: await res.json().catch(() => null) };
+    };
+  }
+
+  /** The whole copy as one gzip request — for a website that predates chunks. */
+  private async uploadBlob(
+    cfg: WebBridgeConfig,
+    raw: Buffer,
+    fileName: string,
+    reason: CloudCopyReason,
+    trimmed: { removedSync: number; removedAudit: number },
+  ): Promise<
+    | { ok: true; id: string | null; sha256: string; gzBytes: number; meta: CloudCopyManifest }
+    | { ok: false; tooLarge: boolean; message: string }
+  > {
+    const gz = gzipSync(raw, { level: 9 });
+    if (gz.length > CLOUD_BACKUP_MAX_GZ_BYTES) {
+      return {
+        ok: false,
+        tooLarge: true,
+        message: `Backup exceeds the website's 3MB limit (${(gz.length / 1_000_000).toFixed(1)} MB gzipped) — the website needs updating; local backups are unaffected.`,
+      };
+    }
+    const sha256 = createHash('sha256').update(gz).digest('hex');
+    const meta = this.manifest(reason, trimmed, raw.length, gz.length, 'blob');
+    const res = await this.api(cfg, '/api/bridge/backups', {
+      method: 'POST',
+      body: JSON.stringify({
+        deviceId: this.deviceId,
+        fileName: `${fileName}.gz`,
+        dataBase64: gz.toString('base64'),
+        sha256,
+        meta,
+      }),
+    });
+    const json = (await res.json().catch(() => null)) as
+      | { ok: boolean; error?: string; message?: string; data?: { id: string } }
+      | null;
+    if (!res.ok || !json?.ok) {
+      return {
+        ok: false,
+        tooLarge: json?.error === 'backup_too_large',
+        message: json?.message ?? json?.error ?? `Upload failed: HTTP ${res.status}`,
+      };
+    }
+    return { ok: true, id: json.data?.id ?? null, sha256, gzBytes: gz.length, meta };
+  }
+
   private manifest(
     reason: CloudCopyReason,
     trimmed: { removedSync: number; removedAudit: number },
     rawBytes: number,
     gzBytes: number,
+    format: CloudCopyManifest['format'],
   ): CloudCopyManifest {
     const db = this.db!;
     const device = db
@@ -489,7 +569,8 @@ class WebOrdersBridge {
       .prepare(`SELECT row_hash FROM audit_log WHERE row_hash IS NOT NULL ORDER BY rowid DESC LIMIT 1`)
       .get() as { row_hash: string } | undefined;
     return {
-      schema: 1,
+      schema: 2,
+      format,
       deviceId: this.deviceId,
       deviceName: device?.display_name ?? null,
       appVersion: app.getVersion(),
@@ -628,29 +709,47 @@ class WebOrdersBridge {
       ok: boolean;
       data?: {
         fileName: string;
-        dataBase64: string;
+        dataBase64: string | null;
+        format?: string;
+        chunks?: string[] | null;
         deviceId?: string;
         sha256?: string | null;
         meta?: Partial<CloudCopyManifest> | null;
       };
     };
     if (!json.ok || !json.data) throw new Error('Download failed: bad response');
-    const gz = Buffer.from(json.data.dataBase64, 'base64');
-    if (json.data.sha256) {
-      const digest = createHash('sha256').update(gz).digest('hex');
-      if (digest !== json.data.sha256) {
-        throw new Error(
-          'The cloud copy does not match the checksum the server recorded when it was uploaded. It is damaged or was altered; refusing to restore it. Pick another copy.',
-        );
-      }
-    }
-    const raw = gunzipSync(gz);
     const fromPc = json.data.meta?.deviceName ?? (json.data.deviceId === this.deviceId ? 'this PC' : 'another PC');
-    // Write to a temp file inside userData, then reuse the local staging flow
+    // Build a database file inside userData, then reuse the local staging flow
     // (which validates the SQLite header before accepting).
     const tmpPath = path.join(app.getPath('userData'), `cloud-restore-${Date.now()}.db`);
-    fs.writeFileSync(tmpPath, raw);
     try {
+      if (json.data.format === CHUNKS_FORMAT) {
+        // Every chunk is checked against its name and the whole against sha256…
+        if (!json.data.chunks?.length || !json.data.sha256) throw new Error('Download failed: bad response');
+        const dump = await downloadChunkedCopy(this.bridgeApi(c), { chunks: json.data.chunks, sha256: json.data.sha256 });
+        const out = new Database(tmpPath);
+        try {
+          await rebuildDatabase(dump, rowSink(out));
+          // …and the rebuilt database must export to exactly what was uploaded.
+          if (!(await dumpDatabase(rowSource(out))).equals(dump)) {
+            throw new Error('The rebuilt cloud copy does not match what was uploaded; refusing to restore it.');
+          }
+        } finally {
+          out.close();
+        }
+      } else {
+        if (!json.data.dataBase64) throw new Error('Download failed: bad response');
+        const gz = Buffer.from(json.data.dataBase64, 'base64');
+        if (json.data.sha256) {
+          const digest = createHash('sha256').update(gz).digest('hex');
+          if (digest !== json.data.sha256) {
+            throw new Error(
+              'The cloud copy does not match the checksum the server recorded when it was uploaded. It is damaged or was altered; refusing to restore it. Pick another copy.',
+            );
+          }
+        }
+        fs.writeFileSync(tmpPath, gunzipSync(gz));
+      }
       return stageRestoreFromPath(tmpPath, {
         source: 'cloud',
         label: `cloud copy ${json.data.fileName} from ${fromPc}`,
@@ -662,7 +761,13 @@ class WebOrdersBridge {
             : null,
       });
     } finally {
-      fs.unlinkSync(tmpPath);
+      for (const suffix of ['', '-journal']) {
+        try {
+          fs.unlinkSync(tmpPath + suffix);
+        } catch {
+          // not created (download failed first) — nothing to tidy
+        }
+      }
     }
   }
 
@@ -674,7 +779,7 @@ class WebOrdersBridge {
     // Hard timeout so a hung connection can never wedge the poll loop. Without
     // this, one stalled request left `this.running` true forever and the
     // bridge silently stopped pulling orders (while manual actions kept
-    // working). 20s is generous for a ~3MB backup upload on shop Wi-Fi.
+    // working). 20s is generous for one ≤1 MB cloud-copy chunk on shop Wi-Fi.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20_000);
     try {
@@ -1249,3 +1354,23 @@ function notifyRenderer(channel: string, payload: unknown): void {
 
 export const webOrdersBridge = new WebOrdersBridge();
 void WEB_ACTOR_NAME; // reserved: future dedicated system-user row
+
+/** better-sqlite3 as the row export's read side: INTEGERs as bigint, rows as arrays. */
+function rowSource(db: Database.Database): RowSource {
+  return {
+    all: (sql) => db.prepare(sql).all() as Array<Record<string, unknown>>,
+    rows: (sql) => db.prepare(sql).raw(true).safeIntegers(true).iterate() as Iterable<unknown[]>,
+    pragma: (name) => Number(db.pragma(name, { simple: true })),
+  };
+}
+
+/** better-sqlite3 as the row export's write side. */
+function rowSink(db: Database.Database): RowSink {
+  return {
+    exec: (sql) => void db.exec(sql),
+    insert: (sql) => {
+      const stmt = db.prepare(sql);
+      return (values) => void stmt.run(...values);
+    },
+  };
+}
