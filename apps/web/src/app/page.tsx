@@ -131,7 +131,7 @@ export default function HomePage() {
         <Marquee
           tilted
           items={[
-            'CLEANLY MADE. DELICIOUSLY UNFORGETTABLE.',
+            'HYGIENICALLY MADE. DELICIOUSLY UNFORGETTABLE.',
             'WE DELIVER ALL OVER DHA & CLIFTON',
             'OPEN 12 NOON – 1 AM',
             'CASH ON DELIVERY',

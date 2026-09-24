@@ -46,13 +46,19 @@ export default async function MenuPage() {
   const [menu, store] = await Promise.all([loadMenu(), getStoreStatus()]);
   const accepting = store.acceptingOrders;
   const pickupAvailable = store.pickupAvailable;
+  const pickupDiscountPercent = store.pickupDiscountPercent;
 
   return (
     <>
       <SiteHeader />
       <main className="min-h-screen bg-paper text-ink">
         {menu ? (
-          <OrderingApp menu={menu} acceptingOrders={accepting} pickupAvailable={pickupAvailable} />
+          <OrderingApp
+            menu={menu}
+            acceptingOrders={accepting}
+            pickupAvailable={pickupAvailable}
+            pickupDiscountPercent={pickupDiscountPercent}
+          />
         ) : (
           <div className="mx-auto max-w-md px-4 py-24 text-center">
             <h1 className="font-display text-5xl uppercase tracking-wide text-ink">

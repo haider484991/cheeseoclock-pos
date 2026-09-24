@@ -12,6 +12,8 @@ const StatusSchema = z.object({
    * none, and unknown words from newer ones are ignored rather than refused.
    */
   features: z.array(z.string().max(40)).max(20).optional(),
+  /** The pickup discount the till applies (v0.7.1+; v0.7.0 sends none = 10). */
+  pickupDiscountPercent: z.number().int().min(0).max(50).optional(),
 });
 
 /**
@@ -34,6 +36,7 @@ export async function PUT(req: Request): Promise<Response> {
       acceptingOrders: parsed.data.acceptingOrders,
       deviceId: parsed.data.deviceId ?? null,
       pickup: parsed.data.features?.includes('pickup') ?? false,
+      pickupDiscountPercent: parsed.data.pickupDiscountPercent ?? null,
     });
     return Response.json({ ok: true, data: status });
   } catch (e) {

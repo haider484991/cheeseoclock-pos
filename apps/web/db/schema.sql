@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS store_status (
 );
 -- The till announces it can import pickup orders (heartbeat `features`).
 ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup BOOLEAN NOT NULL DEFAULT false;
+-- …and the pickup discount percent it applies (null = a v0.7.0 till: 10%).
+ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup_discount_pct INT;
 
 -- Orders placed on the website. The POS bridge polls status='new', imports
 -- each into the local SQLite (source='web'), acks with the POS order number,

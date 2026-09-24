@@ -10,8 +10,8 @@
  */
 export const BUSINESS = {
   name: "Cheese O'Clock",
-  // The printed menu's line (owner, 25 Sep 2026).
-  tagline: 'Cleanly Made. Deliciously Unforgettable.',
+  // The printed menu's line (owner, 25 Sep 2026: "Hygienically", not "Cleanly").
+  tagline: 'Hygienically Made. Deliciously Unforgettable.',
   // Matches the Google Business Profile listing (verified 27 Jul 2026).
   phoneDisplay: '0300 9367865',
   phoneE164: '+923009367865',

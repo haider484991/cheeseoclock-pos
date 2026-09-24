@@ -30,9 +30,12 @@ function bridge(path: string, init?: { method?: string; body?: unknown }) {
   });
 }
 /** The till's heartbeat, with or without the pickup capability. */
-async function heartbeat(features?: string[]) {
+async function heartbeat(features?: string[], pickupDiscountPercent?: number) {
   const res = await bridgeStatus.PUT(
-    bridge('/api/bridge/status', { method: 'PUT', body: { acceptingOrders: true, deviceId: 'till-1', features } }),
+    bridge('/api/bridge/status', {
+      method: 'PUT',
+      body: { acceptingOrders: true, deviceId: 'till-1', features, pickupDiscountPercent },
+    }),
   );
   expect(res.status).toBe(200);
 }
@@ -205,7 +208,7 @@ describe('POST /api/orders — delivery zones', () => {
   });
 });
 
-describe('POST /api/orders — pickup, 10% off', () => {
+describe('POST /api/orders — pickup at the till’s discount', () => {
   it('is not offered until the till announces it can import pickups', async () => {
     const off = await place({ fulfilment: 'pickup', addressLine: undefined });
     expect(off.status).toBe(409);
@@ -218,7 +221,7 @@ describe('POST /api/orders — pickup, 10% off', () => {
     expect(after.data.pickupAvailable).toBe(true);
   });
 
-  it('takes 10% off, needs no zone or address, and adds no delivery charge', async () => {
+  it('a v0.7.0 till (no percent announced) gets 10% off; no zone, address or delivery charge', async () => {
     await heartbeat(['pickup']);
     const r = await place({ fulfilment: 'pickup', addressLine: undefined, notes: 'Collecting at 9' });
     expect(r.status).toBe(200);
@@ -263,5 +266,19 @@ describe('POST /api/orders — pickup, 10% off', () => {
     const byId = new Map(json.data.map((o) => [o.id, o]));
     expect(byId.get(p.json.data!.orderId)).toMatchObject({ fulfilment: 'pickup', discountCents: 20_000 });
     expect(byId.get(d.json.data!.orderId)).toMatchObject({ fulfilment: 'delivery', discountCents: 0, addressLine: 'House 12, Street 4' });
+  });
+
+  it('uses the percent the till announces — 15% from v0.7.1', async () => {
+    await heartbeat(['pickup'], 15);
+    const st = (await (await storeStatus.GET()).json()) as { data: { pickupDiscountPercent: number } };
+    expect(st.data.pickupDiscountPercent).toBe(15);
+    const r = await place({ fulfilment: 'pickup' });
+    expect(r.status).toBe(200);
+    expect(r.json.data).toMatchObject({
+      subtotalCents: 200_000,
+      discountCents: 30_000,
+      taxCents: 25_500, // 15% tax on the discounted 1,700
+      totalCents: 195_500,
+    });
   });
 });

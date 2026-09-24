@@ -18,7 +18,7 @@ import { isDeliveryChargeItem } from './delivery-zones';
  */
 
 export interface MenuVariant {
-  /** "Medium", "Large", "250 ml" … or null for an item sold in one size. */
+  /** "Medium", "Large", "345 ml" … or null for an item sold in one size. */
   size: string | null;
   item: PublishedMenuItem;
 }

@@ -22,7 +22,6 @@ import {
   type MenuVariant,
 } from '@/lib/menu-view';
 import {
-  PICKUP_DISCOUNT_PERCENT,
   type PublishedMenu,
   type PublishedMenuItem,
   type PublishedModifierGroup,
@@ -92,17 +91,21 @@ export function OrderingApp({
   menu,
   acceptingOrders,
   pickupAvailable,
+  pickupDiscountPercent,
 }: {
   menu: PublishedMenu;
   acceptingOrders: boolean;
   /** The till can take pickup orders right now (lib/store-status). */
   pickupAvailable: boolean;
+  /** The pickup discount that till bills — shown and priced here. */
+  pickupDiscountPercent: number;
 }) {
   // Server-rendered starting point, then kept honest client-side: a customer
   // can sit on this page long after the shop stops taking orders. The POST is
   // the real gate (see api/orders) — this only keeps the buttons truthful.
   const [open, setOpen] = useState(acceptingOrders);
   const [canPickup, setCanPickup] = useState(pickupAvailable);
+  const [pickupPct, setPickupPct] = useState(pickupDiscountPercent);
   useEffect(() => {
     let cancelled = false;
     async function check() {
@@ -110,11 +113,12 @@ export function OrderingApp({
         const res = await fetch('/api/store-status', { cache: 'no-store' });
         const json = (await res.json()) as {
           ok: boolean;
-          data?: { acceptingOrders: boolean; pickupAvailable?: boolean };
+          data?: { acceptingOrders: boolean; pickupAvailable?: boolean; pickupDiscountPercent?: number };
         };
         if (!cancelled && json.ok && json.data) {
           setOpen(json.data.acceptingOrders);
           setCanPickup(json.data.pickupAvailable === true);
+          if (typeof json.data.pickupDiscountPercent === 'number') setPickupPct(json.data.pickupDiscountPercent);
         }
       } catch {
         // Keep the last known state; submitting is still guarded server-side.
@@ -174,7 +178,7 @@ export function OrderingApp({
   const feeItem = zone ? deliveryChargeItemFor(menu, zone.feeCents) : undefined;
   const deliveryFee = zone && cart.length > 0 ? zone.feeCents : 0;
   if (deliveryFee > 0) priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0 });
-  const totals = priceOrder(priced, pickup ? PICKUP_DISCOUNT_PERCENT : 0);
+  const totals = priceOrder(priced, pickup ? pickupPct : 0);
   const { discountCents: discount, taxCents: tax, totalCents: total } = totals;
   const cartCount = cart.reduce((s, l) => s + l.quantity, 0);
   const pickupOnlyInCart = cart.filter((l) => isPickupOnly(l.item)).map((l) => l.label);
@@ -234,13 +238,14 @@ export function OrderingApp({
     setQty,
     fulfilment,
     canPickup,
+    pickupPct,
     onFulfilment: setFulfilment,
     pickupOnlyInCart,
   };
 
   return (
     <div className="pb-28 lg:pb-12">
-      <MenuHeader canPickup={canPickup} />
+      <MenuHeader canPickup={canPickup} pickupPct={pickupPct} />
 
       {!open && <ClosedBanner />}
 
@@ -365,7 +370,7 @@ function sectionNote(sectionName: string): string | null {
   return null;
 }
 
-function MenuHeader({ canPickup }: { canPickup: boolean }) {
+function MenuHeader({ canPickup, pickupPct }: { canPickup: boolean; pickupPct: number }) {
   return (
     <div className="bg-ink text-cream">
       <div className="mx-auto max-w-6xl px-4 pb-7 pt-8 md:pb-9 md:pt-10">
@@ -381,7 +386,7 @@ function MenuHeader({ canPickup }: { canPickup: boolean }) {
         <ul className="mt-5 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide">
           {canPickup && (
             <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
-              {PICKUP_DISCOUNT_PERCENT}% off when you pick up
+              {pickupPct}% off when you order online &amp; pick up
             </li>
           )}
           <li
@@ -705,6 +710,8 @@ interface CartProps {
   fulfilment: WebFulfilment;
   /** The till takes pickup orders right now. */
   canPickup: boolean;
+  /** The pickup discount that till bills. */
+  pickupPct: number;
   onFulfilment: (f: WebFulfilment) => void;
   /** Labels of pick-up-only lines in the cart (they block a delivery). */
   pickupOnlyInCart: string[];
@@ -714,7 +721,7 @@ interface CartProps {
  * Delivery or pick-up. Pick-up shows the saving up front — it is the printed
  * menu's headline offer. Hidden entirely while the till can't take pickups.
  */
-function FulfilmentToggle(props: Pick<CartProps, 'fulfilment' | 'canPickup' | 'onFulfilment'>) {
+function FulfilmentToggle(props: Pick<CartProps, 'fulfilment' | 'canPickup' | 'pickupPct' | 'onFulfilment'>) {
   if (!props.canPickup) return null;
   const opt = (f: WebFulfilment, title: string, note: string) => {
     const on = props.fulfilment === f;
@@ -737,7 +744,7 @@ function FulfilmentToggle(props: Pick<CartProps, 'fulfilment' | 'canPickup' | 'o
   return (
     <div className="grid grid-cols-2 gap-2" role="group" aria-label="Delivery or pick-up">
       {opt('delivery', 'Delivery', 'Rs 200–250 · DHA & Clifton')}
-      {opt('pickup', `Pick up · ${PICKUP_DISCOUNT_PERCENT}% off`, 'Collect from DHA Phase 6')}
+      {opt('pickup', `Pick up · ${props.pickupPct}% off`, 'Collect from DHA Phase 6')}
     </div>
   );
 }
@@ -857,7 +864,7 @@ function Totals(props: CartProps) {
       </div>
       {pickup ? (
         <div className="flex justify-between font-semibold text-emerald-700">
-          <dt>Pick-up {PICKUP_DISCOUNT_PERCENT}% off</dt>
+          <dt>Pick-up {props.pickupPct}% off</dt>
           <dd className="tabular-nums">−{formatCents(props.discount)}</dd>
         </div>
       ) : (
@@ -1283,7 +1290,7 @@ function CheckoutSheet(
           <h3 className="font-display text-3xl uppercase leading-none tracking-wide">Checkout</h3>
           <p className="mt-1.5 font-cond text-sm font-bold uppercase tracking-wide text-cheese">
             {props.fulfilment === 'pickup'
-              ? `Pick-up · ${PICKUP_DISCOUNT_PERCENT}% off · pay at the counter`
+              ? `Pick-up · ${props.pickupPct}% off · pay at the counter`
               : 'Cash on delivery · pay the rider'}
           </p>
         </div>

@@ -1002,8 +1002,10 @@ class WebOrdersBridge {
         }
 
         // The pickup offer, priced by the till itself on its own subtotal
-        // (the site showed the same maths — apps/web lib/pricing). 10% sits
-        // at the approval threshold, so no manager PIN is needed.
+        // (the site showed the same maths — apps/web lib/pricing). It is the
+        // owner's standing offer, above the percent that needs a manager PIN
+        // at the counter, so the bridge's actor (the shop's admin — see
+        // resolveActor) is recorded as its approver.
         if (pickup) {
           applyDiscount(
             db,
@@ -1012,6 +1014,7 @@ class WebOrdersBridge {
               discountType: 'percent',
               value: PICKUP_DISCOUNT_PERCENT,
               reason: `Website pick-up ${PICKUP_DISCOUNT_PERCENT}% off`,
+              approverUserId: actor.userId,
             },
             actor,
           );
@@ -1122,6 +1125,8 @@ class WebOrdersBridge {
       acceptingOrders: cfg.enabled,
       deviceId: this.deviceId,
       features: ['pickup'],
+      // The site shows this percent, so the customer sees what the till bills.
+      pickupDiscountPercent: PICKUP_DISCOUNT_PERCENT,
     };
     const res = await this.api(cfg, '/api/bridge/status', {
       method: 'PUT',

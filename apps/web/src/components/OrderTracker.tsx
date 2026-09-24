@@ -5,7 +5,6 @@ import { useSearchParams } from 'next/navigation';
 import { formatCents } from '@/lib/format';
 import { BUSINESS } from '@/lib/business';
 import {
-  PICKUP_DISCOUNT_PERCENT,
   type WebFulfilment,
   type WebOrderItem,
   type WebOrderStatus,
@@ -132,6 +131,8 @@ export function OrderTracker({ orderId }: { orderId: string }) {
   const STEPS = pickup ? PICKUP_STEPS : DELIVERY_STEPS;
   const idx = STEPS.findIndex((s) => s.key === order.status);
   const discount = order.discountCents ?? 0;
+  // The percent this order got (the till's offer when it was placed).
+  const pct = order.subtotalCents > 0 ? Math.round((discount * 100) / order.subtotalCents) : 0;
 
   return (
     <div className="animate-fade-in">
@@ -162,7 +163,7 @@ export function OrderTracker({ orderId }: { orderId: string }) {
         {pickup && !cancelled && (
           <div className="mt-3 rounded-xl border border-cheese/30 bg-cheese/10 p-3 text-sm">
             <p className="font-bold text-cream">
-              Pick-up · {PICKUP_DISCOUNT_PERCENT}% off · pay at the counter
+              Pick-up{pct > 0 ? ` · ${pct}% off` : ''} · pay at the counter
             </p>
             <p className="mt-0.5 text-cream/75">
               {BUSINESS.streetAddress}, {BUSINESS.locality}
@@ -284,7 +285,7 @@ export function OrderTracker({ orderId }: { orderId: string }) {
             </div>
             {discount > 0 && (
               <div className="flex justify-between text-emerald-300">
-                <dt>Pick-up {PICKUP_DISCOUNT_PERCENT}% off</dt>
+                <dt>Pick-up {pct}% off</dt>
                 <dd className="font-mono tabular-nums">−{formatCents(discount)}</dd>
               </div>
             )}

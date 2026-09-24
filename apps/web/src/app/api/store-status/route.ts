@@ -15,7 +15,11 @@ export async function GET(): Promise<Response> {
   return Response.json(
     {
       ok: true,
-      data: { acceptingOrders: status.acceptingOrders, pickupAvailable: status.pickupAvailable },
+      data: {
+        acceptingOrders: status.acceptingOrders,
+        pickupAvailable: status.pickupAvailable,
+        pickupDiscountPercent: status.pickupDiscountPercent,
+      },
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );

@@ -9,7 +9,6 @@ import { checkOrderRate, clientIpHash, recordOrderPlaced } from '@/lib/rate-limi
 import { getStoreStatus } from '@/lib/store-status';
 import { ensureWebOrderColumns } from '@/lib/web-order-columns';
 import {
-  PICKUP_DISCOUNT_PERCENT,
   type PublishedMenu,
   type WebFulfilment,
   type WebOrderItem,
@@ -36,9 +35,10 @@ export const dynamic = 'force-dynamic';
  * rides to the till as the matching "Delivery Charge (Rs N)" menu item, added
  * here — never chosen by the client.
  *
- * Pickup: no zone, no address, PICKUP_DISCOUNT_PERCENT off the order — and
- * only while the listening till has announced it can import pickup orders,
- * because an older POS would book one as a delivery at full price.
+ * Pickup: no zone, no address, the listening till's pickup discount off the
+ * order (it announces the percent it will bill) — and only while that till
+ * has announced it can import pickup orders, because an older POS would book
+ * one as a delivery at full price.
  */
 
 const OrderItemSchema = z.object({
@@ -293,7 +293,7 @@ export async function POST(req: Request): Promise<Response> {
     // or the import fails validation and retries until it gives up.
     if (orderNotes && orderNotes.length > 490) orderNotes = orderNotes.slice(0, 490);
 
-    const totals = priceOrder(priced, pickup ? PICKUP_DISCOUNT_PERCENT : 0);
+    const totals = priceOrder(priced, pickup ? store.pickupDiscountPercent : 0);
 
     const id = input.clientOrderId ?? uuidv7();
     const inserted = (await sql()`
