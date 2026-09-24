@@ -21,8 +21,8 @@ export function CheeseTime({ className = '' }: { className?: string }) {
       const hour = Number(
         now.toLocaleString('en-GB', { timeZone: 'Asia/Karachi', hour: 'numeric', hour12: false }),
       );
-      // Kitchen hours: 12pm – 2am.
-      const open = hour >= 12 || hour < 2;
+      // Kitchen hours: 12 noon – 1 am.
+      const open = hour >= 12 || hour < 1;
       setState({ time, open });
     };
     update();
@@ -38,7 +38,7 @@ export function CheeseTime({ className = '' }: { className?: string }) {
           in DHA —{' '}
           {state.open
             ? 'definitely Cheese O’Clock.'
-            : 'we open at 12pm. Almost Cheese O’Clock.'}
+            : 'we open at 12 noon. Almost Cheese O’Clock.'}
         </>
       ) : (
         <>It&rsquo;s always Cheese O&rsquo;Clock in DHA.</>

@@ -5,13 +5,15 @@ import { OrderCtaBand } from '@/components/OrderCtaBand';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
 import { BUSINESS } from '@/lib/business';
-import { DELIVERY_AREAS, etaText } from '@/lib/areas';
+import { DELIVERY_AREAS, feeText } from '@/lib/areas';
+import { FEE_SUMMARY } from '@/lib/delivery-zones';
+import { formatCents } from '@/lib/format';
 import { JsonLd, webPageNode } from '@/lib/seo';
 
 export const metadata: Metadata = {
   title: 'Food Delivery Areas in DHA & Clifton, Karachi',
   description:
-    "Cheese O'Clock delivers pizza & burgers across DHA Phases 1–8, Clifton and Gizri from our Phase 6 kitchen. Honest delivery times per area, cash on delivery, open till 2am.",
+    "Cheese O'Clock delivers pizza & burgers across DHA Phases 1–8 and Clifton from our Phase 6 kitchen. Rs 200–250 delivery, cash on delivery, open daily till 1 am.",
   alternates: { canonical: '/delivery' },
 };
 
@@ -31,10 +33,14 @@ export default function DeliveryHubPage() {
             FOOD DELIVERY AREAS IN DHA &amp; CLIFTON, KARACHI
           </h1>
           <p className="mt-5 max-w-2xl leading-relaxed text-smoke">
-            Every order fires from our kitchen in DHA Phase 6 and rides out in
-            insulated bags — daily from 12pm to 2am, always cash on delivery.
-            Pick your area below for honest delivery times, the streets we
-            cover, and answers to the questions your area actually asks.
+            Every order fires from our kitchen in DHA Phase 6 — daily from 12
+            noon to 1 am, always cash on delivery. We deliver in DHA and
+            Clifton only:{' '}
+            {FEE_SUMMARY.map(
+              (f) => `${formatCents(f.feeCents)} for ${f.places.replace(' · ', ', ')}`,
+            ).join('; ')}
+            . Pick your area below for the streets we cover and answers to the
+            questions your area actually asks.
           </p>
 
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -47,7 +53,7 @@ export default function DeliveryHubPage() {
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="text-lg font-bold text-cream">{area.name}</h2>
                     <span className="whitespace-nowrap rounded-full bg-cheese/15 px-3 py-1 text-xs font-bold text-cheese group-hover:bg-cheese group-hover:text-night">
-                      🛵 {etaText(area)}
+                      🛵 {feeText(area)}
                     </span>
                   </div>
                   <p className="mt-2 line-clamp-2 text-sm text-smoke">
@@ -80,7 +86,7 @@ export default function DeliveryHubPage() {
                   </li>
                   <li>
                     <Link href="/late-night-food-delivery-dha" className="font-semibold text-cheese hover:text-cheese-hot">
-                      Late-night food delivery (open till 2am) →
+                      Late-night food delivery (open till 1 am) →
                     </Link>
                   </li>
                 </ul>
@@ -116,7 +122,7 @@ export default function DeliveryHubPage() {
           path: '/delivery',
           name: 'Food Delivery Areas in DHA & Clifton, Karachi',
           description:
-            'Delivery coverage, honest ETAs and covered streets for every Cheese O’Clock zone across DHA Karachi, Clifton and Gizri.',
+            'Delivery coverage, fees and covered streets for every Cheese O’Clock zone across DHA Karachi and Clifton.',
           breadcrumb: [
             { name: 'Home', path: '/' },
             { name: 'Delivery areas', path: '/delivery' },

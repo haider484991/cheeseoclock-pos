@@ -110,6 +110,12 @@ function ensureStatusTable(): Promise<void> {
 
 /** Current status. Any failure reads as closed — see the fail-closed note. */
 export async function getStoreStatus(): Promise<StoreStatus> {
+  // Local preview without a database (see app/menu/page.tsx DEV_MENU_FILE):
+  // `next dev` only, never a production build.
+  if (process.env.NODE_ENV === 'development' && process.env['DEV_MENU_FILE']) {
+    const open = process.env['DEV_ACCEPTING_ORDERS'] === '1';
+    return { acceptingOrders: open, posAcceptingOrders: open, updatedAt: null, stale: false };
+  }
   try {
     await ensureStatusTable();
     const rows = (await sql()`

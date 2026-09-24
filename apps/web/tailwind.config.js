@@ -19,12 +19,17 @@ module.exports = {
           deep: '#D89C00',
         },
         cream: { DEFAULT: '#FAF5EA', dim: '#EFE8D8' },
-        ink: '#171310',
+        // The printed menu's paper and ink — the ordering page is set on it.
+        paper: { DEFAULT: '#FBF7EE', deep: '#EFE9DD', line: '#E4DCCB' },
+        ink: { DEFAULT: '#151412', soft: '#2B2824', muted: '#5B554D' },
         smoke: '#A39E93',
       },
       fontFamily: {
+        // Same three faces as the printed menu: Anton headlines, Barlow
+        // Condensed labels and prices, Barlow body.
         sans: ['var(--font-sans)', 'system-ui', 'sans-serif'],
         display: ['var(--font-display)', 'Impact', 'sans-serif'],
+        cond: ['var(--font-cond)', 'var(--font-sans)', 'sans-serif'],
       },
       boxShadow: {
         // On dark UIs shadows vanish — gold glow + borders do the lifting.
@@ -55,6 +60,14 @@ module.exports = {
           '0%, 100%': { boxShadow: '0 8px 30px rgba(245, 179, 1, 0.25)' },
           '50%': { boxShadow: '0 8px 42px rgba(245, 179, 1, 0.5)' },
         },
+        'pop-in': {
+          '0%': { opacity: '0', transform: 'translateY(8px) scale(0.96)' },
+          '100%': { opacity: '1', transform: 'translateY(0) scale(1)' },
+        },
+        'sheet-up': {
+          from: { transform: 'translateY(24px)', opacity: '0' },
+          to: { transform: 'translateY(0)', opacity: '1' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 0.25s ease-out',
@@ -63,6 +76,8 @@ module.exports = {
         float: 'float 6s ease-in-out infinite',
         'float-slow': 'float 8s ease-in-out infinite',
         'tick-glow': 'tick-glow 4s ease-in-out infinite',
+        'pop-in': 'pop-in 0.22s ease-out both',
+        'sheet-up': 'sheet-up 0.24s ease-out both',
       },
     },
   },

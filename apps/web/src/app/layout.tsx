@@ -1,16 +1,25 @@
 import type { Metadata, Viewport } from 'next';
-import { Bebas_Neue, Inter } from 'next/font/google';
+import { Anton, Barlow, Barlow_Condensed } from 'next/font/google';
 import { JsonLd, restaurantNode, webSiteNode, SITE_URL } from '@/lib/seo';
 import './globals.css';
 
-const display = Bebas_Neue({
+// The printed menu's type: Anton headlines, Barlow Condensed labels, Barlow body.
+const display = Anton({
   weight: '400',
   subsets: ['latin'],
   variable: '--font-display',
   display: 'swap',
 });
 
-const sans = Inter({
+const cond = Barlow_Condensed({
+  weight: ['600', '700', '800'],
+  subsets: ['latin'],
+  variable: '--font-cond',
+  display: 'swap',
+});
+
+const sans = Barlow({
+  weight: ['400', '500', '600', '700'],
   subsets: ['latin'],
   variable: '--font-sans',
   display: 'swap',
@@ -23,12 +32,12 @@ export const metadata: Metadata = {
     template: "%s · Cheese O'Clock",
   },
   description:
-    'Oven-fresh signature pizzas & loaded smash burgers delivered across DHA Phases 1–8, Clifton & Gizri. Cash on delivery, open daily till 2am. Order online or on WhatsApp.',
+    'Signature pizzas, crispy chicken burgers and fries delivered across DHA Phases 1–8 and Clifton. Cash on delivery, open daily 12 noon – 1 am. Order online or on WhatsApp.',
   alternates: { canonical: './' },
   openGraph: {
     title: "Cheese O'Clock — Pizza & Burger Delivery in DHA Karachi",
     description:
-      'Signature cheese-pull pizzas and smash burgers, hot at your door in 30–45 minutes. Cash on delivery across DHA & Clifton, open till 2am.',
+      'Five signature pizzas, crispy chicken burgers and fries, fired to order in DHA Phase 6. Cash on delivery across DHA & Clifton, open 12 noon – 1 am.',
     url: SITE_URL,
     siteName: "Cheese O'Clock",
     locale: 'en_PK',
@@ -38,7 +47,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: "Cheese O'Clock — Pizza & Burger Delivery in DHA Karachi",
     description:
-      'Signature cheese-pull pizzas and smash burgers, hot at your door. Cash on delivery, open till 2am.',
+      'Signature pizzas, crispy chicken burgers and fries delivered across DHA & Clifton. Cash on delivery, open 12 noon – 1 am.',
   },
   robots: { index: true, follow: true },
 };
@@ -51,7 +60,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${sans.variable}`}>
+    <html lang="en" className={`${display.variable} ${cond.variable} ${sans.variable}`}>
       <body className="font-sans">
         {children}
         {/* Film grain over everything — subtle, pointer-transparent. */}

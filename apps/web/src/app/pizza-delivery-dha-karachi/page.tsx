@@ -4,53 +4,59 @@ import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
 import { OrderCtaBand } from '@/components/OrderCtaBand';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
-import { DELIVERY_AREAS, etaText } from '@/lib/areas';
+import { ShowcaseVisual } from '@/components/ShowcaseVisual';
+import { DELIVERY_AREAS, feeText } from '@/lib/areas';
+import { FEE_SUMMARY } from '@/lib/delivery-zones';
+import { formatCents } from '@/lib/format';
 import { JsonLd, webPageNode } from '@/lib/seo';
 
 export const metadata: Metadata = {
-  title: 'Pizza Delivery in DHA Karachi — Hot in 30–45 Min',
+  title: 'Pizza Delivery in DHA Karachi — Medium & Large, Cash on Delivery',
   description:
-    'Order signature cheese-pull pizza online for delivery across DHA Phases 1–8, Clifton & Gizri. Daily-proofed dough, oven to door in 30–45 min, cash on delivery, open till 2am.',
+    'Order pizza online for delivery across DHA Phases 1–8 and Clifton — Signature pies and regular pizzas in Medium 9" or Large 12". Cash on delivery, till 1 am.',
   alternates: { canonical: '/pizza-delivery-dha-karachi' },
 };
 
 const WHY = [
   {
-    img: '/images/pizza-cheesy.jpg',
-    alt: 'Cheese O\'Clock four-cheese pizza fresh out of the oven',
-    title: 'Dough proofed daily',
-    body: 'Every base is proofed in-house the same day it bakes. No frozen discs, no shortcuts — that is where the chew and the char come from.',
+    img: '/images/menu/cheesy-star.webp' as string | null,
+    alt: 'Cheesy Star signature pizza, cut like a star',
+    fallback: { big: 'Signature', small: 'Large 12"' },
+    title: 'Signature pizzas',
+    body: 'Shawarma Pizza, Crown Crust, Cheesy Star, Meat Lovers and Cheetos — the house specials, all Large 12". The Cheesy Star is cut like a star and comes with a Sriracha mayo dip.',
   },
   {
-    img: '/images/hero-cheese-pull.jpg',
-    alt: 'Slice lift with a long mozzarella cheese pull',
-    title: 'A proper cheese pull',
-    body: 'We blend real mozzarella for stretch and cheddar for flavour, and we do not ration it. The name is a promise, not a gimmick.',
+    img: null as string | null,
+    alt: 'Regular pizzas in Medium 9" and Large 12"',
+    fallback: { big: '9" · 12"', small: 'Medium · Large' },
+    title: 'Regular pizzas, two sizes',
+    body: 'Fajita, Classic Supreme, Malai Supreme, Chicken Tikka, Chicken Tikka Malai, Cheesalious, Veggie Lovers (any five veggies), Classic and Special Pepperoni — each in Medium 9" or Large 12".',
   },
   {
-    img: '/images/pizza-bbq.jpg',
-    alt: 'Smoky BBQ chicken pizza on a dark wooden board',
-    title: 'Boxed at the bell',
-    body: 'Pizzas go straight from oven to box to insulated bag — never under a heat lamp waiting for a rider. What leaves hot, arrives hot.',
+    img: null as string | null,
+    alt: 'Value deals with a 1 litre Pepsi',
+    fallback: { big: 'From Rs 2,799', small: 'Value deals · 1 litre Pepsi' },
+    title: 'Value deals',
+    body: 'Big Two (2 Large), Family Feast (1 Medium + 1 Large) and Perfect Pair (2 Medium) — regular-menu pizzas with a 1 litre Pepsi, for less than ordering them one by one.',
   },
 ];
 
 const FAQS = [
   {
-    q: 'How long does pizza delivery take in DHA?',
-    a: 'From our Phase 6 kitchen: 20–35 minutes inside Phase 6, 25–45 minutes for Phases 4, 5, 7 and 8, and up to 50 for Phase 1 & 2 and Clifton. You can track your order live after checkout.',
+    q: 'How much is pizza delivery in DHA and Clifton?',
+    a: `${FEE_SUMMARY.map((f) => `${formatCents(f.feeCents)} for ${f.places.replace(' · ', ', ')}`).join('; ')}. We deliver in DHA and Clifton only. You can follow your order’s status after checkout.`,
   },
   {
     q: 'Do you deliver pizza late at night?',
-    a: 'Yes — the ovens fire daily until 2am, and late-night rides are usually faster with clear roads. We are one of the few kitchens in DHA still baking after midnight.',
+    a: 'Yes — we take orders every day from 12 noon until 1 am, on the website and on WhatsApp.',
   },
   {
     q: 'How do I pay for my pizza?',
-    a: 'Cash on delivery on every order. The rider carries change, and the printed kitchen receipt is your exact bill — no surprise charges.',
+    a: 'Cash on delivery on every order. The bill is the menu total plus 15% tax and your area’s delivery fee.',
   },
   {
     q: 'Can I customize my pizza?',
-    a: 'Yes — toppings, sizes and add-ons are all on the online menu. Tap a pizza to customize it, or tell us what you want on WhatsApp and we will build it.',
+    a: 'Regular pizzas come in Medium 9" or Large 12" (Signature pizzas are Large 12"), Veggie Lovers takes any five veggies you choose, and dips are Rs 100 each. For anything else, ask us on WhatsApp.',
   },
 ];
 
@@ -67,19 +73,19 @@ export default function PizzaDeliveryPage() {
             / <span className="text-cream/80">Pizza delivery DHA Karachi</span>
           </nav>
           <h1 className="mt-4 font-display text-4xl leading-[0.95] tracking-wide text-cream md:text-6xl">
-            PIZZA DELIVERY IN DHA KARACHI — HOT IN 30–45 MINUTES
+            PIZZA DELIVERY IN DHA KARACHI — FIRED TO ORDER
           </h1>
           <p className="mt-5 leading-relaxed text-cream/80">
-            Craving pizza in DHA? Ours bakes in Phase 6 and rides out across
-            every phase, Clifton and Gizri — signature cheese-pull pies on
-            daily-proofed dough, delivered hot and paid in cash at your door.
-            Order on the website in under a minute, or send your order on
-            WhatsApp; both land straight in the kitchen queue.
+            Craving pizza in DHA? Ours bakes in our Phase 6 kitchen and rides
+            out across every DHA phase and Clifton — Signature pies and regular
+            pizzas in Medium 9&quot; or Large 12&quot;, fired to order and paid
+            in cash at your door. Order on the website in under a minute, or
+            send your order on WhatsApp; both land straight in the kitchen.
           </p>
           <p className="mt-4 leading-relaxed text-cream/80">
-            No app downloads, no online payments, no cold corners: the box is
-            sealed at the oven and opened by you. If a pizza ever arrives in a
-            state we would not serve, message us and we will make it right.
+            No app downloads, no online payments: the box goes from the oven
+            to the rider and is opened by you. If a pizza ever arrives in a
+            state we would not serve, message us on WhatsApp.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
@@ -96,15 +102,7 @@ export default function PizzaDeliveryPage() {
             {WHY.map((w, i) => (
               <Reveal key={w.title} delay={i * 80}>
                 <div className="h-full overflow-hidden rounded-2xl border border-white/10 bg-night-card">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={w.img}
-                    alt={w.alt}
-                    width={1200}
-                    height={900}
-                    loading="lazy"
-                    className="aspect-[4/3] w-full object-cover"
-                  />
+                  <ShowcaseVisual img={w.img} alt={w.alt} fallback={w.fallback} />
                   <div className="p-5">
                     <h2 className="text-lg font-bold text-cream">{w.title}</h2>
                     <p className="mt-1 text-sm leading-relaxed text-smoke">{w.body}</p>
@@ -121,7 +119,7 @@ export default function PizzaDeliveryPage() {
               PIZZA DELIVERY AREAS
             </h2>
             <p className="mt-3 text-smoke">
-              Honest delivery windows from the Phase 6 ovens — tap your area for
+              Delivery fees from the Phase 6 kitchen — tap your area for
               covered streets and local FAQs.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
@@ -131,7 +129,7 @@ export default function PizzaDeliveryPage() {
                   href={`/delivery/${a.slug}`}
                   className="rounded-full border border-white/15 px-4 py-2 text-sm font-semibold text-cream/80 transition-colors hover:border-cheese/60 hover:text-cheese"
                 >
-                  {a.name} · {etaText(a)}
+                  {a.name} · {feeText(a)}
                 </Link>
               ))}
             </div>
@@ -172,7 +170,7 @@ export default function PizzaDeliveryPage() {
           path: '/pizza-delivery-dha-karachi',
           name: 'Pizza Delivery in DHA Karachi',
           description:
-            'Signature cheese-pull pizza delivered hot across DHA Karachi, Clifton and Gizri — cash on delivery, open till 2am.',
+            'Signature and regular pizzas delivered across DHA Karachi and Clifton — cash on delivery, open till 1 am.',
           breadcrumb: [
             { name: 'Home', path: '/' },
             { name: 'Pizza delivery DHA Karachi', path: '/pizza-delivery-dha-karachi' },

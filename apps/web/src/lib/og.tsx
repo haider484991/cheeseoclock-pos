@@ -75,9 +75,9 @@ export function brandOgImage({
         >
           <span>CASH ON DELIVERY</span>
           <span>·</span>
-          <span>30–45 MIN</span>
+          <span>DHA &amp; CLIFTON</span>
           <span>·</span>
-          <span>OPEN TILL 2AM</span>
+          <span>12 NOON – 1 AM</span>
         </div>
       </div>
     ),

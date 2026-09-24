@@ -1,8 +1,9 @@
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { sql } from '@/lib/db';
-import { normalizePhone } from '@/lib/format';
-import { validateModifierSelection } from '@/lib/order-validation';
+import { deliveryChargeItemFor, findZone } from '@/lib/delivery-zones';
+import { formatCents, normalizePhone } from '@/lib/format';
+import { validateModifierSelection, validateOrderable } from '@/lib/order-validation';
 import { checkOrderRate, clientIpHash, recordOrderPlaced } from '@/lib/rate-limit';
 import { getStoreStatus } from '@/lib/store-status';
 import type { PublishedMenu, WebOrderItem } from '@cheeseoclock/shared-types';
@@ -21,6 +22,11 @@ export const dynamic = 'force-dynamic';
  * (its DB is authoritative), so the worst a stale menu can cause is a small
  * estimate drift on the confirmation page, never a wrong charge: COD is
  * collected against the POS receipt.
+ *
+ * Delivery zones (lib/delivery-zones): the customer must pick one of the
+ * shop's DHA / Clifton zones, and anything else is refused. The zone's fee
+ * rides to the till as the matching "Delivery Charge (Rs N)" menu item, added
+ * here — never chosen by the client.
  */
 
 const OrderItemSchema = z.object({
@@ -34,7 +40,8 @@ const PlaceOrderSchema = z.object({
   customerName: z.string().trim().min(2).max(80),
   customerPhone: z.string().trim().min(7).max(20),
   addressLine: z.string().trim().min(5).max(300),
-  area: z.string().trim().max(120).optional(),
+  /** One of DELIVERY_ZONES' ids. Required: no zone, no delivery. */
+  zoneId: z.string({ required_error: 'Choose your delivery area' }).trim().min(1, 'Choose your delivery area').max(40),
   notes: z.string().trim().max(500).optional(),
   items: z.array(OrderItemSchema).min(1).max(50),
   /**
@@ -93,6 +100,20 @@ export async function POST(req: Request): Promise<Response> {
     if (input.clientOrderId) {
       const existing = await findExisting(input.clientOrderId);
       if (existing) return placedResponse(existing, true);
+    }
+
+    // DHA and Clifton only — the owner's rule, not a UI nicety.
+    const zone = findZone(input.zoneId);
+    if (!zone) {
+      return Response.json(
+        {
+          ok: false,
+          error: 'outside_zone',
+          message:
+            'We deliver in DHA and Clifton only. Choose your area from the list — if it is not there, we cannot deliver to it.',
+        },
+        { status: 400 },
+      );
     }
 
     // The till is the authority on whether anyone is listening. Checked before
@@ -157,6 +178,13 @@ export async function POST(req: Request): Promise<Response> {
           { status: 409 },
         );
       }
+      const notOrderable = validateOrderable(item);
+      if (notOrderable) {
+        return Response.json(
+          { ok: false, error: 'not_deliverable', message: notOrderable },
+          { status: 409 },
+        );
+      }
       const groupError = validateModifierSelection(item, line.modifierIds);
       if (groupError) {
         return Response.json(
@@ -196,6 +224,31 @@ export async function POST(req: Request): Promise<Response> {
         notes: line.notes?.trim() || null,
       });
     }
+
+    // The zone's fee, as the till's own delivery-charge item so the receipt
+    // and the rider's cash agree. A till that has not imported those items
+    // yet still gets the order, with the fee spelled out for the cashier.
+    let orderNotes = input.notes?.trim() || null;
+    const feeItem = deliveryChargeItemFor(menu, zone.feeCents);
+    if (feeItem) {
+      subtotalCents += feeItem.basePriceCents;
+      taxCents += Math.round((feeItem.basePriceCents * feeItem.taxRateBps) / 10_000);
+      lines.push({
+        posItemId: feeItem.posItemId,
+        name: feeItem.name,
+        quantity: 1,
+        unitPriceCents: feeItem.basePriceCents,
+        modifiers: [],
+        notes: null,
+      });
+    } else {
+      subtotalCents += zone.feeCents;
+      const reminder = `Delivery ${zone.name} ${formatCents(zone.feeCents)} — add the delivery charge by hand`;
+      orderNotes = orderNotes ? `${reminder}. ${orderNotes}` : reminder;
+    }
+    // The till caps order notes at 500 and prefixes "[web] " — stay under it
+    // or the import fails validation and retries until it gives up.
+    if (orderNotes && orderNotes.length > 490) orderNotes = orderNotes.slice(0, 490);
     const totalCents = subtotalCents + taxCents;
 
     const id = input.clientOrderId ?? uuidv7();
@@ -205,8 +258,8 @@ export async function POST(req: Request): Promise<Response> {
          items_json, subtotal_cents, tax_cents, total_cents, payment_method)
       VALUES
         (${id}, 'new', ${input.customerName.trim()}, ${phone},
-         ${input.addressLine.trim()}, ${input.area?.trim() || null},
-         ${input.notes?.trim() || null}, ${JSON.stringify(lines)},
+         ${input.addressLine.trim()}, ${zone.name},
+         ${orderNotes}, ${JSON.stringify(lines)},
          ${subtotalCents}, ${taxCents}, ${totalCents}, 'cod')
       ON CONFLICT (id) DO NOTHING
       RETURNING id

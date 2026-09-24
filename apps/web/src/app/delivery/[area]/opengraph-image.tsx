@@ -1,5 +1,5 @@
 import { brandOgImage, OG_SIZE } from '@/lib/og';
-import { getArea, etaText } from '@/lib/areas';
+import { getArea, feeText } from '@/lib/areas';
 
 export const runtime = 'edge';
 export const alt = "Cheese O'Clock delivery area";
@@ -21,7 +21,7 @@ export default async function Image({ params }: { params: { area: string } }) {
   return brandOgImage({
     title: area ? area.name.toUpperCase() : 'DHA KARACHI',
     subtitle: area
-      ? `PIZZA & BURGER DELIVERY — HOT IN ${etaText(area).toUpperCase()}`
+      ? `PIZZA & BURGER DELIVERY — ${feeText(area).toUpperCase()}`
       : 'PIZZA & BURGER DELIVERY',
     fontData,
   });

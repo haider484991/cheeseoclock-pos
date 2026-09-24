@@ -3,39 +3,43 @@
  * block (pushed from POS branding) overrides these where present — these are
  * the fallbacks so the site renders sensibly before the first publish.
  *
- * IMPORTANT (local SEO): name, address and phone here must stay
- * character-identical to the Google Business Profile listing. This object
- * feeds the footer NAP, the JSON-LD Restaurant graph and the delivery pages —
- * one source of truth, zero drift.
+ * IMPORTANT (local SEO): name, address and phone here should read the same
+ * as the Google Business Profile listing. This object feeds the footer NAP,
+ * the JSON-LD Restaurant graph and the delivery pages — one source of truth,
+ * zero drift.
  */
 export const BUSINESS = {
   name: "Cheese O'Clock",
-  tagline: 'Gourmet pizza & fast food — it’s always Cheese O’Clock.',
+  // The printed menu's line (owner, 25 Sep 2026).
+  tagline: 'Cleanly Made. Deliciously Unforgettable.',
   // Matches the Google Business Profile listing (verified 27 Jul 2026).
   phoneDisplay: '0300 9367865',
   phoneE164: '+923009367865',
 
-  // WhatsApp ordering line. Currently the same number as the call line above,
-  // but kept as its own field so a dedicated WhatsApp line can be split off
-  // without touching the NAP. Keep all three in sync: display, E.164, wa.me.
+  // Primary WhatsApp ordering line (the call line above). Keep all three in
+  // sync: display, E.164, wa.me. Both shop numbers take WhatsApp orders —
+  // whatsappLines is what the site lists; this one is the default deep link.
   whatsappDisplay: '0300 9367865',
   whatsappE164: '+923009367865',
   whatsappUrl: 'https://wa.me/923009367865',
-  // Short form for inline "name · address · hours" strips only. The full,
-  // GBP-exact address lives in streetAddress below and is what the footer
-  // <address> block and the JSON-LD PostalAddress render.
-  addressLine: 'Rahat Commercial, DHA Phase 6, Karachi',
-  hours: 'Open daily · 12pm – 2am',
+  whatsappLines: [
+    { display: '0300 9367865', e164: '+923009367865', url: 'https://wa.me/923009367865' },
+    { display: '0331 2188295', e164: '+923312188295', url: 'https://wa.me/923312188295' },
+  ],
+  // Short form for inline "name · address · hours" strips only. The full
+  // address lives in streetAddress below and is what the footer <address>
+  // block and the JSON-LD PostalAddress render.
+  addressLine: 'Rahat Commercial Area, DHA Phase 6, Karachi',
+  hours: 'Open daily · 12 noon – 1 am',
   openingDate: '15 June 2026',
 
-  // --- Structured address (keep in sync with GBP, char-for-char) ---------
-  // Verified against the live listing 27 Jul 2026. Google formats it as:
-  //   "<streetAddress>, Karachi, 75500, Pakistan"
-  // so these fields reassemble into the GBP string exactly. `region` is not
-  // part of Google's formatted address (it omits Sindh) but is correct and
-  // valid for schema.org addressRegion.
+  // --- Structured address -------------------------------------------------
+  // The owner's corrected address (25 Sep 2026). The Google listing still
+  // repeats "Rahat … Phase 6 … Defence Housing Authority"; edit the listing
+  // to this same wording so the NAP matches everywhere. `region` is not part
+  // of Google's formatted address but is valid for schema.org addressRegion.
   streetAddress:
-    'SHOP-3 GROUND FLOOR, 41-C RAHAT Sehar Lane No. 3, D.H.A Phase 6 Rahat Commercial Area Phase 6 Defence Housing Authority',
+    'Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6',
   locality: 'Karachi',
   region: 'Sindh',
   postalCode: '75500',
@@ -66,11 +70,11 @@ export const BUSINESS = {
   // Matches GBP "price range" tier; used in JSON-LD.
   priceRange: 'PKR 400–2,500',
 
-  // 12:00 → 02:00 next day; Google's LocalBusiness format supports
-  // past-midnight closes on the same entry.
-  openingHours: { opens: '12:00', closes: '02:00' },
+  // 12:00 → 01:00 next day (owner, 25 Sep 2026); Google's LocalBusiness
+  // format supports past-midnight closes on the same entry.
+  openingHours: { opens: '12:00', closes: '01:00' },
 
-  servesCuisine: ['Pizza', 'Burgers', 'Fast Food', 'Wings'],
+  servesCuisine: ['Pizza', 'Burgers', 'Fast Food'],
 } as const;
 
 /** wa.me deep link with a pre-filled, URL-encoded message. */

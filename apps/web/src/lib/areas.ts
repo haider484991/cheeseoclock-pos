@@ -1,13 +1,24 @@
+import { BUSINESS } from './business';
+import { findZone } from './delivery-zones';
+import { formatCents } from './format';
+
 /**
  * Delivery-area data driving the programmatic local-SEO pages at
  * /delivery/[slug]. Every field that renders as page copy is hand-written and
  * genuinely different per area — Google's doorway/scaled-content policies
  * punish synonym-swapped templates, so when adding an area, write real local
- * detail (landmarks, coverage edges, honest ETAs) or merge it into a
+ * detail (landmarks, coverage edges, real menu items) or merge it into a
  * neighbouring page instead.
  *
- * ETAs are kitchen-to-door estimates from the Phase 6 kitchen — tune them to
- * real rider data as it accumulates.
+ * Facts only: the shop delivers in DHA and Clifton ONLY (see
+ * delivery-zones.ts), is open daily 12 noon – 1 am, and takes cash on
+ * delivery. Delivery times are NOT confirmed — never write a minute count
+ * into this copy. Menu items named here must exist on the printed menu.
+ *
+ * Fees are never typed into this file's structure: each area lists the
+ * checkout zone ids it covers (`zoneIds`) and `feeText` reads the fee from
+ * DELIVERY_ZONES, so a rate-card change moves every page's fee chip with it.
+ * (Prose that names a fee — "Rs 200" — must be updated by hand.)
  */
 
 export interface DeliveryArea {
@@ -20,19 +31,21 @@ export interface DeliveryArea {
   title: string;
   /** Meta description, ≤160 chars. */
   description: string;
-  /** Estimated delivery window in minutes. */
-  eta: { min: number; max: number };
+  /** DELIVERY_ZONES ids (delivery-zones.ts) this page covers — drives feeText. */
+  zoneIds: string[];
   /** Hand-written intro paragraphs — the unique meat of the page. */
   intro: string[];
   /** Streets / commercial areas / landmarks we actually cover. */
   landmarks: string[];
-  /** What people in this area order most (brand copy, links to /menu). */
+  /** Real menu items to feature on this page (brand copy, links to /menu). */
   popular: Array<{ name: string; blurb: string }>;
   /** Area-specific visible FAQ. */
   faqs: Array<{ q: string; a: string }>;
   /** Slugs of bordering areas for internal linking. */
   adjacent: string[];
 }
+
+const WA_NUMBERS = BUSINESS.whatsappLines.map((l) => l.display).join(' or ');
 
 export const DELIVERY_AREAS: DeliveryArea[] = [
   {
@@ -41,42 +54,51 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 6 — From Our Kitchen Next Door',
     title: 'Pizza & Burger Delivery in DHA Phase 6, Karachi',
     description:
-      'Cheese O’Clock’s kitchen is in Phase 6 — the fastest pizza & burger delivery in the phase. Hot in 20–35 min, cash on delivery. Order online or WhatsApp.',
-    eta: { min: 20, max: 35 },
+      'Cheese O’Clock’s kitchen is in Rahat Commercial, Phase 6 — our shortest ride. Pizza & burgers, Rs 200 delivery, cash on delivery. Open daily till 1 am.',
+    zoneIds: ['dha-6'],
     intro: [
-      'Phase 6 is home turf. Our kitchen sits right here, which means your pizza comes out of the oven and onto your table faster than anywhere else we deliver — usually inside half an hour, still too hot to grab the first slice.',
-      'From Bukhari Commercial lanes to the houses off Khayaban-e-Shahbaz, our riders know every street and every shortcut. Late-night study session, family dinner, or a 1am craving — we are open until 2am, every day.',
+      `Phase 6 is home turf. Our kitchen is at ${BUSINESS.streetAddress}, so Phase 6 is the shortest ride we make. Every order is fired when it comes in, boxed straight from the oven and sent out hot.`,
+      'From the Bukhari Commercial lanes to the houses off Khayaban-e-Shahbaz, delivery anywhere in Phase 6 is Rs 200. Late study session, family dinner or a midnight craving — we are open every day from 12 noon until 1 am.',
     ],
     landmarks: [
+      'Rahat Commercial',
       'Bukhari Commercial',
       'Nishat Commercial',
-      'Rahat Commercial',
       'Muslim Commercial',
       'Khayaban-e-Shahbaz',
       'Khayaban-e-Ittehad',
       'Khayaban-e-Bukhari',
     ],
     popular: [
-      { name: 'Signature cheese-pull pizzas', blurb: 'The ones the brand is named after — extra cheese is the default here.' },
-      { name: 'Double-smash burgers', blurb: 'Smashed to order, never pre-cooked, with our house sauce.' },
-      { name: 'Loaded fries', blurb: 'The Phase 6 midnight favourite — cheese, sauces, crispy bits.' },
+      {
+        name: 'Cheesy Star',
+        blurb: 'Cut like a star, built for sharing, with a Sriracha mayo dip. One of our five Signature pizzas, Large 12".',
+      },
+      {
+        name: 'Crown Crust',
+        blurb: 'Another Signature Large 12" — pair it with a Cheesy Star when there are more than two of you.',
+      },
+      {
+        name: 'Signature Loaded Fries',
+        blurb: 'Pick-up only — we do not deliver these. Living in Phase 6, you are close enough to collect them from the shop in Rahat Commercial.',
+      },
     ],
     faqs: [
       {
-        q: 'How fast is delivery inside DHA Phase 6?',
-        a: 'Usually 20–35 minutes door to door. Our kitchen is inside Phase 6, so you are our quickest delivery zone — most orders arrive in under half an hour.',
+        q: 'Is Phase 6 your quickest delivery area?',
+        a: 'Yes — the kitchen is in Rahat Commercial, Phase 6, so it is the shortest ride we make. Orders are fired when they arrive and sent out hot. Delivery inside Phase 6 is Rs 200.',
       },
       {
         q: 'Do you deliver to Bukhari and Nishat Commercial offices?',
-        a: 'Yes — offices, shops and apartments across all Phase 6 commercial lanes. Add your building name and floor in the order notes and the rider will call when downstairs.',
+        a: 'Yes — offices, shops and apartments across all Phase 6 commercial lanes. Add your building name and floor in the order notes and keep your phone on for the rider.',
       },
       {
         q: 'How late can I order in Phase 6?',
-        a: 'We take orders daily until 2am. Late-night orders in Phase 6 typically arrive in 25 minutes or less since the streets are clear.',
+        a: `We take orders every day from 12 noon until 1 am — on the website, or on WhatsApp at ${WA_NUMBERS}.`,
       },
       {
         q: 'How do I pay?',
-        a: 'Cash on delivery — pay the rider when your food arrives. No card or app required.',
+        a: 'Cash on delivery — pay the rider when your food arrives. Your bill is the menu total plus 15% tax and the Rs 200 delivery fee. No card or app required.',
       },
     ],
     adjacent: ['dha-phase-7', 'dha-phase-5', 'dha-phase-8'],
@@ -87,36 +109,44 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 7, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 7, Karachi',
     description:
-      'Hot pizza & gourmet burger delivery to DHA Phase 7 and Phase 7 Ext in 25–40 min from our Phase 6 kitchen. Cash on delivery — order online or on WhatsApp.',
-    eta: { min: 25, max: 40 },
+      'Pizza & crispy chicken burger delivery to DHA Phase 7 and Phase 7 Ext from our Phase 6 kitchen next door. Rs 200 delivery, cash on delivery.',
+    zoneIds: ['dha-7', 'dha-7-ext'],
     intro: [
-      'Phase 7 sits a few minutes from our ovens, so your order crosses Khayaban-e-Ittehad and lands at your door while the cheese is still moving. Most Phase 7 deliveries arrive in around half an hour.',
-      'We cover the whole phase — the residential streets off Khayaban-e-Sehar, the commercial strip, and Phase 7 Extension down to the Khayaban-e-Shaheen side. If you are unsure about your street, send us a WhatsApp and a rider will confirm in a minute.',
+      'Phase 7 sits right next to our Phase 6 kitchen, so your order is on its way while the cheese is still moving. Every pizza and burger is fired when the ticket comes in.',
+      'We cover the whole phase — the residential streets off Khayaban-e-Sehar, Sehar and Jami Commercial, and Phase 7 Extension — for Rs 200. If you are unsure about your street, send us a WhatsApp before you order.',
     ],
     landmarks: [
       'Khayaban-e-Sehar',
       'Sehar Commercial',
+      'Jami Commercial',
       'Phase 7 Extension',
-      'Khayaban-e-Shaheen side',
-      'Spinzer roundabout area',
     ],
     popular: [
-      { name: 'BBQ chicken pizzas', blurb: 'Smoky, loaded, and a Phase 7 dinner-time staple.' },
-      { name: 'Crispy wings', blurb: 'Tossed in house glaze — order them with extra dip.' },
-      { name: 'Chocolate shakes', blurb: 'The usual add-on to a late Phase 7 order.' },
+      {
+        name: 'Shawarma Pizza',
+        blurb: 'A Signature Large 12" — shawarma night and pizza night, settled in one box.',
+      },
+      {
+        name: 'Nashville Authentic (Hot)',
+        blurb: 'A thigh-marinated crispy chicken fillet in a brioche bun, Nashville-style and properly hot. Add cheese to any burger.',
+      },
+      {
+        name: 'Baked Wings',
+        blurb: 'Six oven-baked wings with a dip — baked, not fried.',
+      },
     ],
     faqs: [
       {
         q: 'Do you deliver to Phase 7 Extension?',
-        a: 'Yes — Phase 7 Ext is fully covered, including the streets toward Khayaban-e-Shaheen. Expect the upper end of the 25–40 minute window for the far edge.',
+        a: 'Yes — Phase 7 Extension has its own option at checkout, at the same Rs 200 fee as the rest of DHA.',
       },
       {
-        q: 'What is the delivery time to Khayaban-e-Sehar?',
-        a: 'Around 25–35 minutes for most of the Sehar side, since it connects straight to our Phase 6 kitchen via Ittehad.',
+        q: 'Which area do I pick at checkout?',
+        a: 'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, either is fine — the fee is Rs 200 both ways.',
       },
       {
         q: 'Is there a minimum order for Phase 7?',
-        a: 'No minimum — though most Phase 7 orders are a deal for two. You pay cash on delivery exactly what the receipt says.',
+        a: 'No minimum on the website. You pay cash on delivery: the menu total plus 15% tax and the Rs 200 delivery fee.',
       },
     ],
     adjacent: ['dha-phase-6', 'dha-phase-8'],
@@ -127,36 +157,50 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 8, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 8, Karachi',
     description:
-      'Cheese O’Clock delivers oven-fresh pizza & smash burgers across DHA Phase 8 — Do Darya side included — in 30–45 min. Cash on delivery, open till 2am.',
-    eta: { min: 30, max: 45 },
+      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side included. Rs 200; Emaar Crescent Bay & Creek Vista Rs 250. Cash on delivery, till 1 am.',
+    zoneIds: ['dha-8', 'emaar', 'creek-vista'],
     intro: [
-      'Phase 8 runs wide — from the Zulfiqar and Murtaza commercial strips out to the sea at Do Darya — and we deliver across all of it. Orders leave our Phase 6 kitchen in insulated bags so the pizza that reaches Creek-side still behaves like it just left the oven.',
-      'Evening sea breeze plans at Do Darya that fell through? Skip the restaurant queue — order in, pay the rider cash, and eat with the same view from home.',
+      'Phase 8 runs wide — from the Zulfiqar and Al-Murtaza commercial strips out to the sea at Do Darya — and we deliver across all of it. Orders leave our Phase 6 kitchen boxed straight from the oven.',
+      'Delivery is Rs 200 across Phase 8, and Rs 250 for Emaar Crescent Bay and Creek Vista, which are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
     ],
     landmarks: [
       'Zulfiqar Commercial',
       'Al-Murtaza Commercial',
       'Do Darya side',
-      'Creek Vista apartments',
+      'Emaar Crescent Bay',
+      'Creek Vista',
       'Khayaban-e-Shaheen',
     ],
     popular: [
-      { name: 'Family-size loaded pizzas', blurb: 'Phase 8 orders big — our large pies feed the whole gathering.' },
-      { name: 'Triple-stack burgers', blurb: 'For appetites that laugh at a single patty.' },
-      { name: 'Wings + fries combos', blurb: 'The standard Phase 8 movie-night order.' },
+      {
+        name: 'Big Two value deal',
+        blurb: 'Two Large 12" regular-menu pizzas and a 1 litre Pepsi — the value deal for a full house.',
+      },
+      {
+        name: 'Meat Lovers',
+        blurb: 'A Signature Large 12" for the meat-first crowd.',
+      },
+      {
+        name: 'Nuggets',
+        blurb: 'Five nuggets with fries and a dip — a side that is nearly a meal.',
+      },
     ],
     faqs: [
       {
         q: 'Do you deliver near Do Darya?',
-        a: 'Yes — the Do Darya side and Creek Vista apartments are covered. Being our farthest Phase 8 corner, those orders land at the 40–45 minute end of the window.',
+        a: 'Yes — the Do Darya side is covered at the standard Phase 8 fee of Rs 200.',
+      },
+      {
+        q: 'Why is delivery to Emaar or Creek Vista Rs 250?',
+        a: 'They are priced as separate zones on our rider service’s rate card — Rs 250 instead of the Rs 200 for the rest of DHA. Pick Emaar Crescent Bay or Creek Vista at checkout and the right fee is added for you.',
       },
       {
         q: 'Will the food still be hot in Phase 8?',
-        a: 'Yes. Orders travel in insulated delivery bags, and pizzas are boxed straight from the oven. If anything ever arrives cold, message us on WhatsApp and we will make it right.',
+        a: 'Orders are boxed straight from the oven and sent out as soon as they are ready. If anything is not right when it arrives, message us on WhatsApp.',
       },
       {
         q: 'Can I order late at night in Phase 8?',
-        a: 'We deliver to Phase 8 until 2am daily — one of the few kitchens still firing for the Creek side after midnight.',
+        a: 'Yes — we take Phase 8 orders every day until 1 am.',
       },
     ],
     adjacent: ['dha-phase-6', 'dha-phase-7'],
@@ -167,39 +211,49 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 5, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 5, Karachi',
     description:
-      'Fresh pizza & loaded burgers delivered across DHA Phase 5 — Khadda Market, 26th Street & beyond — in 25–40 min. Cash on delivery, order online or WhatsApp.',
-    eta: { min: 25, max: 40 },
+      'Pizza & crispy chicken burgers delivered across DHA Phase 5 — Khadda Market, 26th Street, Badar Commercial. Rs 200 delivery, cash on delivery.',
+    zoneIds: ['dha-5'],
     intro: [
-      'Phase 5 neighbours our kitchen, so the ride from oven to your gate is short — usually 25 to 40 minutes across the phase, from the Khadda Market lanes to the quieter streets off Khayaban-e-Tanzeem.',
-      'Phase 5 has plenty of food, but most of it means going out. We bring the gourmet side home: smashed-to-order burgers, pizzas with a proper cheese pull, and shakes — all paid in cash at your door.',
+      'Phase 5 neighbours our Phase 6 kitchen, so the ride from oven to gate is a short one — from the Khadda Market lanes to the quieter streets off Khayaban-e-Tanzeem. Delivery anywhere in Phase 5 is Rs 200.',
+      'Phase 5 has plenty of food, but most of it means going out. We bring it home instead: crispy chicken burgers in brioche buns, Medium or Large pizzas with a proper cheese pull, and masala fries — all paid in cash at your door.',
     ],
     landmarks: [
       'Khadda Market',
       '26th Street',
+      'Tauheed Commercial',
+      'Badar Commercial',
       'Khayaban-e-Tanzeem',
       'Khayaban-e-Bahria',
-      'Saba Avenue side',
     ],
     popular: [
-      { name: 'Smash burgers with fries', blurb: 'The Phase 5 lunch order — quick, hot, properly filling.' },
-      { name: 'Margherita-style cheese pizzas', blurb: 'Simple, daily-proofed dough, very serious cheese.' },
-      { name: 'Glazed wings', blurb: 'A Khadda-side favourite with the cricket on.' },
+      {
+        name: 'Classic Crispy Chicken',
+        blurb: 'A thigh-marinated crispy chicken fillet in a brioche bun — the straightforward one. Add cheese if you like.',
+      },
+      {
+        name: 'Chicken Tikka Pizza',
+        blurb: 'From the regular menu, in Medium 9" or Large 12".',
+      },
+      {
+        name: 'Signature Masala Fries',
+        blurb: 'A Large portion of fries in our masala — the side that goes with everything.',
+      },
     ],
     faqs: [
       {
-        q: 'How long does delivery to Khadda Market take?',
-        a: 'The Khadda Market side is closest to us — usually 25–30 minutes. The far end toward Saba Avenue runs closer to 40.',
+        q: 'Do you deliver around Khadda Market?',
+        a: 'Yes — Khadda Market and the lanes around it are covered at the standard Phase 5 fee of Rs 200.',
       },
       {
         q: 'Do you cover all of 26th Street?',
-        a: 'Yes, the full stretch. For apartment buildings, add the building name in your order notes and the rider will call on arrival.',
+        a: 'Yes, the full stretch. For apartment buildings, add the building name in your order notes and keep your phone on for the rider.',
       },
       {
         q: 'Can I pay by card?',
-        a: 'We are cash on delivery for now — the rider carries change. The exact bill is printed on your receipt from the kitchen.',
+        a: 'Not at the moment — every order is cash on delivery. The bill is the menu total plus 15% tax and the Rs 200 delivery fee.',
       },
     ],
-    adjacent: ['dha-phase-6', 'dha-phase-4', 'gizri'],
+    adjacent: ['dha-phase-6', 'dha-phase-4', 'clifton'],
   },
   {
     slug: 'dha-phase-4',
@@ -207,38 +261,47 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 4, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 4, Karachi',
     description:
-      'Cheese O’Clock delivers hot pizzas & gourmet burgers to DHA Phase 4 in 30–45 min — 9th Commercial, Sunset side and all residential lanes. Cash on delivery.',
-    eta: { min: 30, max: 45 },
+      'Pizza & crispy chicken burgers delivered to DHA Phase 4 and Phase 3 — 9th Commercial, Sunset side and the residential lanes. Rs 200, cash on delivery.',
+    zoneIds: ['dha-4', 'dha-3'],
     intro: [
-      'Phase 4 sits between us and the older phases, and our riders run the route all evening — across the Sunset Boulevard side, the 9th Commercial strip and the residential lanes in between. Expect your order hot in 30 to 45 minutes.',
-      'Order by website in under a minute, or send a WhatsApp with what you want and your street — both land in the same kitchen queue, and both are cash on delivery.',
+      'Phase 4 sits between our kitchen and the older phases, and we deliver across all of it — the Sunset Boulevard side, the 9th Commercial strip and the residential lanes in between. Phase 3 next door is covered too. Delivery to either is Rs 200.',
+      `Order on the website in under a minute, or WhatsApp your order and street to ${WA_NUMBERS} — both land in the same kitchen, and both are cash on delivery.`,
     ],
     landmarks: [
       '9th Commercial Street',
       'Sunset Boulevard side',
-      'Khayaban-e-Badar stretch',
       'Phase 4 residential lanes',
+      'DHA Phase 3',
     ],
     popular: [
-      { name: 'Pepperoni-loaded pizzas', blurb: 'The most reordered Phase 4 item by a margin.' },
-      { name: 'Classic cheeseburgers', blurb: 'House sauce, proper bun, no shortcuts.' },
-      { name: 'Pasta in red sauce', blurb: 'For the one person in the group who is "not feeling pizza".' },
+      {
+        name: 'Classic & Special Pepperoni',
+        blurb: 'Two takes on pepperoni from the regular menu, each in Medium 9" or Large 12".',
+      },
+      {
+        name: 'Crispy Signature',
+        blurb: 'A thigh-marinated crispy chicken fillet in a brioche bun — one step up from the Classic.',
+      },
+      {
+        name: 'Veggie Lovers',
+        blurb: 'Choose any five veggies — for the one person in the group who is not feeling meat.',
+      },
     ],
     faqs: [
       {
-        q: 'What is the delivery time to Phase 4?',
-        a: '30–45 minutes for most addresses. The 9th Commercial side is quickest; lanes toward Sunset Boulevard sit at the later end.',
+        q: 'Do you deliver to DHA Phase 3?',
+        a: 'Yes — pick DHA Phase 3 at checkout. It is Rs 200, the same as Phase 4 and the rest of DHA.',
       },
       {
         q: 'Do you deliver to offices in 9th Commercial?',
-        a: 'Yes — lunch and dinner. Put the office name and floor in the notes, and keep your phone close for the rider’s call.',
+        a: 'Yes — lunch and dinner, from 12 noon. Put the office name and floor in the order notes, and keep your phone close for the rider’s call.',
       },
       {
         q: 'Is WhatsApp ordering available for Phase 4?',
-        a: 'Yes. Message us your order and address on WhatsApp and we will confirm the total and ETA right away.',
+        a: `Yes. Message your order and address to ${WA_NUMBERS} and we will confirm the total right away.`,
       },
     ],
-    adjacent: ['dha-phase-5', 'dha-phase-1-2', 'gizri'],
+    adjacent: ['dha-phase-5', 'dha-phase-1-2'],
   },
   {
     slug: 'dha-phase-1-2',
@@ -246,38 +309,47 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 1 & 2, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 1 & 2, Karachi',
     description:
-      'Oven-fresh pizza & burger delivery to DHA Phase 1 and Phase 2 (incl. Phase 2 Ext) in 35–50 min from Phase 6. Cash on delivery — order online or WhatsApp.',
-    eta: { min: 35, max: 50 },
+      'Pizza & burger delivery to DHA Phase 1, Phase 2 and Phase 2 Ext from our Phase 6 kitchen. Rs 200 delivery, cash on delivery — order online or WhatsApp.',
+    zoneIds: ['dha-1', 'dha-2', 'dha-2-ext'],
     intro: [
-      'The older phases are the longest ride from our Phase 6 ovens, so we are honest about it: Phase 1 and Phase 2 orders take 35 to 50 minutes. What does not change is how the food travels — boxed hot, sealed, in insulated bags.',
-      'We cover both phases as one zone: the Korangi Road side, Amir Khusro Road, the Phase 2 commercial areas and Phase 2 Extension. If your street sits right on the boundary, send a WhatsApp and we will confirm before you order.',
+      'Phase 1 and Phase 2 are the longest ride from our Phase 6 kitchen, and we will not pretend otherwise. What does not change is how the food leaves: fired to order, boxed straight from the oven and sent out hot — for the same Rs 200 as the rest of DHA.',
+      'We cover Phase 1, Phase 2 and Phase 2 Extension: the Korangi Road side, Defence Mor and the Phase 2 Ext lanes. If your street sits right on the boundary, send a WhatsApp and we will confirm before you order.',
     ],
     landmarks: [
-      'Amir Khusro Road side',
       'Korangi Road stretch',
-      'Phase 2 Commercial Area A & B',
+      'Defence Mor',
+      'Phase 2 commercial lanes',
       'Phase 2 Extension',
     ],
     popular: [
-      { name: 'Deal-size pizza combos', blurb: 'Bigger orders make the longer ride worth it — deals are king here.' },
-      { name: 'Double-smash burgers', blurb: 'Still hot after the ride — smashed patties hold their heat.' },
-      { name: 'Loaded fries + shakes', blurb: 'The add-on pair on most Phase 1 & 2 orders.' },
+      {
+        name: 'Family Feast value deal',
+        blurb: 'One Medium and one Large regular-menu pizza with a 1 litre Pepsi — makes the longer ride worth it.',
+      },
+      {
+        name: 'Signature Cheese Dipped',
+        blurb: 'A thigh-marinated crispy chicken fillet, dipped in cheese, in a brioche bun.',
+      },
+      {
+        name: 'Fajita Pizza',
+        blurb: 'A regular-menu pizza in Medium 9" or Large 12" — it fits in the Family Feast too.',
+      },
     ],
     faqs: [
       {
-        q: 'Why is the ETA longer for Phase 1 & 2?',
-        a: 'Simple distance — you are the farthest DHA phases from our Phase 6 kitchen. We quote 35–50 minutes honestly rather than promising 30 and arriving late.',
+        q: 'Do you really deliver this far from Phase 6?',
+        a: 'Yes. Phase 1, Phase 2 and Phase 2 Extension are all on our delivery map at the standard DHA fee of Rs 200. It is the longest ride we make, so order a little ahead if you are feeding people at a set time.',
       },
       {
         q: 'Do you deliver to Phase 2 Extension?',
-        a: 'Yes, Phase 2 Ext is covered. For boundary streets near Korangi Road, drop us a WhatsApp first and we will confirm your address is in zone.',
+        a: 'Yes, Phase 2 Ext has its own option at checkout. We deliver in DHA and Clifton only, so for boundary streets near Korangi Road, drop us a WhatsApp first and we will confirm your address is in zone.',
       },
       {
         q: 'Is it still cash on delivery this far out?',
-        a: 'Always — same as every zone. Pay the rider when the food arrives; the printed receipt is the bill.',
+        a: 'Always — same as every zone. Pay the rider when the food arrives: the menu total plus 15% tax and the Rs 200 delivery fee.',
       },
     ],
-    adjacent: ['dha-phase-4', 'gizri'],
+    adjacent: ['dha-phase-4'],
   },
   {
     slug: 'clifton',
@@ -285,78 +357,58 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in Clifton, Karachi',
     title: 'Pizza & Burger Delivery in Clifton, Karachi',
     description:
-      'Cheese O’Clock delivers gourmet pizza & smash burgers to Clifton — Boat Basin, Schon Circle, Blocks 2–9 — in 35–50 min. Cash on delivery, open till 2am.',
-    eta: { min: 35, max: 50 },
+      'Pizza & burgers delivered to Clifton Blocks 1–9 — Boat Basin, Schon Circle and beyond. Rs 200 (Blocks 1 & 2: Rs 250). Cash on delivery, open till 1 am.',
+    zoneIds: [
+      'clifton-1',
+      'clifton-2',
+      'clifton-3',
+      'clifton-4',
+      'clifton-5',
+      'clifton-6',
+      'clifton-7',
+      'clifton-8',
+      'clifton-9',
+    ],
     intro: [
-      'Clifton has no shortage of food streets — what it lacks at midnight is a kitchen still answering. We deliver across the Clifton blocks from our DHA Phase 6 kitchen until 2am, every day, cash on delivery.',
-      'Coverage runs from the Boat Basin and Schon Circle side through Blocks 2, 4, 5, 7, 8 and 9. Sea View apartments and the blocks past Bilawal Chowrangi sit at the far edge of the window — we will always tell you the honest ETA when you order.',
+      'Clifton has no shortage of food streets — what it lacks at midnight is a kitchen still answering. We deliver across Clifton from our DHA Phase 6 kitchen every day until 1 am, cash on delivery.',
+      'Coverage runs across all nine blocks, from Boat Basin and Schon Circle to Bilawal Chowrangi and the Sea View side. Delivery is Rs 200 for Blocks 3–9 and Rs 250 for Blocks 1 and 2.',
     ],
     landmarks: [
       'Boat Basin',
       'Schon Circle',
       'Bilawal Chowrangi',
-      'Clifton Block 2, 4, 5, 7, 8 & 9',
+      'Clifton Blocks 1–9',
       'Sea View apartments side',
     ],
     popular: [
-      { name: 'Late-night pizza deals', blurb: 'Clifton orders peak after 11pm — we are built for it.' },
-      { name: 'Gourmet burger boxes', blurb: 'Burger + fries + drink, packed for the seaside breeze.' },
-      { name: 'Extra-cheese everything', blurb: 'Clifton consistently out-cheeses every other zone. Respect.' },
+      {
+        name: 'Cheetos',
+        blurb: 'A Signature Large 12" — fajita chicken and jalapeño with creamy cheese and a hot, tangy red spice, with ranch dip.',
+      },
+      {
+        name: 'Perfect Pair value deal',
+        blurb: 'Two Medium 9" regular-menu pizzas and a 1 litre Pepsi — right-sized for two.',
+      },
+      {
+        name: 'Chicken Tikka Malai',
+        blurb: 'The creamy side of tikka, from the regular menu in Medium 9" or Large 12".',
+      },
     ],
     faqs: [
       {
         q: 'Which Clifton blocks do you deliver to?',
-        a: 'Blocks 2, 4, 5, 7, 8 and 9, plus the Boat Basin and Schon Circle areas. If you are in Block 1 or right at the edge, WhatsApp us and we will confirm in a minute.',
+        a: 'All of them — Blocks 1 to 9, including Boat Basin and Schon Circle. Delivery is Rs 200 for Blocks 3–9 and Rs 250 for Blocks 1 and 2.',
       },
       {
-        q: 'How long does delivery to Boat Basin take?',
-        a: 'Around 35–45 minutes most evenings. After midnight the roads clear and Clifton deliveries often beat the quote.',
+        q: 'Do you deliver beyond Clifton?',
+        a: 'No — we deliver in DHA and Clifton only, and the checkout will not take an address outside those zones.',
       },
       {
         q: 'Do you deliver to apartment towers?',
-        a: 'Yes — most of our Clifton orders are towers. Add the tower name and apartment number in the notes; the rider calls from the lobby.',
+        a: 'Yes. Add the tower name and apartment number in the order notes, and keep your phone on for the rider.',
       },
     ],
-    adjacent: ['gizri', 'dha-phase-5'],
-  },
-  {
-    slug: 'gizri',
-    name: 'Gizri & Punjab Colony',
-    h1: 'Fast Food Delivery in Gizri & Punjab Colony, Karachi',
-    title: 'Fast Food Delivery in Gizri & Punjab Colony, Karachi',
-    description:
-      'Hot pizza, burgers & fries delivered to Gizri, Punjab Colony and Delhi Colony in 25–40 min from DHA Phase 6. Cash on delivery — order online or WhatsApp.',
-    eta: { min: 25, max: 40 },
-    intro: [
-      'Gizri sits right between our kitchen and Clifton, which makes it one of our fastest zones outside DHA itself — most orders land in 25 to 40 minutes, straight down Gizri Boulevard.',
-      'We deliver across Gizri, Punjab Colony and Delhi Colony. Order from the website or just WhatsApp your order and street — and pay the rider in cash when it arrives, no apps and no cards needed.',
-    ],
-    landmarks: [
-      'Gizri Boulevard',
-      'Punjab Colony',
-      'Delhi Colony',
-      'Ch. Khaliq-uz-Zaman Road side',
-    ],
-    popular: [
-      { name: 'Crispy chicken burgers', blurb: 'The Gizri go-to — crunchy, saucy, generous.' },
-      { name: 'Fries family packs', blurb: 'Big bags for big households; ask for extra masala.' },
-      { name: 'Personal pizzas', blurb: 'One-person pies that beat the dhaaba queue.' },
-    ],
-    faqs: [
-      {
-        q: 'Do you deliver inside Punjab Colony lanes?',
-        a: 'Yes — riders deliver to the main lanes; for the narrowest streets the rider may call you to meet at the lane entrance.',
-      },
-      {
-        q: 'How fast is delivery to Gizri Boulevard?',
-        a: 'Addresses on or just off the Boulevard usually see 25–35 minutes. Delhi Colony edges run slightly longer.',
-      },
-      {
-        q: 'What if I do not have exact address details?',
-        a: 'Share a nearby landmark in the notes (mosque, bakery, school) and keep your phone on — the rider will call as he enters the area.',
-      },
-    ],
-    adjacent: ['dha-phase-5', 'clifton', 'dha-phase-4'],
+    adjacent: ['dha-phase-5'],
   },
 ];
 
@@ -364,6 +416,21 @@ export function getArea(slug: string): DeliveryArea | undefined {
   return DELIVERY_AREAS.find((a) => a.slug === slug);
 }
 
-export function etaText(area: DeliveryArea): string {
-  return `${area.eta.min}–${area.eta.max} min`;
+/**
+ * The page's delivery-fee label, read from DELIVERY_ZONES: "Rs 200 delivery"
+ * when every zone on the page costs the same, "Rs 200–250 delivery" when not.
+ * Throws on an unknown zone id so a typo fails the build instead of shipping
+ * a wrong fee.
+ */
+export function feeText(area: DeliveryArea): string {
+  const fees = area.zoneIds.map((id) => {
+    const zone = findZone(id);
+    if (!zone) throw new Error(`areas.ts: "${area.slug}" lists unknown delivery zone "${id}"`);
+    return zone.feeCents;
+  });
+  if (fees.length === 0) throw new Error(`areas.ts: "${area.slug}" lists no delivery zones`);
+  const min = Math.min(...fees);
+  const max = Math.max(...fees);
+  if (min === max) return `${formatCents(min)} delivery`;
+  return `${formatCents(min)}–${formatCents(max).replace(/^Rs\s*/, '')} delivery`;
 }

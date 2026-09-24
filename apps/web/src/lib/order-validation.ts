@@ -1,4 +1,25 @@
 import type { PublishedMenuItem } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeItem } from './delivery-zones';
+import { isPickupOnly, splitSizedName } from './menu-view';
+
+/**
+ * Items the website must not put on a delivery order even though the till
+ * published them: the delivery-charge items (the server adds the right one
+ * from the customer's zone — a client must not pick its own fee), and items
+ * the printed menu marks "Pick up only".
+ *
+ * @returns a customer-facing message, or null when the item may be ordered.
+ */
+export function validateOrderable(item: PublishedMenuItem): string | null {
+  if (isDeliveryChargeItem(item)) {
+    return 'The delivery charge is added from your delivery area — please refresh the menu.';
+  }
+  if (isPickupOnly(item)) {
+    const { base } = splitSizedName(item.name);
+    return `${base} is pick-up only, so we can't deliver it. Remove it to order delivery, or ask for it on WhatsApp.`;
+  }
+  return null;
+}
 
 /**
  * Enforce the modifier-group rules server-side.

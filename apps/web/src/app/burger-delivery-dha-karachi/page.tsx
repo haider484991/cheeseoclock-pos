@@ -4,53 +4,59 @@ import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
 import { OrderCtaBand } from '@/components/OrderCtaBand';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
-import { DELIVERY_AREAS, etaText } from '@/lib/areas';
+import { ShowcaseVisual } from '@/components/ShowcaseVisual';
+import { DELIVERY_AREAS, feeText } from '@/lib/areas';
+import { FEE_SUMMARY } from '@/lib/delivery-zones';
+import { formatCents } from '@/lib/format';
 import { JsonLd, webPageNode } from '@/lib/seo';
 
 export const metadata: Metadata = {
-  title: 'Burger Delivery in DHA Karachi — Smashed to Order',
+  title: 'Burger Delivery in DHA Karachi — Crispy Chicken on Brioche',
   description:
-    'Gourmet smash burgers delivered across DHA Phases 1–8, Clifton & Gizri. Smashed when your ticket prints, hot in 30–45 min, cash on delivery, open till 2am.',
+    'Crispy chicken burgers — thigh-marinated fillets in brioche buns — delivered across DHA Phases 1–8 and Clifton. Cash on delivery, open daily till 1 am.',
   alternates: { canonical: '/burger-delivery-dha-karachi' },
 };
 
 const WHY = [
   {
-    img: '/images/burger-stack.jpg',
-    alt: 'Double smash burger with melting cheese and house sauce',
-    title: 'Smashed when you order',
-    body: 'Patties hit the hot plate when your ticket prints — not before. The smash gives crispy lace edges and a juicy centre that survives the ride.',
+    img: '/images/menu/signature-cheese-dipped.webp' as string | null,
+    alt: 'Signature Cheese Dipped crispy chicken burger',
+    fallback: { big: 'Crispy chicken', small: 'Thigh fillet · brioche bun' },
+    title: 'Crispy chicken, thigh meat',
+    body: 'Every burger is built on a thigh-marinated crispy chicken fillet in a brioche bun, made when your order comes in.',
   },
   {
-    img: '/images/burger-triple.jpg',
-    alt: 'Triple-stack burger with crispy strips on a black background',
-    title: 'Stacks for real appetites',
-    body: 'Singles, doubles and triple-stacks with proper cheese between every patty. Pick your fighter on the menu and customize the works.',
+    img: null as string | null,
+    alt: 'Four crispy chicken burgers',
+    fallback: { big: '4 burgers', small: 'Rs 700 – Rs 950' },
+    title: 'Four burgers, pick your level',
+    body: 'Classic Crispy Chicken, Crispy Signature, Signature Cheese Dipped and Nashville Authentic (Hot). Add cheese to any burger for Rs 100.',
   },
   {
-    img: '/images/fries-loaded.jpg',
-    alt: 'Basket of crispy fries with cheese and herbs',
+    img: null as string | null,
+    alt: 'Fries and sides',
+    fallback: { big: 'Fries & sides', small: 'From Rs 300' },
     title: 'Sides that keep up',
-    body: 'Loaded fries, sticky wings and thick shakes — built to travel, packed separately so nothing arrives soggy.',
+    body: 'Fries, Signature Masala and Mayo Masala Fries, five nuggets with fries and a dip, or six oven-baked wings. (Signature Loaded Fries are pick-up only.)',
   },
 ];
 
 const FAQS = [
   {
-    q: 'Do smash burgers travel well?',
-    a: 'Better than most — the crust from the smash holds heat and texture. We also pack burgers wrapped snug and boxed flat, with sides in their own compartment so steam does not soften anything.',
+    q: 'What goes into your burgers?',
+    a: 'A thigh-marinated crispy chicken fillet in a brioche bun. Start with the Classic Crispy Chicken, step up to the Crispy Signature or the Signature Cheese Dipped, or go Nashville Authentic if you want heat. Add cheese to any of them for Rs 100.',
   },
   {
-    q: 'How long does burger delivery take in DHA?',
-    a: '20–35 minutes inside Phase 6, where the kitchen lives; 25–45 for the neighbouring phases and Gizri; up to 50 for Clifton and Phase 1 & 2. Track it live after you order.',
+    q: 'Where do you deliver burgers?',
+    a: `DHA and Clifton only, from our kitchen in Rahat Commercial, Phase 6. Delivery is ${FEE_SUMMARY.map((f) => `${formatCents(f.feeCents)} for ${f.places.replace(' · ', ', ')}`).join('; ')}. You can follow your order’s status after checkout.`,
   },
   {
     q: 'Can I get a burger deal for a group?',
-    a: 'Yes — combos and family deals are on the online menu, and for office or gathering orders you can WhatsApp us; we will suggest the best-value spread for your headcount.',
+    a: 'Our value deals are pizza deals — Big Two, Family Feast and Perfect Pair. For a group burger order, WhatsApp us your headcount and we will help you put it together.',
   },
   {
     q: 'Is payment cash only?',
-    a: 'Cash on delivery on every order — no cards or wallets needed. The rider carries change and your printed receipt is the bill.',
+    a: 'Cash on delivery on every order — no cards or wallets needed. The bill is the menu total plus 15% tax and your area’s delivery fee.',
   },
 ];
 
@@ -67,18 +73,17 @@ export default function BurgerDeliveryPage() {
             / <span className="text-cream/80">Burger delivery DHA Karachi</span>
           </nav>
           <h1 className="mt-4 font-display text-4xl leading-[0.95] tracking-wide text-cream md:text-6xl">
-            BURGER DELIVERY IN DHA KARACHI — SMASHED TO ORDER
+            BURGER DELIVERY IN DHA KARACHI — CRISPY CHICKEN ON BRIOCHE
           </h1>
           <p className="mt-5 leading-relaxed text-cream/80">
-            DHA has burger spots on every other street — but most of what gets
-            delivered was cooked before you ordered. Ours work the other way:
-            the patty hits the plate when your ticket prints in our Phase 6
-            kitchen, gets its cheese, sauce and proper bun, and rides out hot
-            across DHA, Clifton and Gizri.
+            DHA has burger spots on every other street. Ours keeps it to
+            chicken and does it properly: a thigh-marinated crispy chicken
+            fillet in a brioche bun, made when your order lands in our Phase 6
+            kitchen and sent out hot across DHA and Clifton.
           </p>
           <p className="mt-4 leading-relaxed text-cream/80">
             Order online in under a minute or send a WhatsApp — both are cash
-            on delivery, every day from noon to 2am.
+            on delivery, every day from 12 noon to 1 am.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
@@ -95,15 +100,7 @@ export default function BurgerDeliveryPage() {
             {WHY.map((w, i) => (
               <Reveal key={w.title} delay={i * 80}>
                 <div className="h-full overflow-hidden rounded-2xl border border-white/10 bg-night-card">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={w.img}
-                    alt={w.alt}
-                    width={1200}
-                    height={900}
-                    loading="lazy"
-                    className="aspect-[4/3] w-full object-cover"
-                  />
+                  <ShowcaseVisual img={w.img} alt={w.alt} fallback={w.fallback} />
                   <div className="p-5">
                     <h2 className="text-lg font-bold text-cream">{w.title}</h2>
                     <p className="mt-1 text-sm leading-relaxed text-smoke">{w.body}</p>
@@ -120,8 +117,8 @@ export default function BurgerDeliveryPage() {
               BURGER DELIVERY AREAS
             </h2>
             <p className="mt-3 text-smoke">
-              Fired in Phase 6, delivered across the map — tap your area for
-              streets covered and honest ETAs.
+              Fired in Phase 6, delivered across DHA and Clifton — tap your
+              area for the streets we cover and its delivery fee.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               {DELIVERY_AREAS.map((a) => (
@@ -130,7 +127,7 @@ export default function BurgerDeliveryPage() {
                   href={`/delivery/${a.slug}`}
                   className="rounded-full border border-white/15 px-4 py-2 text-sm font-semibold text-cream/80 transition-colors hover:border-cheese/60 hover:text-cheese"
                 >
-                  {a.name} · {etaText(a)}
+                  {a.name} · {feeText(a)}
                 </Link>
               ))}
             </div>
@@ -171,7 +168,7 @@ export default function BurgerDeliveryPage() {
           path: '/burger-delivery-dha-karachi',
           name: 'Burger Delivery in DHA Karachi',
           description:
-            'Smash burgers made to order, delivered hot across DHA Karachi, Clifton and Gizri — cash on delivery, open till 2am.',
+            'Crispy chicken burgers in brioche buns, delivered across DHA Karachi and Clifton — cash on delivery, open till 1 am.',
           breadcrumb: [
             { name: 'Home', path: '/' },
             { name: 'Burger delivery DHA Karachi', path: '/burger-delivery-dha-karachi' },

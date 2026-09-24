@@ -48,12 +48,15 @@ export function SiteFooter() {
       <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <BrandMark className="!h-12" />
-          <p className="mt-4 max-w-xs text-sm leading-relaxed text-smoke">
-            Premium fast food fired fresh in DHA Phase 6 — signature cheese-pull
-            pizzas, smash burgers and late-night cravings, delivered hot.
+          <p className="mt-4 max-w-xs font-cond text-lg font-semibold italic text-cream/85">
+            {BUSINESS.tagline}
           </p>
-          <p className="mt-4 inline-flex items-center gap-2 rounded-full border border-cheese/30 bg-cheese/10 px-3 py-1.5 text-xs font-bold text-cheese">
-            💵 Cash on delivery — no cards, no apps
+          <p className="mt-2 max-w-xs text-sm leading-relaxed text-smoke">
+            Signature pizzas, crispy chicken burgers and fries, made to order in
+            DHA Phase 6 and delivered all over DHA &amp; Clifton.
+          </p>
+          <p className="mt-4 inline-flex items-center gap-2 rounded-full border border-cheese/30 bg-cheese/10 px-3 py-1.5 font-cond text-sm font-bold uppercase tracking-wide text-cheese">
+            Cash on delivery · 15% tax on the bill
           </p>
         </div>
 
@@ -64,9 +67,9 @@ export function SiteFooter() {
           <address className="not-italic leading-relaxed text-cream/80">
             {BUSINESS.name}
             <br />
-            {BUSINESS.streetAddress}, {BUSINESS.locality}
+            {BUSINESS.streetAddress},
             <br />
-            {BUSINESS.region} {BUSINESS.postalCode}, Pakistan
+            {BUSINESS.locality} {BUSINESS.postalCode}, {BUSINESS.region}, Pakistan
           </address>
           <p className="mt-2 text-cream/80">{BUSINESS.hours}</p>
           <a
@@ -89,16 +92,13 @@ export function SiteFooter() {
                 Order online — full menu
               </Link>
             </li>
-            <li>
-              <a
-                href={BUSINESS.whatsappUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-cheese"
-              >
-                Order on WhatsApp
-              </a>
-            </li>
+            {BUSINESS.whatsappLines.map((l) => (
+              <li key={l.url}>
+                <a href={l.url} target="_blank" rel="noopener noreferrer" className="hover:text-cheese">
+                  WhatsApp {l.display}
+                </a>
+              </li>
+            ))}
             <li>
               <a href={`tel:${BUSINESS.phoneE164}`} className="hover:text-cheese">
                 Call {BUSINESS.phoneDisplay}
@@ -129,7 +129,7 @@ export function SiteFooter() {
             </li>
             <li>
               <Link href="/late-night-food-delivery-dha" className="hover:text-cheese">
-                Late-night delivery (till 2am)
+                Late-night delivery (till 1 am)
               </Link>
             </li>
           </ul>

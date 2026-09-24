@@ -6,7 +6,7 @@ import { OrderCtaBand } from '@/components/OrderCtaBand';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
 import { BUSINESS, waLink } from '@/lib/business';
-import { DELIVERY_AREAS, getArea, etaText } from '@/lib/areas';
+import { DELIVERY_AREAS, getArea, feeText } from '@/lib/areas';
 import { JsonLd, webPageNode } from '@/lib/seo';
 
 export const dynamicParams = false;
@@ -67,13 +67,13 @@ export default function AreaPage({ params }: { params: { area: string } }) {
 
           <ul className="mt-6 flex flex-wrap gap-2 text-sm font-bold">
             <li className="rounded-full bg-cheese px-4 py-2 text-night">
-              🛵 {etaText(area)} to your door
+              🛵 {feeText(area)}
             </li>
             <li className="rounded-full border border-white/15 px-4 py-2 text-cream/80">
               💵 Cash on delivery
             </li>
             <li className="rounded-full border border-white/15 px-4 py-2 text-cream/80">
-              🌙 Daily 12pm – 2am
+              🌙 {BUSINESS.hours}
             </li>
           </ul>
 
@@ -99,6 +99,23 @@ export default function AreaPage({ params }: { params: { area: string } }) {
               💬 WhatsApp your order
             </a>
           </div>
+          <p className="mt-3 text-sm text-smoke">
+            WhatsApp orders on{' '}
+            {BUSINESS.whatsappLines.map((l, i) => (
+              <span key={l.e164}>
+                {i > 0 && ' or '}
+                <a
+                  href={`${l.url}?text=${encodeURIComponent(waMessage)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-semibold text-cheese hover:text-cheese-hot"
+                >
+                  {l.display}
+                </a>
+              </span>
+            ))}
+            .
+          </p>
 
           {/* Coverage */}
           <Reveal>
@@ -126,7 +143,7 @@ export default function AreaPage({ params }: { params: { area: string } }) {
                 >
                   Ask on WhatsApp
                 </a>{' '}
-                — we answer in a minute.
+                and we will confirm before you order.
               </p>
             </section>
           </Reveal>
@@ -135,7 +152,7 @@ export default function AreaPage({ params }: { params: { area: string } }) {
           <Reveal>
             <section className="mt-12">
               <h2 className="font-display text-3xl tracking-wide text-cream">
-                WHAT {area.name.toUpperCase()} ORDERS MOST
+                MENU PICKS FOR {area.name.toUpperCase()}
               </h2>
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 {area.popular.map((p) => (
@@ -194,7 +211,7 @@ export default function AreaPage({ params }: { params: { area: string } }) {
                       href={`/delivery/${a.slug}`}
                       className="rounded-full border border-white/15 px-4 py-2 text-sm font-semibold text-cream/80 transition-colors hover:border-cheese/60 hover:text-cheese"
                     >
-                      {a.name} · {etaText(a)}
+                      {a.name} · {feeText(a)}
                     </Link>
                   ))}
                   <Link

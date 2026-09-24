@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Cheese O'Clock — Pizza & Burger Delivery",
     short_name: "Cheese O'Clock",
     description:
-      'Signature pizzas & smash burgers delivered across DHA Karachi. Cash on delivery, open till 2am.',
+      'Signature pizzas, crispy chicken burgers and fries delivered across DHA & Clifton. Cash on delivery, open 12 noon – 1 am.',
     start_url: '/',
     display: 'standalone',
     background_color: '#0C0A07',

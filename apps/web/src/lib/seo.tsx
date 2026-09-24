@@ -1,6 +1,7 @@
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 import { BUSINESS } from './business';
 import { DELIVERY_AREAS } from './areas';
+import { isDeliveryChargeItem } from './delivery-zones';
 
 /**
  * JSON-LD builders for the local-SEO entity graph.
@@ -41,10 +42,11 @@ export function restaurantNode(): Record<string, unknown> {
     name: BUSINESS.name,
     url: SITE_URL,
     logo: `${SITE_URL}/logo.png`,
+    // The shop's own food — never stock photos.
     image: [
-      `${SITE_URL}/images/hero-cheese-pull.jpg`,
-      `${SITE_URL}/images/pizza-cheesy.jpg`,
-      `${SITE_URL}/images/burger-stack.jpg`,
+      `${SITE_URL}/images/menu/cheesy-star.webp`,
+      `${SITE_URL}/images/menu/crown-crust.webp`,
+      `${SITE_URL}/images/menu/signature-cheese-dipped.webp`,
     ],
     telephone: BUSINESS.phoneE164,
     servesCuisine: [...BUSINESS.servesCuisine],
@@ -112,6 +114,8 @@ export function webSiteNode(): Record<string, unknown> {
 export function menuNode(menu: PublishedMenu): Record<string, unknown> {
   const sections = [...menu.categories]
     .sort((a, b) => a.displayOrder - b.displayOrder)
+    // Delivery charges are till items, not food — keep them out of the Menu.
+    .map((c) => ({ ...c, items: c.items.filter((i) => !isDeliveryChargeItem(i)) }))
     .filter((c) => c.items.length > 0)
     .map((c) => ({
       '@type': 'MenuSection',
