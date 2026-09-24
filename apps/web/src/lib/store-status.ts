@@ -50,6 +50,12 @@ export interface StoreStatus {
   updatedAt: string | null;
   /** True when the till has gone quiet — treated as closed. */
   stale: boolean;
+  /**
+   * The checkout may offer pickup: the shop is taking orders AND the till
+   * announced it can import pickup orders (POS heartbeat `features`). A till
+   * that predates pickup would book them as deliveries at full price.
+   */
+  pickupAvailable: boolean;
 }
 
 export const CLOSED: StoreStatus = {
@@ -57,6 +63,7 @@ export const CLOSED: StoreStatus = {
   posAcceptingOrders: false,
   updatedAt: null,
   stale: true,
+  pickupAvailable: false,
 };
 
 /**
@@ -64,7 +71,7 @@ export const CLOSED: StoreStatus = {
  * counts while it is both affirmative and recent.
  */
 export function evaluateStatus(
-  row: { accepting_orders: boolean; updated_at: string | Date } | null,
+  row: { accepting_orders: boolean; updated_at: string | Date; pickup?: boolean | null } | null,
   now: number = Date.now(),
 ): StoreStatus {
   if (!row) return CLOSED;
@@ -79,6 +86,7 @@ export function evaluateStatus(
     posAcceptingOrders: posAccepting,
     updatedAt: updatedAt.toISOString(),
     stale,
+    pickupAvailable: posAccepting && !stale && row.pickup === true,
   };
 }
 
@@ -99,6 +107,10 @@ function ensureStatusTable(): Promise<void> {
           updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
         )
       `;
+      // Added with pickup orders; a table from before then gains it here.
+      await sql()`
+        ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup BOOLEAN NOT NULL DEFAULT false
+      `;
     })().catch((e) => {
       // Let the next call retry rather than caching the failure forever.
       tableReady = null;
@@ -114,13 +126,14 @@ export async function getStoreStatus(): Promise<StoreStatus> {
   // `next dev` only, never a production build.
   if (process.env.NODE_ENV === 'development' && process.env['DEV_MENU_FILE']) {
     const open = process.env['DEV_ACCEPTING_ORDERS'] === '1';
-    return { acceptingOrders: open, posAcceptingOrders: open, updatedAt: null, stale: false };
+    const pickupAvailable = open && process.env['DEV_PICKUP'] === '1';
+    return { acceptingOrders: open, posAcceptingOrders: open, updatedAt: null, stale: false, pickupAvailable };
   }
   try {
     await ensureStatusTable();
     const rows = (await sql()`
-      SELECT accepting_orders, updated_at FROM store_status WHERE id = 1
-    `) as Array<{ accepting_orders: boolean; updated_at: string | Date }>;
+      SELECT accepting_orders, updated_at, pickup FROM store_status WHERE id = 1
+    `) as Array<{ accepting_orders: boolean; updated_at: string | Date; pickup: boolean }>;
     return evaluateStatus(rows[0] ?? null);
   } catch (e) {
     console.error('store status read failed', e);
@@ -132,14 +145,18 @@ export async function getStoreStatus(): Promise<StoreStatus> {
 export async function setStoreStatus(input: {
   acceptingOrders: boolean;
   deviceId?: string | null;
+  /** The till can import pickup orders (its heartbeat lists 'pickup'). */
+  pickup?: boolean;
 }): Promise<StoreStatus> {
   await ensureStatusTable();
+  const pickup = input.pickup === true;
   await sql()`
-    INSERT INTO store_status (id, accepting_orders, device_id, updated_at)
-    VALUES (1, ${input.acceptingOrders}, ${input.deviceId ?? null}, now())
+    INSERT INTO store_status (id, accepting_orders, device_id, pickup, updated_at)
+    VALUES (1, ${input.acceptingOrders}, ${input.deviceId ?? null}, ${pickup}, now())
     ON CONFLICT (id) DO UPDATE
       SET accepting_orders = EXCLUDED.accepting_orders,
           device_id        = EXCLUDED.device_id,
+          pickup           = EXCLUDED.pickup,
           updated_at       = now()
   `;
   return {
@@ -147,5 +164,6 @@ export async function setStoreStatus(input: {
     posAcceptingOrders: input.acceptingOrders,
     updatedAt: new Date().toISOString(),
     stale: false,
+    pickupAvailable: input.acceptingOrders && pickup,
   };
 }

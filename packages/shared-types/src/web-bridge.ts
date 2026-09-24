@@ -82,6 +82,30 @@ export interface WebOrderItem {
   notes: string | null;
 }
 
+/**
+ * How the customer gets the food. 'pickup' = collected from the shop, with
+ * PICKUP_DISCOUNT_PERCENT off. Orders from sites that predate pickup carry no
+ * fulfilment field and are deliveries.
+ */
+export type WebFulfilment = 'delivery' | 'pickup';
+
+/** The printed menu's offer: "10% OFF · order online & pick up". */
+export const PICKUP_DISCOUNT_PERCENT = 10;
+
+/**
+ * Capabilities a till announces in its heartbeat (PUT /api/bridge/status).
+ * The site only offers pickup while the listening till says it can import
+ * pickup orders — an older POS would book them as deliveries at full price.
+ */
+export type TillFeature = 'pickup';
+
+/** Body for PUT /api/bridge/status (the till's heartbeat). */
+export interface BridgeHeartbeatBody {
+  acceptingOrders: boolean;
+  deviceId?: string | null;
+  features?: TillFeature[];
+}
+
 export type WebOrderStatus =
   | 'new' // placed on the site, not yet seen by the POS
   | 'accepted' // imported into the POS (ack'd)
@@ -97,12 +121,17 @@ export interface WebOrder {
   status: WebOrderStatus;
   customerName: string;
   customerPhone: string;
+  /** For a pickup order, a fixed "collect from the shop" line. */
   addressLine: string;
   area: string | null;
   notes: string | null;
+  /** Absent on orders from sites that predate pickup: a delivery. */
+  fulfilment?: WebFulfilment;
   items: WebOrderItem[];
   /** Estimates computed by the site; the POS receipt is authoritative. */
   subtotalCents: number;
+  /** The pickup discount the site showed (0 for deliveries). */
+  discountCents?: number;
   taxCents: number;
   totalCents: number;
   paymentMethod: 'cod';

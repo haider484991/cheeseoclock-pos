@@ -1,7 +1,8 @@
 /**
  * POST /api/orders on a real Postgres (PGlite, in memory, with db/schema.sql):
  * delivery zones are enforced, the zone's fee reaches the till as its
- * "Delivery Charge (Rs N)" item, and pick-up-only food is refused.
+ * "Delivery Charge (Rs N)" item, pick-up-only food is refused for delivery,
+ * and pickup (10% off) is offered only while the till announced it.
  */
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
@@ -16,6 +17,25 @@ vi.mock('@/lib/db', () => ({
 }));
 
 const orders = await import('@/app/api/orders/route');
+const bridgeStatus = await import('@/app/api/bridge/status/route');
+const bridgeOrders = await import('@/app/api/bridge/orders/route');
+const storeStatus = await import('@/app/api/store-status/route');
+
+const SECRET = 'test-bridge-secret-0123456789';
+function bridge(path: string, init?: { method?: string; body?: unknown }) {
+  return new Request(`https://site.test${path}`, {
+    method: init?.method ?? 'GET',
+    headers: { authorization: `Bearer ${SECRET}`, 'content-type': 'application/json' },
+    body: init?.body === undefined ? undefined : JSON.stringify(init.body),
+  });
+}
+/** The till's heartbeat, with or without the pickup capability. */
+async function heartbeat(features?: string[]) {
+  const res = await bridgeStatus.PUT(
+    bridge('/api/bridge/status', { method: 'PUT', body: { acceptingOrders: true, deviceId: 'till-1', features } }),
+  );
+  expect(res.status).toBe(200);
+}
 
 function item(id: string, name: string, priceRs: number, over: Partial<PublishedMenuItem> = {}): PublishedMenuItem {
   return {
@@ -88,13 +108,16 @@ async function place(body: Record<string, unknown>) {
     }),
   });
   const res = await orders.POST(req);
-  return { status: res.status, json: (await res.json()) as { ok: boolean; error?: string; message?: string; data?: { orderId: string; subtotalCents: number; taxCents: number; totalCents: number } } };
+  return { status: res.status, json: (await res.json()) as { ok: boolean; error?: string; message?: string; data?: { orderId: string; fulfilment: string; subtotalCents: number; discountCents: number; taxCents: number; totalCents: number } } };
 }
 
 async function stored(id: string) {
-  const rows = (await db.pg.query(`SELECT area, notes, items_json, subtotal_cents, tax_cents, total_cents FROM web_orders WHERE id = $1`, [id])).rows as Array<{
+  const rows = (await db.pg.query(`SELECT area, address_line, notes, fulfilment, items_json, subtotal_cents, discount_cents, tax_cents, total_cents FROM web_orders WHERE id = $1`, [id])).rows as Array<{
     area: string;
+    address_line: string;
     notes: string | null;
+    fulfilment: string;
+    discount_cents: number;
     items_json: WebOrderItem[] | string;
     subtotal_cents: number;
     tax_cents: number;
@@ -106,17 +129,14 @@ async function stored(id: string) {
 }
 
 beforeAll(async () => {
+  process.env['BRIDGE_SECRET'] = SECRET;
   db.pg = new PGlite() as unknown as typeof db.pg;
   await (db.pg as unknown as PGlite).exec(readFileSync(new URL('../../db/schema.sql', import.meta.url), 'utf8'));
 });
 
 beforeEach(async () => {
   // The till is on and listening.
-  await db.pg.query(
-    `INSERT INTO store_status (id, accepting_orders, updated_at) VALUES (1, true, now())
-     ON CONFLICT (id) DO UPDATE SET accepting_orders = true, updated_at = now()`,
-    [],
-  );
+  await heartbeat();
   await publish(menu(true));
 });
 
@@ -182,5 +202,66 @@ describe('POST /api/orders — delivery zones', () => {
     const r = await place({ zoneId: 'dha-1', notes: 'x'.repeat(500) });
     const row = await stored(r.json.data!.orderId);
     expect(row.notes!.length).toBeLessThanOrEqual(490);
+  });
+});
+
+describe('POST /api/orders — pickup, 10% off', () => {
+  it('is not offered until the till announces it can import pickups', async () => {
+    const off = await place({ fulfilment: 'pickup', addressLine: undefined });
+    expect(off.status).toBe(409);
+    expect(off.json.error).toBe('pickup_unavailable');
+    const before = (await (await storeStatus.GET()).json()) as { data: { pickupAvailable: boolean } };
+    expect(before.data.pickupAvailable).toBe(false);
+
+    await heartbeat(['pickup']);
+    const after = (await (await storeStatus.GET()).json()) as { data: { pickupAvailable: boolean } };
+    expect(after.data.pickupAvailable).toBe(true);
+  });
+
+  it('takes 10% off, needs no zone or address, and adds no delivery charge', async () => {
+    await heartbeat(['pickup']);
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, notes: 'Collecting at 9' });
+    expect(r.status).toBe(200);
+    expect(r.json.data).toMatchObject({
+      fulfilment: 'pickup',
+      subtotalCents: 200_000,
+      discountCents: 20_000,
+      taxCents: 27_000, // 15% of the discounted 1,800 — the till's own maths
+      totalCents: 207_000,
+    });
+    const row = await stored(r.json.data!.orderId);
+    expect(row.fulfilment).toBe('pickup');
+    expect(row.discount_cents).toBe(20_000);
+    expect(row.items.map((i) => i.posItemId)).toEqual(['fajita-l']);
+    expect(row.area).toBe('Pick-up');
+    expect(row.address_line).toMatch(/collects from the shop/);
+    expect(row.notes).toBe('Collecting at 9');
+  });
+
+  it('sells pick-up-only food on a pickup', async () => {
+    await heartbeat(['pickup']);
+    const r = await place({
+      fulfilment: 'pickup',
+      items: [{ posItemId: 'loaded', quantity: 1, modifierIds: [] }],
+    });
+    expect(r.status).toBe(200);
+    expect(r.json.data!.discountCents).toBe(7_000);
+  });
+
+  it('closes pickup again when a till without it takes over', async () => {
+    await heartbeat(['pickup']);
+    await heartbeat();
+    expect((await place({ fulfilment: 'pickup' })).json.error).toBe('pickup_unavailable');
+  });
+
+  it('hands the till fulfilment and discount; deliveries stay deliveries', async () => {
+    await heartbeat(['pickup']);
+    const p = await place({ fulfilment: 'pickup' });
+    const d = await place({ zoneId: 'dha-6' });
+    const res = await bridgeOrders.GET(bridge('/api/bridge/orders'));
+    const json = (await res.json()) as { data: Array<{ id: string; fulfilment: string; discountCents: number; addressLine: string }> };
+    const byId = new Map(json.data.map((o) => [o.id, o]));
+    expect(byId.get(p.json.data!.orderId)).toMatchObject({ fulfilment: 'pickup', discountCents: 20_000 });
+    expect(byId.get(d.json.data!.orderId)).toMatchObject({ fulfilment: 'delivery', discountCents: 0, addressLine: 'House 12, Street 4' });
   });
 });

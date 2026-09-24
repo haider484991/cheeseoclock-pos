@@ -75,7 +75,7 @@ export const SIGNATURE_BURGER: Showcase = {
 
 /** Printed menu's Value Deals (regular-menu pizzas only). */
 export const VALUE_DEALS = [
-  { name: 'Big Two', what: '2 Large 12" + 1 litre Pepsi', priceRs: 3999 },
-  { name: 'Family Feast', what: '1 Medium 9" + 1 Large 12" + 1 litre Pepsi', priceRs: 3199 },
-  { name: 'Perfect Pair', what: '2 Medium 9" + 1 litre Pepsi', priceRs: 2799 },
+  { name: 'Big Two', what: '2 Large 12" + 1 litre Pepsi', priceRs: 3600 },
+  { name: 'Family Feast', what: '1 Medium 9" + 1 Large 12" + 1 litre Pepsi', priceRs: 3100 },
+  { name: 'Perfect Pair', what: '2 Medium 9" + 1 litre Pepsi', priceRs: 2600 },
 ] as const;

@@ -4,21 +4,31 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { formatCents } from '@/lib/format';
 import { BUSINESS } from '@/lib/business';
-import type { WebOrderItem, WebOrderStatus } from '@cheeseoclock/shared-types';
+import {
+  PICKUP_DISCOUNT_PERCENT,
+  type WebFulfilment,
+  type WebOrderItem,
+  type WebOrderStatus,
+} from '@cheeseoclock/shared-types';
 
 interface TrackedOrder {
   id: string;
   status: WebOrderStatus;
   customerName: string;
+  /** Absent on orders from before pickup existed. */
+  fulfilment?: WebFulfilment;
   items: WebOrderItem[];
   subtotalCents: number;
+  discountCents?: number;
   taxCents: number;
   totalCents: number;
   posOrderNumber: string | null;
   createdAt: string;
 }
 
-const STEPS: Array<{ key: WebOrderStatus; label: string; emoji: string }> = [
+type Step = { key: WebOrderStatus; label: string; emoji: string };
+
+const DELIVERY_STEPS: Step[] = [
   { key: 'new', label: 'Order placed', emoji: '📝' },
   { key: 'accepted', label: 'Restaurant confirmed', emoji: '✅' },
   { key: 'preparing', label: 'In the kitchen', emoji: '👨‍🍳' },
@@ -27,12 +37,17 @@ const STEPS: Array<{ key: WebOrderStatus; label: string; emoji: string }> = [
   { key: 'delivered', label: 'Delivered — enjoy!', emoji: '🎉' },
 ];
 
+// A pickup has no rider; the till reports "delivered" once it is collected.
+const PICKUP_STEPS: Step[] = [
+  { key: 'new', label: 'Order placed', emoji: '📝' },
+  { key: 'accepted', label: 'Restaurant confirmed', emoji: '✅' },
+  { key: 'preparing', label: 'In the kitchen', emoji: '👨‍🍳' },
+  { key: 'ready', label: 'Ready — come and collect it', emoji: '🛍️' },
+  { key: 'delivered', label: 'Collected — enjoy!', emoji: '🎉' },
+];
+
 /** How long "Order placed" may sit unconfirmed before the page suggests calling. */
 const UNCONFIRMED_NOTICE_MS = 5 * 60_000;
-
-function stepIndex(status: WebOrderStatus): number {
-  return STEPS.findIndex((s) => s.key === status);
-}
 
 export function OrderTracker({ orderId }: { orderId: string }) {
   const search = useSearchParams();
@@ -113,7 +128,10 @@ export function OrderTracker({ orderId }: { orderId: string }) {
   const waitingTooLong =
     order.status === 'new' &&
     Date.now() - Date.parse(order.createdAt) > UNCONFIRMED_NOTICE_MS;
-  const idx = stepIndex(order.status);
+  const pickup = order.fulfilment === 'pickup';
+  const STEPS = pickup ? PICKUP_STEPS : DELIVERY_STEPS;
+  const idx = STEPS.findIndex((s) => s.key === order.status);
+  const discount = order.discountCents ?? 0;
 
   return (
     <div className="animate-fade-in">
@@ -140,6 +158,25 @@ export function OrderTracker({ orderId }: { orderId: string }) {
             {formatCents(order.totalCents)}
           </span>
         </div>
+
+        {pickup && !cancelled && (
+          <div className="mt-3 rounded-xl border border-cheese/30 bg-cheese/10 p-3 text-sm">
+            <p className="font-bold text-cream">
+              Pick-up · {PICKUP_DISCOUNT_PERCENT}% off · pay at the counter
+            </p>
+            <p className="mt-0.5 text-cream/75">
+              {BUSINESS.streetAddress}, {BUSINESS.locality}
+            </p>
+            <a
+              href={BUSINESS.mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 inline-block font-bold text-cheese hover:text-cheese-hot"
+            >
+              Directions →
+            </a>
+          </div>
+        )}
 
         {waitingTooLong && (
           <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center text-sm">
@@ -240,6 +277,26 @@ export function OrderTracker({ orderId }: { orderId: string }) {
               </li>
             ))}
           </ul>
+          <dl className="mt-3 space-y-1 border-t border-white/10 pt-2 text-sm text-smoke">
+            <div className="flex justify-between">
+              <dt>Subtotal</dt>
+              <dd className="font-mono tabular-nums">{formatCents(order.subtotalCents)}</dd>
+            </div>
+            {discount > 0 && (
+              <div className="flex justify-between text-emerald-300">
+                <dt>Pick-up {PICKUP_DISCOUNT_PERCENT}% off</dt>
+                <dd className="font-mono tabular-nums">−{formatCents(discount)}</dd>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <dt>Tax</dt>
+              <dd className="font-mono tabular-nums">{formatCents(order.taxCents)}</dd>
+            </div>
+            <div className="flex justify-between font-bold text-cream">
+              <dt>Total</dt>
+              <dd className="font-mono tabular-nums">{formatCents(order.totalCents)}</dd>
+            </div>
+          </dl>
         </div>
       </div>
 

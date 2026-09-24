@@ -13,7 +13,10 @@ export const revalidate = 0;
 export async function GET(): Promise<Response> {
   const status = await getStoreStatus();
   return Response.json(
-    { ok: true, data: { acceptingOrders: status.acceptingOrders } },
+    {
+      ok: true,
+      data: { acceptingOrders: status.acceptingOrders, pickupAvailable: status.pickupAvailable },
+    },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }

@@ -1,5 +1,6 @@
 import { sql } from '@/lib/db';
 import { normalizePhone } from '@/lib/format';
+import { ensureWebOrderColumns } from '@/lib/web-order-columns';
 
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
@@ -20,17 +21,21 @@ export async function GET(
     if (!phone) {
       return Response.json({ ok: false, error: 'phone_required' }, { status: 400 });
     }
+    await ensureWebOrderColumns();
     const rows = (await sql()`
-      SELECT id, status, customer_name, items_json, subtotal_cents, tax_cents,
-             total_cents, pos_order_number, created_at, updated_at
+      SELECT id, status, customer_name, fulfilment, items_json, subtotal_cents,
+             discount_cents, tax_cents, total_cents, pos_order_number,
+             created_at, updated_at
         FROM web_orders
        WHERE id = ${params.id} AND customer_phone = ${phone}
     `) as Array<{
       id: string;
       status: string;
       customer_name: string;
+      fulfilment: string;
       items_json: unknown;
       subtotal_cents: number;
+      discount_cents: number;
       tax_cents: number;
       total_cents: number;
       pos_order_number: string | null;
@@ -47,8 +52,10 @@ export async function GET(
         id: row.id,
         status: row.status,
         customerName: row.customer_name,
+        fulfilment: row.fulfilment,
         items: row.items_json,
         subtotalCents: row.subtotal_cents,
+        discountCents: row.discount_cents,
         taxCents: row.tax_cents,
         totalCents: row.total_cents,
         posOrderNumber: row.pos_order_number,

@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS store_status (
   device_id        TEXT,
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The till announces it can import pickup orders (heartbeat `features`).
+ALTER TABLE store_status ADD COLUMN IF NOT EXISTS pickup BOOLEAN NOT NULL DEFAULT false;
 
 -- Orders placed on the website. The POS bridge polls status='new', imports
 -- each into the local SQLite (source='web'), acks with the POS order number,
@@ -52,6 +54,13 @@ CREATE INDEX IF NOT EXISTS idx_web_orders_status
   ON web_orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_web_orders_phone
   ON web_orders(customer_phone, created_at);
+
+-- Pickup orders (collected from the shop, 10% off). src/lib/web-order-columns.ts
+-- also adds these on demand, so an already-provisioned database picks them up.
+ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS fulfilment TEXT NOT NULL DEFAULT 'delivery'
+  CHECK (fulfilment IN ('delivery','pickup'));
+ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS discount_cents INT NOT NULL DEFAULT 0
+  CHECK (discount_cents >= 0);
 
 -- Append-only counter behind the order endpoint's per-IP flood limit. Only a
 -- salted hash is stored, never a raw IP. src/lib/rate-limit.ts also creates

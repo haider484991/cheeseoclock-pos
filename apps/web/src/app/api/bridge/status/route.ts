@@ -7,6 +7,11 @@ export const dynamic = 'force-dynamic';
 const StatusSchema = z.object({
   acceptingOrders: z.boolean(),
   deviceId: z.string().max(200).nullable().optional(),
+  /**
+   * What this till can do (BridgeHeartbeatBody). Tills from before pickup send
+   * none, and unknown words from newer ones are ignored rather than refused.
+   */
+  features: z.array(z.string().max(40)).max(20).optional(),
 });
 
 /**
@@ -28,6 +33,7 @@ export async function PUT(req: Request): Promise<Response> {
     const status = await setStoreStatus({
       acceptingOrders: parsed.data.acceptingOrders,
       deviceId: parsed.data.deviceId ?? null,
+      pickup: parsed.data.features?.includes('pickup') ?? false,
     });
     return Response.json({ ok: true, data: status });
   } catch (e) {

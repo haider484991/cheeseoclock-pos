@@ -35,7 +35,7 @@ const WHY = [
   {
     img: null as string | null,
     alt: 'Value deals with a 1 litre Pepsi',
-    fallback: { big: 'From Rs 2,799', small: 'Value deals · 1 litre Pepsi' },
+    fallback: { big: 'From Rs 2,600', small: 'Value deals · 1 litre Pepsi' },
     title: 'Value deals',
     body: 'Big Two (2 Large), Family Feast (1 Medium + 1 Large) and Perfect Pair (2 Medium) — regular-menu pizzas with a 1 litre Pepsi, for less than ordering them one by one.',
   },

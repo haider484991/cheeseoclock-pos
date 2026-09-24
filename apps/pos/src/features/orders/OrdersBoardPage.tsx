@@ -371,6 +371,13 @@ function OrderCard({
               #{order.orderNumber.split('-').pop() ?? order.orderNumber}
             </span>
             <ModeBadge mode={order.mode} />
+            {order.source === 'web' && (
+              // A website takeaway is a customer on the way to collect it, with
+              // the online pick-up discount already on the bill.
+              <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700 ring-1 ring-amber-200">
+                {order.mode === 'takeaway' ? 'Web pick-up' : 'Web'}
+              </span>
+            )}
           </div>
           {snap.customerName && (
             <div className="mt-1 flex items-center gap-1.5 text-sm font-medium text-stone-700 dark:text-stone-200">

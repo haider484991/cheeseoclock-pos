@@ -10,19 +10,23 @@ import {
   findZone,
   type DeliveryZone,
 } from '@/lib/delivery-zones';
+import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
   buildMenuView,
   groupLabel,
+  isPickupOnly,
   optionLabel,
   requiredCount,
   sizeLabel,
   type MenuCard,
   type MenuVariant,
 } from '@/lib/menu-view';
-import type {
-  PublishedMenu,
-  PublishedMenuItem,
-  PublishedModifierGroup,
+import {
+  PICKUP_DISCOUNT_PERCENT,
+  type PublishedMenu,
+  type PublishedMenuItem,
+  type PublishedModifierGroup,
+  type WebFulfilment,
 } from '@cheeseoclock/shared-types';
 
 /** Idempotency key for one checkout; the server dedupes resends on it. */
@@ -87,14 +91,18 @@ function modifierIndex(item: PublishedMenuItem) {
 export function OrderingApp({
   menu,
   acceptingOrders,
+  pickupAvailable,
 }: {
   menu: PublishedMenu;
   acceptingOrders: boolean;
+  /** The till can take pickup orders right now (lib/store-status). */
+  pickupAvailable: boolean;
 }) {
   // Server-rendered starting point, then kept honest client-side: a customer
   // can sit on this page long after the shop stops taking orders. The POST is
   // the real gate (see api/orders) — this only keeps the buttons truthful.
   const [open, setOpen] = useState(acceptingOrders);
+  const [canPickup, setCanPickup] = useState(pickupAvailable);
   useEffect(() => {
     let cancelled = false;
     async function check() {
@@ -102,9 +110,12 @@ export function OrderingApp({
         const res = await fetch('/api/store-status', { cache: 'no-store' });
         const json = (await res.json()) as {
           ok: boolean;
-          data?: { acceptingOrders: boolean };
+          data?: { acceptingOrders: boolean; pickupAvailable?: boolean };
         };
-        if (!cancelled && json.ok && json.data) setOpen(json.data.acceptingOrders);
+        if (!cancelled && json.ok && json.data) {
+          setOpen(json.data.acceptingOrders);
+          setCanPickup(json.data.pickupAvailable === true);
+        }
       } catch {
         // Keep the last known state; submitting is still guarded server-side.
       }
@@ -139,7 +150,11 @@ export function OrderingApp({
     if (findZone(id)) saveZone(id);
   }
 
-  const zone = findZone(zoneId);
+  const [chosenFulfilment, setFulfilment] = useState<WebFulfilment>('delivery');
+  // Pickup silently falls back to delivery if the till stops offering it.
+  const fulfilment: WebFulfilment = canPickup ? chosenFulfilment : 'delivery';
+  const pickup = fulfilment === 'pickup';
+  const zone = pickup ? undefined : findZone(zoneId);
 
   function lineUnitPrice(line: CartLine): number {
     const mods = modifierIndex(line.item);
@@ -149,20 +164,20 @@ export function OrderingApp({
     );
   }
 
+  // Same maths as the server and the till (lib/pricing). The delivery fee is
+  // a real till item, taxed like one; pickup takes its discount off the lot.
   const subtotal = cart.reduce((s, l) => s + lineUnitPrice(l) * l.quantity, 0);
-  const itemsTax = cart.reduce(
-    (s, l) => s + Math.round((lineUnitPrice(l) * l.quantity * l.item.taxRateBps) / 10_000),
-    0,
-  );
-  // The fee is a real till item, taxed like one — mirror the server's estimate.
+  const priced: PricedLine[] = cart.map((l) => ({
+    lineTotalCents: lineUnitPrice(l) * l.quantity,
+    taxRateBps: l.item.taxRateBps,
+  }));
   const feeItem = zone ? deliveryChargeItemFor(menu, zone.feeCents) : undefined;
   const deliveryFee = zone && cart.length > 0 ? zone.feeCents : 0;
-  const deliveryTax = feeItem && cart.length > 0
-    ? Math.round((feeItem.basePriceCents * feeItem.taxRateBps) / 10_000)
-    : 0;
-  const tax = itemsTax + deliveryTax;
-  const total = subtotal + deliveryFee + tax;
+  if (deliveryFee > 0) priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0 });
+  const totals = priceOrder(priced, pickup ? PICKUP_DISCOUNT_PERCENT : 0);
+  const { discountCents: discount, taxCents: tax, totalCents: total } = totals;
   const cartCount = cart.reduce((s, l) => s + l.quantity, 0);
+  const pickupOnlyInCart = cart.filter((l) => isPickupOnly(l.item)).map((l) => l.label);
 
   const qtyByItem = useMemo(() => {
     const m = new Map<string, number>();
@@ -191,7 +206,7 @@ export function OrderingApp({
   /** A size tap: straight into the cart unless the item has choices to make. */
   function pickVariant(card: MenuCard, variantIndex: number) {
     const v = card.variants[variantIndex];
-    if (!v || card.pickupOnly) return;
+    if (!v || (card.pickupOnly && !canPickup)) return;
     if (v.item.modifierGroups.length > 0) {
       setSheet({ card, variantIndex });
     } else {
@@ -212,15 +227,20 @@ export function OrderingApp({
     lineUnitPrice,
     subtotal,
     deliveryFee,
+    discount,
     zone,
     tax,
     total,
     setQty,
+    fulfilment,
+    canPickup,
+    onFulfilment: setFulfilment,
+    pickupOnlyInCart,
   };
 
   return (
     <div className="pb-28 lg:pb-12">
-      <MenuHeader />
+      <MenuHeader canPickup={canPickup} />
 
       {!open && <ClosedBanner />}
 
@@ -238,6 +258,7 @@ export function OrderingApp({
                       key={card.key}
                       card={card}
                       qtyByItem={qtyByItem}
+                      canPickup={canPickup}
                       onPick={(i) => pickVariant(card, i)}
                     />
                   ) : (
@@ -245,6 +266,7 @@ export function OrderingApp({
                       key={card.key}
                       card={card}
                       qtyByItem={qtyByItem}
+                      canPickup={canPickup}
                       onPick={(i) => pickVariant(card, i)}
                     />
                   ),
@@ -253,7 +275,7 @@ export function OrderingApp({
             </section>
           ))}
           <p className="mt-10 text-center font-cond text-sm font-semibold uppercase tracking-wider text-ink-muted">
-            Prices in PKR · 15% tax added on the bill · cash on delivery
+            Prices in PKR · 15% tax added on the bill · pay cash on delivery or at the counter
           </p>
         </div>
 
@@ -343,12 +365,12 @@ function sectionNote(sectionName: string): string | null {
   return null;
 }
 
-function MenuHeader() {
+function MenuHeader({ canPickup }: { canPickup: boolean }) {
   return (
     <div className="bg-ink text-cream">
       <div className="mx-auto max-w-6xl px-4 pb-7 pt-8 md:pb-9 md:pt-10">
         <p className="font-cond text-sm font-bold uppercase tracking-[0.22em] text-cheese">
-          Order online · cash on delivery
+          {canPickup ? 'Order online · delivery or pick-up' : 'Order online · cash on delivery'}
         </p>
         <h1 className="mt-1 font-display text-6xl uppercase leading-none tracking-wide md:text-7xl">
           The Menu
@@ -357,7 +379,16 @@ function MenuHeader() {
           {BUSINESS.tagline}
         </p>
         <ul className="mt-5 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide">
-          <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink">
+          {canPickup && (
+            <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
+              {PICKUP_DISCOUNT_PERCENT}% off when you pick up
+            </li>
+          )}
+          <li
+            className={`rounded-full px-3.5 py-1.5 ${
+              canPickup ? 'border border-cream/20' : 'bg-cheese text-ink'
+            }`}
+          >
             Delivery Rs 200–250 · DHA &amp; Clifton
           </li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">12 noon – 1 am</li>
@@ -468,19 +499,22 @@ function PickupOnly() {
 function VariantButtons({
   card,
   qtyByItem,
+  canPickup,
   onPick,
   dark = false,
 }: {
   card: MenuCard;
   qtyByItem: Map<string, number>;
+  canPickup: boolean;
   onPick: (variantIndex: number) => void;
   dark?: boolean;
 }) {
-  if (card.pickupOnly) return <PickupOnly />;
+  // Pick-up-only food is orderable only while online pick-up is.
+  if (card.pickupOnly && !canPickup) return <PickupOnly />;
   const hasChoices = card.variants.some((v) => v.item.modifierGroups.length > 0);
   const sized = card.variants.length > 1;
   return (
-    <div className={sized ? 'grid grid-cols-2 gap-2' : 'flex'}>
+    <div className={sized ? 'grid grid-cols-2 gap-2' : 'flex flex-wrap items-center gap-2'}>
       {card.variants.map((v, i) => {
         const inCart = qtyByItem.get(v.item.posItemId) ?? 0;
         return (
@@ -525,6 +559,11 @@ function VariantButtons({
           </button>
         );
       })}
+      {card.pickupOnly && (
+        <span className="font-cond text-xs font-bold uppercase tracking-wider opacity-70">
+          Pick-up only
+        </span>
+      )}
     </div>
   );
 }
@@ -533,10 +572,12 @@ function VariantButtons({
 function PhotoCard({
   card,
   qtyByItem,
+  canPickup,
   onPick,
 }: {
   card: MenuCard;
   qtyByItem: Map<string, number>;
+  canPickup: boolean;
   onPick: (variantIndex: number) => void;
 }) {
   const count = card.variants.reduce((s, v) => s + (qtyByItem.get(v.item.posItemId) ?? 0), 0);
@@ -570,7 +611,7 @@ function PhotoCard({
           </p>
         )}
         <div className="mt-auto pt-3">
-          <VariantButtons card={card} qtyByItem={qtyByItem} onPick={onPick} dark />
+          <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} dark />
         </div>
       </div>
     </article>
@@ -581,10 +622,12 @@ function PhotoCard({
 function ItemCard({
   card,
   qtyByItem,
+  canPickup,
   onPick,
 }: {
   card: MenuCard;
   qtyByItem: Map<string, number>;
+  canPickup: boolean;
   onPick: (variantIndex: number) => void;
 }) {
   const count = card.variants.reduce((s, v) => s + (qtyByItem.get(v.item.posItemId) ?? 0), 0);
@@ -606,7 +649,7 @@ function ItemCard({
         <p className="mt-1 text-sm leading-snug text-ink-muted">{card.description}</p>
       )}
       <div className="mt-auto pt-3">
-        <VariantButtons card={card} qtyByItem={qtyByItem} onPick={onPick} />
+        <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} />
       </div>
     </article>
   );
@@ -653,10 +696,50 @@ interface CartProps {
   lineUnitPrice: (l: CartLine) => number;
   subtotal: number;
   deliveryFee: number;
+  /** Pickup discount (0 on a delivery). */
+  discount: number;
   zone: DeliveryZone | undefined;
   tax: number;
   total: number;
   setQty: (key: string, qty: number) => void;
+  fulfilment: WebFulfilment;
+  /** The till takes pickup orders right now. */
+  canPickup: boolean;
+  onFulfilment: (f: WebFulfilment) => void;
+  /** Labels of pick-up-only lines in the cart (they block a delivery). */
+  pickupOnlyInCart: string[];
+}
+
+/**
+ * Delivery or pick-up. Pick-up shows the saving up front — it is the printed
+ * menu's headline offer. Hidden entirely while the till can't take pickups.
+ */
+function FulfilmentToggle(props: Pick<CartProps, 'fulfilment' | 'canPickup' | 'onFulfilment'>) {
+  if (!props.canPickup) return null;
+  const opt = (f: WebFulfilment, title: string, note: string) => {
+    const on = props.fulfilment === f;
+    return (
+      <button
+        type="button"
+        onClick={() => props.onFulfilment(f)}
+        aria-pressed={on}
+        className={`rounded-2xl border-2 px-3 py-2 text-left transition-colors ${
+          on ? 'border-ink bg-ink text-cheese' : 'border-paper-line bg-white text-ink hover:border-ink/40'
+        }`}
+      >
+        <span className="block font-cond text-base font-extrabold uppercase leading-tight">{title}</span>
+        <span className={`block font-cond text-xs font-bold uppercase ${on ? 'text-cream/80' : 'text-ink-muted'}`}>
+          {note}
+        </span>
+      </button>
+    );
+  };
+  return (
+    <div className="grid grid-cols-2 gap-2" role="group" aria-label="Delivery or pick-up">
+      {opt('delivery', 'Delivery', 'Rs 200–250 · DHA & Clifton')}
+      {opt('pickup', `Pick up · ${PICKUP_DISCOUNT_PERCENT}% off`, 'Collect from DHA Phase 6')}
+    </div>
+  );
 }
 
 function CartPanel(props: CartProps & { acceptingOrders: boolean; onCheckout: () => void }) {
@@ -676,6 +759,11 @@ function CartPanel(props: CartProps & { acceptingOrders: boolean; onCheckout: ()
               <CartLineRow key={l.key} line={l} unit={props.lineUnitPrice(l)} setQty={props.setQty} />
             ))}
           </ul>
+          {props.canPickup && (
+            <div className="mt-3">
+              <FulfilmentToggle {...props} />
+            </div>
+          )}
           <Totals {...props} />
           <button
             onClick={props.onCheckout}
@@ -760,18 +848,26 @@ function Stepper({
 }
 
 function Totals(props: CartProps) {
+  const pickup = props.fulfilment === 'pickup';
   return (
     <dl className="mt-4 space-y-1.5 border-t-2 border-dashed border-paper-line pt-3 text-sm">
       <div className="flex justify-between text-ink-muted">
         <dt>Subtotal</dt>
         <dd className="tabular-nums">{formatCents(props.subtotal)}</dd>
       </div>
-      <div className="flex justify-between text-ink-muted">
-        <dt>Delivery{props.zone ? ` · ${props.zone.name}` : ''}</dt>
-        <dd className="tabular-nums">
-          {props.zone ? formatCents(props.deliveryFee) : 'Rs 200–250'}
-        </dd>
-      </div>
+      {pickup ? (
+        <div className="flex justify-between font-semibold text-emerald-700">
+          <dt>Pick-up {PICKUP_DISCOUNT_PERCENT}% off</dt>
+          <dd className="tabular-nums">−{formatCents(props.discount)}</dd>
+        </div>
+      ) : (
+        <div className="flex justify-between text-ink-muted">
+          <dt>Delivery{props.zone ? ` · ${props.zone.name}` : ''}</dt>
+          <dd className="tabular-nums">
+            {props.zone ? formatCents(props.deliveryFee) : 'Rs 200–250'}
+          </dd>
+        </div>
+      )}
       <div className="flex justify-between text-ink-muted">
         <dt>Tax (est.)</dt>
         <dd className="tabular-nums">{formatCents(props.tax)}</dd>
@@ -780,7 +876,9 @@ function Totals(props: CartProps) {
         <dt>Total</dt>
         <dd className="tabular-nums">
           {formatCents(props.total)}
-          {!props.zone && <span className="ml-1 text-xs font-bold text-ink-muted">+ delivery</span>}
+          {!pickup && !props.zone && (
+            <span className="ml-1 text-xs font-bold text-ink-muted">+ delivery</span>
+          )}
         </dd>
       </div>
     </dl>
@@ -1095,10 +1193,20 @@ function CheckoutSheet(
   async function submit() {
     if (inFlight.current) return;
     setError(null);
-    if (!props.zone) return setError('Choose your delivery area — we deliver in DHA and Clifton only.');
+    const pickup = props.fulfilment === 'pickup';
+    if (!pickup && props.pickupOnlyInCart.length > 0) {
+      return setError(
+        `${props.pickupOnlyInCart.join(', ')} is pick-up only — ${
+          props.canPickup ? 'switch to pick-up, or remove it' : 'remove it'
+        } to order delivery.`,
+      );
+    }
+    if (!pickup && !props.zone) {
+      return setError('Choose your delivery area — we deliver in DHA and Clifton only.');
+    }
     if (name.trim().length < 2) return setError('Please enter your name.');
     if (phone.trim().length < 10) return setError('Please enter your mobile number.');
-    if (address.trim().length < 5) return setError('Please enter your house and street.');
+    if (!pickup && address.trim().length < 5) return setError('Please enter your house and street.');
     if (props.cart.length === 0) return setError('Your order is empty.');
     if (!props.acceptingOrders) {
       return setError('We are not taking online orders right now.');
@@ -1114,8 +1222,8 @@ function CheckoutSheet(
           clientOrderId: clientOrderId.current,
           customerName: name.trim(),
           customerPhone: phone.trim(),
-          addressLine: address.trim(),
-          zoneId: props.zone.id,
+          fulfilment: props.fulfilment,
+          ...(pickup ? {} : { addressLine: address.trim(), zoneId: props.zone?.id }),
           notes: notes.trim() || undefined,
           items: props.cart.map((l) => ({
             posItemId: l.item.posItemId,
@@ -1143,6 +1251,8 @@ function CheckoutSheet(
             fieldError ??
             (json.error === 'store_closed'
               ? 'We are not taking online orders at the moment. Please order on WhatsApp.'
+              : json.error === 'pickup_unavailable'
+                ? 'Online pick-up is not available right now — choose delivery.'
               : json.error === 'menu_not_published' || json.error === 'item_not_on_menu'
                 ? 'The menu was just updated — please refresh and try again.'
                 : json.error === 'rate_limited'
@@ -1172,7 +1282,9 @@ function CheckoutSheet(
         <div>
           <h3 className="font-display text-3xl uppercase leading-none tracking-wide">Checkout</h3>
           <p className="mt-1.5 font-cond text-sm font-bold uppercase tracking-wide text-cheese">
-            Cash on delivery · pay the rider
+            {props.fulfilment === 'pickup'
+              ? `Pick-up · ${PICKUP_DISCOUNT_PERCENT}% off · pay at the counter`
+              : 'Cash on delivery · pay the rider'}
           </p>
         </div>
         <CloseButton onClose={props.onClose} />
@@ -1185,7 +1297,27 @@ function CheckoutSheet(
           ))}
         </ul>
 
+        {props.canPickup && (
+          <div className="mt-5">
+            <FulfilmentToggle {...props} />
+          </div>
+        )}
+
         <div className="mt-5 space-y-3">
+          {props.fulfilment === 'pickup' ? (
+            <div className="rounded-2xl border-2 border-ink bg-white p-4">
+              <p className="font-cond text-sm font-extrabold uppercase tracking-widest text-ink">
+                Collect from
+              </p>
+              <p className="mt-1 text-sm font-semibold text-ink">
+                {BUSINESS.streetAddress}, {BUSINESS.locality}
+              </p>
+              <p className="mt-1 text-xs text-ink-muted">
+                We&rsquo;ll have it ready — follow it live after you order. Pay at the counter.
+              </p>
+            </div>
+          ) : (
+          <>
           <label className="block">
             <span className="mb-1 block font-cond text-sm font-extrabold uppercase tracking-widest text-ink">
               Delivery area
@@ -1217,6 +1349,8 @@ function CheckoutSheet(
               We deliver in DHA and Clifton only. Somewhere else? We can&rsquo;t take that order online.
             </span>
           </label>
+          </>
+          )}
           <Field label="Your name" value={name} onChange={setName} placeholder="Ahmed Khan" autoComplete="name" />
           <Field
             label="Mobile number"
@@ -1226,13 +1360,15 @@ function CheckoutSheet(
             type="tel"
             autoComplete="tel"
           />
-          <Field
-            label="House & street"
-            value={address}
-            onChange={setAddress}
-            placeholder="House 12, Street 4, Khayaban-e-…"
-            autoComplete="street-address"
-          />
+          {props.fulfilment !== 'pickup' && (
+            <Field
+              label="House & street"
+              value={address}
+              onChange={setAddress}
+              placeholder="House 12, Street 4, Khayaban-e-…"
+              autoComplete="street-address"
+            />
+          )}
           <Field label="Notes (optional)" value={notes} onChange={setNotes} placeholder="Ring the bell twice" />
         </div>
 
@@ -1265,12 +1401,14 @@ function CheckoutSheet(
             ? 'Online ordering is closed'
             : submitting
               ? 'Placing your order…'
-              : !props.zone
+              : props.fulfilment === 'delivery' && !props.zone
                 ? 'Choose your delivery area'
                 : `Place order · ${formatCents(props.total)}`}
         </button>
         <p className="mt-2 text-center text-xs text-ink-muted">
-          You pay the rider in cash. The printed receipt from the kitchen is the final bill.
+          {props.fulfilment === 'pickup'
+            ? 'You pay in cash when you collect. The printed receipt from the kitchen is the final bill.'
+            : 'You pay the rider in cash. The printed receipt from the kitchen is the final bill.'}
         </p>
       </div>
     </Sheet>

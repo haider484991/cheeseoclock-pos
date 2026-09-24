@@ -14,6 +14,7 @@ import { sealSecret } from './secret-seal.js';
 import {
   createOrder,
   addOrderItem,
+  applyDiscount,
   sendOrderToKitchen,
   findOrder,
   getOrderSnapshot,
@@ -40,13 +41,15 @@ import {
   type BridgeApi,
 } from './cloud-copy-chunks.js';
 import { dumpDatabase, rebuildDatabase, type RowSink, type RowSource } from './cloud-copy-rows.js';
-import type {
-  CloudBackupEntry,
-  PublishedMenu,
-  PublishedMenuCategory,
-  WebOrder,
-  WebOrderStatus,
-  OrderStatus,
+import {
+  PICKUP_DISCOUNT_PERCENT,
+  type BridgeHeartbeatBody,
+  type CloudBackupEntry,
+  type PublishedMenu,
+  type PublishedMenuCategory,
+  type WebOrder,
+  type WebOrderStatus,
+  type OrderStatus,
 } from '@cheeseoclock/shared-types';
 
 /**
@@ -934,39 +937,52 @@ class WebOrdersBridge {
       // gone from the menu, say) must leave nothing behind. It used to leave
       // an 'open' shell — and another on every retry — that sat on the Live
       // Orders board as a half-imported order.
+      // A pickup is collected from the counter at PICKUP_DISCOUNT_PERCENT off:
+      // a takeaway order with the discount on it, no address. Orders from a
+      // site that predates pickup carry no fulfilment and are deliveries.
+      const pickup = web.fulfilment === 'pickup';
       const order = db.transaction(() => {
-        // 1. Local order shell (delivery, source web).
+        // 1. Local order shell (delivery or takeaway, source web).
+        const tag = pickup ? '[web pick-up]' : '[web]';
         const shell = createOrder(
           db,
           {
-            mode: 'delivery',
+            mode: pickup ? 'takeaway' : 'delivery',
             source: 'web',
-            notes: web.notes ? `[web] ${web.notes}` : '[web order]',
+            notes: web.notes ? `${tag} ${web.notes}` : pickup ? '[web pick-up order]' : '[web order]',
           },
           actor,
         );
 
-        // 2. Customer + address (both dedupe internally).
+        // 2. Customer (+ address for a delivery; both dedupe internally).
         const customer = createCustomer(
           db,
           { name: web.customerName, phone: web.customerPhone },
           actor,
         );
-        const address = createAddress(
-          db,
-          {
-            customerId: customer.id,
-            label: 'Web order',
-            addressLine: web.addressLine,
-            area: web.area ?? null,
-          },
-          actor,
-        );
-        snapshotCustomerOntoOrder(
-          db,
-          { orderId: shell.id, customerId: customer.id, addressId: address.id },
-          actor,
-        );
+        if (pickup) {
+          snapshotCustomerOntoOrder(
+            db,
+            { orderId: shell.id, customerId: customer.id, addressId: null },
+            actor,
+          );
+        } else {
+          const address = createAddress(
+            db,
+            {
+              customerId: customer.id,
+              label: 'Web order',
+              addressLine: web.addressLine,
+              area: web.area ?? null,
+            },
+            actor,
+          );
+          snapshotCustomerOntoOrder(
+            db,
+            { orderId: shell.id, customerId: customer.id, addressId: address.id },
+            actor,
+          );
+        }
 
         // 3. Items. POS re-prices from its own menu (authoritative). If an item
         //    vanished from the menu since publish, the whole import throws and
@@ -980,6 +996,22 @@ class WebOrdersBridge {
               quantity: line.quantity,
               modifierIds: line.modifiers.map((m) => m.posModifierId),
               notes: line.notes,
+            },
+            actor,
+          );
+        }
+
+        // The pickup offer, priced by the till itself on its own subtotal
+        // (the site showed the same maths — apps/web lib/pricing). 10% sits
+        // at the approval threshold, so no manager PIN is needed.
+        if (pickup) {
+          applyDiscount(
+            db,
+            {
+              orderId: shell.id,
+              discountType: 'percent',
+              value: PICKUP_DISCOUNT_PERCENT,
+              reason: `Website pick-up ${PICKUP_DISCOUNT_PERCENT}% off`,
             },
             actor,
           );
@@ -1084,12 +1116,16 @@ class WebOrdersBridge {
    * once the last beat goes stale.
    */
   private async pushStoreStatus(cfg: WebBridgeConfig): Promise<void> {
+    // `features` tells the site what this till can import: it offers online
+    // pick-up (10% off) only while the listening till says 'pickup'.
+    const beat: BridgeHeartbeatBody = {
+      acceptingOrders: cfg.enabled,
+      deviceId: this.deviceId,
+      features: ['pickup'],
+    };
     const res = await this.api(cfg, '/api/bridge/status', {
       method: 'PUT',
-      body: JSON.stringify({
-        acceptingOrders: cfg.enabled,
-        deviceId: this.deviceId,
-      }),
+      body: JSON.stringify(beat),
     });
     if (!res.ok) {
       // A website deployed before this feature has no such route. Nothing to
