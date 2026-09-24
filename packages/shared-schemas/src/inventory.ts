@@ -55,7 +55,21 @@ export const convertIngredientUnitInputSchema = z.object({ id: idSchema });
 
 export const setRecipeInputSchema = z.object({
   menuItemId: idSchema,
-  lines: z.array(z.object({ ingredientId: idSchema, qtyPerUnit: lineQtySchema })),
+  lines: z.array(
+    z.object({ ingredientId: idSchema, qtyPerUnit: lineQtySchema, modifierId: idSchema.nullable().optional() }),
+  ),
+});
+
+export const setBatchRecipeInputSchema = z.object({
+  ingredientId: idSchema,
+  batchYield: wholeUnits.positive({ message: 'A batch must make at least 1 unit' }).nullable(),
+  batchMethod: z.string().max(4000).nullable().optional(),
+  lines: z.array(z.object({ inputIngredientId: idSchema, qty: lineQtySchema })).max(100),
+});
+
+export const makeBatchInputSchema = z.object({
+  ingredientId: idSchema,
+  batches: z.number().int().min(1, { message: 'At least one batch' }).max(100),
 });
 
 export const recordMovementInputSchema = z.object({

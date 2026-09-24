@@ -3,6 +3,7 @@ import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
+import { clearBatchRecipeLines } from './batch-recipe-repo.js';
 import type { Ingredient, Recipe } from '@cheeseoclock/shared-types';
 import { baseUnitConversion, costPerUnitFromPack } from '@cheeseoclock/pos-domain';
 
@@ -19,6 +20,8 @@ interface IngRow {
   cost_per_unit_cents: number;
   pack_size: number | null;
   pack_price_cents: number | null;
+  batch_yield: number | null;
+  batch_method: string | null;
   default_supplier_id: string | null;
   sku: string | null;
   notes: string | null;
@@ -27,7 +30,7 @@ interface IngRow {
 
 const ING_SELECT = `
   id, name, unit, current_qty, low_threshold, cost_per_unit_cents,
-  pack_size, pack_price_cents, default_supplier_id, sku, notes, is_active
+  pack_size, pack_price_cents, batch_yield, batch_method, default_supplier_id, sku, notes, is_active
 `;
 
 function rowToIngredient(r: IngRow): Ingredient {
@@ -40,6 +43,8 @@ function rowToIngredient(r: IngRow): Ingredient {
     costPerUnitCents: r.cost_per_unit_cents,
     packSize: r.pack_size,
     packPriceCents: r.pack_price_cents,
+    batchYield: r.batch_yield,
+    batchMethod: r.batch_method,
     defaultSupplierId: r.default_supplier_id as Ingredient['defaultSupplierId'],
     sku: r.sku,
     notes: r.notes,
@@ -109,6 +114,8 @@ export function createIngredient(
     costPerUnitCents: input.costPerUnitCents ?? 0,
     packSize: input.packSize ?? null,
     packPriceCents: input.packPriceCents ?? null,
+    batchYield: null,
+    batchMethod: null,
     defaultSupplierId: (input.defaultSupplierId ?? null) as Ingredient['defaultSupplierId'],
     sku: input.sku ?? null,
     notes: input.notes ?? null,
@@ -238,22 +245,32 @@ export function deleteIngredient(db: AppDatabase, id: string, actor: Actor): voi
   if (usage.n > 0) {
     throw new Error(`Ingredient is used in ${usage.n} recipes — remove from recipes first`);
   }
+  const batchUsage = db
+    .prepare(`SELECT COUNT(*) AS n FROM batch_recipe_lines WHERE input_ingredient_id = ? AND deleted_at IS NULL`)
+    .get(id) as { n: number };
+  if (batchUsage.n > 0) {
+    throw new Error(`Ingredient is used in ${batchUsage.n} batch recipes — remove it from them first`);
+  }
   const now = nowIso();
-  writeWithSync({
-    db,
-    entityType: 'ingredients',
-    entityId: id,
-    op: 'delete',
-    action: 'delete',
-    actor,
-    before: rowToIngredient(row),
-    after: null,
-    writeRow: () => {
-      db.prepare(
-        `UPDATE ingredients SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
-      ).run(now, now, id);
-    },
-  });
+  // Its own batch recipe goes with it, in one transaction with the delete.
+  db.transaction(() => {
+    clearBatchRecipeLines(db, id, actor);
+    writeWithSync({
+      db,
+      entityType: 'ingredients',
+      entityId: id,
+      op: 'delete',
+      action: 'delete',
+      actor,
+      before: rowToIngredient(row),
+      after: null,
+      writeRow: () => {
+        db.prepare(
+          `UPDATE ingredients SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+        ).run(now, now, id);
+      },
+    });
+  })();
 }
 
 /**
@@ -279,12 +296,13 @@ export function convertIngredientToBaseUnit(db: AppDatabase, id: string, actor: 
     lowThreshold: before.lowThreshold * f,
     costPerUnitCents: Math.round(before.costPerUnitCents / f),
     packSize: before.packSize !== null ? before.packSize * f : null,
+    batchYield: before.batchYield !== null ? before.batchYield * f : null,
   });
   const now = nowIso();
   const tx = db.transaction(() => {
     db.prepare(
       `UPDATE ingredients SET unit = ?, current_qty = ?, low_threshold = ?, cost_per_unit_cents = ?,
-              pack_size = ?, pack_price_cents = ?, updated_at = ?, version = version + 1
+              pack_size = ?, pack_price_cents = ?, batch_yield = ?, updated_at = ?, version = version + 1
         WHERE id = ?`,
     ).run(
       after.unit,
@@ -293,6 +311,7 @@ export function convertIngredientToBaseUnit(db: AppDatabase, id: string, actor: 
       after.costPerUnitCents,
       after.packSize,
       after.packPriceCents,
+      after.batchYield,
       now,
       id,
     );
@@ -331,6 +350,35 @@ export function convertIngredientToBaseUnit(db: AppDatabase, id: string, actor: 
         after: { qtyPerUnit: qty, unit: after.unit },
       });
     }
+
+    // …and every batch recipe that uses it as an input.
+    const inputs = db
+      .prepare(
+        `SELECT id, ingredient_id, qty FROM batch_recipe_lines WHERE input_ingredient_id = ? AND deleted_at IS NULL`,
+      )
+      .all(id) as Array<{ id: string; ingredient_id: string; qty: number }>;
+    for (const line of inputs) {
+      const qty = line.qty * f;
+      db.prepare(`UPDATE batch_recipe_lines SET qty = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(
+        qty,
+        now,
+        line.id,
+      );
+      enqueueSync(db, {
+        entityType: 'batch_recipe_lines',
+        entityId: line.id,
+        op: 'upsert',
+        payload: { id: line.id, ingredientId: line.ingredient_id, inputIngredientId: id, qty },
+      });
+      writeAudit(db, {
+        entityType: 'batch_recipe_lines',
+        entityId: line.id,
+        action: 'convert_unit',
+        actorUserId: actor.userId,
+        before: { qty: line.qty, unit: before.unit },
+        after: { qty, unit: after.unit },
+      });
+    }
   });
   tx();
   return after;
@@ -345,35 +393,44 @@ interface RecipeRow {
   menu_item_id: string;
   ingredient_id: string;
   qty_per_unit: number;
+  modifier_id: string | null;
 }
 
 export interface RecipeWithIngredient extends Recipe {
   ingredientName: string;
   unit: string;
+  /** The choice this line depends on, or null for lines used on every sale. */
+  modifierName: string | null;
 }
 
 export function listRecipeForItem(
   db: AppDatabase,
   menuItemId: string,
 ): RecipeWithIngredient[] {
+  // A line tied to a choice that has since been deleted can never apply; leave it out.
   const rows = db
     .prepare(
-      `SELECT r.id, r.menu_item_id, r.ingredient_id, r.qty_per_unit, i.name AS ingredient_name, i.unit
+      `SELECT r.id, r.menu_item_id, r.ingredient_id, r.qty_per_unit, r.modifier_id,
+              i.name AS ingredient_name, i.unit, m.name AS modifier_name
          FROM recipes r
          JOIN ingredients i ON i.id = r.ingredient_id
+         LEFT JOIN modifiers m ON m.id = r.modifier_id AND m.deleted_at IS NULL
         WHERE r.menu_item_id = ? AND r.deleted_at IS NULL AND i.deleted_at IS NULL
-        ORDER BY i.name`,
+          AND (r.modifier_id IS NULL OR m.id IS NOT NULL)
+        ORDER BY r.modifier_id IS NOT NULL, m.sort_order, m.name, i.name`,
     )
     .all(menuItemId) as Array<
-    RecipeRow & { ingredient_name: string; unit: string }
+    RecipeRow & { ingredient_name: string; unit: string; modifier_name: string | null }
   >;
   return rows.map((r) => ({
     id: r.id as Recipe['id'],
     menuItemId: r.menu_item_id as Recipe['menuItemId'],
     ingredientId: r.ingredient_id as Recipe['ingredientId'],
     qtyPerUnit: r.qty_per_unit,
+    modifierId: r.modifier_id as Recipe['modifierId'],
     ingredientName: r.ingredient_name,
     unit: r.unit,
+    modifierName: r.modifier_name,
   }));
 }
 
@@ -381,22 +438,29 @@ export function listRecipeForItem(
 export function setRecipeForItem(
   db: AppDatabase,
   menuItemId: string,
-  desired: Array<{ ingredientId: string; qtyPerUnit: number }>,
+  desired: Array<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>,
   actor: Actor,
 ): void {
   const now = nowIso();
+  const lineKey = (ingredientId: string, modifierId: string | null | undefined) => `${ingredientId}|${modifierId ?? ''}`;
   const tx = db.transaction(() => {
     const existing = db
       .prepare(
-        `SELECT id, ingredient_id FROM recipes WHERE menu_item_id = ? AND deleted_at IS NULL`,
+        `SELECT id, ingredient_id, modifier_id FROM recipes WHERE menu_item_id = ? AND deleted_at IS NULL`,
       )
-      .all(menuItemId) as Array<{ id: string; ingredient_id: string }>;
-    const existingByIng = new Map(existing.map((r) => [r.ingredient_id, r]));
-    const desiredByIng = new Map(desired.map((d) => [d.ingredientId, d]));
+      .all(menuItemId) as Array<{ id: string; ingredient_id: string; modifier_id: string | null }>;
+    const existingByIng = new Map(existing.map((r) => [lineKey(r.ingredient_id, r.modifier_id), r]));
+    const desiredByIng = new Map(desired.map((d) => [lineKey(d.ingredientId, d.modifierId), d]));
+    if (desiredByIng.size !== desired.length) throw new Error('The same ingredient is listed twice for the same choice');
+    for (const d of desired) {
+      if (!d.modifierId) continue;
+      const mod = db.prepare(`SELECT 1 FROM modifiers WHERE id = ? AND deleted_at IS NULL`).get(d.modifierId);
+      if (!mod) throw new Error('A recipe line points at a choice that does not exist');
+    }
 
     // Soft-delete recipes whose ingredient is no longer desired
     for (const row of existing) {
-      if (!desiredByIng.has(row.ingredient_id)) {
+      if (!desiredByIng.has(lineKey(row.ingredient_id, row.modifier_id))) {
         db.prepare(
           `UPDATE recipes SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
         ).run(now, now, row.id);
@@ -410,7 +474,8 @@ export function setRecipeForItem(
     }
     // Insert / update desired
     for (const want of desired) {
-      const ex = existingByIng.get(want.ingredientId);
+      const modifierId = want.modifierId ?? null;
+      const ex = existingByIng.get(lineKey(want.ingredientId, modifierId));
       if (ex) {
         db.prepare(
           `UPDATE recipes SET qty_per_unit = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
@@ -424,15 +489,16 @@ export function setRecipeForItem(
             menuItemId,
             ingredientId: want.ingredientId,
             qtyPerUnit: want.qtyPerUnit,
+            modifierId,
           },
         });
       } else {
         const id = uuidv7();
         db.prepare(
           `INSERT INTO recipes
-             (id, menu_item_id, ingredient_id, qty_per_unit, created_at, updated_at, device_id, version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-        ).run(id, menuItemId, want.ingredientId, want.qtyPerUnit, now, now, actor.deviceId);
+             (id, menu_item_id, ingredient_id, qty_per_unit, modifier_id, created_at, updated_at, device_id, version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        ).run(id, menuItemId, want.ingredientId, want.qtyPerUnit, modifierId, now, now, actor.deviceId);
         enqueueSync(db, {
           entityType: 'recipes',
           entityId: id,
@@ -442,6 +508,7 @@ export function setRecipeForItem(
             menuItemId,
             ingredientId: want.ingredientId,
             qtyPerUnit: want.qtyPerUnit,
+            modifierId,
           },
         });
       }
@@ -452,7 +519,7 @@ export function setRecipeForItem(
       entityId: menuItemId,
       action: 'set_recipe',
       actorUserId: actor.userId,
-      before: existing.map((r) => ({ id: r.id, ingredientId: r.ingredient_id })),
+      before: existing.map((r) => ({ id: r.id, ingredientId: r.ingredient_id, modifierId: r.modifier_id })),
       after: desired,
     });
   });

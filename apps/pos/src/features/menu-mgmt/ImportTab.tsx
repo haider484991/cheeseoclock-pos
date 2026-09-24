@@ -40,6 +40,7 @@ export function ImportTab() {
   const { toast } = useToast();
   const [preview, setPreview] = useState<MenuImportPreview | null>(null);
   const [showUnchanged, setShowUnchanged] = useState(false);
+  const fresh = !!preview?.fresh;
 
   const pickMut = useMutation({
     mutationFn: () => ipc.menu.importPick(),
@@ -54,12 +55,26 @@ export function ImportTab() {
       }),
   });
 
-  const applyMut = useMutation({
-    mutationFn: () => ipc.menu.importApply(),
-    onSuccess: (s) => {
+  // Switch between updating the menu and starting fresh: re-plan the same file.
+  const modeMut = useMutation({
+    mutationFn: (wantFresh: boolean) => ipc.menu.importPreview(wantFresh),
+    onSuccess: (p) => setPreview(p),
+    onError: (e) =>
       toast({
-        title: 'Menu imported',
-        description: `${s.newItems} new items, ${s.updatedItems} updated, ${s.recipesSet} recipes, ${s.newIngredients + s.updatedIngredients} ingredients.`,
+        title: 'Could not re-check the file',
+        description: e instanceof IpcError ? e.message : String(e),
+        variant: 'error',
+      }),
+  });
+
+  const applyMut = useMutation({
+    mutationFn: (asFresh: boolean) => ipc.menu.importApply(asFresh),
+    onSuccess: (s, asFresh) => {
+      toast({
+        title: asFresh ? 'Menu replaced' : 'Menu imported',
+        description: asFresh
+          ? `${s.removedItems} old items removed; ${s.newItems} items, ${s.newIngredients} ingredients and ${s.recipesSet} recipes loaded. Count your stock next (Inventory).`
+          : `${s.newItems} new items, ${s.updatedItems} updated, ${s.recipesSet} recipes, ${s.newIngredients + s.updatedIngredients} ingredients.`,
         variant: 'success',
       });
       setPreview(null);
@@ -76,7 +91,12 @@ export function ImportTab() {
 
   const s = preview?.summary;
   const nothingToDo =
-    !!s && s.newItems + s.updatedItems + s.newIngredients + s.updatedIngredients + s.newCategories === 0;
+    !fresh &&
+    !!s &&
+    s.newItems + s.updatedItems + s.newIngredients + s.updatedIngredients + s.newCategories +
+      s.choiceGroupsChanged + s.batchRecipesSet === 0;
+  const blocked = fresh && (preview?.fresh?.openOrders ?? 0) > 0;
+  const busy = pickMut.isPending || modeMut.isPending || applyMut.isPending;
   const visibleItems = (preview?.items ?? []).filter((i) => showUnchanged || i.action !== 'same');
   const visibleIngredients = (preview?.ingredients ?? []).filter(
     (i) => showUnchanged || i.action !== 'same',
@@ -90,12 +110,13 @@ export function ImportTab() {
             <h2 className="font-semibold">Import a menu file</h2>
             <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
               Loads prices, ingredients and recipes from a menu file (.json). You will see every
-              change before anything is saved. Nothing is deleted, renamed or moved; items not in the
-              file stay exactly as they are. Stock is never added or removed — an ingredient kept in kg
-              is switched to grams (the same amount, ×1000) so recipes can use it.
+              change before anything is saved. <b>Update</b> only adds and changes: nothing is deleted,
+              renamed or moved, items not in the file stay as they are, and stock is never added or
+              removed (an ingredient kept in kg is switched to grams, the same amount ×1000).{' '}
+              <b>Start fresh</b> replaces the whole menu with the file.
             </p>
           </div>
-          <Button variant="secondary" onClick={() => pickMut.mutate()} disabled={pickMut.isPending || applyMut.isPending}>
+          <Button variant="secondary" onClick={() => pickMut.mutate()} disabled={busy}>
             <FileUp className="h-4 w-4" /> {pickMut.isPending ? 'Reading…' : preview ? 'Choose another file…' : 'Choose menu file…'}
           </Button>
         </div>
@@ -110,19 +131,61 @@ export function ImportTab() {
                 {preview.source && <div className="text-xs text-stone-500">{preview.source}</div>}
               </div>
               <Button
-                variant="primary"
-                disabled={applyMut.isPending || nothingToDo}
+                variant={fresh ? 'danger' : 'primary'}
+                disabled={busy || nothingToDo || blocked}
                 onClick={() => {
-                  if (
-                    confirm(
-                      `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.`,
-                    )
-                  )
-                    applyMut.mutate();
+                  const f = preview.fresh;
+                  const ask = f
+                    ? `Replace the WHOLE menu with this file?\n\nRemoved: ${f.items.length} menu items, ${f.categories} categories, ${f.combos} combos, ${f.choiceGroups} choice groups and ${f.ingredients} ingredients, with their recipes and stock counts.\nLoaded: ${s.newItems} items, ${s.newIngredients} ingredients, ${s.recipesSet} recipes.\n\nSales history, customers, users, settings and tax stay. A backup is saved first (Settings → Backups).`
+                    : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.`;
+                  if (confirm(ask)) applyMut.mutate(fresh);
                 }}
               >
-                {applyMut.isPending ? 'Importing…' : nothingToDo ? 'Nothing to change' : 'Apply import'}
+                {applyMut.isPending
+                  ? fresh
+                    ? 'Replacing…'
+                    : 'Importing…'
+                  : fresh
+                    ? 'Replace the whole menu'
+                    : nothingToDo
+                      ? 'Nothing to change'
+                      : 'Apply import'}
               </Button>
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How to load the file">
+              {[
+                { value: false, title: 'Update the menu', body: 'Add and change what the file says. Everything else stays.' },
+                {
+                  value: true,
+                  title: 'Start fresh',
+                  body: 'Remove the whole menu on this POS, then load the file. Needs the owner login.',
+                },
+              ].map((o) => (
+                <label
+                  key={o.title}
+                  className={cn(
+                    'flex cursor-pointer gap-3 rounded-lg border-2 p-3 text-sm',
+                    fresh === o.value
+                      ? o.value
+                        ? 'border-red-500 bg-red-50 dark:bg-red-950/40'
+                        : 'border-amber-500 bg-amber-50 dark:bg-amber-950/40'
+                      : 'border-stone-200 dark:border-stone-700',
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="import-mode"
+                    className="mt-1"
+                    checked={fresh === o.value}
+                    disabled={busy}
+                    onChange={() => modeMut.mutate(o.value)}
+                  />
+                  <span>
+                    <span className="block font-semibold">{o.title}</span>
+                    <span className="text-stone-600 dark:text-stone-400">{o.body}</span>
+                  </span>
+                </label>
+              ))}
             </div>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
               {[
@@ -134,6 +197,8 @@ export function ImportTab() {
                 ['New ingredients', s.newIngredients],
                 ['Ingredients changed', s.updatedIngredients],
                 ['New categories', s.newCategories],
+                ['Choice groups', s.choiceGroupsChanged],
+                ['Batch recipes', s.batchRecipesSet],
                 ['Skipped', s.skipped],
               ].map(([label, n]) => (
                 <div key={label} className="rounded-lg bg-stone-50 p-3 dark:bg-stone-800/50">
@@ -160,10 +225,56 @@ export function ImportTab() {
             </label>
           </Card>
 
+          {preview.fresh && (
+            <Card className="border-2 border-red-300 dark:border-red-900">
+              <h3 className="flex items-center gap-2 font-semibold text-red-800 dark:text-red-300">
+                <AlertTriangle className="h-4 w-4" /> Removed before the file is loaded
+              </h3>
+              <p className="mt-1 text-sm">
+                {preview.fresh.items.length} menu items, {preview.fresh.categories} categories, {preview.fresh.combos} combos,{' '}
+                {preview.fresh.choiceGroups} choice groups and {preview.fresh.ingredients} ingredients — with their recipes,
+                photos and stock counts. Every ingredient in the file starts at zero stock: count your stock after
+                (Inventory). Sales history, customers, users, settings and tax categories stay. A backup is saved first
+                (Settings → Backups), so the old menu can be restored.
+              </p>
+              {preview.fresh.openOrders > 0 && (
+                <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-400">
+                  <AlertTriangle className="h-4 w-4 flex-none" />
+                  {preview.fresh.openOrders} unpaid order{preview.fresh.openOrders === 1 ? ' is' : 's are'} still open — take
+                  payment or discard {preview.fresh.openOrders === 1 ? 'it' : 'them'} first.
+                </p>
+              )}
+              {preview.fresh.items.length > 0 && (
+                <details className="mt-2 text-sm">
+                  <summary className="cursor-pointer text-stone-600 dark:text-stone-400">Items removed</summary>
+                  <p className="mt-1 text-stone-600 dark:text-stone-400">{preview.fresh.items.join(' · ')}</p>
+                </details>
+              )}
+            </Card>
+          )}
+
           <Card>
             <h3 className="mb-2 font-semibold">Menu items</h3>
             <ItemTable rows={visibleItems} />
           </Card>
+
+          {preview.choiceGroups.length > 0 && (
+            <Card>
+              <h3 className="mb-2 font-semibold">Choices asked at the till</h3>
+              <ul className="space-y-2 text-sm">
+                {preview.choiceGroups.map((g) => (
+                  <li key={g.name} className="flex flex-wrap items-center gap-2">
+                    <Badge action={g.action} />
+                    <span className="font-medium">{g.existingName ?? g.name}</span>
+                    <span className="text-stone-500">{g.options.join(' · ')}</span>
+                    {g.changes.map((c) => (
+                      <span key={c} className="text-xs text-stone-700 dark:text-stone-300">{c}</span>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
 
           <Card>
             <h3 className="mb-2 font-semibold">Ingredients</h3>

@@ -8,6 +8,8 @@ import {
   updateIngredientInputSchema,
   convertIngredientUnitInputSchema,
   setRecipeInputSchema,
+  setBatchRecipeInputSchema,
+  makeBatchInputSchema,
   recordMovementInputSchema,
   createPurchaseOrderInputSchema,
   receiveDeliveryInputSchema,
@@ -26,6 +28,7 @@ import {
   listMovements,
   recordStockMovement,
 } from '../../db/repositories/stock-movement-repo.js';
+import { getBatchRecipe, setBatchRecipe, makeBatch } from '../../db/repositories/batch-recipe-repo.js';
 import {
   listSuppliers,
   createSupplier,
@@ -120,6 +123,28 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
       deviceId: ctx.deviceId,
     });
     return ok({ menuItemId: parsed.data.menuItemId });
+  });
+
+  // ---- Batch recipes (made in-house) ----
+  defineHandler('inventory:getBatchRecipe', ctx, (_ctx, payload) => {
+    requireSession();
+    return ok(getBatchRecipe(ctx.db, payload.ingredientId));
+  });
+
+  defineHandler('inventory:setBatchRecipe', ctx, (_ctx, payload) => {
+    const s = requireInventoryManage();
+    const parsed = setBatchRecipeInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    setBatchRecipe(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId });
+    return ok({ ingredientId: parsed.data.ingredientId });
+  });
+
+  defineHandler('inventory:makeBatch', ctx, (_ctx, payload) => {
+    // Kitchen staff make batches; any signed-in user may record one.
+    const s = requireSession();
+    const parsed = makeBatchInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(makeBatch(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 
   // ---- Movements ----

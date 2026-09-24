@@ -5,7 +5,8 @@ import { menuImportFileSchema, type MenuImportFile } from '@cheeseoclock/shared-
 import type { MenuImportPreview, MenuImportSummary } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import type { Actor } from '../db/repositories/base.js';
-import { applyMenuImport, planMenuImportFromDb } from '../db/repositories/menu-import-repo.js';
+import { applyMenuImport, planMenuImportFromDb, refuseFreshStartWhileBusy } from '../db/repositories/menu-import-repo.js';
+import { createBackup } from './backup-service.js';
 
 /** Largest menu file accepted — a full menu with recipes is well under 1 MB. */
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -60,10 +61,24 @@ export async function pickMenuImport(db: AppDatabase): Promise<MenuImportPreview
   return { fileName, ...planMenuImportFromDb(db, file).preview };
 }
 
-export function applyPickedMenuImport(db: AppDatabase, actor: Actor): MenuImportSummary {
+/** Re-plan the picked file — as an update, or as a fresh start. */
+export function previewPickedMenuImport(db: AppDatabase, fresh: boolean): MenuImportPreview {
+  if (!picked) throw new MenuImportFileError('Choose a menu file first.');
+  return { fileName: picked.fileName, ...planMenuImportFromDb(db, picked.file, { fresh }).preview };
+}
+
+/**
+ * fresh: the whole current menu is removed before the file is loaded. A local
+ * backup (Settings → Backups) is taken first, so the old menu can be restored.
+ */
+export function applyPickedMenuImport(db: AppDatabase, actor: Actor, opts: { fresh?: boolean } = {}): MenuImportSummary {
   if (!picked) throw new MenuImportFileError('Choose a menu file first.');
   const { file, fileName } = picked;
-  const summary = applyMenuImport(db, file, fileName, actor);
+  if (opts.fresh) {
+    refuseFreshStartWhileBusy(db);
+    createBackup({ kind: 'manual' });
+  }
+  const summary = applyMenuImport(db, file, fileName, actor, { fresh: opts.fresh });
   picked = null;
   return summary;
 }

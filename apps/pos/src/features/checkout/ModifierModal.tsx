@@ -53,7 +53,7 @@ export function ModifierModal({ item, onCancel, onConfirm }: Props) {
   // Validation: required groups need at least minSelect
   const errors = groups
     .filter((g) => g.isRequired && (selected[g.id]?.length ?? 0) < g.minSelect)
-    .map((g) => `Choose ${g.minSelect}+ for ${g.name}`);
+    .map((g) => `Pick ${g.minSelect - (selected[g.id]?.length ?? 0)} more for ${g.name}`);
   const allValid = errors.length === 0;
 
   // Compute running price
@@ -102,7 +102,13 @@ export function ModifierModal({ item, onCancel, onConfirm }: Props) {
                     <span className="text-xs text-stone-500">
                       {g.selectionType === 'single'
                         ? 'Choose 1'
-                        : `Choose ${g.minSelect}-${g.maxSelect}`}
+                        : `${
+                            g.minSelect === g.maxSelect
+                              ? `Choose ${g.minSelect}`
+                              : g.minSelect === 0
+                                ? `Up to ${g.maxSelect}`
+                                : `Choose ${g.minSelect}-${g.maxSelect}`
+                          } · ${selected[g.id]?.length ?? 0} chosen`}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">

@@ -9,8 +9,8 @@ function file(partial: Partial<Record<'categories' | 'ingredients' | 'items', un
     source: 'test',
     categories: partial.categories ?? [{ name: 'Pizza', aliases: ['Regular Pizzas'] }],
     ingredients: partial.ingredients ?? [
-      { name: 'Pan Pizza Dough', unit: 'g', costPerUnitCents: 23 },
-      { name: 'Pizza Box Medium', aliases: ['Pizza box medium'], unit: 'pcs', costPerUnitCents: 5300 },
+      { name: 'Pan Pizza Dough', unit: 'g', costPerUnitCents: 31 },
+      { name: 'Pizza Box Medium', aliases: ['Pizza box medium'], unit: 'pcs', costPerUnitCents: 6000 },
     ],
     items: partial.items ?? [
       {
@@ -38,6 +38,9 @@ function shop(partial: Partial<MenuSnapshot> = {}): MenuSnapshot {
       { id: 'tax-a', name: 'A', rateBps: 1300 },
       { id: 'tax-sindh', name: 'Sindh', rateBps: 1700 },
     ],
+    modifierGroups: [],
+    itemGroups: new Map(),
+    batchLines: new Map(),
     ...partial,
   };
 }
@@ -74,6 +77,8 @@ const ing = (
   costPerUnitCents,
   packSize: null,
   packPriceCents: null,
+  batchYield: null,
+  batchMethod: null,
   notes: null,
   ...extra,
 });
@@ -151,7 +156,7 @@ describe('planMenuImport', () => {
 
   it('updates cost and fills empty notes, but keeps the shop name and stock', () => {
     const f = file({
-      ingredients: [{ name: 'Pan Pizza Dough', aliases: ['Dough'], unit: 'grams', costPerUnitCents: 23, notes: 'Batch recipe…' }],
+      ingredients: [{ name: 'Pan Pizza Dough', aliases: ['Dough'], unit: 'grams', costPerUnitCents: 31, notes: 'Batch recipe…' }],
       items: [],
     });
     const plan = planMenuImport(
@@ -159,7 +164,7 @@ describe('planMenuImport', () => {
       shop({ ingredients: [ing('d', 'Dough', 'g', 20, { notes: '' })] }),
     );
     expect(plan.preview.ingredients[0]).toMatchObject({ action: 'update', existingName: 'Dough' });
-    expect(plan.ops.ingredients[0]?.update).toEqual({ costPerUnitCents: 23, notes: 'Batch recipe…' });
+    expect(plan.ops.ingredients[0]?.update).toEqual({ costPerUnitCents: 31, notes: 'Batch recipe…' });
     expect(plan.ops.ingredients[0]?.update).not.toHaveProperty('name');
   });
 
@@ -175,7 +180,7 @@ describe('planMenuImport', () => {
       shop({
         items: [item('db', 'Dough Ball', { basePriceCents: 100, description: 'x' })],
         ingredients: [ing('fl', 'Flour', 'kg', 19000, { notes: 'n' })],
-        recipes: new Map([['db', [{ ingredientId: 'fl', qtyPerUnit: 1 }]]]),
+        recipes: new Map([['db', [{ ingredientId: 'fl', qtyPerUnit: 1, modifierId: null }]]]),
       }),
     );
     expect(plan.preview.ingredients[0]).toMatchObject({ action: 'update' });
@@ -193,13 +198,13 @@ describe('planMenuImport', () => {
 
   it('shows the per-gram cost change a new pack price brings', () => {
     const f = file({
-      ingredients: [{ name: 'Ketchup', unit: 'g', costPerUnitCents: 38, packSize: 4000, packPriceCents: 150000 }],
+      ingredients: [{ name: 'Ketchup', unit: 'g', costPerUnitCents: 44, packSize: 5000, packPriceCents: 220000 }],
       items: [],
     });
     const plan = planMenuImport(f, shop({ ingredients: [ing('k', 'Ketchup', 'Gram', 30, { notes: 'n' })] }));
     expect(plan.preview.ingredients[0]?.changes).toEqual([
-      'bought as 4,000 Gram for Rs 1,500',
-      'cost Rs 0.30 / Gram → Rs 0.375 / Gram',
+      'bought as 5,000 Gram for Rs 2,200',
+      'cost Rs 0.30 / Gram → Rs 0.44 / Gram',
     ]);
     expect(plan.ops.ingredients[0]?.convert).toBe(false);
   });
@@ -210,11 +215,11 @@ describe('planMenuImport', () => {
       shop({
         items: [item('fm', 'Fajita Pizza — Medium', { basePriceCents: 150000, description: 'x' })],
         ingredients: [
-          ing('d', 'Pan Pizza Dough', 'g', 23, { notes: 'n' }),
-          ing('b', 'Pizza Box Medium', 'pcs', 5300, { notes: 'n' }),
+          ing('d', 'Pan Pizza Dough', 'g', 31, { notes: 'n' }),
+          ing('b', 'Pizza Box Medium', 'pcs', 6000, { notes: 'n' }),
         ],
         recipes: new Map([
-          ['fm', [{ ingredientId: 'b', qtyPerUnit: 1 }, { ingredientId: 'd', qtyPerUnit: 300 }]],
+          ['fm', [{ ingredientId: 'b', qtyPerUnit: 1, modifierId: null }, { ingredientId: 'd', qtyPerUnit: 300, modifierId: null }]],
         ]),
       }),
     );
@@ -304,6 +309,175 @@ describe('planMenuImport', () => {
   });
 });
 
+describe('choices at the till', () => {
+  const dips = {
+    name: 'Choose your dip',
+    aliases: ['Dip'],
+    selectionType: 'single',
+    minSelect: 1,
+    maxSelect: 1,
+    required: true,
+    options: [{ name: 'Ranch' }, { name: 'Sriracha' }],
+  };
+  const withDips = (extra: Partial<Record<string, unknown>> = {}) =>
+    menuImportFileSchema.parse({
+      format: 'cheeseoclock-menu-import',
+      version: 1,
+      categories: [{ name: 'Pizza' }],
+      modifierGroups: [dips],
+      ingredients: [
+        { name: 'Ranch Sauce', unit: 'g', costPerUnitCents: 70 },
+        { name: 'Sriracha Sauce', unit: 'ml', costPerUnitCents: 110 },
+        { name: 'Pan Pizza Dough', unit: 'g', costPerUnitCents: 31 },
+      ],
+      items: [
+        {
+          name: 'Nuggets',
+          category: 'Pizza',
+          priceCents: 67000,
+          modifierGroups: ['Choose your dip'],
+          recipe: [
+            { ingredient: 'Pan Pizza Dough', qty: 10 },
+            { ingredient: 'Ranch Sauce', qty: 25, when: 'Ranch' },
+            { ingredient: 'Sriracha Sauce', qty: 25, when: 'Sriracha' },
+          ],
+        },
+      ],
+      ...extra,
+    });
+
+  it('creates the group, attaches it, and ties each dip line to its option', () => {
+    const plan = planMenuImport(withDips(), shop());
+    expect(plan.preview.choiceGroups[0]).toMatchObject({ name: 'Choose your dip', action: 'create' });
+    expect(plan.ops.modifierGroups[0]?.options.map((o) => o.create?.name)).toEqual(['Ranch', 'Sriracha']);
+    const op = plan.ops.items[0]!;
+    expect(op.attach).toEqual([{ groupKey: 'choose your dip' }]);
+    expect(op.recipe?.map((l) => l.modifier)).toEqual([
+      null,
+      { groupKey: 'choose your dip', optionKey: 'ranch' },
+      { groupKey: 'choose your dip', optionKey: 'sriracha' },
+    ]);
+    expect(plan.preview.items[0]?.changes).toContain('asks: Choose your dip');
+  });
+
+  it('reuses a group the shop has (by alias), adds only missing options, and does not attach it twice', () => {
+    const live = shop({
+      items: [item('n', 'Nuggets', { basePriceCents: 67000, description: 'x' })],
+      ingredients: [ing('r', 'Ranch Sauce', 'g', 70), ing('s', 'Sriracha Sauce', 'ml', 110), ing('d', 'Pan Pizza Dough', 'g', 31)],
+      modifierGroups: [
+        {
+          id: 'g1',
+          name: 'Dip',
+          selectionType: 'single',
+          minSelect: 1,
+          maxSelect: 1,
+          isRequired: true,
+          modifiers: [{ id: 'm-ranch', name: 'Ranch', priceDeltaCents: 0, isDefault: false, sortOrder: 0 }],
+        },
+      ],
+      itemGroups: new Map([['n', [{ groupId: 'g1', sortOrder: 0 }]]]),
+    });
+    const plan = planMenuImport(withDips(), live);
+    expect(plan.preview.choiceGroups[0]).toMatchObject({ action: 'update', existingName: 'Dip', changes: ['"Sriracha" added'] });
+    expect(plan.ops.items[0]?.attach).toEqual([]);
+    expect(plan.ops.items[0]?.recipe?.[1]?.modifier).toEqual({ existingId: 'm-ranch' });
+  });
+
+  it('sees a recipe with the same choice lines as unchanged', () => {
+    const live = shop({
+      items: [item('n', 'Nuggets', { basePriceCents: 67000, description: 'x' })],
+      ingredients: [ing('r', 'Ranch Sauce', 'g', 70, { notes: 'n' }), ing('s', 'Sriracha Sauce', 'ml', 110, { notes: 'n' }), ing('d', 'Pan Pizza Dough', 'g', 31, { notes: 'n' })],
+      modifierGroups: [
+        {
+          id: 'g1', name: 'Choose your dip', selectionType: 'single', minSelect: 1, maxSelect: 1, isRequired: true,
+          modifiers: [
+            { id: 'm-r', name: 'Ranch', priceDeltaCents: 0, isDefault: false, sortOrder: 0 },
+            { id: 'm-s', name: 'Sriracha', priceDeltaCents: 0, isDefault: false, sortOrder: 1 },
+          ],
+        },
+      ],
+      itemGroups: new Map([['n', [{ groupId: 'g1', sortOrder: 0 }]]]),
+      recipes: new Map([
+        ['n', [
+          { ingredientId: 'd', qtyPerUnit: 10, modifierId: null },
+          { ingredientId: 'r', qtyPerUnit: 25, modifierId: 'm-r' },
+          { ingredientId: 's', qtyPerUnit: 25, modifierId: 'm-s' },
+        ]],
+      ]),
+    });
+    const plan = planMenuImport(withDips(), live);
+    expect(plan.preview.items[0]).toMatchObject({ action: 'same', recipeChange: 'same' });
+  });
+
+  it('refuses a line for a choice the item does not offer', () => {
+    const bad = menuImportFileSchema.safeParse({
+      format: 'cheeseoclock-menu-import',
+      version: 1,
+      categories: [{ name: 'Pizza' }],
+      ingredients: [{ name: 'Ranch Sauce', unit: 'g', costPerUnitCents: 70 }],
+      items: [{ name: 'X', category: 'Pizza', priceCents: 1, recipe: [{ ingredient: 'Ranch Sauce', qty: 25, when: 'Ranch' }] }],
+    });
+    expect(bad.success).toBe(false);
+  });
+});
+
+describe('batch recipes', () => {
+  const file2 = (batch: unknown) =>
+    menuImportFileSchema.parse({
+      format: 'cheeseoclock-menu-import',
+      version: 1,
+      categories: [{ name: 'Pizza' }],
+      ingredients: [
+        { name: 'Mayonnaise', unit: 'g', costPerUnitCents: 100 },
+        { name: 'Yogurt', unit: 'g', costPerUnitCents: 50 },
+        { name: 'Ranch Sauce', unit: 'g', costPerUnitCents: 80, batch },
+      ],
+      items: [],
+    });
+  const ranch = { yield: 150, method: 'Mix well', lines: [{ ingredient: 'Mayonnaise', qty: 100 }, { ingredient: 'Yogurt', qty: 50 }] };
+
+  it('sets the batch recipe of a new made-in-house ingredient', () => {
+    const plan = planMenuImport(file2(ranch), shop());
+    expect(plan.ops.batches).toEqual([
+      {
+        ingredient: { fileKey: 'ranch sauce' },
+        batchYield: 150,
+        batchMethod: 'Mix well',
+        lines: [
+          { ingredient: { fileKey: 'mayonnaise' }, qty: 100 },
+          { ingredient: { fileKey: 'yogurt' }, qty: 50 },
+        ],
+      },
+    ]);
+    expect(plan.preview.summary.batchRecipesSet).toBe(1);
+  });
+
+  it('leaves an identical batch recipe alone, and keeps the shop\'s own method', () => {
+    const live = shop({
+      ingredients: [
+        ing('m', 'Mayonnaise', 'g', 100, { notes: 'n' }),
+        ing('y', 'Yogurt', 'g', 50, { notes: 'n' }),
+        ing('r', 'Ranch Sauce', 'g', 80, { notes: 'n', batchYield: 150, batchMethod: 'Our way' }),
+      ],
+      batchLines: new Map([['r', [{ inputId: 'm', qty: 100 }, { inputId: 'y', qty: 50 }]]]),
+    });
+    const plan = planMenuImport(file2(ranch), live);
+    expect(plan.ops.batches).toEqual([]);
+    expect(plan.preview.ingredients.find((i) => i.name === 'Ranch Sauce')?.action).toBe('same');
+  });
+
+  it('refuses a batch that uses itself', () => {
+    const bad = menuImportFileSchema.safeParse({
+      format: 'cheeseoclock-menu-import',
+      version: 1,
+      categories: [],
+      ingredients: [{ name: 'Ranch Sauce', unit: 'g', costPerUnitCents: 1, batch: { yield: 10, lines: [{ ingredient: 'Ranch Sauce', qty: 5 }] } }],
+      items: [],
+    });
+    expect(bad.success).toBe(false);
+  });
+});
+
 describe('menuImportFileSchema', () => {
   it('rejects fractional recipe quantities and unknown ingredients', () => {
     const base = {
@@ -322,5 +496,29 @@ describe('menuImportFileSchema', () => {
       items: [{ name: 'Cheetos', category: 'Pizza', priceCents: 1, recipe: [{ ingredient: 'Cheese', qty: 10 }] }],
     });
     expect(unknown.success).toBe(false);
+  });
+
+  it('a fresh start (empty menu) keeps the tax the old menu used, not the first by name', () => {
+    const f = menuImportFileSchema.parse({
+      format: 'cheeseoclock-menu-import',
+      version: 2,
+      categories: [{ name: 'Pizza' }],
+      ingredients: [],
+      items: [{ name: 'Fajita Pizza — Medium', category: 'Pizza', priceCents: 150000 }],
+    });
+    const empty = shop({ categories: [], items: [], taxUse: new Map([['tax-sindh', 12]]) });
+    const plan = planMenuImport(f, empty);
+    expect(plan.ops.taxCategoryId).toBe('tax-sindh');
+    expect(plan.preview.items[0]).toMatchObject({ action: 'create' });
+    // Without the old menu's tax use, the first by name would win.
+    expect(planMenuImport(f, shop({ categories: [], items: [] })).ops.taxCategoryId).toBe('tax-a');
+  });
+
+  it('reads versions 1 and 2 only', () => {
+    const file = (version: number) =>
+      menuImportFileSchema.safeParse({ format: 'cheeseoclock-menu-import', version, categories: [], ingredients: [], items: [] });
+    expect(file(1).success).toBe(true);
+    expect(file(2).success).toBe(true);
+    expect(file(3).success).toBe(false);
   });
 });

@@ -88,7 +88,8 @@ export const ipc = {
     listCombos: (input?: IpcRequest<'menu:listCombos'>) =>
       unwrap(window.api.menu.listCombos(input)),
     importPick: () => unwrap(window.api.menu.importPick()),
-    importApply: () => unwrap(window.api.menu.importApply()),
+    importPreview: (fresh: boolean) => unwrap(window.api.menu.importPreview({ fresh })),
+    importApply: (fresh = false) => unwrap(window.api.menu.importApply({ fresh })),
     listTaxCategories: () => unwrap(window.api.menu.listTaxCategories()),
     createTaxCategory: (input: IpcRequest<'menu:createTaxCategory'>) =>
       unwrap(window.api.menu.createTaxCategory(input)),
@@ -282,6 +283,12 @@ export const ipc = {
       unwrap(window.api.inventory.getRecipe({ menuItemId })),
     setRecipe: (input: IpcRequest<'inventory:setRecipe'>) =>
       unwrap(window.api.inventory.setRecipe(input)),
+    getBatchRecipe: (ingredientId: string) =>
+      unwrap(window.api.inventory.getBatchRecipe({ ingredientId })),
+    setBatchRecipe: (input: IpcRequest<'inventory:setBatchRecipe'>) =>
+      unwrap(window.api.inventory.setBatchRecipe(input)),
+    makeBatch: (input: IpcRequest<'inventory:makeBatch'>) =>
+      unwrap(window.api.inventory.makeBatch(input)),
     listMovements: (input?: IpcRequest<'inventory:listMovements'>) =>
       unwrap(window.api.inventory.listMovements(input)),
     recordMovement: (input: IpcRequest<'inventory:recordMovement'>) =>

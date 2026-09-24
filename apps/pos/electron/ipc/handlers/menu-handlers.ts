@@ -37,9 +37,12 @@ import {
 import { listCombos } from '../../db/repositories/combo-repo.js';
 import {
   pickMenuImport,
+  previewPickedMenuImport,
   applyPickedMenuImport,
   MenuImportFileError,
 } from '../../services/menu-import-service.js';
+import { MenuImportRefusedError } from '../../db/repositories/menu-import-repo.js';
+import { requireAdmin } from '../guards.js';
 
 function requireSession(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -127,12 +130,26 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
     }
   });
 
-  defineHandler('menu:importApply', ctx, () => {
-    const s = requireMenuManage();
+  defineHandler('menu:importPreview', ctx, (_ctx, payload) => {
+    requireMenuManage();
     try {
-      return ok(applyPickedMenuImport(ctx.db, { userId: s.id, deviceId: ctx.deviceId }));
+      return ok(previewPickedMenuImport(ctx.db, payload.fresh));
     } catch (e) {
       if (e instanceof MenuImportFileError) return err({ code: 'precondition_failed', message: e.message });
+      throw e;
+    }
+  });
+
+  defineHandler('menu:importApply', ctx, (_ctx, payload) => {
+    const fresh = payload?.fresh === true;
+    // Replacing the whole menu is the owner's call; updating it is a manager's.
+    const s = fresh ? requireAdmin('Replacing the whole menu') : requireMenuManage();
+    try {
+      return ok(applyPickedMenuImport(ctx.db, { userId: s.id, deviceId: ctx.deviceId }, { fresh }));
+    } catch (e) {
+      if (e instanceof MenuImportFileError || e instanceof MenuImportRefusedError) {
+        return err({ code: 'precondition_failed', message: e.message });
+      }
       throw e;
     }
   });

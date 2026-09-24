@@ -166,8 +166,10 @@ export function recordStockMovement(
 
 /**
  * Decrement ingredients consumed by an order. Walks each order item's recipe
- * and deducts qty_per_unit × quantity. Idempotent guard: if any movement rows
- * already exist for this order, skip (don't double-decrement).
+ * and deducts qty_per_unit × quantity — every line without a choice, plus the
+ * lines of the choices made on that order line (the five veggies picked, the
+ * dip picked). Idempotent guard: if any movement rows already exist for this
+ * order, skip (don't double-decrement).
  *
  * Returns the list of ingredients that crossed below their threshold.
  */
@@ -187,6 +189,10 @@ export function decrementForOrder(
               r.ingredient_id, r.qty_per_unit, i.name, i.current_qty, i.low_threshold
          FROM order_items oi
          JOIN recipes r ON r.menu_item_id = oi.menu_item_id AND r.deleted_at IS NULL
+          AND (r.modifier_id IS NULL OR EXISTS (
+                SELECT 1 FROM order_item_modifiers oim
+                 WHERE oim.order_item_id = oi.id AND oim.modifier_id = r.modifier_id
+                   AND oim.deleted_at IS NULL))
          JOIN ingredients i ON i.id = r.ingredient_id AND i.deleted_at IS NULL
         WHERE oi.order_id = ? AND oi.deleted_at IS NULL`,
     )

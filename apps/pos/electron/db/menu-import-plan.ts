@@ -17,6 +17,12 @@
  *     unit mismatch is skipped, and so are the recipes that use it.
  *   - A pack price ("6,000 g for Rs 2,250") decides the per-gram cost.
  *   - A description is only filled in where the item has none.
+ *   - Choice groups ("Choose your dip") are matched by name; missing options
+ *     are added, none removed. Items gain the file's groups; groups they
+ *     already had stay attached.
+ *   - A recipe line with `when` is only used when that choice is picked.
+ *   - Batch recipes (what the kitchen makes) replace the old batch recipe;
+ *     a method is only filled in where there is none.
  */
 
 import {
@@ -30,6 +36,7 @@ import {
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
 import type {
   MenuImportCategoryPlan,
+  MenuImportChoiceGroupPlan,
   MenuImportIngredientPlan,
   MenuImportItemPlan,
   MenuImportPreview,
@@ -54,15 +61,39 @@ export interface MenuSnapshot {
     costPerUnitCents: number;
     packSize: number | null;
     packPriceCents: number | null;
+    batchYield: number | null;
+    batchMethod: string | null;
     notes: string | null;
   }>;
   /** Live recipe lines per menu item id. */
-  recipes: Map<string, Array<{ ingredientId: string; qtyPerUnit: number }>>;
+  recipes: Map<string, Array<{ ingredientId: string; qtyPerUnit: number; modifierId: string | null }>>;
   taxCategories: Array<{ id: string; name: string; rateBps: number }>;
+  modifierGroups: Array<{
+    id: string;
+    name: string;
+    selectionType: 'single' | 'multi';
+    minSelect: number;
+    maxSelect: number;
+    isRequired: boolean;
+    modifiers: Array<{ id: string; name: string; priceDeltaCents: number; isDefault: boolean; sortOrder: number }>;
+  }>;
+  /** Groups attached to each menu item id. */
+  itemGroups: Map<string, Array<{ groupId: string; sortOrder: number }>>;
+  /** Batch recipe inputs per made-in-house ingredient id. */
+  batchLines: Map<string, Array<{ inputId: string; qty: number }>>;
+  /**
+   * How many items use each tax category, when that is not `items` — a fresh
+   * start plans against an empty menu but keeps the tax the shop was using.
+   */
+  taxUse?: Map<string, number>;
 }
 
 /** A reference to an ingredient that exists now, or one the import creates first. */
 export type IngredientRef = { existingId: string } | { fileKey: string };
+/** A choice group that exists now, or one the import creates. */
+export type GroupRef = { existingId: string } | { groupKey: string };
+/** An option of a choice group that exists now, or one the import creates. */
+export type ModifierRef = { existingId: string } | { groupKey: string; optionKey: string };
 
 export interface MenuImportOps {
   categories: Array<{
@@ -101,8 +132,28 @@ export interface MenuImportOps {
     } | null;
     /** useImportTax: move the item onto the import's tax category (see taxCategoryId / createTaxCategory). */
     update: { basePriceCents?: number; description?: string; useImportTax?: true } | null;
+    /** Choice groups to attach (in addition to those already attached). */
+    attach: GroupRef[];
     /** Replace the item's recipe with these lines; null = leave the recipe alone. */
-    recipe: Array<{ ingredient: IngredientRef; qty: number }> | null;
+    recipe: Array<{ ingredient: IngredientRef; qty: number; modifier: ModifierRef | null }> | null;
+  }>;
+  modifierGroups: Array<{
+    groupKey: string;
+    existingId: string | null;
+    create: { name: string; selectionType: 'single' | 'multi'; minSelect: number; maxSelect: number; isRequired: boolean } | null;
+    update: { selectionType?: 'single' | 'multi'; minSelect?: number; maxSelect?: number; isRequired?: boolean } | null;
+    options: Array<{
+      optionKey: string;
+      existingId: string | null;
+      create: { name: string; priceDeltaCents: number; isDefault: boolean; sortOrder: number } | null;
+      update: { priceDeltaCents?: number; isDefault?: boolean } | null;
+    }>;
+  }>;
+  batches: Array<{
+    ingredient: IngredientRef;
+    batchYield: number;
+    batchMethod: string | null;
+    lines: Array<{ ingredient: IngredientRef; qty: number }>;
   }>;
   /** Tax category for new items and useImportTax updates… */
   taxCategoryId: string | null;
@@ -189,7 +240,10 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     newIngredients: 0,
     updatedIngredients: 0,
     newCategories: 0,
+    choiceGroupsChanged: 0,
+    batchRecipesSet: 0,
     skipped: 0,
+    removedItems: 0,
   };
 
   // ---- Categories ----------------------------------------------------------
@@ -227,9 +281,12 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
   /** existing ingredient id → factor its stock and recipe lines are scaled by */
   const conversions = new Map<string, number>();
   const ingredientMatches = matchAll(file.ingredients, live.ingredients);
+  /** file ingredient key → the existing row it matched (for batch comparison) */
+  const matchedIngredient = new Map<string, MenuSnapshot['ingredients'][number]>();
   file.ingredients.forEach((ing, i) => {
     const key = ing.name.toLowerCase();
     const m = ingredientMatches[i]!;
+    if (m.row) matchedIngredient.set(key, m.row);
     const base = {
       name: ing.name,
       unit: ing.unit,
@@ -333,9 +390,159 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     if (changed) summary.updatedIngredients++;
   });
 
+  // ---- Batch recipes ---------------------------------------------------------
+  const batchOps: MenuImportOps['batches'] = [];
+  const planOf = new Map(ingredientPlans.map((p) => [p.name.toLowerCase(), p]));
+  file.ingredients.forEach((ing) => {
+    const key = ing.name.toLowerCase();
+    const self = ingredientRef.get(key);
+    const plan = planOf.get(key);
+    if (!ing.batch || !self || !plan) return;
+    const lines = ing.batch.lines.map((l) => ({ ref: ingredientRef.get(l.ingredient.toLowerCase()), name: l.ingredient, qty: l.qty }));
+    const unresolved = lines.filter((l) => !l.ref).map((l) => l.name);
+    if (unresolved.length > 0) {
+      plan.reason = `Batch recipe left as it is: ${unresolved.join(', ')} could not be imported`;
+      return;
+    }
+    const row = matchedIngredient.get(key);
+    const factor = row ? conversions.get(row.id) ?? 1 : 1;
+    const current = row ? live.batchLines.get(row.id) ?? [] : [];
+    const same =
+      !!row &&
+      (row.batchYield ?? 0) * factor === ing.batch.yield &&
+      current.length === lines.length &&
+      lines.every((l) => {
+        if (!('existingId' in l.ref!)) return false;
+        const id = l.ref.existingId;
+        const f = conversions.get(id) ?? 1;
+        return current.some((c) => c.inputId === id && c.qty * f === l.qty);
+      });
+    const method = row?.batchMethod?.trim() ? row.batchMethod : ing.batch.method;
+    if (same && method === (row?.batchMethod ?? null)) return;
+    batchOps.push({
+      ingredient: self,
+      batchYield: ing.batch.yield,
+      batchMethod: method,
+      lines: lines.map((l) => ({ ingredient: l.ref!, qty: l.qty })),
+    });
+    if (!same) {
+      plan.changes.push(`batch recipe: ${lines.length} inputs, makes ${ing.batch.yield} ${ing.unit}`);
+      summary.batchRecipesSet++;
+    } else {
+      plan.changes.push('batch method added');
+    }
+    if (plan.action === 'same') {
+      plan.action = 'update';
+      summary.updatedIngredients++;
+    }
+  });
+
+  // ---- Choice groups -------------------------------------------------------
+  const choicePlans: MenuImportChoiceGroupPlan[] = [];
+  const groupOps: MenuImportOps['modifierGroups'] = [];
+  /** file group key → how items refer to it; absent = skipped */
+  const groupRef = new Map<string, GroupRef>();
+  /** "groupKey|optionKey" → how recipe lines refer to the option; absent = skipped */
+  const optionRef = new Map<string, ModifierRef>();
+  const groupMatches = matchAll(file.modifierGroups, live.modifierGroups);
+  file.modifierGroups.forEach((g, i) => {
+    const groupKey = g.name.toLowerCase();
+    const m = groupMatches[i]!;
+    const optionNames = g.options.map((o) => o.name);
+    if (!m.row && m.ambiguous.length > 0) {
+      choicePlans.push({
+        name: g.name,
+        action: 'skip',
+        existingName: null,
+        options: optionNames,
+        changes: [`More than one choice group here could be this one: ${m.ambiguous.map((r) => r.name).join(', ')}`],
+      });
+      summary.skipped++;
+      return;
+    }
+    const shape = { selectionType: g.selectionType, minSelect: g.minSelect, maxSelect: g.maxSelect, isRequired: g.required };
+    if (!m.row) {
+      groupRef.set(groupKey, { groupKey });
+      groupOps.push({
+        groupKey,
+        existingId: null,
+        create: { name: g.name, ...shape },
+        update: null,
+        options: g.options.map((o, j) => {
+          const optionKey = o.name.toLowerCase();
+          optionRef.set(`${groupKey}|${optionKey}`, { groupKey, optionKey });
+          return {
+            optionKey,
+            existingId: null,
+            create: { name: o.name, priceDeltaCents: o.priceDeltaCents, isDefault: o.isDefault, sortOrder: j },
+            update: null,
+          };
+        }),
+      });
+      choicePlans.push({ name: g.name, action: 'create', existingName: null, options: optionNames, changes: [] });
+      summary.choiceGroupsChanged++;
+      return;
+    }
+    const row = m.row;
+    groupRef.set(groupKey, { existingId: row.id });
+    const changes: string[] = [];
+    const update: NonNullable<MenuImportOps['modifierGroups'][number]['update']> = {};
+    if (row.selectionType !== shape.selectionType) update.selectionType = shape.selectionType;
+    if (row.minSelect !== shape.minSelect) update.minSelect = shape.minSelect;
+    if (row.maxSelect !== shape.maxSelect) update.maxSelect = shape.maxSelect;
+    if (row.isRequired !== shape.isRequired) update.isRequired = shape.isRequired;
+    if (Object.keys(update).length > 0) {
+      changes.push(`choose ${shape.minSelect === shape.maxSelect ? shape.minSelect : `${shape.minSelect}–${shape.maxSelect}`}${shape.isRequired ? ', required' : ''}`);
+    }
+    let nextSort = Math.max(0, ...row.modifiers.map((x) => x.sortOrder + 1));
+    const optionMatches = matchAll(g.options, row.modifiers);
+    const options: MenuImportOps['modifierGroups'][number]['options'] = [];
+    g.options.forEach((o, j) => {
+      const optionKey = o.name.toLowerCase();
+      const om = optionMatches[j]!;
+      if (!om.row && om.ambiguous.length > 0) {
+        changes.push(`"${o.name}" skipped: more than one option could be it`);
+        return;
+      }
+      if (!om.row) {
+        optionRef.set(`${groupKey}|${optionKey}`, { groupKey, optionKey });
+        options.push({
+          optionKey,
+          existingId: null,
+          create: { name: o.name, priceDeltaCents: o.priceDeltaCents, isDefault: o.isDefault, sortOrder: nextSort++ },
+          update: null,
+        });
+        changes.push(`"${o.name}" added`);
+        return;
+      }
+      optionRef.set(`${groupKey}|${optionKey}`, { existingId: om.row.id });
+      const oUpdate: { priceDeltaCents?: number; isDefault?: boolean } = {};
+      if (om.row.priceDeltaCents !== o.priceDeltaCents) {
+        oUpdate.priceDeltaCents = o.priceDeltaCents;
+        changes.push(`"${om.row.name}" ${formatCents(om.row.priceDeltaCents)} → ${formatCents(o.priceDeltaCents)}`);
+      }
+      if (om.row.isDefault !== o.isDefault) oUpdate.isDefault = o.isDefault;
+      options.push({ optionKey, existingId: om.row.id, create: null, update: Object.keys(oUpdate).length ? oUpdate : null });
+    });
+    const changed = Object.keys(update).length > 0 || options.some((o) => o.create || o.update);
+    groupOps.push({ groupKey, existingId: row.id, create: null, update: Object.keys(update).length ? update : null, options });
+    choicePlans.push({ name: g.name, action: changed ? 'update' : 'same', existingName: row.name, options: optionNames, changes });
+    if (changed) summary.choiceGroupsChanged++;
+  });
+  const fileGroups = new Map(file.modifierGroups.map((g) => [g.name.toLowerCase(), g]));
+  /** An item's choices: option name → the option, through the item's groups. */
+  const optionsOf = (item: MenuImportFile['items'][number]) => {
+    const out = new Map<string, ModifierRef | undefined>();
+    for (const gName of item.modifierGroups) {
+      const g = fileGroups.get(gName.toLowerCase());
+      for (const o of g?.options ?? []) out.set(o.name.toLowerCase(), optionRef.get(`${gName.toLowerCase()}|${o.name.toLowerCase()}`));
+    }
+    return out;
+  };
+
   // ---- Items ---------------------------------------------------------------
-  const counts = new Map<string, number>();
-  for (const it of live.items) counts.set(it.taxCategoryId, (counts.get(it.taxCategoryId) ?? 0) + 1);
+  const counts = new Map<string, number>(live.taxUse ?? []);
+  if (!live.taxUse) for (const it of live.items) counts.set(it.taxCategoryId, (counts.get(it.taxCategoryId) ?? 0) + 1);
   const byUse = (a: { id: string; name: string }, b: { id: string; name: string }) =>
     (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0) || a.name.localeCompare(b.name);
   const pct = (bps: number) => `${bps / 100}%`;
@@ -383,12 +590,17 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
   file.items.forEach((item, i) => {
     const m = itemMatches[i]!;
     const catKey = item.category.toLowerCase();
+    const itemOptions = optionsOf(item);
     const recipeRefs = item.recipe.map((line) => ({
       ingredient: ingredientRef.get(line.ingredient.toLowerCase()),
-      name: line.ingredient,
+      modifier: line.when ? itemOptions.get(line.when.toLowerCase()) : null,
+      name: line.when ? `${line.ingredient} (if ${line.when})` : line.ingredient,
       qty: line.qty,
     }));
-    const missing = recipeRefs.filter((l) => !l.ingredient).map((l) => l.name);
+    const missing = recipeRefs.filter((l) => !l.ingredient || l.modifier === undefined).map((l) => l.name);
+    const attachWanted = item.modifierGroups
+      .map((gName) => ({ name: gName, ref: groupRef.get(gName.toLowerCase()) }))
+      .filter((x): x is { name: string; ref: GroupRef } => !!x.ref);
     const base = { name: item.name, priceCents: item.priceCents, recipeLines: item.recipe.length };
 
     if (!m.row && m.ambiguous.length > 0) {
@@ -412,7 +624,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       if (missing.length > 0) {
         recipeReason = `Recipe left as it is: ${missing.join(', ')} could not be imported`;
       } else {
-        recipe = recipeRefs.map((l) => ({ ingredient: l.ingredient!, qty: l.qty }));
+        recipe = recipeRefs.map((l) => ({ ingredient: l.ingredient!, qty: l.qty, modifier: l.modifier ?? null }));
       }
     }
 
@@ -436,7 +648,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
         categoryName: categoryNameByKey.get(catKey) ?? item.category,
         action: 'create',
         existingName: null,
-        changes: [],
+        changes: attachWanted.length ? [`asks: ${attachWanted.map((x) => x.name).join(', ')}`] : [],
         recipeChange: recipe ? 'set' : item.recipe.length > 0 ? 'skip' : 'none',
         reason: recipeReason,
       });
@@ -450,6 +662,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
           sortOrder: item.sortOrder,
         },
         update: null,
+        attach: attachWanted.map((x) => x.ref),
         recipe,
       });
       summary.newItems++;
@@ -477,6 +690,10 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       summary.taxChanges++;
     }
 
+    const attachedNow = new Set((live.itemGroups.get(row.id) ?? []).map((a) => a.groupId));
+    const attach = attachWanted.filter((x) => !('existingId' in x.ref) || !attachedNow.has(x.ref.existingId));
+    if (attach.length > 0) changes.push(`asks: ${attach.map((x) => x.name).join(', ')}`);
+
     let recipeChange: MenuImportItemPlan['recipeChange'] = item.recipe.length > 0 ? 'skip' : 'none';
     if (recipe) {
       const current = live.recipes.get(row.id) ?? [];
@@ -484,9 +701,11 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
         current.length === recipe.length &&
         recipe.every((l) => {
           if (!('existingId' in l.ingredient)) return false;
+          if (l.modifier && !('existingId' in l.modifier)) return false;
           const id = l.ingredient.existingId;
+          const modifierId = l.modifier && 'existingId' in l.modifier ? l.modifier.existingId : null;
           const factor = conversions.get(id) ?? 1;
-          return current.some((c) => c.ingredientId === id && c.qtyPerUnit * factor === l.qty);
+          return current.some((c) => c.ingredientId === id && c.modifierId === modifierId && c.qtyPerUnit * factor === l.qty);
         });
       if (same) {
         recipe = null;
@@ -499,7 +718,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     }
 
     const hasUpdate = Object.keys(update).length > 0;
-    const action = hasUpdate || recipe ? 'update' : 'same';
+    const action = hasUpdate || recipe || attach.length > 0 ? 'update' : 'same';
     if (action === 'update') summary.updatedItems++;
     itemPlans.push({
       ...base,
@@ -511,7 +730,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       reason: recipeReason,
     });
     if (action === 'update') {
-      itemOps.push({ existingId: row.id, create: null, update: hasUpdate ? update : null, recipe });
+      itemOps.push({ existingId: row.id, create: null, update: hasUpdate ? update : null, attach: attach.map((x) => x.ref), recipe });
     }
   });
 
@@ -531,11 +750,13 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
 
   return {
     preview: {
+      fresh: null,
       source: file.source,
       taxCategoryName: importTaxName && importTaxRate !== null ? `${importTaxName} (${pct(importTaxRate)})` : null,
       taxCategoryIsNew: createTaxCategory !== null,
       taxFromFile: file.tax !== null,
       categories: categoryPlans.filter((_, i) => keepCategory(i)),
+      choiceGroups: choicePlans,
       ingredients: ingredientPlans,
       items: itemPlans,
       untouchedItems,
@@ -546,6 +767,8 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       categories: categoriesKept,
       ingredients: ingredientOps,
       items: itemOps,
+      modifierGroups: groupOps,
+      batches: batchOps,
       taxCategoryId: taxCategory?.id ?? null,
       createTaxCategory,
     },

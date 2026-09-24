@@ -16,6 +16,10 @@ export interface Ingredient {
   packSize: number | null;
   /** Price of one such pack, in paisa. */
   packPriceCents: number | null;
+  /** Made in-house: one batch yields this many base units (null = bought in). */
+  batchYield: number | null;
+  /** How to make a batch (free text). */
+  batchMethod: string | null;
   defaultSupplierId: UUID | null;
   sku: string | null;
   notes: string | null;
@@ -27,6 +31,26 @@ export interface Recipe {
   menuItemId: UUID;
   ingredientId: UUID;
   qtyPerUnit: number;
+  /** Only used when this modifier (a choice at the till) is on the order line; null = always. */
+  modifierId: UUID | null;
+}
+
+/** One input of a batch recipe, with what it costs now. */
+export interface BatchRecipeLine {
+  inputIngredientId: UUID;
+  name: string;
+  unit: string;
+  qty: number;
+  costPerUnitCents: number;
+}
+
+export interface BatchRecipe {
+  ingredientId: UUID;
+  batchYield: number | null;
+  batchMethod: string | null;
+  lines: BatchRecipeLine[];
+  /** What one batch costs at today's input costs, in paisa. */
+  batchCostCents: number;
 }
 
 export interface Supplier {

@@ -42,6 +42,7 @@ import type {
   PurchaseOrder,
   PurchaseOrderStatus,
   PurchaseOrderWithItems,
+  BatchRecipe,
 } from './inventory.js';
 import type { Customer, CustomerAddress, CustomerAddressMatch, CustomerWithAddresses } from './customer.js';
 import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
@@ -289,8 +290,17 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<MenuImportPreview | null>;
   };
+  /** Re-plan the picked file, as an update (fresh false) or a fresh start. */
+  'menu:importPreview': {
+    request: { fresh: boolean };
+    response: ApiResult<MenuImportPreview>;
+  };
+  /**
+   * fresh: remove the whole current menu first (owner login; refused while
+   * orders are open; a local backup is taken before anything changes).
+   */
   'menu:importApply': {
-    request: undefined;
+    request: { fresh: boolean } | undefined;
     response: ApiResult<MenuImportSummary>;
   };
 
@@ -834,15 +844,35 @@ export interface IpcContract {
   'inventory:getRecipe': {
     request: { menuItemId: string };
     response: ApiResult<
-      Array<Recipe & { ingredientName: string; unit: string }>
+      Array<Recipe & { ingredientName: string; unit: string; modifierName: string | null }>
     >;
   };
   'inventory:setRecipe': {
     request: {
       menuItemId: string;
-      lines: Array<{ ingredientId: string; qtyPerUnit: number }>;
+      lines: Array<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>;
     };
     response: ApiResult<{ menuItemId: string }>;
+  };
+
+  // Inventory — batch recipes (what the kitchen makes itself)
+  'inventory:getBatchRecipe': {
+    request: { ingredientId: string };
+    response: ApiResult<BatchRecipe>;
+  };
+  'inventory:setBatchRecipe': {
+    request: {
+      ingredientId: string;
+      batchYield: number | null;
+      batchMethod?: string | null;
+      lines: Array<{ inputIngredientId: string; qty: number }>;
+    };
+    response: ApiResult<{ ingredientId: string }>;
+  };
+  /** Record batches made: inputs come out of stock, the yield goes in. */
+  'inventory:makeBatch': {
+    request: { ingredientId: string; batches: number };
+    response: ApiResult<{ made: number; resultingQty: number }>;
   };
 
   // Inventory — movements (audit log + manual adjustments)
