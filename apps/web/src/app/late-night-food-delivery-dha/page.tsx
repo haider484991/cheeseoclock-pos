@@ -23,7 +23,7 @@ const NIGHT_PICKS = [
     alt: 'Cheesy Star signature pizza',
     fallback: { big: 'Till 1 am', small: 'Ovens on every night' },
     title: 'The midnight pizza',
-    body: 'The star-cut Cheesy Star, built for sharing — or a Classic or Special Pepperoni in Medium 9" or Large 12". The ovens stay on until we close at 1 am.',
+    body: 'The star-cut Cheesy Star, built for sharing — or a Classic Pepperoni in Medium 9" or Large 12". The ovens stay on until we close at 1 am.',
   },
   {
     img: null as string | null,

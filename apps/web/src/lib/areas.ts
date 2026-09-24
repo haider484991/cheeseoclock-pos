@@ -275,8 +275,8 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     ],
     popular: [
       {
-        name: 'Classic & Special Pepperoni',
-        blurb: 'Two takes on pepperoni from the regular menu, each in Medium 9" or Large 12".',
+        name: 'Classic Pepperoni',
+        blurb: 'Pepperoni on rich tomato sauce, from the regular menu in Medium 9" or Large 12".',
       },
       {
         name: 'Crispy Signature',

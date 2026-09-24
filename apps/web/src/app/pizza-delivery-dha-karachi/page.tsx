@@ -30,7 +30,7 @@ const WHY = [
     alt: 'Regular pizzas in Medium 9" and Large 12"',
     fallback: { big: '9" · 12"', small: 'Medium · Large' },
     title: 'Regular pizzas, two sizes',
-    body: 'Fajita, Classic Supreme, Malai Supreme, Chicken Tikka, Chicken Tikka Malai, Cheesalious, Veggie Lovers (any five veggies), Classic and Special Pepperoni — each in Medium 9" or Large 12".',
+    body: 'Fajita, Classic Supreme, Malai Supreme, Chicken Tikka, Chicken Tikka Malai, Cheesalious, Veggie Lovers (any five veggies) and Classic Pepperoni — each in Medium 9" or Large 12".',
   },
   {
     img: null as string | null,
