@@ -6,6 +6,7 @@ import {
   groupLabel,
   isDealSection,
   isPickupOnly,
+  menuWithoutDrinkBrand,
   optionLabel,
   shopPhotoFor,
   sizeLabel,
@@ -184,6 +185,8 @@ describe('value deals', () => {
     ]);
     expect(buildMenuView(old)[0]!.cards[0]!.description).toBe('2 Large 12" + 1 litre soft drink.');
     expect(withoutDrinkBrand(null)).toBeNull();
+    // …and not in the menu data the page ships to the browser either.
+    expect(JSON.stringify(menuWithoutDrinkBrand(old))).not.toMatch(/pepsi/i);
   });
 
   it('claims no saving it cannot price', () => {

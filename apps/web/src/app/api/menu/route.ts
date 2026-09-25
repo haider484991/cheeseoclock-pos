@@ -1,4 +1,5 @@
 import { sql } from '@/lib/db';
+import { menuWithoutDrinkBrand } from '@/lib/menu-view';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +20,7 @@ export async function GET(): Promise<Response> {
       );
     }
     return Response.json(
-      { ok: true, data: row.menu_json },
+      { ok: true, data: menuWithoutDrinkBrand(row.menu_json) },
       // Cache at the CDN for 60s — menu changes are infrequent and the POS
       // republish simply overwrites; a stale minute is fine.
       { headers: { 'Cache-Control': 's-maxage=60, stale-while-revalidate=300' } },

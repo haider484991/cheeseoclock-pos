@@ -72,6 +72,17 @@ export function withoutDrinkBrand(text: string | null): string | null {
   return text === null ? null : text.replace(/\bpepsi\b/gi, 'soft drink');
 }
 
+/** The whole published menu without the brand — for anything that ships it to a browser. */
+export function menuWithoutDrinkBrand(menu: PublishedMenu): PublishedMenu {
+  return {
+    ...menu,
+    categories: menu.categories.map((c) => ({
+      ...c,
+      items: c.items.map((i) => ({ ...i, description: withoutDrinkBrand(i.description) })),
+    })),
+  };
+}
+
 export function isPickupOnly(item: Pick<PublishedMenuItem, 'description'>): boolean {
   return /\bpick[\s-]?up only\b/i.test(item.description ?? '');
 }

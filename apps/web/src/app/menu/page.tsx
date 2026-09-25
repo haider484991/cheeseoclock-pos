@@ -6,6 +6,7 @@ import { BUSINESS } from '@/lib/business';
 import { sql } from '@/lib/db';
 import { JsonLd, menuNode, webPageNode } from '@/lib/seo';
 import { getStoreStatus } from '@/lib/store-status';
+import { menuWithoutDrinkBrand } from '@/lib/menu-view';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 
 export const metadata: Metadata = {
@@ -35,7 +36,8 @@ async function loadMenu(): Promise<PublishedMenu | null> {
     const rows = (await sql()`
       SELECT menu_json FROM site_menu WHERE id = 1
     `) as Array<{ menu_json: PublishedMenu }>;
-    return rows[0]?.menu_json ?? null;
+    // Sent whole to the browser as the ordering app's props: no drink brand in it.
+    return rows[0] ? menuWithoutDrinkBrand(rows[0].menu_json) : null;
   } catch (e) {
     console.error('menu load failed', e);
     return null;
