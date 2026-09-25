@@ -75,6 +75,8 @@ export const menuImportModifierGroupSchema = z
           aliases,
           priceDeltaCents: centsSchema.default(0),
           isDefault: z.boolean().default(false),
+          /** A "leave out" choice: the ingredient (by name in this file) it takes off the dish. */
+          removes: name.nullable().default(null),
         }),
       )
       .min(1)
@@ -102,8 +104,10 @@ export const menuImportFileSchema = z
      * recipes. Before 0.6.7 the POS read only version 1 and would have dropped
      * `when`, deducting every dip and veggie on every sale — so a file that
      * uses them says 2, and an older POS refuses it instead.
+     * 3 = may carry "leave out" choices (option `removes`, POS 0.7.5): a POS
+     * before that would import "No onion" and still deduct the onion.
      */
-    version: z.union([z.literal(1), z.literal(2)]),
+    version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     source: z.string().max(300).nullable().default(null),
     /**
      * The tax every item in the file is charged (added on top of the price —
@@ -138,6 +142,17 @@ export const menuImportFileSchema = z
 
     const categories = new Set(file.categories.map((c) => c.name.toLowerCase()));
     const ingredients = new Set(file.ingredients.map((i) => i.name.toLowerCase()));
+    file.modifierGroups.forEach((g, gi) => {
+      g.options.forEach((o, oi) => {
+        if (o.removes && !ingredients.has(o.removes.toLowerCase())) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['modifierGroups', gi, 'options', oi, 'removes'],
+            message: `"${o.name}" leaves out "${o.removes}", which is not an ingredient in the file`,
+          });
+        }
+      });
+    });
     const groups = new Map(file.modifierGroups.map((g) => [g.name.toLowerCase(), g]));
     file.ingredients.forEach((ing, i) => {
       ing.batch?.lines.forEach((l, j) => {

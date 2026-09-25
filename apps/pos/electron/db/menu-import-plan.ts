@@ -75,7 +75,14 @@ export interface MenuSnapshot {
     minSelect: number;
     maxSelect: number;
     isRequired: boolean;
-    modifiers: Array<{ id: string; name: string; priceDeltaCents: number; isDefault: boolean; sortOrder: number }>;
+    modifiers: Array<{
+      id: string;
+      name: string;
+      priceDeltaCents: number;
+      isDefault: boolean;
+      sortOrder: number;
+      removesIngredientId?: string | null;
+    }>;
   }>;
   /** Groups attached to each menu item id. */
   itemGroups: Map<string, Array<{ groupId: string; sortOrder: number }>>;
@@ -145,8 +152,15 @@ export interface MenuImportOps {
     options: Array<{
       optionKey: string;
       existingId: string | null;
-      create: { name: string; priceDeltaCents: number; isDefault: boolean; sortOrder: number } | null;
-      update: { priceDeltaCents?: number; isDefault?: boolean } | null;
+      create: {
+        name: string;
+        priceDeltaCents: number;
+        isDefault: boolean;
+        sortOrder: number;
+        /** A "leave out" choice: the ingredient it takes off the dish. */
+        removes: IngredientRef | null;
+      } | null;
+      update: { priceDeltaCents?: number; isDefault?: boolean; removes?: IngredientRef | null } | null;
     }>;
   }>;
   batches: Array<{
@@ -444,6 +458,9 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
   const groupRef = new Map<string, GroupRef>();
   /** "groupKey|optionKey" → how recipe lines refer to the option; absent = skipped */
   const optionRef = new Map<string, ModifierRef>();
+  /** A leave-out choice's ingredient, by its name in the file (the schema checked it exists). */
+  const removesRef = (name: string | null | undefined): IngredientRef | null =>
+    name ? ingredientRef.get(name.toLowerCase()) ?? null : null;
   const groupMatches = matchAll(file.modifierGroups, live.modifierGroups);
   file.modifierGroups.forEach((g, i) => {
     const groupKey = g.name.toLowerCase();
@@ -474,7 +491,13 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
           return {
             optionKey,
             existingId: null,
-            create: { name: o.name, priceDeltaCents: o.priceDeltaCents, isDefault: o.isDefault, sortOrder: j },
+            create: {
+              name: o.name,
+              priceDeltaCents: o.priceDeltaCents,
+              isDefault: o.isDefault,
+              sortOrder: j,
+              removes: removesRef(o.removes),
+            },
             update: null,
           };
         }),
@@ -509,14 +532,30 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
         options.push({
           optionKey,
           existingId: null,
-          create: { name: o.name, priceDeltaCents: o.priceDeltaCents, isDefault: o.isDefault, sortOrder: nextSort++ },
+          create: {
+            name: o.name,
+            priceDeltaCents: o.priceDeltaCents,
+            isDefault: o.isDefault,
+            sortOrder: nextSort++,
+            removes: removesRef(o.removes),
+          },
           update: null,
         });
         changes.push(`"${o.name}" added`);
         return;
       }
       optionRef.set(`${groupKey}|${optionKey}`, { existingId: om.row.id });
-      const oUpdate: { priceDeltaCents?: number; isDefault?: boolean } = {};
+      const oUpdate: { priceDeltaCents?: number; isDefault?: boolean; removes?: IngredientRef | null } = {};
+      const wantRemoves = removesRef(o.removes);
+      const haveRemoves = om.row.removesIngredientId ?? null;
+      const sameRemoves =
+        wantRemoves === null
+          ? haveRemoves === null
+          : 'existingId' in wantRemoves && wantRemoves.existingId === haveRemoves;
+      if (!sameRemoves) {
+        oUpdate.removes = wantRemoves;
+        changes.push(`"${om.row.name}" ${wantRemoves ? `leaves out ${o.removes}` : 'no longer leaves anything out'}`);
+      }
       if (om.row.priceDeltaCents !== o.priceDeltaCents) {
         oUpdate.priceDeltaCents = o.priceDeltaCents;
         changes.push(`"${om.row.name}" ${formatCents(om.row.priceDeltaCents)} → ${formatCents(o.priceDeltaCents)}`);

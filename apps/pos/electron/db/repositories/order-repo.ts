@@ -773,6 +773,114 @@ export function addOrderItem(
   return inserted;
 }
 
+/**
+ * Change a line's choices and its note after it is in the cart: "Customize" on
+ * the till (owner 2026-09-26 — leave-outs for allergic customers, extras, and
+ * an "allergy / special request" note that prints on the kitchen ticket).
+ * Open orders only. The chosen choices replace the line's old ones; the line
+ * total is re-priced from their snapshots, the same way addOrderItem prices it.
+ */
+export function updateOrderItemOptions(
+  db: AppDatabase,
+  input: { orderId: string; orderItemId: string; modifierIds: string[]; notes: string | null },
+  actor: Actor & { userId: string },
+): void {
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be changed now`);
+    const line = db
+      .prepare(
+        `SELECT id, unit_price_cents, quantity, notes FROM order_items
+          WHERE id = ? AND order_id = ? AND deleted_at IS NULL`,
+      )
+      .get(input.orderItemId, input.orderId) as
+      | { id: string; unit_price_cents: number; quantity: number; notes: string | null }
+      | undefined;
+    if (!line) throw new Error('Order item not found');
+
+    const ids = [...new Set(input.modifierIds)];
+    const modRows = ids.length
+      ? (db
+          .prepare(
+            `SELECT id, name, price_delta_cents FROM modifiers
+              WHERE id IN (${ids.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+          )
+          .all(...ids) as Array<{ id: string; name: string; price_delta_cents: number }>)
+      : [];
+    if (modRows.length !== ids.length) {
+      throw new Error('One of the chosen options is no longer on the menu — publish the menu again');
+    }
+    const notes = input.notes?.trim().slice(0, 300) || null;
+
+    const before = db
+      .prepare(
+        `SELECT id, modifier_id, modifier_name, price_delta_cents FROM order_item_modifiers
+          WHERE order_item_id = ? AND deleted_at IS NULL`,
+      )
+      .all(input.orderItemId) as Array<{ id: string; modifier_id: string; modifier_name: string; price_delta_cents: number }>;
+
+    const now = nowIso();
+    for (const old of before) {
+      db.prepare(
+        `UPDATE order_item_modifiers SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(now, now, old.id);
+      enqueueSync(db, { entityType: 'order_item_modifiers', entityId: old.id, op: 'delete', payload: { id: old.id, deletedAt: now } });
+    }
+    for (const mr of modRows) {
+      const modOrderId = uuidv7();
+      db.prepare(
+        `INSERT INTO order_item_modifiers
+           (id, order_item_id, modifier_id, modifier_name, price_delta_cents,
+            created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(modOrderId, input.orderItemId, mr.id, mr.name, mr.price_delta_cents, now, now, actor.deviceId);
+      enqueueSync(db, {
+        entityType: 'order_item_modifiers',
+        entityId: modOrderId,
+        op: 'upsert',
+        payload: {
+          id: modOrderId,
+          orderItemId: input.orderItemId,
+          modifierId: mr.id,
+          modifierName: mr.name,
+          priceDeltaCents: mr.price_delta_cents,
+        },
+      });
+    }
+
+    const modSum = modRows.reduce((sum, m) => sum + m.price_delta_cents, 0);
+    const lineTotal = (line.unit_price_cents + modSum) * line.quantity;
+    db.prepare(
+      `UPDATE order_items SET line_total_cents = ?, notes = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).run(lineTotal, notes, now, input.orderItemId);
+    enqueueSync(db, {
+      entityType: 'order_items',
+      entityId: input.orderItemId,
+      op: 'upsert',
+      payload: { id: input.orderItemId, lineTotalCents: lineTotal, notes },
+    });
+    writeAudit(db, {
+      entityType: 'order_items',
+      entityId: input.orderItemId,
+      action: 'update_options',
+      actorUserId: actor.userId,
+      before: {
+        notes: line.notes,
+        modifiers: before.map((m) => ({ modifierId: m.modifier_id, modifierName: m.modifier_name, priceDeltaCents: m.price_delta_cents })),
+      },
+      after: {
+        notes,
+        lineTotalCents: lineTotal,
+        modifiers: modRows.map((m) => ({ modifierId: m.id, modifierName: m.name, priceDeltaCents: m.price_delta_cents })),
+      },
+    });
+
+    recomputeOrderTotals(db, input.orderId, actor);
+  });
+  tx();
+}
+
 export function removeOrderItem(
   db: AppDatabase,
   orderId: string,

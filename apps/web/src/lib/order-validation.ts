@@ -1,6 +1,6 @@
 import type { PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
 import { isDeliveryChargeItem } from './delivery-zones';
-import { isPickupOnly, splitSizedName } from './menu-view';
+import { groupLabel, isPickupOnly, splitSizedName } from './menu-view';
 
 /**
  * Items the website must not put on an order even though the till published
@@ -56,15 +56,15 @@ export function validateModifierSelection(
     const chosen = modifierIds.filter((id) => idsInGroup.has(id)).length;
 
     if (group.selectionType === 'single' && chosen > 1) {
-      return `"${group.name}" allows only one choice.`;
+      return `"${groupLabel(group)}" allows only one choice.`;
     }
     if (group.maxSelect > 0 && chosen > group.maxSelect) {
-      return `"${group.name}" allows at most ${group.maxSelect} choices.`;
+      return `"${groupLabel(group)}" allows at most ${group.maxSelect} choices.`;
     }
     if (group.isRequired) {
       const needed = Math.max(1, group.minSelect);
       if (chosen < needed) {
-        return `"${group.name}" is required for "${item.name}".`;
+        return `"${groupLabel(group)}" is required for "${item.name}".`;
       }
     }
   }

@@ -78,6 +78,7 @@ const api: RendererApi = {
     addItem: (req) => invoke('orders:addItem', req),
     updateItemQuantity: (req) => invoke('orders:updateItemQuantity', req),
     removeItem: (req) => invoke('orders:removeItem', req),
+    updateItemOptions: (req) => invoke('orders:updateItemOptions', req),
     applyDiscount: (req) => invoke('orders:applyDiscount', req),
     clearDiscount: (req) => invoke('orders:clearDiscount', req),
     setMode: (req) => invoke('orders:setMode', req),

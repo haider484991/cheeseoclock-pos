@@ -12,6 +12,7 @@ import {
 } from '@/lib/delivery-zones';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
+  ALLERGY_NOTICE,
   buildMenuView,
   dealWorthCents,
   groupLabel,
@@ -24,6 +25,7 @@ import {
   type MenuVariant,
 } from '@/lib/menu-view';
 import {
+  isLeaveOutChoice,
   type PublishedMenu,
   type PublishedMenuItem,
   type PublishedModifierGroup,
@@ -53,12 +55,14 @@ function newOrderId(): string {
  */
 
 interface CartLine {
-  key: string; // posItemId + sorted modifier ids — merges identical lines
+  key: string; // posItemId + sorted modifier ids + note — merges identical lines
   item: PublishedMenuItem;
   /** Card name + size, e.g. "Fajita Pizza · Large 12"". */
   label: string;
   quantity: number;
   modifierIds: string[];
+  /** The item's allergy / special request; prints on the kitchen ticket. */
+  notes: string | null;
 }
 
 const ZONE_KEY = 'coc.zone';
@@ -210,14 +214,20 @@ export function OrderingApp({
     toastTimer.current = setTimeout(() => setToast(null), 1800);
   }
 
-  function addToCart(item: PublishedMenuItem, label: string, modifierIds: string[], quantity = 1) {
-    const key = `${item.posItemId}|${[...modifierIds].sort().join(',')}`;
+  function addToCart(
+    item: PublishedMenuItem,
+    label: string,
+    modifierIds: string[],
+    quantity = 1,
+    notes: string | null = null,
+  ) {
+    const key = `${item.posItemId}|${[...modifierIds].sort().join(',')}|${notes ?? ''}`;
     setCart((prev) => {
       const existing = prev.find((l) => l.key === key);
       if (existing) {
         return prev.map((l) => (l.key === key ? { ...l, quantity: l.quantity + quantity } : l));
       }
-      return [...prev, { key, item, label, quantity, modifierIds }];
+      return [...prev, { key, item, label, quantity, modifierIds, notes }];
     });
     flash(`Added ${quantity > 1 ? `${quantity} × ` : ''}${label}`);
   }
@@ -362,8 +372,8 @@ export function OrderingApp({
           card={sheet.card}
           initialVariant={sheet.variantIndex}
           onClose={() => setSheet(null)}
-          onConfirm={(v, ids, qty) => {
-            addToCart(v.item, variantLabel(sheet.card, v), ids, qty);
+          onConfirm={(v, ids, qty, notes) => {
+            addToCart(v.item, variantLabel(sheet.card, v), ids, qty, notes);
             setSheet(null);
           }}
         />
@@ -424,6 +434,7 @@ function MenuHeader({ canPickup, pickupPct }: { canPickup: boolean; pickupPct: n
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">12 noon – 1 am</li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>
         </ul>
+        <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{ALLERGY_NOTICE}</p>
       </div>
     </div>
   );
@@ -897,12 +908,20 @@ function CartLineRow({
     .map((id) => mods.get(id)?.name)
     .filter((n): n is string => Boolean(n))
     .map(optionLabel);
+  const leaveOuts = names.filter(isLeaveOutChoice);
+  const others = names.filter((n) => !isLeaveOutChoice(n));
   return (
     <li className="flex items-start gap-2 rounded-2xl bg-paper p-3">
       <div className="min-w-0 flex-1">
         <div className="font-cond text-base font-bold uppercase leading-tight text-ink">{line.label}</div>
-        {names.length > 0 && (
-          <div className="mt-0.5 text-xs leading-snug text-ink-muted">{names.join(' · ')}</div>
+        {leaveOuts.length > 0 && (
+          <div className="mt-0.5 text-xs font-bold leading-snug text-red-700">{leaveOuts.join(' · ')}</div>
+        )}
+        {others.length > 0 && (
+          <div className="mt-0.5 text-xs leading-snug text-ink-muted">{others.join(' · ')}</div>
+        )}
+        {line.notes && (
+          <div className="mt-0.5 break-words text-xs font-semibold leading-snug text-ink">Note: {line.notes}</div>
         )}
         <div className="mt-1 font-cond text-sm font-bold tabular-nums text-ink">
           {formatCents(unit * line.quantity)}
@@ -1062,9 +1081,10 @@ function ItemSheet({
   card: MenuCard;
   initialVariant: number;
   onClose: () => void;
-  onConfirm: (variant: MenuVariant, modifierIds: string[], quantity: number) => void;
+  onConfirm: (variant: MenuVariant, modifierIds: string[], quantity: number, notes: string | null) => void;
 }) {
   const [variantIndex, setVariantIndex] = useState(initialVariant);
+  const [notes, setNotes] = useState('');
   const variant = card.variants[variantIndex] ?? card.variants[0]!;
   const item = variant.item;
   const groups = useMemo(
@@ -1230,7 +1250,11 @@ function ItemSheet({
                 <span className="font-cond text-sm font-extrabold uppercase tracking-widest text-ink">
                   {groupLabel(g)}
                 </span>
-                {g.selectionType === 'multi' && g.maxSelect > 1 ? (
+                {need === 0 ? (
+                  <span className="font-cond text-xs font-bold uppercase tracking-wide text-ink-muted">
+                    Optional
+                  </span>
+                ) : g.selectionType === 'multi' && g.maxSelect > 1 ? (
                   <span
                     className={`rounded-full px-2.5 py-0.5 font-cond text-xs font-bold uppercase ${
                       done ? 'bg-emerald-600 text-white' : 'bg-cheese text-ink'
@@ -1259,7 +1283,9 @@ function ItemSheet({
                       <label
                         key={m.posModifierId}
                         className={`flex cursor-pointer items-center justify-between gap-2 rounded-xl border-2 px-3 py-2.5 text-sm transition-colors ${
-                          checked
+                          checked && isLeaveOutChoice(m.name)
+                            ? 'border-red-600 bg-red-50'
+                            : checked
                             ? 'border-ink bg-cheese/25'
                             : blocked
                               ? 'cursor-not-allowed border-paper-line bg-white opacity-45'
@@ -1289,6 +1315,24 @@ function ItemSheet({
             </fieldset>
           );
         })}
+
+        <label className="mt-5 block">
+          <span className="font-cond text-sm font-extrabold uppercase tracking-widest text-ink">
+            Allergy or special request
+          </span>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value.slice(0, 300))}
+            rows={2}
+            maxLength={300}
+            placeholder="e.g. nut allergy, well done, cut in 8"
+            className="mt-2 w-full rounded-xl border-2 border-paper-line bg-white px-3 py-2.5 text-sm text-ink placeholder:text-ink-muted/70 focus:border-ink focus:outline-none"
+          />
+          <span className="mt-1 block text-xs leading-snug text-ink-muted">
+            Goes to the kitchen with this item. Our kitchen shares equipment, so we can&rsquo;t guarantee any
+            dish is allergen-free.
+          </span>
+        </label>
       </div>
 
       <div className="flex shrink-0 items-center gap-3 border-t border-paper-line bg-white px-5 py-4">
@@ -1296,7 +1340,9 @@ function ItemSheet({
         <button
           aria-disabled={unmet.length > 0}
           onClick={() =>
-            unmet.length > 0 ? showGroup(unmet[0]!.posGroupId, true) : onConfirm(variant, [...selected], qty)
+            unmet.length > 0
+              ? showGroup(unmet[0]!.posGroupId, true)
+              : onConfirm(variant, [...selected], qty, notes.trim() || null)
           }
           className={`flex-1 rounded-full bg-ink py-3.5 font-cond text-lg font-bold uppercase tracking-wide text-cheese transition-all active:scale-[0.99] ${
             unmet.length > 0 ? 'opacity-55' : 'hover:bg-ink-soft'
@@ -1372,6 +1418,7 @@ function CheckoutSheet(
             posItemId: l.item.posItemId,
             quantity: l.quantity,
             modifierIds: l.modifierIds,
+            ...(l.notes ? { notes: l.notes } : {}),
           })),
         }),
       });
@@ -1513,6 +1560,7 @@ function CheckoutSheet(
             />
           )}
           <Field label="Notes (optional)" value={notes} onChange={setNotes} placeholder="Ring the bell twice" />
+          <p className="text-xs leading-snug text-ink-muted">{ALLERGY_NOTICE}</p>
         </div>
 
         <Totals {...props} />

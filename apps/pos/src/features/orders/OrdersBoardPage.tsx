@@ -21,6 +21,7 @@ import {
 import { ipc, onWebOrderImportFailed } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
+import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { AssignRiderDialog } from './AssignRiderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { VoidOrderDialog } from './VoidOrderDialog';
@@ -413,6 +414,20 @@ function OrderCard({
           <div className="text-stone-400">+{snap.items.length - 3} more…</div>
         )}
       </div>
+
+      {/* Leave-outs and allergy / special-request notes, whatever line they are on:
+          the card shows three lines at most, and this must not be one of the hidden ones. */}
+      {(() => {
+        const flags = snap.items.flatMap((i) => [
+          ...i.modifiers.filter((m) => isLeaveOutChoice(m.modifierName)).map((m) => `${m.modifierName.toUpperCase()} (${i.menuItemName})`),
+          ...(i.notes ? [`${i.notes} (${i.menuItemName})`] : []),
+        ]);
+        return flags.length > 0 ? (
+          <div className="mt-1.5 rounded-md bg-red-50 px-2 py-1 text-[11px] font-semibold leading-snug text-red-800 dark:bg-red-950/50 dark:text-red-200">
+            Leave out / allergy: {flags.join(' · ')}
+          </div>
+        ) : null;
+      })()}
 
       {/* Delivery-specific blob: address, phone, rider */}
       {order.mode === 'delivery' && (

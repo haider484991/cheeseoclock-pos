@@ -21,6 +21,8 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 export function CheckoutPage() {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [modifierForItem, setModifierForItem] = useState<MenuItem | null>(null);
+  /** The cart line being customised (leave-outs, extras, allergy note). */
+  const [customizeLineId, setCustomizeLineId] = useState<string | null>(null);
   const [pizzaChoice, setPizzaChoice] = useState<MenuChoice | null>(null);
   const sizeTriggerRef = useRef<HTMLElement | null>(null);
   const [tenderOpen, setTenderOpen] = useState(false);
@@ -78,6 +80,12 @@ export function CheckoutPage() {
       }),
   });
 
+  const customizeLine = customizeLineId ? snapshot?.items.find((i) => i.id === customizeLineId) ?? null : null;
+  // The line's menu item (name, description, price) from the menu the grid shows;
+  // a line whose item has since left the menu cannot be customised.
+  const customizeItem = customizeLine
+    ? (itemsQ.data ?? []).find((m) => m.id === customizeLine.menuItemId) ?? null
+    : null;
   const visibleItems = (itemsQ.data ?? []).filter((item) =>
     `${item.name} ${item.description ?? ''}`.toLowerCase().includes(search.trim().toLowerCase()),
   );
@@ -155,8 +163,12 @@ export function CheckoutPage() {
 
   async function handleAddItem(item: MenuItem) {
     try {
+      // Only a choice the item cannot be sold without (a dip, the five veggies,
+      // a deal's pizzas) opens the choices first. Leave-outs, extras and the
+      // allergy note are optional: the item goes straight in, and "Customize"
+      // on its cart line opens them — so every pizza is still one tap.
       const groups = await ipc.menu.listModifierGroupsForItem(item.id);
-      if (groups.length > 0) {
+      if (groups.some((g) => g.isRequired || g.minSelect > 0)) {
         setModifierForItem(item);
         return;
       }
@@ -248,7 +260,7 @@ export function CheckoutPage() {
         </div>
       </section>
 
-      <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen(true)} onSendToKitchen={handleSendToKitchen} />
+      <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen(true)} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
 
       {pizzaChoice && (
         <PizzaSizeDialog choice={pizzaChoice} returnFocus={sizeTriggerRef.current} onClose={() => setPizzaChoice(null)} onSelect={(item) => { setPizzaChoice(null); void handleAddItem(item); }} />
@@ -258,14 +270,36 @@ export function CheckoutPage() {
         <ModifierModal
           item={modifierForItem}
           onCancel={() => setModifierForItem(null)}
-          onConfirm={async (modifierIds) => {
+          onConfirm={async (modifierIds, notes) => {
             setModifierForItem(null);
             try {
-              await useCheckoutStore.getState().addItem(modifierForItem.id, 1, modifierIds);
+              await useCheckoutStore.getState().addItem(modifierForItem.id, 1, modifierIds, notes);
               setCheckoutStep('items');
             } catch (e) {
               toast({
                 title: 'Could not add item',
+                description: e instanceof Error ? e.message : 'Unknown error',
+                variant: 'error',
+              });
+            }
+          }}
+        />
+      )}
+
+      {customizeLine && customizeItem && (
+        <ModifierModal
+          item={customizeItem}
+          initialModifierIds={customizeLine.modifiers.map((m) => m.modifierId)}
+          initialNotes={customizeLine.notes}
+          confirmLabel="Save"
+          onCancel={() => setCustomizeLineId(null)}
+          onConfirm={async (modifierIds, notes) => {
+            setCustomizeLineId(null);
+            try {
+              await useCheckoutStore.getState().updateItemOptions(customizeLine.id, modifierIds, notes);
+            } catch (e) {
+              toast({
+                title: 'Could not change the item',
                 description: e instanceof Error ? e.message : 'Unknown error',
                 variant: 'error',
               });

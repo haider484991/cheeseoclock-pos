@@ -267,8 +267,25 @@ export function applyMenuImport(
       groupIds.set(g.groupKey, gid);
       for (const o of g.options) {
         let oid = o.existingId;
-        if (!oid) oid = createModifier(db, { modifierGroupId: gid, ...o.create! }, actor).id;
-        else if (o.update) updateModifier(db, { id: oid, ...o.update }, actor);
+        if (!oid) {
+          const { removes, ...create } = o.create!;
+          oid = createModifier(
+            db,
+            { modifierGroupId: gid, ...create, removesIngredientId: removes ? ingredientId(removes) : null },
+            actor,
+          ).id;
+        } else if (o.update) {
+          const { removes, ...update } = o.update;
+          updateModifier(
+            db,
+            {
+              id: oid,
+              ...update,
+              ...(removes !== undefined ? { removesIngredientId: removes ? ingredientId(removes) : null } : {}),
+            },
+            actor,
+          );
+        }
         optionIds.set(`${g.groupKey}|${o.optionKey}`, oid);
       }
     }

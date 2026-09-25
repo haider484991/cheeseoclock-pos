@@ -409,6 +409,80 @@ describe('choices at the till', () => {
     expect(plan.preview.items[0]).toMatchObject({ action: 'same', recipeChange: 'same' });
   });
 
+  describe('leave-out choices', () => {
+    const leaveOut = {
+      name: 'Leave out · Nuggets',
+      selectionType: 'multi',
+      minSelect: 0,
+      maxSelect: 1,
+      required: false,
+      options: [{ name: 'No ranch', removes: 'Ranch Sauce' }],
+    };
+    const withLeaveOut = () =>
+      menuImportFileSchema.parse({
+        format: 'cheeseoclock-menu-import',
+        version: 3,
+        categories: [{ name: 'Pizza' }],
+        modifierGroups: [leaveOut],
+        ingredients: [
+          { name: 'Ranch Sauce', unit: 'g', costPerUnitCents: 70 },
+          { name: 'Pan Pizza Dough', unit: 'g', costPerUnitCents: 31 },
+        ],
+        items: [
+          {
+            name: 'Nuggets',
+            category: 'Pizza',
+            priceCents: 67000,
+            modifierGroups: ['Leave out · Nuggets'],
+            recipe: [
+              { ingredient: 'Pan Pizza Dough', qty: 10 },
+              { ingredient: 'Ranch Sauce', qty: 25 },
+            ],
+          },
+        ],
+      });
+
+    it('creates the option with the ingredient it leaves out', () => {
+      const plan = planMenuImport(withLeaveOut(), shop());
+      expect(plan.ops.modifierGroups[0]?.options[0]?.create).toMatchObject({
+        name: 'No ranch',
+        removes: { fileKey: 'ranch sauce' },
+      });
+    });
+
+    it('points an existing option at the ingredient, and then sees it as unchanged', () => {
+      const live = (removesIngredientId: string | null) =>
+        shop({
+          items: [item('n', 'Nuggets', { basePriceCents: 67000, description: 'x' })],
+          ingredients: [ing('r', 'Ranch Sauce', 'g', 70, { notes: 'n' }), ing('d', 'Pan Pizza Dough', 'g', 31, { notes: 'n' })],
+          modifierGroups: [
+            {
+              id: 'g1', name: 'Leave out · Nuggets', selectionType: 'multi', minSelect: 0, maxSelect: 1, isRequired: false,
+              modifiers: [{ id: 'm-nr', name: 'No ranch', priceDeltaCents: 0, isDefault: false, sortOrder: 0, removesIngredientId }],
+            },
+          ],
+          itemGroups: new Map([['n', [{ groupId: 'g1', sortOrder: 0 }]]]),
+        });
+      const before = planMenuImport(withLeaveOut(), live(null));
+      expect(before.ops.modifierGroups[0]?.options[0]?.update).toEqual({ removes: { existingId: 'r' } });
+      expect(before.preview.choiceGroups[0]?.changes).toContain('"No ranch" leaves out Ranch Sauce');
+      const after = planMenuImport(withLeaveOut(), live('r'));
+      expect(after.ops.modifierGroups[0]?.options[0]?.update).toBeNull();
+    });
+
+    it('refuses a leave-out of an ingredient the file does not have', () => {
+      const bad = menuImportFileSchema.safeParse({
+        format: 'cheeseoclock-menu-import',
+        version: 3,
+        categories: [],
+        ingredients: [],
+        items: [],
+        modifierGroups: [{ ...leaveOut, options: [{ name: 'No ranch', removes: 'Ranch Sauce' }] }],
+      });
+      expect(bad.success).toBe(false);
+    });
+  });
+
   it('refuses a line for a choice the item does not offer', () => {
     const bad = menuImportFileSchema.safeParse({
       format: 'cheeseoclock-menu-import',
@@ -529,11 +603,12 @@ describe('menuImportFileSchema', () => {
     expect(planMenuImport(f, shop({ categories: [], items: [] })).ops.taxCategoryId).toBe('tax-a');
   });
 
-  it('reads versions 1 and 2 only', () => {
+  it('reads versions 1 to 3 only', () => {
     const file = (version: number) =>
       menuImportFileSchema.safeParse({ format: 'cheeseoclock-menu-import', version, categories: [], ingredients: [], items: [] });
     expect(file(1).success).toBe(true);
     expect(file(2).success).toBe(true);
-    expect(file(3).success).toBe(false);
+    expect(file(3).success).toBe(true);
+    expect(file(4).success).toBe(false);
   });
 });

@@ -194,7 +194,15 @@ export function decrementForOrder(
                  WHERE oim.order_item_id = oi.id AND oim.modifier_id = r.modifier_id
                    AND oim.deleted_at IS NULL))
          JOIN ingredients i ON i.id = r.ingredient_id AND i.deleted_at IS NULL
-        WHERE oi.order_id = ? AND oi.deleted_at IS NULL`,
+        WHERE oi.order_id = ? AND oi.deleted_at IS NULL
+          -- A "leave out" choice on the line ("No onion", migration 0022) keeps
+          -- that ingredient's base recipe line off stock for this line. Extras
+          -- the customer asked for (lines with a modifier) are still deducted.
+          AND NOT (r.modifier_id IS NULL AND EXISTS (
+                SELECT 1 FROM order_item_modifiers lo
+                  JOIN modifiers lm ON lm.id = lo.modifier_id
+                 WHERE lo.order_item_id = oi.id AND lo.deleted_at IS NULL
+                   AND lm.removes_ingredient_id = r.ingredient_id))`,
     )
     .all(orderId) as Array<{
     menu_item_id: string;

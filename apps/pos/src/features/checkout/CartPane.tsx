@@ -17,6 +17,7 @@ import { useToast } from '../../components/toast/ToastProvider';
 import { resetCustomerForm, useCustomerForm } from './useCustomerForm';
 import { CustomerInlinePanel } from './CustomerInlinePanel';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 
 interface Props {
   step: 'items' | 'details';
@@ -25,6 +26,8 @@ interface Props {
   onPay: () => void;
   onDiscount: () => void;
   onSendToKitchen: () => void;
+  /** Open the line's choices + allergy / special-request note. */
+  onCustomize: (orderItemId: string) => void;
 }
 
 /** "Delivery needs a customer phone" → "customer phone"; the row already says "Still needed". */
@@ -35,7 +38,7 @@ function shortMissing(missing: string[]): string {
 }
 
 /** The ticket contains items, totals and checkout actions. */
-export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendToKitchen }: Props) {
+export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendToKitchen, onCustomize }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
   const mode = useCheckoutStore((s) => s.mode);
@@ -160,14 +163,22 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
                   {item.modifiers.length > 0 && (
                     <div className="ticket-line-mods">
                       {item.modifiers.map((m) => (
-                        <span key={m.id}>
+                        <span key={m.id} className={isLeaveOutChoice(m.modifierName) ? 'is-leave-out' : undefined}>
                           {m.modifierName}
                           {m.priceDeltaCents !== 0 && ` ${formatCents(m.priceDeltaCents, { showSymbol: false })}`}
                         </span>
                       ))}
                     </div>
                   )}
-                  {item.notes && <div className="ticket-line-note">{item.notes}</div>}
+                  {item.notes && <div className="ticket-line-note">Note: {item.notes}</div>}
+                  <button
+                    type="button"
+                    className="ticket-link ticket-customize"
+                    disabled={busy}
+                    onClick={() => onCustomize(item.id)}
+                  >
+                    Customize · allergy
+                  </button>
                 </div>
                 <div className="ticket-line-price">{formatCents(item.lineTotalCents, { showSymbol: false })}</div>
               </li>

@@ -280,8 +280,11 @@ describe('renderKitchenTicket', () => {
     expect(r.some((x) => x.startsWith('2 x Chicken Tikka Pizza Large (12")'))).toBe(true);
     expect(r.join(' ')).toContain('with Stuffed Crust');
     expect(r).toContain('    + Extra Cheese');
-    expect(r).toContain('    + No onions');
-    expect(r).toContain('    ** Extra crispy please - and cut into 8');
+    // a leave-out shouts, without the "+", ahead of the extras
+    expect(r).toContain('    NO ONIONS');
+    expect(r).not.toContain('    + No onions');
+    expect(r.indexOf('    NO ONIONS')).toBeLessThan(r.indexOf('    + Extra Cheese'));
+    expect(r.join(' ')).toContain('!! ALLERGY/NOTE: Extra crispy please');
     expect(r).toContain('1 x Coke 500ml');
     expect(r).toContain('  House 12, Street 7, Phase 6, DHA, Karachi -');
     const text = r.join('\n');

@@ -212,6 +212,7 @@ interface ModRow {
   price_delta_cents: number;
   is_default: number;
   sort_order: number;
+  removes_ingredient_id: string | null;
   created_at: string;
   updated_at: string;
   synced_at: string | null;
@@ -228,11 +229,12 @@ function rowToModifier(row: ModRow): Modifier {
     priceDeltaCents: row.price_delta_cents as Modifier['priceDeltaCents'],
     isDefault: toBool(row.is_default),
     sortOrder: row.sort_order,
+    removesIngredientId: row.removes_ingredient_id as Modifier['removesIngredientId'],
   };
 }
 
 const MOD_SELECT = `
-  id, modifier_group_id, name, price_delta_cents, is_default, sort_order,
+  id, modifier_group_id, name, price_delta_cents, is_default, sort_order, removes_ingredient_id,
   created_at, updated_at, synced_at, deleted_at, device_id, version
 `;
 
@@ -253,6 +255,7 @@ export interface CreateModifierInput {
   priceDeltaCents: number;
   isDefault?: boolean;
   sortOrder?: number;
+  removesIngredientId?: string | null;
 }
 
 export function createModifier(
@@ -269,6 +272,7 @@ export function createModifier(
     priceDeltaCents: input.priceDeltaCents as Modifier['priceDeltaCents'],
     isDefault: input.isDefault ?? false,
     sortOrder: input.sortOrder ?? 0,
+    removesIngredientId: (input.removesIngredientId ?? null) as Modifier['removesIngredientId'],
   };
   writeWithSync({
     db,
@@ -283,8 +287,8 @@ export function createModifier(
       db.prepare(
         `INSERT INTO modifiers
            (id, modifier_group_id, name, price_delta_cents, is_default, sort_order,
-            created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            removes_ingredient_id, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       ).run(
         id,
         mod.modifierGroupId,
@@ -292,6 +296,7 @@ export function createModifier(
         mod.priceDeltaCents,
         fromBool(mod.isDefault),
         mod.sortOrder,
+        mod.removesIngredientId ?? null,
         now,
         now,
         actor.deviceId,
@@ -307,6 +312,8 @@ export interface UpdateModifierInput {
   priceDeltaCents?: number;
   isDefault?: boolean;
   sortOrder?: number;
+  /** Omitted = unchanged; null = no longer a leave-out choice. */
+  removesIngredientId?: string | null;
 }
 
 export function updateModifier(
@@ -326,6 +333,9 @@ export function updateModifier(
     priceDeltaCents: (input.priceDeltaCents ?? before.priceDeltaCents) as Modifier['priceDeltaCents'],
     isDefault: input.isDefault ?? before.isDefault,
     sortOrder: input.sortOrder ?? before.sortOrder,
+    removesIngredientId: (input.removesIngredientId !== undefined
+      ? input.removesIngredientId
+      : before.removesIngredientId ?? null) as Modifier['removesIngredientId'],
   };
   const now = nowIso();
 
@@ -342,13 +352,14 @@ export function updateModifier(
       db.prepare(
         `UPDATE modifiers
             SET name = ?, price_delta_cents = ?, is_default = ?, sort_order = ?,
-                updated_at = ?, version = version + 1
+                removes_ingredient_id = ?, updated_at = ?, version = version + 1
           WHERE id = ?`,
       ).run(
         after.name,
         after.priceDeltaCents,
         fromBool(after.isDefault),
         after.sortOrder,
+        after.removesIngredientId ?? null,
         now,
         input.id,
       );

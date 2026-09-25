@@ -388,6 +388,11 @@ export interface IpcContract {
     request: { orderId: string; orderItemId: string };
     response: ApiResult<OrderSnapshot>;
   };
+  /** "Customize" a cart line: its choices (leave-outs, extras…) and its allergy / special-request note. */
+  'orders:updateItemOptions': {
+    request: { orderId: string; orderItemId: string; modifierIds: string[]; notes: string | null };
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:applyDiscount': {
     request: {
       orderId: string;

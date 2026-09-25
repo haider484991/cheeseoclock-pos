@@ -211,6 +211,9 @@ describe('labels', () => {
     expect(groupLabel({ name: 'Deal: 2nd Large pizza' })).toBe('2nd Large pizza');
     expect(groupLabel({ name: 'Veggie Lovers — Choose 5 veggies' })).toBe('Choose 5 veggies');
     expect(groupLabel({ name: 'Choose your dip' })).toBe('Choose your dip');
+    // each item's own leave-outs: the till needs unique names, customers see the heading
+    expect(groupLabel({ name: 'Leave out · Fajita Pizza' })).toBe('Leave out');
+    expect(groupLabel({ name: 'Extras · Burgers' })).toBe('Extras');
   });
 
   it('finds photos case-insensitively', () => {

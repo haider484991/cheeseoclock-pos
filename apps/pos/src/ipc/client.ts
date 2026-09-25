@@ -117,6 +117,8 @@ export const ipc = {
       unwrap(window.api.orders.updateItemQuantity(input)),
     removeItem: (input: IpcRequest<'orders:removeItem'>) =>
       unwrap(window.api.orders.removeItem(input)),
+    updateItemOptions: (input: IpcRequest<'orders:updateItemOptions'>) =>
+      unwrap(window.api.orders.updateItemOptions(input)),
     applyDiscount: (input: IpcRequest<'orders:applyDiscount'>) =>
       unwrap(window.api.orders.applyDiscount(input)),
     clearDiscount: (orderId: string) =>

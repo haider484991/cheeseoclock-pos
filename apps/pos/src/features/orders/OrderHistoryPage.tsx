@@ -351,9 +351,16 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                       {i.modifiers.length > 0 && (
                         <ul className="ml-4 text-[11px] text-stone-500">
                           {i.modifiers.map((m) => (
-                            <li key={m.id}>+ {m.modifierName}</li>
+                            <li key={m.id} className={/^no\s/i.test(m.modifierName) ? 'font-semibold text-red-700 dark:text-red-300' : undefined}>
+                              {/^no\s/i.test(m.modifierName) ? m.modifierName : `+ ${m.modifierName}`}
+                            </li>
                           ))}
                         </ul>
+                      )}
+                      {i.notes && (
+                        <div className="ml-4 text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                          Note: {i.notes}
+                        </div>
                       )}
                     </div>
                     <div className="font-mono text-sm">

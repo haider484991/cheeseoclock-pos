@@ -323,3 +323,9 @@ html.dark .menu-tile:hover { border-color: #78716c; }
 @media (prefers-reduced-motion: reduce) {
   .checkout *, .checkout *::before, .checkout *::after { transition: none !important; animation: none !important; }
 }
+
+/* Leave-outs and the per-item note (allergies) stand out on the ticket line (2026-09-26). */
+.ticket-line-mods .is-leave-out { color: #b91c1c; font-weight: 600; }
+.ticket-line-note { font-weight: 600; }
+.ticket-customize { margin-top: 2px; font-size: 12px; min-height: 24px; }
+html.dark .ticket-line-mods .is-leave-out { color: #fca5a5; }

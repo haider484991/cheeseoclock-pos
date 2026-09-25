@@ -33,6 +33,7 @@
  */
 
 import type { OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
+import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode } from './escpos.js';
 
 export interface ReceiptBranding {
@@ -318,14 +319,24 @@ export function renderKitchenTicket(
     b.bold(true).doubleHeight(true);
     b.wrappedText(`${it.quantity} x ${it.menuItemName}`, width);
     b.bold(false).doubleHeight(false);
-    for (const mod of it.modifiers) {
+    // What to leave off comes first and loudest: "NO ONION" in bold capitals,
+    // then the extras, then the line's allergy / special-request note — a
+    // missed leave-out can put an allergic customer in hospital (2026-09-26).
+    for (const mod of it.modifiers.filter((m) => isLeaveOutChoice(m.modifierName))) {
+      b.bold(true);
+      for (const ln of wrap(mod.modifierName.toUpperCase(), width - 4)) {
+        b.text(`    ${ln}`).newline();
+      }
+      b.bold(false);
+    }
+    for (const mod of it.modifiers.filter((m) => !isLeaveOutChoice(m.modifierName))) {
       for (const ln of wrap(`+ ${mod.modifierName}`, width - 4)) {
         b.text(`    ${ln}`).newline();
       }
     }
     if (it.notes) {
       b.bold(true);
-      for (const ln of wrap(`** ${it.notes}`, width - 4)) {
+      for (const ln of wrap(`!! ALLERGY/NOTE: ${it.notes}`, width - 4)) {
         b.text(`    ${ln}`).newline();
       }
       b.bold(false);

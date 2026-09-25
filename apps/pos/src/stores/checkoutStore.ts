@@ -30,7 +30,9 @@ interface CheckoutState {
   discardDraft: () => Promise<void>;
   /** Begin a new order with the current mode/table. Idempotent if one exists. */
   ensureOrder: () => Promise<OrderSnapshot>;
-  addItem: (menuItemId: string, quantity?: number, modifierIds?: string[]) => Promise<void>;
+  addItem: (menuItemId: string, quantity?: number, modifierIds?: string[], notes?: string | null) => Promise<void>;
+  /** "Customize" a cart line: replace its choices and its note. */
+  updateItemOptions: (orderItemId: string, modifierIds: string[], notes: string | null) => Promise<void>;
   updateItemQty: (orderItemId: string, quantity: number) => Promise<void>;
   removeItem: (orderItemId: string) => Promise<void>;
   applyDiscount: (
@@ -128,7 +130,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => ({
     }
   },
 
-  async addItem(menuItemId, quantity = 1, modifierIds = []) {
+  async addItem(menuItemId, quantity = 1, modifierIds = [], notes = null) {
     set({ busy: true });
     try {
       const order = await get().ensureOrder();
@@ -137,8 +139,26 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => ({
         menuItemId,
         quantity,
         modifierIds,
+        notes,
       });
       set({ snapshot: snap });
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  async updateItemOptions(orderItemId, modifierIds, notes) {
+    const snap = get().snapshot;
+    if (!snap) return;
+    set({ busy: true });
+    try {
+      const next = await ipc.orders.updateItemOptions({
+        orderId: snap.order.id,
+        orderItemId,
+        modifierIds,
+        notes,
+      });
+      set({ snapshot: next });
     } finally {
       set({ busy: false });
     }

@@ -15,6 +15,7 @@ import {
   addOrderItem,
   removeOrderItem,
   updateOrderItemQuantity,
+  updateOrderItemOptions,
   applyDiscount,
   clearDiscount,
   setOrderMode,
@@ -160,6 +161,23 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       userId: s.id,
       deviceId: ctx.deviceId,
     });
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  defineHandler('orders:updateItemOptions', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    updateOrderItemOptions(
+      ctx.db,
+      {
+        orderId: payload.orderId,
+        orderItemId: payload.orderItemId,
+        modifierIds: Array.isArray(payload.modifierIds) ? payload.modifierIds : [],
+        notes: typeof payload.notes === 'string' ? payload.notes : null,
+      },
+      { userId: s.id, deviceId: ctx.deviceId },
+    );
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);

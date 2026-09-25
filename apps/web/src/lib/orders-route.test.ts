@@ -209,6 +209,58 @@ describe('POST /api/orders — delivery zones', () => {
   });
 });
 
+describe('POST /api/orders — leave-outs, extras and allergy notes', () => {
+  const withChoices = (): PublishedMenu => {
+    const m = menu(true);
+    m.categories[0]!.items = [
+      item('fajita-l', 'Fajita Pizza — Large', 2000, {
+        modifierGroups: [
+          {
+            posGroupId: 'g-leave', name: 'Leave out · Fajita Pizza', selectionType: 'multi',
+            minSelect: 0, maxSelect: 2, isRequired: false, sortOrder: 0,
+            modifiers: [
+              { posModifierId: 'no-onion', name: 'No onion', priceDeltaCents: 0, isDefault: false, sortOrder: 0 },
+              { posModifierId: 'no-pepper', name: 'No bell pepper', priceDeltaCents: 0, isDefault: false, sortOrder: 1 },
+            ],
+          },
+          {
+            posGroupId: 'g-extra', name: 'Extra toppings', selectionType: 'multi',
+            minSelect: 0, maxSelect: 8, isRequired: false, sortOrder: 1,
+            modifiers: [
+              { posModifierId: 'x-cheese', name: 'Extra cheese', priceDeltaCents: 15_000, isDefault: false, sortOrder: 0 },
+            ],
+          },
+        ],
+      }),
+    ];
+    return m;
+  };
+
+  it('prices the extra, keeps the leave-out and the note on the line for the kitchen', async () => {
+    await publish(withChoices());
+    const r = await place({
+      zoneId: 'dha-6',
+      items: [{ posItemId: 'fajita-l', quantity: 2, modifierIds: ['no-onion', 'x-cheese'], notes: '  Peanut allergy  ' }],
+    });
+    expect(r.status).toBe(200);
+    const row = await stored(r.json.data!.orderId);
+    const pizza = row.items.find((i) => i.posItemId === 'fajita-l')!;
+    expect(pizza.unitPriceCents).toBe(215_000);
+    expect(pizza.modifiers.map((m) => m.name)).toEqual(['No onion', 'Extra cheese']);
+    expect(pizza.notes).toBe('Peanut allergy');
+    expect(row.subtotal_cents).toBe(2 * 215_000 + 20_000);
+  });
+
+  it('names the group as customers see it when too many are picked', async () => {
+    const m = withChoices();
+    m.categories[0]!.items[0]!.modifierGroups[0]!.maxSelect = 1;
+    await publish(m);
+    const r = await place({ zoneId: 'dha-6', items: [{ posItemId: 'fajita-l', quantity: 1, modifierIds: ['no-onion', 'no-pepper'] }] });
+    expect(r.status).toBe(409);
+    expect(r.json.message).toBe('"Leave out" allows at most 1 choices.');
+  });
+});
+
 describe('POST /api/orders — pickup at the till’s discount', () => {
   it('is not offered until the till announces it can import pickups', async () => {
     const off = await place({ fulfilment: 'pickup', addressLine: undefined });

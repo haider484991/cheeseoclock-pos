@@ -3,6 +3,7 @@ import type {
   PublishedMenuItem,
   PublishedModifierGroup,
 } from '@cheeseoclock/shared-types';
+import { groupDisplayName } from '@cheeseoclock/shared-types';
 import { isDeliveryChargeItem } from './delivery-zones';
 
 /**
@@ -188,10 +189,22 @@ export function optionLabel(optionName: string): string {
   return m ? m[1]!.trim() : optionName;
 }
 
-/** "Deal: 2nd Large pizza" → "2nd Large pizza"; other groups unchanged. */
+/**
+ * "Deal: 2nd Large pizza" → "2nd Large pizza"; "Leave out · Fajita Pizza" →
+ * "Leave out" (till group names are unique, so each item's leave-outs carry its
+ * name after " · "); other groups unchanged.
+ */
 export function groupLabel(group: Pick<PublishedModifierGroup, 'name'>): string {
-  return group.name.replace(/^deal:\s*/i, '').replace(/^.+?\s+[—–]\s+/, '').trim();
+  return groupDisplayName(group.name).replace(/^deal:\s*/i, '').replace(/^.+?\s+[—–]\s+/, '').trim();
 }
+
+/**
+ * What customers read about allergies (owner 2026-09-26). It names no
+ * allergen on purpose: a list the kitchen does not keep up to date is worse
+ * than none. Same words as the printed menu.
+ */
+export const ALLERGY_NOTICE =
+  'Allergy? Tell us in the item\u2019s \u201cAllergy or special request\u201d box and we\u2019ll leave ingredients out. Our kitchen shares equipment, so we can\u2019t guarantee any dish is allergen-free.';
 
 /**
  * What a value deal's contents cost bought one by one, from the live menu, so

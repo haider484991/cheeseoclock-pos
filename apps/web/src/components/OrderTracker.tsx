@@ -268,9 +268,10 @@ export function OrderTracker({ orderId }: { orderId: string }) {
                   {i.modifiers.length > 0 && (
                     <span className="text-xs text-smoke">
                       {' '}
-                      (+{i.modifiers.map((m) => m.name).join(', ')})
+                      ({i.modifiers.map((m) => (/^no\s/i.test(m.name) ? m.name : `+${m.name}`)).join(', ')})
                     </span>
                   )}
+                  {i.notes && <span className="block text-xs text-smoke">Note: {i.notes}</span>}
                 </span>
                 <span className="font-mono tabular-nums text-smoke">
                   {formatCents(i.unitPriceCents * i.quantity)}
