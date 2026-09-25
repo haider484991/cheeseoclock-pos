@@ -268,7 +268,8 @@ describe('POST /api/orders — pickup at the till’s discount', () => {
     expect(byId.get(d.json.data!.orderId)).toMatchObject({ fulfilment: 'delivery', discountCents: 0, addressLine: 'House 12, Street 4' });
   });
 
-  it('uses the percent the till announces — 15% from v0.7.1', async () => {
+  // v0.7.1 tills announce 15% (v0.7.2 went back to 10): the site bills whatever the till says.
+  it('uses the percent the till announces — 15% from a v0.7.1 till', async () => {
     await heartbeat(['pickup'], 15);
     const st = (await (await storeStatus.GET()).json()) as { data: { pickupDiscountPercent: number } };
     expect(st.data.pickupDiscountPercent).toBe(15);

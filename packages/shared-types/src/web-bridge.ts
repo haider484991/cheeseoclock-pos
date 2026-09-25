@@ -90,12 +90,12 @@ export interface WebOrderItem {
 export type WebFulfilment = 'delivery' | 'pickup';
 
 /**
- * The printed menu's offer: "15% OFF · order online & pick up" (owner,
- * 2026-09-25; was 10% in v0.7.0). This is the percent the till applies at
- * import; it announces it in its heartbeat so the website always shows the
- * discount the till will actually bill.
+ * The printed menu's offer: "10% OFF · order online & pick up" (owner,
+ * 2026-09-25: back to 10% — it was 10% in v0.7.0 and 15% in v0.7.1). This is
+ * the percent the till applies at import; it announces it in its heartbeat so
+ * the website always shows the discount the till will actually bill.
  */
-export const PICKUP_DISCOUNT_PERCENT = 15;
+export const PICKUP_DISCOUNT_PERCENT = 10;
 
 /** What a till that offers pickup but sends no percent (v0.7.0) applies. */
 export const LEGACY_PICKUP_DISCOUNT_PERCENT = 10;
