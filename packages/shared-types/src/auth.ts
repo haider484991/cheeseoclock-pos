@@ -82,11 +82,13 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'printer.manage',
     'riders.manage',
   ]),
+  // A cashier opens the shift (counts the float in the morning) but never
+  // closes it: the close is the drawer count, done by a manager or the owner
+  // (owner, 2026-09-25).
   cashier: new Set<Capability>([
     'order.create',
     'discount.apply',
     'shift.open',
-    'shift.close',
   ]),
 };
 

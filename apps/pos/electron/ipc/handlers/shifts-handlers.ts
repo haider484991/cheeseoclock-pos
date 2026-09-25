@@ -31,7 +31,10 @@ function requireShiftManage(capability: 'shift.open' | 'shift.close'): Authentic
   if (!hasCapability(s.role, capability)) {
     throw new IpcGuardError({
       code: 'forbidden',
-      message: 'Opening/closing shifts requires manager or admin',
+      message:
+        capability === 'shift.close'
+          ? 'Only a manager or the owner can close the shift — ask them to log in and count the drawer'
+          : 'You are not allowed to open a shift',
     });
   }
   return s;

@@ -10,10 +10,11 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { CashMovementDialog } from './CashMovementDialog';
 
 /**
- * TopBar shift widget. Shows current shift status; lets manager open/close.
- *  - No shift open → grey pill "Open shift" → opens OpenShiftDialog.
- *  - Shift open → green pill with elapsed time + manager-only Close button.
- *  - Cashier-role: read-only; can see "Shift open" but can't open/close.
+ * TopBar shift widget. Shows current shift status.
+ *  - No shift open → grey pill "Open shift" → opens OpenShiftDialog (anyone,
+ *    cashiers included).
+ *  - Shift open → green pill with elapsed time; only a manager or the owner
+ *    can click it to close (count the drawer). A cashier sees it read-only.
  */
 export function ShiftWidget() {
   const can = useSessionStore((s) => s.can);
@@ -67,7 +68,7 @@ export function ShiftWidget() {
         type="button"
         disabled={!canClose}
         onClick={() => canClose && setOpenDlg('close')}
-        title={canClose ? 'Close shift + count cash' : 'Manager must close the shift'}
+        title={canClose ? 'Close shift + count cash' : 'Only a manager or the owner can close the shift'}
         className={cn(
           'flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors',
           'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:hover:bg-emerald-900/60',
