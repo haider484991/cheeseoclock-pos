@@ -107,7 +107,21 @@ function anchorFor(name: string): string {
     .replace(/^-|-$/g, '');
 }
 
+/** The value deals section, whatever the till calls it ("Value Deals", "Deals"). */
+export function isDealSection(sectionName: string): boolean {
+  return /\bdeals?\b/i.test(sectionName);
+}
+
+/**
+ * The value deals lead the ordering page (owner 2026-09-25: "deals should be
+ * prominent"); every other section keeps the till's order.
+ */
 export function buildMenuView(menu: PublishedMenu): MenuSectionView[] {
+  const sections = buildSections(menu);
+  return [...sections.filter((s) => isDealSection(s.name)), ...sections.filter((s) => !isDealSection(s.name))];
+}
+
+function buildSections(menu: PublishedMenu): MenuSectionView[] {
   return [...menu.categories]
     .sort((a, b) => a.displayOrder - b.displayOrder)
     .map((c) => {
@@ -157,6 +171,43 @@ export function optionLabel(optionName: string): string {
 /** "Deal: 2nd Large pizza" → "2nd Large pizza"; other groups unchanged. */
 export function groupLabel(group: Pick<PublishedModifierGroup, 'name'>): string {
   return group.name.replace(/^deal:\s*/i, '').replace(/^.+?\s+[—–]\s+/, '').trim();
+}
+
+/**
+ * What a value deal's contents cost bought one by one, from the live menu, so
+ * the page can say "Save Rs 650" without a hard-coded number: each pizza slot
+ * at the cheapest regular pizza of its size ("Large: Fajita Pizza" → the
+ * "Fajita Pizza — Large" item), plus the drink its description promises
+ * ("… + 1 litre Pepsi" → the 1 litre soft drink). Null when anything can't be
+ * priced — then the page shows no saving rather than a wrong one.
+ */
+export function dealWorthCents(menu: PublishedMenu, deal: PublishedMenuItem): number | null {
+  if (deal.modifierGroups.length === 0) return null;
+  const all = menu.categories.flatMap((c) => c.items);
+  const priceOf = new Map<string, number>();
+  for (const it of all) {
+    const { base, size } = splitSizedName(it.name);
+    if (size) priceOf.set(`${base}|${size}`.toLowerCase(), it.basePriceCents);
+  }
+
+  let worth = 0;
+  for (const group of deal.modifierGroups) {
+    let cheapest: number | null = null;
+    for (const m of group.modifiers) {
+      const slot = /^(?:2nd\s+)?(medium|large):\s*(.+)$/i.exec(m.name.trim());
+      const price = slot ? priceOf.get(`${slot[2]!.trim()}|${slot[1]}`.toLowerCase()) : undefined;
+      if (price !== undefined) cheapest = cheapest === null ? price : Math.min(cheapest, price);
+    }
+    if (cheapest === null) return null;
+    worth += cheapest;
+  }
+
+  if (/\b1\s*lit(?:re|er)\b/i.test(deal.description ?? '')) {
+    const drink = all.find((it) => /^1\s*lit(?:re|er)$/i.test(splitSizedName(it.name).size ?? ''));
+    if (!drink) return null;
+    worth += drink.basePriceCents;
+  }
+  return worth;
 }
 
 /** How many choices a group needs before the item can go in the cart. */

@@ -73,9 +73,13 @@ export const SIGNATURE_BURGER: Showcase = {
   priceRs: 900,
 };
 
-/** Printed menu's Value Deals (regular-menu pizzas only). */
+/**
+ * Printed menu's Value Deals (regular-menu pizzas only). `worthRs` is the same
+ * food bought one by one (Medium Rs 1,500, Large Rs 2,000, 1 litre Rs 250) —
+ * the ordering page works this out from live prices (menu-view dealWorthCents).
+ */
 export const VALUE_DEALS = [
-  { name: 'Big Two', what: '2 Large 12" + 1 litre Pepsi', priceRs: 3600 },
-  { name: 'Family Feast', what: '1 Medium 9" + 1 Large 12" + 1 litre Pepsi', priceRs: 3100 },
-  { name: 'Perfect Pair', what: '2 Medium 9" + 1 litre Pepsi', priceRs: 2600 },
+  { name: 'Big Two', what: '2 Large 12" + 1 litre Pepsi', priceRs: 3600, worthRs: 4250 },
+  { name: 'Family Feast', what: '1 Medium 9" + 1 Large 12" + 1 litre Pepsi', priceRs: 3100, worthRs: 3750 },
+  { name: 'Perfect Pair', what: '2 Medium 9" + 1 litre Pepsi', priceRs: 2600, worthRs: 3250 },
 ] as const;

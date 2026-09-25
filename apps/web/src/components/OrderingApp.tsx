@@ -13,7 +13,9 @@ import {
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
   buildMenuView,
+  dealWorthCents,
   groupLabel,
+  isDealSection,
   isPickupOnly,
   optionLabel,
   requiredCount,
@@ -137,6 +139,19 @@ export function OrderingApp({
   }, []);
 
   const sections = useMemo(() => buildMenuView(menu), [menu]);
+  // Each deal's contents bought one by one, for its "Save Rs …" badge.
+  const dealWorth = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of sections) {
+      if (!isDealSection(s.name)) continue;
+      for (const c of s.cards) {
+        const item = c.variants[0]?.item;
+        const worth = item ? dealWorthCents(menu, item) : null;
+        if (item && worth !== null && worth > item.basePriceCents) m.set(item.posItemId, worth);
+      }
+    }
+    return m;
+  }, [menu, sections]);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [sheet, setSheet] = useState<{ card: MenuCard; variantIndex: number } | null>(null);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -257,8 +272,18 @@ export function OrderingApp({
             <section key={s.id} id={s.anchor} className="scroll-mt-36 pt-8">
               <SectionTitle name={s.name} note={sectionNote(s.name)} />
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {s.cards.map((card) =>
-                  isSignature(s.name) || card.image ? (
+                {s.cards.map((card, i) =>
+                  isDealSection(s.name) ? (
+                    <DealCard
+                      key={card.key}
+                      card={card}
+                      n={i + 1}
+                      worthCents={dealWorth.get(card.variants[0]?.item.posItemId ?? '') ?? null}
+                      qtyByItem={qtyByItem}
+                      canPickup={canPickup}
+                      onPick={(v) => pickVariant(card, v)}
+                    />
+                  ) : isSignature(s.name) || card.image ? (
                     <PhotoCard
                       key={card.key}
                       card={card}
@@ -454,7 +479,9 @@ function CategoryRail({ sections }: { sections: Array<{ anchor: string; name: st
             className={`whitespace-nowrap rounded-full px-4 py-2 font-cond text-[0.95rem] font-bold uppercase tracking-wide transition-colors ${
               s.anchor === active
                 ? 'bg-ink text-cheese'
-                : 'border border-ink/15 bg-white text-ink-soft hover:border-ink/40'
+                : isDealSection(s.name)
+                  ? 'border border-ink bg-cheese text-ink hover:bg-cheese-hot'
+                  : 'border border-ink/15 bg-white text-ink-soft hover:border-ink/40'
             }`}
           >
             {s.name}
@@ -507,12 +534,15 @@ function VariantButtons({
   canPickup,
   onPick,
   dark = false,
+  onGold = false,
 }: {
   card: MenuCard;
   qtyByItem: Map<string, number>;
   canPickup: boolean;
   onPick: (variantIndex: number) => void;
   dark?: boolean;
+  /** On a gold deal card: a solid ink button. */
+  onGold?: boolean;
 }) {
   // Pick-up-only food is orderable only while online pick-up is.
   if (card.pickupOnly && !canPickup) return <PickupOnly />;
@@ -529,9 +559,11 @@ function VariantButtons({
             className={`group/btn relative flex items-center gap-2 py-1.5 pr-1.5 font-cond font-bold uppercase tracking-wide transition-all active:scale-95 ${
               sized ? 'justify-between rounded-2xl pl-3 text-left' : 'rounded-full pl-3.5'
             } ${
-              dark
-                ? 'bg-cheese text-ink hover:bg-cheese-hot'
-                : 'border-2 border-ink bg-white text-ink hover:bg-ink hover:text-cheese'
+              onGold
+                ? 'bg-ink py-2 text-lg text-cheese hover:bg-ink-soft'
+                : dark
+                  ? 'bg-cheese text-ink hover:bg-cheese-hot'
+                  : 'border-2 border-ink bg-white text-ink hover:bg-ink hover:text-cheese'
             }`}
           >
             {sized ? (
@@ -548,7 +580,7 @@ function VariantButtons({
             <span
               aria-hidden
               className={`grid h-7 w-7 place-items-center rounded-full text-lg leading-none ${
-                dark ? 'bg-ink text-cheese' : 'bg-cheese text-ink'
+                dark && !onGold ? 'bg-ink text-cheese' : 'bg-cheese text-ink'
               }`}
             >
               {hasChoices ? '›' : '+'}
@@ -655,6 +687,72 @@ function ItemCard({
       )}
       <div className="mt-auto pt-3">
         <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} />
+      </div>
+    </article>
+  );
+}
+
+/**
+ * A value deal, set like the printed menu's gold deals panel: numbered, a big
+ * price, and what it saves against buying the same things one by one (worked
+ * out from the live menu — no badge when that can't be priced).
+ */
+function DealCard({
+  card,
+  n,
+  worthCents,
+  qtyByItem,
+  canPickup,
+  onPick,
+}: {
+  card: MenuCard;
+  n: number;
+  worthCents: number | null;
+  qtyByItem: Map<string, number>;
+  canPickup: boolean;
+  onPick: (variantIndex: number) => void;
+}) {
+  const count = card.variants.reduce((s, v) => s + (qtyByItem.get(v.item.posItemId) ?? 0), 0);
+  const price = card.variants[0]?.item.basePriceCents ?? 0;
+  const save = worthCents !== null ? worthCents - price : 0;
+  const num = String(n).padStart(2, '0');
+  return (
+    <article className="relative flex flex-col overflow-hidden rounded-3xl border-2 border-ink bg-cheese p-5 text-ink shadow-soft-md">
+      <span
+        aria-hidden
+        className="pointer-events-none absolute -bottom-7 -right-1 select-none font-display text-[8.5rem] leading-none text-ink/[0.08]"
+      >
+        {num}
+      </span>
+      <div className="relative flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-cond text-xs font-extrabold uppercase tracking-[0.22em] text-ink/60">
+            Value deal {num}
+          </p>
+          <h3 className="mt-1 font-display text-3xl uppercase leading-none tracking-wide">{card.name}</h3>
+        </div>
+        {save > 0 && (
+          <span className="shrink-0 -rotate-6 rounded-xl bg-ink px-2.5 py-1.5 text-center font-cond font-extrabold uppercase leading-none text-cheese shadow-soft-sm">
+            <span className="block text-[0.65rem] tracking-widest">Save</span>
+            <span className="mt-0.5 block text-lg tabular-nums">{formatCents(save)}</span>
+          </span>
+        )}
+      </div>
+      {card.description && (
+        <p className="relative mt-2 font-cond text-lg font-bold leading-snug">{card.description}</p>
+      )}
+      {save > 0 && worthCents !== null && (
+        <p className="relative mt-0.5 text-sm font-medium text-ink/65">
+          <s className="tabular-nums">{formatCents(worthCents)}</s> if bought separately
+        </p>
+      )}
+      <div className="relative mt-auto flex flex-wrap items-center gap-3 pt-4">
+        <VariantButtons card={card} qtyByItem={qtyByItem} canPickup={canPickup} onPick={onPick} onGold />
+        {count > 0 && (
+          <span className="rounded-full bg-ink px-2.5 py-1 font-cond text-xs font-bold uppercase text-cheese">
+            {count} in order
+          </span>
+        )}
       </div>
     </article>
   );
@@ -1006,28 +1104,50 @@ function ItemSheet({
     setSelected(carried.size > 0 ? carried : defaults(next.item));
   }
 
-  function toggle(group: PublishedModifierGroup, modId: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (group.selectionType === 'single') {
-        // Radio behavior: clear siblings.
-        for (const m of group.modifiers) next.delete(m.posModifierId);
-        next.add(modId);
-      } else if (next.has(modId)) {
-        next.delete(modId);
-      } else {
-        const chosen = group.modifiers.filter((m) => next.has(m.posModifierId)).length;
-        if (group.maxSelect > 0 && chosen >= group.maxSelect) return prev;
-        next.add(modId);
-      }
-      return next;
-    });
+  const isUnmet = (g: PublishedModifierGroup, sel: Set<string>) =>
+    g.modifiers.filter((m) => sel.has(m.posModifierId)).length < requiredCount(g);
+
+  // A deal has two pizza slots, and on a phone the second sits below the fold:
+  // customers picked one pizza, met a grey "Choose 2nd large pizza" button that
+  // did nothing, and took it for the deal not adding (owner, 2026-09-25). So a
+  // finished single choice scrolls on to the next open group, and the Add
+  // button, while choices are missing, takes you to the first one and flags it.
+  const groupRefs = useRef(new Map<string, HTMLFieldSetElement>());
+  const [flagged, setFlagged] = useState<string | null>(null);
+  const flagTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (flagTimer.current) clearTimeout(flagTimer.current);
+  }, []);
+
+  function showGroup(groupId: string, flag: boolean) {
+    groupRefs.current.get(groupId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!flag) return;
+    setFlagged(groupId);
+    if (flagTimer.current) clearTimeout(flagTimer.current);
+    flagTimer.current = setTimeout(() => setFlagged(null), 1400);
   }
 
-  const unmet = groups.filter((g) => {
-    const chosen = g.modifiers.filter((m) => selected.has(m.posModifierId)).length;
-    return chosen < requiredCount(g);
-  });
+  function toggle(group: PublishedModifierGroup, modId: string) {
+    const next = new Set(selected);
+    if (group.selectionType === 'single') {
+      // Radio behavior: clear siblings.
+      for (const m of group.modifiers) next.delete(m.posModifierId);
+      next.add(modId);
+    } else if (next.has(modId)) {
+      next.delete(modId);
+    } else {
+      const chosen = group.modifiers.filter((m) => next.has(m.posModifierId)).length;
+      if (group.maxSelect > 0 && chosen >= group.maxSelect) return;
+      next.add(modId);
+    }
+    setSelected(next);
+    if (group.selectionType === 'single') {
+      const after = groups.slice(groups.indexOf(group) + 1).find((g) => isUnmet(g, next));
+      if (after) setTimeout(() => showGroup(after.posGroupId, false), 160);
+    }
+  }
+
+  const unmet = groups.filter((g) => isUnmet(g, selected));
 
   const extra = groups
     .flatMap((g) => g.modifiers)
@@ -1092,8 +1212,20 @@ function ItemSheet({
           const need = requiredCount(g);
           const full = g.maxSelect > 0 && chosen >= g.maxSelect;
           const done = chosen >= need;
+          // Long single lists (a deal's 8 pizzas, the dips) go two-up on a
+          // phone too, so a deal's two pizza slots fit on one screen.
+          const twoUp = g.selectionType === 'single' && g.modifiers.length >= 6;
           return (
-            <fieldset key={g.posGroupId} className="mt-5">
+            <fieldset
+              key={g.posGroupId}
+              ref={(el) => {
+                if (el) groupRefs.current.set(g.posGroupId, el);
+                else groupRefs.current.delete(g.posGroupId);
+              }}
+              className={`mt-5 scroll-mt-3 rounded-2xl transition-shadow duration-300 ${
+                flagged === g.posGroupId ? 'animate-pulse ring-4 ring-cheese ring-offset-4 ring-offset-paper' : ''
+              }`}
+            >
               <legend className="flex w-full items-center justify-between gap-2">
                 <span className="font-cond text-sm font-extrabold uppercase tracking-widest text-ink">
                   {groupLabel(g)}
@@ -1116,7 +1248,7 @@ function ItemSheet({
                   </span>
                 ) : null}
               </legend>
-              <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+              <div className={`mt-2 grid gap-1.5 ${twoUp ? 'grid-cols-2' : 'sm:grid-cols-2'}`}>
                 {g.modifiers
                   .slice()
                   .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -1162,9 +1294,13 @@ function ItemSheet({
       <div className="flex shrink-0 items-center gap-3 border-t border-paper-line bg-white px-5 py-4">
         <Stepper value={qty} onChange={setQty} label={card.name} min={1} />
         <button
-          disabled={unmet.length > 0}
-          onClick={() => onConfirm(variant, [...selected], qty)}
-          className="flex-1 rounded-full bg-ink py-3.5 font-cond text-lg font-bold uppercase tracking-wide text-cheese transition-all hover:bg-ink-soft active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
+          aria-disabled={unmet.length > 0}
+          onClick={() =>
+            unmet.length > 0 ? showGroup(unmet[0]!.posGroupId, true) : onConfirm(variant, [...selected], qty)
+          }
+          className={`flex-1 rounded-full bg-ink py-3.5 font-cond text-lg font-bold uppercase tracking-wide text-cheese transition-all active:scale-[0.99] ${
+            unmet.length > 0 ? 'opacity-55' : 'hover:bg-ink-soft'
+          }`}
         >
           {unmet.length > 0 ? unmetText(unmet[0]!, selected) : `Add · ${formatCents(unit * qty)}`}
         </button>

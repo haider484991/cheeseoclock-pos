@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { PublishedMenu, PublishedMenuItem } from '@cheeseoclock/shared-types';
 import {
   buildMenuView,
+  dealWorthCents,
   groupLabel,
+  isDealSection,
   isPickupOnly,
   optionLabel,
   shopPhotoFor,
@@ -110,6 +112,72 @@ describe('buildMenuView', () => {
       menu([['Signature Pizzas', [item('Cheesy Star — Large', 2200, { imageUrl: 'data:image/png;base64,AA' })]]]),
     );
     expect(v[0]!.cards[0]!.image).toBe('data:image/png;base64,AA');
+  });
+});
+
+describe('value deals', () => {
+  function slot(name: string, options: string[]) {
+    return {
+      posGroupId: `g:${name}`,
+      name,
+      selectionType: 'single' as const,
+      minSelect: 1,
+      maxSelect: 1,
+      isRequired: true,
+      sortOrder: 0,
+      modifiers: options.map((o, i) => ({
+        posModifierId: `m:${name}:${o}`,
+        name: o,
+        priceDeltaCents: 0,
+        isDefault: false,
+        sortOrder: i,
+      })),
+    };
+  }
+  const bigTwo = item('Big Two', 3600, {
+    description: '2 Large 12" regular pizzas + 1 litre Pepsi.',
+    modifierGroups: [
+      slot('Deal: Large pizza', ['Large: Fajita Pizza', 'Large: Cheesalious']),
+      slot('Deal: 2nd Large pizza', ['2nd Large: Fajita Pizza', '2nd Large: Cheesalious']),
+    ],
+  });
+  const familyFeast = item('Family Feast', 3100, {
+    description: '1 Medium 9" + 1 Large 12" regular pizza + 1 litre Pepsi.',
+    modifierGroups: [
+      slot('Deal: Medium pizza', ['Medium: Fajita Pizza']),
+      slot('Deal: Large pizza', ['Large: Fajita Pizza']),
+    ],
+  });
+  const m = menu([
+    [
+      'Pizza',
+      [
+        item('Fajita Pizza — Medium', 1500),
+        item('Fajita Pizza — Large', 2000),
+        item('Cheesalious — Large', 2000),
+      ],
+    ],
+    ['Value Deals', [bigTwo, familyFeast]],
+    ['Drinks', [item('Soft Drink — 345 ml', 120), item('Soft Drink — 1 litre', 250)]],
+  ]);
+
+  it('puts the deals first, the rest in the till’s order', () => {
+    expect(buildMenuView(m).map((s) => s.name)).toEqual(['Value Deals', 'Regular Pizzas', 'Drinks']);
+    expect(isDealSection('Value Deals')).toBe(true);
+    expect(isDealSection('Regular Pizzas')).toBe(false);
+  });
+
+  it('prices a deal’s contents bought separately, from the live menu', () => {
+    // 2 Large at Rs 2,000 + the 1 litre drink at Rs 250 = Rs 4,250 (the deal is Rs 3,600).
+    expect(dealWorthCents(m, bigTwo)).toBe(425_000);
+    // Medium Rs 1,500 + Large Rs 2,000 + drink Rs 250.
+    expect(dealWorthCents(m, familyFeast)).toBe(375_000);
+  });
+
+  it('claims no saving it cannot price', () => {
+    expect(dealWorthCents(m, item('Nuggets', 670))).toBeNull();
+    const noDrink = menu([['Pizza', [item('Fajita Pizza — Large', 2000)]]]);
+    expect(dealWorthCents(noDrink, bigTwo)).toBeNull();
   });
 });
 

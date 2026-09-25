@@ -118,6 +118,14 @@ export default function HomePage() {
                 </a>
               </div>
               <ul className="mt-6 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide text-cream/80">
+                <li>
+                  <Link
+                    href="/menu#value-deals"
+                    className="block rounded-full bg-cheese px-3 py-1.5 text-ink transition-colors hover:bg-cheese-hot"
+                  >
+                    Value deals from {formatCents(Math.min(...VALUE_DEALS.map((d) => d.priceRs)) * 100)} →
+                  </Link>
+                </li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">Delivery from Rs 200</li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">12 noon – 1 am daily</li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">Cash on delivery</li>
@@ -139,6 +147,74 @@ export default function HomePage() {
             "IT'S ALWAYS CHEESE O'CLOCK",
           ]}
         />
+
+        {/* ========================== VALUE DEALS ========================== */}
+        {/* Straight after the marquee, before the signatures (owner 2026-09-25:
+            "deals should be prominent"). */}
+        <section id="deals" className="relative overflow-hidden bg-cheese text-ink">
+          <div
+            aria-hidden
+            className="absolute inset-0 opacity-[0.07] [background-image:repeating-linear-gradient(135deg,#151412_0_2px,transparent_2px_22px)]"
+          />
+          <div className="relative mx-auto max-w-6xl px-4 py-16 md:py-20">
+            <Reveal>
+              <div className="flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3">
+                <div>
+                  <p className="font-cond text-sm font-extrabold uppercase tracking-[0.24em] text-ink/70">
+                    Every deal comes with a 1 litre Pepsi
+                  </p>
+                  <h2 className="mt-1 font-display text-5xl uppercase leading-none tracking-wide md:text-7xl">
+                    Value deals
+                  </h2>
+                </div>
+                <p className="max-w-xs font-cond text-lg font-bold leading-snug">
+                  Choice of pizzas only from the regular menu.
+                </p>
+              </div>
+            </Reveal>
+            <div className="mt-8 grid gap-4 md:grid-cols-3">
+              {VALUE_DEALS.map((d, i) => (
+                <Reveal key={d.name} delay={i * 80}>
+                  <Link
+                    href="/menu#value-deals"
+                    className="group relative flex h-full flex-col overflow-hidden rounded-3xl bg-ink p-6 text-cream shadow-soft-lg transition-transform hover:-translate-y-1"
+                  >
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute -bottom-8 -right-2 select-none font-display text-[9rem] leading-none text-cheese/10"
+                    >
+                      0{i + 1}
+                    </span>
+                    <span className="absolute right-4 top-4 -rotate-6 rounded-xl bg-cheese px-2.5 py-1.5 text-center font-cond font-extrabold uppercase leading-none text-ink">
+                      <span className="block text-[0.65rem] tracking-widest">Save</span>
+                      <span className="mt-0.5 block text-lg">{formatCents((d.worthRs - d.priceRs) * 100)}</span>
+                    </span>
+                    <span className="font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese">
+                      Value deal 0{i + 1}
+                    </span>
+                    <span className="mt-1 block pr-20 font-display text-4xl uppercase leading-none tracking-wide">
+                      {d.name}
+                    </span>
+                    <span className="mt-3 block font-cond text-lg font-semibold uppercase leading-snug tracking-wide text-cream/75">
+                      {d.what}
+                    </span>
+                    <span className="relative mt-auto flex items-end justify-between gap-3 pt-6">
+                      <span>
+                        <span className="block text-sm text-cream/45 line-through">{formatCents(d.worthRs * 100)}</span>
+                        <span className="block font-display text-4xl tracking-wide text-cheese">
+                          {formatCents(d.priceRs * 100)}
+                        </span>
+                      </span>
+                      <span className="rounded-full bg-cheese px-4 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink transition-colors group-hover:bg-cheese-hot">
+                        Order →
+                      </span>
+                    </span>
+                  </Link>
+                </Reveal>
+              ))}
+            </div>
+          </div>
+        </section>
 
         {/* ======================== THE SIGNATURES ========================= */}
         <section className="bg-paper text-ink">
@@ -190,42 +266,6 @@ export default function HomePage() {
                         Order it →
                       </p>
                     </div>
-                  </Link>
-                </Reveal>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ========================== VALUE DEALS ========================== */}
-        <section className="bg-cheese text-ink">
-          <div className="mx-auto grid max-w-6xl gap-8 px-4 py-16 md:grid-cols-[0.8fr_1.2fr] md:items-center md:py-20">
-            <Reveal>
-              <h2 className="font-display text-5xl uppercase leading-none tracking-wide md:text-6xl">
-                Value deals
-              </h2>
-              <p className="mt-3 max-w-sm font-cond text-lg font-semibold">
-                Choice of pizzas only from the regular menu — every deal comes with a
-                1 litre Pepsi.
-              </p>
-            </Reveal>
-            <div className="grid gap-3">
-              {VALUE_DEALS.map((d, i) => (
-                <Reveal key={d.name} delay={i * 70}>
-                  <Link
-                    href="/menu#value-deals"
-                    className="flex items-center gap-4 rounded-2xl bg-ink px-5 py-4 text-cream transition-transform hover:scale-[1.01]"
-                  >
-                    <span className="font-display text-3xl text-cheese/50">0{i + 1}</span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-display text-2xl uppercase tracking-wide">{d.name}</span>
-                      <span className="block font-cond text-sm font-semibold uppercase tracking-wide text-cream/65">
-                        {d.what}
-                      </span>
-                    </span>
-                    <span className="rounded-full bg-cheese px-4 py-1.5 font-cond text-lg font-extrabold text-ink">
-                      {formatCents(d.priceRs * 100)}
-                    </span>
                   </Link>
                 </Reveal>
               ))}
