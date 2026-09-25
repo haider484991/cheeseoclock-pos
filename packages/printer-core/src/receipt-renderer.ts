@@ -77,6 +77,7 @@ const METHOD_LABEL: Record<string, string> = {
   easypaisa: 'EasyPaisa',
   jazzcash: 'JazzCash',
   bank_transfer: 'Bank Transfer',
+  foodpanda: 'Foodpanda',
 };
 
 export function renderReceipt(
@@ -194,8 +195,12 @@ export function renderReceipt(
   // order says PAID so nobody asks twice.
   const settled = order.status === 'void' || order.status === 'refunded';
   if (!settled) {
-    const paidCents = payments.reduce((sum, p) => sum + p.amountCents, 0);
-    const dueCents = order.totalCents - paidCents;
+    // Only money actually taken counts (refund rows are negative): after a
+    // partial refund the net fell below the total and the slip — and every
+    // reprint — read "TO PAY" the refunded amount, for a rider to collect
+    // again (audit 2026-09-25). A paid order is paid.
+    const paidCents = payments.reduce((sum, p) => sum + Math.max(0, p.amountCents), 0);
+    const dueCents = order.paidAt ? 0 : order.totalCents - paidCents;
     if (dueCents > 0) {
       b.bold(true).doubleHeight(true).line('TO PAY', `Rs ${formatCentsForReceipt(dueCents)}`);
       b.bold(false).doubleHeight(false);

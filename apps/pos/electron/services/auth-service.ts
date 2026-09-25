@@ -25,12 +25,22 @@ const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h
 //   - one keyed on the PIN hash (a stuck key on one PIN locks only that PIN);
 //   - one keyed on a fixed device-wide row, so walking 0000…9999 — where no
 //     single PIN is ever retried — still locks after five wrong guesses.
-// A successful login clears both rows.
+// A successful login clears only that PIN's row. The device-wide row counts
+// wrong guesses in a rolling 15-minute window and is never cleared by a good
+// PIN: clearing it let a cashier guess 4 PINs, log in with their own, and
+// repeat until the manager's PIN fell (audit 2026-09-25). Its locks are short
+// (DEVICE_LOCKOUT_TIERS) so a burst of typos can't shut the till for 30 min.
 const PIN_LOCKOUT_TIERS = [
   { threshold: 15, lockMs: 30 * 60 * 1000 }, // 30 min
   { threshold: 10, lockMs: 5 * 60 * 1000 }, //  5 min
   { threshold: 5, lockMs: 30 * 1000 }, // 30 s
 ] as const;
+
+const DEVICE_LOCKOUT_TIERS = [
+  { threshold: 10, lockMs: 60 * 1000 }, // 1 min
+  { threshold: 5, lockMs: 30 * 1000 }, // 30 s
+] as const;
+const DEVICE_WINDOW_MS = 15 * 60 * 1000;
 
 /** Fixed `login_attempts.pin_hash` for the device-wide counter. PINs are digits, so it can never collide with a real PIN hash. */
 const DEVICE_ATTEMPTS_KEY = '__device__';
@@ -56,14 +66,22 @@ function assertKeyNotLocked(db: AppDatabase, key: string): void {
   }
 }
 
-function recordKeyFailure(db: AppDatabase, key: string): void {
+function recordKeyFailure(
+  db: AppDatabase,
+  key: string,
+  tiers: ReadonlyArray<{ threshold: number; lockMs: number }> = PIN_LOCKOUT_TIERS,
+  windowMs?: number,
+): void {
   const now = new Date().toISOString();
   const row = db
-    .prepare(`SELECT failed_count FROM login_attempts WHERE pin_hash = ?`)
-    .get(key) as { failed_count: number } | undefined;
-  const next = (row?.failed_count ?? 0) + 1;
+    .prepare(`SELECT failed_count, last_failed_at FROM login_attempts WHERE pin_hash = ?`)
+    .get(key) as { failed_count: number; last_failed_at: string } | undefined;
+  // A rolling window: failures older than it no longer count.
+  const stale =
+    windowMs !== undefined && row !== undefined && Date.now() - Date.parse(row.last_failed_at) > windowMs;
+  const next = (stale ? 0 : row?.failed_count ?? 0) + 1;
   // Find the highest tier this count crosses.
-  const tier = PIN_LOCKOUT_TIERS.find((t) => next >= t.threshold);
+  const tier = tiers.find((t) => next >= t.threshold);
   const lockedUntil = tier ? String(Date.now() + tier.lockMs) : null;
   db.prepare(
     `INSERT INTO login_attempts (pin_hash, failed_count, last_failed_at, locked_until)
@@ -88,15 +106,13 @@ function assertPinNotLocked(db: AppDatabase, pin: string): void {
 function recordPinFailure(db: AppDatabase, pin: string): void {
   db.transaction(() => {
     recordKeyFailure(db, hashPinForAttempts(pin));
-    recordKeyFailure(db, DEVICE_ATTEMPTS_KEY);
+    recordKeyFailure(db, DEVICE_ATTEMPTS_KEY, DEVICE_LOCKOUT_TIERS, DEVICE_WINDOW_MS);
   })();
 }
 
 function clearPinAttempts(db: AppDatabase, pin: string): void {
-  db.prepare(`DELETE FROM login_attempts WHERE pin_hash IN (?, ?)`).run(
-    hashPinForAttempts(pin),
-    DEVICE_ATTEMPTS_KEY,
-  );
+  // This PIN only — the device-wide counter runs out on its own window.
+  db.prepare(`DELETE FROM login_attempts WHERE pin_hash = ?`).run(hashPinForAttempts(pin));
 }
 
 let currentSession: AuthenticatedUser | null = null;

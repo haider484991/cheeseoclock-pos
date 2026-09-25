@@ -546,7 +546,16 @@ function OrderActions(props: {
         </Button>
       );
     }
-    // Dine-in: just status change; payment happens later via Order History.
+    // Foodpanda (and anything else): an unpaid order must not close without
+    // its payment — "Served" alone left it served-unpaid and off the board.
+    if (!props.paid) {
+      return (
+        <Button size="sm" variant="success" className="w-full whitespace-nowrap" onClick={props.onMarkDelivered}>
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          Served + Pay
+        </Button>
+      );
+    }
     return (
       <Button size="sm" variant="success" className="w-full whitespace-nowrap" onClick={props.onMarkServedDineIn}>
         <CheckCircle2 className="h-3.5 w-3.5" />

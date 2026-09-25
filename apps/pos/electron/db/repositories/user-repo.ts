@@ -98,11 +98,30 @@ export async function findUserByPin(
   return null;
 }
 
+/**
+ * The PIN is how the till tells people apart, so no two users may share one.
+ * With a shared PIN `findUserByPin` logged in whichever matched first — a new
+ * cashier given the manager's 1111 became the manager (audit 2026-09-25).
+ * Inactive users count too: switching one back on must not create a clash.
+ */
+async function assertPinFree(db: AppDatabase, pin: string, exceptUserId?: string): Promise<void> {
+  const rows = db
+    .prepare(`SELECT id, pin_hash FROM users WHERE deleted_at IS NULL`)
+    .all() as Array<{ id: string; pin_hash: string }>;
+  for (const r of rows) {
+    if (r.id === exceptUserId) continue;
+    if (await verifyPin(pin, r.pin_hash)) {
+      throw new Error('That PIN is already used by someone else — choose another');
+    }
+  }
+}
+
 export async function createUser(
   db: AppDatabase,
   input: { fullName: string; role: Role; pin: string },
   actor: { userId: string | null; deviceId: string },
 ): Promise<User> {
+  await assertPinFree(db, input.pin);
   const pinHash = await hashPin(input.pin);
   const id = uuidv7();
   const now = new Date().toISOString();
@@ -185,6 +204,7 @@ export async function updateUser(
   const fullName = input.fullName ?? existingRow.full_name;
   const role = input.role ?? existingRow.role;
   const isActive = input.isActive ?? existingRow.is_active === 1;
+  if (input.pin) await assertPinFree(db, input.pin, existingRow.id);
   const pinHash = input.pin ? await hashPin(input.pin) : existingRow.pin_hash;
   const now = new Date().toISOString();
   const nextVersion = existingRow.version + 1;

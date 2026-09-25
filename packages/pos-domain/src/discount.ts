@@ -29,7 +29,19 @@ export function computeDiscountCents(subtotalCents: Cents | number, d: DiscountI
 export const MANAGER_APPROVAL_PERCENT_THRESHOLD = 10;
 export const MANAGER_APPROVAL_FLAT_CENTS_THRESHOLD = 50_000; // PKR 500
 
-export function requiresManagerApproval(d: DiscountInput): boolean {
+/**
+ * Does this discount need a manager's PIN? A percent over the threshold does.
+ * A flat amount does when it is over Rs 500 — or, given the order's subtotal,
+ * when it is more than the same threshold percent of that order (Rs 499 off a
+ * Rs 600 order is 83% off and must not slip through as "under Rs 500").
+ */
+export function requiresManagerApproval(d: DiscountInput, subtotalCents?: Cents | number): boolean {
   if (d.type === 'percent') return d.value > MANAGER_APPROVAL_PERCENT_THRESHOLD;
-  return d.value > MANAGER_APPROVAL_FLAT_CENTS_THRESHOLD;
+  if (d.value > MANAGER_APPROVAL_FLAT_CENTS_THRESHOLD) return true;
+  const subtotal = subtotalCents === undefined ? undefined : (subtotalCents as number);
+  return (
+    subtotal !== undefined &&
+    subtotal > 0 &&
+    d.value * 100 > subtotal * MANAGER_APPROVAL_PERCENT_THRESHOLD
+  );
 }

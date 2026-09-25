@@ -115,7 +115,9 @@ export interface SalesByHour {
 export function getSalesByHour(db: AppDatabase, range: DateRange): SalesByHour[] {
   return db
     .prepare(
-      `SELECT CAST(substr(created_at, 12, 2) AS INTEGER) AS hour,
+      // Pakistan local hour (UTC+5, no daylight saving): the bar labelled 20
+      // used to be 15:00 UTC — the shop's 8 pm rush showed as 3 pm.
+      `SELECT CAST(strftime('%H', created_at, '+5 hours') AS INTEGER) AS hour,
               COUNT(*) AS orderCount,
               SUM(total_cents) AS totalCents
          FROM orders

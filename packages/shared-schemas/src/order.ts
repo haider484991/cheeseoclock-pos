@@ -17,6 +17,7 @@ export const paymentMethodSchema = z.enum([
   'easypaisa',
   'jazzcash',
   'bank_transfer',
+  'foodpanda',
 ]);
 export const kitchenStatusSchema = z.enum(['pending', 'preparing', 'ready', 'served']);
 

@@ -135,7 +135,8 @@ export function CheckoutPage() {
           toast({ title: e.key === 'F1' ? 'Cannot pay yet' : 'Cannot send yet', description: gate.missing.join(' · '), variant: 'warning' });
           return;
         }
-        if (e.key === 'F1') setTenderOpen(true);
+        // Foodpanda has no 'send unpaid': F2 takes the payment too.
+        if (e.key === 'F1' || mode === 'foodpanda') setTenderOpen(true);
         else void handleSendToKitchen();
       } else if (e.key === 'F3') {
         e.preventDefault();
@@ -145,7 +146,7 @@ export function CheckoutPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pizzaChoice, modifierForItem, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy]);
+  }, [pizzaChoice, modifierForItem, tenderOpen, receiptOpen, discountOpen, snapshot, reset, gate, toast, checkoutStep, needsCustomer, hasItems, busy, mode]);
 
   function handleChooseSize(choice: MenuChoice) {
     sizeTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;

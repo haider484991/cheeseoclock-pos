@@ -27,6 +27,7 @@ import { VoidOrderDialog } from './VoidOrderDialog';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { CreditCard } from 'lucide-react';
+import { tradingDayStart } from '../reports/dateRange';
 
 /**
  * Order History page — every order ever, filterable. Click a row for a
@@ -127,6 +128,7 @@ export function OrderHistoryPage() {
             <option value="ready">Ready</option>
             <option value="out_for_delivery">Out for delivery</option>
             <option value="delivered">Delivered</option>
+            <option value="served">Served</option>
             <option value="paid">Paid</option>
             <option value="void">Voided</option>
             <option value="refunded">Refunded</option>
@@ -457,8 +459,12 @@ function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   <Printer className="h-4 w-4" />
                   {reprintMut.isPending ? 'Sending…' : 'Reprint'}
                 </Button>
+                {/* Not for an 'open' draft: that is the order still being rung up at
+                    Checkout (discard it there). Cancelling it here left Checkout
+                    holding a void order it could neither add to nor discard. */}
                 {snap.order.status !== 'void' &&
                   snap.order.status !== 'refunded' &&
+                  snap.order.status !== 'open' &&
                   snap.order.paidAt === null && (
                     <Button
                       variant="ghost"
@@ -638,9 +644,8 @@ function computeRange(range: 'today' | '7d' | '30d' | 'all'): {
   if (range === 'all') return {};
   const now = new Date();
   if (range === 'today') {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    return { sinceIso: start.toISOString() };
+    // The trading day (05:00 → 05:00): after midnight the evening's orders are still "today".
+    return { sinceIso: tradingDayStart(now).toISOString() };
   }
   const days = range === '7d' ? 7 : 30;
   const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);

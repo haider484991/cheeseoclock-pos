@@ -31,4 +31,14 @@ describe('requiresManagerApproval', () => {
     expect(requiresManagerApproval({ type: 'flat', value: 10_000 })).toBe(false);
     expect(requiresManagerApproval({ type: 'flat', value: 60_000 })).toBe(true);
   });
+
+  it('flags a flat discount that is more than 10% of the order', () => {
+    // Rs 499 off a Rs 600 order: under Rs 500, but 83% off.
+    expect(requiresManagerApproval({ type: 'flat', value: 49_900 }, 60_000)).toBe(true);
+    // Rs 200 off Rs 2,000 is exactly 10%: no PIN. Rs 201 is over.
+    expect(requiresManagerApproval({ type: 'flat', value: 20_000 }, 200_000)).toBe(false);
+    expect(requiresManagerApproval({ type: 'flat', value: 20_100 }, 200_000)).toBe(true);
+    // Without a subtotal only the Rs 500 cap applies.
+    expect(requiresManagerApproval({ type: 'flat', value: 49_900 })).toBe(false);
+  });
 });

@@ -42,7 +42,13 @@ export type Capability =
   | 'settings.manage'
   | 'users.manage'
   | 'fbr.manage'
-  | 'printer.manage';
+  | 'printer.manage'
+  /**
+   * Edit or deactivate riders. Adding one only needs `order.create`: the
+   * cashier dispatching a delivery must be able to put a new rider on the
+   * roster there and then (owner, 2026-09-25).
+   */
+  | 'riders.manage';
 
 export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
   admin: new Set<Capability>([
@@ -60,6 +66,7 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'users.manage',
     'fbr.manage',
     'printer.manage',
+    'riders.manage',
   ]),
   manager: new Set<Capability>([
     'menu.manage',
@@ -73,6 +80,7 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'cash.movement',
     'report.view',
     'printer.manage',
+    'riders.manage',
   ]),
   cashier: new Set<Capability>([
     'order.create',

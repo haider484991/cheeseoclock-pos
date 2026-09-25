@@ -203,6 +203,28 @@ export function closeShift(
     if (before.closedAt) throw new Error('Shift is already closed');
     if (input.countedCashCents < 0) throw new Error('Counted cash cannot be negative');
 
+    // Money still to come in (a rider still out, an order not yet paid) must be
+    // taken while this shift is open — once it closes, its expected cash is
+    // frozen and a payment has no shift to go to (audit 2026-09-25).
+    const unpaid = db
+      .prepare(
+        `SELECT order_number FROM orders
+          WHERE device_id = ? AND deleted_at IS NULL AND paid_at IS NULL
+            AND status IN ('sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'served')
+          ORDER BY created_at LIMIT 6`,
+      )
+      .all(before.deviceId) as Array<{ order_number: string }>;
+    if (unpaid.length > 0) {
+      const list = unpaid
+        .slice(0, 5)
+        .map((o) => `#${o.order_number.split('-').pop()}`)
+        .join(', ');
+      throw new Error(
+        `Collect payment for ${list}${unpaid.length > 5 ? ' and more' : ''} before closing the shift ` +
+          `(Live Orders or Order History) — or cancel them with a manager PIN.`,
+      );
+    }
+
     // Compute expected cash from the payments ledger for this shift window.
     // Cash sales (positive cash payments) minus cash refunds (negative cash
     // payments). A payment is credited to the shift that took the money

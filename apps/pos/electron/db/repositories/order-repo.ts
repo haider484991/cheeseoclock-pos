@@ -240,13 +240,17 @@ export function listOrderHistory(
 // -----------------------------------------------------------------------------
 
 /**
- * The shift that should be credited with money changing hands *now*: the
- * shift open on this device, falling back to the order's own shift. Orders
- * are linked to the shift they were created in, but a COD delivery is often
- * paid after that shift closed — stamping the payment separately keeps the
- * drawer reconciliation honest.
+ * The shift credited with money changing hands *now*: the shift open on this
+ * device. Orders are linked to the shift they were created in, but a COD
+ * delivery is often paid after that shift closed — stamping the payment
+ * separately keeps the drawer reconciliation honest.
+ *
+ * There is no fallback any more. Falling back to the order's own shift put
+ * cash taken after a close into a shift whose expected cash was already
+ * frozen, and with no shift at all into no reconciliation (audit 2026-09-25):
+ * money only changes hands while a shift is open.
  */
-function shiftForPayment(db: AppDatabase, deviceId: string, fallback: string | null): string | null {
+function shiftForPayment(db: AppDatabase, deviceId: string): string {
   const row = db
     .prepare(
       `SELECT id FROM shifts
@@ -254,7 +258,48 @@ function shiftForPayment(db: AppDatabase, deviceId: string, fallback: string | n
         ORDER BY opened_at DESC LIMIT 1`,
     )
     .get(deviceId) as { id: string } | undefined;
-  return row?.id ?? (fallback || null);
+  if (!row) {
+    throw new Error('No shift is open on this till — open a shift before taking or returning money');
+  }
+  return row.id;
+}
+
+/**
+ * Every payment and refund row gets its sync entry AND an audit entry with its
+ * amount and method (CLAUDE.md: row + sync + audit). The audit log used to
+ * hold only order images, so a partial refund's amount and method were in no
+ * tamper-evident record at all (audit 2026-09-25).
+ */
+function enqueuePaymentSyncAndAudit(
+  db: AppDatabase,
+  entry: Parameters<typeof enqueueSync>[1],
+  actorUserId: string,
+): void {
+  enqueueSync(db, entry);
+  const amount = (entry.payload as { amountCents?: number } | null)?.amountCents ?? 0;
+  writeAudit(db, {
+    entityType: 'payments',
+    entityId: entry.entityId,
+    action: amount < 0 ? 'refund' : 'create',
+    actorUserId,
+    before: null,
+    after: entry.payload,
+  });
+}
+
+/**
+ * Foodpanda settles its own orders (migration 0020): its method belongs to
+ * foodpanda orders alone, and a foodpanda order is paid with nothing else —
+ * recorded as the dialog's default Cash it inflated the drawer's expected
+ * cash every night (audit 2026-09-25).
+ */
+function assertMethodFitsOrder(mode: OrderMode, method: PaymentMethod): void {
+  if ((mode === 'foodpanda') === (method === 'foodpanda')) return;
+  throw new Error(
+    mode === 'foodpanda'
+      ? 'Foodpanda orders are paid through Foodpanda — choose Foodpanda as the method'
+      : 'Foodpanda is only for foodpanda orders',
+  );
 }
 
 function nextOrderNumber(db: AppDatabase): string {
@@ -602,6 +647,14 @@ export function addOrderItem(
           price_delta_cents: number;
         }>)
       : [];
+    // Every requested choice must still exist. A deleted one used to be dropped
+    // silently — a website order for a deal or a pizza with a choice arrived
+    // without it, and the kitchen ticket, bill and stock all left it out
+    // (audit 2026-09-25). Failing here sends a web order down the usual
+    // retry → "couldn't import, call the customer" path instead.
+    if (modRows.length !== new Set(input.modifierIds).size) {
+      throw new Error('One of the chosen options is no longer on the menu — publish the menu again');
+    }
 
     const modSum = modRows.reduce((sum, m) => sum + m.price_delta_cents, 0);
     const lineTotal = (unitPrice + modSum) * input.quantity;
@@ -843,7 +896,7 @@ export function applyDiscount(
     // Repo-level approval guard — defense in depth even if a future caller
     // bypasses the IPC handler (which already enforces it via verifyManagerPin).
     if (
-      requiresManagerApproval({ type: input.discountType, value: input.value }) &&
+      requiresManagerApproval({ type: input.discountType, value: input.value }, order.subtotalCents) &&
       !input.approverUserId
     ) {
       throw new Error('Manager approval is required for this discount');
@@ -963,15 +1016,54 @@ function recomputeOrderTotals(
     .get(orderId) as { s: number };
   const subtotal = subtotalRow.s;
 
-  // Discount = single most recent (we enforce one discount per order in Phase 2)
+  // Discount = single most recent (we enforce one discount per order in Phase 2),
+  // re-worked from its type and value against the subtotal as it is NOW. It was
+  // frozen at the rupee amount from when it was applied, so 10% of a big cart
+  // became 100% once items were taken off (no PIN), and items added later got
+  // nothing (audit 2026-09-25).
   const discountRow = db
     .prepare(
-      `SELECT amount_cents FROM order_discounts
+      `SELECT id, discount_type, value, amount_cents, approved_by_user_id FROM order_discounts
          WHERE order_id = ? AND deleted_at IS NULL
          ORDER BY created_at DESC LIMIT 1`,
     )
-    .get(orderId) as { amount_cents: number } | undefined;
-  const discount = Math.min(discountRow?.amount_cents ?? 0, subtotal);
+    .get(orderId) as
+    | { id: string; discount_type: 'percent' | 'flat'; value: number; amount_cents: number; approved_by_user_id: string | null }
+    | undefined;
+  let discount = 0;
+  if (discountRow) {
+    const d = { type: discountRow.discount_type, value: discountRow.value };
+    const now = nowIso();
+    if (requiresManagerApproval(d, subtotal) && !discountRow.approved_by_user_id) {
+      // A flat discount that has become more than 10% of a shrunken cart now
+      // needs a manager: take it off, the cashier re-applies it (with a PIN).
+      db.prepare(
+        `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(now, now, discountRow.id);
+      enqueueSync(db, { entityType: 'order_discounts', entityId: discountRow.id, op: 'delete', payload: { id: discountRow.id, deletedAt: now } });
+      writeAudit(db, {
+        entityType: 'order_discounts',
+        entityId: discountRow.id,
+        action: 'auto_clear_needs_approval',
+        actorUserId: actor.userId ?? null,
+        before: discountRow,
+        after: null,
+      });
+    } else {
+      discount = computeDiscountCents(subtotal, d);
+      if (discount !== discountRow.amount_cents) {
+        db.prepare(
+          `UPDATE order_discounts SET amount_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+        ).run(discount, now, discountRow.id);
+        enqueueSync(db, {
+          entityType: 'order_discounts',
+          entityId: discountRow.id,
+          op: 'upsert',
+          payload: { id: discountRow.id, amountCents: discount },
+        });
+      }
+    }
+  }
 
   // Tax = per-line tax on (line_total - prorated discount) * rate
   // Simple approach: prorate discount across lines by line_total weight,
@@ -1074,13 +1166,14 @@ export function tenderOrder(
     // Cash legs must satisfy tendered >= leg amount (UI enforces, server confirms).
     for (const p of input.payments) {
       if (p.amountCents <= 0) throw new Error('Payment amounts must be positive');
+      assertMethodFitsOrder(order.mode, p.method);
       if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
         throw new Error('Cash tendered cannot be less than the cash amount');
       }
     }
 
     const now = nowIso();
-    const shiftId = shiftForPayment(db, actor.deviceId, order.shiftId);
+    const shiftId = input.payments.length > 0 ? shiftForPayment(db, actor.deviceId) : null;
     for (const p of input.payments) {
       const pid = uuidv7();
       db.prepare(
@@ -1102,12 +1195,12 @@ export function tenderOrder(
         actor.deviceId,
         shiftId,
       );
-      enqueueSync(db, {
+      enqueuePaymentSyncAndAudit(db, {
         entityType: 'payments',
         entityId: pid,
         op: 'upsert',
         payload: { id: pid, orderId: input.orderId, ...p, paidAt: now, receivedByUserId: actor.userId },
-      });
+      }, actor.userId);
     }
 
     // Paying is not the end of the order's life: the kitchen still has to
@@ -1237,7 +1330,7 @@ export function refundOrder(
     if (!input.reason.trim()) throw new Error('Refund reason is required');
 
     const now = nowIso();
-    const shiftId = shiftForPayment(db, actor.deviceId, order.shiftId);
+    const shiftId = shiftForPayment(db, actor.deviceId);
     const payments = db
       .prepare(
         `SELECT id, method, amount_cents FROM payments
@@ -1293,7 +1386,7 @@ export function refundOrder(
         actor.deviceId,
         shiftId,
       );
-      enqueueSync(db, {
+      enqueuePaymentSyncAndAudit(db, {
         entityType: 'payments',
         entityId: refundId,
         op: 'upsert',
@@ -1306,7 +1399,7 @@ export function refundOrder(
           receivedByUserId: input.approverUserId,
           paidAt: now,
         },
-      });
+      }, actor.userId);
 
       // Status flips to 'refunded' only when cumulative refunds hit total.
       const remaining = netPaidCents - requested;
@@ -1341,8 +1434,20 @@ export function refundOrder(
       return;
     }
 
-    // ---- FULL REFUND PATH (original behavior) -----------------------
-    for (const p of positivePayments) {
+    // ---- FULL REFUND PATH ----------------------------------------------
+    // After a partial refund only the rest is still paid. Reversing every
+    // original payment again paid out more than the customer ever paid
+    // (Rs 1,000 order, Rs 300 back, then "full refund" wrote −Rs 1,000:
+    // Rs 1,300 in all — audit 2026-09-25). So: one refund of what is left.
+    const positiveTotal = positivePayments.reduce((s, p) => s + p.amount_cents, 0);
+    const alreadyRefunded = positiveTotal !== netPaidCents;
+    const dominantMethod = positivePayments
+      .slice()
+      .sort((a, b) => b.amount_cents - a.amount_cents)[0]!.method;
+    const reversals: Array<{ method: PaymentMethod; amountCents: number; ref: string }> = alreadyRefunded
+      ? [{ method: input.method ?? dominantMethod, amountCents: netPaidCents, ref: `refund-rest: ${input.reason.trim()}` }]
+      : positivePayments.map((p) => ({ method: p.method, amountCents: p.amount_cents, ref: `refund-of:${p.id}` }));
+    for (const p of reversals) {
       const refundId = uuidv7();
       db.prepare(
         `INSERT INTO payments
@@ -1353,8 +1458,8 @@ export function refundOrder(
         refundId,
         input.orderId,
         p.method,
-        -p.amount_cents,
-        `refund-of:${p.id}`,
+        -p.amountCents,
+        p.ref,
         input.approverUserId,
         now,
         now,
@@ -1362,7 +1467,7 @@ export function refundOrder(
         actor.deviceId,
         shiftId,
       );
-      enqueueSync(db, {
+      enqueuePaymentSyncAndAudit(db, {
         entityType: 'payments',
         entityId: refundId,
         op: 'upsert',
@@ -1370,12 +1475,12 @@ export function refundOrder(
           id: refundId,
           orderId: input.orderId,
           method: p.method,
-          amountCents: -p.amount_cents,
-          referenceNo: `refund-of:${p.id}`,
+          amountCents: -p.amountCents,
+          referenceNo: p.ref,
           receivedByUserId: input.approverUserId,
           paidAt: now,
         },
-      });
+      }, actor.userId);
     }
 
     db.prepare(
@@ -1737,6 +1842,13 @@ export function sendOrderToKitchen(
   orderId: string,
   actor: Actor & { userId: string },
 ): Order {
+  // A foodpanda order is recorded as paid and sent in one step. Sent unpaid (F2)
+  // it reached Ready with only a 'Served' button, closed as served-unpaid and
+  // left the board: no sale, no FBR invoice, no stock taken (audit 2026-09-25).
+  const order = findOrder(db, orderId);
+  if (order && order.mode === 'foodpanda' && order.paidAt === null) {
+    throw new Error('Foodpanda orders are paid and sent in one step — use Pay (F1)');
+  }
   return setOrderStatus(
     db,
     orderId,
@@ -1889,11 +2001,12 @@ export function markOrderServed(
     if (alreadyPaid && input.payment) throw new Error('Order is already paid');
 
     const now = nowIso();
-    const shiftId = shiftForPayment(db, actor.deviceId, order.shiftId);
+    const shiftId = input.payment ? shiftForPayment(db, actor.deviceId) : null;
     let finalStatus: OrderStatus = alreadyPaid ? 'paid' : 'served';
 
     if (input.payment) {
       const p = input.payment;
+      assertMethodFitsOrder(order.mode, p.method);
       if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
       if (p.amountCents < order.totalCents) {
         throw new Error(
@@ -1922,7 +2035,7 @@ export function markOrderServed(
         actor.deviceId,
         shiftId,
       );
-      enqueueSync(db, {
+      enqueuePaymentSyncAndAudit(db, {
         entityType: 'payments',
         entityId: pid,
         op: 'upsert',
@@ -1933,7 +2046,7 @@ export function markOrderServed(
           paidAt: now,
           receivedByUserId: actor.userId,
         },
-      });
+      }, actor.userId);
       finalStatus = 'paid';
     }
 
@@ -2009,13 +2122,14 @@ export function markOrderDelivered(
     if (alreadyPaid && input.payment) throw new Error('Order is already paid');
 
     const now = nowIso();
-    const shiftId = shiftForPayment(db, actor.deviceId, order.shiftId);
+    const shiftId = input.payment ? shiftForPayment(db, actor.deviceId) : null;
 
     // If a payment was supplied, insert it and bump to `paid`. Otherwise just
     // mark `delivered` and leave tendering for later.
     let finalStatus: OrderStatus = alreadyPaid ? 'paid' : 'delivered';
     if (input.payment) {
       const p = input.payment;
+      assertMethodFitsOrder(order.mode, p.method);
       if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
       if (p.amountCents < order.totalCents) {
         throw new Error(
@@ -2044,7 +2158,7 @@ export function markOrderDelivered(
         actor.deviceId,
         shiftId,
       );
-      enqueueSync(db, {
+      enqueuePaymentSyncAndAudit(db, {
         entityType: 'payments',
         entityId: pid,
         op: 'upsert',
@@ -2055,7 +2169,7 @@ export function markOrderDelivered(
           paidAt: now,
           receivedByUserId: actor.userId,
         },
-      });
+      }, actor.userId);
       finalStatus = 'paid';
     }
 

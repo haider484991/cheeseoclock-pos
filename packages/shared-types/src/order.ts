@@ -44,7 +44,9 @@ export type PaymentMethod =
   | 'card'
   | 'easypaisa'
   | 'jazzcash'
-  | 'bank_transfer';
+  | 'bank_transfer'
+  /** Settled by the platform (migration 0020) — never drawer cash. Only foodpanda orders use it. */
+  | 'foodpanda';
 
 export interface Order {
   id: UUID;

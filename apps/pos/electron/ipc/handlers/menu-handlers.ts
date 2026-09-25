@@ -43,6 +43,8 @@ import {
 } from '../../services/menu-import-service.js';
 import { MenuImportRefusedError } from '../../db/repositories/menu-import-repo.js';
 import { requireAdmin } from '../guards.js';
+import log from 'electron-log/main';
+import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 
 function requireSession(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -145,7 +147,16 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
     // Replacing the whole menu is the owner's call; updating it is a manager's.
     const s = fresh ? requireAdmin('Replacing the whole menu') : requireMenuManage();
     try {
-      return ok(applyPickedMenuImport(ctx.db, { userId: s.id, deviceId: ctx.deviceId }, { fresh }));
+      const result = applyPickedMenuImport(ctx.db, { userId: s.id, deviceId: ctx.deviceId }, { fresh });
+      // The website sells from the menu the till last published. After an
+      // import that is stale (old prices, missing choices) — after a fresh
+      // start every item it knows is gone and every web order fails — and
+      // nothing told anyone to press Publish (audit 2026-09-25). Publish now,
+      // best effort: a till with no website set up just skips it.
+      void webOrdersBridge.publishMenu().catch((e: unknown) =>
+        log.warn('Menu publish after import skipped', { error: e instanceof Error ? e.message : String(e) }),
+      );
+      return ok(result);
     } catch (e) {
       if (e instanceof MenuImportFileError || e instanceof MenuImportRefusedError) {
         return err({ code: 'precondition_failed', message: e.message });

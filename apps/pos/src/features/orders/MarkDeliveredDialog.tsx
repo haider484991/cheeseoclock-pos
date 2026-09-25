@@ -25,7 +25,9 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
   const { order } = snap;
   const isDelivery = order.mode === 'delivery';
   const alreadyPaid = order.paidAt !== null;
-  const [method, setMethod] = useState<PaymentMethod>('cash');
+  // Foodpanda settles its own orders: the only method for one, and never offered for anything else.
+  const isFoodpanda = order.mode === 'foodpanda';
+  const [method, setMethod] = useState<PaymentMethod>(isFoodpanda ? 'foodpanda' : 'cash');
   // Default tendered to the exact total (with paisa) so the gate doesn't trip
   // when the bill has a non-zero fractional part.
   const [tendered, setTendered] = useState((order.totalCents / 100).toFixed(2));
@@ -78,12 +80,14 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
     deliverMut.mutate();
   }
 
-  const methods: Array<{ key: PaymentMethod; label: string; icon: typeof Banknote }> = [
-    { key: 'cash', label: 'Cash', icon: Banknote },
-    { key: 'card', label: 'Card', icon: CreditCard },
-    { key: 'easypaisa', label: 'EasyPaisa', icon: Smartphone },
-    { key: 'jazzcash', label: 'JazzCash', icon: Smartphone },
-  ];
+  const methods: Array<{ key: PaymentMethod; label: string; icon: typeof Banknote }> = isFoodpanda
+    ? [{ key: 'foodpanda', label: 'Foodpanda', icon: Smartphone }]
+    : [
+        { key: 'cash', label: 'Cash', icon: Banknote },
+        { key: 'card', label: 'Card', icon: CreditCard },
+        { key: 'easypaisa', label: 'EasyPaisa', icon: Smartphone },
+        { key: 'jazzcash', label: 'JazzCash', icon: Smartphone },
+      ];
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>

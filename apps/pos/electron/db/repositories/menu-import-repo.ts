@@ -101,6 +101,22 @@ export function refuseFreshStartWhileBusy(db: AppDatabase): void {
       `${open} unpaid order${open === 1 ? ' is' : 's are'} still open. Take payment or discard ${open === 1 ? 'it' : 'them'} first — a fresh start replaces every menu item.`,
     );
   }
+  // Purchase orders still expected point at the ingredients a fresh start
+  // retires; receiving one afterwards failed with "Ingredient not found" and
+  // the whole delivery rolled back (audit 2026-09-25).
+  const pending = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM purchase_orders
+          WHERE deleted_at IS NULL AND status IN ('ordered', 'partial')`,
+      )
+      .get() as { n: number }
+  ).n;
+  if (pending > 0) {
+    throw new MenuImportRefusedError(
+      `${pending} purchase order${pending === 1 ? ' is' : 's are'} still waiting to be received. Receive or cancel ${pending === 1 ? 'it' : 'them'} first — a fresh start replaces every ingredient.`,
+    );
+  }
 }
 
 function taxUseOf(live: MenuSnapshot): Map<string, number> {

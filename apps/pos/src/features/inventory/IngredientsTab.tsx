@@ -303,6 +303,9 @@ function IngredientDialog({
                 <select
                   value={unit}
                   onChange={(e) => setUnit(e.target.value)}
+                  // An existing ingredient changes unit only through Convert (it rescales stock and recipes).
+                  disabled={!!existing}
+                  title={existing ? 'Use Convert to change the unit' : undefined}
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
                 >
                   {unitChoices.map((u) => (

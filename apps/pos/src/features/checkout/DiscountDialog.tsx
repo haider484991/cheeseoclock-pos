@@ -17,14 +17,16 @@ export function DiscountDialog({ onClose }: Props) {
   const [approverPin, setApproverPin] = useState('');
   const applyDiscount = useCheckoutStore((s) => s.applyDiscount);
   const busy = useCheckoutStore((s) => s.busy);
+  const subtotalCents = useCheckoutStore((s) => s.snapshot?.order.subtotalCents ?? 0);
   const { toast } = useToast();
 
   const numericValue = parseFloat(value) || 0;
   const valueForApproval = discountType === 'flat' ? numericValue * 100 : numericValue;
-  const needsApproval = requiresManagerApproval({
-    type: discountType,
-    value: valueForApproval,
-  });
+  // Same rule as the till's server side: a flat amount over 10% of this order needs a PIN too.
+  const needsApproval = requiresManagerApproval(
+    { type: discountType, value: valueForApproval },
+    subtotalCents,
+  );
 
   async function submit() {
     if (numericValue <= 0) {

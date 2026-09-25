@@ -168,7 +168,15 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:applyDiscount', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();
     let approverUserId: string | null = null;
-    if (requiresManagerApproval({ type: payload.discountType, value: payload.value })) {
+    // The order's subtotal decides whether a flat amount is more than 10% of it.
+    const current = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!current) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    if (
+      requiresManagerApproval(
+        { type: payload.discountType, value: payload.value },
+        current.order.subtotalCents,
+      )
+    ) {
       if (!payload.approverPin) {
         throw new IpcGuardError({
           code: 'precondition_failed',
@@ -557,9 +565,16 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
-    // Refund receipt; the drawer pops when cash is going back out.
-    const hadCash = snap.payments.some((p) => p.method === 'cash');
-    printSpooler.onOrderEvent(payload.orderId, 'refunded', { cash: hadCash });
+    // The refund rows this call just wrote share one timestamp. The drawer pops
+    // only when THIS refund hands cash back (not because some earlier payment
+    // on the order was cash), and FBR hears about this refund's amount only —
+    // summing every refund on the order re-reported earlier partial ones.
+    const refundRows = snap.payments.filter((p) => p.amountCents < 0);
+    const latestAt = refundRows.reduce((m, p) => (p.paidAt > m ? p.paidAt : m), '');
+    const thisRefund = refundRows.filter((p) => p.paidAt === latestAt);
+    printSpooler.onOrderEvent(payload.orderId, 'refunded', {
+      cash: thisRefund.some((p) => p.method === 'cash'),
+    });
 
     // Tell FBR: a refund is a Debit Note against the sale invoice. Only when
     // FBR actually accepted the sale — otherwise there is nothing to reverse.
@@ -567,13 +582,9 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     try {
       const sale = getFbrRowByOrder(ctx.db, payload.orderId);
       if (sale && sale.status === 'sent' && sale.irn && sale.modeAtEnqueue !== 'noop') {
-        const refunds = snap.payments.filter((p) => p.amountCents < 0);
-        const latest = refunds.slice().sort((a, b) => b.paidAt.localeCompare(a.paidAt))[0];
+        const latest = thisRefund[0];
         if (latest) {
-          const refundedCents =
-            payload.amountCents !== undefined
-              ? Math.round(payload.amountCents)
-              : refunds.reduce((sum, p) => sum + -p.amountCents, 0);
+          const refundedCents = thisRefund.reduce((sum, p) => sum + -p.amountCents, 0);
           const cfg = getFbrConfig(ctx.db);
           const note = mapRefundToFbrDebitNote(snap, toSellerInfo(cfg), {
             originalIrn: sale.irn,

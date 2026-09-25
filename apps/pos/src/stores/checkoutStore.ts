@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { OrderSnapshot, OrderMode } from '@cheeseoclock/shared-types';
+import type { OrderSnapshot, OrderMode, PaymentMethod } from '@cheeseoclock/shared-types';
 import { ipc } from '../ipc/client';
 
 interface CheckoutState {
@@ -42,7 +42,7 @@ interface CheckoutState {
   clearDiscount: () => Promise<void>;
   tender: (
     payments: Array<{
-      method: 'cash' | 'card' | 'easypaisa' | 'jazzcash' | 'bank_transfer';
+      method: PaymentMethod;
       amountCents: number;
       tenderedCents?: number | null;
       referenceNo?: string | null;

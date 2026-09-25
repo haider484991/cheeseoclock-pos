@@ -11,8 +11,11 @@ import {
 } from '../../db/repositories/rider-repo.js';
 
 /**
- * Riders are dispatch-flow records. Any cashier can read the roster (to assign
- * on a delivery), but only managers/admins can mutate it.
+ * Riders are dispatch-flow records. Any till user can read the roster and add
+ * a rider — the cashier dispatching a delivery has to be able to, or the order
+ * cannot leave (owner, 2026-09-25: "the cashier can't add rider"; the Assign
+ * rider dialog offered "Add a new rider" and the handler refused it). Editing
+ * or deactivating a rider stays with managers and admins (`riders.manage`).
  */
 function requireOrderUser(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -26,9 +29,9 @@ function requireOrderUser(): AuthenticatedUser {
 function requireRidersManage(): AuthenticatedUser {
   const session = getCurrentSession();
   if (!session) throw new IpcGuardError({ code: 'unauthenticated', message: 'Not logged in' });
-  // Riders are a roster — reuse `users.manage` since it's already the bar for
-  // staff management. (Cashiers can assign but not create.)
-  if (!hasCapability(session.role, 'users.manage')) {
+  // Was `users.manage`, which only the admin holds — managers could not
+  // touch the roster either.
+  if (!hasCapability(session.role, 'riders.manage')) {
     throw new IpcGuardError({ code: 'forbidden', message: 'Manager/admin required' });
   }
   return session;
@@ -41,7 +44,7 @@ export function registerRidersHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('riders:create', ctx, (_ctx, payload) => {
-    const s = requireRidersManage();
+    const s = requireOrderUser();
     try {
       const rider = createRider(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
       return ok(rider);

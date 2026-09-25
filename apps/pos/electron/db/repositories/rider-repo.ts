@@ -61,12 +61,32 @@ export interface CreateRiderInput {
   notes?: string | null;
 }
 
+/**
+ * Add a rider. Cashiers can do this from the Assign rider dialog, so the phone
+ * number is the identity: a number already on the roster is not added twice —
+ * an active rider is refused with their name (pick them from the list), and an
+ * inactive one is switched back on under the name just typed.
+ */
 export function createRider(db: AppDatabase, input: CreateRiderInput, actor: Actor): Rider {
   const id = uuidv7();
   const now = nowIso();
-  const normalizedPhone = normalizePhone(input.phone) ?? input.phone.trim();
   if (!input.name.trim()) throw new Error('Rider name is required');
+  const normalizedPhone = normalizePhone(input.phone) ?? input.phone.trim();
   if (!normalizedPhone) throw new Error('Rider phone is required');
+
+  const existing = db
+    .prepare(`SELECT ${RIDER_SELECT} FROM riders WHERE phone = ? AND deleted_at IS NULL`)
+    .get(normalizedPhone) as RiderRow | undefined;
+  if (existing) {
+    if (existing.is_active === 1) {
+      throw new Error(`${existing.name} is already a rider with this number — pick them from the list`);
+    }
+    return updateRider(
+      db,
+      { id: existing.id, name: input.name, isActive: true, ...(input.notes !== undefined ? { notes: input.notes } : {}) },
+      actor,
+    );
+  }
 
   const rider: Rider = {
     id: id as Rider['id'],
@@ -153,8 +173,10 @@ export function updateRider(db: AppDatabase, input: UpdateRiderInput, actor: Act
 }
 
 /**
- * Soft-delete. Any orders still pointing at the rider keep their snapshot —
- * the FK is allowed to dangle since we treat the assignment as historical.
+ * Take a rider off the assignment list. They stay on the roster as inactive
+ * (the Riders page lists them, a manager can switch them back on) — this used
+ * to set deleted_at too, so a deactivated rider vanished for good and could
+ * never be reactivated. Orders already assigned keep pointing at them.
  */
 export function deactivateRider(db: AppDatabase, id: string, actor: Actor): void {
   const row = db
@@ -167,16 +189,16 @@ export function deactivateRider(db: AppDatabase, id: string, actor: Actor): void
     db,
     entityType: 'riders',
     entityId: id,
-    op: 'delete',
+    op: 'upsert',
     action: 'deactivate',
     actor,
     before,
     after: { ...before, isActive: false, updatedAt: now },
     writeRow: () => {
       db.prepare(
-        `UPDATE riders SET is_active = 0, deleted_at = ?, updated_at = ?, version = version + 1
+        `UPDATE riders SET is_active = 0, updated_at = ?, version = version + 1
           WHERE id = ?`,
-      ).run(now, now, id);
+      ).run(now, id);
     },
   });
 }

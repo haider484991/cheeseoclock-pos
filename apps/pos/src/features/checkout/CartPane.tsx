@@ -263,7 +263,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
         </div>
         {needsCustomer && !showDetails && <p className="ticket-next">Next: {mode === 'delivery' ? 'customer & delivery details' : 'customer details'}</p>}
         <div className="ticket-keys" aria-hidden="true">
-          {needsCustomer && !showDetails ? <span><kbd>F2</kbd> Continue</span> : <><span><kbd>F2</kbd> Send</span><span><kbd>F1</kbd> Pay</span></>}
+          {needsCustomer && !showDetails ? <span><kbd>F2</kbd> Continue</span> : mode === 'foodpanda' ? <span><kbd>F1</kbd> Pay</span> : <><span><kbd>F2</kbd> Send</span><span><kbd>F1</kbd> Pay</span></>}
           <span><kbd>F3</kbd> Discount</span>
         </div>
       </footer>

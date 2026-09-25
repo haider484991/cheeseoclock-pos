@@ -202,6 +202,10 @@ function OpenShiftDialog({ onClose }: { onClose: () => void }) {
 function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () => void }) {
   const [counted, setCounted] = useState('');
   const [notes, setNotes] = useState('');
+  // A blind count: what the drawer should hold is shown only once the count
+  // is in. Showing it first let a cashier type the expected figure and hide a
+  // shortage (audit 2026-09-25).
+  const [result, setResult] = useState<{ expected: number; counted: number; variance: number } | null>(null);
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -218,10 +222,14 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
         countedCashCents: Math.round((parseFloat(counted) || 0) * 100),
         notes: notes.trim() || null,
       }),
-    onSuccess: () => {
+    onSuccess: (shift) => {
       toast({ title: 'Shift closed', description: 'Cash drawer reconciliation saved.' });
       void qc.invalidateQueries({ queryKey: ['shifts'] });
-      onClose();
+      setResult({
+        expected: shift.expectedCashCents ?? 0,
+        counted: shift.countedCashCents ?? 0,
+        variance: shift.varianceCents ?? 0,
+      });
     },
     onError: (e) =>
       toast({
@@ -231,10 +239,7 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
       }),
   });
 
-  const countedCents =
-    counted === '' ? null : Math.round((parseFloat(counted) || 0) * 100);
-  const variance =
-    countedCents !== null && summary ? countedCents - summary.expectedCashCents : null;
+  const variance = result?.variance ?? null;
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -268,17 +273,23 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
               <dl className="space-y-0.5 text-emerald-900 dark:text-emerald-100">
                 <Row k="Paid orders" v={String(summary.paidOrderCount)} />
                 <Row k="Refunds" v={String(summary.refundedOrderCount)} />
-                <Row k="Cash sales" v={formatCents(summary.cashSalesCents)} />
-                <Row k="Cash refunds" v={`− ${formatCents(summary.cashRefundsCents)}`} />
-                <div className="mt-1 flex justify-between border-t border-emerald-200 pt-1 font-bold dark:border-emerald-800">
-                  <dt>Expected cash</dt>
-                  <dd className="font-mono">{formatCents(summary.expectedCashCents)}</dd>
-                </div>
+                {result && (
+                  <>
+                    <Row k="Cash sales" v={formatCents(summary.cashSalesCents)} />
+                    <Row k="Cash refunds" v={`− ${formatCents(summary.cashRefundsCents)}`} />
+                    <div className="mt-1 flex justify-between border-t border-emerald-200 pt-1 font-bold dark:border-emerald-800">
+                      <dt>Expected cash</dt>
+                      <dd className="font-mono">{formatCents(result.expected)}</dd>
+                    </div>
+                    <Row k="Counted" v={formatCents(result.counted)} />
+                  </>
+                )}
               </dl>
             </div>
           )}
 
           <div className="space-y-3">
+            {!result && (
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                 Counted cash in drawer (Rs)
@@ -292,6 +303,7 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
             </label>
+            )}
             {variance !== null && (
               <div
                 className={cn(
@@ -319,6 +331,7 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
                 </div>
               </div>
             )}
+            {!result && (
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                 Notes (optional)
@@ -330,8 +343,16 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
             </label>
+            )}
           </div>
 
+          {result ? (
+            <div className="mt-5 flex">
+              <Button variant="primary" size="md" className="flex-1" onClick={onClose}>
+                Done
+              </Button>
+            </div>
+          ) : (
           <div className="mt-5 flex gap-2">
             <Button variant="ghost" size="md" className="flex-1" onClick={onClose}>
               Cancel
@@ -346,6 +367,7 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
               {closeMut.isPending ? 'Closing…' : 'Close shift'}
             </Button>
           </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

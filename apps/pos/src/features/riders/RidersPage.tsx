@@ -16,16 +16,19 @@ import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Rider } from '@cheeseoclock/shared-types';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { useSessionStore } from '../../stores/sessionStore';
 
 /**
- * Riders roster. Cashiers see this list when assigning a delivery; managers
- * use it to add/edit/deactivate riders.
+ * Riders roster. Everyone on the till can add a rider (a cashier dispatching a
+ * delivery must be able to); editing, deactivating and switching a rider back
+ * on is for managers and admins — the buttons only show for them.
  */
 export function RidersPage() {
   const [editing, setEditing] = useState<Rider | null>(null);
   const [showNew, setShowNew] = useState(false);
   const qc = useQueryClient();
   const { toast } = useToast();
+  const canManage = useSessionStore((s) => s.can('riders.manage'));
 
   const ridersQ = useQuery({
     queryKey: ['riders', 'all'],
@@ -124,6 +127,7 @@ export function RidersPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
+                      {canManage && (
                       <div className="flex justify-end gap-1">
                         <button
                           onClick={() => setEditing(r)}
@@ -148,6 +152,7 @@ export function RidersPage() {
                           </button>
                         )}
                       </div>
+                      )}
                     </td>
                   </tr>
                 ))}

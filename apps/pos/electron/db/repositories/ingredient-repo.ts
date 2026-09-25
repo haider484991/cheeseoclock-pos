@@ -182,6 +182,13 @@ export function updateIngredient(
     .get(input.id) as IngRow | undefined;
   if (!row) throw new Error('Ingredient not found');
   const before = rowToIngredient(row);
+  // A unit is not a label: stock, recipes, batches and costs are all counted
+  // in it. Re-labelling kg as g here turned 5 kg of stock into 5 g and left
+  // every recipe and cost 1000x off (audit 2026-09-25) — the Convert button
+  // scales everything instead.
+  if (input.unit !== undefined && input.unit !== before.unit) {
+    throw new Error(`Use Convert to change ${before.name} from ${before.unit} — it rescales stock, recipes and costs`);
+  }
   const after: Ingredient = withPackCost({
     ...before,
     name: input.name ?? before.name,

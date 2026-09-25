@@ -44,11 +44,20 @@ export function registerUsersHandlers(ctx: HandlerContext): void {
       });
     }
     const actor = getCurrentSession();
-    const user = await createUser(ctx.db, parsed.data, {
-      userId: actor?.id ?? null,
-      deviceId: ctx.deviceId,
-    });
-    return ok(user);
+    try {
+      const user = await createUser(ctx.db, parsed.data, {
+        userId: actor?.id ?? null,
+        deviceId: ctx.deviceId,
+      });
+      return ok(user);
+    } catch (e) {
+      // e.g. "That PIN is already used by someone else" — the admin needs the
+      // reason, not a correlation id.
+      return err({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Create user failed',
+      });
+    }
   });
 
   defineHandler('users:update', ctx, async (_ctx, payload) => {

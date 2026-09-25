@@ -221,10 +221,27 @@ class WebOrdersBridge {
     }
     // The loop runs when EITHER feature needs it: online orders, or
     // scheduled cloud backups. Both require URL + secret.
-    const anyFeatureOn = cfg.enabled || cfg.cloudBackupFrequency !== 'off';
+    // …and while web orders already taken still have news for their customers.
+    const anyFeatureOn =
+      cfg.enabled || cfg.cloudBackupFrequency !== 'off' || this.hasUnfinishedWebOrders();
     if (!anyFeatureOn || !isWebBridgeReady(cfg).ok) return;
     this.timer = setInterval(() => void this.tick(), ORDER_POLL_MS);
     void this.tick();
+  }
+
+  /** Web orders whose customer has not yet been told delivered or cancelled. */
+  private hasUnfinishedWebOrders(): boolean {
+    if (!this.db) return false;
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM web_order_imports
+            WHERE status = 'imported'
+              AND IFNULL(last_pushed_status, '') NOT IN ('delivered', 'cancelled')
+            LIMIT 1`,
+        )
+        .get() !== undefined
+    );
   }
 
   /** Stop polling — called right before the app restarts for a restore. */
@@ -279,10 +296,13 @@ class WebOrdersBridge {
           });
         });
       }
-      if (cfg.enabled) {
-        await this.pullNewOrders(cfg);
-        await this.pushStatusUpdates(cfg);
-      }
+      if (cfg.enabled) await this.pullNewOrders(cfg);
+      // Status pushes run whether or not new orders are being accepted:
+      // unticking "Accept online orders" at closing time used to freeze the
+      // tracking page of every web order still in the kitchen or on the road
+      // until someone ticked it again (audit 2026-09-25). With nothing to
+      // push this makes no network call.
+      await this.pushStatusUpdates(cfg);
       this.lastPollAt = nowIso();
       this.lastError = null;
       this.consecutiveFails = 0;
@@ -1037,15 +1057,7 @@ class WebOrdersBridge {
       printSpooler.onOrderEvent(order.id, 'sent_to_kitchen');
       this.importedTotal += 1;
 
-      // 6. Ack to the site (flips 'new' → 'accepted').
-      await this.api(cfg, `/api/bridge/orders/${web.id}/ack`, {
-        method: 'POST',
-        body: JSON.stringify({
-          posOrderId: order.id,
-          posOrderNumber: order.orderNumber,
-        }),
-      });
-
+      // The order is saved and on the board: say so before talking to the site.
       log.info('Web order imported', {
         webOrderId: web.id,
         posOrder: order.orderNumber,
@@ -1057,6 +1069,26 @@ class WebOrdersBridge {
         customerName: web.customerName,
       });
       this.lastImportError = null;
+
+      // 6. Ack to the site (flips 'new' → 'accepted'). Its own try: a timeout
+      //    here (shop Wi-Fi) used to land in the import catch below, and staff
+      //    got "Website order not imported — call the customer" for an order
+      //    already on the board — and re-keyed it, so it was cooked twice
+      //    (audit 2026-09-25). The next poll re-acks it (step 0 above).
+      try {
+        await this.api(cfg, `/api/bridge/orders/${web.id}/ack`, {
+          method: 'POST',
+          body: JSON.stringify({
+            posOrderId: order.id,
+            posOrderNumber: order.orderNumber,
+          }),
+        });
+      } catch (e) {
+        log.warn('Web order ack failed (imported; will re-ack next poll)', {
+          webOrderId: web.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       db.prepare(

@@ -24,18 +24,24 @@ const METHODS: Array<{
   { id: 'easypaisa', label: 'EasyPaisa', icon: Smartphone, showTendered: false },
   { id: 'jazzcash', label: 'JazzCash', icon: Smartphone, showTendered: false },
   { id: 'bank_transfer', label: 'Bank', icon: Building, showTendered: false },
+  // Settled by the platform, never drawer cash — and the only way a foodpanda order is paid.
+  { id: 'foodpanda', label: 'Foodpanda', icon: Smartphone, showTendered: false },
 ];
 
 export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const total = snapshot.order.totalCents;
-  const [method, setMethod] = useState<PaymentMethod>('cash');
+  // A foodpanda order is paid through Foodpanda only (it used to default to Cash and inflate the
+  // drawer's expected cash every night); every other order can't use that method.
+  const isFoodpanda = snapshot.order.mode === 'foodpanda';
+  const methods = METHODS.filter((m) => (m.id === 'foodpanda') === isFoodpanda);
+  const [method, setMethod] = useState<PaymentMethod>(isFoodpanda ? 'foodpanda' : 'cash');
   const [tendered, setTendered] = useState('');
   const tender = useCheckoutStore((s) => s.tender);
   const busy = useCheckoutStore((s) => s.busy);
   const { toast } = useToast();
 
   const tenderedCents = parseTenderedCents(tendered);
-  const methodSpec = METHODS.find((m) => m.id === method)!;
+  const methodSpec = methods.find((m) => m.id === method) ?? methods[0]!;
   // A 100%-discounted order has nothing to collect — no payment leg at all.
   const nothingToPay = total === 0;
   // For cash: tendered must be >= total. For others: amount = total exactly.
@@ -43,6 +49,9 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const changeCents = methodSpec.showTendered && tenderedCents >= total ? tenderedCents - total : 0;
 
   async function submit() {
+    // The number pad's Enter bypasses the disabled button: a double Enter sent
+    // a second tender, refused, with a "Payment failed" after a good payment.
+    if (busy) return;
     if (!enough) {
       toast({ title: 'Tendered amount is less than total', variant: 'warning' });
       return;
@@ -92,7 +101,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                 Method
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {METHODS.map((m) => {
+                {methods.map((m) => {
                   const Icon = m.icon;
                   return (
                     <button

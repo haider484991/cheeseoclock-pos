@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
-import { rangeForPreset, type RangePreset, dateInputToIso, fmtDateInput } from './dateRange';
+import { rangeForPreset, type RangePreset, dateInputToIso, fmtDateInput, fmtRange } from './dateRange';
 import { BarChart, LineChart } from './charts';
 import {
   CalendarRange,
@@ -114,7 +114,7 @@ export function ReportsPage() {
             </div>
           )}
           <span className="ml-auto rounded-full bg-stone-100 px-3 py-1 font-mono text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-400">
-            {range.sinceIso.slice(0, 10)} → {range.untilIso.slice(0, 10)}
+            {fmtRange(range)}
           </span>
         </div>
       </Card>

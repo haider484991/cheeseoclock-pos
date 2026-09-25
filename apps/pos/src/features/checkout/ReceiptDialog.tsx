@@ -27,6 +27,7 @@ const METHOD_LABEL = {
   easypaisa: 'EasyPaisa',
   jazzcash: 'JazzCash',
   bank_transfer: 'Bank',
+  foodpanda: 'Foodpanda',
 } as const;
 
 export function ReceiptDialog({ snapshot, onClose }: Props) {
