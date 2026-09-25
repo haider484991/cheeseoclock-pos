@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
@@ -458,14 +458,20 @@ function MovementDialog({
   const numericDelta = deltaValid ? parseInt(delta.trim(), 10) : 0;
   const computedDelta = isCount ? numericDelta - ingredient.currentQty : numericDelta;
 
+  // One save per click. Waste and deliveries used to go through a second,
+  // unguarded call that ignored "Saving…": a double-click wasted the stock twice.
+  const submitting = useRef(false);
   const mut = useMutation({
-    mutationFn: () =>
+    mutationFn: (deltaQty: number) =>
       ipc.inventory.recordMovement({
         ingredientId: ingredient.id,
-        deltaQty: computedDelta,
+        deltaQty,
         reason,
         notes: notes || null,
       }),
+    onSettled: () => {
+      submitting.current = false;
+    },
     onSuccess: () => {
       toast({
         title: 'Stock updated',
@@ -567,33 +573,12 @@ function MovementDialog({
               variant="primary"
               disabled={mut.isPending || !deltaValid}
               onClick={() => {
+                if (submitting.current) return;
+                submitting.current = true;
                 let normalizedDelta = computedDelta;
                 if (reason === 'waste') normalizedDelta = -Math.abs(normalizedDelta);
                 if (reason === 'delivery') normalizedDelta = Math.abs(normalizedDelta);
-                // Re-run with normalized delta
-                if (normalizedDelta !== computedDelta) {
-                  void ipc.inventory
-                    .recordMovement({
-                      ingredientId: ingredient.id,
-                      deltaQty: normalizedDelta,
-                      reason,
-                      notes: notes || null,
-                    })
-                    .then(() => {
-                      toast({ title: 'Stock updated', variant: 'success' });
-                      void qc.invalidateQueries({ queryKey: ['inventory'] });
-                      onClose();
-                    })
-                    .catch((e) =>
-                      toast({
-                        title: 'Failed',
-                        description: e instanceof Error ? e.message : String(e),
-                        variant: 'error',
-                      }),
-                    );
-                } else {
-                  mut.mutate();
-                }
+                mut.mutate(normalizedDelta);
               }}
             >
               {mut.isPending ? 'Saving…' : 'Record'}

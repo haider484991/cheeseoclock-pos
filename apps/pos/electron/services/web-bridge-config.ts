@@ -66,15 +66,24 @@ export function getWebBridgeConfig(db: AppDatabase): LoadedWebBridgeConfig {
   return { ...cfg, bridgeSecret: opened.value, secretUnreadable: opened.unreadable };
 }
 
-export function setWebBridgeConfig(db: AppDatabase, config: WebBridgeConfig): void {
+export function setWebBridgeConfig(
+  db: AppDatabase,
+  config: WebBridgeConfig,
+  actorUserId: string | null = null,
+): void {
   const { enabled, siteUrl, bridgeSecret, pollIntervalMs, cloudBackupFrequency } = config;
-  setSetting(db, WEB_BRIDGE_CONFIG_KEY, {
-    enabled,
-    siteUrl,
-    bridgeSecret: bridgeSecret ? sealSecret(bridgeSecret) : undefined,
-    pollIntervalMs,
-    cloudBackupFrequency,
-  });
+  setSetting(
+    db,
+    WEB_BRIDGE_CONFIG_KEY,
+    {
+      enabled,
+      siteUrl,
+      bridgeSecret: bridgeSecret ? sealSecret(bridgeSecret) : undefined,
+      pollIntervalMs,
+      cloudBackupFrequency,
+    },
+    { actorUserId },
+  );
 }
 
 /** Parse + normalise a site URL typed by the operator (trailing slashes dropped). */

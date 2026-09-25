@@ -6,6 +6,7 @@ import type { CloudBackupEntry } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { applyRestore } from '../settings/applyRestore';
 
 const CONFIRM =
   'Restore this copy onto this PC? The app will restart on it. Anything already on this PC is archived first, so this can be undone.';
@@ -30,7 +31,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
     onSuccess: (r) => {
       if (!r.staged) return;
       void askConfirm(CONFIRM).then((ok) => {
-        if (ok) void ipc.backup.applyAndRelaunch();
+        if (ok) void applyRestore();
       });
     },
     onError: (e) =>
@@ -57,7 +58,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
         id,
       }),
     onSuccess: (r) => {
-      if (r.staged) void ipc.backup.applyAndRelaunch();
+      if (r.staged) void applyRestore();
     },
     onError: (e) =>
       toast({ title: 'Cloud restore failed', description: errorMessage(e), variant: 'error' }),

@@ -177,7 +177,7 @@ export function decrementForOrder(
   db: AppDatabase,
   orderId: string,
   actor: Actor,
-): Array<{ ingredientId: string; name: string; resultingQty: number; threshold: number }> {
+): Array<{ ingredientId: string; name: string; unit: string; resultingQty: number; threshold: number }> {
   const alreadyDone = db
     .prepare(`SELECT 1 FROM stock_movements WHERE ref_order_id = ? LIMIT 1`)
     .get(orderId);
@@ -186,7 +186,7 @@ export function decrementForOrder(
   const usages = db
     .prepare(
       `SELECT oi.id AS order_item_id, oi.menu_item_id, oi.quantity,
-              r.ingredient_id, r.qty_per_unit, i.name, i.current_qty, i.low_threshold
+              r.ingredient_id, r.qty_per_unit, i.name, i.unit, i.current_qty, i.low_threshold
          FROM order_items oi
          JOIN recipes r ON r.menu_item_id = oi.menu_item_id AND r.deleted_at IS NULL
           AND (r.modifier_id IS NULL OR EXISTS (
@@ -202,6 +202,7 @@ export function decrementForOrder(
     ingredient_id: string;
     qty_per_unit: number;
     name: string;
+    unit: string;
     current_qty: number;
     low_threshold: number;
   }>;
@@ -209,15 +210,18 @@ export function decrementForOrder(
   if (usages.length === 0) return [];
 
   // Aggregate per-ingredient delta across all order items.
-  const byIngredient = new Map<string, { name: string; delta: number; low: number }>();
+  const byIngredient = new Map<string, { name: string; unit: string; delta: number; low: number }>();
   for (const u of usages) {
     const prev = byIngredient.get(u.ingredient_id);
     const delta = (prev?.delta ?? 0) + u.qty_per_unit * u.quantity;
-    byIngredient.set(u.ingredient_id, { name: u.name, delta, low: u.low_threshold });
+    byIngredient.set(u.ingredient_id, { name: u.name, unit: u.unit, delta, low: u.low_threshold });
   }
 
-  const crossed: Array<{ ingredientId: string; name: string; resultingQty: number; threshold: number }> = [];
+  const crossed: Array<{ ingredientId: string; name: string; unit: string; resultingQty: number; threshold: number }> = [];
   const tx = db.transaction(() => {
+    // Checked inside the transaction: two tills sending at once must not both
+    // take the stock off (the check above is only the cheap early exit).
+    if (db.prepare(`SELECT 1 FROM stock_movements WHERE ref_order_id = ? LIMIT 1`).get(orderId)) return;
     for (const [ingredientId, info] of byIngredient) {
       const result = recordStockMovement(
         db,
@@ -229,10 +233,14 @@ export function decrementForOrder(
         },
         actor,
       );
-      if (result.resultingQty <= info.low) {
+      // Warn on the way down through the line only — every sale of an item
+      // already under it used to raise the same alert again.
+      const before = result.resultingQty + info.delta;
+      if (result.resultingQty <= info.low && before > info.low) {
         crossed.push({
           ingredientId,
           name: info.name,
+          unit: info.unit,
           resultingQty: result.resultingQty,
           threshold: info.low,
         });
@@ -249,4 +257,48 @@ export function decrementForOrder(
   }
 
   return crossed;
+}
+
+/**
+ * Put back the stock an order took when it is cancelled before the kitchen
+ * started on it (status still `sent_to_kitchen`). Stock now leaves when the
+ * order is sent, not when it is paid, so a cancelled order would otherwise
+ * keep eating stock it never used. Once the kitchen has started, the food is
+ * made and the stock stays gone (it is waste, not a sale that didn't happen).
+ * Written as positive `sale` movements so the cost-of-sales report nets out.
+ * Safe to call twice: a second call finds nothing left to put back.
+ */
+export function returnStockForOrder(db: AppDatabase, orderId: string, actor: Actor): number {
+  let returned = 0;
+  const tx = db.transaction(() => {
+    const net = db
+      .prepare(
+        `SELECT ingredient_id, SUM(delta_qty) AS net
+           FROM stock_movements
+          WHERE ref_order_id = ? AND reason = 'sale' AND deleted_at IS NULL
+          GROUP BY ingredient_id`,
+      )
+      .all(orderId) as Array<{ ingredient_id: string; net: number }>;
+    for (const row of net) {
+      if (row.net >= 0) continue;
+      const exists = db
+        .prepare(`SELECT 1 FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
+        .get(row.ingredient_id);
+      if (!exists) continue;
+      recordStockMovement(
+        db,
+        {
+          ingredientId: row.ingredient_id,
+          deltaQty: -row.net,
+          reason: 'sale',
+          refOrderId: orderId,
+          notes: 'Order cancelled before cooking — stock put back',
+        },
+        actor,
+      );
+      returned += 1;
+    }
+  });
+  tx();
+  return returned;
 }

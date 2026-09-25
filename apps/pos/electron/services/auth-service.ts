@@ -15,6 +15,15 @@ import type { AuthenticatedUser, UUID } from '@cheeseoclock/shared-types';
 
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h
 
+/**
+ * An owner or manager login left open on the counter hands anyone walking past
+ * the settings, the staff list and the reports. It ends after this long with
+ * no one touching the till (key presses and clicks — the screens that refresh
+ * themselves don't count). Cashiers work the till all day and are not timed
+ * out; every login still ends after SESSION_MAX_AGE_MS.
+ */
+export const ELEVATED_IDLE_MS = 15 * 60 * 1000;
+
 // Brute-force protection. Argon2id alone is insufficient at PIN entropy
 // (~10k combinations for a 4-digit PIN), so we layer a sliding-window
 // counter on top. The lockout escalates with consecutive failures:
@@ -116,9 +125,73 @@ function clearPinAttempts(db: AppDatabase, pin: string): void {
 }
 
 let currentSession: AuthenticatedUser | null = null;
+let sessionDb: AppDatabase | null = null;
+let sessionStartedAtMs = 0;
+let lastActivityAtMs = 0;
 
+/** Someone pressed a key or clicked on the till (renderer → `auth:activity`). */
+export function noteActivity(): void {
+  if (currentSession) lastActivityAtMs = Date.now();
+}
+
+/**
+ * The logged-in user, or null. Also where a login ends: an owner or manager
+ * idle for ELEVATED_IDLE_MS, any login older than SESSION_MAX_AGE_MS, and a
+ * user switched off since they logged in. The role is read again each time, so
+ * a manager demoted to cashier loses manager rights at once, not at next login.
+ */
 export function getCurrentSession(): AuthenticatedUser | null {
+  if (!currentSession) return null;
+  const now = Date.now();
+  if (now - sessionStartedAtMs > SESSION_MAX_AGE_MS) {
+    endSession('session_expired');
+    return null;
+  }
+  if (currentSession.role !== 'cashier' && now - lastActivityAtMs > ELEVATED_IDLE_MS) {
+    endSession('session_idle_timeout');
+    return null;
+  }
+  if (sessionDb) {
+    const row = sessionDb
+      .prepare(`SELECT role, is_active, deleted_at FROM users WHERE id = ?`)
+      .get(currentSession.id) as
+      | { role: AuthenticatedUser['role']; is_active: number; deleted_at: string | null }
+      | undefined;
+    if (!row || row.is_active !== 1 || row.deleted_at !== null) {
+      endSession('session_revoked');
+      return null;
+    }
+    if (row.role !== currentSession.role) {
+      log.info('Session role changed', { userId: currentSession.id, from: currentSession.role, to: row.role });
+      currentSession = { ...currentSession, role: row.role };
+    }
+  }
   return currentSession;
+}
+
+function endSession(action: 'logout' | 'session_expired' | 'session_idle_timeout' | 'session_revoked'): void {
+  const session = currentSession;
+  const db = sessionDb;
+  currentSession = null;
+  sessionDb = null;
+  if (!session || !db) return;
+  const now = new Date().toISOString();
+  try {
+    db.transaction(() => {
+      db.prepare(`UPDATE user_sessions SET ended_at = ? WHERE id = ?`).run(now, session.sessionId);
+      writeAudit(db, {
+        entityType: 'user_sessions',
+        entityId: session.sessionId,
+        action,
+        actorUserId: session.id,
+        before: { sessionId: session.sessionId },
+        after: { endedAt: now },
+      });
+    })();
+  } catch (e) {
+    log.warn('Ending the session failed to write', { error: String(e) });
+  }
+  log.info('Session ended', { userId: session.id, action });
 }
 
 export async function login(
@@ -166,6 +239,9 @@ export async function login(
     role: user.role,
     sessionId: sessionId as UUID,
   };
+  sessionDb = db;
+  sessionStartedAtMs = Date.now();
+  lastActivityAtMs = sessionStartedAtMs;
 
   log.info('User logged in', { userId: user.id, role: user.role });
   return currentSession;
@@ -173,25 +249,8 @@ export async function login(
 
 export function logout(db: AppDatabase): void {
   if (!currentSession) return;
-
-  const now = new Date().toISOString();
-  const session = currentSession;
-
-  const tx = db.transaction(() => {
-    db.prepare(`UPDATE user_sessions SET ended_at = ? WHERE id = ?`).run(now, session.sessionId);
-    writeAudit(db, {
-      entityType: 'user_sessions',
-      entityId: session.sessionId,
-      action: 'logout',
-      actorUserId: session.id,
-      before: { sessionId: session.sessionId },
-      after: { endedAt: now },
-    });
-  });
-  tx();
-
-  currentSession = null;
-  log.info('User logged out', { userId: session.id });
+  sessionDb = db;
+  endSession('logout');
 }
 
 /**
@@ -221,6 +280,9 @@ export function recoverSession(db: AppDatabase, deviceId: string): Authenticated
     role: row.role,
     sessionId: row.session_id as UUID,
   };
+  sessionDb = db;
+  sessionStartedAtMs = Date.now();
+  lastActivityAtMs = sessionStartedAtMs;
   return currentSession;
 }
 

@@ -15,7 +15,13 @@ const StatusSchema = z.object({
   ]),
 });
 
-/** Bridge: POS pushes a status change so the customer's tracking page updates. */
+/**
+ * Bridge: POS pushes a status change so the customer's tracking page updates.
+ * Delivered and cancelled are final: a later push (a refund after delivery, a
+ * till replaying an old status) must not reopen or cancel an order the
+ * customer already has. Those answer ok with updated:false so the till stops
+ * pushing.
+ */
 export async function POST(
   req: Request,
   { params }: { params: { id: string } },
@@ -30,10 +36,17 @@ export async function POST(
       UPDATE web_orders
          SET status = ${parsed.data.status}, updated_at = now()
        WHERE id = ${params.id}
+         AND (status NOT IN ('delivered', 'cancelled') OR status = ${parsed.data.status})
        RETURNING id
     `) as Array<{ id: string }>;
     if (rows.length === 0) {
-      return Response.json({ ok: false, error: 'not_found' }, { status: 404 });
+      const found = (await sql()`
+        SELECT status FROM web_orders WHERE id = ${params.id}
+      `) as Array<{ status: string }>;
+      if (found.length === 0) {
+        return Response.json({ ok: false, error: 'not_found' }, { status: 404 });
+      }
+      return Response.json({ ok: true, data: { updated: false, finalStatus: found[0]!.status } });
     }
     return Response.json({ ok: true, data: { updated: true } });
   } catch (e) {

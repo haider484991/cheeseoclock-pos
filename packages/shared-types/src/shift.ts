@@ -13,7 +13,7 @@ export interface Shift {
   openingCashCents: Cents;
   /** Manager's drawer count at close. Null while open. */
   countedCashCents: Cents | null;
-  /** Computed at close: opening + cash sales − cash refunds. */
+  /** Computed at close: opening + cash sales − cash refunds + pay-ins − pay-outs. */
   expectedCashCents: Cents | null;
   /** counted − expected (negative = short, positive = over). */
   varianceCents: Cents | null;
@@ -32,7 +32,11 @@ export interface ShiftSummary {
   netRevenueCents: Cents;
   cashSalesCents: Cents;
   cashRefundsCents: Cents;
-  /** opening + cashSales − cashRefunds. */
+  /** Cash put into the drawer that is not a sale (change top-ups). */
+  cashInCents: Cents;
+  /** Cash taken out that is not a refund (suppliers, expenses, rider tips). */
+  cashOutCents: Cents;
+  /** opening + cashSales − cashRefunds + cashIn − cashOut. */
   expectedCashCents: Cents;
   byMethod: Array<{
     method: string;
@@ -51,5 +55,8 @@ export interface CashMovement {
   amountCents: Cents;
   reason: string;
   userId: UUID;
+  userName: string | null;
+  /** The manager whose PIN let a cashier record it; null when a manager did it. */
+  approvedByUserId: UUID | null;
   createdAt: string;
 }

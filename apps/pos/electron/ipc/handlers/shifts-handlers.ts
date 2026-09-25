@@ -2,13 +2,16 @@ import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { ok, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
-import { getCurrentSession } from '../../services/auth-service.js';
+import { getCurrentSession, verifyManagerPin } from '../../services/auth-service.js';
 import {
   closeShift,
   getCurrentShift,
+  getLastCount,
   getShiftSummary,
+  listCashMovements,
   listShifts,
   openShift,
+  recordCashMovement,
 } from '../../db/repositories/shift-repo.js';
 
 /**
@@ -84,6 +87,58 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   defineHandler('shifts:list', ctx, (_ctx, payload) => {
     requireSession();
     return ok(listShifts(ctx.db, payload ?? {}));
+  });
+
+  defineHandler('shifts:lastCount', ctx, () => {
+    requireSession();
+    return ok(getLastCount(ctx.db, ctx.deviceId));
+  });
+
+  // Cash in/out of the drawer. A manager or the owner records it directly; a
+  // cashier needs a manager's PIN, the same as a big discount or a refund.
+  defineHandler('shifts:recordCashMovement', ctx, async (_ctx, payload) => {
+    const s = requireSession();
+    let approvedByUserId: string | null = null;
+    if (!hasCapability(s.role, 'cash.movement')) {
+      if (!payload.approverPin) {
+        throw new IpcGuardError({
+          code: 'precondition_failed',
+          message: 'A manager PIN is needed to take cash out of or put cash into the drawer',
+        });
+      }
+      try {
+        approvedByUserId = (await verifyManagerPin(ctx.db, payload.approverPin)).approverUserId;
+      } catch (e) {
+        throw new IpcGuardError({
+          code: 'forbidden',
+          message: e instanceof Error ? e.message : 'Manager approval failed',
+        });
+      }
+    }
+    try {
+      return ok(
+        recordCashMovement(
+          ctx.db,
+          {
+            type: payload.type,
+            amountCents: payload.amountCents,
+            reason: payload.reason,
+            approvedByUserId,
+          },
+          { userId: s.id, deviceId: ctx.deviceId },
+        ),
+      );
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not record the cash',
+      });
+    }
+  });
+
+  defineHandler('shifts:listCashMovements', ctx, (_ctx, payload) => {
+    requireSession();
+    return ok(listCashMovements(ctx.db, payload.shiftId));
   });
 
   defineHandler('shifts:summary', ctx, (_ctx, payload) => {

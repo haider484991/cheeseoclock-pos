@@ -4,8 +4,10 @@ import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
+import { decrementForOrder, returnStockForOrder } from './stock-movement-repo.js';
 import { computeTax } from '@cheeseoclock/pos-domain';
 import {
+  allocateDiscount,
   computeDiscountCents,
   validateOrderForTender,
   validateVoid,
@@ -56,6 +58,24 @@ interface OrderRow {
   device_id: string;
   version: number;
 }
+
+/**
+ * Where an order is, in words for the screen. These refusals now reach the
+ * cashier as written ("…a sent_to_kitchen order" read like a fault).
+ */
+const STATUS_WORDS: Record<OrderStatus, string> = {
+  open: 'still open',
+  sent_to_kitchen: 'already with the kitchen',
+  preparing: 'being cooked',
+  ready: 'ready',
+  out_for_delivery: 'out for delivery',
+  delivered: 'delivered',
+  served: 'served',
+  paid: 'paid and closed',
+  void: 'cancelled',
+  refunded: 'refunded',
+};
+const said = (s: OrderStatus): string => STATUS_WORDS[s] ?? s;
 
 function rowToOrder(row: OrderRow): Order {
   return {
@@ -440,7 +460,7 @@ export function setOrderMode(
   const tx = db.transaction(() => {
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`Cannot change the mode of a ${order.status} order`);
+    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — its type can't be changed now`);
 
     const tableId = mode === 'dine_in' ? order.tableId : null;
     const now = nowIso();
@@ -605,7 +625,7 @@ export function addOrderItem(
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`Cannot add items to ${order.status} order`);
+    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be added now`);
     if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 999) {
       throw new Error('Quantity must be a whole number between 1 and 999');
     }
@@ -762,7 +782,7 @@ export function removeOrderItem(
   const tx = db.transaction(() => {
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`Cannot remove items from ${order.status} order`);
+    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be removed now`);
 
     const item = db
       .prepare(`SELECT id FROM order_items WHERE id = ? AND order_id = ? AND deleted_at IS NULL`)
@@ -770,6 +790,24 @@ export function removeOrderItem(
     if (!item) throw new Error('Order item not found');
 
     const now = nowIso();
+    // Every row this soft-deletes goes to sync, not only the line itself: the
+    // cloud copy kept a deal's children and a line's options alive.
+    const childIds = (
+      db
+        .prepare(
+          `SELECT id FROM order_items WHERE parent_order_item_id = ? AND deleted_at IS NULL`,
+        )
+        .all(orderItemId) as Array<{ id: string }>
+    ).map((r) => r.id);
+    const modifierRowIds = (
+      db
+        .prepare(
+          `SELECT id FROM order_item_modifiers
+            WHERE order_item_id IN (SELECT id FROM order_items WHERE id = ? OR parent_order_item_id = ?)
+              AND deleted_at IS NULL`,
+        )
+        .all(orderItemId, orderItemId) as Array<{ id: string }>
+    ).map((r) => r.id);
 
     // Soft-delete child items (combo children share parent_order_item_id)
     db.prepare(
@@ -784,12 +822,22 @@ export function removeOrderItem(
           AND deleted_at IS NULL`,
     ).run(now, now, orderItemId, orderItemId);
 
-    enqueueSync(db, {
-      entityType: 'order_items',
-      entityId: orderItemId,
-      op: 'delete',
-      payload: { id: orderItemId, deletedAt: now },
-    });
+    for (const id of [orderItemId, ...childIds]) {
+      enqueueSync(db, {
+        entityType: 'order_items',
+        entityId: id,
+        op: 'delete',
+        payload: { id, deletedAt: now },
+      });
+    }
+    for (const id of modifierRowIds) {
+      enqueueSync(db, {
+        entityType: 'order_item_modifiers',
+        entityId: id,
+        op: 'delete',
+        payload: { id, deletedAt: now },
+      });
+    }
     writeAudit(db, {
       entityType: 'order_items',
       entityId: orderItemId,
@@ -823,7 +871,7 @@ export function updateOrderItemQuantity(
     // paid order's totals could be rewritten after the money was taken.
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`Cannot change items on ${order.status} order`);
+    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be changed now`);
     const row = db
       .prepare(
         `SELECT unit_price_cents, quantity FROM order_items
@@ -887,7 +935,7 @@ export function applyDiscount(
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`Cannot discount ${order.status} order`);
+    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — a discount can't be added now`);
 
     // Validate the discount input shape (percent 0-100, value >= 0).
     const v = validateDiscountInput({ discountType: input.discountType, value: input.value });
@@ -907,12 +955,25 @@ export function applyDiscount(
       value: input.value,
     });
 
-    // Remove prior discounts on this order (single-discount model for Phase 2)
+    // Remove prior discounts on this order (single-discount model for Phase 2).
+    // Each one replaced goes to sync as a delete — without it the cloud copy
+    // kept both discounts and summed them.
     const now = nowIso();
+    const replaced = db
+      .prepare(`SELECT id FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`)
+      .all(input.orderId) as Array<{ id: string }>;
     db.prepare(
       `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1
         WHERE order_id = ? AND deleted_at IS NULL`,
     ).run(now, now, input.orderId);
+    for (const r of replaced) {
+      enqueueSync(db, {
+        entityType: 'order_discounts',
+        entityId: r.id,
+        op: 'delete',
+        payload: { id: r.id, deletedAt: now },
+      });
+    }
 
     const discountId = uuidv7();
     db.prepare(
@@ -960,6 +1021,11 @@ export function clearDiscount(
   actor: Actor & { userId: string },
 ): void {
   const tx = db.transaction(() => {
+    // Same gate as applying one: taking a discount off a paid order would
+    // rewrite a total the customer has already paid.
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — its discount can't be changed now`);
     const now = nowIso();
     const existing = db
       .prepare(
@@ -1065,24 +1131,24 @@ function recomputeOrderTotals(
     }
   }
 
-  // Tax = per-line tax on (line_total - prorated discount) * rate
-  // Simple approach: prorate discount across lines by line_total weight,
-  // then apply each line's snapshotted rate to its discounted portion.
+  // Tax = per-line tax on (line_total - its share of the discount) * rate.
+  // The discount is split over the lines by weight in whole paisa that add up
+  // to it exactly (allocateDiscount); the FBR mapper and the website's
+  // estimate split it the same way. Lines in insertion order so all three agree.
   let tax = 0;
   const lineRows = db
     .prepare(
       `SELECT line_total_cents, tax_rate_bps_snapshot
-         FROM order_items WHERE order_id = ? AND deleted_at IS NULL`,
+         FROM order_items WHERE order_id = ? AND deleted_at IS NULL
+        ORDER BY created_at, id`,
     )
     .all(orderId) as Array<{ line_total_cents: number; tax_rate_bps_snapshot: number }>;
   if (subtotal > 0) {
-    for (const line of lineRows) {
-      const lineWeight = line.line_total_cents / subtotal;
-      const lineDiscount = Math.round(discount * lineWeight);
-      const lineNet = Math.max(0, line.line_total_cents - lineDiscount);
-      const lineTax = computeTax(lineNet, line.tax_rate_bps_snapshot, 'exclusive').taxCents;
-      tax += lineTax as number;
-    }
+    const shares = allocateDiscount(lineRows.map((l) => l.line_total_cents), discount);
+    lineRows.forEach((line, i) => {
+      const lineNet = Math.max(0, line.line_total_cents - (shares[i] ?? 0));
+      tax += computeTax(lineNet, line.tax_rate_bps_snapshot, 'exclusive').taxCents as number;
+    });
   }
 
   const total = subtotal - discount + tax;
@@ -1125,7 +1191,7 @@ export function tenderOrder(
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`Cannot tender ${order.status} order`);
+    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — it can't be paid again here`);
 
     // Snapshot the order again to pick up customer/address fields written by attachCustomer.
     const orderRow = db
@@ -1156,10 +1222,14 @@ export function tenderOrder(
     // CHECK (amount_cents != 0)). The order is still stamped paid below.
     const nothingToPay = order.totalCents === 0 && input.payments.length === 0;
     if (!nothingToPay) {
+      // The payments ARE the sale: they must add up to the bill exactly. More
+      // than the bill was accepted (a Rs 5,000 card charge on a Rs 2,000 order
+      // went into the books as Rs 5,000 of sales). Cash change lives in
+      // tendered_cents, never in the amount.
       const sum = input.payments.reduce((s, p) => s + p.amountCents, 0);
-      if (sum < order.totalCents) {
+      if (sum !== order.totalCents) {
         throw new Error(
-          `Tender (Rs ${sum / 100}) is less than order total (Rs ${order.totalCents / 100})`,
+          `Payments (Rs ${sum / 100}) must equal the order total (Rs ${order.totalCents / 100})`,
         );
       }
     }
@@ -1262,6 +1332,10 @@ export function voidOrder(
         WHERE id = ?`,
     ).run(now, input.approverUserId, input.reason, now, input.orderId);
 
+    // Stock leaves when the kitchen gets the order. Cancelled before the
+    // kitchen started on it, it goes back; once cooking has started it is gone.
+    if (order.status === 'sent_to_kitchen') returnStockForOrder(db, input.orderId, actor);
+
     const voided = {
       ...order,
       status: 'void' as OrderStatus,
@@ -1325,7 +1399,7 @@ export function refundOrder(
     if (order.status === 'refunded') throw new Error('Order already fully refunded');
     if (order.status === 'void') throw new Error('Cannot refund a voided order');
     if (order.paidAt === null) {
-      throw new Error(`Cannot refund ${order.status} order — nothing has been paid yet`);
+      throw new Error(`Nothing has been paid on this order yet (it is ${said(order.status)}) — cancel it instead`);
     }
     if (!input.reason.trim()) throw new Error('Refund reason is required');
 
@@ -1414,6 +1488,8 @@ export function refundOrder(
         `UPDATE orders SET updated_at = ?, version = version + 1${statusUpdate}
           WHERE id = ?`,
       ).run(now, ...statusParams, input.orderId);
+      // All the money back before the kitchen started: the stock goes back too.
+      if (fullyRefunded && order.status === 'sent_to_kitchen') returnStockForOrder(db, input.orderId, actor);
 
       const after = findOrder(db, input.orderId)!;
       enqueueSync(db, {
@@ -1488,6 +1564,8 @@ export function refundOrder(
                           updated_at = ?, version = version + 1
         WHERE id = ?`,
     ).run(now, input.approverUserId, input.reason.trim(), now, input.orderId);
+    // Refunded before the kitchen started on it: the stock goes back too.
+    if (order.status === 'sent_to_kitchen') returnStockForOrder(db, input.orderId, actor);
 
     const after = findOrder(db, input.orderId)!;
     enqueueSync(db, {
@@ -1534,7 +1612,7 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
     LEFT JOIN categories c ON c.id = mi.category_id
         WHERE oi.order_id = ? AND oi.deleted_at IS NULL
-        ORDER BY oi.created_at`,
+        ORDER BY oi.created_at, oi.id`,
     )
     .all(orderId) as Array<{
     id: string;
@@ -1783,7 +1861,7 @@ function setOrderStatus(
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
     if (!legalFrom.includes(order.status)) {
-      throw new Error(`Cannot transition from ${order.status} to ${next}`);
+      throw new Error(`This order is ${said(order.status)} — it can't be marked ${said(next)} from there`);
     }
     const now = nowIso();
     const setParts = ['status = ?', 'updated_at = ?', 'version = version + 1'];
@@ -1849,7 +1927,7 @@ export function sendOrderToKitchen(
   if (order && order.mode === 'foodpanda' && order.paidAt === null) {
     throw new Error('Foodpanda orders are paid and sent in one step — use Pay (F1)');
   }
-  return setOrderStatus(
+  const sent = setOrderStatus(
     db,
     orderId,
     'sent_to_kitchen',
@@ -1858,6 +1936,16 @@ export function sendOrderToKitchen(
     actor,
     'send_to_kitchen',
   );
+  // The kitchen is about to use the ingredients: take them off stock now, not
+  // at payment. Unpaid orders (cash on delivery, served then paid later, web
+  // orders) used to take nothing until the money came in, and a served-unpaid
+  // order never did. Idempotent; a failure never blocks the order.
+  try {
+    decrementForOrder(db, orderId, actor);
+  } catch (e) {
+    log.warn('Stock decrement on send failed (order not affected)', { orderId, error: String(e) });
+  }
+  return sent;
 }
 
 export function markOrderPreparing(
@@ -1993,7 +2081,7 @@ export function markOrderServed(
       );
     }
     if (order.status !== 'ready' && order.status !== 'served') {
-      throw new Error(`Cannot mark ${order.status} as served`);
+      throw new Error(`This order is ${said(order.status)} — it can't be marked served`);
     }
     // Prepaid (tendered at the till): handing it over closes the order. A
     // second payment must not be recorded against it.
@@ -2008,12 +2096,15 @@ export function markOrderServed(
       const p = input.payment;
       assertMethodFitsOrder(order.mode, p.method);
       if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
-      if (p.amountCents < order.totalCents) {
+      if (p.amountCents !== order.totalCents) {
         throw new Error(
-          `Payment (Rs ${p.amountCents / 100}) is less than total (Rs ${
+          `Payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
             order.totalCents / 100
           })`,
         );
+      }
+      if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
+        throw new Error('Cash tendered cannot be less than the cash amount');
       }
       const pid = uuidv7();
       db.prepare(
@@ -2113,7 +2204,7 @@ export function markOrderDelivered(
       order.status !== 'out_for_delivery' &&
       order.status !== 'delivered'
     ) {
-      throw new Error(`Cannot mark ${order.status} delivery as delivered`);
+      throw new Error(`This delivery is ${said(order.status)} — it can't be marked delivered`);
     }
 
     // Prepaid (tendered at the till): delivering it closes the order. A
@@ -2131,12 +2222,15 @@ export function markOrderDelivered(
       const p = input.payment;
       assertMethodFitsOrder(order.mode, p.method);
       if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
-      if (p.amountCents < order.totalCents) {
+      if (p.amountCents !== order.totalCents) {
         throw new Error(
-          `COD payment (Rs ${p.amountCents / 100}) is less than total (Rs ${
+          `COD payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
             order.totalCents / 100
           })`,
         );
+      }
+      if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
+        throw new Error('Cash tendered cannot be less than the cash amount');
       }
       const pid = uuidv7();
       db.prepare(

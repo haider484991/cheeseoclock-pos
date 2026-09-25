@@ -56,7 +56,7 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('webBridge:setConfig', ctx, (_ctx, payload) => {
-    requireSettingsManage();
+    const s = requireSettingsManage();
     // Preserve the saved secret if the client re-submitted the masked form.
     const existing = getWebBridgeConfig(ctx.db);
     const bridgeSecret =
@@ -77,7 +77,7 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
         message: parsed.error.errors.map((e) => e.message).join(', '),
       });
     }
-    setWebBridgeConfig(ctx.db, parsed.data);
+    setWebBridgeConfig(ctx.db, parsed.data, s.id);
     webOrdersBridge.reschedule();
     return ok({ ok: true } as const);
   });

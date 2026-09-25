@@ -8,6 +8,13 @@ import type { AppDatabase } from '../db/connection.js';
  * (>1 year), the aggregations may need pre-roll tables — Phase 6.5.
  */
 
+/**
+ * An order's takings after any partial refund. A fully refunded order leaves
+ * the reports (status 'refunded'); a partly refunded one stayed in them at its
+ * full total, so Rs 300 handed back never came off the day's sales.
+ */
+const NET_TOTAL = `(o.total_cents + COALESCE((SELECT SUM(rp.amount_cents) FROM payments rp WHERE rp.order_id = o.id AND rp.amount_cents < 0 AND rp.deleted_at IS NULL), 0))`;
+
 export interface DateRange {
   /** Inclusive lower bound, ISO 8601. */
   sinceIso: string;
@@ -21,7 +28,10 @@ export interface SalesSummary {
   subtotalCents: number;
   discountCents: number;
   taxCents: number;
+  /** Takings after partial refunds (fully refunded orders are left out altogether). */
   totalCents: number;
+  /** Money handed back on orders that are still counted as sales. */
+  partialRefundCents: number;
   avgTicketCents: number;
   voidedCount: number;
   voidedCents: number;
@@ -35,8 +45,9 @@ export function getSalesSummary(db: AppDatabase, range: DateRange): SalesSummary
          COALESCE(SUM(subtotal_cents), 0) AS subtotalCents,
          COALESCE(SUM(discount_cents), 0) AS discountCents,
          COALESCE(SUM(tax_cents), 0) AS taxCents,
-         COALESCE(SUM(total_cents), 0) AS totalCents
-       FROM orders
+         COALESCE(SUM(${NET_TOTAL}), 0) AS totalCents,
+         COALESCE(SUM(total_cents), 0) - COALESCE(SUM(${NET_TOTAL}), 0) AS partialRefundCents
+       FROM orders o
        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')`,
     )
     .get(range.sinceIso, range.untilIso) as
@@ -46,6 +57,7 @@ export function getSalesSummary(db: AppDatabase, range: DateRange): SalesSummary
         discountCents: number;
         taxCents: number;
         totalCents: number;
+        partialRefundCents: number;
       }
     | undefined;
 
@@ -76,6 +88,7 @@ export function getSalesSummary(db: AppDatabase, range: DateRange): SalesSummary
     discountCents: 0,
     taxCents: 0,
     totalCents: 0,
+    partialRefundCents: 0,
   };
   return {
     ...r,
@@ -95,10 +108,12 @@ export interface SalesByDay {
 export function getSalesByDay(db: AppDatabase, range: DateRange): SalesByDay[] {
   return db
     .prepare(
+      // The UTC date IS the shop's trading day: it runs 05:00–05:00 Karachi
+      // time, which is 00:00–00:00 UTC, so a 1 am sale belongs to the night before.
       `SELECT substr(created_at, 1, 10) AS day,
               COUNT(*) AS orderCount,
-              SUM(total_cents) AS totalCents
-         FROM orders
+              SUM(${NET_TOTAL}) AS totalCents
+         FROM orders o
         WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')
         GROUP BY day
         ORDER BY day`,
@@ -119,8 +134,8 @@ export function getSalesByHour(db: AppDatabase, range: DateRange): SalesByHour[]
       // used to be 15:00 UTC — the shop's 8 pm rush showed as 3 pm.
       `SELECT CAST(strftime('%H', created_at, '+5 hours') AS INTEGER) AS hour,
               COUNT(*) AS orderCount,
-              SUM(total_cents) AS totalCents
-         FROM orders
+              SUM(${NET_TOTAL}) AS totalCents
+         FROM orders o
         WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')
         GROUP BY hour
         ORDER BY hour`,
@@ -190,8 +205,8 @@ export interface SalesByMode {
 export function getSalesByMode(db: AppDatabase, range: DateRange): SalesByMode[] {
   return db
     .prepare(
-      `SELECT mode, COUNT(*) AS orderCount, SUM(total_cents) AS totalCents
-         FROM orders
+      `SELECT mode, COUNT(*) AS orderCount, SUM(${NET_TOTAL}) AS totalCents
+         FROM orders o
         WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND status NOT IN ('void', 'refunded')
         GROUP BY mode
         ORDER BY totalCents DESC`,
@@ -217,7 +232,10 @@ export interface CashSummary {
   }>;
   cashSalesCents: number;
   cashRefundsCents: number;
-  /** opening + cashSales - cashRefunds. Opening is supplied by caller. */
+  /** Drawer cash in / out that is not a sale (cash_movements). */
+  cashInCents: number;
+  cashOutCents: number;
+  /** opening + cashSales - cashRefunds + cashIn - cashOut. Opening is supplied by caller. */
   expectedCashCents: number;
   totalRevenueCents: number;
   totalRefundsCents: number;
@@ -287,11 +305,24 @@ export function getCashSummary(
     )
     .get(range.sinceIso, range.untilIso) as { n: number }).n;
 
+  const moves = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN type = 'payin' THEN amount_cents ELSE 0 END), 0) AS inCents,
+         COALESCE(SUM(CASE WHEN type IN ('payout', 'tip_out') THEN amount_cents ELSE 0 END), 0) AS outCents
+        FROM cash_movements
+       WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL`,
+    )
+    .get(range.sinceIso, range.untilIso) as { inCents: number; outCents: number };
+
   return {
     byMethod,
     cashSalesCents,
     cashRefundsCents,
-    expectedCashCents: openingCashCents + cashSalesCents - cashRefundsCents,
+    cashInCents: moves.inCents,
+    cashOutCents: moves.outCents,
+    expectedCashCents:
+      openingCashCents + cashSalesCents - cashRefundsCents + moves.inCents - moves.outCents,
     totalRevenueCents,
     totalRefundsCents,
     netRevenueCents: totalRevenueCents - totalRefundsCents,
@@ -329,7 +360,7 @@ export function getSalesByCashier(db: AppDatabase, range: DateRange): SalesByCas
     .prepare(
       `SELECT u.id AS cashierId, u.full_name AS cashierName,
               SUM(CASE WHEN o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded') THEN 1 ELSE 0 END) AS orderCount,
-              COALESCE(SUM(CASE WHEN o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded') THEN o.total_cents ELSE 0 END), 0) AS totalCents,
+              COALESCE(SUM(CASE WHEN o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded') THEN ${NET_TOTAL} ELSE 0 END), 0) AS totalCents,
               SUM(CASE WHEN o.status = 'void' THEN 1 ELSE 0 END) AS voidedCount
          FROM orders o
          JOIN users u ON u.id = o.cashier_id

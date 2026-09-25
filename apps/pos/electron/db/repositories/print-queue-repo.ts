@@ -266,3 +266,9 @@ export function purgeOldDoneJobs(db: AppDatabase, olderThanIso: string): number 
     .run(olderThanIso);
   return result.changes;
 }
+
+export function purgeOldFailedJobs(db: AppDatabase, olderThanIso: string): number {
+  return db
+    .prepare(`DELETE FROM print_queue WHERE status = 'failed' AND updated_at < ?`)
+    .run(olderThanIso).changes;
+}

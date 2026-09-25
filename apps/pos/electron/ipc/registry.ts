@@ -26,6 +26,7 @@ import { registerShiftsHandlers } from './handlers/shifts-handlers.js';
 import { registerWebBridgeHandlers } from './handlers/web-bridge-handlers.js';
 import { registerAuditHandlers } from './handlers/audit-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
+import { startHousekeeping } from '../services/housekeeping.js';
 
 export interface HandlerContext {
   db: AppDatabase;
@@ -63,6 +64,23 @@ export class IpcGuardError extends Error {
 }
 
 /**
+ * A refusal the repositories wrote for people ("Cannot change the discount on a
+ * paid order", "Ingredient is used in 2 recipes — remove from recipes first").
+ * Those are thrown as plain `Error`s all over the repositories, and only some
+ * handlers caught them, so the rest reached the screen as "Something went
+ * wrong. Reference: …". Only an exact `Error` qualifies — SqliteError,
+ * TypeError (network), SyntaxError, ZodError are subclasses and stay hidden —
+ * and never one that mentions SQL.
+ */
+function userFacingMessage(err: unknown): string | null {
+  if (!(err instanceof Error) || Object.getPrototypeOf(err) !== Error.prototype) return null;
+  const m = err.message.trim();
+  if (!m || m.length > 300) return null;
+  if (/sqlite|constraint|no such (table|column)|syntax error|\bSELECT\b|\bUPDATE\b.*\bSET\b|\bINSERT INTO\b/i.test(m)) return null;
+  return m;
+}
+
+/**
  * Register a handler with consistent error mapping. Handlers return their
  * own ApiResult<T>; this wrapper catches anything that throws and maps it
  * to { ok: false, error: ... } so the renderer never sees a raw exception.
@@ -85,6 +103,14 @@ export function defineHandler<C extends IpcChannel>(
       if (err instanceof IpcGuardError) {
         return { ok: false, error: err.apiError } as IpcContract[C]['response'];
       }
+      const said = userFacingMessage(err);
+      if (said) {
+        log.warn(`IPC handler refused [${channel}]`, said);
+        return {
+          ok: false,
+          error: { code: 'precondition_failed', message: said },
+        } as IpcContract[C]['response'];
+      }
       // Don't leak internals (SQL constraint names, column names, HTTP URLs
       // with credentials in headers, etc.) to the renderer. Log everything
       // server-side; return a correlation id the operator can quote.
@@ -105,6 +131,7 @@ export function defineHandler<C extends IpcChannel>(
 
 export function registerAllIpcHandlers(ctx: HandlerContext): void {
   reapStaleSessions(ctx.db);
+  startHousekeeping(ctx.db);
   registerSystemHandlers(ctx);
   registerAuthHandlers(ctx);
   registerUsersHandlers(ctx);

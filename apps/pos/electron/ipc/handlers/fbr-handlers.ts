@@ -96,7 +96,7 @@ export function registerFbrHandlers(ctx: HandlerContext): void {
         message: parsed.error.errors.map((e) => e.message).join(', '),
       });
     }
-    setFbrConfig(ctx.db, parsed.data);
+    setFbrConfig(ctx.db, parsed.data, getCurrentSession()?.id ?? null);
     fbrWorker.resetAdapter();
     if (!parsed.data.paused) fbrWorker.kick();
     return ok({ ok: true } as const);

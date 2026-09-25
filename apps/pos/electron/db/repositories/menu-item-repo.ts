@@ -1,6 +1,8 @@
 import { v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
+import { enqueueSync } from './sync-repo.js';
+import { writeAudit } from './audit-repo.js';
 import type { MenuItem, PrepStation } from '@cheeseoclock/shared-types';
 
 interface Row {
@@ -272,6 +274,28 @@ export function deleteMenuItem(db: AppDatabase, id: string, actor: Actor): void 
       db.prepare(
         `UPDATE menu_items SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
       ).run(now, now, id);
+      // Its recipe lines and option-group links go with it. Left behind, the
+      // recipe kept an ingredient "in use" (it couldn't be deleted) and the
+      // links kept a group attached to an item nobody can see.
+      for (const table of ['recipes', 'menu_item_modifier_groups'] as const) {
+        const rows = db
+          .prepare(`SELECT id FROM ${table} WHERE menu_item_id = ? AND deleted_at IS NULL`)
+          .all(id) as Array<{ id: string }>;
+        for (const r of rows) {
+          db.prepare(
+            `UPDATE ${table} SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+          ).run(now, now, r.id);
+          enqueueSync(db, { entityType: table, entityId: r.id, op: 'delete', payload: { id: r.id, deletedAt: now } });
+          writeAudit(db, {
+            entityType: table,
+            entityId: r.id,
+            action: 'delete_with_item',
+            actorUserId: actor.userId,
+            before: { id: r.id, menuItemId: id },
+            after: null,
+          });
+        }
+      }
     },
   });
 }

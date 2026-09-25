@@ -26,9 +26,12 @@ function requireSession(): AuthenticatedUser {
   return session;
 }
 
-function requireSettingsManage(): AuthenticatedUser {
+// Printers are `printer.manage` (managers and the owner). It used to check
+// `settings.manage`, which only the owner has — a manager was told "manager or
+// admin" and then refused when the kitchen printer needed changing.
+function requirePrinterManage(): AuthenticatedUser {
   const session = requireSession();
-  if (!hasCapability(session.role, 'settings.manage')) {
+  if (!hasCapability(session.role, 'printer.manage')) {
     throw new IpcGuardError({
       code: 'forbidden',
       message: 'Printer settings require manager or admin role',
@@ -53,7 +56,7 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('printer:setConfig', ctx, (_ctx, payload) => {
-    requireSettingsManage();
+    const s = requirePrinterManage();
     const parsed = PrinterConnectionConfigSchema.safeParse(payload.config);
     if (!parsed.success) {
       throw new IpcGuardError({
@@ -61,13 +64,13 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
         message: parsed.error.errors.map((e) => e.message).join(', '),
       });
     }
-    setReceiptPrinterConfig(ctx.db, parsed.data);
+    setReceiptPrinterConfig(ctx.db, parsed.data, s.id);
     printSpooler.resetAdapter();
     return ok({ ok: true } as const);
   });
 
   defineHandler('printer:setBranding', ctx, (_ctx, payload) => {
-    requireSettingsManage();
+    const s = requirePrinterManage();
     const parsed = ReceiptBrandingSchema.safeParse(payload);
     if (!parsed.success) {
       throw new IpcGuardError({
@@ -75,12 +78,12 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
         message: parsed.error.errors.map((e) => e.message).join(', '),
       });
     }
-    setReceiptBranding(ctx.db, parsed.data);
+    setReceiptBranding(ctx.db, parsed.data, s.id);
     return ok({ ok: true } as const);
   });
 
   defineHandler('printer:setPolicy', ctx, (_ctx, payload) => {
-    requireSettingsManage();
+    const s = requirePrinterManage();
     const parsed = PrintPolicySchema.safeParse(payload);
     if (!parsed.success) {
       throw new IpcGuardError({
@@ -88,14 +91,14 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
         message: parsed.error.errors.map((e) => e.message).join(', '),
       });
     }
-    setPrintPolicy(ctx.db, parsed.data);
+    setPrintPolicy(ctx.db, parsed.data, s.id);
     return ok({ ok: true } as const);
   });
 
   defineHandler('printer:setKitchenPrinter', ctx, (_ctx, payload) => {
-    requireSettingsManage();
+    const s = requirePrinterManage();
     if (payload.config === null) {
-      setKitchenPrinterConfig(ctx.db, null);
+      setKitchenPrinterConfig(ctx.db, null, s.id);
     } else {
       const parsed = PrinterConnectionConfigSchema.safeParse(payload.config);
       if (!parsed.success) {
@@ -104,7 +107,7 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
           message: parsed.error.errors.map((e) => e.message).join(', '),
         });
       }
-      setKitchenPrinterConfig(ctx.db, parsed.data);
+      setKitchenPrinterConfig(ctx.db, parsed.data, s.id);
     }
     printSpooler.resetAdapter();
     return ok({ ok: true } as const);

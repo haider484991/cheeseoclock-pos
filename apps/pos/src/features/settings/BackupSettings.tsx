@@ -14,6 +14,7 @@ import {
   Usb,
 } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { applyRestore } from './applyRestore';
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -61,7 +62,7 @@ export function BackupSettings() {
     mutationFn: (path: string) => ipc.backup.stageRestoreFromPath(path),
     onSuccess: () => {
       void askConfirm(RESTORE_CONFIRM).then((ok) => {
-        if (ok) void ipc.backup.applyAndRelaunch();
+        if (ok) void applyRestore();
       });
     },
     onError: (e) =>
@@ -198,7 +199,7 @@ export function UsbRestoreSettings() {
     onSuccess: (r) => {
       if (!r.staged) return;
       void askConfirm(RESTORE_CONFIRM).then((ok) => {
-        if (ok) void ipc.backup.applyAndRelaunch();
+        if (ok) void applyRestore();
       });
     },
     onError: (e) =>

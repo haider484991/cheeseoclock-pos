@@ -74,8 +74,12 @@ export function getReceiptPrinterConfig(db: AppDatabase): PrinterConnectionConfi
   return parsed.success ? (parsed.data as PrinterConnectionConfig) : null;
 }
 
-export function setReceiptPrinterConfig(db: AppDatabase, config: PrinterConnectionConfig): void {
-  setSetting(db, PRINTER_RECEIPT_KEY, config);
+export function setReceiptPrinterConfig(
+  db: AppDatabase,
+  config: PrinterConnectionConfig,
+  actorUserId: string | null = null,
+): void {
+  setSetting(db, PRINTER_RECEIPT_KEY, config, { actorUserId });
 }
 
 export function getReceiptBranding(db: AppDatabase): ReceiptBranding {
@@ -85,8 +89,12 @@ export function getReceiptBranding(db: AppDatabase): ReceiptBranding {
   return ReceiptBrandingSchema.parse({}); // returns defaults
 }
 
-export function setReceiptBranding(db: AppDatabase, branding: ReceiptBranding): void {
-  setSetting(db, BRANDING_KEY, branding);
+export function setReceiptBranding(
+  db: AppDatabase,
+  branding: ReceiptBranding,
+  actorUserId: string | null = null,
+): void {
+  setSetting(db, BRANDING_KEY, branding, { actorUserId });
 }
 
 /** Built-in default — mock printer, so the app prints to disk out of the box. */
@@ -110,8 +118,9 @@ export function getKitchenPrinterConfig(db: AppDatabase): PrinterConnectionConfi
 export function setKitchenPrinterConfig(
   db: AppDatabase,
   config: PrinterConnectionConfig | null,
+  actorUserId: string | null = null,
 ): void {
-  setSetting(db, PRINTER_KITCHEN_KEY, config);
+  setSetting(db, PRINTER_KITCHEN_KEY, config, { actorUserId });
 }
 
 /** What prints automatically, and when — see PrintPolicy in shared-types. */
@@ -127,6 +136,6 @@ export function getPrintPolicy(db: AppDatabase): PrintPolicy {
   return parsed.success ? parsed.data : PrintPolicySchema.parse({});
 }
 
-export function setPrintPolicy(db: AppDatabase, policy: PrintPolicy): void {
-  setSetting(db, PRINT_POLICY_KEY, PrintPolicySchema.parse(policy));
+export function setPrintPolicy(db: AppDatabase, policy: PrintPolicy, actorUserId: string | null = null): void {
+  setSetting(db, PRINT_POLICY_KEY, PrintPolicySchema.parse(policy), { actorUserId });
 }

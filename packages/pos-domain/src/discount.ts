@@ -45,3 +45,30 @@ export function requiresManagerApproval(d: DiscountInput, subtotalCents?: Cents 
     d.value * 100 > subtotal * MANAGER_APPROVAL_PERCENT_THRESHOLD
   );
 }
+
+/**
+ * Split an order-level discount over its lines by weight, in whole paisa, so
+ * the pieces add up to the discount exactly. Rounding each line on its own
+ * (Rs 1 over three equal lines = 33 + 33 + 33) lost or invented a paisa, and
+ * the per-line figures the tax and the FBR invoice are built from no longer
+ * summed to the discount on the bill. The paisa left after flooring go to the
+ * lines with the biggest remainders (ties: the bigger line, then the earlier).
+ */
+export function allocateDiscount(lineTotalsCents: ReadonlyArray<number>, discountCents: number): number[] {
+  const subtotal = lineTotalsCents.reduce((s, t) => s + Math.max(0, t), 0);
+  if (subtotal <= 0 || discountCents <= 0) return lineTotalsCents.map(() => 0);
+  const discount = Math.min(Math.round(discountCents), subtotal);
+  const shares = lineTotalsCents.map((t) => Math.floor((discount * Math.max(0, t)) / subtotal));
+  let left = discount - shares.reduce((s, x) => s + x, 0);
+  const byRemainder = lineTotalsCents
+    .map((t, i) => ({ i, t: Math.max(0, t), rem: (discount * Math.max(0, t)) % subtotal }))
+    .sort((a, b) => b.rem - a.rem || b.t - a.t || a.i - b.i);
+  for (const line of byRemainder) {
+    if (left <= 0) break;
+    if (shares[line.i]! < line.t) {
+      shares[line.i] = shares[line.i]! + 1;
+      left -= 1;
+    }
+  }
+  return shares;
+}

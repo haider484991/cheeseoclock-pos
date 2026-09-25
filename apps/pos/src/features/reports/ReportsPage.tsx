@@ -181,7 +181,7 @@ function OverviewTab({ range }: { range: { sinceIso: string; untilIso: string } 
         <Stat
           icon={DollarSign}
           tone="from-emerald-400 to-emerald-600"
-          label="Revenue"
+          label={s && s.partialRefundCents > 0 ? `Revenue (after ${formatCents(s.partialRefundCents)} refunded)` : 'Revenue'}
           value={s ? formatCents(s.totalCents) : '—'}
         />
         <Stat
@@ -460,6 +460,18 @@ function CashDrawerTab({ range }: { range: { sinceIso: string; untilIso: string 
                   {formatCents(data?.cashRefundsCents ?? 0)}
                 </dd>
               </div>
+              {(data?.cashInCents ?? 0) > 0 && (
+                <div className="flex justify-between text-emerald-800 dark:text-emerald-100">
+                  <dt>+ Cash put in</dt>
+                  <dd className="font-mono">{formatCents(data?.cashInCents ?? 0)}</dd>
+                </div>
+              )}
+              {(data?.cashOutCents ?? 0) > 0 && (
+                <div className="flex justify-between text-red-700 dark:text-red-300">
+                  <dt>− Cash taken out</dt>
+                  <dd className="font-mono">{formatCents(data?.cashOutCents ?? 0)}</dd>
+                </div>
+              )}
               <div className="mt-1 flex justify-between border-t border-emerald-200 pt-1 font-bold dark:border-emerald-800">
                 <dt>Expected</dt>
                 <dd className="font-mono text-base">
@@ -501,6 +513,8 @@ function CashDrawerTab({ range }: { range: { sinceIso: string; untilIso: string 
           </div>
         </div>
       </Card>
+
+      <ShiftHistory range={range} />
 
       <Card>
         <SectionLabel>Payments breakdown</SectionLabel>
@@ -546,6 +560,58 @@ function CashDrawerTab({ range }: { range: { sinceIso: string; untilIso: string 
         />
       </div>
     </div>
+  );
+}
+
+/**
+ * Every shift closed in the range, with what the drawer should have held, what
+ * was counted and the difference. The close dialog shows it once; this is where
+ * the owner sees which shift came up short, and who closed it.
+ */
+function ShiftHistory({ range }: { range: { sinceIso: string; untilIso: string } }) {
+  const q = useQuery({
+    queryKey: ['reports', 'shifts', range],
+    queryFn: () => ipc.shifts.list({ sinceIso: range.sinceIso, limit: 200 }),
+  });
+  const shifts = (q.data ?? []).filter((s) => s.openedAt < range.untilIso);
+  const closed = shifts.filter((s) => s.closedAt !== null);
+  const net = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
+  const when = (iso: string) =>
+    new Date(iso).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return (
+    <Card>
+      <div className="mb-2 flex items-baseline justify-between">
+        <SectionLabel>Shifts</SectionLabel>
+        {closed.length > 0 && (
+          <span
+            className={cn(
+              'text-sm font-semibold',
+              net === 0 ? 'text-emerald-700 dark:text-emerald-300' : net > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-red-700 dark:text-red-300',
+            )}
+          >
+            {net === 0 ? 'All drawers matched' : `${net > 0 ? 'Over' : 'Short'} ${formatCents(Math.abs(net))} in all`}
+          </span>
+        )}
+      </div>
+      <DataTable
+        headers={['Opened', 'Closed', 'By', 'Float', 'Expected', 'Counted', 'Short / over']}
+        rows={shifts.map((s) => [
+          when(s.openedAt),
+          s.closedAt ? when(s.closedAt) : 'Still open',
+          s.closedByName ?? s.openedByName,
+          formatCents(s.openingCashCents),
+          s.expectedCashCents === null ? '—' : formatCents(s.expectedCashCents),
+          s.countedCashCents === null ? '—' : formatCents(s.countedCashCents),
+          s.varianceCents === null
+            ? '—'
+            : s.varianceCents === 0
+              ? 'Matched'
+              : `${s.varianceCents > 0 ? 'Over ' : 'Short '}${formatCents(Math.abs(s.varianceCents))}`,
+        ])}
+        alignRight={[false, false, false, true, true, true, true]}
+        empty={q.isLoading ? 'Loading…' : 'No shifts in this range.'}
+      />
+    </Card>
   );
 }
 

@@ -24,6 +24,7 @@ import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared
 import { AssignRiderDialog } from './AssignRiderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { VoidOrderDialog } from './VoidOrderDialog';
+import { RefundOrderDialog } from './RefundOrderDialog';
 
 /**
  * Live Orders Board.
@@ -86,6 +87,8 @@ export function OrdersBoardPage() {
   const [assignFor, setAssignFor] = useState<OrderSnapshot | null>(null);
   const [deliverFor, setDeliverFor] = useState<OrderSnapshot | null>(null);
   const [voidFor, setVoidFor] = useState<OrderSnapshot | null>(null);
+  // A paid order can't be voided (the server refuses): its Cancel is a refund.
+  const [refundFor, setRefundFor] = useState<OrderSnapshot | null>(null);
   const qc = useQueryClient();
   const { toast } = useToast();
 
@@ -285,7 +288,7 @@ export function OrdersBoardPage() {
                       onMarkServedDineIn={() => markServedDineIn.mutate(snap.order.id)}
                       onReprint={() => reprint.mutate(snap.order.id)}
                       onReprintKitchen={() => reprintKitchen.mutate(snap.order.id)}
-                      onCancel={() => setVoidFor(snap)}
+                      onCancel={() => (snap.order.paidAt !== null ? setRefundFor(snap) : setVoidFor(snap))}
                     />
                   ))
                 )}
@@ -311,6 +314,16 @@ export function OrdersBoardPage() {
           onClose={() => setDeliverFor(null)}
           onDone={() => {
             setDeliverFor(null);
+            void qc.invalidateQueries({ queryKey: ['orders', 'active'] });
+          }}
+        />
+      )}
+      {refundFor && (
+        <RefundOrderDialog
+          snap={refundFor}
+          onClose={() => setRefundFor(null)}
+          onDone={() => {
+            setRefundFor(null);
             void qc.invalidateQueries({ queryKey: ['orders', 'active'] });
           }}
         />
@@ -489,8 +502,8 @@ function OrderCard({
           <button
             type="button"
             onClick={onCancel}
-            aria-label="Cancel order"
-            title="Cancel order (manager PIN)"
+            aria-label={order.paidAt !== null ? 'Refund order' : 'Cancel order'}
+            title={order.paidAt !== null ? 'Paid — refund it (manager PIN)' : 'Cancel order (manager PIN)'}
             className="rounded-md p-1.5 text-stone-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950 dark:hover:text-red-300"
           >
             <XCircle className="h-3.5 w-3.5" />

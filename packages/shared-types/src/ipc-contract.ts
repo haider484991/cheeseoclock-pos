@@ -25,7 +25,7 @@ import type {
   PaymentMethod,
   Rider,
 } from './order.js';
-import type { Shift, ShiftSummary } from './shift.js';
+import type { CashMovement, CashMovementType, Shift, ShiftSummary } from './shift.js';
 import type {
   PrinterConnectionConfig,
   PrintPolicy,
@@ -83,6 +83,11 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<{ version: string; isDev: boolean }>;
   };
+  /** Shop name, tagline and logo for the PIN screen — readable before anyone logs in. */
+  'system:getBranding': {
+    request: undefined;
+    response: ApiResult<{ storeName: string; storeTagline: string | null; logoUrl: string | null }>;
+  };
   'system:getDeviceInfo': {
     request: undefined;
     response: ApiResult<{ deviceId: string; displayName: string; registeredAt: string }>;
@@ -113,6 +118,11 @@ export interface IpcContract {
   'auth:logout': {
     request: undefined;
     response: ApiResult<{ loggedOut: true }>;
+  };
+  /** Human input on the till (throttled by the renderer); keeps an owner/manager login alive. */
+  'auth:activity': {
+    request: undefined;
+    response: ApiResult<null>;
   };
   'auth:currentSession': {
     request: undefined;
@@ -566,6 +576,20 @@ export interface IpcContract {
     request: { shiftId: string };
     response: ApiResult<ShiftSummary>;
   };
+  /** What the drawer was counted at when this till's last shift closed (the next float). */
+  'shifts:lastCount': {
+    request: undefined;
+    response: ApiResult<{ countedCashCents: number; closedAt: string } | null>;
+  };
+  /** Cash in / out of the drawer that is not a sale. A cashier needs a manager PIN. */
+  'shifts:recordCashMovement': {
+    request: { type: CashMovementType; amountCents: number; reason: string; approverPin?: string };
+    response: ApiResult<CashMovement>;
+  };
+  'shifts:listCashMovements': {
+    request: { shiftId: string };
+    response: ApiResult<CashMovement[]>;
+  };
 
   // Website bridge (online ordering ↔ POS)
   'webBridge:getConfig': {
@@ -971,7 +995,9 @@ export interface IpcContract {
       subtotalCents: number;
       discountCents: number;
       taxCents: number;
+      /** After partial refunds; fully refunded orders are not counted at all. */
       totalCents: number;
+      partialRefundCents: number;
       avgTicketCents: number;
       voidedCount: number;
       voidedCents: number;
@@ -1055,6 +1081,8 @@ export interface IpcContract {
       }>;
       cashSalesCents: number;
       cashRefundsCents: number;
+      cashInCents: number;
+      cashOutCents: number;
       expectedCashCents: number;
       totalRevenueCents: number;
       totalRefundsCents: number;
@@ -1252,8 +1280,25 @@ export interface IpcContract {
     response: ApiResult<{ fileName: string }>;
   };
   'backup:applyAndRelaunch': {
-    request: undefined;
+    /**
+     * The cloud safety copy of today's data is uploaded first. If that fails
+     * the call is refused (details.safetyCopyFailed) until the owner says to
+     * go ahead without it.
+     */
+    request: { withoutSafetyCopy?: boolean } | undefined;
     response: ApiResult<{ relaunching: true }>;
+  };
+  /** Are the backups working? Warnings in plain words, for the dashboard. */
+  'backup:health': {
+    request: undefined;
+    response: ApiResult<{
+      lastLocalAt: string | null;
+      lastLocalError: { at: string; message: string } | null;
+      cloudOn: boolean;
+      lastCloudAt: string | null;
+      lastCloudError: { at: string; message: string } | null;
+      warnings: string[];
+    }>;
   };
 
   // Audit trail (hash-chained; see apps/pos/electron/db/audit-chain.ts)

@@ -73,7 +73,7 @@ export function registerSyncHandlers(ctx: HandlerContext): void {
         message: parsed.error.errors.map((e) => e.message).join(', '),
       });
     }
-    setSyncConfig(ctx.db, parsed.data);
+    setSyncConfig(ctx.db, parsed.data, getCurrentSession()?.id ?? null);
     syncWorker.resetAdapter();
     if (!parsed.data.paused && parsed.data.mode !== 'off') syncWorker.kick();
     return ok({ ok: true } as const);

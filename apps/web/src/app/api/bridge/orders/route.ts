@@ -10,9 +10,18 @@ export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
 
+/** A claim not acked in this long is released to any till (the first one went quiet). */
+const CLAIM_TTL_SECONDS = 180;
+
 /**
  * Bridge: POS polls for new (not-yet-imported) web orders.
  * Returns oldest-first so the kitchen sees them in placement order.
+ *
+ * Each order handed out is claimed for the asking till (`?device=`) in the
+ * same statement. Two tills polling at once used to both get it, both import
+ * it, and the kitchen cooked it twice; now the other till skips it until the
+ * claim has gone stale (the first till died before acking). A till from before
+ * this change sends no device and shares one claim — as before, one till.
  */
 export async function GET(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
@@ -26,15 +35,25 @@ export async function GET(req: Request): Promise<Response> {
          SET status = 'cancelled', updated_at = now()
        WHERE status = 'new' AND created_at < ${unconfirmedOrderCutoff()}
     `;
-    const rows = (await sql()`
-      SELECT id, status, customer_name, customer_phone, address_line, area,
-             notes, items_json, subtotal_cents, discount_cents, tax_cents,
-             total_cents, payment_method, fulfilment, created_at
-        FROM web_orders
-       WHERE status = 'new'
-       ORDER BY created_at ASC
-       LIMIT 25
+    const device = (new URL(req.url).searchParams.get('device') ?? '').slice(0, 100) || 'unknown';
+    const claimed = (await sql()`
+      UPDATE web_orders
+         SET claimed_by = ${device}, claimed_at = now()
+       WHERE id IN (
+             SELECT id FROM web_orders
+              WHERE status = 'new'
+                AND (claimed_by IS NULL OR claimed_by = ${device}
+                     OR claimed_at < now() - make_interval(secs => ${CLAIM_TTL_SECONDS}))
+              ORDER BY created_at ASC
+              LIMIT 25
+              FOR UPDATE SKIP LOCKED)
+       RETURNING id, status, customer_name, customer_phone, address_line, area,
+                 notes, items_json, subtotal_cents, discount_cents, tax_cents,
+                 total_cents, payment_method, fulfilment, created_at
     `) as Array<Record<string, unknown>>;
+    const rows = claimed.sort(
+      (a, b) => new Date(String(a['created_at'])).getTime() - new Date(String(b['created_at'])).getTime(),
+    );
     const orders = rows.map((r) => ({
       id: r['id'],
       status: r['status'],

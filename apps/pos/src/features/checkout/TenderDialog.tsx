@@ -36,11 +36,20 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const methods = METHODS.filter((m) => (m.id === 'foodpanda') === isFoodpanda);
   const [method, setMethod] = useState<PaymentMethod>(isFoodpanda ? 'foodpanda' : 'cash');
   const [tendered, setTendered] = useState('');
+  // "Exact" tenders the bill to the paisa. The pad only types whole rupees, so
+  // a Rs 1,234.50 bill could not be paid with exactly Rs 1,234.50 in cash.
+  const [exact, setExact] = useState(false);
   const tender = useCheckoutStore((s) => s.tender);
   const busy = useCheckoutStore((s) => s.busy);
   const { toast } = useToast();
 
-  const tenderedCents = parseTenderedCents(tendered);
+  const tenderedCents = exact ? total : parseTenderedCents(tendered);
+  const exactLabel = (total / 100).toFixed(total % 100 === 0 ? 0 : 2);
+  // The next round notes above the bill, for a one-tap tender.
+  const quickRupees = [100, 500, 1000, 5000]
+    .map((note) => Math.ceil(total / (note * 100)) * note)
+    .filter((r, i, all) => r * 100 > total && all.indexOf(r) === i)
+    .slice(0, 3);
   const methodSpec = methods.find((m) => m.id === method) ?? methods[0]!;
   // A 100%-discounted order has nothing to collect — no payment leg at all.
   const nothingToPay = total === 0;
@@ -109,7 +118,10 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                       type="button"
                       onClick={() => {
                         setMethod(m.id);
-                        if (!m.showTendered) setTendered('');
+                        if (!m.showTendered) {
+                          setTendered('');
+                          setExact(false);
+                        }
                       }}
                       className={cn(
                         'flex flex-col items-center gap-1 rounded-lg border-2 p-3 transition-colors',
@@ -155,7 +167,50 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                   <div className="mb-2 text-xs uppercase tracking-wider text-stone-500">
                     Cash tendered
                   </div>
-                  <NumberPad value={tendered} onChange={setTendered} maxLength={8} onSubmit={submit} />
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExact(true);
+                        setTendered('');
+                      }}
+                      className={cn(
+                        'rounded-lg border-2 px-3 py-2 text-sm font-semibold',
+                        exact
+                          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                          : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                      )}
+                    >
+                      Exact {exactLabel}
+                    </button>
+                    {quickRupees.map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => {
+                          setExact(false);
+                          setTendered(String(r));
+                        }}
+                        className="rounded-lg border-2 border-stone-200 px-3 py-2 text-sm font-semibold hover:border-stone-300 dark:border-stone-700"
+                      >
+                        {r.toLocaleString('en-PK')}
+                      </button>
+                    ))}
+                  </div>
+                  <NumberPad
+                    value={exact ? exactLabel : tendered}
+                    onChange={(v) => {
+                      if (exact) {
+                        // Typing after Exact starts a fresh amount; backspace clears it.
+                        setExact(false);
+                        setTendered(v.length > exactLabel.length ? v.slice(exactLabel.length) : '');
+                        return;
+                      }
+                      setTendered(v);
+                    }}
+                    maxLength={8}
+                    onSubmit={submit}
+                  />
                   <div className="mt-3 rounded-lg bg-emerald-50 p-3 text-center dark:bg-emerald-950">
                     <div className="text-xs uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
                       Change

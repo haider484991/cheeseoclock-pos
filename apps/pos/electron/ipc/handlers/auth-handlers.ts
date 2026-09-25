@@ -6,6 +6,7 @@ import {
   getCurrentSession,
   login,
   logout,
+  noteActivity,
   verifyManagerPin,
 } from '../../services/auth-service.js';
 
@@ -36,6 +37,13 @@ export function registerAuthHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('auth:currentSession', ctx, () => ok(getCurrentSession()));
+
+  // A key press or click on the till. Only human input keeps an owner or
+  // manager login alive — the screens that poll on their own must not.
+  defineHandler('auth:activity', ctx, () => {
+    if (getCurrentSession()) noteActivity();
+    return ok(null);
+  });
 
   defineHandler('auth:verifyManagerPin', ctx, async (_ctx, payload) => {
     // Manager approval only makes sense on top of a cashier's session; without

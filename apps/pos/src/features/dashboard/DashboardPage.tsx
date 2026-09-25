@@ -5,6 +5,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { ipc } from '../../ipc/client';
 import { FbrStatusCard } from './FbrStatusCard';
 import { SyncStatusCard } from './SyncStatusCard';
+import { BackupHealthBanner } from './BackupHealthBanner';
 import {
   ShoppingCart,
   UtensilsCrossed,
@@ -148,6 +149,9 @@ export function DashboardPage() {
           <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
             <span className="inline-block h-px w-6 bg-stone-300 dark:bg-stone-700" />
             System status
+          </div>
+          <div className="mb-4">
+            <BackupHealthBanner />
           </div>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <FbrStatusCard />

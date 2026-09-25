@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeDiscountCents, requiresManagerApproval } from './discount.js';
+import { allocateDiscount, computeDiscountCents, requiresManagerApproval } from './discount.js';
 
 describe('computeDiscountCents', () => {
   it('computes percent discount', () => {
@@ -40,5 +40,34 @@ describe('requiresManagerApproval', () => {
     expect(requiresManagerApproval({ type: 'flat', value: 20_100 }, 200_000)).toBe(true);
     // Without a subtotal only the Rs 500 cap applies.
     expect(requiresManagerApproval({ type: 'flat', value: 49_900 })).toBe(false);
+  });
+});
+
+describe('allocateDiscount', () => {
+  it('splits Rs 1 over three equal lines without losing a paisa', () => {
+    const shares = allocateDiscount([1_000, 1_000, 1_000], 100);
+    expect(shares.reduce((s, x) => s + x, 0)).toBe(100);
+    expect(shares).toEqual([34, 33, 33]);
+  });
+
+  it('always adds up to the discount, never more than a line', () => {
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let n = 0; n < 1_000; n++) {
+      const lines = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => Math.floor(rnd() * 500_000));
+      const subtotal = lines.reduce((s, x) => s + x, 0);
+      const discount = Math.floor(rnd() * (subtotal + 1));
+      const shares = allocateDiscount(lines, discount);
+      expect(shares.reduce((s, x) => s + x, 0)).toBe(subtotal > 0 ? discount : 0);
+      shares.forEach((x, i) => {
+        expect(x).toBeGreaterThanOrEqual(0);
+        expect(x).toBeLessThanOrEqual(lines[i]!);
+      });
+    }
+  });
+
+  it('gives nothing when there is no discount or no subtotal', () => {
+    expect(allocateDiscount([500, 700], 0)).toEqual([0, 0]);
+    expect(allocateDiscount([0, 0], 100)).toEqual([0, 0]);
   });
 });

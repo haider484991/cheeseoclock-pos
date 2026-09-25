@@ -17,6 +17,14 @@ export function ensureWebOrderColumns(): Promise<void> {
       await sql()`
         ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS discount_cents INT NOT NULL DEFAULT 0
       `;
+      // Which till is importing a 'new' order (api/bridge/orders GET), so two
+      // tills polling at once don't both cook it.
+      await sql()`
+        ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS claimed_by TEXT
+      `;
+      await sql()`
+        ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ
+      `;
     })().catch((e) => {
       // Let the next call retry rather than caching the failure forever.
       ready = null;

@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { Banknote, BookOpenCheck, ChevronRight, Clock, X } from 'lucide-react';
+import { Banknote, BookOpenCheck, ChevronRight, Clock, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
+import { CashMovementDialog } from './CashMovementDialog';
 
 /**
  * TopBar shift widget. Shows current shift status; lets manager open/close.
@@ -18,7 +19,7 @@ export function ShiftWidget() {
   const can = useSessionStore((s) => s.can);
   const canOpen = can('shift.open');
   const canClose = can('shift.close');
-  const [openDlg, setOpenDlg] = useState<'open' | 'close' | null>(null);
+  const [openDlg, setOpenDlg] = useState<'open' | 'close' | 'cash' | null>(null);
 
   const shiftQ = useQuery({
     queryKey: ['shifts', 'current'],
@@ -77,6 +78,18 @@ export function ShiftWidget() {
         Shift {elapsed}
         {canClose && <ChevronRight className="h-3 w-3" />}
       </button>
+      <button
+        type="button"
+        onClick={() => setOpenDlg('cash')}
+        title="Cash in / out of the drawer (not a sale)"
+        aria-label="Drawer cash in or out"
+        className="flex items-center rounded-xl bg-stone-100 px-2 py-1.5 text-stone-600 transition-colors hover:bg-amber-100 hover:text-amber-800 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-amber-950 dark:hover:text-amber-200"
+      >
+        <Wallet className="h-3.5 w-3.5" />
+      </button>
+      {openDlg === 'cash' && (
+        <CashMovementDialog shiftId={shift.id} onClose={() => setOpenDlg(null)} />
+      )}
       {openDlg === 'close' && (
         <CloseShiftDialog shiftId={shift.id} onClose={() => setOpenDlg(null)} />
       )}
@@ -102,6 +115,15 @@ function OpenShiftDialog({ onClose }: { onClose: () => void }) {
   const [notes, setNotes] = useState('');
   const { toast } = useToast();
   const qc = useQueryClient();
+  // The float starts from what the last shift on this till counted: the cash
+  // that stayed in the drawer overnight. Typed in fresh every morning, it was
+  // routinely left at 0 and the whole float showed up as "over" at close.
+  const lastQ = useQuery({ queryKey: ['shifts', 'lastCount'], queryFn: () => ipc.shifts.lastCount() });
+  const last = lastQ.data;
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (last && !touched) setOpening(String(last.countedCashCents / 100));
+  }, [last, touched]);
 
   const openMut = useMutation({
     mutationFn: () =>
@@ -154,10 +176,19 @@ function OpenShiftDialog({ onClose }: { onClose: () => void }) {
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                 Opening cash (Rs)
               </span>
+              {last && (
+                <span className="mb-1 block text-xs text-stone-500">
+                  The last shift closed with {formatCents(last.countedCashCents)} in the drawer. Count
+                  it again and change this if it is different.
+                </span>
+              )}
               <input
                 inputMode="decimal"
                 value={opening}
-                onChange={(e) => setOpening(e.target.value)}
+                onChange={(e) => {
+                  setTouched(true);
+                  setOpening(e.target.value);
+                }}
                 autoFocus
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
@@ -277,6 +308,12 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
                   <>
                     <Row k="Cash sales" v={formatCents(summary.cashSalesCents)} />
                     <Row k="Cash refunds" v={`− ${formatCents(summary.cashRefundsCents)}`} />
+                    {summary.cashInCents > 0 && (
+                      <Row k="Cash put in" v={`+ ${formatCents(summary.cashInCents)}`} />
+                    )}
+                    {summary.cashOutCents > 0 && (
+                      <Row k="Cash taken out" v={`− ${formatCents(summary.cashOutCents)}`} />
+                    )}
                     <div className="mt-1 flex justify-between border-t border-emerald-200 pt-1 font-bold dark:border-emerald-800">
                       <dt>Expected cash</dt>
                       <dd className="font-mono">{formatCents(result.expected)}</dd>

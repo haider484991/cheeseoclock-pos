@@ -64,6 +64,10 @@ const MAX_ATTEMPTS = 5;
 // mark the job 'failed' and broadcast a toast.
 const BACKOFF_MS = [0, 5_000, 30_000, 120_000, 600_000];
 const TICK_INTERVAL_MS = 1_000;
+// A drawer that opens by itself minutes after the sale — when the printer
+// finally comes back — is an open till nobody is standing at. Past this age a
+// retried job prints without the kick, and a drawer-only job is dropped.
+const DRAWER_KICK_MAX_AGE_MS = 60_000;
 // How long a payment receipt waits for the FBR invoice number before printing
 // with the "pending" placeholder.
 const FBR_IRN_GRACE_MS = 4_000;
@@ -275,7 +279,17 @@ class PrintSpooler {
         return;
       }
       await this.waitForFbrInvoice(job);
-      const { adapter, bytes } = this.render(job.payload, snap);
+      const late = Date.now() - Date.parse(job.createdAt) > DRAWER_KICK_MAX_AGE_MS;
+      if (late && job.payload.kind === 'drawer') {
+        log.info('Dropped a late cash-drawer kick', { jobId: job.id, orderId: job.orderId });
+        markJobDone(this.db, job.id);
+        return;
+      }
+      const payload =
+        late && job.payload.kind === 'receipt' && job.payload.openDrawer
+          ? { ...job.payload, openDrawer: false }
+          : job.payload;
+      const { adapter, bytes } = this.render(payload, snap);
       result = await adapter.send(bytes);
     } catch (e) {
       result = {
@@ -305,6 +319,9 @@ class PrintSpooler {
     }
     const backoff = BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)]!;
     rescheduleJob(this.db, job.id, result.error?.message ?? 'unknown', backoff);
+    // Say so on the first miss, not after ~12 minutes of silent retries: the
+    // kitchen is waiting on that ticket now (it keeps retrying on its own).
+    if (attempts === 1) notifyPrintFailure(job, result.error, true);
     log.warn('Print job will retry', {
       jobId: job.id,
       attempts,
@@ -391,19 +408,23 @@ function concat(parts: Uint8Array[]): Uint8Array {
 function notifyPrintFailure(
   job: PrintJobRow,
   error?: { code: string; message: string },
+  retrying = false,
 ): void {
-  log.error('Print job failed permanently', {
-    jobId: job.id,
-    jobKind: job.jobKind,
-    orderId: job.orderId,
-    attempts: job.attempts + 1,
-    error,
-  });
+  if (!retrying) {
+    log.error('Print job failed permanently', {
+      jobId: job.id,
+      jobKind: job.jobKind,
+      orderId: job.orderId,
+      attempts: job.attempts + 1,
+      error,
+    });
+  }
   for (const w of BrowserWindow.getAllWindows()) {
     w.webContents.send('printer:failed', {
       jobKind: job.jobKind,
       orderId: job.orderId ?? undefined,
       error,
+      retrying,
     });
   }
 }

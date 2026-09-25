@@ -41,7 +41,7 @@ const ITEMS: NavItem[] = [
   { to: '/customers', label: 'Customers', icon: Contact, capability: 'order.create' },
   { to: '/reports', label: 'Reports', icon: BarChart3, capability: 'report.view' },
   { to: '/users', label: 'Users', icon: Users, capability: 'users.manage' },
-  { to: '/settings', label: 'Settings', icon: Settings, capability: 'settings.manage' },
+  { to: '/settings', label: 'Settings', icon: Settings, capability: 'printer.manage' },
 ];
 
 export function Sidebar() {

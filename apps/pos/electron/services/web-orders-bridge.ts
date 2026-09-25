@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 import type { AppDatabase } from '../db/connection.js';
 import { getSyncConfig } from './sync-config.js';
 import { nowIso } from '../db/repositories/base.js';
-import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
+import { deleteSetting, getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import { createBackup, stageRestoreFromPath } from './backup-service.js';
 import { sealSecret } from './secret-seal.js';
 import {
@@ -32,7 +32,7 @@ import {
   type WebBridgeConfig,
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
-import { isStaleWebOrder } from './web-order-age.js';
+import { isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
 import {
   CHUNKS_FORMAT,
   ChunksUnsupportedError,
@@ -160,6 +160,8 @@ const LAST_CLOUD_BACKUP_KEY = 'webBridge.lastCloudBackupAt';
 const LAST_CLOUD_META_KEY = 'webBridge.lastCloudBackupMeta';
 /** When an upload was last tried, success or not — throttles scheduled retries. */
 const LAST_CLOUD_ATTEMPT_KEY = 'webBridge.lastCloudBackupAttemptAt';
+/** The last cloud-copy failure, kept until one succeeds (survives a restart). */
+export const LAST_CLOUD_ERROR_KEY = 'webBridge.lastCloudBackupError';
 /** When the copy was last refused for size — no scheduled retry until the next full interval. */
 const LAST_CLOUD_TOO_LARGE_KEY = 'webBridge.lastCloudBackupTooLargeAt';
 
@@ -339,7 +341,7 @@ class WebOrdersBridge {
     this.running = true;
     try {
       const db = this.db;
-      const res = await this.api(cfg, '/api/bridge/orders');
+      const res = await this.api(cfg, this.ordersPath());
       if (!res.ok) throw new Error(`Pull failed: HTTP ${res.status}`);
       const json = (await res.json()) as { ok: boolean; data?: WebOrder[] };
       if (!json.ok || !json.data) throw new Error('Pull failed: bad response');
@@ -498,6 +500,7 @@ class WebOrdersBridge {
         auditRows: sent.meta.auditRows,
       });
       this.lastCloudBackupError = null;
+      deleteSetting(this.db, LAST_CLOUD_ERROR_KEY);
       log.info('Cloud backup uploaded', {
         fileName: backup.fileName,
         reason,
@@ -513,6 +516,7 @@ class WebOrdersBridge {
       return { fileName: backup.fileName, sizeBytes: sent.gzBytes };
     } catch (e) {
       this.lastCloudBackupError = e instanceof Error ? e.message : String(e);
+      setSetting(this.db, LAST_CLOUD_ERROR_KEY, { at: nowIso(), message: this.lastCloudBackupError });
       if (tooLarge) setSetting(this.db, LAST_CLOUD_TOO_LARGE_KEY, nowIso());
       log.warn('Cloud backup failed', { error: this.lastCloudBackupError, tooLarge });
       throw e;
@@ -863,9 +867,14 @@ class WebOrdersBridge {
 
   // ---- inbound ------------------------------------------------------------
 
+  /** The site claims each order it hands out for the till that asked (two tills, one cook). */
+  private ordersPath(): string {
+    return `/api/bridge/orders?device=${encodeURIComponent(this.deviceId)}`;
+  }
+
   private async pullNewOrders(cfg: WebBridgeConfig): Promise<void> {
     if (!this.db) return;
-    const res = await this.api(cfg, '/api/bridge/orders');
+    const res = await this.api(cfg, this.ordersPath());
     if (!res.ok) throw new Error(`Pull failed: HTTP ${res.status}`);
     const json = (await res.json()) as { ok: boolean; data?: WebOrder[] };
     if (!json.ok || !json.data) throw new Error('Pull failed: bad response');
@@ -961,6 +970,7 @@ class WebOrdersBridge {
       // a takeaway order with the discount on it, no address. Orders from a
       // site that predates pickup carry no fulfilment and are deliveries.
       const pickup = web.fulfilment === 'pickup';
+      const pickupPercent = pickupPercentOf(web);
       const order = db.transaction(() => {
         // 1. Local order shell (delivery or takeaway, source web).
         const tag = pickup ? '[web pick-up]' : '[web]';
@@ -1026,14 +1036,14 @@ class WebOrdersBridge {
         // owner's standing offer, above the percent that needs a manager PIN
         // at the counter, so the bridge's actor (the shop's admin — see
         // resolveActor) is recorded as its approver.
-        if (pickup) {
+        if (pickup && pickupPercent > 0) {
           applyDiscount(
             db,
             {
               orderId: shell.id,
               discountType: 'percent',
-              value: PICKUP_DISCOUNT_PERCENT,
-              reason: `Website pick-up ${PICKUP_DISCOUNT_PERCENT}% off`,
+              value: pickupPercent,
+              reason: `Website pick-up ${pickupPercent}% off`,
               approverUserId: actor.userId,
             },
             actor,
@@ -1058,15 +1068,31 @@ class WebOrdersBridge {
       this.importedTotal += 1;
 
       // The order is saved and on the board: say so before talking to the site.
+      // The till prices it from its own menu; if that is not what the customer
+      // was shown (a price changed since the menu was last published), the
+      // rider would ask for a different amount — so staff are told to call.
+      const tillTotalCents = getOrderSnapshot(db, order.id)?.order.totalCents ?? null;
+      const totalDiffers =
+        tillTotalCents !== null && typeof web.totalCents === 'number' && tillTotalCents !== web.totalCents;
       log.info('Web order imported', {
         webOrderId: web.id,
         posOrder: order.orderNumber,
-        totalCents: getOrderSnapshot(db, order.id)?.order.totalCents,
+        totalCents: tillTotalCents,
+        webTotalCents: web.totalCents,
       });
+      if (totalDiffers) {
+        log.warn('Web order total differs from the website', {
+          webOrderId: web.id,
+          posOrder: order.orderNumber,
+          tillTotalCents,
+          webTotalCents: web.totalCents,
+        });
+      }
       notifyRenderer('web-order:received', {
         orderId: order.id,
         orderNumber: order.orderNumber,
         customerName: web.customerName,
+        ...(totalDiffers ? { totalMismatch: { webTotalCents: web.totalCents, tillTotalCents } } : {}),
       });
       this.lastImportError = null;
 
@@ -1133,9 +1159,15 @@ class WebOrdersBridge {
         body: JSON.stringify({ status: webStatus }),
       });
       if (res.ok) {
+        // A site that says the order is already final (delivered / cancelled)
+        // answers updated:false — record what it holds so we stop pushing.
+        const body = (await res.json().catch(() => null)) as
+          | { data?: { updated?: boolean; finalStatus?: string } }
+          | null;
+        const held = body?.data?.updated === false ? body.data.finalStatus ?? webStatus : webStatus;
         db.prepare(
           `UPDATE web_order_imports SET last_pushed_status = ?, updated_at = ? WHERE web_order_id = ?`,
-        ).run(webStatus, nowIso(), row.web_order_id);
+        ).run(held, nowIso(), row.web_order_id);
       }
     }
   }
@@ -1447,3 +1479,4 @@ function rowSink(db: Database.Database): RowSink {
     },
   };
 }
+

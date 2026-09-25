@@ -19,6 +19,7 @@ vi.mock('@/lib/db', () => ({
 const orders = await import('@/app/api/orders/route');
 const bridgeStatus = await import('@/app/api/bridge/status/route');
 const bridgeOrders = await import('@/app/api/bridge/orders/route');
+const bridgeOrderStatus = await import('@/app/api/bridge/orders/[id]/status/route');
 const storeStatus = await import('@/app/api/store-status/route');
 
 const SECRET = 'test-bridge-secret-0123456789';
@@ -281,5 +282,48 @@ describe('POST /api/orders — pickup at the till’s discount', () => {
       taxCents: 25_500, // 15% tax on the discounted 1,700
       totalCents: 195_500,
     });
+  });
+});
+
+describe('two tills and the order journey', () => {
+  const pull = async (device: string) => {
+    const res = await bridgeOrders.GET(bridge(`/api/bridge/orders?device=${device}`));
+    const json = (await res.json()) as { data: Array<{ id: string }> };
+    return json.data.map((o) => o.id);
+  };
+
+  it('hands a new order to one till only, and to that till again on its next poll', async () => {
+    const p = await place({ zoneId: 'dha-6' });
+    const id = p.json.data!.orderId;
+    expect(await pull('till-A')).toContain(id);
+    expect(await pull('till-B')).not.toContain(id);
+    expect(await pull('till-A')).toContain(id);
+  });
+
+  it('gives the order to the other till once the first one has gone quiet', async () => {
+    const p = await place({ zoneId: 'dha-6' });
+    const id = p.json.data!.orderId;
+    expect(await pull('till-A')).toContain(id);
+    await db.pg.query(`UPDATE web_orders SET claimed_at = now() - interval '10 minutes' WHERE id = $1`, [id]);
+    expect(await pull('till-B')).toContain(id);
+    expect(await pull('till-A')).not.toContain(id);
+  });
+
+  it('keeps a delivered order delivered', async () => {
+    const p = await place({ zoneId: 'dha-6' });
+    const id = p.json.data!.orderId;
+    const push = async (status: string) => {
+      const res = await bridgeOrderStatus.POST(
+        bridge(`/api/bridge/orders/${id}/status`, { method: 'POST', body: { status } }),
+        { params: { id } },
+      );
+      return (await res.json()) as { ok: boolean; data?: { updated: boolean; finalStatus?: string } };
+    };
+    expect((await push('out_for_delivery')).data).toEqual({ updated: true });
+    expect((await push('delivered')).data).toEqual({ updated: true });
+    expect((await push('cancelled')).data).toEqual({ updated: false, finalStatus: 'delivered' });
+    expect((await push('delivered')).data).toEqual({ updated: true });
+    const rows = (await db.pg.query(`SELECT status FROM web_orders WHERE id = $1`, [id])).rows as Array<{ status: string }>;
+    expect(rows[0]!.status).toBe('delivered');
   });
 });

@@ -25,6 +25,7 @@ import { CloudBackupSettings } from './CloudBackupSettings';
 import { AuditTrailCard } from './AuditTrailCard';
 import { WebsiteSettings } from './WebsiteSettings';
 import { AboutCard } from './AboutCard';
+import { useSessionStore } from '../../stores/sessionStore';
 
 export type SettingsTab =
   | 'store'
@@ -71,7 +72,11 @@ function readSavedTab(): SettingsTab {
  * but is unrelated, sits under Advanced so it cannot be mistaken for it.
  */
 export function SettingsPage() {
-  const [tab, setTab] = useState<SettingsTab>(readSavedTab);
+  // A manager comes here for the printers only; the rest is the owner's.
+  const full = useSessionStore((s) => s.can('settings.manage'));
+  const tabs = full ? TABS : TABS.filter((t) => t.id === 'printer' || t.id === 'about');
+  const [savedTab, setTab] = useState<SettingsTab>(readSavedTab);
+  const tab: SettingsTab = tabs.some((t) => t.id === savedTab) ? savedTab : 'printer';
 
   useEffect(() => {
     try {
@@ -86,19 +91,20 @@ export function SettingsPage() {
       <header>
         <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
         <p className="mt-1 text-stone-600 dark:text-stone-400">
-          Set up the shop in order: Store, Printer, then Online orders. Backups
-          run on their own once the website is connected.
+          {full
+            ? 'Set up the shop in order: Store, Printer, then Online orders. Backups run on their own once the website is connected.'
+            : 'The printers for this till. The rest of Settings is for the owner’s login.'}
         </p>
       </header>
 
-      <SettingsOverview onSelect={setTab} />
+      {full && <SettingsOverview onSelect={setTab} />}
 
       <nav
         role="tablist"
         aria-label="Settings sections"
         className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-stone-200 dark:border-stone-700"
       >
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const Icon = t.icon;
           const active = tab === t.id;
           return (

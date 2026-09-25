@@ -5,6 +5,7 @@ import { Cloud, CloudUpload, AlertTriangle, ArrowRight, Monitor } from 'lucide-r
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { applyRestore } from './applyRestore';
 
 type BackupFrequency = 'off' | 'daily' | 'weekly' | 'monthly';
 
@@ -106,7 +107,7 @@ export function CloudBackupSettings({ onGoToOnline }: { onGoToOnline: () => void
         title: 'Restore staged',
         description: 'Uploading a safety copy, then restarting on the chosen copy.',
       });
-      await ipc.backup.applyAndRelaunch();
+      await applyRestore();
     },
     onError: (e) =>
       toast({ title: 'Cloud restore failed', description: errorMessage(e), variant: 'error' }),

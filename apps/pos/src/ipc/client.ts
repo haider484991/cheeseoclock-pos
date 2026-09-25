@@ -25,9 +25,15 @@ export class IpcError extends Error {
   }
 }
 
+/** Fired when the till says nobody is logged in any more (idle timeout, 12 h cap, user switched off). */
+export const SESSION_ENDED_EVENT = 'coc:session-ended';
+
 async function unwrap<T>(p: Promise<ApiResult<T>>): Promise<T> {
   const result = await p;
   if (result.ok) return result.data;
+  if (result.error.code === 'unauthenticated' && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT));
+  }
   throw new IpcError(result.error);
 }
 
@@ -35,6 +41,7 @@ export const ipc = {
   system: {
     getVersion: () => unwrap(window.api.system.getVersion()),
     getDeviceInfo: () => unwrap(window.api.system.getDeviceInfo()),
+    getBranding: () => unwrap(window.api.system.getBranding()),
     getSetupStatus: () => unwrap(window.api.system.getSetupStatus()),
     completeOnboarding: (input: IpcRequest<'system:completeOnboarding'>) =>
       unwrap(window.api.system.completeOnboarding(input)),
@@ -43,6 +50,7 @@ export const ipc = {
     login: (pin: string) => unwrap(window.api.auth.login({ pin })),
     logout: () => unwrap(window.api.auth.logout()),
     currentSession: () => unwrap(window.api.auth.currentSession()),
+    activity: () => unwrap(window.api.auth.activity()),
     verifyManagerPin: (pin: string) =>
       unwrap(window.api.auth.verifyManagerPin({ pin })),
   },
@@ -152,6 +160,11 @@ export const ipc = {
     close: (input: IpcRequest<'shifts:close'>) => unwrap(window.api.shifts.close(input)),
     list: (input?: IpcRequest<'shifts:list'>) => unwrap(window.api.shifts.list(input)),
     summary: (shiftId: string) => unwrap(window.api.shifts.summary({ shiftId })),
+    lastCount: () => unwrap(window.api.shifts.lastCount()),
+    recordCashMovement: (input: IpcRequest<'shifts:recordCashMovement'>) =>
+      unwrap(window.api.shifts.recordCashMovement(input)),
+    listCashMovements: (shiftId: string) =>
+      unwrap(window.api.shifts.listCashMovements({ shiftId })),
   },
   webBridge: {
     getConfig: () => unwrap(window.api.webBridge.getConfig()),
@@ -211,7 +224,9 @@ export const ipc = {
     stageRestoreFromPath: (path: string) =>
       unwrap(window.api.backup.stageRestoreFromPath({ path })),
     delete: (fileName: string) => unwrap(window.api.backup.delete({ fileName })),
-    applyAndRelaunch: () => unwrap(window.api.backup.applyAndRelaunch()),
+    applyAndRelaunch: (input?: IpcRequest<'backup:applyAndRelaunch'>) =>
+      unwrap(window.api.backup.applyAndRelaunch(input)),
+    health: () => unwrap(window.api.backup.health()),
   },
   tables: {
     listSections: () => unwrap(window.api.tables.listSections()),
@@ -333,6 +348,8 @@ export interface WebOrderReceivedPayload {
   orderId: string;
   orderNumber: string;
   customerName: string;
+  /** Set when the till's total is not what the website showed the customer. */
+  totalMismatch?: { webTotalCents: number; tillTotalCents: number };
 }
 
 /** Listen for web-order:received broadcasts from the website bridge. */
@@ -366,11 +383,30 @@ export function onWebOrderImportFailed(
   return w.webOrderEvents?.onImportFailed(cb) ?? (() => {});
 }
 
+/** One ingredient that just dropped below its low-stock level. */
+export interface LowStockItem {
+  ingredientId: string;
+  name: string;
+  unit: string;
+  resultingQty: number;
+  threshold: number;
+}
+
+/** Listen for inventory:low-stock broadcasts (sent when an order takes stock below the line). */
+export function onLowStock(cb: (items: LowStockItem[]) => void): () => void {
+  const w = window as unknown as {
+    inventoryEvents?: { onLowStock: (cb: (items: LowStockItem[]) => void) => () => void };
+  };
+  return w.inventoryEvents?.onLowStock(cb) ?? (() => {});
+}
+
 /** Payload broadcast by the main process when a print job fails permanently. */
 export interface PrinterFailedPayload {
   jobKind: string;
   orderId?: string;
   error?: { code: string; message: string };
+  /** First miss: the till keeps trying on its own. Absent/false: it gave up. */
+  retrying?: boolean;
 }
 
 /** Listen for printer:failed broadcasts from the main process. */

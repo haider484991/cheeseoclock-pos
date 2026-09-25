@@ -25,6 +25,7 @@ const api: RendererApi = {
   system: {
     getVersion: () => invoke('system:getVersion', undefined),
     getDeviceInfo: () => invoke('system:getDeviceInfo', undefined),
+    getBranding: () => invoke('system:getBranding', undefined),
     getSetupStatus: () => invoke('system:getSetupStatus', undefined),
     completeOnboarding: (req) => invoke('system:completeOnboarding', req),
   },
@@ -32,6 +33,7 @@ const api: RendererApi = {
     login: (req) => invoke('auth:login', req),
     logout: () => invoke('auth:logout', undefined),
     currentSession: () => invoke('auth:currentSession', undefined),
+    activity: () => invoke('auth:activity', undefined),
     verifyManagerPin: (req) => invoke('auth:verifyManagerPin', req),
   },
   users: {
@@ -108,7 +110,8 @@ const api: RendererApi = {
     stageRestoreFromPicker: () => invoke('backup:stageRestoreFromPicker', undefined),
     stageRestoreFromPath: (req) => invoke('backup:stageRestoreFromPath', req),
     delete: (req) => invoke('backup:delete', req),
-    applyAndRelaunch: () => invoke('backup:applyAndRelaunch', undefined),
+    applyAndRelaunch: (req) => invoke('backup:applyAndRelaunch', req),
+    health: () => invoke('backup:health', undefined),
   },
   customers: {
     list: (req) => invoke('customers:list', req),
@@ -140,6 +143,9 @@ const api: RendererApi = {
     close: (req) => invoke('shifts:close', req),
     list: (req) => invoke('shifts:list', req),
     summary: (req) => invoke('shifts:summary', req),
+    lastCount: () => invoke('shifts:lastCount', undefined),
+    recordCashMovement: (req) => invoke('shifts:recordCashMovement', req),
+    listCashMovements: (req) => invoke('shifts:listCashMovements', req),
   },
   webBridge: {
     getConfig: () => invoke('webBridge:getConfig', undefined),
@@ -225,6 +231,20 @@ contextBridge.exposeInMainWorld('printerEvents', {
   },
 });
 
+// Stock that just dropped below its low-stock level (sent once, on the way down).
+contextBridge.exposeInMainWorld('inventoryEvents', {
+  onLowStock: (
+    cb: (items: Array<{ ingredientId: string; name: string; unit: string; resultingQty: number; threshold: number }>) => void,
+  ) => {
+    const listener = (
+      _e: unknown,
+      items: Array<{ ingredientId: string; name: string; unit: string; resultingQty: number; threshold: number }>,
+    ) => cb(items);
+    ipcRenderer.on('inventory:low-stock', listener);
+    return () => ipcRenderer.removeListener('inventory:low-stock', listener);
+  },
+});
+
 // Subscribe to FBR queue-changed broadcasts so the dashboard badge refreshes.
 contextBridge.exposeInMainWorld('fbrEvents', {
   onQueueChanged: (cb: () => void) => {
@@ -276,11 +296,21 @@ contextBridge.exposeInMainWorld('syncEvents', {
 // New online orders arriving from the website bridge → toast + board refresh.
 contextBridge.exposeInMainWorld('webOrderEvents', {
   onReceived: (
-    cb: (payload: { orderId: string; orderNumber: string; customerName: string }) => void,
+    cb: (payload: {
+      orderId: string;
+      orderNumber: string;
+      customerName: string;
+      totalMismatch?: { webTotalCents: number; tillTotalCents: number };
+    }) => void,
   ) => {
     const listener = (
       _e: unknown,
-      payload: { orderId: string; orderNumber: string; customerName: string },
+      payload: {
+        orderId: string;
+        orderNumber: string;
+        customerName: string;
+        totalMismatch?: { webTotalCents: number; tillTotalCents: number };
+      },
     ) => cb(payload);
     ipcRenderer.on('web-order:received', listener);
     return () => ipcRenderer.removeListener('web-order:received', listener);

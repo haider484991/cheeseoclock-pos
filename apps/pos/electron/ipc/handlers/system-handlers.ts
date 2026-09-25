@@ -5,9 +5,21 @@ import { ok } from '@cheeseoclock/shared-types';
 import { ensureDeviceInfo } from '../../db/repositories/device-repo.js';
 import { createUser } from '../../db/repositories/user-repo.js';
 import { createTaxCategory } from '../../db/repositories/tax-category-repo.js';
-import { setReceiptBranding } from '../../services/printer-config.js';
+import { getReceiptBranding, setReceiptBranding } from '../../services/printer-config.js';
 
 export function registerSystemHandlers(ctx: HandlerContext): void {
+  // The PIN screen shows the shop's own name and logo. It read them through
+  // printer:getConfig, which needs a login, so the login screen never had them.
+  // Only what is printed on every receipt anyway — nothing else leaks here.
+  defineHandler('system:getBranding', ctx, () => {
+    const b = getReceiptBranding(ctx.db);
+    return ok({
+      storeName: b.storeName,
+      storeTagline: b.storeTagline ?? null,
+      logoUrl: b.logoUrl ?? null,
+    });
+  });
+
   defineHandler('system:getVersion', ctx, () =>
     ok({
       version: app.getVersion(),

@@ -63,6 +63,10 @@ ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS fulfilment TEXT NOT NULL DEFAULT
   CHECK (fulfilment IN ('delivery','pickup'));
 ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS discount_cents INT NOT NULL DEFAULT 0
   CHECK (discount_cents >= 0);
+-- Which till is importing a 'new' order (api/bridge/orders GET): two tills
+-- polling at once must not both cook it. Also added on demand (web-order-columns).
+ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS claimed_by TEXT;
+ALTER TABLE web_orders ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
 
 -- Append-only counter behind the order endpoint's per-IP flood limit. Only a
 -- salted hash is stored, never a raw IP. src/lib/rate-limit.ts also creates

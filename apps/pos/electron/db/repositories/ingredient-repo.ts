@@ -358,6 +358,55 @@ export function convertIngredientToBaseUnit(db: AppDatabase, id: string, actor: 
       });
     }
 
+    // …every purchase order still to be received: 5 "kg" on order would
+    // otherwise arrive as 5 g.
+    const poLines = db
+      .prepare(
+        `SELECT poi.id, poi.purchase_order_id, poi.qty_ordered, poi.qty_received, poi.unit_cost_cents
+           FROM purchase_order_items poi
+           JOIN purchase_orders po ON po.id = poi.purchase_order_id
+          WHERE poi.ingredient_id = ? AND poi.deleted_at IS NULL AND po.deleted_at IS NULL
+            AND po.status IN ('draft', 'ordered', 'partial')`,
+      )
+      .all(id) as Array<{
+      id: string;
+      purchase_order_id: string;
+      qty_ordered: number;
+      qty_received: number;
+      unit_cost_cents: number;
+    }>;
+    for (const line of poLines) {
+      const next = {
+        qtyOrdered: line.qty_ordered * f,
+        qtyReceived: line.qty_received * f,
+        // The line total (what is owed) stays as it is; only the per-unit price moves.
+        unitCostCents: Math.round(line.unit_cost_cents / f),
+      };
+      db.prepare(
+        `UPDATE purchase_order_items SET qty_ordered = ?, qty_received = ?, unit_cost_cents = ?,
+                updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(next.qtyOrdered, next.qtyReceived, next.unitCostCents, now, line.id);
+      enqueueSync(db, {
+        entityType: 'purchase_order_items',
+        entityId: line.id,
+        op: 'upsert',
+        payload: { id: line.id, purchaseOrderId: line.purchase_order_id, ingredientId: id, ...next },
+      });
+      writeAudit(db, {
+        entityType: 'purchase_order_items',
+        entityId: line.id,
+        action: 'convert_unit',
+        actorUserId: actor.userId,
+        before: {
+          qtyOrdered: line.qty_ordered,
+          qtyReceived: line.qty_received,
+          unitCostCents: line.unit_cost_cents,
+          unit: before.unit,
+        },
+        after: { ...next, unit: after.unit },
+      });
+    }
+
     // …and every batch recipe that uses it as an input.
     const inputs = db
       .prepare(

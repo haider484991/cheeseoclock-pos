@@ -72,7 +72,8 @@ export const router: ReturnType<typeof createHashRouter> = createHashRouter([
       {
         path: 'settings',
         element: <SettingsPage />,
-        loader: requireCapability('settings.manage'),
+        // Managers reach it for the printers; the page shows them nothing else.
+        loader: requireCapability('printer.manage'),
       },
     ],
   },

@@ -42,10 +42,12 @@ export function mapOrderToFbrPayload(
   const subtotal = order.subtotalCents;
   const discount = order.discountCents;
 
-  const fbrItems: FbrInvoiceItem[] = items.map((line) => {
-    // Prorate discount across lines by weight.
-    const weight = subtotal > 0 ? line.lineTotalCents / subtotal : 0;
-    const lineDiscount = Math.round(discount * weight);
+  // The discount split over the lines exactly as the till split it for tax
+  // (pos-domain allocateDiscount — kept in step by hand, fbr-core has no
+  // dependency on pos-domain): whole paisa that add up to the discount.
+  const shares = allocateDiscount(items.map((l) => l.lineTotalCents), subtotal > 0 ? discount : 0);
+  const fbrItems: FbrInvoiceItem[] = items.map((line, i) => {
+    const lineDiscount = shares[i] ?? 0;
     const netCents = Math.max(0, line.lineTotalCents - lineDiscount);
     // Each line carries the tax rate snapshotted at order time (basis
     // points). FBR validates `rate` against its reference list per line, so a
@@ -147,6 +149,26 @@ export function mapRefundToFbrDebitNote(
     invoiceRefNo: refund.originalIrn,
     items,
   };
+}
+
+/** Same as pos-domain allocateDiscount (largest remainder, whole paisa). */
+export function allocateDiscount(lineTotalsCents: ReadonlyArray<number>, discountCents: number): number[] {
+  const subtotal = lineTotalsCents.reduce((s, t) => s + Math.max(0, t), 0);
+  if (subtotal <= 0 || discountCents <= 0) return lineTotalsCents.map(() => 0);
+  const discount = Math.min(Math.round(discountCents), subtotal);
+  const shares = lineTotalsCents.map((t) => Math.floor((discount * Math.max(0, t)) / subtotal));
+  let left = discount - shares.reduce((s, x) => s + x, 0);
+  const byRemainder = lineTotalsCents
+    .map((t, i) => ({ i, t: Math.max(0, t), rem: (discount * Math.max(0, t)) % subtotal }))
+    .sort((a, b) => b.rem - a.rem || b.t - a.t || a.i - b.i);
+  for (const line of byRemainder) {
+    if (left <= 0) break;
+    if (shares[line.i]! < line.t) {
+      shares[line.i] = shares[line.i]! + 1;
+      left -= 1;
+    }
+  }
+  return shares;
 }
 
 function rupeesFromCents(cents: number): number {

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { AuthenticatedUser, Capability } from '@cheeseoclock/shared-types';
 import { hasCapability } from '@cheeseoclock/shared-types';
-import { ipc, IpcError } from '../ipc/client';
+import { ipc, IpcError, SESSION_ENDED_EVENT } from '../ipc/client';
 
 interface SessionState {
   user: AuthenticatedUser | null;
@@ -52,3 +52,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     return u ? hasCapability(u.role, capability) : false;
   },
 }));
+
+// The till ended the login (idle owner/manager, 12 h cap, user switched off):
+// any call that comes back "not logged in" drops the screen to the PIN pad.
+if (typeof window !== 'undefined') {
+  window.addEventListener(SESSION_ENDED_EVENT, () => {
+    if (useSessionStore.getState().user) useSessionStore.setState({ user: null, status: 'idle' });
+  });
+}

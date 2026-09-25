@@ -3,6 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
 import { Banknote, CheckCircle2, CreditCard, Smartphone, X } from 'lucide-react';
+import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { OrderSnapshot, PaymentMethod } from '@cheeseoclock/shared-types';
@@ -34,7 +35,6 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
   const [reference, setReference] = useState('');
   const { toast } = useToast();
 
-  const totalPkr = (order.totalCents / 100).toFixed(0);
   const tenderedNum = parseFloat(tendered) || 0;
   const tenderedCents = Math.round(tenderedNum * 100);
   const changeCents = method === 'cash' ? Math.max(0, tenderedCents - order.totalCents) : 0;
@@ -120,7 +120,7 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
               Total
             </span>
             <span className="font-mono text-2xl font-bold text-amber-900 dark:text-amber-100">
-              Rs {totalPkr}
+              {formatCents(order.totalCents)}
             </span>
           </div>
 
@@ -167,7 +167,7 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
                     <div className="mt-2 flex items-center justify-between rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100">
                       <span className="font-semibold">Change due</span>
                       <span className="font-mono text-lg font-bold">
-                        Rs {(changeCents / 100).toFixed(0)}
+                        {formatCents(changeCents)}
                       </span>
                     </div>
                   )}

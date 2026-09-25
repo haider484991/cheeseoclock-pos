@@ -16,8 +16,8 @@ export function LoginPage() {
   const errorMessage = useSessionStore((s) => s.errorMessage);
   const { toast } = useToast();
   const brandingQ = useQuery({
-    queryKey: ['printer', 'config'],
-    queryFn: () => ipc.printer.getConfig(),
+    queryKey: ['system', 'branding'],
+    queryFn: () => ipc.system.getBranding(),
     staleTime: 60_000,
   });
   const versionQ = useQuery({
@@ -26,9 +26,9 @@ export function LoginPage() {
     staleTime: Infinity,
   });
   const isDev = versionQ.data?.isDev ?? false;
-  const logoUrl = brandingQ.data?.branding.logoUrl;
-  const storeName = brandingQ.data?.branding.storeName ?? 'CheeseOclock POS';
-  const tagline = brandingQ.data?.branding.storeTagline;
+  const logoUrl = brandingQ.data?.logoUrl ?? undefined;
+  const storeName = brandingQ.data?.storeName ?? 'CheeseOclock POS';
+  const tagline = brandingQ.data?.storeTagline ?? undefined;
 
   useEffect(() => {
     void refresh().then(() => {

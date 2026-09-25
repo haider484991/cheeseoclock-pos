@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { computeDiscountCents } from '../../../../packages/pos-domain/src/discount';
+import {
+  allocateDiscount as tillAllocate,
+  computeDiscountCents,
+} from '../../../../packages/pos-domain/src/discount';
+import { allocateDiscount as fbrAllocate } from '../../../../packages/fbr-core/src/mapper';
 import { computeTax } from '../../../../packages/pos-domain/src/tax';
-import { percentDiscountCents, priceOrder, type PricedLine } from './pricing';
+import { allocateDiscount, percentDiscountCents, priceOrder, type PricedLine } from './pricing';
 
 /** The till's recomputeOrderTotals (apps/pos order-repo), built from its own pieces. */
 function tillTotals(lines: PricedLine[], percent: number) {
@@ -12,11 +16,11 @@ function tillTotals(lines: PricedLine[], percent: number) {
   );
   let tax = 0;
   if (subtotal > 0) {
-    for (const l of lines) {
-      const lineDiscount = Math.round(discount * (l.lineTotalCents / subtotal));
-      const net = Math.max(0, l.lineTotalCents - lineDiscount);
+    const shares = tillAllocate(lines.map((l) => l.lineTotalCents), discount);
+    lines.forEach((l, i) => {
+      const net = Math.max(0, l.lineTotalCents - (shares[i] ?? 0));
       tax += computeTax(net, l.taxRateBps, 'exclusive').taxCents as number;
-    }
+    });
   }
   return { subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: subtotal - discount + tax };
 }
@@ -50,5 +54,19 @@ describe('priceOrder matches the till', () => {
     expect(percentDiscountCents(0, 10)).toBe(0);
     expect(percentDiscountCents(500, 150)).toBe(500);
     expect(priceOrder([], 10)).toEqual({ subtotalCents: 0, discountCents: 0, taxCents: 0, totalCents: 0 });
+  });
+});
+
+describe('the discount split is the same on the till, the FBR invoice and the site', () => {
+  it('gives every line the same paisa in all three', () => {
+    let seed = 99;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let n = 0; n < 500; n++) {
+      const lines = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => Math.floor(rnd() * 400_000));
+      const discount = Math.floor(rnd() * 100_000);
+      const web = allocateDiscount(lines, discount);
+      expect(web).toEqual(tillAllocate(lines, discount));
+      expect(web).toEqual(fbrAllocate(lines, discount));
+    }
   });
 });

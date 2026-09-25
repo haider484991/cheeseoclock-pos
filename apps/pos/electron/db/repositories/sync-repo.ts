@@ -123,3 +123,10 @@ function safeParse(json: string): unknown {
     return null;
   }
 }
+
+/** Delete queue rows the sync already delivered, older than the cutoff. Unsent rows are kept. */
+export function purgeSyncedQueue(db: AppDatabase, olderThanIso: string): number {
+  return db
+    .prepare(`DELETE FROM sync_queue WHERE synced_at IS NOT NULL AND synced_at < ?`)
+    .run(olderThanIso).changes;
+}

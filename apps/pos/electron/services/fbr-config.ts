@@ -30,11 +30,13 @@ export function getFbrConfig(db: AppDatabase): FbrConfig {
   return { ...cfg, bearerToken: openSecret(cfg.bearerToken).value };
 }
 
-export function setFbrConfig(db: AppDatabase, config: FbrConfig): void {
-  setSetting(db, FBR_CONFIG_KEY, {
-    ...config,
-    bearerToken: config.bearerToken ? sealSecret(config.bearerToken) : undefined,
-  });
+export function setFbrConfig(db: AppDatabase, config: FbrConfig, actorUserId: string | null = null): void {
+  setSetting(
+    db,
+    FBR_CONFIG_KEY,
+    { ...config, bearerToken: config.bearerToken ? sealSecret(config.bearerToken) : undefined },
+    { actorUserId },
+  );
 }
 
 /** Convert the user-facing FbrConfig into an FbrAdapterConfig. */

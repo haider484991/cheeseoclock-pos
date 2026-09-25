@@ -4,7 +4,13 @@ import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
-import type { Shift, ShiftSummary, UUID } from '@cheeseoclock/shared-types';
+import type {
+  CashMovement,
+  CashMovementType,
+  Shift,
+  ShiftSummary,
+  UUID,
+} from '@cheeseoclock/shared-types';
 
 /**
  * Shifts repo. Open/close cash-drawer reconciliation per device.
@@ -240,7 +246,9 @@ export function closeShift(
          WHERE COALESCE(p.shift_id, o.shift_id) = ? AND p.method = 'cash' AND p.deleted_at IS NULL`,
       )
       .get(input.shiftId) as { sales: number; refunds: number };
-    const expected = before.openingCashCents + cashRow.sales - cashRow.refunds;
+    const moves = cashMovementTotals(db, input.shiftId);
+    const expected =
+      before.openingCashCents + cashRow.sales - cashRow.refunds + moves.inCents - moves.outCents;
     const counted = Math.round(input.countedCashCents);
     const variance = counted - expected;
     const now = nowIso();
@@ -343,8 +351,9 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
   const cashLine = byMethod.find((m) => m.method === 'cash');
   const cashSalesCents = cashLine?.salesCents ?? 0;
   const cashRefundsCents = cashLine?.refundCents ?? 0;
+  const moves = cashMovementTotals(db, shiftId);
   const expectedCashCents =
-    shift.openingCashCents + cashSalesCents - cashRefundsCents;
+    shift.openingCashCents + cashSalesCents - cashRefundsCents + moves.inCents - moves.outCents;
 
   return {
     shiftId: shiftId as UUID,
@@ -358,7 +367,157 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
       totalRefundsCents) as ShiftSummary['netRevenueCents'],
     cashSalesCents: cashSalesCents as ShiftSummary['cashSalesCents'],
     cashRefundsCents: cashRefundsCents as ShiftSummary['cashRefundsCents'],
+    cashInCents: moves.inCents as ShiftSummary['cashInCents'],
+    cashOutCents: moves.outCents as ShiftSummary['cashOutCents'],
     expectedCashCents: expectedCashCents as ShiftSummary['expectedCashCents'],
     byMethod,
   };
+}
+
+// -----------------------------------------------------------------------------
+// Cash in / out of the drawer (not sales) — migrations/0021_cash_movements.sql
+// -----------------------------------------------------------------------------
+
+/** Pay-ins and pay-outs (tip-outs count as out) recorded against a shift. */
+export function cashMovementTotals(
+  db: AppDatabase,
+  shiftId: string,
+): { inCents: number; outCents: number } {
+  const row = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN type = 'payin' THEN amount_cents ELSE 0 END), 0) AS inCents,
+         COALESCE(SUM(CASE WHEN type IN ('payout', 'tip_out') THEN amount_cents ELSE 0 END), 0) AS outCents
+        FROM cash_movements WHERE shift_id = ? AND deleted_at IS NULL`,
+    )
+    .get(shiftId) as { inCents: number; outCents: number };
+  return row;
+}
+
+interface CashMovementRow {
+  id: string;
+  shift_id: string;
+  type: CashMovementType;
+  amount_cents: number;
+  reason: string;
+  user_id: string;
+  user_name: string | null;
+  approved_by_user_id: string | null;
+  created_at: string;
+}
+
+function rowToCashMovement(r: CashMovementRow): CashMovement {
+  return {
+    id: r.id as CashMovement['id'],
+    shiftId: r.shift_id as CashMovement['shiftId'],
+    type: r.type,
+    amountCents: r.amount_cents as CashMovement['amountCents'],
+    reason: r.reason,
+    userId: r.user_id as CashMovement['userId'],
+    userName: r.user_name,
+    approvedByUserId: r.approved_by_user_id as CashMovement['approvedByUserId'],
+    createdAt: r.created_at,
+  };
+}
+
+export function listCashMovements(db: AppDatabase, shiftId: string): CashMovement[] {
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.shift_id, m.type, m.amount_cents, m.reason, m.user_id,
+              u.full_name AS user_name, m.approved_by_user_id, m.created_at
+         FROM cash_movements m
+         LEFT JOIN users u ON u.id = m.user_id
+        WHERE m.shift_id = ? AND m.deleted_at IS NULL
+        ORDER BY m.created_at`,
+    )
+    .all(shiftId) as CashMovementRow[];
+  return rows.map(rowToCashMovement);
+}
+
+export interface RecordCashMovementInput {
+  type: CashMovementType;
+  amountCents: number;
+  reason: string;
+  approvedByUserId?: string | null;
+}
+
+/**
+ * Record cash into or out of this till's open drawer. It belongs to the shift
+ * open on this device now — there is no drawer to put it in otherwise.
+ */
+export function recordCashMovement(
+  db: AppDatabase,
+  input: RecordCashMovementInput,
+  actor: Actor & { userId: string },
+): CashMovement {
+  const amount = Math.round(input.amountCents);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter an amount above zero');
+  if (amount > 10_000_000_00) throw new Error('That amount is too large for the drawer');
+  if (input.type !== 'payin' && input.type !== 'payout' && input.type !== 'tip_out') {
+    throw new Error('Unknown cash movement type');
+  }
+  const reason = input.reason.trim();
+  if (!reason) throw new Error('Say what the cash was for (e.g. "Gas cylinder", "Change from bank")');
+  const shift = getCurrentShift(db, actor.deviceId);
+  if (!shift) throw new Error('No shift is open on this till — open a shift first');
+
+  const id = uuidv7();
+  const now = nowIso();
+  const after = {
+    id,
+    shiftId: shift.id,
+    type: input.type,
+    amountCents: amount,
+    reason,
+    userId: actor.userId,
+    approvedByUserId: input.approvedByUserId ?? null,
+    createdAt: now,
+  };
+  writeWithSync({
+    db,
+    entityType: 'cash_movements',
+    entityId: id,
+    op: 'upsert',
+    action: `cash_${input.type}`,
+    actor,
+    before: null,
+    after,
+    writeRow: () => {
+      db.prepare(
+        `INSERT INTO cash_movements
+           (id, shift_id, type, amount_cents, reason, user_id, approved_by_user_id,
+            created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(
+        id,
+        shift.id,
+        input.type,
+        amount,
+        reason,
+        actor.userId,
+        input.approvedByUserId ?? null,
+        now,
+        now,
+        actor.deviceId,
+      );
+    },
+  });
+  log.info('Cash movement', { id, type: input.type, amount, shiftId: shift.id });
+  return listCashMovements(db, shift.id).find((m) => m.id === id)!;
+}
+
+/** The drawer count this till's last closed shift ended on — tonight's float. */
+export function getLastCount(
+  db: AppDatabase,
+  deviceId: string,
+): { countedCashCents: number; closedAt: string } | null {
+  const row = db
+    .prepare(
+      `SELECT counted_cash_cents, closed_at FROM shifts
+        WHERE device_id = ? AND closed_at IS NOT NULL AND counted_cash_cents IS NOT NULL
+          AND deleted_at IS NULL
+        ORDER BY closed_at DESC LIMIT 1`,
+    )
+    .get(deviceId) as { counted_cash_cents: number; closed_at: string } | undefined;
+  return row ? { countedCashCents: row.counted_cash_cents, closedAt: row.closed_at } : null;
 }

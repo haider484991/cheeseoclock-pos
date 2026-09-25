@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import log from 'electron-log/main';
 import { closeDatabase, type AppDatabase } from '../db/connection.js';
+import { deleteSetting, setSetting } from '../db/repositories/settings-repo.js';
 
 /**
  * Local backup / restore for the SQLite database.
@@ -293,10 +294,23 @@ function runAutoBackupIfDue(): void {
       if (age < 23 * 60 * 60 * 1000) return; // within the last 23h, skip
     }
     createBackup({ kind: 'auto' });
+    deleteSetting(dbRef, LAST_AUTO_BACKUP_ERROR_KEY);
   } catch (e) {
     log.warn('Auto-backup failed', e);
+    // Kept (not just logged) so the dashboard can say so until one works:
+    // a disk that filled up used to stop the daily copy without a word.
+    try {
+      setSetting(dbRef, LAST_AUTO_BACKUP_ERROR_KEY, {
+        at: new Date().toISOString(),
+        message: e instanceof Error ? e.message : String(e),
+      });
+    } catch {
+      // the database itself is the problem; the log has it
+    }
   }
 }
+
+export const LAST_AUTO_BACKUP_ERROR_KEY = 'backup.lastAutoError';
 
 /**
  * Called at bootstrap BEFORE the live DB is opened. If a `pending-restore.db`

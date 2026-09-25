@@ -27,11 +27,13 @@ export function getSyncConfig(db: AppDatabase): SyncConfig {
   return { ...cfg, deviceSecret: openSecret(cfg.deviceSecret).value };
 }
 
-export function setSyncConfig(db: AppDatabase, config: SyncConfig): void {
-  setSetting(db, SYNC_CONFIG_KEY, {
-    ...config,
-    deviceSecret: config.deviceSecret ? sealSecret(config.deviceSecret) : undefined,
-  });
+export function setSyncConfig(db: AppDatabase, config: SyncConfig, actorUserId: string | null = null): void {
+  setSetting(
+    db,
+    SYNC_CONFIG_KEY,
+    { ...config, deviceSecret: config.deviceSecret ? sealSecret(config.deviceSecret) : undefined },
+    { actorUserId },
+  );
 }
 
 export function isSyncReady(c: SyncConfig): { ok: boolean; missing: string[] } {

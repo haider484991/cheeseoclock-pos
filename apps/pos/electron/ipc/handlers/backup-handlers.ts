@@ -1,7 +1,7 @@
 import path from 'node:path';
 import log from 'electron-log/main';
 import type { HandlerContext } from '../registry.js';
-import { defineHandler, markShuttingDown } from '../registry.js';
+import { defineHandler, IpcGuardError, markShuttingDown } from '../registry.js';
 import { ok } from '@cheeseoclock/shared-types';
 import { isSetupPhase, requireAdmin, requireAdminOrSetupPhase, requireSettingsManage } from '../guards.js';
 import {
@@ -15,6 +15,8 @@ import {
   stopBackupService,
 } from '../../services/backup-service.js';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
+import { getBackupHealth } from '../../services/backup-health.js';
+import { getWebBridgeConfig, isWebBridgeReady } from '../../services/web-bridge-config.js';
 
 /**
  * Reading and making backups: manager or admin. Restoring or deleting one
@@ -61,20 +63,34 @@ export function registerBackupHandlers(ctx: HandlerContext): void {
     return ok({ fileName: payload.fileName });
   });
 
-  defineHandler('backup:applyAndRelaunch', ctx, async () => {
+  defineHandler('backup:health', ctx, () => {
+    requireSettingsManage();
+    return ok(getBackupHealth(ctx.db));
+  });
+
+  defineHandler('backup:applyAndRelaunch', ctx, async (_ctx, payload) => {
     requireAdminOrSetupPhase(ctx.db, 'Restoring a backup');
     // Safety copy: the state a restore is about to overwrite goes to the cloud
     // first (kept for 30 days regardless of rotation), so a restore can never
-    // be a way to make today's sales disappear. Best effort — a fresh install
-    // has nothing to protect and no connection yet.
+    // be a way to make today's sales disappear. A fresh install has nothing to
+    // protect and no connection yet; a till never linked to the website can't
+    // upload one (its data is still archived on this PC). But a linked till
+    // whose upload failed no longer restores silently: the owner is asked.
     if (!isSetupPhase(ctx.db)) {
       try {
         await webOrdersBridge.uploadBackupNow({ reason: 'before-restore' });
         log.info('Safety copy uploaded before restore');
       } catch (e) {
-        log.warn('Safety copy before restore skipped', {
-          reason: e instanceof Error ? e.message : String(e),
-        });
+        const reason = e instanceof Error ? e.message : String(e);
+        const linked = isWebBridgeReady(getWebBridgeConfig(ctx.db)).ok;
+        if (linked && !payload?.withoutSafetyCopy) {
+          throw new IpcGuardError({
+            code: 'precondition_failed',
+            message: `The safety copy could not be uploaded: ${reason}`,
+            details: { safetyCopyFailed: true, reason },
+          });
+        }
+        log.warn('Restoring without a cloud safety copy', { reason, linked, ownerAgreed: !!payload?.withoutSafetyCopy });
       }
     }
     // Quiesce: no more polls, backups or handler calls may touch the database
