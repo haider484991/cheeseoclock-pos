@@ -161,7 +161,7 @@ export default function HomePage() {
               <div className="flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3">
                 <div>
                   <p className="font-cond text-sm font-extrabold uppercase tracking-[0.24em] text-ink/70">
-                    Every deal comes with a 1 litre Pepsi
+                    Every deal comes with a 1 litre soft drink
                   </p>
                   <h2 className="mt-1 font-display text-5xl uppercase leading-none tracking-wide md:text-7xl">
                     Value deals

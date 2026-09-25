@@ -2,6 +2,7 @@ import type { PublishedMenu } from '@cheeseoclock/shared-types';
 import { BUSINESS } from './business';
 import { DELIVERY_AREAS } from './areas';
 import { isDeliveryChargeItem } from './delivery-zones';
+import { withoutDrinkBrand } from './menu-view';
 
 /**
  * JSON-LD builders for the local-SEO entity graph.
@@ -125,7 +126,7 @@ export function menuNode(menu: PublishedMenu): Record<string, unknown> {
         .map((item) => ({
           '@type': 'MenuItem',
           name: item.name,
-          ...(item.description ? { description: item.description } : {}),
+          ...(item.description ? { description: withoutDrinkBrand(item.description) } : {}),
           // Data-URL images from the POS publish are skipped — schema images
           // must be fetchable URLs.
           ...(item.imageUrl && /^https?:\/\//.test(item.imageUrl)

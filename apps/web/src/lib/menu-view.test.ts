@@ -10,6 +10,7 @@ import {
   shopPhotoFor,
   sizeLabel,
   splitSizedName,
+  withoutDrinkBrand,
 } from './menu-view';
 import { validateOrderable } from './order-validation';
 
@@ -135,14 +136,14 @@ describe('value deals', () => {
     };
   }
   const bigTwo = item('Big Two', 3600, {
-    description: '2 Large 12" regular pizzas + 1 litre Pepsi.',
+    description: '2 Large 12" regular pizzas + 1 litre soft drink.',
     modifierGroups: [
       slot('Deal: Large pizza', ['Large: Fajita Pizza', 'Large: Cheesalious']),
       slot('Deal: 2nd Large pizza', ['2nd Large: Fajita Pizza', '2nd Large: Cheesalious']),
     ],
   });
   const familyFeast = item('Family Feast', 3100, {
-    description: '1 Medium 9" + 1 Large 12" regular pizza + 1 litre Pepsi.',
+    description: '1 Medium 9" + 1 Large 12" regular pizza + 1 litre soft drink.',
     modifierGroups: [
       slot('Deal: Medium pizza', ['Medium: Fajita Pizza']),
       slot('Deal: Large pizza', ['Large: Fajita Pizza']),
@@ -172,6 +173,17 @@ describe('value deals', () => {
     expect(dealWorthCents(m, bigTwo)).toBe(425_000);
     // Medium Rs 1,500 + Large Rs 2,000 + drink Rs 250.
     expect(dealWorthCents(m, familyFeast)).toBe(375_000);
+  });
+
+  it('never names a drink brand, even in a description the till published', () => {
+    expect(withoutDrinkBrand('2 Large 12" regular pizzas + 1 litre Pepsi.')).toBe(
+      '2 Large 12" regular pizzas + 1 litre soft drink.',
+    );
+    const old = menu([
+      ['Value Deals', [item('Big Two', 3600, { description: '2 Large 12" + 1 litre PEPSI.' })]],
+    ]);
+    expect(buildMenuView(old)[0]!.cards[0]!.description).toBe('2 Large 12" + 1 litre soft drink.');
+    expect(withoutDrinkBrand(null)).toBeNull();
   });
 
   it('claims no saving it cannot price', () => {

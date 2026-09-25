@@ -63,6 +63,15 @@ export function sizeLabel(size: string | null): string {
   return size;
 }
 
+/**
+ * The shop sells soft drinks, not a brand (owner 2026-09-25: "we are not an
+ * affiliate of Pepsi"). Deals the till published before then read "+ 1 litre
+ * Pepsi"; whatever the till sends, the site never names the brand.
+ */
+export function withoutDrinkBrand(text: string | null): string | null {
+  return text === null ? null : text.replace(/\bpepsi\b/gi, 'soft drink');
+}
+
 export function isPickupOnly(item: Pick<PublishedMenuItem, 'description'>): boolean {
   return /\bpick[\s-]?up only\b/i.test(item.description ?? '');
 }
@@ -134,7 +143,7 @@ function buildSections(menu: PublishedMenu): MenuSectionView[] {
         const existing = byBase.get(base.toLowerCase());
         if (existing) {
           existing.variants.push({ size, item });
-          existing.description ??= item.description;
+          existing.description ??= withoutDrinkBrand(item.description);
           existing.image ??= item.imageUrl;
           existing.pickupOnly ||= isPickupOnly(item);
           continue;
@@ -142,7 +151,7 @@ function buildSections(menu: PublishedMenu): MenuSectionView[] {
         byBase.set(base.toLowerCase(), {
           key: item.posItemId,
           name: base,
-          description: item.description,
+          description: withoutDrinkBrand(item.description),
           image: item.imageUrl ?? shopPhotoFor(base),
           variants: [{ size, item }],
           pickupOnly: isPickupOnly(item),
@@ -178,7 +187,7 @@ export function groupLabel(group: Pick<PublishedModifierGroup, 'name'>): string 
  * the page can say "Save Rs 650" without a hard-coded number: each pizza slot
  * at the cheapest regular pizza of its size ("Large: Fajita Pizza" → the
  * "Fajita Pizza — Large" item), plus the drink its description promises
- * ("… + 1 litre Pepsi" → the 1 litre soft drink). Null when anything can't be
+ * ("… + 1 litre soft drink" → the 1 litre drink item). Null when anything can't be
  * priced — then the page shows no saving rather than a wrong one.
  */
 export function dealWorthCents(menu: PublishedMenu, deal: PublishedMenuItem): number | null {

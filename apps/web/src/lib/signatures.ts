@@ -79,7 +79,7 @@ export const SIGNATURE_BURGER: Showcase = {
  * the ordering page works this out from live prices (menu-view dealWorthCents).
  */
 export const VALUE_DEALS = [
-  { name: 'Big Two', what: '2 Large 12" + 1 litre Pepsi', priceRs: 3600, worthRs: 4250 },
-  { name: 'Family Feast', what: '1 Medium 9" + 1 Large 12" + 1 litre Pepsi', priceRs: 3100, worthRs: 3750 },
-  { name: 'Perfect Pair', what: '2 Medium 9" + 1 litre Pepsi', priceRs: 2600, worthRs: 3250 },
+  { name: 'Big Two', what: '2 Large 12" + 1 litre soft drink', priceRs: 3600, worthRs: 4250 },
+  { name: 'Family Feast', what: '1 Medium 9" + 1 Large 12" + 1 litre soft drink', priceRs: 3100, worthRs: 3750 },
+  { name: 'Perfect Pair', what: '2 Medium 9" + 1 litre soft drink', priceRs: 2600, worthRs: 3250 },
 ] as const;

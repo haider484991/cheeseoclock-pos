@@ -174,7 +174,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     popular: [
       {
         name: 'Big Two value deal',
-        blurb: 'Two Large 12" regular-menu pizzas and a 1 litre Pepsi — the value deal for a full house.',
+        blurb: 'Two Large 12" regular-menu pizzas and a 1 litre soft drink — the value deal for a full house.',
       },
       {
         name: 'Meat Lovers',
@@ -324,7 +324,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     popular: [
       {
         name: 'Family Feast value deal',
-        blurb: 'One Medium and one Large regular-menu pizza with a 1 litre Pepsi — makes the longer ride worth it.',
+        blurb: 'One Medium and one Large regular-menu pizza with a 1 litre soft drink — makes the longer ride worth it.',
       },
       {
         name: 'Signature Cheese Dipped',
@@ -387,7 +387,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         name: 'Perfect Pair value deal',
-        blurb: 'Two Medium 9" regular-menu pizzas and a 1 litre Pepsi — right-sized for two.',
+        blurb: 'Two Medium 9" regular-menu pizzas and a 1 litre soft drink — right-sized for two.',
       },
       {
         name: 'Chicken Tikka Malai',
