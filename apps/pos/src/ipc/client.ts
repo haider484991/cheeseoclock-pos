@@ -11,6 +11,7 @@ import type {
   ApiError,
   IpcRequest,
 } from '@cheeseoclock/shared-types';
+import { STEP_IN_HELD } from '@cheeseoclock/shared-types';
 
 export class IpcError extends Error {
   readonly code: ApiError['code'];
@@ -27,12 +28,19 @@ export class IpcError extends Error {
 
 /** Fired when the till says nobody is logged in any more (idle timeout, 12 h cap, user switched off). */
 export const SESSION_ENDED_EVENT = 'coc:session-ended';
+/**
+ * Fired when the till is holding a manager's stepping-in login until their
+ * PIN is typed again (AuthenticatedUser.stepInHeld): the page stays, a PIN
+ * box goes over it.
+ */
+export const STEP_IN_HELD_EVENT = 'coc:step-in-held';
 
 async function unwrap<T>(p: Promise<ApiResult<T>>): Promise<T> {
   const result = await p;
   if (result.ok) return result.data;
   if (result.error.code === 'unauthenticated' && typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT));
+    const held = result.error.details?.['stepIn'] === STEP_IN_HELD;
+    window.dispatchEvent(new CustomEvent(held ? STEP_IN_HELD_EVENT : SESSION_ENDED_EVENT));
   }
   throw new IpcError(result.error);
 }
@@ -51,6 +59,8 @@ export const ipc = {
     logout: () => unwrap(window.api.auth.logout()),
     currentSession: () => unwrap(window.api.auth.currentSession()),
     activity: () => unwrap(window.api.auth.activity()),
+    /** A manager stepping in keeps their login with their own PIN or password. */
+    keepStepIn: (pin: string) => unwrap(window.api.auth.keepStepIn({ pin })),
     verifyManagerPin: (pin: string) =>
       unwrap(window.api.auth.verifyManagerPin({ pin })),
   },
@@ -110,6 +120,9 @@ export const ipc = {
     create: (input: IpcRequest<'orders:create'>) => unwrap(window.api.orders.create(input)),
     list: (input?: IpcRequest<'orders:list'>) => unwrap(window.api.orders.list(input)),
     history: (input?: IpcRequest<'orders:history'>) => unwrap(window.api.orders.history(input)),
+    /** This till's orders of the shift open now, for the counter's Recent Orders; or the one with this whole number. */
+    recentAtCounter: (orderNumber?: string) =>
+      unwrap(window.api.orders.recentAtCounter(orderNumber ? { orderNumber } : undefined)),
     get: (id: string) => unwrap(window.api.orders.get({ id })),
     addItem: (input: IpcRequest<'orders:addItem'>) =>
       unwrap(window.api.orders.addItem(input)),
@@ -129,6 +142,8 @@ export const ipc = {
     tender: (input: IpcRequest<'orders:tender'>) => unwrap(window.api.orders.tender(input)),
     void: (input: IpcRequest<'orders:void'>) => unwrap(window.api.orders.void(input)),
     refund: (input: IpcRequest<'orders:refund'>) => unwrap(window.api.orders.refund(input)),
+    /** What cancelling / refunding would do to stock ("Was the food made?"), or what it did. */
+    stockStatus: (orderId: string) => unwrap(window.api.orders.stockStatus({ orderId })),
     attachCustomer: (input: IpcRequest<'orders:attachCustomer'>) =>
       unwrap(window.api.orders.attachCustomer(input)),
     detachCustomer: (orderId: string) =>
@@ -265,9 +280,13 @@ export const ipc = {
       unwrap(window.api.printer.test(station ? { station } : undefined)),
     testDrawer: () => unwrap(window.api.printer.testDrawer()),
     listSystemPrinters: () => unwrap(window.api.printer.listSystemPrinters()),
-    reprint: (orderId: string) => unwrap(window.api.printer.reprint({ orderId })),
+    /** Use features/printing/reprint.ts: it asks for a manager's PIN when the till needs one. */
+    reprint: (orderId: string, opts: { copy?: 'customer' | 'shop'; approverPin?: string } = {}) =>
+      unwrap(window.api.printer.reprint({ orderId, ...opts })),
     reprintKitchen: (orderId: string) =>
       unwrap(window.api.printer.reprintKitchen({ orderId })),
+    reprintCounts: (orderIds: string[]) =>
+      unwrap(window.api.printer.reprintCounts({ orderIds })),
   },
   fbr: {
     getConfig: () => unwrap(window.api.fbr.getConfig()),

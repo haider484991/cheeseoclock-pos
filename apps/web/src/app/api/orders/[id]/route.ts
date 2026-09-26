@@ -1,5 +1,6 @@
 import { sql } from '@/lib/db';
 import { normalizePhone } from '@/lib/format';
+import { orderItemsWithoutDrinkBrand } from '@/lib/menu-view';
 import { ensureWebOrderColumns } from '@/lib/web-order-columns';
 
 export const dynamic = 'force-dynamic';
@@ -53,7 +54,8 @@ export async function GET(
         status: row.status,
         customerName: row.customer_name,
         fulfilment: row.fulfilment,
-        items: row.items_json,
+        // The customer's own order, never a drink brand (owner 2026-09-25).
+        items: orderItemsWithoutDrinkBrand(row.items_json),
         subtotalCents: row.subtotal_cents,
         discountCents: row.discount_cents,
         taxCents: row.tax_cents,

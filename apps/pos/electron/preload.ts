@@ -34,6 +34,7 @@ const api: RendererApi = {
     logout: () => invoke('auth:logout', undefined),
     currentSession: () => invoke('auth:currentSession', undefined),
     activity: () => invoke('auth:activity', undefined),
+    keepStepIn: (req) => invoke('auth:keepStepIn', req),
     verifyManagerPin: (req) => invoke('auth:verifyManagerPin', req),
   },
   users: {
@@ -74,6 +75,7 @@ const api: RendererApi = {
     create: (req) => invoke('orders:create', req),
     list: (req) => invoke('orders:list', req),
     history: (req) => invoke('orders:history', req),
+    recentAtCounter: (req) => invoke('orders:recentAtCounter', req),
     get: (req) => invoke('orders:get', req),
     addItem: (req) => invoke('orders:addItem', req),
     updateItemQuantity: (req) => invoke('orders:updateItemQuantity', req),
@@ -87,6 +89,7 @@ const api: RendererApi = {
     tender: (req) => invoke('orders:tender', req),
     void: (req) => invoke('orders:void', req),
     refund: (req) => invoke('orders:refund', req),
+    stockStatus: (req) => invoke('orders:stockStatus', req),
     attachCustomer: (req) => invoke('orders:attachCustomer', req),
     detachCustomer: (req) => invoke('orders:detachCustomer', req),
     listActive: (req) => invoke('orders:listActive', req),
@@ -189,6 +192,7 @@ const api: RendererApi = {
     listSystemPrinters: () => invoke('printer:listSystemPrinters', undefined),
     reprint: (req) => invoke('printer:reprint', req),
     reprintKitchen: (req) => invoke('printer:reprintKitchen', req),
+    reprintCounts: (req) => invoke('printer:reprintCounts', req),
   },
   fbr: {
     getConfig: () => invoke('fbr:getConfig', undefined),

@@ -8,3 +8,5 @@ export * from './delivery-areas.js';
 export * from './units.js';
 export * from './ingredient-category.js';
 export * from './stock-level.js';
+export * from './order-stock.js';
+export * from './counter-access.js';

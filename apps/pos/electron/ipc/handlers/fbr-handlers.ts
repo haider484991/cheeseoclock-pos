@@ -15,6 +15,8 @@ import {
   getFbrRowByOrder,
   retryAllFailed,
 } from '../../db/repositories/fbr-queue-repo.js';
+import { findOrder } from '../../db/repositories/order-repo.js';
+import { assertCounterMaySee } from '../order-access.js';
 
 function requireSession(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -117,7 +119,11 @@ export function registerFbrHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('fbr:getInvoiceStatus', ctx, (_ctx, payload) => {
-    requireSession();
+    const s = requireSession();
+    // The receipt dialog asks about the sale just made; a counter login reads
+    // only orders it may open (order-access.ts), not any old invoice.
+    const order = findOrder(ctx.db, payload.orderId);
+    if (order) assertCounterMaySee(ctx.db, s, order, 'open');
     const row = getFbrRowByOrder(ctx.db, payload.orderId);
     if (!row) {
       return ok({ status: 'none' as const, attempts: 0 });

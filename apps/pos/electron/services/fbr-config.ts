@@ -30,6 +30,16 @@ export function getFbrConfig(db: AppDatabase): FbrConfig {
   return { ...cfg, bearerToken: openSecret(cfg.bearerToken).value };
 }
 
+/**
+ * Just the mode, for deciding what a receipt says about FBR. Reads the saved
+ * setting only — the sealed token is never opened for this.
+ */
+export function getFbrMode(db: AppDatabase): FbrMode {
+  const raw = getSettingRaw(db, FBR_CONFIG_KEY) as { mode?: unknown } | null;
+  const mode = raw && typeof raw === 'object' ? raw.mode : undefined;
+  return mode === 'sandbox' || mode === 'production' ? mode : 'noop';
+}
+
 export function setFbrConfig(db: AppDatabase, config: FbrConfig, actorUserId: string | null = null): void {
   setSetting(
     db,

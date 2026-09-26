@@ -108,6 +108,8 @@ describe('guessIngredientCategory', () => {
     // drinks
     ['Soft Drink 1 Litre', 'drinks'],
     ['Mineral Water 500ml', 'drinks'],
+    ['Pepsi 345 ml', 'drinks'],
+    ['Diet Pepsi 1 Litre', 'drinks'],
     // packaging
     ['Pizza Box Large', 'packaging'],
     ['Burger Foil', 'packaging'],

@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { BusinessReport } from '@cheeseoclock/shared-types';
+import type { BusinessReport, ReportOrderStock } from '@cheeseoclock/shared-types';
 import {
   Bike,
   Clock,
@@ -24,6 +24,7 @@ import { DataTable, Note, Panel, Section, useShowAll } from './reportUi';
 import {
   CHANNEL_LABEL,
   DRAWER_OPEN_WHY,
+  cancelledWasteText,
   daySeries,
   fmtMinutes,
   fmtQty,
@@ -32,6 +33,7 @@ import {
   hourSeries,
   methodLabel,
   percentOf,
+  stockCellText,
   weekdayAverages,
 } from './reportFormat';
 
@@ -258,7 +260,7 @@ export function StaffSection({ report }: { report: BusinessReport }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Orders taken" note="Website orders come in by themselves, so they have their own line.">
           <DataTable
-            columns={[{ label: 'Taken by' }, { label: 'Orders', right: true }, { label: 'Sales', right: true }, { label: 'Discounts', right: true }, { label: 'Cancelled', right: true }, { label: 'No-sale opens', right: true }]}
+            columns={[{ label: 'Taken by' }, { label: 'Orders', right: true }, { label: 'Sales', right: true }, { label: 'Discounts', right: true }, { label: 'Cancelled', right: true }, { label: 'No-sale opens', right: true }, { label: 'Reprints', right: true }]}
             rows={report.staff.map((s) => [
               <span key="n" className={cn('font-medium', s.isWebsite && 'text-sky-700 dark:text-sky-300')}>{s.name}</span>,
               s.orderCount,
@@ -268,6 +270,8 @@ export function StaffSection({ report }: { report: BusinessReport }) {
               s.discountCents > 0 ? formatCents(s.discountCents) : '—',
               s.voidCount > 0 ? <span key="v" className="font-semibold text-amber-700 dark:text-amber-400">{s.voidCount}</span> : '—',
               s.noSaleOpens > 0 ? <span key="d" className="font-semibold text-amber-700 dark:text-amber-400">{s.noSaleOpens}</span> : '—',
+              // Receipts / bills printed again by hand (each says DUPLICATE).
+              (s.reprints ?? 0) > 0 ? <span key="r" className="font-semibold text-amber-700 dark:text-amber-400">{s.reprints}</span> : '—',
             ])}
             empty="No orders in this period yet."
           />
@@ -439,7 +443,7 @@ export function RefundsSection({ report }: { report: BusinessReport }) {
           note="Listed against the day the order was taken, whenever the money went back."
         >
           <DataTable
-            columns={[{ label: 'When' }, { label: 'Amount', right: true }, { label: 'Reason' }, { label: 'Approved by' }]}
+            columns={[{ label: 'When' }, { label: 'Amount', right: true }, { label: 'Reason' }, { label: 'Stock' }, { label: 'Approved by' }]}
             rows={refunds.shown.map((x) => [
               <div key="w">
                 <div>{fmtWhen(x.refundedAt)}</div>
@@ -452,6 +456,7 @@ export function RefundsSection({ report }: { report: BusinessReport }) {
                 </div>
               </div>,
               x.reason,
+              <StockCell key="s" stock={x.stock} hasCosts={report.foodCost.hasCosts} />,
               x.approvedBy,
             ])}
             empty="No refunds in this period."
@@ -460,14 +465,16 @@ export function RefundsSection({ report }: { report: BusinessReport }) {
         </Panel>
         <Panel title={`Cancelled before payment — ${plural(k.voidCount, 'order')}`} note={k.voidCount > 0 ? `Worth ${formatCents(k.voidCents)} at the time. Not in the sales.` : undefined}>
           <DataTable
-            columns={[{ label: 'When' }, { label: 'Value', right: true }, { label: 'Reason' }, { label: 'Approved by' }, { label: 'Taken by' }]}
+            columns={[{ label: 'When' }, { label: 'Value', right: true }, { label: 'Reason' }, { label: 'Stock' }, { label: 'Approved by' }, { label: 'Taken by' }]}
             rows={voids.shown.map((v) => [
               <div key="w">
                 <div>{fmtWhen(v.voidedAt ?? v.createdAt)}</div>
+                {v.billPrinted && <div className="text-[10px] font-semibold uppercase text-red-700 dark:text-red-400">Bill was printed</div>}
                 <div className="font-mono text-xs text-stone-500">{v.orderNumber}</div>
               </div>,
               formatCents(v.amountCents),
               v.reason,
+              <StockCell key="s" stock={v.stock} hasCosts={report.foodCost.hasCosts} />,
               v.approvedBy,
               v.takenBy,
             ])}
@@ -477,6 +484,27 @@ export function RefundsSection({ report }: { report: BusinessReport }) {
         </Panel>
       </div>
     </Section>
+  );
+}
+
+/**
+ * What a cancel / whole-order refund did to stock: "Put back", "Wasted · Rs
+ * 180", or "—". Amber when it deserves a look: put back although cooking had
+ * been marked, or the answer went against what the till hinted.
+ */
+function StockCell({ stock, hasCosts }: { stock: ReportOrderStock | null; hasCosts: boolean }) {
+  const text = stockCellText(stock, hasCosts);
+  if (!stock) return <span className="text-stone-400">{text}</span>;
+  return (
+    <span
+      className={cn(
+        'whitespace-nowrap text-xs',
+        stock.flagged ? 'rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-900 dark:bg-amber-950 dark:text-amber-100' : '',
+      )}
+      title={stock.flagged ? 'Worth a look: put back after cooking was marked, or against the hint the till showed' : undefined}
+    >
+      {text}
+    </span>
   );
 }
 
@@ -526,8 +554,17 @@ export function FoodCostSection({ report, lowStockCount }: { report: BusinessRep
             <Panel>
               <div className="text-[11px] font-semibold uppercase tracking-widest text-stone-500">Wasted</div>
               <div className="mt-1 text-2xl font-bold tabular-nums">{f.wasteCents > 0 ? formatCents(f.wasteCents) : '—'}</div>
+              {f.cancelledOrderCount > 0 && (
+                <div className="mt-1 text-xs text-stone-500">{cancelledWasteText(f)}</div>
+              )}
             </Panel>
           </div>
+          {f.putBackAfterCookingCount > 0 && (
+            <Note tone="warn">
+              {plural(f.putBackAfterCookingCount, 'cancelled order')} had stock put back after cooking was marked. See
+              Refunds and cancelled orders.
+            </Note>
+          )}
           {!f.hasCosts && <Note>No prices are set on these ingredients yet. Add what you pay for them in Inventory to see the food cost.</Note>}
           {lowStock}
           <Panel>

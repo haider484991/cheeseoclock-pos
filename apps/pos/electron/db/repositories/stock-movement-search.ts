@@ -45,6 +45,13 @@ const FROM = `
   LEFT JOIN purchase_orders po ON po.id = sm.ref_purchase_order_id
 `;
 
+/**
+ * The filter chip a movement sits under. A 'count' row written by a cancel
+ * ("…already in the stock take", order-stock-repo.ts) is not a stock take
+ * anyone did: it sits with the order's sale rows, not under "Stock takes".
+ */
+const CHIP_REASON = `(CASE WHEN sm.reason = 'count' AND sm.ref_order_id IS NOT NULL THEN 'sale' ELSE sm.reason END)`;
+
 /** "moz  sauce" → ['moz', 'sauce'], each safe inside LIKE '%…%' ESCAPE '\'. */
 export function searchTokens(search: string | undefined): string[] {
   return (search ?? '')
@@ -62,7 +69,7 @@ function whereClause(
   const where: string[] = ['sm.deleted_at IS NULL'];
   const params: unknown[] = [];
   if (includeReason && opts.reason) {
-    where.push('sm.reason = ?');
+    where.push(`${CHIP_REASON} = ?`);
     params.push(opts.reason);
   }
   if (opts.ingredientId) {
@@ -100,7 +107,9 @@ export function searchMovements(db: AppDatabase, input?: StockMovementSearch): S
     .prepare(
       `SELECT sm.id, sm.ingredient_id, sm.delta_qty, sm.reason, sm.ref_order_id, sm.ref_purchase_order_id,
               sm.notes, sm.actor_user_id, sm.occurred_at, sm.resulting_qty,
-              i.name AS ingredient_name, i.unit AS unit, u.full_name AS actor_name,
+              i.name AS ingredient_name,
+              -- the unit the row was written in (0029): "−2 kg" stays 2 kg after a Convert to g
+              COALESCE(sm.unit, i.unit) AS unit, u.full_name AS actor_name,
               o.order_number AS order_number, po.reference_no AS po_ref
          ${FROM}
         WHERE ${filtered.sql}
@@ -112,7 +121,7 @@ export function searchMovements(db: AppDatabase, input?: StockMovementSearch): S
   // The chip counts ignore the reason filter, so every chip says what it would show.
   const unreasoned = whereClause(opts, false);
   const counts = db
-    .prepare(`SELECT sm.reason AS reason, COUNT(*) AS n ${FROM} WHERE ${unreasoned.sql} GROUP BY sm.reason`)
+    .prepare(`SELECT ${CHIP_REASON} AS reason, COUNT(*) AS n ${FROM} WHERE ${unreasoned.sql} GROUP BY 1`)
     .all(...unreasoned.params) as Array<{ reason: StockMovementReason; n: number }>;
   const reasonCounts: StockMovementPage['reasonCounts'] = {};
   for (const c of counts) reasonCounts[c.reason] = c.n;

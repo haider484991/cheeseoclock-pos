@@ -23,6 +23,7 @@ import {
   hourSeries,
   methodLabel,
   percentOf,
+  stockCellText,
 } from './reportFormat';
 
 // --------------------------------------------------------------------- CSV --
@@ -158,15 +159,33 @@ export function buildCsv(r: BusinessReport, period: ReportPeriod, madeAt: Date =
   }
 
   heading('Refunds');
-  rows.push(['Refunded', 'Order', 'Order started', 'Amount Rs', 'Paid back as', 'Whole order', 'Reason', 'Approved by']);
+  rows.push(['Refunded', 'Order', 'Order started', 'Amount Rs', 'Paid back as', 'Whole order', 'Reason', 'Stock', 'Approved by']);
   for (const x of r.refunds) {
-    rows.push([fmtWhen(x.refundedAt), x.orderNumber, fmtWhen(x.orderCreatedAt), rs(x.amountCents), methodLabel(x.method), x.full ? 'Yes' : 'No', x.reason, x.approvedBy]);
+    rows.push([
+      fmtWhen(x.refundedAt),
+      x.orderNumber,
+      fmtWhen(x.orderCreatedAt),
+      rs(x.amountCents),
+      methodLabel(x.method),
+      x.full ? 'Yes' : 'No',
+      x.reason,
+      stockCellText(x.stock, r.foodCost.hasCosts),
+      x.approvedBy,
+    ]);
   }
 
   heading('Cancelled before payment');
-  rows.push(['Cancelled', 'Order', 'Value Rs', 'Reason', 'Approved by', 'Taken by']);
+  rows.push(['Cancelled', 'Order', 'Value Rs', 'Reason', 'Stock', 'Approved by', 'Taken by']);
   for (const v of r.voids) {
-    rows.push([fmtWhen(v.voidedAt ?? v.createdAt), v.orderNumber, rs(v.amountCents), v.reason, v.approvedBy, v.takenBy]);
+    rows.push([
+      fmtWhen(v.voidedAt ?? v.createdAt),
+      v.orderNumber,
+      rs(v.amountCents),
+      v.reason,
+      stockCellText(v.stock, r.foodCost.hasCosts),
+      v.approvedBy,
+      v.takenBy,
+    ]);
   }
 
   heading(
@@ -185,6 +204,9 @@ export function buildCsv(r: BusinessReport, period: ReportPeriod, madeAt: Date =
     rows.push([i.name, i.unit, i.usedQty, rs(i.usedCents), i.wastedQty, rs(i.wastedCents)]);
   }
   rows.push(['Total', null, null, rs(r.foodCost.usedCents), null, rs(r.foodCost.wasteCents)]);
+  if (r.foodCost.cancelledOrderCount > 0) {
+    rows.push(['Of the waste: food made for cancelled orders', null, null, null, r.foodCost.cancelledOrderCount, rs(r.foodCost.cancelledWasteCents)]);
+  }
 
   heading('Deliveries by rider');
   rows.push(['Rider', 'Deliveries', 'Sales Rs', 'Average time on the road (minutes)']);
@@ -404,13 +426,14 @@ export function buildPrintBody(r: BusinessReport, period: ReportPeriod, madeAt: 
     const list = limited(r.refunds, 25);
     parts.push(
       `<section><h2>Refunds</h2>${table(
-        ['When', 'Order', 'Amount', 'Paid back as', 'Reason', 'Approved by'],
+        ['When', 'Order', 'Amount', 'Paid back as', 'Reason', 'Stock', 'Approved by'],
         list.shown.map((x) => [
           esc(fmtWhen(x.refundedAt)),
           esc(x.orderNumber),
           `${money(x.amountCents)}${x.full ? ' (whole order)' : ''}`,
           esc(methodLabel(x.method)),
           esc(x.reason),
+          esc(stockCellText(x.stock, r.foodCost.hasCosts)),
           esc(x.approvedBy),
         ]),
         [2],
@@ -422,12 +445,13 @@ export function buildPrintBody(r: BusinessReport, period: ReportPeriod, madeAt: 
     const list = limited(r.voids, 25);
     parts.push(
       `<section><h2>Cancelled before payment</h2>${table(
-        ['When', 'Order', 'Value', 'Reason', 'Approved by', 'Taken by'],
+        ['When', 'Order', 'Value', 'Reason', 'Stock', 'Approved by', 'Taken by'],
         list.shown.map((v) => [
           esc(fmtWhen(v.voidedAt ?? v.createdAt)),
           esc(v.orderNumber),
           money(v.amountCents),
           esc(v.reason),
+          esc(stockCellText(v.stock, r.foodCost.hasCosts)),
           esc(v.approvedBy),
           esc(v.takenBy),
         ]),

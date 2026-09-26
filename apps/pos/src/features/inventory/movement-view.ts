@@ -4,6 +4,7 @@
  * movement-view.test.ts); `now` is passed in so tests can pin the clock.
  */
 
+import { orderStockNoteKind } from '@cheeseoclock/pos-domain';
 import type { StockMovement } from '@cheeseoclock/shared-types';
 
 export type MovementTone = 'blue' | 'green' | 'red' | 'amber' | 'purple' | 'stone';
@@ -11,18 +12,33 @@ export type MovementTone = 'blue' | 'green' | 'red' | 'amber' | 'purple' | 'ston
 /**
  * "Sale", "Returned", "Delivery", "Waste", "Stock take", "Batch", "Fix".
  * Batches are recorded as adjustments with a note ("Made 2 batches",
- * "Used in 1 batch of Pizza Sauce"), and a cancelled order puts its stock
- * back as a positive sale.
+ * "Used in 1 batch of Pizza Sauce"). A cancelled or refunded order is
+ * settled against itself ("Was the food made?", notes from pos-domain
+ * orderStockNote): not made → "Returned"; made → a "Moved to waste" row that
+ * undoes the sale (bookkeeping: `quiet`, shown without the green +) and a
+ * "Waste" row; a stock take that already counted it → "Already counted".
+ * Stock the other till took and this one put back reads "Returned" too; its
+ * note says it went back "on the till that sent it".
  */
-export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'notes'>): { label: string; tone: MovementTone } {
+export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'notes'>): {
+  label: string;
+  tone: MovementTone;
+  /** Bookkeeping that moves the count but is not news: no green / red change. */
+  quiet?: boolean;
+} {
+  const kind = orderStockNoteKind(m.notes);
   switch (m.reason) {
     case 'sale':
+      if (m.deltaQty > 0 && kind === 'moved_to_waste') return { label: 'Moved to waste', tone: 'stone', quiet: true };
+      if (m.deltaQty > 0 && kind === 'already_counted') return { label: 'Already counted', tone: 'stone', quiet: true };
       return m.deltaQty > 0 ? { label: 'Returned', tone: 'stone' } : { label: 'Sale', tone: 'blue' };
     case 'delivery':
       return { label: 'Delivery', tone: 'green' };
     case 'waste':
       return { label: 'Waste', tone: 'red' };
     case 'count':
+      // Written by a cancel, not by someone counting: the stock take had already seen it.
+      if (kind === 'already_counted') return { label: 'Already counted', tone: 'stone', quiet: true };
       return { label: 'Stock take', tone: 'amber' };
     case 'transfer':
       return { label: 'Transfer', tone: 'stone' };
@@ -31,6 +47,25 @@ export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'no
         ? { label: 'Batch', tone: 'purple' }
         : { label: 'Fix', tone: 'stone' };
   }
+}
+
+/**
+ * The Details column: "Order #42 · Cancelled, not made — put back",
+ * "Order #42 · Cancelled after cooking — counted as waste".
+ */
+export function movementDetails(m: {
+  orderNumber: string | null;
+  refPurchaseOrderId: string | null;
+  purchaseOrderRef: string | null;
+  notes: string | null;
+}): string {
+  return [
+    m.orderNumber ? `Order #${m.orderNumber.split('-').pop() ?? m.orderNumber}` : null,
+    m.refPurchaseOrderId && !(m.notes ?? '').startsWith('PO ') ? `PO ${m.purchaseOrderRef ?? m.refPurchaseOrderId.slice(0, 8)}` : null,
+    m.notes,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 export type DateRange = 'today' | '7d' | '30d' | 'all';

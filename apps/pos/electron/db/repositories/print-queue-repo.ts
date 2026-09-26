@@ -25,13 +25,26 @@ export interface ReceiptJobPayload {
   /** Printed in this order, on one strip; the drawer (if any) opens with the first copy. */
   copies: ReceiptCopy[];
   reason: ReceiptJobReason;
+  /** A refund slip: the paid_at shared by that refund's rows (which refund it is for). */
+  refundAt?: string;
+  /** Who was signed in when it was queued, or who pressed Reprint. */
+  requestedByUserId?: string | null;
+  /** The manager whose PIN or password allowed a reprint. */
+  approvedByUserId?: string | null;
 }
 
 export interface KitchenJobPayload {
   kind: 'kitchen';
   orderId: string;
-  /** Stamped REPRINT on paper so the line doesn't cook it twice. */
+  /**
+   * Printed by hand (the chef-hat button). The REPRINT stamp itself comes
+   * from the print log, not from this flag.
+   */
   reprint: boolean;
+  /** The order was cancelled while the kitchen had it: "CANCELLED — DO NOT MAKE". */
+  cancelled?: boolean;
+  /** Who was signed in when it was queued, or who pressed the button. */
+  requestedByUserId?: string | null;
 }
 
 /** Just the drawer pulse — money in, no paper. */
@@ -75,13 +88,24 @@ interface RawPayload {
   copies?: ReceiptCopy[];
   reason?: ReceiptJobReason;
   reprint?: boolean;
+  cancelled?: boolean;
+  refundAt?: unknown;
+  requestedByUserId?: unknown;
+  approvedByUserId?: unknown;
+}
+
+/** A user id kept only when it is one (a string); anything else is dropped. */
+function optId(v: unknown): { requestedByUserId?: string } | Record<string, never> {
+  return typeof v === 'string' && v ? { requestedByUserId: v } : {};
 }
 
 function parsePayload(kind: PrintJobKind, json: string): PrintJobPayload {
   const raw = JSON.parse(json) as RawPayload;
   switch (kind) {
     case 'kitchen':
-      return { kind, orderId: raw.orderId, reprint: raw.reprint === true };
+      return raw.cancelled === true
+        ? { kind, orderId: raw.orderId, reprint: false, cancelled: true, ...optId(raw.requestedByUserId) }
+        : { kind, orderId: raw.orderId, reprint: raw.reprint === true, ...optId(raw.requestedByUserId) };
     case 'drawer':
       return { kind, orderId: raw.orderId };
     default:
@@ -92,6 +116,11 @@ function parsePayload(kind: PrintJobKind, json: string): PrintJobPayload {
         openDrawer: raw.openDrawer === true,
         copies: Array.isArray(raw.copies) && raw.copies.length > 0 ? raw.copies : ['customer'],
         reason: raw.reason ?? 'payment',
+        ...(typeof raw.refundAt === 'string' && raw.refundAt ? { refundAt: raw.refundAt } : {}),
+        ...optId(raw.requestedByUserId),
+        ...(typeof raw.approvedByUserId === 'string' && raw.approvedByUserId
+          ? { approvedByUserId: raw.approvedByUserId }
+          : {}),
       };
   }
 }
@@ -191,9 +220,108 @@ export function claimNextPendingJob(db: AppDatabase): PrintJobRow | null {
 export function markJobDone(db: AppDatabase, id: string, note: string | null = null): void {
   const now = nowIso();
   db.prepare(
-    `UPDATE print_queue SET status = 'done', completed_at = ?, updated_at = ?, last_error = ?
+    `UPDATE print_queue SET status = 'done', completed_at = ?, updated_at = ?, last_error = ?,
+                            sending_plan_json = NULL
       WHERE id = ?`,
   ).run(now, now, note, id);
+}
+
+/**
+ * A job not yet finished — pending (due, in backoff or waiting for FBR) or
+ * being sent now — for this order and kind. For receipts, one that prints
+ * `copy` and is not a refund slip; for the kitchen, a ticket (not a
+ * CANCELLED slip). A reprint pressed meanwhile joins it instead of printing
+ * a second paper.
+ */
+export function findOpenJob(
+  db: AppDatabase,
+  orderId: string,
+  kind: 'receipt' | 'kitchen',
+  copy: ReceiptCopy = 'customer',
+): PrintJobRow | null {
+  const rows = db
+    .prepare(
+      `SELECT ${SELECT} FROM print_queue
+        WHERE order_id = ? AND job_kind = ? AND status IN ('pending', 'in_flight')
+        ORDER BY rowid`,
+    )
+    .all(orderId, kind) as RawRow[];
+  for (const r of rows) {
+    const job = rowToJob(r);
+    const p = job.payload;
+    if (p.kind === 'kitchen' && p.cancelled !== true) return job;
+    if (p.kind === 'receipt' && p.reason !== 'refund' && p.copies.includes(copy)) return job;
+  }
+  return null;
+}
+
+/** A pending job goes now (a reprint joined it): no more backoff wait. */
+export function retryNow(db: AppDatabase, id: string): void {
+  const now = nowIso();
+  db.prepare(
+    `UPDATE print_queue SET next_attempt_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'`,
+  ).run(now, now, id);
+}
+
+/**
+ * What the job is about to send (its copies and their place in the print
+ * log), written just before the bytes go out. Still there at boot on a job
+ * in flight: those papers may exist.
+ */
+export function setSendingPlan(db: AppDatabase, id: string, plan: unknown): void {
+  db.prepare(`UPDATE print_queue SET sending_plan_json = ?, updated_at = ? WHERE id = ?`).run(
+    plan === null ? null : JSON.stringify(plan),
+    nowIso(),
+    id,
+  );
+}
+
+/** Jobs cut off mid-send (in flight with a plan) — for the boot check, before they are re-queued. */
+export function listInFlightWithPlan(db: AppDatabase): Array<{ job: PrintJobRow; plan: unknown }> {
+  const rows = db
+    .prepare(
+      `SELECT ${SELECT}, sending_plan_json AS plan FROM print_queue
+        WHERE status = 'in_flight' AND sending_plan_json IS NOT NULL AND sending_plan_json != '"legacy"'
+        ORDER BY rowid`,
+    )
+    .all() as Array<RawRow & { plan: string }>;
+  const out: Array<{ job: PrintJobRow; plan: unknown }> = [];
+  for (const r of rows) {
+    try {
+      out.push({ job: rowToJob(r), plan: JSON.parse(r.plan) as unknown });
+    } catch {
+      // A plan that can't be read is no evidence either way.
+    }
+  }
+  return out;
+}
+
+/**
+ * Jobs for an order that must not print any more because it was cancelled:
+ * its kitchen tickets still waiting (never a CANCELLED slip), and on a void
+ * its bills too (a dispatch bill or a reprint not yet out). Refund slips and
+ * drawer pulses are never touched. Marked done with `note`; returns how many.
+ * A job being sent right now is left alone.
+ */
+export function cancelPendingJobs(
+  db: AppDatabase,
+  orderId: string,
+  opts: { bills: boolean; note: string },
+): number {
+  const rows = db
+    .prepare(`SELECT ${SELECT} FROM print_queue WHERE order_id = ? AND status = 'pending' ORDER BY rowid`)
+    .all(orderId) as RawRow[];
+  let n = 0;
+  for (const r of rows) {
+    const p = rowToJob(r).payload;
+    const stop =
+      (p.kind === 'kitchen' && p.cancelled !== true) ||
+      (opts.bills && p.kind === 'receipt' && (p.reason === 'dispatch' || p.reason === 'reprint'));
+    if (!stop) continue;
+    markJobDone(db, r.id, opts.note);
+    n += 1;
+  }
+  return n;
 }
 
 /**
@@ -214,7 +342,8 @@ export function rescheduleJob(
             attempts = attempts + 1,
             last_error = ?,
             next_attempt_at = ?,
-            updated_at = ?
+            updated_at = ?,
+            sending_plan_json = NULL
       WHERE id = ?`,
   ).run(errorMessage, next, new Date(now).toISOString(), id);
 }
@@ -228,7 +357,7 @@ export function deferJob(db: AppDatabase, id: string, delayMs: number): void {
   const now = Date.now();
   db.prepare(
     `UPDATE print_queue
-        SET status = 'pending', next_attempt_at = ?, updated_at = ?
+        SET status = 'pending', next_attempt_at = ?, updated_at = ?, sending_plan_json = NULL
       WHERE id = ?`,
   ).run(new Date(now + delayMs).toISOString(), new Date(now).toISOString(), id);
 }
@@ -244,7 +373,8 @@ export function markJobFailedPermanently(
         SET status = 'failed',
             attempts = attempts + 1,
             last_error = ?,
-            updated_at = ?
+            updated_at = ?,
+            sending_plan_json = NULL
       WHERE id = ?`,
   ).run(errorMessage, now, id);
 }
@@ -291,11 +421,17 @@ export function listRecentFailedJobs(db: AppDatabase, limit = 20): PrintJobRow[]
   return rows.map(rowToJob);
 }
 
+/**
+ * Finished jobs past their keep time. The ones printed before the print log
+ * existed (marked "legacy" by migration 0030) stay: they are the only record
+ * that those receipts went out, so a reprint of them still says DUPLICATE.
+ */
 export function purgeOldDoneJobs(db: AppDatabase, olderThanIso: string): number {
   const result = db
     .prepare(
       `DELETE FROM print_queue
-        WHERE status = 'done' AND completed_at < ?`,
+        WHERE status = 'done' AND completed_at < ?
+          AND (sending_plan_json IS NULL OR sending_plan_json != '"legacy"')`,
     )
     .run(olderThanIso);
   return result.changes;

@@ -1,7 +1,10 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
+import { requireCapability, REFUSED } from '../guards.js';
+import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
 import { ok, hasCapability } from '@cheeseoclock/shared-types';
-import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
+import { orderStockAnswerSchema } from '@cheeseoclock/shared-schemas';
 import {
   getCurrentSession,
   verifyManagerPin,
@@ -32,14 +35,22 @@ import {
   unassignRiderFromOrder,
   markOrderServed,
   markOrderDelivered,
+  findOrder,
 } from '../../db/repositories/order-repo.js';
-import { requiresManagerApproval, validateOrderForTender } from '@cheeseoclock/pos-domain';
+import {
+  IN_THE_KITCHEN,
+  requiresManagerApproval,
+  stockSettlementForCounter,
+  stockStatusForCounter,
+  validateOrderForTender,
+} from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
 import { mapOrderToFbrPayload, mapRefundToFbrDebitNote } from '@cheeseoclock/fbr-core';
 import { getFbrConfig, toSellerInfo } from '../../services/fbr-config.js';
 import { enqueueFbrSubmission, getFbrRowByOrder } from '../../db/repositories/fbr-queue-repo.js';
 import { fbrWorker } from '../../services/fbr-worker.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
+import { getOrderStockStatus } from '../../db/repositories/order-stock-repo.js';
 import {
   snapshotCustomerOntoOrder,
   detachCustomerFromOrder,
@@ -54,9 +65,55 @@ function requireOrderCreate(): AuthenticatedUser {
   return session;
 }
 
+/**
+ * Ingredient quantities and food cost are the owner's business data: only a
+ * login that may open Inventory (`menu.manage`, as inventory-handlers
+ * requireStockView) sees them. A counter login still gets the question.
+ */
+function mayViewStock(s: AuthenticatedUser): boolean {
+  return hasCapability(s.role, 'menu.manage');
+}
+
+/** What a cancel / refund did to stock, as this login may read it. */
+function stockForLogin(s: AuthenticatedUser, stock: StockSettlement | null): StockSettlement | null {
+  if (!stock || mayViewStock(s)) return stock;
+  return stockSettlementForCounter(stock);
+}
+
+/** What to say when one part of the stock answer is malformed. */
+const STOCK_ANSWER_REFUSED: Record<keyof OrderStockAnswer, string> = {
+  foodMade: 'Say whether the food was made',
+  putBack: 'Pick which drinks go back',
+  expectStatus: 'Close this and check the order again',
+};
+
+/**
+ * The stock half of a cancel / refund, checked at the boundary: "Was the food
+ * made?" is 'made', 'not_made' or not given (the repository then refuses when
+ * the order still holds stock in the shop — the till never guesses).
+ */
+function stockAnswer(payload: { foodMade?: unknown; putBack?: unknown; expectStatus?: unknown }): OrderStockAnswer {
+  const parsed = orderStockAnswerSchema.safeParse({
+    foodMade: payload.foodMade,
+    putBack: payload.putBack,
+    expectStatus: payload.expectStatus,
+  });
+  if (!parsed.success) {
+    const field = parsed.error.issues[0]?.path[0] as keyof OrderStockAnswer | undefined;
+    throw new IpcGuardError({ code: 'precondition_failed', message: STOCK_ANSWER_REFUSED[field ?? 'foodMade'] });
+  }
+  const out: OrderStockAnswer = {};
+  if (parsed.data.foodMade !== undefined) out.foodMade = parsed.data.foodMade;
+  if (parsed.data.putBack !== undefined) out.putBack = parsed.data.putBack;
+  if (parsed.data.expectStatus !== undefined) out.expectStatus = parsed.data.expectStatus;
+  return out;
+}
+
 export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:create', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    // The same address rule as the attach channels, before any row is written.
+    if (payload.customerId) assertCounterAddress(ctx.db, s, payload.customerId, payload.customerAddressId);
     const order = createOrder(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
     // If the cashier already picked a customer, snapshot them onto the order now.
     if (payload.customerId) {
@@ -75,6 +132,9 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:attachCustomer', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    // Only a bill still being rung up (see order-access.ts).
+    assertOrderStillBeingTaken(ctx.db, payload.orderId);
+    assertCounterAddress(ctx.db, s, payload.customerId, payload.addressId);
     try {
       snapshotCustomerOntoOrder(
         ctx.db,
@@ -99,6 +159,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:detachCustomer', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    assertOrderStillBeingTaken(ctx.db, payload.orderId);
     try {
       detachCustomerFromOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
     } catch (e) {
@@ -112,19 +173,25 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     return ok(snap);
   });
 
+  // Past orders are for managers and the owner (`order.history`, owner
+  // 2026-09-26): a counter login gets the board and Recent Orders.
   defineHandler('orders:list', ctx, (_ctx, payload) => {
-    requireOrderCreate();
+    requireCapability('order.history', REFUSED.history);
     return ok(listOrders(ctx.db, payload ?? {}));
   });
 
   defineHandler('orders:history', ctx, (_ctx, payload) => {
-    requireOrderCreate();
+    requireCapability('order.history', REFUSED.history);
     return ok(listOrderHistory(ctx.db, payload ?? {}));
   });
 
+  // Checkout reads its own draft; a counter login opens only the draft, board
+  // orders and this shift's orders (order-access.ts).
   defineHandler('orders:get', ctx, (_ctx, payload) => {
-    requireOrderCreate();
-    return ok(getOrderSnapshot(ctx.db, payload.id));
+    const s = requireOrderCreate();
+    const snap = getOrderSnapshot(ctx.db, payload.id);
+    if (snap) assertCounterMaySee(ctx.db, s, snap.order, 'open');
+    return ok(snap);
   });
 
   defineHandler('orders:addItem', ctx, (_ctx, payload) => {
@@ -512,6 +579,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:void', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();
+    const answer = stockAnswer(payload);
     if (!payload.reason || !payload.reason.trim()) {
       throw new IpcGuardError({
         code: 'precondition_failed',
@@ -531,10 +599,11 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         message: e instanceof Error ? e.message : 'Manager approval failed',
       });
     }
+    let done: ReturnType<typeof voidOrder>;
     try {
-      voidOrder(
+      done = voidOrder(
         ctx.db,
-        { orderId: payload.orderId, reason: payload.reason.trim(), approverUserId },
+        { orderId: payload.orderId, reason: payload.reason.trim(), approverUserId, ...answer },
         { userId: s.id, deviceId: ctx.deviceId },
       );
     } catch (e) {
@@ -545,11 +614,27 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
-    return ok(snap);
+    // Still with the kitchen: a CANCELLED slip so the line stops (per Settings → Printer).
+    if (IN_THE_KITCHEN.includes(done.statusBefore)) printSpooler.onOrderEvent(payload.orderId, 'cancelled');
+    return ok({ ...snap, stock: stockForLogin(s, done.stock) });
+  });
+
+  // The question for the Cancel / Refund dialogs, and the Order History line.
+  // A counter login reads it only for an order it may open, and without the
+  // ingredient lines or costs (stockForLogin).
+  defineHandler('orders:stockStatus', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const order = findOrder(ctx.db, payload.orderId);
+    if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    assertCounterMaySee(ctx.db, s, order, 'open');
+    const status = getOrderStockStatus(ctx.db, payload.orderId, ctx.deviceId, Date.now());
+    if (!status) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(mayViewStock(s) ? status : stockStatusForCounter(status));
   });
 
   defineHandler('orders:refund', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();
+    const answer = stockAnswer(payload);
     if (!payload.reason || !payload.reason.trim()) {
       throw new IpcGuardError({
         code: 'precondition_failed',
@@ -566,8 +651,9 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         message: e instanceof Error ? e.message : 'Manager approval failed',
       });
     }
+    let done: ReturnType<typeof refundOrder>;
     try {
-      refundOrder(
+      done = refundOrder(
         ctx.db,
         {
           orderId: payload.orderId,
@@ -575,6 +661,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
           approverUserId,
           ...(payload.amountCents !== undefined ? { amountCents: payload.amountCents } : {}),
           ...(payload.method ? { method: payload.method } : {}),
+          ...answer,
         },
         { userId: s.id, deviceId: ctx.deviceId },
       );
@@ -596,6 +683,10 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     printSpooler.onOrderEvent(payload.orderId, 'refunded', {
       cash: thisRefund.some((p) => p.method === 'cash'),
     });
+    // Refunded in full while the kitchen still had it: the line stops.
+    if (done.order.status === 'refunded' && IN_THE_KITCHEN.includes(done.statusBefore)) {
+      printSpooler.onOrderEvent(payload.orderId, 'cancelled');
+    }
 
     // Tell FBR: a refund is a Debit Note against the sale invoice. Only when
     // FBR actually accepted the sale — otherwise there is nothing to reverse.
@@ -623,6 +714,6 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
       console.warn('FBR debit note enqueue failed (refund not affected):', e);
     }
-    return ok(snap);
+    return ok({ ...snap, stock: stockForLogin(s, done.stock) });
   });
 }

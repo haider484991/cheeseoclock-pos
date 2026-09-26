@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PublishedMenu, PublishedMenuItem } from '@cheeseoclock/shared-types';
+import type { PublishedMenu, PublishedMenuItem, PublishedModifierGroup } from '@cheeseoclock/shared-types';
 import {
   buildMenuView,
   dealWorthCents,
@@ -8,6 +8,7 @@ import {
   isPickupOnly,
   menuWithoutDrinkBrand,
   optionLabel,
+  sheetGroups,
   shopPhotoFor,
   sizeLabel,
   splitSizedName,
@@ -239,6 +240,79 @@ describe('labels', () => {
   it('finds photos case-insensitively', () => {
     expect(shopPhotoFor('Signature Cheese Dipped')).toBe('/images/menu/signature-cheese-dipped.webp');
     expect(shopPhotoFor('Fajita Pizza')).toBeNull();
+  });
+});
+
+describe('sheetGroups', () => {
+  function group(name: string, sortOrder: number, options: string[], required = false): PublishedModifierGroup {
+    return {
+      posGroupId: `g:${name}`,
+      name,
+      selectionType: required ? 'single' : 'multi',
+      minSelect: required ? 1 : 0,
+      maxSelect: required ? 1 : options.length,
+      isRequired: required,
+      sortOrder,
+      modifiers: options.map((o, i) => ({
+        posModifierId: `m:${name}:${o}`,
+        name: o,
+        priceDeltaCents: 0,
+        isDefault: false,
+        sortOrder: i,
+      })),
+    };
+  }
+  const labels = (menuItem: PublishedMenuItem) => sheetGroups(menuItem).map((g) => groupLabel(g));
+
+  it('asks a pizza’s dips on the side, then extras, then leave-outs — as the till does', () => {
+    // The shop's till stored these leave-outs first; the published sortOrder says so.
+    const fajita = item('Fajita Pizza — Large', 2000, {
+      modifierGroups: [
+        group('Dips on the side', 2, ['Side of Ranch', 'Side of Sriracha']),
+        group('Leave out · Fajita Pizza', 0, ['No onion', 'No bell pepper']),
+        group('Extra toppings', 1, ['Extra cheese', 'Extra onion']),
+      ],
+    });
+    expect(labels(fajita)).toEqual(['Dips on the side', 'Extra toppings', 'Leave out']);
+  });
+
+  it('asks what the item cannot go without first', () => {
+    const veggie = item('Veggie Lovers — Medium', 1500, {
+      modifierGroups: [
+        group('Leave out · Veggie Lovers', 1, ['No sauce', 'No cheese']),
+        group('Extra toppings', 2, ['Extra olives']),
+        group('Dips on the side', 3, ['Side of Ranch']),
+        // Attached last by hand on the till: still asked first.
+        { ...group('Veggie Lovers — Choose 5 veggies', 4, ['Onion', 'Olives'], true), selectionType: 'multi', maxSelect: 5 },
+      ],
+    });
+    expect(labels(veggie)).toEqual(['Choose up to 5 veggies', 'Dips on the side', 'Extra toppings', 'Leave out']);
+  });
+
+  it('a deal: its pizzas in slot order, then dips, then leave-outs', () => {
+    const bigTwo = item('Big Two', 3600, {
+      modifierGroups: [
+        group('Leave out · Deals', 2, ['No onion']),
+        group('Dips on the side', 3, ['Side of Ranch']),
+        group('Deal: 2nd Large pizza', 1, ['2nd Large: Fajita Pizza'], true),
+        group('Deal: Large pizza', 0, ['Large: Fajita Pizza'], true),
+      ],
+    });
+    expect(labels(bigTwo)).toEqual(['Large pizza', '2nd Large pizza', 'Dips on the side', 'Leave out']);
+    // Leaves the published menu alone.
+    expect(bigTwo.modifierGroups.map((g) => g.name)[0]).toBe('Leave out · Deals');
+  });
+
+  it('a burger with a dip of its choice', () => {
+    const burger = item('Crispy Signature', 1100, {
+      modifierGroups: [
+        group('Choose your dip', 0, ['Ranch', 'Sriracha'], true),
+        group('Leave out · Crispy Signature', 1, ['No lettuce']),
+        group('Extras · Burgers', 2, ['Add cheese']),
+        group('Dips on the side', 3, ['Side of Ranch']),
+      ],
+    });
+    expect(labels(burger)).toEqual(['Choose your dip', 'Dips on the side', 'Extras', 'Leave out']);
   });
 });
 

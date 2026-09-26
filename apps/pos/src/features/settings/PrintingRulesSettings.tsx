@@ -163,7 +163,7 @@ export function PrintingRulesSettings() {
         <Rule
           icon={RotateCcw}
           title="Refunds and reprints"
-          body="A refund prints a refund receipt (the drawer opens when cash goes back out). A reprinted receipt never opens the drawer. The print buttons on the Live Orders board, in order history and on the payment screen print the receipt or the kitchen ticket again — a reprinted kitchen ticket is stamped REPRINT so nothing is cooked twice."
+          body="Every paper says what it is. A paid receipt says RECEIPT and PAID - CASH (or the method); a bill before payment says BILL - NOT PAID, and a delivery bill says CASH ON DELIVERY and what the rider collects. A refund prints a REFUND slip (the drawer opens when cash goes back out, and a cash refund also prints a SHOP COPY for the customer to sign, unless shop copies are set to Never); a cancelled order only ever prints as CANCELLED ORDER - nothing to pay. Any second copy of a receipt or bill says DUPLICATE at the top, in the middle and at the bottom, with the reprint number, time and who asked; a printer retry says so too. A counter login gets one copy of a paid receipt for the order in front of it; any more, or an older order, needs a manager's PIN or password. A reprinted kitchen ticket says REPRINT - SAME ORDER, DO NOT COOK TWICE, and a cancelled one CANCELLED - DO NOT MAKE. Reprints never open the drawer and never go to FBR again; every paper is kept in the audit trail."
           control={<span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Always</span>}
         />
       </ul>

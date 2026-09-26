@@ -11,6 +11,7 @@ import type {
   PaymentMethod,
 } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
+import { reprintReceipt, reprintToast } from '../printing/reprint';
 import { useToast } from '../../components/toast/ToastProvider';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
 import { ModeBadge, StatusBadge } from './OrderBadges';
@@ -87,10 +88,21 @@ export function OrderHistoryPage() {
   const summary = page?.summary;
 
   const reprintMut = useMutation({
-    mutationFn: (orderId: string) => ipc.printer.reprint(orderId),
-    onSuccess: () => toast({ title: 'Receipt sent to printer' }),
+    mutationFn: (orderId: string) => reprintReceipt(orderId),
+    onSuccess: (r) => {
+      toast({ title: reprintToast(r) });
+      // The paper goes into the log once the printer took it: look again shortly.
+      setTimeout(() => void reprintCountsQ.refetch(), 2_000);
+    },
     onError: (e) =>
       toast({ title: 'Reprint failed', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
+  });
+  // "Reprinted ×N" beside the printer button: papers printed again by hand.
+  const rowIds = rows.map((o) => o.id);
+  const reprintCountsQ = useQuery({
+    queryKey: ['printer', 'reprintCounts', rowIds],
+    queryFn: () => ipc.printer.reprintCounts(rowIds),
+    enabled: rowIds.length > 0,
   });
 
   const filtersActive =
@@ -334,6 +346,7 @@ export function OrderHistoryPage() {
                     onOpen={() => setOpenId(o.id)}
                     onReprint={() => reprintMut.mutate(o.id)}
                     reprinting={reprintMut.isPending && reprintMut.variables === o.id}
+                    reprints={reprintCountsQ.data?.[o.id] ?? 0}
                   />
                 ))}
               </tbody>
@@ -379,11 +392,14 @@ function HistoryRow({
   onOpen,
   onReprint,
   reprinting,
+  reprints = 0,
 }: {
   o: OrderHistoryRow;
   onOpen: () => void;
   onReprint: () => void;
   reprinting: boolean;
+  /** Receipts / bills printed again by hand (the print log). */
+  reprints?: number;
 }) {
   const owed = isOwed(o);
   const cancelled = o.status === 'void' || o.status === 'refunded';
@@ -442,7 +458,15 @@ function HistoryRow({
       <td className="px-3 py-2.5">
         <StatusBadge status={o.status} />
       </td>
-      <td className="px-3 py-2.5 text-right">
+      <td className="whitespace-nowrap px-3 py-2.5 text-right">
+        {reprints > 0 && (
+          <span
+            title={`Printed again by hand ${reprints} time${reprints === 1 ? '' : 's'} (each copy says DUPLICATE)`}
+            className="mr-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+          >
+            Reprinted ×{reprints}
+          </span>
+        )}
         <button
           type="button"
           onClick={(e) => {

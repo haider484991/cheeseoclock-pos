@@ -30,7 +30,8 @@ export interface ValidationResult {
  * Can this order be tendered RIGHT NOW? World-standard POS rules:
  *  - Must have at least one item with positive subtotal.
  *  - Dine-in: table required.
- *  - Takeaway: customer phone OR name required (so the order can be called out).
+ *  - Takeaway: nothing but items — the customer's name and phone are optional
+ *    (owner 2026-09-26); the order number is called out when there is no name.
  *  - Delivery: customer name + phone + address required.
  *  - Online: same as delivery (web channel still needs the address).
  *  - Foodpanda: aggregator channel — only needs items (platform owns the rest).
@@ -47,9 +48,7 @@ export function validateOrderForTender(ctx: OrderValidationContext): ValidationR
       if (!ctx.tableId) missing.push('Pick a table for dine-in');
       break;
     case 'takeaway':
-      if (!ctx.customerPhone && !ctx.customerName) {
-        missing.push('Takeaway needs a customer phone or name');
-      }
+      // Customer optional: a walk-in pays and takes the food.
       break;
     case 'delivery':
     case 'online':

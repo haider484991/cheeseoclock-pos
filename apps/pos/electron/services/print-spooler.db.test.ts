@@ -118,6 +118,8 @@ function openMigrated(): AppDatabase {
     raw.exec(readFileSync(join(MIGRATIONS, f), 'utf8'));
   }
   raw.exec('PRAGMA foreign_keys = OFF'); // FBR rows below point at made-up orders
+  // The print log "started" before the fixtures' made-up sale times (0030).
+  raw.exec(`UPDATE settings SET value_json = '"2026-01-01T00:00:00.000Z"' WHERE key = 'printing.printLogSince'`);
   let depth = 0;
   return {
     exec: (sql: string) => raw.exec(sql),
@@ -780,5 +782,40 @@ describe.skipIf(!DatabaseSync)('cash drawer: by hand', () => {
     ).toBe('The printer is not ready. Windows says the printer is off (status 0x80)');
     expect(drawerFailureText({ code: 'no_config', message: '', recoverable: false })).toMatch(/Settings → Printers/);
     expect(drawerFailureText(undefined)).toMatch(/did not take/);
+  });
+});
+
+describe.skipIf(!DatabaseSync)('kitchen: a cancelled order', () => {
+  it('the kitchen gets one CANCELLED slip after its ticket — never a drawer pulse, never a receipt', async () => {
+    const s = await spooler();
+    const oid = order('o0101', 'takeaway', []);
+    s.onOrderEvent(oid, 'sent_to_kitchen');
+    await s.whenIdle();
+    expect(sentKinds()).toEqual(['kitchen']);
+    s.onOrderEvent(oid, 'cancelled');
+    await s.whenIdle();
+    expect(sentKinds()).toEqual(['kitchen', 'kitchen']);
+    const slip = escPosToText(h.sends[1]!.bytes);
+    expect(slip).toContain('* CANCELLED *');
+    expect(slip).toContain('DO NOT MAKE - DO NOT SEND');
+    expect(slip).toContain('Test Pizza');
+    expect(totalKicks()).toBe(0);
+    expect(queueRows(db, oid, 'kitchen')).toHaveLength(2);
+  });
+
+  it('no slip when the kitchen never got a ticket from this till (or kitchen tickets are off)', async () => {
+    const s = await spooler();
+    s.onOrderEvent(order('o0102', 'takeaway', []), 'cancelled');
+    const { getPrintPolicy, setPrintPolicy } = await import('./printer-config.js');
+    setPrintPolicy(db, { ...getPrintPolicy(db), kitchenTicket: false });
+    const oid = order('o0103', 'takeaway', []);
+    const { enqueuePrintJob } = await import('../db/repositories/print-queue-repo.js');
+    enqueuePrintJob(db, { kind: 'kitchen', orderId: oid, reprint: false });
+    await s.whenIdle();
+    h.sends.length = 0;
+    s.onOrderEvent(oid, 'cancelled');
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(0);
+    expect(queueRows(db, 'o0102')).toHaveLength(0);
   });
 });

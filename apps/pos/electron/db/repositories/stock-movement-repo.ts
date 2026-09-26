@@ -81,6 +81,12 @@ export interface RecordMovementInput {
   refPurchaseOrderId?: string | null;
   notes?: string | null;
   occurredAtIso?: string;
+  /**
+   * False: the row is booked for the OTHER till's count (stock it took, put
+   * back or wasted from here when an order is settled on this till), so this
+   * till's count does not move. Default true.
+   */
+  countHere?: boolean;
 }
 
 /**
@@ -95,14 +101,15 @@ export function recordStockMovement(
   const id = uuidv7();
   const now = nowIso();
   const occurredAt = input.occurredAtIso ?? now;
+  const countHere = input.countHere !== false;
   let resultingQty = 0;
 
   const tx = db.transaction(() => {
     const ing = db
-      .prepare(`SELECT current_qty FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
-      .get(input.ingredientId) as { current_qty: number } | undefined;
+      .prepare(`SELECT current_qty, unit FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
+      .get(input.ingredientId) as { current_qty: number; unit: string } | undefined;
     if (!ing) throw new Error('Ingredient not found');
-    resultingQty = ing.current_qty + input.deltaQty;
+    resultingQty = countHere ? ing.current_qty + input.deltaQty : ing.current_qty;
 
     // Update the ingredient's running count. Not version or updated_at: those
     // are the second-till link's "who edited last" clock, and the count is
@@ -110,25 +117,29 @@ export function recordStockMovement(
     // new to it; the movement row below is what travels). Bumping them here
     // made every sale out-rank a manager's edit made on the other till, so
     // the edit was dropped on both tills.
-    db.prepare(`UPDATE ingredients SET current_qty = ? WHERE id = ?`).run(
-      resultingQty,
-      input.ingredientId,
-    );
+    if (countHere) {
+      db.prepare(`UPDATE ingredients SET current_qty = ? WHERE id = ?`).run(
+        resultingQty,
+        input.ingredientId,
+      );
 
-    enqueueSync(db, {
-      entityType: 'ingredients',
-      entityId: input.ingredientId,
-      op: 'upsert',
-      payload: { id: input.ingredientId, currentQty: resultingQty },
-    });
+      enqueueSync(db, {
+        entityType: 'ingredients',
+        entityId: input.ingredientId,
+        op: 'upsert',
+        payload: { id: input.ingredientId, currentQty: resultingQty },
+      });
+    }
 
-    // Insert the movement row
+    // Insert the movement row, stamped with the unit it is counted in (0029):
+    // a later Convert (kg → g) must not turn "2 kg" into "2 g" when this row
+    // is read back — cancelling the order, or valuing it in Reports.
     db.prepare(
       `INSERT INTO stock_movements
          (id, ingredient_id, delta_qty, reason, ref_order_id, ref_purchase_order_id,
-          notes, actor_user_id, occurred_at, resulting_qty,
+          notes, actor_user_id, occurred_at, resulting_qty, unit,
           created_at, updated_at, device_id, version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     ).run(
       id,
       input.ingredientId,
@@ -140,6 +151,7 @@ export function recordStockMovement(
       actor.userId,
       occurredAt,
       resultingQty,
+      ing.unit,
       now,
       now,
       actor.deviceId,
@@ -155,6 +167,8 @@ export function recordStockMovement(
         deltaQty: input.deltaQty,
         reason: input.reason,
         resultingQty,
+        unit: ing.unit,
+        refOrderId: input.refOrderId ?? null,
       },
     });
     writeAudit(db, {
@@ -163,7 +177,12 @@ export function recordStockMovement(
       action: input.reason,
       actorUserId: actor.userId,
       before: { qty: ing.current_qty },
-      after: { qty: resultingQty, delta: input.deltaQty, reason: input.reason },
+      after: {
+        qty: resultingQty,
+        delta: input.deltaQty,
+        reason: input.reason,
+        ...(countHere ? {} : { countHere: false }),
+      },
     });
   });
   tx();
@@ -280,46 +299,5 @@ export function decrementForOrder(
   return crossed;
 }
 
-/**
- * Put back the stock an order took when it is cancelled before the kitchen
- * started on it (status still `sent_to_kitchen`). Stock now leaves when the
- * order is sent, not when it is paid, so a cancelled order would otherwise
- * keep eating stock it never used. Once the kitchen has started, the food is
- * made and the stock stays gone (it is waste, not a sale that didn't happen).
- * Written as positive `sale` movements so the cost-of-sales report nets out.
- * Safe to call twice: a second call finds nothing left to put back.
- */
-export function returnStockForOrder(db: AppDatabase, orderId: string, actor: Actor): number {
-  let returned = 0;
-  const tx = db.transaction(() => {
-    const net = db
-      .prepare(
-        `SELECT ingredient_id, SUM(delta_qty) AS net
-           FROM stock_movements
-          WHERE ref_order_id = ? AND reason = 'sale' AND deleted_at IS NULL
-          GROUP BY ingredient_id`,
-      )
-      .all(orderId) as Array<{ ingredient_id: string; net: number }>;
-    for (const row of net) {
-      if (row.net >= 0) continue;
-      const exists = db
-        .prepare(`SELECT 1 FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
-        .get(row.ingredient_id);
-      if (!exists) continue;
-      recordStockMovement(
-        db,
-        {
-          ingredientId: row.ingredient_id,
-          deltaQty: -row.net,
-          reason: 'sale',
-          refOrderId: orderId,
-          notes: 'Order cancelled before cooking — stock put back',
-        },
-        actor,
-      );
-      returned += 1;
-    }
-  });
-  tx();
-  return returned;
-}
+// Putting an order's stock back (or booking it as waste) when it is cancelled
+// or refunded lives in order-stock-repo.ts: settleOrderStock.

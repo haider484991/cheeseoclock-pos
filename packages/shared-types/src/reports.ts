@@ -97,6 +97,8 @@ export interface ReportStaffLine {
   voidCount: number;
   /** Times this person opened the cash drawer with no sale (Open drawer, Test drawer). */
   noSaleOpens: number;
+  /** Receipts / bills / slips this person printed again by hand (the print log). */
+  reprints?: number;
 }
 
 export interface ReportShiftLine {
@@ -165,6 +167,33 @@ export interface ReportRefundLine {
   full: boolean;
   reason: string;
   approvedBy: string;
+  /**
+   * What the refund did to the order's stock. Only on the refund line that
+   * settled it (the latest one of a whole-order refund); null on every other.
+   */
+  stock: ReportOrderStock | null;
+}
+
+/** What a cancel or whole-order refund did to the order's stock ("Was the food made?"). */
+export interface ReportOrderStock {
+  /**
+   * What happened to the stock. 'returned': it went back on the shelf;
+   * 'wasted': booked as waste (sealed drinks may have gone back). A "Made"
+   * answer where only sealed drinks moved is 'returned' with answer 'made'.
+   */
+  outcome: 'returned' | 'wasted';
+  /** The answer to "Was the food made?" (from the till's record, or the stock rows' notes). */
+  answer: 'made' | 'not_made' | null;
+  /** Waste at today's ingredient prices (0 when put back, or no prices set). */
+  wasteCents: number;
+  /** The order's status when it was cancelled / refunded, when recorded. */
+  statusBefore: string | null;
+  /**
+   * Worth a look: answered "Not made" (put back) although cooking had been
+   * marked (preparing or ready), or the answer went against the hint the till
+   * showed.
+   */
+  flagged: boolean;
 }
 
 export interface ReportVoidLine {
@@ -176,6 +205,10 @@ export interface ReportVoidLine {
   reason: string;
   approvedBy: string;
   takenBy: string;
+  /** What the cancel did to the order's stock; null when it held none (or before this was asked). */
+  stock: ReportOrderStock | null;
+  /** A bill (NOT PAID) had been printed for it before it was cancelled — worth the owner's look. */
+  billPrinted?: boolean;
 }
 
 export interface ReportIngredientLine {
@@ -192,6 +225,12 @@ export interface ReportFoodCost {
   /** Ingredients that went out with sales, valued at today's stored prices. */
   usedCents: number;
   wasteCents: number;
+  /** The part of `wasteCents` that is food made for orders that were then cancelled or refunded. */
+  cancelledWasteCents: number;
+  /** How many cancelled / refunded orders that waste came from. */
+  cancelledOrderCount: number;
+  /** Cancelled orders whose stock was put back although cooking had been marked — worth a look. */
+  putBackAfterCookingCount: number;
   /** False when no ingredient used has a price on file (nothing to show). */
   hasCosts: boolean;
   /** Stock movements exist at all in the period (recipes are set up). */

@@ -1,5 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { formatWhen, movementLabel, rangeSinceIso } from './movement-view';
+import { formatWhen, movementDetails, movementLabel, rangeSinceIso } from './movement-view';
+
+describe('movementDetails', () => {
+  it('names the order by its short number, then the note', () => {
+    expect(
+      movementDetails({ orderNumber: '20260926-0042', refPurchaseOrderId: null, purchaseOrderRef: null, notes: 'Cancelled, not made — put back' }),
+    ).toBe('Order #0042 · Cancelled, not made — put back');
+    expect(
+      movementDetails({
+        orderNumber: '20260926-0042',
+        refPurchaseOrderId: null,
+        purchaseOrderRef: null,
+        notes: 'Cancelled after cooking — counted as waste',
+      }),
+    ).toBe('Order #0042 · Cancelled after cooking — counted as waste');
+    expect(movementDetails({ orderNumber: null, refPurchaseOrderId: '0190abcdef12', purchaseOrderRef: null, notes: null })).toBe(
+      'PO 0190abcd',
+    );
+    expect(movementDetails({ orderNumber: null, refPurchaseOrderId: 'x', purchaseOrderRef: 'R-7', notes: 'PO R-7 received' })).toBe(
+      'PO R-7 received',
+    );
+  });
+});
 
 describe('movementLabel', () => {
   it('names each kind of movement plainly', () => {
@@ -10,10 +32,42 @@ describe('movementLabel', () => {
     expect(movementLabel({ reason: 'transfer', deltaQty: 10, notes: null }).label).toBe('Transfer');
   });
 
-  it('calls stock put back by a cancelled order "Returned"', () => {
+  it('calls stock put back by a cancelled order "Returned" (older tills\' note too)', () => {
     expect(
       movementLabel({ reason: 'sale', deltaQty: 200, notes: 'Order cancelled before cooking — stock put back' }).label,
     ).toBe('Returned');
+    expect(movementLabel({ reason: 'sale', deltaQty: 90, notes: 'Cancelled, not made — put back' })).toEqual({
+      label: 'Returned',
+      tone: 'stone',
+    });
+    expect(movementLabel({ reason: 'sale', deltaQty: 1, notes: 'Refunded — sealed drink put back' }).label).toBe('Returned');
+    // Put back on the till that took it (the details column carries the note).
+    expect(movementLabel({ reason: 'sale', deltaQty: 90, notes: 'Cancelled, not made — put back on the till that sent it' })).toEqual({
+      label: 'Returned',
+      tone: 'stone',
+    });
+    expect(
+      movementLabel({ reason: 'sale', deltaQty: 1, notes: 'Cancelled — sealed drink put back on the till that sent it' }).label,
+    ).toBe('Returned');
+  });
+
+  it('food made for a cancelled order: the sale undone quietly, then "Waste"', () => {
+    expect(movementLabel({ reason: 'sale', deltaQty: 90, notes: 'Cancelled after cooking — moved to waste' })).toEqual({
+      label: 'Moved to waste',
+      tone: 'stone',
+      quiet: true,
+    });
+    expect(movementLabel({ reason: 'waste', deltaQty: -90, notes: 'Refunded after cooking — counted as waste' })).toEqual({
+      label: 'Waste',
+      tone: 'red',
+    });
+  });
+
+  it('a cancel that a stock take had already counted is not a stock take', () => {
+    const note = 'Cancelled, not made — already in the stock take';
+    expect(movementLabel({ reason: 'count', deltaQty: -90, notes: note })).toEqual({ label: 'Already counted', tone: 'stone', quiet: true });
+    expect(movementLabel({ reason: 'sale', deltaQty: 90, notes: note }).label).toBe('Already counted');
+    expect(movementLabel({ reason: 'count', deltaQty: 90, notes: 'Weekly count' }).label).toBe('Stock take');
   });
 
   it('tells a batch apart from a hand-made fix', () => {

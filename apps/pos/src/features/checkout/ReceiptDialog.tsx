@@ -8,6 +8,7 @@ import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { CheckCircle2, Printer, Hourglass, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { reprintReceipt, reprintToast } from '../printing/reprint';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -38,8 +39,10 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
   const qc = useQueryClient();
   const newOrderRef = useRef<HTMLButtonElement>(null);
   // The change to hand back, big, before anything else (cash only).
-  const tenderedCents = payments[0]?.tenderedCents ?? null;
-  const changeCents = tenderedCents != null ? Math.max(0, tenderedCents - order.totalCents) : 0;
+  // Change is the cash handed over less the CASH part (as on the printed receipt).
+  const cashLeg = payments.find((p) => p.method === 'cash' && p.tenderedCents != null) ?? null;
+  const tenderedCents = cashLeg?.tenderedCents ?? null;
+  const changeCents = cashLeg && tenderedCents != null ? Math.max(0, tenderedCents - cashLeg.amountCents) : 0;
 
   const fbrQ = useQuery({
     queryKey: ['fbr', 'status', order.id],
@@ -58,8 +61,8 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
   async function reprint() {
     setReprinting(true);
     try {
-      await ipc.printer.reprint(order.id);
-      toast({ title: 'Reprint sent', variant: 'success' });
+      // Says DUPLICATE on paper; asks for a manager after the cashier's one copy.
+      toast({ title: reprintToast(await reprintReceipt(order.id)), variant: 'success' });
     } catch (e) {
       toast({
         title: 'Reprint failed',
@@ -160,20 +163,15 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                 <span>{formatCents(p.amountCents, { showSymbol: false })}</span>
               </div>
             ))}
-            {payments.length > 0 && payments[0]?.tenderedCents != null && (
+            {tenderedCents != null && (
               <>
                 <div className="flex justify-between text-xs">
                   <span>Tendered</span>
-                  <span>{formatCents(payments[0].tenderedCents, { showSymbol: false })}</span>
+                  <span>{formatCents(tenderedCents, { showSymbol: false })}</span>
                 </div>
                 <div className="flex justify-between text-xs">
                   <span>Change</span>
-                  <span>
-                    {formatCents(
-                      (payments[0].tenderedCents ?? 0) - order.totalCents,
-                      { showSymbol: false },
-                    )}
-                  </span>
+                  <span>{formatCents(changeCents, { showSymbol: false })}</span>
                 </div>
               </>
             )}

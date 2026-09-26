@@ -51,6 +51,37 @@ export const DRAWER_TOO_LATE_CODE = 'drawer_too_late';
 /** Which copy of a receipt is being printed. The shop copy carries a signature line. */
 export type ReceiptCopy = 'customer' | 'shop';
 
+/**
+ * A paper the till printed for an order, as kept in the print log
+ * (document_prints): the customer receipt (PAID), a bill (NOT PAID), a refund
+ * slip, a cancelled-order slip, the kitchen ticket, the kitchen CANCELLED slip.
+ */
+export type PrintedDocument = 'receipt' | 'bill' | 'refund' | 'void' | 'kitchen' | 'kitchen_cancel';
+
+/**
+ * What a reprint button did:
+ *  - queued: a new paper is on its way (`duplicate`: it says DUPLICATE,
+ *    `printNo` papers of this document went out before it);
+ *  - merged: that paper was still waiting to print (the printer is busy or
+ *    retrying), so it was sent now instead of printing a second one.
+ * For a kitchen ticket `duplicate` means it says REPRINT / DO NOT COOK TWICE
+ * (a ticket surely printed before); `resent` that the earlier tries only may
+ * have printed, so it says RE-SENT / CHECK FOR TICKET BEFORE COOKING.
+ */
+export interface ReprintResult {
+  status: 'queued' | 'merged';
+  document: PrintedDocument;
+  duplicate: boolean;
+  printNo: number;
+  resent?: boolean;
+}
+
+/**
+ * A reprint refused until a manager allows it: the IPC error is 'forbidden'
+ * with these details, and the screen asks for a manager's PIN or password.
+ */
+export const NEEDS_MANAGER_PIN = 'manager_pin';
+
 /** When a second, SHOP COPY receipt prints alongside the customer's. */
 export type ShopCopyRule = 'never' | 'delivery' | 'always';
 
@@ -67,7 +98,7 @@ export type ShopCopyRule = 'never' | 'delivery' | 'always';
  *  - Delivery bill: for delivery orders, the bill prints when the rider is
  *    assigned so it travels with the food, showing the amount to collect (or
  *    PAID). When the rider brings the cash back, only the drawer opens — the
- *    customer already has the receipt.
+ *    customer already has the bill (BILL - NOT PAID, pay the rider Rs X).
  *  - Shop copy: a second copy marked SHOP COPY with a "Received by" line,
  *    printed with every delivery bill (default), every receipt, or never.
  */

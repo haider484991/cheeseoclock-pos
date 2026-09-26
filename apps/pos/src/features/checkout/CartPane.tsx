@@ -67,9 +67,12 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
   // Cash on delivery / pay at pickup is the norm here, so "Send to kitchen"
   // leads for takeaway and delivery. Foodpanda is settled by the platform:
   // the till records it as paid and sends it in one step.
-  const needsCustomer = mode === 'takeaway' || mode === 'delivery';
-  const sendFirst = needsCustomer;
-  const showDetails = needsCustomer && step === 'details';
+  // Delivery must have its details step; a takeaway's customer is optional
+  // (owner 2026-09-26), so Send / Pay show at once with a link to add one.
+  const needsCustomer = mode === 'delivery';
+  const optionalCustomer = mode === 'takeaway';
+  const sendFirst = mode === 'takeaway' || mode === 'delivery';
+  const showDetails = (needsCustomer || optionalCustomer) && step === 'details';
 
   useEffect(() => {
     if (showDetails) {
@@ -162,7 +165,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
         {showDetails ? (
           <section aria-labelledby="ticket-details-title">
             <div className="ticket-step-heading">
-              <h2 id="ticket-details-title" ref={detailsHeading} tabIndex={-1}>{mode === 'delivery' ? 'Delivery details' : 'Customer details'}</h2>
+              <h2 id="ticket-details-title" ref={detailsHeading} tabIndex={-1}>{mode === 'delivery' ? 'Delivery details' : 'Customer (optional)'}</h2>
               <button type="button" className="ticket-link" onClick={onBack} disabled={busy}><ArrowLeft className="h-3 w-3" />Edit order</button>
             </div>
             <CustomerInlinePanel mode={mode} form={form} setForm={setForm} />
@@ -336,10 +339,15 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
             </button>
           )}
         </div>
-        {needsCustomer && !showDetails && <p className="ticket-next">Next: {mode === 'delivery' ? 'customer & delivery details' : 'customer details'}</p>}
+        {needsCustomer && !showDetails && <p className="ticket-next">Next: customer &amp; delivery details</p>}
+        {optionalCustomer && !showDetails && items.length > 0 && (
+          <button type="button" className="ticket-link ticket-optional-customer" onClick={onContinue}>
+            + Customer name or phone (optional)
+          </button>
+        )}
         <div className="ticket-keys" aria-hidden="true">
           <span><kbd>Enter</kbd> {needsCustomer && !showDetails ? 'Continue' : sendFirst ? 'Send' : 'Pay'}</span>
-          {showDetails && <span><kbd>F1</kbd> Pay</span>}
+          {(showDetails || optionalCustomer) && <span><kbd>F1</kbd> Pay</span>}
           <span><kbd>+</kbd><kbd>−</kbd> Qty</span>
           <span><kbd>F3</kbd> Discount</span>
         </div>

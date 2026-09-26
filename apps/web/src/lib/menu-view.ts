@@ -3,7 +3,7 @@ import type {
   PublishedMenuItem,
   PublishedModifierGroup,
 } from '@cheeseoclock/shared-types';
-import { groupDisplayName } from '@cheeseoclock/shared-types';
+import { groupDisplayName, orderChoiceGroups } from '@cheeseoclock/shared-types';
 import { isDeliveryChargeItem } from './delivery-zones';
 
 /**
@@ -65,23 +65,163 @@ export function sizeLabel(size: string | null): string {
 }
 
 /**
+ * The till sells soft drinks by flavour under their brand names (owner
+ * 2026-09-27: "Pepsi, Mirinda, Diet …") — fine on the till, the kitchen ticket
+ * and the receipt. Customers never see a brand (owner 2026-09-25: "we are not
+ * an affiliate of Pepsi"), so on the website each flavour reads as what it is.
+ * Diet first, so "Diet Pepsi" is not read as "Pepsi". The menu import's
+ * DRINK_FLAVOURS lists the till's flavours (DRINK_GENERIC there names each one's
+ * word here): a new brand there needs a line here. Until it has one, a drink
+ * choice with it reads "Soft drink" (drinkChoiceName), never the brand.
+ */
+const DRINK_FLAVOURS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bdiet[\s-]*(?:pepsi|coke|coca[\s-]*cola)\b/gi, 'Diet cola'],
+  [/\b(?:pepsi|coca[\s-]*cola|coke)\b/gi, 'Cola'],
+  [/\b(?:7[\s-]*up|seven[\s-]*up|sprite)\b/gi, 'Lemon-lime'],
+  [/\b(?:mirinda|fanta)\b/gi, 'Orange'],
+  [/\b(?:mountain|mtn)[\s-]*dew\b/gi, 'Citrus'],
+];
+
+/**
+ * A drink choice or item name as customers read it: "Pepsi" → "Cola",
+ * "Diet Pepsi 1 litre" → "Diet cola 1 litre", "Mirinda 345 ml" → "Orange 345 ml",
+ * "Add 7Up" → "Add lemon-lime". Any case; the size after it is kept as it is.
+ */
+export function drinkFlavourName(name: string): string {
+  let out = name;
+  for (const [brand, generic] of DRINK_FLAVOURS) {
+    out = out.replace(brand, (_match: string, offset: number) => (offset === 0 ? generic : generic.toLowerCase()));
+  }
+  return out;
+}
+
+/** What a drink choice may read as: the flavours above, and plain words that name no brand. */
+const GENERIC_DRINKS = new Set([
+  ...DRINK_FLAVOURS.map(([, generic]) => generic.toLowerCase()),
+  'soft drink',
+  'diet',
+  'diet soft drink',
+  'water',
+  'mineral water',
+]);
+
+/** The size at the end of a drink choice: "345 ml", "1 litre", "1.5L", "Can". */
+const DRINK_SIZE_SUFFIX = /\s+(\d+(?:[.,]\d+)?\s*(?:ml|l|ltr|litres?|liters?)|cans?|bottles?)$/i;
+
+/**
+ * A choice in a drink group as customers read it, failing closed: "Mirinda
+ * 345 ml" → "Orange 345 ml", but a flavour with no generic word above — a
+ * brand the till started selling since ("Sting 345 ml") — reads "Soft drink
+ * 345 ml", never its own name. The size is kept as the till wrote it.
+ */
+export function drinkChoiceName(name: string): string {
+  const trimmed = name.trim();
+  const size = DRINK_SIZE_SUFFIX.exec(trimmed);
+  const flavour = drinkFlavourName(size ? trimmed.slice(0, size.index) : trimmed).trim();
+  const label = GENERIC_DRINKS.has(flavour.toLowerCase()) ? flavour : 'Soft drink';
+  return size ? `${label} ${size[1]!}` : label;
+}
+
+/**
+ * Groups whose every choice is a drink, where an unknown flavour fails closed:
+ * "Add a drink", a deal's "Deal: 1 litre drink", and a soft drink's own
+ * flavour ("Choose a flavour · 345 ml" on "Soft Drink — 345 ml") — a required
+ * or flavour group on a drink, or on an item in the drinks section.
+ */
+function isDrinkChoiceGroup(
+  sectionName: string,
+  itemName: string,
+  group: Pick<PublishedModifierGroup, 'name' | 'isRequired'>,
+): boolean {
+  if (isDrinkGroup(group)) return true;
+  const drinkItem =
+    /\b(?:drinks?|beverages?)\b/i.test(sectionName) || /\bdrinks?\b/i.test(splitSizedName(itemName).base);
+  return drinkItem && (group.isRequired || /\bflavou?rs?\b/i.test(groupDisplayName(group.name)));
+}
+
+/**
+ * A drink group's choices by flavour (drinkChoiceName). Two that read the same
+ * — two brands the site has no word for — are numbered, so the customer can
+ * still tell them apart: "Soft drink 345 ml (1)", "Soft drink 345 ml (2)".
+ */
+function drinkChoices<M extends { name: string }>(modifiers: readonly M[]): M[] {
+  const labels = modifiers.map((m) => drinkChoiceName(m.name));
+  const total = new Map<string, number>();
+  for (const l of labels) total.set(l.toLowerCase(), (total.get(l.toLowerCase()) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return modifiers.map((m, i) => {
+    const label = labels[i]!;
+    const key = label.toLowerCase();
+    if ((total.get(key) ?? 0) < 2) return { ...m, name: label };
+    const n = (seen.get(key) ?? 0) + 1;
+    seen.set(key, n);
+    return { ...m, name: `${label} (${n})` };
+  });
+}
+
+/**
  * The shop sells soft drinks, not a brand (owner 2026-09-25: "we are not an
  * affiliate of Pepsi"). Deals the till published before then read "+ 1 litre
  * Pepsi"; whatever the till sends, the site never names the brand.
  */
 export function withoutDrinkBrand(text: string | null): string | null {
-  return text === null ? null : text.replace(/\bpepsi\b/gi, 'soft drink');
+  return text === null ? null : drinkFlavourName(text.replace(/\bpepsi\b/gi, 'soft drink'));
 }
 
-/** The whole published menu without the brand — for anything that ships it to a browser. */
+/**
+ * The whole published menu without a brand — names of sections, items, choice
+ * groups and choices, and descriptions — for anything that ships it to a
+ * browser (the ordering page's props, /api/menu, the JSON-LD) and for what an
+ * order stores. A drink group's choices fail closed (drinkChoiceName). Ids and
+ * prices are untouched, so an order still names the till's own items and choices.
+ */
 export function menuWithoutDrinkBrand(menu: PublishedMenu): PublishedMenu {
   return {
     ...menu,
     categories: menu.categories.map((c) => ({
       ...c,
-      items: c.items.map((i) => ({ ...i, description: withoutDrinkBrand(i.description) })),
+      name: drinkFlavourName(c.name),
+      items: c.items.map((i) => ({
+        ...i,
+        name: drinkFlavourName(i.name),
+        description: withoutDrinkBrand(i.description),
+        modifierGroups: i.modifierGroups.map((g) => ({
+          ...g,
+          name: drinkFlavourName(g.name),
+          modifiers: isDrinkChoiceGroup(c.name, i.name, g)
+            ? drinkChoices(g.modifiers)
+            : g.modifiers.map((m) => ({ ...m, name: drinkFlavourName(m.name) })),
+        })),
+      })),
     })),
   };
+}
+
+/**
+ * A placed order's lines without a brand, for the tracking page. An order
+ * placed while the till's menu named brands keeps those names (the till reads
+ * an order by its ids); what goes back to the customer reads as the menu did.
+ * Anything that is not an order line is passed through untouched.
+ */
+export function orderItemsWithoutDrinkBrand(items: unknown): unknown {
+  if (!Array.isArray(items)) return items;
+  return items.map((line: unknown) => {
+    if (!line || typeof line !== 'object') return line;
+    const l = line as { name?: unknown; modifiers?: unknown };
+    return {
+      ...l,
+      ...(typeof l.name === 'string' ? { name: drinkFlavourName(l.name) } : {}),
+      ...(Array.isArray(l.modifiers)
+        ? {
+            modifiers: l.modifiers.map((m: unknown) =>
+              m && typeof m === 'object' && typeof (m as { name?: unknown }).name === 'string'
+                ? { ...m, name: drinkFlavourName((m as { name: string }).name) }
+                : m,
+            ),
+          }
+        : {}),
+    };
+  });
 }
 
 export function isPickupOnly(item: Pick<PublishedMenuItem, 'description'>): boolean {
@@ -182,18 +322,20 @@ function buildSections(menu: PublishedMenu): MenuSectionView[] {
 /**
  * Deal slots name their options "Large: Fajita Pizza" so every option stays
  * unique across the deal's groups (a POS import rule). Inside a group already
- * titled "Large pizza" the prefix is noise — show "Fajita Pizza".
+ * titled "Large pizza" the prefix is noise — show "Fajita Pizza". A drink
+ * reads as its flavour, never its brand ("Pepsi 345 ml" → "Cola 345 ml").
  */
 export function optionLabel(optionName: string): string {
   const m = /^(?:2nd\s+)?(?:medium|large):\s*(.+)$/i.exec(optionName.trim());
-  return m ? m[1]!.trim() : optionName;
+  return drinkFlavourName(m ? m[1]!.trim() : optionName);
 }
 
 /**
  * "Deal: 2nd Large pizza" → "2nd Large pizza"; "Leave out · Fajita Pizza" →
  * "Leave out" (till group names are unique, so each item's leave-outs carry its
  * name after " · "); "Choose 5 veggies" that takes 1–5 → "Choose up to 5
- * veggies"; other groups unchanged.
+ * veggies"; "Choose a flavour · 345 ml" → "Choose a flavour"; other groups
+ * unchanged, never with a drink brand in them.
  */
 export function groupLabel(
   group: Pick<PublishedModifierGroup, 'name'> & Partial<Pick<PublishedModifierGroup, 'minSelect' | 'maxSelect'>>,
@@ -202,7 +344,14 @@ export function groupLabel(
     group.minSelect !== undefined && group.maxSelect !== undefined
       ? { minSelect: group.minSelect, maxSelect: group.maxSelect }
       : undefined;
-  return groupDisplayName(group.name, limits).replace(/^deal:\s*/i, '').replace(/^.+?\s+[—–]\s+/, '').trim();
+  return drinkFlavourName(
+    groupDisplayName(group.name, limits).replace(/^deal:\s*/i, '').replace(/^.+?\s+[—–]\s+/, '').trim(),
+  );
+}
+
+/** A deal's drink ("Deal: 1 litre drink"), which its description prices — not a pizza slot. */
+function isDrinkGroup(group: Pick<PublishedModifierGroup, 'name'>): boolean {
+  return /\b(?:drinks?|beverages?)\b/i.test(groupDisplayName(group.name));
 }
 
 /**
@@ -237,6 +386,9 @@ export function dealWorthCents(menu: PublishedMenu, deal: PublishedMenuItem): nu
     // hangs on every item ("Dips on the side", paid extras) are add-ons, and
     // counting them made every deal unpriceable — the Save badge vanished.
     if (requiredCount(group) === 0) continue;
+    // The deal's drink flavour (owner 2026-09-27) costs nothing extra: the drink
+    // itself is priced below, from the description's "1 litre".
+    if (isDrinkGroup(group)) continue;
     slots++;
     let cheapest: number | null = null;
     for (const m of group.modifiers) {
@@ -255,6 +407,18 @@ export function dealWorthCents(menu: PublishedMenu, deal: PublishedMenuItem): nu
     worth += drink.basePriceCents;
   }
   return worth;
+}
+
+/**
+ * The item sheet's choice groups, in the order the till asks them too (owner
+ * 2026-09-27): what the item cannot be sold without (a deal's pizzas and drink,
+ * the dip, the veggies, a drink's flavour), then dips on the side, extras,
+ * "Add a drink" and leave-outs. Groups of one
+ * kind keep the till's order. The size sits above them all and the allergy
+ * note below.
+ */
+export function sheetGroups(item: Pick<PublishedMenuItem, 'modifierGroups'>): PublishedModifierGroup[] {
+  return orderChoiceGroups(item.modifierGroups.slice().sort((a, b) => a.sortOrder - b.sortOrder));
 }
 
 /** How many choices a group needs before the item can go in the cart. */

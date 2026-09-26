@@ -13,7 +13,15 @@ import {
   useSessionState,
   type ChipOption,
 } from '../../components/list';
-import { DATE_RANGES, formatWhen, movementLabel, rangeSinceIso, type DateRange, type MovementTone } from './movement-view';
+import {
+  DATE_RANGES,
+  formatWhen,
+  movementDetails,
+  movementLabel,
+  rangeSinceIso,
+  type DateRange,
+  type MovementTone,
+} from './movement-view';
 
 type ReasonFilter = StockMovementReason | 'all';
 
@@ -187,14 +195,8 @@ export function MovementsTab({
 }
 
 function MovementRow({ m, onPickIngredient }: { m: StockMovementEntry; onPickIngredient?: () => void }) {
-  const { label, tone } = movementLabel(m);
-  const details = [
-    m.orderNumber ? `Order #${m.orderNumber}` : null,
-    m.refPurchaseOrderId && !(m.notes ?? '').startsWith('PO ') ? `PO ${m.purchaseOrderRef ?? m.refPurchaseOrderId.slice(0, 8)}` : null,
-    m.notes,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const { label, tone, quiet } = movementLabel(m);
+  const details = movementDetails(m);
   return (
     <tr className="border-t border-stone-100 dark:border-stone-800">
       <td className="whitespace-nowrap py-2 pr-3 text-stone-500" title={new Date(m.occurredAt).toLocaleString()}>
@@ -220,7 +222,13 @@ function MovementRow({ m, onPickIngredient }: { m: StockMovementEntry; onPickIng
       <td
         className={cn(
           'whitespace-nowrap py-2 text-right font-mono',
-          m.deltaQty > 0 ? 'text-emerald-700 dark:text-emerald-300' : m.deltaQty < 0 ? 'text-red-700 dark:text-red-300' : 'text-stone-500',
+          quiet
+            ? 'text-stone-400 dark:text-stone-500'
+            : m.deltaQty > 0
+              ? 'text-emerald-700 dark:text-emerald-300'
+              : m.deltaQty < 0
+                ? 'text-red-700 dark:text-red-300'
+                : 'text-stone-500',
         )}
       >
         {m.deltaQty > 0 ? '+' : ''}

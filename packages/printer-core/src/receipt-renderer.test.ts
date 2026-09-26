@@ -153,7 +153,9 @@ describe('renderReceipt', () => {
     expect(text).toContain("Cheese O'Clock");
     expect(text).toContain('Thank you - order again at www.cheeseoclock.net');
     expect(text).toContain('Discount (Friends & family - Eid)');
-    expect(text).toContain('[ FBR fiscal QR - pending ]');
+    // FBR in noop mode (the default): nothing about FBR, no "pending" promise.
+    expect(text).not.toContain('FBR');
+    expect(text).not.toContain('pending');
   });
 
   it('wraps long free text on word boundaries', () => {
@@ -210,9 +212,9 @@ describe('renderReceipt', () => {
       }),
     ).map((r) => r.text);
     expect(rows).toContain('FBR Digital Invoice');
-    expect(rows).toContain('IRN: ABC123');
+    expect(rows).toContain('FBR Invoice No: ABC123');
     expect(rows).toContain(QR_MARKER);
-    expect(rows).not.toContain('[ FBR fiscal QR - pending ]');
+    expect(rows.join('\n')).not.toContain('pending');
   });
 });
 
@@ -222,7 +224,7 @@ const rows = (bytes: Uint8Array) => decodeEscPos(bytes).map((r) => r.text);
 describe('renderReceipt — copies and balance', () => {
   it('a settled order says PAID; the customer copy carries no signature line', () => {
     const r = rows(renderReceipt(snapshot(), { branding }));
-    expect(r).toContain('PAID');
+    expect(r).toContain('PAID - CASH');
     expect(r.some((x) => x.startsWith('TO PAY'))).toBe(false);
     expect(r).not.toContain('SHOP COPY');
     expect(r.some((x) => x.startsWith('Received by:'))).toBe(false);
@@ -235,8 +237,9 @@ describe('renderReceipt — copies and balance', () => {
     s.payments = [];
     s.rider = { id: id('r1'), name: 'Bilal', phone: '0311 1234567' };
     const r = rows(renderReceipt(s, { branding }));
-    expect(r.some((x) => /^TO PAY\s+Rs 3,303\.68$/.test(x))).toBe(true);
-    expect(r).not.toContain('PAID');
+    // A delivery: the rider collects it.
+    expect(r.some((x) => /^TO COLLECT\s+Rs 3,303\.68$/.test(x))).toBe(true);
+    expect(r.some((x) => x.startsWith('PAID'))).toBe(false);
     expect(r.some((x) => /^Rider: Bilal\s+0311 1234567$/.test(x))).toBe(true);
   });
 
@@ -302,6 +305,23 @@ describe('renderKitchenTicket', () => {
   it('marks a reprint so the line does not cook it twice', () => {
     expect(rows(renderKitchenTicket(snapshot(), { now }))).not.toContain('* REPRINT *');
     expect(rows(renderKitchenTicket(snapshot(), { now, reprint: true }))).toContain('* REPRINT *');
+  });
+
+  it('a cancelled order: CANCELLED — DO NOT MAKE, then what not to make', () => {
+    const r = rows(renderKitchenTicket(snapshot(), { now, cancelled: true }));
+    expect(r).toContain('* CANCELLED *');
+    expect(r).toContain('DO NOT MAKE - DO NOT SEND');
+    expect(r).toContain('#0042');
+    expect(r.some((x) => x.startsWith('2 x Chicken Tikka Pizza Large (12")'))).toBe(true);
+    // Never also stamped REPRINT, and a plain ticket never says CANCELLED.
+    expect(r).not.toContain('* REPRINT *');
+    expect(rows(renderKitchenTicket(snapshot(), { now, reprint: true, cancelled: true }))).not.toContain('* REPRINT *');
+    expect(rows(renderKitchenTicket(snapshot(), { now }))).not.toContain('* CANCELLED *');
+    for (const width of [48, 32] as const) {
+      for (const row of decodeEscPos(renderKitchenTicket(snapshot(), { width, now, cancelled: true }))) {
+        expect(row.text.length * row.scale, JSON.stringify(row.text)).toBeLessThanOrEqual(width);
+      }
+    }
   });
 
   it('prints order notes for the kitchen', () => {

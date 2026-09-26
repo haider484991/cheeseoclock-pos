@@ -5,6 +5,8 @@ import { SECRET_MISSING, loginInputSchema } from '@cheeseoclock/shared-schemas';
 import {
   WRONG_SECRET,
   getCurrentSession,
+  getHeldStepIn,
+  keepStepIn,
   login,
   logout,
   noteActivity,
@@ -38,7 +40,34 @@ export function registerAuthHandlers(ctx: HandlerContext): void {
     return ok({ loggedOut: true });
   });
 
-  defineHandler('auth:currentSession', ctx, () => ok(getCurrentSession()));
+  // A held stepping-in login is still "who is signed in" to the screen (so it
+  // keeps its page and asks for the PIN); every other channel refuses it.
+  defineHandler('auth:currentSession', ctx, () => ok(getCurrentSession() ?? getHeldStepIn()));
+
+  defineHandler('auth:keepStepIn', ctx, async (_ctx, payload) => {
+    if (!getCurrentSession() && !getHeldStepIn()) {
+      return err({ code: 'unauthenticated', message: 'Not logged in' });
+    }
+    const parsed = loginInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      return err({
+        code: 'validation_failed',
+        message: parsed.error.issues[0]?.message ?? SECRET_MISSING,
+      });
+    }
+    try {
+      return ok(await keepStepIn(ctx.db, parsed.data.pin));
+    } catch (e) {
+      // Handed back (or ended) while the secret was being checked.
+      if (!getCurrentSession() && !getHeldStepIn()) {
+        return err({ code: 'unauthenticated', message: 'Not logged in' });
+      }
+      return err({
+        code: 'forbidden',
+        message: e instanceof Error ? e.message : WRONG_SECRET,
+      });
+    }
+  });
 
   // A key press or click on the till. Only human input keeps an owner or
   // manager login alive — the screens that poll on their own must not.

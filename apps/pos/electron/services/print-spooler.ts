@@ -2,12 +2,19 @@ import log from 'electron-log/main';
 import { BrowserWindow } from 'electron';
 import type { AppDatabase } from '../db/connection.js';
 import {
+  receiptDocumentFor,
   renderDrawerKick,
   renderKitchenTicket,
   renderReceipt,
+  type CancelInfo,
+  type CopyStamp,
+  type FbrPrint,
   type MonoRaster,
   type PrinterAdapter,
   type PrintResult,
+  type ReceiptDocument,
+  type RefundSlipInfo,
+  type RenderReceiptOpts,
   type TestPageOptions,
 } from '@cheeseoclock/printer-core';
 import {
@@ -16,9 +23,12 @@ import {
   DRAWER_UNSURE_CODE,
   type DrawerSettings,
   type OrderSnapshot,
+  type OrderStatus,
+  type PrintedDocument,
   type PrinterConnectionConfig,
   type PrintPolicy,
   type ReceiptCopy,
+  type ReprintResult,
 } from '@cheeseoclock/shared-types';
 import { makePrinterAdapter } from '../adapters/printer/factory.js';
 import {
@@ -33,20 +43,41 @@ import {
 } from './printer-config.js';
 import { logoTestOptions } from './receipt-logo.js';
 import { getOrderSnapshot } from '../db/repositories/order-repo.js';
-import { getFbrRowByOrder } from '../db/repositories/fbr-queue-repo.js';
+import { getFbrDebitNotes, getFbrRowByOrder, paymentTakenOnDevice } from '../db/repositories/fbr-queue-repo.js';
 import {
+  cancelPendingJobs,
   claimNextPendingJob,
   deferJob,
   enqueuePrintJob,
+  findOpenJob,
   hasPrintJob,
+  listInFlightWithPlan,
   markJobDone,
   markJobFailedPermanently,
   recoverStuckInFlight,
   rescheduleJob,
+  retryNow,
+  setSendingPlan,
   type PrintJobPayload,
   type PrintJobRow,
   type ReceiptJobReason,
 } from '../db/repositories/print-queue-repo.js';
+import {
+  MANUAL_REASON,
+  docKeyFor,
+  latestLoggedSaleFbr,
+  legacyPrintCount,
+  listSeriesPrints,
+  recordDocumentPrint,
+  userNames,
+  type LoggedFbrMode,
+  type PrintOutcome,
+  type PrintReason,
+  type PrintedCopy,
+  type SeriesPrint,
+} from '../db/repositories/document-print-repo.js';
+import { getFbrMode } from './fbr-config.js';
+import { KITCHEN_REPRINT_STATUSES, isCurrentOrder } from './reprint-policy.js';
 
 /**
  * Background print queue — backed by `print_queue` in SQLite so a crash
@@ -81,9 +112,67 @@ export type OrderPrintEvent =
   | 'payment_captured'
   /** A rider was assigned: the food is leaving. */
   | 'dispatched'
-  | 'refunded';
+  | 'refunded'
+  /** Cancelled or refunded in full while the kitchen still had it. */
+  | 'cancelled';
 
 type Station = 'receipt' | 'kitchen';
+
+/**
+ * One paper a job is about to send, and its place in the print log. Written
+ * to the job (sending_plan_json) just before the bytes go out, and into the
+ * log (document_prints) once the printer took them — or as 'unsure' when it
+ * may have.
+ */
+interface PlannedPaper {
+  orderNumber: string;
+  document: PrintedDocument;
+  docKey: string;
+  copy: PrintedCopy;
+  printNo: number;
+  reason: PrintReason;
+  requestedByUserId: string | null;
+  approvedByUserId: string | null;
+  fbrIrn: string | null;
+  /** The QR and kind of that number (optional: plans written before these existed lack them). */
+  fbrQrPayload?: string | null;
+  fbrMode?: LoggedFbrMode | null;
+}
+
+/** What a reprint press would print, worked out before anything is queued. */
+export interface ReprintPlan {
+  orderId: string;
+  /** "Order #0042" */
+  orderLabel: string;
+  status: OrderStatus;
+  /** paid_at, or created_at while unpaid. */
+  lastActivityAt: string;
+  /** What the order prints as now. */
+  document: 'receipt' | 'bill' | 'void';
+  copy: ReceiptCopy;
+  /** Papers of this series so far (0: the press prints the original). */
+  priorAll: number;
+  /** Of those, printed by hand (distinct presses), the FBR copy not counted. */
+  priorManual: number;
+  /** The press prints the first paper that carries the FBR number. */
+  fbrCopy: boolean;
+  /** A job for this paper still waiting or printing: the press joins it. */
+  openJob: PrintJobRow | null;
+}
+
+export interface ReprintOptions {
+  copy?: ReceiptCopy;
+  requestedByUserId?: string | null;
+  approvedByUserId?: string | null;
+  /**
+   * Checked again right before queueing (the manager's PIN was awaited in
+   * between): throws to refuse. Not called when the press joins a waiting job.
+   */
+  check?: (plan: ReprintPlan) => void;
+}
+
+/** Why a job was finished without printing: its order was cancelled. */
+export const NOT_PRINTED_CANCELLED = 'Not printed: order cancelled';
 
 const MAX_ATTEMPTS = 5;
 // Backoff schedule: ~immediate, 5s, 30s, 2m, 10m. Past MAX_ATTEMPTS we
@@ -115,6 +204,9 @@ const FBR_IRN_GRACE_MS = 4_000;
 // While it waits, the receipt steps aside this long at a time so the jobs
 // behind it (the next sale's drawer, a kitchen ticket) are not held up.
 const FBR_RECHECK_MS = 250;
+// A sale paid this recently with no FBR row yet is about to get one ("not
+// yet issued"); an older one never will ("not issued").
+const FBR_NO_ROW_PENDING_MS = 10 * 60_000;
 
 class PrintSpooler {
   private db: AppDatabase | null = null;
@@ -136,10 +228,19 @@ class PrintSpooler {
    * hand while a sale's pulse waits for the printer must not pop again later.
    */
   private drawerPulsedAt = 0;
+  /** This till, for the print log. */
+  private deviceId = 'unknown-device';
+  /** Who is signed in now (the person a queued paper is put down to). */
+  private currentUserId: () => string | null = () => null;
 
-  init(db: AppDatabase): void {
+  init(db: AppDatabase, opts: { deviceId?: string; currentUserId?: () => string | null } = {}): void {
     this.db = db;
     this.drawerPulsedAt = 0;
+    this.deviceId = opts.deviceId ?? readDeviceId(db);
+    this.currentUserId = opts.currentUserId ?? (() => null);
+    // Papers that were going out when the app last died may be on paper:
+    // into the log as 'unsure', so their re-send says DUPLICATE.
+    this.logCutOffSends(db);
     // Recover any jobs that were mid-flight when the app last died.
     const recovered = recoverStuckInFlight(db);
     if (recovered > 0) {
@@ -173,9 +274,10 @@ class PrintSpooler {
       policy.shopCopy === 'always' || (policy.shopCopy === 'delivery' && delivery)
         ? ['customer', 'shop']
         : ['customer'];
+    const requestedByUserId = this.whoIsSignedIn();
     // Receipts never carry the drawer pulse: it goes as its own job, first.
-    const receipt = (reason: ReceiptJobReason, c: ReceiptCopy[] = copies) =>
-      this.enqueue({ kind: 'receipt', orderId, openDrawer: false, copies: c, reason });
+    const receipt = (reason: ReceiptJobReason, c: ReceiptCopy[] = copies, extra: { refundAt?: string } = {}) =>
+      this.enqueue({ kind: 'receipt', orderId, openDrawer: false, copies: c, reason, requestedByUserId, ...extra });
     // Cash changed hands: open the drawer now, ahead of any paper. Once per event.
     const drawer = () => {
       if (cash) this.enqueue({ kind: 'drawer', orderId });
@@ -212,29 +314,129 @@ class PrintSpooler {
         if (!hasPrintJob(db, orderId, 'receipt', 'dispatch')) receipt('payment');
         break;
 
-      case 'refunded':
+      case 'refunded': {
         drawer();
-        receipt('refund', ['customer']);
+        // The slip is for THIS refund (its rows share one paid_at). Cash
+        // handed back also gets a SHOP COPY the customer signs — the shop's
+        // record of money that left the drawer (unless shop copies are off).
+        const refundAt = latestRefundAt(snap);
+        receipt('refund', cash && policy.shopCopy !== 'never' ? ['customer', 'shop'] : ['customer'], {
+          ...(refundAt ? { refundAt } : {}),
+        });
+        break;
+      }
+
+      case 'cancelled':
+        this.kitchenCancelSlip(snap, policy);
         break;
     }
   }
 
-  /** Manual reprint of the customer receipt (history, board, receipt dialog). */
-  reprintReceipt(orderId: string): void {
-    if (!this.db) return;
+  /**
+   * What pressing "Reprint receipt" would print for this order now: which
+   * paper (receipt, bill or cancelled-order slip — never chosen by the
+   * button), how many of it went out before, how many of those by hand, and
+   * whether a job for it is still waiting (the press then joins that job).
+   */
+  planReprint(orderId: string, copy: ReceiptCopy = 'customer'): ReprintPlan {
+    if (!this.db) throw new Error('Printing is not ready yet');
+    const db = this.db;
     // A draft has no bill. Printing one would hand the customer a "TO PAY"
     // slip for an order that can still be discarded without a trace.
-    const snap = getOrderSnapshot(this.db, orderId);
+    const snap = getOrderSnapshot(db, orderId);
     if (!snap) throw new Error('Order not found');
     if (snap.order.status === 'open') {
       throw new Error('This order has not been sent or paid yet — there is no bill to reprint');
     }
-    this.enqueue({ kind: 'receipt', orderId, openDrawer: false, copies: ['customer'], reason: 'reprint' });
+    const document = receiptDocumentFor(snap);
+    const series = this.series(snap, document, document, copy);
+    const fbrIrn = document === 'receipt' && copy === 'customer' ? this.fbrForReceipt(snap).fbr?.irn ?? null : null;
+    const fbrCopy = isFbrCopy(series, fbrIrn);
+    // Presses, not attempts (a press the printer fumbled twice is one), and
+    // the paper that first carried the FBR number does not count.
+    const fbrPaper = firstFbrCopyRow(series.rows);
+    const manual = new Set(
+      series.rows.filter((r) => r.reason === MANUAL_REASON && r.id !== fbrPaper?.id).map(jobKey),
+    );
+    return {
+      orderId,
+      orderLabel: orderLabel(snap),
+      status: snap.order.status,
+      lastActivityAt: snap.order.paidAt ?? snap.order.createdAt,
+      document,
+      copy,
+      priorAll: series.prior,
+      priorManual: manual.size,
+      fbrCopy,
+      openJob: findOpenJob(db, orderId, 'receipt', copy),
+    };
   }
 
-  /** Manual reprint of the kitchen ticket — stamped REPRINT. */
-  reprintKitchenTicket(orderId: string): void {
-    this.enqueue({ kind: 'kitchen', orderId, reprint: true });
+  /**
+   * Print the order's customer paper (or its SHOP COPY) again. What it
+   * prints and whether it says DUPLICATE is decided when it prints, from the
+   * order and the print log. A press while that paper is still waiting to
+   * print (printer busy, retrying, waiting for FBR) joins the waiting job:
+   * one paper, never an unmarked original after a marked copy. Never opens
+   * the drawer, never sends anything to FBR again.
+   */
+  reprintReceipt(orderId: string, opts: ReprintOptions = {}): ReprintResult {
+    if (!this.db) throw new Error('Printing is not ready yet');
+    const copy = opts.copy ?? 'customer';
+    const plan = this.planReprint(orderId, copy);
+    if (plan.openJob) {
+      if (plan.openJob.status === 'pending') retryNow(this.db, plan.openJob.id);
+      void this.drain();
+      return { status: 'merged', document: plan.document, duplicate: plan.priorAll > 0, printNo: plan.priorAll };
+    }
+    opts.check?.(plan);
+    this.enqueue({
+      kind: 'receipt',
+      orderId,
+      openDrawer: false,
+      copies: [copy],
+      reason: 'reprint',
+      requestedByUserId: opts.requestedByUserId ?? null,
+      approvedByUserId: opts.approvedByUserId ?? null,
+    });
+    return { status: 'queued', document: plan.document, duplicate: plan.priorAll > 0, printNo: plan.priorAll };
+  }
+
+  /**
+   * The kitchen ticket again — only while the kitchen still has the order
+   * (sent, preparing, ready). It says REPRINT / SAME ORDER - DO NOT COOK
+   * TWICE when a ticket surely printed (`duplicate`); RE-SENT / CHECK FOR
+   * TICKET BEFORE COOKING when the only earlier tries may or may not have
+   * (`resent`: the printer failed mid-way); when none ever went out it is
+   * simply the kitchen's ticket. A press while a ticket is still waiting
+   * joins it.
+   */
+  reprintKitchenTicket(orderId: string, opts: { requestedByUserId?: string | null } = {}): ReprintResult {
+    if (!this.db) throw new Error('Printing is not ready yet');
+    const db = this.db;
+    const snap = getOrderSnapshot(db, orderId);
+    if (!snap) throw new Error('Order not found');
+    const status = snap.order.status;
+    if (status === 'open') throw new Error('This order has not gone to the kitchen yet');
+    if (status === 'void' || status === 'refunded') {
+      throw new Error('This order was cancelled, so its kitchen ticket is not printed again');
+    }
+    if (!KITCHEN_REPRINT_STATUSES.includes(status)) {
+      throw new Error('The kitchen is done with this order, so its ticket is not printed again');
+    }
+    const series = this.series(snap, 'kitchen', 'kitchen', 'kitchen');
+    // The same test stampFor uses for the kitchen: REPRINT only after a
+    // ticket that surely printed; only 'unsure' tries before → RE-SENT.
+    const surely = series.legacy > 0 || series.rows.some((r) => r.outcome === 'printed');
+    const marks = { duplicate: surely, printNo: series.prior, ...(series.prior > 0 && !surely ? { resent: true } : {}) };
+    const open = findOpenJob(db, orderId, 'kitchen');
+    if (open) {
+      if (open.status === 'pending') retryNow(db, open.id);
+      void this.drain();
+      return { status: 'merged', document: 'kitchen', ...marks };
+    }
+    this.enqueue({ kind: 'kitchen', orderId, reprint: true, requestedByUserId: opts.requestedByUserId ?? null });
+    return { status: 'queued', document: 'kitchen', ...marks };
   }
 
   /**
@@ -318,7 +520,140 @@ class PrintSpooler {
   private kitchenTicket(snap: OrderSnapshot, policy: PrintPolicy): void {
     if (!policy.kitchenTicket || !this.db) return;
     if (hasPrintJob(this.db, snap.order.id, 'kitchen')) return;
-    this.enqueue({ kind: 'kitchen', orderId: snap.order.id, reprint: false });
+    this.enqueue({ kind: 'kitchen', orderId: snap.order.id, reprint: false, requestedByUserId: this.whoIsSignedIn() });
+  }
+
+  /**
+   * "CANCELLED — DO NOT MAKE" for the line, when the kitchen got a ticket for
+   * this order from this till. Without it "Not made — put stock back" is only
+   * a hope: the kitchen keeps cooking and the count ends up too high.
+   *
+   * First, whatever has not printed yet never will: a ticket still waiting
+   * (a printer retry would otherwise land AFTER the CANCELLED slip, and look
+   * like a new order) and, on a void, a bill not yet out. Then the slip goes
+   * only if a ticket did print, may have (the printer failed mid-way), or is
+   * printing right now — a CANCELLED slip for an order the kitchen never saw
+   * only confuses the line.
+   */
+  private kitchenCancelSlip(snap: OrderSnapshot, policy: PrintPolicy): void {
+    if (!this.db) return;
+    const db = this.db;
+    cancelPendingJobs(db, snap.order.id, { bills: snap.order.status === 'void', note: NOT_PRINTED_CANCELLED });
+    if (!policy.kitchenTicket) return;
+    const printing = findOpenJob(db, snap.order.id, 'kitchen')?.status === 'in_flight';
+    if (!printing && this.series(snap, 'kitchen', 'kitchen', 'kitchen').prior === 0) return;
+    this.enqueue({
+      kind: 'kitchen',
+      orderId: snap.order.id,
+      reprint: false,
+      cancelled: true,
+      requestedByUserId: this.whoIsSignedIn(),
+    });
+  }
+
+  /** The person signed in now, never throwing. */
+  private whoIsSignedIn(): string | null {
+    try {
+      return this.currentUserId();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Papers of one series in the print log (plus any the version before the
+   * log printed): how many there were, and the rows themselves.
+   */
+  private series(
+    snap: OrderSnapshot,
+    document: PrintedDocument,
+    docKey: string,
+    copy: PrintedCopy,
+  ): { rows: SeriesPrint[]; legacy: number; prior: number } {
+    if (!this.db) return { rows: [], legacy: 0, prior: 0 };
+    const rows = listSeriesPrints(this.db, snap.order.id, docKey, copy);
+    const legacy = legacyPrintCount(this.db, { orderId: snap.order.id, document, copy, paidAt: snap.order.paidAt });
+    return { rows, legacy, prior: rows.length + legacy };
+  }
+
+  /** Put what may be on paper from a send the app died in the middle of into the log. Never throws. */
+  private logCutOffSends(db: AppDatabase): void {
+    try {
+      for (const { job, plan } of listInFlightWithPlan(db)) {
+        const papers = readPlan(plan);
+        if (papers.length === 0) continue;
+        this.logPapers(job, papers, 'unsure');
+        setSendingPlan(db, job.id, null);
+        log.warn('Print spooler: a job was cut off mid-send; its paper may exist', { jobId: job.id, orderId: job.orderId });
+      }
+    } catch (e) {
+      log.warn('Print spooler: could not check jobs cut off mid-send', e);
+    }
+  }
+
+  /** Papers into the print log, one row each (row + sync + audit). */
+  private logPapers(job: PrintJobRow, papers: PlannedPaper[], outcome: PrintOutcome): void {
+    if (!this.db) return;
+    const db = this.db;
+    const orderId = job.payload.orderId;
+    db.transaction(() => {
+      for (const p of papers) {
+        recordDocumentPrint(
+          db,
+          {
+            orderId,
+            orderNumber: p.orderNumber,
+            document: p.document,
+            docKey: p.docKey,
+            copy: p.copy,
+            printNo: p.printNo,
+            outcome,
+            reason: p.reason,
+            requestedByUserId: p.requestedByUserId,
+            approvedByUserId: p.approvedByUserId,
+            printJobId: job.id,
+            fbrIrn: p.fbrIrn,
+            fbrQrPayload: typeof p.fbrQrPayload === 'string' ? p.fbrQrPayload : null,
+            fbrMode: p.fbrMode === 'sandbox' || p.fbrMode === 'production' ? p.fbrMode : null,
+          },
+          this.deviceId,
+        );
+      }
+    })();
+  }
+
+  /**
+   * The printer took the job: its papers into the log and the job done, in
+   * one transaction (a crash in between would log them twice). The log must
+   * never keep a printed job open: if it can't be written, the job is still
+   * marked done (and the gap logged).
+   */
+  private finishPrinted(job: PrintJobRow, papers: PlannedPaper[]): void {
+    if (!this.db) return;
+    const db = this.db;
+    try {
+      db.transaction(() => {
+        if (papers.length > 0) this.logPapers(job, papers, 'printed');
+        markJobDone(db, job.id);
+      })();
+    } catch (e) {
+      log.error('Print log not written for a printed job', { jobId: job.id, orderId: job.orderId, error: String(e) });
+      markJobDone(db, job.id);
+    }
+  }
+
+  /** The printer failed after bytes may have gone out: those papers may exist. */
+  private noteUnsure(job: PrintJobRow, papers: PlannedPaper[]): void {
+    if (!this.db || papers.length === 0) return;
+    const db = this.db;
+    try {
+      db.transaction(() => {
+        this.logPapers(job, papers, 'unsure');
+        setSendingPlan(db, job.id, null);
+      })();
+    } catch (e) {
+      log.warn('Print log not written for a job that may have printed', { jobId: job.id, error: String(e) });
+    }
   }
 
   private enqueue(payload: PrintJobPayload): void {
@@ -346,11 +681,20 @@ class PrintSpooler {
     try {
       return await this.exclusive(async () => {
         const adapter = this.getAdapter(station);
+        // The page says which printer it was asked for — and when a kitchen
+        // test came out of the receipt printer because none is set up.
+        const stationPage: TestPageOptions =
+          station === 'kitchen' && !this.stationConfig('kitchen')
+            ? {
+                station: 'kitchen',
+                stationNote: 'Kitchen test - no kitchen printer set up, printed on the receipt printer',
+              }
+            : { station };
         // Only the receipt printer's page shows the logo; a kitchen test (even
         // one that falls back to the receipt printer) never does.
-        if (station !== 'receipt') return adapter.testPrint();
+        if (station !== 'receipt') return adapter.testPrint(stationPage);
         const logoTest = this.logoTest(adapter);
-        const result = await adapter.testPrint(logoTest.options);
+        const result = await adapter.testPrint({ ...logoTest.options, ...stationPage });
         if (result.ok && logoTest.printed) {
           try {
             markReceiptLogoChecked(db, logoTest.printed, adapter.config);
@@ -494,6 +838,8 @@ class PrintSpooler {
       markJobDone(db, job.id, ALREADY_OPENED_NOTE);
     };
     let result: PrintResult | typeof ALREADY_OPENED;
+    /** The papers this send carries, for the print log. */
+    let papers: PlannedPaper[] = [];
     try {
       const snap = getOrderSnapshot(db, job.payload.orderId);
       if (!snap) {
@@ -502,6 +848,12 @@ class PrintSpooler {
           code: 'order_missing',
           message: 'Order no longer exists',
         });
+        return;
+      }
+      if (cancelledMeanwhile(job.payload, snap)) {
+        // The order was cancelled after this was queued: a ticket for the
+        // kitchen (or the till's own bill) must not come out now.
+        markJobDone(db, job.id, NOT_PRINTED_CANCELLED);
         return;
       }
       if (isDrawer && this.drawerOpenedSince(queuedAt)) {
@@ -517,7 +869,7 @@ class PrintSpooler {
         );
         return;
       }
-      if (this.waitingForFbr(job)) {
+      if (this.waitingForFbr(job, snap)) {
         deferJob(db, job.id, FBR_RECHECK_MS);
         setTimeout(() => void this.drain(), FBR_RECHECK_MS + 10);
         return;
@@ -539,8 +891,12 @@ class PrintSpooler {
           if (this.drawerOpenedSince(queuedAt)) return ALREADY_OPENED;
           if (Date.now() > deadline) return tooLate(queuedAt);
         }
-        const { adapter, bytes } = this.render(toSend, snap);
-        return isDrawer ? this.sendPulse(adapter, bytes, deadline) : adapter.send(bytes);
+        const rendered = this.render(job, toSend, snap);
+        papers = rendered.papers;
+        // Just before the bytes go out: if the app dies mid-send, boot finds
+        // this and logs the papers as 'unsure' (their re-send says DUPLICATE).
+        if (papers.length > 0) setSendingPlan(db, job.id, { papers });
+        return isDrawer ? this.sendPulse(rendered.adapter, rendered.bytes, deadline) : rendered.adapter.send(rendered.bytes);
       });
     } catch (e) {
       result = {
@@ -559,9 +915,13 @@ class PrintSpooler {
       return;
     }
     if (result.ok) {
-      markJobDone(db, job.id);
+      this.finishPrinted(job, papers);
       return;
     }
+    // Part of it may be on paper: the log says so, and the retry says
+    // DUPLICATE (printer retry). A definite failure logs nothing, so the
+    // retry is still the original.
+    if (!isDrawer && result.error?.maybeSent === true) this.noteUnsure(job, papers);
     const attempts = job.attempts + 1;
     const backoff = BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)]!;
     if (isDrawer) {
@@ -600,66 +960,332 @@ class PrintSpooler {
    * A customer receipt should carry the FBR invoice number. The FBR worker
    * runs right after the sale commits, so give it a moment before printing
    * the payment receipt — but never hold the paper for long: past the grace
-   * period (counted from when the sale queued it) the receipt prints with the
-   * "pending" placeholder instead. While waiting it steps aside (see runJob).
+   * period (counted from when the sale queued it) the receipt prints saying
+   * the number is not issued yet. While waiting it steps aside (see runJob).
+   *
+   * Only a RECEIPT waits (a cash-on-delivery bill has no FBR row until the
+   * rider brings the money: it prints at once). With FBR live it also waits
+   * when the sale's row is not queued yet — the receipt is claimed before
+   * the tender queues it — but only when this till took the money: a sale
+   * paid on the other till has its FBR row there, never here, so waiting
+   * would only hold the paper. A refund slip waits the same way for its
+   * debit note when the sale was fiscalised.
    */
-  private waitingForFbr(job: PrintJobRow): boolean {
+  private waitingForFbr(job: PrintJobRow, snap: OrderSnapshot): boolean {
     if (!this.db || job.payload.kind !== 'receipt') return false;
-    if (job.payload.reason !== 'payment' && job.payload.reason !== 'dispatch') return false;
     if (Date.now() >= Date.parse(job.createdAt) + FBR_IRN_GRACE_MS) return false;
-    const row = getFbrRowByOrder(this.db, job.payload.orderId);
-    return !!row && row.modeAtEnqueue !== 'noop' && row.status === 'pending';
+    const db = this.db;
+    const reason = job.payload.reason;
+    if (reason === 'payment' || reason === 'dispatch') {
+      if (receiptDocumentFor(snap) !== 'receipt') return false;
+      const row = getFbrRowByOrder(db, job.payload.orderId);
+      if (row) return row.modeAtEnqueue !== 'noop' && row.status === 'pending';
+      if (getFbrMode(db) === 'noop') return false;
+      if (latestLoggedSaleFbr(db, job.payload.orderId)) return false;
+      return paymentTakenOnDevice(db, job.payload.orderId, this.deviceId);
+    }
+    if (reason === 'refund') {
+      const sale = getFbrRowByOrder(db, job.payload.orderId);
+      if (!sale || sale.status !== 'sent' || !sale.irn || sale.modeAtEnqueue === 'noop') return false;
+      const refundAt = job.payload.refundAt ?? latestRefundAt(snap);
+      const ids = refundRows(snap, refundAt).map((p) => p.id);
+      const notes = getFbrDebitNotes(db, job.payload.orderId, ids);
+      return !notes.some((n) => n.status === 'sent' || n.status === 'failed' || n.status === 'skipped');
+    }
+    return false;
   }
 
-  /** Bytes for a job, and the printer they go to. */
+  /**
+   * The sale's FBR number for a customer receipt, or why a live till has none.
+   * In `noop` mode (the default) nothing: the adapter makes up a NOOP-…
+   * number to exercise the queue, and that must never reach paper — nor a
+   * promise of a fiscal QR that will never come.
+   *
+   * fbr_submission_queue is per till. With no row here, the number (and its
+   * QR) may be on a receipt the other till printed — the print log syncs —
+   * and a duplicate must carry exactly that. A sale paid on the other till
+   * with no number known here prints nothing about FBR: this till cannot
+   * tell "not issued" from "issued there", and must not say either.
+   */
+  private fbrForReceipt(snap: OrderSnapshot): { fbr: FbrPrint | null; missing: 'pending' | 'failed' | null } {
+    const none = { fbr: null, missing: null };
+    if (!this.db) return none;
+    const db = this.db;
+    const row = getFbrRowByOrder(db, snap.order.id);
+    if (row) {
+      if (row.modeAtEnqueue === 'noop') return none;
+      if (row.status === 'sent' && row.irn) {
+        return { fbr: { irn: row.irn, qrPayload: row.qrPayload, test: row.modeAtEnqueue === 'sandbox' }, missing: null };
+      }
+      return { fbr: null, missing: row.status === 'failed' || row.status === 'skipped' ? 'failed' : 'pending' };
+    }
+    const logged = latestLoggedSaleFbr(db, snap.order.id);
+    if (logged) return { fbr: { irn: logged.irn, qrPayload: logged.qrPayload, test: logged.mode === 'sandbox' }, missing: null };
+    if (getFbrMode(db) === 'noop') return none;
+    if (!paymentTakenOnDevice(db, snap.order.id, this.deviceId)) return none;
+    // Taken here with no row: queued any moment now for a sale just paid; an
+    // older sale (from before FBR was switched on, say) never will be.
+    const paidMs = Date.parse(snap.order.paidAt ?? snap.order.createdAt);
+    return { fbr: null, missing: Date.now() - paidMs < FBR_NO_ROW_PENDING_MS ? 'pending' : 'failed' };
+  }
+
+  /** A refund's own FBR number (its debit note), when the sale was fiscalised. */
+  private fbrForRefund(
+    snap: OrderSnapshot,
+    rows: OrderSnapshot['payments'],
+  ): Pick<RefundSlipInfo, 'debitNote' | 'debitNoteMissing'> {
+    if (!this.db) return {};
+    const sale = getFbrRowByOrder(this.db, snap.order.id);
+    if (!sale || sale.status !== 'sent' || !sale.irn || sale.modeAtEnqueue === 'noop') return {};
+    const notes = getFbrDebitNotes(this.db, snap.order.id, rows.map((p) => p.id));
+    const sent = notes.find((n) => n.status === 'sent' && n.irn);
+    if (sent?.irn) {
+      return {
+        debitNote: {
+          irn: sent.irn,
+          qrPayload: sent.qrPayload,
+          test: sent.modeAtEnqueue === 'sandbox',
+          saleIrn: sale.irn,
+        },
+      };
+    }
+    return { debitNoteMissing: notes.some((n) => n.status === 'failed' || n.status === 'skipped') ? 'failed' : 'pending' };
+  }
+
+  /**
+   * How a paper of this series is marked, from the log: nothing on the
+   * first; a retry of this very job after the printer failed mid-way says
+   * "Printer retry"; a press of a reprint button "Reprint #N" (N counts the
+   * earlier presses and prints, not the printer's attempts); a second paper
+   * the till printed itself "Copy #N". The first paper printed by hand well
+   * after the sale says "Printed later" — and so does a first paper a
+   * manager had to approve (the first SHOP COPY of a current order): every
+   * approved paper carries the approver's name.
+   */
+  private stampFor(
+    series: { rows: SeriesPrint[]; legacy: number; prior: number },
+    ctx: {
+      jobId: string;
+      manual: boolean;
+      kitchen: boolean;
+      current: boolean;
+      requestedBy: string | null;
+      approvedBy: string | null;
+      names: Map<string, string>;
+      fbrCopy: boolean;
+    },
+  ): CopyStamp | null {
+    const now = new Date();
+    const byName = ctx.requestedBy ? (ctx.names.get(ctx.requestedBy) ?? null) : null;
+    const approvedByName = ctx.approvedBy ? (ctx.names.get(ctx.approvedBy) ?? null) : null;
+    if (series.prior === 0) {
+      if (ctx.manual && !ctx.kitchen && (!ctx.current || !!ctx.approvedBy)) {
+        return { kind: 'late', number: 0, printedAt: now, byName, approvedByName };
+      }
+      return null;
+    }
+    const others = series.rows.filter((r) => r.printJobId !== ctx.jobId);
+    const earlierPapers = new Set(others.map(jobKey)).size + series.legacy;
+    // The first paper, when the log has it (one the old version printed is unknown).
+    const firstPrintedAt = series.legacy === 0 && series.rows[0] ? new Date(series.rows[0].createdAt) : null;
+    // Nothing but this job's own fumbled attempts — or, for the kitchen,
+    // nothing that surely printed: the kitchen may have no ticket at all.
+    const onlyThisJob = earlierPapers === 0;
+    const nothingSurelyPrinted = series.legacy === 0 && series.rows.every((r) => r.outcome === 'unsure');
+    if (onlyThisJob || (ctx.kitchen && nothingSurelyPrinted)) {
+      return { kind: 'retry', number: 0, printedAt: now, firstPrintedAt };
+    }
+    if (ctx.manual) {
+      return {
+        kind: 'reprint',
+        number: earlierPapers,
+        printedAt: now,
+        byName,
+        approvedByName,
+        firstPrintedAt,
+        ...(ctx.fbrCopy ? { fbrCopy: true } : {}),
+      };
+    }
+    return { kind: 'copy', number: earlierPapers + 1, printedAt: now, firstPrintedAt };
+  }
+
+  /** Bytes for a job, the printer they go to, and the papers they carry (for the print log). */
   private render(
+    job: PrintJobRow,
     payload: PrintJobPayload,
     snap: OrderSnapshot,
-  ): { adapter: PrinterAdapter; bytes: Uint8Array } {
+  ): { adapter: PrinterAdapter; bytes: Uint8Array; papers: PlannedPaper[] } {
     if (!this.db) throw new Error('Spooler not initialized');
+    const db = this.db;
+    const orderNumber = snap.order.orderNumber;
     switch (payload.kind) {
       case 'kitchen': {
         const adapter = this.getAdapter('kitchen');
+        const cancelled = payload.cancelled === true;
+        const document: PrintedDocument = cancelled ? 'kitchen_cancel' : 'kitchen';
+        const reason: PrintReason = cancelled ? 'cancel' : payload.reprint ? MANUAL_REASON : 'auto';
+        const requestedBy = payload.requestedByUserId ?? null;
+        let stamp: CopyStamp | null = null;
+        let printNo = 0;
+        let names = new Map<string, string>();
+        try {
+          const series = this.series(snap, document, document, 'kitchen');
+          names = userNames(db, [requestedBy, snap.order.voidedBy]);
+          stamp = this.stampFor(series, {
+            jobId: job.id,
+            manual: reason === MANUAL_REASON,
+            kitchen: true,
+            current: true,
+            requestedBy,
+            approvedBy: null,
+            names,
+            fbrCopy: false,
+          });
+          printNo = series.prior;
+        } catch (e) {
+          log.warn('Print log unreadable; ticket printed without its stamp', { jobId: job.id, error: String(e) });
+        }
+        const cancelInfo: CancelInfo | null = cancelled
+          ? {
+              at: snap.order.voidedAt ? new Date(snap.order.voidedAt) : null,
+              byName: snap.order.voidedBy ? (names.get(snap.order.voidedBy) ?? null) : null,
+              reason: snap.order.voidReason,
+            }
+          : null;
         return {
           adapter,
           bytes: renderKitchenTicket(snap, {
             width: adapter.config.width ?? 48,
-            reprint: payload.reprint,
+            cancelled,
+            cancelInfo,
+            stamp,
+            queuedAt: new Date(job.createdAt),
           }),
+          papers: [
+            {
+              orderNumber,
+              document,
+              docKey: document,
+              copy: 'kitchen',
+              printNo,
+              reason,
+              requestedByUserId: requestedBy,
+              approvedByUserId: null,
+              fbrIrn: null,
+            },
+          ],
         };
       }
       case 'drawer': {
         const adapter = this.getAdapter('receipt');
-        return { adapter, bytes: renderDrawerKick(this.drawerSettings()) };
+        return { adapter, bytes: renderDrawerKick(this.drawerSettings()), papers: [] };
       }
       default: {
         const adapter = this.getAdapter('receipt');
         const width = adapter.config.width ?? 48;
-        const branding = getReceiptBranding(this.db);
+        const branding = getReceiptBranding(db);
         // The logo, when there is a usable one and receipts are set to print it.
-        const logo = receiptLogoToPrint(this.db, width, branding);
-        // Embed FBR IRN/QR if the worker has resolved one by now. In `noop`
-        // mode the adapter fabricates a NOOP-… number so the queue can be
-        // exercised; that must never reach paper as a fiscal invoice.
-        const fbrRow = getFbrRowByOrder(this.db, payload.orderId);
-        const fbrBlock =
-          fbrRow && fbrRow.status === 'sent' && fbrRow.irn && fbrRow.modeAtEnqueue !== 'noop'
-            ? { irn: fbrRow.irn, qrPayload: fbrRow.qrPayload }
+        const logo = receiptLogoToPrint(db, width, branding);
+
+        // What this paper is, decided now from the order — never from the
+        // button: a cancelled order prints as cancelled, whatever asked.
+        const refundAt = payload.reason === 'refund' ? (payload.refundAt ?? latestRefundAt(snap)) : null;
+        const thisRefund = refundAt ? refundRows(snap, refundAt) : [];
+        const document: ReceiptDocument = payload.reason === 'refund' && thisRefund.length > 0 ? 'refund' : receiptDocumentFor(snap);
+        const docKey = docKeyFor(document, refundAt);
+        const manual = payload.reason === MANUAL_REASON;
+        const requestedBy = payload.requestedByUserId ?? null;
+        const approvedBy = payload.approvedByUserId ?? null;
+        const current = isCurrentOrder(snap.order.status, snap.order.paidAt ?? snap.order.createdAt, Date.now());
+        const names = userNames(db, [
+          requestedBy,
+          approvedBy,
+          snap.order.voidedBy,
+          ...thisRefund.map((p) => p.receivedByUserId),
+        ]);
+
+        const fbrSale = document === 'receipt' ? this.fbrForReceipt(snap) : { fbr: null, missing: null };
+        const refund: RefundSlipInfo | undefined =
+          document === 'refund' && refundAt
+            ? {
+                refundedAt: new Date(refundAt),
+                rows: thisRefund.map((p) => ({ method: p.method, amountCents: -p.amountCents })),
+                reason: refundReason(thisRefund, snap),
+                refundedByName: requestedBy ? (names.get(requestedBy) ?? null) : null,
+                approvedByName: thisRefund[0] ? (names.get(thisRefund[0].receivedByUserId) ?? null) : null,
+                totalRefundedCents: -snap.payments
+                  .filter((p) => p.amountCents < 0 && p.paidAt <= refundAt)
+                  .reduce((n, p) => n + p.amountCents, 0),
+                ...this.fbrForRefund(snap, thisRefund),
+              }
             : undefined;
+        const cancelled: CancelInfo | null =
+          document === 'void'
+            ? {
+                at: snap.order.voidedAt ? new Date(snap.order.voidedAt) : null,
+                byName: snap.order.voidedBy ? (names.get(snap.order.voidedBy) ?? null) : null,
+                reason: snap.order.voidReason,
+              }
+            : null;
+
+        // Each copy is its own series: the SHOP COPY is never a duplicate of
+        // the customer's.
+        const copies = payload.copies.map((copy) => {
+          // The FBR number this paper carries (the customer's copy only).
+          const fbrPrinted = copy === 'customer' ? (fbrSale.fbr ?? refund?.debitNote ?? null) : null;
+          const fbrIrn = fbrPrinted?.irn ?? null;
+          let stamp: CopyStamp | null = null;
+          let printNo = 0;
+          try {
+            const series = this.series(snap, document, docKey, copy);
+            stamp = this.stampFor(series, {
+              jobId: job.id,
+              manual,
+              kitchen: false,
+              // "Printed later" is for a receipt or a bill; a cancelled-order
+              // or refund slip already says when it happened.
+              current: current || (document !== 'receipt' && document !== 'bill'),
+              requestedBy,
+              approvedBy,
+              names,
+              fbrCopy: document === 'receipt' && copy === 'customer' && isFbrCopy(series, fbrSale.fbr?.irn ?? null),
+            });
+            printNo = series.prior;
+          } catch (e) {
+            log.warn('Print log unreadable; receipt printed without its stamp', { jobId: job.id, error: String(e) });
+          }
+          const opts: Omit<RenderReceiptOpts, 'logo'> = {
+            width,
+            branding,
+            copy,
+            document,
+            stamp,
+            openDrawer: false,
+            cutPaper: true,
+            ...(fbrSale.fbr ? { fbr: fbrSale.fbr } : {}),
+            ...(fbrSale.missing ? { fbrMissing: fbrSale.missing } : {}),
+            ...(refund ? { refund } : {}),
+            ...(cancelled ? { cancelled } : {}),
+          };
+          const paper: PlannedPaper = {
+            orderNumber,
+            document,
+            docKey,
+            copy,
+            printNo,
+            reason: payload.reason,
+            requestedByUserId: requestedBy,
+            approvedByUserId: approvedBy,
+            fbrIrn,
+            fbrQrPayload: fbrPrinted?.qrPayload ?? null,
+            fbrMode: fbrPrinted ? (fbrPrinted.test ? 'sandbox' : 'production') : null,
+          };
+          return { opts, paper };
+        });
         // All copies on one strip, one send. Never a drawer pulse: that is
         // its own job (see onOrderEvent).
         const renderAll = (withLogo: MonoRaster | null) =>
-          payload.copies.map((copy) =>
-            renderReceipt(snap, {
-              width,
-              branding,
-              logo: withLogo,
-              copy,
-              openDrawer: false,
-              cutPaper: true,
-              ...(fbrBlock ? { fbr: fbrBlock } : {}),
-            }),
-          );
+          copies.map((c) => renderReceipt(snap, { ...c.opts, logo: withLogo }));
         // The logo is never the reason a receipt fails: if anything about it
         // goes wrong, the receipt prints without it.
         let parts: Uint8Array[];
@@ -670,7 +1296,7 @@ class PrintSpooler {
           log.warn('Receipt printed without the logo', e);
           parts = renderAll(null);
         }
-        return { adapter, bytes: concat(parts) };
+        return { adapter, bytes: concat(parts), papers: copies.map((c) => c.paper) };
       }
     }
   }
@@ -688,6 +1314,87 @@ function concat(parts: Uint8Array[]): Uint8Array {
 
 function orderLabel(snap: OrderSnapshot): string {
   return `Order #${snap.order.orderNumber.split('-').pop() ?? snap.order.orderNumber}`;
+}
+
+/** This till's id (device_info), for the print log. */
+function readDeviceId(db: AppDatabase): string {
+  try {
+    const row = db.prepare(`SELECT device_id FROM device_info WHERE id = 'singleton'`).get() as
+      | { device_id: string }
+      | undefined;
+    return row?.device_id ?? 'unknown-device';
+  } catch {
+    return 'unknown-device';
+  }
+}
+
+/** When the order's latest refund happened (its rows share this paid_at), or null. */
+function latestRefundAt(snap: OrderSnapshot): string | null {
+  let at: string | null = null;
+  for (const p of snap.payments) if (p.amountCents < 0 && (at === null || p.paidAt > at)) at = p.paidAt;
+  return at;
+}
+
+/** The refund rows (negative payments) written together at `at`. */
+function refundRows(snap: OrderSnapshot, at: string | null): OrderSnapshot['payments'] {
+  if (!at) return [];
+  return snap.payments.filter((p) => p.amountCents < 0 && p.paidAt === at);
+}
+
+/** Why the money went back: the reason typed with a part refund, else the order's. */
+function refundReason(rows: OrderSnapshot['payments'], snap: OrderSnapshot): string | null {
+  for (const p of rows) {
+    const m = /^(?:partial-refund|refund-rest):\s*(.+)$/.exec(p.referenceNo ?? '');
+    if (m?.[1]) return m[1].trim();
+  }
+  return snap.order.voidReason;
+}
+
+/**
+ * A job that must not print because its order was cancelled after it was
+ * queued: a kitchen ticket (not the CANCELLED slip) for a cancelled or fully
+ * refunded order, and the till's own bill or receipt for a cancelled one. A
+ * reprint pressed for a cancelled order still prints — as CANCELLED ORDER.
+ */
+function cancelledMeanwhile(payload: PrintJobPayload, snap: OrderSnapshot): boolean {
+  const status = snap.order.status;
+  if (payload.kind === 'kitchen') return payload.cancelled !== true && (status === 'void' || status === 'refunded');
+  if (payload.kind === 'receipt') return status === 'void' && (payload.reason === 'payment' || payload.reason === 'dispatch');
+  return false;
+}
+
+/** The papers in a stored sending plan (whatever shape it has). */
+function readPlan(plan: unknown): PlannedPaper[] {
+  const papers = (plan as { papers?: unknown } | null)?.papers;
+  if (!Array.isArray(papers)) return [];
+  return papers.filter(
+    (p): p is PlannedPaper =>
+      !!p &&
+      typeof p === 'object' &&
+      typeof (p as PlannedPaper).document === 'string' &&
+      typeof (p as PlannedPaper).docKey === 'string' &&
+      typeof (p as PlannedPaper).copy === 'string' &&
+      typeof (p as PlannedPaper).printNo === 'number',
+  );
+}
+
+/** One press or print job (its attempts are one paper, as far as counting goes). */
+function jobKey(r: SeriesPrint): string {
+  return r.printJobId ?? r.id;
+}
+
+/**
+ * The paper that first carried the FBR number, when an earlier one of the
+ * series went out without it: the customer's fiscal copy, not a spare.
+ */
+function firstFbrCopyRow(rows: SeriesPrint[]): SeriesPrint | null {
+  const i = rows.findIndex((r) => !!r.fbrIrn);
+  return i > 0 ? (rows[i] ?? null) : null;
+}
+
+/** Printing `fbrIrn` now would be the first paper of the series to carry it. */
+function isFbrCopy(series: { rows: SeriesPrint[]; legacy: number }, fbrIrn: string | null): boolean {
+  return !!fbrIrn && series.legacy === 0 && series.rows.length > 0 && series.rows.every((r) => !r.fbrIrn);
 }
 
 function tooLate(since: number): PrintResult {

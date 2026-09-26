@@ -10,6 +10,8 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 import type { BusinessReport, ReportDiscountLine, ReportItemLine } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import {
+  CANCELLED_WASTE_ORDERS_SQL,
+  FOOD_COST_SQL,
   REPORT_LIST_CAP,
   channelOf,
   getBusinessReport,
@@ -652,6 +654,79 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
     expect(month.kpis.unrecordedPaymentCents).toBe(0);
     expect(a.kpis.netSalesCents + b.kpis.netSalesCents).toBe(month.kpis.netSalesCents);
     expect(a.kpis.orderCount + b.kpis.orderCount).toBe(month.kpis.orderCount);
+  });
+
+  it('food made for a cancelled order is waste on the day it was cooked, even when cancelled days later', () => {
+    const { raw, db } = openMigrated();
+    seedBasics(raw);
+    raw
+      .prepare(
+        `INSERT INTO ingredients (id, name, unit, cost_per_unit_cents, pack_size, pack_price_cents, created_at, updated_at, device_id)
+         VALUES ('i_bun', 'Bun', 'pcs', 2000, NULL, NULL, ?, ?, ?)`,
+      )
+      .run(T0, T0, DEV);
+    // Sent on the 24th (2 buns out), cancelled from Order History on the 25th as "made".
+    seedOrder(raw, {
+      id: 'o_late',
+      status: 'void',
+      createdAt: '2026-09-24T12:00:00.000Z',
+      paidAt: null,
+      subtotal: 100000,
+      tax: 16000,
+      total: 116000,
+      items: [burger(2)],
+      voidedBy: 'u_sara',
+      voidReason: 'Not collected',
+    });
+    const mv = raw.prepare(
+      `INSERT INTO stock_movements (id, ingredient_id, delta_qty, reason, ref_order_id, notes, occurred_at, resulting_qty, unit,
+         created_at, updated_at, device_id)
+       VALUES (?, 'i_bun', ?, ?, 'o_late', ?, ?, 0, 'pcs', ?, ?, ?)`,
+    );
+    mv.run('m_take', -2, 'sale', null, '2026-09-24T12:01:00.000Z', T0, T0, DEV);
+    mv.run('m_undo', 2, 'sale', 'Cancelled after cooking — moved to waste', '2026-09-25T09:00:00.000Z', T0, T0, DEV);
+    mv.run('m_waste', -2, 'waste', 'Cancelled after cooking — counted as waste', '2026-09-25T09:00:00.000Z', T0, T0, DEV);
+
+    const day24 = getBusinessReport(db, DAY_BEFORE);
+    const day25 = getBusinessReport(db, DAY);
+    raw.close();
+    expect(day24.foodCost).toMatchObject({
+      usedCents: 0,
+      wasteCents: 4000,
+      cancelledWasteCents: 4000,
+      cancelledOrderCount: 1,
+      hasUsage: true,
+    });
+    expect(day24.foodCost.ingredients).toEqual([
+      { ingredientId: 'i_bun', name: 'Bun', unit: 'pcs', usedQty: 0, wastedQty: 2, usedCents: 0, wastedCents: 4000 },
+    ]);
+    // The void is listed on its order's day, with what happened to the stock
+    // (no order-level audit row here, so the status it was in is unknown; the
+    // answer is read from the rows' notes).
+    expect(day24.voids.map((v) => [v.orderId, v.stock])).toEqual([
+      ['o_late', { outcome: 'wasted', answer: 'made', wasteCents: 4000, statusBefore: null, flagged: false }],
+    ]);
+    // The day it was cancelled shows nothing for it.
+    expect(day25.foodCost).toMatchObject({ usedCents: 0, wasteCents: 0, cancelledWasteCents: 0, hasUsage: false });
+  });
+
+  it('reads order-linked stock by order, never by walking every earlier sale', () => {
+    const { raw } = openMigrated();
+    const plan = (sql: string, params: string[]) =>
+      (raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail: string }>).map((r) => r.detail);
+    const { sinceIso: a, untilIso: b } = DAY;
+    const food = plan(FOOD_COST_SQL, [a, b, a, a, b]);
+    const cancelled = plan(CANCELLED_WASTE_ORDERS_SQL, [a, b, a]);
+    raw.close();
+    for (const steps of [food, cancelled]) {
+      // Every look-up of the movements table goes through an index…
+      const moves = steps.filter((d) => /\b(m|e|stock_movements)\b/.test(d) && /SCAN|SEARCH/.test(d));
+      expect(moves.length).toBeGreaterThan(0);
+      for (const d of moves) expect(d).toMatch(/USING (COVERING )?INDEX/);
+      // …and the per-order probes (the NOT EXISTS and the join) by order.
+      expect(steps.filter((d) => /SEARCH (e|m) USING (COVERING )?INDEX idx_movements_order/.test(d)).length).toBeGreaterThanOrEqual(2);
+      expect(steps.join(' | ')).not.toMatch(/SEARCH e USING (COVERING )?INDEX idx_movements_reason_time/);
+    }
   });
 
   it('reads orders and stock by date through an index, not a full-table scan', () => {

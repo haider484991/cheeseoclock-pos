@@ -4,7 +4,8 @@ import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
-import { decrementForOrder, returnStockForOrder } from './stock-movement-repo.js';
+import { decrementForOrder } from './stock-movement-repo.js';
+import { settleOrderStock } from './order-stock-repo.js';
 import {
   buildOrderHistoryWhere,
   historyPage,
@@ -31,7 +32,9 @@ import type {
   Payment,
   PaymentMethod,
   OrderSnapshot,
+  OrderStockAnswer,
   PrepStation,
+  StockSettlement,
   UUID,
 } from '@cheeseoclock/shared-types';
 import type {
@@ -1453,15 +1456,32 @@ export function tenderOrder(
 // Void
 // -----------------------------------------------------------------------------
 
+/** What a cancel or refund did: the order after it, and to its stock. */
+export interface OrderCloseResult {
+  order: Order;
+  /** Null when the order held no stock here (or a part refund left money on it). */
+  stock: StockSettlement | null;
+  /** The status it had just before (the kitchen gets a CANCELLED slip while it was cooking). */
+  statusBefore: OrderStatus;
+}
+
+/** The dialog showed one status; the order has moved on since (the kitchen tapped a button). */
+function checkExpectedStatus(order: Order, expected: OrderStatus | undefined): void {
+  if (expected !== undefined && order.status !== expected) {
+    throw new Error(`This order is now ${said(order.status)} — close this and check again`);
+  }
+}
+
 export function voidOrder(
   db: AppDatabase,
-  input: { orderId: string; reason: string; approverUserId: string },
+  input: { orderId: string; reason: string; approverUserId: string } & OrderStockAnswer,
   actor: Actor & { userId: string },
-): Order {
-  let result!: Order;
+): OrderCloseResult {
+  let result!: OrderCloseResult;
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
+    checkExpectedStatus(order, input.expectStatus);
 
     const v = validateVoid({ status: order.status, paidAt: order.paidAt, reason: input.reason });
     if (!v.ok) throw new Error(v.missing.join('; '));
@@ -1473,9 +1493,22 @@ export function voidOrder(
         WHERE id = ?`,
     ).run(now, input.approverUserId, input.reason, now, input.orderId);
 
-    // Stock leaves when the kitchen gets the order. Cancelled before the
-    // kitchen started on it, it goes back; once cooking has started it is gone.
-    if (order.status === 'sent_to_kitchen') returnStockForOrder(db, input.orderId, actor);
+    // Stock left when the kitchen got the order. Whatever it still holds is
+    // put back or booked as waste, per "Was the food made?" — at any status
+    // (order-stock-repo.ts). A refusal there (no answer; "not made" for food
+    // that left the shop) rolls the whole cancel back.
+    const stock = settleOrderStock(
+      db,
+      {
+        orderId: input.orderId,
+        how: 'cancelled',
+        statusBefore: order.status,
+        approverUserId: input.approverUserId,
+        ...(input.foodMade !== undefined ? { foodMade: input.foodMade } : {}),
+        ...(input.putBack !== undefined ? { putBack: input.putBack } : {}),
+      },
+      actor,
+    );
 
     const voided = {
       ...order,
@@ -1498,7 +1531,7 @@ export function voidOrder(
       before: order,
       after: voided,
     });
-    result = voided;
+    result = { order: voided, stock, statusBefore: order.status };
   });
   tx();
   return result;
@@ -1511,16 +1544,22 @@ export function voidOrder(
 /**
  * Refund a paid order. Supports two modes:
  *   1. Full refund (no `amountCents` given) — inserts one negative payment
- *      per original positive payment so the books mirror perfectly. Status
- *      moves to 'refunded'.
+ *      per original positive payment so the books mirror perfectly (or, after
+ *      an earlier part refund, one refund of what is left). Status moves to
+ *      'refunded'.
  *   2. Partial refund (`amountCents` provided) — inserts a single negative
  *      payment with the supplied method (or the dominant payment method on
- *      the order if not specified). Status stays 'paid' until cumulative
- *      refunds equal the order total, at which point it flips to 'refunded'.
+ *      the order if not specified). The status is left as it is (an order
+ *      still in the kitchen stays there; a closed one stays paid) until the
+ *      refunds add up to everything paid, when it flips to 'refunded'.
  *
  * Partial-refund accumulation is computed from the payments ledger, so
  * multiple partials add up correctly. Refund amount can't exceed the
  * remaining refundable balance.
+ *
+ * Stock: money only, until the order is refunded in full. Then whatever it
+ * still holds is put back or booked as waste, per "Was the food made?"
+ * (order-stock-repo.ts) — a part refund can't say which item it was for.
  */
 export function refundOrder(
   db: AppDatabase,
@@ -1530,13 +1569,27 @@ export function refundOrder(
     approverUserId: string;
     amountCents?: number;
     method?: PaymentMethod;
-  },
+  } & OrderStockAnswer,
   actor: Actor & { userId: string },
-): Order {
-  let result!: Order;
+): OrderCloseResult {
+  let result!: OrderCloseResult;
+  const settle = (statusBefore: OrderStatus): StockSettlement | null =>
+    settleOrderStock(
+      db,
+      {
+        orderId: input.orderId,
+        how: 'refunded',
+        statusBefore,
+        approverUserId: input.approverUserId,
+        ...(input.foodMade !== undefined ? { foodMade: input.foodMade } : {}),
+        ...(input.putBack !== undefined ? { putBack: input.putBack } : {}),
+      },
+      actor,
+    );
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
+    checkExpectedStatus(order, input.expectStatus);
     if (order.status === 'refunded') throw new Error('Order already fully refunded');
     if (order.status === 'void') throw new Error('Cannot refund a voided order');
     if (order.paidAt === null) {
@@ -1629,8 +1682,8 @@ export function refundOrder(
         `UPDATE orders SET updated_at = ?, version = version + 1${statusUpdate}
           WHERE id = ?`,
       ).run(now, ...statusParams, input.orderId);
-      // All the money back before the kitchen started: the stock goes back too.
-      if (fullyRefunded && order.status === 'sent_to_kitchen') returnStockForOrder(db, input.orderId, actor);
+      // The last of the money back: the order ends, and so does its hold on stock.
+      const stock = fullyRefunded ? settle(order.status) : null;
 
       const after = findOrder(db, input.orderId)!;
       enqueueSync(db, {
@@ -1647,7 +1700,7 @@ export function refundOrder(
         before: order,
         after,
       });
-      result = after;
+      result = { order: after, stock, statusBefore: order.status };
       return;
     }
 
@@ -1705,8 +1758,8 @@ export function refundOrder(
                           updated_at = ?, version = version + 1
         WHERE id = ?`,
     ).run(now, input.approverUserId, input.reason.trim(), now, input.orderId);
-    // Refunded before the kitchen started on it: the stock goes back too.
-    if (order.status === 'sent_to_kitchen') returnStockForOrder(db, input.orderId, actor);
+    // Refunded in full: whatever it still holds is put back or wasted.
+    const stock = settle(order.status);
 
     const after = findOrder(db, input.orderId)!;
     enqueueSync(db, {
@@ -1723,7 +1776,7 @@ export function refundOrder(
       before: order,
       after,
     });
-    result = after;
+    result = { order: after, stock, statusBefore: order.status };
   });
   tx();
   log.info('Order refunded', { id: input.orderId });
@@ -1935,12 +1988,19 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
 // Live order tracking — status transitions for the Live Orders board.
 //
 // State machine (legal transitions enforced here, in addition to UI):
-//   open / sent_to_kitchen   → preparing
-//   preparing                → ready
-//   ready                    → out_for_delivery (delivery)  | served (dine-in/takeaway)
-//   out_for_delivery         → delivered
-//   delivered                → paid (via tenderOrder, COD case)
-//   any active               → void (via voidOrder)
+//   open                     → sent_to_kitchen (sendOrderToKitchen; or tenderOrder,
+//                              which pays and sends in one step). Stock leaves here.
+//   sent_to_kitchen          → preparing | ready | out_for_delivery (a rider pre-assigned)
+//   preparing                → ready | out_for_delivery
+//   ready                    → out_for_delivery (delivery)  | served / paid (takeaway, dine-in)
+//   out_for_delivery         → ready (rider un-assigned) | delivered / paid (markOrderDelivered)
+//   served / delivered       → paid (markOrderServed / markOrderDelivered with a payment)
+//   unpaid, not void         → void (voidOrder); paid → refunded (refundOrder).
+//                              Either way the stock it holds is settled
+//                              ("Was the food made?", order-stock-repo.ts).
+//
+// Nothing moves an order forward from 'open' but sending it: preparing, ready
+// or a rider straight from a draft skipped the stock (found 2026-09-26).
 //
 // Each transition uses writeWithSync so sync + audit get the change.
 // -----------------------------------------------------------------------------
@@ -2098,7 +2158,7 @@ export function markOrderPreparing(
     db,
     orderId,
     'preparing',
-    ['open', 'sent_to_kitchen'],
+    ['sent_to_kitchen'],
     [],
     actor,
     'mark_preparing',
@@ -2114,7 +2174,7 @@ export function markOrderReady(
     db,
     orderId,
     'ready',
-    ['open', 'sent_to_kitchen', 'preparing'],
+    ['sent_to_kitchen', 'preparing'],
     [],
     actor,
     'mark_ready',
@@ -2124,7 +2184,8 @@ export function markOrderReady(
 /**
  * Assign a rider to a delivery order. Moves the status to `out_for_delivery`
  * and stamps `dispatched_at`. Allowed from `ready` (the usual path), but also
- * from earlier states if the dispatcher wants to pre-assign.
+ * from earlier kitchen states if the dispatcher wants to pre-assign — never
+ * from a draft that was not sent (it would skip the stock).
  */
 export function assignRiderToOrder(
   db: AppDatabase,
@@ -2150,7 +2211,7 @@ export function assignRiderToOrder(
     db,
     orderId,
     'out_for_delivery',
-    ['open', 'sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'],
+    ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'],
     [
       { col: 'assigned_rider_id', value: riderId },
       { col: 'dispatched_at', value: nowIso() },

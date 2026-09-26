@@ -24,11 +24,10 @@ describe('validateOrderForTender', () => {
     expect(validateOrderForTender({ ...base, mode: 'dine_in', tableId: 't1' }).ok).toBe(true);
   });
 
-  it('takeaway needs a phone or a name', () => {
-    expect(validateOrderForTender({ ...base, mode: 'takeaway' }).ok).toBe(false);
-    expect(validateOrderForTender({ ...base, mode: 'takeaway', customerName: 'Ali' }).ok).toBe(
-      true,
-    );
+  it('takeaway needs only items — the customer is optional (owner 2026-09-26)', () => {
+    expect(validateOrderForTender({ ...base, mode: 'takeaway' })).toEqual({ ok: true, missing: [] });
+    expect(validateOrderForTender({ ...base, mode: 'takeaway', customerName: 'Ali' }).ok).toBe(true);
+    expect(validateOrderForTender({ ...base, mode: 'takeaway', itemCount: 0, subtotalCents: 0 }).ok).toBe(false);
   });
 
   it('delivery needs name, phone and address', () => {

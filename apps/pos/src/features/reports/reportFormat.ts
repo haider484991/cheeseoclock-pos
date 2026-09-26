@@ -2,7 +2,14 @@
  * Plain-words labels and the small calculations the Reports page shows.
  * Pure (no React, no DOM) so they are unit-tested.
  */
-import type { BusinessReport, ReportChannel, ReportPaymentGroup } from '@cheeseoclock/shared-types';
+import { formatCents } from '@cheeseoclock/pos-domain';
+import type {
+  BusinessReport,
+  ReportChannel,
+  ReportFoodCost,
+  ReportOrderStock,
+  ReportPaymentGroup,
+} from '@cheeseoclock/shared-types';
 import { daysSoFar, fmtDay, fmtMonth, tradingDayNumber, weekdayIndex, WEEKDAYS, type ReportPeriod } from './dateRange';
 
 export const CHANNEL_LABEL: Record<ReportChannel, string> = {
@@ -207,4 +214,34 @@ export function fmtMinutes(min: number | null): string {
 /** A quantity in an ingredient's unit, with thousands separators: "12,500 g". */
 export function fmtQty(qty: number, unit: string): string {
   return `${new Intl.NumberFormat('en-PK').format(qty)} ${unit}`;
+}
+
+/**
+ * The Stock column for a cancelled or refunded order: "Put back", "Put back ·
+ * was Ready", "Wasted · Rs 180", "Made · drinks put back" (only sealed drinks
+ * moved), or "—" (it held no stock, a part refund, or cancelled before the
+ * till asked). The rupees only when prices are set.
+ */
+export function stockCellText(stock: ReportOrderStock | null, hasCosts: boolean): string {
+  if (!stock) return '—';
+  if (stock.outcome === 'wasted') {
+    return hasCosts && stock.wasteCents > 0 ? `Wasted · ${formatCents(stock.wasteCents)}` : 'Wasted';
+  }
+  if (stock.answer === 'made') return 'Made · drinks put back';
+  const was = stock.statusBefore ? STATUS_WAS[stock.statusBefore] : undefined;
+  return stock.flagged && was ? `Put back · was ${was}` : 'Put back';
+}
+
+const STATUS_WAS: Record<string, string> = {
+  sent_to_kitchen: 'with the kitchen',
+  preparing: 'being cooked',
+  ready: 'Ready',
+};
+
+/** Under the Wasted tile: "Rs 540 of it from 3 cancelled orders". */
+export function cancelledWasteText(f: Pick<ReportFoodCost, 'cancelledWasteCents' | 'cancelledOrderCount' | 'hasCosts'>): string {
+  const orders = `${f.cancelledOrderCount} cancelled order${f.cancelledOrderCount === 1 ? '' : 's'}`;
+  return f.hasCosts && f.cancelledWasteCents > 0
+    ? `${formatCents(f.cancelledWasteCents)} of it from ${orders}`
+    : `Some of it from ${orders}`;
 }

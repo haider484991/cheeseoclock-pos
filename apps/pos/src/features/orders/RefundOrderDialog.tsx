@@ -11,6 +11,9 @@ import { SecretHint } from '../../components/secret/SecretHint';
 import { approvalProblem } from '../../components/secret/secretRules';
 import type { OrderSnapshot, PaymentMethod } from '@cheeseoclock/shared-types';
 import { parseRupeesToCents } from './boardLogic';
+import { FoodMadeQuestion, useFoodMadeAnswer } from './FoodMadeQuestion';
+import { REFUND_REASONS, refundToast } from './stockCopy';
+import { shortOrderNumber } from './historyFilters';
 
 interface Props {
   snap: OrderSnapshot;
@@ -21,8 +24,9 @@ interface Props {
 /**
  * Give money back on a paid order — all of what is left, or part of it.
  * Needs a reason + a manager's PIN or password (the server checks both). A full refund moves
- * the order to Refunded; a part refund leaves it paid until nothing is left.
- * Enter confirms.
+ * the order to Refunded; a part refund leaves it as it is until nothing is left.
+ * The refund that ends the order (all of it, or the last part) also asks
+ * "Was the food made?" when the order took stock. Enter confirms.
  */
 export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
   // What can still be given back: every payment added up (refunds are negative).
@@ -41,9 +45,14 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
   const [reason, setReason] = useState('');
   const [pin, setPin] = useState('');
   const { toast } = useToast();
+  const fm = useFoodMadeAnswer(snap);
+  const short = shortOrderNumber(snap.order.orderNumber);
 
   const partialCents = mode === 'partial' ? parseRupeesToCents(partialStr) : 0;
   const refundAmountCents = mode === 'full' ? remainingCents : Number.isFinite(partialCents) ? partialCents : 0;
+  // Only the refund that ends the order touches stock; a part refund is money only.
+  const endsOrder = mode === 'full' || (partialCents > 0 && partialCents === remainingCents);
+  const asksStock = endsOrder && fm.question !== null;
 
   const refundMut = useMutation({
     mutationFn: () =>
@@ -52,12 +61,11 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
         reason: reason.trim(),
         approverPin: pin.trim(),
         ...(mode === 'partial' ? { amountCents: partialCents, method } : {}),
+        ...(endsOrder ? fm.payload() : { expectStatus: fm.orderStatus }),
       }),
-    onSuccess: () => {
-      toast({
-        title: mode === 'full' ? 'Refund done' : 'Part refund done',
-        description: `${formatCents(refundAmountCents)} back to the customer`,
-      });
+    onSuccess: (done) => {
+      // What the till actually did, from its reply.
+      toast(refundToast(done.order.status === 'refunded', formatCents(refundAmountCents), done.stock));
       onDone();
     },
     onError: (e) =>
@@ -68,8 +76,15 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
       }),
   });
 
+  function pickReason(label: string) {
+    setReason(label);
+    // A part refund moves no stock: a chip answers nothing then. Otherwise it
+    // fills the question only while nobody has answered it.
+    if (endsOrder) fm.pickReason(REFUND_REASONS, label);
+  }
+
   function submit() {
-    if (refundMut.isPending) return;
+    if (refundMut.isPending || fm.loading) return;
     if (remainingCents <= 0) {
       toast({ title: 'Nothing left to refund on this order', variant: 'warning' });
       return;
@@ -90,6 +105,10 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
     }
     if (!reason.trim()) {
       toast({ title: 'Say why you are refunding', variant: 'warning' });
+      return;
+    }
+    if (endsOrder && fm.missing) {
+      toast({ title: 'Tap Made or Not made', variant: 'warning' });
       return;
     }
     const pinProblem = approvalProblem(pin);
@@ -114,14 +133,15 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[460px] max-w-[95vw] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] flex max-h-[90vh] w-[460px] max-w-[95vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl bg-white shadow-soft-lg dark:bg-stone-900">
           <form
+            className="flex min-h-0 flex-1 flex-col"
             onSubmit={(e) => {
               e.preventDefault();
               submit();
             }}
           >
-            <header className="mb-4 flex items-start justify-between gap-3">
+            <header className="flex items-start justify-between gap-3 px-5 pb-3 pt-5">
               <div className="flex items-start gap-2">
                 <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-200">
                   <Undo2 className="h-4 w-4" />
@@ -129,7 +149,7 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                 <div>
                   <Dialog.Title className="text-lg font-semibold">Refund</Dialog.Title>
                   <Dialog.Description className="mt-0.5 text-xs text-stone-500">
-                    Order #{snap.order.orderNumber.split('-').pop()} · {snap.customerName ?? 'Walk-in'} · paid{' '}
+                    Order {short} · {snap.customerName ?? 'Walk-in'} · paid{' '}
                     {formatCents(remainingCents)}
                   </Dialog.Description>
                 </div>
@@ -144,6 +164,7 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
               </button>
             </header>
 
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-1">
             <div className="mb-3 flex gap-1 rounded-lg bg-stone-100 p-1 dark:bg-stone-800">
               {(['full', 'partial'] as const).map((m) => (
                 <button
@@ -216,19 +237,52 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                   </div>
                 </>
               )}
-              <label className="block text-sm">
-                <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">Reason</span>
+              <div className="block text-sm">
+                <label htmlFor="refund-reason" className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
+                  Reason
+                </label>
+                <div className="mb-1.5 flex flex-wrap gap-1.5">
+                  {REFUND_REASONS.map((r) => (
+                    <button
+                      key={r.label}
+                      type="button"
+                      onClick={() => pickReason(r.label)}
+                      aria-pressed={reason === r.label}
+                      className={cn(
+                        'rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition-colors',
+                        reason === r.label
+                          ? 'bg-amber-100 text-amber-900 ring-amber-300 dark:bg-amber-950 dark:text-amber-100 dark:ring-amber-700'
+                          : 'bg-stone-50 text-stone-700 ring-stone-200 hover:bg-stone-100 dark:bg-stone-800 dark:text-stone-200 dark:ring-stone-700',
+                      )}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
                 <input
+                  id="refund-reason"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                   autoFocus={mode === 'full'}
                   className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
-                  placeholder="Wrong order, customer unhappy…"
+                  placeholder="Or type why…"
                 />
-              </label>
+              </div>
+              {endsOrder ? (
+                <FoodMadeQuestion fm={fm} shortNumber={short} />
+              ) : (
+                fm.question !== null && (
+                  <div className="rounded-lg bg-stone-50 p-2.5 text-xs text-stone-600 dark:bg-stone-800/60 dark:text-stone-300">
+                    A part refund doesn't change stock. If an item was never made, fix it in Inventory → Stock.
+                  </div>
+                )
+              )}
               <label className="block text-sm">
                 <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                   Manager PIN or password
+                  {asksStock && (
+                    <span className="ml-1 font-normal text-stone-500">— approves the refund and the stock</span>
+                  )}
                 </span>
                 <SecretInput
                   value={pin}
@@ -239,13 +293,14 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                 <SecretHint value={pin} className="mt-1" />
               </label>
             </div>
+            </div>
 
-            <div className="mt-5 flex gap-2">
+            <div className="flex gap-2 border-t border-stone-100 px-5 py-4 dark:border-stone-800">
               <Button type="button" variant="ghost" size="md" className="flex-1" onClick={onClose}>
                 Back
               </Button>
-              <Button type="submit" variant="danger" size="md" className="flex-1" disabled={refundMut.isPending}>
-                {refundMut.isPending ? 'Refunding…' : `Refund ${formatCents(refundAmountCents)}`}
+              <Button type="submit" variant="danger" size="md" className="flex-1" disabled={refundMut.isPending || fm.loading}>
+                {fm.loading ? 'Checking stock…' : refundMut.isPending ? 'Refunding…' : `Refund ${formatCents(refundAmountCents)}`}
               </Button>
             </div>
           </form>

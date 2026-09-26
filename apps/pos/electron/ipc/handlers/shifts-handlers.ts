@@ -5,6 +5,7 @@ import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession, verifyManagerPin } from '../../services/auth-service.js';
 import {
   closeShift,
+  findShift,
   getCurrentShift,
   getLastCount,
   getShiftSummary,
@@ -15,11 +16,17 @@ import {
 } from '../../db/repositories/shift-repo.js';
 import { printSpooler } from '../../services/print-spooler.js';
 import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-service.js';
+import { requireCapability, REFUSED } from '../guards.js';
 
 /**
  * Shifts IPC. Open/close are gated on the `shift.open` / `shift.close`
- * capabilities (see ROLE_CAPABILITIES). Read endpoints are open to any
- * logged-in user so the TopBar widget can show "Shift open" to everyone.
+ * capabilities (see ROLE_CAPABILITIES). Anyone logged in reads the shift open
+ * now (the TopBar's "Shift open" pill) and the last counted cash (the float
+ * suggestion). The money of a shift — takings, expected cash, past shifts'
+ * counts — is for managers and the owner: a cashier who knows what the drawer
+ * should hold knows how much can go missing, and the count is blind
+ * (owner, 2026-09-26). A cashier sees the cash in / out of the shift open now
+ * only (the list in that dialog).
  */
 
 function requireSession(): AuthenticatedUser {
@@ -92,7 +99,7 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('shifts:list', ctx, (_ctx, payload) => {
-    requireSession();
+    requireCapability('report.view', REFUSED.shiftTotals);
     return ok(listShifts(ctx.db, payload ?? {}));
   });
 
@@ -168,12 +175,16 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('shifts:listCashMovements', ctx, (_ctx, payload) => {
-    requireSession();
+    const s = requireSession();
+    if (!hasCapability(s.role, 'shift.close') && findShift(ctx.db, payload.shiftId)?.closedAt !== null) {
+      throw new IpcGuardError({ code: 'forbidden', message: REFUSED.earlierShiftCash });
+    }
     return ok(listCashMovements(ctx.db, payload.shiftId));
   });
 
+  // Takings and the expected cash: the close dialog's, so the same people.
   defineHandler('shifts:summary', ctx, (_ctx, payload) => {
-    requireSession();
+    requireCapability('shift.close', REFUSED.shiftTotals);
     try {
       return ok(getShiftSummary(ctx.db, payload.shiftId));
     } catch (e) {

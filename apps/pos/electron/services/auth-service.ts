@@ -35,6 +35,32 @@ const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h
  */
 export const ELEVATED_IDLE_MS = 15 * 60 * 1000;
 
+/**
+ * An owner or manager signing in on a till a cashier was just using is
+ * stepping in: to approve something, fix a customer, reprint an old order,
+ * close the shift. The idle timer can't end that login — at a busy counter
+ * the cashier's own taps keep it alive, and the cashier would work on with
+ * the customer list, the history and the reports on screen, every sale in
+ * the manager's name (owner, 2026-09-26).
+ *
+ * So this long after it began, however busy the till is, that login is HELD:
+ * nothing more is allowed on it, but it is not ended and the screen keeps
+ * everything on it (a half-edited menu item, a drawer count being typed).
+ * The till asks for that same person's PIN or password (keepStepIn): typed,
+ * the login carries on as a normal one; "Hand back to cashier" logs out. The
+ * screen warns a minute before. Nobody answering: the owner / manager idle
+ * rule ends it (no key presses count while it is held).
+ */
+export const STEP_IN_MAX_MS = 10 * 60 * 1000;
+/**
+ * A cashier on this till within this long before the sign-in means the
+ * manager is stepping in. Short on purpose: the owner signing in the next
+ * morning, or a manager arriving long after the cashier left, is not.
+ */
+export const STEP_IN_LOOKBACK_MS = 15 * 60 * 1000;
+/** The audit action that makes a stepping-in login a normal one (also read back after a restart). */
+const STEP_IN_KEPT = 'session_step_in_kept';
+
 /** A PIN or password nobody has. */
 export const WRONG_SECRET = 'PIN or password is wrong';
 /**
@@ -43,6 +69,11 @@ export const WRONG_SECRET = 'PIN or password is wrong';
  * the string is a real staff password, which may be used elsewhere too.
  */
 export const NOT_A_MANAGER = "That is not a manager's PIN or password";
+
+/** Keeping a stepping-in login with a secret that is not that person's (same message for nobody's). */
+export function notTheirSecret(fullName: string): string {
+  return `That is not ${fullName}'s PIN or password`;
+}
 
 /**
  * The typed secret, normalized, or a plain-words refusal. A value that breaks
@@ -61,19 +92,88 @@ let currentSession: AuthenticatedUser | null = null;
 let sessionDb: AppDatabase | null = null;
 let sessionStartedAtMs = 0;
 let lastActivityAtMs = 0;
+/** When a stepping-in login ends (STEP_IN_MAX_MS), or null. */
+let stepInEndsAtMs: number | null = null;
+
+/**
+ * Is this owner / manager login stepping in for a cashier? The session this
+ * till had before `sessionId` belonged to a cashier who was on the till
+ * within STEP_IN_LOOKBACK_MS of `startMs` (a cashier login never logged out
+ * counts as on the till until now). Returns when the login is held, or null
+ * (a cashier's own login, the first login of the morning, a manager after a
+ * manager, a login already kept with its PIN).
+ */
+function stepInEnd(
+  db: AppDatabase,
+  deviceId: string,
+  sessionId: string,
+  role: AuthenticatedUser['role'],
+  startMs: number,
+): number | null {
+  if (role === 'cashier' || !Number.isFinite(startMs)) return null;
+  const before = db
+    .prepare(
+      `SELECT u.role AS role, s.started_at AS started_at, s.ended_at AS ended_at
+         FROM user_sessions s
+         JOIN users u ON u.id = s.user_id
+        WHERE s.device_id = ? AND s.id <> ? AND s.started_at <= ?
+        ORDER BY s.started_at DESC, s.rowid DESC
+        LIMIT 1`,
+    )
+    .get(deviceId, sessionId, new Date(startMs).toISOString()) as
+    | { role: string; started_at: string; ended_at: string | null }
+    | undefined;
+  if (!before || before.role !== 'cashier') return null;
+  const lastSeenMs = before.ended_at === null ? startMs : Date.parse(before.ended_at);
+  if (!Number.isFinite(lastSeenMs) || startMs - lastSeenMs > STEP_IN_LOOKBACK_MS) return null;
+  const kept = db
+    .prepare(`SELECT 1 AS kept FROM audit_log WHERE entity_type = 'user_sessions' AND entity_id = ? AND action = ? LIMIT 1`)
+    .get(sessionId, STEP_IN_KEPT);
+  if (kept) return null;
+  return startMs + STEP_IN_MAX_MS;
+}
+
+function withStepIn(user: AuthenticatedUser): AuthenticatedUser {
+  return stepInEndsAtMs === null ? user : { ...user, stepInEndsAt: new Date(stepInEndsAtMs).toISOString() };
+}
 
 /** Someone pressed a key or clicked on the till (renderer → `auth:activity`). */
 export function noteActivity(): void {
-  if (currentSession) lastActivityAtMs = Date.now();
+  // A held login is not kept alive by whoever is tapping the screen meanwhile.
+  if (currentSession && !stepInIsHeld()) lastActivityAtMs = Date.now();
 }
 
 /**
- * The logged-in user, or null. Also where a login ends: an owner or manager
- * idle for ELEVATED_IDLE_MS, any login older than SESSION_MAX_AGE_MS, and a
- * user switched off since they logged in. The role is read again each time, so
+ * The logged-in user, or null — also null while a stepping-in login is held
+ * (see STEP_IN_MAX_MS and getHeldStepIn), so every guard refuses it. The
+ * login itself ends here (liveSession) for an owner or manager idle for
+ * ELEVATED_IDLE_MS, any login older than SESSION_MAX_AGE_MS, and a user
+ * switched off since they logged in. The role is read again each time, so
  * a manager demoted to cashier loses manager rights at once, not at next login.
  */
 export function getCurrentSession(): AuthenticatedUser | null {
+  const s = liveSession();
+  if (!s || stepInIsHeld()) return null;
+  return s;
+}
+
+/**
+ * A stepping-in login whose STEP_IN_MAX_MS are up, marked `stepInHeld`: it
+ * waits for that person's PIN or password (keepStepIn) or a hand-back
+ * (logout), and nothing else is allowed on it meanwhile. Null otherwise.
+ */
+export function getHeldStepIn(): AuthenticatedUser | null {
+  const s = liveSession();
+  if (!s || !stepInIsHeld()) return null;
+  return { ...s, stepInHeld: true };
+}
+
+function stepInIsHeld(): boolean {
+  return stepInEndsAtMs !== null && Date.now() >= stepInEndsAtMs;
+}
+
+/** The session after the rules that END a login, held or not. */
+function liveSession(): AuthenticatedUser | null {
   if (!currentSession) return null;
   const now = Date.now();
   if (now - sessionStartedAtMs > SESSION_MAX_AGE_MS) {
@@ -102,11 +202,67 @@ export function getCurrentSession(): AuthenticatedUser | null {
   return currentSession;
 }
 
-function endSession(action: 'logout' | 'session_expired' | 'session_idle_timeout' | 'session_revoked'): void {
+/**
+ * "It's still me": a stepping-in login's own PIN or password makes it a
+ * normal login, before or after it is held, and nothing on the screen is
+ * lost. Only that person's secret: anyone else's (or nobody's) is refused
+ * and counted as a wrong guess, like a manager approval — someone else takes
+ * the till by handing it back and signing in. Kept is written to the audit
+ * trail, which is also how a restart knows (recoverSession).
+ */
+export async function keepStepIn(db: AppDatabase, pin: string): Promise<AuthenticatedUser> {
+  const secret = readSecret(pin);
+  const s = liveSession();
+  if (!s) throw new Error('Not logged in');
+  if (stepInEndsAtMs === null) return s;
+  const endsAtMs = stepInEndsAtMs;
+  await oneSecretCheckAtATime(async () => {
+    assertSecretNotLocked(db, secret);
+    const found = await findUserBySecret(db, secret);
+    if (!found || found.id !== s.id) {
+      recordSecretFailure(db, secret);
+      throw new Error(notTheirSecret(s.fullName));
+    }
+    clearSecretAttempts(db, secret);
+  });
+  // Handed back, or ended, while the secret was being checked.
+  if (!currentSession || currentSession.sessionId !== s.sessionId) throw new Error('Not logged in');
+  currentSession = {
+    id: currentSession.id,
+    fullName: currentSession.fullName,
+    role: currentSession.role,
+    sessionId: currentSession.sessionId,
+  };
+  stepInEndsAtMs = null;
+  lastActivityAtMs = Date.now();
+  const sessionId = s.sessionId;
+  try {
+    db.transaction(() => {
+      writeAudit(db, {
+        entityType: 'user_sessions',
+        entityId: sessionId,
+        action: STEP_IN_KEPT,
+        actorUserId: s.id,
+        before: { stepInEndsAt: new Date(endsAtMs).toISOString() },
+        after: { stepInEndsAt: null },
+      });
+    })();
+  } catch (e) {
+    // The login is kept either way; only a restart would ask for the PIN again.
+    log.warn('Keeping the step-in login failed to write', { error: String(e) });
+  }
+  log.info('Step-in login kept', { userId: s.id });
+  return currentSession;
+}
+
+function endSession(
+  action: 'logout' | 'session_expired' | 'session_idle_timeout' | 'session_revoked',
+): void {
   const session = currentSession;
   const db = sessionDb;
   currentSession = null;
   sessionDb = null;
+  stepInEndsAtMs = null;
   if (!session || !db) return;
   const now = new Date().toISOString();
   try {
@@ -171,17 +327,18 @@ export async function login(
   });
   tx();
 
-  currentSession = {
+  stepInEndsAtMs = stepInEnd(db, deviceId, sessionId, user.role, Date.parse(now));
+  currentSession = withStepIn({
     id: user.id,
     fullName: user.fullName,
     role: user.role,
     sessionId: sessionId as UUID,
-  };
+  });
   sessionDb = db;
   sessionStartedAtMs = Date.now();
   lastActivityAtMs = sessionStartedAtMs;
 
-  log.info('User logged in', { userId: user.id, role: user.role });
+  log.info('User logged in', { userId: user.id, role: user.role, steppingIn: stepInEndsAtMs !== null });
   return currentSession;
 }
 
@@ -199,7 +356,7 @@ export function recoverSession(db: AppDatabase, deviceId: string): Authenticated
   const cutoff = new Date(Date.now() - SESSION_MAX_AGE_MS).toISOString();
   const row = db
     .prepare(
-      `SELECT s.id AS session_id, s.user_id, u.full_name, u.role
+      `SELECT s.id AS session_id, s.user_id, u.full_name, u.role, s.started_at
          FROM user_sessions s
          JOIN users u ON u.id = s.user_id
         WHERE s.device_id = ? AND s.ended_at IS NULL AND s.started_at >= ?
@@ -207,17 +364,25 @@ export function recoverSession(db: AppDatabase, deviceId: string): Authenticated
         LIMIT 1`,
     )
     .get(deviceId, cutoff) as
-    | { session_id: string; user_id: string; full_name: string; role: AuthenticatedUser['role'] }
+    | {
+        session_id: string;
+        user_id: string;
+        full_name: string;
+        role: AuthenticatedUser['role'];
+        started_at: string;
+      }
     | undefined;
 
   if (!row) return null;
 
-  currentSession = {
+  // A restart does not give a stepping-in login a fresh ten minutes.
+  stepInEndsAtMs = stepInEnd(db, deviceId, row.session_id, row.role, Date.parse(row.started_at));
+  currentSession = withStepIn({
     id: row.user_id as UUID,
     fullName: row.full_name,
     role: row.role,
     sessionId: row.session_id as UUID,
-  };
+  });
   sessionDb = db;
   sessionStartedAtMs = Date.now();
   lastActivityAtMs = sessionStartedAtMs;

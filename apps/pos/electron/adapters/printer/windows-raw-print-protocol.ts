@@ -13,7 +13,8 @@
  *
  * A drawer job's ERR message may start with [offline], [not_sent] or
  * [maybe_sent] (see DrawerFailure): a prefix, so a reply stays three fields
- * and a message may still contain tabs.
+ * and a message may still contain tabs. A paper job's may start with
+ * [maybe_sent] when writing failed part-way (part of it may still print).
  *
  * Plus a single `READY` line from the worker once its helper is compiled.
  * Everything on the wire is ASCII on purpose: the child's console code page
@@ -194,7 +195,8 @@ public static class CheeseOclockRawPrinter {
       try {
         if (!StartPagePrinter(handle)) throw Fail("StartPagePrinter");
         int written;
-        if (!WritePrinter(handle, bytes, bytes.Length, out written)) throw Fail("WritePrinter");
+        // EndDocPrinter below still hands over what was written: part may print.
+        if (!WritePrinter(handle, bytes, bytes.Length, out written)) throw new Exception("[maybe_sent] " + Fail("WritePrinter").Message);
         EndPagePrinter(handle);
         return written;
       } finally {

@@ -5,6 +5,8 @@ import { LogOut, Clock, Calculator, Inbox } from 'lucide-react';
 import { CalculatorPopover } from './CalculatorPopover';
 import { ShiftWidget } from './ShiftWidget';
 import { OpenDrawerDialog } from './OpenDrawerDialog';
+import { useKeepLoginAsk } from './StepInHold';
+import { stepInTimeLabel } from './stepInClock';
 
 /** Re-render every minute so the wall clock stays current. */
 function useNowTick(intervalMs = 60_000): number {
@@ -87,6 +89,31 @@ export function TopBar() {
         >
           <Calculator className="h-4 w-4" />
         </button>
+        {/* A manager or the owner stepping in on a cashier's till: at this time
+            the till asks for their PIN again (auth-service STEP_IN_MAX_MS; the
+            box is StepInHold). One tap hands the till back; "Keep my login"
+            types the PIN now instead. */}
+        {user?.stepInEndsAt && (
+          <>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              title="Log out now and give the till back to the cashier."
+              className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-bold text-stone-900 shadow-soft-sm transition-colors hover:bg-amber-400"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Hand back to cashier
+            </button>
+            <button
+              type="button"
+              onClick={() => useKeepLoginAsk.setState({ open: true })}
+              title="A cashier was using this till, so at this time it asks for your PIN again. Nothing on the screen is lost. Tap to type it now."
+              className="flex items-center gap-1.5 rounded-xl bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:hover:bg-amber-900"
+            >
+              Keep my login · PIN at {stepInTimeLabel(user.stepInEndsAt)}
+            </button>
+          </>
+        )}
         {user && (
           <div className="flex items-center gap-3 rounded-xl bg-stone-100/70 px-3 py-1.5 dark:bg-stone-800/70">
             <div

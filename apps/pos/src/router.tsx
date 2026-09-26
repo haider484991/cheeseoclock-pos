@@ -12,8 +12,11 @@ import { UsersPage } from './features/users/UsersPage';
 import { OrdersBoardPage } from './features/orders/OrdersBoardPage';
 import { OrderHistoryPage } from './features/orders/OrderHistoryPage';
 import { RidersPage } from './features/riders/RidersPage';
+import { RecentOrdersPage } from './features/orders/RecentOrdersPage';
 import { useSessionStore } from './stores/sessionStore';
-import { hasCapability, type Capability } from '@cheeseoclock/shared-types';
+import { canOpenPage, homeFor, type GatedPage } from './features/shell/navAccess';
+import { OnlyFor } from './features/shell/OnlyFor';
+import type { ReactNode } from 'react';
 
 function requireAuth() {
   const session = useSessionStore.getState().user;
@@ -21,11 +24,20 @@ function requireAuth() {
   return session;
 }
 
-function requireCapability(cap: Capability) {
-  return () => {
-    const user = requireAuth();
-    if (!hasCapability(user.role, cap)) throw redirect('/');
-    return user;
+/**
+ * A page for some logins only (who: PAGE_ACCESS in navAccess.ts). Navigating
+ * there without it goes to that person's start page; someone already on it
+ * when their role changes is sent there by OnlyFor, with a toast.
+ */
+function gated(page: GatedPage, element: ReactNode) {
+  return {
+    path: page.slice(1),
+    element: <OnlyFor page={page}>{element}</OnlyFor>,
+    loader: () => {
+      const user = requireAuth();
+      if (!canOpenPage(user.role, page)) throw redirect(homeFor(user.role));
+      return user;
+    },
   };
 }
 
@@ -40,41 +52,17 @@ export const router: ReturnType<typeof createHashRouter> = createHashRouter([
     loader: () => requireAuth(),
     children: [
       { index: true, element: <DashboardPage /> },
-      { path: 'checkout', element: <CheckoutPage />, loader: requireCapability('order.create') },
-      { path: 'orders', element: <OrdersBoardPage />, loader: requireCapability('order.create') },
-      {
-        path: 'orders/history',
-        element: <OrderHistoryPage />,
-        loader: requireCapability('order.create'),
-      },
-      { path: 'riders', element: <RidersPage />, loader: requireCapability('order.create') },
-      { path: 'menu', element: <MenuPage />, loader: requireCapability('menu.manage') },
-      {
-        path: 'inventory',
-        element: <InventoryPage />,
-        loader: requireCapability('menu.manage'),
-      },
-      {
-        path: 'reports',
-        element: <ReportsPage />,
-        loader: requireCapability('report.view'),
-      },
-      {
-        path: 'customers',
-        element: <CustomersPage />,
-        loader: requireCapability('order.create'),
-      },
-      {
-        path: 'users',
-        element: <UsersPage />,
-        loader: requireCapability('users.manage'),
-      },
-      {
-        path: 'settings',
-        element: <SettingsPage />,
-        // Managers reach it for the printers; the page shows them nothing else.
-        loader: requireCapability('printer.manage'),
-      },
+      gated('/checkout', <CheckoutPage />),
+      gated('/orders', <OrdersBoardPage />),
+      gated('/orders/recent', <RecentOrdersPage />),
+      gated('/orders/history', <OrderHistoryPage />),
+      gated('/riders', <RidersPage />),
+      gated('/menu', <MenuPage />),
+      gated('/inventory', <InventoryPage />),
+      gated('/reports', <ReportsPage />),
+      gated('/customers', <CustomersPage />),
+      gated('/users', <UsersPage />),
+      gated('/settings', <SettingsPage />),
     ],
   },
   // Catch-all: any stale or unknown hash → bounce to dashboard.

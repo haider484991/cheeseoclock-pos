@@ -15,6 +15,7 @@ import {
   Users,
   Boxes,
   Contact,
+  Receipt,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -74,7 +75,18 @@ export function DashboardPage() {
       },
     },
     {
-      allowed: can('order.create'),
+      // The counter's window on this shift; managers have Order History.
+      allowed: can('order.create') && !can('order.history'),
+      tile: {
+        icon: Receipt,
+        title: 'Recent orders',
+        subtitle: 'This shift at this till',
+        to: '/orders/recent',
+        tone: 'from-sky-400 to-blue-500',
+      },
+    },
+    {
+      allowed: can('customers.manage'),
       tile: {
         icon: Contact,
         title: 'Customers',

@@ -14,6 +14,7 @@ export * from './customer.js';
 export * from './auth.js';
 export * from './sync.js';
 export * from './order.js';
+export * from './order-stock.js';
 export * from './order-history.js';
 export * from './menu.js';
 export * from './menu-import.js';

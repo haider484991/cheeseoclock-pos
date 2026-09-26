@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { cn } from '@cheeseoclock/ui';
 import { useSessionStore } from '../../stores/sessionStore';
 import { ipc } from '../../ipc/client';
-import type { Capability } from '@cheeseoclock/shared-types';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -17,36 +16,49 @@ import {
   ClipboardList,
   Bike,
   History,
+  Receipt,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { StoreLogo, useImageAspect } from '../settings/StoreLogo';
+import { PAGE_ACCESS, showInNav, type GatedPage } from './navAccess';
 
 interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
-  capability?: Capability;
+  /** Who sees it: PAGE_ACCESS in navAccess.ts (the routes use the same list). None = everyone. */
+  page?: GatedPage;
   comingSoon?: boolean;
   /** Key for a live count badge (e.g. 'liveOrders'). */
   badgeKey?: 'liveOrders';
 }
 
+const navItem = (page: GatedPage, icon: LucideIcon, extra: Partial<NavItem> = {}): NavItem => ({
+  to: page,
+  label: PAGE_ACCESS[page].label,
+  icon,
+  page,
+  ...extra,
+});
+
 const ITEMS: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/checkout', label: 'Checkout', icon: ShoppingCart, capability: 'order.create' },
-  { to: '/orders', label: 'Live Orders', icon: ClipboardList, capability: 'order.create', badgeKey: 'liveOrders' },
-  { to: '/orders/history', label: 'Order History', icon: History, capability: 'order.create' },
-  { to: '/riders', label: 'Riders', icon: Bike, capability: 'order.create' },
-  { to: '/menu', label: 'Menu', icon: UtensilsCrossed, capability: 'menu.manage' },
-  { to: '/inventory', label: 'Inventory', icon: Boxes, capability: 'menu.manage' },
-  { to: '/customers', label: 'Customers', icon: Contact, capability: 'order.create' },
-  { to: '/reports', label: 'Reports', icon: BarChart3, capability: 'report.view' },
-  { to: '/users', label: 'Users', icon: Users, capability: 'users.manage' },
-  { to: '/settings', label: 'Settings', icon: Settings, capability: 'printer.manage' },
+  navItem('/checkout', ShoppingCart),
+  navItem('/orders', ClipboardList, { badgeKey: 'liveOrders' }),
+  navItem('/orders/recent', Receipt),
+  navItem('/orders/history', History),
+  navItem('/riders', Bike),
+  navItem('/menu', UtensilsCrossed),
+  navItem('/inventory', Boxes),
+  navItem('/customers', Contact),
+  navItem('/reports', BarChart3),
+  navItem('/users', Users),
+  navItem('/settings', Settings),
 ];
 
 export function Sidebar() {
   const can = useSessionStore((s) => s.can);
+  const role = useSessionStore((s) => s.user?.role ?? null);
   const cfgQ = useQuery({
     queryKey: ['printer', 'config'],
     queryFn: () => ipc.printer.getConfig(),
@@ -71,7 +83,7 @@ export function Sidebar() {
 
       <nav className="flex-1 space-y-0.5 px-3 pb-3">
         {ITEMS.map((item) => {
-          const allowed = !item.capability || can(item.capability);
+          const allowed = !item.page || (role !== null && showInNav(role, item.page));
           if (!allowed) return null;
           const Icon = item.icon;
           return (

@@ -151,6 +151,9 @@ describe('windows raw print protocol', () => {
     const send = script.slice(script.indexOf('public static int Send('), script.indexOf('public const string DrawerDoc'));
     expect(send.indexOf('Blocked(handle, out ahead)')).toBeGreaterThan(-1);
     expect(send.indexOf('Blocked(handle, out ahead)')).toBeLessThan(send.indexOf('StartDocPrinter(handle'));
+    // A receipt whose write failed part-way may still print part of it (the
+    // job is closed, not aborted): tagged so its retry says DUPLICATE.
+    expect(send).toContain('throw new Exception("[maybe_sent] " + Fail("WritePrinter").Message)');
     // Never touch the console code page — see the module comment.
     expect(script).not.toContain('InputEncoding');
     expect(script).not.toContain('OutputEncoding');

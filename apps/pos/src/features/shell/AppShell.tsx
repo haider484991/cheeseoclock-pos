@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { ReceiptLogoKeeper } from '../settings/ReceiptLogoKeeper';
 import { TopBar } from './TopBar';
+import { StepInHold } from './StepInHold';
 import { useSessionStore } from '../../stores/sessionStore';
 import { ipc, onLowStock, onPrinterFailed, onWebOrderReceived } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -114,6 +115,8 @@ export function AppShell() {
     <div className={isCheckout ? 'app-shell app-shell--compact flex h-full' : 'app-shell flex h-full'}>
       <Sidebar />
       <ReceiptLogoKeeper />
+      {/* A manager's stepping-in login: the PIN box over the page when it is held. */}
+      <StepInHold />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar />
         <main className={isCheckout ? 'checkout-main min-h-0 flex-1 overflow-auto' : 'min-h-0 flex-1 overflow-auto p-4 lg:p-8'}>

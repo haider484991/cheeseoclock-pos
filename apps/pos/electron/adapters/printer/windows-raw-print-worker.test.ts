@@ -115,6 +115,20 @@ describe('RawPrintWorker', () => {
     await expect(a).resolves.toBe(1);
   });
 
+  it('a receipt whose writing failed part-way is retried, marked "may have printed"', async () => {
+    const { worker, spawned } = harness();
+    const result = worker.send('P', new Uint8Array([1]));
+    const proc = spawned[0]!;
+    proc.ready();
+    const job = await nextJob(proc);
+    proc.reply(job.id, 'ERR', Buffer.from('[maybe_sent] WritePrinter failed (1167): device not connected').toString('base64'));
+    const err = await rejection(result);
+    expect(err.code).toBe('printer_maybe_sent');
+    // Retried (unlike a drawer pulse), and the retry says DUPLICATE (printer retry).
+    expect(err.recoverable).toBe(true);
+    expect(err.maybeSent).toBe(true);
+  });
+
   it('surfaces a spooler ERR as a retryable error with the message', async () => {
     const { worker, spawned } = harness();
     const result = worker.send('Missing Printer', new Uint8Array([1]));

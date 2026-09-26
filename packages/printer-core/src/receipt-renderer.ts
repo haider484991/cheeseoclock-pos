@@ -4,6 +4,11 @@
  *
  * Layout (80mm / 48 cols):
  *
+ *      ****************************************   <- only on a DUPLICATE
+ *                    DUPLICATE
+ *      Reprint #1 | 25/05/2026 19:52 | by Sana
+ *      Original: 25/05/2026 19:35
+ *      ****************************************
  *               [ shop logo ]
  *      CHEESE O CLOCK
  *      Pakistani Pizza · Cafe
@@ -11,8 +16,11 @@
  *      Branch: F-10, Islamabad
  *      Phone: +92 ...
  *
+ *                  RECEIPT            <- or BILL - NOT PAID / REFUND /
+ *                 DUPLICATE              CANCELLED ORDER
+ *
  *      Order #20260525-0042   Dine-in T-3
- *      Cashier: Ali Akbar     2026-05-25 19:35
+ *      Cashier: Ali Akbar     25/05/2026 19:35
  *      ----------------------------------------
  *      1x Pepperoni Pizza               1,499.00
  *           Large (12")
@@ -22,20 +30,24 @@
  *      Subtotal                         1,849.00
  *      Discount (Friend & family)         -200.00
  *      Tax (16%)                          263.84
- *      ========================================
+ *      ============= DUPLICATE ================
  *      TOTAL                            1,912.84
  *      ----------------------------------------
  *      Cash                             2,000.00
+ *      Tendered                         2,000.00
  *      Change                              87.16
+ *
+ *      PAID - CASH (DUPLICATE)
  *
  *           Thank you — visit us again!
  *
- *           [FBR QR placeholder]
+ *           FBR block (live FBR only)
+ *        ** DUPLICATE - Reprint #1 **
  */
 
 import type { DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
-import { EscPosBuilder, wrap, qrCode } from './escpos.js';
+import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
 import {
   centreOnPaper,
   isPrintableLogo,
@@ -52,9 +64,109 @@ export interface ReceiptBranding {
   footerLine?: string;
 }
 
+/**
+ * Which paper a customer-facing job prints as. Decided when it prints, from
+ * the order as it is then — never from the button that was pressed:
+ *  - receipt: money was taken (PAID), or the order was refunded;
+ *  - bill:    money is still owed (BILL - NOT PAID);
+ *  - refund:  the slip for one refund (the job says so — reason 'refund');
+ *  - void:    the order was cancelled (CANCELLED ORDER, nothing to pay).
+ */
+export type ReceiptDocument = 'receipt' | 'bill' | 'refund' | 'void';
+
+/**
+ * The paper an order prints as now (a refund slip is chosen by its job, not
+ * here). A cancelled order never prints as a receipt or a bill; an order
+ * nobody has paid for yet is a bill, even when its total is 0.
+ */
+export function receiptDocumentFor(s: OrderSnapshot): 'receipt' | 'bill' | 'void' {
+  if (s.order.status === 'void') return 'void';
+  if (s.order.paidAt || s.order.status === 'refunded') return 'receipt';
+  return 'bill';
+}
+
+/**
+ * How a paper that is not the first of its kind is marked. Worked out by the
+ * spooler from the print log (document_prints), never from which button was
+ * pressed:
+ *  - reprint: someone pressed a reprint button — "DUPLICATE / Reprint #N";
+ *  - copy:    printed again by the till itself (e.g. the dispatch bill after
+ *             the counter already printed one) — "DUPLICATE / Copy #N";
+ *  - retry:   the printer failed mid-way on this same job, so the first try
+ *             may have printed — "DUPLICATE / Printer retry";
+ *  - late:    the FIRST paper of this document, printed by hand well after
+ *             the sale — not a duplicate, but it says when and by whom.
+ */
+export type CopyStampKind = 'reprint' | 'copy' | 'retry' | 'late';
+
+export interface CopyStamp {
+  kind: CopyStampKind;
+  /** reprint: which reprint (1 = the first); copy: which paper (2 = the second). */
+  number: number;
+  /** When this paper prints. */
+  printedAt: Date;
+  /** Who asked for it (a reprint, or a late first print). */
+  byName?: string | null;
+  /** The manager whose PIN or password allowed it. */
+  approvedByName?: string | null;
+  /** When the first paper of this document went out (unknown for one an older version printed). */
+  firstPrintedAt?: Date | null;
+  /** The first paper carrying the FBR invoice number; the earlier one printed without it. */
+  fbrCopy?: boolean;
+}
+
+/** A stamp that makes the paper a DUPLICATE (every kind but a late first print). */
+export function isDuplicateStamp(stamp: CopyStamp | null | undefined): stamp is CopyStamp {
+  return !!stamp && stamp.kind !== 'late';
+}
+
+/** FBR's number for this paper, or why a live till has none yet. */
+export interface FbrPrint {
+  irn: string;
+  qrPayload?: string | null;
+  /** Sandbox: a test number, not a tax invoice (no QR). */
+  test?: boolean;
+}
+
+/** One refund, for its slip. Amounts are positive (what went back). */
+export interface RefundSlipInfo {
+  refundedAt: Date;
+  rows: Array<{ method: string; amountCents: number }>;
+  reason: string | null;
+  refundedByName: string | null;
+  approvedByName: string | null;
+  /** Everything refunded on the order so far, this refund included. */
+  totalRefundedCents: number;
+  /** The debit note for this refund once FBR issued it (customer copy only). */
+  debitNote?: (FbrPrint & { saleIrn?: string | null }) | null;
+  /** Live FBR, the sale was fiscalised, and the debit note is not issued yet. */
+  debitNoteMissing?: 'pending' | 'failed' | null;
+}
+
+/** Who cancelled an order, when and why — for the cancelled-order and kitchen CANCELLED slips. */
+export interface CancelInfo {
+  at: Date | null;
+  byName?: string | null;
+  reason?: string | null;
+}
+
 export interface RenderReceiptOpts {
   width?: PrinterWidth;
   branding: ReceiptBranding;
+  /** The paper to print (default: receiptDocumentFor the order). 'refund' needs `refund`. */
+  document?: ReceiptDocument;
+  /** DUPLICATE (or late-print) marking, from the print log. None on an original. */
+  stamp?: CopyStamp | null;
+  /** The refund this slip is for (document 'refund'). */
+  refund?: RefundSlipInfo;
+  /** Who cancelled the order, when and why (document 'void'). */
+  cancelled?: CancelInfo | null;
+  /**
+   * FBR is live but this receipt has no invoice number: 'pending' prints
+   * "not yet issued", 'failed' prints "not issued". Leave both this and `fbr`
+   * out in noop mode: then nothing about FBR is printed at all.
+   */
+  fbrMissing?: 'pending' | 'failed' | null;
   /**
    * Pulse the cash drawer at the end of the receipt. The till no longer uses
    * this: a cash payment sends the pulse as its own job, first, so the drawer
@@ -66,11 +178,8 @@ export interface RenderReceiptOpts {
   drawer?: DrawerSettings;
   /** Cut paper after printing — default true. Disable for a previewing/test print. */
   cutPaper?: boolean;
-  /** FBR Digital Invoicing data once the worker has submitted. */
-  fbr?: {
-    irn: string;
-    qrPayload?: string | null;
-  };
+  /** FBR Digital Invoicing data once the worker has submitted (live modes only). */
+  fbr?: FbrPrint;
   /**
    * 'shop' prints the same receipt with a SHOP COPY banner and a "Received by"
    * signature line, and leaves out the fiscal QR (the customer's copy carries
@@ -132,66 +241,167 @@ const METHOD_LABEL: Record<string, string> = {
   foodpanda: 'Foodpanda',
 };
 
+/**
+ * One customer-facing paper: a RECEIPT, a BILL - NOT PAID, a REFUND slip or
+ * a CANCELLED ORDER slip, customer or SHOP COPY, original or DUPLICATE.
+ *
+ * Top to bottom: DUPLICATE band, logo, shop header, TITLE (and its sub-line),
+ * DUPLICATE (again, inside the body, so tearing the ends off doesn't leave an
+ * "original"), SHOP COPY, order details, customer / rider, items, totals,
+ * payments and refunds, the state line (PAID - CASH / TO COLLECT / REFUNDED),
+ * the rider note, the signature line (shop copy), the bottom stamp, thank-you,
+ * FBR, DUPLICATE footer, cut. Everything between the two DUPLICATE marks is
+ * exactly what the original said: same order number, times, amounts, FBR
+ * number and QR.
+ */
 export function renderReceipt(
   snapshot: OrderSnapshot,
   opts: RenderReceiptOpts,
 ): Uint8Array {
   const width: PrinterWidth = opts.width ?? 48;
+  const half = width / 2;
   const b = new EscPosBuilder(width);
-  const { order, items, payments, discounts, cashierName, tableLabel } = snapshot;
+  const doc: ReceiptDocument =
+    opts.document === 'refund' && !opts.refund ? receiptDocumentFor(snapshot) : (opts.document ?? receiptDocumentFor(snapshot));
+  const shopCopy = opts.copy === 'shop';
+  const stamp = opts.stamp ?? null;
+  const dup = isDuplicateStamp(stamp) ? stamp : null;
+
+  b.align('center');
+  if (dup) appendDuplicateBand(b, dup, width);
 
   // Header — large, centered store name + tagline. Free text from settings,
   // so every line is word-wrapped here rather than broken by the printer at
   // the paper edge; double-size glyphs take two columns each. The logo (when
   // there is one) goes above the name on every copy — customer receipt, shop
   // copy, delivery bill, refund slip, reprint. Kitchen tickets never carry it.
-  b.align('center');
   appendLogo(b, opts.logo, width);
-  b.doubleSize(true).bold(true).wrappedText(opts.branding.storeName, width / 2);
+  b.align('center');
+  b.doubleSize(true).bold(true).wrappedText(opts.branding.storeName, half);
   b.doubleSize(false).bold(false);
   if (opts.branding.storeTagline) b.wrappedText(opts.branding.storeTagline);
   if (opts.branding.branchLine) b.newline().wrappedText(opts.branding.branchLine);
   if (opts.branding.phoneLine) b.wrappedText(opts.branding.phoneLine);
   b.newline();
 
-  const shopCopy = opts.copy === 'shop';
+  // What this paper IS, before anything else can be misread.
+  appendTitle(b, doc, snapshot, opts.refund, width);
+  if (dup) {
+    b.bold(true).doubleHeight(true).text('DUPLICATE').newline();
+    b.doubleHeight(false).bold(false);
+  }
+  if (stamp?.kind === 'late') {
+    const who = stamp.byName ? ` by ${stamp.byName}` : '';
+    b.bold(true).wrappedText(`Printed later: ${formatDateTime(stamp.printedAt)}${who}`).bold(false);
+    if (stamp.approvedByName) b.wrappedText(`Approved by: ${stamp.approvedByName}`);
+  }
   if (shopCopy) {
     b.bold(true).doubleHeight(true).text('SHOP COPY').newline();
-    b.bold(false).doubleHeight(false).newline();
+    b.bold(false).doubleHeight(false);
   }
+  b.newline();
 
-  // Order metadata block
   b.align('left');
-  const orderTopRight = tableLabel
-    ? `${MODE_LABEL[order.mode]} ${tableLabel}`
-    : MODE_LABEL[order.mode];
-  b.bold(true).line(`Order #${order.orderNumber}`, orderTopRight).bold(false);
-  const dt = new Date(order.paidAt ?? order.createdAt);
-  b.line(`Cashier: ${cashierName}`, formatDateTime(dt));
-
-  // Customer / delivery block (only when present — snapshotted onto the order)
-  if (snapshot.customerName || snapshot.customerPhone) {
-    b.line(
-      `Customer: ${snapshot.customerName ?? ''}`,
-      snapshot.customerPhone ?? '',
-    );
+  if (doc === 'void') {
+    appendCancelledBody(b, snapshot, opts.cancelled ?? null, width);
+  } else if (doc === 'refund' && opts.refund) {
+    appendRefundBody(b, snapshot, opts.refund, shopCopy, width);
+  } else {
+    appendSaleBody(b, snapshot, doc === 'bill' ? 'bill' : 'receipt', dup, shopCopy, width);
   }
-  if (snapshot.deliveryAddress) {
-    b.text('Deliver to:').newline();
-    for (const ln of wrap(snapshot.deliveryAddress, width - 2)) {
-      b.text(`  ${ln}`).newline();
+
+  // Thank-you: on a receipt and a bill (not once the sale was refunded in
+  // full), never on the shop's own copy, a refund slip or a cancelled order.
+  b.align('center');
+  const thanks =
+    !shopCopy && (doc === 'bill' || (doc === 'receipt' && snapshot.order.status !== 'refunded'));
+  if (thanks) {
+    b.wrappedText(opts.branding.footerLine ?? 'Thank you — visit us again!');
+    b.newline();
+  }
+
+  // FBR: the customer's copy of a receipt carries the sale invoice; the
+  // customer's copy of a refund slip carries the debit note. A bill, a
+  // cancelled order and the shop copy never carry one. In noop mode (the
+  // default) nothing about FBR is printed — no promise of a QR to come.
+  if (!shopCopy && doc === 'receipt') {
+    appendFbrInvoice(b, opts.fbr ?? null, opts.fbrMissing ?? null);
+  } else if (!shopCopy && doc === 'refund' && opts.refund) {
+    appendFbrDebitNote(b, opts.refund);
+  }
+
+  if (dup) {
+    b.align('center').bold(true).wrappedText(duplicateFooter(dup)).bold(false);
+  }
+  b.newline();
+
+  if (opts.openDrawer) b.openDrawer(opts.drawer);
+  if (opts.cutPaper !== false) b.cut(true);
+
+  return b.build();
+}
+
+/**
+ * "RECEIPT", "BILL - NOT PAID" (or "BILL - NOTHING TO PAY"), "REFUND",
+ * "CANCELLED ORDER" — in double size, plus the line under it.
+ */
+function appendTitle(
+  b: EscPosBuilder,
+  doc: ReceiptDocument,
+  snapshot: OrderSnapshot,
+  refund: RefundSlipInfo | undefined,
+  width: PrinterWidth,
+): void {
+  const half = width / 2;
+  const big = (s: string) => {
+    b.bold(true).doubleSize(true).wrappedText(s, half);
+    b.doubleSize(false).bold(false);
+  };
+  switch (doc) {
+    case 'void':
+      big('CANCELLED ORDER');
+      b.bold(true).wrappedText('NOT A BILL - NOTHING TO PAY').bold(false);
+      return;
+    case 'refund':
+      if (!refund) break;
+      big('REFUND');
+      b.bold(true).doubleHeight(true).wrappedText(`Rs ${money(sumOf(refund.rows))} RETURNED`, width);
+      b.doubleHeight(false).bold(false);
+      return;
+    case 'bill': {
+      const cod = snapshot.order.mode === 'delivery';
+      // Nothing due (a 100% discount, a free replacement): the headline
+      // must not send the rider after cash the body says is not owed.
+      if (billDueCents(snapshot) <= 0) {
+        big('BILL - NOTHING TO PAY');
+        if (cod) b.bold(true).wrappedText('RIDER COLLECTS NOTHING', width).bold(false);
+        return;
+      }
+      big('BILL - NOT PAID');
+      b.bold(true)
+        .wrappedText(cod ? 'CASH ON DELIVERY' : 'PAY AT THE COUNTER')
+        .bold(false);
+      return;
     }
+    case 'receipt':
+      break;
   }
-  if (snapshot.rider) {
-    b.line(`Rider: ${snapshot.rider.name}`, snapshot.rider.phone);
-  }
-  b.rule();
+  big(snapshot.order.status === 'refunded' ? 'RECEIPT - REFUNDED' : 'RECEIPT');
+}
 
-  // Items
-  for (const it of items) {
+/** Order number and mode, then who and when. */
+function appendOrderMeta(b: EscPosBuilder, snapshot: OrderSnapshot): void {
+  const { order, tableLabel } = snapshot;
+  const orderTopRight = tableLabel ? `${MODE_LABEL[order.mode]} ${tableLabel}` : MODE_LABEL[order.mode];
+  b.bold(true).line(`Order #${order.orderNumber}`, orderTopRight).bold(false);
+}
+
+/** Items with their prices and choices (receipts and bills). */
+function appendPricedItems(b: EscPosBuilder, snapshot: OrderSnapshot, width: PrinterWidth): void {
+  for (const it of snapshot.items) {
     const qty = `${it.quantity}x`;
     const name = `${qty} ${it.menuItemName}`;
-    const total = formatCentsForReceipt(it.lineTotalCents);
+    const total = money(it.lineTotalCents);
 
     // Item name may need wrapping if longer than width - total.length - 1.
     const maxNameWidth = width - total.length - 1;
@@ -207,7 +417,7 @@ export function renderReceipt(
       const modName = `    ${mod.modifierName}`;
       if (mod.priceDeltaCents !== 0) {
         const sign = mod.priceDeltaCents > 0 ? '+' : '-';
-        b.line(modName, `${sign} ${formatCentsForReceipt(Math.abs(mod.priceDeltaCents))}`);
+        b.line(modName, `${sign} ${money(Math.abs(mod.priceDeltaCents))}`);
       } else {
         b.text(modName).newline();
       }
@@ -219,96 +429,400 @@ export function renderReceipt(
       }
     }
   }
+}
 
+/** A receipt or a bill: everything about the sale and where the money stands. */
+function appendSaleBody(
+  b: EscPosBuilder,
+  snapshot: OrderSnapshot,
+  doc: 'receipt' | 'bill',
+  dup: CopyStamp | null,
+  shopCopy: boolean,
+  width: PrinterWidth,
+): void {
+  const { order, payments, discounts, cashierName } = snapshot;
+  appendOrderMeta(b, snapshot);
+  const dt = new Date(order.paidAt ?? order.createdAt);
+  b.line(`Cashier: ${cashierName}`, formatDateTime(dt));
+
+  // Customer / delivery block (only when present — snapshotted onto the order)
+  if (snapshot.customerName || snapshot.customerPhone) {
+    b.line(`Customer: ${snapshot.customerName ?? ''}`, snapshot.customerPhone ?? '');
+  }
+  if (snapshot.deliveryAddress) {
+    b.text('Deliver to:').newline();
+    for (const ln of wrap(snapshot.deliveryAddress, width - 2)) {
+      b.text(`  ${ln}`).newline();
+    }
+  }
+  if (snapshot.rider) {
+    b.line(`Rider: ${snapshot.rider.name}`, snapshot.rider.phone);
+  }
+  b.rule();
+
+  appendPricedItems(b, snapshot, width);
   b.rule();
 
   // Totals
-  b.line('Subtotal', formatCentsForReceipt(order.subtotalCents));
+  b.line('Subtotal', money(order.subtotalCents));
   for (const d of discounts) {
     const tag = d.reason ? `Discount (${d.reason})` : 'Discount';
-    b.line(tag, `- ${formatCentsForReceipt(d.amountCents)}`);
+    b.line(tag, `- ${money(d.amountCents)}`);
   }
-  b.line('Tax', formatCentsForReceipt(order.taxCents));
-  b.rule('=');
-  b.bold(true).doubleHeight(true).line('TOTAL', `Rs ${formatCentsForReceipt(order.totalCents)}`);
+  b.line(taxLabel(snapshot), money(order.taxCents));
+  if (dup) b.text(ruleWith('=', ' DUPLICATE ', width)).newline();
+  else b.rule('=');
+  b.bold(true).doubleHeight(true).line('TOTAL', `Rs ${money(order.totalCents)}`);
   b.bold(false).doubleHeight(false);
   b.rule();
 
-  // Payments
-  for (const p of payments) {
-    b.line(METHOD_LABEL[p.method] ?? p.method, formatCentsForReceipt(p.amountCents));
+  // Money taken, then money given back.
+  const taken = payments.filter((p) => p.amountCents > 0);
+  const refunds = payments.filter((p) => p.amountCents < 0);
+  for (const p of taken) {
+    b.line(METHOD_LABEL[p.method] ?? p.method, money(p.amountCents));
   }
-  // Cash tendered + change (only if a cash payment with a tendered amount)
-  const cash = payments.find((p) => p.method === 'cash' && p.tenderedCents != null);
+  // Change is what the customer handed over for the CASH part, less that
+  // part — not less the whole bill (a card + cash split printed a negative
+  // "Change" that way).
+  const cash = taken.find((p) => p.method === 'cash' && p.tenderedCents != null);
   if (cash && cash.tenderedCents != null) {
-    b.line('Tendered', formatCentsForReceipt(cash.tenderedCents));
-    b.line('Change', formatCentsForReceipt(cash.tenderedCents - order.totalCents));
+    b.line('Tendered', money(cash.tenderedCents));
+    b.line('Change', money(Math.max(0, cash.tenderedCents - cash.amountCents)));
   }
-
-  // Where the money stands. A bill that goes out with a delivery rider is
-  // printed before any payment, so it must say what to collect; a settled
-  // order says PAID so nobody asks twice.
-  const settled = order.status === 'void' || order.status === 'refunded';
-  if (!settled) {
-    // Only money actually taken counts (refund rows are negative): after a
-    // partial refund the net fell below the total and the slip — and every
-    // reprint — read "TO PAY" the refunded amount, for a rider to collect
-    // again (audit 2026-09-25). A paid order is paid.
-    const paidCents = payments.reduce((sum, p) => sum + Math.max(0, p.amountCents), 0);
-    const dueCents = order.paidAt ? 0 : order.totalCents - paidCents;
-    if (dueCents > 0) {
-      b.bold(true).doubleHeight(true).line('TO PAY', `Rs ${formatCentsForReceipt(dueCents)}`);
-      b.bold(false).doubleHeight(false);
-    } else if (payments.length > 0) {
-      b.bold(true).text('PAID').newline().bold(false);
-    }
+  for (const r of refunds) {
+    const at = new Date(r.paidAt);
+    b.line(`Refund ${formatClock(at)} ${METHOD_LABEL[r.method] ?? r.method}`, money(r.amountCents));
+  }
+  const takenCents = sumOf(taken);
+  const refundedCents = -sumOf(refunds);
+  if (refunds.length > 0) {
+    b.bold(true).line('NET PAID', money(takenCents - refundedCents)).bold(false);
   }
   b.newline();
+
+  if (doc === 'receipt') {
+    appendPaidState(b, snapshot, taken, refunds, dup, width);
+  } else {
+    appendDueState(b, snapshot, takenCents, width);
+  }
 
   if (shopCopy) {
     // Room for the rider or customer to sign; the shop keeps this copy.
-    b.text(`Received by: ${'_'.repeat(Math.max(8, width - 13))}`).newline();
-    b.newline();
-  }
-
-  // Footer
-  b.align('center');
-  if (!shopCopy) {
-    b.wrappedText(opts.branding.footerLine ?? 'Thank you — visit us again!');
-    b.newline();
-  }
-
-  // FBR fiscal block (shown if the worker has resolved an IRN for this order).
-  // The shop copy skips it: one fiscal QR per sale, on the customer's copy.
-  if (shopCopy) {
-    // nothing
-  } else if (opts.fbr?.irn) {
-    b.rule();
-    b.bold(true).text('FBR Digital Invoice').newline().bold(false);
-    b.text(`IRN: ${opts.fbr.irn}`).newline();
-    if (opts.fbr.qrPayload) {
-      qrCode(b, opts.fbr.qrPayload, 6);
-    }
-  } else {
-    b.text('[ FBR fiscal QR — pending ]').newline();
+    b.newline().text(`Received by: ${'_'.repeat(Math.max(8, width - 13))}`).newline();
   }
   b.newline();
+}
 
-  if (opts.openDrawer) b.openDrawer(opts.drawer);
-  if (opts.cutPaper !== false) b.cut(true);
+/** PAID - CASH, PART REFUNDED, or REFUNDED IN FULL — and what the rider collects. */
+function appendPaidState(
+  b: EscPosBuilder,
+  snapshot: OrderSnapshot,
+  taken: OrderSnapshot['payments'],
+  refunds: OrderSnapshot['payments'],
+  dup: CopyStamp | null,
+  width: PrinterWidth,
+): void {
+  const { order } = snapshot;
+  const refundedCents = -sumOf(refunds);
+  const lastRefund = refunds.reduce<string | null>((m, p) => (m === null || p.paidAt > m ? p.paidAt : m), null);
+  const suffix = dup ? ' (DUPLICATE)' : '';
+  if (order.status === 'refunded') {
+    b.bold(true).doubleHeight(true).wrappedText(`REFUNDED IN FULL${suffix}`, width);
+    b.doubleHeight(false);
+    const when = lastRefund ? ` ${formatDateTime(new Date(lastRefund))}` : '';
+    b.wrappedText(`Rs ${money(refundedCents)} returned${when}`, width).bold(false);
+    b.newline();
+    b.bold(true).wrappedText('This sale was refunded - not valid for any claim.', width).bold(false);
+    return;
+  }
+  if (taken.length === 0 && order.totalCents <= 0) {
+    b.bold(true).doubleHeight(true).wrappedText(`NO CHARGE - NOTHING TO PAY${suffix}`, width);
+    b.doubleHeight(false).bold(false);
+  } else {
+    b.bold(true).doubleHeight(true).wrappedText(`PAID - ${paidMethods(taken)}${suffix}`, width);
+    b.doubleHeight(false).bold(false);
+  }
+  if (refundedCents > 0) {
+    b.bold(true).wrappedText(`PART REFUNDED - Rs ${money(refundedCents)} returned`, width).bold(false);
+  }
+  const when = order.mode === 'delivery' ? deliveryPaidLine(order) : null;
+  if (when) b.bold(true).wrappedText(when, width).bold(false);
+}
 
-  return b.build();
+/**
+ * When a delivery's money was taken, as the order's own times say — never
+ * "PREPAID" for cash the rider brought back:
+ *  - before the food left (paid before the rider was assigned, or with no
+ *    rider and before it was delivered): PREPAID - RIDER COLLECTS NOTHING;
+ *  - when it was delivered (cash on delivery: the board records the payment
+ *    and the delivery together): PAID ON DELIVERY; later than that: PAID
+ *    AFTER DELIVERY;
+ *  - while the rider was out: nothing more than PAID - <method>.
+ */
+function deliveryPaidLine(order: OrderSnapshot['order']): string | null {
+  const paid = order.paidAt ? Date.parse(order.paidAt) : NaN;
+  if (!Number.isFinite(paid)) return null;
+  const delivered = order.deliveredAt ? Date.parse(order.deliveredAt) : NaN;
+  const dispatched = order.dispatchedAt ? Date.parse(order.dispatchedAt) : NaN;
+  if (Number.isFinite(delivered) && paid >= delivered) {
+    return paid - delivered <= 60_000 ? 'PAID ON DELIVERY' : 'PAID AFTER DELIVERY';
+  }
+  if (Number.isFinite(dispatched) && paid > dispatched) return null;
+  return 'PREPAID - RIDER COLLECTS NOTHING';
+}
+
+/** What is still owed on a bill: the total less the money already taken. */
+function billDueCents(snapshot: OrderSnapshot): number {
+  return snapshot.order.totalCents - sumOf(snapshot.payments.filter((p) => p.amountCents > 0));
+}
+
+/** What is still owed on a bill, and who collects it. */
+function appendDueState(b: EscPosBuilder, snapshot: OrderSnapshot, takenCents: number, width: PrinterWidth): void {
+  const { order } = snapshot;
+  const dueCents = order.totalCents - takenCents;
+  const cod = order.mode === 'delivery';
+  if (takenCents > 0) b.line('Paid so far', money(takenCents));
+  if (dueCents <= 0) {
+    // "No charge" only when nothing was ever charged; money already taken covers it otherwise.
+    b.bold(true).doubleHeight(true).wrappedText(takenCents > 0 ? 'NOTHING MORE TO PAY' : 'NO CHARGE - NOTHING TO PAY', width);
+    b.doubleHeight(false).bold(false);
+    return;
+  }
+  b.bold(true).doubleHeight(true).line(cod ? 'TO COLLECT' : 'TO PAY', `Rs ${money(dueCents)}`);
+  b.doubleHeight(false);
+  b.newline();
+  if (cod) {
+    // The customer's only paper until the rider is paid: say who to pay.
+    b.wrappedText('NOT PAID', width).wrappedText(`Pay the rider Rs ${money(dueCents)}`, width).bold(false);
+  } else {
+    b.wrappedText('NOT PAID - pay at the counter', width).bold(false);
+    b.wrappedText('This bill is not a receipt.', width);
+  }
+}
+
+/** A refund slip: how much went back, how, why, and who allowed it. */
+function appendRefundBody(
+  b: EscPosBuilder,
+  snapshot: OrderSnapshot,
+  refund: RefundSlipInfo,
+  shopCopy: boolean,
+  width: PrinterWidth,
+): void {
+  const { order, payments, cashierName } = snapshot;
+  const returned = sumOf(refund.rows);
+  appendOrderMeta(b, snapshot);
+  b.text(`Refunded ${formatDateTime(refund.refundedAt)}`).newline();
+  b.line(`Sale ${formatDateTime(new Date(order.paidAt ?? order.createdAt))}`, `Cashier: ${cashierName}`);
+  b.rule();
+  for (const r of refund.rows) {
+    b.line(`${METHOD_LABEL[r.method] ?? r.method} refund`, money(r.amountCents));
+  }
+  if (refund.reason) b.wrappedText(`Reason: ${refund.reason}`, width);
+  if (refund.refundedByName) b.wrappedText(`Refunded by: ${refund.refundedByName}`, width);
+  if (refund.approvedByName) b.wrappedText(`Approved by: ${refund.approvedByName}`, width);
+  b.rule();
+  const paid = sumOf(payments.filter((p) => p.amountCents > 0));
+  b.line('Original bill total', money(order.totalCents));
+  b.line('Refunded in all', money(refund.totalRefundedCents));
+  b.line('Net paid', money(Math.max(0, paid - refund.totalRefundedCents)));
+  b.newline();
+  if (shopCopy) {
+    b.bold(true).wrappedText(`Customer received Rs ${money(returned)}`, width).bold(false);
+    b.newline().text(`Signature: ${'_'.repeat(Math.max(8, width - 11))}`).newline().newline();
+  }
+  b.align('center').bold(true).wrappedText('REFUND SLIP - NOT A RECEIPT FOR PAYMENT', width).bold(false);
+  b.newline();
+}
+
+/** A cancelled order: what it was, when and why it was cancelled — no prices, nothing to pay. */
+function appendCancelledBody(
+  b: EscPosBuilder,
+  snapshot: OrderSnapshot,
+  cancel: CancelInfo | null,
+  width: PrinterWidth,
+): void {
+  const { order } = snapshot;
+  appendOrderMeta(b, snapshot);
+  const at = cancel?.at ?? (order.voidedAt ? new Date(order.voidedAt) : null);
+  if (at) b.text(`Cancelled ${formatDateTime(at)}`).newline();
+  const reason = cancel?.reason ?? order.voidReason;
+  if (reason) b.wrappedText(`Reason: ${reason}`, width);
+  if (cancel?.byName) b.wrappedText(`Approved by: ${cancel.byName}`, width);
+  b.rule();
+  for (const it of snapshot.items) {
+    b.wrappedText(`${it.quantity} x ${it.menuItemName}`, width);
+    for (const mod of it.modifiers) {
+      for (const ln of wrap(mod.modifierName, width - 4)) b.text(`    ${ln}`).newline();
+    }
+  }
+  b.rule();
+  b.newline();
+  b.align('center').bold(true).wrappedText('CANCELLED - NOTHING TO PAY', width).bold(false);
+  b.newline();
+}
+
+/**
+ * The sale's FBR invoice number and QR. A duplicate prints exactly the same
+ * number and QR (never a new one: the same invoice, printed again).
+ */
+function appendFbrInvoice(b: EscPosBuilder, fbr: FbrPrint | null, missing: 'pending' | 'failed' | null): void {
+  if (fbr?.irn) {
+    b.rule();
+    if (fbr.test) {
+      b.bold(true).text('FBR SANDBOX TEST').newline().bold(false);
+      b.text('Not a tax invoice').newline();
+      b.wrappedText(`Test no: ${fbr.irn}`);
+      return;
+    }
+    b.bold(true).text('FBR Digital Invoice').newline().bold(false);
+    b.wrappedText(`FBR Invoice No: ${fbr.irn}`);
+    if (fbr.qrPayload) qrCode(b, fbr.qrPayload, 6);
+    return;
+  }
+  if (missing) {
+    b.rule();
+    b.wrappedText(missing === 'failed' ? 'FBR invoice no.: not issued' : 'FBR invoice no.: not yet issued');
+  }
+}
+
+/** A refund's own FBR number (the debit note), never the sale's under "FBR Digital Invoice". */
+function appendFbrDebitNote(b: EscPosBuilder, refund: RefundSlipInfo): void {
+  const note = refund.debitNote;
+  if (note?.irn) {
+    b.rule();
+    if (note.test) {
+      b.bold(true).text('FBR SANDBOX TEST').newline().bold(false);
+      b.text('Not a tax invoice').newline();
+      b.wrappedText(`Test no: ${note.irn}`);
+      return;
+    }
+    b.bold(true).text('FBR Debit Note').newline().bold(false);
+    b.wrappedText(`FBR No: ${note.irn}`);
+    if (note.qrPayload) qrCode(b, note.qrPayload, 6);
+    if (note.saleIrn) b.wrappedText(`Against invoice: ${note.saleIrn}`);
+    return;
+  }
+  if (refund.debitNoteMissing) {
+    b.rule();
+    b.wrappedText(refund.debitNoteMissing === 'failed' ? 'FBR debit note: not issued' : 'FBR debit note: not yet issued');
+  }
+}
+
+/**
+ * The band at the very top of a DUPLICATE: a row of stars, DUPLICATE in
+ * double size, which copy it is, when and by whom, and when the original
+ * went out.
+ */
+function appendDuplicateBand(b: EscPosBuilder, stamp: CopyStamp, width: PrinterWidth): void {
+  b.align('center');
+  b.rule('*');
+  b.bold(true).doubleSize(true).text('DUPLICATE').newline();
+  b.doubleSize(false).bold(false);
+  const when = formatDateTime(stamp.printedAt);
+  switch (stamp.kind) {
+    case 'retry':
+      factsLine(b, ['Printer retry', when], width);
+      b.wrappedText('The first copy may have printed', width);
+      break;
+    case 'copy':
+      factsLine(b, [`Copy #${stamp.number}`, when], width);
+      break;
+    default:
+      factsLine(b, [`Reprint #${stamp.number}`, when, stamp.byName ? `by ${stamp.byName}` : null], width);
+      break;
+  }
+  if (stamp.approvedByName) b.wrappedText(`Approved by: ${stamp.approvedByName}`, width);
+  if (stamp.kind !== 'retry' && stamp.firstPrintedAt) {
+    b.wrappedText(`Original: ${formatDateTime(stamp.firstPrintedAt)}`, width);
+  }
+  if (stamp.fbrCopy) b.wrappedText('FBR copy - the first with the FBR number', width);
+  b.rule('*');
+}
+
+/** The line just above the cut on a DUPLICATE. */
+function duplicateFooter(stamp: CopyStamp): string {
+  switch (stamp.kind) {
+    case 'retry':
+      return '** DUPLICATE - printer retry **';
+    case 'copy':
+      return `** DUPLICATE - Copy #${stamp.number} **`;
+    default:
+      return `** DUPLICATE - Reprint #${stamp.number} **`;
+  }
+}
+
+/** "a | b | c" on one row when it fits, otherwise one fact per row (58 mm paper). */
+function factsLine(b: EscPosBuilder, facts: Array<string | null>, width: number): void {
+  const parts = facts.filter((f): f is string => !!f);
+  const joined = parts.join(' | ');
+  if (toPrinterAscii(joined).length <= width) {
+    b.text(joined).newline();
+    return;
+  }
+  for (const p of parts) b.wrappedText(p, width);
+}
+
+/** "==== DUPLICATE ====" across the paper. */
+function ruleWith(char: string, label: string, width: number): string {
+  const left = Math.max(1, Math.floor((width - label.length) / 2));
+  const right = Math.max(1, width - label.length - left);
+  return `${char.repeat(left)}${label}${char.repeat(right)}`.slice(0, width);
+}
+
+/** "Tax (16%)" when every line carries the same rate, otherwise "Tax". */
+function taxLabel(snapshot: OrderSnapshot): string {
+  const rates = new Set(snapshot.items.map((it) => it.taxRateBps));
+  if (rates.size !== 1) return 'Tax';
+  const [bps] = [...rates];
+  if (bps === undefined || !Number.isInteger(bps) || bps <= 0) return 'Tax';
+  const pct = bps % 100 === 0 ? String(bps / 100) : (bps / 100).toFixed(2).replace(/0$/, '');
+  return `Tax (${pct}%)`;
+}
+
+/** "CASH", "CARD + CASH": the methods money came in by, biggest first. */
+function paidMethods(taken: OrderSnapshot['payments']): string {
+  const byMethod = new Map<string, number>();
+  for (const p of taken) byMethod.set(p.method, (byMethod.get(p.method) ?? 0) + p.amountCents);
+  return [...byMethod.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([m]) => (METHOD_LABEL[m] ?? m).toUpperCase())
+    .join(' + ');
+}
+
+function sumOf(rows: ReadonlyArray<{ amountCents: number }>): number {
+  return rows.reduce((n, r) => n + r.amountCents, 0);
 }
 
 export interface RenderKitchenTicketOpts {
   width?: PrinterWidth;
   /** Cut paper after printing — default true. */
   cutPaper?: boolean;
-  /** Stamps the ticket REPRINT so the kitchen doesn't cook the order twice. */
+  /**
+   * Stamps the ticket REPRINT so the kitchen doesn't cook the order twice.
+   * Only used when there is no `stamp` (older callers): the till's own
+   * tickets are stamped from the print log.
+   */
   reprint?: boolean;
+  /** The order was cancelled while the kitchen had it: "CANCELLED — DO NOT MAKE", then what it was. */
+  cancelled?: boolean;
+  /** When, by whom and why it was cancelled (for a `cancelled` ticket). */
+  cancelInfo?: CancelInfo | null;
+  /**
+   * From the print log. 'reprint' / 'copy': a ticket for this order already
+   * printed — "* REPRINT * / SAME ORDER - DO NOT COOK TWICE". 'retry': the
+   * printer failed mid-way, so the first try may have printed — "* RE-SENT *
+   * / CHECK FOR TICKET #0042 BEFORE COOKING". None: the kitchen's first ticket.
+   */
+  stamp?: CopyStamp | null;
+  /** When the ticket was queued: one printing 2 minutes or more later says "LATE - sent 19:35". */
+  queuedAt?: Date | null;
   /** Clock for the "printed at" time — injectable for tests. */
   now?: Date;
 }
+
+/** A kitchen ticket printing this long after it was queued says LATE. */
+export const KITCHEN_LATE_MS = 2 * 60_000;
 
 const MODE_SHOUT: Record<OrderSnapshot['order']['mode'], string> = {
   dine_in: 'DINE-IN',
@@ -350,19 +864,57 @@ export function renderKitchenTicket(
   const b = new EscPosBuilder(width);
   const { order, items } = snapshot;
 
+  const short = order.orderNumber.split('-').pop() ?? order.orderNumber;
+  const stamp = opts.stamp ?? null;
+  // The log decides; a caller without one may still ask for the old stamp.
+  const reprinted = stamp ? stamp.kind === 'reprint' || stamp.kind === 'copy' : opts.reprint === true;
+  const resent = !opts.cancelled && stamp?.kind === 'retry';
+
   b.align('center');
   b.bold(true).doubleSize(true).wrappedText('KITCHEN', half);
-  if (opts.reprint) {
-    b.doubleSize(false).doubleHeight(true).wrappedText('* REPRINT *', width);
+  if (opts.cancelled) {
+    b.doubleSize(true).wrappedText('* CANCELLED *', half);
+    b.doubleSize(false).doubleHeight(true).wrappedText('DO NOT MAKE - DO NOT SEND', width);
+  } else if (resent) {
+    // The first try may be on the rail already: look before cooking.
+    b.doubleSize(false).doubleHeight(true).wrappedText('* RE-SENT *', width);
+    b.doubleHeight(false).bold(false).wrappedText('Printer error on first try', width);
+    b.bold(true).wrappedText(`CHECK FOR TICKET #${short}`, width).wrappedText('BEFORE COOKING', width);
   }
-  const short = order.orderNumber.split('-').pop() ?? order.orderNumber;
-  b.doubleSize(true).wrappedText(`#${short}`, half);
+  b.bold(true).doubleSize(true).wrappedText(`#${short}`, half);
+  if (!opts.cancelled && reprinted) {
+    // Right under the number the kitchen looks for: the same order again.
+    b.doubleSize(false).doubleHeight(true).wrappedText('* REPRINT *', width);
+    b.wrappedText('SAME ORDER - DO NOT COOK TWICE', width);
+    b.doubleHeight(false);
+    if (stamp?.firstPrintedAt) {
+      b.wrappedText(`First printed ${formatTicketTime(stamp.firstPrintedAt)} - check the rail`, width);
+    }
+    if (stamp) {
+      b.bold(false);
+      const who = stamp.byName ? ` by ${stamp.byName}` : '';
+      const which = stamp.kind === 'copy' ? `Copy #${stamp.number}` : `Reprint #${stamp.number}`;
+      b.wrappedText(`${which} ${formatTicketTime(stamp.printedAt)}${who}`, width);
+      b.bold(true);
+    }
+  }
   b.doubleSize(false).doubleHeight(true).wrappedText(MODE_SHOUT[order.mode], width);
   b.doubleHeight(false).bold(false);
 
   b.align('left');
   const when = opts.now ?? new Date();
   b.line(formatTicketTime(when), snapshot.cashierName);
+  if (opts.cancelled && opts.cancelInfo) {
+    const c = opts.cancelInfo;
+    b.bold(true);
+    if (c.at) b.wrappedText(`Cancelled ${formatTicketTime(c.at)}${c.byName ? ` by ${c.byName}` : ''}`, width);
+    if (c.reason) b.wrappedText(`Reason: ${c.reason}`, width);
+    b.bold(false);
+    if (stamp) b.wrappedText('(printed again: printer retry)', width);
+  } else if (!reprinted && opts.queuedAt && when.getTime() - opts.queuedAt.getTime() >= KITCHEN_LATE_MS) {
+    // A ticket that sat in the printer queue must not look fresh.
+    b.bold(true).wrappedText(`LATE - sent ${formatClock(opts.queuedAt)}`, width).bold(false);
+  }
   if (snapshot.tableLabel) b.line(`Table: ${snapshot.tableLabel}`);
   if (snapshot.customerName || snapshot.customerPhone) {
     b.line(`Customer: ${snapshot.customerName ?? ''}`, snapshot.customerPhone ?? '');
@@ -444,11 +996,21 @@ function formatCentsForReceipt(cents: number): string {
   return `${sign}${r}.${paisa.toString().padStart(2, '0')}`;
 }
 
+function money(cents: number): string {
+  return formatCentsForReceipt(cents);
+}
+
+/** "26/09/2026 19:35" — the one date format on every paper (Pakistan writes the day first). */
 function formatDateTime(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
+  return `${day}/${m}/${y} ${formatClock(d)}`;
+}
+
+/** "19:35" */
+function formatClock(d: Date): string {
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${y}-${m}-${day} ${hh}:${mm}`;
+  return `${hh}:${mm}`;
 }

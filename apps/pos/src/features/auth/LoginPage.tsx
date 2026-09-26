@@ -12,6 +12,7 @@ import { Grid3x3, Keyboard, Pizza, Lock } from 'lucide-react';
 import { StoreLogo } from '../settings/StoreLogo';
 import { isTypingField } from '../checkout/keys';
 import { keypadDigits, signInKey, signInProblemTitle, type SignInMode } from './signInKeys';
+import { homeFor } from '../shell/navAccess';
 
 /**
  * Logo, name and tagline at the top of the sign-in screen. Also drawn by the
@@ -73,6 +74,7 @@ export function LoginPage() {
   const login = useSessionStore((s) => s.login);
   const refresh = useSessionStore((s) => s.refresh);
   const status = useSessionStore((s) => s.status);
+  const endedNote = useSessionStore((s) => s.endedNote);
   const { toast } = useToast();
   const passwordRef = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
@@ -94,7 +96,7 @@ export function LoginPage() {
   useEffect(() => {
     void refresh().then(() => {
       const u = useSessionStore.getState().user;
-      if (u) navigate('/', { replace: true });
+      if (u) navigate(homeFor(u.role), { replace: true });
     });
   }, [navigate, refresh]);
 
@@ -117,7 +119,9 @@ export function LoginPage() {
     try {
       await login(normalizeSecret(typed));
       setSecret('');
-      navigate('/', { replace: true });
+      // The counter starts at Checkout; managers and the owner at the dashboard.
+      const signedIn = useSessionStore.getState().user;
+      navigate(signedIn ? homeFor(signedIn.role) : '/', { replace: true });
     } catch (e) {
       setSecret('');
       // The error caught here — the store's copy is a render behind.
@@ -192,6 +196,12 @@ export function LoginPage() {
       <div className="relative w-[460px] animate-scale-in">
         <div className="glass-surface rounded-3xl p-8 shadow-soft-lg ring-1 ring-stone-200/60 dark:ring-stone-700/60">
           <LoginBrand logoUrl={logoUrl} storeName={storeName} tagline={tagline} />
+          {/* Why the till is back here, when nobody logged out (sessionStore endedNote). */}
+          {endedNote && (
+            <p role="status" className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-center text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              {endedNote}
+            </p>
+          )}
           <p className="mb-4 text-center text-xs font-medium uppercase tracking-widest text-stone-400">
             {mode === 'pin' ? 'Enter your PIN' : 'Type your password'}
           </p>

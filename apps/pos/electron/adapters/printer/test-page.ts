@@ -17,20 +17,32 @@ export function renderTestPage(
 
   b.align('center');
   appendLogo(b, opts.logo, width);
+  // Nobody may take this for a bill: it says so at the top and at the bottom.
   b.align('center')
     .doubleSize(true)
     .bold(true)
-    .text('TEST PAGE')
+    .text('TEST PRINT')
     .newline()
     .doubleSize(false)
+    .doubleHeight(true)
+    .text('NOT A RECEIPT')
+    .newline()
+    .doubleHeight(false)
     .bold(false)
     .text('CheeseOclock POS')
     .newline()
     .newline();
 
-  b.align('left')
-    .rule()
-    .line('Printed', formatLocal(new Date()))
+  b.align('left').rule();
+  const station =
+    opts.stationNote ??
+    (opts.station === 'kitchen'
+      ? 'Station: Kitchen printer'
+      : opts.station === 'receipt'
+        ? 'Station: Receipt printer'
+        : null);
+  if (station) b.bold(true).wrappedText(station).bold(false);
+  b.line('Printed', formatLocal(new Date()))
     .line('Connection', connection)
     .line('Paper', width === 48 ? '80 mm (48 columns)' : '58 mm (32 columns)');
   if (opts.logoNote) b.line('Logo', opts.logoNote);
@@ -76,6 +88,10 @@ export function renderTestPage(
     .wrappedText(
       'If you can read this, the printer is wired correctly. Save the settings, then print a receipt to see the real layout.',
     )
+    .newline()
+    .bold(true)
+    .wrappedText('TEST PRINT - NOT A RECEIPT')
+    .bold(false)
     .align('left')
     .cut(true);
 
@@ -84,5 +100,6 @@ export function renderTestPage(
 
 function formatLocal(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  // Day first, like every other paper the till prints.
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }

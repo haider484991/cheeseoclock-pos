@@ -10,11 +10,13 @@ import {
   type CustomerAddress,
   type CustomerAddressMatch,
 } from '@cheeseoclock/shared-types';
-import { formatCents, resolveAreaText } from '@cheeseoclock/pos-domain';
+import { counterPhoneLookup, formatCents, resolveAreaText } from '@cheeseoclock/pos-domain';
 import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, RefreshCw } from 'lucide-react';
 import { AreaPicker } from '../customers/AreaPicker';
 import { useCheckoutStore } from '../../stores/checkoutStore';
+import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
+import { counterPhoneHint, savedAddressToMakeUsual, typedAddressToSave } from './counterCustomer';
 
 /**
  * Inline customer + delivery panel — lives in the second step of the order ticket (no modal).
@@ -32,6 +34,13 @@ import { useToast } from '../../components/toast/ToastProvider';
  *     Clifton list, which also gives the delivery fee — with one tap to put
  *     the matching "Delivery Charge" item on the bill.
  *   • No save buttons. A small status pill says "Existing customer" or "New".
+ *
+ * At the counter (a login without `customers.manage`, owner 2026-09-26) the
+ * lookup is the WHOLE phone number only: the caller reads it out, and at most
+ * one customer comes back, filled in by itself. No type-ahead list, no
+ * house-number search, no past-order count — those read the customer list a
+ * few at a time. The customer's own saved addresses still fill in, and the
+ * main process refuses the rest anyway (customers-handlers.ts).
  */
 
 export interface CustomerFormState {
@@ -46,8 +55,10 @@ export interface CustomerFormState {
   matchedCustomerId: string | null;
   /** When the form picks one of the matched customer's saved addresses. */
   matchedAddressId: string | null;
-  /** If user wants to save a new address back to the customer's profile. */
+  /** If user wants to save a new address back to the customer's profile (ticked by default). */
   saveAddressToCustomer: boolean;
+  /** Make the picked saved address, or the kept typed one, the one filled in next time (starts unticked). */
+  makeDefault: boolean;
 }
 
 export function makeEmptyCustomerForm(): CustomerFormState {
@@ -63,6 +74,7 @@ export function makeEmptyCustomerForm(): CustomerFormState {
     matchedCustomerId: null,
     matchedAddressId: null,
     saveAddressToCustomer: true,
+    makeDefault: false,
   };
 }
 
@@ -84,12 +96,25 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
   const [addrOpen, setAddrOpen] = useState(false);
   const addrWrapRef = useRef<HTMLDivElement | null>(null);
 
+  // Managers and the owner search the customer list as they type; the
+  // counter finds one customer by the whole number (see the header).
+  const canBrowse = useSessionStore((s) => s.can('customers.manage'));
+  const lookup = counterPhoneLookup(form.phone);
+
   // Debounced lookup for phone autocomplete.
   const suggestionsQ = useQuery({
     queryKey: ['customers', 'inlineSearch', form.phone],
     queryFn: () => ipc.customers.list({ search: form.phone, limit: 6 }),
-    enabled: form.phone.length >= 2 && !form.matchedCustomerId,
+    enabled: canBrowse && form.phone.length >= 2 && !form.matchedCustomerId,
   });
+
+  const exactQ = useQuery({
+    queryKey: ['customers', 'byPhone', lookup.canonical],
+    queryFn: () => ipc.customers.findByPhone(lookup.canonical ?? ''),
+    enabled: !canBrowse && lookup.canonical !== null && !form.matchedCustomerId,
+  });
+  const matches = canBrowse ? (suggestionsQ.data ?? []) : exactQ.data ? [exactQ.data] : [];
+  const counterHint = canBrowse ? null : counterPhoneHint(lookup, exactQ.isFetching, !!exactQ.data);
 
   // When we have a matched customer, load their addresses
   const customerDetailQ = useQuery({
@@ -107,17 +132,18 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       form.matchedCustomerId
         ? ipc.customers.orderHistory(form.matchedCustomerId, 5)
         : Promise.resolve([]),
-    enabled: !!form.matchedCustomerId,
+    enabled: canBrowse && !!form.matchedCustomerId,
   });
 
   // "41-C" typed at the counter → every saved address starting with it, with
   // the customer it belongs to. Regulars are known by their house number.
+  // A search of everyone's addresses, so managers and the owner only.
   const addrMatchesQ = useQuery({
     queryKey: ['customers', 'addressSearch', form.addressLine.trim().toLowerCase()],
     queryFn: () => ipc.customers.searchAddresses(form.addressLine.trim(), 6),
-    enabled: mode === 'delivery' && form.addressLine.trim().length >= 2 && !form.matchedAddressId,
+    enabled: canBrowse && mode === 'delivery' && form.addressLine.trim().length >= 2 && !form.matchedAddressId,
   });
-  const addrMatches = form.matchedAddressId ? [] : (addrMatchesQ.data ?? []);
+  const addrMatches = !canBrowse || form.matchedAddressId ? [] : (addrMatchesQ.data ?? []);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -133,6 +159,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
     setForm((prev) => ({
       ...prev,
       matchedAddressId: a.id,
+      makeDefault: false,
       addressLabel: a.label,
       addressLine: a.addressLine,
       area: a.area ?? '',
@@ -158,6 +185,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       setForm((prev) => ({
         ...prev,
         matchedAddressId: def.id,
+        makeDefault: false,
         addressLabel: def.label,
         addressLine: def.addressLine,
         area: def.area ?? '',
@@ -190,15 +218,27 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       ...prev,
       matchedCustomerId: customer.id,
       matchedAddressId: null,
+      makeDefault: false,
       phone: customer.phone ?? prev.phone,
       name: customer.name,
     }));
   }
 
+  // At the counter the whole number finds at most one customer: fill them in
+  // straight away while the name is still empty (the "Existing customer" pill
+  // undoes it), so a regular takes no extra tap.
+  const exactMatch = canBrowse ? null : (exactQ.data ?? null);
+  useEffect(() => {
+    if (!exactMatch || form.matchedCustomerId || form.name.trim()) return;
+    pickSuggestion(exactMatch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exactMatch?.id]);
+
   function pickSavedAddress(a: CustomerAddress) {
     setForm((prev) => ({
       ...prev,
       matchedAddressId: a.id,
+      makeDefault: false,
       addressLabel: a.label,
       addressLine: a.addressLine,
       area: a.area ?? '',
@@ -211,6 +251,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       ...prev,
       matchedCustomerId: null,
       matchedAddressId: null,
+      makeDefault: false,
     }));
     phoneRef.current?.focus();
   }
@@ -241,18 +282,29 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
             }));
             setPhoneOpen(true);
           }}
-          placeholder="+92 300…"
+          onKeyDown={(e) => {
+            // One match (always so at the counter): Enter takes it.
+            if (e.key === 'Enter' && phoneOpen && !form.matchedCustomerId && matches.length === 1 && matches[0]) {
+              e.preventDefault();
+              pickSuggestion(matches[0]);
+            }
+          }}
+          placeholder={canBrowse ? '+92 300…' : '0300 1234567'}
           className="cust-input is-mono"
         />
         {phoneOpen && form.phone.length >= 2 && !form.matchedCustomerId && (
           <div className="cust-dropdown-wrap">
-            {(suggestionsQ.data ?? []).length === 0 ? (
+            {counterHint !== null ? (
+              <div className="p-2 text-xs text-stone-500" role="status">
+                {counterHint}
+              </div>
+            ) : matches.length === 0 ? (
               <div className="p-2 text-xs text-stone-500">
                 No match. Fill name + address — we'll save this customer with the order.
               </div>
             ) : (
               <ul className="max-h-56 overflow-auto">
-                {suggestionsQ.data?.map((c) => (
+                {matches.map((c) => (
                   <li key={c.id}>
                     <button
                       type="button"
@@ -311,7 +363,13 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
                 onFocus={() => setAddrOpen(true)}
                 onBlur={() => setTimeout(() => setAddrOpen(false), 150)}
                 onChange={(e) => {
-                  setForm((p) => ({ ...p, addressLine: e.target.value, matchedAddressId: null }));
+                  // Leaving a saved address: its "use next time" tick does not carry over to the typing.
+                  setForm((p) => ({
+                    ...p,
+                    addressLine: e.target.value,
+                    matchedAddressId: null,
+                    makeDefault: p.matchedAddressId ? false : p.makeDefault,
+                  }));
                   setAddrOpen(true);
                 }}
                 onKeyDown={(e) => {
@@ -346,7 +404,13 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
               <AreaPicker
                 value={form.area}
                 onChange={(area) =>
-                  setForm((p) => ({ ...p, area, city: DELIVERY_CITY, matchedAddressId: null }))
+                  setForm((p) => ({
+                    ...p,
+                    area,
+                    city: DELIVERY_CITY,
+                    matchedAddressId: null,
+                    makeDefault: p.matchedAddressId ? false : p.makeDefault,
+                  }))
                 }
               />
             </div>
@@ -405,6 +469,35 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
               Save this address to {customerDetailQ.data?.name ?? 'customer'} for next time
             </label>
           )}
+          {/* Kept, for a customer with a usual address already: replace it only when asked
+              (a one-day office delivery must not become where their pizza goes next week). */}
+          {form.matchedCustomerId &&
+            form.addressLine &&
+            !form.matchedAddressId &&
+            form.saveAddressToCustomer &&
+            savedAddresses.length > 0 && (
+              <label className="flex items-center gap-1 text-[10px] text-stone-500">
+                <input
+                  type="checkbox"
+                  checked={form.makeDefault}
+                  onChange={(e) => setForm((p) => ({ ...p, makeDefault: e.target.checked }))}
+                />
+                Use it next time instead of their usual address (they moved)
+              </label>
+            )}
+          {/* A saved address that is not the usual one: make it the one filled in next time. */}
+          {form.matchedCustomerId &&
+            form.matchedAddressId &&
+            savedAddresses.some((a) => a.id === form.matchedAddressId && !a.isDefault) && (
+              <label className="flex items-center gap-1 text-[10px] text-stone-500">
+                <input
+                  type="checkbox"
+                  checked={form.makeDefault}
+                  onChange={(e) => setForm((p) => ({ ...p, makeDefault: e.target.checked }))}
+                />
+                Use this address for {customerDetailQ.data?.name ?? 'customer'} next time
+              </label>
+            )}
         </div>
       )}
 
@@ -441,7 +534,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
         ) : (
           <span className="text-[10px] text-stone-500">No customer yet</span>
         )}
-        {form.matchedCustomerId && (customerHistoryQ.data?.length ?? 0) > 0 && (
+        {canBrowse && form.matchedCustomerId && (customerHistoryQ.data?.length ?? 0) > 0 && (
           <span className="inline-flex items-center gap-1 text-[10px] text-stone-500">
             <History className="h-3 w-3" />
             {customerHistoryQ.data?.length} past order
@@ -546,8 +639,11 @@ function DeliveryChargeRow({ area }: { area: string }) {
  * - If the phone matched an existing customer → reuse.
  * - Else if name+phone given → create the customer.
  * - If the user picked a saved address → use it.
- * - Else if address fields are filled → optionally save as a new address on the customer.
+ * - Else if address fields are filled → save them on the customer (kept: on
+ *   their list; unticked: as a "One-off"), the usual one only when "use it
+ *   next time" is ticked too.
  * - Attach customer + chosen address + delivery notes to the order.
+ * - A saved address picked with "use it next time" becomes the usual one.
  */
 export async function commitCustomerToOrder(
   orderId: string,
@@ -561,9 +657,13 @@ export async function commitCustomerToOrder(
   // The name on the reused customer's master record, to compare against
   // what the till typed for this order.
   let masterName: string | null = null;
+  // Their saved addresses, as stored (for "use this address next time").
+  let savedAddresses: CustomerAddress[] = [];
 
   if (customerId) {
-    masterName = (await ipc.customers.get(customerId))?.name ?? null;
+    const master = await ipc.customers.get(customerId);
+    masterName = master?.name ?? null;
+    savedAddresses = master?.addresses ?? [];
   } else if (form.phone.trim()) {
     // Try one more lookup in case they typed without picking the suggestion
     const found = await ipc.customers.findByPhone(form.phone.trim());
@@ -591,18 +691,12 @@ export async function commitCustomerToOrder(
   }
 
   let addressId: string | null = form.matchedAddressId;
-  if (mode === 'delivery' && !addressId && form.addressLine.trim()) {
-    // Saved either way (the order needs an address row to point at); the
-    // "One-off" label keeps a do-not-save address out of the customer's
-    // usual list of places.
-    const created = await ipc.customers.createAddress({
-      customerId,
-      label: form.saveAddressToCustomer ? form.addressLabel || 'Order' : 'One-off',
-      addressLine: form.addressLine.trim(),
-      area: form.area.trim() || null,
-      city: form.city.trim() || DELIVERY_CITY,
-    });
-    addressId = created.id;
+  // A typed address is saved either way (the order needs an address row to
+  // point at); "One-off" keeps a do-not-save address out of the customer's
+  // usual list of places, and a kept one is filled in next time.
+  const typedAddress = typedAddressToSave(form, mode, DELIVERY_CITY);
+  if (typedAddress) {
+    addressId = (await ipc.customers.createAddress({ customerId, ...typedAddress })).id;
   }
 
   await ipc.customers.attachToOrder({
@@ -612,4 +706,15 @@ export async function commitCustomerToOrder(
     ...(form.deliveryNotes.trim() ? { deliveryNotes: form.deliveryNotes.trim() } : {}),
     ...(nameOverride ? { nameOverride } : {}),
   });
+
+  // "Use this address next time" on a saved address: after the order has its
+  // customer, and never in the way of the sale.
+  const usual = savedAddressToMakeUsual(form, mode, savedAddresses);
+  if (usual) {
+    try {
+      await ipc.customers.createAddress({ customerId, ...usual });
+    } catch (e) {
+      console.warn('Could not make the address the usual one (order not affected):', e);
+    }
+  }
 }

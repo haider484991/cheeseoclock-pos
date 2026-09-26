@@ -26,7 +26,9 @@ import { registerShiftsHandlers } from './handlers/shifts-handlers.js';
 import { registerWebBridgeHandlers } from './handlers/web-bridge-handlers.js';
 import { registerAuditHandlers } from './handlers/audit-handlers.js';
 import { registerAlertsHandlers } from './handlers/alerts-handlers.js';
+import { registerCounterHandlers } from './handlers/counter-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
+import { markHeldStepIn } from './step-in-hold.js';
 import { startHousekeeping } from '../services/housekeeping.js';
 
 export interface HandlerContext {
@@ -91,7 +93,8 @@ export function defineHandler<C extends IpcChannel>(
   ctx: HandlerContext,
   fn: HandlerFn<C>,
 ): void {
-  ipcMain.handle(channel, async (_event, payload: IpcRequest<C>) => {
+  ipcMain.handle(channel, async (_event, payload: IpcRequest<C>) => markHeldStepIn(channel, await answer(payload)));
+  async function answer(payload: IpcRequest<C>): Promise<IpcContract[C]['response']> {
     if (shuttingDown) {
       return {
         ok: false,
@@ -127,7 +130,7 @@ export function defineHandler<C extends IpcChannel>(
         },
       } as IpcContract[C]['response'];
     }
-  });
+  }
 }
 
 export function registerAllIpcHandlers(ctx: HandlerContext): void {
@@ -151,5 +154,6 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   registerWebBridgeHandlers(ctx);
   registerAuditHandlers(ctx);
   registerAlertsHandlers(ctx);
+  registerCounterHandlers(ctx);
   log.info('IPC handlers registered');
 }

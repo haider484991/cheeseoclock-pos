@@ -205,6 +205,35 @@ export function getFbrRowByOrder(db: AppDatabase, orderId: string): FbrQueueRow 
   return row ? toRow(row) : null;
 }
 
+/**
+ * Whether this till took money for the order. The sale's FBR row is queued
+ * by the till that took the payment (orders:tender / markServed /
+ * markDelivered), and this table is per till: when the money was taken on
+ * the other till, this one will never have the row.
+ */
+export function paymentTakenOnDevice(db: AppDatabase, orderId: string, deviceId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS hit FROM payments
+        WHERE order_id = ? AND device_id = ? AND amount_cents > 0 AND deleted_at IS NULL
+        LIMIT 1`,
+    )
+    .get(orderId, deviceId);
+  return row !== undefined;
+}
+
+/** The debit notes for these refund payments (a refund's rows share one note, keyed by one of them). */
+export function getFbrDebitNotes(db: AppDatabase, orderId: string, refIds: readonly string[]): FbrQueueRow[] {
+  if (refIds.length === 0) return [];
+  const rows = db
+    .prepare(
+      `SELECT * FROM fbr_submission_queue
+        WHERE order_id = ? AND kind = 'debit_note' AND ref_id IN (${refIds.map(() => '?').join(', ')})`,
+    )
+    .all(orderId, ...refIds) as Row[];
+  return rows.map(toRow);
+}
+
 export function retryAllFailed(db: AppDatabase): number {
   const now = nowIso();
   const r = db

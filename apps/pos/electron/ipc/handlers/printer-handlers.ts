@@ -3,6 +3,7 @@ import { defineHandler, IpcGuardError } from '../registry.js';
 import { ok, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { logoFingerprint } from '@cheeseoclock/printer-core';
+import { assertCounterMayReprint } from '../order-access.js';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
   DEFAULT_RECEIPT_CONFIG,
@@ -22,6 +23,8 @@ import {
 } from '../../services/printer-config.js';
 import { ReceiptLogoRasterSchema } from '../../services/receipt-logo.js';
 import { printSpooler } from '../../services/print-spooler.js';
+import { reprintWithApproval } from '../../services/reprint-service.js';
+import { reprintCounts } from '../../db/repositories/document-print-repo.js';
 import { testDrawer } from '../../services/drawer-service.js';
 import { isSystemPrintingSupported, listSystemPrinters } from '../../services/system-printers.js';
 
@@ -160,15 +163,26 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
     return ok({ printers, supported });
   });
 
-  defineHandler('printer:reprint', ctx, (_ctx, payload) => {
-    requireSession();
-    printSpooler.reprintReceipt(payload.orderId);
-    return ok({ enqueued: true } as const);
+  defineHandler('printer:reprint', ctx, async (_ctx, payload) => {
+    const s = requireSession();
+    // A counter login reprints only orders it may open (order-access.ts).
+    assertCounterMayReprint(ctx.db, s, payload.orderId, 'receipt');
+    // DUPLICATE marking, the manager's PIN when needed, the print log: reprint-service.ts.
+    return ok(await reprintWithApproval(ctx.db, s, payload));
   });
 
   defineHandler('printer:reprintKitchen', ctx, (_ctx, payload) => {
+    const s = requireSession();
+    assertCounterMayReprint(ctx.db, s, payload.orderId, 'kitchen');
+    return ok(printSpooler.reprintKitchenTicket(payload.orderId, { requestedByUserId: s.id }));
+  });
+
+  // "Reprinted ×N" in Order History: papers printed by hand, per order.
+  defineHandler('printer:reprintCounts', ctx, (_ctx, payload) => {
     requireSession();
-    printSpooler.reprintKitchenTicket(payload.orderId);
-    return ok({ enqueued: true } as const);
+    const ids = Array.isArray(payload?.orderIds)
+      ? payload.orderIds.filter((x): x is string => typeof x === 'string').slice(0, 100)
+      : [];
+    return ok(reprintCounts(ctx.db, ids));
   });
 }

@@ -35,6 +35,38 @@ export function baseUnitConversion(unit: string): { unit: 'g' | 'ml'; factor: 10
   return null;
 }
 
+/**
+ * What a stock row written in `from` is worth in `to`, the ingredient's unit
+ * now: 1 when nothing changed (or the row carries no unit — rows written
+ * before 0029 read as "the unit now"), 1000 after a Convert (kg → g,
+ * l → ml). Null when the two can't be converted (not a change the till makes).
+ */
+export function unitFactor(from: string | null | undefined, to: string): number | null {
+  if (from === null || from === undefined || from === '') return 1;
+  const a = normalizeUnit(from);
+  const b = normalizeUnit(to);
+  if (a === b) return 1;
+  const conv = baseUnitConversion(a);
+  if (conv && conv.unit === b) return conv.factor;
+  return null;
+}
+
+/**
+ * What a quantity of an ingredient cost, in paisa, at its stored price. Exact
+ * from the pack ("6,000 g for Rs 2,250") when there is one, else the stored
+ * per-unit cost. Rounded once, on the total.
+ */
+export function ingredientCostCents(
+  qty: number,
+  i: { costPerUnitCents: number; packSize: number | null; packPriceCents: number | null },
+): number {
+  if (qty === 0) return 0;
+  if (i.packSize && i.packSize > 0 && i.packPriceCents !== null) {
+    return Math.round((qty * i.packPriceCents) / i.packSize);
+  }
+  return Math.round(qty * i.costPerUnitCents);
+}
+
 /** Cost of one base unit, in whole paisa, from a pack price. */
 export function costPerUnitFromPack(packPriceCents: number, packSize: number): number {
   if (!(packSize > 0)) throw new Error('Pack size must be more than zero');

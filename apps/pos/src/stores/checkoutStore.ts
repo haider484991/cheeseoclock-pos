@@ -81,7 +81,6 @@ interface CheckoutState {
    * Live Orders board.
    */
   sendToKitchen: () => Promise<OrderSnapshot>;
-  voidCurrent: (reason: string, approverPin: string) => Promise<void>;
   /** Refetch the current order snapshot — used after side mutations like attachCustomer. */
   refreshSnapshot: () => Promise<void>;
   /** Discard the local pointer to the snapshot — used after tender to start fresh. */
@@ -334,19 +333,6 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const next = await ipc.orders.sendToKitchen(snap.order.id);
         set({ snapshot: next });
         return next;
-      });
-    },
-
-    voidCurrent(reason, approverPin) {
-      return run(async () => {
-        const snap = get().snapshot;
-        if (!snap) return;
-        const next = await ipc.orders.void({
-          orderId: snap.order.id,
-          reason,
-          approverPin,
-        });
-        set({ snapshot: next });
       });
     },
 

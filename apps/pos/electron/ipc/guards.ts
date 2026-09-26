@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../db/connection.js';
-import { hasCapability, type AuthenticatedUser } from '@cheeseoclock/shared-types';
+import { hasCapability, type AuthenticatedUser, type Capability } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../services/auth-service.js';
 import { IpcGuardError } from './registry.js';
 
@@ -51,3 +51,26 @@ export function requireAdminOrSetupPhase(db: AppDatabase, what: string): Authent
   if (isSetupPhase(db)) return null;
   return requireAdmin(what);
 }
+
+/**
+ * Someone signed in whose role has `capability`. Nobody signed in is
+ * 'unauthenticated' (the screen drops to the PIN pad); a role without it is
+ * 'forbidden' with `message`, which is shown to that person as it is.
+ */
+export function requireCapability(capability: Capability, message: string): AuthenticatedUser {
+  const session = getCurrentSession();
+  if (!session) throw new IpcGuardError({ code: 'unauthenticated', message: 'Not logged in' });
+  if (!hasCapability(session.role, capability)) {
+    throw new IpcGuardError({ code: 'forbidden', message });
+  }
+  return session;
+}
+
+/** What a counter login is told when it reaches a manager's area. Plain words, shown as they are. */
+export const REFUSED = {
+  customers: 'Only a manager or the owner can open the customer list.',
+  history: 'Only a manager or the owner can look at past orders.',
+  shiftTotals: 'Only a manager or the owner can see shift totals.',
+  earlierShiftCash: "Only a manager or the owner can see an earlier shift's cash.",
+  stock: 'Only a manager or the owner can see stock, recipes and suppliers.',
+} as const;

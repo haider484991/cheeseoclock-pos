@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { sql } from '@/lib/db';
 import { deliveryChargeItemFor, findZone } from '@/lib/delivery-zones';
 import { formatCents, normalizePhone } from '@/lib/format';
+import { menuWithoutDrinkBrand } from '@/lib/menu-view';
 import { validateModifierSelection, validateOrderable } from '@/lib/order-validation';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import { checkOrderRate, clientIpHash, recordOrderPlaced } from '@/lib/rate-limit';
@@ -227,7 +228,10 @@ export async function POST(req: Request): Promise<Response> {
     const menuRows = (await sql()`
       SELECT menu_json FROM site_menu WHERE id = 1
     `) as Array<{ menu_json: PublishedMenu }>;
-    const menu = menuRows[0]?.menu_json;
+    // Brand-free names (the till sells drinks as "Pepsi"; customers read
+    // "Cola"): what the order stores and every message below says them as the
+    // menu page did. Ids and prices are the till's own — it imports by id.
+    const menu = menuRows[0] ? menuWithoutDrinkBrand(menuRows[0].menu_json) : undefined;
     if (!menu) {
       return Response.json({ ok: false, error: 'menu_not_published' }, { status: 409 });
     }

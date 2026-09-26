@@ -30,7 +30,9 @@ describe('renderTestPage', () => {
     expect(margin.every((r) => r === '')).toBe(true);
     // The sentence sits between the last rule and that margin, whole words per row.
     const lastRule = rows.lastIndexOf('-'.repeat(48));
-    const sentenceRows = rows.slice(lastRule + 1, -1 - LINES_BEFORE_CUT);
+    // …then a blank row and the closing TEST PRINT - NOT A RECEIPT.
+    expect(rows.slice(-3 - LINES_BEFORE_CUT, -1 - LINES_BEFORE_CUT)).toEqual(['', 'TEST PRINT - NOT A RECEIPT']);
+    const sentenceRows = rows.slice(lastRule + 1, -3 - LINES_BEFORE_CUT);
     expect(sentenceRows.length).toBeGreaterThan(1);
     expect(sentenceRows.join(' ')).toBe(SENTENCE);
     for (const r of sentenceRows) expect(r).toMatch(/^\S.*\S$/);
@@ -45,7 +47,7 @@ describe('renderTestPage — shop logo', () => {
       renderTestPage(48, 'USB: BC-85AC G1', { logo: logo(), logoNote: 'should be above', logoOnReceipts: true }),
     ).map((r) => r.text);
     expect(rows[0]).toBe('[logo 576×20]');
-    expect(rows[1]).toBe('TEST PAGE');
+    expect(rows[1]).toBe('TEST PRINT');
     expect(rows.some((r) => /^Logo\s+should be above$/.test(r))).toBe(true);
     expect(rows.some((r) => /^Logo on receipts\s+on$/.test(r))).toBe(true);
   });
@@ -54,7 +56,7 @@ describe('renderTestPage — shop logo', () => {
     const rows = decodeEscPos(renderTestPage(32, 'LAN', { logo: null, logoNote: 'too dark to print', logoOnReceipts: false })).map(
       (r) => r.text,
     );
-    expect(rows[0]).toBe('TEST PAGE');
+    expect(rows[0]).toBe('TEST PRINT');
     expect(rows.some((r) => /^Logo\s+too dark to print$/.test(r))).toBe(true);
     expect(rows.some((r) => /^Logo on receipts\s+off$/.test(r))).toBe(true);
   });
@@ -74,7 +76,35 @@ describe('renderTestPage — shop logo', () => {
 
   it('without the options is the page it always was', () => {
     const rows = decodeEscPos(renderTestPage(48, 'USB: BC-85AC G1')).map((r) => r.text);
-    expect(rows[0]).toBe('TEST PAGE');
+    expect(rows[0]).toBe('TEST PRINT');
     expect(rows.some((r) => r.startsWith('Logo'))).toBe(false);
+  });
+});
+
+describe('renderTestPage — never mistaken for a receipt', () => {
+  it('says TEST PRINT / NOT A RECEIPT at the top and at the bottom', () => {
+    const rows = decodeEscPos(renderTestPage(32, 'LAN', { station: 'receipt' }));
+    expect(rows[0]).toEqual({ text: 'TEST PRINT', scale: 2 });
+    expect(rows[1]).toEqual({ text: 'NOT A RECEIPT', scale: 1 });
+    const text = rows.map((r) => r.text);
+    expect(text.at(-2 - LINES_BEFORE_CUT)).toBe('TEST PRINT - NOT A RECEIPT');
+    expect(text.join('\n')).not.toMatch(/TOTAL|PAID|Rs /);
+  });
+
+  it('names the station it was asked for, and says so when a kitchen test fell back to the receipt printer', () => {
+    const receipt = decodeEscPos(renderTestPage(48, 'LAN', { station: 'receipt' })).map((r) => r.text);
+    expect(receipt).toContain('Station: Receipt printer');
+    const kitchen = decodeEscPos(renderTestPage(48, 'LAN', { station: 'kitchen' })).map((r) => r.text);
+    expect(kitchen).toContain('Station: Kitchen printer');
+    const fellBack = decodeEscPos(
+      renderTestPage(32, 'LAN', {
+        station: 'kitchen',
+        stationNote: 'Kitchen test - no kitchen printer set up, printed on the receipt printer',
+      }),
+    );
+    expect(fellBack.map((r) => r.text).join(' ')).toContain(
+      'Kitchen test - no kitchen printer set up, printed on the receipt printer',
+    );
+    for (const r of fellBack) expect(r.text.length * r.scale).toBeLessThanOrEqual(32);
   });
 });

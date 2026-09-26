@@ -22,9 +22,38 @@ import type {
   Order,
   OrderMode,
   OrderSnapshot,
+  OrderStatus,
   PaymentMethod,
   Rider,
 } from './order.js';
+import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
+
+/**
+ * The stock half of a cancel or a full refund (see order-stock.ts). Needed
+ * only when the order holds stock on this till.
+ */
+export interface OrderStockAnswer {
+  /**
+   * "Was the food made?" Required while the order is still with the kitchen
+   * or ready (the till never guesses); once the food has left the shop only
+   * 'made' is accepted, and it is the default. Ignored when the order holds
+   * no stock here, and for a part refund that leaves money on the order.
+   */
+  foodMade?: FoodMade;
+  /**
+   * Sealed drinks (Drinks shelf) to put back although the food was made.
+   * Omit for "every drink on the order", before it was handed over.
+   */
+  putBack?: string[];
+  /**
+   * The status the dialog showed. If the order has moved on since (the
+   * kitchen tapped "Start preparing"), it is refused: "check again".
+   */
+  expectStatus?: OrderStatus;
+}
+
+/** An order after a cancel / refund, with what it did to stock. */
+export type OrderSnapshotWithStock = OrderSnapshot & { stock: StockSettlement | null };
 import type {
   CashMovement,
   CashMovementType,
@@ -40,6 +69,8 @@ import type {
   PrinterTransport,
   ReceiptLogoRasterSet,
   ReceiptLogoStatus,
+  ReceiptCopy,
+  ReprintResult,
   SystemPrinterInfo,
 } from './printer.js';
 import type {
@@ -65,7 +96,7 @@ import type {
   CustomerWithAddresses,
 } from './customer.js';
 import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
-import type { OrderHistoryFilter, OrderHistoryPage } from './order-history.js';
+import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
 
 /** One cloud copy as listed for the operator (from any till). */
@@ -145,9 +176,19 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<null>;
   };
+  /** Who is signed in; a held stepping-in login comes back with `stepInHeld` (see AuthenticatedUser). */
   'auth:currentSession': {
     request: undefined;
     response: ApiResult<AuthenticatedUser | null>;
+  };
+  /**
+   * A manager or the owner stepping in keeps their login: their OWN PIN or
+   * password, before or after it is held. Anyone else's is refused
+   * ('forbidden'). The answer is the login, now a normal one.
+   */
+  'auth:keepStepIn': {
+    request: { pin: string };
+    response: ApiResult<AuthenticatedUser>;
   };
   'auth:verifyManagerPin': {
     request: { pin: string };
@@ -462,8 +503,9 @@ export interface IpcContract {
     response: ApiResult<OrderSnapshot>;
   };
   'orders:void': {
-    request: { orderId: string; reason: string; approverPin: string };
-    response: ApiResult<OrderSnapshot>;
+    request: { orderId: string; reason: string; approverPin: string } & OrderStockAnswer;
+    /** The order after the cancel, plus what it did to stock (null: it held none here). */
+    response: ApiResult<OrderSnapshotWithStock>;
   };
   'orders:refund': {
     request: {
@@ -474,8 +516,18 @@ export interface IpcContract {
       amountCents?: number;
       /** Override the auto-picked method (defaults to dominant payment method). */
       method?: PaymentMethod;
-    };
-    response: ApiResult<OrderSnapshot>;
+    } & OrderStockAnswer;
+    /** `stock` is null for a part refund that leaves money on the order (money only). */
+    response: ApiResult<OrderSnapshotWithStock>;
+  };
+  /**
+   * What cancelling (or fully refunding) this order would do to stock — the
+   * "Was the food made?" question and the lines behind it — or, once done,
+   * what it did. Read-only.
+   */
+  'orders:stockStatus': {
+    request: { orderId: string };
+    response: ApiResult<OrderStockStatus>;
   };
 
   // Live order tracking — state transitions for the Live Orders board.
@@ -492,6 +544,18 @@ export interface IpcContract {
   'orders:history': {
     request: OrderHistoryFilter | undefined;
     response: ApiResult<OrderHistoryPage>;
+  };
+  /**
+   * The counter's Recent Orders: orders taken on THIS till in the shift open
+   * now (or, with no shift open, today's), newest first, at most
+   * RECENT_AT_COUNTER_LIMIT. Anyone who takes orders; no totals.
+   * `orderNumber`: the one order of that same set with this WHOLE number
+   * ("1043", "#1043" or the full "20260926-1043" off the receipt) — how an
+   * order past the newest few is found. Never a part of a number.
+   */
+  'orders:recentAtCounter': {
+    request: { orderNumber?: string } | undefined;
+    response: ApiResult<RecentCounterOrder[]>;
   };
   /**
    * Commit a still-open order without tendering. The COD entry path: cashier
@@ -779,14 +843,27 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<{ printers: SystemPrinterInfo[]; supported: boolean }>;
   };
+  /**
+   * The order's customer paper again: the receipt (PAID), the bill (NOT PAID)
+   * or the cancelled-order slip, whichever the order is now. A second or later
+   * paper says DUPLICATE. A counter login needs a manager's PIN or password
+   * for most duplicates of a paid receipt: then it is refused 'forbidden' with
+   * details `{ needs: 'manager_pin' }`, and asked again with `approverPin`.
+   * `copy: 'shop'` prints the SHOP COPY again (a manager's, always).
+   */
   'printer:reprint': {
-    request: { orderId: string };
-    response: ApiResult<{ enqueued: true }>;
+    request: { orderId: string; copy?: ReceiptCopy; approverPin?: string };
+    response: ApiResult<ReprintResult>;
   };
-  /** Kitchen ticket again, stamped REPRINT. */
+  /** Kitchen ticket again, stamped REPRINT (only while the kitchen still has the order). */
   'printer:reprintKitchen': {
     request: { orderId: string };
-    response: ApiResult<{ enqueued: true }>;
+    response: ApiResult<ReprintResult>;
+  };
+  /** How many times each order's receipt or bill was printed by hand (Reprint button). At most 100 ids. */
+  'printer:reprintCounts': {
+    request: { orderIds: string[] };
+    response: ApiResult<Record<string, number>>;
   };
 
   // FBR (Pakistan Digital Invoicing)

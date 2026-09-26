@@ -8,7 +8,15 @@ import {
 } from '@cheeseoclock/shared-types';
 import { MAX_NOTE_LENGTH } from '@/lib/cart';
 import { formatCents } from '@/lib/format';
-import { groupLabel, optionLabel, requiredCount, sizeLabel, type MenuCard, type MenuVariant } from '@/lib/menu-view';
+import {
+  groupLabel,
+  optionLabel,
+  requiredCount,
+  sheetGroups,
+  sizeLabel,
+  type MenuCard,
+  type MenuVariant,
+} from '@/lib/menu-view';
 import { sheetOptionLabel } from '@/lib/order-display';
 import { Stepper } from './cart-ui';
 import { CloseButton, Sheet } from './Sheet';
@@ -32,7 +40,10 @@ function isUnmet(g: PublishedModifierGroup, sel: Set<string>): boolean {
   return g.modifiers.filter((m) => sel.has(m.posModifierId)).length < requiredCount(g);
 }
 
-/** Size, choices (required first as the till orders them), a kitchen note, quantity → Add. */
+/**
+ * Size, then the choices in the till's sequence (required, dips on the side,
+ * extras, leave-outs), then the allergy / kitchen note, quantity → Add.
+ */
 export function ItemSheet({
   card,
   initialVariant,
@@ -48,7 +59,7 @@ export function ItemSheet({
   const [notes, setNotes] = useState('');
   const variant = card.variants[variantIndex] ?? card.variants[0]!;
   const item = variant.item;
-  const groups = useMemo(() => item.modifierGroups.slice().sort((a, b) => a.sortOrder - b.sortOrder), [item]);
+  const groups = useMemo(() => sheetGroups(item), [item]);
   const [qty, setQty] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(() => defaultsOf(item));
 

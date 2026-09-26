@@ -6,6 +6,7 @@ import { CategoryRail } from './CategoryRail';
 import { ItemGrid } from './ItemGrid';
 import { PizzaSizeDialog } from './PizzaSizeDialog';
 import { menuChoices, type MenuChoice } from './pizzaChoices';
+import { opensChoicesOnAdd } from './choiceFlow';
 import { searchMenu } from './menuSearch';
 import { isTypingField, ownsEnter } from './keys';
 import { CartPane } from './CartPane';
@@ -44,7 +45,9 @@ export function CheckoutPage() {
   const resumeDraft = useCheckoutStore((s) => s.resumeDraft);
   const gate = useTenderGate();
   const { toast } = useToast();
-  const needsCustomer = mode === 'takeaway' || mode === 'delivery';
+  // Only delivery forces the details step; a takeaway's customer is optional (owner 2026-09-26).
+  const needsCustomer = mode === 'delivery';
+  const sendsFirst = mode === 'takeaway' || mode === 'delivery';
   const hasItems = (snapshot?.items.length ?? 0) > 0;
 
   useEffect(() => {
@@ -141,10 +144,10 @@ export function CheckoutPage() {
       return;
     }
     if (!gate.ok) {
-      nudgeMissing(needsCustomer ? 'Cannot send yet' : 'Cannot pay yet');
+      nudgeMissing(sendsFirst ? 'Cannot send yet' : 'Cannot pay yet');
       return;
     }
-    if (needsCustomer) void handleSendToKitchen();
+    if (sendsFirst) void handleSendToKitchen();
     else setTenderOpen(true);
   }
 
@@ -273,10 +276,12 @@ export function CheckoutPage() {
 
   async function handleAddItem(item: MenuItem) {
     try {
-      // Only a choice the item cannot be sold without (a dip, the five veggies,
-      // a deal's pizzas) opens the choices first. Leave-outs, extras and the
-      // allergy note are optional: the item goes straight in, and "Customize"
-      // on its cart line opens them — so every pizza is still one tap.
+      // An item with choices opens them in order (owner 2026-09-27): what it
+      // cannot be sold without (a deal's pizzas, the dip, the veggies), then
+      // dips on the side, extras, leave-outs and the allergy note. Nothing
+      // optional has to be picked — the popup opens on "Add to order", so
+      // Enter adds the item as it is. Items with no choices (drinks, dips) go
+      // straight in; the cart line's link opens the choices again later.
       // The item's choice lists are cached, so the second tap on an item does
       // not wait on the database at all.
       const groups = await qc.fetchQuery({
@@ -284,7 +289,7 @@ export function CheckoutPage() {
         queryFn: () => ipc.menu.listModifierGroupsForItem(item.id),
         staleTime: 5 * 60_000,
       });
-      if (groups.some((g) => g.isRequired || g.minSelect > 0)) {
+      if (opensChoicesOnAdd(groups)) {
         setModifierForItem(item);
         return;
       }

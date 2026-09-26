@@ -19,6 +19,7 @@ import {
   searchMovementsInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
+import { requireCapability, REFUSED } from '../guards.js';
 import {
   listIngredients,
   createIngredient,
@@ -66,6 +67,16 @@ function requireInventoryManage(): AuthenticatedUser {
 }
 
 /**
+ * Reading stock, recipes, stock movements (waste included), suppliers and
+ * purchase orders: the Inventory page's, so managers and the owner. Costs and
+ * stock are the owner's business data, and no counter screen reads them
+ * (owner, 2026-09-26). Making a batch stays open to anyone logged in.
+ */
+function requireStockView(): AuthenticatedUser {
+  return requireCapability('menu.manage', REFUSED.stock);
+}
+
+/**
  * Quantities and cents are INTEGER columns; a fractional value from the
  * renderer would land in SQLite as REAL. Reject it here with the field named,
  * before any repository runs.
@@ -83,7 +94,7 @@ function validationFailed(error: ZodError) {
 export function registerInventoryHandlers(ctx: HandlerContext): void {
   // ---- Ingredients ----
   defineHandler('inventory:listIngredients', ctx, (_ctx, payload) => {
-    requireSession();
+    requireStockView();
     return ok(listIngredients(ctx.db, payload ?? {}));
   });
 
@@ -116,7 +127,7 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   // ---- Recipes ----
   defineHandler('inventory:getRecipe', ctx, (_ctx, payload) => {
-    requireSession();
+    requireStockView();
     return ok(listRecipeForItem(ctx.db, payload.menuItemId));
   });
 
@@ -132,13 +143,13 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('inventory:listRecipeLineCounts', ctx, () => {
-    requireSession();
+    requireStockView();
     return ok(listRecipeLineCounts(ctx.db));
   });
 
   // ---- Batch recipes (made in-house) ----
   defineHandler('inventory:getBatchRecipe', ctx, (_ctx, payload) => {
-    requireSession();
+    requireStockView();
     return ok(getBatchRecipe(ctx.db, payload.ingredientId));
   });
 
@@ -160,12 +171,12 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   // ---- Movements ----
   defineHandler('inventory:listMovements', ctx, (_ctx, payload) => {
-    requireSession();
+    requireStockView();
     return ok(listMovements(ctx.db, payload ?? {}));
   });
 
   defineHandler('inventory:searchMovements', ctx, (_ctx, payload) => {
-    requireSession();
+    requireStockView();
     const parsed = searchMovementsInputSchema.safeParse(payload ?? {});
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(searchMovements(ctx.db, parsed.data));
@@ -180,7 +191,7 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   // ---- Suppliers ----
   defineHandler('inventory:listSuppliers', ctx, (_ctx, payload) => {
-    requireSession();
+    requireStockView();
     return ok(listSuppliers(ctx.db, payload ?? {}));
   });
 
@@ -200,12 +211,12 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   // ---- Purchase orders ----
   defineHandler('inventory:listPurchaseOrders', ctx, (_ctx, payload) => {
-    requireSession();
+    requireStockView();
     return ok(listPurchaseOrders(ctx.db, payload ?? {}));
   });
 
   defineHandler('inventory:getPurchaseOrder', ctx, (_ctx, payload) => {
-    requireSession();
+    requireStockView();
     return ok(getPurchaseOrderWithItems(ctx.db, payload.id));
   });
 

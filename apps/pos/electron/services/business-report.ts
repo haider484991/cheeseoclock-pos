@@ -11,12 +11,15 @@ import type {
   ReportFoodCost,
   ReportItemLine,
   ReportKpis,
+  ReportOrderStock,
   ReportPaymentGroup,
   ReportRefundLine,
   ReportStaffLine,
   ReportVoidLine,
 } from '@cheeseoclock/shared-types';
+import { ingredientCostCents, noteKindAnswer, orderStockNoteKind, unitFactor } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
+import { withBillPrinted, withHandPrints } from './print-report.js';
 
 /**
  * The Reports page, in one call (`reports:business`).
@@ -119,21 +122,8 @@ export function refundReason(referenceNo: string | null, orderReason: string | n
   return fromOrder || 'No reason given';
 }
 
-/**
- * What a quantity of an ingredient cost, in paisa, at its stored price. Exact
- * from the pack ("6,000 g for Rs 2,250") when there is one, else the stored
- * per-unit cost. Rounded once, on the total.
- */
-export function ingredientCostCents(
-  qty: number,
-  i: { costPerUnitCents: number; packSize: number | null; packPriceCents: number | null },
-): number {
-  if (qty === 0) return 0;
-  if (i.packSize && i.packSize > 0 && i.packPriceCents !== null) {
-    return Math.round((qty * i.packPriceCents) / i.packSize);
-  }
-  return Math.round(qty * i.costPerUnitCents);
-}
+/** Moved to pos-domain (the till's stock dialogs price with it too); kept here for callers. */
+export { ingredientCostCents };
 
 /** Categories rolled up from the item lines, so the two always agree. Biggest first. */
 export function rollUpCategories(items: ReportItemLine[]): ReportCategoryLine[] {
@@ -473,7 +463,11 @@ function getItems(db: AppDatabase, range: ReportRange): ReportItemLine[] {
     .all(...args(range)) as ReportItemLine[];
 }
 
-function getVoids(db: AppDatabase, range: ReportRange): Array<ReportVoidLine & { staffKey: string }> {
+function getVoids(
+  db: AppDatabase,
+  range: ReportRange,
+  stockOf: (orderIds: string[]) => Map<string, ReportOrderStock>,
+): Array<ReportVoidLine & { staffKey: string }> {
   const rows = db
     .prepare(
       `SELECT o.id AS orderId, o.order_number AS orderNumber, o.created_at AS createdAt,
@@ -497,11 +491,13 @@ function getVoids(db: AppDatabase, range: ReportRange): Array<ReportVoidLine & {
     takenBy: string | null;
     staffKey: string;
   }>;
+  const stock = stockOf(rows.map((r) => r.orderId));
   return rows.map((r) => ({
     ...r,
     reason: r.reason?.trim() || 'No reason given',
     approvedBy: r.approvedBy ?? 'Unknown',
     takenBy: r.staffKey === 'web' ? 'Website' : (r.takenBy ?? 'Unknown'),
+    stock: stock.get(r.orderId) ?? null,
   }));
 }
 
@@ -674,7 +670,11 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
   }));
 }
 
-function getRefunds(db: AppDatabase, range: ReportRange): ReportRefundLine[] {
+function getRefunds(
+  db: AppDatabase,
+  range: ReportRange,
+  stockOf: (orderIds: string[]) => Map<string, ReportOrderStock>,
+): ReportRefundLine[] {
   // Refunds on orders from this period (the same orders the sales figures
   // cover), whenever the money went back. The approver is who handed it back.
   const rows = db
@@ -701,73 +701,278 @@ function getRefunds(db: AppDatabase, range: ReportRange): ReportRefundLine[] {
     referenceNo: string | null;
     approvedBy: string | null;
   }>;
-  return rows.map((r) => ({
-    orderId: r.orderId,
-    orderNumber: r.orderNumber,
-    orderCreatedAt: r.orderCreatedAt,
-    refundedAt: r.refundedAt,
-    amountCents: r.amountCents,
-    method: r.method,
-    full: r.status === 'refunded',
-    reason: refundReason(r.referenceNo, r.orderReason),
-    approvedBy: r.approvedBy ?? 'Unknown',
-  }));
+  // What the refund did to stock goes on ONE line per order: the latest of a
+  // whole-order refund (the one that settled it). A split cash + card order
+  // refunded in full has two lines; its waste must not count twice.
+  const stock = stockOf([...new Set(rows.filter((r) => r.status === 'refunded').map((r) => r.orderId))]);
+  const placed = new Set<string>();
+  return rows.map((r) => {
+    const full = r.status === 'refunded';
+    let lineStock: ReportOrderStock | null = null;
+    if (full && !placed.has(r.orderId)) {
+      placed.add(r.orderId);
+      lineStock = stock.get(r.orderId) ?? null;
+    }
+    return {
+      orderId: r.orderId,
+      orderNumber: r.orderNumber,
+      orderCreatedAt: r.orderCreatedAt,
+      refundedAt: r.refundedAt,
+      amountCents: r.amountCents,
+      method: r.method,
+      full,
+      reason: refundReason(r.referenceNo, r.orderReason),
+      approvedBy: r.approvedBy ?? 'Unknown',
+      stock: lineStock,
+    };
+  });
 }
 
-function getFoodCost(db: AppDatabase, range: ReportRange): ReportFoodCost {
-  // Stock leaves when the kitchen gets the order ('sale' movements; a
-  // cancellation puts it back as a positive 'sale' movement, so the sum nets
-  // out). Valued at the ingredient's price on file TODAY — movements carry no
-  // cost of their own — so this is an estimate, and labelled as one.
-  // Added up per ingredient first (idx_movements_reason_time), then named.
+/** Where an ingredient's price and unit are read for valuing stock rows. */
+interface PricedIngredient {
+  unit: string;
+  costPerUnitCents: number;
+  packSize: number | null;
+  packPriceCents: number | null;
+}
+
+/** A stock row's quantity, in the ingredient's unit now (rows written before a Convert were in kg). */
+function inUnitNow(qty: number, rowUnit: string | null, ing: PricedIngredient): number {
+  return qty * (unitFactor(rowUnit, ing.unit) ?? 1);
+}
+
+/**
+ * What cancelling / refunding in full did to each order's stock ("Was the
+ * food made?", order-stock-repo.ts): put back, or wasted (and at what cost
+ * today), from the order's settle rows. The ANSWER comes from the order-level
+ * audit row where this till wrote one (else from what the settle rows' notes
+ * stand for — the other till's audit trail stays there), with the status it
+ * was in and whether it went against the till's hint. The flag follows the
+ * answer, not the rows: a correct "Made" where only sealed drinks moved put
+ * stock back, and is no false alarm. Two indexed reads over the listed orders
+ * (idx_movements_order, idx_audit_entity).
+ */
+export function getOrderStockOutcomes(db: AppDatabase, orderIds: string[]): Map<string, ReportOrderStock> {
+  const out = new Map<string, ReportOrderStock>();
+  if (orderIds.length === 0) return out;
+  const ids = JSON.stringify(orderIds);
   const rows = db
     .prepare(
-      `SELECT i.id AS ingredientId, i.name AS name, i.unit AS unit,
-              i.cost_per_unit_cents AS costPerUnitCents, i.pack_size AS packSize,
-              i.pack_price_cents AS packPriceCents,
-              a.usedQty AS usedQty, a.wastedQty AS wastedQty
-         FROM (SELECT m.ingredient_id AS ingredientId,
-                      COALESCE(SUM(CASE WHEN m.reason = 'sale' THEN -m.delta_qty ELSE 0 END), 0) AS usedQty,
-                      COALESCE(SUM(CASE WHEN m.reason = 'waste' THEN -m.delta_qty ELSE 0 END), 0) AS wastedQty
-                 FROM stock_movements m
-                WHERE m.reason IN ('sale', 'waste') AND m.occurred_at >= ? AND m.occurred_at < ?
-                  AND m.deleted_at IS NULL
-                GROUP BY m.ingredient_id) a
-         JOIN ingredients i ON i.id = a.ingredientId`,
+      `SELECT m.ref_order_id AS orderId, m.reason AS reason, m.unit AS rowUnit, m.notes AS notes,
+              COALESCE(SUM(m.delta_qty), 0) AS qty,
+              i.unit AS unit, i.cost_per_unit_cents AS costPerUnitCents,
+              i.pack_size AS packSize, i.pack_price_cents AS packPriceCents
+         FROM stock_movements m
+         LEFT JOIN ingredients i ON i.id = m.ingredient_id
+        WHERE m.ref_order_id IN (SELECT value FROM json_each(?)) AND m.deleted_at IS NULL
+          -- unary +: look rows up by order (idx_movements_order), never by reason
+          AND (+m.reason IN ('waste', 'count') OR (+m.reason = 'sale' AND m.delta_qty > 0))
+        GROUP BY m.ref_order_id, m.ingredient_id, m.unit, m.reason, m.notes`,
     )
-    .all(...args(range)) as Array<{
+    .all(ids) as Array<{
+    orderId: string;
+    reason: string;
+    rowUnit: string | null;
+    notes: string | null;
+    qty: number;
+    unit: string | null;
+    costPerUnitCents: number | null;
+    packSize: number | null;
+    packPriceCents: number | null;
+  }>;
+  for (const r of rows) {
+    const cur: ReportOrderStock = out.get(r.orderId) ?? {
+      outcome: 'returned',
+      answer: null,
+      wasteCents: 0,
+      statusBefore: null,
+      flagged: false,
+    };
+    // A "made" settle can put sealed drinks back too; "not made" never wastes.
+    const said = noteKindAnswer(orderStockNoteKind(r.notes));
+    if (said === 'made' || (said === 'not_made' && cur.answer === null)) cur.answer = said;
+    if (r.reason === 'waste') {
+      cur.outcome = 'wasted';
+      if (r.unit !== null) {
+        const ing: PricedIngredient = {
+          unit: r.unit,
+          costPerUnitCents: r.costPerUnitCents ?? 0,
+          packSize: r.packSize,
+          packPriceCents: r.packPriceCents,
+        };
+        cur.wasteCents += ingredientCostCents(inUnitNow(-Number(r.qty), r.rowUnit, ing), ing);
+      }
+    }
+    out.set(r.orderId, cur);
+  }
+  const audits = db
+    .prepare(
+      `SELECT entity_id AS orderId, before_json AS beforeJson, after_json AS afterJson
+         FROM audit_log
+        WHERE entity_type = 'orders' AND entity_id IN (SELECT value FROM json_each(?))
+          AND action IN ('stock_put_back', 'stock_to_waste')
+        ORDER BY rowid`,
+    )
+    .all(ids) as Array<{ orderId: string; beforeJson: string | null; afterJson: string | null }>;
+  for (const a of audits) {
+    const cur = out.get(a.orderId);
+    if (!cur) continue;
+    const before = safeJson(a.beforeJson);
+    const after = safeJson(a.afterJson);
+    const status = typeof before['status'] === 'string' ? before['status'] : null;
+    cur.statusBefore = status;
+    if (after['outcome'] === 'made' || after['outcome'] === 'not_made') cur.answer = after['outcome'];
+    cur.flagged = putBackAfterCooking(cur) || after['againstHint'] === true;
+  }
+  return out;
+}
+
+/** "Not made" although cooking had been marked (preparing or ready): worth the owner's look. */
+export function putBackAfterCooking(stock: Pick<ReportOrderStock, 'answer' | 'statusBefore'>): boolean {
+  return stock.answer === 'not_made' && (stock.statusBefore === 'preparing' || stock.statusBefore === 'ready');
+}
+
+function safeJson(text: string | null): Record<string, unknown> {
+  if (!text) return {};
+  try {
+    const v: unknown = JSON.parse(text);
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Orders that took their stock in the period: their first 'sale' take falls
+ * in it. Everything written against such an order — the take, and whatever
+ * settled it when it was cancelled or refunded, maybe on a later day from
+ * Order History — counts on that day, so a late cancel moves nothing between
+ * days (the day of the sale shows the food as waste, not as food sold).
+ * Params: since, until, since.
+ *
+ * The per-order probes carry a unary + on everything but ref_order_id, so
+ * SQLite looks them up by order (idx_movements_order); left to itself it
+ * picked idx_movements_reason_time, walking every earlier sale for each row.
+ */
+const ORDERS_TAKEN_IN_RANGE = `
+  SELECT DISTINCT m.ref_order_id AS oid
+    FROM stock_movements m
+   WHERE m.reason = 'sale' AND m.delta_qty < 0 AND m.ref_order_id IS NOT NULL
+     AND m.occurred_at >= ? AND m.occurred_at < ? AND m.deleted_at IS NULL
+     AND NOT EXISTS (SELECT 1 FROM stock_movements e
+                      WHERE e.ref_order_id = m.ref_order_id AND +e.reason = 'sale' AND +e.delta_qty < 0
+                        AND e.deleted_at IS NULL AND +e.occurred_at < ?)`;
+
+/** Food cost per ingredient and row unit. Params: since, until, since (taken), since, until. */
+export const FOOD_COST_SQL = `WITH taken AS (${ORDERS_TAKEN_IN_RANGE}),
+            mv AS (
+              SELECT m.ingredient_id AS ingredientId, m.unit AS rowUnit, m.reason AS reason,
+                     m.delta_qty AS delta, 0 AS fromOrder
+                FROM stock_movements m
+               WHERE m.reason IN ('sale', 'waste') AND m.occurred_at >= ? AND m.occurred_at < ?
+                 AND m.deleted_at IS NULL AND m.ref_order_id IS NULL
+              UNION ALL
+              SELECT m.ingredient_id, m.unit, m.reason, m.delta_qty, 1
+                FROM taken t
+                JOIN stock_movements m ON m.ref_order_id = t.oid
+               WHERE +m.reason IN ('sale', 'waste') AND m.deleted_at IS NULL)
+       SELECT i.id AS ingredientId, i.name AS name, i.unit AS unit,
+              i.cost_per_unit_cents AS costPerUnitCents, i.pack_size AS packSize,
+              i.pack_price_cents AS packPriceCents, a.rowUnit AS rowUnit,
+              a.usedQty AS usedQty, a.wastedQty AS wastedQty, a.orderWastedQty AS orderWastedQty
+         FROM (SELECT ingredientId, rowUnit,
+                      COALESCE(SUM(CASE WHEN reason = 'sale' THEN -delta ELSE 0 END), 0) AS usedQty,
+                      COALESCE(SUM(CASE WHEN reason = 'waste' THEN -delta ELSE 0 END), 0) AS wastedQty,
+                      COALESCE(SUM(CASE WHEN reason = 'waste' AND fromOrder = 1 THEN -delta ELSE 0 END), 0) AS orderWastedQty
+                 FROM mv
+                GROUP BY ingredientId, rowUnit) a
+         JOIN ingredients i ON i.id = a.ingredientId`;
+
+/** Cancelled / refunded orders whose food was booked as waste. Params: since, until, since. */
+export const CANCELLED_WASTE_ORDERS_SQL = `WITH taken AS (${ORDERS_TAKEN_IN_RANGE})
+       SELECT COUNT(DISTINCT m.ref_order_id) AS n
+         FROM taken t JOIN stock_movements m ON m.ref_order_id = t.oid
+        WHERE +m.reason = 'waste' AND m.deleted_at IS NULL`;
+
+function getFoodCost(db: AppDatabase, range: ReportRange): ReportFoodCost {
+  // Stock leaves when the kitchen gets the order ('sale' movements). A
+  // cancelled or refunded order is settled against itself: put back as a
+  // positive 'sale' (so the sum nets out), or — food that was made — moved
+  // from 'sale' to 'waste' (order-stock-repo.ts). Valued at the ingredient's
+  // price on file TODAY (movements carry no cost of their own), so this is an
+  // estimate, and labelled as one. A row written before a Convert (kg → g) is
+  // scaled into the unit the ingredient has now.
+  // Rows with no order: by when they happened (idx_movements_reason_time).
+  // Order rows: by the day the order took its stock (idx_movements_order).
+  const [since, until] = args(range);
+  const rows = db.prepare(FOOD_COST_SQL).all(since, until, since, since, until) as Array<{
     ingredientId: string;
     name: string;
     unit: string;
     costPerUnitCents: number;
     packSize: number | null;
     packPriceCents: number | null;
+    rowUnit: string | null;
     usedQty: number;
     wastedQty: number;
+    orderWastedQty: number;
   }>;
+  // One line per ingredient, whatever units its rows were written in.
+  const byIngredient = new Map<
+    string,
+    { ingredientId: string; name: string; unit: string; ing: PricedIngredient; used: number; wasted: number; orderWasted: number }
+  >();
+  for (const r of rows) {
+    const ing: PricedIngredient = {
+      unit: r.unit,
+      costPerUnitCents: r.costPerUnitCents,
+      packSize: r.packSize,
+      packPriceCents: r.packPriceCents,
+    };
+    const cur = byIngredient.get(r.ingredientId) ?? {
+      ingredientId: r.ingredientId,
+      name: r.name,
+      unit: r.unit,
+      ing,
+      used: 0,
+      wasted: 0,
+      orderWasted: 0,
+    };
+    cur.used += inUnitNow(Number(r.usedQty), r.rowUnit, ing);
+    cur.wasted += inUnitNow(Number(r.wastedQty), r.rowUnit, ing);
+    cur.orderWasted += inUnitNow(Number(r.orderWastedQty), r.rowUnit, ing);
+    byIngredient.set(r.ingredientId, cur);
+  }
   let usedCents = 0;
   let wasteCents = 0;
-  const ingredients = rows
-    .filter((r) => r.usedQty !== 0 || r.wastedQty !== 0)
+  let cancelledWasteCents = 0;
+  const ingredients = [...byIngredient.values()]
+    .filter((r) => r.used !== 0 || r.wasted !== 0)
     .map((r) => {
-      const used = ingredientCostCents(r.usedQty, r);
-      const wasted = ingredientCostCents(r.wastedQty, r);
+      const used = ingredientCostCents(r.used, r.ing);
+      const wasted = ingredientCostCents(r.wasted, r.ing);
       usedCents += used;
       wasteCents += wasted;
+      cancelledWasteCents += ingredientCostCents(r.orderWasted, r.ing);
       return {
         ingredientId: r.ingredientId,
         name: r.name,
         unit: r.unit,
-        usedQty: r.usedQty,
-        wastedQty: r.wastedQty,
+        usedQty: r.used,
+        wastedQty: r.wasted,
         usedCents: used,
         wastedCents: wasted,
       };
     })
     .sort((a, b) => b.usedCents + b.wastedCents - (a.usedCents + a.wastedCents) || a.name.localeCompare(b.name));
+  const cancelled = db.prepare(CANCELLED_WASTE_ORDERS_SQL).get(since, until, since) as { n: number } | undefined;
   return {
     usedCents,
     wasteCents,
+    cancelledWasteCents,
+    cancelledOrderCount: Number(cancelled?.n ?? 0),
+    // Filled in by getBusinessReport from the cancelled / refunded orders.
+    putBackAfterCookingCount: 0,
     hasCosts: ingredients.some((i) => i.usedCents !== 0 || i.wastedCents !== 0),
     hasUsage: ingredients.length > 0,
     ingredients,
@@ -788,7 +993,12 @@ export function getBusinessReport(db: AppDatabase, req: BusinessReportRequest): 
     const sales = aggregateSales(getSaleRows(db, range), names);
     const items = getItems(db, range);
     const itemCount = items.reduce((s, i) => s + i.quantity, 0);
-    const voidRows = getVoids(db, range);
+    const stockOf = (ids: string[]) => getOrderStockOutcomes(db, ids);
+    const voidRows = getVoids(db, range, stockOf);
+    const refunds = getRefunds(db, range, stockOf);
+    const foodCost = getFoodCost(db, range);
+    // Answered "Not made" although cooking had been marked: worth the owner's look.
+    foodCost.putBackAfterCookingCount = [...voidRows, ...refunds].filter((l) => l.stock !== null && putBackAfterCooking(l.stock)).length;
     return {
       sinceIso: range.sinceIso,
       untilIso: range.untilIso,
@@ -799,14 +1009,14 @@ export function getBusinessReport(db: AppDatabase, req: BusinessReportRequest): 
       items,
       categories: rollUpCategories(items),
       channels: sales.channels,
-      staff: withStaffCounts(sales.staff, voidRows, getNoSaleOpensByUser(db, range), names.user),
+      staff: withHandPrints(db, range, withStaffCounts(sales.staff, voidRows, getNoSaleOpensByUser(db, range), names.user), names.user),
       shifts: getShifts(db, range),
       discounts: summarizeDiscounts(getDiscountLines(db, range)),
-      refunds: getRefunds(db, range).slice(0, REPORT_LIST_CAP),
-      voids: voidRows.slice(0, REPORT_LIST_CAP).map(({ staffKey: _staffKey, ...v }) => v),
+      refunds: refunds.slice(0, REPORT_LIST_CAP),
+      voids: withBillPrinted(db, voidRows.slice(0, REPORT_LIST_CAP).map(({ staffKey: _staffKey, ...v }) => v)),
       drawerOpens: getDrawerOpens(db, range),
       drawerOpenCount: getDrawerOpenCount(db, range),
-      foodCost: getFoodCost(db, range),
+      foodCost,
       deliveries: sales.deliveries,
     };
   });

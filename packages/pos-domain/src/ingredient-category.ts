@@ -72,7 +72,7 @@ const RULES: ReadonlyArray<[IngredientCategory, RegExp]> = [
   )],
   ['dry', w('lemon juice|lime juice')],
   ['drinks', w(
-    'drink|drinks|soft drink|cola|coke|soda|sprite|fanta|7 ?up|mirinda|mountain dew|dew|mineral water|' +
+    'drink|drinks|soft drink|cola|coke|pepsi|soda|sprite|fanta|7 ?up|mirinda|mountain dew|dew|mineral water|' +
       'bottled water|water bottle|juice|juices|tea|coffee|lemonade|milkshake|shake|energy drink|syrup drink',
   )],
   ['spice', w('powder|spice|spices|seasoning|masala|dry rub|rub')],

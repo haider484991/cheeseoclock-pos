@@ -37,6 +37,10 @@ export interface TestPageOptions {
   logoNote?: string;
   /** Whether receipts print the logo (the setting), shown when a logo is set. */
   logoOnReceipts?: boolean;
+  /** Which printer the page was asked for: "Station: Receipt printer" / "Station: Kitchen printer". */
+  station?: 'receipt' | 'kitchen';
+  /** Replaces the station line, e.g. a kitchen test that fell back to the receipt printer. */
+  stationNote?: string;
 }
 
 /** How a job has to be sent. */
@@ -104,7 +108,10 @@ export {
   renderKitchenTicket,
   renderDrawerKick,
   appendLogo,
+  receiptDocumentFor,
+  isDuplicateStamp,
   LOGO_GAP_DOTS,
+  KITCHEN_LATE_MS,
 } from './receipt-renderer.js';
 export {
   LOGO_RASTER_ALGO,
@@ -140,4 +147,10 @@ export type {
   RenderReceiptOpts,
   RenderKitchenTicketOpts,
   ReceiptBranding,
+  ReceiptDocument,
+  CopyStamp,
+  CopyStampKind,
+  FbrPrint,
+  RefundSlipInfo,
+  CancelInfo,
 } from './receipt-renderer.js';

@@ -3,6 +3,7 @@ import type { BusinessReport, ReportKpis } from '@cheeseoclock/shared-types';
 import { periodFor } from './dateRange';
 import { buildCsv, buildPrintBody, csvFileName, escapeHtml, toCsv } from './exporters';
 import {
+  cancelledWasteText,
   changeOf,
   daySeries,
   fmtMinutes,
@@ -10,6 +11,7 @@ import {
   hourLabel,
   hourSeries,
   percentOf,
+  stockCellText,
   weekdayAverages,
 } from './reportFormat';
 
@@ -165,7 +167,16 @@ const report = (over: Partial<BusinessReport> = {}): BusinessReport => ({
   voids: [],
   drawerOpens: [],
   drawerOpenCount: 0,
-  foodCost: { usedCents: 0, wasteCents: 0, hasCosts: false, hasUsage: false, ingredients: [] },
+  foodCost: {
+    usedCents: 0,
+    wasteCents: 0,
+    cancelledWasteCents: 0,
+    cancelledOrderCount: 0,
+    putBackAfterCookingCount: 0,
+    hasCosts: false,
+    hasUsage: false,
+    ingredients: [],
+  },
   deliveries: { byRider: [], byArea: [] },
   ...over,
 });
@@ -297,5 +308,65 @@ describe('printout', () => {
     expect(html).toContain('Showing the latest 25 of 420. Download for Excel for the latest 30.');
     // None: no section.
     expect(buildPrintBody(report(), period, SAT_3PM)).not.toContain('Cash drawer opened by hand');
+  });
+});
+
+describe('stock after a cancel or refund', () => {
+  it('says what happened to the stock, with rupees only when prices are set', () => {
+    expect(stockCellText(null, true)).toBe('—');
+    expect(stockCellText({ outcome: 'wasted', answer: 'made', wasteCents: 18_000, statusBefore: 'ready', flagged: false }, true)).toBe('Wasted · Rs 180');
+    expect(stockCellText({ outcome: 'wasted', answer: 'made', wasteCents: 18_000, statusBefore: 'ready', flagged: false }, false)).toBe('Wasted');
+    expect(stockCellText({ outcome: 'wasted', answer: 'made', wasteCents: 0, statusBefore: null, flagged: false }, true)).toBe('Wasted');
+    expect(stockCellText({ outcome: 'returned', answer: 'not_made', wasteCents: 0, statusBefore: 'sent_to_kitchen', flagged: false }, true)).toBe('Put back');
+    // Worth a look: put back after cooking was marked.
+    expect(stockCellText({ outcome: 'returned', answer: 'not_made', wasteCents: 0, statusBefore: 'ready', flagged: true }, true)).toBe('Put back · was Ready');
+    expect(stockCellText({ outcome: 'returned', answer: 'not_made', wasteCents: 0, statusBefore: 'preparing', flagged: true }, true)).toBe(
+      'Put back · was being cooked',
+    );
+    // "Made", but only sealed drinks moved (back in the fridge): no false alarm.
+    expect(stockCellText({ outcome: 'returned', answer: 'made', wasteCents: 0, statusBefore: 'ready', flagged: false }, true)).toBe(
+      'Made · drinks put back',
+    );
+  });
+
+  it('under the Wasted tile: how much of it came from cancelled orders', () => {
+    expect(cancelledWasteText({ cancelledWasteCents: 54_000, cancelledOrderCount: 3, hasCosts: true })).toBe(
+      'Rs 540 of it from 3 cancelled orders',
+    );
+    expect(cancelledWasteText({ cancelledWasteCents: 0, cancelledOrderCount: 1, hasCosts: false })).toBe('Some of it from 1 cancelled order');
+  });
+
+  it('the Excel file and the printout carry the Stock column', () => {
+    const r = report({
+      voids: [
+        {
+          orderId: 'o9',
+          orderNumber: '20260926-0009',
+          createdAt: '2026-09-26T09:00:00.000Z',
+          voidedAt: '2026-09-26T09:10:00.000Z',
+          amountCents: 100_000,
+          reason: 'Not collected',
+          approvedBy: 'Sara',
+          takenBy: 'Ali',
+          stock: { outcome: 'wasted', answer: 'made', wasteCents: 18_000, statusBefore: 'ready', flagged: false },
+        },
+      ],
+      foodCost: {
+        usedCents: 1,
+        wasteCents: 18_000,
+        cancelledWasteCents: 18_000,
+        cancelledOrderCount: 1,
+        putBackAfterCookingCount: 0,
+        hasCosts: true,
+        hasUsage: true,
+        ingredients: [],
+      },
+    });
+    const csv = buildCsv(r, periodFor('today', SAT_3PM), SAT_3PM);
+    expect(csv).toContain('Cancelled,Order,Value Rs,Reason,Stock,Approved by,Taken by');
+    expect(csv).toContain('Not collected,Wasted · Rs 180,Sara,Ali');
+    expect(csv).toContain('Of the waste: food made for cancelled orders,,,,1,180.00');
+    const html = buildPrintBody(r, periodFor('today', SAT_3PM), SAT_3PM);
+    expect(html).toContain('<td>Wasted · Rs 180</td>');
   });
 });

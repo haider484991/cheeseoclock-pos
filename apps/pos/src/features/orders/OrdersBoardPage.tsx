@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
+import { reprintReceipt, reprintToast } from '../printing/reprint';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useAcknowledgeOnlineOrders } from '../notifications/alertStore';
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
@@ -125,13 +126,13 @@ export function OrdersBoardPage() {
     onError: failed('Could not move the order'),
   });
   const reprint = useMutation({
-    mutationFn: (orderId: string) => ipc.printer.reprint(orderId),
-    onSuccess: () => toast({ title: 'Receipt sent to printer' }),
+    mutationFn: (orderId: string) => reprintReceipt(orderId),
+    onSuccess: (r) => toast({ title: reprintToast(r) }),
     onError: failed('Reprint failed'),
   });
   const reprintKitchen = useMutation({
     mutationFn: (orderId: string) => ipc.printer.reprintKitchen(orderId),
-    onSuccess: () => toast({ title: 'Kitchen ticket sent to printer' }),
+    onSuccess: (r) => toast({ title: reprintToast(r) }),
     onError: failed('Reprint failed'),
   });
 

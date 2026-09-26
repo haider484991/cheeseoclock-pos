@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import type { MenuItem } from '@cheeseoclock/shared-types';
-import { groupDisplayName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { groupDisplayName, isLeaveOutChoice, orderChoiceGroups } from '@cheeseoclock/shared-types';
 import { X } from 'lucide-react';
 import { ownsEnter } from './keys';
+import { onePickAdds as onlyOnePickAdds, strayTapGuard } from './choiceFlow';
 
 interface Props {
   item: MenuItem;
@@ -26,13 +27,16 @@ interface Props {
 }
 
 /**
- * The item's choices — required ones (dip, veggies, deal pizzas), then the
- * optional ones: leave-outs, extras, dips on the side — plus an "allergy or
- * special request" note that prints on the kitchen ticket (owner 2026-09-26).
+ * The item's choices in the order they are asked (owner 2026-09-27): required
+ * ones (a deal's pizzas, the dip, the veggies), then dips on the side, extras
+ * and leave-outs — and last an "allergy or special request" note that prints
+ * on the kitchen ticket (owner 2026-09-26).
  *
- * Speed: an item whose only choice is one pick from one list (a dip) adds the
- * moment that pick is tapped. Enter confirms (Shift+Enter for a new line in
- * the note).
+ * Speed: with nothing that must be picked, the popup opens on "Add to order",
+ * so Enter (or a tap) adds the item as it is. An item whose only choice is one
+ * pick from one list (a dip) adds the moment that pick is tapped. Enter
+ * confirms (Shift+Enter for a new line in the note). Taps in the first half
+ * second after it opens are the rest of a double tap and do nothing.
  */
 export function ModifierModal({
   item,
@@ -46,6 +50,7 @@ export function ModifierModal({
   const [notes, setNotes] = useState(initialNotes ?? '');
   const [onlyOne, setOnlyOne] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
   const confirmed = useRef(false);
   const groupsQ = useQuery({
     queryKey: ['menu', 'modifierGroupsForItem', item.id],
@@ -73,12 +78,13 @@ export function ModifierModal({
     setSelected(next);
   }, [groupsQ.data, initialModifierIds]);
 
-  const groups = groupsQ.data ?? [];
+  // Required, dips on the side, extras, leave-outs — whatever order the till
+  // stored them in.
+  const groups = useMemo(() => orderChoiceGroups(groupsQ.data ?? []), [groupsQ.data]);
   const editing = initialModifierIds !== undefined;
   // One required pick from one list and nothing else to choose: the tap on
   // that pick is the confirmation.
-  const onePickAdds =
-    !editing && groups.length === 1 && groups[0]!.isRequired && groups[0]!.selectionType === 'single';
+  const onePickAdds = onlyOnePickAdds(groups, editing);
 
   function confirm(modifierIds: string[]) {
     // One confirmation per modal: a double tap or Enter + click must not add twice.
@@ -115,7 +121,11 @@ export function ModifierModal({
 
   // Compute running price
   const allMods = groups.flatMap((g) => g.modifiers);
-  const selectedMods = Object.values(selected).flat();
+  // Sent in the order asked. The cart line and the kitchen ticket do NOT follow
+  // it: order-repo addItem loads the chosen modifiers with no ORDER BY, so a
+  // line lists them in modifier-id (creation) order. Only the popup's sections
+  // follow the asked order.
+  const selectedMods = groups.flatMap((g) => selected[g.id] ?? []);
   const deltaTotal = selectedMods.reduce((sum, id) => {
     const m = allMods.find((x) => x.id === id);
     return sum + (m?.priceDeltaCents ?? 0);
@@ -131,6 +141,28 @@ export function ModifierModal({
     if (allValid) confirm(selectedMods);
   }
 
+  /**
+   * Where the popup starts: on "Add to order" when nothing has to be picked
+   * (Enter or a tap adds the item as it is), else on the popup itself.
+   */
+  function focusStart() {
+    const button = confirmRef.current;
+    if (button && !button.disabled) button.focus();
+    else contentRef.current?.focus();
+  }
+
+  // The choices were still loading when the popup opened: once nothing is
+  // missing, move from the popup to its button (never away from a choice).
+  useEffect(() => {
+    if (allValid && document.activeElement === contentRef.current) confirmRef.current?.focus();
+  }, [allValid]);
+
+  // Items that used to go in with one tap now open this popup, so the second
+  // tap of a double tap on the menu tile or the size lands on it or beside it.
+  // For the first half second no tap selects, cancels or closes anything; the
+  // keyboard is never held back (choiceFlow.ts).
+  const [tapGuard] = useState(() => strayTapGuard());
+
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onCancel()}>
       <Dialog.Portal>
@@ -141,7 +173,23 @@ export function ModifierModal({
           // Not the Close button (Radix's default): Enter there would cancel.
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            contentRef.current?.focus();
+            focusStart();
+          }}
+          onPointerDownOutside={(e) => {
+            if (tapGuard.isStray()) e.preventDefault();
+          }}
+          // Never preventDefault here: Radix's own capture handler must still
+          // see the press to know it was inside.
+          onPointerDownCapture={() => {
+            tapGuard.pointerDown();
+          }}
+          onMouseDownCapture={(e) => {
+            if (tapGuard.keepsFocus()) e.preventDefault();
+          }}
+          onClickCapture={(e) => {
+            if (!tapGuard.swallowsClick(e.detail)) return;
+            e.preventDefault();
+            e.stopPropagation();
           }}
           {...(item.description ? {} : { 'aria-describedby': undefined })}
           className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-24px)] w-[640px] max-w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl bg-white shadow-xl outline-none dark:bg-stone-900 dark:text-stone-100"
@@ -273,7 +321,7 @@ export function ModifierModal({
               <Button variant="secondary" size="lg" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button variant="primary" size="lg" disabled={!allValid} onClick={() => confirm(selectedMods)}>
+              <Button ref={confirmRef} variant="primary" size="lg" disabled={!allValid} onClick={() => confirm(selectedMods)}>
                 {confirmLabel}
               </Button>
             </div>

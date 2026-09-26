@@ -17,12 +17,14 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import type { OrderStatus } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
+import { reprintReceipt, reprintToast } from '../printing/reprint';
 import { useToast } from '../../components/toast/ToastProvider';
 import { VoidOrderDialog } from './VoidOrderDialog';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './historyFilters';
+import { historyStockStep } from './stockCopy';
 
 const KITCHEN_STATUSES: readonly OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready'];
 
@@ -50,6 +52,15 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
     queryFn: () => ipc.orders.get(orderId),
   });
   const snap = snapQ.data;
+  // What cancelling did to its stock (or would do): only worth a read once the
+  // order has ended. Under ['orders'], so a cancel / refund refreshes it.
+  const ended = snap?.order.status === 'void' || snap?.order.status === 'refunded';
+  const stockQ = useQuery({
+    queryKey: ['orders', 'stock', orderId],
+    queryFn: () => ipc.orders.stockStatus(orderId),
+    enabled: ended,
+  });
+  const stockStep = ended && stockQ.data ? historyStockStep(stockQ.data) : null;
 
   // Esc closes the drawer — but not while a dialog on top of it is open
   // (Esc there closes just the dialog).
@@ -66,13 +77,13 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
     toast({ title, description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' });
 
   const reprintMut = useMutation({
-    mutationFn: () => ipc.printer.reprint(orderId),
-    onSuccess: () => toast({ title: 'Receipt sent to printer' }),
+    mutationFn: () => reprintReceipt(orderId),
+    onSuccess: (r) => toast({ title: reprintToast(r) }),
     onError: errorToast('Reprint failed'),
   });
   const reprintKitchenMut = useMutation({
     mutationFn: () => ipc.printer.reprintKitchen(orderId),
-    onSuccess: () => toast({ title: 'Kitchen ticket sent to printer' }),
+    onSuccess: (r) => toast({ title: reprintToast(r) }),
     onError: errorToast('Reprint failed'),
   });
 
@@ -272,6 +283,13 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   {o.voidedAt && (
                     <Step label={o.status === 'refunded' ? 'Refunded' : 'Cancelled'} at={o.voidedAt} />
                   )}
+                  {stockStep && (
+                    <Step
+                      label={stockStep.label}
+                      at={stockQ.data?.settledAt ?? o.voidedAt ?? null}
+                      extra={stockStep.extra || undefined}
+                    />
+                  )}
                 </ol>
               </section>
 
@@ -376,13 +394,13 @@ function Row({ k, v, tone, emphasize }: { k: string; v: string; tone?: 'emerald'
   );
 }
 
-function Step({ label, at, extra }: { label: string; at: string; extra?: string | undefined }) {
+function Step({ label, at, extra }: { label: string; at: string | null; extra?: string | undefined }) {
   return (
     <li className="flex items-baseline gap-2">
       <span className="w-24 shrink-0 font-semibold text-stone-700 dark:text-stone-200">{label}</span>
       <span>
-        {orderTimeLabel(at)}
-        {extra ? ` · ${extra}` : ''}
+        {at ? orderTimeLabel(at) : ''}
+        {extra ? `${at ? ' · ' : ''}${extra}` : ''}
       </span>
     </li>
   );

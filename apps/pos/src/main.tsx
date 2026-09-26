@@ -5,10 +5,12 @@ import { RouterProvider } from 'react-router-dom';
 import { router } from './router';
 import { ToastProvider } from './components/toast/ToastProvider';
 import { ConfirmHost } from './components/confirm/ConfirmHost';
+import { ManagerApprovalHost } from './features/printing/ManagerApprovalHost';
 import { ipc } from './ipc/client';
 import { OnboardingPage } from './features/onboarding/OnboardingPage';
 import { UpdateBanner } from './features/shell/UpdateBanner';
 import { OrderAlerts } from './features/notifications/OrderAlerts';
+import { forgetOnWhoChanges } from './stores/forgetOnSignOut';
 import './styles/globals.css';
 
 // Renderer-side Sentry — captures React errors + unhandled rejections in the
@@ -51,6 +53,8 @@ const queryClient = new QueryClient({
 // categories at the till (and reopening an item's choices) is served from
 // memory instead of a round trip for the whole category each time.
 queryClient.setQueryDefaults(['menu'], { staleTime: 5 * 60_000 });
+// A new person at the till never inherits what the last one looked at.
+forgetOnWhoChanges(queryClient);
 
 /**
  * Gate the router on whether the device has finished onboarding. If no user
@@ -100,6 +104,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ToastProvider>
         <RootGate />
         <ConfirmHost />
+        <ManagerApprovalHost />
       </ToastProvider>
     </QueryClientProvider>
   </React.StrictMode>,

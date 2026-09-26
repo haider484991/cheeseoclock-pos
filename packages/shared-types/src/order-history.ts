@@ -90,3 +90,19 @@ export interface OrderHistoryPage {
   total: number;
   summary: OrderHistorySummary;
 }
+
+/**
+ * One line of the counter's Recent Orders (`orders:recentAtCounter`): an
+ * order taken on this till in the shift open now, newest first. Enough to
+ * find the order a customer is asking about — no totals, no customer name or
+ * phone (those are on the order itself, once opened).
+ */
+export interface RecentCounterOrder {
+  id: string;
+  orderNumber: string;
+  mode: OrderMode;
+  source: OrderSource;
+  status: OrderStatus;
+  createdAt: string;
+  paid: boolean;
+}

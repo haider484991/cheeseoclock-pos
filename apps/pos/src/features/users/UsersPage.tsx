@@ -44,13 +44,14 @@ const ROLES: Array<{ id: Role; label: string; icon: typeof Shield; description: 
     id: 'manager',
     label: 'Manager',
     icon: Shield,
-    description: 'Menu, inventory, reports, void/discount approvals.',
+    description: 'Menu, stock, reports, customers, order history, approvals.',
   },
   {
     id: 'cashier',
     label: 'Cashier',
     icon: UserCog,
-    description: 'Take orders + tender. No menu/settings edits.',
+    description:
+      'Takes orders and payments and works Live Orders. Cannot see the customer list, order history or sales.',
   },
 ];
 

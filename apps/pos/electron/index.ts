@@ -9,6 +9,7 @@ import { ensureSeedUsers } from './db/repositories/user-repo.js';
 import { ensureSeedMenu } from './db/seed.js';
 import { registerAllIpcHandlers } from './ipc/registry.js';
 import { printSpooler } from './services/print-spooler.js';
+import { getCurrentSession } from './services/auth-service.js';
 import { fbrWorker } from './services/fbr-worker.js';
 import { syncWorker } from './services/sync-worker.js';
 import { webOrdersBridge } from './services/web-orders-bridge.js';
@@ -173,7 +174,8 @@ async function bootstrap() {
     ensureSeedMenu(db, deviceInfo.deviceId);
   }
 
-  printSpooler.init(db);
+  // The print log puts each paper down to this till and whoever is signed in.
+  printSpooler.init(db, { deviceId: deviceInfo.deviceId, currentUserId: () => getCurrentSession()?.id ?? null });
   fbrWorker.init(db);
   syncWorker.init(db, deviceInfo.deviceId);
   webOrdersBridge.init(db, deviceInfo.deviceId);

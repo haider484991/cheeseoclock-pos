@@ -33,7 +33,7 @@ import {
   type RowImage,
   type SyncChange,
 } from '@cheeseoclock/sync-core';
-import { baseUnitConversion } from '@cheeseoclock/pos-domain';
+import { baseUnitConversion, orderStockNoteKind, returnsToOtherTill, unitFactor } from '@cheeseoclock/pos-domain';
 import { quoteIdent, replicableTables } from '../replicable-schema.js';
 import { writeAudit } from './audit-repo.js';
 import { readParked, writeParked, type ParkedChange } from './sync-repo.js';
@@ -181,13 +181,14 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
       `INSERT INTO ${quoteIdent(table.name)} (${cols.map(quoteIdent).join(', ')})
        VALUES (${cols.map(() => '?').join(', ')})`,
     ).run(...vals);
+    if (table.name === 'stock_movements') arrivedMovement(db, change.entityId);
   } else {
     // An UPDATE, not an upsert: SQLite checks NOT NULL on an upsert's insert
     // half first, and a user row here never gets the other till's PIN.
     const keepHere = new Set(['id', 'created_at', ...(RECEIVER_KEEPS_ON_UPDATE[table.name] ?? [])]);
     const set = cols.map((c, i) => ({ c, v: vals[i] })).filter(({ c }) => !keepHere.has(c));
     if (table.name === 'ingredients') {
-      const count = countInNewUnit(db, change.entityId, image);
+      const count = countInNewUnit(db, change.entityId, image, change.deviceId);
       if (count !== null) set.push({ c: 'current_qty', v: count });
     }
     if (set.length > 0) {
@@ -222,9 +223,11 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
  * the other till converted the ingredient (Convert: kg → g, l → ml, which
  * rescales its own count, recipes and costs), this till's count must be
  * rescaled the same way, or 5 kg here becomes 5 g. Returns the count to
- * write, or null when the unit did not change.
+ * write, or null when the unit did not change. The change goes into this
+ * till's own audit trail as a 'convert_unit' row, as if it had been done
+ * here: it is when the count here changed unit.
  */
-function countInNewUnit(db: AppDatabase, id: string, image: RowImage): number | null {
+function countInNewUnit(db: AppDatabase, id: string, image: RowImage, fromDeviceId: string): number | null {
   const newUnit = image['unit'];
   if (typeof newUnit !== 'string') return null;
   const here = db.prepare(`SELECT unit, current_qty FROM ingredients WHERE id = ?`).get(id) as
@@ -232,11 +235,174 @@ function countInNewUnit(db: AppDatabase, id: string, image: RowImage): number | 
     | undefined;
   if (!here || here.unit === newUnit) return null;
   const conv = baseUnitConversion(here.unit);
-  if (conv && conv.unit === newUnit) return here.current_qty * conv.factor;
-  // No known conversion between the two: the other till's count is at least
-  // in the right unit.
-  const theirs = image['currentQty'];
-  return typeof theirs === 'number' && Number.isFinite(theirs) ? theirs : null;
+  let count: number | null;
+  if (conv && conv.unit === newUnit) count = here.current_qty * conv.factor;
+  else {
+    // No known conversion between the two: the other till's count is at least
+    // in the right unit.
+    const theirs = image['currentQty'];
+    count = typeof theirs === 'number' && Number.isFinite(theirs) ? theirs : null;
+  }
+  writeAudit(db, {
+    entityType: 'ingredients',
+    entityId: id,
+    action: 'convert_unit',
+    actorUserId: null,
+    before: { unit: here.unit, currentQty: here.current_qty },
+    after: { unit: newUnit, currentQty: count ?? here.current_qty, fromDeviceId },
+  });
+  return count;
+}
+
+/**
+ * A stock movement new to this till. Two things only this till can do:
+ *  - a row from a till that does not stamp units yet (before 0029) is given
+ *    the ingredient's unit here now — rows apply in the order they were
+ *    written, so that is the unit it was written in, and a later Convert
+ *    can't turn its "2 kg" into "2 g";
+ *  - a put-back the other till booked for stock THIS till took ("…put back
+ *    on the till that sent it") goes back on this till's count
+ *    (applyOtherTillReturn).
+ */
+function arrivedMovement(db: AppDatabase, id: string): void {
+  db.prepare(
+    `UPDATE stock_movements
+        SET unit = (SELECT i.unit FROM ingredients i WHERE i.id = stock_movements.ingredient_id)
+      WHERE id = ? AND unit IS NULL`,
+  ).run(id);
+  const here = localDeviceId(db);
+  if (here !== null) applyOtherTillReturn(db, id, here);
+}
+
+// -----------------------------------------------------------------------------
+// Stock this till took, put back by the other till
+// -----------------------------------------------------------------------------
+
+/*
+ * Each till keeps its own count (sync-core RECEIVER_KEEPS_ON_UPDATE): a sale
+ * on till A lowers A's count, and its movement rows travel to B as history
+ * only. When B cancels or fully refunds such an order as "Not made" (or puts
+ * a sealed drink of it back), B books A's share in rows that do not move B's
+ * count — "…put back on the till that sent it" (order-stock-repo.ts). This is
+ * the other half: when one of those rows arrives here (once, as a new row),
+ * the count here goes up by what this till still holds of that order — never
+ * more, so a cancel settled on both tills while the link was down can't put
+ * it back twice — unless a stock take here after the order was sent already
+ * counted it on the shelf.
+ *
+ * Like the rest of this file nothing is queued: current_qty is each till's
+ * own and never travels on an update. The change goes into this till's own
+ * audit trail (who decided, on which till, for which order).
+ */
+
+/** This till's id (device_info), or null before it has one. */
+function localDeviceId(db: AppDatabase): string | null {
+  const row = db.prepare(`SELECT device_id AS id FROM device_info WHERE id = 'singleton'`).get() as
+    | { id: string }
+    | undefined;
+  return row?.id ?? null;
+}
+
+interface ArrivedMovementRow {
+  id: string;
+  ingredient_id: string;
+  reason: string;
+  delta_qty: number;
+  unit: string | null;
+  notes: string | null;
+  ref_order_id: string | null;
+  device_id: string;
+  actor_user_id: string | null;
+}
+
+/**
+ * Apply a newly arrived movement row that puts stock back on this till's
+ * count. Returns what the count went up by (0 when the row is not one of
+ * those, or nothing is left to put back).
+ */
+function applyOtherTillReturn(db: AppDatabase, movementId: string, deviceId: string): number {
+  const m = db
+    .prepare(
+      `SELECT id, ingredient_id, reason, delta_qty, unit, notes, ref_order_id, device_id, actor_user_id
+         FROM stock_movements WHERE id = ? AND deleted_at IS NULL`,
+    )
+    .get(movementId) as ArrivedMovementRow | undefined;
+  if (!m || m.reason !== 'sale' || !(Number(m.delta_qty) > 0) || !m.ref_order_id) return 0;
+  if (m.device_id === deviceId || !returnsToOtherTill(orderStockNoteKind(m.notes))) return 0;
+
+  const ing = db
+    .prepare(`SELECT unit, current_qty FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
+    .get(m.ingredient_id) as { unit: string; current_qty: number } | undefined;
+  if (!ing) return 0;
+  const factor = unitFactor(m.unit, ing.unit);
+  if (factor === null) return 0;
+  const qty = Number(m.delta_qty) * factor;
+
+  // What this till still holds of the order: its own 'sale' rows (the take,
+  // and any settle of its own), less what the other till already put back
+  // onto this count.
+  const rows = db
+    .prepare(
+      `SELECT id, delta_qty, unit, notes, device_id, occurred_at
+         FROM stock_movements
+        WHERE ref_order_id = ? AND ingredient_id = ? AND reason = 'sale' AND deleted_at IS NULL`,
+    )
+    .all(m.ref_order_id, m.ingredient_id) as Array<{
+    id: string;
+    delta_qty: number;
+    unit: string | null;
+    notes: string | null;
+    device_id: string;
+    occurred_at: string;
+  }>;
+  let ownNet = 0;
+  let alreadyBack = 0;
+  let takenAt: string | null = null;
+  for (const r of rows) {
+    const f = unitFactor(r.unit, ing.unit);
+    if (f === null) continue;
+    const q = Number(r.delta_qty) * f;
+    if (r.device_id === deviceId) {
+      ownNet += q;
+      if (q < 0 && (takenAt === null || r.occurred_at < takenAt)) takenAt = r.occurred_at;
+    } else if (r.id !== m.id && q > 0 && returnsToOtherTill(orderStockNoteKind(r.notes))) {
+      alreadyBack += q;
+    }
+  }
+  const back = Math.min(qty, Math.max(0, -ownNet - alreadyBack));
+  if (!(back > 0) || takenAt === null) return 0;
+
+  // A stock take here after the order was sent already saw it on the shelf.
+  const count = db
+    .prepare(
+      `SELECT 1 AS x FROM stock_movements
+        WHERE ingredient_id = ? AND reason = 'count' AND ref_order_id IS NULL AND deleted_at IS NULL
+          AND device_id = ? AND occurred_at > ?
+        LIMIT 1`,
+    )
+    .get(m.ingredient_id, deviceId, takenAt);
+  const alreadyCounted = count !== undefined;
+  const after = alreadyCounted ? ing.current_qty : ing.current_qty + back;
+  if (!alreadyCounted) {
+    // Not version or updated_at: the count is this till's own (see recordStockMovement).
+    db.prepare(`UPDATE ingredients SET current_qty = ? WHERE id = ?`).run(after, m.ingredient_id);
+  }
+  writeAudit(db, {
+    entityType: 'ingredients',
+    entityId: m.ingredient_id,
+    action: 'put_back_by_other_till',
+    actorUserId: m.actor_user_id,
+    before: { qty: ing.current_qty },
+    after: {
+      qty: after,
+      delta: alreadyCounted ? 0 : back,
+      orderId: m.ref_order_id,
+      movementId: m.id,
+      fromDeviceId: m.device_id,
+      alreadyCounted,
+    },
+  });
+  return alreadyCounted ? 0 : back;
 }
 
 // -----------------------------------------------------------------------------

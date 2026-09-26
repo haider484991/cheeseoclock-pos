@@ -2,7 +2,7 @@ import type { PublishedMenu } from '@cheeseoclock/shared-types';
 import { BUSINESS } from './business';
 import { DELIVERY_AREAS } from './areas';
 import { isDeliveryChargeItem } from './delivery-zones';
-import { withoutDrinkBrand } from './menu-view';
+import { drinkFlavourName, withoutDrinkBrand } from './menu-view';
 
 /**
  * JSON-LD builders for the local-SEO entity graph.
@@ -120,12 +120,13 @@ export function menuNode(menu: PublishedMenu): Record<string, unknown> {
     .filter((c) => c.items.length > 0)
     .map((c) => ({
       '@type': 'MenuSection',
-      name: c.name,
+      // Never a drink brand (owner 2026-09-25), even if the menu passed in still has one.
+      name: drinkFlavourName(c.name),
       hasMenuItem: [...c.items]
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((item) => ({
           '@type': 'MenuItem',
-          name: item.name,
+          name: drinkFlavourName(item.name),
           ...(item.description ? { description: withoutDrinkBrand(item.description) } : {}),
           // Data-URL images from the POS publish are skipped — schema images
           // must be fetchable URLs.

@@ -92,7 +92,10 @@ function replyError(reply: { message: string; code?: DrawerFailure }, drawer: bo
     case 'not_sent':
       return new RawPrintError('printer_not_sent', reply.message, true);
     case 'maybe_sent':
-      return new RawPrintError('printer_maybe_sent', reply.message, false, true);
+      // A drawer pulse that may have gone out is never sent again (it would
+      // open twice). Paper is retried, and the retry says DUPLICATE (printer
+      // retry): part of the first may already be on paper.
+      return new RawPrintError('printer_maybe_sent', reply.message, !drawer, true);
     default:
       // A drawer job that failed without a tag failed somewhere unexpected
       // inside the checked send, after the job may have been queued.

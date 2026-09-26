@@ -64,12 +64,41 @@ export const tenderInputSchema = z.object({
     .min(1),
 });
 
-export const voidOrderInputSchema = z.object({
-  orderId: uuidSchema,
-  reason: z.string().min(1).max(500),
-  /** A manager's PIN or password (same rules as sign-in). */
-  approverPin: signInSecretSchema,
+/** "Was the food made?" when an order that took stock is cancelled or refunded in full. */
+export const foodMadeSchema = z.enum(['made', 'not_made']);
+
+/** Every order status, for "the status the dialog showed" (orderStatusSchema above predates the board's). */
+export const liveOrderStatusSchema = z.enum([
+  'open',
+  'sent_to_kitchen',
+  'preparing',
+  'ready',
+  'out_for_delivery',
+  'delivered',
+  'served',
+  'paid',
+  'void',
+  'refunded',
+]);
+
+/**
+ * The stock half of a cancel or a full refund (shared-types OrderStockAnswer):
+ * the answer, the sealed drinks going back, and the status the dialog showed.
+ */
+export const orderStockAnswerSchema = z.object({
+  foodMade: foodMadeSchema.optional(),
+  putBack: z.array(z.string().min(1).max(64)).max(200).optional(),
+  expectStatus: liveOrderStatusSchema.optional(),
 });
+
+export const voidOrderInputSchema = z
+  .object({
+    orderId: uuidSchema,
+    reason: z.string().min(1).max(500),
+    /** A manager's PIN or password (same rules as sign-in). */
+    approverPin: signInSecretSchema,
+  })
+  .merge(orderStockAnswerSchema);
 
 export type CreateOrderInput = z.infer<typeof createOrderInputSchema>;
 export type AddOrderItemInput = z.infer<typeof addOrderItemInputSchema>;
