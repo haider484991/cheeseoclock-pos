@@ -518,6 +518,9 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         message: 'Void reason is required',
       });
     }
+    if (!payload.approverPin?.trim()) {
+      throw new IpcGuardError({ code: 'forbidden', message: 'Manager PIN required to cancel an order' });
+    }
     let approverUserId: string;
     try {
       const approver = await verifyManagerPin(ctx.db, payload.approverPin);

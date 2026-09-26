@@ -18,7 +18,7 @@ import { useToast } from '../../components/toast/ToastProvider';
 import { resetCustomerForm, useCustomerForm } from './useCustomerForm';
 import { CustomerInlinePanel } from './CustomerInlinePanel';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
-import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 
 interface Props {
   step: 'items' | 'details';
@@ -216,13 +216,16 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
                     </div>
                   )}
                   {item.notes && <div className="ticket-line-note">Note: {item.notes}</div>}
-                  <button
-                    type="button"
-                    className="ticket-link ticket-customize"
-                    onClick={() => onCustomize(item.id)}
-                  >
-                    Customize · allergy
-                  </button>
+                  {/* The delivery charge is a fee, not food: nothing to customize. */}
+                  {!isDeliveryChargeName(item.menuItemName) && (
+                    <button
+                      type="button"
+                      className="ticket-link ticket-customize"
+                      onClick={() => onCustomize(item.id)}
+                    >
+                      Customize · allergy
+                    </button>
+                  )}
                 </div>
                 <div className="ticket-line-price">{formatCents(item.lineTotalCents, { showSymbol: false })}</div>
               </li>

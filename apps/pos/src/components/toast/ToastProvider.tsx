@@ -74,7 +74,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(() => ({ toast }), [toast]);
-  const { shown, waiting } = visibleToasts(items);
+  // ONE note on screen, inside the top bar: a stack reached down over the
+  // order-type buttons (owner: notes that "can't be X'd out" slowed confirming).
+  // The rest wait behind it, newest first, and the card says how many.
+  const { shown, waiting } = visibleToasts(items, 1);
 
   return (
     <ToastContext.Provider value={value}>
@@ -91,23 +94,25 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               type={t.variant === 'error' || t.variant === 'warning' ? 'foreground' : 'background'}
               onOpenChange={(open) => !open && dismiss(t.id)}
               className={cn(
-                'pointer-events-auto flex w-full items-start gap-2.5 rounded-xl border py-2 pl-3 pr-1.5 shadow-soft-lg animate-fade-in',
+                'pointer-events-auto flex max-h-[4.25rem] w-full items-start gap-2.5 overflow-hidden rounded-xl border py-1.5 pl-3 pr-1.5 shadow-soft-lg animate-fade-in',
                 'data-[swipe=move]:translate-y-[var(--radix-toast-swipe-move-y)] data-[swipe=cancel]:translate-y-0 data-[swipe=cancel]:transition-transform',
                 TONE[t.variant],
               )}
             >
               <Icon className={cn('mt-0.5 h-5 w-5 shrink-0', ICON_TONE[t.variant])} aria-hidden="true" />
               <div className="min-w-0 flex-1 py-0.5">
-                <RadixToast.Title className="text-sm font-semibold leading-snug">{t.title}</RadixToast.Title>
+                <div className="flex items-baseline gap-2">
+                  <RadixToast.Title className="truncate text-sm font-semibold leading-snug">{t.title}</RadixToast.Title>
+                  {moreBehind > 0 && (
+                    <span className="shrink-0 rounded-full bg-black/10 px-1.5 text-[11px] font-bold dark:bg-white/15" title={`${moreBehind} more — close this to see ${moreBehind === 1 ? 'it' : 'them'}`}>
+                      +{moreBehind} more
+                    </span>
+                  )}
+                </div>
                 {t.description && (
-                  <RadixToast.Description className="mt-0.5 text-[13px] leading-snug opacity-90">
+                  <RadixToast.Description className="mt-0.5 line-clamp-2 text-[13px] leading-snug opacity-90" title={t.description}>
                     {t.description}
                   </RadixToast.Description>
-                )}
-                {moreBehind > 0 && (
-                  <div className="mt-1 text-xs font-semibold opacity-70">
-                    +{moreBehind} more waiting — close one to see {moreBehind === 1 ? 'it' : 'them'}
-                  </div>
                 )}
               </div>
               <RadixToast.Close
@@ -122,7 +127,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         })}
         {/* Newest on top. pointer-events-none: the gaps between cards and the
             viewport's own box never swallow a tap meant for the screen below. */}
-        <RadixToast.Viewport className="pointer-events-none fixed left-1/2 top-2 z-[100] flex w-[26rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col-reverse gap-2 outline-none" />
+        <RadixToast.Viewport className="pointer-events-none fixed left-1/2 top-1.5 z-[100] flex w-[36rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col-reverse gap-2 outline-none" />
       </RadixToast.Provider>
     </ToastContext.Provider>
   );
