@@ -38,6 +38,7 @@ import {
   findOrder,
 } from '../../db/repositories/order-repo.js';
 import {
+  checkChoicePicks,
   kitchenHearsOfClose,
   requiresManagerApproval,
   stockSettlementForCounter,
@@ -45,6 +46,9 @@ import {
   validateOrderForTender,
 } from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
+import { listModifierGroupsForItem, listModifiersByGroup } from '../../db/repositories/modifier-repo.js';
+import { groupDisplayName } from '@cheeseoclock/shared-types';
+import type { AppDatabase } from '../../db/connection.js';
 import { mapOrderToFbrPayload, mapRefundToFbrDebitNote } from '@cheeseoclock/fbr-core';
 import { getFbrConfig, toSellerInfo } from '../../services/fbr-config.js';
 import { enqueueFbrSubmission, getFbrRowByOrder } from '../../db/repositories/fbr-queue-repo.js';
@@ -196,6 +200,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:addItem', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    assertChoicePicks(ctx.db, payload.menuItemId, payload.modifierIds ?? []);
     // Only the fields the contract names. `unitPriceOverrideCents` and
     // `parentOrderItemId` exist for a future server-side combo expander and
     // must never be accepted from the renderer — a free item with a clean
@@ -235,6 +240,10 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:updateItemOptions', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    const line = ctx.db
+      .prepare('SELECT menu_item_id FROM order_items WHERE id = ? AND order_id = ? AND deleted_at IS NULL')
+      .get(payload.orderItemId, payload.orderId) as { menu_item_id: string } | undefined;
+    if (line) assertChoicePicks(ctx.db, line.menu_item_id, Array.isArray(payload.modifierIds) ? payload.modifierIds : []);
     updateOrderItemOptions(
       ctx.db,
       {
@@ -722,4 +731,25 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     return ok({ ...snap, stock: stockForLogin(s, done.stock) });
   });
+}
+
+/**
+ * The item's choice rules on the till's own writes: a required flavour, veggie
+ * pick or deal pizza must be chosen, single choices hold one, maxima hold
+ * (owner test 2026-09-27: a 1 litre drink went in with no flavour). Website
+ * orders are checked by the site before they are imported, so the bridge does
+ * not come through here.
+ */
+function assertChoicePicks(db: AppDatabase, menuItemId: string, modifierIds: readonly string[]): void {
+  const groups = listModifierGroupsForItem(db, menuItemId).map((g) => ({
+    id: g.id,
+    label: groupDisplayName(g.name, g),
+    selectionType: g.selectionType,
+    isRequired: g.isRequired,
+    minSelect: g.minSelect,
+    maxSelect: g.maxSelect,
+    optionIds: listModifiersByGroup(db, g.id).map((m) => m.id),
+  }));
+  const why = checkChoicePicks(groups, modifierIds);
+  if (why) throw new IpcGuardError({ code: 'precondition_failed', message: why });
 }
