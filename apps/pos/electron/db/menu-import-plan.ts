@@ -267,6 +267,28 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
   const categoryNameByKey = new Map<string, string>();
   let nextOrder = Math.max(0, ...live.categories.map((c) => c.displayOrder + 1));
   const categoryMatches = matchAll(file.categories, live.categories);
+  /** The shop's order of each file category that already exists, else null. */
+  const liveOrder = categoryMatches.map((m) => (m.row ?? m.ambiguous[0] ?? null)?.displayOrder ?? null);
+  /**
+   * Where a NEW category goes: where the file puts it, among the ones the shop
+   * has (owner 2026-09-26: a new "Dips" landed after "Delivery Charges", off
+   * the edge of the till's category bar). Between its neighbours when there is
+   * room; otherwise level with the next one (the till sorts a tie by name);
+   * after everything only when nothing follows it. Existing categories never move.
+   */
+  const orderForNew = (i: number): number => {
+    let prev: number | null = null;
+    for (let j = i - 1; j >= 0 && prev === null; j--) prev = liveOrder[j] ?? null;
+    let next: number | null = null;
+    for (let k = i + 1; k < liveOrder.length && next === null; k++) next = liveOrder[k] ?? null;
+    if (next === null) return nextOrder++;
+    if (prev !== null && next - prev > 1) {
+      liveOrder[i] = prev + 1; // a second new one right after takes the next gap
+      return prev + 1;
+    }
+    liveOrder[i] = next;
+    return next;
+  };
   file.categories.forEach((cat, i) => {
     const key = cat.name.toLowerCase();
     const m = categoryMatches[i]!;
@@ -281,7 +303,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       categoryOps.push({
         fileKey: key,
         existingId: null,
-        create: { name: cat.name, displayOrder: nextOrder++, colorHex: cat.colorHex },
+        create: { name: cat.name, displayOrder: orderForNew(i), colorHex: cat.colorHex },
       });
       categoryNameByKey.set(key, cat.name);
     }

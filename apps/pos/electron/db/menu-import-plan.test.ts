@@ -603,6 +603,26 @@ describe('menuImportFileSchema', () => {
     expect(planMenuImport(f, shop({ categories: [], items: [] })).ops.taxCategoryId).toBe('tax-a');
   });
 
+  it('puts a new category where the file puts it, never moving the shop\'s own', () => {
+    const cats = (names: string[]) => names.map((name) => ({ name }));
+    const dip = [{ name: 'Ranch Dip', category: 'Dips', priceCents: 10000, recipe: [] }];
+    const f = file({ categories: cats(['Fries & Sides', 'Dips', 'Value Deals', 'Drinks']), ingredients: [], items: dip });
+    const shopCats = (orders: Record<string, number>) =>
+      shop({ categories: Object.entries(orders).map(([name, displayOrder], i) => ({ id: `c${i}`, name, displayOrder })) });
+    const orderOf = (plan: ReturnType<typeof planMenuImport>, key: string) =>
+      plan.ops.categories.find((c) => c.fileKey === key)?.create?.displayOrder;
+    // No room between neighbours: level with the next one (the till then sorts "Dips" before "Value Deals").
+    const tight = planMenuImport(f, shopCats({ 'Fries & Sides': 3, 'Value Deals': 4, Drinks: 5, 'Delivery Charges': 6 }));
+    expect(orderOf(tight, 'dips')).toBe(4);
+    expect(tight.ops.categories.filter((c) => c.create).length).toBe(1);
+    // Room between them: in the gap.
+    const roomy = planMenuImport(f, shopCats({ 'Fries & Sides': 3, 'Value Deals': 6, Drinks: 7 }));
+    expect(orderOf(roomy, 'dips')).toBe(4);
+    // Nothing after it: at the end, as before.
+    const last = planMenuImport(file({ categories: cats(['Drinks', 'Dips']), ingredients: [], items: dip }), shopCats({ Drinks: 5, Pizza: 1 }));
+    expect(orderOf(last, 'dips')).toBe(6);
+  });
+
   it('reads versions 1 to 3 only', () => {
     const file = (version: number) =>
       menuImportFileSchema.safeParse({ format: 'cheeseoclock-menu-import', version, categories: [], ingredients: [], items: [] });
