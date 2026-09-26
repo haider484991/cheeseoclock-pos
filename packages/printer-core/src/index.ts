@@ -109,7 +109,10 @@ export {
   renderDrawerKick,
   appendLogo,
   receiptDocumentFor,
+  receiptHeadLines,
+  receiptShopLines,
   isDuplicateStamp,
+  DEFAULT_FOOTER_LINE,
   LOGO_GAP_DOTS,
   KITCHEN_LATE_MS,
 } from './receipt-renderer.js';

@@ -5,6 +5,7 @@
  */
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { KITCHEN_TICKET_STATUSES } from '@cheeseoclock/pos-domain';
 
 /** Minutes after which a card turns amber, then red. */
 export const WARN_AFTER_MIN = 15;
@@ -64,6 +65,16 @@ export function nextBoardAction(status: OrderStatus, mode: OrderMode, paid: bool
     default:
       return { kind: 'none', label: '' };
   }
+}
+
+/**
+ * Whether a card offers "Reprint kitchen ticket": only while the kitchen still
+ * has the order (new, preparing, ready). Once it is out for delivery (or
+ * later) the till refuses that ticket for everyone (reprint-policy.ts
+ * KITCHEN_REPRINT_STATUSES), so the button would only ever say no.
+ */
+export function offersKitchenReprint(status: OrderStatus): boolean {
+  return KITCHEN_TICKET_STATUSES.includes(status);
 }
 
 /**

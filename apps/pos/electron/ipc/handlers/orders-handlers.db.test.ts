@@ -142,6 +142,8 @@ let db: ReturnType<typeof openMigrated>;
 let cheeseId = '';
 let pizzaId = '';
 let customerId = '';
+let addressId = '';
+let riderId = '';
 
 const call = (channel: string, payload: unknown) => {
   const fn = h.handlers.get(channel);
@@ -164,6 +166,20 @@ async function sentOrder(): Promise<string> {
   c.snapshotCustomerOntoOrder(db as never, { orderId: o.id, customerId, addressId: null }, ACTOR);
   r.addOrderItem(db as never, { orderId: o.id, menuItemId: pizzaId, quantity: 1, modifierIds: [], notes: null }, ACTOR);
   await call('orders:sendToKitchen', { orderId: o.id });
+  return o.id;
+}
+
+/** A cash-on-delivery order sent, made and handed to a rider, through the handlers. */
+async function deliveryOut(): Promise<string> {
+  const r = await import('../../db/repositories/order-repo.js');
+  const c = await import('../../db/repositories/customer-repo.js');
+  const o = r.createOrder(db as never, { mode: 'delivery' }, ACTOR);
+  c.snapshotCustomerOntoOrder(db as never, { orderId: o.id, customerId, addressId }, ACTOR);
+  r.addOrderItem(db as never, { orderId: o.id, menuItemId: pizzaId, quantity: 1, modifierIds: [], notes: null }, ACTOR);
+  await call('orders:sendToKitchen', { orderId: o.id });
+  await call('orders:markPreparing', { orderId: o.id });
+  await call('orders:markReady', { orderId: o.id });
+  await call('orders:assignRider', { orderId: o.id, riderId });
   return o.id;
 }
 
@@ -194,6 +210,9 @@ beforeEach(async () => {
   ing.setRecipeForItem(db as never, pizzaId, [{ ingredientId: cheeseId, qtyPerUnit: 90, modifierId: null }], MGR);
   shift.openShift(db as never, { openingCashCents: 0 }, MGR);
   customerId = cust.createCustomer(db as never, { name: 'Test Customer', phone: '03001234567' }, ACTOR).id;
+  addressId = cust.createAddress(db as never, { customerId, addressLine: 'House 1, Test Street', area: 'Test Area' }, ACTOR).id;
+  const riders = await import('../../db/repositories/rider-repo.js');
+  riderId = riders.createRider(db as never, { name: 'Test Rider', phone: '03009876543' }, MGR).id;
   const { setReceiptPrinterConfig } = await import('../../services/printer-config.js');
   setReceiptPrinterConfig(db as never, { transport: 'network', network: { host: '192.0.2.5', port: 9100 }, width: 48 });
   const { printSpooler } = await import('../../services/print-spooler.js');
@@ -306,6 +325,105 @@ describe.skipIf(!DatabaseSync)('orders handlers: "Was the food made?"', () => {
     const r = await call('orders:void', { orderId: o, reason: 'x', approverPin: PIN, foodMade: 'made', expectStatus: 'preparing' });
     expect((r.data as OrderSnapshotWithStock).stock).toMatchObject({ outcome: 'made' });
     expect(cheese()).toBe(9_910);
+  });
+
+  it('a cancel from ready, or while out with the rider, still gets the kitchen its CANCELLED slip', async () => {
+    const { printSpooler } = await import('../../services/print-spooler.js');
+    // Ready on the pass.
+    const ready = await sentOrder();
+    await printSpooler.whenIdle();
+    await call('orders:markPreparing', { orderId: ready });
+    await call('orders:markReady', { orderId: ready });
+    await call('orders:void', { orderId: ready, reason: 'Customer left', approverPin: PIN, foodMade: 'made' });
+    await printSpooler.whenIdle();
+    expect(kitchenJobs(ready).map((j) => j.cancelled === true)).toEqual([false, true]);
+
+    // Out with the rider.
+    const out = await deliveryOut();
+    await printSpooler.whenIdle();
+    expect(kitchenJobs(out)).toHaveLength(1);
+    await call('orders:void', { orderId: out, reason: 'Customer refused at the door', approverPin: PIN, foodMade: 'made' });
+    await printSpooler.whenIdle();
+    expect(kitchenJobs(out).map((j) => j.cancelled === true)).toEqual([false, true]);
+    // And it printed: the kitchen's paper says so.
+    const { escPosToText } = await import('@cheeseoclock/printer-core');
+    expect(escPosToText(h.sends.at(-1)!)).toContain('* CANCELLED *');
+  });
+
+  it('a cancel after the food was served or delivered sends the kitchen nothing — no "DO NOT MAKE" for food already eaten', async () => {
+    const { printSpooler } = await import('../../services/print-spooler.js');
+    // Takeaway handed over unpaid (collect later), then cancelled: the customer
+    // walked off without paying.
+    const served = await sentOrder();
+    await printSpooler.whenIdle();
+    await call('orders:markPreparing', { orderId: served });
+    await call('orders:markReady', { orderId: served });
+    await call('orders:markServed', { orderId: served });
+    // Cash on delivery, delivered, the money never came back.
+    const delivered = await deliveryOut();
+    await printSpooler.whenIdle();
+    await call('orders:markDelivered', { orderId: delivered });
+    // Both kitchen tickets printed.
+    expect(kitchenJobs(served)).toHaveLength(1);
+    expect(kitchenJobs(delivered)).toHaveLength(1);
+    const sendsBefore = h.sends.length;
+
+    for (const [orderId, status] of [
+      [served, 'served'],
+      [delivered, 'delivered'],
+    ] as const) {
+      const done = (
+        await call('orders:void', { orderId, reason: 'Never paid', approverPin: PIN, foodMade: 'made', expectStatus: status })
+      ).data as OrderSnapshotWithStock;
+      expect(done.order.status).toBe('void');
+    }
+    await printSpooler.whenIdle();
+    expect(kitchenJobs(served).map((j) => j.cancelled === true)).toEqual([false]);
+    expect(kitchenJobs(delivered).map((j) => j.cancelled === true)).toEqual([false]);
+    // Nothing reached the kitchen printer at all.
+    const { escPosToText } = await import('@cheeseoclock/printer-core');
+    const after = h.sends.slice(sendsBefore).map((b) => escPosToText(b));
+    expect(after.filter((t) => t.includes('CANCELLED') || t.includes('DO NOT MAKE'))).toEqual([]);
+  });
+
+  it('no CANCELLED slip for an order the kitchen never got a ticket for', async () => {
+    const { getPrintPolicy, setPrintPolicy } = await import('../../services/printer-config.js');
+    setPrintPolicy(db as never, { ...getPrintPolicy(db as never), kitchenTicket: false });
+    const o = await sentOrder();
+    const { printSpooler } = await import('../../services/print-spooler.js');
+    await printSpooler.whenIdle();
+    await call('orders:markPreparing', { orderId: o });
+    await call('orders:markReady', { orderId: o });
+    await call('orders:void', { orderId: o, reason: 'Customer left', approverPin: PIN, foodMade: 'made' });
+    await printSpooler.whenIdle();
+    expect(kitchenJobs(o)).toEqual([]);
+  });
+
+  it('a full refund before the food was handed over gets the slip; after it was handed over, none', async () => {
+    const { printSpooler } = await import('../../services/print-spooler.js');
+    const prepaid = async () => {
+      const r = await import('../../db/repositories/order-repo.js');
+      const c = await import('../../db/repositories/customer-repo.js');
+      const o = r.createOrder(db as never, { mode: 'takeaway' }, ACTOR);
+      c.snapshotCustomerOntoOrder(db as never, { orderId: o.id, customerId, addressId: null }, ACTOR);
+      r.addOrderItem(db as never, { orderId: o.id, menuItemId: pizzaId, quantity: 1, modifierIds: [], notes: null }, ACTOR);
+      await call('orders:tender', { orderId: o.id, payments: [{ method: 'card', amountCents: 100_000 }] });
+      await printSpooler.whenIdle();
+      await call('orders:markPreparing', { orderId: o.id });
+      await call('orders:markReady', { orderId: o.id });
+      return o.id;
+    };
+    // Paid up front, ready on the pass, then refunded in full: the kitchen hears of it.
+    const ready = await prepaid();
+    await call('orders:refund', { orderId: ready, reason: 'Customer left', approverPin: PIN, foodMade: 'made' });
+    await printSpooler.whenIdle();
+    expect(kitchenJobs(ready).map((j) => j.cancelled === true)).toEqual([false, true]);
+    // Picked up, then refunded: money only.
+    const pickedUp = await prepaid();
+    await call('orders:markServed', { orderId: pickedUp });
+    await call('orders:refund', { orderId: pickedUp, reason: 'Cold', approverPin: PIN, foodMade: 'made' });
+    await printSpooler.whenIdle();
+    expect(kitchenJobs(pickedUp).map((j) => j.cancelled === true)).toEqual([false]);
   });
 
   it('a part refund ignores the answer (money only); refunding the rest asks and settles', async () => {

@@ -315,6 +315,9 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
 const COUNTER_SCOPED = [
   'orders:get',
+  // The same rule as orders:get: "Was the food made?" and its stock lines only
+  // for an order the counter may open.
+  'orders:stockStatus',
   'orders:attachCustomer',
   'orders:detachCustomer',
   'customers:findByPhone',
@@ -347,7 +350,6 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:markDelivered': { orderId: s.boardOld },
   'orders:void': { orderId: s.paidNow, reason: 'Customer left' },
   'orders:refund': { orderId: s.paidNow, reason: 'Cold pizza', approverPin: '0000' },
-  'orders:stockStatus': { orderId: s.paidNow },
   'orders:discardDraft': { orderId: s.draft },
   'orders:recentAtCounter': undefined,
   'customers:areaUsage': undefined,
@@ -768,6 +770,44 @@ describe.skipIf(!Sqlite)('which orders a counter login opens and reprints', () =
       code: 'forbidden',
       message: 'The kitchen is done with this order, so its ticket is not printed again',
     });
+  });
+
+  it("reads an order's stock (\"Was the food made?\") only when it may open it — the same answer as orders:get, word for word", async () => {
+    const { createOrder } = await import('../../db/repositories/order-repo.js');
+    const ALL: OrderStatus[] = ['open', 'sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'served', 'paid', 'void', 'refunded'];
+    // Every status, long ago, in the shift that was closed: only the board makes them the counter's.
+    const old = ALL.map((status) => {
+      const o = createOrder(db as never, { mode: 'delivery' }, { userId: 'u_cash', deviceId: DEV });
+      db.prepare(`UPDATE orders SET status = ?, shift_id = ?, created_at = ? WHERE id = ?`).run(status, s.earlierShift, T0, o.id);
+      return o.id;
+    });
+    const ids = [s.draft, s.boardOld, s.paidOld, s.paidNow, s.kitchenNow, s.noShiftOld, s.otherTill, ...old];
+    const answer = (o: Outcome) => (o.ok ? 'ok' : `${o.code}: ${o.message}`);
+    h.session = CASHIER;
+    let refused = 0;
+    for (const id of ids) {
+      const opened = answer(await call('orders:get', { id }));
+      const stock = answer(await call('orders:stockStatus', { orderId: id }));
+      expect({ id, stock }).toEqual({ id, stock: opened });
+      if (opened !== 'ok') refused += 1;
+    }
+    expect(refused).toBeGreaterThanOrEqual(5);
+    expect(await call('orders:stockStatus', { orderId: s.paidOld })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: 'This order is from an earlier shift. Ask a manager to open it.',
+    });
+    expect(await call('orders:stockStatus', { orderId: s.noShiftOld })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: 'This order is more than a day old. Ask a manager to open it.',
+    });
+    expect(await call('orders:stockStatus', { orderId: 'no-such-order' })).toMatchObject({ ok: false, code: 'not_found' });
+    // Managers and the owner read any of them.
+    for (const who of [MANAGER, OWNER]) {
+      h.session = who;
+      for (const id of ids) expect({ who: who.role, id, ok: (await call('orders:stockStatus', { orderId: id })).ok }).toEqual({ who: who.role, id, ok: true });
+    }
   });
 
   it('reads the FBR status of an order it may open only', async () => {

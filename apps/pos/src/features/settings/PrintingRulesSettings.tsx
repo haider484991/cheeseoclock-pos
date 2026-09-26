@@ -27,7 +27,7 @@ function logoRuleBody(status: ReceiptLogoStatus | undefined, logoUrl: string | u
     case 'too_dark':
       return `Your logo would print as a big black block, so receipts leave it out. The owner can upload ${darkLogoFix(logoUrl)} under Settings → Shop & logo.`;
     default:
-      return "Your logo prints at the top of customer receipts, delivery bills and refund slips — never on kitchen tickets. The receipt printer's Test print shows it even when this is off. If it comes out as odd symbols, your printer can't print pictures: turn this off.";
+      return "Your logo prints at the top of customer receipts, delivery bills and refund slips, in place of the shop name — never on kitchen tickets. Turned off, they start with the shop name. The receipt printer's Test print shows it even when this is off. If it comes out as odd symbols, your printer can't print pictures: turn this off.";
   }
 }
 

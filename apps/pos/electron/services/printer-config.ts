@@ -82,11 +82,30 @@ export const PrinterConnectionConfigSchema = z
     }
   });
 
+/** The shop's own site: printed at the bottom of receipts on a till that never set a website. */
+export const DEFAULT_WEBSITE_LINE = 'cheeseoclock.net';
+/** Longest website the settings take (it prints on one or two receipt lines). */
+export const WEBSITE_MAX_CHARS = 60;
+
 export const ReceiptBrandingSchema = z.object({
   storeName: z.string().min(1).default('Cheese O Clock'),
   storeTagline: z.string().optional(),
   branchLine: z.string().optional(),
   phoneLine: z.string().optional(),
+  /**
+   * The website at the bottom of customer receipts, under the phone. '' =
+   * none (the owner cleared it). Not there at all (a till set up before
+   * 0.7.8, or by first-time setup) = the shop's own site: getReceiptBranding
+   * fills in DEFAULT_WEBSITE_LINE, so existing tills print it without anyone
+   * saving the settings again, and clearing it is still possible.
+   */
+  websiteLine: z
+    .string()
+    .trim()
+    .max(WEBSITE_MAX_CHARS, `Keep the website to ${WEBSITE_MAX_CHARS} characters or fewer`)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\u0000-\u001f\u007f]*$/, 'The website has unsupported characters')
+    .optional(),
   footerLine: z.string().optional(),
   /** Data URL of the company logo (already resized — see ImagePicker). */
   logoUrl: z.string().optional(),
@@ -129,8 +148,23 @@ export function setReceiptPrinterConfig(
 export function getReceiptBranding(db: AppDatabase): ReceiptBranding {
   const raw = getSettingRaw(db, BRANDING_KEY);
   const parsed = ReceiptBrandingSchema.safeParse(raw ?? {});
-  if (parsed.success) return parsed.data;
-  return ReceiptBrandingSchema.parse({}); // returns defaults
+  if (parsed.success) return withDefaultWebsite(parsed.data);
+  // A website that no longer passes the check must not cost the shop its
+  // name, address and logo on every receipt: keep the rest, print no website.
+  if (raw && typeof raw === 'object' && 'websiteLine' in raw) {
+    const { websiteLine: _bad, ...rest } = raw as Record<string, unknown>;
+    const retry = ReceiptBrandingSchema.safeParse(rest);
+    if (retry.success) {
+      log.warn('Receipt website unreadable; printing receipts without it');
+      return { ...retry.data, websiteLine: '' };
+    }
+  }
+  return withDefaultWebsite(ReceiptBrandingSchema.parse({})); // returns defaults
+}
+
+/** Never set (see ReceiptBrandingSchema.websiteLine): the shop's own site. */
+function withDefaultWebsite(branding: ReceiptBranding): ReceiptBranding {
+  return branding.websiteLine === undefined ? { ...branding, websiteLine: DEFAULT_WEBSITE_LINE } : branding;
 }
 
 export function setReceiptBranding(

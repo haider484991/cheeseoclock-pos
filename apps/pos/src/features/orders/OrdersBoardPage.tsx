@@ -39,6 +39,7 @@ import {
   cardLines,
   matchesBoardSearch,
   nextBoardAction,
+  offersKitchenReprint,
   type AgeTone,
 } from './boardLogic';
 import { orderTimeLabel } from './historyFilters';
@@ -523,9 +524,12 @@ function OrderCard({
             {busy ? 'Saving…' : primaryLabel}
           </Button>
         )}
-        <IconButton label="Reprint kitchen ticket" onClick={onReprintKitchen}>
-          <ChefHat className="h-4 w-4" />
-        </IconButton>
+        {/* Only while the kitchen still has it: the till refuses the ticket after that. */}
+        {offersKitchenReprint(order.status) && (
+          <IconButton label="Reprint kitchen ticket" onClick={onReprintKitchen}>
+            <ChefHat className="h-4 w-4" />
+          </IconButton>
+        )}
         <IconButton label="Reprint receipt" onClick={onReprint}>
           <Printer className="h-4 w-4" />
         </IconButton>

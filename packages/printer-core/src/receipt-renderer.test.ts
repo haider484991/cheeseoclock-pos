@@ -6,10 +6,13 @@ import type { MonoRaster } from './logo-raster.js';
 import {
   LOGO_GAP_DOTS,
   appendLogo,
+  receiptHeadLines,
+  receiptShopLines,
   renderDrawerKick,
   renderKitchenTicket,
   renderReceipt,
   type ReceiptBranding,
+  type RenderReceiptOpts,
 } from './receipt-renderer.js';
 
 const id = (s: string) => s as UUID;
@@ -131,6 +134,7 @@ const branding: ReceiptBranding = {
   storeTagline: 'Pakistani pizza · cafe — open till late, every night of the week',
   branchLine: 'Phase 6, DHA, Karachi',
   phoneLine: '0300 9367865',
+  websiteLine: 'cheeseoclock.net',
   footerLine: 'Thank you — order again at www.cheeseoclock.net and follow us for deals',
 };
 
@@ -374,18 +378,19 @@ describe('renderReceipt — shop logo', () => {
   };
   const GS_V_0 = [0x1d, 0x76, 0x30];
 
-  it('prints the logo first, across the full paper width, then the shop name', () => {
+  it('prints the logo first, across the full paper width, then the tagline — the logo stands for the name', () => {
     for (const [width, dots] of [
       [48, 576],
       [32, 384],
     ] as const) {
       const r = rows(renderReceipt(snapshot(), { width, branding, logo: logo() }));
       expect(r[0]).toBe(`[logo ${dots}×20]`);
-      expect(r[1]).toBe("Cheese O'Clock");
+      expect(r[1]).toMatch(/^Pakistani pizza - cafe/);
+      expect(r).not.toContain("Cheese O'Clock");
     }
   });
 
-  it('centres the picture, then resets the printer and centres again before the name', () => {
+  it('centres the picture, then resets the printer and centres again before the tagline', () => {
     const bytes = renderReceipt(snapshot(), { branding, logo: logo() });
     const pic = indexOf(bytes, GS_V_0);
     expect(pic).toBeGreaterThan(0);
@@ -467,5 +472,148 @@ describe('renderReceipt — shop logo', () => {
     expect(appendLogo(b, weird as unknown as MonoRaster, 48)).toBe(false);
     expect([...b.build()]).toEqual([0x1b, 0x40]);
     expect(appendLogo(b, logo(), 48)).toBe(true);
+  });
+});
+
+describe('the shop on a customer paper: logo and tagline on top; address, phone and website at the bottom (owner 2026-09-27)', () => {
+  const logo = (): MonoRaster => ({ width: 64, height: 20, data: new Uint8Array(8 * 20).fill(0x81) });
+  const NAME = "Cheese O'Clock";
+  const TAGLINE = 'Pizza - Burgers - Wings';
+  const ADDRESS = 'Shop 4, Rahat Commercial, DHA';
+  const PHONE = '021 3500 0000';
+  const WEBSITE = 'cheeseoclock.net';
+  const THANKS = 'Thank you - visit us again!';
+  const shop: ReceiptBranding = {
+    storeName: NAME,
+    storeTagline: TAGLINE,
+    branchLine: ADDRESS,
+    phoneLine: PHONE,
+    websiteLine: WEBSITE,
+    footerLine: THANKS,
+  };
+  const fbr = { irn: 'ABC123', qrPayload: 'https://fbr.gov.pk/verify/ABC123' };
+  const reprint = {
+    kind: 'reprint' as const,
+    number: 1,
+    printedAt: new Date(2026, 8, 14, 19, 52),
+    byName: 'Ali Akbar',
+    firstPrintedAt: new Date(2026, 8, 14, 16, 20),
+  };
+
+  /** Every customer-facing paper: [name, order, options, has a thank-you line]. */
+  const papers = (): Array<[string, OrderSnapshot, Omit<RenderReceiptOpts, 'branding'>, boolean]> => {
+    const bill = snapshot();
+    bill.order.status = 'out_for_delivery';
+    bill.order.paidAt = null;
+    bill.payments = [];
+    bill.rider = { id: id('r1'), name: 'Bilal', phone: '0311 1234567' };
+    const partRefund = snapshot();
+    partRefund.payments.push({ ...partRefund.payments[0]!, id: id('p2'), amountCents: cents(-30_000), tenderedCents: null });
+    const voided = snapshot();
+    voided.order.status = 'void';
+    voided.order.voidReason = 'Customer cancelled';
+    const refund = {
+      refundedAt: new Date(2026, 8, 14, 19, 50),
+      rows: [{ method: 'cash', amountCents: 30_000 }],
+      reason: 'cold pizza',
+      refundedByName: 'Ali Akbar',
+      approvedByName: 'Sana Khan',
+      totalRefundedCents: 30_000,
+    };
+    const cancelled = { at: new Date(2026, 8, 14, 19, 52), byName: 'Sana Khan', reason: 'Customer cancelled' };
+    return [
+      ['receipt', snapshot(), { fbr }, true],
+      ['bill', bill, {}, true],
+      ['refund slip', partRefund, { document: 'refund', refund }, false],
+      ['duplicate', snapshot(), { fbr, stamp: reprint }, true],
+      ['cancelled order', voided, { cancelled }, false],
+      ['shop copy', snapshot(), { copy: 'shop', fbr }, false],
+    ];
+  };
+
+  for (const width of [48, 32] as const) {
+    for (const withLogo of [true, false]) {
+      const top = withLogo ? 'the logo, then the tagline, no name line' : 'the name, then the tagline';
+      it(`${width} columns, ${withLogo ? 'with' : 'without'} a logo: ${top}; the shop's lines at the bottom`, () => {
+        for (const [name, s, opts, hasThanks] of papers()) {
+          const decoded = decodeEscPos(renderReceipt(s, { ...opts, width, branding: shop, logo: withLogo ? logo() : null }));
+          const t = decoded.map((r) => r.text);
+          const where = `${name} (${width} cols${withLogo ? ', logo' : ''})`;
+          for (const row of decoded) {
+            expect(row.text.length * row.scale, `${where}: ${JSON.stringify(row.text)}`).toBeLessThanOrEqual(width);
+          }
+
+          // Top: the logo (or the name), the tagline right under it — nothing else of the shop.
+          const orderRow = t.findIndex((x) => x.startsWith('Order #'));
+          expect(orderRow, where).toBeGreaterThan(0);
+          const head = t.slice(0, orderRow);
+          const logoRow = head.findIndex((x) => x.startsWith('[logo '));
+          if (withLogo) {
+            expect(logoRow, where).toBeGreaterThanOrEqual(0);
+            expect(head[logoRow + 1], where).toBe(TAGLINE);
+            expect(t, where).not.toContain(NAME);
+          } else {
+            expect(logoRow, where).toBe(-1);
+            const nameRow = t.indexOf(NAME);
+            expect(nameRow, where).toBeGreaterThanOrEqual(0);
+            expect(nameRow, where).toBeLessThan(orderRow);
+            expect(decoded[nameRow]?.scale, where).toBe(2);
+            expect(t[nameRow + 1], where).toBe(TAGLINE);
+          }
+          for (const line of [ADDRESS, PHONE, WEBSITE]) expect(head, where).not.toContain(line);
+
+          // Bottom: address, phone, website, then the thank-you (where the paper has one) — once each.
+          const at = [ADDRESS, PHONE, WEBSITE].map((line) => t.indexOf(line));
+          const first = at[0]!;
+          expect(first, where).toBeGreaterThan(orderRow);
+          expect(at, where).toEqual([first, first + 1, first + 2]);
+          for (const line of [ADDRESS, PHONE, WEBSITE]) expect(t.filter((x) => x === line), where).toHaveLength(1);
+          const thanks = t.indexOf(THANKS);
+          expect(thanks, where).toBe(hasThanks ? first + 3 : -1);
+
+          // …after everything about the order: only the FBR block and the DUPLICATE line may follow.
+          for (const label of ['PAID - CASH', 'TO COLLECT', 'REFUND SLIP - NOT A RECEIPT FOR PAYMENT', 'CANCELLED - NOTHING TO PAY']) {
+            const i = t.findIndex((x) => x.startsWith(label));
+            if (i >= 0) expect(i, `${where}: ${label}`).toBeLessThan(first);
+          }
+          const fbrRow = t.indexOf('FBR Digital Invoice');
+          if (fbrRow >= 0) expect(fbrRow, where).toBeGreaterThan(first + 2);
+          const dupRow = t.indexOf('** DUPLICATE - Reprint #1 **');
+          if (dupRow >= 0) expect(dupRow, where).toBeGreaterThan(first + 2);
+          expect(t.at(-1), where).toBe(CUT_MARKER);
+        }
+      });
+    }
+  }
+
+  it('keeps the labels where they were: the DUPLICATE band first, then the logo, the tagline and the title', () => {
+    const t = rows(renderReceipt(snapshot(), { branding: shop, stamp: reprint, logo: logo() }));
+    expect(t[0]).toBe('*'.repeat(48));
+    expect(t[1]).toBe('DUPLICATE');
+    const logoRow = t.indexOf('[logo 576×20]');
+    expect(logoRow).toBeGreaterThan(1);
+    expect(t.slice(logoRow + 1, logoRow + 5)).toEqual([TAGLINE, '', 'RECEIPT', 'DUPLICATE']);
+  });
+
+  it('a line left empty is left out, with no gap where it would be', () => {
+    const noWebsite = rows(renderReceipt(snapshot(), { branding: { ...shop, websiteLine: '' }, logo: logo() }));
+    const address = noWebsite.indexOf(ADDRESS);
+    expect(noWebsite.slice(address, address + 3)).toEqual([ADDRESS, PHONE, THANKS]);
+    expect(noWebsite).not.toContain(WEBSITE);
+    const onlyWebsite = rows(renderReceipt(snapshot(), { branding: { storeName: NAME, websiteLine: WEBSITE } }));
+    const w = onlyWebsite.indexOf(WEBSITE);
+    expect(onlyWebsite.slice(w, w + 2)).toEqual([WEBSITE, THANKS]);
+    // No tagline: the logo, then straight to the title.
+    const bare = rows(renderReceipt(snapshot(), { branding: { storeName: NAME }, logo: logo() }));
+    expect(bare.slice(0, 3)).toEqual(['[logo 576×20]', '', 'RECEIPT']);
+  });
+
+  it('receiptHeadLines: the name only when no logo printed; receiptShopLines: address, phone, website, set ones only', () => {
+    expect(receiptHeadLines(shop, true)).toEqual({ name: null, tagline: TAGLINE });
+    expect(receiptHeadLines(shop, false)).toEqual({ name: NAME, tagline: TAGLINE });
+    expect(receiptHeadLines({ storeName: NAME, storeTagline: '   ' }, false)).toEqual({ name: NAME, tagline: null });
+    expect(receiptShopLines(shop)).toEqual([ADDRESS, PHONE, WEBSITE]);
+    expect(receiptShopLines({ branchLine: ' ', phoneLine: PHONE, websiteLine: ` ${WEBSITE} ` })).toEqual([PHONE, WEBSITE]);
+    expect(receiptShopLines({})).toEqual([]);
   });
 });

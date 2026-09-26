@@ -121,10 +121,9 @@ export function ModifierModal({
 
   // Compute running price
   const allMods = groups.flatMap((g) => g.modifiers);
-  // Sent in the order asked. The cart line and the kitchen ticket do NOT follow
-  // it: order-repo addItem loads the chosen modifiers with no ORDER BY, so a
-  // line lists them in modifier-id (creation) order. Only the popup's sections
-  // follow the asked order.
+  // Sent in the order asked. The till stores them in that order too (order-repo
+  // inAskedOrder, from the same groups), so the cart line, the kitchen ticket
+  // and the receipt list them as they were asked here.
   const selectedMods = groups.flatMap((g) => selected[g.id] ?? []);
   const deltaTotal = selectedMods.reduce((sum, id) => {
     const m = allMods.find((x) => x.id === id);

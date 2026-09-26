@@ -38,7 +38,7 @@ import {
   findOrder,
 } from '../../db/repositories/order-repo.js';
 import {
-  IN_THE_KITCHEN,
+  kitchenHearsOfClose,
   requiresManagerApproval,
   stockSettlementForCounter,
   stockStatusForCounter,
@@ -614,8 +614,13 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
-    // Still with the kitchen: a CANCELLED slip so the line stops (per Settings → Printer).
-    if (IN_THE_KITCHEN.includes(done.statusBefore)) printSpooler.onOrderEvent(payload.orderId, 'cancelled');
+    // A CANCELLED slip for the kitchen when a ticket for this order printed or
+    // may have, and the food had not been handed over — still cooking, ready
+    // on the pass, or out with the rider. Not for food already served or
+    // delivered: "DO NOT MAKE - DO NOT SEND" then only confuses the line. The
+    // spooler checks the print log, and cancels a ticket or bill still waiting
+    // to print (per Settings → Printer).
+    if (kitchenHearsOfClose(done.statusBefore)) printSpooler.onOrderEvent(payload.orderId, 'cancelled');
     return ok({ ...snap, stock: stockForLogin(s, done.stock) });
   });
 
@@ -683,8 +688,9 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     printSpooler.onOrderEvent(payload.orderId, 'refunded', {
       cash: thisRefund.some((p) => p.method === 'cash'),
     });
-    // Refunded in full while the kitchen still had it: the line stops.
-    if (done.order.status === 'refunded' && IN_THE_KITCHEN.includes(done.statusBefore)) {
+    // Refunded in full before the food was handed over (in the kitchen, ready,
+    // out with the rider): a CANCELLED slip when a ticket printed or may have.
+    if (done.order.status === 'refunded' && kitchenHearsOfClose(done.statusBefore)) {
       printSpooler.onOrderEvent(payload.orderId, 'cancelled');
     }
 

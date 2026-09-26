@@ -1,0 +1,18 @@
+-- 0031_order_item_modifier_order.sql
+-- The place of each choice on its order line: the order the choices popup
+-- asks them in — required choices, dips on the side, extras, drinks,
+-- leave-outs, anything else (shared-types orderChoiceGroups), each group's
+-- options in their menu order. 0 = first.
+--
+-- The rows were written in modifier-id (creation) order and read back with no
+-- ORDER BY, so the cart line, the kitchen ticket and the receipt listed a
+-- deal's "No onion" before its pizza, or an extra before the dip (owner
+-- 2026-09-27). order-repo now writes this position (addOrderItem,
+-- updateOrderItemOptions) and reads the choices back by it.
+--
+-- Plain ADD COLUMN, no table rebuild. Rows already there keep 0 and so read
+-- back as before (by created_at, then id: the order they were written in).
+-- Row images are built from the live schema on each till, so the column
+-- travels without a sync-core change; a row from a till without it arrives
+-- with the default.
+ALTER TABLE order_item_modifiers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;

@@ -111,6 +111,51 @@ beforeEach(() => {
   if (DatabaseSync) db = openMigrated();
 });
 
+describe.skipIf(!DatabaseSync)('the website at the bottom of receipts', () => {
+  it("a till that never set one (branding saved by v0.7.7, or none at all) reads the shop's own site", async () => {
+    const { getReceiptBranding, BRANDING_KEY, DEFAULT_WEBSITE_LINE } = await cfg();
+    const { setSetting } = await import('../db/repositories/settings-repo.js');
+    expect(DEFAULT_WEBSITE_LINE).toBe('cheeseoclock.net');
+    expect(getReceiptBranding(db).websiteLine).toBe('cheeseoclock.net');
+    // Exactly what v0.7.7 stored: no website field.
+    setSetting(db, BRANDING_KEY, { storeName: 'Test Shop', storeTagline: 'Test tagline', branchLine: 'Test Street 1', phoneLine: '0300 0000000' });
+    expect(getReceiptBranding(db)).toEqual({
+      storeName: 'Test Shop',
+      storeTagline: 'Test tagline',
+      branchLine: 'Test Street 1',
+      phoneLine: '0300 0000000',
+      websiteLine: 'cheeseoclock.net',
+    });
+  });
+
+  it('cleared stays cleared; a new one is kept, trimmed', async () => {
+    const { getReceiptBranding, setReceiptBranding, ReceiptBrandingSchema } = await cfg();
+    setReceiptBranding(db, { storeName: 'Test Shop', websiteLine: '' });
+    expect(getReceiptBranding(db).websiteLine).toBe('');
+    const typed = ReceiptBrandingSchema.parse({ storeName: 'Test Shop', websiteLine: '  order.example.test  ' });
+    expect(typed.websiteLine).toBe('order.example.test');
+    setReceiptBranding(db, typed);
+    expect(getReceiptBranding(db).websiteLine).toBe('order.example.test');
+  });
+
+  it('Settings refuses one that is too long or has control characters (printer:setBranding checks with this schema)', async () => {
+    const { ReceiptBrandingSchema, WEBSITE_MAX_CHARS } = await cfg();
+    expect(WEBSITE_MAX_CHARS).toBe(60);
+    expect(ReceiptBrandingSchema.safeParse({ storeName: 'Test Shop', websiteLine: 'w'.repeat(60) }).success).toBe(true);
+    const long = ReceiptBrandingSchema.safeParse({ storeName: 'Test Shop', websiteLine: 'w'.repeat(61) });
+    expect(long.success).toBe(false);
+    expect(long.error?.issues[0]?.message).toBe('Keep the website to 60 characters or fewer');
+    expect(ReceiptBrandingSchema.safeParse({ storeName: 'Test Shop', websiteLine: 'bad\u001bsite' }).success).toBe(false);
+  });
+
+  it('a stored website that no longer passes costs only the website, never the rest of the shop', async () => {
+    const { getReceiptBranding, BRANDING_KEY } = await cfg();
+    const { setSetting } = await import('../db/repositories/settings-repo.js');
+    setSetting(db, BRANDING_KEY, { storeName: 'Test Shop', branchLine: 'Test Street 1', logoUrl: LOGO, websiteLine: 'w'.repeat(200) });
+    expect(getReceiptBranding(db)).toEqual({ storeName: 'Test Shop', branchLine: 'Test Street 1', logoUrl: LOGO, websiteLine: '' });
+  });
+});
+
 describe.skipIf(!DatabaseSync)('print policy', () => {
   it('a policy saved before "Logo on receipts" existed reads as logo on, the rest kept', async () => {
     const { getPrintPolicy, PRINT_POLICY_KEY } = await cfg();

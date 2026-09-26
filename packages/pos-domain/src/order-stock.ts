@@ -36,8 +36,6 @@ export const PROBABLY_MADE_MIN = 15;
 export const FOOD_LEFT_SHOP: readonly OrderStatus[] = ['out_for_delivery', 'served', 'delivered', 'paid'];
 /** Handed to the customer: not even a sealed drink comes back. */
 export const HANDED_OVER: readonly OrderStatus[] = ['served', 'delivered', 'paid'];
-/** Still with the kitchen: a CANCELLED slip tells the line to stop. */
-export const IN_THE_KITCHEN: readonly OrderStatus[] = ['sent_to_kitchen', 'preparing'];
 
 export function foodLeftShop(status: OrderStatus): boolean {
   return FOOD_LEFT_SHOP.includes(status);
@@ -45,6 +43,25 @@ export function foodLeftShop(status: OrderStatus): boolean {
 
 export function handedOver(status: OrderStatus): boolean {
   return HANDED_OVER.includes(status);
+}
+
+/**
+ * Whether cancelling an order, or refunding it in full, from `statusBefore` is
+ * sent to the kitchen printer. The print spooler then prints a CANCELLED slip
+ * only when a kitchen ticket for the order printed, may have printed (the
+ * printer failed mid-way) or is printing now (print-spooler kitchenCancelSlip).
+ *
+ * Yes while the food had not been handed over — still cooking, ready on the
+ * pass, or out with the rider (cancels from ready / out for delivery used to
+ * get no slip; 2026-09-27). No once it was served or delivered, for a cancel
+ * just as for a refund: that slip always reads "CANCELLED - DO NOT MAKE - DO
+ * NOT SEND", and for food the customer already has, perhaps an hour later, it
+ * would only confuse the line. The stock is booked as waste without asking
+ * then, and a ticket or bill still waiting to print is dropped at print time
+ * all the same (print-spooler cancelledMeanwhile).
+ */
+export function kitchenHearsOfClose(statusBefore: OrderStatus): boolean {
+  return !handedOver(statusBefore);
 }
 
 /** "just now", "3 min ago", "1 h 5 min ago". */

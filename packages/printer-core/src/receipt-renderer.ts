@@ -9,12 +9,8 @@
  *      Reprint #1 | 25/05/2026 19:52 | by Sana
  *      Original: 25/05/2026 19:35
  *      ****************************************
- *               [ shop logo ]
- *      CHEESE O CLOCK
- *      Pakistani Pizza · Cafe
- *
- *      Branch: F-10, Islamabad
- *      Phone: +92 ...
+ *               [ shop logo ]         <- or CHEESE O CLOCK, big, when no
+ *      Pakistani Pizza · Cafe            logo prints (never both)
  *
  *                  RECEIPT            <- or BILL - NOT PAID / REFUND /
  *                 DUPLICATE              CANCELLED ORDER
@@ -39,6 +35,9 @@
  *
  *      PAID - CASH (DUPLICATE)
  *
+ *            F-10, Islamabad          <- the shop's address, phone and
+ *            +92 ...                     website: at the bottom, on every
+ *            cheeseoclock.net            paper (owner 2026-09-27)
  *           Thank you — visit us again!
  *
  *           FBR block (live FBR only)
@@ -57,11 +56,48 @@ import {
 } from './logo-raster.js';
 
 export interface ReceiptBranding {
+  /** Printed big at the top only when no logo prints: a paper is never nameless. */
   storeName: string;
+  /** Under the logo (or the name). */
   storeTagline?: string;
+  /** The address: at the bottom. */
   branchLine?: string;
+  /** At the bottom, under the address. */
   phoneLine?: string;
+  /** The shop's website ("cheeseoclock.net"): at the bottom, under the phone. */
+  websiteLine?: string;
+  /** The thank-you line, under the website (a receipt or bill for the customer only). */
   footerLine?: string;
+}
+
+/** The thank-you line when the shop set none. */
+export const DEFAULT_FOOTER_LINE = 'Thank you — visit us again!';
+
+/**
+ * The shop's lines at the top of a customer paper (owner 2026-09-27: "on
+ * top logo and tagline"). The logo is the shop's name there: when it prints,
+ * the plain name line is left off. With no logo on paper (none set, one that
+ * can't print, "Logo on receipts" off) the name prints instead, so a paper is
+ * never nameless. The Settings preview lays itself out from this too.
+ */
+export function receiptHeadLines(
+  branding: Pick<ReceiptBranding, 'storeName' | 'storeTagline'>,
+  logoPrinted: boolean,
+): { name: string | null; tagline: string | null } {
+  const name = branding.storeName.trim();
+  const tagline = branding.storeTagline?.trim() ?? '';
+  return { name: logoPrinted || !name ? null : name, tagline: tagline || null };
+}
+
+/**
+ * The shop's lines at the bottom of every customer paper, in order: the
+ * address, the phone, the website — each only when it is set. The thank-you
+ * line (where the paper has one) comes after them.
+ */
+export function receiptShopLines(branding: Pick<ReceiptBranding, 'branchLine' | 'phoneLine' | 'websiteLine'>): string[] {
+  return [branding.branchLine, branding.phoneLine, branding.websiteLine]
+    .map((l) => l?.trim() ?? '')
+    .filter((l) => l !== '');
 }
 
 /**
@@ -194,7 +230,7 @@ export interface RenderReceiptOpts {
   logo?: MonoRaster | null;
 }
 
-/** Gap between the logo and the shop name (ESC J units: about 2 mm). */
+/** Gap between the logo and the line under it (ESC J units: about 2 mm). */
 export const LOGO_GAP_DOTS = 16;
 
 /**
@@ -245,14 +281,15 @@ const METHOD_LABEL: Record<string, string> = {
  * One customer-facing paper: a RECEIPT, a BILL - NOT PAID, a REFUND slip or
  * a CANCELLED ORDER slip, customer or SHOP COPY, original or DUPLICATE.
  *
- * Top to bottom: DUPLICATE band, logo, shop header, TITLE (and its sub-line),
- * DUPLICATE (again, inside the body, so tearing the ends off doesn't leave an
- * "original"), SHOP COPY, order details, customer / rider, items, totals,
- * payments and refunds, the state line (PAID - CASH / TO COLLECT / REFUNDED),
- * the rider note, the signature line (shop copy), the bottom stamp, thank-you,
- * FBR, DUPLICATE footer, cut. Everything between the two DUPLICATE marks is
- * exactly what the original said: same order number, times, amounts, FBR
- * number and QR.
+ * Top to bottom: DUPLICATE band, logo (or the shop name when no logo
+ * prints), tagline, TITLE (and its sub-line), DUPLICATE (again, inside the
+ * body, so tearing the ends off doesn't leave an "original"), SHOP COPY,
+ * order details, customer / rider, items, totals, payments and refunds, the
+ * state line (PAID - CASH / TO COLLECT / REFUNDED), the rider note, the
+ * signature line (shop copy), the bottom stamp, the shop's address, phone and
+ * website, thank-you, FBR, DUPLICATE footer, cut. Everything between the two
+ * DUPLICATE marks is exactly what the original said: same order number,
+ * times, amounts, FBR number and QR.
  */
 export function renderReceipt(
   snapshot: OrderSnapshot,
@@ -270,18 +307,22 @@ export function renderReceipt(
   b.align('center');
   if (dup) appendDuplicateBand(b, dup, width);
 
-  // Header — large, centered store name + tagline. Free text from settings,
-  // so every line is word-wrapped here rather than broken by the printer at
-  // the paper edge; double-size glyphs take two columns each. The logo (when
-  // there is one) goes above the name on every copy — customer receipt, shop
-  // copy, delivery bill, refund slip, reprint. Kitchen tickets never carry it.
-  appendLogo(b, opts.logo, width);
+  // Header — the logo, then the tagline under it (owner 2026-09-27). The logo
+  // is the shop's name here, so with it on paper the plain name line is left
+  // off; with no logo on paper the name prints large instead — a paper is
+  // never nameless. Every copy gets the same header: customer receipt, shop
+  // copy, delivery bill, refund slip, cancelled order, reprint. Kitchen
+  // tickets never carry it. Free text from settings, so every line is
+  // word-wrapped here rather than broken by the printer at the paper edge;
+  // double-size glyphs take two columns each. The address, phone and website
+  // go at the bottom (receiptShopLines, below).
+  const head = receiptHeadLines(opts.branding, appendLogo(b, opts.logo, width));
   b.align('center');
-  b.doubleSize(true).bold(true).wrappedText(opts.branding.storeName, half);
-  b.doubleSize(false).bold(false);
-  if (opts.branding.storeTagline) b.wrappedText(opts.branding.storeTagline);
-  if (opts.branding.branchLine) b.newline().wrappedText(opts.branding.branchLine);
-  if (opts.branding.phoneLine) b.wrappedText(opts.branding.phoneLine);
+  if (head.name) {
+    b.doubleSize(true).bold(true).wrappedText(head.name, half);
+    b.doubleSize(false).bold(false);
+  }
+  if (head.tagline) b.wrappedText(head.tagline);
   b.newline();
 
   // What this paper IS, before anything else can be misread.
@@ -310,15 +351,18 @@ export function renderReceipt(
     appendSaleBody(b, snapshot, doc === 'bill' ? 'bill' : 'receipt', dup, shopCopy, width);
   }
 
-  // Thank-you: on a receipt and a bill (not once the sale was refunded in
+  // The shop's address, phone and website, on every paper, then the
+  // thank-you: on a receipt and a bill (not once the sale was refunded in
   // full), never on the shop's own copy, a refund slip or a cancelled order.
   b.align('center');
+  const shopLines = receiptShopLines(opts.branding);
+  for (const line of shopLines) b.wrappedText(line);
   const thanks =
     !shopCopy && (doc === 'bill' || (doc === 'receipt' && snapshot.order.status !== 'refunded'));
   if (thanks) {
-    b.wrappedText(opts.branding.footerLine ?? 'Thank you — visit us again!');
-    b.newline();
+    b.wrappedText(opts.branding.footerLine?.trim() || DEFAULT_FOOTER_LINE);
   }
+  if (thanks || shopLines.length > 0) b.newline();
 
   // FBR: the customer's copy of a receipt carries the sale invoice; the
   // customer's copy of a refund slip carries the debit note. A bill, a

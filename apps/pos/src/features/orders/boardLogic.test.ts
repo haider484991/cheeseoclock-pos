@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { OrderSnapshot } from '@cheeseoclock/shared-types';
+import type { OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
+import { KITCHEN_TICKET_STATUSES } from '@cheeseoclock/pos-domain';
 import {
   ageLabel,
   ageMinutes,
@@ -9,6 +10,7 @@ import {
   cardLines,
   matchesBoardSearch,
   nextBoardAction,
+  offersKitchenReprint,
   parseRupeesToCents,
   quickCashOptions,
 } from './boardLogic';
@@ -151,5 +153,19 @@ describe('board search', () => {
 
   it('empty search shows everything', () => {
     expect(matchesBoardSearch(snap, '  ')).toBe(true);
+  });
+});
+
+describe('the chef-hat button', () => {
+  it('shows on New, Preparing and Ready cards only — never once the order is out for delivery or later', () => {
+    const shown: OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready'];
+    const hidden: OrderStatus[] = ['out_for_delivery', 'delivered', 'served', 'paid', 'void', 'refunded', 'open'];
+    for (const status of shown) expect({ status, shown: offersKitchenReprint(status) }).toEqual({ status, shown: true });
+    for (const status of hidden) expect({ status, shown: offersKitchenReprint(status) }).toEqual({ status, shown: false });
+  });
+
+  it('agrees with the counter rule the main process applies (the till refuses the rest for everyone)', () => {
+    const all: OrderStatus[] = ['open', 'sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'served', 'paid', 'void', 'refunded'];
+    expect(all.filter(offersKitchenReprint)).toEqual([...KITCHEN_TICKET_STATUSES]);
   });
 });

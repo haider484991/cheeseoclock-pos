@@ -15,7 +15,6 @@ import {
 } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
-import type { OrderStatus } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { reprintReceipt, reprintToast } from '../printing/reprint';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -25,8 +24,7 @@ import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './historyFilters';
 import { historyStockStep } from './stockCopy';
-
-const KITCHEN_STATUSES: readonly OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready'];
+import { offersKitchenReprint } from './boardLogic';
 
 interface DrawerProps {
   orderId: string;
@@ -104,7 +102,7 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   // Not for an 'open' cart: that is still being rung up at Checkout (it never
   // shows in history, but the guard stays in case one is opened directly).
   const canCancel = !!o && owed && o.status !== 'open';
-  const inKitchen = !!o && KITCHEN_STATUSES.includes(o.status);
+  const inKitchen = !!o && offersKitchenReprint(o.status);
 
   return (
     <>

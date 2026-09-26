@@ -6,6 +6,7 @@ import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { decrementForOrder } from './stock-movement-repo.js';
 import { settleOrderStock } from './order-stock-repo.js';
+import { listModifierGroupsForItem, listModifiersByGroup } from './modifier-repo.js';
 import {
   buildOrderHistoryWhere,
   historyPage,
@@ -42,6 +43,7 @@ import type {
   OrderHistoryPage,
   OrderHistoryRow,
 } from '@cheeseoclock/shared-types';
+import { orderChoiceGroups } from '@cheeseoclock/shared-types';
 
 interface OrderRow {
   id: string;
@@ -652,6 +654,43 @@ export interface AddItemInput {
   unitPriceOverrideCents?: number;
 }
 
+/**
+ * A line's chosen choices in the order the choices popup asks them (owner
+ * 2026-09-27): required ones, dips on the side, extras, drinks, leave-outs,
+ * anything else — shared-types `orderChoiceGroups` over the item's groups,
+ * each group's options in their menu order (exactly the lists the popup
+ * shows, menu-handlers `menu:listModifierGroupsForItem`). Stored as
+ * order_item_modifiers.sort_order and read back by it, so the cart line, the
+ * kitchen ticket and the receipt list them as they were asked. The kitchen
+ * ticket still pulls the leave-outs to the top, in capitals.
+ *
+ * A choice that is not on one of this item's groups (the item's groups
+ * changed since it was picked) keeps the order it was sent in, after the rest.
+ */
+function inAskedOrder<M extends { id: string }>(
+  db: AppDatabase,
+  menuItemId: string,
+  chosen: readonly M[],
+  requested: readonly string[],
+): M[] {
+  const groups = listModifierGroupsForItem(db, menuItemId).map((g) => ({
+    ...g,
+    modifiers: listModifiersByGroup(db, g.id),
+  }));
+  const asked = new Map<string, number>();
+  for (const g of orderChoiceGroups(groups)) {
+    for (const m of g.modifiers) if (!asked.has(m.id)) asked.set(m.id, asked.size);
+  }
+  const sent = (id: string) => {
+    const i = requested.indexOf(id);
+    return i < 0 ? requested.length : i;
+  };
+  return chosen
+    .map((m) => ({ m, asked: asked.get(m.id) ?? Number.MAX_SAFE_INTEGER, sent: sent(m.id) }))
+    .sort((a, b) => a.asked - b.asked || a.sent - b.sent)
+    .map((x) => x.m);
+}
+
 export function addOrderItem(
   db: AppDatabase,
   input: AddItemInput,
@@ -691,7 +730,7 @@ export function addOrderItem(
 
     // Load selected modifiers (snapshot name + price_delta at insert time).
     const modPlaceholders = input.modifierIds.map(() => '?').join(',') || 'NULL';
-    const modRows = input.modifierIds.length
+    const found = input.modifierIds.length
       ? (db
           .prepare(
             `SELECT id, name, price_delta_cents FROM modifiers
@@ -708,9 +747,11 @@ export function addOrderItem(
     // without it, and the kitchen ticket, bill and stock all left it out
     // (audit 2026-09-25). Failing here sends a web order down the usual
     // retry → "couldn't import, call the customer" path instead.
-    if (modRows.length !== new Set(input.modifierIds).size) {
+    if (found.length !== new Set(input.modifierIds).size) {
       throw new Error('One of the chosen options is no longer on the menu — publish the menu again');
     }
+    // The order they were asked in (the SELECT hands them back in id order).
+    const modRows = inAskedOrder(db, input.menuItemId, found, input.modifierIds);
 
     const modSum = modRows.reduce((sum, m) => sum + m.price_delta_cents, 0);
     const lineTotal = (unitPrice + modSum) * input.quantity;
@@ -759,15 +800,15 @@ export function addOrderItem(
 
     enqueueSync(db, { entityType: 'order_items', entityId: itemId, op: 'upsert', payload: newItem });
 
-    // Insert modifier snapshots
-    for (const mr of modRows) {
+    // Insert modifier snapshots, each with its place in the asked order.
+    for (const [position, mr] of modRows.entries()) {
       const modOrderId = uuidv7();
       db.prepare(
         `INSERT INTO order_item_modifiers
-           (id, order_item_id, modifier_id, modifier_name, price_delta_cents,
+           (id, order_item_id, modifier_id, modifier_name, price_delta_cents, sort_order,
             created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      ).run(modOrderId, itemId, mr.id, mr.name, mr.price_delta_cents, now, now, actor.deviceId);
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(modOrderId, itemId, mr.id, mr.name, mr.price_delta_cents, position, now, now, actor.deviceId);
       enqueueSync(db, {
         entityType: 'order_item_modifiers',
         entityId: modOrderId,
@@ -778,6 +819,7 @@ export function addOrderItem(
           modifierId: mr.id,
           modifierName: mr.name,
           priceDeltaCents: mr.price_delta_cents,
+          sortOrder: position,
         },
       });
     }
@@ -827,16 +869,16 @@ export function updateOrderItemOptions(
     if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be changed now`);
     const line = db
       .prepare(
-        `SELECT id, unit_price_cents, quantity, notes FROM order_items
+        `SELECT id, menu_item_id, unit_price_cents, quantity, notes FROM order_items
           WHERE id = ? AND order_id = ? AND deleted_at IS NULL`,
       )
       .get(input.orderItemId, input.orderId) as
-      | { id: string; unit_price_cents: number; quantity: number; notes: string | null }
+      | { id: string; menu_item_id: string | null; unit_price_cents: number; quantity: number; notes: string | null }
       | undefined;
     if (!line) throw new Error('Order item not found');
 
     const ids = [...new Set(input.modifierIds)];
-    const modRows = ids.length
+    const found = ids.length
       ? (db
           .prepare(
             `SELECT id, name, price_delta_cents FROM modifiers
@@ -844,15 +886,18 @@ export function updateOrderItemOptions(
           )
           .all(...ids) as Array<{ id: string; name: string; price_delta_cents: number }>)
       : [];
-    if (modRows.length !== ids.length) {
+    if (found.length !== ids.length) {
       throw new Error('One of the chosen options is no longer on the menu — publish the menu again');
     }
+    // The order they were asked in, as addOrderItem stores them.
+    const modRows = inAskedOrder(db, line.menu_item_id ?? '', found, ids);
     const notes = input.notes?.trim().slice(0, 300) || null;
 
     const before = db
       .prepare(
         `SELECT id, modifier_id, modifier_name, price_delta_cents FROM order_item_modifiers
-          WHERE order_item_id = ? AND deleted_at IS NULL`,
+          WHERE order_item_id = ? AND deleted_at IS NULL
+          ORDER BY sort_order, created_at, id`,
       )
       .all(input.orderItemId) as Array<{ id: string; modifier_id: string; modifier_name: string; price_delta_cents: number }>;
 
@@ -863,14 +908,14 @@ export function updateOrderItemOptions(
       ).run(now, now, old.id);
       enqueueSync(db, { entityType: 'order_item_modifiers', entityId: old.id, op: 'delete', payload: { id: old.id, deletedAt: now } });
     }
-    for (const mr of modRows) {
+    for (const [position, mr] of modRows.entries()) {
       const modOrderId = uuidv7();
       db.prepare(
         `INSERT INTO order_item_modifiers
-           (id, order_item_id, modifier_id, modifier_name, price_delta_cents,
+           (id, order_item_id, modifier_id, modifier_name, price_delta_cents, sort_order,
             created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      ).run(modOrderId, input.orderItemId, mr.id, mr.name, mr.price_delta_cents, now, now, actor.deviceId);
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(modOrderId, input.orderItemId, mr.id, mr.name, mr.price_delta_cents, position, now, now, actor.deviceId);
       enqueueSync(db, {
         entityType: 'order_item_modifiers',
         entityId: modOrderId,
@@ -881,6 +926,7 @@ export function updateOrderItemOptions(
           modifierId: mr.id,
           modifierName: mr.name,
           priceDeltaCents: mr.price_delta_cents,
+          sortOrder: position,
         },
       });
     }
@@ -1825,13 +1871,16 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     category_name: string | null;
   }>;
 
-  // Fetch modifiers for all items in one query
+  // Fetch modifiers for all items in one query, each line's in the order they
+  // were asked (sort_order, written by addOrderItem / updateOrderItemOptions).
+  // Rows from before 0031 all carry 0: they keep the order they were written in.
   const modRows = itemRows.length
     ? (db
         .prepare(
           `SELECT id, order_item_id, modifier_id, modifier_name, price_delta_cents
              FROM order_item_modifiers
-            WHERE order_item_id IN (${itemRows.map(() => '?').join(',')}) AND deleted_at IS NULL`,
+            WHERE order_item_id IN (${itemRows.map(() => '?').join(',')}) AND deleted_at IS NULL
+            ORDER BY order_item_id, sort_order, created_at, id`,
         )
         .all(...itemRows.map((r) => r.id)) as Array<{
         id: string;

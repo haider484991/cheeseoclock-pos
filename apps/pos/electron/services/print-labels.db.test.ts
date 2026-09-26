@@ -958,3 +958,36 @@ describe.skipIf(!DatabaseSync)('who and when', () => {
     expect(dispatch).toContain('PREPAID - RIDER COLLECTS NOTHING');
   });
 });
+
+describe.skipIf(!DatabaseSync)('the shop on paper (owner 2026-09-27)', () => {
+  it("a till that never set a website prints the shop's own at the bottom, under the address and phone; the name on top with no logo", async () => {
+    const s = await spooler();
+    await policy({ kitchenTicket: false });
+    const cfg = await import('./printer-config.js');
+    cfg.setReceiptBranding(db, {
+      storeName: 'Test Shop',
+      storeTagline: 'Test tagline',
+      branchLine: 'Test Street 1',
+      phoneLine: '0300 0000000',
+      footerLine: 'Test thanks',
+    });
+    const oid = order('o0801');
+    s.onOrderEvent(oid, 'paid', { cash: false });
+    await s.whenIdle();
+    const lines = texts().find((t) => t.includes('RECEIPT'))!.split('\n');
+    // No logo set: the name, then the tagline, then the title.
+    expect(lines.slice(0, 4)).toEqual(['Test Shop', 'Test tagline', '', 'RECEIPT']);
+    const address = lines.indexOf('Test Street 1');
+    expect(address).toBeGreaterThan(lines.indexOf('PAID - CASH'));
+    expect(lines.slice(address, address + 4)).toEqual(['Test Street 1', '0300 0000000', 'cheeseoclock.net', 'Test thanks']);
+
+    // Cleared in Settings: no website line at all.
+    cfg.setReceiptBranding(db, { ...cfg.getReceiptBranding(db), websiteLine: '' });
+    s.reprintReceipt(oid, { requestedByUserId: 'u_mgr' });
+    await s.whenIdle();
+    const again = last().split('\n');
+    expect(again).not.toContain('cheeseoclock.net');
+    const a = again.indexOf('Test Street 1');
+    expect(again.slice(a, a + 3)).toEqual(['Test Street 1', '0300 0000000', 'Test thanks']);
+  });
+});

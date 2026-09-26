@@ -4,7 +4,14 @@ import { ipc } from '../../ipc/client';
 import { Button, Card } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
 import { Eye, Store } from 'lucide-react';
-import { logoBox, type MonoRaster } from '@cheeseoclock/printer-core';
+import {
+  DEFAULT_FOOTER_LINE,
+  logoBox,
+  receiptHeadLines,
+  receiptShopLines,
+  type MonoRaster,
+  type ReceiptBranding,
+} from '@cheeseoclock/printer-core';
 import { LogoPicker } from './LogoPicker';
 import { darkLogoFix, receiptLogoUpToDate, saveReceiptLogo, type LogoPreview } from './receiptLogo';
 import { PrintedLogo, useReceiptLogoPreview } from './ReceiptLogoPreview';
@@ -12,6 +19,8 @@ import { SidebarBrand } from '../shell/Sidebar';
 import { LoginBrand } from '../auth/LoginPage';
 
 const DEFAULT_NAME = 'Cheese O Clock';
+/** The till refuses a longer one (printer-config.ts WEBSITE_MAX_CHARS). */
+const WEBSITE_MAX_CHARS = 60;
 
 export function BrandingSettings() {
   const qc = useQueryClient();
@@ -25,6 +34,7 @@ export function BrandingSettings() {
   const [storeTagline, setStoreTagline] = useState('');
   const [branchLine, setBranchLine] = useState('');
   const [phoneLine, setPhoneLine] = useState('');
+  const [websiteLine, setWebsiteLine] = useState('');
   const [footerLine, setFooterLine] = useState('');
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
@@ -37,6 +47,8 @@ export function BrandingSettings() {
     setStoreTagline(saved.storeTagline ?? '');
     setBranchLine(saved.branchLine ?? '');
     setPhoneLine(saved.phoneLine ?? '');
+    // A till that never set one reads the shop's own site here (printer-config.ts).
+    setWebsiteLine(saved.websiteLine ?? '');
     setFooterLine(saved.footerLine ?? '');
     setLogoUrl(saved.logoUrl ?? null);
   }, [saved]);
@@ -47,6 +59,7 @@ export function BrandingSettings() {
       storeTagline !== (saved.storeTagline ?? '') ||
       branchLine !== (saved.branchLine ?? '') ||
       phoneLine !== (saved.phoneLine ?? '') ||
+      websiteLine !== (saved.websiteLine ?? '') ||
       footerLine !== (saved.footerLine ?? '') ||
       logoUrl !== (saved.logoUrl ?? null));
 
@@ -57,6 +70,8 @@ export function BrandingSettings() {
         ...(storeTagline.trim() ? { storeTagline: storeTagline.trim() } : {}),
         ...(branchLine.trim() ? { branchLine: branchLine.trim() } : {}),
         ...(phoneLine.trim() ? { phoneLine: phoneLine.trim() } : {}),
+        // Always sent: '' is "no website" (left out, the till would print its own site again).
+        websiteLine: websiteLine.trim(),
         ...(footerLine.trim() ? { footerLine: footerLine.trim() } : {}),
         ...(logoUrl ? { logoUrl } : {}),
       });
@@ -98,8 +113,10 @@ export function BrandingSettings() {
         </div>
         <p className="mb-5 text-sm text-stone-500">
           Your logo and name show on the sign-in screen and in the menu bar. Customer receipts start
-          with the logo in black and white (see the preview below), then the name and the lines
-          you fill in here. The name and lines also go to the website when you publish the menu.
+          with the logo in black and white and the tagline under it (see the preview below); the
+          name prints there instead only when there is no logo to print. The address, phone and
+          website go at the bottom, above the thank-you line. The name, tagline, address and phone
+          also go to the website when you publish the menu.
         </p>
 
         <div className="space-y-5">
@@ -111,29 +128,44 @@ export function BrandingSettings() {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
               label="Shop name"
-              hint="Big and bold at the top of receipts, under the logo."
+              hint="On receipts only when there is no logo to print: big and bold at the top."
               value={storeName}
               onChange={setStoreName}
               placeholder={DEFAULT_NAME}
             />
             <Field
               label="Tagline"
-              hint="Optional. One short line under the name."
+              hint="Optional. One short line under the logo."
               value={storeTagline}
               onChange={setStoreTagline}
               placeholder="Pizza · Burgers · Late-night delivery"
             />
             <Field
               label="Address"
+              hint="At the bottom of receipts."
               value={branchLine}
               onChange={setBranchLine}
               placeholder="DHA Phase 6, Karachi"
             />
-            <Field label="Phone" value={phoneLine} onChange={setPhoneLine} placeholder="0300 9367865" />
+            <Field
+              label="Phone"
+              hint="At the bottom, under the address."
+              value={phoneLine}
+              onChange={setPhoneLine}
+              placeholder="0300 9367865"
+            />
+            <Field
+              label="Website"
+              hint="At the bottom, under the phone. Leave empty for none."
+              value={websiteLine}
+              onChange={setWebsiteLine}
+              placeholder="cheeseoclock.net"
+              maxLength={WEBSITE_MAX_CHARS}
+            />
           </div>
           <Field
             label="Thank-you line"
-            hint="Printed at the bottom of every receipt."
+            hint="Printed at the very bottom of customer receipts and bills."
             value={footerLine}
             onChange={setFooterLine}
             placeholder="Thank you — order again on www.cheeseoclock.net"
@@ -178,11 +210,7 @@ export function BrandingSettings() {
             <ReceiptPreview
               logo={receiptLogo}
               paperDots={logoBox(paper).maxWidth}
-              name={shownName}
-              tagline={storeTagline.trim()}
-              address={branchLine.trim()}
-              phone={phoneLine.trim()}
-              footer={footerLine.trim() || 'Thank you — visit us again!'}
+              branding={{ storeName: shownName, storeTagline, branchLine, phoneLine, websiteLine, footerLine }}
             />
             <p
               className={
@@ -227,59 +255,65 @@ function PreviewFrame({ label, children }: { label: string; children: React.Reac
 function logoNote(p: LogoPreview, on: boolean, logoUrl: string | null): { text: string; warn: boolean } {
   switch (p.state) {
     case 'none':
-      return { text: 'Add a logo and it prints at the top of customer receipts.', warn: false };
+      return { text: 'Add a logo and it prints at the top of customer receipts, in place of the shop name.', warn: false };
     case 'loading':
       return { text: 'Getting the logo ready for the printer…', warn: false };
     case 'error':
       return {
-        text: "The till couldn't read this logo for the printer, so receipts print without it. Try uploading it again.",
+        text: "The till couldn't read this logo for the printer, so receipts print the shop name instead. Try uploading it again.",
         warn: true,
       };
     case 'blank':
       return {
-        text: 'This logo is too light to print, so receipts leave it out. A darker logo works better.',
+        text: 'This logo is too light to print, so receipts print the shop name instead. A darker logo works better.',
         warn: true,
       };
     case 'too_dark':
       return {
-        text: `This logo would print as a big black block, so receipts leave it out. Upload ${darkLogoFix(logoUrl)}.`,
+        text: `This logo would print as a big black block, so receipts print the shop name instead. Upload ${darkLogoFix(logoUrl)}.`,
         warn: true,
       };
     case 'ready':
       return on
         ? {
-            text: "Your logo prints in black and white at the top of customer receipts, like this. Kitchen tickets don't show it.",
+            text: "Your logo prints in black and white at the top of customer receipts, like this, in place of the shop name. Kitchen tickets don't show it.",
             warn: false,
           }
         : {
-            text: 'The logo is turned off for receipts. Turn it on under Printers → What prints, and when.',
+            text: 'The logo is turned off for receipts, so they start with the shop name. Turn it on under Printers → What prints, and when.',
             warn: false,
           };
   }
 }
 
-/** The receipt header and footer as the printer lays them out (logo, centred text, big name). */
-function ReceiptPreview(props: {
+/**
+ * The top and bottom of a customer receipt as the printer lays them out, from
+ * the same rules the receipt uses (printer-core receiptHeadLines /
+ * receiptShopLines): the logo and the tagline on top — the name only when no
+ * logo prints — and the address, phone, website and thank-you at the bottom.
+ */
+function ReceiptPreview({
+  logo,
+  paperDots,
+  branding,
+}: {
   logo: MonoRaster | null;
   paperDots: number;
-  name: string;
-  tagline: string;
-  address: string;
-  phone: string;
-  footer: string;
+  branding: ReceiptBranding;
 }) {
+  const head = receiptHeadLines(branding, logo !== null);
+  const bottom = receiptShopLines(branding);
+  const thanks = branding.footerLine?.trim() || DEFAULT_FOOTER_LINE;
   return (
     <div className="mx-auto w-[18rem] max-w-full bg-white px-4 py-5 text-center font-mono text-[11px] leading-snug text-stone-900 shadow-soft ring-1 ring-stone-200">
-      {props.logo && (
+      {logo && (
         <div className="mb-2">
-          <PrintedLogo raster={props.logo} paperDots={props.paperDots} />
+          <PrintedLogo raster={logo} paperDots={paperDots} />
         </div>
       )}
-      <div className="break-words text-lg font-bold leading-tight">{props.name}</div>
-      {props.tagline && <div className="mt-1 break-words">{props.tagline}</div>}
-      {(props.address || props.phone) && <div className="mt-2" />}
-      {props.address && <div className="break-words">{props.address}</div>}
-      {props.phone && <div className="break-words">{props.phone}</div>}
+      {head.name && <div className="break-words text-lg font-bold leading-tight">{head.name}</div>}
+      {head.tagline && <div className="mt-1 break-words">{head.tagline}</div>}
+      <div className="mt-2 font-bold">RECEIPT</div>
       <div className="my-3 border-t border-dashed border-stone-400" />
       <div className="text-left text-stone-400">
         <div className="flex justify-between">
@@ -289,7 +323,12 @@ function ReceiptPreview(props: {
         <div className="mt-1">…</div>
       </div>
       <div className="my-3 border-t border-dashed border-stone-400" />
-      <div className="break-words">{props.footer}</div>
+      {bottom.map((line, i) => (
+        <div key={i} className="break-words">
+          {line}
+        </div>
+      ))}
+      <div className="break-words">{thanks}</div>
     </div>
   );
 }
@@ -300,12 +339,14 @@ function Field({
   value,
   onChange,
   placeholder,
+  maxLength,
 }: {
   label: string;
   hint?: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  maxLength?: number;
 }) {
   return (
     <label className="block">
@@ -315,6 +356,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        maxLength={maxLength}
         className="w-full rounded-lg border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
       />
       {hint && <span className="mt-1 block text-xs text-stone-500">{hint}</span>}

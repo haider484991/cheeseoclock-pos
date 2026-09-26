@@ -10,6 +10,7 @@ import {
   handedOver,
   isDrinkShelf,
   isSealedDrink,
+  kitchenHearsOfClose,
   minutesAgoText,
   noteKindAnswer,
   orderStockNote,
@@ -278,5 +279,23 @@ describe('ingredientCostCents', () => {
     expect(ingredientCostCents(3, { costPerUnitCents: 38, packSize: null, packPriceCents: null })).toBe(114);
     expect(ingredientCostCents(0, { costPerUnitCents: 38, packSize: null, packPriceCents: null })).toBe(0);
     expect(ingredientCostCents(-2, { costPerUnitCents: 100, packSize: null, packPriceCents: null })).toBe(-200);
+  });
+});
+
+describe('kitchenHearsOfClose: which cancels and refunds go to the kitchen printer', () => {
+  const ALL: OrderStatus[] = ['open', 'sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'served', 'paid', 'void', 'refunded'];
+
+  it('a cancel or full refund: until the food was handed over — ready on the pass and out with the rider too', () => {
+    for (const status of ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'] as const) {
+      expect({ status, heard: kitchenHearsOfClose(status) }).toEqual({ status, heard: true });
+    }
+  });
+
+  it('not once it was served or delivered: a "DO NOT MAKE" slip for food the customer has only confuses the line', () => {
+    for (const status of ['served', 'delivered', 'paid'] as const) {
+      expect({ status, heard: kitchenHearsOfClose(status) }).toEqual({ status, heard: false });
+    }
+    // Exactly the handed-over statuses are kept from the kitchen.
+    expect(ALL.filter((s) => !kitchenHearsOfClose(s))).toEqual(['delivered', 'served', 'paid']);
   });
 });

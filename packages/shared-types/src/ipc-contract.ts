@@ -778,6 +778,8 @@ export interface IpcContract {
         storeTagline?: string;
         branchLine?: string;
         phoneLine?: string;
+        /** At the bottom of receipts. '' = none; a till that never set one reads the shop's own site. */
+        websiteLine?: string;
         footerLine?: string;
         logoUrl?: string;
       };
@@ -811,6 +813,8 @@ export interface IpcContract {
       storeTagline?: string;
       branchLine?: string;
       phoneLine?: string;
+      /** Send '' to print no website (left out, a till reads the shop's own site). */
+      websiteLine?: string;
       footerLine?: string;
       logoUrl?: string;
     };
