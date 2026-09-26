@@ -5,6 +5,14 @@ import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { decrementForOrder, returnStockForOrder } from './stock-movement-repo.js';
+import {
+  buildOrderHistoryWhere,
+  historyPage,
+  methodsFromLegs,
+  IS_NOT_PAID_SQL,
+  IS_SALE_SQL,
+  NET_TOTAL_SQL,
+} from '../order-history-query.js';
 import { computeTax } from '@cheeseoclock/pos-domain';
 import {
   allocateDiscount,
@@ -25,6 +33,11 @@ import type {
   OrderSnapshot,
   PrepStation,
   UUID,
+} from '@cheeseoclock/shared-types';
+import type {
+  OrderHistoryFilter,
+  OrderHistoryPage,
+  OrderHistoryRow,
 } from '@cheeseoclock/shared-types';
 
 interface OrderRow {
@@ -144,89 +157,46 @@ export function listOrders(
 }
 
 /**
- * Richer list for the Order History page: includes the customer/table name
- * snapshot, cashier name, item count, and payment method (first payment's).
- * Filters: text search across order#/customer name/phone, status/mode/date.
+ * Order History page: one page of PLACED orders (never a cart still being
+ * rung up — see PLACED_ORDER_SQL) plus totals across every page, all under
+ * the same filters. Filter/search rules live in ../order-history-query.ts.
  */
-export interface OrderHistoryRow {
-  id: string;
-  orderNumber: string;
-  mode: OrderMode;
-  status: OrderStatus;
-  customerName: string | null;
-  customerPhone: string | null;
-  tableLabel: string | null;
-  cashierName: string;
-  itemCount: number;
-  totalCents: number;
-  paidAt: string | null;
-  createdAt: string;
-  primaryPaymentMethod: PaymentMethod | null;
-}
-
 export function listOrderHistory(
   db: AppDatabase,
-  opts?: {
-    search?: string;
-    status?: OrderStatus | 'any';
-    mode?: OrderMode | 'any';
-    sinceIso?: string;
-    untilIso?: string;
-    limit?: number;
-  },
-): OrderHistoryRow[] {
-  const conditions: string[] = ['o.deleted_at IS NULL'];
-  const params: unknown[] = [];
-  if (opts?.status && opts.status !== 'any') {
-    conditions.push('o.status = ?');
-    params.push(opts.status);
-  }
-  if (opts?.mode && opts.mode !== 'any') {
-    conditions.push('o.mode = ?');
-    params.push(opts.mode);
-  }
-  if (opts?.sinceIso) {
-    conditions.push('o.created_at >= ?');
-    params.push(opts.sinceIso);
-  }
-  if (opts?.untilIso) {
-    conditions.push('o.created_at <= ?');
-    params.push(opts.untilIso);
-  }
-  if (opts?.search && opts.search.trim()) {
-    const q = `%${opts.search.trim().toLowerCase()}%`;
-    conditions.push(
-      `(LOWER(o.order_number) LIKE ?
-        OR LOWER(IFNULL(o.customer_name_snapshot, '')) LIKE ?
-        OR LOWER(IFNULL(o.customer_phone_snapshot, '')) LIKE ?)`,
-    );
-    params.push(q, q, q);
-  }
-  const limit = opts?.limit ?? 200;
+  filter?: OrderHistoryFilter,
+): OrderHistoryPage {
+  const where = buildOrderHistoryWhere(filter);
+  const { limit, offset } = historyPage(filter);
+
   const rows = db
     .prepare(
       `SELECT
-         o.id, o.order_number, o.mode, o.status,
+         o.id, o.order_number, o.mode, o.source, o.status,
          o.customer_name_snapshot, o.customer_phone_snapshot,
          o.total_cents, o.paid_at, o.created_at,
          u.full_name AS cashier_name,
          t.label AS table_label,
-         (SELECT COUNT(*) FROM order_items oi
-            WHERE oi.order_id = o.id AND oi.deleted_at IS NULL) AS item_count,
-         (SELECT method FROM payments p
-            WHERE p.order_id = o.id AND p.deleted_at IS NULL
-            ORDER BY p.paid_at LIMIT 1) AS first_payment_method
+         r.name AS rider_name,
+         (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi
+            WHERE oi.order_id = o.id AND oi.deleted_at IS NULL
+              AND oi.parent_order_item_id IS NULL) AS item_count,
+         (SELECT COALESCE(-SUM(rp.amount_cents), 0) FROM payments rp
+            WHERE rp.order_id = o.id AND rp.deleted_at IS NULL AND rp.amount_cents < 0) AS refunded_cents,
+         (SELECT group_concat(lp.method || ':' || lp.amount_cents, ',') FROM payments lp
+            WHERE lp.order_id = o.id AND lp.deleted_at IS NULL AND lp.amount_cents > 0) AS pay_legs
         FROM orders o
         LEFT JOIN users u ON u.id = o.cashier_id
         LEFT JOIN tables t ON t.id = o.table_id
-        WHERE ${conditions.join(' AND ')}
-        ORDER BY o.created_at DESC
-        LIMIT ?`,
+        LEFT JOIN riders r ON r.id = o.assigned_rider_id
+       WHERE ${where.sql}
+       ORDER BY o.created_at DESC, o.id DESC
+       LIMIT ? OFFSET ?`,
     )
-    .all(...params, limit) as Array<{
+    .all(...where.params, limit, offset) as Array<{
     id: string;
     order_number: string;
     mode: OrderMode;
+    source: 'pos' | 'web';
     status: OrderStatus;
     customer_name_snapshot: string | null;
     customer_phone_snapshot: string | null;
@@ -235,24 +205,87 @@ export function listOrderHistory(
     created_at: string;
     cashier_name: string | null;
     table_label: string | null;
+    rider_name: string | null;
     item_count: number;
-    first_payment_method: PaymentMethod | null;
+    refunded_cents: number;
+    pay_legs: string | null;
   }>;
-  return rows.map((r) => ({
+
+  const totals = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS orderCount,
+         COALESCE(SUM(CASE WHEN ${IS_SALE_SQL} THEN 1 ELSE 0 END), 0) AS paidCount,
+         COALESCE(SUM(CASE WHEN ${IS_SALE_SQL} THEN ${NET_TOTAL_SQL} ELSE 0 END), 0) AS salesCents,
+         COALESCE(SUM(CASE WHEN ${IS_NOT_PAID_SQL} THEN 1 ELSE 0 END), 0) AS notPaidCount,
+         COALESCE(SUM(CASE WHEN ${IS_NOT_PAID_SQL} THEN o.total_cents ELSE 0 END), 0) AS notPaidCents,
+         COALESCE(SUM(CASE WHEN o.status = 'void' THEN 1 ELSE 0 END), 0) AS cancelledCount,
+         COALESCE(SUM(CASE WHEN o.status = 'void' THEN o.total_cents ELSE 0 END), 0) AS cancelledCents
+        FROM orders o
+       WHERE ${where.sql}`,
+    )
+    .get(...where.params) as {
+    orderCount: number;
+    paidCount: number;
+    salesCents: number;
+    notPaidCount: number;
+    notPaidCents: number;
+    cancelledCount: number;
+    cancelledCents: number;
+  };
+
+  const refunds = db
+    .prepare(
+      `SELECT COUNT(DISTINCT p.order_id) AS refundCount,
+              COALESCE(-SUM(p.amount_cents), 0) AS refundedCents
+         FROM payments p
+         JOIN orders o ON o.id = p.order_id
+        WHERE p.deleted_at IS NULL AND p.amount_cents < 0
+          AND ${where.sql}`,
+    )
+    .get(...where.params) as { refundCount: number; refundedCents: number };
+
+  const byMethod = db
+    .prepare(
+      `SELECT p.method AS method, SUM(p.amount_cents) AS netCents
+         FROM payments p
+         JOIN orders o ON o.id = p.order_id
+        WHERE p.deleted_at IS NULL
+          AND ${where.sql}
+        GROUP BY p.method
+        ORDER BY netCents DESC`,
+    )
+    .all(...where.params) as Array<{ method: PaymentMethod; netCents: number }>;
+
+  const pageRows: OrderHistoryRow[] = rows.map((r) => ({
     id: r.id,
     orderNumber: r.order_number,
     mode: r.mode,
+    source: r.source,
     status: r.status,
     customerName: r.customer_name_snapshot,
     customerPhone: r.customer_phone_snapshot,
     tableLabel: r.table_label,
     cashierName: r.cashier_name ?? 'Unknown',
+    riderName: r.rider_name,
     itemCount: r.item_count,
     totalCents: r.total_cents,
+    refundedCents: r.refunded_cents,
     paidAt: r.paid_at,
     createdAt: r.created_at,
-    primaryPaymentMethod: r.first_payment_method,
+    paymentMethods: methodsFromLegs(r.pay_legs),
   }));
+
+  return {
+    rows: pageRows,
+    total: totals.orderCount,
+    summary: {
+      ...totals,
+      refundCount: refunds.refundCount,
+      refundedCents: refunds.refundedCents,
+      byMethod: byMethod.filter((m) => m.netCents !== 0),
+    },
+  };
 }
 
 // -----------------------------------------------------------------------------

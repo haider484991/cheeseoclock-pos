@@ -196,13 +196,20 @@ export function decrementForOrder(
          JOIN ingredients i ON i.id = r.ingredient_id AND i.deleted_at IS NULL
         WHERE oi.order_id = ? AND oi.deleted_at IS NULL
           -- A "leave out" choice on the line ("No onion", migration 0022) keeps
-          -- that ingredient's base recipe line off stock for this line. Extras
-          -- the customer asked for (lines with a modifier) are still deducted.
-          AND NOT (r.modifier_id IS NULL AND EXISTS (
+          -- that ingredient off stock for this line: its base recipe line, and
+          -- the lines of a free choice that brings it (a deal's pizzas, a
+          -- veggie pick). A paid extra the customer asked for ("Extra onion",
+          -- priced above zero) is still deducted.
+          AND NOT (
+            EXISTS (
                 SELECT 1 FROM order_item_modifiers lo
                   JOIN modifiers lm ON lm.id = lo.modifier_id
                  WHERE lo.order_item_id = oi.id AND lo.deleted_at IS NULL
-                   AND lm.removes_ingredient_id = r.ingredient_id))`,
+                   AND lm.removes_ingredient_id = r.ingredient_id)
+            AND (r.modifier_id IS NULL OR EXISTS (
+                SELECT 1 FROM order_item_modifiers fc
+                 WHERE fc.order_item_id = oi.id AND fc.modifier_id = r.modifier_id
+                   AND fc.deleted_at IS NULL AND fc.price_delta_cents <= 0)))`,
     )
     .all(orderId) as Array<{
     menu_item_id: string;

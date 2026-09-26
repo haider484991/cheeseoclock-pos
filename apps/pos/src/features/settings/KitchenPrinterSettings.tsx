@@ -5,6 +5,7 @@ import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { PrinterConnectionConfig } from '@cheeseoclock/shared-types';
 import { ChefHat, Check, RefreshCw } from 'lucide-react';
+import { isChanged } from './PrinterSettings';
 
 type Where = 'same' | 'network' | 'usb';
 
@@ -29,9 +30,12 @@ export function KitchenPrinterSettings() {
   const [printerName, setPrinterName] = useState('');
   const [width, setWidth] = useState<32 | 48>(48);
 
+  // Hydrate from the saved kitchen printer only: the receipt printer and the
+  // printing rules on this tab share the query, and saving one of them must
+  // not wipe what is typed here. (null = "same printer", undefined = loading.)
+  const k = cfgQ.data ? cfgQ.data.kitchenPrinter : undefined;
   useEffect(() => {
-    if (!cfgQ.data) return;
-    const k = cfgQ.data.kitchenPrinter;
+    if (k === undefined) return;
     if (!k) {
       setWhere('same');
       return;
@@ -41,7 +45,7 @@ export function KitchenPrinterSettings() {
     if (k.network?.port) setPort(String(k.network.port));
     setPrinterName(k.usb?.printerName ?? '');
     setWidth(k.width ?? 48);
-  }, [cfgQ.data]);
+  }, [k]);
 
   const printersQ = useQuery({
     queryKey: ['printer', 'system'],
@@ -88,12 +92,13 @@ export function KitchenPrinterSettings() {
       }),
   });
 
-  function buildConfig(): PrinterConnectionConfig | null | undefined {
+  /** The form as a config: null = same printer, undefined = incomplete (toast unless quiet). */
+  function buildConfig(quiet = false): PrinterConnectionConfig | null | undefined {
     if (where === 'same') return null;
     if (where === 'network') {
       const p = parseInt(port, 10);
       if (!host.trim()) {
-        toast({ title: 'Enter the printer address', variant: 'error' });
+        if (!quiet) toast({ title: 'Enter the printer address', variant: 'error' });
         return undefined;
       }
       return {
@@ -104,11 +109,13 @@ export function KitchenPrinterSettings() {
     }
     const name = printerName.trim();
     if (!name) {
-      toast({
-        title: 'Pick the printer first',
-        description: 'Choose the kitchen printer from the list, then save.',
-        variant: 'error',
-      });
+      if (!quiet) {
+        toast({
+          title: 'Pick the printer first',
+          description: 'Choose the kitchen printer from the list, then save.',
+          variant: 'error',
+        });
+      }
       return undefined;
     }
     return { transport: 'usb', usb: { printerName: name }, width };
@@ -120,6 +127,25 @@ export function KitchenPrinterSettings() {
   }
 
   const current = cfgQ.data?.kitchenPrinter ?? null;
+  const draft = buildConfig(true);
+  const unsaved =
+    !!cfgQ.data &&
+    (draft === undefined ||
+      (draft === null ? current !== null : current === null || isChanged(current, draft)));
+
+  async function testPrint() {
+    // The test goes to the saved kitchen printer; unsaved changes are saved first.
+    if (unsaved) {
+      const config = buildConfig();
+      if (config === undefined) return;
+      try {
+        await saveMut.mutateAsync(config);
+      } catch {
+        return; // the save toast already said why
+      }
+    }
+    testMut.mutate();
+  }
   const selectedIsKnown = !printerName || systemPrinters.some((p) => p.name === printerName);
 
   return (
@@ -163,7 +189,7 @@ export function KitchenPrinterSettings() {
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
               <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-                IP address or hostname
+                Printer&rsquo;s IP address
               </label>
               <input
                 type="text"
@@ -252,7 +278,8 @@ export function KitchenPrinterSettings() {
                       : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
                   )}
                 >
-                  {w === 32 ? '58 mm' : '80 mm'} <span className="text-stone-500">({w} cols)</span>
+                  {w === 32 ? '58 mm' : '80 mm'}{' '}
+                  <span className="text-stone-500">{w === 32 ? '(narrow roll)' : '(standard roll)'}</span>
                 </button>
               ))}
             </div>
@@ -263,12 +290,21 @@ export function KitchenPrinterSettings() {
           <div className="text-xs text-stone-500">
             <span className="inline-flex items-center gap-1">
               <Check className="h-3 w-3 text-emerald-500" />
-              Current: {labelCurrent(current)}
+              Saved: {labelCurrent(current)}
+              {unsaved && (
+                <span className="ml-1 font-medium text-amber-600 dark:text-amber-400">
+                  — your changes are not saved yet
+                </span>
+              )}
             </span>
           </div>
           <div className="flex gap-2">
-            <Button variant="secondary" disabled={testMut.isPending} onClick={() => testMut.mutate()}>
-              {testMut.isPending ? 'Sending…' : 'Test print'}
+            <Button
+              variant="secondary"
+              disabled={testMut.isPending || saveMut.isPending}
+              onClick={() => void testPrint()}
+            >
+              {testMut.isPending ? 'Sending…' : unsaved ? 'Save and test print' : 'Test print'}
             </Button>
             <Button variant="primary" disabled={saveMut.isPending} onClick={save}>
               {saveMut.isPending ? 'Saving…' : 'Save'}

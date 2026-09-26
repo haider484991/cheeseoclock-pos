@@ -5,9 +5,31 @@
 
 import type { UUID } from './ids.js';
 
+/**
+ * The shelves an ingredient sits on (owner 2026-09-26). Labels and the
+ * name-based guess live in pos-domain (`ingredient-category.ts`).
+ */
+export const INGREDIENT_CATEGORY_IDS = [
+  'dough',
+  'cheese',
+  'meat',
+  'veg',
+  'sauce',
+  'spice',
+  'dry',
+  'drinks',
+  'packaging',
+  'other',
+] as const;
+export type IngredientCategory = (typeof INGREDIENT_CATEGORY_IDS)[number];
+
 export interface Ingredient {
   id: UUID;
   name: string;
+  /** The category chosen by a manager, or — when `categoryAuto` — guessed from the name. */
+  category: IngredientCategory;
+  /** True while nobody has picked a category: it follows the name (a rename re-guesses). */
+  categoryAuto: boolean;
   unit: string;
   currentQty: number;
   lowThreshold: number;
@@ -83,6 +105,38 @@ export interface StockMovement {
   actorUserId: UUID | null;
   occurredAt: string;
   resultingQty: number;
+}
+
+/** A movement as the history screen shows it: names resolved, even for a deleted ingredient. */
+export interface StockMovementEntry extends StockMovement {
+  ingredientName: string;
+  unit: string;
+  /** Who recorded it (null for the till's own sales bookkeeping when no one was signed in). */
+  actorName: string | null;
+  /** The order's number when the movement came from a sale. */
+  orderNumber: string | null;
+  /** The purchase order's reference when the movement came from a delivery. */
+  purchaseOrderRef: string | null;
+}
+
+/** Filters for the movement history. Every field optional; `offset`/`limit` page it. */
+export interface StockMovementSearch {
+  /** Words to find in the ingredient name or the note. */
+  search?: string;
+  reason?: StockMovementReason;
+  ingredientId?: string;
+  sinceIso?: string;
+  untilIso?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface StockMovementPage {
+  rows: StockMovementEntry[];
+  /** Matches for every filter, before paging. */
+  total: number;
+  /** Matches per reason for the same filters except `reason` (for the filter chip counts). */
+  reasonCounts: Partial<Record<StockMovementReason, number>>;
 }
 
 export type PurchaseOrderStatus =

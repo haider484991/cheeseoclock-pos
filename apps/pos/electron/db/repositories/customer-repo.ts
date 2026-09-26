@@ -4,11 +4,13 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { findOrder } from './order-repo.js';
-import { normalizePhone, phoneSearchTerms } from '@cheeseoclock/pos-domain';
+import { normalizePhone, phoneSearchTerms, resolveAreaText } from '@cheeseoclock/pos-domain';
 import type {
   CustomerAddressMatch,
   Customer,
   CustomerAddress,
+  CustomerListRow,
+  CustomerListSort,
   CustomerWithAddresses,
 } from '@cheeseoclock/shared-types';
 
@@ -72,6 +74,41 @@ function escapeLike(text: string): string {
 // Customer CRUD
 // -----------------------------------------------------------------------------
 
+/**
+ * WHERE fragment matching a typed name or phone. `col` prefixes the columns
+ * ("c." inside a join). With `withAddress`, a house / street typed at the
+ * counter ("41-C") finds whoever has it saved.
+ */
+function customerSearchClause(
+  term: string,
+  col = '',
+  withAddress = false,
+): { sql: string; params: unknown[] } {
+  const clauses = [`LOWER(${col}name) LIKE ? ESCAPE '\\'`];
+  const params: unknown[] = [`%${escapeLike(term.toLowerCase())}%`];
+  // Phones are stored canonical ("+923001234567") while cashiers type the
+  // local form ("03001234567"), so a raw LIKE on the typed text never
+  // matched. Match the normalised number and the stripped digits instead.
+  const { canonical, digits } = phoneSearchTerms(term);
+  if (canonical) {
+    clauses.push(`${col}phone = ?`, `${col}phone LIKE ? ESCAPE '\\'`);
+    params.push(canonical, `${escapeLike(canonical)}%`);
+  }
+  if (digits) {
+    clauses.push(`${col}phone LIKE ? ESCAPE '\\'`);
+    params.push(`%${digits}%`);
+  }
+  if (withAddress) {
+    clauses.push(
+      `EXISTS (SELECT 1 FROM customer_addresses sa
+                WHERE sa.customer_id = ${col}id AND sa.deleted_at IS NULL
+                  AND LOWER(sa.address_line) LIKE ? ESCAPE '\\')`,
+    );
+    params.push(`%${escapeLike(term.toLowerCase())}%`);
+  }
+  return { sql: `(${clauses.join(' OR ')})`, params };
+}
+
 export function listCustomers(
   db: AppDatabase,
   opts?: { search?: string; activeOnly?: boolean; limit?: number },
@@ -80,22 +117,9 @@ export function listCustomers(
   const params: unknown[] = [];
   if (opts?.activeOnly) where.push('is_active = 1');
   if (opts?.search && opts.search.trim()) {
-    const term = opts.search.trim();
-    const clauses = [`LOWER(name) LIKE ? ESCAPE '\\'`];
-    params.push(`%${escapeLike(term.toLowerCase())}%`);
-    // Phones are stored canonical ("+923001234567") while cashiers type the
-    // local form ("03001234567"), so a raw LIKE on the typed text never
-    // matched. Match the normalised number and the stripped digits instead.
-    const { canonical, digits } = phoneSearchTerms(term);
-    if (canonical) {
-      clauses.push('phone = ?', `phone LIKE ? ESCAPE '\\'`);
-      params.push(canonical, `${escapeLike(canonical)}%`);
-    }
-    if (digits) {
-      clauses.push(`phone LIKE ? ESCAPE '\\'`);
-      params.push(`%${digits}%`);
-    }
-    where.push(`(${clauses.join(' OR ')})`);
+    const clause = customerSearchClause(opts.search.trim());
+    where.push(clause.sql);
+    params.push(...clause.params);
   }
   const limit = opts?.limit ?? 100;
   const rows = db
@@ -105,6 +129,118 @@ export function listCustomers(
     )
     .all(...params, limit) as CustRow[];
   return rows.map(rowToCustomer);
+}
+
+export interface PageCustomersOptions {
+  search?: string;
+  /** Keep customers with a saved address in these delivery zones. */
+  zoneIds?: readonly string[];
+  sort?: CustomerListSort;
+  offset?: number;
+  limit?: number;
+}
+
+/** Orders that count as the customer's: placed, not open drafts or voids. */
+const PLACED_ORDER = `o.customer_id = c.id AND o.deleted_at IS NULL AND o.status NOT IN ('open', 'void')`;
+
+/**
+ * The Customers screen: one page plus the total, so the till never renders
+ * thousands of rows. Order count / last order come from correlated
+ * subqueries served by idx_orders_customer (migration 0025).
+ */
+export function pageCustomers(
+  db: AppDatabase,
+  opts: PageCustomersOptions = {},
+): { rows: CustomerListRow[]; total: number } {
+  const where: string[] = ['c.deleted_at IS NULL'];
+  const params: unknown[] = [];
+  const term = opts.search?.trim();
+  if (term) {
+    const clause = customerSearchClause(term, 'c.', true);
+    where.push(clause.sql);
+    params.push(...clause.params);
+  }
+  if (opts.zoneIds && opts.zoneIds.length > 0) {
+    // Areas are saved as text ("Rahat Commercial, DHA Phase 6", or typed by
+    // hand on an older till), so which zone an address is in is worked out
+    // with the same reader the area picker uses. There are only as many
+    // distinct areas as places people live, so this stays small.
+    const wanted = new Set(opts.zoneIds);
+    const areas = db
+      .prepare(
+        `SELECT DISTINCT area FROM customer_addresses
+          WHERE deleted_at IS NULL AND area IS NOT NULL AND TRIM(area) != ''`,
+      )
+      .all() as Array<{ area: string }>;
+    const matching = areas
+      .map((r) => r.area)
+      .filter((area) => {
+        const { zoneIds } = resolveAreaText(area);
+        return zoneIds.length > 0 && zoneIds.every((z) => wanted.has(z));
+      });
+    if (matching.length === 0) return { rows: [], total: 0 };
+    where.push(
+      `EXISTS (SELECT 1 FROM customer_addresses za
+                WHERE za.customer_id = c.id AND za.deleted_at IS NULL
+                  AND za.area IN (SELECT value FROM json_each(?)))`,
+    );
+    params.push(JSON.stringify(matching));
+  }
+  const whereSql = where.join(' AND ');
+  const total = (
+    db.prepare(`SELECT COUNT(*) AS n FROM customers c WHERE ${whereSql}`).get(...params) as { n: number }
+  ).n;
+
+  const orderBy =
+    opts.sort === 'recent'
+      ? 'last_order_at IS NULL, last_order_at DESC, c.created_at DESC'
+      : opts.sort === 'orders'
+        ? 'order_count DESC, c.name COLLATE NOCASE, c.id'
+        : 'c.name COLLATE NOCASE, c.id';
+  const limit = Math.min(Math.max(1, opts.limit ?? 50), 200);
+  const offset = Math.max(0, opts.offset ?? 0);
+  const rows = db
+    .prepare(
+      `SELECT c.id, c.name, c.phone, c.email, c.notes, c.loyalty_points, c.is_active, c.created_at,
+              (SELECT COUNT(*) FROM orders o WHERE ${PLACED_ORDER}) AS order_count,
+              (SELECT MAX(o.created_at) FROM orders o WHERE ${PLACED_ORDER}) AS last_order_at,
+              (SELECT a.area FROM customer_addresses a
+                WHERE a.customer_id = c.id AND a.deleted_at IS NULL
+                ORDER BY a.is_default DESC, a.updated_at DESC LIMIT 1) AS area
+         FROM customers c
+        WHERE ${whereSql}
+        ORDER BY ${orderBy}
+        LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as Array<
+    CustRow & { order_count: number; last_order_at: string | null; area: string | null }
+  >;
+  return {
+    rows: rows.map((r) => ({
+      ...rowToCustomer(r),
+      orderCount: r.order_count,
+      lastOrderAt: r.last_order_at,
+      area: r.area,
+    })),
+    total,
+  };
+}
+
+/**
+ * How many saved addresses name each area, busiest first. The till's area
+ * picker turns these into per-zone counts so the areas this shop actually
+ * delivers to are offered first.
+ */
+export function listAreaUsage(db: AppDatabase, limit = 300): Array<{ area: string; count: number }> {
+  return db
+    .prepare(
+      `SELECT area, COUNT(*) AS count FROM customer_addresses
+        WHERE deleted_at IS NULL AND area IS NOT NULL AND TRIM(area) != ''
+        GROUP BY area
+        ORDER BY count DESC
+        LIMIT ?`,
+    )
+    .all(Math.min(Math.max(1, limit), 1000)) as Array<{ area: string; count: number }>;
 }
 
 export function findCustomer(db: AppDatabase, id: string): Customer | null {
@@ -348,18 +484,15 @@ export function createAddress(
     )
     .get(input.customerId, normLine, normArea, normCity) as AddrRow | undefined;
   if (existing) {
-    // Honor a fresh isDefault flag if asked, even on the reused row.
-    if (input.isDefault) {
-      const now = nowIso();
-      db.prepare(
-        `UPDATE customer_addresses SET is_default = 0, updated_at = ?, version = version + 1
-          WHERE customer_id = ? AND deleted_at IS NULL AND id != ?`,
-      ).run(now, input.customerId, existing.id);
-      db.prepare(
-        `UPDATE customer_addresses SET is_default = 1, updated_at = ?, version = version + 1
-          WHERE id = ?`,
-      ).run(now, existing.id);
-      return { ...rowToAddress(existing), isDefault: true };
+    // Honor a fresh isDefault flag if asked, even on the reused row. This
+    // used to be two bare UPDATEs — the default moved on this till but never
+    // reached the sync queue or the audit trail.
+    if (input.isDefault && existing.is_default !== 1) {
+      let after: CustomerAddress = rowToAddress(existing);
+      db.transaction(() => {
+        after = makeDefaultAddress(db, existing, actor, nowIso());
+      })();
+      return after;
     }
     return rowToAddress(existing);
   }
@@ -378,13 +511,9 @@ export function createAddress(
   };
 
   const tx = db.transaction(() => {
-    // If this address is set as default, clear any other defaults for the same customer.
-    if (addr.isDefault) {
-      db.prepare(
-        `UPDATE customer_addresses SET is_default = 0, updated_at = ?, version = version + 1
-          WHERE customer_id = ? AND deleted_at IS NULL`,
-      ).run(now, input.customerId);
-    }
+    // If this address is set as default, clear any other defaults for the
+    // same customer — each cleared row with its own sync + audit entry.
+    if (addr.isDefault) clearOtherDefaults(db, input.customerId, id, actor, now);
     db.prepare(
       `INSERT INTO customer_addresses
          (id, customer_id, label, address_line, area, city, notes, is_default,
@@ -422,6 +551,65 @@ export function createAddress(
   return addr;
 }
 
+/**
+ * Inside a transaction: every OTHER default address of this customer stops
+ * being the default. Each row that changes gets its own sync post-image and
+ * audit entry — a bare multi-row UPDATE moved defaults on this till only.
+ */
+function clearOtherDefaults(
+  db: AppDatabase,
+  customerId: string,
+  keepId: string,
+  actor: Actor,
+  now: string,
+): void {
+  const others = db
+    .prepare(
+      `SELECT ${ADDR_SELECT} FROM customer_addresses
+        WHERE customer_id = ? AND deleted_at IS NULL AND is_default = 1 AND id != ?`,
+    )
+    .all(customerId, keepId) as AddrRow[];
+  for (const o of others) {
+    db.prepare(
+      `UPDATE customer_addresses SET is_default = 0, updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(now, o.id);
+    const before = rowToAddress(o);
+    const after: CustomerAddress = { ...before, isDefault: false };
+    enqueueSync(db, { entityType: 'customer_addresses', entityId: o.id, op: 'upsert', payload: after });
+    writeAudit(db, {
+      entityType: 'customer_addresses',
+      entityId: o.id,
+      action: 'unset_default',
+      actorUserId: actor.userId,
+      before,
+      after,
+    });
+  }
+}
+
+/** Inside a transaction: `row` becomes the customer's one default address. */
+function makeDefaultAddress(db: AppDatabase, row: AddrRow, actor: Actor, now: string): CustomerAddress {
+  clearOtherDefaults(db, row.customer_id, row.id, actor, now);
+  const before = rowToAddress(row);
+  const after: CustomerAddress = { ...before, isDefault: true };
+  if (before.isDefault) return after;
+  db.prepare(
+    `UPDATE customer_addresses SET is_default = 1, updated_at = ?, version = version + 1
+      WHERE id = ?`,
+  ).run(now, row.id);
+  enqueueSync(db, { entityType: 'customer_addresses', entityId: row.id, op: 'upsert', payload: after });
+  writeAudit(db, {
+    entityType: 'customer_addresses',
+    entityId: row.id,
+    action: 'set_default',
+    actorUserId: actor.userId,
+    before,
+    after,
+  });
+  return after;
+}
+
 export function setDefaultAddress(db: AppDatabase, addressId: string, actor: Actor): void {
   const row = db
     .prepare(
@@ -429,52 +617,38 @@ export function setDefaultAddress(db: AppDatabase, addressId: string, actor: Act
     )
     .get(addressId) as AddrRow | undefined;
   if (!row) throw new Error('Address not found');
-  const now = nowIso();
-  const tx = db.transaction(() => {
-    db.prepare(
-      `UPDATE customer_addresses SET is_default = 0, updated_at = ?, version = version + 1
-        WHERE customer_id = ? AND deleted_at IS NULL`,
-    ).run(now, row.customer_id);
-    db.prepare(
-      `UPDATE customer_addresses SET is_default = 1, updated_at = ?, version = version + 1
-        WHERE id = ?`,
-    ).run(now, addressId);
-    enqueueSync(db, {
-      entityType: 'customer_addresses',
-      entityId: addressId,
-      op: 'upsert',
-      payload: { id: addressId, isDefault: true, customerId: row.customer_id },
-    });
-    writeAudit(db, {
-      entityType: 'customer_addresses',
-      entityId: addressId,
-      action: 'set_default',
-      actorUserId: actor.userId,
-      before: null,
-      after: { isDefault: true },
-    });
-  });
-  tx();
+  db.transaction(() => {
+    makeDefaultAddress(db, row, actor, nowIso());
+  })();
 }
 
+/**
+ * Soft-delete a saved address — row, sync entry and audit (with what was
+ * deleted) in one transaction. It used to be three separate statements with
+ * no transaction and an empty audit "before".
+ */
 export function deleteAddress(db: AppDatabase, addressId: string, actor: Actor): void {
+  const row = db
+    .prepare(
+      `SELECT ${ADDR_SELECT} FROM customer_addresses WHERE id = ? AND deleted_at IS NULL`,
+    )
+    .get(addressId) as AddrRow | undefined;
+  if (!row) throw new Error('Address not found');
   const now = nowIso();
-  db.prepare(
-    `UPDATE customer_addresses SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
-  ).run(now, now, addressId);
-  enqueueSync(db, {
+  writeWithSync({
+    db,
     entityType: 'customer_addresses',
     entityId: addressId,
     op: 'delete',
-    payload: { id: addressId, deletedAt: now },
-  });
-  writeAudit(db, {
-    entityType: 'customer_addresses',
-    entityId: addressId,
     action: 'delete',
-    actorUserId: actor.userId,
-    before: null,
+    actor,
+    before: rowToAddress(row),
     after: null,
+    writeRow: () => {
+      db.prepare(
+        `UPDATE customer_addresses SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+      ).run(now, now, addressId);
+    },
   });
 }
 
@@ -501,7 +675,7 @@ export function getCustomerOrderHistory(
       `SELECT id AS orderId, order_number AS orderNumber, created_at AS createdAt,
               mode, status, total_cents AS totalCents
          FROM orders
-        WHERE customer_id = ? AND deleted_at IS NULL
+        WHERE customer_id = ? AND deleted_at IS NULL AND status <> 'open'
         ORDER BY created_at DESC
         LIMIT ?`,
     )

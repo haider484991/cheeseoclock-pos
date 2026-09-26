@@ -5,6 +5,8 @@ import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
   listCustomers,
+  pageCustomers,
+  listAreaUsage,
   findCustomerByPhone,
   getCustomerWithAddresses,
   createCustomer,
@@ -32,6 +34,16 @@ export function registerCustomersHandlers(ctx: HandlerContext): void {
   defineHandler('customers:list', ctx, (_ctx, payload) => {
     requireOrderCreate();
     return ok(listCustomers(ctx.db, payload ?? {}));
+  });
+
+  defineHandler('customers:page', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    return ok(pageCustomers(ctx.db, payload));
+  });
+
+  defineHandler('customers:areaUsage', ctx, (_ctx, payload) => {
+    requireOrderCreate();
+    return ok(listAreaUsage(ctx.db, payload?.limit));
   });
 
   defineHandler('customers:findByPhone', ctx, (_ctx, payload) => {

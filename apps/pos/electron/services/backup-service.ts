@@ -11,7 +11,10 @@ import { deleteSetting, setSetting } from '../db/repositories/settings-repo.js';
  * Local backup / restore for the SQLite database.
  *
  *   - `createBackup` uses SQLite's `VACUUM INTO` which produces a clean,
- *     defragmented copy of the live DB without locking writers for long.
+ *     defragmented copy of the live DB without locking writers for long —
+ *     but in one synchronous call that freezes the till while it runs.
+ *     `createBackupAsync` (the daily copy, "Back up now", USB export, cloud
+ *     copies) uses the online backup API a slice at a time instead.
  *   - `listBackups` enumerates the on-disk auto-backup folder.
  *   - `stageRestoreFromPath` stages a chosen file to be swapped in on next
  *     launch (we can't safely overwrite the DB while it's open), together
@@ -31,19 +34,29 @@ const PENDING_RESTORE_INFO = 'pending-restore.json';
 const AUTO_BACKUP_PREFIX = 'auto-';
 const MANUAL_BACKUP_PREFIX = 'manual-';
 const KEEP_AUTO_BACKUPS = 14;
-const AUTO_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/**
+ * The daily copy is checked for this long after boot, then hourly (it is made
+ * when the newest one is 23 h old). It used to run synchronously before the
+ * window even opened, and then every 24 h from boot — in the middle of
+ * whatever service was on at that hour.
+ */
+const AUTO_BACKUP_FIRST_CHECK_MS = 2 * 60_000;
+const AUTO_BACKUP_CHECK_MS = 60 * 60_000;
 
 let dbRef: AppDatabase | null = null;
 let timer: NodeJS.Timeout | null = null;
+let firstCheck: NodeJS.Timeout | null = null;
+let autoBackupRunning = false;
 
 export function initBackupService(db: AppDatabase): void {
   dbRef = db;
-  // First check immediately, then daily.
-  void runAutoBackupIfDue();
-  timer = setInterval(() => void runAutoBackupIfDue(), AUTO_BACKUP_INTERVAL_MS);
+  firstCheck = setTimeout(() => void runAutoBackupIfDue(), AUTO_BACKUP_FIRST_CHECK_MS);
+  timer = setInterval(() => void runAutoBackupIfDue(), AUTO_BACKUP_CHECK_MS);
 }
 
 export function stopBackupService(): void {
+  if (firstCheck) clearTimeout(firstCheck);
+  firstCheck = null;
   if (timer) clearInterval(timer);
   timer = null;
   dbRef = null;
@@ -80,6 +93,47 @@ export function snapshotDatabaseTo(db: AppDatabase, destPath: string): void {
   db.exec(`VACUUM INTO '${destPath.replace(/'/g, "''")}'`);
 }
 
+/**
+ * The same snapshot without stopping the till. SQLite's online backup API
+ * (better-sqlite3 `db.backup`) copies a hundred pages per turn of the event
+ * loop, so sales, prints and every IPC call carry on while it runs; writes
+ * made meanwhile on this connection land in the copy too. VACUUM INTO does
+ * the whole copy in one synchronous call on the main process: measured
+ * 12.6 s on a 2 GB database against a worst pause of 88 ms for this.
+ *
+ * The copy is written beside the destination and renamed into place, and is
+ * left in rollback-journal mode: one self-contained file, as VACUUM INTO
+ * made (it would otherwise inherit WAL mode and grow -wal/-shm files when
+ * opened).
+ */
+export async function snapshotDatabaseAsync(db: AppDatabase, destPath: string): Promise<void> {
+  const part = `${destPath}.part`;
+  removeDatabaseFiles(part);
+  try {
+    await db.backup(part);
+    const copy = new Database(part);
+    try {
+      copy.pragma('journal_mode = DELETE');
+    } finally {
+      copy.close();
+    }
+    fs.renameSync(part, destPath);
+  } finally {
+    removeDatabaseFiles(part);
+  }
+}
+
+/** A database file and whatever journal files SQLite left next to it. */
+export function removeDatabaseFiles(filePath: string): void {
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
+    try {
+      fs.unlinkSync(filePath + suffix);
+    } catch {
+      // not there
+    }
+  }
+}
+
 export function listBackups(): BackupEntry[] {
   const dir = ensureBackupDir();
   const out: BackupEntry[] = [];
@@ -110,22 +164,48 @@ export interface CreateBackupResult {
   sizeBytes: number;
 }
 
-export function createBackup(opts: { kind: 'auto' | 'manual' } = { kind: 'manual' }): CreateBackupResult {
-  if (!dbRef) throw new Error('Backup service not initialised');
+function newBackupPath(kind: 'auto' | 'manual'): { fileName: string; fullPath: string } {
   const dir = ensureBackupDir();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const prefix = opts.kind === 'auto' ? AUTO_BACKUP_PREFIX : MANUAL_BACKUP_PREFIX;
+  const prefix = kind === 'auto' ? AUTO_BACKUP_PREFIX : MANUAL_BACKUP_PREFIX;
   const fileName = `${prefix}${stamp}.db`;
-  const fullPath = path.join(dir, fileName);
-  snapshotDatabaseTo(dbRef, fullPath);
+  return { fileName, fullPath: path.join(dir, fileName) };
+}
+
+function backupCreated(kind: 'auto' | 'manual', fileName: string, fullPath: string): CreateBackupResult {
   const sizeBytes = fs.statSync(fullPath).size;
   log.info('Backup created', { fileName, sizeBytes });
-  if (opts.kind === 'auto') rotateAutoBackups();
+  if (kind === 'auto') rotateAutoBackups();
   return { fileName, fullPath, sizeBytes };
+}
+
+/** Synchronous (VACUUM INTO): only where the next step must not start before it exists. */
+export function createBackup(opts: { kind: 'auto' | 'manual' } = { kind: 'manual' }): CreateBackupResult {
+  if (!dbRef) throw new Error('Backup service not initialised');
+  const { fileName, fullPath } = newBackupPath(opts.kind);
+  snapshotDatabaseTo(dbRef, fullPath);
+  return backupCreated(opts.kind, fileName, fullPath);
+}
+
+/** The same backup without freezing the till while it is written (see snapshotDatabaseAsync). */
+export async function createBackupAsync(
+  opts: { kind: 'auto' | 'manual' } = { kind: 'manual' },
+): Promise<CreateBackupResult> {
+  if (!dbRef) throw new Error('Backup service not initialised');
+  const { fileName, fullPath } = newBackupPath(opts.kind);
+  await snapshotDatabaseAsync(dbRef, fullPath);
+  return backupCreated(opts.kind, fileName, fullPath);
 }
 
 export function sha256OfFile(filePath: string): string {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+/** sha256OfFile read in pieces, so a big file (or a slow USB stick) never stalls the till. */
+export async function sha256OfFileAsync(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const piece of fs.createReadStream(filePath)) hash.update(piece as Buffer);
+  return hash.digest('hex');
 }
 
 /**
@@ -143,8 +223,10 @@ export async function exportBackup(): Promise<string | null> {
     filters: [{ name: 'SQLite database', extensions: ['db'] }],
   });
   if (result.canceled || !result.filePath) return null;
-  snapshotDatabaseTo(dbRef, result.filePath);
-  const digest = sha256OfFile(result.filePath);
+  // A USB stick writes at a few MB/s: VACUUM INTO straight onto it froze the
+  // till for the whole write.
+  await snapshotDatabaseAsync(dbRef, result.filePath);
+  const digest = await sha256OfFileAsync(result.filePath);
   try {
     fs.writeFileSync(`${result.filePath}.sha256`, `${digest}  ${path.basename(result.filePath)}\n`);
   } catch (e) {
@@ -169,6 +251,14 @@ export interface RestoreStagingInfo {
 
 export interface PendingRestoreInfo extends RestoreStagingInfo {
   stagedAt: string;
+  /**
+   * Set by backup:applyAndRelaunch once the owner said yes and the safety
+   * copy step is done. Only a confirmed restore is applied at the next start:
+   * a copy that was staged and then declined used to sit in the slot and
+   * silently replace the data the next time the till was switched on, with
+   * no safety copy of what it overwrote.
+   */
+  confirmedAt?: string;
 }
 
 export interface AppliedRestore {
@@ -239,6 +329,50 @@ export function stageRestoreFromPath(
   return { staged: true };
 }
 
+function pendingRestorePaths(): { staged: string; info: string } {
+  const dir = ensureBackupDir();
+  return { staged: path.join(dir, PENDING_RESTORE_NAME), info: path.join(dir, PENDING_RESTORE_INFO) };
+}
+
+/** A copy is staged and waiting for the owner's yes. */
+export function hasPendingRestore(): boolean {
+  return fs.existsSync(pendingRestorePaths().staged);
+}
+
+/**
+ * The owner said yes (and the safety copy step is done): mark the staged copy
+ * so the next start applies it. Throws when nothing is staged.
+ */
+export function confirmPendingRestore(): void {
+  const { staged, info } = pendingRestorePaths();
+  if (!fs.existsSync(staged)) {
+    throw new Error('Nothing is waiting to be restored. Pick the copy again.');
+  }
+  let pending: PendingRestoreInfo | null = null;
+  try {
+    pending = JSON.parse(fs.readFileSync(info, 'utf8')) as PendingRestoreInfo;
+  } catch {
+    pending = null;
+  }
+  if (!pending) throw new Error('The details of the chosen copy are missing. Pick the copy again.');
+  fs.writeFileSync(info, JSON.stringify({ ...pending, confirmedAt: new Date().toISOString() }));
+}
+
+/** The owner said no: drop the staged copy so it can never be applied later. */
+export function cancelPendingRestore(): { cancelled: boolean } {
+  const { staged, info } = pendingRestorePaths();
+  const existed = fs.existsSync(staged);
+  for (const p of [staged, info]) {
+    try {
+      fs.unlinkSync(p);
+    } catch {
+      // not there — nothing to drop
+    }
+  }
+  if (existed) log.info('Staged restore cancelled');
+  return { cancelled: existed };
+}
+
 export function deleteBackup(fileName: string): void {
   // Reject any separators / parent refs so a malicious renderer can't
   // traverse outside the backups dir.
@@ -285,28 +419,32 @@ function rotateAutoBackups(): void {
   }
 }
 
-function runAutoBackupIfDue(): void {
-  if (!dbRef) return;
+async function runAutoBackupIfDue(): Promise<void> {
+  const db = dbRef;
+  if (!db || autoBackupRunning) return;
+  autoBackupRunning = true;
   try {
     const last = listBackups().find((b) => b.kind === 'auto');
     if (last) {
       const age = Date.now() - new Date(last.createdAtIso).getTime();
       if (age < 23 * 60 * 60 * 1000) return; // within the last 23h, skip
     }
-    createBackup({ kind: 'auto' });
-    deleteSetting(dbRef, LAST_AUTO_BACKUP_ERROR_KEY);
+    await createBackupAsync({ kind: 'auto' });
+    deleteSetting(db, LAST_AUTO_BACKUP_ERROR_KEY);
   } catch (e) {
     log.warn('Auto-backup failed', e);
     // Kept (not just logged) so the dashboard can say so until one works:
     // a disk that filled up used to stop the daily copy without a word.
     try {
-      setSetting(dbRef, LAST_AUTO_BACKUP_ERROR_KEY, {
+      setSetting(db, LAST_AUTO_BACKUP_ERROR_KEY, {
         at: new Date().toISOString(),
         message: e instanceof Error ? e.message : String(e),
       });
     } catch {
       // the database itself is the problem; the log has it
     }
+  } finally {
+    autoBackupRunning = false;
   }
 }
 
@@ -330,6 +468,24 @@ export function maybeApplyPendingRestoreSync(mainDbPath: string): AppliedRestore
     if (fs.existsSync(infoPath)) info = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
   } catch (e) {
     log.warn('Could not read the pending-restore sidecar', e);
+  }
+
+  // Staged but never confirmed (the owner said no, or the app closed before
+  // the question was answered): throw it away rather than rewind the data.
+  if (!info?.confirmedAt) {
+    log.warn('Discarding a staged restore that was never confirmed', {
+      source: info?.source,
+      label: info?.label,
+      stagedAt: info?.stagedAt,
+    });
+    for (const p of [staged, infoPath]) {
+      try {
+        fs.unlinkSync(p);
+      } catch {
+        // already gone
+      }
+    }
+    return null;
   }
 
   try {

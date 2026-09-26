@@ -32,9 +32,12 @@ export function PrintingRulesSettings() {
     queryFn: () => ipc.printer.getConfig(),
   });
   const [policy, setPolicy] = useState<PrintPolicy>(DEFAULT_POLICY);
+  // Hydrate from the saved rules only: saving a printer on this tab must not
+  // wipe a rule that was changed here but not saved yet.
+  const savedPolicy = cfgQ.data?.policy;
   useEffect(() => {
-    if (cfgQ.data) setPolicy(cfgQ.data.policy);
-  }, [cfgQ.data]);
+    if (savedPolicy) setPolicy(savedPolicy);
+  }, [savedPolicy]);
 
   const saveMut = useMutation({
     mutationFn: (next: PrintPolicy) => ipc.printer.setPolicy(next),
@@ -133,7 +136,11 @@ export function PrintingRulesSettings() {
       </ul>
 
       <div className="mt-4 flex items-center justify-end gap-2 border-t border-stone-200 pt-4 dark:border-stone-700">
-        {dirty && <span className="text-xs text-amber-600 dark:text-amber-400">Unsaved changes</span>}
+        {dirty && (
+          <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+            Your changes are not saved yet
+          </span>
+        )}
         <Button
           variant="primary"
           disabled={saveMut.isPending || !dirty}

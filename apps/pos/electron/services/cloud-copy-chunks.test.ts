@@ -6,6 +6,7 @@ import {
   CHUNK_MIN_BYTES,
   ChunksUnsupportedError,
   chunkBuffer,
+  chunkBufferAsync,
   downloadChunkedCopy,
   sha256Hex,
   uploadChunkedCopy,
@@ -100,6 +101,16 @@ describe('chunkBuffer', () => {
   it('handles empty and tiny inputs', () => {
     expect(chunkBuffer(Buffer.alloc(0))).toEqual([]);
     expect(chunkBuffer(Buffer.from('hi'))).toHaveLength(1);
+  });
+
+  it('cuts exactly the same chunks when scanned a slice at a time (async)', async () => {
+    const buf = randomBytes(700 * 1024);
+    const whole = chunkBuffer(buf);
+    // Slices that end mid-chunk, on odd byte counts, and bigger than the buffer.
+    for (const slice of [1_000, 8_191, 65_537, 10 * 1024 * 1024]) {
+      expect(await chunkBufferAsync(buf, slice)).toEqual(whole);
+    }
+    expect(await chunkBufferAsync(Buffer.alloc(0), 1_000)).toEqual([]);
   });
 });
 

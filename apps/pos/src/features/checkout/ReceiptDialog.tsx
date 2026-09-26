@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
+import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { CheckCircle2, Printer, Hourglass, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -35,6 +36,10 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
   const [reprinting, setReprinting] = useState(false);
   const { toast } = useToast();
   const qc = useQueryClient();
+  const newOrderRef = useRef<HTMLButtonElement>(null);
+  // The change to hand back, big, before anything else (cash only).
+  const tenderedCents = payments[0]?.tenderedCents ?? null;
+  const changeCents = tenderedCents != null ? Math.max(0, tenderedCents - order.totalCents) : 0;
 
   const fbrQ = useQuery({
     queryKey: ['fbr', 'status', order.id],
@@ -69,11 +74,25 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[400px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl bg-white shadow-xl dark:bg-stone-900">
+        <Dialog.Content
+          aria-describedby={undefined}
+          // Enter (or Esc) starts the next order straight away.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            newOrderRef.current?.focus();
+          }}
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[400px] max-w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl bg-white shadow-xl dark:bg-stone-900 dark:text-stone-100"
+        >
           <header className="flex items-center justify-center gap-2 border-b border-stone-200 p-4 dark:border-stone-800">
             <CheckCircle2 className="h-6 w-6 text-emerald-500" />
             <Dialog.Title className="text-lg font-bold">Payment received</Dialog.Title>
           </header>
+          {changeCents > 0 && (
+            <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-center dark:border-emerald-800 dark:bg-emerald-950" role="status">
+              <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Give change</div>
+              <div className="font-mono text-3xl font-bold text-emerald-900 dark:text-emerald-50">{formatCents(changeCents)}</div>
+            </div>
+          )}
 
           <div className="flex-1 overflow-auto p-5 font-mono text-sm">
             <div className="text-center">
@@ -99,12 +118,14 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                 </div>
                 {it.modifiers.map((m) => (
                   <div key={m.id} className="ml-3 text-xs text-stone-500">
-                    + {m.modifierName}
+                    {isLeaveOutChoice(m.modifierName) ? '' : '+ '}
+                    {m.modifierName}
                     {m.priceDeltaCents !== 0 && (
                       <span> ({formatCents(m.priceDeltaCents, { showSymbol: false })})</span>
                     )}
                   </div>
                 ))}
+                {it.notes && <div className="ml-3 text-xs font-semibold text-amber-800 dark:text-amber-300">Note: {it.notes}</div>}
               </div>
             ))}
 
@@ -117,7 +138,7 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
               </div>
               {discounts.map((d) => (
                 <div key={d.id} className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                  <span>Discount ({d.reason ?? d.discountType})</span>
+                  <span>Discount ({d.reason ?? (d.discountType === 'percent' ? `${d.value}%` : formatCents(d.value))})</span>
                   <span>−{formatCents(d.amountCents, { showSymbol: false })}</span>
                 </div>
               ))}
@@ -166,11 +187,12 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
           </div>
 
           <footer className="flex gap-2 border-t border-stone-200 p-4 dark:border-stone-800">
-            <Button variant="secondary" className="flex-1" onClick={onClose}>
+            <Button ref={newOrderRef} variant="primary" size="lg" className="flex-[2]" onClick={onClose}>
               New order
             </Button>
             <Button
-              variant="primary"
+              variant="secondary"
+              size="lg"
               className="flex-1"
               disabled={reprinting}
               onClick={reprint}

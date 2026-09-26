@@ -94,7 +94,7 @@ export function WebsiteSettings() {
           (lastError ? (
             <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-200 dark:bg-red-950 dark:text-red-200 dark:ring-red-800">
               <XCircle className="h-3 w-3" />
-              {authRejected ? 'Secret rejected' : 'Not connecting'}
+              {authRejected ? 'Password not accepted' : 'Not connecting'}
             </span>
           ) : (
             <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:ring-emerald-800">
@@ -108,14 +108,14 @@ export function WebsiteSettings() {
         Orders placed on your website land on the Live Orders board and print a
         kitchen ticket, and customers can follow their delivery live. Publish
         the menu whenever you change items or prices; the website never updates
-        on its own.
+        on its own. The same connection carries the online backup copies.
       </p>
 
       {cfgQ.data?.secretUnreadable && (
         <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
           <AlertTriangle className="mr-1 inline h-3 w-3" />
-          The saved bridge secret was sealed on another PC and cannot be read here. Enter it
-          again and save.
+          The connection password was saved on another computer and cannot be read here. Enter
+          it again and save.
         </p>
       )}
 
@@ -130,24 +130,24 @@ export function WebsiteSettings() {
             placeholder="https://www.cheeseoclock.net"
             className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
           />
-          <span className="mt-1 block text-xs text-stone-400">
+          <span className="mt-1 block text-xs text-stone-500">
             The address customers use, starting with https://www.
           </span>
         </label>
         <label className="block text-sm">
           <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
-            Bridge secret
+            Connection password
           </span>
           <input
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
-            placeholder="Same value as BRIDGE_SECRET on the website host"
+            placeholder="Given to you when the website was set up"
             type="password"
             className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
           />
-          <span className="mt-1 block text-xs text-stone-400">
-            The shared password that lets this POS talk to the website. Only the
-            last 4 characters are shown once saved.
+          <span className="mt-1 block text-xs text-stone-500">
+            Lets this till talk to your website (it is the website&rsquo;s BRIDGE_SECRET).
+            Only the last 4 characters show once saved.
           </span>
         </label>
       </div>
@@ -162,12 +162,12 @@ export function WebsiteSettings() {
         <span className="font-medium text-stone-700 dark:text-stone-200">
           Accept online orders
         </span>
-        <span className="text-xs text-stone-400">(checks for new orders every ~10 seconds)</span>
+        <span className="text-xs text-stone-500">(checks for new orders every few seconds)</span>
       </label>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
-          {saveMut.isPending ? 'Saving…' : 'Save settings'}
+          {saveMut.isPending ? 'Saving…' : 'Save'}
         </Button>
         <Button
           size="sm"
@@ -191,9 +191,9 @@ export function WebsiteSettings() {
       {status && (
         <dl className="mt-4 grid grid-cols-2 gap-x-8 gap-y-1 border-t border-stone-200 pt-3 text-xs dark:border-stone-700 sm:grid-cols-4">
           <div>
-            <dt className="text-stone-500">Status</dt>
+            <dt className="text-stone-500">Online orders</dt>
             <dd className="font-semibold">
-              {status.enabled ? (status.ready ? 'Active' : 'Needs setup') : 'Off'}
+              {status.enabled ? (status.ready ? 'On' : 'Needs setup') : 'Off'}
             </dd>
           </div>
           <div>
@@ -203,11 +203,11 @@ export function WebsiteSettings() {
             </dd>
           </div>
           <div>
-            <dt className="text-stone-500">Orders imported</dt>
+            <dt className="text-stone-500">Orders received</dt>
             <dd className="font-mono">{status.importedTotal}</dd>
           </div>
           <div>
-            <dt className="text-stone-500">Errors</dt>
+            <dt className="text-stone-500">Problems</dt>
             <dd className={status.lastError ? 'text-red-600' : ''}>
               {status.lastError ? (
                 <span className="inline-flex items-center gap-1" title={status.lastError}>
@@ -230,7 +230,8 @@ export function WebsiteSettings() {
           </p>
           {authRejected && (
             <p className="mt-1.5 border-t border-red-200 pt-1.5 dark:border-red-900">
-              The website rejected this secret (401). It must be the{' '}
+              The website did not accept this connection password: type it again above and
+              press Save. For whoever set up the website: it must be the{' '}
               <span className="font-semibold">exact same value</span> as{' '}
               <code className="font-mono">BRIDGE_SECRET</code> in your website host (Vercel →
               Project → Settings → Environment Variables), and the site must be redeployed after

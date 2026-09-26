@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { Building2, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
 
 type Mode = 'noop' | 'sandbox' | 'production';
@@ -12,19 +13,38 @@ const MODES: Array<{ id: Mode; label: string; description: string }> = [
     id: 'noop',
     label: 'Off',
     description:
-      'Nothing is sent to FBR. Receipts print without an IRN or QR code. Use this until you have PRAL credentials.',
+      'Nothing is sent to FBR, and receipts print without an FBR number or QR code. Keep this until you have your FBR token.',
   },
   {
     id: 'sandbox',
     label: 'Test',
-    description: 'Send invoices to a test address to check the setup before going live.',
+    description: 'Sales go to a test server only, to check everything works before going live.',
   },
   {
     id: 'production',
     label: 'Live',
-    description: 'Every invoice goes to FBR through the PRAL gateway. Needs your registered token.',
+    description: 'Every sale is reported to FBR, and each receipt carries its FBR number and QR code.',
   },
 ];
+
+/** Pakistan's provinces and territories, as FBR names them. */
+const PROVINCES = [
+  'Punjab',
+  'Sindh',
+  'Khyber Pakhtunkhwa',
+  'Balochistan',
+  'Islamabad Capital Territory',
+  'Gilgit-Baltistan',
+  'Azad Jammu and Kashmir',
+];
+
+/** The main process names missing fields in its own words; say them the way this form does. */
+const MISSING_LABEL: Record<string, string> = {
+  'Bearer token': 'FBR security token',
+  'Seller NTN/CNIC': 'NTN or CNIC',
+  'Business name': 'Registered business name',
+  'Seller address': 'Business address',
+};
 
 export function FbrSettings() {
   const qc = useQueryClient();
@@ -58,8 +78,15 @@ export function FbrSettings() {
   }, [cfgQ.data]);
 
   const saveMut = useMutation({
-    mutationFn: () =>
-      ipc.fbr.setConfig({
+    mutationFn: async () => {
+      // Going live changes every receipt from now on: ask once, plainly.
+      if (mode === 'production' && cfgQ.data?.mode !== 'production') {
+        const ok = await askConfirm(
+          'Start reporting every sale to FBR?\nFrom now on each sale is sent to FBR and its receipt carries the FBR number and QR code. Only do this once Test mode has worked.',
+        );
+        if (!ok) return false;
+      }
+      await ipc.fbr.setConfig({
         mode,
         ...(endpoint ? { endpoint } : {}),
         ...(bearerToken ? { bearerToken } : {}),
@@ -68,8 +95,11 @@ export function FbrSettings() {
         sellerProvince,
         sellerAddress,
         paused,
-      }),
-    onSuccess: () => {
+      });
+      return true;
+    },
+    onSuccess: (saved) => {
+      if (!saved) return;
       toast({ title: 'FBR settings saved', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['fbr'] });
     },
@@ -113,14 +143,14 @@ export function FbrSettings() {
       </div>
 
       <p className="mb-4 text-sm text-stone-500">
-        Only needed if the shop is required to report sales to FBR. Leave it Off
-        otherwise; nothing else in the POS depends on it.
+        Only needed if the shop has to report its sales to FBR (Digital Invoicing). Leave it Off
+        otherwise; nothing else in the till depends on it.
       </p>
 
       <section className="space-y-4">
         <div>
           <label className="mb-2 block text-xs uppercase tracking-wider text-stone-500">
-            Sending
+            Report sales to FBR
           </label>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             {MODES.map((m) => (
@@ -147,7 +177,7 @@ export function FbrSettings() {
             {mode === 'sandbox' && (
               <div>
                 <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-                  Sandbox endpoint (POST URL)
+                  Test server address
                 </label>
                 <input
                   type="text"
@@ -156,18 +186,21 @@ export function FbrSettings() {
                   placeholder="http://localhost:8787/di_data/v1/di/postinvoicedata"
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
                 />
+                <p className="mt-1 text-xs text-stone-500">
+                  The test address PRAL gave you for your account (FBR only shares it with registered businesses).
+                </p>
               </div>
             )}
             <div>
               <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-                Bearer token (from e.fbr.gov.pk)
+                FBR security token
               </label>
               <div className="flex gap-2">
                 <input
                   type={showToken ? 'text' : 'password'}
                   value={bearerToken}
                   onChange={(e) => setBearerToken(e.target.value)}
-                  placeholder="Long alphanumeric string from your SCO account"
+                  placeholder="Paste the long token from e.fbr.gov.pk"
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
                 />
                 <button
@@ -178,32 +211,47 @@ export function FbrSettings() {
                   {showToken ? 'Hide' : 'Show'}
                 </button>
               </div>
+              <p className="mt-1 text-xs text-stone-500">
+                From your account on e.fbr.gov.pk (Digital Invoicing). Only the last 4 characters
+                show once saved.
+              </p>
             </div>
           </>
         )}
 
         <div className="grid grid-cols-2 gap-3">
           <Field
-            label="Seller NTN / CNIC"
+            label="NTN or CNIC"
             value={sellerNTNCNIC}
             onChange={setSellerNTNCNIC}
             placeholder="0000000-0"
           />
-          <Field
-            label="Province"
-            value={sellerProvince}
-            onChange={setSellerProvince}
-            placeholder="Sindh"
-          />
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Province</label>
+            <select
+              value={sellerProvince}
+              onChange={(e) => setSellerProvince(e.target.value)}
+              className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
+            >
+              {!PROVINCES.includes(sellerProvince) && sellerProvince && (
+                <option value={sellerProvince}>{sellerProvince}</option>
+              )}
+              {PROVINCES.map((pr) => (
+                <option key={pr} value={pr}>
+                  {pr}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <Field
-          label="Business name"
+          label="Registered business name"
           value={sellerBusinessName}
           onChange={setSellerBusinessName}
           placeholder="Cheese O Clock (Pvt) Ltd"
         />
         <Field
-          label="Seller address"
+          label="Business address"
           value={sellerAddress}
           onChange={setSellerAddress}
           placeholder="DHA Phase 6, Karachi"
@@ -216,16 +264,16 @@ export function FbrSettings() {
             onChange={(e) => setPaused(e.target.checked)}
             className="h-4 w-4 rounded border-stone-300 dark:border-stone-700"
           />
-          Pause sending (invoices queue up and go out when you unpause)
+          Pause sending (sales wait on this till and go out when you untick this)
         </label>
 
         {ready && !ready.ok && mode !== 'noop' && (
           <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
             <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
             <div>
-              <div className="font-semibold">Missing fields before live submission:</div>
+              <div className="font-semibold">Fill these in before sales can go to FBR:</div>
               <div className="text-amber-900 dark:text-amber-200">
-                {ready.missing.join(', ')}
+                {ready.missing.map((m) => MISSING_LABEL[m] ?? m).join(', ')}
               </div>
             </div>
           </div>

@@ -1,18 +1,20 @@
 import Link from 'next/link';
 import { BUSINESS } from '@/lib/business';
 import { BrandMark } from './BrandMark';
+import { RecentOrderLink } from './RecentOrderLink';
 
 export function SiteHeader() {
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-night/85 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:h-[4.5rem]">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:h-[4.5rem]">
         <Link href="/" aria-label="Cheese O'Clock home" className="shrink-0">
-          <BrandMark className="!h-10 sm:!h-11" />
+          <BrandMark className="!h-9 sm:!h-10" />
         </Link>
-        <nav className="flex items-center gap-1 text-sm font-semibold">
+        <nav aria-label="Main" className="flex items-center gap-0.5 text-sm font-semibold sm:gap-1">
+          <RecentOrderLink />
           <Link
             href="/menu"
-            className="rounded-lg px-3 py-2 text-cream/80 transition-colors hover:bg-white/5 hover:text-cheese"
+            className="rounded-lg px-2.5 py-2 text-cream/80 transition-colors hover:bg-white/5 hover:text-cheese max-[359px]:hidden sm:px-3"
           >
             Menu
           </Link>
@@ -32,7 +34,7 @@ export function SiteHeader() {
           </a>
           <Link
             href="/menu"
-            className="ml-2 rounded-full bg-cheese px-5 py-2.5 font-display text-base tracking-wide text-night shadow-glow transition-all hover:bg-cheese-hot hover:shadow-glow-lg active:scale-95"
+            className="ml-1 whitespace-nowrap rounded-full bg-cheese px-4 py-2.5 font-display text-base tracking-wide text-night shadow-glow transition-all hover:bg-cheese-hot hover:shadow-glow-lg active:scale-95 sm:ml-2 sm:px-5"
           >
             ORDER NOW
           </Link>
@@ -47,7 +49,7 @@ export function SiteFooter() {
     <footer className="border-t border-white/10 bg-night-soft">
       <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <BrandMark className="!h-12" />
+          <BrandMark className="!h-11" />
           <p className="mt-4 max-w-xs font-cond text-lg font-semibold italic text-cream/85">
             {BUSINESS.tagline}
           </p>

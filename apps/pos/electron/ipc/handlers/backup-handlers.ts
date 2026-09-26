@@ -6,13 +6,16 @@ import { ok } from '@cheeseoclock/shared-types';
 import { isSetupPhase, requireAdmin, requireAdminOrSetupPhase, requireSettingsManage } from '../guards.js';
 import {
   listBackups,
-  createBackup,
+  createBackupAsync,
   exportBackup,
   stageRestoreFromPicker,
   stageRestoreFromPath,
   deleteBackup,
   applyPendingRestoreNowAndRelaunch,
   stopBackupService,
+  hasPendingRestore,
+  confirmPendingRestore,
+  cancelPendingRestore,
 } from '../../services/backup-service.js';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 import { getBackupHealth } from '../../services/backup-health.js';
@@ -29,9 +32,10 @@ export function registerBackupHandlers(ctx: HandlerContext): void {
     return ok(listBackups());
   });
 
-  defineHandler('backup:create', ctx, () => {
+  defineHandler('backup:create', ctx, async () => {
     requireSettingsManage();
-    return ok(createBackup({ kind: 'manual' }));
+    // Written a slice at a time: "Back up now" mid-service no longer freezes the till.
+    return ok(await createBackupAsync({ kind: 'manual' }));
   });
 
   defineHandler('backup:export', ctx, async () => {
@@ -68,8 +72,21 @@ export function registerBackupHandlers(ctx: HandlerContext): void {
     return ok(getBackupHealth(ctx.db));
   });
 
+  // The owner said no to a copy that was already staged: drop it, so it is
+  // not applied the next time the till starts.
+  defineHandler('backup:cancelStagedRestore', ctx, () => {
+    requireAdminOrSetupPhase(ctx.db, 'Cancelling a restore');
+    return ok(cancelPendingRestore());
+  });
+
   defineHandler('backup:applyAndRelaunch', ctx, async (_ctx, payload) => {
     requireAdminOrSetupPhase(ctx.db, 'Restoring a backup');
+    if (!hasPendingRestore()) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: 'Nothing is waiting to be restored. Pick the copy again.',
+      });
+    }
     // Safety copy: the state a restore is about to overwrite goes to the cloud
     // first (kept for 30 days regardless of rotation), so a restore can never
     // be a way to make today's sales disappear. A fresh install has nothing to
@@ -93,6 +110,8 @@ export function registerBackupHandlers(ctx: HandlerContext): void {
         log.warn('Restoring without a cloud safety copy', { reason, linked, ownerAgreed: !!payload?.withoutSafetyCopy });
       }
     }
+    // Only now is the staged copy marked to be applied at the next start.
+    confirmPendingRestore();
     // Quiesce: no more polls, backups or handler calls may touch the database
     // between closing it and the restart.
     markShuttingDown();

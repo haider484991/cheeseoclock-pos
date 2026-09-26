@@ -1,660 +1,510 @@
-import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import {
-  Banknote,
-  Calendar,
-  CheckCircle2,
-  ChevronRight,
-  CircleDot,
-  Phone,
-  Printer,
-  Search,
-  Truck,
-  Undo2,
-  UserRound,
-  X,
-  XCircle,
-} from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Printer, Search, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
+import type {
+  OrderHistoryChannel,
+  OrderHistoryFilter,
+  OrderHistoryRow,
+  OrderHistoryStatusGroup,
+  PaymentMethod,
+} from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type {
-  OrderMode,
-  OrderStatus,
-} from '@cheeseoclock/shared-types';
-import { VoidOrderDialog } from './VoidOrderDialog';
-import { RefundOrderDialog } from './RefundOrderDialog';
-import { MarkDeliveredDialog } from './MarkDeliveredDialog';
-import { CreditCard } from 'lucide-react';
-import { tradingDayStart } from '../reports/dateRange';
+import { OrderDetailDrawer } from './OrderDetailDrawer';
+import { ModeBadge, StatusBadge } from './OrderBadges';
+import {
+  CHANNEL_CHOICES,
+  DATE_PRESETS,
+  HISTORY_PAGE_SIZE,
+  PAYMENT_CHOICES,
+  PAYMENT_LABELS,
+  STATUS_CHOICES,
+  historyRange,
+  isOwed,
+  orderTimeLabel,
+  pageLabel,
+  paymentLabel,
+  shortOrderNumber,
+  type HistoryDatePreset,
+} from './historyFilters';
 
 /**
- * Order History page — every order ever, filterable. Click a row for a
- * detail panel with reprint + cancel/refund actions.
+ * Order History — every order that was actually placed (sent to the kitchen,
+ * paid, handed over, cancelled or refunded). A cart still being rung up at
+ * Checkout never shows here. Search by number, name or phone; filter by day,
+ * status, type and payment; totals cover every page. Click a row for the
+ * order in full with reprint / collect payment / refund / cancel.
  */
 export function OrderHistoryPage() {
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'any'>('any');
-  const [modeFilter, setModeFilter] = useState<OrderMode | 'any'>('any');
-  const [range, setRange] = useState<'today' | '7d' | '30d' | 'all'>('today');
+  const debouncedSearch = useDebounced(search.trim(), 250);
+  const [preset, setPreset] = useState<HistoryDatePreset>('today');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [statusGroup, setStatusGroup] = useState<OrderHistoryStatusGroup>('all');
+  const [channel, setChannel] = useState<OrderHistoryChannel>('all');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | 'all'>('all');
+  const [offset, setOffset] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
+  const { toast } = useToast();
 
-  const { sinceIso, untilIso } = useMemo(() => computeRange(range), [range]);
+  // Any filter change goes back to the first page.
+  const withReset =
+    <T,>(set: (v: T) => void) =>
+    (v: T) => {
+      set(v);
+      setOffset(0);
+    };
+
+  // Recomputed every render; only changes when the trading day does, so the
+  // query key stays put between refreshes.
+  const range = historyRange(preset, new Date(), { from: customFrom, to: customTo });
+  const request: OrderHistoryFilter = {
+    ...range,
+    ...(debouncedSearch ? { search: debouncedSearch } : {}),
+    statusGroup,
+    channel,
+    paymentMethod,
+    limit: HISTORY_PAGE_SIZE,
+    offset,
+  };
 
   const historyQ = useQuery({
-    queryKey: [
-      'orders',
-      'history',
-      { search, statusFilter, modeFilter, sinceIso, untilIso },
-    ],
-    queryFn: () =>
-      ipc.orders.history({
-        search: search.trim() || undefined,
-        status: statusFilter === 'any' ? undefined : statusFilter,
-        mode: modeFilter === 'any' ? undefined : modeFilter,
-        sinceIso,
-        untilIso,
-        limit: 200,
-      }),
-    refetchInterval: 15_000,
+    queryKey: ['orders', 'history', request],
+    queryFn: () => ipc.orders.history(request),
+    // Keep the old page on screen while the next one loads — no flashing.
+    placeholderData: keepPreviousData,
+    // Only ranges that include "now" change on their own. Totals over a whole
+    // year take ~150 ms on the till's database thread: not every 15 s.
+    refetchInterval: preset === 'today' || preset === 'week' ? 15_000 : false,
   });
 
-  const rows = historyQ.data ?? [];
-  const totals = useMemo(() => {
-    let count = 0;
-    let revenueCents = 0;
-    for (const r of rows) {
-      // Revenue is money taken: drafts and unpaid COD orders are not sales yet.
-      if (r.status === 'void' || r.status === 'refunded' || r.paidAt === null) continue;
-      count += 1;
-      revenueCents += r.totalCents;
-    }
-    return { count, revenueCents };
-  }, [rows]);
+  const page = historyQ.data;
+  const rows = page?.rows ?? [];
+  const total = page?.total ?? 0;
+  const summary = page?.summary;
+
+  const reprintMut = useMutation({
+    mutationFn: (orderId: string) => ipc.printer.reprint(orderId),
+    onSuccess: () => toast({ title: 'Receipt sent to printer' }),
+    onError: (e) =>
+      toast({ title: 'Reprint failed', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
+  });
+
+  const filtersActive =
+    search !== '' || statusGroup !== 'all' || channel !== 'all' || paymentMethod !== 'all';
+
+  function clearFilters() {
+    setSearch('');
+    setStatusGroup('all');
+    setChannel('all');
+    setPaymentMethod('all');
+    setOffset(0);
+  }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Order History</h1>
           <p className="mt-1 text-sm text-stone-500">
-            {totals.count} {totals.count === 1 ? 'order' : 'orders'} ·{' '}
-            <span className="font-semibold text-amber-700">
-              {formatCents(totals.revenueCents)}
-            </span>{' '}
-            net revenue
+            Orders sent to the kitchen or paid. A cart still being rung up is not shown.
           </p>
         </div>
-        <div className="flex items-center gap-1 rounded-xl bg-stone-100 p-1 dark:bg-stone-800">
-          <Calendar className="ml-2 h-3.5 w-3.5 text-stone-500" />
-          {(['today', '7d', '30d', 'all'] as const).map((r) => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              className={cn(
-                'rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
-                range === r
-                  ? 'bg-white text-stone-900 shadow-soft-sm dark:bg-stone-700 dark:text-stone-100'
-                  : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300',
-              )}
-            >
-              {r === 'today' ? 'Today' : r === 'all' ? 'All time' : `Last ${r === '7d' ? '7' : '30'}d`}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 rounded-xl bg-stone-100 p-1 dark:bg-stone-800">
+            <Calendar className="ml-2 h-4 w-4 text-stone-500" />
+            {DATE_PRESETS.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => withReset(setPreset)(p.key)}
+                className={cn(
+                  'rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
+                  preset === p.key
+                    ? 'bg-white text-stone-900 shadow-soft-sm dark:bg-stone-700 dark:text-stone-100'
+                    : 'text-stone-500 hover:text-stone-800 dark:hover:text-stone-200',
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {preset === 'custom' && (
+            <div className="flex items-center gap-1.5 text-sm">
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => withReset(setCustomFrom)(e.target.value)}
+                aria-label="From date"
+                className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 dark:border-stone-700 dark:bg-stone-800"
+              />
+              <span className="text-stone-400">to</span>
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => withReset(setCustomTo)(e.target.value)}
+                aria-label="To date"
+                className="rounded-lg border border-stone-200 bg-white px-2 py-1.5 dark:border-stone-700 dark:bg-stone-800"
+              />
+            </div>
+          )}
         </div>
       </header>
 
-      <Card>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[14rem]">
+      <Card className="space-y-3 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[16rem] flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search order #, customer name, or phone"
-              className="w-full rounded-lg border border-stone-200 bg-white pl-9 pr-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
+              onChange={(e) => withReset(setSearch)(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && search) {
+                  e.stopPropagation();
+                  withReset(setSearch)('');
+                }
+                // One match for what was typed: Enter opens it.
+                const only = rows.length === 1 ? rows[0] : undefined;
+                if (e.key === 'Enter' && only && debouncedSearch === search.trim() && !historyQ.isPlaceholderData) {
+                  setOpenId(only.id);
+                }
+              }}
+              autoFocus
+              placeholder="Order #, customer name or phone"
+              aria-label="Search orders"
+              className="h-11 w-full rounded-lg border border-stone-200 bg-white pl-9 pr-9 text-base focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => withReset(setSearch)('')}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-stone-400 hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
           <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as OrderStatus | 'any')}
-            className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800"
+            value={channel}
+            onChange={(e) => withReset(setChannel)(e.target.value as OrderHistoryChannel)}
+            aria-label="Order type"
+            className="h-11 rounded-lg border border-stone-200 bg-white px-3 text-sm dark:border-stone-700 dark:bg-stone-800"
           >
-            <option value="any">Any status</option>
-            <option value="open">Open</option>
-            <option value="sent_to_kitchen">Sent to kitchen</option>
-            <option value="preparing">Preparing</option>
-            <option value="ready">Ready</option>
-            <option value="out_for_delivery">Out for delivery</option>
-            <option value="delivered">Delivered</option>
-            <option value="served">Served</option>
-            <option value="paid">Paid</option>
-            <option value="void">Voided</option>
-            <option value="refunded">Refunded</option>
+            {CHANNEL_CHOICES.map((c) => (
+              <option key={c.key} value={c.key}>
+                {c.label}
+              </option>
+            ))}
           </select>
           <select
-            value={modeFilter}
-            onChange={(e) => setModeFilter(e.target.value as OrderMode | 'any')}
-            className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800"
+            value={paymentMethod}
+            onChange={(e) => withReset(setPaymentMethod)(e.target.value as PaymentMethod | 'all')}
+            aria-label="Payment method"
+            className="h-11 rounded-lg border border-stone-200 bg-white px-3 text-sm dark:border-stone-700 dark:bg-stone-800"
           >
-            <option value="any">Any mode</option>
-            <option value="takeaway">Takeaway</option>
-            <option value="delivery">Delivery</option>
-            <option value="online">Online</option>
-            <option value="foodpanda">Foodpanda</option>
+            {PAYMENT_CHOICES.map((c) => (
+              <option key={c.key} value={c.key}>
+                {c.label}
+              </option>
+            ))}
           </select>
+          {filtersActive && (
+            <Button variant="ghost" size="sm" onClick={clearFilters}>
+              <X className="h-4 w-4" />
+              Clear filters
+            </Button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Status">
+          {STATUS_CHOICES.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => withReset(setStatusGroup)(s.key)}
+              aria-pressed={statusGroup === s.key}
+              className={cn(
+                'rounded-full px-3.5 py-1.5 text-sm font-semibold ring-1 transition-colors',
+                statusGroup === s.key
+                  ? 'bg-stone-900 text-white ring-stone-900 dark:bg-amber-400 dark:text-stone-900 dark:ring-amber-400'
+                  : 'bg-white text-stone-600 ring-stone-200 hover:ring-stone-300 dark:bg-stone-800 dark:text-stone-300 dark:ring-stone-700',
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
         </div>
       </Card>
 
-      <Card className="overflow-hidden">
-        {historyQ.isLoading ? (
-          <div className="py-10 text-center text-sm text-stone-400">Loading…</div>
+      {summary && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <SummaryTile label="Orders" value={summary.orderCount.toLocaleString('en-PK')} />
+          <SummaryTile
+            label="Sales (paid)"
+            value={formatCents(summary.salesCents)}
+            sub={`${summary.paidCount} paid`}
+            tone="amber"
+          />
+          <SummaryTile
+            label="Not paid yet"
+            value={formatCents(summary.notPaidCents)}
+            sub={`${summary.notPaidCount} ${summary.notPaidCount === 1 ? 'order' : 'orders'}`}
+            tone={summary.notPaidCount > 0 ? 'warn' : undefined}
+            onClick={() => withReset(setStatusGroup)('not_paid')}
+          />
+          <SummaryTile
+            label="Cancelled"
+            value={String(summary.cancelledCount)}
+            sub={summary.cancelledCount > 0 ? formatCents(summary.cancelledCents) : undefined}
+            onClick={() => withReset(setStatusGroup)('cancelled')}
+          />
+          <SummaryTile
+            label="Refunded"
+            value={formatCents(summary.refundedCents)}
+            sub={`${summary.refundCount} ${summary.refundCount === 1 ? 'order' : 'orders'}`}
+            onClick={() => withReset(setStatusGroup)('refunded')}
+          />
+        </div>
+      )}
+      {summary && summary.byMethod.length > 0 && (
+        <p className="-mt-1 text-sm text-stone-500">
+          Money in:{' '}
+          {summary.byMethod.map((m, i) => (
+            <span key={m.method}>
+              {i > 0 && ' · '}
+              {PAYMENT_LABELS[m.method]}{' '}
+              <span className="font-semibold text-stone-700 dark:text-stone-200">{formatCents(m.netCents)}</span>
+            </span>
+          ))}
+        </p>
+      )}
+
+      <Card className="overflow-hidden p-0">
+        {historyQ.isError ? (
+          <div className="py-12 text-center text-sm text-red-600">
+            Could not load orders. {historyQ.error instanceof Error ? historyQ.error.message : ''}
+          </div>
+        ) : historyQ.isLoading ? (
+          <div className="py-12 text-center text-sm text-stone-400">Loading…</div>
         ) : rows.length === 0 ? (
-          <div className="py-10 text-center text-sm text-stone-400">
-            No orders match these filters.
+          <div className="py-12 text-center text-sm text-stone-500">
+            No orders match.{' '}
+            {(filtersActive || preset !== 'all') && (
+              <span>
+                Try{' '}
+                {preset !== 'all' && (
+                  <button type="button" className="font-semibold text-amber-700 underline" onClick={() => withReset(setPreset)('all')}>
+                    all dates
+                  </button>
+                )}
+                {preset !== 'all' && filtersActive && ' or '}
+                {filtersActive && (
+                  <button type="button" className="font-semibold text-amber-700 underline" onClick={clearFilters}>
+                    clearing the filters
+                  </button>
+                )}
+                .
+              </span>
+            )}
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className={cn('overflow-x-auto transition-opacity', historyQ.isPlaceholderData && 'opacity-60')}>
             <table className="w-full text-sm">
-              <thead className="border-b border-stone-200 bg-stone-50/50 text-left text-xs uppercase tracking-wider text-stone-500 dark:border-stone-700 dark:bg-stone-800">
+              <thead className="border-b border-stone-200 bg-stone-50 text-left text-xs uppercase tracking-wider text-stone-500 dark:border-stone-700 dark:bg-stone-800">
                 <tr>
-                  <th className="px-4 py-2 font-semibold">Order #</th>
-                  <th className="px-4 py-2 font-semibold">Mode</th>
-                  <th className="px-4 py-2 font-semibold">Customer</th>
-                  <th className="px-4 py-2 font-semibold">Items</th>
-                  <th className="px-4 py-2 text-right font-semibold">Total</th>
-                  <th className="px-4 py-2 font-semibold">Status</th>
-                  <th className="px-4 py-2 font-semibold">When</th>
-                  <th className="px-4 py-2"></th>
+                  <th className="px-4 py-2.5 font-semibold">Order</th>
+                  <th className="px-3 py-2.5 font-semibold">Time</th>
+                  <th className="px-3 py-2.5 font-semibold">Type</th>
+                  <th className="px-3 py-2.5 font-semibold">Customer</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Items</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Total</th>
+                  <th className="px-3 py-2.5 font-semibold">Payment</th>
+                  <th className="px-3 py-2.5 font-semibold">Status</th>
+                  <th className="px-3 py-2.5" aria-label="Reprint" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-stone-100 dark:divide-stone-700">
+              <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
                 {rows.map((o) => (
-                  <tr
+                  <HistoryRow
                     key={o.id}
-                    onClick={() => setOpenId(o.id)}
-                    className="cursor-pointer transition-colors hover:bg-amber-50/60 dark:hover:bg-amber-950/20"
-                  >
-                    <td className="px-4 py-2 font-mono text-xs font-semibold text-stone-700 dark:text-stone-200">
-                      #{o.orderNumber.split('-').pop()}
-                    </td>
-                    <td className="px-4 py-2">
-                      <ModeBadgeRow mode={o.mode} />
-                    </td>
-                    <td className="px-4 py-2">
-                      {o.customerName ? (
-                        <div className="leading-tight">
-                          <div className="font-medium">{o.customerName}</div>
-                          {o.customerPhone && (
-                            <div className="font-mono text-[10px] text-stone-500">
-                              {o.customerPhone}
-                            </div>
-                          )}
-                        </div>
-                      ) : o.tableLabel ? (
-                        <span className="text-stone-600 dark:text-stone-300">
-                          Table {o.tableLabel}
-                        </span>
-                      ) : (
-                        <span className="text-stone-400">Walk-in</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-stone-500">{o.itemCount}</td>
-                    <td className="px-4 py-2 text-right font-mono font-semibold">
-                      {formatCents(o.totalCents)}
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusBadgeRow status={o.status} paidAt={o.paidAt} />
-                    </td>
-                    <td className="px-4 py-2 text-stone-500">
-                      {relativeTime(o.createdAt)}
-                    </td>
-                    <td className="px-4 py-2 text-right text-stone-400">
-                      <ChevronRight className="ml-auto h-4 w-4" />
-                    </td>
-                  </tr>
+                    o={o}
+                    onOpen={() => setOpenId(o.id)}
+                    onReprint={() => reprintMut.mutate(o.id)}
+                    reprinting={reprintMut.isPending && reprintMut.variables === o.id}
+                  />
                 ))}
               </tbody>
             </table>
           </div>
         )}
+        {total > 0 && (
+          <footer className="flex items-center justify-between gap-3 border-t border-stone-200 px-4 py-2.5 text-sm dark:border-stone-700">
+            <span className="text-stone-500">{pageLabel(offset, rows.length, total)}</span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - HISTORY_PAGE_SIZE))}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Newer
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={offset + rows.length >= total}
+                onClick={() => setOffset(offset + HISTORY_PAGE_SIZE)}
+              >
+                Older
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </footer>
+        )}
       </Card>
 
-      {openId && (
-        <OrderDetailDrawer orderId={openId} onClose={() => setOpenId(null)} />
-      )}
+      {openId && <OrderDetailDrawer orderId={openId} onClose={() => setOpenId(null)} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Right-side drawer with order detail
-// ---------------------------------------------------------------------------
 
-interface DrawerProps {
-  orderId: string;
-  onClose: () => void;
+function HistoryRow({
+  o,
+  onOpen,
+  onReprint,
+  reprinting,
+}: {
+  o: OrderHistoryRow;
+  onOpen: () => void;
+  onReprint: () => void;
+  reprinting: boolean;
+}) {
+  const owed = isOwed(o);
+  const cancelled = o.status === 'void' || o.status === 'refunded';
+  return (
+    <tr
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      tabIndex={0}
+      className={cn(
+        'cursor-pointer transition-colors hover:bg-amber-50/70 focus:bg-amber-50 focus:outline-none dark:hover:bg-amber-950/20 dark:focus:bg-amber-950/30',
+        cancelled && 'text-stone-400',
+      )}
+    >
+      <td className="px-4 py-2.5">
+        <div className="font-mono text-base font-bold text-stone-800 dark:text-stone-100">
+          {shortOrderNumber(o.orderNumber)}
+        </div>
+        {o.source === 'web' && (
+          <div className="text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">Website</div>
+        )}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2.5 text-stone-600 dark:text-stone-300">{orderTimeLabel(o.createdAt)}</td>
+      <td className="px-3 py-2.5">
+        <ModeBadge mode={o.mode} />
+      </td>
+      <td className="px-3 py-2.5">
+        {o.customerName || o.customerPhone ? (
+          <div className="leading-tight">
+            {o.customerName && <div className="font-medium">{o.customerName}</div>}
+            {o.customerPhone && <div className="font-mono text-xs text-stone-500">{o.customerPhone}</div>}
+            {o.riderName && <div className="text-xs text-violet-700 dark:text-violet-300">Rider: {o.riderName}</div>}
+          </div>
+        ) : o.tableLabel ? (
+          <span className="text-stone-600 dark:text-stone-300">Table {o.tableLabel}</span>
+        ) : (
+          <span className="text-stone-400">Walk-in</span>
+        )}
+      </td>
+      <td className="px-3 py-2.5 text-right text-stone-600 dark:text-stone-300">{o.itemCount}</td>
+      <td className="whitespace-nowrap px-3 py-2.5 text-right">
+        <div className={cn('font-mono font-semibold', cancelled && 'line-through')}>{formatCents(o.totalCents)}</div>
+        {o.refundedCents > 0 && (
+          <div className="font-mono text-xs text-orange-700 dark:text-orange-300">− {formatCents(o.refundedCents)} back</div>
+        )}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2.5">
+        <span className={cn(owed ? 'font-bold text-amber-700 dark:text-amber-300' : 'text-stone-600 dark:text-stone-300')}>
+          {paymentLabel(o)}
+        </span>
+      </td>
+      <td className="px-3 py-2.5">
+        <StatusBadge status={o.status} />
+      </td>
+      <td className="px-3 py-2.5 text-right">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onReprint();
+          }}
+          disabled={reprinting}
+          aria-label="Reprint receipt"
+          title="Reprint receipt"
+          className="rounded-lg p-2 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700 disabled:opacity-40 dark:hover:bg-stone-700 dark:hover:text-stone-200"
+        >
+          <Printer className="h-4 w-4" />
+        </button>
+      </td>
+    </tr>
+  );
 }
 
-function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
-  const qc = useQueryClient();
-  const { toast } = useToast();
-  const [voidOpen, setVoidOpen] = useState(false);
-  const [refundOpen, setRefundOpen] = useState(false);
-  const [collectOpen, setCollectOpen] = useState(false);
-
-  const snapQ = useQuery({
-    queryKey: ['orders', 'detail', orderId],
-    queryFn: () => ipc.orders.get(orderId),
-  });
-  const snap = snapQ.data;
-
-  const reprintMut = useMutation({
-    mutationFn: () => ipc.printer.reprint(orderId),
-    onSuccess: () => toast({ title: 'Receipt sent to printer' }),
-    onError: (e) =>
-      toast({
-        title: 'Reprint failed',
-        description: e instanceof Error ? e.message : 'Unknown error',
-        variant: 'error',
-      }),
-  });
-
-  return (
+function SummaryTile({
+  label,
+  value,
+  sub,
+  tone,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  sub?: string | undefined;
+  tone?: 'amber' | 'warn' | undefined;
+  onClick?: () => void;
+}) {
+  const body = (
     <>
+      <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">{label}</div>
       <div
-        className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      <aside className="fixed right-0 top-0 z-50 flex h-full w-[440px] flex-col bg-white shadow-soft-lg dark:bg-stone-900">
-        <header className="flex items-start justify-between border-b border-stone-200 px-5 py-4 dark:border-stone-700">
-          <div>
-            <h3 className="text-lg font-bold">
-              {snap ? `#${snap.order.orderNumber.split('-').pop()}` : '…'}
-            </h3>
-            {snap && (
-              <p className="text-xs text-stone-500">
-                {new Date(snap.order.createdAt).toLocaleString()} · by{' '}
-                {snap.cashierName}
-              </p>
-            )}
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded p-1 text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
-
-        {snapQ.isLoading || !snap ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-stone-400">
-            Loading…
-          </div>
-        ) : (
-          <>
-            <div className="flex-1 overflow-y-auto p-5">
-              <div className="mb-3 flex items-center gap-2">
-                <ModeBadgeRow mode={snap.order.mode} />
-                <StatusBadgeRow
-                  status={snap.order.status}
-                  paidAt={snap.order.paidAt}
-                />
-              </div>
-
-              {(snap.customerName || snap.customerPhone || snap.deliveryAddress) && (
-                <div className="mb-4 rounded-xl bg-stone-50 p-3 text-sm dark:bg-stone-800/60">
-                  {snap.customerName && (
-                    <div className="flex items-center gap-1.5 font-medium">
-                      <UserRound className="h-3.5 w-3.5 text-stone-400" />
-                      {snap.customerName}
-                    </div>
-                  )}
-                  {snap.customerPhone && (
-                    <a
-                      href={`tel:${snap.customerPhone}`}
-                      className="mt-1 flex items-center gap-1.5 text-xs text-stone-600 hover:text-amber-600 dark:text-stone-400"
-                    >
-                      <Phone className="h-3 w-3" />
-                      {snap.customerPhone}
-                    </a>
-                  )}
-                  {snap.deliveryAddress && (
-                    <div className="mt-1 flex items-start gap-1.5 text-xs text-stone-600 dark:text-stone-400">
-                      <Truck className="mt-0.5 h-3 w-3" />
-                      {snap.deliveryAddress}
-                    </div>
-                  )}
-                  {snap.rider && (
-                    <div className="mt-2 flex items-center gap-1.5 rounded-md bg-violet-100 px-2 py-1 text-xs text-violet-800 dark:bg-violet-950 dark:text-violet-200">
-                      Rider: <strong>{snap.rider.name}</strong> · {snap.rider.phone}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">
-                Items
-              </h4>
-              <ul className="space-y-1.5">
-                {snap.items.map((i) => (
-                  <li
-                    key={i.id}
-                    className="flex items-start justify-between gap-2 text-sm"
-                  >
-                    <div>
-                      <div>
-                        <span className="font-semibold">{i.quantity}×</span>{' '}
-                        {i.menuItemName}
-                      </div>
-                      {i.modifiers.length > 0 && (
-                        <ul className="ml-4 text-[11px] text-stone-500">
-                          {i.modifiers.map((m) => (
-                            <li key={m.id} className={/^no\s/i.test(m.modifierName) ? 'font-semibold text-red-700 dark:text-red-300' : undefined}>
-                              {/^no\s/i.test(m.modifierName) ? m.modifierName : `+ ${m.modifierName}`}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {i.notes && (
-                        <div className="ml-4 text-[11px] font-semibold text-amber-800 dark:text-amber-300">
-                          Note: {i.notes}
-                        </div>
-                      )}
-                    </div>
-                    <div className="font-mono text-sm">
-                      {formatCents(i.lineTotalCents)}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-
-              <dl className="mt-4 space-y-1 border-t border-stone-200 pt-3 text-sm dark:border-stone-700">
-                <Row k="Subtotal" v={formatCents(snap.order.subtotalCents)} />
-                {snap.order.discountCents > 0 && (
-                  <Row
-                    k="Discount"
-                    v={`− ${formatCents(snap.order.discountCents)}`}
-                    tone="emerald"
-                  />
-                )}
-                <Row k="Tax" v={formatCents(snap.order.taxCents)} />
-                <Row
-                  k="Total"
-                  v={formatCents(snap.order.totalCents)}
-                  emphasize
-                />
-              </dl>
-
-              {snap.payments.length > 0 && (
-                <>
-                  <h4 className="mt-4 mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">
-                    Payments
-                  </h4>
-                  <ul className="space-y-1 text-sm">
-                    {snap.payments.map((p) => (
-                      <li
-                        key={p.id}
-                        className="flex items-center justify-between rounded-md bg-stone-50 px-2 py-1.5 dark:bg-stone-800"
-                      >
-                        <span className="flex items-center gap-1.5">
-                          <Banknote className="h-3.5 w-3.5 text-emerald-600" />
-                          <span className="font-semibold uppercase">{p.method}</span>
-                          {p.referenceNo && (
-                            <span className="font-mono text-xs text-stone-500">
-                              ({p.referenceNo})
-                            </span>
-                          )}
-                        </span>
-                        <span className="font-mono">{formatCents(p.amountCents)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-
-              {snap.order.voidReason && (
-                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
-                  <strong>Voided:</strong> {snap.order.voidReason}
-                </div>
-              )}
-            </div>
-
-            {/* Footer: primary action on top (full-width), secondary row of
-                ghost buttons below. Avoids the 3-flex-1 wrap that crammed
-                "Collect payment" onto two lines. */}
-            <footer className="space-y-2 border-t border-stone-200 px-4 py-3 dark:border-stone-700">
-              {/* Primary: the most likely next action for this status. */}
-              {snap.order.paidAt === null &&
-                (snap.order.status === 'served' ||
-                  snap.order.status === 'delivered' ||
-                  snap.order.status === 'ready') && (
-                  <Button
-                    variant="success"
-                    size="md"
-                    className="w-full whitespace-nowrap"
-                    onClick={() => setCollectOpen(true)}
-                  >
-                    <CreditCard className="h-4 w-4" />
-                    Collect payment
-                  </Button>
-                )}
-              {snap.order.paidAt !== null &&
-                snap.order.status !== 'refunded' &&
-                snap.order.status !== 'void' && (
-                <Button
-                  variant="danger"
-                  size="md"
-                  className="w-full whitespace-nowrap"
-                  onClick={() => setRefundOpen(true)}
-                  title="Issue a full refund"
-                >
-                  <Undo2 className="h-4 w-4" />
-                  Refund
-                </Button>
-              )}
-              {/* Secondary row: lower-impact actions, always present. */}
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="md"
-                  className="flex-1 whitespace-nowrap"
-                  onClick={() => reprintMut.mutate()}
-                  disabled={reprintMut.isPending}
-                >
-                  <Printer className="h-4 w-4" />
-                  {reprintMut.isPending ? 'Sending…' : 'Reprint'}
-                </Button>
-                {/* Not for an 'open' draft: that is the order still being rung up at
-                    Checkout (discard it there). Cancelling it here left Checkout
-                    holding a void order it could neither add to nor discard. */}
-                {snap.order.status !== 'void' &&
-                  snap.order.status !== 'refunded' &&
-                  snap.order.status !== 'open' &&
-                  snap.order.paidAt === null && (
-                    <Button
-                      variant="ghost"
-                      size="md"
-                      className="flex-1 whitespace-nowrap text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-                      onClick={() => setVoidOpen(true)}
-                    >
-                      <XCircle className="h-4 w-4" />
-                      Cancel
-                    </Button>
-                  )}
-              </div>
-            </footer>
-          </>
+        className={cn(
+          'mt-0.5 font-mono text-xl font-bold',
+          tone === 'amber' && 'text-amber-700 dark:text-amber-300',
+          tone === 'warn' && 'text-orange-700 dark:text-orange-300',
         )}
-      </aside>
-
-      {voidOpen && snap && (
-        <VoidOrderDialog
-          snap={snap}
-          onClose={() => setVoidOpen(false)}
-          onDone={() => {
-            setVoidOpen(false);
-            void qc.invalidateQueries({ queryKey: ['orders'] });
-          }}
-        />
-      )}
-      {refundOpen && snap && (
-        <RefundOrderDialog
-          snap={snap}
-          onClose={() => setRefundOpen(false)}
-          onDone={() => {
-            setRefundOpen(false);
-            void qc.invalidateQueries({ queryKey: ['orders'] });
-          }}
-        />
-      )}
-      {collectOpen && snap && (
-        <MarkDeliveredDialog
-          snap={snap}
-          onClose={() => setCollectOpen(false)}
-          onDone={() => {
-            setCollectOpen(false);
-            void qc.invalidateQueries({ queryKey: ['orders'] });
-          }}
-        />
-      )}
+      >
+        {value}
+      </div>
+      {sub && <div className="text-xs text-stone-500">{sub}</div>}
     </>
   );
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-function Row({
-  k,
-  v,
-  tone,
-  emphasize,
-}: {
-  k: string;
-  v: string;
-  tone?: 'emerald';
-  emphasize?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        'flex justify-between',
-        emphasize && 'rounded-md bg-amber-50 px-2 py-1.5 text-base font-bold dark:bg-amber-950/60',
-        tone === 'emerald' && 'text-emerald-700 dark:text-emerald-300',
-      )}
-    >
-      <dt className="text-stone-600 dark:text-stone-300">{k}</dt>
-      <dd className="font-mono">{v}</dd>
-    </div>
+  const cls =
+    'rounded-xl bg-white p-3 text-left ring-1 ring-stone-200/70 dark:bg-stone-900 dark:ring-stone-800';
+  return onClick ? (
+    <button type="button" onClick={onClick} className={cn(cls, 'transition-colors hover:ring-amber-300')} title={`Show ${label.toLowerCase()} orders`}>
+      {body}
+    </button>
+  ) : (
+    <div className={cls}>{body}</div>
   );
 }
 
-function ModeBadgeRow({ mode }: { mode: OrderMode }) {
-  const tones: Record<OrderMode, string> = {
-    dine_in: 'bg-sky-100 text-sky-800',
-    takeaway: 'bg-emerald-100 text-emerald-800',
-    delivery: 'bg-violet-100 text-violet-800',
-    online: 'bg-amber-100 text-amber-800',
-    foodpanda: 'bg-pink-100 text-pink-800',
-  };
-  const labels: Record<OrderMode, string> = {
-    dine_in: 'Dine-in',
-    takeaway: 'Takeaway',
-    delivery: 'Delivery',
-    online: 'Online',
-    foodpanda: 'Foodpanda',
-  };
-  return (
-    <span
-      className={cn(
-        'inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase',
-        tones[mode],
-      )}
-    >
-      {labels[mode]}
-    </span>
-  );
-}
-
-function StatusBadgeRow({
-  status,
-  paidAt,
-}: {
-  status: OrderStatus;
-  paidAt: string | null;
-}) {
-  const tone: Record<OrderStatus, string> = {
-    open: 'bg-sky-100 text-sky-800',
-    sent_to_kitchen: 'bg-sky-100 text-sky-800',
-    preparing: 'bg-amber-100 text-amber-800',
-    ready: 'bg-emerald-100 text-emerald-800',
-    out_for_delivery: 'bg-violet-100 text-violet-800',
-    delivered: 'bg-stone-200 text-stone-700',
-    served: 'bg-stone-200 text-stone-700',
-    paid: 'bg-emerald-100 text-emerald-800',
-    void: 'bg-red-100 text-red-700',
-    refunded: 'bg-orange-100 text-orange-800',
-  };
-  const label: Record<OrderStatus, string> = {
-    open: 'Open',
-    sent_to_kitchen: 'Sent to kitchen',
-    preparing: 'Preparing',
-    ready: 'Ready',
-    out_for_delivery: 'Out for delivery',
-    delivered: 'Delivered',
-    served: 'Served',
-    paid: 'Paid',
-    void: 'Void',
-    refunded: 'Refunded',
-  };
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold',
-        tone[status],
-      )}
-    >
-      {status === 'void' ? (
-        <XCircle className="h-2.5 w-2.5" />
-      ) : status === 'paid' || status === 'served' ? (
-        <CheckCircle2 className="h-2.5 w-2.5" />
-      ) : (
-        <CircleDot className="h-2.5 w-2.5" />
-      )}
-      {label[status]}
-      {paidAt && status !== 'paid' && status !== 'refunded' && (
-        <span className="ml-1 text-emerald-700">(paid)</span>
-      )}
-    </span>
-  );
-}
-
-function relativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(diffMs / 60_000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
-function computeRange(range: 'today' | '7d' | '30d' | 'all'): {
-  sinceIso?: string;
-  untilIso?: string;
-} {
-  if (range === 'all') return {};
-  const now = new Date();
-  if (range === 'today') {
-    // The trading day (05:00 → 05:00): after midnight the evening's orders are still "today".
-    return { sinceIso: tradingDayStart(now).toISOString() };
-  }
-  const days = range === '7d' ? 7 : 30;
-  const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-  return { sinceIso: start.toISOString() };
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
 }

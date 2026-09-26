@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import * as shared from '@cheeseoclock/shared-types';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 import { DELIVERY_ZONES, deliveryChargeItemFor, findZone, isDeliveryChargeItem } from './delivery-zones';
 
 describe('delivery zones', () => {
+  it('is the one list the till uses, not a copy', () => {
+    expect(DELIVERY_ZONES).toBe(shared.DELIVERY_ZONES);
+    expect(findZone).toBe(shared.findZone);
+  });
+
+  it('names every zone once, so the till can read an area back', () => {
+    expect(new Set(DELIVERY_ZONES.map((z) => z.name.toLowerCase())).size).toBe(DELIVERY_ZONES.length);
+  });
+
   it('covers DHA and Clifton only, at the rate card’s two fees', () => {
     expect(new Set(DELIVERY_ZONES.map((z) => z.group))).toEqual(new Set(['DHA', 'Clifton']));
     expect(new Set(DELIVERY_ZONES.map((z) => z.feeCents))).toEqual(new Set([20_000, 25_000]));

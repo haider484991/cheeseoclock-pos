@@ -1,7 +1,7 @@
 import log from 'electron-log/main';
 import type { AppDatabase } from '../db/connection.js';
 import {
-  verifyAuditChain,
+  AuditChainVerifier,
   type AuditChainReport,
   type AuditChainRow,
 } from '../db/audit-chain.js';
@@ -32,58 +32,102 @@ interface DbRow {
   row_hash: string | null;
 }
 
-function* rows(db: AppDatabase): Generator<AuditChainRow> {
-  const stmt = db.prepare(
-    `SELECT rowid, id, entity_type, entity_id, action, actor_user_id, before_json, after_json,
-            ip, created_at, prev_hash, row_hash
-       FROM audit_log ORDER BY rowid`,
-  );
-  for (const r of stmt.iterate() as IterableIterator<DbRow>) {
-    yield {
-      rowid: r.rowid,
-      id: r.id,
-      entityType: r.entity_type,
-      entityId: r.entity_id,
-      action: r.action,
-      actorUserId: r.actor_user_id,
-      beforeJson: r.before_json,
-      afterJson: r.after_json,
-      ip: r.ip,
-      createdAt: r.created_at,
-      prevHash: r.prev_hash,
-      rowHash: r.row_hash,
-    };
-  }
+/**
+ * Rows hashed per slice of the walk. Every IPC call waits behind the main
+ * process, and hashing runs at roughly 15 µs a row, so a slice this size
+ * holds the till up for tens of milliseconds at most. The walk used to be one
+ * synchronous pass: a year of trade (~500k rows) froze the till for 8+ s,
+ * three seconds after it opened and again each time Settings showed the
+ * audit card.
+ */
+const PAGE_ROWS = 1_000;
+/** After boot: out of the way of the first sale and of the day's cloud copy. */
+const BOOT_VERIFY_DELAY_MS = 30_000;
+
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+function toChainRow(r: DbRow): AuditChainRow {
+  return {
+    rowid: r.rowid,
+    id: r.id,
+    entityType: r.entity_type,
+    entityId: r.entity_id,
+    action: r.action,
+    actorUserId: r.actor_user_id,
+    beforeJson: r.before_json,
+    afterJson: r.after_json,
+    ip: r.ip,
+    createdAt: r.created_at,
+    prevHash: r.prev_hash,
+    rowHash: r.row_hash,
+  };
 }
 
 class AuditChainService {
   private last: AuditChainStatus | null = null;
+  private running: Promise<AuditChainStatus> | null = null;
 
   status(): AuditChainStatus | null {
     return this.last;
   }
 
-  verify(db: AppDatabase): AuditChainStatus {
+  /** Walk the whole trail. Concurrent callers share the walk already running. */
+  verify(db: AppDatabase): Promise<AuditChainStatus> {
+    if (!this.running) {
+      this.running = this.walk(db).finally(() => {
+        this.running = null;
+      });
+    }
+    return this.running;
+  }
+
+  private async walk(db: AppDatabase): Promise<AuditChainStatus> {
     const anchorSetting = getSettingRaw(db, 'audit.chainAnchor') as
       | { prevHash?: string | null }
       | null;
-    const report = verifyAuditChain(rows(db), {
-      anchorPrevHash: anchorSetting?.prevHash ?? null,
-    });
-
     const lastCloud = getSettingRaw(db, 'webBridge.lastCloudBackupMeta') as
       | { uploadedAt?: string; auditHeadHash?: string | null }
       | null;
+    const cloudHead =
+      lastCloud?.uploadedAt && lastCloud.auditHeadHash ? lastCloud.auditHeadHash : null;
+
+    const verifier = new AuditChainVerifier({ anchorPrevHash: anchorSetting?.prevHash ?? null });
+    // Keyset pages in rowid order. Rows appended while the walk runs (sales
+    // go on) are picked up by the later pages.
+    const page = db.prepare(
+      `SELECT rowid, id, entity_type, entity_id, action, actor_user_id, before_json, after_json,
+              ip, created_at, prev_hash, row_hash
+         FROM audit_log WHERE rowid > ? ORDER BY rowid LIMIT ${PAGE_ROWS}`,
+    );
+    let after = 0;
+    let intact = true;
+    // The cloud head is looked for during the same walk: a separate
+    // "WHERE row_hash = ?" has no index and read the whole table again.
+    let cloudHeadSeen = false;
+    for (;;) {
+      const rows = page.all(after) as DbRow[];
+      for (const r of rows) {
+        if (cloudHead !== null && r.row_hash === cloudHead) cloudHeadSeen = true;
+        if (!verifier.push(toChainRow(r))) {
+          intact = false;
+          break;
+        }
+      }
+      if (!intact || rows.length < PAGE_ROWS) break;
+      after = rows[rows.length - 1]!.rowid;
+      await yieldToEventLoop();
+    }
+    const report = verifier.report();
+
     let anchor: AuditChainStatus['anchor'] = null;
-    if (lastCloud?.uploadedAt && lastCloud.auditHeadHash) {
-      const hit = db
-        .prepare(`SELECT 1 AS x FROM audit_log WHERE row_hash = ? LIMIT 1`)
-        .get(lastCloud.auditHeadHash);
-      anchor = {
-        uploadedAt: lastCloud.uploadedAt,
-        headHash: lastCloud.auditHeadHash,
-        present: hit !== undefined,
-      };
+    if (lastCloud?.uploadedAt && cloudHead !== null) {
+      // A walk that stopped at a break did not see the rows after it.
+      const present =
+        cloudHeadSeen ||
+        (!intact &&
+          db.prepare(`SELECT 1 AS x FROM audit_log WHERE row_hash = ? LIMIT 1`).get(cloudHead) !==
+            undefined);
+      anchor = { uploadedAt: lastCloud.uploadedAt, headHash: cloudHead, present };
     }
 
     this.last = { ...report, verifiedAt: new Date().toISOString(), anchor };
@@ -99,15 +143,13 @@ class AuditChainService {
     return this.last;
   }
 
-  /** Verify shortly after boot without holding up the window. */
+  /** Verify after boot without holding up the window or the first sales. */
   verifyInBackground(db: AppDatabase): void {
     setTimeout(() => {
-      try {
-        this.verify(db);
-      } catch (e) {
+      this.verify(db).catch((e: unknown) => {
         log.warn('Audit trail verification failed to run', e);
-      }
-    }, 3_000);
+      });
+    }, BOOT_VERIFY_DELAY_MS);
   }
 }
 

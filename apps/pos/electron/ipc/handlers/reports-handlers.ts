@@ -17,6 +17,28 @@ import {
   getCogs,
   getCashSummary,
 } from '../../services/reports-service.js';
+import { getBusinessReport } from '../../services/business-report.js';
+
+/** Longest period one report may cover — two years and a bit (leap day, comparison). */
+const MAX_REPORT_DAYS = 800;
+
+/** A usable [since, until) pair of ISO instants, or a precondition error the page can show. */
+function checkRange(sinceIso: unknown, untilIso: unknown, what: string): void {
+  const since = typeof sinceIso === 'string' ? Date.parse(sinceIso) : NaN;
+  const until = typeof untilIso === 'string' ? Date.parse(untilIso) : NaN;
+  if (!Number.isFinite(since) || !Number.isFinite(until)) {
+    throw new IpcGuardError({ code: 'validation_failed', message: `The ${what} dates are not valid` });
+  }
+  if (until <= since) {
+    throw new IpcGuardError({ code: 'validation_failed', message: `The ${what} must end after it starts` });
+  }
+  if (until - since > MAX_REPORT_DAYS * 86_400_000) {
+    throw new IpcGuardError({
+      code: 'validation_failed',
+      message: `Pick a shorter ${what} — reports cover up to two years at a time`,
+    });
+  }
+}
 
 function requireReportView(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -71,6 +93,19 @@ export function registerReportsHandlers(ctx: HandlerContext): void {
   defineHandler('reports:cogs', ctx, (_ctx, payload) => {
     requireReportView();
     return ok(getCogs(ctx.db, payload));
+  });
+  defineHandler('reports:business', ctx, (_ctx, payload) => {
+    requireReportView();
+    checkRange(payload?.sinceIso, payload?.untilIso, 'report period');
+    const withCompare = payload.compareSinceIso !== undefined || payload.compareUntilIso !== undefined;
+    if (withCompare) checkRange(payload.compareSinceIso, payload.compareUntilIso, 'comparison period');
+    return ok(
+      getBusinessReport(ctx.db, {
+        sinceIso: payload.sinceIso,
+        untilIso: payload.untilIso,
+        ...(withCompare ? { compareSinceIso: payload.compareSinceIso, compareUntilIso: payload.compareUntilIso } : {}),
+      }),
+    );
   });
   defineHandler('reports:cashSummary', ctx, (_ctx, payload) => {
     requireReportView();

@@ -366,6 +366,20 @@ export function createPurchaseOrder(
   return fetched;
 }
 
+/**
+ * The status changes a person may make by hand. 'partial' and 'received' only
+ * ever come from receiving a delivery (receiveDelivery), which also moves the
+ * stock; setting them by hand would say goods arrived that never went on the
+ * shelf. A finished order (received or cancelled) stays finished.
+ */
+const MANUAL_STATUS_MOVES: Record<PurchaseOrderStatus, readonly PurchaseOrderStatus[]> = {
+  draft: ['ordered', 'cancelled'],
+  ordered: ['cancelled'],
+  partial: ['cancelled'],
+  received: [],
+  cancelled: [],
+};
+
 export function setPurchaseOrderStatus(
   db: AppDatabase,
   id: string,
@@ -373,25 +387,42 @@ export function setPurchaseOrderStatus(
   actor: Actor & { userId: string },
 ): void {
   const now = nowIso();
-  db.prepare(
-    `UPDATE purchase_orders SET status = ?,
-       ordered_at = CASE WHEN status = 'draft' AND ? = 'ordered' THEN ? ELSE ordered_at END,
-       updated_at = ?, version = version + 1 WHERE id = ?`,
-  ).run(status, status, now, now, id);
-  enqueueSync(db, {
-    entityType: 'purchase_orders',
-    entityId: id,
-    op: 'upsert',
-    payload: { id, status },
+  const tx = db.transaction(() => {
+    const row = db
+      .prepare(`SELECT ${PO_SELECT} FROM purchase_orders WHERE id = ? AND deleted_at IS NULL`)
+      .get(id) as POrow | undefined;
+    if (!row) throw new Error('Purchase order not found');
+    const before = rowToPO(row);
+    if (!MANUAL_STATUS_MOVES[before.status].includes(status)) {
+      if (status === 'received' || status === 'partial') {
+        throw new Error('Use Receive to book a delivery in — it also adds the stock');
+      }
+      throw new Error(`This purchase order is ${before.status}; it cannot be marked ${status}`);
+    }
+    const after: PurchaseOrder = {
+      ...before,
+      status,
+      orderedAt: before.status === 'draft' && status === 'ordered' ? now : before.orderedAt,
+    };
+    db.prepare(
+      `UPDATE purchase_orders SET status = ?, ordered_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).run(after.status, after.orderedAt, now, id);
+    enqueueSync(db, {
+      entityType: 'purchase_orders',
+      entityId: id,
+      op: 'upsert',
+      payload: after,
+    });
+    writeAudit(db, {
+      entityType: 'purchase_orders',
+      entityId: id,
+      action: `status:${status}`,
+      actorUserId: actor.userId,
+      before,
+      after,
+    });
   });
-  writeAudit(db, {
-    entityType: 'purchase_orders',
-    entityId: id,
-    action: `status:${status}`,
-    actorUserId: actor.userId,
-    before: null,
-    after: { status },
-  });
+  tx();
 }
 
 /**
@@ -449,18 +480,42 @@ export function receiveDelivery(
       );
 
       // Optionally roll the unit cost forward. The delivery's per-unit cost
-      // replaces any pack price, which would otherwise contradict it.
+      // replaces any pack price, which would otherwise contradict it — but
+      // only when the price actually changed: the PO line was filled in from
+      // the ingredient's own (rounded) cost, and receiving it at that same
+      // price used to throw away the exact pack price ("6,000 g for Rs 2,250").
       if (input.updateCosts) {
-        db.prepare(
-          `UPDATE ingredients SET cost_per_unit_cents = ?, pack_size = NULL, pack_price_cents = NULL,
-                  updated_at = ?, version = version + 1 WHERE id = ?`,
-        ).run(item.unitCostCents, now, item.ingredientId);
-        enqueueSync(db, {
-          entityType: 'ingredients',
-          entityId: item.ingredientId,
-          op: 'upsert',
-          payload: { id: item.ingredientId, costPerUnitCents: item.unitCostCents, packSize: null, packPriceCents: null },
-        });
+        const cost = db
+          .prepare(
+            `SELECT cost_per_unit_cents, pack_size, pack_price_cents FROM ingredients WHERE id = ? AND deleted_at IS NULL`,
+          )
+          .get(item.ingredientId) as
+          | { cost_per_unit_cents: number; pack_size: number | null; pack_price_cents: number | null }
+          | undefined;
+        if (cost && cost.cost_per_unit_cents !== item.unitCostCents) {
+          db.prepare(
+            `UPDATE ingredients SET cost_per_unit_cents = ?, pack_size = NULL, pack_price_cents = NULL,
+                    updated_at = ?, version = version + 1 WHERE id = ?`,
+          ).run(item.unitCostCents, now, item.ingredientId);
+          enqueueSync(db, {
+            entityType: 'ingredients',
+            entityId: item.ingredientId,
+            op: 'upsert',
+            payload: { id: item.ingredientId, costPerUnitCents: item.unitCostCents, packSize: null, packPriceCents: null },
+          });
+          writeAudit(db, {
+            entityType: 'ingredients',
+            entityId: item.ingredientId,
+            action: 'cost_from_delivery',
+            actorUserId: actor.userId,
+            before: {
+              costPerUnitCents: cost.cost_per_unit_cents,
+              packSize: cost.pack_size,
+              packPriceCents: cost.pack_price_cents,
+            },
+            after: { costPerUnitCents: item.unitCostCents, packSize: null, packPriceCents: null, purchaseOrderId: po.id },
+          });
+        }
       }
     }
 

@@ -12,7 +12,7 @@ type Tab = 'items' | 'categories' | 'modifiers' | 'tax' | 'import';
 const TABS: Array<{ id: Tab; label: string; icon: typeof Folder }> = [
   { id: 'items', label: 'Items', icon: Pizza },
   { id: 'categories', label: 'Categories', icon: Folder },
-  { id: 'modifiers', label: 'Modifiers', icon: SlidersHorizontal },
+  { id: 'modifiers', label: 'Choices', icon: SlidersHorizontal },
   { id: 'tax', label: 'Tax', icon: Receipt },
   { id: 'import', label: 'Import', icon: FileUp },
 ];

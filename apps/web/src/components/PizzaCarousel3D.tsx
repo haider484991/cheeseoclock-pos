@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatCents } from '@/lib/format';
+import { menuImageSrcSet } from '@/lib/images';
 import { SIGNATURE_PIZZAS } from '@/lib/signatures';
 
 /**
@@ -117,7 +118,29 @@ export function PizzaCarousel3D({ className = '' }: { className?: string }) {
     let raf = 0;
     let last = performance.now();
     let held = 0;
+    // The loop only runs while the stage is on screen and the tab is visible:
+    // scrolled past the hero, a phone was still repainting five pizzas every
+    // frame for as long as the page stayed open.
+    let onScreen = true;
+    const running = () => onScreen && document.visibilityState === 'visible';
+    const start = () => {
+      if (raf || !running()) return;
+      last = performance.now();
+      raf = requestAnimationFrame(tick);
+    };
+    const io =
+      typeof IntersectionObserver !== 'undefined'
+        ? new IntersectionObserver((entries) => {
+            onScreen = entries.some((e) => e.isIntersecting);
+            start();
+          })
+        : null;
+    io?.observe(stage);
+    const onVisibility = () => start();
+    document.addEventListener('visibilitychange', onVisibility);
     const tick = (now: number) => {
+      raf = 0;
+      if (!running()) return;
       const dt = Math.min(0.064, (now - last) / 1000);
       last = now;
       if (!reduced) spin.current = (spin.current + dt * SPIN_DEG_PER_S) % 360;
@@ -137,10 +160,13 @@ export function PizzaCarousel3D({ className = '' }: { className?: string }) {
       layout();
       raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
+    start();
     return () => {
       cancelAnimationFrame(raf);
+      raf = 0;
       ro?.disconnect();
+      io?.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [layout]);
 
@@ -247,8 +273,13 @@ export function PizzaCarousel3D({ className = '' }: { className?: string }) {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={p.image}
+                    srcSet={menuImageSrcSet(p.image)}
+                    sizes="(min-width: 768px) 260px, 46vw"
+                    width={400}
+                    height={400}
                     alt={`${p.name} pizza from Cheese O'Clock`}
                     draggable={false}
+                    decoding="async"
                     fetchPriority={i === 0 ? 'high' : 'auto'}
                     className="h-full w-full object-contain"
                   />

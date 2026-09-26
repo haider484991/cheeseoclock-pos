@@ -6,6 +6,47 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
 import { ipc } from '../../ipc/client';
 import { Pizza, Lock } from 'lucide-react';
+import { StoreLogo } from '../settings/StoreLogo';
+
+/**
+ * Logo, name and tagline at the top of the PIN screen. Also drawn by the
+ * Branding settings preview, so what the owner sees there is exactly this.
+ * The logo is shown whole: a wide logo gets a wide frame, never a crop.
+ */
+export function LoginBrand({
+  logoUrl,
+  storeName,
+  tagline,
+}: {
+  logoUrl?: string | null | undefined;
+  storeName: string;
+  tagline?: string | null | undefined;
+}) {
+  return (
+    <div className="mb-4 flex flex-col items-center gap-3">
+      <div className="relative max-w-full">
+        <StoreLogo
+          src={logoUrl}
+          height={88}
+          maxWidth={300}
+          className="rounded-2xl shadow-lift"
+          fallback={
+            <span className="flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
+              <Pizza className="h-10 w-10" />
+            </span>
+          }
+        />
+        <div className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-white shadow-soft ring-1 ring-stone-200 dark:bg-stone-800 dark:ring-stone-700">
+          <Lock className="h-3.5 w-3.5 text-stone-600 dark:text-stone-300" />
+        </div>
+      </div>
+      <h1 className="mt-2 text-center text-3xl font-bold tracking-tight">{storeName}</h1>
+      {tagline && (
+        <p className="text-center text-sm text-stone-500 dark:text-stone-400">{tagline}</p>
+      )}
+    </div>
+  );
+}
 
 export function LoginPage() {
   const [pin, setPin] = useState('');
@@ -83,25 +124,10 @@ export function LoginPage() {
 
       <div className="relative w-[460px] animate-scale-in">
         <div className="glass-surface rounded-3xl p-8 shadow-soft-lg ring-1 ring-stone-200/60 dark:ring-stone-700/60">
-          <div className="mb-6 flex flex-col items-center gap-3">
-            <div className="relative">
-              <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
-                {logoUrl ? (
-                   
-                  <img src={logoUrl} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <Pizza className="h-10 w-10" />
-                )}
-              </div>
-              <div className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-white shadow-soft ring-1 ring-stone-200 dark:bg-stone-800 dark:ring-stone-700">
-                <Lock className="h-3.5 w-3.5 text-stone-600 dark:text-stone-300" />
-              </div>
-            </div>
-            <h1 className="mt-2 text-3xl font-bold tracking-tight">{storeName}</h1>
-            <p className="text-sm text-stone-500 dark:text-stone-400">
-              {tagline ?? 'Enter your PIN to continue'}
-            </p>
-          </div>
+          <LoginBrand logoUrl={logoUrl} storeName={storeName} tagline={tagline} />
+          <p className="mb-4 text-center text-xs font-medium uppercase tracking-widest text-stone-400">
+            Enter your PIN
+          </p>
 
           <NumberPad value={pin} onChange={setPin} onSubmit={submit} mask maxLength={8} />
 

@@ -5,11 +5,19 @@ import { ArrowLeft, Cloud, Usb, RefreshCw, ShieldCheck } from 'lucide-react';
 import type { CloudBackupEntry } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { askConfirm } from '../../components/confirm/ConfirmHost';
-import { applyRestore } from '../settings/applyRestore';
+import { confirmAndRestore } from '../settings/applyRestore';
+import { copyReasonLabel, fmtWhen } from '../settings/backupStatus';
 
-const CONFIRM =
-  'Restore this copy onto this PC? The app will restart on it. Anything already on this PC is archived first, so this can be undone.';
+const FILE_CONFIRM =
+  'Restore this computer from a file?\nYou pick the file next (a USB copy or a copy from the old computer). The app then restarts on it. Anything already on this computer is kept aside first, so this can be undone.';
+
+function cloudConfirm(b: CloudBackupEntry): string {
+  return (
+    `Restore the copy from ${fmtWhen(b.createdAt)}?\n` +
+    `It comes from ${b.deviceName ?? 'an earlier version of the till'}. The app then restarts on it. ` +
+    'Anything already on this computer is kept aside first, so this can be undone.'
+  );
+}
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -27,13 +35,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
   const [copies, setCopies] = useState<CloudBackupEntry[] | null>(null);
 
   const fileMut = useMutation({
-    mutationFn: () => ipc.backup.stageRestoreFromPicker(),
-    onSuccess: (r) => {
-      if (!r.staged) return;
-      void askConfirm(CONFIRM).then((ok) => {
-        if (ok) void applyRestore();
-      });
-    },
+    mutationFn: () => confirmAndRestore(FILE_CONFIRM, () => ipc.backup.stageRestoreFromPicker()),
     onError: (e) =>
       toast({ title: 'Restore failed', description: errorMessage(e), variant: 'error' }),
   });
@@ -51,15 +53,14 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
   });
 
   const cloudMut = useMutation({
-    mutationFn: (id: string) =>
-      ipc.webBridge.restoreCloudBackupWith({
-        siteUrl: siteUrl.trim(),
-        bridgeSecret: secret.trim(),
-        id,
-      }),
-    onSuccess: (r) => {
-      if (r.staged) void applyRestore();
-    },
+    mutationFn: (b: CloudBackupEntry) =>
+      confirmAndRestore(cloudConfirm(b), () =>
+        ipc.webBridge.restoreCloudBackupWith({
+          siteUrl: siteUrl.trim(),
+          bridgeSecret: secret.trim(),
+          id: b.id,
+        }),
+      ),
     onError: (e) =>
       toast({ title: 'Cloud restore failed', description: errorMessage(e), variant: 'error' }),
   });
@@ -70,11 +71,11 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
   return (
     <div className="glass-surface space-y-5 rounded-3xl p-7 shadow-soft-lg ring-1 ring-stone-200/60 dark:ring-stone-700/60">
       <div>
-        <h2 className="text-lg font-bold">Restore this PC from a backup</h2>
+        <h2 className="text-lg font-bold">Restore this computer from a backup</h2>
         <p className="mt-1 text-xs text-stone-500">
           Brings back the menu, staff logins, customers, orders and settings from a
-          copy. Nothing is lost on this PC: whatever is here is archived before the
-          copy takes over.
+          copy. Nothing is lost on this computer: whatever is here is kept aside
+          before the copy takes over.
         </p>
       </div>
 
@@ -83,12 +84,12 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           <Usb className="h-4 w-4" /> From a USB stick or file
         </div>
         <p className="mb-3 text-xs text-stone-500">
-          A copy made with Backups → &ldquo;Save a copy to USB…&rdquo;, or a snapshot
-          from the old PC&rsquo;s backups folder. A copy that was changed since it was
-          saved is refused.
+          A copy saved with Settings → Backups → &ldquo;Save a copy to USB&rdquo;, or a
+          copy from the old computer&rsquo;s backups folder. A copy that was changed after
+          it was saved is refused.
         </p>
         <Button variant="secondary" onClick={() => fileMut.mutate()} disabled={fileMut.isPending}>
-          Choose the file…
+          {fileMut.isPending ? 'Restoring…' : 'Choose the file…'}
         </Button>
       </section>
 
@@ -97,8 +98,8 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           <Cloud className="h-4 w-4" /> From the cloud
         </div>
         <p className="mb-3 text-xs text-stone-500">
-          Needs the website address and the bridge secret. The connection is kept, so
-          this PC comes up already linked to the website.
+          Needs the website address and its connection password (bridge secret). The
+          connection is kept, so this computer comes up already linked to the website.
         </p>
         <div className="grid gap-2 sm:grid-cols-2">
           <input
@@ -112,8 +113,8 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
             type="password"
-            placeholder="Bridge secret"
-            aria-label="Bridge secret"
+            placeholder="Connection password (bridge secret)"
+            aria-label="Connection password (bridge secret)"
             className={inputClass}
           />
         </div>
@@ -137,7 +138,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
               <thead className="bg-stone-50 text-left uppercase tracking-wider text-stone-500 dark:bg-stone-800/60">
                 <tr>
                   <th className="px-3 py-2">When</th>
-                  <th className="px-3 py-2">PC</th>
+                  <th className="px-3 py-2">From</th>
                   <th className="px-3 py-2 text-right">Orders</th>
                   <th className="px-3 py-2 text-right"></th>
                 </tr>
@@ -146,9 +147,9 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
                 {copies.map((b) => (
                   <tr key={b.id} data-testid="cloud-copy-row">
                     <td className="px-3 py-2">
-                      <div className="font-medium">{new Date(b.createdAt).toLocaleString()}</div>
+                      <div className="font-medium first-letter:uppercase">{fmtWhen(b.createdAt)}</div>
                       <div className="text-[10px] text-stone-400">
-                        {b.reason === 'before-restore' ? 'safety copy' : (b.reason ?? 'copy')}
+                        {copyReasonLabel(b.reason)}
                         {b.appVersion ? ` · v${b.appVersion}` : ''}
                       </div>
                     </td>
@@ -161,13 +162,9 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
                         type="button"
                         className="font-semibold text-amber-600 hover:underline"
                         disabled={cloudMut.isPending}
-                        onClick={() => {
-                          void askConfirm(CONFIRM).then((ok) => {
-                            if (ok) cloudMut.mutate(b.id);
-                          });
-                        }}
+                        onClick={() => cloudMut.mutate(b)}
                       >
-                        Restore
+                        {cloudMut.isPending && cloudMut.variables?.id === b.id ? 'Restoring…' : 'Restore'}
                       </button>
                     </td>
                   </tr>
@@ -185,7 +182,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
         </Button>
         <span className="inline-flex items-center gap-1 text-[11px] text-stone-400">
           <ShieldCheck className="h-3 w-3" />
-          Every restore is recorded in the audit trail.
+          Every restore is written into the till&rsquo;s history log.
         </span>
       </div>
     </div>

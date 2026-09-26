@@ -31,9 +31,25 @@ const queryClient = new QueryClient({
       gcTime: 5 * 60_000,
       retry: 1,
       refetchOnWindowFocus: false,
+      // Every query and mutation here is an IPC call to this PC's own
+      // database, not a network request. React Query's default ('online')
+      // pauses them all whenever Windows reports the network gone: when the
+      // shop Wi-Fi dropped, the board's buttons, dialogs and lists sat on
+      // "loading" until it came back. And when it came back, every query
+      // refetched at once.
+      networkMode: 'always',
+      refetchOnReconnect: false,
+    },
+    mutations: {
+      networkMode: 'always',
     },
   },
 });
+// The menu only changes when someone edits or imports it, and every one of
+// those screens invalidates ['menu']. Kept fresh for 5 minutes, flipping
+// categories at the till (and reopening an item's choices) is served from
+// memory instead of a round trip for the whole category each time.
+queryClient.setQueryDefaults(['menu'], { staleTime: 5 * 60_000 });
 
 /**
  * Gate the router on whether the device has finished onboarding. If no user

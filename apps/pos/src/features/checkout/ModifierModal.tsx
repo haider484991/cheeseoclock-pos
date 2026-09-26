@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
@@ -7,21 +7,32 @@ import { ipc } from '../../ipc/client';
 import type { MenuItem } from '@cheeseoclock/shared-types';
 import { groupDisplayName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { X } from 'lucide-react';
+import { ownsEnter } from './keys';
 
 interface Props {
   item: MenuItem;
   onCancel: () => void;
-  onConfirm: (modifierIds: string[], notes: string | null) => void | Promise<void>;
+  /**
+   * `onlyOne`: when customising a line of several, the cashier chose to change
+   * just one of them (it becomes its own line) instead of all of them.
+   */
+  onConfirm: (modifierIds: string[], notes: string | null, opts?: { onlyOne: boolean }) => void | Promise<void>;
   /** Editing a line already in the cart ("Customize"): its current choices and note. */
   initialModifierIds?: string[];
   initialNotes?: string | null;
   confirmLabel?: string;
+  /** Customising a cart line: how many are on it (offers "just one of them"). */
+  lineQuantity?: number;
 }
 
 /**
  * The item's choices — required ones (dip, veggies, deal pizzas), then the
  * optional ones: leave-outs, extras, dips on the side — plus an "allergy or
  * special request" note that prints on the kitchen ticket (owner 2026-09-26).
+ *
+ * Speed: an item whose only choice is one pick from one list (a dip) adds the
+ * moment that pick is tapped. Enter confirms (Shift+Enter for a new line in
+ * the note).
  */
 export function ModifierModal({
   item,
@@ -30,11 +41,16 @@ export function ModifierModal({
   initialModifierIds,
   initialNotes,
   confirmLabel = 'Add to order',
+  lineQuantity = 1,
 }: Props) {
   const [notes, setNotes] = useState(initialNotes ?? '');
+  const [onlyOne, setOnlyOne] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const confirmed = useRef(false);
   const groupsQ = useQuery({
     queryKey: ['menu', 'modifierGroupsForItem', item.id],
     queryFn: () => ipc.menu.listModifierGroupsForItem(item.id),
+    staleTime: 5 * 60_000,
   });
 
   /** Map of groupId → selected modifier ids */
@@ -57,7 +73,25 @@ export function ModifierModal({
     setSelected(next);
   }, [groupsQ.data, initialModifierIds]);
 
+  const groups = groupsQ.data ?? [];
+  const editing = initialModifierIds !== undefined;
+  // One required pick from one list and nothing else to choose: the tap on
+  // that pick is the confirmation.
+  const onePickAdds =
+    !editing && groups.length === 1 && groups[0]!.isRequired && groups[0]!.selectionType === 'single';
+
+  function confirm(modifierIds: string[]) {
+    // One confirmation per modal: a double tap or Enter + click must not add twice.
+    if (confirmed.current) return;
+    confirmed.current = true;
+    void onConfirm(modifierIds, notes.trim() || null, { onlyOne: editing && lineQuantity > 1 && onlyOne });
+  }
+
   function toggle(groupId: string, modId: string, selectionType: 'single' | 'multi', maxSelect: number) {
+    if (onePickAdds && selectionType === 'single') {
+      confirm([modId]);
+      return;
+    }
     setSelected((prev) => {
       const current = prev[groupId] ?? [];
       const isSelected = current.includes(modId);
@@ -73,13 +107,11 @@ export function ModifierModal({
     });
   }
 
-  const groups = groupsQ.data ?? [];
-
   // Validation: required groups need at least minSelect
   const errors = groups
     .filter((g) => g.isRequired && (selected[g.id]?.length ?? 0) < g.minSelect)
     .map((g) => `Pick ${g.minSelect - (selected[g.id]?.length ?? 0)} more for ${groupDisplayName(g.name)}`);
-  const allValid = errors.length === 0;
+  const allValid = errors.length === 0 && !groupsQ.isLoading;
 
   // Compute running price
   const allMods = groups.flatMap((g) => g.modifiers);
@@ -89,11 +121,31 @@ export function ModifierModal({
     return sum + (m?.priceDeltaCents ?? 0);
   }, 0);
 
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    const target = e.target as HTMLElement;
+    // A button reached with Tab does its own thing (a choice toggles, Cancel
+    // cancels). One that was just tapped does not: Enter means "add it".
+    if (target.tagName === 'BUTTON' && ownsEnter(target)) return;
+    e.preventDefault();
+    if (allValid) confirm(selectedMods);
+  }
+
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onCancel()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[640px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl bg-white shadow-xl dark:bg-stone-900">
+        <Dialog.Content
+          ref={contentRef}
+          onKeyDown={onKeyDown}
+          // Not the Close button (Radix's default): Enter there would cancel.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            contentRef.current?.focus();
+          }}
+          {...(item.description ? {} : { 'aria-describedby': undefined })}
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-24px)] w-[640px] max-w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl bg-white shadow-xl outline-none dark:bg-stone-900 dark:text-stone-100"
+        >
           <header className="flex items-start justify-between border-b border-stone-200 p-5 dark:border-stone-800">
             <div>
               <Dialog.Title className="text-xl font-bold">{item.name}</Dialog.Title>
@@ -102,11 +154,17 @@ export function ModifierModal({
                   {item.description}
                 </Dialog.Description>
               )}
+              {onePickAdds && (
+                <p className="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-400">
+                  Tap a choice to add it.
+                </p>
+              )}
             </div>
             <Dialog.Close asChild>
               <button
                 type="button"
-                className="rounded p-2 text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"
+                aria-label="Close"
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -114,59 +172,76 @@ export function ModifierModal({
           </header>
 
           <div className="flex-1 overflow-auto p-5">
-            {groups.length === 0 ? null : (
-              groups.map((g) => (
-                <section key={g.id} className="mb-6">
-                  <div className="mb-2 flex items-baseline justify-between">
-                    <h3 className="font-semibold">
-                      {groupDisplayName(g.name)}
-                      {g.isRequired && <span className="ml-1 text-red-500">*</span>}
-                    </h3>
-                    <span className="text-xs text-stone-500">
-                      {g.selectionType === 'single'
-                        ? 'Choose 1'
-                        : `${
-                            g.minSelect === g.maxSelect
-                              ? `Choose ${g.minSelect}`
-                              : g.minSelect === 0
-                                ? `Up to ${g.maxSelect}`
-                                : `Choose ${g.minSelect}-${g.maxSelect}`
-                          } · ${selected[g.id]?.length ?? 0} chosen`}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {g.modifiers.map((m) => {
-                      const sel = (selected[g.id] ?? []).includes(m.id);
-                      return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() =>
-                            toggle(g.id, m.id, g.selectionType, g.maxSelect)
-                          }
-                          className={cn(
-                            'flex items-center justify-between rounded-lg border-2 p-3 text-left transition-colors',
-                            sel && isLeaveOutChoice(m.name)
-                              ? 'border-red-500 bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-100'
-                              : sel
-                                ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
-                                : 'border-stone-200 bg-white hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800',
-                          )}
-                        >
-                          <span className="font-medium">{m.name}</span>
-                          {m.priceDeltaCents !== 0 && (
-                            <span className="font-mono text-sm text-stone-500">
-                              {m.priceDeltaCents > 0 ? '+' : ''}
-                              {formatCents(m.priceDeltaCents, { showSymbol: false })}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))
+            {editing && lineQuantity > 1 && (
+              <div className="mb-5 grid grid-cols-2 gap-1 rounded-xl bg-stone-100 p-1 dark:bg-stone-800" role="group" aria-label="Which ones to change">
+                {[false, true].map((one) => (
+                  <button
+                    key={String(one)}
+                    type="button"
+                    aria-pressed={onlyOne === one}
+                    onClick={() => setOnlyOne(one)}
+                    className={cn(
+                      'min-h-[44px] rounded-lg text-sm font-semibold',
+                      onlyOne === one
+                        ? 'bg-white text-stone-900 shadow-sm dark:bg-stone-900 dark:text-stone-100'
+                        : 'text-stone-500',
+                    )}
+                  >
+                    {one ? `Just 1 of the ${lineQuantity}` : `All ${lineQuantity}`}
+                  </button>
+                ))}
+              </div>
             )}
+            {groups.map((g) => (
+              <section key={g.id} className="mb-6">
+                <div className="mb-2 flex items-baseline justify-between">
+                  <h3 className="font-semibold">
+                    {groupDisplayName(g.name)}
+                    {g.isRequired && <span className="ml-1 text-red-500">*</span>}
+                  </h3>
+                  <span className="text-xs text-stone-500">
+                    {g.selectionType === 'single'
+                      ? 'Choose 1'
+                      : `${
+                          g.minSelect === g.maxSelect
+                            ? `Choose ${g.minSelect}`
+                            : g.minSelect === 0
+                              ? `Up to ${g.maxSelect}`
+                              : `Choose ${g.minSelect}-${g.maxSelect}`
+                        } · ${selected[g.id]?.length ?? 0} chosen`}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {g.modifiers.map((m) => {
+                    const sel = (selected[g.id] ?? []).includes(m.id);
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        aria-pressed={sel}
+                        onClick={() => toggle(g.id, m.id, g.selectionType, g.maxSelect)}
+                        className={cn(
+                          'flex min-h-[52px] items-center justify-between rounded-lg border-2 p-3 text-left transition-colors',
+                          sel && isLeaveOutChoice(m.name)
+                            ? 'border-red-500 bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-100'
+                            : sel
+                              ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                              : 'border-stone-200 bg-white hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800',
+                        )}
+                      >
+                        <span className="font-medium">{m.name}</span>
+                        {m.priceDeltaCents !== 0 && (
+                          <span className="font-mono text-sm text-stone-500">
+                            {m.priceDeltaCents > 0 ? '+' : ''}
+                            {formatCents(m.priceDeltaCents, { showSymbol: false })}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
             <label className="block">
               <span className="mb-1 block font-semibold">Allergy or special request</span>
               <span className="mb-2 block text-xs text-stone-500">
@@ -195,14 +270,10 @@ export function ModifierModal({
               )}
             </div>
             <div className="flex gap-2">
-              <Button variant="secondary" onClick={onCancel}>
+              <Button variant="secondary" size="lg" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button
-                variant="primary"
-                disabled={!allValid}
-                onClick={() => void onConfirm(selectedMods, notes.trim() || null)}
-              >
+              <Button variant="primary" size="lg" disabled={!allValid} onClick={() => confirm(selectedMods)}>
                 {confirmLabel}
               </Button>
             </div>

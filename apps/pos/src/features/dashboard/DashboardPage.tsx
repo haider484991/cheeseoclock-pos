@@ -1,11 +1,12 @@
 import { Card } from '@cheeseoclock/ui';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useSessionStore } from '../../stores/sessionStore';
 import { ipc } from '../../ipc/client';
 import { FbrStatusCard } from './FbrStatusCard';
 import { SyncStatusCard } from './SyncStatusCard';
 import { BackupHealthBanner } from './BackupHealthBanner';
+import { SettingsOverview } from '../settings/SettingsPage';
 import {
   ShoppingCart,
   UtensilsCrossed,
@@ -29,6 +30,7 @@ interface TileSpec {
 export function DashboardPage() {
   const user = useSessionStore((s) => s.user);
   const can = useSessionStore((s) => s.can);
+  const navigate = useNavigate();
 
   const { data: deviceInfo } = useQuery({
     queryKey: ['system', 'deviceInfo'],
@@ -56,7 +58,7 @@ export function DashboardPage() {
       tile: {
         icon: UtensilsCrossed,
         title: 'Menu',
-        subtitle: 'Items · modifiers · tax',
+        subtitle: 'Items, prices, add-ons',
         to: '/menu',
         tone: 'from-amber-400 to-orange-500',
       },
@@ -66,7 +68,7 @@ export function DashboardPage() {
       tile: {
         icon: Boxes,
         title: 'Inventory',
-        subtitle: 'Ingredients · recipes · POs',
+        subtitle: 'Stock, recipes, purchases',
         to: '/inventory',
         tone: 'from-fuchsia-400 to-pink-500',
       },
@@ -86,7 +88,7 @@ export function DashboardPage() {
       tile: {
         icon: BarChart3,
         title: 'Reports',
-        subtitle: 'Sales · items · COGS',
+        subtitle: 'Sales, best sellers, costs',
         to: '/reports',
         tone: 'from-violet-400 to-purple-600',
       },
@@ -96,7 +98,7 @@ export function DashboardPage() {
       tile: {
         icon: Users,
         title: 'Users',
-        subtitle: 'PINs + roles',
+        subtitle: 'Staff logins and PINs',
         to: '/users',
         tone: 'from-rose-400 to-red-500',
       },
@@ -106,7 +108,7 @@ export function DashboardPage() {
       tile: {
         icon: Settings,
         title: 'Settings',
-        subtitle: 'Printer · FBR · Sync',
+        subtitle: 'Shop, printers, backups',
         to: '/settings',
         tone: 'from-stone-400 to-stone-600',
       },
@@ -125,16 +127,11 @@ export function DashboardPage() {
             {user?.fullName?.split(' ')[0]}
           </span>
         </h1>
-        <p className="text-stone-500 dark:text-stone-400">
-          Here's what's available to you right now.
-        </p>
+        <p className="text-stone-500 dark:text-stone-400">What would you like to do?</p>
       </header>
 
       <section>
-        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
-          <span className="inline-block h-px w-6 bg-stone-300 dark:bg-stone-700" />
-          Quick actions
-        </div>
+        <SectionTitle>Quick actions</SectionTitle>
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {tiles
             .filter((t) => t.allowed)
@@ -145,51 +142,40 @@ export function DashboardPage() {
       </section>
 
       {can('settings.manage') && (
-        <section>
-          <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
-            <span className="inline-block h-px w-6 bg-stone-300 dark:bg-stone-700" />
-            System status
-          </div>
-          <div className="mb-4">
-            <BackupHealthBanner />
-          </div>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <section className="space-y-4">
+          <SectionTitle>Shop status</SectionTitle>
+          <BackupHealthBanner />
+          <SettingsOverview onSelect={(tab) => navigate(`/settings?tab=${tab}`)} />
+          {/* Each card shows itself only while that feature is switched on. */}
+          <div className="grid grid-cols-1 gap-4 empty:hidden lg:grid-cols-2">
             <FbrStatusCard />
             <SyncStatusCard />
           </div>
         </section>
       )}
 
-      <section>
-        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
-          <span className="inline-block h-px w-6 bg-stone-300 dark:bg-stone-700" />
-          Device
-        </div>
-        <Card>
-          <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
-            <dt className="text-stone-500">App version</dt>
-            <dd className="font-mono font-medium">{appInfo?.version}</dd>
-            <dt className="text-stone-500">Mode</dt>
-            <dd className="font-medium">
-              {appInfo?.isDev ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                  Development
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  Production
-                </span>
-              )}
-            </dd>
-            <dt className="text-stone-500">Device name</dt>
-            <dd className="font-medium">{deviceInfo?.displayName}</dd>
-            <dt className="text-stone-500">Device ID</dt>
-            <dd className="font-mono text-xs text-stone-500">{deviceInfo?.deviceId}</dd>
-          </dl>
-        </Card>
-      </section>
+      <footer className="border-t border-stone-200 pt-4 text-xs text-stone-400 dark:border-stone-800">
+        This till: <span className="font-medium text-stone-500">{deviceInfo?.displayName ?? '…'}</span>
+        {' · '}version {appInfo?.version ?? '…'}
+        {appInfo?.isDev ? ' · development build' : ''}
+        {can('printer.manage') && (
+          <>
+            {' · '}
+            <Link to="/settings?tab=about" className="hover:underline">
+              About this till
+            </Link>
+          </>
+        )}
+      </footer>
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
+      <span className="inline-block h-px w-6 bg-stone-300 dark:bg-stone-700" />
+      {children}
     </div>
   );
 }

@@ -6,8 +6,9 @@ import { auditChainService } from '../../services/audit-chain-service.js';
 
 export function registerAuditHandlers(ctx: HandlerContext): void {
   /** Walk the whole audit trail and report whether every link still holds. */
-  defineHandler('audit:verifyChain', ctx, () => {
+  defineHandler('audit:verifyChain', ctx, async () => {
     requireSettingsManage();
-    return ok(auditChainService.verify(ctx.db));
+    // Paged: the till keeps selling while a long trail is checked.
+    return ok(await auditChainService.verify(ctx.db));
   });
 }

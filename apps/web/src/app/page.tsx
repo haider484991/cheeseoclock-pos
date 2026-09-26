@@ -9,6 +9,7 @@ import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
 import { FEE_SUMMARY } from '@/lib/delivery-zones';
 import { formatCents } from '@/lib/format';
+import { menuImageSrcSet } from '@/lib/images';
 import { SIGNATURE_BURGER, SIGNATURE_PIZZAS, VALUE_DEALS } from '@/lib/signatures';
 
 const LINEUP = [...SIGNATURE_PIZZAS, SIGNATURE_BURGER];
@@ -246,10 +247,13 @@ export default function HomePage() {
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={item.image}
+                        srcSet={menuImageSrcSet(item.image)}
+                        sizes="(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw"
                         alt={`${item.name} from Cheese O'Clock`}
                         width={720}
                         height={720}
                         loading="lazy"
+                        decoding="async"
                         className="w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105"
                       />
                       <span className="absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink">

@@ -3,16 +3,22 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { ipc, onSyncStatusChanged } from '../../ipc/client';
 import { Card, Button, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
-import { Cloud, RefreshCw, AlertTriangle, PauseCircle, CheckCircle2 } from 'lucide-react';
+import { MonitorSmartphone, RefreshCw, AlertTriangle, PauseCircle, CheckCircle2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
+/**
+ * The link between this till and a second till (multi-device sync). Nothing
+ * is shown for a one-till shop: with the link off there is nothing to watch,
+ * and a "Cloud sync" card next to the backups only confused the owner.
+ */
 export function SyncStatusCard() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const statusQ = useQuery({
     queryKey: ['sync', 'status'],
     queryFn: () => ipc.sync.getStatus(),
-    refetchInterval: 20_000,
+    // Nothing to watch while the second-till link is off (the card is hidden then).
+    refetchInterval: (q) => (q.state.data?.mode === 'off' ? false : 20_000),
   });
 
   useEffect(
@@ -25,65 +31,44 @@ export function SyncStatusCard() {
 
   const triggerMut = useMutation({
     mutationFn: () => ipc.sync.triggerNow(),
-    onSuccess: () => toast({ title: 'Sync kicked', variant: 'success' }),
+    onSuccess: () => toast({ title: 'Syncing now', variant: 'success' }),
     onError: (e) =>
       toast({
-        title: 'Failed',
+        title: 'Could not sync',
         description: e instanceof Error ? e.message : String(e),
         variant: 'error',
       }),
   });
 
   const s = statusQ.data;
-  if (!s) {
-    return (
-      <Card>
-        <div className="text-sm text-stone-500">Loading sync status…</div>
-      </Card>
-    );
-  }
+  if (!s || s.mode === 'off') return null;
 
   const isFailing = s.consecutiveFails > 0;
-  const live = s.mode !== 'off';
 
   return (
     <Card>
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Cloud className="h-5 w-5" />
-          <h3 className="font-semibold">Cloud sync</h3>
+          <MonitorSmartphone className="h-5 w-5" />
+          <h3 className="font-semibold">Second till link</h3>
           <ModePill mode={s.mode} paused={s.paused} />
         </div>
-        <Link to="/settings" className="text-xs text-amber-700 hover:underline dark:text-amber-300">
+        <Link to="/settings?tab=advanced" className="text-xs text-amber-700 hover:underline dark:text-amber-300">
           Settings →
         </Link>
       </div>
 
-      <div className="grid grid-cols-4 gap-3 text-center">
-        <Stat label="Pending" value={s.pending} tone={s.pending > 0 ? 'warn' : 'neutral'} />
-        <Stat label="Pushed" value={s.eventsPushed} tone="success" />
-        <Stat label="Pulled" value={s.eventsPulled} tone="success" />
-        <Stat label="Failures" value={s.consecutiveFails} tone={isFailing ? 'error' : 'neutral'} />
+      <div className="grid grid-cols-3 gap-3 text-center">
+        <Stat label="Waiting to send" value={s.pending} tone={s.pending > 0 ? 'warn' : 'neutral'} />
+        <Stat label="Sent" value={s.eventsPushed} tone="success" />
+        <Stat label="Received" value={s.eventsPulled} tone="success" />
       </div>
 
-      <dl className="mt-3 grid grid-cols-2 gap-x-3 text-xs text-stone-500">
-        <dt>Last pushed</dt>
-        <dd className="text-right font-mono">{fmt(s.pushedAt)}</dd>
-        <dt>Last pulled</dt>
-        <dd className="text-right font-mono">{fmt(s.pulledAt)}</dd>
-        <dt>Last attempt</dt>
-        <dd className="text-right font-mono">{fmt(s.lastAttempt)}</dd>
-      </dl>
-
-      {!live && (
-        <div className="mt-3 rounded-lg bg-stone-100 p-3 text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-400">
-          Sync is off — all data stays on this device.
-        </div>
-      )}
+      <p className="mt-3 text-xs text-stone-500">Last sent {fmt(s.pushedAt)} · last received {fmt(s.pulledAt)}</p>
 
       {s.paused && (
         <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-          <PauseCircle className="h-4 w-4" /> Paused — events queueing but not transmitting.
+          <PauseCircle className="h-4 w-4" /> Paused: changes wait here and go out when you turn it back on.
         </div>
       )}
 
@@ -92,8 +77,8 @@ export function SyncStatusCard() {
           <span className="inline-flex items-center gap-1">
             <AlertTriangle className="h-4 w-4 flex-shrink-0" />
             <span>
-              {s.consecutiveFails} consecutive failure
-              {s.consecutiveFails === 1 ? '' : 's'}: {s.lastError}
+              Not reaching the other till ({s.consecutiveFails} tr{s.consecutiveFails === 1 ? 'y' : 'ies'}):{' '}
+              {s.lastError}
             </span>
           </span>
           <Button
@@ -103,7 +88,7 @@ export function SyncStatusCard() {
             onClick={() => triggerMut.mutate()}
           >
             <RefreshCw className="h-3 w-3" />
-            Retry
+            Try again
           </Button>
         </div>
       )}
@@ -112,12 +97,12 @@ export function SyncStatusCard() {
 }
 
 function fmt(iso: string | null): string {
-  if (!iso) return '—';
+  if (!iso) return 'never';
   const d = new Date(iso);
   const diffMs = Date.now() - d.getTime();
   if (diffMs < 60_000) return 'just now';
   if (diffMs < 3_600_000) return `${Math.round(diffMs / 60_000)} min ago`;
-  if (diffMs < 86_400_000) return `${Math.round(diffMs / 3_600_000)}h ago`;
+  if (diffMs < 86_400_000) return `${Math.round(diffMs / 3_600_000)} h ago`;
   return d.toLocaleString();
 }
 
@@ -129,25 +114,17 @@ function ModePill({ mode, paused }: { mode: 'off' | 'mock' | 'http'; paused: boo
       </span>
     );
   }
-  const colors = {
-    off: 'bg-stone-200 text-stone-700 dark:bg-stone-700 dark:text-stone-200',
-    mock: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
-    http: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
-  } as const;
-  const icons = {
-    off: null,
-    mock: null,
-    http: <CheckCircle2 className="h-3 w-3" />,
-  } as const;
   return (
     <span
       className={cn(
         'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-        colors[mode],
+        mode === 'http'
+          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
+          : 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
       )}
     >
-      {icons[mode]}
-      {mode === 'http' ? 'Cloud' : mode === 'mock' ? 'Mock' : 'Off'}
+      {mode === 'http' && <CheckCircle2 className="h-3 w-3" />}
+      {mode === 'http' ? 'On' : 'Developer test'}
     </span>
   );
 }

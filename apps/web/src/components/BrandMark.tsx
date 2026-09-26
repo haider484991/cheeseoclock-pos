@@ -4,9 +4,10 @@ import { useState } from 'react';
 import { Logo } from './Logo';
 
 /**
- * Renders the real Cheese O'Clock logo from /public/logo.png (your exact
- * artwork with the background removed by `pnpm logo:clean`). Until that file
- * exists, it falls back to the vector mark so the site never looks broken.
+ * The real Cheese O'Clock logo. The header and footer draw it 40–48px tall,
+ * so they load /logo-header.webp (cropped to the artwork, ~18 KB) rather than
+ * the 186 KB /logo.png, which stays for the JSON-LD logo and the web-app
+ * manifest. If the image ever fails, the vector mark stands in.
  */
 export function BrandMark({
   stacked = false,
@@ -23,8 +24,11 @@ export function BrandMark({
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src="/logo.png"
+        src={stacked ? '/logo.png' : '/logo-header.webp'}
         alt="Cheese O'Clock"
+        width={stacked ? 760 : 201}
+        height={stacked ? 524 : 132}
+        decoding="async"
         onError={() => setFailed(true)}
         className={`${stacked ? 'h-56 w-auto' : 'h-12 w-auto'} ${className}`}
       />

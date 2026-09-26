@@ -39,6 +39,9 @@ export function ItemGrid({ items, categories, onAdd, onChooseSize }: Props) {
           key={choice.id}
           type="button"
           onClick={() => choice.sizedPizza ? onChooseSize(choice) : onAdd(item)}
+          // A tap adds the item without taking the keyboard away from the
+          // search box, so the cashier can keep typing the next name.
+          onMouseDown={(e) => e.preventDefault()}
           aria-label={choice.sizedPizza ? `Choose size for ${choice.name}` : `Add ${item.name}, ${formatCents(price)}`}
           aria-haspopup={choice.sizedPizza ? 'dialog' : undefined}
           className={cn('menu-tile', photo && 'has-photo')}

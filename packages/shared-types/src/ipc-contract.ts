@@ -26,6 +26,7 @@ import type {
   Rider,
 } from './order.js';
 import type { CashMovement, CashMovementType, Shift, ShiftSummary } from './shift.js';
+import type { BusinessReport, BusinessReportRequest } from './reports.js';
 import type {
   PrinterConnectionConfig,
   PrintPolicy,
@@ -43,9 +44,20 @@ import type {
   PurchaseOrderStatus,
   PurchaseOrderWithItems,
   BatchRecipe,
+  IngredientCategory,
+  StockMovementSearch,
+  StockMovementPage,
 } from './inventory.js';
-import type { Customer, CustomerAddress, CustomerAddressMatch, CustomerWithAddresses } from './customer.js';
+import type {
+  Customer,
+  CustomerAddress,
+  CustomerAddressMatch,
+  CustomerListRow,
+  CustomerListSort,
+  CustomerWithAddresses,
+} from './customer.js';
 import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
+import type { OrderHistoryFilter, OrderHistoryPage } from './order-history.js';
 
 /** One cloud copy as listed for the operator (from any till). */
 export interface CloudBackupEntry {
@@ -464,38 +476,13 @@ export interface IpcContract {
     response: ApiResult<OrderSnapshot[]>;
   };
   /**
-   * Richer list for the Order History page: includes customer snapshot,
-   * cashier name, item count, and primary payment method. Supports text
-   * search + date/status/mode filters.
+   * Order History page: one page of PLACED orders (never an open cart) plus
+   * totals across every page. Search by order number / name / phone; filter
+   * by date, status group, channel and payment method.
    */
   'orders:history': {
-    request:
-      | {
-          search?: string;
-          status?: Order['status'] | 'any';
-          mode?: OrderMode | 'any';
-          sinceIso?: string;
-          untilIso?: string;
-          limit?: number;
-        }
-      | undefined;
-    response: ApiResult<
-      Array<{
-        id: string;
-        orderNumber: string;
-        mode: OrderMode;
-        status: Order['status'];
-        customerName: string | null;
-        customerPhone: string | null;
-        tableLabel: string | null;
-        cashierName: string;
-        itemCount: number;
-        totalCents: number;
-        paidAt: string | null;
-        createdAt: string;
-        primaryPaymentMethod: PaymentMethod | null;
-      }>
-    >;
+    request: OrderHistoryFilter | undefined;
+    response: ApiResult<OrderHistoryPage>;
   };
   /**
    * Commit a still-open order without tendering. The COD entry path: cashier
@@ -841,6 +828,8 @@ export interface IpcContract {
       defaultSupplierId?: string | null;
       sku?: string | null;
       notes?: string | null;
+      /** Omitted or null = guessed from the name. */
+      category?: IngredientCategory | null;
     };
     response: ApiResult<Ingredient>;
   };
@@ -848,6 +837,8 @@ export interface IpcContract {
     request: {
       id: string;
       name?: string;
+      /** null = back to "guess from the name". */
+      category?: IngredientCategory | null;
       unit?: string;
       lowThreshold?: number;
       costPerUnitCents?: number;
@@ -883,6 +874,11 @@ export interface IpcContract {
     };
     response: ApiResult<{ menuItemId: string }>;
   };
+  /** How many recipe lines each menu item has (items with none never take stock). */
+  'inventory:listRecipeLineCounts': {
+    request: undefined;
+    response: ApiResult<Array<{ menuItemId: string; lineCount: number }>>;
+  };
 
   // Inventory — batch recipes (what the kitchen makes itself)
   'inventory:getBatchRecipe': {
@@ -913,6 +909,11 @@ export interface IpcContract {
       limit?: number;
     } | undefined;
     response: ApiResult<StockMovement[]>;
+  };
+  /** The movement history screen: filtered, one page at a time, names resolved. */
+  'inventory:searchMovements': {
+    request: StockMovementSearch | undefined;
+    response: ApiResult<StockMovementPage>;
   };
   'inventory:recordMovement': {
     request: {
@@ -1121,11 +1122,36 @@ export interface IpcContract {
       }>;
     }>;
   };
+  /** Everything on the Reports page for one period (plus comparison KPIs), in one call. */
+  'reports:business': {
+    request: BusinessReportRequest;
+    response: ApiResult<BusinessReport>;
+  };
 
   // Customers
   'customers:list': {
     request: { search?: string; activeOnly?: boolean; limit?: number } | undefined;
     response: ApiResult<Customer[]>;
+  };
+  /**
+   * One page of the Customers screen. `search` matches name, phone or house /
+   * street; `zoneIds` keeps customers with a saved address in those delivery
+   * zones (the shared DELIVERY_ZONES ids).
+   */
+  'customers:page': {
+    request: {
+      search?: string;
+      zoneIds?: string[];
+      sort?: CustomerListSort;
+      offset?: number;
+      limit?: number;
+    };
+    response: ApiResult<{ rows: CustomerListRow[]; total: number }>;
+  };
+  /** How many saved addresses name each area — the area picker puts the busiest first. */
+  'customers:areaUsage': {
+    request: { limit?: number } | undefined;
+    response: ApiResult<Array<{ area: string; count: number }>>;
   };
   'customers:findByPhone': {
     request: { phone: string };
@@ -1292,6 +1318,11 @@ export interface IpcContract {
      */
     request: { withoutSafetyCopy?: boolean } | undefined;
     response: ApiResult<{ relaunching: true }>;
+  };
+  /** The owner said no: drop the staged copy so the next start does not apply it. */
+  'backup:cancelStagedRestore': {
+    request: undefined;
+    response: ApiResult<{ cancelled: boolean }>;
   };
   /** Are the backups working? Warnings in plain words, for the dashboard. */
   'backup:health': {

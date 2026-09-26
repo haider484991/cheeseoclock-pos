@@ -4,8 +4,13 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { clearBatchRecipeLines } from './batch-recipe-repo.js';
-import type { Ingredient, Recipe } from '@cheeseoclock/shared-types';
-import { baseUnitConversion, costPerUnitFromPack } from '@cheeseoclock/pos-domain';
+import type { Ingredient, IngredientCategory, Recipe } from '@cheeseoclock/shared-types';
+import {
+  baseUnitConversion,
+  costPerUnitFromPack,
+  guessIngredientCategory,
+  isIngredientCategory,
+} from '@cheeseoclock/pos-domain';
 
 // -----------------------------------------------------------------------------
 // Ingredients
@@ -14,6 +19,8 @@ import { baseUnitConversion, costPerUnitFromPack } from '@cheeseoclock/pos-domai
 interface IngRow {
   id: string;
   name: string;
+  /** NULL = not chosen yet; guessed from the name on every read (migration 0024). */
+  category: string | null;
   unit: string;
   current_qty: number;
   low_threshold: number;
@@ -29,14 +36,22 @@ interface IngRow {
 }
 
 const ING_SELECT = `
-  id, name, unit, current_qty, low_threshold, cost_per_unit_cents,
+  id, name, category, unit, current_qty, low_threshold, cost_per_unit_cents,
   pack_size, pack_price_cents, batch_yield, batch_method, default_supplier_id, sku, notes, is_active
 `;
+
+/** The stored choice when there is a valid one, else the guess from the name. */
+function resolveCategory(stored: string | null, name: string): { category: IngredientCategory; categoryAuto: boolean } {
+  return isIngredientCategory(stored)
+    ? { category: stored, categoryAuto: false }
+    : { category: guessIngredientCategory(name), categoryAuto: true };
+}
 
 function rowToIngredient(r: IngRow): Ingredient {
   return {
     id: r.id as Ingredient['id'],
     name: r.name,
+    ...resolveCategory(r.category, r.name),
     unit: r.unit,
     currentQty: r.current_qty,
     lowThreshold: r.low_threshold,
@@ -74,6 +89,8 @@ export function findIngredient(db: AppDatabase, id: string): Ingredient | null {
 
 export interface CreateIngredientInput {
   name: string;
+  /** Omitted or null = guessed from the name (the menu import leaves it out). */
+  category?: IngredientCategory | null;
   unit: string;
   currentQty?: number;
   lowThreshold?: number;
@@ -105,9 +122,11 @@ export function createIngredient(
 ): Ingredient {
   const id = uuidv7();
   const now = nowIso();
+  const storedCategory = input.category ?? null;
   const ing: Ingredient = withPackCost({
     id: id as Ingredient['id'],
     name: input.name,
+    ...resolveCategory(storedCategory, input.name),
     unit: input.unit,
     currentQty: input.currentQty ?? 0,
     lowThreshold: input.lowThreshold ?? 0,
@@ -133,13 +152,14 @@ export function createIngredient(
     writeRow: () => {
       db.prepare(
         `INSERT INTO ingredients
-           (id, name, unit, current_qty, low_threshold, cost_per_unit_cents,
+           (id, name, category, unit, current_qty, low_threshold, cost_per_unit_cents,
             pack_size, pack_price_cents, default_supplier_id, sku, notes, is_active,
             created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
       ).run(
         id,
         ing.name,
+        storedCategory,
         ing.unit,
         ing.currentQty,
         ing.lowThreshold,
@@ -161,6 +181,8 @@ export function createIngredient(
 export interface UpdateIngredientInput {
   id: string;
   name?: string;
+  /** null = back to "guess from the name"; omitted = unchanged. */
+  category?: IngredientCategory | null;
   unit?: string;
   lowThreshold?: number;
   costPerUnitCents?: number;
@@ -189,9 +211,13 @@ export function updateIngredient(
   if (input.unit !== undefined && input.unit !== before.unit) {
     throw new Error(`Use Convert to change ${before.name} from ${before.unit} — it rescales stock, recipes and costs`);
   }
+  const name = input.name ?? before.name;
+  const storedCategory = input.category !== undefined ? input.category : isIngredientCategory(row.category) ? row.category : null;
   const after: Ingredient = withPackCost({
     ...before,
-    name: input.name ?? before.name,
+    name,
+    // A guessed category follows a rename; a chosen one stays.
+    ...resolveCategory(storedCategory, name),
     unit: input.unit ?? before.unit,
     lowThreshold: input.lowThreshold ?? before.lowThreshold,
     costPerUnitCents: input.costPerUnitCents ?? before.costPerUnitCents,
@@ -218,12 +244,13 @@ export function updateIngredient(
     writeRow: () => {
       db.prepare(
         `UPDATE ingredients SET
-           name = ?, unit = ?, low_threshold = ?, cost_per_unit_cents = ?,
+           name = ?, category = ?, unit = ?, low_threshold = ?, cost_per_unit_cents = ?,
            pack_size = ?, pack_price_cents = ?,
            default_supplier_id = ?, sku = ?, notes = ?, is_active = ?,
            updated_at = ?, version = version + 1 WHERE id = ?`,
       ).run(
         after.name,
+        storedCategory,
         after.unit,
         after.lowThreshold,
         after.costPerUnitCents,
@@ -488,6 +515,25 @@ export function listRecipeForItem(
     unit: r.unit,
     modifierName: r.modifier_name,
   }));
+}
+
+/**
+ * Recipe lines per menu item, counted the way `listRecipeForItem` lists them
+ * (live ingredient, live choice), so the Recipes screen can say "no recipe"
+ * without asking for every item's recipe one by one.
+ */
+export function listRecipeLineCounts(db: AppDatabase): Array<{ menuItemId: string; lineCount: number }> {
+  const rows = db
+    .prepare(
+      `SELECT r.menu_item_id, COUNT(*) AS n
+         FROM recipes r
+         JOIN ingredients i ON i.id = r.ingredient_id AND i.deleted_at IS NULL
+         LEFT JOIN modifiers m ON m.id = r.modifier_id AND m.deleted_at IS NULL
+        WHERE r.deleted_at IS NULL AND (r.modifier_id IS NULL OR m.id IS NOT NULL)
+        GROUP BY r.menu_item_id`,
+    )
+    .all() as Array<{ menu_item_id: string; n: number }>;
+  return rows.map((r) => ({ menuItemId: r.menu_item_id, lineCount: r.n }));
 }
 
 /** Replace the entire recipe for an item. One transaction. */

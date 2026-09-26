@@ -4,5 +4,7 @@ export * from './discount.js';
 export * from './pricing.js';
 export * from './order-validation.js';
 export * from './phone.js';
-export * from './dha-karachi.js';
+export * from './delivery-areas.js';
 export * from './units.js';
+export * from './ingredient-category.js';
+export * from './stock-level.js';

@@ -63,6 +63,11 @@ async function createMainWindow() {
       sandbox: false, // preload uses Node APIs (ipcRenderer); contextIsolation keeps renderer safe
       spellcheck: false,
       devTools: !app.isPackaged,
+      // A till is never "in the background": when another window covers it
+      // (WhatsApp, the browser), Chromium otherwise slows its timers, so the
+      // Live Orders board and web-order alerts go stale and then every
+      // refresh fires at once, a burst of lag, the moment it is brought back.
+      backgroundThrottling: false,
     },
   });
 

@@ -36,6 +36,24 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+
+  /*
+   * Sheets on phones: 92vh is taller than what is visible while the browser's
+   * address bar shows, which pushed the Add / Place order button off-screen.
+   * dvh tracks the visible height; vh stays as the fallback for old browsers.
+   */
+  .sheet-max-h {
+    max-height: 92vh;
+    max-height: 92dvh;
+  }
+
+  /* Bottom bars clear the iPhone home indicator (0 where there is none). */
+  .pb-safe {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  .pb-safe-4 {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

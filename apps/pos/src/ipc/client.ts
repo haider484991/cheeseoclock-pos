@@ -190,6 +190,9 @@ export const ipc = {
   },
   customers: {
     list: (input?: IpcRequest<'customers:list'>) => unwrap(window.api.customers.list(input)),
+    page: (input: IpcRequest<'customers:page'>) => unwrap(window.api.customers.page(input)),
+    areaUsage: (limit?: number) =>
+      unwrap(window.api.customers.areaUsage(limit ? { limit } : undefined)),
     findByPhone: (phone: string) => unwrap(window.api.customers.findByPhone({ phone })),
     get: (id: string) => unwrap(window.api.customers.get({ id })),
     create: (input: IpcRequest<'customers:create'>) =>
@@ -228,6 +231,7 @@ export const ipc = {
     delete: (fileName: string) => unwrap(window.api.backup.delete({ fileName })),
     applyAndRelaunch: (input?: IpcRequest<'backup:applyAndRelaunch'>) =>
       unwrap(window.api.backup.applyAndRelaunch(input)),
+    cancelStagedRestore: () => unwrap(window.api.backup.cancelStagedRestore()),
     health: () => unwrap(window.api.backup.health()),
   },
   tables: {
@@ -284,6 +288,8 @@ export const ipc = {
     cogs: (input: IpcRequest<'reports:cogs'>) => unwrap(window.api.reports.cogs(input)),
     cashSummary: (input: IpcRequest<'reports:cashSummary'>) =>
       unwrap(window.api.reports.cashSummary(input)),
+    business: (input: IpcRequest<'reports:business'>) =>
+      unwrap(window.api.reports.business(input)),
   },
   inventory: {
     listIngredients: (input?: IpcRequest<'inventory:listIngredients'>) =>
@@ -300,6 +306,7 @@ export const ipc = {
       unwrap(window.api.inventory.getRecipe({ menuItemId })),
     setRecipe: (input: IpcRequest<'inventory:setRecipe'>) =>
       unwrap(window.api.inventory.setRecipe(input)),
+    listRecipeLineCounts: () => unwrap(window.api.inventory.listRecipeLineCounts()),
     getBatchRecipe: (ingredientId: string) =>
       unwrap(window.api.inventory.getBatchRecipe({ ingredientId })),
     setBatchRecipe: (input: IpcRequest<'inventory:setBatchRecipe'>) =>
@@ -308,6 +315,8 @@ export const ipc = {
       unwrap(window.api.inventory.makeBatch(input)),
     listMovements: (input?: IpcRequest<'inventory:listMovements'>) =>
       unwrap(window.api.inventory.listMovements(input)),
+    searchMovements: (input?: IpcRequest<'inventory:searchMovements'>) =>
+      unwrap(window.api.inventory.searchMovements(input)),
     recordMovement: (input: IpcRequest<'inventory:recordMovement'>) =>
       unwrap(window.api.inventory.recordMovement(input)),
     listSuppliers: (input?: IpcRequest<'inventory:listSuppliers'>) =>

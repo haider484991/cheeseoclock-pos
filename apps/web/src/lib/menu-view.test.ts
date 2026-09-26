@@ -189,6 +189,23 @@ describe('value deals', () => {
     expect(JSON.stringify(menuWithoutDrinkBrand(old))).not.toMatch(/pepsi/i);
   });
 
+  it('still prices a deal that carries optional add-on groups (dips on the side)', () => {
+    const withDips = {
+      ...bigTwo,
+      modifierGroups: [
+        ...bigTwo.modifierGroups,
+        {
+          ...slot('Dips on the side', ['Side of Ranch', 'Side of Garlic Mayo']),
+          selectionType: 'multi' as const,
+          minSelect: 0,
+          maxSelect: 9,
+          isRequired: false,
+        },
+      ],
+    };
+    expect(dealWorthCents(m, withDips)).toBe(425_000);
+  });
+
   it('claims no saving it cannot price', () => {
     expect(dealWorthCents(m, item('Nuggets', 670))).toBeNull();
     const noDrink = menu([['Pizza', [item('Fajita Pizza — Large', 2000)]]]);

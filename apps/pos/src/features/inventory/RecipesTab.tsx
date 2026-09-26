@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
@@ -8,6 +8,18 @@ import { useToast } from '../../components/toast/ToastProvider';
 import type { Ingredient, MenuItem } from '@cheeseoclock/shared-types';
 import { X, Plus, Trash2, Edit, BookOpen, ChefHat, Soup } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import {
+  FilterChips,
+  Pagination,
+  SearchBox,
+  ToggleChip,
+  compareText,
+  countBy,
+  useListQuery,
+  useSessionState,
+  type ChipOption,
+} from '../../components/list';
+import { IngredientSelect } from './IngredientSelect';
 
 type Mode = 'items' | 'batches';
 
@@ -47,55 +59,90 @@ export function RecipesTab() {
 function MenuItemRecipes() {
   const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
   const catsQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
+  const countsQ = useQuery({
+    queryKey: ['inventory', 'recipeLineCounts'],
+    queryFn: () => ipc.inventory.listRecipeLineCounts(),
+  });
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
-  const [filter, setFilter] = useState<string | 'all'>('all');
+  const [category, setCategory] = useSessionState<string>('inv.rec.category', 'all');
+  const [missingOnly, setMissingOnly] = useSessionState('inv.rec.missing', false);
 
-  const items = (itemsQ.data ?? []).filter((i) => filter === 'all' || i.categoryId === filter);
-  const catName = (id: string) => catsQ.data?.find((c) => c.id === id)?.name ?? '?';
+  const lineCount = useMemo(() => new Map((countsQ.data ?? []).map((c) => [c.menuItemId, c.lineCount])), [countsQ.data]);
+  const hasRecipe = useCallback((item: MenuItem) => (lineCount.get(item.id) ?? 0) > 0, [lineCount]);
+  const catName = useCallback((id: string) => catsQ.data?.find((c) => c.id === id)?.name ?? '?', [catsQ.data]);
+
+  const filter = useCallback(
+    (i: MenuItem) => (category === 'all' || i.categoryId === category) && (!missingOnly || !hasRecipe(i)),
+    [category, missingOnly, hasRecipe],
+  );
+  const sortedItems = useMemo(
+    () => [...(itemsQ.data ?? [])].sort((a, b) => compareText(a.name, b.name)),
+    [itemsQ.data],
+  );
+  const searchText = useCallback((i: MenuItem) => `${i.name} ${catName(i.categoryId)}`, [catName]);
+  const list = useListQuery({
+    items: sortedItems,
+    searchText,
+    filter,
+    persistKey: 'inv.rec',
+    resetPageOn: [category, missingOnly],
+  });
+
+  const catCounts = countBy(
+    list.searched.filter((i) => !missingOnly || !hasRecipe(i)),
+    (i) => i.categoryId,
+  );
+  const categoryOptions: ChipOption<string>[] = [
+    { id: 'all', label: 'All', count: list.searched.filter((i) => !missingOnly || !hasRecipe(i)).length },
+    ...(catsQ.data ?? [])
+      .filter((c) => (catCounts[c.id] ?? 0) > 0 || c.id === category)
+      .map((c) => ({ id: c.id, label: c.name, count: catCounts[c.id] ?? 0 })),
+  ];
+  const missingCount = list.searched.filter(
+    (i) => (category === 'all' || i.categoryId === category) && !hasRecipe(i),
+  ).length;
 
   return (
     <Card>
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setFilter('all')}
-            className={cn(
-              'rounded-full px-3 py-1 text-xs font-semibold',
-              filter === 'all'
-                ? 'bg-amber-500 text-stone-900'
-                : 'bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300',
-            )}
-          >
-            All
-          </button>
-          {catsQ.data?.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => setFilter(c.id)}
-              className={cn(
-                'rounded-full px-3 py-1 text-xs font-semibold',
-                filter === c.id
-                  ? 'text-stone-900'
-                  : 'bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300',
-              )}
-              style={filter === c.id ? { background: c.colorHex } : undefined}
-            >
-              {c.name}
-            </button>
-          ))}
-        </div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <SearchBox value={list.query} onChange={list.setQuery} placeholder="Search menu items…" label="Search menu items" />
+        <ToggleChip
+          active={missingOnly}
+          onChange={setMissingOnly}
+          label="No recipe yet"
+          count={countsQ.data ? missingCount : undefined}
+          tone="red"
+        />
       </div>
+      <FilterChips label="Menu category" className="mb-3" options={categoryOptions} value={category} onChange={setCategory} />
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-        {items.map((item) => (
+        {list.items.map((item) => (
           <RecipeCard key={item.id} item={item} categoryName={catName(item.categoryId)} onEdit={() => setEditingItem(item)} />
         ))}
-        {items.length === 0 && (
-          <div className="col-span-2 py-6 text-center text-stone-500">No menu items.</div>
+        {list.total === 0 && (
+          <div className="col-span-full py-8 text-center text-stone-500">
+            {itemsQ.isLoading
+              ? 'Loading…'
+              : (itemsQ.data ?? []).length === 0
+                ? 'No menu items yet.'
+                : missingOnly && !list.query
+                  ? 'Every item here has a recipe.'
+                  : 'No menu items match.'}
+          </div>
         )}
       </div>
+      <Pagination
+        page={list.page}
+        pageCount={list.pageCount}
+        total={list.total}
+        from={list.from}
+        to={list.to}
+        onPage={list.setPage}
+        pageSize={list.pageSize}
+        onPageSize={list.setPageSize}
+        noun={list.total === 1 ? 'menu item' : 'menu items'}
+      />
 
       {editingItem && <RecipeEditor item={editingItem} onClose={() => setEditingItem(null)} />}
     </Card>
@@ -126,7 +173,14 @@ function RecipeCard({
     <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
       <div className="flex items-center justify-between">
         <div>
-          <div className="font-semibold">{item.name}</div>
+          <div className="font-semibold">
+            {item.name}
+            {!item.isActive && (
+              <span className="ml-2 rounded bg-stone-200 px-1.5 py-0.5 text-[11px] font-medium text-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                off the menu
+              </span>
+            )}
+          </div>
           <div className="text-xs text-stone-500">{categoryName}</div>
         </div>
         <Button variant="secondary" size="sm" onClick={onEdit}>
@@ -212,6 +266,7 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
     onSuccess: () => {
       toast({ title: 'Recipe saved', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['inventory', 'recipe', item.id] });
+      void qc.invalidateQueries({ queryKey: ['inventory', 'recipeLineCounts'] });
       onClose();
     },
     onError: (e) =>
@@ -222,14 +277,27 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
       }),
   });
 
+  // A new line starts empty: it used to pick the first unused ingredient A–Z
+  // ("Baking Powder"), which people saved by mistake.
   function addLine() {
-    const firstUnused = ingredientsQ.data?.find((i) => !lines.some((l) => l.ingredientId === i.id));
-    if (!firstUnused) {
-      toast({ title: 'No more ingredients to add', variant: 'warning' });
-      return;
-    }
-    setLines((prev) => [...prev, { ingredientId: firstUnused.id, qtyPerUnit: 1, modifierId: null }]);
+    setLines((prev) => [...prev, { ingredientId: '', qtyPerUnit: 0, modifierId: null }]);
   }
+
+  const seen = new Set<string>();
+  const duplicate = lines.find((l) => {
+    const key = `${l.ingredientId}|${l.modifierId ?? ''}`;
+    if (!l.ingredientId) return false;
+    if (seen.has(key)) return true;
+    seen.add(key);
+    return false;
+  });
+  const problem = lines.some((l) => !l.ingredientId)
+    ? 'Pick an ingredient on every line.'
+    : lines.some((l) => l.qtyPerUnit <= 0)
+      ? 'Every line needs an amount.'
+      : duplicate
+        ? `${ingredientsQ.data?.find((x) => x.id === duplicate.ingredientId)?.name ?? 'An ingredient'} is listed twice for the same choice.`
+        : null;
 
   function updateLine(i: number, patch: Partial<EditLine>) {
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
@@ -270,23 +338,20 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
             )}
             {lines.map((line, i) => (
               <div key={i} className="flex items-center gap-2">
-                <select
+                <IngredientSelect
+                  ingredients={ingredientsQ.data}
                   value={line.ingredientId}
-                  onChange={(e) => updateLine(i, { ingredientId: e.target.value })}
-                  className="flex-1 rounded-lg border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
-                >
-                  {ingredientsQ.data?.map((ing) => (
-                    <option key={ing.id} value={ing.id}>
-                      {ing.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(id) => updateLine(i, { ingredientId: id })}
+                  className="min-w-0 flex-1"
+                />
                 <input
                   type="number"
                   step="1"
                   min={1}
                   inputMode="numeric"
-                  value={line.qtyPerUnit}
+                  value={line.qtyPerUnit || ''}
+                  placeholder="qty"
+                  aria-label="Amount per one sold"
                   onChange={(e) => updateLine(i, { qtyPerUnit: parseInt(e.target.value, 10) || 0 })}
                   className="w-20 rounded-lg border border-stone-300 px-3 py-2 text-right font-mono dark:border-stone-700 dark:bg-stone-800"
                 />
@@ -318,13 +383,14 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
               <Plus className="h-3 w-3" /> Add ingredient
             </Button>
           </div>
-          <footer className="flex justify-end gap-2 border-t border-stone-200 p-5 dark:border-stone-800">
+          <footer className="flex items-center justify-end gap-2 border-t border-stone-200 p-5 dark:border-stone-800">
+            {problem && <span className="mr-auto text-xs text-red-700 dark:text-red-400">{problem}</span>}
             <Button variant="secondary" onClick={onClose}>
               Cancel
             </Button>
             <Button
               variant="primary"
-              disabled={mut.isPending || lines.some((l) => !l.ingredientId || l.qtyPerUnit <= 0)}
+              disabled={mut.isPending || problem !== null}
               onClick={() => mut.mutate()}
             >
               {mut.isPending ? 'Saving…' : 'Save recipe'}
@@ -360,18 +426,14 @@ function BatchRecipes() {
           batch in, so menu recipes can use it by the gram.
         </p>
         <div className="flex items-center gap-2">
-          <select
+          <IngredientSelect
+            ingredients={boughtIn}
             value={adding}
-            onChange={(e) => setAdding(e.target.value)}
-            className="rounded-lg border border-stone-300 px-2 py-1.5 text-sm dark:border-stone-700 dark:bg-stone-800"
-          >
-            <option value="">New batch recipe for…</option>
-            {boughtIn.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.name}
-              </option>
-            ))}
-          </select>
+            onChange={setAdding}
+            placeholder="New batch recipe for…"
+            label="Make a batch recipe for"
+            className="px-2 py-1.5 text-sm"
+          />
           <Button
             variant="secondary"
             size="sm"
@@ -479,15 +541,20 @@ function BatchEditor({ ingredient, onClose }: { ingredient: Ingredient; onClose:
 
   const inputs = (ingredientsQ.data ?? []).filter((i) => i.id !== ingredient.id);
   const hasYield = parseInt(yieldQty, 10) > 0;
+  const inputIds = lines.map((l) => l.inputIngredientId).filter(Boolean);
   // A batch recipe is both: how much it makes, and what it uses.
   const problem =
     lines.length === 0
       ? 'Add at least one ingredient the batch uses.'
       : !hasYield
         ? 'Say how much one batch makes.'
-        : lines.some((l) => l.qty <= 0)
-          ? 'Every ingredient needs a quantity.'
-          : null;
+        : lines.some((l) => !l.inputIngredientId)
+          ? 'Pick an ingredient on every line.'
+          : lines.some((l) => l.qty <= 0)
+            ? 'Every ingredient needs a quantity.'
+            : new Set(inputIds).size !== inputIds.length
+              ? 'An ingredient is listed twice.'
+              : null;
   const mut = useMutation({
     mutationFn: (remove: boolean) =>
       ipc.inventory.setBatchRecipe(
@@ -542,24 +609,21 @@ function BatchEditor({ ingredient, onClose }: { ingredient: Ingredient; onClose:
             </label>
             {lines.map((line, i) => (
               <div key={i} className="flex items-center gap-2">
-                <select
+                <IngredientSelect
+                  ingredients={inputs}
                   value={line.inputIngredientId}
-                  onChange={(e) =>
-                    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, inputIngredientId: e.target.value } : l)))
+                  onChange={(id) =>
+                    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, inputIngredientId: id } : l)))
                   }
-                  className="flex-1 rounded-lg border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
-                >
-                  {inputs.map((ing) => (
-                    <option key={ing.id} value={ing.id}>
-                      {ing.name}
-                    </option>
-                  ))}
-                </select>
+                  className="min-w-0 flex-1"
+                />
                 <input
                   type="number"
                   min={1}
                   step="1"
-                  value={line.qty}
+                  placeholder="qty"
+                  aria-label="Amount in one batch"
+                  value={line.qty || ''}
                   onChange={(e) =>
                     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, qty: parseInt(e.target.value, 10) || 0 } : l)))
                   }
@@ -581,10 +645,7 @@ function BatchEditor({ ingredient, onClose }: { ingredient: Ingredient; onClose:
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => {
-                const next = inputs.find((i) => !lines.some((l) => l.inputIngredientId === i.id));
-                if (next) setLines((prev) => [...prev, { inputIngredientId: next.id, qty: 1 }]);
-              }}
+              onClick={() => setLines((prev) => [...prev, { inputIngredientId: '', qty: 0 }])}
             >
               <Plus className="h-3 w-3" /> Add input
             </Button>

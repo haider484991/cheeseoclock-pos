@@ -31,3 +31,14 @@ export interface CustomerAddressMatch extends CustomerAddress {
 export interface CustomerWithAddresses extends Customer {
   addresses: CustomerAddress[];
 }
+
+/** One row of the Customers screen: the customer plus what the list shows. */
+export interface CustomerListRow extends Customer {
+  /** Placed orders (not open drafts, not voided). */
+  orderCount: number;
+  lastOrderAt: string | null;
+  /** Area of the default address (else the newest one), for the list's Area column. */
+  area: string | null;
+}
+
+export type CustomerListSort = 'name' | 'recent' | 'orders';

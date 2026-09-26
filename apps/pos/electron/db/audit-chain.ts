@@ -84,49 +84,82 @@ export interface VerifyOptions {
 }
 
 /**
- * Walk rows in rowid order and check every link. Legacy rows (no hash) are
- * only allowed before the chain starts; one appearing later means a row was
- * inserted around the hashing code and is reported as a break.
+ * The chain walk one row at a time, so a caller can feed rows in pages and
+ * hand the event loop back in between: a year of trade is hundreds of
+ * thousands of rows, several seconds of hashing, and on the till's main
+ * process that is several seconds of a frozen screen.
+ *
+ * Legacy rows (no hash) are only allowed before the chain starts; one
+ * appearing later means a row was inserted around the hashing code and is
+ * reported as a break.
  */
+export class AuditChainVerifier {
+  private totalRows = 0;
+  private checkedRows = 0;
+  private legacyRows = 0;
+  private expectedPrev: string | null = null; // null until the first hashed row
+  private headHash: string | null = null;
+  private broken: AuditChainReport | null = null;
+
+  constructor(private readonly opts: VerifyOptions = {}) {}
+
+  /** Check the next row in rowid order. False once the chain is broken: stop feeding it. */
+  push(r: AuditChainRow): boolean {
+    if (this.broken) return false;
+    this.totalRows += 1;
+    if (r.rowHash === null) {
+      if (this.expectedPrev !== null) {
+        return this.fail(r, 'a row without a hash appears after the chain started');
+      }
+      this.legacyRows += 1;
+      return true;
+    }
+    const prev = this.expectedPrev ?? this.opts.anchorPrevHash ?? AUDIT_CHAIN_GENESIS;
+    if ((r.prevHash ?? '') !== prev) {
+      return this.fail(r, 'the link to the previous row does not match');
+    }
+    if (hashAuditRow(prev, r) !== r.rowHash) {
+      return this.fail(r, 'the row content does not match its hash');
+    }
+    this.checkedRows += 1;
+    this.expectedPrev = r.rowHash;
+    this.headHash = r.rowHash;
+    return true;
+  }
+
+  report(): AuditChainReport {
+    if (this.broken) return this.broken;
+    return {
+      ok: true,
+      totalRows: this.totalRows,
+      checkedRows: this.checkedRows,
+      legacyRows: this.legacyRows,
+      headHash: this.headHash,
+      brokenAt: null,
+    };
+  }
+
+  private fail(r: AuditChainRow, reason: string): false {
+    this.broken = {
+      ok: false,
+      totalRows: this.totalRows,
+      checkedRows: this.checkedRows,
+      legacyRows: this.legacyRows,
+      headHash: this.headHash,
+      brokenAt: { rowid: r.rowid, id: r.id, createdAt: r.createdAt, reason },
+    };
+    return false;
+  }
+}
+
+/** Walk rows in rowid order and check every link (see AuditChainVerifier). */
 export function verifyAuditChain(
   rows: Iterable<AuditChainRow>,
   opts: VerifyOptions = {},
 ): AuditChainReport {
-  let totalRows = 0;
-  let checkedRows = 0;
-  let legacyRows = 0;
-  let expectedPrev: string | null = null; // null until the first hashed row
-  let headHash: string | null = null;
-
-  const fail = (r: AuditChainRow, reason: string): AuditChainReport => ({
-    ok: false,
-    totalRows,
-    checkedRows,
-    legacyRows,
-    headHash,
-    brokenAt: { rowid: r.rowid, id: r.id, createdAt: r.createdAt, reason },
-  });
-
+  const verifier = new AuditChainVerifier(opts);
   for (const r of rows) {
-    totalRows += 1;
-    if (r.rowHash === null) {
-      if (expectedPrev !== null) {
-        return fail(r, 'a row without a hash appears after the chain started');
-      }
-      legacyRows += 1;
-      continue;
-    }
-    const prev = expectedPrev ?? opts.anchorPrevHash ?? AUDIT_CHAIN_GENESIS;
-    if ((r.prevHash ?? '') !== prev) {
-      return fail(r, 'the link to the previous row does not match');
-    }
-    if (hashAuditRow(prev, r) !== r.rowHash) {
-      return fail(r, 'the row content does not match its hash');
-    }
-    checkedRows += 1;
-    expectedPrev = r.rowHash;
-    headHash = r.rowHash;
+    if (!verifier.push(r)) break;
   }
-
-  return { ok: true, totalRows, checkedRows, legacyRows, headHash, brokenAt: null };
+  return verifier.report();
 }

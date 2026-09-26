@@ -19,6 +19,7 @@ import {
   History,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { StoreLogo, useImageAspect } from '../settings/StoreLogo';
 
 interface NavItem {
   to: string;
@@ -51,37 +52,22 @@ export function Sidebar() {
     queryFn: () => ipc.printer.getConfig(),
     staleTime: 60_000,
   });
-  // Live count of active orders for the sidebar badge. Refetches every 15s
-  // so it's roughly current without thrashing the DB.
+  // Live count of active orders for the sidebar badge. Shares the Live Orders
+  // board's own "All" query, so the two never fetch the same snapshots twice.
   const activeQ = useQuery({
-    queryKey: ['orders', 'active', 'sidebar-count'],
-    queryFn: () => ipc.orders.listActive(),
+    queryKey: ['orders', 'active', 'all'],
+    queryFn: () => ipc.orders.listActive(undefined),
     refetchInterval: 15_000,
     enabled: can('order.create'),
+    select: (d) => d.length,
   });
-  const liveCount = activeQ.data?.length ?? 0;
+  const liveCount = activeQ.data ?? 0;
   const logoUrl = cfgQ.data?.branding.logoUrl;
   const storeName = cfgQ.data?.branding.storeName ?? 'CheeseOclock';
 
   return (
     <aside className="app-sidebar flex w-60 shrink-0 flex-col border-r border-stone-200/70 bg-white/70 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/70">
-      <div className="flex items-center gap-3 px-5 py-5">
-        <div className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
-          {logoUrl ? (
-             
-            <img src={logoUrl} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <Pizza className="h-5 w-5" />
-          )}
-          <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-stone-900" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-bold tracking-tight">{storeName}</div>
-          <div className="text-[10px] uppercase tracking-widest text-stone-500">
-            Point of Sale
-          </div>
-        </div>
-      </div>
+      <SidebarBrand logoUrl={logoUrl} storeName={storeName} />
 
       <nav className="flex-1 space-y-0.5 px-3 pb-3">
         {ITEMS.map((item) => {
@@ -146,6 +132,64 @@ export function Sidebar() {
 
       <SidebarFooter />
     </aside>
+  );
+}
+
+/** A logo at least this much wider than tall gets the full width of the sidebar. */
+const WIDE_LOGO = 1.8;
+
+/**
+ * The shop's logo and name at the top of the sidebar. Also drawn by the
+ * Branding settings preview, so what the owner sees there is exactly this.
+ *
+ * The narrow sidebar (checkout, smaller screens) hides the element's last
+ * child and keeps the first, so the logo frame comes first and may shrink
+ * to the narrow width (max-w-full); the whole logo stays visible either way.
+ */
+export function SidebarBrand({
+  logoUrl,
+  storeName,
+}: {
+  logoUrl?: string | null | undefined;
+  storeName: string;
+}) {
+  const aspect = useImageAspect(logoUrl);
+  const wide = !!logoUrl && (aspect ?? 1) >= WIDE_LOGO;
+  const dot = (
+    <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-stone-900" />
+  );
+  const fallback = (
+    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
+      <Pizza className="h-5 w-5" />
+    </span>
+  );
+
+  if (wide) {
+    return (
+      <div className="flex flex-col items-start gap-2 px-5 py-4">
+        <div className="relative max-w-full">
+          <StoreLogo src={logoUrl} height={48} maxWidth={200} />
+          {dot}
+        </div>
+        <div className="min-w-0 max-w-full">
+          <div className="truncate text-sm font-bold tracking-tight">{storeName}</div>
+          <div className="text-[10px] uppercase tracking-widest text-stone-500">Point of Sale</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 px-5 py-5">
+      <div className="relative flex max-w-full shrink-0">
+        <StoreLogo src={logoUrl} height={40} maxWidth={60} fallback={fallback} />
+        {dot}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-base font-bold tracking-tight">{storeName}</div>
+        <div className="text-[10px] uppercase tracking-widest text-stone-500">Point of Sale</div>
+      </div>
+    </div>
   );
 }
 

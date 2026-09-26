@@ -8,17 +8,17 @@ import { Cloud, AlertTriangle, CheckCircle2, Info, PauseCircle } from 'lucide-re
 type Mode = 'off' | 'mock' | 'http';
 
 const MODES: Array<{ id: Mode; label: string; description: string; devOnly?: boolean }> = [
-  { id: 'off', label: 'Off', description: 'One till. Everything stays on this PC.' },
+  { id: 'off', label: 'Off (one till)', description: 'Everything stays on this computer. Right for most shops.' },
   {
     id: 'mock',
-    label: 'Mock (developer)',
+    label: 'Developer test',
     description: 'Writes sync payloads to userData/sync-mock/ instead of a server.',
     devOnly: true,
   },
   {
     id: 'http',
-    label: 'Sync server',
-    description: 'Share data with other tills through a hosted sync server.',
+    label: 'On (two or more tills)',
+    description: 'Orders, menu and stock are shared with the other tills through a sync server.',
   },
 ];
 
@@ -58,7 +58,7 @@ export function SyncSettings() {
         paused,
       }),
     onSuccess: () => {
-      toast({ title: 'Sync settings saved', variant: 'success' });
+      toast({ title: 'Second till settings saved', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['sync'] });
     },
     onError: (e) =>
@@ -71,10 +71,10 @@ export function SyncSettings() {
 
   const triggerMut = useMutation({
     mutationFn: () => ipc.sync.triggerNow(),
-    onSuccess: () => toast({ title: 'Sync kicked', variant: 'success' }),
+    onSuccess: () => toast({ title: 'Syncing now', variant: 'success' }),
     onError: (e) =>
       toast({
-        title: 'Failed',
+        title: 'Could not sync',
         description: e instanceof Error ? e.message : String(e),
         variant: 'error',
       }),
@@ -88,7 +88,7 @@ export function SyncSettings() {
     <Card>
       <div className="mb-4 flex items-center gap-2">
         <Cloud className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">Second till (multi-device sync)</h2>
+        <h2 className="text-lg font-semibold">Second till</h2>
         {ready &&
           mode !== 'off' &&
           (ready.ok ? (
@@ -103,16 +103,16 @@ export function SyncSettings() {
       </div>
 
       <p className="mb-4 rounded-xl bg-stone-50 p-3 text-sm leading-relaxed text-stone-600 dark:bg-stone-800/50 dark:text-stone-300">
-        Copies orders, menu and stock between two or more POS PCs. It is{' '}
+        Shares orders, menu and stock between two or more till computers. It is{' '}
         <strong>not</strong> needed for one till, and it has nothing to do with
-        website orders or cloud backups (those live under Online orders and
-        Backups). Leave it <strong>Off</strong> unless you add a second counter.
+        website orders or backups (those are under Online orders and Backups).
+        Leave it <strong>Off</strong> unless a second counter is being added.
       </p>
 
       <section className="space-y-4">
         <div>
           <label className="mb-2 block text-xs uppercase tracking-wider text-stone-500">
-            Mode
+            Second till link
           </label>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             {modes.map((m) => (
@@ -138,7 +138,7 @@ export function SyncSettings() {
           <>
             <div>
               <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-                Backend URL
+                Sync server address
               </label>
               <input
                 type="text"
@@ -148,20 +148,19 @@ export function SyncSettings() {
                 className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
               />
               <div className="mt-1 text-xs text-stone-500">
-                Expects <code>POST /sync/push</code> + <code>GET /sync/pull?since=…</code> with a
-                bearer token.
+                Given to you by whoever set up the second till.
               </div>
             </div>
             <div>
               <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-                Device secret
+                This till&rsquo;s password on the sync server
               </label>
               <div className="flex gap-2">
                 <input
                   type={showSecret ? 'text' : 'password'}
                   value={deviceSecret}
                   onChange={(e) => setDeviceSecret(e.target.value)}
-                  placeholder="Long random token, paired with this device on the server"
+                  placeholder="Given to you with the server address"
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
                 />
                 <button
@@ -196,7 +195,7 @@ export function SyncSettings() {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-              Poll every (seconds)
+              Check for changes every (seconds)
             </label>
             <input
               type="number"
@@ -213,7 +212,7 @@ export function SyncSettings() {
               checked={paused}
               onChange={(e) => setPaused(e.target.checked)}
             />
-            <PauseCircle className="h-4 w-4 text-stone-500" /> Pause sync
+            <PauseCircle className="h-4 w-4 text-stone-500" /> Pause (changes wait here)
           </label>
         </div>
 
@@ -221,7 +220,7 @@ export function SyncSettings() {
           <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
             <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
             <div>
-              <div className="font-semibold">Missing before sync goes live:</div>
+              <div className="font-semibold">Fill these in first:</div>
               <div className="text-amber-900 dark:text-amber-200">
                 {ready.missing.join(', ')}
               </div>
@@ -235,7 +234,7 @@ export function SyncSettings() {
             disabled={triggerMut.isPending || mode === 'off'}
             onClick={() => triggerMut.mutate()}
           >
-            Trigger sync now
+            Sync now
           </Button>
           <Button variant="primary" disabled={saveMut.isPending} onClick={() => saveMut.mutate()}>
             {saveMut.isPending ? 'Saving…' : 'Save'}

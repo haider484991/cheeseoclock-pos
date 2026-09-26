@@ -57,7 +57,8 @@ export function AppShell() {
             : payload.jobKind === 'drawer'
               ? 'Could not open the cash drawer'
               : 'Could not print receipt'),
-        variant: 'error',
+        // A retry on its way is a warning that clears itself; a final failure stays until closed.
+        variant: payload.retrying ? 'warning' : 'error',
       });
     });
   }, [toast]);

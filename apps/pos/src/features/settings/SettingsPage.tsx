@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { cn } from '@cheeseoclock/ui';
 import {
   Store,
@@ -7,11 +8,12 @@ import {
   Globe,
   Database,
   Building2,
-  Settings2,
+  MonitorSmartphone,
   Info,
   CheckCircle2,
   AlertTriangle,
   MinusCircle,
+  XCircle,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { PrinterSettings } from './PrinterSettings';
@@ -20,9 +22,8 @@ import { KitchenPrinterSettings } from './KitchenPrinterSettings';
 import { BrandingSettings } from './BrandingSettings';
 import { FbrSettings } from './FbrSettings';
 import { SyncSettings } from './SyncSettings';
-import { BackupSettings, UsbRestoreSettings } from './BackupSettings';
-import { CloudBackupSettings } from './CloudBackupSettings';
-import { AuditTrailCard } from './AuditTrailCard';
+import { BackupsPanel } from './BackupSettings';
+import { useBackupSummary } from './useBackupSummary';
 import { WebsiteSettings } from './WebsiteSettings';
 import { AboutCard } from './AboutCard';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -43,21 +44,26 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  { id: 'store', label: 'Store', icon: Store },
-  { id: 'printer', label: 'Printer', icon: Printer },
+  { id: 'store', label: 'Shop & logo', icon: Store },
+  { id: 'printer', label: 'Printers', icon: Printer },
   { id: 'online', label: 'Online orders', icon: Globe },
   { id: 'backups', label: 'Backups', icon: Database },
   { id: 'fbr', label: 'FBR invoicing', icon: Building2 },
-  { id: 'advanced', label: 'Advanced', icon: Settings2 },
+  // The id stays 'advanced' so a remembered tab still opens here.
+  { id: 'advanced', label: 'Second till', icon: MonitorSmartphone },
   { id: 'about', label: 'About', icon: Info },
 ];
 
 const TAB_KEY = 'settings.tab';
 
+function isTab(v: string | null): v is SettingsTab {
+  return !!v && TABS.some((t) => t.id === v);
+}
+
 function readSavedTab(): SettingsTab {
   try {
     const v = sessionStorage.getItem(TAB_KEY);
-    if (v && TABS.some((t) => t.id === v)) return v as SettingsTab;
+    if (isTab(v)) return v;
   } catch {
     // storage unavailable: start on the first tab
   }
@@ -66,16 +72,23 @@ function readSavedTab(): SettingsTab {
 
 /**
  * Settings is organised by what the shop needs, one tab each. Everything that
- * belongs to one topic lives on one tab: the three backup layers (local, cloud,
- * USB) are together even though the cloud copy travels over the website
- * connection, and the second-till sync, a form that looks like the website one
- * but is unrelated, sits under Advanced so it cannot be mistaken for it.
+ * belongs to one topic lives on one tab: every backup (this computer, online,
+ * USB) is in one Backups area even though the online copy travels over the
+ * website connection, and the second-till sync, a form that looks like the
+ * website one but is unrelated, has its own tab so it cannot be mistaken for it.
+ *
+ * `/settings?tab=backups` opens a tab directly (the dashboard banner does).
  */
 export function SettingsPage() {
   // A manager comes here for the printers only; the rest is the owner's.
   const full = useSessionStore((s) => s.can('settings.manage'));
   const tabs = full ? TABS : TABS.filter((t) => t.id === 'printer' || t.id === 'about');
-  const [savedTab, setTab] = useState<SettingsTab>(readSavedTab);
+  const [params] = useSearchParams();
+  const fromUrl = params.get('tab');
+  const [savedTab, setTab] = useState<SettingsTab>(() => (isTab(fromUrl) ? fromUrl : readSavedTab()));
+  useEffect(() => {
+    if (isTab(fromUrl)) setTab(fromUrl);
+  }, [fromUrl]);
   const tab: SettingsTab = tabs.some((t) => t.id === savedTab) ? savedTab : 'printer';
 
   useEffect(() => {
@@ -92,7 +105,7 @@ export function SettingsPage() {
         <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
         <p className="mt-1 text-stone-600 dark:text-stone-400">
           {full
-            ? 'Set up the shop in order: Store, Printer, then Online orders. Backups run on their own once the website is connected.'
+            ? 'Setting up? Go left to right: Shop & logo, Printers, then Online orders. Backups run on their own.'
             : 'The printers for this till. The rest of Settings is for the owner’s login.'}
         </p>
       </header>
@@ -139,21 +152,7 @@ export function SettingsPage() {
           </>
         )}
         {tab === 'online' && <WebsiteSettings />}
-        {tab === 'backups' && (
-          <>
-            <p className="text-sm text-stone-600 dark:text-stone-400">
-              Three copies protect the shop&rsquo;s data: a daily snapshot on this
-              PC, a daily compressed copy in the cloud, and the USB copy you export
-              yourself. If this PC dies, restore from the cloud or the USB copy.
-              Restoring or deleting a copy needs the owner login, a safety copy is
-              made first, and every restore is written into the audit trail.
-            </p>
-            <BackupSettings />
-            <CloudBackupSettings onGoToOnline={() => setTab('online')} />
-            <UsbRestoreSettings />
-            <AuditTrailCard />
-          </>
-        )}
+        {tab === 'backups' && <BackupsPanel onGoToOnline={() => setTab('online')} />}
         {tab === 'fbr' && <FbrSettings />}
         {tab === 'advanced' && <SyncSettings />}
         {tab === 'about' && <AboutCard />}
@@ -164,7 +163,7 @@ export function SettingsPage() {
 
 // ---------------------------------------------------------------------------
 
-type Tone = 'good' | 'warn' | 'off';
+type Tone = 'good' | 'warn' | 'bad' | 'off';
 
 interface Tile {
   label: string;
@@ -175,16 +174,13 @@ const LOADING: Tile = { label: 'Loading…', tone: 'off' };
 
 /**
  * One glance answers "what is set up?": the four things that decide whether
- * the shop can trade today, each a button that jumps to its tab.
+ * the shop can trade today, each a button that jumps to its tab. The
+ * dashboard shows the same tiles as its shop status.
  */
-function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) => void }) {
+export function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) => void }) {
   const printerQ = useQuery({
     queryKey: ['printer', 'config'],
     queryFn: () => ipc.printer.getConfig(),
-  });
-  const bridgeCfgQ = useQuery({
-    queryKey: ['webBridge', 'config'],
-    queryFn: () => ipc.webBridge.getConfig(),
   });
   const bridgeStatusQ = useQuery({
     queryKey: ['webBridge', 'status'],
@@ -195,12 +191,13 @@ function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) => void }
     queryKey: ['fbr', 'config'],
     queryFn: () => ipc.fbr.getConfig(),
   });
+  const { summary: backups } = useBackupSummary();
 
   const printer = printerQ.data?.config;
   let printerTile: Tile = LOADING;
   if (printer) {
     if (printer.transport === 'network' && printer.network?.host === 'mock') {
-      printerTile = { label: 'No printer, saving to file', tone: 'warn' };
+      printerTile = { label: 'Not connected yet', tone: 'warn' };
     } else if (printer.transport === 'network' && printer.network) {
       printerTile = { label: `Wi-Fi / LAN · ${printer.network.host}`, tone: 'good' };
     } else if (printer.transport === 'usb' && printer.usb?.printerName) {
@@ -214,23 +211,18 @@ function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) => void }
   let onlineTile: Tile = LOADING;
   if (st) {
     if (!st.enabled) onlineTile = { label: 'Off', tone: 'off' };
-    else if (!st.ready) onlineTile = { label: 'Needs website URL and secret', tone: 'warn' };
-    else if (st.lastError) onlineTile = { label: 'On, last check failed', tone: 'warn' };
+    else if (!st.ready) onlineTile = { label: 'Needs the website details', tone: 'warn' };
+    else if (st.lastError) onlineTile = { label: 'Not connecting', tone: 'warn' };
     else onlineTile = { label: 'Connected', tone: 'good' };
   }
 
-  const freq = bridgeCfgQ.data?.cloudBackupFrequency;
-  let cloudTile: Tile = LOADING;
-  if (st && freq) {
-    if (freq === 'off') cloudTile = { label: 'Off', tone: 'off' };
-    else if (!st.ready) cloudTile = { label: 'Set up Online orders first', tone: 'warn' };
-    else if (st.lastCloudBackupError) cloudTile = { label: 'Last upload failed', tone: 'warn' };
-    else if (st.lastCloudBackupAt)
-      cloudTile = {
-        label: `Last copy ${new Date(st.lastCloudBackupAt).toLocaleDateString()}`,
-        tone: 'good',
-      };
-    else cloudTile = { label: 'Waiting for first upload', tone: 'warn' };
+  let backupTile: Tile = LOADING;
+  if (backups) {
+    if (backups.tone === 'good') backupTile = { label: 'All backed up', tone: 'good' };
+    else if (backups.tone === 'bad') backupTile = { label: 'Not working', tone: 'bad' };
+    else if (backups.headline === 'Backed up on this computer only')
+      backupTile = { label: 'This computer only', tone: 'warn' };
+    else backupTile = { label: 'Needs a look', tone: 'warn' };
   }
 
   let fbrTile: Tile = LOADING;
@@ -243,7 +235,7 @@ function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) => void }
   const tiles: Array<{ title: string; tile: Tile; tab: SettingsTab }> = [
     { title: 'Printer', tile: printerTile, tab: 'printer' },
     { title: 'Online orders', tile: onlineTile, tab: 'online' },
-    { title: 'Cloud backup', tile: cloudTile, tab: 'backups' },
+    { title: 'Backups', tile: backupTile, tab: 'backups' },
     { title: 'FBR invoicing', tile: fbrTile, tab: 'fbr' },
   ];
 
@@ -251,7 +243,13 @@ function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) => void }
     <div className="grid grid-cols-2 gap-2 md:grid-cols-4" aria-label="Setup status">
       {tiles.map(({ title, tile, tab }) => {
         const Icon =
-          tile.tone === 'good' ? CheckCircle2 : tile.tone === 'warn' ? AlertTriangle : MinusCircle;
+          tile.tone === 'good'
+            ? CheckCircle2
+            : tile.tone === 'warn'
+              ? AlertTriangle
+              : tile.tone === 'bad'
+                ? XCircle
+                : MinusCircle;
         return (
           <button
             key={title}
@@ -270,6 +268,7 @@ function SettingsOverview({ onSelect }: { onSelect: (tab: SettingsTab) => void }
                 'inline-flex max-w-full items-center gap-1.5 text-sm font-semibold',
                 tile.tone === 'good' && 'text-emerald-700 dark:text-emerald-300',
                 tile.tone === 'warn' && 'text-amber-700 dark:text-amber-300',
+                tile.tone === 'bad' && 'text-red-700 dark:text-red-300',
                 tile.tone === 'off' && 'text-stone-500',
               )}
             >

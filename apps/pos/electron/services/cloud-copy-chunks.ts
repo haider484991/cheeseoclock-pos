@@ -64,22 +64,64 @@ export function sha256Hex(buf: Buffer): string {
  * repetitive data (rows that look alike) almost never cut on them.
  */
 export function chunkBuffer(buf: Buffer): Chunk[] {
-  const shift = 32 - CHUNK_AVG_BITS;
-  const chunks: Chunk[] = [];
-  let start = 0;
-  let h = 0;
-  const cut = (end: number) => {
-    chunks.push({ offset: start, length: end - start, hash: sha256Hex(buf.subarray(start, end)) });
-    start = end;
-    h = 0;
-  };
-  for (let i = 0; i < buf.length; i++) {
-    h = ((h << 1) + GEAR[buf[i]!]!) >>> 0;
-    const len = i - start + 1;
-    if ((len >= CHUNK_MIN_BYTES && h >>> shift === 0) || len >= CHUNK_MAX_BYTES) cut(i + 1);
+  const cutter = new ChunkCutter(buf);
+  cutter.scan(buf.length);
+  return cutter.finish();
+}
+
+/**
+ * Bytes scanned between event-loop turns by chunkBufferAsync. The scan runs at
+ * about 1 ns a byte (a second per 100 MB) on the till's main process.
+ */
+const ASYNC_SLICE_BYTES = 4 * 1024 * 1024;
+
+/** chunkBuffer, giving the event loop back every few MB. Same cuts, same hashes. */
+export async function chunkBufferAsync(buf: Buffer, sliceBytes = ASYNC_SLICE_BYTES): Promise<Chunk[]> {
+  const cutter = new ChunkCutter(buf);
+  for (let to = Math.min(buf.length, sliceBytes); ; to = Math.min(buf.length, to + sliceBytes)) {
+    cutter.scan(to);
+    if (to >= buf.length) break;
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
-  if (start < buf.length) cut(buf.length);
-  return chunks;
+  return cutter.finish();
+}
+
+/** The gear-hash walk, resumable at any byte: its state is (start, h, i). */
+class ChunkCutter {
+  private readonly chunks: Chunk[] = [];
+  private start = 0;
+  private h = 0;
+  private i = 0;
+
+  constructor(private readonly buf: Buffer) {}
+
+  /** Scan up to (not including) byte `to`. */
+  scan(to: number): void {
+    const { buf } = this;
+    const shift = 32 - CHUNK_AVG_BITS;
+    let h = this.h;
+    for (let i = this.i; i < to; i++) {
+      h = ((h << 1) + GEAR[buf[i]!]!) >>> 0;
+      const len = i - this.start + 1;
+      if ((len >= CHUNK_MIN_BYTES && h >>> shift === 0) || len >= CHUNK_MAX_BYTES) {
+        this.cut(i + 1);
+        h = 0;
+      }
+    }
+    this.h = h;
+    this.i = Math.max(this.i, to);
+  }
+
+  finish(): Chunk[] {
+    if (this.start < this.buf.length) this.cut(this.buf.length);
+    return this.chunks;
+  }
+
+  private cut(end: number): void {
+    const { start } = this;
+    this.chunks.push({ offset: start, length: end - start, hash: sha256Hex(this.buf.subarray(start, end)) });
+    this.start = end;
+  }
 }
 
 /** The website, as far as a cloud copy needs it: path + JSON body in, status + JSON out. */
@@ -131,7 +173,7 @@ export async function uploadChunkedCopy(
       | ((sent: { chunkCount: number; newChunkCount: number; uploadedBytes: number }) => Record<string, unknown>);
   },
 ): Promise<ChunkedUploadResult> {
-  const chunks = chunkBuffer(raw);
+  const chunks = await chunkBufferAsync(raw);
   const sha256 = sha256Hex(raw);
   const byHash = new Map<string, Chunk>();
   for (const c of chunks) if (!byHash.has(c.hash)) byHash.set(c.hash, c);

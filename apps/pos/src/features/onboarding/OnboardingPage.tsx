@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Button, ImagePicker, cn } from '@cheeseoclock/ui';
+import { Button, cn } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { RestoreFromBackup } from './RestoreFromBackup';
+import { LogoPicker } from '../settings/LogoPicker';
 import {
   Store,
   Receipt,
@@ -177,7 +178,8 @@ export function OnboardingPage({ onComplete }: Props) {
             <div className="space-y-4">
               <h2 className="text-lg font-bold">Tell us about your business</h2>
               <p className="text-xs text-stone-500">
-                These details print on every receipt and show in the sidebar.
+                The name and contact lines print on every receipt; the logo shows on the PIN
+                screen and in the menu bar. You can change all of it later in Settings.
               </p>
               <button
                 type="button"
@@ -190,14 +192,9 @@ export function OnboardingPage({ onComplete }: Props) {
 
               <div>
                 <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-                  Logo
+                  Logo (optional)
                 </label>
-                <ImagePicker
-                  value={logoUrl}
-                  onChange={setLogoUrl}
-                  rounded
-                  emptyLabel="Logo"
-                />
+                <LogoPicker value={logoUrl} onChange={setLogoUrl} />
               </div>
 
               <Field label="Business name *">

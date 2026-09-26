@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
 import { Info, Pizza, Heart, Mail, Phone, Code2 } from 'lucide-react';
+import { StoreLogo } from './StoreLogo';
 
 export function AboutCard() {
   const versionQ = useQuery({
@@ -28,15 +29,18 @@ export function AboutCard() {
       </div>
 
       <div className="flex items-start gap-4">
-        <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
-          {brandingQ.data?.branding.logoUrl ? (
-            // eslint-disable-next-line jsx-a11y/alt-text
-            <img src={brandingQ.data.branding.logoUrl} className="h-full w-full object-cover" />
-          ) : (
-            <Pizza className="h-8 w-8" />
-          )}
-        </div>
-        <div className="flex-1">
+        <StoreLogo
+          src={brandingQ.data?.branding.logoUrl}
+          height={64}
+          maxWidth={180}
+          alt="Shop logo"
+          fallback={
+            <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
+              <Pizza className="h-8 w-8" />
+            </div>
+          }
+        />
+        <div className="min-w-0 flex-1">
           <div className="text-xl font-bold tracking-tight">
             {brandingQ.data?.branding.storeName ?? 'CheeseOclock POS'}
           </div>

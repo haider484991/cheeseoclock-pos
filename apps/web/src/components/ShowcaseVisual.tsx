@@ -1,3 +1,5 @@
+import { menuImageSrcSet } from '@/lib/images';
+
 /**
  * Card art for the landing pages. The shop's own cut-out food photo on a gold
  * glow when one exists; otherwise a bold type panel — never a stock photo of
@@ -18,10 +20,13 @@ export function ShowcaseVisual({
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={img}
+          srcSet={menuImageSrcSet(img)}
+          sizes="(min-width: 768px) 260px, 72vw"
           alt={alt}
           width={720}
           height={720}
           loading="lazy"
+          decoding="async"
           className="w-[72%] drop-shadow-[0_20px_24px_rgba(0,0,0,0.55)]"
         />
       ) : (

@@ -1,92 +1,159 @@
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Card, cn } from '@cheeseoclock/ui';
+/**
+ * Reports — how the shop did, at a glance.
+ *
+ * One period at a time (Today, This week…), compared with the same stretch
+ * just before. The top row answers "how much did we sell, to how many, how
+ * did they pay"; the sections below answer one plain question each. Every
+ * figure comes from one `reports:business` call, built from the till's stored
+ * order totals — print and the Excel file use the same data, so they agree.
+ */
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { Button, Card, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
+import type { BusinessReport } from '@cheeseoclock/shared-types';
+import { CalendarDays, FileSpreadsheet, Loader2, Printer, RefreshCw } from 'lucide-react';
 import { ipc } from '../../ipc/client';
-import { rangeForPreset, type RangePreset, dateInputToIso, fmtDateInput, fmtRange } from './dateRange';
-import { BarChart, LineChart } from './charts';
+import { fmtDateInput, periodFor, type RangePreset } from './dateRange';
+import { buildCsv, buildPrintBody, csvFileName, downloadText, PRINT_CSS, PRINT_SHEET_CLASS } from './exporters';
+import { changeOf, PAYMENT_LABEL, PAYMENT_ORDER, percentOf } from './reportFormat';
+import { Kpi, Note, Panel } from './reportUi';
+import { ShareBar } from './charts';
 import {
-  CalendarRange,
-  TrendingUp,
-  UtensilsCrossed,
-  Users,
-  CreditCard,
-  Percent,
-  Boxes,
-  Activity,
-  DollarSign,
-  ShoppingBag,
-  Receipt,
-  AlertTriangle,
-  Banknote,
-  Printer,
-  type LucideIcon,
-} from 'lucide-react';
-
-type Tab = 'overview' | 'items' | 'cashiers' | 'payments' | 'cashDrawer' | 'discounts' | 'stock';
+  ChannelsSection,
+  DeliveriesSection,
+  DiscountsSection,
+  FoodCostSection,
+  ItemsSection,
+  RefundsSection,
+  StaffSection,
+  WhenSection,
+} from './ReportSections';
 
 const PRESETS: Array<{ id: RangePreset; label: string }> = [
   { id: 'today', label: 'Today' },
   { id: 'yesterday', label: 'Yesterday' },
-  { id: '7d', label: '7 days' },
-  { id: '30d', label: '30 days' },
+  { id: 'thisWeek', label: 'This week' },
+  { id: 'last7', label: 'Last 7 days' },
   { id: 'thisMonth', label: 'This month' },
-  { id: 'custom', label: 'Custom' },
+  { id: 'lastMonth', label: 'Last month' },
+  { id: 'custom', label: 'Pick dates' },
 ];
 
-const TABS: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
-  { id: 'overview', label: 'Overview', icon: TrendingUp },
-  { id: 'items', label: 'Items & categories', icon: UtensilsCrossed },
-  { id: 'cashiers', label: 'Cashiers', icon: Users },
-  { id: 'payments', label: 'Payments & modes', icon: CreditCard },
-  { id: 'cashDrawer', label: 'Cash drawer', icon: Banknote },
-  { id: 'discounts', label: 'Discounts', icon: Percent },
-  { id: 'stock', label: 'Stock & COGS', icon: Boxes },
+const JUMPS: Array<{ id: string; label: string }> = [
+  { id: 'when', label: 'When' },
+  { id: 'items', label: 'What sells' },
+  { id: 'types', label: 'Order types' },
+  { id: 'staff', label: 'Staff & cash' },
+  { id: 'discounts', label: 'Discounts' },
+  { id: 'refunds', label: 'Refunds' },
+  { id: 'food', label: 'Food cost' },
+  { id: 'deliveries', label: 'Deliveries' },
 ];
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function ReportsPage() {
-  const [preset, setPreset] = useState<RangePreset>('7d');
-  const [customSince, setCustomSince] = useState(() => fmtDateInput(new Date().toISOString()));
-  const [customUntil, setCustomUntil] = useState(() => fmtDateInput(new Date().toISOString()));
-  const [tab, setTab] = useState<Tab>('overview');
+  const [preset, setPreset] = useState<RangePreset>('today');
+  const [now, setNow] = useState(() => new Date());
+  const [customFrom, setCustomFrom] = useState(() => fmtDateInput(new Date().toISOString()));
+  const [customTo, setCustomTo] = useState(() => fmtDateInput(new Date().toISOString()));
+  // An id per click, so printing the same report twice prints twice.
+  const [printJob, setPrintJob] = useState<{ id: number; html: string } | null>(null);
 
-  const range = useMemo(() => {
-    if (preset === 'custom') {
-      return {
-        sinceIso: dateInputToIso(customSince, false),
-        untilIso: dateInputToIso(customUntil, true),
-      };
-    }
-    return rangeForPreset(preset);
-  }, [preset, customSince, customUntil]);
+  // A running period ("today so far") moves with the clock: the comparison
+  // follows ("yesterday by this time") and the figures refresh every minute.
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const period = useMemo(
+    () => periodFor(preset, now, preset === 'custom' ? { from: customFrom, to: customTo } : undefined),
+    [preset, now, customFrom, customTo],
+  );
+
+  const query = useQuery({
+    queryKey: ['reports', 'business', period.sinceIso, period.untilIso, period.compare?.sinceIso, period.compare?.untilIso],
+    // The report travels with the period it was asked for, so the sections,
+    // the printout and the file always pair figures with their own dates —
+    // also while the next period is still loading.
+    queryFn: async () => ({
+      period,
+      report: await ipc.reports.business({
+        sinceIso: period.sinceIso,
+        untilIso: period.untilIso,
+        ...(period.compare ? { compareSinceIso: period.compare.sinceIso, compareUntilIso: period.compare.untilIso } : {}),
+      }),
+    }),
+    placeholderData: keepPreviousData,
+  });
+  const lowStock = useQuery({ queryKey: ['reports', 'lowStock'], queryFn: () => ipc.reports.lowStock() });
+
+  const report = query.data?.report;
+  const shownPeriod = query.data?.period ?? period;
+  // While another period loads, the old figures stay up (dimmed) instead of
+  // flashing to blank. The once-a-minute refresh of the same period is not
+  // "stale": nothing dims and the buttons stay usable.
+  const stale = shownPeriod.sinceIso !== period.sinceIso || shownPeriod.untilIso !== period.untilIso;
+
+  // Print: render the sheet next to the app, print, then take it away again.
+  useEffect(() => {
+    if (printJob === null) return;
+    const done = () => setPrintJob(null);
+    window.addEventListener('afterprint', done, { once: true });
+    const t = setTimeout(() => window.print(), 60);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('afterprint', done);
+    };
+  }, [printJob]);
+
+  const choose = (id: RangePreset) => {
+    setNow(new Date());
+    setPreset(id);
+  };
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
-      <header className="space-y-1">
-        <p className="text-xs font-medium uppercase tracking-widest text-amber-600 dark:text-amber-400">
-          Analytics
-        </p>
-        <h1 className="text-4xl font-bold tracking-tight">Reports</h1>
-        <p className="text-stone-500 dark:text-stone-400">
-          Sales, items, cashiers, payments, discounts, stock & COGS — restricted to your selected date range.
-        </p>
-      </header>
-
-      {/* Date range selector */}
-      <Card>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 text-stone-600 dark:text-stone-400">
-            <CalendarRange className="h-4 w-4" />
-            <span className="text-xs font-semibold uppercase tracking-wider">Range</span>
+    <div className="mx-auto max-w-7xl space-y-8 pb-16">
+      {/* ---------------------------------------------------------- header */}
+      <header className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-4xl font-bold tracking-tight">Reports</h1>
+            <p className="mt-1 text-stone-500 dark:text-stone-400">How the shop did. Every figure comes from the orders saved on this till.</p>
           </div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              disabled={!report || stale}
+              onClick={() => report && setPrintJob({ id: Date.now(), html: buildPrintBody(report, shownPeriod, new Date()) })}
+            >
+              <Printer className="h-4 w-4" />
+              Print
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={!report || stale}
+              onClick={() => report && downloadText(csvFileName(shownPeriod), buildCsv(report, shownPeriod, new Date()))}
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Download for Excel
+            </Button>
+          </div>
+        </div>
+
+        <Card className="space-y-3">
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Period">
             {PRESETS.map((p) => (
               <button
                 key={p.id}
                 type="button"
-                onClick={() => setPreset(p.id)}
+                aria-pressed={preset === p.id}
+                onClick={() => choose(p.id)}
                 className={cn(
-                  'rounded-full px-3 py-1.5 text-xs font-semibold transition-all',
+                  'h-11 rounded-xl px-4 text-sm font-semibold transition-colors',
                   preset === p.id
                     ? 'bg-gradient-to-b from-amber-400 to-amber-500 text-stone-900 shadow-soft-sm'
                     : 'bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700',
@@ -96,707 +163,248 @@ export function ReportsPage() {
               </button>
             ))}
           </div>
+
           {preset === 'custom' && (
-            <div className="flex items-center gap-2">
-              <input
-                type="date"
-                value={customSince}
-                onChange={(e) => setCustomSince(e.target.value)}
-                className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-xs font-mono dark:border-stone-700 dark:bg-stone-800"
-              />
-              <span className="text-stone-400">→</span>
-              <input
-                type="date"
-                value={customUntil}
-                onChange={(e) => setCustomUntil(e.target.value)}
-                className="rounded-lg border border-stone-300 px-2.5 py-1.5 text-xs font-mono dark:border-stone-700 dark:bg-stone-800"
-              />
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                From
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={(e) => e.target.value && setCustomFrom(e.target.value)}
+                  className="h-11 rounded-xl border border-stone-300 bg-white px-3 font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm font-medium">
+                To
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={(e) => e.target.value && setCustomTo(e.target.value)}
+                  className="h-11 rounded-xl border border-stone-300 bg-white px-3 font-mono text-sm dark:border-stone-700 dark:bg-stone-800"
+                />
+              </label>
+              <span className="text-xs text-stone-500">Each day runs 5 am to 5 am.</span>
             </div>
           )}
-          <span className="ml-auto rounded-full bg-stone-100 px-3 py-1 font-mono text-xs text-stone-600 dark:bg-stone-800 dark:text-stone-400">
-            {fmtRange(range)}
-          </span>
-        </div>
-      </Card>
 
-      {/* Tabs */}
-      <nav className="flex gap-1 overflow-x-auto border-b border-stone-200/70 dark:border-stone-800/70">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={cn(
-                '-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-all',
-                active
-                  ? 'border-amber-500 text-amber-700 dark:text-amber-300'
-                  : 'border-transparent text-stone-500 hover:text-stone-900 dark:hover:text-stone-100',
-              )}
-            >
-              <Icon
-                className={cn(
-                  'h-4 w-4 transition-transform',
-                  active && 'scale-110',
-                )}
-              />
-              {t.label}
-            </button>
-          );
-        })}
-      </nav>
-
-      {tab === 'overview' && <OverviewTab range={range} />}
-      {tab === 'items' && <ItemsTab range={range} />}
-      {tab === 'cashiers' && <CashiersTab range={range} />}
-      {tab === 'payments' && <PaymentsTab range={range} />}
-      {tab === 'cashDrawer' && <CashDrawerTab range={range} />}
-      {tab === 'discounts' && <DiscountsTab range={range} />}
-      {tab === 'stock' && <StockTab range={range} />}
-    </div>
-  );
-}
-
-function OverviewTab({ range }: { range: { sinceIso: string; untilIso: string } }) {
-  const summary = useQuery({
-    queryKey: ['reports', 'summary', range],
-    queryFn: () => ipc.reports.salesSummary(range),
-  });
-  const byDay = useQuery({
-    queryKey: ['reports', 'byDay', range],
-    queryFn: () => ipc.reports.salesByDay(range),
-  });
-  const byHour = useQuery({
-    queryKey: ['reports', 'byHour', range],
-    queryFn: () => ipc.reports.salesByHour(range),
-  });
-
-  const s = summary.data;
-  return (
-    <div className="space-y-6">
-      <SectionLabel>Key metrics</SectionLabel>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat
-          icon={DollarSign}
-          tone="from-emerald-400 to-emerald-600"
-          label={s && s.partialRefundCents > 0 ? `Revenue (after ${formatCents(s.partialRefundCents)} refunded)` : 'Revenue'}
-          value={s ? formatCents(s.totalCents) : '—'}
-        />
-        <Stat
-          icon={ShoppingBag}
-          tone="from-sky-400 to-blue-500"
-          label="Orders"
-          value={s ? String(s.orderCount) : '—'}
-        />
-        <Stat
-          icon={UtensilsCrossed}
-          tone="from-amber-400 to-orange-500"
-          label="Items sold"
-          value={s ? String(s.itemCount) : '—'}
-        />
-        <Stat
-          icon={Receipt}
-          tone="from-violet-400 to-purple-500"
-          label="Avg ticket"
-          value={s ? formatCents(s.avgTicketCents) : '—'}
-        />
-        <Stat
-          icon={Activity}
-          tone="from-fuchsia-400 to-pink-500"
-          label="Tax collected"
-          value={s ? formatCents(s.taxCents) : '—'}
-        />
-        <Stat
-          icon={Percent}
-          tone="from-teal-400 to-emerald-500"
-          label="Discounts given"
-          value={s ? formatCents(s.discountCents) : '—'}
-        />
-        <Stat
-          icon={AlertTriangle}
-          tone="from-stone-400 to-stone-600"
-          label="Voided orders"
-          value={s ? String(s.voidedCount) : '—'}
-        />
-        <Stat
-          icon={AlertTriangle}
-          tone="from-rose-400 to-red-500"
-          label="Voided value"
-          value={s ? formatCents(s.voidedCents) : '—'}
-        />
-      </div>
-
-      <SectionLabel>Trends</SectionLabel>
-      <Card>
-        <ChartHeader icon={TrendingUp} title="Revenue by day" />
-        <LineChart
-          points={(byDay.data ?? []).map((d) => ({ label: d.day.slice(5), value: d.totalCents }))}
-        />
-      </Card>
-
-      <Card>
-        <ChartHeader icon={Activity} title="Sales by hour of day" />
-        <BarChart
-          data={Array.from({ length: 24 }, (_, h) => {
-            const row = byHour.data?.find((x) => x.hour === h);
-            return { label: String(h), value: row?.totalCents ?? 0 };
-          })}
-        />
-      </Card>
-    </div>
-  );
-}
-
-function ItemsTab({ range }: { range: { sinceIso: string; untilIso: string } }) {
-  const byCat = useQuery({
-    queryKey: ['reports', 'byCategory', range],
-    queryFn: () => ipc.reports.salesByCategory(range),
-  });
-  const topItems = useQuery({
-    queryKey: ['reports', 'topItems', range],
-    queryFn: () => ipc.reports.topItems({ ...range, limit: 30 }),
-  });
-
-  return (
-    <div className="space-y-4">
-      <Card>
-        <ChartHeader icon={Boxes} title="Sales by category" />
-        <BarChart
-          data={(byCat.data ?? []).map((c) => ({ label: c.categoryName, value: c.revenueCents }))}
-        />
-        <DataTable
-          rows={(byCat.data ?? []).map((c) => [
-            c.categoryName,
-            String(c.itemCount),
-            formatCents(c.revenueCents),
-          ])}
-          headers={['Category', 'Items sold', 'Revenue']}
-          alignRight={[false, true, true]}
-        />
-      </Card>
-      <Card>
-        <ChartHeader icon={UtensilsCrossed} title="Top items" />
-        <DataTable
-          rows={(topItems.data ?? []).map((t) => [
-            t.menuItemName,
-            t.categoryName,
-            String(t.quantity),
-            formatCents(t.revenueCents),
-          ])}
-          headers={['Item', 'Category', 'Qty sold', 'Revenue']}
-          alignRight={[false, false, true, true]}
-        />
-      </Card>
-    </div>
-  );
-}
-
-function CashiersTab({ range }: { range: { sinceIso: string; untilIso: string } }) {
-  const q = useQuery({
-    queryKey: ['reports', 'cashiers', range],
-    queryFn: () => ipc.reports.salesByCashier(range),
-  });
-  return (
-    <Card>
-      <ChartHeader icon={Users} title="Sales by cashier" />
-      <DataTable
-        rows={(q.data ?? []).map((c) => [
-          c.cashierName,
-          String(c.orderCount),
-          formatCents(c.totalCents),
-          String(c.voidedCount),
-        ])}
-        headers={['Cashier', 'Orders', 'Revenue', 'Voids']}
-        alignRight={[false, true, true, true]}
-      />
-    </Card>
-  );
-}
-
-function PaymentsTab({ range }: { range: { sinceIso: string; untilIso: string } }) {
-  const byMode = useQuery({
-    queryKey: ['reports', 'byMode', range],
-    queryFn: () => ipc.reports.salesByMode(range),
-  });
-  const byMethod = useQuery({
-    queryKey: ['reports', 'byMethod', range],
-    queryFn: () => ipc.reports.salesByPaymentMethod(range),
-  });
-  const MODE_LABEL: Record<string, string> = {
-    dine_in: 'Dine-in',
-    takeaway: 'Takeaway',
-    delivery: 'Delivery',
-    online: 'Online',
-    foodpanda: 'Foodpanda',
-  };
-  return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <Card>
-        <ChartHeader icon={Activity} title="By order mode" />
-        <BarChart
-          data={(byMode.data ?? []).map((m) => ({
-            label: MODE_LABEL[m.mode] ?? m.mode,
-            value: m.totalCents,
-          }))}
-        />
-        <DataTable
-          rows={(byMode.data ?? []).map((m) => [
-            MODE_LABEL[m.mode] ?? m.mode,
-            String(m.orderCount),
-            formatCents(m.totalCents),
-          ])}
-          headers={['Mode', 'Orders', 'Revenue']}
-          alignRight={[false, true, true]}
-        />
-      </Card>
-      <Card>
-        <ChartHeader icon={CreditCard} title="By payment method" />
-        <BarChart
-          data={(byMethod.data ?? []).map((m) => ({
-            label: m.method,
-            value: m.amountCents,
-          }))}
-          color="#16a34a"
-        />
-        <DataTable
-          rows={(byMethod.data ?? []).map((m) => [
-            m.method,
-            String(m.paymentCount),
-            formatCents(m.amountCents),
-          ])}
-          headers={['Method', 'Payments', 'Amount']}
-          alignRight={[false, true, true]}
-        />
-      </Card>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Cash Drawer / End-of-Day reconciliation
-// ---------------------------------------------------------------------------
-
-function CashDrawerTab({ range }: { range: { sinceIso: string; untilIso: string } }) {
-  const [openingStr, setOpeningStr] = useState('0');
-  const [countedStr, setCountedStr] = useState('');
-  const openingCash = Math.round((parseFloat(openingStr) || 0) * 100);
-
-  const q = useQuery({
-    queryKey: ['reports', 'cashSummary', range, openingCash],
-    queryFn: () => ipc.reports.cashSummary({ ...range, openingCashCents: openingCash }),
-  });
-  const data = q.data;
-  const counted = countedStr === '' ? null : Math.round((parseFloat(countedStr) || 0) * 100);
-  const variance = counted !== null && data ? counted - data.expectedCashCents : null;
-
-  function handlePrint() {
-    if (typeof window !== 'undefined') window.print();
-  }
-
-  return (
-    <div className="space-y-4 print:m-0">
-      <Card>
-        <div className="mb-3 flex items-center justify-between">
-          <SectionLabel>End of day · cash count</SectionLabel>
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-semibold text-stone-600 hover:bg-stone-50 dark:border-stone-700 dark:hover:bg-stone-800"
-          >
-            <Printer className="h-3.5 w-3.5" />
-            Print summary
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div className="space-y-2 rounded-xl bg-stone-50 p-4 dark:bg-stone-800/50">
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">
-                Opening float (cash)
-              </span>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={openingStr}
-                onChange={(e) => setOpeningStr(e.target.value)}
-                className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-900"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500">
-                Counted cash in drawer
-              </span>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={countedStr}
-                onChange={(e) => setCountedStr(e.target.value)}
-                placeholder="0"
-                className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-900"
-              />
-            </label>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <CalendarDays className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <span className="font-semibold">{period.dates}</span>
+            <span className="text-stone-500 dark:text-stone-400">
+              {period.isCurrent ? 'so far' : ''}
+              {period.compare ? `${period.isCurrent ? ' · ' : ''}compared with ${period.compare.label}` : ''}
+            </span>
+            {query.isFetching && <Loader2 className="h-4 w-4 animate-spin text-stone-400" aria-label="Updating" />}
           </div>
+        </Card>
+      </header>
 
-          <div className="rounded-xl bg-emerald-50 p-4 dark:bg-emerald-950/30">
-            <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
-              Cash flow today
-            </div>
-            <dl className="mt-2 space-y-1 text-sm">
-              <div className="flex justify-between">
-                <dt>Opening</dt>
-                <dd className="font-mono">{formatCents(openingCash)}</dd>
-              </div>
-              <div className="flex justify-between text-emerald-800 dark:text-emerald-100">
-                <dt>+ Cash sales</dt>
-                <dd className="font-mono">
-                  {formatCents(data?.cashSalesCents ?? 0)}
-                </dd>
-              </div>
-              <div className="flex justify-between text-red-700 dark:text-red-300">
-                <dt>− Cash refunds</dt>
-                <dd className="font-mono">
-                  {formatCents(data?.cashRefundsCents ?? 0)}
-                </dd>
-              </div>
-              {(data?.cashInCents ?? 0) > 0 && (
-                <div className="flex justify-between text-emerald-800 dark:text-emerald-100">
-                  <dt>+ Cash put in</dt>
-                  <dd className="font-mono">{formatCents(data?.cashInCents ?? 0)}</dd>
-                </div>
-              )}
-              {(data?.cashOutCents ?? 0) > 0 && (
-                <div className="flex justify-between text-red-700 dark:text-red-300">
-                  <dt>− Cash taken out</dt>
-                  <dd className="font-mono">{formatCents(data?.cashOutCents ?? 0)}</dd>
-                </div>
-              )}
-              <div className="mt-1 flex justify-between border-t border-emerald-200 pt-1 font-bold dark:border-emerald-800">
-                <dt>Expected</dt>
-                <dd className="font-mono text-base">
-                  {formatCents(data?.expectedCashCents ?? 0)}
-                </dd>
-              </div>
-            </dl>
+      {query.isError ? (
+        <Card className="space-y-3 text-center">
+          <p className="font-semibold">The report could not be loaded.</p>
+          <p className="text-sm text-stone-500">{query.error instanceof Error ? query.error.message : 'Please try again.'}</p>
+          <div>
+            <Button variant="secondary" onClick={() => void query.refetch()}>
+              <RefreshCw className="h-4 w-4" />
+              Try again
+            </Button>
           </div>
+        </Card>
+      ) : (
+        <div className={cn('space-y-10 transition-opacity', stale && 'opacity-60')}>
+          <Summary report={report} />
 
-          <div
-            className={cn(
-              'rounded-xl p-4',
-              variance === null
-                ? 'bg-stone-100 dark:bg-stone-800/40'
-                : variance === 0
-                ? 'bg-emerald-100 dark:bg-emerald-950/40'
-                : variance > 0
-                ? 'bg-amber-100 dark:bg-amber-950/40'
-                : 'bg-red-100 dark:bg-red-950/40',
-            )}
-          >
-            <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">
-              Variance
-            </div>
-            <div className="mt-2 font-mono text-3xl font-bold">
-              {variance === null
-                ? '—'
-                : `${variance > 0 ? '+' : ''}${formatCents(variance)}`}
-            </div>
-            <div className="mt-1 text-xs text-stone-600 dark:text-stone-300">
-              {variance === null
-                ? 'Enter counted cash to compute'
-                : variance === 0
-                ? 'Drawer matches expected'
-                : variance > 0
-                ? 'Drawer has more than expected (over)'
-                : 'Drawer has less than expected (short)'}
-            </div>
-          </div>
+          {report && (
+            <>
+              <nav className="flex flex-wrap gap-2" aria-label="Jump to a section">
+                {JUMPS.map((j) => (
+                  <button
+                    key={j.id}
+                    type="button"
+                    onClick={() => document.getElementById(j.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                    className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-stone-600 ring-1 ring-stone-200 hover:bg-stone-50 dark:bg-stone-900 dark:text-stone-300 dark:ring-stone-700 dark:hover:bg-stone-800"
+                  >
+                    {j.label}
+                  </button>
+                ))}
+              </nav>
+              <WhenSection report={report} period={shownPeriod} now={now} />
+              <ItemsSection report={report} />
+              <ChannelsSection report={report} />
+              <StaffSection report={report} />
+              <DiscountsSection report={report} />
+              <RefundsSection report={report} />
+              <FoodCostSection report={report} lowStockCount={lowStock.data ? lowStock.data.length : null} />
+              <DeliveriesSection report={report} />
+            </>
+          )}
         </div>
-      </Card>
+      )}
 
-      <ShiftHistory range={range} />
-
-      <Card>
-        <SectionLabel>Payments breakdown</SectionLabel>
-        <DataTable
-          headers={['Method', 'Sales', 'Refunds', 'Net', '# sales', '# refunds']}
-          rows={(data?.byMethod ?? []).map((m) => [
-            m.method.toUpperCase(),
-            formatCents(m.salesCents),
-            formatCents(m.refundCents),
-            formatCents(m.netCents),
-            String(m.paymentCount),
-            String(m.refundCount),
-          ])}
-          alignRight={[false, true, true, true, true, true]}
-          empty={q.isLoading ? 'Loading…' : 'No payments in this range yet.'}
-        />
-      </Card>
-
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Stat
-          icon={DollarSign}
-          tone="from-emerald-400 to-emerald-600"
-          label="Net revenue"
-          value={formatCents(data?.netRevenueCents ?? 0)}
-        />
-        <Stat
-          icon={ShoppingBag}
-          tone="from-sky-400 to-sky-600"
-          label="Paid orders"
-          value={String(data?.paidOrderCount ?? 0)}
-        />
-        <Stat
-          icon={Receipt}
-          tone="from-amber-400 to-amber-600"
-          label="Refunds value"
-          value={formatCents(data?.totalRefundsCents ?? 0)}
-        />
-        <Stat
-          icon={AlertTriangle}
-          tone="from-red-400 to-red-600"
-          label="Refunded orders"
-          value={String(data?.refundedOrderCount ?? 0)}
-        />
-      </div>
-    </div>
-  );
-}
-
-/**
- * Every shift closed in the range, with what the drawer should have held, what
- * was counted and the difference. The close dialog shows it once; this is where
- * the owner sees which shift came up short, and who closed it.
- */
-function ShiftHistory({ range }: { range: { sinceIso: string; untilIso: string } }) {
-  const q = useQuery({
-    queryKey: ['reports', 'shifts', range],
-    queryFn: () => ipc.shifts.list({ sinceIso: range.sinceIso, limit: 200 }),
-  });
-  const shifts = (q.data ?? []).filter((s) => s.openedAt < range.untilIso);
-  const closed = shifts.filter((s) => s.closedAt !== null);
-  const net = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
-  const when = (iso: string) =>
-    new Date(iso).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-  return (
-    <Card>
-      <div className="mb-2 flex items-baseline justify-between">
-        <SectionLabel>Shifts</SectionLabel>
-        {closed.length > 0 && (
-          <span
-            className={cn(
-              'text-sm font-semibold',
-              net === 0 ? 'text-emerald-700 dark:text-emerald-300' : net > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-red-700 dark:text-red-300',
-            )}
-          >
-            {net === 0 ? 'All drawers matched' : `${net > 0 ? 'Over' : 'Short'} ${formatCents(Math.abs(net))} in all`}
-          </span>
+      {printJob !== null &&
+        createPortal(
+          <div className={PRINT_SHEET_CLASS}>
+            <style>{PRINT_CSS}</style>
+            {/* Built by buildPrintBody, which escapes every value. */}
+            <div dangerouslySetInnerHTML={{ __html: printJob.html }} />
+          </div>,
+          document.body,
         )}
-      </div>
-      <DataTable
-        headers={['Opened', 'Closed', 'By', 'Float', 'Expected', 'Counted', 'Short / over']}
-        rows={shifts.map((s) => [
-          when(s.openedAt),
-          s.closedAt ? when(s.closedAt) : 'Still open',
-          s.closedByName ?? s.openedByName,
-          formatCents(s.openingCashCents),
-          s.expectedCashCents === null ? '—' : formatCents(s.expectedCashCents),
-          s.countedCashCents === null ? '—' : formatCents(s.countedCashCents),
-          s.varianceCents === null
-            ? '—'
-            : s.varianceCents === 0
-              ? 'Matched'
-              : `${s.varianceCents > 0 ? 'Over ' : 'Short '}${formatCents(Math.abs(s.varianceCents))}`,
-        ])}
-        alignRight={[false, false, false, true, true, true, true]}
-        empty={q.isLoading ? 'Loading…' : 'No shifts in this range.'}
-      />
-    </Card>
+    </div>
   );
 }
 
-function DiscountsTab({ range }: { range: { sinceIso: string; untilIso: string } }) {
-  const q = useQuery({
-    queryKey: ['reports', 'discounts', range],
-    queryFn: () => ipc.reports.discounts(range),
-  });
-  return (
-    <Card>
-      <ChartHeader icon={Percent} title="Discounts" />
-      <div className="mb-4 grid grid-cols-2 gap-3">
-        <Stat
-          icon={Percent}
-          tone="from-emerald-400 to-emerald-600"
-          label="Count"
-          value={q.data ? String(q.data.count) : '—'}
-        />
-        <Stat
-          icon={DollarSign}
-          tone="from-amber-400 to-orange-500"
-          label="Total given"
-          value={q.data ? formatCents(q.data.totalAmountCents) : '—'}
-        />
-      </div>
-      <DataTable
-        rows={(q.data?.byReason ?? []).map((r) => [
-          r.reason,
-          String(r.count),
-          formatCents(r.amountCents),
-        ])}
-        headers={['Reason', 'Count', 'Total']}
-        alignRight={[false, true, true]}
-      />
-    </Card>
-  );
-}
+// ----------------------------------------------------------------- summary --
 
-function StockTab({ range }: { range: { sinceIso: string; untilIso: string } }) {
-  const low = useQuery({ queryKey: ['reports', 'lowStock'], queryFn: () => ipc.reports.lowStock() });
-  const cogs = useQuery({
-    queryKey: ['reports', 'cogs', range],
-    queryFn: () => ipc.reports.cogs(range),
-  });
+function Summary({ report }: { report: BusinessReport | undefined }) {
+  const k = report?.kpis;
+  const p = report?.previous ?? null;
+  const dash = '—';
+  const refunds = k ? k.partialRefundCents + k.fullRefundCents : 0;
+  const prevRefunds = p ? p.partialRefundCents + p.fullRefundCents : null;
+
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <Card>
-        <ChartHeader icon={AlertTriangle} title="Low stock right now" />
-        <DataTable
-          rows={(low.data ?? []).map((i) => [
-            i.name,
-            `${i.currentQty} ${i.unit}`,
-            `${i.lowThreshold} ${i.unit}`,
-          ])}
-          headers={['Ingredient', 'On hand', 'Threshold']}
-          alignRight={[false, true, true]}
-          empty="Nothing under threshold."
-        />
-      </Card>
-      <Card>
-        <ChartHeader icon={DollarSign} title="Cost of goods sold (period)" />
-        <div className="mb-4">
-          <Stat
-            icon={DollarSign}
-            tone="from-rose-400 to-red-500"
-            label="Total COGS"
-            value={cogs.data ? formatCents(cogs.data.totalCogsCents) : '—'}
+    <section className="space-y-4" aria-label="Summary">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+        <div className="col-span-2 md:col-span-1">
+          <Kpi
+            big
+            label="Sales"
+            value={k ? formatCents(k.netSalesCents) : dash}
+            loading={!k}
+            change={k ? changeOf(k.netSalesCents, p?.netSalesCents) : undefined}
+            goodWhen="up"
+            was={p ? formatCents(p.netSalesCents) : undefined}
+            sub="After discounts and refunds. Tax included."
           />
         </div>
-        <DataTable
-          rows={(cogs.data?.byIngredient ?? []).map((c) => [
-            c.name,
-            `${c.qtyConsumed} ${c.unit}`,
-            formatCents(c.costCents),
-          ])}
-          headers={['Ingredient', 'Qty consumed', 'Cost']}
-          alignRight={[false, true, true]}
-          empty="No sales with recipes in this range."
+        <Kpi
+          label="Orders"
+          value={k ? String(k.orderCount) : dash}
+          loading={!k}
+          change={k ? changeOf(k.orderCount, p?.orderCount) : undefined}
+          goodWhen="up"
+          was={p ? String(p.orderCount) : undefined}
+          sub={k ? `${plural(k.itemCount, 'item')} sold` : undefined}
         />
-      </Card>
-    </div>
-  );
-}
-
-// -----------------------------------------------------------------------------
-// Shared building blocks
-// -----------------------------------------------------------------------------
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-stone-500">
-      <span className="inline-block h-px w-6 bg-stone-300 dark:bg-stone-700" />
-      {children}
-    </div>
-  );
-}
-
-function ChartHeader({ icon: Icon, title }: { icon: LucideIcon; title: string }) {
-  return (
-    <div className="mb-3 flex items-center gap-2">
-      <Icon className="h-4 w-4 text-stone-500" />
-      <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
-    </div>
-  );
-}
-
-interface StatProps {
-  icon: LucideIcon;
-  tone: string;
-  label: string;
-  value: string;
-}
-
-function Stat({ icon: Icon, tone, label, value }: StatProps) {
-  return (
-    <Card className="relative overflow-hidden">
-      {/* Soft tinted background blob in the corner */}
-      <div
-        className={cn(
-          'pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full bg-gradient-to-br opacity-10 blur-xl',
-          tone,
-        )}
-        aria-hidden
-      />
-      <div className="relative flex items-start justify-between gap-2">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-stone-500">
-            {label}
-          </div>
-          <div className="mt-1 text-2xl font-bold tracking-tight">{value}</div>
-        </div>
-        <div
-          className={cn(
-            'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white shadow-soft-sm',
-            tone,
-          )}
-        >
-          <Icon className="h-4 w-4" />
-        </div>
+        <Kpi
+          label="Average order"
+          value={k ? formatCents(k.avgOrderCents) : dash}
+          loading={!k}
+          change={k ? changeOf(k.avgOrderCents, p?.avgOrderCents) : undefined}
+          goodWhen="up"
+          was={p ? formatCents(p.avgOrderCents) : undefined}
+        />
+        <Kpi
+          label="Discounts given"
+          value={k ? formatCents(k.discountCents) : dash}
+          loading={!k}
+          change={k ? changeOf(k.discountCents, p?.discountCents) : undefined}
+          goodWhen="down"
+          was={p ? formatCents(p.discountCents) : undefined}
+          sub={k ? `on ${plural(k.discountedOrderCount, 'order')}` : undefined}
+        />
+        <Kpi
+          label="Refunds"
+          value={k ? formatCents(refunds) : dash}
+          loading={!k}
+          change={k ? changeOf(refunds, prevRefunds) : undefined}
+          goodWhen="down"
+          was={prevRefunds !== null ? formatCents(prevRefunds) : undefined}
+          sub={
+            k
+              ? k.voidCount > 0
+                ? `Also ${plural(k.voidCount, 'order')} cancelled before paying`
+                : 'No cancelled orders'
+              : undefined
+          }
+        />
+        <Kpi
+          label="Tax collected"
+          value={k ? formatCents(k.taxCents) : dash}
+          loading={!k}
+          change={k ? changeOf(k.taxCents, p?.taxCents) : undefined}
+          goodWhen="neutral"
+          was={p ? formatCents(p.taxCents) : undefined}
+          sub="Included in sales"
+        />
       </div>
-    </Card>
+
+      {k && (
+        <>
+          {k.unpaidCount > 0 && (
+            <Note>
+              {plural(k.unpaidCount, 'order')} worth {formatCents(k.unpaidCents)} {k.unpaidCount === 1 ? 'is' : 'are'} not paid yet
+              (still on the Orders board). {k.unpaidCount === 1 ? 'It counts' : 'They count'} once paid.
+            </Note>
+          )}
+          {k.unrecordedPaymentCents !== 0 && (
+            <Note tone="warn">
+              {formatCents(k.unrecordedPaymentCents)} of these sales has no payment method on record (older orders). It is shown
+              as “No method recorded” below.
+            </Note>
+          )}
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Panel title="How customers paid" note="Refunds are taken off the method the money went back on.">
+              <ul className="space-y-3">
+                {PAYMENT_ORDER.map((g) => (
+                  <li key={g}>
+                    <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
+                      <span className="font-medium">{PAYMENT_LABEL[g]}</span>
+                      <span className="tabular-nums">
+                        <span className="font-semibold">{formatCents(k.payments[g])}</span>{' '}
+                        <span className="text-xs text-stone-500">{percentOf(k.payments[g], k.netSalesCents)}</span>
+                      </span>
+                    </div>
+                    <ShareBar value={k.payments[g]} total={k.netSalesCents} tone="emerald" />
+                  </li>
+                ))}
+                {k.unrecordedPaymentCents !== 0 && (
+                  <li className="flex justify-between text-sm text-stone-500">
+                    <span>No method recorded</span>
+                    <span className="tabular-nums">{formatCents(k.unrecordedPaymentCents)}</span>
+                  </li>
+                )}
+              </ul>
+            </Panel>
+
+            <Panel
+              title="How the sales add up"
+              note={
+                k.fullRefundCount > 0 || k.voidCount > 0
+                  ? `Not in these figures: ${[
+                      k.fullRefundCount > 0 ? `${plural(k.fullRefundCount, 'order')} refunded in full (${formatCents(k.fullRefundCents)})` : null,
+                      k.voidCount > 0 ? `${plural(k.voidCount, 'cancelled order')} (${formatCents(k.voidCents)})` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' and ')}.`
+                  : undefined
+              }
+            >
+              <dl className="space-y-1.5 text-sm">
+                <Line label="Items at menu price" value={formatCents(k.menuSalesCents)} />
+                <Line label="− Discounts" value={formatCents(k.discountCents)} />
+                <Line label="+ Tax" value={formatCents(k.taxCents)} />
+                {k.partialRefundCents > 0 && <Line label="− Part refunds on these orders" value={formatCents(k.partialRefundCents)} />}
+                <div className="flex justify-between border-t border-stone-200 pt-1.5 text-base font-bold dark:border-stone-700">
+                  <dt>= Sales</dt>
+                  <dd className="tabular-nums">{formatCents(k.netSalesCents)}</dd>
+                </div>              </dl>
+            </Panel>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
-function DataTable({
-  headers,
-  rows,
-  alignRight,
-  empty,
-}: {
-  headers: string[];
-  rows: string[][];
-  alignRight: boolean[];
-  empty?: string;
-}) {
-  if (rows.length === 0) {
-    return (
-      <div className="py-6 text-center text-sm text-stone-500">{empty ?? 'No data.'}</div>
-    );
-  }
+function Line({ label, value }: { label: string; value: string }) {
   return (
-    <table className="w-full text-sm">
-      <thead className="text-left text-xs uppercase tracking-wider text-stone-500">
-        <tr>
-          {headers.map((h, i) => (
-            <th key={i} className={cn('pb-2 font-semibold', alignRight[i] && 'text-right')}>
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, ri) => (
-          <tr
-            key={ri}
-            className="border-t border-stone-100 transition-colors hover:bg-stone-50 dark:border-stone-800 dark:hover:bg-stone-800/50"
-          >
-            {row.map((cell, ci) => (
-              <td key={ci} className={cn('py-2.5', alignRight[ci] && 'text-right font-mono')}>
-                {cell}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="flex justify-between">
+      <dt>{label}</dt>
+      <dd className="tabular-nums">{value}</dd>
+    </div>
   );
 }

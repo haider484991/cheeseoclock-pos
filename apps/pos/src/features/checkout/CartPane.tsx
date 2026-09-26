@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import {
@@ -12,6 +12,7 @@ import {
   ArrowRight,
   ArrowLeft,
 } from 'lucide-react';
+import { cn } from '@cheeseoclock/ui';
 import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
 import { resetCustomerForm, useCustomerForm } from './useCustomerForm';
@@ -42,13 +43,16 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
   const mode = useCheckoutStore((s) => s.mode);
-  const updateItemQty = useCheckoutStore((s) => s.updateItemQty);
+  const lastTouch = useCheckoutStore((s) => s.lastTouch);
+  const bumpItemQty = useCheckoutStore((s) => s.bumpItemQty);
   const clearDiscount = useCheckoutStore((s) => s.clearDiscount);
   const discardDraft = useCheckoutStore((s) => s.discardDraft);
   const gate = useTenderGate();
   const { toast } = useToast();
   const { form, setForm } = useCustomerForm();
   const detailsHeading = useRef<HTMLHeadingElement>(null);
+  const linesRef = useRef<HTMLDivElement>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
 
   const items = snapshot?.items ?? [];
   const order = snapshot?.order;
@@ -58,6 +62,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
   const taxCents = order?.taxCents ?? 0;
   const itemCount = items.reduce((n, i) => n + i.quantity, 0);
   const shortNumber = order?.orderNumber.split('-').pop() ?? null;
+  const discount = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
 
   // Cash on delivery / pay at pickup is the norm here, so "Send to kitchen"
   // leads for takeaway and delivery. Foodpanda is settled by the platform:
@@ -72,6 +77,17 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
       detailsHeading.current?.scrollIntoView({ block: 'nearest' });
     }
   }, [showDetails]);
+
+  // The line just added or changed flashes and scrolls into view, so a tap on
+  // the menu is answered on the ticket straight away — no pop-up needed.
+  useEffect(() => {
+    if (!lastTouch) return;
+    setFlashId(lastTouch.lineId);
+    const row = linesRef.current?.querySelector<HTMLElement>(`[data-line-id="${lastTouch.lineId}"]`);
+    row?.scrollIntoView({ block: 'nearest' });
+    const t = window.setTimeout(() => setFlashId(null), 650);
+    return () => window.clearTimeout(t);
+  }, [lastTouch]);
 
   async function handleDiscard() {
     if (!order) return;
@@ -89,7 +105,29 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
     }
   }
 
-  const canAct = items.length > 0 && !busy && gate.ok;
+  function changeQty(orderItemId: string, delta: number) {
+    bumpItemQty(orderItemId, delta).catch((e: unknown) => {
+      toast({
+        title: 'Could not change the quantity',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      });
+    });
+  }
+
+  function removeDiscount() {
+    clearDiscount().catch((e: unknown) => {
+      toast({
+        title: 'Could not remove the discount',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      });
+    });
+  }
+
+  // Not greyed out while the till saves the last tap (that made the big
+  // button flicker on every item): Send and Pay queue behind the save.
+  const canAct = items.length > 0 && gate.ok;
 
   return (
     <aside id="checkout-order" className={`ticket${showDetails ? ' is-details' : ''}`} aria-label="Current order">
@@ -120,7 +158,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
         )}
       </header>
 
-      <div className={showDetails ? 'ticket-details' : 'ticket-lines'}>
+      <div ref={linesRef} className={showDetails ? 'ticket-details' : 'ticket-lines'}>
         {showDetails ? (
           <section aria-labelledby="ticket-details-title">
             <div className="ticket-step-heading">
@@ -136,24 +174,31 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
         ) : (
           <ul>
             {items.map((item) => (
-              <li key={item.id} className="ticket-line">
+              <li
+                key={item.id}
+                data-line-id={item.id}
+                className={cn(
+                  'ticket-line rounded-lg transition-colors',
+                  flashId === item.id ? 'bg-amber-100 duration-75 dark:bg-amber-900/40' : 'duration-500',
+                )}
+              >
+                {/* Quantity taps queue up in order, so they are never greyed
+                    out while the till is still saving the last one. */}
                 <div className="ticket-qty" role="group" aria-label={`Quantity of ${item.menuItemName}`}>
                   <button
                     type="button"
-                    disabled={busy}
-                    onClick={() => void updateItemQty(item.id, item.quantity - 1)}
+                    onClick={() => changeQty(item.id, -1)}
                     aria-label={item.quantity === 1 ? `Remove ${item.menuItemName}` : 'One less'}
-                    title={item.quantity === 1 ? 'Remove' : 'One less'}
+                    title={item.quantity === 1 ? 'Remove' : 'One less (−)'}
                   >
                     {item.quantity === 1 ? <X className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
                   </button>
                   <span aria-live="polite">{item.quantity}</span>
                   <button
                     type="button"
-                    disabled={busy}
-                    onClick={() => void updateItemQty(item.id, item.quantity + 1)}
+                    onClick={() => changeQty(item.id, 1)}
                     aria-label="One more"
-                    title="One more"
+                    title="One more (+)"
                   >
                     <Plus className="h-4 w-4" />
                   </button>
@@ -174,7 +219,6 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
                   <button
                     type="button"
                     className="ticket-link ticket-customize"
-                    disabled={busy}
                     onClick={() => onCustomize(item.id)}
                   >
                     Customize · allergy
@@ -196,8 +240,24 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
           {discountCents > 0 ? (
             <div className="is-discount">
               <dt>
-                Discount
-                <button type="button" onClick={() => void clearDiscount()} aria-label="Remove discount" title="Remove discount">
+                <button
+                  type="button"
+                  className="ticket-link"
+                  style={{ color: 'inherit' }}
+                  onClick={onDiscount}
+                  title="Change the discount (F3)"
+                >
+                  <Percent className="h-3 w-3" aria-hidden="true" />
+                  Discount
+                  {discount && (
+                    <span className="font-normal">
+                      {' · '}
+                      {discount.discountType === 'percent' ? `${discount.value}%` : formatCents(discount.value)}
+                      {discount.reason ? ` · ${discount.reason}` : ''}
+                    </span>
+                  )}
+                </button>
+                <button type="button" onClick={removeDiscount} aria-label="Remove discount" title="Remove discount">
                   <X className="h-3 w-3" />
                 </button>
               </dt>
@@ -209,7 +269,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
                 <button
                   type="button"
                   className="ticket-link"
-                  disabled={items.length === 0 || busy}
+                  disabled={items.length === 0}
                   onClick={onDiscount}
                   title="Apply a discount (F3)"
                 >
@@ -239,7 +299,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
 
         <div className="ticket-actions">
           {needsCustomer && !showDetails ? (
-            <button type="button" className="ticket-primary" disabled={items.length === 0 || busy} onClick={onContinue} title="Continue to customer details (F2)">
+            <button type="button" className="ticket-primary" disabled={items.length === 0} onClick={onContinue} title="Continue to customer details (Enter or F2)">
               Confirm order <ArrowRight className="h-5 w-5" aria-hidden="true" />
             </button>
           ) : sendFirst ? (
@@ -249,7 +309,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
                 className="ticket-primary"
                 disabled={!canAct}
                 onClick={onSendToKitchen}
-                title="Send to kitchen (F2)"
+                title="Send to kitchen (Enter or F2)"
               >
                 <ChefHat className="h-5 w-5" aria-hidden="true" />
                 Send to kitchen
@@ -266,7 +326,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
               </button>
             </>
           ) : (
-            <button type="button" className="ticket-primary" disabled={!canAct} onClick={onPay} title="Take payment (F1)">
+            <button type="button" className="ticket-primary" disabled={!canAct} onClick={onPay} title="Take payment (Enter or F1)">
               <Banknote className="h-5 w-5" aria-hidden="true" />
               Pay &amp; send to kitchen
             </button>
@@ -274,7 +334,9 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
         </div>
         {needsCustomer && !showDetails && <p className="ticket-next">Next: {mode === 'delivery' ? 'customer & delivery details' : 'customer details'}</p>}
         <div className="ticket-keys" aria-hidden="true">
-          {needsCustomer && !showDetails ? <span><kbd>F2</kbd> Continue</span> : mode === 'foodpanda' ? <span><kbd>F1</kbd> Pay</span> : <><span><kbd>F2</kbd> Send</span><span><kbd>F1</kbd> Pay</span></>}
+          <span><kbd>Enter</kbd> {needsCustomer && !showDetails ? 'Continue' : sendFirst ? 'Send' : 'Pay'}</span>
+          {showDetails && <span><kbd>F1</kbd> Pay</span>}
+          <span><kbd>+</kbd><kbd>−</kbd> Qty</span>
           <span><kbd>F3</kbd> Discount</span>
         </div>
       </footer>

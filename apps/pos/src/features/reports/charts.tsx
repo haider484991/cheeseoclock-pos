@@ -1,48 +1,60 @@
 /**
- * Tiny inline SVG chart primitives — no library. Good enough for POS dashboards.
+ * Small, dependency-free charts for the Reports page. Plain divs rather than
+ * a stretched SVG: bars stay crisp at any width, labels stay readable, and
+ * every bar carries its exact figure in a tooltip and in the table beside it.
  */
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { cn } from '@cheeseoclock/ui';
 
-interface BarChartProps {
-  data: Array<{ label: string; value: number }>;
-  height?: number;
-  formatValue?: (v: number) => string;
-  color?: string;
+export interface ColumnBar {
+  key: string;
+  /** Short label under the bar ("8 pm", "26"). */
+  label: string;
+  /** Tooltip, e.g. "Sat 26 Sep: Rs 3,174 · 6 orders". */
+  title: string;
+  value: number;
 }
 
-export function BarChart({
-  data,
-  height = 200,
-  formatValue = (v) => formatCents(v),
-  color = '#f59e0b',
-}: BarChartProps) {
-  if (data.length === 0) {
-    return <div className="py-8 text-center text-stone-500">No data in this range.</div>;
-  }
-  const max = Math.max(...data.map((d) => d.value), 1);
-  const barWidth = 100 / data.length;
+/**
+ * Vertical bars. The tallest bar is picked out in a stronger colour so the
+ * busiest hour / best day jumps out. Labels thin out when there are many bars.
+ */
+export function ColumnChart({
+  bars,
+  ariaLabel,
+  height = 'h-44',
+}: {
+  bars: ColumnBar[];
+  ariaLabel: string;
+  height?: string;
+}) {
+  if (bars.length === 0) return null;
+  const max = Math.max(...bars.map((b) => b.value), 1);
+  const best = bars.reduce((m, b, i) => (b.value > (bars[m]?.value ?? -Infinity) ? i : m), 0);
+  const labelEvery = bars.length <= 16 ? 1 : Math.ceil(bars.length / 12);
   return (
-    <div>
-      <svg viewBox={`0 0 100 ${height}`} preserveAspectRatio="none" className="h-48 w-full">
-        {data.map((d, i) => {
-          const h = (d.value / max) * (height - 30);
-          const x = i * barWidth + barWidth * 0.1;
-          const w = barWidth * 0.8;
-          const y = height - 20 - h;
+    <div role="img" aria-label={ariaLabel}>
+      <div className={cn('flex items-end gap-[3px] border-b border-stone-200 dark:border-stone-700', height)}>
+        {bars.map((b, i) => {
+          const pct = b.value > 0 ? Math.max((b.value / max) * 100, 1.5) : 0;
           return (
-            <g key={i}>
-              <rect x={x} y={y} width={w} height={h} fill={color} rx={0.5} />
-              <title>
-                {d.label}: {formatValue(d.value)}
-              </title>
-            </g>
+            <div key={b.key} className="group flex h-full min-w-0 flex-1 flex-col justify-end" title={b.title}>
+              <div
+                className={cn(
+                  'w-full rounded-t-[3px] transition-colors',
+                  i === best && b.value > 0
+                    ? 'bg-amber-500 dark:bg-amber-400'
+                    : 'bg-amber-200 group-hover:bg-amber-300 dark:bg-amber-900/70 dark:group-hover:bg-amber-700',
+                )}
+                style={{ height: `${pct}%` }}
+              />
+            </div>
           );
         })}
-      </svg>
-      <div className="grid text-center text-[10px] text-stone-500" style={{ gridTemplateColumns: `repeat(${data.length}, 1fr)` }}>
-        {data.map((d, i) => (
-          <div key={i} className="truncate" title={d.label}>
-            {d.label}
+      </div>
+      <div className="mt-1 flex gap-[3px]">
+        {bars.map((b, i) => (
+          <div key={b.key} className="min-w-0 flex-1 truncate text-center text-[10px] tabular-nums text-stone-500">
+            {i % labelEvery === 0 ? b.label : ''}
           </div>
         ))}
       </div>
@@ -50,53 +62,20 @@ export function BarChart({
   );
 }
 
-interface LineChartProps {
-  points: Array<{ label: string; value: number }>;
-  height?: number;
-  formatValue?: (v: number) => string;
-  color?: string;
-}
-
-export function LineChart({
-  points,
-  height = 200,
-  formatValue = (v) => formatCents(v),
-  color = '#f59e0b',
-}: LineChartProps) {
-  if (points.length === 0) {
-    return <div className="py-8 text-center text-stone-500">No data in this range.</div>;
-  }
-  const max = Math.max(...points.map((p) => p.value), 1);
-  const stepX = points.length > 1 ? 100 / (points.length - 1) : 50;
-  const path = points
-    .map((p, i) => {
-      const x = i * stepX;
-      const y = height - 20 - (p.value / max) * (height - 30);
-      return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
-    })
-    .join(' ');
+/** A thin share-of-total bar for table rows. */
+export function ShareBar({ value, total, tone = 'amber' }: { value: number; total: number; tone?: 'amber' | 'emerald' | 'sky' }) {
+  const pct = total > 0 ? Math.max(0, Math.min(100, (value / total) * 100)) : 0;
   return (
-    <div>
-      <svg viewBox={`0 0 100 ${height}`} preserveAspectRatio="none" className="h-48 w-full">
-        <path d={path} stroke={color} strokeWidth={1.5} fill="none" vectorEffect="non-scaling-stroke" />
-        {points.map((p, i) => {
-          const x = i * stepX;
-          const y = height - 20 - (p.value / max) * (height - 30);
-          return (
-            <g key={i}>
-              <circle cx={x} cy={y} r={1.2} fill={color}>
-                <title>
-                  {p.label}: {formatValue(p.value)}
-                </title>
-              </circle>
-            </g>
-          );
-        })}
-      </svg>
-      <div className="flex justify-between text-[10px] text-stone-500">
-        <span>{points[0]?.label}</span>
-        <span>{points[points.length - 1]?.label}</span>
-      </div>
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-100 dark:bg-stone-800" aria-hidden>
+      <div
+        className={cn(
+          'h-full rounded-full',
+          tone === 'amber' && 'bg-amber-400',
+          tone === 'emerald' && 'bg-emerald-500',
+          tone === 'sky' && 'bg-sky-500',
+        )}
+        style={{ width: `${pct}%` }}
+      />
     </div>
   );
 }

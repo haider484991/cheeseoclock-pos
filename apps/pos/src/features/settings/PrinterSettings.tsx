@@ -50,15 +50,18 @@ export function PrinterSettings() {
   const [printerName, setPrinterName] = useState('');
   const [width, setWidth] = useState<32 | 48>(48);
 
+  // Hydrate from the saved receipt printer only: the kitchen printer and the
+  // printing rules on this tab share the query, and saving one of them must
+  // not wipe what is typed here.
+  const savedCfg = cfgQ.data?.config;
   useEffect(() => {
-    if (!cfgQ.data) return;
-    const cfg = cfgQ.data.config;
-    setUiTransport(inferUiTransport(cfg));
-    setHost(cfg.network?.host && cfg.network.host !== 'mock' ? cfg.network.host : '192.168.1.100');
-    setPort(String(cfg.network?.port ?? 9100));
-    setPrinterName(cfg.usb?.printerName ?? '');
-    setWidth(cfg.width ?? 48);
-  }, [cfgQ.data]);
+    if (!savedCfg) return;
+    setUiTransport(inferUiTransport(savedCfg));
+    setHost(savedCfg.network?.host && savedCfg.network.host !== 'mock' ? savedCfg.network.host : '192.168.1.100');
+    setPort(String(savedCfg.network?.port ?? 9100));
+    setPrinterName(savedCfg.usb?.printerName ?? '');
+    setWidth(savedCfg.width ?? 48);
+  }, [savedCfg]);
 
   // Printers Windows knows about — only asked for while the USB option is open.
   const printersQ = useQuery({
@@ -121,7 +124,8 @@ export function PrinterSettings() {
       }),
   });
 
-  function buildConfig(): PrinterConnectionConfig | null {
+  /** The form as a printer config; null (with a toast unless quiet) when no USB printer is picked. */
+  function buildConfig(quiet = false): PrinterConnectionConfig | null {
     if (uiTransport === 'mock') {
       return { transport: 'network', network: { host: 'mock', port: 9100 }, width };
     }
@@ -140,11 +144,13 @@ export function PrinterSettings() {
     if (uiTransport === 'usb') {
       const name = printerName.trim();
       if (!name) {
-        toast({
-          title: 'Pick the printer first',
-          description: 'Choose the printer from the list, then save.',
-          variant: 'error',
-        });
+        if (!quiet) {
+          toast({
+            title: 'Pick the printer first',
+            description: 'Choose the printer from the list, then save.',
+            variant: 'error',
+          });
+        }
         return null;
       }
       return { transport: 'usb', usb: { printerName: name }, width };
@@ -158,19 +164,31 @@ export function PrinterSettings() {
     if (config) saveMut.mutate(config);
   }
 
-  function testPrint() {
-    // Runs against the saved config, so the toast reflects what the till will do.
+  const unsaved = !!savedCfg && isChanged(savedCfg, buildConfig(true));
+
+  async function testPrint() {
+    // The test runs against the saved printer, so the result is what the till
+    // will really do. Changes not saved yet are saved first; testing the old
+    // printer while the form shows a new one only confused people.
+    if (unsaved) {
+      const config = buildConfig();
+      if (!config) return;
+      try {
+        await saveMut.mutateAsync(config);
+      } catch {
+        return; // the save toast already said why
+      }
+    }
     testMut.mutate();
   }
 
-  const savedName = cfgQ.data?.config.usb?.printerName;
   const selectedIsKnown = !printerName || systemPrinters.some((p) => p.name === printerName);
 
   return (
     <Card>
       <div className="mb-4 flex items-center gap-2">
         <Printer className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">Printer</h2>
+        <h2 className="text-lg font-semibold">Receipt printer</h2>
       </div>
       <p className="mb-4 text-sm text-stone-500">
         Receipts and the cash drawer go through this printer — and kitchen tickets too, unless you
@@ -279,7 +297,7 @@ export function PrinterSettings() {
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
               <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-                IP address or hostname
+                Printer&rsquo;s IP address
               </label>
               <input
                 type="text"
@@ -288,6 +306,10 @@ export function PrinterSettings() {
                 placeholder="192.168.1.100"
                 className={inputClass}
               />
+              <p className="mt-1 text-xs text-stone-500">
+                Printed on the printer&rsquo;s self-test page (hold the feed button while switching
+                it on).
+              </p>
             </div>
             <div>
               <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
@@ -300,6 +322,7 @@ export function PrinterSettings() {
                 placeholder="9100"
                 className={inputClass}
               />
+              <p className="mt-1 text-xs text-stone-500">Almost always 9100.</p>
             </div>
           </div>
         )}
@@ -332,7 +355,8 @@ export function PrinterSettings() {
                     : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
                 )}
               >
-                {w === 32 ? '58 mm' : '80 mm'} <span className="text-stone-500">({w} cols)</span>
+                {w === 32 ? '58 mm' : '80 mm'}{' '}
+                <span className="text-stone-500">{w === 32 ? '(narrow roll)' : '(standard roll)'}</span>
               </button>
             ))}
           </div>
@@ -343,18 +367,22 @@ export function PrinterSettings() {
             {cfgQ.data?.config && (
               <span className="inline-flex items-center gap-1">
                 <Check className="h-3 w-3 text-emerald-500" />
-                Current: {labelCurrent(cfgQ.data.config)}
-                {uiTransport === 'usb' && savedName && savedName !== printerName.trim() && (
-                  <span className="ml-1 text-amber-600 dark:text-amber-400">
-                    — save to use the new pick
+                Saved: {labelCurrent(cfgQ.data.config)}
+                {unsaved && (
+                  <span className="ml-1 font-medium text-amber-600 dark:text-amber-400">
+                    — your changes are not saved yet
                   </span>
                 )}
               </span>
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="secondary" disabled={testMut.isPending} onClick={testPrint}>
-              {testMut.isPending ? 'Sending…' : 'Test print'}
+            <Button
+              variant="secondary"
+              disabled={testMut.isPending || saveMut.isPending}
+              onClick={() => void testPrint()}
+            >
+              {testMut.isPending ? 'Sending…' : unsaved ? 'Save and test print' : 'Test print'}
             </Button>
             <Button variant="primary" disabled={saveMut.isPending} onClick={save}>
               {saveMut.isPending ? 'Saving…' : 'Save'}
@@ -363,6 +391,18 @@ export function PrinterSettings() {
         </div>
       </section>
     </Card>
+  );
+}
+
+/** Whether the form differs from the saved printer (an unpicked USB printer counts as a change). */
+export function isChanged(saved: PrinterConnectionConfig, next: PrinterConnectionConfig | null): boolean {
+  if (!next) return true;
+  return (
+    saved.transport !== next.transport ||
+    (saved.network?.host ?? '') !== (next.network?.host ?? '') ||
+    (saved.network?.port ?? 9100) !== (next.network?.port ?? 9100) ||
+    (saved.usb?.printerName ?? '') !== (next.usb?.printerName ?? '') ||
+    (saved.width ?? 48) !== (next.width ?? 48)
   );
 }
 

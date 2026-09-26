@@ -9,7 +9,12 @@ import type { AppDatabase } from '../db/connection.js';
 import { getSyncConfig } from './sync-config.js';
 import { nowIso } from '../db/repositories/base.js';
 import { deleteSetting, getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
-import { createBackup, stageRestoreFromPath } from './backup-service.js';
+import {
+  ensureBackupDir,
+  removeDatabaseFiles,
+  snapshotDatabaseAsync,
+  stageRestoreFromPath,
+} from './backup-service.js';
 import { sealSecret } from './secret-seal.js';
 import {
   createOrder,
@@ -421,7 +426,8 @@ class WebOrdersBridge {
   }
 
   /**
-   * Create a fresh VACUUM'd snapshot, slim it, and upload it with a manifest:
+   * Take a fresh snapshot (online backup, a slice at a time), slim it, and
+   * upload it with a manifest:
    * as content-defined chunks, sending only those the website does not have
    * (cloud-copy-chunks.ts) — so a copy of any size fits, and a day's upload is
    * about a day's data. A website that predates chunks gets the old single
@@ -442,10 +448,22 @@ class WebOrdersBridge {
     // Recorded before the attempt so a crash mid-upload still counts as one.
     setSetting(this.db, LAST_CLOUD_ATTEMPT_KEY, nowIso());
     let tooLarge = false;
+    // The snapshot exists only to be uploaded; local retention is the daily
+    // auto-backup. It is named for the website like a manual backup, but kept
+    // on disk under a name the local backup list ignores (no ".db" ending),
+    // and removed at the end whatever happens: manual files are never
+    // rotated, so leaving it behind put an extra copy of the whole database
+    // on the shop PC every day.
+    let snapshotPath: string | null = null;
     try {
-      const backup = createBackup({ kind: 'manual' });
-      const trimmed = slimCloudCopy(backup.fullPath, getSyncConfig(this.db).mode);
-      const raw = fs.readFileSync(backup.fullPath);
+      const backup = cloudSnapshotName();
+      snapshotPath = backup.fullPath;
+      // Every step here used to be one synchronous call on the main process
+      // (VACUUM INTO, the trim, a second VACUUM, reading the file back, the
+      // chunking): the daily cloud copy froze the till for seconds, usually
+      // just after it was switched on. Each one now gives the event loop back.
+      await snapshotDatabaseAsync(this.db, backup.fullPath);
+      const trimmed = await slimCloudCopy(backup.fullPath, getSyncConfig(this.db).mode);
       // The row export the chunks are cut from (see cloud-copy-rows.ts).
       const snapshot = new Database(backup.fullPath, { readonly: true });
       let dump: Buffer;
@@ -453,16 +471,6 @@ class WebOrdersBridge {
         dump = await dumpDatabase(rowSource(snapshot));
       } finally {
         snapshot.close();
-      }
-      // The snapshot exists only to be uploaded; local retention is the daily
-      // auto-backup. Manual files are never rotated, so leaving this one behind
-      // put an extra copy of the whole database on the shop PC every day.
-      for (const suffix of ['', '-wal', '-shm', '-journal']) {
-        try {
-          fs.unlinkSync(backup.fullPath + suffix);
-        } catch {
-          // best effort — a stray file is harmless, just untidy
-        }
       }
       let sent: { id: string | null; sha256: string; gzBytes: number; meta: CloudCopyManifest };
       try {
@@ -472,7 +480,7 @@ class WebOrdersBridge {
           fileName: backup.fileName,
           meta: (s) => {
             meta = {
-              ...this.manifest(reason, trimmed, raw.length, s.uploadedBytes, CHUNKS_FORMAT),
+              ...this.manifest(reason, trimmed, trimmed.liveBytes, s.uploadedBytes, CHUNKS_FORMAT),
               chunkCount: s.chunkCount,
               newChunkCount: s.newChunkCount,
             };
@@ -482,6 +490,10 @@ class WebOrdersBridge {
         sent = { id: up.id, sha256: up.sha256, gzBytes: up.uploadedBytes, meta: meta! };
       } catch (e) {
         if (!(e instanceof ChunksUnsupportedError)) throw e;
+        // A website from before chunked copies takes the SQLite file itself,
+        // compacted to fit under its size cap. Only this path needs the VACUUM.
+        compactCopy(backup.fullPath);
+        const raw = fs.readFileSync(backup.fullPath);
         const blob = await this.uploadBlob(cfg, raw, backup.fileName, reason, trimmed);
         if (!blob.ok) {
           tooLarge = blob.tooLarge;
@@ -505,7 +517,7 @@ class WebOrdersBridge {
         fileName: backup.fileName,
         reason,
         format: sent.meta.format,
-        rawBytes: raw.length,
+        rawBytes: sent.meta.rawBytes,
         sentGzBytes: sent.gzBytes,
         chunks: sent.meta.chunkCount,
         newChunks: sent.meta.newChunkCount,
@@ -522,6 +534,8 @@ class WebOrdersBridge {
       throw e;
     } finally {
       this.cloudBackupRunning = false;
+      // Best effort — a stray file is harmless, and the next copy clears it.
+      if (snapshotPath) removeDatabaseFiles(snapshotPath);
     }
   }
 
@@ -1246,26 +1260,33 @@ class WebOrdersBridge {
  * (settings "audit.chainAnchor") for the verifier to start from — and for new
  * rows to link to if this copy is ever restored.
  *
- * Runs on the copy only. The live database is never touched.
+ * Runs on the copy only. The live database is never touched. Row-by-row
+ * deletes go in batches with the event loop given back in between (a year of
+ * audit rows is hundreds of thousands); there is no VACUUM here any more: the
+ * chunked upload exports rows, so free pages never leave the PC, and the
+ * size it reports is the live data (pages in use), what a VACUUM would leave.
  */
-function slimCloudCopy(
+async function slimCloudCopy(
   copyPath: string,
   syncMode: 'off' | 'mock' | 'http',
-): { removedSync: number; removedAudit: number } {
+): Promise<{ removedSync: number; removedAudit: number; liveBytes: number }> {
   const copy = new Database(copyPath);
   try {
     // Rollback journal, so closing leaves no -wal/-shm siblings behind.
     copy.pragma('journal_mode = DELETE');
+    // A throwaway file: a crash midway just means another copy next time, so
+    // no fsyncs and no journal file created and deleted for every batch.
+    copy.pragma('synchronous = OFF');
+    copy.pragma('journal_mode = MEMORY');
     const cutoff = new Date(
       Date.now() - CLOUD_COPY_AUDIT_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString();
     const removedSync =
       syncMode === 'off'
-        ? copy.prepare(`DELETE FROM sync_queue`).run().changes
-        : copy.prepare(`DELETE FROM sync_queue WHERE synced_at IS NOT NULL`).run().changes;
-    const removedAudit = copy
-      .prepare(`DELETE FROM audit_log WHERE created_at < ?`)
-      .run(cutoff).changes;
+        ? // No WHERE: SQLite drops the table's pages wholesale without visiting rows.
+          copy.prepare(`DELETE FROM sync_queue`).run().changes
+        : await deleteInBatches(copy, 'sync_queue', 'synced_at IS NOT NULL', []);
+    const removedAudit = await deleteInBatches(copy, 'audit_log', 'created_at < ?', [cutoff]);
     if (removedAudit > 0) {
       const first = copy
         .prepare(`SELECT prev_hash FROM audit_log ORDER BY rowid LIMIT 1`)
@@ -1285,8 +1306,70 @@ function slimCloudCopy(
           nowIso(),
         );
     }
+    const pageSize = Number(copy.pragma('page_size', { simple: true }));
+    const pages = Number(copy.pragma('page_count', { simple: true }));
+    const free = Number(copy.pragma('freelist_count', { simple: true }));
+    return { removedSync, removedAudit, liveBytes: (pages - free) * pageSize };
+  } finally {
+    copy.close();
+  }
+}
+
+/** Rowids examined per statement by slimCloudCopy: a step is ~40 ms on a 2 GB copy. */
+const SLIM_BATCH_ROWS = 2_000;
+
+/**
+ * `DELETE FROM table WHERE …`, one window of rowids at a time with the event
+ * loop given back in between. Windows (not "the first N matches") so every
+ * row is read once in total, however many match.
+ */
+async function deleteInBatches(
+  db: Database.Database,
+  table: 'sync_queue' | 'audit_log',
+  where: string,
+  params: unknown[],
+): Promise<number> {
+  const span = db.prepare(`SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM ${table}`).get() as {
+    lo: number | null;
+    hi: number | null;
+  };
+  if (span.lo === null || span.hi === null) return 0;
+  const stmt = db.prepare(`DELETE FROM ${table} WHERE rowid >= ? AND rowid < ? AND (${where})`);
+  let removed = 0;
+  for (let from = span.lo; from <= span.hi; from += SLIM_BATCH_ROWS) {
+    removed += stmt.run(from, from + SLIM_BATCH_ROWS, ...params).changes;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  return removed;
+}
+
+/**
+ * Where a cloud copy's snapshot is written: named like a manual backup for the
+ * website, with no ".db" ending on disk so listBackups() never offers it as a
+ * local backup. Leftovers of a copy the app died in the middle of are removed
+ * first (only one cloud copy runs at a time).
+ */
+function cloudSnapshotName(): { fileName: string; fullPath: string } {
+  const dir = ensureBackupDir();
+  for (const name of fs.readdirSync(dir)) {
+    if (/^manual-.*\.db\.cloud/.test(name)) {
+      try {
+        fs.unlinkSync(path.join(dir, name));
+      } catch {
+        // still open somewhere — the next copy tries again
+      }
+    }
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const fileName = `manual-${stamp}.db`;
+  return { fileName, fullPath: path.join(dir, `${fileName}.cloud`) };
+}
+
+/** VACUUM the throwaway copy: the old single-file upload sends the file itself. */
+function compactCopy(copyPath: string): void {
+  const copy = new Database(copyPath);
+  try {
     copy.exec('VACUUM');
-    return { removedSync, removedAudit };
   } finally {
     copy.close();
   }

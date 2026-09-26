@@ -91,11 +91,14 @@ export async function findUserByPin(
     )
     .all() as UserRow[];
 
-  for (const row of rows) {
-    const ok = await verifyPin(pin, row.pin_hash);
-    if (ok) return rowToInternal(row);
-  }
-  return null;
+  // All hashes at once: argon2 runs off the main thread (libuv pool, four at
+  // a time), and checking them one after another made every PIN entry
+  // (login, the idle-lock unlock, each manager approval) wait for the sum —
+  // ~100-200 ms a user on a till-class CPU, over a second with a full staff
+  // list or a wrong PIN. First match in row order, as before.
+  const matches = await Promise.all(rows.map((row) => verifyPin(pin, row.pin_hash)));
+  const hit = matches.findIndex(Boolean);
+  return hit >= 0 ? rowToInternal(rows[hit]!) : null;
 }
 
 /**
@@ -262,27 +265,32 @@ export function deactivateUser(
     .get(id) as UserRow | undefined;
   if (!existingRow) throw new Error('User not found');
 
+  // Switched OFF, not deleted (2026-09-26): this used to set deleted_at too, so
+  // a deactivated user vanished from Users and could never be switched back on.
   const now = new Date().toISOString();
   const tx = db.transaction(() => {
     if (existingRow.role === 'admin' && existingRow.is_active === 1) {
       assertNotLastActiveAdmin(db, id);
     }
     db.prepare(
-      `UPDATE users SET is_active = 0, deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
-    ).run(now, now, id);
+      `UPDATE users SET is_active = 0, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).run(now, id);
+    const after = rowToUser(
+      db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow,
+    );
     enqueueSync(db, {
       entityType: 'users',
       entityId: id,
-      op: 'delete',
-      payload: { id, deletedAt: now },
+      op: 'upsert',
+      payload: after,
     });
     writeAudit(db, {
       entityType: 'users',
       entityId: id,
-      action: 'delete',
+      action: 'update',
       actorUserId: actor.userId,
       before: rowToUser(existingRow),
-      after: null,
+      after,
     });
   });
   tx();

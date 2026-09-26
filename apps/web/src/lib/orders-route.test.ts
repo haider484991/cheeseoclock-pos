@@ -174,6 +174,24 @@ describe('POST /api/orders — delivery zones', () => {
     expect(none.json.error).toBe('validation');
   });
 
+  it('answers a broken request with a 400, and field errors in words a customer can act on', async () => {
+    const garbled = await orders.POST(
+      new Request('https://site.test/api/orders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{not json',
+      }),
+    );
+    expect(garbled.status).toBe(400);
+    const short = await place({ zoneId: 'dha-6', customerName: 'A' });
+    expect(short.status).toBe(400);
+    expect((short.json as { details?: Record<string, string[]> }).details?.['customerName']).toEqual([
+      'Please enter your name.',
+    ]);
+    const tooMany = await place({ zoneId: 'dha-6', items: [{ posItemId: 'fajita-l', quantity: 51, modifierIds: [] }] });
+    expect((tooMany.json as { details?: Record<string, string[]> }).details?.['items']?.[0]).toMatch(/Up to 50/);
+  });
+
   it('still takes the order when the till has no charge items yet, and tells the cashier', async () => {
     await publish(menu(false));
     const r = await place({ zoneId: 'emaar', notes: 'Ring twice' });

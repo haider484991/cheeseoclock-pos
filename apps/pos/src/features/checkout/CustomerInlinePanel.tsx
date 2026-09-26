@@ -2,9 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
-import type { CustomerAddress, CustomerAddressMatch } from '@cheeseoclock/shared-types';
-import { suggestDhaAreas, formatDhaArea, DHA_CITY, type DhaPlace } from '@cheeseoclock/pos-domain';
-import { Phone, User, MapPin, Check, UserPlus, History } from 'lucide-react';
+import {
+  DELIVERY_CITY,
+  feeForZones,
+  findDeliveryChargeItem,
+  isDeliveryChargeName,
+  type CustomerAddress,
+  type CustomerAddressMatch,
+} from '@cheeseoclock/shared-types';
+import { formatCents, resolveAreaText } from '@cheeseoclock/pos-domain';
+import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, RefreshCw } from 'lucide-react';
+import { AreaPicker } from '../customers/AreaPicker';
+import { useCheckoutStore } from '../../stores/checkoutStore';
+import { useToast } from '../../components/toast/ToastProvider';
 
 /**
  * Inline customer + delivery panel — lives in the second step of the order ticket (no modal).
@@ -17,9 +27,11 @@ import { Phone, User, MapPin, Check, UserPlus, History } from 'lucide-react';
  * UX rules:
  *   • Phone autocompletes as you type — suggestions appear in a small dropdown.
  *   • Pick a suggestion → name + saved addresses pre-fill (you can still edit).
- *   • If `mode === 'delivery'`, an address picker (saved) + freeform fields appear.
- *   • All inputs are debounced on blur for autocomplete; no save buttons.
- *   • A small status pill says "Existing customer" or "New — will save".
+ *   • If `mode === 'delivery'`: house / street is typed (a saved house number
+ *     brings its customer back); the AREA is picked from the shared DHA /
+ *     Clifton list, which also gives the delivery fee — with one tap to put
+ *     the matching "Delivery Charge" item on the bill.
+ *   • No save buttons. A small status pill says "Existing customer" or "New".
  */
 
 export interface CustomerFormState {
@@ -45,8 +57,8 @@ export function makeEmptyCustomerForm(): CustomerFormState {
     addressLabel: 'Order',
     addressLine: '',
     area: '',
-    // The shop delivers inside DHA only; the city is never in question.
-    city: DHA_CITY,
+    // The shop delivers in DHA and Clifton only; the city is never in question.
+    city: DELIVERY_CITY,
     deliveryNotes: '',
     matchedCustomerId: null,
     matchedAddressId: null,
@@ -68,9 +80,8 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
   // suggestion button used to unmount the button before its click event could
   // run — that's the "selecting doesn't pre-fill" bug).
   const phoneWrapRef = useRef<HTMLDivElement | null>(null);
-  // Address typeahead: known addresses by house number, DHA places by name.
+  // House-number typeahead: known addresses by what was typed.
   const [addrOpen, setAddrOpen] = useState(false);
-  const [areaOpen, setAreaOpen] = useState(false);
   const addrWrapRef = useRef<HTMLDivElement | null>(null);
 
   // Debounced lookup for phone autocomplete.
@@ -107,19 +118,15 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
     enabled: mode === 'delivery' && form.addressLine.trim().length >= 2 && !form.matchedAddressId,
   });
   const addrMatches = form.matchedAddressId ? [] : (addrMatchesQ.data ?? []);
-  const areaSuggestions = useMemo(() => suggestDhaAreas(form.area, 8), [form.area]);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
       if (!addrWrapRef.current) return;
-      if (!addrWrapRef.current.contains(e.target as Node)) {
-        setAddrOpen(false);
-        setAreaOpen(false);
-      }
+      if (!addrWrapRef.current.contains(e.target as Node)) setAddrOpen(false);
     }
-    if (addrOpen || areaOpen) document.addEventListener('mousedown', onClick);
+    if (addrOpen) document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
-  }, [addrOpen, areaOpen]);
+  }, [addrOpen]);
 
   function pickAddressMatch(a: CustomerAddressMatch) {
     setAddrOpen(false);
@@ -129,17 +136,12 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       addressLabel: a.label,
       addressLine: a.addressLine,
       area: a.area ?? '',
-      city: a.city ?? DHA_CITY,
+      city: a.city ?? DELIVERY_CITY,
       // The house tells us who it is, unless the cashier already picked someone.
       ...(prev.matchedCustomerId
         ? {}
         : { matchedCustomerId: a.customerId, name: a.customerName, phone: a.customerPhone ?? prev.phone }),
     }));
-  }
-
-  function pickArea(p: DhaPlace) {
-    setAreaOpen(false);
-    setForm((prev) => ({ ...prev, area: formatDhaArea(p), city: DHA_CITY, matchedAddressId: null }));
   }
 
   // After matching a customer, auto-pick their default address for delivery
@@ -159,7 +161,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
         addressLabel: def.label,
         addressLine: def.addressLine,
         area: def.area ?? '',
-        city: def.city ?? '',
+        city: def.city ?? DELIVERY_CITY,
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,7 +202,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
       addressLabel: a.label,
       addressLine: a.addressLine,
       area: a.area ?? '',
-      city: a.city ?? '',
+      city: a.city ?? DELIVERY_CITY,
     }));
   }
 
@@ -319,7 +321,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
                     pickAddressMatch(addrMatches[0]);
                   }
                 }}
-                placeholder="House 41-C, Sehar Lane 3"
+                placeholder="House 41-C, Lane 3 (house and street)"
                 className="cust-input"
               />
               {addrOpen && addrMatches.length > 0 && (
@@ -339,52 +341,17 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
                 </ul>
               )}
             </div>
-            <div className="relative">
-              <input
-                type="text"
+            {/* The area gets the whole row: its list, fee and "which phase?" chips need the width. */}
+            <div style={{ gridColumn: '1 / -1' }}>
+              <AreaPicker
                 value={form.area}
-                aria-label="Phase or commercial area"
-                autoComplete="off"
-                onFocus={() => setAreaOpen(true)}
-                onBlur={() => setTimeout(() => setAreaOpen(false), 150)}
-                onChange={(e) => {
-                  setForm((p) => ({ ...p, area: e.target.value, matchedAddressId: null }));
-                  setAreaOpen(true);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') setAreaOpen(false);
-                  if (e.key === 'Enter' && areaOpen && areaSuggestions[0]) {
-                    e.preventDefault();
-                    pickArea(areaSuggestions[0]);
-                  }
-                }}
-                placeholder="Phase / commercial"
-                className="cust-input"
+                onChange={(area) =>
+                  setForm((p) => ({ ...p, area, city: DELIVERY_CITY, matchedAddressId: null }))
+                }
               />
-              {areaOpen && areaSuggestions.length > 0 && (
-                <ul className="cust-dropdown" role="listbox" aria-label="DHA areas">
-                  {areaSuggestions.map((p) => (
-                    <li key={p.label}>
-                      <button type="button" onClick={() => pickArea(p)}>
-                        <span>{p.label}</span>
-                        {p.kind !== 'phase' && <small>{p.phase ? `DHA ${p.phase}` : 'DHA'}</small>}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
-            <input
-              type="text"
-              value={form.city}
-              aria-label="City"
-              onChange={(e) =>
-                setForm((p) => ({ ...p, city: e.target.value, matchedAddressId: null }))
-              }
-              placeholder="City"
-              className="cust-input"
-            />
           </div>
+          <DeliveryChargeRow area={form.area} />
           {savedAddresses.length > 0 && (
             <div className="mt-1 flex flex-wrap items-center gap-1">
               <span className="text-[10px] text-stone-500">Saved:</span>
@@ -487,6 +454,94 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
 }
 
 /**
+ * The picked area's delivery fee, and one tap to put the matching
+ * "Delivery Charge (Rs N)" menu item on the bill — or to swap a charge
+ * already there for the right one. Never adds anything by itself.
+ */
+function DeliveryChargeRow({ area }: { area: string }) {
+  const snapshot = useCheckoutStore((s) => s.snapshot);
+  const busy = useCheckoutStore((s) => s.busy);
+  const { toast } = useToast();
+  const [working, setWorking] = useState(false);
+  // Same query (and cache) as the menu grid's "All" view.
+  const itemsQ = useQuery({
+    queryKey: ['menu', 'items', { categoryId: null, activeOnly: true }],
+    queryFn: () => ipc.menu.listItems({ activeOnly: true }),
+    staleTime: 60_000,
+  });
+
+  const zoneIds = useMemo(() => resolveAreaText(area).zoneIds, [area]);
+  const fee = feeForZones(zoneIds);
+  if (fee === null) return null;
+
+  const chargeItem = findDeliveryChargeItem(itemsQ.data ?? [], fee);
+  const lines = (snapshot?.items ?? []).filter((l) => isDeliveryChargeName(l.menuItemName));
+  const rightQty = lines.filter((l) => l.unitPriceCents === fee).reduce((n, l) => n + l.quantity, 0);
+  const wrong = lines.filter((l) => l.unitPriceCents !== fee);
+  const disabled = busy || working || !chargeItem;
+
+  async function apply() {
+    if (!chargeItem) return;
+    setWorking(true);
+    try {
+      const store = useCheckoutStore.getState();
+      for (const l of wrong) await store.removeItem(l.id);
+      await store.addItem(chargeItem.id);
+    } catch (e) {
+      toast({
+        title: 'Could not add the delivery charge',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      });
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const feeText = formatCents(fee);
+  const base =
+    'mt-1 flex flex-wrap items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs';
+
+  if (rightQty > 0 && wrong.length === 0) {
+    return (
+      <div className={cn(base, 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200')}>
+        <span className="inline-flex items-center gap-1">
+          <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          {feeText} delivery charge is on the bill
+          {rightQty > 1 && <strong className="ml-1 text-amber-700 dark:text-amber-300">— {rightQty} times, check it</strong>}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn(base, 'bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200')}>
+      <span className="inline-flex items-center gap-1">
+        <Bike className="h-3.5 w-3.5" aria-hidden="true" />
+        {wrong.length > 0
+          ? `The bill has a ${formatCents(wrong[0]?.unitPriceCents ?? 0)} delivery charge — this area is ${feeText}`
+          : `Delivery to this area is ${feeText}`}
+      </span>
+      {chargeItem ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => void apply()}
+          className="inline-flex min-h-[32px] items-center gap-1 rounded-full bg-amber-500 px-3 font-semibold text-stone-900 hover:bg-amber-400 disabled:opacity-50"
+        >
+          {wrong.length > 0 ? <RefreshCw className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+          {wrong.length > 0 ? `Change to ${feeText}` : `Add ${feeText} to the bill`}
+        </button>
+      ) : (
+        <span className="text-[11px] text-stone-500">
+          No “Delivery Charge ({feeText})” item on the menu — add it in Menu to charge it here.
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
  * Persist whatever's in the form to the order at tender time.
  * - If the phone matched an existing customer → reuse.
  * - Else if name+phone given → create the customer.
@@ -537,26 +592,17 @@ export async function commitCustomerToOrder(
 
   let addressId: string | null = form.matchedAddressId;
   if (mode === 'delivery' && !addressId && form.addressLine.trim()) {
-    if (form.saveAddressToCustomer) {
-      const created = await ipc.customers.createAddress({
-        customerId,
-        label: form.addressLabel || 'Order',
-        addressLine: form.addressLine.trim(),
-        area: form.area.trim() || null,
-        city: form.city.trim() || null,
-      });
-      addressId = created.id;
-    } else {
-      // One-off: create a temporary address (still saved but unflagged)
-      const created = await ipc.customers.createAddress({
-        customerId,
-        label: 'One-off',
-        addressLine: form.addressLine.trim(),
-        area: form.area.trim() || null,
-        city: form.city.trim() || null,
-      });
-      addressId = created.id;
-    }
+    // Saved either way (the order needs an address row to point at); the
+    // "One-off" label keeps a do-not-save address out of the customer's
+    // usual list of places.
+    const created = await ipc.customers.createAddress({
+      customerId,
+      label: form.saveAddressToCustomer ? form.addressLabel || 'Order' : 'One-off',
+      addressLine: form.addressLine.trim(),
+      area: form.area.trim() || null,
+      city: form.city.trim() || DELIVERY_CITY,
+    });
+    addressId = created.id;
   }
 
   await ipc.customers.attachToOrder({

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
@@ -17,6 +17,23 @@ export function CategoriesTab() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const q = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
+  // Same cache as the Items tab: how many items each category holds.
+  const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
+  const itemCounts = useMemo(() => {
+    const counts = new Map<string, { all: number; active: number }>();
+    for (const i of itemsQ.data ?? []) {
+      const c = counts.get(i.categoryId) ?? { all: 0, active: 0 };
+      c.all += 1;
+      if (i.isActive) c.active += 1;
+      counts.set(i.categoryId, c);
+    }
+    return counts;
+  }, [itemsQ.data]);
+  // The till shows categories in display order; so does this list.
+  const categories = useMemo(
+    () => [...(q.data ?? [])].sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)),
+    [q.data],
+  );
 
   const [editing, setEditing] = useState<Category | null | 'new'>(null);
 
@@ -48,18 +65,29 @@ export function CategoriesTab() {
           <tr>
             <th className="pb-2">Color</th>
             <th className="pb-2">Name</th>
+            <th className="pb-2 text-right">Items</th>
             <th className="pb-2 text-right">Order</th>
             <th className="pb-2">Status</th>
-            <th className="pb-2" />
+            <th className="pb-2">
+              <span className="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
-          {(q.data ?? []).map((c) => (
+          {categories.map((c) => (
             <tr key={c.id} className="border-t border-stone-100 dark:border-stone-800">
               <td className="py-2">
                 <span className="inline-block h-5 w-8 rounded" style={{ background: c.colorHex }} />
               </td>
               <td className="py-2 font-medium">{c.name}</td>
+              <td className="py-2 text-right font-mono">
+                {itemCounts.get(c.id)?.active ?? 0}
+                {(itemCounts.get(c.id)?.all ?? 0) > (itemCounts.get(c.id)?.active ?? 0) && (
+                  <span className="ml-1 text-xs text-stone-400" title="Hidden items">
+                    +{(itemCounts.get(c.id)?.all ?? 0) - (itemCounts.get(c.id)?.active ?? 0)} hidden
+                  </span>
+                )}
+              </td>
               <td className="py-2 text-right font-mono">{c.displayOrder}</td>
               <td className="py-2">
                 {c.isActive ? (
@@ -77,19 +105,26 @@ export function CategoriesTab() {
                   type="button"
                   onClick={() => setEditing(c)}
                   className="rounded p-1 text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"
-                  aria-label="Edit"
+                  aria-label={`Edit ${c.name}`}
+                  title="Edit"
                 >
                   <Edit className="h-4 w-4" />
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    void askConfirm(`Delete category "${c.name}"?`).then((ok) => {
+                    const n = itemCounts.get(c.id)?.all ?? 0;
+                    void askConfirm(
+                      n > 0
+                        ? `Delete category "${c.name}"? It still has ${n} item${n === 1 ? '' : 's'} — move or delete them first, or hide the category instead (Edit → Inactive).`
+                        : `Delete category "${c.name}"?`,
+                    ).then((ok) => {
                       if (ok) deleteMut.mutate(c.id);
                     });
                   }}
                   className="rounded p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
-                  aria-label="Delete"
+                  aria-label={`Delete ${c.name}`}
+                  title="Delete"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -98,7 +133,7 @@ export function CategoriesTab() {
           ))}
           {(!q.data || q.data.length === 0) && (
             <tr>
-              <td colSpan={5} className="py-6 text-center text-stone-500">
+              <td colSpan={6} className="py-6 text-center text-stone-500">
                 No categories yet. Click "Add category" to get started.
               </td>
             </tr>

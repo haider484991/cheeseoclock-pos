@@ -224,7 +224,13 @@ export function dealWorthCents(menu: PublishedMenu, deal: PublishedMenuItem): nu
   }
 
   let worth = 0;
+  let slots = 0;
   for (const group of deal.modifierGroups) {
+    // Only the pizza slots are the deal's contents. Optional groups the till
+    // hangs on every item ("Dips on the side", paid extras) are add-ons, and
+    // counting them made every deal unpriceable — the Save badge vanished.
+    if (requiredCount(group) === 0) continue;
+    slots++;
     let cheapest: number | null = null;
     for (const m of group.modifiers) {
       const slot = /^(?:2nd\s+)?(medium|large):\s*(.+)$/i.exec(m.name.trim());
@@ -234,6 +240,7 @@ export function dealWorthCents(menu: PublishedMenu, deal: PublishedMenuItem): nu
     if (cheapest === null) return null;
     worth += cheapest;
   }
+  if (slots === 0) return null;
 
   if (/\b1\s*lit(?:re|er)\b/i.test(deal.description ?? '')) {
     const drink = all.find((it) => /^1\s*lit(?:re|er)$/i.test(splitSizedName(it.name).size ?? ''));

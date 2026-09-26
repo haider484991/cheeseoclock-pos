@@ -11,11 +11,14 @@ const MODES: Array<{ id: OrderMode; label: string; icon: typeof ShoppingBag }> =
   { id: 'foodpanda', label: 'Foodpanda', icon: Smartphone },
 ];
 
-/** Order type stays beside the menu; customer entry follows item confirmation. */
+/**
+ * Order type stays beside the menu; customer entry follows item confirmation.
+ * The switch is never greyed out: it takes effect on screen at once and is
+ * saved to the order in turn with the item taps (checkoutStore's queue).
+ */
 export function OrderDetails() {
   const mode = useCheckoutStore((s) => s.mode);
   const setMode = useCheckoutStore((s) => s.setMode);
-  const busy = useCheckoutStore((s) => s.busy);
   const { toast } = useToast();
 
   async function switchMode(next: OrderMode) {
@@ -36,7 +39,7 @@ export function OrderDetails() {
         </div>
         <div className="ticket-modes" role="group" aria-label="Order type">
           {MODES.map(({ id, label, icon: Icon }) => (
-            <button key={id} type="button" disabled={busy} aria-pressed={mode === id} onClick={() => void switchMode(id)} className={cn('ticket-mode', mode === id && 'is-active')}>
+            <button key={id} type="button" aria-pressed={mode === id} onClick={() => void switchMode(id)} className={cn('ticket-mode', mode === id && 'is-active')}>
               <Icon className="h-4 w-4" aria-hidden="true" />{label}
             </button>
           ))}

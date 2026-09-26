@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { INGREDIENT_CATEGORY_IDS } from '@cheeseoclock/shared-types';
 import { centsSchema } from './common.js';
 
 /**
@@ -22,9 +23,12 @@ const idSchema = z.string().min(1);
 /** How many base units one pack holds: a whole number, at least 1. */
 const packSizeSchema = wholeUnits.positive({ message: 'Pack size must be at least 1' });
 const nullableText = z.string().nullable().optional();
+/** A shelf from the fixed list; null = guess it from the name. */
+const ingredientCategorySchema = z.enum(INGREDIENT_CATEGORY_IDS).nullable().optional();
 
 export const createIngredientInputSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().trim().min(1, { message: 'Give the ingredient a name' }),
+  category: ingredientCategorySchema,
   unit: z.string().min(1),
   currentQty: stockQtySchema.optional(),
   lowThreshold: stockQtySchema.optional(),
@@ -38,7 +42,8 @@ export const createIngredientInputSchema = z.object({
 
 export const updateIngredientInputSchema = z.object({
   id: idSchema,
-  name: z.string().min(1).optional(),
+  name: z.string().trim().min(1, { message: 'Give the ingredient a name' }).optional(),
+  category: ingredientCategorySchema,
   unit: z.string().min(1).optional(),
   lowThreshold: stockQtySchema.optional(),
   costPerUnitCents: centsSchema.optional(),
@@ -88,6 +93,17 @@ export const recordMovementInputSchema = z.object({
   notes: nullableText,
 });
 
+/** The movement history screen's filters; the repository clamps the page size too. */
+export const searchMovementsInputSchema = z.object({
+  search: z.string().max(200).optional(),
+  reason: z.enum(['sale', 'delivery', 'waste', 'count', 'transfer', 'adjustment']).optional(),
+  ingredientId: idSchema.optional(),
+  sinceIso: z.string().max(40).optional(),
+  untilIso: z.string().max(40).optional(),
+  offset: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().max(200).optional(),
+});
+
 export const createPurchaseOrderInputSchema = z.object({
   supplierId: idSchema,
   referenceNo: nullableText,
@@ -111,4 +127,29 @@ export const receiveDeliveryInputSchema = z.object({
     z.object({ purchaseOrderItemId: idSchema, qtyReceivedNow: lineQtySchema }),
   ),
   updateCosts: z.boolean().optional(),
+});
+
+export const setPurchaseOrderStatusInputSchema = z.object({
+  id: idSchema,
+  status: z.enum(['draft', 'ordered', 'partial', 'received', 'cancelled']),
+});
+
+const supplierFields = {
+  contactPerson: nullableText,
+  phone: nullableText,
+  email: nullableText,
+  address: nullableText,
+  notes: nullableText,
+};
+
+export const createSupplierInputSchema = z.object({
+  name: z.string().trim().min(1, { message: 'Give the supplier a name' }),
+  ...supplierFields,
+});
+
+export const updateSupplierInputSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1, { message: 'Give the supplier a name' }).optional(),
+  ...supplierFields,
+  isActive: z.boolean().optional(),
 });

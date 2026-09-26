@@ -13,6 +13,10 @@ import {
   recordMovementInputSchema,
   createPurchaseOrderInputSchema,
   receiveDeliveryInputSchema,
+  setPurchaseOrderStatusInputSchema,
+  createSupplierInputSchema,
+  updateSupplierInputSchema,
+  searchMovementsInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
@@ -22,12 +26,14 @@ import {
   deleteIngredient,
   convertIngredientToBaseUnit,
   listRecipeForItem,
+  listRecipeLineCounts,
   setRecipeForItem,
 } from '../../db/repositories/ingredient-repo.js';
 import {
   listMovements,
   recordStockMovement,
 } from '../../db/repositories/stock-movement-repo.js';
+import { searchMovements } from '../../db/repositories/stock-movement-search.js';
 import { getBatchRecipe, setBatchRecipe, makeBatch } from '../../db/repositories/batch-recipe-repo.js';
 import {
   listSuppliers,
@@ -125,6 +131,11 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     return ok({ menuItemId: parsed.data.menuItemId });
   });
 
+  defineHandler('inventory:listRecipeLineCounts', ctx, () => {
+    requireSession();
+    return ok(listRecipeLineCounts(ctx.db));
+  });
+
   // ---- Batch recipes (made in-house) ----
   defineHandler('inventory:getBatchRecipe', ctx, (_ctx, payload) => {
     requireSession();
@@ -153,6 +164,13 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     return ok(listMovements(ctx.db, payload ?? {}));
   });
 
+  defineHandler('inventory:searchMovements', ctx, (_ctx, payload) => {
+    requireSession();
+    const parsed = searchMovementsInputSchema.safeParse(payload ?? {});
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(searchMovements(ctx.db, parsed.data));
+  });
+
   defineHandler('inventory:recordMovement', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
     const parsed = recordMovementInputSchema.safeParse(payload);
@@ -168,12 +186,16 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:createSupplier', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    return ok(createSupplier(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const parsed = createSupplierInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(createSupplier(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 
   defineHandler('inventory:updateSupplier', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    return ok(updateSupplier(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const parsed = updateSupplierInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(updateSupplier(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 
   // ---- Purchase orders ----
@@ -196,7 +218,9 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:setPurchaseOrderStatus', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
-    setPurchaseOrderStatus(ctx.db, payload.id, payload.status, {
+    const parsed = setPurchaseOrderStatusInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    setPurchaseOrderStatus(ctx.db, parsed.data.id, parsed.data.status, {
       userId: s.id,
       deviceId: ctx.deviceId,
     });

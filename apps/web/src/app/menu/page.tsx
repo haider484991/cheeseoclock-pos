@@ -30,7 +30,7 @@ const devMenuFile =
 
 async function loadMenu(): Promise<PublishedMenu | null> {
   if (devMenuFile) {
-    return JSON.parse(await readFile(devMenuFile, 'utf8')) as PublishedMenu;
+    return menuWithoutDrinkBrand(JSON.parse(await readFile(devMenuFile, 'utf8')) as PublishedMenu);
   }
   try {
     const rows = (await sql()`

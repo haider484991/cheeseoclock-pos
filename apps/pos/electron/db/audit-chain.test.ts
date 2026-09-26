@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUDIT_CHAIN_GENESIS,
+  AuditChainVerifier,
   hashAuditRow,
   verifyAuditChain,
   type AuditChainRow,
@@ -88,6 +89,23 @@ describe('verifyAuditChain', () => {
     expect(r.ok).toBe(true);
     expect(r.checkedRows).toBe(3);
     expect(r.headHash).toBe(rows[7]!.rowHash);
+  });
+
+  it('gives the same report fed one row at a time (paged boot verification)', () => {
+    const intact = chain(7, 2);
+    const edited = chain(7, 2);
+    edited[5]!.afterJson = JSON.stringify({ status: 'void' });
+    for (const rows of [intact, edited]) {
+      const v = new AuditChainVerifier();
+      let fed = 0;
+      for (const r of rows) {
+        fed += 1;
+        if (!v.push(r)) break;
+      }
+      expect(v.report()).toEqual(verifyAuditChain(rows));
+      // A broken chain stops asking for rows at the break.
+      expect(fed).toBe(v.report().ok ? rows.length : 6);
+    }
   });
 
   it('hash depends on every field and on the previous hash', () => {
