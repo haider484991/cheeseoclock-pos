@@ -12,7 +12,8 @@ import type {
 
 /**
  * No-network sync adapter for development. Pushes are written to
- * userData/sync-mock/ as JSON; pulls return empty. Lets you exercise the
+ * userData/sync-mock/ as JSON (a big one, such as "send everything", as a
+ * summary; the newest 200 files are kept); pulls return empty. Lets you exercise the
  * worker + queue plumbing without standing up a Postgres backend.
  *
  * If you want to simulate inbound peer changes, drop a JSON file shaped like
@@ -38,7 +39,10 @@ export class MockSyncAdapter implements SyncAdapter {
     }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const file = path.join(this.dir, `push-${stamp}.json`);
-    fs.writeFileSync(file, JSON.stringify(changes, null, 2));
+    const full = JSON.stringify(changes, null, 2);
+    // A full send is the whole database: write what was in it, not all of it.
+    fs.writeFileSync(file, full.length <= MOCK_FULL_PAYLOAD_BYTES ? full : summarize(changes));
+    this.keepNewest();
     log.info('Mock sync wrote push', { file, count: changes.length });
     return {
       accepted: changes.map((c) => c.entityId),
@@ -70,4 +74,38 @@ export class MockSyncAdapter implements SyncAdapter {
   subscribeRemote(): { unsubscribe: () => void } {
     return { unsubscribe: () => {} };
   }
+
+  /** Only the newest push files stay; the folder must not grow without end. */
+  private keepNewest(): void {
+    try {
+      const pushes = fs
+        .readdirSync(this.dir)
+        .filter((f) => f.startsWith('push-') && f.endsWith('.json'))
+        .sort();
+      for (const f of pushes.slice(0, Math.max(0, pushes.length - MOCK_KEEP_FILES))) {
+        fs.unlinkSync(path.join(this.dir, f));
+      }
+    } catch (e) {
+      log.warn('Mock sync could not tidy its folder', { err: e });
+    }
+  }
+}
+
+/** Pushes up to this size are written in full; bigger ones as a summary. */
+const MOCK_FULL_PAYLOAD_BYTES = 256 * 1024;
+const MOCK_KEEP_FILES = 200;
+
+function summarize(changes: SyncChange[]): string {
+  const byType: Record<string, number> = {};
+  for (const c of changes) byType[c.entityType] = (byType[c.entityType] ?? 0) + 1;
+  return JSON.stringify(
+    {
+      summary: true,
+      count: changes.length,
+      byType,
+      first: changes.slice(0, 20).map((c) => ({ entityType: c.entityType, entityId: c.entityId, op: c.op })),
+    },
+    null,
+    2,
+  );
 }

@@ -4,7 +4,10 @@ import { ipc } from '../../ipc/client';
 import { Button, Card } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
 import { Eye, Store } from 'lucide-react';
+import { logoBox, type MonoRaster } from '@cheeseoclock/printer-core';
 import { LogoPicker } from './LogoPicker';
+import { darkLogoFix, receiptLogoUpToDate, saveReceiptLogo, type LogoPreview } from './receiptLogo';
+import { PrintedLogo, useReceiptLogoPreview } from './ReceiptLogoPreview';
 import { SidebarBrand } from '../shell/Sidebar';
 import { LoginBrand } from '../auth/LoginPage';
 
@@ -48,15 +51,21 @@ export function BrandingSettings() {
       logoUrl !== (saved.logoUrl ?? null));
 
   const saveMut = useMutation({
-    mutationFn: () =>
-      ipc.printer.setBranding({
+    mutationFn: async () => {
+      await ipc.printer.setBranding({
         storeName: storeName.trim() || DEFAULT_NAME,
         ...(storeTagline.trim() ? { storeTagline: storeTagline.trim() } : {}),
         ...(branchLine.trim() ? { branchLine: branchLine.trim() } : {}),
         ...(phoneLine.trim() ? { phoneLine: phoneLine.trim() } : {}),
         ...(footerLine.trim() ? { footerLine: footerLine.trim() } : {}),
         ...(logoUrl ? { logoUrl } : {}),
-      }),
+      });
+      // The receipt printer's copy of a new logo. Receipts print (without the
+      // logo) if this fails, and the till tries again on its own.
+      if (logoUrl && !receiptLogoUpToDate(logoUrl, cfgQ.data?.logo.stored)) {
+        await saveReceiptLogo(logoUrl).catch((e: unknown) => console.warn('Receipt logo not prepared', e));
+      }
+    },
     onSuccess: () => {
       toast({ title: 'Shop details saved', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['printer', 'config'] });
@@ -73,6 +82,13 @@ export function BrandingSettings() {
 
   const shownName = storeName.trim() || DEFAULT_NAME;
 
+  // The logo as this till's receipt printer would print it (on its paper width).
+  const paper = cfgQ.data?.config.width ?? 48;
+  const logoOn = cfgQ.data?.policy.logoOnReceipt ?? true;
+  const printed = useReceiptLogoPreview(logoUrl, paper);
+  const receiptLogo = logoOn && printed.state === 'ready' ? printed.raster : null;
+  const note = logoNote(printed, logoOn, logoUrl);
+
   return (
     <>
       <Card>
@@ -81,9 +97,9 @@ export function BrandingSettings() {
           <h2 className="text-lg font-semibold">Shop details</h2>
         </div>
         <p className="mb-5 text-sm text-stone-500">
-          Your logo and name show on the PIN screen and in the menu bar. The name and the lines
-          below print at the top of every receipt, and go to the website when you publish the
-          menu.
+          Your logo and name show on the PIN screen and in the menu bar. Customer receipts start
+          with the logo in black and white (see the preview below), then the name and the lines
+          you fill in here. The name and lines also go to the website when you publish the menu.
         </p>
 
         <div className="space-y-5">
@@ -95,7 +111,7 @@ export function BrandingSettings() {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
               label="Shop name"
-              hint="Big and bold at the top of receipts."
+              hint="Big and bold at the top of receipts, under the logo."
               value={storeName}
               onChange={setStoreName}
               placeholder={DEFAULT_NAME}
@@ -160,15 +176,37 @@ export function BrandingSettings() {
           </div>
           <PreviewFrame label="Top and bottom of a printed receipt">
             <ReceiptPreview
+              logo={receiptLogo}
+              paperDots={logoBox(paper).maxWidth}
               name={shownName}
               tagline={storeTagline.trim()}
               address={branchLine.trim()}
               phone={phoneLine.trim()}
               footer={footerLine.trim() || 'Thank you — visit us again!'}
             />
-            <p className="mt-2 max-w-[18rem] text-xs text-stone-500">
-              Receipt printers print text, so the logo is not printed on receipts.
+            <p
+              className={
+                note.warn
+                  ? 'mx-auto mt-2 max-w-[18rem] text-xs font-medium text-amber-700 dark:text-amber-400'
+                  : 'mx-auto mt-2 max-w-[18rem] text-xs text-stone-500'
+              }
+            >
+              {note.text}
             </p>
+            {printed.state === 'ready' && printed.repaired && (
+              <p className="mx-auto mt-1 max-w-[18rem] text-xs text-stone-500">
+                The black background around your logo is left off on paper. For the sharpest
+                print, upload a PNG with a see-through background.
+              </p>
+            )}
+            {printed.state === 'ready' && printed.raster && (
+              <div className="mt-3">
+                <div className="mb-1 text-xs text-stone-500">Close-up of the printed logo</div>
+                <div className="overflow-x-auto rounded bg-white p-2 ring-1 ring-stone-200">
+                  <PrintedLogo raster={printed.raster} />
+                </div>
+              </div>
+            )}
           </PreviewFrame>
         </div>
       </Card>
@@ -185,8 +223,45 @@ function PreviewFrame({ label, children }: { label: string; children: React.Reac
   );
 }
 
-/** The receipt header and footer as the printer lays them out (centred text, big name). */
+/** What the preview says about the logo on paper. */
+function logoNote(p: LogoPreview, on: boolean, logoUrl: string | null): { text: string; warn: boolean } {
+  switch (p.state) {
+    case 'none':
+      return { text: 'Add a logo and it prints at the top of customer receipts.', warn: false };
+    case 'loading':
+      return { text: 'Getting the logo ready for the printer…', warn: false };
+    case 'error':
+      return {
+        text: "The till couldn't read this logo for the printer, so receipts print without it. Try uploading it again.",
+        warn: true,
+      };
+    case 'blank':
+      return {
+        text: 'This logo is too light to print, so receipts leave it out. A darker logo works better.',
+        warn: true,
+      };
+    case 'too_dark':
+      return {
+        text: `This logo would print as a big black block, so receipts leave it out. Upload ${darkLogoFix(logoUrl)}.`,
+        warn: true,
+      };
+    case 'ready':
+      return on
+        ? {
+            text: "Your logo prints in black and white at the top of customer receipts, like this. Kitchen tickets don't show it.",
+            warn: false,
+          }
+        : {
+            text: 'The logo is turned off for receipts. Turn it on under Printers → What prints, and when.',
+            warn: false,
+          };
+  }
+}
+
+/** The receipt header and footer as the printer lays them out (logo, centred text, big name). */
 function ReceiptPreview(props: {
+  logo: MonoRaster | null;
+  paperDots: number;
   name: string;
   tagline: string;
   address: string;
@@ -195,6 +270,11 @@ function ReceiptPreview(props: {
 }) {
   return (
     <div className="mx-auto w-[18rem] max-w-full bg-white px-4 py-5 text-center font-mono text-[11px] leading-snug text-stone-900 shadow-soft ring-1 ring-stone-200">
+      {props.logo && (
+        <div className="mb-2">
+          <PrintedLogo raster={props.logo} paperDots={props.paperDots} />
+        </div>
+      )}
       <div className="break-words text-lg font-bold leading-tight">{props.name}</div>
       {props.tagline && <div className="mt-1 break-words">{props.tagline}</div>}
       {(props.address || props.phone) && <div className="mt-2" />}

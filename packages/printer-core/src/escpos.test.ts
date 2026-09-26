@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { EscPosBuilder, LINES_BEFORE_CUT, qrCode, toPrinterAscii, wrap } from './escpos.js';
-import { CUT_MARKER, QR_MARKER, decodeEscPos, escPosToText } from './escpos-decode.js';
+import {
+  EscPosBuilder,
+  LINES_BEFORE_CUT,
+  RASTER_BAND_ROWS,
+  qrCode,
+  toPrinterAscii,
+  wrap,
+} from './escpos.js';
+import { CUT_MARKER, QR_MARKER, decodeEscPos, escPosToText, logoMarker } from './escpos-decode.js';
 
 const rowsOf = (bytes: Uint8Array) => decodeEscPos(bytes).map((r) => r.text);
 
@@ -121,5 +128,99 @@ describe('decodeEscPos', () => {
     expect(rows.slice(3, -1).every((r) => r.text === '')).toBe(true);
     expect(rows.slice(3, -1)).toHaveLength(2 + LINES_BEFORE_CUT);
     expect(escPosToText(b.build()).split('\n').slice(0, 3)).toEqual(['BIG', 'u', QR_MARKER]);
+  });
+});
+
+describe('EscPosBuilder.rasterImage', () => {
+  const img = (width: number, height: number, fill = 0xff) => ({
+    width,
+    height,
+    data: new Uint8Array((width / 8) * height).fill(fill),
+  });
+
+  it('sends GS v 0 with bytes-per-row and rows, then the dots', () => {
+    const data = Uint8Array.from([0x80, 0x01, 0xf0, 0x0f, 0xaa, 0x55]);
+    const bytes = new EscPosBuilder(48).rasterImage({ width: 16, height: 3, data }).build();
+    expect([...bytes]).toEqual([
+      0x1b, 0x40, // ESC @ from the constructor
+      0x1d, 0x76, 0x30, 0x00, // GS v 0, normal density
+      0x02, 0x00, // xL xH: 2 bytes a row
+      0x03, 0x00, // yL yH: 3 rows
+      0x80, 0x01, 0xf0, 0x0f, 0xaa, 0x55,
+    ]);
+  });
+
+  it('splits a tall picture into bands, each with its own header', () => {
+    const bytes = new EscPosBuilder(48).rasterImage(img(8, 130), 64).build();
+    expect(bytes).toHaveLength(2 + 3 * 8 + 130);
+    const header = (at: number) => [...bytes.slice(at, at + 8)];
+    expect(header(2)).toEqual([0x1d, 0x76, 0x30, 0x00, 0x01, 0x00, 64, 0x00]);
+    expect(header(2 + 8 + 64)).toEqual([0x1d, 0x76, 0x30, 0x00, 0x01, 0x00, 64, 0x00]);
+    expect(header(2 + 2 * (8 + 64))).toEqual([0x1d, 0x76, 0x30, 0x00, 0x01, 0x00, 2, 0x00]);
+  });
+
+  it('sends a whole logo (up to 160 rows) as one command by default', () => {
+    expect(RASTER_BAND_ROWS).toBeGreaterThanOrEqual(160);
+    const bytes = new EscPosBuilder(48).rasterImage(img(576, 160)).build();
+    expect(bytes).toHaveLength(2 + 8 + 72 * 160);
+    expect([...bytes.slice(2, 10)]).toEqual([0x1d, 0x76, 0x30, 0x00, 72, 0x00, 160, 0x00]);
+  });
+
+  it('puts the high byte of the row count in yH', () => {
+    const bytes = new EscPosBuilder(48).rasterImage(img(8, 300), 300).build();
+    expect([...bytes.slice(2, 10)]).toEqual([0x1d, 0x76, 0x30, 0x00, 0x01, 0x00, 0x2c, 0x01]);
+  });
+
+  it('refuses a malformed picture without writing anything', () => {
+    const b = new EscPosBuilder(48);
+    expect(() => b.rasterImage({ width: 10, height: 1, data: new Uint8Array(2) })).toThrow(RangeError);
+    expect(() => b.rasterImage({ width: 16, height: 3, data: new Uint8Array(5) })).toThrow(RangeError);
+    expect(() => b.rasterImage({ width: 16, height: 0, data: new Uint8Array(0) })).toThrow(RangeError);
+    expect(() => b.rasterImage(img(8, 2), 0)).toThrow(RangeError);
+    expect([...b.build()]).toEqual([0x1b, 0x40]);
+  });
+
+  it('never sends a real-time command (drawer pulse, power off) hidden in the dots', () => {
+    // DLE DC4 1 0 1 would pulse the cash drawer; DLE EOT / ENQ ask for status.
+    const data = Uint8Array.from([0x10, 0x14, 0x01, 0x00, 0x01, 0x10, 0x04, 0x10, 0x05, 0x10, 0x10, 0x20]);
+    const bytes = new EscPosBuilder(48).rasterImage({ width: 96, height: 1, data }).build();
+    const dots = [...bytes.slice(10)];
+    expect(dots).toHaveLength(data.length);
+    for (let i = 0; i + 1 < dots.length; i++) {
+      if (dots[i] === 0x10) expect([0x04, 0x05, 0x14]).not.toContain(dots[i + 1]);
+    }
+    // Only the DLE bytes that led a command changed, each to 0x18 (one more dot).
+    expect(dots).toEqual([0x18, 0x14, 0x01, 0x00, 0x01, 0x18, 0x04, 0x18, 0x05, 0x10, 0x10, 0x20]);
+  });
+
+  it('feedDots and reset', () => {
+    expect([...new EscPosBuilder(48).feedDots(16).build()].slice(2)).toEqual([0x1b, 0x4a, 16]);
+    expect([...new EscPosBuilder(48).feedDots(999).build()].slice(2)).toEqual([0x1b, 0x4a, 255]);
+    expect([...new EscPosBuilder(48).reset().build()].slice(2)).toEqual([0x1b, 0x40]);
+  });
+});
+
+describe('decodeEscPos — pictures', () => {
+  it('shows a picture as one row and never reads its dots as text or commands', () => {
+    // Dots that look like LF, ESC and a cut (GS V) must not turn into rows.
+    const data = Uint8Array.from([0x0a, 0x1b, 0x1d, 0x56, 0x00, 0x0a]);
+    const b = new EscPosBuilder(48).rasterImage({ width: 16, height: 3, data }).text('after').newline();
+    const rows = decodeEscPos(b.build());
+    expect(rows.map((r) => r.text)).toEqual([logoMarker(16, 3), 'after']);
+    expect(logoMarker(16, 3)).toBe('[logo 16×3]');
+  });
+
+  it('merges the bands of one picture into one row', () => {
+    const img = { width: 576, height: 160, data: new Uint8Array(72 * 160).fill(0x0a) };
+    const one = rowsOf(new EscPosBuilder(48).rasterImage(img).build());
+    const banded = rowsOf(new EscPosBuilder(48).rasterImage(img, 64).build());
+    expect(one).toEqual(['[logo 576×160]']);
+    expect(banded).toEqual(['[logo 576×160]']);
+  });
+
+  it('keeps two pictures apart when something prints between them', () => {
+    const img = { width: 8, height: 2, data: new Uint8Array(2) };
+    const b = new EscPosBuilder(48).rasterImage(img).text('x').newline().rasterImage(img);
+    expect(rowsOf(b.build())).toEqual(['[logo 8×2]', 'x', '[logo 8×2]']);
   });
 });

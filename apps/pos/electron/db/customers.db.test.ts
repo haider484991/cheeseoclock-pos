@@ -209,8 +209,9 @@ describe.skipIf(!raw)('address writes keep sync and audit honest', () => {
     const payload = JSON.parse(
       String(raw!.prepare(`SELECT payload_json AS p FROM sync_queue WHERE entity_id = ? ORDER BY rowid DESC LIMIT 1`).get(home.id)?.p),
     );
-    // The full post-image, not a partial { isDefault } patch.
-    expect(payload).toMatchObject({ id: home.id, isDefault: false, addressLine: 'House 3A', area: 'DHA Phase 7' });
+    // The full post-image, not a partial { isDefault } patch: the row as
+    // stored (a row image, see replicable-schema.ts).
+    expect(payload).toMatchObject({ id: home.id, isDefault: 0, addressLine: 'House 3A', area: 'DHA Phase 7' });
   });
 
   it('re-saving an existing address as default goes through the ledgers too', async () => {

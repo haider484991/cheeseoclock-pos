@@ -10,6 +10,7 @@ import {
   setSyncConfig,
 } from '../../services/sync-config.js';
 import { syncWorker } from '../../services/sync-worker.js';
+import { clearDroppedCount, markSnapshotNeeded } from '../../db/repositories/sync-repo.js';
 
 function requireSession(): AuthenticatedUser {
   const s = getCurrentSession();
@@ -90,5 +91,23 @@ export function registerSyncHandlers(ctx: HandlerContext): void {
     requireSettingsManage();
     syncWorker.kick();
     return ok({ kicked: true } as const);
+  });
+
+  // The fallback for what the till cannot notice by itself (the sync server
+  // was wiped and set up again at the same address with the same password).
+  defineHandler('sync:sendEverything', ctx, () => {
+    requireSettingsManage();
+    markSnapshotNeeded(ctx.db, 'asked');
+    syncWorker.kick();
+    return ok({ ok: true } as const);
+  });
+
+  // After the other till sent everything again: forget the changes dropped
+  // past the waiting list's cap. Changes still waiting are tried again now.
+  defineHandler('sync:clearNotSaved', ctx, () => {
+    const s = requireSettingsManage();
+    const cleared = clearDroppedCount(ctx.db, s.id);
+    syncWorker.kick();
+    return ok({ cleared });
   });
 }

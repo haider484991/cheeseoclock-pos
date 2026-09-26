@@ -16,6 +16,7 @@ import {
   stageRestoreFromPath,
 } from './backup-service.js';
 import { sealSecret } from './secret-seal.js';
+import { SYNC_SNAPSHOT_KEYS } from '../db/repositories/sync-repo.js';
 import {
   createOrder,
   addOrderItem,
@@ -1286,6 +1287,20 @@ async function slimCloudCopy(
         ? // No WHERE: SQLite drops the table's pages wholesale without visiting rows.
           copy.prepare(`DELETE FROM sync_queue`).run().changes
         : await deleteInBatches(copy, 'sync_queue', 'synced_at IS NOT NULL', []);
+    if (syncMode === 'off') {
+      // The copy's queue is gone: if it is ever restored and the second-till
+      // link switched on, that till must be sent everything once (sync-worker).
+      copy
+        .prepare(
+          `INSERT INTO sync_state (key, value, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        )
+        .run(
+          SYNC_SNAPSHOT_KEYS.needed,
+          JSON.stringify({ reason: 'unsent_cleared', at: nowIso(), gen: `cloud-copy-${nowIso()}` }),
+          nowIso(),
+        );
+    }
     const removedAudit = await deleteInBatches(copy, 'audit_log', 'created_at < ?', [cutoff]);
     if (removedAudit > 0) {
       const first = copy

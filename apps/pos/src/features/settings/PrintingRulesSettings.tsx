@@ -3,14 +3,33 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { PrintPolicy, ShopCopyRule } from '@cheeseoclock/shared-types';
-import { Bike, ChefHat, Copy, Receipt, RotateCcw, ScrollText } from 'lucide-react';
+import type { PrintPolicy, ReceiptLogoStatus, ShopCopyRule } from '@cheeseoclock/shared-types';
+import { Bike, ChefHat, Copy, Image as ImageIcon, Receipt, RotateCcw, ScrollText } from 'lucide-react';
+import { darkLogoFix } from './receiptLogo';
 
 const DEFAULT_POLICY: PrintPolicy = {
   kitchenTicket: true,
   deliveryBillOnDispatch: true,
   shopCopy: 'delivery',
+  logoOnReceipt: true,
 };
+
+/** What the "Logo on receipts" rule says, from what the till will really do with the logo. */
+function logoRuleBody(status: ReceiptLogoStatus | undefined, logoUrl: string | undefined): string {
+  if (!logoUrl || !status || status.state === 'none') {
+    return 'No logo yet. The owner can add one under Settings → Shop & logo.';
+  }
+  switch (status.state) {
+    case 'not_ready':
+      return 'The logo is being made ready for the printer; this takes a moment. Until then receipts print without it.';
+    case 'blank':
+      return 'Your logo is too light to print, so receipts leave it out. The owner can upload a darker one under Settings → Shop & logo.';
+    case 'too_dark':
+      return `Your logo would print as a big black block, so receipts leave it out. The owner can upload ${darkLogoFix(logoUrl)} under Settings → Shop & logo.`;
+    default:
+      return "Your logo prints at the top of customer receipts, delivery bills and refund slips — never on kitchen tickets. The receipt printer's Test print shows it even when this is off. If it comes out as odd symbols, your printer can't print pictures: turn this off.";
+  }
+}
 
 const SHOP_COPY_OPTIONS: Array<{ id: ShopCopyRule; label: string }> = [
   { id: 'never', label: 'Never' },
@@ -57,7 +76,9 @@ export function PrintingRulesSettings() {
   const dirty =
     saved.kitchenTicket !== policy.kitchenTicket ||
     saved.deliveryBillOnDispatch !== policy.deliveryBillOnDispatch ||
-    saved.shopCopy !== policy.shopCopy;
+    saved.shopCopy !== policy.shopCopy ||
+    saved.logoOnReceipt !== policy.logoOnReceipt;
+  const logoUrl = cfgQ.data?.branding.logoUrl;
 
   return (
     <Card>
@@ -88,6 +109,18 @@ export function PrintingRulesSettings() {
           title="Customer receipt"
           body="Printed when money is taken: Pay now at the counter, or a cash-on-delivery order marked served or delivered with its payment. A cash payment opens the drawer; card and wallet payments do not."
           control={<span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Always</span>}
+        />
+        <Rule
+          icon={ImageIcon}
+          title="Logo on receipts"
+          body={logoRuleBody(cfgQ.data?.logo, logoUrl)}
+          control={
+            <Toggle
+              checked={policy.logoOnReceipt}
+              onChange={(v) => setPolicy({ ...policy, logoOnReceipt: v })}
+              label="Print the logo on receipts"
+            />
+          }
         />
         <Rule
           icon={Bike}

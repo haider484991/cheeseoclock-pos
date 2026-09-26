@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { Cloud, AlertTriangle, CheckCircle2, Info, PauseCircle } from 'lucide-react';
 
 type Mode = 'off' | 'mock' | 'http';
@@ -80,9 +81,40 @@ export function SyncSettings() {
       }),
   });
 
+  const sendAllMut = useMutation({
+    mutationFn: () => ipc.sync.sendEverything(),
+    onSuccess: () => {
+      toast({ title: 'Sending everything to the other till', variant: 'success' });
+      void qc.invalidateQueries({ queryKey: ['sync'] });
+    },
+    onError: (e) =>
+      toast({
+        title: 'Could not start',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'error',
+      }),
+  });
+
+  const askSendAll = async () => {
+    const yes = await askConfirm(
+      'Send everything on this till to the other till again? It can take up to an hour. The till keeps working.',
+    );
+    if (yes) sendAllMut.mutate();
+  };
+
   const ready = cfgQ.data?.ready;
   const isDev = versionQ.data?.isDev ?? false;
   const modes = MODES.filter((m) => !m.devOnly || isDev || mode === m.id);
+  const saved = cfgQ.data;
+  // Switching the link on, or pointing it at another server: the other side
+  // gets everything this till has (sync-worker.ts).
+  const sendsEverything =
+    !!saved &&
+    mode !== 'off' &&
+    (saved.mode === 'off' ||
+      mode !== saved.mode ||
+      baseUrl.trim() !== (saved.baseUrl ?? '') ||
+      (deviceSecret !== '' && !deviceSecret.startsWith('****')));
 
   return (
     <Card>
@@ -228,7 +260,26 @@ export function SyncSettings() {
           </div>
         )}
 
+        {sendsEverything && (
+          <div className="flex items-start gap-2 rounded-lg bg-stone-100 p-3 text-sm dark:bg-stone-800">
+            <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-stone-500" />
+            <div className="text-stone-600 dark:text-stone-400">
+              When you save, this till sends everything it has (menu, orders, stock, customers) to
+              the other till once. This can take up to an hour. The till keeps working.
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 border-t border-stone-200 pt-3 dark:border-stone-700">
+          {saved && saved.mode !== 'off' && (
+            <Button
+              variant="secondary"
+              disabled={sendAllMut.isPending}
+              onClick={() => void askSendAll()}
+            >
+              Send everything again
+            </Button>
+          )}
           <Button
             variant="secondary"
             disabled={triggerMut.isPending || mode === 'off'}

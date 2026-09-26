@@ -2,6 +2,7 @@ import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { ok, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
+import { logoFingerprint } from '@cheeseoclock/printer-core';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
   DEFAULT_RECEIPT_CONFIG,
@@ -11,12 +12,15 @@ import {
   getKitchenPrinterConfig,
   getPrintPolicy,
   getReceiptBranding,
+  getReceiptLogoStatus,
   getReceiptPrinterConfig,
   setKitchenPrinterConfig,
   setPrintPolicy,
   setReceiptBranding,
+  setReceiptLogoRaster,
   setReceiptPrinterConfig,
 } from '../../services/printer-config.js';
+import { ReceiptLogoRasterSchema } from '../../services/receipt-logo.js';
 import { printSpooler } from '../../services/print-spooler.js';
 import { isSystemPrintingSupported, listSystemPrinters } from '../../services/system-printers.js';
 
@@ -52,6 +56,7 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
       mockEnabled: true,
       policy: getPrintPolicy(ctx.db),
       kitchenPrinter: getKitchenPrinterConfig(ctx.db),
+      logo: getReceiptLogoStatus(ctx.db, config, branding),
     });
   });
 
@@ -80,6 +85,25 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
     }
     setReceiptBranding(ctx.db, parsed.data, s.id);
     return ok({ ok: true } as const);
+  });
+
+  // The printer's copy of the logo, made on screen. Managers and the owner
+  // only: whatever is saved here prints on every customer receipt, so a
+  // cashier's login must not be able to put a picture there. The fingerprint
+  // check keeps it to a picture of the logo that is set right now.
+  defineHandler('printer:setLogoRaster', ctx, (_ctx, payload) => {
+    requirePrinterManage();
+    const parsed = ReceiptLogoRasterSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({
+        code: 'validation_failed',
+        message: 'The logo could not be prepared for the printer',
+      });
+    }
+    const logoUrl = getReceiptBranding(ctx.db).logoUrl;
+    if (!logoUrl || parsed.data.source !== logoFingerprint(logoUrl)) return ok({ saved: false });
+    setReceiptLogoRaster(ctx.db, parsed.data);
+    return ok({ saved: true });
   });
 
   defineHandler('printer:setPolicy', ctx, (_ctx, payload) => {

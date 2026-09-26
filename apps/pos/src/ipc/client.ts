@@ -220,6 +220,8 @@ export const ipc = {
       unwrap(window.api.sync.setConfig(input)),
     getStatus: () => unwrap(window.api.sync.getStatus()),
     triggerNow: () => unwrap(window.api.sync.triggerNow()),
+    sendEverything: () => unwrap(window.api.sync.sendEverything()),
+    clearNotSaved: () => unwrap(window.api.sync.clearNotSaved()),
   },
   backup: {
     list: () => unwrap(window.api.backup.list()),
@@ -245,6 +247,8 @@ export const ipc = {
       unwrap(window.api.printer.setConfig(input)),
     setBranding: (input: IpcRequest<'printer:setBranding'>) =>
       unwrap(window.api.printer.setBranding(input)),
+    setLogoRaster: (input: IpcRequest<'printer:setLogoRaster'>) =>
+      unwrap(window.api.printer.setLogoRaster(input)),
     setPolicy: (input: IpcRequest<'printer:setPolicy'>) =>
       unwrap(window.api.printer.setPolicy(input)),
     setKitchenPrinter: (input: IpcRequest<'printer:setKitchenPrinter'>) =>

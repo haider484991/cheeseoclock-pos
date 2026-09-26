@@ -223,7 +223,8 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
                       className="ticket-link ticket-customize"
                       onClick={() => onCustomize(item.id)}
                     >
-                      Customize · allergy
+                      {/* Owner 2026-09-26: "I don't see the dip options if a customer wants extra" — name what is behind it. */}
+                      + Extras · dips · allergy
                     </button>
                   )}
                 </div>

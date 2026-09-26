@@ -1,14 +1,22 @@
 import type { PrinterWidth } from '@cheeseoclock/shared-types';
-import { EscPosBuilder } from '@cheeseoclock/printer-core';
+import { EscPosBuilder, appendLogo, type TestPageOptions } from '@cheeseoclock/printer-core';
 
 /**
  * A short page to prove the cable, the paper and the ESC/POS path. It names
  * the connection it came through, so a test print from the wrong printer or
- * the wrong setting is obvious on paper.
+ * the wrong setting is obvious on paper. On the receipt printer it starts
+ * with the shop logo (when there is a usable one), so the owner can see that
+ * this printer prints pictures before a customer gets one.
  */
-export function renderTestPage(width: PrinterWidth, connection = 'not set'): Uint8Array {
+export function renderTestPage(
+  width: PrinterWidth,
+  connection = 'not set',
+  opts: TestPageOptions = {},
+): Uint8Array {
   const b = new EscPosBuilder(width);
 
+  b.align('center');
+  appendLogo(b, opts.logo, width);
   b.align('center')
     .doubleSize(true)
     .bold(true)
@@ -24,9 +32,10 @@ export function renderTestPage(width: PrinterWidth, connection = 'not set'): Uin
     .rule()
     .line('Printed', formatLocal(new Date()))
     .line('Connection', connection)
-    .line('Paper', width === 48 ? '80 mm (48 columns)' : '58 mm (32 columns)')
-    .rule()
-    .newline();
+    .line('Paper', width === 48 ? '80 mm (48 columns)' : '58 mm (32 columns)');
+  if (opts.logoNote) b.line('Logo', opts.logoNote);
+  if (opts.logoOnReceipts !== undefined) b.line('Logo on receipts', opts.logoOnReceipts ? 'on' : 'off');
+  b.rule().newline();
 
   b.bold(true)
     .text('Alignment')

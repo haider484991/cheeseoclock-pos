@@ -18,6 +18,9 @@ export const CUT_MARKER = '[cut]';
 /** Row that stands in for a printed QR code in the decoded output. */
 export const QR_MARKER = '[QR]';
 
+/** Row that stands in for a printed picture (the logo), e.g. "[logo 576×160]". */
+export const logoMarker = (width: number, height: number): string => `[logo ${width}×${height}]`;
+
 const ESC = 0x1b;
 const GS = 0x1d;
 
@@ -25,6 +28,8 @@ export function decodeEscPos(bytes: Uint8Array): DecodedLine[] {
   const lines: DecodedLine[] = [];
   let cur = '';
   let scale: 1 | 2 = 1;
+  /** The picture row being built: bands of one picture sent back to back merge into it. */
+  let raster: { line: DecodedLine; width: number; height: number } | null = null;
   const flush = () => {
     lines.push({ text: cur, scale });
     cur = '';
@@ -81,6 +86,21 @@ export function decodeEscPos(bytes: Uint8Array): DecodedLine[] {
           lines.push({ text: QR_MARKER, scale: 1 });
         }
         i += 4 + len;
+      } else if (c === 0x76 && bytes[i + 2] === 0x30) {
+        // GS v 0 m xL xH yL yH d1…dk — raster picture, k = x·y bytes of dots.
+        // The data is dots, not text or commands: skip it whole.
+        flushIfPending();
+        const x = (bytes[i + 4] ?? 0) | ((bytes[i + 5] ?? 0) << 8);
+        const y = (bytes[i + 6] ?? 0) | ((bytes[i + 7] ?? 0) << 8);
+        if (raster && lines.at(-1) === raster.line && raster.width === x * 8) {
+          raster.height += y;
+          raster.line.text = logoMarker(raster.width, raster.height);
+        } else {
+          const line: DecodedLine = { text: logoMarker(x * 8, y), scale: 1 };
+          lines.push(line);
+          raster = { line, width: x * 8, height: y };
+        }
+        i += 7 + x * y;
       } else {
         i += 1;
       }

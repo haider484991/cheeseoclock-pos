@@ -8,11 +8,13 @@
  */
 
 import type { PrinterWidth } from '@cheeseoclock/shared-types';
+import type { MonoRaster } from './logo-raster.js';
 
 // ESC/POS commands ------------------------------------------------------------
 const ESC = 0x1b;
 const GS = 0x1d;
 const LF = 0x0a;
+const DLE = 0x10;
 
 const INIT = [ESC, 0x40];
 const ALIGN_LEFT = [ESC, 0x61, 0x00];
@@ -37,6 +39,14 @@ const FEED = (n: number) => [ESC, 0x64, n & 0xff];
  * bottom margin the customer sees; six gives about a finger's width.
  */
 export const LINES_BEFORE_CUT = 6;
+
+/**
+ * Most rows sent in one GS v 0 picture command. A logo (at most 160 rows)
+ * always goes as one command: cheap printers stop and restart the paper
+ * between commands and leave a hairline across the picture there. Anything
+ * taller is split into bands of this many rows.
+ */
+export const RASTER_BAND_ROWS = 255;
 
 // Code Page 437 (default) — most thermal printers expect single-byte ASCII;
 // non-ASCII chars need transliteration. For Urdu/Arabic shop name, we'd swap
@@ -193,6 +203,59 @@ export class EscPosBuilder {
 
   openDrawer() {
     return this.push(...DRAWER_KICK);
+  }
+
+  /** ESC @ — back to the printer's switched-on modes: left aligned, normal text. */
+  reset(): this {
+    return this.push(...INIT);
+  }
+
+  /**
+   * Print and feed n motion units (ESC J n): a dot (1/203 inch) on most
+   * receipt printers, a little less on some Epson models.
+   */
+  feedDots(n: number): this {
+    return this.push(ESC, 0x4a, Math.max(0, Math.min(255, Math.round(n))));
+  }
+
+  /**
+   * A 1-bit picture (GS v 0, normal density), in bands of `bandRows` rows.
+   * Must start a line. Throws on a malformed picture before writing anything.
+   *
+   * Epson-style firmware acts on real-time commands (DLE EOT / ENQ / DC4)
+   * even inside picture data, and DLE DC4 can pulse the cash drawer or
+   * switch the printer off. A picture never changes, so such a byte pair
+   * would fire on every receipt: any 0x10 followed by 0x04, 0x05 or 0x14
+   * goes out as 0x18 instead — one extra dot, invisible on paper.
+   */
+  rasterImage(img: MonoRaster, bandRows = RASTER_BAND_ROWS): this {
+    const bpr = img.width / 8;
+    if (
+      !Number.isInteger(bpr) ||
+      bpr < 1 ||
+      bpr > 0xffff ||
+      !Number.isInteger(img.height) ||
+      img.height < 1 ||
+      !(img.data instanceof Uint8Array) ||
+      img.data.length !== bpr * img.height ||
+      !Number.isInteger(bandRows) ||
+      bandRows < 1
+    ) {
+      throw new RangeError('Malformed raster');
+    }
+    const band = Math.min(bandRows, 0xffff);
+    for (let y0 = 0; y0 < img.height; y0 += band) {
+      const rows = Math.min(band, img.height - y0);
+      this.bytes.push(GS, 0x76, 0x30, 0x00, bpr & 0xff, (bpr >> 8) & 0xff, rows & 0xff, (rows >> 8) & 0xff);
+      const end = (y0 + rows) * bpr;
+      // A loop, not a spread: a picture is thousands of bytes.
+      for (let i = y0 * bpr; i < end; i++) {
+        const v = img.data[i]!;
+        const next = i + 1 < end ? img.data[i + 1]! : -1;
+        this.bytes.push(v === DLE && (next === 0x04 || next === 0x05 || next === 0x14) ? 0x18 : v);
+      }
+    }
+    return this;
   }
 
   build(): Uint8Array {

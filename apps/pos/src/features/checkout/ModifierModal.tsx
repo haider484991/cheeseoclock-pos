@@ -110,7 +110,7 @@ export function ModifierModal({
   // Validation: required groups need at least minSelect
   const errors = groups
     .filter((g) => g.isRequired && (selected[g.id]?.length ?? 0) < g.minSelect)
-    .map((g) => `Pick ${g.minSelect - (selected[g.id]?.length ?? 0)} more for ${groupDisplayName(g.name)}`);
+    .map((g) => `Pick ${g.minSelect - (selected[g.id]?.length ?? 0)} more for ${groupDisplayName(g.name, g)}`);
   const allValid = errors.length === 0 && !groupsQ.isLoading;
 
   // Compute running price
@@ -196,7 +196,7 @@ export function ModifierModal({
               <section key={g.id} className="mb-6">
                 <div className="mb-2 flex items-baseline justify-between">
                   <h3 className="font-semibold">
-                    {groupDisplayName(g.name)}
+                    {groupDisplayName(g.name, g)}
                     {g.isRequired && <span className="ml-1 text-red-500">*</span>}
                   </h3>
                   <span className="text-xs text-stone-500">

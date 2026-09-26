@@ -103,6 +103,8 @@ const api: RendererApi = {
     setConfig: (req) => invoke('sync:setConfig', req),
     getStatus: () => invoke('sync:getStatus', undefined),
     triggerNow: () => invoke('sync:triggerNow', undefined),
+    sendEverything: () => invoke('sync:sendEverything', undefined),
+    clearNotSaved: () => invoke('sync:clearNotSaved', undefined),
   },
   backup: {
     list: () => invoke('backup:list', undefined),
@@ -171,6 +173,7 @@ const api: RendererApi = {
     getConfig: () => invoke('printer:getConfig', undefined),
     setConfig: (req) => invoke('printer:setConfig', req),
     setBranding: (req) => invoke('printer:setBranding', req),
+    setLogoRaster: (req) => invoke('printer:setLogoRaster', req),
     setPolicy: (req) => invoke('printer:setPolicy', req),
     setKitchenPrinter: (req) => invoke('printer:setKitchenPrinter', req),
     test: (req) => invoke('printer:test', req),

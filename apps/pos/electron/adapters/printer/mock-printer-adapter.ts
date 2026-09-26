@@ -8,6 +8,7 @@ import {
   type PrinterAdapter,
   type PrintResult,
   type PrinterConnectionConfig,
+  type TestPageOptions,
 } from '@cheeseoclock/printer-core';
 import { renderTestPage } from './test-page.js';
 
@@ -61,7 +62,7 @@ export class MockPrinterAdapter implements PrinterAdapter {
     }
   }
 
-  async testPrint(): Promise<PrintResult> {
-    return this.send(renderTestPage(this.config.width ?? 48, 'No printer (saved to file)'));
+  async testPrint(opts?: TestPageOptions): Promise<PrintResult> {
+    return this.send(renderTestPage(this.config.width ?? 48, 'No printer (saved to file)', opts));
   }
 }

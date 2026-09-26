@@ -3,6 +3,7 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { ipc, onSyncStatusChanged } from '../../ipc/client';
 import { Card, Button, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { MonitorSmartphone, RefreshCw, AlertTriangle, PauseCircle, CheckCircle2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -40,6 +41,27 @@ export function SyncStatusCard() {
       }),
   });
 
+  const clearMut = useMutation({
+    mutationFn: () => ipc.sync.clearNotSaved(),
+    onSuccess: () => {
+      toast({ title: 'Cleared', variant: 'success' });
+      void qc.invalidateQueries({ queryKey: ['sync'] });
+    },
+    onError: (e) =>
+      toast({
+        title: 'Could not clear',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'error',
+      }),
+  });
+
+  const askClear = async () => {
+    const yes = await askConfirm(
+      'Only do this after pressing Send everything again on the other till. Changes still waiting here are tried again. Clear the count?',
+    );
+    if (yes) clearMut.mutate();
+  };
+
   const s = statusQ.data;
   if (!s || s.mode === 'off') return null;
 
@@ -69,6 +91,33 @@ export function SyncStatusCard() {
       {s.paused && (
         <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
           <PauseCircle className="h-4 w-4" /> Paused: changes wait here and go out when you turn it back on.
+        </div>
+      )}
+
+      {s.sendingEverything && (
+        <div className="mt-3 flex items-center gap-2 rounded-lg bg-stone-50 p-3 text-xs text-stone-700 dark:bg-stone-800 dark:text-stone-200">
+          <RefreshCw className="h-4 w-4 flex-shrink-0" />
+          {s.paused
+            ? 'Everything on this till will be sent to the other till once, when you turn the link back on.'
+            : isFailing
+              ? 'Everything on this till will be sent to the other till once, when it can be reached.'
+              : 'Sending everything to the other till once. "Waiting to send" goes up first, then down. The till keeps working.'}
+        </div>
+      )}
+
+      {s.notSaved > 0 && (
+        <div className="mt-3 flex items-start justify-between gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          <span className="inline-flex items-start gap-1">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            <span>
+              {s.notSaved} {s.notSaved === 1 ? 'change' : 'changes'} from the other till could not be saved
+              on this till. To fix: on the other till, open Settings → Second till and press Send everything
+              again. Then press Clear here.
+            </span>
+          </span>
+          <Button variant="secondary" size="sm" disabled={clearMut.isPending} onClick={() => void askClear()}>
+            Clear
+          </Button>
         </div>
       )}
 

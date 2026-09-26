@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Cents, OrderNumber, OrderSnapshot, UUID } from '@cheeseoclock/shared-types';
-import { LINES_BEFORE_CUT } from './escpos.js';
+import { EscPosBuilder, LINES_BEFORE_CUT } from './escpos.js';
 import { CUT_MARKER, QR_MARKER, decodeEscPos } from './escpos-decode.js';
+import type { MonoRaster } from './logo-raster.js';
 import {
+  LOGO_GAP_DOTS,
+  appendLogo,
   renderDrawerKick,
   renderKitchenTicket,
   renderReceipt,
@@ -330,5 +333,108 @@ describe('renderDrawerKick', () => {
     const decoded = decodeEscPos(bytes);
     expect(decoded.map((r) => r.text).filter(Boolean)).toEqual([]);
     expect(decoded.some((r) => r.text === CUT_MARKER)).toBe(false);
+  });
+});
+
+describe('renderReceipt — shop logo', () => {
+  /** A 64×20 logo with two dots in every eight: printable, not too dark. */
+  const logo = (): MonoRaster => ({ width: 64, height: 20, data: new Uint8Array(8 * 20).fill(0x81) });
+  const indexOf = (bytes: Uint8Array, seq: number[]) => {
+    for (let i = 0; i + seq.length <= bytes.length; i++) {
+      if (seq.every((v, k) => bytes[i + k] === v)) return i;
+    }
+    return -1;
+  };
+  const GS_V_0 = [0x1d, 0x76, 0x30];
+
+  it('prints the logo first, across the full paper width, then the shop name', () => {
+    for (const [width, dots] of [
+      [48, 576],
+      [32, 384],
+    ] as const) {
+      const r = rows(renderReceipt(snapshot(), { width, branding, logo: logo() }));
+      expect(r[0]).toBe(`[logo ${dots}×20]`);
+      expect(r[1]).toBe("Cheese O'Clock");
+    }
+  });
+
+  it('centres the picture, then resets the printer and centres again before the name', () => {
+    const bytes = renderReceipt(snapshot(), { branding, logo: logo() });
+    const pic = indexOf(bytes, GS_V_0);
+    expect(pic).toBeGreaterThan(0);
+    expect(indexOf(bytes, [0x1b, 0x61, 0x01])).toBeLessThan(pic);
+    // Header: 576 dots = 72 bytes a row, 20 rows.
+    expect([...bytes.slice(pic, pic + 8)]).toEqual([0x1d, 0x76, 0x30, 0x00, 72, 0x00, 20, 0x00]);
+    // The 64-dot logo sits in the middle: 32 blank bytes, its 8, 32 blank.
+    const row0 = [...bytes.slice(pic + 8, pic + 8 + 72)];
+    expect(row0.slice(0, 32).every((b) => b === 0)).toBe(true);
+    expect(row0.slice(32, 40)).toEqual(Array(8).fill(0x81));
+    expect(row0.slice(40).every((b) => b === 0)).toBe(true);
+    const after = pic + 8 + 72 * 20;
+    expect([...bytes.slice(after, after + 8)]).toEqual([0x1b, 0x40, 0x1b, 0x61, 0x01, 0x1b, 0x4a, LOGO_GAP_DOTS]);
+  });
+
+  it('puts it on the shop copy and on an unpaid delivery bill too', () => {
+    expect(rows(renderReceipt(snapshot(), { branding, copy: 'shop', logo: logo() }))[0]).toBe('[logo 576×20]');
+    const s = snapshot();
+    s.order.status = 'out_for_delivery';
+    s.order.paidAt = null;
+    s.payments = [];
+    expect(rows(renderReceipt(s, { branding, logo: logo() }))[0]).toBe('[logo 576×20]');
+  });
+
+  it('prints exactly the text-only receipt when the logo is unusable', () => {
+    const plain = renderReceipt(snapshot(), { branding });
+    const bad: unknown[] = [
+      null,
+      undefined,
+      { width: 64, height: 20, data: new Uint8Array(8 * 20 - 1) }, // data length off
+      { width: 10, height: 20, data: new Uint8Array(40) }, // not whole bytes
+      { width: 64, height: 20, data: new Uint8Array(8 * 20) }, // blank
+      { width: 64, height: 20, data: new Uint8Array(8 * 20).fill(0xff) }, // a black block
+      { width: 64, height: 200, data: new Uint8Array(8 * 200).fill(0x81) }, // too tall
+      { width: 64, height: 20, data: Array(160).fill(0x81) }, // not bytes
+      'garbage',
+    ];
+    for (const l of bad) {
+      expect(renderReceipt(snapshot(), { branding, logo: l as MonoRaster })).toEqual(plain);
+    }
+    // Made for 80 mm paper, sent to a 58 mm printer: too wide, left out.
+    const wide = { width: 576, height: 20, data: new Uint8Array(72 * 20).fill(0x81) };
+    expect(renderReceipt(snapshot(), { width: 32, branding, logo: wide })).toEqual(
+      renderReceipt(snapshot(), { width: 32, branding }),
+    );
+  });
+
+  for (const width of [48, 32] as const) {
+    it(`with a logo still never hands the printer a row wider than ${width} columns`, () => {
+      for (const copy of ['customer', 'shop'] as const) {
+        for (const row of decodeEscPos(renderReceipt(snapshot(), { width, branding, copy, logo: logo() }))) {
+          expect(row.text.length * row.scale, JSON.stringify(row.text)).toBeLessThanOrEqual(width);
+        }
+      }
+    });
+  }
+
+  it('keeps the drawer pulse and the cut at the end', () => {
+    const bytes = renderReceipt(snapshot(), { branding, logo: logo(), openDrawer: true });
+    expect([...bytes].join(',')).toContain(DRAWER_KICK);
+    expect(rows(bytes).at(-1)).toBe(CUT_MARKER);
+  });
+
+  it('never goes on a kitchen ticket', () => {
+    const now = new Date(2026, 8, 14, 19, 35);
+    for (const width of [48, 32] as const) {
+      expect(indexOf(renderKitchenTicket(snapshot(), { width, now }), GS_V_0)).toBe(-1);
+      expect(indexOf(renderKitchenTicket(snapshot(), { width, now, reprint: true }), GS_V_0)).toBe(-1);
+    }
+  });
+
+  it('appendLogo never throws and writes nothing when it cannot print', () => {
+    const b = new EscPosBuilder(48);
+    const weird = { width: 64, height: 20, get data(): Uint8Array { throw new Error('boom'); } };
+    expect(appendLogo(b, weird as unknown as MonoRaster, 48)).toBe(false);
+    expect([...b.build()]).toEqual([0x1b, 0x40]);
+    expect(appendLogo(b, logo(), 48)).toBe(true);
   });
 });

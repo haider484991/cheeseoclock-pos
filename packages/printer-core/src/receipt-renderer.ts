@@ -4,6 +4,7 @@
  *
  * Layout (80mm / 48 cols):
  *
+ *               [ shop logo ]
  *      CHEESE O CLOCK
  *      Pakistani Pizza · Cafe
  *
@@ -35,6 +36,13 @@
 import type { OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode } from './escpos.js';
+import {
+  centreOnPaper,
+  isPrintableLogo,
+  isValidMonoRaster,
+  logoBox,
+  type MonoRaster,
+} from './logo-raster.js';
 
 export interface ReceiptBranding {
   storeName: string;
@@ -62,6 +70,42 @@ export interface RenderReceiptOpts {
    * it). Default 'customer'.
    */
   copy?: ReceiptCopy;
+  /**
+   * Shop logo for the top, as made for this paper width. Skipped when
+   * missing, malformed, blank, too dark or too big for this paper — the
+   * receipt then prints exactly as it would without one.
+   */
+  logo?: MonoRaster | null;
+}
+
+/** Gap between the logo and the shop name (ESC J units: about 2 mm). */
+export const LOGO_GAP_DOTS = 16;
+
+/**
+ * Put the logo on the page, centred across the full paper width. Never
+ * throws: with a missing or unusable picture nothing is written and it
+ * returns false, so a logo can never be the reason a print fails.
+ *
+ * Right after the picture the printer is reset (ESC @) and centring set
+ * again. A printer that prints pictures has finished it by then; one that
+ * can't read GS v 0 takes the picture bytes as text and commands, and the
+ * reset stops those from turning the rest of the bill upside down, inverted
+ * or oversized.
+ */
+export function appendLogo(
+  b: EscPosBuilder,
+  logo: MonoRaster | null | undefined,
+  width: PrinterWidth,
+): boolean {
+  try {
+    if (!logo || !isPrintableLogo(logo, width)) return false;
+    const onPaper = centreOnPaper(logo, logoBox(width).maxWidth);
+    if (!isValidMonoRaster(onPaper)) return false;
+    b.align('center').rasterImage(onPaper).reset().align('center').feedDots(LOGO_GAP_DOTS);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const MODE_LABEL: Record<OrderSnapshot['order']['mode'], string> = {
@@ -91,8 +135,11 @@ export function renderReceipt(
 
   // Header — large, centered store name + tagline. Free text from settings,
   // so every line is word-wrapped here rather than broken by the printer at
-  // the paper edge; double-size glyphs take two columns each.
+  // the paper edge; double-size glyphs take two columns each. The logo (when
+  // there is one) goes above the name on every copy — customer receipt, shop
+  // copy, delivery bill, refund slip, reprint. Kitchen tickets never carry it.
   b.align('center');
+  appendLogo(b, opts.logo, width);
   b.doubleSize(true).bold(true).wrappedText(opts.branding.storeName, width / 2);
   b.doubleSize(false).bold(false);
   if (opts.branding.storeTagline) b.wrappedText(opts.branding.storeTagline);

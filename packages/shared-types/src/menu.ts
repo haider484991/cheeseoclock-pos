@@ -59,9 +59,14 @@ export interface Modifier {
  * so a per-item group carries the item after " · " ("Leave out · Fajita
  * Pizza"); customers and cashiers see only the part before it ("Leave out").
  */
-export function groupDisplayName(name: string): string {
+export function groupDisplayName(name: string, limits?: { minSelect: number; maxSelect: number }): string {
   const i = name.indexOf(' · ');
-  return i > 0 ? name.slice(0, i) : name;
+  const base = i > 0 ? name.slice(0, i) : name;
+  // "Choose 5 veggies" that now takes 1–5 reads "Choose up to 5 veggies" (owner
+  // 2026-09-26). The stored name stays: a menu import matches groups by name and
+  // never renames one.
+  if (!limits || limits.minSelect >= limits.maxSelect) return base;
+  return base.replace(/\bChoose (\d+)\b/i, (m, n: string) => (Number(n) === limits.maxSelect ? `Choose up to ${n}` : m));
 }
 
 /** A "leave out" choice: printed as "NO ONION" on the kitchen ticket. */

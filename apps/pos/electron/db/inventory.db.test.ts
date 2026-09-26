@@ -145,7 +145,8 @@ describe.skipIf(!raw)('ingredient categories (migration 0024)', () => {
           ?.payload_json,
       ),
     );
-    expect(payload).toMatchObject({ category: 'packaging', categoryAuto: false });
+    // The row as stored (a row image): a picked category is in the row itself.
+    expect(payload).toMatchObject({ id: cup.id, category: 'packaging' });
   });
 
   it('lists every ingredient with its category', async () => {

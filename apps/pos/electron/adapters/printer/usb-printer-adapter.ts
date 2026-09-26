@@ -4,6 +4,7 @@ import type {
   PrinterAdapter,
   PrintResult,
   PrinterConnectionConfig,
+  TestPageOptions,
 } from '@cheeseoclock/printer-core';
 import { renderTestPage } from './test-page.js';
 import { RawPrintError, RawPrintWorker } from './windows-raw-print-worker.js';
@@ -82,9 +83,9 @@ export class UsbPrinterAdapter implements PrinterAdapter {
     }
   }
 
-  async testPrint(): Promise<PrintResult> {
+  async testPrint(opts?: TestPageOptions): Promise<PrintResult> {
     return this.send(
-      renderTestPage(this.config.width ?? 48, `USB: ${this.config.usb?.printerName ?? ''}`),
+      renderTestPage(this.config.width ?? 48, `USB: ${this.config.usb?.printerName ?? ''}`, opts),
     );
   }
 }

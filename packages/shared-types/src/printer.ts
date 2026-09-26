@@ -48,6 +48,53 @@ export interface PrintPolicy {
   kitchenTicket: boolean;
   deliveryBillOnDispatch: boolean;
   shopCopy: ShopCopyRule;
+  /** Print the shop logo at the top of customer receipts (never on kitchen tickets). */
+  logoOnReceipt: boolean;
+}
+
+/** The logo as a 1-bit picture for one paper width, as stored and sent over IPC. */
+export interface ReceiptLogoRasterJson {
+  paperWidth: PrinterWidth;
+  /** Dots across (a multiple of 8) and rows down. */
+  width: number;
+  height: number;
+  /** Base64 of the packed dots: width/8 bytes a row, leftmost dot in the high bit, 1 = black. */
+  data: string;
+}
+
+/**
+ * The printer's copy of the shop logo, made on screen from the saved logo.
+ * Kept beside the branding (not inside it) and tied to the exact logo it came
+ * from, so a picture of an older logo can never print.
+ */
+export interface ReceiptLogoRasterSet {
+  /** logoFingerprint() of the logo data URL it was made from. */
+  source: string;
+  /** LOGO_RASTER_ALGO it was made with; a newer till redraws older ones. */
+  algo: number;
+  /** One per paper width; a width is missing when nothing on it would print. */
+  rasters: ReceiptLogoRasterJson[];
+}
+
+/**
+ * What happens to the logo on the receipt printer:
+ *  - none: no logo is set;
+ *  - not_ready: the printer's copy isn't made yet (or is of an older logo);
+ *  - blank: the logo is too light — nothing would print;
+ *  - too_dark: it would print as a big black block, so it is left off;
+ *  - ready: it prints (when the setting is on).
+ */
+export type ReceiptLogoState = 'none' | 'not_ready' | 'blank' | 'too_dark' | 'ready';
+
+export interface ReceiptLogoStatus {
+  /** For the receipt printer's paper width. */
+  state: ReceiptLogoState;
+  /** PrintPolicy.logoOnReceipt. */
+  enabled: boolean;
+  /** Which logo the stored printer copy was made from (no picture data), or null. */
+  stored: { source: string; algo: number } | null;
+  /** A test print that included this logo went through on this printer. */
+  checked: boolean;
 }
 
 export interface PrinterAssignment {

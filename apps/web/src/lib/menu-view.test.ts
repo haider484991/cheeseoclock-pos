@@ -227,6 +227,9 @@ describe('labels', () => {
     expect(optionLabel('Garlic Mayo')).toBe('Garlic Mayo');
     expect(groupLabel({ name: 'Deal: 2nd Large pizza' })).toBe('2nd Large pizza');
     expect(groupLabel({ name: 'Veggie Lovers — Choose 5 veggies' })).toBe('Choose 5 veggies');
+    // 1 to 5 veggies (owner 2026-09-26): the stored name stays, the heading says "up to"
+    expect(groupLabel({ name: 'Veggie Lovers — Choose 5 veggies', minSelect: 1, maxSelect: 5 })).toBe('Choose up to 5 veggies');
+    expect(groupLabel({ name: 'Veggie Lovers — Choose 5 veggies', minSelect: 5, maxSelect: 5 })).toBe('Choose 5 veggies');
     expect(groupLabel({ name: 'Choose your dip' })).toBe('Choose your dip');
     // each item's own leave-outs: the till needs unique names, customers see the heading
     expect(groupLabel({ name: 'Leave out · Fajita Pizza' })).toBe('Leave out');

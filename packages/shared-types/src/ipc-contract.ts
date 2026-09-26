@@ -32,6 +32,8 @@ import type {
   PrintPolicy,
   PrintResult,
   PrinterTransport,
+  ReceiptLogoRasterSet,
+  ReceiptLogoStatus,
   SystemPrinterInfo,
 } from './printer.js';
 import type {
@@ -704,6 +706,8 @@ export interface IpcContract {
       policy: PrintPolicy;
       /** Separate kitchen printer, or null when tickets share the receipt printer. */
       kitchenPrinter: PrinterConnectionConfig | null;
+      /** The logo on the receipt printer: what will happen to it (no picture data). */
+      logo: ReceiptLogoStatus;
     }>;
   };
   'printer:setPolicy': {
@@ -730,6 +734,14 @@ export interface IpcContract {
       logoUrl?: string;
     };
     response: ApiResult<{ ok: true }>;
+  };
+  /**
+   * The logo as 1-bit pictures for the receipt printer, made on screen from the
+   * saved logo. `saved` is false when the logo changed in the meantime.
+   */
+  'printer:setLogoRaster': {
+    request: ReceiptLogoRasterSet;
+    response: ApiResult<{ saved: boolean }>;
   };
   /** Test page on the receipt printer, or on the kitchen printer when asked. */
   'printer:test': {
@@ -1270,11 +1282,24 @@ export interface IpcContract {
       eventsPushed: number;
       eventsPulled: number;
       consecutiveFails: number;
+      /** Everything is owed to the other till once (being queued, or waiting for the link). */
+      sendingEverything: boolean;
+      /** Changes from the other till that could not be saved here (kept and retried). */
+      notSaved: number;
     }>;
   };
   'sync:triggerNow': {
     request: undefined;
     response: ApiResult<{ kicked: true }>;
+  };
+  'sync:sendEverything': {
+    request: undefined;
+    response: ApiResult<{ ok: true }>;
+  };
+  /** Forget the changes dropped past the waiting list's cap (after the other till sent everything again). */
+  'sync:clearNotSaved': {
+    request: undefined;
+    response: ApiResult<{ cleared: number }>;
   };
 
   // Backup / restore — local SQLite snapshots, no cloud required

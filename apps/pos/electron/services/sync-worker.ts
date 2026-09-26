@@ -1,24 +1,44 @@
 import log from 'electron-log/main';
 import { BrowserWindow } from 'electron';
+import Database from 'better-sqlite3';
 import type { AppDatabase } from '../db/connection.js';
 import {
-  listPendingSync,
+  listPendingBatch,
   markSyncedIds,
   markSyncFailed,
   getPendingCount,
   getSyncState,
   setSyncState,
+  pendingToChange,
+  noteSyncDestination,
+  readSnapshotMarker,
+  isSnapshotNeeded,
+  notSavedCount,
 } from '../db/repositories/sync-repo.js';
-import { applyRemoteChange } from '../db/repositories/apply-remote.js';
-import { getSyncConfig } from './sync-config.js';
+import { applyRemoteBatch } from '../db/repositories/apply-remote.js';
+import { destinationSeal, getSyncConfig, readSyncSwitch, syncDestinationKey } from './sync-config.js';
+import { sendEverythingOnce, type SnapshotReader } from './sync-snapshot.js';
 import { makeSyncAdapter } from '../adapters/sync/factory.js';
 import type { SyncAdapter, SyncChange, SyncCursor } from '@cheeseoclock/sync-core';
 
 /**
  * Sync worker. Polls every config.pollIntervalMs while mode != off + !paused:
- *   1. Drain sync_queue (rows where synced_at IS NULL) → adapter.push
- *   2. adapter.pull(since cursor) → apply each remote change locally
- *   3. Update cursors + counters
+ *   0. Note where the link points; the first place ever, or a new place,
+ *      means everything is sent once (noteSyncDestination).
+ *   1. If everything is owed (sync_state "snapshot.needed": unsent entries
+ *      were cleared while the link was off, the link points somewhere for the
+ *      first time or somewhere new, or a manager asked), first check the other
+ *      side answers (one pull), wait out the first minutes after start if it
+ *      was found owed at start, then
+ *      queue an image of every row (services/sync-snapshot.ts). Nothing is
+ *      pushed until that is queued: the old entries it replaces are deleted
+ *      by its first step.
+ *   2. Drain sync_queue (rows where synced_at IS NULL) → adapter.push, oldest
+ *      first, capped by rows and by bytes. While a backlog drains the next
+ *      tick comes after FAST_DRAIN_MS instead of the poll interval.
+ *   3. adapter.pull(since cursor) → apply the changes (each on its own; one
+ *      that cannot be saved is kept, retried and counted, never blocking the
+ *      rest). Update cursors + counters.
  *
  * The worker never throws — failures land in sync_state for the UI to surface.
  */
@@ -33,16 +53,43 @@ const STATE_KEYS = {
   consecutiveFails: 'sync.consecutive_fails',
 } as const;
 
-class SyncWorker {
+const PUSH_BATCH = 500;
+/** A body-limited server refuses a push of several MB of menu photos. */
+const PUSH_MAX_BYTES = 1_000_000;
+/** Gap between pushes while a backlog drains (not the whole poll interval). */
+const FAST_DRAIN_MS = 2_000;
+/** While draining, the status card is told at most this often (each tell recounts the queue). */
+const DRAIN_BROADCAST_MS = 10_000;
+/**
+ * A full send found owed at start (left unfinished before a restart, or
+ * noticed by the first checks after start, such as the first link after an
+ * update) waits this long after start: out of the way of the first sales and
+ * of the 30 s and 2 min jobs at boot. One a person causes later in the
+ * session (switching the link on, "Send everything again") starts at once.
+ */
+export const RESUME_QUIET_MS = 4 * 60_000;
+/** Markers made this soon after start came from the boot checks, not a person. */
+const BOOT_CHECKS_MS = 30_000;
+
+export class SyncWorker {
   private db: AppDatabase | null = null;
   private deviceId: string | null = null;
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
   private adapterCache: { adapter: SyncAdapter; key: string } | null = null;
+  private startedAt = Date.now();
+  /** The destination a pull has answered from in this session. */
+  private linkOkFor: string | null = null;
+  /** The destination already noted in this session (saves unsealing it every tick). */
+  private notedDestination: string | null = null;
+  private lastBroadcastAt = 0;
+  private lastWaiting = 0;
 
   init(db: AppDatabase, deviceId: string): void {
     this.db = db;
     this.deviceId = deviceId;
+    this.startedAt = Date.now();
+    this.notedDestination = null;
     this.scheduleNext(3_000);
   }
 
@@ -98,15 +145,47 @@ class SyncWorker {
     if (cursor.lastPulledAt) setSyncState(this.db, STATE_KEYS.pulledAt, cursor.lastPulledAt);
   }
 
-  private async tick(): Promise<void> {
+  /** Pull and apply. True when the other side answered (the cursor moved). */
+  private async pullAndApply(db: AppDatabase, adapter: SyncAdapter): Promise<boolean> {
+    const before = this.cursor();
+    const pull = await adapter.pullChanges(before);
+    await this.applyPulled(db, pull.changes);
+    this.setCursor(pull.newCursor);
+    return !!pull.newCursor.lastPulledAt && pull.newCursor.lastPulledAt !== before.lastPulledAt;
+  }
+
+  private async applyPulled(db: AppDatabase, changes: SyncChange[]): Promise<void> {
+    const r = await applyRemoteBatch(db, changes);
+    if (r.applied > 0) incrementCounter(db, STATE_KEYS.eventsPulled, r.applied);
+    if (r.waiting !== this.lastWaiting || r.dropped > 0) {
+      if (r.waiting > 0 || r.dropped > 0) {
+        log.warn('Sync: changes from the other till not saved here (kept and retried)', {
+          waiting: r.waiting,
+          dropped: r.dropped,
+        });
+      }
+      this.lastWaiting = r.waiting;
+    }
+  }
+
+  /** One pass. The timer runs it (kick() schedules one now); tests call it directly. */
+  async tick(): Promise<void> {
     if (!this.db || this.busy) {
       this.scheduleNext(15_000);
       return;
     }
     this.busy = true;
     const db = this.db;
+    let backlog = false;
     try {
       const cfg = getSyncConfig(db);
+      const destination = syncDestinationKey(cfg);
+      // Before the idle check, so a paused link still records a new server.
+      // Never while Off: a till with the link off sends nowhere.
+      if (cfg.mode !== 'off' && destination !== this.notedDestination) {
+        noteSyncDestination(db, destination, destinationSeal);
+        this.notedDestination = destination;
+      }
       if (cfg.mode === 'off' || cfg.paused) {
         // Idle but keep polling so a config change resumes quickly.
         this.scheduleNext(Math.max(5_000, cfg.pollIntervalMs));
@@ -115,20 +194,52 @@ class SyncWorker {
 
       setSyncState(db, STATE_KEYS.lastAttempt, new Date().toISOString());
       const adapter = this.getAdapter();
+
+      // --- Send everything once, when owed ---
+      const marker = readSnapshotMarker(db);
+      if (marker) {
+        if (this.linkOkFor !== destination) {
+          // Only build once the other side answers: a link set up wrong must
+          // not fill the queue with a copy of the whole shop for nothing.
+          if (await this.pullAndApply(db, adapter)) {
+            this.linkOkFor = destination;
+            setSyncState(db, STATE_KEYS.consecutiveFails, '0');
+            setSyncState(db, STATE_KEYS.lastError, '');
+            this.scheduleNext(1_000);
+          } else {
+            incrementCounter(db, STATE_KEYS.consecutiveFails, 1);
+            setSyncState(db, STATE_KEYS.lastError, 'The sync server did not answer');
+            this.scheduleNext(cfg.pollIntervalMs);
+          }
+          broadcastSyncChanged();
+          return;
+        }
+        const markedAt = Date.parse(marker.at);
+        const sinceStart = Date.now() - this.startedAt;
+        const causedByPerson = markedAt >= this.startedAt + BOOT_CHECKS_MS;
+        if (!causedByPerson && sinceStart < RESUME_QUIET_MS) {
+          this.scheduleNext(Math.min(cfg.pollIntervalMs, RESUME_QUIET_MS - sinceStart + 1_000));
+          return;
+        }
+        const r = await sendEverythingOnce(db, {
+          openReader: () => openReadOnly(db),
+          shouldContinue: () => {
+            const s = readSyncSwitch(db);
+            return s.mode !== 'off' && !s.paused;
+          },
+        });
+        broadcastSyncChanged();
+        this.scheduleNext(r === 'done' ? 1_000 : 5_000);
+        return;
+      }
+
       let hadError = false;
 
       // --- Push ---
-      const pending = listPendingSync(db, 500);
+      const batch = listPendingBatch(db, PUSH_BATCH, PUSH_MAX_BYTES);
+      const pending = batch.rows;
       if (pending.length > 0) {
-        const changes: SyncChange[] = pending.map((p) => ({
-          entityType: p.entityType,
-          entityId: p.entityId,
-          op: p.op,
-          payload: p.payload,
-          updatedAt: extractUpdatedAt(p.payload) ?? p.createdAt,
-          deviceId: this.deviceId ?? 'unknown',
-          version: extractVersion(p.payload) ?? 1,
-        }));
+        const changes: SyncChange[] = pending.map((p) => pendingToChange(p, this.deviceId ?? 'unknown'));
         const cursor = this.cursor();
         const result = await adapter.pushChanges(changes, cursor);
         if (result.accepted.length > 0) {
@@ -149,24 +260,10 @@ class SyncWorker {
         }
         this.setCursor(result.newCursor);
       }
+      backlog = batch.more;
 
       // --- Pull ---
-      const pullCursor = this.cursor();
-      const pull = await adapter.pullChanges(pullCursor);
-      if (pull.changes.length > 0) {
-        let applied = 0;
-        for (const change of pull.changes) {
-          const r = applyRemoteChange(db, change);
-          if (r.applied) applied++;
-          else if (r.reason === 'unknown_entity') {
-            log.warn('Skipped remote change for unknown entity_type', {
-              entityType: change.entityType,
-            });
-          }
-        }
-        incrementCounter(db, STATE_KEYS.eventsPulled, applied);
-      }
-      this.setCursor(pull.newCursor);
+      if (await this.pullAndApply(db, adapter)) this.linkOkFor = destination;
 
       if (hadError) {
         incrementCounter(db, STATE_KEYS.consecutiveFails, 1);
@@ -175,8 +272,13 @@ class SyncWorker {
         setSyncState(db, STATE_KEYS.consecutiveFails, '0');
         setSyncState(db, STATE_KEYS.lastError, '');
       }
-      this.scheduleNext(cfg.pollIntervalMs);
-      broadcastSyncChanged();
+      // A backlog (a full send, or days of sales after a pause) drains in
+      // minutes, not at one batch per poll interval.
+      this.scheduleNext(backlog && !hadError ? FAST_DRAIN_MS : cfg.pollIntervalMs);
+      if (!backlog || Date.now() - this.lastBroadcastAt >= DRAIN_BROADCAST_MS) {
+        this.lastBroadcastAt = Date.now();
+        broadcastSyncChanged();
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.warn('Sync worker exception', { msg });
@@ -204,6 +306,8 @@ class SyncWorker {
     eventsPushed: number;
     eventsPulled: number;
     consecutiveFails: number;
+    sendingEverything: boolean;
+    notSaved: number;
   } {
     if (!this.db) {
       return {
@@ -215,6 +319,8 @@ class SyncWorker {
         eventsPushed: 0,
         eventsPulled: 0,
         consecutiveFails: 0,
+        sendingEverything: false,
+        notSaved: 0,
       };
     }
     return {
@@ -229,8 +335,15 @@ class SyncWorker {
         getSyncState(this.db, STATE_KEYS.consecutiveFails) ?? '0',
         10,
       ),
+      sendingEverything: isSnapshotNeeded(this.db),
+      notSaved: notSavedCount(this.db),
     };
   }
+}
+
+/** A second, read-only connection to the till's database file (the full send reads through it). */
+function openReadOnly(db: AppDatabase): SnapshotReader {
+  return new Database(db.name, { readonly: true, fileMustExist: true });
 }
 
 function broadcastSyncChanged(): void {
@@ -242,22 +355,6 @@ function broadcastSyncChanged(): void {
 function incrementCounter(db: AppDatabase, key: string, by: number): void {
   const cur = parseInt(getSyncState(db, key) ?? '0', 10);
   setSyncState(db, key, String(cur + by));
-}
-
-function extractUpdatedAt(payload: unknown): string | null {
-  if (payload && typeof payload === 'object') {
-    const v = (payload as Record<string, unknown>).updatedAt;
-    if (typeof v === 'string') return v;
-  }
-  return null;
-}
-
-function extractVersion(payload: unknown): number | null {
-  if (payload && typeof payload === 'object') {
-    const v = (payload as Record<string, unknown>).version;
-    if (typeof v === 'number') return v;
-  }
-  return null;
 }
 
 export const syncWorker = new SyncWorker();

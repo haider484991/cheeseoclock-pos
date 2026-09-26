@@ -192,10 +192,17 @@ export function optionLabel(optionName: string): string {
 /**
  * "Deal: 2nd Large pizza" → "2nd Large pizza"; "Leave out · Fajita Pizza" →
  * "Leave out" (till group names are unique, so each item's leave-outs carry its
- * name after " · "); other groups unchanged.
+ * name after " · "); "Choose 5 veggies" that takes 1–5 → "Choose up to 5
+ * veggies"; other groups unchanged.
  */
-export function groupLabel(group: Pick<PublishedModifierGroup, 'name'>): string {
-  return groupDisplayName(group.name).replace(/^deal:\s*/i, '').replace(/^.+?\s+[—–]\s+/, '').trim();
+export function groupLabel(
+  group: Pick<PublishedModifierGroup, 'name'> & Partial<Pick<PublishedModifierGroup, 'minSelect' | 'maxSelect'>>,
+): string {
+  const limits =
+    group.minSelect !== undefined && group.maxSelect !== undefined
+      ? { minSelect: group.minSelect, maxSelect: group.maxSelect }
+      : undefined;
+  return groupDisplayName(group.name, limits).replace(/^deal:\s*/i, '').replace(/^.+?\s+[—–]\s+/, '').trim();
 }
 
 /**

@@ -1,6 +1,7 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import { Sidebar } from './Sidebar';
+import { ReceiptLogoKeeper } from '../settings/ReceiptLogoKeeper';
 import { TopBar } from './TopBar';
 import { useSessionStore } from '../../stores/sessionStore';
 import { ipc, onLowStock, onPrinterFailed, onWebOrderReceived } from '../../ipc/client';
@@ -107,6 +108,7 @@ export function AppShell() {
   return (
     <div className={isCheckout ? 'app-shell app-shell--compact flex h-full' : 'app-shell flex h-full'}>
       <Sidebar />
+      <ReceiptLogoKeeper />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar />
         <main className={isCheckout ? 'checkout-main min-h-0 flex-1 overflow-auto' : 'min-h-0 flex-1 overflow-auto p-4 lg:p-8'}>

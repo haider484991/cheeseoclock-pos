@@ -5,6 +5,7 @@ import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { PrinterConnectionConfig, PrinterTransport } from '@cheeseoclock/shared-types';
 import { Printer, Wifi, Usb, Bluetooth, FlaskConical, Check, RefreshCw } from 'lucide-react';
+import { ensureReceiptLogo } from './receiptLogo';
 
 interface TransportOption {
   id: PrinterTransport | 'mock';
@@ -102,6 +103,8 @@ export function PrinterSettings() {
   const testMut = useMutation({
     mutationFn: () => ipc.printer.test(),
     onSuccess: (result) => {
+      // A test page with the logo on it marks the logo as checked on this printer.
+      void qc.invalidateQueries({ queryKey: ['printer', 'config'] });
       if (result.ok) {
         toast({
           title: 'Test print sent',
@@ -179,8 +182,13 @@ export function PrinterSettings() {
         return; // the save toast already said why
       }
     }
+    // The page shows the shop logo: make sure the printer's copy is current.
+    // Never throws — at worst the page prints without it.
+    await ensureReceiptLogo(cfgQ.data);
     testMut.mutate();
   }
+
+  const logo = cfgQ.data?.logo;
 
   const selectedIsKnown = !printerName || systemPrinters.some((p) => p.name === printerName);
 
@@ -389,6 +397,15 @@ export function PrinterSettings() {
             </Button>
           </div>
         </div>
+        {logo?.state === 'ready' &&
+          (logo.enabled && !logo.checked ? (
+            <p className="text-right text-xs font-medium text-amber-700 dark:text-amber-400">
+              Receipts now print your logo. Press Test print once to check it comes out right on
+              paper.
+            </p>
+          ) : (
+            <p className="text-right text-xs text-stone-500">Test print shows your logo too.</p>
+          ))}
       </section>
     </Card>
   );

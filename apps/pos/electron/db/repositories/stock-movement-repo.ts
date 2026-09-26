@@ -104,10 +104,16 @@ export function recordStockMovement(
     if (!ing) throw new Error('Ingredient not found');
     resultingQty = ing.current_qty + input.deltaQty;
 
-    // Update the ingredient
-    db.prepare(
-      `UPDATE ingredients SET current_qty = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
-    ).run(resultingQty, now, input.ingredientId);
+    // Update the ingredient's running count. Not version or updated_at: those
+    // are the second-till link's "who edited last" clock, and the count is
+    // each till's own (a till takes the other's count only for an ingredient
+    // new to it; the movement row below is what travels). Bumping them here
+    // made every sale out-rank a manager's edit made on the other till, so
+    // the edit was dropped on both tills.
+    db.prepare(`UPDATE ingredients SET current_qty = ? WHERE id = ?`).run(
+      resultingQty,
+      input.ingredientId,
+    );
 
     enqueueSync(db, {
       entityType: 'ingredients',

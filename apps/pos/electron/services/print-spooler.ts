@@ -5,8 +5,10 @@ import {
   renderDrawerKick,
   renderKitchenTicket,
   renderReceipt,
+  type MonoRaster,
   type PrinterAdapter,
   type PrintResult,
+  type TestPageOptions,
 } from '@cheeseoclock/printer-core';
 import type { OrderSnapshot, PrintPolicy, ReceiptCopy } from '@cheeseoclock/shared-types';
 import { makePrinterAdapter } from '../adapters/printer/factory.js';
@@ -15,8 +17,12 @@ import {
   getKitchenPrinterConfig,
   getPrintPolicy,
   getReceiptBranding,
+  getReceiptLogo,
   getReceiptPrinterConfig,
+  markReceiptLogoChecked,
+  receiptLogoToPrint,
 } from './printer-config.js';
+import { logoTestOptions } from './receipt-logo.js';
 import { getOrderSnapshot } from '../db/repositories/order-repo.js';
 import { getFbrRowByOrder } from '../db/repositories/fbr-queue-repo.js';
 import {
@@ -207,7 +213,19 @@ class PrintSpooler {
     }
     try {
       const adapter = this.getAdapter(station);
-      return await adapter.testPrint();
+      // Only the receipt printer's page shows the logo; a kitchen test (even
+      // one that falls back to the receipt printer) never does.
+      if (station !== 'receipt') return await adapter.testPrint();
+      const logoTest = this.logoTest(adapter);
+      const result = await adapter.testPrint(logoTest.options);
+      if (result.ok && logoTest.printed) {
+        try {
+          markReceiptLogoChecked(this.db, logoTest.printed, adapter.config);
+        } catch (e) {
+          log.warn('Could not note the logo test print', e);
+        }
+      }
+      return result;
     } catch (e) {
       return {
         ok: false,
@@ -218,6 +236,23 @@ class PrintSpooler {
           recoverable: false,
         },
       };
+    }
+  }
+
+  /**
+   * The logo part of the receipt printer's test page, and the logo it prints
+   * (to note the check afterwards). Never throws: at worst the page has no logo.
+   */
+  private logoTest(adapter: PrinterAdapter): { options: TestPageOptions; printed: string | null } {
+    if (!this.db) return { options: {}, printed: null };
+    try {
+      const branding = getReceiptBranding(this.db);
+      const logo = getReceiptLogo(this.db, adapter.config.width ?? 48, branding);
+      const options = logoTestOptions(logo, logo.enabled);
+      return { options, printed: options.logo && branding.logoUrl ? branding.logoUrl : null };
+    } catch (e) {
+      log.warn('Test page without the logo', e);
+      return { options: {}, printed: null };
     }
   }
 
@@ -369,7 +404,10 @@ class PrintSpooler {
         return { adapter: this.getAdapter('receipt'), bytes: renderDrawerKick() };
       default: {
         const adapter = this.getAdapter('receipt');
+        const width = adapter.config.width ?? 48;
         const branding = getReceiptBranding(this.db);
+        // The logo, when there is a usable one and receipts are set to print it.
+        const logo = receiptLogoToPrint(this.db, width, branding);
         // Embed FBR IRN/QR if the worker has resolved one by now. In `noop`
         // mode the adapter fabricates a NOOP-… number so the queue can be
         // exercised; that must never reach paper as a fiscal invoice.
@@ -379,16 +417,28 @@ class PrintSpooler {
             ? { irn: fbrRow.irn, qrPayload: fbrRow.qrPayload }
             : undefined;
         // All copies on one strip, one send: the drawer opens with the first.
-        const parts = payload.copies.map((copy, i) =>
-          renderReceipt(snap, {
-            width: adapter.config.width ?? 48,
-            branding,
-            copy,
-            openDrawer: payload.openDrawer && i === 0,
-            cutPaper: true,
-            ...(fbrBlock ? { fbr: fbrBlock } : {}),
-          }),
-        );
+        const renderAll = (withLogo: MonoRaster | null) =>
+          payload.copies.map((copy, i) =>
+            renderReceipt(snap, {
+              width,
+              branding,
+              logo: withLogo,
+              copy,
+              openDrawer: payload.openDrawer && i === 0,
+              cutPaper: true,
+              ...(fbrBlock ? { fbr: fbrBlock } : {}),
+            }),
+          );
+        // The logo is never the reason a receipt fails: if anything about it
+        // goes wrong, the receipt prints without it.
+        let parts: Uint8Array[];
+        try {
+          parts = renderAll(logo);
+        } catch (e) {
+          if (!logo) throw e;
+          log.warn('Receipt printed without the logo', e);
+          parts = renderAll(null);
+        }
         return { adapter, bytes: concat(parts) };
       }
     }
