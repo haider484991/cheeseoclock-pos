@@ -1,6 +1,10 @@
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { vi, describe, expect, it } from 'vitest';
+
+// Builds a real database from every migration and loads the repositories on
+// first use: seconds on a slow CI runner, well past the 5 s default.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 import { dumpDatabase, rebuildDatabase, type RowSink, type RowSource } from './cloud-copy-rows.js';
 
 // better-sqlite3 is built for Electron here, so the tests drive node:sqlite

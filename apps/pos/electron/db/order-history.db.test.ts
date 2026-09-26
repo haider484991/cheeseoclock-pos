@@ -10,6 +10,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+
+// Builds a real database from every migration and loads the repositories on
+// first use: seconds on a slow CI runner, well past the 5 s default.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 import type { OrderHistoryFilter } from '@cheeseoclock/shared-types';
 
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {} } }));

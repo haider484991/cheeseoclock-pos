@@ -2,7 +2,11 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { vi, beforeAll, describe, expect, it } from 'vitest';
+
+// Builds a real database from every migration and loads the repositories on
+// first use: seconds on a slow CI runner, well past the 5 s default.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 import type { BusinessReport, ReportDiscountLine, ReportItemLine } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import {
