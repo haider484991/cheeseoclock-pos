@@ -6,6 +6,9 @@ import { Undo2, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { SecretInput } from '../../components/secret/SecretInput';
+import { SecretHint } from '../../components/secret/SecretHint';
+import { approvalProblem } from '../../components/secret/secretRules';
 import type { OrderSnapshot, PaymentMethod } from '@cheeseoclock/shared-types';
 import { parseRupeesToCents } from './boardLogic';
 
@@ -17,7 +20,7 @@ interface Props {
 
 /**
  * Give money back on a paid order — all of what is left, or part of it.
- * Needs a reason + manager PIN (the server checks both). A full refund moves
+ * Needs a reason + a manager's PIN or password (the server checks both). A full refund moves
  * the order to Refunded; a part refund leaves it paid until nothing is left.
  * Enter confirms.
  */
@@ -89,8 +92,9 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
       toast({ title: 'Say why you are refunding', variant: 'warning' });
       return;
     }
-    if (pin.length < 4) {
-      toast({ title: 'Manager PIN needed', variant: 'warning' });
+    const pinProblem = approvalProblem(pin);
+    if (pinProblem) {
+      toast({ title: pinProblem, variant: 'warning' });
       return;
     }
     refundMut.mutate();
@@ -223,17 +227,16 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                 />
               </label>
               <label className="block text-sm">
-                <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">Manager PIN</span>
-                <input
+                <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
+                  Manager PIN or password
+                </span>
+                <SecretInput
                   value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  maxLength={8}
-                  className="w-full rounded-lg border border-stone-200 px-3 py-2 text-center font-mono text-lg tracking-[0.5em] focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
+                  onChange={setPin}
+                  className="min-w-0 flex-1 rounded-lg border border-stone-200 px-3 py-2 text-center font-mono text-lg tracking-[0.5em] focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
                   placeholder="••••"
                 />
+                <SecretHint value={pin} className="mt-1" />
               </label>
             </div>
 

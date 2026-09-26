@@ -132,6 +132,19 @@ const kpis = (over: Partial<ReportKpis> = {}): ReportKpis => ({
   ...over,
 });
 
+const drawerOpen = (
+  over: Partial<BusinessReport['drawerOpens'][number]> = {},
+): BusinessReport['drawerOpens'][number] => ({
+  id: 'd1',
+  createdAt: '2026-09-26T09:00:00.000Z',
+  kind: 'no_sale',
+  reason: 'Change',
+  openedBy: 'Ali',
+  approvedBy: 'Sara',
+  outsideShift: false,
+  ...over,
+});
+
 const report = (over: Partial<BusinessReport> = {}): BusinessReport => ({
   sinceIso: '2026-09-26T00:00:00.000Z',
   untilIso: '2026-09-27T00:00:00.000Z',
@@ -145,11 +158,13 @@ const report = (over: Partial<BusinessReport> = {}): BusinessReport => ({
   ],
   categories: [],
   channels: [{ channel: 'takeaway', orderCount: 2, netSalesCents: 21540 }],
-  staff: [{ key: 'u1', name: '<b>Ali</b>', isWebsite: false, orderCount: 2, netSalesCents: 21540, discountCents: 1000, voidCount: 1 }],
+  staff: [{ key: 'u1', name: '<b>Ali</b>', isWebsite: false, orderCount: 2, netSalesCents: 21540, discountCents: 1000, voidCount: 1, noSaleOpens: 2 }],
   shifts: [],
   discounts: { totalCount: 0, totalCents: 0, byReason: [], byPerson: [], recent: [] },
   refunds: [],
   voids: [],
+  drawerOpens: [],
+  drawerOpenCount: 0,
   foodCost: { usedCents: 0, wasteCents: 0, hasCosts: false, hasUsage: false, ingredients: [] },
   deliveries: { byRider: [], byArea: [] },
   ...over,
@@ -176,6 +191,31 @@ describe('CSV for Excel', () => {
     expect(csv).toContain(`'=HYPERLINK(""x"")`);
     expect(csv).toContain('"Burgers, large"');
     expect(csv).toContain('8 pm,2,215.40');
+    // No-sale drawer opens per person, and the list of each one.
+    expect(csv).toContain('Cancelled orders,Drawer opened with no sale');
+    expect(csv).toMatch(/Ali.*,215\.40,10\.00,1,2\r\n/);
+    const withOpen = buildCsv(
+      report({
+        drawerOpens: [
+          {
+            id: 'd1',
+            createdAt: '2026-09-26T09:00:00.000Z',
+            kind: 'no_sale',
+            reason: 'Change',
+            openedBy: 'Ali',
+            approvedBy: 'Sara',
+            outsideShift: false,
+          },
+        ],
+      }),
+      period,
+      SAT_3PM,
+    );
+    expect(withOpen).toContain('CASH DRAWER OPENED BY HAND (NO SALE)');
+    expect(withOpen).toMatch(/No sale,Change,Ali,Sara,Yes/);
+    // A busy month: the list stops at the cap, and says so.
+    const capped = buildCsv(report({ drawerOpens: [drawerOpen()], drawerOpenCount: 420 }), period, SAT_3PM);
+    expect(capped).toContain('CASH DRAWER OPENED BY HAND (NO SALE) — LATEST 1 OF 420');
   });
 
   it('names the file after the period', () => {
@@ -200,5 +240,62 @@ describe('printout', () => {
     expect(html).toContain('▲ 8%, was Rs 200');
     expect(html).toContain('How the sales add up');
     expect(html).toContain('Cancelled before payment: 1 order');
+    expect(html).toContain('No-sale opens');
+  });
+
+  it('prints each shift’s cash in/out and no-sale opens, and every hand-opened drawer with who approved it', () => {
+    const html = buildPrintBody(
+      report({
+        shifts: [
+          {
+            id: 's1',
+            openedAt: '2026-09-26T04:00:00.000Z',
+            closedAt: '2026-09-26T16:00:00.000Z',
+            openedBy: 'Sara',
+            closedBy: 'Sara',
+            openingCashCents: 500000,
+            expectedCashCents: 611540,
+            countedCashCents: 611540,
+            varianceCents: 0,
+            cashInCents: 0,
+            cashOutCents: 20000,
+            cashMovementCount: 3,
+            noSaleOpens: 2,
+          },
+        ],
+        drawerOpens: [
+          drawerOpen(),
+          drawerOpen({ id: 'd2', kind: 'count', reason: null, openedBy: 'Sara', approvedBy: null }),
+          drawerOpen({ id: 'd3', reason: '<i>x</i>', openedBy: 'Owner', approvedBy: null, outsideShift: true }),
+        ],
+        drawerOpenCount: 3,
+      }),
+      periodFor('today', SAT_3PM),
+      SAT_3PM,
+    );
+    expect(html).toContain('<th class="r">Cash in/out</th><th class="r">No-sale opens</th>');
+    expect(html).toMatch(/Matched<\/td><td class="r">3<\/td><td class="r">2<\/td>/);
+    expect(html).toContain('Cash drawer opened by hand — 3 times');
+    expect(html).toMatch(/No sale<\/td><td>Change<\/td><td>Ali<\/td><td>Sara<\/td>/);
+    expect(html).toMatch(/To count at close<\/td><td>—<\/td><td>Sara<\/td><td>—<\/td>/);
+    expect(html).toContain('(no shift open)');
+    expect(html).toContain('&lt;i&gt;x&lt;/i&gt;');
+    expect(html).not.toContain('<i>x</i>');
+    expect(html).not.toContain('Showing the latest');
+  });
+
+  it('says how many hand opens there were in all when it prints only some', () => {
+    const many = Array.from({ length: 30 }, (_, i) => drawerOpen({ id: `d${i}` }));
+    const period = periodFor('today', SAT_3PM);
+    // More than fit on paper; the Excel file has them all.
+    let html = buildPrintBody(report({ drawerOpens: many, drawerOpenCount: 30 }), period, SAT_3PM);
+    expect(html).toContain('Cash drawer opened by hand — 30 times');
+    expect(html).toContain('Showing the latest 25 of 30. Download for Excel for the full list.');
+    // The report itself stopped at its cap: say how many there really were.
+    html = buildPrintBody(report({ drawerOpens: many, drawerOpenCount: 420 }), period, SAT_3PM);
+    expect(html).toContain('Cash drawer opened by hand — 420 times');
+    expect(html).toContain('Showing the latest 25 of 420. Download for Excel for the latest 30.');
+    // None: no section.
+    expect(buildPrintBody(report(), period, SAT_3PM)).not.toContain('Cash drawer opened by hand');
   });
 });

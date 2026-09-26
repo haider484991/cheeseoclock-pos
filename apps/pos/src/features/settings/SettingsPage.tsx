@@ -14,8 +14,10 @@ import {
   AlertTriangle,
   MinusCircle,
   XCircle,
+  Volume2,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
+import { SoundSettings } from '../notifications/SoundSettings';
 import { PrinterSettings } from './PrinterSettings';
 import { PrintingRulesSettings } from './PrintingRulesSettings';
 import { KitchenPrinterSettings } from './KitchenPrinterSettings';
@@ -31,6 +33,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 export type SettingsTab =
   | 'store'
   | 'printer'
+  | 'sounds'
   | 'online'
   | 'backups'
   | 'fbr'
@@ -46,6 +49,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'store', label: 'Shop & logo', icon: Store },
   { id: 'printer', label: 'Printers', icon: Printer },
+  { id: 'sounds', label: 'Sounds', icon: Volume2 },
   { id: 'online', label: 'Online orders', icon: Globe },
   { id: 'backups', label: 'Backups', icon: Database },
   { id: 'fbr', label: 'FBR invoicing', icon: Building2 },
@@ -80,9 +84,11 @@ function readSavedTab(): SettingsTab {
  * `/settings?tab=backups` opens a tab directly (the dashboard banner does).
  */
 export function SettingsPage() {
-  // A manager comes here for the printers only; the rest is the owner's.
+  // A manager comes here for this till's printers and sounds; the rest is the owner's.
   const full = useSessionStore((s) => s.can('settings.manage'));
-  const tabs = full ? TABS : TABS.filter((t) => t.id === 'printer' || t.id === 'about');
+  const tabs = full
+    ? TABS
+    : TABS.filter((t) => t.id === 'printer' || t.id === 'sounds' || t.id === 'about');
   const [params] = useSearchParams();
   const fromUrl = params.get('tab');
   const [savedTab, setTab] = useState<SettingsTab>(() => (isTab(fromUrl) ? fromUrl : readSavedTab()));
@@ -106,7 +112,7 @@ export function SettingsPage() {
         <p className="mt-1 text-stone-600 dark:text-stone-400">
           {full
             ? 'Setting up? Go left to right: Shop & logo, Printers, then Online orders. Backups run on their own.'
-            : 'The printers for this till. The rest of Settings is for the owner’s login.'}
+            : 'The printers and sounds for this till. The rest of Settings is for the owner’s login.'}
         </p>
       </header>
 
@@ -151,6 +157,7 @@ export function SettingsPage() {
             <KitchenPrinterSettings />
           </>
         )}
+        {tab === 'sounds' && <SoundSettings />}
         {tab === 'online' && <WebsiteSettings />}
         {tab === 'backups' && <BackupsPanel onGoToOnline={() => setTab('online')} />}
         {tab === 'fbr' && <FbrSettings />}

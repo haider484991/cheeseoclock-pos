@@ -137,6 +137,14 @@ describe('logo bookkeeping', () => {
     expect(isLogoChecked(stored, undefined, lan)).toBe(false);
     expect(isLogoChecked(null, LOGO, lan)).toBe(false);
   });
+
+  it('a drawer setting change keeps the logo checked', () => {
+    const lan: PrinterConnectionConfig = { transport: 'network', network: { host: '192.168.1.50', port: 9100 }, width: 48 };
+    const stored = logoCheckedValue(LOGO, lan);
+    expect(isLogoChecked(stored, LOGO, { ...lan, drawer: { pin: 5, pulseMs: 100 } })).toBe(true);
+    expect(isLogoChecked(stored, LOGO, { ...lan, drawer: { pin: 2, pulseMs: 50 } })).toBe(true);
+    expect(isLogoChecked(stored, LOGO, { ...lan, drawer: { pin: 2, pulseMs: 50 }, width: 32 })).toBe(false);
+  });
 });
 
 describe('logoTestOptions', () => {

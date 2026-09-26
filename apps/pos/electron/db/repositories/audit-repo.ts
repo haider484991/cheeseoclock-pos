@@ -22,6 +22,21 @@ const PHONE_FIELDS = new Set([
   'phoneSnapshot',
 ]);
 const EMAIL_FIELDS = new Set(['email', 'customerEmail', 'customer_email']);
+/**
+ * Keys that hold a PIN or password (or a hash of one). Repositories keep
+ * them out of audit rows; this is the net if one ever slips in. A password
+ * may be one the person uses elsewhere too.
+ */
+const SECRET_FIELDS = new Set([
+  'pin',
+  'pin_hash',
+  'pinHash',
+  'approverPin',
+  'password',
+  'secret',
+  'newPin',
+  'currentPin',
+]);
 
 /**
  * Walk an arbitrary JSON-shaped value and redact known PII fields.
@@ -41,7 +56,7 @@ function redactPii(value: unknown): unknown {
         out[k] = redactPhone(v);
       } else if (EMAIL_FIELDS.has(k) && typeof v === 'string') {
         out[k] = maskEmail(v);
-      } else if (k === 'pin' || k === 'pin_hash' || k === 'pinHash') {
+      } else if (SECRET_FIELDS.has(k)) {
         out[k] = '••••';
       } else {
         out[k] = redactPii(v);

@@ -3,11 +3,20 @@ import {
   EscPosBuilder,
   LINES_BEFORE_CUT,
   RASTER_BAND_ROWS,
+  drawerPulseBytes,
   qrCode,
+  statusByteSaysOffline,
   toPrinterAscii,
   wrap,
 } from './escpos.js';
-import { CUT_MARKER, QR_MARKER, decodeEscPos, escPosToText, logoMarker } from './escpos-decode.js';
+import {
+  CUT_MARKER,
+  QR_MARKER,
+  decodeEscPos,
+  drawerMarker,
+  escPosToText,
+  logoMarker,
+} from './escpos-decode.js';
 
 const rowsOf = (bytes: Uint8Array) => decodeEscPos(bytes).map((r) => r.text);
 
@@ -124,10 +133,61 @@ describe('decodeEscPos', () => {
     expect(rows[0]).toEqual({ text: 'BIG', scale: 2 });
     expect(rows[1]).toEqual({ text: 'u', scale: 1 });
     expect(rows[2]).toEqual({ text: QR_MARKER, scale: 1 });
+    expect(rows[3]).toEqual({ text: drawerMarker(2, 50), scale: 1 });
     expect(rows.at(-1)).toEqual({ text: CUT_MARKER, scale: 1 });
-    expect(rows.slice(3, -1).every((r) => r.text === '')).toBe(true);
-    expect(rows.slice(3, -1)).toHaveLength(2 + LINES_BEFORE_CUT);
+    expect(rows.slice(4, -1).every((r) => r.text === '')).toBe(true);
+    expect(rows.slice(4, -1)).toHaveLength(2 + LINES_BEFORE_CUT);
     expect(escPosToText(b.build()).split('\n').slice(0, 3)).toEqual(['BIG', 'u', QR_MARKER]);
+  });
+});
+
+describe('cash drawer pulse', () => {
+  it('defaults to pin 2, 50 ms on, 500 ms off', () => {
+    expect(drawerPulseBytes()).toEqual([0x1b, 0x70, 0x00, 25, 250]);
+    expect(drawerPulseBytes(null)).toEqual([0x1b, 0x70, 0x00, 25, 250]);
+    expect(drawerPulseBytes({ pin: 2, pulseMs: 50 })).toEqual([0x1b, 0x70, 0x00, 0x19, 0xfa]);
+  });
+
+  it('picks pin 5 and a 100 ms pulse when asked', () => {
+    expect(drawerPulseBytes({ pin: 5, pulseMs: 50 })).toEqual([0x1b, 0x70, 0x01, 25, 250]);
+    expect(drawerPulseBytes({ pin: 2, pulseMs: 100 })).toEqual([0x1b, 0x70, 0x00, 50, 250]);
+    expect(drawerPulseBytes({ pin: 5, pulseMs: 100 })).toEqual([0x1b, 0x70, 0x01, 0x32, 0xfa]);
+  });
+
+  it('never pulses longer than 100 ms, whatever arrives', () => {
+    for (const odd of [{ pin: 7, pulseMs: 500 }, { pin: 1, pulseMs: 0 }, { pulseMs: 250 }, { pin: '5' }]) {
+      const bytes = drawerPulseBytes(odd as never);
+      expect(bytes[2]).toBe(0x00);
+      expect(bytes[3]).toBe(25);
+    }
+    expect(drawerPulseBytes({ pulseMs: 100 })[3]).toBeLessThanOrEqual(50);
+  });
+
+  it('shows up in the decoded text with its pin and length', () => {
+    expect(rowsOf(new EscPosBuilder().openDrawer().build())).toEqual([drawerMarker(2, 50)]);
+    expect(rowsOf(new EscPosBuilder().openDrawer({ pin: 5, pulseMs: 100 }).build())).toEqual([
+      '[drawer pin 5, 100 ms]',
+    ]);
+    // Firmware also takes m = 48 / 49 for the same two pins.
+    expect(rowsOf(new Uint8Array([0x1b, 0x70, 49, 25, 250]))).toEqual(['[drawer pin 5, 50 ms]']);
+    expect(rowsOf(new Uint8Array([0x1b, 0x70, 48, 25, 250]))).toEqual(['[drawer pin 2, 50 ms]']);
+    // Text before and after the pulse stays on its own rows.
+    const b = new EscPosBuilder().text('Paid');
+    expect(rowsOf(b.openDrawer().text('Thanks').newline().build())).toEqual([
+      'Paid',
+      drawerMarker(2, 50),
+      'Thanks',
+    ]);
+  });
+
+  it('reads a DLE EOT status byte: offline only when the answer is well-formed', () => {
+    expect(statusByteSaysOffline(0x16)).toBe(false); // online, drawer switch low
+    expect(statusByteSaysOffline(0x12)).toBe(false);
+    expect(statusByteSaysOffline(0x1e)).toBe(true); // offline bit set
+    expect(statusByteSaysOffline(0x1a)).toBe(true);
+    expect(statusByteSaysOffline(0x08)).toBe(false); // not a status byte
+    expect(statusByteSaysOffline(0xff)).toBe(false);
+    expect(statusByteSaysOffline(0x9a)).toBe(false);
   });
 });
 

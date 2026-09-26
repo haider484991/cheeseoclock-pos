@@ -21,6 +21,7 @@ import {
 import { recordAppliedRestore } from './services/restore-service.js';
 import { sealAllStoredSecrets } from './services/secrets-bootstrap.js';
 import { auditChainService } from './services/audit-chain-service.js';
+import { clearAttention } from './services/order-alerts-hub.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,7 +69,26 @@ async function createMainWindow() {
       // Live Orders board and web-order alerts go stale and then every
       // refresh fires at once, a burst of lag, the moment it is brought back.
       backgroundThrottling: false,
+      // The new-order chime must play with nobody touching the screen first
+      // (Electron's default today, stated so an upgrade cannot change it).
+      autoplayPolicy: 'no-user-gesture-required',
     },
+  });
+
+  // Nothing else reloads a crashed screen (there is no menu in production to
+  // press Ctrl+R), and a dead screen cannot ring for a website order. Reload
+  // it — but not in a loop if it keeps crashing on start.
+  const reloads: number[] = [];
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    log.error('Till screen stopped', details);
+    if (details.reason === 'clean-exit') return;
+    const now = Date.now();
+    while (reloads.length > 0 && now - reloads[0]! > 5 * 60_000) reloads.shift();
+    if (reloads.length >= 3) return;
+    reloads.push(now);
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+    }, 1_000);
   });
 
   mainWindow.on('ready-to-show', () => {
@@ -114,6 +134,10 @@ async function bootstrap() {
     mainWindow.show();
     mainWindow.focus();
   });
+
+  // Windows only shows notices (new online order) for an app id that matches
+  // the installer's Start-menu shortcut: electron-builder's appId.
+  if (process.platform === 'win32') app.setAppUserModelId(isDev ? process.execPath : 'pk.cheeseoclock.pos');
 
   log.info('Bootstrapping CheeseOclock POS', { version: app.getVersion(), isDev });
 
@@ -175,6 +199,9 @@ app.whenReady().then(bootstrap).catch((err: unknown) => {
   );
   app.exit(1);
 });
+
+// A notice that stays until dealt with must not outlive the till in Action Center.
+app.on('before-quit', () => clearAttention());
 
 app.on('window-all-closed', () => {
   closeDatabase();

@@ -107,7 +107,7 @@ export function PrintingRulesSettings() {
         <Rule
           icon={Receipt}
           title="Customer receipt"
-          body="Printed when money is taken: Pay now at the counter, or a cash-on-delivery order marked served or delivered with its payment. A cash payment opens the drawer; card and wallet payments do not."
+          body="Printed when money is taken: Pay now at the counter, or a cash-on-delivery order marked served or delivered with its payment. A cash payment opens the drawer straight away, before anything prints; card and wallet payments do not."
           control={<span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Always</span>}
         />
         <Rule
@@ -163,7 +163,7 @@ export function PrintingRulesSettings() {
         <Rule
           icon={RotateCcw}
           title="Refunds and reprints"
-          body="A refund prints a refund receipt (the drawer opens when cash goes back out). The print buttons on the Live Orders board, in order history and on the payment screen print the receipt or the kitchen ticket again — a reprinted kitchen ticket is stamped REPRINT so nothing is cooked twice."
+          body="A refund prints a refund receipt (the drawer opens when cash goes back out). A reprinted receipt never opens the drawer. The print buttons on the Live Orders board, in order history and on the payment screen print the receipt or the kitchen ticket again — a reprinted kitchen ticket is stamped REPRINT so nothing is cooked twice."
           control={<span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Always</span>}
         />
       </ul>

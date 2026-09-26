@@ -7,7 +7,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { ipc, onLowStock, onPrinterFailed, onWebOrderReceived } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useQueryClient } from '@tanstack/react-query';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { DRAWER_NOT_OPENED_CODE, DRAWER_UNSURE_CODE } from '@cheeseoclock/shared-types';
 
 export function AppShell() {
   const user = useSessionStore((s) => s.user);
@@ -47,6 +47,25 @@ export function AppShell() {
   // Surface any spooler failure as a toast — sales are already saved.
   useEffect(() => {
     return onPrinterFailed((payload) => {
+      // The cash drawer: say plainly what to do at the counter.
+      if (payload.error?.code === DRAWER_NOT_OPENED_CODE || payload.error?.code === DRAWER_UNSURE_CODE) {
+        const unsure = payload.error.code === DRAWER_UNSURE_CODE;
+        toast({
+          title: unsure ? 'Cash drawer may not have opened — check it' : 'Cash drawer did not open — use the key',
+          description: payload.error.message,
+          variant: 'warning',
+          duration: 15_000,
+        });
+        return;
+      }
+      if (payload.jobKind === 'drawer' && payload.retrying) {
+        toast({
+          title: 'Cash drawer not opening yet',
+          description: 'The printer is not answering. The till keeps trying for up to a minute, until the drawer opens.',
+          variant: 'warning',
+        });
+        return;
+      }
       toast({
         title: payload.retrying
           ? `Printer not responding — ${payload.jobKind === 'kitchen' ? 'kitchen ticket' : payload.jobKind === 'drawer' ? 'cash drawer' : 'receipt'} will retry`
@@ -80,28 +99,14 @@ export function AppShell() {
     });
   }, [toast, qc]);
 
-  // New online order from the website → loud toast + refresh the board.
+  // New online order from the website → refresh the board. The banner, the
+  // chime and the "total changed" note come from OrderAlerts (mounted at the
+  // root, so they work on the PIN screen too).
   useEffect(() => {
-    return onWebOrderReceived((payload) => {
-      const no = payload.orderNumber.split('-').pop();
-      toast({
-        title: '🌐 New online order!',
-        description: `#${no} — ${payload.customerName}. Check Live Orders.`,
-      });
-      // The till priced it differently from what the website showed (a price
-      // changed since the menu was published): the customer expects the other
-      // amount, so someone should call before the rider asks for it.
-      if (payload.totalMismatch) {
-        toast({
-          title: `Online order #${no}: the total changed`,
-          description: `The website showed ${formatCents(payload.totalMismatch.webTotalCents)}, the till bills ${formatCents(payload.totalMismatch.tillTotalCents)}. Call ${payload.customerName} before it goes out — and publish the menu again (Settings → Online orders).`,
-          variant: 'warning',
-          duration: 60_000,
-        });
-      }
+    return onWebOrderReceived(() => {
       void qc.invalidateQueries({ queryKey: ['orders', 'active'] });
     });
-  }, [toast, qc]);
+  }, [qc]);
 
   if (!user) return null;
 

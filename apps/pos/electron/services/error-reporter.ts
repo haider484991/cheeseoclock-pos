@@ -70,8 +70,12 @@ function scrubPii(event: Record<string, unknown>): void {
     .replace(/\b0\d{10}\b/g, '0•••••••••')
     // Email patterns
     .replace(/([\w.-]+)@([\w.-]+)/g, '$1•••@$2')
-    // PIN-looking fields (keys named pin / pin_hash + 4-8 digit values)
-    .replace(/"(pin|pin_hash|pinHash)"\s*:\s*"[^"]*"/g, '"$1":"••••"');
+    // Sign-in secrets: any value under a key that holds a PIN or a password
+    // (a password may hold escaped quotes, hence the escape-aware match).
+    .replace(
+      /"(pin|pin_hash|pinHash|approverPin|password|secret|newPin|currentPin)"\s*:\s*"(?:[^"\\]|\\.)*"/g,
+      '"$1":"••••"',
+    );
   const reparsed = JSON.parse(scrubbed) as Record<string, unknown>;
   for (const k of Object.keys(event)) delete event[k];
   Object.assign(event, reparsed);

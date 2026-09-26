@@ -1,8 +1,9 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler } from '../registry.js';
 import { ok, err } from '@cheeseoclock/shared-types';
-import { loginInputSchema } from '@cheeseoclock/shared-schemas';
+import { SECRET_MISSING, loginInputSchema } from '@cheeseoclock/shared-schemas';
 import {
+  WRONG_SECRET,
   getCurrentSession,
   login,
   logout,
@@ -12,12 +13,13 @@ import {
 
 export function registerAuthHandlers(ctx: HandlerContext): void {
   defineHandler('auth:login', ctx, async (_ctx, payload) => {
+    // A PIN or a password; the one set of rules is in shared-schemas. Only
+    // the rule that was broken goes back, never what was typed.
     const parsed = loginInputSchema.safeParse(payload);
     if (!parsed.success) {
       return err({
         code: 'validation_failed',
-        message: 'PIN must be 4-8 digits',
-        details: parsed.error.flatten(),
+        message: parsed.error.issues[0]?.message ?? SECRET_MISSING,
       });
     }
     try {
@@ -26,7 +28,7 @@ export function registerAuthHandlers(ctx: HandlerContext): void {
     } catch (e) {
       return err({
         code: 'unauthenticated',
-        message: e instanceof Error ? e.message : 'Invalid PIN',
+        message: e instanceof Error ? e.message : WRONG_SECRET,
       });
     }
   });
@@ -55,7 +57,7 @@ export function registerAuthHandlers(ctx: HandlerContext): void {
     if (!parsed.success) {
       return err({
         code: 'validation_failed',
-        message: 'PIN must be 4-8 digits',
+        message: parsed.error.issues[0]?.message ?? SECRET_MISSING,
       });
     }
     try {

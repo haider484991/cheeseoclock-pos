@@ -11,6 +11,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportPeriod } from './dateRange';
 import {
   CHANNEL_LABEL,
+  DRAWER_OPEN_WHY,
   PAYMENT_LABEL,
   PAYMENT_ORDER,
   changeOf,
@@ -116,11 +117,13 @@ export function buildCsv(r: BusinessReport, period: ReportPeriod, madeAt: Date =
   for (const c of r.channels) rows.push([CHANNEL_LABEL[c.channel], c.orderCount, rs(c.netSalesCents)]);
 
   heading('Staff');
-  rows.push(['Taken by', 'Orders', 'Sales Rs', 'Discounts given Rs', 'Cancelled orders']);
-  for (const s of r.staff) rows.push([s.name, s.orderCount, rs(s.netSalesCents), rs(s.discountCents), s.voidCount]);
+  rows.push(['Taken by', 'Orders', 'Sales Rs', 'Discounts given Rs', 'Cancelled orders', 'Drawer opened with no sale']);
+  for (const s of r.staff) {
+    rows.push([s.name, s.orderCount, rs(s.netSalesCents), rs(s.discountCents), s.voidCount, s.noSaleOpens]);
+  }
 
   heading('Shifts (cash drawer)');
-  rows.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs']);
+  rows.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale']);
   for (const s of r.shifts) {
     rows.push([
       fmtWhen(s.openedAt),
@@ -133,6 +136,8 @@ export function buildCsv(r: BusinessReport, period: ReportPeriod, madeAt: Date =
       s.expectedCashCents === null ? null : rs(s.expectedCashCents),
       s.countedCashCents === null ? null : rs(s.countedCashCents),
       s.varianceCents === null ? null : rs(s.varianceCents),
+      s.cashMovementCount,
+      s.noSaleOpens,
     ]);
   }
 
@@ -162,6 +167,16 @@ export function buildCsv(r: BusinessReport, period: ReportPeriod, madeAt: Date =
   rows.push(['Cancelled', 'Order', 'Value Rs', 'Reason', 'Approved by', 'Taken by']);
   for (const v of r.voids) {
     rows.push([fmtWhen(v.voidedAt ?? v.createdAt), v.orderNumber, rs(v.amountCents), v.reason, v.approvedBy, v.takenBy]);
+  }
+
+  heading(
+    r.drawerOpens.length < r.drawerOpenCount
+      ? `Cash drawer opened by hand (no sale) — latest ${r.drawerOpens.length} of ${r.drawerOpenCount}`
+      : 'Cash drawer opened by hand (no sale)',
+  );
+  rows.push(['When', 'Why', 'Reason', 'Opened by', 'Approved by', 'Shift open']);
+  for (const d of r.drawerOpens) {
+    rows.push([fmtWhen(d.createdAt), DRAWER_OPEN_WHY[d.kind], d.reason, d.openedBy, d.approvedBy, d.outsideShift ? 'No' : 'Yes']);
   }
 
   heading("Ingredients used (estimate at today's ingredient prices)");
@@ -223,6 +238,14 @@ function limited<T>(rows: T[], n: number): { shown: T[]; note: string } {
   return rows.length > n
     ? { shown: rows.slice(0, n), note: `<p class="muted">Showing ${n} of ${rows.length}. Download for Excel for the full list.</p>` }
     : { shown: rows, note: '' };
+}
+
+/** `limited` for a list the report already stopped at a cap: `total` is how many there really were. */
+function limitedOf<T>(rows: T[], n: number, total: number): { shown: T[]; note: string } {
+  const shown = rows.slice(0, n);
+  if (shown.length >= total) return { shown, note: '' };
+  const more = rows.length >= total ? ' Download for Excel for the full list.' : ` Download for Excel for the latest ${rows.length}.`;
+  return { shown, note: `<p class="muted">Showing the latest ${shown.length} of ${total}.${more}</p>` };
 }
 
 /**
@@ -310,16 +333,23 @@ export function buildPrintBody(r: BusinessReport, period: ReportPeriod, madeAt: 
 
   parts.push(
     `<section><h2>Staff</h2>${table(
-      ['Taken by', 'Orders', 'Sales', 'Discounts given', 'Cancelled'],
-      r.staff.map((s) => [esc(s.name), String(s.orderCount), money(s.netSalesCents), money(s.discountCents), String(s.voidCount)]),
-      [1, 2, 3, 4],
+      ['Taken by', 'Orders', 'Sales', 'Discounts given', 'Cancelled', 'No-sale opens'],
+      r.staff.map((s) => [
+        esc(s.name),
+        String(s.orderCount),
+        money(s.netSalesCents),
+        money(s.discountCents),
+        String(s.voidCount),
+        String(s.noSaleOpens),
+      ]),
+      [1, 2, 3, 4, 5],
     )}</section>`,
   );
 
   if (r.shifts.length > 0) {
     parts.push(
       `<section><h2>Cash drawer (shifts)</h2>${table(
-        ['Opened', 'Closed', 'By', 'Float', 'Expected', 'Counted', 'Short / over'],
+        ['Opened', 'Closed', 'By', 'Float', 'Expected', 'Counted', 'Short / over', 'Cash in/out', 'No-sale opens'],
         r.shifts.map((s) => [
           esc(fmtWhen(s.openedAt)),
           s.closedAt ? esc(fmtWhen(s.closedAt)) : 'Still open',
@@ -332,9 +362,27 @@ export function buildPrintBody(r: BusinessReport, period: ReportPeriod, madeAt: 
             : s.varianceCents === 0
               ? 'Matched'
               : `${s.varianceCents > 0 ? 'Over' : 'Short'} ${money(Math.abs(s.varianceCents))}`,
+          String(s.cashMovementCount),
+          String(s.noSaleOpens),
         ]),
-        [3, 4, 5, 6],
+        [3, 4, 5, 6, 7, 8],
       )}</section>`,
+    );
+  }
+
+  if (r.drawerOpenCount > 0) {
+    const list = limitedOf(r.drawerOpens, 25, r.drawerOpenCount);
+    parts.push(
+      `<section><h2>Cash drawer opened by hand — ${r.drawerOpenCount} time${r.drawerOpenCount === 1 ? '' : 's'}</h2>${table(
+        ['When', 'Why', 'Reason', 'Opened by', 'Approved by'],
+        list.shown.map((d) => [
+          `${esc(fmtWhen(d.createdAt))}${d.outsideShift ? ' <span class="muted">(no shift open)</span>' : ''}`,
+          esc(DRAWER_OPEN_WHY[d.kind]),
+          d.reason ? esc(d.reason) : '—',
+          esc(d.openedBy),
+          d.approvedBy ? esc(d.approvedBy) : '—',
+        ]),
+      )}${list.note}</section>`,
     );
   }
 

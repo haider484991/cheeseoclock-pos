@@ -152,6 +152,7 @@ const api: RendererApi = {
     lastCount: () => invoke('shifts:lastCount', undefined),
     recordCashMovement: (req) => invoke('shifts:recordCashMovement', req),
     listCashMovements: (req) => invoke('shifts:listCashMovements', req),
+    openDrawer: (req) => invoke('shifts:openDrawer', req),
   },
   webBridge: {
     getConfig: () => invoke('webBridge:getConfig', undefined),
@@ -169,6 +170,13 @@ const api: RendererApi = {
   audit: {
     verifyChain: () => invoke('audit:verifyChain', undefined),
   },
+  alerts: {
+    getSounds: () => invoke('alerts:getSounds', undefined),
+    setSounds: (req) => invoke('alerts:setSounds', req),
+    getPending: () => invoke('alerts:getPending', undefined),
+    acknowledge: (req) => invoke('alerts:acknowledge', req),
+    testNotice: () => invoke('alerts:testNotice', undefined),
+  },
   printer: {
     getConfig: () => invoke('printer:getConfig', undefined),
     setConfig: (req) => invoke('printer:setConfig', req),
@@ -177,6 +185,7 @@ const api: RendererApi = {
     setPolicy: (req) => invoke('printer:setPolicy', req),
     setKitchenPrinter: (req) => invoke('printer:setKitchenPrinter', req),
     test: (req) => invoke('printer:test', req),
+    testDrawer: () => invoke('printer:testDrawer', undefined),
     listSystemPrinters: () => invoke('printer:listSystemPrinters', undefined),
     reprint: (req) => invoke('printer:reprint', req),
     reprintKitchen: (req) => invoke('printer:reprintKitchen', req),
@@ -303,36 +312,44 @@ contextBridge.exposeInMainWorld('syncEvents', {
   },
 });
 
-// New online orders arriving from the website bridge → toast + board refresh.
+// New online orders arriving from the website bridge → banner, chime + board refresh.
+type WebOrderReceivedEvent = {
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  webOrderId?: string;
+  fulfilment?: 'delivery' | 'pickup';
+  totalCents?: number | null;
+  totalMismatch?: { webTotalCents: number; tillTotalCents: number };
+};
+type WebOrderImportFailedEvent = {
+  webOrderId: string;
+  customerName: string;
+  message: string;
+  customerPhone?: string | null;
+  /** The till stopped trying: someone has to call the customer. */
+  final?: boolean;
+  reason?: 'gave_up' | 'stale' | 'error';
+};
 contextBridge.exposeInMainWorld('webOrderEvents', {
-  onReceived: (
-    cb: (payload: {
-      orderId: string;
-      orderNumber: string;
-      customerName: string;
-      totalMismatch?: { webTotalCents: number; tillTotalCents: number };
-    }) => void,
-  ) => {
-    const listener = (
-      _e: unknown,
-      payload: {
-        orderId: string;
-        orderNumber: string;
-        customerName: string;
-        totalMismatch?: { webTotalCents: number; tillTotalCents: number };
-      },
-    ) => cb(payload);
+  onReceived: (cb: (payload: WebOrderReceivedEvent) => void) => {
+    const listener = (_e: unknown, payload: WebOrderReceivedEvent) => cb(payload);
     ipcRenderer.on('web-order:received', listener);
     return () => ipcRenderer.removeListener('web-order:received', listener);
   },
-  onImportFailed: (
-    cb: (payload: { webOrderId: string; customerName: string; message: string }) => void,
-  ) => {
-    const listener = (
-      _e: unknown,
-      payload: { webOrderId: string; customerName: string; message: string },
-    ) => cb(payload);
+  onImportFailed: (cb: (payload: WebOrderImportFailedEvent) => void) => {
+    const listener = (_e: unknown, payload: WebOrderImportFailedEvent) => cb(payload);
     ipcRenderer.on('web-order:import-failed', listener);
     return () => ipcRenderer.removeListener('web-order:import-failed', listener);
+  },
+});
+
+// A click on the till's Windows notice (new online order, order not in):
+// the main process has already brought the window to the front.
+contextBridge.exposeInMainWorld('alertEvents', {
+  onOpen: (cb: (payload: { kind: 'newOrder' | 'importFailed' | 'test' }) => void) => {
+    const listener = (_e: unknown, payload: { kind: 'newOrder' | 'importFailed' | 'test' }) => cb(payload);
+    ipcRenderer.on('alerts:open', listener);
+    return () => ipcRenderer.removeListener('alerts:open', listener);
   },
 });

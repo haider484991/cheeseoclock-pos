@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
+import type { SecretKind } from '@cheeseoclock/shared-types';
+import { normalizeSecret } from '@cheeseoclock/shared-schemas/sign-in-secret';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { SecretFields } from '../../components/secret/SecretFields';
+import { secretFieldsReady } from '../../components/secret/secretRules';
 import { RestoreFromBackup } from './RestoreFromBackup';
 import { LogoPicker } from '../settings/LogoPicker';
 import {
@@ -22,7 +26,7 @@ import {
  * First-run onboarding. Visible until at least one user exists. Collects:
  *   1. Business basics (logo, name, contact)
  *   2. Tax categories (pre-filled with Pakistan defaults)
- *   3. First admin user (name + PIN)
+ *   3. First admin user (name + a number PIN or a password)
  *
  * On finish, calls system:completeOnboarding which atomically creates the
  * user, writes branding, and inserts the chosen tax categories. After success
@@ -61,6 +65,7 @@ export function OnboardingPage({ onComplete }: Props) {
 
   // Step 3
   const [adminName, setAdminName] = useState('');
+  const [secretKind, setSecretKind] = useState<SecretKind>('pin');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
 
@@ -73,10 +78,15 @@ export function OnboardingPage({ onComplete }: Props) {
         ...(phoneLine.trim() ? { phoneLine: phoneLine.trim() } : {}),
         ...(logoUrl ? { logoUrl } : {}),
         taxCategories: taxRows.filter((r) => r.name.trim()),
-        admin: { fullName: adminName.trim(), pin },
+        admin: { fullName: adminName.trim(), pin: normalizeSecret(pin) },
       }),
     onSuccess: () => {
-      toast({ title: 'Welcome aboard!', variant: 'success' });
+      toast({
+        title: 'Welcome aboard!',
+        // The sign-in screen opens on the keypad.
+        ...(secretKind === 'password' ? { description: 'To sign in, tap "Use a password".' } : {}),
+        variant: 'success',
+      });
       onComplete();
     },
     onError: (e) =>
@@ -93,10 +103,7 @@ export function OnboardingPage({ onComplete }: Props) {
     {
       title: 'Admin',
       icon: ShieldCheck,
-      complete:
-        adminName.trim().length > 0 &&
-        pin.length >= 4 &&
-        pin === confirmPin,
+      complete: adminName.trim().length > 0 && secretFieldsReady(secretKind, pin, confirmPin),
     },
   ];
 
@@ -178,7 +185,7 @@ export function OnboardingPage({ onComplete }: Props) {
             <div className="space-y-4">
               <h2 className="text-lg font-bold">Tell us about your business</h2>
               <p className="text-xs text-stone-500">
-                The name and contact lines print on every receipt; the logo shows on the PIN
+                The name and contact lines print on every receipt; the logo shows on the sign-in
                 screen and in the menu bar. You can change all of it later in Settings.
               </p>
               <button
@@ -325,43 +332,22 @@ export function OnboardingPage({ onComplete }: Props) {
                 />
               </Field>
 
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="PIN (4–8 digits) *">
-                  <input
-                    type="password"
-                    value={pin}
-                    inputMode="numeric"
-                    onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                    placeholder="****"
-                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-center font-mono text-lg tracking-widest dark:border-stone-700 dark:bg-stone-800"
-                  />
-                </Field>
-                <Field label="Confirm PIN *">
-                  <input
-                    type="password"
-                    value={confirmPin}
-                    inputMode="numeric"
-                    onChange={(e) =>
-                      setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 8))
-                    }
-                    placeholder="****"
-                    className="w-full rounded-xl border border-stone-300 px-3 py-2.5 text-center font-mono text-lg tracking-widest dark:border-stone-700 dark:bg-stone-800"
-                  />
-                </Field>
-              </div>
-
-              {pin.length > 0 && pin.length < 4 && (
-                <p className="text-xs text-red-500">PIN must be at least 4 digits.</p>
-              )}
-              {confirmPin.length > 0 && pin !== confirmPin && (
-                <p className="text-xs text-red-500">PINs don't match.</p>
-              )}
+              <SecretFields
+                kind={secretKind}
+                onKind={setSecretKind}
+                secret={pin}
+                onSecret={setPin}
+                confirm={confirmPin}
+                onConfirm={setConfirmPin}
+                idPrefix="onboarding"
+                who="you"
+              />
 
               <div className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
                 <Sparkles className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 <span>
-                  Write your PIN down somewhere safe — there's no "forgot PIN" yet. If you lose it,
-                  you'd need to reset the device.
+                  Write your PIN or password down somewhere safe — there's no "forgot password" yet.
+                  If you lose it, you'd need to reset the device.
                 </span>
               </div>
             </div>

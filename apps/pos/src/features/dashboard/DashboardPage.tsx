@@ -98,7 +98,7 @@ export function DashboardPage() {
       tile: {
         icon: Users,
         title: 'Users',
-        subtitle: 'Staff logins and PINs',
+        subtitle: 'Staff logins, PINs and passwords',
         to: '/users',
         tone: 'from-rose-400 to-red-500',
       },

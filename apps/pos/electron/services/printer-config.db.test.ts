@@ -137,6 +137,85 @@ describe.skipIf(!DatabaseSync)('print policy', () => {
   });
 });
 
+describe.skipIf(!DatabaseSync)('the cash drawer setting', () => {
+  it('a printer saved before the setting existed reads back unchanged', async () => {
+    const m = await cfg();
+    const { setSetting } = await import('../db/repositories/settings-repo.js');
+    const v077 = { transport: 'usb', usb: { printerName: 'BC-85AC' }, width: 48 };
+    setSetting(db, m.PRINTER_RECEIPT_KEY, v077);
+    expect(m.getReceiptPrinterConfig(db)).toEqual(v077);
+  });
+
+  it('keeps pin 5 / 100 ms, and refuses anything else', async () => {
+    const m = await cfg();
+    const lan = { transport: 'network' as const, network: { host: '192.0.2.7', port: 9100 }, width: 48 as const };
+    m.setReceiptPrinterConfig(db, { ...lan, drawer: { pin: 5, pulseMs: 100 } });
+    expect(m.getReceiptPrinterConfig(db)?.drawer).toEqual({ pin: 5, pulseMs: 100 });
+    for (const drawer of [{ pin: 3, pulseMs: 50 }, { pin: 2, pulseMs: 250 }, { pin: 2 }, 'pin 2']) {
+      expect(m.PrinterConnectionConfigSchema.safeParse({ ...lan, drawer }).success).toBe(false);
+    }
+  });
+
+  it('a damaged drawer value never drops the real printer back to "no printer"', async () => {
+    const m = await cfg();
+    const { setSetting } = await import('../db/repositories/settings-repo.js');
+    setSetting(db, m.PRINTER_RECEIPT_KEY, {
+      transport: 'usb',
+      usb: { printerName: 'BC-85AC' },
+      width: 48,
+      drawer: { pin: 9, pulseMs: 5000 },
+    });
+    expect(m.getReceiptPrinterConfig(db)).toEqual({ transport: 'usb', usb: { printerName: 'BC-85AC' }, width: 48 });
+    // Something else broken still reads as no saved printer, as before.
+    setSetting(db, m.PRINTER_RECEIPT_KEY, { transport: 'usb', drawer: { pin: 9 } });
+    expect(m.getReceiptPrinterConfig(db)).toBeNull();
+  });
+
+  it('only the file printer counts as "no printer"', async () => {
+    const m = await cfg();
+    expect(m.isNoPrinter(m.DEFAULT_RECEIPT_CONFIG)).toBe(true);
+    expect(m.isNoPrinter({ transport: 'usb', usb: { printerName: 'mock' } })).toBe(false);
+    expect(m.isNoPrinter({ transport: 'network', network: { host: '192.0.2.7', port: 9100 } })).toBe(false);
+  });
+});
+
+describe.skipIf(!DatabaseSync)('the drawer pulse on the no-printer file', () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** One pulse through the real spooler and the no-printer adapter; the .txt it wrote. */
+  async function kick(): Promise<string> {
+    state.userData = mkdtempSync(join(tmpdir(), 'coc-drawer-test-'));
+    dirs.push(state.userData);
+    const { printSpooler } = await import('./print-spooler.js');
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }); // no background ticks
+    try {
+      printSpooler.init(db);
+      printSpooler.resetAdapter();
+      const result = await printSpooler.kickDrawerNow();
+      expect(result.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    const dir = join(state.userData, 'printer-mock');
+    const txt = readdirSync(dir).filter((f) => f.endsWith('.txt'));
+    expect(txt).toHaveLength(1);
+    return readFileSync(join(dir, txt[0]!), 'utf8');
+  }
+
+  it('shows the pulse, pin 2, 50 ms, by default', async () => {
+    expect(await kick()).toBe('[drawer pin 2, 50 ms]');
+  });
+
+  it('shows the saved pin and length', async () => {
+    const m = await cfg();
+    m.setReceiptPrinterConfig(db, { ...m.DEFAULT_RECEIPT_CONFIG, drawer: { pin: 5, pulseMs: 100 } });
+    expect(await kick()).toBe('[drawer pin 5, 100 ms]');
+  });
+});
+
 describe.skipIf(!DatabaseSync)('the logo a customer receipt prints', () => {
   it('prints the stored picture for the logo that is set now, on either paper', async () => {
     const { getReceiptBranding, getReceiptLogo, receiptLogoToPrint, setReceiptBranding, setReceiptLogoRaster } =

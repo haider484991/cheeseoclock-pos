@@ -519,7 +519,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       });
     }
     if (!payload.approverPin?.trim()) {
-      throw new IpcGuardError({ code: 'forbidden', message: 'Manager PIN required to cancel an order' });
+      throw new IpcGuardError({ code: 'forbidden', message: "A manager's PIN or password is needed to cancel an order" });
     }
     let approverUserId: string;
     try {

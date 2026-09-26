@@ -23,6 +23,7 @@ import { ColumnChart, ShareBar } from './charts';
 import { DataTable, Note, Panel, Section, useShowAll } from './reportUi';
 import {
   CHANNEL_LABEL,
+  DRAWER_OPEN_WHY,
   daySeries,
   fmtMinutes,
   fmtQty,
@@ -239,8 +240,17 @@ export function ChannelsSection({ report }: { report: BusinessReport }) {
 
 // ------------------------------------------------------------------ staff --
 
+/** " · cash in/out 3× · drawer opened 2× with no sale" — what else opened the drawer on a shift. */
+function shiftDrawerNote(s: BusinessReport['shifts'][number]): string {
+  let note = '';
+  if (s.cashMovementCount > 0) note += ` · cash in/out ${s.cashMovementCount}×`;
+  if (s.noSaleOpens > 0) note += ` · drawer opened ${s.noSaleOpens}× with no sale`;
+  return note;
+}
+
 export function StaffSection({ report }: { report: BusinessReport }) {
   const net = report.kpis.netSalesCents;
+  const opens = useShowAll(report.drawerOpens, 8);
   const closed = report.shifts.filter((s) => s.closedAt !== null && s.varianceCents !== null);
   const drawer = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
   return (
@@ -248,7 +258,7 @@ export function StaffSection({ report }: { report: BusinessReport }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Orders taken" note="Website orders come in by themselves, so they have their own line.">
           <DataTable
-            columns={[{ label: 'Taken by' }, { label: 'Orders', right: true }, { label: 'Sales', right: true }, { label: 'Discounts', right: true }, { label: 'Cancelled', right: true }]}
+            columns={[{ label: 'Taken by' }, { label: 'Orders', right: true }, { label: 'Sales', right: true }, { label: 'Discounts', right: true }, { label: 'Cancelled', right: true }, { label: 'No-sale opens', right: true }]}
             rows={report.staff.map((s) => [
               <span key="n" className={cn('font-medium', s.isWebsite && 'text-sky-700 dark:text-sky-300')}>{s.name}</span>,
               s.orderCount,
@@ -257,6 +267,7 @@ export function StaffSection({ report }: { report: BusinessReport }) {
               </span>,
               s.discountCents > 0 ? formatCents(s.discountCents) : '—',
               s.voidCount > 0 ? <span key="v" className="font-semibold text-amber-700 dark:text-amber-400">{s.voidCount}</span> : '—',
+              s.noSaleOpens > 0 ? <span key="d" className="font-semibold text-amber-700 dark:text-amber-400">{s.noSaleOpens}</span> : '—',
             ])}
             empty="No orders in this period yet."
           />
@@ -289,6 +300,7 @@ export function StaffSection({ report }: { report: BusinessReport }) {
                 <div className="font-medium">{fmtWhen(s.openedAt)}</div>
                 <div className="text-xs text-stone-500">
                   {s.closedAt ? `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}` : `still open · opened by ${s.openedBy}`}
+                  {shiftDrawerNote(s)}
                 </div>
               </div>,
               formatCents(s.openingCashCents),
@@ -307,6 +319,36 @@ export function StaffSection({ report }: { report: BusinessReport }) {
             ])}
             empty="No shifts were opened in this period."
           />
+        </Panel>
+
+        <Panel
+          title={`Cash drawer opened by hand — ${plural(report.drawerOpenCount, 'time')}`}
+          note="Opened with no sale: the Open drawer button, “Open drawer to count” at close, and Test drawer. A cashier needs a manager's PIN or password."
+          className="xl:col-span-2"
+        >
+          <DataTable
+            columns={[{ label: 'When' }, { label: 'Why' }, { label: 'Opened by' }, { label: 'Approved by' }]}
+            rows={opens.shown.map((d) => [
+              <div key="w">
+                <div>{fmtWhen(d.createdAt)}</div>
+                {d.outsideShift && <div className="text-xs text-amber-700 dark:text-amber-400">No shift open</div>}
+              </div>,
+              <div key="k">
+                <div>{DRAWER_OPEN_WHY[d.kind]}</div>
+                {d.reason && <div className="text-xs text-stone-500">{d.reason}</div>}
+              </div>,
+              d.openedBy,
+              d.approvedBy ?? '—',
+            ])}
+            empty="The drawer was not opened by hand in this period."
+          />
+          {opens.toggle}
+          {report.drawerOpens.length < report.drawerOpenCount && (
+            <p className="mt-2 text-xs text-stone-500">
+              Showing the latest {report.drawerOpens.length} of {report.drawerOpenCount}. The counts per person and per
+              shift include all of them.
+            </p>
+          )}
         </Panel>
       </div>
     </Section>
@@ -342,7 +384,7 @@ export function DiscountsSection({ report }: { report: BusinessReport }) {
               empty="None."
             />
           </Panel>
-          <Panel title="Who gave them" note="“Manager OK” = a manager's PIN approved it.">
+          <Panel title="Who gave them" note="“Manager OK” = a manager's PIN or password approved it.">
             <DataTable
               columns={[{ label: 'Given by' }, { label: 'Times', right: true }, { label: 'Amount', right: true }, { label: 'Manager OK', right: true }]}
               rows={d.byPerson.map((p) => [p.name, p.count, formatCents(p.amountCents), p.approvedCount || '—'])}

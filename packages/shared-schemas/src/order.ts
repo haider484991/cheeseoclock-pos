@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { uuidSchema, centsSchema } from './common.js';
+import { signInSecretSchema } from './auth.js';
 
 export const orderModeSchema = z.enum(['dine_in', 'takeaway', 'delivery', 'online', 'foodpanda']);
 export const orderStatusSchema = z.enum([
@@ -45,7 +46,8 @@ export const applyDiscountInputSchema = z.object({
   discountType: z.enum(['percent', 'flat']),
   value: z.number().min(0),
   reason: z.string().max(500).nullable().optional(),
-  approverPin: z.string().regex(/^\d{4,8}$/).optional(),
+  /** A manager's PIN or password (same rules as sign-in). */
+  approverPin: signInSecretSchema.optional(),
 });
 
 export const tenderInputSchema = z.object({
@@ -65,7 +67,8 @@ export const tenderInputSchema = z.object({
 export const voidOrderInputSchema = z.object({
   orderId: uuidSchema,
   reason: z.string().min(1).max(500),
-  approverPin: z.string().regex(/^\d{4,8}$/),
+  /** A manager's PIN or password (same rules as sign-in). */
+  approverPin: signInSecretSchema,
 });
 
 export type CreateOrderInput = z.infer<typeof createOrderInputSchema>;

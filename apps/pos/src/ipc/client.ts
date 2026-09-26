@@ -167,6 +167,7 @@ export const ipc = {
       unwrap(window.api.shifts.recordCashMovement(input)),
     listCashMovements: (shiftId: string) =>
       unwrap(window.api.shifts.listCashMovements({ shiftId })),
+    openDrawer: (input: IpcRequest<'shifts:openDrawer'>) => unwrap(window.api.shifts.openDrawer(input)),
   },
   webBridge: {
     getConfig: () => unwrap(window.api.webBridge.getConfig()),
@@ -187,6 +188,13 @@ export const ipc = {
   },
   audit: {
     verifyChain: () => unwrap(window.api.audit.verifyChain()),
+  },
+  alerts: {
+    getSounds: () => unwrap(window.api.alerts.getSounds()),
+    setSounds: (input: IpcRequest<'alerts:setSounds'>) => unwrap(window.api.alerts.setSounds(input)),
+    getPending: () => unwrap(window.api.alerts.getPending()),
+    acknowledge: (input: IpcRequest<'alerts:acknowledge'>) => unwrap(window.api.alerts.acknowledge(input)),
+    testNotice: () => unwrap(window.api.alerts.testNotice()),
   },
   customers: {
     list: (input?: IpcRequest<'customers:list'>) => unwrap(window.api.customers.list(input)),
@@ -255,6 +263,7 @@ export const ipc = {
       unwrap(window.api.printer.setKitchenPrinter(input)),
     test: (station?: 'receipt' | 'kitchen') =>
       unwrap(window.api.printer.test(station ? { station } : undefined)),
+    testDrawer: () => unwrap(window.api.printer.testDrawer()),
     listSystemPrinters: () => unwrap(window.api.printer.listSystemPrinters()),
     reprint: (orderId: string) => unwrap(window.api.printer.reprint({ orderId })),
     reprintKitchen: (orderId: string) =>
@@ -363,6 +372,12 @@ export interface WebOrderReceivedPayload {
   orderId: string;
   orderNumber: string;
   customerName: string;
+  /** The website's own id for the order (older builds leave it out). */
+  webOrderId?: string;
+  /** Delivery or pick-up (older builds leave it out). */
+  fulfilment?: 'delivery' | 'pickup';
+  /** What the till bills (older builds leave it out). */
+  totalCents?: number | null;
   /** Set when the till's total is not what the website showed the customer. */
   totalMismatch?: { webTotalCents: number; tillTotalCents: number };
 }
@@ -384,6 +399,10 @@ export interface WebOrderImportFailedPayload {
   webOrderId: string;
   customerName: string;
   message: string;
+  customerPhone?: string | null;
+  /** The till stopped trying (true) or will try again (false / left out by older builds). */
+  final?: boolean;
+  reason?: 'gave_up' | 'stale' | 'error';
 }
 
 /** Listen for web-order:import-failed broadcasts from the website bridge. */
@@ -432,4 +451,17 @@ export function onPrinterFailed(
     printerEvents?: { onFailed: (cb: (p: PrinterFailedPayload) => void) => () => void };
   };
   return w.printerEvents?.onFailed(cb) ?? (() => {});
+}
+
+/** Someone clicked the till's Windows notice; the window is already in front. */
+export interface AlertOpenPayload {
+  kind: 'newOrder' | 'importFailed' | 'test';
+}
+
+/** Listen for alerts:open (a click on the Windows notice for a new or failed online order). */
+export function onAlertOpen(cb: (payload: AlertOpenPayload) => void): () => void {
+  const w = window as unknown as {
+    alertEvents?: { onOpen: (cb: (p: AlertOpenPayload) => void) => () => void };
+  };
+  return w.alertEvents?.onOpen(cb) ?? (() => {});
 }

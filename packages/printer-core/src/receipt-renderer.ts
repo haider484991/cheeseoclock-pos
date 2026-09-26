@@ -33,7 +33,7 @@
  *           [FBR QR placeholder]
  */
 
-import type { OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
+import type { DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode } from './escpos.js';
 import {
@@ -55,8 +55,15 @@ export interface ReceiptBranding {
 export interface RenderReceiptOpts {
   width?: PrinterWidth;
   branding: ReceiptBranding;
-  /** Open the cash drawer along with the receipt (typical for cash payment). */
+  /**
+   * Pulse the cash drawer at the end of the receipt. The till no longer uses
+   * this: a cash payment sends the pulse as its own job, first, so the drawer
+   * opens at once instead of after the logo, the FBR wait and the kitchen
+   * ticket (see print-spooler.ts).
+   */
   openDrawer?: boolean;
+  /** Which pin and pulse length the drawer wants (default pin 2, 50 ms). */
+  drawer?: DrawerSettings;
   /** Cut paper after printing — default true. Disable for a previewing/test print. */
   cutPaper?: boolean;
   /** FBR Digital Invoicing data once the worker has submitted. */
@@ -287,7 +294,7 @@ export function renderReceipt(
   }
   b.newline();
 
-  if (opts.openDrawer) b.openDrawer();
+  if (opts.openDrawer) b.openDrawer(opts.drawer);
   if (opts.cutPaper !== false) b.cut(true);
 
   return b.build();
@@ -409,12 +416,12 @@ export function renderKitchenTicket(
 }
 
 /**
- * Just the cash-drawer pulse — for taking money in when no paper is wanted,
- * e.g. a rider handing over the cash for an order whose bill already left
- * with the food.
+ * Just the cash-drawer pulse (ESC @ then ESC p) — what every cash payment,
+ * cash refund, drawer cash in / out and the Open drawer button send, on its
+ * own and ahead of any paper.
  */
-export function renderDrawerKick(): Uint8Array {
-  return new EscPosBuilder().openDrawer().build();
+export function renderDrawerKick(settings?: Partial<DrawerSettings> | null): Uint8Array {
+  return new EscPosBuilder().openDrawer(settings).build();
 }
 
 // Helpers ---------------------------------------------------------------------

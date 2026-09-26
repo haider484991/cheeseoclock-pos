@@ -2,6 +2,13 @@ import type { UUID } from './ids.js';
 
 export type Role = 'admin' | 'manager' | 'cashier';
 
+/**
+ * How someone signs in: a number PIN (4-12 digits, the keypad) or a password
+ * (6-64 characters with at least one letter). The rules live in
+ * @cheeseoclock/shared-schemas (sign-in-secret.ts).
+ */
+export type SecretKind = 'pin' | 'password';
+
 export interface User {
   id: UUID;
   fullName: string;
@@ -10,6 +17,11 @@ export interface User {
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * How this person signs in on THIS till. Null: the user was made on the
+   * other till and has no PIN or password here yet (they never travel).
+   */
+  secretKind: SecretKind | null;
 }
 
 export interface UserSession {

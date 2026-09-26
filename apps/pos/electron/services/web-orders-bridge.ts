@@ -39,6 +39,7 @@ import {
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
 import { isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
+import { orderAlerts } from './order-alerts-hub.js';
 import {
   CHUNKS_FORMAT,
   ChunksUnsupportedError,
@@ -943,6 +944,17 @@ class WebOrdersBridge {
         createdAt: web.createdAt,
         maxAgeMs: MAX_IMPORT_AGE_MS,
       });
+      // Staff hear nothing of it otherwise, and the customer was told to call.
+      const staleNotice = {
+        webOrderId: web.id,
+        customerName: web.customerName,
+        customerPhone: web.customerPhone,
+        message: 'came in while the till was off — cancelled on the website',
+        final: true,
+        reason: 'stale' as const,
+      };
+      notifyRenderer('web-order:import-failed', staleNotice);
+      orderAlerts.importFailed(staleNotice);
       return;
     }
     if (existing && existing.attempts >= MAX_IMPORT_ATTEMPTS) {
@@ -954,11 +966,16 @@ class WebOrdersBridge {
         method: 'POST',
         body: JSON.stringify({ status: 'cancelled' }),
       }).catch(() => undefined);
-      notifyRenderer('web-order:import-failed', {
+      const gaveUp = {
         webOrderId: web.id,
         customerName: web.customerName,
+        customerPhone: web.customerPhone,
         message: `gave up after ${MAX_IMPORT_ATTEMPTS} attempts`,
-      });
+        final: true,
+        reason: 'gave_up' as const,
+      };
+      notifyRenderer('web-order:import-failed', gaveUp);
+      orderAlerts.importFailed(gaveUp);
       return;
     }
 
@@ -1103,12 +1120,22 @@ class WebOrdersBridge {
           webTotalCents: web.totalCents,
         });
       }
-      notifyRenderer('web-order:received', {
+      const received = {
         orderId: order.id,
         orderNumber: order.orderNumber,
         customerName: web.customerName,
-        ...(totalDiffers ? { totalMismatch: { webTotalCents: web.totalCents, tillTotalCents } } : {}),
-      });
+        // For the banner: "New online order #0042 · Delivery · Rs 1,850".
+        webOrderId: web.id,
+        fulfilment: pickup ? ('pickup' as const) : ('delivery' as const),
+        totalCents: tillTotalCents,
+        ...(totalDiffers && tillTotalCents !== null
+          ? { totalMismatch: { webTotalCents: web.totalCents, tillTotalCents } }
+          : {}),
+      };
+      notifyRenderer('web-order:received', received);
+      // Kept in the main process too, so a screen that starts after this
+      // (restart, reload) still rings; never throws.
+      orderAlerts.orderReceived(received);
       this.lastImportError = null;
 
       // 6. Ack to the site (flips 'new' → 'accepted'). Its own try: a timeout
@@ -1142,7 +1169,11 @@ class WebOrdersBridge {
       notifyRenderer('web-order:import-failed', {
         webOrderId: web.id,
         customerName: web.customerName,
+        customerPhone: web.customerPhone,
         message,
+        // Still retrying: "call the customer" now is how an order got cooked twice.
+        final: false,
+        reason: 'error',
       });
     }
   }

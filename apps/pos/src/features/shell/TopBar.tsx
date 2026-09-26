@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@cheeseoclock/ui';
 import { useSessionStore } from '../../stores/sessionStore';
-import { LogOut, Clock, Calculator } from 'lucide-react';
+import { LogOut, Clock, Calculator, Inbox } from 'lucide-react';
 import { CalculatorPopover } from './CalculatorPopover';
 import { ShiftWidget } from './ShiftWidget';
+import { OpenDrawerDialog } from './OpenDrawerDialog';
 
 /** Re-render every minute so the wall clock stays current. */
 function useNowTick(intervalMs = 60_000): number {
@@ -41,6 +42,7 @@ export function TopBar() {
   const user = useSessionStore((s) => s.user);
   const logout = useSessionStore((s) => s.logout);
   const [calcOpen, setCalcOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const tick = useNowTick();
   const now = new Date(tick);
 
@@ -66,6 +68,17 @@ export function TopBar() {
 
       <div className="flex flex-wrap items-center gap-2">
         <ShiftWidget />
+        {user && (
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            title="Open the cash drawer — no sale"
+            className="flex items-center gap-1.5 rounded-xl bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-600 transition-colors hover:bg-amber-100 hover:text-amber-800 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-amber-950 dark:hover:text-amber-200"
+          >
+            <Inbox className="h-3.5 w-3.5" />
+            Open drawer
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setCalcOpen(true)}
@@ -95,6 +108,7 @@ export function TopBar() {
         </Button>
       </div>
       <CalculatorPopover open={calcOpen} onClose={() => setCalcOpen(false)} />
+      {drawerOpen && <OpenDrawerDialog onClose={() => setDrawerOpen(false)} />}
     </header>
   );
 }

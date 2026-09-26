@@ -20,12 +20,14 @@ export const ROW_IMAGE_VERSION = 1;
 export const RECEIVER_OWNED_COLUMNS: ReadonlySet<string> = new Set(['synced_at']);
 
 /**
- * Columns that never leave the till that wrote them. A user's PIN hash stays
- * on the till where the PIN was set; the other till gets the user (orders
- * point at them) but not their PIN.
+ * Columns that never leave the till that wrote them. A user's PIN or password
+ * hash stays on the till where it was set; the other till gets the user
+ * (orders point at them) but not their secret. Whether that secret is a PIN
+ * or a password (secret_kind, 0027) stays with the hash: if it travelled
+ * alone, the other till's "set a PIN" could relabel a password hash here.
  */
 export const LOCAL_ONLY_COLUMNS: Readonly<Record<string, readonly string[]>> = {
-  users: ['pin_hash'],
+  users: ['pin_hash', 'secret_kind'],
 };
 
 /**

@@ -19,7 +19,34 @@ export interface PrinterConnectionConfig {
   serial?: { path: string; baudRate?: number };
   codepage?: string;
   width?: PrinterWidth;
+  /**
+   * The cash drawer plugged into this printer's drawer port (receipt printer
+   * only). Missing means the usual pin 2, 50 ms.
+   */
+  drawer?: DrawerSettings;
 }
+
+/**
+ * How the printer pulses the cash drawer: which pin of its drawer port (DK)
+ * and how long. Almost every drawer opens on pin 2 with 50 ms; a stiff 24 V
+ * solenoid may want 100 ms. Never longer — a long pulse can burn the coil.
+ */
+export interface DrawerSettings {
+  pin: 2 | 5;
+  pulseMs: 50 | 100;
+}
+
+export const DEFAULT_DRAWER_SETTINGS: DrawerSettings = { pin: 2, pulseMs: 50 };
+
+/**
+ * `printer:failed` error codes for the cash drawer. NOT_OPENED: it did not
+ * open (use the key). UNSURE: the printer had a problem mid-way, so it may or
+ * may not have opened — and must not be sent again.
+ */
+export const DRAWER_NOT_OPENED_CODE = 'drawer_not_opened';
+export const DRAWER_UNSURE_CODE = 'drawer_unsure';
+/** A drawer pulse that could not go out in time and was not sent (it would pop late). */
+export const DRAWER_TOO_LATE_CODE = 'drawer_too_late';
 
 /** Which copy of a receipt is being printed. The shop copy carries a signature line. */
 export type ReceiptCopy = 'customer' | 'shop';
@@ -111,6 +138,12 @@ export interface PrintResult {
     code: string;
     message: string;
     recoverable: boolean;
+    /**
+     * The bytes may have reached the printer (e.g. a timeout after sending
+     * began). A job carrying a drawer pulse is then never sent again: the
+     * drawer may already be open, and a second pulse would open it twice.
+     */
+    maybeSent?: boolean;
   };
 }
 

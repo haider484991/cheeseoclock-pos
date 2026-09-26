@@ -4,10 +4,26 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { User, Role } from '@cheeseoclock/shared-types';
-import { Plus, Edit, X, KeyRound, UserX, UserCheck, Shield, UserCog, ShieldCheck } from 'lucide-react';
+import type { User, Role, SecretKind } from '@cheeseoclock/shared-types';
+import { normalizeSecret } from '@cheeseoclock/shared-schemas/sign-in-secret';
+import {
+  Plus,
+  Edit,
+  X,
+  KeyRound,
+  UserX,
+  UserCheck,
+  Shield,
+  UserCog,
+  ShieldCheck,
+  Grid3x3,
+  Keyboard,
+  AlertTriangle,
+} from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { SecretFields } from '../../components/secret/SecretFields';
+import { secretFieldsReady } from '../../components/secret/secretRules';
 import {
   FilterChips,
   Pagination,
@@ -132,7 +148,8 @@ export function UsersPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Users</h1>
           <p className="mt-1 text-stone-600 dark:text-stone-400">
-            Everyone who logs in to the till with a PIN. The role decides what they can see and change.
+            Everyone who logs in to the till, with a number PIN or a password. The role decides what they
+            can see and change.
           </p>
         </div>
         <Button variant="primary" onClick={() => setEditing('new')}>
@@ -153,6 +170,7 @@ export function UsersPage() {
                 <th className="pb-2">Name</th>
                 <th className="pb-2">Role</th>
                 <th className="pb-2">Status</th>
+                <th className="pb-2">Signs in with</th>
                 <th className="pb-2">Last login</th>
                 <th className="pb-2 text-right">Added</th>
                 <th className="pb-2">
@@ -189,6 +207,9 @@ export function UsersPage() {
                         </span>
                       )}
                     </td>
+                    <td className="py-2">
+                      <SignInBadge kind={u.secretKind} />
+                    </td>
                     <td className="py-2 text-xs text-stone-500">{when(u.lastLoginAt)}</td>
                     <td className="py-2 text-right text-xs text-stone-500">
                       {new Date(u.createdAt).toLocaleDateString()}
@@ -200,7 +221,7 @@ export function UsersPage() {
                           onClick={() => setEditing(u)}
                           className="rounded p-1 text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"
                           aria-label={`Edit ${u.fullName}`}
-                          title="Edit name, role or PIN"
+                          title="Edit name, role, PIN or password"
                         >
                           <Edit className="h-4 w-4" />
                         </button>
@@ -210,14 +231,14 @@ export function UsersPage() {
                             disabled={isMe || setActiveMut.isPending}
                             onClick={() => {
                               void askConfirm(
-                                `Deactivate "${u.fullName}"? Their PIN stops working straight away. You can switch them back on here later.`,
+                                `Deactivate "${u.fullName}"? Their PIN or password stops working straight away. You can switch them back on here later.`,
                               ).then((ok) => {
                                 if (ok) setActiveMut.mutate({ id: u.id, isActive: false });
                               });
                             }}
                             className="rounded p-1 text-red-500 hover:bg-red-50 disabled:opacity-30 dark:hover:bg-red-950"
                             aria-label={`Switch off ${u.fullName}`}
-                            title={isMe ? "You can't switch yourself off" : 'Switch off (PIN stops working)'}
+                            title={isMe ? "You can't switch yourself off" : 'Switch off (PIN or password stops working)'}
                           >
                             <UserX className="h-4 w-4" />
                           </button>
@@ -239,7 +260,7 @@ export function UsersPage() {
               })}
               {list.items.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-6 text-center text-stone-500">
+                  <td colSpan={7} className="py-6 text-center text-stone-500">
                     {q.isLoading ? 'Loading…' : (q.data?.length ?? 0) === 0 ? 'No users yet.' : 'No users match.'}
                   </td>
                 </tr>
@@ -277,9 +298,13 @@ function UserDialog({ existing, isMe, onClose }: { existing: User | null; isMe: 
   const { toast } = useToast();
   const [fullName, setFullName] = useState(existing?.fullName ?? '');
   const [role, setRole] = useState<Role>(existing?.role ?? 'cashier');
-  const [pin, setPin] = useState('');
-  const [confirmPin, setConfirmPin] = useState('');
-  const [showPinSection, setShowPinSection] = useState(!existing);
+  const [kind, setKind] = useState<SecretKind>(existing?.secretKind ?? 'pin');
+  const [secret, setSecret] = useState('');
+  const [confirmSecret, setConfirmSecret] = useState('');
+  // Someone made on the other till has nothing to sign in with here yet:
+  // setting one is the point of opening them.
+  const notSetHere = existing !== null && existing.secretKind === null;
+  const [showSecretSection, setShowSecretSection] = useState(!existing || notSetHere);
 
   const mut = useMutation({
     mutationFn: () => {
@@ -288,10 +313,10 @@ function UserDialog({ existing, isMe, onClose }: { existing: User | null; isMe: 
           id: existing.id,
           fullName: fullName.trim(),
           role,
-          ...(showPinSection && pin ? { pin } : {}),
+          ...(showSecretSection && secret.trim() ? { pin: normalizeSecret(secret) } : {}),
         });
       }
-      return ipc.users.create({ fullName: fullName.trim(), role, pin });
+      return ipc.users.create({ fullName: fullName.trim(), role, pin: normalizeSecret(secret) });
     },
     onSuccess: () => {
       toast({
@@ -302,6 +327,7 @@ function UserDialog({ existing, isMe, onClose }: { existing: User | null; isMe: 
       onClose();
     },
     onError: (e) =>
+      // The till's own words: "That password is already used by someone else".
       toast({
         title: 'Save failed',
         description: e instanceof Error ? e.message : String(e),
@@ -309,14 +335,13 @@ function UserDialog({ existing, isMe, onClose }: { existing: User | null; isMe: 
       }),
   });
 
-  const pinValid =
-    pin.length >= 4 &&
-    pin.length <= 8 &&
-    /^\d+$/.test(pin) &&
-    (!showPinSection || pin === confirmPin);
+  const secretOk = secretFieldsReady(kind, secret, confirmSecret);
+  // Someone from the other till can still be renamed or moved to another
+  // role with the boxes left empty.
+  const secretLeftEmpty = secret.trim() === '' && confirmSecret.trim() === '';
   const canSubmit =
     fullName.trim().length > 0 &&
-    (existing ? (!showPinSection || pinValid) : pinValid);
+    (existing ? !showSecretSection || secretOk || (notSetHere && secretLeftEmpty) : secretOk);
 
   async function save() {
     if (!canSubmit || mut.isPending) return;
@@ -330,6 +355,19 @@ function UserDialog({ existing, isMe, onClose }: { existing: User | null; isMe: 
     mut.mutate();
   }
 
+  const fields = (
+    <SecretFields
+      kind={kind}
+      onKind={setKind}
+      secret={secret}
+      onSecret={setSecret}
+      confirm={confirmSecret}
+      onConfirm={setConfirmSecret}
+      idPrefix="user"
+      who={isMe ? 'you' : 'they'}
+    />
+  );
+
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
@@ -339,7 +377,7 @@ function UserDialog({ existing, isMe, onClose }: { existing: User | null; isMe: 
             <Dialog.Title className="text-lg font-bold">
               {existing ? `Edit ${existing.fullName}` : 'Add user'}
             </Dialog.Title>
-            <Dialog.Description className="sr-only">Name, role and PIN.</Dialog.Description>
+            <Dialog.Description className="sr-only">Name, role and sign-in.</Dialog.Description>
             <Dialog.Close asChild>
               <button type="button" aria-label="Close" className="rounded p-2 text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800">
                 <X className="h-5 w-5" />
@@ -401,20 +439,38 @@ function UserDialog({ existing, isMe, onClose }: { existing: User | null; isMe: 
 
               {existing ? (
                 <div className="border-t border-stone-200 pt-3 dark:border-stone-700">
-                  <button
-                    type="button"
-                    onClick={() => setShowPinSection((s) => !s)}
-                    className="inline-flex items-center gap-1 text-sm text-amber-700 hover:underline dark:text-amber-300"
-                  >
-                    <KeyRound className="h-3 w-3" />
-                    {showPinSection ? 'Keep the current PIN' : 'Set a new PIN'}
-                  </button>
-                  {showPinSection && (
-                    <PinFields pin={pin} confirmPin={confirmPin} onPin={setPin} onConfirm={setConfirmPin} />
+                  {notSetHere ? (
+                    <div className="mb-3 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>
+                        {existing.fullName} was added on the other till. PINs and passwords never travel between
+                        tills, so set one for this till.
+                      </span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSecretSection((s) => !s);
+                        setSecret('');
+                        setConfirmSecret('');
+                      }}
+                      className="mb-2 inline-flex items-center gap-1 text-sm text-amber-700 hover:underline dark:text-amber-300"
+                    >
+                      <KeyRound className="h-3 w-3" />
+                      {showSecretSection ? 'Keep the current PIN or password' : 'Change PIN or password'}
+                    </button>
                   )}
+                  {showSecretSection && fields}
                 </div>
               ) : (
-                <PinFields pin={pin} confirmPin={confirmPin} onPin={setPin} onConfirm={setConfirmPin} />
+                fields
+              )}
+
+              {showSecretSection && isMe && (
+                <p className="text-xs text-stone-500">
+                  Write it down somewhere safe — there is no &quot;forgot password&quot; yet.
+                </p>
               )}
             </div>
 
@@ -431,51 +487,22 @@ function UserDialog({ existing, isMe, onClose }: { existing: User | null; isMe: 
   );
 }
 
-function PinFields({
-  pin,
-  confirmPin,
-  onPin,
-  onConfirm,
-}: {
-  pin: string;
-  confirmPin: string;
-  onPin: (v: string) => void;
-  onConfirm: (v: string) => void;
-}) {
-  const mismatch = pin.length > 0 && confirmPin.length > 0 && pin !== confirmPin;
-  const tooShort = pin.length > 0 && pin.length < 4;
+/** How someone signs in on this till: a PIN, a password, or nothing yet (made on the other till). */
+function SignInBadge({ kind }: { kind: SecretKind | null }) {
+  if (kind === null) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+        title="Added on the other till. Edit them to set a PIN or password for this till."
+      >
+        <AlertTriangle className="h-3 w-3" aria-hidden="true" /> Not set here — set one
+      </span>
+    );
+  }
+  const Icon = kind === 'pin' ? Grid3x3 : Keyboard;
   return (
-    <div className="mt-2 space-y-2">
-      <div>
-        <label htmlFor="user-pin" className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-          PIN (4–8 digits, not used by anyone else)
-        </label>
-        <input
-          id="user-pin"
-          type="password"
-          value={pin}
-          onChange={(e) => onPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
-          inputMode="numeric"
-          autoComplete="new-password"
-          className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono tracking-widest dark:border-stone-700 dark:bg-stone-800"
-        />
-        {tooShort && <div className="mt-1 text-xs text-red-500">At least 4 digits</div>}
-      </div>
-      <div>
-        <label htmlFor="user-pin-confirm" className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
-          Type the PIN again
-        </label>
-        <input
-          id="user-pin-confirm"
-          type="password"
-          value={confirmPin}
-          onChange={(e) => onConfirm(e.target.value.replace(/\D/g, '').slice(0, 8))}
-          inputMode="numeric"
-          autoComplete="new-password"
-          className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono tracking-widest dark:border-stone-700 dark:bg-stone-800"
-        />
-        {mismatch && <div className="mt-1 text-xs text-red-500">The two PINs don't match</div>}
-      </div>
-    </div>
+    <span className="inline-flex items-center gap-1 rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-700 dark:bg-stone-800 dark:text-stone-200">
+      <Icon className="h-3 w-3" aria-hidden="true" /> {kind === 'pin' ? 'PIN' : 'Password'}
+    </span>
   );
 }

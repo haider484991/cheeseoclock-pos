@@ -8,6 +8,7 @@ import { ConfirmHost } from './components/confirm/ConfirmHost';
 import { ipc } from './ipc/client';
 import { OnboardingPage } from './features/onboarding/OnboardingPage';
 import { UpdateBanner } from './features/shell/UpdateBanner';
+import { OrderAlerts } from './features/notifications/OrderAlerts';
 import './styles/globals.css';
 
 // Renderer-side Sentry — captures React errors + unhandled rejections in the
@@ -87,6 +88,8 @@ function RootGate() {
         <RouterProvider router={router} />
       )}
       <UpdateBanner />
+      {/* Here, not in AppShell: a website order rings on the PIN screen too. */}
+      {setupQ.data?.completed && <OrderAlerts />}
     </>
   );
 }

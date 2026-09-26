@@ -2,6 +2,7 @@ import { app } from 'electron';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { ok } from '@cheeseoclock/shared-types';
+import { onboardingAdminSchema } from '@cheeseoclock/shared-schemas';
 import { ensureDeviceInfo } from '../../db/repositories/device-repo.js';
 import { createUser } from '../../db/repositories/user-repo.js';
 import { createTaxCategory } from '../../db/repositories/tax-category-repo.js';
@@ -49,11 +50,18 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
 
   /**
    * One-shot onboarding endpoint — creates the first admin user, writes
-   * branding, optionally seeds tax categories. Refuses to run a second time.
+   * branding, optionally seeds tax categories, all in one transaction.
+   * Refuses to run a second time.
    *
    * Auth gate: anyone can call this BEFORE the first user exists. Once there's
    * a user, the next call throws (the only path to create more users is via
    * users:create which requires a logged-in admin).
+   *
+   * The owner's name and PIN or password are checked first, before anything
+   * is written: this used to save branding and tax categories, then fail on
+   * the PIN, and a retry added the tax categories a second time. The user,
+   * branding and tax now land together or not at all, and two calls at once
+   * cannot both make an owner (createUser firstUserOnly re-checks inside).
    */
   defineHandler('system:completeOnboarding', ctx, async (_ctx, payload) => {
     const existing = ctx.db
@@ -66,38 +74,51 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
       });
     }
 
+    const admin = onboardingAdminSchema.safeParse(payload.admin);
+    if (!admin.success) {
+      throw new IpcGuardError({
+        code: 'validation_failed',
+        message: admin.error.issues[0]?.message ?? 'Check your name and your PIN or password',
+      });
+    }
+
     const info = ensureDeviceInfo(ctx.db);
     const actor = { userId: null, deviceId: info.deviceId };
 
-    // Branding
-    setReceiptBranding(ctx.db, {
-      storeName: payload.storeName.trim() || 'My Store',
-      ...(payload.storeTagline ? { storeTagline: payload.storeTagline } : {}),
-      ...(payload.branchLine ? { branchLine: payload.branchLine } : {}),
-      ...(payload.phoneLine ? { phoneLine: payload.phoneLine } : {}),
-      ...(payload.footerLine ? { footerLine: payload.footerLine } : {}),
-      ...(payload.logoUrl ? { logoUrl: payload.logoUrl } : {}),
-    });
-
-    // Tax categories — only insert if the user picked some
-    for (const t of payload.taxCategories) {
-      if (!t.name.trim()) continue;
-      createTaxCategory(
-        ctx.db,
-        { name: t.name.trim(), rateBps: t.rateBps },
-        actor,
-      );
-    }
-
-    // First admin user — createUser hashes the PIN with argon2id (async).
+    // First admin user — createUser hashes the PIN or password with argon2id
+    // (async), then writes the user, branding and tax in one transaction.
     const adminUser = await createUser(
       ctx.db,
       {
-        fullName: payload.admin.fullName.trim(),
+        fullName: admin.data.fullName,
         role: 'admin',
-        pin: payload.admin.pin,
+        pin: admin.data.pin,
       },
       actor,
+      {
+        firstUserOnly: true,
+        inSameTransaction: () => {
+          // Branding
+          setReceiptBranding(ctx.db, {
+            storeName: payload.storeName.trim() || 'My Store',
+            ...(payload.storeTagline ? { storeTagline: payload.storeTagline } : {}),
+            ...(payload.branchLine ? { branchLine: payload.branchLine } : {}),
+            ...(payload.phoneLine ? { phoneLine: payload.phoneLine } : {}),
+            ...(payload.footerLine ? { footerLine: payload.footerLine } : {}),
+            ...(payload.logoUrl ? { logoUrl: payload.logoUrl } : {}),
+          });
+
+          // Tax categories — only insert if the user picked some
+          for (const t of payload.taxCategories) {
+            if (!t.name.trim()) continue;
+            createTaxCategory(
+              ctx.db,
+              { name: t.name.trim(), rateBps: t.rateBps },
+              actor,
+            );
+          }
+        },
+      },
     );
 
     return ok({ adminUserId: adminUser.id });

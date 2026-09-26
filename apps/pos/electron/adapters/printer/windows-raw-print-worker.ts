@@ -2,13 +2,16 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
+import { DRAWER_TOO_LATE_CODE } from '@cheeseoclock/shared-types';
 import {
+  MAX_DRAWER_CONFIRM_MS,
   WORKER_READY_LINE,
   buildWorkerScript,
   encodeJobLine,
   encodePowerShellCommand,
   isValidPrinterName,
   parseReplyLine,
+  type DrawerFailure,
 } from './windows-raw-print-protocol.js';
 
 /**
@@ -50,18 +53,53 @@ export interface RawPrintWorkerOptions {
 export class RawPrintError extends Error {
   readonly code: string;
   readonly recoverable: boolean;
-  constructor(code: string, message: string, recoverable: boolean) {
+  /**
+   * The job may have reached Windows (and so the printer): the line went to
+   * the worker and no clear answer came back. A drawer pulse is then never
+   * sent again — it may already have opened the drawer.
+   */
+  readonly maybeSent: boolean;
+  constructor(code: string, message: string, recoverable: boolean, maybeSent = false) {
     super(message);
     this.name = 'RawPrintError';
     this.code = code;
     this.recoverable = recoverable;
+    this.maybeSent = maybeSent;
   }
+}
+
+/** How a job is sent (see SendOptions in printer-core). */
+export interface RawSendOptions {
+  /** A cash-drawer pulse: the worker checks the printer first and never leaves it queued. */
+  drawer?: boolean;
+  /** Epoch ms after which the job must not be handed to Windows at all. */
+  notAfter?: number;
 }
 
 interface PendingJob {
   resolve: (written: number) => void;
   reject: (err: RawPrintError) => void;
   timer: NodeJS.Timeout;
+  drawer: boolean;
+}
+
+/** The worker's ERR reply as the error the spooler acts on. */
+function replyError(reply: { message: string; code?: DrawerFailure }, drawer: boolean): RawPrintError {
+  switch (reply.code) {
+    case 'offline':
+      // Nothing reached the printer and nothing is left queued: retry is safe.
+      return new RawPrintError('printer_offline', reply.message, true);
+    case 'not_sent':
+      return new RawPrintError('printer_not_sent', reply.message, true);
+    case 'maybe_sent':
+      return new RawPrintError('printer_maybe_sent', reply.message, false, true);
+    default:
+      // A drawer job that failed without a tag failed somewhere unexpected
+      // inside the checked send, after the job may have been queued.
+      return drawer
+        ? new RawPrintError('spooler_error', reply.message, false, true)
+        : new RawPrintError('spooler_error', reply.message, true);
+  }
 }
 
 const STDERR_TAIL_LIMIT = 2_000;
@@ -108,8 +146,22 @@ export class RawPrintWorker {
     this.onEvent = opts.onEvent ?? (() => {});
   }
 
+  /** Start the worker now, so the first print does not wait for it. Never throws. */
+  warm(): void {
+    if (this.disposed) return;
+    this.ensureStarted().catch(() => undefined);
+  }
+
+  /** Start the worker if needed; resolves once it is ready for jobs. */
+  whenReady(): Promise<void> {
+    if (this.disposed) {
+      return Promise.reject(new RawPrintError('disposed', 'Print worker was shut down', true));
+    }
+    return this.ensureStarted();
+  }
+
   /** Resolves with the byte count the spooler accepted. */
-  async send(printerName: string, bytes: Uint8Array): Promise<number> {
+  async send(printerName: string, bytes: Uint8Array, opts: RawSendOptions = {}): Promise<number> {
     if (this.disposed) {
       throw new RawPrintError('disposed', 'Print worker was shut down', true);
     }
@@ -119,6 +171,15 @@ export class RawPrintWorker {
     await this.ensureStarted();
     const proc = this.proc;
     if (!proc) throw new RawPrintError('worker_exited', 'Print worker is not running', true);
+    // Starting the worker can take a while on a slow PC. A drawer pulse that
+    // late would open a drawer nobody is standing at: don't send it at all.
+    if (opts.notAfter !== undefined && Date.now() > opts.notAfter) {
+      throw new RawPrintError(DRAWER_TOO_LATE_CODE, 'The printer was not ready in time', false);
+    }
+    const drawer = opts.drawer === true;
+    const flags = drawer
+      ? { drawerConfirmMs: opts.notAfter !== undefined ? opts.notAfter - Date.now() : MAX_DRAWER_CONFIRM_MS }
+      : {};
 
     const id = `${Date.now().toString(36)}-${(this.seq += 1)}`;
     return new Promise<number>((resolve, reject) => {
@@ -132,11 +193,13 @@ export class RawPrintWorker {
             'timeout',
             `Windows did not accept the print job within ${this.jobTimeoutMs}ms`,
             true,
+            // The line went out: Windows may have the job.
+            true,
           ),
         );
       }, this.jobTimeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      proc.stdin.write(encodeJobLine(id, printerName, bytes), (err) => {
+      this.pending.set(id, { resolve, reject, timer, drawer });
+      proc.stdin.write(encodeJobLine(id, printerName, bytes, flags), (err) => {
         if (err) {
           const job = this.pending.get(id);
           if (!job) return;
@@ -218,7 +281,7 @@ export class RawPrintWorker {
         clearTimeout(job.timer);
         this.pending.delete(reply.id);
         if (reply.ok) job.resolve(reply.written);
-        else job.reject(new RawPrintError('spooler_error', reply.message, true));
+        else job.reject(replyError(reply, job.drawer));
       });
 
       const onGone = (why: string) => {
@@ -237,7 +300,8 @@ export class RawPrintWorker {
         for (const [id, job] of this.pending) {
           clearTimeout(job.timer);
           this.pending.delete(id);
-          job.reject(new RawPrintError('worker_exited', message, true));
+          // Its line went to the worker, which may have handed it to Windows.
+          job.reject(new RawPrintError('worker_exited', message, true, true));
         }
       };
       proc.on('exit', (code, signal) =>

@@ -4,6 +4,7 @@ import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import type { MonoRaster, PrinterConnectionConfig } from '@cheeseoclock/printer-core';
 import type {
+  DrawerSettings,
   PrintPolicy,
   PrinterWidth,
   ReceiptLogoRasterSet,
@@ -25,6 +26,14 @@ export const PRINT_POLICY_KEY = 'printer.policy';
 export const BRANDING_KEY = 'receipt.branding';
 
 const TransportSchema = z.enum(['usb', 'network', 'bluetooth', 'serial']);
+
+/** The cash drawer on the receipt printer: pin 2 or 5, a 50 or 100 ms pulse — nothing else. */
+export const DrawerSettingsSchema: z.ZodType<DrawerSettings> = z.object({
+  pin: z.union([z.literal(2), z.literal(5)], { errorMap: () => ({ message: 'The drawer pin is 2 or 5' }) }),
+  pulseMs: z.union([z.literal(50), z.literal(100)], {
+    errorMap: () => ({ message: 'The drawer pulse is 50 or 100 ms' }),
+  }),
+});
 
 export const PrinterConnectionConfigSchema = z
   .object({
@@ -60,6 +69,9 @@ export const PrinterConnectionConfigSchema = z
       .optional(),
     codepage: z.string().optional(),
     width: z.union([z.literal(32), z.literal(48)]).optional(),
+    // No default: a config saved before this setting existed reads unchanged
+    // (and so keeps its "logo checked" mark — see receipt-logo printerKey).
+    drawer: DrawerSettingsSchema.optional(),
   })
   .superRefine((c, ctx) => {
     if (c.transport === 'network' && !c.network) {
@@ -86,7 +98,24 @@ export function getReceiptPrinterConfig(db: AppDatabase): PrinterConnectionConfi
   const raw = getSettingRaw(db, PRINTER_RECEIPT_KEY);
   if (!raw) return null;
   const parsed = PrinterConnectionConfigSchema.safeParse(raw);
-  return parsed.success ? (parsed.data as PrinterConnectionConfig) : null;
+  if (parsed.success) return parsed.data as PrinterConnectionConfig;
+  // A bad drawer value must never drop the real printer back to "no printer"
+  // (receipts would silently go to a file): keep the printer, use the usual
+  // drawer pulse.
+  if (raw && typeof raw === 'object' && 'drawer' in raw) {
+    const { drawer: _bad, ...rest } = raw as Record<string, unknown>;
+    const retry = PrinterConnectionConfigSchema.safeParse(rest);
+    if (retry.success) {
+      log.warn('Receipt printer drawer setting unreadable; using pin 2, 50 ms');
+      return retry.data as PrinterConnectionConfig;
+    }
+  }
+  return null;
+}
+
+/** The "No printer" setup: jobs are written to files, nothing reaches a drawer. */
+export function isNoPrinter(config: PrinterConnectionConfig): boolean {
+  return config.transport === 'network' && config.network?.host === 'mock';
 }
 
 export function setReceiptPrinterConfig(

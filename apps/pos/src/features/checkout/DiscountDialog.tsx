@@ -4,6 +4,9 @@ import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { Lock, X } from 'lucide-react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
+import { SecretInput } from '../../components/secret/SecretInput';
+import { SecretHint } from '../../components/secret/SecretHint';
+import { approvalProblem, secretReady } from '../../components/secret/secretRules';
 import { ownsEnter } from './keys';
 import {
   FLAT_PRESETS_RUPEES,
@@ -26,8 +29,8 @@ interface Props {
  * Discount in two taps: pick a preset (10 / 20 / 25 / 50 / 100 %, or Rs 100 /
  * 200 / 500), check the new total, Apply — or tap the same preset again. Each
  * preset shows what it takes off this order, and a lock where the till will
- * ask for a manager's PIN (over 10%, or a flat amount over 10% of the order —
- * the same rule the till checks when it saves the discount).
+ * ask for a manager's PIN or password (over 10%, or a flat amount over 10% of
+ * the order — the same rule the till checks when it saves the discount).
  */
 export function DiscountDialog({ onClose }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
@@ -59,7 +62,7 @@ export function DiscountDialog({ onClose }: Props) {
   const before = previewDiscount(lines, subtotal, null);
   const after = previewDiscount(lines, subtotal, choice);
   const needsPin = after.needsApproval;
-  const pinOk = /^\d{4,8}$/.test(pin);
+  const pinOk = secretReady(pin);
   const canApply = !!choice && after.discountCents > 0 && (!needsPin || pinOk) && !saving && !busy;
 
   function focusPinSoon() {
@@ -91,7 +94,7 @@ export function DiscountDialog({ onClose }: Props) {
       return;
     }
     if (preview.needsApproval && !pinOk) {
-      setError('This discount needs a manager PIN.');
+      setError(pin.trim() ? approvalProblem(pin) : "This discount needs a manager's PIN or password.");
       pinRef.current?.focus();
       return;
     }
@@ -128,7 +131,7 @@ export function DiscountDialog({ onClose }: Props) {
 
   // Enter applies from anywhere in the dialog except a button reached with
   // Tab (which does its own thing). In the "other amount" box, Enter goes to
-  // the PIN box first when one is needed.
+  // the PIN / password box first when one is needed.
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key !== 'Enter') return;
     const target = e.target as HTMLElement;
@@ -158,7 +161,7 @@ export function DiscountDialog({ onClose }: Props) {
         type="button"
         onClick={() => pick(preset)}
         aria-pressed={selected}
-        aria-label={`${describeDiscount(preset)}, takes ${formatCents(p.discountCents)} off${p.needsApproval ? ', needs a manager PIN' : ''}`}
+        aria-label={`${describeDiscount(preset)}, takes ${formatCents(p.discountCents)} off${p.needsApproval ? ", needs a manager's PIN or password" : ''}`}
         className={presetClass(selected)}
       >
         <span className="text-lg font-bold leading-tight">{label}</span>
@@ -299,24 +302,26 @@ export function DiscountDialog({ onClose }: Props) {
             </section>
 
             {needsPin && (
-              <label className="flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-700 dark:bg-amber-950">
-                <Lock className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden="true" />
-                <span className="text-sm font-semibold text-amber-900 dark:text-amber-100">Manager PIN</span>
-                <input
-                  ref={pinRef}
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  value={pin}
-                  onChange={(e) => {
-                    setPin(e.target.value.replace(/\D/g, '').slice(0, 8));
-                    setError(null);
-                  }}
-                  className="h-11 min-w-0 flex-1 rounded-lg border border-amber-300 bg-white px-3 font-mono text-lg tracking-widest dark:border-amber-700 dark:bg-stone-900"
-                  placeholder="••••"
-                  maxLength={8}
-                />
-              </label>
+              <div>
+                <label className="flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-700 dark:bg-amber-950">
+                  <Lock className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden="true" />
+                  <span className="text-sm font-semibold text-amber-900 dark:text-amber-100">
+                    Manager PIN or password
+                  </span>
+                  <SecretInput
+                    ref={pinRef}
+                    value={pin}
+                    onChange={(v) => {
+                      setPin(v);
+                      setError(null);
+                    }}
+                    wrapperClassName="min-w-0 flex-1"
+                    className="h-11 min-w-0 flex-1 rounded-lg border border-amber-300 bg-white px-3 font-mono text-lg tracking-widest dark:border-amber-700 dark:bg-stone-900"
+                    placeholder="••••"
+                  />
+                </label>
+                <SecretHint value={pin} className="mt-1 px-1" />
+              </div>
             )}
 
             <div className="rounded-xl bg-stone-100 px-4 py-3 dark:bg-stone-800" aria-live="polite">

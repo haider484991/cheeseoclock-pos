@@ -331,8 +331,15 @@ describe('renderDrawerKick', () => {
     const bytes = renderDrawerKick();
     expect([...bytes].join(',')).toContain(DRAWER_KICK);
     const decoded = decodeEscPos(bytes);
-    expect(decoded.map((r) => r.text).filter(Boolean)).toEqual([]);
+    expect(decoded.map((r) => r.text)).toEqual(['[drawer pin 2, 50 ms]']);
     expect(decoded.some((r) => r.text === CUT_MARKER)).toBe(false);
+  });
+
+  it('uses the drawer settings of the printer', () => {
+    const bytes = renderDrawerKick({ pin: 5, pulseMs: 100 });
+    expect([...bytes]).toEqual([0x1b, 0x40, 0x1b, 0x70, 0x01, 0x32, 0xfa]);
+    expect(decodeEscPos(bytes).map((r) => r.text)).toEqual(['[drawer pin 5, 100 ms]']);
+    expect([...renderDrawerKick(null)].join(',')).toContain(DRAWER_KICK);
   });
 });
 
@@ -420,6 +427,10 @@ describe('renderReceipt — shop logo', () => {
     const bytes = renderReceipt(snapshot(), { branding, logo: logo(), openDrawer: true });
     expect([...bytes].join(',')).toContain(DRAWER_KICK);
     expect(rows(bytes).at(-1)).toBe(CUT_MARKER);
+    expect(rows(bytes).at(-2 - LINES_BEFORE_CUT)).toBe('[drawer pin 2, 50 ms]');
+    const pin5 = renderReceipt(snapshot(), { branding, openDrawer: true, drawer: { pin: 5, pulseMs: 100 } });
+    expect([...pin5].join(',')).toContain([0x1b, 0x70, 0x01, 0x32, 0xfa].join(','));
+    expect([...pin5].join(',')).not.toContain(DRAWER_KICK);
   });
 
   it('never goes on a kitchen ticket', () => {

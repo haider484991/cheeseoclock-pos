@@ -7,7 +7,7 @@
  * in unit tests and (eventually) in a browser-side mock.
  */
 
-import type { PrinterWidth } from '@cheeseoclock/shared-types';
+import type { DrawerSettings, PrinterWidth } from '@cheeseoclock/shared-types';
 import type { MonoRaster } from './logo-raster.js';
 
 // ESC/POS commands ------------------------------------------------------------
@@ -29,8 +29,34 @@ const DOUBLE_HEIGHT_ON = [GS, 0x21, 0x01];
 const NORMAL_SIZE = [GS, 0x21, 0x00];
 const CUT_FULL = [GS, 0x56, 0x00];
 const CUT_PARTIAL = [GS, 0x56, 0x01];
-const DRAWER_KICK = [ESC, 0x70, 0x00, 0x19, 0xfa]; // open drawer 1
 const FEED = (n: number) => [ESC, 0x64, n & 0xff];
+
+/**
+ * ESC p m t1 t2 — pulse the cash drawer. m picks the drawer port pin (0 = pin
+ * 2, 1 = pin 5); t1 is the on-time and t2 the off-time, both in 2 ms steps.
+ * On-time is 50 ms (t1 = 25), or 100 ms (t1 = 50) for a stiff drawer — never
+ * longer, whatever arrives: anything unknown falls back to pin 2, 50 ms. The
+ * off-time stays 500 ms (t2 = 250).
+ */
+export function drawerPulseBytes(settings?: Partial<DrawerSettings> | null): number[] {
+  return [ESC, 0x70, settings?.pin === 5 ? 0x01 : 0x00, settings?.pulseMs === 100 ? 50 : 25, 0xfa];
+}
+
+/**
+ * DLE EOT 1 — "send your status now". Epson-compatible printers answer it at
+ * once with one byte, even while offline or in error.
+ */
+export const DLE_EOT_PRINTER_STATUS = [DLE, 0x04, 0x01];
+
+/**
+ * Whether a DLE EOT 1 answer says the printer is offline (cover open, paper
+ * out, an error) — a drawer pulse sent now would wait inside the printer and
+ * pop the drawer when it recovers. Only a well-formed answer counts (bits 1
+ * and 4 set, bits 0 and 7 clear); anything else is "don't know".
+ */
+export function statusByteSaysOffline(b: number): boolean {
+  return (b & 0x93) === 0x12 && (b & 0x08) !== 0;
+}
 
 /**
  * Lines fed before the blade drops. The print head sits above the cutter, so
@@ -201,8 +227,9 @@ export class EscPosBuilder {
     return this.feed(LINES_BEFORE_CUT).push(...(partial ? CUT_PARTIAL : CUT_FULL));
   }
 
-  openDrawer() {
-    return this.push(...DRAWER_KICK);
+  /** Pulse the cash drawer (see drawerPulseBytes). */
+  openDrawer(settings?: Partial<DrawerSettings> | null) {
+    return this.push(...drawerPulseBytes(settings));
   }
 
   /** ESC @ — back to the printer's switched-on modes: left aligned, normal text. */

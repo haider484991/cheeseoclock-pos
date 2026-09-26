@@ -1,13 +1,20 @@
 import { Socket } from 'node:net';
 import { v7 as uuidv7 } from 'uuid';
 import log from 'electron-log/main';
-import type {
-  PrinterAdapter,
-  PrintResult,
-  PrinterConnectionConfig,
-  TestPageOptions,
+import {
+  DLE_EOT_PRINTER_STATUS,
+  statusByteSaysOffline,
+  type PrinterAdapter,
+  type PrintResult,
+  type PrinterConnectionConfig,
+  type SendOptions,
+  type TestPageOptions,
 } from '@cheeseoclock/printer-core';
+import { DRAWER_TOO_LATE_CODE } from '@cheeseoclock/shared-types';
 import { renderTestPage } from './test-page.js';
+
+/** How long to wait for the printer's answer to "are you online?" before a drawer pulse. */
+const STATUS_WAIT_MS = 300;
 
 /**
  * Raw TCP printer adapter — works with the vast majority of network-capable
@@ -44,7 +51,14 @@ export class NetworkPrinterAdapter implements PrinterAdapter {
     return this.connected;
   }
 
-  async send(bytes: Uint8Array): Promise<PrintResult> {
+  /**
+   * One socket per job. For a drawer pulse, two extra rules: the printer is
+   * asked first whether it is online (DLE EOT 1 — a printer with its lid open
+   * or out of paper would keep the pulse and pop the drawer when it
+   * recovers), and a failure after the bytes started going out says
+   * `maybeSent`, so the pulse is never sent a second time.
+   */
+  async send(bytes: Uint8Array, opts: SendOptions = {}): Promise<PrintResult> {
     const start = Date.now();
     const net = this.config.network;
     if (!net) {
@@ -59,42 +73,41 @@ export class NetworkPrinterAdapter implements PrinterAdapter {
     return new Promise<PrintResult>((resolve) => {
       const socket = new Socket();
       let finished = false;
+      /** The job's own bytes began to go out (the status question doesn't count). */
+      let started = false;
       const done = (result: PrintResult) => {
         if (finished) return;
         finished = true;
         socket.destroy();
         resolve(result);
       };
+      const fail = (code: string, message: string, recoverable: boolean) =>
+        done({
+          ok: false,
+          durationMs: Date.now() - start,
+          error: { code, message, recoverable, ...(started ? { maybeSent: true } : {}) },
+        });
 
       socket.setTimeout(timeoutMs);
       socket.once('error', (err) => {
-        log.warn('Network printer error', { host: net.host, port: net.port, err: err.message });
-        done({
-          ok: false,
-          durationMs: Date.now() - start,
-          error: { code: 'network_error', message: err.message, recoverable: true },
-        });
+        log.warn('Network printer error', { host: net.host, port: net.port, err: err.message, started });
+        fail('network_error', err.message, true);
       });
       socket.once('timeout', () => {
-        log.warn('Network printer timeout', { host: net.host, port: net.port, timeoutMs });
-        done({
-          ok: false,
-          durationMs: Date.now() - start,
-          error: {
-            code: 'timeout',
-            message: `Printer did not respond within ${timeoutMs}ms`,
-            recoverable: true,
-          },
-        });
+        log.warn('Network printer timeout', { host: net.host, port: net.port, timeoutMs, started });
+        fail('timeout', `Printer did not respond within ${timeoutMs}ms`, true);
       });
-      socket.connect(net.port, net.host, () => {
+
+      const write = () => {
+        if (finished) return;
+        if (opts.notAfter !== undefined && Date.now() > opts.notAfter) {
+          fail(DRAWER_TOO_LATE_CODE, 'The printer was not ready in time', false);
+          return;
+        }
+        started = true;
         socket.write(Buffer.from(bytes), (writeErr) => {
           if (writeErr) {
-            done({
-              ok: false,
-              durationMs: Date.now() - start,
-              error: { code: 'write_error', message: writeErr.message, recoverable: true },
-            });
+            fail('write_error', writeErr.message, true);
             return;
           }
           // Give the printer a moment to consume the buffer, then close cleanly.
@@ -102,6 +115,32 @@ export class NetworkPrinterAdapter implements PrinterAdapter {
             done({ ok: true, durationMs: Date.now() - start });
           });
         });
+      };
+
+      socket.connect(net.port, net.host, () => {
+        if (!opts.drawer) {
+          write();
+          return;
+        }
+        // Ask first. No answer (printers without real-time status) → send as
+        // before; a clear "offline" → don't send, and let the till retry.
+        const timer = setTimeout(() => {
+          socket.removeListener('data', onData);
+          write();
+        }, STATUS_WAIT_MS);
+        const onData = (chunk: Buffer) => {
+          clearTimeout(timer);
+          socket.removeListener('data', onData);
+          const b = chunk[0];
+          if (b !== undefined && statusByteSaysOffline(b)) {
+            log.warn('Network printer says it is offline; drawer pulse not sent', { host: net.host, status: b });
+            fail('printer_offline', 'It says it is offline (lid open, out of paper or an error).', true);
+            return;
+          }
+          write();
+        };
+        socket.on('data', onData);
+        socket.write(Buffer.from(DLE_EOT_PRINTER_STATUS));
       });
     });
   }

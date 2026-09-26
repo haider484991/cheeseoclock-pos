@@ -225,6 +225,117 @@ describe('RawPrintWorker', () => {
     expect(spawned).toHaveLength(1);
   });
 
+  describe('drawer pulses', () => {
+    const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
+    const KICK = new Uint8Array([0x1b, 0x40, 0x1b, 0x70, 0x00, 0x19, 0xfa]);
+
+    async function drawerJob(opts: { notAfter?: number } = {}) {
+      const h = harness();
+      const result = h.worker.send('P', KICK, { drawer: true, ...opts });
+      const proc = h.spawned[0]!;
+      proc.ready();
+      for (let i = 0; i < 50 && proc.jobs.length === 0; i += 1) await new Promise((r) => setTimeout(r, 2));
+      const line = proc.jobs[0]!;
+      const job = await nextJob(proc);
+      return { ...h, proc, result, job, line };
+    }
+
+    it('sends a drawer job with the K flag and its confirm window; receipts go without', async () => {
+      const { proc, result, job, line } = await drawerJob({ notAfter: Date.now() + 8_000 });
+      const flag = line.split('\t')[3]!;
+      expect(flag).toMatch(/^K\d+$/);
+      const ms = Number(flag.slice(1));
+      expect(ms).toBeGreaterThan(6_000);
+      expect(ms).toBeLessThanOrEqual(8_000);
+      expect(job.bytes).toEqual([...KICK]);
+      proc.reply(job.id, 'OK', String(KICK.length));
+      await expect(result).resolves.toBe(KICK.length);
+
+      const { worker, spawned } = harness();
+      const receipt = worker.send('P', new Uint8Array([1]));
+      spawned[0]!.ready();
+      for (let i = 0; i < 50 && spawned[0]!.jobs.length === 0; i += 1) await new Promise((r) => setTimeout(r, 2));
+      expect(spawned[0]!.jobs[0]!.split('\t')).toHaveLength(3);
+      spawned[0]!.reply((await nextJob(spawned[0]!)).id, 'OK', '1');
+      await receipt;
+    });
+
+    it('offline: retryable, nothing sent', async () => {
+      const { proc, result, job } = await drawerJob();
+      proc.reply(job.id, 'ERR', b64('[offline] Windows says the printer is off (status 0x80)'));
+      const err = await rejection(result);
+      expect(err.code).toBe('printer_offline');
+      expect(err.recoverable).toBe(true);
+      expect(err.maybeSent).toBe(false);
+      expect(err.message).toBe('Windows says the printer is off (status 0x80)');
+    });
+
+    it('not sent: retryable', async () => {
+      const { proc, result, job } = await drawerJob();
+      proc.reply(job.id, 'ERR', b64('[not_sent] OpenPrinter failed (1801): bad name'));
+      const err = await rejection(result);
+      expect(err.code).toBe('printer_not_sent');
+      expect(err.recoverable).toBe(true);
+      expect(err.maybeSent).toBe(false);
+    });
+
+    it('maybe sent: never retried', async () => {
+      const { proc, result, job } = await drawerJob();
+      proc.reply(job.id, 'ERR', b64('[maybe_sent] The printer stopped while taking the drawer pulse'));
+      const err = await rejection(result);
+      expect(err.code).toBe('printer_maybe_sent');
+      expect(err.recoverable).toBe(false);
+      expect(err.maybeSent).toBe(true);
+    });
+
+    it('an untagged failure of a drawer job counts as maybe sent (a receipt just retries)', async () => {
+      const { proc, result, job } = await drawerJob();
+      proc.reply(job.id, 'ERR', b64('Object reference not set to an instance of an object.'));
+      const err = await rejection(result);
+      expect(err.recoverable).toBe(false);
+      expect(err.maybeSent).toBe(true);
+    });
+
+    it('a timeout or a dying worker after the line went out may have sent it', async () => {
+      const t = harness({ jobTimeoutMs: 30 });
+      const timedOut = t.worker.send('P', KICK, { drawer: true });
+      t.spawned[0]!.ready();
+      await nextJob(t.spawned[0]!);
+      const e1 = await rejection(timedOut);
+      expect(e1.code).toBe('timeout');
+      expect(e1.maybeSent).toBe(true);
+
+      const { proc, result } = await drawerJob();
+      proc.emit('exit', null, 'SIGKILL');
+      const e2 = await rejection(result);
+      expect(e2.code).toBe('worker_exited');
+      expect(e2.maybeSent).toBe(true);
+    });
+
+    it('refuses to hand over a pulse once it is too late, without sending anything', async () => {
+      const { worker, spawned } = harness();
+      const late = worker.send('P', KICK, { drawer: true, notAfter: Date.now() - 1 });
+      spawned[0]!.ready();
+      const err = await rejection(late);
+      expect(err.code).toBe('drawer_too_late');
+      expect(err.recoverable).toBe(false);
+      expect(err.maybeSent).toBe(false);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(spawned[0]!.jobs).toHaveLength(0);
+    });
+
+    it('warm() starts the worker ahead of the first job', async () => {
+      const { worker, spawned } = harness();
+      worker.warm();
+      expect(spawned).toHaveLength(1);
+      spawned[0]!.ready();
+      const sent = worker.send('P', new Uint8Array([1]));
+      spawned[0]!.reply((await nextJob(spawned[0]!)).id, 'OK', '1');
+      await expect(sent).resolves.toBe(1);
+      expect(spawned).toHaveLength(1);
+    });
+  });
+
   it('round-trips through the same parser the worker replies are read with', () => {
     expect(parseReplyLine('x\tOK\t5')).toEqual({ id: 'x', ok: true, written: 5 });
   });

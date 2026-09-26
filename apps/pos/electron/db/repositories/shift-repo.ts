@@ -227,7 +227,7 @@ export function closeShift(
         .join(', ');
       throw new Error(
         `Collect payment for ${list}${unpaid.length > 5 ? ' and more' : ''} before closing the shift ` +
-          `(Live Orders or Order History) — or cancel them with a manager PIN.`,
+          `(Live Orders or Order History) — or cancel them with a manager's PIN or password.`,
       );
     }
 

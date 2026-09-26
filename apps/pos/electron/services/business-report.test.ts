@@ -10,6 +10,7 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 import type { BusinessReport, ReportDiscountLine, ReportItemLine } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import {
+  REPORT_LIST_CAP,
   channelOf,
   getBusinessReport,
   ingredientCostCents,
@@ -321,6 +322,19 @@ function seedTradingDay(raw: NodeDatabase): void {
     )
     .run(T0, T0, DEV);
 
+  // The drawer opened by hand: Ali twice with Sara's PIN, Sara's test, Sara's
+  // count at close (not a no-sale open), and Ali once the day before.
+  const dopen = raw.prepare(
+    `INSERT INTO drawer_opens (id, shift_id, kind, reason, user_id, approved_by_user_id, created_at, updated_at, device_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  dopen.run('do1', 's1', 'no_sale', 'Change', 'u_ali', 'u_sara', '2026-09-25T09:00:00.000Z', T0, DEV);
+  dopen.run('do2', 's1', 'no_sale', null, 'u_ali', 'u_sara', '2026-09-25T12:00:00.000Z', T0, DEV);
+  dopen.run('do3', 's1', 'test', null, 'u_sara', null, '2026-09-25T08:00:00.000Z', T0, DEV);
+  dopen.run('do4', 's1', 'count', null, 'u_sara', null, '2026-09-25T20:25:00.000Z', T0, DEV);
+  dopen.run('do5', null, 'no_sale', 'Check notes', 'u_ali', 'u_sara', '2026-09-24T22:00:00.000Z', T0, DEV);
+  dopen.run('do6', null, 'no_sale', 'Late', 'u_owner', null, '2026-09-25T23:30:00.000Z', T0, DEV);
+
   // Stock: buns at Rs 20 each (no pack), cheese bought as 1,000 g for Rs 1,500.
   const ing = raw.prepare(
     `INSERT INTO ingredients (id, name, unit, cost_per_unit_cents, pack_size, pack_price_cents, created_at, updated_at, device_id)
@@ -453,7 +467,50 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
       ['Ali', 3, 218880, 7000, 1],
       ['Website orders', 2, 63800, 5000, 0],
       ['Sara', 1, 34800, 0, 0],
+      ['Owner', 0, 0, 0, 0],
     ]);
+  });
+
+  it('counts each person’s no-sale drawer opens (not the count at close), in the period only', () => {
+    expect(report.staff.map((s) => [s.name, s.noSaleOpens])).toEqual([
+      ['Ali', 2],
+      ['Website orders', 0],
+      ['Sara', 1],
+      // Opened the drawer with no sale and took no orders: still on the list.
+      ['Owner', 1],
+    ]);
+  });
+
+  it('lists every drawer opened by hand, newest first, with who approved it', () => {
+    expect(report.drawerOpens.map((d) => [d.id, d.kind, d.reason, d.openedBy, d.approvedBy, d.outsideShift])).toEqual([
+      ['do6', 'no_sale', 'Late', 'Owner', null, true],
+      ['do4', 'count', null, 'Sara', null, false],
+      ['do2', 'no_sale', null, 'Ali', 'Sara', false],
+      ['do1', 'no_sale', 'Change', 'Ali', 'Sara', false],
+      ['do3', 'test', null, 'Sara', null, false],
+    ]);
+    expect(report.drawerOpenCount).toBe(5);
+  });
+
+  it('counts every drawer opened by hand even past the listed ones (a busy month)', () => {
+    const { raw, db } = openMigrated();
+    seedBasics(raw);
+    const dopen = raw.prepare(
+      `INSERT INTO drawer_opens (id, shift_id, kind, reason, user_id, approved_by_user_id, created_at, updated_at, device_id)
+       VALUES (?, NULL, 'no_sale', 'Change', 'u_ali', 'u_sara', ?, ?, ?)`,
+    );
+    const total = REPORT_LIST_CAP + 120;
+    for (let i = 0; i < total; i++) {
+      const at = new Date(Date.parse('2026-09-01T06:00:00.000Z') + i * 60_000).toISOString();
+      dopen.run(`dx${String(i).padStart(4, '0')}`, at, at, DEV);
+    }
+    const r = getBusinessReport(db, { sinceIso: '2026-09-01T00:00:00.000Z', untilIso: '2026-10-01T00:00:00.000Z' });
+    raw.close();
+    expect(r.drawerOpens).toHaveLength(REPORT_LIST_CAP);
+    expect(r.drawerOpens[0]!.id).toBe(`dx${String(total - 1).padStart(4, '0')}`); // the newest
+    expect(r.drawerOpenCount).toBe(total);
+    // …and the per-person column agrees with it.
+    expect(r.staff.find((s) => s.name === 'Ali')?.noSaleOpens).toBe(total);
   });
 
   it('shows the shifts of the period with their stored drawer figures', () => {
@@ -470,6 +527,9 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         varianceCents: -10000,
         cashInCents: 0,
         cashOutCents: 20000,
+        cashMovementCount: 1,
+        // Two no-sale opens and a test; the count at close is not one.
+        noSaleOpens: 3,
       },
     ]);
   });
@@ -524,6 +584,8 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
     expect(r.previous).toBeNull();
     expect(r.items).toEqual([]);
     expect(r.foodCost).toMatchObject({ usedCents: 0, hasUsage: false, hasCosts: false });
+    expect(r.drawerOpens).toEqual([]);
+    expect(r.drawerOpenCount).toBe(0);
   });
 
   it('reconciles on a month of generated orders (random refunds, splits, discounts)', () => {

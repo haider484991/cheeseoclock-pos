@@ -200,8 +200,9 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
 
   if (table.name === 'users') {
     // Who can sign in, and as what, changed from another till: keep that in
-    // this till's own tamper-evident trail (PIN hashes never included).
-    const { pin_hash: _pin, ...beforeRow } = before ?? {};
+    // this till's own tamper-evident trail (PIN/password hashes never
+    // included, nor the kind that stays with them on this till).
+    const { pin_hash: _pin, secret_kind: _kind, ...beforeRow } = before ?? {};
     const { [ROW_IMAGE_KEY]: _marker, ...afterImage } = image;
     writeAudit(db, {
       entityType: 'users',

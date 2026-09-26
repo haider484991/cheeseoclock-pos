@@ -18,6 +18,9 @@ export const CUT_MARKER = '[cut]';
 /** Row that stands in for a printed QR code in the decoded output. */
 export const QR_MARKER = '[QR]';
 
+/** Row that stands in for a cash-drawer pulse, e.g. "[drawer pin 2, 50 ms]". */
+export const drawerMarker = (pin: number, ms: number): string => `[drawer pin ${pin}, ${ms} ms]`;
+
 /** Row that stands in for a printed picture (the logo), e.g. "[logo 576×160]". */
 export const logoMarker = (width: number, height: number): string => `[logo ${width}×${height}]`;
 
@@ -54,7 +57,10 @@ export function decodeEscPos(bytes: Uint8Array): DecodedLine[] {
         for (let k = 0; k < n; k++) lines.push({ text: '', scale });
         i += 2;
       } else if (c === 0x70) {
-        // ESC p m t1 t2 — drawer kick
+        // ESC p m t1 t2 — drawer pulse: m 0/48 is pin 2, 1/49 pin 5; t1 in 2 ms steps
+        flushIfPending();
+        const pin = (bytes[i + 2] ?? 0) & 1 ? 5 : 2;
+        lines.push({ text: drawerMarker(pin, (bytes[i + 3] ?? 0) * 2), scale: 1 });
         i += 4;
       } else if (c === 0x61 || c === 0x45 || c === 0x2d || c === 0x4a) {
         // ESC a/E/-/J n — align, bold, underline, feed dots

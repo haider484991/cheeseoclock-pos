@@ -95,6 +95,8 @@ export interface ReportStaffLine {
   discountCents: number;
   /** Orders this person started that were cancelled before payment. */
   voidCount: number;
+  /** Times this person opened the cash drawer with no sale (Open drawer, Test drawer). */
+  noSaleOpens: number;
 }
 
 export interface ReportShiftLine {
@@ -111,6 +113,23 @@ export interface ReportShiftLine {
   varianceCents: number | null;
   cashInCents: number;
   cashOutCents: number;
+  /** How many cash in / cash out / rider tip entries — each one opened the drawer. */
+  cashMovementCount: number;
+  /** Times the drawer was opened by hand with no sale (not the one count at close). */
+  noSaleOpens: number;
+}
+
+/** One time the cash drawer was opened by hand, for the owner to check. */
+export interface ReportDrawerOpenLine {
+  id: string;
+  createdAt: string;
+  kind: 'no_sale' | 'count' | 'test';
+  reason: string | null;
+  openedBy: string;
+  /** The manager whose PIN let a cashier open it; null when a manager or the owner did it. */
+  approvedBy: string | null;
+  /** No shift was open on that till at the time. */
+  outsideShift: boolean;
 }
 
 export interface ReportDiscountLine {
@@ -213,6 +232,10 @@ export interface BusinessReport {
   refunds: ReportRefundLine[];
   /** Newest first, capped. */
   voids: ReportVoidLine[];
+  /** Every time the cash drawer was opened by hand (no sale), newest first, capped. */
+  drawerOpens: ReportDrawerOpenLine[];
+  /** How many times it was opened by hand in all — drawerOpens stops at the cap. */
+  drawerOpenCount: number;
   foodCost: ReportFoodCost;
   deliveries: ReportDeliveries;
 }

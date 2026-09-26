@@ -1,5 +1,6 @@
 export * from './common.js';
 export * from './auth.js';
+export * from './sign-in-secret.js';
 export * from './menu.js';
 export * from './order.js';
 export * from './customer.js';

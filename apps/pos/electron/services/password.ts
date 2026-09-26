@@ -2,8 +2,11 @@ import { hash, verify } from '@node-rs/argon2';
 
 /**
  * Argon2id parameters tuned for fast counter-side login (~200ms on a modern
- * laptop). Strong enough for a 4-8 digit PIN given login attempts are also
- * rate-limited at the application layer.
+ * laptop). Used for both kinds of sign-in secret: a 4-12 digit PIN, where
+ * the strength comes from the lockout on attempts (login-attempts.ts), and a
+ * 6-64 character password. 19 MiB / t=2 / p=1 is OWASP's minimum argon2id
+ * setting for passwords. The functions keep their PIN names; the argument
+ * is the normalized secret either way (normalizeSecret, shared-schemas).
  *
  * @node-rs/argon2 defaults to Argon2id — we keep the default by omitting algorithm
  * (importing Algorithm enum trips isolatedModules const-enum rules).

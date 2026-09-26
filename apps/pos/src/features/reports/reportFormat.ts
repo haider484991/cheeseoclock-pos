@@ -24,6 +24,13 @@ export const PAYMENT_LABEL: Record<ReportPaymentGroup, string> = {
 
 export const PAYMENT_ORDER: ReportPaymentGroup[] = ['cash', 'card', 'foodpanda', 'transfer'];
 
+/** Why the cash drawer was opened by hand, in the owner's words (screen, Excel and paper). */
+export const DRAWER_OPEN_WHY: Record<BusinessReport['drawerOpens'][number]['kind'], string> = {
+  no_sale: 'No sale',
+  count: 'To count at close',
+  test: 'Test (settings)',
+};
+
 const METHOD_LABEL: Record<string, string> = {
   cash: 'Cash',
   card: 'Card',

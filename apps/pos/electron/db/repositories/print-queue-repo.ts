@@ -159,6 +159,11 @@ export function hasPrintJob(
  * Claim the next due pending job. Atomically flips it to in_flight so two
  * worker ticks can't grab the same job. Returns null when there's nothing
  * to do.
+ *
+ * A due cash-drawer pulse goes first, ahead of any paper — even an earlier
+ * order's receipt: the cashier is standing there with the money. Then oldest
+ * due first; jobs queued in the same millisecond keep the order they were
+ * queued in (rowid).
  */
 export function claimNextPendingJob(db: AppDatabase): PrintJobRow | null {
   const now = nowIso();
@@ -168,7 +173,8 @@ export function claimNextPendingJob(db: AppDatabase): PrintJobRow | null {
       .prepare(
         `SELECT ${SELECT} FROM print_queue
           WHERE status = 'pending' AND next_attempt_at <= ?
-          ORDER BY next_attempt_at LIMIT 1`,
+          ORDER BY CASE job_kind WHEN 'drawer' THEN 0 ELSE 1 END, next_attempt_at, rowid
+          LIMIT 1`,
       )
       .get(now) as RawRow | undefined;
     if (!row) return;
@@ -181,12 +187,13 @@ export function claimNextPendingJob(db: AppDatabase): PrintJobRow | null {
   return claimed;
 }
 
-export function markJobDone(db: AppDatabase, id: string): void {
+/** `note`: why a job is done without being sent (e.g. the drawer already opened for it). */
+export function markJobDone(db: AppDatabase, id: string, note: string | null = null): void {
   const now = nowIso();
   db.prepare(
-    `UPDATE print_queue SET status = 'done', completed_at = ?, updated_at = ?, last_error = NULL
+    `UPDATE print_queue SET status = 'done', completed_at = ?, updated_at = ?, last_error = ?
       WHERE id = ?`,
-  ).run(now, now, id);
+  ).run(now, now, note, id);
 }
 
 /**
@@ -212,6 +219,20 @@ export function rescheduleJob(
   ).run(errorMessage, next, new Date(now).toISOString(), id);
 }
 
+/**
+ * Put a claimed job back for a moment without counting an attempt — e.g. a
+ * receipt waiting a little for its FBR invoice number, which must not hold
+ * up the jobs behind it (a cash drawer, the next kitchen ticket).
+ */
+export function deferJob(db: AppDatabase, id: string, delayMs: number): void {
+  const now = Date.now();
+  db.prepare(
+    `UPDATE print_queue
+        SET status = 'pending', next_attempt_at = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(new Date(now + delayMs).toISOString(), new Date(now).toISOString(), id);
+}
+
 export function markJobFailedPermanently(
   db: AppDatabase,
   id: string,
@@ -231,9 +252,22 @@ export function markJobFailedPermanently(
 /**
  * Reset any rows stuck in `in_flight` back to `pending` — called once at
  * boot. Without this, an app crash mid-print would leave a job orphaned.
+ *
+ * Except a drawer pulse: cut off mid-send it may already have opened the
+ * drawer, and sending it again would open it twice (and late). Those are
+ * marked failed instead.
  */
 export function recoverStuckInFlight(db: AppDatabase): number {
   const now = nowIso();
+  const drawers = db
+    .prepare(
+      `UPDATE print_queue
+          SET status = 'failed',
+              updated_at = ?,
+              last_error = 'Stopped mid-send; the drawer may already have opened'
+        WHERE status = 'in_flight' AND job_kind = 'drawer'`,
+    )
+    .run(now);
   const result = db
     .prepare(
       `UPDATE print_queue
@@ -243,7 +277,7 @@ export function recoverStuckInFlight(db: AppDatabase): number {
         WHERE status = 'in_flight'`,
     )
     .run(now);
-  return result.changes;
+  return Number(drawers.changes) + Number(result.changes);
 }
 
 export function listRecentFailedJobs(db: AppDatabase, limit = 20): PrintJobRow[] {

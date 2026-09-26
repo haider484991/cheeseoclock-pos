@@ -1,15 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { NumberPad } from '@cheeseoclock/ui';
+import { Button, NumberPad } from '@cheeseoclock/ui';
+import { PIN_MAX_DIGITS, normalizeSecret, secretProblem } from '@cheeseoclock/shared-schemas/sign-in-secret';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
+import { SecretInput } from '../../components/secret/SecretInput';
+import { SecretHint } from '../../components/secret/SecretHint';
 import { ipc } from '../../ipc/client';
-import { Pizza, Lock } from 'lucide-react';
+import { Grid3x3, Keyboard, Pizza, Lock } from 'lucide-react';
 import { StoreLogo } from '../settings/StoreLogo';
+import { isTypingField } from '../checkout/keys';
+import { keypadDigits, signInKey, signInProblemTitle, type SignInMode } from './signInKeys';
 
 /**
- * Logo, name and tagline at the top of the PIN screen. Also drawn by the
+ * Logo, name and tagline at the top of the sign-in screen. Also drawn by the
  * Branding settings preview, so what the owner sees there is exactly this.
  * The logo is shown whole: a wide logo gets a wide frame, never a crop.
  */
@@ -48,14 +53,29 @@ export function LoginBrand({
   );
 }
 
+const SWITCH_BUTTON =
+  'flex h-12 w-full items-center justify-center gap-2 rounded-lg border-2 border-stone-300 text-base font-semibold text-stone-700 hover:bg-stone-100 active:bg-stone-200 dark:border-stone-600 dark:text-stone-200 dark:hover:bg-stone-800';
+
+/**
+ * The sign-in screen, and also the idle-lock unlock: when an owner or
+ * manager login ends on its own, the till comes back here.
+ *
+ * It always opens on the keypad: most people at the counter have a number
+ * PIN, and a cashier must never find a password box waiting because the
+ * owner signed in with one. "Use a password" (or just typing a letter on a
+ * keyboard) opens the password box. Either screen takes either kind — the
+ * till tells a PIN from a password by what was typed.
+ */
 export function LoginPage() {
-  const [pin, setPin] = useState('');
+  const [mode, setMode] = useState<SignInMode>('pin');
+  const [secret, setSecret] = useState('');
   const navigate = useNavigate();
   const login = useSessionStore((s) => s.login);
   const refresh = useSessionStore((s) => s.refresh);
   const status = useSessionStore((s) => s.status);
-  const errorMessage = useSessionStore((s) => s.errorMessage);
   const { toast } = useToast();
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const busy = useRef(false);
   const brandingQ = useQuery({
     queryKey: ['system', 'branding'],
     queryFn: () => ipc.system.getBranding(),
@@ -78,35 +98,82 @@ export function LoginPage() {
     });
   }, [navigate, refresh]);
 
+  async function submit() {
+    // One at a time: every extra press would count as another wrong guess.
+    if (busy.current || useSessionStore.getState().status === 'loading') return;
+    const { mode: nowMode, secret: keyed } = latest.current;
+    // On the keypad, numeric-keypad symbols held out of sight were slips: a PIN is its digits.
+    const typed = nowMode === 'pin' ? keypadDigits(keyed) : keyed;
+    const problem = secretProblem(typed);
+    if (problem) {
+      toast({
+        title: signInProblemTitle(nowMode, typed),
+        description: problem,
+        variant: 'warning',
+      });
+      return;
+    }
+    busy.current = true;
+    try {
+      await login(normalizeSecret(typed));
+      setSecret('');
+      navigate('/', { replace: true });
+    } catch (e) {
+      setSecret('');
+      // The error caught here — the store's copy is a render behind.
+      toast({
+        title: "Can't sign in",
+        description: e instanceof Error ? e.message : 'PIN or password is wrong',
+        variant: 'error',
+      });
+      if (latest.current.mode === 'password') passwordRef.current?.focus();
+    } finally {
+      busy.current = false;
+    }
+  }
+
+  // The keyboard listener is added once and reads the newest values here.
+  const latest = useRef({ mode, secret, submit });
+  latest.current = { mode, secret, submit };
+
+  function showPassword(carried: string) {
+    setMode('password');
+    setSecret(carried);
+    // The box mounts on this render: focus it, caret after what was carried over.
+    requestAnimationFrame(() => {
+      const el = passwordRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(carried.length, carried.length);
+    });
+  }
+
+  function showKeypad() {
+    setMode('pin');
+    setSecret('');
+  }
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key >= '0' && e.key <= '9') {
-        if (pin.length < 8) setPin(pin + e.key);
-      } else if (e.key === 'Backspace') {
-        setPin(pin.slice(0, -1));
-      } else if (e.key === 'Enter') {
-        void submit();
+      // The password box (like any text box) types for itself.
+      if (e.defaultPrevented || e.isComposing || isTypingField(e.target as Element | null)) return;
+      const action = signInKey(latest.current.mode, latest.current.secret, e);
+      if (action.type === 'ignore') return;
+      // Also stops Enter or Space from pressing a keypad button that has focus.
+      e.preventDefault();
+      if (action.type === 'set') setSecret(action.value);
+      else if (action.type === 'submit') void latest.current.submit();
+      else if (action.type === 'switch') showPassword(action.value);
+      else if (action.type === 'focus') {
+        setSecret(action.value);
+        passwordRef.current?.focus();
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pin]);
+  }, []);
 
-  async function submit() {
-    if (pin.length < 4) {
-      toast({ title: 'PIN too short', description: 'Enter 4–8 digits.', variant: 'warning' });
-      return;
-    }
-    try {
-      await login(pin);
-      setPin('');
-      navigate('/', { replace: true });
-    } catch {
-      setPin('');
-      toast({ title: 'Login failed', description: errorMessage ?? 'Invalid PIN', variant: 'error' });
-    }
-  }
+  const verifying = status === 'loading';
 
   return (
     <div className="relative flex h-full items-center justify-center overflow-hidden">
@@ -126,12 +193,56 @@ export function LoginPage() {
         <div className="glass-surface rounded-3xl p-8 shadow-soft-lg ring-1 ring-stone-200/60 dark:ring-stone-700/60">
           <LoginBrand logoUrl={logoUrl} storeName={storeName} tagline={tagline} />
           <p className="mb-4 text-center text-xs font-medium uppercase tracking-widest text-stone-400">
-            Enter your PIN
+            {mode === 'pin' ? 'Enter your PIN' : 'Type your password'}
           </p>
 
-          <NumberPad value={pin} onChange={setPin} onSubmit={submit} mask maxLength={8} />
+          {mode === 'pin' ? (
+            <>
+              <NumberPad
+                value={keypadDigits(secret)}
+                onChange={setSecret}
+                onSubmit={() => void submit()}
+                mask
+                maxLength={PIN_MAX_DIGITS}
+              />
+              <button type="button" onClick={() => showPassword('')} className={`mt-3 ${SWITCH_BUTTON}`}>
+                <Keyboard className="h-5 w-5" aria-hidden="true" />
+                Use a password
+              </button>
+            </>
+          ) : (
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submit();
+              }}
+            >
+              <SecretInput
+                ref={passwordRef}
+                keyboard="text"
+                value={secret}
+                onChange={setSecret}
+                autoFocus
+                aria-label="Password"
+                placeholder="Password"
+                className="h-16 w-full rounded-lg border-2 border-stone-300 bg-white px-4 text-center text-2xl text-stone-900 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100"
+              />
+              <SecretHint value={secret} rules={false} className="text-center" />
+              <p className="text-center text-xs text-stone-500">
+                Tap the box to type. Capital and small letters count.
+              </p>
+              <Button type="submit" variant="primary" size="lg" disabled={verifying} className="w-full">
+                Sign in
+              </Button>
+              <button type="button" onClick={showKeypad} className={SWITCH_BUTTON}>
+                <Grid3x3 className="h-5 w-5" aria-hidden="true" />
+                Use the number pad
+              </button>
+            </form>
+          )}
 
-          {status === 'loading' ? (
+          {verifying ? (
             <p className="mt-4 text-center text-sm font-medium text-amber-700 dark:text-amber-300">
               Verifying…
             </p>

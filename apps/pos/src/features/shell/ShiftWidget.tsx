@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { Banknote, BookOpenCheck, ChevronRight, Clock, Wallet, X } from 'lucide-react';
+import { Banknote, BookOpenCheck, ChevronRight, Clock, Inbox, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { CashMovementDialog } from './CashMovementDialog';
+import { drawerResultToast } from './drawerToast';
 
 /**
  * TopBar shift widget. Shows current shift status.
@@ -133,7 +134,7 @@ function OpenShiftDialog({ onClose }: { onClose: () => void }) {
         notes: notes.trim() || null,
       }),
     onSuccess: () => {
-      toast({ title: 'Shift opened', description: 'New orders will be linked to this shift.' });
+      toast({ title: 'Shift opened', description: 'New orders go on this shift. The cash drawer opens for the float.' });
       void qc.invalidateQueries({ queryKey: ['shifts'] });
       onClose();
     },
@@ -247,6 +248,21 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
   });
   const summary = summaryQ.data;
 
+  // Pulses the drawer so it can be counted; the count itself stays blind.
+  const countMut = useMutation({
+    mutationFn: () => ipc.shifts.openDrawer({ kind: 'count' }),
+    onSuccess: (r) => {
+      const t = drawerResultToast(r);
+      toast({ ...t, ...(t.variant === 'success' ? {} : { duration: 15_000 }) });
+    },
+    onError: (e) =>
+      toast({
+        title: 'Could not open the drawer',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      }),
+  });
+
   const closeMut = useMutation({
     mutationFn: () =>
       ipc.shifts.close({
@@ -327,6 +343,18 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
           )}
 
           <div className="space-y-3">
+            {!result && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="w-full"
+                disabled={countMut.isPending}
+                onClick={() => countMut.mutate()}
+              >
+                <Inbox className="h-4 w-4" />
+                {countMut.isPending ? 'Opening…' : 'Open drawer to count'}
+              </Button>
+            )}
             {!result && (
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">

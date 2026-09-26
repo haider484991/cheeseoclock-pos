@@ -115,9 +115,14 @@ export function logoInfo(stored: unknown): { source: string; algo: number } | nu
   return parsed.success ? { source: parsed.data.source, algo: parsed.data.algo } : null;
 }
 
-/** Stable key for a printer setup: a test print on one printer says nothing about another. */
+/**
+ * Stable key for a printer setup: a test print on one printer says nothing
+ * about another. The drawer setting is left out — the logo prints the same
+ * whichever pin the drawer is on.
+ */
 export function printerKey(config: PrinterConnectionConfig): string {
-  return logoFingerprint(JSON.stringify(config));
+  const { drawer: _drawer, ...printer } = config;
+  return logoFingerprint(JSON.stringify(printer));
 }
 
 const LogoCheckedSchema = z.object({ source: z.string(), printer: z.string() });

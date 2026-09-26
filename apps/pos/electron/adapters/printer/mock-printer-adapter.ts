@@ -8,6 +8,7 @@ import {
   type PrinterAdapter,
   type PrintResult,
   type PrinterConnectionConfig,
+  type SendOptions,
   type TestPageOptions,
 } from '@cheeseoclock/printer-core';
 import { renderTestPage } from './test-page.js';
@@ -17,6 +18,8 @@ import { renderTestPage } from './test-page.js';
  * userData/printer-mock/<timestamp>.bin and a human-readable .txt alongside.
  * Use this when developing without a printer attached.
  */
+let mockSeq = 0;
+
 export class MockPrinterAdapter implements PrinterAdapter {
   readonly id: string;
   readonly config: PrinterConnectionConfig;
@@ -37,12 +40,16 @@ export class MockPrinterAdapter implements PrinterAdapter {
     return this.connected;
   }
 
-  async send(bytes: Uint8Array): Promise<PrintResult> {
+  /** Nothing to wait for or queue here: a drawer pulse is written out like any job ("[drawer pin 2, 50 ms]"). */
+  async send(bytes: Uint8Array, _opts?: SendOptions): Promise<PrintResult> {
     const start = Date.now();
     try {
       const dir = path.join(app.getPath('userData'), 'printer-mock');
       fs.mkdirSync(dir, { recursive: true });
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      // A drawer pulse and the tickets after it can land in the same
+      // millisecond: the counter keeps each one its own file, in order.
+      mockSeq = (mockSeq + 1) % 1000;
+      const stamp = `${new Date().toISOString().replace(/[:.]/g, '-')}-${String(mockSeq).padStart(3, '0')}`;
       const binPath = path.join(dir, `${stamp}.bin`);
       const txtPath = path.join(dir, `${stamp}.txt`);
       fs.writeFileSync(binPath, Buffer.from(bytes));

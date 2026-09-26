@@ -3,9 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { PrinterConnectionConfig, PrinterTransport } from '@cheeseoclock/shared-types';
-import { Printer, Wifi, Usb, Bluetooth, FlaskConical, Check, RefreshCw } from 'lucide-react';
+import type { DrawerSettings, PrinterConnectionConfig, PrinterTransport } from '@cheeseoclock/shared-types';
+import { Printer, Wifi, Usb, Bluetooth, FlaskConical, Check, RefreshCw, Inbox } from 'lucide-react';
 import { ensureReceiptLogo } from './receiptLogo';
+import { drawerOf, isChanged } from './printerForm';
+
+// KitchenPrinterSettings compares its form the same way.
+export { isChanged } from './printerForm';
 
 interface TransportOption {
   id: PrinterTransport | 'mock';
@@ -50,6 +54,8 @@ export function PrinterSettings() {
   const [port, setPort] = useState('9100');
   const [printerName, setPrinterName] = useState('');
   const [width, setWidth] = useState<32 | 48>(48);
+  const [drawerPin, setDrawerPin] = useState<DrawerSettings['pin']>(2);
+  const [drawerPulse, setDrawerPulse] = useState<DrawerSettings['pulseMs']>(50);
 
   // Hydrate from the saved receipt printer only: the kitchen printer and the
   // printing rules on this tab share the query, and saving one of them must
@@ -62,6 +68,9 @@ export function PrinterSettings() {
     setPort(String(savedCfg.network?.port ?? 9100));
     setPrinterName(savedCfg.usb?.printerName ?? '');
     setWidth(savedCfg.width ?? 48);
+    const d = drawerOf(savedCfg);
+    setDrawerPin(d.pin);
+    setDrawerPulse(d.pulseMs);
   }, [savedCfg]);
 
   // Printers Windows knows about — only asked for while the USB option is open.
@@ -127,10 +136,42 @@ export function PrinterSettings() {
       }),
   });
 
+  const drawerTestMut = useMutation({
+    mutationFn: () => ipc.printer.testDrawer(),
+    onSuccess: (result) => {
+      if (result.ok && uiTransport === 'mock') {
+        toast({
+          title: 'No printer connected — saved to a file',
+          description: 'Pick USB or Wi-Fi / LAN above to open the real drawer.',
+          variant: 'info',
+        });
+      } else if (result.ok) {
+        toast({
+          title: 'Drawer pulse sent',
+          description: 'If it didn’t open, see “Drawer won’t open?” below.',
+          variant: 'success',
+        });
+      } else {
+        toast({
+          title: 'Could not open the drawer',
+          description: result.error?.message ?? 'Unknown error',
+          variant: 'error',
+        });
+      }
+    },
+    onError: (e) =>
+      toast({
+        title: 'Could not open the drawer',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'error',
+      }),
+  });
+
   /** The form as a printer config; null (with a toast unless quiet) when no USB printer is picked. */
   function buildConfig(quiet = false): PrinterConnectionConfig | null {
+    const drawer: DrawerSettings = { pin: drawerPin, pulseMs: drawerPulse };
     if (uiTransport === 'mock') {
-      return { transport: 'network', network: { host: 'mock', port: 9100 }, width };
+      return { transport: 'network', network: { host: 'mock', port: 9100 }, width, drawer };
     }
     if (uiTransport === 'network') {
       const p = parseInt(port, 10);
@@ -142,6 +183,7 @@ export function PrinterSettings() {
           timeoutMs: 5000,
         },
         width,
+        drawer,
       };
     }
     if (uiTransport === 'usb') {
@@ -156,10 +198,10 @@ export function PrinterSettings() {
         }
         return null;
       }
-      return { transport: 'usb', usb: { printerName: name }, width };
+      return { transport: 'usb', usb: { printerName: name }, width, drawer };
     }
     // Bluetooth is disabled at the option level — we shouldn't reach here.
-    return { transport: 'network', network: { host: 'mock', port: 9100 }, width };
+    return { transport: 'network', network: { host: 'mock', port: 9100 }, width, drawer };
   }
 
   function save() {
@@ -187,6 +229,23 @@ export function PrinterSettings() {
     await ensureReceiptLogo(cfgQ.data);
     testMut.mutate();
   }
+
+  async function testDrawer() {
+    // Same as Test print: the pulse goes to the saved printer, with the saved
+    // pin and length — so unsaved changes are saved first.
+    if (unsaved) {
+      const config = buildConfig();
+      if (!config) return;
+      try {
+        await saveMut.mutateAsync(config);
+      } catch {
+        return; // the save toast already said why
+      }
+    }
+    drawerTestMut.mutate();
+  }
+
+  const busy = testMut.isPending || saveMut.isPending || drawerTestMut.isPending;
 
   const logo = cfgQ.data?.logo;
 
@@ -295,7 +354,8 @@ export function PrinterSettings() {
                 the driver from the printer&rsquo;s CD or the maker&rsquo;s website if it
                 doesn&rsquo;t). Pick it here, Save, then Test print. Receipts go through
                 Windows&rsquo; own print queue, so if the printer is off they print when it comes
-                back.
+                back. The cash drawer never waits like that: if the printer is off, the drawer
+                does not open and the till says so.
               </p>
             )}
           </div>
@@ -370,6 +430,49 @@ export function PrinterSettings() {
           </div>
         </div>
 
+        <div>
+          <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Cash drawer</label>
+          <div className="flex flex-wrap gap-2">
+            {([2, 5] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                aria-pressed={drawerPin === p}
+                onClick={() => setDrawerPin(p)}
+                className={cn(
+                  'rounded-lg border-2 px-4 py-2 font-semibold transition-colors',
+                  drawerPin === p
+                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                    : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                )}
+              >
+                Pin {p} {p === 2 && <span className="text-stone-500">(usual)</span>}
+              </button>
+            ))}
+            <span className="mx-1 hidden w-px self-stretch bg-stone-200 sm:block dark:bg-stone-700" />
+            {([50, 100] as const).map((ms) => (
+              <button
+                key={ms}
+                type="button"
+                aria-pressed={drawerPulse === ms}
+                onClick={() => setDrawerPulse(ms)}
+                className={cn(
+                  'rounded-lg border-2 px-4 py-2 font-semibold transition-colors',
+                  drawerPulse === ms
+                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                    : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                )}
+              >
+                {ms} ms <span className="text-stone-500">{ms === 50 ? '(usual)' : '(stronger)'}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-stone-500">
+            The drawer plugs into the printer&rsquo;s drawer port (DK). Most drawers open on pin 2,
+            50 ms. A cash payment opens it straight away.
+          </p>
+        </div>
+
         <div className="flex items-center justify-between border-t border-stone-200 pt-4 dark:border-stone-700">
           <div className="text-xs text-stone-500">
             {cfgQ.data?.config && (
@@ -384,12 +487,12 @@ export function PrinterSettings() {
               </span>
             )}
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              disabled={testMut.isPending || saveMut.isPending}
-              onClick={() => void testPrint()}
-            >
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="secondary" disabled={busy} onClick={() => void testDrawer()}>
+              <Inbox className="h-4 w-4" />
+              {drawerTestMut.isPending ? 'Opening…' : unsaved ? 'Save and test drawer' : 'Test drawer'}
+            </Button>
+            <Button variant="secondary" disabled={busy} onClick={() => void testPrint()}>
               {testMut.isPending ? 'Sending…' : unsaved ? 'Save and test print' : 'Test print'}
             </Button>
             <Button variant="primary" disabled={saveMut.isPending} onClick={save}>
@@ -406,20 +509,20 @@ export function PrinterSettings() {
           ) : (
             <p className="text-right text-xs text-stone-500">Test print shows your logo too.</p>
           ))}
+        <details className="rounded-lg border border-stone-200 p-3 text-sm dark:border-stone-700">
+          <summary className="cursor-pointer font-semibold">Drawer won&rsquo;t open?</summary>
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-stone-600 dark:text-stone-300">
+            <li>
+              The drawer&rsquo;s cable (a phone-style plug) is in the printer&rsquo;s drawer port —
+              marked DK, CD or with a drawer picture — not the LAN port.
+            </li>
+            <li>The drawer&rsquo;s key is in the middle position — not locked.</li>
+            <li>The printer is on, has paper and its lid is closed — Test print works.</li>
+            <li>Still shut? Choose 100 ms and press Save and test drawer. Only then try Pin 5.</li>
+          </ol>
+        </details>
       </section>
     </Card>
-  );
-}
-
-/** Whether the form differs from the saved printer (an unpicked USB printer counts as a change). */
-export function isChanged(saved: PrinterConnectionConfig, next: PrinterConnectionConfig | null): boolean {
-  if (!next) return true;
-  return (
-    saved.transport !== next.transport ||
-    (saved.network?.host ?? '') !== (next.network?.host ?? '') ||
-    (saved.network?.port ?? 9100) !== (next.network?.port ?? 9100) ||
-    (saved.usb?.printerName ?? '') !== (next.usb?.printerName ?? '') ||
-    (saved.width ?? 48) !== (next.width ?? 48)
   );
 }
 

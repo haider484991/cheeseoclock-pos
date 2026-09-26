@@ -39,14 +39,32 @@ export interface TestPageOptions {
   logoOnReceipts?: boolean;
 }
 
+/** How a job has to be sent. */
+export interface SendOptions {
+  /**
+   * The bytes pulse the cash drawer. Never leave them waiting in a queue (the
+   * OS's or the printer's) to pop the drawer later: check the printer can take
+   * them now, and report `maybeSent` when they may have gone out, so they are
+   * never sent twice.
+   */
+  drawer?: boolean;
+  /**
+   * Epoch ms after which the bytes must not start going out at all (a drawer
+   * pulse that late would open an unattended drawer). The adapter answers
+   * DRAWER_TOO_LATE_CODE instead, not sent.
+   */
+  notAfter?: number;
+}
+
 export interface PrinterAdapter {
   readonly id: string;
   readonly config: PrinterConnectionConfig;
+  /** Get ready to print (e.g. start the USB print worker) so the first job is not slow. */
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   isConnected(): boolean;
   /** Send raw ESC/POS bytes to the printer. The high-level renderer produces these. */
-  send(bytes: Uint8Array): Promise<PrintResult>;
+  send(bytes: Uint8Array, opts?: SendOptions): Promise<PrintResult>;
   testPrint(opts?: TestPageOptions): Promise<PrintResult>;
 }
 
@@ -68,8 +86,18 @@ export {
   toPrinterAscii,
   LINES_BEFORE_CUT,
   RASTER_BAND_ROWS,
+  drawerPulseBytes,
+  DLE_EOT_PRINTER_STATUS,
+  statusByteSaysOffline,
 } from './escpos.js';
-export { decodeEscPos, escPosToText, CUT_MARKER, QR_MARKER, logoMarker } from './escpos-decode.js';
+export {
+  decodeEscPos,
+  escPosToText,
+  CUT_MARKER,
+  QR_MARKER,
+  logoMarker,
+  drawerMarker,
+} from './escpos-decode.js';
 export type { DecodedLine } from './escpos-decode.js';
 export {
   renderReceipt,

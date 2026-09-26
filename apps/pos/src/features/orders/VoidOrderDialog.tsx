@@ -6,6 +6,9 @@ import { ShieldAlert, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { SecretInput } from '../../components/secret/SecretInput';
+import { SecretHint } from '../../components/secret/SecretHint';
+import { approvalProblem } from '../../components/secret/secretRules';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
 
 interface Props {
@@ -15,7 +18,7 @@ interface Props {
 }
 
 /**
- * Cancel (void) an unpaid order. Needs a reason + manager PIN (the server
+ * Cancel (void) an unpaid order. Needs a reason + a manager's PIN or password (the server
  * checks both). Used from the Live Orders board and from Order History; a
  * paid order is refunded instead. Enter confirms.
  */
@@ -49,8 +52,9 @@ export function VoidOrderDialog({ snap, onClose, onDone }: Props) {
       toast({ title: 'Say why it is cancelled', variant: 'warning' });
       return;
     }
-    if (pin.length < 4) {
-      toast({ title: 'Manager PIN needed', variant: 'warning' });
+    const pinProblem = approvalProblem(pin);
+    if (pinProblem) {
+      toast({ title: pinProblem, variant: 'warning' });
       return;
     }
     voidMut.mutate();
@@ -102,17 +106,16 @@ export function VoidOrderDialog({ snap, onClose, onDone }: Props) {
                 />
               </label>
               <label className="block text-sm">
-                <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">Manager PIN</span>
-                <input
+                <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
+                  Manager PIN or password
+                </span>
+                <SecretInput
                   value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  maxLength={8}
-                  className="w-full rounded-lg border border-stone-200 px-3 py-2 text-center font-mono text-lg tracking-[0.5em] focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
+                  onChange={setPin}
+                  className="min-w-0 flex-1 rounded-lg border border-stone-200 px-3 py-2 text-center font-mono text-lg tracking-[0.5em] focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
                   placeholder="••••"
                 />
+                <SecretHint value={pin} className="mt-1" />
               </label>
               <div className="rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
                 Cancelling can't be undone and is recorded with the manager's name. If the customer already

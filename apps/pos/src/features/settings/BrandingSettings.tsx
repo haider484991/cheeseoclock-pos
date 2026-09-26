@@ -69,7 +69,7 @@ export function BrandingSettings() {
     onSuccess: () => {
       toast({ title: 'Shop details saved', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['printer', 'config'] });
-      // The PIN screen reads the name and logo through its own query.
+      // The sign-in screen reads the name and logo through its own query.
       void qc.invalidateQueries({ queryKey: ['system', 'branding'] });
     },
     onError: (e) =>
@@ -97,7 +97,7 @@ export function BrandingSettings() {
           <h2 className="text-lg font-semibold">Shop details</h2>
         </div>
         <p className="mb-5 text-sm text-stone-500">
-          Your logo and name show on the PIN screen and in the menu bar. Customer receipts start
+          Your logo and name show on the sign-in screen and in the menu bar. Customer receipts start
           with the logo in black and white (see the preview below), then the name and the lines
           you fill in here. The name and lines also go to the website when you publish the menu.
         </p>
@@ -168,7 +168,7 @@ export function BrandingSettings() {
                 <SidebarBrand logoUrl={logoUrl} storeName={shownName} />
               </div>
             </PreviewFrame>
-            <PreviewFrame label="PIN screen">
+            <PreviewFrame label="Sign-in screen">
               <div className="w-full max-w-[400px] rounded-2xl bg-white/90 px-6 pt-6 ring-1 ring-stone-200 dark:bg-stone-900 dark:ring-stone-700">
                 <LoginBrand logoUrl={logoUrl} storeName={shownName} tagline={storeTagline.trim() || null} />
               </div>

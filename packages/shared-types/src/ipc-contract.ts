@@ -25,7 +25,13 @@ import type {
   PaymentMethod,
   Rider,
 } from './order.js';
-import type { CashMovement, CashMovementType, Shift, ShiftSummary } from './shift.js';
+import type {
+  CashMovement,
+  CashMovementType,
+  DrawerOpenResult,
+  Shift,
+  ShiftSummary,
+} from './shift.js';
 import type { BusinessReport, BusinessReportRequest } from './reports.js';
 import type {
   PrinterConnectionConfig,
@@ -60,6 +66,7 @@ import type {
 } from './customer.js';
 import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
 import type { OrderHistoryFilter, OrderHistoryPage } from './order-history.js';
+import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
 
 /** One cloud copy as listed for the operator (from any till). */
 export interface CloudBackupEntry {
@@ -584,6 +591,16 @@ export interface IpcContract {
     request: { shiftId: string };
     response: ApiResult<CashMovement[]>;
   };
+  /**
+   * Open the cash drawer with no sale ('no_sale'), or to count it while
+   * closing the shift ('count' — managers and the owner, open shift only). A
+   * cashier's no-sale open needs a manager's PIN or password. Saved and
+   * audited before the drawer is pulsed.
+   */
+  'shifts:openDrawer': {
+    request: { kind: 'no_sale' | 'count'; reason?: string | null; approverPin?: string };
+    response: ApiResult<DrawerOpenResult>;
+  };
 
   // Website bridge (online ordering ↔ POS)
   'webBridge:getConfig': {
@@ -746,6 +763,11 @@ export interface IpcContract {
   /** Test page on the receipt printer, or on the kitchen printer when asked. */
   'printer:test': {
     request: { station?: 'receipt' | 'kitchen' } | undefined;
+    response: ApiResult<PrintResult>;
+  };
+  /** Just the drawer pulse, straight to the receipt printer (no order, no queue). printer.manage. */
+  'printer:testDrawer': {
+    request: undefined;
     response: ApiResult<PrintResult>;
   };
   /**
@@ -1366,6 +1388,37 @@ export interface IpcContract {
   'audit:verifyChain': {
     request: undefined;
     response: ApiResult<AuditTrailStatus>;
+  };
+
+  // Sounds & order alerts (this till only; see shared-types/src/alerts.ts)
+  /** Settings → Sounds. No login needed: the PIN screen rings for orders too. */
+  'alerts:getSounds': {
+    request: undefined;
+    response: ApiResult<AlertSoundSettings>;
+  };
+  /** Save Settings → Sounds (manager or owner). Audited. */
+  'alerts:setSounds': {
+    request: AlertSoundSettings;
+    response: ApiResult<AlertSoundSettings>;
+  };
+  /**
+   * Website orders nobody has looked at yet, and website orders that did not
+   * come in. Kept by the main process, so a screen that starts (or restarts)
+   * after they arrived still rings. No login needed.
+   */
+  'alerts:getPending': {
+    request: undefined;
+    response: ApiResult<PendingAlerts>;
+  };
+  /** Seen / silenced / closed. Closing a failure card needs a login. */
+  'alerts:acknowledge': {
+    request: AcknowledgeAlertsRequest;
+    response: ApiResult<PendingAlerts>;
+  };
+  /** Settings → Sounds → "Test the Windows notice" (manager or owner). */
+  'alerts:testNotice': {
+    request: undefined;
+    response: ApiResult<{ shown: boolean }>;
   };
 
   // Tables (floor sections + dine-in tables)

@@ -22,6 +22,7 @@ import {
 } from '../../services/printer-config.js';
 import { ReceiptLogoRasterSchema } from '../../services/receipt-logo.js';
 import { printSpooler } from '../../services/print-spooler.js';
+import { testDrawer } from '../../services/drawer-service.js';
 import { isSystemPrintingSupported, listSystemPrinters } from '../../services/system-printers.js';
 
 function requireSession(): AuthenticatedUser {
@@ -143,6 +144,13 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
       payload?.station === 'kitchen' ? 'kitchen' : 'receipt',
     );
     return ok(result);
+  });
+
+  // Just the drawer pulse, straight through the receipt printer. Managers and
+  // the owner (it opens the till); saved as a "test" drawer open first.
+  defineHandler('printer:testDrawer', ctx, async () => {
+    const s = requirePrinterManage();
+    return ok(await testDrawer(ctx.db, s, ctx.deviceId));
   });
 
   defineHandler('printer:listSystemPrinters', ctx, async () => {

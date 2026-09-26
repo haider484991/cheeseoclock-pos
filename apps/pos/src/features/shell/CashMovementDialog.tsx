@@ -8,6 +8,9 @@ import type { CashMovementType } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
+import { SecretInput } from '../../components/secret/SecretInput';
+import { SecretHint } from '../../components/secret/SecretHint';
+import { secretReady } from '../../components/secret/secretRules';
 
 const TYPES: Array<{ id: CashMovementType; label: string; hint: string; icon: typeof Wallet }> = [
   { id: 'payout', label: 'Cash out', hint: 'Supplier, gas, an expense', icon: ArrowUpFromLine },
@@ -35,7 +38,7 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
   });
 
   const amountCents = Math.round((parseFloat(amount) || 0) * 100);
-  const ready = amountCents > 0 && reason.trim() !== '' && (canDirect || pin.length >= 4);
+  const ready = amountCents > 0 && reason.trim() !== '' && (canDirect || secretReady(pin));
 
   const saveMut = useMutation({
     mutationFn: () =>
@@ -147,14 +150,14 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
                 <div className="mb-2 text-sm font-semibold text-amber-900 dark:text-amber-100">
                   Manager approval required
                 </div>
-                <input
-                  type="password"
+                <SecretInput
                   value={pin}
-                  onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
-                  className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 font-mono tracking-widest dark:border-amber-700 dark:bg-stone-900"
-                  placeholder="Manager PIN"
-                  maxLength={8}
+                  onChange={setPin}
+                  aria-label="Manager PIN or password"
+                  placeholder="Manager PIN or password"
+                  className="min-w-0 flex-1 rounded-lg border border-amber-300 bg-white px-3 py-2 font-mono tracking-widest dark:border-amber-700 dark:bg-stone-900"
                 />
+                <SecretHint value={pin} className="mt-1" />
               </div>
             )}
           </div>

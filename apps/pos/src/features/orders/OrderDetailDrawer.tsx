@@ -34,7 +34,8 @@ interface DrawerProps {
 /**
  * One order in full, from Order History: what was on it, what was paid, what
  * happened when — plus reprint, collect payment, refund and cancel where the
- * order allows them (the server checks again; manager PIN for refund/cancel).
+ * order allows them (the server checks again; a manager's PIN or password for
+ * refund/cancel).
  */
 export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   const qc = useQueryClient();

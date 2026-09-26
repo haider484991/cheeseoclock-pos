@@ -13,6 +13,8 @@ import {
   openShift,
   recordCashMovement,
 } from '../../db/repositories/shift-repo.js';
+import { printSpooler } from '../../services/print-spooler.js';
+import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-service.js';
 
 /**
  * Shifts IPC. Open/close are gated on the `shift.open` / `shift.close`
@@ -57,6 +59,8 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
         },
         { userId: s.id, deviceId: ctx.deviceId },
       );
+      // The drawer opens to put the float in (a failure is a toast, not an error).
+      printSpooler.kickDrawerSoon();
       return ok(shift);
     } catch (e) {
       throw new IpcGuardError({
@@ -106,7 +110,7 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
       if (!payload.approverPin) {
         throw new IpcGuardError({
           code: 'precondition_failed',
-          message: 'A manager PIN is needed to take cash out of or put cash into the drawer',
+          message: "A manager's PIN or password is needed to take cash out of or put cash into the drawer",
         });
       }
       try {
@@ -119,22 +123,46 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
       }
     }
     try {
-      return ok(
-        recordCashMovement(
-          ctx.db,
-          {
-            type: payload.type,
-            amountCents: payload.amountCents,
-            reason: payload.reason,
-            approvedByUserId,
-          },
-          { userId: s.id, deviceId: ctx.deviceId },
-        ),
+      const movement = recordCashMovement(
+        ctx.db,
+        {
+          type: payload.type,
+          amountCents: payload.amountCents,
+          reason: payload.reason,
+          approvedByUserId,
+        },
+        { userId: s.id, deviceId: ctx.deviceId },
       );
+      // Cash in, cash out or a rider tip: the drawer opens for the notes.
+      printSpooler.kickDrawerSoon();
+      return ok(movement);
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',
         message: e instanceof Error ? e.message : 'Could not record the cash',
+      });
+    }
+  });
+
+  // Open the drawer with no sale, or to count it at close. The rules (who
+  // may, the manager PIN for a cashier) live in drawer-service.
+  defineHandler('shifts:openDrawer', ctx, async (_ctx, payload) => {
+    const s = requireSession();
+    try {
+      return ok(
+        await openDrawerNoSale(ctx.db, s, ctx.deviceId, {
+          kind: payload.kind,
+          reason: payload.reason ?? null,
+          ...(payload.approverPin !== undefined ? { approverPin: payload.approverPin } : {}),
+        }),
+      );
+    } catch (e) {
+      if (e instanceof DrawerOpenRefused) {
+        throw new IpcGuardError({ code: e.code, message: e.message });
+      }
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not open the drawer',
       });
     }
   });

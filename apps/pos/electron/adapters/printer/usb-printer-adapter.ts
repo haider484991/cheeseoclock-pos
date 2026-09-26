@@ -4,6 +4,7 @@ import type {
   PrinterAdapter,
   PrintResult,
   PrinterConnectionConfig,
+  SendOptions,
   TestPageOptions,
 } from '@cheeseoclock/printer-core';
 import { renderTestPage } from './test-page.js';
@@ -41,9 +42,14 @@ export class UsbPrinterAdapter implements PrinterAdapter {
       });
   }
 
+  /**
+   * Start the print worker now: compiling its helper takes a moment, and a
+   * cash-drawer pulse should not wait for that on the first sale. Resolves
+   * once it is ready (callers that only want it started don't await it).
+   */
   async connect(): Promise<void> {
-    // The worker starts on the first print — nothing to open up front.
     this.connected = true;
+    await this.worker.whenReady();
   }
 
   async disconnect(): Promise<void> {
@@ -55,7 +61,7 @@ export class UsbPrinterAdapter implements PrinterAdapter {
     return this.connected;
   }
 
-  async send(bytes: Uint8Array): Promise<PrintResult> {
+  async send(bytes: Uint8Array, opts: SendOptions = {}): Promise<PrintResult> {
     const start = Date.now();
     const printerName = this.config.usb?.printerName;
     if (!printerName) {
@@ -66,19 +72,30 @@ export class UsbPrinterAdapter implements PrinterAdapter {
       };
     }
     try {
-      const written = await this.worker.send(printerName, bytes);
-      log.info('USB printer job spooled', { printerName, bytes: written });
+      const written = await this.worker.send(printerName, bytes, {
+        drawer: opts.drawer === true,
+        ...(opts.notAfter !== undefined ? { notAfter: opts.notAfter } : {}),
+      });
+      log.info(opts.drawer ? 'USB printer took the drawer pulse' : 'USB printer job spooled', {
+        printerName,
+        bytes: written,
+      });
       return { ok: true, durationMs: Date.now() - start };
     } catch (err) {
       const e =
         err instanceof RawPrintError
           ? err
           : new RawPrintError('usb_error', err instanceof Error ? err.message : String(err), true);
-      log.warn('USB printer error', { printerName, code: e.code, err: e.message });
+      log.warn('USB printer error', { printerName, code: e.code, err: e.message, drawer: opts.drawer === true });
       return {
         ok: false,
         durationMs: Date.now() - start,
-        error: { code: e.code, message: e.message, recoverable: e.recoverable },
+        error: {
+          code: e.code,
+          message: e.message,
+          recoverable: e.recoverable,
+          ...(e.maybeSent ? { maybeSent: true } : {}),
+        },
       };
     }
   }

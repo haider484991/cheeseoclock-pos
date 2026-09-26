@@ -5,6 +5,7 @@ import {
   createUserInputSchema,
   updateUserInputSchema,
 } from '@cheeseoclock/shared-schemas';
+import type { ZodError } from 'zod';
 import {
   listUsers,
   createUser,
@@ -12,6 +13,16 @@ import {
   deactivateUser,
 } from '../../db/repositories/user-repo.js';
 import { getCurrentSession } from '../../services/auth-service.js';
+
+/**
+ * The message for a refused create/update: the PIN or password rule that was
+ * broken, in plain words ("A PIN is 4 to 12 numbers"), else a generic one.
+ * The details never carry what was typed (zod issues hold paths and messages).
+ */
+function validationMessage(error: ZodError): string {
+  const pinIssue = error.issues.find((i) => i.path[0] === 'pin');
+  return pinIssue?.message ?? 'Invalid input';
+}
 
 function requireAdmin() {
   const session = getCurrentSession();
@@ -39,7 +50,7 @@ export function registerUsersHandlers(ctx: HandlerContext): void {
     if (!parsed.success) {
       return err({
         code: 'validation_failed',
-        message: 'Invalid input',
+        message: validationMessage(parsed.error),
         details: parsed.error.flatten(),
       });
     }
@@ -51,8 +62,8 @@ export function registerUsersHandlers(ctx: HandlerContext): void {
       });
       return ok(user);
     } catch (e) {
-      // e.g. "That PIN is already used by someone else" — the admin needs the
-      // reason, not a correlation id.
+      // e.g. "That password is already used by someone else" — the admin
+      // needs the reason, not a correlation id.
       return err({
         code: 'precondition_failed',
         message: e instanceof Error ? e.message : 'Create user failed',
@@ -68,7 +79,7 @@ export function registerUsersHandlers(ctx: HandlerContext): void {
     if (!parsed.success) {
       return err({
         code: 'validation_failed',
-        message: 'Invalid input',
+        message: validationMessage(parsed.error),
         details: parsed.error.flatten(),
       });
     }

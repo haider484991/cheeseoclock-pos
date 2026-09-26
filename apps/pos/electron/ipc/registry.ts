@@ -25,6 +25,7 @@ import { registerRidersHandlers } from './handlers/riders-handlers.js';
 import { registerShiftsHandlers } from './handlers/shifts-handlers.js';
 import { registerWebBridgeHandlers } from './handlers/web-bridge-handlers.js';
 import { registerAuditHandlers } from './handlers/audit-handlers.js';
+import { registerAlertsHandlers } from './handlers/alerts-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
 import { startHousekeeping } from '../services/housekeeping.js';
 
@@ -149,5 +150,6 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   registerShiftsHandlers(ctx);
   registerWebBridgeHandlers(ctx);
   registerAuditHandlers(ctx);
+  registerAlertsHandlers(ctx);
   log.info('IPC handlers registered');
 }

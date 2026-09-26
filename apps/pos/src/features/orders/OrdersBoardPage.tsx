@@ -20,8 +20,9 @@ import {
   XCircle,
 } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { ipc, onWebOrderImportFailed } from '../../ipc/client';
+import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { useAcknowledgeOnlineOrders } from '../notifications/alertStore';
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
 import { AssignRiderDialog } from './AssignRiderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
@@ -134,19 +135,10 @@ export function OrdersBoardPage() {
     onError: failed('Reprint failed'),
   });
 
-  // A website order the bridge could not import never reaches the board, so
-  // staff would otherwise never know it existed. Keep the toast up until it
-  // is dismissed — the customer is waiting on a call.
-  useEffect(() => {
-    return onWebOrderImportFailed((payload) => {
-      toast({
-        title: 'Website order not imported',
-        description: `Website order from ${payload.customerName} could not be imported: ${payload.message} — call the customer`,
-        variant: 'error',
-        duration: Infinity,
-      });
-    });
-  }, [toast]);
+  // A website order that did not come in: the alarm and the red note are on
+  // every screen now (notifications/OrderAlerts). Opening the board counts as
+  // seeing the new online orders on it.
+  useAcknowledgeOnlineOrders();
 
   const all = useMemo(() => ordersQ.data ?? [], [ordersQ.data]);
   const visible = useMemo(() => all.filter((s) => matchesBoardSearch(s, search)), [all, search]);
@@ -537,7 +529,7 @@ function OrderCard({
           <Printer className="h-4 w-4" />
         </IconButton>
         <IconButton
-          label={paid ? 'Refund order (manager PIN)' : 'Cancel order (manager PIN)'}
+          label={paid ? 'Refund order (manager approval)' : 'Cancel order (manager approval)'}
           onClick={onCancel}
           danger
         >

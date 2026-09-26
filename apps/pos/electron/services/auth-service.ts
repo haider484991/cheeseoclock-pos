@@ -1,16 +1,27 @@
 import { v7 as uuidv7 } from 'uuid';
-import { createHash } from 'node:crypto';
 import log from 'electron-log/main';
 import type { AppDatabase } from '../db/connection.js';
-import { findUserByPin, touchUserLogin } from '../db/repositories/user-repo.js';
+import { findUserBySecret, touchUserLogin } from '../db/repositories/user-repo.js';
 import { writeAudit } from '../db/repositories/audit-repo.js';
 import type { AuthenticatedUser, UUID } from '@cheeseoclock/shared-types';
+import { normalizeSecret, secretProblem } from '@cheeseoclock/shared-schemas';
+import {
+  assertSecretNotLocked,
+  clearSecretAttempts,
+  oneSecretCheckAtATime,
+  recordSecretFailure,
+} from './login-attempts.js';
 
 /**
  * The auth service owns the single "currently logged-in user" for this device.
  * Sessions persist across app restarts so a closed laptop doesn't kick a cashier
- * mid-shift, but a fresh app boot will require fresh PIN entry by design
- * (sessions older than SESSION_MAX_AGE_MS are auto-closed).
+ * mid-shift, but a fresh app boot will require fresh PIN or password entry by
+ * design (sessions older than SESSION_MAX_AGE_MS are auto-closed).
+ *
+ * Everyone signs in with a number PIN or a password (sign-in-secret.ts in
+ * shared-schemas); the same rules and the same lockout (login-attempts.ts)
+ * apply to both, and to every manager approval. What was typed is never
+ * logged or stored — only argon2id hashes and HMAC-keyed attempt counters.
  */
 
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h
@@ -24,104 +35,26 @@ const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h
  */
 export const ELEVATED_IDLE_MS = 15 * 60 * 1000;
 
-// Brute-force protection. Argon2id alone is insufficient at PIN entropy
-// (~10k combinations for a 4-digit PIN), so we layer a sliding-window
-// counter on top. The lockout escalates with consecutive failures:
-//   5 failures → 30s lockout
-//   10 failures → 5 min lockout
-//   15+ failures → 30 min lockout
-// Two counters share the same tiers and the same `login_attempts` table:
-//   - one keyed on the PIN hash (a stuck key on one PIN locks only that PIN);
-//   - one keyed on a fixed device-wide row, so walking 0000…9999 — where no
-//     single PIN is ever retried — still locks after five wrong guesses.
-// A successful login clears only that PIN's row. The device-wide row counts
-// wrong guesses in a rolling 15-minute window and is never cleared by a good
-// PIN: clearing it let a cashier guess 4 PINs, log in with their own, and
-// repeat until the manager's PIN fell (audit 2026-09-25). Its locks are short
-// (DEVICE_LOCKOUT_TIERS) so a burst of typos can't shut the till for 30 min.
-const PIN_LOCKOUT_TIERS = [
-  { threshold: 15, lockMs: 30 * 60 * 1000 }, // 30 min
-  { threshold: 10, lockMs: 5 * 60 * 1000 }, //  5 min
-  { threshold: 5, lockMs: 30 * 1000 }, // 30 s
-] as const;
-
-const DEVICE_LOCKOUT_TIERS = [
-  { threshold: 10, lockMs: 60 * 1000 }, // 1 min
-  { threshold: 5, lockMs: 30 * 1000 }, // 30 s
-] as const;
-const DEVICE_WINDOW_MS = 15 * 60 * 1000;
-
-/** Fixed `login_attempts.pin_hash` for the device-wide counter. PINs are digits, so it can never collide with a real PIN hash. */
-const DEVICE_ATTEMPTS_KEY = '__device__';
-
-/** Hash the PIN so we never store/key on the raw value. */
-function hashPinForAttempts(pin: string): string {
-  return createHash('sha256').update(`attempts:${pin.trim()}`).digest('hex');
-}
-
-function assertKeyNotLocked(db: AppDatabase, key: string): void {
-  const row = db
-    .prepare(
-      `SELECT locked_until FROM login_attempts WHERE pin_hash = ?`,
-    )
-    .get(key) as { locked_until: string | null } | undefined;
-  if (row?.locked_until) {
-    const until = Number(row.locked_until);
-    if (Number.isFinite(until) && until > Date.now()) {
-      const seconds = Math.ceil((until - Date.now()) / 1000);
-      const human = seconds >= 60 ? `${Math.ceil(seconds / 60)} min` : `${seconds}s`;
-      throw new Error(`Too many failed attempts. Try again in ${human}.`);
-    }
-  }
-}
-
-function recordKeyFailure(
-  db: AppDatabase,
-  key: string,
-  tiers: ReadonlyArray<{ threshold: number; lockMs: number }> = PIN_LOCKOUT_TIERS,
-  windowMs?: number,
-): void {
-  const now = new Date().toISOString();
-  const row = db
-    .prepare(`SELECT failed_count, last_failed_at FROM login_attempts WHERE pin_hash = ?`)
-    .get(key) as { failed_count: number; last_failed_at: string } | undefined;
-  // A rolling window: failures older than it no longer count.
-  const stale =
-    windowMs !== undefined && row !== undefined && Date.now() - Date.parse(row.last_failed_at) > windowMs;
-  const next = (stale ? 0 : row?.failed_count ?? 0) + 1;
-  // Find the highest tier this count crosses.
-  const tier = tiers.find((t) => next >= t.threshold);
-  const lockedUntil = tier ? String(Date.now() + tier.lockMs) : null;
-  db.prepare(
-    `INSERT INTO login_attempts (pin_hash, failed_count, last_failed_at, locked_until)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(pin_hash) DO UPDATE SET
-       failed_count = excluded.failed_count,
-       last_failed_at = excluded.last_failed_at,
-       locked_until = excluded.locked_until`,
-  ).run(key, next, now, lockedUntil);
-}
+/** A PIN or password nobody has. */
+export const WRONG_SECRET = 'PIN or password is wrong';
+/**
+ * A manager approval that failed. One message whether nobody has that secret
+ * or a cashier does: a separate "not a manager" told whoever typed it that
+ * the string is a real staff password, which may be used elsewhere too.
+ */
+export const NOT_A_MANAGER = "That is not a manager's PIN or password";
 
 /**
- * Throws "Too many failed attempts. Try again in <N>s." if this PIN, or the
- * device as a whole, is currently locked. Always call BEFORE the argon2
- * verify so a locked PIN doesn't even hit the hash check.
+ * The typed secret, normalized, or a plain-words refusal. A value that breaks
+ * the rules is refused before the lockout lookup and before any hash, and is
+ * not counted as a guess (it can't be anyone's). Also what stops an approval
+ * with no PIN at all from reaching the hash check (orders:refund once passed
+ * `undefined` straight through and showed a TypeError on the screen).
  */
-function assertPinNotLocked(db: AppDatabase, pin: string): void {
-  assertKeyNotLocked(db, DEVICE_ATTEMPTS_KEY);
-  assertKeyNotLocked(db, hashPinForAttempts(pin));
-}
-
-function recordPinFailure(db: AppDatabase, pin: string): void {
-  db.transaction(() => {
-    recordKeyFailure(db, hashPinForAttempts(pin));
-    recordKeyFailure(db, DEVICE_ATTEMPTS_KEY, DEVICE_LOCKOUT_TIERS, DEVICE_WINDOW_MS);
-  })();
-}
-
-function clearPinAttempts(db: AppDatabase, pin: string): void {
-  // This PIN only — the device-wide counter runs out on its own window.
-  db.prepare(`DELETE FROM login_attempts WHERE pin_hash = ?`).run(hashPinForAttempts(pin));
+function readSecret(raw: unknown): string {
+  const problem = secretProblem(raw);
+  if (problem !== null) throw new Error(problem);
+  return normalizeSecret(raw as string);
 }
 
 let currentSession: AuthenticatedUser | null = null;
@@ -194,18 +127,23 @@ function endSession(action: 'logout' | 'session_expired' | 'session_idle_timeout
   log.info('Session ended', { userId: session.id, action });
 }
 
+/** Sign in with a PIN or a password. */
 export async function login(
   db: AppDatabase,
   pin: string,
   deviceId: string,
 ): Promise<AuthenticatedUser> {
-  assertPinNotLocked(db, pin);
-  const user = await findUserByPin(db, pin);
-  if (!user) {
-    recordPinFailure(db, pin);
-    throw new Error('Invalid PIN');
-  }
-  clearPinAttempts(db, pin);
+  const secret = readSecret(pin);
+  const user = await oneSecretCheckAtATime(async () => {
+    assertSecretNotLocked(db, secret);
+    const found = await findUserBySecret(db, secret);
+    if (!found) {
+      recordSecretFailure(db, secret);
+      throw new Error(WRONG_SECRET);
+    }
+    clearSecretAttempts(db, secret);
+    return found;
+  });
 
   const sessionId = uuidv7();
   const now = new Date().toISOString();
@@ -287,27 +225,27 @@ export function recoverSession(db: AppDatabase, deviceId: string): Authenticated
 }
 
 /**
- * Verify a manager-level PIN without changing the current session.
- * Used for discount approvals, void overrides, etc.
+ * Verify a manager's PIN or password without changing the current session.
+ * Used for discount approvals, cancel / refund overrides, cash in/out. A
+ * cashier's own secret is refused (and counted, as a wrong guess is).
  */
 export async function verifyManagerPin(
   db: AppDatabase,
   pin: string,
 ): Promise<{ approverUserId: string; approverName: string }> {
-  assertPinNotLocked(db, pin);
-  const user = await findUserByPin(db, pin);
-  if (!user) {
-    recordPinFailure(db, pin);
-    throw new Error('Invalid PIN');
-  }
-  if (user.role !== 'manager' && user.role !== 'admin') {
-    // Not authorized → still count as a failed attempt (someone is trying
-    // cashier PINs as manager overrides).
-    recordPinFailure(db, pin);
-    throw new Error('Not authorized — manager PIN required');
-  }
-  clearPinAttempts(db, pin);
-  return { approverUserId: user.id, approverName: user.fullName };
+  const secret = readSecret(pin);
+  return oneSecretCheckAtATime(async () => {
+    assertSecretNotLocked(db, secret);
+    const user = await findUserBySecret(db, secret);
+    if (!user || (user.role !== 'manager' && user.role !== 'admin')) {
+      // A cashier's secret typed as a manager override counts as a failed
+      // attempt too (someone is trying staff secrets as approvals).
+      recordSecretFailure(db, secret);
+      throw new Error(NOT_A_MANAGER);
+    }
+    clearSecretAttempts(db, secret);
+    return { approverUserId: user.id, approverName: user.fullName };
+  });
 }
 
 /** Close any session that's been open longer than SESSION_MAX_AGE_MS (called on boot). */

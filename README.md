@@ -18,7 +18,7 @@ A modern, **offline-first point-of-sale system for restaurants & cafés**, built
 | **Receipt printing** | ESC/POS over USB (any printer Windows lists — sent RAW through its print queue, no driver tricks), network port 9100, or a mock-to-disk adapter for dev. Logo + FBR IRN + QR. |
 | **FBR Digital Invoicing** | Noop (dev) / sandbox / production adapters, persistent queue with retry, IRN + QR auto-attached to receipts. |
 | **Cloud sync** | `sync_queue` push + apply-remote dispatcher. Mock & HTTP adapters ready; bring your own Postgres-backed `/sync/push` + `/sync/pull` endpoint. |
-| **Users + auth** | PIN-based login (argon2id), three roles (admin / manager / cashier), capability gates. |
+| **Users + auth** | Sign in with a number PIN (4–12 digits) or a password (argon2id, lockout on wrong tries), three roles (admin / manager / cashier), capability gates. |
 | **Settings** | Printer config, receipt branding (logo + store info), FBR creds, sync config, local backup/restore, About. |
 | **Backup** | Daily auto-snapshots (keep last 14), USB export with a checksum sidecar, restore-from-file, cloud copies listed from any PC, restore from the onboarding wizard on a replacement PC. |
 | **Tamper evidence** | Hash-chained audit trail verified at boot; every cloud copy carries a manifest and a server-recorded SHA-256; owner-only restore with a safety copy first and a permanent restore record; secrets sealed with the OS keychain so USB copies never carry the website password. |
@@ -119,7 +119,7 @@ The `.github/workflows/release.yml` workflow then:
 1. Build the installer: `pnpm pos:build`
 2. Copy `apps/pos/release/CheeseOclock POS-x.y.z-x64.exe` to a USB stick or email it
 3. On the customer's PC: double-click → (SmartScreen → More info → Run anyway) → install
-4. First launch: **onboarding wizard** appears — collect store name, admin PIN, optional logo
+4. First launch: **onboarding wizard** appears — collect store name, admin PIN or password, optional logo
 5. Set up: Settings → Printer (USB: install the printer's Windows driver, plug it in, pick it from the list; LAN: its IP on port 9100), Branding (store info), FBR (defaults to Noop = dry-run until you have PRAL credentials)
 6. **Tell them**: "Every Friday, Settings → Backup → Export copy → save to your USB. That's your disaster recovery."
 

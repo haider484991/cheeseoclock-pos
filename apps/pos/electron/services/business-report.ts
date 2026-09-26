@@ -7,6 +7,7 @@ import type {
   ReportDeliveries,
   ReportDiscountLine,
   ReportDiscounts,
+  ReportDrawerOpenLine,
   ReportFoodCost,
   ReportItemLine,
   ReportKpis,
@@ -204,6 +205,9 @@ function tally<K>(map: Map<K, Tally>, key: K, net: number): void {
   } else map.set(key, { orderCount: 1, netSalesCents: net });
 }
 
+/** A staff line as the sales pass makes it, before the counts from other tables. */
+type SalesStaffLine = Omit<ReportStaffLine, 'voidCount' | 'noSaleOpens'>;
+
 /** Everything that is added up per counted order, in one pass. */
 export function aggregateSales(
   rows: SaleRow[],
@@ -223,7 +227,7 @@ export function aggregateSales(
   byDay: BusinessReport['byDay'];
   byHour: BusinessReport['byHour'];
   channels: ReportChannelLine[];
-  staff: Array<Omit<ReportStaffLine, 'voidCount'>>;
+  staff: SalesStaffLine[];
   deliveries: ReportDeliveries;
 } {
   const totals = {
@@ -501,16 +505,25 @@ function getVoids(db: AppDatabase, range: ReportRange): Array<ReportVoidLine & {
   }));
 }
 
-/** Staff lines with each person's cancellations; someone whose every order was cancelled still shows. */
-function withVoidCounts(
-  staff: Array<Omit<ReportStaffLine, 'voidCount'>>,
+/**
+ * Staff lines with each person's cancellations and no-sale drawer opens;
+ * someone whose every order was cancelled, or who only opened the drawer,
+ * still shows.
+ */
+function withStaffCounts(
+  staff: SalesStaffLine[],
   voids: Array<{ staffKey: string }>,
+  noSaleOpens: Map<string, number>,
   userName: (id: string) => string | null,
 ): ReportStaffLine[] {
   const voidCounts = new Map<string, number>();
   for (const v of voids) voidCounts.set(v.staffKey, (voidCounts.get(v.staffKey) ?? 0) + 1);
-  const lines: ReportStaffLine[] = staff.map((s) => ({ ...s, voidCount: voidCounts.get(s.key) ?? 0 }));
-  for (const [key, n] of voidCounts) {
+  const lines: ReportStaffLine[] = staff.map((s) => ({
+    ...s,
+    voidCount: voidCounts.get(s.key) ?? 0,
+    noSaleOpens: noSaleOpens.get(s.key) ?? 0,
+  }));
+  for (const key of new Set([...voidCounts.keys(), ...noSaleOpens.keys()])) {
     if (lines.some((l) => l.key === key)) continue;
     lines.push({
       key,
@@ -519,10 +532,77 @@ function withVoidCounts(
       orderCount: 0,
       netSalesCents: 0,
       discountCents: 0,
-      voidCount: n,
+      voidCount: voidCounts.get(key) ?? 0,
+      noSaleOpens: noSaleOpens.get(key) ?? 0,
     });
   }
   return lines;
+}
+
+/**
+ * Manual drawer opens that count as "no sale": the Open drawer button and
+ * Test drawer. A shift's one "open to count" is part of closing it (a second
+ * one is saved as no_sale — see drawer-open-repo).
+ */
+const NO_SALE_KINDS = `('no_sale', 'test')`;
+
+/** Who opened the drawer with no sale in the period, and how often. */
+function getNoSaleOpensByUser(db: AppDatabase, range: ReportRange): Map<string, number> {
+  const rows = db
+    .prepare(
+      `SELECT user_id AS userId, COUNT(*) AS n FROM drawer_opens
+        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND kind IN ${NO_SALE_KINDS}
+        GROUP BY user_id`,
+    )
+    .all(...args(range)) as Array<{ userId: string; n: number }>;
+  return new Map(rows.map((r) => [r.userId, Number(r.n)]));
+}
+
+/** How many manual drawer opens (all kinds) the period had — the list below is capped. */
+function getDrawerOpenCount(db: AppDatabase, range: ReportRange): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM drawer_opens
+        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL`,
+    )
+    .get(...args(range)) as { n: number } | undefined;
+  return Number(row?.n ?? 0);
+}
+
+/** Every manual drawer open in the period (all kinds), newest first, capped. */
+function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLine[] {
+  const rows = db
+    .prepare(
+      `SELECT d.id AS id, d.created_at AS createdAt, d.kind AS kind, d.reason AS reason,
+              COALESCE(u.full_name, 'Unknown') AS openedBy, ua.full_name AS approvedBy,
+              d.approved_by_user_id AS approverId, d.shift_id AS shiftId
+         FROM drawer_opens d
+         LEFT JOIN users u ON u.id = d.user_id
+         LEFT JOIN users ua ON ua.id = d.approved_by_user_id
+        WHERE d.created_at >= ? AND d.created_at < ? AND d.deleted_at IS NULL
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT ${REPORT_LIST_CAP}`,
+    )
+    .all(...args(range)) as Array<{
+    id: string;
+    createdAt: string;
+    kind: string;
+    reason: string | null;
+    openedBy: string;
+    approvedBy: string | null;
+    approverId: string | null;
+    shiftId: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    createdAt: r.createdAt,
+    // A kind this till doesn't know yet (from a newer one) reads as a no-sale open.
+    kind: r.kind === 'count' || r.kind === 'test' ? r.kind : 'no_sale',
+    reason: r.reason,
+    openedBy: r.openedBy,
+    approvedBy: r.approverId === null ? null : (r.approvedBy ?? 'Unknown'),
+    outsideShift: r.shiftId === null,
+  }));
 }
 
 function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'] {
@@ -537,7 +617,11 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
               COALESCE((SELECT SUM(m.amount_cents) FROM cash_movements m
                          WHERE m.shift_id = s.id AND m.deleted_at IS NULL AND m.type = 'payin'), 0) AS cashInCents,
               COALESCE((SELECT SUM(m.amount_cents) FROM cash_movements m
-                         WHERE m.shift_id = s.id AND m.deleted_at IS NULL AND m.type IN ('payout', 'tip_out')), 0) AS cashOutCents
+                         WHERE m.shift_id = s.id AND m.deleted_at IS NULL AND m.type IN ('payout', 'tip_out')), 0) AS cashOutCents,
+              (SELECT COUNT(*) FROM cash_movements m
+                WHERE m.shift_id = s.id AND m.deleted_at IS NULL) AS cashMovementCount,
+              (SELECT COUNT(*) FROM drawer_opens d
+                WHERE d.shift_id = s.id AND d.deleted_at IS NULL AND d.kind IN ${NO_SALE_KINDS}) AS noSaleOpens
          FROM shifts s
          LEFT JOIN users uo ON uo.id = s.opened_by_user_id
          LEFT JOIN users uc ON uc.id = s.closed_by_user_id
@@ -715,11 +799,13 @@ export function getBusinessReport(db: AppDatabase, req: BusinessReportRequest): 
       items,
       categories: rollUpCategories(items),
       channels: sales.channels,
-      staff: withVoidCounts(sales.staff, voidRows, names.user),
+      staff: withStaffCounts(sales.staff, voidRows, getNoSaleOpensByUser(db, range), names.user),
       shifts: getShifts(db, range),
       discounts: summarizeDiscounts(getDiscountLines(db, range)),
       refunds: getRefunds(db, range).slice(0, REPORT_LIST_CAP),
       voids: voidRows.slice(0, REPORT_LIST_CAP).map(({ staffKey: _staffKey, ...v }) => v),
+      drawerOpens: getDrawerOpens(db, range),
+      drawerOpenCount: getDrawerOpenCount(db, range),
       foodCost: getFoodCost(db, range),
       deliveries: sales.deliveries,
     };
