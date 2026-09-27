@@ -1281,6 +1281,13 @@ interface DoThisBase {
   weekCents: number | null;
   /** Pinned first, whatever the rupees (a key ingredient running out). */
   pinned: boolean;
+  /**
+   * First among the pinned lines, so the few pinned places never leave it
+   * out (a stock take the owner asked to be reminded of: it is due most when
+   * nothing has been counted for a while, which is when many key items read
+   * low too). Absent: false.
+   */
+  pinFirst?: boolean;
   /** It carries costs: only for a login with COST_CAPABILITY (the main process drops the rest). */
   cost: boolean;
 }

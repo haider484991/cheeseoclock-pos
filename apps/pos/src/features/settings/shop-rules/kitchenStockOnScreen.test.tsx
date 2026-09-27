@@ -108,7 +108,16 @@ describe('Settings → Kitchen & stock', () => {
         { id: 'test_spill', label: 'Test spill', hidden: false },
       ],
     };
-    const words = text(render(<KitchenStockSettings />, seedCards(stock, true)));
+    const out = render(<KitchenStockSettings />, seedCards(stock, true));
+    const words = text(out);
+    // His added reason is saved, so either till may have waste entries with it: Hide, no Remove.
+    expect(words).not.toContain('Remove');
+    expect(words).toContain('A reason you add can be removed until you save it');
+    // Each reminder's words tick its own box; the days box has its own name.
+    expect(out).toMatch(/<label for="stock-keyItemsOn"[^>]*><input id="stock-keyItemsOn" type="checkbox"[^>]*\/><span>Remind me to count the key items every<\/span><\/label>/);
+    expect(out).toMatch(/<label for="stock-fullOn"[^>]*><input id="stock-fullOn" type="checkbox"[^>]*\/><span>Remind me to do a full stock take every<\/span><\/label>/);
+    expect(out).toMatch(/<input id="stock-keyItemsDays" aria-label="Days between key-items counts"/);
+    expect(out).toMatch(/<input id="stock-fullDays" aria-label="Days between full stock takes"[^>]*disabled=""/);
     expect(words).toContain('Last changed by Test Owner on this till');
     expect(words).toContain('lists it when more than 2.5% went (Rs 2,500 here)');
     expect(words).toContain('“Count the key items” when the last key-items or full stock take was 7 days ago or more');
@@ -118,7 +127,7 @@ describe('Settings → Kitchen & stock', () => {
     expect(words).toContain('the till keeps Rs 1,200');
   });
 
-  it('only the owner’s login has the tab, after Printers; the first five tabs are as they were', () => {
+  it('only the owner’s login has the tab, in the design’s place: after Staff & kitchen timing, before Printers', () => {
     const tabs = (markup: string) =>
       markup
         .split('role="tab"')
@@ -126,7 +135,7 @@ describe('Settings → Kitchen & stock', () => {
         .map((t) => text(`<x ${t.slice(0, t.indexOf('</button>'))}`));
     signIn('admin');
     const all = tabs(render(<SettingsPage />));
-    expect(all.slice(0, 6)).toEqual(['foodpanda', 'Money & discounts', 'Shop & logo', 'Staff & kitchen timing', 'Printers', 'Kitchen & stock']);
+    expect(all.slice(0, 6)).toEqual(['foodpanda', 'Money & discounts', 'Shop & logo', 'Staff & kitchen timing', 'Kitchen & stock', 'Printers']);
     for (const role of ['manager', 'cashier'] as const) {
       signIn(role);
       expect({ role, tabs: tabs(render(<SettingsPage />)) }).toEqual({ role, tabs: ['Printers', 'Sounds', 'About'] });

@@ -5,24 +5,48 @@
  * pos-domain varianceBand, stockFill; suggestReorderQty), never typed into
  * the text.
  */
-import { formatCents, formatQty, varianceBand } from '@cheeseoclock/pos-domain';
-import type { MenuImportPolicy, StockRules, StockTakeReminders } from '@cheeseoclock/shared-types';
+import { formatCents, formatQty, isBuiltInWasteReason, releasedWasteReasonLabel, varianceBand } from '@cheeseoclock/pos-domain';
+import type { MenuImportPolicy, StockRules, StockTakeReminders, WasteReasonSetting } from '@cheeseoclock/shared-types';
 import { formatBps } from '../../costing/costingFormat';
 import { VARIANCE_BAND_LABEL } from '../../reports/varianceFormat';
 import { suggestReorderQty } from '../../inventory/ingredient-list';
 
 const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
 
-/** One line for History: "“Do this” over 3% (6+ days apart) · good under 2%, OK to 3%, needs work to 5% · no reminders · full bar 3 × low · 7 waste reasons". */
+/**
+ * One line for History (and the "Put back the default" dialog): "“Do this”
+ * over 3% (6+ days apart) · good under 2%, OK to 3%, needs work to 5% · no
+ * reminders · full bar 3 × low · 7 waste reasons". The waste reasons say
+ * what differs from the till's own seven — renamed, added, hidden — so two
+ * saves that differ only there read differently.
+ */
 export function stockRulesSummary(r: StockRules): string {
-  const hidden = r.wasteReasons.filter((x) => x.hidden).length;
   return [
     `“Do this” over ${formatBps(r.varianceDoThisBps)} (${r.varianceMinWindowDays}+ days apart)`,
     `good under ${formatBps(r.bands.goodUnderBps)}, OK to ${formatBps(r.bands.okUpToBps)}, needs work to ${formatBps(r.bands.needsWorkUpToBps)}`,
     remindersSummary(r.reminders),
     `full bar ${r.reorderMultiple} × low`,
-    `${r.wasteReasons.length} waste reasons${hidden > 0 ? ` (${hidden} hidden)` : ''}`,
+    wasteReasonsSummary(r.wasteReasons),
   ].join(' · ');
+}
+
+/**
+ * "7 waste reasons", or with what differs from the released seven:
+ * "8 waste reasons (“Burnt” renamed “Burnt edges”; added “Spilled”; hidden: “Staff meal”)".
+ */
+export function wasteReasonsSummary(reasons: readonly WasteReasonSetting[]): string {
+  const q = (s: string) => `“${s}”`;
+  const renamed = reasons
+    .filter((x) => isBuiltInWasteReason(x.id) && releasedWasteReasonLabel(x.id) !== x.label)
+    .map((x) => `${q(releasedWasteReasonLabel(x.id)!)} renamed ${q(x.label)}`);
+  const added = reasons.filter((x) => !isBuiltInWasteReason(x.id)).map((x) => q(x.label));
+  const hidden = reasons.filter((x) => x.hidden).map((x) => q(x.label));
+  const notes = [
+    ...renamed,
+    ...(added.length > 0 ? [`added ${added.join(', ')}`] : []),
+    ...(hidden.length > 0 ? [`hidden: ${hidden.join(', ')}`] : []),
+  ];
+  return `${reasons.length} waste reasons${notes.length > 0 ? ` (${notes.join('; ')})` : ''}`;
 }
 
 function remindersSummary(r: StockTakeReminders): string {
@@ -99,7 +123,7 @@ export const IMPORT_POLICY_FIELDS: ReadonlyArray<{ field: PolicyField; label: st
     field: 'choices',
     label: 'Choices (“Choose your dip”)',
     file: 'The file sets each choice’s extra charge, what it leaves out, which is picked first and how many to pick.',
-    till: 'The till keeps them as they are; new options in the file are still added.',
+    till: 'The till keeps them as they are; new options in the file are still added, not picked to start with.',
   },
   {
     field: 'recipes',

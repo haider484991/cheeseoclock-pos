@@ -273,9 +273,11 @@ export interface StockTakeReminders {
 /**
  * One reason on the Waste screen. The id is FIXED: waste rows keep
  * 'waste:<id>' and Reports group by it, so a new name shows on every old
- * row too. A reason old rows use can be hidden (off the Waste screen, still
- * named in Reports and the history) but not removed; the seven the till was
- * released with (WASTE_REASONS) are never removed.
+ * row too. A saved reason can be hidden (off the Waste screen, still named
+ * in Reports and the history) but not removed: either till may have waste
+ * rows with it, and the other till's may not have arrived yet. Only one
+ * added since the last Save can come off. The seven the till was released
+ * with (WASTE_REASONS) are never removed.
  */
 export interface WasteReasonSetting {
   id: WasteReasonId;
@@ -347,7 +349,7 @@ export interface MenuImportPolicy {
   v: number;
   /** A menu item's selling price. */
   itemPrices: ImportSide;
-  /** A choice's extra charge, which option is picked first, what it leaves out, and how many to pick. New options still come in. */
+  /** A choice's extra charge, which option is picked first, what it leaves out, and how many to pick. New options still come in (with 'till': not picked first). */
   choices: ImportSide;
   /** A dish's recipe, and a batch recipe (what the kitchen makes), where the till has one. */
   recipes: ImportSide;
@@ -573,6 +575,11 @@ export interface ShopSettingCard<K extends ShopSettingKey = ShopSettingKey> {
   key: K;
   /** The value in use: the saved one, or the default when nothing is saved. */
   value: ShopSettingValues[K];
+  /**
+   * What "Put back the default" writes: the default's values (the stock
+   * rules also keep every waste reason the owner added, hidden — either till
+   * may have waste entries with it).
+   */
   defaultValue: ShopSettingValues[K];
   /**
    * The value in use is the default's: nothing saved yet, or the default was

@@ -37,7 +37,7 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
     const req = parsed.data;
     // "Put back the default" WRITES the default's values, so both tills hold
     // the same explicit row (a soft delete would leave each on its own idea).
-    // (The stock rules keep a waste reason the owner added that rows use, hidden: putBackValue.)
+    // (The stock rules keep every waste reason the owner added, hidden: putBackValue.)
     const value = 'useDefault' in req ? putBackValue(ctx.db, req.key) : req.value;
     try {
       // The key's schema checks the value, and a value saved by a newer

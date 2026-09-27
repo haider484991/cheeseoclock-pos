@@ -135,6 +135,7 @@ live('stock-take reminders', () => {
         key: 'stock_take_due:key_items',
         weekCents: null,
         pinned: true,
+        pinFirst: true,
         cost: false,
         scope: 'key_items',
         everyDays: 7,
@@ -148,6 +149,19 @@ live('stock-take reminders', () => {
     s.clock('2026-09-27T06:00:00.000Z');
     s.stockTake(s.tillCount(s.ing.cheese), 'full');
     expect(reminders(s, MON_28)).toEqual([]);
+  });
+
+  it('due, it comes first of the pinned lines: key items running low don’t push it down (two pins at most)', async () => {
+    const { s } = await weekOfCheese(0);
+    // Three key items, all under their low level (the kind of till that most needs a count).
+    s.r.setKeyItems(s.db, [s.ing.cheese, s.ing.onion, s.ing.pepper], MANAGER);
+    for (const id of [s.ing.cheese, s.ing.onion, s.ing.pepper]) s.r.updateIngredient(s.db, { id, lowThreshold: 10_000_000 }, MANAGER);
+    const before = s.doThis(MON_28).map((i) => i.kind);
+    expect(before.filter((k) => k === 'low_stock')).toHaveLength(3);
+    expect(before).not.toContain('stock_take_due');
+    s.saveRules({ reminders: { keyItemsEveryDays: 7, fullEveryDays: null } });
+    const kinds = s.doThis(MON_28).map((i) => i.kind);
+    expect(kinds.slice(0, 2)).toEqual(['stock_take_due', 'low_stock']);
   });
 
   it('a full stock take every 30 days, never done: that line alone', async () => {

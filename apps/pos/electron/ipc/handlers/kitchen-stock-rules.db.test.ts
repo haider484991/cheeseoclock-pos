@@ -13,10 +13,11 @@
  *     (checkout:getRules) — never the variance's figures;
  *   - waste reasons keyed by their fixed id: a rename keeps old rows and
  *     Reports right; a reason the owner added works on the Waste screen and
- *     in Reports; one that rows use can be hidden but not removed (refused
- *     inside the save, nothing written), and once hidden it can't be picked;
- *     one no row uses can be removed; "Put back the default" keeps a used
- *     one, hidden;
+ *     in Reports; once saved it can be hidden but not removed — even with
+ *     no waste row on this till, since the other till may have booked some
+ *     that have not arrived yet (refused inside the save, nothing written) —
+ *     and once hidden it can't be picked; "Put back the default" keeps every
+ *     added one, hidden, and is the default from then on;
  *   - a menu file import reads the owner's rule when it is previewed AND
  *     when it is applied (inside its transaction): the file's price by
  *     default (today), the till's kept — and said — when he asks.
@@ -307,7 +308,7 @@ live('waste reasons are keyed by a fixed id', () => {
     expect(removed).toEqual({
       ok: false,
       code: 'validation_failed',
-      message: '“Spilled” is on 1 waste entry, so it can\'t be removed: hide it instead (old entries keep its name).',
+      message: '“Spilled” is saved, and waste entries on either till may use it, so it can\'t be removed: hide it instead (old entries keep its name).',
     });
     expect(writtenRows()).toEqual(before);
 
@@ -322,15 +323,23 @@ live('waste reasons are keyed by a fixed id', () => {
     expect(await waste('eaten')).toMatchObject({ ok: false, code: 'validation_failed' });
   });
 
-  it('a reason no row uses can be removed', async () => {
-    const added = withReasons((r) => [...r, { id: 'mice', label: 'Mice', hidden: false }]);
+  it('a saved reason with no waste row on THIS till still can’t be removed: the other till’s rows may not have arrived yet', async () => {
+    // Till A saves "Spilled"; till B books waste with it while the link is down; the owner, on A, takes it off.
+    const added = withReasons((r) => [...r.slice(0, -1), { id: 'spilled', label: 'Spilled', hidden: false }, r[r.length - 1]!]);
     expect((await save('stock.rules', added)).ok).toBe(true);
-    expect((await save('stock.rules', rules())).ok).toBe(true);
-    const card = await as(OWNER, () => data<{ value: StockRules; isDefault: boolean }>('settings:getBusiness', { key: 'stock.rules' }));
-    expect(card).toMatchObject({ value: DEFAULT_STOCK_RULES, isDefault: true });
+    expect(one(`SELECT COUNT(*) AS n FROM stock_movements WHERE detail = 'waste:spilled'`)).toBe(0);
+    const before = writtenRows();
+    expect(await save('stock.rules', rules())).toMatchObject({ ok: false, code: 'validation_failed', message: expect.stringContaining('“Spilled” is saved') });
+    expect(writtenRows()).toEqual(before);
+    // B's row arrives (booked here in its place): it keeps its name in Reports.
+    expect((await waste('spilled')).ok).toBe(true);
+    expect((await report()).wasteByReason.map((w) => w.reason)).toEqual(['spilled']);
+    expect((await report()).wasteLabels).toEqual({ spilled: 'Spilled' });
+    // Hiding it is always allowed.
+    expect((await save('stock.rules', { ...added, wasteReasons: added.wasteReasons.map((x) => (x.id === 'spilled' ? { ...x, hidden: true } : x)) })).ok).toBe(true);
   });
 
-  it('"Put back the default": today’s rules, and a reason the owner added that rows use stays, hidden', async () => {
+  it('"Put back the default": today’s rules, every reason the owner added stays, hidden — and it is the default from then on', async () => {
     const mine = withReasons((r) => [
       ...r.map((x) => (x.id === 'burnt' ? { ...x, label: 'Burnt edges' } : x)),
       { id: 'spilled', label: 'Spilled', hidden: false },
@@ -339,11 +348,18 @@ live('waste reasons are keyed by a fixed id', () => {
     mine.reorderMultiple = 5;
     expect((await save('stock.rules', mine)).ok).toBe(true);
     expect((await waste('spilled')).ok).toBe(true);
-    const card = await as(OWNER, () => data<{ value: StockRules; isDefault: boolean }>('settings:setBusiness', { key: 'stock.rules', useDefault: true }));
-    expect(card.value).toEqual({ ...DEFAULT_STOCK_RULES, wasteReasons: [...DEFAULT_STOCK_RULES.wasteReasons, { id: 'spilled', label: 'Spilled', hidden: true }] });
-    expect(card.isDefault).toBe(false);
-    // The old row still has its name.
-    expect((await report()).wasteLabels).toEqual({ spilled: 'Spilled' });
+    const kept = { ...DEFAULT_STOCK_RULES, wasteReasons: [...DEFAULT_STOCK_RULES.wasteReasons, { id: 'spilled', label: 'Spilled', hidden: true }, { id: 'mice', label: 'Mice', hidden: true }] };
+    // Before: the card's default is what Put back will write (its dialog describes it).
+    const was = await as(OWNER, () => data<{ value: StockRules; defaultValue: StockRules; isDefault: boolean }>('settings:getBusiness', { key: 'stock.rules' }));
+    expect(was).toMatchObject({ value: mine, defaultValue: kept, isDefault: false });
+    const card = await as(OWNER, () => data<{ value: StockRules; defaultValue: StockRules; isDefault: boolean }>('settings:setBusiness', { key: 'stock.rules', useDefault: true }));
+    expect(card.value).toEqual(kept);
+    // The "Default" badge is back and Put back has nothing left to do.
+    expect(card).toMatchObject({ defaultValue: kept, isDefault: true });
+    // The old row still has its name; neither hidden reason can be picked.
+    expect((await report()).wasteByReason.map((w) => w.reason)).toEqual(['spilled']);
+    expect((await report()).wasteLabels).toMatchObject({ spilled: 'Spilled' });
+    expect(await waste('mice')).toMatchObject({ ok: false, code: 'validation_failed' });
   });
 });
 

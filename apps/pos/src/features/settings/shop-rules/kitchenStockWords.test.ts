@@ -8,6 +8,7 @@ import {
 import {
   addWasteReason,
   bpsFromShareText,
+  canRemoveWasteReason,
   removeWasteReason,
   renameWasteReason,
   sameStockRules,
@@ -23,12 +24,14 @@ import {
   reorderExample,
   stockRulesSummary,
   varianceExample,
+  wasteReasonsSummary,
 } from './stockRulesWords';
 import { kitchenTicketText, printPolicyDiffers } from './printingWords';
 import { DEFAULT_COUNTER_STOCK, stockRulesOf } from './counterRules';
 import { varianceBandsText } from '../../reports/varianceFormat';
 import { WASTE_REASON_LABEL, wasteReasonLabel } from '../../reports/reportFormat';
-import { defaultTargetText } from '../../costing/costingFormat';
+import { defaultTargetText, followsDefaultTarget, withDefaultFollowed } from '../../costing/costingFormat';
+import { stockRulesPutBack } from '@cheeseoclock/pos-domain';
 import { movementLabel } from '../../inventory/movement-view';
 import { suggestReorderQty } from '../../inventory/ingredient-list';
 import { stockTakeDueWords } from '../../reports/ownerWeekFormat';
@@ -64,7 +67,27 @@ describe('the stock rules card’s words, from the values', () => {
           wasteReasons: DEFAULT_STOCK_RULES.wasteReasons.map((r) => ({ ...r, hidden: r.id === 'other' })),
         }),
       ),
-    ).toBe('“Do this” over 2.5% (3+ days apart) · good under 2%, OK to 3%, needs work to 5% · reminders: key items every 7 days, full every 30 days · full bar 4 × low · 7 waste reasons (1 hidden)');
+    ).toBe('“Do this” over 2.5% (3+ days apart) · good under 2%, OK to 3%, needs work to 5% · reminders: key items every 7 days, full every 30 days · full bar 4 × low · 7 waste reasons (hidden: “Other”)');
+  });
+
+  it('History tells two saves apart that differ only in a waste reason’s name (“Burnt” → “Burnt edges”)', () => {
+    const renamed = mine({ wasteReasons: renameWasteReason(DEFAULT_STOCK_RULES.wasteReasons, 'burnt', 'Burnt edges') });
+    expect(stockRulesSummary(renamed)).not.toBe(stockRulesSummary(DEFAULT_STOCK_RULES));
+    expect(wasteReasonsSummary(renamed.wasteReasons)).toBe('7 waste reasons (“Burnt” renamed “Burnt edges”)');
+    const added = setWasteReasonHidden(addWasteReason(renamed.wasteReasons, 'Test spill'), 'staff_meal', true);
+    expect(wasteReasonsSummary(added)).toBe('8 waste reasons (“Burnt” renamed “Burnt edges”; added “Test spill”; hidden: “Staff meal”)');
+  });
+
+  it('the "Put back the default" dialog says what is written: an added reason stays, hidden', () => {
+    const current = mine({
+      reorderMultiple: 5,
+      wasteReasons: addWasteReason(renameWasteReason(DEFAULT_STOCK_RULES.wasteReasons, 'burnt', 'Burnt edges'), 'Test spill'),
+    });
+    // SettingCard's dialog describes card.defaultValue, which the main process sets to what Put back writes (putBackOf).
+    expect(stockRulesSummary(stockRulesPutBack(current))).toBe(
+      '“Do this” over 3% (6+ days apart) · good under 2%, OK to 3%, needs work to 5% · no reminders · full bar 3 × low · 8 waste reasons (added “Test spill”; hidden: “Test spill”)',
+    );
+    expect(stockRulesSummary(stockRulesPutBack(DEFAULT_STOCK_RULES))).toBe(stockRulesSummary(DEFAULT_STOCK_RULES));
   });
 
   it('the variance worked through on Rs 100,000 of food sales', () => {
@@ -146,6 +169,10 @@ describe('the stock rules form', () => {
     expect(setWasteReasonHidden(renamed, 'burnt', true)[0]).toEqual({ id: 'burnt', label: 'Burnt', hidden: true });
     expect(removeWasteReason(renamed, 'burnt')).toEqual(renamed);
     expect(removeWasteReason(renamed, 'spilled').map((r) => r.id)).not.toContain('spilled');
+    // Remove is offered only for a reason added since the last Save: a saved one may be on either till's waste entries.
+    expect(canRemoveWasteReason('spilled', DEFAULT_STOCK_RULES.wasteReasons)).toBe(true);
+    expect(canRemoveWasteReason('spilled', added)).toBe(false);
+    expect(canRemoveWasteReason('burnt', [])).toBe(false);
     expect(wasteReasonsProblem(renameWasteReason(added, 'spilled', 'burnt'))).toBe('Two waste reasons are called “burnt”.');
     expect(wasteReasonsProblem(renameWasteReason(added, 'spilled', ' '))).toBe('A waste reason needs a name.');
     expect(wasteReasonsProblem(added.map((r) => ({ ...r, hidden: true })))).toBe('Keep at least one waste reason on the Waste screen.');
@@ -183,7 +210,7 @@ describe('Reports and the Dashboard say the owner’s numbers', () => {
   it('the stock-take reminder as a "Do this" line', () => {
     expect(stockTakeDueWords({ scope: 'key_items', everyDays: 7, daysSince: 9 })).toEqual({
       title: 'Count the key items',
-      detail: 'The last key-items count was 9 days ago; you asked for one every 7 days (Settings → Kitchen & stock).',
+      detail: 'The key items were last counted 9 days ago; you asked for a count every 7 days (Settings → Kitchen & stock).',
       action: 'Open stock takes',
       amount: null,
     });
@@ -191,16 +218,44 @@ describe('Reports and the Dashboard say the owner’s numbers', () => {
       'No full stock take yet; you asked for one every 30 days (Settings → Kitchen & stock).',
     );
     expect(stockTakeDueWords({ scope: 'key_items', everyDays: 1, daysSince: 1 }).detail).toBe(
-      'The last key-items count was yesterday; you asked for one every 1 day (Settings → Kitchen & stock).',
+      'The key items were last counted yesterday; you asked for a count every 1 day (Settings → Kitchen & stock).',
     );
+    // Never counted at all: said so, never "the last key-items count" (a full stock take counts them too).
+    expect(stockTakeDueWords({ scope: 'key_items', everyDays: 7, daysSince: null }).detail).toBe(
+      'The key items have never been counted; you asked for a count every 7 days (Settings → Kitchen & stock).',
+    );
+    expect(stockTakeDueWords({ scope: 'full', everyDays: 30, daysSince: 31 }).detail).toBe(
+      'The last full stock take was 31 days ago; you asked for one every 30 days (Settings → Kitchen & stock).',
+    );
+    for (const daysSince of [null, 0, 1, 9]) {
+      expect(stockTakeDueWords({ scope: 'key_items', everyDays: 7, daysSince }).detail).not.toContain('key-items count');
+    }
   });
 
   it('the default food-cost target on Costing → Targets', () => {
     expect(defaultTargetText(3_000)).toBe(
-      'A category the till has no suggestion for (Pizza, Burgers, Fries & Sides, Deals, Dips and Drinks have their own), and every category added later, starts at 30% — shown as “suggested”, without colours, until you save the targets. For example, a new “Wraps” category: a Rs 1,000 wrap is on target up to Rs 300 of ingredients.',
+      'A category the till has no suggestion for (one without Pizza, Burger, Fries, Side, Deal, Combo, Dip, Sauce, Drink or Beverage in its name) starts at 30% — shown as “suggested”, without colours, until you save the targets. That is any such category added later, and any above that is still “suggested”: its box follows this one. For example, a new “Wraps” category: a Rs 1,000 wrap is on target up to Rs 300 of ingredients.',
     );
     expect(defaultTargetText(2_750)).toContain('starts at 27.5%');
     expect(defaultTargetText(2_750)).toContain('up to Rs 275 of ingredients');
+    // It no longer claims EVERY later category: a later "Cold Drinks" takes the drinks' suggestion.
+    expect(defaultTargetText(3_000)).not.toContain('every category added later');
+  });
+
+  it('a “suggested” category on the default follows the default box, so Save keeps what the words say (“Test Wraps”)', () => {
+    const cats = [
+      { categoryId: 'wraps', name: 'Test Wraps', confirmed: false },
+      { categoryId: 'drinks', name: 'Cold Drinks', confirmed: false },
+      { categoryId: 'rolls', name: 'Test Rolls', confirmed: true },
+      { categoryId: 'bowls', name: 'Test Bowls', confirmed: false },
+      { categoryId: 'fees', name: 'Test Fees', confirmed: false },
+    ];
+    expect(cats.map((c) => followsDefaultTarget(c, c.categoryId === 'fees'))).toEqual([true, false, false, true, false]);
+    const pct = { wraps: '30', drinks: '60', rolls: '30', bowls: '28', fees: '' };
+    const nonFood = { fees: true };
+    // The owner typed Bowls' box himself: his number stays.
+    expect(withDefaultFollowed(cats, pct, nonFood, new Set(['bowls']), '25')).toEqual({ wraps: '25', drinks: '60', rolls: '30', bowls: '28', fees: '' });
+    expect(withDefaultFollowed(cats, pct, nonFood, new Set(), '25')).toMatchObject({ wraps: '25', bowls: '25' });
   });
 });
 

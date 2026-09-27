@@ -162,6 +162,55 @@ describe('each “keep the till’s”', () => {
     expect(plan.preview.summary.keptOnTill).toMatchObject({ choices: 1 });
   });
 
+  it('choices: a new option the file picks first comes in NOT picked, so a “pick 1” group never starts with two (and the preview says so)', () => {
+    // The till's "Size" (pick 1) starts on Small; the file adds Medium and starts on it instead.
+    const file = theFile();
+    file.modifierGroups = [
+      {
+        ...file.modifierGroups[0]!,
+        name: 'Test size',
+        options: [
+          { name: 'Small', aliases: [], priceDeltaCents: 0, isDefault: false, removes: null },
+          { name: 'Medium', aliases: [], priceDeltaCents: 20_000, isDefault: true, removes: null },
+        ],
+      },
+    ];
+    file.items = file.items.map((i) => ({ ...i, modifierGroups: i.name === 'Test Pizza' ? ['Test size'] : i.modifierGroups }));
+    const till = theTill();
+    till.modifierGroups = [
+      {
+        id: 'size',
+        name: 'Test size',
+        selectionType: 'single',
+        minSelect: 1,
+        maxSelect: 1,
+        isRequired: true,
+        modifiers: [{ id: 'small', name: 'Small', priceDeltaCents: 0, isDefault: true, sortOrder: 0 }],
+      },
+    ];
+    till.itemGroups = new Map([['pz', [{ groupId: 'size', sortOrder: 0 }]]]);
+    /** Which options start picked once the plan is applied: the till's kept ones and the new ones. */
+    const pickedAfter = (plan: ReturnType<typeof planMenuImport>) => {
+      const op = plan.ops.modifierGroups.find((g) => g.existingId === 'size')!;
+      return [
+        ...till.modifierGroups[0]!.modifiers
+          .filter((m) => op.options.find((o) => o.existingId === m.id)?.update?.isDefault ?? m.isDefault)
+          .map((m) => m.name),
+        ...op.options.filter((o) => o.create?.isDefault).map((o) => o.create!.name),
+      ];
+    };
+
+    // Today (the file wins): Medium alone starts picked.
+    expect(pickedAfter(planMenuImport(file, till))).toEqual(['Medium']);
+    // Keep the till's: Small alone, and the preview lists Medium as kept not picked.
+    const kept = planMenuImport(file, till, policy({ choices: 'till' }));
+    expect(pickedAfter(kept)).toEqual(['Small']);
+    const group = kept.preview.choiceGroups.find((g) => g.name === 'Test size')!;
+    expect(group.changes).toEqual(['"Medium" added']);
+    expect(group.keptOnTill).toEqual(['"Small" picked to start with', '"Medium" not picked to start with (the file picks it first)']);
+    expect(kept.preview.summary.keptOnTill).toMatchObject({ choices: 1 });
+  });
+
   it('recipes: the till keeps the pizza’s recipe and the ranch batch; the new wings still get the file’s', () => {
     const plan = planMenuImport(theFile(), theTill(), policy({ recipes: 'till' }));
     const pizza = pizzaOf(plan);

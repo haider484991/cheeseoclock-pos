@@ -166,10 +166,17 @@ export function setWasteReasonHidden(reasons: readonly WasteReasonSetting[], id:
 }
 
 /**
- * Take a reason the owner added off the list. The till's own seven can't be
- * (hide them instead); a reason that old waste entries use is refused by
- * the main process on Save ("hide it instead").
+ * Whether a reason can come off the list: only one the owner added since
+ * the last Save (not on `saved`, the list saved now). The till's own seven
+ * never can, and a saved one can't either — the other till may have waste
+ * entries with it that have not reached this one yet — so those are hidden
+ * instead (the main process refuses the rest on Save).
  */
+export function canRemoveWasteReason(id: string, saved: readonly Pick<WasteReasonSetting, 'id'>[]): boolean {
+  return !isBuiltInWasteReason(id) && !saved.some((r) => r.id === id);
+}
+
+/** Take a reason the owner added off the list (the till's own seven stay: hide them instead). */
 export function removeWasteReason(reasons: readonly WasteReasonSetting[], id: string): WasteReasonSetting[] {
   return isBuiltInWasteReason(id) ? [...reasons] : reasons.filter((r) => r.id !== id);
 }

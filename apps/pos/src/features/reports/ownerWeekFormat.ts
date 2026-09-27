@@ -127,20 +127,23 @@ export function doThisWords(item: DoThisItem): DoThisWords {
 
 /**
  * The owner's stock-take reminder (Settings → Kitchen & stock) as a "Do
- * this" line: "Count the key items — the last count was 9 days ago; you
- * asked for one every 7 days." Built from the values.
+ * this" line: "Count the key items — the key items were last counted 9
+ * days ago; you asked for a count every 7 days." Built from the values.
+ * A full stock take counts the key items too, so the key-items line says
+ * when they were last COUNTED (by either kind), never that a key-items
+ * count happened when it was a full one.
  */
 export function stockTakeDueWords(item: Pick<Extract<DoThisItem, { kind: 'stock_take_due' }>, 'scope' | 'everyDays' | 'daysSince'>): DoThisWords {
-  const what = item.scope === 'full' ? 'full stock take' : 'key-items count';
-  const every = `you asked for one every ${plural(item.everyDays, 'day')}`;
-  const last =
-    item.daysSince === null
-      ? `No ${what} yet`
-      : item.daysSince === 0
-        ? `The last ${what} was today`
-        : item.daysSince === 1
-          ? `The last ${what} was yesterday`
-          : `The last ${what} was ${plural(item.daysSince, 'day')} ago`;
+  const full = item.scope === 'full';
+  const every = `you asked for ${full ? 'one' : 'a count'} every ${plural(item.everyDays, 'day')}`;
+  const when = (d: number) => (d === 0 ? 'today' : d === 1 ? 'yesterday' : `${plural(d, 'day')} ago`);
+  const last = full
+    ? item.daysSince === null
+      ? 'No full stock take yet'
+      : `The last full stock take was ${when(item.daysSince)}`
+    : item.daysSince === null
+      ? 'The key items have never been counted'
+      : `The key items were last counted ${when(item.daysSince)}`;
   return {
     title: item.scope === 'full' ? 'Time for a full stock take' : 'Count the key items',
     detail: `${last}; ${every} (Settings → Kitchen & stock).`,

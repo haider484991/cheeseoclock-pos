@@ -31,7 +31,6 @@ import {
   foodpandaDealLabel,
   foodpandaDealRule,
   foodpandaTerms,
-  isBuiltInWasteReason,
   shareBps,
   stockRulesPutBack,
 } from '@cheeseoclock/pos-domain';
@@ -46,7 +45,6 @@ import {
   type ShopSettingInUse,
 } from '../db/business-settings-read.js';
 import { businessSettingId } from '../db/business-settings-ids.js';
-import { wasteReasonUse } from '../db/stock-rules-guard.js';
 
 export { readShopSetting, readApprovalLimits, readStaffTiming, readStockRules, readMenuImportPolicy, type ShopSettingInUse };
 
@@ -167,19 +165,21 @@ export function itemFoodpandaLine(
 }
 
 /**
- * What "Put back the default" writes for a key: the default's values. For
- * the stock rules, a waste reason the owner added that waste rows still use
- * is kept, hidden (removing it would leave those rows without a name; the
- * repository refuses that) — with none in use it is exactly the default.
+ * What "Put back the default" writes for a key, given the value in use: the
+ * default's values. For the stock rules, every waste reason the owner added
+ * is kept, hidden (it is saved, so either till may have waste rows with it;
+ * the repository refuses removing one) — with none added it is exactly the
+ * default. The Settings card shows this as the default, so its dialog says
+ * what will be written and its "Default" badge comes back after a put back.
  */
-export function putBackValue<K extends ShopSettingKey>(db: AppDatabase, key: K): ShopSettingValues[K] {
-  if (key === 'stock.rules') {
-    const current = readShopSetting(db, 'stock.rules').value;
-    const added = current.wasteReasons.filter((r) => !isBuiltInWasteReason(r.id)).map((r) => r.id);
-    const use = wasteReasonUse(db, added);
-    return stockRulesPutBack(current, new Set(added.filter((id) => (use.get(id) ?? 0) > 0))) as ShopSettingValues[K];
-  }
+export function putBackOf<K extends ShopSettingKey>(key: K, current: ShopSettingValues[K]): ShopSettingValues[K] {
+  if (key === 'stock.rules') return stockRulesPutBack(current as ShopSettingValues['stock.rules']) as ShopSettingValues[K];
   return { ...SHOP_SETTING_DEFAULTS[key] } as ShopSettingValues[K];
+}
+
+/** What "Put back the default" writes for a key now (putBackOf the value in use). */
+export function putBackValue<K extends ShopSettingKey>(db: AppDatabase, key: K): ShopSettingValues[K] {
+  return putBackOf(key, readShopSetting(db, key).value);
 }
 
 /** Changes shown under a card. */
@@ -233,7 +233,9 @@ export function getShopSettingCard<K extends ShopSettingKey>(
       )
       .get(id) !== undefined;
 
-  const defaultValue = { ...SHOP_SETTING_DEFAULTS[key] } as ShopSettingValues[K];
+  // What "Put back the default" would write: the default's values (the stock
+  // rules also keep the owner's added waste reasons, hidden: putBackOf).
+  const defaultValue = putBackOf(key, inUse.value);
   return {
     key,
     value: inUse.value,

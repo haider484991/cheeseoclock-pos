@@ -932,13 +932,18 @@ export function planMenuImport(
       }
       if (!om.row) {
         optionRef.set(`${groupKey}|${optionKey}`, { groupKey, optionKey });
+        // Keeping the till's choices keeps which options it picks first: a new
+        // option comes in not picked (picked too, a "pick 1" group would start
+        // with two, and the counter would refuse the item until one is unticked).
+        const keptPick = keepChoices && o.isDefault;
+        if (keptPick) kept.push(`"${o.name}" not picked to start with (the file picks it first)`);
         options.push({
           optionKey,
           existingId: null,
           create: {
             name: o.name,
             priceDeltaCents: o.priceDeltaCents,
-            isDefault: o.isDefault,
+            isDefault: keptPick ? false : o.isDefault,
             sortOrder: nextSort++,
             removes: removesRef(o.removes),
           },

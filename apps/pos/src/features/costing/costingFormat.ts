@@ -2,8 +2,8 @@
  * How the Costing page says things (costing spec D15: plain words, a few
  * numbers). Pure, so the wording is tested.
  */
-import { formatCents, mcToCents } from '@cheeseoclock/pos-domain';
-import type { BatchCalc, CostLineKind, FoodCostFlag, LeaveOutView, MenuCostRow } from '@cheeseoclock/shared-types';
+import { formatCents, mcToCents, suggestedTargetBps } from '@cheeseoclock/pos-domain';
+import type { BatchCalc, CategoryTargetView, CostLineKind, FoodCostFlag, LeaveOutView, MenuCostRow } from '@cheeseoclock/shared-types';
 
 /** 1470 → "14.7%"; 3000 → "30%". */
 export function formatBps(bps: number | null | undefined): string {
@@ -299,10 +299,40 @@ export function madeOfNote(line: { costCents: number; priceKind: CostLineKind },
 
 /**
  * What the default food-cost target does, from its value: the target of a
- * category with none of its own yet whose name the till has no suggestion
- * for, and of every category added later — shown as a suggestion until the
- * targets are saved.
+ * category with none of its own yet whose NAME the till has no suggestion
+ * for (pos-domain suggestedTargetBps: a later "Cold Drinks" takes the
+ * drinks' suggestion, not this) — shown as a suggestion until the targets
+ * are saved. The ones still "suggested" on the screen follow the box
+ * (withDefaultFollowed), so a Save keeps what the words say.
  */
 export function defaultTargetText(defaultBps: number): string {
-  return `A category the till has no suggestion for (Pizza, Burgers, Fries & Sides, Deals, Dips and Drinks have their own), and every category added later, starts at ${formatBps(defaultBps)} — shown as “suggested”, without colours, until you save the targets. For example, a new “Wraps” category: a Rs 1,000 wrap is on target up to ${formatCents(Math.round((100_000 * defaultBps) / 10_000))} of ingredients.`;
+  return `A category the till has no suggestion for (one without Pizza, Burger, Fries, Side, Deal, Combo, Dip, Sauce, Drink or Beverage in its name) starts at ${formatBps(defaultBps)} — shown as “suggested”, without colours, until you save the targets. That is any such category added later, and any above that is still “suggested”: its box follows this one. For example, a new “Wraps” category: a Rs 1,000 wrap is on target up to ${formatCents(Math.round((100_000 * defaultBps) / 10_000))} of ingredients.`;
+}
+
+/**
+ * A category whose target is the default one: still the till's suggestion
+ * (not confirmed), food, and no suggestion of its own by its name.
+ */
+export function followsDefaultTarget(c: Pick<CategoryTargetView, 'name' | 'confirmed'>, nonFood: boolean): boolean {
+  return !c.confirmed && !nonFood && suggestedTargetBps(c.name, -1) === -1;
+}
+
+/**
+ * The Targets form's boxes after the default box changes to `defaultText`:
+ * every category that follows the default (followsDefaultTarget) and whose
+ * box the owner has not typed in (`edited`) takes the new default, so Save
+ * confirms what the default's words promise; the rest stay as typed.
+ */
+export function withDefaultFollowed(
+  categories: ReadonlyArray<Pick<CategoryTargetView, 'categoryId' | 'name' | 'confirmed'>>,
+  pct: Readonly<Record<string, string>>,
+  nonFood: Readonly<Record<string, boolean>>,
+  edited: ReadonlySet<string>,
+  defaultText: string,
+): Record<string, string> {
+  const out = { ...pct };
+  for (const c of categories) {
+    if (!edited.has(c.categoryId) && followsDefaultTarget(c, !!nonFood[c.categoryId])) out[c.categoryId] = defaultText;
+  }
+  return out;
 }

@@ -1,23 +1,17 @@
 /**
  * The waste reasons' one rule the schema can't check on its own: a reason
- * that waste rows use can be hidden, never removed (Settings → Kitchen &
- * stock, 'stock.rules'). Rows keep 'waste:<id>' and Reports group by it, so
- * a removed reason would leave them without a name. Checked in the main
- * process, inside the save's own transaction (business-settings-repo), so
- * a waste row booked a moment before the save still counts.
+ * on the SAVED list can be hidden or renamed, never removed (Settings →
+ * Kitchen & stock, 'stock.rules'). Rows keep 'waste:<id>' and Reports group
+ * by it, so a removed reason would leave them without a name — and counting
+ * this till's rows is not enough: the other till may have booked waste with
+ * the reason before its rows get here (sync lag, or the link off). A reason
+ * added since the last Save is not saved yet, so no till can have used it:
+ * that one can still be taken off. Checked in the main process, inside the
+ * save's own transaction (business-settings-repo).
  */
 import { BUSINESS_SETTING_READ_SCHEMAS } from '@cheeseoclock/shared-schemas';
-import { DEFAULT_STOCK_RULES, type StockRules, type WasteReasonId } from '@cheeseoclock/shared-types';
+import { DEFAULT_STOCK_RULES, type StockRules } from '@cheeseoclock/shared-types';
 import { removedWasteReasonIds } from '@cheeseoclock/pos-domain';
-import type { AppDatabase } from './connection.js';
-
-/** How many live waste rows (every till's) keep each of these reasons. */
-export function wasteReasonUse(db: AppDatabase, ids: readonly WasteReasonId[]): Map<WasteReasonId, number> {
-  const count = db.prepare(
-    `SELECT COUNT(*) AS n FROM stock_movements WHERE reason = 'waste' AND detail = ? AND deleted_at IS NULL`,
-  );
-  return new Map(ids.map((id) => [id, Number((count.get(`waste:${id}`) as { n: number } | undefined)?.n ?? 0)]));
-}
 
 /** The reasons of a stored 'stock.rules' value (its raw JSON), or the released seven when none reads. */
 function reasonsOf(storedJson: string | null): StockRules['wasteReasons'] {
@@ -31,23 +25,17 @@ function reasonsOf(storedJson: string | null): StockRules['wasteReasons'] {
 }
 
 /**
- * Throws, in the owner's words, when `next` would remove a reason waste
- * rows still use: "“Spilled” is on 3 waste entries, so it can't be
- * removed: hide it instead." `storedJson`: the value saved now (null when
- * nothing is).
+ * Throws, in the owner's words, when `next` would take a saved reason off
+ * the list: "“Spilled” is saved, and waste entries on either till may use
+ * it, so it can't be removed: hide it instead." `storedJson`: the value
+ * saved now (null when nothing is).
  */
-export function assertNoUsedWasteReasonRemoved(db: AppDatabase, storedJson: string | null, next: Pick<StockRules, 'wasteReasons'>): void {
+export function assertNoSavedWasteReasonRemoved(storedJson: string | null, next: Pick<StockRules, 'wasteReasons'>): void {
   const before = reasonsOf(storedJson);
-  const removed = removedWasteReasonIds(before, next.wasteReasons);
-  if (removed.length === 0) return;
-  const use = wasteReasonUse(db, removed);
-  for (const id of removed) {
-    const n = use.get(id) ?? 0;
-    if (n > 0) {
-      const name = before.find((r) => r.id === id)?.label ?? id;
-      throw new Error(
-        `“${name}” is on ${n} waste ${n === 1 ? 'entry' : 'entries'}, so it can't be removed: hide it instead (old entries keep its name).`,
-      );
-    }
-  }
+  const id = removedWasteReasonIds(before, next.wasteReasons)[0];
+  if (id === undefined) return;
+  const name = before.find((r) => r.id === id)?.label ?? id;
+  throw new Error(
+    `“${name}” is saved, and waste entries on either till may use it, so it can't be removed: hide it instead (old entries keep its name).`,
+  );
 }

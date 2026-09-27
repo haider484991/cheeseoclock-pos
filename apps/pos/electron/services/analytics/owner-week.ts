@@ -350,7 +350,8 @@ function lastStockTakes(db: AppDatabase): { keyItemsAt: string | null; fullAt: s
  * A stock take the owner asked to be reminded of is due (Settings →
  * Kitchen & stock; off by default, so nothing shows until he turns it on):
  * the key items or a full stock take, last finished that many trading days
- * ago or more, or never. Pinned; no rupees (pos-domain stockTakesDue).
+ * ago or more, or never. Pinned, first of the pinned (pinFirst: two low key
+ * items can't push it off the card); no rupees (pos-domain stockTakesDue).
  */
 const stockTakeDueSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
   kind: 'stock_take_due',
@@ -363,6 +364,8 @@ const stockTakeDueSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
       key: `stock_take_due:${d.scope}`,
       weekCents: null,
       pinned: true,
+      // Ahead of the low-stock pins: many key items read low exactly when nothing was counted for a while.
+      pinFirst: true,
       cost: false,
       scope: d.scope,
       everyDays: d.everyDays,

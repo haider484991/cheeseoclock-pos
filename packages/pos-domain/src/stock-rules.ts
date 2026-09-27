@@ -72,7 +72,15 @@ export function newWasteReasonId(label: string, taken: Iterable<string>): WasteR
   }
 }
 
-/** Reasons on `before`'s list that `after` no longer has (hiding one is not removing it). */
+/**
+ * Reasons on `before`'s list that `after` no longer has (hiding one is not
+ * removing it). With `before` the SAVED list, a Save that removes any is
+ * refused (stock-rules-guard), whatever this till's own rows say: once a
+ * reason is saved the other till may book waste with it before its rows
+ * get here, and a removed reason would leave them without a name. A reason
+ * added since the last Save is not on the saved list, so it can still be
+ * taken off; a saved one can be hidden or renamed.
+ */
 export function removedWasteReasonIds(
   before: readonly Pick<WasteReasonSetting, 'id'>[],
   after: readonly Pick<WasteReasonSetting, 'id'>[],
@@ -83,14 +91,13 @@ export function removedWasteReasonIds(
 
 /**
  * "Put back the default" for the stock rules: today's numbers and the seven
- * reasons with their released names — and every reason the owner added that
- * waste rows still use (`inUse`), kept HIDDEN, after them: removing it would
- * leave those rows without a name. With none in use this is exactly the
- * default.
+ * reasons with their released names — and every reason the owner added
+ * (they are saved, so either till may have waste rows with them), kept
+ * HIDDEN, after them. With none added this is exactly the default.
  */
-export function stockRulesPutBack(current: Pick<StockRules, 'wasteReasons'>, inUse: ReadonlySet<WasteReasonId>): StockRules {
+export function stockRulesPutBack(current: Pick<StockRules, 'wasteReasons'>): StockRules {
   const kept = current.wasteReasons
-    .filter((r) => !isBuiltInWasteReason(r.id) && inUse.has(r.id))
+    .filter((r) => !isBuiltInWasteReason(r.id))
     .map((r) => ({ id: r.id, label: r.label, hidden: true }));
   return {
     ...DEFAULT_STOCK_RULES,

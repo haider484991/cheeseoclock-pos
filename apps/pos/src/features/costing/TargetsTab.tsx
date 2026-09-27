@@ -8,7 +8,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { COSTING_KEY, useCostAlertSettings, useCostingTargets } from './costingQueries';
-import { defaultTargetText, formatBps, parsePercent, parseRupees } from './costingFormat';
+import { defaultTargetText, formatBps, parsePercent, parseRupees, withDefaultFollowed } from './costingFormat';
 import { DaypartsCard } from './DaypartsCard';
 import { TillsCard } from './TillsCard';
 import { ChannelFeesCard } from './ChannelFeesCard';
@@ -214,6 +214,8 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
   const [step, setStep] = useState(String(view.priceStepCents / 100));
   // The default target (costing.targets defaultBps, already stored; Settings phase 7 gives it its box).
   const [dflt, setDflt] = useState(pctText(view.defaultBps));
+  // Boxes the owner typed in: a "suggested" category on the default follows the default box until he does.
+  const [edited, setEdited] = useState<ReadonlySet<string>>(() => new Set());
 
   const dirty =
     view.categories.some((c) => pct[c.categoryId] !== pctText(c.bps) || nonFood[c.categoryId] !== c.nonFood) ||
@@ -236,12 +238,12 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
   const defaultBad = defaultBps === null || defaultBps <= 0;
   const stepCents = parseRupees(step);
   const stepBad = stepCents === null || stepCents < 100 || stepCents > 100_000;
-  const problem =
-    bad.size > 0
+  // The default's own words first: a "suggested" box that follows it shows the same text.
+  const problem = defaultBad
+    ? 'A new category starts at a target above 0%, up to 100%.'
+    : bad.size > 0
       ? 'Every food category needs a target above 0%.'
-      : defaultBad
-        ? 'A new category starts at a target above 0%, up to 100%.'
-        : amberBad
+      : amberBad
         ? '"Close" is 0 to 50 points over the target.'
         : stepBad
           ? 'The price step is Rs 1 to Rs 1,000.'
@@ -332,7 +334,11 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
                         value={nf ? '' : (pct[c.categoryId] ?? '')}
                         placeholder={nf ? '—' : undefined}
                         disabled={!canEdit || nf}
-                        onChange={(e) => setPct((p) => ({ ...p, [c.categoryId]: e.target.value }))}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setEdited((s) => new Set(s).add(c.categoryId));
+                          setPct((p) => ({ ...p, [c.categoryId]: v }));
+                        }}
                         className={cn(inputCls, bad.has(c.categoryId) && 'border-red-500')}
                       />
                       %
@@ -375,7 +381,11 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
               aria-label="Default food-cost target for a new menu category, per cent"
               value={dflt}
               disabled={!canEdit}
-              onChange={(e) => setDflt(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDflt(v);
+                setPct((p) => withDefaultFollowed(view.categories, p, nonFood, edited, v));
+              }}
               className={cn(inputCls, defaultBad && 'border-red-500')}
             />
             %

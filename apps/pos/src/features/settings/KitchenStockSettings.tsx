@@ -10,8 +10,9 @@
  *    Reports → Between stock takes all use them), the stock-take reminders,
  *    the stock bar's and "Add low-stock items"' multiple of the low level,
  *    and the Waste screen's reasons — fixed ids, so a rename follows every
- *    old waste row; a reason old rows use can be hidden, not removed (the
- *    main process refuses that);
+ *    old waste row; a saved reason can be hidden, not removed (either till
+ *    may have waste entries with it; the main process refuses that), and
+ *    one added since the last Save can still come off;
  *  - what a menu file import may change on what the till already has
  *    ('menu.importPolicy'); the import preview lists what was "kept on the
  *    till".
@@ -22,7 +23,7 @@
 import { useMemo, useState } from 'react';
 import { Button, cn } from '@cheeseoclock/ui';
 import { Boxes, Eye, EyeOff, FileInput, Plus, Trash2 } from 'lucide-react';
-import { isBuiltInWasteReason, releasedWasteReasonLabel } from '@cheeseoclock/pos-domain';
+import { releasedWasteReasonLabel } from '@cheeseoclock/pos-domain';
 import {
   STOCK_RULE_BOUNDS,
   WASTE_REASON_LABEL_MAX,
@@ -37,6 +38,7 @@ import { useShopSetting, useShopSettingsLive } from './shop-rules/useShopSetting
 import { sameValue } from './shop-rules/foodpandaForm';
 import {
   addWasteReason,
+  canRemoveWasteReason,
   removeWasteReason,
   renameWasteReason,
   sameStockRules,
@@ -144,7 +146,7 @@ function KitchenStockCards({
         card={stockCard}
         title="Stock takes and waste"
         icon={<Boxes className="h-5 w-5" />}
-        intro="When “used vs should have used” goes on the Dashboard and how it is rated (the Dashboard, the weekly sheet and Reports → Between stock takes), reminders to take stock, how full a stock bar is, and the reasons on the Waste screen. Put back the default keeps a reason you added that old waste entries use, hidden."
+        intro="When “used vs should have used” goes on the Dashboard and how it is rated (the Dashboard, the weekly sheet and Reports → Between stock takes), reminders to take stock, how full a stock bar is, and the reasons on the Waste screen. Put back the default keeps the reasons you added, hidden: waste entries on either till may use them."
         describe={stockRulesSummary}
         dirty={stockDirty}
         problem={stockParsed.problem}
@@ -189,25 +191,43 @@ function KitchenStockCards({
           <div className="mt-2 space-y-2">
             {(
               [
-                { on: 'keyItemsOn', days: 'keyItemsDays', label: 'Remind me to count the key items every', bounds: STOCK_RULE_BOUNDS.keyItemsEveryDays },
-                { on: 'fullOn', days: 'fullDays', label: 'Remind me to do a full stock take every', bounds: STOCK_RULE_BOUNDS.fullEveryDays },
+                {
+                  on: 'keyItemsOn',
+                  days: 'keyItemsDays',
+                  label: 'Remind me to count the key items every',
+                  daysName: 'Days between key-items counts',
+                  bounds: STOCK_RULE_BOUNDS.keyItemsEveryDays,
+                },
+                {
+                  on: 'fullOn',
+                  days: 'fullDays',
+                  label: 'Remind me to do a full stock take every',
+                  daysName: 'Days between full stock takes',
+                  bounds: STOCK_RULE_BOUNDS.fullEveryDays,
+                },
               ] as const
             ).map((r) => (
               <div key={r.on} className="flex flex-wrap items-center gap-2 text-sm">
+                {/* The words tick the box; the days box has its own name. */}
+                <label htmlFor={`stock-${r.on}`} className="flex items-center gap-2">
+                  <input
+                    id={`stock-${r.on}`}
+                    type="checkbox"
+                    checked={f[r.on]}
+                    onChange={(e) => set({ [r.on]: e.target.checked } as Partial<StockRulesForm>)}
+                  />
+                  <span>{r.label}</span>
+                </label>
                 <input
-                  id={`stock-${r.on}`}
-                  type="checkbox"
-                  checked={f[r.on]}
-                  onChange={(e) => set({ [r.on]: e.target.checked } as Partial<StockRulesForm>)}
-                />
-                <Inline
                   id={`stock-${r.days}`}
-                  before={r.label}
+                  aria-label={r.daysName}
+                  inputMode="numeric"
                   value={f[r.days]}
-                  onChange={(v) => set({ [r.days]: v } as Partial<StockRulesForm>)}
-                  after={`days (${r.bounds[0]} to ${r.bounds[1]})`}
                   disabled={!f[r.on]}
+                  onChange={(e) => set({ [r.days]: e.target.value.replace(/[^\d]/g, '').slice(0, 4) } as Partial<StockRulesForm>)}
+                  className={inputClass}
                 />
+                <span className="text-stone-600 dark:text-stone-300">{`days (${r.bounds[0]} to ${r.bounds[1]})`}</span>
               </div>
             ))}
           </div>
@@ -235,8 +255,9 @@ function KitchenStockCards({
           <h3 className={sectionTitle}>Waste reasons</h3>
           <p className={helpClass}>
             What the Waste screen asks, in this order, and how Reports split waste. Every waste entry keeps its reason, not the name: a new
-            name shows on the old entries too. Hide a reason to take it off the Waste screen; a reason old entries use can’t be removed.
-            The till’s own seven can be renamed or hidden, never removed.
+            name shows on the old entries too. Hide a reason to take it off the Waste screen. A reason you add can be removed until you save
+            it; once saved, waste entries on either till may use it, so it can only be hidden or renamed. The till’s own seven can be renamed
+            or hidden, never removed.
           </p>
           <ul className="mt-2 space-y-2">
             {f.reasons.map((r) => {
@@ -257,7 +278,7 @@ function KitchenStockCards({
                     {r.hidden ? <Eye className="mr-1 h-4 w-4" /> : <EyeOff className="mr-1 h-4 w-4" />}
                     {r.hidden ? 'Show again' : 'Hide'}
                   </Button>
-                  {!isBuiltInWasteReason(r.id) && (
+                  {canRemoveWasteReason(r.id, stockCard.value.wasteReasons) && (
                     <Button variant="secondary" size="sm" onClick={() => set({ reasons: removeWasteReason(f.reasons, r.id) })}>
                       <Trash2 className="mr-1 h-4 w-4" /> Remove
                     </Button>

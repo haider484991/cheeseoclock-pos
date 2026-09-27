@@ -18,6 +18,7 @@ import {
   isBuiltInWasteReason,
   newWasteReasonId,
   ownerWasteLabels,
+  rankDoThis,
   releasedWasteReasonLabel,
   removedWasteReasonIds,
   stockFill,
@@ -201,25 +202,55 @@ describe('waste reasons keyed by a fixed id', () => {
     expect(removedWasteReasonIds(before, after)).toEqual(['mice']);
   });
 
-  it('"Put back the default": exactly the default with nothing of the owner’s in use; a reason old rows use stays, hidden', () => {
+  it('"Put back the default": exactly the default with nothing added; every reason the owner added stays, hidden (either till may have rows with it)', () => {
     const current: StockRules = {
       ...DEFAULT_STOCK_RULES,
       varianceDoThisBps: 500,
       reorderMultiple: 5,
-      wasteReasons: reasons({ id: 'spilled', label: 'Spilled', hidden: false }, { id: 'mice', label: 'Mice', hidden: false }).map((r) =>
+      wasteReasons: reasons({ id: 'spilled', label: 'Spilled', hidden: false }, { id: 'mice', label: 'Mice', hidden: true }).map((r) =>
         r.id === 'burnt' ? { ...r, label: 'Burnt edges', hidden: true } : r,
       ),
     };
-    expect(stockRulesPutBack(current, new Set())).toEqual(DEFAULT_STOCK_RULES);
-    const kept = stockRulesPutBack(current, new Set(['mice', 'burnt']));
-    expect(kept.wasteReasons).toEqual([...DEFAULT_STOCK_RULES.wasteReasons, { id: 'mice', label: 'Mice', hidden: true }]);
+    expect(stockRulesPutBack(DEFAULT_STOCK_RULES)).toEqual(DEFAULT_STOCK_RULES);
+    expect(stockRulesPutBack({ wasteReasons: current.wasteReasons.filter((r) => isBuiltInWasteReason(r.id)) })).toEqual(DEFAULT_STOCK_RULES);
+    const kept = stockRulesPutBack(current);
+    expect(kept.wasteReasons).toEqual([
+      ...DEFAULT_STOCK_RULES.wasteReasons,
+      { id: 'spilled', label: 'Spilled', hidden: true },
+      { id: 'mice', label: 'Mice', hidden: true },
+    ]);
     expect(kept.varianceDoThisBps).toBe(300);
     expect(kept.reorderMultiple).toBe(3);
     expect(Object.isFrozen(kept.wasteReasons)).toBe(false);
+    // Putting back twice writes the same thing: it is the default from then on.
+    expect(stockRulesPutBack(kept)).toEqual(kept);
   });
 });
 
 describe('stock-take reminders', () => {
+  it('a due reminder is first of the pinned lines: two low key items and three money lines can’t push it off the card', () => {
+    const line = (key: string, weekCents: number | null, pinned = false, pinFirst = false) => ({ kind: key.split(':')[0]!, key, weekCents, pinned, pinFirst, cost: false });
+    const lines = [
+      line('low_stock:a', null, true),
+      line('low_stock:b', null, true),
+      line('red_item:x', 30_000),
+      line('red_item:y', 20_000),
+      line('red_item:z', 10_000),
+      line('stock_take_due:key_items', null, true, true),
+    ];
+    const r = rankDoThis(lines, { canSeeCosts: true });
+    expect(r.items.map((i) => i.key)).toEqual(['stock_take_due:key_items', 'low_stock:a', 'red_item:x', 'red_item:y', 'red_item:z']);
+    expect(r.more).toBe(1);
+    // Without the reminder the list is as it always was (the pins by key).
+    expect(rankDoThis(lines.slice(0, 5), { canSeeCosts: true }).items.map((i) => i.key)).toEqual([
+      'low_stock:a',
+      'low_stock:b',
+      'red_item:x',
+      'red_item:y',
+      'red_item:z',
+    ]);
+  });
+
   // Trading days start at 05:00 PKT (00:00 UTC). Mon 21 Sep 2026, 10:00 PKT.
   const NOW = Date.parse('2026-09-21T05:00:00.000Z');
   const OFF = { keyItemsEveryDays: null, fullEveryDays: null };
