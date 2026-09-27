@@ -78,6 +78,7 @@ import type {
   Recipe,
   StockMovement,
   StockMovementReason,
+  WasteReason,
   Supplier,
   PurchaseOrder,
   PurchaseOrderStatus,
@@ -1055,6 +1056,8 @@ export interface IpcContract {
       deltaQty: number;
       reason: 'delivery' | 'waste' | 'count' | 'adjustment';
       notes?: string | null;
+      /** Waste only: why it was thrown away ("other" when not given). */
+      wasteReason?: WasteReason;
     };
     response: ApiResult<{ movementId: string; resultingQty: number }>;
   };
@@ -1165,111 +1168,7 @@ export interface IpcContract {
     response: ApiResult<BatchCalc>;
   };
 
-  // Reports / analytics
-  'reports:salesSummary': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<{
-      orderCount: number;
-      itemCount: number;
-      subtotalCents: number;
-      discountCents: number;
-      taxCents: number;
-      /** After partial refunds; fully refunded orders are not counted at all. */
-      totalCents: number;
-      partialRefundCents: number;
-      avgTicketCents: number;
-      voidedCount: number;
-      voidedCents: number;
-    }>;
-  };
-  'reports:salesByDay': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<Array<{ day: string; orderCount: number; totalCents: number }>>;
-  };
-  'reports:salesByHour': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<Array<{ hour: number; orderCount: number; totalCents: number }>>;
-  };
-  'reports:salesByCategory': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<
-      Array<{ categoryId: string; categoryName: string; itemCount: number; revenueCents: number }>
-    >;
-  };
-  'reports:topItems': {
-    request: { sinceIso: string; untilIso: string; limit?: number };
-    response: ApiResult<
-      Array<{
-        menuItemId: string;
-        menuItemName: string;
-        categoryName: string;
-        quantity: number;
-        revenueCents: number;
-      }>
-    >;
-  };
-  'reports:salesByMode': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<
-      Array<{
-        mode: OrderMode;
-        orderCount: number;
-        totalCents: number;
-      }>
-    >;
-  };
-  'reports:salesByPaymentMethod': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<Array<{ method: string; paymentCount: number; amountCents: number }>>;
-  };
-  'reports:salesByCashier': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<
-      Array<{
-        cashierId: string;
-        cashierName: string;
-        orderCount: number;
-        totalCents: number;
-        voidedCount: number;
-      }>
-    >;
-  };
-  'reports:discounts': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<{
-      count: number;
-      totalAmountCents: number;
-      byReason: Array<{ reason: string; count: number; amountCents: number }>;
-    }>;
-  };
-  /**
-   * End-of-day cash reconciliation summary. Returns per-method totals
-   * (sales + refunds) plus a cash-specific roll-up. `openingCashCents`
-   * gets added to expected cash on hand — pass the float you opened with.
-   */
-  'reports:cashSummary': {
-    request: { sinceIso: string; untilIso: string; openingCashCents?: number };
-    response: ApiResult<{
-      byMethod: Array<{
-        method: string;
-        salesCents: number;
-        refundCents: number;
-        netCents: number;
-        paymentCount: number;
-        refundCount: number;
-      }>;
-      cashSalesCents: number;
-      cashRefundsCents: number;
-      cashInCents: number;
-      cashOutCents: number;
-      expectedCashCents: number;
-      totalRevenueCents: number;
-      totalRefundsCents: number;
-      netRevenueCents: number;
-      paidOrderCount: number;
-      refundedOrderCount: number;
-    }>;
-  };
+  // Reports (the older one-figure channels were retired with costing Phase 2)
   'reports:lowStock': {
     request: undefined;
     response: ApiResult<
@@ -1281,19 +1180,6 @@ export interface IpcContract {
         lowThreshold: number;
       }>
     >;
-  };
-  'reports:cogs': {
-    request: { sinceIso: string; untilIso: string };
-    response: ApiResult<{
-      totalCogsCents: number;
-      byIngredient: Array<{
-        ingredientId: string;
-        name: string;
-        unit: string;
-        qtyConsumed: number;
-        costCents: number;
-      }>;
-    }>;
   };
   /** Everything on the Reports page for one period (plus comparison KPIs), in one call. */
   'reports:business': {

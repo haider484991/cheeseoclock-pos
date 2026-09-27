@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { daysSoFar, fmtDateInput, fmtDays, periodFor, tradingDayStart, weekdayIndex } from './dateRange';
+import { AUTO_REFRESH_MAX_DAYS, autoRefreshes, daysSoFar, fmtDateInput, fmtDays, periodFor, tradingDayStart, weekdayIndex } from './dateRange';
 
 // Sat 26 Sep 2026, 3 pm in Pakistan (10:00 UTC).
 const SAT_3PM = new Date('2026-09-26T10:00:00.000Z');
@@ -137,5 +137,40 @@ describe('labels', () => {
     expect(days).toHaveLength(26);
     expect(days[0]).toBe('2026-09-01');
     expect(days[25]).toBe('2026-09-26');
+  });
+});
+
+describe('autoRefreshes: the open report refreshes itself only when it is cheap and useful', () => {
+  it('today, this week and this month refresh while on screen', () => {
+    for (const preset of ['today', 'thisWeek', 'thisMonth', 'last7'] as const) {
+      expect(autoRefreshes(periodFor(preset, SAT_3PM), true)).toBe(true);
+    }
+  });
+
+  it('never while the window is hidden', () => {
+    expect(autoRefreshes(periodFor('today', SAT_3PM), false)).toBe(false);
+  });
+
+  it('never for a period that is over (yesterday, last month)', () => {
+    expect(autoRefreshes(periodFor('yesterday', SAT_3PM), true)).toBe(false);
+    expect(autoRefreshes(periodFor('lastMonth', SAT_3PM), true)).toBe(false);
+  });
+
+  it('"Today" left open past 5 am still refreshes once, onto the new trading day', () => {
+    const today = periodFor('today', SAT_3PM);
+    expect(autoRefreshes(today, true)).toBe(true);
+    // The tick recomputes the period with the new clock: Sunday's "Today".
+    const next = periodFor('today', new Date('2026-09-27T00:01:00.000Z'));
+    expect(next.firstDay).toBe('2026-09-27');
+    expect(autoRefreshes(next, true)).toBe(true);
+  });
+
+  it('31 days that include today refresh; 32 days never do', () => {
+    const thirtyOne = periodFor('custom', SAT_3PM, { from: '2026-08-27', to: '2026-09-26' });
+    expect(thirtyOne.days).toBe(AUTO_REFRESH_MAX_DAYS);
+    expect(autoRefreshes(thirtyOne, true)).toBe(true);
+    const thirtyTwo = periodFor('custom', SAT_3PM, { from: '2026-08-26', to: '2026-09-26' });
+    expect(thirtyTwo.days).toBe(32);
+    expect(autoRefreshes(thirtyTwo, true)).toBe(false);
   });
 });

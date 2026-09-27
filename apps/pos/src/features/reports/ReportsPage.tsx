@@ -15,7 +15,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { BusinessReport } from '@cheeseoclock/shared-types';
 import { CalendarDays, FileSpreadsheet, Loader2, Printer, RefreshCw } from 'lucide-react';
 import { ipc } from '../../ipc/client';
-import { fmtDateInput, periodFor, type RangePreset } from './dateRange';
+import { autoRefreshes, fmtDateInput, periodFor, type RangePreset } from './dateRange';
 import { buildCsv, buildPrintBody, csvFileName, downloadText, PRINT_CSS, PRINT_SHEET_CLASS } from './exporters';
 import { changeOf, PAYMENT_LABEL, PAYMENT_ORDER, percentOf } from './reportFormat';
 import { Kpi, Note, Panel } from './reportUi';
@@ -62,17 +62,27 @@ export function ReportsPage() {
   // An id per click, so printing the same report twice prints twice.
   const [printJob, setPrintJob] = useState<{ id: number; html: string } | null>(null);
 
-  // A running period ("today so far") moves with the clock: the comparison
-  // follows ("yesterday by this time") and the figures refresh every minute.
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(t);
-  }, []);
-
   const period = useMemo(
     () => periodFor(preset, now, preset === 'custom' ? { from: customFrom, to: customTo } : undefined),
     [preset, now, customFrom, customTo],
   );
+
+  // A running period ("today so far") moves with the clock: the comparison
+  // follows ("yesterday by this time") and the figures refresh every minute —
+  // but only while the window is on screen and the period is at most 31 days
+  // (autoRefreshes): a long report is never re-run behind the cashier's back.
+  // Coming back to the window catches up at once.
+  useEffect(() => {
+    const tick = () => {
+      if (autoRefreshes(period, document.visibilityState === 'visible')) setNow(new Date());
+    };
+    const t = setInterval(tick, 60_000);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [period]);
 
   const query = useQuery({
     queryKey: ['reports', 'business', period.sinceIso, period.untilIso, period.compare?.sinceIso, period.compare?.untilIso],
@@ -218,7 +228,7 @@ export function ReportsPage() {
           {report && (
             <>
               <nav className="flex flex-wrap gap-2" aria-label="Jump to a section">
-                {JUMPS.map((j) => (
+                {JUMPS.filter((j) => j.id !== 'food' || report.foodCost !== null).map((j) => (
                   <button
                     key={j.id}
                     type="button"
@@ -235,7 +245,9 @@ export function ReportsPage() {
               <StaffSection report={report} />
               <DiscountsSection report={report} />
               <RefundsSection report={report} />
-              <FoodCostSection report={report} lowStockCount={lowStock.data ? lowStock.data.length : null} />
+              {report.foodCost !== null && (
+                <FoodCostSection report={report} food={report.foodCost} lowStockCount={lowStock.data ? lowStock.data.length : null} />
+              )}
               <DeliveriesSection report={report} />
             </>
           )}

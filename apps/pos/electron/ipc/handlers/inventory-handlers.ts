@@ -1,7 +1,8 @@
 import type { ZodError } from 'zod';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, err, hasCapability } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, ok, err, hasCapability } from '@cheeseoclock/shared-types';
+import { movementWithoutCosts } from '@cheeseoclock/pos-domain';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import {
   createIngredientInputSchema,
@@ -74,6 +75,15 @@ function requireInventoryManage(): AuthenticatedUser {
  */
 function requireStockView(): AuthenticatedUser {
   return requireCapability('menu.manage', REFUSED.stock);
+}
+
+/**
+ * Stock rows carry what they were worth (costing spec Phase 2). Costs are the
+ * owner's business figures: a login without COST_CAPABILITY gets the rows
+ * without them, in the main process, not only hidden on screen.
+ */
+function mayViewCosts(s: AuthenticatedUser): boolean {
+  return hasCapability(s.role, COST_CAPABILITY);
 }
 
 /**
@@ -162,7 +172,9 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('inventory:makeBatch', ctx, (_ctx, payload) => {
-    // Kitchen staff make batches; any signed-in user may record one.
+    // Kitchen staff make batches; any signed-in user may record one. The
+    // answer carries no costs (what was made, and the stock now): the rows'
+    // values stay with the rows.
     const s = requireSession();
     const parsed = makeBatchInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
@@ -171,15 +183,17 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   // ---- Movements ----
   defineHandler('inventory:listMovements', ctx, (_ctx, payload) => {
-    requireStockView();
-    return ok(listMovements(ctx.db, payload ?? {}));
+    const s = requireStockView();
+    const rows = listMovements(ctx.db, payload ?? {});
+    return ok(mayViewCosts(s) ? rows : rows.map(movementWithoutCosts));
   });
 
   defineHandler('inventory:searchMovements', ctx, (_ctx, payload) => {
-    requireStockView();
+    const s = requireStockView();
     const parsed = searchMovementsInputSchema.safeParse(payload ?? {});
     if (!parsed.success) return validationFailed(parsed.error);
-    return ok(searchMovements(ctx.db, parsed.data));
+    const page = searchMovements(ctx.db, parsed.data);
+    return ok(mayViewCosts(s) ? page : { ...page, rows: page.rows.map(movementWithoutCosts) });
   });
 
   defineHandler('inventory:recordMovement', ctx, (_ctx, payload) => {

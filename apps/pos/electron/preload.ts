@@ -202,18 +202,7 @@ const api: RendererApi = {
     getInvoiceStatus: (req) => invoke('fbr:getInvoiceStatus', req),
   },
   reports: {
-    salesSummary: (req) => invoke('reports:salesSummary', req),
-    salesByDay: (req) => invoke('reports:salesByDay', req),
-    salesByHour: (req) => invoke('reports:salesByHour', req),
-    salesByCategory: (req) => invoke('reports:salesByCategory', req),
-    topItems: (req) => invoke('reports:topItems', req),
-    salesByMode: (req) => invoke('reports:salesByMode', req),
-    salesByPaymentMethod: (req) => invoke('reports:salesByPaymentMethod', req),
-    salesByCashier: (req) => invoke('reports:salesByCashier', req),
-    discounts: (req) => invoke('reports:discounts', req),
     lowStock: () => invoke('reports:lowStock', undefined),
-    cogs: (req) => invoke('reports:cogs', req),
-    cashSummary: (req) => invoke('reports:cashSummary', req),
     business: (req) => invoke('reports:business', req),
   },
   inventory: {

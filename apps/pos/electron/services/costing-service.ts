@@ -51,7 +51,7 @@ import type { AppDatabase } from '../db/connection.js';
 import { loadPriceBook, type PriceBook } from '../db/price-book.js';
 import { getBusinessSetting, setBusinessSettings } from '../db/repositories/business-settings-repo.js';
 import type { Actor } from '../db/repositories/base.js';
-import { COUNTED } from './business-report.js';
+import { COUNTED } from './analytics/sql.js';
 
 /** "Sold in the last 28 days": the window the customers' picks are weighted over. */
 export const MIX_WINDOW_DAYS = 28;

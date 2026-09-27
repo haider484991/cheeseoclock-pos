@@ -12,6 +12,8 @@
  * back.
  */
 
+import type { WasteReason } from './inventory.js';
+
 /** Where an order came from, in the owner's words. */
 export type ReportChannel =
   | 'takeaway'
@@ -184,7 +186,11 @@ export interface ReportOrderStock {
   outcome: 'returned' | 'wasted';
   /** The answer to "Was the food made?" (from the till's record, or the stock rows' notes). */
   answer: 'made' | 'not_made' | null;
-  /** Waste at today's ingredient prices (0 when put back, or no prices set). */
+  /**
+   * Waste, at what the stock cost when the order took it (orders from before
+   * costing: at today's prices). 0 when put back, no prices are set, or this
+   * login may not see costs.
+   */
   wasteCents: number;
   /** The order's status when it was cancelled / refunded, when recorded. */
   statusBefore: string | null;
@@ -211,31 +217,128 @@ export interface ReportVoidLine {
   billPrinted?: boolean;
 }
 
-export interface ReportIngredientLine {
+/** One ingredient thrown away in the period: how much, and what it cost when it was taken. */
+export interface ReportWasteIngredientLine {
   ingredientId: string;
   name: string;
   unit: string;
-  usedQty: number;
   wastedQty: number;
-  usedCents: number;
   wastedCents: number;
 }
 
+/**
+ * Why food was thrown away, as Reports groups it: the reasons picked on the
+ * Waste screen, plus food made for orders that were then cancelled or
+ * refunded ('cancelled_made').
+ */
+export type ReportWasteReason = WasteReason | 'cancelled_made';
+
+export interface ReportWasteLine {
+  reason: ReportWasteReason;
+  /**
+   * How many times, as the owner counts them: for food cancelled after
+   * cooking, the orders it came from (not their ingredient rows); for waste
+   * booked by hand, the entries (one ingredient each).
+   */
+  times: number;
+  cents: number;
+}
+
+/** Why a sale's cost is not known. */
+export type ReportMissingCostWhy =
+  /** The item has no recipe (nothing was taken from stock for it). */
+  | 'no_recipe'
+  /** An ingredient it used has no price in Inventory. */
+  | 'no_price'
+  /** No cost was kept with the sale and none could be worked out (costing failed, or no stock was taken). */
+  | 'not_recorded';
+
+/** Food sold whose cost is not (fully) known, per item and reason. */
+export interface ReportMissingCostLine {
+  /** Menu item id (or 'name:' + the sold name when the item is gone from the menu). */
+  key: string;
+  name: string;
+  why: ReportMissingCostWhy;
+  quantity: number;
+  /** What customers paid for it, before tax (after discounts and part refunds). */
+  salesCents: number;
+}
+
+/** Orders whose food went out but that are not sales (yet). */
+export interface ReportUnpaidFood {
+  orderCount: number;
+  /** What their food cost (kept with the sale, or estimated). */
+  costCents: number;
+  /** Of `orderCount`, estimated (no cost kept with the order). */
+  estimatedOrders: number;
+}
+
+/**
+ * Food cost (costing spec 4.5, Phase 2), for the orders saved on THIS till.
+ *
+ * From the day costing started every sale keeps what its food cost that day
+ * (order_item_costs), so a price change later never moves an earlier period.
+ * Orders from before that, or with no cost kept, are ESTIMATED from what they
+ * took from stock at today's prices, and labelled.
+ *
+ * Money in paisa; percentages in basis points. Sales here are before tax, at
+ * what customers paid (after discounts and part refunds). Delivery charges
+ * and other non-food lines are left out of food sales.
+ */
 export interface ReportFoodCost {
-  /** Ingredients that went out with sales, valued at today's stored prices. */
-  usedCents: number;
+  /** Food sales of the counted orders, before tax, after discounts and part refunds. */
+  foodSalesCents: number;
+  /** Delivery charges and other non-food lines, left out of food sales. */
+  feeSalesCents: number;
+  /** Food cost of sales: the cost kept with each sale, plus estimates for orders with none. */
+  costOfSalesCents: number;
+  /** The food sales whose cost is fully known — what the food cost % is worked on. */
+  knownSalesCents: number;
+  /** What those sales cost. */
+  knownCostCents: number;
+  /** knownCost ÷ knownSales; null when no sale's cost is known. */
+  foodCostBps: number | null;
+  /**
+   * The same known sales at menu price (before discounts and part refunds),
+   * and the food cost on that basis — as the Costing page works it — so the
+   * two figures reconcile: "at menu prices 27.1% → after discounts 28.9%".
+   */
+  knownMenuSalesCents: number;
+  menuFoodCostBps: number | null;
+  /** knownSales ÷ foodSales ("costs known for 94% of sales"); null with no food sales. */
+  coverageBps: number | null;
+  /** Counted orders with no cost kept with the sale: estimated from the stock they took, at today's prices. */
+  estimatedOrders: number;
+  /** Of costOfSalesCents, the estimated part. */
+  estimatedCostCents: number;
+  /** When this till first kept a sale's cost; null before any. */
+  costingStartedAt: string | null;
+  /** Food sold whose cost is not known, biggest first (capped; the total covers all). */
+  missingSales: ReportMissingCostLine[];
+  missingSalesCents: number;
+  /**
+   * Food thrown away: waste booked by hand (dated by when it happened) and
+   * food made for orders then cancelled or refunded (dated by the ORDER's
+   * day, so a late cancel moves nothing between days). At what the stock
+   * cost when it was taken; rows from before costing at today's prices.
+   */
   wasteCents: number;
-  /** The part of `wasteCents` that is food made for orders that were then cancelled or refunded. */
+  wasteByReason: ReportWasteLine[];
+  wasteIngredients: ReportWasteIngredientLine[];
+  /** The part of `wasteCents` made for orders that were then cancelled or refunded. */
   cancelledWasteCents: number;
   /** How many cancelled / refunded orders that waste came from. */
   cancelledOrderCount: number;
   /** Cancelled orders whose stock was put back although cooking had been marked — worth a look. */
   putBackAfterCookingCount: number;
-  /** False when no ingredient used has a price on file (nothing to show). */
+  /** Food that went out on orders closed without payment (served / delivered, never paid). */
+  sentNotPaid: ReportUnpaidFood;
+  /** Orders from an earlier day still on the board, not paid: their food is out, not yet a sale. */
+  stillOpen: ReportUnpaidFood;
+  /** Some cost or waste figure is above Rs 0 (prices are set). */
   hasCosts: boolean;
-  /** Stock movements exist at all in the period (recipes are set up). */
+  /** Stock was taken for sales, or wasted, in the period (recipes are set up). */
   hasUsage: boolean;
-  ingredients: ReportIngredientLine[];
 }
 
 export interface ReportDeliveries {
@@ -275,7 +378,12 @@ export interface BusinessReport {
   drawerOpens: ReportDrawerOpenLine[];
   /** How many times it was opened by hand in all — drawerOpens stops at the cap. */
   drawerOpenCount: number;
-  foodCost: ReportFoodCost;
+  /**
+   * Food cost, waste and food sent unpaid. Costs are the owner's business
+   * figures: null for a login without COST_CAPABILITY (the main process
+   * leaves them out, not only the screen).
+   */
+  foodCost: ReportFoodCost | null;
   deliveries: ReportDeliveries;
 }
 

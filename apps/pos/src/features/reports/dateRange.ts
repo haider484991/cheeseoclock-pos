@@ -266,3 +266,21 @@ export function daysSoFar(period: Pick<ReportPeriod, 'firstDay' | 'lastDay'>, no
   for (let n = first; n <= upTo; n += 1) out.push(ymdOf(n));
   return out;
 }
+
+// ---------------------------------------------------------- auto-refresh --
+
+/** The longest period that refreshes itself while it is open. */
+export const AUTO_REFRESH_MAX_DAYS = 31;
+
+/**
+ * Does the open report refresh itself once a minute? Only while the period
+ * includes today (new sales still come in — `isCurrent`, as of its last
+ * refresh, so "Today" left open past 5 am still moves on to the new day
+ * once), covers at most 31 days, and the window is on screen: a year's
+ * report is never re-run every minute behind the cashier's back (costing
+ * spec Phase 2). Anything else refreshes when asked (a new period, "Try
+ * again").
+ */
+export function autoRefreshes(period: Pick<ReportPeriod, 'isCurrent' | 'days'>, visible: boolean): boolean {
+  return visible && period.isCurrent && period.days <= AUTO_REFRESH_MAX_DAYS;
+}

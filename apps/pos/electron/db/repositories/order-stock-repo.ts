@@ -23,6 +23,14 @@
  * (row + sync + audit), inside the caller's void / refund transaction, and one
  * order-level audit row says who decided what (stock_put_back / stock_to_waste).
  *
+ * What the rows are worth (costing spec Phase 2): the order's take kept its
+ * value when it left (decrementForOrder), and every row that settles it
+ * copies that value pro rata ("cancel_put_back" / "cancel_made", with
+ * ref_taken_at = when the order first took stock) — so a put-back nets the
+ * order to exactly Rs 0 and cancelled food is waste at what it cost THEN,
+ * whatever the price is now. Orders taken before costing started are valued
+ * at today's prices, as before.
+ *
  * Two tills: each keeps its own count (sync-core RECEIVER_KEEPS_ON_UPDATE).
  * Stock the OTHER till took is settled here too, in rows that do not move
  * this till's count ("…put back on the till that sent it", "made" rows): the
@@ -41,24 +49,29 @@
 
 import type { AppDatabase } from '../connection.js';
 import type { Actor } from './base.js';
-import { recordStockMovement } from './stock-movement-repo.js';
+import { priceOfBook, recordStockMovement, safeStockValue } from './stock-movement-repo.js';
 import { writeAudit } from './audit-repo.js';
+import { loadPriceBook } from '../price-book.js';
 import {
   answerWentAgainstHint,
   drinksGoBackByDefault,
   foodLeftShop,
   foodMadeQuestion,
   handedOver,
-  ingredientCostCents,
   isSealedDrink,
   noteKindAnswer,
   orderStockNote,
   orderStockNoteKind,
   returnsToOtherTill,
+  shareByQty,
+  splitByQty,
   unitFactor,
+  type OrderStockNoteKind,
+  type PriceOf,
 } from '@cheeseoclock/pos-domain';
 import type {
   FoodMade,
+  MovementDetail,
   OrderMode,
   OrderStatus,
   OrderStockHow,
@@ -81,6 +94,8 @@ interface LedgerRow {
   device_id: string;
   occurred_at: string;
   actor_user_id: string | null;
+  value_cents: number | null;
+  unit_cost_mc: number | null;
 }
 
 interface IngredientRow {
@@ -88,9 +103,6 @@ interface IngredientRow {
   name: string;
   unit: string;
   category: string | null;
-  cost_per_unit_cents: number;
-  pack_size: number | null;
-  pack_price_cents: number | null;
   deleted_at: string | null;
 }
 
@@ -112,6 +124,18 @@ interface Holding {
   counted: number;
   /** Of `plusSale`: put back from here onto the other till's count. */
   thereBack: number;
+  /** What the order's 'sale' rows are worth together (takes −, put-backs +), paisa. */
+  saleValue: number;
+  /** What its takes are worth (a positive number), and how much they took. */
+  takeValue: number;
+  takeQty: number;
+  /** The price the first valued take was at, millicents. */
+  takeUnitCostMc: number | null;
+  /** Every 'sale' row carries its value (none from before costing). */
+  valued: boolean;
+  /** What its waste rows are worth (a positive number); `wasteValued`: all carry a value. */
+  wasteValue: number;
+  wasteValued: boolean;
 }
 
 interface OrderLedger {
@@ -121,12 +145,15 @@ interface OrderLedger {
   otherTill: boolean;
   /** Settle rows: + sale, waste, count (a settle, or an older till's "put back"). */
   settleRows: LedgerRow[];
+  /** When the order first took stock, on either till (the settle rows' ref_taken_at). */
+  firstTakenAt: string | null;
 }
 
 function readOrderLedger(db: AppDatabase, orderId: string, deviceId: string): OrderLedger {
   const rows = db
     .prepare(
-      `SELECT ingredient_id, reason, delta_qty, unit, notes, device_id, occurred_at, actor_user_id
+      `SELECT ingredient_id, reason, delta_qty, unit, notes, device_id, occurred_at, actor_user_id,
+              value_cents, unit_cost_mc
          FROM stock_movements
         WHERE ref_order_id = ? AND deleted_at IS NULL
         ORDER BY occurred_at, id`,
@@ -137,7 +164,7 @@ function readOrderLedger(db: AppDatabase, orderId: string, deviceId: string): Or
   if (ids.length > 0) {
     const found = db
       .prepare(
-        `SELECT id, name, unit, category, cost_per_unit_cents, pack_size, pack_price_cents, deleted_at
+        `SELECT id, name, unit, category, deleted_at
            FROM ingredients WHERE id IN (SELECT value FROM json_each(?))`,
       )
       .all(JSON.stringify(ids)) as IngredientRow[];
@@ -148,6 +175,7 @@ function readOrderLedger(db: AppDatabase, orderId: string, deviceId: string): Or
   let takenAt: string | null = null;
   let ownTakenAt: string | null = null;
   let otherTill = false;
+  let firstTakenAt: string | null = null;
   const settleRows: LedgerRow[] = [];
   for (const r of rows) {
     const ing = ings.get(r.ingredient_id) ?? null;
@@ -164,6 +192,13 @@ function readOrderLedger(db: AppDatabase, orderId: string, deviceId: string): Or
         wasted: 0,
         counted: 0,
         thereBack: 0,
+        saleValue: 0,
+        takeValue: 0,
+        takeQty: 0,
+        takeUnitCostMc: null,
+        valued: true,
+        wasteValue: 0,
+        wasteValued: true,
       };
       byId.set(r.ingredient_id, h);
     }
@@ -175,7 +210,19 @@ function readOrderLedger(db: AppDatabase, orderId: string, deviceId: string): Or
       continue;
     }
     const qty = Number(r.delta_qty) * factor;
+    // Values are money: no unit conversion, whatever unit the row was in.
+    const value = r.value_cents === null ? null : Number(r.value_cents);
     if (r.reason === 'sale') {
+      if (value === null) h.valued = false;
+      else h.saleValue += value;
+      if (qty < 0) {
+        h.takeQty += -qty;
+        if (value !== null) {
+          h.takeValue += -value;
+          if (h.takeUnitCostMc === null && r.unit_cost_mc !== null) h.takeUnitCostMc = Number(r.unit_cost_mc);
+        }
+        if (firstTakenAt === null || r.occurred_at < firstTakenAt) firstTakenAt = r.occurred_at;
+      }
       if (qty > 0 && returnsToOtherTill(orderStockNoteKind(r.notes))) {
         // Booked for the count of the till that took the stock: written here,
         // it evens out the other till's take; written there, ours.
@@ -202,13 +249,15 @@ function readOrderLedger(db: AppDatabase, orderId: string, deviceId: string): Or
       }
     } else if (r.reason === 'waste') {
       h.wasted += -qty;
+      if (value === null) h.wasteValued = false;
+      else h.wasteValue += -value;
       settleRows.push(r);
     } else if (r.reason === 'count') {
       h.counted += -qty;
       settleRows.push(r);
     }
   }
-  return { holdings: [...byId.values()], takenAt: ownTakenAt ?? takenAt, otherTill, settleRows };
+  return { holdings: [...byId.values()], takenAt: ownTakenAt ?? takenAt, otherTill, settleRows, firstTakenAt };
 }
 
 /** What an order still holds of one ingredient: in all, and of that on this till. */
@@ -222,13 +271,31 @@ function isDrink(ing: IngredientRow | null): boolean {
   return ing !== null && isSealedDrink(ing);
 }
 
-function cost(ing: IngredientRow | null, qty: number): number {
-  if (!ing || qty === 0) return 0;
-  return ingredientCostCents(qty, {
-    costPerUnitCents: ing.cost_per_unit_cents,
-    packSize: ing.pack_size,
-    packPriceCents: ing.pack_price_cents,
-  });
+/**
+ * Today's effective prices, read once and only when needed: for stock an
+ * order took before costing started (its rows carry no value).
+ */
+function lazyPrices(db: AppDatabase): () => PriceOf {
+  let priceOf: PriceOf | null = null;
+  return () => (priceOf ??= priceOfBook(loadPriceBook(db)));
+}
+
+/** What `qty` of one holding is worth: its share of what the take cost, else at today's price. */
+function valueOf(h: Holding, qty: number, prices: () => PriceOf): number {
+  if (qty === 0) return 0;
+  if (h.valued && h.takeQty > 0) return shareByQty(h.takeValue, qty, h.takeQty);
+  return safeStockValue(qty, prices()(h.ingredientId)).valueCents ?? 0;
+}
+
+/** What a settled holding's waste rows are worth. */
+function wasteValueOf(h: Holding, wasted: number, prices: () => PriceOf): number {
+  if (wasted <= 0) return 0;
+  return h.wasteValued ? h.wasteValue : valueOf(h, wasted, prices);
+}
+
+/** The detail a settle row carries: cancelled food that was made, or stock put back. */
+function settleDetail(kind: OrderStockNoteKind): MovementDetail {
+  return kind === 'moved_to_waste' || kind === 'waste' ? 'cancel_made' : 'cancel_put_back';
 }
 
 /** Ingredients this till counted in a stock take (not an order's own row) after `sinceIso`. */
@@ -264,13 +331,13 @@ function lineNote(h: Holding, counted: Set<string>): OrderStockLineNote | null {
   return null;
 }
 
-function baseLine(h: Holding, qty: number, note: OrderStockLineNote | null): OrderStockLine {
+function baseLine(h: Holding, qty: number, note: OrderStockLineNote | null, prices: () => PriceOf): OrderStockLine {
   return {
     ingredientId: h.ingredientId,
     name: h.ing?.name ?? 'Deleted ingredient',
     unit: h.ing?.unit ?? '',
     qty,
-    estCostCents: cost(h.ing, qty),
+    estCostCents: valueOf(h, qty, prices),
     drink: isDrink(h.ing),
     note,
   };
@@ -326,6 +393,7 @@ export function getOrderStockStatus(
 
   const ledger = readOrderLedger(db, orderId, deviceId);
   const counted = countedSince(db, deviceId, ledger.holdings);
+  const prices = lazyPrices(db);
   // Settled when a settle row exists (written here, or arrived from the other
   // till) — or, when every line was skipped (all deleted from Inventory),
   // when this till's order-level audit row says so.
@@ -348,16 +416,16 @@ export function getOrderStockStatus(
       const putBack = Math.max(0, h.plusSale - wasted - alreadyCounted - putBackThere);
       const qty = putBack + alreadyCounted + putBackThere + wasted + need;
       if (qty === 0 && !h.unconvertible) continue;
-      const line = baseLine(h, qty, need > 0 || h.unconvertible ? lineNote(h, counted) : null);
+      const line = baseLine(h, qty, need > 0 || h.unconvertible ? lineNote(h, counted) : null, prices);
       line.putBack = putBack;
       line.alreadyCounted = alreadyCounted;
       line.putBackThere = putBackThere;
       line.wasted = wasted;
-      line.wasteCents = cost(h.ing, wasted);
+      line.wasteCents = wasteValueOf(h, wasted, prices);
       wasteCents += line.wasteCents;
       lines.push(line);
     } else if (need > 0 || h.unconvertible) {
-      lines.push(baseLine(h, need, lineNote(h, counted)));
+      lines.push(baseLine(h, need, lineNote(h, counted), prices));
     }
   }
   lines.sort(byName);
@@ -500,12 +568,37 @@ export function settleOrderStock(
     }
 
     const counted = outcome === 'not_made' ? countedSince(db, actor.deviceId, holding) : new Set<string>();
-    const note = (kind: Parameters<typeof orderStockNote>[0]) => orderStockNote(kind, input.how);
-    /** A row on this till's count, or (`here` false) booked for the other till's. */
-    const move = (ingredientId: string, deltaQty: number, reason: 'sale' | 'waste' | 'count', notes: string, here = true) =>
+    const prices = lazyPrices(db);
+    /**
+     * A row on this till's count, or (`here` false) booked for the other
+     * till's, worth `valueCents` (signed like the quantity): its share of what
+     * the order's take cost, so the order nets to exactly Rs 0. A take from
+     * before costing (no value) is valued at today's price instead.
+     */
+    const move = (
+      h: Holding,
+      deltaQty: number,
+      reason: 'sale' | 'waste' | 'count',
+      kind: OrderStockNoteKind,
+      valueCents: number,
+      here = true,
+    ) =>
       recordStockMovement(
         db,
-        { ingredientId, deltaQty, reason, refOrderId: input.orderId, notes, ...(here ? {} : { countHere: false }) },
+        {
+          ingredientId: h.ingredientId,
+          deltaQty,
+          reason,
+          refOrderId: input.orderId,
+          notes: orderStockNote(kind, input.how),
+          detail: settleDetail(kind),
+          refTakenAt: ledger.firstTakenAt,
+          value:
+            h.valued && h.takeQty > 0
+              ? { valueCents, unitCostMc: h.takeUnitCostMc, basis: 'take' }
+              : safeStockValue(deltaQty, prices()(h.ingredientId)),
+          ...(here ? {} : { countHere: false }),
+        },
         actor,
       );
 
@@ -515,7 +608,15 @@ export function settleOrderStock(
     for (const h of holding) {
       const { need, mine, theirs } = held(h);
       const ln = lineNote(h, counted);
-      const line = baseLine(h, need, ln);
+      const line = baseLine(h, need, ln, prices);
+      // What is still held is worth what the take cost, less anything already
+      // put back: split over this till's share and the other till's, the
+      // remainder on the last, so the pieces add up to it exactly. A take from
+      // before costing has no value to split: each row is valued on its own
+      // (move), at today's price.
+      const fromTake = h.valued && h.takeQty > 0;
+      const heldValue = fromTake ? -h.saleValue : valueOf(h, need, prices);
+      const [vMine = 0, vTheirs = 0] = fromTake ? splitByQty(heldValue, [mine, theirs]) : [0, 0];
       line.putBack = 0;
       line.alreadyCounted = 0;
       line.putBackThere = 0;
@@ -528,10 +629,10 @@ export function settleOrderStock(
       }
       if (outcome === 'not_made') {
         if (mine > 0) {
-          move(h.ingredientId, mine, 'sale', note(counted.has(h.ingredientId) ? 'already_counted' : 'put_back'));
+          move(h, mine, 'sale', counted.has(h.ingredientId) ? 'already_counted' : 'put_back', vMine);
           if (counted.has(h.ingredientId)) {
             // The stock take after sending saw it on the shelf: the count stays.
-            move(h.ingredientId, -mine, 'count', note('already_counted'));
+            move(h, -mine, 'count', 'already_counted', -vMine);
             line.alreadyCounted = mine;
           } else {
             line.putBack = mine;
@@ -540,31 +641,32 @@ export function settleOrderStock(
         // The other till's share: booked here without moving this count; the
         // till that took it puts it back on its own when the row arrives.
         if (theirs > 0) {
-          move(h.ingredientId, theirs, 'sale', note('put_back_other_till'), false);
+          move(h, theirs, 'sale', 'put_back_other_till', vTheirs, false);
           line.putBackThere = theirs;
         }
       } else if (drinksBack.has(h.ingredientId)) {
         if (mine > 0) {
-          move(h.ingredientId, mine, 'sale', note('drink_back'));
+          move(h, mine, 'sale', 'drink_back', vMine);
           line.putBack = mine;
         }
         if (theirs > 0) {
-          move(h.ingredientId, theirs, 'sale', note('drink_back_other_till'), false);
+          move(h, theirs, 'sale', 'drink_back_other_till', vTheirs, false);
           line.putBackThere = theirs;
         }
       } else {
         // Made: the sale undone and booked as waste — on this count for this
         // till's share (up, then down), and without moving it for the other's.
+        // The waste is worth exactly what the take cost.
         if (mine > 0) {
-          move(h.ingredientId, mine, 'sale', note('moved_to_waste'));
-          move(h.ingredientId, -mine, 'waste', note('waste'));
+          move(h, mine, 'sale', 'moved_to_waste', vMine);
+          move(h, -mine, 'waste', 'waste', -vMine);
         }
         if (theirs > 0) {
-          move(h.ingredientId, theirs, 'sale', note('moved_to_waste'), false);
-          move(h.ingredientId, -theirs, 'waste', note('waste'), false);
+          move(h, theirs, 'sale', 'moved_to_waste', vTheirs, false);
+          move(h, -theirs, 'waste', 'waste', -vTheirs, false);
         }
         line.wasted = need;
-        line.wasteCents = cost(h.ing, need);
+        line.wasteCents = heldValue;
         wasteCents += line.wasteCents;
       }
     }

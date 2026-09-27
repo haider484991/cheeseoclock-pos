@@ -17,6 +17,8 @@ import {
   orderStockNoteKind,
   returnsToOtherTill,
   stockSettlementForCounter,
+  shareByQty,
+  splitByQty,
   stockStatusForCounter,
 } from './order-stock.js';
 import { ingredientCostCents, unitFactor } from './units.js';
@@ -297,5 +299,69 @@ describe('kitchenHearsOfClose: which cancels and refunds go to the kitchen print
     }
     // Exactly the handed-over statuses are kept from the kitchen.
     expect(ALL.filter((s) => !kitchenHearsOfClose(s))).toEqual(['delivered', 'served', 'paid']);
+  });
+});
+
+describe('splitByQty: what the rows that settle an order are worth', () => {
+  it('shares pro rata with the remainder on the last, adding up to the total exactly', () => {
+    expect(splitByQty(660, [300])).toEqual([660]);
+    expect(splitByQty(100, [1, 1, 1])).toEqual([33, 33, 34]);
+    expect(splitByQty(101, [2, 1])).toEqual([67, 34]);
+    for (const [total, qtys] of [
+      [12_345, [7, 11, 13]],
+      [1, [999, 1]],
+      [-660, [100, 200]],
+      [0, [5, 5]],
+    ] as Array<[number, number[]]>) {
+      expect(splitByQty(total, qtys).reduce((s, x) => s + x, 0)).toBe(total);
+    }
+  });
+
+  it('a partial put-back plus the waste add up to what was taken', () => {
+    // 300 g taken for Rs 6.60; 100 g goes back, 200 g is waste.
+    const [back, waste] = splitByQty(660, [100, 200]);
+    expect(back! + waste!).toBe(660);
+    expect([back, waste]).toEqual([220, 440]);
+  });
+
+  it('nothing to share: all zero', () => {
+    expect(splitByQty(500, [0, 0])).toEqual([0, 0]);
+    expect(splitByQty(500, [])).toEqual([]);
+    expect(splitByQty(0, [2.5, 0])).toEqual([0, 0]);
+  });
+
+  it('never refuses a quantity that is not whole (bad data: 2.5 g): shared by ratio, still adding up exactly', () => {
+    expect(splitByQty(660, [2.5])).toEqual([660]);
+    expect(splitByQty(660, [2.5, 0])).toEqual([660, 0]);
+    expect(splitByQty(-100, [0.5, 1])).toEqual([-33, -67]);
+    for (const [total, qtys] of [
+      [12_345, [0.1, 0.2, 0.7]],
+      [-7, [1.5, 2.5]],
+      [1, [0.001, 999.999]],
+    ] as Array<[number, number[]]>) {
+      const parts = splitByQty(total, qtys);
+      expect(parts.every((p) => Number.isSafeInteger(p))).toBe(true);
+      expect(parts.reduce((s, x) => s + x, 0)).toBe(total);
+    }
+  });
+});
+
+describe('shareByQty: one share of what the take cost', () => {
+  it('round(total × qty ÷ of), half away from zero; all of it for all of it', () => {
+    expect(shareByQty(660, 100, 300)).toBe(220);
+    expect(shareByQty(-660, 100, 300)).toBe(-220);
+    expect(shareByQty(100, 1, 3)).toBe(33);
+    expect(shareByQty(101, 1, 2)).toBe(51);
+    expect(shareByQty(-101, 1, 2)).toBe(-51);
+    expect(shareByQty(660, 300, 300)).toBe(660);
+  });
+
+  it('nothing to share, or a quantity that is not whole: never throws', () => {
+    expect(shareByQty(0, 2.5, 2.5)).toBe(0);
+    expect(shareByQty(500, 0, 10)).toBe(0);
+    expect(shareByQty(500, 5, 0)).toBe(0);
+    expect(shareByQty(1_000, 2.5, 2.5)).toBe(1_000);
+    expect(shareByQty(1_000, 1.25, 2.5)).toBe(500);
+    expect(shareByQty(1_000, 0.1, 0.3)).toBe(333);
   });
 });

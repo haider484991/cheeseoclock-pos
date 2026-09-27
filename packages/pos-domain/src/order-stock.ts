@@ -25,7 +25,7 @@ import type {
   StockSettlement,
 } from '@cheeseoclock/shared-types';
 import { guessIngredientCategory, isIngredientCategory } from './ingredient-category.js';
-import { normalizeUnit } from './units.js';
+import { normalizeUnit, ratioRound } from './units.js';
 
 /** Under this long after sending, an untouched order was probably not started. Wording only. */
 export const PROBABLY_NOT_STARTED_MIN = 5;
@@ -274,6 +274,69 @@ function withoutCost(l: OrderStockLine): OrderStockLine {
   const out: OrderStockLine = { ...l, estCostCents: 0 };
   if (out.wasteCents !== undefined) out.wasteCents = 0;
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// What the rows that settle an order are worth
+// ---------------------------------------------------------------------------
+
+/**
+ * Share `total` (paisa) over quantities pro rata — round(total × q ÷ Σq) each,
+ * half away from zero — with the remainder on the LAST share, so the shares
+ * always add up to `total` exactly. Settling an order splits what it still
+ * holds of an ingredient (at what it cost when it was taken, costing spec
+ * D10) over the rows that put it back or book it as waste: the order's value
+ * then nets to exactly 0, whatever the price is now. All zero when Σq is 0.
+ *
+ * Never throws on a quantity that is not a whole number (bad data from
+ * before quantities were checked: 2.5 g on a recipe line): only the RATIO of
+ * the quantities matters, so they are shared in millionths instead
+ * (shareQtys). The money is still worked exactly and adds up to `total`, so
+ * such an order can always be cancelled or refunded.
+ */
+export function splitByQty(total: number, qtys: readonly number[]): number[] {
+  if (qtys.length === 0) return [];
+  const whole = shareQtys(qtys);
+  const sum = whole.reduce((s, q) => s + q, 0);
+  if (!(sum > 0) || total === 0) return qtys.map(() => 0);
+  const out: number[] = [];
+  let given = 0;
+  whole.forEach((q, i) => {
+    if (i === whole.length - 1) {
+      out.push(total - given);
+      return;
+    }
+    const share = ratioRound([total, q], [sum]);
+    out.push(share);
+    given += share;
+  });
+  return out;
+}
+
+/**
+ * `total`'s share for `qty` of `of`: round(total × qty ÷ of), half away from
+ * zero, exact — all of it when qty is all of it; 0 when there is nothing to
+ * share. Like splitByQty, a quantity that is not a whole number is shared in
+ * millionths rather than refused.
+ */
+export function shareByQty(total: number, qty: number, of: number): number {
+  if (total === 0 || qty === 0) return 0;
+  if (qty === of) return total;
+  const [q = 0, d = 0] = shareQtys([qty, of]);
+  if (!(d > 0)) return 0;
+  return ratioRound([total, q], [d]);
+}
+
+/** Millionths of a unit: finer than any quantity the till records. */
+const QTY_SHARE_SCALE = 1_000_000;
+
+/**
+ * Quantities as whole numbers for an exact pro-rata share: as they are, or
+ * — when any is not whole — all in millionths (the ratio is what counts).
+ */
+function shareQtys(qtys: readonly number[]): number[] {
+  if (qtys.every((q) => Number.isSafeInteger(q))) return [...qtys];
+  return qtys.map((q) => Math.round(q * QTY_SHARE_SCALE));
 }
 
 /** True when the answer given differs from what the till hinted (tapped for them, or leaned). */

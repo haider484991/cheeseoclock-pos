@@ -1,23 +1,18 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, hasCapability } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../../services/auth-service.js';
-import {
-  getSalesSummary,
-  getSalesByDay,
-  getSalesByHour,
-  getSalesByCategory,
-  getTopItems,
-  getSalesByMode,
-  getSalesByPaymentMethod,
-  getSalesByCashier,
-  getDiscountSummary,
-  getLowStock,
-  getCogs,
-  getCashSummary,
-} from '../../services/reports-service.js';
-import { getBusinessReport } from '../../services/business-report.js';
+import { getLowStock } from '../../services/inventory-service.js';
+import { getBusinessReport, reportForLogin } from '../../services/business-report.js';
+
+/**
+ * The Reports page. Two channels: the whole page for one period
+ * (`reports:business`) and the ingredients running low. The older one-figure
+ * channels (salesSummary, cogs…) and reports-service.ts were retired with
+ * costing Phase 2: nothing called them, and their cost of goods was valued
+ * at today's prices.
+ */
 
 /** Longest period one report may cover — two years and a bit (leap day, comparison). */
 const MAX_REPORT_DAYS = 800;
@@ -50,71 +45,21 @@ function requireReportView(): AuthenticatedUser {
 }
 
 export function registerReportsHandlers(ctx: HandlerContext): void {
-  defineHandler('reports:salesSummary', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getSalesSummary(ctx.db, payload));
-  });
-  defineHandler('reports:salesByDay', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getSalesByDay(ctx.db, payload));
-  });
-  defineHandler('reports:salesByHour', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getSalesByHour(ctx.db, payload));
-  });
-  defineHandler('reports:salesByCategory', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getSalesByCategory(ctx.db, payload));
-  });
-  defineHandler('reports:topItems', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getTopItems(ctx.db, payload, payload.limit));
-  });
-  defineHandler('reports:salesByMode', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getSalesByMode(ctx.db, payload));
-  });
-  defineHandler('reports:salesByPaymentMethod', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getSalesByPaymentMethod(ctx.db, payload));
-  });
-  defineHandler('reports:salesByCashier', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getSalesByCashier(ctx.db, payload));
-  });
-  defineHandler('reports:discounts', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getDiscountSummary(ctx.db, payload));
-  });
   defineHandler('reports:lowStock', ctx, () => {
     requireReportView();
     return ok(getLowStock(ctx.db));
   });
-  defineHandler('reports:cogs', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(getCogs(ctx.db, payload));
-  });
   defineHandler('reports:business', ctx, (_ctx, payload) => {
-    requireReportView();
+    const s = requireReportView();
     checkRange(payload?.sinceIso, payload?.untilIso, 'report period');
     const withCompare = payload.compareSinceIso !== undefined || payload.compareUntilIso !== undefined;
     if (withCompare) checkRange(payload.compareSinceIso, payload.compareUntilIso, 'comparison period');
-    return ok(
-      getBusinessReport(ctx.db, {
-        sinceIso: payload.sinceIso,
-        untilIso: payload.untilIso,
-        ...(withCompare ? { compareSinceIso: payload.compareSinceIso, compareUntilIso: payload.compareUntilIso } : {}),
-      }),
-    );
-  });
-  defineHandler('reports:cashSummary', ctx, (_ctx, payload) => {
-    requireReportView();
-    return ok(
-      getCashSummary(
-        ctx.db,
-        { sinceIso: payload.sinceIso, untilIso: payload.untilIso },
-        payload.openingCashCents ?? 0,
-      ),
-    );
+    const report = getBusinessReport(ctx.db, {
+      sinceIso: payload.sinceIso,
+      untilIso: payload.untilIso,
+      ...(withCompare ? { compareSinceIso: payload.compareSinceIso, compareUntilIso: payload.compareUntilIso } : {}),
+    });
+    // Food cost and waste are costs: only for a login that may see them.
+    return ok(reportForLogin(report, hasCapability(s.role, COST_CAPABILITY)));
   });
 }

@@ -126,6 +126,53 @@ export type StockMovementReason =
   | 'transfer'
   | 'adjustment';
 
+/**
+ * How a stock row was valued when it was written (costing spec 0033,
+ * stock_movements.cost_basis):
+ *  - 'price': the ingredient's price at the time (a batch item at its
+ *    rolled-up price);
+ *  - 'bill':  a delivery, at its purchase order line's price;
+ *  - 'take':  copied from what the order took (a put-back or cancelled-food
+ *    row settles at the ORIGINAL cost, whatever the price is now);
+ *  - 'batch': what a batch made, valued at the inputs it used;
+ *  - 'count': a stock take, at the price at the time;
+ *  - 'none':  the ingredient had no price (the value is Rs 0).
+ * A row written before costing started has no basis and no value.
+ */
+export const COST_BASES = ['price', 'bill', 'take', 'batch', 'count', 'none'] as const;
+export type CostBasis = (typeof COST_BASES)[number];
+
+/** Why food was thrown away, as the owner picks it on the Waste screen. */
+export const WASTE_REASONS = ['burnt', 'dropped', 'expired', 'wrong_order', 'returned', 'staff_meal', 'other'] as const;
+export type WasteReason = (typeof WASTE_REASONS)[number];
+
+/**
+ * What a stock row stands for beyond its reason (stock_movements.detail,
+ * checked here rather than by a table CHECK, costing spec D9):
+ *  - batch_in / batch_out: an input used by a batch, and what the batch made;
+ *  - waste:<reason>: waste booked by hand, with why;
+ *  - cancel_made: a cancelled / refunded order's food that was made (its
+ *    sale undone and booked as waste);
+ *  - cancel_put_back: a cancelled / refunded order's stock put back;
+ *  - stock_take / correction: counted on the shelf, or a fix by hand.
+ */
+export const MOVEMENT_DETAILS = [
+  'batch_in',
+  'batch_out',
+  'waste:burnt',
+  'waste:dropped',
+  'waste:expired',
+  'waste:wrong_order',
+  'waste:returned',
+  'waste:staff_meal',
+  'waste:other',
+  'cancel_made',
+  'cancel_put_back',
+  'stock_take',
+  'correction',
+] as const;
+export type MovementDetail = (typeof MOVEMENT_DETAILS)[number];
+
 export interface StockMovement {
   id: UUID;
   ingredientId: UUID;
@@ -137,6 +184,17 @@ export interface StockMovement {
   actorUserId: UUID | null;
   occurredAt: string;
   resultingQty: number;
+  /** What the row stands for beyond its reason (a waste reason, a batch…); null when plain. */
+  detail?: MovementDetail | null;
+  /**
+   * What the row was worth when written, SIGNED like deltaQty (paisa), the
+   * price of one unit (millicents) and how it was valued. Null on rows from
+   * before costing started. Costs: left out altogether for a login without
+   * COST_CAPABILITY.
+   */
+  valueCents?: number | null;
+  unitCostMc?: number | null;
+  costBasis?: CostBasis | null;
 }
 
 /** A movement as the history screen shows it: names resolved, even for a deleted ingredient. */

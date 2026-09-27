@@ -8,6 +8,7 @@
  */
 
 import type { AppDatabase } from '../connection.js';
+import { toCostBasis, toMovementDetail } from './stock-movement-repo.js';
 import type {
   StockMovementEntry,
   StockMovementPage,
@@ -33,6 +34,10 @@ interface EntryRow {
   actor_name: string | null;
   order_number: string | null;
   po_ref: string | null;
+  detail: string | null;
+  value_cents: number | null;
+  unit_cost_mc: number | null;
+  cost_basis: string | null;
 }
 
 // LEFT JOINs: a deleted ingredient's history must still show its name, and a
@@ -110,7 +115,8 @@ export function searchMovements(db: AppDatabase, input?: StockMovementSearch): S
               i.name AS ingredient_name,
               -- the unit the row was written in (0029): "−2 kg" stays 2 kg after a Convert to g
               COALESCE(sm.unit, i.unit) AS unit, u.full_name AS actor_name,
-              o.order_number AS order_number, po.reference_no AS po_ref
+              o.order_number AS order_number, po.reference_no AS po_ref,
+              sm.detail, sm.value_cents, sm.unit_cost_mc, sm.cost_basis
          ${FROM}
         WHERE ${filtered.sql}
         ORDER BY sm.occurred_at DESC, sm.id DESC
@@ -149,5 +155,10 @@ function rowToEntry(r: EntryRow): StockMovementEntry {
     actorName: r.actor_name,
     orderNumber: r.order_number,
     purchaseOrderRef: r.po_ref,
+    detail: toMovementDetail(r.detail),
+    // Costs: the IPC handler leaves these out for a login without COST_CAPABILITY.
+    valueCents: r.value_cents,
+    unitCostMc: r.unit_cost_mc,
+    costBasis: toCostBasis(r.cost_basis),
   };
 }

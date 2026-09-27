@@ -2,7 +2,7 @@ import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireCapability, REFUSED } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
-import { ok, hasCapability } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
 import { orderStockAnswerSchema } from '@cheeseoclock/shared-schemas';
 import {
@@ -71,11 +71,12 @@ function requireOrderCreate(): AuthenticatedUser {
 
 /**
  * Ingredient quantities and food cost are the owner's business data: only a
- * login that may open Inventory (`menu.manage`, as inventory-handlers
- * requireStockView) sees them. A counter login still gets the question.
+ * login that may see costs (COST_CAPABILITY — today `menu.manage`, the same
+ * logins that open Inventory) sees them: the "about Rs …" of the food, and
+ * what the waste cost. A counter login still gets the question.
  */
 function mayViewStock(s: AuthenticatedUser): boolean {
-  return hasCapability(s.role, 'menu.manage');
+  return hasCapability(s.role, COST_CAPABILITY);
 }
 
 /** What a cancel / refund did to stock, as this login may read it. */

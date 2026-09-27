@@ -12,19 +12,27 @@ import type { ReportPeriod } from './dateRange';
 import {
   CHANNEL_LABEL,
   DRAWER_OPEN_WHY,
+  MISSING_COST_WHY,
   PAYMENT_LABEL,
   PAYMENT_ORDER,
+  WASTE_REASON_LABEL,
   changeOf,
+  costingStartText,
+  coverageText,
   daySeries,
+  estimatedText,
+  foodCostHeadline,
+  menuPriceLine,
   fmtMinutes,
-  fmtQty,
   fmtWhen,
   hourLabel,
   hourSeries,
   methodLabel,
   percentOf,
   stockCellText,
+  unpaidFoodText,
 } from './reportFormat';
+import { formatBps } from '../costing/costingFormat';
 
 // --------------------------------------------------------------------- CSV --
 
@@ -169,7 +177,7 @@ export function buildCsv(r: BusinessReport, period: ReportPeriod, madeAt: Date =
       methodLabel(x.method),
       x.full ? 'Yes' : 'No',
       x.reason,
-      stockCellText(x.stock, r.foodCost.hasCosts),
+      stockCellText(x.stock, r.foodCost?.hasCosts ?? false),
       x.approvedBy,
     ]);
   }
@@ -182,7 +190,7 @@ export function buildCsv(r: BusinessReport, period: ReportPeriod, madeAt: Date =
       v.orderNumber,
       rs(v.amountCents),
       v.reason,
-      stockCellText(v.stock, r.foodCost.hasCosts),
+      stockCellText(v.stock, r.foodCost?.hasCosts ?? false),
       v.approvedBy,
       v.takenBy,
     ]);
@@ -198,14 +206,36 @@ export function buildCsv(r: BusinessReport, period: ReportPeriod, madeAt: Date =
     rows.push([fmtWhen(d.createdAt), DRAWER_OPEN_WHY[d.kind], d.reason, d.openedBy, d.approvedBy, d.outsideShift ? 'No' : 'Yes']);
   }
 
-  heading("Ingredients used (estimate at today's ingredient prices)");
-  rows.push(['Ingredient', 'Unit', 'Used', 'Cost of used Rs', 'Wasted', 'Cost of waste Rs']);
-  for (const i of r.foodCost.ingredients) {
-    rows.push([i.name, i.unit, i.usedQty, rs(i.usedCents), i.wastedQty, rs(i.wastedCents)]);
-  }
-  rows.push(['Total', null, null, rs(r.foodCost.usedCents), null, rs(r.foodCost.wasteCents)]);
-  if (r.foodCost.cancelledOrderCount > 0) {
-    rows.push(['Of the waste: food made for cancelled orders', null, null, null, r.foodCost.cancelledOrderCount, rs(r.foodCost.cancelledWasteCents)]);
+  // Food cost: only in a report made for a login that may see costs.
+  const f = r.foodCost;
+  if (f) {
+    heading('Food cost (this till; sales before tax, after discounts)');
+    rows.push(['', 'Orders', 'Rs', 'Share']);
+    rows.push(['Food sales', null, rs(f.foodSalesCents), null]);
+    rows.push(['Cost of food sold', null, rs(f.costOfSalesCents), null]);
+    rows.push(['Food cost (sales with a known cost)', null, null, f.foodCostBps === null ? null : formatBps(f.foodCostBps)]);
+    rows.push(['Costs known for', null, rs(f.knownSalesCents), f.coverageBps === null ? null : formatBps(f.coverageBps)]);
+    if (f.menuFoodCostBps !== null) rows.push(['Food cost at menu prices', null, null, formatBps(f.menuFoodCostBps)]);
+    if (f.estimatedOrders > 0) rows.push(["Estimated at today's prices", f.estimatedOrders, rs(f.estimatedCostCents), null]);
+    rows.push(['Food sent out, not paid', f.sentNotPaid.orderCount, rs(f.sentNotPaid.costCents), null]);
+    if (f.stillOpen.orderCount > 0) rows.push(['Still open from earlier days', f.stillOpen.orderCount, rs(f.stillOpen.costCents), null]);
+
+    heading('Waste by reason (at what the stock cost when taken)');
+    rows.push(['Reason', 'Times', 'Cost Rs']);
+    for (const w of f.wasteByReason) rows.push([WASTE_REASON_LABEL[w.reason], w.times, rs(w.cents)]);
+    rows.push(['Total', null, rs(f.wasteCents)]);
+    if (f.cancelledOrderCount > 0) {
+      rows.push(['Of the waste: food made for cancelled orders', f.cancelledOrderCount, rs(f.cancelledWasteCents)]);
+    }
+
+    heading('Sales with missing costs');
+    rows.push(['Item', 'Why', 'Sold', 'Sales Rs']);
+    for (const m of f.missingSales) rows.push([m.name, MISSING_COST_WHY[m.why], m.quantity, rs(m.salesCents)]);
+    rows.push(['Total', null, null, rs(f.missingSalesCents)]);
+
+    heading('Ingredients wasted');
+    rows.push(['Ingredient', 'Unit', 'Wasted', 'Cost Rs']);
+    for (const i of f.wasteIngredients) rows.push([i.name, i.unit, i.wastedQty, rs(i.wastedCents)]);
   }
 
   heading('Deliveries by rider');
@@ -433,7 +463,7 @@ export function buildPrintBody(r: BusinessReport, period: ReportPeriod, madeAt: 
           `${money(x.amountCents)}${x.full ? ' (whole order)' : ''}`,
           esc(methodLabel(x.method)),
           esc(x.reason),
-          esc(stockCellText(x.stock, r.foodCost.hasCosts)),
+          esc(stockCellText(x.stock, r.foodCost?.hasCosts ?? false)),
           esc(x.approvedBy),
         ]),
         [2],
@@ -451,7 +481,7 @@ export function buildPrintBody(r: BusinessReport, period: ReportPeriod, madeAt: 
           esc(v.orderNumber),
           money(v.amountCents),
           esc(v.reason),
-          esc(stockCellText(v.stock, r.foodCost.hasCosts)),
+          esc(stockCellText(v.stock, r.foodCost?.hasCosts ?? false)),
           esc(v.approvedBy),
           esc(v.takenBy),
         ]),
@@ -460,24 +490,29 @@ export function buildPrintBody(r: BusinessReport, period: ReportPeriod, madeAt: 
     );
   }
 
-  if (r.foodCost.hasUsage) {
-    const salesExTax = k.netSalesCents - k.taxCents;
-    const ing = limited(r.foodCost.ingredients, 12);
+  const food = r.foodCost;
+  if (food && (food.hasUsage || food.foodSalesCents > 0)) {
+    const estimated = estimatedText(food);
+    const reconcile = menuPriceLine(food);
+    const missing = limited(food.missingSales, 10);
     parts.push(
-      `<section><h2>Ingredients and food cost (estimate)</h2><p>Food cost ${money(r.foodCost.usedCents)}` +
-        (salesExTax > 0 ? ` — ${esc(percentOf(r.foodCost.usedCents, salesExTax))} of sales before tax` : '') +
-        (r.foodCost.wasteCents > 0 ? ` · waste ${money(r.foodCost.wasteCents)}` : '') +
-        `. Valued at today's ingredient prices.</p>${table(
-          ['Ingredient', 'Used', 'Cost', 'Wasted', 'Waste cost'],
-          ing.shown.map((i) => [
-            esc(i.name),
-            esc(fmtQty(i.usedQty, i.unit)),
-            money(i.usedCents),
-            i.wastedQty ? esc(fmtQty(i.wastedQty, i.unit)) : '—',
-            i.wastedCents ? money(i.wastedCents) : '—',
-          ]),
-          [1, 2, 3, 4],
-        )}${ing.note}</section>`,
+      `<section><h2>Food cost (this till)</h2><p><b>${esc(foodCostHeadline(food))}</b>` +
+        (food.foodSalesCents > 0 ? `, ${esc(coverageText(food))}` : '') +
+        ` · cost of food sold ${money(food.costOfSalesCents)} of ${money(food.foodSalesCents)} food sales (before tax, after discounts)` +
+        (food.wasteCents > 0 ? ` · waste ${money(food.wasteCents)}` : '') +
+        (food.sentNotPaid.orderCount > 0 ? ` · sent out, not paid: ${esc(unpaidFoodText(food.sentNotPaid))}` : '') +
+        `.</p>` +
+        (reconcile ? `<p class="muted">${esc(reconcile)}.</p>` : '') +
+        (estimated ? `<p class="muted">${esc(estimated)} ${esc(costingStartText(food.costingStartedAt))}</p>` : '') +
+        `<div class="two"><div>${table(
+          ['Waste by reason', 'Times', 'Cost'],
+          food.wasteByReason.map((w) => [esc(WASTE_REASON_LABEL[w.reason]), String(w.times), money(w.cents)]),
+          [1, 2],
+        )}</div><div>${table(
+          ['Sales with missing costs', 'Why', 'Sales'],
+          missing.shown.map((m) => [esc(m.name), esc(MISSING_COST_WHY[m.why]), money(m.salesCents)]),
+          [2],
+        )}${missing.note}</div></div></section>`,
     );
   }
 

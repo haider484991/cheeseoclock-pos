@@ -1664,9 +1664,9 @@ live('two tills: stock goes back on the till that took it', () => {
     await applyRemoteBatch(s.db, changes, { pause: async () => {} });
     expect(s.change(start)).toEqual({});
 
-    // Reports on both tills: nothing of it was food used.
-    expect((await report(s.db)).foodCost).toMatchObject({ usedCents: 0, wasteCents: 0 });
-    expect((await report(t2.db2)).foodCost).toMatchObject({ usedCents: 0, wasteCents: 0 });
+    // Reports on both tills: nothing of it was food sold, nothing wasted.
+    expect((await report(s.db)).foodCost).toMatchObject({ costOfSalesCents: 0, wasteCents: 0 });
+    expect((await report(t2.db2)).foodCost).toMatchObject({ costOfSalesCents: 0, wasteCents: 0 });
   });
 
   it('cancelled on till 2 as "Made": waste on both tills, no count moves on either', async () => {
@@ -1687,7 +1687,7 @@ live('two tills: stock goes back on the till that took it', () => {
     expect(s.stockStatus(o)).toMatchObject({ state: 'wasted', answer: 'made', wasteCents: FAJITA_ONE_COST });
     for (const db of [s.db, t2.db2]) {
       expect((await report(db)).foodCost).toMatchObject({
-        usedCents: 0,
+        costOfSalesCents: 0,
         wasteCents: FAJITA_ONE_COST,
         cancelledWasteCents: FAJITA_ONE_COST,
         cancelledOrderCount: 1,
@@ -1904,9 +1904,9 @@ live('Reports: cancelled food is waste, on the day it was cooked', () => {
     s.cancel(o, 'made');
     const { since, until } = aroundNow();
     const r = await report(s, since, until);
-    // Only the sold pizza is food used; the cancelled one is waste.
+    // Only the sold pizza is food sold (the cost it kept); the cancelled one is waste.
     expect(r.foodCost).toMatchObject({
-      usedCents: FAJITA_ONE_COST,
+      costOfSalesCents: FAJITA_ONE_COST,
       wasteCents: FAJITA_ONE_COST,
       cancelledWasteCents: FAJITA_ONE_COST,
       cancelledOrderCount: 1,
@@ -1930,7 +1930,7 @@ live('Reports: cancelled food is waste, on the day it was cooked', () => {
     s.cancel(o, 'not_made');
     const { since, until } = aroundNow();
     const r = await report(s, since, until);
-    expect(r.foodCost).toMatchObject({ usedCents: 0, wasteCents: 0, cancelledOrderCount: 0, putBackAfterCookingCount: 1 });
+    expect(r.foodCost).toMatchObject({ costOfSalesCents: 0, wasteCents: 0, cancelledOrderCount: 0, putBackAfterCookingCount: 1 });
     expect(r.voids[0]!.stock).toEqual({ outcome: 'returned', answer: 'not_made', wasteCents: 0, statusBefore: 'preparing', flagged: true });
   });
 
@@ -1950,7 +1950,7 @@ live('Reports: cancelled food is waste, on the day it was cooked', () => {
     const r = await report(s, since, until);
     // Was: "Put back · was Ready" in amber and "1 cancelled order had stock put back after cooking was marked".
     expect(r.voids[0]!.stock).toEqual({ outcome: 'returned', answer: 'made', wasteCents: 0, statusBefore: 'ready', flagged: false });
-    expect(r.foodCost).toMatchObject({ putBackAfterCookingCount: 0, cancelledOrderCount: 0, usedCents: 0, wasteCents: 0 });
+    expect(r.foodCost).toMatchObject({ putBackAfterCookingCount: 0, cancelledOrderCount: 0, costOfSalesCents: 0, wasteCents: 0 });
   });
 
   it('a split cash + card order refunded in full as "Made": the waste is on one refund line only', async () => {
@@ -1976,7 +1976,7 @@ live('Reports: cancelled food is waste, on the day it was cooked', () => {
     expect(r.refunds).toHaveLength(2);
     expect(r.refunds.filter((x) => x.stock !== null)).toHaveLength(1);
     const lineWaste = r.refunds.reduce((n, x) => n + (x.stock?.wasteCents ?? 0), 0);
-    expect(lineWaste).toBe(r.foodCost.cancelledWasteCents);
+    expect(lineWaste).toBe(r.foodCost!.cancelledWasteCents);
     expect(lineWaste).toBe(FAJITA_ONE_COST);
   });
 
@@ -1984,7 +1984,8 @@ live('Reports: cancelled food is waste, on the day it was cooked', () => {
     const s = await openShop();
     const o = s.ring('takeaway', [['fajita', 1]]);
     s.pay(o);
-    // It took its stock on 10 Jan…
+    // It was started, and took its stock, on 10 Jan…
+    s.db.prepare(`UPDATE orders SET created_at = '2026-01-10T09:58:00.000Z' WHERE id = ?`).run(o);
     s.db
       .prepare(`UPDATE stock_movements SET occurred_at = '2026-01-10T10:00:00.000Z' WHERE ref_order_id = ?`)
       .run(o);
@@ -1994,21 +1995,30 @@ live('Reports: cancelled food is waste, on the day it was cooked', () => {
     s.handOver(o);
     s.refund(o);
     const day1 = await report(s, '2026-01-10T00:00:00.000Z', '2026-01-11T00:00:00.000Z');
-    expect(day1.foodCost).toMatchObject({ usedCents: 0, wasteCents: FAJITA_ONE_COST, cancelledWasteCents: FAJITA_ONE_COST, cancelledOrderCount: 1 });
+    expect(day1.foodCost).toMatchObject({ costOfSalesCents: 0, wasteCents: FAJITA_ONE_COST, cancelledWasteCents: FAJITA_ONE_COST, cancelledOrderCount: 1 });
+    // The settle rows say when the order first took stock, so a stock take between can place them.
+    const settled = s.db
+      .prepare(`SELECT DISTINCT ref_taken_at AS at FROM stock_movements WHERE ref_order_id = ? AND delta_qty > 0`)
+      .all(o) as Array<{ at: string }>;
+    expect(settled).toEqual([{ at: '2026-01-10T10:00:00.000Z' }]);
     const { since, until } = aroundNow();
     const today = await report(s, since, until);
-    expect(today.foodCost).toMatchObject({ usedCents: 0, wasteCents: 0, cancelledWasteCents: 0, hasUsage: false });
+    expect(today.foodCost).toMatchObject({ costOfSalesCents: 0, wasteCents: 0, cancelledWasteCents: 0, hasUsage: false });
   });
 
-  it('a row written in kg before a Convert is valued in grams afterwards', async () => {
+  it('an order from before costing, written in kg before a Convert, is estimated in grams afterwards', async () => {
     const s = await openShop();
-    s.db.prepare(`UPDATE ingredients SET cost_per_unit_cents = 100 WHERE id = ?`).run(s.ing.flour); // Rs 1 / kg, made up
+    s.db.prepare(`UPDATE ingredients SET cost_per_unit_cents = 100, price_kind = 'set' WHERE id = ?`).run(s.ing.flour); // Rs 1 / kg, made up
     const o = s.ring('takeaway', [['loaf', 2]]);
     s.pay(o); // 2 kg of flour out
+    // As an order sent before costing started: no cost kept, its rows carry no value.
+    s.db.prepare(`DELETE FROM order_item_costs WHERE order_id = ?`).run(o);
+    s.db.prepare(`UPDATE stock_movements SET value_cents = NULL, unit_cost_mc = NULL, cost_basis = NULL WHERE ref_order_id = ?`).run(o);
     s.r.convertIngredientToBaseUnit(s.db, s.ing.flour, MANAGER); // now 0.1 paisa / g → rounds to 0
     s.db.prepare(`UPDATE ingredients SET cost_per_unit_cents = 1 WHERE id = ?`).run(s.ing.flour); // 1 paisa / g
     const { since, until } = aroundNow();
     const r = await report(s, since, until);
-    expect(r.foodCost.ingredients.find((i) => i.ingredientId === s.ing.flour)).toMatchObject({ usedQty: 2_000, unit: 'g', usedCents: 2_000 });
+    // 2 kg read as 2,000 g at 1 paisa / g, plus 100 g of cheese at 2 paisa / g.
+    expect(r.foodCost).toMatchObject({ estimatedOrders: 1, costOfSalesCents: 2_000 + 200, estimatedCostCents: 2_200 });
   });
 });

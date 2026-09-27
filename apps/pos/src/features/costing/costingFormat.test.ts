@@ -153,18 +153,18 @@ describe('costing words and numbers', () => {
     expect(noPriceText(['a', 'b', 'c', 'd'])).toBe('4 ingredients have no price yet');
     expect(atLeast(12_000, false)).toBe('Rs 120');
     expect(atLeast(12_000, true)).toBe('at least Rs 120');
-    expect(leaveOutText({ savingCents: 150, missingLines: 0, ingredientName: 'Onion' })).toBe('saves Rs 1.5');
-    expect(leaveOutText({ savingCents: 150, missingLines: 1, ingredientName: 'Onion' })).toBe('saves at least Rs 1.5');
+    expect(leaveOutText({ savingCents: 150, missingLines: 0, ingredientName: 'Onion' })).toBe('saves Rs 1.50');
+    expect(leaveOutText({ savingCents: 150, missingLines: 1, ingredientName: 'Onion' })).toBe('saves at least Rs 1.50');
     expect(leaveOutText({ savingCents: 0, missingLines: 2, ingredientName: 'Onion' })).toBe('saving not known yet: Onion has no price');
   });
 
   it('a sauce not fully priced says which figure the plate uses and why its parts add up to less', () => {
     const calc = { complete: false, unpricedInputs: ['Test garlic'], totalCostCents: 750 };
     expect(madeOfNote({ costCents: 800, priceKind: 'set' }, calc)).toBe(
-      'Test garlic has no price yet, so this is costed at its saved price (Rs 8) until every input has one; the inputs with a price come to Rs 7.5.',
+      'Test garlic has no price yet, so this is costed at its saved price (Rs 8) until every input has one; the inputs with a price come to Rs 7.50.',
     );
     expect(madeOfNote({ costCents: 0, priceKind: 'missing' }, calc)).toBe(
-      "Test garlic has no price yet, so this can't be costed yet; the inputs with a price come to Rs 7.5.",
+      "Test garlic has no price yet, so this can't be costed yet; the inputs with a price come to Rs 7.50.",
     );
     expect(madeOfNote({ costCents: 800, priceKind: 'set' }, { ...calc, complete: true })).toBeNull();
   });

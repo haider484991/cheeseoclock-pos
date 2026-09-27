@@ -40,7 +40,7 @@ export interface OrderStockLine {
   unit: string;
   /** How much the order holds (or held), positive. */
   qty: number;
-  /** What `qty` cost at today's price in Inventory; 0 when no price is set (or not shown to this login). */
+  /** What `qty` cost when the order took it (a take from before costing: at today's price); 0 when no price is set (or not shown to this login). */
   estCostCents: number;
   /**
    * A sealed drink: on the Drinks shelf and counted in pieces (a bottle or a
@@ -57,7 +57,7 @@ export interface OrderStockLine {
   putBackThere?: number;
   /** Once settled: booked as waste. */
   wasted?: number;
-  /** What `wasted` cost at today's price. */
+  /** What `wasted` cost when the order took it. */
   wasteCents?: number;
 }
 
@@ -85,7 +85,7 @@ export interface OrderStockStatus {
   takenAt: string | null;
   /** Held now ('out', 'kept'), or what was settled ('returned', 'wasted'). */
   lines: OrderStockLine[];
-  /** Cost of `lines` at today's prices. */
+  /** Cost of `lines`, at what the order's take cost. */
   estCostCents: number;
   /** Some line has a price on file (otherwise leave the rupees out). */
   hasCosts: boolean;
@@ -109,7 +109,7 @@ export interface OrderStockStatus {
    * the fridge).
    */
   answer: FoodMade | null;
-  /** Of a settled order: what was booked as waste, at today's prices. */
+  /** Of a settled order: what was booked as waste, at what the take cost. */
   wasteCents: number;
   /**
    * Ingredient lines left out because this login may not see stock or costs
@@ -127,7 +127,7 @@ export interface StockSettlement {
   how: OrderStockHow;
   statusBefore: OrderStatus;
   lines: OrderStockLine[];
-  /** Booked as waste, at today's prices. */
+  /** Booked as waste, at what the order's take cost (a take from before costing: today's prices). */
   wasteCents: number;
   /** Sealed drinks put back although the food was made. */
   drinksBack: number;

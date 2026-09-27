@@ -336,3 +336,15 @@ export interface MissingCosts {
   batches: MissingBatchRow[];
   total: number;
 }
+
+// ------------------------------------------------ the cost kept with a sale --
+
+/**
+ * What a sale's cost row says (costing spec 0033, order_item_costs.status):
+ *  - 'full':    every ingredient had a price (a guessed price counts);
+ *  - 'partial': some ingredient had no price (it added Rs 0);
+ *  - 'none':    the item has no recipe at all (Baked Wings, a delivery charge);
+ *  - 'failed':  working the cost out went wrong (the stock was still taken).
+ */
+export const ORDER_ITEM_COST_STATUSES = ['full', 'partial', 'none', 'failed'] as const;
+export type OrderItemCostStatus = (typeof ORDER_ITEM_COST_STATUSES)[number];

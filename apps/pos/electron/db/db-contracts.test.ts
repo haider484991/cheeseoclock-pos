@@ -150,6 +150,8 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     // 0032: the shop-wide settings both tills share (costing targets) replicate;
     // the per-till `settings` above does not.
     expect(REPLICABLE_TABLES).toContain('business_settings');
+    // 0033: the cost each sale kept travels to the other till (same ids on both).
+    expect(REPLICABLE_TABLES).toContain('order_item_costs');
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');

@@ -10,8 +10,13 @@ vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 import type { BusinessReport, ReportDiscountLine, ReportItemLine } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import {
-  CANCELLED_WASTE_ORDERS_SQL,
-  FOOD_COST_SQL,
+  FOOD_COST_LINES_SQL,
+  FOOD_COST_PLAIN_COST_SQL,
+  FOOD_COST_PLAIN_GAPS_SQL,
+  FOOD_COST_PLAIN_SALES_SQL,
+  HAND_WASTE_SQL,
+  ORDERS_THAT_TOOK_STOCK_SQL,
+  ORDER_WASTE_SQL,
   REPORT_LIST_CAP,
   channelOf,
   getBusinessReport,
@@ -20,6 +25,7 @@ import {
   paymentGroup,
   tradingDayOf,
   refundReason,
+  reportForLogin,
   rollUpCategories,
   summarizeDiscounts,
 } from './business-report.js';
@@ -558,12 +564,38 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
     ]);
   });
 
-  it('values ingredient usage and waste at the stored prices', () => {
-    expect(report.foodCost.ingredients.map((i) => [i.name, i.usedQty, i.usedCents, i.wastedQty, i.wastedCents])).toEqual([
-      ['Cheese', 250, 37500, 0, 0],
-      ['Bun', 3, 6000, 1, 2000],
-    ]);
-    expect(report.foodCost).toMatchObject({ usedCents: 43500, wasteCents: 2000, hasCosts: true, hasUsage: true });
+  it('food cost is worked on the counted orders; stock rows with no order are not food sold', () => {
+    const f = report.foodCost!;
+    // Food sales before tax, after discounts and part refunds: o2's Rs 50
+    // handed back (tax included) comes off before tax as round(5,000 ×
+    // 63,000 ÷ 73,080) = 4,310.
+    expect(f.foodSalesCents).toBe(100_000 + (63_000 - 4_310) + 30_000 + 45_000 + 10_000 + 30_000);
+    expect(f.feeSalesCents).toBe(0);
+    // None of these orders kept a cost with its sale or took stock, and the
+    // items have no recipe: nothing is known, nothing is guessed — so none
+    // is "estimated at today's prices" either (there was nothing to estimate from).
+    expect(f).toMatchObject({
+      costOfSalesCents: 0,
+      knownSalesCents: 0,
+      foodCostBps: null,
+      coverageBps: 0,
+      estimatedOrders: 0,
+      estimatedCostCents: 0,
+      missingSalesCents: f.foodSalesCents,
+    });
+    expect(new Set(f.missingSales.map((m) => m.why))).toEqual(new Set(['no_recipe']));
+    // The waste booked by hand, with no value of its own (before costing): at today's price.
+    expect(f).toMatchObject({ wasteCents: 2_000, hasCosts: true, hasUsage: true });
+    expect(f.wasteByReason).toEqual([{ reason: 'other', times: 1, cents: 2_000 }]);
+    expect(f.wasteIngredients).toEqual([{ ingredientId: 'i_bun', name: 'Bun', unit: 'pcs', wastedQty: 1, wastedCents: 2_000 }]);
+  });
+
+  it('a login that may not see costs gets no food cost and no waste rupees', () => {
+    const stripped = reportForLogin(report, false);
+    expect(stripped.foodCost).toBeNull();
+    expect(stripped.kpis).toEqual(report.kpis);
+    for (const l of [...stripped.voids, ...stripped.refunds]) expect(l.stock?.wasteCents ?? 0).toBe(0);
+    expect(reportForLogin(report, true)).toBe(report);
   });
 
   it('breaks own-rider deliveries down by rider and area', () => {
@@ -585,7 +617,7 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
     expect(r.kpis.avgOrderCents).toBe(0);
     expect(r.previous).toBeNull();
     expect(r.items).toEqual([]);
-    expect(r.foodCost).toMatchObject({ usedCents: 0, hasUsage: false, hasCosts: false });
+    expect(r.foodCost).toMatchObject({ costOfSalesCents: 0, foodSalesCents: 0, hasUsage: false, hasCosts: false, coverageBps: null });
     expect(r.drawerOpens).toEqual([]);
     expect(r.drawerOpenCount).toBe(0);
   });
@@ -691,14 +723,15 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
     const day25 = getBusinessReport(db, DAY);
     raw.close();
     expect(day24.foodCost).toMatchObject({
-      usedCents: 0,
+      costOfSalesCents: 0,
       wasteCents: 4000,
       cancelledWasteCents: 4000,
       cancelledOrderCount: 1,
       hasUsage: true,
     });
-    expect(day24.foodCost.ingredients).toEqual([
-      { ingredientId: 'i_bun', name: 'Bun', unit: 'pcs', usedQty: 0, wastedQty: 2, usedCents: 0, wastedCents: 4000 },
+    expect(day24.foodCost!.wasteByReason).toEqual([{ reason: 'cancelled_made', times: 1, cents: 4000 }]);
+    expect(day24.foodCost!.wasteIngredients).toEqual([
+      { ingredientId: 'i_bun', name: 'Bun', unit: 'pcs', wastedQty: 2, wastedCents: 4000 },
     ]);
     // The void is listed on its order's day, with what happened to the stock
     // (no order-level audit row here, so the status it was in is unknown; the
@@ -707,26 +740,43 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
       ['o_late', { outcome: 'wasted', answer: 'made', wasteCents: 4000, statusBefore: null, flagged: false }],
     ]);
     // The day it was cancelled shows nothing for it.
-    expect(day25.foodCost).toMatchObject({ usedCents: 0, wasteCents: 0, cancelledWasteCents: 0, hasUsage: false });
+    expect(day25.foodCost).toMatchObject({ costOfSalesCents: 0, wasteCents: 0, cancelledWasteCents: 0, hasUsage: false });
   });
 
-  it('reads order-linked stock by order, never by walking every earlier sale', () => {
+  it('reads food cost by the orders\' date index and waste by reason and time, never walking the ledger', () => {
     const { raw } = openMigrated();
     const plan = (sql: string, params: string[]) =>
       (raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail: string }>).map((r) => r.detail);
     const { sinceIso: a, untilIso: b } = DAY;
-    const food = plan(FOOD_COST_SQL, [a, b, a, a, b]);
-    const cancelled = plan(CANCELLED_WASTE_ORDERS_SQL, [a, b, a]);
+    const lines = plan(FOOD_COST_LINES_SQL, [a, b, '[]']).join(' | ');
+    const plain = [
+      plan(FOOD_COST_PLAIN_SALES_SQL, [a, b, '[]']),
+      plan(FOOD_COST_PLAIN_COST_SQL, [a, b]),
+      plan(FOOD_COST_PLAIN_GAPS_SQL, [a, b, '[]']),
+    ].map((p) => p.join(' | '));
+    const hand = plan(HAND_WASTE_SQL, [a, b]).join(' | ');
+    const byOrder = plan(ORDER_WASTE_SQL, [a, b]).join(' | ');
+    const took = plan(ORDERS_THAT_TOOK_STOCK_SQL, ['["o_x"]']).join(' | ');
     raw.close();
-    for (const steps of [food, cancelled]) {
-      // Every look-up of the movements table goes through an index…
-      const moves = steps.filter((d) => /\b(m|e|stock_movements)\b/.test(d) && /SCAN|SEARCH/.test(d));
-      expect(moves.length).toBeGreaterThan(0);
-      for (const d of moves) expect(d).toMatch(/USING (COVERING )?INDEX/);
-      // …and the per-order probes (the NOT EXISTS and the join) by order.
-      expect(steps.filter((d) => /SEARCH (e|m) USING (COVERING )?INDEX idx_movements_order/.test(d)).length).toBeGreaterThanOrEqual(2);
-      expect(steps.join(' | ')).not.toMatch(/SEARCH e USING (COVERING )?INDEX idx_movements_reason_time/);
-    }
+    // Unpaid orders that took stock: each order's own rows, never every sale in the ledger.
+    expect(took).toMatch(/SEARCH m USING INDEX idx_movements_order \(ref_order_id=\?\)/);
+    expect(took).not.toMatch(/idx_movements_reason_time/);
+    // The counted orders by date, their lines by order, each line's kept costs by line.
+    expect(lines).toMatch(/SEARCH o USING (COVERING )?INDEX idx_orders_created/);
+    expect(lines).toMatch(/SEARCH oi USING (COVERING )?INDEX idx_order_items_order/);
+    expect(lines).toMatch(/SEARCH c USING (COVERING )?INDEX idx_order_item_costs_line_part/);
+    // The plain orders added up in SQL: by date, then by order (lines, or cost rows).
+    for (const p of plain) expect(p).toMatch(/SEARCH o USING (COVERING )?INDEX idx_orders_created/);
+    expect(plain[0]).toMatch(/SEARCH oi USING (COVERING )?INDEX idx_order_items_order/);
+    expect(plain[1]).toMatch(/SEARCH c USING (COVERING )?INDEX idx_order_item_costs_order/);
+    expect(plain[2]).toMatch(/SEARCH c USING (COVERING )?INDEX idx_order_item_costs_order/);
+    expect(plain[2]).toMatch(/SEARCH c USING (COVERING )?INDEX idx_order_item_costs_line_part/);
+    // Waste by hand through the reason / time index (never a skip-scan of the ingredient index).
+    expect(hand).toMatch(/SEARCH m USING INDEX idx_movements_reason_time/);
+    // Cancelled or refunded orders by status and date, then each one's own rows.
+    expect(byOrder).toMatch(/SEARCH o USING (COVERING )?INDEX idx_orders_status_created/);
+    expect(byOrder).toMatch(/SEARCH m USING INDEX idx_movements_order/);
+    for (const p of [lines, ...plain, hand, byOrder]) expect(p).not.toMatch(/SCAN (m|o|oi|c|stock_movements|orders)( |$)/);
   });
 
   it('reads orders and stock by date through an index, not a full-table scan', () => {

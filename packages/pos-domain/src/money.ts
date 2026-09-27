@@ -4,8 +4,11 @@ import type { Cents } from '@cheeseoclock/shared-types';
 export function formatCents(cents: Cents | number, opts?: { showSymbol?: boolean }): string {
   const showSymbol = opts?.showSymbol ?? true;
   const value = (cents as number) / 100;
+  // Whole rupees print bare ("Rs 4,000"); part rupees always show both
+  // paisa digits ("Rs 641.10", never "Rs 641.1").
+  const whole = Math.round(cents as number) % 100 === 0;
   const formatted = new Intl.NumberFormat('en-PK', {
-    minimumFractionDigits: 0,
+    minimumFractionDigits: whole ? 0 : 2,
     maximumFractionDigits: 2,
   }).format(value);
   return showSymbol ? `Rs ${formatted}` : formatted;

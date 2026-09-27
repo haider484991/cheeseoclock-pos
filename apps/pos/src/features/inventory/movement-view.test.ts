@@ -111,3 +111,17 @@ describe('formatWhen', () => {
     expect(formatWhen('not a date', now)).toBe('not a date');
   });
 });
+
+describe('movementLabel: waste reasons and batches by their detail', () => {
+  it('waste booked by hand says why; "other" and older rows just say Waste', () => {
+    expect(movementLabel({ reason: 'waste', deltaQty: -5, notes: null, detail: 'waste:burnt' }).label).toBe('Waste · burnt');
+    expect(movementLabel({ reason: 'waste', deltaQty: -5, notes: null, detail: 'waste:staff_meal' }).label).toBe('Waste · staff meal');
+    expect(movementLabel({ reason: 'waste', deltaQty: -5, notes: null, detail: 'waste:other' }).label).toBe('Waste');
+    expect(movementLabel({ reason: 'waste', deltaQty: -5, notes: null }).label).toBe('Waste');
+  });
+
+  it('a batch row is a batch whatever its note says', () => {
+    expect(movementLabel({ reason: 'adjustment', deltaQty: 500, notes: 'Made 500 g', detail: 'batch_out' }).label).toBe('Batch');
+    expect(movementLabel({ reason: 'adjustment', deltaQty: -5, notes: 'Fixed a typo', detail: 'correction' }).label).toBe('Fix');
+  });
+});

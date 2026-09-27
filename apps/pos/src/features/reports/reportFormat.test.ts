@@ -1,17 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import type { BusinessReport, ReportKpis } from '@cheeseoclock/shared-types';
+import type { BusinessReport, ReportFoodCost, ReportKpis } from '@cheeseoclock/shared-types';
 import { periodFor } from './dateRange';
 import { buildCsv, buildPrintBody, csvFileName, escapeHtml, toCsv } from './exporters';
 import {
+  MISSING_COST_WHY,
+  WASTE_REASON_LABEL,
   cancelledWasteText,
   changeOf,
+  costingStartText,
+  coverageText,
   daySeries,
+  estimatedText,
   fmtMinutes,
   fmtWhen,
+  foodCostHeadline,
   hourLabel,
   hourSeries,
+  menuPriceLine,
   percentOf,
   stockCellText,
+  unpaidFoodText,
   weekdayAverages,
 } from './reportFormat';
 
@@ -147,6 +155,35 @@ const drawerOpen = (
   ...over,
 });
 
+/** A made-up food cost: nothing sold, nothing wasted, unless overridden. */
+const food = (over: Partial<ReportFoodCost> = {}): ReportFoodCost => ({
+  foodSalesCents: 0,
+  feeSalesCents: 0,
+  costOfSalesCents: 0,
+  knownSalesCents: 0,
+  knownCostCents: 0,
+  foodCostBps: null,
+  knownMenuSalesCents: 0,
+  menuFoodCostBps: null,
+  coverageBps: null,
+  estimatedOrders: 0,
+  estimatedCostCents: 0,
+  costingStartedAt: null,
+  missingSales: [],
+  missingSalesCents: 0,
+  wasteCents: 0,
+  wasteByReason: [],
+  wasteIngredients: [],
+  cancelledWasteCents: 0,
+  cancelledOrderCount: 0,
+  putBackAfterCookingCount: 0,
+  sentNotPaid: { orderCount: 0, costCents: 0, estimatedOrders: 0 },
+  stillOpen: { orderCount: 0, costCents: 0, estimatedOrders: 0 },
+  hasCosts: false,
+  hasUsage: false,
+  ...over,
+});
+
 const report = (over: Partial<BusinessReport> = {}): BusinessReport => ({
   sinceIso: '2026-09-26T00:00:00.000Z',
   untilIso: '2026-09-27T00:00:00.000Z',
@@ -167,16 +204,7 @@ const report = (over: Partial<BusinessReport> = {}): BusinessReport => ({
   voids: [],
   drawerOpens: [],
   drawerOpenCount: 0,
-  foodCost: {
-    usedCents: 0,
-    wasteCents: 0,
-    cancelledWasteCents: 0,
-    cancelledOrderCount: 0,
-    putBackAfterCookingCount: 0,
-    hasCosts: false,
-    hasUsage: false,
-    ingredients: [],
-  },
+  foodCost: food(),
   deliveries: { byRider: [], byArea: [] },
   ...over,
 });
@@ -351,22 +379,96 @@ describe('stock after a cancel or refund', () => {
           stock: { outcome: 'wasted', answer: 'made', wasteCents: 18_000, statusBefore: 'ready', flagged: false },
         },
       ],
-      foodCost: {
-        usedCents: 1,
+      foodCost: food({
         wasteCents: 18_000,
+        wasteByReason: [{ reason: 'cancelled_made', times: 1, cents: 18_000 }],
         cancelledWasteCents: 18_000,
         cancelledOrderCount: 1,
-        putBackAfterCookingCount: 0,
         hasCosts: true,
         hasUsage: true,
-        ingredients: [],
-      },
+      }),
     });
     const csv = buildCsv(r, periodFor('today', SAT_3PM), SAT_3PM);
     expect(csv).toContain('Cancelled,Order,Value Rs,Reason,Stock,Approved by,Taken by');
     expect(csv).toContain('Not collected,Wasted · Rs 180,Sara,Ali');
-    expect(csv).toContain('Of the waste: food made for cancelled orders,,,,1,180.00');
+    expect(csv).toContain('Of the waste: food made for cancelled orders,1,180.00');
+    // Counted in orders (one here), not in its ingredient rows.
+    expect(csv).toContain('Reason,Times,Cost Rs');
+    expect(csv).toContain('Cancelled after cooking,1,180.00');
     const html = buildPrintBody(r, periodFor('today', SAT_3PM), SAT_3PM);
     expect(html).toContain('<td>Wasted · Rs 180</td>');
+  });
+});
+
+describe('food cost, in plain words', () => {
+  it('"costs known for 94% of sales": rounded down, never "100%" while one is missing', () => {
+    expect(coverageText({ coverageBps: 9_460 })).toBe('costs known for 94% of sales');
+    expect(coverageText({ coverageBps: 9_999 })).toBe('costs known for 99% of sales');
+    expect(coverageText({ coverageBps: 10_000 })).toBe('costs known for all sales');
+    expect(coverageText({ coverageBps: 40 })).toBe('costs known for under 1% of sales');
+    expect(coverageText({ coverageBps: 0 })).toBe('no sale has a known cost yet');
+    expect(coverageText({ coverageBps: null })).toBe('');
+  });
+
+  it('the headline, and the line that reconciles it with the Costing page', () => {
+    expect(foodCostHeadline({ foodCostBps: 2_940, foodSalesCents: 1 })).toBe('Food cost 29.4% of food sales');
+    expect(foodCostHeadline({ foodCostBps: null, foodSalesCents: 1 })).toBe('Food cost not known yet');
+    expect(foodCostHeadline({ foodCostBps: null, foodSalesCents: 0 })).toBe('No food sales in this period');
+    expect(menuPriceLine({ foodCostBps: 2_890, menuFoodCostBps: 2_710 })).toBe(
+      'At menu prices 27.1% → after discounts 28.9% (discounts and refunds cost you 1.8 points)',
+    );
+    expect(menuPriceLine({ foodCostBps: 2_900, menuFoodCostBps: 2_900 })).toBe('');
+  });
+
+  it('estimated orders and when costs started being kept', () => {
+    expect(estimatedText({ estimatedOrders: 212 })).toBe("Includes 212 orders estimated at today's prices.");
+    expect(estimatedText({ estimatedOrders: 1 })).toBe("Includes 1 order estimated at today's prices.");
+    expect(estimatedText({ estimatedOrders: 0 })).toBe('');
+    expect(costingStartText('2026-10-03T07:00:00.000Z')).toBe(
+      "From Sat 3 Oct 2026 every sale keeps its cost; older or unrecorded orders are estimated from what they took from stock at today's prices.",
+    );
+    expect(costingStartText(null)).toMatch(/^From the next order sent to the kitchen/);
+  });
+
+  it('waste reasons and missing-cost reasons have plain labels', () => {
+    expect(WASTE_REASON_LABEL.cancelled_made).toBe('Cancelled after cooking');
+    expect(WASTE_REASON_LABEL.staff_meal).toBe('Staff meal');
+    expect(MISSING_COST_WHY.no_price).toBe('An ingredient has no price');
+    expect(unpaidFoodText({ orderCount: 2, costCents: 54_000 })).toBe('2 orders · Rs 540');
+    expect(unpaidFoodText({ orderCount: 0, costCents: 0 })).toBe('—');
+  });
+
+  it('the Excel file and the printout carry the food cost only when the report has it', () => {
+    const period = periodFor('today', SAT_3PM);
+    const withFood = report({
+      foodCost: food({
+        foodSalesCents: 100_000,
+        costOfSalesCents: 30_000,
+        knownSalesCents: 94_000,
+        knownCostCents: 28_200,
+        foodCostBps: 3_000,
+        coverageBps: 9_400,
+        estimatedOrders: 3,
+        estimatedCostCents: 4_000,
+        missingSales: [{ key: 'm9', name: 'Test Wings', why: 'no_recipe', quantity: 2, salesCents: 6_000 }],
+        missingSalesCents: 6_000,
+        hasCosts: true,
+        hasUsage: true,
+      }),
+    });
+    const csv = buildCsv(withFood, period, SAT_3PM);
+    expect(csv).toContain('FOOD COST (THIS TILL; SALES BEFORE TAX, AFTER DISCOUNTS)');
+    expect(csv).toContain('Food cost (sales with a known cost),,,30%');
+    expect(csv).toContain('Costs known for,,940.00,94%');
+    expect(csv).toContain("Estimated at today's prices,3,40.00,");
+    expect(csv).toContain('Test Wings,No recipe,2,60.00');
+    const html = buildPrintBody(withFood, period, SAT_3PM);
+    expect(html).toContain('Food cost 30% of food sales');
+    expect(html).toContain('costs known for 94% of sales');
+    expect(html).toContain("Includes 3 orders estimated at today&#39;s prices.");
+
+    const without = report({ foodCost: null });
+    expect(buildCsv(without, period, SAT_3PM)).not.toContain('FOOD COST');
+    expect(buildPrintBody(without, period, SAT_3PM)).not.toContain('Food cost');
   });
 });

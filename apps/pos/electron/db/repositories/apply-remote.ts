@@ -263,6 +263,12 @@ function countInNewUnit(db: AppDatabase, id: string, image: RowImage, fromDevice
  *  - a put-back the other till booked for stock THIS till took ("…put back
  *    on the till that sent it") goes back on this till's count
  *    (applyOtherTillReturn).
+ * What the row was worth (value_cents, unit_cost_mc, cost_basis — 0033)
+ * arrives with it and is kept as written: nothing is re-costed here at this
+ * till's prices (costing spec Phase 2). A row from a till without costing
+ * arrives with no value and is valued like an older row (Reports estimates
+ * it). The cost a sale kept (order_item_costs) arrives the same way, by its
+ * name-based id, so both tills hold the same rows.
  */
 function arrivedMovement(db: AppDatabase, id: string): void {
   db.prepare(

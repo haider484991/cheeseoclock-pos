@@ -298,28 +298,7 @@ export const ipc = {
       unwrap(window.api.fbr.getInvoiceStatus({ orderId })),
   },
   reports: {
-    salesSummary: (input: IpcRequest<'reports:salesSummary'>) =>
-      unwrap(window.api.reports.salesSummary(input)),
-    salesByDay: (input: IpcRequest<'reports:salesByDay'>) =>
-      unwrap(window.api.reports.salesByDay(input)),
-    salesByHour: (input: IpcRequest<'reports:salesByHour'>) =>
-      unwrap(window.api.reports.salesByHour(input)),
-    salesByCategory: (input: IpcRequest<'reports:salesByCategory'>) =>
-      unwrap(window.api.reports.salesByCategory(input)),
-    topItems: (input: IpcRequest<'reports:topItems'>) =>
-      unwrap(window.api.reports.topItems(input)),
-    salesByMode: (input: IpcRequest<'reports:salesByMode'>) =>
-      unwrap(window.api.reports.salesByMode(input)),
-    salesByPaymentMethod: (input: IpcRequest<'reports:salesByPaymentMethod'>) =>
-      unwrap(window.api.reports.salesByPaymentMethod(input)),
-    salesByCashier: (input: IpcRequest<'reports:salesByCashier'>) =>
-      unwrap(window.api.reports.salesByCashier(input)),
-    discounts: (input: IpcRequest<'reports:discounts'>) =>
-      unwrap(window.api.reports.discounts(input)),
     lowStock: () => unwrap(window.api.reports.lowStock()),
-    cogs: (input: IpcRequest<'reports:cogs'>) => unwrap(window.api.reports.cogs(input)),
-    cashSummary: (input: IpcRequest<'reports:cashSummary'>) =>
-      unwrap(window.api.reports.cashSummary(input)),
     business: (input: IpcRequest<'reports:business'>) =>
       unwrap(window.api.reports.business(input)),
   },

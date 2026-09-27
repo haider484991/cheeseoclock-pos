@@ -18,9 +18,10 @@ export type MovementTone = 'blue' | 'green' | 'red' | 'amber' | 'purple' | 'ston
  * undoes the sale (bookkeeping: `quiet`, shown without the green +) and a
  * "Waste" row; a stock take that already counted it → "Already counted".
  * Stock the other till took and this one put back reads "Returned" too; its
- * note says it went back "on the till that sent it".
+ * note says it went back "on the till that sent it". Waste booked by hand
+ * says why ("Waste · burnt"), and a batch row is known by its detail too.
  */
-export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'notes'>): {
+export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'notes' | 'detail'>): {
   label: string;
   tone: MovementTone;
   /** Bookkeeping that moves the count but is not news: no green / red change. */
@@ -34,8 +35,10 @@ export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'no
       return m.deltaQty > 0 ? { label: 'Returned', tone: 'stone' } : { label: 'Sale', tone: 'blue' };
     case 'delivery':
       return { label: 'Delivery', tone: 'green' };
-    case 'waste':
-      return { label: 'Waste', tone: 'red' };
+    case 'waste': {
+      const why = m.detail ? WASTE_WHY[m.detail] : undefined;
+      return { label: why ? `Waste · ${why}` : 'Waste', tone: 'red' };
+    }
     case 'count':
       // Written by a cancel, not by someone counting: the stock take had already seen it.
       if (kind === 'already_counted') return { label: 'Already counted', tone: 'stone', quiet: true };
@@ -43,11 +46,21 @@ export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'no
     case 'transfer':
       return { label: 'Transfer', tone: 'stone' };
     case 'adjustment':
-      return /^(made \d+ batch|used in \d+ batch)/i.test(m.notes ?? '')
+      return m.detail === 'batch_in' || m.detail === 'batch_out' || /^(made \d+ batch|used in \d+ batch)/i.test(m.notes ?? '')
         ? { label: 'Batch', tone: 'purple' }
         : { label: 'Fix', tone: 'stone' };
   }
 }
+
+/** Why food was wasted, as the history says it (the reasons picked on the Waste screen). */
+const WASTE_WHY: Partial<Record<string, string>> = {
+  'waste:burnt': 'burnt',
+  'waste:dropped': 'dropped',
+  'waste:expired': 'expired',
+  'waste:wrong_order': 'wrong order',
+  'waste:returned': 'sent back',
+  'waste:staff_meal': 'staff meal',
+};
 
 /**
  * The Details column: "Order #42 · Cancelled, not made — put back",

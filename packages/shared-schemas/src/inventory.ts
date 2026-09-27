@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { INGREDIENT_CATEGORY_IDS, PRICE_KINDS } from '@cheeseoclock/shared-types';
+import { INGREDIENT_CATEGORY_IDS, MOVEMENT_DETAILS, PRICE_KINDS, WASTE_REASONS } from '@cheeseoclock/shared-types';
 import { centsSchema } from './common.js';
 
 /**
@@ -124,12 +124,29 @@ export const recipeCostInputSchema = z.object({
     .max(500),
 });
 
-export const recordMovementInputSchema = z.object({
-  ingredientId: idSchema,
-  deltaQty: movementQtySchema,
-  reason: z.enum(['delivery', 'waste', 'count', 'adjustment']),
-  notes: nullableText,
-});
+/** What a stock row may stand for (stock_movements.detail): checked here, not by a table CHECK (costing spec D9). */
+export const movementDetailSchema = z.enum(MOVEMENT_DETAILS);
+
+/** Why food was thrown away, as picked on the Waste screen. */
+export const wasteReasonSchema = z.enum(WASTE_REASONS);
+
+/**
+ * A stock change booked by hand. Waste says why (burnt, dropped, expired…);
+ * without a reason it is booked as "other". A stock take and a fix say what
+ * they are on their own, so they take no reason here.
+ */
+export const recordMovementInputSchema = z
+  .object({
+    ingredientId: idSchema,
+    deltaQty: movementQtySchema,
+    reason: z.enum(['delivery', 'waste', 'count', 'adjustment']),
+    notes: nullableText,
+    wasteReason: wasteReasonSchema.optional(),
+  })
+  .refine((m) => m.wasteReason === undefined || m.reason === 'waste', {
+    message: 'Only waste has a reason like burnt or dropped',
+    path: ['wasteReason'],
+  });
 
 /** The movement history screen's filters; the repository clamps the page size too. */
 export const searchMovementsInputSchema = z.object({

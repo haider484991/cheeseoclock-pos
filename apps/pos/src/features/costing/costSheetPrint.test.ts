@@ -77,7 +77,7 @@ describe('the printed cost sheet', () => {
     expect(html).toContain('food cost 14.7% (target 30%)');
     expect(html).toContain('Rs 1,200 / kg');
     expect(html).toContain('Of the plate');
-    expect(html).toContain('saves Rs 1.5');
+    expect(html).toContain('saves Rs 1.50');
     expect(html).toContain('Extra cheese');
   });
 
@@ -122,6 +122,6 @@ describe('the printed cost sheet', () => {
       ...SHEET,
       always: [{ ingredientId: 's', name: 'Test sauce', unit: 'g', qty: 50, unitCostMc: 16_000, costMc: 800_000, costCents: 800, shareBps: 500, priceKind: 'set', madeOf }],
     });
-    expect(html).toContain('Test garlic has no price yet, so this is costed at its saved price (Rs 8) until every input has one; the inputs with a price come to Rs 7.5.');
+    expect(html).toContain('Test garlic has no price yet, so this is costed at its saved price (Rs 8) until every input has one; the inputs with a price come to Rs 7.50.');
   });
 });

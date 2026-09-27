@@ -466,7 +466,8 @@ export function receiveDelivery(
         payload: { id: item.id, qtyReceived: newReceived },
       });
 
-      // Bump stock + write a movement
+      // Bump stock + write a movement, worth what the bill says for it: the
+      // purchase order line's price × what came in (costing spec Phase 2).
       recordStockMovement(
         db,
         {
@@ -475,6 +476,11 @@ export function receiveDelivery(
           reason: 'delivery',
           refPurchaseOrderId: input.purchaseOrderId,
           notes: `PO ${po.referenceNo ?? po.id.slice(0, 8)}`,
+          value: {
+            valueCents: receipt.qtyReceivedNow * item.unitCostCents,
+            unitCostMc: item.unitCostCents * 1000,
+            basis: 'bill',
+          },
         },
         actor,
       );

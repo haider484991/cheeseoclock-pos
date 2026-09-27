@@ -7,10 +7,13 @@ import type {
   BusinessReport,
   ReportChannel,
   ReportFoodCost,
+  ReportMissingCostWhy,
   ReportOrderStock,
   ReportPaymentGroup,
+  ReportWasteReason,
 } from '@cheeseoclock/shared-types';
-import { daysSoFar, fmtDay, fmtMonth, tradingDayNumber, weekdayIndex, WEEKDAYS, type ReportPeriod } from './dateRange';
+import { daysSoFar, fmtDateInput, fmtDay, fmtMonth, tradingDayNumber, weekdayIndex, WEEKDAYS, type ReportPeriod } from './dateRange';
+import { formatBps } from '../costing/costingFormat';
 
 export const CHANNEL_LABEL: Record<ReportChannel, string> = {
   takeaway: 'Takeaway (counter)',
@@ -244,4 +247,82 @@ export function cancelledWasteText(f: Pick<ReportFoodCost, 'cancelledWasteCents'
   return f.hasCosts && f.cancelledWasteCents > 0
     ? `${formatCents(f.cancelledWasteCents)} of it from ${orders}`
     : `Some of it from ${orders}`;
+}
+
+// -------------------------------------------------------------- food cost --
+
+/** Why food was thrown away, in the owner's words (screen, Excel and paper). */
+export const WASTE_REASON_LABEL: Record<ReportWasteReason, string> = {
+  cancelled_made: 'Cancelled after cooking',
+  burnt: 'Burnt',
+  dropped: 'Dropped',
+  expired: 'Expired / went off',
+  wrong_order: 'Wrong order made',
+  returned: 'Sent back',
+  staff_meal: 'Staff meal',
+  other: 'Other',
+};
+
+/** Why a sale's cost is not known, in plain words. */
+export const MISSING_COST_WHY: Record<ReportMissingCostWhy, string> = {
+  no_recipe: 'No recipe',
+  no_price: 'An ingredient has no price',
+  not_recorded: 'Cost not recorded',
+};
+
+/**
+ * "costs known for 94% of sales". Rounded DOWN, so it never says "100%"
+ * while some sale's cost is missing; "all" only when every one is known.
+ */
+export function coverageText(f: Pick<ReportFoodCost, 'coverageBps'>): string {
+  if (f.coverageBps === null) return '';
+  if (f.coverageBps >= 10_000) return 'costs known for all sales';
+  if (f.coverageBps <= 0) return 'no sale has a known cost yet';
+  const pct = Math.floor(f.coverageBps / 100);
+  return `costs known for ${pct < 1 ? 'under 1' : pct}% of sales`;
+}
+
+/** The headline: "Food cost 29% of food sales", or why there is none. */
+export function foodCostHeadline(f: Pick<ReportFoodCost, 'foodCostBps' | 'foodSalesCents'>): string {
+  if (f.foodSalesCents <= 0) return 'No food sales in this period';
+  if (f.foodCostBps === null) return 'Food cost not known yet';
+  return `Food cost ${formatBps(f.foodCostBps)} of food sales`;
+}
+
+/**
+ * The line that reconciles Reports with the Costing page: "At menu prices
+ * 27.1% → after discounts 28.9% (discounts cost you 1.8 points)". Empty when
+ * the two are the same (no discounts or refunds on those sales).
+ */
+export function menuPriceLine(f: Pick<ReportFoodCost, 'foodCostBps' | 'menuFoodCostBps'>): string {
+  if (f.foodCostBps === null || f.menuFoodCostBps === null || f.foodCostBps === f.menuFoodCostBps) return '';
+  const diff = f.foodCostBps - f.menuFoodCostBps;
+  const points = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 1 }).format(Math.abs(diff) / 100);
+  const why = diff > 0 ? `discounts and refunds cost you ${points} point${points === '1' ? '' : 's'}` : `${points} point${points === '1' ? '' : 's'} lower`;
+  return `At menu prices ${formatBps(f.menuFoodCostBps)} → after discounts ${formatBps(f.foodCostBps)} (${why})`;
+}
+
+/** "Includes 212 orders estimated at today's prices." Empty when none were. */
+export function estimatedText(f: Pick<ReportFoodCost, 'estimatedOrders'>): string {
+  if (f.estimatedOrders <= 0) return '';
+  const n = f.estimatedOrders;
+  return `Includes ${n} order${n === 1 ? '' : 's'} estimated at today's prices.`;
+}
+
+/**
+ * When costs started being kept with each sale, and what that means for the
+ * figures: "From Sat 3 Oct 2026 every sale keeps its cost; older or unrecorded
+ * orders are estimated from what they took from stock at today's prices."
+ */
+export function costingStartText(costingStartedAt: string | null): string {
+  if (costingStartedAt === null) {
+    return "From the next order sent to the kitchen, every sale keeps its cost. Until then orders are estimated from what they took from stock at today's prices.";
+  }
+  return `From ${fmtDay(fmtDateInput(costingStartedAt))} every sale keeps its cost; older or unrecorded orders are estimated from what they took from stock at today's prices.`;
+}
+
+/** "2 orders · Rs 540" for food sent out and not paid, or still open. */
+export function unpaidFoodText(u: { orderCount: number; costCents: number }): string {
+  if (u.orderCount === 0) return '—';
+  return `${u.orderCount} order${u.orderCount === 1 ? '' : 's'} · ${formatCents(u.costCents)}`;
 }

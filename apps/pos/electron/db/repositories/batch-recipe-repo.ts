@@ -3,7 +3,7 @@ import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
-import { recordStockMovement } from './stock-movement-repo.js';
+import { priceOfBook, recordStockMovement, safeStockValue } from './stock-movement-repo.js';
 import { loadPriceBook } from '../price-book.js';
 import type { BatchRecipe, BatchRecipeLine } from '@cheeseoclock/shared-types';
 import {
@@ -13,6 +13,7 @@ import {
   hasPrice,
   maxBatchAmount,
   scaleBatch,
+  mulDivRound,
   toPriceKind,
   valueCents,
 } from '@cheeseoclock/pos-domain';
@@ -251,6 +252,10 @@ const qtyText = (n: number) => new Intl.NumberFormat('en-PK').format(n);
  * in — ordinary stock movements (reason 'adjustment', noted), in one
  * transaction, with one audit row saying what was made from what.
  *
+ * The rows of one run share a group id (ref_group_id): the inputs used are
+ * 'batch_in', each at its effective price now; what was made is 'batch_out',
+ * worth exactly what its inputs cost (costing spec Phase 2).
+ *
  *  - `batches`: whole batches, as before ("Make a batch" × n).
  *  - `amount`: ANY amount of the batch item in its base unit (200 g of a
  *    2,000 g sauce). Every input is scaled by amount ÷ yield and rounded to
@@ -296,20 +301,45 @@ export function makeBatch(
     : `Made ${madeText} (${batchesText(amount, batchYield)}; one batch makes ${qtyText(batchYield)} ${ing.unit})`;
 
   let resultingQty = 0;
+  const groupId = uuidv7();
   const tx = db.transaction(() => {
+    const priceOf = priceOfBook(loadPriceBook(db));
     const taken: Array<{ ingredientId: string; qty: number }> = [];
+    let inputsCents = 0;
+    let allValued = true;
     for (const l of scaled.lines) {
       if (l.stockQty === 0) continue;
+      const value = safeStockValue(-l.stockQty, priceOf(l.inputId));
+      if (value.valueCents === null) allValued = false;
+      else inputsCents += -value.valueCents;
       recordStockMovement(
         db,
-        { ingredientId: l.inputId, deltaQty: -l.stockQty, reason: 'adjustment', notes: usedNote },
+        {
+          ingredientId: l.inputId,
+          deltaQty: -l.stockQty,
+          reason: 'adjustment',
+          notes: usedNote,
+          detail: 'batch_in',
+          refGroupId: groupId,
+          value,
+        },
         actor,
       );
       taken.push({ ingredientId: l.inputId, qty: l.stockQty });
     }
     resultingQty = recordStockMovement(
       db,
-      { ingredientId: input.ingredientId, deltaQty: amount, reason: 'adjustment', notes: madeNote },
+      {
+        ingredientId: input.ingredientId,
+        deltaQty: amount,
+        reason: 'adjustment',
+        notes: madeNote,
+        detail: 'batch_out',
+        refGroupId: groupId,
+        value: allValued
+          ? { valueCents: inputsCents, unitCostMc: mulDivRound(inputsCents, 1000, amount), basis: 'batch' }
+          : { valueCents: null, unitCostMc: null, basis: null },
+      },
       actor,
     ).resultingQty;
     writeAudit(db, {

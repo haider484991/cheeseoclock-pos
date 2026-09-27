@@ -103,10 +103,10 @@ describe('outcomePreview', () => {
 
   it('"Made": what is waste and what it costs; a sealed drink back to the fridge', () => {
     expect(outcomePreview(s, 'made', new Set([COLA.ingredientId]))).toEqual([
-      'Counted as waste: Dough 300 g, Cheese 90 g · about Rs 4.8',
+      'Counted as waste: Dough 300 g, Cheese 90 g · about Rs 4.80',
       'Cola 1.5 L ×1 goes back to the fridge',
     ]);
-    expect(outcomePreview(s, 'made', new Set())).toEqual(['Counted as waste: Dough 300 g, Cheese 90 g, Cola 1.5 L ×1 · about Rs 4.8']);
+    expect(outcomePreview(s, 'made', new Set())).toEqual(['Counted as waste: Dough 300 g, Cheese 90 g, Cola 1.5 L ×1 · about Rs 4.80']);
   });
 
   it('a deleted ingredient is left out of both', () => {

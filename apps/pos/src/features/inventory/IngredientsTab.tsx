@@ -19,7 +19,7 @@ import {
 } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { Ingredient, IngredientCategory, PriceKind, StockMovementReason } from '@cheeseoclock/shared-types';
+import type { Ingredient, IngredientCategory, PriceKind, StockMovementReason, WasteReason } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
@@ -872,6 +872,17 @@ function FieldLabel({ htmlFor, children }: { htmlFor: string; children: React.Re
 
 type ManualReason = Extract<StockMovementReason, 'delivery' | 'waste' | 'count' | 'adjustment'>;
 
+/** Why it was thrown away: Reports splits waste by these (costing spec Phase 2). */
+const WASTE_REASON_CHIPS: ReadonlyArray<{ id: WasteReason; label: string }> = [
+  { id: 'burnt', label: 'Burnt' },
+  { id: 'dropped', label: 'Dropped' },
+  { id: 'expired', label: 'Expired / went off' },
+  { id: 'wrong_order', label: 'Wrong order made' },
+  { id: 'returned', label: 'Sent back' },
+  { id: 'staff_meal', label: 'Staff meal' },
+  { id: 'other', label: 'Other' },
+];
+
 const MANUAL_REASONS: ReadonlyArray<{ id: ManualReason; label: string; hint: string }> = [
   { id: 'delivery', label: 'Delivery in', hint: 'Stock that arrived without a purchase order' },
   { id: 'waste', label: 'Waste', hint: 'Spoiled, dropped or thrown away' },
@@ -889,8 +900,10 @@ function MovementDialog({
   const qc = useQueryClient();
   const { toast } = useToast();
   const [reason, setReason] = useState<ManualReason>('delivery');
+  const [wasteReason, setWasteReason] = useState<WasteReason | null>(null);
   const [delta, setDelta] = useState('');
   const [notes, setNotes] = useState('');
+  const needsWhy = reason === 'waste' && wasteReason === null;
 
   const isCount = reason === 'count';
   // Every reason needs an explicit integer — an empty "count" must never be
@@ -919,6 +932,7 @@ function MovementDialog({
         deltaQty: normalize(d),
         reason,
         notes: notes.trim() || null,
+        ...(reason === 'waste' && wasteReason ? { wasteReason } : {}),
       });
     },
     onSettled: () => {
@@ -985,6 +999,30 @@ function MovementDialog({
               </div>
               {hint && <p className="mt-1 text-xs text-stone-500">{hint}</p>}
             </div>
+            {reason === 'waste' && (
+              <div>
+                <div className="mb-1 text-xs uppercase tracking-wider text-stone-500">Why?</div>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Why was it wasted">
+                  {WASTE_REASON_CHIPS.map((w) => (
+                    <button
+                      key={w.id}
+                      type="button"
+                      aria-pressed={wasteReason === w.id}
+                      onClick={() => setWasteReason(w.id)}
+                      className={cn(
+                        'rounded-full border-2 px-3 py-1.5 text-xs font-semibold transition-colors',
+                        wasteReason === w.id
+                          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                          : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                      )}
+                    >
+                      {w.label}
+                    </button>
+                  ))}
+                </div>
+                {needsWhy && <p className="mt-1 text-xs text-stone-500">Pick why, so Reports can show waste by reason.</p>}
+              </div>
+            )}
             <div>
               <label htmlFor="mv-qty" className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
                 {isCount
@@ -1030,7 +1068,7 @@ function MovementDialog({
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button
               variant="primary"
-              disabled={mut.isPending || !deltaValid || countNegative}
+              disabled={mut.isPending || !deltaValid || countNegative || needsWhy}
               onClick={() => {
                 if (submitting.current) return;
                 submitting.current = true;
