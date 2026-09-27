@@ -179,7 +179,8 @@ export function Kpi({
           loading && 'text-stone-300 dark:text-stone-700',
         )}
       >
-        {value}
+        {/* "Rs" never sits on its own line above the number. */}
+        {value.replace(/^Rs /, 'Rs\u00a0')}
       </div>
       {change && goodWhen && <ChangeText change={change} goodWhen={goodWhen} was={was} />}
       {sub && <div className="text-xs text-stone-500 dark:text-stone-400">{sub}</div>}

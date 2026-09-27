@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DO_THIS_CAP,
+  DO_THIS_MAX_PINNED,
   collectDoThis,
   missingCostsWeekCents,
   rankDoThis,
@@ -31,6 +32,14 @@ describe('"Do this": the ranking (costing spec 4.17)', () => {
       { canSeeCosts: true },
     );
     expect(r.items.map((i) => i.key)).toEqual(['cheese-low', 'dear', 'cheap']);
+  });
+
+  it('pins take at most two places, so money lines still show on a till that never counted its stock', () => {
+    const lows = ['a-low', 'b-low', 'c-low', 'd-low', 'e-low'].map((k) => line(k, null, { pinned: true, cost: false, kind: 'low_stock' }));
+    const r = rankDoThis([...lows, line('red', 50_000), line('missing', 20_000, { kind: 'missing_costs' })], { canSeeCosts: true });
+    expect(DO_THIS_MAX_PINNED).toBe(2);
+    expect(r.items.map((i) => i.key)).toEqual(['a-low', 'b-low', 'red', 'missing', 'c-low']);
+    expect(r.more).toBe(2);
   });
 
   it('at most five lines, and says how many more there were', () => {

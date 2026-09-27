@@ -32,6 +32,11 @@ import { formatBps } from '../costing/costingFormat';
 import { openCostingTab, openDishInCosting, openLowStockInInventory } from '../costing/deepLinks';
 import { cardHideReason, cardHidesInMs, cardMayShow, type CardLogin, type CardShown } from './ownerCardClock';
 
+/** The card is read at a glance: whole rupees ("Rs 11,512", not "Rs 11,511.50"). */
+function wholeRupees(cents: number): string {
+  return formatCents(Math.round(cents / 100) * 100);
+}
+
 export const OWNER_WEEK_KEY = ['reports', 'ownerWeek'] as const;
 
 export function OwnerWeekCard() {
@@ -193,9 +198,9 @@ export function OwnerWeekView({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <Kpi label="Sales" value={formatCents(c.netSalesCents)} change={trendChangeOf(week.change.sales)} goodWhen="up" sub="Tax included" />
+        <Kpi label="Sales" value={wholeRupees(c.netSalesCents)} change={trendChangeOf(week.change.sales)} goodWhen="up" sub="Tax included" />
         <Kpi label="Orders" value={String(c.orderCount)} change={trendChangeOf(week.change.orders)} goodWhen="up" />
-        <Kpi label="Average order" value={formatCents(c.avgOrderCents)} change={trendChangeOf(week.change.avgOrder)} goodWhen="up" />
+        <Kpi label="Average order" value={wholeRupees(c.avgOrderCents)} change={trendChangeOf(week.change.avgOrder)} goodWhen="up" />
         {costs && (
           <>
             <Kpi
@@ -203,7 +208,7 @@ export function OwnerWeekView({
               value={costs.foodCostBps === null ? '—' : formatBps(costs.foodCostBps)}
               sub={costs.coverageBps === null ? 'No food sold yet' : coverageText({ coverageBps: costs.coverageBps })}
             />
-            <Kpi label="Waste" value={formatCents(costs.wasteCents)} sub={costs.hasCosts ? 'Thrown away, at cost' : 'Set prices to see it'} />
+            <Kpi label="Waste" value={wholeRupees(costs.wasteCents)} sub={costs.hasCosts ? 'Thrown away, at cost' : 'Set prices to see it'} />
           </>
         )}
       </div>

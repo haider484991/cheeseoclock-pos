@@ -85,7 +85,8 @@ describe('the "This week" card', () => {
   it('tapped: five numbers and one ranked "Do this" list with rupees a week; never profit', () => {
     const out = html(<OwnerWeekView week={WEEK} canSeeCosts canOpenStock onOpen={() => {}} />);
     for (const label of ['Sales', 'Orders', 'Average order', 'Food cost', 'Waste']) expect(out).toContain(label);
-    expect(out).toContain('Rs 45,600');
+    // The tile keeps "Rs" and its number together (a no-break space); read as text.
+    expect(text(out)).toContain('Rs 45,600');
     expect(out).toContain('▲ 14%');
     expect(out).toContain('costs known for 94%');
     expect(out).toContain('Running low: Test cheese');

@@ -2,7 +2,8 @@
  * The Dashboard's "Do this" list (costing spec 4.17, Phase 7): ONE ranked
  * list of what to fix, each line with what it costs per week.
  *
- *  - A key ingredient at or under its low-stock level is pinned first.
+ *  - A key ingredient at or under its low-stock level is pinned first (at
+ *    most two such lines: more rank with the rest, see DO_THIS_MAX_PINNED).
  *  - Everything else by rupees per week, most first.
  *  - At most five lines.
  *  - A line that carries costs is only for a login that may see costs
@@ -27,6 +28,9 @@ export interface DoThisCandidate {
 
 /** At most this many lines on the card (costing spec D15). */
 export const DO_THIS_CAP = 5;
+
+/** Pinned lines take at most this many of those places. */
+export const DO_THIS_MAX_PINNED = 2;
 
 /** One kind of problem the list looks for. */
 export interface DoThisSource<Ctx, T extends DoThisCandidate = DoThisCandidate> {
@@ -56,12 +60,16 @@ export function rankDoThis<T extends DoThisCandidate>(
 ): { items: T[]; more: number } {
   const cap = Math.max(0, opts.cap ?? DO_THIS_CAP);
   const shown = items.filter((i) => opts.canSeeCosts || !i.cost);
-  const sorted = [...shown].sort(
-    (a, b) =>
-      Number(b.pinned) - Number(a.pinned) ||
-      (b.weekCents ?? -1) - (a.weekCents ?? -1) ||
-      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
-  );
+  const byWeek = (a: T, b: T) =>
+    (b.weekCents ?? -1) - (a.weekCents ?? -1) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  const pinned = shown.filter((i) => i.pinned).sort(byWeek);
+  // Pins beyond the first few rank with everything else, so a till whose
+  // stock was never counted (every key ingredient "out") still shows what
+  // costs the shop money.
+  const sorted = [
+    ...pinned.slice(0, DO_THIS_MAX_PINNED),
+    ...[...shown.filter((i) => !i.pinned), ...pinned.slice(DO_THIS_MAX_PINNED)].sort(byWeek),
+  ];
   return { items: sorted.slice(0, cap), more: Math.max(0, sorted.length - cap) };
 }
 
