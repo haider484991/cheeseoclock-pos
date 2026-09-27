@@ -337,6 +337,54 @@ live('where a tab is worked out', () => {
   });
 });
 
+live('shift history on Team & leakage', () => {
+  /** Made-up shifts around the 26 Sep trading day, on two tills (one open shift per till). */
+  function seedShifts(): void {
+    const add = db.prepare(
+      `INSERT INTO shifts (id, device_id, opened_by_user_id, opened_at, opening_cash_cents, closed_by_user_id, closed_at,
+         expected_cash_cents, counted_cash_cents, variance_cents, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 100000, ?, ?, ?, ?, ?, 'x', 'x')`,
+    );
+    const closed = (id: string, openedAt: string, closedAt: string, variance: number) =>
+      add.run(id, DEV, 'u_cash', openedAt, 'u_mgr', closedAt, 300_000, 300_000 + variance, variance);
+    closed('before', '2026-09-24T07:00:00.000Z', '2026-09-24T20:00:00.000Z', 0);
+    closed('yesterday', '2026-09-25T15:00:00.000Z', '2026-09-26T01:30:00.000Z', -10_000);
+    closed('inside', '2026-09-26T07:00:00.000Z', '2026-09-26T20:00:00.000Z', 5_000);
+    closed('after', '2026-09-27T07:00:00.000Z', '2026-09-27T20:00:00.000Z', 0);
+    add.run('old_open', 'till-2', 'u_cash', '2026-09-24T09:00:00.000Z', null, null, null, null, null);
+  }
+  const DAY = { sinceIso: '2026-09-26T00:00:00.000Z', untilIso: '2026-09-27T00:00:00.000Z' };
+  const OVERLAPPING = ['inside', 'yesterday', 'old_open'];
+
+  it('the owner sees every shift open in the period, from the main process (no worker) and from the worker alike; a manager and a cashier see none', async () => {
+    seedShifts();
+    h.session = OWNER;
+    h.worker = null;
+    const main = await call('reports:team', DAY);
+    expect(main).toMatchObject({ ok: true, data: { engine: 'main' } });
+    const mainShifts = (main as { data: ReportTeamTab }).data.shifts;
+    expect(mainShifts.map((x) => x.id)).toEqual(OVERLAPPING);
+    expect(mainShifts.find((x) => x.id === 'old_open')).toMatchObject({ closedAt: null, varianceCents: null, openedBy: 'Test Cashier' });
+    expect(mainShifts.find((x) => x.id === 'yesterday')).toMatchObject({ closedBy: 'Test Manager', varianceCents: -10_000 });
+
+    // The Reports worker running: what its thread hands back (a copy).
+    const { handleRunRequest } = await import('../../services/analytics/worker.js');
+    h.worker = fakeWorker('ready', async (kind, req) => {
+      const reply = handleRunRequest(db, structuredClone({ type: 'run' as const, id: 1, kind, request: req, nowIso: new Date().toISOString() }));
+      if (reply.type !== 'result' || !reply.ok) throw new Error('worker said no');
+      return structuredClone(reply.data);
+    });
+    const fromWorker = await call('reports:team', DAY);
+    expect(fromWorker).toMatchObject({ ok: true, data: { engine: 'worker' } });
+    expect((fromWorker as { data: ReportTeamTab }).data.shifts).toEqual(mainShifts);
+
+    for (const who of [MANAGER, CASHIER]) {
+      h.session = who;
+      expect(await call('reports:team', DAY)).toEqual({ ok: false, code: 'forbidden', message: REFUSED['reports'] });
+    }
+  });
+});
+
 live('stock rows and their values', () => {
   it('a manager\'s stock history carries what each row was worth; "Make this amount" answers with no costs', async () => {
     h.session = MANAGER;

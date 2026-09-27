@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card } from '@cheeseoclock/ui';
-import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle, PauseCircle } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+
+/** The bridge status, with the till's shift pause (webOrdersBridge.status()). */
+type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
 
 /**
  * Settings → Online orders. Connects this POS to the website:
@@ -77,7 +80,10 @@ export function WebsiteSettings() {
       }),
   });
 
-  const status = statusQ.data;
+  const status: BridgeStatusView | undefined = statusQ.data;
+  // Paused by the till because no shift is open. Only worth saying while the
+  // owner's switch is on — with it off, "Off" already says it all.
+  const shiftPause = status?.enabled ? status.shiftPause ?? null : null;
   // "ready" only means a URL and secret are filled in — not that the website
   // accepts them. A 401 means the secret here does not match BRIDGE_SECRET on
   // the site, so the badge must never claim "Connected" while calls are failing.
@@ -193,7 +199,13 @@ export function WebsiteSettings() {
           <div>
             <dt className="text-stone-500">Online orders</dt>
             <dd className="font-semibold">
-              {status.enabled ? (status.ready ? 'On' : 'Needs setup') : 'Off'}
+              {status.enabled
+                ? status.ready
+                  ? shiftPause
+                    ? 'Paused'
+                    : 'On'
+                  : 'Needs setup'
+                : 'Off'}
             </dd>
           </div>
           <div>
@@ -220,6 +232,13 @@ export function WebsiteSettings() {
             </dd>
           </div>
         </dl>
+      )}
+
+      {shiftPause && (
+        <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <PauseCircle className="mr-1 inline h-3 w-3" />
+          {shiftPause.message}
+        </p>
       )}
 
       {status?.lastError && (

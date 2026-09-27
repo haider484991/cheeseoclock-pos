@@ -109,7 +109,7 @@ export interface OrderDiscount {
   approvedByUserId: UUID | null;
   amountCents: Cents;
   /**
-   * Where it came from (migration 0039): 'foodpanda' = the shop's standing
+   * Where it came from (migration 0040): 'foodpanda' = the shop's standing
    * foodpanda deal, put on automatically; null/absent = typed by staff (F3).
    */
   source?: DiscountSource | null;
@@ -152,6 +152,44 @@ export interface OrderSnapshot {
   customerName: string | null;
   customerPhone: string | null;
   deliveryAddress: string | null;
+  /**
+   * The counter's "Order notes" box (orders.delivery_notes): "ring upper
+   * bell", "collect by 7pm". Printed on the kitchen ticket and the bill, and
+   * shown on the Live Orders card, with the website customer's own note —
+   * see orderNotesOf. Absent from a snapshot made before it was read.
+   */
+  deliveryNotes?: string | null;
   /** Rider snapshot for the order — null until a rider is assigned. */
   rider: { id: UUID; name: string; phone: string } | null;
+}
+
+/**
+ * The till's tag in front of a website customer's note, as the web bridge
+ * stores it in orders.notes: "[web] …" / "[web pick-up] …", or the tag alone
+ * when the customer wrote nothing ("[web order]", "[web pick-up order]").
+ */
+const WEB_NOTE_TAG = /^\[web(?: pick-up)?(?: order)?\]\s*/i;
+
+/**
+ * What was written for the WHOLE order — not one item (each line's allergy /
+ * special-request note stays on its line) — for the kitchen ticket, the bill
+ * and receipt, and the Live Orders card, the same way for every order:
+ *  - the order's own note (orders.notes). For a website order that is the
+ *    customer's "Directions for the rider" / "Notes for the counter", without
+ *    the till's "[web]" tag; the tag alone is not a note (the card's Web
+ *    badge and the kitchen ticket's WEBSITE line say where it came from);
+ *  - the counter's "Order notes" box (orders.delivery_notes).
+ * Trimmed; empty ones left out; the same words never twice.
+ */
+export function orderNotesOf(s: {
+  order: Pick<Order, 'notes' | 'source'>;
+  deliveryNotes?: string | null;
+}): string[] {
+  const own = (s.order.notes ?? '').trim();
+  const fromOrder = s.order.source === 'web' ? own.replace(WEB_NOTE_TAG, '').trim() : own;
+  const fromCounter = (s.deliveryNotes ?? '').trim();
+  const notes: string[] = [];
+  if (fromOrder) notes.push(fromOrder);
+  if (fromCounter && fromCounter !== fromOrder) notes.push(fromCounter);
+  return notes;
 }

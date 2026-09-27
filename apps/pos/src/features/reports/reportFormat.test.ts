@@ -11,6 +11,7 @@ import {
   coverageText,
   daySeries,
   estimatedText,
+  fmtAgo,
   fmtMinutes,
   fmtWhen,
   byHandText,
@@ -133,6 +134,18 @@ describe('times', () => {
     expect(fmtMinutes(45)).toBe('45 min');
     expect(fmtMinutes(70)).toBe('1 h 10 min');
     expect(fmtMinutes(null)).toBe('—');
+  });
+
+  it('says how long ago a shift was opened', () => {
+    const now = new Date('2026-09-27T10:00:00.000Z');
+    expect(fmtAgo('2026-09-27T09:59:30.000Z', now)).toBe('just now');
+    // A till clock a little behind the one that wrote it.
+    expect(fmtAgo('2026-09-27T10:02:00.000Z', now)).toBe('just now');
+    expect(fmtAgo('not a date', now)).toBe('just now');
+    expect(fmtAgo('2026-09-27T09:35:00.000Z', now)).toBe('25 min ago');
+    expect(fmtAgo('2026-09-27T04:50:00.000Z', now)).toBe('5 h 10 min ago');
+    expect(fmtAgo('2026-09-26T10:00:00.000Z', now)).toBe('1 day ago');
+    expect(fmtAgo('2026-09-25T07:00:00.000Z', now)).toBe('2 days 3 h ago');
   });
 });
 
@@ -535,6 +548,10 @@ describe('printout', () => {
             cashOutCents: 20000,
             cashMovementCount: 3,
             noSaleOpens: 2,
+            openingNote: 'Morning shift, <b>Ali</b> on register',
+            closingNote: 'Rs 200 paid for gas, receipt in the drawer',
+            carriedUnpaidCount: 0,
+            carryOverReason: null,
           },
         ],
         drawerOpens: [
@@ -545,8 +562,12 @@ describe('printout', () => {
         drawerOpenCount: 3,
       }),
     );
-    expect(html).toContain('<th class="r">Cash in/out</th><th class="r">No-sale opens</th>');
+    expect(html).toContain('<th class="r">Cash in/out</th><th class="r">No-sale opens</th><th>Notes</th>');
     expect(html).toMatch(/Matched<\/td><td class="r">3<\/td><td class="r">2<\/td>/);
+    // The opening and the closing note, each on its own line, escaped like everything else.
+    expect(html).toContain(
+      '<td>Opening note: Morning shift, &lt;b&gt;Ali&lt;/b&gt; on register<br>Closing note: Rs 200 paid for gas, receipt in the drawer</td>',
+    );
     expect(html).toContain('Cash drawer opened by hand — 3 times');
     expect(html).toMatch(/No sale<\/td><td>Change<\/td><td>Ali<\/td><td>Sara<\/td>/);
     expect(html).toMatch(/To count at close<\/td><td>—<\/td><td>Sara<\/td><td>—<\/td>/);
@@ -554,6 +575,34 @@ describe('printout', () => {
     expect(html).toContain('&lt;i&gt;x&lt;/i&gt;');
     expect(html).not.toContain('<i>x</i>');
     expect(html).not.toContain('Showing the latest');
+  });
+
+  it('the CSV has each shift’s opening and closing note in columns of their own; a shift with none leaves them empty', () => {
+    const shift = (id: string, openingNote: string | null, closingNote: string | null) => ({
+      id,
+      openedAt: '2026-09-26T04:00:00.000Z',
+      closedAt: '2026-09-26T16:00:00.000Z',
+      openedBy: 'Sara',
+      closedBy: 'Sara',
+      openingCashCents: 500000,
+      expectedCashCents: 600000,
+      countedCashCents: 590000,
+      varianceCents: -10000,
+      cashInCents: 0,
+      cashOutCents: 0,
+      cashMovementCount: 0,
+      noSaleOpens: 0,
+      openingNote,
+      closingNote,
+      carriedUnpaidCount: 0,
+      carryOverReason: null,
+    });
+    const csv = tabCsv('team', report({ shifts: [shift('s1', 'Morning, Ali on register', 'Rs 100 short, change given wrong'), shift('s2', null, null)] }));
+    const rows = csv.split(/\r?\n/);
+    // Right after the drawer columns (anything the sheet adds later comes after them).
+    expect(rows).toContainEqual(expect.stringMatching(/,Cash in\/out entries,Drawer opened with no sale,Opening note,Closing note(,|$)/));
+    expect(rows).toContainEqual(expect.stringMatching(/,-100\.00,0,0,"Morning, Ali on register","Rs 100 short, change given wrong"(,|$)/));
+    expect(rows).toContainEqual(expect.stringMatching(/,-100\.00,0,0,,(,|$)/));
   });
 
   it('says how many hand opens there were in all when it prints only some', () => {

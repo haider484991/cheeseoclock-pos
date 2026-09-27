@@ -1,4 +1,5 @@
--- 0039_foodpanda_deal_and_terms.sql
+-- 0040_foodpanda_deal_and_terms.sql
+-- (Numbered 0040: v0.7.21 released 0039_shift_close_notes.sql first.)
 -- Settings → foodpanda (owner, 2026-09-27: "we just need to add how much
 -- discount is added on the foodpanda listing so the system knows what stock
 -- cost and all… everything should be editable for the admin").

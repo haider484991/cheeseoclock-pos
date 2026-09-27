@@ -643,6 +643,13 @@ function DeliveryChargeRow({ area }: { area: string }) {
  *   their list; unticked: as a "One-off"), the usual one only when "use it
  *   next time" is ticked too.
  * - Attach customer + chosen address + delivery notes to the order.
+ * - No customer typed in, only an "Order notes" ("collect by 7pm"): the note
+ *   goes on the order by itself — it used to be dropped here, unsaved.
+ * - The order's note is what the box says now, with or without a customer:
+ *   an emptied box takes off a note saved by an earlier Pay or Send that did
+ *   not go through (a payment refused with no shift open), so it does not
+ *   print on the kitchen ticket or the bill. The same words again write
+ *   nothing (setOrderDeliveryNotes).
  * - A saved address picked with "use it next time" becomes the usual one.
  */
 export async function commitCustomerToOrder(
@@ -651,7 +658,11 @@ export async function commitCustomerToOrder(
   form: CustomerFormState,
 ): Promise<void> {
   if (mode === 'dine_in' || mode === 'online' || mode === 'foodpanda') return;
-  if (!form.phone.trim() && !form.name.trim() && !form.addressLine.trim()) return;
+  const note = form.deliveryNotes.trim() || null;
+  if (!form.phone.trim() && !form.name.trim() && !form.addressLine.trim()) {
+    await ipc.orders.setNote({ orderId, note });
+    return;
+  }
 
   let customerId = form.matchedCustomerId;
   // The name on the reused customer's master record, to compare against
@@ -703,7 +714,7 @@ export async function commitCustomerToOrder(
     orderId,
     customerId,
     addressId,
-    ...(form.deliveryNotes.trim() ? { deliveryNotes: form.deliveryNotes.trim() } : {}),
+    deliveryNotes: note,
     ...(nameOverride ? { nameOverride } : {}),
   });
 

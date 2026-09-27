@@ -96,6 +96,25 @@ export function cardLines<T extends { parentOrderItemId: unknown }>(items: T[]):
   return items.filter((i) => !i.parentOrderItemId);
 }
 
+/**
+ * What goes under one card line (owner 2026-09-27: the card said only
+ * "Family Feast"): its deal parts, each with its picks ("Fajita Pizza —
+ * Large + Extra cheese", "1.5 litre drink + 7up"), then the line's own
+ * extras, flavours and dips. Leave-outs are left out here: cardFlags shows
+ * them, in red, on every card.
+ */
+export function cardLineDetails(
+  line: Pick<OrderSnapshot['items'][number], 'id' | 'modifiers'>,
+  items: Array<Pick<OrderSnapshot['items'][number], 'id' | 'parentOrderItemId' | 'quantity' | 'menuItemName' | 'modifiers'>>,
+): string[] {
+  const picks = (mods: Array<{ modifierName: string }>) =>
+    mods.filter((m) => !isLeaveOutChoice(m.modifierName)).map((m) => m.modifierName);
+  const parts = items
+    .filter((i) => i.parentOrderItemId === line.id)
+    .map((i) => [`${i.quantity > 1 ? `${i.quantity}× ` : ''}${i.menuItemName}`, ...picks(i.modifiers)].join(' + '));
+  return [...parts, ...picks(line.modifiers).map((name) => `+ ${name}`)];
+}
+
 /** Items on a card, deal parts not counted twice. */
 export function cardItemCount(items: Array<{ parentOrderItemId: unknown; quantity: number }>): number {
   return cardLines(items).reduce((s, i) => s + i.quantity, 0);

@@ -4,6 +4,7 @@ import { ShoppingBag, Bike, Smartphone } from 'lucide-react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { useToast } from '../../components/toast/ToastProvider';
 import { resetCustomerForm } from './useCustomerForm';
+import { NoShiftBanner } from '../shell/NoShiftBanner';
 
 const MODES: Array<{ id: OrderMode; label: string; icon: typeof ShoppingBag }> = [
   { id: 'takeaway', label: 'Takeaway', icon: ShoppingBag },
@@ -45,6 +46,8 @@ export function OrderDetails() {
           ))}
         </div>
       </div>
+      {/* Orders still go to the kitchen with no shift open; the money waits for one. */}
+      <NoShiftBanner className="mt-2" />
     </section>
   );
 }

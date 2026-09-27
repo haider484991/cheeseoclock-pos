@@ -17,6 +17,38 @@ export function visibleReportTabs(canSeeCosts: boolean, canSeeProfit = false): R
 
 export const LAST_TAB_KEY = 'coc.reports.lastTab';
 
+/** Team & leakage's shift history panel: its id, for the top bar's "Shift history" to scroll to. */
+export const SHIFT_HISTORY_ANCHOR = 'shift-history';
+
+/** How much of a part must be on screen below its top to count as showing: its name and a line or two. */
+export const SHOWING_ROOM_PX = 200;
+
+/** A part of the page as bringIntoView sees it: an element (a stand-in in tests). */
+export interface ScrollTarget {
+  getBoundingClientRect(): { top: number };
+  /** The page it scrolls in: the shell's <main>, under the top bar. */
+  closest(selector: 'main'): { getBoundingClientRect(): { top: number; bottom: number } } | null;
+  scrollIntoView(options: ScrollIntoViewOptions): void;
+}
+
+/**
+ * A link's "show me this part" (the top bar's "Shift history"): scroll only
+ * when the part is not already showing, and then as little as it takes.
+ * Pulling a part that already showed up to the top took the page's header
+ * off the screen for nothing — the period, its dates and the tabs — so the
+ * shifts showed with no period named. True when it scrolled.
+ */
+export function bringIntoView(part: ScrollTarget | null, windowHeight: number): boolean {
+  if (!part) return false;
+  const page = part.closest('main')?.getBoundingClientRect();
+  const viewTop = Math.max(page?.top ?? 0, 0);
+  const viewBottom = Math.min(page?.bottom ?? windowHeight, windowHeight);
+  const top = part.getBoundingClientRect().top;
+  if (top >= viewTop && top + SHOWING_ROOM_PX <= viewBottom) return false;
+  part.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  return true;
+}
+
 /** Storage as the page uses it (window.localStorage, or a stand-in in tests). */
 export interface TabStorage {
   getItem(key: string): string | null;

@@ -45,7 +45,7 @@
  */
 
 import type { DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
-import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
 import {
   centreOnPaper,
@@ -284,7 +284,7 @@ const METHOD_LABEL: Record<string, string> = {
  * Top to bottom: DUPLICATE band, logo (or the shop name when no logo
  * prints), tagline, TITLE (and its sub-line), DUPLICATE (again, inside the
  * body, so tearing the ends off doesn't leave an "original"), SHOP COPY,
- * order details, customer / rider, items, totals, payments and refunds, the
+ * order details, customer / rider, the order's notes, items, totals, payments and refunds, the
  * state line (PAID - CASH / TO COLLECT / REFUNDED), the rider note, the
  * signature line (shop copy), the bottom stamp, the shop's address, phone and
  * website, thank-you, FBR, DUPLICATE footer, cut. Everything between the two
@@ -501,6 +501,11 @@ function appendSaleBody(
   }
   if (snapshot.rider) {
     b.line(`Rider: ${snapshot.rider.name}`, snapshot.rider.phone);
+  }
+  // What was written for the whole order (the counter's "Order notes", a
+  // website customer's directions) — the rider and the customer read it here.
+  for (const note of orderNotesOf(snapshot)) {
+    b.bold(true).wrappedText(`Order note: ${note}`, width).bold(false);
   }
   b.rule();
 
@@ -893,17 +898,22 @@ const MODE_SHOUT: Record<OrderSnapshot['order']['mode'], string> = {
 
 /**
  * The kitchen's copy: what to cook, big enough to read from the pass, and
- * nothing about money. Order number and mode in double size, one double-height
- * row per item with its modifiers and notes beneath, then any order notes and
- * — for deliveries — the address, so the bag can be matched to its rider.
+ * nothing about money. Order number and mode in double size (and WEBSITE
+ * ORDER for one from the website), the order's notes in bold before the
+ * items (the counter's "Order notes", a website customer's note — as loud as
+ * an allergy note), one double-height row per item with its modifiers and
+ * notes beneath, then — for deliveries — the address, so the bag can be
+ * matched to its rider.
  *
  * Layout (80mm / 48 cols):
  *
  *                    KITCHEN
  *                     #0042
  *                    DELIVERY
+ *                 WEBSITE ORDER
  *      14/09 19:35                     Ali Akbar
  *      Customer: Hamza              0300 9367865
+ *      !! ORDER NOTE: Ring the upper bell
  *      ----------------------------------------
  *      2 x Chicken Tikka Pizza Large (12")
  *          + Extra Cheese
@@ -958,7 +968,13 @@ export function renderKitchenTicket(
     }
   }
   b.doubleSize(false).doubleHeight(true).wrappedText(MODE_SHOUT[order.mode], width);
-  b.doubleHeight(false).bold(false);
+  b.doubleHeight(false);
+  // Where it came from: the website order's "[web …]" tag used to be the
+  // only sign of it on the ticket (as its note); the note now prints alone.
+  if (order.source === 'web') {
+    b.wrappedText(order.mode === 'takeaway' ? 'WEBSITE PICK-UP' : 'WEBSITE ORDER', width);
+  }
+  b.bold(false);
 
   b.align('left');
   const when = opts.now ?? new Date();
@@ -977,6 +993,15 @@ export function renderKitchenTicket(
   if (snapshot.tableLabel) b.line(`Table: ${snapshot.tableLabel}`);
   if (snapshot.customerName || snapshot.customerPhone) {
     b.line(`Customer: ${snapshot.customerName ?? ''}`, snapshot.customerPhone ?? '');
+  }
+  // What was written for the whole order, before the first item and as loud
+  // as an allergy note: the counter's "Order notes" box and a website
+  // customer's note print the same way. It used to be missed altogether (the
+  // counter's) or printed small after the items (the website's).
+  for (const note of orderNotesOf(snapshot)) {
+    b.bold(true);
+    for (const ln of wrap(`!! ORDER NOTE: ${note}`, width)) b.text(ln).newline();
+    b.bold(false);
   }
   b.rule();
 
@@ -1009,11 +1034,6 @@ export function renderKitchenTicket(
   }
   b.rule();
 
-  if (order.notes) {
-    b.bold(true);
-    b.wrappedText(`Note: ${order.notes}`, width);
-    b.bold(false);
-  }
   if (snapshot.deliveryAddress) {
     b.text('Deliver to:').newline();
     for (const ln of wrap(snapshot.deliveryAddress, width - 2)) {

@@ -223,11 +223,17 @@ describe.skipIf(!DatabaseSync)('Open drawer (no sale)', () => {
 });
 
 describe.skipIf(!DatabaseSync)('Open drawer to count', () => {
-  it('only a manager or the owner, and only with a shift open', async () => {
+  it('only a manager or the owner — or a cashier with a manager’s PIN, as that manager closes the shift — and only with a shift open', async () => {
     const { openDrawerNoSale } = await svc();
+    // A cashier alone, or with a secret that is not a manager's: refused.
+    await expect(openDrawerNoSale(db, CASHIER, DEV, { kind: 'count' })).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(
+      openDrawerNoSale(db, CASHIER, DEV, { kind: 'count', approverPin: 'not-a-manager' }),
+    ).rejects.toMatchObject({ code: 'forbidden', message: "That is not a manager's PIN or password" });
+    // A manager's PIN on a cashier's login (owner, 2026-09-27) still needs a shift to count.
     await expect(
       openDrawerNoSale(db, CASHIER, DEV, { kind: 'count', approverPin: 'Manager-pass-7' }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
+    ).rejects.toMatchObject({ code: 'precondition_failed' });
     await expect(openDrawerNoSale(db, MANAGER, DEV, { kind: 'count' })).rejects.toMatchObject({
       code: 'precondition_failed',
     });
@@ -241,6 +247,15 @@ describe.skipIf(!DatabaseSync)('Open drawer to count', () => {
     // Pressing it again shows up as a no-sale open.
     expect(opens().map((o) => o['kind'])).toEqual(['count', 'no_sale']);
     expect(h.sends).toHaveLength(2);
+  });
+
+  it('a cashier’s count with a manager’s PIN is on record as the cashier’s, approved by that manager', async () => {
+    const { openDrawerNoSale } = await svc();
+    const { openShift } = await import('../db/repositories/shift-repo.js');
+    openShift(db, { openingCashCents: 0 }, { userId: 'u_cash', deviceId: DEV });
+    const r = await openDrawerNoSale(db, CASHIER, DEV, { kind: 'count', approverPin: 'Manager-pass-7' });
+    expect(r.opened).toBe(true);
+    expect(opens()).toEqual([{ kind: 'count', reason: null, userId: 'u_cash', approver: 'u_mgr' }]);
   });
 
   it('refuses a kind it does not know', async () => {

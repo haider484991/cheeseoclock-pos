@@ -14,6 +14,7 @@ export {
   presetSessionState,
   readSessionState,
   useOneShotLink,
+  hasOneShotLink,
   useDeepLinkOpen,
   useDebouncedValue,
   PAGE_SIZES,

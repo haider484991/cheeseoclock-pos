@@ -1728,7 +1728,7 @@ export function orderChannelTermsId(orderId: string): string {
 
 /**
  * A foodpanda order's economics at payment (order_channel_terms, migration
- * 0039), in the tender's transaction: the deal as frozen on the order, the
+ * 0040), in the tender's transaction: the deal as frozen on the order, the
  * shop's part and foodpanda's, the fees in force now and what they come to
  * (pos-domain foodpandaTerms, at foodpanda's prices when its menu is dearer),
  * what foodpanda should pay, and the tablet's total with its difference from
@@ -2367,6 +2367,9 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     customerName: orderRow.customer_name_snapshot,
     customerPhone: orderRow.customer_phone_snapshot,
     deliveryAddress,
+    // The counter's "Order notes" box: printed and shown with the order's
+    // own note (orderNotesOf), not left in the row unread.
+    deliveryNotes: orderRow.delivery_notes?.trim() || null,
     rider,
   };
 }

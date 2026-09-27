@@ -1,10 +1,14 @@
 /**
  * The Costing page fixes nothing itself: prices and recipes stay in
  * Inventory (costing spec §5). These open the right Inventory screen,
- * searched for the thing to fix, with its form already open.
+ * searched for the thing to fix, with its form already open. The Reports
+ * links (a tab, a period, a part of it) are here too.
  */
+import type { ReportTab } from '@cheeseoclock/shared-types';
 import { presetSessionState, readSessionState } from '../../components/list';
 import { CALC_LINES_KEY, withItemLine, type CalcLine } from '../inventory/recipeCalcView';
+import type { RangePreset } from '../reports/dateRange';
+import { SHIFT_HISTORY_ANCHOR } from '../reports/reportTabs';
 
 type Navigate = (to: string) => void;
 
@@ -98,9 +102,14 @@ export function openRecipeCalculator(navigate: Navigate, item?: { id: string; na
 /** The one-shot link Reports reads when it opens (ReportsPage). */
 export const REPORTS_DEEP_LINK = 'reports.deepLink';
 
+/** Where Reports opens: a tab, a period, and what on that tab to show. */
 export interface ReportsDeepLink {
-  /** Food cost & stock, "Between stock takes", these two. */
-  stockTakes: { fromCountId: string; toCountId: string };
+  tab: ReportTab;
+  preset: RangePreset;
+  /** With the "Between stock takes" period: these two. */
+  stockTakes?: { fromCountId: string; toCountId: string };
+  /** The id of a part of the tab to bring into view once its figures are on screen. */
+  scrollTo?: string;
 }
 
 /**
@@ -108,7 +117,17 @@ export interface ReportsDeepLink {
  * takes: what was used against what should have been (a finished stock
  * take's link, the Dashboard's "Do this" stock line).
  */
-export function openStockVariance(navigate: Navigate, stockTakes: ReportsDeepLink['stockTakes']): void {
-  presetSessionState(REPORTS_DEEP_LINK, { stockTakes } satisfies ReportsDeepLink);
+export function openStockVariance(navigate: Navigate, stockTakes: NonNullable<ReportsDeepLink['stockTakes']>): void {
+  presetSessionState(REPORTS_DEEP_LINK, { tab: 'foodStock', preset: 'stockTakes', stockTakes } satisfies ReportsDeepLink);
+  navigate('/reports');
+}
+
+/**
+ * Reports → Team & leakage over the last 7 days, scrolled to the shift
+ * history (the top bar's "Shift history", the owner's: 2026-09-27 "I can't
+ * see the shift history").
+ */
+export function openShiftHistory(navigate: Navigate): void {
+  presetSessionState(REPORTS_DEEP_LINK, { tab: 'team', preset: 'last7', scrollTo: SHIFT_HISTORY_ANCHOR } satisfies ReportsDeepLink);
   navigate('/reports');
 }

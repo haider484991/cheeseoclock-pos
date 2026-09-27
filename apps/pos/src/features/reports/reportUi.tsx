@@ -40,9 +40,22 @@ export function Section({
   );
 }
 
-export function Panel({ title, note, children, className }: { title?: string; note?: ReactNode; children: ReactNode; className?: string }) {
+export function Panel({
+  id,
+  title,
+  note,
+  children,
+  className,
+}: {
+  /** For a link to scroll to (it stops just short of the top). */
+  id?: string;
+  title?: string;
+  note?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <Card className={cn('min-w-0', className)}>
+    <Card id={id} className={cn('min-w-0', id && 'scroll-mt-4', className)}>
       {title && <h3 className="mb-3 text-sm font-semibold tracking-tight text-stone-700 dark:text-stone-200">{title}</h3>}
       {children}
       {note && <p className="mt-3 text-xs text-stone-500 dark:text-stone-400">{note}</p>}

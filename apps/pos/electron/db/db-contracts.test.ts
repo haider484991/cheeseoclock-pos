@@ -163,7 +163,7 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     expect([...(SCHEMA.get('stock_count_lines') ?? [])]).toEqual(
       expect.arrayContaining(['stock_count_id', 'ingredient_id', 'counted_qty', 'unit', 'counted_at', 'expected_qty', 'till_qty', 'unit_cost_mc', 'value_cents', 'movement_id']),
     );
-    // 0039: a foodpanda order's channel terms travel with it (one row per order, same id on both tills),
+    // 0040: a foodpanda order's channel terms travel with it (one row per order, same id on both tills),
     // and a discount says where it came from and carries its frozen terms.
     expect(REPLICABLE_TABLES).toContain('order_channel_terms');
     expect([...(SCHEMA.get('order_channel_terms') ?? [])]).toEqual(

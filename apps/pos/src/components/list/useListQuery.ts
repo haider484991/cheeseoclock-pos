@@ -49,6 +49,15 @@ export function useOneShotLink<T>(key: string): T | undefined {
 }
 
 /**
+ * Is a one-shot link waiting under `key` (preset, not read yet)? For a
+ * screen that is already open when a link to it comes, so it can open
+ * afresh and read it (ReportsPage).
+ */
+export function hasOneShotLink(key: string): boolean {
+  return sessionMemory.get(key) !== undefined;
+}
+
+/**
  * The other end of a deep link's "open this one" (presetSessionState(key,
  * id) before navigating here): once `items` has loaded, `open` is called
  * with the item of that id, once, and the link is forgotten — coming back to

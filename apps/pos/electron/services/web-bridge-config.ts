@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  PICKUP_DISCOUNT_PERCENT,
+  type BridgeHeartbeatBody,
+  type WebOrdersShiftPause,
+} from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import { openSecret, sealSecret } from './secret-seal.js';
@@ -104,4 +109,91 @@ export function isWebBridgeReady(
     );
   }
   return { ok: missing.length === 0, missing };
+}
+
+// ---- the shift pause ------------------------------------------------------
+
+/**
+ * Website orders paused by the till itself because no shift is open on it
+ * (owner, 2026-09-27): set when the last open shift closes, cleared when a
+ * shift opens (services/web-orders-shift-pause.ts). Per till and pure-local,
+ * like the rest of the settings table.
+ *
+ * It lives under its own key, never inside `webBridge.config`: `enabled` there
+ * is the owner's hand switch, and the pause must not overwrite it. The till
+ * takes orders only while both allow it (storeAcceptingOrders), so opening a
+ * shift cannot switch back on what the owner switched off.
+ */
+export const WEB_ORDERS_SHIFT_PAUSE_KEY = 'webBridge.shiftPause';
+
+const StoredShiftPauseSchema = z.object({
+  reason: z.literal('shift_closed'),
+  since: z.string(),
+});
+
+/** The pause as stored: why, and since when. No row (or null) = not paused. */
+export type StoredShiftPause = z.infer<typeof StoredShiftPauseSchema>;
+
+export function getWebOrdersShiftPause(db: AppDatabase): StoredShiftPause | null {
+  const parsed = StoredShiftPauseSchema.safeParse(getSettingRaw(db, WEB_ORDERS_SHIFT_PAUSE_KEY));
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Set or lift the pause. Audited like a setting a person changes — the
+ * person who closed or opened the shift — so "why was the website shut at
+ * 3 pm?" has an answer in the audit trail. Returns whether anything changed;
+ * a repeat (a second close, an open with no pause) writes nothing.
+ */
+export function setWebOrdersShiftPause(
+  db: AppDatabase,
+  pause: StoredShiftPause | null,
+  actorUserId: string | null,
+): boolean {
+  const current = getWebOrdersShiftPause(db);
+  const unchanged = pause === null ? current === null : current?.reason === pause.reason;
+  if (unchanged) return false;
+  setSetting(db, WEB_ORDERS_SHIFT_PAUSE_KEY, pause, { actorUserId });
+  return true;
+}
+
+/**
+ * The one answer the heartbeat sends: the owner's switch is on AND the till
+ * has not paused itself for want of an open shift.
+ */
+export function storeAcceptingOrders(
+  cfg: Pick<WebBridgeConfig, 'enabled'>,
+  pause: StoredShiftPause | null,
+): boolean {
+  return cfg.enabled && pause === null;
+}
+
+/** The heartbeat body (PUT /api/bridge/status) for this config and pause. */
+export function storeHeartbeatBody(
+  cfg: Pick<WebBridgeConfig, 'enabled'>,
+  pause: StoredShiftPause | null,
+  deviceId: string,
+): BridgeHeartbeatBody {
+  return {
+    acceptingOrders: storeAcceptingOrders(cfg, pause),
+    deviceId,
+    // `features` tells the site what this till can import: it offers online
+    // pick-up only while the listening till says 'pickup'.
+    features: ['pickup'],
+    // The site shows this percent, so the customer sees what the till bills.
+    pickupDiscountPercent: PICKUP_DISCOUNT_PERCENT,
+    // Only when the pause is what closes the shop; the owner's switch-off
+    // sends no reason, as before.
+    ...(cfg.enabled && pause ? { reason: pause.reason } : {}),
+  };
+}
+
+/** The pause as Settings → Online orders shows it. */
+export function describeShiftPause(pause: StoredShiftPause): WebOrdersShiftPause {
+  return {
+    reason: pause.reason,
+    since: pause.since,
+    message:
+      'Website orders paused: shift closed — they start again when a shift is opened',
+  };
 }

@@ -7,6 +7,7 @@ import {
   ageTone,
   cardFlags,
   cardItemCount,
+  cardLineDetails,
   cardLines,
   matchesBoardSearch,
   nextBoardAction,
@@ -109,6 +110,20 @@ describe('card lines', () => {
     ];
     expect(cardLines(items).map((i) => i.id)).toEqual(['deal', 'fries']);
     expect(cardItemCount(items)).toBe(3);
+  });
+
+  it("shows a deal's picks and a line's extras under it, leave-outs left to the red box", () => {
+    const items = [
+      line({ id: 'deal', menuItemName: 'Family Feast' }),
+      line({ id: 'p1', parentOrderItemId: 'deal', menuItemName: 'Fajita Pizza — Large', modifiers: [mod('Extra cheese'), mod('No onion')] }),
+      line({ id: 'p2', parentOrderItemId: 'deal', menuItemName: 'Garlic Dip', quantity: 2 }),
+      line({ id: 'd1', parentOrderItemId: 'deal', menuItemName: '1.5 litre drink', modifiers: [mod('7up')] }),
+      line({ id: 'burger', menuItemName: 'Zinger Burger', modifiers: [mod('Add a drink: Cola'), mod('No mayo')] }),
+      line({ id: 'fries', menuItemName: 'Fries' }),
+    ];
+    expect(cardLineDetails(items[0]!, items)).toEqual(['Fajita Pizza — Large + Extra cheese', '2× Garlic Dip', '1.5 litre drink + 7up']);
+    expect(cardLineDetails(items[4]!, items)).toEqual(['+ Add a drink: Cola']);
+    expect(cardLineDetails(items[5]!, items)).toEqual([]);
   });
 });
 
