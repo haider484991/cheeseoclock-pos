@@ -138,7 +138,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you deliver to Phase 7 Extension?',
-        a: 'Yes — Phase 7 Extension has its own option at checkout, at the same Rs 200 fee as the rest of DHA.',
+        a: 'Yes — Phase 7 Extension has its own option at checkout, at the same Rs 200 fee as Phase 7.',
       },
       {
         q: 'Which area do I pick at checkout?',
@@ -157,11 +157,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 8, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 8, Karachi',
     description:
-      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side included. Rs 200; Emaar Crescent Bay & Creek Vista Rs 250. Cash on delivery, till 1 am.',
+      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side, Emaar Crescent Bay & Creek Vista included. Rs 250 delivery, cash on delivery, till 1 am.',
     zoneIds: ['dha-8', 'emaar', 'creek-vista'],
     intro: [
       'Phase 8 runs wide — from the Zulfiqar and Al-Murtaza commercial strips out to the sea at Do Darya — and we deliver across all of it. Orders leave our Phase 6 kitchen boxed straight from the oven.',
-      'Delivery is Rs 200 across Phase 8, and Rs 250 for Emaar Crescent Bay and Creek Vista, which are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+      'Delivery is Rs 250 across Phase 8, the same for Emaar Crescent Bay and Creek Vista, which are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
     ],
     landmarks: [
       'Zulfiqar Commercial',
@@ -188,11 +188,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you deliver near Do Darya?',
-        a: 'Yes — the Do Darya side is covered at the standard Phase 8 fee of Rs 200.',
+        a: 'Yes — the Do Darya side is covered at the Phase 8 fee of Rs 250.',
       },
       {
-        q: 'Why is delivery to Emaar or Creek Vista Rs 250?',
-        a: 'They are priced as separate zones on our rider service’s rate card — Rs 250 instead of the Rs 200 for the rest of DHA. Pick Emaar Crescent Bay or Creek Vista at checkout and the right fee is added for you.',
+        q: 'Why is delivery to Phase 8 Rs 250?',
+        a: 'Phase 8 — with Emaar Crescent Bay and Creek Vista — is Rs 250 on our rider service’s rate card, instead of the Rs 200 for Phases 1–7. Pick your area at checkout and the right fee is added for you.',
       },
       {
         q: 'Will the food still be hot in Phase 8?',
@@ -290,7 +290,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you deliver to DHA Phase 3?',
-        a: 'Yes — pick DHA Phase 3 at checkout. It is Rs 200, the same as Phase 4 and the rest of DHA.',
+        a: 'Yes — pick DHA Phase 3 at checkout. It is Rs 200, the same as Phase 4.',
       },
       {
         q: 'Do you deliver to offices in 9th Commercial?',
@@ -312,7 +312,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       'Pizza & burger delivery to DHA Phase 1, Phase 2 and Phase 2 Ext from our Phase 6 kitchen. Rs 200 delivery, cash on delivery — order online or WhatsApp.',
     zoneIds: ['dha-1', 'dha-2', 'dha-2-ext'],
     intro: [
-      'Phase 1 and Phase 2 are the longest ride from our Phase 6 kitchen, and we will not pretend otherwise. What does not change is how the food leaves: fired to order, boxed straight from the oven and sent out hot — for the same Rs 200 as the rest of DHA.',
+      'Phase 1 and Phase 2 are the longest ride from our Phase 6 kitchen, and we will not pretend otherwise. What does not change is how the food leaves: fired to order, boxed straight from the oven and sent out hot — for the same Rs 200 as Phases 3 to 7.',
       'We cover Phase 1, Phase 2 and Phase 2 Extension: the Korangi Road side, Defence Mor and the Phase 2 Ext lanes. If your street sits right on the boundary, send a WhatsApp and we will confirm before you order.',
     ],
     landmarks: [
@@ -338,7 +338,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you really deliver this far from Phase 6?',
-        a: 'Yes. Phase 1, Phase 2 and Phase 2 Extension are all on our delivery map at the standard DHA fee of Rs 200. It is the longest ride we make, so order a little ahead if you are feeding people at a set time.',
+        a: 'Yes. Phase 1, Phase 2 and Phase 2 Extension are all on our delivery map at the Rs 200 fee for DHA Phases 1–7. It is the longest ride we make, so order a little ahead if you are feeding people at a set time.',
       },
       {
         q: 'Do you deliver to Phase 2 Extension?',
