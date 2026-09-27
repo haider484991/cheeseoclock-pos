@@ -146,6 +146,10 @@ const line = (p: Partial<ReportShiftLine> & Pick<ReportShiftLine, 'id' | 'opened
   cashOutCents: 0,
   cashMovementCount: 0,
   noSaleOpens: 0,
+  openingNote: null,
+  closingNote: null,
+  carriedUnpaidCount: 0,
+  carryOverReason: null,
   ...p,
 });
 
@@ -199,6 +203,34 @@ describe('the shift history panel', () => {
     expect(shiftHistoryNote(periodFor('yesterday', NOW))).toContain(`in this period (${periodFor('yesterday', NOW).dates}), newest first.`);
     // Without a period (another screen showing the section), it reads as before.
     expect(shiftHistoryNote()).toMatch(/^Every shift that was open at any time in this period, newest first\. Expected = /);
+  });
+
+  it('shows the note typed at opening and the one typed at closing, each on its own line; a shift with neither shows no note line', () => {
+    const out = render(
+      <TeamLeakageTab
+        now={NOW}
+        data={team([
+          line({
+            id: 's3',
+            openedAt: '2026-09-25T07:00:00.000Z',
+            closedAt: '2026-09-25T20:00:00.000Z',
+            closedBy: 'Sara',
+            expectedCashCents: 600_000,
+            countedCashCents: 590_000,
+            varianceCents: -10_000,
+            openingNote: 'Morning shift, Ali on register',
+            closingNote: 'Rs 100 short, change given wrong',
+          }),
+          line({ id: 's2', openedAt: '2026-09-24T07:00:00.000Z', openingNote: 'Only an opening note' }),
+          line({ id: 's1', openedAt: '2026-09-23T07:00:00.000Z' }),
+        ])}
+      />,
+    );
+    const words = text(out);
+    expect(words).toContain('Opening note: Morning shift, Ali on register Closing note: Rs 100 short, change given wrong');
+    expect(words).toContain('Opening note: Only an opening note');
+    expect(words.match(/Opening note:/g)).toHaveLength(2);
+    expect(words.match(/Closing note:/g)).toHaveLength(1);
   });
 
   it('an empty period says so plainly', () => {

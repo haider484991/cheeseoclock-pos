@@ -148,6 +148,8 @@ export const ipc = {
       unwrap(window.api.orders.attachCustomer(input)),
     detachCustomer: (orderId: string) =>
       unwrap(window.api.orders.detachCustomer({ orderId })),
+    /** The counter's "Order notes" on an order with no customer typed in (blank clears it). */
+    setNote: (input: IpcRequest<'orders:setNote'>) => unwrap(window.api.orders.setNote(input)),
     // Live tracking
     listActive: (input?: IpcRequest<'orders:listActive'>) =>
       unwrap(window.api.orders.listActive(input)),
@@ -175,6 +177,8 @@ export const ipc = {
     current: () => unwrap(window.api.shifts.current()),
     open: (input: IpcRequest<'shifts:open'>) => unwrap(window.api.shifts.open(input)),
     close: (input: IpcRequest<'shifts:close'>) => unwrap(window.api.shifts.close(input)),
+    /** Who closes, and the unpaid orders the close carries over (a cashier's login: the manager's PIN). */
+    closeCheck: (input: IpcRequest<'shifts:closeCheck'>) => unwrap(window.api.shifts.closeCheck(input)),
     list: (input?: IpcRequest<'shifts:list'>) => unwrap(window.api.shifts.list(input)),
     summary: (shiftId: string) => unwrap(window.api.shifts.summary({ shiftId })),
     lastCount: () => unwrap(window.api.shifts.lastCount()),

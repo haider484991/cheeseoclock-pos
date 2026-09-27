@@ -10,7 +10,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
 import { Percent, Receipt, UsersRound } from 'lucide-react';
 import { DataTable, Panel, Section, useShowAll } from '../reportUi';
-import { DRAWER_OPEN_WHY, fmtAgo, fmtWhen, methodLabel, percentOf, stockCellText } from '../reportFormat';
+import { DRAWER_OPEN_WHY, fmtAgo, fmtWhen, methodLabel, percentOf, shiftCarryOverText, shiftNoteLines, stockCellText } from '../reportFormat';
 import { SHIFT_HISTORY_ANCHOR } from '../reportTabs';
 import type { ReportPeriod } from '../dateRange';
 
@@ -133,6 +133,18 @@ export function StaffSection({
                   )}
                   {shiftDrawerNote(s)}
                 </div>
+                {/* What was typed at opening and at closing, each on its own line. */}
+                {shiftNoteLines(s).map((note) => (
+                  <div key={note} className="mt-0.5 whitespace-normal break-words text-xs text-stone-700 dark:text-stone-300">
+                    {note}
+                  </div>
+                ))}
+                {/* Unpaid orders the close left for the next shift, why, and who approved it. */}
+                {shiftCarryOverText(s) && (
+                  <div className="mt-0.5 whitespace-normal break-words text-xs font-semibold text-amber-800 dark:text-amber-300">
+                    {shiftCarryOverText(s)}
+                  </div>
+                )}
               </div>,
               formatCents(s.openingCashCents),
               s.cashOutCents > 0 ? formatCents(s.cashOutCents) : '—',

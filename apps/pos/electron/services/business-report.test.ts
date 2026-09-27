@@ -538,6 +538,11 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         cashMovementCount: 1,
         // Two no-sale opens and a test; the count at close is not one.
         noSaleOpens: 3,
+        // Nothing was typed in either Notes box.
+        openingNote: null,
+        closingNote: null,
+        carriedUnpaidCount: 0,
+        carryOverReason: null,
       },
       // Opened the day before and never closed: still open through this day
       // too (it used to be left out, as not OPENED in the period).
@@ -555,6 +560,10 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         cashOutCents: 0,
         cashMovementCount: 0,
         noSaleOpens: 0,
+        openingNote: null,
+        closingNote: null,
+        carriedUnpaidCount: 0,
+        carryOverReason: null,
       },
     ]);
   });

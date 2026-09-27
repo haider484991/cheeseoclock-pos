@@ -1,0 +1,41 @@
+-- 0039_shift_close_notes.sql
+-- Closing a shift (audit and owner decisions, 2026-09-27).
+--
+-- 1. The note typed when a shift is CLOSED, kept apart from the one typed
+--    when it was opened. Both boxes said "Notes (optional)", and the close
+--    wrote its note over the opening one (shift-repo closeShift: notes =
+--    COALESCE(NULLIF(?, ''), notes)), so "Morning shift, Ali on register"
+--    was lost to "Rs 100 short, change given wrong", and neither was shown
+--    anywhere.
+--
+--      notes        the opening note, as before (openShift writes it);
+--      close_notes  the closing note (closeShift writes it; NULL while the
+--                   shift is open, or when nothing was typed).
+--
+--    A shift closed before this migration keeps its one note in `notes`,
+--    read as the opening note (a close note typed then may be in it; nothing
+--    can tell the two apart now).
+--
+-- 2. Unpaid orders carried over. The close used to be refused while any
+--    order on this till was unpaid. Now the manager who closes gives one
+--    reason for all of them and the shift closes; the orders stay unpaid and
+--    are paid on whichever shift takes the money (owner, 2026-09-27).
+--
+--      carried_unpaid_count  how many unpaid orders this till still had when
+--                            the shift closed (0: none, and every shift
+--                            closed before this migration);
+--      carry_over_reason     the manager's reason (NULL when none were
+--                            carried). Who approved it is closed_by_user_id:
+--                            the manager who closed the shift, signed in or
+--                            by their PIN on a cashier's till.
+--    Each carried order also gets its own hash-chained audit row
+--    ('carried_over_unpaid': order, reason, approving manager, shift).
+--
+-- Replicable like the rest of the row: the sync queue sends the row as it is
+-- stored (a row image), so these columns travel with every shift written from
+-- here on, and a till without them simply leaves them out. Written only
+-- through repositories/shift-repo.ts, with its sync entry and audit row. No
+-- new foreign key, so no new index.
+ALTER TABLE shifts ADD COLUMN close_notes TEXT;
+ALTER TABLE shifts ADD COLUMN carried_unpaid_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE shifts ADD COLUMN carry_over_reason TEXT;

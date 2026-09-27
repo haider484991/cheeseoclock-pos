@@ -637,7 +637,9 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
  * and still running, or closed this morning (the owner's "I can't see the
  * shift history", 2026-09-27: it used to list only shifts OPENED in the
  * period). Each shift's drawer figures are the ones saved when it was
- * closed; a shift still open has none yet.
+ * closed; a shift still open has none yet. The notes typed when it was
+ * opened and when it was closed come with it, each on its own, and the
+ * unpaid orders its close carried over, with the reason (0039).
  */
 function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'] {
   return db
@@ -655,7 +657,11 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
               (SELECT COUNT(*) FROM cash_movements m
                 WHERE m.shift_id = s.id AND m.deleted_at IS NULL) AS cashMovementCount,
               (SELECT COUNT(*) FROM drawer_opens d
-                WHERE d.shift_id = s.id AND d.deleted_at IS NULL AND d.kind IN ${NO_SALE_KINDS}) AS noSaleOpens
+                WHERE d.shift_id = s.id AND d.deleted_at IS NULL AND d.kind IN ${NO_SALE_KINDS}) AS noSaleOpens,
+              NULLIF(TRIM(s.notes), '') AS openingNote,
+              NULLIF(TRIM(s.close_notes), '') AS closingNote,
+              COALESCE(s.carried_unpaid_count, 0) AS carriedUnpaidCount,
+              NULLIF(TRIM(s.carry_over_reason), '') AS carryOverReason
          FROM shifts s
          LEFT JOIN users uo ON uo.id = s.opened_by_user_id
          LEFT JOIN users uc ON uc.id = s.closed_by_user_id

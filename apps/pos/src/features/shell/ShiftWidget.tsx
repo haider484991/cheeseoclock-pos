@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Wallet, X } from 'lucide-react';
+import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Lock, ShieldCheck, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
+import type { IpcRequest, ShiftCloseCheck, UnpaidOrderAtClose } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -12,21 +13,67 @@ import { openShiftHistory } from '../costing/deepLinks';
 import { CashMovementDialog } from './CashMovementDialog';
 import { drawerResultToast } from './drawerToast';
 import { PAGE_ACCESS } from './navAccess';
+import { SecretInput } from '../../components/secret/SecretInput';
+import { fmtWhen } from '../reports/reportFormat';
+import {
+  dismissShiftCloseOutcome,
+  outcomeFor,
+  showShiftCloseOutcome,
+  useShiftCloseOutcome,
+  type ShiftCloseOutcome,
+} from './shiftCloseOutcome';
+
+/**
+ * What a cashier who taps the shift pill is told (a touch screen has no mouse
+ * to hover for the old tooltip, so the tap used to do nothing at all).
+ */
+export const CASHIER_CANNOT_CLOSE =
+  'Only a manager or the owner can close the shift. Ask them to sign in and count the drawer.';
+/**
+ * The manager can close it right here, on the cashier's login: they type
+ * their PIN or password (the same approval box as a refund or a cash out),
+ * then count the drawer, and the shift is closed in their name (owner,
+ * 2026-09-27). Signing in on the till themselves still works too.
+ */
+export const CASHIER_CLOSE_HOW =
+  'A manager can close it here: tap “A manager closes the shift”, and they type their own PIN or password and count the drawer. The shift is closed in their name.';
+/** The button that hands the close to the manager standing at the till. */
+export const MANAGER_CLOSES_LABEL = 'A manager closes the shift';
+/**
+ * Under the result of a close by a manager's PIN: it is on the cashier's
+ * login, so it does not stay (shiftCloseOutcome.ts, PIN_CLOSE_RESULT_MS).
+ */
+export const PIN_CLOSE_RESULT_NOTE =
+  'This is the cashier’s login, so this box closes by itself after a minute. Write the result in the shift book now.';
 
 /**
  * TopBar shift widget. Shows current shift status.
  *  - No shift open → grey pill "Open shift" → opens OpenShiftDialog (anyone,
  *    cashiers included).
  *  - Shift open → green pill with elapsed time; only a manager or the owner
- *    can click it to close (count the drawer). A cashier sees it read-only.
+ *    can close it (count the drawer). A cashier's tap says so, and who to ask.
+ *  - The close result (Expected, Counted, Over / Short) stays up until Done,
+ *    whatever the shift status says by then (shiftCloseOutcome.ts).
  *  - "Shift history", for whoever sees Reports (the owner): Reports → Team &
  *    leakage, the last 7 days, at the shift history.
  */
 export function ShiftWidget() {
   const can = useSessionStore((s) => s.can);
+  const user = useSessionStore((s) => s.user);
   const canOpen = can('shift.open');
   const canClose = can('shift.close');
-  const [openDlg, setOpenDlg] = useState<'open' | 'close' | 'cash' | null>(null);
+  const [openDlg, setOpenDlg] = useState<'open' | 'close' | 'cash' | 'why' | null>(null);
+  // A manager's PIN typed on a cashier's login, and what the till said to it:
+  // the close box then closes in that manager's name.
+  const [managerClose, setManagerClose] = useState<{ pin: string; check: ShiftCloseCheck } | null>(null);
+  const closeDialogs = () => {
+    setOpenDlg(null);
+    setManagerClose(null);
+  };
+  const outcome = outcomeFor(
+    useShiftCloseOutcome((s) => s.outcome),
+    user,
+  );
 
   const shiftQ = useQuery({
     queryKey: ['shifts', 'current'],
@@ -34,6 +81,10 @@ export function ShiftWidget() {
     refetchInterval: 30_000,
   });
   const shift = shiftQ.data;
+
+  // In every branch below: closing refreshes the shift status, and the
+  // result must not go with the "shift open" pill (audit 2026-09-27).
+  const closeResult = outcome && <CloseShiftResultDialog outcome={outcome} onDone={dismissShiftCloseOutcome} />;
 
   if (shiftQ.isLoading) {
     return (
@@ -43,6 +94,7 @@ export function ShiftWidget() {
           …
         </span>
         <ShiftHistoryButton />
+        {closeResult}
       </>
     );
   }
@@ -66,6 +118,7 @@ export function ShiftWidget() {
         </button>
         <ShiftHistoryButton />
         {openDlg === 'open' && <OpenShiftDialog onClose={() => setOpenDlg(null)} />}
+        {closeResult}
       </>
     );
   }
@@ -76,13 +129,15 @@ export function ShiftWidget() {
     <>
       <button
         type="button"
-        disabled={!canClose}
-        onClick={() => canClose && setOpenDlg('close')}
+        // A cashier's tap explains itself: it used to be disabled, with the
+        // reason only in a hover title that a touch screen never shows.
+        onClick={() => setOpenDlg(canClose ? 'close' : 'why')}
+        aria-haspopup="dialog"
         title={canClose ? 'Close shift + count cash' : 'Only a manager or the owner can close the shift'}
         className={cn(
           'flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors',
           'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:hover:bg-emerald-900/60',
-          !canClose && 'cursor-default hover:bg-emerald-100 dark:hover:bg-emerald-950/50',
+          !canClose && 'hover:bg-emerald-100 dark:hover:bg-emerald-950/50',
         )}
       >
         <span className="flex h-2 w-2 rounded-full bg-emerald-500" />
@@ -102,10 +157,132 @@ export function ShiftWidget() {
       {openDlg === 'cash' && (
         <CashMovementDialog shiftId={shift.id} onClose={() => setOpenDlg(null)} />
       )}
-      {openDlg === 'close' && (
-        <CloseShiftDialog shiftId={shift.id} onClose={() => setOpenDlg(null)} />
+      {openDlg === 'close' && (canClose || managerClose) && (
+        <CloseShiftDialog
+          shiftId={shift.id}
+          onClose={closeDialogs}
+          {...(managerClose ? { approverPin: managerClose.pin, check: managerClose.check } : {})}
+        />
       )}
+      {openDlg === 'why' && (
+        <CloseShiftNotAllowedDialog
+          shiftId={shift.id}
+          onClose={closeDialogs}
+          onManagerApproved={(pin, check) => {
+            setManagerClose({ pin, check });
+            setOpenDlg('close');
+          }}
+        />
+      )}
+      {closeResult}
     </>
+  );
+}
+
+/**
+ * A cashier tapped the shift pill. First why they cannot close it and who
+ * can; then, if a manager is there, "A manager closes the shift": the
+ * manager types their PIN or password, the till checks it (lockout rules and
+ * all, in the main process), and only then does the close box open — so the
+ * cashier never sees anything of the count before the manager's PIN.
+ */
+export function CloseShiftNotAllowedDialog({
+  shiftId,
+  onClose,
+  onManagerApproved,
+  initialStep = 'why',
+}: {
+  shiftId: string;
+  onClose: () => void;
+  onManagerApproved: (pin: string, check: ShiftCloseCheck) => void;
+  initialStep?: 'why' | 'pin';
+}) {
+  const [step, setStep] = useState<'why' | 'pin'>(initialStep);
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const checkMut = useMutation({
+    mutationFn: (approverPin: string) => ipc.shifts.closeCheck({ shiftId, approverPin }),
+    onSuccess: (check, approverPin) => onManagerApproved(approverPin, check),
+    onError: (e) => {
+      setPin('');
+      setError(e instanceof Error ? e.message : 'Manager approval failed');
+    },
+  });
+  return (
+    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[420px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
+          {step === 'why' ? (
+            <>
+              <header className="mb-3 flex items-start gap-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                  <Lock className="h-4 w-4" />
+                </span>
+                <Dialog.Title className="pt-1.5 text-lg font-semibold">Closing the shift</Dialog.Title>
+              </header>
+              <Dialog.Description className="text-base font-medium text-stone-800 dark:text-stone-100">
+                {CASHIER_CANNOT_CLOSE}
+              </Dialog.Description>
+              <p className="mt-2 text-sm text-stone-600 dark:text-stone-300">{CASHIER_CLOSE_HOW}</p>
+              <div className="mt-5 flex gap-2">
+                <Button variant="ghost" size="md" className="flex-1" onClick={onClose}>
+                  OK
+                </Button>
+                <Button variant="primary" size="md" className="flex-1" onClick={() => setStep('pin')}>
+                  <ShieldCheck className="h-4 w-4" />
+                  {MANAGER_CLOSES_LABEL}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (pin.trim() && !checkMut.isPending) {
+                  setError(null);
+                  checkMut.mutate(pin);
+                }
+              }}
+            >
+              <header className="mb-3 flex items-start gap-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                  <ShieldCheck className="h-4 w-4" />
+                </span>
+                <Dialog.Title className="pt-1.5 text-lg font-semibold">{MANAGER_CLOSES_LABEL}</Dialog.Title>
+              </header>
+              <Dialog.Description className="text-sm text-stone-600 dark:text-stone-300">
+                Manager: type your PIN or password. Then you count the drawer, and the shift is closed in your name.
+              </Dialog.Description>
+              <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950">
+                <div className="mb-2 text-sm font-semibold text-amber-900 dark:text-amber-100">Manager approval required</div>
+                <SecretInput
+                  autoFocus
+                  value={pin}
+                  onChange={setPin}
+                  aria-label="Manager PIN or password"
+                  placeholder="Manager PIN or password"
+                  className="min-w-0 flex-1 rounded-lg border border-amber-300 bg-white px-3 py-2 font-mono tracking-widest dark:border-amber-700 dark:bg-stone-900"
+                />
+              </div>
+              {error && (
+                <p role="alert" className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
+                  {error}
+                </p>
+              )}
+              <div className="mt-5 flex gap-2">
+                <Button type="button" variant="ghost" size="md" className="flex-1" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button type="submit" variant="primary" size="md" className="flex-1" disabled={!pin.trim() || checkMut.isPending}>
+                  {checkMut.isPending ? 'Checking…' : 'Count the drawer'}
+                </Button>
+              </div>
+            </form>
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -144,7 +321,8 @@ function formatElapsed(openedAtIso: string): string {
 // Open shift dialog
 // ---------------------------------------------------------------------------
 
-function OpenShiftDialog({ onClose }: { onClose: () => void }) {
+/** Count the float and open a shift: the top bar's "Open shift", and the no-shift banner's. */
+export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
   const [opening, setOpening] = useState('0');
   const [notes, setNotes] = useState('');
   const { toast } = useToast();
@@ -229,7 +407,7 @@ function OpenShiftDialog({ onClose }: { onClose: () => void }) {
             </label>
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
-                Notes (optional)
+                Opening note (optional)
               </span>
               <input
                 value={notes}
@@ -264,25 +442,107 @@ function OpenShiftDialog({ onClose }: { onClose: () => void }) {
 // Close shift dialog
 // ---------------------------------------------------------------------------
 
-function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () => void }) {
+/**
+ * What the close box sends. The ids of the unpaid orders it showed go with
+ * it (none shown: an empty list), so the till refuses a close that would
+ * carry over an order that came in during the count on a reason the manager
+ * gave for the others — or with no reason asked at all (shift-repo).
+ */
+export function closeShiftRequest(p: {
+  shiftId: string;
+  counted: string;
+  notes: string;
+  unpaid: readonly UnpaidOrderAtClose[];
+  carryOverReason: string;
+  approverPin?: string | undefined;
+}): IpcRequest<'shifts:close'> {
+  return {
+    shiftId: p.shiftId,
+    countedCashCents: Math.round((parseFloat(p.counted) || 0) * 100),
+    notes: p.notes.trim() || null,
+    ...(p.unpaid.length > 0 ? { carryOverReason: p.carryOverReason.trim() } : {}),
+    carryOverOrderIds: p.unpaid.map((o) => o.orderId),
+    ...(p.approverPin !== undefined ? { approverPin: p.approverPin } : {}),
+  };
+}
+
+/** The till now lists an unpaid order the close box had not shown: the reason must be given again. */
+export function hasNewUnpaid(shown: readonly UnpaidOrderAtClose[], now: ShiftCloseCheck): boolean {
+  const seen = new Set(shown.map((o) => o.orderId));
+  return now.unpaidOrders.some((o) => !seen.has(o.orderId));
+}
+
+/**
+ * The close box: open the drawer, count it (blind), a closing note, and —
+ * when orders on this till are still unpaid — the list of them and the
+ * manager's reason for carrying them over to the next shift. `approverPin`
+ * and `check`: a manager's PIN typed on a cashier's login (already checked
+ * by CloseShiftNotAllowedDialog); every call below carries it again and the
+ * main process checks it again.
+ */
+export function CloseShiftDialog({
+  shiftId,
+  onClose,
+  approverPin,
+  check: givenCheck,
+}: {
+  shiftId: string;
+  onClose: () => void;
+  approverPin?: string;
+  check?: ShiftCloseCheck;
+}) {
   const [counted, setCounted] = useState('');
   const [notes, setNotes] = useState('');
-  // A blind count: what the drawer should hold is shown only once the count
-  // is in. Showing it first let a cashier type the expected figure and hide a
-  // shortage (audit 2026-09-25).
-  const [result, setResult] = useState<{ expected: number; counted: number; variance: number } | null>(null);
+  const [carryOverReason, setCarryOverReason] = useState('');
   const { toast } = useToast();
   const qc = useQueryClient();
+  const sessionId = useSessionStore((s) => s.user?.sessionId ?? null);
+  const viaPin = approverPin !== undefined;
 
+  // A blind count: what the drawer should hold is shown only once the count
+  // is in (CloseShiftResultDialog). Showing it first let a cashier type the
+  // expected figure and hide a shortage (audit 2026-09-25). On a cashier's
+  // login (a manager's PIN) the shift's totals are not fetched at all.
   const summaryQ = useQuery({
     queryKey: ['shifts', 'summary', shiftId],
     queryFn: () => ipc.shifts.summary(shiftId),
+    enabled: !viaPin,
   });
-  const summary = summaryQ.data;
+  const summary = viaPin ? undefined : summaryQ.data;
+  // Who closes, and the unpaid orders the close carries over.
+  const checkQ = useQuery({
+    queryKey: ['shifts', 'closeCheck', shiftId],
+    queryFn: () => ipc.shifts.closeCheck({ shiftId }),
+    enabled: !givenCheck,
+  });
+  // Asked again after a refused close (on a manager's PIN, with the PIN).
+  const [recheck, setRecheck] = useState<ShiftCloseCheck | null>(null);
+  const check = recheck ?? givenCheck ?? checkQ.data;
+  const unpaid = check?.unpaidOrders ?? [];
+  const needsReason = unpaid.length > 0;
+
+  // A refused close (most often: an order came in unpaid during the count):
+  // the list is asked for again, so the new order and the reason box show,
+  // and a reason given for the others is typed again for the new list.
+  async function refreshCheck(): Promise<void> {
+    const shown = unpaid;
+    try {
+      let next: ShiftCloseCheck | undefined;
+      if (approverPin !== undefined) {
+        next = await ipc.shifts.closeCheck({ shiftId, approverPin });
+        setRecheck(next);
+      } else {
+        next = (await checkQ.refetch()).data;
+      }
+      if (next && hasNewUnpaid(shown, next)) setCarryOverReason('');
+    } catch {
+      // The close's own error is already on screen.
+    }
+  }
 
   // Pulses the drawer so it can be counted; the count itself stays blind.
   const countMut = useMutation({
-    mutationFn: () => ipc.shifts.openDrawer({ kind: 'count' }),
+    mutationFn: () => ipc.shifts.openDrawer({ kind: 'count', ...(viaPin ? { approverPin } : {}) }),
     onSuccess: (r) => {
       const t = drawerResultToast(r);
       toast({ ...t, ...(t.variant === 'success' ? {} : { duration: 15_000 }) });
@@ -297,97 +557,74 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
 
   const closeMut = useMutation({
     mutationFn: () =>
-      ipc.shifts.close({
-        shiftId,
-        countedCashCents: Math.round((parseFloat(counted) || 0) * 100),
-        notes: notes.trim() || null,
-      }),
+      ipc.shifts.close(
+        closeShiftRequest({ shiftId, counted, notes, unpaid, carryOverReason, approverPin }),
+      ),
     onSuccess: (shift) => {
       toast({ title: 'Shift closed', description: 'Cash drawer reconciliation saved.' });
+      // The result first, then the refresh that turns the pill to "Open
+      // shift": the result is kept outside the pill (shiftCloseOutcome.ts),
+      // so it stays up until Done. On a manager's PIN (a cashier's login)
+      // the till sends no expected cash, and none is shown.
+      if (sessionId) {
+        showShiftCloseOutcome({
+          sessionId,
+          shiftId,
+          expectedCents: viaPin ? null : (shift.expectedCashCents ?? 0),
+          countedCents: shift.countedCashCents ?? 0,
+          varianceCents: shift.varianceCents ?? 0,
+          summary: summary ?? null,
+          closedByName: shift.closedByName ?? check?.closerName ?? null,
+          carriedUnpaidCount: shift.carriedUnpaidCount ?? 0,
+          viaManagerPin: viaPin,
+        });
+      }
       void qc.invalidateQueries({ queryKey: ['shifts'] });
-      setResult({
-        expected: shift.expectedCashCents ?? 0,
-        counted: shift.countedCashCents ?? 0,
-        variance: shift.varianceCents ?? 0,
-      });
+      onClose();
     },
-    onError: (e) =>
+    onError: (e) => {
       toast({
         title: 'Could not close shift',
         description: e instanceof Error ? e.message : 'Unknown error',
         variant: 'error',
-      }),
+      });
+      void refreshCheck();
+    },
   });
-
-  const variance = result?.variance ?? null;
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[460px] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
-          <header className="mb-4 flex items-start justify-between gap-3">
-            <div className="flex items-start gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200">
-                <Banknote className="h-4 w-4" />
-              </span>
-              <div>
-                <Dialog.Title className="text-lg font-semibold">Close shift</Dialog.Title>
-                <Dialog.Description className="mt-0.5 text-xs text-stone-500">
-                  Count cash in the drawer and enter the actual total below.
-                </Dialog.Description>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded p-1 text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800"
-              aria-label="Close"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </header>
+          <CloseShiftHeader onClose={onClose} />
+
+          {viaPin && check && (
+            <p className="mb-3 rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-700 dark:bg-stone-800 dark:text-stone-200">
+              Closing as <span className="font-semibold">{check.closerName}</span> (manager's PIN).
+            </p>
+          )}
 
           {summary && (
             <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
               <dl className="space-y-0.5 text-emerald-900 dark:text-emerald-100">
                 <Row k="Paid orders" v={String(summary.paidOrderCount)} />
                 <Row k="Refunds" v={String(summary.refundedOrderCount)} />
-                {result && (
-                  <>
-                    <Row k="Cash sales" v={formatCents(summary.cashSalesCents)} />
-                    <Row k="Cash refunds" v={`− ${formatCents(summary.cashRefundsCents)}`} />
-                    {summary.cashInCents > 0 && (
-                      <Row k="Cash put in" v={`+ ${formatCents(summary.cashInCents)}`} />
-                    )}
-                    {summary.cashOutCents > 0 && (
-                      <Row k="Cash taken out" v={`− ${formatCents(summary.cashOutCents)}`} />
-                    )}
-                    <div className="mt-1 flex justify-between border-t border-emerald-200 pt-1 font-bold dark:border-emerald-800">
-                      <dt>Expected cash</dt>
-                      <dd className="font-mono">{formatCents(result.expected)}</dd>
-                    </div>
-                    <Row k="Counted" v={formatCents(result.counted)} />
-                  </>
-                )}
               </dl>
             </div>
           )}
 
           <div className="space-y-3">
-            {!result && (
-              <Button
-                variant="secondary"
-                size="sm"
-                className="w-full"
-                disabled={countMut.isPending}
-                onClick={() => countMut.mutate()}
-              >
-                <Inbox className="h-4 w-4" />
-                {countMut.isPending ? 'Opening…' : 'Open drawer to count'}
-              </Button>
-            )}
-            {!result && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="w-full"
+              disabled={countMut.isPending}
+              onClick={() => countMut.mutate()}
+            >
+              <Inbox className="h-4 w-4" />
+              {countMut.isPending ? 'Opening…' : 'Open drawer to count'}
+            </Button>
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                 Counted cash in drawer (Rs)
@@ -401,38 +638,17 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
             </label>
+            {needsReason && (
+              <UnpaidCarryOver orders={unpaid} reason={carryOverReason} onReason={setCarryOverReason} />
             )}
-            {variance !== null && (
-              <div
-                className={cn(
-                  'rounded-lg p-3 text-sm',
-                  variance === 0
-                    ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100'
-                    : variance > 0
-                    ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100'
-                    : 'bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-100',
-                )}
-              >
-                <div className="flex items-baseline justify-between">
-                  <span className="font-semibold">Variance</span>
-                  <span className="font-mono text-xl">
-                    {variance > 0 ? '+' : ''}
-                    {formatCents(variance)}
-                  </span>
-                </div>
-                <div className="mt-0.5 text-xs">
-                  {variance === 0
-                    ? 'Matches expected'
-                    : variance > 0
-                    ? 'Over (more than expected)'
-                    : 'Short (less than expected)'}
-                </div>
-              </div>
+            {!check && checkQ.isError && (
+              <p role="alert" className="text-sm font-medium text-red-600 dark:text-red-400">
+                {checkQ.error instanceof Error ? checkQ.error.message : 'Could not check the orders on this till'}
+              </p>
             )}
-            {!result && (
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
-                Notes (optional)
+                Closing note (optional)
               </span>
               <input
                 value={notes}
@@ -441,16 +657,8 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
             </label>
-            )}
           </div>
 
-          {result ? (
-            <div className="mt-5 flex">
-              <Button variant="primary" size="md" className="flex-1" onClick={onClose}>
-                Done
-              </Button>
-            </div>
-          ) : (
           <div className="mt-5 flex gap-2">
             <Button variant="ghost" size="md" className="flex-1" onClick={onClose}>
               Cancel
@@ -460,12 +668,190 @@ function CloseShiftDialog({ shiftId, onClose }: { shiftId: string; onClose: () =
               size="md"
               className="flex-1"
               onClick={() => closeMut.mutate()}
-              disabled={closeMut.isPending || counted === ''}
+              disabled={closeMut.isPending || counted === '' || !check || (needsReason && !carryOverReason.trim())}
             >
               {closeMut.isPending ? 'Closing…' : 'Close shift'}
             </Button>
           </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/**
+ * Orders on this till still unpaid at the close (from any day): they stay
+ * unpaid and carry over to the next shift, with one reason for all of them,
+ * approved by the manager closing (owner, 2026-09-27).
+ */
+export function UnpaidCarryOver({
+  orders,
+  reason,
+  onReason,
+}: {
+  orders: readonly UnpaidOrderAtClose[];
+  reason: string;
+  onReason: (reason: string) => void;
+}) {
+  const n = orders.length;
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+      <p className="font-semibold">
+        {n === 1 ? '1 order on this till is not paid yet.' : `${n} orders on this till are not paid yet.`}
+      </p>
+      <p className="mt-0.5 text-xs">
+        {n === 1 ? 'It stays' : 'They stay'} unpaid and carr{n === 1 ? 'ies' : 'y'} over to the next shift; the money goes to whichever shift takes it.
+      </p>
+      <ul className="mt-2 max-h-32 space-y-0.5 overflow-y-auto text-xs">
+        {orders.map((o) => (
+          <li key={o.orderId} className="flex justify-between gap-2">
+            <span className="min-w-0 truncate">
+              <span className="font-mono font-semibold">#{o.orderNumber.split('-').pop()}</span> · {fmtWhen(o.createdAt)} · {o.takenBy}
+            </span>
+            <span className="shrink-0 font-mono">{formatCents(o.totalCents)}</span>
+          </li>
+        ))}
+      </ul>
+      <label className="mt-2 block">
+        <span className="mb-1 block text-xs font-semibold">Why are they carried over? (required)</span>
+        <input
+          value={reason}
+          onChange={(e) => onReason(e.target.value)}
+          maxLength={300}
+          placeholder="Rider still out, customer pays tomorrow…"
+          aria-label="Reason for carrying the unpaid orders over"
+          className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-amber-700 dark:bg-stone-900 dark:text-stone-100"
+        />
+      </label>
+    </div>
+  );
+}
+
+function CloseShiftHeader({ onClose, closeLabel = 'Close' }: { onClose: () => void; closeLabel?: string }) {
+  return (
+    <header className="mb-4 flex items-start justify-between gap-3">
+      <div className="flex items-start gap-2">
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200">
+          <Banknote className="h-4 w-4" />
+        </span>
+        <div>
+          <Dialog.Title className="text-lg font-semibold">Close shift</Dialog.Title>
+          <Dialog.Description className="mt-0.5 text-xs text-stone-500">
+            Count cash in the drawer and enter the actual total below.
+          </Dialog.Description>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="rounded p-1 text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800"
+        aria-label={closeLabel}
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </header>
+  );
+}
+
+/**
+ * The close box once the count is in: the shift's cash, Expected, Counted and
+ * the Variance (Matches expected / Over / Short), until Done — the same box
+ * the close always meant to show, now kept up after the shift status turns
+ * to "no shift open". Shown only to the login that closed the shift.
+ *
+ * Done (or the X, labelled Done) is the only way out: a tap on the dimmed
+ * area or Escape used to throw the numbers away before they were written in
+ * the shift book, and a manager has no other screen to find them again.
+ * On a manager's PIN (a cashier's login): no expected cash, and it goes by
+ * itself after a minute (shiftCloseOutcome.ts).
+ */
+export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftCloseOutcome; onDone: () => void }) {
+  const { summary } = outcome;
+  const variance = outcome.varianceCents;
+  const keepOpen = (e: Event) => e.preventDefault();
+  return (
+    <Dialog.Root open>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
+        <Dialog.Content
+          onPointerDownOutside={keepOpen}
+          onInteractOutside={keepOpen}
+          onEscapeKeyDown={keepOpen}
+          className="fixed left-1/2 top-1/2 z-50 w-[460px] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900"
+        >
+          <CloseShiftHeader onClose={onDone} closeLabel="Done" />
+
+          <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
+            <dl className="space-y-0.5 text-emerald-900 dark:text-emerald-100">
+              {summary && (
+                <>
+                  <Row k="Paid orders" v={String(summary.paidOrderCount)} />
+                  <Row k="Refunds" v={String(summary.refundedOrderCount)} />
+                  <Row k="Cash sales" v={formatCents(summary.cashSalesCents)} />
+                  <Row k="Cash refunds" v={`− ${formatCents(summary.cashRefundsCents)}`} />
+                  {summary.cashInCents > 0 && <Row k="Cash put in" v={`+ ${formatCents(summary.cashInCents)}`} />}
+                  {summary.cashOutCents > 0 && <Row k="Cash taken out" v={`− ${formatCents(summary.cashOutCents)}`} />}
+                </>
+              )}
+              {outcome.expectedCents !== null && (
+                <div className="mt-1 flex justify-between border-t border-emerald-200 pt-1 font-bold dark:border-emerald-800">
+                  <dt>Expected cash</dt>
+                  <dd className="font-mono">{formatCents(outcome.expectedCents)}</dd>
+                </div>
+              )}
+              <Row k="Counted" v={formatCents(outcome.countedCents)} />
+            </dl>
+          </div>
+
+          <div
+            className={cn(
+              'rounded-lg p-3 text-sm',
+              variance === 0
+                ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100'
+                : variance > 0
+                ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100'
+                : 'bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-100',
+            )}
+          >
+            <div className="flex items-baseline justify-between">
+              <span className="font-semibold">Variance</span>
+              <span className="font-mono text-xl">
+                {variance > 0 ? '+' : ''}
+                {formatCents(variance)}
+              </span>
+            </div>
+            <div className="mt-0.5 text-xs">
+              {variance === 0
+                ? 'Matches expected'
+                : variance > 0
+                ? 'Over (more than expected)'
+                : 'Short (less than expected)'}
+            </div>
+          </div>
+
+          {(outcome.closedByName || outcome.carriedUnpaidCount > 0) && (
+            <p className="mt-3 text-xs text-stone-600 dark:text-stone-300">
+              {outcome.closedByName && <>Closed by {outcome.closedByName}.</>}
+              {outcome.carriedUnpaidCount > 0 && (
+                <>
+                  {' '}
+                  {outcome.carriedUnpaidCount === 1
+                    ? '1 unpaid order was carried over to the next shift.'
+                    : `${outcome.carriedUnpaidCount} unpaid orders were carried over to the next shift.`}
+                </>
+              )}
+            </p>
           )}
+
+          {outcome.viaManagerPin && (
+            <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">{PIN_CLOSE_RESULT_NOTE}</p>
+          )}
+
+          <div className="mt-5 flex">
+            <Button variant="primary" size="md" className="flex-1" onClick={onDone}>
+              Done
+            </Button>
+          </div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

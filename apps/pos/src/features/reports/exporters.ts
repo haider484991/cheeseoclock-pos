@@ -40,6 +40,7 @@ import {
   hourSeries,
   methodLabel,
   percentOf,
+  shiftDetailLines,
   stockCellText,
   unpaidFoodText,
   websiteVsTill,
@@ -266,7 +267,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     }
 
     sheet.heading('Shifts (cash drawer)');
-    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale']);
+    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason']);
     for (const s of r.shifts) {
       sheet.push([
         fmtWhen(s.openedAt),
@@ -281,6 +282,10 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
         s.varianceCents === null ? null : rs(s.varianceCents),
         s.cashMovementCount,
         s.noSaleOpens,
+        s.openingNote?.trim() || null,
+        s.closingNote?.trim() || null,
+        s.carriedUnpaidCount ?? 0,
+        (s.carriedUnpaidCount ?? 0) > 0 ? s.carryOverReason?.trim() || null : null,
       ]);
     }
 
@@ -729,7 +734,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
     if (r.shifts.length > 0) {
       parts.push(
         `<section><h2>Cash drawer (shifts)</h2>${table(
-          ['Opened', 'Closed', 'By', 'Float', 'Expected', 'Counted', 'Short / over', 'Cash in/out', 'No-sale opens'],
+          ['Opened', 'Closed', 'By', 'Float', 'Expected', 'Counted', 'Short / over', 'Cash in/out', 'No-sale opens', 'Notes'],
           r.shifts.map((s) => [
             esc(fmtWhen(s.openedAt)),
             s.closedAt ? esc(fmtWhen(s.closedAt)) : 'Still open',
@@ -744,6 +749,8 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
                 : `${s.varianceCents > 0 ? 'Over' : 'Short'} ${money(Math.abs(s.varianceCents))}`,
             String(s.cashMovementCount),
             String(s.noSaleOpens),
+            // Opening and closing notes, then any unpaid orders carried over — each on its own line.
+            shiftDetailLines(s).map(esc).join('<br>') || '—',
           ]),
           [3, 4, 5, 6, 7, 8],
         )}</section>`,

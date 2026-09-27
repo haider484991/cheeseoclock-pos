@@ -14,6 +14,7 @@ import type {
   ReportPurchaseIngredientLine,
   ReportPurchaseSupplierLine,
   ReportPurchases,
+  ReportShiftLine,
   ReportWasteReason,
 } from '@cheeseoclock/shared-types';
 import { daysSoFar, fmtDateInput, fmtDay, fmtMonth, tradingDayNumber, weekdayIndex, WEEKDAYS, type ReportPeriod } from './dateRange';
@@ -242,6 +243,42 @@ export function fmtAgo(iso: string, now: Date): string {
   const days = Math.floor(min / (24 * 60));
   const h = Math.floor((min % (24 * 60)) / 60);
   return `${days} ${days === 1 ? 'day' : 'days'}${h > 0 ? ` ${h} h` : ''} ago`;
+}
+
+/**
+ * A shift's notes as the shift history, its print and its CSV say them:
+ * "Opening note: …" (typed when it was opened), then "Closing note: …"
+ * (typed when it was closed) — each only when something was typed.
+ */
+export function shiftNoteLines(s: Pick<ReportShiftLine, 'openingNote' | 'closingNote'>): string[] {
+  const lines: string[] = [];
+  const opening = s.openingNote?.trim();
+  const closing = s.closingNote?.trim();
+  if (opening) lines.push(`Opening note: ${opening}`);
+  if (closing) lines.push(`Closing note: ${closing}`);
+  return lines;
+}
+
+/**
+ * "3 unpaid orders carried over — rider still out — approved by Sara": the
+ * orders a close left unpaid for the next shift, why, and the manager who
+ * closed it (who approved it). Null when none were carried.
+ */
+export function shiftCarryOverText(
+  s: Pick<ReportShiftLine, 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy'>,
+): string | null {
+  const n = s.carriedUnpaidCount ?? 0;
+  if (!(n > 0)) return null;
+  const reason = s.carryOverReason?.trim() || 'no reason given';
+  return `${n} unpaid ${n === 1 ? 'order' : 'orders'} carried over — ${reason} — approved by ${s.closedBy ?? 'unknown'}`;
+}
+
+/** Everything written on a shift, one line each: its notes, then any unpaid orders carried over (print and CSV). */
+export function shiftDetailLines(
+  s: Pick<ReportShiftLine, 'openingNote' | 'closingNote' | 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy'>,
+): string[] {
+  const carry = shiftCarryOverText(s);
+  return carry ? [...shiftNoteLines(s), carry] : shiftNoteLines(s);
 }
 
 /** A quantity in an ingredient's unit, with thousands separators: "12,500 g". */

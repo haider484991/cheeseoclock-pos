@@ -812,6 +812,49 @@ export function snapshotCustomerOntoOrder(
   tx();
 }
 
+/** The longest order note kept (the website sends at most 500 with its tag). */
+export const ORDER_NOTE_MAX = 500;
+
+/**
+ * The counter's "Order notes" box on an order with no customer typed in (a
+ * takeaway: "collect by 7pm"). With a customer the note goes on with them
+ * (snapshotCustomerOntoOrder); without one it used to be dropped before it
+ * was ever saved. Only while the order is still being rung up; blank clears
+ * it. Row, sync entry and hash-chained audit row in one transaction.
+ */
+export function setOrderDeliveryNotes(
+  db: AppDatabase,
+  orderId: string,
+  notes: string | null,
+  actor: Actor,
+): void {
+  const value = notes?.trim().slice(0, ORDER_NOTE_MAX) || null;
+  const tx = db.transaction(() => {
+    const before = orderCustomerImage(db, orderId);
+    if (!before) throw new Error('Order not found');
+    if (before.status !== 'open') throw new Error('This order has already been sent — its note can no longer be changed');
+    if ((before.deliveryNotes ?? null) === value) return;
+    db.prepare(
+      `UPDATE orders SET delivery_notes = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).run(value, nowIso(), orderId);
+    enqueueSync(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      op: 'upsert',
+      payload: findOrder(db, orderId),
+    });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      action: 'set_order_note',
+      actorUserId: actor.userId,
+      before,
+      after: orderCustomerImage(db, orderId),
+    });
+  });
+  tx();
+}
+
 /** Clear the customer snapshot (and delivery notes) from an order. */
 export function detachCustomerFromOrder(db: AppDatabase, orderId: string, actor: Actor): void {
   const tx = db.transaction(() => {

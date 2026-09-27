@@ -59,6 +59,7 @@ import type {
   CashMovementType,
   DrawerOpenResult,
   Shift,
+  ShiftCloseCheck,
   ShiftSummary,
 } from './shift.js';
 import type {
@@ -132,6 +133,7 @@ import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
 import type { CostedRecipeCalc, RecipeCalc, RecipeCalcRequest, TypicalPicksView } from './recipe-calc.js';
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
+import type { WebOrdersShiftPause } from './web-bridge.js';
 import type {
   ReportVariance,
   StockCountDetail,
@@ -468,6 +470,16 @@ export interface IpcContract {
     request: { orderId: string };
     response: ApiResult<OrderSnapshot>;
   };
+  /**
+   * The counter's "Order notes" box on an order still being rung up with no
+   * customer typed in (with one, the note goes with orders:attachCustomer /
+   * customers:attachToOrder). Blank clears it. Printed on the kitchen ticket
+   * and the bill.
+   */
+  'orders:setNote': {
+    request: { orderId: string; note: string | null };
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:list': {
     request: { status?: Order['status']; sinceIso?: string; limit?: number } | undefined;
     response: ApiResult<Order[]>;
@@ -673,9 +685,35 @@ export interface IpcContract {
     request: { openingCashCents: number; notes?: string | null };
     response: ApiResult<Shift>;
   };
+  /**
+   * Close the shift with the drawer count. A manager or the owner signed in
+   * closes it; on a cashier's login a manager's PIN or password
+   * (`approverPin`) does, and the shift is closed by that manager. Unpaid
+   * orders on this till are carried over to the next shift only with
+   * `carryOverReason` (owner, 2026-09-27); `notes` is the closing note.
+   * `carryOverOrderIds`: the unpaid orders the close box showed — a close
+   * that would carry over any other (one that came in during the count) is
+   * refused. On a manager's PIN the reply leaves out `expectedCashCents`:
+   * the cashier's screen never shows the expected cash.
+   */
   'shifts:close': {
-    request: { shiftId: string; countedCashCents: number; notes?: string | null };
+    request: {
+      shiftId: string;
+      countedCashCents: number;
+      notes?: string | null;
+      approverPin?: string;
+      carryOverReason?: string | null;
+      carryOverOrderIds?: string[];
+    };
     response: ApiResult<Shift>;
+  };
+  /**
+   * Before the count: who closes (a cashier's login needs `approverPin`) and
+   * the unpaid orders the close will carry over. Never the expected cash.
+   */
+  'shifts:closeCheck': {
+    request: { shiftId: string; approverPin?: string };
+    response: ApiResult<ShiftCloseCheck>;
   };
   'shifts:list': {
     request: { sinceIso?: string; limit?: number; deviceId?: string } | undefined;
@@ -701,7 +739,8 @@ export interface IpcContract {
   };
   /**
    * Open the cash drawer with no sale ('no_sale'), or to count it while
-   * closing the shift ('count' — managers and the owner, open shift only). A
+   * closing the shift ('count' — managers and the owner, or a cashier with a
+   * manager's PIN while that manager closes the shift; open shift only). A
    * cashier's no-sale open needs a manager's PIN or password. Saved and
    * audited before the drawer is pulsed.
    */
@@ -747,6 +786,12 @@ export interface IpcContract {
       lastCloudBackupAt: string | null;
       lastCloudBackupError: string | null;
       lastImportError: string | null;
+      /**
+       * Website orders paused by the till itself because no shift is open on
+       * it (owner, 2026-09-27); null when not paused. The owner's `enabled`
+       * switch is untouched by it.
+       */
+      shiftPause: WebOrdersShiftPause | null;
     }>;
   };
   /** Upload a fresh gzipped database backup to the cloud right now. */

@@ -10,6 +10,7 @@ import type {
   DrawerPayout,
   Shift,
   ShiftSummary,
+  UnpaidOrderAtClose,
   UUID,
 } from '@cheeseoclock/shared-types';
 
@@ -35,6 +36,9 @@ interface ShiftRow {
   expected_cash_cents: number | null;
   variance_cents: number | null;
   notes: string | null;
+  close_notes: string | null;
+  carried_unpaid_count: number | null;
+  carry_over_reason: string | null;
 }
 
 const SHIFT_SELECT = `
@@ -44,7 +48,8 @@ const SHIFT_SELECT = `
   uc.full_name AS closed_by_name,
   s.opened_at, s.closed_at,
   s.opening_cash_cents, s.counted_cash_cents,
-  s.expected_cash_cents, s.variance_cents, s.notes
+  s.expected_cash_cents, s.variance_cents, s.notes, s.close_notes,
+  s.carried_unpaid_count, s.carry_over_reason
 `;
 
 function rowToShift(r: ShiftRow): Shift {
@@ -62,6 +67,9 @@ function rowToShift(r: ShiftRow): Shift {
     expectedCashCents: r.expected_cash_cents as Shift['expectedCashCents'],
     varianceCents: r.variance_cents as Shift['varianceCents'],
     notes: r.notes,
+    closeNotes: r.close_notes ?? null,
+    carriedUnpaidCount: Number(r.carried_unpaid_count ?? 0),
+    carryOverReason: r.carry_over_reason ?? null,
   };
 }
 
@@ -160,6 +168,9 @@ export function openShift(
     expectedCashCents: null,
     varianceCents: null,
     notes: input.notes?.trim() || null,
+    closeNotes: null,
+    carriedUnpaidCount: 0,
+    carryOverReason: null,
   };
   writeWithSync({
     db,
@@ -195,13 +206,86 @@ export function openShift(
 export interface CloseShiftInput {
   shiftId: string;
   countedCashCents: number;
+  /**
+   * The closing note ("Rs 100 short, change given wrong"). Saved on its own
+   * (close_notes, migration 0039): the note typed at opening stays as it was.
+   */
   notes?: string | null;
+  /**
+   * Why the unpaid orders still on this till are carried over to the next
+   * shift (one reason for all of them). Required when there are any: without
+   * it the close is refused, as before.
+   */
+  carryOverReason?: string | null;
+  /**
+   * The unpaid orders the manager was shown in the close box (their ids),
+   * which the reason is for. When given, a close that would carry over an
+   * order NOT on that list is refused: a website order imported, or an order
+   * sent, while they counted must not be carried over — and put on record as
+   * approved by them — for a reason they gave for other orders. One paid off
+   * meanwhile simply is not carried. Omitted: no such check (direct callers).
+   */
+  carryOverOrderIds?: readonly string[] | null;
+}
+
+/**
+ * How the close was approved, for its audit row: by the manager signed in on
+ * the till (null), or by a manager's PIN or password typed on a cashier's
+ * login (owner, 2026-09-27) — then who was signed in.
+ */
+export interface CloseApproval {
+  via: 'manager_pin';
+  /** The cashier signed in on the till when the manager typed their PIN. */
+  tillSignedInUserId: string;
+}
+
+/** The statuses of an order that has gone to the kitchen and is still waiting to be paid. */
+const UNPAID_STATUSES = `('sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'served')`;
+
+/**
+ * Orders on this till still waiting to be paid, from any day, oldest first:
+ * the ones a close carries over to the next shift (with a manager's reason).
+ * Money that comes in for them later goes to whichever shift takes it
+ * (payments.shift_id), as it always did.
+ */
+export function listUnpaidForClose(db: AppDatabase, deviceId: string): UnpaidOrderAtClose[] {
+  const rows = db
+    .prepare(
+      `SELECT o.id, o.order_number, o.created_at, o.total_cents, o.source, u.full_name AS taken_by
+         FROM orders o
+         LEFT JOIN users u ON u.id = o.cashier_id
+        WHERE o.device_id = ? AND o.deleted_at IS NULL AND o.paid_at IS NULL
+          AND o.status IN ${UNPAID_STATUSES}
+        ORDER BY o.created_at, o.id`,
+    )
+    .all(deviceId) as Array<{
+    id: string;
+    order_number: string;
+    created_at: string;
+    total_cents: number;
+    source: string;
+    taken_by: string | null;
+  }>;
+  return rows.map((r) => ({
+    orderId: r.id as UUID,
+    orderNumber: r.order_number,
+    createdAt: r.created_at,
+    totalCents: Number(r.total_cents) as UnpaidOrderAtClose['totalCents'],
+    takenBy: r.source === 'web' ? 'Website' : (r.taken_by ?? 'Unknown'),
+  }));
+}
+
+/** "#0042, #0043 and 3 more" */
+function orderList(orders: readonly UnpaidOrderAtClose[]): string {
+  const shown = orders.slice(0, 5).map((o) => `#${o.orderNumber.split('-').pop()}`).join(', ');
+  return orders.length > 5 ? `${shown} and ${orders.length - 5} more` : shown;
 }
 
 export function closeShift(
   db: AppDatabase,
   input: CloseShiftInput,
   actor: Actor & { userId: string },
+  approval: CloseApproval | null = null,
 ): Shift {
   let result!: Shift;
   const tx = db.transaction(() => {
@@ -210,27 +294,32 @@ export function closeShift(
     if (before.closedAt) throw new Error('Shift is already closed');
     if (input.countedCashCents < 0) throw new Error('Counted cash cannot be negative');
 
-    // Money still to come in (a rider still out, an order not yet paid) must be
-    // taken while this shift is open — once it closes, its expected cash is
-    // frozen and a payment has no shift to go to (audit 2026-09-25).
-    const unpaid = db
-      .prepare(
-        `SELECT order_number FROM orders
-          WHERE device_id = ? AND deleted_at IS NULL AND paid_at IS NULL
-            AND status IN ('sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'served')
-          ORDER BY created_at LIMIT 6`,
-      )
-      .all(before.deviceId) as Array<{ order_number: string }>;
-    if (unpaid.length > 0) {
-      const list = unpaid
-        .slice(0, 5)
-        .map((o) => `#${o.order_number.split('-').pop()}`)
-        .join(', ');
+    // Money still to come in (a rider still out, an order not yet paid). It
+    // used to block the close outright (audit 2026-09-25), and one forgotten
+    // old order blocked every close. Now the manager closing says why they
+    // are carried over, once for all of them, and the shift closes; the
+    // orders stay unpaid and their money goes to whichever shift takes it
+    // (owner, 2026-09-27). Without a reason the close is refused, as before.
+    const unpaid = listUnpaidForClose(db, before.deviceId);
+    const carryOverReason = input.carryOverReason?.trim() ?? '';
+    if (input.carryOverOrderIds) {
+      const seen = new Set(input.carryOverOrderIds);
+      const unseen = unpaid.filter((o) => !seen.has(o.orderId));
+      if (unseen.length > 0) {
+        throw new Error(
+          `${unseen.length === 1 ? 'An order' : `${unseen.length} orders`} came in unpaid while you were counting ` +
+            `(${orderList(unseen)}). Check the list of unpaid orders, then close the shift again.`,
+        );
+      }
+    }
+    if (unpaid.length > 0 && !carryOverReason) {
       throw new Error(
-        `Collect payment for ${list}${unpaid.length > 5 ? ' and more' : ''} before closing the shift ` +
-          `(Live Orders or Order History) — or cancel them with a manager's PIN or password.`,
+        `${unpaid.length === 1 ? '1 order on this till is' : `${unpaid.length} orders on this till are`} not paid yet ` +
+          `(${orderList(unpaid)}). Give a reason to carry ${unpaid.length === 1 ? 'it' : 'them'} over to the next shift, ` +
+          `or collect the money first (Live Orders or Order History).`,
       );
     }
+    if (carryOverReason.length > 300) throw new Error('Keep the reason under 300 characters');
 
     // Compute expected cash from the payments ledger for this shift window.
     // Cash sales (positive cash payments) minus cash refunds (negative cash
@@ -254,11 +343,13 @@ export function closeShift(
     const variance = counted - expected;
     const now = nowIso();
 
+    // The closing note goes in its own column: it used to be written over
+    // the note typed when the shift was opened (audit 2026-09-27).
     db.prepare(
       `UPDATE shifts
           SET closed_by_user_id = ?, closed_at = ?, counted_cash_cents = ?,
               expected_cash_cents = ?, variance_cents = ?,
-              notes = COALESCE(NULLIF(?, ''), notes),
+              close_notes = ?, carried_unpaid_count = ?, carry_over_reason = ?,
               updated_at = ?, version = version + 1
         WHERE id = ? AND closed_at IS NULL`,
     ).run(
@@ -267,7 +358,9 @@ export function closeShift(
       counted,
       expected,
       variance,
-      input.notes?.trim() ?? '',
+      input.notes?.trim() || null,
+      unpaid.length,
+      unpaid.length > 0 ? carryOverReason : null,
       now,
       input.shiftId,
     );
@@ -284,14 +377,35 @@ export function closeShift(
       op: 'upsert',
       payload: after,
     });
+    // The actor is the manager who closed it. On a cashier's login the
+    // audit row also says so: approved by the manager's PIN, on whose till.
     writeAudit(db, {
       entityType: 'shifts',
       entityId: input.shiftId,
       action: 'shift_close',
       actorUserId: actor.userId,
       before,
-      after,
+      after: approval ? { ...after, approval } : after,
     });
+    // One row per carried order: which order, why, who approved, which shift.
+    for (const o of unpaid) {
+      writeAudit(db, {
+        entityType: 'orders',
+        entityId: o.orderId,
+        action: 'carried_over_unpaid',
+        actorUserId: actor.userId,
+        before: null,
+        after: {
+          orderId: o.orderId,
+          orderNumber: o.orderNumber,
+          totalCents: o.totalCents,
+          reason: carryOverReason,
+          approvedByUserId: actor.userId,
+          shiftId: input.shiftId,
+          ...(approval ? { approval } : {}),
+        },
+      });
+    }
 
     result = after;
   });
@@ -300,6 +414,8 @@ export function closeShift(
     id: input.shiftId,
     counted: result.countedCashCents,
     variance: result.varianceCents,
+    carriedUnpaid: result.carriedUnpaidCount,
+    viaManagerPin: approval !== null,
   });
   return result;
 }

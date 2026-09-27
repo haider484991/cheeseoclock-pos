@@ -446,6 +446,8 @@ const COUNTER_SCOPED = [
   'orders:stockStatus',
   'orders:attachCustomer',
   'orders:detachCustomer',
+  // The counter's "Order notes" with no customer: only on the bill still being rung up.
+  'orders:setNote',
   'customers:findByPhone',
   'customers:attachToOrder',
   'printer:reprint',
@@ -527,7 +529,10 @@ function lockedOutBy(channel: string, o: Outcome): string | null {
  * settings were too, until 2026-09-27: see PRINTER_SETTINGS.)
  */
 const ALREADY_MANAGERS = (): Record<string, unknown> => ({
+  // A cashier's login closes only with a manager's PIN or password typed on
+  // it (shift-close-approval.db.test.ts); with none, it is refused.
   'shifts:close': { shiftId: s.openNow, countedCashCents: 0 },
+  'shifts:closeCheck': { shiftId: s.openNow },
   'inventory:createIngredient': {},
   'inventory:updateIngredient': {},
   'inventory:deleteIngredient': { id: 'x' },
@@ -815,6 +820,9 @@ describe.skipIf(!Sqlite)('the counter still takes orders', () => {
         ['orders:attachCustomer', { orderId: s.paidOld, customerId: s.ayesha, addressId: null }],
         ['orders:detachCustomer', { orderId: s.paidOld }],
         ['orders:attachCustomer', { orderId: s.kitchenNow, customerId: s.ayesha, addressId: null }],
+        // Nor its note: the kitchen already has the ticket.
+        ['orders:setNote', { orderId: s.kitchenNow, note: 'Too late' }],
+        ['orders:setNote', { orderId: s.paidOld, note: 'Too late' }],
       ] as const) {
         const o = await call(channel, payload);
         expect({ channel, who: who.role, o }).toMatchObject({ channel, who: who.role, o: { ok: false, code: 'precondition_failed' } });
@@ -826,6 +834,10 @@ describe.skipIf(!Sqlite)('the counter still takes orders', () => {
     h.session = CASHIER;
     expect((await call('orders:attachCustomer', { orderId: s.draft, customerId: s.ayesha, addressId: s.ayeshaHome })).ok).toBe(true);
     expect((await call('orders:detachCustomer', { orderId: s.draft })).ok).toBe(true);
+    // Its note, with no customer typed in: yes, and on the order for the kitchen ticket.
+    const noted = await call('orders:setNote', { orderId: s.draft, note: 'Collect by 7pm' });
+    expect(noted.ok).toBe(true);
+    expect(db.prepare(`SELECT delivery_notes FROM orders WHERE id = ?`).get(s.draft)).toMatchObject({ delivery_notes: 'Collect by 7pm' });
   });
 
   it("Live Orders shows the board; Recent Orders shows this till's orders of the shift open now", async () => {

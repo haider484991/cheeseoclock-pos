@@ -58,6 +58,7 @@ import { getOrderStockStatus } from '../../db/repositories/order-stock-repo.js';
 import {
   snapshotCustomerOntoOrder,
   detachCustomerFromOrder,
+  setOrderDeliveryNotes,
 } from '../../db/repositories/customer-repo.js';
 
 function requireOrderCreate(): AuthenticatedUser {
@@ -171,6 +172,25 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       throw new IpcGuardError({
         code: 'precondition_failed',
         message: e instanceof Error ? e.message : 'Could not detach customer',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  // The counter's "Order notes" box with no customer typed in: saved before
+  // the order is sent, so the kitchen ticket and the bill print it.
+  defineHandler('orders:setNote', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    assertOrderStillBeingTaken(ctx.db, payload.orderId);
+    const note = typeof payload.note === 'string' ? payload.note : null;
+    try {
+      setOrderDeliveryNotes(ctx.db, payload.orderId, note, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not save the order note',
       });
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);

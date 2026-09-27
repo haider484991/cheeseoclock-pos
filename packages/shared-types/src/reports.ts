@@ -124,6 +124,20 @@ export interface ReportShiftLine {
   cashMovementCount: number;
   /** Times the drawer was opened by hand with no sale (not the one count at close). */
   noSaleOpens: number;
+  /**
+   * The note typed when the shift was opened ("Morning shift, Ali on
+   * register"), or null. A shift closed before migration 0039 keeps its one
+   * note here.
+   */
+  openingNote: string | null;
+  /** The note typed when the shift was closed ("Rs 100 short, change given wrong"), or null. */
+  closingNote: string | null;
+  /**
+   * Unpaid orders carried over to the next shift when this one closed, with
+   * the manager's reason (0 / null when none). Approved by `closedBy`.
+   */
+  carriedUnpaidCount: number;
+  carryOverReason: string | null;
 }
 
 /** One time the cash drawer was opened by hand, for the owner to check. */

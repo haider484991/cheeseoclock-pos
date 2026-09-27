@@ -107,6 +107,24 @@ export const LEGACY_PICKUP_DISCOUNT_PERCENT = 10;
  */
 export type TillFeature = 'pickup';
 
+/**
+ * Why a till has stopped the website taking orders by itself. It is kept
+ * apart from the owner's "Accept online orders" switch, which it never
+ * changes. 'shift_closed': the last open shift on the till was closed (owner,
+ * 2026-09-27). Opening a shift lifts it; a switch the owner turned off by hand
+ * stays off.
+ */
+export type WebOrdersPauseReason = 'shift_closed';
+
+/** The till's own pause of website orders, as Settings → Online orders shows it. */
+export interface WebOrdersShiftPause {
+  reason: WebOrdersPauseReason;
+  /** When the pause began (ISO 8601 UTC). */
+  since: string;
+  /** One line for the owner: why orders stopped, and what starts them again. */
+  message: string;
+}
+
 /** Body for PUT /api/bridge/status (the till's heartbeat). */
 export interface BridgeHeartbeatBody {
   acceptingOrders: boolean;
@@ -114,6 +132,12 @@ export interface BridgeHeartbeatBody {
   features?: TillFeature[];
   /** The pickup discount this till applies (absent from v0.7.0: 10). */
   pickupDiscountPercent?: number;
+  /**
+   * Sent with acceptingOrders false when the till paused itself rather than
+   * the owner switching ordering off. Every site so far drops keys it does
+   * not know (its schema is not strict), so older sites are unaffected.
+   */
+  reason?: WebOrdersPauseReason;
 }
 
 export type WebOrderStatus =
