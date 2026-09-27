@@ -140,7 +140,7 @@ export function SettingsPage() {
       <nav
         role="tablist"
         aria-label="Settings sections"
-        className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-stone-200 dark:border-stone-700"
+        className="flex flex-wrap gap-x-1 border-b border-stone-200 dark:border-stone-700"
       >
         {tabs.map((t) => {
           const Icon = t.icon;
