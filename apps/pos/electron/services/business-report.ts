@@ -630,6 +630,15 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
   }));
 }
 
+/**
+ * Shift history: every shift that was open at some time in the period —
+ * opened before the period ends, and still open or closed at or after it
+ * starts — newest first, capped. So Today shows the shift opened last night
+ * and still running, or closed this morning (the owner's "I can't see the
+ * shift history", 2026-09-27: it used to list only shifts OPENED in the
+ * period). Each shift's drawer figures are the ones saved when it was
+ * closed; a shift still open has none yet.
+ */
 function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'] {
   return db
     .prepare(
@@ -650,11 +659,11 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
          FROM shifts s
          LEFT JOIN users uo ON uo.id = s.opened_by_user_id
          LEFT JOIN users uc ON uc.id = s.closed_by_user_id
-        WHERE s.opened_at >= ? AND s.opened_at < ? AND s.deleted_at IS NULL
-        ORDER BY s.opened_at DESC
+        WHERE s.opened_at < ? AND (s.closed_at IS NULL OR s.closed_at >= ?) AND s.deleted_at IS NULL
+        ORDER BY s.opened_at DESC, s.id DESC
         LIMIT ${REPORT_LIST_CAP}`,
     )
-    .all(...args(range)) as BusinessReport['shifts'];
+    .all(range.untilIso, range.sinceIso) as BusinessReport['shifts'];
 }
 
 function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLine[] {

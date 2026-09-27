@@ -521,7 +521,7 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
     expect(r.staff.find((s) => s.name === 'Ali')?.noSaleOpens).toBe(total);
   });
 
-  it('shows the shifts of the period with their stored drawer figures', () => {
+  it('shows every shift open in the period (shift history) with their stored drawer figures, newest first', () => {
     expect(report.shifts).toEqual([
       {
         id: 's1',
@@ -538,6 +538,23 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         cashMovementCount: 1,
         // Two no-sale opens and a test; the count at close is not one.
         noSaleOpens: 3,
+      },
+      // Opened the day before and never closed: still open through this day
+      // too (it used to be left out, as not OPENED in the period).
+      {
+        id: 's0',
+        openedAt: '2026-09-24T07:00:00.000Z',
+        closedAt: null,
+        openedBy: 'Ali',
+        closedBy: null,
+        openingCashCents: 0,
+        expectedCashCents: null,
+        countedCashCents: null,
+        varianceCents: null,
+        cashInCents: 0,
+        cashOutCents: 0,
+        cashMovementCount: 0,
+        noSaleOpens: 0,
       },
     ]);
   });

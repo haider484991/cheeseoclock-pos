@@ -10,14 +10,21 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
 import { Percent, Receipt, UsersRound } from 'lucide-react';
 import { DataTable, Panel, Section, useShowAll } from '../reportUi';
-import { DRAWER_OPEN_WHY, fmtWhen, methodLabel, percentOf, stockCellText } from '../reportFormat';
+import { DRAWER_OPEN_WHY, fmtAgo, fmtWhen, methodLabel, percentOf, stockCellText } from '../reportFormat';
+import { SHIFT_HISTORY_ANCHOR } from '../reportTabs';
+import type { ReportPeriod } from '../dateRange';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-export function TeamLeakageTab({ data }: { data: ReportTeamTab }) {
+/**
+ * `now`: the page's clock, for how long a shift has been open. `period`: the
+ * one on screen, named in the shift history (a link lands the owner there,
+ * possibly scrolled past the page's own period line).
+ */
+export function TeamLeakageTab({ data, now, period }: { data: ReportTeamTab; now?: Date; period?: ShiftHistoryPeriod }) {
   return (
     <div className="space-y-10">
-      <StaffSection report={data} />
+      <StaffSection report={data} now={now} period={period} />
       <DiscountsSection report={data} />
       <RefundsSection report={data} />
     </div>
@@ -32,11 +39,43 @@ function shiftDrawerNote(s: ReportShiftLine): string {
   return note;
 }
 
-export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'drawerOpens' | 'drawerOpenCount'> }) {
+/** The period the shift history covers, as the page names it. */
+export type ShiftHistoryPeriod = Pick<ReportPeriod, 'dates' | 'isCurrent'>;
+
+/** The shift history's note: which shifts it lists (and for which dates, when known), and how Expected is worked out. */
+export function shiftHistoryNote(period?: ShiftHistoryPeriod): string {
+  const dates = period ? ` (${period.dates}${period.isCurrent ? ', so far' : ''})` : '';
+  return `Every shift that was open at any time in this period${dates}, newest first. Expected = float + cash sales − cash refunds + cash put in − cash taken out. Figures are the ones saved when the shift was closed.`;
+}
+
+/** The shift history's banner: what the closed drawers came to. A shift still open is not counted until it closes. */
+export function shiftDrawerBanner(shifts: readonly ReportShiftLine[]): { text: string; tone: 'matched' | 'over' | 'short' } | null {
+  const closed = shifts.filter((s) => s.closedAt !== null && s.varianceCents !== null);
+  if (closed.length === 0) return null;
+  const drawer = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
+  const open = shifts.filter((s) => s.closedAt === null).length;
+  const text =
+    drawer === 0
+      ? `Every closed drawer matched (${plural(closed.length, 'shift')}).`
+      : `${drawer > 0 ? 'Over' : 'Short'} ${formatCents(Math.abs(drawer))} in all, over ${plural(closed.length, 'closed shift')}.`;
+  return {
+    text: open > 0 ? `${text} ${plural(open, 'shift')} still open: counted when ${open === 1 ? 'it closes' : 'they close'}.` : text,
+    tone: drawer === 0 ? 'matched' : drawer > 0 ? 'over' : 'short',
+  };
+}
+
+export function StaffSection({
+  report,
+  now = new Date(),
+  period,
+}: {
+  report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'drawerOpens' | 'drawerOpenCount'>;
+  now?: Date;
+  period?: ShiftHistoryPeriod;
+}) {
   const net = report.kpis.netSalesCents;
   const opens = useShowAll(report.drawerOpens, 8);
-  const closed = report.shifts.filter((s) => s.closedAt !== null && s.varianceCents !== null);
-  const drawer = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
+  const banner = shiftDrawerBanner(report.shifts);
   return (
     <Section id="staff" icon={UsersRound} title="Staff and cash drawer">
       <div className="grid gap-4 xl:grid-cols-2">
@@ -60,23 +99,22 @@ export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 
         </Panel>
 
         <Panel
-          title="Shifts — cash in the drawer"
-          note="Expected = float + cash sales − cash refunds + cash put in − cash taken out. Figures are the ones saved when the shift was closed."
+          id={SHIFT_HISTORY_ANCHOR}
+          title="Shift history — cash in the drawer"
+          note={shiftHistoryNote(period)}
         >
-          {closed.length > 0 && (
+          {banner && (
             <div
               className={cn(
                 'mb-3 rounded-lg px-3 py-2 text-sm font-semibold',
-                drawer === 0
+                banner.tone === 'matched'
                   ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
-                  : drawer > 0
+                  : banner.tone === 'over'
                     ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
                     : 'bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-300',
               )}
             >
-              {drawer === 0
-                ? `Every closed drawer matched (${plural(closed.length, 'shift')}).`
-                : `${drawer > 0 ? 'Over' : 'Short'} ${formatCents(Math.abs(drawer))} in all, over ${plural(closed.length, 'closed shift')}.`}
+              {banner.text}
             </div>
           )}
           <DataTable
@@ -85,7 +123,14 @@ export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 
               <div key="w">
                 <div className="font-medium">{fmtWhen(s.openedAt)}</div>
                 <div className="text-xs text-stone-500">
-                  {s.closedAt ? `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}` : `still open · opened by ${s.openedBy}`}
+                  {s.closedAt ? (
+                    `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}`
+                  ) : (
+                    <>
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">still open</span>
+                      {` · opened by ${s.openedBy}, ${fmtAgo(s.openedAt, now)}`}
+                    </>
+                  )}
                   {shiftDrawerNote(s)}
                 </div>
               </div>,
@@ -103,7 +148,7 @@ export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 
                 </span>
               ),
             ])}
-            empty="No shifts were opened in this period."
+            empty="No shifts in this period."
           />
         </Panel>
 

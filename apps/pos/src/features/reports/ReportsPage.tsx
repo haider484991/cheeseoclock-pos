@@ -8,10 +8,13 @@
  * Reports worker thread so a year never holds up the counter. Every figure
  * comes from the till's stored order totals. Print and "Download for Excel"
  * take the tab on screen; "Print everything" takes every tab this login
- * sees. The page opens on the tab last looked at.
+ * sees. The page opens on the tab last looked at, or where a link from
+ * elsewhere says (costing/deepLinks.ts: a stock take, the top bar's "Shift
+ * history").
  */
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import {
@@ -52,7 +55,7 @@ import {
   type RangePreset,
   type ReportPeriod,
 } from './dateRange';
-import { useOneShotLink } from '../../components/list';
+import { hasOneShotLink, useOneShotLink } from '../../components/list';
 import { REPORTS_DEEP_LINK, type ReportsDeepLink } from '../costing/deepLinks';
 import type { VarianceView } from './tabs/VarianceSection';
 import {
@@ -66,7 +69,7 @@ import {
   PRINT_SHEET_CLASS,
   type SomeReportTabs,
 } from './exporters';
-import { browserStorage, readLastTab, tabQueryKey, tabRequest, visibleReportTabs, writeLastTab } from './reportTabs';
+import { bringIntoView, browserStorage, readLastTab, tabQueryKey, tabRequest, visibleReportTabs, writeLastTab } from './reportTabs';
 import { Note } from './reportUi';
 import { OverviewTab } from './tabs/OverviewTab';
 import { WhenTab } from './tabs/WhenTab';
@@ -137,16 +140,28 @@ function csvTab<K extends ReportTab>(r: { tab: K; period: ReportPeriod; data: Re
 const TRENDS_KEY = ['reports', 'trends'] as const;
 
 export function ReportsPage() {
+  // The page reads its link (costing/deepLinks.ts) as it opens. A link that
+  // comes while Reports is already open (the top bar's "Shift history")
+  // opens it afresh on that link; going to Reports without one changes nothing.
+  const navigation = useLocation().key;
+  const [openedFor, setOpenedFor] = useState(navigation);
+  if (navigation !== openedFor && hasOneShotLink(REPORTS_DEEP_LINK)) setOpenedFor(navigation);
+  return <ReportsScreen key={openedFor} />;
+}
+
+function ReportsScreen() {
   const canSeeCosts = useSessionStore((s) => s.can(COST_CAPABILITY));
   const tabs = useMemo(() => visibleReportTabs(canSeeCosts), [canSeeCosts]);
-  // A link from a finished stock take or the Dashboard: Food cost & stock, between those two stock takes.
+  // A link from elsewhere: a finished stock take or the Dashboard (Food cost &
+  // stock, between those two stock takes), or the top bar's "Shift history"
+  // (Team & leakage, the last 7 days, scrolled to the shifts).
   const deepLink = useOneShotLink<ReportsDeepLink>(REPORTS_DEEP_LINK);
-  const [chosenTab, setChosenTab] = useState<ReportTab>(() =>
-    deepLink ? 'foodStock' : readLastTab(browserStorage(), visibleReportTabs(canSeeCosts)),
-  );
+  const [chosenTab, setChosenTab] = useState<ReportTab>(() => deepLink?.tab ?? readLastTab(browserStorage(), visibleReportTabs(canSeeCosts)));
   const tab: ReportTab = tabs.includes(chosenTab) ? chosenTab : 'overview';
-  const [preset, setPreset] = useState<RangePreset>(deepLink ? 'stockTakes' : 'today');
+  const [preset, setPreset] = useState<RangePreset>(deepLink?.preset ?? 'today');
   const [pickedPair, setPickedPair] = useState<{ fromCountId: string; toCountId: string } | null>(deepLink?.stockTakes ?? null);
+  // What the link asked to bring into view, until the tab's figures are on screen.
+  const [scrollTo, setScrollTo] = useState<string | null>(deepLink?.scrollTo ?? null);
   const [now, setNow] = useState(() => new Date());
   const [customFrom, setCustomFrom] = useState(() => fmtDateInput(new Date().toISOString()));
   const [customTo, setCustomTo] = useState(() => fmtDateInput(new Date().toISOString()));
@@ -296,6 +311,15 @@ export function ReportsPage() {
   // The once-a-minute refresh of the same period is not "stale": nothing dims
   // and the buttons stay usable.
   const stale = shownPeriod.sinceIso !== period.sinceIso || shownPeriod.untilIso !== period.untilIso;
+
+  // A link's part of the tab ("Shift history"): once that tab's figures for
+  // the linked period are on screen, bring it into view, once — without
+  // scrolling if it already shows, so the period and the tabs stay in sight.
+  useEffect(() => {
+    if (scrollTo === null || !result || stale) return;
+    bringIntoView(document.getElementById(scrollTo), window.innerHeight);
+    setScrollTo(null);
+  }, [scrollTo, result, stale]);
 
   // Print: render the sheet next to the app, print, then take it away again.
   useEffect(() => {
@@ -602,6 +626,6 @@ function TabBody({
     case 'foodStock':
       return <FoodCostStockTab data={result.data} lowStockCount={lowStockCount} variance={variance} />;
     case 'team':
-      return <TeamLeakageTab data={result.data} />;
+      return <TeamLeakageTab data={result.data} now={now} period={result.period} />;
   }
 }

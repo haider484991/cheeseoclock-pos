@@ -233,6 +233,17 @@ export function fmtMinutes(min: number | null): string {
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
+/** How long before `now` an instant was: "just now", "25 min ago", "5 h 10 min ago", "2 days 3 h ago". */
+export function fmtAgo(iso: string, now: Date): string {
+  const min = Math.floor((now.getTime() - Date.parse(iso)) / 60_000);
+  // Not a date, or a clock a little behind the till that wrote it.
+  if (!Number.isFinite(min) || min < 1) return 'just now';
+  if (min < 24 * 60) return `${fmtMinutes(min)} ago`;
+  const days = Math.floor(min / (24 * 60));
+  const h = Math.floor((min % (24 * 60)) / 60);
+  return `${days} ${days === 1 ? 'day' : 'days'}${h > 0 ? ` ${h} h` : ''} ago`;
+}
+
 /** A quantity in an ingredient's unit, with thousands separators: "12,500 g". */
 export function fmtQty(qty: number, unit: string): string {
   return `${new Intl.NumberFormat('en-PK').format(qty)} ${unit}`;

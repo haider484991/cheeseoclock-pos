@@ -431,6 +431,7 @@ export interface BusinessReport {
   categories: ReportCategoryLine[];
   channels: ReportChannelLine[];
   staff: ReportStaffLine[];
+  /** Shift history: every shift open at some time in the period (still open, or closed at or after its start), newest first, capped. */
   shifts: ReportShiftLine[];
   discounts: ReportDiscounts;
   /** Newest first, capped. Σ amountCents = partial + full refunds when not capped. */
@@ -549,6 +550,7 @@ export interface ReportFoodStockTab extends ReportTabBase {
 export interface ReportTeamTab extends ReportTabBase {
   kpis: Pick<ReportKpis, 'netSalesCents' | 'menuSalesCents' | 'partialRefundCents' | 'fullRefundCents' | 'voidCount' | 'voidCents'>;
   staff: ReportStaffLine[];
+  /** Shift history: every shift open at some time in the period (still open, or closed at or after its start), newest first, capped. */
   shifts: ReportShiftLine[];
   discounts: ReportDiscounts;
   /** Newest first, capped. */

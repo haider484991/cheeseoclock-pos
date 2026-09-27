@@ -11,6 +11,7 @@ import {
   coverageText,
   daySeries,
   estimatedText,
+  fmtAgo,
   fmtMinutes,
   fmtWhen,
   byHandText,
@@ -133,6 +134,18 @@ describe('times', () => {
     expect(fmtMinutes(45)).toBe('45 min');
     expect(fmtMinutes(70)).toBe('1 h 10 min');
     expect(fmtMinutes(null)).toBe('—');
+  });
+
+  it('says how long ago a shift was opened', () => {
+    const now = new Date('2026-09-27T10:00:00.000Z');
+    expect(fmtAgo('2026-09-27T09:59:30.000Z', now)).toBe('just now');
+    // A till clock a little behind the one that wrote it.
+    expect(fmtAgo('2026-09-27T10:02:00.000Z', now)).toBe('just now');
+    expect(fmtAgo('not a date', now)).toBe('just now');
+    expect(fmtAgo('2026-09-27T09:35:00.000Z', now)).toBe('25 min ago');
+    expect(fmtAgo('2026-09-27T04:50:00.000Z', now)).toBe('5 h 10 min ago');
+    expect(fmtAgo('2026-09-26T10:00:00.000Z', now)).toBe('1 day ago');
+    expect(fmtAgo('2026-09-25T07:00:00.000Z', now)).toBe('2 days 3 h ago');
   });
 });
 

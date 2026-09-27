@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { Banknote, BookOpenCheck, ChevronRight, Clock, Inbox, Wallet, X } from 'lucide-react';
+import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
+import { openShiftHistory } from '../costing/deepLinks';
 import { CashMovementDialog } from './CashMovementDialog';
 import { drawerResultToast } from './drawerToast';
+import { PAGE_ACCESS } from './navAccess';
 
 /**
  * TopBar shift widget. Shows current shift status.
@@ -16,6 +19,8 @@ import { drawerResultToast } from './drawerToast';
  *    cashiers included).
  *  - Shift open → green pill with elapsed time; only a manager or the owner
  *    can click it to close (count the drawer). A cashier sees it read-only.
+ *  - "Shift history", for whoever sees Reports (the owner): Reports → Team &
+ *    leakage, the last 7 days, at the shift history.
  */
 export function ShiftWidget() {
   const can = useSessionStore((s) => s.can);
@@ -32,10 +37,13 @@ export function ShiftWidget() {
 
   if (shiftQ.isLoading) {
     return (
-      <span className="flex items-center gap-1.5 rounded-xl bg-stone-100 px-3 py-1.5 text-xs text-stone-500 dark:bg-stone-800">
-        <Clock className="h-3.5 w-3.5" />
-        …
-      </span>
+      <>
+        <span className="flex items-center gap-1.5 rounded-xl bg-stone-100 px-3 py-1.5 text-xs text-stone-500 dark:bg-stone-800">
+          <Clock className="h-3.5 w-3.5" />
+          …
+        </span>
+        <ShiftHistoryButton />
+      </>
     );
   }
 
@@ -56,6 +64,7 @@ export function ShiftWidget() {
           <Clock className="h-3.5 w-3.5" />
           Open shift
         </button>
+        <ShiftHistoryButton />
         {openDlg === 'open' && <OpenShiftDialog onClose={() => setOpenDlg(null)} />}
       </>
     );
@@ -89,6 +98,7 @@ export function ShiftWidget() {
       >
         <Wallet className="h-3.5 w-3.5" />
       </button>
+      <ShiftHistoryButton />
       {openDlg === 'cash' && (
         <CashMovementDialog shiftId={shift.id} onClose={() => setOpenDlg(null)} />
       )}
@@ -96,6 +106,28 @@ export function ShiftWidget() {
         <CloseShiftDialog shiftId={shift.id} onClose={() => setOpenDlg(null)} />
       )}
     </>
+  );
+}
+
+/**
+ * Past shifts and their drawer counts (the owner, 2026-09-27: "I can't see
+ * the shift history"). Only for whoever may open Reports — the owner; a
+ * manager or a cashier sees nothing here (the till refuses them anyway).
+ */
+function ShiftHistoryButton() {
+  const canSeeHistory = useSessionStore((s) => s.can(PAGE_ACCESS['/reports'].capability));
+  const navigate = useNavigate();
+  if (!canSeeHistory) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => openShiftHistory(navigate)}
+      title="Past shifts: who opened and closed them, and what each drawer counted (Reports → Team & leakage)"
+      className="flex items-center gap-1.5 rounded-xl bg-stone-100 px-3 py-1.5 text-xs font-semibold text-stone-600 transition-colors hover:bg-amber-100 hover:text-amber-800 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-amber-950 dark:hover:text-amber-200"
+    >
+      <History className="h-3.5 w-3.5" />
+      Shift history
+    </button>
   );
 }
 

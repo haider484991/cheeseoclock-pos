@@ -13,6 +13,7 @@ export {
   useSessionState,
   presetSessionState,
   useOneShotLink,
+  hasOneShotLink,
   useDeepLinkOpen,
   useDebouncedValue,
   PAGE_SIZES,
