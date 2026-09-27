@@ -6,6 +6,8 @@ import { useToast } from '../../components/toast/ToastProvider';
 import type { PrintPolicy, ReceiptLogoStatus, ShopCopyRule } from '@cheeseoclock/shared-types';
 import { Bike, ChefHat, Copy, Image as ImageIcon, Receipt, RotateCcw, ScrollText } from 'lucide-react';
 import { darkLogoFix } from './receiptLogo';
+import { reprintRuleText } from './shop-rules/timingWords';
+import { SHOP_SETTINGS_KEY, useShopSettingsLive } from './shop-rules/useShopSetting';
 
 const DEFAULT_POLICY: PrintPolicy = {
   kitchenTicket: true,
@@ -70,6 +72,15 @@ export function PrintingRulesSettings() {
         description: e instanceof Error ? e.message : String(e),
         variant: 'error',
       }),
+  });
+
+  // The owner's reprint rule (Settings → Staff & kitchen timing): the words follow it, and a Save
+  // (here or on the other till) re-reads it.
+  useShopSettingsLive();
+  const staffQ = useQuery({
+    queryKey: [...SHOP_SETTINGS_KEY, 'staff.timing'],
+    queryFn: () => ipc.settings.getBusiness('staff.timing'),
+    retry: false,
   });
 
   const saved = cfgQ.data?.policy ?? DEFAULT_POLICY;
@@ -163,7 +174,7 @@ export function PrintingRulesSettings() {
         <Rule
           icon={RotateCcw}
           title="Refunds and reprints"
-          body="Every paper says what it is. A paid receipt says RECEIPT and PAID - CASH (or the method); a bill before payment says BILL - NOT PAID, and a delivery bill says CASH ON DELIVERY and what the rider collects. A refund prints a REFUND slip (the drawer opens when cash goes back out, and a cash refund also prints a SHOP COPY for the customer to sign, unless shop copies are set to Never); a cancelled order only ever prints as CANCELLED ORDER - nothing to pay. Any second copy of a receipt or bill says DUPLICATE at the top, in the middle and at the bottom, with the reprint number, time and who asked; a printer retry says so too. A counter login gets one copy of a paid receipt for the order in front of it; any more, or an older order, needs a manager's PIN or password. A reprinted kitchen ticket says REPRINT - SAME ORDER, DO NOT COOK TWICE, and a cancelled one CANCELLED - DO NOT MAKE. Reprints never open the drawer and never go to FBR again; every paper is kept in the audit trail."
+          body={`Every paper says what it is. A paid receipt says RECEIPT and PAID - CASH (or the method); a bill before payment says BILL - NOT PAID, and a delivery bill says CASH ON DELIVERY and what the rider collects. A refund prints a REFUND slip (the drawer opens when cash goes back out, and a cash refund also prints a SHOP COPY for the customer to sign, unless shop copies are set to Never); a cancelled order only ever prints as CANCELLED ORDER - nothing to pay. Any second copy of a receipt or bill says DUPLICATE at the top, in the middle and at the bottom, with the reprint number, time and who asked; a printer retry says so too. ${reprintRuleText(staffQ.data?.value ?? null)} A reprinted kitchen ticket says REPRINT - SAME ORDER, DO NOT COOK TWICE, and a cancelled one CANCELLED - DO NOT MAKE. Reprints never open the drawer and never go to FBR again; every paper is kept in the audit trail.`}
           control={<span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Always</span>}
         />
       </ul>

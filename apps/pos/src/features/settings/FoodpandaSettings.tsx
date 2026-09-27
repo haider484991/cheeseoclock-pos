@@ -10,7 +10,7 @@
  * automatically; an order already on screen keeps the deal it started with.
  * The owner alone (the main process refuses anyone else).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { cn } from '@cheeseoclock/ui';
 import { BadgePercent, ClipboardCheck, Receipt } from 'lucide-react';
 import {
@@ -22,6 +22,7 @@ import {
   type ShopSettingCard,
 } from '@cheeseoclock/shared-types';
 import { SettingCard } from './shop-rules/SettingCard';
+import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting, useShopSettingsLive } from './shop-rules/useShopSetting';
 import { checksSummary, dealSummary, feesSummary, percentFromBps, workedExample, type DealPayer } from './shop-rules/foodpandaWords';
 import { dealFromForm, dealToForm, feesFromForm, feesToForm, sameValue, type DealForm, type FeesForm } from './shop-rules/foodpandaForm';
@@ -61,30 +62,6 @@ function Choice<T extends string>({
       ))}
     </div>
   );
-}
-
-/**
- * The form for one card, kept in step with what is saved until the owner
- * starts typing (a Save here, or one from the other till, shows at once);
- * `reset` hands it back to the saved value after a Save.
- */
-function useDraft<V, F>(saved: V, toForm: (v: V) => F) {
-  const [form, setForm] = useState<F>(() => toForm(saved));
-  const [touched, setTouched] = useState(false);
-  const savedKey = JSON.stringify(saved);
-  useEffect(() => {
-    if (!touched) setForm(toForm(saved));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedKey, touched]);
-  return {
-    form,
-    touched,
-    set: (f: F) => {
-      setTouched(true);
-      setForm(f);
-    },
-    reset: () => setTouched(false),
-  };
 }
 
 export function FoodpandaSettings() {

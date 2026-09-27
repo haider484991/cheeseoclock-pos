@@ -16,6 +16,8 @@ import {
   XCircle,
   Volume2,
   BadgePercent,
+  Banknote,
+  Timer,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { SoundSettings } from '../notifications/SoundSettings';
@@ -30,11 +32,15 @@ import { useBackupSummary } from './useBackupSummary';
 import { WebsiteSettings } from './WebsiteSettings';
 import { AboutCard } from './AboutCard';
 import { FoodpandaSettings } from './FoodpandaSettings';
+import { MoneySettings } from './MoneySettings';
+import { TimingSettings } from './TimingSettings';
 import { useSessionStore } from '../../stores/sessionStore';
 
 export type SettingsTab =
   | 'foodpanda'
+  | 'money'
   | 'store'
+  | 'timing'
   | 'printer'
   | 'sounds'
   | 'online'
@@ -50,13 +56,16 @@ interface TabDef {
 }
 
 /**
- * The owner's business rules come first (foodpanda; later Money & discounts,
- * Delivery areas & fees, Shop & website, Staff & kitchen timing), then this
- * till's printers, sounds, backups, FBR, the second till and About.
+ * The owner's business rules come first, in the design's order (foodpanda,
+ * Money & discounts, [Delivery areas & fees], Shop & logo, Staff & kitchen
+ * timing), then this till's printers, sounds, backups, FBR, the second till
+ * and About.
  */
 const TABS: TabDef[] = [
   { id: 'foodpanda', label: 'foodpanda', icon: BadgePercent },
+  { id: 'money', label: 'Money & discounts', icon: Banknote },
   { id: 'store', label: 'Shop & logo', icon: Store },
+  { id: 'timing', label: 'Staff & kitchen timing', icon: Timer },
   { id: 'printer', label: 'Printers', icon: Printer },
   { id: 'sounds', label: 'Sounds', icon: Volume2 },
   { id: 'online', label: 'Online orders', icon: Globe },
@@ -160,6 +169,8 @@ export function SettingsPage() {
 
       <div role="tabpanel" className="space-y-6">
         {tab === 'foodpanda' && <FoodpandaSettings />}
+        {tab === 'money' && <MoneySettings />}
+        {tab === 'timing' && <TimingSettings />}
         {tab === 'store' && <BrandingSettings />}
         {tab === 'printer' && (
           <>

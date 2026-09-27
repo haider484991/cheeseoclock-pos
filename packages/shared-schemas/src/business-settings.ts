@@ -1,15 +1,28 @@
 import { z } from 'zod';
 import {
+  APPROVAL_MAX_FLAT_CENTS,
+  APPROVAL_MAX_PERCENT,
   DAY_NOTE_TAGS,
   FOODPANDA_DEAL_MAX_PERCENT,
+  KITCHEN_TIMING_BOUNDS,
   LEGACY_COMMISSION_BASES,
+  PRESET_FLAT_MAX_CENTS,
+  PRESET_FLATS_MAX,
+  PRESET_PERCENTS_MAX,
+  PRESET_REASON_MAX_LENGTH,
+  PRESET_REASONS_MAX,
   RIDER_COST_MODES,
   SHOP_SETTING_FORMAT,
   SHOP_SETTING_KEYS,
+  STAFF_TIMING_BOUNDS,
   daypartHours,
   isShopSettingKey,
 } from '@cheeseoclock/shared-types';
 import type {
+  DiscountApproval,
+  DiscountPresets,
+  KitchenTiming,
+  StaffTiming,
   ChannelFees,
   CostAlertSettings,
   CostingTargets,
@@ -269,6 +282,113 @@ const foodpandaFeesReadSchema = z.object({
   paymentFeeBps: foodpandaFeesShape.paymentFeeBps.default(0),
 });
 
+// ---------------------------------------------------------------------------
+// Money & discounts (phase 2) and Staff & kitchen timing (phase 6)
+// ---------------------------------------------------------------------------
+//
+// The hard bounds live here and are checked in the main process on every
+// save (settings:setBusiness → business-settings-repo): a screen that sends
+// something outside them is refused with the reason, and nothing is written.
+
+/** A whole number from `lo` to `hi` ("Idle sign-out is at least 5 minutes"). */
+const wholeIn = (lo: number, hi: number, what: string, unit = '') => {
+  const u = unit ? ` ${unit}` : '';
+  return z
+    .number()
+    .int({ message: `${what} is a whole number` })
+    .min(lo, { message: `${what} is at least ${lo}${u}` })
+    .max(hi, { message: `${what} is at most ${hi}${u}` });
+};
+
+/** No two the same (reasons: whatever their capitals). */
+const allDifferent = (xs: ReadonlyArray<string | number>) =>
+  new Set(xs.map((x) => (typeof x === 'string' ? x.toLowerCase() : x))).size === xs.length;
+
+const discountApprovalShape = {
+  percentOver: z
+    .number()
+    .int({ message: 'The % limit is a whole %' })
+    .min(0, { message: "The % limit can't be below 0%" })
+    .max(APPROVAL_MAX_PERCENT, { message: `The % limit is at most ${APPROVAL_MAX_PERCENT}%` }),
+  flatOverCents: wholeRupees(APPROVAL_MAX_FLAT_CENTS / 100, 'The rupee limit'),
+};
+/** 'discounts.approval' as this version writes it. */
+export const discountApprovalSchema = z.object({ v: writesFormat('discounts.approval'), ...discountApprovalShape }).strict();
+const discountApprovalReadSchema = z.object({ v: readsFormat, ...discountApprovalShape });
+
+/** A one-tap reason: printed on the bill, so one line, no spaces at its ends, 30 letters at most. */
+const presetReason = z
+  .string()
+  .min(1, { message: "A reason button can't be empty" })
+  .max(PRESET_REASON_MAX_LENGTH, { message: `Keep a reason to ${PRESET_REASON_MAX_LENGTH} letters` })
+  .refine((r) => r.trim() === r && r.trim() !== '', { message: 'A reason has no spaces at its start or end' })
+  .refine((r) => !/[\r\n\t]/.test(r), { message: 'A reason is one line' });
+
+const discountPresetsShape = {
+  percents: z
+    .array(wholeIn(1, 100, 'A % button', '%'))
+    .min(1, { message: 'Keep at least one % button' })
+    .max(PRESET_PERCENTS_MAX, { message: `At most ${PRESET_PERCENTS_MAX} % buttons` })
+    .refine(allDifferent, { message: 'Two % buttons are the same' }),
+  flatCents: z
+    .array(
+      wholeRupees(PRESET_FLAT_MAX_CENTS / 100, 'A rupee button').refine((c) => c > 0, { message: 'A rupee button is at least Rs 1' }),
+    )
+    .min(1, { message: 'Keep at least one rupee button' })
+    .max(PRESET_FLATS_MAX, { message: `At most ${PRESET_FLATS_MAX} rupee buttons` })
+    .refine(allDifferent, { message: 'Two rupee buttons are the same' }),
+  reasons: z
+    .array(presetReason)
+    .min(1, { message: 'Keep at least one reason button' })
+    .max(PRESET_REASONS_MAX, { message: `At most ${PRESET_REASONS_MAX} reason buttons` })
+    .refine(allDifferent, { message: 'Two reason buttons are the same' }),
+};
+/** 'discounts.presets' as this version writes it. */
+export const discountPresetsSchema = z.object({ v: writesFormat('discounts.presets'), ...discountPresetsShape }).strict();
+const discountPresetsReadSchema = z.object({ v: readsFormat, ...discountPresetsShape });
+
+const [idleLo, idleHi] = STAFF_TIMING_BOUNDS.idleLogoutMin;
+const [loginLo, loginHi] = STAFF_TIMING_BOUNDS.maxLoginHours;
+const [stepLo, stepHi] = STAFF_TIMING_BOUNDS.stepInMin;
+const [reprintLo, reprintHi] = STAFF_TIMING_BOUNDS.freeReprints;
+const [windowLo, windowHi] = STAFF_TIMING_BOUNDS.reprintWindowMin;
+const staffTimingShape = {
+  // Never off: an owner or manager login left open hands anyone walking past the settings and the staff list.
+  idleLogoutMin: wholeIn(idleLo, idleHi, 'Signing out an idle owner or manager', 'minutes'),
+  maxLoginHours: wholeIn(loginLo, loginHi, 'The longest a login lasts', 'hours'),
+  stepInMin: wholeIn(stepLo, stepHi, 'A manager stepping in', 'minutes'),
+  freeReprints: wholeIn(reprintLo, reprintHi, 'Free reprints'),
+  reprintWindowMin: wholeIn(windowLo, windowHi, 'The free reprint time', 'minutes'),
+};
+/** 'staff.timing' as this version writes it. */
+export const staffTimingSchema = z.object({ v: writesFormat('staff.timing'), ...staffTimingShape }).strict();
+const staffTimingReadSchema = z.object({ v: readsFormat, ...staffTimingShape });
+
+const [amberLo, amberHi] = KITCHEN_TIMING_BOUNDS.amberMin;
+const [redLo, redHi] = KITCHEN_TIMING_BOUNDS.redMin;
+const [startLo, startHi] = KITCHEN_TIMING_BOUNDS.notStartedMin;
+const [doneLo, doneHi] = KITCHEN_TIMING_BOUNDS.notDoneMin;
+const kitchenTimingShape = {
+  amberMin: wholeIn(amberLo, amberHi, 'Amber', 'minutes'),
+  redMin: wholeIn(redLo, redHi, 'Red', 'minutes'),
+  notStartedMin: wholeIn(startLo, startHi, '"Not started" reminder', 'minutes'),
+  notDoneMin: wholeIn(doneLo, doneHi, '"Not done" reminder', 'minutes'),
+};
+const kitchenRules = (t: { amberMin: number; redMin: number; notStartedMin: number; notDoneMin: number }, ctx: z.RefinementCtx) => {
+  if (t.redMin <= t.amberMin) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A card turns red after it turns amber: give red more minutes' });
+  }
+  if (t.notDoneMin <= t.notStartedMin) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The "not done" reminder comes after "not started": give it more minutes' });
+  }
+};
+/** 'kitchen.timing' as this version writes it. */
+export const kitchenTimingSchema = z
+  .object({ v: writesFormat('kitchen.timing'), ...kitchenTimingShape })
+  .strict()
+  .superRefine(kitchenRules);
+const kitchenTimingReadSchema = z.object({ v: readsFormat, ...kitchenTimingShape }).superRefine(kitchenRules);
+
 const checkRule = z.enum(['optional', 'required'], { errorMap: () => ({ message: 'Optional or required' }) });
 const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };
 /** 'foodpanda.checks' as this version writes it. */
@@ -345,6 +465,10 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'foodpanda.deal': foodpandaDealSchema,
   'foodpanda.fees': foodpandaFeesSchema,
   'foodpanda.checks': foodpandaChecksSchema,
+  'discounts.approval': discountApprovalSchema,
+  'discounts.presets': discountPresetsSchema,
+  'staff.timing': staffTimingSchema,
+  'kitchen.timing': kitchenTimingSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 } as const;
@@ -371,6 +495,10 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'foodpanda.deal': foodpandaDealReadSchema,
   'foodpanda.fees': foodpandaFeesReadSchema,
   'foodpanda.checks': foodpandaChecksReadSchema,
+  'discounts.approval': discountApprovalReadSchema,
+  'discounts.presets': discountPresetsReadSchema,
+  'staff.timing': staffTimingReadSchema,
+  'kitchen.timing': kitchenTimingReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 };
@@ -380,6 +508,10 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'foodpanda.deal': new Set(['v', ...Object.keys(foodpandaDealShape)]),
   'foodpanda.fees': new Set(['v', ...Object.keys(foodpandaFeesShape)]),
   'foodpanda.checks': new Set(['v', ...Object.keys(foodpandaChecksShape)]),
+  'discounts.approval': new Set(['v', ...Object.keys(discountApprovalShape)]),
+  'discounts.presets': new Set(['v', ...Object.keys(discountPresetsShape)]),
+  'staff.timing': new Set(['v', ...Object.keys(staffTimingShape)]),
+  'kitchen.timing': new Set(['v', ...Object.keys(kitchenTimingShape)]),
 };
 
 /**
@@ -555,6 +687,14 @@ const _foodpandaFeesReadShape: Same<z.infer<typeof foodpandaFeesReadSchema>, Foo
 const _foodpandaChecksShape: Same<z.infer<typeof foodpandaChecksSchema>, FoodpandaChecks> = true;
 const _foodpandaChecksReadShape: Same<z.infer<typeof foodpandaChecksReadSchema>, FoodpandaChecks> = true;
 const _tenderCheckShape: Same<z.infer<typeof foodpandaTenderCheckSchema>, FoodpandaTenderCheck> = true;
+const _approvalShape: Same<z.infer<typeof discountApprovalSchema>, DiscountApproval> = true;
+const _approvalReadShape: Same<z.infer<typeof discountApprovalReadSchema>, DiscountApproval> = true;
+const _presetsShape: Same<z.infer<typeof discountPresetsSchema>, DiscountPresets> = true;
+const _presetsReadShape: Same<z.infer<typeof discountPresetsReadSchema>, DiscountPresets> = true;
+const _staffTimingShape: Same<z.infer<typeof staffTimingSchema>, StaffTiming> = true;
+const _staffTimingReadShape: Same<z.infer<typeof staffTimingReadSchema>, StaffTiming> = true;
+const _kitchenTimingShape: Same<z.infer<typeof kitchenTimingSchema>, KitchenTiming> = true;
+const _kitchenTimingReadShape: Same<z.infer<typeof kitchenTimingReadSchema>, KitchenTiming> = true;
 const _feesShape: Same<z.infer<typeof channelFeesSchema>, ChannelFees> = true;
 const _riderShape: Same<z.infer<typeof riderCostSchema>, RiderCostSetting> = true;
 const _setFeesShape: Same<z.infer<typeof setChannelFeesInputSchema>, SetChannelFeesRequest> = true;

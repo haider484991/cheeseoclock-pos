@@ -3,8 +3,9 @@ import log from 'electron-log/main';
 import type { AppDatabase } from '../db/connection.js';
 import { findUserBySecret, touchUserLogin } from '../db/repositories/user-repo.js';
 import { writeAudit } from '../db/repositories/audit-repo.js';
-import type { AuthenticatedUser, UUID } from '@cheeseoclock/shared-types';
+import { DEFAULT_STAFF_TIMING, type AuthenticatedUser, type StaffTiming, type UUID } from '@cheeseoclock/shared-types';
 import { normalizeSecret, secretProblem } from '@cheeseoclock/shared-schemas';
+import { readStaffTiming } from '../db/business-settings-read.js';
 import {
   assertSecretNotLocked,
   clearSecretAttempts,
@@ -16,7 +17,13 @@ import {
  * The auth service owns the single "currently logged-in user" for this device.
  * Sessions persist across app restarts so a closed laptop doesn't kick a cashier
  * mid-shift, but a fresh app boot will require fresh PIN or password entry by
- * design (sessions older than SESSION_MAX_AGE_MS are auto-closed).
+ * design (sessions older than the longest login are auto-closed).
+ *
+ * The timings are the owner's (Settings → Staff & kitchen timing,
+ * 'staff.timing', read on every check on both tills: login expiry, restart
+ * recovery, the startup clean-up, the step-in hold). The constants below are
+ * the released defaults, used while nothing is saved. Who can do what stays
+ * in the role table, never a setting.
  *
  * Everyone signs in with a number PIN or a password (sign-in-secret.ts in
  * shared-schemas); the same rules and the same lockout (login-attempts.ts)
@@ -24,16 +31,21 @@ import {
  * logged or stored — only argon2id hashes and HMAC-keyed attempt counters.
  */
 
-const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12h
+const MIN_MS = 60_000;
+const HOUR_MS = 60 * MIN_MS;
+
+/** The longest a login lasts by default (12 h); the owner's is 'staff.timing' maxLoginHours. */
+export const SESSION_MAX_AGE_MS = DEFAULT_STAFF_TIMING.maxLoginHours * HOUR_MS;
 
 /**
  * An owner or manager login left open on the counter hands anyone walking past
  * the settings, the staff list and the reports. It ends after this long with
  * no one touching the till (key presses and clicks — the screens that refresh
  * themselves don't count). Cashiers work the till all day and are not timed
- * out; every login still ends after SESSION_MAX_AGE_MS.
+ * out; every login still ends after the longest login. By default 15
+ * minutes; the owner's is 'staff.timing' idleLogoutMin (5–60, never off).
  */
-export const ELEVATED_IDLE_MS = 15 * 60 * 1000;
+export const ELEVATED_IDLE_MS = DEFAULT_STAFF_TIMING.idleLogoutMin * MIN_MS;
 
 /**
  * An owner or manager signing in on a till a cashier was just using is
@@ -49,9 +61,10 @@ export const ELEVATED_IDLE_MS = 15 * 60 * 1000;
  * The till asks for that same person's PIN or password (keepStepIn): typed,
  * the login carries on as a normal one; "Hand back to cashier" logs out. The
  * screen warns a minute before. Nobody answering: the owner / manager idle
- * rule ends it (no key presses count while it is held).
+ * rule ends it (no key presses count while it is held). By default 10
+ * minutes; the owner's is 'staff.timing' stepInMin (5–30).
  */
-export const STEP_IN_MAX_MS = 10 * 60 * 1000;
+export const STEP_IN_MAX_MS = DEFAULT_STAFF_TIMING.stepInMin * MIN_MS;
 /**
  * A cashier on this till within this long before the sign-in means the
  * manager is stepping in. Short on purpose: the owner signing in the next
@@ -60,6 +73,17 @@ export const STEP_IN_MAX_MS = 10 * 60 * 1000;
 export const STEP_IN_LOOKBACK_MS = 15 * 60 * 1000;
 /** The audit action that makes a stepping-in login a normal one (also read back after a restart). */
 const STEP_IN_KEPT = 'session_step_in_kept';
+
+/** The owner's timings in ms, as this till reads them now (the defaults when nothing is saved). */
+function timings(db: AppDatabase | null): { idleMs: number; maxAgeMs: number; stepInMs: number; stepInMinutes: number } {
+  const t: StaffTiming = readStaffTiming(db);
+  return {
+    idleMs: t.idleLogoutMin * MIN_MS,
+    maxAgeMs: t.maxLoginHours * HOUR_MS,
+    stepInMs: t.stepInMin * MIN_MS,
+    stepInMinutes: t.stepInMin,
+  };
+}
 
 /** A PIN or password nobody has. */
 export const WRONG_SECRET = 'PIN or password is wrong';
@@ -92,8 +116,10 @@ let currentSession: AuthenticatedUser | null = null;
 let sessionDb: AppDatabase | null = null;
 let sessionStartedAtMs = 0;
 let lastActivityAtMs = 0;
-/** When a stepping-in login ends (STEP_IN_MAX_MS), or null. */
+/** When a stepping-in login ends (the step-in minutes after it began), or null. */
 let stepInEndsAtMs: number | null = null;
+/** How many minutes that step-in was given (for the words on screen). */
+let stepInMinutes: number | null = null;
 
 /**
  * Is this owner / manager login stepping in for a cashier? The session this
@@ -130,11 +156,18 @@ function stepInEnd(
     .prepare(`SELECT 1 AS kept FROM audit_log WHERE entity_type = 'user_sessions' AND entity_id = ? AND action = ? LIMIT 1`)
     .get(sessionId, STEP_IN_KEPT);
   if (kept) return null;
-  return startMs + STEP_IN_MAX_MS;
+  const { stepInMs, stepInMinutes: minutes } = timings(db);
+  stepInMinutes = minutes;
+  return startMs + stepInMs;
 }
 
 function withStepIn(user: AuthenticatedUser): AuthenticatedUser {
-  return stepInEndsAtMs === null ? user : { ...user, stepInEndsAt: new Date(stepInEndsAtMs).toISOString() };
+  if (stepInEndsAtMs === null) return user;
+  return {
+    ...user,
+    stepInEndsAt: new Date(stepInEndsAtMs).toISOString(),
+    ...(stepInMinutes !== null ? { stepInMinutes } : {}),
+  };
 }
 
 /** Someone pressed a key or clicked on the till (renderer → `auth:activity`). */
@@ -146,9 +179,10 @@ export function noteActivity(): void {
 /**
  * The logged-in user, or null — also null while a stepping-in login is held
  * (see STEP_IN_MAX_MS and getHeldStepIn), so every guard refuses it. The
- * login itself ends here (liveSession) for an owner or manager idle for
- * ELEVATED_IDLE_MS, any login older than SESSION_MAX_AGE_MS, and a user
- * switched off since they logged in. The role is read again each time, so
+ * login itself ends here (liveSession) for an owner or manager idle for the
+ * owner's idle minutes (ELEVATED_IDLE_MS by default), any login older than
+ * the longest login (SESSION_MAX_AGE_MS by default), and a user switched
+ * off since they logged in. The role is read again each time, so
  * a manager demoted to cashier loses manager rights at once, not at next login.
  */
 export function getCurrentSession(): AuthenticatedUser | null {
@@ -158,7 +192,7 @@ export function getCurrentSession(): AuthenticatedUser | null {
 }
 
 /**
- * A stepping-in login whose STEP_IN_MAX_MS are up, marked `stepInHeld`: it
+ * A stepping-in login whose step-in minutes are up, marked `stepInHeld`: it
  * waits for that person's PIN or password (keepStepIn) or a hand-back
  * (logout), and nothing else is allowed on it meanwhile. Null otherwise.
  */
@@ -176,11 +210,13 @@ function stepInIsHeld(): boolean {
 function liveSession(): AuthenticatedUser | null {
   if (!currentSession) return null;
   const now = Date.now();
-  if (now - sessionStartedAtMs > SESSION_MAX_AGE_MS) {
+  // The owner's timings, read now: a Save here or from the other till counts at once.
+  const { maxAgeMs, idleMs } = timings(sessionDb);
+  if (now - sessionStartedAtMs > maxAgeMs) {
     endSession('session_expired');
     return null;
   }
-  if (currentSession.role !== 'cashier' && now - lastActivityAtMs > ELEVATED_IDLE_MS) {
+  if (currentSession.role !== 'cashier' && now - lastActivityAtMs > idleMs) {
     endSession('session_idle_timeout');
     return null;
   }
@@ -234,6 +270,7 @@ export async function keepStepIn(db: AppDatabase, pin: string): Promise<Authenti
     sessionId: currentSession.sessionId,
   };
   stepInEndsAtMs = null;
+  stepInMinutes = null;
   lastActivityAtMs = Date.now();
   const sessionId = s.sessionId;
   try {
@@ -263,6 +300,7 @@ function endSession(
   currentSession = null;
   sessionDb = null;
   stepInEndsAtMs = null;
+  stepInMinutes = null;
   if (!session || !db) return;
   const now = new Date().toISOString();
   try {
@@ -327,6 +365,7 @@ export async function login(
   });
   tx();
 
+  stepInMinutes = null;
   stepInEndsAtMs = stepInEnd(db, deviceId, sessionId, user.role, Date.parse(now));
   currentSession = withStepIn({
     id: user.id,
@@ -350,10 +389,10 @@ export function logout(db: AppDatabase): void {
 
 /**
  * On boot, try to recover a recent in-progress session. Returns the user if a
- * session that's < SESSION_MAX_AGE_MS old exists for this device.
+ * session younger than the longest login ('staff.timing') exists for this device.
  */
 export function recoverSession(db: AppDatabase, deviceId: string): AuthenticatedUser | null {
-  const cutoff = new Date(Date.now() - SESSION_MAX_AGE_MS).toISOString();
+  const cutoff = new Date(Date.now() - timings(db).maxAgeMs).toISOString();
   const row = db
     .prepare(
       `SELECT s.id AS session_id, s.user_id, u.full_name, u.role, s.started_at
@@ -375,7 +414,8 @@ export function recoverSession(db: AppDatabase, deviceId: string): Authenticated
 
   if (!row) return null;
 
-  // A restart does not give a stepping-in login a fresh ten minutes.
+  // A restart does not give a stepping-in login a fresh step-in.
+  stepInMinutes = null;
   stepInEndsAtMs = stepInEnd(db, deviceId, row.session_id, row.role, Date.parse(row.started_at));
   currentSession = withStepIn({
     id: row.user_id as UUID,
@@ -413,9 +453,9 @@ export async function verifyManagerPin(
   });
 }
 
-/** Close any session that's been open longer than SESSION_MAX_AGE_MS (called on boot). */
+/** Close any session that's been open longer than the longest login ('staff.timing'; called on boot). */
 export function reapStaleSessions(db: AppDatabase): void {
-  const cutoff = new Date(Date.now() - SESSION_MAX_AGE_MS).toISOString();
+  const cutoff = new Date(Date.now() - timings(db).maxAgeMs).toISOString();
   db.prepare(`UPDATE user_sessions SET ended_at = started_at WHERE ended_at IS NULL AND started_at < ?`).run(
     cutoff,
   );

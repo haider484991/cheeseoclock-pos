@@ -30,10 +30,12 @@
  *     as costs and to managers as profit, in plain words; foodpanda's
  *     commission (the cost sheet's foodpanda line, the terms on Targets &
  *     fees) is left out for a manager;
- *   - the owner's shop rules (Settings → foodpanda …, 2026-09-27) are the
- *     owner's alone: every set channel is refused to a cashier AND to a
- *     manager in the main process, and nothing is written; the counter reads
- *     only what taking an order needs (checkout:getRules);
+ *   - the owner's shop rules (Settings → foodpanda, Money & discounts, Staff
+ *     & kitchen timing, 2026-09-27) are the owner's alone: every set channel
+ *     is refused to a cashier AND to a manager in the main process, for every
+ *     key, and nothing is written; the counter reads only what taking an
+ *     order needs (checkout:getRules: the approval limit and the F3 buttons,
+ *     the Live Orders minutes, the foodpanda deal and Pay's checks);
  *   - every channel of these modules is classified here, so one added later
  *     fails until someone decides whether the counter may call it.
  *
@@ -50,7 +52,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { COST_CAPABILITY, PROFIT_CAPABILITY, hasCapability } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, PROFIT_CAPABILITY, SHOP_SETTING_KEYS, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser, OrderStatus, UUID } from '@cheeseoclock/shared-types';
 import { BOARD_STATUSES, KITCHEN_TICKET_STATUSES, RECENT_AT_COUNTER_LIMIT } from '@cheeseoclock/pos-domain';
 
@@ -502,6 +504,15 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   { key: 'foodpanda.deal', useDefault: true },
   { key: 'foodpanda.fees', useDefault: true },
   { key: 'foodpanda.checks', useDefault: true },
+  // Money & discounts (Settings step 2) and Staff & kitchen timing (step 6).
+  { key: 'discounts.approval', value: { v: 1, percentOver: 0, flatOverCents: 0 } },
+  { key: 'discounts.presets', value: { v: 1, percents: [5, 50], flatCents: [30_000], reasons: ['Test reason'] } },
+  { key: 'staff.timing', value: { v: 1, idleLogoutMin: 60, maxLoginHours: 24, stepInMin: 30, freeReprints: 3, reprintWindowMin: 120 } },
+  { key: 'kitchen.timing', value: { v: 1, amberMin: 45, redMin: 90, notStartedMin: 30, notDoneMin: 60 } },
+  { key: 'discounts.approval', useDefault: true },
+  { key: 'discounts.presets', useDefault: true },
+  { key: 'staff.timing', useDefault: true },
+  { key: 'kitchen.timing', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -750,8 +761,9 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
           o: { ok: false, code: 'forbidden', message: REFUSED['settings'] },
         });
       }
-      // …nor may they read a card (it carries foodpanda's commission).
-      for (const key of ['foodpanda.deal', 'foodpanda.fees', 'foodpanda.checks']) {
+      // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
+      expect(SHOP_SETTING_KEYS.length).toBe(7);
+      for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
           key,
@@ -794,6 +806,29 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
       });
       expect(JSON.stringify(rules)).not.toMatch(/commission|fee|2200|payout/i);
     }
+  });
+
+  it('the counter reads the approval limit, the F3 buttons and the Live Orders minutes — never the staff timings', async () => {
+    h.session = OWNER;
+    for (const payload of SHOP_SETTING_SAVES().slice(6, 10)) expect((await call('settings:setBusiness', payload)).ok).toBe(true);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<Record<string, unknown>>('checkout:getRules');
+      expect(rules).toMatchObject({
+        discounts: {
+          approval: { percentOver: 0, flatOverCents: 0 },
+          presets: { percents: [5, 50], flatCents: [30_000], reasons: ['Test reason'] },
+        },
+        kitchen: { amberMin: 45, redMin: 90, notStartedMin: 30, notDoneMin: 60 },
+      });
+      expect(JSON.stringify(rules)).not.toMatch(/idleLogout|maxLogin|stepIn|freeReprints|reprintWindow|updatedBy/i);
+    }
+    // …and the limit counts at once: with 0%, a cashier's 5% needs a manager.
+    h.session = CASHIER;
+    expect(await call('orders:applyDiscount', { orderId: s.draft, discountType: 'percent', value: 5 })).toMatchObject({
+      ok: false,
+      code: 'precondition_failed',
+    });
   });
 
   it('a cashier gets the owner’s deal on a foodpanda order automatically, and can’t change or take it off without a manager', async () => {

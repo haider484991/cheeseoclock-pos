@@ -8,7 +8,8 @@ import type { AppDatabase } from '../db/connection.js';
 import { IpcGuardError } from '../ipc/registry.js';
 import { verifyManagerPin } from './auth-service.js';
 import { printSpooler, type ReprintPlan } from './print-spooler.js';
-import { reprintApproval, type ReprintApproval } from './reprint-policy.js';
+import { reprintApproval, reprintRulesOf, type ReprintApproval } from './reprint-policy.js';
+import { readStaffTiming } from '../db/business-settings-read.js';
 
 /**
  * "Reprint receipt" from any screen: decides whether this person may print
@@ -26,6 +27,8 @@ export async function reprintWithApproval(
   req: { orderId: string; copy?: ReceiptCopy; approverPin?: string },
 ): Promise<ReprintResult> {
   const copy: ReceiptCopy = req.copy === 'shop' ? 'shop' : 'customer';
+  // The owner's reprint rule (Settings → Staff & kitchen timing), read now.
+  const rules = reprintRulesOf(readStaffTiming(db));
   const decide = (plan: ReprintPlan): ReprintApproval =>
     reprintApproval({
       role: session.role,
@@ -38,6 +41,7 @@ export async function reprintWithApproval(
       priorAll: plan.priorAll,
       fbrCopy: plan.fbrCopy,
       orderLabel: plan.orderLabel,
+      rules,
     });
   const refuse = (plan: ReprintPlan, why: string, wrongSecret = false): IpcGuardError =>
     new IpcGuardError({

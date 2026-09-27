@@ -26,6 +26,8 @@ import { repeatRuleText } from './alertState';
 import { getSoundPlayer } from './audioEngine';
 import { NEW_ORDER_TONE_LABELS, soundForEvent, type SoundId } from './tones';
 import { ALERT_SOUNDS_QUERY_KEY } from './useAlertSoundSettings';
+import { waitingRuleText } from './waitingReminders';
+import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
 
 function sameSettings(a: AlertSoundSettings, b: AlertSoundSettings): boolean {
   return (
@@ -48,6 +50,8 @@ function sameSettings(a: AlertSoundSettings, b: AlertSoundSettings): boolean {
 export function SoundSettings() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  // The owner's reminder minutes (Settings → Staff & kitchen timing): the words below follow them.
+  const kitchen = useKitchenTiming();
   const q = useQuery({
     queryKey: ALERT_SOUNDS_QUERY_KEY,
     queryFn: () => ipc.alerts.getSounds(),
@@ -212,7 +216,7 @@ export function SoundSettings() {
         <Rule
           icon={Hourglass}
           title="Order waiting too long"
-          body="A soft beep and a note when a website order is still not started 10 minutes after it came in, or not done after 30. Once per order, at most one beep every 5 minutes."
+          body={waitingRuleText(kitchen)}
           dimmed={muted}
           control={
             <div className="flex flex-col items-start gap-3 md:items-end">

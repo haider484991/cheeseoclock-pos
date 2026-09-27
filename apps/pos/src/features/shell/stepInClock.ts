@@ -1,3 +1,5 @@
+import { DEFAULT_STAFF_TIMING } from '@cheeseoclock/shared-types';
+
 /**
  * When the screen says what about a manager's stepping-in login (see
  * STEP_IN_MAX_MS in electron/services/auth-service.ts): a warning a minute
@@ -20,6 +22,16 @@ export function stepInClock(endsAtIso: string, nowMs: number): StepInClock | nul
   const holdInMs = Math.max(0, endsMs - nowMs);
   if (holdInMs === 0) return { warnInMs: null, holdInMs };
   return { warnInMs: Math.max(0, endsMs - STEP_IN_WARN_BEFORE_MS - nowMs), holdInMs };
+}
+
+/**
+ * What the held box says: how long a step-in lasts is the owner's
+ * (Settings → Staff & kitchen timing), carried on the login itself
+ * (`stepInMinutes`); the released 10 minutes for a login that has none.
+ */
+export function stepInHeldText(minutes: number | undefined): string {
+  const m = minutes ?? DEFAULT_STAFF_TIMING.stepInMin;
+  return `A cashier was using this till, so your login stops after ${m} minutes. Type your PIN or password to keep working. Nothing on the screen is lost.`;
 }
 
 /** "2:32 PM", as the rest of the till writes the time. */

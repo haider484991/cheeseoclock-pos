@@ -1,23 +1,20 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { approvalRuleText, formatCents } from '@cheeseoclock/pos-domain';
 import { Lock, X } from 'lucide-react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { SecretInput } from '../../components/secret/SecretInput';
 import { SecretHint } from '../../components/secret/SecretHint';
 import { approvalProblem, secretReady } from '../../components/secret/secretRules';
 import { ownsEnter } from './keys';
+import { useDiscountRules } from '../settings/shop-rules/useShopSetting';
 import {
-  FLAT_PRESETS_RUPEES,
-  PERCENT_PRESETS,
-  REASON_PRESETS,
   describeDiscount,
   discountDialogPrimary,
   discountDialogStart,
-  flatChoiceRupees,
   parseDiscountEntry,
-  percentChoice,
+  presetButtons,
   previewDiscount,
   sameChoice,
   type DiscountChoice,
@@ -31,17 +28,24 @@ interface Props {
 }
 
 /**
- * Discount in two taps: pick a preset (10 / 20 / 25 / 50 / 100 %, or Rs 100 /
- * 200 / 500), check the new total, Apply — or tap the same preset again. Each
- * preset shows what it takes off this order, and a lock where the till will
- * ask for a manager's PIN or password (over 10%, or a flat amount over 10% of
- * the order — the same rule the till checks when it saves the discount).
+ * Discount in two taps: pick a preset (the owner's buttons, Settings → Money
+ * & discounts; by default 10 / 20 / 25 / 50 / 100 %, or Rs 100 / 200 / 500),
+ * check the new total, Apply — or tap the same preset again. Each preset
+ * shows what it takes off this order, and a lock where the till will ask for
+ * a manager's PIN or password: pos-domain requiresManagerApproval with the
+ * owner's limit (by default over 10%, or a flat amount over Rs 500 or over
+ * 10% of the order), the same rule the till checks when it saves the
+ * discount. Any other amount can still be typed.
  */
 export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const applyDiscount = useCheckoutStore((s) => s.applyDiscount);
   const clearDiscount = useCheckoutStore((s) => s.clearDiscount);
   const busy = useCheckoutStore((s) => s.busy);
+  // The owner's approval limit and buttons (checkout:getRules; the released ones until it answers).
+  const rules = useDiscountRules();
+  const limits = rules.approval;
+  const buttons = presetButtons(rules.presets);
 
   const current = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
   // The shop's foodpanda deal is on this order: only a manager changes it or takes it off (for one order).
@@ -69,8 +73,8 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const typed = parseDiscountEntry(customKind, customText);
   const choice = typing ? typed : picked;
 
-  const before = previewDiscount(lines, subtotal, null);
-  const after = previewDiscount(lines, subtotal, choice);
+  const before = previewDiscount(lines, subtotal, null, limits);
+  const after = previewDiscount(lines, subtotal, choice, limits);
   const needsPin = after.needsApproval || dealOn;
   const pinOk = secretReady(pin);
   const canApply = !!choice && after.discountCents > 0 && (!needsPin || pinOk) && !saving && !busy;
@@ -90,7 +94,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
     setPicked(next);
     setArmed(true);
     setCustomText('');
-    if ((previewDiscount(lines, subtotal, next).needsApproval || dealOn) && !pinOk) focusPinSoon();
+    if ((previewDiscount(lines, subtotal, next, limits).needsApproval || dealOn) && !pinOk) focusPinSoon();
   }
 
   async function apply(which: DiscountChoice | null = choice) {
@@ -99,7 +103,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
       setError(typing ? 'That amount does not work — check it.' : 'Pick a discount or type an amount.');
       return;
     }
-    const preview = previewDiscount(lines, subtotal, which);
+    const preview = previewDiscount(lines, subtotal, which, limits);
     if (preview.discountCents <= 0) {
       setError('Nothing to take off this order.');
       return;
@@ -118,6 +122,8 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       setError(`Discount not applied: ${message}`);
+      // The owner may have just changed the limit: the locks follow it.
+      rules.refetch();
       if (approval) {
         setPin('');
         pinRef.current?.focus();
@@ -172,7 +178,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
     );
 
   function presetButton(key: string, label: string, preset: DiscountChoice) {
-    const p = previewDiscount(lines, subtotal, preset);
+    const p = previewDiscount(lines, subtotal, preset, limits);
     const selected = !typing && sameChoice(picked, preset);
     return (
       <button
@@ -219,6 +225,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                   </>
                 )}
               </Dialog.Description>
+              {!dealOn && <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{approvalRuleText(limits)}</p>}
               {dealOn && (
                 <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
                   {removingDeal
@@ -242,14 +249,14 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
             <section aria-label="Percent off">
               <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-stone-500">Percent off</div>
               <div className="grid grid-cols-5 gap-2">
-                {PERCENT_PRESETS.map((pct) => presetButton(`p${pct}`, `${pct}%`, percentChoice(pct)))}
+                {buttons.percent.map((b) => presetButton(b.key, b.label, b.choice))}
               </div>
             </section>
 
             <section aria-label="Amount off">
               <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-stone-500">Amount off</div>
               <div className="grid grid-cols-5 gap-2">
-                {FLAT_PRESETS_RUPEES.map((rs) => presetButton(`f${rs}`, `Rs ${rs}`, flatChoiceRupees(rs)))}
+                {buttons.flat.map((b) => presetButton(b.key, b.label, b.choice))}
                 <div
                   className={cn(
                     'col-span-2 flex min-h-[60px] items-center gap-1 rounded-xl border-2 pl-3 pr-1',
@@ -300,7 +307,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                 Reason <span className="font-normal normal-case tracking-normal">(optional, prints on the bill)</span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {REASON_PRESETS.map((r) => (
+                {rules.presets.reasons.map((r) => (
                   <button
                     key={r}
                     type="button"

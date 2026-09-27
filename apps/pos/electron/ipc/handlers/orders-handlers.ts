@@ -40,6 +40,7 @@ import {
   FOODPANDA_DEAL_NEEDS_MANAGER,
 } from '../../db/repositories/order-repo.js';
 import {
+  approvalRuleText,
   checkChoicePicks,
   kitchenHearsOfClose,
   requiresManagerApproval,
@@ -48,6 +49,7 @@ import {
   validateOrderForTender,
 } from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
+import { readApprovalLimits } from '../../db/business-settings-read.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from '../../db/repositories/modifier-repo.js';
 import { groupDisplayName } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../../db/connection.js';
@@ -285,22 +287,23 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:applyDiscount', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();
     let approverUserId: string | null = null;
-    // The order's subtotal decides whether a flat amount is more than 10% of it.
+    // The order's subtotal decides whether a flat amount is more than the % limit of it.
     const current = getOrderSnapshot(ctx.db, payload.orderId);
     if (!current) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     // The shop's foodpanda deal on this order: changing it is a manager's, whatever the amount.
     const replacesDeal = hasFoodpandaDeal(ctx.db, payload.orderId);
+    // The live limit (Settings → Money & discounts): the screen may be a Save behind, this decides.
+    const limits = readApprovalLimits(ctx.db);
     if (
       replacesDeal ||
-      requiresManagerApproval(
-        { type: payload.discountType, value: payload.value },
-        current.order.subtotalCents,
-      )
+      requiresManagerApproval({ type: payload.discountType, value: payload.value }, current.order.subtotalCents, limits)
     ) {
       if (!payload.approverPin) {
         throw new IpcGuardError({
           code: 'precondition_failed',
-          message: replacesDeal ? FOODPANDA_DEAL_NEEDS_MANAGER : 'Manager approval required for this discount',
+          message: replacesDeal
+            ? FOODPANDA_DEAL_NEEDS_MANAGER
+            : `Manager approval required for this discount. ${approvalRuleText(limits)}`,
         });
       }
       try {

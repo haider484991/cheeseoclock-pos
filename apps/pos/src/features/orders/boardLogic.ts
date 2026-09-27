@@ -3,13 +3,21 @@
  * action it offers, which leave-out / allergy flags it must show, and the
  * quick search. Tested in boardLogic.test.ts.
  */
-import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
-import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import type { KitchenTiming, OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
+import { DEFAULT_KITCHEN_TIMING, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { KITCHEN_TICKET_STATUSES } from '@cheeseoclock/pos-domain';
 
-/** Minutes after which a card turns amber, then red. */
-export const WARN_AFTER_MIN = 15;
-export const LATE_AFTER_MIN = 30;
+/**
+ * Minutes after which a card turns amber, then red, by default (15, 30). The
+ * owner's are Settings → Staff & kitchen timing ('kitchen.timing', from
+ * checkout:getRules).
+ */
+export const WARN_AFTER_MIN = DEFAULT_KITCHEN_TIMING.amberMin;
+export const LATE_AFTER_MIN = DEFAULT_KITCHEN_TIMING.redMin;
+
+/** The board's colour minutes. */
+export type BoardTiming = Pick<KitchenTiming, 'amberMin' | 'redMin'>;
+const DEFAULT_BOARD_TIMING: BoardTiming = { amberMin: WARN_AFTER_MIN, redMin: LATE_AFTER_MIN };
 
 export function ageMinutes(fromIso: string, now: number): number {
   const t = Date.parse(fromIso);
@@ -19,10 +27,20 @@ export function ageMinutes(fromIso: string, now: number): number {
 
 export type AgeTone = 'ok' | 'warn' | 'late';
 
-export function ageTone(minutes: number): AgeTone {
-  if (minutes >= LATE_AFTER_MIN) return 'late';
-  if (minutes >= WARN_AFTER_MIN) return 'warn';
+export function ageTone(minutes: number, timing: BoardTiming = DEFAULT_BOARD_TIMING): AgeTone {
+  if (minutes >= timing.redMin) return 'late';
+  if (minutes >= timing.amberMin) return 'warn';
   return 'ok';
+}
+
+/** "3 waiting over 30 min" — the board's header, with the owner's red minutes. */
+export function lateCountText(count: number, timing: BoardTiming): string {
+  return `${count} waiting over ${timing.redMin} min`;
+}
+
+/** The board's colours in words (its help line): "A card turns amber after 15 minutes and red after 30." */
+export function boardColoursText(timing: BoardTiming): string {
+  return `A card turns amber after ${timing.amberMin} minutes and red after ${timing.redMin}.`;
 }
 
 /** "just now", "12m", "1h 05m". */

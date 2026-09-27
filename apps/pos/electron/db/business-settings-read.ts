@@ -24,7 +24,14 @@ import {
   type BusinessSettingKey,
   type BusinessSettingValue,
 } from '@cheeseoclock/shared-schemas';
-import { SHOP_SETTING_DEFAULTS, type ShopSettingKey, type ShopSettingValues } from '@cheeseoclock/shared-types';
+import {
+  DEFAULT_STAFF_TIMING,
+  SHOP_SETTING_DEFAULTS,
+  type ApprovalLimits,
+  type ShopSettingKey,
+  type ShopSettingValues,
+  type StaffTiming,
+} from '@cheeseoclock/shared-types';
 import { foodpandaFeesFromChannelFees } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from './connection.js';
 
@@ -116,6 +123,32 @@ export function readShopSetting<K extends ShopSettingKey>(db: AppDatabase, key: 
     newerFormat: saved.newerFormat,
     carriedOver: false,
   };
+}
+
+/**
+ * The live approval limit ('discounts.approval'), as the main process checks
+ * a discount (pos-domain requiresManagerApproval): the IPC handler and the
+ * repository's save and cart re-check read it on every call, so a Save —
+ * here or arrived from the other till — counts at once. The default (10%,
+ * Rs 500) when nothing is saved.
+ */
+export function readApprovalLimits(db: AppDatabase): ApprovalLimits {
+  const { percentOver, flatOverCents } = readShopSetting(db, 'discounts.approval').value;
+  return { percentOver, flatOverCents };
+}
+
+/**
+ * The staff timings ('staff.timing') auth-service, the step-in hold and the
+ * reprint rule use, read on every call. A read that fails (it should not)
+ * falls back to the released defaults rather than locking the till.
+ */
+export function readStaffTiming(db: AppDatabase | null): StaffTiming {
+  if (!db) return { ...DEFAULT_STAFF_TIMING };
+  try {
+    return readShopSetting(db, 'staff.timing').value;
+  } catch {
+    return { ...DEFAULT_STAFF_TIMING };
+  }
 }
 
 /**

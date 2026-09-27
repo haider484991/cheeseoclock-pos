@@ -34,10 +34,16 @@ import {
   shareBps,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
-import { readBusinessSettingRow, readShopSetting, type ShopSettingInUse } from '../db/business-settings-read.js';
+import {
+  readApprovalLimits,
+  readBusinessSettingRow,
+  readShopSetting,
+  readStaffTiming,
+  type ShopSettingInUse,
+} from '../db/business-settings-read.js';
 import { businessSettingId } from '../db/business-settings-ids.js';
 
-export { readShopSetting, type ShopSettingInUse };
+export { readShopSetting, readApprovalLimits, readStaffTiming, type ShopSettingInUse };
 
 /** Every shop rule, as the till uses it now (saved values, or the defaults). */
 export type ShopSettings = { [K in ShopSettingKey]: ShopSettingInUse<K> };
@@ -50,17 +56,32 @@ export function getShopSettings(db: AppDatabase): ShopSettings {
 
 /**
  * What the counter needs to take an order (checkout:getRules), for any
- * signed-in login: the foodpanda deal an order started now gets (its % and
- * label, never who saved it), what Pay asks, and how much dearer the
- * foodpanda listing is (a price: the tablet's total is the till's at those
- * prices). Never the commission, fees or costs.
+ * signed-in login: when a discount needs a manager and the F3 buttons (the
+ * screen's locks; the main process decides again on save), the Live Orders
+ * colours and reminder minutes, the foodpanda deal an order started now
+ * gets (its % and label, never who saved it), what Pay asks, and how much
+ * dearer the foodpanda listing is (a price: the tablet's total is the
+ * till's at those prices). Never the commission, fees or costs.
  */
 export function checkoutRules(db: AppDatabase, now: Date = new Date()): CheckoutRules {
   const deal = readShopSetting(db, 'foodpanda.deal').value;
   const checks = readShopSetting(db, 'foodpanda.checks').value;
   const { upliftBps } = readShopSetting(db, 'foodpanda.fees').value;
+  const approval = readShopSetting(db, 'discounts.approval').value;
+  const presets = readShopSetting(db, 'discounts.presets').value;
+  const kitchen = readShopSetting(db, 'kitchen.timing').value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
   return {
+    discounts: {
+      approval: { percentOver: approval.percentOver, flatOverCents: approval.flatOverCents },
+      presets: { percents: [...presets.percents], flatCents: [...presets.flatCents], reasons: [...presets.reasons] },
+    },
+    kitchen: {
+      amberMin: kitchen.amberMin,
+      redMin: kitchen.redMin,
+      notStartedMin: kitchen.notStartedMin,
+      notDoneMin: kitchen.notDoneMin,
+    },
     foodpanda: {
       deal: active
         ? {

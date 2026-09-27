@@ -7,9 +7,10 @@
  * and checked by its Zod schema in shared-schemas business-settings.ts.
  *
  * Phase 1 is foodpanda: the deal on the listing, foodpanda's fees and the
- * checks at Pay. Later phases add their own keys here (approval limits and
- * discount buttons, delivery areas and fees, offers, the shop profile,
- * timings…), each with a frozen default.
+ * checks at Pay. Phase 2 the approval limit and the discount buttons (Money
+ * & discounts); phase 6 the staff and kitchen timings. Later phases add
+ * their own keys here (delivery areas and fees, offers, the shop profile…),
+ * each with a frozen default.
  *
  * FROZEN DEFAULTS. A key never saved reads as its DEFAULT_* below, which is
  * exactly what the till did before the setting existed, so installing the
@@ -26,7 +27,15 @@
  */
 
 /** The keys the Settings cards edit (settings:getBusiness / settings:setBusiness). */
-export const SHOP_SETTING_KEYS = ['foodpanda.deal', 'foodpanda.fees', 'foodpanda.checks'] as const;
+export const SHOP_SETTING_KEYS = [
+  'foodpanda.deal',
+  'foodpanda.fees',
+  'foodpanda.checks',
+  'discounts.approval',
+  'discounts.presets',
+  'staff.timing',
+  'kitchen.timing',
+] as const;
 export type ShopSettingKey = (typeof SHOP_SETTING_KEYS)[number];
 
 export function isShopSettingKey(key: unknown): key is ShopSettingKey {
@@ -117,10 +126,126 @@ export interface FoodpandaChecks {
   tabletTotal: FoodpandaCheckRule;
 }
 
+// ---------------------------------------------------------------------------
+// Money & discounts (phase 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * How much a cashier can take off an order without a manager's PIN or
+ * password ('discounts.approval'). The ONE rule is pos-domain
+ * requiresManagerApproval(d, subtotal, limits): the F3 screen's locks (from
+ * checkout:getRules), the IPC check and the repository's save and cart
+ * re-check (both read the live setting in the main process) all call it.
+ */
+export interface DiscountApproval {
+  v: number;
+  /** A % discount over this needs a manager (whole %, 0–50). 0 = every discount needs one. */
+  percentOver: number;
+  /**
+   * A discount in rupees over this needs a manager (paisa, whole rupees,
+   * Rs 0–5,000). A rupee amount is also held to `percentOver` of the order,
+   * as before (Rs 499 off a Rs 600 order is 83% off). 0 = every rupee
+   * discount needs one.
+   */
+  flatOverCents: number;
+}
+
+/** The limits requiresManagerApproval works with (the setting without its format). */
+export type ApprovalLimits = Pick<DiscountApproval, 'percentOver' | 'flatOverCents'>;
+
+/** The owner's bounds on the approval limit: a whole % from 0 to 50, Rs 0 to Rs 5,000. */
+export const APPROVAL_MAX_PERCENT = 50;
+export const APPROVAL_MAX_FLAT_CENTS = 500_000;
+
+/**
+ * The F3 discount screen's one-tap buttons ('discounts.presets'). A button
+ * above the approval limit shows the lock; typing any other amount or
+ * reason still works.
+ */
+export interface DiscountPresets {
+  v: number;
+  /** One-tap % buttons, whole % 1–100: one to five of them. */
+  percents: number[];
+  /** One-tap rupee buttons (paisa, whole rupees, Rs 1–5,000): one to three. */
+  flatCents: number[];
+  /** One-tap reasons, printed on the bill and grouped in Team & leakage: one to eight, 30 letters at most. */
+  reasons: string[];
+}
+
+export const PRESET_PERCENTS_MAX = 5;
+export const PRESET_FLATS_MAX = 3;
+export const PRESET_FLAT_MAX_CENTS = 500_000;
+export const PRESET_REASONS_MAX = 8;
+export const PRESET_REASON_MAX_LENGTH = 30;
+
+// ---------------------------------------------------------------------------
+// Staff & kitchen timing (phase 6). Only timings: who can do what stays in
+// the role table (auth.ts ROLE_CAPABILITIES), never a switch here.
+// ---------------------------------------------------------------------------
+
+/**
+ * How long logins last and how many free reprints a cashier gets
+ * ('staff.timing'). auth-service reads it on both tills (login expiry,
+ * restart recovery, the startup clean-up); reprint-policy.ts and the
+ * step-in hold too. Cashiers are still never signed out for being idle.
+ * The DUPLICATE marks and the print log never change.
+ */
+export interface StaffTiming {
+  v: number;
+  /** An owner or manager login with nobody touching the till ends after this many minutes (5–60; never off). */
+  idleLogoutMin: number;
+  /** Any login ends after this many hours (8–24). */
+  maxLoginHours: number;
+  /** A manager or the owner stepping in on a cashier's till is held after this many minutes (5–30). */
+  stepInMin: number;
+  /** Papers of a paid receipt a cashier may print by hand for the order in front of them (0–3). */
+  freeReprints: number;
+  /** How long after the sale an order still counts as in front of the counter, minutes (10–120). */
+  reprintWindowMin: number;
+}
+
+/** The owner's bounds on each staff timing (whole numbers, inclusive). */
+export const STAFF_TIMING_BOUNDS: Readonly<Record<Exclude<keyof StaffTiming, 'v'>, readonly [number, number]>> = Object.freeze({
+  idleLogoutMin: [5, 60] as const,
+  maxLoginHours: [8, 24] as const,
+  stepInMin: [5, 30] as const,
+  freeReprints: [0, 3] as const,
+  reprintWindowMin: [10, 120] as const,
+});
+
+/**
+ * The Live Orders board's colours and the "order waiting too long"
+ * reminders ('kitchen.timing'). The Sounds and board wording is built from
+ * these values.
+ */
+export interface KitchenTiming {
+  v: number;
+  /** A card turns amber this many minutes after the order came in. */
+  amberMin: number;
+  /** …and red after this many (more than amberMin). */
+  redMin: number;
+  /** A reminder when an order is still in New this many minutes after it came in. */
+  notStartedMin: number;
+  /** …and when it is still not done after this many (more than notStartedMin). */
+  notDoneMin: number;
+}
+
+/** The owner's bounds on each kitchen timing (whole minutes, inclusive). */
+export const KITCHEN_TIMING_BOUNDS: Readonly<Record<Exclude<keyof KitchenTiming, 'v'>, readonly [number, number]>> = Object.freeze({
+  amberMin: [5, 60] as const,
+  redMin: [10, 120] as const,
+  notStartedMin: [5, 60] as const,
+  notDoneMin: [10, 120] as const,
+});
+
 export interface ShopSettingValues {
   'foodpanda.deal': FoodpandaDeal;
   'foodpanda.fees': FoodpandaFees;
   'foodpanda.checks': FoodpandaChecks;
+  'discounts.approval': DiscountApproval;
+  'discounts.presets': DiscountPresets;
+  'staff.timing': StaffTiming;
+  'kitchen.timing': KitchenTiming;
 }
 export type ShopSettingValue<K extends ShopSettingKey> = ShopSettingValues[K];
 
@@ -129,6 +254,10 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'foodpanda.deal': 1,
   'foodpanda.fees': 1,
   'foodpanda.checks': 1,
+  'discounts.approval': 1,
+  'discounts.presets': 1,
+  'staff.timing': 1,
+  'kitchen.timing': 1,
 });
 
 /** foodpanda's commission until the owner confirms his own (costing spec 4.7): shown as "suggested". */
@@ -164,10 +293,51 @@ export const DEFAULT_FOODPANDA_CHECKS: Readonly<FoodpandaChecks> = Object.freeze
   tabletTotal: 'optional',
 });
 
+/**
+ * Today: over 10%, or over Rs 500 (or over 10% of the order), needs a
+ * manager (was MANAGER_APPROVAL_PERCENT_THRESHOLD / _FLAT_CENTS_THRESHOLD).
+ */
+export const DEFAULT_DISCOUNT_APPROVAL: Readonly<DiscountApproval> = Object.freeze({
+  v: 1,
+  percentOver: 10,
+  flatOverCents: 50_000,
+});
+
+/** Today's buttons (owner, 2026-09-26): 10 / 20 / 25 / 50 / 100 %, Rs 100 / 200 / 500, four reasons. */
+export const DEFAULT_DISCOUNT_PRESETS: Readonly<DiscountPresets> = Object.freeze({
+  v: 1,
+  percents: Object.freeze([10, 20, 25, 50, 100]) as number[],
+  flatCents: Object.freeze([10_000, 20_000, 50_000]) as number[],
+  reasons: Object.freeze(['Staff', 'Friends & family', 'Regular customer', 'Complaint']) as string[],
+});
+
+/** Today: 15 minutes idle (owner / manager), 12 hours a login, a 10-minute step-in, one free reprint within 30 minutes. */
+export const DEFAULT_STAFF_TIMING: Readonly<StaffTiming> = Object.freeze({
+  v: 1,
+  idleLogoutMin: 15,
+  maxLoginHours: 12,
+  stepInMin: 10,
+  freeReprints: 1,
+  reprintWindowMin: 30,
+});
+
+/** Today: amber at 15 minutes, red at 30; reminders when not started after 10, not done after 30. */
+export const DEFAULT_KITCHEN_TIMING: Readonly<KitchenTiming> = Object.freeze({
+  v: 1,
+  amberMin: 15,
+  redMin: 30,
+  notStartedMin: 10,
+  notDoneMin: 30,
+});
+
 export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<ShopSettingValues[K]> } = Object.freeze({
   'foodpanda.deal': DEFAULT_FOODPANDA_DEAL,
   'foodpanda.fees': DEFAULT_FOODPANDA_FEES,
   'foodpanda.checks': DEFAULT_FOODPANDA_CHECKS,
+  'discounts.approval': DEFAULT_DISCOUNT_APPROVAL,
+  'discounts.presets': DEFAULT_DISCOUNT_PRESETS,
+  'staff.timing': DEFAULT_STAFF_TIMING,
+  'kitchen.timing': DEFAULT_KITCHEN_TIMING,
 });
 
 /** A tablet total more than this far from the till's total is a mismatch (Rs 1). */
@@ -281,6 +451,16 @@ export type SetShopSettingRequest =
 // ---------------------------------------------------------------------------
 
 export interface CheckoutRules {
+  /**
+   * The F3 screen: when a discount needs a manager (the locks; the main
+   * process decides again on save) and the one-tap buttons.
+   */
+  discounts: {
+    approval: ApprovalLimits;
+    presets: Omit<DiscountPresets, 'v'>;
+  };
+  /** The Live Orders colours and the "waiting too long" reminders. */
+  kitchen: Omit<KitchenTiming, 'v'>;
   foodpanda: {
     /** The deal a foodpanda order started now gets; null when there is none today. */
     deal: {

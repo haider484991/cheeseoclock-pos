@@ -34,7 +34,8 @@ import {
 } from './eventTones';
 import { soundForEvent } from './tones';
 import { useAlertSoundSettings } from './useAlertSoundSettings';
-import { BOARD_UNUSED_COUNT, BOARD_UNUSED_MIN, describeReminders } from './waitingReminders';
+import { boardUnusedText, describeReminders } from './waitingReminders';
+import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
 
 /** While something is on the banner, check with the main process this often. */
 const SYNC_EVERY_MS = 5_000;
@@ -140,10 +141,17 @@ function OrderAlertsInner() {
   const qc = useQueryClient();
   const player = getSoundPlayer();
 
+  // The owner's reminder minutes (checkout:getRules; the released 10 / 30 until it answers).
+  const kitchen = useKitchenTiming({ enabled: loggedIn });
+
   const settingsRef = useRef(settings);
   const readyRef = useRef(soundsReady);
   const loggedInRef = useRef(loggedIn);
   const canViewRef = useRef(canView);
+  const kitchenRef = useRef(kitchen);
+  useEffect(() => {
+    kitchenRef.current = kitchen;
+  }, [kitchen]);
   useEffect(() => {
     settingsRef.current = settings;
     readyRef.current = soundsReady;
@@ -351,6 +359,7 @@ function OrderAlertsInner() {
       const s = settingsRef.current;
       if (!reminded.current) reminded.current = loadReminded();
       const ringing = new Set(alerts.getState().orders.map((o) => o.orderId));
+      const timing = kitchenRef.current;
       const { due, boardUnused, tone } = planWaitingReminders(toWaitingOrders(snaps), {
         loggedIn: loggedInRef.current,
         settings: s,
@@ -358,13 +367,14 @@ function OrderAlertsInner() {
         lastToneAt: lastWaitTone.current,
         reminded: reminded.current,
         ringing,
+        timing,
       });
       if (boardUnused) {
         if (!boardUnusedNoted.current) {
           boardUnusedNoted.current = true;
           toast({
             title: 'Orders are not being moved along on Live Orders',
-            description: `${BOARD_UNUSED_COUNT} or more have sat in New for over ${BOARD_UNUSED_MIN} minutes, so the "waiting too long" reminder stays quiet. Tap each order's next step as you go.`,
+            description: boardUnusedText(timing),
             variant: 'info',
             duration: 15_000,
           });
@@ -378,7 +388,7 @@ function OrderAlertsInner() {
         lastWaitTone.current = now;
         player.play('waiting', s.volume);
       }
-      const text = describeReminders(due);
+      const text = describeReminders(due, timing);
       toast({ title: text.title, description: text.description, variant: 'warning', duration: 15_000 });
     });
     const check = async () => {

@@ -43,8 +43,12 @@ import {
   matchesBoardSearch,
   nextBoardAction,
   offersKitchenReprint,
+  boardColoursText,
+  lateCountText,
   type AgeTone,
+  type BoardTiming,
 } from './boardLogic';
+import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
 import { orderTimeLabel } from './historyFilters';
 
 /**
@@ -53,7 +57,8 @@ import { orderTimeLabel } from './historyFilters';
  * Every placed order that is not finished, in four columns that follow the
  * order's life: New → Preparing → Ready → Out for delivery. Each card has one
  * big button for its next step. Oldest first in every column; a card turns
- * amber after 15 minutes and red after 30. Polls every 5 seconds.
+ * amber, then red, after the owner's minutes (Settings → Staff & kitchen
+ * timing; by default 15 and 30). Polls every 5 seconds.
  */
 
 type ColumnKey = 'new' | 'preparing' | 'ready' | 'out';
@@ -100,6 +105,8 @@ export function OrdersBoardPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const now = useNow(20_000);
+  // The owner's amber / red minutes (checkout:getRules; the released 15 / 30 until it answers).
+  const timing = useKitchenTiming();
 
   const ordersQ = useQuery({
     queryKey: ['orders', 'active', modeFilter],
@@ -156,7 +163,7 @@ export function OrdersBoardPage() {
     return out;
   }, [visible]);
 
-  const lateCount = all.filter((s) => ageTone(ageMinutes(s.order.createdAt, now)) === 'late').length;
+  const lateCount = all.filter((s) => ageTone(ageMinutes(s.order.createdAt, now), timing) === 'late').length;
   const pendingId = step.isPending ? step.variables?.orderId : undefined;
 
   return (
@@ -167,8 +174,8 @@ export function OrdersBoardPage() {
           <p className="mt-1 text-sm text-stone-500">
             {all.length} active {all.length === 1 ? 'order' : 'orders'}
             {lateCount > 0 && (
-              <span className="ml-1 font-semibold text-red-600">
-                · {lateCount} waiting over 30 min
+              <span className="ml-1 font-semibold text-red-600" title={boardColoursText(timing)}>
+                · {lateCountText(lateCount, timing)}
               </span>
             )}
             {ordersQ.isError && <span className="ml-1 font-semibold text-red-600">· could not refresh</span>}
@@ -256,6 +263,7 @@ export function OrdersBoardPage() {
                         key={snap.order.id}
                         snap={snap}
                         now={now}
+                        timing={timing}
                         busy={pendingId === snap.order.id}
                         onPrimary={() => {
                           switch (action.kind) {
@@ -370,6 +378,7 @@ const MAX_LINES = 4;
 interface OrderCardProps {
   snap: OrderSnapshot;
   now: number;
+  timing: BoardTiming;
   busy: boolean;
   primaryLabel: string | null;
   primaryKind: ReturnType<typeof nextBoardAction>['kind'];
@@ -383,6 +392,7 @@ interface OrderCardProps {
 function OrderCard({
   snap,
   now,
+  timing,
   busy,
   primaryLabel,
   primaryKind,
@@ -399,7 +409,7 @@ function OrderCard({
   const flags = cardFlags(snap);
   const orderNotes = orderNotesOf(snap);
   const minutes = ageMinutes(order.createdAt, now);
-  const tone = ageTone(minutes);
+  const tone = ageTone(minutes, timing);
   const outMinutes = order.status === 'out_for_delivery' && order.dispatchedAt ? ageMinutes(order.dispatchedAt, now) : null;
   const PrimaryIcon = PRIMARY_ICON[primaryKind];
 

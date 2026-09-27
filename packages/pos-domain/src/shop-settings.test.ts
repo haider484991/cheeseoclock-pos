@@ -51,7 +51,15 @@ describe('the released defaults are pinned', () => {
   });
 
   it('one default per key, frozen, in the format this version writes', () => {
-    expect([...SHOP_SETTING_KEYS]).toEqual(['foodpanda.deal', 'foodpanda.fees', 'foodpanda.checks']);
+    expect([...SHOP_SETTING_KEYS]).toEqual([
+      'foodpanda.deal',
+      'foodpanda.fees',
+      'foodpanda.checks',
+      'discounts.approval',
+      'discounts.presets',
+      'staff.timing',
+      'kitchen.timing',
+    ]);
     for (const key of SHOP_SETTING_KEYS) {
       const d = SHOP_SETTING_DEFAULTS[key];
       expect(Object.isFrozen(d)).toBe(true);

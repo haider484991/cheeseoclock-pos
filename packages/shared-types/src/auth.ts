@@ -46,6 +46,12 @@ export interface AuthenticatedUser {
    */
   stepInEndsAt?: string;
   /**
+   * With `stepInEndsAt`: how many minutes this step-in was given (Settings →
+   * Staff & kitchen timing, 'staff.timing' stepInMin, when it began), for the
+   * words on screen. Absent otherwise.
+   */
+  stepInMinutes?: number;
+  /**
    * That time has come: the till refuses everything on this login until its
    * own PIN or password is typed (`auth:keepStepIn`) or it is logged out. The
    * screen stays as it was underneath. Only `auth:currentSession` returns a

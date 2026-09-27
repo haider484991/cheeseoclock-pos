@@ -8,14 +8,15 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
 import { SecretInput } from '../../components/secret/SecretInput';
 import { IpcError } from '../../ipc/client';
-import { stepInClock, stepInTimeLabel } from './stepInClock';
+import { stepInClock, stepInHeldText, stepInTimeLabel } from './stepInClock';
 
 /** "Keep my login" tapped in the top bar before the time is up. */
 export const useKeepLoginAsk = create<{ open: boolean }>(() => ({ open: false }));
 
 /**
- * A manager or the owner stepping in on a cashier's till (auth-service
- * STEP_IN_MAX_MS): a warning a minute before, then — however busy the till —
+ * A manager or the owner stepping in on a cashier's till (auth-service; the
+ * owner's step-in minutes, Settings → Staff & kitchen timing, 10 by
+ * default): a warning a minute before, then — however busy the till —
  * the till holds the login and this box goes OVER the page, which keeps
  * everything on it (a half-edited item, a drawer count being typed). Their
  * own PIN or password carries on as a normal login; "Hand back to cashier"
@@ -114,7 +115,7 @@ export function StepInHold() {
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-sm text-stone-600 dark:text-stone-400">
             {held
-              ? 'A cashier was using this till, so your login stops after 10 minutes. Type your PIN or password to keep working. Nothing on the screen is lost.'
+              ? stepInHeldText(user.stepInMinutes)
               : `A cashier was using this till, so your login stops at ${stepInTimeLabel(endsAt)}. Type your PIN or password now to keep working without a break.`}
           </Dialog.Description>
           <form

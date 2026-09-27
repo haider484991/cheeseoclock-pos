@@ -1,7 +1,9 @@
 /**
  * "Order waiting too long": a soft reminder, once per order, when
  *   - an order is still in New (not started) 10 minutes after it came in, or
- *   - an order is still not done (New, Preparing or Ready) after 30 minutes.
+ *   - an order is still not done (New, Preparing or Ready) after 30 minutes
+ *   (the owner's minutes: Settings → Staff & kitchen timing, 'kitchen.timing'
+ *   from checkout:getRules; 10 and 30 by default).
  * Out for delivery is left alone: the rider has it and the counter can't act.
  *
  * Website orders only, unless Settings → Sounds says "counter orders too":
@@ -15,17 +17,37 @@
  * already refreshes — no extra polling. Pure; tested in waitingReminders.test.ts.
  */
 import { ageMinutes } from '../orders/boardLogic';
-import { shortOrderNumber, type OrderSource, type OrderStatus } from '@cheeseoclock/shared-types';
+import {
+  DEFAULT_KITCHEN_TIMING,
+  shortOrderNumber,
+  type KitchenTiming,
+  type OrderSource,
+  type OrderStatus,
+} from '@cheeseoclock/shared-types';
 
-export const NOT_STARTED_MIN = 10;
-export const NOT_DONE_MIN = 30;
+/** The released reminder minutes (the owner's are 'kitchen.timing' notStartedMin / notDoneMin). */
+export const NOT_STARTED_MIN = DEFAULT_KITCHEN_TIMING.notStartedMin;
+export const NOT_DONE_MIN = DEFAULT_KITCHEN_TIMING.notDoneMin;
 /** A reminder is only given this many minutes after its threshold. */
 export const REMIND_WINDOW_MIN = 10;
-/** This many orders in New for BOARD_UNUSED_MIN+ minutes: nobody is using the board. */
+/** This many orders in New for boardUnusedMin+ minutes: nobody is using the board. */
 export const BOARD_UNUSED_COUNT = 5;
-export const BOARD_UNUSED_MIN = 20;
 /** At most one reminder beep this often, however many orders are late. */
 export const REMIND_TONE_GAP_MS = 5 * 60_000;
+
+/** The reminders' minutes. */
+export type ReminderTiming = Pick<KitchenTiming, 'notStartedMin' | 'notDoneMin'>;
+const DEFAULT_REMINDER_TIMING: ReminderTiming = { notStartedMin: NOT_STARTED_MIN, notDoneMin: NOT_DONE_MIN };
+
+/**
+ * Orders in New this long mean nobody is moving them along: past the whole
+ * "not started" reminder window (20 minutes by default).
+ */
+export function boardUnusedMin(timing: ReminderTiming = DEFAULT_REMINDER_TIMING): number {
+  return timing.notStartedMin + REMIND_WINDOW_MIN;
+}
+/** The released one: 20 minutes. */
+export const BOARD_UNUSED_MIN = boardUnusedMin();
 
 export interface WaitingOrder {
   id: string;
@@ -54,11 +76,15 @@ export function dueWaitingReminders(
     reminded: ReadonlySet<string>;
     /** Orders already ringing as a new online order: the chime covers them. */
     ringing: ReadonlySet<string>;
+    /** The owner's minutes (checkout:getRules); the released 10 / 30 when absent. */
+    timing?: ReminderTiming;
   },
 ): { due: WaitingReminder[]; boardUnused: boolean } {
+  const { notStartedMin, notDoneMin } = opts.timing ?? DEFAULT_REMINDER_TIMING;
   const eligible = orders.filter((o) => opts.includeCounter || o.source === 'web');
+  const unusedAfter = boardUnusedMin({ notStartedMin, notDoneMin });
   const oldNew = eligible.filter(
-    (o) => o.status === 'sent_to_kitchen' && ageMinutes(o.createdAt, now) >= BOARD_UNUSED_MIN,
+    (o) => o.status === 'sent_to_kitchen' && ageMinutes(o.createdAt, now) >= unusedAfter,
   ).length;
   if (oldNew >= BOARD_UNUSED_COUNT) return { due: [], boardUnused: true };
 
@@ -68,26 +94,29 @@ export function dueWaitingReminders(
     const minutes = ageMinutes(o.createdAt, now);
     if (
       o.status === 'sent_to_kitchen' &&
-      minutes >= NOT_STARTED_MIN &&
-      minutes < NOT_STARTED_MIN + REMIND_WINDOW_MIN &&
-      !opts.reminded.has(`${o.id}:${NOT_STARTED_MIN}`)
+      minutes >= notStartedMin &&
+      minutes < notStartedMin + REMIND_WINDOW_MIN &&
+      !opts.reminded.has(`${o.id}:${notStartedMin}`)
     ) {
-      due.push({ key: `${o.id}:${NOT_STARTED_MIN}`, orderId: o.id, orderNumber: o.orderNumber, kind: 'notStarted', minutes });
+      due.push({ key: `${o.id}:${notStartedMin}`, orderId: o.id, orderNumber: o.orderNumber, kind: 'notStarted', minutes });
     }
     if (
       NOT_DONE_STATUSES.has(o.status) &&
-      minutes >= NOT_DONE_MIN &&
-      minutes < NOT_DONE_MIN + REMIND_WINDOW_MIN &&
-      !opts.reminded.has(`${o.id}:${NOT_DONE_MIN}`)
+      minutes >= notDoneMin &&
+      minutes < notDoneMin + REMIND_WINDOW_MIN &&
+      !opts.reminded.has(`${o.id}:${notDoneMin}`)
     ) {
-      due.push({ key: `${o.id}:${NOT_DONE_MIN}`, orderId: o.id, orderNumber: o.orderNumber, kind: 'notDone', minutes });
+      due.push({ key: `${o.id}:${notDoneMin}`, orderId: o.id, orderNumber: o.orderNumber, kind: 'notDone', minutes });
     }
   }
   return { due, boardUnused: false };
 }
 
 /** One note for everything due this round. */
-export function describeReminders(due: readonly WaitingReminder[]): { title: string; description: string } {
+export function describeReminders(
+  due: readonly WaitingReminder[],
+  timing: ReminderTiming = DEFAULT_REMINDER_TIMING,
+): { title: string; description: string } {
   const notStarted = due.filter((d) => d.kind === 'notStarted');
   const notDone = due.filter((d) => d.kind === 'notDone');
   const nums = (list: readonly WaitingReminder[]) => list.map((d) => shortOrderNumber(d.orderNumber)).join(', ');
@@ -105,9 +134,24 @@ export function describeReminders(due: readonly WaitingReminder[]): { title: str
   }
   const parts: string[] = [];
   if (notStarted.length > 0) parts.push(`not started: ${nums(notStarted)}`);
-  if (notDone.length > 0) parts.push(`over ${NOT_DONE_MIN} min: ${nums(notDone)}`);
+  if (notDone.length > 0) parts.push(`over ${timing.notDoneMin} min: ${nums(notDone)}`);
   return {
     title: `${due.length} orders are waiting too long`,
     description: `${parts.join(' · ')}. Check them on Live Orders.`,
   };
+}
+
+/**
+ * Settings → Sounds, "Order waiting too long", in words built from the
+ * owner's minutes: "A soft beep and a note when a website order is still not
+ * started 10 minutes after it came in, or not done after 30. Once per order,
+ * at most one beep every 5 minutes."
+ */
+export function waitingRuleText(timing: ReminderTiming): string {
+  return `A soft beep and a note when a website order is still not started ${timing.notStartedMin} minutes after it came in, or not done after ${timing.notDoneMin}. Once per order, at most one beep every ${REMIND_TONE_GAP_MS / 60_000} minutes.`;
+}
+
+/** The note when nobody moves orders along on Live Orders. */
+export function boardUnusedText(timing: ReminderTiming): string {
+  return `${BOARD_UNUSED_COUNT} or more have sat in New for over ${boardUnusedMin(timing)} minutes, so the "waiting too long" reminder stays quiet. Tap each order's next step as you go.`;
 }

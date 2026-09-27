@@ -6,7 +6,13 @@
  */
 import type { AlertSoundSettings, OrderSnapshot } from '@cheeseoclock/shared-types';
 import { ringsFor } from './alertState';
-import { REMIND_TONE_GAP_MS, dueWaitingReminders, type WaitingOrder, type WaitingReminder } from './waitingReminders';
+import {
+  REMIND_TONE_GAP_MS,
+  dueWaitingReminders,
+  type ReminderTiming,
+  type WaitingOrder,
+  type WaitingReminder,
+} from './waitingReminders';
 
 /** A printer that is off would otherwise beep on every sale in a rush. */
 export const PRINTER_TONE_GAP_MS = 2 * 60_000;
@@ -86,12 +92,13 @@ export function toWaitingOrders(snaps: readonly OrderSnapshot[]): WaitingOrder[]
  */
 export function planWaitingReminders(
   list: readonly WaitingOrder[],
-  opts: ToneContext & { reminded: ReadonlySet<string>; ringing: ReadonlySet<string> },
+  opts: ToneContext & { reminded: ReadonlySet<string>; ringing: ReadonlySet<string>; timing?: ReminderTiming },
 ): { due: WaitingReminder[]; boardUnused: boolean; tone: boolean } {
   const { due, boardUnused } = dueWaitingReminders(list, opts.now, {
     includeCounter: opts.settings.waitingIncludesCounter,
     reminded: opts.reminded,
     ringing: opts.ringing,
+    ...(opts.timing ? { timing: opts.timing } : {}),
   });
   const tone =
     due.length > 0 &&

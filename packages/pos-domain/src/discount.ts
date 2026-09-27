@@ -1,4 +1,5 @@
-import type { Cents } from '@cheeseoclock/shared-types';
+import { DEFAULT_DISCOUNT_APPROVAL, type ApprovalLimits, type Cents } from '@cheeseoclock/shared-types';
+import { formatCents } from './money.js';
 
 export type DiscountType = 'percent' | 'flat';
 
@@ -25,25 +26,57 @@ export function computeDiscountCents(subtotalCents: Cents | number, d: DiscountI
   return Math.min(amount, subtotal) as Cents;
 }
 
-/** Discount threshold beyond which manager approval is required (configurable later). */
-export const MANAGER_APPROVAL_PERCENT_THRESHOLD = 10;
-export const MANAGER_APPROVAL_FLAT_CENTS_THRESHOLD = 50_000; // PKR 500
+/**
+ * Does this discount need a manager's PIN or password? THE one rule: the F3
+ * screen's locks (limits from checkout:getRules), the IPC check and the
+ * repository's save and cart-change re-check (both read the live
+ * 'discounts.approval' setting in the main process) all call it, so they
+ * can't disagree.
+ *
+ * A percent over `limits.percentOver` does. A flat amount does when it is
+ * over `limits.flatOverCents` — or, given the order's subtotal, when it is
+ * more than the same percent of that order (Rs 499 off a Rs 600 order is 83%
+ * off and must not slip through as "under Rs 500"). A limit of 0 means every
+ * discount of that kind needs a manager (a % limit of 0 holds rupee amounts
+ * to 0% of the order too).
+ *
+ * `limits` defaults to the released default (10%, Rs 500) only for callers
+ * that have no setting to hand (tests of today's numbers); every till path
+ * passes the live setting (pinned by approval-everywhere.db.test.ts).
+ */
+export function requiresManagerApproval(
+  d: DiscountInput,
+  subtotalCents?: Cents | number,
+  limits: ApprovalLimits = DEFAULT_DISCOUNT_APPROVAL,
+): boolean {
+  if (d.type === 'percent') return d.value > limits.percentOver;
+  if (d.value > limits.flatOverCents) return true;
+  const subtotal = subtotalCents === undefined ? undefined : (subtotalCents as number);
+  return subtotal !== undefined && subtotal > 0 && d.value * 100 > subtotal * limits.percentOver;
+}
 
 /**
- * Does this discount need a manager's PIN? A percent over the threshold does.
- * A flat amount does when it is over Rs 500 — or, given the order's subtotal,
- * when it is more than the same threshold percent of that order (Rs 499 off a
- * Rs 600 order is 83% off and must not slip through as "under Rs 500").
+ * The approval rule in plain words, built from the limits (the F3 screen,
+ * the refusal, Settings → Money & discounts): "Up to 10% off, or up to Rs 500
+ * off if that is no more than 10% of the order, without a manager."
  */
-export function requiresManagerApproval(d: DiscountInput, subtotalCents?: Cents | number): boolean {
-  if (d.type === 'percent') return d.value > MANAGER_APPROVAL_PERCENT_THRESHOLD;
-  if (d.value > MANAGER_APPROVAL_FLAT_CENTS_THRESHOLD) return true;
-  const subtotal = subtotalCents === undefined ? undefined : (subtotalCents as number);
-  return (
-    subtotal !== undefined &&
-    subtotal > 0 &&
-    d.value * 100 > subtotal * MANAGER_APPROVAL_PERCENT_THRESHOLD
-  );
+export function approvalRuleText(limits: ApprovalLimits): string {
+  const p = limits.percentOver;
+  if (p === 0) return "Every discount needs a manager's PIN or password.";
+  if (limits.flatOverCents === 0) {
+    return `Up to ${p}% off without a manager. More, or any amount off in rupees, needs a manager's PIN or password.`;
+  }
+  return `Up to ${p}% off, or up to ${formatCents(limits.flatOverCents)} off if that is no more than ${p}% of the order, without a manager. More needs a manager's PIN or password.`;
+}
+
+/**
+ * The most a cashier can take off this order without a manager, in rupees:
+ * the smaller of the rupee limit and the % limit of the order (for the
+ * worked example on Settings → Money & discounts).
+ */
+export function mostOffWithoutManagerCents(limits: ApprovalLimits, subtotalCents: number): number {
+  if (!(subtotalCents > 0)) return 0;
+  return Math.min(limits.flatOverCents, Math.floor((subtotalCents * limits.percentOver) / 100));
 }
 
 /**

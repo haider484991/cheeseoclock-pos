@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
 import { ipc, IpcError, onShopSettingsChanged, onSyncStatusChanged } from '../../../ipc/client';
 import { useToast } from '../../../components/toast/ToastProvider';
+import { discountRulesOf, kitchenTimingOf, type CounterDiscountRules, type CounterKitchenTiming } from './counterRules';
 
 /** Every shop-rule query (Settings cards, the counter's rules) is under this key. */
 export const SHOP_SETTINGS_KEY = ['shop-settings'] as const;
@@ -25,10 +26,33 @@ export function useShopSettingsLive(): void {
   );
 }
 
-/** What the counter needs: the foodpanda deal and Pay's checks (any signed-in login). */
-export function useCheckoutRules() {
+/**
+ * What the counter needs (any signed-in login): the F3 approval limit and
+ * buttons, the Live Orders timings, the foodpanda deal and Pay's checks.
+ */
+export function useCheckoutRules(opts: { enabled?: boolean } = {}) {
   useShopSettingsLive();
-  return useQuery({ queryKey: CHECKOUT_RULES_KEY, queryFn: () => ipc.checkout.getRules(), staleTime: 30_000 });
+  return useQuery({
+    queryKey: CHECKOUT_RULES_KEY,
+    queryFn: () => ipc.checkout.getRules(),
+    staleTime: 30_000,
+    enabled: opts.enabled ?? true,
+  });
+}
+
+/** The F3 screen's approval limit and buttons (the released ones until the till has answered). */
+export function useDiscountRules(): CounterDiscountRules & { refetch: () => void } {
+  const q = useCheckoutRules();
+  return { ...discountRulesOf(q.data), refetch: () => void q.refetch() };
+}
+
+/**
+ * The Live Orders colours and reminder minutes (the released ones until the
+ * till has answered). `enabled: false` while nobody is signed in (the
+ * reminders' loop is mounted on the PIN pad too; the till would refuse).
+ */
+export function useKitchenTiming(opts: { enabled?: boolean } = {}): CounterKitchenTiming {
+  return kitchenTimingOf(useCheckoutRules(opts).data);
 }
 
 /**

@@ -30,7 +30,7 @@ import {
   validateDiscountInput,
   requiresManagerApproval,
 } from '@cheeseoclock/pos-domain';
-import { readShopSetting } from '../business-settings-read.js';
+import { readApprovalLimits, readShopSetting } from '../business-settings-read.js';
 import { COC_ID_NAMESPACE, FOODPANDA_ORDER_CODE_MAX } from '@cheeseoclock/shared-types';
 import type {
   FoodpandaTenderCheck,
@@ -1279,8 +1279,9 @@ export function applyDiscount(
 
     // Repo-level approval guard — defense in depth even if a future caller
     // bypasses the IPC handler (which already enforces it via verifyManagerPin).
+    // The live limit (Settings → Money & discounts), the same rule as the screen and the handler.
     if (
-      requiresManagerApproval({ type: input.discountType, value: input.value }, order.subtotalCents) &&
+      requiresManagerApproval({ type: input.discountType, value: input.value }, order.subtotalCents, readApprovalLimits(db)) &&
       !input.approverUserId
     ) {
       throw new Error('Manager approval is required for this discount');
@@ -1485,9 +1486,12 @@ function recomputeOrderTotals(
           payload: { id: discountRow.id, amountCents: discount },
         });
       }
-    } else if (requiresManagerApproval(d, subtotal) && !discountRow.approved_by_user_id) {
-      // A flat discount that has become more than 10% of a shrunken cart now
-      // needs a manager: take it off, the cashier re-applies it (with a PIN).
+    } else if (!discountRow.approved_by_user_id && requiresManagerApproval(d, subtotal, readApprovalLimits(db))) {
+      // Unapproved, and now over the limit: a flat discount that has become
+      // more than the % limit of a shrunken cart, or any discount over a
+      // limit the owner has lowered since (Settings → Money & discounts, read
+      // live here, at the order's next cart change). Take it off; the cashier
+      // re-applies it with a manager's PIN.
       db.prepare(
         `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
       ).run(now, now, discountRow.id);

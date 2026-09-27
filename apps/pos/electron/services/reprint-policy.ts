@@ -16,17 +16,52 @@
  *    (the customer lost it, the post-payment Reprint with the FBR number);
  *    anything more, any order that is not current, a refunded order and the
  *    shop copy need a manager's PIN or password;
+ *  - how many free papers (0–3) and how long an order stays current (10–120
+ *    minutes) are the owner's: Settings → Staff & kitchen timing
+ *    ('staff.timing' freeReprints, reprintWindowMin), read by reprint-service
+ *    on every press. By default one paper within 30 minutes;
  *  - the first paper that carries the FBR number, after the receipt printed
  *    without it, does not use up that one paper.
  * Every paper is in the print log either way (document_prints).
  */
-import { hasCapability, type OrderStatus, type PrintedDocument, type ReceiptCopy, type Role } from '@cheeseoclock/shared-types';
+import {
+  DEFAULT_STAFF_TIMING,
+  hasCapability,
+  type OrderStatus,
+  type PrintedDocument,
+  type ReceiptCopy,
+  type Role,
+  type StaffTiming,
+} from '@cheeseoclock/shared-types';
 
-/** How long after the sale an order still counts as current (paid_at, or created_at while unpaid). */
-export const REPRINT_FREE_WINDOW_MS = 30 * 60_000;
+/**
+ * How long after the sale an order still counts as current (paid_at, or
+ * created_at while unpaid), by default: 30 minutes. The owner's is
+ * 'staff.timing' reprintWindowMin. The spooler's "Printed later" mark keeps
+ * this released window on purpose: the marks on a paper never change with a
+ * setting.
+ */
+export const REPRINT_FREE_WINDOW_MS = DEFAULT_STAFF_TIMING.reprintWindowMin * 60_000;
 
-/** Papers a cashier may print by hand for one paid receipt of a current order. */
-export const FREE_CASHIER_REPRINTS = 1;
+/** Papers a cashier may print by hand for one paid receipt of a current order, by default (the owner's is 'staff.timing' freeReprints). */
+export const FREE_CASHIER_REPRINTS = DEFAULT_STAFF_TIMING.freeReprints;
+
+/** The owner's reprint rule: free papers by hand, and for how long after the sale. */
+export interface ReprintRules {
+  freeReprints: number;
+  windowMin: number;
+}
+
+/** The released rule: one paper within 30 minutes. */
+export const DEFAULT_REPRINT_RULES: Readonly<ReprintRules> = Object.freeze({
+  freeReprints: FREE_CASHIER_REPRINTS,
+  windowMin: DEFAULT_STAFF_TIMING.reprintWindowMin,
+});
+
+/** The reprint rule out of the owner's staff timings. */
+export function reprintRulesOf(t: Pick<StaffTiming, 'freeReprints' | 'reprintWindowMin'>): ReprintRules {
+  return { freeReprints: t.freeReprints, windowMin: t.reprintWindowMin };
+}
 
 /** The Live Orders board: an order that is still being made or delivered is current, however old. */
 export const CURRENT_STATUSES: readonly OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'];
@@ -42,12 +77,17 @@ export const KITCHEN_REPRINT_STATUSES: readonly OrderStatus[] = ['sent_to_kitche
  */
 export const REPRINT_ANY_CAPABILITY = 'order.history' as const;
 
-/** Still the order in front of the counter: on the board, or paid / taken within the window. */
-export function isCurrentOrder(status: OrderStatus, lastActivityAt: string, nowMs: number): boolean {
+/** Still the order in front of the counter: on the board, or paid / taken within the window (default 30 minutes). */
+export function isCurrentOrder(
+  status: OrderStatus,
+  lastActivityAt: string,
+  nowMs: number,
+  windowMs: number = REPRINT_FREE_WINDOW_MS,
+): boolean {
   if (status === 'void' || status === 'refunded') return false;
   if (CURRENT_STATUSES.includes(status)) return true;
   const age = nowMs - Date.parse(lastActivityAt);
-  return Number.isFinite(age) && age <= REPRINT_FREE_WINDOW_MS;
+  return Number.isFinite(age) && age <= windowMs;
 }
 
 export interface ReprintApprovalInput {
@@ -67,6 +107,8 @@ export interface ReprintApprovalInput {
   fbrCopy: boolean;
   /** "Order #0042" — for the message. */
   orderLabel: string;
+  /** The owner's rule (Settings → Staff & kitchen timing); the released one when absent. */
+  rules?: ReprintRules;
 }
 
 export interface ReprintApproval {
@@ -80,6 +122,7 @@ const FREE: ReprintApproval = { approval: false, why: '' };
 const NEED = "A manager's PIN or password is needed";
 
 export function reprintApproval(i: ReprintApprovalInput): ReprintApproval {
+  const rules = i.rules ?? DEFAULT_REPRINT_RULES;
   if (hasCapability(i.role, REPRINT_ANY_CAPABILITY)) return FREE;
   // Nothing of cash value on it: a bill says NOT PAID, a cancelled order NOTHING TO PAY.
   if (i.document === 'bill' || i.document === 'void' || i.document === 'kitchen' || i.document === 'kitchen_cancel') {
@@ -92,14 +135,16 @@ export function reprintApproval(i: ReprintApprovalInput): ReprintApproval {
   if (i.status === 'refunded') {
     return { approval: true, why: `${i.orderLabel} was refunded. ${NEED} to print its ${paper} again.` };
   }
-  if (!isCurrentOrder(i.status, i.lastActivityAt, i.nowMs)) {
+  if (!isCurrentOrder(i.status, i.lastActivityAt, i.nowMs, rules.windowMin * 60_000)) {
     return {
       approval: true,
-      why: `${i.orderLabel} was paid more than ${REPRINT_FREE_WINDOW_MS / 60_000} minutes ago. ${NEED} to print its ${paper} now.`,
+      why: `${i.orderLabel} was paid more than ${rules.windowMin} minutes ago. ${NEED} to print its ${paper} now.`,
     };
   }
   if (i.fbrCopy) return FREE;
-  if (i.priorManual >= FREE_CASHIER_REPRINTS) {
+  // The first paper of the series is not a reprint: free however few reprints the owner allows.
+  if (i.priorAll === 0) return FREE;
+  if (i.priorManual >= rules.freeReprints) {
     const times = i.priorAll === 1 ? 'once' : `${i.priorAll} times`;
     return {
       approval: true,

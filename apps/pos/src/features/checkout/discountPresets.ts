@@ -5,6 +5,12 @@ import {
   formatCents,
   requiresManagerApproval,
 } from '@cheeseoclock/pos-domain';
+import {
+  DEFAULT_DISCOUNT_APPROVAL,
+  DEFAULT_DISCOUNT_PRESETS,
+  type ApprovalLimits,
+  type DiscountPresets,
+} from '@cheeseoclock/shared-types';
 
 /**
  * The discount screen's one-tap choices and the live "what will the bill be"
@@ -19,12 +25,35 @@ export interface DiscountChoice {
   value: number;
 }
 
-/** One-tap percentages (owner, 2026-09-26). */
-export const PERCENT_PRESETS = [10, 20, 25, 50, 100] as const;
-/** One-tap flat amounts, in rupees. */
-export const FLAT_PRESETS_RUPEES = [100, 200, 500] as const;
-/** One-tap reasons; the reason prints on the bill and shows in the discount report. */
-export const REASON_PRESETS = ['Staff', 'Friends & family', 'Regular customer', 'Complaint'] as const;
+/**
+ * The released one-tap buttons (owner, 2026-09-26): what the dialog shows
+ * while nothing is saved. The owner's own are Settings → Money & discounts
+ * ('discounts.presets', from checkout:getRules): presetButtons() below.
+ */
+export const PERCENT_PRESETS: readonly number[] = DEFAULT_DISCOUNT_PRESETS.percents;
+/** One-tap flat amounts, in rupees (the released ones). */
+export const FLAT_PRESETS_RUPEES: readonly number[] = DEFAULT_DISCOUNT_PRESETS.flatCents.map((c) => c / 100);
+/** One-tap reasons; the reason prints on the bill and shows in the discount report (the released ones). */
+export const REASON_PRESETS: readonly string[] = DEFAULT_DISCOUNT_PRESETS.reasons;
+
+/** One one-tap button of the dialog. */
+export interface PresetButton {
+  key: string;
+  /** "25%", "Rs 200". */
+  label: string;
+  choice: DiscountChoice;
+}
+
+/** The dialog's % and rupee buttons, built from the owner's values (in the order he saved them). */
+export function presetButtons(presets: Pick<DiscountPresets, 'percents' | 'flatCents'>): {
+  percent: PresetButton[];
+  flat: PresetButton[];
+} {
+  return {
+    percent: presets.percents.map((pct) => ({ key: `p${pct}`, label: `${pct}%`, choice: percentChoice(pct) })),
+    flat: presets.flatCents.map((cents) => ({ key: `f${cents}`, label: formatCents(cents), choice: { type: 'flat' as const, value: cents } })),
+  };
+}
 
 export function percentChoice(pct: number): DiscountChoice {
   return { type: 'percent', value: pct };
@@ -100,7 +129,7 @@ export interface DiscountPreview {
   discountCents: number;
   taxCents: number;
   totalCents: number;
-  /** Needs a manager's PIN (same rule the till enforces when saving). */
+  /** Needs a manager's PIN: pos-domain requiresManagerApproval with the owner's limit, the rule the till enforces when saving. */
   needsApproval: boolean;
   /** A flat amount bigger than the order: only the order's worth comes off. */
   capped: boolean;
@@ -109,12 +138,14 @@ export interface DiscountPreview {
 /**
  * The bill if `choice` were applied now. `lines` are the order's lines in
  * ticket order (their line totals and tax rates); `subtotalCents` is their sum.
- * With no choice it is the bill with no discount.
+ * With no choice it is the bill with no discount. `limits` is the owner's
+ * approval limit (checkout:getRules); the released 10% / Rs 500 when absent.
  */
 export function previewDiscount(
   lines: ReadonlyArray<{ lineTotalCents: number; taxRateBps?: number }>,
   subtotalCents: number,
   choice: DiscountChoice | null,
+  limits: ApprovalLimits = DEFAULT_DISCOUNT_APPROVAL,
 ): DiscountPreview {
   const discountCents = choice ? computeDiscountCents(subtotalCents, choice) : 0;
   let taxCents = 0;
@@ -132,7 +163,7 @@ export function previewDiscount(
     discountCents,
     taxCents,
     totalCents: subtotalCents - discountCents + taxCents,
-    needsApproval: choice ? requiresManagerApproval(choice, subtotalCents) : false,
+    needsApproval: choice ? requiresManagerApproval(choice, subtotalCents, limits) : false,
     capped: !!choice && choice.type === 'flat' && choice.value > subtotalCents,
   };
 }
