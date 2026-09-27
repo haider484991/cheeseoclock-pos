@@ -1,9 +1,10 @@
 import { Fragment, useCallback, useMemo, useState } from 'react';
 import { Card, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { MenuCostRow } from '@cheeseoclock/shared-types';
+import { PROFIT_CAPABILITY, type MenuCostRow } from '@cheeseoclock/shared-types';
 import { AlertTriangle, Target } from 'lucide-react';
 import { FilterChips, SearchBox, matchesSearch, useDeepLinkOpen, useSessionState, type ChipOption } from '../../components/list';
+import { useSessionStore } from '../../stores/sessionStore';
 import { useMenuCosts } from './costingQueries';
 import { FoodCostChip } from './CostChip';
 import { ItemCostSheetDrawer } from './ItemCostSheet';
@@ -12,11 +13,24 @@ import { groupSizes, splitSize, summarySentence } from './costingFormat';
 /**
  * Menu costs: every item and size, worst first, with the five columns the
  * owner reads — item, price, cost to make, food-cost chip, profit per sale.
+ * Profit per sale is profit.view's (the owner's since 2026-09-27): a manager
+ * gets the first four, and the main process sends no profit to fill a fifth.
  * A row opens its cost sheet. Delivery charges and other non-food lines are
  * left out.
  */
-export function MenuCostsTab({ onShowMissing, onShowTargets }: { onShowMissing: () => void; onShowTargets: () => void }) {
+export function MenuCostsTab({
+  onShowMissing,
+  onShowTargets,
+  onTryPrice,
+}: {
+  onShowMissing: () => void;
+  onShowTargets: () => void;
+  /** "Try a price" on a cost sheet (profit.view): What-if with that dish. */
+  onTryPrice?: (menuItemId: string) => void;
+}) {
   const q = useMenuCosts();
+  const withKeep = useSessionStore((s) => s.can(PROFIT_CAPABILITY));
+  const cols = withKeep ? 5 : 4;
   const [category, setCategory] = useSessionState<string>('costing.menu.cat', 'all');
   const [query, setQuery] = useSessionState('costing.menu:q', '');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -93,30 +107,30 @@ export function MenuCostsTab({ onShowMissing, onShowTargets }: { onShowMissing: 
                 <th className="pb-2 text-right">Price</th>
                 <th className="pb-2 text-right">Cost to make</th>
                 <th className="pb-2 text-center">Food cost</th>
-                <th className="pb-2 text-right">You keep per sale</th>
+                {withKeep && <th className="pb-2 text-right">You keep per sale</th>}
               </tr>
             </thead>
             <tbody>
               {groups.map((g) =>
                 g.rows.length === 1 ? (
-                  <CostRow key={g.key} row={g.rows[0]!} label={g.rows[0]!.name} onOpen={setOpenId} />
+                  <CostRow key={g.key} row={g.rows[0]!} label={g.rows[0]!.name} withKeep={withKeep} onOpen={setOpenId} />
                 ) : (
                   <Fragment key={g.key}>
                     <tr className="border-t border-stone-200 dark:border-stone-700">
-                      <td colSpan={5} className="pb-0.5 pt-2.5 font-semibold">
+                      <td colSpan={cols} className="pb-0.5 pt-2.5 font-semibold">
                         {g.base}
                         <span className="ml-2 text-xs font-normal text-stone-500">{g.rows[0]!.categoryName}</span>
                       </td>
                     </tr>
                     {g.rows.map((r) => (
-                      <CostRow key={r.menuItemId} row={r} label={splitSize(r.name).size ?? r.name} indent onOpen={setOpenId} />
+                      <CostRow key={r.menuItemId} row={r} label={splitSize(r.name).size ?? r.name} indent withKeep={withKeep} onOpen={setOpenId} />
                     ))}
                   </Fragment>
                 ),
               )}
               {groups.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-stone-500">
+                  <td colSpan={cols} className="py-8 text-center text-stone-500">
                     {q.isLoading ? 'Working out the costs…' : q.isError ? 'Could not work out the costs.' : food.length === 0 ? 'No menu items yet.' : 'No items match.'}
                   </td>
                 </tr>
@@ -126,12 +140,25 @@ export function MenuCostsTab({ onShowMissing, onShowTargets }: { onShowMissing: 
         </div>
       </Card>
 
-      {openId && <ItemCostSheetDrawer menuItemId={openId} onClose={() => setOpenId(null)} />}
+      {openId && <ItemCostSheetDrawer menuItemId={openId} onClose={() => setOpenId(null)} onTryPrice={onTryPrice} />}
     </div>
   );
 }
 
-function CostRow({ row: r, label, indent, onOpen }: { row: MenuCostRow; label: string; indent?: boolean; onOpen: (id: string) => void }) {
+function CostRow({
+  row: r,
+  label,
+  indent,
+  withKeep,
+  onOpen,
+}: {
+  row: MenuCostRow;
+  label: string;
+  indent?: boolean;
+  /** The "You keep per sale" column (profit.view). */
+  withKeep: boolean;
+  onOpen: (id: string) => void;
+}) {
   const costed = r.flag !== 'grey';
   const range = r.minCostCents !== r.maxCostCents ? `From ${formatCents(r.minCostCents)} to ${formatCents(r.maxCostCents)}, by what the customer picks` : undefined;
   return (
@@ -167,7 +194,7 @@ function CostRow({ row: r, label, indent, onOpen }: { row: MenuCostRow; label: s
       <td className="py-2 text-center">
         <FoodCostChip flag={r.flag} bps={r.foodCostBps} targetBps={r.targetBps} />
       </td>
-      <td className="py-2 text-right font-mono">{costed ? formatCents(r.profitCents) : '—'}</td>
+      {withKeep && <td className="py-2 text-right font-mono">{costed && r.profitCents !== null ? formatCents(r.profitCents) : '—'}</td>}
     </tr>
   );
 }

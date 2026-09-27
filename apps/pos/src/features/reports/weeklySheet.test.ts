@@ -43,8 +43,8 @@ const WEEK: OwnerWeek = {
   doThisMore: 0,
   doThisFailed: [],
   sheet: {
-    earnsMost: [{ menuItemId: 'm2', name: 'Test Large Fajita', soldThisWeek: 30, foodCostBps: 2_500 }],
-    earnsLeast: [{ menuItemId: 'm3', name: 'Test Garlic Bread', soldThisWeek: 12, foodCostBps: 4_500 }],
+    earnsMost: [{ menuItemId: 'm2', name: 'Test Large Fajita', soldThisWeek: 30, foodCostBps: 2_500, profitPerSaleCents: null }],
+    earnsLeast: [{ menuItemId: 'm3', name: 'Test Garlic Bread', soldThisWeek: 12, foodCostBps: 4_500, profitPerSaleCents: null }],
     wasteByReason: [{ reason: 'burnt', times: 3, cents: 240_000 }],
     previousCosts: { foodCostBps: 2_800, coverageBps: 9_500, wasteCents: 180_000, hasCosts: true },
     lastStockTake: {
@@ -56,6 +56,7 @@ const WEEK: OwnerWeek = {
       band: 'needs_work',
       topIngredient: 'Test mozzarella',
     },
+    profit: null,
   },
 };
 

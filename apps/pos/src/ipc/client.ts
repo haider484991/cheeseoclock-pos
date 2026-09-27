@@ -319,6 +319,10 @@ export const ipc = {
     setDayparts: (input: IpcRequest<'reports:setDayparts'>) => unwrap(window.api.reports.setDayparts(input)),
     /** Used vs should have used between two stock takes (the latest two when none are named). */
     variance: (input?: IpcRequest<'reports:variance'>) => unwrap(window.api.reports.variance(input)),
+    /** Profit (costing spec Phase 9): the waterfall, by channel and by category (profit.view). */
+    profit: (input: IpcRequest<'reports:profit'>) => unwrap(window.api.reports.profit(input)),
+    /** The menu map: the last 28 days unless a period is given (profit.view). */
+    menuMap: (input?: IpcRequest<'reports:menuMap'>) => unwrap(window.api.reports.menuMap(input)),
   },
   inventory: {
     listIngredients: (input?: IpcRequest<'inventory:listIngredients'>) =>
@@ -420,6 +424,12 @@ export const ipc = {
     getTills: () => unwrap(window.api.costing.getTills()),
     /** The owner's answer (settings.manage). */
     setTills: (input: IpcRequest<'costing:setTills'>) => unwrap(window.api.costing.setTills(input)),
+    /** foodpanda's commission, payment fees and the rider cost (Phase 9). */
+    getChannelFees: () => unwrap(window.api.costing.getChannelFees()),
+    /** The owner's answer (settings.manage). */
+    setChannelFees: (input: IpcRequest<'costing:setChannelFees'>) => unwrap(window.api.costing.setChannelFees(input)),
+    /** New prices tried against the last 4 weeks — nothing is saved (profit.view). */
+    whatIf: (input: IpcRequest<'costing:whatIf'>) => unwrap(window.api.costing.whatIf(input)),
   },
 };
 

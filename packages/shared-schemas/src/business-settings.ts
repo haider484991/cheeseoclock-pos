@@ -1,12 +1,17 @@
 import { z } from 'zod';
-import { DAY_NOTE_TAGS, daypartHours } from '@cheeseoclock/shared-types';
+import { COMMISSION_BASES, DAY_NOTE_TAGS, RIDER_COST_MODES, daypartHours } from '@cheeseoclock/shared-types';
 import type {
+  ChannelFees,
   CostAlertSettings,
   CostingTargets,
   Daypart,
+  MenuMapRequest,
+  RiderCostSetting,
+  SetChannelFeesRequest,
   SetCostAlertSettingsRequest,
   SetCostingTargetsRequest,
   TillsSetting,
+  WhatIfRequest,
 } from '@cheeseoclock/shared-types';
 
 /**
@@ -143,6 +148,55 @@ export const analyticsDaypartsSchema = z
     }
   });
 
+/** A share of money in basis points, 0–100% (2500 = 25%). */
+const feeBps = (what: string) =>
+  z
+    .number()
+    .int({ message: `${what} is a whole number of basis points` })
+    .min(0, { message: `${what} cannot be below 0%` })
+    .max(10_000, { message: `${what} cannot be above 100%` });
+
+/** Paisa, Rs 0 to Rs 100,000. */
+const feeCents = (what: string) =>
+  z
+    .number()
+    .int({ message: `${what} is in whole paisa` })
+    .min(0, { message: `${what} cannot be below Rs 0` })
+    .max(10_000_000, { message: `${what} is at most Rs 100,000` });
+
+/**
+ * Phase 9: foodpanda's commission (owner question 9; 25% of the order before
+ * tax until answered) and what each way of paying costs (costing spec 4.7).
+ */
+export const channelFeesSchema = z
+  .object({
+    foodpanda: z
+      .object({
+        commissionBps: feeBps('The commission'),
+        base: z.enum(COMMISSION_BASES, { errorMap: () => ({ message: 'Pick what the commission is taken on' }) }),
+        fixedFeeCents: feeCents('The fixed fee'),
+        upliftBps: feeBps('How much dearer foodpanda is'),
+      })
+      .strict(),
+    paymentFeeBps: z
+      .object({
+        cash: feeBps('A payment fee'),
+        card: feeBps('A payment fee'),
+        foodpanda: feeBps('A payment fee'),
+        transfer: feeBps('A payment fee'),
+      })
+      .strict(),
+  })
+  .strict();
+
+/** Phase 9: what a delivery costs in rider (costing spec 4.7): the zone's rate by default. */
+export const riderCostSchema = z
+  .object({
+    mode: z.enum(RIDER_COST_MODES, { errorMap: () => ({ message: 'Pick how riders are paid' }) }),
+    fixedCents: feeCents('The rider cost per trip'),
+  })
+  .strict();
+
 /** Every key and its schema. A key not listed here cannot be written. */
 export const BUSINESS_SETTING_SCHEMAS = {
   'costing.targets': costingTargetsSchema,
@@ -150,6 +204,8 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'costing.alerts': costingAlertsSchema,
   'analytics.dayparts': analyticsDaypartsSchema,
   'analytics.tills': analyticsTillsSchema,
+  'channels.fees': channelFeesSchema,
+  'delivery.riderCost': riderCostSchema,
 } as const;
 
 export type BusinessSettingKey = keyof typeof BUSINESS_SETTING_SCHEMAS;
@@ -180,6 +236,66 @@ export const setCostAlertSettingsInputSchema = z
 
 /** Costing → Targets & fees saves how many tills take orders (costing:setTills; the owner only). */
 export const setTillsInputSchema = analyticsTillsSchema;
+
+/** Costing → Targets & fees saves foodpanda's commission, payment fees and the rider cost (costing:setChannelFees; the owner only). */
+export const setChannelFeesInputSchema = z.object({ fees: channelFeesSchema, riderCost: riderCostSchema }).strict();
+
+const anId = z.string().min(1).max(64);
+
+/**
+ * Costing → What-if (costing:whatIf): prices to TRY, never saved. An
+ * ingredient's as a pack (size in its base unit, price in paisa); a menu
+ * item's own price (before tax). At most 200 of each.
+ */
+export const whatIfInputSchema = z
+  .object({
+    ingredients: z
+      .array(
+        z
+          .object({
+            ingredientId: anId,
+            packSize: z
+              .number()
+              .int({ message: 'A pack size is a whole number' })
+              .min(1, { message: 'A pack is at least 1' })
+              .max(100_000_000, { message: 'That pack is too big' }),
+            packPriceCents: z
+              .number()
+              .int({ message: 'A price is in whole paisa' })
+              .min(0, { message: 'A price cannot be below Rs 0' })
+              .max(100_000_000, { message: 'A price is at most Rs 1,000,000' }),
+          })
+          .strict(),
+      )
+      .max(200),
+    items: z
+      .array(
+        z
+          .object({
+            menuItemId: anId,
+            priceCents: z
+              .number()
+              .int({ message: 'A price is in whole paisa' })
+              .min(0, { message: 'A price cannot be below Rs 0' })
+              .max(100_000_000, { message: 'A price is at most Rs 1,000,000' }),
+          })
+          .strict(),
+      )
+      .max(200),
+  })
+  .strict();
+
+/** An ISO instant. */
+const instant = z.string().refine((v) => Number.isFinite(Date.parse(v)), { message: 'Pick a date' });
+
+/** Reports → Menu, the menu map (reports:menuMap): a period, or nothing for the last 28 days. */
+export const menuMapInputSchema = z
+  .object({ sinceIso: instant.optional(), untilIso: instant.optional() })
+  .strict()
+  .refine((v) => (v.sinceIso === undefined) === (v.untilIso === undefined), { message: 'Give both dates, or neither' })
+  .refine((v) => v.sinceIso === undefined || v.untilIso === undefined || Date.parse(v.untilIso) > Date.parse(v.sinceIso), {
+    message: 'The period must end after it starts',
+  });
 
 /** "Seen" on Costing → Alerts: one or more alerts at once. */
 export const markCostAlertsSeenInputSchema = z
@@ -231,3 +347,8 @@ const _alertsShape: Same<z.infer<typeof costingAlertsSchema>, CostAlertSettings>
 const _setAlertsShape: Same<z.infer<typeof setCostAlertSettingsInputSchema>, SetCostAlertSettingsRequest> = true;
 const _tillsShape: Same<z.infer<typeof analyticsTillsSchema>, TillsSetting> = true;
 const _daypartsShape: Same<z.infer<typeof analyticsDaypartsSchema>, Daypart[]> = true;
+const _feesShape: Same<z.infer<typeof channelFeesSchema>, ChannelFees> = true;
+const _riderShape: Same<z.infer<typeof riderCostSchema>, RiderCostSetting> = true;
+const _setFeesShape: Same<z.infer<typeof setChannelFeesInputSchema>, SetChannelFeesRequest> = true;
+const _whatIfShape: Same<z.infer<typeof whatIfInputSchema>, WhatIfRequest> = true;
+const _menuMapShape: Same<z.infer<typeof menuMapInputSchema>, MenuMapRequest> = true;

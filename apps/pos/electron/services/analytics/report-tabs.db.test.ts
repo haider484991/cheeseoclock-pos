@@ -151,8 +151,18 @@ live('Reports tabs through the worker', () => {
     expect(plain.staff).toEqual(team.staff);
     const food = { ...tabs.buildReportTab(db, 'foodStock', DAY, NOW), engine: 'worker' as const };
     expect(() => tabs.reportTabForLogin('foodStock', food, false)).toThrow('Only a manager or the owner can see costs.');
+    // Menu: its cost columns go with the costs (costing spec Phase 9), and its profit with profit.view.
     const menu = { ...tabs.buildReportTab(db, 'menu', DAY, NOW), engine: 'main' as const };
-    expect(tabs.reportTabForLogin('menu', menu, false)).toBe(menu);
+    expect(menu.costs).not.toBeNull();
+    expect(tabs.reportTabForLogin('menu', menu, false)).toEqual({ ...menu, costs: null });
+    expect(tabs.reportTabForLogin('menu', menu, true, true)).toBe(menu);
+    const noProfit = tabs.reportTabForLogin('menu', menu, true, false);
+    expect(Object.values(noProfit.costs!.items).every((c) => c.profitCents === null && c.profitPerSaleCents === null)).toBe(true);
+    // Profit is never handed over without profit.view and costs.
+    const profit = { ...tabs.buildReportTab(db, 'profit', DAY, NOW), engine: 'worker' as const };
+    expect(tabs.reportTabForLogin('profit', profit, true, true)).toBe(profit);
+    expect(() => tabs.reportTabForLogin('profit', profit, true, false)).toThrow('Only the owner can see profit.');
+    expect(() => tabs.reportTabForLogin('profit', profit, false, true)).toThrow('Only the owner can see profit.');
   });
 
   it('the worker answers a bad ask with its reason, and carries on', () => {

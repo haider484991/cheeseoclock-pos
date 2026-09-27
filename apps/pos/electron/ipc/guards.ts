@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../db/connection.js';
-import { hasCapability, type AuthenticatedUser, type Capability } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, PROFIT_CAPABILITY, hasCapability, type AuthenticatedUser, type Capability } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../services/auth-service.js';
 import { IpcGuardError } from './registry.js';
 
@@ -79,4 +79,21 @@ export const REFUSED = {
   purchases: 'Only a manager or the owner can record purchases or see what was spent.',
   reports: 'Only the owner can see reports.',
   stockTakes: 'Only a manager or the owner can do a stock take or see what went missing.',
+  profit: 'Only the owner can see profit.',
 } as const;
+
+/**
+ * Someone signed in who may see rupee profit (costing spec D6, Phase 9):
+ * profit.view, and — since profit says what things cost — COST_CAPABILITY
+ * too. 'forbidden' with the plain words otherwise.
+ */
+export function requireProfit(): AuthenticatedUser {
+  const s = requireCapability(PROFIT_CAPABILITY, REFUSED.profit);
+  if (!hasCapability(s.role, COST_CAPABILITY)) throw new IpcGuardError({ code: 'forbidden', message: REFUSED.profit });
+  return s;
+}
+
+/** May this login see rupee profit (profit.view and COST_CAPABILITY)? */
+export function mayProfit(s: Pick<AuthenticatedUser, 'role'>): boolean {
+  return hasCapability(s.role, PROFIT_CAPABILITY) && hasCapability(s.role, COST_CAPABILITY);
+}

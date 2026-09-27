@@ -15,7 +15,8 @@
  */
 
 import type { WasteReason } from './inventory.js';
-import type { VarianceBand } from './stock-count.js';
+import type { StockCountScope, VarianceBand } from './stock-count.js';
+import type { ChannelFees, RiderCostSetting } from './profit.js';
 
 /** Where an order came from, in the owner's words. */
 export type ReportChannel =
@@ -471,6 +472,12 @@ export interface BusinessReportRequest {
   /** Optional comparison period (e.g. "same time yesterday"). */
   compareSinceIso?: string;
   compareUntilIso?: string;
+  /**
+   * Profit only (costing spec Phase 9): the period is "Between stock takes"
+   * — these two — so the waterfall can take off the stock that went
+   * unexplained between them (when both were full counts).
+   */
+  stockTakes?: { fromCountId: string; toCountId: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -483,7 +490,7 @@ export interface BusinessReportRequest {
  * figures. Food cost & stock is for a login that may see costs
  * (COST_CAPABILITY) as well as reports.
  */
-export const REPORT_TABS = ['overview', 'when', 'menu', 'channels', 'foodStock', 'team'] as const;
+export const REPORT_TABS = ['overview', 'when', 'menu', 'channels', 'foodStock', 'team', 'profit'] as const;
 export type ReportTab = (typeof REPORT_TABS)[number];
 
 /** The owner's names for the tabs (screen, paper and file). */
@@ -494,6 +501,7 @@ export const REPORT_TAB_LABEL: Record<ReportTab, string> = {
   channels: 'Channels & delivery',
   foodStock: 'Food cost & stock',
   team: 'Team & leakage',
+  profit: 'Profit',
 };
 
 /** A tab asks for the same period (and comparison) as the whole page did. */
@@ -538,11 +546,97 @@ export interface ReportWhenTab extends ReportTabBase {
   dayNotes: ReportDayNote[];
 }
 
+/**
+ * What an item's (or a category's) sales cost, from the cost each sale kept
+ * (costing spec 4.7, Phase 9): only lines whose cost is FULLY known count,
+ * so it starts on the day costing started (older sales show "—").
+ */
+export interface ReportLineCost {
+  /** Units, and sales before tax after discounts and part refunds, of every line. */
+  units: number;
+  salesCents: number;
+  /** The units and sales whose cost is fully known, and what they cost. */
+  knownUnits: number;
+  knownSalesCents: number;
+  costCents: number;
+  /** cost ÷ known sales; null with none known. */
+  foodCostBps: number | null;
+  /** known sales ÷ sales ("costs known for 94%"); null with no sales. */
+  coverageBps: number | null;
+  /**
+   * profit.view only (null otherwise): what the known sales earned before
+   * channel costs (known sales − cost), and per known unit.
+   */
+  profitCents: number | null;
+  profitPerSaleCents: number | null;
+}
+
 /** Menu: what sells, by item and by category. */
 export interface ReportMenuTab extends ReportTabBase {
   kpis: Pick<ReportKpis, 'menuSalesCents' | 'itemCount'>;
   items: ReportItemLine[];
   categories: ReportCategoryLine[];
+  /**
+   * Costing spec Phase 9: each item's and category's cost (COST_CAPABILITY),
+   * keyed like `items` (the item key) and `categories` (the category id, or
+   * 'name:' + its name); the profit inside is profit.view's. Null for a
+   * login without costs.
+   */
+  costs: ReportMenuCosts | null;
+}
+
+export interface ReportMenuCosts {
+  items: Record<string, ReportLineCost>;
+  categories: Record<string, ReportLineCost>;
+  /** When this till first kept a sale's cost; null before any. */
+  costingStartedAt: string | null;
+}
+
+/**
+ * One delivery area (costing spec 4.11): the area on the order's address,
+ * recognised as a delivery zone where it can be. Own-rider deliveries
+ * (phone and website).
+ */
+export interface ReportDeliveryArea {
+  /** 'zone:' + the zone id, 'text:' + the area as typed, or 'none'. */
+  key: string;
+  /** "DHA Phase 6", the area as typed, or "Area not recorded". */
+  area: string;
+  /** The delivery zone it is in; null when the area names none (or several). */
+  zoneId: string | null;
+  orderCount: number;
+  /** Sales, tax included (as the rest of this tab). */
+  netSalesCents: number;
+  avgOrderCents: number;
+  /** Delivery charges collected, before tax, after discounts. */
+  feesCollectedCents: number;
+  avgMinutesOut: number | null;
+  /** Customers known by account or phone who had a delivery here in the period… */
+  customers: number;
+  /**
+   * …of them, those with 2 or more orders (any kind, anywhere) in the 90 days
+   * up to the period's end, or the whole period when longer (costing spec 4.11).
+   */
+  repeatCustomers: number;
+  repeatRateBps: number | null;
+  /** profit.view only (null otherwise): the rider's cost for these trips… */
+  riderCents: number | null;
+  /**
+   * …and what an order earns after its food, delivery charge, rider and fees,
+   * over the known part of the orders (an order whose food cost is only partly
+   * known counts in that share, its charge, rider and fees too); null with none known.
+   */
+  contributionPerOrderCents: number | null;
+}
+
+/** A delivery with no area recognised and no delivery charge on the bill: no rider cost could be put on it. */
+export interface ReportDeliveryException {
+  orderId: string;
+  orderNumber: string;
+  createdAt: string;
+  /** The area as typed, when there is one. */
+  area: string | null;
+  channel: ReportChannel;
 }
 
 /** Channels & delivery: order types, riders and delivery areas. */
@@ -550,6 +644,19 @@ export interface ReportChannelsTab extends ReportTabBase {
   kpis: Pick<ReportKpis, 'orderCount' | 'netSalesCents' | 'avgOrderCents'>;
   channels: ReportChannelLine[];
   deliveries: ReportDeliveries;
+  /** Costing spec 4.11: own-rider deliveries by area, most orders first. */
+  areas: ReportDeliveryArea[];
+  /** Deliveries with no area and no delivery charge (costing spec 4.14), newest first, capped. */
+  noRateDeliveries: ReportDeliveryException[];
+  noRateCount: number;
+  /** profit.view only (null otherwise): what each channel earns after food, commission, fees and the rider. */
+  profit: ReportChannelsProfit | null;
+}
+
+export interface ReportChannelsProfit {
+  channels: ReportChannelProfit[];
+  fees: ChannelFees;
+  riderCost: RiderCostSetting;
 }
 
 /** Food cost & stock (COST_CAPABILITY): food cost, waste, missing costs, food sent out unpaid, purchases. */
@@ -580,6 +687,112 @@ export interface ReportTeamTab extends ReportTabBase {
   foodCost: Pick<ReportFoodCost, 'hasCosts'> | null;
 }
 
+// ---------------------------------------------------------------------------
+// Profit (costing spec Phase 9, profit.view)
+// ---------------------------------------------------------------------------
+
+/**
+ * The profit waterfall's steps, in order (costing spec 4.7): sales before
+ * tax, less the food cost of the sales whose cost is known, less the sales
+ * whose cost is NOT known (set aside, never costed at Rs 0), waste, food
+ * sent out and not paid, the stock that went unexplained between two full
+ * stock takes, foodpanda's commission and payment fees (plus foodpanda's
+ * dearer prices, estimated), and the rider: profit before overheads.
+ */
+export type ProfitStepKey =
+  | 'sales'
+  | 'food_cost'
+  | 'unknown_cost'
+  | 'waste'
+  | 'sent_not_paid'
+  | 'stock_loss'
+  | 'commission'
+  | 'uplift'
+  | 'payment_fees'
+  | 'rider';
+
+export interface ReportProfitStep {
+  key: ProfitStepKey;
+  /** Signed: sales and the uplift add, everything else takes off (below 0). Σ steps = profit. */
+  cents: number;
+}
+
+/** What one channel earns (costing spec 4.7 contribution), before waste, unpaid food and stock loss. */
+export interface ReportChannelProfit {
+  channel: ReportChannel;
+  orderCount: number;
+  /** Sales before tax, after discounts and part refunds (delivery charges included). */
+  salesCents: number;
+  /** Of them: delivery charges and other non-food lines. */
+  feeSalesCents: number;
+  /** Food sales whose cost is known, and what that food cost. */
+  knownFoodSalesCents: number;
+  foodCostCents: number;
+  /** Food sales whose cost is not known: left out of what it earns. */
+  unknownSalesCents: number;
+  commissionCents: number;
+  upliftCents: number;
+  paymentFeeCents: number;
+  riderCents: number;
+  /**
+   * Of an order whose food cost is only partly known, the share of its
+   * delivery charges less rider, commission and fees (plus uplift) that goes
+   * with the food of unknown cost — set aside with it, like that food
+   * (signed; 0 when every order's food cost is known).
+   */
+  setAsideCents: number;
+  /**
+   * What the known part earns: known food sales − food cost + delivery
+   * charges − rider − commission − payment fees + uplift − setAsideCents.
+   */
+  contributionCents: number;
+  /** Per order, over the known part of the orders (an order half known counts as half); null with none known. */
+  contributionPerOrderCents: number | null;
+}
+
+/** A category's profit before channel costs: its CURRENT dishes' fully costed sales (costing spec 4.7). */
+export interface ReportCategoryProfit extends ReportLineCost {
+  categoryId: string | null;
+  name: string;
+}
+
+/**
+ * The stock-loss step: shown only when the period is "Between stock takes"
+ * and both were full counts ('counted'); otherwise why not, in a sentence.
+ */
+export interface ReportProfitStockLoss {
+  state: 'counted' | 'not_between' | 'not_full' | 'no_counts' | 'other_till_missing';
+  /** What went unexplained, at the prices then (below 0: more on the shelves than expected); null unless counted. */
+  cents: number | null;
+  scopes: { from: StockCountScope; to: StockCountScope } | null;
+  message: string | null;
+}
+
+/** Reports → Profit (profit.view): the waterfall, by channel and by category. For the orders on THIS till. */
+export interface ReportProfitTab extends ReportTabBase {
+  /** In order; their sum is profitCents. */
+  steps: ReportProfitStep[];
+  /** Profit before overheads (rent, salaries and bills are not on the till). */
+  profitCents: number;
+  wasteByReason: ReportWasteLine[];
+  sentNotPaid: ReportUnpaidFood;
+  stockLoss: ReportProfitStockLoss;
+  channels: ReportChannelProfit[];
+  categories: ReportCategoryProfit[];
+  /** Food sales whose cost is not known (the unknown-cost bar is these, less what goes with them: setAsideCents). */
+  unknownSalesCents: number;
+  /** Food sales with a known cost, as a share of food sales; null with none. */
+  coverageBps: number | null;
+  /** Orders with no cost kept, estimated from the stock they took. */
+  estimatedOrders: number;
+  costingStartedAt: string | null;
+  /** The fees and rider cost the figures were worked with. */
+  fees: ChannelFees;
+  riderCost: RiderCostSetting;
+  /** Deliveries with no area and no delivery charge: no rider cost put on them. */
+  noRateCount: number;
+}
+
 export interface ReportTabData {
   overview: ReportOverviewTab;
   when: ReportWhenTab;
@@ -587,6 +800,7 @@ export interface ReportTabData {
   channels: ReportChannelsTab;
   foodStock: ReportFoodStockTab;
   team: ReportTeamTab;
+  profit: ReportProfitTab;
 }
 
 /** A tab's figures as the builders make them, before the main process says where they were worked out. */
@@ -912,12 +1126,23 @@ export interface OwnerWeekCosts {
   hasCosts: boolean;
 }
 
-/** A dish on the printed sheet: what it earns per sale ranks it; the sheet prints no rupee profit (Phase 9's, profit.view). */
+/** A dish on the printed sheet: what it earns per sale ranks it. */
 export interface OwnerWeekItem {
   menuItemId: string;
   name: string;
   soldThisWeek: number;
   foodCostBps: number | null;
+  /** What one sale earns at menu price and today's costs: profit.view only (null otherwise). */
+  profitPerSaleCents: number | null;
+}
+
+/** The week's profit before overheads on the printed sheet (profit.view only). */
+export interface OwnerWeekProfit {
+  profitCents: number;
+  /** Food sales left out because their cost is not known. */
+  unknownSalesCents: number;
+  /** The same over the stretch it is compared with; null when this till has no figures for then. */
+  previousProfitCents: number | null;
 }
 
 /** The printed weekly sheet's cost lines (COST_CAPABILITY only). */
@@ -940,6 +1165,8 @@ export interface OwnerWeekSheet {
    * take orders with the link off (switched off).
    */
   lastStockTake: OwnerWeekStockTake | null;
+  /** Profit before overheads (costing spec §5, Phase 9): profit.view only (null otherwise). */
+  profit: OwnerWeekProfit | null;
 }
 
 /** "Used vs should have used" between the latest two stock takes, as the weekly sheet prints it. */

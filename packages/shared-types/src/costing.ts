@@ -188,7 +188,11 @@ export interface PaidExtraView {
   groupName: string;
   priceDeltaCents: number;
   costCents: number;
-  marginCents: number;
+  /**
+   * What you keep on it: price − cost. Profit (profit.view, the owner's since
+   * 2026-09-27): null for any other login, left out in the main process.
+   */
+  marginCents: number | null;
   foodCostBps: number | null;
   flag: FoodCostFlag;
   missingLines: number;
@@ -220,8 +224,12 @@ export interface MenuCostRow {
   /** Cheapest and dearest plate, from the picks the customer makes. */
   minCostCents: number;
   maxCostCents: number;
-  /** What you keep per sale at menu price: price − cost. */
-  profitCents: number;
+  /**
+   * What you keep per sale at menu price: price − cost. Profit (profit.view,
+   * the owner's since 2026-09-27): null for any other login — a manager sees
+   * the cost, not what the shop keeps — left out in the main process.
+   */
+  profitCents: number | null;
   /** Cost ÷ price, basis points; null when the price is 0. */
   foodCostBps: number | null;
   targetBps: number;
@@ -264,6 +272,13 @@ export interface MenuCostsView {
 
 export interface ItemCostSheet {
   row: MenuCostRow;
+  /**
+   * The item's own price (before tax, in the owner's price steps) that brings
+   * it to its category target at today's costs (costing spec 4.3):
+   * profit.view only, null otherwise, and when it can't be worked out (no
+   * cost, a target of 0, not food).
+   */
+  priceToHitCents: number | null;
   /** "Always in it": the lines used on every sale. */
   always: CostLineView[];
   alwaysCostCents: number;

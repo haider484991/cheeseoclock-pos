@@ -2,18 +2,18 @@
  * What the till's main process and the Reports worker thread say to each
  * other (costing spec Phase 3). Types and constants only: both sides load it.
  */
-import type { BusinessReportRequest, ReportTab, TillLinkState } from '@cheeseoclock/shared-types';
+import type { BusinessReportRequest, MenuMapRequest, ReportTab, TillLinkState, WhatIfRequest } from '@cheeseoclock/shared-types';
 import type { OwnerWeekJob } from './owner-week.js';
 import type { TrendsJob } from './trends.js';
 import type { VarianceJob } from './stock-control.js';
 
 /**
- * What the worker works out besides the six tabs: Reports → Overview's
- * trend strip and 12 months, and the owner's week (the Dashboard card and
- * the weekly sheet) — costing spec Phase 7; "used vs should have used"
- * between two stock takes — Phase 8.
+ * What the worker works out besides the tabs: Reports → Overview's trend
+ * strip and 12 months, and the owner's week (the Dashboard card and the
+ * weekly sheet) — costing spec Phase 7; "used vs should have used" between
+ * two stock takes — Phase 8; the menu map and Costing → What-if — Phase 9.
  */
-export const EXTRA_ANALYTICS = ['trends', 'ownerWeek', 'variance'] as const;
+export const EXTRA_ANALYTICS = ['trends', 'ownerWeek', 'variance', 'menuMap', 'whatIf'] as const;
 export type ExtraAnalytics = (typeof EXTRA_ANALYTICS)[number];
 
 /** Everything the worker is asked for: a tab, or one of the extras. */
@@ -28,7 +28,11 @@ export type AnalyticsRequest<K extends AnalyticsKind> = K extends ReportTab
       ? OwnerWeekJob
       : K extends 'variance'
         ? VarianceJob
-        : never;
+        : K extends 'menuMap'
+          ? MenuMapRequest | undefined
+          : K extends 'whatIf'
+            ? WhatIfRequest
+            : never;
 
 /**
  * The worker's file, next to the main bundle (out/main). electron.vite.config.ts

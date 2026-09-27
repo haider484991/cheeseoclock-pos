@@ -6,9 +6,13 @@
 import { REPORT_TABS, type ReportTab, type ReportTabRequest } from '@cheeseoclock/shared-types';
 import type { ReportPeriod } from './dateRange';
 
-/** The tabs this login sees, in the page's order: Food cost & stock only with costs (the till refuses it anyway). */
-export function visibleReportTabs(canSeeCosts: boolean): ReportTab[] {
-  return REPORT_TABS.filter((t) => t !== 'foodStock' || canSeeCosts);
+/**
+ * The tabs this login sees, in the page's order: Food cost & stock only with
+ * costs, Profit only with profit.view and costs (costing spec Phase 9) — the
+ * till refuses them anyway.
+ */
+export function visibleReportTabs(canSeeCosts: boolean, canSeeProfit = false): ReportTab[] {
+  return REPORT_TABS.filter((t) => (t !== 'foodStock' || canSeeCosts) && (t !== 'profit' || (canSeeProfit && canSeeCosts)));
 }
 
 export const LAST_TAB_KEY = 'coc.reports.lastTab';
@@ -83,12 +87,17 @@ export function browserStorage(): TabStorage | undefined {
   }
 }
 
-/** What a tab asks the till for: the period, and for the Overview its comparison. */
-export function tabRequest(tab: ReportTab, period: Pick<ReportPeriod, 'sinceIso' | 'untilIso' | 'compare'>): ReportTabRequest {
+/**
+ * What a tab asks the till for: the period, for the Overview its comparison,
+ * and for Profit — "Between stock takes" — the two stock takes (its stock
+ * loss step).
+ */
+export function tabRequest(tab: ReportTab, period: Pick<ReportPeriod, 'sinceIso' | 'untilIso' | 'compare' | 'stockTakes'>): ReportTabRequest {
   return {
     sinceIso: period.sinceIso,
     untilIso: period.untilIso,
     ...(tab === 'overview' && period.compare ? { compareSinceIso: period.compare.sinceIso, compareUntilIso: period.compare.untilIso } : {}),
+    ...(tab === 'profit' && period.stockTakes ? { stockTakes: period.stockTakes } : {}),
   };
 }
 
@@ -97,7 +106,18 @@ export function tabRequest(tab: ReportTab, period: Pick<ReportPeriod, 'sinceIso'
  * running the clock tick (so it refreshes once a minute while on screen, as
  * the page did before it had tabs; dateRange.ts autoRefreshes).
  */
-export function tabQueryKey(tab: ReportTab, period: Pick<ReportPeriod, 'sinceIso' | 'untilIso' | 'compare' | 'isCurrent'>, now: Date): unknown[] {
+export function tabQueryKey(tab: ReportTab, period: Pick<ReportPeriod, 'sinceIso' | 'untilIso' | 'compare' | 'isCurrent' | 'stockTakes'>, now: Date): unknown[] {
   const req = tabRequest(tab, period);
-  return ['reports', 'tab', tab, req.sinceIso, req.untilIso, req.compareSinceIso ?? null, req.compareUntilIso ?? null, period.isCurrent ? now.getTime() : null];
+  return [
+    'reports',
+    'tab',
+    tab,
+    req.sinceIso,
+    req.untilIso,
+    req.compareSinceIso ?? null,
+    req.compareUntilIso ?? null,
+    req.stockTakes?.fromCountId ?? null,
+    req.stockTakes?.toCountId ?? null,
+    period.isCurrent ? now.getTime() : null,
+  ];
 }

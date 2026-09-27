@@ -6,8 +6,10 @@
  * list, Phase 7): the worker must never load a write path.
  */
 import type {
+  ChannelFeesView,
   CostAlertSettingsView,
   CostingTargetsView,
+  SetChannelFeesRequest,
   SetCostAlertSettingsRequest,
   SetCostingTargetsRequest,
   TillLinkState,
@@ -19,6 +21,7 @@ import { getBusinessSetting, setBusinessSetting, setBusinessSettings } from '../
 import { keyItemIds, setKeyItems } from '../db/repositories/ingredient-repo.js';
 import type { Actor } from '../db/repositories/base.js';
 import { getCostAlertSettings, getCostingTargets } from './costing-service.js';
+import { loadProfitSettings } from './analytics/profit.js';
 
 /**
  * Save the owner's targets and price step, both keys in one transaction
@@ -76,4 +79,27 @@ export function getTillsSetting(db: AppDatabase, link: TillLinkState): TillsSett
 export function saveTillsSetting(db: AppDatabase, value: TillsSetting, actor: Actor, link: TillLinkState): TillsSettingView {
   setBusinessSetting(db, 'analytics.tills', { sellingTills: value.sellingTills }, actor);
   return getTillsSetting(db, link);
+}
+
+/** foodpanda's commission, payment fees and the rider cost in force (costing spec Phase 9; the defaults until saved). */
+export function getChannelFees(db: AppDatabase): ChannelFeesView {
+  const p = loadProfitSettings(db);
+  return { fees: p.fees, riderCost: p.riderCost, isDefault: p.isDefault, savedAt: p.savedAt };
+}
+
+/**
+ * The owner's answer to owner question 9 and how riders are paid: both keys
+ * in one transaction (business-settings-repo: synced, audited, both tills).
+ * Answers with the fees as they now stand.
+ */
+export function saveChannelFees(db: AppDatabase, req: SetChannelFeesRequest, actor: Actor): ChannelFeesView {
+  setBusinessSettings(
+    db,
+    [
+      { key: 'channels.fees', value: req.fees },
+      { key: 'delivery.riderCost', value: req.riderCost },
+    ],
+    actor,
+  );
+  return getChannelFees(db);
 }
