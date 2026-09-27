@@ -115,6 +115,19 @@ describe('orderStockNote / orderStockNoteKind', () => {
     'drink_back_other_till',
   ] as const;
 
+  it('a test order the owner deleted: its own verb, the same endings (an older till still reads them)', () => {
+    for (const kind of KINDS) {
+      const note = orderStockNote(kind, 'test_deleted');
+      expect(note.startsWith('Test order deleted')).toBe(true);
+      expect(orderStockNoteKind(note)).toBe(kind);
+    }
+    expect(orderStockNote('put_back', 'test_deleted')).toBe('Test order deleted, not made — put back');
+    expect(orderStockNote('waste', 'test_deleted')).toBe('Test order deleted after cooking — counted as waste');
+    expect(orderStockNote('moved_to_waste', 'test_deleted')).toBe('Test order deleted after cooking — moved to waste');
+    // The till that took the stock puts the other till's share back on its own count.
+    expect(returnsToOtherTill(orderStockNoteKind(orderStockNote('put_back_other_till', 'test_deleted')))).toBe(true);
+  });
+
   it('writes one note per kind, and reads each back', () => {
     for (const how of ['cancelled', 'refunded'] as const) {
       for (const kind of KINDS) {

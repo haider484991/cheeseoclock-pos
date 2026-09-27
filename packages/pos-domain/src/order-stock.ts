@@ -140,9 +140,15 @@ export type OrderStockNoteKind =
   /** Made, but a sealed drink the other till took went back in the fridge: as above. */
   | 'drink_back_other_till';
 
-/** The note on a stock row that settled an order. One place, so the labels can read it back. */
+/**
+ * The note on a stock row that settled an order. One place, so the labels can
+ * read it back. A test order the owner deleted (0043) reads "Test order
+ * deleted, not made — put back" / "Test order deleted after cooking — counted
+ * as waste": the endings are the same, so orderStockNoteKind (and an older
+ * till's applyOtherTillReturn) still read them.
+ */
 export function orderStockNote(kind: OrderStockNoteKind, how: OrderStockHow): string {
-  const verb = how === 'refunded' ? 'Refunded' : 'Cancelled';
+  const verb = how === 'refunded' ? 'Refunded' : how === 'test_deleted' ? 'Test order deleted' : 'Cancelled';
   switch (kind) {
     case 'put_back':
       return `${verb}, not made — put back`;

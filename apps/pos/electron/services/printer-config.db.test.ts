@@ -239,8 +239,17 @@ describe.skipIf(!DatabaseSync)('the drawer pulse on the no-printer file', () => 
     try {
       printSpooler.init(db);
       printSpooler.resetAdapter();
-      const result = await printSpooler.kickDrawerNow();
+      // No row, no pulse (0042): the open is on record first, and settled by the pulse.
+      const { recordDrawerOpen } = await import('../db/repositories/drawer-open-repo.js');
+      db.prepare(
+        `INSERT OR IGNORE INTO users (id, full_name, pin_hash, role, created_at, updated_at, device_id)
+         VALUES ('u-test', 'Test Owner', 'x', 'admin', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'dev-test')`,
+      ).run();
+      const open = recordDrawerOpen(db, { kind: 'test' }, { userId: 'u-test', deviceId: 'dev-test' });
+      const result = await printSpooler.kickDrawerNow({ drawerOpenId: open.id });
       expect(result.ok).toBe(true);
+      // The no-printer file "took" it, but no receipt printer is set up.
+      expect(db.prepare(`SELECT outcome FROM drawer_opens WHERE id = ?`).get(open.id)).toEqual({ outcome: 'no_printer' });
     } finally {
       vi.useRealTimers();
     }

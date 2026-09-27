@@ -146,6 +146,12 @@ export const ipc = {
     refund: (input: IpcRequest<'orders:refund'>) => unwrap(window.api.orders.refund(input)),
     /** What cancelling / refunding would do to stock ("Was the food made?"), or what it did. */
     stockStatus: (orderId: string) => unwrap(window.api.orders.stockStatus({ orderId })),
+    /** The owner only: what deleting this order as a test would do (nothing is written). */
+    testDeletePreview: (orderId: string) => unwrap(window.api.orders.testDeletePreview({ orderId })),
+    /** The owner only, with the owner's PIN or password typed again. It can't be brought back. */
+    deleteTest: (req: IpcRequest<'orders:deleteTest'>) => unwrap(window.api.orders.deleteTest(req)),
+    /** The owner only: deleted test orders taken in the period. */
+    listDeletedTests: (req: IpcRequest<'orders:listDeletedTests'>) => unwrap(window.api.orders.listDeletedTests(req)),
     attachCustomer: (input: IpcRequest<'orders:attachCustomer'>) =>
       unwrap(window.api.orders.attachCustomer(input)),
     detachCustomer: (orderId: string) =>
@@ -293,6 +299,10 @@ export const ipc = {
       unwrap(window.api.printer.reprintKitchen({ orderId })),
     reprintCounts: (orderIds: string[]) =>
       unwrap(window.api.printer.reprintCounts({ orderIds })),
+    /** What the print button would print (original or DUPLICATE), and every paper the order had. */
+    orderPapers: (orderId: string) => unwrap(window.api.printer.orderPapers({ orderId })),
+    /** "Try again" on the failed-print note: that very job again (the till's own paper stays the original). */
+    retryJob: (jobId: string) => unwrap(window.api.printer.retryJob({ jobId })),
   },
   fbr: {
     getConfig: () => unwrap(window.api.fbr.getConfig()),
@@ -321,6 +331,8 @@ export const ipc = {
     setDayparts: (input: IpcRequest<'reports:setDayparts'>) => unwrap(window.api.reports.setDayparts(input)),
     /** Used vs should have used between two stock takes (the latest two when none are named). */
     variance: (input?: IpcRequest<'reports:variance'>) => unwrap(window.api.reports.variance(input)),
+    /** Every time the till opened the cash drawer, newest first, a page at a time (the owner). */
+    drawerLog: (req: IpcRequest<'reports:drawerLog'>) => unwrap(window.api.reports.drawerLog(req)),
     /** Profit (costing spec Phase 9): the waterfall, by channel and by category (profit.view). */
     profit: (input: IpcRequest<'reports:profit'>) => unwrap(window.api.reports.profit(input)),
     /** The menu map: the last 28 days unless a period is given (profit.view). */
@@ -544,8 +556,12 @@ export function onLowStock(cb: (items: LowStockItem[]) => void): () => void {
 
 /** Payload broadcast by the main process when a print job fails permanently. */
 export interface PrinterFailedPayload {
+  /** The job that failed ("Try again" sends it again: printer:retryJob). */
+  jobId?: string;
   jobKind: string;
   orderId?: string;
+  /** Which paper of which order, e.g. "Receipt for Order #0041" (absent: not known). */
+  what?: string;
   error?: { code: string; message: string };
   /** First miss: the till keeps trying on its own. Absent/false: it gave up. */
   retrying?: boolean;

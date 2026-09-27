@@ -149,6 +149,13 @@ export interface CopyStamp {
   firstPrintedAt?: Date | null;
   /** The first paper carrying the FBR invoice number; the earlier one printed without it. */
   fbrCopy?: boolean;
+  /**
+   * The print log could not be read when this paper was pressed for by hand,
+   * so which copy it is is not known: it still says DUPLICATE (a paper pressed
+   * for by hand is never passed off as an original), just without a number —
+   * "DUPLICATE / Reprint | time | by X" and "** DUPLICATE **".
+   */
+  numberUnknown?: boolean;
 }
 
 /** A stamp that makes the paper a DUPLICATE (every kind but a late first print). */
@@ -793,7 +800,7 @@ function appendDuplicateBand(b: EscPosBuilder, stamp: CopyStamp, width: PrinterW
       factsLine(b, [`Copy #${stamp.number}`, when], width);
       break;
     default:
-      factsLine(b, [`Reprint #${stamp.number}`, when, stamp.byName ? `by ${stamp.byName}` : null], width);
+      factsLine(b, [reprintLabel(stamp), when, stamp.byName ? `by ${stamp.byName}` : null], width);
       break;
   }
   if (stamp.approvedByName) b.wrappedText(`Approved by: ${stamp.approvedByName}`, width);
@@ -812,8 +819,13 @@ function duplicateFooter(stamp: CopyStamp): string {
     case 'copy':
       return `** DUPLICATE - Copy #${stamp.number} **`;
     default:
-      return `** DUPLICATE - Reprint #${stamp.number} **`;
+      return stamp.numberUnknown ? '** DUPLICATE **' : `** DUPLICATE - Reprint #${stamp.number} **`;
   }
+}
+
+/** "Reprint #2", or just "Reprint" when the print log could not say which one. */
+function reprintLabel(stamp: CopyStamp): string {
+  return stamp.numberUnknown ? 'Reprint' : `Reprint #${stamp.number}`;
 }
 
 /** "a | b | c" on one row when it fits, otherwise one fact per row (58 mm paper). */
@@ -962,7 +974,7 @@ export function renderKitchenTicket(
     if (stamp) {
       b.bold(false);
       const who = stamp.byName ? ` by ${stamp.byName}` : '';
-      const which = stamp.kind === 'copy' ? `Copy #${stamp.number}` : `Reprint #${stamp.number}`;
+      const which = stamp.kind === 'copy' ? `Copy #${stamp.number}` : reprintLabel(stamp);
       b.wrappedText(`${which} ${formatTicketTime(stamp.printedAt)}${who}`, width);
       b.bold(true);
     }

@@ -558,7 +558,8 @@ function OrderCard({
             <ChefHat className="h-4 w-4" />
           </IconButton>
         )}
-        <IconButton label="Reprint receipt" onClick={onReprint}>
+        {/* The bill while unpaid, the receipt once paid. Printed with this button it always says DUPLICATE (the owner's rule; order-papers.ts). */}
+        <IconButton label="Print bill or receipt" onClick={onReprint}>
           <Printer className="h-4 w-4" />
         </IconButton>
         <IconButton

@@ -27,6 +27,7 @@ export * from './reports.js';
 export * from './alerts.js';
 export * from './costing.js';
 export * from './stock-count.js';
+export * from './test-orders.js';
 export * from './profit.js';
 export * from './recipe-calc.js';
 export * from './shop-settings.js';

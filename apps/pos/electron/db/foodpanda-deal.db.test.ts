@@ -685,7 +685,12 @@ describe.skipIf(!DatabaseSync)('Reports: foodpanda on Channels, the deal on Team
     expect(team.discounts.recent.map((l) => l.orderId)).toEqual([t.id]);
     expect(team.discounts.recent.some((l) => l.source === 'foodpanda')).toBe(false);
     // "Orders taken" (and the Excel / print staff tables): the cashier gave Rs 50, not Rs 450.
-    expect(team.staff).toMatchObject([{ name: 'Test Cashier', orderCount: 2, discountCents: 5_000 }]);
+    // With the drawer log (0042) each person's drawer opens are on their line: the cashier's one is the cash
+    // sale (the foodpanda order opened nothing), and the manager is listed for the float alone.
+    expect(team.staff).toMatchObject([
+      { name: 'Test Cashier', orderCount: 2, discountCents: 5_000, drawerOpens: 1 },
+      { name: 'Test Manager', orderCount: 0, discountCents: 0, drawerOpens: 1 },
+    ]);
     // The shop's own totals still count the deal.
     expect(br.buildOverviewTab(s.db, period()).kpis).toMatchObject({ discountCents: 40_000 + 5_000, discountedOrderCount: 2 });
   });
@@ -702,7 +707,11 @@ describe.skipIf(!DatabaseSync)('Reports: foodpanda on Channels, the deal on Team
     expect(team.discounts.standing).toEqual([]);
     expect(team.discounts.byPerson).toEqual([{ name: 'Test Cashier', count: 1, amountCents: 30_000, approvedCount: 1 }]);
     expect(team.discounts.recent).toMatchObject([{ orderId: fp.id, source: null, approvedBy: 'Test Manager' }]);
-    expect(team.staff).toMatchObject([{ name: 'Test Cashier', discountCents: 30_000 }]);
+    // Paid through foodpanda: no drawer open for the cashier; the manager's is the float (0042).
+    expect(team.staff).toMatchObject([
+      { name: 'Test Cashier', discountCents: 30_000, drawerOpens: 0 },
+      { name: 'Test Manager', orderCount: 0, drawerOpens: 1 },
+    ]);
   });
 });
 

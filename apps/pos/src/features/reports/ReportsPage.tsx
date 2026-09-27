@@ -74,6 +74,7 @@ import {
 } from './exporters';
 import { bringIntoView, browserStorage, readLastTab, tabQueryKey, tabRequest, visibleReportTabs, writeLastTab } from './reportTabs';
 import { Note } from './reportUi';
+import { fetchTeamExtras, teamExtrasFailedText, type TeamExtras, type TeamExtrasReaders } from './teamExtras';
 import { OverviewTab } from './tabs/OverviewTab';
 import { WhenTab } from './tabs/WhenTab';
 import { MenuTab, type MenuMapView } from './tabs/MenuTab';
@@ -144,6 +145,12 @@ function csvTab<K extends ReportTab>(r: { tab: K; period: ReportPeriod; data: Re
 
 /** Overview's trend strip (its own channel): the same query on screen, on paper and in the file. */
 const TRENDS_KEY = ['reports', 'trends'] as const;
+
+/** Team & leakage's own lists for paper and file, read from the till (teamExtras.ts). */
+const TEAM_EXTRAS_IPC: TeamExtrasReaders = {
+  drawerLog: (q) => ipc.reports.drawerLog(q),
+  deletedTests: (q) => ipc.orders.listDeletedTests(q),
+};
 
 export function ReportsPage() {
   // The page reads its link (costing/deepLinks.ts) as it opens. A link that
@@ -372,6 +379,28 @@ function ReportsScreen() {
     writeLastTab(browserStorage(), t);
   };
 
+  // Print this tab / Download for Excel: Team & leakage adds its drawer log and deleted test orders.
+  // Part of Team & leakage could not be read: the paper / file says so in
+  // its place, and so does the screen.
+  const teamExtrasFor = async (p: Pick<ReportPeriod, 'sinceIso' | 'untilIso'>): Promise<Omit<TeamExtras, 'failed'>> => {
+    const { failed, ...got } = await fetchTeamExtras(p, TEAM_EXTRAS_IPC);
+    const note = teamExtrasFailedText(failed);
+    if (note) toast({ title: 'Part of Team & leakage is missing', description: note, variant: 'warning' });
+    return got;
+  };
+
+  const exportTab = async (how: 'print' | 'csv') => {
+    if (!result) return;
+    const extras: ReportExtras = {
+      trends: trends.data,
+      variance: varianceForPaper,
+      menuMap: menuMapQ.data,
+      ...(result.tab === 'team' ? await teamExtrasFor(result.period) : {}),
+    };
+    if (how === 'print') setPrintJob({ id: Date.now(), html: printTab(result, extras) });
+    else downloadText(csvFileName(result.period, result.tab), csvTab(result, extras));
+  };
+
   // Every tab this login sees, for the period on screen, as one printout.
   // Tabs already loaded come from the cache; the till works the rest out one
   // after another, in the background.
@@ -404,6 +433,8 @@ function ReportsScreen() {
               })
               .catch(() => undefined)
           : undefined;
+      // Team & leakage: its drawer log and deleted test orders (the owner's).
+      const teamNow = tabs.includes('team') ? await teamExtrasFor(period) : {};
       // The menu map goes with Menu for profit.view.
       const menuMapNow =
         canSeeProfit && tabs.includes('menu')
@@ -416,7 +447,10 @@ function ReportsScreen() {
               })
               .catch(() => undefined)
           : undefined;
-      setPrintJob({ id: Date.now(), html: buildPrintEverything(all, period, new Date(), { trends: trendsNow, variance: varianceNow, menuMap: menuMapNow }) });
+      setPrintJob({
+        id: Date.now(),
+        html: buildPrintEverything(all, period, new Date(), { trends: trendsNow, variance: varianceNow, menuMap: menuMapNow, ...teamNow }),
+      });
     } catch (e) {
       toast({ title: 'Could not print everything', description: e instanceof Error ? e.message : 'Please try again.', variant: 'error' });
     } finally {
@@ -437,7 +471,7 @@ function ReportsScreen() {
             <Button
               variant="secondary"
               disabled={!result || stale}
-              onClick={() => result && setPrintJob({ id: Date.now(), html: printTab(result, { trends: trends.data, variance: varianceForPaper, menuMap: menuMapQ.data }) })}
+              onClick={() => void exportTab('print')}
             >
               <Printer className="h-4 w-4" />
               Print this tab
@@ -445,9 +479,7 @@ function ReportsScreen() {
             <Button
               variant="secondary"
               disabled={!result || stale}
-              onClick={() =>
-                result && downloadText(csvFileName(result.period, result.tab), csvTab(result, { trends: trends.data, variance: varianceForPaper, menuMap: menuMapQ.data }))
-              }
+              onClick={() => void exportTab('csv')}
             >
               <FileSpreadsheet className="h-4 w-4" />
               Download for Excel
@@ -617,6 +649,7 @@ function ReportsScreen() {
               }}
               notes={noteEditor}
               variance={variance}
+              onPrint={(html) => setPrintJob({ id: Date.now(), html })}
               menuMap={menuMap}
             />
           ) : tab === 'overview' ? (
@@ -650,6 +683,7 @@ function TabBody({
   trends,
   notes,
   variance,
+  onPrint,
   menuMap,
 }: {
   result: TabResult;
@@ -658,6 +692,8 @@ function TabBody({
   trends: NonNullable<Parameters<typeof OverviewTab>[0]['trends']>;
   notes: DayNoteEditor;
   variance: VarianceView | null;
+  /** Prints an HTML body with the report sheet (a shift's drawer log). */
+  onPrint: (html: string) => void;
   menuMap: MenuMapView | null;
 }) {
   switch (result.tab) {
@@ -672,7 +708,7 @@ function TabBody({
     case 'foodStock':
       return <FoodCostStockTab data={result.data} lowStockCount={lowStockCount} variance={variance} />;
     case 'team':
-      return <TeamLeakageTab data={result.data} now={now} period={result.period} />;
+      return <TeamLeakageTab data={result.data} now={now} period={result.period} onPrint={onPrint} />;
     case 'profit':
       return <ProfitTab data={result.data} />;
   }

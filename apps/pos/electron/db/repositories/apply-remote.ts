@@ -57,6 +57,27 @@ const RECEIVER_FILL: Readonly<Record<string, Readonly<Record<string, string | nu
   users: { pin_hash: PIN_NOT_SHARED },
 };
 
+/**
+ * Deletion wins, both ways, for orders and their payments (a test order the
+ * owner deleted, 0043): the two tills must never disagree about whether a
+ * sale exists.
+ *  - A delete that arrives stale (this till changed the row since) is still
+ *    applied — only deleted_at and the delete_* columns, the version left
+ *    alone — and noted in this till's audit trail ('remote_delete_applied').
+ *  - A newer change that arrives for a row deleted here is applied, but the
+ *    row stays deleted ('remote_change_kept_deleted').
+ * Only the older domain-shaped handlers (menu, customers) ever clear
+ * deleted_at, and they are not these tables.
+ */
+const DELETE_WINS: ReadonlySet<string> = new Set(['orders', 'payments']);
+const DELETE_COLUMNS = ['deleted_at', 'deleted_by', 'delete_reason', 'delete_kind', 'delete_stock'] as const;
+
+/** The delete columns this table has (orders: all of them; payments: deleted_at). */
+function deleteColumnsOf(table: { columns: ReadonlyArray<{ name: string }> }): string[] {
+  const have = new Set(table.columns.map((c) => c.name));
+  return DELETE_COLUMNS.filter((c) => have.has(c));
+}
+
 export function applyRemoteChange(db: AppDatabase, change: SyncChange): ApplyResult {
   if (isRowImage(change.payload)) return applyRowImage(db, change, change.payload);
 
@@ -128,9 +149,25 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
   ) {
     return { applied: false, reason: 'malformed' };
   }
+  const deleteWins = DELETE_WINS.has(table.name);
+  const localRow = deleteWins
+    ? ((db.prepare(`SELECT deleted_at FROM ${quoteIdent(table.name)} WHERE id = ?`).get(change.entityId) as
+        | { deleted_at: string | null }
+        | undefined) ?? null)
+    : null;
   if (isStale(db, table.name, change.entityId, change.version, change.updatedAt)) {
+    const incomingDeleted = typeof image['deletedAt'] === 'string' && image['deletedAt'] !== '';
+    if (deleteWins && incomingDeleted && localRow !== null && localRow.deleted_at === null) {
+      return applyRemoteDelete(db, table, change, image);
+    }
     return { applied: false, reason: 'stale' };
   }
+  // A newer change for a row deleted here: applied, but it stays deleted.
+  const keepDeleted =
+    deleteWins &&
+    localRow !== null &&
+    localRow.deleted_at !== null &&
+    !(typeof image['deletedAt'] === 'string' && image['deletedAt'] !== '');
 
   const cols: string[] = [];
   const vals: Array<string | number | null> = [];
@@ -183,7 +220,12 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
   } else {
     // An UPDATE, not an upsert: SQLite checks NOT NULL on an upsert's insert
     // half first, and a user row here never gets the other till's PIN.
-    const keepHere = new Set(['id', 'created_at', ...(RECEIVER_KEEPS_ON_UPDATE[table.name] ?? [])]);
+    const keepHere = new Set([
+      'id',
+      'created_at',
+      ...(RECEIVER_KEEPS_ON_UPDATE[table.name] ?? []),
+      ...(keepDeleted ? deleteColumnsOf(table) : []),
+    ]);
     const set = cols.map((c, i) => ({ c, v: vals[i] })).filter(({ c }) => !keepHere.has(c));
     if (table.name === 'ingredients') {
       const count = countInNewUnit(db, change.entityId, image, change.deviceId);
@@ -195,6 +237,17 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
           WHERE id = ?`,
       ).run(...set.map(({ v }) => v), change.entityId);
     }
+  }
+
+  if (keepDeleted) {
+    writeAudit(db, {
+      entityType: table.name,
+      entityId: change.entityId,
+      action: 'remote_change_kept_deleted',
+      actorUserId: null,
+      before: { deletedAt: localRow?.deleted_at ?? null },
+      after: { version: change.version, updatedAt: change.updatedAt, fromDeviceId: change.deviceId },
+    });
   }
 
   if (table.name === 'users') {
@@ -241,6 +294,48 @@ function parseJsonOr(v: unknown): unknown {
   } catch {
     return v;
   }
+}
+
+/**
+ * A delete from the other till that arrived after this till changed the row
+ * (DELETE_WINS): only the delete columns are written — deleted_at and, on an
+ * order, who deleted it, why, how and what it did to its stock — the rest of
+ * this till's row and its version stay. Noted in this till's own audit trail.
+ */
+function applyRemoteDelete(
+  db: AppDatabase,
+  table: { name: string; columns: ReadonlyArray<{ name: string }> },
+  change: SyncChange,
+  image: RowImage,
+): ApplyResult {
+  const set: Array<{ c: string; v: string | null }> = [];
+  for (const col of deleteColumnsOf(table)) {
+    const v = image[columnKey(col)];
+    if (col === 'deleted_at') {
+      set.push({ c: col, v: String(v) });
+      continue;
+    }
+    if (!Object.hasOwn(image, columnKey(col))) continue;
+    if (v !== null && typeof v !== 'string') return { applied: false, reason: 'malformed' };
+    set.push({ c: col, v });
+  }
+  db.prepare(
+    `UPDATE ${quoteIdent(table.name)} SET ${set.map(({ c }) => `${quoteIdent(c)} = ?`).join(', ')}
+      WHERE id = ? AND deleted_at IS NULL`,
+  ).run(...set.map(({ v }) => v), change.entityId);
+  writeAudit(db, {
+    entityType: table.name,
+    entityId: change.entityId,
+    action: 'remote_delete_applied',
+    actorUserId: null,
+    before: { deletedAt: null },
+    after: {
+      ...Object.fromEntries(set.map(({ c, v }) => [columnKey(c), v])),
+      remoteVersion: change.version,
+      fromDeviceId: change.deviceId,
+    },
+  });
+  return { applied: true };
 }
 
 /**

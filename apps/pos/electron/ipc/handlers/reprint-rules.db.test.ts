@@ -300,8 +300,11 @@ describe.skipIf(!DatabaseSync)('printer:reprint follows the owner’s reprint ru
     const ok = (await call('printer:reprint', { orderId: oid, approverPin: 'Manager-pass-7' })) as { data: { status: string } };
     expect(ok.data.status).toBe('queued');
     await idle();
+    // print_no counts the papers of the series before it (at least 1); the paper itself says Reprint #2 (order-papers handReprintNumber).
+    expect(last()).toContain('Reprint #2');
     expect(logRows(oid)).toEqual([
-      { print_no: 0, reason: 'reprint', requestedBy: 'u_cash', approvedBy: null },
+      // The owner's rule (v0.7.23): every paper printed by hand is a DUPLICATE with its reprint number, the first one too.
+      { print_no: 1, reason: 'reprint', requestedBy: 'u_cash', approvedBy: null },
       { print_no: 1, reason: 'reprint', requestedBy: 'u_cash', approvedBy: 'u_mgr' },
     ]);
   });
@@ -311,8 +314,9 @@ describe.skipIf(!DatabaseSync)('printer:reprint follows the owner’s reprint ru
     const recent = order('o0103', 45);
     await expect(call('printer:reprint', { orderId: recent })).resolves.toMatchObject({ ok: true, data: { status: 'queued' } });
     await idle();
-    // The mark is the released one: a first paper by hand this long after the sale still says so.
-    expect(last()).toContain('Printed later:');
+    // The owner's rule (v0.7.23): a paper printed by hand is a DUPLICATE, never "Printed later", however long after the sale.
+    expect(last()).toContain('DUPLICATE');
+    expect(last()).not.toContain('Printed later:');
     const old = order('o0104', 61);
     const refused = await refusal(call('printer:reprint', { orderId: old }));
     expect(refused).toMatchObject({ code: 'forbidden', details: { needs: 'manager_pin' } });

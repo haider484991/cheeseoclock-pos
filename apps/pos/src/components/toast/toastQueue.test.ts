@@ -83,4 +83,25 @@ describe('addToast', () => {
     list = addToast(list, note('warning', 'Cannot pay yet', 'customer name'));
     expect(list.filter((t) => t.title === 'Cannot pay yet')).toHaveLength(2);
   });
+
+  it('two failed prints with the same printer error keep their own "Try again"; the same job failing again replaces its note', () => {
+    const tried: string[] = [];
+    const failed = (jobId: string): ToastItem => ({
+      ...note('error', 'Print failed', 'The printer is off, offline, out of paper or its lid is open.'),
+      action: { label: 'Try again', key: jobId, onClick: () => tried.push(jobId) },
+    });
+    let list = addToast([], failed('job-0041'));
+    list = addToast(list, failed('job-0042'));
+    expect(list.map((t) => t.action?.key)).toEqual(['job-0041', 'job-0042']);
+    list.forEach((t) => t.action?.onClick());
+    expect(tried).toEqual(['job-0041', 'job-0042']);
+    // "Try again" on #0041 failed once more: one note for it, not two.
+    const again = failed('job-0041');
+    list = addToast(list, again);
+    expect(list.map((t) => t.action?.key)).toEqual(['job-0042', 'job-0041']);
+    expect(list[1]!.id).toBe(again.id);
+    // A note with a button never swallows the same words without one, nor the other way round.
+    list = addToast(list, note('error', 'Print failed', 'The printer is off, offline, out of paper or its lid is open.'));
+    expect(list).toHaveLength(3);
+  });
 });

@@ -33,6 +33,7 @@ interface EntryRow {
   unit: string | null;
   actor_name: string | null;
   order_number: string | null;
+  order_deleted_test: number | null;
   po_ref: string | null;
   detail: string | null;
   value_cents: number | null;
@@ -116,6 +117,7 @@ export function searchMovements(db: AppDatabase, input?: StockMovementSearch): S
               -- the unit the row was written in (0029): "−2 kg" stays 2 kg after a Convert to g
               COALESCE(sm.unit, i.unit) AS unit, u.full_name AS actor_name,
               o.order_number AS order_number, po.reference_no AS po_ref,
+              (o.deleted_at IS NOT NULL AND o.delete_kind = 'test') AS order_deleted_test,
               sm.detail, sm.value_cents, sm.unit_cost_mc, sm.cost_basis
          ${FROM}
         WHERE ${filtered.sql}
@@ -154,6 +156,7 @@ function rowToEntry(r: EntryRow): StockMovementEntry {
     unit: r.unit ?? '',
     actorName: r.actor_name,
     orderNumber: r.order_number,
+    ...(r.order_deleted_test ? { orderDeletedAsTest: true } : {}),
     purchaseOrderRef: r.po_ref,
     detail: toMovementDetail(r.detail),
     // Costs: the IPC handler leaves these out for a login without COST_CAPABILITY.

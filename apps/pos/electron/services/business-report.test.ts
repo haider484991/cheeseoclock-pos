@@ -538,11 +538,16 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         cashMovementCount: 1,
         // Two no-sale opens and a test; the count at close is not one.
         noSaleOpens: 3,
+        // Every open of the shift (the drawer log, 0042): those three and the count.
+        drawerOpenCount: 4,
+        // No test order of this shift was deleted after it closed (0043).
+        testDeletedCashCents: 0,
         // Nothing was typed in either Notes box.
         openingNote: null,
         closingNote: null,
         carriedUnpaidCount: 0,
         carryOverReason: null,
+        carriedTestDeletedCount: 0,
       },
       // Opened the day before and never closed: still open through this day
       // too (it used to be left out, as not OPENED in the period).
@@ -560,10 +565,13 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         cashOutCents: 0,
         cashMovementCount: 0,
         noSaleOpens: 0,
+        drawerOpenCount: 0,
+        testDeletedCashCents: 0,
         openingNote: null,
         closingNote: null,
         carriedUnpaidCount: 0,
         carryOverReason: null,
+        carriedTestDeletedCount: 0,
       },
     ]);
   });

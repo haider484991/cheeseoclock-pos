@@ -73,7 +73,32 @@ export interface Order {
   assignedRiderId: UUID | null;
   dispatchedAt: string | null;
   deliveredAt: string | null;
+  /**
+   * Set only on an order read with its deleted ones (getOrderSnapshot
+   * includeDeleted): when and by whom it was deleted, why, and how
+   * (migration 0043: 'test' — deleted by the owner as a test order; a
+   * discarded draft carries no kind). Deleted orders never reach a screen.
+   */
+  deletedAt?: string | null;
+  deletedBy?: UUID | null;
+  deleteReason?: string | null;
+  deleteKind?: OrderDeleteKind | null;
+  /** What deleting it as a test did to its stock. */
+  deleteStock?: TestDeleteStock | null;
 }
+
+/** How an order was deleted: 'test' — the owner deleted it as a test order (0043). */
+export type OrderDeleteKind = 'test';
+
+/**
+ * What deleting a test order did to its stock:
+ *  - put_back: "Yes — put it back": the food was not made, back on the shelf;
+ *  - waste: "No — count it as waste": the food was made, booked as waste;
+ *  - none: it took no stock (no recipes, or nothing sent);
+ *  - settled_before: already put back or wasted when it was cancelled or
+ *    refunded — that answer stands.
+ */
+export type TestDeleteStock = 'put_back' | 'waste' | 'none' | 'settled_before';
 
 export type KitchenStatus = 'pending' | 'preparing' | 'ready' | 'served';
 
@@ -126,6 +151,8 @@ export interface Payment {
   referenceNo: string | null;
   receivedByUserId: UUID;
   paidAt: string;
+  /** Only on a snapshot read with its deleted rows: this payment was deleted (with its test order). */
+  deletedAt?: string | null;
 }
 
 /**

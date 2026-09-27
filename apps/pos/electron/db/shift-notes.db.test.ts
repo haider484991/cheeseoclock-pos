@@ -18,11 +18,11 @@
  * node:sqlite behind better-sqlite3's shape (better-sqlite3 here is built for
  * Electron); skips where it is missing. Names, notes and amounts are made up.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { BusinessReportRequest } from '@cheeseoclock/shared-types';
-import { DatabaseSync, MIGRATIONS, openMigrated } from './costing-shop.fixture.js';
+import { DatabaseSync, MIGRATIONS, migrationFiles, openMigrated } from './costing-shop.fixture.js';
 import { verifyAuditChain, type AuditChainRow } from './audit-chain.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
@@ -149,10 +149,10 @@ live('shift notes: the opening note and the closing note, each kept', () => {
        VALUES ('s_old', ?, 'u_ali', '2026-09-20T07:00:00.000Z', 400000, 'u_sara', '2026-09-20T20:00:00.000Z',
          700000, 700000, 0, 'Old shift, one note', ?, ?)`,
     ).run(DEV, T0, T0);
-    // The update arrives: 0039 and every later migration run on that database.
-    for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith('.sql') && n >= '0039').sort()) {
-      db.exec(readFileSync(join(MIGRATIONS, f), 'utf8'));
-    }
+    // The update arrives: 0039 and every later migration run on that database
+    // (0040 / 0041 foodpanda, 0042 drawer log, 0043 test-order delete:
+    // Reports reads their columns too).
+    for (const f of migrationFiles().filter((m) => m >= '0039')) db.exec(readFileSync(join(MIGRATIONS, f), 'utf8'));
 
     expect(repo.findShift(db, 's_old')).toMatchObject({ notes: 'Old shift, one note', closeNotes: null, varianceCents: 0 });
     const line = tabs.buildReportTab(db, 'team', ALL_TIME, new Date()).shifts.find((s) => s.id === 's_old');

@@ -16,6 +16,19 @@ export interface ToastItem {
   variant: ToastVariant;
   /** ms before auto-dismiss; `Infinity` keeps it until closed. */
   duration: number;
+  /** One button on the note ("Try again" on a failed print); pressing it closes the note. */
+  action?: ToastAction;
+}
+
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+  /**
+   * What the button acts on ("Try again": the print job's id). Two notes with
+   * the same words but a different key are different notes — neither may
+   * replace the other and take its button with it.
+   */
+  key?: string;
 }
 
 /** Most notes on screen at once. */
@@ -43,13 +56,26 @@ export function toastDuration(variant: ToastVariant, requested?: number): number
   return requested;
 }
 
+/** No button on either, or buttons acting on the same thing. */
+function sameAction(a: ToastAction | undefined, b: ToastAction | undefined): boolean {
+  if (!a && !b) return true;
+  return !!a && !!b && a.key !== undefined && a.key === b.key && a.label === b.label;
+}
+
 function sameMessage(a: ToastItem, b: ToastItem): boolean {
-  return a.variant === b.variant && a.title === b.title && (a.description ?? '') === (b.description ?? '');
+  return (
+    a.variant === b.variant &&
+    a.title === b.title &&
+    (a.description ?? '') === (b.description ?? '') &&
+    sameAction(a.action, b.action)
+  );
 }
 
 /**
  * Add a note to the list. The same message again replaces the old copy (its
- * timer starts over) instead of stacking. Over the limit, the oldest note
+ * timer starts over) instead of stacking — unless the two carry buttons for
+ * different things (two failed prints with the same printer error: each keeps
+ * its own "Try again"). Over the limit, the oldest note
  * that closes by itself goes first; notes that stay until closed are kept
  * (the screen shows the newest few and says how many more are waiting).
  */

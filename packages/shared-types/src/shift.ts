@@ -109,26 +109,61 @@ export interface CashMovement {
 }
 
 /**
- * Why the cash drawer was opened by hand (not by a sale):
+ * Why the till opened the cash drawer (migrations 0028 and 0042). By hand:
  *  - no_sale: the Open drawer button (change, checking a note, …);
  *  - count: "Open drawer to count" while closing the shift — once per shift;
  *    any later one is recorded as no_sale;
  *  - test: Test drawer under Settings → Printers.
+ * For cash (0042), written in the same transaction as the cash:
+ *  - sale: a cash payment (also cash collected on delivery or at the table);
+ *  - refund: cash handed back;
+ *  - float: the float at shift open;
+ *  - payin / payout / tip_out: cash in, cash out, a rider's tip.
  */
-export type DrawerOpenKind = 'no_sale' | 'count' | 'test';
+export type DrawerOpenKind =
+  | 'no_sale'
+  | 'count'
+  | 'test'
+  | 'sale'
+  | 'refund'
+  | 'float'
+  | 'payin'
+  | 'payout'
+  | 'tip_out';
 
-/** One manual drawer open, saved (and audited) before the drawer is pulsed. */
+/**
+ * What happened when the till pulsed the drawer for a drawer_opens row
+ * (0042). Null on the row while nobody knows yet.
+ *  - opened: the printer took the pulse;
+ *  - already_open: a later pulse (another sale, Open drawer) opened it first;
+ *  - not_opened: it surely did not open (use the key);
+ *  - unsure: the printer failed mid-way, or the till stopped first;
+ *  - no_printer: no receipt printer is set up.
+ */
+export type DrawerOutcome = 'opened' | 'already_open' | 'not_opened' | 'unsure' | 'no_printer';
+
+/** One drawer open, saved (and audited) before the drawer is pulsed. */
 export interface DrawerOpen {
   id: UUID;
   /** The shift open on this till at the time; null when none was. */
   shiftId: UUID | null;
   kind: DrawerOpenKind;
   reason: string | null;
-  /** Who pressed the button. */
+  /** Who pressed the button (who took or handed back the cash). */
   userId: UUID;
   /** The manager whose PIN let a cashier open it; null when a manager did it. */
   approvedByUserId: UUID | null;
   createdAt: string;
+  /** The order the cash was for (sale, refund). */
+  orderId?: UUID | null;
+  /** The cash in / out it was for (payin, payout, tip_out). */
+  cashMovementId?: UUID | null;
+  /** Signed paisa: + into the drawer, − out of it; null for no_sale / count / test. */
+  amountCents?: number | null;
+  /** What the pulse did; null while not known. */
+  outcome?: DrawerOutcome | null;
+  outcomeNote?: string | null;
+  settledAt?: string | null;
 }
 
 /** What happened when the till tried to open the drawer by hand. */

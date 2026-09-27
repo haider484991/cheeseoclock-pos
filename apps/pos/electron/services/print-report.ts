@@ -4,10 +4,11 @@ import { duplicatePressesSql } from '../db/print-log-sql.js';
 
 /**
  * The print log's part of Reports → Staff (and the shift / day report):
- *  - per person, how many DUPLICATE receipts / bills / slips they printed by
- *    hand (the Reprint button), one per press — the first bill of a table and
- *    a "Printed later" first receipt are originals and are not counted
- *    (duplicatePressesSql in document-print-repo). Loss-prevention guides
+ *  - per person, how many receipts / bills / slips they printed AGAIN by
+ *    hand (a print button), one per press, when a paper of the same kind had
+ *    already gone out — a table's first bill printed from the board says
+ *    DUPLICATE (the owner's rule) but is routine and is not counted
+ *    (duplicatePressesSql in print-log-sql.ts). Loss-prevention guides
  *    watch reprints per employee next to voids and no-sale opens: a
  *    reprinted paid receipt is how an old customer's bill is handed to a new
  *    customer;
@@ -17,7 +18,7 @@ import { duplicatePressesSql } from '../db/print-log-sql.js';
  * Read-only; the log itself is written by document-print-repo.ts.
  */
 
-/** DUPLICATE papers printed by hand per person in the period, one per press (kitchen tickets not counted). */
+/** Papers printed again by hand per person in the period, one per press (kitchen tickets not counted). */
 export function handPrintsByUser(db: AppDatabase, range: { sinceIso: string; untilIso: string }): Map<string, number> {
   const rows = db
     .prepare(

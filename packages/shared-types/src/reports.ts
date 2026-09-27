@@ -104,6 +104,12 @@ export interface ReportStaffLine {
   voidCount: number;
   /** Times this person opened the cash drawer with no sale (Open drawer, Test drawer). */
   noSaleOpens: number;
+  /**
+   * Every time the till opened the drawer for this person (cash sales,
+   * refunds, cash in and out, the float, counting, no sale, tests — the
+   * drawer log, 0042). Absent from a till before the log.
+   */
+  drawerOpens?: number;
   /** Receipts / bills / slips this person printed again by hand (the print log). */
   reprints?: number;
 }
@@ -126,6 +132,14 @@ export interface ReportShiftLine {
   cashMovementCount: number;
   /** Times the drawer was opened by hand with no sale (not the one count at close). */
   noSaleOpens: number;
+  /** Every time the till opened the drawer in this shift (the drawer log, 0042: all kinds). */
+  drawerOpenCount?: number;
+  /**
+   * Cash of test orders deleted AFTER this shift closed (0043): its saved
+   * expected / counted / short-over are never rewritten, so Reports notes it
+   * instead. Signed paisa (a test's cash less its cash refunds).
+   */
+  testDeletedCashCents?: number;
   /**
    * The note typed when the shift was opened ("Morning shift, Ali on
    * register"), or null. A shift closed before migration 0039 keeps its one
@@ -140,19 +154,87 @@ export interface ReportShiftLine {
    */
   carriedUnpaidCount: number;
   carryOverReason: string | null;
+  /**
+   * Of the orders this close carried over, how many the owner later deleted
+   * as test orders (0043). The saved count above is never rewritten; Shift
+   * history says it instead. Absent from a till before 0043.
+   */
+  carriedTestDeletedCount?: number;
 }
 
-/** One time the cash drawer was opened by hand, for the owner to check. */
+/**
+ * One time the cash drawer was opened by hand, for the owner to check.
+ * 'other': a kind a newer till wrote that this one does not know.
+ */
 export interface ReportDrawerOpenLine {
   id: string;
   createdAt: string;
-  kind: 'no_sale' | 'count' | 'test';
+  kind: 'no_sale' | 'count' | 'test' | 'other';
   reason: string | null;
   openedBy: string;
   /** The manager whose PIN let a cashier open it; null when a manager or the owner did it. */
   approvedBy: string | null;
   /** No shift was open on that till at the time. */
   outsideShift: boolean;
+}
+
+/** The drawer log's filter pills (Reports → Team & leakage). */
+export type DrawerLogGroup = 'all' | 'sales' | 'cash' | 'nosale' | 'problems';
+
+/**
+ * One time the till opened the cash drawer (drawer_opens, 0028 + 0042):
+ * why, for how much, who, who allowed it, and whether it opened.
+ */
+export interface ReportDrawerLogLine {
+  id: string;
+  createdAt: string;
+  /** Written on this till or on the other one. */
+  till: 'this' | 'other';
+  /** sale, refund, float, payin, payout, tip_out, no_sale, count, test — or one a newer till wrote. */
+  kind: string;
+  /** "20260926-0042" for a sale or refund; null otherwise. */
+  orderNumber: string | null;
+  /** The order was deleted as a test afterwards. */
+  orderDeletedAsTest: boolean;
+  /** Signed paisa: + into the drawer, − out; null for no sale / count / test. */
+  amountCents: number | null;
+  reason: string | null;
+  openedBy: string;
+  approvedBy: string | null;
+  /** opened / already_open / not_opened / unsure / no_printer; null while not known (or before the log). */
+  outcome: string | null;
+  outcomeNote: string | null;
+  outsideShift: boolean;
+  shiftId: string | null;
+}
+
+/** How many opens of each kind and each result the period (or shift) had — the chips. */
+export interface DrawerLogCounts {
+  total: number;
+  byKind: Record<string, number>;
+  /** By outcome; 'unknown' for rows with none yet. */
+  byOutcome: Record<string, number>;
+}
+
+export interface DrawerLogRequest {
+  sinceIso: string;
+  untilIso: string;
+  /** One shift's opens only (the Shifts table's "Drawer log"). */
+  shiftId?: string;
+  group?: DrawerLogGroup;
+  /** From the previous page's nextCursor. */
+  cursor?: string;
+  /** Rows per page, at most 200 (default 50). */
+  limit?: number;
+}
+
+export interface DrawerLogPage {
+  rows: ReportDrawerLogLine[];
+  /** Pass back for the next page; null when this was the last. */
+  nextCursor: string | null;
+  counts: DrawerLogCounts;
+  /** When the drawer log started on this till (drawer.logSince); before it only opens by hand were kept. */
+  logSince: string | null;
 }
 
 export interface ReportDiscountLine {
@@ -268,9 +350,10 @@ export interface ReportWasteIngredientLine {
 /**
  * Why food was thrown away, as Reports groups it: the reasons picked on the
  * Waste screen, plus food made for orders that were then cancelled or
- * refunded ('cancelled_made').
+ * refunded ('cancelled_made'), and the food of test orders the owner deleted
+ * as waste ('test_order', 0043).
  */
-export type ReportWasteReason = WasteReason | 'cancelled_made';
+export type ReportWasteReason = WasteReason | 'cancelled_made' | 'test_order';
 
 export interface ReportWasteLine {
   reason: ReportWasteReason;

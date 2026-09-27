@@ -1,13 +1,20 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { requireCapability, REFUSED } from '../guards.js';
+import { requireAdmin, requireCapability, REFUSED } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
 import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
-import { foodpandaTenderCheckSchema, orderStockAnswerSchema } from '@cheeseoclock/shared-schemas';
+import {
+  deleteTestOrderInputSchema,
+  foodpandaTenderCheckSchema,
+  listDeletedTestsInputSchema,
+  orderStockAnswerSchema,
+  testDeletePreviewInputSchema,
+} from '@cheeseoclock/shared-schemas';
 import {
   getCurrentSession,
   verifyManagerPin,
+  verifyOwnerSecret,
 } from '../../services/auth-service.js';
 import {
   createOrder,
@@ -36,6 +43,9 @@ import {
   markOrderServed,
   markOrderDelivered,
   findOrder,
+  deleteTestOrder,
+  listDeletedTests,
+  testDeletePreview,
   hasFoodpandaDeal,
   FOODPANDA_DEAL_NEEDS_MANAGER,
 } from '../../db/repositories/order-repo.js';
@@ -50,6 +60,7 @@ import {
 } from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
 import { readApprovalLimits } from '../../db/business-settings-read.js';
+import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from '../../db/repositories/modifier-repo.js';
 import { groupDisplayName } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../../db/connection.js';
@@ -64,6 +75,10 @@ import {
   detachCustomerFromOrder,
   setOrderDeliveryNotes,
 } from '../../db/repositories/customer-repo.js';
+
+/** What requireAdmin names ("… needs the owner (admin) login"). */
+const DELETE_TEST = 'Deleting a test order';
+const DELETED_TESTS = 'The list of deleted test orders';
 
 function requireOrderCreate(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -393,12 +408,15 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     if (!fp.success) {
       throw new IpcGuardError({ code: 'validation_failed', message: fp.error.issues[0]?.message ?? 'Check the tablet total' });
     }
+    let drawerOpenId: string | null;
     try {
-      tenderOrder(
+      // Cash in the drawer: the drawer_opens row is written with the sale
+      // (a foodpanda order has no cash leg: no row, and the drawer stays shut).
+      drawerOpenId = tenderOrder(
         ctx.db,
         { orderId: payload.orderId, payments: payload.payments, foodpanda: fp.data },
         { userId: s.id, deviceId: ctx.deviceId },
-      );
+      ).drawerOpenId;
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',
@@ -408,10 +426,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found after tender' });
     // Paper per Settings → Printer: a kitchen ticket (the kitchen still has to
-    // cook a prepaid order) and the receipt; cash pops the drawer.
-    printSpooler.onOrderEvent(payload.orderId, 'paid', {
-      cash: payload.payments.some((p) => p.method === 'cash'),
-    });
+    // cook a prepaid order) and the receipt; cash pops the drawer (for its row).
+    printSpooler.onOrderEvent(payload.orderId, 'paid', { drawerOpenId });
 
     // Decrement ingredient stock based on recipes. Idempotent — guards against
     // double-decrement if a tender is somehow re-issued. Failures don't roll back the sale.
@@ -550,12 +566,13 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:markServed', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    let drawerOpenId: string | null;
     try {
-      markOrderServed(
+      drawerOpenId = markOrderServed(
         ctx.db,
         { orderId: payload.orderId, payment: payload.payment },
         { userId: s.id, deviceId: ctx.deviceId },
-      );
+      ).drawerOpenId;
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',
@@ -567,9 +584,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // Receipt + FBR + inventory decrement when a payment was just captured
     // (takeaway COD / dine-in collect-later).
     if (payload.payment) {
-      printSpooler.onOrderEvent(payload.orderId, 'payment_captured', {
-        cash: payload.payment.method === 'cash',
-      });
+      printSpooler.onOrderEvent(payload.orderId, 'payment_captured', { drawerOpenId });
       try {
         const cfg = getFbrConfig(ctx.db);
         const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
@@ -594,12 +609,13 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:markDelivered', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    let drawerOpenId: string | null;
     try {
-      markOrderDelivered(
+      drawerOpenId = markOrderDelivered(
         ctx.db,
         { orderId: payload.orderId, payment: payload.payment },
         { userId: s.id, deviceId: ctx.deviceId },
-      );
+      ).drawerOpenId;
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',
@@ -612,9 +628,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // just captured (the tender path already covers prepay). A pre-paid
     // delivery prints nothing here: its bill left with the rider.
     if (payload.payment) {
-      printSpooler.onOrderEvent(payload.orderId, 'payment_captured', {
-        cash: payload.payment.method === 'cash',
-      });
+      printSpooler.onOrderEvent(payload.orderId, 'payment_captured', { drawerOpenId });
       try {
         const cfg = getFbrConfig(ctx.db);
         const fbrPayload = mapOrderToFbrPayload(snap, toSellerInfo(cfg));
@@ -695,6 +709,74 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     return ok(mayViewStock(s) ? status : stockStatusForCounter(status));
   });
 
+  // ---- Test orders the owner deletes (migration 0043) ----
+  // The owner (admin) login only — a manager or cashier is refused before
+  // anything is read — and the delete itself needs the owner's PIN or
+  // password typed again, so an owner login left open at the counter can't
+  // be used for it.
+
+  defineHandler('orders:testDeletePreview', ctx, (_ctx, payload) => {
+    requireAdmin(DELETE_TEST);
+    const parsed = testDeletePreviewInputSchema.safeParse(payload);
+    if (!parsed.success) throw new IpcGuardError({ code: 'validation_failed', message: 'Which order?' });
+    try {
+      return ok(testDeletePreview(ctx.db, parsed.data.orderId, ctx.deviceId));
+    } catch (e) {
+      throw new IpcGuardError({ code: 'not_found', message: e instanceof Error ? e.message : 'Order not found' });
+    }
+  });
+
+  defineHandler('orders:deleteTest', ctx, async (_ctx, payload) => {
+    const s = requireAdmin(DELETE_TEST);
+    const parsed = deleteTestOrderInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: parsed.error.issues[0]?.message ?? 'Check the form' });
+    }
+    let ownerUserId: string;
+    try {
+      ownerUserId = (await verifyOwnerSecret(ctx.db, parsed.data.ownerSecret)).ownerUserId;
+    } catch (e) {
+      throw new IpcGuardError({ code: 'forbidden', message: e instanceof Error ? e.message : "That is not the owner's PIN or password." });
+    }
+    let done: ReturnType<typeof deleteTestOrder>;
+    try {
+      done = deleteTestOrder(
+        ctx.db,
+        {
+          orderId: parsed.data.orderId,
+          reason: parsed.data.reason,
+          restock: parsed.data.restock,
+          expectStatus: parsed.data.expectStatus,
+          ownerUserId,
+        },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
+    } catch (e) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: e instanceof Error ? e.message : 'Not deleted' });
+    }
+    // After the commit. Paper never blocks it: the spooler finishes whatever
+    // was still waiting quietly and sends the kitchen a CANCELLED slip when
+    // its ticket printed and the food was not handed over.
+    printSpooler.onOrderDeleted(done.orderId, done.statusBefore);
+    if (done.web) {
+      try {
+        webOrdersBridge.kick();
+      } catch (e) {
+        console.warn('Website not told yet about a deleted test order (it will be on the next push):', e);
+      }
+    }
+    return ok({ ...done, stock: stockForLogin(s, done.stock) });
+  });
+
+  defineHandler('orders:listDeletedTests', ctx, (_ctx, payload) => {
+    requireAdmin(DELETED_TESTS);
+    const parsed = listDeletedTestsInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: parsed.error.issues[0]?.message ?? 'Check the dates' });
+    }
+    return ok(listDeletedTests(ctx.db, parsed.data));
+  });
+
   defineHandler('orders:refund', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();
     const answer = stockAnswer(payload);
@@ -738,14 +820,13 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     // The refund rows this call just wrote share one timestamp. The drawer pops
     // only when THIS refund hands cash back (not because some earlier payment
-    // on the order was cash), and FBR hears about this refund's amount only —
-    // summing every refund on the order re-reported earlier partial ones.
+    // on the order was cash) — for the drawer_opens row the refund wrote — and
+    // FBR hears about this refund's amount only: summing every refund on the
+    // order re-reported earlier partial ones.
     const refundRows = snap.payments.filter((p) => p.amountCents < 0);
     const latestAt = refundRows.reduce((m, p) => (p.paidAt > m ? p.paidAt : m), '');
     const thisRefund = refundRows.filter((p) => p.paidAt === latestAt);
-    printSpooler.onOrderEvent(payload.orderId, 'refunded', {
-      cash: thisRefund.some((p) => p.method === 'cash'),
-    });
+    printSpooler.onOrderEvent(payload.orderId, 'refunded', { drawerOpenId: done.drawerOpenId });
     // Refunded in full before the food was handed over (in the kitchen, ready,
     // out with the rider): a CANCELLED slip when a ticket printed or may have.
     if (done.order.status === 'refunded' && kitchenHearsOfClose(done.statusBefore)) {

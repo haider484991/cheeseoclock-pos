@@ -45,7 +45,7 @@ vi.mock('./managerApproval', () => ({
 const { IpcError } = (await import('../../ipc/client')) as unknown as {
   IpcError: new (e: { code: string; message: string; details?: Record<string, unknown> }) => Error;
 };
-const { reprintReceipt, reprintToast, NO_APPROVAL_MESSAGE } = await import('./reprint');
+const { reprintReceipt, reprintToast, failedRetryToast, NO_APPROVAL_MESSAGE } = await import('./reprint');
 
 const needs = (message: string, extra: Record<string, unknown> = {}) => () => {
   throw new IpcError({ code: 'forbidden', message, details: { needs: 'manager_pin', document: 'receipt', printNo: 1, ...extra } });
@@ -123,11 +123,40 @@ describe('reprintReceipt — asking a manager when the till needs one', () => {
 });
 
 describe('reprintToast', () => {
-  it('says what went to the printer', () => {
-    expect(reprintToast({ status: 'merged', document: 'receipt', duplicate: false, printNo: 0 })).toBe('Already on its way to the printer');
-    expect(reprintToast({ status: 'queued', document: 'receipt', duplicate: true, printNo: 1 })).toBe('Receipt sent — marked DUPLICATE');
-    expect(reprintToast({ status: 'queued', document: 'bill', duplicate: false, printNo: 0 })).toBe('Bill (not paid) sent to printer');
-    expect(reprintToast({ status: 'queued', document: 'void', duplicate: false, printNo: 0 })).toBe('Cancelled-order slip sent to printer');
+  it("says what printed, and that a paper printed by hand says DUPLICATE — the first one too (the owner's rule)", () => {
+    // The first paper of its kind, pressed by hand: still a DUPLICATE, and the toast says why.
+    expect(reprintToast({ status: 'queued', document: 'bill', duplicate: true, printNo: 0, reprintNo: 1 })).toBe(
+      'Bill printed — marked DUPLICATE (Reprint #1). A paper printed by hand always says DUPLICATE.',
+    );
+    expect(reprintToast({ status: 'queued', document: 'receipt', duplicate: true, printNo: 0, reprintNo: 1 })).toBe(
+      'Receipt printed — marked DUPLICATE (Reprint #1). A paper printed by hand always says DUPLICATE.',
+    );
+    expect(reprintToast({ status: 'queued', document: 'void', duplicate: true, printNo: 0, reprintNo: 1 })).toBe(
+      'Cancelled-order slip printed — marked DUPLICATE (Reprint #1). A paper printed by hand always says DUPLICATE.',
+    );
+    // A later copy.
+    expect(reprintToast({ status: 'queued', document: 'bill', duplicate: true, printNo: 1, reprintNo: 1 })).toBe(
+      'Bill printed again — marked DUPLICATE (Reprint #1)',
+    );
+    expect(reprintToast({ status: 'queued', document: 'receipt', duplicate: true, printNo: 3, reprintNo: 2 })).toBe(
+      'Receipt printed again — marked DUPLICATE (Reprint #2)',
+    );
+    expect(reprintToast({ status: 'queued', document: 'refund', duplicate: true, printNo: 1, reprintNo: 1 })).toBe(
+      'Refund slip printed again — marked DUPLICATE (Reprint #1)',
+    );
+    // An answer without the number still says DUPLICATE.
+    expect(reprintToast({ status: 'queued', document: 'receipt', duplicate: true, printNo: 1 })).toBe(
+      'Receipt printed again — marked DUPLICATE',
+    );
+    // Joined a paper still waiting to print (the till's own, or a press a moment ago).
+    expect(reprintToast({ status: 'merged', document: 'receipt', duplicate: false, printNo: 0 })).toBe(
+      'Already printing — no second copy was made.',
+    );
+    // Never claims a paper is the original when the till did not say DUPLICATE.
+    expect(reprintToast({ status: 'queued', document: 'receipt', duplicate: false, printNo: 0 })).toBe('Receipt sent to the printer.');
+  });
+
+  it('kitchen tickets say what the ticket says', () => {
     expect(reprintToast({ status: 'queued', document: 'kitchen', duplicate: true, printNo: 1 })).toBe('Kitchen ticket sent — marked REPRINT');
     // Earlier tickets only may have printed: the paper says RE-SENT / check the rail, and so does the toast.
     const resent = reprintToast({ status: 'queued', document: 'kitchen', duplicate: false, resent: true, printNo: 5 });
@@ -141,9 +170,18 @@ describe('the manager-approval dialog', () => {
   it('promises only what the paper will say', async () => {
     const { approvalPaperNote } = await vi.importActual<typeof import('./managerApproval')>('./managerApproval');
     expect(approvalPaperNote(2)).toBe("The paper will say DUPLICATE and show the manager's name.");
-    // The common case: a cashier's first paper for an order paid long ago prints "Printed later", not DUPLICATE.
-    expect(approvalPaperNote(0)).toContain('not a DUPLICATE');
+    // The owner's rule: a cashier's first paper for an order paid long ago is a DUPLICATE too.
+    expect(approvalPaperNote(0)).toContain('always says DUPLICATE');
     expect(approvalPaperNote(0)).toContain("manager's name");
-    expect(approvalPaperNote(null)).toContain('DUPLICATE if it was printed before');
+    expect(approvalPaperNote(null)).toBe("The paper will say DUPLICATE and show the manager's name.");
+  });
+});
+
+describe('failedRetryToast', () => {
+  it("the till's own paper sent again prints as the original; nothing to send says so", () => {
+    expect(failedRetryToast('receipt', true)).toBe(
+      'Receipt sent to the printer again — it is the one the till owed, so it prints as the original.',
+    );
+    expect(failedRetryToast('bill', false)).toBe('Nothing to send again — it already printed.');
   });
 });

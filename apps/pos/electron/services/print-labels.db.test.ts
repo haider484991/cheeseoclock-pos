@@ -2,14 +2,16 @@
  * ORIGINAL or DUPLICATE, through the real print spooler and the real print
  * log (document_prints), on a database built from every migration, with a
  * fake printer that records what it is sent:
- *  - the first paper of each series is the original; a reprint says
- *    DUPLICATE / Reprint #N (counted from the log, not from the button);
+ *  - the owner's rule (27 Sep 2026): the paper the till prints by itself is
+ *    the original; every paper printed with a print button says DUPLICATE /
+ *    Reprint #N — the first of its kind too (a bill from the board, a
+ *    cash-on-delivery receipt from Order History);
  *  - the SHOP COPY is its own series; a refund slip is its own document;
  *  - a retry after a definite failure is still the original; after a failure
  *    that may have printed (or a crash mid-send) it says "Printer retry";
  *  - a press while the paper is still waiting joins it: one paper;
- *  - a bill printed with the Reprint button is the ORIGINAL bill, and the
- *    receipt after payment is the ORIGINAL receipt;
+ *  - a bill printed with a print button is a DUPLICATE bill, and the receipt
+ *    the till prints at payment is the ORIGINAL receipt;
  *  - a cancelled order never prints as a receipt; a cancelled order's waiting
  *    kitchen ticket never prints, and CANCELLED goes only when one did;
  *  - FBR: noop prints nothing, a duplicate keeps the same number, a reprint
@@ -33,6 +35,7 @@ import type {
   UUID,
 } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
+import { recordDrawerOpen } from '../db/repositories/drawer-open-repo.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
@@ -296,6 +299,14 @@ function dueNow(orderId: string): void {
 
 let db: AppDatabase;
 const spooler = async () => (await import('./print-spooler.js')).printSpooler;
+/**
+ * The drawer_opens row the repository writes WITH the cash (migration 0042):
+ * the drawer pulse is for it — no row, no pulse.
+ */
+function cash(kind: 'sale' | 'refund' = 'sale'): { drawerOpenId: string } {
+  const amountCents = kind === 'refund' ? -116_000 : 116_000;
+  return { drawerOpenId: recordDrawerOpen(db, { kind, amountCents }, { userId: 'u_cash', deviceId: 'dev-1' }).id };
+}
 async function policy(p: Partial<{ kitchenTicket: boolean; shopCopy: 'never' | 'delivery' | 'always'; deliveryBillOnDispatch: boolean }>) {
   const { getPrintPolicy, setPrintPolicy } = await import('./printer-config.js');
   setPrintPolicy(db, { ...getPrintPolicy(db), ...p });
@@ -339,7 +350,7 @@ describe.skipIf(!DatabaseSync)('receipts: original, then DUPLICATE', () => {
     const s = await spooler();
     await policy({ shopCopy: 'always' });
     const oid = order('o0101');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     const receipt = texts().find((t) => t.includes('RECEIPT'))!;
     expect(receipt).not.toContain('DUPLICATE');
@@ -355,6 +366,7 @@ describe.skipIf(!DatabaseSync)('receipts: original, then DUPLICATE', () => {
       document: 'receipt',
       duplicate: true,
       printNo: 1,
+      reprintNo: 1,
     });
     await s.whenIdle();
     const first = last();
@@ -386,7 +398,7 @@ describe.skipIf(!DatabaseSync)('receipts: original, then DUPLICATE', () => {
   it("a cash sale's drawer pulse is not a paper: the first reprint is #1 (nothing counted twice)", async () => {
     const s = await spooler();
     const oid = order('o0102');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     expect(texts().find((t) => t.includes('RECEIPT'))).not.toContain('DUPLICATE');
     expect(s.planReprint(oid).priorAll).toBe(1);
@@ -402,7 +414,7 @@ describe.skipIf(!DatabaseSync)('receipts: original, then DUPLICATE', () => {
     await policy({ kitchenTicket: false });
     h.script.push(fail());
     const oid = order('o0103');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     expect(logRows(oid)).toEqual([]);
     dueNow(oid);
@@ -417,7 +429,7 @@ describe.skipIf(!DatabaseSync)('receipts: original, then DUPLICATE', () => {
     await policy({ kitchenTicket: false });
     h.script.push(fail({ code: 'timeout', maybeSent: true }));
     const oid = order('o0104');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     expect(logRows(oid)).toMatchObject([{ print_no: 0, outcome: 'unsure' }]);
     dueNow(oid);
@@ -442,7 +454,7 @@ describe.skipIf(!DatabaseSync)('receipts: original, then DUPLICATE', () => {
     let release!: () => void;
     h.script.push(() => new Promise<PrintResult>((r) => (release = () => r({ ok: true, durationMs: 1 }))));
     const oid = order('o0105');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await vi.waitFor(() => expect(h.sends).toHaveLength(1));
     const inFlight = db
       .prepare(`SELECT status, sending_plan_json AS plan FROM print_queue WHERE order_id = ?`)
@@ -477,7 +489,7 @@ describe.skipIf(!DatabaseSync)('a press while the paper is still waiting', () =>
     await policy({ kitchenTicket: false });
     h.script.push(fail());
     const oid = order('o0201');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     expect(jobs(oid, 'receipt')).toMatchObject([{ status: 'pending', attempts: 1 }]);
     const r = s.reprintReceipt(oid, { requestedByUserId: 'u_cash' });
@@ -492,7 +504,7 @@ describe.skipIf(!DatabaseSync)('a press while the paper is still waiting', () =>
     const s = await spooler();
     await policy({ kitchenTicket: false });
     const oid = order('o0202');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     let release!: () => void;
     h.script.push(() => new Promise<PrintResult>((r) => (release = () => r({ ok: true, durationMs: 1 }))));
@@ -508,20 +520,40 @@ describe.skipIf(!DatabaseSync)('a press while the paper is still waiting', () =>
 });
 
 describe.skipIf(!DatabaseSync)('bills, receipts, refunds and cancelled orders', () => {
-  it('the first bill printed with the Reprint button is the ORIGINAL bill; after payment the receipt is the ORIGINAL receipt', async () => {
+  it("the owner's rule: a bill printed with a print button is a DUPLICATE, even the first one; the paid receipt the till prints by itself is the ORIGINAL", async () => {
     const s = await spooler();
     await policy({ kitchenTicket: false });
     const oid = order('o0301', { paid: false, status: 'sent_to_kitchen' });
-    expect(s.reprintReceipt(oid, { requestedByUserId: 'u_cash' })).toMatchObject({ document: 'bill', duplicate: false });
+    // The board's printer icon on an unpaid order: the first bill, pressed by hand.
+    expect(s.reprintReceipt(oid, { requestedByUserId: 'u_cash' })).toMatchObject({
+      document: 'bill',
+      duplicate: true,
+      printNo: 0,
+      reprintNo: 1,
+    });
     await s.whenIdle();
-    expect(last()).toContain('BILL - NOT PAID');
-    expect(last()).toContain('PAY AT THE COUNTER');
-    expect(last()).not.toContain('DUPLICATE');
+    const bill1 = last();
+    expect(bill1).toContain('BILL - NOT PAID');
+    expect(bill1).toContain('PAY AT THE COUNTER');
+    expect(bill1.split('\n')[1]).toBe('DUPLICATE');
+    expect(bill1).toMatch(/Reprint #1 \| \d\d\/\d\d\/\d{4} \d\d:\d\d \| by Ali Akbar/);
+    expect(bill1).toContain('** DUPLICATE - Reprint #1 **');
+    // No "Original: …" line: nothing printed before it.
+    expect(bill1).not.toContain('Original:');
 
-    // Paid at the counter later: served with the payment.
+    // A second press: Reprint #2.
+    s.reprintReceipt(oid, { requestedByUserId: 'u_mgr' });
+    await s.whenIdle();
+    expect(last()).toContain('** DUPLICATE - Reprint #2 **');
+    expect(last()).toContain('by Sana Khan');
+    // Still no original of this bill: no "Original: …" line.
+    expect(last()).not.toContain('Original:');
+
+    // Paid at the counter later (served with the payment): the receipt the till
+    // prints by itself is the ORIGINAL — the bill and the receipt are different papers.
     const paidSnap = snap(order('o0301', { status: 'served' }));
     expect(paidSnap.order.paidAt).not.toBeNull();
-    s.onOrderEvent(oid, 'payment_captured', { cash: false });
+    s.onOrderEvent(oid, 'payment_captured', {});
     await s.whenIdle();
     expect(last()).toContain('RECEIPT');
     expect(last()).toContain('PAID - CASH');
@@ -530,12 +562,97 @@ describe.skipIf(!DatabaseSync)('bills, receipts, refunds and cancelled orders', 
     s.reprintReceipt(oid, { requestedByUserId: 'u_cash' });
     await s.whenIdle();
     expect(last()).toContain('RECEIPT');
-    expect(last()).toContain('Reprint #1');
-    expect(logRows(oid).map((r) => [r.document, r.print_no])).toEqual([
-      ['bill', 0],
-      ['receipt', 0],
-      ['receipt', 1],
+    expect(last()).toContain('** DUPLICATE - Reprint #1 **');
+    expect(logRows(oid).map((r) => [r.document, r.print_no, r.reason])).toEqual([
+      ['bill', 1, 'reprint'],
+      ['bill', 1, 'reprint'],
+      ['receipt', 0, 'payment'],
+      ['receipt', 1, 'reprint'],
     ]);
+    // Both bills pressed by hand are DUPLICATEs in the audit trail too.
+    const actions = db
+      .prepare(`SELECT action FROM audit_log WHERE entity_type = 'document_prints' ORDER BY rowid`)
+      .all()
+      .map((r) => (r as { action: string }).action);
+    expect(actions).toEqual(['print_duplicate', 'print_duplicate', 'print_original', 'print_duplicate']);
+  });
+
+  it("the owner's rule: a cash-on-delivery receipt first printed by hand is a DUPLICATE, not 'Printed later'; the dispatch paper stays the original", async () => {
+    const s = await spooler();
+    await policy({ kitchenTicket: false, shopCopy: 'never' });
+    // Out with the rider: the dispatch bill (automatic) is the original bill.
+    const oid = order('o0312', { mode: 'delivery', paid: false, status: 'out_for_delivery' });
+    s.onOrderEvent(oid, 'dispatched');
+    await s.whenIdle();
+    expect(last()).toContain('BILL - NOT PAID');
+    expect(last()).not.toContain('DUPLICATE');
+    // The rider brings the money back (paid long ago, as Order History sees it).
+    order('o0312', { mode: 'delivery', status: 'delivered', paidAt: minutesAgo(90) });
+    s.onOrderEvent(oid, 'payment_captured', cash());
+    await s.whenIdle();
+    // The customer already holds the dispatch paper: only the drawer.
+    expect(logRows(oid).map((r) => r.document)).toEqual(['bill']);
+    // Order History, much later: the first RECEIPT, by hand — a DUPLICATE.
+    expect(s.planReprint(oid)).toMatchObject({ document: 'receipt', priorAll: 0, reprintNo: 1 });
+    expect(s.reprintReceipt(oid, { requestedByUserId: 'u_mgr' })).toMatchObject({ duplicate: true, printNo: 0, reprintNo: 1 });
+    await s.whenIdle();
+    const receipt = last();
+    expect(receipt).toContain('RECEIPT');
+    expect(receipt.split('\n')[1]).toBe('DUPLICATE');
+    expect(receipt).toContain('PAID - CASH (DUPLICATE)');
+    expect(receipt).toContain('** DUPLICATE - Reprint #1 **');
+    expect(receipt).not.toContain('Printed later');
+    expect(logRows(oid).map((r) => [r.document, r.print_no, r.reason])).toEqual([
+      ['bill', 0, 'dispatch'],
+      ['receipt', 1, 'reprint'],
+    ]);
+    // The only receipt there is: it says DUPLICATE, but Order History does not
+    // call it a reprint (the bill that left with the rider is another paper).
+    const { reprintCounts } = await import('../db/repositories/document-print-repo.js');
+    expect(reprintCounts(db, [oid])).toEqual({});
+  });
+
+  it("the owner's rule: a receipt pressed for before the rider leaves is a DUPLICATE; the one the till prints at dispatch is the ORIGINAL", async () => {
+    const s = await spooler();
+    await policy({ kitchenTicket: false, shopCopy: 'never', deliveryBillOnDispatch: true });
+    const oid = order('o0313', { mode: 'delivery', status: 'preparing' });
+    s.onOrderEvent(oid, 'paid', cash());
+    await s.whenIdle();
+    // Paid up front, bill on dispatch: nothing on paper yet.
+    expect(logRows(oid)).toEqual([]);
+    s.reprintReceipt(oid, { requestedByUserId: 'u_cash' });
+    await s.whenIdle();
+    expect(last()).toContain('** DUPLICATE - Reprint #1 **');
+    order('o0313', { mode: 'delivery', status: 'out_for_delivery' });
+    s.onOrderEvent(oid, 'dispatched');
+    await s.whenIdle();
+    expect(last()).toContain('RECEIPT');
+    expect(last()).not.toContain('DUPLICATE');
+    // A later hand press counts both: Reprint #2 — and names the till's paper as the original.
+    s.reprintReceipt(oid, { requestedByUserId: 'u_cash' });
+    await s.whenIdle();
+    expect(last()).toContain('** DUPLICATE - Reprint #2 **');
+    expect(last()).toMatch(/Original: \d\d\/\d\d\/\d{4} \d\d:\d\d/);
+    expect(logRows(oid).map((r) => [r.print_no, r.reason])).toEqual([
+      [1, 'reprint'],
+      [0, 'dispatch'],
+      [2, 'reprint'],
+    ]);
+  });
+
+  it("the owner's rule: a quick double press while the paper is still waiting prints ONE paper", async () => {
+    const s = await spooler();
+    await policy({ kitchenTicket: false });
+    const oid = order('o0314', { paid: false, status: 'preparing' });
+    let release!: () => void;
+    h.script.push(() => new Promise<PrintResult>((r) => (release = () => r({ ok: true, durationMs: 1 }))));
+    s.reprintReceipt(oid, { requestedByUserId: 'u_cash' });
+    await vi.waitFor(() => expect(h.sends).toHaveLength(1));
+    expect(s.reprintReceipt(oid, { requestedByUserId: 'u_cash' })).toMatchObject({ status: 'merged' });
+    release();
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(1);
+    expect(logRows(oid)).toHaveLength(1);
   });
 
   it('the cash-on-delivery bill at dispatch says NOT PAID and nothing about FBR, and does not wait for FBR', async () => {
@@ -555,7 +672,7 @@ describe.skipIf(!DatabaseSync)('bills, receipts, refunds and cancelled orders', 
     const s = await spooler();
     const oid = order('o0303');
     const at = addRefund(oid, 30_000);
-    s.onOrderEvent(oid, 'refunded', { cash: true });
+    s.onOrderEvent(oid, 'refunded', cash('refund'));
     await s.whenIdle();
     const slip = texts().find((t) => t.includes('REFUND'))!;
     expect(count(slip, 'REFUND SLIP - NOT A RECEIPT FOR PAYMENT')).toBe(2);
@@ -573,7 +690,7 @@ describe.skipIf(!DatabaseSync)('bills, receipts, refunds and cancelled orders', 
     h.sends.length = 0;
     const o2 = order('o0310', { method: 'card' });
     addRefund(o2, 10_000);
-    s.onOrderEvent(o2, 'refunded', { cash: false });
+    s.onOrderEvent(o2, 'refunded', {});
     await s.whenIdle();
     expect(count(last(), 'REFUND SLIP - NOT A RECEIPT FOR PAYMENT')).toBe(1);
     expect(count(last(), 'SHOP COPY')).toBe(0);
@@ -581,7 +698,7 @@ describe.skipIf(!DatabaseSync)('bills, receipts, refunds and cancelled orders', 
     await policy({ shopCopy: 'never' });
     const o3 = order('o0311');
     addRefund(o3, 10_000);
-    s.onOrderEvent(o3, 'refunded', { cash: true });
+    s.onOrderEvent(o3, 'refunded', cash('refund'));
     await s.whenIdle();
     expect(count(last(), 'SHOP COPY')).toBe(0);
   });
@@ -599,7 +716,9 @@ describe.skipIf(!DatabaseSync)('bills, receipts, refunds and cancelled orders', 
     expect(last()).not.toContain('RECEIPT');
     expect(last()).not.toContain('BILL - NOT PAID');
     expect(last()).not.toContain('TOTAL');
-    expect(logRows(oid)).toMatchObject([{ document: 'void', print_no: 0 }]);
+    // Printed with a print button: a DUPLICATE, like every paper pressed for by hand.
+    expect(last()).toContain('** DUPLICATE - Reprint #1 **');
+    expect(logRows(oid)).toMatchObject([{ document: 'void', print_no: 1, reason: 'reprint' }]);
   });
 
   it('a bill queued for a rider that is cancelled before it prints never comes out', async () => {
@@ -726,13 +845,13 @@ describe.skipIf(!DatabaseSync)('kitchen tickets', () => {
   it('a full cash refund while preparing: the refund slip (with its shop copy) AND the kitchen CANCELLED slip', async () => {
     const s = await spooler();
     const oid = order('o0406', { status: 'preparing' });
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     h.sends.length = 0;
     addRefund(oid, 116_000, 'kitchen out of cheese');
     snap(oid).order.status = 'refunded';
     // What orders:refund does: 'refunded', then 'cancelled'.
-    s.onOrderEvent(oid, 'refunded', { cash: true });
+    s.onOrderEvent(oid, 'refunded', cash('refund'));
     s.onOrderEvent(oid, 'cancelled');
     await s.whenIdle();
     const all = texts().join('\n=====\n');
@@ -790,7 +909,7 @@ describe.skipIf(!DatabaseSync)('FBR on paper', () => {
     const s = await spooler();
     const oid = order('o0601');
     fbrRow(oid, 'sent', 'NOOP-123', 'noop');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     const receipt = texts().find((t) => t.includes('RECEIPT'))!;
     expect(receipt).not.toContain('FBR');
@@ -802,7 +921,7 @@ describe.skipIf(!DatabaseSync)('FBR on paper', () => {
     await fbrMode('production');
     const oid = order('o0602');
     fbrRow(oid, 'sent', '123456-260926193500-0001');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     const original = texts().find((t) => t.includes('RECEIPT'))!;
     expect(original).toContain('FBR Invoice No: 123456-260926193500-0001');
@@ -823,7 +942,7 @@ describe.skipIf(!DatabaseSync)('FBR on paper', () => {
     await fbrMode('production');
     await policy({ kitchenTicket: false });
     const oid = order('o0603');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     expect(h.sends).toHaveLength(0);
     fbrRow(oid, 'sent', 'LIVE-1');
@@ -902,7 +1021,7 @@ describe.skipIf(!DatabaseSync)('FBR on paper', () => {
     await policy({ kitchenTicket: false });
     const oid = order('o0604');
     fbrRow(oid, 'failed', null);
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     expect(last()).toContain('FBR invoice no.: not issued');
     db.prepare(`UPDATE fbr_submission_queue SET status = 'sent', irn = 'LATE-1' WHERE order_id = ?`).run(oid);
@@ -918,15 +1037,16 @@ describe.skipIf(!DatabaseSync)('FBR on paper', () => {
 });
 
 describe.skipIf(!DatabaseSync)('who and when', () => {
-  it('a first paper printed by hand long after the sale says "Printed later"', async () => {
+  it("a first paper printed by hand long after the sale is a DUPLICATE (the owner's rule), never \"Printed later\"", async () => {
     const s = await spooler();
     const oid = order('o0701', { status: 'delivered', paidAt: minutesAgo(90) });
     // Its receipt never printed on this till (a bill went with the rider).
-    s.reprintReceipt(oid, { requestedByUserId: 'u_mgr' });
+    s.reprintReceipt(oid, { requestedByUserId: 'u_mgr', approvedByUserId: 'u_mgr' });
     await s.whenIdle();
-    expect(last()).toContain('Printed later:');
+    expect(last()).not.toContain('Printed later');
+    expect(last().split('\n')[1]).toBe('DUPLICATE');
+    expect(last()).toContain('Reprint #1');
     expect(last()).toContain('by Sana Khan');
-    expect(last()).not.toContain('DUPLICATE');
   });
 
   it('cash on delivery taken when the rider comes back: the receipt says PAID ON DELIVERY, never PREPAID', async () => {
@@ -935,7 +1055,7 @@ describe.skipIf(!DatabaseSync)('who and when', () => {
     const now = new Date().toISOString();
     const oid = order('o0703', { mode: 'delivery', status: 'paid', paidAt: now });
     Object.assign(snap(oid).order, { dispatchedAt: minutesAgo(30), deliveredAt: now });
-    s.onOrderEvent(oid, 'payment_captured', { cash: true });
+    s.onOrderEvent(oid, 'payment_captured', cash());
     await s.whenIdle();
     const receipt = texts().find((t) => t.includes('RECEIPT'))!;
     expect(receipt).toContain('PAID - CASH');
@@ -943,19 +1063,31 @@ describe.skipIf(!DatabaseSync)('who and when', () => {
     expect(receipt).not.toContain('PREPAID');
   });
 
-  it('a second copy the till prints itself says Copy #N, with no name', async () => {
+  it('a hand-pressed copy never takes the place of the paper the till prints itself; a second automatic paper says Copy #N, with no name', async () => {
     const s = await spooler();
     await policy({ kitchenTicket: false });
     const oid = order('o0702', { mode: 'delivery' });
     // The cashier printed it at the counter, then the rider was assigned.
     s.reprintReceipt(oid, { requestedByUserId: 'u_cash' });
     await s.whenIdle();
+    expect(last()).toContain('** DUPLICATE - Reprint #1 **');
     s.onOrderEvent(oid, 'dispatched');
     await s.whenIdle();
     const dispatch = last();
-    expect(dispatch).toContain('Copy #2');
-    expect(dispatch).not.toContain('by Ali Akbar');
+    // The till's own paper: the ORIGINAL.
+    expect(dispatch).not.toContain('DUPLICATE');
     expect(dispatch).toContain('PREPAID - RIDER COLLECTS NOTHING');
+    // A second paper the till prints by itself (an older till's job for the same paper).
+    const { enqueuePrintJob } = await import('../db/repositories/print-queue-repo.js');
+    enqueuePrintJob(db, { kind: 'receipt', orderId: oid, openDrawer: false, copies: ['customer'], reason: 'dispatch' });
+    await s.whenIdle();
+    expect(last()).toContain('Copy #3');
+    expect(last()).not.toContain('by Ali Akbar');
+    expect(logRows(oid).filter((r) => r.copy === 'customer').map((r) => [r.print_no, r.reason])).toEqual([
+      [1, 'reprint'],
+      [0, 'dispatch'],
+      [2, 'dispatch'],
+    ]);
   });
 });
 
@@ -972,7 +1104,7 @@ describe.skipIf(!DatabaseSync)('the shop on paper (owner 2026-09-27)', () => {
       footerLine: 'Test thanks',
     });
     const oid = order('o0801');
-    s.onOrderEvent(oid, 'paid', { cash: false });
+    s.onOrderEvent(oid, 'paid', {});
     await s.whenIdle();
     const lines = texts().find((t) => t.includes('RECEIPT'))!.split('\n');
     // No logo set: the name, then the tagline, then the title.

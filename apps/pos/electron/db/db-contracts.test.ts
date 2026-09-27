@@ -278,3 +278,31 @@ describe('repository contract: only writeAudit / enqueueSync append to the ledge
     ).toEqual([]);
   });
 });
+
+describe('migrations: numbered in order, one file per number', () => {
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, by name', () => {
+    const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
+    expect(numbers).toEqual(numbers.map((_, i) => i + 1));
+    // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
+    // delete were renumbered after them, so a 0.7.22 till runs just these two.
+    expect(files.slice(38)).toEqual([
+      '0039_shift_close_notes.sql',
+      '0040_foodpanda_deal_and_terms.sql',
+      '0041_channel_terms_uplift_and_fee.sql',
+      '0042_drawer_log.sql',
+      '0043_order_test_delete.sql',
+    ]);
+  });
+
+  it('0042 and 0043 assume nothing 0039, 0040 or 0041 changed: they touch neither the shifts table, order_discounts nor order_channel_terms', () => {
+    for (const f of ['0042_drawer_log.sql', '0043_order_test_delete.sql']) {
+      const sql = stripComments(readFileSync(join(MIGRATIONS_DIR, f), 'utf8'));
+      expect({ f, touches: /\bshifts\b|close_notes|carried_unpaid_count|carry_over_reason/i.test(sql) }).toEqual({ f, touches: false });
+      expect({ f, touches: /\border_discounts\b|\border_channel_terms\b/i.test(sql) }).toEqual({ f, touches: false });
+    }
+  });
+});

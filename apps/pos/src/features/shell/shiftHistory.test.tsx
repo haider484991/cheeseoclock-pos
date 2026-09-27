@@ -25,6 +25,7 @@ import { ReportsPage } from '../reports/ReportsPage';
 import { SHIFT_HISTORY_ANCHOR } from '../reports/reportTabs';
 import { periodFor } from '../reports/dateRange';
 import { shiftDrawerBanner, shiftHistoryNote, TeamLeakageTab } from '../reports/tabs/TeamLeakageTab';
+import { shiftCarryOverText, shiftDetailLines } from '../reports/reportFormat';
 import { ShiftWidget } from './ShiftWidget';
 
 function signIn(role: AuthenticatedUser['role']) {
@@ -231,6 +232,73 @@ describe('the shift history panel', () => {
     expect(words).toContain('Opening note: Only an opening note');
     expect(words.match(/Opening note:/g)).toHaveLength(2);
     expect(words.match(/Closing note:/g)).toHaveLength(1);
+  });
+
+  it('with the drawer log (0042) and deleted test orders (0043), one layout: each shift keeps its notes and carry-over, adds its deleted-test notes and its own Drawer log; the period’s whole log sits right under the history', () => {
+    const out = render(
+      <TeamLeakageTab
+        now={NOW}
+        data={team([
+          line({
+            id: 's3',
+            openedAt: '2026-09-25T07:00:00.000Z',
+            closedAt: '2026-09-25T20:00:00.000Z',
+            closedBy: 'Sara',
+            expectedCashCents: 620_000,
+            countedCashCents: 620_000,
+            varianceCents: 0,
+            noSaleOpens: 1,
+            drawerOpenCount: 6,
+            testDeletedCashCents: 120_000,
+            openingNote: 'Morning shift, Ali on register',
+            closingNote: 'All good',
+            carriedUnpaidCount: 2,
+            carryOverReason: 'Rider still out',
+            carriedTestDeletedCount: 1,
+          }),
+        ])}
+      />,
+    );
+    const words = text(out);
+    const at = (s: string) => {
+      const i = words.indexOf(s);
+      if (i < 0) throw new Error(`Not on screen: ${s}`);
+      return i;
+    };
+    // In this order, inside the shift history: the row's facts, its notes, the
+    // carry-over (and the carried test deleted later), the test cash deleted
+    // after the close, its own drawer log; then the period's whole log.
+    const order = [
+      'Shift history — cash in the drawer',
+      'to 26 Sep, 1:00 am · closed by Sara · drawer used 6× (1 no sale)',
+      'Opening note: Morning shift, Ali on register',
+      'Closing note: All good',
+      '2 unpaid orders carried over — Rider still out — approved by Sara (1 of them later deleted as a test order)',
+      'Includes Rs 1,200 of test orders deleted after this shift closed.',
+      'Drawer log',
+      'Cash drawer log — used',
+    ].map(at);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(out.indexOf(`id="${SHIFT_HISTORY_ANCHOR}"`)).toBeLessThan(out.indexOf('Drawer log</button>'));
+    // The hand-opened list is folded into the drawer log, not shown twice.
+    expect(words).not.toContain('Cash drawer opened by hand');
+    // The owner's deleted test orders have their own section, after the refunds.
+    expect(at('Refunds and cancelled orders')).toBeLessThan(at('Orders made to test the till that the owner deleted.'));
+  });
+
+  it('a carried order the owner deleted as a test later: the saved count stays, and says so', () => {
+    const carried = (n: number, deleted?: number) =>
+      line({ id: 'sc', openedAt: '2026-09-25T07:00:00.000Z', closedAt: '2026-09-25T20:00:00.000Z', closedBy: 'Sara', carriedUnpaidCount: n, carryOverReason: 'Rider still out', ...(deleted === undefined ? {} : { carriedTestDeletedCount: deleted }) });
+    expect(shiftCarryOverText(carried(1, 1))).toBe('1 unpaid order carried over — Rider still out — approved by Sara (later deleted as a test order)');
+    expect(shiftCarryOverText(carried(3, 2))).toBe('3 unpaid orders carried over — Rider still out — approved by Sara (2 of them later deleted as test orders)');
+    // None deleted, or a till before 0043: as 0.7.21 said it.
+    expect(shiftCarryOverText(carried(2, 0))).toBe('2 unpaid orders carried over — Rider still out — approved by Sara');
+    expect(shiftCarryOverText(carried(2))).toBe('2 unpaid orders carried over — Rider still out — approved by Sara');
+    // Never more than were carried; nothing carried, nothing said.
+    expect(shiftCarryOverText(carried(1, 4))).toBe('1 unpaid order carried over — Rider still out — approved by Sara (later deleted as a test order)');
+    expect(shiftCarryOverText(carried(0, 1))).toBeNull();
+    // Paper and file carry the same words.
+    expect(shiftDetailLines(carried(2, 1))).toEqual(['2 unpaid orders carried over — Rider still out — approved by Sara (1 of them later deleted as a test order)']);
   });
 
   it('an empty period says so plainly', () => {

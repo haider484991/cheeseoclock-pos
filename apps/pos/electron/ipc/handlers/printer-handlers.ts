@@ -177,6 +177,38 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
     return ok(printSpooler.reprintKitchenTicket(payload.orderId, { requestedByUserId: s.id }));
   });
 
+  // What the print button would print (original or DUPLICATE) and every paper
+  // the order had: the same orders as a reprint (order-access.ts).
+  defineHandler('printer:orderPapers', ctx, (_ctx, payload) => {
+    const s = requireSession();
+    const orderId = typeof payload?.orderId === 'string' ? payload.orderId : '';
+    if (!orderId) throw new IpcGuardError({ code: 'validation_failed', message: 'Which order?' });
+    assertCounterMayReprint(ctx.db, s, orderId, 'receipt');
+    try {
+      return ok(printSpooler.orderPapers(orderId));
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'not_found',
+        message: e instanceof Error ? e.message : 'Order not found',
+      });
+    }
+  });
+
+  // "Try again" on the failed-print note: that very job again (the till's own
+  // paper stays the original). A counter login: only jobs of orders it may
+  // reprint (order-access.ts).
+  defineHandler('printer:retryJob', ctx, (_ctx, payload) => {
+    const s = requireSession();
+    const jobId = typeof payload?.jobId === 'string' ? payload.jobId : '';
+    if (!jobId) throw new IpcGuardError({ code: 'validation_failed', message: 'Which print?' });
+    const row = ctx.db.prepare(`SELECT order_id AS orderId, job_kind AS kind FROM print_queue WHERE id = ?`).get(jobId) as
+      | { orderId: string | null; kind: string }
+      | undefined;
+    if (!row) return ok({ requeued: false });
+    if (row.orderId) assertCounterMayReprint(ctx.db, s, row.orderId, row.kind === 'kitchen' ? 'kitchen' : 'receipt');
+    return ok({ requeued: printSpooler.retryFailedJob(jobId) !== null });
+  });
+
   // "Reprinted ×N" in Order History: papers printed by hand, per order.
   defineHandler('printer:reprintCounts', ctx, (_ctx, payload) => {
     requireSession();

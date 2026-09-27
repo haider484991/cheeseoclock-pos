@@ -186,6 +186,7 @@ live('Reports channels', () => {
     expect([...h.handlers.keys()].filter((c) => c.startsWith('reports:')).sort()).toEqual([
       'reports:addDayNote',
       'reports:channels',
+      'reports:drawerLog',
       'reports:foodStock',
       'reports:getDayparts',
       'reports:lowStock',

@@ -99,6 +99,11 @@ vi.mock('../../services/auth-service.js', () => ({
   verifyManagerPin: async () => {
     throw new Error("That is not a manager's PIN or password");
   },
+  // The owner's PIN typed again to delete a test order (0043): only this made-up one is the owner's.
+  verifyOwnerSecret: async (_db: unknown, secret: string) => {
+    if (secret === 'Owner-pass-9') return { ownerUserId: 'u_admin', ownerName: 'Test Owner' };
+    throw new Error("That is not the owner's PIN or password.");
+  },
 }));
 // The spooler records what it was asked and prints nothing; any method works,
 // so the reprint work going on beside this one can add its own.
@@ -421,6 +426,8 @@ const REPORTS = (): Record<string, unknown> => ({
   'reports:getDayparts': undefined,
   // Stock takes' "used vs should have used" (costing spec Phase 8).
   'reports:variance': undefined,
+  // The cash drawer log (0042): every open, who, why and whether it opened.
+  'reports:drawerLog': REPORT_TODAY(),
   // Shift history: every past shift with its totals.
   'shifts:list': {},
   // Profit (costing spec Phase 9): the Profit tab and the menu map. Reports
@@ -529,6 +536,8 @@ const COUNTER_SCOPED = [
   'customers:attachToOrder',
   'printer:reprint',
   'printer:reprintKitchen',
+  // What the print button would print and the order's papers: the same orders as a reprint.
+  'printer:orderPapers',
   'shifts:listCashMovements',
   'fbr:getInvoiceStatus',
 ];
@@ -571,6 +580,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'printer:listSystemPrinters': undefined,
   // How many times a paper was printed by hand: numbers only, for orders the screen already shows.
   'printer:reprintCounts': { orderIds: [] },
+  // "Try again" on the failed-print note: that very job again (its order's reprint rule when it has one).
+  'printer:retryJob': { jobId: 'no-such-job' },
   'fbr:getConfig': undefined,
   'fbr:getQueueStats': undefined,
   // Kitchen staff record a batch they made (any login, on purpose).
@@ -624,6 +635,23 @@ const ALREADY_MANAGERS = (): Record<string, unknown> => ({
   'inventory:createPurchaseOrder': {},
   'inventory:setPurchaseOrderStatus': {},
   'inventory:receiveDelivery': {},
+});
+
+/**
+ * Deleting a test order (0043): the OWNER (admin) login only — a manager and
+ * a cashier are refused before anything is read — and the delete itself
+ * needs the owner's PIN or password typed again.
+ */
+const TEST_ORDERS_OWNER = (): Record<string, unknown> => ({
+  'orders:testDeletePreview': { orderId: s.paidNow },
+  'orders:listDeletedTests': REPORT_TODAY(),
+  'orders:deleteTest': {
+    orderId: s.paidNow,
+    reason: 'Printer test',
+    restock: null,
+    ownerSecret: 'Owner-pass-9',
+    expectStatus: 'paid',
+  },
 });
 
 /**
@@ -746,6 +774,66 @@ describe.skipIf(!Sqlite)("the owner's alone", () => {
       if (why) lockedOut.push(`${channel} — ${why}`);
     }
     expect(lockedOut).toEqual([]);
+  });
+});
+
+describe.skipIf(!Sqlite)('test orders: the owner (admin) login only, and the owner\'s PIN or password to delete', () => {
+  it('a cashier and a manager are refused every test-order channel in plain words, and nothing is written', async () => {
+    const before = writtenRows();
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      for (const [channel, payload] of Object.entries(TEST_ORDERS_OWNER())) {
+        const o = await call(channel, payload);
+        expect({ channel, who: who.role, o }).toEqual({
+          channel,
+          who: who.role,
+          o: {
+            ok: false,
+            code: 'forbidden',
+            message:
+              channel === 'orders:listDeletedTests'
+                ? 'The list of deleted test orders needs the owner (admin) login'
+                : 'Deleting a test order needs the owner (admin) login',
+          },
+        });
+      }
+    }
+    h.session = null;
+    for (const [channel, payload] of Object.entries(TEST_ORDERS_OWNER())) {
+      expect({ channel, code: (await call(channel, payload)) }).toMatchObject({ channel, code: { ok: false, code: 'unauthenticated' } });
+    }
+    expect(writtenRows()).toEqual(before);
+  });
+
+  it("the owner: a manager's PIN is not the owner's (nothing written); with the owner's the test order is deleted", async () => {
+    h.session = OWNER;
+    expect(await data('orders:testDeletePreview', { orderId: s.paidNow })).toMatchObject({ orderId: s.paidNow, refusal: null });
+    const before = writtenRows();
+    const wrong = await call('orders:deleteTest', { ...(TEST_ORDERS_OWNER()['orders:deleteTest'] as object), ownerSecret: 'Manager-pass-7' });
+    expect(wrong).toEqual({ ok: false, code: 'forbidden', message: "That is not the owner's PIN or password." });
+    expect(writtenRows()).toEqual(before);
+    const done = await data<{ orderId: string; deleteStock: string }>('orders:deleteTest', TEST_ORDERS_OWNER()['orders:deleteTest']);
+    expect(done).toMatchObject({ orderId: s.paidNow, deleteStock: 'none' });
+    expect(db.prepare(`SELECT delete_kind AS k, deleted_by AS by FROM orders WHERE id = ?`).get(s.paidNow)).toEqual({ k: 'test', by: 'u_admin' });
+    // The kitchen and the printer queue were told after the commit.
+    expect(h.spool.map((c) => c.method)).toContain('onOrderDeleted');
+    const lastTwoDays = { sinceIso: new Date(Date.now() - 48 * HOUR).toISOString(), untilIso: new Date(Date.now() + HOUR).toISOString() };
+    const list = await data<{ total: number; rows: Array<{ orderId: string; reason: string }> }>('orders:listDeletedTests', lastTwoDays);
+    expect(list.total).toBe(1);
+    expect(list.rows[0]).toMatchObject({ orderId: s.paidNow, reason: 'Printer test' });
+    // A second delete: already gone.
+    expect(await call('orders:deleteTest', TEST_ORDERS_OWNER()['orders:deleteTest'])).toMatchObject({
+      ok: false,
+      code: 'precondition_failed',
+      message: "This order is already deleted or can't be found.",
+    });
+  });
+
+  it('the other till\'s order is refused in its words, even for the owner', async () => {
+    h.session = OWNER;
+    expect(await data('orders:testDeletePreview', { orderId: s.otherTill })).toMatchObject({
+      refusal: 'This order was taken on the other till. Delete it on that till.',
+    });
   });
 });
 
@@ -1291,19 +1379,23 @@ describe.skipIf(!Sqlite)('shift money at the counter', () => {
   });
 });
 
+/** Every list above, by name (a channel's "home"). */
+const classification = (): Record<string, string[]> => ({
+  COUNTER_REFUSED: Object.keys(COUNTER_REFUSED()),
+  REPORTS: Object.keys(REPORTS()),
+  PROFIT: Object.keys(PROFIT()),
+  PRINTER_SETTINGS: Object.keys(PRINTER_SETTINGS()),
+  OWNER_ONLY: Object.keys(OWNER_ONLY()),
+  TEST_ORDERS_OWNER: Object.keys(TEST_ORDERS_OWNER()),
+  COUNTER_SCOPED,
+  COUNTER_ALLOWED: Object.keys(COUNTER_ALLOWED()),
+  ALREADY_MANAGERS: Object.keys(ALREADY_MANAGERS()),
+  BEING_ADDED_ELSEWHERE,
+});
+
 describe.skipIf(!Sqlite)('every channel is classified', () => {
   it('each channel of these modules is in exactly one list, so a new one must be decided on', () => {
-    const lists: Record<string, string[]> = {
-      COUNTER_REFUSED: Object.keys(COUNTER_REFUSED()),
-      REPORTS: Object.keys(REPORTS()),
-      PROFIT: Object.keys(PROFIT()),
-      PRINTER_SETTINGS: Object.keys(PRINTER_SETTINGS()),
-      OWNER_ONLY: Object.keys(OWNER_ONLY()),
-      COUNTER_SCOPED,
-      COUNTER_ALLOWED: Object.keys(COUNTER_ALLOWED()),
-      ALREADY_MANAGERS: Object.keys(ALREADY_MANAGERS()),
-      BEING_ADDED_ELSEWHERE,
-    };
+    const lists = classification();
     const unclassified: string[] = [];
     const twice: string[] = [];
     for (const channel of h.handlers.keys()) {
@@ -1322,5 +1414,64 @@ describe.skipIf(!Sqlite)('every channel is classified', () => {
       .filter(([n]) => n !== 'BEING_ADDED_ELSEWHERE')
       .flatMap(([, l]) => l.filter((c) => !known.has(c)));
     expect(stale).toEqual([]);
+  });
+});
+
+describe.skipIf(!Sqlite)('both lines of work, classified where the owner put them (the 0.7.19–0.7.21 release and the test-order / drawer-log / DUPLICATE work)', () => {
+  it("each channel is registered and sits in its list; the drawer log, the deleted-test list and profit are the owner's alone", async () => {
+    const lists = classification();
+    const HOME: Record<string, string> = {
+      // The drawer log (0042): Reports, the owner's.
+      'reports:drawerLog': 'REPORTS',
+      // Test orders (0043): the owner (admin) login, and their PIN to delete.
+      'orders:testDeletePreview': 'TEST_ORDERS_OWNER',
+      'orders:deleteTest': 'TEST_ORDERS_OWNER',
+      'orders:listDeletedTests': 'TEST_ORDERS_OWNER',
+      // DUPLICATE: "Try again" on the failed-print note, the papers and the reprint counts.
+      'printer:retryJob': 'COUNTER_ALLOWED',
+      'printer:orderPapers': 'COUNTER_SCOPED',
+      'printer:reprintCounts': 'COUNTER_ALLOWED',
+      // 0.7.21: the counter's order note (only on the bill being rung up), the close box.
+      'orders:setNote': 'COUNTER_SCOPED',
+      'shifts:closeCheck': 'ALREADY_MANAGERS',
+      // 0.7.20: profit — Reports' tab and the menu map, and Costing → What-if.
+      'reports:profit': 'REPORTS',
+      'reports:menuMap': 'REPORTS',
+      'costing:whatIf': 'PROFIT',
+      'costing:getChannelFees': 'COUNTER_REFUSED',
+      'costing:setChannelFees': 'OWNER_ONLY',
+      // 0.7.19: the recipe calculator (stock, so managers'), its rupees (costs).
+      'inventory:recipeCalc': 'COUNTER_REFUSED',
+      'inventory:typicalPicks': 'COUNTER_REFUSED',
+      'inventory:printPrepList': 'COUNTER_REFUSED',
+      'costing:recipeCalc': 'COUNTER_REFUSED',
+    };
+    const homes = Object.fromEntries(
+      Object.keys(HOME).map((c) => [c, Object.entries(lists).filter(([, l]) => l.includes(c)).map(([n]) => n).join(', ') || '(none)']),
+    );
+    expect(homes).toEqual(HOME);
+    expect(Object.keys(HOME).filter((c) => !h.handlers.has(c))).toEqual([]);
+
+    // Owner-only in the main process: a manager is refused each, the owner gets through.
+    const range = REPORT_TODAY();
+    const ownerOnly: Array<[string, unknown]> = [
+      ['reports:drawerLog', range],
+      ['orders:listDeletedTests', range],
+      ['reports:profit', range],
+      ['reports:menuMap', undefined],
+      ['costing:whatIf', { ingredients: [], items: [] }],
+    ];
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      for (const [channel, payload] of ownerOnly) {
+        const o = await call(channel, payload);
+        expect({ channel, who: who.role, code: o.ok ? 'ok' : o.code }).toEqual({ channel, who: who.role, code: 'forbidden' });
+      }
+    }
+    h.session = OWNER;
+    for (const [channel, payload] of ownerOnly) {
+      const o = await call(channel, payload);
+      expect({ channel, ok: o.ok, why: o.ok ? null : o.message }).toEqual({ channel, ok: true, why: null });
+    }
   });
 });

@@ -213,6 +213,36 @@ describe.skipIf(!DatabaseSync)('the print log: row + sync + audit together', () 
     expect(reprintCounts(db, [])).toEqual({});
   });
 
+  it("the owner's rule: a first paper printed by hand says DUPLICATE (print_no 1) but is not a reprint; the next press is", async () => {
+    const { recordDocumentPrint, reprintCounts } = await repo();
+    for (const oid of ['o3', 'o4', 'o5']) {
+      db.prepare(
+        `INSERT INTO orders (id, order_number, mode, status, cashier_id, subtotal_cents, discount_cents, tax_cents,
+                             total_cents, source, paid_at, created_at, updated_at, device_id)
+         VALUES (?, ?, 'dine_in', 'served', 'u_cash', 100000, 0, 16000, 116000, 'pos', NULL, ?, ?, ?)`,
+      ).run(oid, `20260926-00${oid.slice(1)}`, T0, T0, DEV);
+    }
+    // A table's only bill, printed from the board: logged as a DUPLICATE…
+    recordDocumentPrint(db, paper({ orderId: 'o3', document: 'bill', docKey: 'bill', printNo: 1, reason: 'reprint', printJobId: 'k1' }), DEV);
+    // …its shop copy is its own series, and so is the paid receipt (different papers).
+    recordDocumentPrint(db, paper({ orderId: 'o3', document: 'bill', docKey: 'bill', copy: 'shop', printNo: 1, reason: 'reprint', printJobId: 'k2' }), DEV);
+    recordDocumentPrint(db, paper({ orderId: 'o3', document: 'receipt', docKey: 'receipt', printNo: 1, reason: 'reprint', printJobId: 'k3' }), DEV);
+    expect(reprintCounts(db, ['o3'])).toEqual({});
+    // The same bill pressed for again: that one is a reprint (print_no 1 too — one paper before it).
+    recordDocumentPrint(db, paper({ orderId: 'o3', document: 'bill', docKey: 'bill', printNo: 1, reason: 'reprint', printJobId: 'k4' }), DEV);
+    expect(reprintCounts(db, ['o3'])).toEqual({ o3: 1 });
+    // A press fumbled then printed on the retry is still one press, and its own first try is not "earlier".
+    recordDocumentPrint(db, paper({ orderId: 'o4', printNo: 1, outcome: 'unsure', reason: 'reprint', printJobId: 'k5' }), DEV);
+    recordDocumentPrint(db, paper({ orderId: 'o4', printNo: 1, reason: 'reprint', printJobId: 'k5' }), DEV);
+    expect(reprintCounts(db, ['o4'])).toEqual({});
+    // An earlier paper that came from the other till (synced, a later rowid but an earlier time) counts.
+    recordDocumentPrint(db, paper({ orderId: 'o5', printNo: 1, reason: 'reprint', printJobId: 'k6' }), DEV);
+    expect(reprintCounts(db, ['o5'])).toEqual({});
+    recordDocumentPrint(db, paper({ orderId: 'o5', printJobId: 'k7' }), DEV);
+    db.prepare(`UPDATE document_prints SET created_at = '2020-01-01T00:00:00.000Z' WHERE print_job_id = 'k7'`).run();
+    expect(reprintCounts(db, ['o5'])).toEqual({ o5: 1 });
+  });
+
   it("keeps the FBR number's QR and kind with it; the newest customer receipt's number is what another till reprints", async () => {
     const { recordDocumentPrint, latestLoggedSaleFbr } = await repo();
     expect(latestLoggedSaleFbr(db, 'o1')).toBeNull();

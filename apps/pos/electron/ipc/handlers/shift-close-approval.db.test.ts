@@ -187,7 +187,9 @@ live('A. a manager closes the shift on a cashier’s till with their PIN or pass
     expect(await refusal('shifts:openDrawer', { kind: 'count' })).toMatchObject({ code: 'forbidden' });
     expect(await refusal('shifts:openDrawer', { kind: 'count', approverPin: '1111' })).toMatchObject({ code: 'forbidden' });
     await call('shifts:openDrawer', { kind: 'count', approverPin: PIN });
-    expect(rows(`SELECT kind, user_id, approved_by_user_id, shift_id FROM drawer_opens`)).toEqual([
+    // The float went in when the shift opened (the drawer log, 0042), then the count.
+    expect(rows(`SELECT kind, user_id, approved_by_user_id, shift_id FROM drawer_opens ORDER BY rowid`)).toEqual([
+      { kind: 'float', user_id: 'u_cash', approved_by_user_id: null, shift_id: shift.id },
       { kind: 'count', user_id: 'u_cash', approved_by_user_id: 'u_mgr', shift_id: shift.id },
     ]);
   });

@@ -123,12 +123,13 @@ function mayViewCosts(s: AuthenticatedUser): boolean {
 
 /**
  * A purchase paid from the drawer: the drawer opens for the notes, as for
- * any cash taken out (a failure is a toast, never an error). Loaded when
- * needed: the printer code is the main process's, not the repositories'.
+ * any cash taken out (a failure is a toast, never an error), for the payout's
+ * drawer_opens row the purchase wrote (no row, no pulse). Loaded when needed:
+ * the printer code is the main process's, not the repositories'.
  */
-function kickDrawer(): void {
+function kickDrawer(drawerOpenId: string): void {
   void import('../../services/print-spooler.js')
-    .then((m) => m.printSpooler.kickDrawerSoon())
+    .then((m) => m.printSpooler.kickDrawerSoon(drawerOpenId))
     .catch(() => undefined);
 }
 
@@ -493,7 +494,7 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     const parsed = recordPurchaseInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     const result = recordPurchase(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId });
-    if (parsed.data.paidFromDrawer) kickDrawer();
+    if (result.payoutDrawerOpenId) kickDrawer(result.payoutDrawerOpenId);
     return ok(result);
   });
 

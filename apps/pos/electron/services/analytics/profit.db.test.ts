@@ -19,14 +19,19 @@
  *   - the menu map: "not enough sales yet", then placed, with the dishes not
  *     sold and the ones that can't be placed yet listed apart;
  *   - estimates kept between asks (the Reports worker): reused, worked out
- *     again for an order with a new stock row, all dropped on a price change.
+ *     again for an order with a new stock row, all dropped on a price change;
+ *   - test orders the owner deleted (0043) are in no profit figure — sales,
+ *     food cost, sent-not-paid, channels, categories, Menu, the menu map,
+ *     delivery areas, What-if — as the main process and the Reports worker
+ *     work them out; the food booked as waste is Waste's own line, "Test
+ *     orders (deleted)", as on Food cost & stock.
  *
  * node:sqlite behind better-sqlite3's shape; skips where it is missing.
  * EVERY PRICE AND QUANTITY IS MADE UP (costing spec D11).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReportProfitTab, TillLinkState } from '@cheeseoclock/shared-types';
-import { CASHIER, DatabaseSync, MANAGER, openCostingShop, openMigrated, type Line } from '../../db/costing-shop.fixture.js';
+import { CASHIER, DatabaseSync, MANAGER, OWNER, openCostingShop, openMigrated, type Line } from '../../db/costing-shop.fixture.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {} } }));
@@ -488,5 +493,77 @@ live('the menu map (costing spec 4.8)', () => {
     const def = s.r.buildMenuMap(s.db, undefined, s.at);
     expect(def.lastDays).toBe(true);
     expect(Date.parse(def.untilIso) - Date.parse(def.sinceIso)).toBe(28 * 86_400_000);
+  });
+});
+
+live('test orders the owner deleted (0043): in no profit figure; their food is Waste, on its own line', () => {
+  it('sales, food cost, sent-not-paid, channels, categories, Menu, the menu map, delivery areas and What-if leave them out — the Reports worker too', async () => {
+    const s = await shop();
+    s.sale([['fajitaM', 2]]);
+    // Tests rung the way real orders are: a delivery to a zone, a foodpanda
+    // order, a takeaway, and a delivery handed over and never paid.
+    const tests = [
+      s.sale([['fajitaM', 1], ['delivery', 1]], { mode: 'delivery', area: 'DHA Phase 6', phone: '03000000001' }),
+      s.sale([['fajitaM', 1]], { mode: 'foodpanda' }),
+      s.sale([['fajitaM', 3]]),
+    ];
+    const handedOver = s.ring([['fajitaM', 1]]);
+    s.r.sendOrderToKitchen(s.db, handedOver, CASHIER);
+    s.db.prepare(`UPDATE orders SET status = 'delivered', mode = 'delivery', created_at = ? WHERE id = ?`).run(s.at.toISOString(), handedOver);
+    // They counted before the delete (so the checks below mean something).
+    const before = s.tab();
+    expect(before.channels.reduce((a, c) => a + c.orderCount, 0)).toBe(4);
+    expect(before.sentNotPaid.costCents).toBeGreaterThan(0);
+
+    for (const o of [...tests, handedOver]) {
+      const status = s.r.findOrder(s.db, o)!.status;
+      expect(
+        s.r.deleteTestOrder(s.db, { orderId: o, reason: 'Printer test', restock: false, expectStatus: status, ownerUserId: OWNER.userId }, OWNER),
+      ).toMatchObject({ deleteStock: 'waste' });
+    }
+
+    // The same shop with only the real sale rung: every figure but waste is its.
+    const only = await shop();
+    only.sale([['fajitaM', 2]]);
+    const t = s.tab();
+    const o = only.tab();
+    const noIds = (cs: typeof t.categories) => cs.map(({ categoryId: _id, ...rest }) => rest);
+    for (const key of ['sales', 'food_cost', 'unknown_cost', 'sent_not_paid', 'commission', 'payment_fees', 'rider']) {
+      expect({ key, cents: s.step(t, key) }).toEqual({ key, cents: only.step(o, key) });
+    }
+    expect(t.channels).toEqual(o.channels);
+    expect(noIds(t.categories)).toEqual(noIds(o.categories));
+    expect(t.sentNotPaid).toEqual({ ...o.sentNotPaid });
+
+    // Their food: Waste, on its own line — the same lines Food cost & stock shows.
+    expect(t.wasteByReason.map((w) => [w.reason, w.times])).toEqual([['test_order', 4]]);
+    const wasted = t.wasteByReason[0]!.cents;
+    expect(wasted).toBeGreaterThan(0);
+    expect(s.step(t, 'waste')).toBe(-wasted);
+    expect(t.profitCents).toBe(o.profitCents - wasted);
+    expect(t.wasteByReason).toEqual(s.r.getFoodCost(s.db, s.period).wasteByReason);
+
+    // Menu (cost and profit per item), the menu map, delivery areas and What-if.
+    expect(s.r.buildReportTab(s.db, 'menu', s.period).costs!.items[s.item.fajitaM]).toMatchObject({ units: 2, salesCents: 240_000 });
+    expect(s.r.buildMenuMap(s.db, s.period, s.at).categories.find((c) => c.categoryId === s.cat.pizza)).toMatchObject({ units: 2 });
+    const ch = s.r.buildReportTab(s.db, 'channels', s.period);
+    expect(ch.areas).toEqual([]);
+    expect(ch.noRateDeliveries).toEqual([]);
+    expect(ch.profit!.channels.map((c) => [c.channel, c.orderCount])).toEqual(o.channels.map((c) => [c.channel, c.orderCount]));
+    const { getWhatIf } = await import('../costing-service.js');
+    const whatIf = getWhatIf(s.db, { ingredients: [], items: [] }, s.at);
+    expect(whatIf.rows.find((r) => r.menuItemId === s.item.fajitaM)).toMatchObject({ soldLast28: 2 });
+
+    // The Reports worker (its own bundle, the same code) hands over the same figures.
+    const worker = await import('./worker.js');
+    const viaWorker = (kind: string, request: unknown) => {
+      const reply = worker.handleRunRequest(s.db, { type: 'run', id: 1, kind: kind as never, request, nowIso: s.at.toISOString() });
+      if (reply.type !== 'result' || !reply.ok) throw new Error(`worker said no: ${JSON.stringify(reply)}`);
+      return structuredClone(reply.data);
+    };
+    expect(viaWorker('profit', s.period)).toEqual(structuredClone(t));
+    expect((viaWorker('menuMap', s.period) as { categories: Array<{ categoryId: string; units: number }> }).categories.find((c) => c.categoryId === s.cat.pizza)).toMatchObject({ units: 2 });
+    expect((viaWorker('whatIf', { ingredients: [], items: [] }) as typeof whatIf).rows.find((r) => r.menuItemId === s.item.fajitaM)).toMatchObject({ soldLast28: 2 });
+    expect((viaWorker('channels', s.period) as typeof ch).areas).toEqual([]);
   });
 });

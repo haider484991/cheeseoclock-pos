@@ -217,6 +217,21 @@ describe('the Profit tab (costing spec Phase 9)', () => {
     expect(out).not.toMatch(/contribution|COGS|bps/i);
   });
 
+  it('test orders the owner deleted (0043): their food is Waste on a line of its own, as on Food cost & stock — on screen and in the file', () => {
+    const withTests: ReportProfitTab = {
+      ...PROFIT,
+      wasteByReason: [
+        { reason: 'test_order', times: 2, cents: 8_000 },
+        { reason: 'burnt', times: 2, cents: 4_000 },
+      ],
+    };
+    const out = html(<ProfitTab data={withTests} />).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(out).toContain('Test orders (deleted) · 2× Rs 80');
+    expect(out).toContain('Burnt · 2× Rs 40');
+    const csv = buildTabCsv('profit', withTests, period, SAT_3PM);
+    expect(csv).toContain('Test orders (deleted),2,80.00');
+  });
+
   it('prints and exports on its own', () => {
     const csv = buildTabCsv('profit', PROFIT, period, SAT_3PM);
     expect(csv).toContain('FROM SALES TO PROFIT BEFORE OVERHEADS (THIS TILL)');

@@ -59,6 +59,8 @@ export const DRAWER_OPEN_WHY: Record<BusinessReport['drawerOpens'][number]['kind
   no_sale: 'No sale',
   count: 'To count at close',
   test: 'Test (settings)',
+  // A kind this till doesn't know (a newer till wrote it): never passed off as "No sale".
+  other: 'Other',
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -265,17 +267,22 @@ export function shiftNoteLines(s: Pick<ReportShiftLine, 'openingNote' | 'closing
  * closed it (who approved it). Null when none were carried.
  */
 export function shiftCarryOverText(
-  s: Pick<ReportShiftLine, 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy'>,
+  s: Pick<ReportShiftLine, 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy' | 'carriedTestDeletedCount'>,
 ): string | null {
   const n = s.carriedUnpaidCount ?? 0;
   if (!(n > 0)) return null;
   const reason = s.carryOverReason?.trim() || 'no reason given';
-  return `${n} unpaid ${n === 1 ? 'order' : 'orders'} carried over — ${reason} — approved by ${s.closedBy ?? 'unknown'}`;
+  const text = `${n} unpaid ${n === 1 ? 'order' : 'orders'} carried over — ${reason} — approved by ${s.closedBy ?? 'unknown'}`;
+  // One the owner deleted as a test order afterwards (0043): the saved count stays, and says so.
+  const deleted = Math.min(s.carriedTestDeletedCount ?? 0, n);
+  if (deleted <= 0) return text;
+  if (n === 1) return `${text} (later deleted as a test order)`;
+  return `${text} (${deleted} of them later deleted as ${deleted === 1 ? 'a test order' : 'test orders'})`;
 }
 
 /** Everything written on a shift, one line each: its notes, then any unpaid orders carried over (print and CSV). */
 export function shiftDetailLines(
-  s: Pick<ReportShiftLine, 'openingNote' | 'closingNote' | 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy'>,
+  s: Pick<ReportShiftLine, 'openingNote' | 'closingNote' | 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy' | 'carriedTestDeletedCount'>,
 ): string[] {
   const carry = shiftCarryOverText(s);
   return carry ? [...shiftNoteLines(s), carry] : shiftNoteLines(s);
@@ -321,6 +328,7 @@ export function cancelledWasteText(f: Pick<ReportFoodCost, 'cancelledWasteCents'
 /** Why food was thrown away, in the owner's words (screen, Excel and paper). */
 export const WASTE_REASON_LABEL: Record<ReportWasteReason, string> = {
   cancelled_made: 'Cancelled after cooking',
+  test_order: 'Test orders (deleted)',
   burnt: 'Burnt',
   dropped: 'Dropped',
   expired: 'Expired / went off',

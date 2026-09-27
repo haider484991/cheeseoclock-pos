@@ -13,8 +13,8 @@ export interface ManagerAsk {
   error: string | null;
   /**
    * Papers of this document printed before, as the till said (null: not
-   * said). 0: this paper is the first — no DUPLICATE on it; more: it says
-   * DUPLICATE. The dialog tells the manager which.
+   * said). Printed by hand, the paper says DUPLICATE either way (the owner's
+   * rule, 27 Sep 2026); 0 means it is the first paper of its kind.
    */
   printNo: number | null;
   resolve: (secret: string | null) => void;
@@ -35,11 +35,15 @@ export function askManagerSecret(
   });
 }
 
-/** What the dialog promises about the paper — true for what the till will print. */
+/**
+ * What the dialog promises about the paper — true for what the till will
+ * print: a paper printed by hand always says DUPLICATE (the owner's rule).
+ */
 export function approvalPaperNote(printNo: number | null): string {
-  if (printNo === null) return "The paper will show the manager's name, and say DUPLICATE if it was printed before.";
-  if (printNo > 0) return "The paper will say DUPLICATE and show the manager's name.";
-  return "Nothing was printed for it before, so this paper is not a DUPLICATE. It will say when it was printed and show the manager's name.";
+  if (printNo === 0) {
+    return "Nothing was printed for it before, but a paper printed by hand always says DUPLICATE. It will show the manager's name.";
+  }
+  return "The paper will say DUPLICATE and show the manager's name.";
 }
 
 /** The dialog's answer: the secret typed, or null for Cancel. */

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import { Calendar, ChevronLeft, ChevronRight, Printer, Search, X } from 'lucide-react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { Calendar, ChevronLeft, ChevronRight, Printer, Search, Trash2, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type {
   OrderHistoryChannel,
@@ -14,6 +15,8 @@ import { ipc } from '../../ipc/client';
 import { reprintReceipt, reprintToast } from '../printing/reprint';
 import { useToast } from '../../components/toast/ToastProvider';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
+import { DeletedTestOrdersPanel, deletedTestsTitle, useDeletedTests } from './DeletedTestOrdersPanel';
+import { useSessionStore } from '../../stores/sessionStore';
 import { ModeBadge, StatusBadge } from './OrderBadges';
 import {
   CHANNEL_CHOICES,
@@ -38,6 +41,10 @@ import {
  * status, type and payment; totals cover every page. Click a row for the
  * order in full with reprint / collect payment / refund / cancel.
  */
+/** "All" dates: the deleted-test list still needs a window. */
+const ALL_TIME_SINCE = '2000-01-01T00:00:00.000Z';
+const ALL_TIME_UNTIL = '2100-01-01T00:00:00.000Z';
+
 export function OrderHistoryPage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search.trim(), 250);
@@ -49,7 +56,10 @@ export function OrderHistoryPage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | 'all'>('all');
   const [offset, setOffset] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [deletedOpen, setDeletedOpen] = useState(false);
   const { toast } = useToast();
+  // The owner's "Deleted test orders (n)" for the page's dates (0043).
+  const isOwner = useSessionStore((st) => st.user?.role === 'admin');
 
   // Any filter change goes back to the first page.
   const withReset =
@@ -83,6 +93,9 @@ export function OrderHistoryPage() {
   });
 
   const page = historyQ.data;
+  const deletedSince = range.sinceIso ?? ALL_TIME_SINCE;
+  const deletedUntil = range.untilIso ?? ALL_TIME_UNTIL;
+  const deletedQ = useDeletedTests(deletedSince, deletedUntil, isOwner);
   const rows = page?.rows ?? [];
   const total = page?.total ?? 0;
   const summary = page?.summary;
@@ -123,6 +136,16 @@ export function OrderHistoryPage() {
           <h1 className="text-3xl font-bold tracking-tight">Order History</h1>
           <p className="mt-1 text-sm text-stone-500">
             Orders sent to the kitchen or paid. A cart still being rung up is not shown.
+            {isOwner && (
+              <button
+                type="button"
+                onClick={() => setDeletedOpen(true)}
+                className="ml-2 inline-flex items-center gap-1 font-semibold text-stone-600 underline-offset-2 hover:underline dark:text-stone-300"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Deleted test orders ({deletedQ.data?.total ?? 0})
+              </button>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -381,6 +404,35 @@ export function OrderHistoryPage() {
       </Card>
 
       {openId && <OrderDetailDrawer orderId={openId} onClose={() => setOpenId(null)} />}
+      {deletedOpen && isOwner && (
+        <Dialog.Root open onOpenChange={(o) => !o && setDeletedOpen(false)}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
+            <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[90vh] w-[900px] max-w-[95vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <Dialog.Title className="text-lg font-semibold">{deletedTestsTitle(deletedQ.data)}</Dialog.Title>
+                  <Dialog.Description className="mt-0.5 text-xs text-stone-500">
+                    Orders taken in these dates that the owner deleted as tests. They are not in sales, reports or
+                    the shifts' cash. They can't be brought back.
+                  </Dialog.Description>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDeletedOpen(false)}
+                  aria-label="Close"
+                  className="rounded p-1 text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <DeletedTestOrdersPanel sinceIso={deletedSince} untilIso={deletedUntil} />
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
     </div>
   );
 }
@@ -474,8 +526,8 @@ function HistoryRow({
             onReprint();
           }}
           disabled={reprinting}
-          aria-label="Reprint receipt"
-          title="Reprint receipt"
+          aria-label="Print bill or receipt"
+          title="Print bill or receipt"
           className="rounded-lg p-2 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700 disabled:opacity-40 dark:hover:bg-stone-700 dark:hover:text-stone-200"
         >
           <Printer className="h-4 w-4" />

@@ -495,6 +495,33 @@ export async function verifyManagerPin(
   });
 }
 
+/** What the owner is told when the secret typed to confirm is not the owner's. */
+export const NOT_THE_OWNER = "That is not the owner's PIN or password.";
+
+/**
+ * Verify the OWNER's (admin) PIN or password without changing the current
+ * session — typed again to confirm deleting a test order, so an owner login
+ * left open at the counter can't be used for it. The same rules as
+ * verifyManagerPin: a wrong secret (a manager's or a cashier's included) is
+ * counted, and the lock after repeated wrong ones is respected.
+ */
+export async function verifyOwnerSecret(
+  db: AppDatabase,
+  pin: string,
+): Promise<{ ownerUserId: string; ownerName: string }> {
+  const secret = readSecret(pin);
+  return oneSecretCheckAtATime(async () => {
+    assertSecretNotLocked(db, secret);
+    const user = await findUserBySecret(db, secret);
+    if (!user || user.role !== 'admin') {
+      recordSecretFailure(db, secret);
+      throw new Error(NOT_THE_OWNER);
+    }
+    clearSecretAttempts(db, secret);
+    return { ownerUserId: user.id, ownerName: user.fullName };
+  });
+}
+
 /** Close any session that's been open longer than the longest login ('staff.timing'; called on boot). */
 export function reapStaleSessions(db: AppDatabase): void {
   const cutoff = new Date(Date.now() - timings(db).maxAgeMs).toISOString();

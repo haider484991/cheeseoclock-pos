@@ -12,6 +12,9 @@ import {
   MENU_MAP_WORDS,
   REPORT_TAB_LABEL,
   REPORT_TABS,
+  type DeletedTestsPage,
+  type DrawerLogCounts,
+  type ReportDrawerLogLine,
   type ReportChannelProfit,
   type ReportKpis,
   type ReportLineCost,
@@ -68,6 +71,19 @@ import {
   varianceHeadline,
   varianceWindowText,
 } from './varianceFormat';
+import {
+  DRAWER_LOG_COLUMNS,
+  drawerCash,
+  drawerLogChips,
+  drawerLogRow,
+  drawerLogSinceText,
+  drawerLogTitle,
+  drawerResult,
+  drawerTill,
+  drawerWhy,
+  shiftTestDeletedNote,
+} from './drawerLogFormat';
+import { deletedPaidWords, deletedStockWords } from '../orders/testDeleteCopy';
 import { commissionText, menuMapAdvice, profitHeadline, riderText, stepAmount, stepLabel, stockGainNote, unknownCostNote } from './profitFormat';
 
 /** Some or all of the tabs, as fetched (for "Print everything"). */
@@ -83,8 +99,22 @@ export type SomeReportTabs = { [K in ReportTab]?: ReportTabData[K] };
 export interface ReportExtras {
   trends?: ReportTrends | null;
   variance?: ReportVariance | null;
+  /**
+   * Team & leakage (migrations 0042 / 0043): the period's whole cash drawer
+   * log (reports:drawerLog) and its deleted test orders.
+   */
+  drawerLog?: { rows: ReportDrawerLogLine[]; counts: DrawerLogCounts; logSince: string | null } | null;
+  deletedTests?: DeletedTestsPage | null;
   /** Menu's menu map (costing spec Phase 9, reports:menuMap; profit.view). */
   menuMap?: ReportMenuMap | null;
+}
+
+/** Where a Team & leakage list could not be read (it is null): said in its place, never silently left out. */
+export const TEAM_EXTRA_UNREAD = 'Could not be read when this was made. Make it again to see it.';
+
+/** A list that holds fewer rows than there are: said, so no one takes the rest as missing. */
+export function partialListText(shown: number, total: number): string | null {
+  return shown < total ? `The latest ${shown} of ${total} — narrow the dates for the rest.` : null;
 }
 
 // ------------------------------------------------ Phase 9: cost and profit --
@@ -346,13 +376,13 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
   team: (sheet, r) => {
     const hasCosts = r.foodCost?.hasCosts ?? false;
     sheet.heading('Staff');
-    sheet.push(['Taken by', 'Orders', 'Sales Rs', 'Discounts given Rs', 'Cancelled orders', 'Drawer opened with no sale']);
+    sheet.push(['Taken by', 'Orders', 'Sales Rs', 'Discounts given Rs', 'Cancelled orders', 'Drawer opened with no sale', 'Drawer opens (all)']);
     for (const s of r.staff) {
-      sheet.push([s.name, s.orderCount, rs(s.netSalesCents), rs(s.discountCents), s.voidCount, s.noSaleOpens]);
+      sheet.push([s.name, s.orderCount, rs(s.netSalesCents), rs(s.discountCents), s.voidCount, s.noSaleOpens, s.drawerOpens ?? null]);
     }
 
     sheet.heading('Shifts (cash drawer)');
-    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason']);
+    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason', 'Drawer used (all)', 'Test orders deleted after close Rs', 'Carried over, later deleted as tests']);
     for (const s of r.shifts) {
       sheet.push([
         fmtWhen(s.openedAt),
@@ -371,6 +401,10 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
         s.closingNote?.trim() || null,
         s.carriedUnpaidCount ?? 0,
         (s.carriedUnpaidCount ?? 0) > 0 ? s.carryOverReason?.trim() || null : null,
+        // The drawer log (0042) and the owner's deleted test orders (0043), after the columns 0.7.21 shipped.
+        s.drawerOpenCount ?? null,
+        s.testDeletedCashCents ? rs(s.testDeletedCashCents) : null,
+        s.carriedTestDeletedCount ? s.carriedTestDeletedCount : null,
       ]);
     }
 
@@ -431,8 +465,8 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
 
     sheet.heading(
       r.drawerOpens.length < r.drawerOpenCount
-        ? `Cash drawer opened by hand (no sale) — latest ${r.drawerOpens.length} of ${r.drawerOpenCount}`
-        : 'Cash drawer opened by hand (no sale)',
+        ? `Cash drawer opened by hand (no sale, count, test) — latest ${r.drawerOpens.length} of ${r.drawerOpenCount}`
+        : 'Cash drawer opened by hand (no sale, count, test)',
     );
     sheet.push(['When', 'Why', 'Reason', 'Opened by', 'Approved by', 'Shift open']);
     for (const d of r.drawerOpens) {
@@ -506,8 +540,112 @@ export function buildTabCsv<K extends ReportTab>(
   (CSV_PARTS[tab] as CsvPart<K>)(sheet, data, period, madeAt);
   if (tab === 'overview' && extras.trends) trendsCsv(sheet, extras.trends);
   if (tab === 'foodStock' && extras.variance) varianceCsv(sheet, extras.variance);
+  if (tab === 'team') teamExtrasCsv(sheet, extras);
   if (tab === 'menu' && extras.menuMap) menuMapCsv(sheet, extras.menuMap);
   return toCsv(sheet.rows);
+}
+
+/** Team & leakage in the file: the whole cash drawer log and the deleted test orders. */
+function teamExtrasCsv(sheet: CsvSheet, extras: ReportExtras): void {
+  const log = extras.drawerLog;
+  if (log === null) {
+    sheet.heading('Cash drawer log');
+    sheet.push([TEAM_EXTRA_UNREAD]);
+  } else if (log) {
+    sheet.heading(drawerLogTitle(log.counts.total));
+    sheet.push([drawerLogSinceText(log.logSince)]);
+    sheet.push(drawerLogChips(log.counts).map((c) => `${c.label} ${c.n}`));
+    const partial = partialListText(log.rows.length, log.counts.total);
+    if (partial) sheet.push([partial]);
+    sheet.push([...DRAWER_LOG_COLUMNS]);
+    const now = Date.now();
+    for (const l of log.rows) {
+      const [when, till, why, order, , by, approved, result, note] = drawerLogRow(l, now);
+      sheet.push([when, till, why, order, l.amountCents === null ? null : rs(l.amountCents), by, approved, result, note]);
+    }
+  }
+  const t = extras.deletedTests;
+  if (t === null) {
+    sheet.heading('Deleted test orders');
+    sheet.push([TEAM_EXTRA_UNREAD]);
+  } else if (t) {
+    sheet.heading(`Deleted test orders — ${t.total} (${formatCents(t.totalCents)})`);
+    const partial = partialListText(t.rows.length, t.total);
+    if (partial) sheet.push([partial]);
+    sheet.push(['Order', 'Items', 'Taken', 'Taken by', 'Deleted', 'Deleted by', 'Why', 'Total Rs', 'Paid', 'Stock']);
+    for (const d of t.rows) {
+      sheet.push([
+        d.orderNumber,
+        d.itemsSummary,
+        fmtWhen(d.takenAt),
+        d.takenBy,
+        fmtWhen(d.deletedAt),
+        d.deletedBy,
+        d.reason,
+        rs(d.totalCents),
+        deletedPaidWords(d),
+        deletedStockWords(d),
+      ]);
+    }
+  }
+}
+
+/** Team & leakage on paper: the drawer log's counts and latest 25, and the deleted test orders. */
+function teamExtrasPrint(extras: ReportExtras): string[] {
+  const parts: string[] = [];
+  const log = extras.drawerLog;
+  if (log === null) parts.push(`<section><h2>Cash drawer log</h2><p class="muted">${esc(TEAM_EXTRA_UNREAD)}</p></section>`);
+  if (log) {
+    const chips = drawerLogChips(log.counts)
+      .filter((c) => c.n > 0)
+      .map((c) => `${c.label} ${c.n}`)
+      .join(' · ');
+    const now = Date.now();
+    const shown = log.rows.slice(0, 25);
+    parts.push(
+      `<section><h2>${esc(drawerLogTitle(log.counts.total))}</h2>` +
+        (chips ? `<p>${esc(chips)}</p>` : '') +
+        table(
+          ['When', 'Till', 'Why', 'Cash', 'By', 'Approved by', 'Result'],
+          shown.map((d) => [
+            esc(fmtWhen(d.createdAt)),
+            esc(drawerTill(d.till)),
+            esc(drawerWhy(d)),
+            esc(drawerCash(d.amountCents) || '—'),
+            esc(d.openedBy),
+            d.approvedBy ? esc(d.approvedBy) : '—',
+            esc(drawerResult(d, now)),
+          ]),
+          [3],
+        ) +
+        `<p class="muted">${log.counts.total > shown.length ? `The latest ${shown.length} of ${log.counts.total}. ` : ''}${
+          log.rows.length < log.counts.total
+            ? `The Excel file holds the latest ${log.rows.length} — narrow the dates for the rest.`
+            : 'The full log is in the Excel file.'
+        } ${esc(drawerLogSinceText(log.logSince))}</p></section>`,
+    );
+  }
+  const t = extras.deletedTests;
+  if (t === null) parts.push(`<section><h2>Test orders deleted</h2><p class="muted">${esc(TEAM_EXTRA_UNREAD)}</p></section>`);
+  if (t && t.total > 0) {
+    const list = limitedOf(t.rows, 25, t.total);
+    parts.push(
+      `<section><h2>Test orders deleted — ${t.total} (${money(t.totalCents)})</h2>${table(
+        ['Order', 'Taken', 'Deleted', 'Why', 'Total', 'Paid', 'Stock'],
+        list.shown.map((d) => [
+          `${esc(d.orderNumber)}${d.itemsSummary ? ` <span class="muted">${esc(d.itemsSummary)}</span>` : ''}`,
+          `${esc(fmtWhen(d.takenAt))} <span class="muted">by ${esc(d.takenBy)}</span>`,
+          `${esc(fmtWhen(d.deletedAt))} <span class="muted">by ${esc(d.deletedBy)}</span>`,
+          esc(d.reason ?? '—'),
+          money(d.totalCents),
+          esc(deletedPaidWords(d)),
+          esc(deletedStockWords(d)),
+        ]),
+        [4],
+      )}${list.note}</section>`,
+    );
+  }
+  return parts;
 }
 
 /** "Used vs should have used" between two stock takes in the file (costing spec Phase 8). */
@@ -892,7 +1030,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
     const parts: string[] = [];
     parts.push(
       `<section><h2>Staff</h2>${table(
-        ['Taken by', 'Orders', 'Sales', 'Discounts given', 'Cancelled', 'No-sale opens'],
+        ['Taken by', 'Orders', 'Sales', 'Discounts given', 'Cancelled', 'No-sale opens', 'Drawer opens'],
         r.staff.map((s) => [
           esc(s.name),
           String(s.orderCount),
@@ -900,8 +1038,9 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
           money(s.discountCents),
           String(s.voidCount),
           String(s.noSaleOpens),
+          s.drawerOpens === undefined ? '—' : String(s.drawerOpens),
         ]),
-        [1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6],
       )}</section>`,
     );
 
@@ -910,7 +1049,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
         `<section><h2>Cash drawer (shifts)</h2>${table(
           ['Opened', 'Closed', 'By', 'Float', 'Expected', 'Counted', 'Short / over', 'Cash in/out', 'No-sale opens', 'Notes'],
           r.shifts.map((s) => [
-            esc(fmtWhen(s.openedAt)),
+            `${esc(fmtWhen(s.openedAt))}${shiftTestDeletedNote(s) ? ` <span class="muted">${esc(shiftTestDeletedNote(s) ?? '')}</span>` : ''}`,
             s.closedAt ? esc(fmtWhen(s.closedAt)) : 'Still open',
             esc(s.closedBy ?? s.openedBy),
             money(s.openingCashCents),
@@ -934,7 +1073,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
     if (r.drawerOpenCount > 0) {
       const list = limitedOf(r.drawerOpens, 25, r.drawerOpenCount);
       parts.push(
-        `<section><h2>Cash drawer opened by hand — ${r.drawerOpenCount} time${r.drawerOpenCount === 1 ? '' : 's'}</h2>${table(
+        `<section><h2>Cash drawer opened by hand (no sale, count, test) — ${r.drawerOpenCount} time${r.drawerOpenCount === 1 ? '' : 's'}</h2>${table(
           ['When', 'Why', 'Reason', 'Opened by', 'Approved by'],
           list.shown.map((d) => [
             `${esc(fmtWhen(d.createdAt))}${d.outsideShift ? ' <span class="muted">(no shift open)</span>' : ''}`,
@@ -1108,6 +1247,7 @@ export function buildTabPrintBody<K extends ReportTab>(
   const parts = (PRINT_PARTS[tab] as PrintPart<K>)(data, period, madeAt);
   if (tab === 'overview' && extras.trends) parts.push(trendsPrint(extras.trends));
   if (tab === 'foodStock' && extras.variance) parts.unshift(variancePrint(extras.variance));
+  if (tab === 'team') parts.push(...teamExtrasPrint(extras));
   if (tab === 'menu' && extras.menuMap) parts.push(menuMapPrint(extras.menuMap));
   return printHeader(`${REPORT_TAB_LABEL[tab]} — ${period.title}`, period, madeAt, tab === 'overview') + parts.join('');
 }
@@ -1223,6 +1363,7 @@ export function buildPrintEverything(tabs: SomeReportTabs, period: ReportPeriod,
     if (tab === 'foodStock' && extras.variance) parts.push(variancePrint(extras.variance));
     parts.push(...(PRINT_PARTS[tab] as PrintPart<typeof tab>)(data as never, period, madeAt));
     if (tab === 'overview' && extras.trends) parts.push(trendsPrint(extras.trends));
+    if (tab === 'team') parts.push(...teamExtrasPrint(extras));
     if (tab === 'menu' && extras.menuMap) parts.push(menuMapPrint(extras.menuMap));
   }
   return parts.join('');

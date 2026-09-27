@@ -404,6 +404,30 @@ describe('DUPLICATE', () => {
     expect(t).toContain('Printed later: 26/09/2026 22:10 by Sana Khan');
   });
 
+  it('pressed for by hand while the print log could not be read: still DUPLICATE, with no number', () => {
+    const stamp: CopyStamp = {
+      kind: 'reprint',
+      number: 0,
+      numberUnknown: true,
+      printedAt: at(19, 52),
+      byName: 'Ali Akbar',
+      approvedByName: 'Sana Khan',
+    };
+    const t = text(renderReceipt(paid(), { branding, stamp, fbr }));
+    expect(t[0]).toBe('*'.repeat(48));
+    expect(t[1]).toBe('DUPLICATE');
+    expect(t[2]).toBe('Reprint | 26/09/2026 19:52 | by Ali Akbar');
+    expect(t[3]).toBe('Approved by: Sana Khan');
+    expect(t).toContain('PAID - CASH (DUPLICATE)');
+    expect(t).toContain('** DUPLICATE **');
+    // No made-up number anywhere, and no "Original: …" it can't know.
+    expect(t.join('\n')).not.toMatch(/Reprint #|Copy #|Original:/);
+    // A bill pressed for the same way says the same.
+    const bill = text(renderReceipt(codBill(), { branding, stamp }));
+    expect(bill[1]).toBe('DUPLICATE');
+    expect(bill).toContain('** DUPLICATE **');
+  });
+
   it('a SHOP COPY reprinted is both, and still has no FBR block', () => {
     const t = text(renderReceipt(paid(), { branding, copy: 'shop', stamp: reprint2, fbr }));
     expect(t[1]).toBe('DUPLICATE');
@@ -703,4 +727,58 @@ describe('every paper fits the paper', () => {
       }
     });
   }
+});
+
+/**
+ * The owner's DUPLICATE rule (27 Sep) meets the order notes (0.7.21): a paper
+ * pressed for by hand says DUPLICATE "Reprint #N" — even the first — and
+ * still carries what was written for the whole order, once; the till's own
+ * paper carries the note and no DUPLICATE.
+ */
+describe('DUPLICATE and the order note, on the same paper', () => {
+  const NOTE = 'Ring the upper bell, customer asleep downstairs';
+  const noted = (s: OrderSnapshot = paid()): OrderSnapshot => {
+    s.deliveryNotes = NOTE;
+    return s;
+  };
+  const firstByHand: CopyStamp = { kind: 'reprint', number: 1, printedAt: at(19, 52), byName: 'Ali Akbar', approvedByName: null, firstPrintedAt: at(19, 35) };
+  const count = (t: string[], s: string) => t.filter((x) => x.includes(s)).length;
+
+  it('receipt: the first paper printed with the button is DUPLICATE Reprint #1, top to bottom, and still has the note, once', () => {
+    const t = text(renderReceipt(noted(), { branding, stamp: firstByHand }));
+    expect(t[1]).toBe('DUPLICATE');
+    expect(t[2]).toBe('Reprint #1 | 26/09/2026 19:52 | by Ali Akbar');
+    expect(t).toContain('** DUPLICATE - Reprint #1 **');
+    expect(t).toContain('PAID - CASH (DUPLICATE)');
+    expect(count(t, 'Order note: Ring the upper bell')).toBe(1);
+    // The note is part of the body, between the DUPLICATE band and the items.
+    const note = t.findIndex((x) => x.startsWith('Order note: Ring the upper bell'));
+    expect(note).toBeGreaterThan(2);
+    expect(note).toBeLessThan(t.findIndex((x) => x.startsWith('2x Chicken Tikka')));
+  });
+
+  it('the till’s own paper: the note, and no DUPLICATE', () => {
+    const t = text(renderReceipt(noted(), { branding }));
+    expect(count(t, 'Order note: Ring the upper bell')).toBe(1);
+    expect(t.join(' ')).not.toContain('DUPLICATE');
+  });
+
+  it('a bill pressed for by hand while the print log could not be read: DUPLICATE with no number, and the note', () => {
+    const t = text(renderReceipt(noted(codBill()), { branding, stamp: { ...firstByHand, number: 0, numberUnknown: true } }));
+    expect(t[1]).toBe('DUPLICATE');
+    expect(t[2]).toBe('Reprint | 26/09/2026 19:52 | by Ali Akbar');
+    expect(t).toContain('** DUPLICATE **');
+    expect(t).toContain('BILL - NOT PAID');
+    expect(count(t, 'Order note: Ring the upper bell')).toBe(1);
+  });
+
+  it('kitchen ticket reprinted: REPRINT, who and when, and the note before the first item', () => {
+    const t = text(renderKitchenTicket(noted(), { now: at(19, 52), stamp: firstByHand }));
+    expect(t).toContain('* REPRINT *');
+    expect(t.join(' ')).toContain('Reprint #1 26/09 19:52 by Ali Akbar');
+    const note = t.findIndex((x) => x.startsWith('!! ORDER NOTE: Ring the upper bell'));
+    expect(note).toBeGreaterThan(t.indexOf('* REPRINT *'));
+    expect(note).toBeLessThan(t.findIndex((x) => x.startsWith('2 x Chicken Tikka')));
+    expect(count(t, '!! ORDER NOTE:')).toBe(1);
+  });
 });

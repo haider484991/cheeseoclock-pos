@@ -147,10 +147,15 @@ live('shift history: every shift that overlaps the period', () => {
       cashMovementCount: 1,
       // The count at close is not a no-sale open.
       noSaleOpens: 1,
+      // Every opening of the drawer on the shift (the drawer log, 0042): the no-sale and the count.
+      drawerOpenCount: 2,
+      // No test order of it was deleted after it closed (0043).
+      testDeletedCashCents: 0,
       openingNote: null,
       closingNote: null,
       carriedUnpaidCount: 0,
       carryOverReason: null,
+      carriedTestDeletedCount: 0,
     });
     expect(byId.get('s_old_open')).toEqual({
       id: 's_old_open',
@@ -167,10 +172,13 @@ live('shift history: every shift that overlaps the period', () => {
       cashOutCents: 3_000,
       cashMovementCount: 2,
       noSaleOpens: 1,
+      drawerOpenCount: 1,
+      testDeletedCashCents: 0,
       openingNote: null,
       closingNote: null,
       carriedUnpaidCount: 0,
       carryOverReason: null,
+      carriedTestDeletedCount: 0,
     });
     expect(byId.get('s_inside')).toMatchObject({ closedBy: 'Owner', varianceCents: 5_000 });
   });
