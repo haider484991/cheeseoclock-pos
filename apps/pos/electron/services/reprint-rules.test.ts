@@ -1,3 +1,5 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_STAFF_TIMING } from '@cheeseoclock/shared-types';
 import {
@@ -99,5 +101,33 @@ describe('the owner’s free-reprint window', () => {
     expect(isCurrentOrder('paid', minutesAgo(45), NOW)).toBe(false);
     expect(isCurrentOrder('preparing', minutesAgo(600), NOW, 10 * 60_000)).toBe(true);
     expect(isCurrentOrder('refunded', minutesAgo(1), NOW, 120 * 60_000)).toBe(false);
+  });
+});
+
+describe('what Settings says is what the till does', () => {
+  /**
+   * The words on Settings → Staff & kitchen timing and Settings → Printers
+   * (src/features/settings/shop-rules/timingWords.ts), loaded by path as the
+   * screen loads them: the main process's tsconfig does not take screen files.
+   */
+  type ReprintRuleText = (t: { freeReprints: number; reprintWindowMin: number } | null) => string;
+  async function screenWords(): Promise<ReprintRuleText> {
+    const app = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+    const url = pathToFileURL(join(app, 'src', 'features', 'settings', 'shop-rules', 'timingWords.ts')).href;
+    return ((await import(/* @vite-ignore */ url)) as { reprintRuleText: ReprintRuleText }).reprintRuleText;
+  }
+
+  it('none: the copy that adds the FBR number is still free for the order in front of the counter, and the words say so', async () => {
+    const reprintRuleText = await screenWords();
+    const rules = { freeReprints: 0, windowMin: 45 };
+    // The till: another copy by hand needs a manager; the FBR copy of a current order does not; an older one does.
+    expect(reprintApproval(ask({ priorManual: 0, priorAll: 1, rules })).approval).toBe(true);
+    expect(reprintApproval(ask({ fbrCopy: true, priorManual: 0, priorAll: 1, rules })).approval).toBe(false);
+    expect(reprintApproval(ask({ fbrCopy: true, priorAll: 1, lastActivityAt: minutesAgo(46), rules })).approval).toBe(true);
+    // The words: every copy needs a manager EXCEPT that one, and only within the owner's minutes.
+    const words = reprintRuleText({ freeReprints: 0, reprintWindowMin: 45 });
+    expect(words).toContain("every copy needs a manager's PIN or password, except the one copy that adds the FBR number");
+    expect(words).toContain('paid in the last 45 minutes');
+    expect(words).not.toMatch(/every copy needs a manager's PIN or password\.$/);
   });
 });

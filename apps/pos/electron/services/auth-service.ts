@@ -122,12 +122,41 @@ let stepInEndsAtMs: number | null = null;
 let stepInMinutes: number | null = null;
 
 /**
+ * When this run of the app began (the module loads at startup, before anyone
+ * can sign in), and the logins it opened or brought back. Any other login
+ * still open in user_sessions (pure-local: this till's own) was left by a
+ * till that stopped — shut down, crashed, lost power — without a sign-out.
+ */
+const RUN_STARTED_AT_MS = Date.now();
+const openedThisRun = new Set<string>();
+
+/**
+ * When a login left open by a till that stopped was last seen on this till:
+ * the last thing that person did here after signing in (audit_log is this
+ * till's own), before this run began — or the sign-in itself. Not "until
+ * now": the owner signing in the morning after a cashier left the till
+ * signed in and shut it down is not stepping in, however long a login may
+ * last (Settings → Staff & kitchen timing). A till restarted a minute after
+ * a sale still is.
+ */
+function lastSeenBeforeStop(db: AppDatabase, userId: string, startedAt: string, beforeMs: number): number {
+  const until = new Date(Math.min(beforeMs, RUN_STARTED_AT_MS)).toISOString();
+  const row = db
+    .prepare(`SELECT MAX(created_at) AS at FROM audit_log WHERE actor_user_id = ? AND created_at >= ? AND created_at <= ?`)
+    .get(userId, startedAt, until) as { at: string | null } | undefined;
+  const at = row?.at ? Date.parse(row.at) : Number.NaN;
+  return Number.isFinite(at) ? at : Date.parse(startedAt);
+}
+
+/**
  * Is this owner / manager login stepping in for a cashier? The session this
  * till had before `sessionId` belonged to a cashier who was on the till
- * within STEP_IN_LOOKBACK_MS of `startMs` (a cashier login never logged out
- * counts as on the till until now). Returns when the login is held, or null
- * (a cashier's own login, the first login of the morning, a manager after a
- * manager, a login already kept with its PIN).
+ * within STEP_IN_LOOKBACK_MS of `startMs`. A cashier login never logged out
+ * counts as on the till until `startMs` — unless the till stopped since
+ * (`signingInNow` and the login is not this run's): then only until the last
+ * thing they did on it (lastSeenBeforeStop). Returns when the login is held,
+ * or null (a cashier's own login, the first login of the morning, a manager
+ * after a manager, a login already kept with its PIN).
  */
 function stepInEnd(
   db: AppDatabase,
@@ -135,11 +164,12 @@ function stepInEnd(
   sessionId: string,
   role: AuthenticatedUser['role'],
   startMs: number,
+  signingInNow: boolean,
 ): number | null {
   if (role === 'cashier' || !Number.isFinite(startMs)) return null;
   const before = db
     .prepare(
-      `SELECT u.role AS role, s.started_at AS started_at, s.ended_at AS ended_at
+      `SELECT s.id AS id, s.user_id AS user_id, u.role AS role, s.started_at AS started_at, s.ended_at AS ended_at
          FROM user_sessions s
          JOIN users u ON u.id = s.user_id
         WHERE s.device_id = ? AND s.id <> ? AND s.started_at <= ?
@@ -147,10 +177,15 @@ function stepInEnd(
         LIMIT 1`,
     )
     .get(deviceId, sessionId, new Date(startMs).toISOString()) as
-    | { role: string; started_at: string; ended_at: string | null }
+    | { id: string; user_id: string; role: string; started_at: string; ended_at: string | null }
     | undefined;
   if (!before || before.role !== 'cashier') return null;
-  const lastSeenMs = before.ended_at === null ? startMs : Date.parse(before.ended_at);
+  const lastSeenMs =
+    before.ended_at !== null
+      ? Date.parse(before.ended_at)
+      : signingInNow && !openedThisRun.has(before.id)
+        ? lastSeenBeforeStop(db, before.user_id, before.started_at, startMs)
+        : startMs;
   if (!Number.isFinite(lastSeenMs) || startMs - lastSeenMs > STEP_IN_LOOKBACK_MS) return null;
   const kept = db
     .prepare(`SELECT 1 AS kept FROM audit_log WHERE entity_type = 'user_sessions' AND entity_id = ? AND action = ? LIMIT 1`)
@@ -365,8 +400,9 @@ export async function login(
   });
   tx();
 
+  openedThisRun.add(sessionId);
   stepInMinutes = null;
-  stepInEndsAtMs = stepInEnd(db, deviceId, sessionId, user.role, Date.parse(now));
+  stepInEndsAtMs = stepInEnd(db, deviceId, sessionId, user.role, Date.parse(now), true);
   currentSession = withStepIn({
     id: user.id,
     fullName: user.fullName,
@@ -389,7 +425,10 @@ export function logout(db: AppDatabase): void {
 
 /**
  * On boot, try to recover a recent in-progress session. Returns the user if a
- * session younger than the longest login ('staff.timing') exists for this device.
+ * session younger than the longest login ('staff.timing') exists for this
+ * device. It still ends the longest login after it BEGAN (a restart never
+ * lengthens a login), and a lowered setting ends it by its real age. (The app
+ * does not call this today: a restart always asks for a PIN or password.)
  */
 export function recoverSession(db: AppDatabase, deviceId: string): AuthenticatedUser | null {
   const cutoff = new Date(Date.now() - timings(db).maxAgeMs).toISOString();
@@ -414,9 +453,11 @@ export function recoverSession(db: AppDatabase, deviceId: string): Authenticated
 
   if (!row) return null;
 
-  // A restart does not give a stepping-in login a fresh step-in.
+  // A restart does not give a stepping-in login a fresh step-in (its cashier was on the till until it began)…
+  const startedMs = Date.parse(row.started_at);
+  openedThisRun.add(row.session_id);
   stepInMinutes = null;
-  stepInEndsAtMs = stepInEnd(db, deviceId, row.session_id, row.role, Date.parse(row.started_at));
+  stepInEndsAtMs = stepInEnd(db, deviceId, row.session_id, row.role, startedMs, false);
   currentSession = withStepIn({
     id: row.user_id as UUID,
     fullName: row.full_name,
@@ -424,8 +465,9 @@ export function recoverSession(db: AppDatabase, deviceId: string): Authenticated
     sessionId: row.session_id as UUID,
   });
   sessionDb = db;
-  sessionStartedAtMs = Date.now();
-  lastActivityAtMs = sessionStartedAtMs;
+  // …nor a fresh longest login: it ends the owner's hours after it began, not after the restart.
+  sessionStartedAtMs = Number.isFinite(startedMs) ? startedMs : Date.now();
+  lastActivityAtMs = Date.now();
   return currentSession;
 }
 

@@ -79,6 +79,16 @@ export function approvalExample(a: ApprovalLimits): string {
   );
 }
 
+/**
+ * What lowering the limit does to orders still being rung up (the note under
+ * the example). The till keeps who approved a discount only when a PIN or
+ * password was typed for it (orders:applyDiscount), so the cart re-check
+ * (order-repo auto_clear_needs_approval) also takes off a discount a manager
+ * or the owner gave on their own login under the old limit.
+ */
+export const LOWERED_LIMIT_NOTE =
+  'Lowering it takes a discount off an order still being rung up, the next time its items change, if no manager’s PIN or password was typed for it: that includes a discount a manager or the owner gave on their own login. It goes back on with a manager’s PIN or password. Paid orders never change.';
+
 // -------------------------------------------------------------- buttons --
 
 /** One box per button; an empty box drops that button. */

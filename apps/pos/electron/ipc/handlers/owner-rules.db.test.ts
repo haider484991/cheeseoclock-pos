@@ -674,6 +674,28 @@ describe.skipIf(!Sqlite)('lowering the limit', () => {
     expect(liveDiscounts(dealOrder)).toMatchObject([{ source: 'foodpanda', value: 20 }]);
   });
 
+  it('also takes off a manager’s own discount given under the old limit with no PIN typed — as the note under the card says', async () => {
+    // A manager signed in on the till gives 8%: under the 10% limit, so no PIN is asked and no approver is kept.
+    const orderId = await openOrder();
+    h.session = MANAGER;
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 8 });
+    expect(liveDiscounts(orderId)).toMatchObject([{ value: 8, approved_by_user_id: null }]);
+
+    // The owner lowers the limit to 5%; the next item added takes the manager's 8% off too.
+    expect((await saveAsOwner('discounts.approval', { v: 1, percentOver: 5, flatOverCents: 50_000 })).ok).toBe(true);
+    h.session = MANAGER;
+    await data('orders:addItem', { orderId, menuItemId: menu.side, quantity: 1 });
+    expect(liveDiscounts(orderId)).toEqual([]);
+    expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 250_000, discount_cents: 0 });
+
+    // The owner's note under "When a cashier needs a manager" says exactly that (the screen's own words, loaded by path).
+    const url = pathToFileURL(join(APP, 'src', 'features', 'settings', 'shop-rules', 'discountRules.ts')).href;
+    const { LOWERED_LIMIT_NOTE } = (await import(/* @vite-ignore */ url)) as { LOWERED_LIMIT_NOTE: string };
+    expect(LOWERED_LIMIT_NOTE).toContain('if no manager’s PIN or password was typed for it');
+    expect(LOWERED_LIMIT_NOTE).toContain('a discount a manager or the owner gave on their own login');
+    expect(LOWERED_LIMIT_NOTE).toContain('Paid orders never change.');
+  });
+
   it('a limit saved on the other till counts here at once, for the screen, the handler and the repository', async () => {
     const { businessSettingId, applyRemoteBatch, applyDiscount } = await repos();
     const id = businessSettingId('discounts.approval');

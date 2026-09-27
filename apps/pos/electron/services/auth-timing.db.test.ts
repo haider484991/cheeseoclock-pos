@@ -286,3 +286,98 @@ describe.skipIf(!Sqlite)('the owner’s timings', () => {
     expect(getCurrentSession()?.role).toBe('admin');
   });
 });
+
+describe.skipIf(!Sqlite)('a till that stopped with a login still open', () => {
+  const at = (iso: string) => Date.parse(iso);
+  const endedAt = (sessionId: string) => till.raw.prepare(`SELECT ended_at FROM user_sessions WHERE id = ?`).get(sessionId)?.['ended_at'];
+
+  /** The app starts again: a fresh auth-service (nobody signed in, as after any restart), then the startup clean-up. */
+  async function restartAt(ms: number): Promise<Awaited<ReturnType<typeof auth>>> {
+    vi.setSystemTime(ms);
+    vi.resetModules();
+    const fresh = await auth();
+    fresh.reapStaleSessions(till.db);
+    return fresh;
+  }
+
+  /** The cashier rings something up: its audit row, with the cashier as the actor. */
+  async function cashierRingsUp(): Promise<void> {
+    const { writeAudit } = await import('../db/repositories/audit-repo.js');
+    const cashierId = String(till.raw.prepare(`SELECT id FROM users WHERE role = 'cashier'`).get()?.['id']);
+    writeAudit(till.db, {
+      entityType: 'orders',
+      entityId: `test-order-${Date.now()}`,
+      action: 'create',
+      actorUserId: cashierId,
+      before: null,
+      after: { made: 'up' },
+    });
+  }
+
+  it('raised to 24 hours: the owner the next morning is not stepping in for last night’s cashier', async () => {
+    await save({ ...DEFAULT_STAFF_TIMING, maxLoginHours: 24 });
+    vi.setSystemTime(at('2026-10-05T07:00:00.000Z')); // 12:00 in Karachi
+    const cashier = await (await auth()).login(till.db, PIN.cashier, DEV);
+    vi.setSystemTime(at('2026-10-05T17:45:00.000Z')); // 22:45: the last order of the night
+    await cashierRingsUp();
+
+    // 23:00: the till is shut with the cashier still signed in. 9:55 the next morning it starts again.
+    const fresh = await restartAt(at('2026-10-06T04:55:00.000Z'));
+    // 22 hours old, under the owner's 24: the clean-up leaves the row open…
+    expect(endedAt(cashier.sessionId)).toBeNull();
+    // …but the owner signing in at 10:00 is not held as a step-in.
+    vi.setSystemTime(at('2026-10-06T05:00:00.000Z'));
+    const owner = await fresh.login(till.db, PIN.owner, DEV);
+    expect(owner.stepInEndsAt).toBeUndefined();
+    await busyFor(30 * MIN);
+    expect(fresh.getCurrentSession()?.role).toBe('admin');
+    expect(fresh.getHeldStepIn()).toBeNull();
+  });
+
+  it('with nothing saved too: a cashier signed in at 8 PM and left on overnight does not hold the owner at 7 AM', async () => {
+    vi.setSystemTime(at('2026-10-07T15:00:00.000Z')); // 20:00 in Karachi
+    const cashier = await (await auth()).login(till.db, PIN.cashier, DEV);
+    vi.setSystemTime(at('2026-10-07T17:50:00.000Z'));
+    await cashierRingsUp();
+    const fresh = await restartAt(at('2026-10-08T01:50:00.000Z')); // 6:50
+    expect(endedAt(cashier.sessionId)).toBeNull(); // 11 hours: under 12, left open
+    vi.setSystemTime(at('2026-10-08T02:00:00.000Z')); // 7:00
+    expect((await fresh.login(till.db, PIN.owner, DEV)).stepInEndsAt).toBeUndefined();
+  });
+
+  it('restarted a few minutes after a sale, a manager signing in is still stepping in', async () => {
+    vi.setSystemTime(at('2026-10-09T10:00:00.000Z'));
+    await (await auth()).login(till.db, PIN.cashier, DEV);
+    vi.setSystemTime(at('2026-10-09T12:58:00.000Z'));
+    await cashierRingsUp();
+    // 13:00 the till goes off; 13:02 it is back; 13:03 a manager signs in on it.
+    const fresh = await restartAt(at('2026-10-09T13:02:00.000Z'));
+    vi.setSystemTime(at('2026-10-09T13:03:00.000Z'));
+    const manager = await fresh.login(till.db, PIN.manager, DEV);
+    expect(manager.stepInEndsAt).toBe(new Date(at('2026-10-09T13:13:00.000Z')).toISOString());
+  });
+
+  it('a login brought back after a restart still ends the owner’s hours after it BEGAN, not after the restart', async () => {
+    await save(SHORT); // 8 hours
+    vi.setSystemTime(at('2026-10-10T07:00:00.000Z'));
+    const cashier = await (await auth()).login(till.db, PIN.cashier, DEV);
+    const fresh = await restartAt(at('2026-10-10T14:00:00.000Z')); // 7 hours in
+    expect(fresh.recoverSession(till.db, DEV)?.sessionId).toBe(cashier.sessionId);
+    vi.setSystemTime(at('2026-10-10T14:59:00.000Z'));
+    expect(fresh.getCurrentSession()?.sessionId).toBe(cashier.sessionId);
+    vi.setSystemTime(at('2026-10-10T15:01:00.000Z')); // 8 hours and a minute after the sign-in
+    expect(fresh.getCurrentSession()).toBeNull();
+    expect(lastSessionAction(cashier.sessionId)).toBe('session_expired');
+  });
+
+  it('lowering the longest login after a restart ends a brought-back login by its real age', async () => {
+    vi.setSystemTime(at('2026-10-11T07:00:00.000Z'));
+    const cashier = await (await auth()).login(till.db, PIN.cashier, DEV);
+    const fresh = await restartAt(at('2026-10-11T16:00:00.000Z')); // 9 hours in: under today's 12
+    expect(fresh.recoverSession(till.db, DEV)?.sessionId).toBe(cashier.sessionId);
+    expect(fresh.getCurrentSession()?.role).toBe('cashier');
+    await save(SHORT); // the owner lowers it to 8 hours
+    expect(fresh.getCurrentSession()).toBeNull();
+    expect(lastSessionAction(cashier.sessionId)).toBe('session_expired');
+  });
+});

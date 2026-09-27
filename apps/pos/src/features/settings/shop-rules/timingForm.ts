@@ -43,7 +43,7 @@ export const STAFF_FIELDS: ReadonlyArray<{ field: StaffField; label: string; uni
     field: 'freeReprints',
     label: 'Free reprints of a paid receipt',
     unit: 'copies',
-    help: 'What a cashier may print again by hand for the order in front of them. More needs a manager. 0 = every copy needs a manager.',
+    help: 'What a cashier may print again by hand for the order in front of them. More needs a manager. 0 = every copy needs a manager. The copy that adds the FBR number, when the receipt first printed without it, is always free and never counted.',
   },
   {
     field: 'reprintWindowMin',

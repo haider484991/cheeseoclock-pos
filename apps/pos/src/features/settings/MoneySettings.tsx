@@ -30,6 +30,7 @@ import { useShopSetting, useShopSettingsLive } from './shop-rules/useShopSetting
 import { sameValue } from './shop-rules/foodpandaForm';
 import {
   EXAMPLE_SMALL_ORDER_CENTS,
+  LOWERED_LIMIT_NOTE,
   approvalExample,
   approvalFromForm,
   approvalSummary,
@@ -111,10 +112,7 @@ function MoneyCards({
               <span className="font-semibold">For example: </span>
               {approvalExample(limits)}
             </p>
-            <p className="text-xs">
-              Lowering it takes a discount given without a manager off an order still being rung up, the next time its items
-              change; the cashier puts it back with a manager’s PIN. Paid orders never change.
-            </p>
+            <p className="text-xs">{LOWERED_LIMIT_NOTE}</p>
           </div>
         }
       >

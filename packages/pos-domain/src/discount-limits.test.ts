@@ -5,8 +5,8 @@ import { approvalRuleText, mostOffWithoutManagerCents, requiresManagerApproval }
  * The one approval rule with the owner's limit (Settings → Money &
  * discounts, 'discounts.approval'). The same function decides the F3 locks,
  * the IPC check and the repository's save and cart re-check, so these cases
- * hold in all three (apps/pos approval-everywhere.db.test.ts drives the
- * three with a saved limit). Made-up amounts.
+ * hold in all three (apps/pos electron/ipc/handlers/owner-rules.db.test.ts
+ * drives the three with a saved limit). Made-up amounts.
  */
 describe('requiresManagerApproval with the owner’s limit', () => {
   it('a raised limit lets more through, a lowered one less', () => {

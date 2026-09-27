@@ -154,8 +154,9 @@ describe('Staff & kitchen timing: the words', () => {
     expect(reprintRuleText({ freeReprints: 2, reprintWindowMin: 60 })).toBe(
       "A counter login gets two copies of a paid receipt for the order in front of it (on Live Orders, or paid in the last 60 minutes); any more, or an older order, needs a manager's PIN or password.",
     );
+    // None: the copy that adds the FBR number is still free (reprint-policy.ts), so the words say so.
     expect(reprintRuleText({ freeReprints: 0, reprintWindowMin: 60 })).toBe(
-      "A counter login can't print a paid receipt again by hand: every copy needs a manager's PIN or password.",
+      "A counter login can't print a paid receipt again by hand: every copy needs a manager's PIN or password, except the one copy that adds the FBR number when the receipt first printed without it (for the order in front of it: on Live Orders, or paid in the last 60 minutes).",
     );
     // The setting could not be read here: the rule, with no number in it.
     expect(reprintRuleText(null)).not.toMatch(/\d/);

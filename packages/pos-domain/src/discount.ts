@@ -42,7 +42,8 @@ export function computeDiscountCents(subtotalCents: Cents | number, d: DiscountI
  *
  * `limits` defaults to the released default (10%, Rs 500) only for callers
  * that have no setting to hand (tests of today's numbers); every till path
- * passes the live setting (pinned by approval-everywhere.db.test.ts).
+ * passes the live setting (pinned by apps/pos
+ * electron/ipc/handlers/owner-rules.db.test.ts).
  */
 export function requiresManagerApproval(
   d: DiscountInput,

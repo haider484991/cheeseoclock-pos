@@ -19,7 +19,9 @@ export function reprintRuleText(t: Pick<StaffTiming, 'freeReprints' | 'reprintWi
     return "A counter login gets a set number of copies of a paid receipt for the order in front of it (Settings → Staff & kitchen timing); any more, or an older order, needs a manager's PIN or password.";
   }
   if (t.freeReprints <= 0) {
-    return "A counter login can't print a paid receipt again by hand: every copy needs a manager's PIN or password.";
+    // reprint-policy.ts: the paper that adds the FBR number, when the receipt printed without it, is
+    // never counted — for the order in front of the counter it is free whatever the owner allows.
+    return `A counter login can't print a paid receipt again by hand: every copy needs a manager's PIN or password, except the one copy that adds the FBR number when the receipt first printed without it (for the order in front of it: on Live Orders, or paid in the last ${minutes(t.reprintWindowMin)}).`;
   }
   const copies = COPIES[t.freeReprints] ?? `${t.freeReprints} copies`;
   return `A counter login gets ${copies} of a paid receipt for the order in front of it (on Live Orders, or paid in the last ${minutes(t.reprintWindowMin)}); any more, or an older order, needs a manager's PIN or password.`;
