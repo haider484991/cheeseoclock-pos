@@ -23,7 +23,20 @@ const qty = (n: number) => new Intl.NumberFormat('en-PK').format(n);
  * exactly those whole-unit amounts out of stock and puts the amount made in
  * (the same pos-domain scaleBatch decides both).
  */
-export function BatchCalculatorDialog({ ingredient, onClose }: { ingredient: Ingredient; onClose: () => void }) {
+export function BatchCalculatorDialog({
+  ingredient,
+  onClose,
+  initialAmount,
+}: {
+  ingredient: Ingredient;
+  onClose: () => void;
+  /**
+   * The amount it opens at (the recipe calculator's "Make / calculate 800 g"),
+   * in the base unit; one batch when not given. Opening it never moves
+   * stock: only its Make button does. Key the dialog by id + amount.
+   */
+  initialAmount?: number;
+}) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const canCost = useCanSeeCosts();
@@ -35,7 +48,9 @@ export function BatchCalculatorDialog({ ingredient, onClose }: { ingredient: Ing
   const batchYield = r?.batchYield ?? ingredient.batchYield ?? 0;
   const big = thousandUnit(ingredient.unit);
   const [inBig, setInBig] = useState(false);
-  const [text, setText] = useState(() => (batchYield > 0 ? String(batchYield) : ''));
+  const [text, setText] = useState(() =>
+    initialAmount !== undefined && initialAmount > 0 ? String(initialAmount) : batchYield > 0 ? String(batchYield) : '',
+  );
 
   // "200", "200 g", "1.5 kg" (a unit typed after the number wins over the switch).
   const reading = readAmount(text, inBig, ingredient.unit);

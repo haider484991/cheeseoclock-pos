@@ -11,9 +11,10 @@
  *     orders of the shift open now; a kitchen ticket only while the kitchen
  *     still has the order; the customer on a sent or paid bill never changes;
  *   - managers and the owner keep all of it;
- *   - costs (the Costing page, the batch calculator's rupees) are refused
- *     to the counter the same way, and the food-cost targets are the
- *     owner's alone;
+ *   - costs (the Costing page, the batch calculator's rupees, the recipe
+ *     calculator's) are refused to the counter the same way, and the
+ *     food-cost targets are the owner's alone; the recipe calculator's
+ *     quantities and its prep list are stock, so managers' too;
  *   - Reports (every tab's channel, low stock, the owner's week, day notes,
  *     the stock-take variance, the shift history list) and this till's
  *     printer settings are the owner's alone since 2026-09-27 ("managers
@@ -333,6 +334,11 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'inventory:listSuppliers': undefined,
   'inventory:listPurchaseOrders': undefined,
   'inventory:getPurchaseOrder': { id: 'no-such-po' },
+  // The recipe calculator (2026-09-27): recipes and stock, so managers and the
+  // owner — quantities only; its costs are costing:recipeCalc's, below.
+  'inventory:recipeCalc': { lines: [{ kind: 'item', menuItemId: 'no-such-item', count: 10, portions: [] }] },
+  'inventory:typicalPicks': { menuItemId: 'no-such-item' },
+  'inventory:printPrepList': { lines: [{ kind: 'item', menuItemId: 'no-such-item', count: 10, portions: [] }] },
   // Costs (costing spec D6: COST_CAPABILITY = menu.manage).
   'costing:menuCosts': undefined,
   'costing:itemSheet': { menuItemId: 'no-such-item' },
@@ -340,6 +346,7 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'costing:getTargets': undefined,
   'costing:recipeCost': { menuItemId: 'no-such-item', lines: [] },
   'costing:batchCalc': { ingredientId: 'no-such-ingredient', amount: 200 },
+  'costing:recipeCalc': { lines: [{ kind: 'batch', ingredientId: 'no-such-ingredient', amount: 200 }] },
   // Prices and their history (costing spec Phase 4): costs, both ways.
   'inventory:priceHistory': { ingredientId: 'no-such-ingredient' },
   'inventory:setPrice': { ingredientId: 'no-such-ingredient', per: 'piece', priceCents: 1_000 },

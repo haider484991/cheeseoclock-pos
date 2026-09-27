@@ -25,3 +25,4 @@ export * from './do-this.js';
 export * from './shop-stock.js';
 export * from './variance.js';
 export * from './count-entry.js';
+export * from './recipe-calc.js';

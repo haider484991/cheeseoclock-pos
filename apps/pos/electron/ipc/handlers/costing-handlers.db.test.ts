@@ -109,6 +109,8 @@ const READ_CHANNELS = (): Record<string, unknown> => ({
   'costing:getTargets': undefined,
   'costing:recipeCost': { menuItemId: s.item.fajitaM, lines: [] },
   'costing:batchCalc': { ingredientId: s.ing.sauce, amount: 200 },
+  // The recipe calculator's costs (recipe-calc-handlers.db.test.ts has the rest).
+  'costing:recipeCalc': { lines: [{ kind: 'item', menuItemId: s.item.fajitaM, count: 10, portions: [] }] },
   // Price alerts (costing spec Phase 6): managers read them and mark them seen.
   'costing:alerts': undefined,
   'costing:markAlertsSeen': { ids: ['no-such-alert'] },

@@ -129,6 +129,7 @@ import type {
   CustomerWithAddresses,
 } from './customer.js';
 import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
+import type { CostedRecipeCalc, RecipeCalc, RecipeCalcRequest, TypicalPicksView } from './recipe-calc.js';
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
 import type {
@@ -1104,6 +1105,33 @@ export interface IpcContract {
     response: ApiResult<{ made: number; resultingQty: number }>;
   };
 
+  // Inventory — the recipe calculator (read-only; menu.manage). Quantities
+  // only: no rupee crosses these channels (costing:recipeCalc has the costs).
+  /**
+   * How much N of a dish, a deal or a dip (or an amount of a batch) needs:
+   * the batches to make first (each once, in order), what comes straight
+   * from stock, and every ingredient from scratch, with this till's stock
+   * and what is short. Writes nothing.
+   */
+  'inventory:recipeCalc': {
+    request: RecipeCalcRequest;
+    response: ApiResult<RecipeCalc>;
+  };
+  /** A menu item's choice groups and the last 28 days' picks (sale counts only), for "the usual picks". */
+  'inventory:typicalPicks': {
+    request: { menuItemId: string };
+    response: ApiResult<TypicalPicksView>;
+  };
+  /**
+   * The same worked out again and printed on the receipt printer as a prep
+   * list (no prices). A failed print is an answer (ok: false), never an
+   * error that blocks anything.
+   */
+  'inventory:printPrepList': {
+    request: RecipeCalcRequest;
+    response: ApiResult<PrintResult>;
+  };
+
   // Inventory — movements (audit log + manual adjustments)
   'inventory:listMovements': {
     request: {
@@ -1337,6 +1365,11 @@ export interface IpcContract {
   'costing:batchCalc': {
     request: { ingredientId: string; amount: number };
     response: ApiResult<BatchCalc>;
+  };
+  /** The recipe calculator with what it costs: inventory:recipeCalc's answer plus `costs`. COST_CAPABILITY. */
+  'costing:recipeCalc': {
+    request: RecipeCalcRequest;
+    response: ApiResult<CostedRecipeCalc>;
   };
   /**
    * Costing → Alerts (costing spec Phase 6): price jumps, the Monday digest

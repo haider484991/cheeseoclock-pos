@@ -17,8 +17,10 @@ import {
   Boxes,
   Contact,
   Receipt,
+  Calculator,
   type LucideIcon,
 } from 'lucide-react';
+import { presetRecipeCalculator } from '../costing/deepLinks';
 
 interface TileSpec {
   icon: LucideIcon;
@@ -27,6 +29,8 @@ interface TileSpec {
   to: string;
   /** Tailwind gradient classes for the icon background. */
   tone: string;
+  /** Set the screen up before going there (a tab of a page). */
+  preset?: () => void;
 }
 
 export function DashboardPage() {
@@ -73,6 +77,19 @@ export function DashboardPage() {
         subtitle: 'Stock, recipes, purchases',
         to: '/inventory',
         tone: 'from-fuchsia-400 to-pink-500',
+      },
+    },
+    {
+      // Owner, 2026-09-27: "make it more easy if a manager wants to see how
+      // much ingredients a recipe needs". Inventory → Recipe calculator.
+      allowed: can('menu.manage'),
+      tile: {
+        icon: Calculator,
+        title: 'Recipe calculator',
+        subtitle: 'How much for 10 pizzas?',
+        to: '/inventory',
+        tone: 'from-amber-400 to-yellow-500',
+        preset: () => presetRecipeCalculator(),
       },
     },
     {
@@ -149,7 +166,8 @@ export function DashboardPage() {
           {tiles
             .filter((t) => t.allowed)
             .map(({ tile }) => (
-              <ActionTile key={tile.to} {...tile} />
+              // By title: two tiles go to /inventory.
+              <ActionTile key={tile.title} {...tile} />
             ))}
         </div>
       </section>
@@ -201,9 +219,9 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ActionTile({ icon: Icon, title, subtitle, to, tone }: TileSpec) {
+function ActionTile({ icon: Icon, title, subtitle, to, tone, preset }: TileSpec) {
   return (
-    <Link to={to} className="block group">
+    <Link to={to} onClick={preset} className="block group">
       <Card interactive className="h-full">
         <div className="flex items-start gap-3">
           <div

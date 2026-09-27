@@ -6,6 +6,7 @@ import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import {
   batchCalcInputSchema,
   markCostAlertsSeenInputSchema,
+  recipeCalcInputSchema,
   recipeCostInputSchema,
   setCostAlertSettingsInputSchema,
   setCostingTargetsInputSchema,
@@ -23,6 +24,7 @@ import {
   previewRecipeCost,
 } from '../../services/costing-service.js';
 import { getTillsSetting, saveCostAlertSettings, saveCostingTargets, saveTillsSetting } from '../../services/costing-settings.js';
+import { getCostedRecipeCalc } from '../../services/recipe-calc-service.js';
 import { readTillLink } from '../../services/till-link.js';
 import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/cost-alert-repo.js';
 
@@ -92,6 +94,14 @@ export function registerCostingHandlers(ctx: HandlerContext): void {
     const parsed = batchCalcInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(getBatchCalc(ctx.db, parsed.data.ingredientId, parsed.data.amount));
+  });
+
+  // The recipe calculator with what it costs (inventory:recipeCalc is the same without).
+  defineHandler('costing:recipeCalc', ctx, (_ctx, payload) => {
+    requireCosts();
+    const parsed = recipeCalcInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(getCostedRecipeCalc(ctx.db, parsed.data));
   });
 
   // ---- Price alerts (costing spec Phase 6) ----

@@ -4,7 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ChoiceCostView, CostLineView, ItemCostSheet, PaidExtraView, RequiredGroupView } from '@cheeseoclock/shared-types';
-import { BookOpen, ChevronDown, ChevronRight, Printer, X } from 'lucide-react';
+import { BookOpen, Calculator, ChevronDown, ChevronRight, Printer, X } from 'lucide-react';
 import { useItemCostSheet } from './costingQueries';
 import { FoodCostChip } from './CostChip';
 import { BatchBreakdown } from './BatchBreakdown';
@@ -22,7 +22,7 @@ import {
   priceKindNote,
 } from './costingFormat';
 import { costSheetPrintHtml } from './costSheetPrint';
-import { openRecipeInInventory } from './deepLinks';
+import { openRecipeCalculator, openRecipeInInventory } from './deepLinks';
 import { usePrintSheet } from './usePrintSheet';
 
 /**
@@ -113,6 +113,15 @@ export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: strin
               onClick={() => sheet && openRecipeInInventory(navigate, { id: sheet.row.menuItemId, name: sheet.row.name })}
             >
               <BookOpen className="h-4 w-4" /> Open recipe
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!sheet?.row.hasRecipe}
+              title="How much of everything for 10 (or any number)"
+              onClick={() => sheet && openRecipeCalculator(navigate, { id: sheet.row.menuItemId, name: sheet.row.name })}
+            >
+              <Calculator className="h-4 w-4" /> Calculate
             </Button>
             <Button variant="secondary" size="sm" disabled={!sheet} onClick={() => sheet && printer.print(costSheetPrintHtml(sheet))}>
               <Printer className="h-4 w-4" /> Print cost sheet

@@ -26,6 +26,11 @@ describe('toPrinterAscii', () => {
     expect(toPrinterAscii('“Cheese” ‘O’ Clock… 2×3')).toBe('"Cheese" \'O\' Clock... 2x3');
     expect(toPrinterAscii('₨ 1,250 · open till late')).toBe('Rs 1,250 - open till late');
     expect(toPrinterAscii('پنیر')).toBe('????');
+    // An accented letter prints as its plain letter (menus say "Jalapeño"), a lone accent is dropped.
+    expect(toPrinterAscii('Jalapeño · Café crème brûlée')).toBe('Jalapeno - Cafe creme brulee');
+    expect(toPrinterAscii('JALAPEÑO, Ångström, Straße, Œuf')).toBe('JALAPENO, Angstrom, Strasse, OEuf');
+    expect(toPrinterAscii(`Jalapen${String.fromCharCode(0x303)}o`)).toBe('Jalapeno');
+    expect(toPrinterAscii('أ')).toBe('?');
     expect(toPrinterAscii('a\tb\nc')).toBe('a\tb\nc');
     expect(toPrinterAscii('')).toBe('?');
   });
