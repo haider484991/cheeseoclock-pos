@@ -8,7 +8,15 @@
  * Every number comes straight from the tab's figures — nothing is worked out
  * again here, so paper, file and screen always agree.
  */
-import { REPORT_TAB_LABEL, REPORT_TABS, type ReportKpis, type ReportTab, type ReportTabData } from '@cheeseoclock/shared-types';
+import {
+  REPORT_TAB_LABEL,
+  REPORT_TABS,
+  type ReportKpis,
+  type ReportTab,
+  type ReportTabData,
+  type ReportTrends,
+  type TrendComparison,
+} from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportPeriod } from './dateRange';
 import {
@@ -42,9 +50,21 @@ import {
   purchasePriceText,
 } from './reportFormat';
 import { formatBps, thousandUnit } from '../costing/costingFormat';
+import { DAY_NOTE_TAG_LABEL } from '@cheeseoclock/shared-types';
+import { fmtDay, fmtMonth, WEEKDAYS } from './dateRange';
+import { TREND_LABEL, dayNoteText, daypartHoursText, heatmapShown, monthNote, trendChangeOf } from './ownerWeekFormat';
 
 /** Some or all of the tabs, as fetched (for "Print everything"). */
 export type SomeReportTabs = { [K in ReportTab]?: ReportTabData[K] };
+
+/**
+ * What a tab shows from its own channel rather than the tab's figures:
+ * Overview's trend strip and 12 months (costing spec Phase 7,
+ * reports:trends). Print and file follow the tab (D12), so they carry it too.
+ */
+export interface ReportExtras {
+  trends?: ReportTrends | null;
+}
 
 // --------------------------------------------------------------------- CSV --
 
@@ -133,6 +153,26 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     sheet.heading('Sales by hour (Pakistan time)');
     sheet.push(['Hour', 'Orders', 'Sales Rs']);
     for (const h of hourSeries(r.byHour)) sheet.push([hourLabel(h.hour), h.orderCount, rs(h.netSalesCents)]);
+
+    sheet.heading('Parts of the day');
+    sheet.push(['Part', 'Hours', 'Orders', 'Sales Rs', 'Average order Rs']);
+    for (const l of [...r.dayparts.lines, ...(r.dayparts.other ? [r.dayparts.other] : [])]) {
+      sheet.push([l.name, daypartHoursText(l.fromHour, l.toHour), l.orderCount, rs(l.netSalesCents), l.orderCount > 0 ? rs(l.avgOrderCents) : null]);
+    }
+
+    const hm = r.heatmap;
+    if (heatmapShown(hm)) {
+      sheet.heading('An average day by weekday and hour (sales Rs; closed days left out)');
+      sheet.push(['Day', 'Days counted', ...hm.hours.map(hourLabel)]);
+      WEEKDAYS.forEach((day, w) => {
+        sheet.push([day, hm.dayCounts[w] ?? 0, ...hm.hours.map((h) => rs(hm.cells.find((c) => c.weekday === w && c.hour === h)?.avgNetSalesCents ?? 0))]);
+      });
+      if (hm.closedDays > 0) sheet.push([`Days marked closed, left out: ${hm.closedDays}`]);
+    }
+
+    sheet.heading('Notes on days');
+    sheet.push(['Day', 'What', 'Note', 'Added by', 'Left out of forecasts']);
+    for (const n of r.dayNotes) sheet.push([fmtDay(n.day), DAY_NOTE_TAG_LABEL[n.tag], n.note, n.addedBy, n.excludeFromForecast ? 'Yes' : 'No']);
   },
 
   menu: (sheet, r) => {
@@ -290,7 +330,13 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
 };
 
 /** One tab as a CSV file: the period, then that tab's sections only. */
-export function buildTabCsv<K extends ReportTab>(tab: K, data: ReportTabData[K], period: ReportPeriod, madeAt: Date = new Date()): string {
+export function buildTabCsv<K extends ReportTab>(
+  tab: K,
+  data: ReportTabData[K],
+  period: ReportPeriod,
+  madeAt: Date = new Date(),
+  extras: ReportExtras = {},
+): string {
   const sheet = new CsvSheet();
   sheet.push(['Sales report', REPORT_TAB_LABEL[tab]]);
   sheet.push(['Period', `${period.title}: ${period.dates}`]);
@@ -298,7 +344,50 @@ export function buildTabCsv<K extends ReportTab>(tab: K, data: ReportTabData[K],
   if (tab === 'overview' && period.compare) sheet.push(['Compared with', period.compare.label]);
   sheet.push(['Made', fmtWhen(madeAt.toISOString())]);
   (CSV_PARTS[tab] as CsvPart<K>)(sheet, data, period, madeAt);
+  if (tab === 'overview' && extras.trends) trendsCsv(sheet, extras.trends);
   return toCsv(sheet.rows);
+}
+
+/** Overview's trend strip and 12 months in the file (not tied to the period: so far, to the minute). */
+function trendsCsv(sheet: CsvSheet, t: ReportTrends): void {
+  const then = (c: TrendComparison): CsvCell => (c.figures ? rs(c.figures.netSalesCents) : 'no data then');
+  sheet.heading('How the shop is trending (so far, to the minute; not tied to the period)');
+  sheet.push(['', 'Sales Rs', 'Orders', 'Average order Rs', 'Compared with', 'Then Rs', 'Change', 'A year ago Rs', 'Change']);
+  for (const line of t.lines) {
+    const label = TREND_LABEL[line.period];
+    const f = line.current.figures;
+    sheet.push([
+      label.title,
+      rs(f.netSalesCents),
+      f.orderCount,
+      rs(f.avgOrderCents),
+      label.previous,
+      then(line.previous),
+      trendChangeOf(line.previous.change.sales).text,
+      line.lastYear ? then(line.lastYear) : null,
+      line.lastYear ? trendChangeOf(line.lastYear.change.sales).text : null,
+    ]);
+  }
+  if (t.partial) sheet.push(['Worked out on the till itself: only stretches of 31 days or less.']);
+  if (t.months.length === 0) return;
+  const costs = new Map((t.monthCosts ?? []).map((m) => [m.month, m]));
+  sheet.heading('The last 12 months');
+  sheet.push(['Month', 'Sales Rs', 'Orders', 'Average order Rs', ...(t.monthCosts ? ['Food cost', 'Costs known for'] : []), 'Note']);
+  t.months.forEach((m, i) => {
+    const note = monthNote(m, i === t.months.length - 1);
+    const none = note === 'no data then';
+    const c = costs.get(m.month);
+    sheet.push([
+      fmtMonth(`${m.month}-01`),
+      none ? null : rs(m.netSalesCents),
+      none ? null : m.orderCount,
+      none || m.orderCount === 0 ? null : rs(m.avgOrderCents),
+      ...(t.monthCosts
+        ? [c?.foodCostBps != null ? formatBps(c.foodCostBps) : null, c?.coverageBps != null ? formatBps(c.coverageBps) : null]
+        : []),
+      note,
+    ]);
+  });
 }
 
 const TAB_SLUG: Record<ReportTab, string> = {
@@ -433,6 +522,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
   when: (r, period, madeAt) => {
     const days = daySeries(r.byDay, period, madeAt);
     const hours = hourSeries(r.byHour);
+    const parts = [...r.dayparts.lines, ...(r.dayparts.other ? [r.dayparts.other] : [])];
     return [
       `<section class="two"><div><h2>${days.unit === 'day' ? 'Sales by day' : 'Sales by month'}</h2>${table(
         [days.unit === 'day' ? 'Day' : 'Month', 'Orders', 'Sales'],
@@ -442,6 +532,14 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
         ['Hour', 'Orders', 'Sales'],
         hours.map((h) => [esc(hourLabel(h.hour)), String(h.orderCount), money(h.netSalesCents)]),
         [1, 2],
+      )}</div></section>`,
+      `<section class="two"><div><h2>Parts of the day</h2>${table(
+        ['Part', 'Orders', 'Sales', 'Average order'],
+        parts.map((l) => [`${esc(l.name)} <span class="muted">${esc(daypartHoursText(l.fromHour, l.toHour))}</span>`, String(l.orderCount), money(l.netSalesCents), l.orderCount > 0 ? money(l.avgOrderCents) : '—']),
+        [1, 2, 3],
+      )}</div><div><h2>Notes on days</h2>${table(
+        ['Day', 'What'],
+        r.dayNotes.map((n) => [esc(fmtDay(n.day)), esc(dayNoteText(n))]),
       )}</div></section>`,
     ];
   },
@@ -663,22 +761,75 @@ function purchasesPrint(p: ReportTabData['foodStock']['purchases']): string {
   );
 }
 
-export function buildTabPrintBody<K extends ReportTab>(tab: K, data: ReportTabData[K], period: ReportPeriod, madeAt: Date = new Date()): string {
+export function buildTabPrintBody<K extends ReportTab>(
+  tab: K,
+  data: ReportTabData[K],
+  period: ReportPeriod,
+  madeAt: Date = new Date(),
+  extras: ReportExtras = {},
+): string {
   const parts = (PRINT_PARTS[tab] as PrintPart<K>)(data, period, madeAt);
+  if (tab === 'overview' && extras.trends) parts.push(trendsPrint(extras.trends));
   return printHeader(`${REPORT_TAB_LABEL[tab]} — ${period.title}`, period, madeAt, tab === 'overview') + parts.join('');
+}
+
+/** Overview's trend strip and 12 months on paper. */
+function trendsPrint(t: ReportTrends): string {
+  const then = (c: TrendComparison) =>
+    `${esc(trendChangeOf(c.change.sales).text)}${c.figures ? `<span class="muted">, was ${money(c.figures.netSalesCents)}</span>` : ''}`;
+  const lines = table(
+    ['', 'Sales', 'Orders', 'Average order', 'Against before', 'Against a year ago'],
+    t.lines.map((line) => {
+      const f = line.current.figures;
+      return [
+        esc(TREND_LABEL[line.period].title),
+        money(f.netSalesCents),
+        String(f.orderCount),
+        money(f.avgOrderCents),
+        `${then(line.previous)} <span class="muted">(${esc(TREND_LABEL[line.period].previous)})</span>`,
+        line.lastYear ? then(line.lastYear) : '—',
+      ];
+    }),
+    [1, 2, 3],
+  );
+  const costs = new Map((t.monthCosts ?? []).map((m) => [m.month, m]));
+  const months =
+    t.months.length === 0
+      ? ''
+      : `<section><h2>The last 12 months</h2>${table(
+          ['Month', 'Sales', 'Orders', 'Average order', ...(t.monthCosts ? ['Food cost'] : [])],
+          t.months.map((m, i) => {
+            const note = monthNote(m, i === t.months.length - 1);
+            const none = note === 'no data then';
+            const c = costs.get(m.month);
+            return [
+              `${esc(fmtMonth(`${m.month}-01`))}${note ? ` <span class="muted">${esc(note)}</span>` : ''}`,
+              none ? '—' : money(m.netSalesCents),
+              none ? '—' : String(m.orderCount),
+              none || m.orderCount === 0 ? '—' : money(m.avgOrderCents),
+              ...(t.monthCosts ? [c?.foodCostBps != null ? esc(formatBps(c.foodCostBps)) : '—'] : []),
+            ];
+          }),
+          t.monthCosts ? [1, 2, 3, 4] : [1, 2, 3],
+        )}</section>`;
+  return (
+    `<section><h2>How the shop is trending</h2><p class="muted">So far, to the minute; not tied to the period above. This till's orders.</p>${lines}` +
+    `${t.partial ? '<p class="muted">Worked out on the till itself: only stretches of 31 days or less.</p>' : ''}</section>${months}`
+  );
 }
 
 /**
  * "Print everything": every tab given (the ones this login can see), in the
  * page's order, under one heading, each tab under its own name.
  */
-export function buildPrintEverything(tabs: SomeReportTabs, period: ReportPeriod, madeAt: Date = new Date()): string {
+export function buildPrintEverything(tabs: SomeReportTabs, period: ReportPeriod, madeAt: Date = new Date(), extras: ReportExtras = {}): string {
   const parts = [printHeader(`Sales report — ${period.title}`, period, madeAt, tabs.overview !== undefined)];
   for (const tab of REPORT_TABS) {
     const data = tabs[tab];
     if (data === undefined) continue;
     parts.push(`<div class="tab-title">${esc(REPORT_TAB_LABEL[tab])}</div>`);
     parts.push(...(PRINT_PARTS[tab] as PrintPart<typeof tab>)(data as never, period, madeAt));
+    if (tab === 'overview' && extras.trends) parts.push(trendsPrint(extras.trends));
   }
   return parts.join('');
 }

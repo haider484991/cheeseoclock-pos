@@ -351,6 +351,13 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'reports:foodStock': REPORT_TODAY(),
   'reports:team': REPORT_TODAY(),
   'reports:lowStock': undefined,
+  // The owner's week (costing spec Phase 7): the Dashboard card, the trends,
+  // day notes and the parts of the day, all behind report.view.
+  'reports:ownerWeek': { week: 'this' },
+  'reports:trends': undefined,
+  'reports:addDayNote': { day: new Date().toISOString().slice(0, 10), tag: 'rain', note: 'Heavy rain after 8' },
+  'reports:removeDayNote': { id: 'no-such-note' },
+  'reports:getDayparts': undefined,
 });
 
 /** The owner's alone: refused to the counter AND to managers. */
@@ -359,6 +366,8 @@ const OWNER_ONLY = (): Record<string, unknown> => ({
   'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 },
   // The price alerts' thresholds (settings.manage, costing spec Phase 6).
   'costing:setAlertSettings': { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [] },
+  // The parts of the day Reports splits sales into (settings.manage, costing spec Phase 7).
+  'reports:setDayparts': { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 15 }, { name: 'Dinner', fromHour: 19, toHour: 23 }] },
 });
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */

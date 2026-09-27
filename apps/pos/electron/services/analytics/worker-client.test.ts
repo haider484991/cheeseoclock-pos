@@ -167,7 +167,7 @@ describe('the Reports worker client', () => {
     latest().answer(latest().sent[0]!.id, 'overview figures');
     await expect(busy).resolves.toBe('overview figures');
     // The superseded ask never reached the worker.
-    expect(latest().sent.map((m) => [m.kind, m.request.sinceIso])).toEqual([
+    expect(latest().sent.map((m) => [m.kind, (m.request as { sinceIso: string }).sinceIso])).toEqual([
       ['overview', DAY.sinceIso],
       ['menu', '2025-01-01T00:00:00.000Z'],
     ]);

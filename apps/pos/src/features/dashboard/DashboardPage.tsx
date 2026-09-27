@@ -6,6 +6,7 @@ import { ipc } from '../../ipc/client';
 import { FbrStatusCard } from './FbrStatusCard';
 import { SyncStatusCard } from './SyncStatusCard';
 import { BackupHealthBanner } from './BackupHealthBanner';
+import { OwnerWeekCard } from './OwnerWeekCard';
 import { SettingsOverview } from '../settings/SettingsPage';
 import {
   ShoppingCart,
@@ -152,6 +153,14 @@ export function DashboardPage() {
             ))}
         </div>
       </section>
+
+      {/* The owner's week (costing spec Phase 7): report.view; hidden until tapped. */}
+      {can('report.view') && (
+        <section>
+          <SectionTitle>How the week is going</SectionTitle>
+          <OwnerWeekCard />
+        </section>
+      )}
 
       {can('settings.manage') && (
         <section className="space-y-4">

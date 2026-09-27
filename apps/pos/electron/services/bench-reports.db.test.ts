@@ -81,6 +81,37 @@
  *   food cost & stock, year, worker ....... ~1.30 s costed, ~1.82 s estimated
  *                                          (≤ 2 s: ok; unchanged margin)
  *
+ * Costing Phase 7 (`-t "Phase 7"`): the Dashboard "This week" card with a
+ * full "Do this" list, the printed sheet, the trends and a year of When with
+ * its heatmap. The card's spec budget is ≤ 300 ms on the SHOP-PC profile (the
+ * till PC, or 4× CPU-throttled); unthrottled here, it is held to 300 ÷ 4 =
+ * 75 ms (asserted). Measured 2026-09-27 on the dev laptop (40,152 orders,
+ * 307,497 stock rows; a whole week so far, 840 orders):
+ *   the card, with costs ................ worker ~24 ms (≤ 75 ms: ok), every
+ *                                         order estimated ~39 ms; without
+ *                                         costs ~1 ms. Its parts: 28 whole
+ *                                         days' sales and picks ~42 ms (read
+ *                                         once a trading day, and ahead of
+ *                                         the first tap in the worker), the
+ *                                         week's food cost ~20 ms, prices and
+ *                                         recipes ~1 ms. The first ask of the
+ *                                         day on the main thread (no worker)
+ *                                         ~70 ms. It was ~80–100 ms before:
+ *                                         the 28 days read on every tap, their
+ *                                         picks in two walks, and the sheet's
+ *                                         lines worked out for the card too.
+ *   last week in full (the sheet) ....... worker ~46 ms
+ *   trends .............................. worker ~58 ms; with each of the 12
+ *                                         months' food cost ~1.1 s the first
+ *                                         ask of the day, then ~150 ms (the
+ *                                         months that are over kept for the
+ *                                         day; only this month worked out)
+ *   When for a year (heatmap, parts) .... worker ~205 ms
+ *   every order estimated ............... trends with food cost ~1.6 s the
+ *                                         first ask of the day, then ~190 ms
+ *   meanwhile on the main thread ........ slowest till call ≤ ~23 ms, event
+ *                                         loop late ≤ ~28 ms (no call near 50 ms)
+ *
  * EVERY PRICE IS MADE UP (costing spec D11).
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -528,5 +559,198 @@ bench('Reports bench, Phase 3: a year of each tab, in the worker thread (opt-in)
     // eslint-disable-next-line no-console
     console.log(['', 'Reports bench, Phase 3 (node:sqlite; worker = the built analytics-worker.cjs):', ...lines.map((l) => `  ${l}`)].join('\n'));
     expect(worstTab).toBeLessThan(30_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 7: the owner's week
+// ---------------------------------------------------------------------------
+
+/**
+ * The card's budget is ≤ 300 ms on the SHOP-PC profile (costing spec 6.3: the
+ * shop's till PC, or a 4× CPU-throttled one). This bench runs unthrottled on
+ * the dev laptop, so it holds the card to a quarter of that.
+ */
+const CARD_BUDGET_SHOP_PC_MS = 300;
+const CARD_BUDGET_HERE_MS = CARD_BUDGET_SHOP_PC_MS / 4;
+
+/**
+ * Costing Phase 7 on the same year: the Dashboard "This week" card (spec
+ * budget ≤ 300 ms on the shop-PC profile) with food cost, waste and a full
+ * "Do this" list (dishes over target, missing costs, a price alert, a key
+ * ingredient running low) and where its time goes; the printed sheet;
+ * Overview's trends (8 weeks, 12 months, with each month's food cost the
+ * first time in a day and once kept); a year of When with its heatmap — on
+ * this thread, then in the real worker while the till keeps ringing; then the
+ * trends and the card again on the year with NO sale's cost kept (this shop's
+ * first year after costing began: every order estimated).
+ */
+bench('Reports bench, Phase 7: the owner\'s week (opt-in)', () => {
+  it('the Dashboard card, the trends and a year of When, on this thread and in the worker', async () => {
+    const { db, s, repos, size } = await yearShop();
+    const { saveCostingTargets } = await import('./costing-settings.js');
+    const { setTypedPrice } = await import('../db/repositories/ingredient-cost-repo.js');
+    const { setBusinessSetting } = await import('../db/repositories/business-settings-repo.js');
+    const { buildAnalytics } = await import('./analytics/report-tabs.js');
+    const { buildOwnerWeek, DO_THIS_SOURCES } = await import('./analytics/owner-week.js');
+    const { loadCostingContextWith, loadCostingSales, getCostAlerts } = await import('./costing-service.js');
+    const { getFoodCost } = await import('./business-report.js');
+    const { ownerWeekWindows } = await import('@cheeseoclock/pos-domain');
+    const { AnalyticsWorkerClient } = await import('./analytics/worker-client.js');
+    const { WORKER_FILE, WORKER_TAG } = await import('./analytics/worker-protocol.js');
+    const { buildAnalyticsWorker } = await import('../../electron.vite.config');
+    // What a shop in use has: confirmed targets (pizzas and deals over them), key ingredients (one running
+    // low) and a price alert not seen yet. Made-up figures.
+    saveCostingTargets(
+      db,
+      {
+        defaultBps: 3000,
+        amberBps: 500,
+        perCategory: { [s.cat.pizza]: { bps: 800, confirmed: true }, [s.cat.deals]: { bps: 800, confirmed: true } },
+        nonFoodCategoryIds: [s.cat.fees],
+        priceStepCents: 1000,
+      },
+      MANAGER,
+    );
+    setBusinessSetting(db, 'costing.alerts', { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [s.ing.cheese, s.ing.chicken] }, MANAGER);
+    s.r.updateIngredient(db, { id: s.ing.chicken, lowThreshold: 100_000_000 }, MANAGER);
+    setTypedPrice(db, { ingredientId: s.ing.cheese, typed: { per: 'thousand', priceCents: 150_000 } }, MANAGER);
+    // Sunday night, the last trading day of the year's data: a whole week so far.
+    const NOW = new Date(YEAR_END - 2 * 86_400_000 + 20 * 3_600_000);
+    const LATER = new Date(NOW.getTime() + 60_000); // a minute on, the same trading day: what the day has kept
+    const lines: string[] = [`${size.orders} orders, ${size.stockRows} stock rows`];
+
+    // Where the card's time goes (its parts, each alone).
+    const week = ownerWeekWindows('this', NOW.getTime()).current;
+    const range = { sinceIso: new Date(week.sinceMs).toISOString(), untilIso: new Date(week.untilMs).toISOString() };
+    const dayStart = Math.floor(NOW.getTime() / 86_400_000) * 86_400_000;
+    const wholeDays = { sinceIso: new Date(dayStart - 28 * 86_400_000).toISOString(), untilIso: new Date(dayStart - 1).toISOString() };
+    const daySales = time(5, () => loadCostingSales(db, wholeDays.sinceIso, wholeDays.untilIso));
+    const parts = {
+      sales: daySales.ms,
+      costing: time(5, () => loadCostingContextWith(db, daySales.out)).ms,
+      foodCost: time(5, () => getFoodCost(db, range, NOW)).ms,
+      alerts: time(5, () => getCostAlerts(db)).ms,
+    };
+    lines.push(
+      `main thread, the card's parts: 28 whole days' sales and picks ${parts.sales.toFixed(0)} ms (read once a trading day, and ahead of time in the worker), prices/recipes/menu/targets ${parts.costing.toFixed(0)} ms, the week's food cost and waste ${parts.foodCost.toFixed(0)} ms, price alerts ${parts.alerts.toFixed(0)} ms (${DO_THIS_SOURCES.length} "Do this" sources)`,
+    );
+
+    const tFirst = performance.now();
+    buildAnalytics(db, 'ownerWeek', { week: 'this', withCosts: true }, NOW); // the first ask of the day on this thread: the day's sales read too
+    const firstCardMs = performance.now() - tFirst;
+    const card = time(5, () => buildAnalytics(db, 'ownerWeek', { week: 'this', withCosts: true }, NOW));
+    const cardOut = card.out as { doThis: Array<{ kind: string }>; current: { orderCount: number }; sheet: unknown };
+    const lean = time(5, () => buildAnalytics(db, 'ownerWeek', { week: 'this', withCosts: false }, NOW));
+    const sheet = time(3, () => buildOwnerWeek(db, { week: 'last', withCosts: true, sheet: true }, NOW));
+    lines.push(
+      `main thread, the card with costs: ${card.ms.toFixed(0)} ms — ${verdict(card.ms, CARD_BUDGET_HERE_MS)} for the shop PC's ${CARD_BUDGET_SHOP_PC_MS} ms (${cardOut.current.orderCount} orders this week; "Do this": ${cardOut.doThis.map((i) => i.kind).join(', ')})`,
+    );
+    lines.push(
+      `main thread, the card's first ask of the day (no worker to read the day's sales ahead): ${firstCardMs.toFixed(0)} ms; without costs: ${lean.ms.toFixed(0)} ms; last week's printed sheet (with last week's food cost): ${sheet.ms.toFixed(0)} ms`,
+    );
+    expect(cardOut.sheet).toBeNull();
+    expect(sheet.out.sheet?.previousCosts).not.toBeNull();
+
+    const trends = time(3, () => buildAnalytics(db, 'trends', { withCosts: false }, NOW));
+    const tCold = performance.now();
+    buildAnalytics(db, 'trends', { withCosts: true }, NOW); // the first ask of the day: every month worked out
+    const coldMs = performance.now() - tCold;
+    const warm = time(3, () => buildAnalytics(db, 'trends', { withCosts: true }, LATER)); // the months that are over, kept
+    const whenYear = time(3, () => buildAnalytics(db, 'when', YEAR, NOW));
+    lines.push(
+      `main thread, trends: ${trends.ms.toFixed(0)} ms; with 12 months of food cost: first ask of the day ${coldMs.toFixed(0)} ms, then ${warm.ms.toFixed(0)} ms (this month only); When for a year (heatmap, parts of the day): ${whenYear.ms.toFixed(0)} ms`,
+    );
+    expect(cardOut.doThis.length).toBeGreaterThanOrEqual(3);
+
+    // The real worker, built as for the till, on a file copy of this database.
+    const dir = mkdtempSync(join(tmpdir(), 'coc-bench7-'));
+    const file = join(dir, 'till.sqlite');
+    db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    const till = openTillFile(file);
+    await buildAnalyticsWorker({ outDir: dir });
+    const workerOn = (dbPath: string) =>
+      new AnalyticsWorkerClient({
+        spawn: () => new Worker(join(dir, WORKER_FILE), { workerData: { tag: WORKER_TAG, dbPath, driver: 'node:sqlite' } }),
+      });
+    const client = workerOn(file);
+    client.start();
+    expect(await client.settled()).toBe('ready');
+    const nowIso = NOW.toISOString();
+    await client.run('overview', { ...YEAR }, nowIso); // warm its statement cache, as the first report of the day does
+    const item = s.item;
+    const choice = s.choice;
+    const work = {
+      board: () => repos.listActiveOrders(till, {}),
+      ringAndSend: () => {
+        const t0 = performance.now();
+        const o = repos.createOrder(till, { mode: 'takeaway' }, CASHIER);
+        repos.addOrderItem(till, { orderId: o.id, menuItemId: item.fajitaM, quantity: 1, modifierIds: [choice.extraCheese], notes: null }, CASHIER);
+        repos.sendOrderToKitchen(till, o.id, CASHIER);
+        return performance.now() - t0;
+      },
+    };
+    const inWorker = async (label: string, run: () => Promise<unknown>, budget: number | null, runs = 3, warmFirst = true) => {
+      if (warmFirst) await run(); // first time: its statements compiled
+      const probe = startTill(till, work);
+      const t0 = performance.now();
+      for (let i = 0; i < runs; i += 1) await run();
+      const ms = (performance.now() - t0) / runs;
+      const p = probe.stop();
+      lines.push(
+        `worker, ${label}: ${ms.toFixed(0)} ms${budget ? ` — ${verdict(ms, budget)}` : ''}; meanwhile slowest till call ${Math.max(p.maxBoard, p.maxSend).toFixed(1)} ms, event loop late by at most ${p.maxLag.toFixed(1)} ms`,
+      );
+      return ms;
+    };
+    // Each ask differs a little (the clock), so the client never hands back an earlier answer.
+    let tick = 0;
+    const at = (d: Date) => new Date(d.getTime() + ++tick).toISOString();
+    const cardMs = await inWorker(
+      `the card with costs (budget here ${CARD_BUDGET_HERE_MS} ms = the shop PC's ${CARD_BUDGET_SHOP_PC_MS} ÷ 4)`,
+      () => client.run('ownerWeek', { week: 'this', withCosts: true }, at(NOW)),
+      CARD_BUDGET_HERE_MS,
+      5,
+    );
+    await inWorker('the card without costs', () => client.run('ownerWeek', { week: 'this', withCosts: false }, at(NOW)), CARD_BUDGET_HERE_MS, 5);
+    await inWorker('last week in full (the printed sheet)', () => client.run('ownerWeek', { week: 'last', withCosts: true, sheet: true }, at(NOW)), 2000, 3);
+    await inWorker('trends', () => client.run('trends', { withCosts: false }, at(NOW)), 2000, 3);
+    await inWorker('trends with 12 months of food cost, the first ask of the day', () => client.run('trends', { withCosts: true }, nowIso), 2000, 1, false);
+    const warmTrendsMs = await inWorker('trends with 12 months of food cost, once the day has kept them', () => client.run('trends', { withCosts: true }, at(LATER)), 2000, 3);
+    await inWorker('When for a year (heatmap, parts of the day, notes)', () => client.run('when', { ...YEAR }, at(NOW)), 2000, 3);
+    await client.stop();
+
+    // The year with NO sale's cost kept (every order estimated, a price change a week): this shop's case
+    // until the snapshots cover a year.
+    db.exec(`DELETE FROM order_item_costs`);
+    db.exec(`UPDATE stock_movements SET value_cents = NULL, unit_cost_mc = NULL, cost_basis = NULL`);
+    weeklyPriceHistory(db, YEAR.sinceIso);
+    const estCard = time(3, () => buildAnalytics(db, 'ownerWeek', { week: 'this', withCosts: true }, NOW));
+    const tEst = performance.now();
+    buildAnalytics(db, 'trends', { withCosts: true }, NOW);
+    const estColdMain = performance.now() - tEst;
+    const estWarmMain = time(3, () => buildAnalytics(db, 'trends', { withCosts: true }, LATER));
+    lines.push(
+      `every order estimated — main thread: the card with costs ${estCard.ms.toFixed(0)} ms; trends with 12 months of food cost, first ask of the day ${estColdMain.toFixed(0)} ms, then ${estWarmMain.ms.toFixed(0)} ms`,
+    );
+    const estFile = join(dir, 'till-estimated.sqlite');
+    db.exec(`VACUUM INTO '${estFile.replace(/'/g, "''")}'`);
+    const estClient = workerOn(estFile);
+    estClient.start();
+    expect(await estClient.settled()).toBe('ready');
+    await estClient.run('overview', { ...YEAR }, nowIso);
+    const estCardMs = await inWorker('every order estimated, the card with costs', () => estClient.run('ownerWeek', { week: 'this', withCosts: true }, at(NOW)), CARD_BUDGET_HERE_MS, 5);
+    const estColdMs = await inWorker('every order estimated, trends with 12 months of food cost, the first ask of the day', () => estClient.run('trends', { withCosts: true }, nowIso), 2000, 1, false);
+    const estWarmMs = await inWorker('every order estimated, trends with 12 months of food cost, once kept', () => estClient.run('trends', { withCosts: true }, at(LATER)), 2000, 3);
+    await estClient.stop();
+    till.close();
+    rmSync(dir, { recursive: true, force: true });
+    // eslint-disable-next-line no-console
+    console.log(['', "Reports bench, Phase 7 (node:sqlite; worker = the built analytics-worker.cjs):", ...lines.map((l) => `  ${l}`)].join('\n'));
+    // The card's budget, held to the shop-PC profile (÷ 4 here); re-run on the shop's till PC before trusting the margin.
+    expect(cardMs).toBeLessThanOrEqual(CARD_BUDGET_HERE_MS);
+    expect(estCardMs).toBeLessThanOrEqual(CARD_BUDGET_HERE_MS);
+    // Once the day has kept the months that are over, Overview's trends are a month's read, not a year's.
+    expect(warmTrendsMs).toBeLessThan(estColdMs);
+    expect(estWarmMs).toBeLessThan(estColdMs);
   });
 });

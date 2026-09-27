@@ -12,9 +12,16 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import { COST_CAPABILITY, REPORT_TAB_LABEL, type ReportTab, type ReportTabData } from '@cheeseoclock/shared-types';
+import {
+  COST_CAPABILITY,
+  REPORT_TAB_LABEL,
+  type DayNoteInput,
+  type OwnerWeekWhich,
+  type ReportTab,
+  type ReportTabData,
+} from '@cheeseoclock/shared-types';
 import {
   BarChart3,
   CalendarDays,
@@ -37,6 +44,7 @@ import {
   buildPrintEverything,
   buildTabCsv,
   buildTabPrintBody,
+  type ReportExtras,
   csvFileName,
   downloadText,
   PRINT_CSS,
@@ -51,6 +59,9 @@ import { MenuTab } from './tabs/MenuTab';
 import { ChannelsTab } from './tabs/ChannelsTab';
 import { FoodCostStockTab } from './tabs/FoodCostStockTab';
 import { TeamLeakageTab } from './tabs/TeamLeakageTab';
+import type { DayNoteEditor } from './tabs/WhenExtras';
+import { buildWeeklySheet, WeeklySheetButtons } from './WeeklySheet';
+import { dayNoteAddedText } from './ownerWeekFormat';
 
 const PRESETS: Array<{ id: RangePreset; label: string }> = [
   { id: 'today', label: 'Today' },
@@ -92,13 +103,16 @@ async function fetchTab(tab: ReportTab, period: ReportPeriod): Promise<TabResult
   return { tab, period, data } as TabResult;
 }
 
-function printTab<K extends ReportTab>(r: { tab: K; period: ReportPeriod; data: ReportTabData[K] }): string {
-  return buildTabPrintBody(r.tab, r.data, r.period, new Date());
+function printTab<K extends ReportTab>(r: { tab: K; period: ReportPeriod; data: ReportTabData[K] }, extras: ReportExtras): string {
+  return buildTabPrintBody(r.tab, r.data, r.period, new Date(), extras);
 }
 
-function csvTab<K extends ReportTab>(r: { tab: K; period: ReportPeriod; data: ReportTabData[K] }): string {
-  return buildTabCsv(r.tab, r.data, r.period, new Date());
+function csvTab<K extends ReportTab>(r: { tab: K; period: ReportPeriod; data: ReportTabData[K] }, extras: ReportExtras): string {
+  return buildTabCsv(r.tab, r.data, r.period, new Date(), extras);
 }
+
+/** Overview's trend strip (its own channel): the same query on screen, on paper and in the file. */
+const TRENDS_KEY = ['reports', 'trends'] as const;
 
 export function ReportsPage() {
   const canSeeCosts = useSessionStore((s) => s.can(COST_CAPABILITY));
@@ -151,6 +165,60 @@ export function ReportsPage() {
     queryFn: () => ipc.reports.lowStock(),
     enabled: tab === 'foodStock',
   });
+  // Overview's trend strip and 12 months (costing spec Phase 7): not tied to
+  // the period; refreshed every 5 minutes while on screen.
+  const trends = useQuery({
+    queryKey: TRENDS_KEY,
+    queryFn: () => ipc.reports.trends(),
+    enabled: tab === 'overview',
+    staleTime: 5 * 60_000,
+    refetchInterval: () => (document.visibilityState === 'visible' ? 5 * 60_000 : false),
+    retry: false,
+  });
+  // Notes on days (When): added here, then the When tab is worked out again.
+  const noteMut = useMutation({
+    mutationFn: async (a: { add: DayNoteInput } | { remove: string }) => {
+      if ('add' in a) await ipc.reports.addDayNote(a.add);
+      else await ipc.reports.removeDayNote(a.remove);
+    },
+    onSuccess: (_d, a) => {
+      toast({
+        title: 'add' in a ? 'Note added' : 'Note taken off',
+        description: 'add' in a ? dayNoteAddedText(a.add.day, period) : undefined,
+        variant: 'success',
+      });
+      void queryClient.invalidateQueries({ queryKey: ['reports', 'tab', 'when'] });
+    },
+    onError: (e) => toast({ title: 'That did not work', description: e instanceof Error ? e.message : 'Please try again.', variant: 'error' }),
+  });
+  const todayYmd = fmtDateInput(new Date().toISOString());
+  const noteEditor: DayNoteEditor = {
+    // The toast says what went wrong; the form keeps what was typed.
+    add: (input) => noteMut.mutateAsync({ add: input }).then(
+      () => true,
+      () => false,
+    ),
+    remove: (id) => noteMut.mutateAsync({ remove: id }).then(
+      () => true,
+      () => false,
+    ),
+    busy: noteMut.isPending,
+    defaultDay: period.lastDay < todayYmd ? period.lastDay : todayYmd,
+    maxDay: fmtDateInput(new Date(Date.now() + 365 * 86_400_000).toISOString()),
+  };
+  // The weekly owner sheet (one A4 page): this week so far, or last week in full.
+  const [printingWeek, setPrintingWeek] = useState(false);
+  const printWeek = async (week: OwnerWeekWhich) => {
+    setPrintingWeek(true);
+    try {
+      const data = await ipc.reports.ownerWeek({ week, sheet: true });
+      setPrintJob({ id: Date.now(), html: buildWeeklySheet(data, { canSeeCosts }) });
+    } catch (e) {
+      toast({ title: 'Could not print the week', description: e instanceof Error ? e.message : 'Please try again.', variant: 'error' });
+    } finally {
+      setPrintingWeek(false);
+    }
+  };
 
   const result = query.data?.tab === tab ? query.data : undefined;
   const shownPeriod = result?.period ?? period;
@@ -193,7 +261,13 @@ export function ReportsPage() {
       );
       const all: SomeReportTabs = {};
       for (const r of got) Object.assign(all, { [r.tab]: r.data });
-      setPrintJob({ id: Date.now(), html: buildPrintEverything(all, period, new Date()) });
+      // Overview's trends go with it when the till can work them out; the rest prints without them.
+      const trendsNow = tabs.includes('overview')
+        ? await queryClient
+            .fetchQuery({ queryKey: TRENDS_KEY, queryFn: () => ipc.reports.trends(), staleTime: 5 * 60_000, retry: false })
+            .catch(() => undefined)
+        : undefined;
+      setPrintJob({ id: Date.now(), html: buildPrintEverything(all, period, new Date(), { trends: trendsNow }) });
     } catch (e) {
       toast({ title: 'Could not print everything', description: e instanceof Error ? e.message : 'Please try again.', variant: 'error' });
     } finally {
@@ -214,7 +288,7 @@ export function ReportsPage() {
             <Button
               variant="secondary"
               disabled={!result || stale}
-              onClick={() => result && setPrintJob({ id: Date.now(), html: printTab(result) })}
+              onClick={() => result && setPrintJob({ id: Date.now(), html: printTab(result, { trends: trends.data }) })}
             >
               <Printer className="h-4 w-4" />
               Print this tab
@@ -222,7 +296,7 @@ export function ReportsPage() {
             <Button
               variant="secondary"
               disabled={!result || stale}
-              onClick={() => result && downloadText(csvFileName(result.period, result.tab), csvTab(result))}
+              onClick={() => result && downloadText(csvFileName(result.period, result.tab), csvTab(result, { trends: trends.data }))}
             >
               <FileSpreadsheet className="h-4 w-4" />
               Download for Excel
@@ -335,7 +409,17 @@ export function ReportsPage() {
       ) : (
         <div className={cn('transition-opacity', stale && 'opacity-60')}>
           {result ? (
-            <TabBody result={result} now={now} lowStockCount={lowStock.data ? lowStock.data.length : null} />
+            <TabBody
+              result={result}
+              now={now}
+              lowStockCount={lowStock.data ? lowStock.data.length : null}
+              trends={{
+                data: trends.data,
+                error: trends.isError ? (trends.error instanceof Error ? trends.error.message : 'The trends could not be worked out.') : null,
+                sheetButtons: <WeeklySheetButtons onPrint={(w) => void printWeek(w)} busy={printingWeek} />,
+              }}
+              notes={noteEditor}
+            />
           ) : tab === 'overview' ? (
             <OverviewTab data={undefined} />
           ) : (
@@ -360,12 +444,24 @@ export function ReportsPage() {
   );
 }
 
-function TabBody({ result, now, lowStockCount }: { result: TabResult; now: Date; lowStockCount: number | null }) {
+function TabBody({
+  result,
+  now,
+  lowStockCount,
+  trends,
+  notes,
+}: {
+  result: TabResult;
+  now: Date;
+  lowStockCount: number | null;
+  trends: NonNullable<Parameters<typeof OverviewTab>[0]['trends']>;
+  notes: DayNoteEditor;
+}) {
   switch (result.tab) {
     case 'overview':
-      return <OverviewTab data={result.data} />;
+      return <OverviewTab data={result.data} trends={trends} />;
     case 'when':
-      return <WhenTab data={result.data} period={result.period} now={now} />;
+      return <WhenTab data={result.data} period={result.period} now={now} notes={notes} />;
     case 'menu':
       return <MenuTab data={result.data} />;
     case 'channels':

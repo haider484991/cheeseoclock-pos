@@ -30,6 +30,31 @@ export function openRecipeInInventory(navigate: Navigate, item: { id: string; na
   navigate('/inventory');
 }
 
+/** Inventory → Ingredients, searched for it and showing low stock (a "Do this" line: a key ingredient running low). */
+export function openLowStockInInventory(navigate: Navigate, ingredient: { id: string; name: string }): void {
+  presetSessionState('inv.tab', 'ingredients');
+  presetSessionState('inv.ing:q', ingredient.name);
+  presetSessionState('inv.ing:page', 1);
+  presetSessionState('inv.ing.category', 'all');
+  presetSessionState('inv.ing.stock', 'low');
+  navigate('/inventory');
+}
+
+/** Costing on one of its tabs (the Dashboard's "Do this": Missing costs, Alerts). */
+export function openCostingTab(navigate: Navigate, tab: 'menu' | 'missing' | 'alerts' | 'targets'): void {
+  presetSessionState('costing.tab', tab);
+  navigate('/costing');
+}
+
+/** Costing → Menu costs, searched for the dish, its cost sheet open (a "Do this" line: a dish over target). */
+export function openDishInCosting(navigate: Navigate, item: { id: string; name: string }): void {
+  presetSessionState('costing.tab', 'menu');
+  presetSessionState('costing.menu.cat', 'all');
+  presetSessionState('costing.menu:q', item.name);
+  presetSessionState('costing.menu.openId', item.id);
+  navigate('/costing');
+}
+
 /**
  * Inventory → Recipes → Batch recipes, its recipe open for editing (what
  * goes in, how much it makes) — never the calculator, whose main button

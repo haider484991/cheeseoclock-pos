@@ -5,20 +5,33 @@
  * tab loads only these figures (reports:overview). Phase 7 adds the trend
  * strip, the 12-month chart and the weekly sheet here.
  */
+import type { ReactNode } from 'react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { ReportOverviewTab } from '@cheeseoclock/shared-types';
+import type { ReportOverviewTab, ReportTrends } from '@cheeseoclock/shared-types';
 import { changeOf, PAYMENT_LABEL, PAYMENT_ORDER, percentOf, websiteVsTill } from '../reportFormat';
 import { DataTable, Kpi, Note, Panel } from '../reportUi';
 import { ShareBar } from '../charts';
+import { OverviewTrends } from './OverviewTrends';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** While the first figures load, the tiles show as loading (data undefined). */
-export function OverviewTab({ data }: { data: ReportOverviewTab | undefined }) {
+/**
+ * While the first figures load, the tiles show as loading (data undefined).
+ * Phase 7: the trend strip and the 12 months below (their own channel,
+ * reports:trends, not tied to the period), with the weekly sheet's buttons.
+ */
+export function OverviewTab({
+  data,
+  trends,
+}: {
+  data: ReportOverviewTab | undefined;
+  trends?: { data: ReportTrends | undefined; error: string | null; sheetButtons?: ReactNode };
+}) {
   return (
     <div className="space-y-4">
       <Summary report={data} />
       {data && data.kpis.orderCount > 0 && <WebsiteVsTill data={data} />}
+      {trends && <OverviewTrends trends={trends.data} error={trends.error} sheetButtons={trends.sheetButtons} />}
     </div>
   );
 }

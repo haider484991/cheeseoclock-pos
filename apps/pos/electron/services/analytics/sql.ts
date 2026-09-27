@@ -8,6 +8,7 @@
  * Every figure is for the orders saved on THIS till (costing spec D14).
  */
 import type { ReportChannel, ReportPaymentGroup } from '@cheeseoclock/shared-types';
+import type { AppDatabase } from '../../db/connection.js';
 
 /** Pakistan is UTC+5 all year (no daylight saving). */
 export const PKT_OFFSET_MS = 5 * 3_600_000;
@@ -49,4 +50,20 @@ export function tradingDayOf(iso: string): string {
 /** The Pakistan clock hour (0–23) of an instant. */
 export function pakistanHourOf(iso: string): number {
   return new Date(Date.parse(iso) + PKT_OFFSET_MS).getUTCHours();
+}
+
+/**
+ * When this till's first COUNTED order was started, or null with none yet:
+ * before it, the till has "no data then" (costing spec 4.10). Counted like
+ * every figure it guards, so a training order rung and voided, or an empty
+ * cart left open, before the shop really started does not mark the till as
+ * trading from that day. Walks idx_orders_created from the oldest order and
+ * stops at the first counted one.
+ */
+export function firstOrderMs(db: AppDatabase): number | null {
+  const row = db.prepare(`SELECT o.created_at AS at FROM orders o WHERE ${COUNTED} ORDER BY o.created_at LIMIT 1`).get() as
+    | { at: string | null }
+    | undefined;
+  const t = row?.at ? Date.parse(row.at) : NaN;
+  return Number.isFinite(t) ? t : null;
 }

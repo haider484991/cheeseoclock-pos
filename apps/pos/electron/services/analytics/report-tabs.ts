@@ -23,6 +23,9 @@ import {
   withoutWasteCost,
 } from '../business-report.js';
 import { DAY_MS } from './sql.js';
+import { buildOwnerWeek, type OwnerWeekJob } from './owner-week.js';
+import { buildTrends, type TrendsJob } from './trends.js';
+import { EXTRA_ANALYTICS, type AnalyticsKind } from './worker-protocol.js';
 
 /** The longest period the main process works out itself when the worker is not there (a month). */
 export const MAIN_THREAD_MAX_DAYS = 31;
@@ -31,7 +34,7 @@ type Builder<K extends ReportTab> = (db: AppDatabase, req: BusinessReportRequest
 
 const BUILDERS: { [K in ReportTab]: Builder<K> } = {
   overview: (db, req) => buildOverviewTab(db, req),
-  when: (db, req) => buildWhenTab(db, req),
+  when: (db, req, now) => buildWhenTab(db, req, now),
   menu: (db, req) => buildMenuTab(db, req),
   channels: (db, req) => buildChannelsTab(db, req),
   foodStock: (db, req, now) => buildFoodStockTab(db, req, now),
@@ -55,6 +58,27 @@ export function buildReportTab<K extends ReportTab>(
 ): ReportTabFigures<K> {
   const build = BUILDERS[kind] as Builder<K>;
   return db.transaction(() => build(db, req, now))();
+}
+
+export function isAnalyticsKind(x: unknown): x is AnalyticsKind {
+  return isReportTab(x) || (typeof x === 'string' && (EXTRA_ANALYTICS as readonly string[]).includes(x));
+}
+
+/**
+ * Anything the worker is asked for (costing spec Phase 7): a tab, the trend
+ * strip, or the owner's week — each in one read transaction. `longReads`
+ * false is the main process working it out itself (the worker is not
+ * running): the trends then leave out every stretch over 31 days. The
+ * owner's week reads a fortnight and the last 28 days' sales, so it always
+ * fits.
+ */
+export function buildAnalytics(db: AppDatabase, kind: AnalyticsKind, request: unknown, now: Date, opts: { longReads: boolean } = { longReads: true }): unknown {
+  if (isReportTab(kind)) return buildReportTab(db, kind, request as BusinessReportRequest, now);
+  return db.transaction(() =>
+    kind === 'trends'
+      ? buildTrends(db, request as TrendsJob, now, { longReads: opts.longReads, maxDays: MAIN_THREAD_MAX_DAYS })
+      : buildOwnerWeek(db, request as OwnerWeekJob, now),
+  )();
 }
 
 /** Whole trading days a period covers (a trading day is exactly one UTC day). */

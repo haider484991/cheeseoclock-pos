@@ -18,7 +18,7 @@
  * stood in for. node:sqlite behind better-sqlite3's shape; skips where it is
  * missing. Every name and price is made up.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   AuthenticatedUser,
   BusinessReportRequest,
@@ -146,14 +146,20 @@ function oneSale(): void {
 }
 
 live('Reports channels', () => {
-  it('one channel per tab, plus low stock; the whole-page and one-figure channels are gone', () => {
+  it('one channel per tab, plus low stock and the owner’s week (Phase 7); the whole-page and one-figure channels are gone', () => {
     expect([...h.handlers.keys()].filter((c) => c.startsWith('reports:')).sort()).toEqual([
+      'reports:addDayNote',
       'reports:channels',
       'reports:foodStock',
+      'reports:getDayparts',
       'reports:lowStock',
       'reports:menu',
       'reports:overview',
+      'reports:ownerWeek',
+      'reports:removeDayNote',
+      'reports:setDayparts',
       'reports:team',
+      'reports:trends',
       'reports:when',
     ]);
   });
@@ -300,5 +306,131 @@ live('stock rows and their values', () => {
       ok: false,
       code: 'validation_failed',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The owner's week (costing spec Phase 7)
+// ---------------------------------------------------------------------------
+
+const OWNER = session('u_admin', 'admin');
+/** The clock (Date only) for these: Wednesday 30 Sep 2026, 3 pm in Karachi. */
+const WED_3PM = new Date('2026-09-30T10:00:00.000Z');
+const TODAY = () => new Date().toISOString().slice(0, 10);
+
+/** A sale of one medium Fajita an hour ago (made-up prices): stock taken, cost kept, paid. */
+function saleThisWeek(): void {
+  const o = s.ring([['fajitaM', 1]]);
+  s.r.decrementForOrder(db, o, CASHIER_ACTOR);
+  s.markPaid(o, new Date(WED_3PM.getTime() - 3_600_000));
+}
+
+live("the owner's week channels (costing Phase 7)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(WED_3PM);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a cashier is refused the card, the trends, day notes and the parts of the day, and nothing is written', async () => {
+    h.session = CASHIER;
+    const asks: Array<[string, unknown]> = [
+      ['reports:ownerWeek', { week: 'this' }],
+      ['reports:trends', undefined],
+      ['reports:addDayNote', { day: TODAY(), tag: 'rain' }],
+      ['reports:removeDayNote', { id: 'no-such-note' }],
+      ['reports:getDayparts', undefined],
+      ['reports:setDayparts', { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 15 }] }],
+    ];
+    for (const [channel, payload] of asks) {
+      expect({ channel, ...(await call(channel, payload)) }).toEqual({ channel, ok: false, code: 'forbidden', message: REFUSED['reports'] });
+    }
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM day_notes`).get()).toEqual({ n: 0 });
+    h.session = null;
+    for (const [channel, payload] of asks) expect(await call(channel, payload)).toMatchObject({ ok: false, code: 'unauthenticated' });
+  });
+
+  it('a manager gets food cost, waste and the cost lines; a login without costs gets none of them — and nobody gets profit', async () => {
+    saleThisWeek();
+    h.session = MANAGER;
+    const withCosts = await call('reports:ownerWeek', { week: 'this' });
+    expect(withCosts).toMatchObject({ ok: true, data: { week: 'this', engine: 'main', current: { orderCount: 1, netSalesCents: 120_000 } } });
+    const week = (withCosts as { data: import('@cheeseoclock/shared-types').OwnerWeek }).data;
+    expect(week.costs).toMatchObject({ hasCosts: true });
+    // The Dashboard card does not ask for the printed sheet's lines, so it does not wait for them.
+    expect(week.sheet).toBeNull();
+    expect(JSON.stringify(week)).not.toMatch(/profit/i);
+    // The sheet asks for them.
+    const sheet = (await call('reports:ownerWeek', { week: 'this', sheet: true })) as { ok: true; data: import('@cheeseoclock/shared-types').OwnerWeek };
+    expect(sheet.data.sheet).not.toBeNull();
+    expect(sheet.data.sheet!.previousCosts).toBeNull(); // no orders a week earlier on this till
+    expect(JSON.stringify(sheet.data)).not.toMatch(/profit/i);
+
+    h.noCosts = true;
+    const without = (await call('reports:ownerWeek', { week: 'last', sheet: true })) as { ok: true; data: import('@cheeseoclock/shared-types').OwnerWeek };
+    expect(without.ok).toBe(true);
+    expect(without.data.week).toBe('last');
+    expect(without.data.costs).toBeNull();
+    expect(without.data.sheet).toBeNull();
+    expect(without.data.doThis.every((i) => !i.cost)).toBe(true);
+  });
+
+  it('the trends from the worker: each month’s food cost only for a login with costs', async () => {
+    saleThisWeek();
+    const { buildAnalytics } = await import('../../services/analytics/report-tabs.js');
+    const worker = fakeWorker('ready', (kind, req) => Promise.resolve(buildAnalytics(db, kind, req, new Date())));
+    h.worker = worker;
+    h.session = MANAGER;
+    const r = (await call('reports:trends')) as { ok: true; data: import('@cheeseoclock/shared-types').ReportTrends };
+    expect(r.ok).toBe(true);
+    expect(r.data).toMatchObject({ engine: 'worker', partial: false });
+    expect(r.data.months).toHaveLength(12);
+    expect(r.data.monthCosts).toHaveLength(12);
+    expect(worker.asked.at(-1)).toEqual(['trends', { withCosts: true }]);
+
+    h.noCosts = true;
+    const lean = (await call('reports:trends')) as { ok: true; data: import('@cheeseoclock/shared-types').ReportTrends };
+    expect(lean.data.monthCosts).toBeNull();
+    // The cost figures were not even worked out for this login.
+    expect(worker.asked.at(-1)).toEqual(['trends', { withCosts: false }]);
+  });
+
+  it('without the worker the trends leave out every stretch over 31 days; the card is whole', async () => {
+    saleThisWeek();
+    h.session = MANAGER;
+    const t = (await call('reports:trends')) as { ok: true; data: import('@cheeseoclock/shared-types').ReportTrends };
+    expect(t.data).toMatchObject({ engine: 'main', partial: true, months: [] });
+    expect(t.data.lines.map((l) => l.period)).toEqual(['today', 'week', 'month']);
+    expect(await call('reports:ownerWeek', undefined)).toMatchObject({ ok: true, data: { week: 'this', engine: 'main' } });
+  });
+
+  it('day notes: report.view adds and takes them off, checked in plain words', async () => {
+    h.session = MANAGER;
+    const added = (await call('reports:addDayNote', { day: TODAY(), tag: 'load_shedding', note: 'No power 7 to 9' })) as { ok: true; data: { id: string } };
+    expect(added).toMatchObject({ ok: true, data: { day: TODAY(), tag: 'load_shedding', note: 'No power 7 to 9', addedBy: 'Test Manager' } });
+    expect(await call('reports:addDayNote', { day: '2026-02-30', tag: 'rain' })).toMatchObject({ ok: false, code: 'validation_failed', message: 'That is not a real date' });
+    expect(await call('reports:addDayNote', { day: TODAY(), tag: 'party' })).toMatchObject({ ok: false, code: 'validation_failed', message: 'Pick what the day was' });
+    expect(await call('reports:addDayNote', { day: '2099-01-01', tag: 'closed' })).toMatchObject({ ok: false, code: 'validation_failed', message: 'Pick a day within the next year.' });
+    expect(await call('reports:removeDayNote', { id: added.data.id })).toEqual({ ok: true, data: { removed: true } });
+    expect(await call('reports:removeDayNote', { id: added.data.id })).toEqual({ ok: true, data: { removed: false } });
+  });
+
+  it('the parts of the day: everyone with reports reads them; only the owner changes them, and overlaps are refused', async () => {
+    h.session = MANAGER;
+    expect(await call('reports:getDayparts')).toMatchObject({ ok: true, data: { isDefault: true, savedAt: null } });
+    const mine = { dayparts: [{ name: 'Day', fromHour: 11, toHour: 18 }, { name: 'Night', fromHour: 19, toHour: 2 }] };
+    expect(await call('reports:setDayparts', mine)).toEqual({ ok: false, code: 'forbidden', message: 'Only the owner can change the parts of the day.' });
+    h.session = OWNER;
+    expect(
+      await call('reports:setDayparts', { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 16 }, { name: 'Tea', fromHour: 16, toHour: 18 }] }),
+    ).toMatchObject({ ok: false, code: 'validation_failed', message: '"Lunch" and "Tea" both take the hour from 16:00' });
+    expect(await call('reports:setDayparts', mine)).toMatchObject({ ok: true, data: { isDefault: false, dayparts: mine.dayparts } });
+    h.session = MANAGER;
+    expect(await call('reports:getDayparts')).toMatchObject({ ok: true, data: { isDefault: false, dayparts: mine.dayparts } });
+    // Saved like every shop-wide setting: synced and audited.
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`).get()).toEqual({ n: 1 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'business_settings'`).get()).toEqual({ n: 1 });
   });
 });

@@ -306,6 +306,13 @@ export const ipc = {
     channels: (input: IpcRequest<'reports:channels'>) => unwrap(window.api.reports.channels(input)),
     foodStock: (input: IpcRequest<'reports:foodStock'>) => unwrap(window.api.reports.foodStock(input)),
     team: (input: IpcRequest<'reports:team'>) => unwrap(window.api.reports.team(input)),
+    // The owner's week (costing spec Phase 7).
+    ownerWeek: (input?: IpcRequest<'reports:ownerWeek'>) => unwrap(window.api.reports.ownerWeek(input)),
+    trends: () => unwrap(window.api.reports.trends()),
+    addDayNote: (input: IpcRequest<'reports:addDayNote'>) => unwrap(window.api.reports.addDayNote(input)),
+    removeDayNote: (id: string) => unwrap(window.api.reports.removeDayNote({ id })),
+    getDayparts: () => unwrap(window.api.reports.getDayparts()),
+    setDayparts: (input: IpcRequest<'reports:setDayparts'>) => unwrap(window.api.reports.setDayparts(input)),
   },
   inventory: {
     listIngredients: (input?: IpcRequest<'inventory:listIngredients'>) =>

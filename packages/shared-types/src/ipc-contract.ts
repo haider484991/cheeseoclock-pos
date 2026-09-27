@@ -62,13 +62,20 @@ import type {
   ShiftSummary,
 } from './shift.js';
 import type {
+  DayNoteInput,
+  DaypartsView,
+  OwnerWeek,
+  OwnerWeekRequest,
   ReportChannelsTab,
+  ReportDayNote,
   ReportFoodStockTab,
   ReportMenuTab,
   ReportOverviewTab,
   ReportTabRequest,
   ReportTeamTab,
+  ReportTrends,
   ReportWhenTab,
+  SetDaypartsRequest,
 } from './reports.js';
 import type {
   PrinterConnectionConfig,
@@ -1344,6 +1351,41 @@ export interface IpcContract {
   'reports:team': {
     request: ReportTabRequest;
     response: ApiResult<ReportTeamTab>;
+  };
+  // The owner's week (costing spec Phase 7). Worked out in the Reports worker
+  // like the tabs; report.view, with the cost lines for COST_CAPABILITY only.
+  /**
+   * The Dashboard "This week" card and the printed weekly sheet: five
+   * numbers against last week and the ranked "Do this" list. Never rupee profit.
+   */
+  'reports:ownerWeek': {
+    request: OwnerWeekRequest | undefined;
+    response: ApiResult<OwnerWeek>;
+  };
+  /** Reports → Overview: today / week / month / year so far against before, and the last 12 months. */
+  'reports:trends': {
+    request: undefined;
+    response: ApiResult<ReportTrends>;
+  };
+  /** Reports → When: a note for a day (Eid, rain, closed…). report.view; synced and audited. */
+  'reports:addDayNote': {
+    request: DayNoteInput;
+    response: ApiResult<ReportDayNote>;
+  };
+  /** …and taking one off (kept in the history, marked removed). */
+  'reports:removeDayNote': {
+    request: { id: string };
+    response: ApiResult<{ removed: boolean }>;
+  };
+  /** The parts of the day Reports → When splits sales into (report.view to read)… */
+  'reports:getDayparts': {
+    request: undefined;
+    response: ApiResult<DaypartsView>;
+  };
+  /** …changed by the owner (settings.manage) on Costing → Targets. */
+  'reports:setDayparts': {
+    request: SetDaypartsRequest;
+    response: ApiResult<DaypartsView>;
   };
 
   // Customers

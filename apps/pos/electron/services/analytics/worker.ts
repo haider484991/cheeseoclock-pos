@@ -23,19 +23,21 @@ import { createRequire } from 'node:module';
 import { parentPort, workerData, type MessagePort } from 'node:worker_threads';
 import type { AppDatabase } from '../../db/connection.js';
 import { reuseCompiledStatements } from '../../db/statement-cache.js';
-import { buildReportTab, isReportTab } from './report-tabs.js';
+import { buildAnalytics, isAnalyticsKind } from './report-tabs.js';
+import { warmOwnerWeek } from './owner-week.js';
+import { DAY_MS } from './sql.js';
 import { isWorkerData, type AnalyticsWorkerData, type RunRequest, type WorkerReply, type WorkerRequest } from './worker-protocol.js';
 
 /** The same wait as the till's own connection (connection.ts) when the file is briefly locked. */
 const BUSY_TIMEOUT_MS = 5000;
 
-/** Work out one tab and say how it went. Never throws: a failure is an answer. */
+/** Work out one tab (or the trends, or the owner's week) and say how it went. Never throws: a failure is an answer. */
 export function handleRunRequest(db: AppDatabase, msg: RunRequest): WorkerReply {
   const t0 = performance.now();
   try {
-    if (!isReportTab(msg.kind)) throw new Error(`Unknown report tab: ${String(msg.kind)}`);
+    if (!isAnalyticsKind(msg.kind)) throw new Error(`Unknown report tab: ${String(msg.kind)}`);
     const now = new Date(msg.nowIso);
-    const data = buildReportTab(db, msg.kind, msg.request, Number.isFinite(now.getTime()) ? now : new Date());
+    const data = buildAnalytics(db, msg.kind, msg.request, Number.isFinite(now.getTime()) ? now : new Date());
     return { type: 'result', id: msg.id, ok: true, data, ms: Math.round(performance.now() - t0) };
   } catch (e) {
     return { type: 'result', id: msg.id, ok: false, message: e instanceof Error ? e.message : String(e), ms: Math.round(performance.now() - t0) };
@@ -143,6 +145,21 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
     return;
   }
   let closed = false;
+  // The Dashboard card's "Do this" reads four weeks of order lines once a trading day (owner-week.ts): read
+  // them as the worker starts and again just after each trading day begins (05:00 Pakistan time = 00:00 UTC),
+  // between asks, so the first tap of the day does not wait for them. Never keeps the thread alive.
+  let warmTimer: ReturnType<typeof setTimeout> | null = null;
+  const warm = () => {
+    if (closed) return;
+    try {
+      warmOwnerWeek(conn.db, new Date());
+    } catch {
+      // The card reads them itself when it is asked.
+    }
+    const now = Date.now();
+    warmTimer = setTimeout(warm, (Math.floor(now / DAY_MS) + 1) * DAY_MS + 1_000 - now);
+    warmTimer.unref?.();
+  };
   port.on('message', (msg: WorkerRequest) => {
     if (closed) return;
     if (msg?.type === 'close') {
@@ -151,6 +168,7 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
       // write-ahead log back into the file when it closes. Closing the port
       // then lets the thread end.
       closed = true;
+      if (warmTimer) clearTimeout(warmTimer);
       try {
         conn.close();
       } catch {
@@ -163,6 +181,8 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
     port.postMessage(handleRunRequest(conn.db, msg));
   });
   port.postMessage({ type: 'ready', journalMode: conn.journalMode, ms: Math.round(performance.now() - t0) } satisfies WorkerReply);
+  warmTimer = setTimeout(warm, 0);
+  warmTimer.unref?.();
 }
 
 if (parentPort && isWorkerData(workerData)) serve(parentPort, workerData);

@@ -12,6 +12,8 @@ export interface ColumnBar {
   /** Tooltip, e.g. "Sat 26 Sep: Rs 3,174 · 6 orders". */
   title: string;
   value: number;
+  /** A stretch still going (this month so far): drawn hollow, never picked out as the best. */
+  partial?: boolean;
 }
 
 /**
@@ -29,7 +31,7 @@ export function ColumnChart({
 }) {
   if (bars.length === 0) return null;
   const max = Math.max(...bars.map((b) => b.value), 1);
-  const best = bars.reduce((m, b, i) => (b.value > (bars[m]?.value ?? -Infinity) ? i : m), 0);
+  const best = bars.reduce((m, b, i) => (!b.partial && b.value > (bars[m]?.value ?? -Infinity) ? i : m), bars.findIndex((b) => !b.partial));
   const labelEvery = bars.length <= 16 ? 1 : Math.ceil(bars.length / 12);
   return (
     <div role="img" aria-label={ariaLabel}>
@@ -41,9 +43,11 @@ export function ColumnChart({
               <div
                 className={cn(
                   'w-full rounded-t-[3px] transition-colors',
-                  i === best && b.value > 0
-                    ? 'bg-amber-500 dark:bg-amber-400'
-                    : 'bg-amber-200 group-hover:bg-amber-300 dark:bg-amber-900/70 dark:group-hover:bg-amber-700',
+                  b.partial
+                    ? 'border border-b-0 border-dashed border-amber-500 bg-amber-100/60 dark:border-amber-400 dark:bg-amber-900/30'
+                    : i === best && b.value > 0
+                      ? 'bg-amber-500 dark:bg-amber-400'
+                      : 'bg-amber-200 group-hover:bg-amber-300 dark:bg-amber-900/70 dark:group-hover:bg-amber-700',
                 )}
                 style={{ height: `${pct}%` }}
               />
@@ -58,6 +62,148 @@ export function ColumnChart({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------ Phase 7: the owner's week --
+
+export interface HeatmapCellView {
+  weekday: number;
+  hour: number;
+  value: number;
+  /** Tooltip: "Fri 8 pm: Rs 4,000 on an average Friday · 4 orders". */
+  title: string;
+}
+
+/**
+ * Weekday × hour: a row per weekday (Monday first), a column per hour, each
+ * cell shaded by its share of the busiest cell. Every cell is a button: a
+ * tap picks it (`onPick`), and the panel reads its exact figures out below
+ * (a touch screen has no hover); the tooltip says the same, and the file has
+ * them all.
+ */
+export function Heatmap({
+  cells,
+  hours,
+  weekdays,
+  hourLabel,
+  ariaLabel,
+  picked = null,
+  onPick,
+}: {
+  cells: HeatmapCellView[];
+  hours: number[];
+  weekdays: readonly string[];
+  hourLabel: (h: number) => string;
+  ariaLabel: string;
+  /** The picked cell (weekday × 24 + hour), outlined. */
+  picked?: number | null;
+  onPick?: (key: number) => void;
+}) {
+  if (hours.length === 0) return null;
+  const max = Math.max(...cells.map((c) => c.value), 1);
+  const at = new Map(cells.map((c) => [c.weekday * 24 + c.hour, c]));
+  const labelEvery = hours.length <= 14 ? 1 : 2;
+  return (
+    <div role="group" aria-label={ariaLabel} className="overflow-x-auto">
+      <div className="grid min-w-[480px] gap-[3px]" style={{ gridTemplateColumns: `2.5rem repeat(${hours.length}, minmax(0, 1fr))` }}>
+        <div />
+        {hours.map((h, i) => (
+          <div key={`h${h}`} className="truncate text-center text-[10px] tabular-nums text-stone-500">
+            {i % labelEvery === 0 ? hourLabel(h).replace(' ', '') : ''}
+          </div>
+        ))}
+        {weekdays.map((day, w) => (
+          <HeatRow key={day} day={day} weekday={w} hours={hours} at={at} max={max} picked={picked} onPick={onPick} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HeatRow({
+  day,
+  weekday,
+  hours,
+  at,
+  max,
+  picked,
+  onPick,
+}: {
+  day: string;
+  weekday: number;
+  hours: number[];
+  at: Map<number, HeatmapCellView>;
+  max: number;
+  picked: number | null;
+  onPick?: (key: number) => void;
+}) {
+  return (
+    <>
+      <div className="flex items-center text-xs font-medium text-stone-600 dark:text-stone-400">{day}</div>
+      {hours.map((h) => {
+        const key = weekday * 24 + h;
+        const c = at.get(key);
+        const share = c && c.value > 0 ? c.value / max : 0;
+        return (
+          <button
+            key={h}
+            type="button"
+            title={c?.title}
+            aria-label={c?.title}
+            aria-pressed={picked === key}
+            onClick={onPick ? () => onPick(key) : undefined}
+            className={cn(
+              'h-8 rounded-[4px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500',
+              share === 0 && 'bg-stone-100 dark:bg-stone-800/60',
+              picked === key && 'ring-2 ring-stone-900 dark:ring-stone-100',
+            )}
+            style={share > 0 ? { backgroundColor: `rgba(245, 158, 11, ${(0.12 + share * 0.88).toFixed(3)})` } : undefined}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/** A small line of values (oldest first), for a trend at a glance. Scaled evenly, never stretched out of shape. */
+export function Sparkline({ values, ariaLabel }: { values: number[]; ariaLabel: string }) {
+  if (values.length < 2) return null;
+  const W = 120;
+  const H = 28;
+  const hi = Math.max(...values, 1);
+  const lo = Math.min(...values, 0);
+  const span = hi - lo || 1;
+  const pts = values.map((v, i) => `${((i / (values.length - 1)) * W).toFixed(1)},${(H - 2 - ((v - lo) / span) * (H - 4)).toFixed(1)}`);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={ariaLabel} className="h-7 w-full" preserveAspectRatio="none">
+      <polyline points={pts.join(' ')} fill="none" className="stroke-amber-500 dark:stroke-amber-400" strokeWidth={1.8} strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export interface MonthBarView extends ColumnBar {
+  /** A second line under the bar ("29%"): the month's food cost, for a login that may see costs. */
+  under?: string | null;
+}
+
+/** Twelve months as columns, this month last, with an optional line under each bar. */
+export function MonthBars({ bars, ariaLabel }: { bars: MonthBarView[]; ariaLabel: string }) {
+  if (bars.length === 0) return null;
+  const withUnder = bars.some((b) => b.under);
+  return (
+    <div>
+      <ColumnChart bars={bars} ariaLabel={ariaLabel} height="h-36" />
+      {withUnder && (
+        <div className="mt-0.5 flex gap-[3px]">
+          {bars.map((b) => (
+            <div key={b.key} className="min-w-0 flex-1 truncate text-center text-[10px] tabular-nums text-stone-500">
+              {b.under ?? ''}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

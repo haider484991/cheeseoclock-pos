@@ -91,6 +91,12 @@ describe('the Reports worker loads no Electron', () => {
     const files = [...seen.keys()].map((f) => relative(REPO, f).replace(/\\/g, '/'));
     expect(files).toContain('apps/pos/electron/services/business-report.ts');
     expect(files).toContain('packages/pos-domain/src/index.ts');
+    // Costing spec Phase 7: the owner's week, its "Do this" sources (the read-only costing service)
+    // and the trends run in the worker too — without the write paths (costing-settings.ts, the repositories).
+    expect(files).toContain('apps/pos/electron/services/analytics/owner-week.ts');
+    expect(files).toContain('apps/pos/electron/services/analytics/trends.ts');
+    expect(files).toContain('apps/pos/electron/services/costing-service.ts');
+    expect(files).not.toContain('apps/pos/electron/services/costing-settings.ts');
     expect(files.some((f) => f.includes('/repositories/'))).toBe(false);
     // Only small npm packages, bundled into the worker file (nothing native, nothing that needs node_modules beside it).
     expect([...npm].filter((m) => !m.startsWith('node:') && !/^(uuid|zod)$/.test(m))).toEqual([]);

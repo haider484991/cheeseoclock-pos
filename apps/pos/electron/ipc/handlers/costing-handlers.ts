@@ -20,9 +20,8 @@ import {
   getMenuCosts,
   getMissingCosts,
   previewRecipeCost,
-  saveCostAlertSettings,
-  saveCostingTargets,
 } from '../../services/costing-service.js';
+import { saveCostAlertSettings, saveCostingTargets } from '../../services/costing-settings.js';
 import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/cost-alert-repo.js';
 
 /**

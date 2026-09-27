@@ -506,11 +506,20 @@ export interface ReportOverviewTab extends ReportTabBase {
   channels: ReportChannelLine[];
 }
 
-/** When: sales by day (or month) and by Pakistan clock hour. */
+/**
+ * When: sales by day (or month) and by Pakistan clock hour; from Phase 7 the
+ * weekday × hour heatmap, the parts of the day and the period's day notes.
+ */
 export interface ReportWhenTab extends ReportTabBase {
   kpis: Pick<ReportKpis, 'orderCount' | 'netSalesCents'>;
   byDay: BusinessReport['byDay'];
   byHour: BusinessReport['byHour'];
+  /** An average day by weekday and hour, closed days left out (costing spec Phase 7). */
+  heatmap: ReportHeatmap;
+  /** Lunch, afternoon, dinner, late (the owner's parts of the day). */
+  dayparts: ReportDayparts;
+  /** Notes on the period's days (Eid, rain, closed…), oldest first. */
+  dayNotes: ReportDayNote[];
 }
 
 /** Menu: what sells, by item and by category. */
@@ -565,3 +574,362 @@ export interface ReportTabData {
 
 /** A tab's figures as the builders make them, before the main process says where they were worked out. */
 export type ReportTabFigures<K extends ReportTab> = Omit<ReportTabData[K], 'engine'>;
+
+// ---------------------------------------------------------------------------
+// The owner's week (costing spec Phase 7): trends, the heatmap, parts of the
+// day, day notes, the Dashboard "This week" card and its "Do this" list.
+// ---------------------------------------------------------------------------
+
+/**
+ * A part of the day (costing spec 4.10), in Pakistan clock hours: from the
+ * start of `fromHour` to the end of `toHour` (Lunch 12–15 is 12:00–15:59).
+ * A part whose `toHour` is before its `fromHour` runs across midnight (Late
+ * 23–4 is 23:00–04:59, the same trading night).
+ */
+export interface Daypart {
+  name: string;
+  fromHour: number;
+  toHour: number;
+}
+
+/** The till's parts of the day until the owner sets his own (business setting 'analytics.dayparts'). */
+export const DEFAULT_DAYPARTS: readonly Daypart[] = [
+  { name: 'Lunch', fromHour: 12, toHour: 15 },
+  { name: 'Afternoon', fromHour: 16, toHour: 18 },
+  { name: 'Dinner', fromHour: 19, toHour: 22 },
+  { name: 'Late', fromHour: 23, toHour: 4 },
+];
+
+/** The clock hours a part of the day covers, in order (across midnight when toHour < fromHour). */
+export function daypartHours(d: Pick<Daypart, 'fromHour' | 'toHour'>): number[] {
+  const out: number[] = [];
+  for (let h = d.fromHour; ; h = (h + 1) % 24) {
+    out.push(h);
+    if (h === d.toHour || out.length === 24) break;
+  }
+  return out;
+}
+
+/** The parts of the day as Reports uses them (Costing → Targets shows them; the owner edits them). */
+export interface DaypartsView {
+  dayparts: Daypart[];
+  /** The till's own parts: the owner has not set any. */
+  isDefault: boolean;
+  savedAt: string | null;
+}
+
+/** What Costing → Targets saves (reports:setDayparts; the owner only). */
+export interface SetDaypartsRequest {
+  dayparts: Daypart[];
+}
+
+/**
+ * What a day note says about a trading day (migration 0037). 'closed' days
+ * are left out of the heatmap's averages (and, later, the forecast).
+ * Checked in the schemas, not by a CHECK, so a newer till's tags still sync.
+ */
+export const DAY_NOTE_TAGS = ['closed', 'eid', 'ramadan', 'rain', 'load_shedding', 'cricket', 'event', 'other'] as const;
+export type DayNoteTag = (typeof DAY_NOTE_TAGS)[number];
+
+export function isDayNoteTag(x: unknown): x is DayNoteTag {
+  return typeof x === 'string' && (DAY_NOTE_TAGS as readonly string[]).includes(x);
+}
+
+/** The owner's words for each tag (screen, paper and file). */
+export const DAY_NOTE_TAG_LABEL: Record<DayNoteTag, string> = {
+  closed: 'Closed',
+  eid: 'Eid',
+  ramadan: 'Ramadan',
+  rain: 'Rain',
+  load_shedding: 'Load-shedding',
+  cricket: 'Cricket match',
+  event: 'Event nearby',
+  other: 'Other',
+};
+
+/** Days the till leaves out of forecasts unless told otherwise: nothing about them repeats week to week. */
+export function excludedFromForecastByDefault(tag: DayNoteTag): boolean {
+  return tag === 'closed' || tag === 'eid';
+}
+
+/** A note for a day, as added on Reports → When (report.view). */
+export interface DayNoteInput {
+  /** The trading day, YYYY-MM-DD. */
+  day: string;
+  tag: DayNoteTag;
+  note?: string | null;
+  /** Leave the day out of forecasts (costing spec Phase 12); the till suggests it for closed days and Eid. */
+  excludeFromForecast?: boolean;
+}
+
+export interface ReportDayNote {
+  id: string;
+  day: string;
+  /** A tag this till does not know (a newer till's) reads as 'other'. */
+  tag: DayNoteTag;
+  note: string | null;
+  excludeFromForecast: boolean;
+  /** Who added it (their name); null when not known. */
+  addedBy: string | null;
+  createdAt: string;
+}
+
+/**
+ * How a figure moved against the stretch it is compared with (costing spec
+ * 4.10): 'pct' = (now − then) ÷ then in basis points (0 = the same); 'new'
+ * when then was 0; 'noData' when this till has no figures for then (the
+ * stretch starts before its first order).
+ */
+export type TrendChange = { kind: 'pct'; bps: number } | { kind: 'new' } | { kind: 'noData' };
+
+/** Sales, orders and the average order of a stretch of time, from the counted orders' stored totals. */
+export interface TrendFigures {
+  /** Net sales (billed − part refunds), tax included: the same "Sales" as the Overview. */
+  netSalesCents: number;
+  orderCount: number;
+  avgOrderCents: number;
+}
+
+export type ReportTrendPeriod = 'today' | 'week' | 'month' | 'year';
+
+export interface TrendSpan {
+  sinceIso: string;
+  untilIso: string;
+}
+
+export interface TrendComparison extends TrendSpan {
+  /** Null: this till has no figures for then ("no data then"). */
+  figures: TrendFigures | null;
+  change: { sales: TrendChange; orders: TrendChange; avgOrder: TrendChange };
+}
+
+/** One line of the trend strip: today / this week / this month / this year so far, against the stretches it is compared with. */
+export interface ReportTrendLine {
+  period: ReportTrendPeriod;
+  current: TrendSpan & { figures: TrendFigures };
+  /** Same weekday last week / last week / last month / last year, as far into it as we are now. */
+  previous: TrendComparison;
+  /** The same day / week / month a year ago; null for the year (its comparison already is last year). */
+  lastYear: TrendComparison | null;
+}
+
+export interface ReportDayPoint {
+  /** Trading day, YYYY-MM-DD. */
+  day: string;
+  orderCount: number;
+  netSalesCents: number;
+}
+
+export interface ReportMonthPoint extends TrendFigures {
+  /** YYYY-MM. */
+  month: string;
+  sinceIso: string;
+  untilIso: string;
+  /** This till had orders for the whole month (false before its first order: "no data then"). */
+  hadData: boolean;
+}
+
+/** A month's food cost (COST_CAPABILITY only), as Reports → Food cost & stock works it out. */
+export interface ReportMonthCost {
+  month: string;
+  foodCostBps: number | null;
+  coverageBps: number | null;
+}
+
+/**
+ * Reports → Overview's trend strip and 12-month chart (costing spec 4.10),
+ * for the orders on THIS till. Not tied to the period picker: always today,
+ * this week, month and year so far.
+ */
+export interface ReportTrends {
+  nowIso: string;
+  engine: ReportEngine;
+  /** When this till's first order was started; null with none yet. */
+  firstOrderAt: string | null;
+  lines: ReportTrendLine[];
+  /** The last 56 trading days (8 weeks), oldest first, every day (0 when nothing sold). */
+  recentDays: ReportDayPoint[];
+  /** The last 12 calendar months, oldest first (this month so far last). */
+  months: ReportMonthPoint[];
+  /** Each month's food cost; null for a login without COST_CAPABILITY. */
+  monthCosts: ReportMonthCost[] | null;
+  /**
+   * Worked out on the till itself (the Reports worker is not running): only
+   * stretches of 31 days or less, so the year line, the 8 weeks and the 12
+   * months are left out.
+   */
+  partial: boolean;
+}
+
+export interface ReportHeatCell {
+  /** 0 = Monday … 6 = Sunday. */
+  weekday: number;
+  /** Pakistan clock hour. */
+  hour: number;
+  orderCount: number;
+  netSalesCents: number;
+  /** An average day: net sales ÷ the days counted for that weekday, to the paisa. */
+  avgNetSalesCents: number;
+  /** An average day's orders, in tenths (2.5 orders = 25). */
+  avgOrdersTenths: number;
+}
+
+/**
+ * Weekday × hour (costing spec 4.10): an average day's sales in each hour of
+ * each weekday over the period, leaving out days marked closed and days
+ * before this till's first order or still to come.
+ */
+export interface ReportHeatmap {
+  /** How many trading days of each weekday (0 = Monday) the averages are over. */
+  dayCounts: number[];
+  /** Days in the period marked closed, left out. */
+  closedDays: number;
+  /** The hours shown, in trading-day order (5 am … 4 am), first to last hour with a sale. */
+  hours: number[];
+  /** Every weekday × every hour shown, Monday first. */
+  cells: ReportHeatCell[];
+}
+
+export interface ReportDaypartLine {
+  name: string;
+  /** −1 for "Other hours" (every hour outside the parts). */
+  fromHour: number;
+  toHour: number;
+  orderCount: number;
+  netSalesCents: number;
+  avgOrderCents: number;
+  /** Share of the period's sales, basis points; null with no sales. */
+  shareBps: number | null;
+}
+
+export interface ReportDayparts {
+  lines: ReportDaypartLine[];
+  /** Hours outside every part, when something sold then. */
+  other: ReportDaypartLine | null;
+  isDefault: boolean;
+}
+
+/** Which week the owner's week is: this one so far, or last week in full. */
+export type OwnerWeekWhich = 'this' | 'last';
+
+export interface OwnerWeekRequest {
+  week?: OwnerWeekWhich;
+  /**
+   * For the printed weekly sheet: its dishes, waste by reason and last
+   * week's food cost and waste too. The Dashboard card leaves it off (it
+   * shows none of them, and must come back fast).
+   */
+  sheet?: boolean;
+}
+
+interface DoThisBase {
+  /** Stable within the list (React key). */
+  key: string;
+  /** What it costs (or would bring) per week, paisa; null when it has no rupee figure (low stock). */
+  weekCents: number | null;
+  /** Pinned first, whatever the rupees (a key ingredient running out). */
+  pinned: boolean;
+  /** It carries costs: only for a login with COST_CAPABILITY (the main process drops the rest). */
+  cost: boolean;
+}
+
+/**
+ * One line of the Dashboard's ranked "Do this" list (costing spec 4.17),
+ * each with its rupees per week and where to fix it. Later phases add their
+ * own kinds (stock variance in Phase 8, leakage flags in Phase 10).
+ */
+export type DoThisItem =
+  /** A key ingredient at or under its low-stock level: pinned first. */
+  | (DoThisBase & { kind: 'low_stock'; ingredientId: string; name: string; unit: string; currentQty: number; lowThreshold: number })
+  /** A dish over its food-cost target (red): n̄ per week × (cost − target × price). */
+  | (DoThisBase & {
+      kind: 'red_item';
+      menuItemId: string;
+      name: string;
+      foodCostBps: number;
+      targetBps: number;
+      soldLast28: number;
+    })
+  /** Costs still missing: sales of the dishes it touches per week × their category's target (a proxy). */
+  | (DoThisBase & { kind: 'missing_costs'; things: number; dishes: number })
+  /** A price alert not seen yet (Costing → Alerts): its rupees per week. */
+  | (DoThisBase & {
+      kind: 'price_alert';
+      alertId: string;
+      alertKind: 'price_jump' | 'weekly_digest';
+      /** The ingredient that moved; null for the Monday digest. */
+      ingredientName: string | null;
+      changeBps: number | null;
+      dishes: number;
+    });
+
+export type DoThisKind = DoThisItem['kind'];
+
+/** Food cost and waste for the week (COST_CAPABILITY only). */
+export interface OwnerWeekCosts {
+  /** Food cost of the sales with a known cost; null when none is known. */
+  foodCostBps: number | null;
+  /** "Costs known for 94% of sales"; null with no food sales. */
+  coverageBps: number | null;
+  wasteCents: number;
+  /** Some cost or waste figure is above Rs 0 (prices are set). */
+  hasCosts: boolean;
+}
+
+/** A dish on the printed sheet: what it earns per sale ranks it; the sheet prints no rupee profit (Phase 9's, profit.view). */
+export interface OwnerWeekItem {
+  menuItemId: string;
+  name: string;
+  soldThisWeek: number;
+  foodCostBps: number | null;
+}
+
+/** The printed weekly sheet's cost lines (COST_CAPABILITY only). */
+export interface OwnerWeekSheet {
+  /** Sold this week and fully costed: the three that earn the most per sale, most first … */
+  earnsMost: OwnerWeekItem[];
+  /** … and the three that earn the least, least first (never the same dish twice). */
+  earnsLeast: OwnerWeekItem[];
+  wasteByReason: ReportWasteLine[];
+  /**
+   * Food cost and waste over the stretch the sales are compared with (last
+   * week by now, or the week before in full), so the sheet's five numbers are
+   * all "vs last week"; null when this till has no figures for then.
+   */
+  previousCosts: OwnerWeekCosts | null;
+}
+
+/**
+ * The owner's week (costing spec Phase 7): the Dashboard "This week" card
+ * and the printed weekly sheet. At most five numbers — sales, orders and the
+ * average order against last week (report.view), food cost and waste
+ * (COST_CAPABILITY) — and ONE ranked "Do this" list. Never rupee profit.
+ * For the orders on THIS till.
+ */
+export interface OwnerWeek {
+  week: OwnerWeekWhich;
+  sinceIso: string;
+  untilIso: string;
+  compareSinceIso: string;
+  compareUntilIso: string;
+  /** First and last trading day of the week, YYYY-MM-DD. */
+  firstDay: string;
+  lastDay: string;
+  /** This week, still running. */
+  isCurrent: boolean;
+  engine: ReportEngine;
+  current: TrendFigures;
+  /** Last week (as far into it as we are now); null when this till has no figures for then. */
+  previous: TrendFigures | null;
+  change: { sales: TrendChange; orders: TrendChange; avgOrder: TrendChange };
+  /** Null for a login without COST_CAPABILITY. */
+  costs: OwnerWeekCosts | null;
+  /** Ranked: pinned first, then the most rupees a week; at most five. */
+  doThis: DoThisItem[];
+  /** How many more lines there were beyond the five. */
+  doThisMore: number;
+  /** Checks that could not run this time (their kinds), so the list may be short. */
+  doThisFailed: string[];
+  /** The printed sheet's cost lines: only when asked for the sheet, and null for a login without COST_CAPABILITY. */
+  sheet: OwnerWeekSheet | null;
+}

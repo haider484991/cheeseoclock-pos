@@ -68,6 +68,7 @@ async function repos() {
     ...(await import('./repositories/sync-repo.js')),
     ...(await import('./repositories/apply-remote.js')),
     ...(await import('../services/costing-service.js')),
+    ...(await import('../services/costing-settings.js')),
   };
 }
 

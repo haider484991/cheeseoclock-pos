@@ -27,8 +27,7 @@
  * is unit-tested (worker-client.test.ts).
  */
 import path from 'node:path';
-import type { BusinessReportRequest, ReportTab } from '@cheeseoclock/shared-types';
-import { WORKER_FILE, type WorkerReply, type WorkerRequest } from './worker-protocol.js';
+import { WORKER_FILE, type AnalyticsKind, type AnalyticsRequest, type WorkerReply, type WorkerRequest } from './worker-protocol.js';
 
 /** What the client needs of a worker thread (node:worker_threads Worker has all of it). */
 export interface WorkerLike {
@@ -101,10 +100,10 @@ const CLOSE_TIMEOUT_MS = 2_000;
 
 interface Job {
   id: number;
-  kind: ReportTab;
+  kind: AnalyticsKind;
   /** The ask, for "the same ask twice". */
   key: string;
-  request: BusinessReportRequest;
+  request: unknown;
   nowIso: string;
   promise: Promise<unknown>;
   resolve: (data: unknown) => void;
@@ -187,11 +186,12 @@ export class AnalyticsWorkerClient {
    * caller decides what the owner is told, and whether the main process
    * works it out instead ('unavailable', 'crashed').
    */
-  run(kind: ReportTab, request: BusinessReportRequest, nowIso: string = new Date().toISOString()): Promise<unknown> {
+  run<K extends AnalyticsKind>(kind: K, request: AnalyticsRequest<K>, nowIso: string = new Date().toISOString()): Promise<unknown> {
     if (this.current !== 'ready' && this.current !== 'starting') {
       return Promise.reject(new WorkerRunError('unavailable', this.reason ?? 'The report worker is not running'));
     }
-    const key = JSON.stringify([kind, request.sinceIso, request.untilIso, request.compareSinceIso ?? null, request.compareUntilIso ?? null]);
+    // The same ask: the same kind with the same period (or job); the clock is not part of it.
+    const key = JSON.stringify([kind, request]);
     for (const other of [this.running, ...this.queue]) {
       if (!other || other.settled || other.kind !== kind) continue;
       if (other.key === key) return other.promise;

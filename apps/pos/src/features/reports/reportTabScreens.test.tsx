@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
-import type { ReportFoodCost, ReportKpis, ReportPurchases, ReportTabData } from '@cheeseoclock/shared-types';
+import type { ReportFoodCost, ReportKpis, ReportPurchases, ReportTabData, ReportTrends } from '@cheeseoclock/shared-types';
 import { periodFor } from './dateRange';
 import { OverviewTab } from './tabs/OverviewTab';
 import { WhenTab } from './tabs/WhenTab';
@@ -16,6 +16,7 @@ import { MenuTab } from './tabs/MenuTab';
 import { ChannelsTab } from './tabs/ChannelsTab';
 import { FoodCostStockTab } from './tabs/FoodCostStockTab';
 import { TeamLeakageTab } from './tabs/TeamLeakageTab';
+import { DayNotesPanel, type DayNoteEditor } from './tabs/WhenExtras';
 
 const SAT_3PM = new Date('2026-09-26T10:00:00.000Z');
 const base = { sinceIso: '2026-09-26T00:00:00.000Z', untilIso: '2026-09-27T00:00:00.000Z', engine: 'worker' as const };
@@ -120,17 +121,109 @@ describe('the Reports tabs render their own figures', () => {
     expect(html(<OverviewTab data={undefined} />)).toContain('Average order');
   });
 
+  it('Overview, Phase 7: the trend strip and the 12 months; each month’s food cost only when sent', () => {
+    const figures = (net: number, orders: number) => ({ netSalesCents: net, orderCount: orders, avgOrderCents: Math.round(net / orders) });
+    const span = { sinceIso: '2026-09-26T00:00:00.000Z', untilIso: '2026-09-26T10:00:00.000Z' };
+    const trends: ReportTrends = {
+      nowIso: '2026-09-26T10:00:00.000Z',
+      engine: 'worker',
+      firstOrderAt: '2026-01-10T12:00:00.000Z',
+      lines: [
+        {
+          period: 'today',
+          current: { ...span, figures: figures(120_000, 3) },
+          previous: { ...span, figures: figures(90_000, 2), change: { sales: { kind: 'pct', bps: 3_333 }, orders: { kind: 'pct', bps: 5_000 }, avgOrder: { kind: 'pct', bps: -1_111 } } },
+          lastYear: { ...span, figures: null, change: { sales: { kind: 'noData' }, orders: { kind: 'noData' }, avgOrder: { kind: 'noData' } } },
+        },
+      ],
+      recentDays: Array.from({ length: 56 }, (_, i) => ({ day: `2026-08-${String((i % 28) + 1).padStart(2, '0')}`, orderCount: 1, netSalesCents: 10_000 + i })),
+      months: ['2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09'].map((month, i) => ({
+        month,
+        sinceIso: `${month}-01T00:00:00.000Z`,
+        untilIso: `${month}-28T00:00:00.000Z`,
+        netSalesCents: i < 3 ? 0 : 1_000_000 + i,
+        orderCount: i < 3 ? 0 : 10,
+        avgOrderCents: i < 3 ? 0 : 100_000,
+        hadData: i > 3,
+      })),
+      monthCosts: null,
+      partial: false,
+    };
+    const lean = html(<OverviewTab data={undefined} trends={{ data: trends, error: null }} />);
+    expect(lean).toContain('How the shop is trending');
+    expect(lean).toContain('Today so far');
+    expect(lean).toContain('vs same day last week');
+    expect(lean).toContain('▲ 33%');
+    expect(lean).toContain('No data then');
+    expect(lean).toContain('The last 12 months');
+    expect(lean).not.toContain('food cost');
+    const withCosts = html(
+      <OverviewTab
+        data={undefined}
+        trends={{ data: { ...trends, monthCosts: trends.months.map((m) => ({ month: m.month, foodCostBps: 2_910, coverageBps: 9_000 })) }, error: null }}
+      />,
+    );
+    expect(withCosts).toContain('Food cost as Food cost &amp; stock works it out.');
+    expect(withCosts).toContain('29.1%');
+    // Every month's figures on the screen itself (a touch screen has no hover), newest first, this month "so far".
+    expect(lean).toContain('<th');
+    expect(lean.lastIndexOf('Sep 2026')).toBeLessThan(lean.lastIndexOf('Aug 2026'));
+    expect(lean).toContain(' · so far');
+    expect(lean).toContain(' · no data then');
+    expect(lean).toContain('Rs 10,000.11');
+    expect(lean).toContain('This month is so far (the hollow bar).');
+    // Worked out on the till itself: it says so.
+    expect(html(<OverviewTab data={undefined} trends={{ data: { ...trends, partial: true, months: [] }, error: null }} />)).toContain('only stretches of 31 days or less');
+  });
+
   it('When, Menu, Channels & delivery', () => {
-    const period = periodFor('today', SAT_3PM);
-    expect(
-      html(
-        <WhenTab
-          data={{ ...base, kpis: { orderCount: 3, netSalesCents: 300_000 }, byDay: [{ day: '2026-09-26', orderCount: 3, netSalesCents: 300_000 }], byHour: [{ hour: 20, orderCount: 3, netSalesCents: 300_000 }] }}
-          period={period}
-          now={SAT_3PM}
-        />,
-      ),
-    ).toContain('When you sell');
+    // A week: the heatmap shows once it averages a week of whole days or more.
+    const period = periodFor('last7', SAT_3PM);
+    const whenData: ReportTabData['when'] = {
+      ...base,
+      kpis: { orderCount: 3, netSalesCents: 300_000 },
+      byDay: [{ day: '2026-09-26', orderCount: 3, netSalesCents: 300_000 }],
+      byHour: [{ hour: 20, orderCount: 3, netSalesCents: 300_000 }],
+      // Costing spec Phase 7: weekday × hour, the parts of the day, notes on days.
+      heatmap: {
+        dayCounts: [1, 1, 1, 1, 1, 1, 1],
+        closedDays: 0,
+        hours: [20],
+        cells: [0, 1, 2, 3, 4, 5, 6].map((w) => ({
+          weekday: w,
+          hour: 20,
+          orderCount: w === 5 ? 3 : 0,
+          netSalesCents: w === 5 ? 300_000 : 0,
+          avgNetSalesCents: w === 5 ? 300_000 : 0,
+          avgOrdersTenths: w === 5 ? 30 : 0,
+        })),
+      },
+      dayparts: {
+        lines: [
+          { name: 'Lunch', fromHour: 12, toHour: 15, orderCount: 0, netSalesCents: 0, avgOrderCents: 0, shareBps: 0 },
+          { name: 'Dinner', fromHour: 19, toHour: 22, orderCount: 3, netSalesCents: 300_000, avgOrderCents: 100_000, shareBps: 10_000 },
+        ],
+        other: null,
+        isDefault: true,
+      },
+      dayNotes: [{ id: 'n1', day: '2026-09-26', tag: 'rain', note: 'Heavy rain after 8', excludeFromForecast: false, addedBy: 'Test Manager', createdAt: '2026-09-26T16:00:00.000Z' }],
+    };
+    const when = html(<WhenTab data={whenData} period={period} now={SAT_3PM} />);
+    expect(when).toContain('When you sell');
+    expect(when).toContain('An average day, by weekday and hour');
+    // Every square can be tapped for its figures, and the shading has its key.
+    expect(when).toContain('Tap a square to see its figures.');
+    expect(when).toContain('aria-label="Sat 8 pm: Rs 3,000 and 3 orders on an average Saturday (1 of them counted)"');
+    expect(when).toMatch(/Quiet.*Busy/);
+    // "Last 7 days" with today left out until it is over: six whole days, too few for an average weekday.
+    const short = html(
+      <WhenTab data={{ ...whenData, heatmap: { ...whenData.heatmap, dayCounts: [1, 1, 1, 1, 1, 0, 1] } }} period={period} now={SAT_3PM} />,
+    );
+    expect(short).not.toContain('Tap a square');
+    expect(short).toContain('This needs a week of whole days. Today is left out until it is over');
+    expect(when).toContain('Parts of the day');
+    expect(when).toContain('7 pm – 10:59 pm');
+    expect(when).toContain('Rain · Heavy rain after 8');
     const menu = html(
       <MenuTab
         data={{
@@ -199,5 +292,32 @@ describe('the Reports tabs render their own figures', () => {
     const without = html(<TeamLeakageTab data={team(false)} />);
     expect(without).toContain('Wasted');
     expect(without).not.toContain('Rs 180');
+  });
+});
+
+describe('notes on days (When)', () => {
+  const editor = (defaultDay: string): DayNoteEditor => ({
+    add: () => Promise.resolve(true),
+    remove: () => Promise.resolve(true),
+    busy: false,
+    defaultDay,
+    maxDay: '2027-09-30',
+  });
+  const note = { id: 'n1', day: '2026-09-25', tag: 'closed' as const, note: 'Eid', excludeFromForecast: true, addedBy: 'Test Owner', createdAt: '2026-09-25T10:00:00.000Z' };
+  const lastWeek = { firstDay: '2026-09-21', lastDay: '2026-09-27' };
+
+  it('taking a note off asks first, on the screen (no one-tap removal), with a finger-sized button', () => {
+    const out = html(<DayNotesPanel notes={[note]} editor={editor('2026-09-27')} period={lastWeek} />);
+    expect(out).toMatch(/<button[^>]*class="[^"]*h-10 w-10[^"]*"[^>]*aria-label="Take off the note for Fri 25 Sep 2026"/);
+    // The question and its buttons come only after the tap on the bin.
+    expect(out).not.toContain('Take this note off?');
+    expect(out).not.toContain('Take it off');
+  });
+
+  it('a day outside the dates picked above: the form says the note is kept, and where it shows', () => {
+    expect(html(<DayNotesPanel notes={[]} editor={editor('2026-09-27')} period={lastWeek} />)).not.toContain('is not in the dates picked above');
+    expect(html(<DayNotesPanel notes={[]} editor={editor('2026-10-20')} period={lastWeek} />)).toContain(
+      'Tue 20 Oct 2026 is not in the dates picked above. The note is kept, and shows here when you pick dates that include it.',
+    );
   });
 });

@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { CostAlertSettings, CostingTargets, SetCostingTargetsRequest } from '@cheeseoclock/shared-types';
+import { DAY_NOTE_TAGS, daypartHours } from '@cheeseoclock/shared-types';
+import type { CostAlertSettings, CostingTargets, Daypart, SetCostingTargetsRequest } from '@cheeseoclock/shared-types';
 
 /**
  * Business settings (costing spec §3, migration 0032): shop-wide settings
@@ -63,11 +64,58 @@ export const costingAlertsSchema = z
   })
   .strict();
 
+/** A Pakistan clock hour, 0–23. */
+const clockHour = z
+  .number()
+  .int({ message: 'An hour is a whole number from 0 to 23' })
+  .min(0, { message: 'An hour is from 0 to 23' })
+  .max(23, { message: 'An hour is from 0 to 23' });
+
+/**
+ * Phase 7: the parts of the day Reports → When splits the sales into
+ * (costing spec 4.10). One to six parts, each a name and its first and last
+ * clock hour (Late 23 → 4 runs across midnight). No two parts share an hour
+ * or a name; hours in no part are "Other hours".
+ */
+export const analyticsDaypartsSchema = z
+  .array(
+    z
+      .object({
+        name: z.string().trim().min(1, { message: 'Give each part of the day a name' }).max(24, { message: 'Keep a name to 24 letters' }),
+        fromHour: clockHour,
+        toHour: clockHour,
+      })
+      .strict(),
+  )
+  .min(1, { message: 'Keep at least one part of the day' })
+  .max(6, { message: 'At most six parts of the day' })
+  .superRefine((parts, ctx) => {
+    const names = new Set<string>();
+    const taken = new Map<number, string>();
+    for (const p of parts) {
+      const key = p.name.trim().toLowerCase();
+      if (names.has(key)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Two parts of the day are called "${p.name}"` });
+        return;
+      }
+      names.add(key);
+      for (const h of daypartHours(p)) {
+        const other = taken.get(h);
+        if (other !== undefined) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `"${other}" and "${p.name}" both take the hour from ${h}:00` });
+          return;
+        }
+        taken.set(h, p.name);
+      }
+    }
+  });
+
 /** Every key and its schema. A key not listed here cannot be written. */
 export const BUSINESS_SETTING_SCHEMAS = {
   'costing.targets': costingTargetsSchema,
   'costing.priceStep': costingPriceStepSchema,
   'costing.alerts': costingAlertsSchema,
+  'analytics.dayparts': analyticsDaypartsSchema,
 } as const;
 
 export type BusinessSettingKey = keyof typeof BUSINESS_SETTING_SCHEMAS;
@@ -99,9 +147,43 @@ export const markCostAlertsSeenInputSchema = z
 /** "Use the sheet's price" (Inventory → Ingredients). */
 export const useSheetPriceInputSchema = z.object({ ingredientId: z.string().min(1).max(64) }).strict();
 
+/** Costing → Targets saves the parts of the day (reports:setDayparts; the owner only). */
+export const setDaypartsInputSchema = z.object({ dayparts: analyticsDaypartsSchema }).strict();
+
+/** A real calendar date, YYYY-MM-DD (a trading day). */
+const tradingDay = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Pick a day' })
+  .refine((ymd) => {
+    const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
+    const t = Date.UTC(y, m - 1, d);
+    return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === ymd;
+  }, { message: 'That is not a real date' });
+
+/** A note for a day, added on Reports → When (reports:addDayNote; report.view). */
+export const dayNoteInputSchema = z
+  .object({
+    day: tradingDay,
+    tag: z.enum(DAY_NOTE_TAGS, { errorMap: () => ({ message: 'Pick what the day was' }) }),
+    note: z
+      .string()
+      .max(200, { message: 'Keep the note to 200 letters' })
+      .nullish()
+      .transform((v) => {
+        const t = (v ?? '').replace(/\s+/g, ' ').trim();
+        return t === '' ? null : t;
+      }),
+    excludeFromForecast: z.boolean().optional(),
+  })
+  .strict();
+
+/** Taking a day note off (reports:removeDayNote). */
+export const removeDayNoteInputSchema = z.object({ id: z.string().min(1).max(64) }).strict();
+
 // The IPC contract's types (shared-types) and these schemas must describe the
 // same shape: tsc fails here the moment one changes without the other.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const _targetsShape: Same<z.infer<typeof costingTargetsSchema>, CostingTargets> = true;
 const _setTargetsShape: Same<z.infer<typeof setCostingTargetsInputSchema>, SetCostingTargetsRequest> = true;
 const _alertsShape: Same<z.infer<typeof costingAlertsSchema>, CostAlertSettings> = true;
+const _daypartsShape: Same<z.infer<typeof analyticsDaypartsSchema>, Daypart[]> = true;

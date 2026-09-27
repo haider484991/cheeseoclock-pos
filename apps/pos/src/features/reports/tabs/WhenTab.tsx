@@ -2,6 +2,8 @@
  * Reports → When (costing spec Phase 3): sales by day (or by month over two
  * months) and by Pakistan clock hour. The section moved here unchanged from
  * ReportSections.tsx; the tab loads only these figures (reports:when).
+ * Phase 7 adds the weekday × hour heatmap, the parts of the day and notes on
+ * days (WhenExtras.tsx).
  */
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportWhenTab } from '@cheeseoclock/shared-types';
@@ -10,11 +12,28 @@ import type { ReportPeriod } from '../dateRange';
 import { ColumnChart, ShareBar } from '../charts';
 import { DataTable, Panel, Section } from '../reportUi';
 import { daySeries, hourLabel, hourSeries, weekdayAverages } from '../reportFormat';
+import { DaypartsPanel, DayNotesPanel, HEATMAP_MIN_DAYS, HeatmapPanel, HeatmapTooShort, heatmapShown, type DayNoteEditor } from './WhenExtras';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-export function WhenTab({ data, period, now }: { data: ReportWhenTab; period: ReportPeriod; now: Date }) {
-  return <WhenSection report={data} period={period} now={now} />;
+export function WhenTab({ data, period, now, notes }: { data: ReportWhenTab; period: ReportPeriod; now: Date; notes?: DayNoteEditor }) {
+  return (
+    <div className="space-y-6">
+      <WhenSection report={data} period={period} now={now} />
+      {/* Phase 7: weekday × hour, the parts of the day, notes on days. */}
+      <div className="grid gap-4 xl:grid-cols-2">
+        {/* An average weekday needs a week of whole days at least to mean anything (today counts once it is over). */}
+        {data.kpis.orderCount > 0 &&
+          (heatmapShown(data.heatmap) ? (
+            <HeatmapPanel heatmap={data.heatmap} />
+          ) : (
+            period.days >= HEATMAP_MIN_DAYS && <HeatmapTooShort />
+          ))}
+        {data.kpis.orderCount > 0 && <DaypartsPanel dayparts={data.dayparts} />}
+        <DayNotesPanel notes={data.dayNotes} editor={notes} period={period} />
+      </div>
+    </div>
+  );
 }
 
 export function WhenSection({ report, period, now }: { report: Pick<ReportWhenTab, 'kpis' | 'byDay' | 'byHour'>; period: ReportPeriod; now: Date }) {

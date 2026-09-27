@@ -3,6 +3,28 @@
  * other (costing spec Phase 3). Types and constants only: both sides load it.
  */
 import type { BusinessReportRequest, ReportTab } from '@cheeseoclock/shared-types';
+import type { OwnerWeekJob } from './owner-week.js';
+import type { TrendsJob } from './trends.js';
+
+/**
+ * What the worker works out besides the six tabs (costing spec Phase 7):
+ * Reports → Overview's trend strip and 12 months, and the owner's week
+ * (the Dashboard card and the weekly sheet).
+ */
+export const EXTRA_ANALYTICS = ['trends', 'ownerWeek'] as const;
+export type ExtraAnalytics = (typeof EXTRA_ANALYTICS)[number];
+
+/** Everything the worker is asked for: a tab, or one of the extras. */
+export type AnalyticsKind = ReportTab | ExtraAnalytics;
+
+/** What each kind is asked with. */
+export type AnalyticsRequest<K extends AnalyticsKind> = K extends ReportTab
+  ? BusinessReportRequest
+  : K extends 'trends'
+    ? TrendsJob
+    : K extends 'ownerWeek'
+      ? OwnerWeekJob
+      : never;
 
 /**
  * The worker's file, next to the main bundle (out/main). electron.vite.config.ts
@@ -30,12 +52,13 @@ export interface AnalyticsWorkerData {
   nativeBinding?: string | null;
 }
 
-/** Work out one tab. `id` pairs the answer with the question. */
+/** Work out one tab (or extra). `id` pairs the answer with the question. */
 export interface RunRequest {
   type: 'run';
   id: number;
-  kind: ReportTab;
-  request: BusinessReportRequest;
+  kind: AnalyticsKind;
+  /** AnalyticsRequest<kind>: the period for a tab, the job for an extra. */
+  request: unknown;
   /** The main process's clock (which orders count as "still open from earlier days"). */
   nowIso: string;
 }

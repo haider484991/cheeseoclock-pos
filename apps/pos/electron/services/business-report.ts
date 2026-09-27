@@ -54,6 +54,7 @@ import { loadPriceBook, priceOfBook, safeStockValue } from '../db/price-book.js'
 import { loadPriceHistory, type DatedPrice } from '../db/price-history-read.js';
 import { getBusinessSetting } from '../db/business-settings-read.js';
 import { withBillPrinted, withHandPrints } from './print-report.js';
+import { whenExtras } from './analytics/heatmap.js';
 import {
   COUNTED,
   DAY_MS,
@@ -1727,16 +1728,22 @@ export function buildOverviewTab(db: AppDatabase, req: BusinessReportRequest): R
   };
 }
 
-/** When: sales by trading day and by Pakistan clock hour. */
-export function buildWhenTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'when'> {
+/**
+ * When: sales by trading day and by Pakistan clock hour; with Phase 7 the
+ * weekday × hour heatmap (closed days left out), the parts of the day and the
+ * period's day notes (analytics/heatmap.ts), from the same single read.
+ */
+export function buildWhenTab(db: AppDatabase, req: BusinessReportRequest, now = new Date()): ReportTabFigures<'when'> {
   const range = rangeOf(req);
-  const sales = aggregateSales(getSaleRows(db, range), NO_NAMES);
+  const rows = getSaleRows(db, range);
+  const sales = aggregateSales(rows, NO_NAMES);
   return {
     sinceIso: range.sinceIso,
     untilIso: range.untilIso,
     kpis: { orderCount: sales.totals.orderCount, netSalesCents: netOf(sales.totals) },
     byDay: sales.byDay,
     byHour: sales.byHour,
+    ...whenExtras(db, range, rows, sales.byHour, now),
   };
 }
 
@@ -1848,7 +1855,7 @@ export function buildTeamTab(db: AppDatabase, req: BusinessReportRequest): Repor
 export function getBusinessReport(db: AppDatabase, req: BusinessReportRequest, now = new Date()): BusinessReport {
   const build = db.transaction((): BusinessReport => {
     const overview = buildOverviewTab(db, req);
-    const when = buildWhenTab(db, req);
+    const when = buildWhenTab(db, req, now);
     const menu = buildMenuTab(db, req);
     const channels = buildChannelsTab(db, req);
     const food = buildFoodStockTab(db, req, now);

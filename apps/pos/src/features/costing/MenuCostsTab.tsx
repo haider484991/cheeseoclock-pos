@@ -1,9 +1,9 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useCallback, useMemo, useState } from 'react';
 import { Card, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { MenuCostRow } from '@cheeseoclock/shared-types';
 import { AlertTriangle, Target } from 'lucide-react';
-import { FilterChips, SearchBox, matchesSearch, useSessionState, type ChipOption } from '../../components/list';
+import { FilterChips, SearchBox, matchesSearch, useDeepLinkOpen, useSessionState, type ChipOption } from '../../components/list';
 import { useMenuCosts } from './costingQueries';
 import { FoodCostChip } from './CostChip';
 import { ItemCostSheetDrawer } from './ItemCostSheet';
@@ -22,6 +22,10 @@ export function MenuCostsTab({ onShowMissing, onShowTargets }: { onShowMissing: 
   const [openId, setOpenId] = useState<string | null>(null);
 
   const food = useMemo(() => (q.data?.rows ?? []).filter((r) => r.flag !== 'nonfood'), [q.data]);
+  // A dish named by the Dashboard's "Do this" list opens its cost sheet once the rows are in.
+  const linkable = useMemo(() => (q.data ? q.data.rows.map((r) => ({ id: r.menuItemId })) : undefined), [q.data]);
+  const openLinked = useCallback((r: { id: string }) => setOpenId(r.id), []);
+  useDeepLinkOpen('costing.menu.openId', linkable, openLinked);
   const searched = useMemo(() => food.filter((r) => matchesSearch(`${r.name} ${r.categoryName}`, query)), [food, query]);
   const shown = useMemo(() => searched.filter((r) => category === 'all' || r.categoryId === category), [searched, category]);
   const groups = useMemo(() => groupSizes(shown), [shown]);

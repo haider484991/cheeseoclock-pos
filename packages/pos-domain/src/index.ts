@@ -20,3 +20,5 @@ export * from './missing-costs.js';
 export * from './sale-cost.js';
 export * from './purchase.js';
 export * from './cost-alerts.js';
+export * from './trends.js';
+export * from './do-this.js';

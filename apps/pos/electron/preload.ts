@@ -210,6 +210,13 @@ const api: RendererApi = {
     channels: (req) => invoke('reports:channels', req),
     foodStock: (req) => invoke('reports:foodStock', req),
     team: (req) => invoke('reports:team', req),
+    // The owner's week (costing spec Phase 7).
+    ownerWeek: (req) => invoke('reports:ownerWeek', req),
+    trends: () => invoke('reports:trends', undefined),
+    addDayNote: (req) => invoke('reports:addDayNote', req),
+    removeDayNote: (req) => invoke('reports:removeDayNote', req),
+    getDayparts: () => invoke('reports:getDayparts', undefined),
+    setDayparts: (req) => invoke('reports:setDayparts', req),
   },
   inventory: {
     listIngredients: (req) => invoke('inventory:listIngredients', req),

@@ -58,13 +58,14 @@ import {
   type MissingCosts,
   type MissingPriceRow,
   type RecipeCostPreview,
-  type SetCostAlertSettingsRequest,
   type SetCostingTargetsRequest,
 } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import { loadPriceBook, type PriceBook } from '../db/price-book.js';
-import { getBusinessSetting, setBusinessSetting, setBusinessSettings } from '../db/repositories/business-settings-repo.js';
-import type { Actor } from '../db/repositories/base.js';
+// Read-only: this file also runs in the Reports worker thread (the Dashboard's
+// "Do this" list works dishes out from it), which must not load the write
+// paths. The owner's settings are saved by costing-settings.ts.
+import { getBusinessSetting } from '../db/business-settings-read.js';
 import { COUNTED } from './analytics/sql.js';
 
 /** "Sold in the last 28 days": the window the customers' picks are weighted over. */
@@ -99,7 +100,8 @@ interface Sales {
 interface Ctx {
   book: PriceBook;
   menu: MenuData;
-  sales: Map<string, Sales>;
+  /** Read only: the Dashboard card keeps one for the day (costing-service loadCostingSales). */
+  sales: ReadonlyMap<string, Sales>;
   targets: ResolvedTargets;
   priceStepCents: number;
   savedAt: string | null;
@@ -220,8 +222,11 @@ const IN_WINDOW = `o.created_at >= ? AND o.created_at <= ? AND ${COUNTED}
  * U_g = Σ qty over lines with any live choice of group g.
  */
 function loadSales(db: AppDatabase, now: Date, need: SalesNeed): Map<string, Sales> {
-  const since = new Date(now.getTime() - MIX_WINDOW_DAYS * 86_400_000).toISOString();
-  const until = now.toISOString();
+  return loadSalesIn(db, new Date(now.getTime() - MIX_WINDOW_DAYS * 86_400_000).toISOString(), now.toISOString(), need);
+}
+
+/** loadSales over [since, until] (both ISO, inclusive as the 28-day window always was). */
+function loadSalesIn(db: AppDatabase, since: string, until: string, need: SalesNeed): Map<string, Sales> {
   const oneItem = need.kind === 'item' ? ' AND oi.menu_item_id = ?' : '';
   const params: unknown[] = need.kind === 'item' ? [since, until, need.itemId] : [since, until];
   const out = new Map<string, Sales>();
@@ -236,31 +241,32 @@ function loadSales(db: AppDatabase, now: Date, need: SalesNeed): Map<string, Sal
     out.set(r.item, { units: Number(r.units), salesCents: Number(r.sales), picks: new Map(), groupUnits: new Map() });
   }
   if (need.kind === 'totals' || out.size === 0) return out;
-  // A choice counts once per order line (the till refuses the same choice twice on a line).
+  // The window's choices, walked ONCE (kept aside, MATERIALIZED), then counted two ways:
+  //  - 'pick': a choice counts once per order line (the till refuses the same choice twice on a line);
+  //  - 'group': a line counts once per group however many of its choices it had (five veggies = one line).
+  // Two separate walks of orders → lines → choices cost the Dashboard card and Menu costs twice the time.
   for (const r of db
     .prepare(
-      `SELECT oi.menu_item_id AS item, oim.modifier_id AS modifier, SUM(oi.quantity) AS n
-         FROM ${WINDOW_LINES} CROSS JOIN order_item_modifiers oim
-        WHERE ${IN_WINDOW}${oneItem}
-          AND oim.order_item_id = oi.id AND oim.deleted_at IS NULL AND oim.modifier_id IS NOT NULL
-        GROUP BY oi.menu_item_id, oim.modifier_id`,
-    )
-    .all(...params) as Array<{ item: string; modifier: string; n: number }>) {
-    out.get(r.item)?.picks.set(r.modifier, Number(r.n));
-  }
-  // A line counts once per group however many of its choices it had (five veggies = one line).
-  for (const r of db
-    .prepare(
-      `SELECT item, grp, SUM(qty) AS n FROM (
-         SELECT DISTINCT oi.id AS line, oi.menu_item_id AS item, oi.quantity AS qty, m.modifier_group_id AS grp
-           FROM ${WINDOW_LINES} CROSS JOIN order_item_modifiers oim CROSS JOIN modifiers m
+      `WITH picked AS MATERIALIZED (
+         SELECT oi.id AS line, oi.menu_item_id AS item, oi.quantity AS qty, oim.modifier_id AS modifier
+           FROM ${WINDOW_LINES} CROSS JOIN order_item_modifiers oim
           WHERE ${IN_WINDOW}${oneItem}
-            AND oim.order_item_id = oi.id AND oim.deleted_at IS NULL
-            AND m.id = oim.modifier_id AND m.deleted_at IS NULL)
+            AND oim.order_item_id = oi.id AND oim.deleted_at IS NULL)
+       SELECT 'pick' AS kind, item, modifier AS what, SUM(qty) AS n
+         FROM picked WHERE modifier IS NOT NULL
+        GROUP BY item, modifier
+       UNION ALL
+       SELECT 'group' AS kind, item, grp AS what, SUM(qty) AS n FROM (
+         SELECT DISTINCT p.line, p.item, p.qty, m.modifier_group_id AS grp
+           FROM picked p CROSS JOIN modifiers m
+          WHERE m.id = p.modifier AND m.deleted_at IS NULL)
         GROUP BY item, grp`,
     )
-    .all(...params) as Array<{ item: string; grp: string; n: number }>) {
-    out.get(r.item)?.groupUnits.set(r.grp, Number(r.n));
+    .all(...params) as Array<{ kind: 'pick' | 'group'; item: string; what: string; n: number }>) {
+    const sold = out.get(r.item);
+    if (!sold) continue;
+    if (r.kind === 'pick') sold.picks.set(r.what, Number(r.n));
+    else sold.groupUnits.set(r.what, Number(r.n));
   }
   return out;
 }
@@ -640,6 +646,16 @@ export function getMissingCosts(db: AppDatabase, now = new Date()): MissingCosts
   return missingOf(loadCtx(db, now, { kind: 'totals' }));
 }
 
+/** Missing costs from a context already loaded (the Dashboard's "Do this" list reuses its one read). */
+export function missingCostsIn(ctx: CostingContext): MissingCosts {
+  return missingOf(ctx);
+}
+
+/** An item's chip colour from its plate (green / amber / red / grey / not confirmed / not food). */
+export function flagFor(ctx: CostingContext, item: CostingMenuItem, pc: PlateCost): FoodCostFlag {
+  return flagOf(ctx, item, pc);
+}
+
 /** The targets need no prices, recipes or sales: categories, how many items each has, and the settings. */
 function loadTargetsCtx(db: AppDatabase) {
   const categories = loadCategories(db);
@@ -685,35 +701,6 @@ export function getCostingTargets(db: AppDatabase): CostingTargetsView {
   return targetsViewOf(loadTargetsCtx(db));
 }
 
-/**
- * Save the owner's targets and price step, both keys in one transaction
- * (business-settings-repo). Targets for categories that no longer exist are
- * dropped. Answers with the targets as they now stand.
- */
-export function saveCostingTargets(db: AppDatabase, req: SetCostingTargetsRequest, actor: Actor): CostingTargetsView {
-  const live = new Set(
-    (db.prepare(`SELECT id FROM categories WHERE deleted_at IS NULL`).all() as Array<{ id: string }>).map((c) => c.id),
-  );
-  const perCategory = Object.fromEntries(Object.entries(req.perCategory).filter(([id]) => live.has(id)));
-  setBusinessSettings(
-    db,
-    [
-      {
-        key: 'costing.targets',
-        value: {
-          defaultBps: req.defaultBps,
-          amberBps: req.amberBps,
-          perCategory,
-          nonFoodCategoryIds: req.nonFoodCategoryIds.filter((id) => live.has(id)),
-        },
-      },
-      { key: 'costing.priceStep', value: req.priceStepCents },
-    ],
-    actor,
-  );
-  return getCostingTargets(db);
-}
-
 /** "Use these": every category's suggested (or current) target, confirmed. */
 export function confirmedSuggestions(db: AppDatabase): SetCostingTargetsRequest {
   const t = loadTargets(db, loadCategories(db));
@@ -747,6 +734,26 @@ export type CostingMenuItem = MenuItemRow;
 /** The costing figures' inputs now (every item's sales and picks over the last 28 days). */
 export function loadCostingContext(db: AppDatabase, now = new Date()): CostingContext {
   return loadCtx(db, now, { kind: 'all' });
+}
+
+/** Every item's units, sales and picks over a window: the part of the costing figures that reads the orders. */
+export type CostingSales = ReadonlyMap<string, Sales>;
+
+/**
+ * Every item's units, sales and picks over [sinceIso, untilIso] — the slow
+ * part of the costing figures (a walk of the window's order lines and their
+ * choices), for a caller that keeps it (the Dashboard card keeps the 28 whole
+ * trading days before today, for the day).
+ */
+export function loadCostingSales(db: AppDatabase, sinceIso: string, untilIso: string): CostingSales {
+  return loadSalesIn(db, sinceIso, untilIso, { kind: 'all' });
+}
+
+/** The costing figures' inputs with the sales given: prices, recipes, menu and targets as they are now. */
+export function loadCostingContextWith(db: AppDatabase, sales: CostingSales): CostingContext {
+  const book = loadPriceBook(db);
+  const menu = loadMenu(db);
+  return { book, menu, sales, ...loadTargets(db, menu.categories), priceOf: priceOfBook(book) };
 }
 
 /** The menu items the figures count: on the till, or hidden but sold in the window. */
@@ -940,24 +947,4 @@ export function getCostAlertSettings(db: AppDatabase): CostAlertSettingsView {
     keysSuggested: s.keysSuggested,
     savedAt: saved?.updatedAt ?? null,
   };
-}
-
-/**
- * Save the owner's alert thresholds (business-settings-repo: synced,
- * audited). Key ingredients that are no longer there are dropped. Answers
- * with the settings as they now stand.
- */
-export function saveCostAlertSettings(db: AppDatabase, req: SetCostAlertSettingsRequest, actor: Actor): CostAlertSettingsView {
-  const live = new Set(liveIngredientNames(db).map((i) => i.id));
-  setBusinessSetting(
-    db,
-    'costing.alerts',
-    {
-      jumpBps: req.jumpBps,
-      impactWeekCents: req.impactWeekCents,
-      keyIngredientIds: [...new Set(req.keyIngredientIds)].filter((id) => live.has(id)),
-    },
-    actor,
-  );
-  return getCostAlertSettings(db);
 }

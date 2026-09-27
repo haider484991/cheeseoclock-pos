@@ -9,6 +9,7 @@ import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { COSTING_KEY, useCostAlertSettings, useCostingTargets } from './costingQueries';
 import { formatBps, parsePercent, parseRupees } from './costingFormat';
+import { DaypartsCard } from './DaypartsCard';
 
 /**
  * Food-cost targets per menu category, and the price alerts' thresholds
@@ -29,6 +30,8 @@ export function TargetsTab() {
         <Card className="py-8 text-center text-stone-500">{q.isError ? 'Could not load the targets.' : 'Loading…'}</Card>
       )}
       <AlertSettings canEdit={canEdit} />
+      {/* The parts of the day Reports → When uses (costing spec Phase 7). */}
+      <DaypartsCard canEdit={canEdit} />
     </div>
   );
 }

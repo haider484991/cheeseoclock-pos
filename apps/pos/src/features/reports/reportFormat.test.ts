@@ -234,7 +234,15 @@ function tabsOf(r: BusinessReport): SomeReportTabs {
   const k = r.kpis;
   return {
     overview: { ...base, kpis: k, previous: r.previous, channels: r.channels },
-    when: { ...base, kpis: { orderCount: k.orderCount, netSalesCents: k.netSalesCents }, byDay: r.byDay, byHour: r.byHour },
+    when: {
+      ...base,
+      kpis: { orderCount: k.orderCount, netSalesCents: k.netSalesCents },
+      byDay: r.byDay,
+      byHour: r.byHour,
+      heatmap: { dayCounts: [0, 0, 0, 0, 0, 0, 0], closedDays: 0, hours: [], cells: [] },
+      dayparts: { lines: [], other: null, isDefault: true },
+      dayNotes: [],
+    },
     menu: { ...base, kpis: { menuSalesCents: k.menuSalesCents, itemCount: k.itemCount }, items: r.items, categories: r.categories },
     channels: {
       ...base,

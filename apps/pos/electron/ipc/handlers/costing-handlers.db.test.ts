@@ -591,7 +591,7 @@ live('the costing channels and a growing order history', () => {
     s.markPaid(s.ring([['veggieL', 1, ['pickOnion', 'dipRanch']]])); // a sale, so the picks are read too
     h.session = MANAGER;
     const sales = (await sqlOf('costing:menuCosts')).filter((q) => /\border_items\b/.test(q));
-    expect(sales.length).toBe(3); // units and sales; picks; units per choice group
+    expect(sales.length).toBe(2); // units and sales; then picks and units per choice group, in one walk of the choices
     for (const q of sales) {
       const args = Array.from({ length: (q.match(/\?/g) ?? []).length }, () => '2026-01-01T00:00:00.000Z');
       const plan = (db.prepare(`EXPLAIN QUERY PLAN ${q}`).all(...args) as Array<{ detail: string }>).map((r) => r.detail);
