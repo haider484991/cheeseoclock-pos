@@ -106,7 +106,7 @@ export interface ReportStaffLine {
   /**
    * Every time the till opened the drawer for this person (cash sales,
    * refunds, cash in and out, the float, counting, no sale, tests — the
-   * drawer log, 0040). Absent from a till before the log.
+   * drawer log, 0042). Absent from a till before the log.
    */
   drawerOpens?: number;
   /** Receipts / bills / slips this person printed again by hand (the print log). */
@@ -131,10 +131,10 @@ export interface ReportShiftLine {
   cashMovementCount: number;
   /** Times the drawer was opened by hand with no sale (not the one count at close). */
   noSaleOpens: number;
-  /** Every time the till opened the drawer in this shift (the drawer log, 0040: all kinds). */
+  /** Every time the till opened the drawer in this shift (the drawer log, 0042: all kinds). */
   drawerOpenCount?: number;
   /**
-   * Cash of test orders deleted AFTER this shift closed (0041): its saved
+   * Cash of test orders deleted AFTER this shift closed (0043): its saved
    * expected / counted / short-over are never rewritten, so Reports notes it
    * instead. Signed paisa (a test's cash less its cash refunds).
    */
@@ -155,8 +155,8 @@ export interface ReportShiftLine {
   carryOverReason: string | null;
   /**
    * Of the orders this close carried over, how many the owner later deleted
-   * as test orders (0041). The saved count above is never rewritten; Shift
-   * history says it instead. Absent from a till before 0041.
+   * as test orders (0043). The saved count above is never rewritten; Shift
+   * history says it instead. Absent from a till before 0043.
    */
   carriedTestDeletedCount?: number;
 }
@@ -181,7 +181,7 @@ export interface ReportDrawerOpenLine {
 export type DrawerLogGroup = 'all' | 'sales' | 'cash' | 'nosale' | 'problems';
 
 /**
- * One time the till opened the cash drawer (drawer_opens, 0028 + 0040):
+ * One time the till opened the cash drawer (drawer_opens, 0028 + 0042):
  * why, for how much, who, who allowed it, and whether it opened.
  */
 export interface ReportDrawerLogLine {
@@ -330,7 +330,7 @@ export interface ReportWasteIngredientLine {
  * Why food was thrown away, as Reports groups it: the reasons picked on the
  * Waste screen, plus food made for orders that were then cancelled or
  * refunded ('cancelled_made'), and the food of test orders the owner deleted
- * as waste ('test_order', 0041).
+ * as waste ('test_order', 0043).
  */
 export type ReportWasteReason = WasteReason | 'cancelled_made' | 'test_order';
 

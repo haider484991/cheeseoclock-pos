@@ -91,7 +91,7 @@ vi.mock('../../services/auth-service.js', () => ({
   verifyManagerPin: async () => {
     throw new Error("That is not a manager's PIN or password");
   },
-  // The owner's PIN typed again to delete a test order (0041): only this made-up one is the owner's.
+  // The owner's PIN typed again to delete a test order (0043): only this made-up one is the owner's.
   verifyOwnerSecret: async (_db: unknown, secret: string) => {
     if (secret === 'Owner-pass-9') return { ownerUserId: 'u_admin', ownerName: 'Test Owner' };
     throw new Error("That is not the owner's PIN or password.");
@@ -414,7 +414,7 @@ const REPORTS = (): Record<string, unknown> => ({
   'reports:getDayparts': undefined,
   // Stock takes' "used vs should have used" (costing spec Phase 8).
   'reports:variance': undefined,
-  // The cash drawer log (0040): every open, who, why and whether it opened.
+  // The cash drawer log (0042): every open, who, why and whether it opened.
   'reports:drawerLog': REPORT_TODAY(),
   // Shift history: every past shift with its totals.
   'shifts:list': {},
@@ -593,7 +593,7 @@ const ALREADY_MANAGERS = (): Record<string, unknown> => ({
 });
 
 /**
- * Deleting a test order (0041): the OWNER (admin) login only — a manager and
+ * Deleting a test order (0043): the OWNER (admin) login only — a manager and
  * a cashier are refused before anything is read — and the delete itself
  * needs the owner's PIN or password typed again.
  */
@@ -1247,9 +1247,9 @@ describe.skipIf(!Sqlite)('both lines of work, classified where the owner put the
   it("each channel is registered and sits in its list; the drawer log, the deleted-test list and profit are the owner's alone", async () => {
     const lists = classification();
     const HOME: Record<string, string> = {
-      // The drawer log (0040): Reports, the owner's.
+      // The drawer log (0042): Reports, the owner's.
       'reports:drawerLog': 'REPORTS',
-      // Test orders (0041): the owner (admin) login, and their PIN to delete.
+      // Test orders (0043): the owner (admin) login, and their PIN to delete.
       'orders:testDeletePreview': 'TEST_ORDERS_OWNER',
       'orders:deleteTest': 'TEST_ORDERS_OWNER',
       'orders:listDeletedTests': 'TEST_ORDERS_OWNER',

@@ -2,7 +2,7 @@ import type { DeletedTestsPage, DrawerLogPage } from '@cheeseoclock/shared-types
 import type { ReportExtras } from './exporters';
 
 /**
- * Team & leakage's own channels for paper and file (migrations 0040 / 0041):
+ * Team & leakage's own channels for paper and file (migrations 0042 / 0043):
  * the period's WHOLE cash drawer log (reports:drawerLog, 200 a read) and its
  * deleted test orders (orders:listDeletedTests, 500 a read), read to the end.
  *

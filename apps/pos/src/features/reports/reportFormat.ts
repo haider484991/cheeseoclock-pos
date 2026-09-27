@@ -273,7 +273,7 @@ export function shiftCarryOverText(
   if (!(n > 0)) return null;
   const reason = s.carryOverReason?.trim() || 'no reason given';
   const text = `${n} unpaid ${n === 1 ? 'order' : 'orders'} carried over — ${reason} — approved by ${s.closedBy ?? 'unknown'}`;
-  // One the owner deleted as a test order afterwards (0041): the saved count stays, and says so.
+  // One the owner deleted as a test order afterwards (0043): the saved count stays, and says so.
   const deleted = Math.min(s.carriedTestDeletedCount ?? 0, n);
   if (deleted <= 0) return text;
   if (n === 1) return `${text} (later deleted as a test order)`;

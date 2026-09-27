@@ -3,7 +3,7 @@ import type { DrawerLogCounts, DrawerLogGroup, ReportDrawerLogLine, ReportShiftL
 import { fmtWhen } from './reportFormat';
 
 /**
- * The cash drawer log's words (migration 0040; Reports → Team & leakage, a
+ * The cash drawer log's words (migration 0042; Reports → Team & leakage, a
  * shift's "Drawer log", and the Excel / paper copies). Pure, so they are
  * tested on their own; every figure comes from reports:drawerLog.
  */
@@ -131,7 +131,7 @@ export function shiftDrawerUseNote(s: Pick<ReportShiftLine, 'drawerOpenCount' | 
 }
 
 /**
- * A closed shift with test orders deleted after it closed (0041): its saved
+ * A closed shift with test orders deleted after it closed (0043): its saved
  * figures stay. testDeletedCashCents is signed — cash taken for those tests
  * minus cash handed back for them on this shift — so the note says which way
  * the saved expected cash is off: a test REFUND paid out of this drawer made

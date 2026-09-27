@@ -59,7 +59,7 @@ const RECEIVER_FILL: Readonly<Record<string, Readonly<Record<string, string | nu
 
 /**
  * Deletion wins, both ways, for orders and their payments (a test order the
- * owner deleted, 0041): the two tills must never disagree about whether a
+ * owner deleted, 0043): the two tills must never disagree about whether a
  * sale exists.
  *  - A delete that arrives stale (this till changed the row since) is still
  *    applied — only deleted_at and the delete_* columns, the version left

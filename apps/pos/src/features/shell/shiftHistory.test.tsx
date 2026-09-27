@@ -234,7 +234,7 @@ describe('the shift history panel', () => {
     expect(words.match(/Closing note:/g)).toHaveLength(1);
   });
 
-  it('with the drawer log (0040) and deleted test orders (0041), one layout: each shift keeps its notes and carry-over, adds its deleted-test notes and its own Drawer log; the period’s whole log sits right under the history', () => {
+  it('with the drawer log (0042) and deleted test orders (0043), one layout: each shift keeps its notes and carry-over, adds its deleted-test notes and its own Drawer log; the period’s whole log sits right under the history', () => {
     const out = render(
       <TeamLeakageTab
         now={NOW}
@@ -291,7 +291,7 @@ describe('the shift history panel', () => {
       line({ id: 'sc', openedAt: '2026-09-25T07:00:00.000Z', closedAt: '2026-09-25T20:00:00.000Z', closedBy: 'Sara', carriedUnpaidCount: n, carryOverReason: 'Rider still out', ...(deleted === undefined ? {} : { carriedTestDeletedCount: deleted }) });
     expect(shiftCarryOverText(carried(1, 1))).toBe('1 unpaid order carried over — Rider still out — approved by Sara (later deleted as a test order)');
     expect(shiftCarryOverText(carried(3, 2))).toBe('3 unpaid orders carried over — Rider still out — approved by Sara (2 of them later deleted as test orders)');
-    // None deleted, or a till before 0041: as 0.7.21 said it.
+    // None deleted, or a till before 0043: as 0.7.21 said it.
     expect(shiftCarryOverText(carried(2, 0))).toBe('2 unpaid orders carried over — Rider still out — approved by Sara');
     expect(shiftCarryOverText(carried(2))).toBe('2 unpaid orders carried over — Rider still out — approved by Sara');
     // Never more than were carried; nothing carried, nothing said.

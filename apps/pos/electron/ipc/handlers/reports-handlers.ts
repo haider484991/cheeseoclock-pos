@@ -341,7 +341,7 @@ export function registerReportsHandlers(ctx: HandlerContext, deps: ReportsHandle
     return ok(buildAnalytics(ctx.db, 'variance', job, new Date(), { longReads: false }) as ReportVariance);
   });
 
-  // ---- The cash drawer log (migration 0040) ----
+  // ---- The cash drawer log (migration 0042) ----
 
   // Every drawer open, a page at a time: a small keyset read on indexed
   // columns, so it runs here rather than in the worker. report.view (the

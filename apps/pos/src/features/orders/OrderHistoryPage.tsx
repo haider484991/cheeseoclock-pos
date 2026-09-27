@@ -58,7 +58,7 @@ export function OrderHistoryPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [deletedOpen, setDeletedOpen] = useState(false);
   const { toast } = useToast();
-  // The owner's "Deleted test orders (n)" for the page's dates (0041).
+  // The owner's "Deleted test orders (n)" for the page's dates (0043).
   const isOwner = useSessionStore((st) => st.user?.role === 'admin');
 
   // Any filter change goes back to the first page.

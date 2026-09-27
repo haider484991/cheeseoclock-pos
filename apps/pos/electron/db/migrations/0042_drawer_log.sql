@@ -1,4 +1,6 @@
--- 0040_drawer_log.sql
+-- 0042_drawer_log.sql
+-- (Numbered 0042: v0.7.22 released 0040_foodpanda_deal_and_terms.sql and
+-- 0041_channel_terms_uplift_and_fee.sql first.)
 -- The cash drawer log: EVERY time the till opens the cash drawer, not only by
 -- hand (owner, 27 Sep 2026: "I don't see the logs who drawers used").
 --

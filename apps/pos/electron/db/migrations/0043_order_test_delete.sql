@@ -1,4 +1,6 @@
--- 0041_order_test_delete.sql
+-- 0043_order_test_delete.sql
+-- (Numbered 0043: v0.7.22 released 0040 and 0041 first; runs after
+-- 0042_drawer_log.sql.)
 -- Test orders the OWNER deletes (owner, 27 Sep 2026: "the test order delete
 -- option only for admin and restock back option").
 --

@@ -25,7 +25,7 @@ export function useDeletedTests(sinceIso: string, untilIso: string, enabled = tr
 }
 
 /**
- * The owner's list of test orders deleted (migration 0041), by when the order
+ * The owner's list of test orders deleted (migration 0043), by when the order
  * was taken: Reports → Team & leakage, and Order History's "Deleted test
  * orders" link for the page's dates. Read-only — no reprint, no restore: a
  * deleted test order can't be brought back.

@@ -239,7 +239,7 @@ describe.skipIf(!DatabaseSync)('the drawer pulse on the no-printer file', () => 
     try {
       printSpooler.init(db);
       printSpooler.resetAdapter();
-      // No row, no pulse (0040): the open is on record first, and settled by the pulse.
+      // No row, no pulse (0042): the open is on record first, and settled by the pulse.
       const { recordDrawerOpen } = await import('../db/repositories/drawer-open-repo.js');
       db.prepare(
         `INSERT OR IGNORE INTO users (id, full_name, pin_hash, role, created_at, updated_at, device_id)

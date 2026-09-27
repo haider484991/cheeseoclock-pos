@@ -1,5 +1,5 @@
 /**
- * The website hears about a test order the owner deleted (migration 0041):
+ * The website hears about a test order the owner deleted (migration 0043):
  * the bridge's status push maps a deleted order to 'cancelled', and a site
  * that already holds a final status keeps it. The website's API is a stand-in
  * that records what it was sent; the database is real (every migration,

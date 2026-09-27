@@ -377,7 +377,7 @@ describe('CSV for Excel', () => {
     // No-sale drawer opens per person, and the list of each one.
     const team = tabCsv('team', report(), period);
     expect(team).toContain('Cancelled orders,Drawer opened with no sale');
-    // …then every drawer open (0040): none on this made-up line.
+    // …then every drawer open (0042): none on this made-up line.
     expect(team).toMatch(/Ali.*,215\.40,10\.00,1,2,\r\n/);
     const withOpen = tabCsv(
       'team',
@@ -770,7 +770,7 @@ describe('food cost, in plain words', () => {
   });
 });
 
-describe('Team & leakage in the file and on paper: the drawer log and the deleted test orders (0040 / 0041)', () => {
+describe('Team & leakage in the file and on paper: the drawer log and the deleted test orders (0042 / 0043)', () => {
   const extras = {
     drawerLog: {
       rows: Array.from({ length: 30 }, (_, i) => ({

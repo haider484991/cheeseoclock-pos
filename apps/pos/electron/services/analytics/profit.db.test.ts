@@ -20,7 +20,7 @@
  *     sold and the ones that can't be placed yet listed apart;
  *   - estimates kept between asks (the Reports worker): reused, worked out
  *     again for an order with a new stock row, all dropped on a price change;
- *   - test orders the owner deleted (0041) are in no profit figure — sales,
+ *   - test orders the owner deleted (0043) are in no profit figure — sales,
  *     food cost, sent-not-paid, channels, categories, Menu, the menu map,
  *     delivery areas, What-if — as the main process and the Reports worker
  *     work them out; the food booked as waste is Waste's own line, "Test
@@ -493,7 +493,7 @@ live('the menu map (costing spec 4.8)', () => {
   });
 });
 
-live('test orders the owner deleted (0041): in no profit figure; their food is Waste, on its own line', () => {
+live('test orders the owner deleted (0043): in no profit figure; their food is Waste, on its own line', () => {
   it('sales, food cost, sent-not-paid, channels, categories, Menu, the menu map, delivery areas and What-if leave them out — the Reports worker too', async () => {
     const s = await shop();
     s.sale([['fajitaM', 2]]);

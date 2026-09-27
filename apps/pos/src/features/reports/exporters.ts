@@ -100,7 +100,7 @@ export interface ReportExtras {
   trends?: ReportTrends | null;
   variance?: ReportVariance | null;
   /**
-   * Team & leakage (migrations 0040 / 0041): the period's whole cash drawer
+   * Team & leakage (migrations 0042 / 0043): the period's whole cash drawer
    * log (reports:drawerLog) and its deleted test orders.
    */
   drawerLog?: { rows: ReportDrawerLogLine[]; counts: DrawerLogCounts; logSince: string | null } | null;
@@ -401,7 +401,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
         s.closingNote?.trim() || null,
         s.carriedUnpaidCount ?? 0,
         (s.carriedUnpaidCount ?? 0) > 0 ? s.carryOverReason?.trim() || null : null,
-        // The drawer log (0040) and the owner's deleted test orders (0041), after the columns 0.7.21 shipped.
+        // The drawer log (0042) and the owner's deleted test orders (0043), after the columns 0.7.21 shipped.
         s.drawerOpenCount ?? null,
         s.testDeletedCashCents ? rs(s.testDeletedCashCents) : null,
         s.carriedTestDeletedCount ? s.carriedTestDeletedCount : null,

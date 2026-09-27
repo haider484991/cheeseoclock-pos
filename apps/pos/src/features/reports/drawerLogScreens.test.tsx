@@ -1,5 +1,5 @@
 /**
- * The cash drawer log on screen and in the file (migration 0040; the owner,
+ * The cash drawer log on screen and in the file (migration 0042; the owner,
  * Reports → Team & leakage): why each opening happened, for how much, and
  * whether the drawer opened; the counts; a shift's note; the CSV. Static
  * renders (react-dom/server) with made-up figures; nothing calls the till.

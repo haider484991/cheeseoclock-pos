@@ -109,12 +109,12 @@ export interface CashMovement {
 }
 
 /**
- * Why the till opened the cash drawer (migrations 0028 and 0040). By hand:
+ * Why the till opened the cash drawer (migrations 0028 and 0042). By hand:
  *  - no_sale: the Open drawer button (change, checking a note, …);
  *  - count: "Open drawer to count" while closing the shift — once per shift;
  *    any later one is recorded as no_sale;
  *  - test: Test drawer under Settings → Printers.
- * For cash (0040), written in the same transaction as the cash:
+ * For cash (0042), written in the same transaction as the cash:
  *  - sale: a cash payment (also cash collected on delivery or at the table);
  *  - refund: cash handed back;
  *  - float: the float at shift open;
@@ -133,7 +133,7 @@ export type DrawerOpenKind =
 
 /**
  * What happened when the till pulsed the drawer for a drawer_opens row
- * (0040). Null on the row while nobody knows yet.
+ * (0042). Null on the row while nobody knows yet.
  *  - opened: the printer took the pulse;
  *  - already_open: a later pulse (another sale, Open drawer) opened it first;
  *  - not_opened: it surely did not open (use the key);

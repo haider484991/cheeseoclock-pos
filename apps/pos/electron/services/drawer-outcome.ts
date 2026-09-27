@@ -1,7 +1,7 @@
 import { DRAWER_TOO_LATE_CODE, type DrawerOutcome, type PrintResult } from '@cheeseoclock/shared-types';
 
 /**
- * What a drawer pulse did, in the words the drawer log keeps (0040) and the
+ * What a drawer pulse did, in the words the drawer log keeps (0042) and the
  * counter is told. Pure: no printer, no database — the spooler and
  * drawer-service use it, and it is tested on its own.
  */

@@ -118,7 +118,7 @@ const opens = () =>
   db
     .prepare(`SELECT kind, reason, user_id AS userId, approved_by_user_id AS approver FROM drawer_opens ORDER BY rowid`)
     .all() as Array<Record<string, unknown>>;
-/** What the drawer log says each open did (0040: settled by its pulse). */
+/** What the drawer log says each open did (0042: settled by its pulse). */
 const results = () =>
   db.prepare(`SELECT outcome, outcome_note AS note FROM drawer_opens ORDER BY rowid`).all() as Array<Record<string, unknown>>;
 
@@ -256,7 +256,7 @@ describe.skipIf(!DatabaseSync)('Open drawer to count', () => {
     await openDrawerNoSale(db, MANAGER, DEV, { kind: 'count' });
     await openDrawerNoSale(db, MANAGER, DEV, { kind: 'count' });
     // Pressing it again shows up as a no-sale open (after the float the shift
-    // wrote when it opened: 0040 — this test pulses only for the count).
+    // wrote when it opened: 0042 — this test pulses only for the count).
     expect(opens().map((o) => o['kind'])).toEqual(['float', 'count', 'no_sale']);
     expect(h.sends).toHaveLength(2);
   });
@@ -267,7 +267,7 @@ describe.skipIf(!DatabaseSync)('Open drawer to count', () => {
     const shift = openShift(db, { openingCashCents: 0 }, { userId: 'u_cash', deviceId: DEV });
     const r = await openDrawerNoSale(db, CASHIER, DEV, { kind: 'count', approverPin: 'Manager-pass-7' });
     expect(r.opened).toBe(true);
-    // The float the shift wrote when it opened (0040), then the count, approved by the manager (0.7.21).
+    // The float the shift wrote when it opened (0042), then the count, approved by the manager (0.7.21).
     expect(opens()).toEqual([
       { kind: 'float', reason: null, userId: 'u_cash', approver: null },
       { kind: 'count', reason: null, userId: 'u_cash', approver: 'u_mgr' },

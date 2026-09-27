@@ -31,7 +31,7 @@ export const MANUAL_REASON: PrintReason = 'reprint';
  * is not in the log: a later press on such an order counts only from its
  * second one.) Rows logged before the owner's rule follow the same test.
  *
- * Orders the owner deleted as tests (0041) are left out. Shared by Order
+ * Orders the owner deleted as tests (0043) are left out. Shared by Order
  * History (reprintCounts) and Reports → Staff (print-report.ts), so both show
  * the same number. `filter` narrows the rows first (placeholders only, never
  * values; it sees document_prints' own columns, unqualified).

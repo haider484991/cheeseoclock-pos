@@ -81,7 +81,7 @@ export function shiftDrawerBanner(shifts: readonly ReportShiftLine[]): { text: s
 
 /**
  * Staff and cash drawer: who took the orders; the shift history (0039: its
- * notes and carried-over orders; 0040/0041: each shift's own drawer log, one
+ * notes and carried-over orders; 0042/0043: each shift's own drawer log, one
  * tap from its row, and the cash of test orders deleted after it closed);
  * and the period's whole drawer log under both.
  */
@@ -117,7 +117,7 @@ export function StaffSection({
               s.discountCents > 0 ? formatCents(s.discountCents) : '—',
               s.voidCount > 0 ? <span key="v" className="font-semibold text-amber-700 dark:text-amber-400">{s.voidCount}</span> : '—',
               s.noSaleOpens > 0 ? <span key="d" className="font-semibold text-amber-700 dark:text-amber-400">{s.noSaleOpens}</span> : '—',
-              // Every time the till opened the drawer for them: cash sales, refunds, cash in / out, float… (0040).
+              // Every time the till opened the drawer for them: cash sales, refunds, cash in / out, float… (0042).
               (s.drawerOpens ?? 0) > 0 ? s.drawerOpens : '—',
               // Receipts / bills printed AGAIN by hand, after one had gone out (print-log-sql.ts).
               (s.reprints ?? 0) > 0 ? <span key="r" className="font-semibold text-amber-700 dark:text-amber-400">{s.reprints}</span> : '—',
@@ -173,13 +173,13 @@ export function StaffSection({
                     {shiftCarryOverText(s)}
                   </div>
                 )}
-                {/* A test order of this shift deleted after it closed: the saved figures stay, the cash is noted (0041). */}
+                {/* A test order of this shift deleted after it closed: the saved figures stay, the cash is noted (0043). */}
                 {shiftTestDeletedNote(s) && (
                   <div className="mt-0.5 whitespace-normal break-words text-xs font-medium text-amber-700 dark:text-amber-400">
                     {shiftTestDeletedNote(s)}
                   </div>
                 )}
-                {/* This shift's own drawer log (0040): every opening, who, why, the result. */}
+                {/* This shift's own drawer log (0042): every opening, who, why, the result. */}
                 <button
                   type="button"
                   onClick={() => setLogShift(s)}
@@ -214,7 +214,7 @@ export function StaffSection({
 }
 
 /**
- * The owner's deleted test orders taken in the period (0041): "Test orders
+ * The owner's deleted test orders taken in the period (0043): "Test orders
  * deleted — N (Rs X)". Read-only; they are in no other figure of Reports.
  */
 function DeletedTestsSection({ sinceIso, untilIso }: { sinceIso: string; untilIso: string }) {

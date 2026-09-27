@@ -494,7 +494,7 @@ export function decrementForOrder(
   orderId: string,
   actor: Actor,
 ): Array<{ ingredientId: string; name: string; unit: string; resultingQty: number; threshold: number }> {
-  // A deleted order (a test the owner deleted, 0041; a discarded cart) takes
+  // A deleted order (a test the owner deleted, 0043; a discarded cart) takes
   // nothing more: its stock was settled when it was deleted.
   const live = db.prepare(`SELECT 1 AS x FROM orders WHERE id = ? AND deleted_at IS NULL`).get(orderId);
   if (!live) return [];

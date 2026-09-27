@@ -209,7 +209,7 @@ describe('the Profit tab (costing spec Phase 9)', () => {
     expect(out).not.toMatch(/contribution|COGS|bps/i);
   });
 
-  it('test orders the owner deleted (0041): their food is Waste on a line of its own, as on Food cost & stock — on screen and in the file', () => {
+  it('test orders the owner deleted (0043): their food is Waste on a line of its own, as on Food cost & stock — on screen and in the file', () => {
     const withTests: ReportProfitTab = {
       ...PROFIT,
       wasteByReason: [

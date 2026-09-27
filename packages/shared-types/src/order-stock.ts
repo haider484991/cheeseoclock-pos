@@ -11,7 +11,7 @@ export type FoodMade = 'made' | 'not_made';
 
 /**
  * Which action ended the order's hold on its stock: a cancel, a full refund,
- * or the owner deleting it as a test order (0041).
+ * or the owner deleting it as a test order (0043).
  */
 export type OrderStockHow = 'cancelled' | 'refunded' | 'test_deleted';
 

@@ -576,7 +576,7 @@ const NO_SALE_KINDS = `('no_sale', 'test')`;
 
 /**
  * The opens BY HAND — the Open drawer button, "Open drawer to count" and Test
- * drawer. Since the drawer log (0040) drawer_opens also holds every cash
+ * drawer. Since the drawer log (0042) drawer_opens also holds every cash
  * sale, refund, float and cash in / out, so the "opened by hand" figure and
  * list name these kinds; the whole log is reports:drawerLog.
  */
@@ -594,7 +594,7 @@ function getNoSaleOpensByUser(db: AppDatabase, range: ReportRange): Map<string, 
   return new Map(rows.map((r) => [r.userId, Number(r.n)]));
 }
 
-/** Who had the drawer opened in the period, and how often — every kind (the drawer log, 0040). */
+/** Who had the drawer opened in the period, and how often — every kind (the drawer log, 0042). */
 function getDrawerOpensByUser(db: AppDatabase, range: ReportRange): Map<string, number> {
   const rows = db
     .prepare(
@@ -663,9 +663,9 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
  * closed; a shift still open has none yet. The notes typed when it was
  * opened and when it was closed come with it, each on its own, and the
  * unpaid orders its close carried over, with the reason (0039); every
- * opening of its drawer (0040); and, never rewriting what was saved, the
+ * opening of its drawer (0042); and, never rewriting what was saved, the
  * cash of its test orders the owner deleted after it closed and how many of
- * the orders it carried over were later deleted as tests (0041).
+ * the orders it carried over were later deleted as tests (0043).
  */
 function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'] {
   return db
@@ -686,7 +686,7 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
                 WHERE d.shift_id = s.id AND d.deleted_at IS NULL AND d.kind IN ${NO_SALE_KINDS}) AS noSaleOpens,
               (SELECT COUNT(*) FROM drawer_opens d
                 WHERE d.shift_id = s.id AND d.deleted_at IS NULL) AS drawerOpenCount,
-              -- Test orders deleted AFTER the shift closed (0041): the saved
+              -- Test orders deleted AFTER the shift closed (0043): the saved
               -- expected / counted / short-over are never rewritten, so the
               -- cash is noted instead (signed: sales less refunds).
               COALESCE((SELECT SUM(p.amount_cents) FROM payments p
@@ -700,7 +700,7 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
               NULLIF(TRIM(s.carry_over_reason), '') AS carryOverReason,
               -- Of the orders its close carried over (0039: one audit row each,
               -- 'carried_over_unpaid'), those the owner later deleted as tests
-              -- (0041). Deleted test orders are few: walked by their own index,
+              -- (0043). Deleted test orders are few: walked by their own index,
               -- then each one's audit rows by entity. Only for a close that
               -- carried any.
               CASE WHEN COALESCE(s.carried_unpaid_count, 0) > 0 THEN
@@ -1512,7 +1512,7 @@ export const ORDER_WASTE_SQL = `
 
 /**
  * The waste of test orders started in [since, until) that the owner deleted
- * (0041), whatever their status — "Don't put it back" books the food as
+ * (0043), whatever their status — "Don't put it back" books the food as
  * waste, and so may a cancel before the delete. Reason 'test_order'. The
  * query above keeps o.deleted_at IS NULL, so nothing is counted twice and
  * Waste still matches the waste the stock ledger holds.

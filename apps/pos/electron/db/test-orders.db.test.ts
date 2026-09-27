@@ -1,7 +1,7 @@
 /**
  * Deleting a TEST order — the owner only (owner, 27 Sep 2026: "the test
  * order delete option only for admin and restock back option"; migration
- * 0041) — on a real database built from every migration, foreign keys on,
+ * 0043) — on a real database built from every migration, foreign keys on,
  * through the real repositories in the order the IPC handlers call them:
  *  - every status but a cart still being rung up, each with its effect on
  *    stock ("Put the stock back?" — yes: as if never made, even after a

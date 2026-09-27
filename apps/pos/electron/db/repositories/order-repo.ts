@@ -1403,7 +1403,7 @@ export interface TenderInputItem {
 }
 
 /**
- * An order after money changed hands, and the drawer_opens row (0040) its
+ * An order after money changed hands, and the drawer_opens row (0042) its
  * drawer pulse is for — written in the same transaction as the cash, only
  * when cash moved (null for card, wallet or Foodpanda). The handler passes
  * the id to the spooler: no row, no pulse.
@@ -1566,7 +1566,7 @@ export interface OrderCloseResult {
   /** The status it had just before (the kitchen gets a CANCELLED slip while it was cooking). */
   statusBefore: OrderStatus;
   /**
-   * The drawer_opens row (0040) for cash handed back by THIS refund, written
+   * The drawer_opens row (0042) for cash handed back by THIS refund, written
    * in the same transaction; null when no cash went back (a card refund, a
    * cancel of an unpaid order).
    */
@@ -2657,7 +2657,7 @@ export function markOrderDelivered(
 }
 
 // -----------------------------------------------------------------------------
-// Deleting a test order — the owner only (migration 0041)
+// Deleting a test order — the owner only (migration 0043)
 // -----------------------------------------------------------------------------
 
 /** The owner's refusals, word for word (the dialog shows them as they are). */

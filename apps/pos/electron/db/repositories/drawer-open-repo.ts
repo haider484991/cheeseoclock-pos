@@ -15,7 +15,7 @@ import type {
 } from '@cheeseoclock/shared-types';
 
 /**
- * The cash drawer log (migrations/0028_drawer_opens.sql + 0040_drawer_log.sql):
+ * The cash drawer log (migrations/0028_drawer_opens.sql + 0042_drawer_log.sql):
  * one synced row plus a hash-chained audit entry (action drawer_<kind>) for
  * EVERY time the till opens the cash drawer:
  *  - by hand — Open drawer (no sale), "Open drawer to count" at close, Test
@@ -48,7 +48,7 @@ const OUTCOMES: ReadonlySet<string> = new Set<DrawerOutcome>(['opened', 'already
 /** Longest reason kept — the quick chips are one or two words. */
 export const DRAWER_REASON_MAX = 80;
 
-/** Setting written by migration 0040: when the drawer log started on this till (ISO). */
+/** Setting written by migration 0042: when the drawer log started on this till (ISO). */
 export const DRAWER_LOG_SINCE_KEY = 'drawer.logSince';
 
 /** The note on a row the till never settled because it stopped first (boot sweep). */
@@ -294,7 +294,7 @@ export function settleDrawerOpen(
   })();
 }
 
-/** When the drawer log started on this till (null on a database that never ran 0040). */
+/** When the drawer log started on this till (null on a database that never ran 0042). */
 export function drawerLogSince(db: AppDatabase): string | null {
   const v = getSettingRaw(db, DRAWER_LOG_SINCE_KEY);
   return typeof v === 'string' && v ? v : null;

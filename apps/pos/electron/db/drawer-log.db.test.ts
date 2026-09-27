@@ -1,6 +1,6 @@
 /**
  * The cash drawer log (owner, 27 Sep 2026: "I don't see the logs who drawers
- * used"; migration 0040) on a real database built from every migration,
+ * used"; migration 0042) on a real database built from every migration,
  * foreign keys on, through the real repositories:
  *  - EXACTLY one drawer_opens row per event that opens the drawer, written in
  *    the SAME transaction as the cash: a cash sale (the cash part only), cash

@@ -679,7 +679,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     return ok(mayViewStock(s) ? status : stockStatusForCounter(status));
   });
 
-  // ---- Test orders the owner deletes (migration 0041) ----
+  // ---- Test orders the owner deletes (migration 0043) ----
   // The owner (admin) login only — a manager or cashier is refused before
   // anything is read — and the delete itself needs the owner's PIN or
   // password typed again, so an owner login left open at the counter can't

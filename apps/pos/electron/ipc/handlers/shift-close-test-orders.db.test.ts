@@ -1,6 +1,6 @@
 /**
- * Closing the shift (0.7.21) meets the owner's "Delete test order" (0041)
- * and the drawer log (0040), through the real orders, shifts and reports IPC
+ * Closing the shift (0.7.21) meets the owner's "Delete test order" (0043)
+ * and the drawer log (0042), through the real orders, shifts and reports IPC
  * handlers and the real repositories, on a database built from every
  * migration with the made-up costing shop:
  *

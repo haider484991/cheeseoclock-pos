@@ -3,7 +3,7 @@ import type { OrderStockLine, StockSettlement } from './order-stock.js';
 
 /**
  * Deleting a test order — the OWNER only (owner, 27 Sep 2026; migration
- * 0041). The order disappears from sales, reports, the shift's cash and the
+ * 0043). The order disappears from sales, reports, the shift's cash and the
  * customer's history, stays in the owner's list of deleted test orders, and
  * can't be brought back. Only on the till that took the order and all its
  * payments, and never an order that went to FBR in production.

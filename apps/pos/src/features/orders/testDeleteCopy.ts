@@ -10,7 +10,7 @@ import type {
 import { PAYMENT_LABELS, shortOrderNumber } from './historyFilters';
 
 /**
- * The words of "Delete test order" (the owner only, migration 0041): the
+ * The words of "Delete test order" (the owner only, migration 0043): the
  * dialog, the toast after it and the owner's list of deleted test orders.
  * Pure, so they are tested on their own. The main process decides what may
  * be deleted and does it (order-repo deleteTestOrder); these only say it.

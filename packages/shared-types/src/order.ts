@@ -75,7 +75,7 @@ export interface Order {
   /**
    * Set only on an order read with its deleted ones (getOrderSnapshot
    * includeDeleted): when and by whom it was deleted, why, and how
-   * (migration 0041: 'test' — deleted by the owner as a test order; a
+   * (migration 0043: 'test' — deleted by the owner as a test order; a
    * discarded draft carries no kind). Deleted orders never reach a screen.
    */
   deletedAt?: string | null;
@@ -86,7 +86,7 @@ export interface Order {
   deleteStock?: TestDeleteStock | null;
 }
 
-/** How an order was deleted: 'test' — the owner deleted it as a test order (0041). */
+/** How an order was deleted: 'test' — the owner deleted it as a test order (0043). */
 export type OrderDeleteKind = 'test';
 
 /**

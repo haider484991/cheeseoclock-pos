@@ -966,7 +966,7 @@ export function recordPurchase(
       if (!getCurrentShift(db, actor.deviceId)) throw new Error('No shift is open on this till — open a shift first, or untick "Paid from the drawer"');
     }
     const q = writeQuickPurchase(db, input, actor, { fromDrawer, payoutReason: null });
-    // The payout's drawer open (0040) is written with it, in this transaction.
+    // The payout's drawer open (0042) is written with it, in this transaction.
     let payout: { id: string; drawerOpenId: string } | null = null;
     if (fromDrawer) {
       payout = recordCashMovement(

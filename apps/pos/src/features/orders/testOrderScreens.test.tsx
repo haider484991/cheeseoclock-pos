@@ -1,5 +1,5 @@
 /**
- * Deleting a test order on screen (the owner only; migration 0041): who sees
+ * Deleting a test order on screen (the owner only; migration 0043): who sees
  * the button, the dialog's words, when "Delete test order" can be pressed, a
  * refusal shown in its own words, the toast after, and the owner's list of
  * deleted test orders. Static renders (react-dom/server) with made-up

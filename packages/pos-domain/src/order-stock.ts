@@ -142,7 +142,7 @@ export type OrderStockNoteKind =
 
 /**
  * The note on a stock row that settled an order. One place, so the labels can
- * read it back. A test order the owner deleted (0041) reads "Test order
+ * read it back. A test order the owner deleted (0043) reads "Test order
  * deleted, not made — put back" / "Test order deleted after cooking — counted
  * as waste": the endings are the same, so orderStockNoteKind (and an older
  * till's applyOtherTillReturn) still read them.

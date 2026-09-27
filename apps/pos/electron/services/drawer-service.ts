@@ -25,7 +25,7 @@ export { drawerOutcome } from './drawer-outcome.js';
  * that row and settles its result (opened / did not open / may not have…) in
  * the drawer log. The approval rules live here rather than in the IPC handler
  * so they can be tested. The opens for cash (sales, refunds, the float, cash
- * in / out) are written by the repositories that move the cash (0040).
+ * in / out) are written by the repositories that move the cash (0042).
  */
 
 export class DrawerOpenRefused extends Error {

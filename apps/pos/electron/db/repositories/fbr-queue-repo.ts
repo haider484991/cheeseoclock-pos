@@ -249,7 +249,7 @@ export function getFbrDebitNotes(db: AppDatabase, orderId: string, refIds: reado
 }
 
 /**
- * A test order was deleted (0041): its submissions still waiting — pending,
+ * A test order was deleted (0043): its submissions still waiting — pending,
  * or failed and waiting for a retry — are never sent: 'skipped', with why.
  * Only noop or sandbox rows can be here (an order with a production row is
  * never deleted). Pure-local, like the rest of this queue; the order's

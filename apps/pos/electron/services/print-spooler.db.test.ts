@@ -90,7 +90,7 @@ vi.mock('../adapters/printer/factory.js', () => ({
   }),
 }));
 vi.mock('../db/repositories/order-repo.js', () => ({
-  // A deleted order (a test the owner deleted, 0041) is found only with includeDeleted, as in order-repo.
+  // A deleted order (a test the owner deleted, 0043) is found only with includeDeleted, as in order-repo.
   getOrderSnapshot: (_db: unknown, id: string, opts: { includeDeleted?: boolean } = {}) => {
     const snap = h.snapshots.get(id);
     if (!snap) return null;
@@ -262,7 +262,7 @@ function queueRows(db: AppDatabase, orderId: string, kind?: string) {
 }
 
 /**
- * The drawer_opens row the repository writes WITH the cash (migration 0040):
+ * The drawer_opens row the repository writes WITH the cash (migration 0042):
  * the pulse is for it — no row, no pulse.
  */
 function cash(kind: 'sale' | 'refund' = 'sale'): { drawerOpenId: string } {
@@ -273,7 +273,7 @@ function cash(kind: 'sale' | 'refund' = 'sale'): { drawerOpenId: string } {
 function hand(kind: DrawerOpenKind = 'no_sale'): string {
   return recordDrawerOpen(db, { kind }, { userId: 'u1', deviceId: 'dev-test' }).id;
 }
-/** What the drawer log says about one open (0040). */
+/** What the drawer log says about one open (0042). */
 function drawerRow(id: string): { outcome: string | null; note: string | null } {
   return db.prepare(`SELECT outcome, outcome_note AS note FROM drawer_opens WHERE id = ?`).get(id) as {
     outcome: string | null;
@@ -847,7 +847,7 @@ describe.skipIf(!DatabaseSync)('kitchen: a cancelled order', () => {
   });
 });
 
-describe.skipIf(!DatabaseSync)('the drawer log: every pulse is for a row, and settles it (0040)', () => {
+describe.skipIf(!DatabaseSync)('the drawer log: every pulse is for a row, and settles it (0042)', () => {
   // A real receipt printer is set up (with none, a pulse that "went" is 'no_printer').
   beforeEach(async () => {
     const { setReceiptPrinterConfig } = await import('./printer-config.js');
@@ -1005,7 +1005,7 @@ describe.skipIf(!DatabaseSync)('the drawer log: every pulse is for a row, and se
   });
 });
 
-describe.skipIf(!DatabaseSync)('a test order the owner deleted (0041)', () => {
+describe.skipIf(!DatabaseSync)('a test order the owner deleted (0043)', () => {
   const deleteAsTest = (oid: string) =>
     Object.assign(h.snapshots.get(oid)!.order, {
       deletedAt: new Date().toISOString(),

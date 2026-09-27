@@ -3,7 +3,7 @@ import { uuidSchema } from './common.js';
 import { liveOrderStatusSchema } from './order.js';
 
 /**
- * Deleting a test order (the owner only; migration 0041): what the dialog
+ * Deleting a test order (the owner only; migration 0043): what the dialog
  * sends. The main process checks it again, in the same words, before
  * anything is written (order-repo checkTestDelete).
  */

@@ -147,9 +147,9 @@ live('shift history: every shift that overlaps the period', () => {
       cashMovementCount: 1,
       // The count at close is not a no-sale open.
       noSaleOpens: 1,
-      // Every opening of the drawer on the shift (the drawer log, 0040): the no-sale and the count.
+      // Every opening of the drawer on the shift (the drawer log, 0042): the no-sale and the count.
       drawerOpenCount: 2,
-      // No test order of it was deleted after it closed (0041).
+      // No test order of it was deleted after it closed (0043).
       testDeletedCashCents: 0,
       openingNote: null,
       closingNote: null,

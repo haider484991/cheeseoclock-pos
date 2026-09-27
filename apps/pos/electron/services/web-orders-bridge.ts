@@ -1241,7 +1241,7 @@ class WebOrdersBridge {
     }>;
 
     for (const row of rows) {
-      // An order deleted here (the owner deleting a test order, 0041) is
+      // An order deleted here (the owner deleting a test order, 0043) is
       // cancelled as far as the customer is concerned. A site that already
       // holds a final status keeps it (it answers updated:false below).
       const webStatus = row.pos_deleted_at ? 'cancelled' : mapPosStatusToWeb(row.pos_status);

@@ -605,7 +605,7 @@ export interface IpcContract {
     response: ApiResult<OrderStockStatus>;
   };
   /**
-   * Deleting a TEST order (migration 0041) — the owner (admin) only, with the
+   * Deleting a TEST order (migration 0043) — the owner (admin) only, with the
    * owner's PIN or password typed again. What the dialog shows first:
    * whether it may be deleted (and why not, in plain words), its stock, its
    * cash per shift, the kitchen slip and the website. Nothing is written.
@@ -1649,7 +1649,7 @@ export interface IpcContract {
     response: ApiResult<ReportVariance>;
   };
   /**
-   * The cash drawer log (migration 0040): every time the till opened the
+   * The cash drawer log (migration 0042): every time the till opened the
    * drawer — cash sales, refunds, cash in and out, the float, counting, no
    * sale, tests — who, why, for how much, and whether it opened. Newest
    * first, a page at a time. report.view (the owner).

@@ -300,7 +300,7 @@ function dueNow(orderId: string): void {
 let db: AppDatabase;
 const spooler = async () => (await import('./print-spooler.js')).printSpooler;
 /**
- * The drawer_opens row the repository writes WITH the cash (migration 0040):
+ * The drawer_opens row the repository writes WITH the cash (migration 0042):
  * the drawer pulse is for it — no row, no pulse.
  */
 function cash(kind: 'sale' | 'refund' = 'sale'): { drawerOpenId: string } {

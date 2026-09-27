@@ -52,7 +52,7 @@ export interface DrawerJobPayload {
   kind: 'drawer';
   orderId: string;
   /**
-   * The drawer_opens row this pulse is for (migration 0040), written in the
+   * The drawer_opens row this pulse is for (migration 0042), written in the
    * same transaction as the cash: the job settles it (opened / not opened /
    * unsure…). Absent on a pulse an older version queued.
    */

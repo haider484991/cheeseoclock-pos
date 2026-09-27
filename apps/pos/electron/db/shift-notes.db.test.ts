@@ -150,7 +150,7 @@ live('shift notes: the opening note and the closing note, each kept', () => {
          700000, 700000, 0, 'Old shift, one note', ?, ?)`,
     ).run(DEV, T0, T0);
     // The update arrives: 0039 runs on that database, and every migration
-    // after it (0040 drawer log, 0041 test-order delete: Reports reads their
+    // after it (0042 drawer log, 0043 test-order delete: Reports reads their
     // columns too).
     for (const f of migrationFiles().filter((m) => m >= '0039')) db.exec(readFileSync(join(MIGRATIONS, f), 'utf8'));
 
