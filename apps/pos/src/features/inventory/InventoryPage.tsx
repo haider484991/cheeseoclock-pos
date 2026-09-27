@@ -4,6 +4,7 @@ import { cn } from '@cheeseoclock/ui';
 import { stockStatus } from '@cheeseoclock/pos-domain';
 import type { Ingredient } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
+import { PO_LIST_KEY, fetchPurchaseList } from './purchaseListQuery';
 import { useSessionState } from '../../components/list';
 import { IngredientsTab } from './IngredientsTab';
 import { RecipesTab } from './RecipesTab';
@@ -19,7 +20,7 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof Carrot }> = [
   { id: 'recipes', label: 'Recipes', icon: BookOpen },
   { id: 'movements', label: 'Stock history', icon: History },
   { id: 'suppliers', label: 'Suppliers', icon: Truck },
-  { id: 'pos', label: 'Purchase orders', icon: ClipboardList },
+  { id: 'pos', label: 'Purchases', icon: ClipboardList },
 ];
 
 export function InventoryPage() {
@@ -33,8 +34,8 @@ export function InventoryPage() {
     queryFn: () => ipc.inventory.listIngredients(),
   });
   const posQ = useQuery({
-    queryKey: ['inventory', 'pos', 'list'],
-    queryFn: () => ipc.inventory.listPurchaseOrders({ limit: 2000 }),
+    queryKey: PO_LIST_KEY,
+    queryFn: fetchPurchaseList,
   });
   const needBuying = (ingredientsQ.data ?? []).filter((i) => stockStatus(i) !== 'ok').length;
   const openPos = (posQ.data ?? []).filter((p) => p.status === 'draft' || p.status === 'ordered' || p.status === 'partial').length;

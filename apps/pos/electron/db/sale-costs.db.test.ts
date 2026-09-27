@@ -550,7 +550,8 @@ live('every other stock row keeps its value', () => {
     const s = await shop();
     const sup = s.r.createSupplier(s.db, { name: 'Test Supplier' }, MANAGER);
     const po = s.r.createPurchaseOrder(s.db, { supplierId: sup.id, items: [{ ingredientId: s.ing.cheese, qtyOrdered: 2000, unitCostCents: 115 }] }, MANAGER);
-    s.r.receiveDelivery(s.db, { purchaseOrderId: po.id, receipts: [{ purchaseOrderItemId: po.items[0]!.id, qtyReceivedNow: 2000 }] }, MANAGER);
+    // Received at the bill, the usual price kept (said so: a bill within 10% becomes the price by default, costing Phase 5).
+    s.r.receiveDelivery(s.db, { purchaseOrderId: po.id, updateCosts: false, receipts: [{ purchaseOrderItemId: po.items[0]!.id, qtyReceivedNow: 2000 }] }, MANAGER);
     s.r.recordStockMovement(s.db, { ingredientId: s.ing.cheese, deltaQty: -30, reason: 'waste', wasteReason: 'burnt' }, MANAGER);
     s.r.recordStockMovement(s.db, { ingredientId: s.ing.dough, deltaQty: -100, reason: 'waste' }, MANAGER);
     s.r.recordStockMovement(s.db, { ingredientId: s.ing.onion, deltaQty: -5, reason: 'count' }, MANAGER);

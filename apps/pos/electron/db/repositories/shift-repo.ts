@@ -7,6 +7,7 @@ import { writeAudit } from './audit-repo.js';
 import type {
   CashMovement,
   CashMovementType,
+  DrawerPayout,
   Shift,
   ShiftSummary,
   UUID,
@@ -404,6 +405,7 @@ interface CashMovementRow {
   user_name: string | null;
   approved_by_user_id: string | null;
   created_at: string;
+  ref_purchase_order_id: string | null;
 }
 
 function rowToCashMovement(r: CashMovementRow): CashMovement {
@@ -417,14 +419,19 @@ function rowToCashMovement(r: CashMovementRow): CashMovement {
     userName: r.user_name,
     approvedByUserId: r.approved_by_user_id as CashMovement['approvedByUserId'],
     createdAt: r.created_at,
+    refPurchaseOrderId: (r.ref_purchase_order_id ?? null) as CashMovement['refPurchaseOrderId'],
   };
 }
+
+const CASH_MOVEMENT_SELECT = `
+  m.id, m.shift_id, m.type, m.amount_cents, m.reason, m.user_id,
+  u.full_name AS user_name, m.approved_by_user_id, m.created_at, m.ref_purchase_order_id
+`;
 
 export function listCashMovements(db: AppDatabase, shiftId: string): CashMovement[] {
   const rows = db
     .prepare(
-      `SELECT m.id, m.shift_id, m.type, m.amount_cents, m.reason, m.user_id,
-              u.full_name AS user_name, m.approved_by_user_id, m.created_at
+      `SELECT ${CASH_MOVEMENT_SELECT}
          FROM cash_movements m
          LEFT JOIN users u ON u.id = m.user_id
         WHERE m.shift_id = ? AND m.deleted_at IS NULL
@@ -434,11 +441,109 @@ export function listCashMovements(db: AppDatabase, shiftId: string): CashMovemen
   return rows.map(rowToCashMovement);
 }
 
+/** One cash movement by id, or null. */
+export function findCashMovement(db: AppDatabase, id: string): CashMovement | null {
+  const row = db
+    .prepare(
+      `SELECT ${CASH_MOVEMENT_SELECT}
+         FROM cash_movements m
+         LEFT JOIN users u ON u.id = m.user_id
+        WHERE m.id = ? AND m.deleted_at IS NULL`,
+    )
+    .get(id) as CashMovementRow | undefined;
+  return row ? rowToCashMovement(row) : null;
+}
+
+/**
+ * Cash paid out of THIS till's drawer (payouts; not cash in, not rider
+ * tips), newest first, with the purchase each is linked to — for "Turn this
+ * payout into a purchase" (costing spec Phase 5). The shifts' own history on
+ * this till: the other till's payouts are its own.
+ */
+export function listDrawerPayouts(
+  db: AppDatabase,
+  deviceId: string,
+  opts: { sinceIso?: string; limit?: number } = {},
+): DrawerPayout[] {
+  const since = opts.sinceIso ?? new Date(Date.now() - 30 * 24 * 3_600_000).toISOString();
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.shift_id, m.amount_cents, m.reason, m.created_at, m.ref_purchase_order_id,
+              u.full_name AS user_name, a.full_name AS approved_by_name
+         FROM cash_movements m
+         JOIN shifts s ON s.id = m.shift_id
+         LEFT JOIN users u ON u.id = m.user_id
+         LEFT JOIN users a ON a.id = m.approved_by_user_id
+        WHERE m.type = 'payout' AND m.deleted_at IS NULL AND s.device_id = ? AND m.created_at >= ?
+        ORDER BY m.created_at DESC LIMIT ?`,
+    )
+    .all(deviceId, since, limit) as Array<{
+    id: string;
+    shift_id: string;
+    amount_cents: number;
+    reason: string;
+    created_at: string;
+    ref_purchase_order_id: string | null;
+    user_name: string | null;
+    approved_by_name: string | null;
+  }>;
+  return rows.map((r) => ({
+    id: r.id as UUID,
+    shiftId: r.shift_id as UUID,
+    amountCents: Number(r.amount_cents),
+    reason: r.reason,
+    createdAt: r.created_at,
+    userName: r.user_name,
+    approvedByName: r.approved_by_name,
+    refPurchaseOrderId: (r.ref_purchase_order_id ?? null) as UUID | null,
+  }));
+}
+
+/**
+ * Link a free-text payout to the purchase it paid for ("Turn this payout
+ * into a purchase", costing spec Phase 5): ONCE — a payout already linked
+ * is refused. Only the link changes: the amount, and so the shift's expected
+ * cash, stays exactly as it was. Synced and audited, in the caller's
+ * transaction when there is one.
+ */
+export function linkPayoutToPurchase(
+  db: AppDatabase,
+  cashMovementId: string,
+  purchaseOrderId: string,
+  actor: Actor,
+): CashMovement {
+  return db.transaction((): CashMovement => {
+    const before = findCashMovement(db, cashMovementId);
+    if (!before) throw new Error('That cash payout was not found');
+    if (before.type !== 'payout') throw new Error('Only cash taken out of the drawer can be turned into a purchase');
+    if (before.refPurchaseOrderId) throw new Error('That payout is already a purchase');
+    const now = nowIso();
+    db.prepare(
+      `UPDATE cash_movements SET ref_purchase_order_id = ?, updated_at = ?, version = version + 1
+        WHERE id = ? AND ref_purchase_order_id IS NULL`,
+    ).run(purchaseOrderId, now, cashMovementId);
+    const after = findCashMovement(db, cashMovementId)!;
+    enqueueSync(db, { entityType: 'cash_movements', entityId: cashMovementId, op: 'upsert', payload: after });
+    writeAudit(db, {
+      entityType: 'cash_movements',
+      entityId: cashMovementId,
+      action: 'link_purchase',
+      actorUserId: actor.userId,
+      before,
+      after,
+    });
+    return after;
+  })();
+}
+
 export interface RecordCashMovementInput {
   type: CashMovementType;
   amountCents: number;
   reason: string;
   approvedByUserId?: string | null;
+  /** The purchase this payout pays for (a purchase "Paid from the drawer", costing spec Phase 5). */
+  refPurchaseOrderId?: string | null;
 }
 
 /**
@@ -472,6 +577,7 @@ export function recordCashMovement(
     userId: actor.userId,
     approvedByUserId: input.approvedByUserId ?? null,
     createdAt: now,
+    refPurchaseOrderId: input.type === 'payout' ? (input.refPurchaseOrderId ?? null) : null,
   };
   writeWithSync({
     db,
@@ -485,9 +591,9 @@ export function recordCashMovement(
     writeRow: () => {
       db.prepare(
         `INSERT INTO cash_movements
-           (id, shift_id, type, amount_cents, reason, user_id, approved_by_user_id,
+           (id, shift_id, type, amount_cents, reason, user_id, approved_by_user_id, ref_purchase_order_id,
             created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       ).run(
         id,
         shift.id,
@@ -496,6 +602,7 @@ export function recordCashMovement(
         reason,
         actor.userId,
         input.approvedByUserId ?? null,
+        after.refPurchaseOrderId,
         now,
         now,
         actor.deviceId,

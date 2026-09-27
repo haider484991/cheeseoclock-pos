@@ -20,7 +20,7 @@ import {
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Ingredient, IngredientCategory, PriceKind, StockMovementReason, WasteReason } from '@cheeseoclock/shared-types';
-import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat, Tag } from 'lucide-react';
+import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat, Tag, ShoppingBasket } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
   FilterChips,
@@ -45,6 +45,7 @@ import {
 import { PriceFields, SetPriceDialog } from './SetPriceDialog';
 import { ChangeMark, PriceHistoryDrawer, SourceChip } from './PriceHistoryDrawer';
 import { initialPriceEntry, perChoices, readPriceEntry, tagView, type PriceEntry } from './price-view';
+import { RecordPurchaseDialog } from './RecordPurchaseDialog';
 
 const INGREDIENTS_KEY = ['inventory', 'ingredients', 'all'] as const;
 
@@ -55,6 +56,8 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
   const { toast } = useToast();
   const [editing, setEditing] = useState<Ingredient | null | 'new'>(null);
   const [movementFor, setMovementFor] = useState<Ingredient | null>(null);
+  /** "Record a purchase" open, starting with this ingredient (costing Phase 5: replaces "Delivery in"). */
+  const [purchaseFor, setPurchaseFor] = useState<Ingredient | null>(null);
   /** "Set price" open for this one (costing Phase 4). */
   const [pricing, setPricing] = useState<Ingredient | null>(null);
   /** Its price history open in the drawer. */
@@ -412,8 +415,17 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
         />
       )}
       {movementFor && (
-        <MovementDialog key={movementFor.id} ingredient={movementFor} onClose={() => setMovementFor(null)} />
+        <MovementDialog
+          key={movementFor.id}
+          ingredient={movementFor}
+          onClose={() => setMovementFor(null)}
+          onRecordPurchase={() => {
+            setMovementFor(null);
+            setPurchaseFor(movementFor);
+          }}
+        />
       )}
+      {purchaseFor && <RecordPurchaseDialog ingredientId={purchaseFor.id} onClose={() => setPurchaseFor(null)} />}
     </Card>
   );
 }
@@ -771,7 +783,7 @@ function IngredientDialog({
             {existing && (
               <p className="text-xs text-stone-500">
                 In stock now: <strong>{formatQty(existing.currentQty, existing.unit)}</strong>. Use the Stock button to
-                book a delivery, waste or a stock take.
+                record a purchase, waste or a stock take.
               </p>
             )}
             <div className="rounded-lg bg-stone-50 p-3 dark:bg-stone-800/50">
@@ -868,7 +880,8 @@ function FieldLabel({ htmlFor, children }: { htmlFor: string; children: React.Re
   );
 }
 
-type ManualReason = Extract<StockMovementReason, 'delivery' | 'waste' | 'count' | 'adjustment'>;
+/** What can be booked here by hand. Stock that came in is a purchase now ("Record a purchase", costing Phase 5). */
+type ManualReason = Extract<StockMovementReason, 'waste' | 'count' | 'adjustment'>;
 
 /** Why it was thrown away: Reports splits waste by these (costing spec Phase 2). */
 const WASTE_REASON_CHIPS: ReadonlyArray<{ id: WasteReason; label: string }> = [
@@ -882,7 +895,6 @@ const WASTE_REASON_CHIPS: ReadonlyArray<{ id: WasteReason; label: string }> = [
 ];
 
 const MANUAL_REASONS: ReadonlyArray<{ id: ManualReason; label: string; hint: string }> = [
-  { id: 'delivery', label: 'Delivery in', hint: 'Stock that arrived without a purchase order' },
   { id: 'waste', label: 'Waste', hint: 'Spoiled, dropped or thrown away' },
   { id: 'count', label: 'Stock take', hint: 'You counted it — type what is on the shelf' },
   { id: 'adjustment', label: 'Fix', hint: 'Correct a mistake (use minus to take away)' },
@@ -891,13 +903,16 @@ const MANUAL_REASONS: ReadonlyArray<{ id: ManualReason; label: string; hint: str
 function MovementDialog({
   ingredient,
   onClose,
+  onRecordPurchase,
 }: {
   ingredient: Ingredient;
   onClose: () => void;
+  /** Stock that came in: "Record a purchase" at what was paid (it replaced "Delivery in"). */
+  onRecordPurchase: () => void;
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [reason, setReason] = useState<ManualReason>('delivery');
+  const [reason, setReason] = useState<ManualReason>('waste');
   const [wasteReason, setWasteReason] = useState<WasteReason | null>(null);
   const [delta, setDelta] = useState('');
   const [notes, setNotes] = useState('');
@@ -908,8 +923,7 @@ function MovementDialog({
   // read as 0 (that would silently zero the ingredient).
   const deltaValid = /^-?\d+$/.test(delta.trim());
   const numericDelta = deltaValid ? parseInt(delta.trim(), 10) : 0;
-  const normalize = (d: number): number =>
-    reason === 'waste' ? -Math.abs(d) : reason === 'delivery' ? Math.abs(d) : d;
+  const normalize = (d: number): number => (reason === 'waste' ? -Math.abs(d) : d);
   const previewDelta = normalize(isCount ? numericDelta - ingredient.currentQty : numericDelta);
   const countNegative = isCount && numericDelta < 0;
 
@@ -978,6 +992,13 @@ function MovementDialog({
             <div>
               <div className="mb-1 text-xs uppercase tracking-wider text-stone-500">What happened?</div>
               <div className="grid grid-cols-4 gap-2" role="group" aria-label="What happened">
+                <button
+                  type="button"
+                  onClick={onRecordPurchase}
+                  className="inline-flex items-center justify-center gap-1 rounded-lg border-2 border-emerald-300 bg-emerald-50 px-2 py-2 text-xs font-semibold text-emerald-900 transition-colors hover:border-emerald-400 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-100"
+                >
+                  <ShoppingBasket className="h-3.5 w-3.5" /> Record a purchase
+                </button>
                 {MANUAL_REASONS.map((r) => (
                   <button
                     key={r.id}
@@ -1025,11 +1046,9 @@ function MovementDialog({
               <label htmlFor="mv-qty" className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
                 {isCount
                   ? `On the shelf now (${ingredient.unit})`
-                  : reason === 'delivery'
-                    ? `How much came in (${ingredient.unit})`
-                    : reason === 'waste'
-                      ? `How much was wasted (${ingredient.unit})`
-                      : `Change (${ingredient.unit}, minus to take away)`}
+                  : reason === 'waste'
+                    ? `How much was wasted (${ingredient.unit})`
+                    : `Change (${ingredient.unit}, minus to take away)`}
               </label>
               <input
                 id="mv-qty"

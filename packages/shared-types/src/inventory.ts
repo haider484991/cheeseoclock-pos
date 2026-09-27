@@ -317,9 +317,20 @@ export type PurchaseOrderStatus =
   | 'received'
   | 'cancelled';
 
+/**
+ * What a purchase is (costing spec Phase 5, migration 0035):
+ *  - 'order': a purchase order placed with a supplier, received later;
+ *  - 'quick': a purchase recorded on the spot ("Record a purchase": a market
+ *    run, a bill paid at the door, a drawer payout turned into a purchase),
+ *    received as it is written.
+ */
+export const PURCHASE_KINDS = ['order', 'quick'] as const;
+export type PurchaseKind = (typeof PURCHASE_KINDS)[number];
+
 export interface PurchaseOrder {
   id: UUID;
-  supplierId: UUID;
+  /** Null for a purchase with no supplier on file (a market run). */
+  supplierId: UUID | null;
   referenceNo: string | null;
   status: PurchaseOrderStatus;
   orderedAt: string | null;
@@ -329,6 +340,16 @@ export interface PurchaseOrder {
   notes: string | null;
   createdByUserId: UUID;
   receivedByUserId: UUID | null;
+  /** The supplier's bill number, when one was typed. */
+  invoiceNo: string | null;
+  kind: PurchaseKind;
+  /**
+   * What its bills came to so far: the lines' received value, paisa. For a
+   * quick purchase it is its total; for a purchase order it is what was
+   * billed for what came, which may differ from what was ordered
+   * (`totalCents`). 0 while nothing has come in.
+   */
+  billedCents: number;
 }
 
 export interface PurchaseOrderItem {
@@ -337,12 +358,63 @@ export interface PurchaseOrderItem {
   ingredientId: UUID;
   qtyOrdered: number;
   qtyReceived: number;
+  /** Whole paisa per base unit, for older screens only: the exact price is the ordered pack. */
   unitCostCents: number;
   lineTotalCents: number;
   notes: string | null;
+  /**
+   * The price the line was ordered at, exactly as typed: `orderedPackSize`
+   * base units for `orderedPackPriceCents` ("1,000 g for Rs 375"). Null on
+   * lines written before costing Phase 5: they are priced per unit at
+   * `unitCostCents`.
+   */
+  orderedPackSize: number | null;
+  orderedPackPriceCents: number | null;
+  /** What the bills said for everything received on this line so far, paisa. */
+  receivedValueCents: number;
+}
+
+/** A drawer payout linked to a purchase: the cash that paid for it. */
+export interface PurchasePayout {
+  cashMovementId: UUID;
+  shiftId: UUID;
+  amountCents: number;
+  reason: string;
+  createdAt: string;
 }
 
 /** Convenience: a PO with its line items expanded. */
 export interface PurchaseOrderWithItems extends PurchaseOrder {
   items: PurchaseOrderItem[];
+  /** The drawer payout that paid for it, when it was paid from the drawer. */
+  payout?: PurchasePayout | null;
+}
+
+/**
+ * A purchase recorded (costing spec Phase 5): the purchase itself, whose
+ * prices became the ingredients' prices (D1's guard), and the drawer payout
+ * written with it, if any.
+ */
+export interface RecordPurchaseResult {
+  purchase: PurchaseOrderWithItems;
+  /** Ingredients whose price is now the one on this bill. */
+  pricesUsed: UUID[];
+  /** Ingredients whose price was kept although this bill's differs (the stock still came in at the bill). */
+  pricesKept: UUID[];
+}
+
+/**
+ * A cash payout from a drawer, for "Turn this payout into a purchase"
+ * (costing spec Phase 5): recent payouts on this till, with the purchase each
+ * is already linked to (null = still a free-text payout).
+ */
+export interface DrawerPayout {
+  id: UUID;
+  shiftId: UUID;
+  amountCents: number;
+  reason: string;
+  createdAt: string;
+  userName: string | null;
+  approvedByName: string | null;
+  refPurchaseOrderId: UUID | null;
 }

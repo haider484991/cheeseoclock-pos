@@ -356,6 +356,15 @@ export const ipc = {
       unwrap(window.api.inventory.setPurchaseOrderStatus(input)),
     receiveDelivery: (input: IpcRequest<'inventory:receiveDelivery'>) =>
       unwrap(window.api.inventory.receiveDelivery(input)),
+    /** "Record a purchase" (costing Phase 5): what was bought and paid, at once; paid from the drawer or not. */
+    recordPurchase: (input: IpcRequest<'inventory:recordPurchase'>) =>
+      unwrap(window.api.inventory.recordPurchase(input)),
+    /** "Turn this payout into a purchase": linked once; the drawer's figures never change. */
+    payoutToPurchase: (input: IpcRequest<'inventory:payoutToPurchase'>) =>
+      unwrap(window.api.inventory.payoutToPurchase(input)),
+    /** Recent cash payouts from this till's drawer, with the purchase each is linked to. */
+    listDrawerPayouts: (input?: IpcRequest<'inventory:listDrawerPayouts'>) =>
+      unwrap(window.api.inventory.listDrawerPayouts(input)),
   },
   /** The Costing page and the costs shown in Menu and Inventory (managers and the owner only). */
   costing: {

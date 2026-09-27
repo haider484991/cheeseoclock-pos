@@ -13,11 +13,15 @@ import {
   estimatedText,
   fmtMinutes,
   fmtWhen,
+  byHandText,
   foodCostHeadline,
+  hasPurchases,
   hourLabel,
   hourSeries,
   menuPriceLine,
   percentOf,
+  purchaseBillsText,
+  purchaseHeadline,
   stockCellText,
   unpaidFoodText,
   websiteVsTill,
@@ -238,7 +242,16 @@ function tabsOf(r: BusinessReport): SomeReportTabs {
       channels: r.channels,
       deliveries: r.deliveries,
     },
-    ...(r.foodCost ? { foodStock: { ...base, kpis: { partialRefundCents: k.partialRefundCents }, foodCost: r.foodCost } } : {}),
+    ...(r.foodCost
+      ? {
+          foodStock: {
+            ...base,
+            kpis: { partialRefundCents: k.partialRefundCents },
+            foodCost: r.foodCost,
+            purchases: { spendCents: 0, bills: 0, bySupplier: [], byIngredient: [], byHandCents: 0, byHandEntries: 0 },
+          },
+        }
+      : {}),
     team: {
       ...base,
       kpis: {
@@ -337,7 +350,7 @@ describe('CSV for Excel', () => {
       when: ['SALES BY DAY', 'SALES BY HOUR'],
       menu: ['ITEMS SOLD', 'CATEGORIES'],
       channels: ['ORDER TYPES', 'DELIVERIES BY RIDER', 'DELIVERIES BY AREA'],
-      foodStock: ['FOOD COST', 'WASTE BY REASON', 'SALES WITH MISSING COSTS', 'INGREDIENTS WASTED'],
+      foodStock: ['FOOD COST', 'WASTE BY REASON', 'SALES WITH MISSING COSTS', 'INGREDIENTS WASTED', 'PURCHASES'],
       team: ['STAFF', 'SHIFTS', 'DISCOUNTS BY REASON', 'DISCOUNTS BY PERSON', 'EACH DISCOUNT', 'REFUNDS', 'CANCELLED BEFORE PAYMENT', 'CASH DRAWER OPENED BY HAND'],
     };
     const r = report({ foodCost: food({ hasCosts: true, hasUsage: true, foodSalesCents: 10_000 }) });
@@ -353,6 +366,60 @@ describe('CSV for Excel', () => {
         }
       }
     }
+  });
+});
+
+describe('purchases on paper and in the file (costing spec Phase 5)', () => {
+  it('by supplier and by ingredient, with the latest price and its change; made-up figures', () => {
+    const r = report({ foodCost: food({ hasCosts: true, hasUsage: true, foodSalesCents: 10_000 }) });
+    const tab = tabsOf(r).foodStock!;
+    const withPurchases = {
+      ...tab,
+      purchases: {
+        spendCents: 1_300_000,
+        bills: 3,
+        byHandCents: 50_000,
+        byHandEntries: 2,
+        bySupplier: [
+          { key: 's1', from: 'supplier' as const, name: 'Test Dairy', bills: 2, spendCents: 1_000_000 },
+          { key: 'no_supplier', from: 'no_supplier' as const, name: 'No supplier named', bills: 1, spendCents: 250_000 },
+          { key: 'by_hand', from: 'by_hand' as const, name: 'Booked in by hand (no bill)', bills: 0, spendCents: 50_000 },
+        ],
+        byIngredient: [
+          { ingredientId: 'i1', name: 'Test cheese', unit: 'g', qty: 8_000, times: 2, spendCents: 1_000_000, lastUnitCostMc: 125_000, prevUnitCostMc: 112_500 },
+        ],
+      },
+    };
+    const period = periodFor('today', SAT_3PM);
+    const csv = buildTabCsv('foodStock', withPurchases, period, SAT_3PM);
+    expect(csv).toContain('PURCHASES (THIS TILL, AT THE BILLS)');
+    expect(csv).toContain('Test Dairy,2,10000.00');
+    // Stock booked in by hand has no bills: an empty Bills cell, and not in the total's count.
+    expect(csv).toContain('Booked in by hand (no bill),,500.00');
+    expect(csv).toContain('Total,3,13000.00');
+    expect(csv).toContain('"Of it: booked in by hand 2 times, no bill (at the price then)",,500.00');
+    expect(csv).toContain('Test cheese,g,8000,2,10000.00,1250.00,kg,▲ 11.1%');
+    const html = buildTabPrintBody('foodStock', withPurchases, period, SAT_3PM);
+    expect(html).toContain('Rs 13,000 spent on stock, 3 bills.');
+    expect(html).toContain('No supplier named');
+    expect(html).toContain('<td>Booked in by hand (no bill)</td><td class="r">—</td>');
+  });
+
+  it('bills are purchases: stock booked in by hand is said once, never counted as a bill', () => {
+    const hand = { key: 'by_hand', from: 'by_hand' as const, name: 'Booked in by hand (no bill)', bills: 0, spendCents: 80_000 };
+    const onlyByHand = { spendCents: 80_000, bills: 0, bySupplier: [hand], byHandCents: 80_000, byHandEntries: 12 };
+    expect(hasPurchases(onlyByHand)).toBe(true);
+    expect(purchaseHeadline(onlyByHand)).toBe('Rs 800 of stock booked in, no bills.');
+    expect(purchaseBillsText(hand)).toBe('—');
+    expect(purchaseBillsText({ from: 'supplier', bills: 14 })).toBe('14');
+    expect(byHandText(onlyByHand)).toBe('Rs 800 of it was stock booked in by hand 12 times, with no bill (valued at the price then).');
+    expect(byHandText({ byHandCents: 4_000, byHandEntries: 1 })).toMatch(/by hand once,/);
+    expect(byHandText({ byHandCents: 0, byHandEntries: 0 })).toBeNull();
+    // A Rs 0 bill is still a purchase: something came in.
+    const sample = { spendCents: 0, bills: 1, bySupplier: [{ key: 's1', from: 'supplier' as const, name: 'Test Dairy', bills: 1, spendCents: 0 }] };
+    expect(hasPurchases(sample)).toBe(true);
+    expect(purchaseHeadline(sample)).toBe('Rs 0 spent on stock, 1 bill.');
+    expect(purchaseHeadline({ spendCents: 0, bills: 0, bySupplier: [] })).toBe('No stock bought in this period.');
   });
 });
 

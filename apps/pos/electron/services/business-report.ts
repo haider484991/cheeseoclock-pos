@@ -14,6 +14,9 @@ import type {
   ReportKpis,
   ReportOrderStock,
   ReportPaymentGroup,
+  ReportPurchases,
+  ReportPurchaseIngredientLine,
+  ReportPurchaseSupplierLine,
   ReportRefundLine,
   ReportStaffLine,
   ReportUnpaidFood,
@@ -28,6 +31,7 @@ import { isDeliveryChargeName } from '@cheeseoclock/shared-types';
 import {
   emptyFoodCostTally,
   ingredientCostCents,
+  mulDivRound,
   noteKindAnswer,
   orderKeptCost,
   orderStockNoteKind,
@@ -1551,6 +1555,136 @@ export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date(
 }
 
 // ---------------------------------------------------------------------------
+// Purchases (costing spec 4.5 Pur(P), Phase 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every delivery / purchase stock row up to the end of the period, oldest
+ * first (idx_movements_reason_time): the period's rows are the spend, and
+ * the ones before give "the purchase before" each ingredient's latest.
+ * Deliveries are a few a day, so this stays small over years.
+ */
+export const PURCHASE_ROWS_SQL = `
+  SELECT m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.unit AS rowUnit, m.value_cents AS value,
+         m.cost_basis AS basis, m.occurred_at AS at, m.ref_purchase_order_id AS poId, po.supplier_id AS supplierId
+    FROM stock_movements m INDEXED BY idx_movements_reason_time
+    LEFT JOIN purchase_orders po ON po.id = m.ref_purchase_order_id
+   WHERE m.reason = 'delivery' AND m.occurred_at < ? AND m.deleted_at IS NULL
+   ORDER BY m.occurred_at, m.rowid`;
+
+const NO_SUPPLIER = 'no_supplier';
+const BY_HAND = 'by_hand';
+
+/**
+ * What was spent on stock in a period, on THIS till (costing spec 4.5, Phase
+ * 5): the stock rows of deliveries and purchases, at their bills (from Phase
+ * 5 exact; before it, a purchase order line's price × what came), dated by
+ * when the stock came in. By supplier (a purchase with no supplier, and
+ * stock booked in by hand with no bill, each have their own line) and by
+ * ingredient, with its latest price against the purchase before. A row
+ * from before costing kept no value: it is valued at the price in force
+ * then, like the estimates. Σ by supplier = Σ by ingredient = the spend.
+ *
+ * Bills are purchases (distinct purchase orders / purchases): stock booked
+ * in by hand has none, so its line counts 0 bills and its entries are said
+ * once (byHandEntries). The latest price and the one before come only from
+ * PAID purchases: a bill of Rs 0 (a sample, a gift) and stock booked in by
+ * hand (valued at the price then, not a price paid) are not prices.
+ */
+export function getPurchases(db: AppDatabase, range: ReportRange, pricing: () => Pricing = lazyPricing(db)): ReportPurchases {
+  const rows = db.prepare(PURCHASE_ROWS_SQL).all(range.untilIso) as Array<{
+    ingredientId: string;
+    qty: number;
+    rowUnit: string | null;
+    value: number | null;
+    basis: string | null;
+    at: string;
+    poId: string | null;
+    supplierId: string | null;
+  }>;
+  const groups = new Map<string, { from: ReportPurchaseSupplierLine['from']; bills: Set<string>; spendCents: number }>();
+  const lines = new Map<string, Omit<ReportPurchaseIngredientLine, 'name' | 'unit'>>();
+  /** Each ingredient's price per base unit on its latest purchase so far, in its unit now. */
+  const lastPrice = new Map<string, number | null>();
+  let spendCents = 0;
+  let byHandCents = 0;
+  let byHandEntries = 0;
+  for (const r of rows) {
+    const qty = Number(r.qty);
+    const value = rowValue({ ingredientId: r.ingredientId, qty, rowUnit: r.rowUnit, value: r.value === null ? null : Number(r.value) }, pricing, r.at) ?? 0;
+    const unitNow = pricing().unitOf(r.ingredientId);
+    const qtyNow = qty * (unitNow === undefined ? 1 : (unitFactor(r.rowUnit, unitNow) ?? 1));
+    // A price paid: a purchase's row with money on it (not a Rs 0 bill, not stock booked in by hand).
+    const unitMc = r.poId !== null && qtyNow > 0 && value > 0 ? mulDivRound(value, 1000, qtyNow) : null;
+    const before = lastPrice.get(r.ingredientId) ?? null;
+    if (unitMc !== null) lastPrice.set(r.ingredientId, unitMc);
+    if (r.at < range.sinceIso) continue;
+
+    spendCents += value;
+    const key = r.poId === null ? BY_HAND : (r.supplierId ?? NO_SUPPLIER);
+    const g = groups.get(key) ?? { from: key === BY_HAND ? 'by_hand' : key === NO_SUPPLIER ? 'no_supplier' : 'supplier', bills: new Set<string>(), spendCents: 0 };
+    g.spendCents += value;
+    if (r.poId === null) {
+      byHandCents += value;
+      byHandEntries += 1;
+    } else g.bills.add(r.poId);
+    groups.set(key, g);
+
+    const l = lines.get(r.ingredientId) ?? { ingredientId: r.ingredientId, qty: 0, times: 0, spendCents: 0, lastUnitCostMc: null, prevUnitCostMc: null };
+    l.qty += qtyNow;
+    l.times += 1;
+    l.spendCents += value;
+    if (unitMc !== null) {
+      l.lastUnitCostMc = unitMc;
+      l.prevUnitCostMc = before;
+    }
+    lines.set(r.ingredientId, l);
+  }
+
+  const supplierIds = [...groups.keys()].filter((k) => k !== BY_HAND && k !== NO_SUPPLIER);
+  const supplierNames = new Map(
+    supplierIds.length === 0
+      ? []
+      : (
+          db.prepare(`SELECT id, name FROM suppliers WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(supplierIds)) as Array<{
+            id: string;
+            name: string;
+          }>
+        ).map((s) => [s.id, s.name]),
+  );
+  const ingredients = new Map(
+    lines.size === 0
+      ? []
+      : (
+          db
+            .prepare(`SELECT id, name, unit FROM ingredients WHERE id IN (SELECT value FROM json_each(?))`)
+            .all(JSON.stringify([...lines.keys()])) as Array<{ id: string; name: string; unit: string }>
+        ).map((i) => [i.id, i]),
+  );
+  const bySupplier: ReportPurchaseSupplierLine[] = [...groups].map(([key, g]) => ({
+    key,
+    from: g.from,
+    name:
+      g.from === 'by_hand'
+        ? 'Booked in by hand (no bill)'
+        : g.from === 'no_supplier'
+          ? 'No supplier named'
+          : (supplierNames.get(key) ?? 'Supplier no longer on file'),
+    bills: g.bills.size,
+    spendCents: g.spendCents,
+  }));
+  bySupplier.sort((a, b) => b.spendCents - a.spendCents || a.name.localeCompare(b.name));
+  const byIngredient: ReportPurchaseIngredientLine[] = [...lines.values()].map((l) => ({
+    ...l,
+    name: ingredients.get(l.ingredientId)?.name ?? 'Deleted ingredient',
+    unit: ingredients.get(l.ingredientId)?.unit ?? '',
+  }));
+  byIngredient.sort((a, b) => b.spendCents - a.spendCents || a.name.localeCompare(b.name));
+  // A purchase has one supplier (or none), so the groups' bills are distinct purchases.
+  return { spendCents, bills: bySupplier.reduce((s, g) => s + g.bills, 0), bySupplier, byIngredient, byHandCents, byHandEntries };
+}
+
+// ---------------------------------------------------------------------------
 // The tabs (costing spec Phase 3): one builder per Reports tab
 // ---------------------------------------------------------------------------
 
@@ -1658,7 +1792,13 @@ export function buildFoodStockTab(db: AppDatabase, req: BusinessReportRequest, n
         WHERE ${IN_RANGE} AND ${COUNTED}`,
     )
     .get(...args(range)) as { cents: number };
-  return { sinceIso: range.sinceIso, untilIso: range.untilIso, kpis: { partialRefundCents: Number(refunded.cents) }, foodCost };
+  return {
+    sinceIso: range.sinceIso,
+    untilIso: range.untilIso,
+    kpis: { partialRefundCents: Number(refunded.cents) },
+    foodCost,
+    purchases: getPurchases(db, range, pricing),
+  };
 }
 
 /** Team & leakage: staff, shifts and the cash drawer, discounts, refunds and cancelled orders. */

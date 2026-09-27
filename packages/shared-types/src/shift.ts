@@ -59,6 +59,12 @@ export interface CashMovement {
   /** The manager whose PIN let a cashier record it; null when a manager did it. */
   approvedByUserId: UUID | null;
   createdAt: string;
+  /**
+   * The purchase this payout paid for (costing spec Phase 5): written with a
+   * purchase "Paid from the drawer", or linked later by a manager. Null for
+   * a free-text payout (and for cash in and rider tips).
+   */
+  refPurchaseOrderId?: UUID | null;
 }
 
 /**

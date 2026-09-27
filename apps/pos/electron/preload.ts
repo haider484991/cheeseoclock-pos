@@ -236,6 +236,9 @@ const api: RendererApi = {
     createPurchaseOrder: (req) => invoke('inventory:createPurchaseOrder', req),
     setPurchaseOrderStatus: (req) => invoke('inventory:setPurchaseOrderStatus', req),
     receiveDelivery: (req) => invoke('inventory:receiveDelivery', req),
+    recordPurchase: (req) => invoke('inventory:recordPurchase', req),
+    payoutToPurchase: (req) => invoke('inventory:payoutToPurchase', req),
+    listDrawerPayouts: (req) => invoke('inventory:listDrawerPayouts', req),
   },
   costing: {
     menuCosts: () => invoke('costing:menuCosts', undefined),

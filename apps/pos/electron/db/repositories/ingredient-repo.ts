@@ -8,10 +8,12 @@ import { priceRowId, setIngredientPrice } from './ingredient-cost-repo.js';
 import type { Ingredient, IngredientCategory, PriceKind, PriceSource, Recipe } from '@cheeseoclock/shared-types';
 import {
   baseUnitConversion,
+  convertPack,
   convertedStoredPrice,
-  formatCents,
+  costPerUnitFromPack,
   guessIngredientCategory,
   isIngredientCategory,
+  orderedPack,
   toPriceKind,
 } from '@cheeseoclock/pos-domain';
 
@@ -364,11 +366,11 @@ export function deleteIngredient(db: AppDatabase, id: string, actor: Actor): voi
  * spec 4.1): the pack holds 1,000x as many units for the same money
  * ("Rs 375 per kg" becomes "1,000 g for Rs 375", never 38 paisa a gram), so
  * every value stays as it was, with a line in the price history saying so.
- * An open purchase order line keeps a whole-paisa price per unit (no exact
- * pack on it until costing Phase 5), so its price per gram must come out
- * whole: when one would not (Rs 375.50 a kg is 37.55 paisa a gram), the
- * Convert is refused, in plain words, rather than changing what the order
- * owes — receive or cancel that order first.
+ * An open purchase order line keeps the price it was ordered at as an exact
+ * pack (costing spec Phase 5, 0035): the pack holds 1,000x as many units for
+ * the same money, so what the order owes stays exactly what it was (Rs 375.50
+ * a kg is 1,000 g for Rs 375.50, never 38 paisa a gram); a line from before
+ * that is priced (1, its price per unit) and becomes a pack the same way.
  * One transaction; the ingredient and each row it touches sync and audit.
  */
 export function convertIngredientToBaseUnit(
@@ -385,24 +387,6 @@ export function convertIngredientToBaseUnit(
   const conv = baseUnitConversion(before.unit);
   if (!conv) throw new Error(`"${before.name}" is already counted in ${before.unit}`);
   const f = conv.factor;
-  // What is owed on an open order must stay exactly what it is (see above).
-  const inexact = db
-    .prepare(
-      `SELECT po.reference_no AS ref, poi.unit_cost_cents AS cost
-         FROM purchase_order_items poi
-         JOIN purchase_orders po ON po.id = poi.purchase_order_id
-        WHERE poi.ingredient_id = ? AND poi.deleted_at IS NULL AND po.deleted_at IS NULL
-          AND po.status IN ('draft', 'ordered', 'partial')
-          AND poi.unit_cost_cents % ? <> 0
-        ORDER BY po.created_at LIMIT 1`,
-    )
-    .get(id, f) as { ref: string | null; cost: number } | undefined;
-  if (inexact) {
-    throw new Error(
-      `"${before.name}" is on an open purchase order${inexact.ref ? ` (${inexact.ref})` : ''} at ${formatCents(Number(inexact.cost))} per ${before.unit}, ` +
-        `which can't be kept exactly per ${conv.unit}. Receive or cancel that order first, then count it in ${conv.unit}.`,
-    );
-  }
   const price = convertedStoredPrice(before, f);
   const after: Ingredient = {
     ...before,
@@ -467,7 +451,8 @@ export function convertIngredientToBaseUnit(
     // otherwise arrive as 5 g.
     const poLines = db
       .prepare(
-        `SELECT poi.id, poi.purchase_order_id, poi.qty_ordered, poi.qty_received, poi.unit_cost_cents
+        `SELECT poi.id, poi.purchase_order_id, poi.qty_ordered, poi.qty_received, poi.unit_cost_cents,
+                poi.ordered_pack_size, poi.ordered_pack_price_cents
            FROM purchase_order_items poi
            JOIN purchase_orders po ON po.id = poi.purchase_order_id
           WHERE poi.ingredient_id = ? AND poi.deleted_at IS NULL AND po.deleted_at IS NULL
@@ -479,19 +464,33 @@ export function convertIngredientToBaseUnit(
       qty_ordered: number;
       qty_received: number;
       unit_cost_cents: number;
+      ordered_pack_size: number | null;
+      ordered_pack_price_cents: number | null;
     }>;
     for (const line of poLines) {
+      // The ordered pack holds f× as many units for the same money, so the
+      // line total (what is owed) stays exactly as it is. The price per unit
+      // in whole paisa is only for older screens.
+      const pack = convertPack(
+        orderedPack({
+          orderedPackSize: line.ordered_pack_size === null ? null : Number(line.ordered_pack_size),
+          orderedPackPriceCents: line.ordered_pack_price_cents === null ? null : Number(line.ordered_pack_price_cents),
+          unitCostCents: Number(line.unit_cost_cents),
+        }),
+        f,
+      );
       const next = {
         qtyOrdered: line.qty_ordered * f,
         qtyReceived: line.qty_received * f,
-        // The line total (what is owed) stays exactly as it is: the price per
-        // unit divides exactly (anything else was refused above).
-        unitCostCents: line.unit_cost_cents / f,
+        unitCostCents: costPerUnitFromPack(pack.priceCents, pack.size),
+        orderedPackSize: pack.size,
+        orderedPackPriceCents: pack.priceCents,
       };
       db.prepare(
         `UPDATE purchase_order_items SET qty_ordered = ?, qty_received = ?, unit_cost_cents = ?,
+                ordered_pack_size = ?, ordered_pack_price_cents = ?,
                 updated_at = ?, version = version + 1 WHERE id = ?`,
-      ).run(next.qtyOrdered, next.qtyReceived, next.unitCostCents, now, line.id);
+      ).run(next.qtyOrdered, next.qtyReceived, next.unitCostCents, next.orderedPackSize, next.orderedPackPriceCents, now, line.id);
       enqueueSync(db, {
         entityType: 'purchase_order_items',
         entityId: line.id,
@@ -507,6 +506,8 @@ export function convertIngredientToBaseUnit(
           qtyOrdered: line.qty_ordered,
           qtyReceived: line.qty_received,
           unitCostCents: line.unit_cost_cents,
+          orderedPackSize: line.ordered_pack_size,
+          orderedPackPriceCents: line.ordered_pack_price_cents,
           unit: before.unit,
         },
         after: { ...next, unit: after.unit },

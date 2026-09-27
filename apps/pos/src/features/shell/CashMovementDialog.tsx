@@ -4,13 +4,14 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { ArrowDownToLine, ArrowUpFromLine, Bike, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { CashMovementType } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, type CashMovementType } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { SecretInput } from '../../components/secret/SecretInput';
 import { SecretHint } from '../../components/secret/SecretHint';
 import { secretReady } from '../../components/secret/secretRules';
+import { RecordPurchaseDialog, type PayoutToConvert } from '../inventory/RecordPurchaseDialog';
 
 const TYPES: Array<{ id: CashMovementType; label: string; hint: string; icon: typeof Wallet }> = [
   { id: 'payout', label: 'Cash out', hint: 'Supplier, gas, an expense', icon: ArrowUpFromLine },
@@ -25,6 +26,10 @@ const TYPES: Array<{ id: CashMovementType; label: string; hint: string; icon: ty
  */
 export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onClose: () => void }) {
   const canDirect = useSessionStore((s) => s.can('cash.movement'));
+  // "Turn this payout into a purchase" (costing Phase 5): managers and the
+  // owner only (the main process refuses the rest). Nothing changes for a cashier.
+  const canPurchase = useSessionStore((s) => s.can(COST_CAPABILITY));
+  const [converting, setConverting] = useState<PayoutToConvert | null>(null);
   const [type, setType] = useState<CashMovementType>('payout');
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
@@ -192,21 +197,39 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
                       {m.reason}
                       {m.userName ? <span className="text-stone-400"> · {m.userName}</span> : null}
                     </span>
-                    <span
-                      className={cn(
-                        'shrink-0 font-mono',
-                        m.type === 'payin'
-                          ? 'text-emerald-700 dark:text-emerald-300'
-                          : 'text-red-700 dark:text-red-300',
+                    <span className="flex shrink-0 items-baseline gap-2">
+                      {canPurchase && m.type === 'payout' && (
+                        m.refPurchaseOrderId ? (
+                          <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">a purchase</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setConverting({ id: m.id, amountCents: m.amountCents, reason: m.reason, createdAt: m.createdAt, userName: m.userName })
+                            }
+                            className="text-[11px] font-semibold text-amber-700 underline hover:text-amber-900 dark:text-amber-300"
+                          >
+                            Turn into a purchase
+                          </button>
+                        )
                       )}
-                    >
-                      {m.type === 'payin' ? '+' : '−'} {formatCents(m.amountCents)}
+                      <span
+                        className={cn(
+                          'font-mono',
+                          m.type === 'payin'
+                            ? 'text-emerald-700 dark:text-emerald-300'
+                            : 'text-red-700 dark:text-red-300',
+                        )}
+                      >
+                        {m.type === 'payin' ? '+' : '−'} {formatCents(m.amountCents)}
+                      </span>
                     </span>
                   </li>
                 ))}
               </ul>
             </div>
           )}
+          {converting && <RecordPurchaseDialog payout={converting} onClose={() => setConverting(null)} />}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

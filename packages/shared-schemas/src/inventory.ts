@@ -188,6 +188,19 @@ export const searchMovementsInputSchema = z.object({
   limit: z.number().int().positive().max(200).optional(),
 });
 
+/**
+ * A price as it is bought, on a purchase order line (costing spec Phase 5):
+ * Rs X per kg / litre, for a pack of N, or per piece. Which fits the
+ * ingredient's unit is checked by the repository (typedPricePack).
+ */
+const typedPriceSchema = z
+  .object({
+    per: z.enum(TYPED_PRICE_PERS),
+    priceCents: centsSchema.max(MAX_PRICE_CENTS, { message: 'That price is too large' }),
+    packSize: packSizeSchema.max(100_000_000, { message: 'That pack is too large' }).nullable().optional(),
+  })
+  .refine((p) => p.per !== 'pack' || (p.packSize ?? 0) >= 1, { message: 'Say how much one pack holds', path: ['packSize'] });
+
 export const createPurchaseOrderInputSchema = z.object({
   supplierId: idSchema,
   referenceNo: nullableText,
@@ -195,22 +208,81 @@ export const createPurchaseOrderInputSchema = z.object({
   notes: nullableText,
   items: z
     .array(
-      z.object({
-        ingredientId: idSchema,
-        qtyOrdered: lineQtySchema,
-        unitCostCents: centsSchema,
-        notes: nullableText,
-      }),
+      z
+        .object({
+          ingredientId: idSchema,
+          qtyOrdered: lineQtySchema,
+          price: typedPriceSchema.optional(),
+          unitCostCents: centsSchema.optional(),
+          notes: nullableText,
+        })
+        .refine((it) => (it.price === undefined) !== (it.unitCostCents === undefined), {
+          message: 'Give each line one price: per kg, per pack or per piece',
+          path: ['price'],
+        }),
     )
     .min(1, { message: 'Purchase order needs at least one line item' }),
 });
 
+/** A bill's amount: whole paisa, Rs 0 or more, at most Rs 1 crore. */
+const billSchema = centsSchema.max(MAX_PRICE_CENTS, { message: 'That bill is too large' });
+/** The supplier's bill number, as typed. */
+const invoiceNoSchema = z.string().trim().max(60, { message: 'That bill number is too long' }).nullable().optional();
+
 export const receiveDeliveryInputSchema = z.object({
   purchaseOrderId: idSchema,
   receipts: z.array(
-    z.object({ purchaseOrderItemId: idSchema, qtyReceivedNow: lineQtySchema }),
+    z.object({
+      purchaseOrderItemId: idSchema,
+      qtyReceivedNow: lineQtySchema,
+      /** What the bill says for it; omitted = the ordered price for that quantity. */
+      billCents: billSchema.optional(),
+      /** "Use it as the new price?" as answered on screen; omitted = D1's guard decides. */
+      usePrice: z.boolean().optional(),
+    }),
   ),
+  invoiceNo: invoiceNoSchema,
   updateCosts: z.boolean().optional(),
+});
+
+/** One line of a purchase: what was bought (whole base units) and what was paid for it. */
+const purchaseLineSchema = z.object({
+  ingredientId: idSchema,
+  qty: lineQtySchema.max(100_000_000, { message: 'That amount is too large' }),
+  billCents: billSchema,
+  usePrice: z.boolean().optional(),
+});
+
+const purchaseLinesSchema = z
+  .array(purchaseLineSchema)
+  .min(1, { message: 'Add at least one thing that was bought' })
+  .max(60, { message: 'At most 60 lines on one purchase' })
+  .refine((lines) => new Set(lines.map((l) => l.ingredientId)).size === lines.length, {
+    message: 'Each ingredient once per purchase: add the amounts together',
+  });
+
+/** "Record a purchase" (costing spec Phase 5): supplier optional; paid from the drawer or not. */
+export const recordPurchaseInputSchema = z.object({
+  supplierId: idSchema.nullable().optional(),
+  invoiceNo: invoiceNoSchema,
+  notes: z.string().trim().max(500).nullable().optional(),
+  paidFromDrawer: z.boolean().optional(),
+  lines: purchaseLinesSchema,
+});
+
+/** "Turn this payout into a purchase": the payout, and what it bought. */
+export const payoutToPurchaseInputSchema = z.object({
+  cashMovementId: idSchema,
+  supplierId: idSchema.nullable().optional(),
+  invoiceNo: invoiceNoSchema,
+  notes: z.string().trim().max(500).nullable().optional(),
+  lines: purchaseLinesSchema,
+});
+
+/** Recent drawer payouts, for "Turn this payout into a purchase". */
+export const listDrawerPayoutsInputSchema = z.object({
+  sinceIso: z.string().max(40).optional(),
+  limit: z.number().int().positive().max(500).optional(),
 });
 
 export const setPurchaseOrderStatusInputSchema = z.object({

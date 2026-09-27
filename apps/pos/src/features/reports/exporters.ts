@@ -34,8 +34,14 @@ import {
   stockCellText,
   unpaidFoodText,
   websiteVsTill,
+  byHandText,
+  hasPurchases,
+  purchaseBillsText,
+  purchaseChangeText,
+  purchaseHeadline,
+  purchasePriceText,
 } from './reportFormat';
-import { formatBps } from '../costing/costingFormat';
+import { formatBps, thousandUnit } from '../costing/costingFormat';
 
 /** Some or all of the tabs, as fetched (for "Print everything"). */
 export type SomeReportTabs = { [K in ReportTab]?: ReportTabData[K] };
@@ -179,6 +185,23 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     sheet.heading('Ingredients wasted');
     sheet.push(['Ingredient', 'Unit', 'Wasted', 'Cost Rs']);
     for (const i of f.wasteIngredients) sheet.push([i.name, i.unit, i.wastedQty, rs(i.wastedCents)]);
+
+    const p = r.purchases;
+    sheet.heading('Purchases (this till, at the bills)');
+    sheet.push(['Bought from', 'Bills', 'Spent Rs']);
+    // Stock booked in by hand has no bills: its Bills cell is empty, and it is not in the total's count.
+    for (const s of p.bySupplier) sheet.push([s.name, s.from === 'by_hand' ? null : s.bills, rs(s.spendCents)]);
+    sheet.push(['Total', p.bills, rs(p.spendCents)]);
+    if (p.byHandEntries > 0) sheet.push([`Of it: booked in by hand ${p.byHandEntries} ${p.byHandEntries === 1 ? 'time' : 'times'}, no bill (at the price then)`, null, rs(p.byHandCents)]);
+
+    sheet.heading('Purchases by ingredient');
+    sheet.push(['Ingredient', 'Unit', 'Bought', 'Times', 'Spent Rs', 'Latest price Rs', 'Per', 'Change on the purchase before']);
+    for (const l of p.byIngredient) {
+      // Per kg / litre for something weighed (a gram's price in millicents is paisa per kg), else per unit.
+      const big = thousandUnit(l.unit);
+      const price = l.lastUnitCostMc === null ? null : rs(big ? l.lastUnitCostMc : Math.round(l.lastUnitCostMc / 1000));
+      sheet.push([l.name, l.unit, l.qty, l.times, rs(l.spendCents), price, big ?? l.unit, purchaseChangeText(l)?.text ?? null]);
+    }
   },
 
   team: (sheet, r) => {
@@ -468,7 +491,10 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
   foodStock: (r) => {
     const food = r.foodCost;
     if (!food.hasUsage && food.foodSalesCents === 0) {
-      return ['<section><h2>Food cost (this till)</h2><p class="muted">No food sold or wasted in this period.</p></section>'];
+      return [
+        '<section><h2>Food cost (this till)</h2><p class="muted">No food sold or wasted in this period.</p></section>',
+        purchasesPrint(r.purchases),
+      ];
     }
     const estimated = estimatedText(food);
     const reconcile = menuPriceLine(food);
@@ -491,6 +517,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
           missing.shown.map((m) => [esc(m.name), esc(MISSING_COST_WHY[m.why]), money(m.salesCents)]),
           [2],
         )}${missing.note}</div></div></section>`,
+      purchasesPrint(r.purchases),
     ];
   },
 
@@ -616,6 +643,26 @@ function printHeader(title: string, period: ReportPeriod, madeAt: Date, withComp
 }
 
 /** One tab's printout (HTML, escaped): the period, then that tab's sections only. */
+/** Purchases (costing spec Phase 5): spend by supplier and by ingredient, with the latest price's change. */
+function purchasesPrint(p: ReportTabData['foodStock']['purchases']): string {
+  if (!hasPurchases(p)) return '<section><h2>Purchases (this till)</h2><p class="muted">No stock bought in this period.</p></section>';
+  const hand = byHandText(p);
+  const ings = limited(p.byIngredient, 20);
+  return (
+    `<section><h2>Purchases (this till)</h2><p><b>${esc(purchaseHeadline(p))}</b></p>` +
+    (hand ? `<p class="muted">${esc(hand)}</p>` : '') +
+    `<div class="two"><div>${table(
+      ['Bought from', 'Bills', 'Spent'],
+      p.bySupplier.map((s) => [esc(s.name), purchaseBillsText(s), money(s.spendCents)]),
+      [1, 2],
+    )}</div><div>${table(
+      ['Ingredient', 'Spent', 'Latest price'],
+      ings.shown.map((l) => [esc(l.name), money(l.spendCents), esc(`${purchasePriceText(l)}${purchaseChangeText(l) ? ` ${purchaseChangeText(l)!.text}` : ''}`)]),
+      [1, 2],
+    )}${ings.note}</div></div></section>`
+  );
+}
+
 export function buildTabPrintBody<K extends ReportTab>(tab: K, data: ReportTabData[K], period: ReportPeriod, madeAt: Date = new Date()): string {
   const parts = (PRINT_PARTS[tab] as PrintPart<K>)(data, period, madeAt);
   return printHeader(`${REPORT_TAB_LABEL[tab]} — ${period.title}`, period, madeAt, tab === 'overview') + parts.join('');

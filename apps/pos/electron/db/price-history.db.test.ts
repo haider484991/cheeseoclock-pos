@@ -18,8 +18,8 @@
  *   - the menu file on both tills: one 'import' row per ingredient per file;
  *     a batch whose inputs all have a price keeps its roll-up (the sheet's
  *     figure is only a reference);
- *   - Convert with a purchase order open keeps what the order owes exactly,
- *     or is refused in plain words;
+ *   - Convert with a purchase order open keeps what the order owes exactly
+ *     (its ordered pack scales, costing Phase 5);
  *   - "Set price" on a batch costed from its recipe is refused;
  *   - batches roll up bottom-up, once, only on the till that wrote the
  *     price — the other till receives the rows and rolls nothing up; a loop
@@ -250,33 +250,38 @@ live('every price-writing path appends exactly one history row, synced and audit
     expect(valueCents(3000, effectivePack({ costPerUnitCents: p.cost_per_unit_cents, packSize: p.pack_size, packPriceCents: p.pack_price_cents }))).toBe(wasWorth);
   });
 
-  it('Convert with a purchase order open: what the order owes stays exactly the same, or the Convert is refused in plain words', async () => {
+  it('Convert with a purchase order open: what the order owes stays exactly the same (the ordered pack scales, costing Phase 5)', async () => {
     const s = await shop();
     const sup = s.r.createSupplier(s.db, { name: 'Test Dairy' }, MANAGER);
-    // Rs 380 a kg (made up) is exactly 38 paisa a gram.
+    const line = (id: string) =>
+      s.db
+        .prepare(
+          `SELECT line_total_cents AS owed, qty_ordered AS q, unit_cost_cents AS c, ordered_pack_size AS s, ordered_pack_price_cents AS p
+             FROM purchase_order_items WHERE purchase_order_id = ?`,
+        )
+        .get(id);
+    // Rs 380 a kg (made up), ordered the older way (per unit).
     const ghee = s.r.createIngredient(s.db, { name: 'Test ghee', unit: 'kg', currentQty: 5, costPerUnitCents: 38_000 }, MANAGER);
     const po = s.r.createPurchaseOrder(s.db, { supplierId: sup.id, items: [{ ingredientId: ghee.id, qtyOrdered: 5, unitCostCents: 38_000 }] }, MANAGER);
-    const owed = (id: string) => s.db.prepare(`SELECT qty_ordered * unit_cost_cents AS n, qty_ordered AS q, unit_cost_cents AS c FROM purchase_order_items WHERE purchase_order_id = ?`).get(id);
-    expect(owed(po.id)).toEqual({ n: 190_000, q: 5, c: 38_000 });
+    expect(line(po.id)).toEqual({ owed: 190_000, q: 5, c: 38_000, s: 1, p: 38_000 });
     s.r.convertIngredientToBaseUnit(s.db, ghee.id, MANAGER);
-    expect(owed(po.id)).toEqual({ n: 190_000, q: 5_000, c: 38 });
+    expect(line(po.id)).toEqual({ owed: 190_000, q: 5_000, c: 38, s: 1_000, p: 38_000 });
 
-    // Rs 375.50 a kg is 37.55 paisa a gram: rounding it would make the order owe Rs 1,900, not Rs 1,877.50.
+    // Rs 375.50 a litre is 37.55 paisa a ml: once refused, now kept exactly as 1,000 ml for Rs 375.50.
     const oil = s.r.createIngredient(s.db, { name: 'Test oil', unit: 'l', currentQty: 5, costPerUnitCents: 37_550 }, MANAGER);
-    const po2 = s.r.createPurchaseOrder(s.db, { supplierId: sup.id, items: [{ ingredientId: oil.id, qtyOrdered: 5, unitCostCents: 37_550 }] }, MANAGER);
-    const before = { ing: priceOf(s.db, oil.id), rows: historyOf(s.db, oil.id).length, queued: n(s.db, `SELECT COUNT(*) AS n FROM sync_queue`) };
-    expect(() => s.r.convertIngredientToBaseUnit(s.db, oil.id, MANAGER)).toThrow(
-      /"Test oil" is on an open purchase order .*at Rs 375\.50 per l, which can't be kept exactly per ml\. Receive or cancel that order first, then count it in ml\./,
+    const po2 = s.r.createPurchaseOrder(
+      s.db,
+      { supplierId: sup.id, items: [{ ingredientId: oil.id, qtyOrdered: 5, price: { per: 'thousand', priceCents: 37_550 } }] },
+      MANAGER,
     );
-    expect(owed(po2.id)).toEqual({ n: 187_750, q: 5, c: 37_550 });
-    expect(s.db.prepare(`SELECT unit, current_qty FROM ingredients WHERE id = ?`).get(oil.id)).toEqual({ unit: 'l', current_qty: 5 });
-    expect(priceOf(s.db, oil.id)).toEqual(before.ing);
-    expect(historyOf(s.db, oil.id)).toHaveLength(before.rows);
-    expect(n(s.db, `SELECT COUNT(*) AS n FROM sync_queue`)).toBe(before.queued);
-    // Once that order is received, the Convert goes through.
-    s.r.receiveDelivery(s.db, { purchaseOrderId: po2.id, receipts: [{ purchaseOrderItemId: po2.items[0]!.id, qtyReceivedNow: 5 }] }, MANAGER);
+    expect(line(po2.id)).toEqual({ owed: 187_750, q: 5, c: 37_550, s: 1, p: 37_550 });
     s.r.convertIngredientToBaseUnit(s.db, oil.id, MANAGER);
+    expect(line(po2.id)).toEqual({ owed: 187_750, q: 5_000, c: 38, s: 1_000, p: 37_550 });
     expect(priceOf(s.db, oil.id)).toMatchObject({ pack_size: 1000, pack_price_cents: 37_550 });
+    // Received after the Convert: the bill for all of it is still exactly what was owed.
+    const got = s.r.receiveDelivery(s.db, { purchaseOrderId: po2.id, receipts: [{ purchaseOrderItemId: po2.items[0]!.id, qtyReceivedNow: 5_000 }] }, MANAGER);
+    expect(got.items[0]).toMatchObject({ qtyReceived: 5_000, receivedValueCents: 187_750 });
+    expect(got.status).toBe('received');
   });
 
   it('a delivery taken as the new cost: one row naming the supplier and the purchase order', async () => {
@@ -286,7 +291,9 @@ live('every price-writing path appends exactly one history row, synced and audit
     const before = historyOf(s.db, s.ing.chicken).length;
     s.r.receiveDelivery(s.db, { purchaseOrderId: po.id, updateCosts: true, receipts: [{ purchaseOrderItemId: po.items[0]!.id, qtyReceivedNow: 2000 }] }, MANAGER);
     const row = oneNewRow(s.db, s.ing.chicken, before);
-    expect(row).toMatchObject({ source: 'delivery', pack_size: 1, pack_price_cents: 95, prev_unit_cost_mc: 90_000 });
+    // The bill exactly as paid (2,000 g for Rs 1,900); the chicken keeps its 1,000 g pack, at Rs 950 (costing Phase 5).
+    expect(row).toMatchObject({ source: 'delivery', pack_size: 2000, pack_price_cents: 190_000, unit_cost_mc: 95_000, prev_unit_cost_mc: 90_000 });
+    expect(priceOf(s.db, s.ing.chicken)).toEqual({ cost_per_unit_cents: 95, pack_size: 1000, pack_price_cents: 95_000, price_kind: 'set' });
     const h = s.r.listPriceHistory(s.db, s.ing.chicken)[0]!;
     expect(h).toMatchObject({ source: 'delivery', supplierName: 'Test Dairy', purchaseOrderId: po.id, actorName: 'Test Manager' });
   });

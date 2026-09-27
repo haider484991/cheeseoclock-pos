@@ -20,6 +20,9 @@ import {
   searchMovementsInputSchema,
   setPriceInputSchema,
   priceHistoryInputSchema,
+  recordPurchaseInputSchema,
+  payoutToPurchaseInputSchema,
+  listDrawerPayoutsInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
 import { requireCapability, REFUSED } from '../guards.js';
@@ -52,7 +55,10 @@ import {
   createPurchaseOrder,
   setPurchaseOrderStatus,
   receiveDelivery,
+  recordPurchase,
+  payoutToPurchase,
 } from '../../db/repositories/procurement-repo.js';
+import { listDrawerPayouts } from '../../db/repositories/shift-repo.js';
 
 function requireSession(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -90,6 +96,17 @@ function requireStockView(): AuthenticatedUser {
  */
 function mayViewCosts(s: AuthenticatedUser): boolean {
   return hasCapability(s.role, COST_CAPABILITY);
+}
+
+/**
+ * A purchase paid from the drawer: the drawer opens for the notes, as for
+ * any cash taken out (a failure is a toast, never an error). Loaded when
+ * needed: the printer code is the main process's, not the repositories'.
+ */
+function kickDrawer(): void {
+  void import('../../services/print-spooler.js')
+    .then((m) => m.printSpooler.kickDrawerSoon())
+    .catch(() => undefined);
 }
 
 /**
@@ -303,5 +320,29 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     const parsed = receiveDeliveryInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(receiveDelivery(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  // ---- Purchases (costing spec Phase 5): what was paid, so COST_CAPABILITY ----
+  defineHandler('inventory:recordPurchase', ctx, (_ctx, payload) => {
+    const s = requireCapability(COST_CAPABILITY, REFUSED.purchases);
+    const parsed = recordPurchaseInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    const result = recordPurchase(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId });
+    if (parsed.data.paidFromDrawer) kickDrawer();
+    return ok(result);
+  });
+
+  defineHandler('inventory:payoutToPurchase', ctx, (_ctx, payload) => {
+    const s = requireCapability(COST_CAPABILITY, REFUSED.purchases);
+    const parsed = payoutToPurchaseInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(payoutToPurchase(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  defineHandler('inventory:listDrawerPayouts', ctx, (_ctx, payload) => {
+    requireCapability(COST_CAPABILITY, REFUSED.purchases);
+    const parsed = listDrawerPayoutsInputSchema.safeParse(payload ?? {});
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(listDrawerPayouts(ctx.db, ctx.deviceId, parsed.data));
   });
 }

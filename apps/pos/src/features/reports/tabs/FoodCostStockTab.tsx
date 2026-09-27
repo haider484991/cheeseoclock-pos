@@ -3,13 +3,15 @@
  * see costs (COST_CAPABILITY): the main process refuses the rest, and the
  * tab is not shown to them. The section moved here unchanged from
  * ReportSections.tsx; the tab loads only these figures (reports:foodStock),
- * plus the ingredients running low now. Later phases add purchases,
- * variance and actual cost of goods here.
+ * plus the ingredients running low now. Phase 5 adds Purchases (what was
+ * spent on stock, by supplier and by ingredient); later phases add variance
+ * and actual cost of goods here.
  */
 import { Link } from 'react-router-dom';
+import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { ReportFoodCost, ReportFoodStockTab } from '@cheeseoclock/shared-types';
-import { Wheat } from 'lucide-react';
+import type { ReportFoodCost, ReportFoodStockTab, ReportPurchases } from '@cheeseoclock/shared-types';
+import { Truck, Wheat } from 'lucide-react';
 import { DataTable, Note, Panel, Section, useShowAll } from '../reportUi';
 import {
   MISSING_COST_WHY,
@@ -21,13 +23,99 @@ import {
   foodCostHeadline,
   fmtQty,
   menuPriceLine,
+  byHandText,
+  hasPurchases,
+  purchaseBillsText,
+  purchaseChangeText,
+  purchaseHeadline,
+  purchasePriceText,
 } from '../reportFormat';
 import { formatBps } from '../../costing/costingFormat';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function FoodCostStockTab({ data, lowStockCount }: { data: ReportFoodStockTab; lowStockCount: number | null }) {
-  return <FoodCostSection report={data} food={data.foodCost} lowStockCount={lowStockCount} />;
+  return (
+    <div className="space-y-10">
+      <FoodCostSection report={data} food={data.foodCost} lowStockCount={lowStockCount} />
+      <PurchasesSection purchases={data.purchases} />
+    </div>
+  );
+}
+
+/**
+ * Purchases (costing spec Phase 5): what was spent on stock in the period,
+ * at the bills, from the purchases booked on this till — by supplier, and by
+ * ingredient with its latest price against the purchase before.
+ */
+export function PurchasesSection({ purchases: p }: { purchases: ReportPurchases }) {
+  const ingredients = useShowAll(p.byIngredient, 8);
+  const handNote = byHandText(p);
+  return (
+    <Section
+      id="purchases"
+      icon={Truck}
+      title="Purchases"
+      subtitle="What was spent on stock, at the bills, from the purchases booked in on this till."
+    >
+      {!hasPurchases(p) ? (
+        <Panel>
+          <p className="py-4 text-center text-sm text-stone-500">
+            No stock bought in this period. Deliveries and purchases are booked in under Inventory → Purchases.
+          </p>
+        </Panel>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm font-semibold">{purchaseHeadline(p)}</p>
+          {handNote && <Note>{handNote}</Note>}
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Panel title="By supplier">
+              <DataTable
+                columns={[{ label: 'Bought from' }, { label: 'Bills', right: true }, { label: 'Spent', right: true }]}
+                rows={p.bySupplier.map((s) => [
+                  <span key="n" className={cn('font-medium', s.from !== 'supplier' && 'text-stone-500')}>{s.name}</span>,
+                  purchaseBillsText(s),
+                  formatCents(s.spendCents),
+                ])}
+                footer={['All', p.bills, formatCents(p.spendCents)]}
+                empty="Nothing bought."
+              />
+            </Panel>
+            <Panel title="By ingredient" note="Price: what one kg (or piece) cost on its latest paid purchase, and the change on the one before. Rs 0 bills and stock booked in by hand are not prices.">
+              <DataTable
+                columns={[{ label: 'Ingredient' }, { label: 'Bought', right: true }, { label: 'Spent', right: true }, { label: 'Price', right: true }]}
+                rows={ingredients.shown.map((l) => {
+                  const change = purchaseChangeText(l);
+                  return [
+                    <span key="n" className="font-medium">{l.name}</span>,
+                    fmtQty(l.qty, l.unit),
+                    formatCents(l.spendCents),
+                    <span key="p" className="whitespace-nowrap">
+                      {purchasePriceText(l)}
+                      {change && (
+                        <span
+                          className={cn(
+                            'ml-1.5 text-xs font-semibold',
+                            change.tone === 'up' && 'text-red-700 dark:text-red-400',
+                            change.tone === 'down' && 'text-emerald-700 dark:text-emerald-400',
+                            change.tone === 'same' && 'text-stone-500',
+                          )}
+                        >
+                          {change.text}
+                        </span>
+                      )}
+                    </span>,
+                  ];
+                })}
+                empty="Nothing bought."
+              />
+              {ingredients.toggle}
+            </Panel>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
 }
 
 /**

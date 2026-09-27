@@ -66,7 +66,7 @@ export function listPriceHistory(db: AppDatabase, ingredientId: string, limit = 
   const rows = db
     .prepare(
       `SELECT ${COST_COLUMNS}, c.supplier_id, c.ref_purchase_order_id, c.actor_user_id, c.notes,
-              s.name AS supplier_name, po.reference_no AS po_ref, u.full_name AS actor_name
+              s.name AS supplier_name, po.reference_no AS po_ref, po.kind AS po_kind, u.full_name AS actor_name
          FROM ingredient_costs c
          LEFT JOIN suppliers s ON s.id = c.supplier_id
          LEFT JOIN purchase_orders po ON po.id = c.ref_purchase_order_id
@@ -83,6 +83,7 @@ export function listPriceHistory(db: AppDatabase, ingredientId: string, limit = 
       notes: string | null;
       supplier_name: string | null;
       po_ref: string | null;
+      po_kind: string | null;
       actor_name: string | null;
     }
   >;
@@ -94,7 +95,8 @@ export function listPriceHistory(db: AppDatabase, ingredientId: string, limit = 
     supplierId: r.supplier_id as PriceHistoryEntry['supplierId'],
     supplierName: r.supplier_name,
     purchaseOrderId: r.ref_purchase_order_id as PriceHistoryEntry['purchaseOrderId'],
-    purchaseOrderRef: r.ref_purchase_order_id ? (r.po_ref ?? r.ref_purchase_order_id.slice(0, 8)) : null,
+    // A purchase bought on the spot has no order reference: its bill number is in the notes.
+    purchaseOrderRef: r.ref_purchase_order_id ? (r.po_ref ?? (r.po_kind === 'quick' ? null : r.ref_purchase_order_id.slice(0, 8))) : null,
     actorUserId: r.actor_user_id as PriceHistoryEntry['actorUserId'],
     actorName: r.actor_name,
     notes: r.notes,

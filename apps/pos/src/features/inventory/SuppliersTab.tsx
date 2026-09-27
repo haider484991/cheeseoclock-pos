@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
+import { PO_LIST_KEY, fetchPurchaseList } from './purchaseListQuery';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Supplier } from '@cheeseoclock/shared-types';
 import { Plus, Edit, X, Phone, Mail, MapPin, StickyNote } from 'lucide-react';
@@ -26,8 +27,8 @@ export function SuppliersTab() {
   const q = useQuery({ queryKey: ['inventory', 'suppliers'], queryFn: () => ipc.inventory.listSuppliers() });
   const ingQ = useQuery({ queryKey: ['inventory', 'ingredients', 'all'], queryFn: () => ipc.inventory.listIngredients() });
   const posQ = useQuery({
-    queryKey: ['inventory', 'pos', 'list'],
-    queryFn: () => ipc.inventory.listPurchaseOrders({ limit: 2000 }),
+    queryKey: PO_LIST_KEY,
+    queryFn: fetchPurchaseList,
   });
   const [editing, setEditing] = useState<Supplier | null | 'new'>(null);
   const [active, setActive] = useSessionState<ActiveFilter>('inv.sup.active', 'active');

@@ -287,14 +287,16 @@ describe.skipIf(!raw)('purchase order status', () => {
       { purchaseOrderId: po.id, updateCosts: true, receipts: [{ purchaseOrderItemId: po.items[0]!.id, qtyReceivedNow: 2000 }] },
       actor,
     );
-    expect(findIngredient(db, ing.id)).toMatchObject({ costPerUnitCents: 35, packSize: null, packPriceCents: null });
+    // The pack is kept (costing Phase 5): 1,000 g, now at the bill's price — never cleared.
+    expect(findIngredient(db, ing.id)).toMatchObject({ costPerUnitCents: 35, packSize: 1000, packPriceCents: 35_000 });
     expect(count(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_id = ? AND action = 'set_price'`, ing.id)).toBe(1);
-    // …and a line in its price history naming the supplier and the purchase order (costing Phase 4).
+    // …and a line in its price history naming the supplier and the purchase order, the bill
+    // exactly as paid: 2,000 g for Rs 700 (costing Phases 4 and 5).
     expect(
       count(
         `SELECT COUNT(*) AS n FROM ingredient_costs
           WHERE ingredient_id = ? AND source = 'delivery' AND ref_purchase_order_id = ? AND supplier_id IS NOT NULL
-            AND pack_size = 1 AND pack_price_cents = 35`,
+            AND pack_size = 2000 AND pack_price_cents = 70000`,
         ing.id,
         po.id,
       ),

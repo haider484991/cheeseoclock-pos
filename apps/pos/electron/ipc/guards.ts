@@ -75,5 +75,6 @@ export const REFUSED = {
   stock: 'Only a manager or the owner can see stock, recipes and suppliers.',
   costs: 'Only a manager or the owner can see costs.',
   prices: 'Only a manager or the owner can change prices.',
+  purchases: 'Only a manager or the owner can record purchases or see what was spent.',
   reports: 'Only a manager or the owner can see reports.',
 } as const;

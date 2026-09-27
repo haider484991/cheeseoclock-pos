@@ -2,7 +2,7 @@
  * Plain-words labels and the small calculations the Reports page shows.
  * Pure (no React, no DOM) so they are unit-tested.
  */
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { formatCents, priceChangeBps } from '@cheeseoclock/pos-domain';
 import type {
   BusinessReport,
   ReportChannel,
@@ -11,10 +11,13 @@ import type {
   ReportMissingCostWhy,
   ReportOrderStock,
   ReportPaymentGroup,
+  ReportPurchaseIngredientLine,
+  ReportPurchaseSupplierLine,
+  ReportPurchases,
   ReportWasteReason,
 } from '@cheeseoclock/shared-types';
 import { daysSoFar, fmtDateInput, fmtDay, fmtMonth, tradingDayNumber, weekdayIndex, WEEKDAYS, type ReportPeriod } from './dateRange';
-import { formatBps } from '../costing/costingFormat';
+import { formatBps, formatUnitPrice } from '../costing/costingFormat';
 
 export const CHANNEL_LABEL: Record<ReportChannel, string> = {
   takeaway: 'Takeaway (counter)',
@@ -343,4 +346,46 @@ export function costingStartText(costingStartedAt: string | null): string {
 export function unpaidFoodText(u: { orderCount: number; costCents: number }): string {
   if (u.orderCount === 0) return '—';
   return `${u.orderCount} order${u.orderCount === 1 ? '' : 's'} · ${formatCents(u.costCents)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Purchases (costing spec Phase 5)
+// ---------------------------------------------------------------------------
+
+/** Anything bought or booked in during the period (a purchase, a bill of Rs 0, or stock booked in by hand). */
+export function hasPurchases(p: Pick<ReportPurchases, 'bySupplier'>): boolean {
+  return p.bySupplier.length > 0;
+}
+
+/** "Rs 48,250 spent on stock, 14 bills." — bills are real purchases; stock booked in by hand is said in byHandText. */
+export function purchaseHeadline(p: Pick<ReportPurchases, 'spendCents' | 'bills' | 'bySupplier'>): string {
+  if (!hasPurchases(p)) return 'No stock bought in this period.';
+  if (p.bills === 0) return `${formatCents(p.spendCents)} of stock booked in, no bills.`;
+  return `${formatCents(p.spendCents)} spent on stock, ${p.bills} ${p.bills === 1 ? 'bill' : 'bills'}.`;
+}
+
+/** The Bills column: a number, or '—' for stock booked in by hand (it has no bills). */
+export function purchaseBillsText(l: Pick<ReportPurchaseSupplierLine, 'from' | 'bills'>): string {
+  return l.from === 'by_hand' ? '—' : String(l.bills);
+}
+
+/** "Rs 155 / kg" — what one unit cost on the latest purchase in the period. */
+export function purchasePriceText(l: Pick<ReportPurchaseIngredientLine, 'lastUnitCostMc' | 'unit'>): string {
+  return l.lastUnitCostMc === null ? '—' : formatUnitPrice(l.lastUnitCostMc, l.unit);
+}
+
+/** "▲ 12% on the one before", "▼ 3%", "same" — the latest purchase against the one before; null when there was none. */
+export function purchaseChangeText(l: Pick<ReportPurchaseIngredientLine, 'lastUnitCostMc' | 'prevUnitCostMc'>): { text: string; tone: 'up' | 'down' | 'same' } | null {
+  if (l.lastUnitCostMc === null || l.prevUnitCostMc === null) return null;
+  const bps = priceChangeBps(l.prevUnitCostMc, l.lastUnitCostMc);
+  if (bps === null) return null;
+  if (bps === 0) return { text: 'same', tone: 'same' };
+  return bps > 0 ? { text: `▲ ${formatBps(bps)}`, tone: 'up' } : { text: `▼ ${formatBps(-bps)}`, tone: 'down' };
+}
+
+/** Stock booked in by hand has no bill: said once, under the figures. */
+export function byHandText(p: Pick<ReportPurchases, 'byHandCents' | 'byHandEntries'>): string | null {
+  if (p.byHandEntries === 0) return null;
+  const times = p.byHandEntries === 1 ? 'once' : `${p.byHandEntries} times`;
+  return `${formatCents(p.byHandCents)} of it was stock booked in by hand ${times}, with no bill (valued at the price then).`;
 }

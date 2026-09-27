@@ -74,6 +74,13 @@
  *   getFoodCost, year, estimated ......... ~1.55 s (Phase 2 measured ~2.2 s)
  * The shop PC is slower: a miss there on this case is the Contingency R trigger.
  *
+ * Costing Phase 5 adds a year of stock bought (8 bills a day, 2,920 delivery
+ * rows) and Purchases on the Food cost & stock tab. Measured 2026-09-27 on
+ * the dev laptop:
+ *   purchases, year ....................... ~11 ms (by supplier and by ingredient)
+ *   food cost & stock, year, worker ....... ~1.30 s costed, ~1.82 s estimated
+ *                                          (≤ 2 s: ok; unchanged margin)
+ *
  * EVERY PRICE IS MADE UP (costing spec D11).
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -82,7 +89,7 @@ import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { describe, expect, it, vi } from 'vitest';
 import type { AppDatabase } from '../db/connection.js';
-import { CASHIER, DatabaseSync, MANAGER, openCostingShop, openMigrated, type Line } from '../db/costing-shop.fixture.js';
+import { CASHIER, DatabaseSync, MANAGER, openCostingShop, openMigrated, type Ing, type Line } from '../db/costing-shop.fixture.js';
 
 vi.setConfig({ testTimeout: 600_000, hookTimeout: 600_000 });
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {} } }));
@@ -139,6 +146,27 @@ async function yearShop() {
     templateIds.push(o);
   }
 
+  // A year of stock bought (costing Phase 5): 8 bills a day, each one line of a made-up market run,
+  // recorded through the repository once and cloned a day back each (below).
+  const { recordPurchase } = await import('../db/repositories/procurement-repo.js');
+  const BUYS: Array<[Ing, number, number]> = [
+    ['cheese', 2_000, 250_000],
+    ['chicken', 5_000, 460_000],
+    ['onion', 5_000, 76_000],
+    ['tomato', 10_000, 124_000],
+    ['dough', 10_000, 92_000],
+    ['cup', 100, 520],
+    ['box', 50, 205_000],
+    ['pepper', 2_000, 61_000],
+  ];
+  const purchaseIds = BUYS.map(
+    ([k, qty, billCents]) => recordPurchase(db, { lines: [{ ingredientId: s.ing[k], qty, billCents, usePrice: false }] }, MANAGER).purchase.id,
+  );
+  db.prepare(`UPDATE stock_movements SET occurred_at = ? WHERE reason = 'delivery' AND ref_purchase_order_id IN (SELECT value FROM json_each(?))`).run(
+    new Date(YEAR_END - 86_400_000 + 9 * 3_600_000).toISOString(),
+    JSON.stringify(purchaseIds),
+  );
+
   const copies = Math.ceil((ORDERS_PER_DAY * DAYS) / TEMPLATES.length);
   const t0 = performance.now();
   db.exec('PRAGMA foreign_keys = OFF');
@@ -191,6 +219,15 @@ async function yearShop() {
       occurred_at: shift('occurred_at'),
     }),
   );
+  db.exec(`CREATE TEMP TABLE tplp (id TEXT PRIMARY KEY)`);
+  const addPurchase = db.prepare(`INSERT INTO tplp (id) VALUES (?)`);
+  for (const id of purchaseIds) addPurchase.run(id);
+  db.exec(
+    cloneSql(db, 'stock_movements', `stock_movements s JOIN tplp ON tplp.id = s.ref_purchase_order_id CROSS JOIN k WHERE s.reason = 'delivery' AND k.n < ${DAYS}`, {
+      id: nid('id'),
+      occurred_at: shift('occurred_at'),
+    }),
+  );
   db.exec(`DELETE FROM orders WHERE id IN (SELECT id FROM tpl)`); // the templates themselves are "today"
   db.exec('PRAGMA foreign_keys = ON');
   const built = performance.now() - t0;
@@ -200,6 +237,7 @@ async function yearShop() {
     lines: count(`SELECT COUNT(*) AS n FROM order_items`),
     costRows: count(`SELECT COUNT(*) AS n FROM order_item_costs`),
     stockRows: count(`SELECT COUNT(*) AS n FROM stock_movements`),
+    deliveries: count(`SELECT COUNT(*) AS n FROM stock_movements WHERE reason = 'delivery'`),
   };
   return { db, s, repos, built, size };
 }
@@ -226,6 +264,11 @@ bench('Reports bench: a year of orders (opt-in)', () => {
     const keptMonth = time(5, () => getFoodCost(db, MONTH));
     lines.push(`year food cost, every sale costed: ${kept.ms.toFixed(1)} ms — ${verdict(kept.ms, 200)}`);
     lines.push(`31 days, every sale costed: ${keptMonth.ms.toFixed(1)} ms`);
+    // Purchases (costing Phase 5): a year of bills, by supplier and by ingredient.
+    const { getPurchases } = await import('./business-report.js');
+    const buys = time(5, () => getPurchases(db, YEAR));
+    lines.push(`year purchases (${size.deliveries} delivery rows): ${buys.ms.toFixed(1)} ms`);
+    expect(buys.out.byIngredient.length).toBe(8);
     expect(kept.out.estimatedOrders).toBe(0);
     expect(kept.out.foodSalesCents).toBeGreaterThan(keptMonth.out.foodSalesCents);
 

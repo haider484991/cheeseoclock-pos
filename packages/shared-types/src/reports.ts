@@ -343,6 +343,60 @@ export interface ReportFoodCost {
   hasUsage: boolean;
 }
 
+/**
+ * Who a purchase was bought from, as Reports groups spend:
+ *  - 'supplier':    a supplier on file (a purchase order or a purchase);
+ *  - 'no_supplier': a purchase with no supplier named (a market run);
+ *  - 'by_hand':     stock booked in by hand with no bill (valued at the price then).
+ */
+export type ReportPurchaseFrom = 'supplier' | 'no_supplier' | 'by_hand';
+
+export interface ReportPurchaseSupplierLine {
+  /** The supplier's id, or 'no_supplier' / 'by_hand'. */
+  key: string;
+  from: ReportPurchaseFrom;
+  name: string;
+  /** Bills (distinct purchase orders and purchases) in the period; 0 for stock booked in by hand, which has none. */
+  bills: number;
+  spendCents: number;
+}
+
+export interface ReportPurchaseIngredientLine {
+  ingredientId: string;
+  name: string;
+  unit: string;
+  /** Bought in the period, in the ingredient's unit now. */
+  qty: number;
+  /** How many times it was bought (delivery rows). */
+  times: number;
+  spendCents: number;
+  /**
+   * What one base unit cost on its latest PAID purchase in the period
+   * (millicents; per gram it reads as paisa per kg). Null when it was only
+   * booked in by hand or at a bill of Rs 0 (neither is a price paid).
+   */
+  lastUnitCostMc: number | null;
+  /** …and on the paid purchase before that one (which may be before the period); null when there was none. */
+  prevUnitCostMc: number | null;
+}
+
+/**
+ * What was spent on stock (costing spec 4.5 Pur(P), Phase 5), from the stock
+ * rows of deliveries and purchases on THIS till, at their bills. Dated by
+ * when the stock came in. Σ bySupplier = Σ byIngredient = spendCents.
+ */
+export interface ReportPurchases {
+  spendCents: number;
+  /** Bills in the period: distinct purchases, never stock booked in by hand (see ReportPurchaseSupplierLine.bills). */
+  bills: number;
+  bySupplier: ReportPurchaseSupplierLine[];
+  byIngredient: ReportPurchaseIngredientLine[];
+  /** Of spendCents, stock booked in by hand with no bill, valued at the price then. */
+  byHandCents: number;
+  /** How many times stock was booked in by hand (no bill) in the period. */
+  byHandEntries: number;
+}
+
 export interface ReportDeliveries {
   byRider: Array<{
     riderId: string | null;
@@ -473,10 +527,12 @@ export interface ReportChannelsTab extends ReportTabBase {
   deliveries: ReportDeliveries;
 }
 
-/** Food cost & stock (COST_CAPABILITY): food cost, waste, missing costs, food sent out unpaid. */
+/** Food cost & stock (COST_CAPABILITY): food cost, waste, missing costs, food sent out unpaid, purchases. */
 export interface ReportFoodStockTab extends ReportTabBase {
   kpis: Pick<ReportKpis, 'partialRefundCents'>;
   foodCost: ReportFoodCost;
+  /** What was spent on stock, by supplier and by ingredient (costing spec Phase 5). */
+  purchases: ReportPurchases;
 }
 
 /** Team & leakage: staff, shifts and cash, discounts, refunds, cancelled orders, drawer opens. */

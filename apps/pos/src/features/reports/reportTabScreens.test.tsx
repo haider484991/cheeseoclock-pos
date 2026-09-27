@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
-import type { ReportFoodCost, ReportKpis, ReportTabData } from '@cheeseoclock/shared-types';
+import type { ReportFoodCost, ReportKpis, ReportPurchases, ReportTabData } from '@cheeseoclock/shared-types';
 import { periodFor } from './dateRange';
 import { OverviewTab } from './tabs/OverviewTab';
 import { WhenTab } from './tabs/WhenTab';
@@ -19,6 +19,7 @@ import { TeamLeakageTab } from './tabs/TeamLeakageTab';
 
 const SAT_3PM = new Date('2026-09-26T10:00:00.000Z');
 const base = { sinceIso: '2026-09-26T00:00:00.000Z', untilIso: '2026-09-27T00:00:00.000Z', engine: 'worker' as const };
+const NO_PURCHASES: ReportPurchases = { spendCents: 0, bills: 0, bySupplier: [], byIngredient: [], byHandCents: 0, byHandEntries: 0 };
 
 const kpis: ReportKpis = {
   orderCount: 3,
@@ -157,10 +158,37 @@ describe('the Reports tabs render their own figures', () => {
   });
 
   it('Food cost & stock, and the ingredients running low', () => {
-    const out = html(<FoodCostStockTab data={{ ...base, kpis: { partialRefundCents: 0 }, foodCost: food }} lowStockCount={2} />);
+    const out = html(<FoodCostStockTab data={{ ...base, kpis: { partialRefundCents: 0 }, foodCost: food, purchases: NO_PURCHASES }} lowStockCount={2} />);
     expect(out).toContain('Food cost');
     expect(out).toContain('30%');
     expect(out).toContain('2 ingredients are running low right now.');
+    expect(out).toContain('No stock bought in this period.');
+  });
+
+  it('Food cost & stock: purchases by supplier and by ingredient, with the price change (made-up figures)', () => {
+    const purchases: ReportPurchases = {
+      spendCents: 1_300_000,
+      bills: 3,
+      byHandCents: 50_000,
+      byHandEntries: 2,
+      bySupplier: [
+        { key: 's1', from: 'supplier', name: 'Test Dairy', bills: 2, spendCents: 1_000_000 },
+        { key: 'no_supplier', from: 'no_supplier', name: 'No supplier named', bills: 1, spendCents: 250_000 },
+        { key: 'by_hand', from: 'by_hand', name: 'Booked in by hand (no bill)', bills: 0, spendCents: 50_000 },
+      ],
+      byIngredient: [
+        { ingredientId: 'i1', name: 'Test cheese', unit: 'g', qty: 8_000, times: 2, spendCents: 1_000_000, lastUnitCostMc: 125_000, prevUnitCostMc: 112_500 },
+        { ingredientId: 'i2', name: 'Test onion', unit: 'g', qty: 10_000, times: 1, spendCents: 250_000, lastUnitCostMc: 25_000, prevUnitCostMc: null },
+      ],
+    };
+    const out = html(<FoodCostStockTab data={{ ...base, kpis: { partialRefundCents: 0 }, foodCost: food, purchases }} lowStockCount={0} />);
+    expect(out).toContain('Rs 13,000 spent on stock, 3 bills.');
+    expect(out).toContain('Test Dairy');
+    expect(out).toContain('No supplier named');
+    expect(out).toContain('Rs 1,250 / kg');
+    expect(out).toContain('▲ 11.1%');
+    expect(out).toContain('Rs 500 of it was stock booked in by hand 2 times, with no bill');
+    expect(out).toContain('Booked in by hand (no bill)');
   });
 
   it('Team & leakage: waste rupees on the Stock column only for a login with costs', () => {

@@ -91,6 +91,8 @@ import type {
   PurchaseOrder,
   PurchaseOrderStatus,
   PurchaseOrderWithItems,
+  RecordPurchaseResult,
+  DrawerPayout,
   BatchRecipe,
   IngredientCategory,
   PriceKind,
@@ -1127,8 +1129,9 @@ export interface IpcContract {
   };
 
   // Procurement — purchase orders
+  /** Newest first. `open`: only those still open (draft, ordered, part received), whatever their age. */
   'inventory:listPurchaseOrders': {
-    request: { status?: PurchaseOrderStatus; supplierId?: string; limit?: number } | undefined;
+    request: { status?: PurchaseOrderStatus; open?: boolean; supplierId?: string; limit?: number } | undefined;
     response: ApiResult<PurchaseOrder[]>;
   };
   'inventory:getPurchaseOrder': {
@@ -1144,7 +1147,14 @@ export interface IpcContract {
       items: Array<{
         ingredientId: string;
         qtyOrdered: number;
-        unitCostCents: number;
+        /**
+         * The price as it is bought (costing spec Phase 5): Rs X per kg /
+         * litre, for a pack of N, or per piece — kept exactly as the line's
+         * ordered pack. Or, the older way, `unitCostCents` per base unit.
+         * Exactly one of the two.
+         */
+        price?: { per: TypedPricePer; priceCents: number; packSize?: number | null };
+        unitCostCents?: number;
         notes?: string | null;
       }>;
     };
@@ -1154,13 +1164,64 @@ export interface IpcContract {
     request: { id: string; status: PurchaseOrderStatus };
     response: ApiResult<{ ok: true }>;
   };
+  /**
+   * Book a delivery in at what its bill says (costing spec Phase 5): per
+   * line, what came and the bill amount for it (omitted = the ordered price
+   * for that quantity). Whether a bill's price becomes the ingredient's
+   * price: `usePrice` per line, as answered on screen; omitted, D1's guard
+   * decides (yes for a delivery, within 10% of the usual price or not —
+   * outside it the screen asks, with yes picked). `updateCosts` is the older
+   * all-lines answer, used for a line that gives none.
+   */
   'inventory:receiveDelivery': {
     request: {
       purchaseOrderId: string;
-      receipts: Array<{ purchaseOrderItemId: string; qtyReceivedNow: number }>;
+      receipts: Array<{ purchaseOrderItemId: string; qtyReceivedNow: number; billCents?: number; usePrice?: boolean }>;
+      invoiceNo?: string | null;
       updateCosts?: boolean;
     };
     response: ApiResult<PurchaseOrderWithItems>;
+  };
+  /**
+   * "Record a purchase" (costing spec Phase 5, kind 'quick'): what was bought
+   * and what was paid for it, line by line, received at once. Supplier
+   * optional. `paidFromDrawer` takes the total out of this till's open shift
+   * as a payout, in the same transaction, so the drawer count reconciles.
+   * Whether a line's price becomes the ingredient's price: `usePrice` as
+   * answered on screen; omitted, D1's guard decides (yes within 10% of the
+   * usual price, NO outside it). COST_CAPABILITY.
+   */
+  'inventory:recordPurchase': {
+    request: {
+      supplierId?: string | null;
+      invoiceNo?: string | null;
+      notes?: string | null;
+      paidFromDrawer?: boolean;
+      lines: Array<{ ingredientId: string; qty: number; billCents: number; usePrice?: boolean }>;
+    };
+    response: ApiResult<RecordPurchaseResult>;
+  };
+  /**
+   * "Turn this payout into a purchase" (costing spec Phase 5, managers): a
+   * free-text drawer payout becomes a purchase, linked once. The payout's
+   * amount, and so the shift's expected cash, never changes. Asked again for
+   * a payout already linked, it answers with that purchase and writes
+   * nothing. COST_CAPABILITY.
+   */
+  'inventory:payoutToPurchase': {
+    request: {
+      cashMovementId: string;
+      supplierId?: string | null;
+      invoiceNo?: string | null;
+      notes?: string | null;
+      lines: Array<{ ingredientId: string; qty: number; billCents: number; usePrice?: boolean }>;
+    };
+    response: ApiResult<RecordPurchaseResult & { alreadyLinked: boolean }>;
+  };
+  /** Recent cash payouts from this till's drawer, newest first, with the purchase each is linked to (COST_CAPABILITY). */
+  'inventory:listDrawerPayouts': {
+    request: { sinceIso?: string; limit?: number } | undefined;
+    response: ApiResult<DrawerPayout[]>;
   };
 
   // Costing (menu.manage = COST_CAPABILITY to read; settings.manage to change targets)

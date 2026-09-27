@@ -332,6 +332,10 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   // Prices and their history (costing spec Phase 4): costs, both ways.
   'inventory:priceHistory': { ingredientId: 'no-such-ingredient' },
   'inventory:setPrice': { ingredientId: 'no-such-ingredient', per: 'piece', priceCents: 1_000 },
+  // Purchases (costing spec Phase 5): what was paid, and the drawer's payouts.
+  'inventory:recordPurchase': { lines: [{ ingredientId: 'no-such-ingredient', qty: 1_000, billCents: 10_000 }], paidFromDrawer: true },
+  'inventory:payoutToPurchase': { cashMovementId: 'no-such-payout', lines: [{ ingredientId: 'no-such-ingredient', qty: 1_000, billCents: 10_000 }] },
+  'inventory:listDrawerPayouts': undefined,
   // Reports: one channel per tab (costing spec Phase 3), each checked in the
   // main process; Food cost & stock needs costs as well.
   'reports:overview': REPORT_TODAY(),

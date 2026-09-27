@@ -14,6 +14,7 @@ import {
   toPriceKind,
   typedPricePack,
   unitCostMc,
+  type Pack,
   type StoredPrice,
   type TypedPrice,
 } from '@cheeseoclock/pos-domain';
@@ -146,6 +147,13 @@ export interface PriceWrite {
   purchaseOrderId?: string | null;
   purchaseOrderItemId?: string | null;
   notes?: string | null;
+  /**
+   * A bill, kept EXACTLY in the history row as it was paid — `size` units
+   * for `priceCents` (costing spec 4.1: "the history row is (q, B)") —
+   * while the ingredient keeps its usual pack at the bill's price (`price`).
+   * Omitted: the history row is the ingredient's new pack.
+   */
+  historyPack?: Pack | null;
 }
 
 export interface PriceWriteOptions {
@@ -284,7 +292,11 @@ function writePrice(db: AppDatabase, w: PriceWrite, actor: Actor, opts: PriceWri
     }
   }
 
-  const pack = effectivePack(next);
+  // The history row: the bill exactly as paid (a delivery, a purchase), else the new pack.
+  const pack = w.historyPack && next.priceKind !== 'free' && next.priceKind !== 'unset' ? w.historyPack : effectivePack(next);
+  if (!Number.isSafeInteger(pack.size) || pack.size < 1 || !Number.isSafeInteger(pack.priceCents) || pack.priceCents < 0) {
+    throw new Error('A price must be for at least 1 whole unit, at Rs 0 or more in whole paisa');
+  }
   // The price before, for the ▲ / ▼: the newest line of its history — what
   // the owner sees as the price before (a batch's starting price is its
   // rolled-up one, while its own columns may still hold the sheet's) — in
