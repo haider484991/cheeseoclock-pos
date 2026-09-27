@@ -20,6 +20,9 @@ export type RangePreset =
   | 'last7'
   | 'thisMonth'
   | 'lastMonth'
+  | 'thisYear'
+  | 'last12'
+  | 'lastYear'
   | 'custom';
 
 export const TRADING_DAY_START_HOUR = 5;
@@ -82,6 +85,23 @@ function monthStart(dayNumber: number, monthsFromNow: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + monthsFromNow, 1) / DAY_MS;
 }
 
+/** Day number of 1 January `yearsFromNow` years away from the year of `dayNumber`. */
+function yearStart(dayNumber: number, yearsFromNow: number): number {
+  return Date.UTC(new Date(dayNumber * DAY_MS).getUTCFullYear() + yearsFromNow, 0, 1) / DAY_MS;
+}
+
+/**
+ * The same calendar date `years` years before `dayNumber`: 29 February
+ * becomes 28 February in a year without one.
+ */
+function sameDateYearsBack(dayNumber: number, years: number): number {
+  const d = new Date(dayNumber * DAY_MS);
+  const y = d.getUTCFullYear() - years;
+  const m = d.getUTCMonth();
+  const lastOfMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return Date.UTC(y, m, Math.min(d.getUTCDate(), lastOfMonth)) / DAY_MS;
+}
+
 /** 0 = Monday … 6 = Sunday (1970-01-01 was a Thursday). */
 export function weekdayIndex(dayNumber: number): number {
   return (((dayNumber + 3) % 7) + 7) % 7;
@@ -141,6 +161,9 @@ const TITLES: Record<RangePreset, string> = {
   last7: 'Last 7 days',
   thisMonth: 'This month',
   lastMonth: 'Last month',
+  thisYear: 'This year',
+  last12: 'Last 12 months',
+  lastYear: 'Last year',
   custom: 'Your dates',
 };
 
@@ -150,7 +173,11 @@ const TITLES: Record<RangePreset, string> = {
  * Comparison rule, in one sentence the owner can hold: the same stretch of
  * time just before — and while a period is still running, only as far into
  * it as we are now ("today so far" vs "yesterday by this time", "this month
- * so far" vs "last month by this date"). Months compare with calendar months.
+ * so far" vs "last month by this date"). Months compare with calendar months,
+ * and years with calendar years: "this year so far" vs "last year by this
+ * date" (29 February counts as 28 February in a year without one). "Last 12
+ * months" runs to today, from the day after this date a year ago (365 days,
+ * or 366 across a 29 February), like "Last 7 days".
  */
 export function periodFor(
   preset: RangePreset,
@@ -205,6 +232,26 @@ export function periodFor(
       prevEnd = start;
       compareLabel = 'the month before';
       break;
+    case 'thisYear':
+      start = yearStart(today, 0);
+      end = yearStart(today, 1);
+      prevStart = yearStart(today, -1);
+      prevEnd = start;
+      compareLabel = 'last year by this date';
+      break;
+    case 'last12':
+      start = sameDateYearsBack(today, 1) + 1;
+      prevStart = sameDateYearsBack(today, 2) + 1;
+      prevEnd = start;
+      compareLabel = 'the 12 months before';
+      break;
+    case 'lastYear':
+      start = yearStart(today, -1);
+      end = yearStart(today, 0);
+      prevStart = yearStart(today, -2);
+      prevEnd = start;
+      compareLabel = 'the year before';
+      break;
     case 'custom': {
       let from = custom ? dayNumberFromYmd(custom.from) : null;
       let to = custom ? dayNumberFromYmd(custom.to) : null;
@@ -229,8 +276,14 @@ export function periodFor(
   const prevSinceMs = dayStartMs(prevStart);
   let prevUntilMs = dayStartMs(prevEnd);
   if (isCurrent) {
-    // Only as far into the comparison period as we are into this one.
-    prevUntilMs = Math.min(prevUntilMs, prevSinceMs + (nowMs - sinceMs));
+    // Only as far into the comparison period as we are into this one: for
+    // a year, to the same calendar date (a 29 February in between must not
+    // shift it by a day); otherwise the same length of time.
+    const soFar =
+      preset === 'thisYear'
+        ? dayStartMs(sameDateYearsBack(today, 1)) + (nowMs - dayStartMs(today))
+        : prevSinceMs + (nowMs - sinceMs);
+    prevUntilMs = Math.min(prevUntilMs, soFar);
   }
 
   const firstDay = ymdOf(start);

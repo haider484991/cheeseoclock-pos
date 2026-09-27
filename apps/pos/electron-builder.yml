@@ -8,6 +8,12 @@ asar: true
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/@node-rs/argon2-*/**"
+  # The Reports worker thread (costing spec Phase 3): a worker's script is
+  # loaded from a real file, next to the unpacked better-sqlite3 it opens the
+  # database with. The main process finds both in app.asar.unpacked
+  # (services/analytics/worker-client.ts resolveWorkerPaths); the log says
+  # "analytics worker ready", or why not and that Reports fall back.
+  - "out/main/analytics-worker.cjs"
 # Ships vcruntime140.dll next to the argon2 binding so a fresh Windows PC
 # (no Visual C++ redistributable) can start the app. Fails the build if the
 # DLL can't be found or the layout above changes. See the script for the why.

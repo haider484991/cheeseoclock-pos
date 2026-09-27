@@ -203,7 +203,13 @@ const api: RendererApi = {
   },
   reports: {
     lowStock: () => invoke('reports:lowStock', undefined),
-    business: (req) => invoke('reports:business', req),
+    // One channel per Reports tab (costing spec Phase 3).
+    overview: (req) => invoke('reports:overview', req),
+    when: (req) => invoke('reports:when', req),
+    menu: (req) => invoke('reports:menu', req),
+    channels: (req) => invoke('reports:channels', req),
+    foodStock: (req) => invoke('reports:foodStock', req),
+    team: (req) => invoke('reports:team', req),
   },
   inventory: {
     listIngredients: (req) => invoke('inventory:listIngredients', req),

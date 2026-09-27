@@ -5,18 +5,16 @@ import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
-import { loadPriceBook, type PriceBook } from '../price-book.js';
+import { loadPriceBook, NOT_VALUED, priceOfBook, safeStockValue, type PriceBook, type RowValue } from '../price-book.js';
 import {
   BASE_PART,
   costSaleLine,
   expandRecipe,
-  stockValueAt,
   totalsByIngredient,
   type PickedChoice,
   type PriceOf,
   type RecipeLine,
   type SaleCostPart,
-  type StockValue,
 } from '@cheeseoclock/pos-domain';
 import {
   COC_ID_NAMESPACE,
@@ -115,30 +113,8 @@ export function listMovements(
   return rows.map(rowToMovement);
 }
 
-/** A stock row that could not be valued (bad data): no value, like a row from before costing. */
-export const NOT_VALUED = { valueCents: null, unitCostMc: null, basis: null } as const;
-export type RowValue = StockValue | typeof NOT_VALUED;
-
-/**
- * What `q` units are worth at a price, for a stock row — never throwing: a
- * quantity the exact arithmetic refuses (not a whole number, from old or
- * hand-edited data) is left unvalued rather than blocking the stock.
- */
-export function safeStockValue(q: number, price: Parameters<typeof stockValueAt>[1]): RowValue {
-  try {
-    return stockValueAt(q, price);
-  } catch {
-    return NOT_VALUED;
-  }
-}
-
-/** Every live ingredient's effective price now (a batch at its rolled-up price). */
-export function priceOfBook(book: PriceBook): PriceOf {
-  return (id) => {
-    const p = book.prices.get(id);
-    return p ? { pack: p.pack, kind: p.kind } : undefined;
-  };
-}
+// What a stock row is worth (moved to price-book.ts so the Reports worker can load it without Electron).
+export { NOT_VALUED, priceOfBook, safeStockValue, type RowValue };
 
 export interface RecordMovementInput {
   ingredientId: string;

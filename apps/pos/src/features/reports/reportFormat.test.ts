@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BusinessReport, ReportFoodCost, ReportKpis } from '@cheeseoclock/shared-types';
 import { periodFor } from './dateRange';
-import { buildCsv, buildPrintBody, csvFileName, escapeHtml, toCsv } from './exporters';
+import { buildPrintEverything, buildTabCsv, buildTabPrintBody, csvFileName, escapeHtml, toCsv, type SomeReportTabs } from './exporters';
 import {
   MISSING_COST_WHY,
   WASTE_REASON_LABEL,
@@ -20,10 +20,25 @@ import {
   percentOf,
   stockCellText,
   unpaidFoodText,
+  websiteVsTill,
   weekdayAverages,
 } from './reportFormat';
 
 const SAT_3PM = new Date('2026-09-26T10:00:00.000Z');
+
+describe('website vs till', () => {
+  it('splits the order types into website orders and the rest, adding up to the sales', () => {
+    const split = websiteVsTill([
+      { channel: 'takeaway', orderCount: 5, netSalesCents: 50_000 },
+      { channel: 'web_delivery', orderCount: 2, netSalesCents: 30_000 },
+      { channel: 'web_pickup', orderCount: 1, netSalesCents: 9_000 },
+      { channel: 'foodpanda', orderCount: 3, netSalesCents: 40_000 },
+      { channel: 'delivery', orderCount: 1, netSalesCents: 12_000 },
+    ]);
+    expect(split).toEqual({ website: { orderCount: 3, netSalesCents: 39_000 }, till: { orderCount: 9, netSalesCents: 102_000 } });
+    expect(websiteVsTill([])).toEqual({ website: { orderCount: 0, netSalesCents: 0 }, till: { orderCount: 0, netSalesCents: 0 } });
+  });
+});
 
 describe('changeOf', () => {
   it('says how a figure moved, in words the owner reads', () => {
@@ -209,6 +224,49 @@ const report = (over: Partial<BusinessReport> = {}): BusinessReport => ({
   ...over,
 });
 
+/** The report split into its tabs, as the tab channels hand them over. Without its food cost: no Food cost & stock tab. */
+function tabsOf(r: BusinessReport): SomeReportTabs {
+  const base = { sinceIso: r.sinceIso, untilIso: r.untilIso, engine: 'worker' as const };
+  const k = r.kpis;
+  return {
+    overview: { ...base, kpis: k, previous: r.previous, channels: r.channels },
+    when: { ...base, kpis: { orderCount: k.orderCount, netSalesCents: k.netSalesCents }, byDay: r.byDay, byHour: r.byHour },
+    menu: { ...base, kpis: { menuSalesCents: k.menuSalesCents, itemCount: k.itemCount }, items: r.items, categories: r.categories },
+    channels: {
+      ...base,
+      kpis: { orderCount: k.orderCount, netSalesCents: k.netSalesCents, avgOrderCents: k.avgOrderCents },
+      channels: r.channels,
+      deliveries: r.deliveries,
+    },
+    ...(r.foodCost ? { foodStock: { ...base, kpis: { partialRefundCents: k.partialRefundCents }, foodCost: r.foodCost } } : {}),
+    team: {
+      ...base,
+      kpis: {
+        netSalesCents: k.netSalesCents,
+        menuSalesCents: k.menuSalesCents,
+        partialRefundCents: k.partialRefundCents,
+        fullRefundCents: k.fullRefundCents,
+        voidCount: k.voidCount,
+        voidCents: k.voidCents,
+      },
+      staff: r.staff,
+      shifts: r.shifts,
+      discounts: r.discounts,
+      refunds: r.refunds,
+      voids: r.voids,
+      drawerOpens: r.drawerOpens,
+      drawerOpenCount: r.drawerOpenCount,
+      foodCost: r.foodCost ? { hasCosts: r.foodCost.hasCosts } : null,
+    },
+  };
+}
+
+/** One tab's CSV / printout of a made-up report. */
+const tabCsv = (tab: keyof SomeReportTabs, r: BusinessReport, period = periodFor('today', SAT_3PM)) =>
+  buildTabCsv(tab, tabsOf(r)[tab] as never, period, SAT_3PM);
+const tabPrint = (tab: keyof SomeReportTabs, r: BusinessReport, period = periodFor('today', SAT_3PM)) =>
+  buildTabPrintBody(tab, tabsOf(r)[tab] as never, period, SAT_3PM);
+
 describe('CSV for Excel', () => {
   it('quotes, escapes, and defuses formulas; money as plain rupees', () => {
     const csv = toCsv([
@@ -221,19 +279,26 @@ describe('CSV for Excel', () => {
     expect(second).toBe('12,1234.56,-5.00,');
   });
 
-  it('carries the same figures as the screen', () => {
+  it('carries the same figures as the screen, each tab in its own file', () => {
     const period = periodFor('today', SAT_3PM);
-    const csv = buildCsv(report(), period, SAT_3PM);
-    expect(csv).toContain('Period,Today: Sat 26 Sep 2026');
-    expect(csv).toContain('Compared with,yesterday by this time');
-    expect(csv).toContain('"Sales (after discounts and refunds, tax included) Rs",215.40,200.00');
-    expect(csv).toContain(`'=HYPERLINK(""x"")`);
-    expect(csv).toContain('"Burgers, large"');
-    expect(csv).toContain('8 pm,2,215.40');
+    const overview = tabCsv('overview', report(), period);
+    expect(overview).toContain('Sales report,Overview');
+    expect(overview).toContain('Period,Today: Sat 26 Sep 2026');
+    expect(overview).toContain('Compared with,yesterday by this time');
+    expect(overview).toContain('"Sales (after discounts and refunds, tax included) Rs",215.40,200.00');
+    expect(overview).toContain('"Till (counter, phone, Foodpanda)",2,215.40');
+    const menu = tabCsv('menu', report(), period);
+    expect(menu).toContain(`'=HYPERLINK(""x"")`);
+    expect(menu).toContain('"Burgers, large"');
+    // Only the Overview says what the period is compared with.
+    expect(menu).not.toContain('Compared with');
+    expect(tabCsv('when', report(), period)).toContain('8 pm,2,215.40');
     // No-sale drawer opens per person, and the list of each one.
-    expect(csv).toContain('Cancelled orders,Drawer opened with no sale');
-    expect(csv).toMatch(/Ali.*,215\.40,10\.00,1,2\r\n/);
-    const withOpen = buildCsv(
+    const team = tabCsv('team', report(), period);
+    expect(team).toContain('Cancelled orders,Drawer opened with no sale');
+    expect(team).toMatch(/Ali.*,215\.40,10\.00,1,2\r\n/);
+    const withOpen = tabCsv(
+      'team',
       report({
         drawerOpens: [
           {
@@ -248,42 +313,96 @@ describe('CSV for Excel', () => {
         ],
       }),
       period,
-      SAT_3PM,
     );
     expect(withOpen).toContain('CASH DRAWER OPENED BY HAND (NO SALE)');
     expect(withOpen).toMatch(/No sale,Change,Ali,Sara,Yes/);
     // A busy month: the list stops at the cap, and says so.
-    const capped = buildCsv(report({ drawerOpens: [drawerOpen()], drawerOpenCount: 420 }), period, SAT_3PM);
+    const capped = tabCsv('team', report({ drawerOpens: [drawerOpen()], drawerOpenCount: 420 }), period);
     expect(capped).toContain('CASH DRAWER OPENED BY HAND (NO SALE) — LATEST 1 OF 420');
   });
 
-  it('names the file after the period', () => {
+  it('names the file after the tab and the period', () => {
     expect(csvFileName({ firstDay: '2026-09-26', lastDay: '2026-09-26' })).toBe('sales-report-2026-09-26.csv');
     expect(csvFileName({ firstDay: '2026-09-01', lastDay: '2026-09-30' })).toBe('sales-report-2026-09-01-to-2026-09-30.csv');
+    expect(csvFileName({ firstDay: '2026-09-26', lastDay: '2026-09-26' }, 'menu')).toBe('sales-report-menu-2026-09-26.csv');
+    expect(csvFileName({ firstDay: '2026-01-01', lastDay: '2026-12-31' }, 'foodStock')).toBe(
+      'sales-report-food-cost-stock-2026-01-01-to-2026-12-31.csv',
+    );
+  });
+
+  it('each tab\'s file holds that tab only (costing spec Phase 3)', () => {
+    // Every section heading of every tab, and the tab it belongs to.
+    const HEADINGS: Record<keyof SomeReportTabs, string[]> = {
+      overview: ['SUMMARY', 'WEBSITE VS TILL'],
+      when: ['SALES BY DAY', 'SALES BY HOUR'],
+      menu: ['ITEMS SOLD', 'CATEGORIES'],
+      channels: ['ORDER TYPES', 'DELIVERIES BY RIDER', 'DELIVERIES BY AREA'],
+      foodStock: ['FOOD COST', 'WASTE BY REASON', 'SALES WITH MISSING COSTS', 'INGREDIENTS WASTED'],
+      team: ['STAFF', 'SHIFTS', 'DISCOUNTS BY REASON', 'DISCOUNTS BY PERSON', 'EACH DISCOUNT', 'REFUNDS', 'CANCELLED BEFORE PAYMENT', 'CASH DRAWER OPENED BY HAND'],
+    };
+    const r = report({ foodCost: food({ hasCosts: true, hasUsage: true, foodSalesCents: 10_000 }) });
+    for (const tab of Object.keys(HEADINGS) as Array<keyof SomeReportTabs>) {
+      const lines = tabCsv(tab, r).split('\r\n');
+      // A heading is the line after a blank one (the file's own layout).
+      const headings = lines.filter((_, i) => i > 0 && lines[i - 1] === '').map((l) => l.replace(/^"|"$/g, ''));
+      for (const own of HEADINGS[tab]) expect({ tab, own, found: headings.some((h) => h.startsWith(own)) }).toEqual({ tab, own, found: true });
+      for (const [other, theirs] of Object.entries(HEADINGS)) {
+        if (other === tab) continue;
+        for (const h of theirs) {
+          expect({ tab, foreign: h, found: headings.some((x) => x.startsWith(h)) }).toEqual({ tab, foreign: h, found: false });
+        }
+      }
+    }
   });
 });
 
 describe('printout', () => {
   it('escapes everything typed at the till', () => {
     expect(escapeHtml(`<a href="x">'&'</a>`)).toBe('&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;');
-    const html = buildPrintBody(report(), periodFor('today', SAT_3PM), SAT_3PM);
+    const html = tabPrint('team', report());
     expect(html).not.toContain('<b>Ali</b>');
     expect(html).toContain('&lt;b&gt;Ali&lt;/b&gt;');
   });
 
   it('prints the headline, the comparison and the add-up', () => {
-    const html = buildPrintBody(report(), periodFor('today', SAT_3PM), SAT_3PM);
-    expect(html).toContain('Sales report — Today');
+    const html = tabPrint('overview', report());
+    expect(html).toContain('Overview — Today');
     expect(html).toContain('Sat 26 Sep 2026');
     expect(html).toContain('compared with yesterday by this time');
     expect(html).toContain('▲ 8%, was Rs 200');
     expect(html).toContain('How the sales add up');
     expect(html).toContain('Cancelled before payment: 1 order');
-    expect(html).toContain('No-sale opens');
+    expect(html).toContain('Website vs till');
+    expect(tabPrint('team', report())).toContain('No-sale opens');
+  });
+
+  it('prints a tab on its own, and everything in the page\'s order', () => {
+    const r = report({ foodCost: food({ hasCosts: true, hasUsage: true, foodSalesCents: 100_000, foodCostBps: 3_000, coverageBps: 10_000 }) });
+    const menu = tabPrint('menu', r);
+    expect(menu).toContain('Top items');
+    expect(menu).not.toContain('How the sales add up');
+    expect(menu).not.toContain('Food cost');
+    expect(menu).not.toContain('compared with');
+    const when = tabPrint('when', r);
+    expect(when).toContain('Sales by hour (Pakistan time)');
+    expect(when).toContain('<td>8 pm</td><td class="r">2</td><td class="r">Rs 215.40</td>');
+
+    const all = buildPrintEverything(tabsOf(r), periodFor('today', SAT_3PM), SAT_3PM);
+    expect(all).toContain('Sales report — Today');
+    const order = ['Overview', 'When', 'Menu', 'Channels &amp; delivery', 'Food cost &amp; stock', 'Team &amp; leakage'].map((t) =>
+      all.indexOf(`<div class="tab-title">${t}</div>`),
+    );
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // A login without costs is handed no Food cost & stock tab: nothing of it prints.
+    const noCosts = buildPrintEverything(tabsOf(report({ foodCost: null })), periodFor('today', SAT_3PM), SAT_3PM);
+    expect(noCosts).not.toContain('Food cost');
+    expect(noCosts).toContain('Team &amp; leakage');
   });
 
   it('prints each shift’s cash in/out and no-sale opens, and every hand-opened drawer with who approved it', () => {
-    const html = buildPrintBody(
+    const html = tabPrint(
+      'team',
       report({
         shifts: [
           {
@@ -309,8 +428,6 @@ describe('printout', () => {
         ],
         drawerOpenCount: 3,
       }),
-      periodFor('today', SAT_3PM),
-      SAT_3PM,
     );
     expect(html).toContain('<th class="r">Cash in/out</th><th class="r">No-sale opens</th>');
     expect(html).toMatch(/Matched<\/td><td class="r">3<\/td><td class="r">2<\/td>/);
@@ -327,15 +444,15 @@ describe('printout', () => {
     const many = Array.from({ length: 30 }, (_, i) => drawerOpen({ id: `d${i}` }));
     const period = periodFor('today', SAT_3PM);
     // More than fit on paper; the Excel file has them all.
-    let html = buildPrintBody(report({ drawerOpens: many, drawerOpenCount: 30 }), period, SAT_3PM);
+    let html = tabPrint('team', report({ drawerOpens: many, drawerOpenCount: 30 }), period);
     expect(html).toContain('Cash drawer opened by hand — 30 times');
     expect(html).toContain('Showing the latest 25 of 30. Download for Excel for the full list.');
     // The report itself stopped at its cap: say how many there really were.
-    html = buildPrintBody(report({ drawerOpens: many, drawerOpenCount: 420 }), period, SAT_3PM);
+    html = tabPrint('team', report({ drawerOpens: many, drawerOpenCount: 420 }), period);
     expect(html).toContain('Cash drawer opened by hand — 420 times');
     expect(html).toContain('Showing the latest 25 of 420. Download for Excel for the latest 30.');
     // None: no section.
-    expect(buildPrintBody(report(), period, SAT_3PM)).not.toContain('Cash drawer opened by hand');
+    expect(tabPrint('team', report(), period)).not.toContain('Cash drawer opened by hand');
   });
 });
 
@@ -388,15 +505,18 @@ describe('stock after a cancel or refund', () => {
         hasUsage: true,
       }),
     });
-    const csv = buildCsv(r, periodFor('today', SAT_3PM), SAT_3PM);
+    const csv = tabCsv('team', r);
     expect(csv).toContain('Cancelled,Order,Value Rs,Reason,Stock,Approved by,Taken by');
     expect(csv).toContain('Not collected,Wasted · Rs 180,Sara,Ali');
-    expect(csv).toContain('Of the waste: food made for cancelled orders,1,180.00');
+    const foodCsv = tabCsv('foodStock', r);
+    expect(foodCsv).toContain('Of the waste: food made for cancelled orders,1,180.00');
     // Counted in orders (one here), not in its ingredient rows.
-    expect(csv).toContain('Reason,Times,Cost Rs');
-    expect(csv).toContain('Cancelled after cooking,1,180.00');
-    const html = buildPrintBody(r, periodFor('today', SAT_3PM), SAT_3PM);
-    expect(html).toContain('<td>Wasted · Rs 180</td>');
+    expect(foodCsv).toContain('Reason,Times,Cost Rs');
+    expect(foodCsv).toContain('Cancelled after cooking,1,180.00');
+    expect(tabPrint('team', r)).toContain('<td>Wasted · Rs 180</td>');
+    // A login without costs: its Team tab says "Wasted", no rupees.
+    const noCosts = tabsOf(report({ ...r, foodCost: null, voids: r.voids.map((v) => ({ ...v, stock: v.stock && { ...v.stock, wasteCents: 0 } })) }));
+    expect(buildTabCsv('team', noCosts.team!, periodFor('today', SAT_3PM), SAT_3PM)).toContain('Not collected,Wasted,Sara,Ali');
   });
 });
 
@@ -456,19 +576,23 @@ describe('food cost, in plain words', () => {
         hasUsage: true,
       }),
     });
-    const csv = buildCsv(withFood, period, SAT_3PM);
+    const csv = tabCsv('foodStock', withFood, period);
     expect(csv).toContain('FOOD COST (THIS TILL; SALES BEFORE TAX, AFTER DISCOUNTS)');
     expect(csv).toContain('Food cost (sales with a known cost),,,30%');
     expect(csv).toContain('Costs known for,,940.00,94%');
     expect(csv).toContain("Estimated at today's prices,3,40.00,");
     expect(csv).toContain('Test Wings,No recipe,2,60.00');
-    const html = buildPrintBody(withFood, period, SAT_3PM);
+    const html = tabPrint('foodStock', withFood, period);
     expect(html).toContain('Food cost 30% of food sales');
     expect(html).toContain('costs known for 94% of sales');
     expect(html).toContain("Includes 3 orders estimated at today&#39;s prices.");
 
+    // No other tab carries it, so a login without costs (no Food cost & stock tab) gets none.
     const without = report({ foodCost: null });
-    expect(buildCsv(without, period, SAT_3PM)).not.toContain('FOOD COST');
-    expect(buildPrintBody(without, period, SAT_3PM)).not.toContain('Food cost');
+    for (const tab of ['overview', 'when', 'menu', 'channels', 'team'] as const) {
+      expect(tabCsv(tab, without, period)).not.toContain('FOOD COST');
+      expect(tabPrint(tab, without, period)).not.toContain('Food cost');
+    }
+    expect(buildPrintEverything(tabsOf(without), period, SAT_3PM)).not.toContain('Food cost');
   });
 });

@@ -1,0 +1,287 @@
+/**
+ * Reports → Team & leakage (costing spec Phase 3): who took the orders,
+ * shifts and the cash drawer, discounts, refunds and cancelled orders. The
+ * sections moved here unchanged from ReportSections.tsx; the tab loads only
+ * these figures (reports:team). Phase 10 adds rates, flags and the
+ * Exceptions list here.
+ */
+import { cn } from '@cheeseoclock/ui';
+import { formatCents } from '@cheeseoclock/pos-domain';
+import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
+import { Percent, Receipt, UsersRound } from 'lucide-react';
+import { DataTable, Panel, Section, useShowAll } from '../reportUi';
+import { DRAWER_OPEN_WHY, fmtWhen, methodLabel, percentOf, stockCellText } from '../reportFormat';
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+export function TeamLeakageTab({ data }: { data: ReportTeamTab }) {
+  return (
+    <div className="space-y-10">
+      <StaffSection report={data} />
+      <DiscountsSection report={data} />
+      <RefundsSection report={data} />
+    </div>
+  );
+}
+
+/** " · cash in/out 3× · drawer opened 2× with no sale" — what else opened the drawer on a shift. */
+function shiftDrawerNote(s: ReportShiftLine): string {
+  let note = '';
+  if (s.cashMovementCount > 0) note += ` · cash in/out ${s.cashMovementCount}×`;
+  if (s.noSaleOpens > 0) note += ` · drawer opened ${s.noSaleOpens}× with no sale`;
+  return note;
+}
+
+export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'drawerOpens' | 'drawerOpenCount'> }) {
+  const net = report.kpis.netSalesCents;
+  const opens = useShowAll(report.drawerOpens, 8);
+  const closed = report.shifts.filter((s) => s.closedAt !== null && s.varianceCents !== null);
+  const drawer = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
+  return (
+    <Section id="staff" icon={UsersRound} title="Staff and cash drawer">
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Orders taken" note="Website orders come in by themselves, so they have their own line.">
+          <DataTable
+            columns={[{ label: 'Taken by' }, { label: 'Orders', right: true }, { label: 'Sales', right: true }, { label: 'Discounts', right: true }, { label: 'Cancelled', right: true }, { label: 'No-sale opens', right: true }, { label: 'Reprints', right: true }]}
+            rows={report.staff.map((s) => [
+              <span key="n" className={cn('font-medium', s.isWebsite && 'text-sky-700 dark:text-sky-300')}>{s.name}</span>,
+              s.orderCount,
+              <span key="s">
+                {formatCents(s.netSalesCents)} <span className="text-xs text-stone-500">{percentOf(s.netSalesCents, net)}</span>
+              </span>,
+              s.discountCents > 0 ? formatCents(s.discountCents) : '—',
+              s.voidCount > 0 ? <span key="v" className="font-semibold text-amber-700 dark:text-amber-400">{s.voidCount}</span> : '—',
+              s.noSaleOpens > 0 ? <span key="d" className="font-semibold text-amber-700 dark:text-amber-400">{s.noSaleOpens}</span> : '—',
+              // Receipts / bills printed again by hand (each says DUPLICATE).
+              (s.reprints ?? 0) > 0 ? <span key="r" className="font-semibold text-amber-700 dark:text-amber-400">{s.reprints}</span> : '—',
+            ])}
+            empty="No orders in this period yet."
+          />
+        </Panel>
+
+        <Panel
+          title="Shifts — cash in the drawer"
+          note="Expected = float + cash sales − cash refunds + cash put in − cash taken out. Figures are the ones saved when the shift was closed."
+        >
+          {closed.length > 0 && (
+            <div
+              className={cn(
+                'mb-3 rounded-lg px-3 py-2 text-sm font-semibold',
+                drawer === 0
+                  ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                  : drawer > 0
+                    ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                    : 'bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-300',
+              )}
+            >
+              {drawer === 0
+                ? `Every closed drawer matched (${plural(closed.length, 'shift')}).`
+                : `${drawer > 0 ? 'Over' : 'Short'} ${formatCents(Math.abs(drawer))} in all, over ${plural(closed.length, 'closed shift')}.`}
+            </div>
+          )}
+          <DataTable
+            columns={[{ label: 'Shift' }, { label: 'Float', right: true }, { label: 'Taken out', right: true }, { label: 'Expected', right: true }, { label: 'Counted', right: true }, { label: 'Result', right: true }]}
+            rows={report.shifts.map((s) => [
+              <div key="w">
+                <div className="font-medium">{fmtWhen(s.openedAt)}</div>
+                <div className="text-xs text-stone-500">
+                  {s.closedAt ? `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}` : `still open · opened by ${s.openedBy}`}
+                  {shiftDrawerNote(s)}
+                </div>
+              </div>,
+              formatCents(s.openingCashCents),
+              s.cashOutCents > 0 ? formatCents(s.cashOutCents) : '—',
+              s.expectedCashCents === null ? '—' : formatCents(s.expectedCashCents),
+              s.countedCashCents === null ? '—' : formatCents(s.countedCashCents),
+              s.varianceCents === null ? (
+                '—'
+              ) : s.varianceCents === 0 ? (
+                <span key="r" className="font-semibold text-emerald-700 dark:text-emerald-400">Matched</span>
+              ) : (
+                <span key="r" className={cn('font-semibold', s.varianceCents > 0 ? 'text-amber-700 dark:text-amber-400' : 'text-red-700 dark:text-red-400')}>
+                  {s.varianceCents > 0 ? 'Over' : 'Short'} {formatCents(Math.abs(s.varianceCents))}
+                </span>
+              ),
+            ])}
+            empty="No shifts were opened in this period."
+          />
+        </Panel>
+
+        <Panel
+          title={`Cash drawer opened by hand — ${plural(report.drawerOpenCount, 'time')}`}
+          note="Opened with no sale: the Open drawer button, “Open drawer to count” at close, and Test drawer. A cashier needs a manager's PIN or password."
+          className="xl:col-span-2"
+        >
+          <DataTable
+            columns={[{ label: 'When' }, { label: 'Why' }, { label: 'Opened by' }, { label: 'Approved by' }]}
+            rows={opens.shown.map((d) => [
+              <div key="w">
+                <div>{fmtWhen(d.createdAt)}</div>
+                {d.outsideShift && <div className="text-xs text-amber-700 dark:text-amber-400">No shift open</div>}
+              </div>,
+              <div key="k">
+                <div>{DRAWER_OPEN_WHY[d.kind]}</div>
+                {d.reason && <div className="text-xs text-stone-500">{d.reason}</div>}
+              </div>,
+              d.openedBy,
+              d.approvedBy ?? '—',
+            ])}
+            empty="The drawer was not opened by hand in this period."
+          />
+          {opens.toggle}
+          {report.drawerOpens.length < report.drawerOpenCount && (
+            <p className="mt-2 text-xs text-stone-500">
+              Showing the latest {report.drawerOpens.length} of {report.drawerOpenCount}. The counts per person and per
+              shift include all of them.
+            </p>
+          )}
+        </Panel>
+      </div>
+    </Section>
+  );
+}
+
+export function DiscountsSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 'discounts'> }) {
+  const d = report.discounts;
+  const { shown, toggle } = useShowAll(d.recent, 8);
+  return (
+    <Section
+      id="discounts"
+      icon={Percent}
+      title="Discounts given"
+      subtitle={
+        d.totalCount > 0
+          ? `${formatCents(d.totalCents)} off ${plural(d.totalCount, 'order')} — ${percentOf(d.totalCents, report.kpis.menuSalesCents)} of menu-price sales.`
+          : undefined
+      }
+    >
+      {d.totalCount === 0 ? (
+        <Panel>
+          <p className="py-4 text-center text-sm text-stone-500">No discounts in this period.</p>
+        </Panel>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Panel title="Why">
+            <DataTable
+              columns={[{ label: 'Reason' }, { label: 'Times', right: true }, { label: 'Amount', right: true }]}
+              rows={d.byReason.map((r) => [r.reason, r.count, formatCents(r.amountCents)])}
+              empty="None."
+            />
+          </Panel>
+          <Panel title="Who gave them" note="“Manager OK” = a manager's PIN or password approved it.">
+            <DataTable
+              columns={[{ label: 'Given by' }, { label: 'Times', right: true }, { label: 'Amount', right: true }, { label: 'Manager OK', right: true }]}
+              rows={d.byPerson.map((p) => [p.name, p.count, formatCents(p.amountCents), p.approvedCount || '—'])}
+              empty="None."
+            />
+          </Panel>
+          <Panel title="Each discount" className="xl:col-span-2">
+            <DataTable
+              columns={[{ label: 'When' }, { label: 'Order' }, { label: 'Discount', right: true }, { label: 'Reason' }, { label: 'Given by' }, { label: 'Approved by' }]}
+              rows={shown.map((x) => [
+                fmtWhen(x.createdAt),
+                <span key="o" className="font-mono text-xs">{x.orderNumber}</span>,
+                <span key="a">
+                  {formatCents(x.amountCents)}
+                  {x.entered && <span className="ml-1 text-xs text-stone-500">({x.entered})</span>}
+                </span>,
+                x.reason,
+                x.givenBy,
+                x.approvedBy ?? '—',
+              ])}
+              empty="None."
+            />
+            {toggle}
+            {d.recent.length < d.totalCount && (
+              <p className="mt-2 text-xs text-stone-500">
+                Showing the latest {d.recent.length} of {d.totalCount}. The totals above include all of them.
+              </p>
+            )}
+          </Panel>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+export function RefundsSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 'refunds' | 'voids' | 'foodCost'> }) {
+  const k = report.kpis;
+  const refunds = useShowAll(report.refunds, 8);
+  const voids = useShowAll(report.voids, 8);
+  return (
+    <Section
+      id="refunds"
+      icon={Receipt}
+      title="Refunds and cancelled orders"
+      subtitle="Refunds are money handed back. Cancelled orders were never paid, so no money moved."
+    >
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel
+          title={`Refunds — ${formatCents(k.partialRefundCents + k.fullRefundCents)}`}
+          note="Listed against the day the order was taken, whenever the money went back."
+        >
+          <DataTable
+            columns={[{ label: 'When' }, { label: 'Amount', right: true }, { label: 'Reason' }, { label: 'Stock' }, { label: 'Approved by' }]}
+            rows={refunds.shown.map((x) => [
+              <div key="w">
+                <div>{fmtWhen(x.refundedAt)}</div>
+                <div className="font-mono text-xs text-stone-500">{x.orderNumber}</div>
+              </div>,
+              <div key="a">
+                <div>{formatCents(x.amountCents)}</div>
+                <div className="text-xs text-stone-500">
+                  {methodLabel(x.method)} · {x.full ? 'whole order' : 'part'}
+                </div>
+              </div>,
+              x.reason,
+              <StockCell key="s" stock={x.stock} hasCosts={report.foodCost?.hasCosts ?? false} />,
+              x.approvedBy,
+            ])}
+            empty="No refunds in this period."
+          />
+          {refunds.toggle}
+        </Panel>
+        <Panel title={`Cancelled before payment — ${plural(k.voidCount, 'order')}`} note={k.voidCount > 0 ? `Worth ${formatCents(k.voidCents)} at the time. Not in the sales.` : undefined}>
+          <DataTable
+            columns={[{ label: 'When' }, { label: 'Value', right: true }, { label: 'Reason' }, { label: 'Stock' }, { label: 'Approved by' }, { label: 'Taken by' }]}
+            rows={voids.shown.map((v) => [
+              <div key="w">
+                <div>{fmtWhen(v.voidedAt ?? v.createdAt)}</div>
+                {v.billPrinted && <div className="text-[10px] font-semibold uppercase text-red-700 dark:text-red-400">Bill was printed</div>}
+                <div className="font-mono text-xs text-stone-500">{v.orderNumber}</div>
+              </div>,
+              formatCents(v.amountCents),
+              v.reason,
+              <StockCell key="s" stock={v.stock} hasCosts={report.foodCost?.hasCosts ?? false} />,
+              v.approvedBy,
+              v.takenBy,
+            ])}
+            empty="No cancelled orders in this period."
+          />
+          {voids.toggle}
+        </Panel>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * What a cancel / whole-order refund did to stock: "Put back", "Wasted · Rs
+ * 180", or "—". Amber when it deserves a look: put back although cooking had
+ * been marked, or the answer went against what the till hinted.
+ */
+function StockCell({ stock, hasCosts }: { stock: ReportOrderStock | null; hasCosts: boolean }) {
+  const text = stockCellText(stock, hasCosts);
+  if (!stock) return <span className="text-stone-400">{text}</span>;
+  return (
+    <span
+      className={cn(
+        'whitespace-nowrap text-xs',
+        stock.flagged ? 'rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-900 dark:bg-amber-950 dark:text-amber-100' : '',
+      )}
+      title={stock.flagged ? 'Worth a look: put back after cooking was marked, or against the hint the till showed' : undefined}
+    >
+      {text}
+    </span>
+  );
+}

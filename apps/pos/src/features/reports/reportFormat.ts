@@ -6,6 +6,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type {
   BusinessReport,
   ReportChannel,
+  ReportChannelLine,
   ReportFoodCost,
   ReportMissingCostWhy,
   ReportOrderStock,
@@ -24,6 +25,21 @@ export const CHANNEL_LABEL: Record<ReportChannel, string> = {
   dine_in: 'Dine-in (old orders)',
   online: 'Online (old orders)',
 };
+
+/**
+ * Website orders (pick-up and delivery) against everything rung up at the
+ * till (counter, phone, Foodpanda, older kinds), from the order types. Both
+ * add up to the sales, as the order types do.
+ */
+export function websiteVsTill(channels: ReportChannelLine[]): Record<'website' | 'till', { orderCount: number; netSalesCents: number }> {
+  const out = { website: { orderCount: 0, netSalesCents: 0 }, till: { orderCount: 0, netSalesCents: 0 } };
+  for (const c of channels) {
+    const side = c.channel === 'web_pickup' || c.channel === 'web_delivery' ? out.website : out.till;
+    side.orderCount += c.orderCount;
+    side.netSalesCents += c.netSalesCents;
+  }
+  return out;
+}
 
 export const PAYMENT_LABEL: Record<ReportPaymentGroup, string> = {
   cash: 'Cash',

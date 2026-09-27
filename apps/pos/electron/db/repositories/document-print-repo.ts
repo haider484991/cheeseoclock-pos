@@ -3,6 +3,7 @@ import type { AppDatabase } from '../connection.js';
 import type { PrintedDocument } from '@cheeseoclock/shared-types';
 import { writeWithSync, nowIso } from './base.js';
 import { getSettingRaw } from './settings-repo.js';
+import { MANUAL_REASON, duplicatePressesSql, type PrintReason } from '../print-log-sql.js';
 
 /**
  * The print log (migrations/0030_document_prints.sql): one row per paper the
@@ -19,11 +20,8 @@ import { getSettingRaw } from './settings-repo.js';
 export type PrintedCopy = 'customer' | 'shop' | 'kitchen';
 export type PrintOutcome = 'printed' | 'unsure';
 
-/** Why a paper printed: a receipt job's reason, or for the kitchen auto / reprint / cancel. */
-export type PrintReason = 'payment' | 'dispatch' | 'refund' | 'reprint' | 'auto' | 'cancel';
-
-/** The Reprint button (and the chef-hat button): printed by hand. */
-export const MANUAL_REASON: PrintReason = 'reprint';
+// Why a paper printed, the Reprint button's reason and the DUPLICATE-press SQL live in ../print-log-sql.ts.
+export { MANUAL_REASON, duplicatePressesSql, type PrintReason };
 
 /** A job finished by the version before the log: counted as printed (see legacyPrintCount). */
 export const LEGACY_PLAN = '"legacy"';
@@ -260,26 +258,6 @@ function isSaleReceiptFor(p: JobPayloadBits, copy: PrintedCopy): boolean {
   if (p.reason === 'refund') return false;
   const copies = Array.isArray(p.copies) && p.copies.length > 0 ? (p.copies as unknown[]) : ['customer'];
   return copies.includes(copy);
-}
-
-/**
- * One row per Reprint press whose paper was a DUPLICATE: receipts, bills and
- * slips (kitchen tickets left out), counted by press — a press the printer
- * fumbled ('unsure', then printed on the retry) is one — and only when that
- * press found an earlier paper of the same series (print_no > 0 on its first
- * row). The first bill of a table printed with the button, and a first
- * receipt printed by hand long after the sale ("Printed later"), are
- * originals: never counted. Shared by Order History (reprintCounts) and
- * Reports → Staff (print-report.ts), so both show the same number.
- * `filter` narrows the rows first (placeholders only, never values).
- */
-export function duplicatePressesSql(filter: string): string {
-  return `SELECT order_id AS orderId, requested_by_user_id AS userId
-            FROM document_prints
-           WHERE reason = '${MANUAL_REASON}' AND copy IN ('customer', 'shop') AND deleted_at IS NULL
-             AND (${filter})
-           GROUP BY order_id, COALESCE(print_job_id, id)
-          HAVING MIN(print_no) > 0`;
 }
 
 /** DUPLICATE papers printed by hand (the Reprint button) per order, one per press. For Order History. */

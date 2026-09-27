@@ -61,7 +61,15 @@ import type {
   Shift,
   ShiftSummary,
 } from './shift.js';
-import type { BusinessReport, BusinessReportRequest } from './reports.js';
+import type {
+  ReportChannelsTab,
+  ReportFoodStockTab,
+  ReportMenuTab,
+  ReportOverviewTab,
+  ReportTabRequest,
+  ReportTeamTab,
+  ReportWhenTab,
+} from './reports.js';
 import type {
   PrinterConnectionConfig,
   PrintPolicy,
@@ -1168,7 +1176,10 @@ export interface IpcContract {
     response: ApiResult<BatchCalc>;
   };
 
-  // Reports (the older one-figure channels were retired with costing Phase 2)
+  // Reports: one channel per tab of the Reports page (costing spec Phase 3),
+  // each worked out in the Reports worker thread, not on the till's main
+  // thread. The older one-figure channels went with Phase 2; the whole-page
+  // `reports:business` with Phase 3.
   'reports:lowStock': {
     request: undefined;
     response: ApiResult<
@@ -1181,10 +1192,35 @@ export interface IpcContract {
       }>
     >;
   };
-  /** Everything on the Reports page for one period (plus comparison KPIs), in one call. */
-  'reports:business': {
-    request: BusinessReportRequest;
-    response: ApiResult<BusinessReport>;
+  /** Overview: headline figures (and the comparison period's), payments, website vs till. */
+  'reports:overview': {
+    request: ReportTabRequest;
+    response: ApiResult<ReportOverviewTab>;
+  };
+  /** When: sales by day and by hour. */
+  'reports:when': {
+    request: ReportTabRequest;
+    response: ApiResult<ReportWhenTab>;
+  };
+  /** Menu: items and categories. */
+  'reports:menu': {
+    request: ReportTabRequest;
+    response: ApiResult<ReportMenuTab>;
+  };
+  /** Channels & delivery: order types, riders, delivery areas. */
+  'reports:channels': {
+    request: ReportTabRequest;
+    response: ApiResult<ReportChannelsTab>;
+  };
+  /** Food cost & stock: costs, so COST_CAPABILITY as well as report.view. */
+  'reports:foodStock': {
+    request: ReportTabRequest;
+    response: ApiResult<ReportFoodStockTab>;
+  };
+  /** Team & leakage: staff, shifts and cash, discounts, refunds, cancelled orders, drawer opens. */
+  'reports:team': {
+    request: ReportTabRequest;
+    response: ApiResult<ReportTeamTab>;
   };
 
   // Customers

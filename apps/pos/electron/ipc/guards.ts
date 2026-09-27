@@ -74,4 +74,5 @@ export const REFUSED = {
   earlierShiftCash: "Only a manager or the owner can see an earlier shift's cash.",
   stock: 'Only a manager or the owner can see stock, recipes and suppliers.',
   costs: 'Only a manager or the owner can see costs.',
+  reports: 'Only a manager or the owner can see reports.',
 } as const;

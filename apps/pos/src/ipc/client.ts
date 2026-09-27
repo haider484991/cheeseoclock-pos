@@ -299,8 +299,13 @@ export const ipc = {
   },
   reports: {
     lowStock: () => unwrap(window.api.reports.lowStock()),
-    business: (input: IpcRequest<'reports:business'>) =>
-      unwrap(window.api.reports.business(input)),
+    // One channel per Reports tab (costing spec Phase 3); each is worked out off the till's main thread.
+    overview: (input: IpcRequest<'reports:overview'>) => unwrap(window.api.reports.overview(input)),
+    when: (input: IpcRequest<'reports:when'>) => unwrap(window.api.reports.when(input)),
+    menu: (input: IpcRequest<'reports:menu'>) => unwrap(window.api.reports.menu(input)),
+    channels: (input: IpcRequest<'reports:channels'>) => unwrap(window.api.reports.channels(input)),
+    foodStock: (input: IpcRequest<'reports:foodStock'>) => unwrap(window.api.reports.foodStock(input)),
+    team: (input: IpcRequest<'reports:team'>) => unwrap(window.api.reports.team(input)),
   },
   inventory: {
     listIngredients: (input?: IpcRequest<'inventory:listIngredients'>) =>

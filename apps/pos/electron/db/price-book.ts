@@ -4,13 +4,21 @@
  * Read-only — two queries, then pos-domain effectivePrices. Shared by the
  * Costing page (services/costing-service.ts) and the batch recipe screen
  * (batch-recipe-repo getBatchRecipe), so both show the same figure.
+ *
+ * Also what a stock row is worth at a price (safeStockValue, priceOfBook):
+ * the stock repositories write with them and Reports reads with them. Kept
+ * here, free of Electron and of any write path, because the Reports worker
+ * thread (services/analytics/worker.ts) loads this file too.
  */
 import {
   effectivePrices,
+  stockValueAt,
   toPriceKind,
   type BatchInputLine,
   type EffectivePrice,
+  type PriceOf,
   type PricedIngredient,
+  type StockValue,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from './connection.js';
 
@@ -73,4 +81,29 @@ export function loadPriceBook(db: AppDatabase): PriceBook {
     list.push({ inputId: l.input_ingredient_id, qty: l.qty });
   }
   return { ingredients, batchLines, prices: effectivePrices([...ingredients.values()], batchLines) };
+}
+
+/** A stock row that could not be valued (bad data): no value, like a row from before costing. */
+export const NOT_VALUED = { valueCents: null, unitCostMc: null, basis: null } as const;
+export type RowValue = StockValue | typeof NOT_VALUED;
+
+/**
+ * What `q` units are worth at a price, for a stock row — never throwing: a
+ * quantity the exact arithmetic refuses (not a whole number, from old or
+ * hand-edited data) is left unvalued rather than blocking the stock.
+ */
+export function safeStockValue(q: number, price: Parameters<typeof stockValueAt>[1]): RowValue {
+  try {
+    return stockValueAt(q, price);
+  } catch {
+    return NOT_VALUED;
+  }
+}
+
+/** Every live ingredient's effective price now (a batch at its rolled-up price). */
+export function priceOfBook(book: PriceBook): PriceOf {
+  return (id) => {
+    const p = book.prices.get(id);
+    return p ? { pack: p.pack, kind: p.kind } : undefined;
+  };
 }

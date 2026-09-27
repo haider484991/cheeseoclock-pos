@@ -20,6 +20,7 @@ import {
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 import { getBackupHealth } from '../../services/backup-health.js';
 import { getWebBridgeConfig, isWebBridgeReady } from '../../services/web-bridge-config.js';
+import { stopAnalyticsWorker } from '../../services/analytics/worker-host.js';
 
 /**
  * Reading and making backups: manager or admin. Restoring or deleting one
@@ -117,6 +118,9 @@ export function registerBackupHandlers(ctx: HandlerContext): void {
     markShuttingDown();
     webOrdersBridge.stop();
     stopBackupService();
+    // The Reports worker's read connection closes before the till's own, so
+    // closing the till's connection folds the write-ahead log into the file.
+    await stopAnalyticsWorker();
     applyPendingRestoreNowAndRelaunch();
     return ok({ relaunching: true } as const);
   });

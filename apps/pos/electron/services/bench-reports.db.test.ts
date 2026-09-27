@@ -1,6 +1,9 @@
 /**
- * Reports bench (costing spec Phase 2 "Bench"; Phase 3 moves it into the
- * worker's budgets). OPT-IN — it builds a year of orders and takes a while:
+ * Reports bench (costing spec Phase 2 "Bench", and Phase 3's worker
+ * budgets). Kept here as an opt-in test rather than a script in
+ * apps/pos/scripts: it needs the repositories and node:sqlite as the other
+ * *.db.test.ts files load them. OPT-IN — it builds a year of orders and
+ * takes a while:
  *
  *   BENCH_REPORTS=1 pnpm --filter @cheeseoclock/pos exec vitest run electron/services/bench-reports.db.test.ts
  *
@@ -33,8 +36,37 @@
  * there, no main-process IPC over 50 ms), and Contingency R (daily rollups)
  * follows only if that misses on the shop PC.
  *
+ * Phase 3 (the second bench below; `-t "Phase 3"` runs it alone): each tab
+ * for a year on this thread (what the till would stall for, and a month's
+ * cost for the main-thread fallback), then the REAL worker — built exactly
+ * as for the till (electron.vite.config.ts buildAnalyticsWorker), started
+ * through the real client (worker-client.ts), on a file copy of the year
+ * opened as the till opens it — working out each year tab while this thread
+ * keeps being the till: the Live Orders board read every 10 ms, an order
+ * rung and sent every 250 ms. node:sqlite in both threads (the worker's
+ * bench driver; the till's worker uses better-sqlite3).
+ *
+ * Measured 2026-09-27 on the dev laptop (Phase 3; 40,152 orders, 304,577 stock rows):
+ *   year on the main thread ........ overview ~290 ms, when ~175, menu ~145,
+ *                                    channels ~175, food cost & stock ~965,
+ *                                    team ~255 (the counter would wait that long)
+ *   31 days on the main thread ..... 12–22 ms a tab, food cost & stock ~87 ms
+ *   year in the worker ............. 170–340 ms a tab, food cost & stock ~1.27 s
+ *                                    (≤ 2 s: ok); all six at once ~2.5 s
+ *   meanwhile on the main thread ... slowest till call ~7 ms, event loop late
+ *                                    ≤ ~29 ms (≤ 12 ms with no report running;
+ *                                    Windows timers tick every ~15.6 ms)
+ *                                    — no call near the 50 ms budget
+ *   worker start ................... ~55 ms to "ready"; bundle build ~1 s
+ * Re-run on the shop's till PC (or 4× CPU-throttled) before trusting the
+ * margins; a miss there is what triggers Contingency R.
+ *
  * EVERY PRICE IS MADE UP (costing spec D11).
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { describe, expect, it, vi } from 'vitest';
 import type { AppDatabase } from '../db/connection.js';
 import { CASHIER, DatabaseSync, MANAGER, openCostingShop, openMigrated, type Line } from '../db/costing-shop.fixture.js';
@@ -159,6 +191,8 @@ async function yearShop() {
   return { db, s, repos, built, size };
 }
 
+const verdict = (ms: number, budget: number) => (ms <= budget ? `ok (≤ ${budget} ms)` : `MISSES the ${budget} ms budget`);
+
 function time<T>(runs: number, fn: () => T): { ms: number; out: T } {
   let out!: T;
   fn(); // warm the statement cache
@@ -172,7 +206,6 @@ bench('Reports bench: a year of orders (opt-in)', () => {
     const { db, s, repos, built, size } = await yearShop();
     const { getFoodCost } = await import('./business-report.js');
     const lines: string[] = [];
-    const verdict = (ms: number, budget: number) => (ms <= budget ? `ok (≤ ${budget} ms)` : `MISSES the ${budget} ms budget`);
     lines.push(`built ${size.orders} orders, ${size.lines} lines, ${size.costRows} cost rows, ${size.stockRows} stock rows in ${built.toFixed(0)} ms`);
 
     // 1. Steady state: every sale kept its cost.
@@ -208,5 +241,190 @@ bench('Reports bench: a year of orders (opt-in)', () => {
     console.log(['', 'Reports bench (node:sqlite, in memory):', ...lines.map((l) => `  ${l}`)].join('\n'));
     // The send path is the one budget a cashier feels on every order.
     expect(perOrder).toBeLessThanOrEqual(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3: the tabs, and the Reports worker thread
+// ---------------------------------------------------------------------------
+
+/** A database file opened as the till opens it (WAL, busy timeout), behind better-sqlite3's shape. */
+function openTillFile(file: string): AppDatabase & { close: () => void } {
+  const raw = new DatabaseSync!(file) as unknown as {
+    exec(sql: string): void;
+    prepare(sql: string): unknown;
+    close(): void;
+  };
+  // As the till opens it (db/connection.ts).
+  raw.exec('PRAGMA journal_mode = WAL');
+  raw.exec('PRAGMA synchronous = NORMAL');
+  raw.exec('PRAGMA foreign_keys = ON');
+  raw.exec('PRAGMA busy_timeout = 5000');
+  raw.exec('PRAGMA cache_size = -32000');
+  raw.exec('PRAGMA temp_store = MEMORY');
+  let depth = 0;
+  return {
+    exec: (sql: string) => raw.exec(sql),
+    prepare: (sql: string) => raw.prepare(sql),
+    close: () => raw.close(),
+    transaction:
+      <A extends unknown[], R>(fn: (...args: A) => R) =>
+      (...args: A): R => {
+        const sp = `sp_${depth}`;
+        raw.exec(depth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT ${sp}`);
+        depth += 1;
+        try {
+          const out = fn(...args);
+          depth -= 1;
+          raw.exec(depth === 0 ? 'COMMIT' : `RELEASE ${sp}`);
+          return out;
+        } catch (e) {
+          depth -= 1;
+          if (depth === 0) raw.exec('ROLLBACK');
+          else raw.exec(`ROLLBACK TO ${sp}; RELEASE ${sp}`);
+          throw e;
+        }
+      },
+  } as unknown as AppDatabase & { close: () => void };
+}
+
+/**
+ * The till going on with its day on the main thread while a report runs:
+ * every 10 ms the Live Orders board is read (orders:listActive), and every
+ * 250 ms a cashier rings an order and sends it to the kitchen (stock taken,
+ * cost kept). Records the slowest of each, and how late the event loop was
+ * beyond that work (what the report cost the main thread: receiving its
+ * answer, garbage collection).
+ */
+function startTill(till: AppDatabase, work: { board: () => unknown; ringAndSend: () => number }) {
+  let maxLag = 0;
+  let maxBoard = 0;
+  let maxSend = 0;
+  let boards = 0;
+  let sends = 0;
+  let expected = performance.now() + 10;
+  let lastSend = performance.now();
+  const t = setInterval(() => {
+    const now = performance.now();
+    // Late by what else held the main thread (not by this tick's own work, timed below).
+    maxLag = Math.max(maxLag, now - expected);
+    const b0 = performance.now();
+    work.board();
+    maxBoard = Math.max(maxBoard, performance.now() - b0);
+    boards += 1;
+    if (now - lastSend >= 250) {
+      lastSend = now;
+      maxSend = Math.max(maxSend, work.ringAndSend());
+      sends += 1;
+    }
+    expected = performance.now() + 10;
+  }, 10);
+  void till;
+  return {
+    stop: () => {
+      clearInterval(t);
+      return { maxLag, maxBoard, maxSend, boards, sends };
+    },
+  };
+}
+
+bench('Reports bench, Phase 3: a year of each tab, in the worker thread (opt-in)', () => {
+  it('each year tab in the worker while the till rings orders; and the same on the main thread for contrast', async () => {
+    const { REPORT_TABS } = await import('@cheeseoclock/shared-types');
+    const { db, s, repos, size } = await yearShop();
+    const { buildReportTab } = await import('./analytics/report-tabs.js');
+    const { AnalyticsWorkerClient } = await import('./analytics/worker-client.js');
+    const { WORKER_FILE, WORKER_TAG } = await import('./analytics/worker-protocol.js');
+    const { buildAnalyticsWorker } = await import('../../electron.vite.config');
+    const lines: string[] = [];
+    lines.push(`${size.orders} orders, ${size.lines} lines, ${size.costRows} cost rows, ${size.stockRows} stock rows`);
+    const YEAR_REQ = { ...YEAR, compareSinceIso: new Date(YEAR_END - 2 * DAYS * 86_400_000).toISOString(), compareUntilIso: YEAR.sinceIso };
+
+    // 1. Each tab for a year on this thread: what the main process would stall for (and the fallback's cost for a month).
+    const onMain: Record<string, number> = {};
+    for (const tab of REPORT_TABS) {
+      onMain[tab] = time(3, () => buildReportTab(db, tab, YEAR_REQ)).ms;
+      const month = time(3, () => buildReportTab(db, tab, { ...MONTH })).ms;
+      lines.push(`main thread, ${tab}: year ${onMain[tab]!.toFixed(0)} ms (the till would wait this long); 31 days ${month.toFixed(0)} ms`);
+    }
+
+    // 2. The real worker, built as for the till, on a file copy of this database.
+    const dir = mkdtempSync(join(tmpdir(), 'coc-bench-'));
+    const file = join(dir, 'till.sqlite');
+    db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    const till = openTillFile(file);
+    const tBuild = performance.now();
+    await buildAnalyticsWorker({ outDir: dir });
+    lines.push(`worker bundle built in ${(performance.now() - tBuild).toFixed(0)} ms`);
+    const client = new AnalyticsWorkerClient({
+      spawn: () => new Worker(join(dir, WORKER_FILE), { workerData: { tag: WORKER_TAG, dbPath: file, driver: 'node:sqlite' } }),
+    });
+    const tStart = performance.now();
+    client.start();
+    expect(await client.settled()).toBe('ready');
+    lines.push(`worker ready in ${(performance.now() - tStart).toFixed(0)} ms`);
+    await client.run('overview', YEAR_REQ); // warm its statement cache, as the first report of the day does
+
+    const item = s.item;
+    const choice = s.choice;
+    const work = {
+      board: () => repos.listActiveOrders(till, {}),
+      /** Three taps, three IPC calls (orders:create, orders:addItem, orders:sendToKitchen): the slowest one. */
+      ringAndSend: () => {
+        let slowest = 0;
+        const timed = <T>(fn: () => T): T => {
+          const t0 = performance.now();
+          const out = fn();
+          slowest = Math.max(slowest, performance.now() - t0);
+          return out;
+        };
+        const o = timed(() => repos.createOrder(till, { mode: 'takeaway' }, CASHIER));
+        timed(() => repos.addOrderItem(till, { orderId: o.id, menuItemId: item.fajitaM, quantity: 1, modifierIds: [choice.extraCheese], notes: null }, CASHIER));
+        timed(() => repos.sendOrderToKitchen(till, o.id, CASHIER));
+        return slowest;
+      },
+    };
+
+    // For scale: the same till work with no report running.
+    const idle = startTill(till, work);
+    await new Promise((r) => setTimeout(r, 1_000));
+    const quiet = idle.stop();
+    lines.push(`no report running, 1 s: event loop late by at most ${quiet.maxLag.toFixed(1)} ms, slowest till call ${Math.max(quiet.maxBoard, quiet.maxSend).toFixed(1)} ms`);
+
+    // 3. While each year tab runs in the worker, the till goes on here.
+    let worstLag = 0;
+    let worstCall = 0;
+    let worstTab = 0;
+    for (const tab of REPORT_TABS) {
+      const probe = startTill(till, work);
+      const t0 = performance.now();
+      await client.run(tab, YEAR_REQ);
+      const ms = performance.now() - t0;
+      const p = probe.stop();
+      worstLag = Math.max(worstLag, p.maxLag);
+      worstCall = Math.max(worstCall, p.maxBoard, p.maxSend);
+      worstTab = Math.max(worstTab, ms);
+      lines.push(
+        `worker, ${tab}: year in ${ms.toFixed(0)} ms — ${verdict(ms, 2000)}; meanwhile ${p.boards} board reads (slowest ${p.maxBoard.toFixed(1)} ms), ` +
+          `${p.sends} orders rung and sent (slowest call ${p.maxSend.toFixed(1)} ms), event loop late by at most ${p.maxLag.toFixed(1)} ms`,
+      );
+    }
+    // "Print everything": all six asked at once.
+    const probe = startTill(till, work);
+    const tAll = performance.now();
+    await Promise.all(REPORT_TABS.map((tab) => client.run(tab, YEAR_REQ)));
+    const all = performance.now() - tAll;
+    const p = probe.stop();
+    worstLag = Math.max(worstLag, p.maxLag);
+    worstCall = Math.max(worstCall, p.maxBoard, p.maxSend);
+    lines.push(`worker, all six tabs for a year ("Print everything"): ${all.toFixed(0)} ms; event loop late by at most ${p.maxLag.toFixed(1)} ms, slowest till call ${Math.max(p.maxBoard, p.maxSend).toFixed(1)} ms`);
+    lines.push(`budgets: a year tab ≤ 2 s — worst ${worstTab.toFixed(0)} ms, ${verdict(worstTab, 2000)}; no main-process call over 50 ms while it runs — worst ${Math.max(worstLag, worstCall).toFixed(1)} ms, ${verdict(Math.max(worstLag, worstCall), 50)}`);
+
+    await client.stop();
+    till.close();
+    rmSync(dir, { recursive: true, force: true });
+    // eslint-disable-next-line no-console
+    console.log(['', 'Reports bench, Phase 3 (node:sqlite; worker = the built analytics-worker.cjs):', ...lines.map((l) => `  ${l}`)].join('\n'));
+    expect(worstTab).toBeLessThan(30_000);
   });
 });

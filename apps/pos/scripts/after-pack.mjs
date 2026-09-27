@@ -32,8 +32,30 @@ const NATIVE_BINDING = 'argon2.win32-x64-msvc.node';
 const RUNTIME_DLL = 'vcruntime140.dll';
 const PE_MACHINE_X64 = 0x8664;
 
+// The Reports worker thread (costing spec Phase 3) and the SQLite it opens,
+// both loaded from real files in app.asar.unpacked (electron-builder.yml
+// asarUnpack; services/analytics/worker-client.ts resolveWorkerPaths).
+// Missing either, the till still runs, but Reports fall back to the main
+// process for 31 days at most: catch that here, not at the counter.
+const UNPACKED_FOR_REPORTS = [
+  ['resources', 'app.asar.unpacked', 'out', 'main', 'analytics-worker.cjs'],
+  ['resources', 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'lib', 'index.js'],
+  ['resources', 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'],
+];
+
 export default async function afterPack(context) {
   if (context.electronPlatformName !== 'win32') return;
+
+  for (const parts of UNPACKED_FOR_REPORTS) {
+    const p = path.join(context.appOutDir, ...parts);
+    if (!fs.existsSync(p)) {
+      throw new Error(
+        `afterPack: ${p} not found. The Reports worker needs it unpacked (asarUnpack in electron-builder.yml); ` +
+          "without it Reports run on the till's main thread, 31 days at most.",
+      );
+    }
+  }
+  console.log('  • afterPack: the Reports worker and SQLite are unpacked');
 
   const dest = path.join(context.appOutDir, ...NATIVE_DIR);
   if (!fs.existsSync(path.join(dest, NATIVE_BINDING))) {

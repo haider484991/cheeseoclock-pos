@@ -1,6 +1,6 @@
 import type { ReportStaffLine, ReportVoidLine } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
-import { duplicatePressesSql } from '../db/repositories/document-print-repo.js';
+import { duplicatePressesSql } from '../db/print-log-sql.js';
 
 /**
  * The print log's part of Reports → Staff (and the shift / day report):

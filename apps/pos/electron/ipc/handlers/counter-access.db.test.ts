@@ -14,6 +14,7 @@
  *   - costs (the Costing page, the batch calculator's rupees) are refused
  *     to the counter the same way, and the food-cost targets are the
  *     owner's alone;
+ *   - Reports (every tab's channel, and low stock) likewise;
  *   - every channel of these modules is classified here, so one added later
  *     fails until someone decides whether the counter may call it.
  *
@@ -286,10 +287,17 @@ beforeEach(async () => {
   (await import('./fbr-handlers.js')).registerFbrHandlers(ctx);
   (await import('./counter-handlers.js')).registerCounterHandlers(ctx);
   (await import('./costing-handlers.js')).registerCostingHandlers(ctx);
+  (await import('./reports-handlers.js')).registerReportsHandlers(ctx);
   s = await seed();
 });
 
 // ------------------------------------------------------------ the classes --
+
+/** A report period around now: what the Reports page sends. */
+const REPORT_TODAY = () => ({
+  sinceIso: new Date(Date.now() - 3_600_000).toISOString(),
+  untilIso: new Date(Date.now() + 3_600_000).toISOString(),
+});
 
 /** New in this change: managers and the owner only. Payloads a manager's screen would send. */
 const COUNTER_REFUSED = (): Record<string, unknown> => ({
@@ -321,6 +329,15 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'costing:getTargets': undefined,
   'costing:recipeCost': { menuItemId: 'no-such-item', lines: [] },
   'costing:batchCalc': { ingredientId: 'no-such-ingredient', amount: 200 },
+  // Reports: one channel per tab (costing spec Phase 3), each checked in the
+  // main process; Food cost & stock needs costs as well.
+  'reports:overview': REPORT_TODAY(),
+  'reports:when': REPORT_TODAY(),
+  'reports:menu': REPORT_TODAY(),
+  'reports:channels': REPORT_TODAY(),
+  'reports:foodStock': REPORT_TODAY(),
+  'reports:team': REPORT_TODAY(),
+  'reports:lowStock': undefined,
 });
 
 /** The owner's alone: refused to the counter AND to managers. */

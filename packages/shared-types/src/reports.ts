@@ -1,5 +1,7 @@
 /**
- * The Reports page: one period's figures in one round trip (`reports:business`).
+ * The Reports page: one period's figures, a tab at a time (costing spec
+ * Phase 3: `reports:overview`, `reports:when`, … — see ReportTabData below).
+ * Each tab is worked out off the till's main thread, in the Reports worker.
  *
  * Every money figure is integer cents taken from STORED order totals
  * (subtotal / discount / tax / total) and the payments ledger — nothing is
@@ -353,6 +355,12 @@ export interface ReportDeliveries {
   byArea: Array<{ area: string; orderCount: number; netSalesCents: number }>;
 }
 
+/**
+ * The whole page for one period in one read: every tab's figures together.
+ * The till no longer sends it to the screen (each tab is its own channel);
+ * the main process builds it from the tab builders for the tests and the
+ * bench, which check that every breakdown adds up.
+ */
 export interface BusinessReport {
   sinceIso: string;
   untilIso: string;
@@ -394,3 +402,110 @@ export interface BusinessReportRequest {
   compareSinceIso?: string;
   compareUntilIso?: string;
 }
+
+// ---------------------------------------------------------------------------
+// The tabs (costing spec Phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The Reports page's tabs, in the order they show. Each is one IPC channel
+ * (`reports:<tab>`), checked in the main process, and loads only its own
+ * figures. Food cost & stock is for a login that may see costs
+ * (COST_CAPABILITY) as well as reports.
+ */
+export const REPORT_TABS = ['overview', 'when', 'menu', 'channels', 'foodStock', 'team'] as const;
+export type ReportTab = (typeof REPORT_TABS)[number];
+
+/** The owner's names for the tabs (screen, paper and file). */
+export const REPORT_TAB_LABEL: Record<ReportTab, string> = {
+  overview: 'Overview',
+  when: 'When',
+  menu: 'Menu',
+  channels: 'Channels & delivery',
+  foodStock: 'Food cost & stock',
+  team: 'Team & leakage',
+};
+
+/** A tab asks for the same period (and comparison) as the whole page did. */
+export type ReportTabRequest = BusinessReportRequest;
+
+/**
+ * Where a tab's figures were worked out: 'worker' — the Reports worker
+ * thread, so the till never waits; 'main' — the till's main process, the
+ * fallback when that worker could not start (periods of 31 days or less
+ * only; the page says so).
+ */
+export type ReportEngine = 'worker' | 'main';
+
+interface ReportTabBase {
+  sinceIso: string;
+  untilIso: string;
+  engine: ReportEngine;
+}
+
+/** Overview: the headline figures, how customers paid, how the sales add up, website vs till. */
+export interface ReportOverviewTab extends ReportTabBase {
+  kpis: ReportKpis;
+  /** The comparison period's figures, when one was asked for. */
+  previous: ReportKpis | null;
+  /** Sales by order type — for "website vs till" (the full table is on Channels & delivery). */
+  channels: ReportChannelLine[];
+}
+
+/** When: sales by day (or month) and by Pakistan clock hour. */
+export interface ReportWhenTab extends ReportTabBase {
+  kpis: Pick<ReportKpis, 'orderCount' | 'netSalesCents'>;
+  byDay: BusinessReport['byDay'];
+  byHour: BusinessReport['byHour'];
+}
+
+/** Menu: what sells, by item and by category. */
+export interface ReportMenuTab extends ReportTabBase {
+  kpis: Pick<ReportKpis, 'menuSalesCents' | 'itemCount'>;
+  items: ReportItemLine[];
+  categories: ReportCategoryLine[];
+}
+
+/** Channels & delivery: order types, riders and delivery areas. */
+export interface ReportChannelsTab extends ReportTabBase {
+  kpis: Pick<ReportKpis, 'orderCount' | 'netSalesCents' | 'avgOrderCents'>;
+  channels: ReportChannelLine[];
+  deliveries: ReportDeliveries;
+}
+
+/** Food cost & stock (COST_CAPABILITY): food cost, waste, missing costs, food sent out unpaid. */
+export interface ReportFoodStockTab extends ReportTabBase {
+  kpis: Pick<ReportKpis, 'partialRefundCents'>;
+  foodCost: ReportFoodCost;
+}
+
+/** Team & leakage: staff, shifts and cash, discounts, refunds, cancelled orders, drawer opens. */
+export interface ReportTeamTab extends ReportTabBase {
+  kpis: Pick<ReportKpis, 'netSalesCents' | 'menuSalesCents' | 'partialRefundCents' | 'fullRefundCents' | 'voidCount' | 'voidCents'>;
+  staff: ReportStaffLine[];
+  shifts: ReportShiftLine[];
+  discounts: ReportDiscounts;
+  /** Newest first, capped. */
+  refunds: ReportRefundLine[];
+  /** Newest first, capped. */
+  voids: ReportVoidLine[];
+  drawerOpens: ReportDrawerOpenLine[];
+  drawerOpenCount: number;
+  /**
+   * Whether the Stock column may show what wasted food cost ("Wasted · Rs
+   * 180"): null for a login without COST_CAPABILITY (those rupees are 0).
+   */
+  foodCost: Pick<ReportFoodCost, 'hasCosts'> | null;
+}
+
+export interface ReportTabData {
+  overview: ReportOverviewTab;
+  when: ReportWhenTab;
+  menu: ReportMenuTab;
+  channels: ReportChannelsTab;
+  foodStock: ReportFoodStockTab;
+  team: ReportTeamTab;
+}
+
+/** A tab's figures as the builders make them, before the main process says where they were worked out. */
+export type ReportTabFigures<K extends ReportTab> = Omit<ReportTabData[K], 'engine'>;

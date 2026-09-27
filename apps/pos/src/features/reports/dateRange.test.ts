@@ -174,3 +174,101 @@ describe('autoRefreshes: the open report refreshes itself only when it is cheap 
     expect(autoRefreshes(thirtyTwo, true)).toBe(false);
   });
 });
+
+describe('year presets (costing spec Phase 3)', () => {
+  it('this year: 1 January to 31 December, so far, against last year by this date', () => {
+    const p = periodFor('thisYear', SAT_3PM);
+    expect(p).toMatchObject({
+      sinceIso: '2026-01-01T00:00:00.000Z',
+      untilIso: '2027-01-01T00:00:00.000Z',
+      days: 365,
+      title: 'This year',
+      dates: 'Thu 1 Jan – Thu 31 Dec 2026',
+      isCurrent: true,
+    });
+    expect(p.compare).toEqual({
+      sinceIso: '2025-01-01T00:00:00.000Z',
+      untilIso: '2025-09-26T10:00:00.000Z',
+      label: 'last year by this date',
+    });
+  });
+
+  it('last 12 months runs to today, from the day after this date a year ago', () => {
+    const p = periodFor('last12', SAT_3PM);
+    expect(p).toMatchObject({
+      sinceIso: '2025-09-27T00:00:00.000Z',
+      untilIso: '2026-09-27T00:00:00.000Z',
+      days: 365,
+      title: 'Last 12 months',
+      isCurrent: true,
+    });
+    expect(p.compare).toEqual({
+      sinceIso: '2024-09-27T00:00:00.000Z',
+      untilIso: '2025-09-26T10:00:00.000Z',
+      label: 'the 12 months before',
+    });
+  });
+
+  it('last year is the whole calendar year before, against the year before that', () => {
+    const p = periodFor('lastYear', SAT_3PM);
+    expect(p).toMatchObject({
+      sinceIso: '2025-01-01T00:00:00.000Z',
+      untilIso: '2026-01-01T00:00:00.000Z',
+      days: 365,
+      title: 'Last year',
+      dates: 'Wed 1 Jan – Wed 31 Dec 2025',
+      isCurrent: false,
+    });
+    expect(p.compare).toEqual({ sinceIso: '2024-01-01T00:00:00.000Z', untilIso: '2025-01-01T00:00:00.000Z', label: 'the year before' });
+  });
+
+  it('at 00:30 on 1 January the trading day is still 31 December: "this year" is still the old one', () => {
+    const halfPastMidnight = new Date('2026-12-31T19:30:00.000Z'); // 00:30 on 1 Jan 2027 in Pakistan
+    expect(periodFor('thisYear', halfPastMidnight)).toMatchObject({
+      sinceIso: '2026-01-01T00:00:00.000Z',
+      untilIso: '2027-01-01T00:00:00.000Z',
+      isCurrent: true,
+    });
+    expect(periodFor('lastYear', halfPastMidnight).sinceIso).toBe('2025-01-01T00:00:00.000Z');
+    expect(periodFor('last12', halfPastMidnight)).toMatchObject({ sinceIso: '2026-01-01T00:00:00.000Z', untilIso: '2027-01-01T00:00:00.000Z' });
+  });
+
+  it('at 5 am on 1 January the new year starts; nothing to compare until time has passed', () => {
+    const fiveAm = new Date('2027-01-01T00:00:00.000Z');
+    const p = periodFor('thisYear', fiveAm);
+    expect(p).toMatchObject({ sinceIso: '2027-01-01T00:00:00.000Z', untilIso: '2028-01-01T00:00:00.000Z', days: 365, isCurrent: true });
+    expect(p.compare).toBeNull();
+    expect(periodFor('lastYear', fiveAm)).toMatchObject({ sinceIso: '2026-01-01T00:00:00.000Z', untilIso: '2027-01-01T00:00:00.000Z' });
+    // By 11 am, the same six hours of last 1 January.
+    expect(periodFor('thisYear', new Date('2027-01-01T06:00:00.000Z')).compare).toEqual({
+      sinceIso: '2026-01-01T00:00:00.000Z',
+      untilIso: '2026-01-01T06:00:00.000Z',
+      label: 'last year by this date',
+    });
+  });
+
+  it('29 February: a leap year has 366 days, and last year compares up to 28 February', () => {
+    const leapDay = new Date('2028-02-29T10:00:00.000Z'); // 3 pm, Tue 29 Feb 2028
+    const year = periodFor('thisYear', leapDay);
+    expect(year).toMatchObject({ sinceIso: '2028-01-01T00:00:00.000Z', untilIso: '2029-01-01T00:00:00.000Z', days: 366 });
+    expect(year.compare).toEqual({ sinceIso: '2027-01-01T00:00:00.000Z', untilIso: '2027-02-28T10:00:00.000Z', label: 'last year by this date' });
+    // The day after, last year's same date again (not a day late).
+    expect(periodFor('thisYear', new Date('2028-03-01T10:00:00.000Z')).compare?.untilIso).toBe('2027-03-01T10:00:00.000Z');
+
+    // Twelve months to a 29 February start on 1 March and cover 366 days.
+    const twelve = periodFor('last12', leapDay);
+    expect(twelve).toMatchObject({ sinceIso: '2027-03-01T00:00:00.000Z', untilIso: '2028-03-01T00:00:00.000Z', days: 366 });
+    expect(twelve.compare).toEqual({ sinceIso: '2026-03-01T00:00:00.000Z', untilIso: '2027-03-01T00:00:00.000Z', label: 'the 12 months before' });
+    // …and twelve months to the next 28 February still reach back to 29 February.
+    expect(periodFor('last12', new Date('2029-02-28T10:00:00.000Z'))).toMatchObject({ sinceIso: '2028-02-29T00:00:00.000Z', days: 366 });
+
+    const lastYear = periodFor('lastYear', new Date('2029-01-10T10:00:00.000Z'));
+    expect(lastYear).toMatchObject({ sinceIso: '2028-01-01T00:00:00.000Z', untilIso: '2029-01-01T00:00:00.000Z', days: 366, dates: 'Sat 1 Jan – Sun 31 Dec 2028' });
+  });
+
+  it('a year never refreshes by itself (over 31 days)', () => {
+    for (const preset of ['thisYear', 'last12', 'lastYear'] as const) {
+      expect(autoRefreshes(periodFor(preset, SAT_3PM), true)).toBe(false);
+    }
+  });
+});

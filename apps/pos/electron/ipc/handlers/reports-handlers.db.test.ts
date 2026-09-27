@@ -1,21 +1,34 @@
 /**
- * The Reports channels after costing Phase 2, through the real IPC handlers
- * against a real database built from every migration (a made-up shop,
- * db/costing-shop.fixture.ts):
- *   - the older one-figure channels (salesSummary, cogs…) are no longer
- *     registered: only the page (reports:business) and low stock remain;
- *   - a cashier is refused both in the main process; a manager's report
- *     carries the food cost, with the cost each sale kept;
+ * The Reports channels (costing spec Phase 3: one per tab), through the
+ * real IPC handlers against a real database built from every migration (a
+ * made-up shop, db/costing-shop.fixture.ts):
+ *   - one channel per tab, plus low stock; the whole-page reports:business
+ *     and the older one-figure channels are no longer registered;
+ *   - a cashier is refused every one in the main process; Food cost & stock
+ *     is refused to a login without costs even though it may see reports,
+ *     and its Team tab carries no waste rupees;
+ *   - the figures come from the Reports worker when it is running; when it
+ *     is not, the main process works out 31 days at most and says no, in
+ *     plain words, to anything longer; superseded, timed-out, crashed and
+ *     failed asks each get their own answer;
  *   - stock rows carry their values for a login that may see costs, and
  *     "Make this amount" answers with none.
  *
- * Only `defineHandler` (captured) and the signed-in session are stood in
- * for. node:sqlite behind better-sqlite3's shape; skips where it is
+ * Only `defineHandler` (captured), the signed-in session and the worker are
+ * stood in for. node:sqlite behind better-sqlite3's shape; skips where it is
  * missing. Every name and price is made up.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, BusinessReport, StockMovementPage, UUID } from '@cheeseoclock/shared-types';
+import type {
+  AuthenticatedUser,
+  BusinessReportRequest,
+  ReportTab,
+  ReportTeamTab,
+  StockMovementPage,
+  UUID,
+} from '@cheeseoclock/shared-types';
 import { CASHIER as CASHIER_ACTOR, DatabaseSync, DEV, MANAGER as MANAGER_ACTOR, openCostingShop, openMigrated } from '../../db/costing-shop.fixture.js';
+import type { AnalyticsWorkerState } from '../../services/analytics/worker-client.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
@@ -23,6 +36,9 @@ type Handler = (ctx: unknown, payload: unknown) => unknown;
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (ctx: unknown, payload: unknown) => unknown>(),
   session: null as unknown,
+  /** A login that may see reports but not costs (no role has that today; the rule must hold when one does). */
+  noCosts: false,
+  worker: null as unknown,
 }));
 
 vi.mock('../registry.js', () => {
@@ -44,6 +60,14 @@ vi.mock('../registry.js', () => {
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {} } }));
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] }, app: { getPath: () => '' } }));
 vi.mock('../../services/auth-service.js', () => ({ getCurrentSession: () => h.session }));
+vi.mock('@cheeseoclock/shared-types', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@cheeseoclock/shared-types')>();
+  return {
+    ...orig,
+    hasCapability: (role: Parameters<typeof orig.hasCapability>[0], cap: Parameters<typeof orig.hasCapability>[1]) =>
+      h.noCosts && cap === orig.COST_CAPABILITY ? false : orig.hasCapability(role, cap),
+  };
+});
 
 const session = (id: string, role: AuthenticatedUser['role']): AuthenticatedUser => ({
   id: id as UUID,
@@ -56,6 +80,8 @@ const MANAGER = session('u_mgr', 'manager');
 
 let db: ReturnType<typeof openMigrated>;
 let s: Awaited<ReturnType<typeof openCostingShop>>;
+let TOO_LONG = '';
+let REFUSED: Record<string, string> = {};
 
 type Outcome = { ok: true; data: unknown } | { ok: false; code: string; message: string };
 
@@ -70,18 +96,36 @@ async function call(channel: string, payload?: unknown): Promise<Outcome> {
   } catch (e) {
     const api = (e as { apiError?: { code: string; message: string } }).apiError;
     if (api) return { ok: false, code: api.code, message: api.message };
-    return { ok: false, code: 'precondition_failed', message: e instanceof Error ? e.message : String(e) };
+    return { ok: false, code: `threw ${(e as Error).name}`, message: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** A stand-in Reports worker: its state, and what it answers. */
+function fakeWorker(state: AnalyticsWorkerState, run: (kind: ReportTab, req: BusinessReportRequest) => Promise<unknown>) {
+  const asked: Array<[ReportTab, BusinessReportRequest]> = [];
+  return {
+    asked,
+    settled: () => Promise.resolve(state),
+    run: (kind: ReportTab, req: BusinessReportRequest) => {
+      asked.push([kind, req]);
+      return run(kind, req);
+    },
+  };
 }
 
 beforeEach(async () => {
   if (!DatabaseSync) return;
   h.handlers.clear();
   h.session = null;
+  h.noCosts = false;
+  h.worker = null;
   db = openMigrated();
   s = await openCostingShop(db);
   const ctx = { db, deviceId: DEV } as never;
-  (await import('./reports-handlers.js')).registerReportsHandlers(ctx);
+  const reports = await import('./reports-handlers.js');
+  TOO_LONG = reports.TOO_LONG_WITHOUT_WORKER;
+  ({ REFUSED } = (await import('../guards.js')) as unknown as { REFUSED: Record<string, string> });
+  reports.registerReportsHandlers(ctx, { worker: () => h.worker as never });
   (await import('./inventory-handlers.js')).registerInventoryHandlers(ctx);
 });
 
@@ -90,31 +134,142 @@ const AROUND_NOW = () => ({
   sinceIso: new Date(Date.now() - 3_600_000).toISOString(),
   untilIso: new Date(Date.now() + 3_600_000).toISOString(),
 });
+/** A year ending in an hour. */
+const A_YEAR = () => ({ sinceIso: new Date(Date.now() - 365 * 86_400_000).toISOString(), untilIso: new Date(Date.now() + 3_600_000).toISOString() });
+const TABS: ReportTab[] = ['overview', 'when', 'menu', 'channels', 'foodStock', 'team'];
+
+/** A sale of one medium Fajita (made-up prices): stock taken, cost kept, paid now. */
+function oneSale(): void {
+  const o = s.ring([['fajitaM', 1]]);
+  s.r.decrementForOrder(db, o, CASHIER_ACTOR);
+  s.markPaid(o);
+}
 
 live('Reports channels', () => {
-  it('the older one-figure channels are retired: only the page and low stock are registered', () => {
-    expect([...h.handlers.keys()].filter((c) => c.startsWith('reports:')).sort()).toEqual(['reports:business', 'reports:lowStock']);
+  it('one channel per tab, plus low stock; the whole-page and one-figure channels are gone', () => {
+    expect([...h.handlers.keys()].filter((c) => c.startsWith('reports:')).sort()).toEqual([
+      'reports:channels',
+      'reports:foodStock',
+      'reports:lowStock',
+      'reports:menu',
+      'reports:overview',
+      'reports:team',
+      'reports:when',
+    ]);
   });
 
-  it('a cashier is refused the report and low stock in the main process', async () => {
+  it('a cashier is refused every tab and low stock in the main process; nobody signed in is "not logged in"', async () => {
     h.session = CASHIER;
-    for (const [channel, payload] of [
-      ['reports:business', AROUND_NOW()],
-      ['reports:lowStock', undefined],
-    ] as const) {
-      expect(await call(channel, payload)).toMatchObject({ ok: false, code: 'forbidden' });
+    for (const channel of [...TABS.map((t) => `reports:${t}`), 'reports:lowStock']) {
+      expect({ channel, ...(await call(channel, AROUND_NOW())) }).toEqual({ channel, ok: false, code: 'forbidden', message: REFUSED['reports'] });
     }
+    h.session = null;
+    for (const t of TABS) expect(await call(`reports:${t}`, AROUND_NOW())).toMatchObject({ ok: false, code: 'unauthenticated' });
   });
 
-  it('a manager gets the food cost, from the cost each sale kept', async () => {
-    const o = s.ring([['fajitaM', 1]]);
-    s.r.decrementForOrder(db, o, CASHIER_ACTOR);
-    s.markPaid(o);
+  it('a manager gets the food cost from Food cost & stock, from the cost each sale kept', async () => {
+    oneSale();
     h.session = MANAGER;
-    const r = await call('reports:business', AROUND_NOW());
+    const r = await call('reports:foodStock', AROUND_NOW());
     expect(r.ok).toBe(true);
-    const report = (r as { data: BusinessReport }).data;
-    expect(report.foodCost).toMatchObject({ costOfSalesCents: 17_641, knownSalesCents: 120_000, foodCostBps: 1_470, coverageBps: 10_000 });
+    const tab = (r as { data: { engine: string; foodCost: unknown } }).data;
+    expect(tab.foodCost).toMatchObject({ costOfSalesCents: 17_641, knownSalesCents: 120_000, foodCostBps: 1_470, coverageBps: 10_000 });
+    // No worker running here: worked out on the main process, and it says so.
+    expect(tab.engine).toBe('main');
+  });
+
+  it('reports but no costs: Food cost & stock is refused, and Team carries no waste rupees', async () => {
+    oneSale();
+    h.session = MANAGER;
+    h.noCosts = true;
+    expect(await call('reports:foodStock', AROUND_NOW())).toEqual({ ok: false, code: 'forbidden', message: REFUSED['costs'] });
+    const team = await call('reports:team', AROUND_NOW());
+    expect(team.ok).toBe(true);
+    expect((team as { data: ReportTeamTab }).data.foodCost).toBeNull();
+    const overview = await call('reports:overview', AROUND_NOW());
+    expect(overview).toMatchObject({ ok: true, data: { kpis: { orderCount: 1 } } });
+  });
+
+  it('checks the period like before: bad dates and over two years are refused', async () => {
+    h.session = MANAGER;
+    expect(await call('reports:menu', { sinceIso: 'x', untilIso: 'y' })).toMatchObject({ ok: false, code: 'validation_failed' });
+    expect(await call('reports:menu', { sinceIso: '2026-09-02T00:00:00.000Z', untilIso: '2026-09-01T00:00:00.000Z' })).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
+    expect(await call('reports:menu', { sinceIso: '2020-01-01T00:00:00.000Z', untilIso: '2026-01-01T00:00:00.000Z' })).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
+    expect(await call('reports:overview', { ...AROUND_NOW(), compareSinceIso: 'nope', compareUntilIso: 'nope' })).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
+  });
+});
+
+live('where a tab is worked out', () => {
+  it('the worker, when it is running: its figures, marked as worked out there', async () => {
+    oneSale();
+    h.session = MANAGER;
+    const { buildReportTab } = await import('../../services/analytics/report-tabs.js');
+    const w = fakeWorker('ready', async (kind, req) => buildReportTab(db, kind, req));
+    h.worker = w;
+    for (const t of TABS) {
+      const r = await call(`reports:${t}`, A_YEAR());
+      expect({ t, ok: r.ok, engine: (r as { data?: { engine?: string } }).data?.engine }).toEqual({ t, ok: true, engine: 'worker' });
+    }
+    expect(w.asked.map(([k]) => k)).toEqual(TABS);
+    // The Overview is asked with its comparison, as sent.
+    const cmp = { ...AROUND_NOW(), compareSinceIso: '2026-01-01T00:00:00.000Z', compareUntilIso: '2026-01-02T00:00:00.000Z' };
+    await call('reports:overview', cmp);
+    expect(w.asked.at(-1)).toEqual(['overview', cmp]);
+  });
+
+  it('no worker (it failed to start): a month on the main process, anything longer refused in plain words', async () => {
+    oneSale();
+    h.session = MANAGER;
+    const w = fakeWorker('unavailable', () => Promise.reject(new Error('never asked')));
+    h.worker = w;
+    const month = { sinceIso: new Date(Date.now() - 30 * 86_400_000).toISOString(), untilIso: new Date(Date.now() + 3_600_000).toISOString() };
+    const r = await call('reports:overview', month);
+    expect(r).toMatchObject({ ok: true, data: { engine: 'main', kpis: { orderCount: 1 } } });
+    expect(await call('reports:menu', A_YEAR())).toEqual({ ok: false, code: 'precondition_failed', message: TOO_LONG });
+    expect(TOO_LONG).toBe(
+      'Reports over 31 days are worked out in the background, and that part of the till is not running. Pick 31 days or fewer, or restart the till.',
+    );
+    expect(w.asked).toEqual([]);
+  });
+
+  it('asked again with other dates, too slow, crashed, failed: each gets its own answer', async () => {
+    h.session = MANAGER;
+    const { WorkerRunError } = await import('../../services/analytics/worker-client.js');
+    const answer = (code: 'superseded' | 'timeout' | 'crashed' | 'failed', message = 'x') =>
+      fakeWorker('ready', () => Promise.reject(new WorkerRunError(code, message)));
+
+    h.worker = answer('superseded');
+    expect(await call('reports:when', A_YEAR())).toMatchObject({ ok: false, code: 'conflict', message: 'A newer report was asked for.' });
+
+    h.worker = answer('timeout');
+    expect(await call('reports:when', A_YEAR())).toMatchObject({
+      ok: false,
+      code: 'precondition_failed',
+      message: 'The report took longer than 30 seconds. Pick a shorter period and try again.',
+    });
+
+    // The worker stopped part-way (it restarts): a short period is worked out here instead…
+    h.worker = answer('crashed', 'The report stopped part-way. Please try again.');
+    expect(await call('reports:when', AROUND_NOW())).toMatchObject({ ok: true, data: { engine: 'main' } });
+    // …a long one is to be tried again.
+    expect(await call('reports:when', A_YEAR())).toEqual({
+      ok: false,
+      code: 'precondition_failed',
+      message: 'The report stopped part-way. Please try again.',
+    });
+
+    // A failure inside the worker is not the owner's to read: logged with a reference by defineHandler.
+    h.worker = answer('failed', 'no such column: o.nope');
+    expect(await call('reports:when', AROUND_NOW())).toMatchObject({ ok: false, code: 'threw ReportWorkerFailure' });
   });
 });
 

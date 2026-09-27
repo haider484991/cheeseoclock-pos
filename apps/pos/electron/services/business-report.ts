@@ -21,6 +21,7 @@ import type {
   ReportWasteLine,
   ReportWasteReason,
   OrderItemCostStatus,
+  ReportTabFigures,
 } from '@cheeseoclock/shared-types';
 import { isDeliveryChargeName } from '@cheeseoclock/shared-types';
 import {
@@ -40,9 +41,10 @@ import {
   type PriceOf,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
-import { loadPriceBook } from '../db/price-book.js';
-import { getBusinessSetting } from '../db/repositories/business-settings-repo.js';
-import { priceOfBook, safeStockValue } from '../db/repositories/stock-movement-repo.js';
+// Read-only modules only, none of them loading Electron: this file also runs
+// in the Reports worker thread (analytics/worker.ts). A test walks its imports.
+import { loadPriceBook, priceOfBook, safeStockValue } from '../db/price-book.js';
+import { getBusinessSetting } from '../db/business-settings-read.js';
 import { withBillPrinted, withHandPrints } from './print-report.js';
 import {
   COUNTED,
@@ -58,7 +60,8 @@ import {
 } from './analytics/sql.js';
 
 /**
- * The Reports page, in one call (`reports:business`).
+ * The Reports page's figures, a builder per tab (costing spec Phase 3; see
+ * "The tabs" below), run in the Reports worker thread (analytics/worker.ts).
  *
  * Rules every figure here follows (CLAUDE.md):
  *  - Money comes from STORED order totals (subtotal / discount / tax / total)
@@ -435,8 +438,11 @@ function buildKpis(
 
 /** The headline figures alone (used for the comparison period). */
 export function getReportKpis(db: AppDatabase, range: ReportRange): ReportKpis {
-  const rows = getSaleRows(db, range);
-  const agg = aggregateSales(rows, { user: () => null, rider: () => null });
+  return kpisOf(db, range, aggregateSales(getSaleRows(db, range), { user: () => null, rider: () => null }).totals);
+}
+
+/** The headline figures of a period whose sales pass is done: add items sold, payments, cancels and refunds. */
+function kpisOf(db: AppDatabase, range: ReportRange, totals: ReturnType<typeof aggregateSales>['totals']): ReportKpis {
   const items = db
     .prepare(
       `SELECT COALESCE(SUM(oi.quantity), 0) AS n
@@ -445,7 +451,7 @@ export function getReportKpis(db: AppDatabase, range: ReportRange): ReportKpis {
         WHERE ${IN_RANGE} AND ${COUNTED}`,
     )
     .get(...args(range)) as { n: number };
-  return buildKpis(agg.totals, items.n, getPaymentSplit(db, range), getNonSales(db, range));
+  return buildKpis(totals, Number(items.n), getPaymentSplit(db, range), getNonSales(db, range));
 }
 
 function getItems(db: AppDatabase, range: ReportRange): ReportItemLine[] {
@@ -1429,49 +1435,187 @@ export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date(
 }
 
 // ---------------------------------------------------------------------------
-// The page
+// The tabs (costing spec Phase 3): one builder per Reports tab
 // ---------------------------------------------------------------------------
 
-/** The whole Reports page for one period. Read-only. */
+/*
+ * Each Reports tab is its own IPC channel and loads only its own figures:
+ * a builder per tab, sharing the queries above (and analytics/sql.ts), so a
+ * figure on one tab is worked out exactly as the same figure on another.
+ * They run in the Reports worker thread (analytics/worker.ts), or on the
+ * main process as the fallback; analytics/report-tabs.ts runs each in one
+ * read transaction. Read-only.
+ */
+
+function rangeOf(req: BusinessReportRequest): ReportRange {
+  return { sinceIso: req.sinceIso, untilIso: req.untilIso };
+}
+
+function compareOf(req: BusinessReportRequest): ReportRange | null {
+  return req.compareSinceIso && req.compareUntilIso ? { sinceIso: req.compareSinceIso, untilIso: req.compareUntilIso } : null;
+}
+
+/** Tabs that name nobody (no staff or rider lines) skip reading the people. */
+const NO_NAMES = { user: () => null, rider: () => null };
+
+/** Net sales from the sales pass's totals: billed less part refunds. */
+function netOf(totals: ReturnType<typeof aggregateSales>['totals']): number {
+  return totals.billedCents - totals.partialRefundCents;
+}
+
+/** Overview: the headline figures, the comparison period's, and the order types (website vs till). */
+export function buildOverviewTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'overview'> {
+  const range = rangeOf(req);
+  const compare = compareOf(req);
+  const sales = aggregateSales(getSaleRows(db, range), NO_NAMES);
+  return {
+    sinceIso: range.sinceIso,
+    untilIso: range.untilIso,
+    kpis: kpisOf(db, range, sales.totals),
+    previous: compare ? getReportKpis(db, compare) : null,
+    channels: sales.channels,
+  };
+}
+
+/** When: sales by trading day and by Pakistan clock hour. */
+export function buildWhenTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'when'> {
+  const range = rangeOf(req);
+  const sales = aggregateSales(getSaleRows(db, range), NO_NAMES);
+  return {
+    sinceIso: range.sinceIso,
+    untilIso: range.untilIso,
+    kpis: { orderCount: sales.totals.orderCount, netSalesCents: netOf(sales.totals) },
+    byDay: sales.byDay,
+    byHour: sales.byHour,
+  };
+}
+
+/** Menu: every item sold and its category, at menu price. */
+export function buildMenuTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'menu'> {
+  const range = rangeOf(req);
+  const items = getItems(db, range);
+  // The stored subtotals (not the lines added up): the same figure as the
+  // Overview's "Items at menu price".
+  const menu = db
+    .prepare(`SELECT COALESCE(SUM(o.subtotal_cents), 0) AS cents FROM orders o WHERE ${IN_RANGE} AND ${COUNTED}`)
+    .get(...args(range)) as { cents: number };
+  return {
+    sinceIso: range.sinceIso,
+    untilIso: range.untilIso,
+    kpis: { menuSalesCents: Number(menu.cents), itemCount: items.reduce((s, i) => s + i.quantity, 0) },
+    items,
+    categories: rollUpCategories(items),
+  };
+}
+
+/** Channels & delivery: order types, and own-rider deliveries by rider and by area. */
+export function buildChannelsTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'channels'> {
+  const range = rangeOf(req);
+  const sales = aggregateSales(getSaleRows(db, range), nameLookups(db));
+  const net = netOf(sales.totals);
+  const orders = sales.totals.orderCount;
+  return {
+    sinceIso: range.sinceIso,
+    untilIso: range.untilIso,
+    kpis: { orderCount: orders, netSalesCents: net, avgOrderCents: orders > 0 ? Math.round(net / orders) : 0 },
+    channels: sales.channels,
+    deliveries: sales.deliveries,
+  };
+}
+
+/** Food cost & stock (COST_CAPABILITY only: the main process refuses the rest before building it). */
+export function buildFoodStockTab(db: AppDatabase, req: BusinessReportRequest, now = new Date()): ReportTabFigures<'foodStock'> {
+  const range = rangeOf(req);
+  const pricing = lazyPricing(db);
+  const stockOf = (ids: string[]) => getOrderStockOutcomes(db, ids, pricing);
+  const foodCost = getFoodCost(db, range, now);
+  // Answered "Not made" although cooking had been marked: worth the owner's look.
+  foodCost.putBackAfterCookingCount = [...getVoids(db, range, stockOf), ...getRefunds(db, range, stockOf)].filter(
+    (l) => l.stock !== null && putBackAfterCooking(l.stock),
+  ).length;
+  // Part refunds on the counted orders (the note under the food cost): their negative payments.
+  const refunded = db
+    .prepare(
+      `SELECT COALESCE(-SUM(p.amount_cents), 0) AS cents
+         FROM orders o
+         JOIN payments p ON p.order_id = o.id AND p.amount_cents < 0 AND p.deleted_at IS NULL
+        WHERE ${IN_RANGE} AND ${COUNTED}`,
+    )
+    .get(...args(range)) as { cents: number };
+  return { sinceIso: range.sinceIso, untilIso: range.untilIso, kpis: { partialRefundCents: Number(refunded.cents) }, foodCost };
+}
+
+/** Team & leakage: staff, shifts and the cash drawer, discounts, refunds and cancelled orders. */
+export function buildTeamTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'team'> {
+  const range = rangeOf(req);
+  const names = nameLookups(db);
+  const sales = aggregateSales(getSaleRows(db, range), names);
+  const pricing = lazyPricing(db);
+  const stockOf = (ids: string[]) => getOrderStockOutcomes(db, ids, pricing);
+  const voidRows = getVoids(db, range, stockOf);
+  const refunds = getRefunds(db, range, stockOf);
+  const nonSales = getNonSales(db, range);
+  return {
+    sinceIso: range.sinceIso,
+    untilIso: range.untilIso,
+    kpis: {
+      netSalesCents: netOf(sales.totals),
+      menuSalesCents: sales.totals.menuSalesCents,
+      partialRefundCents: sales.totals.partialRefundCents,
+      fullRefundCents: nonSales.fullRefundCents,
+      voidCount: nonSales.voidCount,
+      voidCents: nonSales.voidCents,
+    },
+    staff: withHandPrints(db, range, withStaffCounts(sales.staff, voidRows, getNoSaleOpensByUser(db, range), names.user), names.user),
+    shifts: getShifts(db, range),
+    discounts: summarizeDiscounts(getDiscountLines(db, range)),
+    refunds: refunds.slice(0, REPORT_LIST_CAP),
+    voids: withBillPrinted(db, voidRows.slice(0, REPORT_LIST_CAP).map(({ staffKey: _staffKey, ...v }) => v)),
+    drawerOpens: getDrawerOpens(db, range),
+    drawerOpenCount: getDrawerOpenCount(db, range),
+    // The Stock column shows what wasted food cost when a row has a figure;
+    // reportTabForLogin clears it (and those figures) for a login without costs.
+    foodCost: { hasCosts: [...voidRows, ...refunds].some((l) => (l.stock?.wasteCents ?? 0) > 0) },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The whole page (tests and the bench)
+// ---------------------------------------------------------------------------
+
+/**
+ * The whole Reports page for one period, put together from the tab
+ * builders in one read transaction (every figure sees the same snapshot).
+ * The till's screens ask for one tab at a time; this is what the tests
+ * reconcile (every breakdown adds up) and the bench times. Read-only.
+ */
 export function getBusinessReport(db: AppDatabase, req: BusinessReportRequest, now = new Date()): BusinessReport {
-  const range = { sinceIso: req.sinceIso, untilIso: req.untilIso };
-  const compare =
-    req.compareSinceIso && req.compareUntilIso
-      ? { sinceIso: req.compareSinceIso, untilIso: req.compareUntilIso }
-      : null;
-  // One read transaction: every figure on the page sees the same snapshot,
-  // even if a sale lands (from another connection) while it is put together.
   const build = db.transaction((): BusinessReport => {
-    const names = nameLookups(db);
-    const sales = aggregateSales(getSaleRows(db, range), names);
-    const items = getItems(db, range);
-    const itemCount = items.reduce((s, i) => s + i.quantity, 0);
-    const pricing = lazyPricing(db);
-    const stockOf = (ids: string[]) => getOrderStockOutcomes(db, ids, pricing);
-    const voidRows = getVoids(db, range, stockOf);
-    const refunds = getRefunds(db, range, stockOf);
-    const foodCost = getFoodCost(db, range, now);
-    // Answered "Not made" although cooking had been marked: worth the owner's look.
-    foodCost.putBackAfterCookingCount = [...voidRows, ...refunds].filter((l) => l.stock !== null && putBackAfterCooking(l.stock)).length;
+    const overview = buildOverviewTab(db, req);
+    const when = buildWhenTab(db, req);
+    const menu = buildMenuTab(db, req);
+    const channels = buildChannelsTab(db, req);
+    const food = buildFoodStockTab(db, req, now);
+    const team = buildTeamTab(db, req);
     return {
-      sinceIso: range.sinceIso,
-      untilIso: range.untilIso,
-      kpis: buildKpis(sales.totals, itemCount, getPaymentSplit(db, range), getNonSales(db, range)),
-      previous: compare ? getReportKpis(db, compare) : null,
-      byDay: sales.byDay,
-      byHour: sales.byHour,
-      items,
-      categories: rollUpCategories(items),
-      channels: sales.channels,
-      staff: withHandPrints(db, range, withStaffCounts(sales.staff, voidRows, getNoSaleOpensByUser(db, range), names.user), names.user),
-      shifts: getShifts(db, range),
-      discounts: summarizeDiscounts(getDiscountLines(db, range)),
-      refunds: refunds.slice(0, REPORT_LIST_CAP),
-      voids: withBillPrinted(db, voidRows.slice(0, REPORT_LIST_CAP).map(({ staffKey: _staffKey, ...v }) => v)),
-      drawerOpens: getDrawerOpens(db, range),
-      drawerOpenCount: getDrawerOpenCount(db, range),
-      foodCost,
-      deliveries: sales.deliveries,
+      sinceIso: req.sinceIso,
+      untilIso: req.untilIso,
+      kpis: overview.kpis,
+      previous: overview.previous,
+      byDay: when.byDay,
+      byHour: when.byHour,
+      items: menu.items,
+      categories: menu.categories,
+      channels: channels.channels,
+      staff: team.staff,
+      shifts: team.shifts,
+      discounts: team.discounts,
+      refunds: team.refunds,
+      voids: team.voids,
+      drawerOpens: team.drawerOpens,
+      drawerOpenCount: team.drawerOpenCount,
+      foodCost: food.foodCost,
+      deliveries: channels.deliveries,
     };
   });
   return build();
@@ -1480,17 +1624,21 @@ export function getBusinessReport(db: AppDatabase, req: BusinessReportRequest, n
 /**
  * The report as a login may read it (costing spec §2): without
  * COST_CAPABILITY the food cost is left out altogether, and what the waste
- * of a cancelled or refunded order cost is 0 — in the main process, so the
- * printout and the file carry no costs either. Sales figures stay.
+ * of a cancelled or refunded order cost is 0, in the main process, so the
+ * printout and the file carry no costs either. Sales figures stay. The tabs
+ * follow the same rule (analytics/report-tabs.ts reportTabForLogin).
  */
 export function reportForLogin(report: BusinessReport, canSeeCosts: boolean): BusinessReport {
   if (canSeeCosts) return report;
-  const noCost = <T extends { stock: ReportOrderStock | null }>(x: T): T =>
-    x.stock ? { ...x, stock: { ...x.stock, wasteCents: 0 } } : x;
   return {
     ...report,
     foodCost: null,
-    voids: report.voids.map(noCost),
-    refunds: report.refunds.map(noCost),
+    voids: report.voids.map(withoutWasteCost),
+    refunds: report.refunds.map(withoutWasteCost),
   };
+}
+
+/** A cancelled or refunded order's line with what its wasted food cost set to 0. */
+export function withoutWasteCost<T extends { stock: ReportOrderStock | null }>(x: T): T {
+  return x.stock ? { ...x, stock: { ...x.stock, wasteCents: 0 } } : x;
 }

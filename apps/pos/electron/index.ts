@@ -23,6 +23,7 @@ import { recordAppliedRestore } from './services/restore-service.js';
 import { sealAllStoredSecrets } from './services/secrets-bootstrap.js';
 import { auditChainService } from './services/audit-chain-service.js';
 import { clearAttention } from './services/order-alerts-hub.js';
+import { startAnalyticsWorker, stopAnalyticsWorker } from './services/analytics/worker-host.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -184,6 +185,12 @@ async function bootstrap() {
 
   registerAllIpcHandlers({ db, deviceId: deviceInfo.deviceId });
 
+  // Reports are worked out in a worker thread with its own read connection,
+  // so a year of figures never holds up the counter (costing spec Phase 3).
+  // The log says "analytics worker ready", or why not and that Reports run on
+  // the main process instead (31 days at most).
+  startAnalyticsWorker(dbPath);
+
   await createMainWindow();
 }
 
@@ -206,8 +213,15 @@ app.whenReady().then(bootstrap).catch((err: unknown) => {
 app.on('before-quit', () => clearAttention());
 
 app.on('window-all-closed', () => {
-  closeDatabase();
-  if (process.platform !== 'darwin') app.quit();
+  // The Reports worker's read connection closes first (a couple of seconds
+  // at most): the till's own connection must be the last one open, or
+  // closing it cannot fold the write-ahead log into cheeseoclock.sqlite.
+  void stopAnalyticsWorker()
+    .catch((err: unknown) => log.warn('Error stopping the analytics worker', err))
+    .then(() => {
+      closeDatabase();
+      if (process.platform !== 'darwin') app.quit();
+    });
 });
 
 app.on('activate', () => {
