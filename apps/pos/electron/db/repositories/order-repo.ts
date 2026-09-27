@@ -2124,6 +2124,9 @@ export function getOrderSnapshot(
     customerName: orderRow.customer_name_snapshot,
     customerPhone: orderRow.customer_phone_snapshot,
     deliveryAddress,
+    // The counter's "Order notes" box: printed and shown with the order's
+    // own note (orderNotesOf), not left in the row unread.
+    deliveryNotes: orderRow.delivery_notes?.trim() || null,
     rider,
   };
 }

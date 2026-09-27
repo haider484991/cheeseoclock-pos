@@ -27,6 +27,14 @@ export function presetSessionState(key: string, value: unknown): void {
 }
 
 /**
+ * What a screen last kept under `key` (undefined when nothing), for a deep
+ * link that adds to it rather than replacing it.
+ */
+export function readSessionState<T>(key: string): T | undefined {
+  return sessionMemory.get(key) as T | undefined;
+}
+
+/**
  * The other end of a one-shot deep link: what was preset under `key`, as
  * the screen first renders, then forgotten (coming back to the screen later
  * does not repeat it). Read in the initializer and forgotten in an effect,
@@ -38,6 +46,15 @@ export function useOneShotLink<T>(key: string): T | undefined {
     sessionMemory.delete(key);
   }, [key]);
   return link;
+}
+
+/**
+ * Is a one-shot link waiting under `key` (preset, not read yet)? For a
+ * screen that is already open when a link to it comes, so it can open
+ * afresh and read it (ReportsPage).
+ */
+export function hasOneShotLink(key: string): boolean {
+  return sessionMemory.get(key) !== undefined;
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   type OwnerWeek,
   type OwnerWeekWhich,
   type ReportEngine,
+  type ReportMenuMap,
   type ReportTab,
   type ReportTabData,
   type ReportTabFigures,
@@ -21,14 +22,24 @@ import {
 import {
   dayNoteInputSchema,
   drawerLogInputSchema,
+  menuMapInputSchema,
   removeDayNoteInputSchema,
   setDaypartsInputSchema,
   varianceInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import type { AppDatabase } from '../../db/connection.js';
-import { requireCapability, REFUSED } from '../guards.js';
+import { mayProfit, requireCapability, requireProfit, REFUSED } from '../guards.js';
 import { getLowStock } from '../../services/inventory-service.js';
-import { buildAnalytics, buildReportTab, fitsMainThread, MAIN_THREAD_MAX_DAYS, reportTabForLogin } from '../../services/analytics/report-tabs.js';
+import {
+  buildAnalytics,
+  buildReportTab,
+  fitsMainThread,
+  MAIN_THREAD_MAX_DAYS,
+  periodDays,
+  reportTabForLogin,
+  type TabJob,
+} from '../../services/analytics/report-tabs.js';
+import { menuMapRange } from '../../services/analytics/menu-engineering.js';
 import { WorkerRunError, type AnalyticsWorkerState } from '../../services/analytics/worker-client.js';
 import { getAnalyticsWorker } from '../../services/analytics/worker-host.js';
 import type { AnalyticsKind, AnalyticsRequest, ExtraAnalytics } from '../../services/analytics/worker-protocol.js';
@@ -79,6 +90,20 @@ import { listDrawerLog } from '../../db/repositories/drawer-open-repo.js';
  * less). The second-till link's state is read here and handed to the
  * worker with the job (it can't read the sync settings), as it is for the
  * owner's week's stock-variance line.
+ *
+ * Profit (costing spec Phase 9), profit.view AND COST_CAPABILITY in the main
+ * process (a cashier is refused; so is any login without profit.view):
+ *  - reports:profit, the Profit tab (the waterfall, by channel and by
+ *    category); "Between stock takes" sends the two stock takes, for the
+ *    stock-loss step when both were full counts;
+ *  - reports:menuMap, the menu map (the last 28 days unless a period is
+ *    asked for);
+ *  - Menu's cost columns (COST_CAPABILITY) and profit (profit.view), and
+ *    Channels' rider cost and what orders earn (profit.view), are left out
+ *    of the tab for a login without them — the worker is told not to work
+ *    them out, and reportTabForLogin drops them again here, so the printout
+ *    and the file carry nothing more;
+ *  - the weekly sheet's profit before overheads (reports:ownerWeek).
  */
 
 /** Longest period one report may cover — two years and a bit (leap day, comparison). */
@@ -118,16 +143,30 @@ function checkRange(sinceIso: unknown, untilIso: unknown, what: string): void {
   }
 }
 
+/** "Between stock takes": the two stock takes, when sent (the Profit tab only). */
+function stockTakesOf(p: Partial<BusinessReportRequest>): BusinessReportRequest['stockTakes'] {
+  const st = p.stockTakes as unknown;
+  if (st === undefined || st === null) return undefined;
+  const pair = st as { fromCountId?: unknown; toCountId?: unknown };
+  const ok = (x: unknown) => typeof x === 'string' && x.length > 0 && x.length <= 64;
+  if (typeof st !== 'object' || !ok(pair.fromCountId) || !ok(pair.toCountId)) {
+    throw new IpcGuardError({ code: 'validation_failed', message: 'Pick the two stock takes' });
+  }
+  return { fromCountId: pair.fromCountId as string, toCountId: pair.toCountId as string };
+}
+
 /** The period (and comparison) a tab was asked for, checked. */
 function tabRequest(payload: unknown): BusinessReportRequest {
   const p = (payload ?? {}) as Partial<BusinessReportRequest>;
   checkRange(p.sinceIso, p.untilIso, 'report period');
   const withCompare = p.compareSinceIso !== undefined || p.compareUntilIso !== undefined;
   if (withCompare) checkRange(p.compareSinceIso, p.compareUntilIso, 'comparison period');
+  const stockTakes = stockTakesOf(p);
   return {
     sinceIso: p.sinceIso as string,
     untilIso: p.untilIso as string,
     ...(withCompare ? { compareSinceIso: p.compareSinceIso as string, compareUntilIso: p.compareUntilIso as string } : {}),
+    ...(stockTakes ? { stockTakes } : {}),
   };
 }
 
@@ -240,10 +279,21 @@ export function registerReportsHandlers(ctx: HandlerContext, deps: ReportsHandle
   async function tab<K extends ReportTab>(kind: K, payload: unknown): Promise<ApiResult<ReportTabData[K]>> {
     const s = requireCapability('report.view', REFUSED.reports);
     const canSeeCosts = hasCapability(s.role, COST_CAPABILITY);
-    // Costs are the owner's business figures (costing spec §2).
+    // Costs are the owner's business figures (costing spec §2); profit is profit.view's (Phase 9).
     if (kind === 'foodStock' && !canSeeCosts) throw new IpcGuardError({ code: 'forbidden', message: REFUSED.costs });
-    const data = await workOutTab(ctx.db, deps.worker(), kind, tabRequest(payload));
-    return ok(reportTabForLogin(kind, data, canSeeCosts));
+    if (kind === 'profit') requireProfit();
+    const canSeeProfit = mayProfit(s);
+    const req = tabRequest(payload);
+    // What the login may see goes with the job, so the worker does not work out rupees nobody is shown.
+    const job: TabJob = {
+      ...req,
+      withCosts: canSeeCosts,
+      withProfit: canSeeProfit,
+      ...(kind === 'profit' && req.stockTakes ? { link: readTillLink(ctx.db) } : {}),
+    };
+    if (kind !== 'profit') delete job.stockTakes;
+    const data = await workOutTab(ctx.db, deps.worker(), kind, job);
+    return ok(reportTabForLogin(kind, data, canSeeCosts, canSeeProfit));
   }
 
   defineHandler('reports:overview', ctx, (_ctx, payload) => tab('overview', payload));
@@ -252,6 +302,27 @@ export function registerReportsHandlers(ctx: HandlerContext, deps: ReportsHandle
   defineHandler('reports:channels', ctx, (_ctx, payload) => tab('channels', payload));
   defineHandler('reports:foodStock', ctx, (_ctx, payload) => tab('foodStock', payload));
   defineHandler('reports:team', ctx, (_ctx, payload) => tab('team', payload));
+  defineHandler('reports:profit', ctx, (_ctx, payload) => tab('profit', payload));
+
+  // ---- The menu map (costing spec 4.8, Phase 9) ----
+
+  /** Each category's dishes by how popular and how profitable: report.view, profit.view and costs. */
+  defineHandler('reports:menuMap', ctx, async (_ctx, payload) => {
+    requireCapability('report.view', REFUSED.reports);
+    requireProfit();
+    const parsed = menuMapInputSchema.safeParse(payload ?? {});
+    if (!parsed.success) return validationFailed(parsed.error);
+    const req = parsed.data.sinceIso && parsed.data.untilIso ? { sinceIso: parsed.data.sinceIso, untilIso: parsed.data.untilIso } : undefined;
+    if (req) checkRange(req.sinceIso, req.untilIso, 'report period');
+    const got = await fromWorker(deps.worker(), 'menuMap', req);
+    if ('data' in got) return ok({ ...(got.data as Omit<ReportMenuMap, 'engine'>), engine: 'worker' as const });
+    // The fallback: the till's own connection, a month at most (the last 28 days always fit).
+    if (periodDays(menuMapRange(req, new Date())) > MAIN_THREAD_MAX_DAYS) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: got.whyNot, retryable: true });
+    }
+    const data = buildAnalytics(ctx.db, 'menuMap', req, new Date(), { longReads: false }) as Omit<ReportMenuMap, 'engine'>;
+    return ok({ ...data, engine: 'main' as const });
+  });
 
   // ---- Stock takes: used vs should have used (costing spec Phase 8) ----
 
@@ -284,13 +355,19 @@ export function registerReportsHandlers(ctx: HandlerContext, deps: ReportsHandle
 
   // ---- The owner's week (costing spec Phase 7) ----
 
-  /** The Dashboard card and the weekly sheet: report.view; the cost lines for COST_CAPABILITY only. Never profit. */
+  /**
+   * The Dashboard card and the weekly sheet: report.view; the cost lines for
+   * COST_CAPABILITY only; the sheet's profit before overheads for profit.view
+   * only (Phase 9). Never profit on the Dashboard card.
+   */
   defineHandler('reports:ownerWeek', ctx, async (_ctx, payload) => {
     const s = requireCapability('report.view', REFUSED.reports);
     const canSeeCosts = hasCapability(s.role, COST_CAPABILITY);
-    const job: OwnerWeekJob = { week: weekOf(payload), withCosts: canSeeCosts, sheet: forSheet(payload), link: readTillLink(ctx.db) };
+    const sheet = forSheet(payload);
+    const canSeeProfit = sheet && mayProfit(s);
+    const job: OwnerWeekJob = { week: weekOf(payload), withCosts: canSeeCosts, withProfit: canSeeProfit, sheet, link: readTillLink(ctx.db) };
     const { data, engine } = await workOutExtra(ctx.db, deps.worker(), 'ownerWeek', job);
-    return ok(ownerWeekForLogin({ ...(data as Omit<OwnerWeek, 'engine'>), engine }, canSeeCosts));
+    return ok(ownerWeekForLogin({ ...(data as Omit<OwnerWeek, 'engine'>), engine }, canSeeCosts, canSeeProfit));
   });
 
   /** Overview's trend strip and 12 months: report.view; each month's food cost for COST_CAPABILITY only. */

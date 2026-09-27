@@ -1,30 +1,43 @@
 import { cn } from '@cheeseoclock/ui';
-import { BellRing, ListChecks, Target, UtensilsCrossed } from 'lucide-react';
-import { useSessionState } from '../../components/list';
+import { PROFIT_CAPABILITY } from '@cheeseoclock/shared-types';
+import { BellRing, FlaskConical, ListChecks, Target, UtensilsCrossed } from 'lucide-react';
+import { presetSessionState, useSessionState } from '../../components/list';
+import { useSessionStore } from '../../stores/sessionStore';
 import { useCostAlerts, useMenuCosts } from './costingQueries';
 import { AlertsTab } from './AlertsTab';
 import { MenuCostsTab } from './MenuCostsTab';
 import { MissingCostsTab } from './MissingCostsTab';
 import { TargetsTab } from './TargetsTab';
+import { WHAT_IF_TRY, WhatIfTab } from './WhatIfTab';
 
 /**
  * Costing (costing spec, Phase 1): what every dish costs to make at today's
  * prices, whether its food cost is on target, and what still needs a price.
  * Read-only: prices and recipes are changed in Inventory, and every row that
  * needs fixing links there. Managers and the owner only (COST_CAPABILITY;
- * the main process refuses anyone else).
+ * the main process refuses anyone else). What-if (costing spec Phase 9) and
+ * what you keep per sale are profit.view's, the owner's alone since
+ * 2026-09-27 (a manager sees costs, not profit); prices tried in What-if
+ * are never saved.
  */
-type Tab = 'menu' | 'missing' | 'alerts' | 'targets';
+type Tab = 'menu' | 'missing' | 'alerts' | 'whatif' | 'targets';
 
-const TABS: Array<{ id: Tab; label: string; icon: typeof ListChecks }> = [
+const TABS: Array<{ id: Tab; label: string; icon: typeof ListChecks; profitOnly?: boolean }> = [
   { id: 'menu', label: 'Menu costs', icon: UtensilsCrossed },
   { id: 'missing', label: 'Missing costs', icon: ListChecks },
   { id: 'alerts', label: 'Alerts', icon: BellRing },
-  { id: 'targets', label: 'Targets', icon: Target },
+  { id: 'whatif', label: 'What-if', icon: FlaskConical, profitOnly: true },
+  { id: 'targets', label: 'Targets & fees', icon: Target },
 ];
 
 export function CostingPage() {
-  const [tab, setTab] = useSessionState<Tab>('costing.tab', 'menu');
+  const canSeeProfit = useSessionStore((s) => s.can(PROFIT_CAPABILITY));
+  const [chosen, setTab] = useSessionState<Tab>('costing.tab', 'menu');
+  const tab: Tab = chosen === 'whatif' && !canSeeProfit ? 'menu' : chosen;
+  const tryPrice = (menuItemId: string) => {
+    presetSessionState(WHAT_IF_TRY, { menuItemId });
+    setTab('whatif');
+  };
   // The badge: what still stops the till costing the menu.
   const menuQ = useMenuCosts();
   const missing = menuQ.data?.missingCount ?? 0;
@@ -37,13 +50,15 @@ export function CostingPage() {
       <header className="mb-4">
         <h1 className="text-3xl font-bold tracking-tight">Costing</h1>
         <p className="mt-1 text-stone-600 dark:text-stone-400">
-          What each dish costs to make at today&apos;s prices, what you keep per sale, and whether it is on target.
+          {canSeeProfit
+            ? "What each dish costs to make at today's prices, what you keep per sale, and whether it is on target."
+            : "What each dish costs to make at today's prices, and whether it is on target."}{' '}
           Prices and recipes are changed in Inventory.
         </p>
       </header>
 
       <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-stone-200 dark:border-stone-800" aria-label="Costing sections">
-        {TABS.map((t) => {
+        {TABS.filter((t) => !t.profitOnly || canSeeProfit).map((t) => {
           const Icon = t.icon;
           const active = tab === t.id;
           return (
@@ -82,9 +97,12 @@ export function CostingPage() {
         })}
       </nav>
 
-      {tab === 'menu' && <MenuCostsTab onShowMissing={() => setTab('missing')} onShowTargets={() => setTab('targets')} />}
+      {tab === 'menu' && (
+        <MenuCostsTab onShowMissing={() => setTab('missing')} onShowTargets={() => setTab('targets')} onTryPrice={canSeeProfit ? tryPrice : undefined} />
+      )}
       {tab === 'missing' && <MissingCostsTab />}
       {tab === 'alerts' && <AlertsTab />}
+      {tab === 'whatif' && canSeeProfit && <WhatIfTab />}
       {tab === 'targets' && <TargetsTab />}
     </div>
   );

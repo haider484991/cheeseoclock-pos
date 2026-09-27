@@ -239,6 +239,7 @@ describe('the Reports tabs render their own figures', () => {
           kpis: { menuSalesCents: 300_000, itemCount: 4 },
           items: [{ key: 'm1', name: 'Test Pizza', categoryId: 'c1', categoryName: 'Pizzas', quantity: 4, salesCents: 300_000 }],
           categories: [{ categoryId: 'c1', name: 'Pizzas', quantity: 4, salesCents: 300_000 }],
+          costs: null,
         }}
       />,
     );
@@ -251,6 +252,10 @@ describe('the Reports tabs render their own figures', () => {
           kpis: { orderCount: 3, netSalesCents: 300_000, avgOrderCents: 100_000 },
           channels: [{ channel: 'delivery', orderCount: 3, netSalesCents: 300_000 }],
           deliveries: { byRider: [{ riderId: 'r1', name: 'Bilal', deliveries: 3, netSalesCents: 300_000, avgMinutesOut: 25 }], byArea: [] },
+          areas: [],
+          noRateDeliveries: [],
+          noRateCount: 0,
+          profit: null,
         }}
       />,
     );

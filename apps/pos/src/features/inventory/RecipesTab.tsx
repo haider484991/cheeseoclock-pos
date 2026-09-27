@@ -22,17 +22,18 @@ import {
 } from '../../components/list';
 import { IngredientSelect } from './IngredientSelect';
 import { BatchCalculatorDialog } from './BatchCalculator';
+import { BatchCalculatorButton } from './BatchPicker';
 import { RecipeCostFooter } from '../costing/RecipeCostFooter';
 import { useCanSeeCosts } from '../costing/costingQueries';
 import { formatUnitPrice } from '../costing/costingFormat';
 
 type Mode = 'items' | 'batches';
 
-export function RecipesTab() {
+export function RecipesTab({ onCalculate }: { onCalculate?: (item: MenuItem) => void } = {}) {
   const [mode, setMode] = useSessionState<Mode>('inv.rec.mode', 'items');
   return (
     <div className="space-y-3">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {([
           ['items', 'Menu items', BookOpen],
           ['batches', 'Batch recipes (made in-house)', Soup],
@@ -51,8 +52,10 @@ export function RecipesTab() {
             <Icon className="h-4 w-4" /> {label}
           </button>
         ))}
+        {/* Owner, 2026-09-27: "I want the batch calculator to show" — one tap, whichever list is open. */}
+        <BatchCalculatorButton className="ml-auto" />
       </div>
-      {mode === 'items' ? <MenuItemRecipes /> : <BatchRecipes />}
+      {mode === 'items' ? <MenuItemRecipes onCalculate={onCalculate} /> : <BatchRecipes />}
     </div>
   );
 }
@@ -61,7 +64,7 @@ export function RecipesTab() {
 // Menu item recipes
 // -----------------------------------------------------------------------------
 
-function MenuItemRecipes() {
+function MenuItemRecipes({ onCalculate }: { onCalculate?: (item: MenuItem) => void }) {
   const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
   const catsQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
   const countsQ = useQuery({
@@ -125,7 +128,13 @@ function MenuItemRecipes() {
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         {list.items.map((item) => (
-          <RecipeCard key={item.id} item={item} categoryName={catName(item.categoryId)} onEdit={() => setEditingItem(item)} />
+          <RecipeCard
+            key={item.id}
+            item={item}
+            categoryName={catName(item.categoryId)}
+            onEdit={() => setEditingItem(item)}
+            onCalculate={onCalculate ? () => onCalculate(item) : undefined}
+          />
         ))}
         {list.total === 0 && (
           <div className="col-span-full py-8 text-center text-stone-500">
@@ -160,10 +169,13 @@ function RecipeCard({
   item,
   categoryName,
   onEdit,
+  onCalculate,
 }: {
   item: MenuItem;
   categoryName: string;
   onEdit: () => void;
+  /** Inventory → Recipe calculator on this item: how much of everything for N of it. */
+  onCalculate?: () => void;
 }) {
   const q = useQuery({
     queryKey: ['inventory', 'recipe', item.id],
@@ -190,17 +202,24 @@ function RecipeCard({
           </div>
           <div className="text-xs text-stone-500">{categoryName}</div>
         </div>
-        <Button variant="secondary" size="sm" onClick={onEdit}>
-          {lines.length === 0 ? (
-            <>
-              <Plus className="h-3 w-3" /> Add recipe
-            </>
-          ) : (
-            <>
-              <Edit className="h-3 w-3" /> Edit
-            </>
+        <div className="flex flex-wrap justify-end gap-1">
+          {onCalculate && lines.length > 0 && (
+            <Button variant="secondary" size="sm" onClick={onCalculate} title="How much of everything for 10 (or any number)">
+              <Calculator className="h-3 w-3" /> Calculate
+            </Button>
           )}
-        </Button>
+          <Button variant="secondary" size="sm" onClick={onEdit}>
+            {lines.length === 0 ? (
+              <>
+                <Plus className="h-3 w-3" /> Add recipe
+              </>
+            ) : (
+              <>
+                <Edit className="h-3 w-3" /> Edit
+              </>
+            )}
+          </Button>
+        </div>
       </div>
       {lines.length > 0 ? (
         <>

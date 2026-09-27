@@ -11,11 +11,14 @@ import {
   getShiftSummary,
   listCashMovements,
   listShifts,
+  listUnpaidForClose,
   openShift,
   recordCashMovement,
 } from '../../db/repositories/shift-repo.js';
+import type { AppDatabase } from '../../db/connection.js';
 import { printSpooler } from '../../services/print-spooler.js';
 import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-service.js';
+import { followShiftForWebOrders } from '../../services/web-orders-shift-pause.js';
 import { requireCapability, REFUSED } from '../guards.js';
 
 /**
@@ -42,11 +45,53 @@ function requireShiftManage(capability: 'shift.open' | 'shift.close'): Authentic
       code: 'forbidden',
       message:
         capability === 'shift.close'
-          ? 'Only a manager or the owner can close the shift — ask them to log in and count the drawer'
+          ? CLOSE_REFUSED
           : 'You are not allowed to open a shift',
     });
   }
   return s;
+}
+
+/** A cashier's login with no manager's PIN or password asks to close. */
+export const CLOSE_REFUSED =
+  'Only a manager or the owner can close the shift — ask them to log in and count the drawer, or to type their PIN or password here';
+
+/** Who closes the shift: the person signed in, or the manager whose PIN was typed on a cashier's till. */
+export interface ShiftCloser {
+  userId: string;
+  name: string;
+  /** Set when a manager's PIN or password approved it on a cashier's login: who was signed in. */
+  tillSignedInUserId: string | null;
+}
+
+/**
+ * Cashiers never close a shift (owner, 2026-09-25). A manager or the owner
+ * signed in closes it themselves; on a cashier's login the manager types
+ * their PIN or password (owner, 2026-09-27) — checked here, in the main
+ * process, with the sign-in lockout rules (verifyManagerPin), and the shift
+ * is closed by that manager. Anything else is refused.
+ */
+export async function shiftCloser(
+  db: AppDatabase,
+  s: AuthenticatedUser,
+  approverPin: unknown,
+): Promise<ShiftCloser> {
+  if (hasCapability(s.role, 'shift.close')) {
+    return { userId: s.id, name: s.fullName, tillSignedInUserId: null };
+  }
+  const pin = typeof approverPin === 'string' ? approverPin : '';
+  if (pin.trim() === '') {
+    throw new IpcGuardError({ code: 'forbidden', message: CLOSE_REFUSED });
+  }
+  try {
+    const m = await verifyManagerPin(db, pin);
+    return { userId: m.approverUserId, name: m.approverName, tillSignedInUserId: s.id };
+  } catch (e) {
+    throw new IpcGuardError({
+      code: 'forbidden',
+      message: e instanceof Error ? e.message : 'Manager approval failed',
+    });
+  }
 }
 
 export function registerShiftsHandlers(ctx: HandlerContext): void {
@@ -69,6 +114,9 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
       // The drawer opens to put the float in, for the 'float' row written with
       // the shift (a failure is a toast, not an error).
       printSpooler.kickDrawerSoon(drawerOpenId);
+      // Website orders start again (unless the owner switched them off by
+      // hand). Never throws: the website never holds up the shift.
+      followShiftForWebOrders(ctx.db, ctx.deviceId, 'opened', s.id);
       return ok(shift);
     } catch (e) {
       throw new IpcGuardError({
@@ -78,8 +126,9 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
     }
   });
 
-  defineHandler('shifts:close', ctx, (_ctx, payload) => {
-    const s = requireShiftManage('shift.close');
+  defineHandler('shifts:close', ctx, async (_ctx, payload) => {
+    const s = requireSession();
+    const closer = await shiftCloser(ctx.db, s, payload.approverPin);
     try {
       const shift = closeShift(
         ctx.db,
@@ -87,16 +136,47 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
           shiftId: payload.shiftId,
           countedCashCents: Math.round(payload.countedCashCents),
           notes: payload.notes ?? null,
+          carryOverReason: typeof payload.carryOverReason === 'string' ? payload.carryOverReason : null,
+          // The unpaid orders the close box showed: one that came in during
+          // the count is not carried over on a reason given for the others.
+          carryOverOrderIds: Array.isArray(payload.carryOverOrderIds)
+            ? payload.carryOverOrderIds.filter((id): id is string => typeof id === 'string')
+            : null,
         },
-        { userId: s.id, deviceId: ctx.deviceId },
+        { userId: closer.userId, deviceId: ctx.deviceId },
+        closer.tillSignedInUserId ? { via: 'manager_pin', tillSignedInUserId: closer.tillSignedInUserId } : null,
       );
-      return ok(shift);
+      // The till's last shift closed: website orders pause until one opens
+      // (owner, 2026-09-27). Never throws: the close is already saved.
+      followShiftForWebOrders(ctx.db, ctx.deviceId, 'closed', closer.userId);
+      // Closed with a manager's PIN on a cashier's login: the manager sees
+      // Counted and Over / Short there, but the expected cash never goes to
+      // a cashier's screen (the shift's totals are refused to that login,
+      // shifts:summary). The row keeps it; Shift history shows it the owner.
+      return ok(closer.tillSignedInUserId ? { ...shift, expectedCashCents: null } : shift);
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',
         message: e instanceof Error ? e.message : 'Close shift failed',
       });
     }
+  });
+
+  // Before the count: who closes, and the unpaid orders the close will carry
+  // over. The same people as the close itself; no money of the shift (the
+  // count is blind), only the unpaid orders' own totals.
+  defineHandler('shifts:closeCheck', ctx, async (_ctx, payload) => {
+    const s = requireSession();
+    const closer = await shiftCloser(ctx.db, s, payload.approverPin);
+    const shift = findShift(ctx.db, payload.shiftId);
+    if (!shift || shift.closedAt !== null) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: 'That shift is not open any more' });
+    }
+    return ok({
+      closerName: closer.name,
+      viaManagerPin: closer.tillSignedInUserId !== null,
+      unpaidOrders: listUnpaidForClose(ctx.db, shift.deviceId),
+    });
   });
 
   defineHandler('shifts:list', ctx, (_ctx, payload) => {

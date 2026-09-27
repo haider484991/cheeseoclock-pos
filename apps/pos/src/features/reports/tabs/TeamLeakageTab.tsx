@@ -11,18 +11,35 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
 import { Percent, Receipt, Trash2, UsersRound } from 'lucide-react';
 import { DataTable, Panel, Section, useShowAll } from '../reportUi';
-import { fmtWhen, methodLabel, percentOf, stockCellText } from '../reportFormat';
+import { fmtAgo, fmtWhen, methodLabel, percentOf, shiftCarryOverText, shiftNoteLines, stockCellText } from '../reportFormat';
+import { SHIFT_HISTORY_ANCHOR } from '../reportTabs';
+import type { ReportPeriod } from '../dateRange';
 import { shiftDrawerUseNote, shiftTestDeletedNote } from '../drawerLogFormat';
 import { DrawerLogPanel, ShiftDrawerLogDialog } from './DrawerLog';
 import { DeletedTestOrdersPanel, deletedTestsTitle, useDeletedTests } from '../../orders/DeletedTestOrdersPanel';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** `onPrint`: prints an HTML body with the Reports print sheet (a shift's drawer log). */
-export function TeamLeakageTab({ data, onPrint }: { data: ReportTeamTab; onPrint?: (html: string) => void }) {
+/**
+ * `now`: the page's clock, for how long a shift has been open. `period`: the
+ * one on screen, named in the shift history (a link lands the owner there,
+ * possibly scrolled past the page's own period line). `onPrint`: prints an
+ * HTML body with the Reports print sheet (a shift's drawer log).
+ */
+export function TeamLeakageTab({
+  data,
+  now,
+  period,
+  onPrint,
+}: {
+  data: ReportTeamTab;
+  now?: Date;
+  period?: ShiftHistoryPeriod;
+  onPrint?: (html: string) => void;
+}) {
   return (
     <div className="space-y-10">
-      <StaffSection report={data} {...(onPrint ? { onPrint } : {})} />
+      <StaffSection report={data} now={now} period={period} {...(onPrint ? { onPrint } : {})} />
       <DiscountsSection report={data} />
       <RefundsSection report={data} />
       <DeletedTestsSection sinceIso={data.sinceIso} untilIso={data.untilIso} />
@@ -37,17 +54,51 @@ function shiftDrawerNote(s: ReportShiftLine): string {
   return note + shiftDrawerUseNote(s);
 }
 
+/** The period the shift history covers, as the page names it. */
+export type ShiftHistoryPeriod = Pick<ReportPeriod, 'dates' | 'isCurrent'>;
+
+/** The shift history's note: which shifts it lists (and for which dates, when known), and how Expected is worked out. */
+export function shiftHistoryNote(period?: ShiftHistoryPeriod): string {
+  const dates = period ? ` (${period.dates}${period.isCurrent ? ', so far' : ''})` : '';
+  return `Every shift that was open at any time in this period${dates}, newest first. Expected = float + cash sales − cash refunds + cash put in − cash taken out. Figures are the ones saved when the shift was closed.`;
+}
+
+/** The shift history's banner: what the closed drawers came to. A shift still open is not counted until it closes. */
+export function shiftDrawerBanner(shifts: readonly ReportShiftLine[]): { text: string; tone: 'matched' | 'over' | 'short' } | null {
+  const closed = shifts.filter((s) => s.closedAt !== null && s.varianceCents !== null);
+  if (closed.length === 0) return null;
+  const drawer = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
+  const open = shifts.filter((s) => s.closedAt === null).length;
+  const text =
+    drawer === 0
+      ? `Every closed drawer matched (${plural(closed.length, 'shift')}).`
+      : `${drawer > 0 ? 'Over' : 'Short'} ${formatCents(Math.abs(drawer))} in all, over ${plural(closed.length, 'closed shift')}.`;
+  return {
+    text: open > 0 ? `${text} ${plural(open, 'shift')} still open: counted when ${open === 1 ? 'it closes' : 'they close'}.` : text,
+    tone: drawer === 0 ? 'matched' : drawer > 0 ? 'over' : 'short',
+  };
+}
+
+/**
+ * Staff and cash drawer: who took the orders; the shift history (0039: its
+ * notes and carried-over orders; 0040/0041: each shift's own drawer log, one
+ * tap from its row, and the cash of test orders deleted after it closed);
+ * and the period's whole drawer log under both.
+ */
 export function StaffSection({
   report,
+  now = new Date(),
+  period,
   onPrint,
 }: {
   report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'sinceIso' | 'untilIso'>;
+  now?: Date;
+  period?: ShiftHistoryPeriod;
   onPrint?: (html: string) => void;
 }) {
   const net = report.kpis.netSalesCents;
   const [logShift, setLogShift] = useState<ReportShiftLine | null>(null);
-  const closed = report.shifts.filter((s) => s.closedAt !== null && s.varianceCents !== null);
-  const drawer = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
+  const banner = shiftDrawerBanner(report.shifts);
   return (
     <Section id="staff" icon={UsersRound} title="Staff and cash drawer">
       <div className="grid gap-4 xl:grid-cols-2">
@@ -76,23 +127,22 @@ export function StaffSection({
         </Panel>
 
         <Panel
-          title="Shifts — cash in the drawer"
-          note="Expected = float + cash sales − cash refunds + cash put in − cash taken out. Figures are the ones saved when the shift was closed."
+          id={SHIFT_HISTORY_ANCHOR}
+          title="Shift history — cash in the drawer"
+          note={shiftHistoryNote(period)}
         >
-          {closed.length > 0 && (
+          {banner && (
             <div
               className={cn(
                 'mb-3 rounded-lg px-3 py-2 text-sm font-semibold',
-                drawer === 0
+                banner.tone === 'matched'
                   ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
-                  : drawer > 0
+                  : banner.tone === 'over'
                     ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
                     : 'bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-300',
               )}
             >
-              {drawer === 0
-                ? `Every closed drawer matched (${plural(closed.length, 'shift')}).`
-                : `${drawer > 0 ? 'Over' : 'Short'} ${formatCents(Math.abs(drawer))} in all, over ${plural(closed.length, 'closed shift')}.`}
+              {banner.text}
             </div>
           )}
           <DataTable
@@ -101,12 +151,35 @@ export function StaffSection({
               <div key="w">
                 <div className="font-medium">{fmtWhen(s.openedAt)}</div>
                 <div className="text-xs text-stone-500">
-                  {s.closedAt ? `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}` : `still open · opened by ${s.openedBy}`}
+                  {s.closedAt ? (
+                    `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}`
+                  ) : (
+                    <>
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">still open</span>
+                      {` · opened by ${s.openedBy}, ${fmtAgo(s.openedAt, now)}`}
+                    </>
+                  )}
                   {shiftDrawerNote(s)}
                 </div>
-                {shiftTestDeletedNote(s) && (
-                  <div className="text-xs font-medium text-amber-700 dark:text-amber-400">{shiftTestDeletedNote(s)}</div>
+                {/* What was typed at opening and at closing, each on its own line. */}
+                {shiftNoteLines(s).map((note) => (
+                  <div key={note} className="mt-0.5 whitespace-normal break-words text-xs text-stone-700 dark:text-stone-300">
+                    {note}
+                  </div>
+                ))}
+                {/* Unpaid orders the close left for the next shift, why, and who approved it. */}
+                {shiftCarryOverText(s) && (
+                  <div className="mt-0.5 whitespace-normal break-words text-xs font-semibold text-amber-800 dark:text-amber-300">
+                    {shiftCarryOverText(s)}
+                  </div>
                 )}
+                {/* A test order of this shift deleted after it closed: the saved figures stay, the cash is noted (0041). */}
+                {shiftTestDeletedNote(s) && (
+                  <div className="mt-0.5 whitespace-normal break-words text-xs font-medium text-amber-700 dark:text-amber-400">
+                    {shiftTestDeletedNote(s)}
+                  </div>
+                )}
+                {/* This shift's own drawer log (0040): every opening, who, why, the result. */}
                 <button
                   type="button"
                   onClick={() => setLogShift(s)}
@@ -129,7 +202,7 @@ export function StaffSection({
                 </span>
               ),
             ])}
-            empty="No shifts were opened in this period."
+            empty="No shifts in this period."
           />
         </Panel>
 

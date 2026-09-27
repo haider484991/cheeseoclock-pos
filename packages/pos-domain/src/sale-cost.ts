@@ -29,10 +29,10 @@ import type {
   WasteReason,
 } from '@cheeseoclock/shared-types';
 import { WASTE_REASONS } from '@cheeseoclock/shared-types';
-import { allocateDiscount } from './discount.js';
+import { splitOrderLines } from './profit.js';
 import { BASE_PART, expandRecipe, type ExpandedLine, type PickedChoice, type RecipeLine } from './recipe-expand.js';
 import { costLines, type PriceOf } from './plate-cost.js';
-import { mulDivRound, unitCostMc, valueCents, type Pack } from './units.js';
+import { unitCostMc, valueCents, type Pack } from './units.js';
 
 // ------------------------------------------------------ the cost of a line --
 
@@ -145,12 +145,8 @@ export function lineNetsExTax(
   totalCents: number,
   refundedCents: number,
 ): number[] {
-  const disc = allocateDiscount(lineTotalsCents, discountCents);
-  const lineNets = lineTotalsCents.map((t, i) => t - (disc[i] ?? 0));
-  const afterDiscount = lineNets.reduce((s, x) => s + x, 0);
-  const refundExTax = totalCents > 0 && refundedCents > 0 ? mulDivRound(refundedCents, afterDiscount, totalCents) : 0;
-  const ref = allocateDiscount(lineNets, refundExTax);
-  return lineNets.map((n, i) => n - (ref[i] ?? 0));
+  // The one allocation (costing spec 4.4), shared with Profit.
+  return splitOrderLines(lineTotalsCents, discountCents, totalCents, refundedCents).nets;
 }
 
 // ------------------------------------------------------------ food cost --
@@ -242,24 +238,62 @@ function addMissing(t: FoodCostTally, l: FoodCostLine, why: ReportMissingCostWhy
   } else t.missing.set(k, { key: l.key, name: l.name, why, quantity: l.quantity, salesCents: net });
 }
 
+/** One counted order's food cost (orderFoodCost): what tallyFoodCost adds, with each line's part. */
+export interface OrderFoodCost {
+  /** Each line at what the customer paid, before tax (lineNetsExTax), in the order given. */
+  nets: number[];
+  /**
+   * Each line's cost is known: a FULL line of an order that kept its cost;
+   * for an estimated order, a line with a recipe when everything it took had
+   * a price (its cost is then only known as the order's whole estimate).
+   */
+  known: boolean[];
+  /** Why each line's cost is not known (null for a known line or a fee). */
+  why: Array<ReportMissingCostWhy | null>;
+  foodSalesCents: number;
+  feeSalesCents: number;
+  costOfSalesCents: number;
+  knownSalesCents: number;
+  knownMenuSalesCents: number;
+  knownCostCents: number;
+  /** It kept no cost and was estimated from the stock it took. */
+  estimated: boolean;
+  estimatedCostCents: number;
+  hasUsage: boolean;
+}
+
 /**
- * Add one counted order into the food cost (spec 4.5):
+ * One counted order's food cost (spec 4.5):
  *  - food sales = its non-fee lines at what the customer paid, before tax;
  *  - an order that kept its cost adds each food line's cost; a FULL line's
  *    sales and cost are "known" (the food cost % is worked on those), any
- *    other is listed under sales with missing costs;
+ *    other is a sale with a missing cost;
  *  - an order that kept none adds its estimate; its lines are "known" only
  *    when every ingredient it took had a price and the item has a recipe
  *    today (then the estimate is their cost).
  * Part refunds lower the sales, never the cost: the food was made.
  */
-export function tallyFoodCost(t: FoodCostTally, o: FoodCostOrder): void {
+export function orderFoodCost(o: FoodCostOrder): OrderFoodCost {
   const nets = lineNetsExTax(
     o.lines.map((l) => l.lineTotalCents),
     o.discountCents,
     o.totalCents,
     o.refundedCents,
   );
+  const r: OrderFoodCost = {
+    nets,
+    known: o.lines.map(() => false),
+    why: o.lines.map(() => null),
+    foodSalesCents: 0,
+    feeSalesCents: 0,
+    costOfSalesCents: 0,
+    knownSalesCents: 0,
+    knownMenuSalesCents: 0,
+    knownCostCents: 0,
+    estimated: false,
+    estimatedCostCents: 0,
+    hasUsage: false,
+  };
   const kept = orderKeptCost(o.lines);
   let knownNet = 0;
   let knownMenu = 0;
@@ -267,50 +301,81 @@ export function tallyFoodCost(t: FoodCostTally, o: FoodCostOrder): void {
   o.lines.forEach((l, i) => {
     const net = nets[i] ?? 0;
     if (l.isFee) {
-      t.feeSalesCents += net;
+      r.feeSalesCents += net;
       return;
     }
-    t.foodSalesCents += net;
+    r.foodSalesCents += net;
     if (kept) {
-      t.costOfSalesCents += l.costCents;
-      if (l.parts > 0) t.hasUsage = true;
+      r.costOfSalesCents += l.costCents;
+      if (l.parts > 0) r.hasUsage = true;
       if (l.status === 'full') {
-        t.knownSalesCents += net;
-        t.knownMenuSalesCents += l.lineTotalCents;
-        t.knownCostCents += l.costCents;
+        r.known[i] = true;
+        r.knownSalesCents += net;
+        r.knownMenuSalesCents += l.lineTotalCents;
+        r.knownCostCents += l.costCents;
       } else {
-        const why: ReportMissingCostWhy =
-          l.status === 'none' ? 'no_recipe' : l.status === 'partial' ? 'no_price' : 'not_recorded';
-        addMissing(t, l, why, net);
+        r.why[i] = l.status === 'none' ? 'no_recipe' : l.status === 'partial' ? 'no_price' : 'not_recorded';
       }
       return;
     }
     const e = o.estimate;
-    if (!l.hasRecipeNow) addMissing(t, l, 'no_recipe', net);
-    else if (!e || !e.tookStock) addMissing(t, l, 'not_recorded', net);
-    else if (!e.priced) addMissing(t, l, 'no_price', net);
+    if (!l.hasRecipeNow) r.why[i] = 'no_recipe';
+    else if (!e || !e.tookStock) r.why[i] = 'not_recorded';
+    else if (!e.priced) r.why[i] = 'no_price';
     else {
+      r.known[i] = true;
       knownNet += net;
       knownMenu += l.lineTotalCents;
       anyKnown = true;
     }
   });
-  if (kept) return;
+  if (kept) return r;
   const e = o.estimate;
   // Estimated only when there is something to estimate from: an order that
-  // took no stock (no recipe, a delivery charge alone) is listed under
-  // missing costs, not counted as "estimated at today's prices".
-  if (!e || !e.tookStock) return;
-  t.estimatedOrders += 1;
-  t.hasUsage = true;
-  t.costOfSalesCents += e.costCents;
-  t.estimatedCostCents += e.costCents;
+  // took no stock (no recipe, a delivery charge alone) is a missing cost,
+  // not "estimated at the prices of the time".
+  if (!e || !e.tookStock) {
+    r.known = r.known.map(() => false);
+    return r;
+  }
+  r.estimated = true;
+  r.hasUsage = true;
+  r.costOfSalesCents += e.costCents;
+  r.estimatedCostCents += e.costCents;
   // The estimate is the cost of the lines with a recipe: known only as a whole.
   if (anyKnown) {
-    t.knownSalesCents += knownNet;
-    t.knownMenuSalesCents += knownMenu;
-    t.knownCostCents += e.costCents;
+    r.knownSalesCents += knownNet;
+    r.knownMenuSalesCents += knownMenu;
+    r.knownCostCents += e.costCents;
   }
+  return r;
+}
+
+/** Add one order's food cost (orderFoodCost) into a tally, its missing-cost lines listed. */
+export function addOrderFoodCost(t: FoodCostTally, o: FoodCostOrder, r: OrderFoodCost): void {
+  t.foodSalesCents += r.foodSalesCents;
+  t.feeSalesCents += r.feeSalesCents;
+  t.costOfSalesCents += r.costOfSalesCents;
+  t.knownSalesCents += r.knownSalesCents;
+  t.knownMenuSalesCents += r.knownMenuSalesCents;
+  t.knownCostCents += r.knownCostCents;
+  if (r.estimated) {
+    t.estimatedOrders += 1;
+    t.estimatedCostCents += r.estimatedCostCents;
+  }
+  if (r.hasUsage) t.hasUsage = true;
+  o.lines.forEach((l, i) => {
+    const why = r.why[i];
+    if (why) addMissing(t, l, why, r.nets[i] ?? 0);
+  });
+}
+
+/**
+ * Add one counted order into the food cost (spec 4.5; see orderFoodCost for
+ * the rules).
+ */
+export function tallyFoodCost(t: FoodCostTally, o: FoodCostOrder): void {
+  addOrderFoodCost(t, o, orderFoodCost(o));
 }
 
 /**

@@ -66,6 +66,7 @@ import type {
   CashMovementType,
   DrawerOpenResult,
   Shift,
+  ShiftCloseCheck,
   ShiftSummary,
 } from './shift.js';
 import type {
@@ -78,6 +79,7 @@ import type {
   ReportFoodStockTab,
   ReportMenuTab,
   ReportOverviewTab,
+  ReportProfitTab,
   ReportTabRequest,
   ReportTeamTab,
   DrawerLogPage,
@@ -86,6 +88,14 @@ import type {
   ReportWhenTab,
   SetDaypartsRequest,
 } from './reports.js';
+import type {
+  ChannelFeesView,
+  MenuMapRequest,
+  ReportMenuMap,
+  SetChannelFeesRequest,
+  WhatIfRequest,
+  WhatIfResult,
+} from './profit.js';
 import type {
   PrinterConnectionConfig,
   PrintPolicy,
@@ -139,8 +149,10 @@ import type {
   CustomerWithAddresses,
 } from './customer.js';
 import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
+import type { CostedRecipeCalc, RecipeCalc, RecipeCalcRequest, TypicalPicksView } from './recipe-calc.js';
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
+import type { WebOrdersShiftPause } from './web-bridge.js';
 import type {
   ReportVariance,
   StockCountDetail,
@@ -477,6 +489,16 @@ export interface IpcContract {
     request: { orderId: string };
     response: ApiResult<OrderSnapshot>;
   };
+  /**
+   * The counter's "Order notes" box on an order still being rung up with no
+   * customer typed in (with one, the note goes with orders:attachCustomer /
+   * customers:attachToOrder). Blank clears it. Printed on the kitchen ticket
+   * and the bill.
+   */
+  'orders:setNote': {
+    request: { orderId: string; note: string | null };
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:list': {
     request: { status?: Order['status']; sinceIso?: string; limit?: number } | undefined;
     response: ApiResult<Order[]>;
@@ -706,9 +728,35 @@ export interface IpcContract {
     request: { openingCashCents: number; notes?: string | null };
     response: ApiResult<Shift>;
   };
+  /**
+   * Close the shift with the drawer count. A manager or the owner signed in
+   * closes it; on a cashier's login a manager's PIN or password
+   * (`approverPin`) does, and the shift is closed by that manager. Unpaid
+   * orders on this till are carried over to the next shift only with
+   * `carryOverReason` (owner, 2026-09-27); `notes` is the closing note.
+   * `carryOverOrderIds`: the unpaid orders the close box showed — a close
+   * that would carry over any other (one that came in during the count) is
+   * refused. On a manager's PIN the reply leaves out `expectedCashCents`:
+   * the cashier's screen never shows the expected cash.
+   */
   'shifts:close': {
-    request: { shiftId: string; countedCashCents: number; notes?: string | null };
+    request: {
+      shiftId: string;
+      countedCashCents: number;
+      notes?: string | null;
+      approverPin?: string;
+      carryOverReason?: string | null;
+      carryOverOrderIds?: string[];
+    };
     response: ApiResult<Shift>;
+  };
+  /**
+   * Before the count: who closes (a cashier's login needs `approverPin`) and
+   * the unpaid orders the close will carry over. Never the expected cash.
+   */
+  'shifts:closeCheck': {
+    request: { shiftId: string; approverPin?: string };
+    response: ApiResult<ShiftCloseCheck>;
   };
   'shifts:list': {
     request: { sinceIso?: string; limit?: number; deviceId?: string } | undefined;
@@ -734,7 +782,8 @@ export interface IpcContract {
   };
   /**
    * Open the cash drawer with no sale ('no_sale'), or to count it while
-   * closing the shift ('count' — managers and the owner, open shift only). A
+   * closing the shift ('count' — managers and the owner, or a cashier with a
+   * manager's PIN while that manager closes the shift; open shift only). A
    * cashier's no-sale open needs a manager's PIN or password. Saved and
    * audited before the drawer is pulsed.
    */
@@ -780,6 +829,12 @@ export interface IpcContract {
       lastCloudBackupAt: string | null;
       lastCloudBackupError: string | null;
       lastImportError: string | null;
+      /**
+       * Website orders paused by the till itself because no shift is open on
+       * it (owner, 2026-09-27); null when not paused. The owner's `enabled`
+       * switch is untouched by it.
+       */
+      shiftPause: WebOrdersShiftPause | null;
     }>;
   };
   /** Upload a fresh gzipped database backup to the cloud right now. */
@@ -1159,6 +1214,33 @@ export interface IpcContract {
     response: ApiResult<{ made: number; resultingQty: number }>;
   };
 
+  // Inventory — the recipe calculator (read-only; menu.manage). Quantities
+  // only: no rupee crosses these channels (costing:recipeCalc has the costs).
+  /**
+   * How much N of a dish, a deal or a dip (or an amount of a batch) needs:
+   * the batches to make first (each once, in order), what comes straight
+   * from stock, and every ingredient from scratch, with this till's stock
+   * and what is short. Writes nothing.
+   */
+  'inventory:recipeCalc': {
+    request: RecipeCalcRequest;
+    response: ApiResult<RecipeCalc>;
+  };
+  /** A menu item's choice groups and the last 28 days' picks (sale counts only), for "the usual picks". */
+  'inventory:typicalPicks': {
+    request: { menuItemId: string };
+    response: ApiResult<TypicalPicksView>;
+  };
+  /**
+   * The same worked out again and printed on the receipt printer as a prep
+   * list (no prices). A failed print is an answer (ok: false), never an
+   * error that blocks anything.
+   */
+  'inventory:printPrepList': {
+    request: RecipeCalcRequest;
+    response: ApiResult<PrintResult>;
+  };
+
   // Inventory — movements (audit log + manual adjustments)
   'inventory:listMovements': {
     request: {
@@ -1356,12 +1438,12 @@ export interface IpcContract {
   };
 
   // Costing (menu.manage = COST_CAPABILITY to read; settings.manage to change targets)
-  /** Every menu item: cost to make, price, what you keep, food-cost chip; worst first on screen. */
+  /** Every menu item: cost to make, price, food-cost chip, and what you keep (profit.view only); worst first on screen. */
   'costing:menuCosts': {
     request: undefined;
     response: ApiResult<MenuCostsView>;
   };
-  /** One item's cost sheet: every line, the customer's picks, paid extras, leave-outs. */
+  /** One item's cost sheet: every line, the customer's picks, paid extras, leave-outs (what you keep and the price to hit target: profit.view only). */
   'costing:itemSheet': {
     request: { menuItemId: string };
     response: ApiResult<ItemCostSheet | null>;
@@ -1392,6 +1474,11 @@ export interface IpcContract {
   'costing:batchCalc': {
     request: { ingredientId: string; amount: number };
     response: ApiResult<BatchCalc>;
+  };
+  /** The recipe calculator with what it costs: inventory:recipeCalc's answer plus `costs`. COST_CAPABILITY. */
+  'costing:recipeCalc': {
+    request: RecipeCalcRequest;
+    response: ApiResult<CostedRecipeCalc>;
   };
   /**
    * Costing → Alerts (costing spec Phase 6): price jumps, the Monday digest
@@ -1429,6 +1516,28 @@ export interface IpcContract {
   'costing:setTills': {
     request: TillsSetting;
     response: ApiResult<TillsSettingView>;
+  };
+  /**
+   * Costing → Targets & fees (costing spec Phase 9): foodpanda's commission,
+   * payment fees and what a delivery costs in rider. COST_CAPABILITY to read…
+   */
+  'costing:getChannelFees': {
+    request: undefined;
+    response: ApiResult<ChannelFeesView>;
+  };
+  /** …settings.manage to change (the owner). */
+  'costing:setChannelFees': {
+    request: SetChannelFeesRequest;
+    response: ApiResult<ChannelFeesView>;
+  };
+  /**
+   * Costing → What-if (costing spec 4.9): new ingredient or menu prices tried
+   * against the last 4 weeks' sales — nothing is saved or changed on the
+   * till. COST_CAPABILITY and profit.view.
+   */
+  'costing:whatIf': {
+    request: WhatIfRequest;
+    response: ApiResult<WhatIfResult>;
   };
 
   // Reports: one channel per tab of the Reports page (costing spec Phase 3),
@@ -1476,6 +1585,23 @@ export interface IpcContract {
   'reports:team': {
     request: ReportTabRequest;
     response: ApiResult<ReportTeamTab>;
+  };
+  /**
+   * Profit (costing spec Phase 9): the waterfall from sales to profit before
+   * overheads, by channel and by category. profit.view and COST_CAPABILITY.
+   */
+  'reports:profit': {
+    request: ReportTabRequest;
+    response: ApiResult<ReportProfitTab>;
+  };
+  /**
+   * Reports → Menu, the menu map (costing spec 4.8): each category's dishes
+   * by how popular and how profitable, in plain words. Omitted dates: the
+   * last 28 days. profit.view and COST_CAPABILITY.
+   */
+  'reports:menuMap': {
+    request: MenuMapRequest | undefined;
+    response: ApiResult<ReportMenuMap>;
   };
   // The owner's week (costing spec Phase 7). Worked out in the Reports worker
   // like the tabs; report.view, with the cost lines for COST_CAPABILITY only.

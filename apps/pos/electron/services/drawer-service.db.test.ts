@@ -234,11 +234,17 @@ describe.skipIf(!DatabaseSync)('Open drawer (no sale)', () => {
 });
 
 describe.skipIf(!DatabaseSync)('Open drawer to count', () => {
-  it('only a manager or the owner, and only with a shift open', async () => {
+  it('only a manager or the owner — or a cashier with a manager’s PIN, as that manager closes the shift — and only with a shift open', async () => {
     const { openDrawerNoSale } = await svc();
+    // A cashier alone, or with a secret that is not a manager's: refused.
+    await expect(openDrawerNoSale(db, CASHIER, DEV, { kind: 'count' })).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(
+      openDrawerNoSale(db, CASHIER, DEV, { kind: 'count', approverPin: 'not-a-manager' }),
+    ).rejects.toMatchObject({ code: 'forbidden', message: "That is not a manager's PIN or password" });
+    // A manager's PIN on a cashier's login (owner, 2026-09-27) still needs a shift to count.
     await expect(
       openDrawerNoSale(db, CASHIER, DEV, { kind: 'count', approverPin: 'Manager-pass-7' }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
+    ).rejects.toMatchObject({ code: 'precondition_failed' });
     await expect(openDrawerNoSale(db, MANAGER, DEV, { kind: 'count' })).rejects.toMatchObject({
       code: 'precondition_failed',
     });
@@ -253,6 +259,27 @@ describe.skipIf(!DatabaseSync)('Open drawer to count', () => {
     // wrote when it opened: 0040 — this test pulses only for the count).
     expect(opens().map((o) => o['kind'])).toEqual(['float', 'count', 'no_sale']);
     expect(h.sends).toHaveLength(2);
+  });
+
+  it('a cashier’s count with a manager’s PIN is on record as the cashier’s, approved by that manager', async () => {
+    const { openDrawerNoSale } = await svc();
+    const { openShift } = await import('../db/repositories/shift-repo.js');
+    const shift = openShift(db, { openingCashCents: 0 }, { userId: 'u_cash', deviceId: DEV });
+    const r = await openDrawerNoSale(db, CASHIER, DEV, { kind: 'count', approverPin: 'Manager-pass-7' });
+    expect(r.opened).toBe(true);
+    // The float the shift wrote when it opened (0040), then the count, approved by the manager (0.7.21).
+    expect(opens()).toEqual([
+      { kind: 'float', reason: null, userId: 'u_cash', approver: null },
+      { kind: 'count', reason: null, userId: 'u_cash', approver: 'u_mgr' },
+    ]);
+    // The drawer log (Reports → Team & leakage, and the shift's own): the
+    // count names the manager as approver, and its pulse settled it.
+    const { listDrawerLog } = await import('../db/repositories/drawer-open-repo.js');
+    const all = { sinceIso: '2000-01-01T00:00:00.000Z', untilIso: '2100-01-01T00:00:00.000Z' };
+    const count = listDrawerLog(db, { ...all, shiftId: shift.id, group: 'nosale' }, DEV).rows;
+    expect(count.map((l) => [l.kind, l.openedBy, l.approvedBy, l.outcome, l.shiftId])).toEqual([
+      ['count', 'Test Cashier', 'Test Manager', 'opened', shift.id],
+    ]);
   });
 
   it('refuses a kind it does not know', async () => {

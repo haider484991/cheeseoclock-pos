@@ -26,6 +26,7 @@ import { reuseCompiledStatements } from '../../db/statement-cache.js';
 import { buildAnalytics, isAnalyticsKind } from './report-tabs.js';
 import type { TillLinkState } from '@cheeseoclock/shared-types';
 import { warmOwnerWeek } from './owner-week.js';
+import { keepEstimates, ordersWithoutCost, warmEstimates } from '../business-report.js';
 import { warmLatestVariance } from './stock-control.js';
 import { DAY_MS } from './sql.js';
 import {
@@ -39,6 +40,35 @@ import {
 
 /** The same wait as the till's own connection (connection.ts) when the file is briefly locked. */
 const BUSY_TIMEOUT_MS = 5000;
+
+/**
+ * Orders from before costing started are estimated from their stock rows —
+ * a year of them is most of a second (more on the shop PC). Between asks,
+ * a while after the thread starts and again after each trading day begins,
+ * the worker works out the last year's estimates a month and a few hundred
+ * orders at a time, each step its own turn of the thread, so an ask waits
+ * at most one step; the first Profit or Channels of "This year" then finds
+ * them kept (business-report keepEstimates).
+ */
+export const ESTIMATE_WARM_DELAY_MS = 20_000;
+export const ESTIMATE_WARM_DAYS = 366;
+export const ESTIMATE_WARM_WINDOW_DAYS = 31;
+export const ESTIMATE_WARM_SLICE = 750;
+
+/** The warm-up's steps, newest month first: each read of a month's orders, then each slice of them, is one step. */
+export function* estimateWarmSteps(db: AppDatabase, now: Date): Generator<void, void, void> {
+  const end = now.getTime() + DAY_MS;
+  for (let back = 0; back < ESTIMATE_WARM_DAYS; back += ESTIMATE_WARM_WINDOW_DAYS) {
+    const untilMs = end - back * DAY_MS;
+    const sinceMs = untilMs - Math.min(ESTIMATE_WARM_WINDOW_DAYS, ESTIMATE_WARM_DAYS - back) * DAY_MS;
+    const ids = db.transaction(() => ordersWithoutCost(db, { sinceIso: new Date(sinceMs).toISOString(), untilIso: new Date(untilMs).toISOString() }))();
+    yield;
+    for (let i = 0; i < ids.length; i += ESTIMATE_WARM_SLICE) {
+      warmEstimates(db, ids.slice(i, i + ESTIMATE_WARM_SLICE));
+      yield;
+    }
+  }
+}
 
 /** Work out one tab (or the trends, or the owner's week) and say how it went. Never throws: a failure is an answer. */
 export function handleRunRequest(db: AppDatabase, msg: RunRequest): WorkerReply {
@@ -167,6 +197,9 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
     port.postMessage({ type: 'startFailed', reason: e instanceof Error ? e.message : String(e) } satisfies WorkerReply);
     return;
   }
+  // Orders from before costing started are estimated from their stock rows: keep each estimate between asks
+  // (Profit, Channels, Food cost & stock and the trends read the same orders), dropped when its rows or any price change.
+  keepEstimates(conn.db);
   let closed = false;
   /** The second-till link as the main process last said it is (off, as the shop runs, until told). */
   let link: TillLinkState = { on: false, stale: false, lastHeardAt: null };
@@ -174,6 +207,27 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
   // them as the worker starts and again just after each trading day begins (05:00 Pakistan time = 00:00 UTC),
   // between asks, so the first tap of the day does not wait for them. Never keeps the thread alive.
   let warmTimer: ReturnType<typeof setTimeout> | null = null;
+  // The last year's estimates, a step at a time between asks (ESTIMATE_WARM_*). Never keeps the thread alive.
+  let estimateTimer: ReturnType<typeof setTimeout> | null = null;
+  const warmEstimatesFrom = (steps: Generator<void, void, void>) => {
+    const step = () => {
+      estimateTimer = null;
+      if (closed) return;
+      try {
+        if (steps.next().done) return;
+      } catch {
+        return; // Worked out when a tab asks.
+      }
+      estimateTimer = setTimeout(step, 0);
+      estimateTimer.unref?.();
+    };
+    return step;
+  };
+  const warmEstimatesLater = () => {
+    if (estimateTimer) clearTimeout(estimateTimer);
+    estimateTimer = setTimeout(() => warmEstimatesFrom(estimateWarmSteps(conn.db, new Date()))(), ESTIMATE_WARM_DELAY_MS);
+    estimateTimer.unref?.();
+  };
   const warm = () => {
     if (closed) return;
     try {
@@ -181,6 +235,7 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
     } catch {
       // The card reads them itself when it is asked.
     }
+    warmEstimatesLater();
     const now = Date.now();
     warmTimer = setTimeout(warm, (Math.floor(now / DAY_MS) + 1) * DAY_MS + 1_000 - now);
     warmTimer.unref?.();
@@ -194,6 +249,7 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
       // then lets the thread end.
       closed = true;
       if (warmTimer) clearTimeout(warmTimer);
+      if (estimateTimer) clearTimeout(estimateTimer);
       try {
         conn.close();
       } catch {

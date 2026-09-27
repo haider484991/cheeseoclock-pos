@@ -266,3 +266,39 @@ export interface SystemPrinterInfo {
    */
   likelyReceiptPrinter: boolean;
 }
+
+/**
+ * A plain paper that is not about an order (the recipe calculator's prep
+ * list): a title, a few lines under it, then sections of rows — a name on
+ * the left, an amount on the right, a note under it. One model for the
+ * receipt printer (printer-core renderPlainDocument) and for "Copy as
+ * text", so both say the same. Never carries a price.
+ */
+export interface PlainDocument {
+  title: string;
+  /** Under the title: when, by whom, what for. */
+  subtitle: string[];
+  sections: PlainDocumentSection[];
+  /** At the bottom, after a rule. */
+  footer: string[];
+}
+
+export interface PlainDocumentSection {
+  heading: string;
+  /** A line under the heading ("each batch made once"). */
+  note?: string;
+  rows: PlainDocumentRow[];
+}
+
+export interface PlainDocumentRow {
+  /** Left: what it is. */
+  text: string;
+  /** Right: how much. */
+  qty?: string;
+  /** Under it, indented: "SHORT 400 g", "1.08 batches of 740 g". */
+  notes?: string[];
+  /** 0 = a main row; 1+ = inside the row above (a batch's inputs). */
+  indent?: number;
+  /** Printed bold (a recipe asked, a batch to make). */
+  strong?: boolean;
+}

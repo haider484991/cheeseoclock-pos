@@ -1038,6 +1038,47 @@ describe.skipIf(!DatabaseSync)('a test order the owner deleted (0041)', () => {
     expect(drawerRow(c.drawerOpenId)).toEqual({ outcome: 'not_opened', note: 'Order deleted before the drawer opened' });
   });
 
+  it("a test order with an order note (0.7.21): its ticket and bill still waiting never print, a reprint is refused; the same order not deleted prints its note", async () => {
+    const s = await spooler();
+    const NOTE = 'Ring the upper bell, test note';
+    const withNote = (oid: string) => {
+      Object.assign(h.snapshots.get(oid)!, { deliveryNotes: NOTE });
+      return oid;
+    };
+    // The one kept: its papers carry the note (so the note would print, were the test's papers to go out).
+    const kept = withNote(order('o0411', 'takeaway'));
+    s.onOrderEvent(kept, 'paid', {});
+    await s.whenIdle();
+    const keptPapers = h.sends.map((x) => escPosToText(x.bytes)).filter((t) => t.includes('#0411'));
+    expect(keptPapers.length).toBeGreaterThan(0);
+    expect(keptPapers.some((t) => t.includes('ORDER NOTE') || t.includes('Order note'))).toBe(true);
+
+    // The test: the printer is off, so its ticket and receipt wait.
+    h.sends.length = 0;
+    for (let i = 0; i < 6; i++) h.script.push(failCode('printer_offline'));
+    const test = withNote(order('o0412', 'takeaway'));
+    s.onOrderEvent(test, 'paid', {});
+    await s.whenIdle();
+    expect(queueRows(db, test).some((r) => r.status === 'pending')).toBe(true);
+    h.script.length = 0;
+    h.sends.length = 0;
+    const eventsBefore = h.events.length;
+    deleteAsTest(test);
+    s.onOrderDeleted(test, 'paid');
+    db.prepare(`UPDATE print_queue SET next_attempt_at = ? WHERE order_id = ? AND status = 'pending'`).run(new Date(Date.now() - 1).toISOString(), test);
+    await s.whenIdle();
+    // Nothing of it went out: no ticket, no bill, no note — and no toast at the counter.
+    expect(h.sends.map((x) => escPosToText(x.bytes)).filter((t) => t.includes('#0412'))).toEqual([]);
+    expect(h.sends.some((x) => escPosToText(x.bytes).includes(NOTE))).toBe(false);
+    expect(queueRows(db, test).every((r) => r.status === 'done')).toBe(true);
+    expect(h.events.slice(eventsBefore).filter((e) => e.channel === 'printer:failed')).toEqual([]);
+    // A print button pressed for it is refused: the order is gone.
+    expect(() => s.reprintReceipt(test)).toThrow('Order not found');
+    expect(() => s.reprintKitchenTicket(test)).toThrow('Order not found');
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(0);
+  });
+
   it('the kitchen gets a CANCELLED slip while it was cooking the test — not once the food was handed over', async () => {
     const s = await spooler();
     const cooking = order('o0402', 'takeaway', []);
@@ -1076,5 +1117,44 @@ describe.skipIf(!DatabaseSync)('no row, no pulse — by type', () => {
       s.kickDrawerSoon();
     };
     expect(typeof typeOnly).toBe('function');
+  });
+});
+
+describe.skipIf(!DatabaseSync)('a paper that is not an order (the prep list)', () => {
+  it('goes straight to the receipt printer, at its width, with no queue row and nothing in the print log', async () => {
+    const s = await spooler();
+    const { setReceiptPrinterConfig } = await import('./printer-config.js');
+    setReceiptPrinterConfig(db, { transport: 'network', network: { host: '192.0.2.10', port: 9100 }, width: 32 });
+    s.resetAdapter();
+    const { renderPlainDocument } = await import('@cheeseoclock/printer-core');
+    const widths: number[] = [];
+    const result = await s.printDocumentNow((width) => {
+      widths.push(width);
+      return renderPlainDocument(
+        { title: 'PREP LIST', subtitle: ['Test'], sections: [{ heading: 'FROM STOCK', rows: [{ text: 'Test cheese', qty: '600 g' }] }], footer: [] },
+        { width },
+      );
+    });
+    expect(result.ok).toBe(true);
+    expect(widths).toEqual([32]);
+    const sent = h.sends.filter((x) => escPosToText(x.bytes).includes('PREP LIST'));
+    expect(sent).toHaveLength(1);
+    expect(escPosToText(sent[0]!.bytes)).toMatch(/^Test cheese +600 g$/m);
+    expect(sent[0]!.opts?.drawer).toBeFalsy();
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM print_queue`).get() as { n: number }).n).toBe(0);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM document_prints`).get() as { n: number }).n).toBe(0);
+  });
+
+  it('a printer that fails, or a paper that cannot be made, comes back as a result — never thrown, never retried', async () => {
+    const s = await spooler();
+    h.script.push(failCode('printer_offline'));
+    const offline = await s.printDocumentNow(() => new Uint8Array([0x0a]));
+    expect(offline).toMatchObject({ ok: false, error: { code: 'printer_offline' } });
+    const broken = await s.printDocumentNow(() => {
+      throw new Error('no paper model');
+    });
+    expect(broken).toMatchObject({ ok: false, error: { code: 'spooler_exception', message: 'no paper model' } });
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(1);
   });
 });

@@ -95,6 +95,7 @@ const api: RendererApi = {
     listDeletedTests: (req) => invoke('orders:listDeletedTests', req),
     attachCustomer: (req) => invoke('orders:attachCustomer', req),
     detachCustomer: (req) => invoke('orders:detachCustomer', req),
+    setNote: (req) => invoke('orders:setNote', req),
     listActive: (req) => invoke('orders:listActive', req),
     sendToKitchen: (req) => invoke('orders:sendToKitchen', req),
     markPreparing: (req) => invoke('orders:markPreparing', req),
@@ -153,6 +154,7 @@ const api: RendererApi = {
     current: () => invoke('shifts:current', undefined),
     open: (req) => invoke('shifts:open', req),
     close: (req) => invoke('shifts:close', req),
+    closeCheck: (req) => invoke('shifts:closeCheck', req),
     list: (req) => invoke('shifts:list', req),
     summary: (req) => invoke('shifts:summary', req),
     lastCount: () => invoke('shifts:lastCount', undefined),
@@ -225,6 +227,9 @@ const api: RendererApi = {
     // Stock takes: used vs should have used (costing spec Phase 8).
     variance: (req) => invoke('reports:variance', req),
     drawerLog: (req) => invoke('reports:drawerLog', req),
+    // Profit and the menu map (costing spec Phase 9).
+    profit: (req) => invoke('reports:profit', req),
+    menuMap: (req) => invoke('reports:menuMap', req),
   },
   inventory: {
     listIngredients: (req) => invoke('inventory:listIngredients', req),
@@ -241,6 +246,10 @@ const api: RendererApi = {
     getBatchRecipe: (req) => invoke('inventory:getBatchRecipe', req),
     setBatchRecipe: (req) => invoke('inventory:setBatchRecipe', req),
     makeBatch: (req) => invoke('inventory:makeBatch', req),
+    // The recipe calculator (quantities only).
+    recipeCalc: (req) => invoke('inventory:recipeCalc', req),
+    typicalPicks: (req) => invoke('inventory:typicalPicks', req),
+    printPrepList: (req) => invoke('inventory:printPrepList', req),
     listMovements: (req) => invoke('inventory:listMovements', req),
     searchMovements: (req) => invoke('inventory:searchMovements', req),
     recordMovement: (req) => invoke('inventory:recordMovement', req),
@@ -272,12 +281,17 @@ const api: RendererApi = {
     setTargets: (req) => invoke('costing:setTargets', req),
     recipeCost: (req) => invoke('costing:recipeCost', req),
     batchCalc: (req) => invoke('costing:batchCalc', req),
+    recipeCalc: (req) => invoke('costing:recipeCalc', req),
     alerts: () => invoke('costing:alerts', undefined),
     markAlertsSeen: (req) => invoke('costing:markAlertsSeen', req),
     getAlertSettings: () => invoke('costing:getAlertSettings', undefined),
     setAlertSettings: (req) => invoke('costing:setAlertSettings', req),
     getTills: () => invoke('costing:getTills', undefined),
     setTills: (req) => invoke('costing:setTills', req),
+    // Profit (costing spec Phase 9).
+    getChannelFees: () => invoke('costing:getChannelFees', undefined),
+    setChannelFees: (req) => invoke('costing:setChannelFees', req),
+    whatIf: (req) => invoke('costing:whatIf', req),
   },
 };
 

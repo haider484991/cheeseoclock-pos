@@ -35,6 +35,10 @@ import {
   getWebBridgeConfig,
   isWebBridgeReady,
   CLOUD_BACKUP_INTERVALS_MS,
+  describeShiftPause,
+  getWebOrdersShiftPause,
+  storeAcceptingOrders,
+  storeHeartbeatBody,
   type WebBridgeConfig,
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
@@ -48,15 +52,14 @@ import {
   type BridgeApi,
 } from './cloud-copy-chunks.js';
 import { dumpDatabase, rebuildDatabase, type RowSink, type RowSource } from './cloud-copy-rows.js';
-import {
-  PICKUP_DISCOUNT_PERCENT,
-  type BridgeHeartbeatBody,
-  type CloudBackupEntry,
-  type PublishedMenu,
-  type PublishedMenuCategory,
-  type WebOrder,
-  type WebOrderStatus,
-  type OrderStatus,
+import type {
+  CloudBackupEntry,
+  PublishedMenu,
+  PublishedMenuCategory,
+  WebOrder,
+  WebOrderStatus,
+  WebOrdersShiftPause,
+  OrderStatus,
 } from '@cheeseoclock/shared-types';
 
 /**
@@ -155,6 +158,12 @@ interface BridgeStatus {
   lastCloudBackupError: string | null;
   /** Last per-order import failure (caught inside the pull, not the tick). */
   lastImportError: string | null;
+  /**
+   * Website orders paused by the till because no shift is open on it (null:
+   * not paused). The owner's switch (`enabled`) is untouched by it; orders
+   * already placed are still pulled in while it lasts.
+   */
+  shiftPause: WebOrdersShiftPause | null;
 }
 
 /** Just enough to talk to the site: the saved config, or one typed into the onboarding wizard. */
@@ -190,6 +199,11 @@ class WebOrdersBridge {
   private running = false;
   private lastPollAt: string | null = null;
   private lastHeartbeatAt = 0;
+  /**
+   * Store-status pushes, one after another: a beat already on its way when a
+   * shift closes must not land after the "paused" one and reopen the site.
+   */
+  private storePush: Promise<void> = Promise.resolve();
   private lastError: string | null = null;
   private importedTotal = 0;
   private consecutiveFails = 0;
@@ -264,6 +278,7 @@ class WebOrdersBridge {
     const lastBackup = this.db
       ? (getSettingRaw(this.db, LAST_CLOUD_BACKUP_KEY) as string | null)
       : null;
+    const pause = this.db ? getWebOrdersShiftPause(this.db) : null;
     return {
       enabled: cfg?.enabled ?? false,
       ready: cfg ? isWebBridgeReady(cfg).ok : false,
@@ -274,11 +289,33 @@ class WebOrdersBridge {
       lastCloudBackupAt: typeof lastBackup === 'string' ? lastBackup : null,
       lastCloudBackupError: this.lastCloudBackupError,
       lastImportError: this.lastImportError,
+      shiftPause: pause ? describeShiftPause(pause) : null,
     };
   }
 
   kick(): void {
     void this.tick();
+  }
+
+  /**
+   * The shift pause was just set or lifted (web-orders-shift-pause.ts): tell
+   * the website now rather than at the next beat. Only a till whose owner has
+   * ordering switched on has anything to say — with it off the site is closed
+   * already. Never throws; a failed push is logged, a failed "open again" is
+   * retried by the next tick, and a failed "paused" is covered by the site
+   * closing itself once the last beat goes stale.
+   */
+  refreshStoreStatus(): void {
+    if (!this.db) return;
+    const cfg = getWebBridgeConfig(this.db);
+    if (!cfg.enabled || !isWebBridgeReady(cfg).ok) return;
+    this.lastHeartbeatAt = Date.now();
+    void this.pushStoreStatus(cfg).catch((e: unknown) => {
+      this.lastHeartbeatAt = 0;
+      log.warn('Store status push after a shift change failed', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -295,8 +332,11 @@ class WebOrdersBridge {
       // With ordering off the site is already closed (the switch-off pushed
       // one final "not accepting", and the site fails closed when heartbeats
       // stop), so nothing needs to be said — and saying nothing overnight
-      // lets the site's database go to sleep.
-      if (cfg.enabled && Date.now() - this.lastHeartbeatAt >= HEARTBEAT_MS) {
+      // lets the site's database go to sleep. The same while the till has
+      // paused itself for want of an open shift (its "paused" went out when
+      // the shift closed) — but orders already placed are still pulled below.
+      const accepting = storeAcceptingOrders(cfg, getWebOrdersShiftPause(this.db));
+      if (accepting && Date.now() - this.lastHeartbeatAt >= HEARTBEAT_MS) {
         this.lastHeartbeatAt = Date.now();
         await this.pushStoreStatus(cfg).catch((e: unknown) => {
           this.lastHeartbeatAt = 0; // try again next tick
@@ -646,6 +686,8 @@ class WebOrdersBridge {
     const actor = this.resolveActor();
     const out: Record<string, unknown> = {
       enabled: cfg.enabled,
+      // Paused because no shift is open (null: not paused) — the site hears "not accepting".
+      shiftPause: getWebOrdersShiftPause(this.db),
       ready: ready.ok,
       missing: ready.missing,
       siteUrl: cfg.siteUrl ?? null,
@@ -1231,27 +1273,30 @@ class WebOrdersBridge {
    * placed while nobody is polling would be paid for on delivery and never
    * cooked. Going quiet (laptop shut, no internet) closes the site by itself
    * once the last beat goes stale.
+   *
+   * "Yes" needs both the owner's switch (cfg.enabled) and no shift pause
+   * (storeAcceptingOrders). Pushes go one at a time, and the pause is read
+   * when a push is sent rather than when it was asked for, so the last word
+   * the site hears is always the current one.
    */
-  private async pushStoreStatus(cfg: WebBridgeConfig): Promise<void> {
-    // `features` tells the site what this till can import: it offers online
-    // pick-up (10% off) only while the listening till says 'pickup'.
-    const beat: BridgeHeartbeatBody = {
-      acceptingOrders: cfg.enabled,
-      deviceId: this.deviceId,
-      features: ['pickup'],
-      // The site shows this percent, so the customer sees what the till bills.
-      pickupDiscountPercent: PICKUP_DISCOUNT_PERCENT,
-    };
-    const res = await this.api(cfg, '/api/bridge/status', {
-      method: 'PUT',
-      body: JSON.stringify(beat),
+  private pushStoreStatus(cfg: WebBridgeConfig): Promise<void> {
+    const push = this.storePush.then(async () => {
+      const pause = this.db ? getWebOrdersShiftPause(this.db) : null;
+      const beat = storeHeartbeatBody(cfg, pause, this.deviceId);
+      const res = await this.api(cfg, '/api/bridge/status', {
+        method: 'PUT',
+        body: JSON.stringify(beat),
+      });
+      if (!res.ok) {
+        // A website deployed before this feature has no such route. Nothing to
+        // do about it here — the gate lives on the site, so a site without the
+        // route simply has no gate and keeps behaving as it did.
+        log.warn('Store status heartbeat rejected', { status: res.status });
+      }
     });
-    if (!res.ok) {
-      // A website deployed before this feature has no such route. Nothing to
-      // do about it here — the gate lives on the site, so a site without the
-      // route simply has no gate and keeps behaving as it did.
-      log.warn('Store status heartbeat rejected', { status: res.status });
-    }
+    // The queue carries on past a failed push; the caller still sees it fail.
+    this.storePush = push.catch(() => undefined);
+    return push;
   }
 
   // ---- menu publish -------------------------------------------------------

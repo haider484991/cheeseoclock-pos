@@ -25,6 +25,8 @@ import { reprintReceipt, reprintToast } from '../printing/reprint';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useAcknowledgeOnlineOrders } from '../notifications/alertStore';
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
+import { orderNotesOf } from '@cheeseoclock/shared-types';
+import { NoShiftBanner } from '../shell/NoShiftBanner';
 import { AssignRiderDialog } from './AssignRiderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { VoidOrderDialog } from './VoidOrderDialog';
@@ -35,6 +37,7 @@ import {
   ageMinutes,
   ageTone,
   cardFlags,
+  cardLineDetails,
   cardItemCount,
   cardLines,
   matchesBoardSearch,
@@ -217,6 +220,9 @@ export function OrdersBoardPage() {
         </div>
       </header>
 
+      {/* "Picked up + Pay" / "Delivered + Pay" are refused with no shift open on this till. */}
+      <NoShiftBanner />
+
       <div className="grid flex-1 grid-cols-4 gap-3 overflow-hidden">
         {COLUMNS.map((col) => {
           const Icon = col.icon;
@@ -391,6 +397,7 @@ function OrderCard({
   const lines = cardLines(snap.items);
   const itemCount = cardItemCount(snap.items);
   const flags = cardFlags(snap);
+  const orderNotes = orderNotesOf(snap);
   const minutes = ageMinutes(order.createdAt, now);
   const tone = ageTone(minutes);
   const outMinutes = order.status === 'out_for_delivery' && order.dispatchedAt ? ageMinutes(order.dispatchedAt, now) : null;
@@ -443,8 +450,15 @@ function OrderCard({
 
       <ul className="space-y-0.5 text-sm text-stone-700 dark:text-stone-300">
         {lines.slice(0, MAX_LINES).map((i) => (
-          <li key={i.id} className="truncate">
-            <span className="font-bold text-stone-900 dark:text-stone-100">{i.quantity}×</span> {i.menuItemName}
+          <li key={i.id}>
+            <div className="truncate">
+              <span className="font-bold text-stone-900 dark:text-stone-100">{i.quantity}×</span> {i.menuItemName}
+            </div>
+            {cardLineDetails(i, snap.items).map((d, n) => (
+              <div key={n} className="ml-5 text-xs leading-snug text-stone-500 dark:text-stone-400">
+                {d}
+              </div>
+            ))}
           </li>
         ))}
         {lines.length > MAX_LINES && <li className="text-xs text-stone-400">+{lines.length - MAX_LINES} more…</li>}
@@ -457,11 +471,15 @@ function OrderCard({
           Leave out / allergy: {flags.join(' · ')}
         </div>
       )}
-      {order.notes && (
-        <div className="mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          Note: {order.notes}
+      {/* The order's notes: the counter's "Order notes" box and a website customer's note, alike. */}
+      {orderNotes.map((note) => (
+        <div
+          key={note}
+          className="mt-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-800"
+        >
+          Order note: {note}
         </div>
-      )}
+      ))}
 
       {(order.mode === 'delivery' || snap.customerPhone) && (
         <div className="mt-2 space-y-1 rounded-lg bg-stone-50 p-2 text-xs dark:bg-stone-900/60">

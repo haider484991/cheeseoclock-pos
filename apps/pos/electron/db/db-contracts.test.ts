@@ -269,3 +269,22 @@ describe('repository contract: only writeAudit / enqueueSync append to the ledge
     ).toEqual([]);
   });
 });
+
+describe('migrations: numbered in order, one file per number', () => {
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (released in 0.7.21), then 0040 and 0041, by name', () => {
+    const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
+    expect(numbers).toEqual(numbers.map((_, i) => i + 1));
+    expect(files.slice(38, 41)).toEqual(['0039_shift_close_notes.sql', '0040_drawer_log.sql', '0041_order_test_delete.sql']);
+  });
+
+  it('0040 and 0041 assume nothing 0039 changed: they touch neither the shifts table nor its new columns', () => {
+    for (const f of ['0040_drawer_log.sql', '0041_order_test_delete.sql']) {
+      const sql = stripComments(readFileSync(join(MIGRATIONS_DIR, f), 'utf8'));
+      expect({ f, touches: /\bshifts\b|close_notes|carried_unpaid_count|carry_over_reason/i.test(sql) }).toEqual({ f, touches: false });
+    }
+  });
+});

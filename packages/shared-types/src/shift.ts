@@ -17,7 +17,48 @@ export interface Shift {
   expectedCashCents: Cents | null;
   /** counted − expected (negative = short, positive = over). */
   varianceCents: Cents | null;
+  /**
+   * The note typed when the shift was OPENED ("Morning shift, Ali on
+   * register"). A shift closed before migration 0039 keeps its one note here.
+   */
   notes: string | null;
+  /** The note typed when the shift was CLOSED ("Rs 100 short, change given wrong"). Null while open. */
+  closeNotes: string | null;
+  /**
+   * Unpaid orders this till still had when the shift closed, carried over to
+   * the next shift with a manager's reason (0 when none; migration 0039).
+   * The manager who approved it is `closedByUserId`.
+   */
+  carriedUnpaidCount: number;
+  /** The manager's reason for carrying them over; null when none were carried. */
+  carryOverReason: string | null;
+}
+
+/**
+ * An order still unpaid on this till when its shift is being closed: the
+ * close box lists them, and the manager gives one reason to carry them all
+ * over to the next shift (owner, 2026-09-27).
+ */
+export interface UnpaidOrderAtClose {
+  orderId: UUID;
+  orderNumber: string;
+  createdAt: string;
+  totalCents: Cents;
+  /** Who took the order ("Website" for a web order). */
+  takenBy: string;
+}
+
+/**
+ * What the close box needs before the count (`shifts:closeCheck`): who is
+ * closing (the signed-in manager, or the manager whose PIN was typed on a
+ * cashier's till) and the unpaid orders that will be carried over. Never
+ * the expected cash: the count is blind.
+ */
+export interface ShiftCloseCheck {
+  closerName: string;
+  /** True when a manager's PIN or password approved it on a cashier's login. */
+  viaManagerPin: boolean;
+  unpaidOrders: UnpaidOrderAtClose[];
 }
 
 /** Per-shift summary numbers used by the close dialog + history view. */

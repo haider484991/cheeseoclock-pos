@@ -154,6 +154,8 @@ export const ipc = {
       unwrap(window.api.orders.attachCustomer(input)),
     detachCustomer: (orderId: string) =>
       unwrap(window.api.orders.detachCustomer({ orderId })),
+    /** The counter's "Order notes" on an order with no customer typed in (blank clears it). */
+    setNote: (input: IpcRequest<'orders:setNote'>) => unwrap(window.api.orders.setNote(input)),
     // Live tracking
     listActive: (input?: IpcRequest<'orders:listActive'>) =>
       unwrap(window.api.orders.listActive(input)),
@@ -181,6 +183,8 @@ export const ipc = {
     current: () => unwrap(window.api.shifts.current()),
     open: (input: IpcRequest<'shifts:open'>) => unwrap(window.api.shifts.open(input)),
     close: (input: IpcRequest<'shifts:close'>) => unwrap(window.api.shifts.close(input)),
+    /** Who closes, and the unpaid orders the close carries over (a cashier's login: the manager's PIN). */
+    closeCheck: (input: IpcRequest<'shifts:closeCheck'>) => unwrap(window.api.shifts.closeCheck(input)),
     list: (input?: IpcRequest<'shifts:list'>) => unwrap(window.api.shifts.list(input)),
     summary: (shiftId: string) => unwrap(window.api.shifts.summary({ shiftId })),
     lastCount: () => unwrap(window.api.shifts.lastCount()),
@@ -327,6 +331,10 @@ export const ipc = {
     variance: (input?: IpcRequest<'reports:variance'>) => unwrap(window.api.reports.variance(input)),
     /** Every time the till opened the cash drawer, newest first, a page at a time (the owner). */
     drawerLog: (req: IpcRequest<'reports:drawerLog'>) => unwrap(window.api.reports.drawerLog(req)),
+    /** Profit (costing spec Phase 9): the waterfall, by channel and by category (profit.view). */
+    profit: (input: IpcRequest<'reports:profit'>) => unwrap(window.api.reports.profit(input)),
+    /** The menu map: the last 28 days unless a period is given (profit.view). */
+    menuMap: (input?: IpcRequest<'reports:menuMap'>) => unwrap(window.api.reports.menuMap(input)),
   },
   inventory: {
     listIngredients: (input?: IpcRequest<'inventory:listIngredients'>) =>
@@ -357,6 +365,12 @@ export const ipc = {
       unwrap(window.api.inventory.setBatchRecipe(input)),
     makeBatch: (input: IpcRequest<'inventory:makeBatch'>) =>
       unwrap(window.api.inventory.makeBatch(input)),
+    /** The recipe calculator: batches to make, from stock, from scratch — quantities only. */
+    recipeCalc: (input: IpcRequest<'inventory:recipeCalc'>) => unwrap(window.api.inventory.recipeCalc(input)),
+    /** A menu item's choices and the last 28 days' picks (counts only), for "the usual picks". */
+    typicalPicks: (menuItemId: string) => unwrap(window.api.inventory.typicalPicks({ menuItemId })),
+    /** The prep list on the receipt printer; a failed print comes back as ok: false. */
+    printPrepList: (input: IpcRequest<'inventory:printPrepList'>) => unwrap(window.api.inventory.printPrepList(input)),
     listMovements: (input?: IpcRequest<'inventory:listMovements'>) =>
       unwrap(window.api.inventory.listMovements(input)),
     searchMovements: (input?: IpcRequest<'inventory:searchMovements'>) =>
@@ -409,6 +423,8 @@ export const ipc = {
     setTargets: (input: IpcRequest<'costing:setTargets'>) => unwrap(window.api.costing.setTargets(input)),
     recipeCost: (input: IpcRequest<'costing:recipeCost'>) => unwrap(window.api.costing.recipeCost(input)),
     batchCalc: (input: IpcRequest<'costing:batchCalc'>) => unwrap(window.api.costing.batchCalc(input)),
+    /** The recipe calculator with its costs (COST_CAPABILITY). */
+    recipeCalc: (input: IpcRequest<'costing:recipeCalc'>) => unwrap(window.api.costing.recipeCalc(input)),
     /** Costing → Alerts (Phase 6): not seen yet first. */
     alerts: () => unwrap(window.api.costing.alerts()),
     /** "Seen": answers with the list as it now stands. */
@@ -420,6 +436,12 @@ export const ipc = {
     getTills: () => unwrap(window.api.costing.getTills()),
     /** The owner's answer (settings.manage). */
     setTills: (input: IpcRequest<'costing:setTills'>) => unwrap(window.api.costing.setTills(input)),
+    /** foodpanda's commission, payment fees and the rider cost (Phase 9). */
+    getChannelFees: () => unwrap(window.api.costing.getChannelFees()),
+    /** The owner's answer (settings.manage). */
+    setChannelFees: (input: IpcRequest<'costing:setChannelFees'>) => unwrap(window.api.costing.setChannelFees(input)),
+    /** New prices tried against the last 4 weeks — nothing is saved (profit.view). */
+    whatIf: (input: IpcRequest<'costing:whatIf'>) => unwrap(window.api.costing.whatIf(input)),
   },
 };
 

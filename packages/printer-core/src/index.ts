@@ -146,6 +146,8 @@ export type {
   LogoInkOptions,
   LogoRasterVerdict,
 } from './logo-raster.js';
+export { renderPlainDocument } from './plain-document.js';
+export type { RenderPlainDocumentOpts } from './plain-document.js';
 export type {
   RenderReceiptOpts,
   RenderKitchenTicketOpts,

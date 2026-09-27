@@ -15,7 +15,15 @@
  *     plain words, to anything longer; superseded, timed-out, crashed and
  *     failed asks each get their own answer;
  *   - stock rows carry their values for a login that may see costs, and
- *     "Make this amount" answers with none.
+ *     "Make this amount" answers with none;
+ *   - Profit (costing spec Phase 9): the Profit tab and the menu map are the
+ *     owner's (profit.view; owner question 8, 2026-09-27: managers keep
+ *     costs but see no profit), refused to a cashier and a manager in the
+ *     Reports words; a login with reports but not profit (none today: the
+ *     owner's login with profit.view taken away) is refused them in the
+ *     profit words, and its Menu has costs but no profit, Channels no rider
+ *     cost or what orders earn, the weekly sheet no profit, and the worker
+ *     is told not to work them out.
  *
  * Only `defineHandler` (captured), the signed-in session and the worker are
  * stood in for. node:sqlite behind better-sqlite3's shape; skips where it is
@@ -45,6 +53,13 @@ const h = vi.hoisted(() => ({
    * one does). Takes COST_CAPABILITY away from whoever is signed in.
    */
   noCosts: false,
+  /**
+   * A login that may see reports but not profit (no role has that today:
+   * only the owner sees reports, and profit.view is the owner's too since
+   * 2026-09-27; the rule must hold if one does). Takes profit.view away from
+   * whoever is signed in.
+   */
+  noProfit: false,
   /**
    * A login that may see reports but not change the shop's settings (a
    * manager's until 2026-09-27; no role has that today, the rule must hold
@@ -78,7 +93,9 @@ vi.mock('@cheeseoclock/shared-types', async (importOriginal) => {
   return {
     ...orig,
     hasCapability: (role: Parameters<typeof orig.hasCapability>[0], cap: Parameters<typeof orig.hasCapability>[1]) =>
-      (h.noCosts && cap === orig.COST_CAPABILITY) || (h.noSettings && cap === 'settings.manage')
+      (h.noCosts && cap === orig.COST_CAPABILITY) ||
+      (h.noProfit && cap === orig.PROFIT_CAPABILITY) ||
+      (h.noSettings && cap === 'settings.manage')
         ? false
         : orig.hasCapability(role, cap),
   };
@@ -135,6 +152,7 @@ beforeEach(async () => {
   h.handlers.clear();
   h.session = null;
   h.noCosts = false;
+  h.noProfit = false;
   h.noSettings = false;
   h.worker = null;
   db = openMigrated();
@@ -154,7 +172,7 @@ const AROUND_NOW = () => ({
 });
 /** A year ending in an hour. */
 const A_YEAR = () => ({ sinceIso: new Date(Date.now() - 365 * 86_400_000).toISOString(), untilIso: new Date(Date.now() + 3_600_000).toISOString() });
-const TABS: ReportTab[] = ['overview', 'when', 'menu', 'channels', 'foodStock', 'team'];
+const TABS: ReportTab[] = ['overview', 'when', 'menu', 'channels', 'foodStock', 'team', 'profit'];
 
 /** A sale of one medium Fajita (made-up prices): stock taken, cost kept, paid now. */
 function oneSale(): void {
@@ -173,8 +191,12 @@ live('Reports channels', () => {
       'reports:getDayparts',
       'reports:lowStock',
       'reports:menu',
+      // The menu map (costing spec Phase 9).
+      'reports:menuMap',
       'reports:overview',
       'reports:ownerWeek',
+      // Profit (costing spec Phase 9).
+      'reports:profit',
       'reports:removeDayNote',
       'reports:setDayparts',
       'reports:team',
@@ -263,10 +285,10 @@ live('where a tab is worked out', () => {
       expect({ t, ok: r.ok, engine: (r as { data?: { engine?: string } }).data?.engine }).toEqual({ t, ok: true, engine: 'worker' });
     }
     expect(w.asked.map(([k]) => k)).toEqual(TABS);
-    // The Overview is asked with its comparison, as sent.
+    // The Overview is asked with its comparison, as sent, and what this login may see (costs, profit).
     const cmp = { ...AROUND_NOW(), compareSinceIso: '2026-01-01T00:00:00.000Z', compareUntilIso: '2026-01-02T00:00:00.000Z' };
     await call('reports:overview', cmp);
-    expect(w.asked.at(-1)).toEqual(['overview', cmp]);
+    expect(w.asked.at(-1)).toEqual(['overview', { ...cmp, withCosts: true, withProfit: true }]);
   });
 
   it('no worker (it failed to start): a month on the main process, anything longer refused in plain words', async () => {
@@ -313,6 +335,54 @@ live('where a tab is worked out', () => {
     // A failure inside the worker is not the owner's to read: logged with a reference by defineHandler.
     h.worker = answer('failed', 'no such column: o.nope');
     expect(await call('reports:when', AROUND_NOW())).toMatchObject({ ok: false, code: 'threw ReportWorkerFailure' });
+  });
+});
+
+live('shift history on Team & leakage', () => {
+  /** Made-up shifts around the 26 Sep trading day, on two tills (one open shift per till). */
+  function seedShifts(): void {
+    const add = db.prepare(
+      `INSERT INTO shifts (id, device_id, opened_by_user_id, opened_at, opening_cash_cents, closed_by_user_id, closed_at,
+         expected_cash_cents, counted_cash_cents, variance_cents, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 100000, ?, ?, ?, ?, ?, 'x', 'x')`,
+    );
+    const closed = (id: string, openedAt: string, closedAt: string, variance: number) =>
+      add.run(id, DEV, 'u_cash', openedAt, 'u_mgr', closedAt, 300_000, 300_000 + variance, variance);
+    closed('before', '2026-09-24T07:00:00.000Z', '2026-09-24T20:00:00.000Z', 0);
+    closed('yesterday', '2026-09-25T15:00:00.000Z', '2026-09-26T01:30:00.000Z', -10_000);
+    closed('inside', '2026-09-26T07:00:00.000Z', '2026-09-26T20:00:00.000Z', 5_000);
+    closed('after', '2026-09-27T07:00:00.000Z', '2026-09-27T20:00:00.000Z', 0);
+    add.run('old_open', 'till-2', 'u_cash', '2026-09-24T09:00:00.000Z', null, null, null, null, null);
+  }
+  const DAY = { sinceIso: '2026-09-26T00:00:00.000Z', untilIso: '2026-09-27T00:00:00.000Z' };
+  const OVERLAPPING = ['inside', 'yesterday', 'old_open'];
+
+  it('the owner sees every shift open in the period, from the main process (no worker) and from the worker alike; a manager and a cashier see none', async () => {
+    seedShifts();
+    h.session = OWNER;
+    h.worker = null;
+    const main = await call('reports:team', DAY);
+    expect(main).toMatchObject({ ok: true, data: { engine: 'main' } });
+    const mainShifts = (main as { data: ReportTeamTab }).data.shifts;
+    expect(mainShifts.map((x) => x.id)).toEqual(OVERLAPPING);
+    expect(mainShifts.find((x) => x.id === 'old_open')).toMatchObject({ closedAt: null, varianceCents: null, openedBy: 'Test Cashier' });
+    expect(mainShifts.find((x) => x.id === 'yesterday')).toMatchObject({ closedBy: 'Test Manager', varianceCents: -10_000 });
+
+    // The Reports worker running: what its thread hands back (a copy).
+    const { handleRunRequest } = await import('../../services/analytics/worker.js');
+    h.worker = fakeWorker('ready', async (kind, req) => {
+      const reply = handleRunRequest(db, structuredClone({ type: 'run' as const, id: 1, kind, request: req, nowIso: new Date().toISOString() }));
+      if (reply.type !== 'result' || !reply.ok) throw new Error('worker said no');
+      return structuredClone(reply.data);
+    });
+    const fromWorker = await call('reports:team', DAY);
+    expect(fromWorker).toMatchObject({ ok: true, data: { engine: 'worker' } });
+    expect((fromWorker as { data: ReportTeamTab }).data.shifts).toEqual(mainShifts);
+
+    for (const who of [MANAGER, CASHIER]) {
+      h.session = who;
+      expect(await call('reports:team', DAY)).toEqual({ ok: false, code: 'forbidden', message: REFUSED['reports'] });
+    }
   });
 });
 
@@ -410,11 +480,17 @@ live("the owner's week channels (costing Phase 7)", () => {
     // The Dashboard card does not ask for the printed sheet's lines, so it does not wait for them.
     expect(week.sheet).toBeNull();
     expect(JSON.stringify(week)).not.toMatch(/profit/i);
-    // The sheet asks for them.
+    // The sheet asks for them — and, for profit.view (Phase 9), the week's profit before overheads.
     const sheet = (await call('reports:ownerWeek', { week: 'this', sheet: true })) as { ok: true; data: import('@cheeseoclock/shared-types').OwnerWeek };
     expect(sheet.data.sheet).not.toBeNull();
     expect(sheet.data.sheet!.previousCosts).toBeNull(); // no orders a week earlier on this till
-    expect(JSON.stringify(sheet.data)).not.toMatch(/profit/i);
+    expect(sheet.data.sheet!.profit).toMatchObject({ profitCents: 120_000 - 17_641, unknownSalesCents: 0, previousProfitCents: null });
+    // A login with reports but not profit (none today: profit.view is the owner's): no profit on its sheet.
+    h.noProfit = true;
+    const lean = (await call('reports:ownerWeek', { week: 'this', sheet: true })) as { ok: true; data: import('@cheeseoclock/shared-types').OwnerWeek };
+    expect(lean.data.sheet!.profit).toBeNull();
+    for (const d of [...lean.data.sheet!.earnsMost, ...lean.data.sheet!.earnsLeast]) expect(d.profitPerSaleCents).toBeNull();
+    h.noProfit = false;
 
     h.noCosts = true;
     const without = (await call('reports:ownerWeek', { week: 'last', sheet: true })) as { ok: true; data: import('@cheeseoclock/shared-types').OwnerWeek };
@@ -491,5 +567,95 @@ live("the owner's week channels (costing Phase 7)", () => {
     // Saved like every shop-wide setting: synced and audited.
     expect(db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`).get()).toEqual({ n: 1 });
     expect(db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'business_settings'`).get()).toEqual({ n: 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Profit (costing spec Phase 9)
+// ---------------------------------------------------------------------------
+
+live('profit (costing spec Phase 9): profit.view in the main process', () => {
+  it('the owner gets the Profit tab and the menu map; a cashier and a manager are refused both, in plain words', async () => {
+    oneSale();
+    h.session = OWNER;
+    const t = (await call('reports:profit', AROUND_NOW())) as { ok: true; data: import('@cheeseoclock/shared-types').ReportProfitTab };
+    expect(t.ok).toBe(true);
+    expect(t.data).toMatchObject({ engine: 'main', profitCents: 120_000 - 17_641 });
+    expect(t.data.steps.reduce((a, x) => a + x.cents, 0)).toBe(t.data.profitCents);
+    const map = await call('reports:menuMap', undefined);
+    expect(map).toMatchObject({ ok: true, data: { engine: 'main', lastDays: true } });
+
+    // Owner, 2026-09-27: profit is the owner's alone; a manager has no Reports either, so it hears the Reports words.
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      expect({ who: who.role, o: await call('reports:profit', AROUND_NOW()) }).toEqual({
+        who: who.role,
+        o: { ok: false, code: 'forbidden', message: REFUSED['reports'] },
+      });
+      expect({ who: who.role, o: await call('reports:menuMap', undefined) }).toEqual({
+        who: who.role,
+        o: { ok: false, code: 'forbidden', message: REFUSED['reports'] },
+      });
+    }
+    expect(REFUSED['reports']).toBe('Only the owner can see reports.');
+    h.session = null;
+    expect(await call('reports:profit', AROUND_NOW())).toMatchObject({ ok: false, code: 'unauthenticated' });
+  });
+
+  it('reports without profit.view (none today: the owner with it taken away) are refused profit, and Menu, Channels carry none of it', async () => {
+    oneSale();
+    const { buildReportTab } = await import('../../services/analytics/report-tabs.js');
+    const w = fakeWorker('ready', async (kind, req) => buildReportTab(db, kind, req));
+    h.worker = w;
+    h.session = OWNER;
+    h.noProfit = true;
+    expect(await call('reports:profit', AROUND_NOW())).toEqual({ ok: false, code: 'forbidden', message: REFUSED['profit'] });
+    expect(await call('reports:menuMap', undefined)).toEqual({ ok: false, code: 'forbidden', message: REFUSED['profit'] });
+    expect(REFUSED['profit']).toBe('Only the owner can see profit.');
+    const menu = (await call('reports:menu', AROUND_NOW())) as { ok: true; data: import('@cheeseoclock/shared-types').ReportMenuTab };
+    // Costs yes (menu.manage), profit no.
+    const fajita = menu.data.costs!.items[s.item.fajitaM]!;
+    expect(fajita).toMatchObject({ costCents: 17_641, foodCostBps: 1_470, profitCents: null, profitPerSaleCents: null });
+    // The worker is told not to work profit out at all.
+    expect(w.asked.at(-1)![1]).toMatchObject({ withCosts: true, withProfit: false });
+    const ch = (await call('reports:channels', AROUND_NOW())) as { ok: true; data: import('@cheeseoclock/shared-types').ReportChannelsTab };
+    expect(ch.data.profit).toBeNull();
+    for (const a of ch.data.areas) expect([a.riderCents, a.contributionPerOrderCents]).toEqual([null, null]);
+    // The owner's own login keeps it all.
+    h.noProfit = false;
+    const own = (await call('reports:menu', AROUND_NOW())) as { ok: true; data: import('@cheeseoclock/shared-types').ReportMenuTab };
+    expect(own.data.costs!.items[s.item.fajitaM]).toMatchObject({ profitCents: 120_000 - 17_641, profitPerSaleCents: 120_000 - 17_641 });
+    expect(w.asked.at(-1)![1]).toMatchObject({ withCosts: true, withProfit: true });
+    expect(await call('reports:profit', AROUND_NOW())).toMatchObject({ ok: true });
+  });
+
+  it('without costs: no Menu cost columns, and no profit either', async () => {
+    oneSale();
+    h.session = OWNER;
+    h.noCosts = true;
+    const menu = (await call('reports:menu', AROUND_NOW())) as { ok: true; data: import('@cheeseoclock/shared-types').ReportMenuTab };
+    expect(menu.data.costs).toBeNull();
+    expect(await call('reports:profit', AROUND_NOW())).toEqual({ ok: false, code: 'forbidden', message: REFUSED['profit'] });
+  });
+
+  it('"Between stock takes" sends the two stock takes; a bad pair is refused, and other tabs ignore it', async () => {
+    oneSale();
+    h.session = OWNER;
+    const { buildReportTab } = await import('../../services/analytics/report-tabs.js');
+    const w = fakeWorker('ready', async (kind, req) => buildReportTab(db, kind, req));
+    h.worker = w;
+    await call('reports:profit', { ...AROUND_NOW(), stockTakes: { fromCountId: 'a', toCountId: 'b' } });
+    expect(w.asked.at(-1)![1]).toMatchObject({ stockTakes: { fromCountId: 'a', toCountId: 'b' }, link: { on: false } });
+    await call('reports:menu', { ...AROUND_NOW(), stockTakes: { fromCountId: 'a', toCountId: 'b' } });
+    expect(w.asked.at(-1)![1]).not.toHaveProperty('stockTakes');
+    expect(await call('reports:profit', { ...AROUND_NOW(), stockTakes: { fromCountId: 5 } })).toMatchObject({ ok: false, code: 'validation_failed' });
+  });
+
+  it('the menu map: a period over a month is refused without the worker; a bad period is refused', async () => {
+    h.session = OWNER;
+    h.worker = fakeWorker('unavailable', () => Promise.reject(new Error('never asked')));
+    expect(await call('reports:menuMap', A_YEAR())).toEqual({ ok: false, code: 'precondition_failed', message: TOO_LONG });
+    expect(await call('reports:menuMap', { sinceIso: A_YEAR().sinceIso })).toMatchObject({ ok: false, code: 'validation_failed' });
+    expect(await call('reports:menuMap', { sinceIso: 'x', untilIso: 'y' })).toMatchObject({ ok: false, code: 'validation_failed' });
   });
 });

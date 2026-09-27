@@ -287,3 +287,159 @@ export function PriceLineChart({ points, ariaLabel, now = Date.now() }: { points
     </svg>
   );
 }
+
+// ------------------------------------------------ Phase 9: profit, menu map --
+
+export interface WaterfallStepView {
+  key: string;
+  label: string;
+  /** Signed: above 0 adds, below 0 takes off. */
+  cents: number;
+  /** The figure written beside the bar ("−Rs 12,000"). */
+  amount: string;
+  /** Set aside rather than spent (sales with an unknown cost): drawn hatched. */
+  hatched?: boolean;
+}
+
+/**
+ * The profit waterfall (costing spec 4.7), a row per step: each bar floats
+ * from the running total before it to the one after, on one scale from the
+ * lowest the total ever goes (Rs 0 at least) to the highest, and the last
+ * row is the result from Rs 0. Plain divs, so bars stay crisp and every
+ * figure is written beside its bar (a till screen has no hover).
+ */
+export function Waterfall({ steps, result, ariaLabel }: { steps: WaterfallStepView[]; result: { label: string; cents: number; amount: string }; ariaLabel: string }) {
+  if (steps.length === 0) return null;
+  const totals: number[] = [];
+  let run = 0;
+  for (const s of steps) {
+    run += s.cents;
+    totals.push(run);
+  }
+  const lo = Math.min(0, ...totals);
+  const hi = Math.max(1, ...totals, ...steps.map((s) => Math.max(0, s.cents)));
+  const span = hi - lo || 1;
+  const pos = (v: number) => ((v - lo) / span) * 100;
+  const row = (key: string, label: string, from: number, to: number, amount: string, tone: 'add' | 'take' | 'hatch' | 'result') => {
+    const left = pos(Math.min(from, to));
+    const width = Math.max(Math.abs(pos(to) - pos(from)), to === from ? 0 : 0.6);
+    return (
+      <li key={key} className="grid grid-cols-[minmax(8rem,16rem)_1fr_minmax(6rem,auto)] items-center gap-3 py-1 text-sm">
+        {/* Wraps rather than cut: the words in brackets ("left out", "estimated") are what stop a bar being misread. */}
+        <span title={label} className={cn('break-words leading-snug', tone === 'result' && 'font-semibold')}>
+          {label}
+        </span>
+        <div className="relative h-5 rounded bg-stone-50 dark:bg-stone-800/60" aria-hidden>
+          {lo < 0 && <div className="absolute inset-y-0 w-px bg-stone-300 dark:bg-stone-600" style={{ left: `${pos(0)}%` }} />}
+          <div
+            className={cn(
+              'absolute inset-y-0.5 rounded-sm',
+              tone === 'add' && 'bg-emerald-500 dark:bg-emerald-400',
+              tone === 'take' && 'bg-rose-400 dark:bg-rose-500',
+              tone === 'hatch' && 'border border-dashed border-stone-400 dark:border-stone-500',
+              tone === 'result' && (to >= 0 ? 'bg-amber-500 dark:bg-amber-400' : 'bg-rose-600'),
+            )}
+            style={{
+              left: `${left}%`,
+              width: `${width}%`,
+              ...(tone === 'hatch'
+                ? { backgroundImage: 'repeating-linear-gradient(135deg, rgba(120,113,108,0.35) 0 4px, transparent 4px 8px)' }
+                : {}),
+            }}
+          />
+        </div>
+        <span className={cn('whitespace-nowrap text-right tabular-nums', tone === 'result' && 'font-semibold')}>{amount}</span>
+      </li>
+    );
+  };
+  let before = 0;
+  return (
+    <ol role="img" aria-label={ariaLabel} className="divide-y divide-stone-100 dark:divide-stone-800">
+      {steps.map((s) => {
+        const from = before;
+        before += s.cents;
+        return row(s.key, s.label, from, before, s.amount, s.hatched ? 'hatch' : s.cents >= 0 ? 'add' : 'take');
+      })}
+      {row('result', result.label, 0, result.cents, result.amount, 'result')}
+    </ol>
+  );
+}
+
+export interface ScatterPointView {
+  key: string;
+  /** Share of the category's units, basis points. */
+  x: number;
+  /** What one sale earns, paisa. */
+  y: number;
+  /**
+   * What is written IN the dot: its number in the table beside the chart
+   * ("1", "12"). A category can have 16 dishes whose dots sit close
+   * together; names beside them would print over each other and run off the
+   * edge, so the table keys the numbers to the names.
+   */
+  label: string;
+  /** Tooltip: the dish in words. */
+  title: string;
+  tone: 'star' | 'plowhorse' | 'puzzle' | 'dog';
+}
+
+/**
+ * The menu map (costing spec 4.8): each dish by how popular (across) and how
+ * profitable (up), with the two lines — 70% of an equal share, and the
+ * category's average profit per sale — dividing it into four corners, each
+ * named in plain words. Scaled evenly, never stretched. Each dot carries its
+ * number in the table beside it, never a name.
+ */
+export function MenuMapScatter({
+  points,
+  xLine,
+  yLine,
+  ariaLabel,
+  corners,
+}: {
+  points: ScatterPointView[];
+  xLine: number;
+  yLine: number;
+  ariaLabel: string;
+  /** The four corners' names: top-left, top-right, bottom-left, bottom-right. */
+  corners: [string, string, string, string];
+}) {
+  if (points.length === 0) return null;
+  const W = 560;
+  const H = 300;
+  const pad = { l: 16, r: 16, t: 20, b: 20 };
+  const xs = [...points.map((p) => p.x), xLine];
+  const ys = [...points.map((p) => p.y), yLine];
+  const x0 = 0;
+  const x1 = Math.max(...xs) * 1.1 || 1;
+  const yLo = Math.min(0, ...ys);
+  const yHi = Math.max(...ys) * 1.1 || 1;
+  const x = (v: number) => pad.l + ((v - x0) / (x1 - x0)) * (W - pad.l - pad.r);
+  const y = (v: number) => pad.t + (1 - (v - yLo) / (yHi - yLo || 1)) * (H - pad.t - pad.b);
+  const fill: Record<ScatterPointView['tone'], string> = {
+    star: 'fill-emerald-500',
+    plowhorse: 'fill-amber-500',
+    puzzle: 'fill-sky-500',
+    dog: 'fill-rose-500',
+  };
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={ariaLabel} className="h-auto w-full">
+      <rect x={pad.l} y={pad.t} width={W - pad.l - pad.r} height={H - pad.t - pad.b} className="fill-stone-50 dark:fill-stone-800/50" />
+      <line x1={x(xLine)} x2={x(xLine)} y1={pad.t} y2={H - pad.b} className="stroke-stone-400" strokeDasharray="4 4" />
+      <line x1={pad.l} x2={W - pad.r} y1={y(yLine)} y2={y(yLine)} className="stroke-stone-400" strokeDasharray="4 4" />
+      <text x={pad.l + 4} y={pad.t + 12} className="fill-stone-500 text-[11px]">{corners[0]}</text>
+      <text x={W - pad.r - 4} y={pad.t + 12} className="fill-stone-500 text-[11px]" textAnchor="end">{corners[1]}</text>
+      <text x={pad.l + 4} y={H - pad.b - 6} className="fill-stone-500 text-[11px]">{corners[2]}</text>
+      <text x={W - pad.r - 4} y={H - pad.b - 6} className="fill-stone-500 text-[11px]" textAnchor="end">{corners[3]}</text>
+      {points.map((p) => (
+        <g key={p.key}>
+          <title>{p.title}</title>
+          <circle cx={x(p.x)} cy={y(p.y)} r={9} className={cn(fill[p.tone], 'stroke-white dark:stroke-stone-900')} strokeWidth={1.5} />
+          <text x={x(p.x)} y={y(p.y) + 3.5} textAnchor="middle" className="pointer-events-none fill-white text-[10px] font-bold">
+            {p.label}
+          </text>
+        </g>
+      ))}
+    </svg>
+  );
+}

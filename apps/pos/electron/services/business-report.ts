@@ -653,6 +653,20 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
   }));
 }
 
+/**
+ * Shift history: every shift that was open at some time in the period —
+ * opened before the period ends, and still open or closed at or after it
+ * starts — newest first, capped. So Today shows the shift opened last night
+ * and still running, or closed this morning (the owner's "I can't see the
+ * shift history", 2026-09-27: it used to list only shifts OPENED in the
+ * period). Each shift's drawer figures are the ones saved when it was
+ * closed; a shift still open has none yet. The notes typed when it was
+ * opened and when it was closed come with it, each on its own, and the
+ * unpaid orders its close carried over, with the reason (0039); every
+ * opening of its drawer (0040); and, never rewriting what was saved, the
+ * cash of its test orders the owner deleted after it closed and how many of
+ * the orders it carried over were later deleted as tests (0041).
+ */
 function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'] {
   return db
     .prepare(
@@ -679,15 +693,31 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
                           JOIN orders o ON o.id = p.order_id
                          WHERE COALESCE(p.shift_id, o.shift_id) = s.id AND p.method = 'cash'
                            AND p.deleted_at IS NOT NULL AND s.closed_at IS NOT NULL AND p.deleted_at > s.closed_at
-                           AND o.delete_kind = 'test'), 0) AS testDeletedCashCents
+                           AND o.delete_kind = 'test'), 0) AS testDeletedCashCents,
+              NULLIF(TRIM(s.notes), '') AS openingNote,
+              NULLIF(TRIM(s.close_notes), '') AS closingNote,
+              COALESCE(s.carried_unpaid_count, 0) AS carriedUnpaidCount,
+              NULLIF(TRIM(s.carry_over_reason), '') AS carryOverReason,
+              -- Of the orders its close carried over (0039: one audit row each,
+              -- 'carried_over_unpaid'), those the owner later deleted as tests
+              -- (0041). Deleted test orders are few: walked by their own index,
+              -- then each one's audit rows by entity. Only for a close that
+              -- carried any.
+              CASE WHEN COALESCE(s.carried_unpaid_count, 0) > 0 THEN
+                (SELECT COUNT(DISTINCT o.id) FROM orders o
+                   JOIN audit_log a ON a.entity_type = 'orders' AND a.entity_id = o.id
+                  WHERE o.deleted_at IS NOT NULL AND o.delete_kind = 'test'
+                    AND a.action = 'carried_over_unpaid' AND json_valid(a.after_json)
+                    AND json_extract(a.after_json, '$.shiftId') = s.id)
+              ELSE 0 END AS carriedTestDeletedCount
          FROM shifts s
          LEFT JOIN users uo ON uo.id = s.opened_by_user_id
          LEFT JOIN users uc ON uc.id = s.closed_by_user_id
-        WHERE s.opened_at >= ? AND s.opened_at < ? AND s.deleted_at IS NULL
-        ORDER BY s.opened_at DESC
+        WHERE s.opened_at < ? AND (s.closed_at IS NULL OR s.closed_at >= ?) AND s.deleted_at IS NULL
+        ORDER BY s.opened_at DESC, s.id DESC
         LIMIT ${REPORT_LIST_CAP}`,
     )
-    .all(...args(range)) as BusinessReport['shifts'];
+    .all(range.untilIso, range.sinceIso) as BusinessReport['shifts'];
 }
 
 function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLine[] {
@@ -802,13 +832,13 @@ function getRefunds(
  * older), else — an ingredient with no history at all — today's price. And
  * the ingredients' units now.
  */
-interface Pricing {
+export interface Pricing {
   priceOf: PriceOf;
   unitOf: (ingredientId: string) => string | undefined;
   /** The price in force at a time, from the price history; undefined when the ingredient has none. */
   priceThen: (ingredientId: string, atIso: string) => DatedPrice | undefined;
 }
-function lazyPricing(db: AppDatabase): () => Pricing {
+export function lazyPricing(db: AppDatabase): () => Pricing {
   let p: Pricing | null = null;
   return () => {
     if (p) return p;
@@ -1014,7 +1044,7 @@ function safeJson(text: string | null): Record<string, unknown> {
 /** Order ids per query: json_each keeps the statement the same, chunks keep it small. */
 const ID_CHUNK = 500;
 
-function chunks<T>(xs: readonly T[], n = ID_CHUNK): T[][] {
+export function chunks<T>(xs: readonly T[], n = ID_CHUNK): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
   return out;
@@ -1028,7 +1058,7 @@ const STATUS_RANK: Record<number, OrderItemCostStatus> = { 0: 'full', 1: 'none',
  * or an item that is a delivery charge or in a category the owner marked
  * "not food". Worked out in SQL so every path below reads it the same way.
  */
-const FEE_LINE = `(TRIM(oi.menu_item_name) LIKE 'delivery charge%' OR oi.menu_item_id IN (SELECT value FROM json_each(?)))`;
+export const FEE_LINE = `(TRIM(oi.menu_item_name) LIKE 'delivery charge%' OR oi.menu_item_id IN (SELECT value FROM json_each(?)))`;
 
 /**
  * A counted order with nothing to share out — no discount, no refund, so
@@ -1036,7 +1066,7 @@ const FEE_LINE = `(TRIM(oi.menu_item_name) LIKE 'delivery charge%' OR oi.menu_it
  * (alias `o`). These are added up in SQL; only the others are read line by
  * line.
  */
-const PLAIN_KEPT = `(o.discount_cents = 0
+export const PLAIN_KEPT = `(o.discount_cents = 0
     AND NOT EXISTS (SELECT 1 FROM payments rp
                      WHERE rp.order_id = o.id AND rp.amount_cents < 0 AND rp.deleted_at IS NULL)
     AND EXISTS (SELECT 1 FROM order_item_costs k
@@ -1055,7 +1085,7 @@ const REST_ORDERS = `ro AS MATERIALIZED (
       FROM orders o WHERE ${IN_RANGE} AND ${COUNTED} AND NOT ${PLAIN_KEPT})`;
 
 /** A line's cost rows, added up (with the LEFT JOIN of order_item_costs `c`, grouped by line). */
-const LINE_COSTS = `COUNT(c.id) AS parts, COALESCE(SUM(c.cost_cents), 0) AS cost,
+export const LINE_COSTS = `COUNT(c.id) AS parts, COALESCE(SUM(c.cost_cents), 0) AS cost,
          MAX(CASE c.status WHEN 'failed' THEN 3 WHEN 'partial' THEN 2 WHEN 'none' THEN 1 WHEN 'full' THEN 0 END) AS worst`;
 
 /**
@@ -1150,18 +1180,22 @@ export const FOOD_COST_PLAIN_GAPS_SQL = `
    WHERE oi.id = gap.lineId AND oi.deleted_at IS NULL AND NOT ${FEE_LINE}
    GROUP BY oi.id`;
 
-function lineStatus(parts: number, worst: number | null): OrderItemCostStatus | null {
+export function lineStatus(parts: number, worst: number | null): OrderItemCostStatus | null {
   return parts > 0 && worst !== null ? (STATUS_RANK[Number(worst)] ?? 'failed') : null;
 }
 
-interface MenuLookup {
+export interface MenuLookup {
   item: (id: string | null) => { name: string; categoryId: string } | undefined;
   /** Items that are not food (delivery charges, non-food categories), as JSON for FEE_LINE. */
   feeItemsJson: string;
+  /** Of them, the delivery charges (by their name now): what a rider's cost falls back to (Profit). */
+  chargeItemsJson: string;
   withRecipe: ReadonlySet<string>;
+  /** The categories the owner marked "not food" (and the delivery charges' own). */
+  nonFoodCategoryIds: ReadonlySet<string>;
 }
 
-function menuLookup(db: AppDatabase): MenuLookup {
+export function menuLookup(db: AppDatabase): MenuLookup {
   // Deleted items keep their name and category for history.
   const items = new Map(
     (
@@ -1189,7 +1223,91 @@ function menuLookup(db: AppDatabase): MenuLookup {
     ).map((r) => r.id),
   );
   const feeItems = [...items.values()].filter((i) => isDeliveryChargeName(i.name) || nonFood.has(i.categoryId)).map((i) => i.id);
-  return { item: (id) => (id ? items.get(id) : undefined), feeItemsJson: JSON.stringify(feeItems), withRecipe };
+  const chargeItems = [...items.values()].filter((i) => isDeliveryChargeName(i.name)).map((i) => i.id);
+  return {
+    item: (id) => (id ? items.get(id) : undefined),
+    feeItemsJson: JSON.stringify(feeItems),
+    chargeItemsJson: JSON.stringify(chargeItems),
+    withRecipe,
+    nonFoodCategoryIds: nonFood,
+  };
+}
+
+// ---------------------------------------------- estimates kept between asks --
+
+/**
+ * The Reports worker keeps each order's estimate between asks (costing spec
+ * Phase 9): Profit, Channels & delivery, Food cost & stock, the trends and
+ * the owner's week all estimate the same orders from before costing started,
+ * and a year of them is most of a second to read. An estimate comes only
+ * from the order's own stock rows — the ledger is insert-only, so an order
+ * that gains a row (a put-back, a late send) is found by rowid and worked out
+ * again — valued at the price book and price history: any change to an
+ * ingredient's price, unit or pack, a price-history row or a batch recipe
+ * drops them all. Only on a connection that asks (keepEstimates: the
+ * worker's read connection); the till's own connection works them out each
+ * time.
+ */
+interface EstimateCache {
+  pricesKey: string;
+  /** stock_movements' highest rowid when last looked. */
+  lastRowid: number;
+  /** null: the order has no sale rows (nothing to estimate from). */
+  byOrder: Map<string, FoodCostEstimate | null>;
+}
+
+/** Past this many orders kept (years of them), the cache starts again. */
+export const ESTIMATE_CACHE_MAX = 150_000;
+
+const estimateCaches = new WeakMap<AppDatabase, EstimateCache>();
+
+/** Keep estimates between asks on this connection (the Reports worker's). */
+export function keepEstimates(db: AppDatabase): void {
+  if (!estimateCaches.has(db)) estimateCaches.set(db, { pricesKey: '', lastRowid: -1, byOrder: new Map() });
+}
+
+/** How many orders' estimates are kept on this connection (tests). */
+export function keptEstimateCount(db: AppDatabase): number {
+  return estimateCaches.get(db)?.byOrder.size ?? 0;
+}
+
+/**
+ * Everything an estimate's prices come from, as one string: the ingredients'
+ * price, unit, pack and batch yield (not their running counts, which move
+ * with every sale), and the price history and batch recipes' size and last
+ * change. A few hundred small rows.
+ */
+function pricesKey(db: AppDatabase): string {
+  const rows = db
+    .prepare(
+      `SELECT id, unit, price_kind, cost_per_unit_cents, pack_size, pack_price_cents, batch_yield, deleted_at
+         FROM ingredients ORDER BY id`,
+    )
+    .all();
+  const tails = db
+    .prepare(
+      `SELECT (SELECT COUNT(*) || ':' || COALESCE(MAX(rowid), 0) || ':' || COALESCE(MAX(updated_at), '') FROM ingredient_costs) AS history,
+              (SELECT COUNT(*) || ':' || COALESCE(MAX(rowid), 0) || ':' || COALESCE(MAX(updated_at), '') FROM batch_recipe_lines) AS batches`,
+    )
+    .get() as { history: string; batches: string };
+  return `${tails.history}|${tails.batches}|${JSON.stringify(rows)}`;
+}
+
+/** Bring the kept estimates up to the ledger and prices this read sees. */
+function refreshEstimates(db: AppDatabase, cache: EstimateCache): void {
+  const top = Number((db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS r FROM stock_movements`).get() as { r: number }).r);
+  const key = pricesKey(db);
+  if (key !== cache.pricesKey || top < cache.lastRowid) {
+    cache.byOrder.clear();
+    cache.pricesKey = key;
+  } else if (top > cache.lastRowid && cache.byOrder.size > 0) {
+    for (const r of db
+      .prepare(`SELECT DISTINCT ref_order_id AS id FROM stock_movements WHERE rowid > ? AND ref_order_id IS NOT NULL`)
+      .all(cache.lastRowid) as Array<{ id: string }>) {
+      cache.byOrder.delete(r.id);
+    }
+  }
+  cache.lastRowid = top;
 }
 
 /**
@@ -1199,9 +1317,57 @@ function menuLookup(db: AppDatabase): MenuLookup {
  * / D8: from the price history since Phase 4 — the starting price for
  * anything older — so a later price change never moves an old estimate).
  * A put-back is valued at that same take's price, so it nets exactly. Net
- * of anything put back.
+ * of anything put back. Kept between asks where the connection keeps them
+ * (keepEstimates). The estimates handed back are shared: read them only.
  */
-function estimateOrders(db: AppDatabase, orderIds: string[], pricing: () => Pricing): Map<string, FoodCostEstimate> {
+export function estimateOrders(db: AppDatabase, orderIds: string[], pricing: () => Pricing): Map<string, FoodCostEstimate> {
+  const cache = estimateCaches.get(db);
+  if (!cache) return estimateFromLedger(db, orderIds, pricing);
+  refreshEstimates(db, cache);
+  const out = new Map<string, FoodCostEstimate>();
+  const missing: string[] = [];
+  for (const id of orderIds) {
+    const hit = cache.byOrder.get(id);
+    if (hit === undefined) missing.push(id);
+    else if (hit !== null) out.set(id, hit);
+  }
+  if (missing.length === 0) return out;
+  const fresh = estimateFromLedger(db, missing, pricing);
+  if (cache.byOrder.size + missing.length > ESTIMATE_CACHE_MAX) cache.byOrder.clear();
+  for (const id of missing) {
+    const e = fresh.get(id) ?? null;
+    cache.byOrder.set(id, e);
+    if (e) out.set(id, e);
+  }
+  return out;
+}
+
+/**
+ * The counted orders of [since, until) that kept no cost with the sale: the
+ * ones Reports estimates from their stock rows. By the orders' date index.
+ * Params: since, until.
+ */
+export const ORDERS_WITHOUT_COST_SQL = `
+  SELECT o.id AS id FROM orders o
+   WHERE ${IN_RANGE} AND ${COUNTED}
+     AND NOT EXISTS (SELECT 1 FROM order_item_costs k WHERE k.order_id = o.id AND k.status <> 'failed' AND k.deleted_at IS NULL)`;
+
+export function ordersWithoutCost(db: AppDatabase, range: ReportRange): string[] {
+  return (db.prepare(ORDERS_WITHOUT_COST_SQL).all(range.sinceIso, range.untilIso) as Array<{ id: string }>).map((r) => r.id);
+}
+
+/**
+ * Work these orders' estimates out now and keep them (a connection that
+ * keeps them: the Reports worker, between asks), in one read — so the first
+ * Profit, Channels or Food cost & stock of a long period finds them kept.
+ */
+export function warmEstimates(db: AppDatabase, orderIds: string[]): void {
+  if (orderIds.length === 0 || !estimateCaches.has(db)) return;
+  db.transaction(() => estimateOrders(db, orderIds, lazyPricing(db)))();
+}
+
+/** estimateOrders' reading and valuing of the orders' stock rows, every time. */
+function estimateFromLedger(db: AppDatabase, orderIds: string[], pricing: () => Pricing): Map<string, FoodCostEstimate> {
   const out = new Map<string, FoodCostEstimate>();
   for (const ids of chunks(orderIds)) {
     const rows = (
@@ -1438,6 +1604,30 @@ function getWaste(db: AppDatabase, range: ReportRange, pricing: () => Pricing): 
     t.byIngredient.set(r.ingredientId, ing);
   }
   return t;
+}
+
+/**
+ * Waste by reason and the food sent out but never paid for, over a period
+ * (spec 4.5): the Profit tab's waste and unpaid-food steps, the same figures
+ * as Food cost & stock's.
+ */
+export function getWasteAndUnpaid(
+  db: AppDatabase,
+  range: ReportRange,
+  pricing: () => Pricing = lazyPricing(db),
+): { wasteCents: number; wasteByReason: ReportWasteLine[]; sentNotPaid: ReportUnpaidFood } {
+  const waste = getWaste(db, range, pricing);
+  return {
+    wasteCents: waste.cents,
+    wasteByReason: WASTE_ORDER.map((r) => waste.byReason.get(r)).filter((l): l is ReportWasteLine => l !== undefined),
+    sentNotPaid: foodOfOrders(db, unpaidOrderIds(db, range, ['served', 'delivered']), pricing),
+  };
+}
+
+/** When this till first kept a sale's cost (order_item_costs' first row); null before any. */
+export function costingStartedAt(db: AppDatabase): string | null {
+  const started = db.prepare(`SELECT costed_at AS at FROM order_item_costs ORDER BY rowid LIMIT 1`).get() as { at: string } | undefined;
+  return started?.at ?? null;
 }
 
 function wasteIngredientLines(db: AppDatabase, w: WasteTally): ReportWasteIngredientLine[] {
@@ -1851,8 +2041,8 @@ export function buildWhenTab(db: AppDatabase, req: BusinessReportRequest, now = 
   };
 }
 
-/** Menu: every item sold and its category, at menu price. */
-export function buildMenuTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'menu'> {
+/** Menu: every item sold and its category, at menu price (Phase 9's costs: analytics/profit.ts menuCosts). */
+export function buildMenuTab(db: AppDatabase, req: BusinessReportRequest): Omit<ReportTabFigures<'menu'>, 'costs'> {
   const range = rangeOf(req);
   const items = getItems(db, range);
   // The stored subtotals (not the lines added up): the same figure as the
@@ -1869,8 +2059,14 @@ export function buildMenuTab(db: AppDatabase, req: BusinessReportRequest): Repor
   };
 }
 
-/** Channels & delivery: order types, and own-rider deliveries by rider and by area. */
-export function buildChannelsTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'channels'> {
+/**
+ * Channels & delivery: order types, and own-rider deliveries by rider and by
+ * area (Phase 9's delivery areas and profit: analytics/profit.ts channelsExtras).
+ */
+export function buildChannelsTab(
+  db: AppDatabase,
+  req: BusinessReportRequest,
+): Omit<ReportTabFigures<'channels'>, 'areas' | 'noRateDeliveries' | 'noRateCount' | 'profit'> {
   const range = rangeOf(req);
   const sales = aggregateSales(getSaleRows(db, range), nameLookups(db));
   const net = netOf(sales.totals);

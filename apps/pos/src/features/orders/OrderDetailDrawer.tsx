@@ -15,7 +15,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
 import { paperButtonLabel } from '../printing/paperLabels';
@@ -270,11 +270,15 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                     </li>
                   ))}
                 </ul>
-                {o.notes && (
-                  <div className="mt-2 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-                    Order note: {o.notes}
+                {/* The counter's "Order notes" and a website customer's note, as the ticket and bill print them. */}
+                {orderNotesOf(snap).map((note) => (
+                  <div
+                    key={note}
+                    className="mt-2 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+                  >
+                    Order note: {note}
                   </div>
-                )}
+                ))}
               </section>
 
               <dl className="space-y-1 border-t border-stone-200 pt-3 text-sm dark:border-stone-700">

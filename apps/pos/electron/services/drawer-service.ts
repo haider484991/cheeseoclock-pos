@@ -59,9 +59,20 @@ export async function openDrawerNoSale(
   }
   let approvedByUserId: string | null = null;
   if (req.kind === 'count') {
-    // Counting the drawer is closing the shift: the same people, only then.
+    // Counting the drawer is closing the shift: the same people, only then —
+    // a manager or the owner signed in, or a manager's PIN or password typed
+    // on a cashier's login (the manager closes the shift there; owner,
+    // 2026-09-27). The open is then on record as approved by that manager.
     if (!hasCapability(session.role, 'shift.close')) {
-      throw new DrawerOpenRefused('forbidden', 'Only a manager or the owner can open the drawer to count it');
+      const pin = typeof req.approverPin === 'string' ? req.approverPin : '';
+      if (pin.trim() === '') {
+        throw new DrawerOpenRefused('forbidden', 'Only a manager or the owner can open the drawer to count it');
+      }
+      try {
+        approvedByUserId = (await verifyManagerPin(db, pin)).approverUserId;
+      } catch (e) {
+        throw new DrawerOpenRefused('forbidden', e instanceof Error ? e.message : 'Manager approval failed');
+      }
     }
     if (!getCurrentShift(db, deviceId)) {
       throw new DrawerOpenRefused('precondition_failed', 'No shift is open on this till — nothing to count');

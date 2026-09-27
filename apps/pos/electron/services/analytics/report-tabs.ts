@@ -11,7 +11,19 @@
  *    the login that asked.
  * So nothing here, or below it, may load Electron (a test walks the imports).
  */
-import { REPORT_TABS, type BusinessReportRequest, type ReportTab, type ReportTabData, type ReportTabFigures } from '@cheeseoclock/shared-types';
+import {
+  REPORT_TABS,
+  type BusinessReportRequest,
+  type MenuMapRequest,
+  type ReportChannelsTab,
+  type ReportLineCost,
+  type ReportMenuCosts,
+  type ReportTab,
+  type ReportTabData,
+  type ReportTabFigures,
+  type TillLinkState,
+  type WhatIfRequest,
+} from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../../db/connection.js';
 import {
   buildChannelsTab,
@@ -26,20 +38,42 @@ import { DAY_MS } from './sql.js';
 import { buildOwnerWeek, type OwnerWeekJob } from './owner-week.js';
 import { buildTrends, type TrendsJob } from './trends.js';
 import { buildVariance, type VarianceJob } from './stock-control.js';
+import { buildProfitTab, channelsExtras, menuCosts } from './profit.js';
+import { buildMenuMap } from './menu-engineering.js';
+import { getWhatIf } from '../costing-service.js';
 import { EXTRA_ANALYTICS, type AnalyticsKind } from './worker-protocol.js';
 
 /** The longest period the main process works out itself when the worker is not there (a month). */
 export const MAIN_THREAD_MAX_DAYS = 31;
 
-type Builder<K extends ReportTab> = (db: AppDatabase, req: BusinessReportRequest, now: Date) => ReportTabFigures<K>;
+/**
+ * A tab's period as the main process hands it to a builder (never as the
+ * screen sent it): what the login may see, so the worker does not work out
+ * rupees nobody will be shown (Menu's costs, Channels' profit), and the
+ * second-till link (the Profit tab's stock-loss step). Left out — the tests
+ * and the bench — everything is worked out.
+ */
+export interface TabJob extends BusinessReportRequest {
+  withCosts?: boolean;
+  withProfit?: boolean;
+  link?: TillLinkState;
+}
+
+type Builder<K extends ReportTab> = (db: AppDatabase, req: TabJob, now: Date) => ReportTabFigures<K>;
+
+const rangeOf = (req: BusinessReportRequest) => ({ sinceIso: req.sinceIso, untilIso: req.untilIso });
 
 const BUILDERS: { [K in ReportTab]: Builder<K> } = {
   overview: (db, req) => buildOverviewTab(db, req),
   when: (db, req, now) => buildWhenTab(db, req, now),
-  menu: (db, req) => buildMenuTab(db, req),
-  channels: (db, req) => buildChannelsTab(db, req),
+  menu: (db, req) => ({
+    ...buildMenuTab(db, req),
+    costs: req.withCosts === false ? null : menuCosts(db, rangeOf(req), req.withProfit !== false),
+  }),
+  channels: (db, req) => ({ ...buildChannelsTab(db, req), ...channelsExtras(db, rangeOf(req), req.withProfit !== false && req.withCosts !== false) }),
   foodStock: (db, req, now) => buildFoodStockTab(db, req, now),
   team: (db, req) => buildTeamTab(db, req),
+  profit: (db, req) => buildProfitTab(db, req),
 };
 
 export function isReportTab(x: unknown): x is ReportTab {
@@ -67,8 +101,9 @@ export function isAnalyticsKind(x: unknown): x is AnalyticsKind {
 
 /**
  * Anything the worker is asked for (costing spec Phase 7): a tab, the trend
- * strip, the owner's week, or "used vs should have used" between two stock
- * takes (Phase 8) — each in one read transaction. `longReads`
+ * strip, the owner's week, "used vs should have used" between two stock
+ * takes (Phase 8), the menu map or a what-if (Phase 9) — each in one read
+ * transaction. `longReads`
  * false is the main process working it out itself (the worker is not
  * running): the trends then leave out every stretch over 31 days. The
  * owner's week reads a fortnight and the last 28 days' sales, so it always
@@ -85,6 +120,12 @@ export function buildAnalytics(db: AppDatabase, kind: AnalyticsKind, request: un
       case 'variance':
         // The main process only asks for it itself with a window of 31 days or less (reports-handlers.ts).
         return buildVariance(db, request as VarianceJob);
+      case 'menuMap':
+        // The main process only asks for it itself with 31 days or less (reports-handlers.ts).
+        return buildMenuMap(db, request as MenuMapRequest | undefined, now);
+      case 'whatIf':
+        // The last 28 days' sales and picks, always: it fits the main process too.
+        return getWhatIf(db, request as WhatIfRequest, now);
     }
   })();
 }
@@ -99,14 +140,41 @@ export function fitsMainThread(req: Pick<BusinessReportRequest, 'sinceIso' | 'un
   return periodDays(req) <= MAIN_THREAD_MAX_DAYS;
 }
 
+/** Rupee profit out of a Menu cost line (a login without profit.view). */
+function withoutProfit(c: ReportLineCost): ReportLineCost {
+  return c.profitCents === null && c.profitPerSaleCents === null ? c : { ...c, profitCents: null, profitPerSaleCents: null };
+}
+
+function menuCostsWithoutProfit(costs: ReportMenuCosts): ReportMenuCosts {
+  const strip = (r: Record<string, ReportLineCost>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, withoutProfit(v)]));
+  return { ...costs, items: strip(costs.items), categories: strip(costs.categories) };
+}
+
+function channelsWithoutProfit(data: ReportChannelsTab): ReportChannelsTab {
+  return { ...data, profit: null, areas: data.areas.map((a) => ({ ...a, riderCents: null, contributionPerOrderCents: null })) };
+}
+
 /**
  * A tab as a login may read it (costing spec §2), in the main process so the
- * printout and the file carry nothing more: without COST_CAPABILITY, Team &
- * leakage says nothing of what wasted food cost, and Food cost & stock is
- * never handed over (its channel refuses such a login before building it;
- * this refuses again).
+ * printout and the file carry nothing more:
+ *  - without COST_CAPABILITY, Team & leakage says nothing of what wasted food
+ *    cost, Menu has no cost columns, and Food cost & stock is never handed
+ *    over (its channel refuses such a login before building it; this refuses
+ *    again);
+ *  - without profit.view (Phase 9: `canSeeProfit`, which also needs costs),
+ *    Menu has no profit, Channels no rider cost or what orders earn, and the
+ *    Profit tab is never handed over.
  */
-export function reportTabForLogin<K extends ReportTab>(kind: K, data: ReportTabData[K], canSeeCosts: boolean): ReportTabData[K] {
+export function reportTabForLogin<K extends ReportTab>(kind: K, data: ReportTabData[K], canSeeCosts: boolean, canSeeProfit = false): ReportTabData[K] {
+  const profit = canSeeProfit && canSeeCosts;
+  if (kind === 'profit' && !profit) throw new Error('Only the owner can see profit.');
+  if (kind === 'menu') {
+    const menu = data as ReportTabData['menu'];
+    if (!canSeeCosts) return (menu.costs === null ? menu : { ...menu, costs: null }) as ReportTabData[K];
+    if (!profit && menu.costs) return { ...menu, costs: menuCostsWithoutProfit(menu.costs) } as ReportTabData[K];
+    return data;
+  }
+  if (kind === 'channels' && !profit) return channelsWithoutProfit(data as ReportChannelsTab) as ReportTabData[K];
   if (canSeeCosts) return data;
   if (kind === 'foodStock') throw new Error('Only a manager or the owner can see costs.');
   if (kind === 'team') {

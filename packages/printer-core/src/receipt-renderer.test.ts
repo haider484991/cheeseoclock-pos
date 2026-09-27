@@ -225,6 +225,17 @@ describe('renderReceipt', () => {
 const DRAWER_KICK = [0x1b, 0x70, 0x00, 0x19, 0xfa].join(',');
 const rows = (bytes: Uint8Array) => decodeEscPos(bytes).map((r) => r.text);
 
+/** Whether `text` goes to the printer with bold on (the last ESC E before it says 1). */
+function printedBold(bytes: Uint8Array, text: string): boolean {
+  const needle = [...text].map((c) => c.charCodeAt(0));
+  const at = bytes.findIndex((_, i) => needle.every((b, j) => bytes[i + j] === b));
+  if (at < 0) throw new Error(`"${text}" is not on the paper`);
+  for (let i = at - 3; i >= 0; i--) {
+    if (bytes[i] === 0x1b && bytes[i + 1] === 0x45) return bytes[i + 2] === 1;
+  }
+  return false;
+}
+
 describe('renderReceipt — copies and balance', () => {
   it('a settled order says PAID; the customer copy carries no signature line', () => {
     const r = rows(renderReceipt(snapshot(), { branding }));
@@ -328,11 +339,22 @@ describe('renderKitchenTicket', () => {
     }
   });
 
-  it('prints order notes for the kitchen', () => {
+  it('prints a website customer’s note for the kitchen, loud, before the first item — without the till’s [web] tag', () => {
     const s = snapshot();
     s.order.notes = '[web] ring the bell twice, leave at the gate';
-    const r = rows(renderKitchenTicket(s, { now }));
-    expect(r).toContain('Note: [web] ring the bell twice, leave at the');
+    const bytes = renderKitchenTicket(s, { now });
+    const r = rows(bytes);
+    expect(r).toContain('!! ORDER NOTE: ring the bell twice, leave at the');
+    expect(r).toContain('gate');
+    expect(r.join(' ')).not.toContain('[web]');
+    // Where it came from is said on its own line, under the mode.
+    expect(r).toContain('WEBSITE ORDER');
+    expect(r.indexOf('WEBSITE ORDER')).toBe(r.indexOf('DELIVERY') + 1);
+    // Before the first item, and bold, like an allergy note.
+    expect(r.indexOf('!! ORDER NOTE: ring the bell twice, leave at the')).toBeLessThan(
+      r.findIndex((x) => x.startsWith('2 x Chicken Tikka')),
+    );
+    expect(printedBold(bytes, '!! ORDER NOTE: ring the bell twice')).toBe(true);
   });
 
   for (const width of [48, 32] as const) {
@@ -616,4 +638,128 @@ describe('the shop on a customer paper: logo and tagline on top; address, phone 
     expect(receiptShopLines({ branchLine: ' ', phoneLine: PHONE, websiteLine: ` ${WEBSITE} ` })).toEqual([PHONE, WEBSITE]);
     expect(receiptShopLines({})).toEqual([]);
   });
+});
+
+/**
+ * The order's own notes (audit 2026-09-27): the counter's "Order notes" box
+ * was saved and never printed, and a website customer's note printed small,
+ * after the items, on the kitchen ticket only. Both now print the same way:
+ * loud on the kitchen ticket before the first item, and on the bill and the
+ * receipt, where the rider and the customer read them. Item notes (allergies)
+ * stay on their lines.
+ */
+describe('order notes on the kitchen ticket and the bill / receipt', () => {
+  const now = new Date(2026, 8, 14, 19, 35);
+  const COUNTER_NOTE = 'Ring the upper bell, customer asleep downstairs';
+
+  /** A counter takeaway with the "Order notes" box filled in and no customer. */
+  function counterOrder(deliveryNotes: string | null = COUNTER_NOTE): OrderSnapshot {
+    const s = snapshot();
+    s.order.source = 'pos';
+    s.order.mode = 'takeaway';
+    s.order.notes = null;
+    s.customerName = null;
+    s.customerPhone = null;
+    s.deliveryAddress = null;
+    s.deliveryNotes = deliveryNotes;
+    return s;
+  }
+
+  it('kitchen ticket: the counter’s note, bold, before the first item; the item’s allergy note stays on its line', () => {
+    const bytes = renderKitchenTicket(counterOrder(), { now });
+    const r = rows(bytes);
+    const note = r.indexOf('!! ORDER NOTE: Ring the upper bell, customer');
+    expect(note).toBeGreaterThan(0);
+    expect(r[note + 1]).toBe('asleep downstairs');
+    expect(note).toBeLessThan(r.findIndex((x) => x.startsWith('2 x Chicken Tikka')));
+    expect(printedBold(bytes, '!! ORDER NOTE: Ring the upper bell')).toBe(true);
+    expect(r.join(' ')).toContain('!! ALLERGY/NOTE: Extra crispy please');
+    // A counter order says nothing about the website.
+    expect(r).not.toContain('WEBSITE ORDER');
+    expect(r).not.toContain('WEBSITE PICK-UP');
+  });
+
+  it('receipt and bill: the counter’s note, bold, above the items', () => {
+    const receipt = renderReceipt(counterOrder(), { branding });
+    const r = rows(receipt);
+    const note = r.indexOf('Order note: Ring the upper bell, customer asleep');
+    expect(note).toBeGreaterThan(0);
+    expect(r[note + 1]).toBe('downstairs');
+    expect(note).toBeLessThan(r.findIndex((x) => x.startsWith('2x Chicken Tikka')));
+    expect(printedBold(receipt, 'Order note: Ring the upper bell')).toBe(true);
+    expect(r).toContain('PAID - CASH');
+
+    const unpaid = counterOrder();
+    unpaid.order.status = 'ready';
+    unpaid.order.paidAt = null;
+    unpaid.payments = [];
+    const bill = rows(renderReceipt(unpaid, { branding }));
+    expect(bill).toContain('BILL - NOT PAID');
+    expect(bill).toContain('Order note: Ring the upper bell, customer asleep');
+  });
+
+  it('a website order’s note prints the same way on both papers, without the [web] tag', () => {
+    for (const [notes, mode, from] of [
+      ['[web] Near the park, bell twice', 'delivery', 'WEBSITE ORDER'],
+      ['[web pick-up] I will be there at 9 pm', 'takeaway', 'WEBSITE PICK-UP'],
+    ] as const) {
+      const s = snapshot();
+      s.order.source = 'web';
+      s.order.mode = mode;
+      s.order.notes = notes;
+      const words = notes.replace(/^\[web[^\]]*\] /, '');
+      const kitchen = rows(renderKitchenTicket(s, { now }));
+      expect(kitchen).toContain(`!! ORDER NOTE: ${words}`);
+      expect(kitchen).toContain(from);
+      const paper = rows(renderReceipt(s, { branding }));
+      expect(paper).toContain(`Order note: ${words}`);
+      for (const text of [kitchen, paper]) expect(text.join(' ')).not.toContain('[web');
+    }
+  });
+
+  it('the website tag alone is not a note: nothing printed for it, and the kitchen still sees it came from the website', () => {
+    for (const [notes, mode, from] of [
+      ['[web order]', 'delivery', 'WEBSITE ORDER'],
+      ['[web pick-up order]', 'takeaway', 'WEBSITE PICK-UP'],
+    ] as const) {
+      const s = snapshot();
+      s.order.source = 'web';
+      s.order.mode = mode;
+      s.order.notes = notes;
+      const kitchen = rows(renderKitchenTicket(s, { now }));
+      expect(kitchen).toContain(from);
+      expect(kitchen.join(' ')).not.toContain('NOTE: [web');
+      expect(kitchen.some((x) => x.startsWith('!! ORDER NOTE'))).toBe(false);
+      expect(rows(renderReceipt(s, { branding })).some((x) => x.startsWith('Order note'))).toBe(false);
+    }
+  });
+
+  it('a website order with the counter’s note too prints both; no note at all prints nothing', () => {
+    const s = snapshot();
+    s.order.notes = '[web] Gate 2';
+    s.deliveryNotes = 'Called: leave it with the guard';
+    const kitchen = rows(renderKitchenTicket(s, { now }));
+    expect(kitchen).toContain('!! ORDER NOTE: Gate 2');
+    expect(kitchen).toContain('!! ORDER NOTE: Called: leave it with the guard');
+    const paper = rows(renderReceipt(s, { branding }));
+    expect(paper).toContain('Order note: Gate 2');
+    expect(paper).toContain('Order note: Called: leave it with the guard');
+
+    const none = counterOrder(null);
+    expect(rows(renderKitchenTicket(none, { now })).some((x) => x.includes('ORDER NOTE'))).toBe(false);
+    expect(rows(renderReceipt(none, { branding })).some((x) => x.includes('Order note'))).toBe(false);
+  });
+
+  for (const width of [48, 32] as const) {
+    it(`notes wrap within ${width} columns on both papers`, () => {
+      const s = snapshot();
+      s.order.notes = '[web] Apartment 14-B, third floor, the lift is out of order so please call from the gate';
+      s.deliveryNotes = COUNTER_NOTE;
+      for (const bytes of [renderKitchenTicket(s, { width, now }), renderReceipt(s, { width, branding })]) {
+        for (const row of decodeEscPos(bytes)) {
+          expect(row.text.length * row.scale, JSON.stringify(row.text)).toBeLessThanOrEqual(width);
+        }
+      }
+    });
+  }
 });

@@ -21,6 +21,8 @@ import {
   maxBatchAmount,
   mulDivRound,
   plateCost,
+  priceChangeBps,
+  priceToHitTarget,
   resolveAlertSettings,
   resolveTargets,
   scaleBatch,
@@ -28,6 +30,8 @@ import {
   suggestedKeyIngredient,
   unitCostMc,
   weeklyImpactCents,
+  whatIfDish,
+  whatIfPrices,
   type CostedLine,
   type PickMix,
   type PlateCost,
@@ -59,6 +63,10 @@ import {
   type MissingPriceRow,
   type RecipeCostPreview,
   type SetCostingTargetsRequest,
+  type WhatIfIngredient,
+  type WhatIfRequest,
+  type WhatIfResult,
+  type WhatIfRow,
 } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import { loadPriceBook, type PriceBook } from '../db/price-book.js';
@@ -81,7 +89,7 @@ interface MenuItemRow {
   isActive: boolean;
 }
 
-interface MenuData {
+export interface MenuData {
   categories: Array<{ id: string; name: string }>;
   items: MenuItemRow[];
   recipes: Map<string, RecipeLine[]>;
@@ -123,7 +131,14 @@ type SalesNeed =
 
 // ------------------------------------------------------------------ loading --
 
-function loadMenu(db: AppDatabase): MenuData {
+/**
+ * The live menu, recipes and choice groups, no prices: every item, its
+ * recipe lines that can still apply (a live ingredient — the stock SQL joins
+ * it the same way — and a live choice when the line depends on one), and
+ * its groups with their options. Also the recipe calculator's (quantities
+ * only), so both read one menu.
+ */
+export function loadMenu(db: AppDatabase): MenuData {
   const categories = loadCategories(db);
   const items = (
     db
@@ -509,6 +524,9 @@ export function getItemCostSheet(db: AppDatabase, menuItemId: string, now = new 
   const nameOf = (id: string) => ctx.book.ingredients.get(id)?.name ?? 'an ingredient that was deleted';
   return {
     row: rowOf(ctx, item, pc),
+    // profit.view's (costing spec 4.3): the costing handler leaves it out for anyone else (itemCostSheetForLogin).
+    priceToHitCents:
+      t.nonFood || !pc.hasRecipe || pc.missingLines > 0 ? null : priceToHitTarget(pc.typicalCostMc, t.bps, pc.groupsPriceMc, ctx.priceStepCents),
     always: lineViews(ctx, pc.base.lines, pc.typicalCostMc),
     alwaysCostCents: pc.base.costCents,
     groups: pc.groups.map((g) => ({
@@ -559,6 +577,36 @@ export function getItemCostSheet(db: AppDatabase, menuItemId: string, now = new 
       savingCents: l.savingCents,
       missingLines: l.missingLines,
     })),
+  };
+}
+
+/** A Menu costs row without what you keep per sale (a login without profit.view). */
+function rowWithoutProfit(r: MenuCostRow): MenuCostRow {
+  return r.profitCents === null ? r : { ...r, profitCents: null };
+}
+
+/**
+ * Menu costs as a login may read them (costing spec D6, Phase 9; owner
+ * 2026-09-27: managers keep costs but see no profit): without profit.view
+ * (`canSeeProfit`, which also needs costs) no row says what you keep per
+ * sale. Costs, food cost % and the chips stay.
+ */
+export function menuCostsForLogin(view: MenuCostsView, canSeeProfit: boolean): MenuCostsView {
+  return canSeeProfit ? view : { ...view, rows: view.rows.map(rowWithoutProfit) };
+}
+
+/**
+ * A cost sheet as a login may read it: without profit.view, no "you keep"
+ * per sale or per paid extra, and no "price to hit target" (costing spec
+ * 4.3). What each line costs stays.
+ */
+export function itemCostSheetForLogin(sheet: ItemCostSheet | null, canSeeProfit: boolean): ItemCostSheet | null {
+  if (!sheet || canSeeProfit) return sheet;
+  return {
+    ...sheet,
+    row: rowWithoutProfit(sheet.row),
+    priceToHitCents: null,
+    paidExtras: sheet.paidExtras.map((x) => (x.marginCents === null ? x : { ...x, marginCents: null })),
   };
 }
 
@@ -720,6 +768,111 @@ export function getBatchCalc(db: AppDatabase, ingredientId: string, amount: numb
   return batchCalcOf(book, ingredientId, amount * 100, 0, new Set())!;
 }
 
+// ---------------------------------------------------- what-if (Phase 9) --
+
+/** A price as one base unit in millicents, or null when there is none. */
+function unitMcOf(p: { pack: { size: number; priceCents: number }; kind: string } | undefined): number | null {
+  return p && p.kind !== 'unset' ? unitCostMc(p.pack) : null;
+}
+
+/**
+ * Costing → What-if (costing spec 4.9, profit.view): ingredient prices and
+ * menu prices TRIED against the last 28 days' sales and picks — every food
+ * dish on the menu costed before and with them (a changed ingredient rolled
+ * up through every batch made from it), what each change comes to per week
+ * at the same sales, the break-even volume of a menu price change, and the
+ * price that brings each dish to its target. Reads only: nothing is saved,
+ * and no price on the till moves. Changed dishes first, most per week first.
+ */
+export function getWhatIf(db: AppDatabase, req: WhatIfRequest, now = new Date()): Omit<WhatIfResult, 'engine'> {
+  const ctx = loadCtx(db, now, { kind: 'all' });
+  const packs = new Map(
+    req.ingredients.filter((i) => ctx.book.ingredients.has(i.ingredientId)).map((i) => [i.ingredientId, { size: i.packSize, priceCents: i.packPriceCents }]),
+  );
+  const items = itemsOnMenu(ctx);
+  const onMenuIds = new Set(items.map((i) => i.id));
+  const basePrices = new Map(req.items.filter((i) => onMenuIds.has(i.menuItemId)).map((i) => [i.menuItemId, i.priceCents]));
+  const prices = whatIfPrices([...ctx.book.ingredients.values()], ctx.book.batchLines, packs, ctx.book.prices);
+  const changes = { packs, basePrices };
+  const catName = new Map(ctx.menu.categories.map((c) => [c.id, c.name]));
+
+  const rows: WhatIfRow[] = [];
+  for (const item of items) {
+    const t = targetOf(ctx, item.categoryId);
+    if (t.nonFood) continue;
+    const d = whatIfDish(
+      {
+        id: item.id,
+        basePriceCents: item.basePriceCents,
+        recipe: ctx.menu.recipes.get(item.id) ?? [],
+        groups: ctx.menu.groups.get(item.id) ?? [],
+        mix: mixOf(ctx, item.id),
+        unitsLast28: soldLast28(ctx, item.id),
+        targetBps: t.bps,
+      },
+      prices,
+      changes,
+      ctx.priceStepCents,
+    );
+    const flag = (pc: PlateCost) =>
+      foodCostFlag(
+        { hasRecipe: pc.hasRecipe, missingLines: pc.missingLines, costMc: pc.typicalCostMc, priceMc: pc.typicalPriceMc },
+        { ...t, amberBps: ctx.targets.amberBps },
+      );
+    rows.push({
+      menuItemId: item.id,
+      name: item.name,
+      categoryId: item.categoryId,
+      categoryName: catName.get(item.categoryId) ?? '',
+      basePriceCents: item.basePriceCents,
+      newBasePriceCents: d.newBasePriceCents,
+      priceCents: d.before.typicalPriceCents,
+      newPriceCents: d.after.typicalPriceCents,
+      costCents: d.before.typicalCostCents,
+      newCostCents: d.after.typicalCostCents,
+      foodCostBps: d.before.foodCostBps,
+      newFoodCostBps: d.after.foodCostBps,
+      flag: flag(d.before),
+      newFlag: flag(d.after),
+      profitCents: d.before.profitCents,
+      newProfitCents: d.after.profitCents,
+      soldLast28: soldLast28(ctx, item.id),
+      weeklyUnitsTenths: d.weeklyUnitsTenths,
+      weekCents: d.weekCents,
+      breakEvenBps: d.breakEvenBps,
+      priceToHitCents: d.priceToHitCents,
+      targetBps: t.bps,
+      targetConfirmed: t.confirmed,
+      changed: d.changed,
+    });
+  }
+  rows.sort(
+    (a, b) =>
+      Number(b.changed) - Number(a.changed) || Math.abs(b.weekCents) - Math.abs(a.weekCents) || a.name.localeCompare(b.name),
+  );
+
+  const ingredients: WhatIfIngredient[] = prices.moved.map((id) => {
+    const ing = ctx.book.ingredients.get(id);
+    const before = unitMcOf(prices.before.get(id));
+    const after = unitMcOf(prices.after.get(id));
+    return {
+      ingredientId: id,
+      name: ing?.name ?? 'An ingredient that was deleted',
+      unit: ing?.unit ?? '',
+      beforeUnitCostMc: before,
+      afterUnitCostMc: after,
+      changeBps: before === null || after === null ? null : priceChangeBps(before, after),
+      batch: !packs.has(id),
+    };
+  });
+  return {
+    rows,
+    ingredients,
+    totalWeekCents: rows.reduce((s, r) => s + r.weekCents, 0),
+    priceStepCents: ctx.priceStepCents,
+  };
+}
+
 // ------------------------------------------------ price alerts (Phase 6) --
 //
 // The figures behind Costing → Alerts: which dishes a price change moves and
@@ -777,6 +930,17 @@ export function plateAt(ctx: CostingContext, item: MenuItemRow, priceOf: PriceOf
     },
     priceOf,
   );
+}
+
+/**
+ * One item's picks over the last 28 days on this till — units sold, per
+ * choice the units that had it (N_o), per group the units that picked in it
+ * (U_g) — and nothing about money (no sales). For the recipe calculator's
+ * "usual picks" (a stock channel), worked out by the same query as Costing's.
+ */
+export function loadItemPickMix(db: AppDatabase, menuItemId: string, now = new Date()): PickMix {
+  const s = loadSales(db, now, { kind: 'item', itemId: menuItemId }).get(menuItemId);
+  return s ? { units: s.units, picks: s.picks, groupUnits: s.groupUnits } : { units: 0, picks: new Map(), groupUnits: new Map() };
 }
 
 /** The customers' picks of an item over the window (null when it did not sell). */
