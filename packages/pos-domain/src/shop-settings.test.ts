@@ -31,7 +31,7 @@ describe('the released defaults are pinned', () => {
     });
   });
 
-  it('foodpanda.fees: 25% suggested (costing spec 4.7), not confirmed, after the deal, no fee, no tax', () => {
+  it('foodpanda.fees: 25% suggested (costing spec 4.7), not confirmed, after the deal, no fee, no tax, at till prices', () => {
     expect(SUGGESTED_FOODPANDA_COMMISSION_BPS).toBe(2500);
     expect(DEFAULT_FOODPANDA_FEES).toEqual({
       v: 1,
@@ -40,6 +40,7 @@ describe('the released defaults are pinned', () => {
       base: 'after_deal',
       fixedFeeCents: 0,
       commissionTaxBps: 0,
+      upliftBps: 0,
     });
   });
 

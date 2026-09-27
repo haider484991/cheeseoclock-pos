@@ -67,6 +67,12 @@ export type FoodpandaCommissionBase = 'after_deal' | 'before_deal';
  * only. Never printed, never in a stored order total. A separate key from
  * the deal: each key is one whole value decided by its last write, so a
  * commission edit on one till can't erase a deal edit on the other.
+ *
+ * The ONE place foodpanda's money terms live (owner, 2026-09-27: foodpanda is
+ * its own Settings section). v0.7.20 kept a commission in 'channels.fees'
+ * (Costing → Targets & fees): retired, and read only while this key has
+ * never been saved (business-settings-read.ts readShopSetting carries it
+ * over).
  */
 export interface FoodpandaFees {
   v: number;
@@ -80,6 +86,15 @@ export interface FoodpandaFees {
   fixedFeeCents: number;
   /** Tax foodpanda adds on its commission, basis points. */
   commissionTaxBps: number;
+  /**
+   * How much above the till's prices the foodpanda menu is, basis points
+   * (1000 = the listing is 10% dearer; 0 = the till's prices, the default).
+   * The till still rings foodpanda orders at till prices (the FBR invoice
+   * and every stored total are the till's); the listing price, the
+   * commission's base, the tablet total Pay expects, the expected payout and
+   * Reports' "price uplift" are worked out at the dearer prices.
+   */
+  upliftBps: number;
 }
 
 export type FoodpandaCheckRule = 'optional' | 'required';
@@ -129,6 +144,7 @@ export const DEFAULT_FOODPANDA_FEES: Readonly<FoodpandaFees> = Object.freeze({
   base: 'after_deal',
   fixedFeeCents: 0,
   commissionTaxBps: 0,
+  upliftBps: 0,
 });
 
 /** Shown at Pay, optional (today neither is asked). */
@@ -219,6 +235,11 @@ export interface ShopSettingCard<K extends ShopSettingKey = ShopSettingKey> {
   isDefault: boolean;
   /** Saved by a newer version of the app: this till reads it but may not save it. */
   readOnly: boolean;
+  /**
+   * 'foodpanda.fees' only: never saved here, and the value in use is what
+   * v0.7.20's Costing → Targets & fees saved (carried over; a Save keeps it here).
+   */
+  carriedOver?: boolean;
   /** Who saved it last, when, and where; null when never saved. */
   lastChanged: { at: string; byName: string | null; onThisTill: boolean | null } | null;
   /** The link to the other till is on and this till's last save has not reached it yet. */
@@ -251,8 +272,13 @@ export interface CheckoutRules {
     } | null;
     /** What Pay asks on a foodpanda order. */
     checks: { orderCode: FoodpandaCheckRule; tabletTotal: FoodpandaCheckRule };
-    /** A tablet total further than this from the till's total is a mismatch. */
+    /** A tablet total further than this from the one expected is a mismatch. */
     tabletToleranceCents: number;
+    /**
+     * How much above the till's prices the foodpanda menu is, basis points:
+     * the tablet shows the till's total at those prices (a price, not a cost).
+     */
+    upliftBps: number;
   };
 }
 

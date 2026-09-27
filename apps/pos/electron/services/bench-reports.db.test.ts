@@ -127,6 +127,43 @@
  * in the worker once it is told of a finished stock take (asserted ≤ 75 ms),
  * ~61–135 ms when it is not. Figures with the block below.
  *
+ * Costing Phase 9 (`-t "Phase 9"`): Profit, Menu with its cost and profit
+ * columns, and Channels with delivery areas and what each channel earns, a
+ * year each (a third of the orders deliveries, one in ten foodpanda); the
+ * menu map and What-if. Measured 2026-09-27 on the dev laptop (40,152
+ * orders, 13,384 deliveries, 73,634 lines, 170,697 cost rows):
+ *   main thread, year ............ profit ~0.9 s, menu ~0.85 s, channels
+ *                                  ~1.1 s (31 days: 73–124 ms)
+ *   worker, year ................. profit ~1.18–1.27 s, menu ~1.13–1.16 s,
+ *                                  channels ~1.42–1.46 s (≤ 2 s: ok, asserted;
+ *                                  a run while the laptop was busy with other
+ *                                  work read 2–3× these, with the main
+ *                                  thread's own lag at ~200 ms to show it)
+ *   every order estimated ........ the FIRST open of a year (every order
+ *                                  estimated from its stock rows, statements
+ *                                  not yet compiled): profit ~2.0–2.4 s,
+ *                                  channels ~2.5–3.1 s in the worker (runs
+ *                                  of 2026-09-27) — over 2 s, as Food cost &
+ *                                  stock's ~1.8 s is close: on the shop PC it is the
+ *                                  Contingency R trigger (reported, not
+ *                                  asserted). The worker keeps each order's
+ *                                  estimate (business-report keepEstimates),
+ *                                  and works the last year's out between asks
+ *                                  from 20 s after it starts (worker.ts
+ *                                  ESTIMATE_WARM_*), so every later open of
+ *                                  Profit, Channels or Food cost & stock on
+ *                                  those orders: profit ~1.0–1.2 s, channels
+ *                                  ~1.2–1.5 s (asserted ≤ 2 s)
+ *   menu map (28 days) ........... ~62 ms main, ~90 ms worker
+ *   What-if (28 days' sales) ..... ~43 ms main, ~56 ms worker
+ *   meanwhile on the main thread . slowest till call ≤ ~20 ms, event loop
+ *                                  late ≤ ~24 ms (no call near 50 ms)
+ * They were ~1.65 s / ~1.5 s / ~1.84 s (~2.05 s estimated) before the plain
+ * orders' lines were summed in JS rather than grouped in SQL, and only
+ * deliveries and foodpanda orders read one by one for commission and rider;
+ * the other orders' lines are no longer grouped and sorted in SQL either
+ * (~0.1 s off a year with every order estimated).
+ *
  * EVERY PRICE IS MADE UP (costing spec D11).
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -1047,5 +1084,152 @@ bench('Reports bench, Phase 8: stock takes and used vs should have used (opt-in)
     // not told, it waits for the month's comparison inside the tap.
     expect(toldMs).toBeLessThanOrEqual(CARD_BUDGET_HERE_MS);
     expect(toldMs).toBeLessThan(notToldMs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9: Profit, Menu and Channels with profit, the menu map, What-if
+// ---------------------------------------------------------------------------
+
+/**
+ * Costing Phase 9 (`-t "Phase 9"`) on the same year, with a third of the
+ * orders turned into own-rider deliveries (areas typed four ways, one in
+ * four with none) and one in ten into foodpanda orders, so commission, the
+ * zone rate and the delivery-charge fallback all run: the Profit tab, Menu
+ * with its cost and profit columns and Channels with delivery areas and
+ * what each channel earns — a year each, on this thread and in the real
+ * worker while the till keeps ringing; the menu map (28 days) and What-if
+ * (a dearer tomato through the sauce, and a menu price) in the worker; then
+ * the year with NO sale's cost kept (every order estimated): the first
+ * Profit and the first Channels on a fresh worker each (reported: the
+ * Contingency R trigger when over 2 s on the shop PC), then each again once
+ * the worker keeps the estimates. The Phase 3 budget: a year tab ≤ 2 s in
+ * the worker (asserted, estimates kept), no main-process call near 50 ms
+ * while it runs.
+ */
+bench('Reports bench, Phase 9: profit, menu map and what-if (opt-in)', () => {
+  it('a year of Profit, Menu and Channels in the worker; the menu map and What-if', async () => {
+    const { db, s, repos, size } = await yearShop();
+    db.exec(`UPDATE orders SET mode = 'delivery',
+                   delivery_address_snapshot = json_object('area', CASE rowid % 4 WHEN 0 THEN 'DHA Phase 6' WHEN 1 THEN 'phase 8'
+                                                                   WHEN 2 THEN 'Rahat Commercial, DHA Phase 6' ELSE NULL END),
+                   customer_phone_snapshot = '0300' || (1000000 + rowid % 997)
+              WHERE rowid % 3 = 0`);
+    db.exec(`UPDATE orders SET mode = 'foodpanda' WHERE rowid % 10 = 1 AND mode = 'takeaway'`);
+    const { buildReportTab, buildAnalytics } = await import('./analytics/report-tabs.js');
+    const { AnalyticsWorkerClient } = await import('./analytics/worker-client.js');
+    const { WORKER_FILE, WORKER_TAG } = await import('./analytics/worker-protocol.js');
+    const { buildAnalyticsWorker } = await import('../../electron.vite.config');
+    const lines: string[] = [];
+    const deliveries = Number((db.prepare(`SELECT COUNT(*) AS n FROM orders WHERE mode = 'delivery'`).get() as { n: number }).n);
+    lines.push(`${size.orders} orders (${deliveries} deliveries), ${size.lines} lines, ${size.costRows} cost rows`);
+    const YEAR_REQ = { ...YEAR };
+    const PHASE9 = ['profit', 'menu', 'channels'] as const;
+
+    // 1. On this thread: what the till would stall for (and a month, the fallback's longest).
+    for (const tab of PHASE9) {
+      const year = time(3, () => buildReportTab(db, tab, YEAR_REQ)).ms;
+      const month = time(3, () => buildReportTab(db, tab, { ...MONTH })).ms;
+      lines.push(`main thread, ${tab}: year ${year.toFixed(0)} ms; 31 days ${month.toFixed(0)} ms`);
+    }
+    const profit = buildReportTab(db, 'profit', YEAR_REQ);
+    expect(profit.steps.reduce((a, x) => a + x.cents, 0)).toBe(profit.profitCents);
+    expect(profit.channels.map((c) => c.channel).sort()).toEqual(['delivery', 'foodpanda', 'takeaway']);
+    const now = new Date(YEAR_END - 3_600_000);
+    const mapOnMain = time(3, () => buildAnalytics(db, 'menuMap', undefined, now, { longReads: false })).ms;
+    const whatIfReq = { ingredients: [{ ingredientId: s.ing.tomato, packSize: 5_000, packPriceCents: 90_000 }], items: [{ menuItemId: s.item.fajitaM, priceCents: 130_000 }] };
+    const whatIfOnMain = time(3, () => buildAnalytics(db, 'whatIf', whatIfReq, now, { longReads: false })).ms;
+    lines.push(`main thread: menu map (28 days) ${mapOnMain.toFixed(0)} ms; What-if ${whatIfOnMain.toFixed(0)} ms (the last 28 days' sales)`);
+
+    // 2. The real worker, built as for the till, on a file copy, while this thread keeps being the till.
+    const dir = mkdtempSync(join(tmpdir(), 'coc-bench9-'));
+    const file = join(dir, 'till.sqlite');
+    db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    const till = openTillFile(file);
+    await buildAnalyticsWorker({ outDir: dir });
+    const client = new AnalyticsWorkerClient({
+      spawn: () => new Worker(join(dir, WORKER_FILE), { workerData: { tag: WORKER_TAG, dbPath: file, driver: 'node:sqlite' } }),
+    });
+    client.start();
+    expect(await client.settled()).toBe('ready');
+    await client.run('overview', YEAR_REQ); // statements compiled, as the first report of the day does
+    const work = {
+      board: () => repos.listActiveOrders(till, {}),
+      ringAndSend: () => {
+        const t0 = performance.now();
+        const o = repos.createOrder(till, { mode: 'takeaway' }, CASHIER);
+        repos.addOrderItem(till, { orderId: o.id, menuItemId: s.item.fajitaM, quantity: 1, modifierIds: [s.choice.extraCheese], notes: null }, CASHIER);
+        repos.sendOrderToKitchen(till, o.id, CASHIER);
+        return performance.now() - t0;
+      },
+    };
+    let worstTab = 0;
+    let worstMain = 0;
+    for (const tab of PHASE9) {
+      await client.run(tab, YEAR_REQ); // its statements compiled
+      const probe = startTill(till, work);
+      const t0 = performance.now();
+      await client.run(tab, YEAR_REQ);
+      const ms = performance.now() - t0;
+      const p = probe.stop();
+      worstTab = Math.max(worstTab, ms);
+      worstMain = Math.max(worstMain, p.maxLag, p.maxBoard, p.maxSend);
+      lines.push(
+        `worker, ${tab}: year in ${ms.toFixed(0)} ms — ${verdict(ms, 2000)}; meanwhile slowest till call ${Math.max(p.maxBoard, p.maxSend).toFixed(1)} ms, event loop late by at most ${p.maxLag.toFixed(1)} ms`,
+      );
+    }
+    const tMap = performance.now();
+    await client.run('menuMap', undefined, now.toISOString());
+    const tIf = performance.now();
+    await client.run('whatIf', whatIfReq, now.toISOString());
+    const tDone = performance.now();
+    lines.push(`worker: menu map (28 days) ${(tIf - tMap).toFixed(0)} ms; What-if ${(tDone - tIf).toFixed(0)} ms`);
+    await client.stop();
+
+    // 3. The year with NO sale's cost kept: every order estimated from its stock rows.
+    db.exec(`DELETE FROM order_item_costs`);
+    db.exec(`UPDATE stock_movements SET value_cents = NULL, unit_cost_mc = NULL, cost_basis = NULL`);
+    const estFile = join(dir, 'till-estimated.sqlite');
+    db.exec(`VACUUM INTO '${estFile.replace(/'/g, "''")}'`);
+    const estWorker = async () => {
+      const c = new AnalyticsWorkerClient({
+        spawn: () => new Worker(join(dir, WORKER_FILE), { workerData: { tag: WORKER_TAG, dbPath: estFile, driver: 'node:sqlite' } }),
+      });
+      c.start();
+      expect(await c.settled()).toBe('ready');
+      await c.run('overview', YEAR_REQ); // the orders' statements compiled, as the first report of the day does
+      return c;
+    };
+    const timed = async (c: InstanceType<typeof AnalyticsWorkerClient>, tab: 'profit' | 'channels') => {
+      const t0 = performance.now();
+      const out = await c.run(tab, YEAR_REQ);
+      return { ms: performance.now() - t0, out };
+    };
+    const firstOpen = (ms: number) => (ms <= 2000 ? verdict(ms, 2000) : `over 2000 ms: on the shop PC, the Contingency R trigger (costing spec §6)`);
+    // Profit first (estimating every order), then Channels and Profit again with the estimates kept.
+    const estClient = await estWorker();
+    const coldProfit = await timed(estClient, 'profit');
+    const keptChannels = await timed(estClient, 'channels');
+    const keptProfit = await timed(estClient, 'profit');
+    await estClient.stop();
+    // Channels first, on a fresh worker.
+    const estClient2 = await estWorker();
+    const coldChannels = await timed(estClient2, 'channels');
+    await estClient2.stop();
+    const estimated = (coldProfit.out as { estimatedOrders: number }).estimatedOrders;
+    lines.push(
+      `every order estimated (${estimated} orders), first open — worker, profit: year in ${coldProfit.ms.toFixed(0)} ms — ${firstOpen(coldProfit.ms)}; channels: ${coldChannels.ms.toFixed(0)} ms — ${firstOpen(coldChannels.ms)}`,
+    );
+    lines.push(
+      `every order estimated, estimates kept — worker, channels: year in ${keptChannels.ms.toFixed(0)} ms — ${verdict(keptChannels.ms, 2000)}; profit: ${keptProfit.ms.toFixed(0)} ms — ${verdict(keptProfit.ms, 2000)}`,
+    );
+    expect(keptProfit.out).toEqual(coldProfit.out);
+    worstTab = Math.max(worstTab, keptChannels.ms, keptProfit.ms);
+    till.close();
+    rmSync(dir, { recursive: true, force: true });
+    lines.push(`budgets: a year tab ≤ 2 s — worst ${worstTab.toFixed(0)} ms, ${verdict(worstTab, 2000)}; no main-process call over 50 ms while one runs — worst ${worstMain.toFixed(1)} ms, ${verdict(worstMain, 50)}`);
+    // eslint-disable-next-line no-console
+    console.log(['', 'Reports bench, Phase 9 (node:sqlite; worker = the built analytics-worker.cjs):', ...lines.map((l) => `  ${l}`)].join('\n'));
+    expect(worstTab).toBeLessThanOrEqual(2_000);
   });
 });

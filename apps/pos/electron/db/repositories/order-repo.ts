@@ -1729,8 +1729,10 @@ export function orderChannelTermsId(orderId: string): string {
 /**
  * A foodpanda order's economics at payment (order_channel_terms, migration
  * 0039), in the tender's transaction: the deal as frozen on the order, the
- * shop's part and foodpanda's, the fees in force now and what they come to,
- * what foodpanda should pay, and the tablet's total with the difference.
+ * shop's part and foodpanda's, the fees in force now and what they come to
+ * (pos-domain foodpandaTerms, at foodpanda's prices when its menu is dearer),
+ * what foodpanda should pay, and the tablet's total with its difference from
+ * the one expected. Reports read it back through foodpandaOrderMoney.
  * Insert-only (a second tender of the same order never happens; the row is
  * never rewritten), and it never bumps orders.version.
  */
@@ -1769,7 +1771,8 @@ function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: nu
     commissionTaxCents: t.commissionTaxCents,
     expectedPayoutCents: t.expectedPayoutCents,
     tabletTotalCents,
-    tabletDiffCents: tabletTotalCents === null ? null : tabletTotalCents - (order.totalCents as number),
+    // Against what the tablet should show: the till's total at foodpanda's prices (Settings → foodpanda).
+    tabletDiffCents: tabletTotalCents === null ? null : tabletTotalCents - t.expectedTabletCents,
     settingsAt: fees.savedAt,
   };
   db.prepare(

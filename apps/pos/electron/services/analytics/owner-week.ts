@@ -6,8 +6,9 @@
  * order against last week by this time (report.view); food cost with how
  * much of it is known, and waste (COST_CAPABILITY only). Then ONE ranked
  * "Do this" list (4.17), each line with its rupees per week. Never rupee
- * profit (that is Phase 9's, behind profit.view): the sheet ranks dishes by
- * what they earn per sale but prints no profit figure.
+ * profit on the Dashboard card: the printed sheet ranks dishes by what they
+ * earn per sale, and — for profit.view only (Phase 9) — prints what one
+ * sale earns and the week's profit before overheads.
  *
  * "Do this" is a list of SOURCES (DO_THIS_SOURCES below), one per kind of
  * problem; pos-domain's collectDoThis runs the ones this login may see and
@@ -70,6 +71,7 @@ import {
 } from '../costing-service.js';
 import { COUNTED, IN_RANGE, firstOrderMs } from './sql.js';
 import { salesIn } from './trends.js';
+import { profitBeforeOverheads } from './profit.js';
 import { isVarianceDoThis, latestVariance, warmLatestVariance } from './stock-control.js';
 
 /**
@@ -82,6 +84,8 @@ import { isVarianceDoThis, latestVariance, warmLatestVariance } from './stock-co
 export interface OwnerWeekJob {
   week: OwnerWeekWhich;
   withCosts: boolean;
+  /** The printed sheet's profit lines (profit.view, Phase 9). Never on the Dashboard card. */
+  withProfit?: boolean;
   sheet?: boolean;
   /**
    * The second-till link as the main process sees it (the worker can't read
@@ -359,7 +363,7 @@ function unitsSold(db: AppDatabase, sinceIso: string, untilIso: string): Map<str
  * known, the three that earn the most per sale and the three that earn the
  * least (at menu price, today's costs — as Costing → Menu costs shows them).
  */
-function sheetDishes(ctx: OwnerWeekCtx, units: Map<string, number>): Pick<OwnerWeekSheet, 'earnsMost' | 'earnsLeast'> {
+function sheetDishes(ctx: OwnerWeekCtx, units: Map<string, number>, withProfit: boolean): Pick<OwnerWeekSheet, 'earnsMost' | 'earnsLeast'> {
   const costed = ctx
     .dishes()
     .filter((d) => (units.get(d.item.id) ?? 0) > 0 && !d.target.nonFood && d.pc.hasRecipe && d.pc.missingLines === 0 && d.pc.typicalPriceMc > 0)
@@ -369,6 +373,7 @@ function sheetDishes(ctx: OwnerWeekCtx, units: Map<string, number>): Pick<OwnerW
     name: d.item.name,
     soldThisWeek: units.get(d.item.id) ?? 0,
     foodCostBps: d.pc.foodCostBps,
+    profitPerSaleCents: withProfit ? d.pc.profitCents : null,
   });
   const most = costed.slice(0, SHEET_ITEMS);
   const least = costed.slice(Math.max(SHEET_ITEMS, costed.length - SHEET_ITEMS)).reverse();
@@ -395,7 +400,7 @@ export function buildOwnerWeek(db: AppDatabase, job: OwnerWeekJob, now: Date, op
     if (job.sheet) {
       let dishes: Pick<OwnerWeekSheet, 'earnsMost' | 'earnsLeast'> = { earnsMost: [], earnsLeast: [] };
       try {
-        dishes = sheetDishes(ctx, unitsSold(db, range.sinceIso, range.untilIso));
+        dishes = sheetDishes(ctx, unitsSold(db, range.sinceIso, range.untilIso), job.withProfit === true);
       } catch {
         // The sheet still prints its other lines; the list says a check could not run.
         list.failed.push('sheet');
@@ -421,8 +426,20 @@ export function buildOwnerWeek(db: AppDatabase, job: OwnerWeekJob, now: Date, op
       } catch {
         list.failed.push('stock_take');
       }
+      // Profit before overheads (Phase 9, profit.view): the Profit tab's waterfall over the week, and over last week.
+      let profit: OwnerWeekSheet['profit'] = null;
+      if (job.withProfit) {
+        try {
+          const now2 = profitBeforeOverheads(db, range);
+          const then = previous ? profitBeforeOverheads(db, { sinceIso: iso(w.previous.sinceMs), untilIso: iso(w.previous.untilMs) }) : null;
+          profit = { profitCents: now2.profitCents, unknownSalesCents: now2.unknownSalesCents, previousProfitCents: then?.profitCents ?? null };
+        } catch {
+          list.failed.push('profit');
+        }
+      }
       sheet = {
         ...dishes,
+        profit,
         lastStockTake,
         wasteByReason: food.wasteByReason,
         previousCosts: before
@@ -461,10 +478,15 @@ export function buildOwnerWeek(db: AppDatabase, job: OwnerWeekJob, now: Date, op
  * The owner's week as a login may read it (costing spec §2), in the main
  * process, so neither the card nor the printed sheet can carry more: without
  * COST_CAPABILITY no food cost, no waste (this week's or last week's), no
- * cost lines in "Do this" and no sheet dishes. (The worker already left the cost checks out for such a
+ * cost lines in "Do this" and no sheet dishes; without profit.view (Phase
+ * 9) no profit on the sheet. (The worker already left them out for such a
  * login; this holds whatever it sent.)
  */
-export function ownerWeekForLogin<T extends Pick<OwnerWeek, 'costs' | 'sheet' | 'doThis' | 'doThisMore'>>(week: T, canSeeCosts: boolean): T {
+export function ownerWeekForLogin<T extends Pick<OwnerWeek, 'costs' | 'sheet' | 'doThis' | 'doThisMore'>>(week: T, canSeeCosts: boolean, canSeeProfit = false): T {
+  if (canSeeCosts && !canSeeProfit && week.sheet) {
+    const noProfit = (i: OwnerWeekItem): OwnerWeekItem => (i.profitPerSaleCents === null ? i : { ...i, profitPerSaleCents: null });
+    return { ...week, sheet: { ...week.sheet, profit: null, earnsMost: week.sheet.earnsMost.map(noProfit), earnsLeast: week.sheet.earnsLeast.map(noProfit) } };
+  }
   if (canSeeCosts) return week;
   const kept = week.doThis.filter((i) => !i.cost);
   return { ...week, costs: null, sheet: null, doThis: kept, doThisMore: kept.length === week.doThis.length ? week.doThisMore : 0 };

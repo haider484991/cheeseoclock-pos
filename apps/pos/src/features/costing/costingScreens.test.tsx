@@ -100,6 +100,13 @@ describe('Costing screens', () => {
     expect(html).toContain('39%');
     expect(html).toContain('price missing');
     expect(html).not.toContain('Test Delivery');
+    // What you keep is profit (profit.view): the owner's column, never a manager's (owner, 2026-09-27).
+    expect(html).not.toContain('You keep');
+    expect(html).not.toContain('Rs 900');
+    signIn('admin');
+    const owner = render(<MenuCostsTab onShowMissing={() => {}} onShowTargets={() => {}} />, [[['costing', 'menuCosts'], view]]);
+    expect(owner).toContain('You keep per sale');
+    expect(owner).toContain('Rs 900');
   });
 
   it('Missing costs: each list with the step that fixes it', () => {

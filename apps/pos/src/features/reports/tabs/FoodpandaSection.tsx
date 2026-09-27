@@ -4,6 +4,11 @@
  * shop keeps, from the terms each order kept when it was paid — and the
  * orders to tick off against foodpanda's statement (no foodpanda number, or
  * a tablet total that differs, first). The owner's alone, like all of Reports.
+ *
+ * Every figure comes from the one per-order rule (pos-domain
+ * foodpandaOrderMoney) that Reports → Profit uses too: "foodpanda kept" is
+ * the foodpanda row's "foodpanda kept" in "What each order type earns", and
+ * the price uplift that row's — never a second figure for the same thing.
  */
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
@@ -44,7 +49,9 @@ export function foodpandaEstimateNote(
 export function FoodpandaSection({ foodpanda: fp }: { foodpanda: ReportFoodpanda | null | undefined }) {
   const check = useShowAll(fp?.toCheck ?? [], 12);
   if (!fp) return null;
-  const keeps = fp.commissionCents + fp.feeCents + fp.commissionTaxCents;
+  // foodpanda dearer than the till: the tablet is checked against the till's total at its prices.
+  const showExpected = fp.toCheck.some((l) => l.expectedTabletCents !== l.tillTotalCents);
+  const keeps = fp.foodpandaKeepsCents;
   return (
     <Section
       id="foodpanda"
@@ -64,13 +71,18 @@ export function FoodpandaSection({ foodpanda: fp }: { foodpanda: ReportFoodpanda
           value={formatCents(keeps)}
           sub={`Commission ${formatCents(fp.commissionCents)}${fp.feeCents > 0 ? ` · fees ${formatCents(fp.feeCents)}` : ''}${fp.commissionTaxCents > 0 ? ` · tax ${formatCents(fp.commissionTaxCents)}` : ''}`}
         />
-        <Kpi label="You keep" value={formatCents(fp.youKeepCents)} sub="Before tax and food cost" big />
+        <Kpi
+          label="You keep"
+          value={formatCents(fp.youKeepCents)}
+          sub={fp.upliftCents !== 0 ? `With ${formatCents(fp.upliftCents)} from foodpanda’s dearer menu · before tax and food cost` : 'Before tax and food cost'}
+          big
+        />
       </div>
 
       <div className="mt-3 space-y-2">
         <Note>
           foodpanda should pay you about <span className="font-semibold">{formatCents(fp.expectedPayoutCents)}</span> for these
-          orders (the bills with tax, less what foodpanda keeps).
+          orders (the bills with tax{fp.upliftCents !== 0 ? ' at foodpanda’s prices' : ''}, less what foodpanda keeps).
           {fp.foodCost && (
             <>
               {' '}
@@ -89,7 +101,8 @@ export function FoodpandaSection({ foodpanda: fp }: { foodpanda: ReportFoodpanda
         note={
           <>
             Tick these off against foodpanda’s statement. First each day: no foodpanda number ({fp.missingCodeCount}) or a
-            tablet total more than Rs 1 away from the till’s ({fp.tabletDiffCount}).
+            tablet total more than Rs 1 away from what it should show ({fp.tabletDiffCount}) — the till’s total, at foodpanda’s
+            prices when its menu is dearer.
           </>
         }
       >
@@ -99,6 +112,7 @@ export function FoodpandaSection({ foodpanda: fp }: { foodpanda: ReportFoodpanda
             { label: 'Order' },
             { label: 'foodpanda #' },
             { label: 'Till total', right: true },
+            ...(showExpected ? [{ label: 'Tablet should show', right: true }] : []),
             { label: 'Tablet total', right: true },
             { label: 'Difference', right: true },
           ]}
@@ -111,6 +125,7 @@ export function FoodpandaSection({ foodpanda: fp }: { foodpanda: ReportFoodpanda
               <span key="c" className="font-semibold text-amber-700 dark:text-amber-300">None typed</span>
             ),
             formatCents(l.tillTotalCents),
+            ...(showExpected ? [formatCents(l.expectedTabletCents)] : []),
             l.tabletTotalCents === null ? '—' : formatCents(l.tabletTotalCents),
             <span key="d" className={cn(l.differs && 'font-semibold text-amber-700 dark:text-amber-300')}>
               {l.diffCents === null ? '—' : `${l.diffCents > 0 ? '+' : l.diffCents < 0 ? '−' : ''}${formatCents(Math.abs(l.diffCents))}`}

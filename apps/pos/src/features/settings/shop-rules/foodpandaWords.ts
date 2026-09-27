@@ -62,6 +62,7 @@ export function feesSummary(fees: FoodpandaFees): string {
   ];
   if (fees.fixedFeeCents > 0) parts.push(`${formatCents(fees.fixedFeeCents)} an order`);
   if (fees.commissionTaxBps > 0) parts.push(`${percentFromBps(fees.commissionTaxBps)} tax on it`);
+  if (fees.upliftBps > 0) parts.push(`menu ${percentFromBps(fees.upliftBps)} above the till`);
   return parts.join(' · ');
 }
 
@@ -72,15 +73,19 @@ export function checksSummary(checks: FoodpandaChecks): string {
 /**
  * The worked example under the card, e.g. "A Rs 2,000 foodpanda order with
  * 20% off that you pay: the bill shows Rs 1,600 + tax; foodpanda keeps 25%
- * of Rs 1,600 = Rs 400; you keep Rs 1,200 before food cost." The order is
- * Rs 2,000, or the deal's minimum when that is more.
+ * of Rs 1,600 = Rs 400; you keep Rs 1,200 before food cost." With a dearer
+ * foodpanda menu it says the listing and the bill at foodpanda's prices
+ * ("(Rs 2,200 on your listing, 10% above the till)", "Rs 1,760 at
+ * foodpanda's prices"), which the commission is on. The order is Rs 2,000,
+ * or the deal's minimum when that is more.
  */
 export function workedExample(deal: FoodpandaDeal, fees: FoodpandaFees): string {
   const orderCents = Math.max(200_000, deal.minOrderCents ?? 0);
   const x = foodpandaExample(deal, fees, orderCents);
-  const order = `A ${formatCents(x.orderCents)} foodpanda order`;
+  const listing = x.upliftBps > 0 ? ` (${formatCents(x.listingOrderCents)} on your listing, ${percentFromBps(x.upliftBps)} above the till)` : '';
+  const order = `A ${formatCents(x.orderCents)} foodpanda order${listing}`;
   let lead: string;
-  let bill = `the bill shows ${formatCents(x.billCents)} + tax`;
+  let bill = `the bill shows ${formatCents(x.billCents)} + tax${x.upliftBps > 0 ? `, ${formatCents(x.billAtFoodpandaCents)} at foodpanda's prices` : ''}`;
   if (x.dealPercent === 0) {
     lead = `${order} with no deal`;
   } else {

@@ -24,7 +24,15 @@ import {
   type TillLinkState,
 } from '@cheeseoclock/shared-types';
 import { BUSINESS_SETTING_READ_SCHEMAS } from '@cheeseoclock/shared-schemas';
-import { activeFoodpandaDeal, dealAmount, foodpandaDealLabel, foodpandaDealRule, foodpandaTerms, shareBps } from '@cheeseoclock/pos-domain';
+import {
+  activeFoodpandaDeal,
+  atFoodpandaPrices,
+  dealAmount,
+  foodpandaDealLabel,
+  foodpandaDealRule,
+  foodpandaTerms,
+  shareBps,
+} from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 import { readBusinessSettingRow, readShopSetting, type ShopSettingInUse } from '../db/business-settings-read.js';
 import { businessSettingId } from '../db/business-settings-ids.js';
@@ -43,12 +51,14 @@ export function getShopSettings(db: AppDatabase): ShopSettings {
 /**
  * What the counter needs to take an order (checkout:getRules), for any
  * signed-in login: the foodpanda deal an order started now gets (its % and
- * label, never who saved it) and what Pay asks. Never the commission, fees
- * or costs.
+ * label, never who saved it), what Pay asks, and how much dearer the
+ * foodpanda listing is (a price: the tablet's total is the till's at those
+ * prices). Never the commission, fees or costs.
  */
 export function checkoutRules(db: AppDatabase, now: Date = new Date()): CheckoutRules {
   const deal = readShopSetting(db, 'foodpanda.deal').value;
   const checks = readShopSetting(db, 'foodpanda.checks').value;
+  const { upliftBps } = readShopSetting(db, 'foodpanda.fees').value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
   return {
     foodpanda: {
@@ -63,46 +73,56 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
         : null,
       checks: { orderCode: checks.orderCode, tabletTotal: checks.tabletTotal },
       tabletToleranceCents: FOODPANDA_TABLET_TOLERANCE_CENTS,
+      upliftBps,
     },
   };
 }
 
 /**
  * The Costing item sheet's "On foodpanda" line for a typical plate: the
- * price after the deal a foodpanda order started now gets (the shop's part),
- * and — for the owner only — foodpanda's commission and what the shop keeps.
- * The deal's minimum is about the whole order, not one plate: the plate is
- * worked out as part of an order that reaches it (a Rs 800 burger on a
- * "from Rs 1,000" deal still sells at the deal's price in a bigger order),
- * and the sheet says the minimum in words. Null when the item has no price.
+ * listing price (the till's at foodpanda's prices), what it sells for after
+ * the shop's part of the deal a foodpanda order started now gets — the same
+ * foodpandaTerms as Pay, the kept terms and Reports — and, with profit.view
+ * only (`withProfit`: the owner), foodpanda's commission and what the shop
+ * keeps. The main process decides `withProfit` (costing:itemSheet), so a
+ * manager's sheet never carries them. The deal's minimum is about the whole
+ * order, not one plate: the plate is worked out as part of an order that
+ * reaches it (a Rs 800 burger on a "from Rs 1,000" deal still sells at the
+ * deal's price in a bigger order), and the sheet says the minimum in words.
+ * Null when the item has no price.
  */
 export function itemFoodpandaLine(
   db: AppDatabase,
   plate: { priceCents: number; costCents: number },
-  withOwnerFigures: boolean,
+  withProfit: boolean,
   now: Date = new Date(),
 ): ItemFoodpandaLine | null {
   if (!(plate.priceCents > 0)) return null;
   const deal = activeFoodpandaDeal(readShopSetting(db, 'foodpanda.deal').value, now.toISOString());
   const amount = deal ? dealAmount({ ...foodpandaDealRule(deal, null), minOrderCents: null }, plate.priceCents) : { shopCents: 0 };
-  const after = plate.priceCents - amount.shopCents;
-  let owner: ItemFoodpandaLine['owner'] = null;
-  if (withOwnerFigures) {
-    const fees = readShopSetting(db, 'foodpanda.fees').value;
-    const t = foodpandaTerms({ subtotalCents: plate.priceCents, shopDiscountCents: amount.shopCents, totalCents: after }, fees);
-    owner = {
-      commissionBps: fees.commissionBps,
-      confirmed: fees.confirmed,
-      foodpandaKeepsCents: t.foodpandaKeepsCents,
-      youKeepCents: t.youKeepCents,
-      foodCostOfKeptBps: shareBps(plate.costCents, t.youKeepCents),
-    };
-  }
+  const fees = readShopSetting(db, 'foodpanda.fees').value;
+  // One plate on its own bill, before tax: the order's value at foodpanda's prices is what it sells for.
+  const t = foodpandaTerms(
+    { subtotalCents: plate.priceCents, shopDiscountCents: amount.shopCents, totalCents: plate.priceCents - amount.shopCents },
+    fees,
+  );
+  const after = plate.priceCents - amount.shopCents + t.upliftCents;
+  const owner: ItemFoodpandaLine['owner'] = withProfit
+    ? {
+        commissionBps: fees.commissionBps,
+        confirmed: fees.confirmed,
+        foodpandaKeepsCents: t.foodpandaKeepsCents,
+        youKeepCents: t.youKeepCents,
+        foodCostOfKeptBps: shareBps(plate.costCents, t.youKeepCents),
+      }
+    : null;
   return {
     dealPercent: deal?.percent ?? 0,
     shopPercent: deal ? Math.min(deal.shopPercent, deal.percent) : 0,
     minOrderCents: deal?.minOrderCents ?? null,
     priceCents: plate.priceCents,
+    upliftBps: fees.upliftBps,
+    listingPriceCents: atFoodpandaPrices(plate.priceCents, fees.upliftBps),
     priceAfterDealCents: after,
     foodCostBps: shareBps(plate.costCents, after),
     owner,
@@ -169,6 +189,7 @@ export function getShopSettingCard<K extends ShopSettingKey>(
     // default" writes the default's values, so a saved row can be the default).
     isDefault: !inUse.newerFormat && sameSettingValue(inUse.value, defaultValue),
     readOnly: inUse.newerFormat,
+    ...(key === 'foodpanda.fees' ? { carriedOver: inUse.carriedOver } : {}),
     lastChanged: row
       ? {
           at: row.updatedAt,

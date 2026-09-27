@@ -95,7 +95,17 @@ export type Capability =
    * login sees the Live Orders board and the orders of the shift open now
    * (Recent Orders) only (owner, 2026-09-26).
    */
-  | 'order.history';
+  | 'order.history'
+  /**
+   * Rupee profit (costing spec D6, Phase 9): what the shop keeps — the
+   * Profit tab of Reports, profit per dish, category and channel,
+   * foodpanda commission and rider cost, the menu map, Costing → What-if,
+   * "price to hit target" and every "you keep" on Costing. The owner's alone
+   * (owner question 8, answered 2026-09-27: managers keep costs but see no
+   * profit anywhere). Profit shows what a dish costs as well, so every check
+   * also needs COST_CAPABILITY. Cashiers never.
+   */
+  | 'profit.view';
 
 export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
   admin: new Set<Capability>([
@@ -116,13 +126,16 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'riders.manage',
     'customers.manage',
     'order.history',
+    'profit.view',
   ]),
   // A manager runs the shift: closes it with the drawer count, approves what
   // a cashier can't do alone, and looks after the menu, stock and customers.
   // No Reports (sales figures, the Dashboard's "This week" card, shift
   // history) and no Settings (printers, sounds, backups): those are the
   // owner's (owner, 2026-09-27: "managers can't see the reports and
-  // settings").
+  // settings"). No profit either (profit.view, costing spec Phase 9, owner
+  // question 8 answered the same day): a manager sees what dishes cost, not
+  // what the shop keeps.
   manager: new Set<Capability>([
     'menu.manage',
     'order.create',
@@ -168,6 +181,16 @@ export const hasCapability = (role: Role, capability: Capability): boolean =>
  * Cashiers never see costs.
  */
 export const COST_CAPABILITY = 'menu.manage' as const satisfies Capability;
+
+/**
+ * Who may see rupee profit (costing spec D6, Phase 9): the Profit tab, profit
+ * per dish / category / channel, contribution after foodpanda commission and
+ * rider cost, the menu map, What-if, "price to hit target" and what you keep
+ * per sale on Costing. The owner only (2026-09-27); managers see costs, not
+ * profit. Profit also says what a dish costs, so the main process asks for
+ * COST_CAPABILITY as well wherever it asks for this. Cashiers never see it.
+ */
+export const PROFIT_CAPABILITY = 'profit.view' as const satisfies Capability;
 
 /**
  * The namespace for this project's name-based (v5) ids (costing spec D13):

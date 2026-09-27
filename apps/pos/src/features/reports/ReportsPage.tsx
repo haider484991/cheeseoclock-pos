@@ -2,8 +2,9 @@
  * Reports — how the shop did, a tab at a time (costing spec Phase 3).
  *
  * One period at a time (Today, This week… This year), compared with the
- * same stretch just before. Six tabs — Overview, When, Menu, Channels &
- * delivery, Food cost & stock, Team & leakage — each loads only its own
+ * same stretch just before. Seven tabs — Overview, When, Menu, Channels &
+ * delivery, Food cost & stock, Team & leakage, Profit (costing spec Phase 9,
+ * profit.view) — each loads only its own
  * figures from its own channel (reports:<tab>), worked out in the till's
  * Reports worker thread so a year never holds up the counter. Every figure
  * comes from the till's stored order totals. Print and "Download for Excel"
@@ -16,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import {
   COST_CAPABILITY,
+  PROFIT_CAPABILITY,
   REPORT_TAB_LABEL,
   STOCK_COUNT_SCOPE_LABEL,
   type DayNoteInput,
@@ -28,6 +30,7 @@ import {
   BarChart3,
   CalendarDays,
   Clock,
+  Coins,
   FileSpreadsheet,
   Loader2,
   Printer,
@@ -70,10 +73,11 @@ import { browserStorage, readLastTab, tabQueryKey, tabRequest, visibleReportTabs
 import { Note } from './reportUi';
 import { OverviewTab } from './tabs/OverviewTab';
 import { WhenTab } from './tabs/WhenTab';
-import { MenuTab } from './tabs/MenuTab';
+import { MenuTab, type MenuMapView } from './tabs/MenuTab';
 import { ChannelsTab } from './tabs/ChannelsTab';
 import { FoodCostStockTab } from './tabs/FoodCostStockTab';
 import { TeamLeakageTab } from './tabs/TeamLeakageTab';
+import { ProfitTab } from './tabs/ProfitTab';
 import type { DayNoteEditor } from './tabs/WhenExtras';
 import { buildWeeklySheet, WeeklySheetButtons } from './WeeklySheet';
 import { dayNoteAddedText } from './ownerWeekFormat';
@@ -105,6 +109,7 @@ const TAB_ICON: Record<ReportTab, LucideIcon> = {
   channels: Store,
   foodStock: Wheat,
   team: UsersRound,
+  profit: Coins,
 };
 
 /** Each tab's channel. */
@@ -115,6 +120,7 @@ const FETCH: { [K in ReportTab]: (req: ReturnType<typeof tabRequest>) => Promise
   channels: (req) => ipc.reports.channels(req),
   foodStock: (req) => ipc.reports.foodStock(req),
   team: (req) => ipc.reports.team(req),
+  profit: (req) => ipc.reports.profit(req),
 };
 
 /** A tab's figures with the tab and the period they are for, so screen, paper and file always pair them. */
@@ -138,11 +144,13 @@ const TRENDS_KEY = ['reports', 'trends'] as const;
 
 export function ReportsPage() {
   const canSeeCosts = useSessionStore((s) => s.can(COST_CAPABILITY));
-  const tabs = useMemo(() => visibleReportTabs(canSeeCosts), [canSeeCosts]);
+  // Rupee profit (costing spec Phase 9): profit.view, and costs (profit says what things cost).
+  const canSeeProfit = useSessionStore((s) => s.can(PROFIT_CAPABILITY)) && canSeeCosts;
+  const tabs = useMemo(() => visibleReportTabs(canSeeCosts, canSeeProfit), [canSeeCosts, canSeeProfit]);
   // A link from a finished stock take or the Dashboard: Food cost & stock, between those two stock takes.
   const deepLink = useOneShotLink<ReportsDeepLink>(REPORTS_DEEP_LINK);
   const [chosenTab, setChosenTab] = useState<ReportTab>(() =>
-    deepLink ? 'foodStock' : readLastTab(browserStorage(), visibleReportTabs(canSeeCosts)),
+    deepLink ? 'foodStock' : readLastTab(browserStorage(), visibleReportTabs(canSeeCosts, canSeeProfit)),
   );
   const tab: ReportTab = tabs.includes(chosenTab) ? chosenTab : 'overview';
   const [preset, setPreset] = useState<RangePreset>(deepLink ? 'stockTakes' : 'today');
@@ -236,6 +244,25 @@ export function ReportsPage() {
             error: stockCounts.isLoading ? null : 'This needs two finished stock takes. Count under Inventory → Stock takes, and again a week later.',
           };
   const varianceForPaper = stockTakes && varianceQ.data ? varianceQ.data : undefined;
+  // Menu → the menu map (costing spec Phase 9, profit.view): the last 28 days, or the period picked.
+  const [menuMapLastDays, setMenuMapLastDays] = useState(true);
+  const menuMapReq = menuMapLastDays ? undefined : { sinceIso: period.sinceIso, untilIso: period.untilIso };
+  const menuMapQ = useQuery({
+    queryKey: ['reports', 'menuMap', menuMapReq?.sinceIso ?? null, menuMapReq?.untilIso ?? null],
+    queryFn: () => ipc.reports.menuMap(menuMapReq),
+    enabled: tab === 'menu' && canSeeProfit,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const menuMap: MenuMapView | null = canSeeProfit
+    ? {
+        data: menuMapQ.data,
+        loading: menuMapQ.isFetching,
+        error: menuMapQ.isError ? (menuMapQ.error instanceof Error ? menuMapQ.error.message : 'The menu map could not be worked out.') : null,
+        lastDays: menuMapLastDays,
+        setLastDays: setMenuMapLastDays,
+      }
+    : null;
   // Overview's trend strip and 12 months (costing spec Phase 7): not tied to
   // the period; refreshed every 5 minutes while on screen.
   const trends = useQuery({
@@ -283,7 +310,7 @@ export function ReportsPage() {
     setPrintingWeek(true);
     try {
       const data = await ipc.reports.ownerWeek({ week, sheet: true });
-      setPrintJob({ id: Date.now(), html: buildWeeklySheet(data, { canSeeCosts }) });
+      setPrintJob({ id: Date.now(), html: buildWeeklySheet(data, { canSeeCosts, canSeeProfit }) });
     } catch (e) {
       toast({ title: 'Could not print the week', description: e instanceof Error ? e.message : 'Please try again.', variant: 'error' });
     } finally {
@@ -351,7 +378,19 @@ export function ReportsPage() {
               })
               .catch(() => undefined)
           : undefined;
-      setPrintJob({ id: Date.now(), html: buildPrintEverything(all, period, new Date(), { trends: trendsNow, variance: varianceNow }) });
+      // The menu map goes with Menu for profit.view.
+      const menuMapNow =
+        canSeeProfit && tabs.includes('menu')
+          ? await queryClient
+              .fetchQuery({
+                queryKey: ['reports', 'menuMap', menuMapReq?.sinceIso ?? null, menuMapReq?.untilIso ?? null],
+                queryFn: () => ipc.reports.menuMap(menuMapReq),
+                staleTime: 60_000,
+                retry: false,
+              })
+              .catch(() => undefined)
+          : undefined;
+      setPrintJob({ id: Date.now(), html: buildPrintEverything(all, period, new Date(), { trends: trendsNow, variance: varianceNow, menuMap: menuMapNow }) });
     } catch (e) {
       toast({ title: 'Could not print everything', description: e instanceof Error ? e.message : 'Please try again.', variant: 'error' });
     } finally {
@@ -372,7 +411,7 @@ export function ReportsPage() {
             <Button
               variant="secondary"
               disabled={!result || stale}
-              onClick={() => result && setPrintJob({ id: Date.now(), html: printTab(result, { trends: trends.data, variance: varianceForPaper }) })}
+              onClick={() => result && setPrintJob({ id: Date.now(), html: printTab(result, { trends: trends.data, variance: varianceForPaper, menuMap: menuMapQ.data }) })}
             >
               <Printer className="h-4 w-4" />
               Print this tab
@@ -380,7 +419,9 @@ export function ReportsPage() {
             <Button
               variant="secondary"
               disabled={!result || stale}
-              onClick={() => result && downloadText(csvFileName(result.period, result.tab), csvTab(result, { trends: trends.data, variance: varianceForPaper }))}
+              onClick={() =>
+                result && downloadText(csvFileName(result.period, result.tab), csvTab(result, { trends: trends.data, variance: varianceForPaper, menuMap: menuMapQ.data }))
+              }
             >
               <FileSpreadsheet className="h-4 w-4" />
               Download for Excel
@@ -550,6 +591,7 @@ export function ReportsPage() {
               }}
               notes={noteEditor}
               variance={variance}
+              menuMap={menuMap}
             />
           ) : tab === 'overview' ? (
             <OverviewTab data={undefined} />
@@ -582,6 +624,7 @@ function TabBody({
   trends,
   notes,
   variance,
+  menuMap,
 }: {
   result: TabResult;
   now: Date;
@@ -589,6 +632,7 @@ function TabBody({
   trends: NonNullable<Parameters<typeof OverviewTab>[0]['trends']>;
   notes: DayNoteEditor;
   variance: VarianceView | null;
+  menuMap: MenuMapView | null;
 }) {
   switch (result.tab) {
     case 'overview':
@@ -596,12 +640,14 @@ function TabBody({
     case 'when':
       return <WhenTab data={result.data} period={result.period} now={now} notes={notes} />;
     case 'menu':
-      return <MenuTab data={result.data} />;
+      return <MenuTab data={result.data} menuMap={menuMap} />;
     case 'channels':
       return <ChannelsTab data={result.data} />;
     case 'foodStock':
       return <FoodCostStockTab data={result.data} lowStockCount={lowStockCount} variance={variance} />;
     case 'team':
       return <TeamLeakageTab data={result.data} />;
+    case 'profit':
+      return <ProfitTab data={result.data} />;
   }
 }

@@ -13,15 +13,23 @@
  *   - managers and the owner keep all of it;
  *   - costs (the Costing page, the batch calculator's rupees, the recipe
  *     calculator's) are refused to the counter the same way, and the
- *     food-cost targets are the owner's alone; the recipe calculator's
- *     quantities and its prep list are stock, so managers' too;
- *   - Reports (every tab's channel, low stock, the owner's week, day notes,
- *     the stock-take variance, the shift history list) and this till's
- *     printer settings are the owner's alone since 2026-09-27 ("managers
- *     can't see the reports and settings"): refused to the counter AND to
- *     managers, in the handlers' plain words, and nothing is written; a
- *     manager keeps everything else it had (closing the shift, stock,
- *     stock takes, costs, customers, order history);
+ *     food-cost targets, the payment fees and the rider cost (costing spec
+ *     Phase 9: managers read them) are the owner's alone to change; the
+ *     recipe calculator's quantities and its prep list are stock, so
+ *     managers' too;
+ *   - Reports (every tab's channel with the Profit tab, low stock, the menu
+ *     map, the owner's week, day notes, the stock-take variance, the shift
+ *     history list) and this till's printer settings are the owner's alone
+ *     since 2026-09-27 ("managers can't see the reports and settings"):
+ *     refused to the counter AND to managers, in the handlers' plain words,
+ *     and nothing is written; a manager keeps everything else it had
+ *     (closing the shift, stock, stock takes, costs, customers, order
+ *     history);
+ *   - profit likewise (costing spec Phase 9, owner 2026-09-27: managers keep
+ *     costs but see no profit): Costing → What-if is refused to the counter
+ *     as costs and to managers as profit, in plain words; foodpanda's
+ *     commission (the cost sheet's foodpanda line, the terms on Targets &
+ *     fees) is left out for a manager;
  *   - the owner's shop rules (Settings → foodpanda …, 2026-09-27) are the
  *     owner's alone: every set channel is refused to a cashier AND to a
  *     manager in the main process, and nothing is written; the counter reads
@@ -42,6 +50,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { COST_CAPABILITY, PROFIT_CAPABILITY, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser, OrderStatus, UUID } from '@cheeseoclock/shared-types';
 import { BOARD_STATUSES, KITCHEN_TICKET_STATUSES, RECENT_AT_COUNTER_LIMIT } from '@cheeseoclock/pos-domain';
 
@@ -380,6 +389,9 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'inventory:stockCountOne': { ingredientId: 'no-such-ingredient', countedQty: 1_000 },
   // How many tills take orders (read by managers).
   'costing:getTills': undefined,
+  // foodpanda's commission, payment fees and the rider cost (costing spec
+  // Phase 9): costs, read by managers; only the owner changes them (OWNER_ONLY).
+  'costing:getChannelFees': undefined,
 });
 
 /**
@@ -409,10 +421,29 @@ const REPORTS = (): Record<string, unknown> => ({
   'reports:variance': undefined,
   // Shift history: every past shift with its totals.
   'shifts:list': {},
+  // Profit (costing spec Phase 9): the Profit tab and the menu map. Reports
+  // first (report.view), then profit.view and costs: a manager hears the
+  // Reports words.
+  'reports:profit': REPORT_TODAY(),
+  'reports:menuMap': undefined,
 });
 
 /** What a REPORTS channel says to a login without report.view (guards.ts REFUSED, shown as it is). */
 const reportsRefusal = (channel: string) => (channel === 'shifts:list' ? REFUSED['shiftHistory'] : REFUSED['reports']);
+
+/**
+ * Profit outside Reports (profit.view, costing spec Phase 9): the owner's
+ * alone since 2026-09-27 (owner question 8: managers keep costs, see no
+ * profit). The counter is refused as costs (it has none), a manager as
+ * profit — see profitRefusal.
+ */
+const PROFIT = (): Record<string, unknown> => ({
+  // Costing → What-if: prices tried against the last 4 weeks, never saved.
+  'costing:whatIf': { ingredients: [], items: [] },
+});
+
+/** What a PROFIT channel says: costs first (the counter), then profit (a manager). */
+const profitRefusal = (who: AuthenticatedUser) => (who.role === 'cashier' ? REFUSED['costs'] : REFUSED['profit']);
 
 /**
  * This till's printer settings and the drawer test (printer.manage): the
@@ -441,6 +472,11 @@ const OWNER_ONLY = (): Record<string, unknown> => ({
   'reports:setDayparts': { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 15 }, { name: 'Dinner', fromHour: 19, toHour: 23 }] },
   // How many tills take orders (settings.manage, costing spec Phase 8).
   'costing:setTills': { sellingTills: 2 },
+  // Payment fees and the rider cost (settings.manage, costing spec Phase 9); foodpanda's terms are Settings → foodpanda's.
+  'costing:setChannelFees': {
+    fees: { paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
+    riderCost: { mode: 'zone_rate', fixedCents: 0 },
+  },
   // FBR's settings and sending the failed invoices again (settings.manage: never a manager's).
   'fbr:setConfig': { mode: 'noop' },
   'fbr:retryFailed': undefined,
@@ -461,7 +497,7 @@ const SHOP_SETTINGS_OWNER_ONLY = (): Record<string, unknown> => ({
 /** Every way a shop rule can be saved: each key, and "Put back the default". */
 const SHOP_SETTING_SAVES = (): unknown[] => [
   { key: 'foodpanda.deal', value: { v: 1, percent: 20, shopPercent: 10, minOrderCents: 50_000, maxOffCents: 40_000, startsOn: null, endsOn: null } },
-  { key: 'foodpanda.fees', value: { v: 1, commissionBps: 2_200, confirmed: true, base: 'after_deal', fixedFeeCents: 2_000, commissionTaxBps: 1_600 } },
+  { key: 'foodpanda.fees', value: { v: 1, commissionBps: 2_200, confirmed: true, base: 'after_deal', fixedFeeCents: 2_000, commissionTaxBps: 1_600, upliftBps: 0 } },
   { key: 'foodpanda.checks', value: { v: 1, orderCode: 'required', tabletTotal: 'required' } },
   { key: 'foodpanda.deal', useDefault: true },
   { key: 'foodpanda.fees', useDefault: true },
@@ -583,10 +619,10 @@ const BEING_ADDED_ELSEWHERE: string[] = [];
 // ------------------------------------------------------------------ tests --
 
 describe.skipIf(!Sqlite)('a cashier is refused the manager areas, in the main process', () => {
-  it('every new manager channel, and Reports, says no, in plain words, and changes nothing', async () => {
+  it('every new manager channel, Reports and profit say no, in plain words, and change nothing', async () => {
     h.session = CASHIER;
     const before = writtenRows();
-    for (const [channel, payload] of Object.entries({ ...COUNTER_REFUSED(), ...REPORTS() })) {
+    for (const [channel, payload] of Object.entries({ ...COUNTER_REFUSED(), ...REPORTS(), ...PROFIT() })) {
       const o = await call(channel, payload);
       expect({ channel, code: o.ok ? 'ok' : o.code }).toEqual({ channel, code: 'forbidden' });
       // Reports are the owner's alone since 2026-09-27; the rest a manager can do.
@@ -610,8 +646,8 @@ describe.skipIf(!Sqlite)('a cashier is refused the manager areas, in the main pr
 
   it('nobody signed in: every new or narrowed channel says "not logged in"', async () => {
     h.session = null;
-    const payloads = { ...COUNTER_REFUSED(), ...REPORTS(), ...COUNTER_ALLOWED() } as Record<string, unknown>;
-    for (const channel of [...Object.keys(COUNTER_REFUSED()), ...Object.keys(REPORTS()), ...COUNTER_SCOPED]) {
+    const payloads = { ...COUNTER_REFUSED(), ...REPORTS(), ...PROFIT(), ...COUNTER_ALLOWED() } as Record<string, unknown>;
+    for (const channel of [...Object.keys(COUNTER_REFUSED()), ...Object.keys(REPORTS()), ...Object.keys(PROFIT()), ...COUNTER_SCOPED]) {
       const o = await call(channel, payloads[channel] ?? { orderId: s.paidNow, id: s.paidNow, phone: '03001234567', shiftId: s.openNow });
       expect({ channel, code: o.ok ? 'ok' : o.code }).toEqual({ channel, code: 'unauthenticated' });
     }
@@ -654,6 +690,42 @@ describe.skipIf(!Sqlite)("the owner's alone", () => {
     h.session = OWNER;
     const lockedOut: string[] = [];
     for (const [channel, payload] of Object.entries({ ...REPORTS(), ...PRINTER_SETTINGS() })) {
+      const why = lockedOutBy(channel, await call(channel, payload));
+      if (why) lockedOut.push(`${channel} — ${why}`);
+    }
+    expect(lockedOut).toEqual([]);
+  });
+
+  it('profit too (costing spec Phase 9, owner 2026-09-27): the counter is refused as costs, a manager as profit, nothing is written; the owner may', async () => {
+    // The role table itself: profit.view is the owner's, costs are managers' too.
+    expect([hasCapability('admin', PROFIT_CAPABILITY), hasCapability('manager', PROFIT_CAPABILITY), hasCapability('cashier', PROFIT_CAPABILITY)]).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect(hasCapability('manager', COST_CAPABILITY)).toBe(true);
+    expect(REFUSED['profit']).toBe('Only the owner can see profit.');
+    const before = writtenRows();
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      for (const [channel, payload] of Object.entries(PROFIT())) {
+        expect({ channel, who: who.role, o: await call(channel, payload) }).toEqual({
+          channel,
+          who: who.role,
+          o: { ok: false, code: 'forbidden', message: profitRefusal(who) },
+        });
+      }
+    }
+    expect(writtenRows()).toEqual(before);
+    // A manager keeps the card fees and the rider cost, but not foodpanda's commission (profit): the
+    // main process leaves Settings → foodpanda's terms out of Targets & fees for anyone but the owner.
+    h.session = MANAGER;
+    const forManager = await call('costing:getChannelFees');
+    expect(forManager).toMatchObject({ ok: true, data: { foodpanda: null } });
+    h.session = OWNER;
+    expect(await call('costing:getChannelFees')).toMatchObject({ ok: true, data: { foodpanda: { fees: { commissionBps: 2_500 } } } });
+    const lockedOut: string[] = [];
+    for (const [channel, payload] of Object.entries(PROFIT())) {
       const why = lockedOutBy(channel, await call(channel, payload));
       if (why) lockedOut.push(`${channel} — ${why}`);
     }
@@ -763,17 +835,17 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
 describe.skipIf(!Sqlite)('managers keep running the shop; the owner keeps everything', () => {
   /**
    * The lists a login keeps: a manager everything the counter lost but
-   * Reports, and what was a manager's before but the printer settings (both
-   * the owner's since 2026-09-27); the owner all of it.
+   * Reports and profit, and what was a manager's before but the printer
+   * settings (all the owner's since 2026-09-27); the owner all of it.
    */
   const kept = (who: AuthenticatedUser, managers: Record<string, unknown>, ownerOnly: Record<string, unknown>) =>
     who.role === 'admin' ? { ...managers, ...ownerOnly } : managers;
 
   for (const who of [MANAGER, OWNER]) {
-    it(`${who.role}: every channel the counter lost still works${who.role === 'manager' ? ' (Reports aside)' : ''}`, async () => {
+    it(`${who.role}: every channel the counter lost still works${who.role === 'manager' ? ' (Reports and profit aside)' : ''}`, async () => {
       h.session = who;
       const lockedOut: string[] = [];
-      for (const [channel, payload] of Object.entries(kept(who, COUNTER_REFUSED(), REPORTS()))) {
+      for (const [channel, payload] of Object.entries(kept(who, COUNTER_REFUSED(), { ...REPORTS(), ...PROFIT() }))) {
         const why = lockedOutBy(channel, await call(channel, payload));
         if (why) lockedOut.push(`${channel} — ${why}`);
       }
@@ -1177,6 +1249,7 @@ describe.skipIf(!Sqlite)('every channel is classified', () => {
     const lists: Record<string, string[]> = {
       COUNTER_REFUSED: Object.keys(COUNTER_REFUSED()),
       REPORTS: Object.keys(REPORTS()),
+      PROFIT: Object.keys(PROFIT()),
       PRINTER_SETTINGS: Object.keys(PRINTER_SETTINGS()),
       OWNER_ONLY: Object.keys(OWNER_ONLY()),
       COUNTER_SCOPED,

@@ -1,7 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn, NumberPad } from '@cheeseoclock/ui';
-import { formatCents, tabletDiffers } from '@cheeseoclock/pos-domain';
+import { expectedTabletCents, formatCents, tabletDiffers } from '@cheeseoclock/pos-domain';
 import { FOODPANDA_ORDER_CODE_MAX, FOODPANDA_TABLET_TOLERANCE_CENTS } from '@cheeseoclock/shared-types';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
@@ -57,6 +57,8 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const rules = useCheckoutRules();
   const checks = rules.data?.foodpanda.checks ?? { orderCode: 'optional', tabletTotal: 'optional' };
   const tolerance = rules.data?.foodpanda.tabletToleranceCents ?? FOODPANDA_TABLET_TOLERANCE_CENTS;
+  // The tablet shows the till's total at foodpanda's prices (Settings → foodpanda: the listing may be dearer).
+  const tabletExpected = expectedTabletCents(total, rules.data?.foodpanda.upliftBps ?? 0);
   const [fpCode, setFpCode] = useState('');
   const [fpTablet, setFpTablet] = useState('');
   const deal = snapshot.discounts.find((d) => d.source === 'foodpanda') ?? null;
@@ -108,10 +110,14 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
         setError('Type the total on the foodpanda tablet — the owner has made it required.');
         return;
       }
-      if (tabletTotalCents !== null && tabletDiffers(total, tabletTotalCents, tolerance)) {
+      if (tabletTotalCents !== null && tabletDiffers(tabletExpected, tabletTotalCents, tolerance)) {
         // A warning to read: Enter (or a held key) lands on "Go back", never on paying anyway.
+        const expected =
+          tabletExpected === total
+            ? `The till says ${formatCents(total)}`
+            : `The tablet should say ${formatCents(tabletExpected)} (the till's ${formatCents(total)} at foodpanda's prices)`;
         const payAnyway = await askConfirm(
-          `The till says ${formatCents(total)}, the tablet says ${formatCents(tabletTotalCents)} — check the items and the deal.\nPay anyway? The difference is kept, and Reports list this order to check.`,
+          `${expected}, the tablet says ${formatCents(tabletTotalCents)} — check the items and the deal.\nPay anyway? The difference is kept, and Reports list this order to check.`,
           { safeDefault: true, yesLabel: 'Pay anyway', noLabel: 'Go back' },
         );
         if (!payAnyway) return;

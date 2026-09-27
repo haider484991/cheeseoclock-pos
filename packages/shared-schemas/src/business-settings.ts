@@ -2,15 +2,21 @@ import { z } from 'zod';
 import {
   DAY_NOTE_TAGS,
   FOODPANDA_DEAL_MAX_PERCENT,
+  LEGACY_COMMISSION_BASES,
+  RIDER_COST_MODES,
   SHOP_SETTING_FORMAT,
   SHOP_SETTING_KEYS,
   daypartHours,
   isShopSettingKey,
 } from '@cheeseoclock/shared-types';
 import type {
+  ChannelFees,
   CostAlertSettings,
   CostingTargets,
   Daypart,
+  MenuMapRequest,
+  RiderCostSetting,
+  SetChannelFeesRequest,
   SetCostAlertSettingsRequest,
   SetCostingTargetsRequest,
   TillsSetting,
@@ -19,6 +25,7 @@ import type {
   FoodpandaFees,
   FoodpandaTenderCheck,
   ShopSettingKey,
+  WhatIfRequest,
 } from '@cheeseoclock/shared-types';
 
 /**
@@ -235,22 +242,91 @@ export const foodpandaDealSchema = z
   .superRefine(dealRules);
 const foodpandaDealReadSchema = z.object({ v: readsFormat, ...foodpandaDealShape }).superRefine(dealRules);
 
+/** How much above the till's prices the foodpanda menu is: basis points, 0–100%, at most two decimals of a %. */
+const upliftBpsSchema = z
+  .number()
+  .int({ message: 'How much dearer foodpanda is has at most two decimals' })
+  .min(0, { message: "foodpanda's prices can't be below the till's here — 0% if they are the same" })
+  .max(10_000, { message: "foodpanda's prices are at most 100% above the till's" });
+
 const foodpandaFeesShape = {
   commissionBps: ratePercentBps('The commission'),
   confirmed: z.boolean(),
   base: z.enum(['after_deal', 'before_deal'], { errorMap: () => ({ message: 'After the deal, or before it' }) }),
   fixedFeeCents: wholeRupees(2_000, 'The fee per order'),
   commissionTaxBps: ratePercentBps('The tax on the commission'),
+  upliftBps: upliftBpsSchema,
 };
 /** 'foodpanda.fees' as this version writes it. */
 export const foodpandaFeesSchema = z.object({ v: writesFormat('foodpanda.fees'), ...foodpandaFeesShape }).strict();
-const foodpandaFeesReadSchema = z.object({ v: readsFormat, ...foodpandaFeesShape });
+// Format 1 gained upliftBps before it was released; a value written without it reads as 0 (the till's prices).
+const foodpandaFeesReadSchema = z.object({ v: readsFormat, ...foodpandaFeesShape, upliftBps: upliftBpsSchema.default(0) });
 
 const checkRule = z.enum(['optional', 'required'], { errorMap: () => ({ message: 'Optional or required' }) });
 const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };
 /** 'foodpanda.checks' as this version writes it. */
 export const foodpandaChecksSchema = z.object({ v: writesFormat('foodpanda.checks'), ...foodpandaChecksShape }).strict();
 const foodpandaChecksReadSchema = z.object({ v: readsFormat, ...foodpandaChecksShape });
+
+/** A share of money in basis points, 0–100% (2500 = 25%). */
+const feeBps = (what: string) =>
+  z
+    .number()
+    .int({ message: `${what} is a whole number of basis points` })
+    .min(0, { message: `${what} cannot be below 0%` })
+    .max(10_000, { message: `${what} cannot be above 100%` });
+
+/** Paisa, Rs 0 to Rs 100,000. */
+const feeCents = (what: string) =>
+  z
+    .number()
+    .int({ message: `${what} is in whole paisa` })
+    .min(0, { message: `${what} cannot be below Rs 0` })
+    .max(10_000_000, { message: `${what} is at most Rs 100,000` });
+
+/** What each way of paying costs the shop (costing spec 4.7). */
+const paymentFeeBpsSchema = z
+  .object({
+    cash: feeBps('A payment fee'),
+    card: feeBps('A payment fee'),
+    foodpanda: feeBps('A payment fee'),
+    transfer: feeBps('A payment fee'),
+  })
+  .strict();
+
+/**
+ * v0.7.20's foodpanda part of 'channels.fees' (RETIRED: Settings →
+ * foodpanda, 'foodpanda.fees', is the one place foodpanda's terms live).
+ * Still read — carried over while 'foodpanda.fees' was never saved — and
+ * kept as stored when the card fees are saved, never written new.
+ */
+const legacyFoodpandaChannelFeesSchema = z
+  .object({
+    commissionBps: feeBps('The commission'),
+    base: z.enum(LEGACY_COMMISSION_BASES, { errorMap: () => ({ message: 'Pick what the commission is taken on' }) }),
+    fixedFeeCents: feeCents('The fixed fee'),
+    upliftBps: feeBps('How much dearer foodpanda is'),
+  })
+  .strict();
+
+/**
+ * Phase 9: what each way of paying costs (costing spec 4.7), and — only as
+ * v0.7.20 saved it — its retired foodpanda part.
+ */
+export const channelFeesSchema = z
+  .object({
+    foodpanda: legacyFoodpandaChannelFeesSchema.optional(),
+    paymentFeeBps: paymentFeeBpsSchema,
+  })
+  .strict();
+
+/** Phase 9: what a delivery costs in rider (costing spec 4.7): the zone's rate by default. */
+export const riderCostSchema = z
+  .object({
+    mode: z.enum(RIDER_COST_MODES, { errorMap: () => ({ message: 'Pick how riders are paid' }) }),
+    fixedCents: feeCents('The rider cost per trip'),
+  })
+  .strict();
 
 /** Every key and its schema. A key not listed here cannot be written. */
 export const BUSINESS_SETTING_SCHEMAS = {
@@ -262,6 +338,8 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'foodpanda.deal': foodpandaDealSchema,
   'foodpanda.fees': foodpandaFeesSchema,
   'foodpanda.checks': foodpandaChecksSchema,
+  'channels.fees': channelFeesSchema,
+  'delivery.riderCost': riderCostSchema,
 } as const;
 
 export type BusinessSettingKey = keyof typeof BUSINESS_SETTING_SCHEMAS;
@@ -286,6 +364,8 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'foodpanda.deal': foodpandaDealReadSchema,
   'foodpanda.fees': foodpandaFeesReadSchema,
   'foodpanda.checks': foodpandaChecksReadSchema,
+  'channels.fees': channelFeesSchema,
+  'delivery.riderCost': riderCostSchema,
 };
 
 /** The fields each shop rule has in the format this version writes. */
@@ -353,6 +433,74 @@ export const setCostAlertSettingsInputSchema = z
 /** Costing → Targets & fees saves how many tills take orders (costing:setTills; the owner only). */
 export const setTillsInputSchema = analyticsTillsSchema;
 
+/**
+ * Costing → Targets & fees saves the payment fees and the rider cost
+ * (costing:setChannelFees; the owner only). foodpanda's terms are Settings →
+ * foodpanda's: a foodpanda part sent here (an older screen) is STRIPPED —
+ * `fees` is a plain (non-strict) object, so unknown keys are dropped — and
+ * the stored one is kept as it was (costing-settings saveChannelFees).
+ */
+export const setChannelFeesInputSchema = z
+  .object({ fees: z.object({ paymentFeeBps: paymentFeeBpsSchema }), riderCost: riderCostSchema })
+  .strict();
+
+const anId = z.string().min(1).max(64);
+
+/**
+ * Costing → What-if (costing:whatIf): prices to TRY, never saved. An
+ * ingredient's as a pack (size in its base unit, price in paisa); a menu
+ * item's own price (before tax). At most 200 of each.
+ */
+export const whatIfInputSchema = z
+  .object({
+    ingredients: z
+      .array(
+        z
+          .object({
+            ingredientId: anId,
+            packSize: z
+              .number()
+              .int({ message: 'A pack size is a whole number' })
+              .min(1, { message: 'A pack is at least 1' })
+              .max(100_000_000, { message: 'That pack is too big' }),
+            packPriceCents: z
+              .number()
+              .int({ message: 'A price is in whole paisa' })
+              .min(0, { message: 'A price cannot be below Rs 0' })
+              .max(100_000_000, { message: 'A price is at most Rs 1,000,000' }),
+          })
+          .strict(),
+      )
+      .max(200),
+    items: z
+      .array(
+        z
+          .object({
+            menuItemId: anId,
+            priceCents: z
+              .number()
+              .int({ message: 'A price is in whole paisa' })
+              .min(0, { message: 'A price cannot be below Rs 0' })
+              .max(100_000_000, { message: 'A price is at most Rs 1,000,000' }),
+          })
+          .strict(),
+      )
+      .max(200),
+  })
+  .strict();
+
+/** An ISO instant. */
+const instant = z.string().refine((v) => Number.isFinite(Date.parse(v)), { message: 'Pick a date' });
+
+/** Reports → Menu, the menu map (reports:menuMap): a period, or nothing for the last 28 days. */
+export const menuMapInputSchema = z
+  .object({ sinceIso: instant.optional(), untilIso: instant.optional() })
+  .strict()
+  .refine((v) => (v.sinceIso === undefined) === (v.untilIso === undefined), { message: 'Give both dates, or neither' })
+  .refine((v) => v.sinceIso === undefined || v.untilIso === undefined || Date.parse(v.untilIso) > Date.parse(v.sinceIso), {
+    message: 'The period must end after it starts',
+  });
+
 /** "Seen" on Costing → Alerts: one or more alerts at once. */
 export const markCostAlertsSeenInputSchema = z
   .object({ ids: z.array(z.string().min(1).max(64)).min(1, { message: 'Which alert?' }).max(500) })
@@ -400,3 +548,8 @@ const _foodpandaFeesReadShape: Same<z.infer<typeof foodpandaFeesReadSchema>, Foo
 const _foodpandaChecksShape: Same<z.infer<typeof foodpandaChecksSchema>, FoodpandaChecks> = true;
 const _foodpandaChecksReadShape: Same<z.infer<typeof foodpandaChecksReadSchema>, FoodpandaChecks> = true;
 const _tenderCheckShape: Same<z.infer<typeof foodpandaTenderCheckSchema>, FoodpandaTenderCheck> = true;
+const _feesShape: Same<z.infer<typeof channelFeesSchema>, ChannelFees> = true;
+const _riderShape: Same<z.infer<typeof riderCostSchema>, RiderCostSetting> = true;
+const _setFeesShape: Same<z.infer<typeof setChannelFeesInputSchema>, SetChannelFeesRequest> = true;
+const _whatIfShape: Same<z.infer<typeof whatIfInputSchema>, WhatIfRequest> = true;
+const _menuMapShape: Same<z.infer<typeof menuMapInputSchema>, MenuMapRequest> = true;

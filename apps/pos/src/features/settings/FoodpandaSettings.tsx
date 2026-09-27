@@ -265,6 +265,11 @@ function FoodpandaCards({
         onSave={() => feesParsed.value && fees.save.mutate(feesParsed.value, { onSuccess: feesD.reset })}
         onPutBack={() => fees.putBack.mutate(undefined, { onSuccess: feesD.reset })}
       >
+        {feesCard.carriedOver && (
+          <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:bg-sky-950/60 dark:text-sky-100">
+            Carried over from what you saved in Costing → Targets &amp; fees. foodpanda’s terms live here now: Save to keep them here.
+          </p>
+        )}
         {!feesCard.value.confirmed && (
           <p className="rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-700 dark:bg-stone-800 dark:text-stone-200">
             {percentFromBps(feesCard.value.commissionBps)} is a suggestion until you confirm foodpanda’s real commission: Reports mark it
@@ -312,6 +317,22 @@ function FoodpandaCards({
               className={inputClass}
             />
             <p className="mt-1 text-xs text-stone-500">Ask your accountant if you are not sure; 0 if none.</p>
+          </div>
+          <div>
+            <label className={labelClass} htmlFor="fp-uplift">
+              Your foodpanda prices above the till’s (%)
+            </label>
+            <input
+              id="fp-uplift"
+              inputMode="decimal"
+              value={feesForm.uplift}
+              onChange={(e) => updFees({ uplift: e.target.value.replace(/[^\d.]/g, '').slice(0, 6) })}
+              className={inputClass}
+            />
+            <p className="mt-1 text-xs text-stone-500">
+              0 if foodpanda shows the same prices as the till. If a Rs 1,000 pizza is Rs 1,100 on foodpanda, type 10: the tablet total
+              Pay expects, the commission and Reports use foodpanda’s prices. The bill and the FBR invoice stay at the till’s.
+            </p>
           </div>
         </div>
         <div>

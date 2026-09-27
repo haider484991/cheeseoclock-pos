@@ -41,6 +41,12 @@ describe('the worked example follows the owner’s values', () => {
     expect(workedExample(deal({ maxOffCents: 30_000 }), fees())).toContain('with 20% off (at most Rs 300) that you pay: the bill shows Rs 1,700');
     expect(workedExample(deal({ minOrderCents: 250_000 }), fees())).toMatch(/^A Rs 2,500 foodpanda order with 20% off/);
   });
+
+  it("foodpanda's menu dearer than the till's: the listing, and the commission on foodpanda's prices", () => {
+    expect(workedExample(deal(), fees({ upliftBps: 1_000 }))).toBe(
+      "A Rs 2,000 foodpanda order (Rs 2,200 on your listing, 10% above the till) with 20% off that you pay: the bill shows Rs 1,600 + tax, Rs 1,760 at foodpanda's prices; foodpanda keeps 25% of Rs 1,760 = Rs 440; you keep Rs 1,320 before food cost.",
+    );
+  });
 });
 
 describe('summaries and typing', () => {
@@ -53,6 +59,7 @@ describe('summaries and typing', () => {
     expect(feesSummary(fees({ commissionBps: 2_250, base: 'before_deal', fixedFeeCents: 3_000, commissionTaxBps: 1_600 }))).toBe(
       '22.5% before the deal · Rs 30 an order · 16% tax on it',
     );
+    expect(feesSummary(fees({ upliftBps: 1_250 }))).toBe('25% after the deal · menu 12.5% above the till');
     expect(checksSummary({ v: 1, orderCode: 'required', tabletTotal: 'optional' })).toBe('Order number required · tablet total optional');
     expect(dealPayer({ percent: 20, shopPercent: 20 })).toBe('shop');
     expect(dealPayer({ percent: 20, shopPercent: 0 })).toBe('foodpanda');
@@ -79,7 +86,7 @@ describe('the forms', () => {
       expect(back.problem).toBeNull();
       expect(sameValue(back.value, d)).toBe(true);
     }
-    for (const f of [DEFAULT_FOODPANDA_FEES, fees({ commissionBps: 2_250, base: 'before_deal', fixedFeeCents: 3_000, commissionTaxBps: 1_625 })]) {
+    for (const f of [DEFAULT_FOODPANDA_FEES, fees({ commissionBps: 2_250, base: 'before_deal', fixedFeeCents: 3_000, commissionTaxBps: 1_625, upliftBps: 1_250 })]) {
       const back = feesFromForm(feesToForm(f));
       expect(back.problem).toBeNull();
       expect(sameValue(back.value, f)).toBe(true);
@@ -99,5 +106,8 @@ describe('the forms', () => {
     expect(feesFromForm({ ...g, commission: '55' }).problem).toMatch(/commission/);
     expect(feesFromForm({ ...g, fixedFee: '2500' }).problem).toMatch(/fee/);
     expect(feesFromForm({ ...g, commissionTax: '' }).value).toMatchObject({ commissionTaxBps: 0 });
+    expect(feesFromForm({ ...g, uplift: '' }).value).toMatchObject({ upliftBps: 0 });
+    expect(feesFromForm({ ...g, uplift: '10' }).value).toMatchObject({ upliftBps: 1_000 });
+    expect(feesFromForm({ ...g, uplift: '150' }).problem).toMatch(/dearer/);
   });
 });

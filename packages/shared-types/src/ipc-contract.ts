@@ -78,12 +78,21 @@ import type {
   ReportFoodStockTab,
   ReportMenuTab,
   ReportOverviewTab,
+  ReportProfitTab,
   ReportTabRequest,
   ReportTeamTab,
   ReportTrends,
   ReportWhenTab,
   SetDaypartsRequest,
 } from './reports.js';
+import type {
+  ChannelFeesView,
+  MenuMapRequest,
+  ReportMenuMap,
+  SetChannelFeesRequest,
+  WhatIfRequest,
+  WhatIfResult,
+} from './profit.js';
 import type {
   PrinterConnectionConfig,
   PrintPolicy,
@@ -1340,12 +1349,12 @@ export interface IpcContract {
   };
 
   // Costing (menu.manage = COST_CAPABILITY to read; settings.manage to change targets)
-  /** Every menu item: cost to make, price, what you keep, food-cost chip; worst first on screen. */
+  /** Every menu item: cost to make, price, food-cost chip, and what you keep (profit.view only); worst first on screen. */
   'costing:menuCosts': {
     request: undefined;
     response: ApiResult<MenuCostsView>;
   };
-  /** One item's cost sheet: every line, the customer's picks, paid extras, leave-outs. */
+  /** One item's cost sheet: every line, the customer's picks, paid extras, leave-outs (what you keep and the price to hit target: profit.view only). */
   'costing:itemSheet': {
     request: { menuItemId: string };
     response: ApiResult<ItemCostSheet | null>;
@@ -1419,6 +1428,28 @@ export interface IpcContract {
     request: TillsSetting;
     response: ApiResult<TillsSettingView>;
   };
+  /**
+   * Costing → Targets & fees (costing spec Phase 9): foodpanda's commission,
+   * payment fees and what a delivery costs in rider. COST_CAPABILITY to read…
+   */
+  'costing:getChannelFees': {
+    request: undefined;
+    response: ApiResult<ChannelFeesView>;
+  };
+  /** …settings.manage to change (the owner). */
+  'costing:setChannelFees': {
+    request: SetChannelFeesRequest;
+    response: ApiResult<ChannelFeesView>;
+  };
+  /**
+   * Costing → What-if (costing spec 4.9): new ingredient or menu prices tried
+   * against the last 4 weeks' sales — nothing is saved or changed on the
+   * till. COST_CAPABILITY and profit.view.
+   */
+  'costing:whatIf': {
+    request: WhatIfRequest;
+    response: ApiResult<WhatIfResult>;
+  };
 
   // The owner's shop rules (Settings → foodpanda …; shop-settings.ts). One
   // pair for every key, the key's Zod schema checked in the main process.
@@ -1488,6 +1519,23 @@ export interface IpcContract {
   'reports:team': {
     request: ReportTabRequest;
     response: ApiResult<ReportTeamTab>;
+  };
+  /**
+   * Profit (costing spec Phase 9): the waterfall from sales to profit before
+   * overheads, by channel and by category. profit.view and COST_CAPABILITY.
+   */
+  'reports:profit': {
+    request: ReportTabRequest;
+    response: ApiResult<ReportProfitTab>;
+  };
+  /**
+   * Reports → Menu, the menu map (costing spec 4.8): each category's dishes
+   * by how popular and how profitable, in plain words. Omitted dates: the
+   * last 28 days. profit.view and COST_CAPABILITY.
+   */
+  'reports:menuMap': {
+    request: MenuMapRequest | undefined;
+    response: ApiResult<ReportMenuMap>;
   };
   // The owner's week (costing spec Phase 7). Worked out in the Reports worker
   // like the tabs; report.view, with the cost lines for COST_CAPABILITY only.

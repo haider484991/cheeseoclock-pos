@@ -3,16 +3,22 @@
  * against a real database built from every migration and a made-up shop
  * (db/costing-shop.fixture.ts):
  *   - a cashier is refused every costing:* channel in the main process, and
- *     a manager may read costs but not change the owner's targets;
- *   - Menu costs: cost to make, price, what you keep, food cost % and the
- *     chip — neutral while the targets are suggestions, coloured once the
- *     owner taps "Use these"; the item cost sheet with its batch sauce
- *     opened up, the customer's picks, paid extras and leave-outs;
+ *     a manager may read costs but not change the owner's targets, and sees
+ *     no profit (owner, 2026-09-27): no "you keep", no What-if;
+ *   - Menu costs: cost to make, price, what you keep (the owner's), food
+ *     cost % and the chip — neutral while the targets are suggestions,
+ *     coloured once the owner taps "Use these"; the item cost sheet with its
+ *     batch sauce opened up, the customer's picks, paid extras and leave-outs;
  *   - Missing costs lists an unpriced ingredient and a food item with no
  *     recipe; marking the ingredient "free" takes it off;
  *   - the batch calculator (200 g of a 2 kg sauce, every input costed) and
  *     "Make this amount" (inventory:makeBatch with any amount), which any
- *     login may call and which answers with no costs.
+ *     login may call and which answers with no costs;
+ *   - Phase 9: foodpanda's commission and the rider cost (managers read, the
+ *     owner saves — synced and audited); What-if (profit.view, the owner's
+ *     alone): a dearer tomato flows through the sauce into every pizza, at
+ *     the last 4 weeks' sales, nothing saved; "price to hit target" and what
+ *     you keep only for profit.view.
  *
  * Only `defineHandler` (captured) and the signed-in session are stood in
  * for. node:sqlite behind better-sqlite3's shape; skips where it is
@@ -117,6 +123,23 @@ const READ_CHANNELS = (): Record<string, unknown> => ({
   'costing:getAlertSettings': undefined,
   // How many tills take orders (costing spec Phase 8): managers read it.
   'costing:getTills': undefined,
+  // foodpanda's commission and the rider cost (costing spec Phase 9): managers read them.
+  'costing:getChannelFees': undefined,
+});
+
+/** Profit (profit.view, costing spec Phase 9): the owner's alone since 2026-09-27 (owner question 8). */
+const PROFIT_CHANNELS = (): Record<string, unknown> => ({
+  // What-if: prices tried against the last 4 weeks, never saved.
+  'costing:whatIf': { ingredients: [], items: [] },
+});
+
+/** What a login without profit.view is told (guards.ts REFUSED.profit, shown as it is). */
+const NO_PROFIT = 'Only the owner can see profit.';
+
+/** What Costing → Targets & fees saves for Phase 9 (made-up figures). */
+const FEES = () => ({
+  fees: { paymentFeeBps: { cash: 0, card: 250, foodpanda: 0, transfer: 0 } },
+  riderCost: { mode: 'fixed', fixedCents: 15_000 },
 });
 
 const ALERT_SETTINGS = () => ({ jumpBps: 1_500, impactWeekCents: 50_000, keyIngredientIds: [s.ing.cheese] });
@@ -126,9 +149,11 @@ live('who may see costs', () => {
     h.session = CASHIER;
     const channels = {
       ...READ_CHANNELS(),
+      ...PROFIT_CHANNELS(),
       'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 },
       'costing:setAlertSettings': ALERT_SETTINGS(),
       'costing:setTills': { sellingTills: 2 },
+      'costing:setChannelFees': FEES(),
     };
     expect(Object.keys(channels).sort()).toEqual([...h.handlers.keys()].filter((c) => c.startsWith('costing:')).sort());
     for (const [channel, payload] of Object.entries(channels)) {
@@ -141,16 +166,22 @@ live('who may see costs', () => {
   });
 
   it('nobody signed in: "not logged in"', async () => {
-    for (const [channel, payload] of Object.entries(READ_CHANNELS())) {
+    for (const [channel, payload] of Object.entries({ ...READ_CHANNELS(), ...PROFIT_CHANNELS() })) {
       expect((await call(channel, payload)) as { code?: string }).toMatchObject({ ok: false, code: 'unauthenticated' });
     }
   });
 
-  it('a manager reads every figure but cannot change the owner\'s targets', async () => {
+  it('a manager reads every cost figure but no profit, and cannot change the owner\'s targets', async () => {
     h.session = MANAGER;
     for (const [channel, payload] of Object.entries(READ_CHANNELS())) {
       expect({ channel, ok: (await call(channel, payload)).ok }).toEqual({ channel, ok: true });
     }
+    // Profit is the owner's alone (owner, 2026-09-27): What-if is refused in plain words, and nothing is written.
+    const written = count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`);
+    for (const [channel, payload] of Object.entries(PROFIT_CHANNELS())) {
+      expect({ channel, o: await call(channel, payload) }).toEqual({ channel, o: { ok: false, code: 'forbidden', message: NO_PROFIT } });
+    }
+    expect(count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`)).toBe(written);
     const target = await data<CostingTargetsView>('costing:getTargets');
     const o = await call('costing:setTargets', {
       defaultBps: target.defaultBps,
@@ -222,7 +253,7 @@ async function useSuggestions() {
 
 live('Menu costs', () => {
   it('costs every item from today\'s prices: cost to make, what you keep, food cost %', async () => {
-    h.session = MANAGER;
+    h.session = OWNER;
     const view = await data<MenuCostsView>('costing:menuCosts');
     const row = (id: string) => view.rows.find((r) => r.menuItemId === id)!;
     // Fajita Medium: 200 g dough Rs 18 + 50 g sauce Rs 8.90625 (rolled up from tomato and garlic)
@@ -246,6 +277,14 @@ live('Menu costs', () => {
     expect(row(s.item.delivery)).toMatchObject({ flag: 'nonfood' });
     expect(view.summary).toEqual({ items: 6, onTarget: 0, close: 0, over: 0, cantCost: 2, notConfirmed: 4 });
     expect(view.missingCount).toBe(3);
+
+    // A manager (owner, 2026-09-27): the same costs, food cost % and chips — and no "you keep" on any row.
+    h.session = MANAGER;
+    const mgr = await data<MenuCostsView>('costing:menuCosts');
+    expect(mgr.rows.find((r) => r.menuItemId === s.item.fajitaM)).toMatchObject({ priceCents: 120_000, costCents: 17_641, profitCents: null, foodCostBps: 1470 });
+    expect(mgr.rows.every((r) => r.profitCents === null)).toBe(true);
+    expect(mgr.rows.map((r) => ({ ...r, profitCents: null }))).toEqual(view.rows.map((r) => ({ ...r, profitCents: null })));
+    expect(mgr.summary).toEqual(view.summary);
   });
 
   it('the chips colour only once the owner taps "Use these"; the owner\'s own targets then decide green, amber, red', async () => {
@@ -302,11 +341,11 @@ live('Menu costs', () => {
 });
 
 live('the item cost sheet', () => {
-  it('"On foodpanda": the price after the deal for a manager; foodpanda’s commission and what you keep for the owner only', async () => {
+  it('"On foodpanda": the price after the deal for a manager; foodpanda’s commission and what you keep for the owner only (profit.view)', async () => {
     const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
     const owner = { userId: 'u_admin', deviceId: DEV };
     setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null }, owner);
-    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: true, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0 }, owner);
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: true, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0 }, owner);
     h.session = MANAGER;
     const forManager = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
     const price = forManager.row.priceCents;
@@ -327,10 +366,31 @@ live('the item cost sheet', () => {
     setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: minimum, maxOffCents: null, startsOn: null, endsOn: null }, owner);
     const withMinimum = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
     expect(withMinimum.onFoodpanda).toMatchObject({ dealPercent: 20, minOrderCents: minimum, priceAfterDealCents: price - Math.round(price / 5) });
+
+    // foodpanda 10% dearer: the listing price and the price after the deal at its prices, for both;
+    // the commission on that price, and what the shop keeps, for the owner only.
+    setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null }, owner);
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: false, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 1_000 }, owner);
+    const tillAfter = price - Math.round(price / 5);
+    const dearerAfter = tillAfter + Math.round(tillAfter / 10);
+    const dearerOwner = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    expect(dearerOwner.onFoodpanda).toMatchObject({
+      upliftBps: 1_000,
+      listingPriceCents: price + Math.round(price / 10),
+      priceAfterDealCents: dearerAfter,
+      owner: { confirmed: false, foodpandaKeepsCents: Math.round(dearerAfter / 4), youKeepCents: dearerAfter - Math.round(dearerAfter / 4) },
+    });
+    h.session = MANAGER;
+    const dearerManager = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    expect(dearerManager.onFoodpanda).toMatchObject({ listingPriceCents: price + Math.round(price / 10), priceAfterDealCents: dearerAfter, owner: null });
+    // …and no profit anywhere on a manager's sheet: no "you keep", no price to hit.
+    expect(dearerManager.row.profitCents).toBeNull();
+    expect(dearerManager.priceToHitCents).toBeNull();
+    expect(JSON.stringify(dearerManager.onFoodpanda)).not.toMatch(/commission|youKeep/i);
   });
 
   it('every line with its price per kg, the batch sauce opened up, paid extras and leave-outs', async () => {
-    h.session = MANAGER;
+    h.session = OWNER;
     const sheet = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
     expect(sheet.always.map((l) => [l.name, l.qty, l.costCents])).toEqual([
       ['Test dough', 200, 1_800],
@@ -358,6 +418,20 @@ live('the item cost sheet', () => {
     expect(sheet.leaveOuts).toEqual([
       { modifierId: s.choice.noOnion, name: 'No onion', ingredientName: 'Test onion', savingCents: 150, missingLines: 0 },
     ]);
+    expect(await data('costing:itemSheet', { menuItemId: 'no-such-item' })).toBeNull();
+
+    // A manager (owner, 2026-09-27): every cost the same, and no "you keep" — not per sale, not per extra.
+    h.session = MANAGER;
+    const mgr = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    expect(mgr.row.profitCents).toBeNull();
+    expect(mgr.priceToHitCents).toBeNull();
+    expect(mgr.paidExtras.map((x) => [x.name, x.priceDeltaCents, x.costCents, x.marginCents, x.foodCostBps])).toEqual([
+      ['Extra cheese', 15_000, 4_800, null, 3200],
+      ['Extra onion', 5_000, 150, null, 300],
+      ['Side of Ranch', 10_000, 1_755, null, 1755],
+    ]);
+    expect(mgr.always).toEqual(sheet.always);
+    expect(mgr.leaveOuts).toEqual(sheet.leaveOuts);
     expect(await data('costing:itemSheet', { menuItemId: 'no-such-item' })).toBeNull();
   });
 
@@ -630,5 +704,160 @@ live('the costing channels and a growing order history', () => {
       expect({ q, plan }).toEqual({ q, plan: expect.arrayContaining([expect.stringMatching(/^SEARCH o USING INDEX idx_orders_created/)]) });
       expect({ q, scans: plan.filter((d) => /^SCAN (o|oi|oim|m)\b/.test(d)) }).toEqual({ q, scans: [] });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9: fees, What-if, price to hit target
+// ---------------------------------------------------------------------------
+
+/** Sold `n` of an item within the last 28 days (made-up prices): stock taken, cost kept, paid. */
+function sold(item: keyof typeof s.item, n: number, picks: Parameters<typeof s.ring>[0][number][2] = []): void {
+  for (let i = 0; i < n; i++) {
+    const o = s.ring([[item, 1, picks]]);
+    s.r.decrementForOrder(db, o, MANAGER_ACTOR);
+    s.markPaid(o, new Date(Date.now() - 86_400_000));
+  }
+}
+
+live('card fees and the rider cost (costing spec Phase 9); foodpanda\'s terms are Settings → foodpanda\'s', () => {
+  const fpRow = () =>
+    db.prepare(`SELECT value_json FROM business_settings WHERE key = 'channels.fees' AND deleted_at IS NULL`).get() as { value_json: string } | undefined;
+
+  it('the defaults until the owner answers; managers read them without foodpanda, only the owner saves them (synced and audited)', async () => {
+    h.session = MANAGER;
+    const view = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees');
+    expect(view).toEqual({
+      isDefault: true,
+      savedAt: null,
+      fees: { paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
+      riderCost: { mode: 'zone_rate', fixedCents: 0 },
+      // foodpanda's commission is profit: never a manager's.
+      foodpanda: null,
+    });
+    expect(await call('costing:setChannelFees', FEES())).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: 'Only the owner can change the card fees and the rider cost.',
+    });
+    h.session = OWNER;
+    // The owner sees foodpanda's terms in force, read-only: the suggested 25%, not confirmed.
+    expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda).toMatchObject({
+      fees: { commissionBps: 2_500, confirmed: false, base: 'after_deal', upliftBps: 0 },
+      isDefault: true,
+      carriedOver: false,
+      deal: { percent: 0 },
+      dealToday: false,
+    });
+    const saved = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:setChannelFees', FEES());
+    expect(saved).toMatchObject({ isDefault: false, ...FEES() });
+    expect(count(`SELECT COUNT(*) AS n FROM business_settings WHERE key IN ('channels.fees', 'delivery.riderCost')`)).toBe(2);
+    expect(count(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`)).toBe(2);
+    expect(count(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'business_settings'`)).toBe(2);
+    // A payment fee over 100% is refused, with the field named.
+    const bad = FEES();
+    bad.fees.paymentFeeBps.card = 12_000;
+    expect(await call('costing:setChannelFees', bad)).toMatchObject({ ok: false, code: 'validation_failed' });
+  });
+
+  it('a foodpanda part in the request (an older screen) is stripped: never saved, never in force', async () => {
+    h.session = OWNER;
+    const withFoodpanda = { ...FEES(), fees: { ...FEES().fees, foodpanda: { commissionBps: 12_000, base: 'menu_price', fixedFeeCents: 999, upliftBps: 5_000 } } };
+    const saved = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:setChannelFees', withFoodpanda);
+    expect(saved.fees).toEqual(FEES().fees);
+    expect(JSON.parse(fpRow()!.value_json)).toEqual(FEES().fees);
+    // Not carried over either: nothing v0.7.20 saved.
+    expect(saved.foodpanda).toMatchObject({ fees: { commissionBps: 2_500, confirmed: false }, carriedOver: false, isDefault: true });
+  });
+
+  it("v0.7.20's saved foodpanda part: carried over for display (and in force), and kept as stored when the card fees are saved", async () => {
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    const legacy = { commissionBps: 2_200, base: 'paid_incl_tax' as const, fixedFeeCents: 2_500, upliftBps: 1_000 };
+    setBusinessSetting(db as never, 'channels.fees', { foodpanda: legacy, paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } }, { userId: 'u_admin', deviceId: DEV });
+    h.session = OWNER;
+    const view = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees');
+    expect(view.fees).toEqual({ paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } });
+    expect(view.foodpanda).toMatchObject({
+      fees: { commissionBps: 2_200, confirmed: true, base: 'after_deal', fixedFeeCents: 2_500, commissionTaxBps: 0, upliftBps: 1_000 },
+      carriedOver: true,
+      isDefault: false,
+    });
+    // Saving the card fees with a different foodpanda part: the stored one stays exactly as it was.
+    await data('costing:setChannelFees', { ...FEES(), fees: { ...FEES().fees, foodpanda: { ...legacy, commissionBps: 3_000 } } });
+    expect(JSON.parse(fpRow()!.value_json)).toEqual({ foodpanda: legacy, paymentFeeBps: FEES().fees.paymentFeeBps });
+    expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda?.fees.commissionBps).toBe(2_200);
+    // A manager still gets no foodpanda part.
+    h.session = MANAGER;
+    expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda).toBeNull();
+  });
+});
+
+live('What-if (costing spec 4.9)', () => {
+  it('a dearer tomato flows through the sauce into every pizza, at the last 4 weeks\' sales; nothing is saved', async () => {
+    sold('fajitaM', 8);
+    h.session = OWNER;
+    const before = count(`SELECT COUNT(*) AS n FROM ingredient_costs`) + count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`);
+    const tomato = { ingredientId: s.ing.tomato, packSize: 5_000, packPriceCents: 120_000 }; // Rs 240 a kilo (was Rs 120)
+    const r = await data<import('@cheeseoclock/shared-types').WhatIfResult>('costing:whatIf', { ingredients: [tomato], items: [] });
+    expect(r.engine).toBe('main');
+    // The tomato as tried, and the sauce made from it.
+    expect(r.ingredients.map((i) => [i.ingredientId, i.batch])).toEqual([
+      [s.ing.tomato, false],
+      [s.ing.sauce, true],
+    ]);
+    expect(r.ingredients[0]).toMatchObject({ beforeUnitCostMc: 12_000, afterUnitCostMc: 24_000, changeBps: 10_000 });
+    const fajita = r.rows.find((x) => x.menuItemId === s.item.fajitaM)!;
+    // 50 g of sauce: 2,500 g of tomato in 2,000 g of sauce, 12 paisa a gram more → 62.5 × 12 = 750 paisa more a pizza.
+    expect(fajita.changed).toBe(true);
+    expect(fajita.newCostCents - fajita.costCents).toBe(750);
+    // 8 in 4 weeks = 2 a week: Rs 15 a week less.
+    expect(fajita).toMatchObject({ soldLast28: 8, weeklyUnitsTenths: 20, weekCents: -1_500, breakEvenBps: null });
+    // Every dish with sauce moved; the cola did not.
+    expect(r.rows.find((x) => x.menuItemId === s.item.deal)!.changed).toBe(true);
+    expect(r.rows.find((x) => x.menuItemId === s.item.cola)!.changed).toBe(false);
+    expect(r.rows[0]!.changed).toBe(true);
+    expect(r.totalWeekCents).toBe(r.rows.reduce((a, x) => a + x.weekCents, 0));
+    // Not food (the delivery charge) is not a dish here.
+    expect(r.rows.some((x) => x.menuItemId === s.item.delivery)).toBe(false);
+    // Nothing written: no price, no history row, no sync or audit row.
+    expect(count(`SELECT COUNT(*) AS n FROM ingredient_costs`) + count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`)).toBe(before);
+    expect(db.prepare(`SELECT pack_price_cents AS p FROM ingredients WHERE id = ?`).get(s.ing.tomato)).toEqual({ p: 60_000 });
+  });
+
+  it('a menu price tried: per week at the same sales, the break-even volume, and the price that hits the target', async () => {
+    sold('fajitaM', 8);
+    h.session = OWNER;
+    const r = await data<import('@cheeseoclock/shared-types').WhatIfResult>('costing:whatIf', { ingredients: [], items: [{ menuItemId: s.item.fajitaM, priceCents: 130_000 }] });
+    const f = r.rows.find((x) => x.menuItemId === s.item.fajitaM)!;
+    expect(f).toMatchObject({ basePriceCents: 120_000, newBasePriceCents: 130_000, newPriceCents: 130_000, weekCents: 20_000, changed: true });
+    // Earns about Rs 1,024 now (Rs 1,200 − Rs 176.41); Rs 100 more: sales could fall about 8.9% before it earns less.
+    expect(f.breakEvenBps).toBe(Math.round((-10_000 * 10_000) / (f.profitCents + 10_000)));
+    expect(f.priceToHitCents).not.toBeNull();
+  });
+
+  it('refused to a cashier (costs) and to a manager (profit, the owner\'s alone since 2026-09-27); the owner may', async () => {
+    h.session = CASHIER;
+    expect(await call('costing:whatIf', { ingredients: [], items: [] })).toEqual({ ok: false, code: 'forbidden', message: 'Only a manager or the owner can see costs.' });
+    h.session = MANAGER;
+    expect(await call('costing:whatIf', { ingredients: [], items: [] })).toEqual({ ok: false, code: 'forbidden', message: NO_PROFIT });
+    expect(await call('costing:whatIf', { ingredients: [], items: [{ menuItemId: s.item.fajitaM, priceCents: 130_000 }] })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: NO_PROFIT,
+    });
+    // "Price to hit target" and what you keep are left out of the cost sheet too; the costs stay.
+    const sheet = await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM });
+    expect(sheet.priceToHitCents).toBeNull();
+    expect(sheet.row.profitCents).toBeNull();
+    expect(sheet.row.costCents).toBeGreaterThan(0);
+    h.session = OWNER;
+    expect((await call('costing:whatIf', { ingredients: [], items: [] })).ok).toBe(true);
+    const own = await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM });
+    // At the suggested 30%: the cost ÷ 0.3, up to the next Rs 10.
+    expect(own.priceToHitCents).toBe(Math.ceil(own.row.costCents / 0.3 / 1_000) * 1_000);
+    expect(await call('costing:whatIf', { ingredients: [{ ingredientId: s.ing.tomato, packSize: 0, packPriceCents: 1 }], items: [] })).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
   });
 });

@@ -25,5 +25,8 @@ export * from './do-this.js';
 export * from './shop-stock.js';
 export * from './variance.js';
 export * from './count-entry.js';
+export * from './profit.js';
+export * from './menu-engineering.js';
+export * from './what-if.js';
 export * from './recipe-calc.js';
 export * from './foodpanda.js';

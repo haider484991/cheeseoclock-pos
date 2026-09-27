@@ -47,9 +47,10 @@ import {
   unitFactor,
   wasteReasonOf,
   dealAmount,
-  foodpandaTerms,
+  foodpandaOrderMoney,
   parseFoodpandaDealRule,
   type FoodCostEstimate,
+  type KeptFoodpandaTerms,
   type FoodCostLine,
   type Pack,
   type PriceOf,
@@ -814,13 +815,13 @@ function getRefunds(
  * older), else — an ingredient with no history at all — today's price. And
  * the ingredients' units now.
  */
-interface Pricing {
+export interface Pricing {
   priceOf: PriceOf;
   unitOf: (ingredientId: string) => string | undefined;
   /** The price in force at a time, from the price history; undefined when the ingredient has none. */
   priceThen: (ingredientId: string, atIso: string) => DatedPrice | undefined;
 }
-function lazyPricing(db: AppDatabase): () => Pricing {
+export function lazyPricing(db: AppDatabase): () => Pricing {
   let p: Pricing | null = null;
   return () => {
     if (p) return p;
@@ -1026,7 +1027,7 @@ function safeJson(text: string | null): Record<string, unknown> {
 /** Order ids per query: json_each keeps the statement the same, chunks keep it small. */
 const ID_CHUNK = 500;
 
-function chunks<T>(xs: readonly T[], n = ID_CHUNK): T[][] {
+export function chunks<T>(xs: readonly T[], n = ID_CHUNK): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
   return out;
@@ -1040,7 +1041,7 @@ const STATUS_RANK: Record<number, OrderItemCostStatus> = { 0: 'full', 1: 'none',
  * or an item that is a delivery charge or in a category the owner marked
  * "not food". Worked out in SQL so every path below reads it the same way.
  */
-const FEE_LINE = `(TRIM(oi.menu_item_name) LIKE 'delivery charge%' OR oi.menu_item_id IN (SELECT value FROM json_each(?)))`;
+export const FEE_LINE = `(TRIM(oi.menu_item_name) LIKE 'delivery charge%' OR oi.menu_item_id IN (SELECT value FROM json_each(?)))`;
 
 /**
  * A counted order with nothing to share out — no discount, no refund, so
@@ -1048,7 +1049,7 @@ const FEE_LINE = `(TRIM(oi.menu_item_name) LIKE 'delivery charge%' OR oi.menu_it
  * (alias `o`). These are added up in SQL; only the others are read line by
  * line.
  */
-const PLAIN_KEPT = `(o.discount_cents = 0
+export const PLAIN_KEPT = `(o.discount_cents = 0
     AND NOT EXISTS (SELECT 1 FROM payments rp
                      WHERE rp.order_id = o.id AND rp.amount_cents < 0 AND rp.deleted_at IS NULL)
     AND EXISTS (SELECT 1 FROM order_item_costs k
@@ -1067,7 +1068,7 @@ const REST_ORDERS = `ro AS MATERIALIZED (
       FROM orders o WHERE ${IN_RANGE} AND ${COUNTED} AND NOT ${PLAIN_KEPT})`;
 
 /** A line's cost rows, added up (with the LEFT JOIN of order_item_costs `c`, grouped by line). */
-const LINE_COSTS = `COUNT(c.id) AS parts, COALESCE(SUM(c.cost_cents), 0) AS cost,
+export const LINE_COSTS = `COUNT(c.id) AS parts, COALESCE(SUM(c.cost_cents), 0) AS cost,
          MAX(CASE c.status WHEN 'failed' THEN 3 WHEN 'partial' THEN 2 WHEN 'none' THEN 1 WHEN 'full' THEN 0 END) AS worst`;
 
 /**
@@ -1162,18 +1163,22 @@ export const FOOD_COST_PLAIN_GAPS_SQL = `
    WHERE oi.id = gap.lineId AND oi.deleted_at IS NULL AND NOT ${FEE_LINE}
    GROUP BY oi.id`;
 
-function lineStatus(parts: number, worst: number | null): OrderItemCostStatus | null {
+export function lineStatus(parts: number, worst: number | null): OrderItemCostStatus | null {
   return parts > 0 && worst !== null ? (STATUS_RANK[Number(worst)] ?? 'failed') : null;
 }
 
-interface MenuLookup {
+export interface MenuLookup {
   item: (id: string | null) => { name: string; categoryId: string } | undefined;
   /** Items that are not food (delivery charges, non-food categories), as JSON for FEE_LINE. */
   feeItemsJson: string;
+  /** Of them, the delivery charges (by their name now): what a rider's cost falls back to (Profit). */
+  chargeItemsJson: string;
   withRecipe: ReadonlySet<string>;
+  /** The categories the owner marked "not food" (and the delivery charges' own). */
+  nonFoodCategoryIds: ReadonlySet<string>;
 }
 
-function menuLookup(db: AppDatabase): MenuLookup {
+export function menuLookup(db: AppDatabase): MenuLookup {
   // Deleted items keep their name and category for history.
   const items = new Map(
     (
@@ -1201,7 +1206,91 @@ function menuLookup(db: AppDatabase): MenuLookup {
     ).map((r) => r.id),
   );
   const feeItems = [...items.values()].filter((i) => isDeliveryChargeName(i.name) || nonFood.has(i.categoryId)).map((i) => i.id);
-  return { item: (id) => (id ? items.get(id) : undefined), feeItemsJson: JSON.stringify(feeItems), withRecipe };
+  const chargeItems = [...items.values()].filter((i) => isDeliveryChargeName(i.name)).map((i) => i.id);
+  return {
+    item: (id) => (id ? items.get(id) : undefined),
+    feeItemsJson: JSON.stringify(feeItems),
+    chargeItemsJson: JSON.stringify(chargeItems),
+    withRecipe,
+    nonFoodCategoryIds: nonFood,
+  };
+}
+
+// ---------------------------------------------- estimates kept between asks --
+
+/**
+ * The Reports worker keeps each order's estimate between asks (costing spec
+ * Phase 9): Profit, Channels & delivery, Food cost & stock, the trends and
+ * the owner's week all estimate the same orders from before costing started,
+ * and a year of them is most of a second to read. An estimate comes only
+ * from the order's own stock rows — the ledger is insert-only, so an order
+ * that gains a row (a put-back, a late send) is found by rowid and worked out
+ * again — valued at the price book and price history: any change to an
+ * ingredient's price, unit or pack, a price-history row or a batch recipe
+ * drops them all. Only on a connection that asks (keepEstimates: the
+ * worker's read connection); the till's own connection works them out each
+ * time.
+ */
+interface EstimateCache {
+  pricesKey: string;
+  /** stock_movements' highest rowid when last looked. */
+  lastRowid: number;
+  /** null: the order has no sale rows (nothing to estimate from). */
+  byOrder: Map<string, FoodCostEstimate | null>;
+}
+
+/** Past this many orders kept (years of them), the cache starts again. */
+export const ESTIMATE_CACHE_MAX = 150_000;
+
+const estimateCaches = new WeakMap<AppDatabase, EstimateCache>();
+
+/** Keep estimates between asks on this connection (the Reports worker's). */
+export function keepEstimates(db: AppDatabase): void {
+  if (!estimateCaches.has(db)) estimateCaches.set(db, { pricesKey: '', lastRowid: -1, byOrder: new Map() });
+}
+
+/** How many orders' estimates are kept on this connection (tests). */
+export function keptEstimateCount(db: AppDatabase): number {
+  return estimateCaches.get(db)?.byOrder.size ?? 0;
+}
+
+/**
+ * Everything an estimate's prices come from, as one string: the ingredients'
+ * price, unit, pack and batch yield (not their running counts, which move
+ * with every sale), and the price history and batch recipes' size and last
+ * change. A few hundred small rows.
+ */
+function pricesKey(db: AppDatabase): string {
+  const rows = db
+    .prepare(
+      `SELECT id, unit, price_kind, cost_per_unit_cents, pack_size, pack_price_cents, batch_yield, deleted_at
+         FROM ingredients ORDER BY id`,
+    )
+    .all();
+  const tails = db
+    .prepare(
+      `SELECT (SELECT COUNT(*) || ':' || COALESCE(MAX(rowid), 0) || ':' || COALESCE(MAX(updated_at), '') FROM ingredient_costs) AS history,
+              (SELECT COUNT(*) || ':' || COALESCE(MAX(rowid), 0) || ':' || COALESCE(MAX(updated_at), '') FROM batch_recipe_lines) AS batches`,
+    )
+    .get() as { history: string; batches: string };
+  return `${tails.history}|${tails.batches}|${JSON.stringify(rows)}`;
+}
+
+/** Bring the kept estimates up to the ledger and prices this read sees. */
+function refreshEstimates(db: AppDatabase, cache: EstimateCache): void {
+  const top = Number((db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS r FROM stock_movements`).get() as { r: number }).r);
+  const key = pricesKey(db);
+  if (key !== cache.pricesKey || top < cache.lastRowid) {
+    cache.byOrder.clear();
+    cache.pricesKey = key;
+  } else if (top > cache.lastRowid && cache.byOrder.size > 0) {
+    for (const r of db
+      .prepare(`SELECT DISTINCT ref_order_id AS id FROM stock_movements WHERE rowid > ? AND ref_order_id IS NOT NULL`)
+      .all(cache.lastRowid) as Array<{ id: string }>) {
+      cache.byOrder.delete(r.id);
+    }
+  }
+  cache.lastRowid = top;
 }
 
 /**
@@ -1211,9 +1300,57 @@ function menuLookup(db: AppDatabase): MenuLookup {
  * / D8: from the price history since Phase 4 — the starting price for
  * anything older — so a later price change never moves an old estimate).
  * A put-back is valued at that same take's price, so it nets exactly. Net
- * of anything put back.
+ * of anything put back. Kept between asks where the connection keeps them
+ * (keepEstimates). The estimates handed back are shared: read them only.
  */
-function estimateOrders(db: AppDatabase, orderIds: string[], pricing: () => Pricing): Map<string, FoodCostEstimate> {
+export function estimateOrders(db: AppDatabase, orderIds: string[], pricing: () => Pricing): Map<string, FoodCostEstimate> {
+  const cache = estimateCaches.get(db);
+  if (!cache) return estimateFromLedger(db, orderIds, pricing);
+  refreshEstimates(db, cache);
+  const out = new Map<string, FoodCostEstimate>();
+  const missing: string[] = [];
+  for (const id of orderIds) {
+    const hit = cache.byOrder.get(id);
+    if (hit === undefined) missing.push(id);
+    else if (hit !== null) out.set(id, hit);
+  }
+  if (missing.length === 0) return out;
+  const fresh = estimateFromLedger(db, missing, pricing);
+  if (cache.byOrder.size + missing.length > ESTIMATE_CACHE_MAX) cache.byOrder.clear();
+  for (const id of missing) {
+    const e = fresh.get(id) ?? null;
+    cache.byOrder.set(id, e);
+    if (e) out.set(id, e);
+  }
+  return out;
+}
+
+/**
+ * The counted orders of [since, until) that kept no cost with the sale: the
+ * ones Reports estimates from their stock rows. By the orders' date index.
+ * Params: since, until.
+ */
+export const ORDERS_WITHOUT_COST_SQL = `
+  SELECT o.id AS id FROM orders o
+   WHERE ${IN_RANGE} AND ${COUNTED}
+     AND NOT EXISTS (SELECT 1 FROM order_item_costs k WHERE k.order_id = o.id AND k.status <> 'failed' AND k.deleted_at IS NULL)`;
+
+export function ordersWithoutCost(db: AppDatabase, range: ReportRange): string[] {
+  return (db.prepare(ORDERS_WITHOUT_COST_SQL).all(range.sinceIso, range.untilIso) as Array<{ id: string }>).map((r) => r.id);
+}
+
+/**
+ * Work these orders' estimates out now and keep them (a connection that
+ * keeps them: the Reports worker, between asks), in one read — so the first
+ * Profit, Channels or Food cost & stock of a long period finds them kept.
+ */
+export function warmEstimates(db: AppDatabase, orderIds: string[]): void {
+  if (orderIds.length === 0 || !estimateCaches.has(db)) return;
+  db.transaction(() => estimateOrders(db, orderIds, lazyPricing(db)))();
+}
+
+/** estimateOrders' reading and valuing of the orders' stock rows, every time. */
+function estimateFromLedger(db: AppDatabase, orderIds: string[], pricing: () => Pricing): Map<string, FoodCostEstimate> {
   const out = new Map<string, FoodCostEstimate>();
   for (const ids of chunks(orderIds)) {
     const rows = (
@@ -1432,6 +1569,30 @@ function getWaste(db: AppDatabase, range: ReportRange, pricing: () => Pricing): 
     t.byIngredient.set(r.ingredientId, ing);
   }
   return t;
+}
+
+/**
+ * Waste by reason and the food sent out but never paid for, over a period
+ * (spec 4.5): the Profit tab's waste and unpaid-food steps, the same figures
+ * as Food cost & stock's.
+ */
+export function getWasteAndUnpaid(
+  db: AppDatabase,
+  range: ReportRange,
+  pricing: () => Pricing = lazyPricing(db),
+): { wasteCents: number; wasteByReason: ReportWasteLine[]; sentNotPaid: ReportUnpaidFood } {
+  const waste = getWaste(db, range, pricing);
+  return {
+    wasteCents: waste.cents,
+    wasteByReason: WASTE_ORDER.map((r) => waste.byReason.get(r)).filter((l): l is ReportWasteLine => l !== undefined),
+    sentNotPaid: foodOfOrders(db, unpaidOrderIds(db, range, ['served', 'delivered']), pricing),
+  };
+}
+
+/** When this till first kept a sale's cost (order_item_costs' first row); null before any. */
+export function costingStartedAt(db: AppDatabase): string | null {
+  const started = db.prepare(`SELECT costed_at AS at FROM order_item_costs ORDER BY rowid LIMIT 1`).get() as { at: string } | undefined;
+  return started?.at ?? null;
 }
 
 function wasteIngredientLines(db: AppDatabase, w: WasteTally): ReportWasteIngredientLine[] {
@@ -1845,8 +2006,8 @@ export function buildWhenTab(db: AppDatabase, req: BusinessReportRequest, now = 
   };
 }
 
-/** Menu: every item sold and its category, at menu price. */
-export function buildMenuTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'menu'> {
+/** Menu: every item sold and its category, at menu price (Phase 9's costs: analytics/profit.ts menuCosts). */
+export function buildMenuTab(db: AppDatabase, req: BusinessReportRequest): Omit<ReportTabFigures<'menu'>, 'costs'> {
   const range = rangeOf(req);
   const items = getItems(db, range);
   // The stored subtotals (not the lines added up): the same figure as the
@@ -1863,8 +2024,14 @@ export function buildMenuTab(db: AppDatabase, req: BusinessReportRequest): Repor
   };
 }
 
-/** Channels & delivery: order types, and own-rider deliveries by rider and by area. */
-export function buildChannelsTab(db: AppDatabase, req: BusinessReportRequest): ReportTabFigures<'channels'> {
+/**
+ * Channels & delivery: order types, and own-rider deliveries by rider and by
+ * area (Phase 9's delivery areas and profit: analytics/profit.ts channelsExtras).
+ */
+export function buildChannelsTab(
+  db: AppDatabase,
+  req: BusinessReportRequest,
+): Omit<ReportTabFigures<'channels'>, 'areas' | 'noRateDeliveries' | 'noRateCount' | 'profit'> {
   const range = rangeOf(req);
   const sales = aggregateSales(getSaleRows(db, range), nameLookups(db));
   const net = netOf(sales.totals);
@@ -1880,14 +2047,43 @@ export function buildChannelsTab(db: AppDatabase, req: BusinessReportRequest): R
 }
 
 /**
+ * The columns of a foodpanda order's kept terms (order_channel_terms, alias
+ * `t`, LEFT JOINed: null when none) that keptTermsOf reads. Reports →
+ * Channels (getFoodpanda) and Reports → Profit (analytics/profit
+ * readOrderCosts) read the same ones.
+ */
+export const KEPT_TERMS_COLUMNS = `t.id AS termsId, t.commission_confirmed AS confirmed, t.commission_cents AS commission,
+         t.fixed_fee_cents AS fee, t.commission_tax_cents AS commissionTax, t.expected_payout_cents AS payout`;
+
+/** A kept-terms row as KEPT_TERMS_COLUMNS reads it, as pos-domain's KeptFoodpandaTerms (null: none kept). */
+export function keptTermsOf(r: {
+  termsId: string | null;
+  confirmed: number | null;
+  commission: number | null;
+  fee: number | null;
+  commissionTax: number | null;
+  payout: number | null;
+}): KeptFoodpandaTerms | null {
+  if (r.termsId === null) return null;
+  return {
+    confirmed: Number(r.confirmed) === 1,
+    commissionCents: Number(r.commission ?? 0),
+    fixedFeeCents: Number(r.fee ?? 0),
+    commissionTaxCents: Number(r.commissionTax ?? 0),
+    expectedPayoutCents: r.payout === null ? null : Number(r.payout),
+  };
+}
+
+/**
  * foodpanda in one period (Settings → foodpanda): the counted foodpanda
  * orders with the terms each kept at payment (order_channel_terms). Sales
- * and the deal come from the STORED order totals; commission, fee and tax
- * from the kept terms when the commission was CONFIRMED at payment. An order
- * paid before this version kept none, and one paid while the commission was
- * only suggested (not confirmed) kept a guess: both are worked out with the
- * fees in force now — so confirming the real commission later corrects them —
- * and counted as "estimated" (the deal's split and the tablet total are still
+ * and the deal come from the STORED order totals; foodpanda's money per
+ * order from pos-domain foodpandaOrderMoney — the same rule as Reports →
+ * Profit, so the two agree to the rupee: the kept commission, fee, tax and
+ * payout when the commission was CONFIRMED at payment; otherwise (paid
+ * before terms were kept, or while the commission was only suggested) the
+ * fees in force now — so confirming the real commission later corrects them
+ * — counted as "estimated" (the deal's split and the tablet total are still
  * the ones kept). A fully refunded order is not counted, so it counts no
  * commission. Food cost is the cost each sale kept (order_item_costs);
  * reportTabForLogin clears it for a login without costs.
@@ -1897,9 +2093,8 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     .prepare(
       `SELECT o.id AS orderId, o.order_number AS orderNumber, o.created_at AS createdAt,
               o.subtotal_cents AS subtotal, o.discount_cents AS discount, o.tax_cents AS tax, o.total_cents AS total,
-              t.id AS termsId, t.platform_funded_cents AS platform, t.commission_cents AS commission,
-              t.fixed_fee_cents AS fee, t.commission_tax_cents AS commissionTax, t.expected_payout_cents AS payout,
-              t.tablet_total_cents AS tablet, t.commission_confirmed AS confirmed,
+              ${KEPT_TERMS_COLUMNS},
+              t.platform_funded_cents AS platform, t.tablet_total_cents AS tablet,
               (SELECT p.reference_no FROM payments p
                 WHERE p.order_id = o.id AND p.method = 'foodpanda' AND p.amount_cents > 0 AND p.deleted_at IS NULL
                 ORDER BY p.paid_at LIMIT 1) AS code,
@@ -1938,7 +2133,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
   }>;
   if (rows.length === 0) return null;
 
-  // The fees in force now, for orders that kept no confirmed commission.
+  // The fees in force now (the one reader), for orders that kept no confirmed commission.
   const feesNow = readShopSetting(db, 'foodpanda.fees').value;
   const out: ReportFoodpanda = {
     orderCount: 0,
@@ -1949,6 +2144,8 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     commissionCents: 0,
     feeCents: 0,
     commissionTaxCents: 0,
+    foodpandaKeepsCents: 0,
+    upliftCents: 0,
     youKeepCents: 0,
     expectedPayoutCents: 0,
     estimatedOrders: 0,
@@ -1968,48 +2165,35 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     const sub = Number(r.subtotal);
     const disc = Number(r.discount);
     const total = Number(r.total);
+    // foodpanda's part of the deal: as kept at payment, else from the deal frozen on the order.
     let platform: number;
-    let commission: number;
-    let fee: number;
-    let commissionTax: number;
-    let payout: number;
-    if (r.termsId !== null && Number(r.confirmed) === 1) {
-      // Kept at payment with the owner's confirmed commission: final.
-      platform = Number(r.platform ?? 0);
-      commission = Number(r.commission ?? 0);
-      fee = Number(r.fee ?? 0);
-      commissionTax = Number(r.commissionTax ?? 0);
-      payout = Number(r.payout ?? total - commission - fee - commissionTax);
-    } else {
-      // No terms kept (paid before this version), or kept with a commission
-      // that was only suggested: worked out with the fees of now.
-      if (r.termsId !== null) platform = Number(r.platform ?? 0);
-      else {
-        const rule = parseFoodpandaDealRule(r.ruleJson);
-        platform = rule ? dealAmount(rule, sub).platformCents : 0;
-      }
-      const t = foodpandaTerms({ subtotalCents: sub, shopDiscountCents: disc, totalCents: total }, feesNow);
-      commission = t.commissionCents;
-      fee = t.fixedFeeCents;
-      commissionTax = t.commissionTaxCents;
-      payout = t.expectedPayoutCents;
+    if (r.termsId !== null) platform = Number(r.platform ?? 0);
+    else {
+      const rule = parseFoodpandaDealRule(r.ruleJson);
+      platform = rule ? dealAmount(rule, sub).platformCents : 0;
+    }
+    // The one per-order rule (Reports → Profit uses it too).
+    const m = foodpandaOrderMoney({ subtotalCents: sub, discountCents: disc, totalCents: total }, keptTermsOf(r), feesNow);
+    if (m.estimated) {
       out.estimatedOrders += 1;
       if (!feesNow.confirmed) {
         out.commissionSuggested = true;
         out.unconfirmedCommissionBps = feesNow.commissionBps;
       }
     }
-    const kept = sub - disc - commission - fee - commissionTax;
+    const kept = m.youKeepCents;
     out.orderCount += 1;
     out.tillPriceSalesCents += sub;
     out.shopDealCents += disc;
     out.foodpandaDealCents += platform;
     out.taxCents += Number(r.tax);
-    out.commissionCents += commission;
-    out.feeCents += fee;
-    out.commissionTaxCents += commissionTax;
+    out.commissionCents += m.commissionCents;
+    out.feeCents += m.fixedFeeCents;
+    out.commissionTaxCents += m.commissionTaxCents;
+    out.foodpandaKeepsCents += m.foodpandaKeepsCents;
+    out.upliftCents += m.upliftCents;
     out.youKeepCents += kept;
-    out.expectedPayoutCents += payout;
+    out.expectedPayoutCents += m.expectedPayoutCents;
     if (Number(r.costRows) > 0 && Number(r.failedRows) === 0) {
       costedOrders += 1;
       costCents += Number(r.cost);
@@ -2019,7 +2203,8 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
 
     const code = r.code?.trim() ? r.code.trim() : null;
     const tablet = r.tablet === null ? null : Number(r.tablet);
-    const diff = tablet === null ? null : tablet - total;
+    // Against what the tablet should show (the till's total at foodpanda's prices), as Pay checks it.
+    const diff = tablet === null ? null : tablet - m.expectedTabletCents;
     const differs = diff !== null && Math.abs(diff) > FOODPANDA_TABLET_TOLERANCE_CENTS;
     if (code === null) out.missingCodeCount += 1;
     if (differs) out.tabletDiffCount += 1;
@@ -2030,6 +2215,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
       createdAt: r.createdAt,
       foodpandaCode: code,
       tillTotalCents: total,
+      expectedTabletCents: m.expectedTabletCents,
       tabletTotalCents: tablet,
       diffCents: diff,
       differs,

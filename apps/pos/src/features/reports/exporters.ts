@@ -9,9 +9,13 @@
  * again here, so paper, file and screen always agree.
  */
 import {
+  MENU_MAP_WORDS,
   REPORT_TAB_LABEL,
   REPORT_TABS,
+  type ReportChannelProfit,
   type ReportKpis,
+  type ReportLineCost,
+  type ReportMenuMap,
   type ReportTab,
   type ReportTabData,
   type ReportTrends,
@@ -63,6 +67,7 @@ import {
   varianceHeadline,
   varianceWindowText,
 } from './varianceFormat';
+import { commissionText, menuMapAdvice, profitHeadline, riderText, stepAmount, stepLabel, stockGainNote, unknownCostNote } from './profitFormat';
 
 /** Some or all of the tabs, as fetched (for "Print everything"). */
 export type SomeReportTabs = { [K in ReportTab]?: ReportTabData[K] };
@@ -77,6 +82,44 @@ export type SomeReportTabs = { [K in ReportTab]?: ReportTabData[K] };
 export interface ReportExtras {
   trends?: ReportTrends | null;
   variance?: ReportVariance | null;
+  /** Menu's menu map (costing spec Phase 9, reports:menuMap; profit.view). */
+  menuMap?: ReportMenuMap | null;
+}
+
+// ------------------------------------------------ Phase 9: cost and profit --
+
+/** A cost line's cells: food cost and how much is known; profit and per sale only when the login may see profit. */
+function costCells(c: ReportLineCost | undefined, withProfit: boolean): CsvCell[] {
+  return [
+    c && c.knownUnits > 0 && c.foodCostBps !== null ? formatBps(c.foodCostBps) : null,
+    c && c.coverageBps !== null ? formatBps(c.coverageBps) : null,
+    ...(withProfit ? [c?.profitCents != null ? rs(c.profitCents) : null, c?.profitPerSaleCents != null ? rs(c.profitPerSaleCents) : null] : []),
+  ];
+}
+
+/** Profit is profit.view's: the main process sends it only then, and paper and file follow the data. */
+function menuHasProfit(r: ReportTabData['menu']): boolean {
+  return r.costs !== null && Object.values(r.costs.items).some((c) => c.profitCents !== null);
+}
+
+function channelProfitRows(channels: readonly ReportChannelProfit[]): CsvCell[][] {
+  return [
+    ['Order type', 'Orders', 'Sales before tax Rs', 'Of it delivery charges Rs', 'Food cost Rs', 'Sales with unknown cost Rs', 'foodpanda kept Rs', 'Price uplift Rs', 'Card and wallet fees Rs', 'Rider Rs', 'Earns Rs (known costs)', 'Per order Rs (known costs)'],
+    ...channels.map((c) => [
+      CHANNEL_LABEL[c.channel],
+      c.orderCount,
+      rs(c.salesCents),
+      rs(c.feeSalesCents),
+      rs(c.foodCostCents),
+      rs(c.unknownSalesCents),
+      rs(c.commissionCents),
+      rs(c.upliftCents),
+      rs(c.paymentFeeCents),
+      rs(c.riderCents),
+      rs(c.contributionCents),
+      c.contributionPerOrderCents === null ? null : rs(c.contributionPerOrderCents),
+    ]),
+  ];
 }
 
 // --------------------------------------------------------------------- CSV --
@@ -189,24 +232,66 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
   },
 
   menu: (sheet, r) => {
+    const costs = r.costs;
+    const withProfit = menuHasProfit(r);
+    const costHead = costs ? ['Food cost (known sales)', 'Costs known for', ...(withProfit ? ['Profit Rs (before channel costs)', 'Profit per sale Rs'] : [])] : [];
     sheet.heading('Items sold (menu price, before order discounts)');
-    sheet.push(['Item', 'Category', 'Quantity', 'Sales Rs']);
-    for (const i of r.items) sheet.push([i.name, i.categoryName, i.quantity, rs(i.salesCents)]);
+    sheet.push(['Item', 'Category', 'Quantity', 'Sales Rs', ...costHead]);
+    for (const i of r.items) sheet.push([i.name, i.categoryName, i.quantity, rs(i.salesCents), ...(costs ? costCells(costs.items[i.key], withProfit) : [])]);
     sheet.heading('Categories (menu price, before order discounts)');
-    sheet.push(['Category', 'Quantity', 'Sales Rs']);
-    for (const c of r.categories) sheet.push([c.name, c.quantity, rs(c.salesCents)]);
+    sheet.push(['Category', 'Quantity', 'Sales Rs', ...costHead]);
+    for (const c of r.categories) {
+      sheet.push([c.name, c.quantity, rs(c.salesCents), ...(costs ? costCells(costs.categories[c.categoryId ?? `name:${c.name}`], withProfit) : [])]);
+    }
+    if (costs) sheet.push([`Food cost${withProfit ? ' and profit' : ''}: on the sales whose cost is fully known, at what customers paid. ${costingStartText(costs.costingStartedAt)}`]);
   },
 
   channels: (sheet, r) => {
     sheet.heading('Order types');
     sheet.push(['Order type', 'Orders', 'Sales Rs']);
     for (const c of r.channels) sheet.push([CHANNEL_LABEL[c.channel], c.orderCount, rs(c.netSalesCents)]);
+    if (r.profit) {
+      sheet.heading('What each order type earns (before waste and missing stock)');
+      sheet.push(...channelProfitRows(r.profit.channels));
+      sheet.push([commissionText(r.profit.fees)]);
+      sheet.push([riderText(r.profit.riderCost)]);
+    }
     sheet.heading('Deliveries by rider');
     sheet.push(['Rider', 'Deliveries', 'Sales Rs', 'Average time on the road (minutes)']);
     for (const d of r.deliveries.byRider) sheet.push([d.name, d.deliveries, rs(d.netSalesCents), d.avgMinutesOut]);
+    const withProfit = r.areas.some((a) => a.riderCents !== null);
     sheet.heading('Deliveries by area');
-    sheet.push(['Area', 'Orders', 'Sales Rs']);
-    for (const a of r.deliveries.byArea) sheet.push([a.area, a.orderCount, rs(a.netSalesCents)]);
+    sheet.push([
+      'Area',
+      'Delivery zone',
+      'Orders',
+      'Sales Rs',
+      'Average order Rs',
+      'Delivery charges before tax Rs',
+      'Average time on the road (minutes)',
+      'Customers',
+      'Came back (2+ orders in 90 days)',
+      ...(withProfit ? ['Rider Rs', 'Earns per order Rs'] : []),
+    ]);
+    for (const a of r.areas) {
+      sheet.push([
+        a.area,
+        a.zoneId === null ? 'Not matched' : 'Yes',
+        a.orderCount,
+        rs(a.netSalesCents),
+        rs(a.avgOrderCents),
+        rs(a.feesCollectedCents),
+        a.avgMinutesOut,
+        a.customers,
+        a.repeatCustomers,
+        ...(withProfit ? [a.riderCents === null ? null : rs(a.riderCents), a.contributionPerOrderCents === null ? null : rs(a.contributionPerOrderCents)] : []),
+      ]);
+    }
+    if (r.noRateCount > 0) {
+      sheet.heading(`Deliveries with no area and no delivery charge (${r.noRateCount})`);
+      sheet.push(['Order', 'Started', 'Area as typed']);
+      for (const d of r.noRateDeliveries) sheet.push([d.orderNumber, fmtWhen(d.createdAt), d.area]);
+    }
   },
 
   foodStock: (sheet, r) => {
@@ -349,7 +434,55 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
       sheet.push([fmtWhen(d.createdAt), DRAWER_OPEN_WHY[d.kind], d.reason, d.openedBy, d.approvedBy, d.outsideShift ? 'No' : 'Yes']);
     }
   },
+
+  profit: (sheet, r) => {
+    sheet.heading('From sales to profit before overheads (this till)');
+    sheet.push(['', 'Rs']);
+    for (const s of r.steps) sheet.push([stepLabel(s.key, s.cents), rs(s.cents)]);
+    sheet.push(['Profit before overheads', rs(r.profitCents)]);
+    const unknown = unknownCostNote(r);
+    if (unknown) sheet.push([unknown]);
+    const gain = stockGainNote(r);
+    if (gain) sheet.push([gain]);
+    if (r.stockLoss.state !== 'counted' && r.stockLoss.message) sheet.push([r.stockLoss.message]);
+    sheet.push([commissionText(r.fees)]);
+    sheet.push([riderText(r.riderCost)]);
+    if (r.estimatedOrders > 0) sheet.push([estimatedText(r)]);
+    sheet.heading('What was thrown away, by reason');
+    sheet.push(['Reason', 'Times', 'Cost Rs']);
+    for (const w of r.wasteByReason) sheet.push([WASTE_REASON_LABEL[w.reason], w.times, rs(w.cents)]);
+    sheet.push(['Food sent out, not paid', r.sentNotPaid.orderCount, rs(r.sentNotPaid.costCents)]);
+    sheet.heading('What each order type earns (before waste and missing stock)');
+    sheet.push(...channelProfitRows(r.channels));
+    sheet.heading('Profit by category (food only, fully costed sales, before channel costs)');
+    sheet.push(['Category', 'Sold', 'Sales before tax Rs', 'Costs known for', 'Food cost', 'Profit Rs', 'Profit per sale Rs']);
+    for (const c of r.categories) {
+      sheet.push([
+        c.name,
+        c.units,
+        rs(c.salesCents),
+        c.coverageBps === null ? null : formatBps(c.coverageBps),
+        c.foodCostBps === null ? null : formatBps(c.foodCostBps),
+        c.profitCents === null ? null : rs(c.profitCents),
+        c.profitPerSaleCents === null ? null : rs(c.profitPerSaleCents),
+      ]);
+    }
+  },
 };
+
+/** The menu map in the file (costing spec 4.8). */
+function menuMapCsv(sheet: CsvSheet, m: ReportMenuMap): void {
+  sheet.heading(`Menu map (${m.lastDays ? 'the last 28 days' : 'the period'}; what one sale earns at menu price)`);
+  sheet.push(['Category', 'Dish', 'Sold', 'Share of the category', 'Earns a sale Rs', 'Price Rs', 'Cost Rs', 'Where it sits', 'What to do']);
+  for (const c of m.categories) {
+    if (c.state === 'few_sales') sheet.push([c.name, `Not enough sales yet: ${c.units} sold, it needs 200.`]);
+    if (c.state === 'few_dishes') sheet.push([c.name, 'Not enough dishes with a known cost sold yet: it needs 3.']);
+    for (const d of c.items) {
+      sheet.push([c.name, d.name, d.units, formatBps(d.mixBps), rs(d.profitPerSaleCents), rs(d.priceCents), rs(d.costCents), `${MENU_MAP_WORDS[d.class].plain} (${MENU_MAP_WORDS[d.class].term})`, menuMapAdvice(d, c.name)]);
+    }
+    for (const x of c.cantPlace) sheet.push([c.name, x.name, x.units, null, null, null, null, `Can't place yet: costs known for ${formatBps(x.costedShareBps)} of its sales`]);
+  }
+}
 
 /** One tab as a CSV file: the period, then that tab's sections only. */
 export function buildTabCsv<K extends ReportTab>(
@@ -368,6 +501,7 @@ export function buildTabCsv<K extends ReportTab>(
   (CSV_PARTS[tab] as CsvPart<K>)(sheet, data, period, madeAt);
   if (tab === 'overview' && extras.trends) trendsCsv(sheet, extras.trends);
   if (tab === 'foodStock' && extras.variance) varianceCsv(sheet, extras.variance);
+  if (tab === 'menu' && extras.menuMap) menuMapCsv(sheet, extras.menuMap);
   return toCsv(sheet.rows);
 }
 
@@ -495,6 +629,7 @@ const TAB_SLUG: Record<ReportTab, string> = {
   channels: 'channels-delivery',
   foodStock: 'food-cost-stock',
   team: 'team-leakage',
+  profit: 'profit',
 };
 
 export function csvFileName(period: Pick<ReportPeriod, 'firstDay' | 'lastDay'>, tab?: ReportTab): string {
@@ -644,16 +779,26 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
 
   menu: (r) => {
     const items = limited(r.items, 15);
+    const costs = r.costs;
+    const withProfit = menuHasProfit(r);
+    const bps = (v: number | null | undefined) => esc(v === null || v === undefined ? '—' : formatBps(v));
+    const opt = (v: number | null | undefined) => (v === null || v === undefined ? '—' : money(v));
+    const cells = (c: ReportLineCost | undefined): string[] =>
+      costs ? [c && c.knownUnits > 0 ? bps(c.foodCostBps) : '—', ...(withProfit ? [opt(c?.profitCents)] : [])] : [];
+    const head = costs ? ['Food cost', ...(withProfit ? ['Profit'] : [])] : [];
+    const right = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
     return [
       `<section class="two"><div><h2>Top items</h2>${table(
-        ['Item', 'Qty', 'Sales'],
-        items.shown.map((i) => [esc(i.name), String(i.quantity), money(i.salesCents)]),
-        [1, 2],
+        ['Item', 'Qty', 'Sales', ...head],
+        items.shown.map((i) => [esc(i.name), String(i.quantity), money(i.salesCents), ...cells(costs?.items[i.key])]),
+        right(2 + head.length),
       )}${items.note}</div><div><h2>Categories</h2>${table(
-        ['Category', 'Qty', 'Sales'],
-        r.categories.map((c) => [esc(c.name), String(c.quantity), money(c.salesCents)]),
-        [1, 2],
-      )}<p class="muted">At menu price, before order discounts.</p></div></section>`,
+        ['Category', 'Qty', 'Sales', ...head],
+        r.categories.map((c) => [esc(c.name), String(c.quantity), money(c.salesCents), ...cells(costs?.categories[c.categoryId ?? `name:${c.name}`])]),
+        right(2 + head.length),
+      )}<p class="muted">At menu price, before order discounts.${
+        costs ? ` Food cost${withProfit ? ' and profit (before channel costs)' : ''} on the sales whose cost is fully known, at what customers paid.` : ''
+      }</p></div></section>`,
     ];
   },
 
@@ -666,17 +811,37 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
         [1, 2, 3],
       )}</section>`,
     ];
+    if (r.profit) parts.push(channelProfitPrint(r.profit.channels, `${commissionText(r.profit.fees)} ${riderText(r.profit.riderCost)}`));
     if (r.deliveries.byRider.length > 0) {
+      const withProfit = r.areas.some((a) => a.riderCents !== null);
+      const areas = limited(r.areas, 15);
       parts.push(
-        `<section class="two"><div><h2>Deliveries by rider</h2>${table(
+        `<section><h2>Deliveries by rider</h2>${table(
           ['Rider', 'Deliveries', 'Sales', 'Avg time out'],
           r.deliveries.byRider.map((d) => [esc(d.name), String(d.deliveries), money(d.netSalesCents), esc(fmtMinutes(d.avgMinutesOut))]),
           [1, 2, 3],
-        )}</div><div><h2>Deliveries by area</h2>${table(
-          ['Area', 'Orders', 'Sales'],
-          limited(r.deliveries.byArea, 15).shown.map((a) => [esc(a.area), String(a.orderCount), money(a.netSalesCents)]),
-          [1, 2],
-        )}</div></section>`,
+        )}</section><section><h2>Deliveries by area</h2>${table(
+          ['Area', 'Orders', 'Sales', 'Charges before tax', 'Avg time out', 'Came back', ...(withProfit ? ['Rider', 'Earns / order'] : [])],
+          areas.shown.map((a) => [
+            esc(a.area),
+            String(a.orderCount),
+            money(a.netSalesCents),
+            money(a.feesCollectedCents),
+            esc(fmtMinutes(a.avgMinutesOut)),
+            a.customers > 0 ? esc(`${a.repeatCustomers} of ${a.customers}`) : '—',
+            ...(withProfit
+              ? [a.riderCents === null ? '—' : money(a.riderCents), a.contributionPerOrderCents === null ? '—' : money(a.contributionPerOrderCents)]
+              : []),
+          ]),
+          withProfit ? [1, 2, 3, 4, 5, 6, 7] : [1, 2, 3, 4, 5],
+        )}${areas.note}${
+          r.noRateCount > 0
+            ? `<p><b>${r.noRateCount} ${r.noRateCount === 1 ? 'delivery has' : 'deliveries have'} no area and no delivery charge:</b> ${r.noRateDeliveries
+                .slice(0, 15)
+                .map((d) => esc(`order ${d.orderNumber}${d.area ? ` (“${d.area}”)` : ''}`))
+                .join(', ')}.</p>`
+            : ''
+        }</section>`,
       );
     } else {
       parts.push('<section><h2>Deliveries</h2><p class="muted">No deliveries in this period.</p></section>');
@@ -832,6 +997,8 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
     }
     return parts;
   },
+
+  profit: (r) => profitPrint(r),
 };
 
 function printHeader(title: string, period: ReportPeriod, madeAt: Date, withCompare: boolean): string {
@@ -842,7 +1009,68 @@ function printHeader(title: string, period: ReportPeriod, madeAt: Date, withComp
   );
 }
 
-/** One tab's printout (HTML, escaped): the period, then that tab's sections only. */
+/** What each order type earns, on paper (costing spec Phase 9). */
+function channelProfitPrint(channels: readonly ReportChannelProfit[], note: string): string {
+  return `<section><h2>What each order type earns</h2>${table(
+    ['Order type', 'Orders', 'Sales before tax', 'Food cost', 'foodpanda kept', 'Rider', 'Earns', 'Per order'],
+    channels.map((c) => [
+      esc(CHANNEL_LABEL[c.channel]),
+      String(c.orderCount),
+      money(c.salesCents),
+      money(c.foodCostCents),
+      c.commissionCents > 0 ? money(c.commissionCents) : '—',
+      c.riderCents > 0 ? money(c.riderCents) : '—',
+      `<b>${money(c.contributionCents)}</b>`,
+      c.contributionPerOrderCents === null ? '—' : money(c.contributionPerOrderCents),
+    ]),
+    [1, 2, 3, 4, 5, 6, 7],
+  )}<p class="muted">Sales before tax, less the food whose cost is known, commission, card fees and the rider; before waste and missing stock. An order with food of unknown cost counts only in the share that is known. ${esc(note)}</p></section>`;
+}
+
+/** The menu map on paper (costing spec 4.8). */
+function menuMapPrint(m: ReportMenuMap): string {
+  const cats = m.categories.map((c) => {
+    if (c.state !== 'ok') {
+      return `<p><b>${esc(c.name)}</b>: ${esc(c.state === 'few_sales' ? `not enough sales yet (${c.units} sold, it needs 200)` : 'not enough dishes with a known cost sold yet (it needs 3)')}.</p>`;
+    }
+    return `<p><b>${esc(c.name)}</b> <span class="muted">${c.units} sold · a sale earns ${money(c.averageProfitCents ?? 0)} on average</span></p>${table(
+      ['Dish', 'Sold', 'Earns a sale', 'What to do'],
+      c.items.map((d) => [esc(d.name), `${d.units} (${esc(formatBps(d.mixBps))})`, money(d.profitPerSaleCents), `${esc(menuMapAdvice(d, c.name))} <span class="muted">(${esc(MENU_MAP_WORDS[d.class].term)})</span>`]),
+      [1, 2],
+    )}`;
+  });
+  return `<section><h2>Menu map (${m.lastDays ? 'the last 28 days' : 'the period'})</h2>${cats.join('')}<p class="muted">What one sale earns at menu price, less its cost. Nothing changes on the till.</p></section>`;
+}
+
+/** Profit (costing spec Phase 9, profit.view) on paper: the waterfall, then by order type and by category. */
+function profitPrint(r: ReportTabData['profit']): string[] {
+  const unknown = unknownCostNote(r);
+  const gain = stockGainNote(r);
+  return [
+    `<section><h2>From sales to profit before overheads (this till)</h2><p><b>${esc(profitHeadline(r))}</b></p>${table(
+      ['', 'Rs'],
+      [...r.steps.map((s) => [esc(stepLabel(s.key, s.cents)), esc(stepAmount(s.key, s.cents))]), ['<b>Profit before overheads</b>', `<b>${money(r.profitCents)}</b>`]],
+      [1],
+    )}${unknown ? `<p class="muted">${esc(unknown)}</p>` : ''}${gain ? `<p class="muted">${esc(gain)}</p>` : ''}${
+      r.stockLoss.state !== 'counted' && r.stockLoss.message ? `<p class="muted">${esc(r.stockLoss.message)}</p>` : ''
+    }<p class="muted">${esc(commissionText(r.fees))} ${esc(riderText(r.riderCost))} ${esc(estimatedText(r))}</p></section>`,
+    channelProfitPrint(r.channels, ''),
+    `<section><h2>Profit by category</h2>${table(
+      ['Category', 'Sold', 'Sales', 'Costs known', 'Food cost', 'Profit', 'Per sale'],
+      r.categories.map((c) => [
+        esc(c.name),
+        String(c.units),
+        money(c.salesCents),
+        esc(c.coverageBps === null ? '—' : formatBps(c.coverageBps)),
+        esc(c.foodCostBps === null ? '—' : formatBps(c.foodCostBps)),
+        c.profitCents === null ? '—' : money(c.profitCents),
+        c.profitPerSaleCents === null ? '—' : money(c.profitPerSaleCents),
+      ]),
+      [1, 2, 3, 4, 5, 6],
+    )}<p class="muted">Food only, on the sales whose cost is fully known, before channel costs (commission, rider).</p></section>`,
+  ];
+}
+
 /** Purchases (costing spec Phase 5): spend by supplier and by ingredient, with the latest price's change. */
 function purchasesPrint(p: ReportTabData['foodStock']['purchases']): string {
   if (!hasPurchases(p)) return '<section><h2>Purchases (this till)</h2><p class="muted">No stock bought in this period.</p></section>';
@@ -873,6 +1101,7 @@ export function buildTabPrintBody<K extends ReportTab>(
   const parts = (PRINT_PARTS[tab] as PrintPart<K>)(data, period, madeAt);
   if (tab === 'overview' && extras.trends) parts.push(trendsPrint(extras.trends));
   if (tab === 'foodStock' && extras.variance) parts.unshift(variancePrint(extras.variance));
+  if (tab === 'menu' && extras.menuMap) parts.push(menuMapPrint(extras.menuMap));
   return printHeader(`${REPORT_TAB_LABEL[tab]} — ${period.title}`, period, madeAt, tab === 'overview') + parts.join('');
 }
 
@@ -987,6 +1216,7 @@ export function buildPrintEverything(tabs: SomeReportTabs, period: ReportPeriod,
     if (tab === 'foodStock' && extras.variance) parts.push(variancePrint(extras.variance));
     parts.push(...(PRINT_PARTS[tab] as PrintPart<typeof tab>)(data as never, period, madeAt));
     if (tab === 'overview' && extras.trends) parts.push(trendsPrint(extras.trends));
+    if (tab === 'menu' && extras.menuMap) parts.push(menuMapPrint(extras.menuMap));
   }
   return parts.join('');
 }

@@ -77,6 +77,8 @@ export interface FeesForm {
   base: FoodpandaCommissionBase;
   fixedFee: string;
   commissionTax: string;
+  /** How much above the till's prices the foodpanda menu is (%). */
+  uplift: string;
 }
 
 export function feesToForm(f: FoodpandaFees): FeesForm {
@@ -86,6 +88,7 @@ export function feesToForm(f: FoodpandaFees): FeesForm {
     base: f.base,
     fixedFee: String(f.fixedFeeCents / 100),
     commissionTax: percentFromBps(f.commissionTaxBps).replace('%', ''),
+    uplift: percentFromBps(f.upliftBps).replace('%', ''),
   };
 }
 
@@ -98,6 +101,10 @@ export function feesFromForm(f: FeesForm): Parsed<FoodpandaFees> {
   if (fee !== null && (Number.isNaN(fee) || fee > 200_000)) return { value: null, problem: 'The fee per order is whole rupees, Rs 0 to Rs 2,000.' };
   const tax = f.commissionTax.trim() === '' ? 0 : bpsFromPercentText(f.commissionTax);
   if (tax === null || tax > 5_000) return { value: null, problem: 'The tax on the commission is a % from 0 to 50.' };
+  const uplift = f.uplift.trim() === '' ? 0 : bpsFromPercentText(f.uplift);
+  if (uplift === null || uplift > 10_000) {
+    return { value: null, problem: "How much dearer foodpanda is: a % from 0 to 100 (0 if foodpanda shows the till's prices)." };
+  }
   return {
     value: {
       v: SHOP_SETTING_FORMAT['foodpanda.fees'],
@@ -106,6 +113,7 @@ export function feesFromForm(f: FeesForm): Parsed<FoodpandaFees> {
       base: f.base,
       fixedFeeCents: fee ?? 0,
       commissionTaxBps: tax,
+      upliftBps: uplift,
     },
     problem: null,
   };

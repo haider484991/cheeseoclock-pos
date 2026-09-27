@@ -4,7 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ChoiceCostView, CostLineView, ItemCostSheet, ItemFoodpandaLine, PaidExtraView, RequiredGroupView } from '@cheeseoclock/shared-types';
-import { BookOpen, Calculator, ChevronDown, ChevronRight, Printer, X } from 'lucide-react';
+import { BookOpen, Calculator, ChevronDown, ChevronRight, FlaskConical, Printer, X } from 'lucide-react';
 import { useItemCostSheet } from './costingQueries';
 import { FoodCostChip } from './CostChip';
 import { BatchBreakdown } from './BatchBreakdown';
@@ -29,9 +29,22 @@ import { usePrintSheet } from './usePrintSheet';
  * One item's cost sheet, in a drawer: what is always in it (a sauce or dough
  * made in-house opens up into what it is made of), each choice the customer
  * must make with what every option costs and how often it is picked, the
- * paid extras (price, cost, what you keep) and what each leave-out saves.
+ * paid extras (price, cost) and what each leave-out saves. For profit.view
+ * (costing spec Phase 9; the owner's alone since 2026-09-27): what you keep
+ * per sale and per extra, the price that brings it to its target, and "Try a
+ * price" (Costing → What-if with this dish). The main process leaves the
+ * profit figures out for anyone else; this shows only what it was given.
  */
-export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: string; onClose: () => void }) {
+export function ItemCostSheetDrawer({
+  menuItemId,
+  onClose,
+  onTryPrice,
+}: {
+  menuItemId: string;
+  onClose: () => void;
+  /** Given (profit.view): "Try a price" opens What-if with this dish. */
+  onTryPrice?: (menuItemId: string) => void;
+}) {
   const q = useItemCostSheet(menuItemId);
   const navigate = useNavigate();
   const printer = usePrintSheet();
@@ -98,6 +111,14 @@ export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: strin
                 </section>
               )}
 
+              {sheet.priceToHitCents !== null && sheet.row.flag !== 'grey' && (
+                <p className="rounded-lg bg-stone-50 px-3 py-2 text-sm dark:bg-stone-800/60">
+                  {sheet.priceToHitCents <= sheet.row.basePriceCents
+                    ? `On its ${formatBps(sheet.row.targetBps)} target at today's price of ${formatCents(sheet.row.basePriceCents)}.`
+                    : `The price that brings it to its ${formatBps(sheet.row.targetBps)} target: ${formatCents(sheet.priceToHitCents)} (now ${formatCents(sheet.row.basePriceCents)}), before tax.`}
+                </p>
+              )}
+
               {sheet.onFoodpanda && sheet.row.flag !== 'grey' && <OnFoodpanda line={sheet.onFoodpanda} costCents={sheet.row.costCents} />}
 
               <p className="text-xs text-stone-500">
@@ -128,6 +149,19 @@ export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: strin
             <Button variant="secondary" size="sm" disabled={!sheet} onClick={() => sheet && printer.print(costSheetPrintHtml(sheet))}>
               <Printer className="h-4 w-4" /> Print cost sheet
             </Button>
+            {onTryPrice && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!sheet}
+                onClick={() => {
+                  onTryPrice(menuItemId);
+                  onClose();
+                }}
+              >
+                <FlaskConical className="h-4 w-4" /> Try a price
+              </Button>
+            )}
             <Button variant="ghost" size="sm" className="ml-auto" onClick={onClose}>
               Close
             </Button>
@@ -140,15 +174,21 @@ export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: strin
 }
 
 /**
- * "On foodpanda" (Settings → foodpanda): a typical plate at the deal a
- * foodpanda order started now gets. foodpanda's commission and what the
- * shop keeps come only for the owner (the main process leaves them out).
+ * "On foodpanda" (Settings → foodpanda): a typical plate at foodpanda's
+ * prices and the deal a foodpanda order started now gets. foodpanda's
+ * commission and what the shop keeps are profit: the owner's alone
+ * (profit.view — the main process leaves them out for a manager).
  */
-function OnFoodpanda({ line, costCents }: { line: ItemFoodpandaLine; costCents: number }) {
+export function OnFoodpanda({ line, costCents }: { line: ItemFoodpandaLine; costCents: number }) {
   return (
     <section>
       <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-stone-500">On foodpanda</h3>
       <p className="text-sm">
+        {line.upliftBps > 0 && (
+          <>
+            Listed at {formatCents(line.listingPriceCents)} ({formatBps(line.upliftBps)} above the till&apos;s {formatCents(line.priceCents)}).{' '}
+          </>
+        )}
         {line.dealPercent > 0 ? (
           <>
             With the {line.dealPercent}% deal{line.shopPercent < line.dealPercent ? ` (your part ${line.shopPercent}%)` : ''}
@@ -187,10 +227,16 @@ function Headline({ sheet }: { sheet: ItemCostSheet }) {
   }
   return (
     <span className="flex flex-wrap items-center gap-2">
-      <span>
-        Costs <b className="text-stone-900 dark:text-stone-100">{formatCents(r.costCents)}</b> to make, you keep{' '}
-        <b className="text-stone-900 dark:text-stone-100">{formatCents(r.profitCents)}</b> per sale at {formatCents(r.priceCents)}.
-      </span>
+      {r.profitCents === null ? (
+        <span>
+          Costs <b className="text-stone-900 dark:text-stone-100">{formatCents(r.costCents)}</b> to make; the price is {formatCents(r.priceCents)}.
+        </span>
+      ) : (
+        <span>
+          Costs <b className="text-stone-900 dark:text-stone-100">{formatCents(r.costCents)}</b> to make, you keep{' '}
+          <b className="text-stone-900 dark:text-stone-100">{formatCents(r.profitCents)}</b> per sale at {formatCents(r.priceCents)}.
+        </span>
+      )}
       <FoodCostChip flag={r.flag} bps={r.foodCostBps} targetBps={r.targetBps} />
       <span className="text-xs text-stone-500">
         {FLAG_LABEL[r.flag]} · target {formatBps(r.targetBps)}
@@ -376,6 +422,8 @@ function OptionRow({ option: o, open, onToggle }: { option: ChoiceCostView; open
 
 function PaidExtras({ extras }: { extras: readonly PaidExtraView[] }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // "You keep" only when the main process sent it (profit.view).
+  const withKeep = extras.some((x) => x.marginCents !== null);
   return (
     <section>
       <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-stone-500">Paid extras</h3>
@@ -385,7 +433,7 @@ function PaidExtras({ extras }: { extras: readonly PaidExtraView[] }) {
             <th className="pb-1 font-medium">Extra</th>
             <th className="pb-1 text-right font-medium">Price</th>
             <th className="pb-1 text-right font-medium">Cost</th>
-            <th className="pb-1 text-right font-medium">You keep</th>
+            {withKeep && <th className="pb-1 text-right font-medium">You keep</th>}
             <th className="pb-1 text-center font-medium">Food cost</th>
           </tr>
         </thead>
@@ -413,14 +461,16 @@ function PaidExtras({ extras }: { extras: readonly PaidExtraView[] }) {
                   </td>
                   <td className="py-1 text-right font-mono">{formatCents(x.priceDeltaCents)}</td>
                   <td className="py-1 text-right font-mono">{x.flag === 'grey' ? '—' : formatCents(x.costCents)}</td>
-                  <td className="py-1 text-right font-mono">{x.flag === 'grey' ? '—' : formatCents(x.marginCents)}</td>
+                  {withKeep && (
+                    <td className="py-1 text-right font-mono">{x.flag === 'grey' || x.marginCents === null ? '—' : formatCents(x.marginCents)}</td>
+                  )}
                   <td className="py-1 text-center">
                     <FoodCostChip flag={x.flag} bps={x.foodCostBps} />
                   </td>
                 </tr>
                 {expanded && (
                   <tr>
-                    <td colSpan={5} className="pb-2 pl-5">
+                    <td colSpan={withKeep ? 5 : 4} className="pb-2 pl-5">
                       <LineTable lines={x.lines} compact />
                     </td>
                   </tr>
