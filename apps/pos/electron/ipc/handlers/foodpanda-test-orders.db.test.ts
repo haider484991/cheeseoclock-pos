@@ -420,6 +420,21 @@ live('R1 × v0.7.22: a foodpanda test order the owner deleted is in none of food
   });
 });
 
+live('R2: a cash sale at Pay hands its drawer row to the spooler (the merged orders:tender)', () => {
+  it('one "sale" row for the order, and the spooler is asked to pulse for exactly that row', async () => {
+    h.session = CASHIER_LOGIN;
+    const o = await call<Order>('orders:create', { mode: 'takeaway' });
+    shop.r.addOrderItem(db, { orderId: o.id, menuItemId: shop.item.bakedWings, quantity: 1, modifierIds: [], notes: null }, CASHIER);
+    const total = shop.r.findOrder(db, o.id)!.totalCents;
+    await call<OrderSnapshot>('orders:tender', { orderId: o.id, payments: [{ method: 'cash', amountCents: total, tenderedCents: total }] });
+
+    const sale = rows<{ id: string }>(`SELECT id FROM drawer_opens WHERE order_id = ? AND kind = 'sale'`, o.id);
+    expect(sale).toHaveLength(1);
+    // Without the row id the spooler never pulses: cash sales would stop opening the drawer.
+    expect(spooled(o.id)).toEqual([{ event: 'paid', drawerOpenId: sale[0]!.id }]);
+  });
+});
+
 live('R2 × v0.7.22: a foodpanda order never opens the drawer and writes no drawer-log row', () => {
   it('paid at Pay: no drawer row, the spooler asked for no pulse; a cash leg on it is refused and writes nothing', async () => {
     const before = drawerRows();
