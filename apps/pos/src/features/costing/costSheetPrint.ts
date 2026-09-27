@@ -6,6 +6,8 @@
  * It never prints a missing price as a Rs 0 cost: an item that can't be
  * costed says why instead of a cost, a profit and a %, an extra with no
  * priced lines prints "—", and a sum with an unpriced part says "at least".
+ * What you keep is printed only when the sheet carries it (profit.view, the
+ * owner's: the main process leaves it out for anyone else).
  */
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { BatchCalc, CostLineView, ItemCostSheet, MenuCostRow } from '@cheeseoclock/shared-types';
@@ -62,13 +64,17 @@ function lineRows(lines: CostLineView[]): string {
 const HEAD = (share: string) =>
   `<thead><tr><th>Ingredient</th><th class="r">Amount</th><th class="r">Price</th><th class="r">Cost</th><th class="r">${esc(share)}</th></tr></thead>`;
 
-/** The headline: what it costs and keeps, or — when it can't be costed — why, with no figures that would read as Rs 0. */
+/**
+ * The headline: what it costs (and, for profit.view, what you keep), or —
+ * when it can't be costed — why, with no figures that would read as Rs 0.
+ */
 function headline(r: MenuCostRow): string {
   if (r.flag === 'grey') {
     return `${esc(r.categoryName)} · can't be costed yet: ${esc(cantCostReason(r))}. Price ${money(r.priceCents)}.`;
   }
+  const keep = r.profitCents === null ? `, price ${money(r.priceCents)}` : `, you keep ${money(r.profitCents)} per sale at ${money(r.priceCents)}`;
   return (
-    `${esc(r.categoryName)} · costs ${money(r.costCents)} to make, you keep ${money(r.profitCents)} per sale at ${money(r.priceCents)}` +
+    `${esc(r.categoryName)} · costs ${money(r.costCents)} to make${keep}` +
     ` · food cost ${esc(formatBps(r.foodCostBps))} (target ${esc(formatBps(r.targetBps))}${r.targetConfirmed ? '' : ', suggested'}) · ${esc(FLAG_LABEL[r.flag])}`
   );
 }
@@ -103,8 +109,10 @@ export function costSheetPrintHtml(sheet: ItemCostSheet, printedAt: Date = new D
     );
   }
   if (sheet.paidExtras.length > 0) {
+    // "You keep" only when the sheet carries it (profit.view).
+    const withKeep = sheet.paidExtras.some((x) => x.marginCents !== null);
     parts.push(
-      `<section><h2>Paid extras</h2><table><thead><tr><th>Extra</th><th class="r">Price</th><th class="r">Cost</th><th class="r">You keep</th><th class="r">Food cost</th></tr></thead><tbody>` +
+      `<section><h2>Paid extras</h2><table><thead><tr><th>Extra</th><th class="r">Price</th><th class="r">Cost</th>${withKeep ? '<th class="r">You keep</th>' : ''}<th class="r">Food cost</th></tr></thead><tbody>` +
         sheet.paidExtras
           .map((x) => {
             // An extra with no priced lines (or none at all) is not a Rs 0 cost: it is not known.
@@ -113,7 +121,7 @@ export function costSheetPrintHtml(sheet: ItemCostSheet, printedAt: Date = new D
             return (
               `<tr><td>${esc(x.name)}${why}</td><td class="r">${money(x.priceDeltaCents)}</td>` +
               `<td class="r">${unknown ? '—' : money(x.costCents)}</td>` +
-              `<td class="r">${unknown ? '—' : money(x.marginCents)}</td>` +
+              (withKeep ? `<td class="r">${unknown || x.marginCents === null ? '—' : money(x.marginCents)}</td>` : '') +
               `<td class="r">${unknown ? '—' : esc(formatBps(x.foodCostBps))}</td></tr>`
             );
           })

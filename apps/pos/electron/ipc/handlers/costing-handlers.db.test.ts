@@ -3,20 +3,22 @@
  * against a real database built from every migration and a made-up shop
  * (db/costing-shop.fixture.ts):
  *   - a cashier is refused every costing:* channel in the main process, and
- *     a manager may read costs but not change the owner's targets;
- *   - Menu costs: cost to make, price, what you keep, food cost % and the
- *     chip — neutral while the targets are suggestions, coloured once the
- *     owner taps "Use these"; the item cost sheet with its batch sauce
- *     opened up, the customer's picks, paid extras and leave-outs;
+ *     a manager may read costs but not change the owner's targets, and sees
+ *     no profit (owner, 2026-09-27): no "you keep", no What-if;
+ *   - Menu costs: cost to make, price, what you keep (the owner's), food
+ *     cost % and the chip — neutral while the targets are suggestions,
+ *     coloured once the owner taps "Use these"; the item cost sheet with its
+ *     batch sauce opened up, the customer's picks, paid extras and leave-outs;
  *   - Missing costs lists an unpriced ingredient and a food item with no
  *     recipe; marking the ingredient "free" takes it off;
  *   - the batch calculator (200 g of a 2 kg sauce, every input costed) and
  *     "Make this amount" (inventory:makeBatch with any amount), which any
  *     login may call and which answers with no costs;
  *   - Phase 9: foodpanda's commission and the rider cost (managers read, the
- *     owner saves — synced and audited); What-if (profit.view): a dearer
- *     tomato flows through the sauce into every pizza, at the last 4 weeks'
- *     sales, nothing saved; "price to hit target" only for profit.view.
+ *     owner saves — synced and audited); What-if (profit.view, the owner's
+ *     alone): a dearer tomato flows through the sauce into every pizza, at
+ *     the last 4 weeks' sales, nothing saved; "price to hit target" and what
+ *     you keep only for profit.view.
  *
  * Only `defineHandler` (captured) and the signed-in session are stood in
  * for. node:sqlite behind better-sqlite3's shape; skips where it is
@@ -32,8 +34,6 @@ type Handler = (ctx: unknown, payload: unknown) => unknown;
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (ctx: unknown, payload: unknown) => unknown>(),
   session: null as unknown,
-  /** A test role table with profit.view taken from managers (owner question 8 answered "only me"). */
-  noProfit: false,
 }));
 
 vi.mock('../registry.js', () => {
@@ -55,14 +55,6 @@ vi.mock('../registry.js', () => {
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {} } }));
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] }, app: { getPath: () => '' } }));
 vi.mock('../../services/auth-service.js', () => ({ getCurrentSession: () => h.session }));
-vi.mock('@cheeseoclock/shared-types', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@cheeseoclock/shared-types')>();
-  return {
-    ...orig,
-    hasCapability: (role: Parameters<typeof orig.hasCapability>[0], cap: Parameters<typeof orig.hasCapability>[1]) =>
-      h.noProfit && role === 'manager' && cap === orig.PROFIT_CAPABILITY ? false : orig.hasCapability(role, cap),
-  };
-});
 
 const session = (id: string, role: AuthenticatedUser['role']): AuthenticatedUser => ({
   id: id as UUID,
@@ -107,7 +99,6 @@ beforeEach(async () => {
   if (!DatabaseSync) return;
   h.handlers.clear();
   h.session = null;
-  h.noProfit = false;
   db = openMigrated();
   s = await openCostingShop(db);
   const ctx = { db, deviceId: DEV } as never;
@@ -124,17 +115,26 @@ const READ_CHANNELS = (): Record<string, unknown> => ({
   'costing:getTargets': undefined,
   'costing:recipeCost': { menuItemId: s.item.fajitaM, lines: [] },
   'costing:batchCalc': { ingredientId: s.ing.sauce, amount: 200 },
+  // The recipe calculator's costs (recipe-calc-handlers.db.test.ts has the rest).
+  'costing:recipeCalc': { lines: [{ kind: 'item', menuItemId: s.item.fajitaM, count: 10, portions: [] }] },
   // Price alerts (costing spec Phase 6): managers read them and mark them seen.
   'costing:alerts': undefined,
   'costing:markAlertsSeen': { ids: ['no-such-alert'] },
   'costing:getAlertSettings': undefined,
   // How many tills take orders (costing spec Phase 8): managers read it.
   'costing:getTills': undefined,
-  // foodpanda's commission and the rider cost (costing spec Phase 9): managers read them…
+  // foodpanda's commission and the rider cost (costing spec Phase 9): managers read them.
   'costing:getChannelFees': undefined,
-  // …and try prices (profit.view: managers and the owner until owner question 8 says otherwise).
+});
+
+/** Profit (profit.view, costing spec Phase 9): the owner's alone since 2026-09-27 (owner question 8). */
+const PROFIT_CHANNELS = (): Record<string, unknown> => ({
+  // What-if: prices tried against the last 4 weeks, never saved.
   'costing:whatIf': { ingredients: [], items: [] },
 });
+
+/** What a login without profit.view is told (guards.ts REFUSED.profit, shown as it is). */
+const NO_PROFIT = 'Only the owner can see profit.';
 
 /** What Costing → Targets & fees saves for Phase 9 (made-up figures). */
 const FEES = () => ({
@@ -149,6 +149,7 @@ live('who may see costs', () => {
     h.session = CASHIER;
     const channels = {
       ...READ_CHANNELS(),
+      ...PROFIT_CHANNELS(),
       'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 },
       'costing:setAlertSettings': ALERT_SETTINGS(),
       'costing:setTills': { sellingTills: 2 },
@@ -165,16 +166,22 @@ live('who may see costs', () => {
   });
 
   it('nobody signed in: "not logged in"', async () => {
-    for (const [channel, payload] of Object.entries(READ_CHANNELS())) {
+    for (const [channel, payload] of Object.entries({ ...READ_CHANNELS(), ...PROFIT_CHANNELS() })) {
       expect((await call(channel, payload)) as { code?: string }).toMatchObject({ ok: false, code: 'unauthenticated' });
     }
   });
 
-  it('a manager reads every figure but cannot change the owner\'s targets', async () => {
+  it('a manager reads every cost figure but no profit, and cannot change the owner\'s targets', async () => {
     h.session = MANAGER;
     for (const [channel, payload] of Object.entries(READ_CHANNELS())) {
       expect({ channel, ok: (await call(channel, payload)).ok }).toEqual({ channel, ok: true });
     }
+    // Profit is the owner's alone (owner, 2026-09-27): What-if is refused in plain words, and nothing is written.
+    const written = count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`);
+    for (const [channel, payload] of Object.entries(PROFIT_CHANNELS())) {
+      expect({ channel, o: await call(channel, payload) }).toEqual({ channel, o: { ok: false, code: 'forbidden', message: NO_PROFIT } });
+    }
+    expect(count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`)).toBe(written);
     const target = await data<CostingTargetsView>('costing:getTargets');
     const o = await call('costing:setTargets', {
       defaultBps: target.defaultBps,
@@ -246,7 +253,7 @@ async function useSuggestions() {
 
 live('Menu costs', () => {
   it('costs every item from today\'s prices: cost to make, what you keep, food cost %', async () => {
-    h.session = MANAGER;
+    h.session = OWNER;
     const view = await data<MenuCostsView>('costing:menuCosts');
     const row = (id: string) => view.rows.find((r) => r.menuItemId === id)!;
     // Fajita Medium: 200 g dough Rs 18 + 50 g sauce Rs 8.90625 (rolled up from tomato and garlic)
@@ -270,6 +277,14 @@ live('Menu costs', () => {
     expect(row(s.item.delivery)).toMatchObject({ flag: 'nonfood' });
     expect(view.summary).toEqual({ items: 6, onTarget: 0, close: 0, over: 0, cantCost: 2, notConfirmed: 4 });
     expect(view.missingCount).toBe(3);
+
+    // A manager (owner, 2026-09-27): the same costs, food cost % and chips — and no "you keep" on any row.
+    h.session = MANAGER;
+    const mgr = await data<MenuCostsView>('costing:menuCosts');
+    expect(mgr.rows.find((r) => r.menuItemId === s.item.fajitaM)).toMatchObject({ priceCents: 120_000, costCents: 17_641, profitCents: null, foodCostBps: 1470 });
+    expect(mgr.rows.every((r) => r.profitCents === null)).toBe(true);
+    expect(mgr.rows.map((r) => ({ ...r, profitCents: null }))).toEqual(view.rows.map((r) => ({ ...r, profitCents: null })));
+    expect(mgr.summary).toEqual(view.summary);
   });
 
   it('the chips colour only once the owner taps "Use these"; the owner\'s own targets then decide green, amber, red', async () => {
@@ -327,7 +342,7 @@ live('Menu costs', () => {
 
 live('the item cost sheet', () => {
   it('every line with its price per kg, the batch sauce opened up, paid extras and leave-outs', async () => {
-    h.session = MANAGER;
+    h.session = OWNER;
     const sheet = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
     expect(sheet.always.map((l) => [l.name, l.qty, l.costCents])).toEqual([
       ['Test dough', 200, 1_800],
@@ -355,6 +370,20 @@ live('the item cost sheet', () => {
     expect(sheet.leaveOuts).toEqual([
       { modifierId: s.choice.noOnion, name: 'No onion', ingredientName: 'Test onion', savingCents: 150, missingLines: 0 },
     ]);
+    expect(await data('costing:itemSheet', { menuItemId: 'no-such-item' })).toBeNull();
+
+    // A manager (owner, 2026-09-27): every cost the same, and no "you keep" — not per sale, not per extra.
+    h.session = MANAGER;
+    const mgr = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    expect(mgr.row.profitCents).toBeNull();
+    expect(mgr.priceToHitCents).toBeNull();
+    expect(mgr.paidExtras.map((x) => [x.name, x.priceDeltaCents, x.costCents, x.marginCents, x.foodCostBps])).toEqual([
+      ['Extra cheese', 15_000, 4_800, null, 3200],
+      ['Extra onion', 5_000, 150, null, 300],
+      ['Side of Ranch', 10_000, 1_755, null, 1755],
+    ]);
+    expect(mgr.always).toEqual(sheet.always);
+    expect(mgr.leaveOuts).toEqual(sheet.leaveOuts);
     expect(await data('costing:itemSheet', { menuItemId: 'no-such-item' })).toBeNull();
   });
 
@@ -673,7 +702,7 @@ live('foodpanda commission and the rider cost (costing spec Phase 9)', () => {
 live('What-if (costing spec 4.9)', () => {
   it('a dearer tomato flows through the sauce into every pizza, at the last 4 weeks\' sales; nothing is saved', async () => {
     sold('fajitaM', 8);
-    h.session = MANAGER;
+    h.session = OWNER;
     const before = count(`SELECT COUNT(*) AS n FROM ingredient_costs`) + count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`);
     const tomato = { ingredientId: s.ing.tomato, packSize: 5_000, packPriceCents: 120_000 }; // Rs 240 a kilo (was Rs 120)
     const r = await data<import('@cheeseoclock/shared-types').WhatIfResult>('costing:whatIf', { ingredients: [tomato], items: [] });
@@ -704,7 +733,7 @@ live('What-if (costing spec 4.9)', () => {
 
   it('a menu price tried: per week at the same sales, the break-even volume, and the price that hits the target', async () => {
     sold('fajitaM', 8);
-    h.session = MANAGER;
+    h.session = OWNER;
     const r = await data<import('@cheeseoclock/shared-types').WhatIfResult>('costing:whatIf', { ingredients: [], items: [{ menuItemId: s.item.fajitaM, priceCents: 130_000 }] });
     const f = r.rows.find((x) => x.menuItemId === s.item.fajitaM)!;
     expect(f).toMatchObject({ basePriceCents: 120_000, newBasePriceCents: 130_000, newPriceCents: 130_000, weekCents: 20_000, changed: true });
@@ -713,15 +742,20 @@ live('What-if (costing spec 4.9)', () => {
     expect(f.priceToHitCents).not.toBeNull();
   });
 
-  it('refused to a cashier and — profit.view taken from managers — to a manager; the owner may', async () => {
+  it('refused to a cashier (costs) and to a manager (profit, the owner\'s alone since 2026-09-27); the owner may', async () => {
     h.session = CASHIER;
     expect(await call('costing:whatIf', { ingredients: [], items: [] })).toEqual({ ok: false, code: 'forbidden', message: 'Only a manager or the owner can see costs.' });
     h.session = MANAGER;
-    h.noProfit = true;
-    expect(await call('costing:whatIf', { ingredients: [], items: [] })).toEqual({ ok: false, code: 'forbidden', message: 'Only a manager or the owner can see profit.' });
-    // "Price to hit target" is left out of the cost sheet too; the rest of it stays.
+    expect(await call('costing:whatIf', { ingredients: [], items: [] })).toEqual({ ok: false, code: 'forbidden', message: NO_PROFIT });
+    expect(await call('costing:whatIf', { ingredients: [], items: [{ menuItemId: s.item.fajitaM, priceCents: 130_000 }] })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: NO_PROFIT,
+    });
+    // "Price to hit target" and what you keep are left out of the cost sheet too; the costs stay.
     const sheet = await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM });
     expect(sheet.priceToHitCents).toBeNull();
+    expect(sheet.row.profitCents).toBeNull();
     expect(sheet.row.costCents).toBeGreaterThan(0);
     h.session = OWNER;
     expect((await call('costing:whatIf', { ingredients: [], items: [] })).ok).toBe(true);

@@ -11,13 +11,14 @@ import { attachOrderAlertsDb, orderAlerts, showAttention } from '../../services/
  * Reading the sounds and the pending alerts needs no login: the PIN screen
  * rings for a website order too, and anyone at the counter can tap Seen (like
  * a doorbell). Changing the sounds is for managers and the owner, the same
- * people who set up this till's printers; cashiers cannot mute the till.
+ * owner, who sets up this till's printers (managers lost Settings on
+ * 2026-09-27); cashiers and managers cannot mute the till.
  */
 function requireSoundsManage(): AuthenticatedUser {
   const session = getCurrentSession();
   if (!session) throw new IpcGuardError({ code: 'unauthenticated', message: 'Not logged in' });
   if (!hasCapability(session.role, 'printer.manage')) {
-    throw new IpcGuardError({ code: 'forbidden', message: 'Sound settings need a manager or the owner' });
+    throw new IpcGuardError({ code: 'forbidden', message: 'Only the owner can change the order sounds.' });
   }
   return session;
 }

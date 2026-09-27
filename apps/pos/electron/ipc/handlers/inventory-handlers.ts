@@ -29,7 +29,10 @@ import {
   stockCountIdInputSchema,
   listStockCountsInputSchema,
   countOneInputSchema,
+  recipeCalcInputSchema,
+  typicalPicksInputSchema,
 } from '@cheeseoclock/shared-schemas';
+import { renderPlainDocument } from '@cheeseoclock/printer-core';
 import { getCurrentSession } from '../../services/auth-service.js';
 import { requireCapability, REFUSED } from '../guards.js';
 import {
@@ -77,6 +80,7 @@ import {
 import { sellingTillsOf } from '../../services/analytics/stock-control.js';
 import { readTillLink } from '../../services/till-link.js';
 import { getAnalyticsWorker } from '../../services/analytics/worker-host.js';
+import { getRecipeCalc, getTypicalPicks, prepListFor } from '../../services/recipe-calc-service.js';
 import type { AppDatabase } from '../../db/connection.js';
 
 function requireSession(): AuthenticatedUser {
@@ -318,6 +322,37 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     const parsed = makeBatchInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(makeBatch(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  // ---- The recipe calculator (read-only; menu.manage). Quantities only:
+  // no price is read and no rupee is answered here (costing:recipeCalc has
+  // the costs, behind COST_CAPABILITY), so it keeps working for a manager
+  // the owner may one day hide costs from. ----
+  defineHandler('inventory:recipeCalc', ctx, (_ctx, payload) => {
+    requireStockView();
+    const parsed = recipeCalcInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(getRecipeCalc(ctx.db, parsed.data));
+  });
+
+  defineHandler('inventory:typicalPicks', ctx, (_ctx, payload) => {
+    requireStockView();
+    const parsed = typicalPicksInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(getTypicalPicks(ctx.db, parsed.data.menuItemId));
+  });
+
+  // The prep list on the receipt printer, worked out again here from the
+  // same request (so the paper says what the screen said). Printed at once,
+  // in turn with the queue; a failed print is an answer (ok: false) the
+  // screen shows as a toast, never an error that holds anything up.
+  defineHandler('inventory:printPrepList', ctx, async (_ctx, payload) => {
+    const s = requireStockView();
+    const parsed = recipeCalcInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    const doc = prepListFor(ctx.db, parsed.data, { byName: s.fullName });
+    const { printSpooler } = await import('../../services/print-spooler.js');
+    return ok(await printSpooler.printDocumentNow((width) => renderPlainDocument(doc, { width })));
   });
 
   // ---- Movements ----

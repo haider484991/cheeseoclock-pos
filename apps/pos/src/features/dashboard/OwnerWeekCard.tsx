@@ -5,8 +5,8 @@
  * this" list, each line with what it costs per week and a button to where it
  * is fixed. Never rupee profit.
  *
- * The home screen stands at the counter, so the figures are hidden until a
- * manager or the owner taps "Show this week's figures", and hide again after
+ * The home screen stands at the counter, so the figures are hidden until the
+ * owner taps "Show this week's figures", and hide again after
  * 2 minutes, on the idle lock, when someone else signs in, and when a
  * stepping-in login starts or is held (ownerCardClock.ts). Hidden, nothing is
  * asked of the till and nothing is kept in the screen's memory.

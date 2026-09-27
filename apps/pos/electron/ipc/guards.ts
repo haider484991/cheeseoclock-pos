@@ -71,14 +71,15 @@ export const REFUSED = {
   customers: 'Only a manager or the owner can open the customer list.',
   history: 'Only a manager or the owner can look at past orders.',
   shiftTotals: 'Only a manager or the owner can see shift totals.',
+  shiftHistory: 'Only the owner can look through past shifts.',
   earlierShiftCash: "Only a manager or the owner can see an earlier shift's cash.",
   stock: 'Only a manager or the owner can see stock, recipes and suppliers.',
   costs: 'Only a manager or the owner can see costs.',
   prices: 'Only a manager or the owner can change prices.',
   purchases: 'Only a manager or the owner can record purchases or see what was spent.',
-  reports: 'Only a manager or the owner can see reports.',
+  reports: 'Only the owner can see reports.',
   stockTakes: 'Only a manager or the owner can do a stock take or see what went missing.',
-  profit: 'Only a manager or the owner can see profit.',
+  profit: 'Only the owner can see profit.',
 } as const;
 
 /**

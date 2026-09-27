@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COST_CAPABILITY, ROLE_CAPABILITIES, hasCapability, type Role } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, PROFIT_CAPABILITY, ROLE_CAPABILITIES, hasCapability, type Role } from '@cheeseoclock/shared-types';
 import { PAGE_ACCESS, canOpenPage, homeFor, navPagesFor, showInNav, type GatedPage } from './navAccess';
 
 const ALL_PAGES = Object.keys(PAGE_ACCESS) as GatedPage[];
@@ -22,13 +22,14 @@ describe('who opens which page', () => {
     expect(PAGE_ACCESS['/costing'].capability).toBe(COST_CAPABILITY);
   });
 
-  it('a manager: everything but Users, with Order History instead of Recent Orders', () => {
+  it('a manager: everything but Users, Reports and Settings, with Order History instead of Recent Orders', () => {
     const pages = navPagesFor('manager');
-    expect(pages).toContain('/customers');
-    expect(pages).toContain('/orders/history');
-    expect(pages).not.toContain('/users');
+    expect(pages).toEqual(['/checkout', '/orders', '/orders/history', '/riders', '/menu', '/inventory', '/costing', '/customers']);
     expect(pages).not.toContain('/orders/recent');
-    expect(canOpenPage('manager', '/users')).toBe(false);
+    // Reports and Settings are the owner's (owner, 2026-09-27: "managers can't see the reports and settings").
+    for (const p of ['/users', '/reports', '/settings'] as const) {
+      expect({ p, open: canOpenPage('manager', p), shown: showInNav('manager', p) }).toEqual({ p, open: false, shown: false });
+    }
   });
 
   it('the owner: every page (Recent Orders only by its address)', () => {
@@ -73,5 +74,14 @@ describe('the capabilities behind it (packages/shared-types auth.ts)', () => {
       expect(hasCapability(role, 'customers.manage')).toBe(true);
       expect(hasCapability(role, 'order.history')).toBe(true);
     }
+  });
+
+  it('reports, settings and profit are the owner\'s alone; a manager still closes the shift and sees costs', () => {
+    // Profit (costing spec Phase 9): owner question 8 answered 2026-09-27 — managers keep costs, see no profit.
+    for (const cap of ['report.view', 'printer.manage', 'settings.manage', 'users.manage', 'fbr.manage', PROFIT_CAPABILITY] as const) {
+      expect({ cap, manager: hasCapability('manager', cap), owner: hasCapability('admin', cap) }).toEqual({ cap, manager: false, owner: true });
+    }
+    expect(hasCapability('manager', 'shift.close')).toBe(true);
+    expect(hasCapability('manager', COST_CAPABILITY)).toBe(true);
   });
 });

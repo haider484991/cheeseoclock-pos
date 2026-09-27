@@ -819,3 +819,42 @@ describe.skipIf(!DatabaseSync)('kitchen: a cancelled order', () => {
     expect(queueRows(db, 'o0102')).toHaveLength(0);
   });
 });
+
+describe.skipIf(!DatabaseSync)('a paper that is not an order (the prep list)', () => {
+  it('goes straight to the receipt printer, at its width, with no queue row and nothing in the print log', async () => {
+    const s = await spooler();
+    const { setReceiptPrinterConfig } = await import('./printer-config.js');
+    setReceiptPrinterConfig(db, { transport: 'network', network: { host: '192.0.2.10', port: 9100 }, width: 32 });
+    s.resetAdapter();
+    const { renderPlainDocument } = await import('@cheeseoclock/printer-core');
+    const widths: number[] = [];
+    const result = await s.printDocumentNow((width) => {
+      widths.push(width);
+      return renderPlainDocument(
+        { title: 'PREP LIST', subtitle: ['Test'], sections: [{ heading: 'FROM STOCK', rows: [{ text: 'Test cheese', qty: '600 g' }] }], footer: [] },
+        { width },
+      );
+    });
+    expect(result.ok).toBe(true);
+    expect(widths).toEqual([32]);
+    const sent = h.sends.filter((x) => escPosToText(x.bytes).includes('PREP LIST'));
+    expect(sent).toHaveLength(1);
+    expect(escPosToText(sent[0]!.bytes)).toMatch(/^Test cheese +600 g$/m);
+    expect(sent[0]!.opts?.drawer).toBeFalsy();
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM print_queue`).get() as { n: number }).n).toBe(0);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM document_prints`).get() as { n: number }).n).toBe(0);
+  });
+
+  it('a printer that fails, or a paper that cannot be made, comes back as a result — never thrown, never retried', async () => {
+    const s = await spooler();
+    h.script.push(failCode('printer_offline'));
+    const offline = await s.printDocumentNow(() => new Uint8Array([0x0a]));
+    expect(offline).toMatchObject({ ok: false, error: { code: 'printer_offline' } });
+    const broken = await s.printDocumentNow(() => {
+      throw new Error('no paper model');
+    });
+    expect(broken).toMatchObject({ ok: false, error: { code: 'spooler_exception', message: 'no paper model' } });
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(1);
+  });
+});

@@ -6,6 +6,7 @@ import type { AuthenticatedUser, WhatIfResult } from '@cheeseoclock/shared-types
 import {
   batchCalcInputSchema,
   markCostAlertsSeenInputSchema,
+  recipeCalcInputSchema,
   recipeCostInputSchema,
   setChannelFeesInputSchema,
   setCostAlertSettingsInputSchema,
@@ -22,6 +23,8 @@ import {
   getItemCostSheet,
   getMenuCosts,
   getMissingCosts,
+  itemCostSheetForLogin,
+  menuCostsForLogin,
   previewRecipeCost,
 } from '../../services/costing-service.js';
 import {
@@ -32,6 +35,7 @@ import {
   saveCostingTargets,
   saveTillsSetting,
 } from '../../services/costing-settings.js';
+import { getCostedRecipeCalc } from '../../services/recipe-calc-service.js';
 import { readTillLink } from '../../services/till-link.js';
 import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/cost-alert-repo.js';
 import { getAnalyticsWorker } from '../../services/analytics/worker-host.js';
@@ -48,8 +52,10 @@ import { workOutExtra, type ReportWorker } from './reports-handlers.js';
  * Phase 9: foodpanda's commission, payment fees and the rider cost
  * (costing:getChannelFees — managers read; costing:setChannelFees — the
  * owner); What-if (costing:whatIf — profit.view and costs; worked out in the
- * Reports worker, never saved, nothing on the till changes); and the cost
- * sheet's "price to hit target", left out for a login without profit.view.
+ * Reports worker, never saved, nothing on the till changes); and profit on
+ * Menu costs and the cost sheet (what you keep per sale and per paid extra,
+ * "price to hit target"), left out for a login without profit.view. Profit
+ * is the owner's alone since 2026-09-27: a manager sees costs, never profit.
  */
 function requireCosts(): AuthenticatedUser {
   return requireCapability(COST_CAPABILITY, REFUSED.costs);
@@ -72,8 +78,9 @@ export interface CostingHandlerDeps {
 
 export function registerCostingHandlers(ctx: HandlerContext, deps: CostingHandlerDeps = { worker: getAnalyticsWorker }): void {
   defineHandler('costing:menuCosts', ctx, () => {
-    requireCosts();
-    return ok(getMenuCosts(ctx.db));
+    const s = requireCosts();
+    // "You keep per sale" is profit.view's (owner, 2026-09-27).
+    return ok(menuCostsForLogin(getMenuCosts(ctx.db), mayProfit(s)));
   });
 
   defineHandler('costing:itemSheet', ctx, (_ctx, payload) => {
@@ -81,9 +88,8 @@ export function registerCostingHandlers(ctx: HandlerContext, deps: CostingHandle
     if (!payload || typeof payload.menuItemId !== 'string') {
       return err({ code: 'validation_failed', message: 'Which menu item?' });
     }
-    const sheet = getItemCostSheet(ctx.db, payload.menuItemId);
-    // "Price to hit target" is profit.view's (costing spec 4.3, D6).
-    return ok(sheet && !mayProfit(s) ? { ...sheet, priceToHitCents: null } : sheet);
+    // What you keep and "price to hit target" are profit.view's (costing spec 4.3, D6; owner, 2026-09-27).
+    return ok(itemCostSheetForLogin(getItemCostSheet(ctx.db, payload.menuItemId), mayProfit(s)));
   });
 
   defineHandler('costing:missingCosts', ctx, () => {
@@ -116,6 +122,14 @@ export function registerCostingHandlers(ctx: HandlerContext, deps: CostingHandle
     const parsed = batchCalcInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(getBatchCalc(ctx.db, parsed.data.ingredientId, parsed.data.amount));
+  });
+
+  // The recipe calculator with what it costs (inventory:recipeCalc is the same without).
+  defineHandler('costing:recipeCalc', ctx, (_ctx, payload) => {
+    requireCosts();
+    const parsed = recipeCalcInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(getCostedRecipeCalc(ctx.db, parsed.data));
   });
 
   // ---- Price alerts (costing spec Phase 6) ----

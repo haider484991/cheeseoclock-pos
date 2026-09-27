@@ -5,7 +5,7 @@
  *  - after 2 minutes;
  *  - on the idle lock (the login ended on its own) or any change of who is
  *    signed in;
- *  - when a manager's stepping-in login starts, changes or is held
+ *  - when a stepping-in login starts, changes or is held
  *    (StepInHold: the PIN box goes over the page).
  * Pure, so each rule is tested alone (ownerCardClock.test.ts).
  */

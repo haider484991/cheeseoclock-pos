@@ -89,7 +89,7 @@ interface MenuItemRow {
   isActive: boolean;
 }
 
-interface MenuData {
+export interface MenuData {
   categories: Array<{ id: string; name: string }>;
   items: MenuItemRow[];
   recipes: Map<string, RecipeLine[]>;
@@ -131,7 +131,14 @@ type SalesNeed =
 
 // ------------------------------------------------------------------ loading --
 
-function loadMenu(db: AppDatabase): MenuData {
+/**
+ * The live menu, recipes and choice groups, no prices: every item, its
+ * recipe lines that can still apply (a live ingredient — the stock SQL joins
+ * it the same way — and a live choice when the line depends on one), and
+ * its groups with their options. Also the recipe calculator's (quantities
+ * only), so both read one menu.
+ */
+export function loadMenu(db: AppDatabase): MenuData {
   const categories = loadCategories(db);
   const items = (
     db
@@ -517,7 +524,7 @@ export function getItemCostSheet(db: AppDatabase, menuItemId: string, now = new 
   const nameOf = (id: string) => ctx.book.ingredients.get(id)?.name ?? 'an ingredient that was deleted';
   return {
     row: rowOf(ctx, item, pc),
-    // profit.view's (costing spec 4.3): the costing handler leaves it out for anyone else.
+    // profit.view's (costing spec 4.3): the costing handler leaves it out for anyone else (itemCostSheetForLogin).
     priceToHitCents:
       t.nonFood || !pc.hasRecipe || pc.missingLines > 0 ? null : priceToHitTarget(pc.typicalCostMc, t.bps, pc.groupsPriceMc, ctx.priceStepCents),
     always: lineViews(ctx, pc.base.lines, pc.typicalCostMc),
@@ -570,6 +577,36 @@ export function getItemCostSheet(db: AppDatabase, menuItemId: string, now = new 
       savingCents: l.savingCents,
       missingLines: l.missingLines,
     })),
+  };
+}
+
+/** A Menu costs row without what you keep per sale (a login without profit.view). */
+function rowWithoutProfit(r: MenuCostRow): MenuCostRow {
+  return r.profitCents === null ? r : { ...r, profitCents: null };
+}
+
+/**
+ * Menu costs as a login may read them (costing spec D6, Phase 9; owner
+ * 2026-09-27: managers keep costs but see no profit): without profit.view
+ * (`canSeeProfit`, which also needs costs) no row says what you keep per
+ * sale. Costs, food cost % and the chips stay.
+ */
+export function menuCostsForLogin(view: MenuCostsView, canSeeProfit: boolean): MenuCostsView {
+  return canSeeProfit ? view : { ...view, rows: view.rows.map(rowWithoutProfit) };
+}
+
+/**
+ * A cost sheet as a login may read it: without profit.view, no "you keep"
+ * per sale or per paid extra, and no "price to hit target" (costing spec
+ * 4.3). What each line costs stays.
+ */
+export function itemCostSheetForLogin(sheet: ItemCostSheet | null, canSeeProfit: boolean): ItemCostSheet | null {
+  if (!sheet || canSeeProfit) return sheet;
+  return {
+    ...sheet,
+    row: rowWithoutProfit(sheet.row),
+    priceToHitCents: null,
+    paidExtras: sheet.paidExtras.map((x) => (x.marginCents === null ? x : { ...x, marginCents: null })),
   };
 }
 
@@ -893,6 +930,17 @@ export function plateAt(ctx: CostingContext, item: MenuItemRow, priceOf: PriceOf
     },
     priceOf,
   );
+}
+
+/**
+ * One item's picks over the last 28 days on this till — units sold, per
+ * choice the units that had it (N_o), per group the units that picked in it
+ * (U_g) — and nothing about money (no sales). For the recipe calculator's
+ * "usual picks" (a stock channel), worked out by the same query as Costing's.
+ */
+export function loadItemPickMix(db: AppDatabase, menuItemId: string, now = new Date()): PickMix {
+  const s = loadSales(db, now, { kind: 'item', itemId: menuItemId }).get(menuItemId);
+  return s ? { units: s.units, picks: s.picks, groupUnits: s.groupUnits } : { units: 0, picks: new Map(), groupUnits: new Map() };
 }
 
 /** The customers' picks of an item over the window (null when it did not sell). */

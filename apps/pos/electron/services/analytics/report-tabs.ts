@@ -167,7 +167,7 @@ function channelsWithoutProfit(data: ReportChannelsTab): ReportChannelsTab {
  */
 export function reportTabForLogin<K extends ReportTab>(kind: K, data: ReportTabData[K], canSeeCosts: boolean, canSeeProfit = false): ReportTabData[K] {
   const profit = canSeeProfit && canSeeCosts;
-  if (kind === 'profit' && !profit) throw new Error('Only a manager or the owner can see profit.');
+  if (kind === 'profit' && !profit) throw new Error('Only the owner can see profit.');
   if (kind === 'menu') {
     const menu = data as ReportTabData['menu'];
     if (!canSeeCosts) return (menu.costs === null ? menu : { ...menu, costs: null }) as ReportTabData[K];

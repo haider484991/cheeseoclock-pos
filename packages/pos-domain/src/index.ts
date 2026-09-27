@@ -28,3 +28,4 @@ export * from './count-entry.js';
 export * from './profit.js';
 export * from './menu-engineering.js';
 export * from './what-if.js';
+export * from './recipe-calc.js';

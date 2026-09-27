@@ -84,7 +84,8 @@ function readSavedTab(): SettingsTab {
  * `/settings?tab=backups` opens a tab directly (the dashboard banner does).
  */
 export function SettingsPage() {
-  // A manager comes here for this till's printers and sounds; the rest is the owner's.
+  // Only the owner comes here (managers lost Settings on 2026-09-27); a role
+  // with printer.manage but not settings.manage would see printers and sounds.
   const full = useSessionStore((s) => s.can('settings.manage'));
   const tabs = full
     ? TABS

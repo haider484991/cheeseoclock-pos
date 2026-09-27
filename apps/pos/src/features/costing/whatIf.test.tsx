@@ -5,7 +5,8 @@
  * changes) with the dishes whose price was tried — or, with an ingredient
  * price alone, the ingredient and the dishes it moves; the tries stay for
  * the rest of the login when the tab is left; the fees form reads what was
- * typed; the What-if tab is there only for profit.view; the fees card is
+ * typed; the What-if tab is there only for profit.view (the owner's alone
+ * since 2026-09-27: not a manager's, never a cashier's); the fees card is
  * read-only for a manager. Every name and price is made up.
  */
 import type { ReactNode } from 'react';
@@ -156,7 +157,7 @@ describe('who sees What-if and the fees', () => {
     const dish = (menuItemId: string, name: string, basePriceCents: number) =>
       ({ menuItemId, name, basePriceCents, flag: 'green', categoryId: 'c1', categoryName: 'Pizza' }) as unknown as MenuCostRow;
     const view = { rows: [dish('m1', 'Test Fajita', 120_000), dish('m2', 'Test Veggie', 150_000)], summary: {}, amberBps: 500, missingCount: 0 } as unknown as MenuCostsView;
-    signIn('manager');
+    signIn('admin');
     // What the tab kept when it was left (another dish's "Try a price" adds to these rather than starting again).
     presetSessionState(whatIfTriesKeys('u1').prices, { m1: '1350', m2: '1600' });
     const out = render(<WhatIfTab />, [[[...COSTING_KEY, 'menuCosts'], view]]);
@@ -172,11 +173,18 @@ describe('who sees What-if and the fees', () => {
     expect(other).toContain('to print the price change list');
   });
 
-  it('What-if is a Costing tab only for a login with profit.view; a cashier never gets the page', () => {
-    signIn('manager');
-    expect(render(<CostingPage />)).toContain('What-if');
+  it('What-if is a Costing tab only for a login with profit.view — the owner; a manager has costs but no What-if', () => {
     signIn('admin');
-    expect(render(<CostingPage />)).toContain('Targets &amp; fees');
+    const owner = render(<CostingPage />);
+    expect(owner).toContain('What-if');
+    expect(owner).toContain('Targets &amp; fees');
+    expect(owner).toContain('what you keep per sale');
+    // Owner, 2026-09-27: profit is the owner's alone.
+    signIn('manager');
+    const manager = render(<CostingPage />);
+    expect(manager).not.toContain('What-if');
+    expect(manager).not.toContain('what you keep');
+    expect(manager).toContain('Targets &amp; fees');
     signIn('cashier');
     expect(render(<CostingPage />)).not.toContain('What-if');
   });

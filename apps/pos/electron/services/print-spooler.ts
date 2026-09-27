@@ -26,6 +26,7 @@ import {
   type OrderStatus,
   type PrintedDocument,
   type PrinterConnectionConfig,
+  type PrinterWidth,
   type PrintPolicy,
   type ReceiptCopy,
   type ReprintResult,
@@ -712,6 +713,41 @@ class PrintSpooler {
           code: 'spooler_exception',
           message: e instanceof Error ? e.message : String(e),
           recoverable: false,
+        },
+      };
+    }
+  }
+
+  /**
+   * A paper that is not about an order (the recipe calculator's prep list),
+   * straight to the receipt printer — like the test page, in turn with the
+   * queue (`exclusive`), so its bytes never interleave with a receipt's. No
+   * print_queue row (that table holds order papers only) and no print-log
+   * row: it is not a document of a sale. `render` gets the paper's width
+   * (58 or 80 mm) as set for the receipt printer. Never throws: a failure
+   * comes back as a PrintResult for the till to show, and nothing waits on it.
+   */
+  async printDocumentNow(render: (width: PrinterWidth) => Uint8Array): Promise<PrintResult> {
+    if (!this.db) {
+      return {
+        ok: false,
+        durationMs: 0,
+        error: { code: 'not_ready', message: 'Spooler not initialized', recoverable: false },
+      };
+    }
+    try {
+      return await this.exclusive(async () => {
+        const adapter = this.getAdapter('receipt');
+        return adapter.send(render(adapter.config.width ?? 48));
+      });
+    } catch (e) {
+      return {
+        ok: false,
+        durationMs: 0,
+        error: {
+          code: 'spooler_exception',
+          message: e instanceof Error ? e.message : String(e),
+          recoverable: true,
         },
       };
     }

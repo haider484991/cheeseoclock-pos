@@ -239,8 +239,14 @@ interface Typical {
  * to be trusted yet: fewer than MIX_MIN_UNITS units picked in it, or fewer
  * picks than its minimum asks for (orders from before the group was
  * required, or before its minimum was raised) — then the usual fallback.
+ * Exported so "the usual picks" mean the same on Costing and in the recipe
+ * calculator (recipe-calc.ts typicalPortions).
  */
-function observedUnits(mix: PickMix | null | undefined, g: PlateGroup, kMin: number): number | null {
+export function trustedPickUnits(
+  mix: PickMix | null | undefined,
+  g: { id: string; options: ReadonlyArray<{ id: string }> },
+  kMin: number,
+): number | null {
   if (!mix) return null;
   const units = mix.groupUnits ? (mix.groupUnits.get(g.id) ?? 0) : mix.units;
   if (units < MIX_MIN_UNITS) return null;
@@ -260,7 +266,7 @@ function typicalPlate(item: PlateItemInput, priceOf: PriceOf, removing: readonly
   for (const g of item.groups) {
     const k = requiredPicks(g, g.options.length);
     if (!k) continue;
-    const units = observedUnits(item.mix, g, k.kMin);
+    const units = trustedPickUnits(item.mix, g, k.kMin);
     const mix = units === null ? null : (item.mix ?? null);
     const options: OptionCost[] = g.options.map((o) => ({
       option: o,

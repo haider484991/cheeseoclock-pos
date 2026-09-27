@@ -349,6 +349,12 @@ export const ipc = {
       unwrap(window.api.inventory.setBatchRecipe(input)),
     makeBatch: (input: IpcRequest<'inventory:makeBatch'>) =>
       unwrap(window.api.inventory.makeBatch(input)),
+    /** The recipe calculator: batches to make, from stock, from scratch — quantities only. */
+    recipeCalc: (input: IpcRequest<'inventory:recipeCalc'>) => unwrap(window.api.inventory.recipeCalc(input)),
+    /** A menu item's choices and the last 28 days' picks (counts only), for "the usual picks". */
+    typicalPicks: (menuItemId: string) => unwrap(window.api.inventory.typicalPicks({ menuItemId })),
+    /** The prep list on the receipt printer; a failed print comes back as ok: false. */
+    printPrepList: (input: IpcRequest<'inventory:printPrepList'>) => unwrap(window.api.inventory.printPrepList(input)),
     listMovements: (input?: IpcRequest<'inventory:listMovements'>) =>
       unwrap(window.api.inventory.listMovements(input)),
     searchMovements: (input?: IpcRequest<'inventory:searchMovements'>) =>
@@ -401,6 +407,8 @@ export const ipc = {
     setTargets: (input: IpcRequest<'costing:setTargets'>) => unwrap(window.api.costing.setTargets(input)),
     recipeCost: (input: IpcRequest<'costing:recipeCost'>) => unwrap(window.api.costing.recipeCost(input)),
     batchCalc: (input: IpcRequest<'costing:batchCalc'>) => unwrap(window.api.costing.batchCalc(input)),
+    /** The recipe calculator with its costs (COST_CAPABILITY). */
+    recipeCalc: (input: IpcRequest<'costing:recipeCalc'>) => unwrap(window.api.costing.recipeCalc(input)),
     /** Costing → Alerts (Phase 6): not seen yet first. */
     alerts: () => unwrap(window.api.costing.alerts()),
     /** "Seen": answers with the list as it now stands. */

@@ -23,7 +23,7 @@ function requireSettingsManage(): AuthenticatedUser {
   if (!hasCapability(s.role, 'settings.manage')) {
     throw new IpcGuardError({
       code: 'forbidden',
-      message: 'Sync settings require manager or admin',
+      message: 'Only the owner can change the link between tills.',
     });
   }
   return s;

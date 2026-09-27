@@ -15,8 +15,10 @@ import { WHAT_IF_TRY, WhatIfTab } from './WhatIfTab';
  * prices, whether its food cost is on target, and what still needs a price.
  * Read-only: prices and recipes are changed in Inventory, and every row that
  * needs fixing links there. Managers and the owner only (COST_CAPABILITY;
- * the main process refuses anyone else). What-if (costing spec Phase 9) is
- * profit.view's: prices tried there are never saved.
+ * the main process refuses anyone else). What-if (costing spec Phase 9) and
+ * what you keep per sale are profit.view's, the owner's alone since
+ * 2026-09-27 (a manager sees costs, not profit); prices tried in What-if
+ * are never saved.
  */
 type Tab = 'menu' | 'missing' | 'alerts' | 'whatif' | 'targets';
 
@@ -48,7 +50,9 @@ export function CostingPage() {
       <header className="mb-4">
         <h1 className="text-3xl font-bold tracking-tight">Costing</h1>
         <p className="mt-1 text-stone-600 dark:text-stone-400">
-          What each dish costs to make at today&apos;s prices, what you keep per sale, and whether it is on target.
+          {canSeeProfit
+            ? "What each dish costs to make at today's prices, what you keep per sale, and whether it is on target."
+            : "What each dish costs to make at today's prices, and whether it is on target."}{' '}
           Prices and recipes are changed in Inventory.
         </p>
       </header>

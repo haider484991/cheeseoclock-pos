@@ -83,6 +83,23 @@ describe('the printed cost sheet', () => {
     expect(html).toContain('Extra cheese');
   });
 
+  it("a manager's sheet (no profit.view: the main process sent no profit) prints the costs and never what you keep", () => {
+    const lean: typeof SHEET = {
+      ...SHEET,
+      row: { ...SHEET.row, profitCents: null },
+      paidExtras: SHEET.paidExtras.map((x) => ({ ...x, marginCents: null })),
+    };
+    const html = costSheetPrintHtml(lean, new Date('2026-09-27T10:00:00Z'));
+    expect(html).toContain('costs Rs 176.41 to make, price Rs 1,200');
+    expect(html).toContain('food cost 14.7% (target 30%)');
+    expect(html).not.toMatch(/you keep/i);
+    expect(html).not.toContain('Rs 1,023.59');
+    // The paid extras keep price, cost and food cost: four columns, no "You keep".
+    expect(html).toContain('<th>Extra</th><th class="r">Price</th><th class="r">Cost</th><th class="r">Food cost</th>');
+    expect(html).toContain('Extra cheese');
+    expect(html).not.toContain('Rs 102');
+  });
+
   it('an item that can\'t be costed never prints a Rs 0 cost, a full profit or a 0% food cost', () => {
     const html = costSheetPrintHtml(COLA, new Date('2026-09-27T10:00:00Z'));
     expect(html).toContain("can't be costed yet: Bottle has no price yet. Price Rs 150.");

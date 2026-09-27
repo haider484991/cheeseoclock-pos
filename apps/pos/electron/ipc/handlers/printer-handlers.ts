@@ -34,15 +34,15 @@ function requireSession(): AuthenticatedUser {
   return session;
 }
 
-// Printers are `printer.manage` (managers and the owner). It used to check
-// `settings.manage`, which only the owner has — a manager was told "manager or
-// admin" and then refused when the kitchen printer needed changing.
+// Printers are `printer.manage`: the owner's since 2026-09-27 ("managers can't
+// see the reports and settings"). A separate capability from `settings.manage`
+// so printers can be handed to another role later without the rest of Settings.
 function requirePrinterManage(): AuthenticatedUser {
   const session = requireSession();
   if (!hasCapability(session.role, 'printer.manage')) {
     throw new IpcGuardError({
       code: 'forbidden',
-      message: 'Printer settings require manager or admin role',
+      message: 'Only the owner can change the printers.',
     });
   }
   return session;

@@ -4,7 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ChoiceCostView, CostLineView, ItemCostSheet, PaidExtraView, RequiredGroupView } from '@cheeseoclock/shared-types';
-import { BookOpen, ChevronDown, ChevronRight, FlaskConical, Printer, X } from 'lucide-react';
+import { BookOpen, Calculator, ChevronDown, ChevronRight, FlaskConical, Printer, X } from 'lucide-react';
 import { useItemCostSheet } from './costingQueries';
 import { FoodCostChip } from './CostChip';
 import { BatchBreakdown } from './BatchBreakdown';
@@ -22,16 +22,18 @@ import {
   priceKindNote,
 } from './costingFormat';
 import { costSheetPrintHtml } from './costSheetPrint';
-import { openRecipeInInventory } from './deepLinks';
+import { openRecipeCalculator, openRecipeInInventory } from './deepLinks';
 import { usePrintSheet } from './usePrintSheet';
 
 /**
  * One item's cost sheet, in a drawer: what is always in it (a sauce or dough
  * made in-house opens up into what it is made of), each choice the customer
  * must make with what every option costs and how often it is picked, the
- * paid extras (price, cost, what you keep) and what each leave-out saves.
- * For profit.view (costing spec Phase 9): the price that brings it to its
- * target, and "Try a price" (Costing → What-if with this dish).
+ * paid extras (price, cost) and what each leave-out saves. For profit.view
+ * (costing spec Phase 9; the owner's alone since 2026-09-27): what you keep
+ * per sale and per extra, the price that brings it to its target, and "Try a
+ * price" (Costing → What-if with this dish). The main process leaves the
+ * profit figures out for anyone else; this shows only what it was given.
  */
 export function ItemCostSheetDrawer({
   menuItemId,
@@ -133,6 +135,15 @@ export function ItemCostSheetDrawer({
             >
               <BookOpen className="h-4 w-4" /> Open recipe
             </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!sheet?.row.hasRecipe}
+              title="How much of everything for 10 (or any number)"
+              onClick={() => sheet && openRecipeCalculator(navigate, { id: sheet.row.menuItemId, name: sheet.row.name })}
+            >
+              <Calculator className="h-4 w-4" /> Calculate
+            </Button>
             <Button variant="secondary" size="sm" disabled={!sheet} onClick={() => sheet && printer.print(costSheetPrintHtml(sheet))}>
               <Printer className="h-4 w-4" /> Print cost sheet
             </Button>
@@ -172,10 +183,16 @@ function Headline({ sheet }: { sheet: ItemCostSheet }) {
   }
   return (
     <span className="flex flex-wrap items-center gap-2">
-      <span>
-        Costs <b className="text-stone-900 dark:text-stone-100">{formatCents(r.costCents)}</b> to make, you keep{' '}
-        <b className="text-stone-900 dark:text-stone-100">{formatCents(r.profitCents)}</b> per sale at {formatCents(r.priceCents)}.
-      </span>
+      {r.profitCents === null ? (
+        <span>
+          Costs <b className="text-stone-900 dark:text-stone-100">{formatCents(r.costCents)}</b> to make; the price is {formatCents(r.priceCents)}.
+        </span>
+      ) : (
+        <span>
+          Costs <b className="text-stone-900 dark:text-stone-100">{formatCents(r.costCents)}</b> to make, you keep{' '}
+          <b className="text-stone-900 dark:text-stone-100">{formatCents(r.profitCents)}</b> per sale at {formatCents(r.priceCents)}.
+        </span>
+      )}
       <FoodCostChip flag={r.flag} bps={r.foodCostBps} targetBps={r.targetBps} />
       <span className="text-xs text-stone-500">
         {FLAG_LABEL[r.flag]} · target {formatBps(r.targetBps)}
@@ -361,6 +378,8 @@ function OptionRow({ option: o, open, onToggle }: { option: ChoiceCostView; open
 
 function PaidExtras({ extras }: { extras: readonly PaidExtraView[] }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // "You keep" only when the main process sent it (profit.view).
+  const withKeep = extras.some((x) => x.marginCents !== null);
   return (
     <section>
       <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-stone-500">Paid extras</h3>
@@ -370,7 +389,7 @@ function PaidExtras({ extras }: { extras: readonly PaidExtraView[] }) {
             <th className="pb-1 font-medium">Extra</th>
             <th className="pb-1 text-right font-medium">Price</th>
             <th className="pb-1 text-right font-medium">Cost</th>
-            <th className="pb-1 text-right font-medium">You keep</th>
+            {withKeep && <th className="pb-1 text-right font-medium">You keep</th>}
             <th className="pb-1 text-center font-medium">Food cost</th>
           </tr>
         </thead>
@@ -398,14 +417,16 @@ function PaidExtras({ extras }: { extras: readonly PaidExtraView[] }) {
                   </td>
                   <td className="py-1 text-right font-mono">{formatCents(x.priceDeltaCents)}</td>
                   <td className="py-1 text-right font-mono">{x.flag === 'grey' ? '—' : formatCents(x.costCents)}</td>
-                  <td className="py-1 text-right font-mono">{x.flag === 'grey' ? '—' : formatCents(x.marginCents)}</td>
+                  {withKeep && (
+                    <td className="py-1 text-right font-mono">{x.flag === 'grey' || x.marginCents === null ? '—' : formatCents(x.marginCents)}</td>
+                  )}
                   <td className="py-1 text-center">
                     <FoodCostChip flag={x.flag} bps={x.foodCostBps} />
                   </td>
                 </tr>
                 {expanded && (
                   <tr>
-                    <td colSpan={5} className="pb-2 pl-5">
+                    <td colSpan={withKeep ? 5 : 4} className="pb-2 pl-5">
                       <LineTable lines={x.lines} compact />
                     </td>
                   </tr>

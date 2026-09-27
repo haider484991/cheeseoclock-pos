@@ -3,7 +3,8 @@
  * Inventory (costing spec §5). These open the right Inventory screen,
  * searched for the thing to fix, with its form already open.
  */
-import { presetSessionState } from '../../components/list';
+import { presetSessionState, readSessionState } from '../../components/list';
+import { CALC_LINES_KEY, withItemLine, type CalcLine } from '../inventory/recipeCalcView';
 
 type Navigate = (to: string) => void;
 
@@ -64,6 +65,24 @@ export function openBatchInInventory(navigate: Navigate, ingredientId: string): 
   presetSessionState('inv.tab', 'recipes');
   presetSessionState('inv.rec.mode', 'batches');
   presetSessionState('inv.batch.openId', ingredientId);
+  navigate('/inventory');
+}
+
+/**
+ * Inventory → Recipe calculator before going there (the Dashboard tile,
+ * "Calculate" on a recipe card or a cost sheet): with a menu item, that
+ * item is ADDED to what is being worked out (10 of it, the usual picks) —
+ * or left as it is when it is there already — so a list being built is
+ * never lost; without, it is as it was left. Opening it never moves stock.
+ */
+export function presetRecipeCalculator(item?: { id: string; name: string }): void {
+  presetSessionState('inv.tab', 'calculator');
+  if (item) presetSessionState(CALC_LINES_KEY, withItemLine(readSessionState<CalcLine[]>(CALC_LINES_KEY), item).lines);
+}
+
+/** Inventory → Recipe calculator ("Calculate" on an item's cost sheet: that item). */
+export function openRecipeCalculator(navigate: Navigate, item?: { id: string; name: string }): void {
+  presetRecipeCalculator(item);
   navigate('/inventory');
 }
 

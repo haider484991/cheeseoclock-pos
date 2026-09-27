@@ -81,7 +81,8 @@ export const RASTER_BAND_ROWS = 255;
 /**
  * Typography that arrives from settings and menu text (curly quotes, dashes,
  * ellipsis) but has no glyph on the printer's default code page. Each maps to
- * a plain-ASCII stand-in; anything else outside ASCII prints as '?'.
+ * a plain-ASCII stand-in; an accented letter loses its accent (toPrinterAscii);
+ * anything else outside ASCII prints as '?'.
  */
 const TRANSLITERATIONS: Record<string, string> = {
   '‐': '-',
@@ -109,11 +110,35 @@ const TRANSLITERATIONS: Record<string, string> = {
   '™': 'TM',
   '®': '(R)',
   '©': '(c)',
+  // Latin letters that are not an accent on a plain letter (so do not fold below).
+  ß: 'ss',
+  æ: 'ae',
+  Æ: 'AE',
+  œ: 'oe',
+  Œ: 'OE',
+  ø: 'o',
+  Ø: 'O',
+  ł: 'l',
+  Ł: 'L',
+  đ: 'd',
+  Đ: 'D',
 };
+
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
+/**
+ * An accented Latin letter as its plain letter ("ñ" → "n", "é" → "e"); a
+ * combining accent on its own is dropped; null when it has no plain form.
+ */
+function withoutAccent(ch: string): string | null {
+  const plain = ch.normalize('NFD').replace(/\p{M}/gu, '');
+  return plain !== ch && PRINTABLE_ASCII.test(plain) ? plain : null;
+}
 
 /**
  * What the printer will actually put on paper for `s`: ASCII kept, known
- * typography swapped for its stand-in, everything else '?'. Line feeds and
+ * typography swapped for its stand-in, an accented letter printed without
+ * its accent ("Jalapeño" → "Jalapeno"), everything else '?'. Line feeds and
  * tabs pass through; other control characters become '?'.
  */
 export function toPrinterAscii(s: string): string {
@@ -123,7 +148,7 @@ export function toPrinterAscii(s: string): string {
     if ((code >= 0x20 && code < 0x7f) || ch === '\n' || ch === '\t') {
       out += ch;
     } else {
-      out += TRANSLITERATIONS[ch] ?? '?';
+      out += TRANSLITERATIONS[ch] ?? withoutAccent(ch) ?? '?';
     }
   }
   return out;

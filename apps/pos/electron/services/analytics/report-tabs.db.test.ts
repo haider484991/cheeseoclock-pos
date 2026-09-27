@@ -161,8 +161,8 @@ live('Reports tabs through the worker', () => {
     // Profit is never handed over without profit.view and costs.
     const profit = { ...tabs.buildReportTab(db, 'profit', DAY, NOW), engine: 'worker' as const };
     expect(tabs.reportTabForLogin('profit', profit, true, true)).toBe(profit);
-    expect(() => tabs.reportTabForLogin('profit', profit, true, false)).toThrow('Only a manager or the owner can see profit.');
-    expect(() => tabs.reportTabForLogin('profit', profit, false, true)).toThrow('Only a manager or the owner can see profit.');
+    expect(() => tabs.reportTabForLogin('profit', profit, true, false)).toThrow('Only the owner can see profit.');
+    expect(() => tabs.reportTabForLogin('profit', profit, false, true)).toThrow('Only the owner can see profit.');
   });
 
   it('the worker answers a bad ask with its reason, and carries on', () => {
