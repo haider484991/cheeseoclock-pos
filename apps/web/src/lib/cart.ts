@@ -48,7 +48,7 @@ export function cartLineKey(posItemId: string, modifierIds: readonly string[], n
 /** "Fajita Pizza — Large" → "Fajita Pizza · Large 12"" (what the cart and the ticket show). */
 export function itemLabel(item: Pick<PublishedMenuItem, 'name'>): string {
   const { base, size } = splitSizedName(item.name);
-  return size ? `${base} · ${sizeLabel(size)}` : base;
+  return size ? `${base} · ${sizeLabel(size, base)}` : base;
 }
 
 function clampQty(n: number): number {

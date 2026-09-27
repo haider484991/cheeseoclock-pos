@@ -11,6 +11,8 @@ import {
   sheetGroups,
   shopPhotoFor,
   sizeLabel,
+  cardSizeLabel,
+  isPizzaName,
   splitSizedName,
   withoutDrinkBrand,
 } from './menu-view';
@@ -216,10 +218,30 @@ describe('value deals', () => {
 
 describe('labels', () => {
   it('prints inches only for the shop’s two pizza sizes', () => {
-    expect(sizeLabel('Medium')).toBe('Medium 9"');
-    expect(sizeLabel('Large')).toBe('Large 12"');
-    expect(sizeLabel('Regular')).toBe('Regular');
-    expect(sizeLabel(null)).toBe('');
+    expect(sizeLabel('Medium', 'Fajita Pizza')).toBe('Medium 9"');
+    expect(sizeLabel('Large', 'Fajita Pizza')).toBe('Large 12"');
+    expect(sizeLabel('Large', 'Crown Crust')).toBe('Large 12"');
+    expect(sizeLabel('Regular', 'Fries')).toBe('Regular');
+    expect(sizeLabel(null, 'Nuggets')).toBe('');
+  });
+
+  it('never gives fries or drinks inches (partner, 27 Sep 2026)', () => {
+    expect(sizeLabel('Large', 'Fries')).toBe('Large');
+    expect(sizeLabel('Large', 'Signature Masala Fries')).toBe('Large');
+    expect(sizeLabel('1 litre', 'Soft Drink')).toBe('1 litre');
+    expect(isPizzaName('Cheetos')).toBe(true);
+    expect(isPizzaName('Signature Mayo Masala Fries')).toBe(false);
+  });
+
+  it('shows no size on a one-size item that is not a pizza', () => {
+    const masala = buildMenuView(menu([['Fries & Sides', [item('Signature Masala Fries — Large', 480)]]]))[0]!.cards[0]!;
+    expect(cardSizeLabel(masala, 'Large')).toBe('');
+    const fries = buildMenuView(
+      menu([['Fries & Sides', [item('Fries — Regular', 300), item('Fries — Large', 450)]]]),
+    )[0]!.cards[0]!;
+    expect(fries.variants.map((v) => cardSizeLabel(fries, v.size))).toEqual(['Regular', 'Large']);
+    const signature = buildMenuView(menu([['Signature Pizzas', [item('Crown Crust — Large', 2200)]]]))[0]!.cards[0]!;
+    expect(cardSizeLabel(signature, 'Large')).toBe('Large 12"');
   });
 
   it('drops the deal-slot prefix inside a slot group', () => {

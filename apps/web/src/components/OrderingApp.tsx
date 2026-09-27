@@ -13,7 +13,7 @@ import {
   dealWorthCents,
   isDealSection,
   isPickupOnly,
-  sizeLabel,
+  cardSizeLabel,
   type MenuCard,
   type MenuVariant,
 } from '@/lib/menu-view';
@@ -78,7 +78,8 @@ function newOrderId(): string {
  */
 
 function variantLabel(card: MenuCard, v: MenuVariant): string {
-  return v.size ? `${card.name} · ${sizeLabel(v.size)}` : card.name;
+  const size = cardSizeLabel(card, v.size);
+  return size ? `${card.name} · ${size}` : card.name;
 }
 
 type PickFn = (card: MenuCard, variantIndex: number) => void;
@@ -703,12 +704,12 @@ function VariantButtons({
           >
             {sized ? (
               <span className="leading-tight">
-                <span className="block text-[0.7rem] opacity-75">{sizeLabel(v.size)}</span>
+                <span className="block text-[0.7rem] opacity-75">{cardSizeLabel(card, v.size)}</span>
                 <span className="block tabular-nums">{formatCents(v.item.basePriceCents)}</span>
               </span>
             ) : (
               <>
-                {v.size && <span className="text-xs opacity-80">{sizeLabel(v.size)}</span>}
+                {cardSizeLabel(card, v.size) && <span className="text-xs opacity-80">{cardSizeLabel(card, v.size)}</span>}
                 <span className="tabular-nums">{formatCents(v.item.basePriceCents)}</span>
               </>
             )}
@@ -797,9 +798,9 @@ const ItemCard = memo(function ItemCard({ card, qtyByItem, canPickup, onPick }: 
       <div className="flex items-start justify-between gap-2">
         <h3 className="font-cond text-xl font-extrabold uppercase leading-tight tracking-wide text-ink">
           {card.name}
-          {single?.size && (
+          {single && cardSizeLabel(card, single.size) && (
             <span className="ml-2 align-middle text-xs font-bold tracking-widest text-ink-muted">
-              {sizeLabel(single.size)}
+              {cardSizeLabel(card, single.size)}
             </span>
           )}
         </h3>

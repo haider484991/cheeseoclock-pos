@@ -13,7 +13,7 @@ import {
   optionLabel,
   requiredCount,
   sheetGroups,
-  sizeLabel,
+  cardSizeLabel,
   type MenuCard,
   type MenuVariant,
 } from '@/lib/menu-view';
@@ -180,7 +180,7 @@ export function ItemSheet({
                       : 'border-paper-line bg-white text-ink hover:border-ink/40'
                   }`}
                 >
-                  <span className="block font-cond text-base font-extrabold uppercase">{sizeLabel(v.size)}</span>
+                  <span className="block font-cond text-base font-extrabold uppercase">{cardSizeLabel(card, v.size)}</span>
                   <span className="font-cond text-sm font-bold tabular-nums opacity-80">
                     {formatCents(v.item.basePriceCents)}
                   </span>

@@ -5,6 +5,7 @@ import { Reveal } from '@/components/Reveal';
 import { CheeseTime } from '@/components/CheeseTime';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { PizzaCarousel3D } from '@/components/PizzaCarousel3D';
+import { ShopMapCard } from '@/components/ShopMapCard';
 import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
 import { FEE_SUMMARY } from '@/lib/delivery-zones';
@@ -335,17 +336,11 @@ export default function HomePage() {
                 </div>
               </div>
               <Reveal delay={100}>
-                <div className="overflow-hidden rounded-3xl border-2 border-ink">
-                  <iframe
-                    title="Cheese O'Clock, Rahat Commercial Area, DHA Phase 6, Karachi on Google Maps"
-                    src={`https://maps.google.com/maps?q=${BUSINESS.latitude},${BUSINESS.longitude}&z=15&output=embed`}
-                    width="600"
-                    height="380"
-                    loading="lazy"
-                    referrerPolicy="no-referrer-when-downgrade"
-                    className="h-[380px] w-full border-0"
-                  />
-                </div>
+                <ShopMapCard
+                  title="Cheese O'Clock, Rahat Commercial Area, DHA Phase 6, Karachi on Google Maps"
+                  heightClass="h-[380px]"
+                  className="rounded-3xl border-2 border-ink"
+                />
                 <address className="mt-3 text-center text-sm not-italic text-ink/65">
                   {BUSINESS.streetAddress}, {BUSINESS.locality} · {BUSINESS.hours}
                 </address>
