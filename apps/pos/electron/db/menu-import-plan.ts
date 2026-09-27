@@ -34,6 +34,12 @@
  *   - A recipe line with `when` is only used when that choice is picked.
  *   - Batch recipes (what the kitchen makes) replace the old batch recipe;
  *     a method is only filled in where there is none.
+ *   - The owner's import rules (Settings → Kitchen & stock,
+ *     'menu.importPolicy'): on things the till ALREADY has, the file wins
+ *     by default (today's behaviour) or the till keeps its own — a menu
+ *     item's price, a choice's charge and rules, a recipe (dish or batch),
+ *     an item's tax. What the till keeps is listed in the preview ("kept on
+ *     the till") and counted in `keptLine`. New things always come in.
  */
 
 import {
@@ -52,7 +58,10 @@ import {
   unitCostMc,
 } from '@cheeseoclock/pos-domain';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
+import { DEFAULT_MENU_IMPORT_POLICY } from '@cheeseoclock/shared-types';
 import type {
+  MenuImportPolicy,
+  MenuImportKept,
   MenuImportCategoryPlan,
   MenuImportChoiceGroupPlan,
   MenuImportIngredientPlan,
@@ -473,7 +482,26 @@ export function importedPriceKind(filePriced: boolean, isEstimate: boolean, prev
   return isEstimate ? 'estimate' : 'set';
 }
 
-export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuImportPlan {
+/**
+ * The preview's line about what the till kept against the file (the
+ * owner's import rules): "Kept on the till: 3 prices, 1 recipe (Settings →
+ * Kitchen & stock)." Null when nothing was.
+ */
+export function keptOnTillLine(k: MenuImportKept): string | null {
+  const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+  const parts: string[] = [];
+  if (k.prices > 0) parts.push(n(k.prices, 'price'));
+  if (k.choices > 0) parts.push(n(k.choices, 'choice group'));
+  if (k.recipes > 0) parts.push(n(k.recipes, 'recipe'));
+  if (k.taxes > 0) parts.push(`the tax of ${n(k.taxes, 'item')}`);
+  return parts.length === 0 ? null : `Kept on the till: ${parts.join(', ')} (Settings → Kitchen & stock).`;
+}
+
+export function planMenuImport(
+  file: MenuImportFile,
+  live: MenuSnapshot,
+  policy: Omit<MenuImportPolicy, 'v'> = DEFAULT_MENU_IMPORT_POLICY,
+): MenuImportPlan {
   const warnings: string[] = [];
   const summary: MenuImportSummary = {
     newItems: 0,
@@ -490,6 +518,8 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     removedItems: 0,
     prices: countPrices([]),
     priceLine: '',
+    keptOnTill: { prices: 0, choices: 0, recipes: 0, taxes: 0 },
+    keptLine: null,
   };
 
   // ---- Categories ----------------------------------------------------------
@@ -782,6 +812,15 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       });
     const method = row?.batchMethod?.trim() ? row.batchMethod : ing.batch.method;
     if (same && method === (row?.batchMethod ?? null)) return;
+    // The owner's rule: a batch recipe the till already has stays as it is (method and all).
+    if (!same && row && current.length > 0 && policy.recipes === 'till') {
+      plan.keptOnTill = [
+        ...(plan.keptOnTill ?? []),
+        `batch recipe: ${current.length} inputs, makes ${(row.batchYield ?? 0) * factor} ${ing.unit} (the file has ${lines.length} inputs, makes ${ing.batch.yield} ${ing.unit})`,
+      ];
+      summary.keptOnTill.recipes++;
+      return;
+    }
     batchOps.push({
       ingredient: self,
       batchYield: ing.batch.yield,
@@ -863,13 +902,23 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     const row = m.row;
     groupRef.set(groupKey, { existingId: row.id });
     const changes: string[] = [];
+    // The owner's rule: a choice group the till already has keeps its charges and rules (new options still come in).
+    const keepChoices = policy.choices === 'till';
+    const kept: string[] = [];
     const update: NonNullable<MenuImportOps['modifierGroups'][number]['update']> = {};
     if (row.selectionType !== shape.selectionType) update.selectionType = shape.selectionType;
     if (row.minSelect !== shape.minSelect) update.minSelect = shape.minSelect;
     if (row.maxSelect !== shape.maxSelect) update.maxSelect = shape.maxSelect;
     if (row.isRequired !== shape.isRequired) update.isRequired = shape.isRequired;
+    const chooseText = (min: number, max: number, required: boolean) =>
+      `choose ${min === max ? min : `${min}–${max}`}${required ? ', required' : ''}`;
     if (Object.keys(update).length > 0) {
-      changes.push(`choose ${shape.minSelect === shape.maxSelect ? shape.minSelect : `${shape.minSelect}–${shape.maxSelect}`}${shape.isRequired ? ', required' : ''}`);
+      if (keepChoices) {
+        kept.push(`${chooseText(row.minSelect, row.maxSelect, row.isRequired)} (the file says ${chooseText(shape.minSelect, shape.maxSelect, shape.isRequired)})`);
+        for (const k of Object.keys(update) as Array<keyof typeof update>) delete update[k];
+      } else {
+        changes.push(chooseText(shape.minSelect, shape.maxSelect, shape.isRequired));
+      }
     }
     let nextSort = Math.max(0, ...row.modifiers.map((x) => x.sortOrder + 1));
     const optionMatches = matchAll(g.options, row.modifiers);
@@ -883,13 +932,18 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       }
       if (!om.row) {
         optionRef.set(`${groupKey}|${optionKey}`, { groupKey, optionKey });
+        // Keeping the till's choices keeps which options it picks first: a new
+        // option comes in not picked (picked too, a "pick 1" group would start
+        // with two, and the counter would refuse the item until one is unticked).
+        const keptPick = keepChoices && o.isDefault;
+        if (keptPick) kept.push(`"${o.name}" not picked to start with (the file picks it first)`);
         options.push({
           optionKey,
           existingId: null,
           create: {
             name: o.name,
             priceDeltaCents: o.priceDeltaCents,
-            isDefault: o.isDefault,
+            isDefault: keptPick ? false : o.isDefault,
             sortOrder: nextSort++,
             removes: removesRef(o.removes),
           },
@@ -907,20 +961,37 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
           ? haveRemoves === null
           : 'existingId' in wantRemoves && wantRemoves.existingId === haveRemoves;
       if (!sameRemoves) {
-        oUpdate.removes = wantRemoves;
-        changes.push(`"${om.row.name}" ${wantRemoves ? `leaves out ${o.removes}` : 'no longer leaves anything out'}`);
+        if (keepChoices) kept.push(`what "${om.row.name}" leaves out (the file: ${wantRemoves ? o.removes : 'nothing'})`);
+        else {
+          oUpdate.removes = wantRemoves;
+          changes.push(`"${om.row.name}" ${wantRemoves ? `leaves out ${o.removes}` : 'no longer leaves anything out'}`);
+        }
       }
       if (om.row.priceDeltaCents !== o.priceDeltaCents) {
-        oUpdate.priceDeltaCents = o.priceDeltaCents;
-        changes.push(`"${om.row.name}" ${formatCents(om.row.priceDeltaCents)} → ${formatCents(o.priceDeltaCents)}`);
+        if (keepChoices) kept.push(`"${om.row.name}" ${formatCents(om.row.priceDeltaCents)} (the file says ${formatCents(o.priceDeltaCents)})`);
+        else {
+          oUpdate.priceDeltaCents = o.priceDeltaCents;
+          changes.push(`"${om.row.name}" ${formatCents(om.row.priceDeltaCents)} → ${formatCents(o.priceDeltaCents)}`);
+        }
       }
-      if (om.row.isDefault !== o.isDefault) oUpdate.isDefault = o.isDefault;
+      if (om.row.isDefault !== o.isDefault) {
+        if (keepChoices) kept.push(`"${om.row.name}" ${om.row.isDefault ? 'picked' : 'not picked'} to start with`);
+        else oUpdate.isDefault = o.isDefault;
+      }
       options.push({ optionKey, existingId: om.row.id, create: null, update: Object.keys(oUpdate).length ? oUpdate : null });
     });
     const changed = Object.keys(update).length > 0 || options.some((o) => o.create || o.update);
     groupOps.push({ groupKey, existingId: row.id, create: null, update: Object.keys(update).length ? update : null, options });
-    choicePlans.push({ name: g.name, action: changed ? 'update' : 'same', existingName: row.name, options: optionNames, changes });
+    choicePlans.push({
+      name: g.name,
+      action: changed ? 'update' : 'same',
+      existingName: row.name,
+      options: optionNames,
+      changes,
+      ...(kept.length > 0 ? { keptOnTill: kept } : {}),
+    });
     if (changed) summary.choiceGroupsChanged++;
+    if (kept.length > 0) summary.keptOnTill.choices++;
   });
   const fileGroups = new Map(file.modifierGroups.map((g) => [g.name.toLowerCase(), g]));
   /** An item's choices: option name → the option, through the item's groups. */
@@ -1066,11 +1137,18 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     const row = m.row;
     matchedItemIds.add(row.id);
     const changes: string[] = [];
+    /** What the till keeps against the file (the owner's import rules). */
+    const kept: string[] = [];
     const update: NonNullable<MenuImportOps['items'][number]['update']> = {};
     if (row.basePriceCents !== item.priceCents) {
-      changes.push(`price ${formatCents(row.basePriceCents)} → ${formatCents(item.priceCents)}`);
-      update.basePriceCents = item.priceCents;
-      summary.priceChanges++;
+      if (policy.itemPrices === 'till') {
+        kept.push(`price ${formatCents(row.basePriceCents)} (the file says ${formatCents(item.priceCents)})`);
+        summary.keptOnTill.prices++;
+      } else {
+        changes.push(`price ${formatCents(row.basePriceCents)} → ${formatCents(item.priceCents)}`);
+        update.basePriceCents = item.priceCents;
+        summary.priceChanges++;
+      }
     }
     if (!row.description?.trim() && item.description?.trim()) {
       changes.push('description added');
@@ -1078,9 +1156,14 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     }
     if (file.tax && row.taxCategoryId !== taxCategory?.id) {
       const was = taxRateById.get(row.taxCategoryId);
-      changes.push(`tax ${was !== undefined ? pct(was) : '?'} → ${pct(file.tax.rateBps)}`);
-      update.useImportTax = true;
-      summary.taxChanges++;
+      if (policy.tax === 'till') {
+        kept.push(`tax ${was !== undefined ? pct(was) : '?'} (the file says ${pct(file.tax.rateBps)})`);
+        summary.keptOnTill.taxes++;
+      } else {
+        changes.push(`tax ${was !== undefined ? pct(was) : '?'} → ${pct(file.tax.rateBps)}`);
+        update.useImportTax = true;
+        summary.taxChanges++;
+      }
     }
 
     const attachedNow = new Set((live.itemGroups.get(row.id) ?? []).map((a) => a.groupId));
@@ -1103,6 +1186,12 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       if (same) {
         recipe = null;
         recipeChange = 'same';
+      } else if (current.length > 0 && policy.recipes === 'till') {
+        // The owner's rule: a recipe the till already has stays; an item with none still gets the file's.
+        recipe = null;
+        recipeChange = 'kept';
+        kept.push(`recipe (${current.length} ${current.length === 1 ? 'line' : 'lines'}; the file has ${item.recipe.length})`);
+        summary.keptOnTill.recipes++;
       } else {
         recipeChange = current.length === 0 ? 'set' : 'replace';
         changes.push(current.length === 0 ? `recipe added (${item.recipe.length} lines)` : `recipe replaced (${current.length} → ${item.recipe.length} lines)`);
@@ -1121,6 +1210,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       changes,
       recipeChange,
       reason: recipeReason,
+      ...(kept.length > 0 ? { keptOnTill: kept } : {}),
     });
     if (action === 'update') {
       itemOps.push({ existingId: row.id, create: null, update: hasUpdate ? update : null, attach: attach.map((x) => x.ref), recipe });
@@ -1154,7 +1244,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       items: itemPlans,
       untouchedItems,
       warnings,
-      summary: { ...summary, newCategories: categoriesKept.filter((c) => c.create).length },
+      summary: { ...summary, newCategories: categoriesKept.filter((c) => c.create).length, keptLine: keptOnTillLine(summary.keptOnTill) },
     },
     ops: {
       categories: categoriesKept,

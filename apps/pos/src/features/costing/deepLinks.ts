@@ -54,6 +54,12 @@ export function openFoodpandaSettings(navigate: Navigate): void {
   navigate('/settings?tab=foodpanda');
 }
 
+/** Inventory → Stock takes (a "Do this" line: a stock take the owner asked to be reminded of is due). */
+export function openStockTakes(navigate: Navigate): void {
+  presetSessionState('inv.tab', 'stocktakes');
+  navigate('/inventory');
+}
+
 /** Costing on one of its tabs (the Dashboard's "Do this": Missing costs, Alerts). */
 export function openCostingTab(navigate: Navigate, tab: 'menu' | 'missing' | 'alerts' | 'targets'): void {
   presetSessionState('costing.tab', tab);

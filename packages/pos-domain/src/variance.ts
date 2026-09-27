@@ -22,7 +22,8 @@
  * only, so it is left out (and listed). Pure: the SQL is in
  * apps/pos/electron/services/analytics/stock-control.ts.
  */
-import type { VarianceBand, VarianceBatchPair } from '@cheeseoclock/shared-types';
+import { DEFAULT_STOCK_RULES, DEFAULT_VARIANCE_BANDS } from '@cheeseoclock/shared-types';
+import type { StockRules, VarianceBand, VarianceBands, VarianceBatchPair } from '@cheeseoclock/shared-types';
 import { tradingDayOfMs } from './trends.js';
 import { mulDivRound, shareBps } from './units.js';
 
@@ -138,36 +139,58 @@ export function unexplainedBps(v: Pick<VarianceFigures, 'unexplained' | 'shouldH
 }
 
 /**
- * The rating of the period variance (Σ V value ÷ food sales), either way:
- * under 2% good, 2–3% OK, 3–5% needs work, over 5% look at it now (meez).
+ * The rating of the period variance (Σ V value ÷ food sales), either way,
+ * with the owner's bands (Settings → Kitchen & stock, 'stock.rules'): by
+ * default under 2% good, 2–3% OK, 3–5% needs work, over 5% look at it now
+ * (meez). The ONE rating: Reports, the Dashboard and the weekly sheet.
  */
-export function varianceBand(bps: number | null): VarianceBand | null {
+export function varianceBand(bps: number | null, bands: VarianceBands = DEFAULT_VARIANCE_BANDS): VarianceBand | null {
   if (bps === null) return null;
   const a = Math.abs(bps);
-  if (a < 200) return 'good';
-  if (a <= 300) return 'ok';
-  if (a <= 500) return 'needs_work';
+  if (a < bands.goodUnderBps) return 'good';
+  if (a <= bands.okUpToBps) return 'ok';
+  if (a <= bands.needsWorkUpToBps) return 'needs_work';
   return 'look_now';
 }
 
-/** "Do this" lists the last stock takes' variance when more than this share of food sales went unexplained (3%). */
-export const VARIANCE_DO_THIS_BPS = 300;
+/**
+ * "Do this" lists the last stock takes' variance when more than this share
+ * of food sales went unexplained: the RELEASED 3% (the owner's own is
+ * 'stock.rules' varianceDoThisBps; see varianceDoThisRules).
+ */
+export const VARIANCE_DO_THIS_BPS = DEFAULT_STOCK_RULES.varianceDoThisBps;
 
-const WEEK_MS = 7 * 86_400_000;
+const DAY_MS = 86_400_000;
+const WEEK_MS = 7 * DAY_MS;
 
 /**
  * The shortest stretch between two stock takes that "Do this" turns into
- * rupees a week (6 days: a weekly count a day early still is one). A
- * shorter one would be scaled UP to a week — a recount two hours later ×84,
- * a day ×7 — so it is left to Reports, which shows it as it is.
+ * rupees a week: the RELEASED 6 days (a weekly count a day early still is
+ * one; the owner's own is 'stock.rules' varianceMinWindowDays). A shorter
+ * one would be scaled UP to a week — a recount two hours later ×84, a day
+ * ×7 — so it is left to Reports, which shows it as it is.
  */
-export const VARIANCE_DO_THIS_MIN_WINDOW_MS = 6 * 86_400_000;
+export const VARIANCE_DO_THIS_MIN_WINDOW_MS = DEFAULT_STOCK_RULES.varianceMinWindowDays * DAY_MS;
+
+/** When the latest variance is a "Do this" line, from the owner's stock rules (the released 3% and 6 days by default). */
+export interface VarianceDoThisRules {
+  /** More than this share of food sales unexplained (basis points). */
+  minBps: number;
+  /** Stock takes at least this far apart. */
+  minWindowMs: number;
+}
+
+export function varianceDoThisRules(
+  rules: Pick<StockRules, 'varianceDoThisBps' | 'varianceMinWindowDays'> = DEFAULT_STOCK_RULES,
+): VarianceDoThisRules {
+  return { minBps: rules.varianceDoThisBps, minWindowMs: rules.varianceMinWindowDays * DAY_MS };
+}
 
 /**
  * What went unexplained per week: the window's total spread over its
  * length (costing spec 4.17 "V value per week"). Rounded once. Only for a
- * window of VARIANCE_DO_THIS_MIN_WINDOW_MS or more (the caller's check):
- * never used to blow a short window up.
+ * window of the owner's shortest stretch or more (varianceDoThisRules; 6
+ * days by default — the caller's check): never used to blow a short window up.
  */
 export function varianceWeekCents(totalCents: number, windowMs: number): number {
   if (!(windowMs > 0)) return 0;

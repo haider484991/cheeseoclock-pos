@@ -14,7 +14,7 @@
  * back.
  */
 
-import type { WasteReason } from './inventory.js';
+import type { WasteReason, WasteReasonId } from './inventory.js';
 import type { DiscountSource } from './shop-settings.js';
 import type { StockCountScope, VarianceBand } from './stock-count.js';
 import type { ProfitFees, RiderCostSetting } from './profit.js';
@@ -355,8 +355,17 @@ export interface ReportWasteIngredientLine {
  */
 export type ReportWasteReason = WasteReason | 'cancelled_made' | 'test_order';
 
+/**
+ * The owner's names for the waste reasons where they are not the released
+ * ones (a renamed reason, or one he added: Settings → Kitchen & stock), by
+ * reason id. Reports group waste by the id each row keeps, so a new name
+ * shows on every old row too. Absent: every reason has its released name.
+ */
+export type WasteReasonLabels = Record<WasteReasonId, string>;
+
 export interface ReportWasteLine {
-  reason: ReportWasteReason;
+  /** A ReportWasteReason, or the id of a reason the owner added. */
+  reason: ReportWasteReason | WasteReasonId;
   /**
    * How many times, as the owner counts them: for food cancelled after
    * cooking, the orders it came from (not their ingredient rows); for waste
@@ -446,6 +455,8 @@ export interface ReportFoodCost {
    */
   wasteCents: number;
   wasteByReason: ReportWasteLine[];
+  /** The owner's names for the reasons, where not the released ones. */
+  wasteLabels?: WasteReasonLabels;
   wasteIngredients: ReportWasteIngredientLine[];
   /** The part of `wasteCents` made for orders that were then cancelled or refunded. */
   cancelledWasteCents: number;
@@ -983,6 +994,8 @@ export interface ReportProfitTab extends ReportTabBase {
   /** Profit before overheads (rent, salaries and bills are not on the till). */
   profitCents: number;
   wasteByReason: ReportWasteLine[];
+  /** The owner's names for the reasons, where not the released ones. */
+  wasteLabels?: WasteReasonLabels;
   sentNotPaid: ReportUnpaidFood;
   stockLoss: ReportProfitStockLoss;
   channels: ReportChannelProfit[];
@@ -1268,6 +1281,13 @@ interface DoThisBase {
   weekCents: number | null;
   /** Pinned first, whatever the rupees (a key ingredient running out). */
   pinned: boolean;
+  /**
+   * First among the pinned lines, so the few pinned places never leave it
+   * out (a stock take the owner asked to be reminded of: it is due most when
+   * nothing has been counted for a while, which is when many key items read
+   * low too). Absent: false.
+   */
+  pinFirst?: boolean;
   /** It carries costs: only for a login with COST_CAPABILITY (the main process drops the rest). */
   cost: boolean;
 }
@@ -1303,7 +1323,8 @@ export type DoThisItem =
     })
   /**
    * The last two stock takes: more stock went than sales, batches and logged
-   * waste explain — over 3% of food sales (costing spec 4.17, Phase 8). Its
+   * waste explain — over the owner's share of food sales (Settings → Kitchen
+   * & stock; 3% by default: costing spec 4.17, Phase 8). Its
    * rupees per week are what went unexplained, spread over the weeks
    * between the two stock takes.
    */
@@ -1319,6 +1340,21 @@ export type DoThisItem =
       topIngredient: string | null;
       /** When the later stock take was finished. */
       countedAt: string;
+    })
+  /**
+   * A stock take is due (Settings → Kitchen & stock, off unless the owner
+   * turns it on): the key items (a key-items or full stock take counts) or a
+   * full one, last finished `daysSince` trading days ago — or never — with
+   * the owner asking for one every `everyDays`. Pinned; no rupees.
+   */
+  | (DoThisBase & {
+      kind: 'stock_take_due';
+      scope: 'key_items' | 'full';
+      everyDays: number;
+      /** When the last one was finished; null: never. */
+      lastAt: string | null;
+      /** Trading days since; null: never. */
+      daysSince: number | null;
     });
 
 export type DoThisKind = DoThisItem['kind'];
@@ -1360,6 +1396,8 @@ export interface OwnerWeekSheet {
   /** … and the three that earn the least, least first (never the same dish twice). */
   earnsLeast: OwnerWeekItem[];
   wasteByReason: ReportWasteLine[];
+  /** The owner's names for the reasons, where not the released ones. */
+  wasteLabels?: WasteReasonLabels;
   /**
    * Food cost and waste over the stretch the sales are compared with (last
    * week by now, or the week before in full), so the sheet's five numbers are

@@ -27,6 +27,7 @@ import type {
   ReportWasteReason,
   StockMovement,
   WasteReason,
+  WasteReasonId,
 } from '@cheeseoclock/shared-types';
 import { WASTE_REASONS } from '@cheeseoclock/shared-types';
 import { splitOrderLines } from './profit.js';
@@ -434,13 +435,22 @@ export function tallyPlainOrders(t: FoodCostTally, p: PlainOrders): void {
 /**
  * The reason a waste row counts under in Reports: food made for an order
  * that was then cancelled or refunded, or the reason picked on the Waste
- * screen ("other" when none was given — rows from before reasons existed).
+ * screen, by the id the row keeps ("other" when none was given — rows from
+ * before reasons existed — or when it is not one of `known`). `known`: the
+ * reasons on the owner's list (Settings → Kitchen & stock, hidden ones
+ * too); the seven built in when not given. A renamed reason keeps its id,
+ * so its old rows count under it, with its new name.
  */
-export function wasteReasonOf(detail: string | null | undefined, refOrderId: string | null | undefined): ReportWasteReason {
+export function wasteReasonOf(
+  detail: string | null | undefined,
+  refOrderId: string | null | undefined,
+  known: Iterable<WasteReasonId> = WASTE_REASONS,
+): ReportWasteReason | WasteReasonId {
   if (detail === 'cancel_made' || (refOrderId !== null && refOrderId !== undefined && refOrderId !== '')) return 'cancelled_made';
   const m = /^waste:(.+)$/.exec(detail ?? '');
   const r = m?.[1];
-  return r && (WASTE_REASONS as readonly string[]).includes(r) ? (r as WasteReason) : 'other';
+  const ids = known instanceof Set ? (known as ReadonlySet<string>) : new Set<string>(known);
+  return r && ids.has(r) ? (r as WasteReason | WasteReasonId) : 'other';
 }
 
 // ------------------------------------------------- what a login may read --

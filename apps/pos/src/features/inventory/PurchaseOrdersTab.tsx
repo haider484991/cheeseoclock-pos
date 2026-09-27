@@ -22,6 +22,7 @@ import { COSTING_KEY, useCostAlertSettings } from '../costing/costingQueries';
 import { formatBps, parseRupees } from '../costing/costingFormat';
 import { IngredientSelect } from './IngredientSelect';
 import { suggestReorderQty } from './ingredient-list';
+import { useStockRules } from '../settings/shop-rules/useShopSetting';
 import { initialPriceEntry, perChoices, type PricePer } from './price-view';
 import { billUnitText, lineCheck, lineWords, orderedPriceText, purchaseTotalText, readBill, readBoughtQty, readQty } from './purchase-view';
 import { PriceQuestion, RecordPurchaseDialog, type PayoutToConvert } from './RecordPurchaseDialog';
@@ -423,6 +424,8 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
   const supQ = useQuery({ queryKey: ['inventory', 'suppliers'], queryFn: () => ipc.inventory.listSuppliers() });
   const ingQ = useQuery({ queryKey: ['inventory', 'ingredients', 'all'], queryFn: () => ipc.inventory.listIngredients() });
+  // "Add low stock" fills up to the owner's multiple of the low level (Settings → Kitchen & stock; 3 by default).
+  const { reorderMultiple } = useStockRules();
   const suppliers = useMemo(
     () => (supQ.data ?? []).filter((s) => s.isActive).sort((a, b) => compareText(a.name, b.name)),
     [supQ.data],
@@ -466,7 +469,7 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
   function addLowStock() {
     setLines((prev) => [
       ...prev.filter((l) => l.ingredientId || l.qty || l.rupees),
-      ...lowForSupplier.map((i) => ({ ingredientId: i.id, qty: String(suggestReorderQty(i)), ...priceBoxesFor(i) })),
+      ...lowForSupplier.map((i) => ({ ingredientId: i.id, qty: String(suggestReorderQty(i, reorderMultiple)), ...priceBoxesFor(i) })),
     ]);
   }
 
@@ -573,7 +576,12 @@ function CreatePoDialog({ onClose }: { onClose: () => void }) {
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-xs uppercase tracking-wider text-stone-500">What to order</div>
                 {lowForSupplier.length > 0 && (
-                  <Button variant="secondary" size="sm" onClick={addLowStock}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={addLowStock}
+                    title={`Each up to ${reorderMultiple} times its low level, in whole packs (Settings → Kitchen & stock)`}
+                  >
                     <ListPlus className="h-4 w-4" /> Add {lowForSupplier.length} low-stock item{lowForSupplier.length === 1 ? '' : 's'}
                   </Button>
                 )}

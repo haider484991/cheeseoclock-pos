@@ -1013,6 +1013,7 @@ export function buildProfitTab(db: AppDatabase, req: BusinessReportRequest): Rep
     steps: w.steps,
     profitCents: w.profitCents,
     wasteByReason: waste.wasteByReason,
+    ...(waste.wasteLabels ? { wasteLabels: waste.wasteLabels } : {}),
     sentNotPaid: waste.sentNotPaid,
     stockLoss,
     channels,

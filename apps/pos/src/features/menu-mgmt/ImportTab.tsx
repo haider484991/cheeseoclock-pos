@@ -10,7 +10,7 @@ import type {
 } from '@cheeseoclock/shared-types';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { FileUp, AlertTriangle, Tags } from 'lucide-react';
+import { FileUp, AlertTriangle, Tags, ShieldCheck } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { priceDetailGroups, sheetPriceText, tillPriceText } from './importPrices';
 
@@ -33,6 +33,16 @@ function Badge({ action }: { action: MenuImportAction }) {
     <span className={cn('rounded px-2 py-0.5 text-xs font-semibold', ACTION_CLASS[action])}>
       {ACTION_LABEL[action]}
     </span>
+  );
+}
+
+/** "Kept on the till: price Rs 1,200 (the file says Rs 1,300)" — what the owner's import rules kept (Settings → Kitchen & stock). */
+function Kept({ notes }: { notes: string[] | undefined }) {
+  if (!notes || notes.length === 0) return null;
+  return (
+    <div className="mt-1 text-xs text-sky-800 dark:text-sky-300">
+      <span className="font-semibold">Kept on the till:</span> {notes.join(' · ')}
+    </div>
   );
 }
 
@@ -99,9 +109,10 @@ export function ImportTab() {
       s.choiceGroupsChanged + s.batchRecipesSet === 0;
   const blocked = fresh && (preview?.fresh?.openOrders ?? 0) > 0;
   const busy = pickMut.isPending || modeMut.isPending || applyMut.isPending;
-  const visibleItems = (preview?.items ?? []).filter((i) => showUnchanged || i.action !== 'same');
+  // A row the owner's import rules kept is shown even with no change: the preview says what was kept on the till.
+  const visibleItems = (preview?.items ?? []).filter((i) => showUnchanged || i.action !== 'same' || (i.keptOnTill?.length ?? 0) > 0);
   const visibleIngredients = (preview?.ingredients ?? []).filter(
-    (i) => showUnchanged || i.action !== 'same',
+    (i) => showUnchanged || i.action !== 'same' || (i.keptOnTill?.length ?? 0) > 0,
   );
 
   return (
@@ -139,7 +150,7 @@ export function ImportTab() {
                   const f = preview.fresh;
                   const ask = f
                     ? `Replace the WHOLE menu with this file?\n\nRemoved: ${f.items.length} menu items, ${f.categories} categories, ${f.combos} combos, ${f.choiceGroups} choice groups and ${f.ingredients} ingredients, with their recipes and stock counts.\nLoaded: ${s.newItems} items, ${s.newIngredients} ingredients, ${s.recipesSet} recipes.\n\nSales history, customers, users, settings and tax stay. A backup is saved first (Settings → Backups).`
-                    : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.\n\n${s.priceLine} The till keeps the prices it has; the sheet's are kept beside them in Inventory.`;
+                    : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.\n\n${s.priceLine} The till keeps the prices it has; the sheet's are kept beside them in Inventory.${s.keptLine ? `\n\n${s.keptLine}` : ''}`;
                   void askConfirm(ask).then((ok) => {
                     if (ok) applyMut.mutate(fresh);
                   });
@@ -212,6 +223,11 @@ export function ImportTab() {
               ))}
             </dl>
             <PriceLine preview={preview} />
+            {s.keptLine && (
+              <p className="mt-2 flex items-start gap-2 rounded-lg bg-sky-50 p-3 text-sm font-medium text-sky-900 dark:bg-sky-950/50 dark:text-sky-200">
+                <ShieldCheck className="mt-0.5 h-4 w-4 flex-none" /> {s.keptLine}
+              </p>
+            )}
             {preview.taxCategoryName && (preview.taxFromFile || s.newItems > 0) && (
               <p className="mt-3 text-xs text-stone-500">
                 {preview.taxFromFile ? 'Tax for the file’s items' : 'New items are charged the tax most of the menu uses'}
@@ -275,6 +291,7 @@ export function ImportTab() {
                     {g.changes.map((c) => (
                       <span key={c} className="text-xs text-stone-700 dark:text-stone-300">{c}</span>
                     ))}
+                    <Kept notes={g.keptOnTill} />
                   </li>
                 ))}
               </ul>
@@ -340,6 +357,7 @@ function ItemTable({ rows }: { rows: MenuImportItemPlan[] }) {
                   <span key={c} className="text-xs text-stone-700 dark:text-stone-300">{c}</span>
                 ))}
               </div>
+              <Kept notes={r.keptOnTill} />
               {r.reason && <div className="mt-1 text-xs text-red-700 dark:text-red-400">{r.reason}</div>}
             </td>
           </tr>
@@ -426,6 +444,7 @@ function IngredientTable({ rows }: { rows: MenuImportIngredientPlan[] }) {
                   <span key={c} className="text-xs text-stone-700 dark:text-stone-300">{c}</span>
                 ))}
               </div>
+              <Kept notes={r.keptOnTill} />
               {r.reason && <div className="mt-1 text-xs text-red-700 dark:text-red-400">{r.reason}</div>}
             </td>
           </tr>

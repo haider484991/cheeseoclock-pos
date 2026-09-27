@@ -32,18 +32,21 @@ import {
   foodpandaDealRule,
   foodpandaTerms,
   shareBps,
+  stockRulesPutBack,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 import {
   readApprovalLimits,
   readBusinessSettingRow,
+  readMenuImportPolicy,
   readShopSetting,
   readStaffTiming,
+  readStockRules,
   type ShopSettingInUse,
 } from '../db/business-settings-read.js';
 import { businessSettingId } from '../db/business-settings-ids.js';
 
-export { readShopSetting, readApprovalLimits, readStaffTiming, type ShopSettingInUse };
+export { readShopSetting, readApprovalLimits, readStaffTiming, readStockRules, readMenuImportPolicy, type ShopSettingInUse };
 
 /** Every shop rule, as the till uses it now (saved values, or the defaults). */
 export type ShopSettings = { [K in ShopSettingKey]: ShopSettingInUse<K> };
@@ -71,6 +74,7 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
   const presets = readShopSetting(db, 'discounts.presets').value;
   const delivery = readShopSetting(db, 'discounts.delivery').value;
   const kitchen = readShopSetting(db, 'kitchen.timing').value;
+  const stock = readShopSetting(db, 'stock.rules').value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
   return {
     discounts: {
@@ -83,6 +87,13 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
       redMin: kitchen.redMin,
       notStartedMin: kitchen.notStartedMin,
       notDoneMin: kitchen.notDoneMin,
+    },
+    // Inventory's: the Waste screen's reasons (hidden ones for their names in the history), the
+    // stock bar's multiple, the reminders. Never the variance's figures.
+    stock: {
+      reorderMultiple: stock.reorderMultiple,
+      wasteReasons: stock.wasteReasons.map((r) => ({ id: r.id, label: r.label, hidden: r.hidden })),
+      reminders: { keyItemsEveryDays: stock.reminders.keyItemsEveryDays, fullEveryDays: stock.reminders.fullEveryDays },
     },
     foodpanda: {
       deal: active
@@ -155,6 +166,24 @@ export function itemFoodpandaLine(
   };
 }
 
+/**
+ * What "Put back the default" writes for a key, given the value in use: the
+ * default's values. For the stock rules, every waste reason the owner added
+ * is kept, hidden (it is saved, so either till may have waste rows with it;
+ * the repository refuses removing one) — with none added it is exactly the
+ * default. The Settings card shows this as the default, so its dialog says
+ * what will be written and its "Default" badge comes back after a put back.
+ */
+export function putBackOf<K extends ShopSettingKey>(key: K, current: ShopSettingValues[K]): ShopSettingValues[K] {
+  if (key === 'stock.rules') return stockRulesPutBack(current as ShopSettingValues['stock.rules']) as ShopSettingValues[K];
+  return { ...SHOP_SETTING_DEFAULTS[key] } as ShopSettingValues[K];
+}
+
+/** What "Put back the default" writes for a key now (putBackOf the value in use). */
+export function putBackValue<K extends ShopSettingKey>(db: AppDatabase, key: K): ShopSettingValues[K] {
+  return putBackOf(key, readShopSetting(db, key).value);
+}
+
 /** Changes shown under a card. */
 const HISTORY_CAP = 20;
 
@@ -206,7 +235,9 @@ export function getShopSettingCard<K extends ShopSettingKey>(
       )
       .get(id) !== undefined;
 
-  const defaultValue = { ...SHOP_SETTING_DEFAULTS[key] } as ShopSettingValues[K];
+  // What "Put back the default" would write: the default's values (the stock
+  // rules also keep the owner's added waste reasons, hidden: putBackOf).
+  const defaultValue = putBackOf(key, inUse.value);
   return {
     key,
     value: inUse.value,

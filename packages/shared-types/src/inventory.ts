@@ -253,9 +253,43 @@ export type StockMovementReason =
 export const COST_BASES = ['price', 'bill', 'take', 'batch', 'count', 'none'] as const;
 export type CostBasis = (typeof COST_BASES)[number];
 
-/** Why food was thrown away, as the owner picks it on the Waste screen. */
+/**
+ * Why food was thrown away: the seven reasons the till was released with.
+ * Their ids are FIXED (a waste row keeps 'waste:<id>'), and every version
+ * of the till knows them, so they can be renamed or hidden in Settings →
+ * Kitchen & stock but never removed. The owner can add reasons of his own
+ * (WasteReasonId): shared-types shop-settings.ts StockRules.wasteReasons.
+ */
 export const WASTE_REASONS = ['burnt', 'dropped', 'expired', 'wrong_order', 'returned', 'staff_meal', 'other'] as const;
 export type WasteReason = (typeof WASTE_REASONS)[number];
+
+/**
+ * The names the seven reasons were released with (the Waste screen's
+ * buttons and Reports). Released: never edited — a new name is the owner's
+ * saved setting ('stock.rules' wasteReasons).
+ */
+export const WASTE_REASON_DEFAULT_LABEL: Readonly<Record<WasteReason, string>> = Object.freeze({
+  burnt: 'Burnt',
+  dropped: 'Dropped',
+  expired: 'Expired / went off',
+  wrong_order: 'Wrong order made',
+  returned: 'Sent back',
+  staff_meal: 'Staff meal',
+  other: 'Other',
+});
+
+/**
+ * A waste reason's id: one of the seven above, or one the owner added
+ * (lower-case letters, digits and _; fixed once made). A waste row keeps it
+ * as 'waste:<id>', so a new name never breaks an old row or a report.
+ */
+export type WasteReasonId = string;
+
+/** What a waste reason's id may look like (the ones the owner adds are made from their first name). */
+export const WASTE_REASON_ID_RE = /^[a-z][a-z0-9_]{0,31}$/;
+
+/** Ids a waste reason may never take: Reports' own groups, and a cancelled order's detail. */
+export const RESERVED_WASTE_REASON_IDS: readonly string[] = Object.freeze(['cancelled_made', 'test_order', 'cancel_made']);
 
 /**
  * What a stock row stands for beyond its reason (stock_movements.detail,
@@ -282,7 +316,8 @@ export const MOVEMENT_DETAILS = [
   'stock_take',
   'correction',
 ] as const;
-export type MovementDetail = (typeof MOVEMENT_DETAILS)[number];
+/** A known detail, or waste booked with a reason the owner added ('waste:<id>', Settings → Kitchen & stock). */
+export type MovementDetail = (typeof MOVEMENT_DETAILS)[number] | `waste:${string}`;
 
 export interface StockMovement {
   id: UUID;

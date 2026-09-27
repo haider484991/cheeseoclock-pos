@@ -8,7 +8,8 @@
  *
  * Phase 1 is foodpanda: the deal on the listing, foodpanda's fees and the
  * checks at Pay. Phase 2 the approval limit and the discount buttons (Money
- * & discounts); phase 6 the staff and kitchen timings. Later phases add
+ * & discounts); phase 6 the staff and kitchen timings; phase 7 the stock
+ * rules and what a menu file import may change (Kitchen & stock). Later phases add
  * their own keys here (delivery areas and fees, offers, the shop profile…),
  * each with a frozen default.
  *
@@ -27,6 +28,8 @@
  * drop what it does not understand.
  */
 
+import { WASTE_REASONS, WASTE_REASON_DEFAULT_LABEL, type WasteReasonId } from './inventory.js';
+
 /** The keys the Settings cards edit (settings:getBusiness / settings:setBusiness). */
 export const SHOP_SETTING_KEYS = [
   'foodpanda.deal',
@@ -37,6 +40,8 @@ export const SHOP_SETTING_KEYS = [
   'discounts.delivery',
   'staff.timing',
   'kitchen.timing',
+  'stock.rules',
+  'menu.importPolicy',
 ] as const;
 export type ShopSettingKey = (typeof SHOP_SETTING_KEYS)[number];
 
@@ -263,6 +268,120 @@ export const KITCHEN_TIMING_BOUNDS: Readonly<Record<Exclude<keyof KitchenTiming,
   notDoneMin: [10, 120] as const,
 });
 
+// ---------------------------------------------------------------------------
+// Kitchen & stock (phase 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * The rating of "used vs should have used" (what went unexplained ÷ food
+ * sales, either way), basis points: under `goodUnderBps` Good; up to
+ * `okUpToBps` OK; up to `needsWorkUpToBps` Needs work; above it Look at it
+ * now. Today 2% / 3% / 5% (meez).
+ */
+export interface VarianceBands {
+  goodUnderBps: number;
+  okUpToBps: number;
+  needsWorkUpToBps: number;
+}
+
+/**
+ * The Dashboard's "Do this" reminds the owner to take stock: the key items
+ * (a key-items or full stock take counts) and a full stock take, each when
+ * the last one was finished this many trading days ago or more (or never).
+ * Null: no reminder (today: both off).
+ */
+export interface StockTakeReminders {
+  keyItemsEveryDays: number | null;
+  fullEveryDays: number | null;
+}
+
+/**
+ * One reason on the Waste screen. The id is FIXED: waste rows keep
+ * 'waste:<id>' and Reports group by it, so a new name shows on every old
+ * row too. A saved reason can be hidden (off the Waste screen, still named
+ * in Reports and the history) but not removed: either till may have waste
+ * rows with it, and the other till's may not have arrived yet. Only one
+ * added since the last Save can come off. The seven the till was released
+ * with (WASTE_REASONS) are never removed.
+ */
+export interface WasteReasonSetting {
+  id: WasteReasonId;
+  /** The name on the Waste screen, in Reports and the stock history (30 letters at most). */
+  label: string;
+  /** Not offered on the Waste screen any more. */
+  hidden: boolean;
+}
+
+/**
+ * The stock rules ('stock.rules'): when "used vs should have used" is a
+ * "Do this" line and how it is rated (Dashboard, the weekly sheet, Reports →
+ * Between stock takes), the stock-take reminders, the stock bar's and a
+ * purchase order's multiple of the low level, and the waste reasons.
+ */
+export interface StockRules {
+  v: number;
+  /**
+   * "Do this" lists the latest two stock takes when more than this share of
+   * the food sales between them went unexplained (basis points; 300 = 3%).
+   */
+  varianceDoThisBps: number;
+  bands: VarianceBands;
+  /**
+   * The shortest stretch between two stock takes that "Do this" turns into
+   * rupees a week (days; a shorter one would be scaled UP to a week, so it
+   * is left to Reports, which shows it as it is).
+   */
+  varianceMinWindowDays: number;
+  reminders: StockTakeReminders;
+  /**
+   * A full stock bar is this many times the low level (the low mark sits at
+   * 1 ÷ this of the bar), and "Add low stock" on a purchase order fills up
+   * to it.
+   */
+  reorderMultiple: number;
+  /** In the order the Waste screen and Reports list them. */
+  wasteReasons: WasteReasonSetting[];
+}
+
+/** The owner's bounds on the stock rules (whole numbers, inclusive; basis points in steps of 0.1%). */
+export const STOCK_RULE_BOUNDS = Object.freeze({
+  varianceDoThisBps: [50, 2_000] as const,
+  bandBps: [50, 2_000] as const,
+  varianceMinWindowDays: [1, 28] as const,
+  keyItemsEveryDays: [1, 31] as const,
+  fullEveryDays: [7, 92] as const,
+  reorderMultiple: [2, 10] as const,
+});
+/** A share in the stock rules is a whole number of tenths of a % (10 basis points). */
+export const STOCK_RULE_BPS_STEP = 10;
+/** At most this many waste reasons, hidden ones included. */
+export const WASTE_REASONS_MAX = 16;
+/** A waste reason's name is printed on reports: one line, this many letters at most. */
+export const WASTE_REASON_LABEL_MAX = 30;
+
+/** Which side wins on a menu file import: the file's value, or the one on the till. */
+export type ImportSide = 'file' | 'till';
+
+/**
+ * What a menu file import may change on things the till ALREADY has
+ * ('menu.importPolicy'). New items, choices, ingredients and recipes always
+ * come in; nothing is ever deleted, renamed or re-categorised; ingredient
+ * prices stay the till's (v0.7.14, costing spec Phase 6: the sheet prices
+ * only a new ingredient or one with none). Each 'till' is shown in the
+ * import preview as "kept on the till".
+ */
+export interface MenuImportPolicy {
+  v: number;
+  /** A menu item's selling price. */
+  itemPrices: ImportSide;
+  /** A choice's extra charge, which option is picked first, what it leaves out, and how many to pick. New options still come in (with 'till': not picked first). */
+  choices: ImportSide;
+  /** A dish's recipe, and a batch recipe (what the kitchen makes), where the till has one. */
+  recipes: ImportSide;
+  /** Moving items onto the file's tax rate. */
+  tax: ImportSide;
+}
+
 export interface ShopSettingValues {
   'foodpanda.deal': FoodpandaDeal;
   'foodpanda.fees': FoodpandaFees;
@@ -272,6 +391,8 @@ export interface ShopSettingValues {
   'discounts.delivery': DiscountDelivery;
   'staff.timing': StaffTiming;
   'kitchen.timing': KitchenTiming;
+  'stock.rules': StockRules;
+  'menu.importPolicy': MenuImportPolicy;
 }
 export type ShopSettingValue<K extends ShopSettingKey> = ShopSettingValues[K];
 
@@ -285,6 +406,8 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'discounts.delivery': 1,
   'staff.timing': 1,
   'kitchen.timing': 1,
+  'stock.rules': 1,
+  'menu.importPolicy': 1,
 });
 
 /** foodpanda's commission until the owner confirms his own (costing spec 4.7): shown as "suggested". */
@@ -373,6 +496,40 @@ export const DEFAULT_KITCHEN_TIMING: Readonly<KitchenTiming> = Object.freeze({
   notDoneMin: 30,
 });
 
+/** Today: good under 2%, OK up to 3%, needs work up to 5%, look at it now above (was pos-domain varianceBand's numbers). */
+export const DEFAULT_VARIANCE_BANDS: Readonly<VarianceBands> = Object.freeze({
+  goodUnderBps: 200,
+  okUpToBps: 300,
+  needsWorkUpToBps: 500,
+});
+
+/**
+ * Today: "Do this" over 3% of food sales, between stock takes 6 days or
+ * more apart (was VARIANCE_DO_THIS_BPS / _MIN_WINDOW_MS); no stock-take
+ * reminders; a full stock bar and "Add low stock" at 3 × the low level (was
+ * stockFill / suggestReorderQty); the seven waste reasons with their names.
+ */
+export const DEFAULT_STOCK_RULES: Readonly<StockRules> = Object.freeze({
+  v: 1,
+  varianceDoThisBps: 300,
+  bands: DEFAULT_VARIANCE_BANDS,
+  varianceMinWindowDays: 6,
+  reminders: Object.freeze({ keyItemsEveryDays: null, fullEveryDays: null }) as StockTakeReminders,
+  reorderMultiple: 3,
+  wasteReasons: Object.freeze(
+    WASTE_REASONS.map((id) => Object.freeze({ id, label: WASTE_REASON_DEFAULT_LABEL[id], hidden: false })),
+  ) as WasteReasonSetting[],
+}) as Readonly<StockRules>;
+
+/** Today: the file wins on everything but ingredient prices (the till keeps those since v0.7.14). */
+export const DEFAULT_MENU_IMPORT_POLICY: Readonly<MenuImportPolicy> = Object.freeze({
+  v: 1,
+  itemPrices: 'file',
+  choices: 'file',
+  recipes: 'file',
+  tax: 'file',
+});
+
 export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<ShopSettingValues[K]> } = Object.freeze({
   'foodpanda.deal': DEFAULT_FOODPANDA_DEAL,
   'foodpanda.fees': DEFAULT_FOODPANDA_FEES,
@@ -382,6 +539,8 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'discounts.delivery': DEFAULT_DISCOUNT_DELIVERY,
   'staff.timing': DEFAULT_STAFF_TIMING,
   'kitchen.timing': DEFAULT_KITCHEN_TIMING,
+  'stock.rules': DEFAULT_STOCK_RULES,
+  'menu.importPolicy': DEFAULT_MENU_IMPORT_POLICY,
 });
 
 /** A tablet total more than this far from the till's total is a mismatch (Rs 1). */
@@ -497,6 +656,11 @@ export interface ShopSettingCard<K extends ShopSettingKey = ShopSettingKey> {
   key: K;
   /** The value in use: the saved one, or the default when nothing is saved. */
   value: ShopSettingValues[K];
+  /**
+   * What "Put back the default" writes: the default's values (the stock
+   * rules also keep every waste reason the owner added, hidden — either till
+   * may have waste entries with it).
+   */
   defaultValue: ShopSettingValues[K];
   /**
    * The value in use is the default's: nothing saved yet, or the default was
@@ -548,6 +712,14 @@ export interface CheckoutRules {
   };
   /** The Live Orders colours and the "waiting too long" reminders. */
   kitchen: Omit<KitchenTiming, 'v'>;
+  /**
+   * Inventory (Settings → Kitchen & stock): the Waste screen's reasons —
+   * hidden ones too, so an old row keeps its name in the stock history — the
+   * stock bar's and "Add low stock"'s multiple of the low level, and the
+   * stock-take reminders. Absent (a test, or before the till answers): the
+   * released ones.
+   */
+  stock?: CounterStockRules;
   foodpanda: {
     /** The deal a foodpanda order started now gets; null when there is none today. */
     deal: {
@@ -567,6 +739,13 @@ export interface CheckoutRules {
      */
     upliftBps: number;
   };
+}
+
+/** The stock rules as the counter and Inventory use them (checkout:getRules): no variance figures. */
+export interface CounterStockRules {
+  reorderMultiple: number;
+  wasteReasons: WasteReasonSetting[];
+  reminders: StockTakeReminders;
 }
 
 /** The foodpanda half of orders:tender (the order number goes on the payment's referenceNo). */

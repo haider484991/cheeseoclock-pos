@@ -313,11 +313,13 @@ describe('the owner’s cards', () => {
         .slice(1)
         .map((t) => text(`<x ${t.slice(0, t.indexOf('</button>'))}`));
     signIn('admin');
-    expect(tabs(render(<SettingsPage />)).slice(0, 5)).toEqual([
+    // Step 7 put Kitchen & stock (an owner's business-rules section) where the design has it: before Receipts & printing.
+    expect(tabs(render(<SettingsPage />)).slice(0, 6)).toEqual([
       'foodpanda',
       'Money & discounts',
       'Shop & logo',
       'Staff & kitchen timing',
+      'Kitchen & stock',
       'Printers',
     ]);
     for (const role of ['manager', 'cashier'] as const) {

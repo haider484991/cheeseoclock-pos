@@ -4,6 +4,8 @@
  *
  *  - A key ingredient at or under its low-stock level is pinned first (at
  *    most two such lines: more rank with the rest, see DO_THIS_MAX_PINNED).
+ *    A pinned line marked pinFirst (a stock take the owner asked to be
+ *    reminded of) comes before the other pinned ones, so it always shows.
  *  - Everything else by rupees per week, most first.
  *  - At most five lines.
  *  - A line that carries costs is only for a login that may see costs
@@ -22,6 +24,8 @@ export interface DoThisCandidate {
   /** Rupees (paisa) per week; null when the line has none (it then ranks after every line that has). */
   weekCents: number | null;
   pinned: boolean;
+  /** First among the pinned lines (a stock take the owner asked to be reminded of); absent: false. */
+  pinFirst?: boolean;
   /** Carries costs (COST_CAPABILITY only). */
   cost: boolean;
 }
@@ -62,7 +66,7 @@ export function rankDoThis<T extends DoThisCandidate>(
   const shown = items.filter((i) => opts.canSeeCosts || !i.cost);
   const byWeek = (a: T, b: T) =>
     (b.weekCents ?? -1) - (a.weekCents ?? -1) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
-  const pinned = shown.filter((i) => i.pinned).sort(byWeek);
+  const pinned = shown.filter((i) => i.pinned).sort((a, b) => Number(b.pinFirst === true) - Number(a.pinFirst === true) || byWeek(a, b));
   // Pins beyond the first few rank with everything else, so a till whose
   // stock was never counted (every key ingredient "out") still shows what
   // costs the shop money.

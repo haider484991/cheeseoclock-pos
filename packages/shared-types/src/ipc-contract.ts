@@ -120,7 +120,7 @@ import type {
   Recipe,
   StockMovement,
   StockMovementReason,
-  WasteReason,
+  WasteReasonId,
   Supplier,
   PurchaseOrder,
   PurchaseOrderStatus,
@@ -1274,8 +1274,11 @@ export interface IpcContract {
       deltaQty: number;
       reason: 'delivery' | 'waste' | 'adjustment';
       notes?: string | null;
-      /** Waste only: why it was thrown away ("other" when not given). */
-      wasteReason?: WasteReason;
+      /**
+       * Waste only: why it was thrown away ("other" when not given) — the id
+       * of a reason shown on the Waste screen (Settings → Kitchen & stock).
+       */
+      wasteReason?: WasteReasonId;
     };
     response: ApiResult<{ movementId: string; resultingQty: number }>;
   };

@@ -184,6 +184,42 @@ export interface PrintPolicy {
   shopCopy: ShopCopyRule;
   /** Print the shop logo at the top of customer receipts (never on kitchen tickets). */
   logoOnReceipt: boolean;
+  // The kitchen ticket's own rules (Settings → Printers, this till only:
+  // each till drives its own printers). Not there = the released ones
+  // (DEFAULT_KITCHEN_TICKET_RULES): read with kitchenTicketRules(). A policy
+  // saved before they existed reads unchanged.
+  /** Kitchen tickets per order, 1–3 (each says COPY 1 OF 2…; a ticket printed by hand is one). */
+  kitchenCopies?: number;
+  /** The customer's phone on the kitchen ticket. */
+  kitchenPhone?: boolean;
+  /** Drinks on the kitchen ticket; off, they are left off (an order of only drinks prints no ticket). */
+  kitchenDrinks?: boolean;
+}
+
+/** What a kitchen ticket carries, and how many print (PrintPolicy's kitchen fields, read with their defaults). */
+export interface KitchenTicketRules {
+  copies: number;
+  phone: boolean;
+  drinks: boolean;
+}
+
+/** The most kitchen tickets one order prints. */
+export const KITCHEN_COPIES_MAX = 3;
+
+/** Today: one kitchen ticket, with the customer's phone and every item, drinks too. Released: never edited. */
+export const DEFAULT_KITCHEN_TICKET_RULES: Readonly<KitchenTicketRules> = Object.freeze({ copies: 1, phone: true, drinks: true });
+
+/** The kitchen ticket's rules on this till: what is saved, the released ones for what is not. */
+export function kitchenTicketRules(p: Pick<PrintPolicy, 'kitchenCopies' | 'kitchenPhone' | 'kitchenDrinks'> | null | undefined): KitchenTicketRules {
+  const copies = p?.kitchenCopies;
+  return {
+    copies:
+      typeof copies === 'number' && Number.isInteger(copies) && copies >= 1 && copies <= KITCHEN_COPIES_MAX
+        ? copies
+        : DEFAULT_KITCHEN_TICKET_RULES.copies,
+    phone: typeof p?.kitchenPhone === 'boolean' ? p.kitchenPhone : DEFAULT_KITCHEN_TICKET_RULES.phone,
+    drinks: typeof p?.kitchenDrinks === 'boolean' ? p.kitchenDrinks : DEFAULT_KITCHEN_TICKET_RULES.drinks,
+  };
 }
 
 /** The logo as a 1-bit picture for one paper width, as stored and sent over IPC. */

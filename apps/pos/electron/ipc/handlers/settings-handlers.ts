@@ -1,10 +1,10 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireSettingsManage } from '../guards.js';
-import { ok, SHOP_SETTING_DEFAULTS, type AnyShopSettingCard, type ShopSettingKey } from '@cheeseoclock/shared-types';
+import { ok, type AnyShopSettingCard, type ShopSettingKey } from '@cheeseoclock/shared-types';
 import { getShopSettingInputSchema, setShopSettingInputSchema } from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
-import { checkoutRules, getShopSettingCard } from '../../services/shop-settings.js';
+import { checkoutRules, getShopSettingCard, putBackValue } from '../../services/shop-settings.js';
 import { setBusinessSettings, type BusinessSettingEntry } from '../../db/repositories/business-settings-repo.js';
 import { readTillLink } from '../../services/till-link.js';
 import { broadcastShopSettingsChanged } from '../../services/shop-settings-events.js';
@@ -37,7 +37,8 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
     const req = parsed.data;
     // "Put back the default" WRITES the default's values, so both tills hold
     // the same explicit row (a soft delete would leave each on its own idea).
-    const value = 'useDefault' in req ? { ...SHOP_SETTING_DEFAULTS[req.key] } : req.value;
+    // (The stock rules keep every waste reason the owner added, hidden: putBackValue.)
+    const value = 'useDefault' in req ? putBackValue(ctx.db, req.key) : req.value;
     try {
       // The key's schema checks the value, and a value saved by a newer
       // version of the app is never saved over (business-settings-repo).

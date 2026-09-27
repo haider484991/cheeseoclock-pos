@@ -31,7 +31,7 @@
  *     commission (the cost sheet's foodpanda line, the terms on Targets &
  *     fees) is left out for a manager;
  *   - the owner's shop rules (Settings → foodpanda, Money & discounts, Staff
- *     & kitchen timing, 2026-09-27) are the owner's alone: every set channel
+ *     & kitchen timing, 2026-09-27; Kitchen & stock, 2026-09-28) are the owner's alone: every set channel
  *     is refused to a cashier AND to a manager in the main process, for every
  *     key, and nothing is written; the counter reads only what taking an
  *     order needs (checkout:getRules: the approval limit and the F3 buttons,
@@ -520,6 +520,31 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   { key: 'discounts.presets', useDefault: true },
   { key: 'staff.timing', useDefault: true },
   { key: 'kitchen.timing', useDefault: true },
+  // Kitchen & stock (Settings step 7): the stock rules (waste reasons with fixed ids) and what a menu file may change.
+  {
+    key: 'stock.rules',
+    value: {
+      v: 1,
+      varianceDoThisBps: 250,
+      bands: { goodUnderBps: 150, okUpToBps: 250, needsWorkUpToBps: 400 },
+      varianceMinWindowDays: 5,
+      reminders: { keyItemsEveryDays: 7, fullEveryDays: 30 },
+      reorderMultiple: 4,
+      wasteReasons: [
+        { id: 'burnt', label: 'Test burnt', hidden: false },
+        { id: 'dropped', label: 'Dropped', hidden: true },
+        { id: 'expired', label: 'Expired / went off', hidden: false },
+        { id: 'wrong_order', label: 'Wrong order made', hidden: false },
+        { id: 'returned', label: 'Sent back', hidden: false },
+        { id: 'staff_meal', label: 'Staff meal', hidden: false },
+        { id: 'test_spill', label: 'Test spill', hidden: false },
+        { id: 'other', label: 'Other', hidden: false },
+      ],
+    },
+  },
+  { key: 'menu.importPolicy', value: { v: 1, itemPrices: 'till', choices: 'till', recipes: 'file', tax: 'till' } },
+  { key: 'stock.rules', useDefault: true },
+  { key: 'menu.importPolicy', useDefault: true },
   // Whether a discount also comes off the delivery charge (owner, 28 Sep 2026).
   { key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge: true } },
   { key: 'discounts.delivery', useDefault: true },
@@ -853,7 +878,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         });
       }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(8);
+      expect(SHOP_SETTING_KEYS.length).toBe(10);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
@@ -922,15 +947,36 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
     });
   });
 
+  it('the counter reads the waste reasons, the stock bar’s multiple and the reminders — never the variance’s figures or the import rule', async () => {
+    h.session = OWNER;
+    for (const payload of SHOP_SETTING_SAVES().slice(14, 16)) expect((await call('settings:setBusiness', payload)).ok).toBe(true);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<Record<string, unknown>>('checkout:getRules');
+      expect(rules).toMatchObject({
+        stock: {
+          reorderMultiple: 4,
+          reminders: { keyItemsEveryDays: 7, fullEveryDays: 30 },
+          wasteReasons: expect.arrayContaining([{ id: 'test_spill', label: 'Test spill', hidden: false }, { id: 'dropped', label: 'Dropped', hidden: true }]),
+        },
+      });
+      expect(JSON.stringify(rules)).not.toMatch(/varianceDoThis|goodUnder|needsWork|MinWindow|itemPrices|recipes|updatedBy/i);
+    }
+  });
+
   it('the counter reads whether a discount comes off the delivery charge (no by default) — in words with no fee or commission', async () => {
-    const saves = SHOP_SETTING_SAVES();
+    // Picked by its key, never by its place in the list (Settings steps add keys to it).
+    const yes = SHOP_SETTING_SAVES().find(
+      (p) => (p as { key?: string }).key === 'discounts.delivery' && 'value' in (p as object),
+    );
+    expect(yes).toEqual({ key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge: true } });
     for (const who of [CASHIER, MANAGER]) {
       h.session = who;
       const rules = await data<{ discounts: { alsoOffDeliveryCharge: boolean } }>('checkout:getRules');
       expect(rules.discounts.alsoOffDeliveryCharge).toBe(false);
     }
     h.session = OWNER;
-    expect((await call('settings:setBusiness', saves[saves.length - 2])).ok).toBe(true);
+    expect((await call('settings:setBusiness', yes)).ok).toBe(true);
     for (const who of [CASHIER, MANAGER]) {
       h.session = who;
       const rules = await data<Record<string, unknown>>('checkout:getRules');

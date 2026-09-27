@@ -19,6 +19,7 @@ import { importPriceRowId, rollUpBatches, setSheetPrice } from './ingredient-cos
 import { raiseBatchUnpricedAlerts } from './cost-alert-repo.js';
 import { loadPriceBook } from '../price-book.js';
 import { latestPriceTags } from '../price-history-read.js';
+import { readMenuImportPolicy } from '../business-settings-read.js';
 import { setBatchRecipe, clearBatchRecipeLines } from './batch-recipe-repo.js';
 import { listCombos, deleteCombo } from './combo-repo.js';
 import {
@@ -185,8 +186,10 @@ export function planMenuImportFromDb(
   opts: { fresh?: boolean } = {},
 ): MenuImportPlan {
   const live = readMenuSnapshot(db);
-  if (!opts.fresh) return planMenuImport(file, live);
-  const plan = planMenuImport(file, emptyMenu(live));
+  // What the file may change on what the till has (Settings → Kitchen & stock; the file wins by default).
+  const policy = readMenuImportPolicy(db);
+  if (!opts.fresh) return planMenuImport(file, live, policy);
+  const plan = planMenuImport(file, emptyMenu(live), policy);
   return { ...plan, preview: { ...plan.preview, fresh: freshStartOf(db, live), untouchedItems: [] } };
 }
 
@@ -308,7 +311,8 @@ export function applyMenuImport(
       removedItems = clearMenu(db, actor);
     }
     const snapshot = readMenuSnapshot(db);
-    const { ops, preview } = planMenuImport(file, taxUse ? { ...snapshot, taxUse } : snapshot);
+    // The owner's import rules as they are now, inside the transaction: what the preview showed, or a Save since.
+    const { ops, preview } = planMenuImport(file, taxUse ? { ...snapshot, taxUse } : snapshot, readMenuImportPolicy(db));
 
     const taxCategoryId = ops.createTaxCategory
       ? createTaxCategory(db, ops.createTaxCategory, actor).id

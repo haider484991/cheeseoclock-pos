@@ -16,6 +16,7 @@ import type {
   ReportPurchases,
   ReportShiftLine,
   ReportWasteReason,
+  WasteReasonLabels,
 } from '@cheeseoclock/shared-types';
 import { daysSoFar, fmtDateInput, fmtDay, fmtMonth, tradingDayNumber, weekdayIndex, WEEKDAYS, type ReportPeriod } from './dateRange';
 import { formatBps, formatUnitPrice } from '../costing/costingFormat';
@@ -337,6 +338,17 @@ export const WASTE_REASON_LABEL: Record<ReportWasteReason, string> = {
   staff_meal: 'Staff meal',
   other: 'Other',
 };
+
+/**
+ * A waste line's reason in the owner's words: his name for it where he
+ * renamed it or added it (`labels`, from the report: Settings → Kitchen &
+ * stock), else the released name. Reports group by the id each row keeps,
+ * so a new name shows on every old row too. An id nobody knows reads
+ * "Other" (Reports count such rows as Other anyway).
+ */
+export function wasteReasonLabel(reason: string, labels?: WasteReasonLabels | null): string {
+  return labels?.[reason] ?? (WASTE_REASON_LABEL as Partial<Record<string, string>>)[reason] ?? WASTE_REASON_LABEL.other;
+}
 
 /** Why a sale's cost is not known, in plain words. */
 export const MISSING_COST_WHY: Record<ReportMissingCostWhy, string> = {

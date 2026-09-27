@@ -1,6 +1,8 @@
 /**
  * The owner's rules as the counter uses them (checkout:getRules, any login):
- * the F3 screen's approval limit and buttons, and the Live Orders timings.
+ * the F3 screen's approval limit and buttons, the Live Orders timings, and
+ * Inventory's stock rules (the Waste screen's reasons, the stock bar's and
+ * "Add low stock"'s multiple, the stock-take reminders).
  *
  * Until the main process has answered — and on a till where nothing is
  * saved — these are the released defaults, which are exactly what the till
@@ -12,7 +14,9 @@ import {
   DEFAULT_DISCOUNT_DELIVERY,
   DEFAULT_DISCOUNT_PRESETS,
   DEFAULT_KITCHEN_TIMING,
+  DEFAULT_STOCK_RULES,
   type CheckoutRules,
+  type CounterStockRules,
 } from '@cheeseoclock/shared-types';
 
 export type CounterDiscountRules = CheckoutRules['discounts'];
@@ -49,4 +53,16 @@ export function discountRulesOf(rules: Pick<CheckoutRules, 'discounts'> | null |
 /** The Live Orders timings from checkout:getRules, or the released ones until it has answered. */
 export function kitchenTimingOf(rules: Pick<CheckoutRules, 'kitchen'> | null | undefined): CounterKitchenTiming {
   return rules?.kitchen ?? DEFAULT_COUNTER_KITCHEN;
+}
+
+/** The released stock rules: the seven waste reasons, a full stock bar at 3 × the low level, no reminders. */
+export const DEFAULT_COUNTER_STOCK: CounterStockRules = {
+  reorderMultiple: DEFAULT_STOCK_RULES.reorderMultiple,
+  wasteReasons: DEFAULT_STOCK_RULES.wasteReasons.map((r) => ({ ...r })),
+  reminders: { ...DEFAULT_STOCK_RULES.reminders },
+};
+
+/** Inventory's stock rules from checkout:getRules, or the released ones until it has answered. */
+export function stockRulesOf(rules: Pick<CheckoutRules, 'stock'> | null | undefined): CounterStockRules {
+  return rules?.stock ?? DEFAULT_COUNTER_STOCK;
 }

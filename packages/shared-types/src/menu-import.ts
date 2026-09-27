@@ -46,6 +46,12 @@ export interface MenuImportIngredientPlan {
   sheetUnitCostMc: number;
   /** The till keeps a price that differs from the sheet's ("Use the sheet's price" is in Inventory). */
   sheetDiffers: boolean;
+  /**
+   * What the till keeps although the file has something else, by the
+   * owner's import rules (Settings → Kitchen & stock): its batch recipe.
+   * Absent: nothing kept.
+   */
+  keptOnTill?: string[];
 }
 
 /**
@@ -89,7 +95,8 @@ export interface MenuImportPriceSummary {
   sheetDiffers: number;
 }
 
-export type MenuImportRecipeChange = 'none' | 'same' | 'set' | 'replace' | 'skip';
+/** … 'kept': the item has a recipe and the owner's import rules keep the till's. */
+export type MenuImportRecipeChange = 'none' | 'same' | 'set' | 'replace' | 'skip' | 'kept';
 
 export interface MenuImportItemPlan {
   name: string;
@@ -102,6 +109,24 @@ export interface MenuImportItemPlan {
   recipeLines: number;
   recipeChange: MenuImportRecipeChange;
   reason: string | null;
+  /**
+   * What the till keeps although the file says otherwise, by the owner's
+   * import rules (Settings → Kitchen & stock): "price Rs 1,200 (the file
+   * says Rs 1,300)", its recipe, its tax. Absent: nothing kept.
+   */
+  keptOnTill?: string[];
+}
+
+/** How many things the till kept against the file, by the owner's import rules (Settings → Kitchen & stock). */
+export interface MenuImportKept {
+  /** Menu items' selling prices. */
+  prices: number;
+  /** Choice groups whose charges or rules the till kept. */
+  choices: number;
+  /** Dish and batch recipes. */
+  recipes: number;
+  /** Items left on their own tax. */
+  taxes: number;
 }
 
 export interface MenuImportSummary {
@@ -124,6 +149,10 @@ export interface MenuImportSummary {
   prices: MenuImportPriceSummary;
   /** Those counts as ONE plain line: "Prices: 12 kept from deliveries, 3 new from the sheet, 0 unpriced." */
   priceLine: string;
+  /** What the till kept against the file (the owner's import rules). */
+  keptOnTill: MenuImportKept;
+  /** Those counts as one line — "Kept on the till: 3 prices, 1 recipe (Settings → Kitchen & stock)." — or null when nothing was kept. */
+  keptLine: string | null;
 }
 
 export interface MenuImportChoiceGroupPlan {
@@ -132,6 +161,8 @@ export interface MenuImportChoiceGroupPlan {
   existingName: string | null;
   options: string[];
   changes: string[];
+  /** What the till keeps of the group although the file says otherwise (the owner's import rules). Absent: nothing kept. */
+  keptOnTill?: string[];
 }
 
 /**

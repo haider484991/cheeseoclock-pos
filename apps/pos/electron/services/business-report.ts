@@ -26,6 +26,7 @@ import type {
   ReportWasteIngredientLine,
   ReportWasteLine,
   ReportWasteReason,
+  WasteReasonLabels,
   OrderItemCostStatus,
   ReportTabFigures,
 } from '@cheeseoclock/shared-types';
@@ -46,6 +47,7 @@ import {
   tallyPlainOrders,
   unitFactor,
   wasteReasonOf,
+  ownerWasteLabels,
   dealAmount,
   discountBaseCents,
   discountRuleAlsoOffDeliveryCharge,
@@ -63,7 +65,7 @@ import type { AppDatabase } from '../db/connection.js';
 // in the Reports worker thread (analytics/worker.ts). A test walks its imports.
 import { loadPriceBook, priceOfBook, safeStockValue } from '../db/price-book.js';
 import { loadPriceHistory, type DatedPrice } from '../db/price-history-read.js';
-import { getBusinessSetting, readShopSetting } from '../db/business-settings-read.js';
+import { getBusinessSetting, readShopSetting, readStockRules } from '../db/business-settings-read.js';
 import { withBillPrinted, withHandPrints } from './print-report.js';
 import { whenExtras } from './analytics/heatmap.js';
 import {
@@ -1603,25 +1605,25 @@ export const TEST_ORDER_WASTE_SQL = `
    WHERE o.deleted_at IS NOT NULL AND o.delete_kind = 'test' AND ${IN_RANGE}
      AND +m.reason = 'waste' AND m.deleted_at IS NULL`;
 
-const WASTE_ORDER: readonly ReportWasteReason[] = [
-  'cancelled_made',
-  'test_order',
-  'burnt',
-  'dropped',
-  'expired',
-  'wrong_order',
-  'returned',
-  'staff_meal',
-  'other',
-];
+/** Reports' own groups come first; then the owner's reasons in his order (by default the seven, Other last). */
+const WASTE_GROUPS_FIRST: readonly ReportWasteReason[] = ['cancelled_made', 'test_order'];
 
 interface WasteTally {
   cents: number;
   cancelledCents: number;
   cancelledOrders: Set<string>;
   rows: number;
-  byReason: Map<ReportWasteReason, ReportWasteLine>;
+  byReason: Map<string, ReportWasteLine>;
   byIngredient: Map<string, { qty: number; cents: number }>;
+  /** The order the lines are listed in. */
+  order: string[];
+  /** The owner's names where not the released ones (Settings → Kitchen & stock); null: none. */
+  labels: WasteReasonLabels | null;
+}
+
+/** A period's waste lines, in the owner's order. */
+function wasteLines(w: WasteTally): ReportWasteLine[] {
+  return w.order.map((r) => w.byReason.get(r)).filter((l): l is ReportWasteLine => l !== undefined);
 }
 
 /**
@@ -1646,13 +1648,25 @@ function getWaste(db: AppDatabase, range: ReportRange, pricing: () => Pricing): 
   const handRows = db.prepare(HAND_WASTE_SQL).all(since, until) as Row[];
   const orderRows = db.prepare(ORDER_WASTE_SQL).all(since, until) as Row[];
   const testRows = (db.prepare(TEST_ORDER_WASTE_SQL).all(since, until) as Row[]).map((r) => ({ ...r, testOrder: true }));
-  const t: WasteTally = { cents: 0, cancelledCents: 0, cancelledOrders: new Set(), rows: 0, byReason: new Map(), byIngredient: new Map() };
-  const ordersByReason = new Map<ReportWasteReason, Set<string>>();
+  // Grouped by the reason id each row keeps (hidden reasons too): a renamed reason's old rows count under its new name.
+  const reasons = readStockRules(db).wasteReasons;
+  const known = new Set(reasons.map((r) => r.id));
+  const t: WasteTally = {
+    cents: 0,
+    cancelledCents: 0,
+    cancelledOrders: new Set(),
+    rows: 0,
+    byReason: new Map(),
+    byIngredient: new Map(),
+    order: [...WASTE_GROUPS_FIRST, ...reasons.map((r) => r.id), ...(known.has('other') ? [] : ['other'])],
+    labels: ownerWasteLabels(reasons),
+  };
+  const ordersByReason = new Map<string, Set<string>>();
   for (const r of [...handRows, ...orderRows, ...testRows] as Array<Row & { testOrder?: boolean }>) {
     const row = { ...r, qty: Number(r.qty), value: r.value === null ? null : Number(r.value) };
     const cents = -(rowValue(row, pricing, r.takenAt) ?? 0);
     // A deleted test order's food is its own line ("Test orders (deleted)"), not a cancel.
-    const reason: ReportWasteReason = r.testOrder === true ? 'test_order' : wasteReasonOf(r.detail, r.orderId);
+    const reason: string = r.testOrder === true ? 'test_order' : wasteReasonOf(r.detail, r.orderId, known);
     t.cents += cents;
     t.rows += 1;
     if (r.orderId !== null && r.testOrder !== true) {
@@ -1693,11 +1707,12 @@ export function getWasteAndUnpaid(
   db: AppDatabase,
   range: ReportRange,
   pricing: () => Pricing = lazyPricing(db),
-): { wasteCents: number; wasteByReason: ReportWasteLine[]; sentNotPaid: ReportUnpaidFood } {
+): { wasteCents: number; wasteByReason: ReportWasteLine[]; wasteLabels?: WasteReasonLabels; sentNotPaid: ReportUnpaidFood } {
   const waste = getWaste(db, range, pricing);
   return {
     wasteCents: waste.cents,
-    wasteByReason: WASTE_ORDER.map((r) => waste.byReason.get(r)).filter((l): l is ReportWasteLine => l !== undefined),
+    wasteByReason: wasteLines(waste),
+    ...(waste.labels ? { wasteLabels: waste.labels } : {}),
     sentNotPaid: foodOfOrders(db, unpaidOrderIds(db, range, ['served', 'delivered']), pricing),
   };
 }
@@ -1908,7 +1923,7 @@ export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date(
   const started = db.prepare(`SELECT costed_at AS at FROM order_item_costs ORDER BY rowid LIMIT 1`).get() as
     | { at: string }
     | undefined;
-  const wasteByReason = WASTE_ORDER.map((r) => waste.byReason.get(r)).filter((l): l is ReportWasteLine => l !== undefined);
+  const wasteByReason = wasteLines(waste);
   return {
     foodSalesCents: t.foodSalesCents,
     feeSalesCents: t.feeSalesCents,
@@ -1926,6 +1941,8 @@ export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date(
     missingSalesCents: missing.reduce((s, m) => s + m.salesCents, 0),
     wasteCents: waste.cents,
     wasteByReason,
+    // The owner's names for the reasons, only where they are not the released ones.
+    ...(waste.labels ? { wasteLabels: waste.labels } : {}),
     wasteIngredients: wasteIngredientLines(db, waste).slice(0, REPORT_LIST_CAP),
     cancelledWasteCents: waste.cancelledCents,
     cancelledOrderCount: waste.cancelledOrders.size,
