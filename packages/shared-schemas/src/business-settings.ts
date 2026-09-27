@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { DAY_NOTE_TAGS, daypartHours } from '@cheeseoclock/shared-types';
-import type { CostAlertSettings, CostingTargets, Daypart, SetCostingTargetsRequest } from '@cheeseoclock/shared-types';
+import type {
+  CostAlertSettings,
+  CostingTargets,
+  Daypart,
+  SetCostAlertSettingsRequest,
+  SetCostingTargetsRequest,
+  TillsSetting,
+} from '@cheeseoclock/shared-types';
 
 /**
  * Business settings (costing spec §3, migration 0032): shop-wide settings
@@ -41,26 +48,52 @@ export const costingPriceStepSchema = z
   .min(100, { message: 'The price step is at least Rs 1' })
   .max(100_000, { message: 'The price step is at most Rs 1,000' });
 
+/** The key items as a list of ingredient ids (at most 1,000). */
+const keyIngredientIdsSchema = z.array(z.string().min(1)).max(1_000);
+
+const alertThresholds = {
+  jumpBps: z
+    .number()
+    .int({ message: 'The price-jump threshold is a whole number of basis points' })
+    .min(100, { message: 'A price jump is at least 1%' })
+    .max(10_000, { message: 'A price jump is at most 100%' }),
+  impactWeekCents: z
+    .number()
+    .int({ message: 'The weekly amount is in whole paisa' })
+    .min(0, { message: 'The weekly amount cannot be below Rs 0' })
+    .max(100_000_000, { message: 'The weekly amount is at most Rs 1,000,000' }),
+};
+
 /**
  * Phase 6: the price alerts' thresholds (costing spec D1, Phase 6). A key
- * ingredient moving more than `jumpBps` is an alert — and the same figure is
- * D1's purchase guard (a bill that far from the usual price asks first);
- * any price change costing at least `impactWeekCents` a week at this till's
- * sales is an alert; `keyIngredientIds` are the key ingredients.
+ * item moving more than `jumpBps` is an alert — and the same figure is D1's
+ * purchase guard (a bill that far from the usual price asks first); any
+ * price change costing at least `impactWeekCents` a week at this till's
+ * sales is an alert.
+ *
+ * `keyIngredientIds` is LEGACY: Phase 6 kept the key ingredients here; since
+ * Phase 8 they are one list on the ingredients (ingredients.count_weekly),
+ * and migration 0038 moved a saved list there once. Never READ since then.
+ * Still written — a copy of the ingredients' list (ingredient-repo
+ * mirrorKeyItemsForOlderTills) — for a till not yet upgraded: v0.7.16 needs
+ * it to read the setting at all, and its 0038 moves that copy onto its
+ * ingredients when it is upgraded after the other till.
  */
 export const costingAlertsSchema = z
   .object({
-    jumpBps: z
-      .number()
-      .int({ message: 'The price-jump threshold is a whole number of basis points' })
-      .min(100, { message: 'A price jump is at least 1%' })
-      .max(10_000, { message: 'A price jump is at most 100%' }),
-    impactWeekCents: z
-      .number()
-      .int({ message: 'The weekly amount is in whole paisa' })
-      .min(0, { message: 'The weekly amount cannot be below Rs 0' })
-      .max(100_000_000, { message: 'The weekly amount is at most Rs 1,000,000' }),
-    keyIngredientIds: z.array(z.string().min(1)).max(1_000),
+    ...alertThresholds,
+    keyIngredientIds: keyIngredientIdsSchema.optional(),
+  })
+  .strict();
+
+/**
+ * Phase 8: how many tills take orders at the shop (owner question 3; 1 when
+ * nothing is saved). Two, while the second-till link is off, switches off
+ * "used vs should have used" and the real food cost (costing spec D14).
+ */
+export const analyticsTillsSchema = z
+  .object({
+    sellingTills: z.union([z.literal(1), z.literal(2)], { errorMap: () => ({ message: 'One till or two' }) }),
   })
   .strict();
 
@@ -116,6 +149,7 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'costing.priceStep': costingPriceStepSchema,
   'costing.alerts': costingAlertsSchema,
   'analytics.dayparts': analyticsDaypartsSchema,
+  'analytics.tills': analyticsTillsSchema,
 } as const;
 
 export type BusinessSettingKey = keyof typeof BUSINESS_SETTING_SCHEMAS;
@@ -136,8 +170,16 @@ export const setCostingTargetsInputSchema = z
   })
   .strict();
 
-/** What the Targets tab saves for the alerts (costing:setAlertSettings): the 'costing.alerts' value. */
-export const setCostAlertSettingsInputSchema = costingAlertsSchema;
+/**
+ * What the Targets tab saves for the alerts (costing:setAlertSettings): the
+ * thresholds ('costing.alerts') and the key items (onto the ingredients).
+ */
+export const setCostAlertSettingsInputSchema = z
+  .object({ ...alertThresholds, keyIngredientIds: keyIngredientIdsSchema })
+  .strict();
+
+/** Costing → Targets & fees saves how many tills take orders (costing:setTills; the owner only). */
+export const setTillsInputSchema = analyticsTillsSchema;
 
 /** "Seen" on Costing → Alerts: one or more alerts at once. */
 export const markCostAlertsSeenInputSchema = z
@@ -186,4 +228,6 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const _targetsShape: Same<z.infer<typeof costingTargetsSchema>, CostingTargets> = true;
 const _setTargetsShape: Same<z.infer<typeof setCostingTargetsInputSchema>, SetCostingTargetsRequest> = true;
 const _alertsShape: Same<z.infer<typeof costingAlertsSchema>, CostAlertSettings> = true;
+const _setAlertsShape: Same<z.infer<typeof setCostAlertSettingsInputSchema>, SetCostAlertSettingsRequest> = true;
+const _tillsShape: Same<z.infer<typeof analyticsTillsSchema>, TillsSetting> = true;
 const _daypartsShape: Same<z.infer<typeof analyticsDaypartsSchema>, Daypart[]> = true;

@@ -146,7 +146,7 @@ function oneSale(): void {
 }
 
 live('Reports channels', () => {
-  it('one channel per tab, plus low stock and the owner’s week (Phase 7); the whole-page and one-figure channels are gone', () => {
+  it('one channel per tab, plus low stock, the owner’s week (Phase 7) and the stock-take variance (Phase 8); the whole-page and one-figure channels are gone', () => {
     expect([...h.handlers.keys()].filter((c) => c.startsWith('reports:')).sort()).toEqual([
       'reports:addDayNote',
       'reports:channels',
@@ -160,6 +160,8 @@ live('Reports channels', () => {
       'reports:setDayparts',
       'reports:team',
       'reports:trends',
+      // Stock takes: used vs should have used (costing spec Phase 8).
+      'reports:variance',
       'reports:when',
     ]);
   });

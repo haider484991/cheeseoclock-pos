@@ -47,6 +47,15 @@ const WEEK: OwnerWeek = {
     earnsLeast: [{ menuItemId: 'm3', name: 'Test Garlic Bread', soldThisWeek: 12, foodCostBps: 4_500 }],
     wasteByReason: [{ reason: 'burnt', times: 3, cents: 240_000 }],
     previousCosts: { foodCostBps: 2_800, coverageBps: 9_500, wasteCents: 180_000, hasCosts: true },
+    lastStockTake: {
+      sinceIso: '2026-09-14T01:40:00.000Z',
+      untilIso: '2026-09-21T01:40:00.000Z',
+      compared: 6,
+      totalCents: 64_000,
+      varianceBps: 420,
+      band: 'needs_work',
+      topIngredient: 'Test mozzarella',
+    },
   },
 };
 
@@ -87,6 +96,25 @@ describe('the weekly owner sheet', () => {
       expect(out).not.toContain('was 28%');
       expect(out).not.toMatch(/profit/i);
     }
+  });
+
+  it('the last stock take: what went that nothing explains, rated; or that two are needed (Phase 8)', () => {
+    const out = buildWeeklySheet(WEEK, { canSeeCosts: true });
+    expect(out).toContain('Last stock take: used vs should have used');
+    expect(out).toContain('Rs 640 more went than sales, batches and logged waste explain: 4.2% of food sales.');
+    expect(out).toContain('Rating: Needs work.');
+    expect(out).toContain('Most of it: Test mozzarella.');
+    expect(buildWeeklySheet({ ...WEEK, sheet: { ...WEEK.sheet!, lastStockTake: null } }, { canSeeCosts: true })).toContain('Needs two finished stock takes');
+    // Nothing counted on both: said so — never a clean "Everything … explained. Rating: Good."
+    const none = buildWeeklySheet(
+      { ...WEEK, sheet: { ...WEEK.sheet!, lastStockTake: { ...WEEK.sheet!.lastStockTake!, compared: 0, totalCents: 0, varianceBps: null, band: null, topIngredient: null } } },
+      { canSeeCosts: true },
+    );
+    expect(none).toContain('Nothing was counted on both stock takes');
+    expect(none).not.toContain('Rating:');
+    expect(none).not.toContain('Everything that went is explained');
+    // Not for a login without costs.
+    expect(buildWeeklySheet(WEEK, { canSeeCosts: false })).not.toContain('stock take');
   });
 
   it('no figures for the week before: food cost and waste print without a "was"', () => {

@@ -11,14 +11,18 @@ import { RecipesTab } from './RecipesTab';
 import { MovementsTab } from './MovementsTab';
 import { SuppliersTab } from './SuppliersTab';
 import { PurchaseOrdersTab } from './PurchaseOrdersTab';
-import { Carrot, BookOpen, History, Truck, ClipboardList } from 'lucide-react';
+import { StockTakesTab } from './StockTakesTab';
+import { STOCK_COUNTS_KEY } from './CountSheet';
+import { Carrot, BookOpen, History, Truck, ClipboardList, ClipboardCheck } from 'lucide-react';
 
-type Tab = 'ingredients' | 'recipes' | 'movements' | 'suppliers' | 'pos';
+type Tab = 'ingredients' | 'recipes' | 'movements' | 'stocktakes' | 'suppliers' | 'pos';
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof Carrot }> = [
   { id: 'ingredients', label: 'Ingredients', icon: Carrot },
   { id: 'recipes', label: 'Recipes', icon: BookOpen },
   { id: 'movements', label: 'Stock history', icon: History },
+  // Costing spec Phase 8: count the shelves; what went missing.
+  { id: 'stocktakes', label: 'Stock takes', icon: ClipboardCheck },
   { id: 'suppliers', label: 'Suppliers', icon: Truck },
   { id: 'pos', label: 'Purchases', icon: ClipboardList },
 ];
@@ -37,11 +41,17 @@ export function InventoryPage() {
     queryKey: PO_LIST_KEY,
     queryFn: fetchPurchaseList,
   });
+  const countsQ = useQuery({
+    queryKey: [...STOCK_COUNTS_KEY, 'list'],
+    queryFn: () => ipc.inventory.stockCountList({ limit: 200 }),
+  });
   const needBuying = (ingredientsQ.data ?? []).filter((i) => stockStatus(i) !== 'ok').length;
+  const beingCounted = (countsQ.data ?? []).filter((c) => c.status === 'open').length;
   const openPos = (posQ.data ?? []).filter((p) => p.status === 'draft' || p.status === 'ordered' || p.status === 'partial').length;
   const badge: Partial<Record<Tab, { n: number; title: string }>> = {
     ingredients: { n: needBuying, title: `${needBuying} low or out of stock` },
     pos: { n: openPos, title: `${openPos} purchase orders still open` },
+    stocktakes: { n: beingCounted, title: `${beingCounted} stock take${beingCounted === 1 ? '' : 's'} being counted` },
   };
 
   return (
@@ -106,6 +116,7 @@ export function InventoryPage() {
       {tab === 'movements' && (
         <MovementsTab ingredient={historyFor} onClearIngredient={() => setHistoryFor(null)} />
       )}
+      {tab === 'stocktakes' && <StockTakesTab />}
       {tab === 'suppliers' && <SuppliersTab />}
       {tab === 'pos' && <PurchaseOrdersTab />}
     </div>

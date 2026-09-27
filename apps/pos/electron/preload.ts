@@ -217,6 +217,8 @@ const api: RendererApi = {
     removeDayNote: (req) => invoke('reports:removeDayNote', req),
     getDayparts: () => invoke('reports:getDayparts', undefined),
     setDayparts: (req) => invoke('reports:setDayparts', req),
+    // Stock takes: used vs should have used (costing spec Phase 8).
+    variance: (req) => invoke('reports:variance', req),
   },
   inventory: {
     listIngredients: (req) => invoke('inventory:listIngredients', req),
@@ -247,6 +249,14 @@ const api: RendererApi = {
     recordPurchase: (req) => invoke('inventory:recordPurchase', req),
     payoutToPurchase: (req) => invoke('inventory:payoutToPurchase', req),
     listDrawerPayouts: (req) => invoke('inventory:listDrawerPayouts', req),
+    // Stock takes (costing spec Phase 8).
+    stockCountList: (req) => invoke('inventory:stockCountList', req),
+    stockCountGet: (req) => invoke('inventory:stockCountGet', req),
+    stockCountStart: (req) => invoke('inventory:stockCountStart', req),
+    stockCountSave: (req) => invoke('inventory:stockCountSave', req),
+    stockCountFinish: (req) => invoke('inventory:stockCountFinish', req),
+    stockCountCancel: (req) => invoke('inventory:stockCountCancel', req),
+    stockCountOne: (req) => invoke('inventory:stockCountOne', req),
   },
   costing: {
     menuCosts: () => invoke('costing:menuCosts', undefined),
@@ -260,6 +270,8 @@ const api: RendererApi = {
     markAlertsSeen: (req) => invoke('costing:markAlertsSeen', req),
     getAlertSettings: () => invoke('costing:getAlertSettings', undefined),
     setAlertSettings: (req) => invoke('costing:setAlertSettings', req),
+    getTills: () => invoke('costing:getTills', undefined),
+    setTills: (req) => invoke('costing:setTills', req),
   },
 };
 

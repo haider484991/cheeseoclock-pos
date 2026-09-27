@@ -358,6 +358,18 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'reports:addDayNote': { day: new Date().toISOString().slice(0, 10), tag: 'rain', note: 'Heavy rain after 8' },
   'reports:removeDayNote': { id: 'no-such-note' },
   'reports:getDayparts': undefined,
+  // Stock takes (costing spec Phase 8): what the stock is worth and what went
+  // missing — managers and the owner only, every channel.
+  'inventory:stockCountList': undefined,
+  'inventory:stockCountGet': { countId: 'no-such-count' },
+  'inventory:stockCountStart': { scope: 'key_items' },
+  'inventory:stockCountSave': { countId: 'no-such-count', lines: [{ ingredientId: 'no-such-ingredient', countedQty: 1_000 }] },
+  'inventory:stockCountFinish': { countId: 'no-such-count' },
+  'inventory:stockCountCancel': { countId: 'no-such-count' },
+  'inventory:stockCountOne': { ingredientId: 'no-such-ingredient', countedQty: 1_000 },
+  'reports:variance': undefined,
+  // How many tills take orders (read by managers).
+  'costing:getTills': undefined,
 });
 
 /** The owner's alone: refused to the counter AND to managers. */
@@ -368,6 +380,8 @@ const OWNER_ONLY = (): Record<string, unknown> => ({
   'costing:setAlertSettings': { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [] },
   // The parts of the day Reports splits sales into (settings.manage, costing spec Phase 7).
   'reports:setDayparts': { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 15 }, { name: 'Dinner', fromHour: 19, toHour: 23 }] },
+  // How many tills take orders (settings.manage, costing spec Phase 8).
+  'costing:setTills': { sellingTills: 2 },
 });
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */

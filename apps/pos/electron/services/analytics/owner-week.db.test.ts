@@ -153,7 +153,7 @@ live('"Do this" (costing spec 4.17)', () => {
     s.sale([['veggieL', 4, ['pickOnion', 'pickPepper', 'pickOlive', 'pickMushroom', 'pickCorn', 'dipChili']], ['bakedWings', 1]], '2026-09-22T14:00:00.000Z');
     s.sale([['deal', 2, ['d1Fajita', 'd2Veggie']]], '2026-09-29T14:00:00.000Z');
     // Cheese is a key ingredient, and running low; onion is low too, but not a key ingredient.
-    s.r.setBusinessSetting(s.db, 'costing.alerts', { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [s.ing.cheese] }, OWNER);
+    s.r.saveCostAlertSettings(s.db, { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [s.ing.cheese] }, OWNER);
     s.r.updateIngredient(s.db, { id: s.ing.cheese, lowThreshold: 10_000_000 }, MANAGER);
     s.r.updateIngredient(s.db, { id: s.ing.onion, lowThreshold: 10_000_000 }, MANAGER);
     // Cheese goes up 25%: a price alert (key ingredient), costing the menu some rupees a week.
@@ -312,7 +312,7 @@ live('the weekly sheet: food cost and waste against last week', () => {
 live('"Do this": a key ingredient out on the till\'s count', () => {
   it('no reorder level set and the count below zero: still pinned first', async () => {
     const s = await shop();
-    s.r.setBusinessSetting(s.db, 'costing.alerts', { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [s.ing.cheese] }, OWNER);
+    s.r.saveCostAlertSettings(s.db, { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [s.ing.cheese] }, OWNER);
     s.r.recordStockMovement(s.db, { ingredientId: s.ing.cheese, deltaQty: -(s.stockOf('cheese') + 3_000), reason: 'waste', wasteReason: 'other', occurredAtIso: '2026-09-29T16:00:00.000Z' }, MANAGER);
     const week = s.r.buildOwnerWeek(s.db, { week: 'this', withCosts: false }, NOW);
     expect(week.doThis[0]).toMatchObject({ kind: 'low_stock', name: 'Test cheese', pinned: true, currentQty: -3_000, lowThreshold: 0 });

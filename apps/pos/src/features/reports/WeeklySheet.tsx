@@ -8,8 +8,9 @@
  *  - for a login that may see costs: the three dishes that earn the most per
  *    sale and the three that earn the least (ranked, with no rupee profit on
  *    the page: that is profit.view's, Phase 9), and waste by reason.
- * Phase 8 adds the last stock-take variance, Phase 9 profit before
- * overheads.
+ * Phase 8 adds the last stock-take variance (what went that sales, batches
+ * and logged waste don't explain, between the latest two stock takes);
+ * Phase 9 profit before overheads.
  *
  * The builder is pure (tested): every value escaped, every figure as the
  * main process sent it — which, for a login without costs, has no cost lines
@@ -23,6 +24,8 @@ import { escapeHtml } from './exporters';
 import { WASTE_REASON_LABEL, coverageText, fmtWhen } from './reportFormat';
 import { doThisWords, trendChangeOf, weekDates } from './ownerWeekFormat';
 import { formatBps } from '../costing/costingFormat';
+import { fmtMoment } from './dateRange';
+import { VARIANCE_BAND_LABEL, varianceTotalText } from './varianceFormat';
 
 const esc = escapeHtml;
 const money = (c: number) => esc(formatCents(c));
@@ -93,6 +96,23 @@ export function buildWeeklySheet(week: OwnerWeek, opts: { canSeeCosts: boolean; 
         `<div><h2>Earn the least per sale</h2>${dishRows(sheet.earnsLeast)}</div></section>` +
         `<p class="muted">Of the dishes sold this week whose cost is fully known, at menu price and today's costs (Costing → Menu costs).</p>`,
     );
+    const st = sheet.lastStockTake;
+    const between = st ? `Between the stock takes of ${esc(fmtMoment(st.sinceIso))} and ${esc(fmtMoment(st.untilIso))}.` : '';
+    let stockTake: string;
+    if (!st) {
+      stockTake = '<p class="muted">Needs two finished stock takes of the key items (or full ones) on different days (Inventory → Stock takes).</p>';
+    } else if (st.compared === 0) {
+      // Nothing counted on both: no figure and no rating (never a clean "Good").
+      stockTake =
+        '<p><b>Nothing was counted on both stock takes, so nothing could be compared.</b></p>' +
+        `<p class="muted">${between} Count the same items each time (the key items) to see what went.</p>`;
+    } else {
+      stockTake =
+        `<p><b>${esc(varianceTotalText(st.totalCents, st.varianceBps))}</b>${st.band ? ` Rating: ${esc(VARIANCE_BAND_LABEL[st.band])}.` : ''}${
+          st.topIngredient && st.totalCents > 0 ? ` Most of it: ${esc(st.topIngredient)}.` : ''
+        }</p>` + `<p class="muted">${between} Every till's stock.</p>`;
+    }
+    parts.push(`<section><h2>Last stock take: used vs should have used</h2>${stockTake}</section>`);
     const waste = sheet.wasteByReason;
     parts.push(
       `<section><h2>Waste by reason</h2>${

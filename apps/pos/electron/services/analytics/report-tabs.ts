@@ -25,6 +25,7 @@ import {
 import { DAY_MS } from './sql.js';
 import { buildOwnerWeek, type OwnerWeekJob } from './owner-week.js';
 import { buildTrends, type TrendsJob } from './trends.js';
+import { buildVariance, type VarianceJob } from './stock-control.js';
 import { EXTRA_ANALYTICS, type AnalyticsKind } from './worker-protocol.js';
 
 /** The longest period the main process works out itself when the worker is not there (a month). */
@@ -66,7 +67,8 @@ export function isAnalyticsKind(x: unknown): x is AnalyticsKind {
 
 /**
  * Anything the worker is asked for (costing spec Phase 7): a tab, the trend
- * strip, or the owner's week — each in one read transaction. `longReads`
+ * strip, the owner's week, or "used vs should have used" between two stock
+ * takes (Phase 8) — each in one read transaction. `longReads`
  * false is the main process working it out itself (the worker is not
  * running): the trends then leave out every stretch over 31 days. The
  * owner's week reads a fortnight and the last 28 days' sales, so it always
@@ -74,11 +76,17 @@ export function isAnalyticsKind(x: unknown): x is AnalyticsKind {
  */
 export function buildAnalytics(db: AppDatabase, kind: AnalyticsKind, request: unknown, now: Date, opts: { longReads: boolean } = { longReads: true }): unknown {
   if (isReportTab(kind)) return buildReportTab(db, kind, request as BusinessReportRequest, now);
-  return db.transaction(() =>
-    kind === 'trends'
-      ? buildTrends(db, request as TrendsJob, now, { longReads: opts.longReads, maxDays: MAIN_THREAD_MAX_DAYS })
-      : buildOwnerWeek(db, request as OwnerWeekJob, now),
-  )();
+  return db.transaction(() => {
+    switch (kind) {
+      case 'trends':
+        return buildTrends(db, request as TrendsJob, now, { longReads: opts.longReads, maxDays: MAIN_THREAD_MAX_DAYS });
+      case 'ownerWeek':
+        return buildOwnerWeek(db, request as OwnerWeekJob, now, { longReads: opts.longReads });
+      case 'variance':
+        // The main process only asks for it itself with a window of 31 days or less (reports-handlers.ts).
+        return buildVariance(db, request as VarianceJob);
+    }
+  })();
 }
 
 /** Whole trading days a period covers (a trading day is exactly one UTC day). */

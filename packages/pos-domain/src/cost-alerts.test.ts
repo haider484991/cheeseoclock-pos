@@ -18,23 +18,25 @@ describe('price alerts: the thresholds (costing spec Phase 6)', () => {
     expect(DEFAULT_ALERT_IMPACT_WEEK_CENTS).toBe(100_000);
   });
 
-  it('suggests the key ingredients by name until the owner picks', () => {
+  it('suggests the key items by name (whole words)', () => {
     for (const name of ['Mozzarella', 'Cheese Mix', 'Chicken Tikka', 'Beef Patty', 'Patties (frozen)', 'Pan Pizza Dough', 'Flour', 'Cooking Oil', 'Pizza Box Medium', 'Boxes'])
       expect({ name, key: suggestedKeyIngredient(name) }).toEqual({ name, key: true });
-    for (const name of ['Onion', 'Oregano', 'Boiled Egg', 'Cheddar', 'Toilet roll'])
+    for (const name of ['Onion', 'Oregano', 'Boiled Egg', 'Cheddar', 'Toilet roll', 'Burger Foil', 'Chickenpox'])
       expect({ name, key: suggestedKeyIngredient(name) }).toEqual({ name, key: false });
-    const ingredients = [
-      { id: 'a', name: 'Mozzarella' },
-      { id: 'b', name: 'Onion' },
-    ];
-    expect(resolveAlertSettings(null, ingredients)).toEqual({ jumpBps: 1_000, impactWeekCents: 100_000, keyIds: new Set(['a']), keysSuggested: true });
-    // Once saved, the owner's list is the list — even an empty one.
-    expect(resolveAlertSettings({ jumpBps: 1_500, impactWeekCents: 0, keyIngredientIds: [] }, ingredients)).toEqual({
+  });
+
+  it('the key items are the ingredients marked as such — one list (costing spec Phase 8)', () => {
+    // Nothing saved: the default thresholds, with the key items as they are marked.
+    expect(resolveAlertSettings(null, ['a'])).toEqual({ jumpBps: 1_000, impactWeekCents: 100_000, keyIds: new Set(['a']), keysSuggested: true });
+    // Saved thresholds keep the key items from the ingredients, never an old list kept inside the setting.
+    expect(resolveAlertSettings({ jumpBps: 1_500, impactWeekCents: 0 }, [])).toEqual({
       jumpBps: 1_500,
       impactWeekCents: 0,
       keyIds: new Set(),
       keysSuggested: false,
     });
+    const legacy = { jumpBps: 1_500, impactWeekCents: 0, keyIngredientIds: ['old'] };
+    expect(resolveAlertSettings(legacy, ['b']).keyIds).toEqual(new Set(['b']));
   });
 
   it('a jump is more than the threshold either way, never at it', () => {

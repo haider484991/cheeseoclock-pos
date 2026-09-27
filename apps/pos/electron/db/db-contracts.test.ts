@@ -157,6 +157,12 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     expect([...(SCHEMA.get('ingredient_costs') ?? [])]).toEqual(
       expect.arrayContaining(['ingredient_id', 'effective_at', 'unit', 'pack_size', 'pack_price_cents', 'unit_cost_mc', 'prev_unit_cost_mc', 'source']),
     );
+    // 0038: stock takes and their lines travel to the other till (shop stock is worked out from every till's rows).
+    expect(REPLICABLE_TABLES).toContain('stock_counts');
+    expect(REPLICABLE_TABLES).toContain('stock_count_lines');
+    expect([...(SCHEMA.get('stock_count_lines') ?? [])]).toEqual(
+      expect.arrayContaining(['stock_count_id', 'ingredient_id', 'counted_qty', 'unit', 'counted_at', 'expected_qty', 'till_qty', 'unit_cost_mc', 'value_cents', 'movement_id']),
+    );
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');

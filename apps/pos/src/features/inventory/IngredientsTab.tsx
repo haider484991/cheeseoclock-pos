@@ -18,6 +18,9 @@ import {
   thousandSize,
   effectivePack,
   unitCostMc,
+  countEntryQty,
+  suggestedKeyIngredient,
+  type CountEntry,
 } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -52,6 +55,8 @@ import { COSTING_FILE_NOTE, SHEET_SAYS_NOTE, costingFileCsv, costingFileName } f
 import { sheetPriceQuestion, tillPriceIsFromBill } from './sheet-price';
 import { downloadText } from '../reports/exporters';
 import { formatUnitPrice } from '../costing/costingFormat';
+import { CountEntryInput, STOCK_COUNTS_KEY, defaultMode } from './CountSheet';
+import { countLineDifferenceText, signedCents } from '../reports/varianceFormat';
 
 const INGREDIENTS_KEY = ['inventory', 'ingredients', 'all'] as const;
 
@@ -312,6 +317,14 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="font-medium">{i.name}</span>
                     <StatusBadge ingredient={i} />
+                    {i.countWeekly && (
+                      <span
+                        title="Counted every week, watched for price jumps"
+                        className="rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold text-sky-900 dark:bg-sky-950 dark:text-sky-200"
+                      >
+                        Key item
+                      </span>
+                    )}
                     {i.batchYield !== null && (
                       <span className="inline-flex items-center gap-1 rounded bg-stone-100 px-1.5 py-0.5 text-[11px] text-stone-600 dark:bg-stone-800 dark:text-stone-300">
                         <ChefHat className="h-3 w-3" /> made here
@@ -717,6 +730,9 @@ function IngredientDialog({
   const [supplierId, setSupplierId] = useState(existing?.defaultSupplierId ?? '');
   const [sku, setSku] = useState(existing?.sku ?? '');
   const [notes, setNotes] = useState(existing?.notes ?? '');
+  /** A key item (costing spec Phase 8); a new one follows the name's suggestion until ticked by hand. */
+  const [keyItem, setKeyItem] = useState<boolean | null>(existing ? existing.countWeekly : null);
+  const isKeyItem = keyItem ?? suggestedKeyIngredient(name);
   const guessed = guessIngredientCategory(name);
 
   const sup = useQuery({
@@ -737,6 +753,7 @@ function IngredientDialog({
           defaultSupplierId: supplierId || null,
           sku: sku || null,
           notes: notes || null,
+          countWeekly: isKeyItem,
         });
       }
       // No price typed: added as "no price yet" (Costing → Missing costs lists it).
@@ -755,6 +772,7 @@ function IngredientDialog({
         defaultSupplierId: supplierId || null,
         sku: sku || null,
         notes: notes || null,
+        countWeekly: isKeyItem,
       });
     },
     onSuccess: () => {
@@ -921,6 +939,20 @@ function IngredientDialog({
                 />
               </div>
             </div>
+            <label className="flex items-start gap-3 rounded-lg bg-stone-50 p-3 text-sm dark:bg-stone-800/50">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-5 w-5"
+                checked={isKeyItem}
+                onChange={(e) => setKeyItem(e.target.checked)}
+              />
+              <span>
+                <span className="font-semibold">Key item</span>
+                <span className="block text-xs text-stone-500">
+                  Counted every week (Inventory → Stock takes), watched for price jumps, and shown on the Dashboard when it runs low.
+                </span>
+              </span>
+            </label>
             <div>
               <FieldLabel htmlFor="ing-notes">Notes</FieldLabel>
               <input
@@ -985,7 +1017,7 @@ const WASTE_REASON_CHIPS: ReadonlyArray<{ id: WasteReason; label: string }> = [
 
 const MANUAL_REASONS: ReadonlyArray<{ id: ManualReason; label: string; hint: string }> = [
   { id: 'waste', label: 'Waste', hint: 'Spoiled, dropped or thrown away' },
-  { id: 'count', label: 'Stock take', hint: 'You counted it — type what is on the shelf' },
+  { id: 'count', label: 'Stock take', hint: 'You counted it: type what is on the shelf. It is a stock take of this one item.' },
   { id: 'adjustment', label: 'Fix', hint: 'Correct a mistake (use minus to take away)' },
 ];
 
@@ -1008,44 +1040,52 @@ function MovementDialog({
   const needsWhy = reason === 'waste' && wasteReason === null;
 
   const isCount = reason === 'count';
+  // A stock take is typed like the count sheet: kilos, packs + loose, or plain units.
+  const [countEntry, setCountEntry] = useState<CountEntry>(() => ({ mode: defaultMode(ingredient.unit, ingredient.packSize), amount: '', loose: '' }));
+  const countRead = countEntryQty(countEntry, ingredient.unit, ingredient.packSize);
+  const countedQty = countRead.ok ? countRead.qty : null;
   // Every reason needs an explicit integer — an empty "count" must never be
   // read as 0 (that would silently zero the ingredient).
-  const deltaValid = /^-?\d+$/.test(delta.trim());
-  const numericDelta = deltaValid ? parseInt(delta.trim(), 10) : 0;
+  const deltaValid = isCount ? countedQty !== null : /^-?\d+$/.test(delta.trim());
+  const numericDelta = isCount ? (countedQty ?? 0) : deltaValid ? parseInt(delta.trim(), 10) : 0;
   const normalize = (d: number): number => (reason === 'waste' ? -Math.abs(d) : d);
   const previewDelta = normalize(isCount ? numericDelta - ingredient.currentQty : numericDelta);
-  const countNegative = isCount && numericDelta < 0;
+  const countNegative = false;
 
   // One save per click. Waste and deliveries used to go through a second,
   // unguarded call that ignored "Saving…": a double-click wasted the stock twice.
   const submitting = useRef(false);
   const mut = useMutation({
-    mutationFn: async () => {
-      let d = numericDelta;
+    mutationFn: async (): Promise<{ resultingQty: number; note: string | null }> => {
       if (isCount) {
-        // Sales keep taking stock while this dialog is open: work the
-        // difference out from the level right now, not when it was opened.
-        const fresh = (await ipc.inventory.listIngredients()).find((x) => x.id === ingredient.id);
-        d = numericDelta - (fresh?.currentQty ?? ingredient.currentQty);
+        // A one-line stock take (costing spec Phase 8): the till sets its count
+        // at the moment it is finished, and works out what was expected there.
+        const r = await ipc.inventory.stockCountOne({ ingredientId: ingredient.id, countedQty: numericDelta, notes: notes.trim() || null });
+        const line = r.count.lines[0];
+        const diff = line ? countLineDifferenceText(line) : '';
+        const worth = line?.differenceCents ? ` (${signedCents(line.differenceCents)})` : '';
+        return { resultingQty: numericDelta, note: [diff ? `${diff}${worth}` : null, r.expectedNote].filter(Boolean).join('. ') || null };
       }
-      return ipc.inventory.recordMovement({
+      const moved = await ipc.inventory.recordMovement({
         ingredientId: ingredient.id,
-        deltaQty: normalize(d),
+        deltaQty: normalize(numericDelta),
         reason,
         notes: notes.trim() || null,
         ...(reason === 'waste' && wasteReason ? { wasteReason } : {}),
       });
+      return { resultingQty: moved.resultingQty, note: null };
     },
     onSettled: () => {
       submitting.current = false;
     },
     onSuccess: (r) => {
       toast({
-        title: 'Stock updated',
-        description: `${ingredient.name}: now ${formatQty(r.resultingQty, ingredient.unit)}`,
+        title: isCount ? 'Stock take saved' : 'Stock updated',
+        description: `${ingredient.name}: now ${formatQty(r.resultingQty, ingredient.unit)}${r.note ? `. ${r.note}` : ''}`,
         variant: 'success',
       });
       void qc.invalidateQueries({ queryKey: ['inventory'] });
+      void qc.invalidateQueries({ queryKey: STOCK_COUNTS_KEY });
       onClose();
     },
     onError: (e) =>
@@ -1134,21 +1174,36 @@ function MovementDialog({
             <div>
               <label htmlFor="mv-qty" className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
                 {isCount
-                  ? `On the shelf now (${ingredient.unit})`
+                  ? // No unit here: the box says what it is in (kg, litres, packs or the ingredient's own unit) and what it read.
+                    'On the shelf now'
                   : reason === 'waste'
                     ? `How much was wasted (${ingredient.unit})`
                     : `Change (${ingredient.unit}, minus to take away)`}
               </label>
-              <input
-                id="mv-qty"
-                type="number"
-                step="1"
-                inputMode="numeric"
-                value={delta}
-                autoFocus
-                onChange={(e) => setDelta(e.target.value)}
-                className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono text-lg dark:border-stone-700 dark:bg-stone-800"
-              />
+              {isCount ? (
+                <>
+                  <CountEntryInput
+                    id="mv-qty"
+                    unit={ingredient.unit}
+                    packSize={ingredient.packSize}
+                    entry={countEntry}
+                    onChange={setCountEntry}
+                    autoFocus
+                  />
+                  {!countRead.ok && <div className="mt-1 text-xs text-red-600">{countRead.message}</div>}
+                </>
+              ) : (
+                <input
+                  id="mv-qty"
+                  type="number"
+                  step="1"
+                  inputMode="numeric"
+                  value={delta}
+                  autoFocus
+                  onChange={(e) => setDelta(e.target.value)}
+                  className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono text-lg dark:border-stone-700 dark:bg-stone-800"
+                />
+              )}
               {deltaValid && !countNegative && (
                 <div className="mt-1 text-xs text-stone-500">
                   {previewDelta > 0 ? '+' : ''}

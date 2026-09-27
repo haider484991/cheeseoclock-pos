@@ -28,6 +28,7 @@ function ing(p: Partial<Ingredient> & { name: string }): Ingredient {
     sku: null,
     notes: null,
     isActive: true,
+    countWeekly: false,
     ...p,
   };
 }

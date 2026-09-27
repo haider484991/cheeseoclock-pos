@@ -98,6 +98,27 @@ live('the Reports worker and the till closing', () => {
     expect(salesInFileAlone(file)).toBe(0);
   });
 
+  it('told a stock take was finished, the worker answers nothing, and one it cannot work out never stops it', async () => {
+    // Only an orders table here: the stock-take comparison can't be worked out — quietly left to the card.
+    const { file, till } = tillFile(1);
+    const { main, closed } = await startWorker(file);
+    const replies: Array<{ type: string; id?: number }> = [];
+    const answered = new Promise<void>((resolve) =>
+      main.on('message', (m: { type: string; id?: number }) => {
+        replies.push(m);
+        if (m.type === 'result') resolve();
+      }),
+    );
+    main.postMessage({ type: 'warm', link: { on: false, stale: false, lastHeardAt: null }, nowIso: '2026-09-26T10:00:00.000Z' });
+    main.postMessage({ type: 'run', id: 7, kind: 'overview', request: { sinceIso: '2026-09-26T00:00:00.000Z', untilIso: '2026-09-27T00:00:00.000Z' }, nowIso: '2026-09-26T10:00:00.000Z' });
+    await answered;
+    // One answer, for the tab asked; nothing for the warm-up.
+    expect(replies.map((r) => [r.type, r.id])).toEqual([['result', 7]]);
+    main.postMessage({ type: 'close' });
+    await closed;
+    till.close();
+  });
+
   it('after closing, the worker answers nothing more', async () => {
     const { file, till } = tillFile(1);
     const { main, closed } = await startWorker(file);

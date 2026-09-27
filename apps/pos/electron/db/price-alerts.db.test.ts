@@ -114,9 +114,13 @@ async function shop(db: AppDatabase = openMigrated()) {
   return { db, ...s, r, price, sheet, history, alerts };
 }
 
-/** The price alerts as the owner sets them (made-up thresholds). */
+/**
+ * The price alerts as the owner sets them on Costing → Targets (made-up
+ * thresholds): the thresholds, and the key items — since Phase 8 one list
+ * on the ingredients (count_weekly), saved in the same transaction.
+ */
 function alertSettings(s: Awaited<ReturnType<typeof shop>>, keys: string[], impactWeekCents = 100_000, jumpBps = 1_000) {
-  s.r.setBusinessSetting(s.db, 'costing.alerts', { jumpBps, impactWeekCents, keyIngredientIds: keys }, OWNER);
+  s.r.saveCostAlertSettings(s.db, { jumpBps, impactWeekCents, keyIngredientIds: keys }, OWNER);
 }
 
 /** A menu file (made-up prices). */

@@ -14,8 +14,11 @@ import {
   guessIngredientCategory,
   isIngredientCategory,
   orderedPack,
+  suggestedKeyIngredient,
   toPriceKind,
 } from '@cheeseoclock/pos-domain';
+import { getBusinessSetting } from '../business-settings-read.js';
+import { setBusinessSetting } from './business-settings-repo.js';
 
 // -----------------------------------------------------------------------------
 // Ingredients
@@ -40,11 +43,14 @@ interface IngRow {
   sku: string | null;
   notes: string | null;
   is_active: number;
+  /** Migration 0038: a key item (counted weekly, watched for price jumps). */
+  count_weekly: number;
 }
 
 const ING_SELECT = `
   id, name, category, unit, current_qty, low_threshold, cost_per_unit_cents,
-  pack_size, pack_price_cents, price_kind, batch_yield, batch_method, default_supplier_id, sku, notes, is_active
+  pack_size, pack_price_cents, price_kind, batch_yield, batch_method, default_supplier_id, sku, notes, is_active,
+  count_weekly
 `;
 
 /** The stored choice when there is a valid one, else the guess from the name. */
@@ -72,6 +78,7 @@ function rowToIngredient(r: IngRow): Ingredient {
     sku: r.sku,
     notes: r.notes,
     isActive: toBool(r.is_active),
+    countWeekly: toBool(r.count_weekly),
   };
 }
 
@@ -110,6 +117,11 @@ export interface CreateIngredientInput {
   defaultSupplierId?: string | null;
   sku?: string | null;
   notes?: string | null;
+  /**
+   * A key item (costing spec Phase 8). Omitted: by its name while no price
+   * alerts are saved (pos-domain suggestedKeyIngredient), else not one.
+   */
+  countWeekly?: boolean;
 }
 
 /**
@@ -148,14 +160,18 @@ export function createIngredient(
   const id = uuidv7();
   const now = nowIso();
   const storedCategory = input.category ?? null;
+  // A key item when asked; otherwise, as in Phase 6, by its name while the
+  // owner has saved no price alerts yet (a fresh till's first menu file gets
+  // cheese, chicken, dough… as key items), and not once he has picked his.
+  const countWeekly = input.countWeekly ?? (getBusinessSetting(db, 'costing.alerts') === null && suggestedKeyIngredient(input.name));
   return db.transaction((): Ingredient => {
     // No price columns here: an ingredient's price is written ONLY by
     // ingredient-cost-repo (the row starts at the columns' defaults).
     db.prepare(
       `INSERT INTO ingredients
          (id, name, category, unit, current_qty, low_threshold, default_supplier_id, sku, notes, is_active,
-          created_at, updated_at, device_id, version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
+          count_weekly, created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 1)`,
     ).run(
       id,
       input.name,
@@ -166,6 +182,7 @@ export function createIngredient(
       input.defaultSupplierId ?? null,
       input.sku ?? null,
       input.notes ?? null,
+      fromBool(countWeekly),
       now,
       now,
       actor.deviceId,
@@ -188,6 +205,7 @@ export function createIngredient(
     const ing = findIngredient(db, id)!;
     enqueueSync(db, { entityType: 'ingredients', entityId: id, op: 'upsert', payload: ing });
     writeAudit(db, { entityType: 'ingredients', entityId: id, action: 'create', actorUserId: actor.userId, before: null, after: ing });
+    if (countWeekly) mirrorKeyItemsForOlderTills(db, actor);
     return ing;
   })();
 }
@@ -208,6 +226,8 @@ export interface UpdateIngredientInput {
   sku?: string | null;
   notes?: string | null;
   isActive?: boolean;
+  /** A key item (costing spec Phase 8); omitted = unchanged. */
+  countWeekly?: boolean;
 }
 
 /**
@@ -250,6 +270,7 @@ export function updateIngredient(
     sku: input.sku !== undefined ? input.sku : before.sku,
     notes: input.notes !== undefined ? input.notes : before.notes,
     isActive: input.isActive ?? before.isActive,
+    countWeekly: input.countWeekly ?? before.countWeekly,
   };
   const detailsChanged =
     after.name !== before.name ||
@@ -258,7 +279,8 @@ export function updateIngredient(
     after.defaultSupplierId !== before.defaultSupplierId ||
     after.sku !== before.sku ||
     after.notes !== before.notes ||
-    after.isActive !== before.isActive;
+    after.isActive !== before.isActive ||
+    after.countWeekly !== before.countWeekly;
   const priceTouched =
     input.priceKind !== undefined ||
     input.costPerUnitCents !== undefined ||
@@ -280,7 +302,7 @@ export function updateIngredient(
           db.prepare(
             `UPDATE ingredients SET
                name = ?, category = ?, low_threshold = ?,
-               default_supplier_id = ?, sku = ?, notes = ?, is_active = ?,
+               default_supplier_id = ?, sku = ?, notes = ?, is_active = ?, count_weekly = ?,
                updated_at = ?, version = version + 1 WHERE id = ?`,
           ).run(
             after.name,
@@ -290,6 +312,7 @@ export function updateIngredient(
             after.sku,
             after.notes,
             fromBool(after.isActive),
+            fromBool(after.countWeekly),
             now,
             input.id,
           );
@@ -316,8 +339,73 @@ export function updateIngredient(
         { id: priceRowIdFor(input.id, price), cascade: price?.cascade, alerts: price?.alerts },
       );
     }
+    if (after.countWeekly !== before.countWeekly) mirrorKeyItemsForOlderTills(db, actor);
   })();
   return findIngredient(db, input.id)!;
+}
+
+/** The key items now (ingredients.count_weekly), ids in a fixed order. */
+export function keyItemIds(db: AppDatabase): string[] {
+  return (db.prepare(`SELECT id FROM ingredients WHERE deleted_at IS NULL AND count_weekly = 1 ORDER BY id`).all() as Array<{ id: string }>).map((r) => r.id);
+}
+
+/**
+ * A copy of the key items in the saved price-alert setting ('costing.alerts'
+ * keyIngredientIds), for a till not yet upgraded to Phase 8. Never read by
+ * this till (the list is ingredients.count_weekly). A till still on v0.7.16
+ * reads its key list there — and reads the setting as "not saved" without
+ * one — and when it is upgraded its migration 0038 moves THAT list onto its
+ * ingredients: the key-item ticks travelled on ingredient rows it could not
+ * take (no column yet), so without the copy a till upgraded an hour after
+ * the other would tick the name suggestions instead of the owner's list.
+ * Written only when a setting is saved already and its copy differs, in the
+ * caller's transaction (synced and audited like any setting).
+ */
+export function mirrorKeyItemsForOlderTills(db: AppDatabase, actor: Actor): void {
+  const saved = getBusinessSetting(db, 'costing.alerts');
+  if (!saved) return;
+  const keys = keyItemIds(db);
+  const had = saved.value.keyIngredientIds;
+  if (had && had.length === keys.length && [...had].sort().every((id, i) => id === keys[i])) return;
+  setBusinessSetting(db, 'costing.alerts', { jumpBps: saved.value.jumpBps, impactWeekCents: saved.value.impactWeekCents, keyIngredientIds: keys }, actor);
+}
+
+/**
+ * Make exactly these ingredients the key items (ingredients.count_weekly,
+ * costing spec Phase 8): the ONE list the weekly stock take counts, the
+ * price alerts watch and the Dashboard pins when low. Only the ingredients
+ * that change are written — each its row, its sync entry and its audit row
+ * — all in one transaction. Ids that are not live ingredients are ignored.
+ * Returns how many changed.
+ */
+export function setKeyItems(db: AppDatabase, keyIds: Iterable<string>, actor: Actor): number {
+  const wanted = new Set(keyIds);
+  let changed = 0;
+  db.transaction(() => {
+    const rows = db.prepare(`SELECT ${ING_SELECT} FROM ingredients WHERE deleted_at IS NULL`).all() as IngRow[];
+    const now = nowIso();
+    for (const row of rows) {
+      const key = wanted.has(row.id);
+      if (toBool(row.count_weekly) === key) continue;
+      const before = rowToIngredient(row);
+      const after: Ingredient = { ...before, countWeekly: key };
+      writeWithSync({
+        db,
+        entityType: 'ingredients',
+        entityId: row.id,
+        op: 'upsert',
+        action: key ? 'key_item_on' : 'key_item_off',
+        actor,
+        before,
+        after,
+        writeRow: () => {
+          db.prepare(`UPDATE ingredients SET count_weekly = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(fromBool(key), now, row.id);
+        },
+      });
+      changed += 1;
+    }
+  })();
+  return changed;
 }
 
 export function deleteIngredient(db: AppDatabase, id: string, actor: Actor): void {

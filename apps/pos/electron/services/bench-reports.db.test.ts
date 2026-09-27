@@ -111,6 +111,21 @@
  *                                         first ask of the day, then ~190 ms
  *   meanwhile on the main thread ........ slowest till call ≤ ~23 ms, event
  *                                         loop late ≤ ~28 ms (no call near 50 ms)
+ *   the card with a stock-take pair ..... (Phase 8: key items a week apart)
+ *                                         worker ~61 ms the first ask after
+ *                                         one is finished, the worker not
+ *                                         told; ~25 ms once it is (the till
+ *                                         tells it: asserted ≤ 75 ms)
+ *
+ * Costing Phase 8 (`-t "Phase 8"`): "used vs should have used" for 90
+ * ingredients over a month between two full stock takes. The spec budget,
+ * ≤ 200 ms in the worker, is on the SHOP-PC profile like the card's: held
+ * to 200 ÷ 4 = 50 ms here, it is MISSED (worker ~113 ms here, ≈ 450 ms on
+ * that profile) — printed, not asserted (only a 200 ms guard against it
+ * getting slower); a miss confirmed on the shop's till PC is the
+ * Contingency R trigger. The Dashboard card with a stock-take pair: ~8–25 ms
+ * in the worker once it is told of a finished stock take (asserted ≤ 75 ms),
+ * ~61–135 ms when it is not. Figures with the block below.
  *
  * EVERY PRICE IS MADE UP (costing spec D11).
  */
@@ -588,9 +603,8 @@ const CARD_BUDGET_HERE_MS = CARD_BUDGET_SHOP_PC_MS / 4;
 bench('Reports bench, Phase 7: the owner\'s week (opt-in)', () => {
   it('the Dashboard card, the trends and a year of When, on this thread and in the worker', async () => {
     const { db, s, repos, size } = await yearShop();
-    const { saveCostingTargets } = await import('./costing-settings.js');
+    const { saveCostingTargets, saveCostAlertSettings } = await import('./costing-settings.js');
     const { setTypedPrice } = await import('../db/repositories/ingredient-cost-repo.js');
-    const { setBusinessSetting } = await import('../db/repositories/business-settings-repo.js');
     const { buildAnalytics } = await import('./analytics/report-tabs.js');
     const { buildOwnerWeek, DO_THIS_SOURCES } = await import('./analytics/owner-week.js');
     const { loadCostingContextWith, loadCostingSales, getCostAlerts } = await import('./costing-service.js');
@@ -612,7 +626,8 @@ bench('Reports bench, Phase 7: the owner\'s week (opt-in)', () => {
       },
       MANAGER,
     );
-    setBusinessSetting(db, 'costing.alerts', { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [s.ing.cheese, s.ing.chicken] }, MANAGER);
+    // The key items live on the ingredients since Phase 8 (one list): saved with the thresholds.
+    saveCostAlertSettings(db, { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [s.ing.cheese, s.ing.chicken] }, MANAGER);
     s.r.updateIngredient(db, { id: s.ing.chicken, lowThreshold: 100_000_000 }, MANAGER);
     setTypedPrice(db, { ingredientId: s.ing.cheese, typed: { per: 'thousand', priceCents: 150_000 } }, MANAGER);
     // Sunday night, the last trading day of the year's data: a whole week so far.
@@ -717,6 +732,47 @@ bench('Reports bench, Phase 7: the owner\'s week (opt-in)', () => {
     await inWorker('trends with 12 months of food cost, the first ask of the day', () => client.run('trends', { withCosts: true }, nowIso), 2000, 1, false);
     const warmTrendsMs = await inWorker('trends with 12 months of food cost, once the day has kept them', () => client.run('trends', { withCosts: true }, at(LATER)), 2000, 3);
     await inWorker('When for a year (heatmap, parts of the day, notes)', () => client.run('when', { ...YEAR }, at(NOW)), 2000, 3);
+
+    // Phase 8 on the card: "Do this" also compares the latest two key-items stock takes. A key-items count a week
+    // before NOW, then one just finished (half of each short: made up), written into the till's file.
+    const { startStockCount, saveStockCountLines, finishStockCount } = await import('../db/repositories/stock-count-repo.js');
+    const LINK = { on: false, stale: false, lastHeardAt: null };
+    const keyTake = (ms: number, shortPct: number) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(ms));
+      try {
+        const c = startStockCount(till, { scope: 'key_items' }, MANAGER);
+        const qty = (id: string) => Number((till.prepare(`SELECT current_qty AS q FROM ingredients WHERE id = ?`).get(id) as { q: number }).q);
+        saveStockCountLines(
+          till,
+          { countId: c.id, lines: c.lines.map((l) => ({ ingredientId: l.ingredientId, countedQty: Math.max(0, Math.round(qty(l.ingredientId) * (1 - shortPct / 100))) })) },
+          MANAGER,
+        );
+        return finishStockCount(till, c.id, MANAGER).count;
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    keyTake(NOW.getTime() - 7 * 86_400_000 - 3_600_000, 0);
+    keyTake(NOW.getTime() - 3_600_000, 50);
+    // The first ask after a stock take is finished, the worker NOT told: the comparison is worked out inside the tap.
+    const t0Card = performance.now();
+    const firstAfter = (await client.run('ownerWeek', { week: 'this', withCosts: true }, at(NOW))) as { doThis: Array<{ kind: string }> };
+    const firstAfterMs = performance.now() - t0Card;
+    lines.push(
+      `worker, the card's first ask after a stock take is finished, not warmed: ${firstAfterMs.toFixed(0)} ms — ${verdict(firstAfterMs, CARD_BUDGET_HERE_MS)} ("Do this": ${firstAfter.doThis.map((i) => i.kind).join(', ')})`,
+    );
+    // A recount of the key items later the same day: a new pair. This time the worker is told as it is finished
+    // (inventory-handlers → worker-client warm) and has worked it out by the owner's next tap.
+    keyTake(NOW.getTime() - 1_800_000, 50);
+    client.warm(LINK, at(NOW));
+    await client.run('trends', { withCosts: false }, at(NOW)); // queued behind the warm-up: the owner taps a moment later
+    const t1Card = performance.now();
+    const warmed = (await client.run('ownerWeek', { week: 'this', withCosts: true }, at(NOW))) as { doThis: Array<{ kind: string }> };
+    const warmedMs = performance.now() - t1Card;
+    lines.push(
+      `worker, the card's next ask once the worker was told of the finished stock take: ${warmedMs.toFixed(0)} ms — ${verdict(warmedMs, CARD_BUDGET_HERE_MS)} ("Do this": ${warmed.doThis.map((i) => i.kind).join(', ')})`,
+    );
     await client.stop();
 
     // The year with NO sale's cost kept (every order estimated, a price change a week): this shop's case
@@ -749,8 +805,247 @@ bench('Reports bench, Phase 7: the owner\'s week (opt-in)', () => {
     // The card's budget, held to the shop-PC profile (÷ 4 here); re-run on the shop's till PC before trusting the margin.
     expect(cardMs).toBeLessThanOrEqual(CARD_BUDGET_HERE_MS);
     expect(estCardMs).toBeLessThanOrEqual(CARD_BUDGET_HERE_MS);
+    // …and with a stock-take pair, once the worker has been told of the finish (as the till tells it).
+    expect(warmedMs).toBeLessThanOrEqual(CARD_BUDGET_HERE_MS);
     // Once the day has kept the months that are over, Overview's trends are a month's read, not a year's.
     expect(warmTrendsMs).toBeLessThan(estColdMs);
     expect(estWarmMs).toBeLessThan(estColdMs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8: stock takes and "used vs should have used"
+// ---------------------------------------------------------------------------
+
+/**
+ * The spec's budget: variance for 90 ingredients over a month ≤ 200 ms in
+ * the worker — on the SHOP-PC profile (costing spec 6.3: the till PC, or 4×
+ * CPU-throttled), as the Phase 7 card is. Unthrottled here, it is held to a
+ * quarter of that, and the verdict printed against it.
+ */
+const VARIANCE_BUDGET_SHOP_PC_MS = 200;
+const VARIANCE_BUDGET_HERE_MS = VARIANCE_BUDGET_SHOP_PC_MS / 4;
+/**
+ * Asserted only as a guard against it getting slower: the dev laptop's
+ * figure before the shop-PC profile was applied. The shop-PC budget above
+ * is MISSED (printed); the spec's answer to a miss confirmed on the shop's
+ * till PC is Contingency R, not more tuning here.
+ */
+const VARIANCE_REGRESSION_GUARD_MS = 200;
+
+/**
+ * Costing Phase 8 (`-t "Phase 8"`) on the same year of orders: 90 ingredients
+ * (the fixture's, and made-up ones to make up the number) with a month of
+ * every kind of stock row between two FULL stock takes — every order's
+ * takes (~12 rows an order, a busy shop's), a delivery a day for each of the
+ * 90, waste, fixes and cancelled orders' put-backs dated back to their take
+ * — then "used vs should have used" (with the real food cost, both counts
+ * being full) on this thread and in the real worker, while the till keeps
+ * ringing orders. Also what finishing a full stock take of 90 lines costs
+ * (shop stock for each). Every quantity and price made up.
+ *
+ * Measured 2026-09-27 on the dev laptop (40,152 orders in the year; 42,372
+ * stock rows in the month's window, ~12 an order):
+ *   variance, worker ....................... 113–147 ms — MISSES the shop-PC
+ *                                            budget held here (200 ÷ 4 = 50
+ *                                            ms; ×4 ≈ 450–590 ms there); the
+ *                                            till's slowest call meanwhile
+ *                                            ~20 ms, event loop late ≤ ~9 ms
+ *   variance, main thread .................. ~102 ms (cold page cache ~130 ms:
+ *                                            the window's sums ~60, food sales
+ *                                            ~58, the rest ~10)
+ *   finishing a full stock take (90 lines) . ~82 ms on the main thread (the
+ *                                            first, with nothing before it,
+ *                                            ~55 ms)
+ *   a heavier ledger (60,934 rows, ~17 an order): worker ~153 ms, main ~121 ms
+ *   the card after the monthly count ....... worker ~8 ms once told of the
+ *                                            finished stock take (warm);
+ *                                            ~135 ms when not (the month's
+ *                                            comparison inside the tap — over
+ *                                            the card's 75 ms here)
+ * It first measured ~530 ms in the worker: every row of the window handed to
+ * JavaScript, and the food cost's full pass. The window is now added up in
+ * SQL (only batches, fixes, counts and later cancels dated row by row), food
+ * sales read in one pass without the "known" lines, a later cancel found by
+ * idx_movements_taken, and shop stock at a finish summed in SQL too (~330 ms
+ * before). What is left is two month-long reads (the window's sums, the food
+ * sales) — the pre-aggregated days of Contingency R, if the shop PC confirms
+ * the miss. Re-run on the shop's till PC (or 4× CPU-throttled).
+ */
+bench('Reports bench, Phase 8: stock takes and used vs should have used (opt-in)', () => {
+  it('variance for 90 ingredients over a month, on this thread and in the worker', async () => {
+    const { db, s, repos, size } = await yearShop();
+    const { startStockCount, saveStockCountLines, finishStockCount } = await import('../db/repositories/stock-count-repo.js');
+    const { buildVariance } = await import('./analytics/stock-control.js');
+    const { AnalyticsWorkerClient } = await import('./analytics/worker-client.js');
+    const { WORKER_FILE, WORKER_TAG } = await import('./analytics/worker-protocol.js');
+    const { buildAnalyticsWorker } = await import('../../electron.vite.config');
+    const lines: string[] = [];
+
+    // 90 ingredients: the fixture's and made-up ones.
+    const extra: string[] = [];
+    const have = Number((db.prepare(`SELECT COUNT(*) AS n FROM ingredients WHERE deleted_at IS NULL AND is_active = 1`).get() as { n: number }).n);
+    for (let i = have; i < 90; i += 1) {
+      extra.push(
+        s.r.createIngredient(db, { name: `Test extra ${String(i).padStart(2, '0')}`, unit: 'g', currentQty: 200_000, packSize: 1_000, packPriceCents: 10_000 + i * 700 }, MANAGER).id,
+      );
+    }
+    const monthStart = Date.parse(MONTH.sinceIso);
+    const monthEnd = Date.parse(MONTH.untilIso);
+    const clockAt = (ms: number) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(ms));
+    };
+    /** A full stock take counted at what the till says, less a little of some things, finished at `ms` (on `on`: this database, or the till's file). */
+    const fullCount = (ms: number, short: (id: string, i: number) => number, on: AppDatabase = db) => {
+      clockAt(ms);
+      const c = startStockCount(on, { scope: 'full' }, MANAGER);
+      const qty = new Map(
+        (on.prepare(`SELECT id, current_qty AS q FROM ingredients WHERE deleted_at IS NULL`).all() as Array<{ id: string; q: number }>).map((r) => [r.id, Number(r.q)]),
+      );
+      saveStockCountLines(
+        on,
+        { countId: c.id, lines: c.lines.map((l, i) => ({ ingredientId: l.ingredientId, countedQty: Math.max(0, (qty.get(l.ingredientId) ?? 0) - short(l.ingredientId, i)) })) },
+        MANAGER,
+      );
+      const t0 = performance.now();
+      const done = finishStockCount(on, c.id, MANAGER).count;
+      return { count: done, ms: performance.now() - t0 };
+    };
+    const s0 = fullCount(monthStart - 60_000, () => 0);
+
+    // A month of the made-up ingredients' stock rows, from the month's orders (seeded: every run is the same).
+    let seed = 42;
+    const rand = (n: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed % n;
+    };
+    const orders = db
+      .prepare(`SELECT id, created_at AS at FROM orders WHERE created_at >= ? AND created_at < ? ORDER BY created_at`)
+      .all(MONTH.sinceIso, MONTH.untilIso) as Array<{ id: string; at: string }>;
+    const insert = db.prepare(
+      `INSERT INTO stock_movements (id, ingredient_id, delta_qty, reason, ref_order_id, occurred_at, resulting_qty, unit, unit_cost_mc, value_cents, cost_basis, detail, ref_taken_at, created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, ?, ?, ?, 0, 'g', ?, ?, ?, ?, ?, ?, ?, 'bench', 1)`,
+    );
+    let rows = 0;
+    const tRows = performance.now();
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.transaction(() => {
+      const add = (id: string, delta: number, reason: string, at: string, opts: { order?: string | null; detail?: string | null; takenAt?: string | null } = {}) => {
+        insert.run(`bench-mv-${rows}`, id, delta, reason, opts.order ?? null, at, 12_000, delta * 12, 'price', opts.detail ?? null, opts.takenAt ?? null, at, at);
+        rows += 1;
+      };
+      for (const o of orders) {
+        // Each order also takes 3 of the made-up ingredients: with the fixture's own, ~12 stock rows an
+        // order (a real order takes 6–12: dough, sauce, cheese, a topping or two, a box, a drink…).
+        for (let k = 0; k < 3; k += 1) add(extra[rand(extra.length)]!, -(20 + rand(80)), 'sale', o.at, { order: o.id });
+        // One in fifty is cancelled later: its stock put back, dated back to its take.
+        if (rand(50) === 0) {
+          const later = new Date(Date.parse(o.at) + 30 * 60_000).toISOString();
+          add(extra[rand(extra.length)]!, 30, 'sale', later, { order: o.id, detail: 'cancel_put_back', takenAt: o.at });
+        }
+      }
+      for (let d = 0; d < 31; d += 1) {
+        const day = monthStart + d * 86_400_000;
+        for (const id of extra) add(id, 5_000, 'delivery', new Date(day + 9 * 3_600_000).toISOString());
+        for (let w = 0; w < 10; w += 1) add(extra[rand(extra.length)]!, -(50 + rand(200)), 'waste', new Date(day + 22 * 3_600_000).toISOString(), { detail: 'waste:expired' });
+        add(extra[rand(extra.length)]!, 100, 'adjustment', new Date(day + 23 * 3_600_000).toISOString(), { detail: 'correction' });
+      }
+    })();
+    db.exec('PRAGMA foreign_keys = ON');
+    // This till's counts as they would stand after those rows.
+    db.exec(
+      `UPDATE ingredients SET current_qty = current_qty + COALESCE((SELECT SUM(delta_qty) FROM stock_movements m WHERE m.ingredient_id = ingredients.id AND m.device_id = 'bench'), 0)`,
+    );
+    lines.push(`${size.orders} orders in the year; added ${rows} stock rows for ${extra.length} made-up ingredients over the month in ${(performance.now() - tRows).toFixed(0)} ms`);
+    const s1 = fullCount(monthEnd - 60_000, (_id, i) => (i % 7 === 0 ? 250 : 0));
+    vi.useRealTimers();
+    const windowRows = Number(
+      (
+        db.prepare(`SELECT COUNT(*) AS n FROM stock_movements WHERE occurred_at > ? AND occurred_at <= ?`).get(s0.count.finishedAt, s1.count.finishedAt) as {
+          n: number;
+        }
+      ).n,
+    );
+    lines.push(
+      `full stock take of ${s1.count.lineCount} lines: finishing (shop stock for each, one transaction) ${s1.ms.toFixed(0)} ms; the first one (no stock take before it) ${s0.ms.toFixed(0)} ms`,
+    );
+
+    const job = { fromCountId: s0.count.id, toCountId: s1.count.id, link: { on: false, stale: false, lastHeardAt: null } };
+    const onMain = time(5, () => buildVariance(db, job));
+    expect(onMain.out.state).toBe('ok');
+    expect(onMain.out.lines.length).toBe(90);
+    expect(onMain.out.actualCogs).not.toBeNull();
+    lines.push(
+      `main thread: variance for ${onMain.out.lines.length} ingredients, ${windowRows} stock rows in the window: ${onMain.ms.toFixed(0)} ms (with the real food cost) — ${verdict(onMain.ms, VARIANCE_BUDGET_HERE_MS)} for the shop PC's ${VARIANCE_BUDGET_SHOP_PC_MS} ms ÷ 4`,
+    );
+
+    // The real worker, built as for the till, on a file copy, while the till keeps ringing orders.
+    const dir = mkdtempSync(join(tmpdir(), 'coc-bench8-'));
+    const file = join(dir, 'till.sqlite');
+    db.exec(`VACUUM INTO '${file.split("'").join("''")}'`);
+    const till = openTillFile(file);
+    await buildAnalyticsWorker({ outDir: dir });
+    const client = new AnalyticsWorkerClient({
+      spawn: () => new Worker(join(dir, WORKER_FILE), { workerData: { tag: WORKER_TAG, dbPath: file, driver: 'node:sqlite' } }),
+    });
+    client.start();
+    expect(await client.settled()).toBe('ready');
+    await client.run('variance', job); // its statements compiled, as the first report of the day does
+    const item = s.item;
+    const choice = s.choice;
+    const probe = startTill(till, {
+      board: () => repos.listActiveOrders(till, {}),
+      ringAndSend: () => {
+        const t0 = performance.now();
+        const o = repos.createOrder(till, { mode: 'takeaway' }, CASHIER);
+        repos.addOrderItem(till, { orderId: o.id, menuItemId: item.fajitaM, quantity: 1, modifierIds: [choice.extraCheese], notes: null }, CASHIER);
+        repos.sendOrderToKitchen(till, o.id, CASHIER);
+        return performance.now() - t0;
+      },
+    });
+    const runs = 5;
+    const t0 = performance.now();
+    for (let i = 0; i < runs; i += 1) await client.run('variance', job, new Date(Date.now() + i).toISOString());
+    const workerMs = (performance.now() - t0) / runs;
+    const p = probe.stop();
+    lines.push(
+      `worker: variance for 90 ingredients over a month ${workerMs.toFixed(0)} ms — ${verdict(workerMs, VARIANCE_BUDGET_HERE_MS)} for the shop PC's ${VARIANCE_BUDGET_SHOP_PC_MS} ms (÷ 4 here; ×4 ≈ ${(workerMs * 4).toFixed(0)} ms there); meanwhile slowest till call ${Math.max(p.maxBoard, p.maxSend).toFixed(1)} ms, event loop late by at most ${p.maxLag.toFixed(1)} ms`,
+    );
+
+    // The Dashboard card after the monthly full stock take (Phase 7's budget: ≤ 300 ms on the shop PC, 75 here):
+    // "Do this" compares the latest two full stock takes. A full recount finished later the same trading day is a
+    // new pair over the same month: asked with the worker not told of it, then — after another — with it told
+    // (inventory-handlers → worker-client warm), as the till does.
+    const CARD_NOW = monthEnd + 3_600_000;
+    let cardTick = 0;
+    const cardAsk = async (label: string) => {
+      const t = performance.now();
+      const out = (await client.run('ownerWeek', { week: 'this', withCosts: true }, new Date(CARD_NOW + ++cardTick).toISOString())) as { doThis: Array<{ kind: string }> };
+      const ms = performance.now() - t;
+      lines.push(`worker, the card ${label}: ${ms.toFixed(0)} ms — ${verdict(ms, CARD_BUDGET_HERE_MS)} for the shop PC's ${CARD_BUDGET_SHOP_PC_MS} ms ÷ 4 ("Do this": ${out.doThis.map((i) => i.kind).join(', ')})`);
+      return ms;
+    };
+    await cardAsk("the first ask of the day after the monthly stock take (the day's sales read too)");
+    await cardAsk('asked again the same day');
+    fullCount(monthEnd - 30_000, (_id, i) => (i % 7 === 0 ? 250 : 0), till);
+    vi.useRealTimers();
+    const notToldMs = await cardAsk('the first ask after a full recount is finished, the worker not told');
+    fullCount(monthEnd - 15_000, (_id, i) => (i % 7 === 0 ? 250 : 0), till);
+    vi.useRealTimers();
+    client.warm({ on: false, stale: false, lastHeardAt: null }, new Date(CARD_NOW).toISOString());
+    await client.run('trends', { withCosts: false }, new Date(CARD_NOW).toISOString()); // queued behind the warm-up: the owner taps a moment later
+    const toldMs = await cardAsk('the next ask once the worker was told of the finished stock take');
+    await client.stop();
+    till.close();
+    rmSync(dir, { recursive: true, force: true });
+    // eslint-disable-next-line no-console
+    console.log(['', 'Reports bench, Phase 8 (node:sqlite; worker = the built analytics-worker.cjs):', ...lines.map((l) => `  ${l}`)].join('\n'));
+    // Only a guard against it getting slower: the shop-PC budget is printed above (see VARIANCE_REGRESSION_GUARD_MS).
+    expect(workerMs).toBeLessThanOrEqual(VARIANCE_REGRESSION_GUARD_MS);
+    // The card, told of the finished stock take as the till tells it, is within its shop-PC budget (÷ 4 here);
+    // not told, it waits for the month's comparison inside the tap.
+    expect(toldMs).toBeLessThanOrEqual(CARD_BUDGET_HERE_MS);
+    expect(toldMs).toBeLessThan(notToldMs);
   });
 });

@@ -15,6 +15,7 @@
  */
 
 import type { WasteReason } from './inventory.js';
+import type { VarianceBand } from './stock-count.js';
 
 /** Where an order came from, in the owner's words. */
 export type ReportChannel =
@@ -861,6 +862,25 @@ export type DoThisItem =
       ingredientName: string | null;
       changeBps: number | null;
       dishes: number;
+    })
+  /**
+   * The last two stock takes: more stock went than sales, batches and logged
+   * waste explain — over 3% of food sales (costing spec 4.17, Phase 8). Its
+   * rupees per week are what went unexplained, spread over the weeks
+   * between the two stock takes.
+   */
+  | (DoThisBase & {
+      kind: 'stock_variance';
+      fromCountId: string;
+      toCountId: string;
+      /** Σ unexplained ÷ food sales over the window. */
+      varianceBps: number;
+      /** What went unexplained in the whole window. */
+      totalCents: number;
+      /** The ingredient that explains least (the most rupees), when there is one. */
+      topIngredient: string | null;
+      /** When the later stock take was finished. */
+      countedAt: string;
     });
 
 export type DoThisKind = DoThisItem['kind'];
@@ -897,6 +917,28 @@ export interface OwnerWeekSheet {
    * all "vs last week"; null when this till has no figures for then.
    */
   previousCosts: OwnerWeekCosts | null;
+  /**
+   * The last stock-take variance (costing spec §5, Phase 8): between the
+   * latest two stock takes, what went that sales, batches and logged waste
+   * don't explain. Null with fewer than two stock takes, or when two tills
+   * take orders with the link off (switched off).
+   */
+  lastStockTake: OwnerWeekStockTake | null;
+}
+
+/** "Used vs should have used" between the latest two stock takes, as the weekly sheet prints it. */
+export interface OwnerWeekStockTake {
+  /** When the earlier and the later stock take were finished. */
+  sinceIso: string;
+  untilIso: string;
+  /** Ingredients counted on both. 0: nothing was compared — no figure, no rating ("Nothing was counted on both stock takes"). */
+  compared: number;
+  /** What went unexplained, in rupees at the prices then (below 0: more on the shelves than expected). */
+  totalCents: number;
+  /** …as a share of food sales between the two; null with none. */
+  varianceBps: number | null;
+  band: VarianceBand | null;
+  topIngredient: string | null;
 }
 
 /**

@@ -113,6 +113,8 @@ const READ_CHANNELS = (): Record<string, unknown> => ({
   'costing:alerts': undefined,
   'costing:markAlertsSeen': { ids: ['no-such-alert'] },
   'costing:getAlertSettings': undefined,
+  // How many tills take orders (costing spec Phase 8): managers read it.
+  'costing:getTills': undefined,
 });
 
 const ALERT_SETTINGS = () => ({ jumpBps: 1_500, impactWeekCents: 50_000, keyIngredientIds: [s.ing.cheese] });
@@ -124,6 +126,7 @@ live('who may see costs', () => {
       ...READ_CHANNELS(),
       'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 },
       'costing:setAlertSettings': ALERT_SETTINGS(),
+      'costing:setTills': { sellingTills: 2 },
     };
     expect(Object.keys(channels).sort()).toEqual([...h.handlers.keys()].filter((c) => c.startsWith('costing:')).sort());
     for (const [channel, payload] of Object.entries(channels)) {

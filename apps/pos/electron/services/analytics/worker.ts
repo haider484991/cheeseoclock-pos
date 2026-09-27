@@ -24,9 +24,18 @@ import { parentPort, workerData, type MessagePort } from 'node:worker_threads';
 import type { AppDatabase } from '../../db/connection.js';
 import { reuseCompiledStatements } from '../../db/statement-cache.js';
 import { buildAnalytics, isAnalyticsKind } from './report-tabs.js';
+import type { TillLinkState } from '@cheeseoclock/shared-types';
 import { warmOwnerWeek } from './owner-week.js';
+import { warmLatestVariance } from './stock-control.js';
 import { DAY_MS } from './sql.js';
-import { isWorkerData, type AnalyticsWorkerData, type RunRequest, type WorkerReply, type WorkerRequest } from './worker-protocol.js';
+import {
+  isWorkerData,
+  type AnalyticsWorkerData,
+  type RunRequest,
+  type WarmRequest,
+  type WorkerReply,
+  type WorkerRequest,
+} from './worker-protocol.js';
 
 /** The same wait as the till's own connection (connection.ts) when the file is briefly locked. */
 const BUSY_TIMEOUT_MS = 5000;
@@ -41,6 +50,20 @@ export function handleRunRequest(db: AppDatabase, msg: RunRequest): WorkerReply 
     return { type: 'result', id: msg.id, ok: true, data, ms: Math.round(performance.now() - t0) };
   } catch (e) {
     return { type: 'result', id: msg.id, ok: false, message: e instanceof Error ? e.message : String(e), ms: Math.round(performance.now() - t0) };
+  }
+}
+
+/**
+ * A stock take was just finished (costing spec Phase 8): work the
+ * Dashboard's latest stock-take comparison out now, so the next tap on the
+ * card finds it kept. Never throws: the card works it out itself when asked.
+ */
+export function handleWarmRequest(db: AppDatabase, msg: WarmRequest): void {
+  try {
+    const now = new Date(msg.nowIso);
+    warmLatestVariance(db, msg.link, Number.isFinite(now.getTime()) ? now : new Date());
+  } catch {
+    // Worked out when the card asks.
   }
 }
 
@@ -145,6 +168,8 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
     return;
   }
   let closed = false;
+  /** The second-till link as the main process last said it is (off, as the shop runs, until told). */
+  let link: TillLinkState = { on: false, stale: false, lastHeardAt: null };
   // The Dashboard card's "Do this" reads four weeks of order lines once a trading day (owner-week.ts): read
   // them as the worker starts and again just after each trading day begins (05:00 Pakistan time = 00:00 UTC),
   // between asks, so the first tap of the day does not wait for them. Never keeps the thread alive.
@@ -152,7 +177,7 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
   const warm = () => {
     if (closed) return;
     try {
-      warmOwnerWeek(conn.db, new Date());
+      warmOwnerWeek(conn.db, new Date(), link);
     } catch {
       // The card reads them itself when it is asked.
     }
@@ -175,6 +200,12 @@ export function serve(port: MessagePort, data: AnalyticsWorkerData): void {
         // Nothing more to do: the thread ends either way.
       }
       port.close();
+      return;
+    }
+    if (msg?.type === 'warm') {
+      // A stock take was just finished: the card's latest comparison, worked out now (no answer).
+      link = msg.link;
+      handleWarmRequest(conn.db, msg);
       return;
     }
     if (msg?.type !== 'run') return;

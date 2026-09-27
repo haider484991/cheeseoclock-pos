@@ -22,3 +22,6 @@ export * from './purchase.js';
 export * from './cost-alerts.js';
 export * from './trends.js';
 export * from './do-this.js';
+export * from './shop-stock.js';
+export * from './variance.js';
+export * from './count-entry.js';

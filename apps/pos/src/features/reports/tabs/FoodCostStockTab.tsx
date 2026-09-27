@@ -4,8 +4,9 @@
  * tab is not shown to them. The section moved here unchanged from
  * ReportSections.tsx; the tab loads only these figures (reports:foodStock),
  * plus the ingredients running low now. Phase 5 adds Purchases (what was
- * spent on stock, by supplier and by ingredient); later phases add variance
- * and actual cost of goods here.
+ * spent on stock, by supplier and by ingredient); Phase 8 "Used vs should
+ * have used" between two stock takes and the real food cost (its own
+ * channel, for the "Between stock takes" period: VarianceSection).
  */
 import { Link } from 'react-router-dom';
 import { cn } from '@cheeseoclock/ui';
@@ -31,14 +32,27 @@ import {
   purchasePriceText,
 } from '../reportFormat';
 import { formatBps } from '../../costing/costingFormat';
+import { VarianceSection, type VarianceView } from './VarianceSection';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-export function FoodCostStockTab({ data, lowStockCount }: { data: ReportFoodStockTab; lowStockCount: number | null }) {
+export function FoodCostStockTab({
+  data,
+  lowStockCount,
+  variance = null,
+}: {
+  data: ReportFoodStockTab;
+  lowStockCount: number | null;
+  /** "Between stock takes": what was used against what should have been; null for any other period. */
+  variance?: VarianceView | null;
+}) {
   return (
     <div className="space-y-10">
+      {/* Between two stock takes, the question the owner opened it for comes first. */}
+      {variance && <VarianceSection view={variance} />}
       <FoodCostSection report={data} food={data.foodCost} lowStockCount={lowStockCount} />
       <PurchasesSection purchases={data.purchases} />
+      {!variance && <VarianceSection view={null} />}
     </div>
   );
 }

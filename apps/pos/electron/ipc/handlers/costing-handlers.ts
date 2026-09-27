@@ -9,6 +9,7 @@ import {
   recipeCostInputSchema,
   setCostAlertSettingsInputSchema,
   setCostingTargetsInputSchema,
+  setTillsInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { requireCapability, REFUSED } from '../guards.js';
 import {
@@ -21,7 +22,8 @@ import {
   getMissingCosts,
   previewRecipeCost,
 } from '../../services/costing-service.js';
-import { saveCostAlertSettings, saveCostingTargets } from '../../services/costing-settings.js';
+import { getTillsSetting, saveCostAlertSettings, saveCostingTargets, saveTillsSetting } from '../../services/costing-settings.js';
+import { readTillLink } from '../../services/till-link.js';
 import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/cost-alert-repo.js';
 
 /**
@@ -120,5 +122,19 @@ export function registerCostingHandlers(ctx: HandlerContext): void {
     const parsed = setCostAlertSettingsInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(saveCostAlertSettings(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  // ---- How many tills take orders (costing spec Phase 8, owner question 3) ----
+  defineHandler('costing:getTills', ctx, () => {
+    requireCosts();
+    return ok(getTillsSetting(ctx.db, readTillLink(ctx.db)));
+  });
+
+  defineHandler('costing:setTills', ctx, (_ctx, payload) => {
+    requireCosts();
+    const s = requireCapability('settings.manage', 'Only the owner can say how many tills take orders.');
+    const parsed = setTillsInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(saveTillsSetting(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }, readTillLink(ctx.db)));
   });
 }

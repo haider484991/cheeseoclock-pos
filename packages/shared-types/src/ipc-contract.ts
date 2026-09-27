@@ -131,6 +131,16 @@ import type {
 import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
+import type {
+  ReportVariance,
+  StockCountDetail,
+  StockCountFinish,
+  StockCountScope,
+  StockCountSummary,
+  TillsSetting,
+  TillsSettingView,
+  VarianceRequest,
+} from './stock-count.js';
 
 /** One cloud copy as listed for the operator (from any till). */
 export interface CloudBackupEntry {
@@ -980,6 +990,8 @@ export interface IpcContract {
       notes?: string | null;
       /** Omitted or null = guessed from the name. */
       category?: IngredientCategory | null;
+      /** A key item: counted every week, watched for price jumps (costing spec Phase 8). */
+      countWeekly?: boolean;
     };
     response: ApiResult<Ingredient>;
   };
@@ -1000,6 +1012,8 @@ export interface IpcContract {
       sku?: string | null;
       notes?: string | null;
       isActive?: boolean;
+      /** A key item: counted every week, watched for price jumps (costing spec Phase 8). */
+      countWeekly?: boolean;
     };
     response: ApiResult<Ingredient>;
   };
@@ -1105,16 +1119,59 @@ export interface IpcContract {
     request: StockMovementSearch | undefined;
     response: ApiResult<StockMovementPage>;
   };
+  /** A stock change by hand. Not a stock take: every stock take is one (inventory:stockCountOne). */
   'inventory:recordMovement': {
     request: {
       ingredientId: string;
       deltaQty: number;
-      reason: 'delivery' | 'waste' | 'count' | 'adjustment';
+      reason: 'delivery' | 'waste' | 'adjustment';
       notes?: string | null;
       /** Waste only: why it was thrown away ("other" when not given). */
       wasteReason?: WasteReason;
     };
     response: ApiResult<{ movementId: string; resultingQty: number }>;
+  };
+
+  // Inventory — stock takes (costing spec Phase 8). COST_CAPABILITY: they
+  // show what stock is worth and what is missing; cashiers are refused.
+  /** The stock takes: open ones first, then the newest. */
+  'inventory:stockCountList': {
+    request: { limit?: number } | undefined;
+    response: ApiResult<StockCountSummary[]>;
+  };
+  /** One stock take with its sheet (and, once finished, its differences). */
+  'inventory:stockCountGet': {
+    request: { countId: string };
+    response: ApiResult<StockCountDetail | null>;
+  };
+  /** Start one: the whole store room, the key items, or picked ingredients ('custom'). */
+  'inventory:stockCountStart': {
+    request: { scope: StockCountScope; ingredientIds?: string[]; notes?: string | null };
+    response: ApiResult<StockCountDetail>;
+  };
+  /** What was counted so far (whole base units; null clears a line). */
+  'inventory:stockCountSave': {
+    request: { countId: string; lines: Array<{ ingredientId: string; countedQty: number | null }> };
+    response: ApiResult<{ lineCount: number; countedCount: number }>;
+  };
+  /**
+   * Finish it — one transaction: each counted line against SHOP stock, its
+   * value, and a 'count' stock row setting this till's count. Asked again:
+   * answers with what was written, writes nothing.
+   */
+  'inventory:stockCountFinish': {
+    request: { countId: string };
+    response: ApiResult<StockCountFinish>;
+  };
+  /** Drop one still being counted: nothing is written to stock. */
+  'inventory:stockCountCancel': {
+    request: { countId: string };
+    response: ApiResult<{ cancelled: boolean }>;
+  };
+  /** The Stock button's "Stock take": one ingredient, counted and finished at once. */
+  'inventory:stockCountOne': {
+    request: { ingredientId: string; countedQty: number; notes?: string | null };
+    response: ApiResult<StockCountFinish>;
   };
 
   // Procurement — suppliers
@@ -1305,6 +1362,19 @@ export interface IpcContract {
     request: SetCostAlertSettingsRequest;
     response: ApiResult<CostAlertSettingsView>;
   };
+  /**
+   * How many tills take orders (costing spec Phase 8, owner question 3), with
+   * the second-till link as it is now. COST_CAPABILITY to read…
+   */
+  'costing:getTills': {
+    request: undefined;
+    response: ApiResult<TillsSettingView>;
+  };
+  /** …settings.manage to change (the owner). */
+  'costing:setTills': {
+    request: TillsSetting;
+    response: ApiResult<TillsSettingView>;
+  };
 
   // Reports: one channel per tab of the Reports page (costing spec Phase 3),
   // each worked out in the Reports worker thread, not on the till's main
@@ -1386,6 +1456,16 @@ export interface IpcContract {
   'reports:setDayparts': {
     request: SetDaypartsRequest;
     response: ApiResult<DaypartsView>;
+  };
+  /**
+   * Reports → Food cost & stock, "Between stock takes" (costing spec Phase
+   * 8): what was used against what should have been, between two stock
+   * takes (omitted: the latest two), and the real food cost when both were
+   * full. Worked out in the Reports worker. report.view and COST_CAPABILITY.
+   */
+  'reports:variance': {
+    request: VarianceRequest | undefined;
+    response: ApiResult<ReportVariance>;
   };
 
   // Customers

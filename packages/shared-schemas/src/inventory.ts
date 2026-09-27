@@ -44,6 +44,8 @@ export const createIngredientInputSchema = z.object({
   defaultSupplierId: nullableText,
   sku: nullableText,
   notes: nullableText,
+  /** A key item: counted every week, watched for price jumps (costing spec Phase 8). */
+  countWeekly: z.boolean().optional(),
 });
 
 export const updateIngredientInputSchema = z.object({
@@ -60,6 +62,8 @@ export const updateIngredientInputSchema = z.object({
   sku: nullableText,
   notes: nullableText,
   isActive: z.boolean().optional(),
+  /** A key item: counted every week, watched for price jumps (costing spec Phase 8). */
+  countWeekly: z.boolean().optional(),
 });
 
 /** Switch an ingredient counted in kg / litres to grams / ml (stock and recipes ×1000). */
@@ -161,14 +165,16 @@ export const wasteReasonSchema = z.enum(WASTE_REASONS);
 
 /**
  * A stock change booked by hand. Waste says why (burnt, dropped, expired…);
- * without a reason it is booked as "other". A stock take and a fix say what
- * they are on their own, so they take no reason here.
+ * without a reason it is booked as "other". A fix says what it is on its
+ * own, so it takes no reason here. A stock take is not booked here any more:
+ * every stock take is one (costing spec Phase 8, stock-count.ts — the Stock
+ * button's is a one-line stock take).
  */
 export const recordMovementInputSchema = z
   .object({
     ingredientId: idSchema,
     deltaQty: movementQtySchema,
-    reason: z.enum(['delivery', 'waste', 'count', 'adjustment']),
+    reason: z.enum(['delivery', 'waste', 'adjustment']),
     notes: nullableText,
     wasteReason: wasteReasonSchema.optional(),
   })

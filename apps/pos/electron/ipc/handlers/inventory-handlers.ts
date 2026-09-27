@@ -2,8 +2,8 @@ import type { ZodError } from 'zod';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { COST_CAPABILITY, ok, err, hasCapability } from '@cheeseoclock/shared-types';
-import { movementWithoutCosts } from '@cheeseoclock/pos-domain';
-import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
+import { OTHER_TILL_MISSING, movementWithoutCosts, otherTillMissing, staleLinkText } from '@cheeseoclock/pos-domain';
+import type { AuthenticatedUser, StockCountDetail, StockCountFinish } from '@cheeseoclock/shared-types';
 import {
   createIngredientInputSchema,
   updateIngredientInputSchema,
@@ -24,6 +24,11 @@ import {
   payoutToPurchaseInputSchema,
   listDrawerPayoutsInputSchema,
   useSheetPriceInputSchema,
+  startStockCountInputSchema,
+  saveStockCountLinesInputSchema,
+  stockCountIdInputSchema,
+  listStockCountsInputSchema,
+  countOneInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
 import { requireCapability, REFUSED } from '../guards.js';
@@ -60,6 +65,19 @@ import {
   payoutToPurchase,
 } from '../../db/repositories/procurement-repo.js';
 import { listDrawerPayouts } from '../../db/repositories/shift-repo.js';
+import {
+  cancelStockCount,
+  countOneIngredient,
+  finishStockCount,
+  getStockCount,
+  listStockCounts,
+  saveStockCountLines,
+  startStockCount,
+} from '../../db/repositories/stock-count-repo.js';
+import { sellingTillsOf } from '../../services/analytics/stock-control.js';
+import { readTillLink } from '../../services/till-link.js';
+import { getAnalyticsWorker } from '../../services/analytics/worker-host.js';
+import type { AppDatabase } from '../../db/connection.js';
 
 function requireSession(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -108,6 +126,49 @@ function kickDrawer(): void {
   void import('../../services/print-spooler.js')
     .then((m) => m.printSpooler.kickDrawerSoon())
     .catch(() => undefined);
+}
+
+/**
+ * Stock takes (costing spec Phase 8) show what the stock is worth and what
+ * went missing: managers and the owner (COST_CAPABILITY). A cashier is
+ * refused here, in the main process.
+ */
+function requireStockTakes(): AuthenticatedUser {
+  return requireCapability(COST_CAPABILITY, REFUSED.stockTakes);
+}
+
+/**
+ * The sentence beside a finished stock take's "expected" when it may be
+ * short of the other till's rows (costing spec D14): two tills take orders
+ * with the link off, or the link is on but has not worked lately. Null
+ * with nothing to say (one till, link off: the shop as it runs).
+ */
+function expectedNote(db: AppDatabase): string | null {
+  const link = readTillLink(db);
+  if (otherTillMissing(sellingTillsOf(db), link)) {
+    return `${OTHER_TILL_MISSING}, so "expected" counts only the sales rung here.`;
+  }
+  return staleLinkText(link);
+}
+
+function finished(db: AppDatabase, r: { count: StockCountDetail; alreadyFinished: boolean }): StockCountFinish {
+  // A new stock take: the Reports worker works the Dashboard's stock line out now, not on the owner's next tap.
+  if (!r.alreadyFinished) warmStockTakes(db);
+  return { ...r, expectedNote: expectedNote(db) };
+}
+
+/**
+ * Tell the Reports worker a stock take was finished (worker-client.ts warm):
+ * the card's "Do this" stock line and the weekly sheet's "last stock take"
+ * are worked out between asks. Never fails the finish; without a worker the
+ * card works it out when asked.
+ */
+function warmStockTakes(db: AppDatabase): void {
+  try {
+    getAnalyticsWorker()?.warm(readTillLink(db));
+  } catch {
+    // Worked out when the card asks.
+  }
 }
 
 /**
@@ -276,9 +337,63 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
 
   defineHandler('inventory:recordMovement', ctx, (_ctx, payload) => {
     const s = requireInventoryManage();
+    // Every stock take is a stock take now (costing spec Phase 8): its "expected" is shop stock.
+    if ((payload as { reason?: unknown } | undefined)?.reason === 'count') {
+      return err({ code: 'validation_failed', message: 'Count stock with a stock take (the Stock button, or Inventory → Stock takes).' });
+    }
     const parsed = recordMovementInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(recordStockMovement(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  // ---- Stock takes (costing spec Phase 8): COST_CAPABILITY ----
+  defineHandler('inventory:stockCountList', ctx, (_ctx, payload) => {
+    requireStockTakes();
+    const parsed = listStockCountsInputSchema.safeParse(payload ?? {});
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(listStockCounts(ctx.db, ctx.deviceId, parsed.data));
+  });
+
+  defineHandler('inventory:stockCountGet', ctx, (_ctx, payload) => {
+    requireStockTakes();
+    const parsed = stockCountIdInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(getStockCount(ctx.db, parsed.data.countId, ctx.deviceId));
+  });
+
+  defineHandler('inventory:stockCountStart', ctx, (_ctx, payload) => {
+    const s = requireStockTakes();
+    const parsed = startStockCountInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(startStockCount(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  defineHandler('inventory:stockCountSave', ctx, (_ctx, payload) => {
+    const s = requireStockTakes();
+    const parsed = saveStockCountLinesInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(saveStockCountLines(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  defineHandler('inventory:stockCountFinish', ctx, (_ctx, payload) => {
+    const s = requireStockTakes();
+    const parsed = stockCountIdInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(finished(ctx.db, finishStockCount(ctx.db, parsed.data.countId, { userId: s.id, deviceId: ctx.deviceId })));
+  });
+
+  defineHandler('inventory:stockCountCancel', ctx, (_ctx, payload) => {
+    const s = requireStockTakes();
+    const parsed = stockCountIdInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok({ cancelled: cancelStockCount(ctx.db, parsed.data.countId, { userId: s.id, deviceId: ctx.deviceId }) });
+  });
+
+  defineHandler('inventory:stockCountOne', ctx, (_ctx, payload) => {
+    const s = requireStockTakes();
+    const parsed = countOneInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(finished(ctx.db, countOneIngredient(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId })));
   });
 
   // ---- Suppliers ----

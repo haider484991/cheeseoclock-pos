@@ -27,6 +27,7 @@
  * is unit-tested (worker-client.test.ts).
  */
 import path from 'node:path';
+import type { TillLinkState } from '@cheeseoclock/shared-types';
 import { WORKER_FILE, type AnalyticsKind, type AnalyticsRequest, type WorkerReply, type WorkerRequest } from './worker-protocol.js';
 
 /** What the client needs of a worker thread (node:worker_threads Worker has all of it). */
@@ -208,6 +209,22 @@ export class AnalyticsWorkerClient {
     this.queue.push(job);
     this.pump();
     return promise;
+  }
+
+  /**
+   * A stock take was just finished (costing spec Phase 8): the worker works
+   * the Dashboard's latest stock-take comparison out between asks, so the
+   * owner's next tap on the card does not wait for it. No answer; only when
+   * the worker is ready (otherwise the card works it out when asked). Never
+   * throws.
+   */
+  warm(link: TillLinkState, nowIso: string = new Date().toISOString()): void {
+    if (this.current !== 'ready' || !this.worker) return;
+    try {
+      this.worker.postMessage({ type: 'warm', link, nowIso });
+    } catch {
+      // Worked out when the card asks.
+    }
   }
 
   /**

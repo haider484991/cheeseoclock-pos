@@ -12,6 +12,7 @@
  * computer's own time zone, so a till whose Windows clock zone is wrong still
  * cuts the day in the right place.
  */
+import { pickStockTakePair as pickPair, type StockTakeRef } from '@cheeseoclock/pos-domain';
 
 export type RangePreset =
   | 'today'
@@ -23,7 +24,9 @@ export type RangePreset =
   | 'thisYear'
   | 'last12'
   | 'lastYear'
-  | 'custom';
+  | 'custom'
+  /** From one stock take's finish to another's (costing spec Phase 8): stockTakesPeriod, not periodFor. */
+  | 'stockTakes';
 
 export const TRADING_DAY_START_HOUR = 5;
 const PKT_OFFSET_HOURS = 5;
@@ -52,6 +55,8 @@ export interface ReportPeriod extends DateRange {
   isCurrent: boolean;
   /** What it is compared with, or null. */
   compare: (DateRange & { label: string }) | null;
+  /** 'stockTakes' only: the two stock takes it runs between. */
+  stockTakes?: { fromCountId: string; toCountId: string };
 }
 
 // ------------------------------------------------------------ day numbers --
@@ -165,6 +170,7 @@ const TITLES: Record<RangePreset, string> = {
   last12: 'Last 12 months',
   lastYear: 'Last year',
   custom: 'Your dates',
+  stockTakes: 'Between stock takes',
 };
 
 /**
@@ -252,6 +258,12 @@ export function periodFor(
       prevEnd = start;
       compareLabel = 'the year before';
       break;
+    case 'stockTakes':
+      // Not a run of whole days: stockTakesPeriod works it out. Asked here, it is today.
+      prevStart = today - 1;
+      prevEnd = today;
+      compareLabel = 'yesterday by this time';
+      break;
     case 'custom': {
       let from = custom ? dayNumberFromYmd(custom.from) : null;
       let to = custom ? dayNumberFromYmd(custom.to) : null;
@@ -307,6 +319,87 @@ export function periodFor(
           }
         : null,
   };
+}
+
+/** "Mon 21 Sep 2026, 10:15" in Pakistan time (a stock take's finish). */
+export function fmtMoment(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  const pk = new Date(ms + PKT_OFFSET_HOURS * HOUR_MS);
+  const hh = String(pk.getUTCHours()).padStart(2, '0');
+  const mm = String(pk.getUTCMinutes()).padStart(2, '0');
+  // The calendar date in Pakistan (a count at 01:00 is on the next date, though still the trading day before).
+  return `${fmtDay(pk.toISOString().slice(0, 10))}, ${hh}:${mm}`;
+}
+
+/**
+ * The period between two stock takes (costing spec Phase 8, "Between stock
+ * takes"): from just after the earlier one was finished to the moment the
+ * later one was (the stock takes' window (t0, t1], as Reports' [since,
+ * until) — one millisecond on each end). Never "so far" (both have ended),
+ * so it never refreshes itself; compared with nothing.
+ */
+export function stockTakesPeriod(
+  from: { id: string; finishedAt: string },
+  to: { id: string; finishedAt: string },
+): ReportPeriod {
+  const sinceMs = Date.parse(from.finishedAt) + 1;
+  const untilMs = Date.parse(to.finishedAt) + 1;
+  const first = dayNumberOf(sinceMs);
+  const last = dayNumberOf(Math.max(sinceMs, untilMs - 1));
+  return {
+    preset: 'stockTakes',
+    sinceIso: new Date(sinceMs).toISOString(),
+    untilIso: new Date(untilMs).toISOString(),
+    firstDay: ymdOf(first),
+    lastDay: ymdOf(last),
+    days: last - first + 1,
+    title: TITLES.stockTakes,
+    dates: `${fmtMoment(from.finishedAt)} – ${fmtMoment(to.finishedAt)}`,
+    isCurrent: false,
+    compare: null,
+    stockTakes: { fromCountId: from.id, toCountId: to.id },
+  };
+}
+
+/**
+ * The two stock takes "Between stock takes" opens on, from the finished
+ * ones (newest first): the latest full or key-items one, and before it (on
+ * an earlier trading day) the latest full one or one of the same kind — the
+ * till's own rule (pos-domain pickStockTakePair, which stock-control.ts
+ * uses too). The Stock button's one-line counts only when picked, or when
+ * there is nothing else. Null with fewer than two.
+ */
+export function defaultStockTakePair<T extends StockTakeRef>(doneNewestFirst: readonly T[]): { from: T; to: T } | null {
+  return pickStockTakePair(doneNewestFirst, null);
+}
+
+/**
+ * The two stock takes asked for, as far as they will do: the later one when
+ * it is there (else the till's rule), and the earlier one when it finished
+ * before it (else the till's rule). Null with fewer than two.
+ */
+export function pickStockTakePair<T extends StockTakeRef>(
+  doneNewestFirst: readonly T[],
+  picked: { fromCountId?: string | null; toCountId?: string | null } | null,
+): { from: T; to: T } | null {
+  return pickPair(doneNewestFirst, picked);
+}
+
+/**
+ * "To" was changed: "From" stays when it still finished before the new
+ * "To"; otherwise it is left blank, for the till's rule to fill (the last
+ * full one or one of the same kind) — never simply the stock take just
+ * before, which may be a one-line count of the oil.
+ */
+export function stockTakesAfterToChange(
+  doneNewestFirst: readonly StockTakeRef[],
+  currentFromId: string,
+  toCountId: string,
+): { fromCountId: string; toCountId: string } {
+  const to = doneNewestFirst.find((c) => c.id === toCountId);
+  const keep = to !== undefined && doneNewestFirst.some((c) => c.id === currentFromId && (c.finishedAt ?? '') < (to.finishedAt ?? ''));
+  return { fromCountId: keep ? currentFromId : '', toCountId };
 }
 
 /** The trading days of a period that have already started (no future days). */

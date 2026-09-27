@@ -111,6 +111,15 @@ export function doThisWords(item: DoThisItem): DoThisWords {
         action: 'Open alerts',
         amount: loss,
       };
+    case 'stock_variance':
+      return {
+        title: `Stock doesn't add up: ${formatBps(item.varianceBps)} of food sales`,
+        detail: `Between the last two stock takes more went than sales, batches and logged waste explain${
+          item.topIngredient ? `, most of it ${item.topIngredient}` : ''
+        }. Check portions, waste and deliveries.`,
+        action: 'Open used vs should have used',
+        amount: loss,
+      };
   }
 }
 

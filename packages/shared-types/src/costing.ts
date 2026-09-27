@@ -377,14 +377,19 @@ export interface CostAlertSettings {
   jumpBps: number;
   /** Any price change costing at least this much a week (paisa) at this till's sales is an alert. */
   impactWeekCents: number;
-  /** The key ingredients (cheese, chicken, dough, oil, boxes…): a jump in their price is always an alert. */
-  keyIngredientIds: string[];
+  /**
+   * LEGACY (Phase 6 kept the key ingredients here). Since Phase 8 the key
+   * items are ONE list on the ingredients (ingredients.count_weekly);
+   * migration 0038 moved this list there once. Read by nothing else, never
+   * written again.
+   */
+  keyIngredientIds?: string[];
 }
 
 export interface KeyIngredientChoice {
   ingredientId: string;
   name: string;
-  /** Watched as a key ingredient now (saved, or suggested while nothing is saved). */
+  /** A key item now (ingredients.count_weekly). */
   key: boolean;
   /** The till suggests it by its name (cheese, chicken, patties, dough, flour, oil, boxes). */
   suggested: boolean;
@@ -400,7 +405,16 @@ export interface CostAlertSettingsView {
   savedAt: string | null;
 }
 
-export type SetCostAlertSettingsRequest = CostAlertSettings;
+/**
+ * What the Targets tab saves (costing:setAlertSettings): the thresholds
+ * (business setting 'costing.alerts') and the key items, which are written
+ * onto the ingredients (count_weekly) in the same transaction.
+ */
+export interface SetCostAlertSettingsRequest {
+  jumpBps: number;
+  impactWeekCents: number;
+  keyIngredientIds: string[];
+}
 
 /** One dish a price change moved, and what that costs per week at this till's sales. */
 export interface CostAlertItemMove {

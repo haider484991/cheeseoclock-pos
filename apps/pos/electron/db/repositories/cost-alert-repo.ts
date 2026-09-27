@@ -245,7 +245,7 @@ function evaluate(db: AppDatabase, writes: readonly PriceWritten[], actor: Actor
     byIngredient.set(w.ingredientId, first ? { ...w, before: first.before } : w);
   }
   const book = loadPriceBook(db);
-  const settings = loadAlertSettings(db, book.ingredients.values());
+  const settings = loadAlertSettings(db);
   let ctx: CostingContext | null = null;
   const context = (): CostingContext => (ctx ??= loadCostingContext(db, now));
   const written: string[] = [];

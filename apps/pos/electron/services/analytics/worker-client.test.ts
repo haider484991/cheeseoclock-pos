@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import type { BusinessReportRequest } from '@cheeseoclock/shared-types';
 import { AnalyticsWorkerClient, resolveWorkerPaths, unpackedPath, WorkerRunError, type WorkerLike } from './worker-client.js';
-import type { RunRequest, WorkerRequest } from './worker-protocol.js';
+import type { RunRequest, WarmRequest, WorkerRequest } from './worker-protocol.js';
 
 type Listener = (arg: never) => void;
 
@@ -22,6 +22,7 @@ type Listener = (arg: never) => void;
  */
 class FakeWorker implements WorkerLike {
   readonly sent: RunRequest[] = [];
+  readonly warmed: WarmRequest[] = [];
   closeAsked = false;
   terminated = false;
   exited = false;
@@ -31,6 +32,10 @@ class FakeWorker implements WorkerLike {
     if (msg.type === 'close') {
       this.closeAsked = true;
       if (!this.busy) queueMicrotask(() => this.exit(0));
+      return;
+    }
+    if (msg.type === 'warm') {
+      this.warmed.push(msg);
       return;
     }
     this.sent.push(msg);
@@ -115,6 +120,26 @@ describe('the Reports worker client', () => {
     latest().answer(9_999, { tab: 'nobody' });
     latest().answer(latest().sent[1]!.id, { tab: 'menu' });
     await expect(b).resolves.toEqual({ tab: 'menu' });
+  });
+
+  it('a stock take finished: the worker is told to work the card’s comparison out now (no answer, never queued ahead of a tab)', async () => {
+    const { client, latest } = setup();
+    const link = { on: false, stale: false, lastHeardAt: null };
+    // Not ready yet: nothing sent (the card works it out itself when asked).
+    client.warm(link);
+    client.start();
+    client.warm(link);
+    expect(latest().warmed).toHaveLength(0);
+    latest().ready();
+    const tab = client.run('overview', DAY);
+    client.warm(link);
+    expect(latest().warmed).toEqual([expect.objectContaining({ type: 'warm', link })]);
+    // The tab the worker is on is still answered by its id.
+    latest().answer(latest().sent[0]!.id, 'figures');
+    await expect(tab).resolves.toBe('figures');
+    // Gone: nothing sent, nothing thrown.
+    await client.stop();
+    expect(() => client.warm(link)).not.toThrow();
   });
 
   it('asks made while the worker starts wait for it', async () => {

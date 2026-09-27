@@ -16,8 +16,9 @@ import {
   type ReportTabData,
   type ReportTabFigures,
   type ReportTrends,
+  type ReportVariance,
 } from '@cheeseoclock/shared-types';
-import { dayNoteInputSchema, removeDayNoteInputSchema, setDaypartsInputSchema } from '@cheeseoclock/shared-schemas';
+import { dayNoteInputSchema, removeDayNoteInputSchema, setDaypartsInputSchema, varianceInputSchema } from '@cheeseoclock/shared-schemas';
 import type { AppDatabase } from '../../db/connection.js';
 import { requireCapability, REFUSED } from '../guards.js';
 import { getLowStock } from '../../services/inventory-service.js';
@@ -29,6 +30,8 @@ import { ownerWeekForLogin, type OwnerWeekJob } from '../../services/analytics/o
 import { daypartsInForce } from '../../services/analytics/heatmap.js';
 import { addDayNote, removeDayNote } from '../../db/repositories/day-note-repo.js';
 import { setBusinessSetting } from '../../db/repositories/business-settings-repo.js';
+import { VARIANCE_MAIN_THREAD_MAX_DAYS, varianceWindowDays, type VarianceJob } from '../../services/analytics/stock-control.js';
+import { readTillLink } from '../../services/till-link.js';
 
 /**
  * The Reports page (costing spec Phase 3): one channel per tab —
@@ -61,6 +64,14 @@ import { setBusinessSetting } from '../../db/repositories/business-settings-repo
  *    settings.manage).
  * Without the worker, the owner's week (a fortnight) is worked out here;
  * the trends leave out every stretch over 31 days and say so.
+ *
+ * Stock takes (costing spec Phase 8): reports:variance, "used vs should
+ * have used" between two stock takes and the real food cost between two
+ * full ones — report.view and COST_CAPABILITY, like Food cost & stock;
+ * worked out in the worker (without it, here, for a window of 31 days or
+ * less). The second-till link's state is read here and handed to the
+ * worker with the job (it can't read the sync settings), as it is for the
+ * owner's week's stock-variance line.
  */
 
 /** Longest period one report may cover — two years and a bit (leap day, comparison). */
@@ -235,13 +246,30 @@ export function registerReportsHandlers(ctx: HandlerContext, deps: ReportsHandle
   defineHandler('reports:foodStock', ctx, (_ctx, payload) => tab('foodStock', payload));
   defineHandler('reports:team', ctx, (_ctx, payload) => tab('team', payload));
 
+  // ---- Stock takes: used vs should have used (costing spec Phase 8) ----
+
+  defineHandler('reports:variance', ctx, async (_ctx, payload) => {
+    const s = requireCapability('report.view', REFUSED.reports);
+    if (!hasCapability(s.role, COST_CAPABILITY)) throw new IpcGuardError({ code: 'forbidden', message: REFUSED.costs });
+    const parsed = varianceInputSchema.safeParse(payload ?? {});
+    if (!parsed.success) return validationFailed(parsed.error);
+    const job: VarianceJob = { fromCountId: parsed.data.fromCountId ?? null, toCountId: parsed.data.toCountId ?? null, link: readTillLink(ctx.db) };
+    const got = await fromWorker(deps.worker(), 'variance', job);
+    if ('data' in got) return ok(got.data as ReportVariance);
+    // The fallback: the till's own connection, for a window of a month at most.
+    if (varianceWindowDays(ctx.db, job) > VARIANCE_MAIN_THREAD_MAX_DAYS) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: got.whyNot, retryable: true });
+    }
+    return ok(buildAnalytics(ctx.db, 'variance', job, new Date(), { longReads: false }) as ReportVariance);
+  });
+
   // ---- The owner's week (costing spec Phase 7) ----
 
   /** The Dashboard card and the weekly sheet: report.view; the cost lines for COST_CAPABILITY only. Never profit. */
   defineHandler('reports:ownerWeek', ctx, async (_ctx, payload) => {
     const s = requireCapability('report.view', REFUSED.reports);
     const canSeeCosts = hasCapability(s.role, COST_CAPABILITY);
-    const job: OwnerWeekJob = { week: weekOf(payload), withCosts: canSeeCosts, sheet: forSheet(payload) };
+    const job: OwnerWeekJob = { week: weekOf(payload), withCosts: canSeeCosts, sheet: forSheet(payload), link: readTillLink(ctx.db) };
     const { data, engine } = await workOutExtra(ctx.db, deps.worker(), 'ownerWeek', job);
     return ok(ownerWeekForLogin({ ...(data as Omit<OwnerWeek, 'engine'>), engine }, canSeeCosts));
   });

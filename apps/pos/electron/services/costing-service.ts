@@ -921,20 +921,35 @@ export function getCostAlerts(db: AppDatabase, limit = ALERTS_LISTED): CostAlert
 
 // ------------------------------------------------------ the alert settings --
 
-function liveIngredientNames(db: AppDatabase): Array<{ id: string; name: string }> {
-  return db.prepare(`SELECT id, name FROM ingredients WHERE deleted_at IS NULL ORDER BY name`).all() as Array<{ id: string; name: string }>;
+function liveIngredientNames(db: AppDatabase): Array<{ id: string; name: string; key: boolean }> {
+  return (
+    db.prepare(`SELECT id, name, count_weekly FROM ingredients WHERE deleted_at IS NULL ORDER BY name`).all() as Array<{
+      id: string;
+      name: string;
+      count_weekly: number;
+    }>
+  ).map((i) => ({ id: i.id, name: i.name, key: Number(i.count_weekly) === 1 }));
 }
 
-/** The thresholds in force now (the saved ones, or the defaults with the key ingredients suggested by name). */
-export function loadAlertSettings(db: AppDatabase, ingredients?: Iterable<{ id: string; name: string }>): ResolvedAlertSettings {
+/** The key items: ONE list, on the ingredients (ingredients.count_weekly, costing spec Phase 8). */
+export function keyItemIds(db: AppDatabase): string[] {
+  return (db.prepare(`SELECT id FROM ingredients WHERE deleted_at IS NULL AND count_weekly = 1`).all() as Array<{ id: string }>).map((i) => i.id);
+}
+
+/**
+ * The thresholds in force now (the saved ones, or the defaults) and the key
+ * items — the ingredients marked as such, the same list the weekly stock
+ * take counts (never an old list kept inside the setting).
+ */
+export function loadAlertSettings(db: AppDatabase): ResolvedAlertSettings {
   const saved = getBusinessSetting(db, 'costing.alerts');
-  return resolveAlertSettings(saved?.value ?? null, ingredients ?? liveIngredientNames(db));
+  return resolveAlertSettings(saved?.value ?? null, keyItemIds(db));
 }
 
 export function getCostAlertSettings(db: AppDatabase): CostAlertSettingsView {
   const ingredients = liveIngredientNames(db);
   const saved = getBusinessSetting(db, 'costing.alerts');
-  const s = resolveAlertSettings(saved?.value ?? null, ingredients);
+  const s = resolveAlertSettings(saved?.value ?? null, ingredients.filter((i) => i.key).map((i) => i.id));
   return {
     jumpBps: s.jumpBps,
     impactWeekCents: s.impactWeekCents,

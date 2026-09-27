@@ -27,6 +27,20 @@ export function presetSessionState(key: string, value: unknown): void {
 }
 
 /**
+ * The other end of a one-shot deep link: what was preset under `key`, as
+ * the screen first renders, then forgotten (coming back to the screen later
+ * does not repeat it). Read in the initializer and forgotten in an effect,
+ * so React's strict mode, which runs the initializer twice, still sees it.
+ */
+export function useOneShotLink<T>(key: string): T | undefined {
+  const [link] = useState<T | undefined>(() => sessionMemory.get(key) as T | undefined);
+  useEffect(() => {
+    sessionMemory.delete(key);
+  }, [key]);
+  return link;
+}
+
+/**
  * The other end of a deep link's "open this one" (presetSessionState(key,
  * id) before navigating here): once `items` has loaded, `open` is called
  * with the item of that id, once, and the link is forgotten — coming back to

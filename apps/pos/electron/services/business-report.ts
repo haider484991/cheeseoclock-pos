@@ -30,6 +30,7 @@ import type {
 import { isDeliveryChargeName } from '@cheeseoclock/shared-types';
 import {
   emptyFoodCostTally,
+  type FoodCostTally,
   ingredientCostCents,
   mulDivRound,
   noteKindAnswer,
@@ -1063,6 +1064,28 @@ export const FOOD_COST_PLAIN_SALES_SQL = `
                            ELSE 0 END), 0) AS feeCost
     FROM l`;
 
+/**
+ * Their food and fee sales, what their fee lines cost and what all their
+ * kept cost rows add up to, in ONE pass over the period's orders (the two
+ * queries above in one, for getFoodSales — "used vs should have used" reads
+ * a whole window between two stock takes in the Reports worker, on a budget).
+ * Params: since, until, fee items (JSON).
+ */
+export const FOOD_SALES_PLAIN_SQL = `
+  WITH ${PLAIN_ORDERS},
+       l AS (SELECT oi.id AS lineId, oi.line_total_cents AS lineTotal, ${FEE_LINE} AS isFee
+               FROM po CROSS JOIN order_items oi
+              WHERE oi.order_id = po.id AND oi.deleted_at IS NULL)
+  SELECT COUNT(*) AS lines,
+         COALESCE(SUM(CASE WHEN isFee THEN 0 ELSE lineTotal END), 0) AS food,
+         COALESCE(SUM(CASE WHEN isFee THEN lineTotal ELSE 0 END), 0) AS fee,
+         COALESCE(SUM(CASE WHEN isFee THEN (SELECT COALESCE(SUM(fc.cost_cents), 0) FROM order_item_costs fc
+                                             WHERE fc.order_item_id = l.lineId AND fc.deleted_at IS NULL)
+                           ELSE 0 END), 0) AS feeCost,
+         (SELECT COALESCE(SUM(c.cost_cents), 0) FROM po CROSS JOIN order_item_costs c
+           WHERE c.order_id = po.id AND c.deleted_at IS NULL) AS cost
+    FROM l`;
+
 /** What all their kept cost rows add up to (idx_order_item_costs_order). Params: since, until. */
 export const FOOD_COST_PLAIN_COST_SQL = `
   WITH ${PLAIN_ORDERS}
@@ -1406,18 +1429,13 @@ function unpaidOrderIds(db: AppDatabase, range: ReportRange, statuses: readonly 
 const IN_PROGRESS = ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'] as const;
 
 /**
- * Food cost for one period (spec 4.5), for the orders saved on this till:
- *  - food cost of sales: the cost each counted order kept with its sale,
- *    plus, for orders that kept none, an estimate from the stock they took
- *    at the prices of the time (the price in force at each take, from the
- *    price history) — dated by the ORDER's trading day, like the sales;
- *  - the food cost % on the sales whose cost is fully known, with how much
- *    of the food sales that is ("costs known for 94%"), and the rest listed;
- *  - waste by reason, food sent out but never paid for, orders from earlier
- *    days still open.
+ * Food sales and what they cost (costing spec 4.5), without waste or unpaid
+ * food: the cost each sale kept, and estimates for orders with none. What
+ * getFoodCost starts from, and all "used vs should have used" needs of it
+ * (stock-control.ts: food sales over the window, and what they should have
+ * cost for the real food cost).
  */
-export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date()): ReportFoodCost {
-  const pricing = lazyPricing(db);
+function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pricing, opts: { known: boolean } = { known: true }): FoodCostTally {
   const menu = menuLookup(db);
   const [since, until] = args(range);
   const t = emptyFoodCostTally();
@@ -1425,14 +1443,20 @@ export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date(
   // 1. Plain orders (nothing to share out, cost kept): each line's net is
   //    its menu price, so their sales and costs are added up in SQL; only
   //    their food lines that are not fully costed are read one by one.
-  const sales = db.prepare(FOOD_COST_PLAIN_SALES_SQL).get(since, until, menu.feeItemsJson) as {
+  // Food sales alone (getFoodSales): the two sums in one pass over the orders.
+  const one = opts.known
+    ? null
+    : (db.prepare(FOOD_SALES_PLAIN_SQL).get(since, until, menu.feeItemsJson) as { lines: number; food: number; fee: number; feeCost: number; cost: number });
+  const sales = one ?? (db.prepare(FOOD_COST_PLAIN_SALES_SQL).get(since, until, menu.feeItemsJson) as {
     lines: number;
     food: number;
     fee: number;
     feeCost: number;
-  };
-  const allCost = db.prepare(FOOD_COST_PLAIN_COST_SQL).get(since, until) as { cost: number };
-  const gaps = db.prepare(FOOD_COST_PLAIN_GAPS_SQL).all(since, until, menu.feeItemsJson) as Array<{
+  });
+  const allCost = one ?? (db.prepare(FOOD_COST_PLAIN_COST_SQL).get(since, until) as { cost: number });
+  // Which of their lines are not fully costed: only for how much is known
+  // (and the missing list) — food sales and their cost do not depend on it.
+  const gaps = (opts.known ? db.prepare(FOOD_COST_PLAIN_GAPS_SQL).all(since, until, menu.feeItemsJson) : []) as Array<{
     itemId: string | null;
     soldName: string;
     qty: number;
@@ -1514,6 +1538,35 @@ export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date(
       estimate: estimates.get(o.id) ?? null,
     });
   }
+
+  return t;
+}
+
+/**
+ * Food sales (before tax, after discounts and part refunds) and what they
+ * cost, over a period — the same figures as getFoodCost's, without how much
+ * of it is known, waste or unpaid food ("used vs should have used" needs no
+ * more, and reads them for a whole window between two stock takes).
+ */
+export function getFoodSales(db: AppDatabase, range: ReportRange): Pick<ReportFoodCost, 'foodSalesCents' | 'costOfSalesCents'> {
+  const t = tallyFoodSales(db, range, lazyPricing(db), { known: false });
+  return { foodSalesCents: t.foodSalesCents, costOfSalesCents: t.costOfSalesCents };
+}
+
+/**
+ * Food cost for one period (spec 4.5), for the orders saved on this till:
+ *  - food cost of sales: the cost each counted order kept with its sale,
+ *    plus, for orders that kept none, an estimate from the stock they took
+ *    at the prices of the time (the price in force at each take, from the
+ *    price history) — dated by the ORDER's trading day, like the sales;
+ *  - the food cost % on the sales whose cost is fully known, with how much
+ *    of the food sales that is ("costs known for 94%"), and the rest listed;
+ *  - waste by reason, food sent out but never paid for, orders from earlier
+ *    days still open.
+ */
+export function getFoodCost(db: AppDatabase, range: ReportRange, now = new Date()): ReportFoodCost {
+  const pricing = lazyPricing(db);
+  const t = tallyFoodSales(db, range, pricing);
 
   const waste = getWaste(db, range, pricing);
   const sentNotPaid = foodOfOrders(db, unpaidOrderIds(db, range, ['served', 'delivered']), pricing);

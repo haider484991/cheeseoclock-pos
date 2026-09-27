@@ -18,8 +18,9 @@
  *   - items over target: n̄ per week × (cost − target × price);
  *   - missing costs:   the week's sales they touch × the category target;
  *   - price alerts:    each alert not seen yet, at its rupees per week.
- * Later phases add their own source to the list: stock variance over 3%
- * (Phase 8), leakage flags (Phase 10).
+ * Phase 8 adds stock variance: the latest two stock takes, when more than
+ * 3% of food sales went unexplained (stock-control.ts, kept for the day).
+ * Later phases add their own source to the list: leakage flags (Phase 10).
  *
  * "Do this" works from the 28 WHOLE trading days before today (its rupees
  * per week are a quarter of them): read once a trading day and kept
@@ -34,7 +35,7 @@
  * Every figure is for the orders on THIS till (costing spec D14). Read-only;
  * never loads Electron.
  */
-import type { DoThisItem, OwnerWeek, OwnerWeekItem, OwnerWeekSheet, OwnerWeekWhich } from '@cheeseoclock/shared-types';
+import type { DoThisItem, OwnerWeek, OwnerWeekItem, OwnerWeekSheet, OwnerWeekWhich, TillLinkState } from '@cheeseoclock/shared-types';
 import {
   collectDoThis,
   dayYmd,
@@ -45,6 +46,7 @@ import {
   tradingDayOfMs,
   tradingDayStartMs,
   trendChange,
+  varianceWeekCents,
   type DoThisSource,
   type PlateCost,
   type ResolvedTarget,
@@ -55,7 +57,6 @@ import {
   flagFor,
   getCostAlerts,
   itemsOnMenu,
-  loadAlertSettings,
   loadCostingContextWith,
   loadCostingSales,
   MIX_WINDOW_DAYS,
@@ -69,6 +70,7 @@ import {
 } from '../costing-service.js';
 import { COUNTED, IN_RANGE, firstOrderMs } from './sql.js';
 import { salesIn } from './trends.js';
+import { isVarianceDoThis, latestVariance, warmLatestVariance } from './stock-control.js';
 
 /**
  * What the main process asks for: the week, whether this login may see
@@ -81,6 +83,12 @@ export interface OwnerWeekJob {
   week: OwnerWeekWhich;
   withCosts: boolean;
   sheet?: boolean;
+  /**
+   * The second-till link as the main process sees it (the worker can't read
+   * the sync switch): stock variance is left out when two tills take orders
+   * and the link is off. Omitted: off.
+   */
+  link?: TillLinkState;
 }
 
 /** How many dishes each end of the printed sheet lists. */
@@ -102,6 +110,9 @@ export interface OwnerWeekCtx {
   now: Date;
   costing: () => CostingContext;
   dishes: () => Dish[];
+  link: TillLinkState;
+  /** False: the main process working it out itself (no worker): nothing that reads over 31 days. */
+  longReads: boolean;
 }
 
 /** The 28 whole trading days' sales, per connection (the worker keeps one for its life), for one trading day. */
@@ -122,17 +133,27 @@ export function wholeDaysSales(db: AppDatabase, now: Date): CostingSales {
   return sales;
 }
 
-/** Read the day's sales ahead of the first tap (the worker, as it starts and as each trading day begins). */
-export function warmOwnerWeek(db: AppDatabase, now: Date): void {
+/**
+ * Read the day's sales ahead of the first tap (the worker, as it starts and
+ * as each trading day begins), and the latest two stock takes' variance
+ * (Phase 8) with the link as the main process last said it is (off, as the
+ * shop runs, until told).
+ */
+export function warmOwnerWeek(db: AppDatabase, now: Date, link: TillLinkState = LINK_OFF): void {
   db.transaction(() => wholeDaysSales(db, now))();
+  warmLatestVariance(db, link, now);
 }
 
-function ownerWeekCtx(db: AppDatabase, now: Date): OwnerWeekCtx {
+const LINK_OFF: TillLinkState = { on: false, stale: false, lastHeardAt: null };
+
+function ownerWeekCtx(db: AppDatabase, now: Date, link: TillLinkState, longReads: boolean): OwnerWeekCtx {
   let costing: CostingContext | null = null;
   let dishes: Dish[] | null = null;
   const ctx: OwnerWeekCtx = {
     db,
     now,
+    link,
+    longReads,
     costing: () => (costing ??= loadCostingContextWith(db, wholeDaysSales(db, now))),
     dishes: () => {
       if (dishes) return dishes;
@@ -149,22 +170,23 @@ function ownerWeekCtx(db: AppDatabase, now: Date): OwnerWeekCtx {
 
 // ----------------------------------------------------------------- sources --
 
-/** A key ingredient at or under its low-stock level: pinned first, no rupees (report.view). */
+/**
+ * A key item (ingredients.count_weekly — the ONE list the weekly stock take
+ * counts and the price alerts watch) at or under its low-stock level on this
+ * till's count: pinned first, no rupees (report.view).
+ */
 const lowStockSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
   kind: 'low_stock',
   cost: false,
   collect: ({ db }) => {
-    const keys = loadAlertSettings(db).keyIds;
-    if (keys.size === 0) return [];
     const low = db
       .prepare(
         `SELECT id, name, unit, current_qty AS qty, low_threshold AS low
            FROM ingredients
-          WHERE deleted_at IS NULL AND is_active = 1 AND current_qty <= low_threshold`,
+          WHERE deleted_at IS NULL AND is_active = 1 AND count_weekly = 1 AND current_qty <= low_threshold`,
       )
       .all() as Array<{ id: string; name: string; unit: string; qty: number; low: number }>;
     return low
-      .filter((i) => keys.has(i.id))
       .map((i) => ({
         kind: 'low_stock' as const,
         key: `low_stock:${i.id}`,
@@ -274,11 +296,47 @@ const priceAlertsSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
 };
 
 /**
- * The "Do this" sources, in no particular order (the ranking orders the
- * lines). Later phases add theirs here: Phase 8 stock variance over 3%,
- * Phase 10 leakage flags.
+ * The latest two full or key-items stock takes, about a week or more apart,
+ * when more than 3% of the food sales between them went unexplained
+ * (costing spec 4.17, Phase 8): what went, spread over the weeks between
+ * them. Left out when two tills take orders with the link off
+ * (stock-control.ts latestVariance, isVarianceDoThis).
  */
-export const DO_THIS_SOURCES: Array<DoThisSource<OwnerWeekCtx, DoThisItem>> = [lowStockSource, redItemsSource, missingCostsSource, priceAlertsSource];
+const stockVarianceSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
+  kind: 'stock_variance',
+  cost: true,
+  collect: ({ db, now, link, longReads }) => {
+    const v = latestVariance(db, link, now, { longReads });
+    if (!isVarianceDoThis(v)) return [];
+    return [
+      {
+        kind: 'stock_variance',
+        key: `stock_variance:${v.toCountId}`,
+        weekCents: varianceWeekCents(v.totalCents, v.windowMs),
+        pinned: false,
+        cost: true,
+        fromCountId: v.fromCountId,
+        toCountId: v.toCountId,
+        varianceBps: v.varianceBps,
+        totalCents: v.totalCents,
+        topIngredient: v.topIngredient,
+        countedAt: v.countedAt,
+      },
+    ];
+  },
+};
+
+/**
+ * The "Do this" sources, in no particular order (the ranking orders the
+ * lines). Later phases add theirs here: Phase 10 leakage flags.
+ */
+export const DO_THIS_SOURCES: Array<DoThisSource<OwnerWeekCtx, DoThisItem>> = [
+  lowStockSource,
+  redItemsSource,
+  missingCostsSource,
+  priceAlertsSource,
+  stockVarianceSource,
+];
 
 // ------------------------------------------------------------------- sheet --
 
@@ -320,13 +378,13 @@ function sheetDishes(ctx: OwnerWeekCtx, units: Map<string, number>): Pick<OwnerW
 // -------------------------------------------------------------------- week --
 
 /** The owner's week at `now`, as a login that may (or may not) see costs is to get it. */
-export function buildOwnerWeek(db: AppDatabase, job: OwnerWeekJob, now: Date): Omit<OwnerWeek, 'engine'> {
+export function buildOwnerWeek(db: AppDatabase, job: OwnerWeekJob, now: Date, opts: { longReads: boolean } = { longReads: true }): Omit<OwnerWeek, 'engine'> {
   const w = ownerWeekWindows(job.week, now.getTime());
   const first = firstOrderMs(db);
   const current = salesIn(db, w.current);
   const previous = tillHadData(w.previous, first) ? salesIn(db, w.previous) : null;
   const range = { sinceIso: iso(w.current.sinceMs), untilIso: iso(w.current.untilMs) };
-  const ctx = ownerWeekCtx(db, now);
+  const ctx = ownerWeekCtx(db, now, job.link ?? LINK_OFF, opts.longReads);
   const list = collectDoThis(DO_THIS_SOURCES, ctx, { canSeeCosts: job.withCosts });
 
   let costs: OwnerWeek['costs'] = null;
@@ -345,8 +403,27 @@ export function buildOwnerWeek(db: AppDatabase, job: OwnerWeekJob, now: Date): O
       // The sheet's five numbers are all against last week (costing spec §5): food cost and waste too,
       // over the same stretch the sales are compared with. None when the till has no figures for then.
       const before = previous ? getFoodCost(db, { sinceIso: iso(w.previous.sinceMs), untilIso: iso(w.previous.untilMs) }, now) : null;
+      // The last stock-take variance (Phase 8), kept for the day with "Do this"'s.
+      let lastStockTake: OwnerWeekSheet['lastStockTake'] = null;
+      try {
+        const v = latestVariance(db, ctx.link, now, { longReads: ctx.longReads });
+        lastStockTake = v
+          ? {
+              sinceIso: v.sinceIso,
+              untilIso: v.countedAt,
+              compared: v.compared,
+              totalCents: v.totalCents,
+              varianceBps: v.varianceBps,
+              band: v.band,
+              topIngredient: v.topIngredient,
+            }
+          : null;
+      } catch {
+        list.failed.push('stock_take');
+      }
       sheet = {
         ...dishes,
+        lastStockTake,
         wasteByReason: food.wasteByReason,
         previousCosts: before
           ? { foodCostBps: before.foodCostBps, coverageBps: before.coverageBps, wasteCents: before.wasteCents, hasCosts: before.hasCosts }

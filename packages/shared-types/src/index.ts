@@ -26,3 +26,4 @@ export * from './delivery-areas.js';
 export * from './reports.js';
 export * from './alerts.js';
 export * from './costing.js';
+export * from './stock-count.js';

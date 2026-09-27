@@ -17,10 +17,12 @@ import { Button, Card, cn } from '@cheeseoclock/ui';
 import {
   COST_CAPABILITY,
   REPORT_TAB_LABEL,
+  STOCK_COUNT_SCOPE_LABEL,
   type DayNoteInput,
   type OwnerWeekWhich,
   type ReportTab,
   type ReportTabData,
+  type StockCountSummary,
 } from '@cheeseoclock/shared-types';
 import {
   BarChart3,
@@ -39,7 +41,20 @@ import {
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
-import { autoRefreshes, fmtDateInput, periodFor, type RangePreset, type ReportPeriod } from './dateRange';
+import {
+  autoRefreshes,
+  fmtDateInput,
+  fmtMoment,
+  periodFor,
+  pickStockTakePair,
+  stockTakesAfterToChange,
+  stockTakesPeriod,
+  type RangePreset,
+  type ReportPeriod,
+} from './dateRange';
+import { useOneShotLink } from '../../components/list';
+import { REPORTS_DEEP_LINK, type ReportsDeepLink } from '../costing/deepLinks';
+import type { VarianceView } from './tabs/VarianceSection';
 import {
   buildPrintEverything,
   buildTabCsv,
@@ -63,7 +78,7 @@ import type { DayNoteEditor } from './tabs/WhenExtras';
 import { buildWeeklySheet, WeeklySheetButtons } from './WeeklySheet';
 import { dayNoteAddedText } from './ownerWeekFormat';
 
-const PRESETS: Array<{ id: RangePreset; label: string }> = [
+const PRESETS: Array<{ id: RangePreset; label: string; costsOnly?: boolean }> = [
   { id: 'today', label: 'Today' },
   { id: 'yesterday', label: 'Yesterday' },
   { id: 'thisWeek', label: 'This week' },
@@ -74,7 +89,14 @@ const PRESETS: Array<{ id: RangePreset; label: string }> = [
   { id: 'last12', label: 'Last 12 months' },
   { id: 'lastYear', label: 'Last year' },
   { id: 'custom', label: 'Pick dates' },
+  // Stock takes are the owner's and managers' (costing spec Phase 8): only with costs.
+  { id: 'stockTakes', label: 'Between stock takes', costsOnly: true },
 ];
+
+/** A finished stock take as the "Between stock takes" pickers name it. */
+function stockTakeLabel(c: StockCountSummary): string {
+  return `${c.finishedAt ? fmtMoment(c.finishedAt) : '-'} · ${STOCK_COUNT_SCOPE_LABEL[c.scope]}`;
+}
 
 const TAB_ICON: Record<ReportTab, LucideIcon> = {
   overview: BarChart3,
@@ -117,9 +139,14 @@ const TRENDS_KEY = ['reports', 'trends'] as const;
 export function ReportsPage() {
   const canSeeCosts = useSessionStore((s) => s.can(COST_CAPABILITY));
   const tabs = useMemo(() => visibleReportTabs(canSeeCosts), [canSeeCosts]);
-  const [chosenTab, setChosenTab] = useState<ReportTab>(() => readLastTab(browserStorage(), visibleReportTabs(canSeeCosts)));
+  // A link from a finished stock take or the Dashboard: Food cost & stock, between those two stock takes.
+  const deepLink = useOneShotLink<ReportsDeepLink>(REPORTS_DEEP_LINK);
+  const [chosenTab, setChosenTab] = useState<ReportTab>(() =>
+    deepLink ? 'foodStock' : readLastTab(browserStorage(), visibleReportTabs(canSeeCosts)),
+  );
   const tab: ReportTab = tabs.includes(chosenTab) ? chosenTab : 'overview';
-  const [preset, setPreset] = useState<RangePreset>('today');
+  const [preset, setPreset] = useState<RangePreset>(deepLink ? 'stockTakes' : 'today');
+  const [pickedPair, setPickedPair] = useState<{ fromCountId: string; toCountId: string } | null>(deepLink?.stockTakes ?? null);
   const [now, setNow] = useState(() => new Date());
   const [customFrom, setCustomFrom] = useState(() => fmtDateInput(new Date().toISOString()));
   const [customTo, setCustomTo] = useState(() => fmtDateInput(new Date().toISOString()));
@@ -129,10 +156,30 @@ export function ReportsPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const period = useMemo(
-    () => periodFor(preset, now, preset === 'custom' ? { from: customFrom, to: customTo } : undefined),
-    [preset, now, customFrom, customTo],
+  // "Between stock takes": the finished stock takes to pick from, newest first.
+  const stockCounts = useQuery({
+    queryKey: ['inventory', 'stockCounts', 'list'],
+    queryFn: () => ipc.inventory.stockCountList({ limit: 200 }),
+    enabled: canSeeCosts && preset === 'stockTakes',
+  });
+  const doneCounts = useMemo(
+    () =>
+      (stockCounts.data ?? [])
+        .filter((c) => c.status === 'done' && c.finishedAt !== null)
+        .sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? '')),
+    [stockCounts.data],
   );
+  const pair = useMemo(() => pickStockTakePair(doneCounts, pickedPair), [doneCounts, pickedPair]);
+
+  const period = useMemo(() => {
+    if (preset === 'stockTakes') {
+      // Until two stock takes are finished there is no window: today, with a note.
+      return pair
+        ? stockTakesPeriod({ id: pair.from.id, finishedAt: pair.from.finishedAt ?? '' }, { id: pair.to.id, finishedAt: pair.to.finishedAt ?? '' })
+        : periodFor('today', now);
+    }
+    return periodFor(preset, now, preset === 'custom' ? { from: customFrom, to: customTo } : undefined);
+  }, [preset, now, customFrom, customTo, pair]);
 
   // A running period ("today so far") moves with the clock: the comparison
   // follows ("yesterday by this time") and the figures refresh every minute —
@@ -165,6 +212,30 @@ export function ReportsPage() {
     queryFn: () => ipc.reports.lowStock(),
     enabled: tab === 'foodStock',
   });
+  // Food cost & stock, "Between stock takes" (costing spec Phase 8): used vs should have used, its own channel.
+  const stockTakes = period.stockTakes;
+  const varianceQ = useQuery({
+    queryKey: ['reports', 'variance', stockTakes?.fromCountId ?? null, stockTakes?.toCountId ?? null],
+    queryFn: () => ipc.reports.variance(stockTakes),
+    enabled: tab === 'foodStock' && stockTakes !== undefined,
+    retry: false,
+  });
+  const variance: VarianceView | null =
+    tab !== 'foodStock' || preset !== 'stockTakes'
+      ? null
+      : stockTakes
+        ? {
+            data: varianceQ.data,
+            loading: varianceQ.isFetching,
+            error: varianceQ.isError ? (varianceQ.error instanceof Error ? varianceQ.error.message : 'It could not be worked out.') : null,
+          }
+        : // "Between stock takes" picked, but fewer than two are finished.
+          {
+            data: undefined,
+            loading: stockCounts.isLoading,
+            error: stockCounts.isLoading ? null : 'This needs two finished stock takes. Count under Inventory → Stock takes, and again a week later.',
+          };
+  const varianceForPaper = stockTakes && varianceQ.data ? varianceQ.data : undefined;
   // Overview's trend strip and 12 months (costing spec Phase 7): not tied to
   // the period; refreshed every 5 minutes while on screen.
   const trends = useQuery({
@@ -267,7 +338,20 @@ export function ReportsPage() {
             .fetchQuery({ queryKey: TRENDS_KEY, queryFn: () => ipc.reports.trends(), staleTime: 5 * 60_000, retry: false })
             .catch(() => undefined)
         : undefined;
-      setPrintJob({ id: Date.now(), html: buildPrintEverything(all, period, new Date(), { trends: trendsNow }) });
+      // "Between stock takes": what was used against what should have been goes on the paper too.
+      const between = period.stockTakes;
+      const varianceNow =
+        between && tabs.includes('foodStock')
+          ? await queryClient
+              .fetchQuery({
+                queryKey: ['reports', 'variance', between.fromCountId, between.toCountId],
+                queryFn: () => ipc.reports.variance(between),
+                staleTime: 60_000,
+                retry: false,
+              })
+              .catch(() => undefined)
+          : undefined;
+      setPrintJob({ id: Date.now(), html: buildPrintEverything(all, period, new Date(), { trends: trendsNow, variance: varianceNow }) });
     } catch (e) {
       toast({ title: 'Could not print everything', description: e instanceof Error ? e.message : 'Please try again.', variant: 'error' });
     } finally {
@@ -288,7 +372,7 @@ export function ReportsPage() {
             <Button
               variant="secondary"
               disabled={!result || stale}
-              onClick={() => result && setPrintJob({ id: Date.now(), html: printTab(result, { trends: trends.data }) })}
+              onClick={() => result && setPrintJob({ id: Date.now(), html: printTab(result, { trends: trends.data, variance: varianceForPaper }) })}
             >
               <Printer className="h-4 w-4" />
               Print this tab
@@ -296,7 +380,7 @@ export function ReportsPage() {
             <Button
               variant="secondary"
               disabled={!result || stale}
-              onClick={() => result && downloadText(csvFileName(result.period, result.tab), csvTab(result, { trends: trends.data }))}
+              onClick={() => result && downloadText(csvFileName(result.period, result.tab), csvTab(result, { trends: trends.data, variance: varianceForPaper }))}
             >
               <FileSpreadsheet className="h-4 w-4" />
               Download for Excel
@@ -310,7 +394,7 @@ export function ReportsPage() {
 
         <Card className="space-y-3">
           <div className="flex flex-wrap gap-2" role="group" aria-label="Period">
-            {PRESETS.map((p) => (
+            {PRESETS.filter((p) => !p.costsOnly || canSeeCosts).map((p) => (
               <button
                 key={p.id}
                 type="button"
@@ -327,6 +411,52 @@ export function ReportsPage() {
               </button>
             ))}
           </div>
+
+          {preset === 'stockTakes' && (
+            <div className="flex flex-wrap items-center gap-3">
+              {pair ? (
+                <>
+                  <label className="flex items-center gap-2 text-sm font-medium">
+                    From
+                    <select
+                      value={pair.from.id}
+                      onChange={(e) => setPickedPair({ fromCountId: e.target.value, toCountId: pair.to.id })}
+                      className="h-11 rounded-xl border border-stone-300 bg-white px-3 text-sm dark:border-stone-700 dark:bg-stone-800"
+                    >
+                      {doneCounts
+                        .filter((c) => (c.finishedAt ?? '') < (pair.to.finishedAt ?? ''))
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {stockTakeLabel(c)}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm font-medium">
+                    To
+                    <select
+                      value={pair.to.id}
+                      onChange={(e) => setPickedPair(stockTakesAfterToChange(doneCounts, pair.from.id, e.target.value))}
+                      className="h-11 rounded-xl border border-stone-300 bg-white px-3 text-sm dark:border-stone-700 dark:bg-stone-800"
+                    >
+                      {doneCounts.slice(0, -1).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {stockTakeLabel(c)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className="text-xs text-stone-500">Sales, waste and purchases below are for the time between the two.</span>
+                </>
+              ) : (
+                <span className="text-sm text-stone-600 dark:text-stone-300">
+                  {stockCounts.isLoading
+                    ? 'Loading the stock takes…'
+                    : 'This needs two finished stock takes (Inventory → Stock takes). Until then the figures below are for today.'}
+                </span>
+              )}
+            </div>
+          )}
 
           {preset === 'custom' && (
             <div className="flex flex-wrap items-center gap-3">
@@ -419,6 +549,7 @@ export function ReportsPage() {
                 sheetButtons: <WeeklySheetButtons onPrint={(w) => void printWeek(w)} busy={printingWeek} />,
               }}
               notes={noteEditor}
+              variance={variance}
             />
           ) : tab === 'overview' ? (
             <OverviewTab data={undefined} />
@@ -450,12 +581,14 @@ function TabBody({
   lowStockCount,
   trends,
   notes,
+  variance,
 }: {
   result: TabResult;
   now: Date;
   lowStockCount: number | null;
   trends: NonNullable<Parameters<typeof OverviewTab>[0]['trends']>;
   notes: DayNoteEditor;
+  variance: VarianceView | null;
 }) {
   switch (result.tab) {
     case 'overview':
@@ -467,7 +600,7 @@ function TabBody({
     case 'channels':
       return <ChannelsTab data={result.data} />;
     case 'foodStock':
-      return <FoodCostStockTab data={result.data} lowStockCount={lowStockCount} />;
+      return <FoodCostStockTab data={result.data} lowStockCount={lowStockCount} variance={variance} />;
     case 'team':
       return <TeamLeakageTab data={result.data} />;
   }

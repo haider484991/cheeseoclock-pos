@@ -25,6 +25,7 @@ const ing = (p: Partial<Ingredient> & Pick<Ingredient, 'name' | 'unit'>): Ingred
   sku: null,
   notes: null,
   isActive: true,
+  countWeekly: false,
   latestPrice: null,
   priceFromRecipe: false,
   sheetPrice: null,

@@ -104,6 +104,7 @@ describe('"Sheet says" (costing spec Phase 6)', () => {
     sku: null,
     notes: null,
     isActive: true,
+    countWeekly: false,
     latestPrice: {
       source: 'delivery',
       effectiveAt: '2026-09-20T08:00:00.000Z',

@@ -12,6 +12,7 @@ export {
   useListQuery,
   useSessionState,
   presetSessionState,
+  useOneShotLink,
   useDeepLinkOpen,
   useDebouncedValue,
   PAGE_SIZES,

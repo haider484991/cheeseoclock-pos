@@ -66,3 +66,21 @@ export function openBatchInInventory(navigate: Navigate, ingredientId: string): 
   presetSessionState('inv.batch.openId', ingredientId);
   navigate('/inventory');
 }
+
+/** The one-shot link Reports reads when it opens (ReportsPage). */
+export const REPORTS_DEEP_LINK = 'reports.deepLink';
+
+export interface ReportsDeepLink {
+  /** Food cost & stock, "Between stock takes", these two. */
+  stockTakes: { fromCountId: string; toCountId: string };
+}
+
+/**
+ * Reports → Food cost & stock, "Between stock takes", on these two stock
+ * takes: what was used against what should have been (a finished stock
+ * take's link, the Dashboard's "Do this" stock line).
+ */
+export function openStockVariance(navigate: Navigate, stockTakes: ReportsDeepLink['stockTakes']): void {
+  presetSessionState(REPORTS_DEEP_LINK, { stockTakes } satisfies ReportsDeepLink);
+  navigate('/reports');
+}

@@ -245,8 +245,10 @@ describe('Costing screens', () => {
     const owner = render(<TargetsTab />, [
       [['costing', 'targets'], TARGETS],
       [['costing', 'alertSettings'], ALERT_SETTINGS],
+      // How many tills take orders (Phase 8): one, the link off.
+      [['costing', 'tills'], { sellingTills: 1, isDefault: true, savedAt: null, link: { on: false, stale: false, lastHeardAt: null } }],
     ]);
-    for (const text of ['Price alerts', 'A key ingredient&#x27;s price moves more than', 'A bill this far from the usual price also asks', 'Key ingredients', 'Test chicken', 'suggested']) {
+    for (const text of ['Price alerts', 'A key ingredient&#x27;s price moves more than', 'A bill this far from the usual price also asks', 'Key items', 'Counted every week', 'Tills that take orders', 'Test chicken', 'suggested']) {
       expect(owner).toContain(text);
     }
     expect(owner).not.toContain('Only the owner can change the price alerts.');

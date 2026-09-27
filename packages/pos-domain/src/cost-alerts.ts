@@ -21,9 +21,10 @@ export const DEFAULT_ALERT_JUMP_BPS = PRICE_GUARD_BPS;
 export const DEFAULT_ALERT_IMPACT_WEEK_CENTS = 100_000;
 
 /**
- * The key ingredients the till suggests by name until the owner picks
- * (costing spec, owner question for Phase 8: mozzarella / Cheese Mix,
- * chicken, patties, dough / flour, oil and boxes).
+ * The key items the till suggests by name (costing spec, owner question for
+ * Phase 8: mozzarella / Cheese Mix, chicken, patties, dough / flour, oil and
+ * boxes): migration 0038 ticked these where no list had been saved, and the
+ * ingredient form ticks "Key item" for a new one that matches. Whole words.
  */
 const KEY_NAME = /\b(mozzarella|cheese\s*mix|chicken|patt(?:y|ies)|dough|flour|oil|box(?:es)?)\b/i;
 
@@ -34,27 +35,24 @@ export function suggestedKeyIngredient(name: string): boolean {
 export interface ResolvedAlertSettings {
   jumpBps: number;
   impactWeekCents: number;
+  /** The key items: ONE list, on the ingredients (ingredients.count_weekly, costing spec Phase 8). */
   keyIds: ReadonlySet<string>;
-  /** Nothing saved: the key ingredients are the suggestions by name. */
+  /** No thresholds saved yet: the defaults, and the key items as the till picked them by name. */
   keysSuggested: boolean;
 }
 
-/** The thresholds in force: what was saved, or the defaults with the suggested key ingredients. */
-export function resolveAlertSettings(
-  saved: CostAlertSettings | null,
-  ingredients: Iterable<{ id: string; name: string }>,
-): ResolvedAlertSettings {
-  if (saved) {
-    return {
-      jumpBps: saved.jumpBps,
-      impactWeekCents: saved.impactWeekCents,
-      keyIds: new Set(saved.keyIngredientIds),
-      keysSuggested: false,
-    };
-  }
-  const keyIds = new Set<string>();
-  for (const i of ingredients) if (suggestedKeyIngredient(i.name)) keyIds.add(i.id);
-  return { jumpBps: DEFAULT_ALERT_JUMP_BPS, impactWeekCents: DEFAULT_ALERT_IMPACT_WEEK_CENTS, keyIds, keysSuggested: true };
+/**
+ * The thresholds in force (what was saved, or the defaults) with the key
+ * items. The key items are the ingredients marked as such — never the old
+ * list a Phase 6 save kept inside the setting (migration 0038 moved it).
+ */
+export function resolveAlertSettings(saved: Pick<CostAlertSettings, 'jumpBps' | 'impactWeekCents'> | null, keyIds: Iterable<string>): ResolvedAlertSettings {
+  return {
+    jumpBps: saved?.jumpBps ?? DEFAULT_ALERT_JUMP_BPS,
+    impactWeekCents: saved?.impactWeekCents ?? DEFAULT_ALERT_IMPACT_WEEK_CENTS,
+    keyIds: new Set(keyIds),
+    keysSuggested: saved === null,
+  };
 }
 
 /** A move of more than the threshold, either way (null = nothing to compare with: never a jump). */

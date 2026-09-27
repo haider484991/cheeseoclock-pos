@@ -129,6 +129,13 @@ export interface Ingredient {
   notes: string | null;
   isActive: boolean;
   /**
+   * A KEY ITEM (ingredients.count_weekly, costing spec Phase 8): counted
+   * every week ("Key items" stock take), watched for price jumps (Costing →
+   * Alerts) and pinned on the Dashboard when it runs low. One list, kept on
+   * the ingredient.
+   */
+  countWeekly: boolean;
+  /**
    * The newest entry of its price history (where the price came from, and
    * the price before it). Only on the Ingredients list
    * (inventory:listIngredients, costs: COST_CAPABILITY); null when it has

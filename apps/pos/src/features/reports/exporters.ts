@@ -15,9 +15,10 @@ import {
   type ReportTab,
   type ReportTabData,
   type ReportTrends,
+  type ReportVariance,
   type TrendComparison,
 } from '@cheeseoclock/shared-types';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { formatCents, formatQty, staleLinkText } from '@cheeseoclock/pos-domain';
 import type { ReportPeriod } from './dateRange';
 import {
   CHANNEL_LABEL,
@@ -53,6 +54,15 @@ import { formatBps, thousandUnit } from '../costing/costingFormat';
 import { DAY_NOTE_TAG_LABEL } from '@cheeseoclock/shared-types';
 import { fmtDay, fmtMonth, WEEKDAYS } from './dateRange';
 import { TREND_LABEL, dayNoteText, daypartHoursText, heatmapShown, monthNote, trendChangeOf } from './ownerWeekFormat';
+import {
+  VARIANCE_BAND_LABEL,
+  actualCogsText,
+  lineVerdict,
+  signedCents,
+  signedQty,
+  varianceHeadline,
+  varianceWindowText,
+} from './varianceFormat';
 
 /** Some or all of the tabs, as fetched (for "Print everything"). */
 export type SomeReportTabs = { [K in ReportTab]?: ReportTabData[K] };
@@ -60,10 +70,13 @@ export type SomeReportTabs = { [K in ReportTab]?: ReportTabData[K] };
 /**
  * What a tab shows from its own channel rather than the tab's figures:
  * Overview's trend strip and 12 months (costing spec Phase 7,
- * reports:trends). Print and file follow the tab (D12), so they carry it too.
+ * reports:trends); Food cost & stock's "used vs should have used" between
+ * two stock takes (Phase 8, reports:variance). Print and file follow the tab
+ * (D12), so they carry it too.
  */
 export interface ReportExtras {
   trends?: ReportTrends | null;
+  variance?: ReportVariance | null;
 }
 
 // --------------------------------------------------------------------- CSV --
@@ -345,7 +358,83 @@ export function buildTabCsv<K extends ReportTab>(
   sheet.push(['Made', fmtWhen(madeAt.toISOString())]);
   (CSV_PARTS[tab] as CsvPart<K>)(sheet, data, period, madeAt);
   if (tab === 'overview' && extras.trends) trendsCsv(sheet, extras.trends);
+  if (tab === 'foodStock' && extras.variance) varianceCsv(sheet, extras.variance);
   return toCsv(sheet.rows);
+}
+
+/** "Used vs should have used" between two stock takes in the file (costing spec Phase 8). */
+function varianceCsv(sheet: CsvSheet, v: ReportVariance): void {
+  sheet.heading('Used vs should have used (every till\'s stock)');
+  if (v.state !== 'ok') {
+    sheet.push([v.message]);
+    return;
+  }
+  const window = varianceWindowText(v);
+  if (window) sheet.push([window]);
+  const stale = v.staleSync ? staleLinkText(v.link) : null;
+  if (stale) sheet.push([stale]);
+  sheet.push([varianceHeadline(v)]);
+  sheet.push(['Not explained Rs', rs(v.totalCents)]);
+  sheet.push(['Food sales Rs', rs(v.foodSalesCents)]);
+  sheet.push(['Of food sales', v.varianceBps === null ? null : formatBps(Math.abs(v.varianceBps)), v.band ? VARIANCE_BAND_LABEL[v.band] : null]);
+  sheet.push([
+    'Ingredient',
+    'Unit',
+    'Counted before',
+    'Delivered',
+    'Made here',
+    'Counted after',
+    'Went',
+    'Sold',
+    'Used in batches',
+    'Should have used',
+    'Waste logged',
+    'Not explained',
+    'Not explained Rs',
+    'Fixes typed',
+  ]);
+  for (const l of v.lines) {
+    sheet.push([
+      l.name,
+      l.unit,
+      l.opening,
+      l.delivered,
+      l.madeHere,
+      l.closing,
+      l.used,
+      l.sold,
+      l.usedInBatches,
+      l.shouldHaveUsed,
+      l.wasted,
+      l.unexplained,
+      l.priced ? rs(l.unexplainedCents) : null,
+      l.corrections === 0 ? null : l.corrections,
+    ]);
+  }
+  for (const p of v.pairs) if (p.warning) sheet.push([p.warning]);
+  if (v.corrections.length > 0) {
+    sheet.heading('Fixes typed between the stock takes (not counted in what went)');
+    sheet.push(['When', 'Ingredient', 'Unit', 'Change', 'Note']);
+    for (const c of v.corrections) sheet.push([fmtWhen(c.at), c.name, c.unit, c.qty, c.notes]);
+  }
+  if (v.alreadyCounted.length > 0) {
+    sheet.heading('Left out: cancelled orders a stock take had already counted');
+    sheet.push(['Order', 'Ingredient', 'Unit', 'Qty']);
+    for (const a of v.alreadyCounted) sheet.push([a.orderNumber ?? a.orderId, a.name, a.unit, Math.abs(a.qty)]);
+  }
+  sheet.heading('Real food cost (both stock takes full)');
+  if (v.actualCogs) {
+    const a = v.actualCogs;
+    sheet.push([actualCogsText(a)]);
+    sheet.push(['Stock held at the first stock take Rs', rs(a.openingCents)]);
+    sheet.push(['Bought in between Rs', rs(a.purchasesCents)]);
+    sheet.push(['Stock held at the second Rs', rs(a.closingCents)]);
+    sheet.push(['Food used Rs', rs(a.costCents)]);
+    sheet.push(['Includes price changes on stock you held. Only ingredients a recipe or a batch uses.']);
+    if (a.otherPurchasesCents > 0) sheet.push(['Other things bought (left out) Rs', rs(a.otherPurchasesCents)]);
+  } else {
+    sheet.push([v.actualCogsWhyNot]);
+  }
 }
 
 /** Overview's trend strip and 12 months in the file (not tied to the period: so far, to the minute). */
@@ -770,7 +859,61 @@ export function buildTabPrintBody<K extends ReportTab>(
 ): string {
   const parts = (PRINT_PARTS[tab] as PrintPart<K>)(data, period, madeAt);
   if (tab === 'overview' && extras.trends) parts.push(trendsPrint(extras.trends));
+  if (tab === 'foodStock' && extras.variance) parts.unshift(variancePrint(extras.variance));
   return printHeader(`${REPORT_TAB_LABEL[tab]} — ${period.title}`, period, madeAt, tab === 'overview') + parts.join('');
+}
+
+/** "Used vs should have used" between two stock takes, on paper (costing spec Phase 8). */
+function variancePrint(v: ReportVariance): string {
+  if (v.state !== 'ok') return `<section><h2>Used vs should have used</h2><p class="muted">${esc(v.message ?? '')}</p></section>`;
+  const stale = v.staleSync ? staleLinkText(v.link) : null;
+  const lines = limited(v.lines, 25);
+  const warnings = v.pairs.filter((p) => p.warning).map((p) => `<p><b>${esc(p.warning ?? '')}</b></p>`).join('');
+  const a = v.actualCogs;
+  return (
+    `<section><h2>Used vs should have used (every till's stock)</h2>` +
+    `<p class="muted">${esc(varianceWindowText(v) ?? '')}</p>` +
+    (stale ? `<p><b>${esc(stale)}</b></p>` : '') +
+    `<p><b>${esc(varianceHeadline(v))}</b>${v.band ? ` Rating: ${esc(VARIANCE_BAND_LABEL[v.band])}.` : ''}</p>` +
+    warnings +
+    table(
+      ['Ingredient', 'Should have used', 'Went', 'Waste logged', 'Not explained', 'Rs'],
+      lines.shown.map((l) => [
+        `${esc(l.name)} <span class="muted">${esc(lineVerdict(l))}</span>`,
+        esc(formatQty(l.shouldHaveUsed, l.unit)),
+        esc(formatQty(l.used, l.unit)),
+        l.wasted === 0 ? '—' : esc(formatQty(l.wasted, l.unit)),
+        esc(signedQty(l.unexplained, l.unit)),
+        l.priced ? esc(signedCents(l.unexplainedCents)) : 'no price',
+      ]),
+      [1, 2, 3, 4, 5],
+    ) +
+    lines.note +
+    (v.corrections.length > 0
+      ? `<p class="muted">Fixes typed in this time (not counted in what went): ${v.corrections
+          .map((c) => esc(`${c.name} ${signedQty(c.qty, c.unit)}`))
+          .join(', ')}.</p>`
+      : '') +
+    (v.alreadyCounted.length > 0
+      ? `<p class="muted">Left out, already counted by a stock take: ${v.alreadyCounted
+          .map((x) => esc(`order ${x.orderNumber ?? x.orderId.slice(0, 8)} ${formatQty(Math.abs(x.qty), x.unit)} ${x.name}`))
+          .join(', ')}.</p>`
+      : '') +
+    `</section><section><h2>Real food cost</h2>` +
+    (a
+      ? `<p><b>${esc(actualCogsText(a))}</b></p>${table(
+          ['', 'Rs'],
+          [
+            ['Stock held at the first stock take', money(a.openingCents)],
+            ['+ bought in between', money(a.purchasesCents)],
+            ['− stock held at the second', money(a.closingCents)],
+            ['= food used', money(a.costCents)],
+          ],
+          [1],
+        )}<p class="muted">Includes price changes on stock you held. Only ingredients a recipe or a batch uses.</p>`
+      : `<p class="muted">${esc(v.actualCogsWhyNot ?? '')}</p>`) +
+    `</section>`
+  );
 }
 
 /** Overview's trend strip and 12 months on paper. */
@@ -828,6 +971,7 @@ export function buildPrintEverything(tabs: SomeReportTabs, period: ReportPeriod,
     const data = tabs[tab];
     if (data === undefined) continue;
     parts.push(`<div class="tab-title">${esc(REPORT_TAB_LABEL[tab])}</div>`);
+    if (tab === 'foodStock' && extras.variance) parts.push(variancePrint(extras.variance));
     parts.push(...(PRINT_PARTS[tab] as PrintPart<typeof tab>)(data as never, period, madeAt));
     if (tab === 'overview' && extras.trends) parts.push(trendsPrint(extras.trends));
   }

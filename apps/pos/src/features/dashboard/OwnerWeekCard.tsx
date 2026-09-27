@@ -29,7 +29,7 @@ import { Kpi } from '../reports/reportUi';
 import { coverageText } from '../reports/reportFormat';
 import { doThisWords, trendChangeOf, weekDates } from '../reports/ownerWeekFormat';
 import { formatBps } from '../costing/costingFormat';
-import { openCostingTab, openDishInCosting, openLowStockInInventory } from '../costing/deepLinks';
+import { openCostingTab, openDishInCosting, openLowStockInInventory, openStockVariance } from '../costing/deepLinks';
 import { cardHideReason, cardHidesInMs, cardMayShow, type CardLogin, type CardShown } from './ownerCardClock';
 
 /** The card is read at a glance: whole rupees ("Rs 11,512", not "Rs 11,511.50"). */
@@ -121,6 +121,9 @@ export function OwnerWeekPanel({
         return;
       case 'price_alert':
         openCostingTab(navigate, 'alerts');
+        return;
+      case 'stock_variance':
+        openStockVariance(navigate, { fromCountId: item.fromCountId, toCountId: item.toCountId });
         return;
     }
   };

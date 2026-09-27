@@ -313,6 +313,8 @@ export const ipc = {
     removeDayNote: (id: string) => unwrap(window.api.reports.removeDayNote({ id })),
     getDayparts: () => unwrap(window.api.reports.getDayparts()),
     setDayparts: (input: IpcRequest<'reports:setDayparts'>) => unwrap(window.api.reports.setDayparts(input)),
+    /** Used vs should have used between two stock takes (the latest two when none are named). */
+    variance: (input?: IpcRequest<'reports:variance'>) => unwrap(window.api.reports.variance(input)),
   },
   inventory: {
     listIngredients: (input?: IpcRequest<'inventory:listIngredients'>) =>
@@ -374,6 +376,17 @@ export const ipc = {
     /** Recent cash payouts from this till's drawer, with the purchase each is linked to. */
     listDrawerPayouts: (input?: IpcRequest<'inventory:listDrawerPayouts'>) =>
       unwrap(window.api.inventory.listDrawerPayouts(input)),
+    // Stock takes (costing Phase 8).
+    stockCountList: (input?: IpcRequest<'inventory:stockCountList'>) => unwrap(window.api.inventory.stockCountList(input)),
+    stockCountGet: (countId: string) => unwrap(window.api.inventory.stockCountGet({ countId })),
+    stockCountStart: (input: IpcRequest<'inventory:stockCountStart'>) => unwrap(window.api.inventory.stockCountStart(input)),
+    stockCountSave: (input: IpcRequest<'inventory:stockCountSave'>) => unwrap(window.api.inventory.stockCountSave(input)),
+    /** One transaction; asked again it writes nothing. */
+    stockCountFinish: (countId: string) => unwrap(window.api.inventory.stockCountFinish({ countId })),
+    /** Nothing is written to stock. */
+    stockCountCancel: (countId: string) => unwrap(window.api.inventory.stockCountCancel({ countId })),
+    /** The Stock button's one-line stock take. */
+    stockCountOne: (input: IpcRequest<'inventory:stockCountOne'>) => unwrap(window.api.inventory.stockCountOne(input)),
   },
   /** The Costing page and the costs shown in Menu and Inventory (managers and the owner only). */
   costing: {
@@ -391,6 +404,10 @@ export const ipc = {
     getAlertSettings: () => unwrap(window.api.costing.getAlertSettings()),
     /** The owner's alert thresholds (settings.manage). */
     setAlertSettings: (input: IpcRequest<'costing:setAlertSettings'>) => unwrap(window.api.costing.setAlertSettings(input)),
+    /** How many tills take orders, with the link as it is now (Phase 8). */
+    getTills: () => unwrap(window.api.costing.getTills()),
+    /** The owner's answer (settings.manage). */
+    setTills: (input: IpcRequest<'costing:setTills'>) => unwrap(window.api.costing.setTills(input)),
   },
 };
 

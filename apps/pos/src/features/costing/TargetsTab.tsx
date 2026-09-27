@@ -10,6 +10,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { COSTING_KEY, useCostAlertSettings, useCostingTargets } from './costingQueries';
 import { formatBps, parsePercent, parseRupees } from './costingFormat';
 import { DaypartsCard } from './DaypartsCard';
+import { TillsCard } from './TillsCard';
 
 /**
  * Food-cost targets per menu category, and the price alerts' thresholds
@@ -32,11 +33,17 @@ export function TargetsTab() {
       <AlertSettings canEdit={canEdit} />
       {/* The parts of the day Reports → When uses (costing spec Phase 7). */}
       <DaypartsCard canEdit={canEdit} />
+      {/* How many tills take orders (costing spec Phase 8). */}
+      <TillsCard canEdit={canEdit} />
     </div>
   );
 }
 
-/** The price alerts' thresholds and key ingredients (costing spec Phase 6). */
+/**
+ * The price alerts' thresholds (costing spec Phase 6) and the key items — ONE
+ * list, kept on the ingredients (Phase 8): what the weekly stock take
+ * counts, what the price alerts watch, what the Dashboard pins when low.
+ */
 function AlertSettings({ canEdit }: { canEdit: boolean }) {
   const q = useCostAlertSettings();
   if (!q.data) {
@@ -80,6 +87,8 @@ function AlertSettingsForm({ view, canEdit }: { view: CostAlertSettingsView; can
     onSuccess: () => {
       toast({ title: 'Price alerts saved', description: 'On both tills, from the next price change.', variant: 'success' });
       void qc.invalidateQueries({ queryKey: COSTING_KEY });
+      // The key items live on the ingredients: Inventory's lists show them too.
+      void qc.invalidateQueries({ queryKey: ['inventory'] });
     },
     onError: (e) => toast({ title: 'Could not save the price alerts', description: e instanceof IpcError ? e.message : String(e), variant: 'error' }),
   });
@@ -105,7 +114,7 @@ function AlertSettingsForm({ view, canEdit }: { view: CostAlertSettingsView; can
           </p>
           {view.keysSuggested && (
             <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
-              The key ingredients below are the till&apos;s suggestions until the price alerts are saved.
+              Nothing is saved yet: the thresholds are the till&apos;s, and the key items were picked by their names.
             </p>
           )}
         </div>
@@ -136,7 +145,10 @@ function AlertSettingsForm({ view, canEdit }: { view: CostAlertSettingsView; can
       <div className="mt-4">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">
-            Key ingredients <span className="font-normal text-stone-500">({keys.size})</span>
+            Key items <span className="font-normal text-stone-500">({keys.size})</span>
+            <span className="block text-xs font-normal text-stone-500">
+              Counted every week (Inventory → Stock takes), watched for price jumps, pinned on the Dashboard when low.
+            </span>
           </h3>
           <input
             type="search"
