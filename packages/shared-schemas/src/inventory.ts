@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { INGREDIENT_CATEGORY_IDS } from '@cheeseoclock/shared-types';
+import { INGREDIENT_CATEGORY_IDS, PRICE_KINDS } from '@cheeseoclock/shared-types';
 import { centsSchema } from './common.js';
 
 /**
@@ -25,6 +25,11 @@ const packSizeSchema = wholeUnits.positive({ message: 'Pack size must be at leas
 const nullableText = z.string().nullable().optional();
 /** A shelf from the fixed list; null = guess it from the name. */
 const ingredientCategorySchema = z.enum(INGREDIENT_CATEGORY_IDS).nullable().optional();
+/**
+ * What the price is: 'free' (a known Rs 0), 'estimate' (a guess), 'set', or
+ * 'unset' (not priced yet). Omitted = worked out from the price typed.
+ */
+const priceKindSchema = z.enum(PRICE_KINDS).optional();
 
 export const createIngredientInputSchema = z.object({
   name: z.string().trim().min(1, { message: 'Give the ingredient a name' }),
@@ -35,6 +40,7 @@ export const createIngredientInputSchema = z.object({
   costPerUnitCents: centsSchema.optional(),
   packSize: packSizeSchema.nullable().optional(),
   packPriceCents: centsSchema.nullable().optional(),
+  priceKind: priceKindSchema,
   defaultSupplierId: nullableText,
   sku: nullableText,
   notes: nullableText,
@@ -49,6 +55,7 @@ export const updateIngredientInputSchema = z.object({
   costPerUnitCents: centsSchema.optional(),
   packSize: packSizeSchema.nullable().optional(),
   packPriceCents: centsSchema.nullable().optional(),
+  priceKind: priceKindSchema,
   defaultSupplierId: nullableText,
   sku: nullableText,
   notes: nullableText,
@@ -81,9 +88,40 @@ export const setBatchRecipeInputSchema = z
     path: ['lines'],
   });
 
-export const makeBatchInputSchema = z.object({
+/**
+ * Record a batch made: whole batches (`batches`, as before), or ANY amount
+ * of the batch item in its base unit (`amount`: 200 g of a 2,000 g sauce),
+ * which scales every input. Exactly one of the two.
+ */
+export const makeBatchInputSchema = z
+  .object({
+    ingredientId: idSchema,
+    batches: z.number().int().min(1, { message: 'At least one batch' }).max(100).optional(),
+    amount: wholeUnits.positive({ message: 'Make at least 1' }).max(100_000_000).optional(),
+  })
+  .refine((r) => (r.batches === undefined) !== (r.amount === undefined), {
+    message: 'Say how many batches, or how much to make',
+    path: ['amount'],
+  });
+
+/** The batch calculator: one batch recipe worked out for `amount` base units of the batch item. */
+export const batchCalcInputSchema = z.object({
   ingredientId: idSchema,
-  batches: z.number().int().min(1, { message: 'At least one batch' }).max(100),
+  amount: wholeUnits.positive({ message: 'Enter how much, at least 1' }).max(100_000_000),
+});
+
+/** The recipe editor's live cost: the lines as typed (not saved), for one menu item. */
+export const recipeCostInputSchema = z.object({
+  menuItemId: idSchema,
+  lines: z
+    .array(
+      z.object({
+        ingredientId: z.string(),
+        qtyPerUnit: z.number().int().nonnegative(),
+        modifierId: idSchema.nullable().optional(),
+      }),
+    )
+    .max(500),
 });
 
 export const recordMovementInputSchema = z.object({

@@ -1,4 +1,4 @@
-import { hasCapability, type Capability, type Role } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, hasCapability, type Capability, type Role } from '@cheeseoclock/shared-types';
 
 /**
  * Who may open which page: one list for the routes, the sidebar and the
@@ -18,6 +18,8 @@ export const PAGE_ACCESS = {
   '/riders': { capability: 'order.create', label: 'Riders' },
   '/menu': { capability: 'menu.manage', label: 'Menu' },
   '/inventory': { capability: 'menu.manage', label: 'Inventory' },
+  // What dishes cost to make (costing spec D6: COST_CAPABILITY, today menu.manage).
+  '/costing': { capability: COST_CAPABILITY, label: 'Costing' },
   '/customers': { capability: 'customers.manage', label: 'Customers' },
   '/reports': { capability: 'report.view', label: 'Reports' },
   '/users': { capability: 'users.manage', label: 'Users' },

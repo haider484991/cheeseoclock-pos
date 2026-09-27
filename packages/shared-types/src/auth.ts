@@ -155,3 +155,20 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
 
 export const hasCapability = (role: Role, capability: Capability): boolean =>
   ROLE_CAPABILITIES[role].has(capability);
+
+/**
+ * Who may see costs: ingredient prices, what a dish costs to make, food cost
+ * %, missing costs, the batch calculator's rupees (costing spec D6). Today
+ * that is the menu managers (admin, manager); every cost check in the main
+ * process and on screen reads this constant, so a later split is one line.
+ * Cashiers never see costs.
+ */
+export const COST_CAPABILITY = 'menu.manage' as const satisfies Capability;
+
+/**
+ * The namespace for this project's name-based (v5) ids (costing spec D13):
+ * rows two tills could each create for the same fact (a business setting's
+ * key) get the SAME id on both, so the link converges on one row by last
+ * write instead of parking a clash. Never change it.
+ */
+export const COC_ID_NAMESPACE = '6f1c2b7e-9a4d-4e3b-8c5f-2d7a9e1b4c60';

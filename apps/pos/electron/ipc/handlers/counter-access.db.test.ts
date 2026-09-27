@@ -11,6 +11,9 @@
  *     orders of the shift open now; a kitchen ticket only while the kitchen
  *     still has the order; the customer on a sent or paid bill never changes;
  *   - managers and the owner keep all of it;
+ *   - costs (the Costing page, the batch calculator's rupees) are refused
+ *     to the counter the same way, and the food-cost targets are the
+ *     owner's alone;
  *   - every channel of these modules is classified here, so one added later
  *     fails until someone decides whether the counter may call it.
  *
@@ -282,6 +285,7 @@ beforeEach(async () => {
   (await import('./inventory-handlers.js')).registerInventoryHandlers(ctx);
   (await import('./fbr-handlers.js')).registerFbrHandlers(ctx);
   (await import('./counter-handlers.js')).registerCounterHandlers(ctx);
+  (await import('./costing-handlers.js')).registerCostingHandlers(ctx);
   s = await seed();
 });
 
@@ -310,6 +314,19 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'inventory:listSuppliers': undefined,
   'inventory:listPurchaseOrders': undefined,
   'inventory:getPurchaseOrder': { id: 'no-such-po' },
+  // Costs (costing spec D6: COST_CAPABILITY = menu.manage).
+  'costing:menuCosts': undefined,
+  'costing:itemSheet': { menuItemId: 'no-such-item' },
+  'costing:missingCosts': undefined,
+  'costing:getTargets': undefined,
+  'costing:recipeCost': { menuItemId: 'no-such-item', lines: [] },
+  'costing:batchCalc': { ingredientId: 'no-such-ingredient', amount: 200 },
+});
+
+/** The owner's alone: refused to the counter AND to managers. */
+const OWNER_ONLY = (): Record<string, unknown> => ({
+  // The food-cost targets (settings.manage).
+  'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 },
 });
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -457,6 +474,20 @@ describe.skipIf(!Sqlite)('a cashier is refused the manager areas, in the main pr
     for (const channel of [...Object.keys(COUNTER_REFUSED()), ...COUNTER_SCOPED]) {
       const o = await call(channel, payloads[channel] ?? { orderId: s.paidNow, id: s.paidNow, phone: '03001234567', shiftId: s.openNow });
       expect({ channel, code: o.ok ? 'ok' : o.code }).toEqual({ channel, code: 'unauthenticated' });
+    }
+  });
+});
+
+describe.skipIf(!Sqlite)("the owner's alone", () => {
+  it('refused to the counter and to managers, in the main process; the owner may', async () => {
+    for (const [channel, payload] of Object.entries(OWNER_ONLY())) {
+      for (const who of [CASHIER, MANAGER]) {
+        h.session = who;
+        const o = await call(channel, payload);
+        expect({ channel, who: who.role, code: o.ok ? 'ok' : o.code }).toEqual({ channel, who: who.role, code: 'forbidden' });
+      }
+      h.session = OWNER;
+      expect({ channel, ok: (await call(channel, payload)).ok }).toEqual({ channel, ok: true });
     }
   });
 });
@@ -859,6 +890,7 @@ describe.skipIf(!Sqlite)('every channel is classified', () => {
   it('each channel of these modules is in exactly one list, so a new one must be decided on', () => {
     const lists: Record<string, string[]> = {
       COUNTER_REFUSED: Object.keys(COUNTER_REFUSED()),
+      OWNER_ONLY: Object.keys(OWNER_ONLY()),
       COUNTER_SCOPED,
       COUNTER_ALLOWED: Object.keys(COUNTER_ALLOWED()),
       ALREADY_MANAGERS: Object.keys(ALREADY_MANAGERS()),

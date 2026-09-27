@@ -16,6 +16,9 @@
  *     low level and recipe lines ×1000, the same physical amounts. Any other
  *     unit mismatch is skipped, and so are the recipes that use it.
  *   - A pack price ("6,000 g for Rs 2,250") decides the per-gram cost.
+ *   - Rs 0 in the file means "not priced yet" ('unset', listed under
+ *     Costing → Missing costs) — except for an ingredient the shop marked
+ *     'free', which stays free. `priceIsEstimate` marks a guess ('estimate').
  *   - A description is only filled in where the item has none.
  *   - Choice groups ("Choose your dip") are matched by name; missing options
  *     are added, none removed. Items gain the file's groups; groups they
@@ -31,6 +34,7 @@ import {
   formatCents,
   formatPack,
   formatUnitCost,
+  hasPrice,
   normalizeUnit,
 } from '@cheeseoclock/pos-domain';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
@@ -41,6 +45,7 @@ import type {
   MenuImportItemPlan,
   MenuImportPreview,
   MenuImportSummary,
+  PriceKind,
 } from '@cheeseoclock/shared-types';
 
 export interface MenuSnapshot {
@@ -61,6 +66,8 @@ export interface MenuSnapshot {
     costPerUnitCents: number;
     packSize: number | null;
     packPriceCents: number | null;
+    /** Omitted = 'set' (a snapshot from before migration 0032). */
+    priceKind?: PriceKind;
     batchYield: number | null;
     batchMethod: string | null;
     notes: string | null;
@@ -117,12 +124,14 @@ export interface MenuImportOps {
       costPerUnitCents: number;
       packSize: number | null;
       packPriceCents: number | null;
+      priceKind: PriceKind;
       notes: string | null;
     } | null;
     update: {
       costPerUnitCents?: number;
       packSize?: number | null;
       packPriceCents?: number | null;
+      priceKind?: PriceKind;
       notes?: string;
     } | null;
     /** Convert kg → g / l → ml (stock and recipe lines ×1000) before the update. */
@@ -243,6 +252,24 @@ function unitCost(c: Costing): number {
   return c.packSize && c.packPriceCents !== null ? costPerUnitFromPack(c.packPriceCents, c.packSize) : c.costPerUnitCents;
 }
 
+/**
+ * The price kind an imported ingredient ends up with (costing spec D4/§8
+ * until Phase 6): Rs 0 in the file is 'unset' — never overwriting a 'free'
+ * the shop chose — and a price is 'estimate' when the file says it is a
+ * guess, else 'set'.
+ */
+export function importedPriceKind(filePriced: boolean, isEstimate: boolean, previous: PriceKind | null): PriceKind {
+  if (!filePriced) return previous === 'free' ? 'free' : 'unset';
+  return isEstimate ? 'estimate' : 'set';
+}
+
+const PRICE_KIND_WORDS: Record<PriceKind, string> = {
+  set: 'price known',
+  estimate: 'price is a guess',
+  free: 'costs nothing',
+  unset: 'no price yet',
+};
+
 export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuImportPlan {
   const warnings: string[] = [];
   const summary: MenuImportSummary = {
@@ -323,12 +350,14 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     const key = ing.name.toLowerCase();
     const m = ingredientMatches[i]!;
     if (m.row) matchedIngredient.set(key, m.row);
+    const filePriced = hasPrice(ing);
     const base = {
       name: ing.name,
       unit: ing.unit,
       costPerUnitCents: unitCost(ing),
       packSize: ing.packSize,
       packPriceCents: ing.packPriceCents,
+      priceKind: importedPriceKind(filePriced, ing.priceIsEstimate, m.row?.priceKind ?? null),
     };
     if (!m.row && m.ambiguous.length > 0) {
       ingredientPlans.push({
@@ -352,6 +381,7 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
           costPerUnitCents: unitCost(ing),
           packSize: ing.packSize,
           packPriceCents: ing.packPriceCents,
+          priceKind: base.priceKind,
           notes: ing.notes,
         },
         update: null,
@@ -412,6 +442,11 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     if (!row.notes?.trim() && ing.notes?.trim()) {
       changes.push('notes added');
       update.notes = ing.notes;
+    }
+    const kindNow = row.priceKind ?? 'set';
+    if (base.priceKind !== kindNow) {
+      update.priceKind = base.priceKind;
+      changes.push(`${PRICE_KIND_WORDS[kindNow]} → ${PRICE_KIND_WORDS[base.priceKind]}`);
     }
     const changed = convert || Object.keys(update).length > 0;
     ingredientPlans.push({ ...base, action: changed ? 'update' : 'same', existingName: row.name, changes, reason: null });

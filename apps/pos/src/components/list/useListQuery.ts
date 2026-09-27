@@ -18,6 +18,38 @@ export function useSessionState<T>(key: string | undefined, initial: T): [T, Dis
   return [value, setValue];
 }
 
+/**
+ * Set screen state before going to that screen: a deep link ("Set price" on
+ * Costing → Missing costs opens Inventory → Ingredients searched for it).
+ */
+export function presetSessionState(key: string, value: unknown): void {
+  sessionMemory.set(key, value);
+}
+
+/**
+ * The other end of a deep link's "open this one" (presetSessionState(key,
+ * id) before navigating here): once `items` has loaded, `open` is called
+ * with the item of that id, once, and the link is forgotten — coming back to
+ * the screen later does not open it again.
+ */
+export function useDeepLinkOpen<T extends { id: string }>(
+  key: string,
+  items: readonly T[] | undefined,
+  open: (item: T) => void,
+): void {
+  const [pending, setPending] = useState<string | undefined>(() => {
+    const v = sessionMemory.get(key);
+    return typeof v === 'string' ? v : undefined;
+  });
+  useEffect(() => {
+    if (pending === undefined || !items) return;
+    sessionMemory.delete(key);
+    setPending(undefined);
+    const hit = items.find((i) => i.id === pending);
+    if (hit) open(hit);
+  }, [pending, items, key, open]);
+}
+
 /** `value`, but only once it has stopped changing for `ms` — for searches that go to the database. */
 export function useDebouncedValue<T>(value: T, ms = 250): T {
   const [debounced, setDebounced] = useState(value);

@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import { formatCents, formatUnitCost } from '@cheeseoclock/pos-domain';
+import { formatCents, unitCostMc } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { Ingredient, MenuItem } from '@cheeseoclock/shared-types';
-import { X, Plus, Trash2, Edit, BookOpen, ChefHat, Soup } from 'lucide-react';
+import type { BatchRecipe, Ingredient, MenuItem } from '@cheeseoclock/shared-types';
+import { X, Plus, Trash2, Edit, BookOpen, ChefHat, Soup, Calculator } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
   FilterChips,
@@ -15,16 +15,21 @@ import {
   ToggleChip,
   compareText,
   countBy,
+  useDeepLinkOpen,
   useListQuery,
   useSessionState,
   type ChipOption,
 } from '../../components/list';
 import { IngredientSelect } from './IngredientSelect';
+import { BatchCalculatorDialog } from './BatchCalculator';
+import { RecipeCostFooter } from '../costing/RecipeCostFooter';
+import { useCanSeeCosts } from '../costing/costingQueries';
+import { formatUnitPrice } from '../costing/costingFormat';
 
 type Mode = 'items' | 'batches';
 
 export function RecipesTab() {
-  const [mode, setMode] = useState<Mode>('items');
+  const [mode, setMode] = useSessionState<Mode>('inv.rec.mode', 'items');
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
@@ -64,6 +69,8 @@ function MenuItemRecipes() {
     queryFn: () => ipc.inventory.listRecipeLineCounts(),
   });
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
+  // "Open recipe" on the Costing page lands here with that item's recipe open.
+  useDeepLinkOpen('inv.rec.openId', itemsQ.data, setEditingItem);
   const [category, setCategory] = useSessionState<string>('inv.rec.category', 'all');
   const [missingOnly, setMissingOnly] = useSessionState('inv.rec.missing', false);
 
@@ -383,6 +390,9 @@ function RecipeEditor({ item, onClose }: { item: MenuItem; onClose: () => void }
               <Plus className="h-3 w-3" /> Add ingredient
             </Button>
           </div>
+          <div className="border-t border-stone-200 px-5 py-3 dark:border-stone-800">
+            <RecipeCostFooter menuItemId={item.id} lines={lines} />
+          </div>
           <footer className="flex items-center justify-end gap-2 border-t border-stone-200 p-5 dark:border-stone-800">
             {problem && <span className="mr-auto text-xs text-red-700 dark:text-red-400">{problem}</span>}
             <Button variant="secondary" onClick={onClose}>
@@ -413,17 +423,22 @@ function BatchRecipes() {
   });
   const [editing, setEditing] = useState<Ingredient | null>(null);
   const [making, setMaking] = useState<Ingredient | null>(null);
+  const [calculating, setCalculating] = useState<Ingredient | null>(null);
   const [adding, setAdding] = useState('');
   const all = ingredientsQ.data ?? [];
   const made = all.filter((i) => i.batchYield !== null);
   const boughtIn = all.filter((i) => i.batchYield === null);
+  // "Open batch recipe" on the Costing page lands here with the recipe open to edit
+  // (not the calculator: its main button makes a batch and moves stock).
+  useDeepLinkOpen('inv.batch.openId', ingredientsQ.data, setEditing);
 
   return (
     <Card>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="max-w-2xl text-sm text-stone-600 dark:text-stone-400">
           Sauces, dough and mixes the kitchen makes. <b>Make a batch</b> takes the inputs out of stock and puts the
-          batch in, so menu recipes can use it by the gram.
+          batch in, so menu recipes can use it by the gram. <b>Make / calculate</b> works out any amount (200 g, 1.5 kg):
+          what it takes and what it costs, and can make exactly that.
         </p>
         <div className="flex items-center gap-2">
           <IngredientSelect
@@ -446,7 +461,13 @@ function BatchRecipes() {
       </div>
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         {made.map((i) => (
-          <BatchCard key={i.id} ingredient={i} onEdit={() => setEditing(i)} onMake={() => setMaking(i)} />
+          <BatchCard
+            key={i.id}
+            ingredient={i}
+            onEdit={() => setEditing(i)}
+            onMake={() => setMaking(i)}
+            onCalculate={() => setCalculating(i)}
+          />
         ))}
         {made.length === 0 && (
           <div className="col-span-2 py-6 text-center text-stone-500">No batch recipes yet.</div>
@@ -454,39 +475,52 @@ function BatchRecipes() {
       </div>
       {editing && <BatchEditor key={editing.id} ingredient={editing} onClose={() => setEditing(null)} />}
       {making && <MakeBatchDialog key={making.id} ingredient={making} onClose={() => setMaking(null)} />}
+      {calculating && (
+        <BatchCalculatorDialog key={calculating.id} ingredient={calculating} onClose={() => setCalculating(null)} />
+      )}
     </Card>
   );
 }
 
-function BatchCard({ ingredient, onEdit, onMake }: { ingredient: Ingredient; onEdit: () => void; onMake: () => void }) {
+function BatchCard({
+  ingredient,
+  onEdit,
+  onMake,
+  onCalculate,
+}: {
+  ingredient: Ingredient;
+  onEdit: () => void;
+  onMake: () => void;
+  onCalculate: () => void;
+}) {
   const q = useQuery({
     queryKey: ['inventory', 'batch', ingredient.id],
     queryFn: () => ipc.inventory.getBatchRecipe(ingredient.id),
   });
   const r = q.data;
-  const perUnit = r && r.batchYield ? r.batchCostCents / r.batchYield : null;
+  const canCost = useCanSeeCosts();
   const [showMethod, setShowMethod] = useState(false);
+  const empty = !r || r.lines.length === 0;
   return (
     <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
-      <div className="flex items-start justify-between gap-2">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
           <div className="font-semibold">{ingredient.name}</div>
           <div className="text-xs text-stone-500">
-            One batch makes {r?.batchYield ?? '?'} {ingredient.unit} · costs {r ? formatCents(r.batchCostCents) : '…'}
-            {perUnit !== null && (
-              <> = {formatUnitCost({ unit: ingredient.unit, costPerUnitCents: 0, packSize: r!.batchYield, packPriceCents: r!.batchCostCents })}</>
-            )}
+            One batch makes {r?.batchYield ? new Intl.NumberFormat('en-PK').format(r.batchYield) : '?'} {ingredient.unit} · in stock:{' '}
+            {new Intl.NumberFormat('en-PK').format(ingredient.currentQty)} {ingredient.unit}
           </div>
-          <div className="text-xs text-stone-500">
-            In stock: {new Intl.NumberFormat('en-PK').format(ingredient.currentQty)} {ingredient.unit}
-          </div>
+          {canCost && r && !!r.batchYield && r.lines.length > 0 && <BatchPrice recipe={r} unit={ingredient.unit} />}
         </div>
-        <div className="flex flex-none gap-1">
+        <div className="flex flex-wrap justify-end gap-1">
           <Button variant="secondary" size="sm" onClick={onEdit}>
             <Edit className="h-3 w-3" /> Edit
           </Button>
-          <Button variant="primary" size="sm" onClick={onMake} disabled={!r || r.lines.length === 0}>
+          <Button variant="secondary" size="sm" onClick={onMake} disabled={empty}>
             <ChefHat className="h-3 w-3" /> Make a batch
+          </Button>
+          <Button variant="primary" size="sm" onClick={onCalculate} disabled={empty} title="Any amount: what it takes, what it costs">
+            <Calculator className="h-3 w-3" /> Make / calculate
           </Button>
         </div>
       </div>
@@ -511,6 +545,33 @@ function BatchCard({ ingredient, onEdit, onMake }: { ingredient: Ingredient; onE
             {showMethod ? 'Hide method' : 'Show method'}
           </button>
           {showMethod && <p className="mt-1 whitespace-pre-line text-stone-600 dark:text-stone-400">{r.batchMethod}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The batch's price rolled up from what its inputs cost now (costing spec
+ * 4.1), with the price saved on the ingredient itself (typed, or the costing
+ * sheet's from the menu import) beside it when they differ.
+ */
+function BatchPrice({ recipe: r, unit }: { recipe: BatchRecipe; unit: string }) {
+  const perUnit = r.batchYield ? unitCostMc({ size: r.batchYield, priceCents: r.batchCostCents }) : null;
+  const stored = r.storedBatchCostCents;
+  return (
+    <div className="mt-0.5 space-y-0.5 text-xs">
+      <div>
+        {r.complete ? 'Costs ' : 'Inputs with a price cost '}
+        <b>{formatCents(r.batchCostCents)}</b> a batch
+        {r.complete && perUnit !== null && <span className="text-stone-500"> ({formatUnitPrice(perUnit, unit)})</span>} at today&apos;s
+        prices
+        {stored !== null && stored !== r.batchCostCents && <span className="text-stone-500"> · saved price {formatCents(stored)}</span>}
+      </div>
+      {!r.complete && (
+        <div className="text-red-700 dark:text-red-400">
+          No price yet: {r.unpricedInputs.join(', ') || 'an input'}.{' '}
+          {stored !== null ? `Costing uses the saved ${formatCents(stored)} until then.` : "Dishes using it can't be costed until then."}
         </div>
       )}
     </div>

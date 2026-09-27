@@ -4,6 +4,8 @@
  * Zod schema `menuImportFileSchema` in @cheeseoclock/shared-schemas.
  */
 
+import type { PriceKind } from './inventory.js';
+
 /** create = new row; update = existing row changes; same = nothing to do; skip = left alone (see reason). */
 export type MenuImportAction = 'create' | 'update' | 'same' | 'skip';
 
@@ -20,6 +22,11 @@ export interface MenuImportIngredientPlan {
   costPerUnitCents: number;
   packSize: number | null;
   packPriceCents: number | null;
+  /**
+   * What the price will be after the import: Rs 0 in the file is 'unset'
+   * (not priced yet) unless the shop marked it 'free'; a guess is 'estimate'.
+   */
+  priceKind: PriceKind;
   action: MenuImportAction;
   existingName: string | null;
   /** Human-readable field changes, e.g. "cost Rs 0.50 → Rs 0.53 per g". */

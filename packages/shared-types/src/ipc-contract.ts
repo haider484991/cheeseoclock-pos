@@ -84,9 +84,19 @@ import type {
   PurchaseOrderWithItems,
   BatchRecipe,
   IngredientCategory,
+  PriceKind,
   StockMovementSearch,
   StockMovementPage,
 } from './inventory.js';
+import type {
+  BatchCalc,
+  CostingTargetsView,
+  ItemCostSheet,
+  MenuCostsView,
+  MissingCosts,
+  RecipeCostPreview,
+  SetCostingTargetsRequest,
+} from './costing.js';
 import type {
   Customer,
   CustomerAddress,
@@ -940,6 +950,8 @@ export interface IpcContract {
       costPerUnitCents?: number;
       packSize?: number | null;
       packPriceCents?: number | null;
+      /** Omitted = worked out from the price: Rs 0 is 'unset' (not priced yet). */
+      priceKind?: PriceKind;
       defaultSupplierId?: string | null;
       sku?: string | null;
       notes?: string | null;
@@ -959,6 +971,8 @@ export interface IpcContract {
       costPerUnitCents?: number;
       packSize?: number | null;
       packPriceCents?: number | null;
+      /** 'free' = it costs nothing (price set to Rs 0); 'estimate' = a guess. Omitted = kept, or worked out from a new price. */
+      priceKind?: PriceKind;
       defaultSupplierId?: string | null;
       sku?: string | null;
       notes?: string | null;
@@ -1009,9 +1023,14 @@ export interface IpcContract {
     };
     response: ApiResult<{ ingredientId: string }>;
   };
-  /** Record batches made: inputs come out of stock, the yield goes in. */
+  /**
+   * Record a batch made: inputs come out of stock, what was made goes in.
+   * Whole batches (`batches`), or any amount of the batch item (`amount`, in
+   * its base unit), which scales every input. Exactly one of the two. The
+   * answer carries no costs: any login may record a batch.
+   */
   'inventory:makeBatch': {
-    request: { ingredientId: string; batches: number };
+    request: { ingredientId: string; batches?: number; amount?: number };
     response: ApiResult<{ made: number; resultingQty: number }>;
   };
 
@@ -1105,6 +1124,45 @@ export interface IpcContract {
       updateCosts?: boolean;
     };
     response: ApiResult<PurchaseOrderWithItems>;
+  };
+
+  // Costing (menu.manage = COST_CAPABILITY to read; settings.manage to change targets)
+  /** Every menu item: cost to make, price, what you keep, food-cost chip; worst first on screen. */
+  'costing:menuCosts': {
+    request: undefined;
+    response: ApiResult<MenuCostsView>;
+  };
+  /** One item's cost sheet: every line, the customer's picks, paid extras, leave-outs. */
+  'costing:itemSheet': {
+    request: { menuItemId: string };
+    response: ApiResult<ItemCostSheet | null>;
+  };
+  /** What stops the till costing the menu: unpriced ingredients, items with no recipe, guesses… */
+  'costing:missingCosts': {
+    request: undefined;
+    response: ApiResult<MissingCosts>;
+  };
+  'costing:getTargets': {
+    request: undefined;
+    response: ApiResult<CostingTargetsView>;
+  };
+  /** The owner's targets ("Use these", or edited). Needs settings.manage. */
+  'costing:setTargets': {
+    request: SetCostingTargetsRequest;
+    response: ApiResult<CostingTargetsView>;
+  };
+  /** The recipe editor's live footer: the recipe as typed, costed, not saved. */
+  'costing:recipeCost': {
+    request: {
+      menuItemId: string;
+      lines: Array<{ ingredientId: string; qtyPerUnit: number; modifierId?: string | null }>;
+    };
+    response: ApiResult<RecipeCostPreview>;
+  };
+  /** The batch calculator: a batch recipe scaled to any amount, every input costed. */
+  'costing:batchCalc': {
+    request: { ingredientId: string; amount: number };
+    response: ApiResult<BatchCalc>;
   };
 
   // Reports / analytics

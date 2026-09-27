@@ -27,6 +27,7 @@ import { registerWebBridgeHandlers } from './handlers/web-bridge-handlers.js';
 import { registerAuditHandlers } from './handlers/audit-handlers.js';
 import { registerAlertsHandlers } from './handlers/alerts-handlers.js';
 import { registerCounterHandlers } from './handlers/counter-handlers.js';
+import { registerCostingHandlers } from './handlers/costing-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
 import { markHeldStepIn } from './step-in-hold.js';
 import { startHousekeeping } from '../services/housekeeping.js';
@@ -145,6 +146,7 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   registerPrinterHandlers(ctx);
   registerFbrHandlers(ctx);
   registerInventoryHandlers(ctx);
+  registerCostingHandlers(ctx);
   registerReportsHandlers(ctx);
   registerCustomersHandlers(ctx);
   registerSyncHandlers(ctx);

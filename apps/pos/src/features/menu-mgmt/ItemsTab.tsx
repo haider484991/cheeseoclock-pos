@@ -5,7 +5,7 @@ import { Button, Card, ImagePicker, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { MenuItem, PrepStation } from '@cheeseoclock/shared-types';
+import type { MenuCostRow, MenuItem, PrepStation } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X, Eye, EyeOff, ChevronRight } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
@@ -26,6 +26,8 @@ import {
   modifierGroupSearchText,
   sectionGroupsForItem,
 } from './menuLists';
+import { FoodCostChip } from '../costing/CostChip';
+import { COSTING_KEY, useCanSeeCosts, useMenuCosts } from '../costing/costingQueries';
 
 const PREP_STATIONS: PrepStation[] = ['kitchen', 'bar', 'cold'];
 
@@ -40,6 +42,10 @@ export function ItemsTab() {
 
   const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
   const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
+  // The food-cost chip (costing spec Phase 1), for logins that may see costs.
+  const canCost = useCanSeeCosts();
+  const costsQ = useMenuCosts(canCost);
+  const costOf = useMemo(() => new Map((costsQ.data?.rows ?? []).map((r) => [r.menuItemId, r])), [costsQ.data]);
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => ipc.menu.deleteItem(id),
@@ -137,6 +143,7 @@ export function ItemsTab() {
               <th className="pb-2">Category</th>
               <th className="pb-2">Station</th>
               <th className="pb-2 text-right">Price</th>
+              {canCost && <th className="pb-2 text-center">Food cost</th>}
               <th className="pb-2">Status</th>
               <th className="pb-2">
                 <span className="sr-only">Actions</span>
@@ -162,6 +169,11 @@ export function ItemsTab() {
                   </td>
                   <td className="py-2 capitalize text-stone-500">{i.prepStation}</td>
                   <td className="py-2 text-right font-mono">{formatCents(i.basePriceCents)}</td>
+                  {canCost && (
+                    <td className="py-2 text-center">
+                      <ItemCostChip row={costOf.get(i.id)} />
+                    </td>
+                  )}
                   <td className="py-2">
                     <button
                       type="button"
@@ -210,7 +222,7 @@ export function ItemsTab() {
             })}
             {list.items.length === 0 && (
               <tr>
-                <td colSpan={6} className="py-6 text-center text-stone-500">
+                <td colSpan={canCost ? 7 : 6} className="py-6 text-center text-stone-500">
                   {itemsQ.isLoading ? 'Loading…' : (itemsQ.data?.length ?? 0) === 0 ? 'No items yet — add one, or use Import.' : 'No items match.'}
                 </td>
               </tr>
@@ -240,6 +252,12 @@ export function ItemsTab() {
       )}
     </Card>
   );
+}
+
+/** The item's food-cost chip from Costing; a dot while it loads. */
+function ItemCostChip({ row }: { row: MenuCostRow | undefined }) {
+  if (!row) return <span className="text-stone-300 dark:text-stone-600">…</span>;
+  return <FoodCostChip flag={row.flag} bps={row.foodCostBps} targetBps={row.targetBps} />;
 }
 
 function ItemDialog({
@@ -347,6 +365,8 @@ function ItemDialog({
     onSuccess: () => {
       toast({ title: existing ? 'Item updated' : 'Item created', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['menu'] });
+      // A new price or choice moves the food-cost chip.
+      void qc.invalidateQueries({ queryKey: COSTING_KEY });
       onClose();
     },
     onError: (e) =>

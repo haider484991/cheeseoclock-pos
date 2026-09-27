@@ -37,6 +37,13 @@ export const menuImportIngredientSchema = z.object({
   packSize: z.number().int().positive().nullable().default(null),
   /** …for this price, in paisa. The POS derives the per-unit cost from it. */
   packPriceCents: centsSchema.nullable().default(null),
+  /**
+   * The price is a guess (the costing sheet's "Breading, about Rs 15"): the
+   * till marks it 'estimate' and lists it under Costing → Missing costs.
+   * A price of Rs 0 always means "not priced yet" ('unset') — never a
+   * manager's "free", which the import leaves alone.
+   */
+  priceIsEstimate: z.boolean().default(false),
   notes: z.string().max(2000).nullable().default(null),
   /** Made in-house: what one batch uses and how much it makes (see batch recipes in the POS). */
   batch: z

@@ -147,6 +147,9 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     // Spot-check the parser itself: users is replicable, settings is not.
     expect(REPLICABLE_TABLES).toContain('users');
     expect(REPLICABLE_TABLES).not.toContain('settings');
+    // 0032: the shop-wide settings both tills share (costing targets) replicate;
+    // the per-till `settings` above does not.
+    expect(REPLICABLE_TABLES).toContain('business_settings');
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');

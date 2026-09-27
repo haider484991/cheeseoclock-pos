@@ -368,6 +368,16 @@ export const ipc = {
     receiveDelivery: (input: IpcRequest<'inventory:receiveDelivery'>) =>
       unwrap(window.api.inventory.receiveDelivery(input)),
   },
+  /** The Costing page and the costs shown in Menu and Inventory (managers and the owner only). */
+  costing: {
+    menuCosts: () => unwrap(window.api.costing.menuCosts()),
+    itemSheet: (menuItemId: string) => unwrap(window.api.costing.itemSheet({ menuItemId })),
+    missingCosts: () => unwrap(window.api.costing.missingCosts()),
+    getTargets: () => unwrap(window.api.costing.getTargets()),
+    setTargets: (input: IpcRequest<'costing:setTargets'>) => unwrap(window.api.costing.setTargets(input)),
+    recipeCost: (input: IpcRequest<'costing:recipeCost'>) => unwrap(window.api.costing.recipeCost(input)),
+    batchCalc: (input: IpcRequest<'costing:batchCalc'>) => unwrap(window.api.costing.batchCalc(input)),
+  },
 };
 
 /** Listen for fbr:queue-changed broadcasts from the worker. */

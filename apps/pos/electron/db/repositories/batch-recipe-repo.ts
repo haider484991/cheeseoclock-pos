@@ -4,7 +4,18 @@ import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { recordStockMovement } from './stock-movement-repo.js';
+import { loadPriceBook } from '../price-book.js';
 import type { BatchRecipe, BatchRecipeLine } from '@cheeseoclock/shared-types';
+import {
+  MAX_BATCHES_AT_ONCE,
+  batchesText,
+  effectivePack,
+  hasPrice,
+  maxBatchAmount,
+  scaleBatch,
+  toPriceKind,
+  valueCents,
+} from '@cheeseoclock/pos-domain';
 
 /**
  * Batch recipes: what the kitchen makes itself (sauces, dough, cheese mix).
@@ -14,13 +25,62 @@ import type { BatchRecipe, BatchRecipeLine } from '@cheeseoclock/shared-types';
 
 export function getBatchRecipe(db: AppDatabase, ingredientId: string): BatchRecipe {
   const ing = db
-    .prepare(`SELECT id, batch_yield, batch_method FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
-    .get(ingredientId) as { id: string; batch_yield: number | null; batch_method: string | null } | undefined;
-  if (!ing) throw new Error('Ingredient not found');
-  const rows = db
     .prepare(
-      `SELECT l.input_ingredient_id, l.qty, i.name, i.unit, i.cost_per_unit_cents,
-              i.pack_size, i.pack_price_cents
+      `SELECT id, batch_yield, batch_method, cost_per_unit_cents, pack_size, pack_price_cents, price_kind
+         FROM ingredients WHERE id = ? AND deleted_at IS NULL`,
+    )
+    .get(ingredientId) as
+    | {
+        id: string;
+        batch_yield: number | null;
+        batch_method: string | null;
+        cost_per_unit_cents: number;
+        pack_size: number | null;
+        pack_price_cents: number | null;
+        price_kind: string;
+      }
+    | undefined;
+  if (!ing) throw new Error('Ingredient not found');
+  const rows = batchInputs(db, ingredientId);
+  // Prices as costing uses them: rolled up through inputs made in-house too,
+  // from the exact pack ("6,000 g for Rs 2,250"), never a per-gram price
+  // rounded to whole paisa (costing spec 4.1).
+  const book = loadPriceBook(db);
+  const lines: BatchRecipeLine[] = rows.map((r) => {
+    const p = book.prices.get(r.input_ingredient_id);
+    return {
+      inputIngredientId: r.input_ingredient_id as BatchRecipeLine['inputIngredientId'],
+      name: r.name,
+      unit: r.unit,
+      qty: r.qty,
+      costPerUnitCents: r.cost_per_unit_cents,
+      priceKind: p?.kind ?? 'unset',
+      madeInHouse: !!p?.batch,
+    };
+  });
+  const rolled = book.prices.get(ingredientId)?.batch ?? null;
+  const nameOf = (id: string) => book.ingredients.get(id)?.name ?? 'an ingredient that was deleted';
+  const stored = { costPerUnitCents: ing.cost_per_unit_cents, packSize: ing.pack_size, packPriceCents: ing.pack_price_cents };
+  return {
+    ingredientId: ing.id as BatchRecipe['ingredientId'],
+    batchYield: ing.batch_yield,
+    batchMethod: ing.batch_method,
+    lines,
+    batchCostCents: rolled ? rolled.rolledCostCents : 0,
+    complete: rolled ? rolled.complete : false,
+    unpricedInputs: rolled ? rolled.unpricedInputIds.map(nameOf) : [],
+    storedBatchCostCents:
+      ing.batch_yield && toPriceKind(ing.price_kind) !== 'unset' && hasPrice(stored)
+        ? valueCents(ing.batch_yield, effectivePack(stored))
+        : null,
+  };
+}
+
+/** A batch recipe's inputs (live ones), in the recipe's order. */
+function batchInputs(db: AppDatabase, ingredientId: string) {
+  return db
+    .prepare(
+      `SELECT l.input_ingredient_id, l.qty, i.name, i.unit, i.cost_per_unit_cents
          FROM batch_recipe_lines l
          JOIN ingredients i ON i.id = l.input_ingredient_id AND i.deleted_at IS NULL
         WHERE l.ingredient_id = ? AND l.deleted_at IS NULL
@@ -32,30 +92,7 @@ export function getBatchRecipe(db: AppDatabase, ingredientId: string): BatchReci
     name: string;
     unit: string;
     cost_per_unit_cents: number;
-    pack_size: number | null;
-    pack_price_cents: number | null;
   }>;
-  const lines: BatchRecipeLine[] = rows.map((r) => ({
-    inputIngredientId: r.input_ingredient_id as BatchRecipeLine['inputIngredientId'],
-    name: r.name,
-    unit: r.unit,
-    qty: r.qty,
-    costPerUnitCents: r.cost_per_unit_cents,
-  }));
-  // Cost from the pack price where there is one: the per-unit cost is rounded to
-  // whole paisa (Rs 1.005/ml shows as 1.01), which over a 2 kg batch adds up to rupees.
-  const exact = rows.reduce(
-    (n, r) =>
-      n + r.qty * (r.pack_size && r.pack_price_cents !== null ? r.pack_price_cents / r.pack_size : r.cost_per_unit_cents),
-    0,
-  );
-  return {
-    ingredientId: ing.id as BatchRecipe['ingredientId'],
-    batchYield: ing.batch_yield,
-    batchMethod: ing.batch_method,
-    lines,
-    batchCostCents: Math.round(exact),
-  };
 }
 
 /** Would making `inputId` part of `ingredientId`'s batch create a loop (A needs B needs A)? */
@@ -207,45 +244,90 @@ export function clearBatchRecipeLines(db: AppDatabase, ingredientId: string, act
   return rows.length;
 }
 
+const qtyText = (n: number) => new Intl.NumberFormat('en-PK').format(n);
+
 /**
- * Record `batches` batches made: each input comes out of stock, the yield
- * goes in — ordinary stock movements (reason 'adjustment', noted), in one
- * transaction.
+ * Record a batch made: each input comes out of stock and what was made goes
+ * in — ordinary stock movements (reason 'adjustment', noted), in one
+ * transaction, with one audit row saying what was made from what.
+ *
+ *  - `batches`: whole batches, as before ("Make a batch" × n).
+ *  - `amount`: ANY amount of the batch item in its base unit (200 g of a
+ *    2,000 g sauce). Every input is scaled by amount ÷ yield and rounded to
+ *    the whole grams / ml / pieces stock is counted in (pos-domain
+ *    scaleBatch — the same figures the batch calculator showed); an input
+ *    that rounds to nothing is not taken.
+ *
+ * The answer carries no costs: any login may record a batch.
  */
 export function makeBatch(
   db: AppDatabase,
-  input: { ingredientId: string; batches: number },
+  input: { ingredientId: string; batches?: number; amount?: number },
   actor: Actor,
 ): { made: number; resultingQty: number } {
-  const recipe = getBatchRecipe(db, input.ingredientId);
-  if (!recipe.batchYield || recipe.lines.length === 0) throw new Error('This ingredient has no batch recipe');
-  const name = (db.prepare(`SELECT name FROM ingredients WHERE id = ?`).get(input.ingredientId) as { name: string }).name;
-  const n = input.batches;
+  const ing = db
+    .prepare(`SELECT name, unit, batch_yield, current_qty FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
+    .get(input.ingredientId) as { name: string; unit: string; batch_yield: number | null; current_qty: number } | undefined;
+  if (!ing) throw new Error('Ingredient not found');
+  const inputs = batchInputs(db, input.ingredientId);
+  if (!ing.batch_yield || inputs.length === 0) throw new Error('This ingredient has no batch recipe');
+  const batchYield = ing.batch_yield;
+  if ((input.batches === undefined) === (input.amount === undefined)) {
+    throw new Error('Say how many batches, or how much to make');
+  }
+  const whole = input.batches !== undefined;
+  const n = input.batches ?? 0;
+  const amount = whole ? batchYield * n : input.amount!;
+  if (!Number.isSafeInteger(amount) || amount < 1) throw new Error('Make at least 1');
+  if (amount > maxBatchAmount(batchYield)) {
+    throw new Error(`That is more than ${MAX_BATCHES_AT_ONCE} batches: at most ${qtyText(maxBatchAmount(batchYield))} ${ing.unit} at once`);
+  }
+  const scaled = scaleBatch(
+    batchYield,
+    inputs.map((l) => ({ inputId: l.input_ingredient_id, qty: l.qty, pack: null, kind: 'missing' as const })),
+    amount,
+  );
+  const madeText = `${qtyText(amount)} ${ing.unit}`;
+  const usedNote = whole
+    ? `Used in ${n} batch${n === 1 ? '' : 'es'} of ${ing.name}`
+    : `Used to make ${madeText} of ${ing.name} (${batchesText(amount, batchYield)})`;
+  const madeNote = whole
+    ? `Made ${n} batch${n === 1 ? '' : 'es'}`
+    : `Made ${madeText} (${batchesText(amount, batchYield)}; one batch makes ${qtyText(batchYield)} ${ing.unit})`;
+
   let resultingQty = 0;
   const tx = db.transaction(() => {
-    for (const l of recipe.lines) {
+    const taken: Array<{ ingredientId: string; qty: number }> = [];
+    for (const l of scaled.lines) {
+      if (l.stockQty === 0) continue;
       recordStockMovement(
         db,
-        {
-          ingredientId: l.inputIngredientId,
-          deltaQty: -l.qty * n,
-          reason: 'adjustment',
-          notes: `Used in ${n} batch${n === 1 ? '' : 'es'} of ${name}`,
-        },
+        { ingredientId: l.inputId, deltaQty: -l.stockQty, reason: 'adjustment', notes: usedNote },
         actor,
       );
+      taken.push({ ingredientId: l.inputId, qty: l.stockQty });
     }
     resultingQty = recordStockMovement(
       db,
-      {
-        ingredientId: input.ingredientId,
-        deltaQty: recipe.batchYield! * n,
-        reason: 'adjustment',
-        notes: `Made ${n} batch${n === 1 ? '' : 'es'}`,
-      },
+      { ingredientId: input.ingredientId, deltaQty: amount, reason: 'adjustment', notes: madeNote },
       actor,
     ).resultingQty;
+    writeAudit(db, {
+      entityType: 'ingredients',
+      entityId: input.ingredientId,
+      action: 'make_batch',
+      actorUserId: actor.userId,
+      before: { qty: ing.current_qty },
+      after: {
+        qty: resultingQty,
+        made: amount,
+        batchYield,
+        batches: whole ? n : null,
+        inputs: taken,
+        notTaken: scaled.roundedAwayIds,
+      },
+    });
   });
   tx();
-  return { made: recipe.batchYield * n, resultingQty };
+  return { made: amount, resultingQty };
 }

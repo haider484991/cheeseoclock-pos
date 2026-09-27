@@ -4,12 +4,15 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { clearBatchRecipeLines } from './batch-recipe-repo.js';
-import type { Ingredient, IngredientCategory, Recipe } from '@cheeseoclock/shared-types';
+import type { Ingredient, IngredientCategory, PriceKind, Recipe } from '@cheeseoclock/shared-types';
 import {
   baseUnitConversion,
   costPerUnitFromPack,
   guessIngredientCategory,
+  hasPrice,
   isIngredientCategory,
+  priceKindAfter,
+  toPriceKind,
 } from '@cheeseoclock/pos-domain';
 
 // -----------------------------------------------------------------------------
@@ -27,6 +30,8 @@ interface IngRow {
   cost_per_unit_cents: number;
   pack_size: number | null;
   pack_price_cents: number | null;
+  /** Migration 0032: set / estimate / free / unset. */
+  price_kind: string;
   batch_yield: number | null;
   batch_method: string | null;
   default_supplier_id: string | null;
@@ -37,7 +42,7 @@ interface IngRow {
 
 const ING_SELECT = `
   id, name, category, unit, current_qty, low_threshold, cost_per_unit_cents,
-  pack_size, pack_price_cents, batch_yield, batch_method, default_supplier_id, sku, notes, is_active
+  pack_size, pack_price_cents, price_kind, batch_yield, batch_method, default_supplier_id, sku, notes, is_active
 `;
 
 /** The stored choice when there is a valid one, else the guess from the name. */
@@ -58,6 +63,7 @@ function rowToIngredient(r: IngRow): Ingredient {
     costPerUnitCents: r.cost_per_unit_cents,
     packSize: r.pack_size,
     packPriceCents: r.pack_price_cents,
+    priceKind: toPriceKind(r.price_kind),
     batchYield: r.batch_yield,
     batchMethod: r.batch_method,
     defaultSupplierId: r.default_supplier_id as Ingredient['defaultSupplierId'],
@@ -97,6 +103,8 @@ export interface CreateIngredientInput {
   costPerUnitCents?: number;
   packSize?: number | null;
   packPriceCents?: number | null;
+  /** Omitted = from the price: Rs 0 is 'unset' (not priced yet). */
+  priceKind?: PriceKind;
   defaultSupplierId?: string | null;
   sku?: string | null;
   notes?: string | null;
@@ -115,6 +123,17 @@ function withPackCost<T extends { packSize: number | null; packPriceCents: numbe
   return { ...ing, packSize: null, packPriceCents: null };
 }
 
+/**
+ * The price kind that goes with the price being saved (costing spec D1):
+ * 'free' is a known Rs 0 (the price is cleared to Rs 0 with it), a guess is
+ * 'estimate', and Rs 0 otherwise is 'unset' — never quietly 'set'.
+ */
+function withPriceKind(ing: Ingredient, previous: PriceKind | null, asked: PriceKind | undefined): Ingredient {
+  const kind = priceKindAfter(previous, hasPrice(ing), asked);
+  if (kind === 'free') return { ...ing, costPerUnitCents: 0, packSize: null, packPriceCents: null, priceKind: kind };
+  return { ...ing, priceKind: kind };
+}
+
 export function createIngredient(
   db: AppDatabase,
   input: CreateIngredientInput,
@@ -123,7 +142,7 @@ export function createIngredient(
   const id = uuidv7();
   const now = nowIso();
   const storedCategory = input.category ?? null;
-  const ing: Ingredient = withPackCost({
+  const priced: Ingredient = withPackCost({
     id: id as Ingredient['id'],
     name: input.name,
     ...resolveCategory(storedCategory, input.name),
@@ -133,6 +152,7 @@ export function createIngredient(
     costPerUnitCents: input.costPerUnitCents ?? 0,
     packSize: input.packSize ?? null,
     packPriceCents: input.packPriceCents ?? null,
+    priceKind: 'unset',
     batchYield: null,
     batchMethod: null,
     defaultSupplierId: (input.defaultSupplierId ?? null) as Ingredient['defaultSupplierId'],
@@ -140,6 +160,7 @@ export function createIngredient(
     notes: input.notes ?? null,
     isActive: true,
   });
+  const ing = withPriceKind(priced, null, input.priceKind);
   writeWithSync({
     db,
     entityType: 'ingredients',
@@ -153,9 +174,9 @@ export function createIngredient(
       db.prepare(
         `INSERT INTO ingredients
            (id, name, category, unit, current_qty, low_threshold, cost_per_unit_cents,
-            pack_size, pack_price_cents, default_supplier_id, sku, notes, is_active,
+            pack_size, pack_price_cents, price_kind, default_supplier_id, sku, notes, is_active,
             created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
       ).run(
         id,
         ing.name,
@@ -166,6 +187,7 @@ export function createIngredient(
         ing.costPerUnitCents,
         ing.packSize,
         ing.packPriceCents,
+        ing.priceKind,
         ing.defaultSupplierId,
         ing.sku,
         ing.notes,
@@ -188,6 +210,8 @@ export interface UpdateIngredientInput {
   costPerUnitCents?: number;
   packSize?: number | null;
   packPriceCents?: number | null;
+  /** Omitted = kept, or worked out when the price changes (see withPriceKind). */
+  priceKind?: PriceKind;
   defaultSupplierId?: string | null;
   sku?: string | null;
   notes?: string | null;
@@ -213,7 +237,7 @@ export function updateIngredient(
   }
   const name = input.name ?? before.name;
   const storedCategory = input.category !== undefined ? input.category : isIngredientCategory(row.category) ? row.category : null;
-  const after: Ingredient = withPackCost({
+  const repriced: Ingredient = withPackCost({
     ...before,
     name,
     // A guessed category follows a rename; a chosen one stays.
@@ -231,6 +255,12 @@ export function updateIngredient(
     notes: input.notes !== undefined ? input.notes : before.notes,
     isActive: input.isActive ?? before.isActive,
   });
+  const priceTouched =
+    input.priceKind !== undefined ||
+    input.costPerUnitCents !== undefined ||
+    input.packSize !== undefined ||
+    input.packPriceCents !== undefined;
+  const after = priceTouched ? withPriceKind(repriced, before.priceKind, input.priceKind) : repriced;
   const now = nowIso();
   writeWithSync({
     db,
@@ -245,7 +275,7 @@ export function updateIngredient(
       db.prepare(
         `UPDATE ingredients SET
            name = ?, category = ?, unit = ?, low_threshold = ?, cost_per_unit_cents = ?,
-           pack_size = ?, pack_price_cents = ?,
+           pack_size = ?, pack_price_cents = ?, price_kind = ?,
            default_supplier_id = ?, sku = ?, notes = ?, is_active = ?,
            updated_at = ?, version = version + 1 WHERE id = ?`,
       ).run(
@@ -256,6 +286,7 @@ export function updateIngredient(
         after.costPerUnitCents,
         after.packSize,
         after.packPriceCents,
+        after.priceKind,
         after.defaultSupplierId,
         after.sku,
         after.notes,

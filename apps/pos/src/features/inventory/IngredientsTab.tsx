@@ -19,7 +19,7 @@ import {
 } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { Ingredient, IngredientCategory, StockMovementReason } from '@cheeseoclock/shared-types';
+import type { Ingredient, IngredientCategory, PriceKind, StockMovementReason } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
@@ -28,6 +28,7 @@ import {
   SearchBox,
   SortHeader,
   countBy,
+  useDeepLinkOpen,
   useListQuery,
   useSessionState,
   type ChipOption,
@@ -69,6 +70,8 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
     (id: string | null) => (id ? sup.data?.find((s) => s.id === id)?.name : undefined),
     [sup.data],
   );
+  // "Set price" on Costing → Missing costs lands here with that ingredient's form open.
+  useDeepLinkOpen('inv.ing.openId', q.data, setEditing);
 
   const filter = useCallback(
     (i: Ingredient) => (category === 'all' || i.category === category) && matchesStockFilter(i, stock),
@@ -284,7 +287,10 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
                   <StockLevel ingredient={i} />
                 </td>
                 <td className="py-2.5 pl-3 text-right">
-                  <div className="whitespace-nowrap font-mono text-xs">{formatUnitCost(i)}</div>
+                  <div className="whitespace-nowrap font-mono text-xs">
+                    <PriceKindTag kind={i.priceKind} madeHere={i.batchYield !== null} />
+                    {i.priceKind !== 'unset' && i.priceKind !== 'free' && formatUnitCost(i)}
+                  </div>
                   {(i.packSize ?? 0) > 1 && <div className="whitespace-nowrap text-xs text-stone-500">{formatPack(i)}</div>}
                   {baseUnitConversion(i.unit) && (
                     <button
@@ -423,6 +429,26 @@ function IconButton({
   );
 }
 
+/**
+ * How the price is known (costing spec D1): "no price yet" (listed under
+ * Costing → Missing costs), "free" (a real Rs 0), or "guess". A sauce made
+ * here with no price of its own is costed from its batch recipe.
+ */
+function PriceKindTag({ kind, madeHere }: { kind: PriceKind; madeHere: boolean }) {
+  const tag =
+    kind === 'unset'
+      ? madeHere
+        ? { text: 'from its batch', cls: 'bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300' }
+        : { text: 'no price yet', cls: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200' }
+      : kind === 'free'
+        ? { text: 'free', cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200' }
+        : kind === 'estimate'
+          ? { text: 'guess', cls: 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200' }
+          : null;
+  if (!tag) return null;
+  return <span className={cn('mr-1.5 rounded px-1.5 py-0.5 font-sans text-[11px] font-medium', tag.cls)}>{tag.text}</span>;
+}
+
 function StatusBadge({ ingredient }: { ingredient: Ingredient }) {
   const s = stockStatus(ingredient);
   if (s === 'ok') return null;
@@ -541,6 +567,11 @@ function IngredientDialog({
   const [sku, setSku] = useState(existing?.sku ?? '');
   const [notes, setNotes] = useState(existing?.notes ?? '');
   const guessed = guessIngredientCategory(name);
+  // What the price is (costing spec D1): a real Rs 0, or a guess. Neither = a
+  // real price, or "no price yet" when it is Rs 0.
+  const [free, setFree] = useState(existing?.priceKind === 'free');
+  const [guess, setGuess] = useState(existing?.priceKind === 'estimate');
+  const priced = hasPack ? pack.priceCents > 0 : (parseFloat(costPerUnit || '0') || 0) > 0;
 
   const sup = useQuery({
     queryKey: ['inventory', 'suppliers'],
@@ -556,6 +587,8 @@ function IngredientDialog({
         ? { packSize: pack.size, packPriceCents: pack.priceCents }
         : { packSize: null, packPriceCents: null };
       const low = parseInt(lowThreshold, 10) || 0;
+      // 'set' with a price of Rs 0 is saved as "no price yet" by the till.
+      const priceKind: PriceKind = free ? 'free' : guess ? 'estimate' : 'set';
       if (existing) {
         return ipc.inventory.updateIngredient({
           id: existing.id,
@@ -564,6 +597,7 @@ function IngredientDialog({
           lowThreshold: low,
           costPerUnitCents,
           ...packFields,
+          priceKind,
           defaultSupplierId: supplierId || null,
           sku: sku || null,
           notes: notes || null,
@@ -577,6 +611,7 @@ function IngredientDialog({
         lowThreshold: low,
         costPerUnitCents,
         ...packFields,
+        priceKind,
         defaultSupplierId: supplierId || null,
         sku: sku || null,
         notes: notes || null,
@@ -694,8 +729,8 @@ function IngredientDialog({
                   id="ing-cost"
                   type="number"
                   step="0.001"
-                  value={hasPack ? (pack.priceCents / pack.size / 100).toFixed(3) : costPerUnit}
-                  disabled={hasPack}
+                  value={free ? '0' : hasPack ? (pack.priceCents / pack.size / 100).toFixed(3) : costPerUnit}
+                  disabled={hasPack || free}
                   onChange={(e) => setCostPerUnit(e.target.value)}
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono disabled:bg-stone-100 disabled:text-stone-500 dark:border-stone-700 dark:bg-stone-800"
                 />
@@ -720,8 +755,9 @@ function IngredientDialog({
                     inputMode="numeric"
                     value={packSize}
                     placeholder="e.g. 6000"
+                    disabled={free}
                     onChange={(e) => setPackSize(e.target.value)}
-                    className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-900"
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono disabled:opacity-50 dark:border-stone-700 dark:bg-stone-900"
                   />
                 </div>
                 <div>
@@ -733,15 +769,44 @@ function IngredientDialog({
                     min={0}
                     value={packPrice}
                     placeholder="e.g. 2250"
+                    disabled={free}
                     onChange={(e) => setPackPrice(e.target.value)}
-                    className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-900"
+                    className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono disabled:opacity-50 dark:border-stone-700 dark:bg-stone-900"
                   />
                 </div>
               </div>
               <p className="mt-2 text-xs text-stone-500">
-                {hasPack
+                {hasPack && !free
                   ? `= ${formatUnitCost({ unit, costPerUnitCents: 0, packSize: pack.size, packPriceCents: pack.priceCents })}`
                   : 'Type the pack from the supplier bill and the cost per ' + unit + ' is worked out for you.'}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={free}
+                    onChange={(e) => {
+                      setFree(e.target.checked);
+                      if (e.target.checked) setGuess(false);
+                    }}
+                  />
+                  Free (costs nothing)
+                </label>
+                <label className={cn('inline-flex items-center gap-2', free && 'opacity-50')}>
+                  <input type="checkbox" checked={guess} disabled={free} onChange={(e) => setGuess(e.target.checked)} />
+                  This price is a guess
+                </label>
+              </div>
+              <p className="text-xs text-stone-500">
+                {free
+                  ? 'Counted as Rs 0 in every dish that uses it.'
+                  : !priced
+                    ? 'No price yet: dishes that use it show "can\'t cost yet" on the Costing page until it has one.'
+                    : guess
+                      ? 'Dishes are costed with it, and it stays on Costing → Missing costs until the real price is in.'
+                      : null}
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3">

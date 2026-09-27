@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { menuImportFileSchema, setBatchRecipeInputSchema, type MenuImportFile } from '@cheeseoclock/shared-schemas';
-import { normalizeName, planMenuImport, type MenuSnapshot } from './menu-import-plan.js';
+import { importedPriceKind, normalizeName, planMenuImport, type MenuSnapshot } from './menu-import-plan.js';
 
 function file(partial: Partial<Record<'categories' | 'ingredients' | 'items', unknown[]>>): MenuImportFile {
   return menuImportFileSchema.parse({
@@ -630,5 +630,50 @@ describe('menuImportFileSchema', () => {
     expect(file(2).success).toBe(true);
     expect(file(3).success).toBe(true);
     expect(file(4).success).toBe(false);
+  });
+});
+
+describe('price kinds from the menu file (costing, Phase 1)', () => {
+  const ingredients = [
+    { name: 'Test Salt', unit: 'g', costPerUnitCents: 0 },
+    { name: 'Test Bottle', unit: 'pcs', costPerUnitCents: 0 },
+    { name: 'Test Breading', unit: 'g', costPerUnitCents: 15, priceIsEstimate: true },
+    { name: 'Test Oil', unit: 'ml', costPerUnitCents: 0, packSize: 1000, packPriceCents: 50_000 },
+  ];
+
+  it('importedPriceKind: Rs 0 is "not priced yet" unless the shop marked it free; a guess is an estimate', () => {
+    expect(importedPriceKind(false, false, null)).toBe('unset');
+    expect(importedPriceKind(false, true, 'set')).toBe('unset');
+    expect(importedPriceKind(false, false, 'free')).toBe('free');
+    expect(importedPriceKind(true, false, 'free')).toBe('set');
+    expect(importedPriceKind(true, true, 'set')).toBe('estimate');
+  });
+
+  it('new ingredients: Rs 0 → unset, a guess → estimate, a pack price → set', () => {
+    const plan = planMenuImport(file({ ingredients, items: [] }), shop());
+    expect(Object.fromEntries(plan.preview.ingredients.map((i) => [i.name, i.priceKind]))).toEqual({
+      'Test Salt': 'unset',
+      'Test Bottle': 'unset',
+      'Test Breading': 'estimate',
+      'Test Oil': 'set',
+    });
+    expect(plan.ops.ingredients.map((o) => o.create?.priceKind)).toEqual(['unset', 'unset', 'estimate', 'set']);
+  });
+
+  it('a "free" ingredient is never overwritten by the file\'s Rs 0; a price that became a guess says so', () => {
+    const plan = planMenuImport(
+      file({ ingredients, items: [] }),
+      shop({
+        ingredients: [
+          ing('salt', 'Test Salt', 'g', 0, { priceKind: 'free' }),
+          ing('breading', 'Test Breading', 'g', 15, { priceKind: 'set' }),
+        ],
+      }),
+    );
+    const salt = plan.preview.ingredients.find((i) => i.name === 'Test Salt')!;
+    expect(salt).toMatchObject({ action: 'same', priceKind: 'free', changes: [] });
+    const breading = plan.preview.ingredients.find((i) => i.name === 'Test Breading')!;
+    expect(breading).toMatchObject({ action: 'update', priceKind: 'estimate', changes: ['price known → price is a guess'] });
+    expect(plan.ops.ingredients.find((o) => o.existingId === 'breading')?.update).toEqual({ priceKind: 'estimate' });
   });
 });

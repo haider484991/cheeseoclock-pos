@@ -17,6 +17,7 @@ import {
   Bike,
   History,
   Receipt,
+  Coins,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { StoreLogo, useImageAspect } from '../settings/StoreLogo';
@@ -50,6 +51,7 @@ const ITEMS: NavItem[] = [
   navItem('/riders', Bike),
   navItem('/menu', UtensilsCrossed),
   navItem('/inventory', Boxes),
+  navItem('/costing', Coins),
   navItem('/customers', Contact),
   navItem('/reports', BarChart3),
   navItem('/users', Users),

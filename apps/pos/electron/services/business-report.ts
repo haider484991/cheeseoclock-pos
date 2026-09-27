@@ -50,7 +50,12 @@ const TRADING_DAY_OFFSET_MS = 5 * 3_600_000 - PKT_OFFSET_MS;
 const DAY_MS = 86_400_000;
 
 const IN_RANGE = `o.created_at >= ? AND o.created_at < ?`;
-const COUNTED = `o.deleted_at IS NULL AND o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded')`;
+/**
+ * The orders every sales figure counts: paid, not cancelled or fully
+ * refunded (alias `o`). Exported for the Costing page's "sold in the last 28
+ * days", so the two never count differently.
+ */
+export const COUNTED = `o.deleted_at IS NULL AND o.paid_at IS NOT NULL AND o.status NOT IN ('void', 'refunded')`;
 /** Money handed back on an order (a positive number): its negative payment rows. */
 const REFUNDED = `COALESCE((SELECT -SUM(rp.amount_cents) FROM payments rp
                     WHERE rp.order_id = o.id AND rp.amount_cents < 0 AND rp.deleted_at IS NULL), 0)`;

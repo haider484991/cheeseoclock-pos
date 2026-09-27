@@ -21,6 +21,7 @@ function ing(p: Partial<Ingredient> & { name: string }): Ingredient {
     costPerUnitCents: 10,
     packSize: null,
     packPriceCents: null,
+    priceKind: 'set',
     batchYield: null,
     batchMethod: null,
     defaultSupplierId: null,

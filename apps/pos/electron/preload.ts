@@ -240,6 +240,15 @@ const api: RendererApi = {
     setPurchaseOrderStatus: (req) => invoke('inventory:setPurchaseOrderStatus', req),
     receiveDelivery: (req) => invoke('inventory:receiveDelivery', req),
   },
+  costing: {
+    menuCosts: () => invoke('costing:menuCosts', undefined),
+    itemSheet: (req) => invoke('costing:itemSheet', req),
+    missingCosts: () => invoke('costing:missingCosts', undefined),
+    getTargets: () => invoke('costing:getTargets', undefined),
+    setTargets: (req) => invoke('costing:setTargets', req),
+    recipeCost: (req) => invoke('costing:recipeCost', req),
+    batchCalc: (req) => invoke('costing:batchCalc', req),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

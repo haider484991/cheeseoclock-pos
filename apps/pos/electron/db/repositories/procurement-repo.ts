@@ -493,10 +493,13 @@ export function receiveDelivery(
           | { cost_per_unit_cents: number; pack_size: number | null; pack_price_cents: number | null }
           | undefined;
         if (cost && cost.cost_per_unit_cents !== item.unitCostCents) {
+          // A price off a real bill is a real price ('set'); a bill at Rs 0
+          // leaves a 'free' ingredient free and anything else unpriced (0032).
           db.prepare(
             `UPDATE ingredients SET cost_per_unit_cents = ?, pack_size = NULL, pack_price_cents = NULL,
+                    price_kind = CASE WHEN ? > 0 THEN 'set' WHEN price_kind = 'free' THEN 'free' ELSE 'unset' END,
                     updated_at = ?, version = version + 1 WHERE id = ?`,
-          ).run(item.unitCostCents, now, item.ingredientId);
+          ).run(item.unitCostCents, item.unitCostCents, now, item.ingredientId);
           enqueueSync(db, {
             entityType: 'ingredients',
             entityId: item.ingredientId,

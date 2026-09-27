@@ -23,6 +23,18 @@ export const INGREDIENT_CATEGORY_IDS = [
 ] as const;
 export type IngredientCategory = (typeof INGREDIENT_CATEGORY_IDS)[number];
 
+/**
+ * What an ingredient's price is (costing spec D1, migration 0032):
+ *  - 'set': a real price (typed, from a bill or the costing sheet);
+ *  - 'estimate': a known guess ("breading, about Rs 15");
+ *  - 'free': it really costs nothing (Rs 0 is its price, not a gap);
+ *  - 'unset': nobody has priced it yet. The ONLY "missing price" marker:
+ *    it is listed under Costing -> Missing costs, and the items using it
+ *    show "can't cost yet".
+ */
+export const PRICE_KINDS = ['set', 'estimate', 'free', 'unset'] as const;
+export type PriceKind = (typeof PRICE_KINDS)[number];
+
 export interface Ingredient {
   id: UUID;
   name: string;
@@ -38,6 +50,8 @@ export interface Ingredient {
   packSize: number | null;
   /** Price of one such pack, in paisa. */
   packPriceCents: number | null;
+  /** Whether that price is real, a guess, a true Rs 0, or not known yet. */
+  priceKind: PriceKind;
   /** Made in-house: one batch yields this many base units (null = bought in). */
   batchYield: number | null;
   /** How to make a batch (free text). */
@@ -64,6 +78,10 @@ export interface BatchRecipeLine {
   unit: string;
   qty: number;
   costPerUnitCents: number;
+  /** The input's price as costing uses it (rolled up when it is made in-house too). */
+  priceKind: PriceKind;
+  /** The input is itself made in-house: its price is rolled up from its own inputs. */
+  madeInHouse: boolean;
 }
 
 export interface BatchRecipe {
@@ -71,8 +89,22 @@ export interface BatchRecipe {
   batchYield: number | null;
   batchMethod: string | null;
   lines: BatchRecipeLine[];
-  /** What one batch costs at today's input costs, in paisa. */
+  /**
+   * What one batch costs at today's input prices, in paisa, rolled up
+   * through inputs that are made in-house too (costing spec 4.1). An input
+   * with no price adds nothing: see `complete`.
+   */
   batchCostCents: number;
+  /** Every input has a price (none 'unset'): the rolled-up cost is the batch's price. */
+  complete: boolean;
+  /** Inputs with no price yet (names): they keep the roll-up from being complete. */
+  unpricedInputs: string[];
+  /**
+   * The price stored on the ingredient itself for one batch (typed, or the
+   * costing sheet's figure from the menu import), shown beside the roll-up.
+   * Null when nothing is stored.
+   */
+  storedBatchCostCents: number | null;
 }
 
 export interface Supplier {

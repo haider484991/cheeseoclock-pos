@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ROLE_CAPABILITIES, hasCapability, type Role } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, ROLE_CAPABILITIES, hasCapability, type Role } from '@cheeseoclock/shared-types';
 import { PAGE_ACCESS, canOpenPage, homeFor, navPagesFor, showInNav, type GatedPage } from './navAccess';
 
 const ALL_PAGES = Object.keys(PAGE_ACCESS) as GatedPage[];
@@ -7,9 +7,19 @@ const ALL_PAGES = Object.keys(PAGE_ACCESS) as GatedPage[];
 describe('who opens which page', () => {
   it('a cashier: Checkout, Live Orders, Recent Orders and Riders — nothing else', () => {
     expect(navPagesFor('cashier')).toEqual(['/checkout', '/orders', '/orders/recent', '/riders']);
-    for (const p of ['/customers', '/orders/history', '/reports', '/menu', '/inventory', '/users', '/settings'] as const) {
+    for (const p of ['/customers', '/orders/history', '/reports', '/menu', '/inventory', '/costing', '/users', '/settings'] as const) {
       expect(canOpenPage('cashier', p)).toBe(false);
     }
+  });
+
+  it('costs: managers and the owner, between Inventory and Customers; never the counter', () => {
+    for (const role of ['manager', 'admin'] as Role[]) {
+      const pages = navPagesFor(role);
+      expect(pages.indexOf('/costing')).toBe(pages.indexOf('/inventory') + 1);
+      expect(pages.indexOf('/customers')).toBe(pages.indexOf('/costing') + 1);
+    }
+    expect(canOpenPage('cashier', '/costing')).toBe(false);
+    expect(PAGE_ACCESS['/costing'].capability).toBe(COST_CAPABILITY);
   });
 
   it('a manager: everything but Users, with Order History instead of Recent Orders', () => {

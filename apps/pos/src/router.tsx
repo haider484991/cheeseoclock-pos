@@ -6,6 +6,7 @@ import { CheckoutPage } from './features/checkout/CheckoutPage';
 import { MenuPage } from './features/menu-mgmt/MenuPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { InventoryPage } from './features/inventory/InventoryPage';
+import { CostingPage } from './features/costing/CostingPage';
 import { ReportsPage } from './features/reports/ReportsPage';
 import { CustomersPage } from './features/customers/CustomersPage';
 import { UsersPage } from './features/users/UsersPage';
@@ -59,6 +60,7 @@ export const router: ReturnType<typeof createHashRouter> = createHashRouter([
       gated('/riders', <RidersPage />),
       gated('/menu', <MenuPage />),
       gated('/inventory', <InventoryPage />),
+      gated('/costing', <CostingPage />),
       gated('/reports', <ReportsPage />),
       gated('/customers', <CustomersPage />),
       gated('/users', <UsersPage />),
