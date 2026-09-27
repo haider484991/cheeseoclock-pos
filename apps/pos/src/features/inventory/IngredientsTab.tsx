@@ -20,11 +20,12 @@ import {
   unitCostMc,
   countEntryQty,
   suggestedKeyIngredient,
+  visibleWasteReasons,
   type CountEntry,
 } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { Ingredient, IngredientCategory, PriceKind, StockMovementReason, WasteReason } from '@cheeseoclock/shared-types';
+import type { Ingredient, IngredientCategory, PriceKind, StockMovementReason, WasteReasonId } from '@cheeseoclock/shared-types';
 import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat, Tag, ShoppingBasket, FileDown } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
@@ -57,6 +58,7 @@ import { downloadText } from '../reports/exporters';
 import { formatUnitPrice } from '../costing/costingFormat';
 import { CountEntryInput, STOCK_COUNTS_KEY, defaultMode } from './CountSheet';
 import { countLineDifferenceText, signedCents } from '../reports/varianceFormat';
+import { useStockRules } from '../settings/shop-rules/useShopSetting';
 
 const INGREDIENTS_KEY = ['inventory', 'ingredients', 'all'] as const;
 
@@ -76,6 +78,8 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
   const [category, setCategory] = useSessionState<CategoryFilter>('inv.ing.category', 'all');
   const [stock, setStock] = useSessionState<StockFilter>('inv.ing.stock', 'all');
   const [sort, setSort] = useSessionState<IngredientSort>('inv.ing.sort', { key: 'name', dir: 'asc' });
+  // The stock bar's full mark (Settings → Kitchen & stock; 3 × the low level by default).
+  const { reorderMultiple } = useStockRules();
 
   const q = useQuery({
     queryKey: INGREDIENTS_KEY,
@@ -341,7 +345,7 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
                   />
                 </td>
                 <td className="py-2.5 text-right">
-                  <StockLevel ingredient={i} />
+                  <StockLevel ingredient={i} multiple={reorderMultiple} />
                 </td>
                 <td className="py-2.5 pl-3 text-right">
                   <PriceCell ingredient={i} onHistory={() => setHistoryFor(i)} />
@@ -632,10 +636,14 @@ function StatusBadge({ ingredient }: { ingredient: Ingredient }) {
   );
 }
 
-/** "12.5 kg", a bar with the low level a third of the way along, "low at 5 kg". */
-function StockLevel({ ingredient: i }: { ingredient: Ingredient }) {
+/**
+ * "12.5 kg", a bar, "low at 5 kg". A full bar is the owner's multiple of the
+ * low level (Settings → Kitchen & stock; 3 by default), so the low mark sits
+ * 1 ÷ that of the way along — a third, by default.
+ */
+function StockLevel({ ingredient: i, multiple }: { ingredient: Ingredient; multiple: number }) {
   const s = stockStatus(i);
-  const fill = stockFill(i);
+  const fill = stockFill(i, multiple);
   return (
     <div className="ml-auto flex w-32 flex-col items-end gap-1">
       <span
@@ -656,7 +664,7 @@ function StockLevel({ ingredient: i }: { ingredient: Ingredient }) {
           )}
           style={{ width: `${Math.round(fill * 100)}%` }}
         />
-        {i.lowThreshold > 0 && <div className="absolute inset-y-0 left-1/3 w-px bg-stone-500/60" />}
+        {i.lowThreshold > 0 && <div className="absolute inset-y-0 w-px bg-stone-500/60" style={{ left: `${(100 / multiple).toFixed(2)}%` }} />}
       </div>
       <span className="whitespace-nowrap text-[11px] text-stone-500">
         {i.lowThreshold > 0 ? `low at ${formatQty(i.lowThreshold, i.unit)}` : 'no low level set'}
@@ -1004,16 +1012,8 @@ function FieldLabel({ htmlFor, children }: { htmlFor: string; children: React.Re
 /** What can be booked here by hand. Stock that came in is a purchase now ("Record a purchase", costing Phase 5). */
 type ManualReason = Extract<StockMovementReason, 'waste' | 'count' | 'adjustment'>;
 
-/** Why it was thrown away: Reports splits waste by these (costing spec Phase 2). */
-const WASTE_REASON_CHIPS: ReadonlyArray<{ id: WasteReason; label: string }> = [
-  { id: 'burnt', label: 'Burnt' },
-  { id: 'dropped', label: 'Dropped' },
-  { id: 'expired', label: 'Expired / went off' },
-  { id: 'wrong_order', label: 'Wrong order made' },
-  { id: 'returned', label: 'Sent back' },
-  { id: 'staff_meal', label: 'Staff meal' },
-  { id: 'other', label: 'Other' },
-];
+// Why it was thrown away: Reports split waste by these (costing spec Phase 2). The owner's list
+// (Settings → Kitchen & stock): the reasons he has not hidden, with his names, in his order.
 
 const MANUAL_REASONS: ReadonlyArray<{ id: ManualReason; label: string; hint: string }> = [
   { id: 'waste', label: 'Waste', hint: 'Spoiled, dropped or thrown away' },
@@ -1034,7 +1034,8 @@ function MovementDialog({
   const qc = useQueryClient();
   const { toast } = useToast();
   const [reason, setReason] = useState<ManualReason>('waste');
-  const [wasteReason, setWasteReason] = useState<WasteReason | null>(null);
+  const [wasteReason, setWasteReason] = useState<WasteReasonId | null>(null);
+  const wasteChips = visibleWasteReasons(useStockRules().wasteReasons);
   const [delta, setDelta] = useState('');
   const [notes, setNotes] = useState('');
   const needsWhy = reason === 'waste' && wasteReason === null;
@@ -1151,7 +1152,7 @@ function MovementDialog({
               <div>
                 <div className="mb-1 text-xs uppercase tracking-wider text-stone-500">Why?</div>
                 <div className="flex flex-wrap gap-2" role="group" aria-label="Why was it wasted">
-                  {WASTE_REASON_CHIPS.map((w) => (
+                  {wasteChips.map((w) => (
                     <button
                       key={w.id}
                       type="button"

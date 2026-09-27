@@ -120,7 +120,33 @@ export function doThisWords(item: DoThisItem): DoThisWords {
         action: 'Open used vs should have used',
         amount: loss,
       };
+    case 'stock_take_due':
+      return stockTakeDueWords(item);
   }
+}
+
+/**
+ * The owner's stock-take reminder (Settings → Kitchen & stock) as a "Do
+ * this" line: "Count the key items — the last count was 9 days ago; you
+ * asked for one every 7 days." Built from the values.
+ */
+export function stockTakeDueWords(item: Pick<Extract<DoThisItem, { kind: 'stock_take_due' }>, 'scope' | 'everyDays' | 'daysSince'>): DoThisWords {
+  const what = item.scope === 'full' ? 'full stock take' : 'key-items count';
+  const every = `you asked for one every ${plural(item.everyDays, 'day')}`;
+  const last =
+    item.daysSince === null
+      ? `No ${what} yet`
+      : item.daysSince === 0
+        ? `The last ${what} was today`
+        : item.daysSince === 1
+          ? `The last ${what} was yesterday`
+          : `The last ${what} was ${plural(item.daysSince, 'day')} ago`;
+  return {
+    title: item.scope === 'full' ? 'Time for a full stock take' : 'Count the key items',
+    detail: `${last}; ${every} (Settings → Kitchen & stock).`,
+    action: 'Open stock takes',
+    amount: null,
+  };
 }
 
 /** "Today", "This week"… and what each is compared with (the trend strip). */

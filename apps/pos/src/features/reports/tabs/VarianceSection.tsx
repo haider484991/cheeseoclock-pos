@@ -21,6 +21,7 @@ import {
   lineVerdict,
   signedCents,
   signedQty,
+  varianceBandsText,
   varianceHeadline,
   varianceWindowText,
 } from '../varianceFormat';
@@ -104,7 +105,7 @@ function VarianceBody({ v }: { v: ReportVariance }) {
               </span>
             )}
           </div>
-          <div className="mt-1 text-xs text-stone-500">Under 2% is good; over 5%, look at it now</div>
+          <div className="mt-1 text-xs text-stone-500">{varianceBandsText(v.bands)}</div>
         </Panel>
         <Panel>
           <div className="text-[11px] font-semibold uppercase tracking-widest text-stone-500">Food sales</div>

@@ -3,6 +3,7 @@
  * "12.5 kg", not "12500 g"; "Low" or "Out", not a number to compare in your
  * head. Pure, so the stock screen and reports agree.
  */
+import { DEFAULT_STOCK_RULES } from '@cheeseoclock/shared-types';
 
 export type StockStatus = 'out' | 'low' | 'ok';
 
@@ -19,14 +20,15 @@ export function stockStatus(i: Stocked): StockStatus {
 }
 
 /**
- * 0…1 for a stock bar: the low-stock level sits a third of the way along, so
- * a full bar means "three times what you call low". With no low level set, a
- * bar is full while there is any stock at all.
+ * 0…1 for a stock bar: a full bar is `multiple` times what you call low (the
+ * owner's, Settings → Kitchen & stock; the released 3), so the low-stock
+ * level sits 1 ÷ `multiple` of the way along — a third, by default. With no
+ * low level set, a bar is full while there is any stock at all.
  */
-export function stockFill(i: Stocked): number {
+export function stockFill(i: Stocked, multiple: number = DEFAULT_STOCK_RULES.reorderMultiple): number {
   if (i.currentQty <= 0) return 0;
   if (i.lowThreshold <= 0) return 1;
-  return Math.min(1, i.currentQty / (i.lowThreshold * 3));
+  return Math.min(1, i.currentQty / (i.lowThreshold * multiple));
 }
 
 /**

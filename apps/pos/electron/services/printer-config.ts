@@ -3,6 +3,7 @@ import log from 'electron-log/main';
 import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import type { MonoRaster, PrinterConnectionConfig } from '@cheeseoclock/printer-core';
+import { KITCHEN_COPIES_MAX } from '@cheeseoclock/shared-types';
 import type {
   DrawerSettings,
   PrintPolicy,
@@ -201,7 +202,14 @@ export function setKitchenPrinterConfig(
   setSetting(db, PRINTER_KITCHEN_KEY, config, { actorUserId });
 }
 
-/** What prints automatically, and when — see PrintPolicy in shared-types. */
+/**
+ * What prints automatically, and when — see PrintPolicy in shared-types.
+ * Per till (the local `settings` table, never synced): each till drives its
+ * own printers. The kitchen ticket's copies, phone and drinks have NO
+ * default here, so a policy saved before they existed reads exactly as it
+ * was; kitchenTicketRules() fills in the released ones (1 copy, phone and
+ * drinks on). Their bounds are checked here, in the main process.
+ */
 export const PrintPolicySchema = z.object({
   kitchenTicket: z.boolean().default(true),
   deliveryBillOnDispatch: z.boolean().default(true),
@@ -209,6 +217,14 @@ export const PrintPolicySchema = z.object({
   // On by default: the owner asked for the logo on receipts. Policies saved
   // before this setting existed read as on.
   logoOnReceipt: z.boolean().default(true),
+  kitchenCopies: z
+    .number()
+    .int({ message: 'Kitchen tickets are a whole number' })
+    .min(1, { message: 'At least one kitchen ticket' })
+    .max(KITCHEN_COPIES_MAX, { message: `At most ${KITCHEN_COPIES_MAX} kitchen tickets an order` })
+    .optional(),
+  kitchenPhone: z.boolean().optional(),
+  kitchenDrinks: z.boolean().optional(),
 });
 
 export function getPrintPolicy(db: AppDatabase): PrintPolicy {

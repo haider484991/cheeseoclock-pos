@@ -296,3 +296,13 @@ export function madeOfNote(line: { costCents: number; priceKind: CostLineKind },
   if (line.priceKind === 'missing' || line.priceKind === 'unset') return `${which}, so this can't be costed yet; ${known}.`;
   return `${which}, so this is costed at its saved price (${formatCents(line.costCents)}) until every input has one; ${known}.`;
 }
+
+/**
+ * What the default food-cost target does, from its value: the target of a
+ * category with none of its own yet whose name the till has no suggestion
+ * for, and of every category added later — shown as a suggestion until the
+ * targets are saved.
+ */
+export function defaultTargetText(defaultBps: number): string {
+  return `A category the till has no suggestion for (Pizza, Burgers, Fries & Sides, Deals, Dips and Drinks have their own), and every category added later, starts at ${formatBps(defaultBps)} — shown as “suggested”, without colours, until you save the targets. For example, a new “Wraps” category: a Rs 1,000 wrap is on target up to ${formatCents(Math.round((100_000 * defaultBps) / 10_000))} of ingredients.`;
+}

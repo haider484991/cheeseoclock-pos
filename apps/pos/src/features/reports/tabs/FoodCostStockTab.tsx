@@ -16,7 +16,7 @@ import { Truck, Wheat } from 'lucide-react';
 import { DataTable, Note, Panel, Section, useShowAll } from '../reportUi';
 import {
   MISSING_COST_WHY,
-  WASTE_REASON_LABEL,
+  wasteReasonLabel,
   cancelledWasteText,
   costingStartText,
   coverageText,
@@ -261,7 +261,7 @@ export function FoodCostSection({
             >
               <DataTable
                 columns={[{ label: 'Reason' }, { label: 'Times', right: true }, { label: 'Cost', right: true }]}
-                rows={f.wasteByReason.map((w) => [WASTE_REASON_LABEL[w.reason], w.times, w.cents ? formatCents(w.cents) : '—'])}
+                rows={f.wasteByReason.map((w) => [wasteReasonLabel(w.reason, f.wasteLabels), w.times, w.cents ? formatCents(w.cents) : '—'])}
                 empty="Nothing was wasted."
               />
             </Panel>

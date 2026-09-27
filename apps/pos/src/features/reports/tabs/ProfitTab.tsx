@@ -13,7 +13,7 @@ import type { ReportChannelProfit, ReportProfitTab } from '@cheeseoclock/shared-
 import { Coins, LayoutGrid, Store } from 'lucide-react';
 import { Waterfall } from '../charts';
 import { DataTable, Note, Panel, Section } from '../reportUi';
-import { CHANNEL_LABEL, WASTE_REASON_LABEL, costingStartText, estimatedText, unpaidFoodText } from '../reportFormat';
+import { CHANNEL_LABEL, costingStartText, estimatedText, unpaidFoodText, wasteReasonLabel } from '../reportFormat';
 import { formatBps } from '../../costing/costingFormat';
 import { commissionText, profitHeadline, riderText, stepAmount, stepLabel, stockGainNote, unknownCostNote } from '../profitFormat';
 
@@ -75,7 +75,7 @@ function WaterfallSection({ data }: { data: ReportProfitTab }) {
                   {data.wasteByReason.map((w) => (
                     <li key={w.reason} className="flex justify-between gap-2">
                       <span>
-                        {WASTE_REASON_LABEL[w.reason]} <span className="text-xs text-stone-500">· {w.times}×</span>
+                        {wasteReasonLabel(w.reason, data.wasteLabels)} <span className="text-xs text-stone-500">· {w.times}×</span>
                       </span>
                       <span className="tabular-nums">{formatCents(w.cents)}</span>
                     </li>

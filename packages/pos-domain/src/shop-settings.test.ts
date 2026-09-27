@@ -59,6 +59,8 @@ describe('the released defaults are pinned', () => {
       'discounts.presets',
       'staff.timing',
       'kitchen.timing',
+      'stock.rules',
+      'menu.importPolicy',
     ]);
     for (const key of SHOP_SETTING_KEYS) {
       const d = SHOP_SETTING_DEFAULTS[key];

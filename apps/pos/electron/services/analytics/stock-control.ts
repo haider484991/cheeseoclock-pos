@@ -33,12 +33,11 @@ import type {
   VarianceLine,
   VarianceBand,
   VarianceRequest,
+  StockRules,
 } from '@cheeseoclock/shared-types';
 import { isStockCountScope } from '@cheeseoclock/shared-types';
 import {
   OTHER_TILL_MISSING,
-  VARIANCE_DO_THIS_BPS,
-  VARIANCE_DO_THIS_MIN_WINDOW_MS,
   actualCogsFigures,
   addToSums,
   batchPairs,
@@ -55,13 +54,14 @@ import {
   unexplainedBps,
   unitFactor,
   varianceBand,
+  varianceDoThisRules,
   varianceOf,
   type BatchRecipeOf,
   type PriceOf,
   type WindowSums,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../../db/connection.js';
-import { getBusinessSetting } from '../../db/business-settings-read.js';
+import { getBusinessSetting, readStockRules } from '../../db/business-settings-read.js';
 import { loadPriceBook, priceOfBook } from '../../db/price-book.js';
 import { loadPriceHistory } from '../../db/price-history-read.js';
 import { firstTakesOf, ledgerRowsToDate, ledgerSumsForWindow, type LedgerDbRow } from '../../db/stock-ledger-read.js';
@@ -363,6 +363,8 @@ export function buildVariance(db: AppDatabase, job: VarianceJob): ReportVariance
   const totalCents = lines.reduce((sum, l) => sum + l.unexplainedCents, 0);
   // Nothing counted on both: nothing was compared, so no share and no rating (never "Good").
   const varianceBps = lines.length === 0 ? null : shareBps(totalCents, food.foodSalesCents);
+  const { goodUnderBps, okUpToBps, needsWorkUpToBps } = readStockRules(db).bands;
+  const bands = { goodUnderBps, okUpToBps, needsWorkUpToBps };
 
   const byId = new Map(lines.map((l) => [l.ingredientId, l]));
   const pairs = batchPairs(batchRecipes(db), byId);
@@ -410,7 +412,9 @@ export function buildVariance(db: AppDatabase, job: VarianceJob): ReportVariance
       .sort((a, b) => a.name.localeCompare(b.name)),
     totalCents,
     varianceBps,
-    band: varianceBand(varianceBps),
+    // Rated with the owner's bands (Settings → Kitchen & stock), which the screen says as they are.
+    band: varianceBand(varianceBps, bands),
+    bands,
     pairs,
     corrections: corrections.sort((a, b) => a.at.localeCompare(b.at)),
     alreadyCounted,
@@ -502,17 +506,23 @@ export interface LatestVariance {
 
 /**
  * Whether the latest comparison is a "Do this" line (costing spec 4.17):
- * something was compared, over about a week or more (a shorter stretch
- * would be blown up to a week), and more than 3% of the food sales between
- * the two went unexplained.
+ * something was compared, over the owner's shortest stretch or more (6
+ * days by default: a shorter stretch would be blown up to a week), and more
+ * than his share of the food sales between the two (3% by default) went
+ * unexplained. `rules`: 'stock.rules' (Settings → Kitchen & stock); the
+ * released ones when not given.
  */
-export function isVarianceDoThis(v: LatestVariance | null): v is LatestVariance & { varianceBps: number } {
+export function isVarianceDoThis(
+  v: LatestVariance | null,
+  rules?: Pick<StockRules, 'varianceDoThisBps' | 'varianceMinWindowDays'>,
+): v is LatestVariance & { varianceBps: number } {
+  const r = varianceDoThisRules(rules);
   return (
     v !== null &&
     v.compared > 0 &&
-    v.windowMs >= VARIANCE_DO_THIS_MIN_WINDOW_MS &&
+    v.windowMs >= r.minWindowMs &&
     v.varianceBps !== null &&
-    v.varianceBps > VARIANCE_DO_THIS_BPS &&
+    v.varianceBps > r.minBps &&
     v.totalCents > 0
   );
 }
@@ -535,7 +545,9 @@ export function latestVariance(db: AppDatabase, link: TillLinkState, now: Date, 
   if (!from || !to) return null;
   const windowMs = Date.parse(to.finishedAt) - Date.parse(from.finishedAt);
   if (!opts.longReads && windowMs > VARIANCE_MAIN_THREAD_MAX_DAYS * 86_400_000) return null;
-  const key = `${from.id}|${to.id}|${link.on}|${sellingTills}|${tradingDayOfMs(now.getTime())}`;
+  // The owner's bands rate it: a Save (here or from the other till) is a new key, so it shows at once.
+  const b = readStockRules(db).bands;
+  const key = `${from.id}|${to.id}|${link.on}|${sellingTills}|${tradingDayOfMs(now.getTime())}|${b.goodUnderBps}/${b.okUpToBps}/${b.needsWorkUpToBps}`;
   const kept = latestKept.get(db);
   if (kept && kept.key === key) return kept.value;
   const v = buildVariance(db, { fromCountId: from.id, toCountId: to.id, link });

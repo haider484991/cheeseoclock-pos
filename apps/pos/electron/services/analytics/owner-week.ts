@@ -21,6 +21,9 @@
  *   - price alerts:    each alert not seen yet, at its rupees per week.
  * Phase 8 adds stock variance: the latest two stock takes, when more than
  * 3% of food sales went unexplained (stock-control.ts, kept for the day).
+ * Settings phase 7 makes that share, the shortest stretch and the rating
+ * the owner's ('stock.rules', Settings → Kitchen & stock), and adds the
+ * stock-take reminders he can turn on (off by default: no line).
  * Later phases add their own source to the list: leakage flags (Phase 10).
  *
  * "Do this" works from the 28 WHOLE trading days before today (its rupees
@@ -43,6 +46,7 @@ import {
   missingCostsWeekCents,
   ownerWeekWindows,
   redItemWeekCents,
+  stockTakesDue,
   tillHadData,
   tradingDayOfMs,
   tradingDayStartMs,
@@ -73,6 +77,7 @@ import { COUNTED, IN_RANGE, firstOrderMs } from './sql.js';
 import { salesIn } from './trends.js';
 import { profitBeforeOverheads } from './profit.js';
 import { isVarianceDoThis, latestVariance, warmLatestVariance } from './stock-control.js';
+import { readStockRules } from '../../db/business-settings-read.js';
 
 /**
  * What the main process asks for: the week, whether this login may see
@@ -300,18 +305,19 @@ const priceAlertsSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
 };
 
 /**
- * The latest two full or key-items stock takes, about a week or more apart,
- * when more than 3% of the food sales between them went unexplained
- * (costing spec 4.17, Phase 8): what went, spread over the weeks between
- * them. Left out when two tills take orders with the link off
- * (stock-control.ts latestVariance, isVarianceDoThis).
+ * The latest two full or key-items stock takes, the owner's shortest
+ * stretch apart or more (6 days by default), when more than his share of
+ * the food sales between them (3% by default) went unexplained (costing
+ * spec 4.17, Phase 8; Settings → Kitchen & stock): what went, spread over
+ * the weeks between them. Left out when two tills take orders with the link
+ * off (stock-control.ts latestVariance, isVarianceDoThis).
  */
 const stockVarianceSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
   kind: 'stock_variance',
   cost: true,
   collect: ({ db, now, link, longReads }) => {
     const v = latestVariance(db, link, now, { longReads });
-    if (!isVarianceDoThis(v)) return [];
+    if (!isVarianceDoThis(v, readStockRules(db))) return [];
     return [
       {
         kind: 'stock_variance',
@@ -330,6 +336,42 @@ const stockVarianceSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
   },
 };
 
+/** When the latest key-items (or full) and the latest full stock take were finished (any till's). */
+function lastStockTakes(db: AppDatabase): { keyItemsAt: string | null; fullAt: string | null } {
+  const latest = db.prepare(
+    `SELECT MAX(finished_at) AS at FROM stock_counts
+      WHERE status = 'done' AND deleted_at IS NULL AND finished_at IS NOT NULL AND scope = ?`,
+  );
+  const at = (scope: string) => ((latest.get(scope) as { at: string | null } | undefined)?.at ?? null);
+  return { keyItemsAt: at('key_items'), fullAt: at('full') };
+}
+
+/**
+ * A stock take the owner asked to be reminded of is due (Settings →
+ * Kitchen & stock; off by default, so nothing shows until he turns it on):
+ * the key items or a full stock take, last finished that many trading days
+ * ago or more, or never. Pinned; no rupees (pos-domain stockTakesDue).
+ */
+const stockTakeDueSource: DoThisSource<OwnerWeekCtx, DoThisItem> = {
+  kind: 'stock_take_due',
+  cost: false,
+  collect: ({ db, now }) => {
+    const { reminders } = readStockRules(db);
+    if (reminders.keyItemsEveryDays === null && reminders.fullEveryDays === null) return [];
+    return stockTakesDue(reminders, lastStockTakes(db), now.getTime()).map((d) => ({
+      kind: 'stock_take_due' as const,
+      key: `stock_take_due:${d.scope}`,
+      weekCents: null,
+      pinned: true,
+      cost: false,
+      scope: d.scope,
+      everyDays: d.everyDays,
+      lastAt: d.lastAt,
+      daysSince: d.daysSince,
+    }));
+  },
+};
+
 /**
  * The "Do this" sources, in no particular order (the ranking orders the
  * lines). Later phases add theirs here: Phase 10 leakage flags.
@@ -340,6 +382,7 @@ export const DO_THIS_SOURCES: Array<DoThisSource<OwnerWeekCtx, DoThisItem>> = [
   missingCostsSource,
   priceAlertsSource,
   stockVarianceSource,
+  stockTakeDueSource,
 ];
 
 // ------------------------------------------------------------------- sheet --
@@ -442,6 +485,7 @@ export function buildOwnerWeek(db: AppDatabase, job: OwnerWeekJob, now: Date, op
         profit,
         lastStockTake,
         wasteByReason: food.wasteByReason,
+        ...(food.wasteLabels ? { wasteLabels: food.wasteLabels } : {}),
         previousCosts: before
           ? { foodCostBps: before.foodCostBps, coverageBps: before.coverageBps, wasteCents: before.wasteCents, hasCosts: before.hasCosts }
           : null,

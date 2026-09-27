@@ -25,12 +25,16 @@ import {
   type BusinessSettingValue,
 } from '@cheeseoclock/shared-schemas';
 import {
+  DEFAULT_MENU_IMPORT_POLICY,
   DEFAULT_STAFF_TIMING,
+  DEFAULT_STOCK_RULES,
   SHOP_SETTING_DEFAULTS,
   type ApprovalLimits,
+  type MenuImportPolicy,
   type ShopSettingKey,
   type ShopSettingValues,
   type StaffTiming,
+  type StockRules,
 } from '@cheeseoclock/shared-types';
 import { foodpandaFeesFromChannelFees } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from './connection.js';
@@ -148,6 +152,35 @@ export function readStaffTiming(db: AppDatabase | null): StaffTiming {
     return readShopSetting(db, 'staff.timing').value;
   } catch {
     return { ...DEFAULT_STAFF_TIMING };
+  }
+}
+
+/**
+ * The stock rules ('stock.rules', Settings → Kitchen & stock) — the
+ * variance's "Do this" trigger, bands and shortest window, the stock-take
+ * reminders, the reorder multiple and the waste reasons — read on every
+ * call (the Reports worker too). A read that fails (it should not) falls
+ * back to the released rules rather than breaking a report.
+ */
+export function readStockRules(db: AppDatabase | null): StockRules {
+  if (!db) return structuredClone(DEFAULT_STOCK_RULES) as StockRules;
+  try {
+    return readShopSetting(db, 'stock.rules').value;
+  } catch {
+    return structuredClone(DEFAULT_STOCK_RULES) as StockRules;
+  }
+}
+
+/**
+ * What a menu file import may change ('menu.importPolicy'), read when the
+ * import is planned and again inside its transaction. The released one
+ * (the file wins) when nothing is saved.
+ */
+export function readMenuImportPolicy(db: AppDatabase): MenuImportPolicy {
+  try {
+    return readShopSetting(db, 'menu.importPolicy').value;
+  } catch {
+    return { ...DEFAULT_MENU_IMPORT_POLICY };
   }
 }
 

@@ -29,7 +29,7 @@ import { Kpi } from '../reports/reportUi';
 import { coverageText } from '../reports/reportFormat';
 import { doThisWords, trendChangeOf, weekDates } from '../reports/ownerWeekFormat';
 import { formatBps } from '../costing/costingFormat';
-import { openCostingTab, openDishInCosting, openLowStockInInventory, openStockVariance } from '../costing/deepLinks';
+import { openCostingTab, openDishInCosting, openLowStockInInventory, openStockTakes, openStockVariance } from '../costing/deepLinks';
 import { cardHideReason, cardHidesInMs, cardMayShow, type CardLogin, type CardShown } from './ownerCardClock';
 
 /** The card is read at a glance: whole rupees ("Rs 11,512", not "Rs 11,511.50"). */
@@ -124,6 +124,9 @@ export function OwnerWeekPanel({
         return;
       case 'stock_variance':
         openStockVariance(navigate, { fromCountId: item.fromCountId, toCountId: item.toCountId });
+        return;
+      case 'stock_take_due':
+        openStockTakes(navigate);
         return;
     }
   };
@@ -227,7 +230,7 @@ export function OwnerWeekView({
           <ol className="space-y-2">
             {lines.map((item, i) => {
               const words = doThisWords(item);
-              const canOpen = item.kind !== 'low_stock' || canOpenStock;
+              const canOpen = (item.kind !== 'low_stock' && item.kind !== 'stock_take_due') || canOpenStock;
               return (
                 <li
                   key={item.key}

@@ -154,8 +154,10 @@ export interface StockCountFinish {
 
 /**
  * The rating of what went unexplained, as a share of food sales over the
- * same stretch: under 2% good, 2–3% OK, 3–5% needs work, over 5% look at it
- * now (either way: stock found over what the till expected is a sign too).
+ * same stretch: by default under 2% good, 2–3% OK, 3–5% needs work, over 5%
+ * look at it now — the owner's bands in Settings → Kitchen & stock
+ * ('stock.rules') — either way: stock found over what the till expected is
+ * a sign too.
  */
 export const VARIANCE_BANDS = ['good', 'ok', 'needs_work', 'look_now'] as const;
 export type VarianceBand = (typeof VARIANCE_BANDS)[number];
@@ -301,6 +303,11 @@ export interface ReportVariance {
   /** Σ unexplainedCents ÷ food sales; null with no food sales, or nothing counted on both (then no rating either). */
   varianceBps: number | null;
   band: VarianceBand | null;
+  /**
+   * The rating's bands the till used (Settings → Kitchen & stock), so the
+   * screen says them as they are. Absent: the released 2% / 3% / 5%.
+   */
+  bands?: { goodUnderBps: number; okUpToBps: number; needsWorkUpToBps: number };
   pairs: VarianceBatchPair[];
   corrections: VarianceCorrection[];
   alreadyCounted: VarianceAlreadyCounted[];

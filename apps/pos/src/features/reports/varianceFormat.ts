@@ -5,7 +5,9 @@
  */
 import { formatCents, formatQty } from '@cheeseoclock/pos-domain';
 import {
+  DEFAULT_VARIANCE_BANDS,
   STOCK_COUNT_SCOPE_LABEL,
+  type VarianceBands,
   type ReportVariance,
   type StockCountLine,
   type StockCountSummary,
@@ -16,13 +18,23 @@ import {
 import { formatBps } from '../costing/costingFormat';
 import { fmtMoment } from './dateRange';
 
-/** The rating, as the owner reads it: under 2% good, 2–3% OK, 3–5% needs work, over 5% look at it now. */
+/** The rating, as the owner reads it: by default under 2% good, 2–3% OK, 3–5% needs work, over 5% look at it now. */
 export const VARIANCE_BAND_LABEL: Record<VarianceBand, string> = {
   good: 'Good',
   ok: 'OK',
   needs_work: 'Needs work',
   look_now: 'Look at it now',
 };
+
+/**
+ * The rating's bands under the figure, built from the ones the till used
+ * (Settings → Kitchen & stock; the released 2% / 5% when the report has
+ * none): "Under 2% is good; over 5%, look at it now".
+ */
+export function varianceBandsText(bands: VarianceBands | null | undefined): string {
+  const b = bands ?? DEFAULT_VARIANCE_BANDS;
+  return `Under ${formatBps(b.goodUnderBps)} is good; over ${formatBps(b.needsWorkUpToBps)}, look at it now`;
+}
 
 /** How the rating is coloured. */
 export function bandTone(band: VarianceBand | null): 'good' | 'warn' | 'bad' | 'none' {

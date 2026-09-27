@@ -106,6 +106,7 @@ export type { DecodedLine } from './escpos-decode.js';
 export {
   renderReceipt,
   renderKitchenTicket,
+  isDrinkLine,
   renderDrawerKick,
   appendLogo,
   receiptDocumentFor,

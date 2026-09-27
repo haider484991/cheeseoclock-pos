@@ -3,11 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { PrintPolicy, ReceiptLogoStatus, ShopCopyRule } from '@cheeseoclock/shared-types';
-import { Bike, ChefHat, Copy, Image as ImageIcon, Receipt, RotateCcw, ScrollText } from 'lucide-react';
+import { KITCHEN_COPIES_MAX, kitchenTicketRules, type PrintPolicy, type ReceiptLogoStatus, type ShopCopyRule } from '@cheeseoclock/shared-types';
+import { Bike, ChefHat, Copy, CupSoda, Image as ImageIcon, Phone, Receipt, RotateCcw, ScrollText } from 'lucide-react';
 import { darkLogoFix } from './receiptLogo';
 import { reprintRuleText } from './shop-rules/timingWords';
 import { SHOP_SETTINGS_KEY, useShopSettingsLive } from './shop-rules/useShopSetting';
+import { kitchenTicketText, printPolicyDiffers } from './shop-rules/printingWords';
 
 const DEFAULT_POLICY: PrintPolicy = {
   kitchenTicket: true,
@@ -52,7 +53,8 @@ export function PrintingRulesSettings() {
     queryKey: ['printer', 'config'],
     queryFn: () => ipc.printer.getConfig(),
   });
-  const [policy, setPolicy] = useState<PrintPolicy>(DEFAULT_POLICY);
+  // Starts from the saved rules when they are already read (no flash of the defaults), else the defaults until they are.
+  const [policy, setPolicy] = useState<PrintPolicy>(() => cfgQ.data?.policy ?? DEFAULT_POLICY);
   // Hydrate from the saved rules only: saving a printer on this tab must not
   // wipe a rule that was changed here but not saved yet.
   const savedPolicy = cfgQ.data?.policy;
@@ -84,12 +86,10 @@ export function PrintingRulesSettings() {
   });
 
   const saved = cfgQ.data?.policy ?? DEFAULT_POLICY;
-  const dirty =
-    saved.kitchenTicket !== policy.kitchenTicket ||
-    saved.deliveryBillOnDispatch !== policy.deliveryBillOnDispatch ||
-    saved.shopCopy !== policy.shopCopy ||
-    saved.logoOnReceipt !== policy.logoOnReceipt;
+  const dirty = printPolicyDiffers(saved, policy);
   const logoUrl = cfgQ.data?.branding.logoUrl;
+  // This till's kitchen-ticket rules, the released ones (1 ticket, phone and drinks on) where none is saved.
+  const kitchen = kitchenTicketRules(policy);
 
   return (
     <Card>
@@ -106,7 +106,7 @@ export function PrintingRulesSettings() {
         <Rule
           icon={ChefHat}
           title="Kitchen ticket"
-          body="Printed once, the moment an order goes to the kitchen — Send to kitchen, Pay now at the counter, or a website order arriving. What to cook, big print, no prices. Comes out of the kitchen printer if one is set up below, otherwise the receipt printer."
+          body={kitchenTicketText(policy)}
           control={
             <Toggle
               checked={policy.kitchenTicket}
@@ -115,6 +115,72 @@ export function PrintingRulesSettings() {
             />
           }
         />
+        {policy.kitchenTicket && (
+          <>
+            <Rule
+              icon={Copy}
+              title="Kitchen tickets per order"
+              body={
+                kitchen.copies === 1
+                  ? 'One ticket an order. More helps when two stations cook from paper (the oven and the fryer): each copy says which it is, so an order is never cooked twice.'
+                  : `${kitchen.copies} tickets an order, printed together and marked ${copyMarks(kitchen.copies)}, so an order is never cooked twice. A CANCELLED slip prints as many. This till only.`
+              }
+              control={
+                <div className="flex gap-1" role="radiogroup" aria-label="Kitchen tickets per order">
+                  {Array.from({ length: KITCHEN_COPIES_MAX }, (_, i) => i + 1).map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      role="radio"
+                      aria-checked={kitchen.copies === n}
+                      onClick={() => setPolicy({ ...policy, kitchenCopies: n })}
+                      className={cn(
+                        'rounded-lg border-2 px-3 py-1.5 text-xs font-semibold transition-colors',
+                        kitchen.copies === n
+                          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                          : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                      )}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              }
+            />
+            <Rule
+              icon={Phone}
+              title="Customer's phone on kitchen tickets"
+              body={
+                kitchen.phone
+                  ? "The customer's phone prints beside their name, so the kitchen can call about an order."
+                  : "Only the customer's name prints: the phone stays off paper that sits on the kitchen rail."
+              }
+              control={
+                <Toggle
+                  checked={kitchen.phone}
+                  onChange={(v) => setPolicy({ ...policy, kitchenPhone: v })}
+                  label="Print the customer's phone on kitchen tickets"
+                />
+              }
+            />
+            <Rule
+              icon={CupSoda}
+              title="Drinks on kitchen tickets"
+              body={
+                kitchen.drinks
+                  ? 'Drinks are listed with the food.'
+                  : 'Drinks (items in a Drinks or Beverages category, or sent to the bar) are left off; one line says how many the counter hands out. An order of only drinks prints no kitchen ticket.'
+              }
+              control={
+                <Toggle
+                  checked={kitchen.drinks}
+                  onChange={(v) => setPolicy({ ...policy, kitchenDrinks: v })}
+                  label="List drinks on kitchen tickets"
+                />
+              }
+            />
+          </>
+        )}
         <Rule
           icon={Receipt}
           title="Customer receipt"
@@ -195,6 +261,12 @@ export function PrintingRulesSettings() {
       </div>
     </Card>
   );
+}
+
+/** "COPY 1 OF 2 and COPY 2 OF 2", "COPY 1 OF 3, COPY 2 OF 3 and COPY 3 OF 3". */
+function copyMarks(n: number): string {
+  const marks = Array.from({ length: n }, (_, i) => `COPY ${i + 1} OF ${n}`);
+  return marks.length <= 1 ? (marks[0] ?? '') : `${marks.slice(0, -1).join(', ')} and ${marks[marks.length - 1]}`;
 }
 
 function Rule(props: {

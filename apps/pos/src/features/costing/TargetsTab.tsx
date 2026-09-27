@@ -8,7 +8,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { COSTING_KEY, useCostAlertSettings, useCostingTargets } from './costingQueries';
-import { formatBps, parsePercent, parseRupees } from './costingFormat';
+import { defaultTargetText, formatBps, parsePercent, parseRupees } from './costingFormat';
 import { DaypartsCard } from './DaypartsCard';
 import { TillsCard } from './TillsCard';
 import { ChannelFeesCard } from './ChannelFeesCard';
@@ -204,6 +204,7 @@ function AlertSettingsForm({ view, canEdit }: { view: CostAlertSettingsView; can
 /** 3000 → "30", 3250 → "32.5". */
 const pctText = (bps: number) => String(bps / 100);
 
+
 function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boolean }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -211,11 +212,14 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
   const [nonFood, setNonFood] = useState<Record<string, boolean>>(() => Object.fromEntries(view.categories.map((c) => [c.categoryId, c.nonFood])));
   const [amber, setAmber] = useState(pctText(view.amberBps));
   const [step, setStep] = useState(String(view.priceStepCents / 100));
+  // The default target (costing.targets defaultBps, already stored; Settings phase 7 gives it its box).
+  const [dflt, setDflt] = useState(pctText(view.defaultBps));
 
   const dirty =
     view.categories.some((c) => pct[c.categoryId] !== pctText(c.bps) || nonFood[c.categoryId] !== c.nonFood) ||
     amber !== pctText(view.amberBps) ||
-    step !== String(view.priceStepCents / 100);
+    step !== String(view.priceStepCents / 100) ||
+    dflt !== pctText(view.defaultBps);
 
   const bad = new Set(
     view.categories
@@ -228,12 +232,16 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
   );
   const amberBps = parsePercent(amber);
   const amberBad = amberBps === null || amberBps > 5000;
+  const defaultBps = parsePercent(dflt);
+  const defaultBad = defaultBps === null || defaultBps <= 0;
   const stepCents = parseRupees(step);
   const stepBad = stepCents === null || stepCents < 100 || stepCents > 100_000;
   const problem =
     bad.size > 0
       ? 'Every food category needs a target above 0%.'
-      : amberBad
+      : defaultBad
+        ? 'A new category starts at a target above 0%, up to 100%.'
+        : amberBad
         ? '"Close" is 0 to 50 points over the target.'
         : stepBad
           ? 'The price step is Rs 1 to Rs 1,000.'
@@ -249,7 +257,7 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
   });
 
   const save = () => {
-    if (problem || amberBps === null || stepCents === null) return;
+    if (problem || amberBps === null || stepCents === null || defaultBps === null) return;
     const perCategory: SetCostingTargetsRequest['perCategory'] = {};
     for (const c of view.categories) {
       // A non-food category keeps a target (unused) so it has one if it turns back into food.
@@ -257,7 +265,7 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
       perCategory[c.categoryId] = { bps: b !== null && b > 0 ? b : c.bps, confirmed: true };
     }
     mut.mutate({
-      defaultBps: view.defaultBps,
+      defaultBps,
       amberBps,
       perCategory,
       nonFoodCategoryIds: view.categories.filter((c) => nonFood[c.categoryId]).map((c) => c.categoryId),
@@ -358,6 +366,22 @@ function TargetsForm({ view, canEdit }: { view: CostingTargetsView; canEdit: boo
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <label className="flex flex-wrap items-center gap-2 text-sm">
+            A new menu category starts at
+            <input
+              type="text"
+              inputMode="decimal"
+              aria-label="Default food-cost target for a new menu category, per cent"
+              value={dflt}
+              disabled={!canEdit}
+              onChange={(e) => setDflt(e.target.value)}
+              className={cn(inputCls, defaultBad && 'border-red-500')}
+            />
+            %
+          </label>
+          <p className="mt-1 text-xs text-stone-500">{defaultTargetText(defaultBps ?? view.defaultBps)}</p>
+        </div>
         <label className="flex flex-wrap items-center gap-2 text-sm">
           &quot;Close&quot; is up to
           <input type="text" inputMode="decimal" value={amber} disabled={!canEdit} onChange={(e) => setAmber(e.target.value)} className={cn(inputCls, amberBad && 'border-red-500')} />

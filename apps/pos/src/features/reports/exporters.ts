@@ -33,7 +33,7 @@ import {
   MISSING_COST_WHY,
   PAYMENT_LABEL,
   PAYMENT_ORDER,
-  WASTE_REASON_LABEL,
+  wasteReasonLabel,
   changeOf,
   costingStartText,
   coverageText,
@@ -340,7 +340,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
 
     sheet.heading('Waste by reason (at what the stock cost when taken)');
     sheet.push(['Reason', 'Times', 'Cost Rs']);
-    for (const w of f.wasteByReason) sheet.push([WASTE_REASON_LABEL[w.reason], w.times, rs(w.cents)]);
+    for (const w of f.wasteByReason) sheet.push([wasteReasonLabel(w.reason, f.wasteLabels), w.times, rs(w.cents)]);
     sheet.push(['Total', null, rs(f.wasteCents)]);
     if (f.cancelledOrderCount > 0) {
       sheet.push(['Of the waste: food made for cancelled orders', f.cancelledOrderCount, rs(f.cancelledWasteCents)]);
@@ -489,7 +489,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     if (r.estimatedOrders > 0) sheet.push([estimatedText(r)]);
     sheet.heading('What was thrown away, by reason');
     sheet.push(['Reason', 'Times', 'Cost Rs']);
-    for (const w of r.wasteByReason) sheet.push([WASTE_REASON_LABEL[w.reason], w.times, rs(w.cents)]);
+    for (const w of r.wasteByReason) sheet.push([wasteReasonLabel(w.reason, r.wasteLabels), w.times, rs(w.cents)]);
     sheet.push(['Food sent out, not paid', r.sentNotPaid.orderCount, rs(r.sentNotPaid.costCents)]);
     sheet.heading('What each order type earns (before waste and missing stock)');
     sheet.push(...channelProfitRows(r.channels));
@@ -1014,7 +1014,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
         (estimated ? `<p class="muted">${esc(estimated)} ${esc(costingStartText(food.costingStartedAt))}</p>` : '') +
         `<div class="two"><div>${table(
           ['Waste by reason', 'Times', 'Cost'],
-          food.wasteByReason.map((w) => [esc(WASTE_REASON_LABEL[w.reason]), String(w.times), money(w.cents)]),
+          food.wasteByReason.map((w) => [esc(wasteReasonLabel(w.reason, food.wasteLabels)), String(w.times), money(w.cents)]),
           [1, 2],
         )}</div><div>${table(
           ['Sales with missing costs', 'Why', 'Sales'],

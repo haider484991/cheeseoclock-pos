@@ -31,19 +31,24 @@ import {
   foodpandaDealLabel,
   foodpandaDealRule,
   foodpandaTerms,
+  isBuiltInWasteReason,
   shareBps,
+  stockRulesPutBack,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 import {
   readApprovalLimits,
   readBusinessSettingRow,
+  readMenuImportPolicy,
   readShopSetting,
   readStaffTiming,
+  readStockRules,
   type ShopSettingInUse,
 } from '../db/business-settings-read.js';
 import { businessSettingId } from '../db/business-settings-ids.js';
+import { wasteReasonUse } from '../db/stock-rules-guard.js';
 
-export { readShopSetting, readApprovalLimits, readStaffTiming, type ShopSettingInUse };
+export { readShopSetting, readApprovalLimits, readStaffTiming, readStockRules, readMenuImportPolicy, type ShopSettingInUse };
 
 /** Every shop rule, as the till uses it now (saved values, or the defaults). */
 export type ShopSettings = { [K in ShopSettingKey]: ShopSettingInUse<K> };
@@ -70,6 +75,7 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
   const approval = readShopSetting(db, 'discounts.approval').value;
   const presets = readShopSetting(db, 'discounts.presets').value;
   const kitchen = readShopSetting(db, 'kitchen.timing').value;
+  const stock = readShopSetting(db, 'stock.rules').value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
   return {
     discounts: {
@@ -81,6 +87,13 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
       redMin: kitchen.redMin,
       notStartedMin: kitchen.notStartedMin,
       notDoneMin: kitchen.notDoneMin,
+    },
+    // Inventory's: the Waste screen's reasons (hidden ones for their names in the history), the
+    // stock bar's multiple, the reminders. Never the variance's figures.
+    stock: {
+      reorderMultiple: stock.reorderMultiple,
+      wasteReasons: stock.wasteReasons.map((r) => ({ id: r.id, label: r.label, hidden: r.hidden })),
+      reminders: { keyItemsEveryDays: stock.reminders.keyItemsEveryDays, fullEveryDays: stock.reminders.fullEveryDays },
     },
     foodpanda: {
       deal: active
@@ -151,6 +164,22 @@ export function itemFoodpandaLine(
     foodCostBps: shareBps(plate.costCents, after),
     owner,
   };
+}
+
+/**
+ * What "Put back the default" writes for a key: the default's values. For
+ * the stock rules, a waste reason the owner added that waste rows still use
+ * is kept, hidden (removing it would leave those rows without a name; the
+ * repository refuses that) — with none in use it is exactly the default.
+ */
+export function putBackValue<K extends ShopSettingKey>(db: AppDatabase, key: K): ShopSettingValues[K] {
+  if (key === 'stock.rules') {
+    const current = readShopSetting(db, 'stock.rules').value;
+    const added = current.wasteReasons.filter((r) => !isBuiltInWasteReason(r.id)).map((r) => r.id);
+    const use = wasteReasonUse(db, added);
+    return stockRulesPutBack(current, new Set(added.filter((id) => (use.get(id) ?? 0) > 0))) as ShopSettingValues[K];
+  }
+  return { ...SHOP_SETTING_DEFAULTS[key] } as ShopSettingValues[K];
 }
 
 /** Changes shown under a card. */

@@ -78,6 +78,7 @@ import {
   startStockCount,
 } from '../../db/repositories/stock-count-repo.js';
 import { sellingTillsOf } from '../../services/analytics/stock-control.js';
+import { readStockRules } from '../../db/business-settings-read.js';
 import { readTillLink } from '../../services/till-link.js';
 import { getAnalyticsWorker } from '../../services/analytics/worker-host.js';
 import { getRecipeCalc, getTypicalPicks, prepListFor } from '../../services/recipe-calc-service.js';
@@ -379,6 +380,12 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     }
     const parsed = recordMovementInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
+    // Waste says why with a reason on the Waste screen now (Settings → Kitchen & stock): a hidden
+    // or unknown one is refused, so every new row is one Reports can name.
+    const why = parsed.data.wasteReason;
+    if (why !== undefined && !readStockRules(ctx.db).wasteReasons.some((r) => r.id === why && !r.hidden)) {
+      return err({ code: 'validation_failed', message: 'That reason is not on the Waste screen any more: pick why it was wasted.' });
+    }
     return ok(recordStockMovement(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 

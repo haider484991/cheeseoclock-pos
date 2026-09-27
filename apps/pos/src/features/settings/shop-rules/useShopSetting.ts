@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
 import { ipc, IpcError, onShopSettingsChanged, onSyncStatusChanged } from '../../../ipc/client';
 import { useToast } from '../../../components/toast/ToastProvider';
-import { discountRulesOf, kitchenTimingOf, type CounterDiscountRules, type CounterKitchenTiming } from './counterRules';
+import type { CounterStockRules } from '@cheeseoclock/shared-types';
+import { discountRulesOf, kitchenTimingOf, stockRulesOf, type CounterDiscountRules, type CounterKitchenTiming } from './counterRules';
 
 /** Every shop-rule query (Settings cards, the counter's rules) is under this key. */
 export const SHOP_SETTINGS_KEY = ['shop-settings'] as const;
@@ -53,6 +54,15 @@ export function useDiscountRules(): CounterDiscountRules & { refetch: () => void
  */
 export function useKitchenTiming(opts: { enabled?: boolean } = {}): CounterKitchenTiming {
   return kitchenTimingOf(useCheckoutRules(opts).data);
+}
+
+/**
+ * Inventory's stock rules (Settings → Kitchen & stock): the Waste screen's
+ * reasons, the stock bar's multiple, the reminders — the released ones
+ * until the till has answered.
+ */
+export function useStockRules(): CounterStockRules {
+  return stockRulesOf(useCheckoutRules().data);
 }
 
 /**

@@ -6,8 +6,9 @@ import {
   RECIPE_CALC_MAX_AMOUNT,
   RECIPE_CALC_MAX_COUNT,
   RECIPE_CALC_MAX_LINES,
+  RESERVED_WASTE_REASON_IDS,
   TYPED_PRICE_PERS,
-  WASTE_REASONS,
+  WASTE_REASON_ID_RE,
 } from '@cheeseoclock/shared-types';
 import { centsSchema } from './common.js';
 
@@ -213,8 +214,16 @@ export const recipeCostInputSchema = z.object({
 /** What a stock row may stand for (stock_movements.detail): checked here, not by a table CHECK (costing spec D9). */
 export const movementDetailSchema = z.enum(MOVEMENT_DETAILS);
 
-/** Why food was thrown away, as picked on the Waste screen. */
-export const wasteReasonSchema = z.enum(WASTE_REASONS);
+/**
+ * Why food was thrown away, as picked on the Waste screen: a reason's id
+ * (one of the seven built in, or one the owner added in Settings → Kitchen
+ * & stock). Whether it is on the Waste screen now is the main process's
+ * check (inventory-handlers: a hidden or unknown reason is refused).
+ */
+export const wasteReasonSchema = z
+  .string()
+  .regex(WASTE_REASON_ID_RE, { message: 'Pick why it was wasted' })
+  .refine((id) => !RESERVED_WASTE_REASON_IDS.includes(id), { message: 'Pick why it was wasted' });
 
 /**
  * A stock change booked by hand. Waste says why (burnt, dropped, expired…);

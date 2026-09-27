@@ -18,6 +18,7 @@ import {
   BadgePercent,
   Banknote,
   Timer,
+  Boxes,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { SoundSettings } from '../notifications/SoundSettings';
@@ -34,6 +35,7 @@ import { AboutCard } from './AboutCard';
 import { FoodpandaSettings } from './FoodpandaSettings';
 import { MoneySettings } from './MoneySettings';
 import { TimingSettings } from './TimingSettings';
+import { KitchenStockSettings } from './KitchenStockSettings';
 import { useSessionStore } from '../../stores/sessionStore';
 
 export type SettingsTab =
@@ -42,6 +44,7 @@ export type SettingsTab =
   | 'store'
   | 'timing'
   | 'printer'
+  | 'stock'
   | 'sounds'
   | 'online'
   | 'backups'
@@ -58,8 +61,9 @@ interface TabDef {
 /**
  * The owner's business rules come first, in the design's order (foodpanda,
  * Money & discounts, [Delivery areas & fees], Shop & logo, Staff & kitchen
- * timing), then this till's printers, sounds, backups, FBR, the second till
- * and About.
+ * timing), then this till's printers (Receipts & printing), Kitchen & stock
+ * (stock rules, waste reasons, what a menu file may change), sounds,
+ * backups, FBR, the second till and About.
  */
 const TABS: TabDef[] = [
   { id: 'foodpanda', label: 'foodpanda', icon: BadgePercent },
@@ -67,6 +71,7 @@ const TABS: TabDef[] = [
   { id: 'store', label: 'Shop & logo', icon: Store },
   { id: 'timing', label: 'Staff & kitchen timing', icon: Timer },
   { id: 'printer', label: 'Printers', icon: Printer },
+  { id: 'stock', label: 'Kitchen & stock', icon: Boxes },
   { id: 'sounds', label: 'Sounds', icon: Volume2 },
   { id: 'online', label: 'Online orders', icon: Globe },
   { id: 'backups', label: 'Backups', icon: Database },
@@ -171,6 +176,7 @@ export function SettingsPage() {
         {tab === 'foodpanda' && <FoodpandaSettings />}
         {tab === 'money' && <MoneySettings />}
         {tab === 'timing' && <TimingSettings />}
+        {tab === 'stock' && <KitchenStockSettings />}
         {tab === 'store' && <BrandingSettings />}
         {tab === 'printer' && (
           <>

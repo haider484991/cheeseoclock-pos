@@ -3,7 +3,8 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { formatQty } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
-import type { Ingredient, StockMovementEntry, StockMovementReason } from '@cheeseoclock/shared-types';
+import { useStockRules } from '../settings/shop-rules/useShopSetting';
+import type { Ingredient, StockMovementEntry, StockMovementReason, WasteReasonSetting } from '@cheeseoclock/shared-types';
 import { X } from 'lucide-react';
 import {
   FilterChips,
@@ -58,6 +59,8 @@ export function MovementsTab({
 }) {
   const [only, setOnly] = useState<Pick<Ingredient, 'id' | 'name'> | null>(ingredient ?? null);
   useEffect(() => setOnly(ingredient ?? null), [ingredient]);
+  // The owner's names for the waste reasons (Settings → Kitchen & stock).
+  const { wasteReasons } = useStockRules();
 
   const [search, setSearch] = useSessionState('inv.mv.q', '');
   const [reason, setReason] = useSessionState<ReasonFilter>('inv.mv.reason', 'all');
@@ -152,6 +155,7 @@ export function MovementsTab({
               <MovementRow
                 key={m.id}
                 m={m}
+                wasteReasons={wasteReasons}
                 onPickIngredient={only ? undefined : () => setOnly({ id: m.ingredientId, name: m.ingredientName })}
               />
             ))}
@@ -194,8 +198,16 @@ export function MovementsTab({
   );
 }
 
-function MovementRow({ m, onPickIngredient }: { m: StockMovementEntry; onPickIngredient?: () => void }) {
-  const { label, tone, quiet } = movementLabel(m);
+function MovementRow({
+  m,
+  wasteReasons,
+  onPickIngredient,
+}: {
+  m: StockMovementEntry;
+  wasteReasons: ReadonlyArray<WasteReasonSetting>;
+  onPickIngredient?: () => void;
+}) {
+  const { label, tone, quiet } = movementLabel(m, wasteReasons);
   const details = movementDetails(m);
   return (
     <tr className="border-t border-stone-100 dark:border-stone-800">

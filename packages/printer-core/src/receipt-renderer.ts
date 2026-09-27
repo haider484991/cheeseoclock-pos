@@ -895,10 +895,30 @@ export interface RenderKitchenTicketOpts {
   queuedAt?: Date | null;
   /** Clock for the "printed at" time — injectable for tests. */
   now?: Date;
+  /**
+   * This till's kitchen-ticket rules (Settings → Printers; PrintPolicy's
+   * kitchen fields, read with kitchenTicketRules): the customer's phone —
+   * default true — and the drinks — default true; off, they are left off
+   * and one line says how many drinks the counter hands out.
+   */
+  showPhone?: boolean;
+  showDrinks?: boolean;
+  /** One of several tickets printed for the order at once: "COPY 1 OF 2" under the order type. Null / 1 of 1: nothing. */
+  copyOf?: { n: number; of: number } | null;
 }
 
 /** A kitchen ticket printing this long after it was queued says LATE. */
 export const KITCHEN_LATE_MS = 2 * 60_000;
+
+/**
+ * A drink, for the kitchen ticket's "drinks" rule (Settings → Printers): an
+ * item sent to the bar, or in a menu category called Drinks or Beverages
+ * ("Cold Drinks", "Soft drinks"…) — the names the till's food-cost
+ * suggestions know drinks by.
+ */
+export function isDrinkLine(item: Pick<OrderSnapshot['items'][number], 'categoryName' | 'prepStation'>): boolean {
+  return item.prepStation === 'bar' || /\bdrinks?\b|\bbeverages?\b/i.test(item.categoryName ?? '');
+}
 
 const MODE_SHOUT: Record<OrderSnapshot['order']['mode'], string> = {
   dine_in: 'DINE-IN',
@@ -981,6 +1001,8 @@ export function renderKitchenTicket(
   }
   b.doubleSize(false).doubleHeight(true).wrappedText(MODE_SHOUT[order.mode], width);
   b.doubleHeight(false);
+  // Several tickets at once (Settings → Printers): each says which it is, so two are never cooked as two orders.
+  if (opts.copyOf && opts.copyOf.of > 1) b.wrappedText(`COPY ${opts.copyOf.n} OF ${opts.copyOf.of}`, width);
   // Where it came from: the website order's "[web …]" tag used to be the
   // only sign of it on the ticket (as its note); the note now prints alone.
   if (order.source === 'web') {
@@ -1003,8 +1025,10 @@ export function renderKitchenTicket(
     b.bold(true).wrappedText(`LATE - sent ${formatClock(opts.queuedAt)}`, width).bold(false);
   }
   if (snapshot.tableLabel) b.line(`Table: ${snapshot.tableLabel}`);
-  if (snapshot.customerName || snapshot.customerPhone) {
-    b.line(`Customer: ${snapshot.customerName ?? ''}`, snapshot.customerPhone ?? '');
+  // The customer's phone only while this till's rule has it on (the default).
+  const phone = opts.showPhone === false ? null : snapshot.customerPhone;
+  if (snapshot.customerName || phone) {
+    b.line(`Customer: ${snapshot.customerName ?? ''}`, phone ?? '');
   }
   // What was written for the whole order, before the first item and as loud
   // as an allergy note: the counter's "Order notes" box and a website
@@ -1017,7 +1041,10 @@ export function renderKitchenTicket(
   }
   b.rule();
 
-  for (const it of items) {
+  // Drinks left off when this till's rule says so: the counter hands them out.
+  const toCook = opts.showDrinks === false ? items.filter((it) => !isDrinkLine(it)) : items;
+  const drinksLeftOff = items.filter((it) => !toCook.includes(it)).reduce((n, it) => n + it.quantity, 0);
+  for (const it of toCook) {
     b.bold(true).doubleHeight(true);
     b.wrappedText(`${it.quantity} x ${it.menuItemName}`, width);
     b.bold(false).doubleHeight(false);
@@ -1043,6 +1070,14 @@ export function renderKitchenTicket(
       }
       b.bold(false);
     }
+  }
+  if (drinksLeftOff > 0) {
+    b.wrappedText(
+      toCook.length === 0
+        ? `Only drinks (${drinksLeftOff}) - nothing to cook`
+        : `+ ${drinksLeftOff} drink${drinksLeftOff === 1 ? '' : 's'} from the counter (not listed)`,
+      width,
+    );
   }
   b.rule();
 

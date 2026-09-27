@@ -22,7 +22,7 @@ import { Button } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OwnerWeek, OwnerWeekItem, OwnerWeekWhich } from '@cheeseoclock/shared-types';
 import { escapeHtml } from './exporters';
-import { WASTE_REASON_LABEL, coverageText, fmtWhen } from './reportFormat';
+import { coverageText, fmtWhen, wasteReasonLabel } from './reportFormat';
 import { doThisWords, trendChangeOf, weekDates } from './ownerWeekFormat';
 import { formatBps } from '../costing/costingFormat';
 import { fmtMoment } from './dateRange';
@@ -134,7 +134,7 @@ export function buildWeeklySheet(week: OwnerWeek, opts: { canSeeCosts: boolean; 
         waste.length === 0
           ? '<p class="muted">Nothing thrown away.</p>'
           : `<table><thead><tr><th>Reason</th><th class="r">Times</th><th class="r">Cost</th></tr></thead><tbody>${waste
-              .map((x) => `<tr><td>${esc(WASTE_REASON_LABEL[x.reason])}</td><td class="r">${x.times}</td><td class="r">${money(x.cents)}</td></tr>`)
+              .map((x) => `<tr><td>${esc(wasteReasonLabel(x.reason, sheet.wasteLabels))}</td><td class="r">${x.times}</td><td class="r">${money(x.cents)}</td></tr>`)
               .join('')}</tbody></table>`
       }</section>`,
     );

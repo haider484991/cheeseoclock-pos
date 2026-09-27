@@ -3,6 +3,7 @@ import { BrowserWindow } from 'electron';
 import type { AppDatabase } from '../db/connection.js';
 import {
   receiptDocumentFor,
+  isDrinkLine,
   renderDrawerKick,
   renderKitchenTicket,
   renderReceipt,
@@ -21,6 +22,7 @@ import {
   DRAWER_NOT_OPENED_CODE,
   DRAWER_TOO_LATE_CODE,
   DRAWER_UNSURE_CODE,
+  kitchenTicketRules,
   type DrawerOutcome,
   type DrawerSettings,
   type OrderPapers,
@@ -659,9 +661,15 @@ class PrintSpooler {
       .catch((e: unknown) => log.warn('Could not report the cash drawer', e));
   }
 
-  /** One kitchen ticket per order, when the policy wants one. */
+  /**
+   * One kitchen ticket per order, when the policy wants one — not for an
+   * order of only drinks while this till leaves drinks off its tickets
+   * (Settings → Printers): there is nothing to cook. Items added later and
+   * sent again still bring the ticket.
+   */
   private kitchenTicket(snap: OrderSnapshot, policy: PrintPolicy): void {
     if (!policy.kitchenTicket || !this.db) return;
+    if (!kitchenTicketRules(policy).drinks && snap.items.length > 0 && snap.items.every((it) => isDrinkLine(it))) return;
     if (hasPrintJob(this.db, snap.order.id, 'kitchen')) return;
     this.enqueue({ kind: 'kitchen', orderId: snap.order.id, reprint: false, requestedByUserId: this.whoIsSignedIn() });
   }
@@ -1488,15 +1496,25 @@ class PrintSpooler {
                 (deletedAsTest ? `Test order${snap.order.deleteReason ? `: ${snap.order.deleteReason}` : ''}` : null),
             }
           : null;
-        return {
-          adapter,
-          bytes: renderKitchenTicket(snap, {
+        // This till's kitchen-ticket rules (Settings → Printers): the phone and the drinks, and how
+        // many tickets the kitchen gets — each marked COPY n OF N. One printed by hand is one; its
+        // copies are the same ticket, one paper in the print log.
+        const rules = kitchenTicketRules(getPrintPolicy(db));
+        const copies = reason === MANUAL_REASON ? 1 : rules.copies;
+        const ticket = (n: number) =>
+          renderKitchenTicket(snap, {
             width: adapter.config.width ?? 48,
             cancelled,
             cancelInfo,
             stamp,
             queuedAt: new Date(job.createdAt),
-          }),
+            showPhone: rules.phone,
+            showDrinks: rules.drinks,
+            copyOf: copies > 1 ? { n, of: copies } : null,
+          });
+        return {
+          adapter,
+          bytes: copies > 1 ? concat(Array.from({ length: copies }, (_, i) => ticket(i + 1))) : ticket(1),
           papers: [
             {
               orderNumber,

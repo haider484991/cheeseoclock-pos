@@ -11,10 +11,18 @@ import {
   PRESET_PERCENTS_MAX,
   PRESET_REASON_MAX_LENGTH,
   PRESET_REASONS_MAX,
+  RESERVED_WASTE_REASON_IDS,
   RIDER_COST_MODES,
   SHOP_SETTING_FORMAT,
   SHOP_SETTING_KEYS,
   STAFF_TIMING_BOUNDS,
+  STOCK_RULE_BOUNDS,
+  STOCK_RULE_BPS_STEP,
+  WASTE_REASONS,
+  WASTE_REASONS_MAX,
+  WASTE_REASON_DEFAULT_LABEL,
+  WASTE_REASON_ID_RE,
+  WASTE_REASON_LABEL_MAX,
   daypartHours,
   isShopSettingKey,
 } from '@cheeseoclock/shared-types';
@@ -22,7 +30,9 @@ import type {
   DiscountApproval,
   DiscountPresets,
   KitchenTiming,
+  MenuImportPolicy,
   StaffTiming,
+  StockRules,
   ChannelFees,
   CostAlertSettings,
   CostingTargets,
@@ -389,6 +399,108 @@ export const kitchenTimingSchema = z
   .superRefine(kitchenRules);
 const kitchenTimingReadSchema = z.object({ v: readsFormat, ...kitchenTimingShape }).superRefine(kitchenRules);
 
+// ---------------------------------------------------------------------------
+// Kitchen & stock (phase 7): the stock rules and what a menu file may change
+// ---------------------------------------------------------------------------
+
+const [trigLo, trigHi] = STOCK_RULE_BOUNDS.varianceDoThisBps;
+const [bandLo, bandHi] = STOCK_RULE_BOUNDS.bandBps;
+const [winLo, winHi] = STOCK_RULE_BOUNDS.varianceMinWindowDays;
+const [keyLo, keyHi] = STOCK_RULE_BOUNDS.keyItemsEveryDays;
+const [fullLo, fullHi] = STOCK_RULE_BOUNDS.fullEveryDays;
+const [multLo, multHi] = STOCK_RULE_BOUNDS.reorderMultiple;
+
+/** "0.5%", "20%": basis points as the owner types them. */
+const pctWords = (bps: number) => `${bps / 100}%`;
+
+/** A share of food sales in basis points, in tenths of a %, from `lo` to `hi`. */
+const shareOfSales = (lo: number, hi: number, what: string) =>
+  z
+    .number()
+    .int({ message: `${what} has at most one decimal` })
+    .min(lo, { message: `${what} is at least ${pctWords(lo)}` })
+    .max(hi, { message: `${what} is at most ${pctWords(hi)}` })
+    .refine((b) => b % STOCK_RULE_BPS_STEP === 0, { message: `${what} has at most one decimal` });
+
+const varianceBandsShape = {
+  goodUnderBps: shareOfSales(bandLo, bandHi, '"Good"'),
+  okUpToBps: shareOfSales(bandLo, bandHi, '"OK"'),
+  needsWorkUpToBps: shareOfSales(bandLo, bandHi, '"Needs work"'),
+};
+const bandsInOrder = (b: { goodUnderBps: number; okUpToBps: number; needsWorkUpToBps: number }, ctx: z.RefinementCtx) => {
+  if (!(b.goodUnderBps < b.okUpToBps && b.okUpToBps < b.needsWorkUpToBps)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The ratings go up in order: Good, then OK, then Needs work' });
+  }
+};
+
+const everyDays = (lo: number, hi: number, what: string) => wholeIn(lo, hi, what, 'days').nullable();
+const remindersShape = {
+  keyItemsEveryDays: everyDays(keyLo, keyHi, 'The key-items reminder'),
+  fullEveryDays: everyDays(fullLo, fullHi, 'The full stock take reminder'),
+};
+
+/** A waste reason's name: printed on reports, so one line, no spaces at its ends, 30 letters at most. */
+const wasteReasonLabel = z
+  .string()
+  .min(1, { message: "A waste reason can't be empty" })
+  .max(WASTE_REASON_LABEL_MAX, { message: `Keep a waste reason to ${WASTE_REASON_LABEL_MAX} letters` })
+  .refine((r) => r.trim() === r && r.trim() !== '', { message: 'A waste reason has no spaces at its start or end' })
+  .refine((r) => !/[\r\n\t]/.test(r), { message: 'A waste reason is one line' });
+const wasteReasonId = z
+  .string()
+  .regex(WASTE_REASON_ID_RE, { message: 'That is not a waste reason' })
+  .refine((id) => !RESERVED_WASTE_REASON_IDS.includes(id), { message: 'That is not a waste reason' });
+const wasteReasonShape = { id: wasteReasonId, label: wasteReasonLabel, hidden: z.boolean() };
+const wasteReasonsRules = (reasons: ReadonlyArray<{ id: string; label: string; hidden: boolean }>, ctx: z.RefinementCtx) => {
+  const ids = new Set(reasons.map((r) => r.id));
+  if (ids.size !== reasons.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Two waste reasons have the same id' });
+  if (!allDifferent(reasons.map((r) => r.label))) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Two waste reasons have the same name' });
+  // The seven the till was released with are what every version writes and reads: rename or hide, never remove.
+  const missing = WASTE_REASONS.filter((id) => !ids.has(id));
+  if (missing.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `"${WASTE_REASON_DEFAULT_LABEL[missing[0]!]}" is one of the till's own reasons: hide it instead of removing it`,
+    });
+  }
+  if (!reasons.some((r) => !r.hidden)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Keep at least one waste reason on the Waste screen' });
+};
+const wasteReasonsList = <T extends z.ZodType<{ id: string; label: string; hidden: boolean }>>(item: T) =>
+  z
+    .array(item)
+    .min(1, { message: 'Keep at least one waste reason' })
+    .max(WASTE_REASONS_MAX, { message: `At most ${WASTE_REASONS_MAX} waste reasons, hidden ones included` })
+    .superRefine(wasteReasonsRules);
+
+const stockRulesCommon = {
+  varianceDoThisBps: shareOfSales(trigLo, trigHi, '"Do this" from'),
+  varianceMinWindowDays: wholeIn(winLo, winHi, 'The shortest stretch between stock takes', 'days'),
+  reorderMultiple: wholeIn(multLo, multHi, 'A full stock bar', 'times the low level'),
+};
+/** The stock rules' fields as this version writes them (strict all the way down). */
+const stockRulesWriteShape = {
+  ...stockRulesCommon,
+  bands: z.object(varianceBandsShape).strict().superRefine(bandsInOrder),
+  reminders: z.object(remindersShape).strict(),
+  wasteReasons: wasteReasonsList(z.object(wasteReasonShape).strict()),
+};
+/** …and as they are read: a newer till's fields this version does not know are dropped. */
+const stockRulesReadShape = {
+  ...stockRulesCommon,
+  bands: z.object(varianceBandsShape).superRefine(bandsInOrder),
+  reminders: z.object(remindersShape),
+  wasteReasons: wasteReasonsList(z.object(wasteReasonShape)),
+};
+/** 'stock.rules' as this version writes it. */
+export const stockRulesSchema = z.object({ v: writesFormat('stock.rules'), ...stockRulesWriteShape }).strict();
+const stockRulesReadSchema = z.object({ v: readsFormat, ...stockRulesReadShape });
+
+const importSide = z.enum(['file', 'till'], { errorMap: () => ({ message: 'The file, or the till' }) });
+const menuImportPolicyShape = { itemPrices: importSide, choices: importSide, recipes: importSide, tax: importSide };
+/** 'menu.importPolicy' as this version writes it. */
+export const menuImportPolicySchema = z.object({ v: writesFormat('menu.importPolicy'), ...menuImportPolicyShape }).strict();
+const menuImportPolicyReadSchema = z.object({ v: readsFormat, ...menuImportPolicyShape });
+
 const checkRule = z.enum(['optional', 'required'], { errorMap: () => ({ message: 'Optional or required' }) });
 const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };
 /** 'foodpanda.checks' as this version writes it. */
@@ -469,6 +581,8 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'discounts.presets': discountPresetsSchema,
   'staff.timing': staffTimingSchema,
   'kitchen.timing': kitchenTimingSchema,
+  'stock.rules': stockRulesSchema,
+  'menu.importPolicy': menuImportPolicySchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 } as const;
@@ -499,6 +613,8 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'discounts.presets': discountPresetsReadSchema,
   'staff.timing': staffTimingReadSchema,
   'kitchen.timing': kitchenTimingReadSchema,
+  'stock.rules': stockRulesReadSchema,
+  'menu.importPolicy': menuImportPolicyReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 };
@@ -512,6 +628,8 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'discounts.presets': new Set(['v', ...Object.keys(discountPresetsShape)]),
   'staff.timing': new Set(['v', ...Object.keys(staffTimingShape)]),
   'kitchen.timing': new Set(['v', ...Object.keys(kitchenTimingShape)]),
+  'stock.rules': new Set(['v', ...Object.keys(stockRulesWriteShape)]),
+  'menu.importPolicy': new Set(['v', ...Object.keys(menuImportPolicyShape)]),
 };
 
 /**
@@ -695,6 +813,10 @@ const _staffTimingShape: Same<z.infer<typeof staffTimingSchema>, StaffTiming> = 
 const _staffTimingReadShape: Same<z.infer<typeof staffTimingReadSchema>, StaffTiming> = true;
 const _kitchenTimingShape: Same<z.infer<typeof kitchenTimingSchema>, KitchenTiming> = true;
 const _kitchenTimingReadShape: Same<z.infer<typeof kitchenTimingReadSchema>, KitchenTiming> = true;
+const _stockRulesShape: Same<z.infer<typeof stockRulesSchema>, StockRules> = true;
+const _stockRulesReadShape: Same<z.infer<typeof stockRulesReadSchema>, StockRules> = true;
+const _menuImportPolicyShape: Same<z.infer<typeof menuImportPolicySchema>, MenuImportPolicy> = true;
+const _menuImportPolicyReadShape: Same<z.infer<typeof menuImportPolicyReadSchema>, MenuImportPolicy> = true;
 const _feesShape: Same<z.infer<typeof channelFeesSchema>, ChannelFees> = true;
 const _riderShape: Same<z.infer<typeof riderCostSchema>, RiderCostSetting> = true;
 const _setFeesShape: Same<z.infer<typeof setChannelFeesInputSchema>, SetChannelFeesRequest> = true;

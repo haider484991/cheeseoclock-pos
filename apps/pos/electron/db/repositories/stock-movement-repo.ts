@@ -20,11 +20,12 @@ import {
   COC_ID_NAMESPACE,
   COST_BASES,
   MOVEMENT_DETAILS,
+  WASTE_REASON_ID_RE,
   type CostBasis,
   type MovementDetail,
   type StockMovement,
   type StockMovementReason,
-  type WasteReason,
+  type WasteReasonId,
 } from '@cheeseoclock/shared-types';
 
 interface MovementRow {
@@ -50,9 +51,15 @@ const MV_SELECT = `
   detail, value_cents, unit_cost_mc, cost_basis
 `;
 
-/** A stored detail as the type; anything this till does not know (a newer till's) reads as null. */
+/**
+ * A stored detail as the type; anything this till does not know (a newer
+ * till's) reads as null. Waste with a reason the owner added ('waste:<id>',
+ * Settings → Kitchen & stock) is known: the history names it.
+ */
 export function toMovementDetail(v: string | null | undefined): MovementDetail | null {
-  return (MOVEMENT_DETAILS as readonly string[]).includes(v ?? '') ? (v as MovementDetail) : null;
+  if ((MOVEMENT_DETAILS as readonly string[]).includes(v ?? '')) return v as MovementDetail;
+  const m = /^waste:(.+)$/.exec(v ?? '');
+  return m && WASTE_REASON_ID_RE.test(m[1]!) ? (v as MovementDetail) : null;
 }
 
 /** A stored cost basis as the type; anything this till does not know reads as null. */
@@ -137,8 +144,8 @@ export interface RecordMovementInput {
    * 'correction'.
    */
   detail?: MovementDetail | null;
-  /** Waste booked by hand: why it was thrown away. */
-  wasteReason?: WasteReason;
+  /** Waste booked by hand: why it was thrown away (a reason's id: inventory-handlers checks it is on the Waste screen). */
+  wasteReason?: WasteReasonId;
   /** The rows of one batch run share this. */
   refGroupId?: string | null;
   /** On a row that settles an order: when that order first took stock. */

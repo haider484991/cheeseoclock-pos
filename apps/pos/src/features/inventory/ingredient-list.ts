@@ -4,7 +4,7 @@
  * ingredient-list.test.ts.
  */
 
-import type { Ingredient } from '@cheeseoclock/shared-types';
+import { DEFAULT_STOCK_RULES, type Ingredient } from '@cheeseoclock/shared-types';
 import { ingredientCategoryLabel, stockStatus, stockUrgency, stockValueCents } from '@cheeseoclock/pos-domain';
 import { compareText } from '../../components/list/list-query';
 
@@ -61,12 +61,16 @@ export function ingredientSearchText(i: Ingredient, supplierName: string | undef
 }
 
 /**
- * How much to put on a purchase order: enough to reach three times the
- * low-stock level (a full stock bar), rounded up to whole packs when the
- * ingredient is bought in packs. At least one unit (or pack).
+ * How much to put on a purchase order: enough to reach `multiple` times
+ * the low-stock level — a full stock bar (stockFill's), the owner's multiple
+ * (Settings → Kitchen & stock; 3 by default) — rounded up to whole packs
+ * when the ingredient is bought in packs. At least one unit (or pack).
  */
-export function suggestReorderQty(i: Pick<Ingredient, 'currentQty' | 'lowThreshold' | 'packSize'>): number {
-  const need = Math.max(1, i.lowThreshold * 3 - Math.max(0, i.currentQty));
+export function suggestReorderQty(
+  i: Pick<Ingredient, 'currentQty' | 'lowThreshold' | 'packSize'>,
+  multiple: number = DEFAULT_STOCK_RULES.reorderMultiple,
+): number {
+  const need = Math.max(1, i.lowThreshold * multiple - Math.max(0, i.currentQty));
   if (i.packSize && i.packSize > 0) return Math.ceil(need / i.packSize) * i.packSize;
   return need;
 }

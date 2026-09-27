@@ -4,8 +4,8 @@
  * movement-view.test.ts); `now` is passed in so tests can pin the clock.
  */
 
-import { orderStockNoteKind } from '@cheeseoclock/pos-domain';
-import type { StockMovement } from '@cheeseoclock/shared-types';
+import { orderStockNoteKind, releasedWasteReasonLabel } from '@cheeseoclock/pos-domain';
+import type { StockMovement, WasteReasonSetting } from '@cheeseoclock/shared-types';
 
 export type MovementTone = 'blue' | 'green' | 'red' | 'amber' | 'purple' | 'stone';
 
@@ -20,8 +20,14 @@ export type MovementTone = 'blue' | 'green' | 'red' | 'amber' | 'purple' | 'ston
  * Stock the other till took and this one put back reads "Returned" too; its
  * note says it went back "on the till that sent it". Waste booked by hand
  * says why ("Waste · burnt"), and a batch row is known by its detail too.
+ * `reasons`: the owner's waste reasons (Settings → Kitchen & stock, hidden
+ * ones too): a renamed or added reason reads with his name — the row keeps
+ * the id, so old rows follow a rename.
  */
-export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'notes' | 'detail'>): {
+export function movementLabel(
+  m: Pick<StockMovement, 'reason' | 'deltaQty' | 'notes' | 'detail'>,
+  reasons?: ReadonlyArray<Pick<WasteReasonSetting, 'id' | 'label'>>,
+): {
   label: string;
   tone: MovementTone;
   /** Bookkeeping that moves the count but is not news: no green / red change. */
@@ -36,7 +42,7 @@ export function movementLabel(m: Pick<StockMovement, 'reason' | 'deltaQty' | 'no
     case 'delivery':
       return { label: 'Delivery', tone: 'green' };
     case 'waste': {
-      const why = m.detail ? WASTE_WHY[m.detail] : undefined;
+      const why = m.detail ? wasteWhy(m.detail, reasons) : undefined;
       return { label: why ? `Waste · ${why}` : 'Waste', tone: 'red' };
     }
     case 'count':
@@ -61,6 +67,18 @@ const WASTE_WHY: Partial<Record<string, string>> = {
   'waste:returned': 'sent back',
   'waste:staff_meal': 'staff meal',
 };
+
+/**
+ * Why, as the history says it: the owner's name where he renamed the reason
+ * or added it, else the released word ("burnt", "sent back"; nothing for
+ * Other).
+ */
+function wasteWhy(detail: string, reasons: ReadonlyArray<Pick<WasteReasonSetting, 'id' | 'label'>> | undefined): string | undefined {
+  const id = /^waste:(.+)$/.exec(detail)?.[1];
+  const mine = id ? reasons?.find((r) => r.id === id) : undefined;
+  if (mine && mine.label !== releasedWasteReasonLabel(mine.id)) return mine.label;
+  return WASTE_WHY[detail];
+}
 
 /**
  * The Details column: "Order #42 · Cancelled, not made — put back",

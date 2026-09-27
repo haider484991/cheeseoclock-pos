@@ -4,6 +4,7 @@ import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { getBusinessSetting, type StoredBusinessSetting } from '../business-settings-read.js';
 import { businessSettingId } from '../business-settings-ids.js';
+import { assertNoUsedWasteReasonRemoved } from '../stock-rules-guard.js';
 import {
   BUSINESS_SETTING_SCHEMAS,
   isBusinessSettingKey,
@@ -76,6 +77,14 @@ export function setBusinessSettings(db: AppDatabase, entries: readonly BusinessS
         .get(id) as { value_json: string; deleted_at: string | null } | undefined;
       if (existing && existing.deleted_at === null && storedFormatIsNewer(key, safeJson(existing.value_json))) {
         throw new Error(NEWER_FORMAT_REFUSAL);
+      }
+      // A waste reason waste rows use is hidden, never removed (Settings → Kitchen & stock).
+      if (key === 'stock.rules') {
+        assertNoUsedWasteReasonRemoved(
+          db,
+          existing && existing.deleted_at === null ? existing.value_json : null,
+          value as BusinessSettingValue<'stock.rules'>,
+        );
       }
       if (existing) {
         db.prepare(
