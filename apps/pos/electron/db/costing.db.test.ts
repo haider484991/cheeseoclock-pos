@@ -321,8 +321,9 @@ live('batch recipes', () => {
     const db = openMigrated();
     const s = await openCostingShop(db);
     const r = s.r.getBatchRecipe(db, s.ing.sauce);
-    // 2,500 g tomato at Rs 120 / kg + 125 g garlic at Rs 450 / kg = Rs 300 + Rs 56.25
-    expect(r).toMatchObject({ batchYield: 2000, batchCostCents: 35_625, complete: true, unpricedInputs: [], storedBatchCostCents: null });
+    // 2,500 g tomato at Rs 120 / kg + 125 g garlic at Rs 450 / kg = Rs 300 + Rs 56.25 — written back
+    // to the sauce as its own price when the recipe was saved (costing Phase 4: batches roll up).
+    expect(r).toMatchObject({ batchYield: 2000, batchCostCents: 35_625, complete: true, unpricedInputs: [], storedBatchCostCents: 35_625 });
     expect(r.lines.map((l) => [l.name, l.priceKind, l.madeInHouse])).toEqual([
       ['Test tomato', 'set', false],
       ['Test garlic', 'set', false],

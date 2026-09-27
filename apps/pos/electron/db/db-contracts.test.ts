@@ -152,6 +152,11 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     expect(REPLICABLE_TABLES).toContain('business_settings');
     // 0033: the cost each sale kept travels to the other till (same ids on both).
     expect(REPLICABLE_TABLES).toContain('order_item_costs');
+    // 0034: every ingredient's price history travels too (seed / import / batch rows by name-based id).
+    expect(REPLICABLE_TABLES).toContain('ingredient_costs');
+    expect([...(SCHEMA.get('ingredient_costs') ?? [])]).toEqual(
+      expect.arrayContaining(['ingredient_id', 'effective_at', 'unit', 'pack_size', 'pack_price_cents', 'unit_cost_mc', 'prev_unit_cost_mc', 'source']),
+    );
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');

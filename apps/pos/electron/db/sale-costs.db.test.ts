@@ -9,7 +9,8 @@
  *   - idempotent: four calls give one set of rows; two tills costing the
  *     same order while the link is down converge on the SAME rows by id;
  *   - a later price change never moves an earlier period's food cost;
- *     orders from before costing are estimated (at today's prices), labelled;
+ *     orders from before costing are estimated (at the price in force when
+ *     they took their stock, costing Phase 4), labelled;
  *   - a cancel "not made" nets the order to exactly Rs 0 at the ORIGINAL
  *     cost; "made" books the waste at what the take cost; a sealed drink
  *     put back plus the waste add up to the take;
@@ -584,7 +585,7 @@ live('every other stock row keeps its value', () => {
 // ---------------------------------------------------------------------------
 
 live('Reports: food cost from the cost each sale kept', () => {
-  it('a later price change does not move last month\'s food cost; an estimated order follows today\'s prices, labelled', async () => {
+  it('a later price change moves neither last month\'s food cost nor an estimate: it is at the price of its take, labelled', async () => {
     const s = await shop();
     const kept = s.sell([['fajitaM', 1]]);
     s.markPaid(kept, AUG_15);
@@ -606,8 +607,9 @@ live('Reports: food cost from the cost each sale kept', () => {
     // Cheese costs twice as much from today.
     s.r.updateIngredient(s.db, { id: s.ing.cheese, packSize: 2000, packPriceCents: 480_000 }, MANAGER);
     const after = s.report(AUGUST.since, AUGUST.until).foodCost!;
-    // The sale that kept its cost does not move; the estimate is at today's prices (60 g × 120 p more).
-    expect(after).toMatchObject({ costOfSalesCents: 17_641 + 24_841, estimatedCostCents: 24_841, estimatedOrders: 1 });
+    // The sale that kept its cost does not move; nor does the estimate: it is priced at the price in
+    // force when its stock was taken, from the price history (costing Phase 4), not at today's.
+    expect(after).toMatchObject({ costOfSalesCents: 17_641 + 17_641, estimatedCostCents: 17_641, estimatedOrders: 1 });
     const keptLine = s.db.prepare(`SELECT SUM(cost_cents) AS n FROM order_item_costs WHERE order_id = ?`).get(kept) as { n: number };
     expect(Number(keptLine.n)).toBe(17_641);
     // A sale today keeps today's price.

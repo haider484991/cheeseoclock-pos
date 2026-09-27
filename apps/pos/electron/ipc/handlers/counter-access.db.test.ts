@@ -329,6 +329,9 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'costing:getTargets': undefined,
   'costing:recipeCost': { menuItemId: 'no-such-item', lines: [] },
   'costing:batchCalc': { ingredientId: 'no-such-ingredient', amount: 200 },
+  // Prices and their history (costing spec Phase 4): costs, both ways.
+  'inventory:priceHistory': { ingredientId: 'no-such-ingredient' },
+  'inventory:setPrice': { ingredientId: 'no-such-ingredient', per: 'piece', priceCents: 1_000 },
   // Reports: one channel per tab (costing spec Phase 3), each checked in the
   // main process; Food cost & stock needs costs as well.
   'reports:overview': REPORT_TODAY(),

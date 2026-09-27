@@ -18,6 +18,8 @@ import {
   createSupplierInputSchema,
   updateSupplierInputSchema,
   searchMovementsInputSchema,
+  setPriceInputSchema,
+  priceHistoryInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
 import { requireCapability, REFUSED } from '../guards.js';
@@ -37,6 +39,10 @@ import {
 } from '../../db/repositories/stock-movement-repo.js';
 import { searchMovements } from '../../db/repositories/stock-movement-search.js';
 import { getBatchRecipe, setBatchRecipe, makeBatch } from '../../db/repositories/batch-recipe-repo.js';
+import { setTypedPrice } from '../../db/repositories/ingredient-cost-repo.js';
+import { findIngredient } from '../../db/repositories/ingredient-repo.js';
+import { latestPriceTags, listPriceHistory } from '../../db/price-history-read.js';
+import { loadPriceBook } from '../../db/price-book.js';
 import {
   listSuppliers,
   createSupplier,
@@ -105,7 +111,19 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
   // ---- Ingredients ----
   defineHandler('inventory:listIngredients', ctx, (_ctx, payload) => {
     requireStockView();
-    return ok(listIngredients(ctx.db, payload ?? {}));
+    // Where each price came from and what it was before (costing spec Phase
+    // 4): costs, so COST_CAPABILITY — which stock view already needs.
+    // And whether a batch's price is worked out from its recipe (every input
+    // priced): "Set price" then points at the recipe instead.
+    const tags = latestPriceTags(ctx.db);
+    const book = loadPriceBook(ctx.db);
+    return ok(
+      listIngredients(ctx.db, payload ?? {}).map((i) => ({
+        ...i,
+        latestPrice: tags.get(i.id) ?? null,
+        priceFromRecipe: book.prices.get(i.id)?.batch?.complete === true,
+      })),
+    );
   });
 
   defineHandler('inventory:createIngredient', ctx, (_ctx, payload) => {
@@ -133,6 +151,34 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     const parsed = convertIngredientUnitInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(convertIngredientToBaseUnit(ctx.db, parsed.data.id, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  // ---- Prices (costing spec Phase 4): costs, so COST_CAPABILITY ----
+  defineHandler('inventory:setPrice', ctx, (_ctx, payload) => {
+    const s = requireCapability(COST_CAPABILITY, REFUSED.prices);
+    const parsed = setPriceInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    const p = parsed.data;
+    setTypedPrice(
+      ctx.db,
+      {
+        ingredientId: p.ingredientId,
+        typed: { per: p.per, priceCents: p.priceCents, packSize: p.packSize ?? null },
+        priceKind: p.priceKind,
+        notes: p.notes ?? null,
+      },
+      { userId: s.id, deviceId: ctx.deviceId },
+    );
+    const ing = findIngredient(ctx.db, p.ingredientId);
+    if (!ing) return err({ code: 'not_found', message: 'Ingredient not found' });
+    return ok(ing);
+  });
+
+  defineHandler('inventory:priceHistory', ctx, (_ctx, payload) => {
+    requireCapability(COST_CAPABILITY, REFUSED.costs);
+    const parsed = priceHistoryInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(listPriceHistory(ctx.db, parsed.data.ingredientId, parsed.data.limit));
   });
 
   // ---- Recipes ----

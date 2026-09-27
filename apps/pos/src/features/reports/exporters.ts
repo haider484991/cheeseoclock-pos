@@ -159,7 +159,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     sheet.push(['Food cost (sales with a known cost)', null, null, f.foodCostBps === null ? null : formatBps(f.foodCostBps)]);
     sheet.push(['Costs known for', null, rs(f.knownSalesCents), f.coverageBps === null ? null : formatBps(f.coverageBps)]);
     if (f.menuFoodCostBps !== null) sheet.push(['Food cost at menu prices', null, null, formatBps(f.menuFoodCostBps)]);
-    if (f.estimatedOrders > 0) sheet.push(["Estimated at today's prices", f.estimatedOrders, rs(f.estimatedCostCents), null]);
+    if (f.estimatedOrders > 0) sheet.push(['Estimated at the prices of the time', f.estimatedOrders, rs(f.estimatedCostCents), null]);
     sheet.push(['Food sent out, not paid', f.sentNotPaid.orderCount, rs(f.sentNotPaid.costCents), null]);
     if (f.stillOpen.orderCount > 0) sheet.push(['Still open from earlier days', f.stillOpen.orderCount, rs(f.stillOpen.costCents), null]);
 

@@ -288,6 +288,16 @@ describe.skipIf(!raw)('purchase order status', () => {
       actor,
     );
     expect(findIngredient(db, ing.id)).toMatchObject({ costPerUnitCents: 35, packSize: null, packPriceCents: null });
-    expect(count(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_id = ? AND action = 'cost_from_delivery'`, ing.id)).toBe(1);
+    expect(count(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_id = ? AND action = 'set_price'`, ing.id)).toBe(1);
+    // …and a line in its price history naming the supplier and the purchase order (costing Phase 4).
+    expect(
+      count(
+        `SELECT COUNT(*) AS n FROM ingredient_costs
+          WHERE ingredient_id = ? AND source = 'delivery' AND ref_purchase_order_id = ? AND supplier_id IS NOT NULL
+            AND pack_size = 1 AND pack_price_cents = 35`,
+        ing.id,
+        po.id,
+      ),
+    ).toBe(1);
   });
 });

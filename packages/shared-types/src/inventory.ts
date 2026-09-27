@@ -35,6 +35,74 @@ export type IngredientCategory = (typeof INGREDIENT_CATEGORY_IDS)[number];
 export const PRICE_KINDS = ['set', 'estimate', 'free', 'unset'] as const;
 export type PriceKind = (typeof PRICE_KINDS)[number];
 
+/**
+ * Where a price in the price history came from (costing spec 0034,
+ * ingredient_costs.source):
+ *  - 'seed':     the price the ingredient had when price history started on
+ *                this till (one row each, written once);
+ *  - 'manual':   typed by a manager or the owner;
+ *  - 'delivery': a purchase order received at its bill;
+ *  - 'purchase': a purchase recorded on the spot (Phase 5);
+ *  - 'import':   the costing sheet, through the menu file;
+ *  - 'batch':    a sauce, dough or mix made here, rolled up from its inputs;
+ *  - 'convert':  the same price, re-kept in grams / ml after a Convert.
+ */
+export const PRICE_SOURCES = ['seed', 'manual', 'delivery', 'purchase', 'import', 'batch', 'convert'] as const;
+export type PriceSource = (typeof PRICE_SOURCES)[number];
+
+/**
+ * How a price is typed on the "Set price" dialog (costing spec 4.1):
+ *  - 'thousand': Rs X per kg (grams) or per litre (ml) → a pack of 1,000;
+ *  - 'pack':     Rs X for a pack of N base units → a pack of N;
+ *  - 'piece':    Rs X per piece (or slice, portion…) → a pack of 1.
+ */
+export const TYPED_PRICE_PERS = ['thousand', 'pack', 'piece'] as const;
+export type TypedPricePer = (typeof TYPED_PRICE_PERS)[number];
+
+/** One entry of an ingredient's price history (ingredient_costs), as the Price history drawer shows it. */
+export interface PriceHistoryEntry {
+  id: UUID;
+  ingredientId: UUID;
+  /**
+   * When this price came in. A starting price ('seed') is in force from the
+   * very start, so it carries the start of time (1970-01-01): it always
+   * comes first, whichever till wrote it and when (see `recordedAt`).
+   */
+  effectiveAt: string;
+  /** When this entry was written on this till (for a starting price: when price history began). */
+  recordedAt: string;
+  /** The ingredient's unit when it was written (a Convert adds a row in the new unit). */
+  unit: string;
+  /** Exactly as bought: `packSize` base units for `packPriceCents` paisa. */
+  packSize: number;
+  packPriceCents: number;
+  priceKind: PriceKind;
+  /** One base unit's price in millicents (per gram, it reads as paisa per kg). */
+  unitCostMc: number;
+  /** The price it replaced, per base unit of THIS entry's unit; null when there was none. */
+  prevUnitCostMc: number | null;
+  source: PriceSource;
+  supplierId: UUID | null;
+  supplierName: string | null;
+  purchaseOrderId: UUID | null;
+  purchaseOrderRef: string | null;
+  actorUserId: UUID | null;
+  actorName: string | null;
+  notes: string | null;
+}
+
+/** The newest price history entry of an ingredient, for the Ingredients list's price column. */
+export interface IngredientPriceTag {
+  source: PriceSource;
+  effectiveAt: string;
+  unit: string;
+  packSize: number;
+  packPriceCents: number;
+  priceKind: PriceKind;
+  unitCostMc: number;
+  prevUnitCostMc: number | null;
+}
+
 export interface Ingredient {
   id: UUID;
   name: string;
@@ -60,6 +128,19 @@ export interface Ingredient {
   sku: string | null;
   notes: string | null;
   isActive: boolean;
+  /**
+   * The newest entry of its price history (where the price came from, and
+   * the price before it). Only on the Ingredients list
+   * (inventory:listIngredients, costs: COST_CAPABILITY); null when it has
+   * no history yet.
+   */
+  latestPrice?: IngredientPriceTag | null;
+  /**
+   * Made here and every input has a price: its price is worked out from its
+   * batch recipe (costing spec D4), so "Set price" does not apply to it.
+   * Only on the Ingredients list, like `latestPrice`.
+   */
+  priceFromRecipe?: boolean;
 }
 
 export interface Recipe {

@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { PriceKind } from '@cheeseoclock/shared-types';
-import { batchClosure, effectivePrices, hasPrice, priceKindAfter, type BatchInputLine, type PricedIngredient } from './ingredient-price.js';
+import {
+  batchClosure,
+  batchesUsing,
+  convertedStoredPrice,
+  effectivePrices,
+  hasPrice,
+  priceChangeBps,
+  knownPriceInForce,
+  priceInForce,
+  priceKindAfter,
+  sameStoredPrice,
+  storedPriceOf,
+  type BatchInputLine,
+  type PricedIngredient,
+} from './ingredient-price.js';
 import { lineCostMc, mcToCents } from './units.js';
 
 // Every price here is made up.
@@ -137,5 +151,150 @@ describe('priceKindAfter: what a saved price is', () => {
     expect(hasPrice({ costPerUnitCents: 0, packSize: 1000, packPriceCents: 40 })).toBe(true); // rounds to 0 paisa / g, still priced
     expect(hasPrice({ costPerUnitCents: 5, packSize: 1000, packPriceCents: 0 })).toBe(false);
     expect(hasPrice({ costPerUnitCents: 5, packSize: null, packPriceCents: null })).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Costing Phase 4: the price as the ingredient keeps it, the price history
+// ---------------------------------------------------------------------------
+
+describe('storedPriceOf: one rule for every way a price is written', () => {
+  it('an exact pack decides the whole-paisa cost kept for older screens', () => {
+    expect(storedPriceOf({ costPerUnitCents: 0, packSize: 6000, packPriceCents: 225_000 }, 'unset')).toEqual({
+      costPerUnitCents: 38,
+      packSize: 6000,
+      packPriceCents: 225_000,
+      priceKind: 'set',
+    });
+  });
+  it('half a pack is no pack; a per-unit cost stays as typed', () => {
+    expect(storedPriceOf({ costPerUnitCents: 40, packSize: 100, packPriceCents: null }, 'set')).toEqual({
+      costPerUnitCents: 40,
+      packSize: null,
+      packPriceCents: null,
+      priceKind: 'set',
+    });
+  });
+  it('free is Rs 0 with no pack; Rs 0 is unset unless free; a guess stays a guess', () => {
+    expect(storedPriceOf({ costPerUnitCents: 0, packSize: 100, packPriceCents: 500 }, 'set', 'free')).toEqual({
+      costPerUnitCents: 0,
+      packSize: null,
+      packPriceCents: null,
+      priceKind: 'free',
+    });
+    expect(storedPriceOf({ costPerUnitCents: 0, packSize: null, packPriceCents: null }, 'set').priceKind).toBe('unset');
+    expect(storedPriceOf({ costPerUnitCents: 0, packSize: null, packPriceCents: null }, 'free').priceKind).toBe('free');
+    expect(storedPriceOf({ costPerUnitCents: 15, packSize: null, packPriceCents: null }, 'estimate').priceKind).toBe('estimate');
+  });
+  it('sameStoredPrice compares column for column', () => {
+    const a = storedPriceOf({ costPerUnitCents: 0, packSize: 1000, packPriceCents: 15_500 }, 'set');
+    expect(sameStoredPrice(a, { ...a })).toBe(true);
+    expect(sameStoredPrice(a, { ...a, priceKind: 'estimate' })).toBe(false);
+    expect(sameStoredPrice(a, { ...a, packSize: 2000, packPriceCents: 31_000 })).toBe(false); // the same price per gram, another pack
+  });
+});
+
+describe('convertedStoredPrice: a Convert keeps the price exactly', () => {
+  it('a price typed per kg becomes a pack of 1,000 g, never 38 paisa a gram', () => {
+    expect(convertedStoredPrice({ costPerUnitCents: 37_500, packSize: null, packPriceCents: null, priceKind: 'set' }, 1000)).toEqual({
+      costPerUnitCents: 38,
+      packSize: 1000,
+      packPriceCents: 37_500,
+      priceKind: 'set',
+    });
+  });
+  it('a pack holds 1,000× as many grams for the same money; a guess stays a guess', () => {
+    expect(convertedStoredPrice({ costPerUnitCents: 37_500, packSize: 6, packPriceCents: 225_000, priceKind: 'estimate' }, 1000)).toEqual({
+      costPerUnitCents: 38,
+      packSize: 6000,
+      packPriceCents: 225_000,
+      priceKind: 'estimate',
+    });
+  });
+  it('nothing to scale on an unpriced or free ingredient', () => {
+    for (const priceKind of ['unset', 'free'] as const) {
+      expect(convertedStoredPrice({ costPerUnitCents: 0, packSize: null, packPriceCents: null, priceKind }, 1000)).toEqual({
+        costPerUnitCents: 0,
+        packSize: null,
+        packPriceCents: null,
+        priceKind,
+      });
+    }
+  });
+});
+
+describe('priceInForce: the price at a time, from the history', () => {
+  const h = [
+    { effectiveAt: '2026-09-01T00:00:00.000Z', p: 'seed' },
+    { effectiveAt: '2026-09-10T00:00:00.000Z', p: 'a' },
+    { effectiveAt: '2026-09-10T00:00:00.000Z', p: 'b' }, // written after a, in the same moment
+    { effectiveAt: '2026-09-20T00:00:00.000Z', p: 'c' },
+  ];
+  it('the latest at or before the time, the later of two written together', () => {
+    expect(priceInForce(h, '2026-09-05T00:00:00.000Z')?.p).toBe('seed');
+    expect(priceInForce(h, '2026-09-10T00:00:00.000Z')?.p).toBe('b');
+    expect(priceInForce(h, '2026-09-19T23:59:59.999Z')?.p).toBe('b');
+    expect(priceInForce(h, '2027-01-01T00:00:00.000Z')?.p).toBe('c');
+  });
+  it('anything older than the history is priced at its first price (the starting price)', () => {
+    expect(priceInForce(h, '2025-01-01T00:00:00.000Z')?.p).toBe('seed');
+  });
+  it('no history: nothing', () => {
+    expect(priceInForce([], '2026-09-10T00:00:00.000Z')).toBeUndefined();
+  });
+});
+
+describe('knownPriceInForce: the price a take is valued at ("no price yet" is no price)', () => {
+  // The bottle had no price when the history started (seed 'unset'), got one on 5 Oct, lost it by mistake, got one again.
+  const h = [
+    { effectiveAt: '1970-01-01T00:00:00.000Z', kind: 'unset' as PriceKind, p: 'seed' },
+    { effectiveAt: '2026-10-05T00:00:00.000Z', kind: 'set' as PriceKind, p: 'first' },
+    { effectiveAt: '2026-10-10T00:00:00.000Z', kind: 'unset' as PriceKind, p: 'cleared' },
+    { effectiveAt: '2026-10-12T00:00:00.000Z', kind: 'free' as PriceKind, p: 'free' },
+  ];
+  it('a take from before the first known price is valued at that first price, never "not priced" for good', () => {
+    expect(knownPriceInForce(h, '2026-08-15T00:00:00.000Z')?.p).toBe('first');
+    expect(knownPriceInForce(h, '2026-10-01T00:00:00.000Z')?.p).toBe('first');
+  });
+  it('while the price was cleared, the last known one stands; free is a known price', () => {
+    expect(knownPriceInForce(h, '2026-10-11T00:00:00.000Z')?.p).toBe('first');
+    expect(knownPriceInForce(h, '2026-10-13T00:00:00.000Z')?.p).toBe('free');
+  });
+  it('no known price at all: nothing (the caller falls back to the price now)', () => {
+    expect(knownPriceInForce(h.filter((x) => x.kind === 'unset'), '2026-10-11T00:00:00.000Z')).toBeUndefined();
+  });
+});
+
+describe('priceChangeBps: up or down against the price before', () => {
+  it('in basis points of the old price; nothing to compare with when there was none (or it was free)', () => {
+    expect(priceChangeBps(37_500, 41_250)).toBe(1_000); // 10% dearer
+    expect(priceChangeBps(40_000, 30_000)).toBe(-2_500);
+    expect(priceChangeBps(40_000, 40_000)).toBe(0);
+    expect(priceChangeBps(null, 40_000)).toBeNull();
+    expect(priceChangeBps(0, 40_000)).toBeNull();
+  });
+});
+
+describe('batchesUsing: which batches a price change rolls up into, bottom-up', () => {
+  // mozzarella → cheese mix → pizza topping; tomato → sauce → pizza topping.
+  const bl = lines({
+    mix: [['mozzarella', 800], ['cheddar', 200]],
+    sauce: [['tomato', 2500]],
+    topping: [['mix', 500], ['sauce', 500]],
+    garnish: [['topping', 10], ['mix', 5]],
+  });
+  it('every batch made from it, each after the batches it is made from', () => {
+    expect(batchesUsing(['mozzarella'], bl)).toEqual(['mix', 'topping', 'garnish']);
+    expect(batchesUsing(['tomato'], bl)).toEqual(['sauce', 'topping', 'garnish']);
+    expect(batchesUsing(['mozzarella', 'tomato'], bl)).toEqual(['mix', 'sauce', 'topping', 'garnish']);
+    expect(batchesUsing(['salt'], bl)).toEqual([]);
+  });
+  it('leaves the changed ones out unless one is made from another', () => {
+    expect(batchesUsing(['mix'], bl)).toEqual(['topping', 'garnish']);
+    expect(batchesUsing(['mix', 'mozzarella'], bl)).toEqual(['mix', 'topping', 'garnish']);
+  });
+  it('a loop (A needs B needs A) is walked once, never round', () => {
+    const loop = lines({ a: [['b', 1], ['mozzarella', 1]], b: [['a', 1]] });
+    expect(batchesUsing(['mozzarella'], loop).sort()).toEqual(['a', 'b']);
   });
 });

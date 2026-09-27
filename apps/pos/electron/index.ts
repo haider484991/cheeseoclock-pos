@@ -7,6 +7,7 @@ import { runMigrations, MigrationFailedError } from './db/migrator.js';
 import { ensureDeviceInfo } from './db/repositories/device-repo.js';
 import { ensureSeedUsers } from './db/repositories/user-repo.js';
 import { ensureSeedMenu } from './db/seed.js';
+import { seedPriceHistoryOnce } from './services/costing-seed.js';
 import { registerAllIpcHandlers } from './ipc/registry.js';
 import { printSpooler } from './services/print-spooler.js';
 import { getCurrentSession } from './services/auth-service.js';
@@ -173,6 +174,15 @@ async function bootstrap() {
   if (isDev && !process.env['COC_NO_SEED']) {
     ensureSeedUsers(db, deviceInfo.deviceId);
     ensureSeedMenu(db, deviceInfo.deviceId);
+  }
+
+  // Price history starts here: one starting price per ingredient, once per
+  // till (costing spec Phase 4). A failure is logged and tried again at the
+  // next start; it never keeps the till from opening.
+  try {
+    seedPriceHistoryOnce(db, deviceInfo.deviceId);
+  } catch (err) {
+    log.error('Costing: the starting prices could not be written; trying again at the next start', err);
   }
 
   // The print log puts each paper down to this till and whoever is signed in.

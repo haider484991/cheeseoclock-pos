@@ -318,6 +318,11 @@ export const ipc = {
       unwrap(window.api.inventory.deleteIngredient({ id })),
     convertIngredientUnit: (id: string) =>
       unwrap(window.api.inventory.convertIngredientUnit({ id })),
+    /** "Set price": per kg / litre, per pack of N or per piece, kept exactly, with a line in the price history. */
+    setPrice: (input: IpcRequest<'inventory:setPrice'>) => unwrap(window.api.inventory.setPrice(input)),
+    /** An ingredient's price history, newest first. */
+    priceHistory: (ingredientId: string, limit?: number) =>
+      unwrap(window.api.inventory.priceHistory(limit === undefined ? { ingredientId } : { ingredientId, limit })),
     getRecipe: (menuItemId: string) =>
       unwrap(window.api.inventory.getRecipe({ menuItemId })),
     setRecipe: (input: IpcRequest<'inventory:setRecipe'>) =>

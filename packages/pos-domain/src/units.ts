@@ -187,6 +187,104 @@ export function shareBps(part: number, whole: number): number | null {
   return mulDivRound(part, 10_000, whole);
 }
 
+// -----------------------------------------------------------------------------
+// Prices as they are typed, and prices across a Convert (costing spec 4.1,
+// Phase 4). Every one of these keeps the price EXACT: a pack, never a price
+// per gram rounded to whole paisa.
+// -----------------------------------------------------------------------------
+
+/** A weighed or measured unit (grams, kg, ml, litres): priced per kg / litre, never per piece. */
+export function isWeighedUnit(unit: string): boolean {
+  const u = normalizeUnit(unit);
+  return u === 'g' || u === 'kg' || u === 'ml' || u === 'l';
+}
+
+/** What "per kg" (or "per litre") is in this unit: 1,000 g, 1,000 ml, 1 kg, 1 litre; null when not weighed. */
+export function thousandSize(unit: string): number | null {
+  const u = normalizeUnit(unit);
+  if (u === 'g' || u === 'ml') return 1000;
+  if (u === 'kg' || u === 'l') return 1;
+  return null;
+}
+
+/** "kg" or "litre" for a weighed / measured unit, else null. */
+export function thousandWord(unit: string): 'kg' | 'litre' | null {
+  const u = normalizeUnit(unit);
+  if (u === 'g' || u === 'kg') return 'kg';
+  if (u === 'ml' || u === 'l') return 'litre';
+  return null;
+}
+
+/** How a price may be typed for this unit: per kg / litre or per pack when weighed; per piece or per pack otherwise. */
+export function priceEntryChoices(unit: string): Array<'thousand' | 'pack' | 'piece'> {
+  return isWeighedUnit(unit) ? ['thousand', 'pack'] : ['piece', 'pack'];
+}
+
+/** A price as typed on the "Set price" dialog. */
+export interface TypedPrice {
+  per: 'thousand' | 'pack' | 'piece';
+  /** Rs X, in paisa. */
+  priceCents: number;
+  /** N, for a pack: base units in one pack. */
+  packSize?: number | null;
+}
+
+/**
+ * The exact pack a typed price is (costing spec 4.1), for an ingredient
+ * counted in `unit`:
+ *   "Rs X per kg / litre" → (1,000, 100X) in g / ml, (1, 100X) in kg / l;
+ *   "Rs X per pack of N"  → (N, 100X);
+ *   "Rs X per piece"      → (1, 100X).
+ * Throws, in plain words, when the way it is typed does not fit the unit
+ * ("per piece" of something weighed would be a per-gram price again).
+ */
+export function typedPricePack(t: TypedPrice, unit: string): Pack {
+  assertWhole(t.priceCents, 'The price');
+  if (t.priceCents < 0) throw new Error('A price cannot be below Rs 0');
+  switch (t.per) {
+    case 'thousand': {
+      const size = thousandSize(unit);
+      if (size === null) throw new Error(`Per kg or per litre only fits something weighed or measured, not ${unit}: use per piece or per pack`);
+      return { size, priceCents: t.priceCents };
+    }
+    case 'pack': {
+      const size = t.packSize ?? 0;
+      if (!Number.isSafeInteger(size) || size < 1) throw new Error(`Say how much one pack holds, in whole ${unit}`);
+      return { size, priceCents: t.priceCents };
+    }
+    case 'piece':
+      if (isWeighedUnit(unit)) throw new Error(`Per piece does not fit something counted in ${unit}: use per ${thousandWord(unit) ?? 'kg'} or per pack`);
+      return { size: 1, priceCents: t.priceCents };
+    default:
+      throw new Error('Say how the price is bought: per kg, per pack or per piece');
+  }
+}
+
+/**
+ * The same price after a Convert that counts `factor`× as many units (kg → g,
+ * l → ml): the pack holds factor× as many units for the same money, so
+ * every value stays exactly as it was. Replaces rounding the per-unit cost.
+ */
+export function convertPack(pack: Pack, factor: number): Pack {
+  assertWhole(factor, 'The factor');
+  if (factor < 1) throw new Error('The factor must be at least 1');
+  return { size: pack.size * factor, priceCents: pack.priceCents };
+}
+
+/**
+ * A pack kept in one unit, as a pack in another it converts to (a price
+ * kept in kg for a row counted in g, or the other way round), exactly; null
+ * when the two units do not convert. Same unit: the pack as it is.
+ */
+export function packInUnit(pack: Pack, from: string, to: string): Pack | null {
+  const down = unitFactor(from, to);
+  if (down !== null) return down === 1 ? pack : convertPack(pack, down);
+  const up = unitFactor(to, from);
+  // S base units of `from` for P = S units of `to` for P × up (1 kg = 1,000 g).
+  if (up !== null) return { size: pack.size, priceCents: pack.priceCents * up };
+  return null;
+}
+
 /** "6,000 g for Rs 2,250" */
 export function formatPack(i: { unit: string; packSize: number | null; packPriceCents: number | null }): string | null {
   if (!i.packSize || i.packPriceCents === null) return null;

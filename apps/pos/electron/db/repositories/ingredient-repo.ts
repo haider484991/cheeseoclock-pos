@@ -4,14 +4,14 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { clearBatchRecipeLines } from './batch-recipe-repo.js';
-import type { Ingredient, IngredientCategory, PriceKind, Recipe } from '@cheeseoclock/shared-types';
+import { priceRowId, setIngredientPrice } from './ingredient-cost-repo.js';
+import type { Ingredient, IngredientCategory, PriceKind, PriceSource, Recipe } from '@cheeseoclock/shared-types';
 import {
   baseUnitConversion,
-  costPerUnitFromPack,
+  convertedStoredPrice,
+  formatCents,
   guessIngredientCategory,
-  hasPrice,
   isIngredientCategory,
-  priceKindAfter,
   toPriceKind,
 } from '@cheeseoclock/pos-domain';
 
@@ -111,93 +111,81 @@ export interface CreateIngredientInput {
 }
 
 /**
- * A pack price, when there is one, decides the per-unit cost — the two can
- * never disagree. Half a pack (size without price) is treated as no pack.
+ * How a price written by create / update / Convert goes into the price
+ * history (costing spec Phase 4): where it came from, and — for a row two
+ * tills could each write for the same fact (the menu file) — the key its
+ * name-based id is made from (ingredient-cost-repo priceRowId).
  */
-function withPackCost<T extends { packSize: number | null; packPriceCents: number | null; costPerUnitCents: number }>(
-  ing: T,
-): T {
-  if (ing.packSize && ing.packSize > 0 && ing.packPriceCents !== null) {
-    return { ...ing, costPerUnitCents: costPerUnitFromPack(ing.packPriceCents, ing.packSize) };
-  }
-  return { ...ing, packSize: null, packPriceCents: null };
+export interface PriceMeta {
+  /** Default 'manual' (typed on the ingredient form). */
+  source?: PriceSource;
+  /** Name-based history row id from this key; omitted = a new uuid v7. */
+  rowKey?: string;
+  /** Roll the new price up into the batches made from it (default yes). */
+  cascade?: boolean;
+}
+
+function priceRowIdFor(ingredientId: string, meta: PriceMeta | undefined): string | undefined {
+  return meta?.rowKey ? priceRowId(ingredientId, meta.rowKey) : undefined;
 }
 
 /**
- * The price kind that goes with the price being saved (costing spec D1):
- * 'free' is a known Rs 0 (the price is cleared to Rs 0 with it), a guess is
- * 'estimate', and Rs 0 otherwise is 'unset' — never quietly 'set'.
+ * Add an ingredient. Its row goes in without a price, then its price is
+ * written through the one price path (setIngredientPrice: exact pack, price
+ * kind, the first line of its price history), and then the whole new row is
+ * synced and audited as the create — one transaction.
  */
-function withPriceKind(ing: Ingredient, previous: PriceKind | null, asked: PriceKind | undefined): Ingredient {
-  const kind = priceKindAfter(previous, hasPrice(ing), asked);
-  if (kind === 'free') return { ...ing, costPerUnitCents: 0, packSize: null, packPriceCents: null, priceKind: kind };
-  return { ...ing, priceKind: kind };
-}
-
 export function createIngredient(
   db: AppDatabase,
   input: CreateIngredientInput,
   actor: Actor,
+  price?: PriceMeta,
 ): Ingredient {
   const id = uuidv7();
   const now = nowIso();
   const storedCategory = input.category ?? null;
-  const priced: Ingredient = withPackCost({
-    id: id as Ingredient['id'],
-    name: input.name,
-    ...resolveCategory(storedCategory, input.name),
-    unit: input.unit,
-    currentQty: input.currentQty ?? 0,
-    lowThreshold: input.lowThreshold ?? 0,
-    costPerUnitCents: input.costPerUnitCents ?? 0,
-    packSize: input.packSize ?? null,
-    packPriceCents: input.packPriceCents ?? null,
-    priceKind: 'unset',
-    batchYield: null,
-    batchMethod: null,
-    defaultSupplierId: (input.defaultSupplierId ?? null) as Ingredient['defaultSupplierId'],
-    sku: input.sku ?? null,
-    notes: input.notes ?? null,
-    isActive: true,
-  });
-  const ing = withPriceKind(priced, null, input.priceKind);
-  writeWithSync({
-    db,
-    entityType: 'ingredients',
-    entityId: id,
-    op: 'upsert',
-    action: 'create',
-    actor,
-    before: null,
-    after: ing,
-    writeRow: () => {
-      db.prepare(
-        `INSERT INTO ingredients
-           (id, name, category, unit, current_qty, low_threshold, cost_per_unit_cents,
-            pack_size, pack_price_cents, price_kind, default_supplier_id, sku, notes, is_active,
-            created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
-      ).run(
-        id,
-        ing.name,
-        storedCategory,
-        ing.unit,
-        ing.currentQty,
-        ing.lowThreshold,
-        ing.costPerUnitCents,
-        ing.packSize,
-        ing.packPriceCents,
-        ing.priceKind,
-        ing.defaultSupplierId,
-        ing.sku,
-        ing.notes,
-        now,
-        now,
-        actor.deviceId,
-      );
-    },
-  });
-  return ing;
+  return db.transaction((): Ingredient => {
+    // No price columns here: an ingredient's price is written ONLY by
+    // ingredient-cost-repo (the row starts at the columns' defaults).
+    db.prepare(
+      `INSERT INTO ingredients
+         (id, name, category, unit, current_qty, low_threshold, default_supplier_id, sku, notes, is_active,
+          created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1)`,
+    ).run(
+      id,
+      input.name,
+      storedCategory,
+      input.unit,
+      input.currentQty ?? 0,
+      input.lowThreshold ?? 0,
+      input.defaultSupplierId ?? null,
+      input.sku ?? null,
+      input.notes ?? null,
+      now,
+      now,
+      actor.deviceId,
+    );
+    setIngredientPrice(
+      db,
+      {
+        ingredientId: id,
+        price: {
+          costPerUnitCents: input.costPerUnitCents ?? 0,
+          packSize: input.packSize ?? null,
+          packPriceCents: input.packPriceCents ?? null,
+        },
+        priceKind: input.priceKind,
+        source: price?.source ?? 'manual',
+      },
+      actor,
+      { first: true, id: priceRowIdFor(id, price) },
+    );
+    const ing = findIngredient(db, id)!;
+    enqueueSync(db, { entityType: 'ingredients', entityId: id, op: 'upsert', payload: ing });
+    writeAudit(db, { entityType: 'ingredients', entityId: id, action: 'create', actorUserId: actor.userId, before: null, after: ing });
+    return ing;
+  })();
 }
 
 export interface UpdateIngredientInput {
@@ -218,10 +206,18 @@ export interface UpdateIngredientInput {
   isActive?: boolean;
 }
 
+/**
+ * Change an ingredient. Its name, shelf, low level, supplier and notes are
+ * written here; a price that changes goes through the one price path
+ * (setIngredientPrice: exact pack, price kind, a line in its price history,
+ * batches made from it rolled up) — all in one transaction. Saving the form
+ * with the price as it was writes no price at all.
+ */
 export function updateIngredient(
   db: AppDatabase,
   input: UpdateIngredientInput,
   actor: Actor,
+  price?: PriceMeta,
 ): Ingredient {
   const row = db
     .prepare(`SELECT ${ING_SELECT} FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
@@ -237,16 +233,12 @@ export function updateIngredient(
   }
   const name = input.name ?? before.name;
   const storedCategory = input.category !== undefined ? input.category : isIngredientCategory(row.category) ? row.category : null;
-  const repriced: Ingredient = withPackCost({
+  const after: Ingredient = {
     ...before,
     name,
     // A guessed category follows a rename; a chosen one stays.
     ...resolveCategory(storedCategory, name),
-    unit: input.unit ?? before.unit,
     lowThreshold: input.lowThreshold ?? before.lowThreshold,
-    costPerUnitCents: input.costPerUnitCents ?? before.costPerUnitCents,
-    packSize: input.packSize !== undefined ? input.packSize : before.packSize,
-    packPriceCents: input.packPriceCents !== undefined ? input.packPriceCents : before.packPriceCents,
     defaultSupplierId:
       input.defaultSupplierId !== undefined
         ? (input.defaultSupplierId as Ingredient['defaultSupplierId'])
@@ -254,49 +246,74 @@ export function updateIngredient(
     sku: input.sku !== undefined ? input.sku : before.sku,
     notes: input.notes !== undefined ? input.notes : before.notes,
     isActive: input.isActive ?? before.isActive,
-  });
+  };
+  const detailsChanged =
+    after.name !== before.name ||
+    storedCategory !== (isIngredientCategory(row.category) ? row.category : null) ||
+    after.lowThreshold !== before.lowThreshold ||
+    after.defaultSupplierId !== before.defaultSupplierId ||
+    after.sku !== before.sku ||
+    after.notes !== before.notes ||
+    after.isActive !== before.isActive;
   const priceTouched =
     input.priceKind !== undefined ||
     input.costPerUnitCents !== undefined ||
     input.packSize !== undefined ||
     input.packPriceCents !== undefined;
-  const after = priceTouched ? withPriceKind(repriced, before.priceKind, input.priceKind) : repriced;
   const now = nowIso();
-  writeWithSync({
-    db,
-    entityType: 'ingredients',
-    entityId: input.id,
-    op: 'upsert',
-    action: 'update',
-    actor,
-    before,
-    after,
-    writeRow: () => {
-      db.prepare(
-        `UPDATE ingredients SET
-           name = ?, category = ?, unit = ?, low_threshold = ?, cost_per_unit_cents = ?,
-           pack_size = ?, pack_price_cents = ?, price_kind = ?,
-           default_supplier_id = ?, sku = ?, notes = ?, is_active = ?,
-           updated_at = ?, version = version + 1 WHERE id = ?`,
-      ).run(
-        after.name,
-        storedCategory,
-        after.unit,
-        after.lowThreshold,
-        after.costPerUnitCents,
-        after.packSize,
-        after.packPriceCents,
-        after.priceKind,
-        after.defaultSupplierId,
-        after.sku,
-        after.notes,
-        fromBool(after.isActive),
-        now,
-        input.id,
+  db.transaction(() => {
+    if (detailsChanged) {
+      writeWithSync({
+        db,
+        entityType: 'ingredients',
+        entityId: input.id,
+        op: 'upsert',
+        action: 'update',
+        actor,
+        before,
+        after,
+        writeRow: () => {
+          db.prepare(
+            `UPDATE ingredients SET
+               name = ?, category = ?, low_threshold = ?,
+               default_supplier_id = ?, sku = ?, notes = ?, is_active = ?,
+               updated_at = ?, version = version + 1 WHERE id = ?`,
+          ).run(
+            after.name,
+            storedCategory,
+            after.lowThreshold,
+            after.defaultSupplierId,
+            after.sku,
+            after.notes,
+            fromBool(after.isActive),
+            now,
+            input.id,
+          );
+        },
+      });
+    }
+    if (priceTouched) {
+      // What is not sent stays as it was: a typed cost with the pack left in
+      // place is still decided by the pack (the menu import clears the pack
+      // when a per-unit cost is meant to count).
+      setIngredientPrice(
+        db,
+        {
+          ingredientId: input.id,
+          price: {
+            costPerUnitCents: input.costPerUnitCents ?? before.costPerUnitCents,
+            packSize: input.packSize !== undefined ? input.packSize : before.packSize,
+            packPriceCents: input.packPriceCents !== undefined ? input.packPriceCents : before.packPriceCents,
+          },
+          priceKind: input.priceKind,
+          source: price?.source ?? 'manual',
+        },
+        actor,
+        { id: priceRowIdFor(input.id, price), cascade: price?.cascade },
       );
-    },
-  });
-  return after;
+    }
+  })();
+  return findIngredient(db, input.id)!;
 }
 
 export function deleteIngredient(db: AppDatabase, id: string, actor: Actor): void {
@@ -340,12 +357,26 @@ export function deleteIngredient(db: AppDatabase, id: string, actor: Actor): voi
 
 /**
  * Switch an ingredient counted in kg (or litres) to grams (or ml): stock,
- * low-stock level and pack size x1000, cost per unit /1000, and every recipe
- * line that uses it x1000 — the same physical amounts, now in units a recipe
- * can express ("300 g", which a whole-number kg column cannot hold).
- * One transaction; the ingredient and each recipe row sync and audit.
+ * low-stock level and batch yield x1000, and every recipe line, open
+ * purchase order line and batch recipe line that uses it x1000 — the same
+ * physical amounts, now in units a recipe can express ("300 g", which a
+ * whole-number kg column cannot hold). The price is kept EXACTLY (costing
+ * spec 4.1): the pack holds 1,000x as many units for the same money
+ * ("Rs 375 per kg" becomes "1,000 g for Rs 375", never 38 paisa a gram), so
+ * every value stays as it was, with a line in the price history saying so.
+ * An open purchase order line keeps a whole-paisa price per unit (no exact
+ * pack on it until costing Phase 5), so its price per gram must come out
+ * whole: when one would not (Rs 375.50 a kg is 37.55 paisa a gram), the
+ * Convert is refused, in plain words, rather than changing what the order
+ * owes — receive or cancel that order first.
+ * One transaction; the ingredient and each row it touches sync and audit.
  */
-export function convertIngredientToBaseUnit(db: AppDatabase, id: string, actor: Actor): Ingredient {
+export function convertIngredientToBaseUnit(
+  db: AppDatabase,
+  id: string,
+  actor: Actor,
+  opts: { priceRowKey?: string } = {},
+): Ingredient {
   const row = db
     .prepare(`SELECT ${ING_SELECT} FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
     .get(id) as IngRow | undefined;
@@ -354,31 +385,47 @@ export function convertIngredientToBaseUnit(db: AppDatabase, id: string, actor: 
   const conv = baseUnitConversion(before.unit);
   if (!conv) throw new Error(`"${before.name}" is already counted in ${before.unit}`);
   const f = conv.factor;
-  const after: Ingredient = withPackCost({
+  // What is owed on an open order must stay exactly what it is (see above).
+  const inexact = db
+    .prepare(
+      `SELECT po.reference_no AS ref, poi.unit_cost_cents AS cost
+         FROM purchase_order_items poi
+         JOIN purchase_orders po ON po.id = poi.purchase_order_id
+        WHERE poi.ingredient_id = ? AND poi.deleted_at IS NULL AND po.deleted_at IS NULL
+          AND po.status IN ('draft', 'ordered', 'partial')
+          AND poi.unit_cost_cents % ? <> 0
+        ORDER BY po.created_at LIMIT 1`,
+    )
+    .get(id, f) as { ref: string | null; cost: number } | undefined;
+  if (inexact) {
+    throw new Error(
+      `"${before.name}" is on an open purchase order${inexact.ref ? ` (${inexact.ref})` : ''} at ${formatCents(Number(inexact.cost))} per ${before.unit}, ` +
+        `which can't be kept exactly per ${conv.unit}. Receive or cancel that order first, then count it in ${conv.unit}.`,
+    );
+  }
+  const price = convertedStoredPrice(before, f);
+  const after: Ingredient = {
     ...before,
+    ...price,
     unit: conv.unit,
     currentQty: before.currentQty * f,
     lowThreshold: before.lowThreshold * f,
-    costPerUnitCents: Math.round(before.costPerUnitCents / f),
-    packSize: before.packSize !== null ? before.packSize * f : null,
     batchYield: before.batchYield !== null ? before.batchYield * f : null,
-  });
+  };
   const now = nowIso();
   const tx = db.transaction(() => {
     db.prepare(
-      `UPDATE ingredients SET unit = ?, current_qty = ?, low_threshold = ?, cost_per_unit_cents = ?,
-              pack_size = ?, pack_price_cents = ?, batch_yield = ?, updated_at = ?, version = version + 1
+      `UPDATE ingredients SET unit = ?, current_qty = ?, low_threshold = ?, batch_yield = ?,
+              updated_at = ?, version = version + 1
         WHERE id = ?`,
-    ).run(
-      after.unit,
-      after.currentQty,
-      after.lowThreshold,
-      after.costPerUnitCents,
-      after.packSize,
-      after.packPriceCents,
-      after.batchYield,
-      now,
-      id,
+    ).run(after.unit, after.currentQty, after.lowThreshold, after.batchYield, now, id);
+    // The same price in the new unit: the one price path, with its history
+    // line ('convert'). Nothing to roll up: no value changes.
+    setIngredientPrice(
+      db,
+      { ingredientId: id, price, priceKind: price.priceKind, source: 'convert', notes: `Counted in ${after.unit} instead of ${before.unit}` },
+      actor,
+      { force: true, cascade: false, previousUnit: before.unit, id: opts.priceRowKey ? priceRowId(id, opts.priceRowKey) : undefined },
     );
     enqueueSync(db, { entityType: 'ingredients', entityId: id, op: 'upsert', payload: after });
     writeAudit(db, {
@@ -437,8 +484,9 @@ export function convertIngredientToBaseUnit(db: AppDatabase, id: string, actor: 
       const next = {
         qtyOrdered: line.qty_ordered * f,
         qtyReceived: line.qty_received * f,
-        // The line total (what is owed) stays as it is; only the per-unit price moves.
-        unitCostCents: Math.round(line.unit_cost_cents / f),
+        // The line total (what is owed) stays exactly as it is: the price per
+        // unit divides exactly (anything else was refused above).
+        unitCostCents: line.unit_cost_cents / f,
       };
       db.prepare(
         `UPDATE purchase_order_items SET qty_ordered = ?, qty_received = ?, unit_cost_cents = ?,

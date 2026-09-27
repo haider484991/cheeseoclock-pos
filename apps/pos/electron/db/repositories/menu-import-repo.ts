@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
 import type { Actor } from './base.js';
@@ -10,8 +11,12 @@ import {
   updateIngredient,
   deleteIngredient,
   convertIngredientToBaseUnit,
+  findIngredient,
   setRecipeForItem,
+  type PriceMeta,
 } from './ingredient-repo.js';
+import { importPriceRowId, rollUpBatches } from './ingredient-cost-repo.js';
+import { loadPriceBook } from '../price-book.js';
 import { setBatchRecipe, clearBatchRecipeLines } from './batch-recipe-repo.js';
 import { listCombos, deleteCombo } from './combo-repo.js';
 import {
@@ -31,6 +36,7 @@ import {
   planMenuImport,
   type GroupRef,
   type IngredientRef,
+  type MenuImportOps,
   type MenuImportPlan,
   type MenuSnapshot,
   type ModifierRef,
@@ -196,11 +202,69 @@ function clearMenu(db: AppDatabase, actor: Actor): number {
   return items.length;
 }
 
+/** The menu file's fingerprint: the same file gives the same one on every till. */
+export function menuFileSha256(file: MenuImportFile): string {
+  return createHash('sha256').update(JSON.stringify(file)).digest('hex');
+}
+
+type IngredientUpdate = NonNullable<MenuImportOps['ingredients'][number]['update']>;
+type PriceFields = Pick<IngredientUpdate, 'costPerUnitCents' | 'packSize' | 'packPriceCents' | 'priceKind'>;
+
+/** An ingredient update's price (null when it has none) and the rest of it (null when nothing else). */
+function splitPrice(u: IngredientUpdate): { price: PriceFields | null; rest: Omit<IngredientUpdate, keyof PriceFields> | null } {
+  const { costPerUnitCents, packSize, packPriceCents, priceKind, ...rest } = u;
+  const price: PriceFields = {};
+  if (costPerUnitCents !== undefined) price.costPerUnitCents = costPerUnitCents;
+  if (packSize !== undefined) price.packSize = packSize;
+  if (packPriceCents !== undefined) price.packPriceCents = packPriceCents;
+  if (priceKind !== undefined) price.priceKind = priceKind;
+  return { price: Object.keys(price).length > 0 ? price : null, rest: Object.keys(rest).length > 0 ? rest : null };
+}
+
+/** The ingredients already here that will be batches made here once the file is in: a batch recipe now, or one from the file. */
+function batchesAfterFile(db: AppDatabase, ops: MenuImportOps): Set<string> {
+  const ids = new Set(
+    (db.prepare(`SELECT DISTINCT ingredient_id AS id FROM batch_recipe_lines WHERE deleted_at IS NULL`).all() as Array<{ id: string }>).map(
+      (r) => r.id,
+    ),
+  );
+  for (const b of ops.batches) if ('existingId' in b.ingredient && b.lines.length > 0) ids.add(b.ingredient.existingId);
+  return ids;
+}
+
+/** The same price, column for column. */
+function samePrice(
+  a: { costPerUnitCents: number; packSize: number | null; packPriceCents: number | null; priceKind: string },
+  b: { costPerUnitCents: number; packSize: number | null; packPriceCents: number | null; priceKind: string },
+): boolean {
+  return (
+    a.costPerUnitCents === b.costPerUnitCents &&
+    a.packSize === b.packSize &&
+    a.packPriceCents === b.packPriceCents &&
+    a.priceKind === b.priceKind
+  );
+}
+
 /**
  * Write a menu file. Re-plans against the live menu inside one transaction,
  * then goes through the ordinary repositories — every row gets its own sync
  * entry and audit row — plus one audit row recording the import itself.
  * Any failure rolls the whole import back.
+ *
+ * Prices go through the one price path (costing spec Phase 4) as source
+ * 'import', each history row with a name-based id from the ingredient and
+ * the file's fingerprint (menuFileSha256: sha-256 of its content, so a copy
+ * saved with or without a byte-order mark is the same file): importing the
+ * same file on both tills gives ONE row per ingredient, which the link
+ * settles by id. The batches
+ * made from a re-priced ingredient are rolled up once, at the end, after
+ * the file's batch recipes are in (also with name-based ids), so they are
+ * rolled up from the file's recipes. Which prices a file may overwrite is
+ * unchanged here (costing Phase 6) — except a batch made here: once the
+ * file's batch recipes are in, a batch whose inputs all have a price keeps
+ * the price rolled up from them, and the sheet's figure for it is only a
+ * reference (costing spec D4 and section 8: batch costs are always the
+ * till's). Only a batch with an input still unpriced takes the sheet's.
  */
 export function applyMenuImport(
   db: AppDatabase,
@@ -209,6 +273,8 @@ export function applyMenuImport(
   actor: Actor,
   opts: { fresh?: boolean } = {},
 ): MenuImportSummary {
+  const fileSha = menuFileSha256(file);
+  const importPrice: PriceMeta = { source: 'import', rowKey: `import|${fileSha}`, cascade: false };
   const tx = db.transaction((): MenuImportSummary => {
     let removedItems = 0;
     let taxUse: Map<string, number> | undefined;
@@ -230,13 +296,33 @@ export function applyMenuImport(
     }
 
     const ingredientIds = new Map<string, string>();
+    /** Ingredients whose price this file wrote, in file order: their batches roll up at the end. */
+    const repriced: string[] = [];
+    /** The file's price for a batch made here: decided once the file's batch recipes are in. */
+    const batchPrices: Array<{ id: string; price: PriceFields }> = [];
+    const madeHere = batchesAfterFile(db, ops);
+    const writeImportPrice = (id: string, update: IngredientUpdate) => {
+      const before = findIngredient(db, id)!;
+      const after = updateIngredient(db, { id, ...update }, actor, importPrice);
+      if (!samePrice(before, after)) repriced.push(id);
+    };
     for (const ing of ops.ingredients) {
       if (ing.existingId) {
-        if (ing.convert) convertIngredientToBaseUnit(db, ing.existingId, actor);
-        if (ing.update) updateIngredient(db, { id: ing.existingId, ...ing.update }, actor);
+        if (ing.convert) convertIngredientToBaseUnit(db, ing.existingId, actor, { priceRowKey: `convert|${fileSha}` });
+        if (ing.update) {
+          const { price, rest } = splitPrice(ing.update);
+          if (price && madeHere.has(ing.existingId)) {
+            if (rest) updateIngredient(db, { id: ing.existingId, ...rest }, actor);
+            batchPrices.push({ id: ing.existingId, price });
+          } else {
+            writeImportPrice(ing.existingId, ing.update);
+          }
+        }
         ingredientIds.set(ing.fileKey, ing.existingId);
       } else if (ing.create) {
-        ingredientIds.set(ing.fileKey, createIngredient(db, ing.create, actor).id);
+        const id = createIngredient(db, ing.create, actor, importPrice).id;
+        ingredientIds.set(ing.fileKey, id);
+        repriced.push(id);
       }
     }
     const ingredientId = (ref: IngredientRef): string => {
@@ -255,8 +341,30 @@ export function applyMenuImport(
           lines: b.lines.map((l) => ({ inputIngredientId: ingredientId(l.ingredient), qty: l.qty })),
         },
         actor,
+        { rollUpKey: `recipe|import|${fileSha}` },
       );
     }
+
+    // A batch made here that the file prices: with every input priced (the
+    // file's own recipe and prices now in), its roll-up wins and the sheet's
+    // figure is only a reference; with one unpriced, the sheet's price is
+    // what it has, as before.
+    for (const b of batchPrices) {
+      if (loadPriceBook(db).prices.get(b.id)?.batch?.complete) {
+        rollUpBatches(db, [b.id], `import|${fileSha}`, actor, {
+          self: true,
+          note: "From its batch recipe (the costing sheet's figure for it is only a reference)",
+        });
+      } else {
+        writeImportPrice(b.id, b.price);
+      }
+    }
+
+    // Every batch made from an ingredient this file re-priced takes its
+    // rolled-up price now, from the file's own batch recipes — on this till
+    // only, once per batch per triggering price row (apply-remote never
+    // rolls up again).
+    for (const id of repriced) rollUpBatches(db, [id], importPriceRowId(id, fileSha), actor);
 
     const groupIds = new Map<string, string>();
     const optionIds = new Map<string, string>();
@@ -357,7 +465,7 @@ export function applyMenuImport(
       action: 'import',
       actorUserId: actor.userId,
       before: null,
-      after: { fileName, source: file.source, fresh: !!opts.fresh, removedItems, summary: preview.summary },
+      after: { fileName, fileSha256: fileSha, source: file.source, fresh: !!opts.fresh, removedItems, summary: preview.summary },
     });
     return { ...preview.summary, removedItems };
   });

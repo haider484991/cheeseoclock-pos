@@ -541,11 +541,11 @@ describe('food cost, in plain words', () => {
   });
 
   it('estimated orders and when costs started being kept', () => {
-    expect(estimatedText({ estimatedOrders: 212 })).toBe("Includes 212 orders estimated at today's prices.");
-    expect(estimatedText({ estimatedOrders: 1 })).toBe("Includes 1 order estimated at today's prices.");
+    expect(estimatedText({ estimatedOrders: 212 })).toBe("Includes 212 orders estimated at the prices of the time.");
+    expect(estimatedText({ estimatedOrders: 1 })).toBe("Includes 1 order estimated at the prices of the time.");
     expect(estimatedText({ estimatedOrders: 0 })).toBe('');
     expect(costingStartText('2026-10-03T07:00:00.000Z')).toBe(
-      "From Sat 3 Oct 2026 every sale keeps its cost; older or unrecorded orders are estimated from what they took from stock at today's prices.",
+      "From Sat 3 Oct 2026 every sale keeps its cost; older or unrecorded orders are estimated from what they took from stock at the prices of the time.",
     );
     expect(costingStartText(null)).toMatch(/^From the next order sent to the kitchen/);
   });
@@ -580,12 +580,12 @@ describe('food cost, in plain words', () => {
     expect(csv).toContain('FOOD COST (THIS TILL; SALES BEFORE TAX, AFTER DISCOUNTS)');
     expect(csv).toContain('Food cost (sales with a known cost),,,30%');
     expect(csv).toContain('Costs known for,,940.00,94%');
-    expect(csv).toContain("Estimated at today's prices,3,40.00,");
+    expect(csv).toContain('Estimated at the prices of the time,3,40.00,');
     expect(csv).toContain('Test Wings,No recipe,2,60.00');
     const html = tabPrint('foodStock', withFood, period);
     expect(html).toContain('Food cost 30% of food sales');
     expect(html).toContain('costs known for 94% of sales');
-    expect(html).toContain("Includes 3 orders estimated at today&#39;s prices.");
+    expect(html).toContain('Includes 3 orders estimated at the prices of the time.');
 
     // No other tab carries it, so a login without costs (no Food cost & stock tab) gets none.
     const without = report({ foodCost: null });

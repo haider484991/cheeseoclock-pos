@@ -6,7 +6,6 @@ import {
   INGREDIENT_CATEGORIES,
   INGREDIENT_UNITS,
   baseUnitConversion,
-  costPerUnitFromPack,
   formatCents,
   formatPack,
   formatQty,
@@ -16,11 +15,12 @@ import {
   stockFill,
   stockStatus,
   stockValueCents,
+  thousandSize,
 } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Ingredient, IngredientCategory, PriceKind, StockMovementReason, WasteReason } from '@cheeseoclock/shared-types';
-import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat } from 'lucide-react';
+import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat, Tag } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
   FilterChips,
@@ -42,6 +42,9 @@ import {
   type IngredientSort,
   type StockFilter,
 } from './ingredient-list';
+import { PriceFields, SetPriceDialog } from './SetPriceDialog';
+import { ChangeMark, PriceHistoryDrawer, SourceChip } from './PriceHistoryDrawer';
+import { initialPriceEntry, perChoices, readPriceEntry, tagView, type PriceEntry } from './price-view';
 
 const INGREDIENTS_KEY = ['inventory', 'ingredients', 'all'] as const;
 
@@ -52,6 +55,10 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
   const { toast } = useToast();
   const [editing, setEditing] = useState<Ingredient | null | 'new'>(null);
   const [movementFor, setMovementFor] = useState<Ingredient | null>(null);
+  /** "Set price" open for this one (costing Phase 4). */
+  const [pricing, setPricing] = useState<Ingredient | null>(null);
+  /** Its price history open in the drawer. */
+  const [historyFor, setHistoryFor] = useState<Ingredient | null>(null);
   const [category, setCategory] = useSessionState<CategoryFilter>('inv.ing.category', 'all');
   const [stock, setStock] = useSessionState<StockFilter>('inv.ing.stock', 'all');
   const [sort, setSort] = useSessionState<IngredientSort>('inv.ing.sort', { key: 'name', dir: 'asc' });
@@ -70,8 +77,8 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
     (id: string | null) => (id ? sup.data?.find((s) => s.id === id)?.name : undefined),
     [sup.data],
   );
-  // "Set price" on Costing → Missing costs lands here with that ingredient's form open.
-  useDeepLinkOpen('inv.ing.openId', q.data, setEditing);
+  // "Set price" on Costing → Missing costs lands here with that ingredient's "Set price" open.
+  useDeepLinkOpen('inv.ing.openId', q.data, setPricing);
 
   const filter = useCallback(
     (i: Ingredient) => (category === 'all' || i.category === category) && matchesStockFilter(i, stock),
@@ -247,7 +254,7 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
                 direction={sort.dir}
                 onClick={() => setSort(nextSort(sort, 'stock'))}
               />
-              <th className="pb-2 text-right">Cost</th>
+              <th className="pb-2 text-right">Price</th>
               <SortHeader
                 label="Value"
                 align="right"
@@ -287,11 +294,7 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
                   <StockLevel ingredient={i} />
                 </td>
                 <td className="py-2.5 pl-3 text-right">
-                  <div className="whitespace-nowrap font-mono text-xs">
-                    <PriceKindTag kind={i.priceKind} madeHere={i.batchYield !== null} />
-                    {i.priceKind !== 'unset' && i.priceKind !== 'free' && formatUnitCost(i)}
-                  </div>
-                  {(i.packSize ?? 0) > 1 && <div className="whitespace-nowrap text-xs text-stone-500">{formatPack(i)}</div>}
+                  <PriceCell ingredient={i} onHistory={() => setHistoryFor(i)} />
                   {baseUnitConversion(i.unit) && (
                     <button
                       type="button"
@@ -317,6 +320,9 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
                     <Button variant="secondary" size="sm" onClick={() => setMovementFor(i)} title="Delivery, waste or stock take">
                       <PackagePlus className="h-4 w-4" /> Stock
                     </Button>
+                    <IconButton label="Set price" onClick={() => setPricing(i)}>
+                      <Tag className="h-4 w-4" />
+                    </IconButton>
                     {onShowHistory && (
                       <IconButton label="Stock history" onClick={() => onShowHistory(i)}>
                         <History className="h-4 w-4" />
@@ -393,6 +399,18 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
           onClose={() => setEditing(null)}
         />
       )}
+      {pricing && <SetPriceDialog key={pricing.id} ingredient={pricing} onClose={() => setPricing(null)} />}
+      {historyFor && (
+        <PriceHistoryDrawer
+          key={historyFor.id}
+          ingredient={historyFor}
+          onClose={() => setHistoryFor(null)}
+          onSetPrice={(i) => {
+            setHistoryFor(null);
+            setPricing(i);
+          }}
+        />
+      )}
       {movementFor && (
         <MovementDialog key={movementFor.id} ingredient={movementFor} onClose={() => setMovementFor(null)} />
       )}
@@ -447,6 +465,40 @@ function PriceKindTag({ kind, madeHere }: { kind: PriceKind; madeHere: boolean }
           : null;
   if (!tag) return null;
   return <span className={cn('mr-1.5 rounded px-1.5 py-0.5 font-sans text-[11px] font-medium', tag.cls)}>{tag.text}</span>;
+}
+
+/**
+ * The price column (costing spec Phase 4): the price per kg / litre / piece,
+ * the pack it is bought in, where it came from (Bill, Typed, Sheet, Batch…)
+ * and up or down on the price before — from the newest line of its price
+ * history. A tap opens the whole history.
+ */
+function PriceCell({ ingredient: i, onHistory }: { ingredient: Ingredient; onHistory: () => void }) {
+  const tag = i.latestPrice ?? null;
+  // After a Convert the newest line is in the unit now; one in another unit is not this price.
+  const view = tag && tag.unit === i.unit ? tagView(tag) : null;
+  const kind = view && tag ? tag.priceKind : i.priceKind;
+  const packLine = view ? view.pack : (i.packSize ?? 0) > 1 && i.packSize !== thousandSize(i.unit) ? formatPack(i) : null;
+  return (
+    <button
+      type="button"
+      onClick={onHistory}
+      title="Price history"
+      className="ml-auto flex flex-col items-end gap-0.5 rounded px-1 py-0.5 text-right hover:bg-stone-50 dark:hover:bg-stone-800"
+    >
+      <span className="whitespace-nowrap font-mono text-xs">
+        <PriceKindTag kind={kind} madeHere={i.batchYield !== null} />
+        {kind !== 'unset' && kind !== 'free' && (view ? view.price : formatUnitCost(i))}
+      </span>
+      {packLine && <span className="whitespace-nowrap text-xs text-stone-500">{packLine}</span>}
+      {view && tag && (
+        <span className="flex items-center gap-1.5">
+          <SourceChip source={tag.source} />
+          {tag.source !== 'convert' && <ChangeMark prevUnitCostMc={tag.prevUnitCostMc} unitCostMc={tag.unitCostMc} priceKind={tag.priceKind} />}
+        </span>
+      )}
+    </button>
+  );
 }
 
 function StatusBadge({ ingredient }: { ingredient: Ingredient }) {
@@ -542,6 +594,10 @@ function IngredientDialog({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  // An ingredient's price changes only through "Set price" (it keeps the price history), opened over this form.
+  const [settingPrice, setSettingPrice] = useState(false);
+  const listed = useQuery({ queryKey: INGREDIENTS_KEY, queryFn: () => ipc.inventory.listIngredients(), enabled: !!existing });
+  const current = (existing && listed.data?.find((x) => x.id === existing.id)) || existing;
   const [name, setName] = useState(existing?.name ?? '');
   /** '' = guess from the name. */
   const [category, setCategory] = useState<IngredientCategory | ''>(
@@ -550,28 +606,17 @@ function IngredientDialog({
   const [unit, setUnit] = useState(existing?.unit ?? 'g');
   const [currentQty, setCurrentQty] = useState((existing?.currentQty ?? 0).toString());
   const [lowThreshold, setLowThreshold] = useState((existing?.lowThreshold ?? 0).toString());
-  const [costPerUnit, setCostPerUnit] = useState(((existing?.costPerUnitCents ?? 0) / 100).toString());
-  const [packSize, setPackSize] = useState(existing?.packSize ? existing.packSize.toString() : '');
-  const [packPrice, setPackPrice] = useState(
-    existing?.packPriceCents !== null && existing?.packPriceCents !== undefined
-      ? (existing.packPriceCents / 100).toString()
-      : '',
+  // A new ingredient's price, as it is bought (the same boxes as "Set price").
+  const [priceEntry, setPriceEntry] = useState<PriceEntry>(() =>
+    initialPriceEntry({ unit: existing?.unit ?? 'g', costPerUnitCents: 0, packSize: null, packPriceCents: null, priceKind: 'unset' }),
   );
-  const pack = {
-    size: parseInt(packSize, 10),
-    priceCents: Math.round(parseFloat(packPrice) * 100),
-  };
-  const hasPack = pack.size > 0 && Number.isFinite(pack.priceCents) && pack.priceCents >= 0 && packPrice.trim() !== '';
+  const priceReading = readPriceEntry(priceEntry, unit);
+  const priceBlocked = !existing && !priceReading.ok && !priceReading.empty;
   const unitChoices = [...new Set([...INGREDIENT_UNITS, ...(existing ? [existing.unit] : [])])];
   const [supplierId, setSupplierId] = useState(existing?.defaultSupplierId ?? '');
   const [sku, setSku] = useState(existing?.sku ?? '');
   const [notes, setNotes] = useState(existing?.notes ?? '');
   const guessed = guessIngredientCategory(name);
-  // What the price is (costing spec D1): a real Rs 0, or a guess. Neither = a
-  // real price, or "no price yet" when it is Rs 0.
-  const [free, setFree] = useState(existing?.priceKind === 'free');
-  const [guess, setGuess] = useState(existing?.priceKind === 'estimate');
-  const priced = hasPack ? pack.priceCents > 0 : (parseFloat(costPerUnit || '0') || 0) > 0;
 
   const sup = useQuery({
     queryKey: ['inventory', 'suppliers'],
@@ -580,38 +625,32 @@ function IngredientDialog({
 
   const mut = useMutation({
     mutationFn: () => {
-      const costPerUnitCents = hasPack
-        ? costPerUnitFromPack(pack.priceCents, pack.size)
-        : Math.round(parseFloat(costPerUnit || '0') * 100);
-      const packFields = hasPack
-        ? { packSize: pack.size, packPriceCents: pack.priceCents }
-        : { packSize: null, packPriceCents: null };
       const low = parseInt(lowThreshold, 10) || 0;
-      // 'set' with a price of Rs 0 is saved as "no price yet" by the till.
-      const priceKind: PriceKind = free ? 'free' : guess ? 'estimate' : 'set';
       if (existing) {
+        // The price is not sent: it changes through "Set price", with its history.
         return ipc.inventory.updateIngredient({
           id: existing.id,
           name: name.trim(),
           category: category || null,
           lowThreshold: low,
-          costPerUnitCents,
-          ...packFields,
-          priceKind,
           defaultSupplierId: supplierId || null,
           sku: sku || null,
           notes: notes || null,
         });
       }
+      // No price typed: added as "no price yet" (Costing → Missing costs lists it).
+      const priceFields: { packSize?: number; packPriceCents?: number; priceKind?: PriceKind } = !priceReading.ok
+        ? {}
+        : priceReading.free
+          ? { priceKind: 'free' }
+          : { packSize: priceReading.pack.size, packPriceCents: priceReading.pack.priceCents, priceKind: priceReading.priceKind };
       return ipc.inventory.createIngredient({
         name: name.trim(),
         category: category || null,
         unit,
         currentQty: parseInt(currentQty, 10) || 0,
         lowThreshold: low,
-        costPerUnitCents,
-        ...packFields,
-        priceKind,
+        ...priceFields,
         defaultSupplierId: supplierId || null,
         sku: sku || null,
         notes: notes || null,
@@ -664,7 +703,12 @@ function IngredientDialog({
                 <select
                   id="ing-unit"
                   value={unit}
-                  onChange={(e) => setUnit(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setUnit(next);
+                    // Per kg fits grams, per piece fits pieces: keep the price boxes to a way this unit is bought.
+                    setPriceEntry((pe) => (perChoices(next).includes(pe.per) ? pe : { ...pe, per: perChoices(next)[0]! }));
+                  }}
                   // An existing ingredient changes unit only through Convert (it rescales stock and recipes).
                   disabled={!!existing}
                   title={existing ? 'Use Convert to change the unit' : undefined}
@@ -694,7 +738,7 @@ function IngredientDialog({
                 ))}
               </select>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               {!existing && (
                 <div>
                   <FieldLabel htmlFor="ing-opening">Opening stock ({unit})</FieldLabel>
@@ -723,18 +767,6 @@ function IngredientDialog({
                   className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
                 />
               </div>
-              <div>
-                <FieldLabel htmlFor="ing-cost">Rs per {unit}</FieldLabel>
-                <input
-                  id="ing-cost"
-                  type="number"
-                  step="0.001"
-                  value={free ? '0' : hasPack ? (pack.priceCents / pack.size / 100).toFixed(3) : costPerUnit}
-                  disabled={hasPack || free}
-                  onChange={(e) => setCostPerUnit(e.target.value)}
-                  className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono disabled:bg-stone-100 disabled:text-stone-500 dark:border-stone-700 dark:bg-stone-800"
-                />
-              </div>
             </div>
             {existing && (
               <p className="text-xs text-stone-500">
@@ -743,71 +775,20 @@ function IngredientDialog({
               </p>
             )}
             <div className="rounded-lg bg-stone-50 p-3 dark:bg-stone-800/50">
-              <div className="mb-2 text-xs uppercase tracking-wider text-stone-500">Bought as (optional)</div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="ing-pack-size" className="mb-1 block text-xs text-stone-500">Pack holds ({unit})</label>
-                  <input
-                    id="ing-pack-size"
-                    type="number"
-                    step="1"
-                    min={1}
-                    inputMode="numeric"
-                    value={packSize}
-                    placeholder="e.g. 6000"
-                    disabled={free}
-                    onChange={(e) => setPackSize(e.target.value)}
-                    className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono disabled:opacity-50 dark:border-stone-700 dark:bg-stone-900"
-                  />
+              <div className="mb-2 text-xs uppercase tracking-wider text-stone-500">Price</div>
+              {current ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <span>
+                    <PriceCellText ingredient={current} />
+                  </span>
+                  <Button variant="secondary" size="sm" onClick={() => setSettingPrice(true)}>
+                    <Tag className="h-4 w-4" /> Change price
+                  </Button>
+                  {settingPrice && <SetPriceDialog ingredient={current} onClose={() => setSettingPrice(false)} />}
                 </div>
-                <div>
-                  <label htmlFor="ing-pack-price" className="mb-1 block text-xs text-stone-500">Pack price (Rs)</label>
-                  <input
-                    id="ing-pack-price"
-                    type="number"
-                    step="0.01"
-                    min={0}
-                    value={packPrice}
-                    placeholder="e.g. 2250"
-                    disabled={free}
-                    onChange={(e) => setPackPrice(e.target.value)}
-                    className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono disabled:opacity-50 dark:border-stone-700 dark:bg-stone-900"
-                  />
-                </div>
-              </div>
-              <p className="mt-2 text-xs text-stone-500">
-                {hasPack && !free
-                  ? `= ${formatUnitCost({ unit, costPerUnitCents: 0, packSize: pack.size, packPriceCents: pack.priceCents })}`
-                  : 'Type the pack from the supplier bill and the cost per ' + unit + ' is worked out for you.'}
-              </p>
-            </div>
-            <div className="space-y-1">
-              <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={free}
-                    onChange={(e) => {
-                      setFree(e.target.checked);
-                      if (e.target.checked) setGuess(false);
-                    }}
-                  />
-                  Free (costs nothing)
-                </label>
-                <label className={cn('inline-flex items-center gap-2', free && 'opacity-50')}>
-                  <input type="checkbox" checked={guess} disabled={free} onChange={(e) => setGuess(e.target.checked)} />
-                  This price is a guess
-                </label>
-              </div>
-              <p className="text-xs text-stone-500">
-                {free
-                  ? 'Counted as Rs 0 in every dish that uses it.'
-                  : !priced
-                    ? 'No price yet: dishes that use it show "can\'t cost yet" on the Costing page until it has one.'
-                    : guess
-                      ? 'Dishes are costed with it, and it stays on Costing → Missing costs until the real price is in.'
-                      : null}
-              </p>
+              ) : (
+                <PriceFields unit={unit} entry={priceEntry} onChange={setPriceEntry} idPrefix="ing-price" optional />
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -852,13 +833,30 @@ function IngredientDialog({
           </div>
           <footer className="mt-5 flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button variant="primary" disabled={mut.isPending || !name.trim() || !unit.trim()} onClick={() => mut.mutate()}>
+            <Button variant="primary" disabled={mut.isPending || !name.trim() || !unit.trim() || priceBlocked} onClick={() => mut.mutate()}>
               {mut.isPending ? 'Saving…' : 'Save'}
             </Button>
           </footer>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/** The price as one line (edit dialog): "Rs 375 / kg · 6,000 g for Rs 2,250", with its chip. */
+function PriceCellText({ ingredient: i }: { ingredient: Ingredient }) {
+  const tag = i.latestPrice ?? null;
+  const view = tag && tag.unit === i.unit ? tagView(tag) : null;
+  const kind = view && tag ? tag.priceKind : i.priceKind;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <span className="font-mono">
+        <PriceKindTag kind={kind} madeHere={i.batchYield !== null} />
+        {kind !== 'unset' && kind !== 'free' && (view ? view.price : formatUnitCost(i))}
+      </span>
+      {view?.pack && <span className="text-xs text-stone-500">{view.pack}</span>}
+      {view && tag && <SourceChip source={tag.source} />}
+    </span>
   );
 }
 

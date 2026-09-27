@@ -61,6 +61,19 @@
  * Re-run on the shop's till PC (or 4× CPU-throttled) before trusting the
  * margins; a miss there is what triggers Contingency R.
  *
+ * Costing Phase 4 adds the case this shop meets first: the same year with NO
+ * sale's cost kept (snapshots began at v0.7.10, so This year / Last 12
+ * months are mostly estimated for a year) and a price history of a change a
+ * week per ingredient, every take priced at the price of its day. Measured
+ * 2026-09-27 on the dev laptop (974 history rows):
+ *   food cost & stock, year, estimated ... main thread ~1.6 s, worker ~1.8 s
+ *                                          (≤ 2 s: ok, with little margin;
+ *                                          ~2.2–2.4 s before each row's price
+ *                                          and value were looked up once and
+ *                                          its row read without a spread)
+ *   getFoodCost, year, estimated ......... ~1.55 s (Phase 2 measured ~2.2 s)
+ * The shop PC is slower: a miss there on this case is the Contingency R trigger.
+ *
  * EVERY PRICE IS MADE UP (costing spec D11).
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -248,6 +261,25 @@ bench('Reports bench: a year of orders (opt-in)', () => {
 // Phase 3: the tabs, and the Reports worker thread
 // ---------------------------------------------------------------------------
 
+/**
+ * A price history of one change a week for a year for every priced ingredient
+ * (made-up prices wandering up to 4% over the price now), as a busy shop's
+ * could be: what Reports' estimates look each take's price up in.
+ */
+function weeklyPriceHistory(db: AppDatabase, sinceIso: string): void {
+  db.prepare(
+    `WITH RECURSIVE w(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM w WHERE n < 52)
+     INSERT INTO ingredient_costs
+       (id, ingredient_id, effective_at, unit, pack_size, pack_price_cents, price_kind, unit_cost_mc, source,
+        created_at, updated_at, device_id)
+     SELECT i.id || '~w' || w.n, i.id, strftime('%Y-%m-%dT%H:%M:%fZ', ?, '+' || (w.n * 7) || ' days'), i.unit,
+            COALESCE(i.pack_size, 1), COALESCE(i.pack_price_cents, i.cost_per_unit_cents) * (100 + w.n % 5) / 100,
+            i.price_kind, 0, 'manual', 'bench', 'bench', 'bench'
+       FROM ingredients i CROSS JOIN w
+      WHERE i.deleted_at IS NULL AND i.price_kind <> 'unset'`,
+  ).run(sinceIso);
+}
+
 /** A database file opened as the till opens it (WAL, busy timeout), behind better-sqlite3's shape. */
 function openTillFile(file: string): AppDatabase & { close: () => void } {
   const raw = new DatabaseSync!(file) as unknown as {
@@ -419,8 +451,35 @@ bench('Reports bench, Phase 3: a year of each tab, in the worker thread (opt-in)
     worstCall = Math.max(worstCall, p.maxBoard, p.maxSend);
     lines.push(`worker, all six tabs for a year ("Print everything"): ${all.toFixed(0)} ms; event loop late by at most ${p.maxLag.toFixed(1)} ms, slowest till call ${Math.max(p.maxBoard, p.maxSend).toFixed(1)} ms`);
     lines.push(`budgets: a year tab ≤ 2 s — worst ${worstTab.toFixed(0)} ms, ${verdict(worstTab, 2000)}; no main-process call over 50 ms while it runs — worst ${Math.max(worstLag, worstCall).toFixed(1)} ms, ${verdict(Math.max(worstLag, worstCall), 50)}`);
-
     await client.stop();
+
+    // 4. Costing Phase 4: the same year when NO sale kept a cost — this shop's This year / Last 12
+    //    months until the snapshots (v0.7.10) cover a year — with a price history of a change a week
+    //    for every priced ingredient: Food cost & stock estimates every order at the price of its day.
+    db.exec(`DELETE FROM order_item_costs`);
+    db.exec(`UPDATE stock_movements SET value_cents = NULL, unit_cost_mc = NULL, cost_basis = NULL`);
+    weeklyPriceHistory(db, YEAR.sinceIso);
+    const historyRows = Number((db.prepare(`SELECT COUNT(*) AS n FROM ingredient_costs`).get() as { n: number }).n);
+    const estOnMain = time(3, () => buildReportTab(db, 'foodStock', YEAR_REQ));
+    lines.push(`every order estimated, ${historyRows} price history rows — main thread, foodStock: year ${estOnMain.ms.toFixed(0)} ms`);
+    const estFile = join(dir, 'till-estimated.sqlite');
+    db.exec(`VACUUM INTO '${estFile.replace(/'/g, "''")}'`);
+    const estClient = new AnalyticsWorkerClient({
+      spawn: () => new Worker(join(dir, WORKER_FILE), { workerData: { tag: WORKER_TAG, dbPath: estFile, driver: 'node:sqlite' } }),
+    });
+    estClient.start();
+    expect(await estClient.settled()).toBe('ready');
+    await estClient.run('overview', YEAR_REQ);
+    const estProbe = startTill(till, work);
+    const tEst = performance.now();
+    await estClient.run('foodStock', YEAR_REQ);
+    const estMs = performance.now() - tEst;
+    const ep = estProbe.stop();
+    lines.push(
+      `every order estimated — worker, foodStock: year in ${estMs.toFixed(0)} ms — ${verdict(estMs, 2000)} ` +
+        `(a miss on the shop PC is the spec's Contingency R trigger); slowest till call ${Math.max(ep.maxBoard, ep.maxSend).toFixed(1)} ms, event loop late by at most ${ep.maxLag.toFixed(1)} ms`,
+    );
+    await estClient.stop();
     till.close();
     rmSync(dir, { recursive: true, force: true });
     // eslint-disable-next-line no-console

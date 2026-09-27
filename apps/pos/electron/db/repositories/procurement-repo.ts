@@ -4,6 +4,7 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { recordStockMovement } from './stock-movement-repo.js';
+import { setIngredientPrice } from './ingredient-cost-repo.js';
 import type {
   Supplier,
   PurchaseOrder,
@@ -492,38 +493,28 @@ export function receiveDelivery(
       // price used to throw away the exact pack price ("6,000 g for Rs 2,250").
       if (input.updateCosts) {
         const cost = db
-          .prepare(
-            `SELECT cost_per_unit_cents, pack_size, pack_price_cents FROM ingredients WHERE id = ? AND deleted_at IS NULL`,
-          )
-          .get(item.ingredientId) as
-          | { cost_per_unit_cents: number; pack_size: number | null; pack_price_cents: number | null }
-          | undefined;
+          .prepare(`SELECT cost_per_unit_cents FROM ingredients WHERE id = ? AND deleted_at IS NULL`)
+          .get(item.ingredientId) as { cost_per_unit_cents: number } | undefined;
         if (cost && cost.cost_per_unit_cents !== item.unitCostCents) {
-          // A price off a real bill is a real price ('set'); a bill at Rs 0
-          // leaves a 'free' ingredient free and anything else unpriced (0032).
-          db.prepare(
-            `UPDATE ingredients SET cost_per_unit_cents = ?, pack_size = NULL, pack_price_cents = NULL,
-                    price_kind = CASE WHEN ? > 0 THEN 'set' WHEN price_kind = 'free' THEN 'free' ELSE 'unset' END,
-                    updated_at = ?, version = version + 1 WHERE id = ?`,
-          ).run(item.unitCostCents, item.unitCostCents, now, item.ingredientId);
-          enqueueSync(db, {
-            entityType: 'ingredients',
-            entityId: item.ingredientId,
-            op: 'upsert',
-            payload: { id: item.ingredientId, costPerUnitCents: item.unitCostCents, packSize: null, packPriceCents: null },
-          });
-          writeAudit(db, {
-            entityType: 'ingredients',
-            entityId: item.ingredientId,
-            action: 'cost_from_delivery',
-            actorUserId: actor.userId,
-            before: {
-              costPerUnitCents: cost.cost_per_unit_cents,
-              packSize: cost.pack_size,
-              packPriceCents: cost.pack_price_cents,
+          // Through the one price path: the ingredient's price, a line in its
+          // price history naming the supplier and the purchase order, the
+          // batches made from it rolled up. A price off a real bill is a real
+          // price ('set'); a bill at Rs 0 leaves a 'free' ingredient free and
+          // anything else unpriced (0032). Receiving at the bill (a pack kept
+          // as delivered) is costing Phase 5.
+          setIngredientPrice(
+            db,
+            {
+              ingredientId: item.ingredientId,
+              price: { costPerUnitCents: item.unitCostCents, packSize: null, packPriceCents: null },
+              priceKind: item.unitCostCents > 0 ? 'set' : undefined,
+              source: 'delivery',
+              supplierId: po.supplierId,
+              purchaseOrderId: po.id,
+              purchaseOrderItemId: item.id,
             },
-            after: { costPerUnitCents: item.unitCostCents, packSize: null, packPriceCents: null, purchaseOrderId: po.id },
-          });
+            actor,
+          );
         }
       }
     }

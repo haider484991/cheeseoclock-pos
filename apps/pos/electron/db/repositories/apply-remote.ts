@@ -269,6 +269,13 @@ function countInNewUnit(db: AppDatabase, id: string, image: RowImage, fromDevice
  * arrives with no value and is valued like an older row (Reports estimates
  * it). The cost a sale kept (order_item_costs) arrives the same way, by its
  * name-based id, so both tills hold the same rows.
+ *
+ * Prices likewise (costing spec Phase 4): an ingredient's new price arrives
+ * as its row and its price history row (ingredient_costs), and the batches
+ * rolled up from it arrive as their own 'batch' rows, written by the till
+ * that wrote the price. Nothing is rolled up here — never
+ * ingredient-cost-repo.rollUpBatches on arrival — so a price is rolled up
+ * once, on one till, and the rows (name-based ids) settle by id.
  */
 function arrivedMovement(db: AppDatabase, id: string): void {
   db.prepare(

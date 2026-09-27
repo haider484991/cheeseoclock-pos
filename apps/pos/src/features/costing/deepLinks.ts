@@ -7,7 +7,7 @@ import { presetSessionState } from '../../components/list';
 
 type Navigate = (to: string) => void;
 
-/** Inventory → Ingredients, searched for it, its form open ("Set price"). */
+/** Inventory → Ingredients, searched for it, its "Set price" open (per kg, per pack or per piece). */
 export function openIngredientInInventory(navigate: Navigate, ingredient: { id: string; name: string }): void {
   presetSessionState('inv.tab', 'ingredients');
   presetSessionState('inv.ing:q', ingredient.name);

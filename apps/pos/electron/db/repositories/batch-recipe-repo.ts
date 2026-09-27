@@ -5,6 +5,7 @@ import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { priceOfBook, recordStockMovement, safeStockValue } from './stock-movement-repo.js';
 import { loadPriceBook } from '../price-book.js';
+import { rollUpBatches } from './ingredient-cost-repo.js';
 import type { BatchRecipe, BatchRecipeLine } from '@cheeseoclock/shared-types';
 import {
   MAX_BATCHES_AT_ONCE,
@@ -117,6 +118,14 @@ function wouldLoop(db: AppDatabase, ingredientId: string, inputId: string): bool
  * Replace an ingredient's batch recipe (inputs, yield, method). An empty
  * recipe with no yield marks it as bought in again. One transaction; every
  * line and the ingredient sync and audit.
+ *
+ * Batch costs are always the till's (costing spec D4, Phase 4): once the
+ * recipe is saved, the batch — and every batch made with it — takes the
+ * price rolled up from its inputs, as a 'batch' line in its price history
+ * (when all its inputs have a price and it is not that price already), in
+ * the same transaction. `rollUpKey` names that change for the history
+ * rows' ids: the menu import passes one made from the file, so both tills
+ * importing it write the same rows; otherwise each save is its own.
  */
 export function setBatchRecipe(
   db: AppDatabase,
@@ -127,6 +136,7 @@ export function setBatchRecipe(
     lines: Array<{ inputIngredientId: string; qty: number }>;
   },
   actor: Actor,
+  opts: { rollUpKey?: string } = {},
 ): void {
   const now = nowIso();
   const tx = db.transaction(() => {
@@ -209,6 +219,10 @@ export function setBatchRecipe(
       },
       after: { batchYield: input.batchYield, lines: input.lines },
     });
+
+    if (input.lines.length > 0) {
+      rollUpBatches(db, [input.ingredientId], opts.rollUpKey ?? `recipe|${uuidv7()}`, actor, { recipeChanged: true });
+    }
   });
   tx();
 }

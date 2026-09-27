@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { INGREDIENT_CATEGORY_IDS, MOVEMENT_DETAILS, PRICE_KINDS, WASTE_REASONS } from '@cheeseoclock/shared-types';
+import { INGREDIENT_CATEGORY_IDS, MOVEMENT_DETAILS, PRICE_KINDS, TYPED_PRICE_PERS, WASTE_REASONS } from '@cheeseoclock/shared-types';
 import { centsSchema } from './common.js';
 
 /**
@@ -64,6 +64,35 @@ export const updateIngredientInputSchema = z.object({
 
 /** Switch an ingredient counted in kg / litres to grams / ml (stock and recipes ×1000). */
 export const convertIngredientUnitInputSchema = z.object({ id: idSchema });
+
+/** The most a price may be: Rs 1 crore for one pack (a typing slip, not a price). */
+const MAX_PRICE_CENTS = 1_000_000_000;
+
+/**
+ * "Set price" (costing spec Phase 4, 4.1): Rs X per kg / litre, for a pack
+ * of N, or per piece — whole paisa, a pack of at least 1 whole unit. Which
+ * of the three fits the ingredient's unit is checked by the repository
+ * (pos-domain typedPricePack), with the reason in plain words.
+ */
+export const setPriceInputSchema = z
+  .object({
+    ingredientId: idSchema,
+    per: z.enum(TYPED_PRICE_PERS),
+    priceCents: centsSchema.max(MAX_PRICE_CENTS, { message: 'That price is too large' }),
+    packSize: packSizeSchema.max(100_000_000, { message: 'That pack is too large' }).nullable().optional(),
+    priceKind: z.enum(['set', 'estimate', 'free']).optional(),
+    notes: z.string().trim().max(500).nullable().optional(),
+  })
+  .refine((p) => p.per !== 'pack' || p.priceKind === 'free' || (p.packSize ?? 0) >= 1, {
+    message: 'Say how much one pack holds',
+    path: ['packSize'],
+  });
+
+/** One ingredient's price history, newest first. */
+export const priceHistoryInputSchema = z.object({
+  ingredientId: idSchema,
+  limit: z.number().int().positive().max(500).optional(),
+});
 
 export const setRecipeInputSchema = z.object({
   menuItemId: idSchema,

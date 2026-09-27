@@ -8,7 +8,7 @@
  */
 
 import { PRICE_KINDS, type PriceKind } from '@cheeseoclock/shared-types';
-import { effectivePack, lineCostMc, mcToCents, type Pack } from './units.js';
+import { convertPack, costPerUnitFromPack, effectivePack, lineCostMc, mcToCents, mulDivRound, type Pack } from './units.js';
 
 export interface PricedIngredient {
   id: string;
@@ -165,6 +165,113 @@ export function priceKindAfter(previous: PriceKind | null, priced: boolean, aske
   }
 }
 
+// -----------------------------------------------------------------------------
+// The price as the ingredient keeps it (costing spec Phase 4)
+// -----------------------------------------------------------------------------
+
+/** An ingredient's own price columns. */
+export interface StoredPrice {
+  costPerUnitCents: number;
+  packSize: number | null;
+  packPriceCents: number | null;
+  priceKind: PriceKind;
+}
+
+/**
+ * A price as the ingredient keeps it: the ONE rule behind every way a price
+ * is written (typed, the menu file, a bill, a Convert, a batch rolled up).
+ *  - An exact pack, when there is one, decides the per-unit cost, which is
+ *    kept in whole paisa only for older screens; the pack is what costing
+ *    uses (effectivePack). Half a pack (a size with no price) is no pack.
+ *  - The kind follows priceKindAfter: a price above Rs 0 is 'set' (or stays
+ *    a guess), Rs 0 is 'unset' unless it is 'free'.
+ *  - 'free' is Rs 0 with no pack.
+ */
+export function storedPriceOf(
+  price: { costPerUnitCents: number; packSize: number | null; packPriceCents: number | null },
+  previous: PriceKind | null,
+  asked?: PriceKind,
+): StoredPrice {
+  const pack = price.packSize !== null && price.packSize > 0 && price.packPriceCents !== null;
+  const cols = pack
+    ? { costPerUnitCents: costPerUnitFromPack(price.packPriceCents!, price.packSize!), packSize: price.packSize, packPriceCents: price.packPriceCents }
+    : { costPerUnitCents: price.costPerUnitCents, packSize: null, packPriceCents: null };
+  const priceKind = priceKindAfter(previous, hasPrice(cols), asked);
+  if (priceKind === 'free') return { costPerUnitCents: 0, packSize: null, packPriceCents: null, priceKind };
+  return { ...cols, priceKind };
+}
+
+/** The same price, column for column. */
+export function sameStoredPrice(a: StoredPrice, b: StoredPrice): boolean {
+  return (
+    a.costPerUnitCents === b.costPerUnitCents &&
+    a.packSize === b.packSize &&
+    a.packPriceCents === b.packPriceCents &&
+    a.priceKind === b.priceKind
+  );
+}
+
+/**
+ * The price after a Convert that counts `factor`× as many units (kg → g,
+ * l → ml), exactly: a pack holds factor× as many units for the same money
+ * (convertPack), and a price typed per kg becomes a pack of 1,000 g — no
+ * per-gram cost rounded to whole paisa, so every value stays the same.
+ * Nothing to scale on an unpriced or free ingredient.
+ */
+export function convertedStoredPrice(p: StoredPrice, factor: number): StoredPrice {
+  if (p.priceKind === 'unset' || p.priceKind === 'free') {
+    return { costPerUnitCents: 0, packSize: null, packPriceCents: null, priceKind: p.priceKind };
+  }
+  const pack = convertPack(effectivePack(p), factor);
+  return storedPriceOf({ costPerUnitCents: 0, packSize: pack.size, packPriceCents: pack.priceCents }, p.priceKind, p.priceKind);
+}
+
+/**
+ * The price in force at `at` from a price history sorted oldest first (ties
+ * in the order written): the latest entry at or before it, else the EARLIEST
+ * one — a take from before the history started is priced at the first price
+ * known (the starting price, costing spec D8). Undefined for no history.
+ */
+export function priceInForce<T extends { effectiveAt: string }>(history: readonly T[], at: string): T | undefined {
+  if (history.length === 0) return undefined;
+  let lo = 0;
+  let hi = history.length; // first index with effectiveAt > at
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (history[mid]!.effectiveAt <= at) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo === 0 ? history[0] : history[lo - 1];
+}
+
+/**
+ * The KNOWN price in force at `at`, for valuing a take (Reports' estimates,
+ * costing spec 4.5): as priceInForce, over the entries that say what it
+ * cost — an entry "no price yet" ('unset') is no price at all. So an
+ * ingredient still unpriced when price history started, priced later, has
+ * its older takes valued at that first price (the first known price stands
+ * in for anything older, as the starting price does), not left "not priced"
+ * forever. Undefined when no entry has a price.
+ */
+export function knownPriceInForce<T extends { effectiveAt: string; kind: PriceKind }>(history: readonly T[], at: string): T | undefined {
+  return priceInForce(knownPrices(history), at);
+}
+
+/** The entries of a price history that say what it cost (none 'unset'), in their order: knownPriceInForce's list, kept once. */
+export function knownPrices<T extends { kind: PriceKind }>(history: readonly T[]): T[] {
+  return history.filter((h) => h.kind !== 'unset');
+}
+
+/**
+ * The change from one price to the next, in basis points of the old one
+ * (+1,000 = 10% dearer); null when there is no earlier price above Rs 0 to
+ * compare with.
+ */
+export function priceChangeBps(prevUnitCostMc: number | null, unitCostMc: number): number | null {
+  if (prevUnitCostMc === null || !(prevUnitCostMc > 0)) return null;
+  return mulDivRound(unitCostMc - prevUnitCostMc, 10_000, prevUnitCostMc);
+}
+
 /**
  * Every ingredient `id` reaches through batch recipes (itself included): an
  * item using pizza sauce also uses the tomatoes the sauce is made of. Loops
@@ -180,4 +287,52 @@ export function batchClosure(id: string, batchLines: ReadonlyMap<string, readonl
     for (const l of batchLines.get(cur) ?? []) stack.push(l.inputId);
   }
   return seen;
+}
+
+/**
+ * The batches made from any of `ids`, directly or through other batches
+ * (Cheese Mix from mozzarella, then anything made with Cheese Mix), in the
+ * order a changed price rolls up: bottom-up, each batch after every batch
+ * of the list it is made from, ties by id so every till writes them in the
+ * same order. The ids themselves are left out unless one is made from
+ * another. A loop (A needs B needs A) is guarded: walked once, never round.
+ */
+export function batchesUsing(ids: Iterable<string>, batchLines: ReadonlyMap<string, readonly BatchInputLine[]>): string[] {
+  const usedIn = new Map<string, string[]>();
+  for (const [batch, lines] of batchLines) {
+    for (const l of lines) {
+      let list = usedIn.get(l.inputId);
+      if (!list) usedIn.set(l.inputId, (list = []));
+      list.push(batch);
+    }
+  }
+  const reached = new Set<string>();
+  const queue = [...ids];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const b of usedIn.get(cur) ?? []) {
+      if (reached.has(b)) continue;
+      reached.add(b);
+      queue.push(b);
+    }
+  }
+  // How many batches of the list lie below each one (0 = made only from the changed ones).
+  const depth = new Map<string, number>();
+  const onPath = new Set<string>();
+  const depthOf = (b: string): number => {
+    const hit = depth.get(b);
+    if (hit !== undefined) return hit;
+    onPath.add(b);
+    let d = 0;
+    for (const l of batchLines.get(b) ?? []) {
+      if (!reached.has(l.inputId) || onPath.has(l.inputId)) continue;
+      d = Math.max(d, depthOf(l.inputId) + 1);
+    }
+    onPath.delete(b);
+    depth.set(b, d);
+    return d;
+  };
+  const byId = [...reached].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const b of byId) depthOf(b); // in one fixed order, so a loop settles the same way on every till
+  return byId.sort((a, b) => depth.get(a)! - depth.get(b)!); // stable: ties stay by id
 }

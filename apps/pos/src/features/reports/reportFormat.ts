@@ -318,23 +318,25 @@ export function menuPriceLine(f: Pick<ReportFoodCost, 'foodCostBps' | 'menuFoodC
   return `At menu prices ${formatBps(f.menuFoodCostBps)} → after discounts ${formatBps(f.foodCostBps)} (${why})`;
 }
 
-/** "Includes 212 orders estimated at today's prices." Empty when none were. */
+/** "Includes 212 orders estimated at the prices of the time." Empty when none were. */
 export function estimatedText(f: Pick<ReportFoodCost, 'estimatedOrders'>): string {
   if (f.estimatedOrders <= 0) return '';
   const n = f.estimatedOrders;
-  return `Includes ${n} order${n === 1 ? '' : 's'} estimated at today's prices.`;
+  return `Includes ${n} order${n === 1 ? '' : 's'} estimated at the prices of the time.`;
 }
 
 /**
  * When costs started being kept with each sale, and what that means for the
  * figures: "From Sat 3 Oct 2026 every sale keeps its cost; older or unrecorded
- * orders are estimated from what they took from stock at today's prices."
+ * orders are estimated from what they took from stock at the prices of the
+ * time." (Each take at the price in force when it was taken, from the
+ * price history; the starting price for anything older — costing Phase 4.)
  */
 export function costingStartText(costingStartedAt: string | null): string {
   if (costingStartedAt === null) {
-    return "From the next order sent to the kitchen, every sale keeps its cost. Until then orders are estimated from what they took from stock at today's prices.";
+    return 'From the next order sent to the kitchen, every sale keeps its cost. Until then orders are estimated from what they took from stock at the prices of the time.';
   }
-  return `From ${fmtDay(fmtDateInput(costingStartedAt))} every sale keeps its cost; older or unrecorded orders are estimated from what they took from stock at today's prices.`;
+  return `From ${fmtDay(fmtDateInput(costingStartedAt))} every sale keeps its cost; older or unrecorded orders are estimated from what they took from stock at the prices of the time.`;
 }
 
 /** "2 orders · Rs 540" for food sent out and not paid, or still open. */

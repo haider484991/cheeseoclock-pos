@@ -2006,19 +2006,38 @@ live('Reports: cancelled food is waste, on the day it was cooked', () => {
     expect(today.foodCost).toMatchObject({ costOfSalesCents: 0, wasteCents: 0, cancelledWasteCents: 0, hasUsage: false });
   });
 
-  it('an order from before costing, written in kg before a Convert, is estimated in grams afterwards', async () => {
-    const s = await openShop();
-    s.db.prepare(`UPDATE ingredients SET cost_per_unit_cents = 100, price_kind = 'set' WHERE id = ?`).run(s.ing.flour); // Rs 1 / kg, made up
-    const o = s.ring('takeaway', [['loaf', 2]]);
-    s.pay(o); // 2 kg of flour out
-    // As an order sent before costing started: no cost kept, its rows carry no value.
-    s.db.prepare(`DELETE FROM order_item_costs WHERE order_id = ?`).run(o);
-    s.db.prepare(`UPDATE stock_movements SET value_cents = NULL, unit_cost_mc = NULL, cost_basis = NULL WHERE ref_order_id = ?`).run(o);
-    s.r.convertIngredientToBaseUnit(s.db, s.ing.flour, MANAGER); // now 0.1 paisa / g → rounds to 0
-    s.db.prepare(`UPDATE ingredients SET cost_per_unit_cents = 1 WHERE id = ?`).run(s.ing.flour); // 1 paisa / g
-    const { since, until } = aroundNow();
-    const r = await report(s, since, until);
-    // 2 kg read as 2,000 g at 1 paisa / g, plus 100 g of cheese at 2 paisa / g.
-    expect(r.foodCost).toMatchObject({ estimatedOrders: 1, costOfSalesCents: 2_000 + 200, estimatedCostCents: 2_200 });
+  it('an order from before costing, written in kg before a Convert, is estimated at the price of its take, in either unit', async () => {
+    // Made-up clock steps, so no price change shares a millisecond with the take.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-09-27T09:00:00.000Z'));
+      const s = await openShop();
+      s.r.updateIngredient(s.db, { id: s.ing.flour, costPerUnitCents: 100 }, MANAGER); // Rs 1 / kg, made up
+      vi.setSystemTime(new Date('2026-09-27T09:10:00.000Z'));
+      const o = s.ring('takeaway', [['loaf', 2]]);
+      s.pay(o); // 2 kg of flour out
+      // As an order sent before costing started: no cost kept, its rows carry no value.
+      s.db.prepare(`DELETE FROM order_item_costs WHERE order_id = ?`).run(o);
+      s.db.prepare(`UPDATE stock_movements SET value_cents = NULL, unit_cost_mc = NULL, cost_basis = NULL WHERE ref_order_id = ?`).run(o);
+      vi.setSystemTime(new Date('2026-09-27T09:20:00.000Z'));
+      // Counted in grams from now on, the price kept exactly: 1,000 g for Rs 1, never 0.1 paisa a gram rounded to 0.
+      s.r.convertIngredientToBaseUnit(s.db, s.ing.flour, MANAGER);
+      expect(s.db.prepare(`SELECT unit, pack_size, pack_price_cents FROM ingredients WHERE id = ?`).get(s.ing.flour)).toEqual({
+        unit: 'g',
+        pack_size: 1000,
+        pack_price_cents: 100,
+      });
+      vi.setSystemTime(new Date('2026-09-27T09:30:00.000Z'));
+      s.r.updateIngredient(s.db, { id: s.ing.flour, packSize: 1000, packPriceCents: 500 }, MANAGER); // dearer since: Rs 5 / kg
+      const { since, until } = aroundNow();
+      // 2 kg at the Rs 1 / kg in force when it was taken (not today's Rs 5), plus 100 g of cheese at 2 paisa / g.
+      expect((await report(s, since, until)).foodCost).toMatchObject({ estimatedOrders: 1, costOfSalesCents: 200 + 200, estimatedCostCents: 400 });
+      // A till whose history began after the Convert: the first price known, kept in grams, prices the
+      // kg rows — 2 kg is 2,000 g at Rs 1 per 1,000 g.
+      s.db.prepare(`DELETE FROM ingredient_costs WHERE ingredient_id = ? AND unit = 'kg'`).run(s.ing.flour);
+      expect((await report(s, since, until)).foodCost).toMatchObject({ estimatedOrders: 1, estimatedCostCents: 400 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

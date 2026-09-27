@@ -30,6 +30,7 @@
 
 import {
   baseUnitConversion,
+  convertedStoredPrice,
   costPerUnitFromPack,
   formatCents,
   formatPack,
@@ -411,11 +412,18 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       }
       convert = true;
       conversions.set(row.id, conv.factor);
+      // As Convert keeps it (exactly: "Rs 375 per kg" becomes 1,000 g for Rs 375).
       current = {
         unit: conv.unit,
-        costPerUnitCents: Math.round(row.costPerUnitCents / conv.factor),
-        packSize: row.packSize !== null ? row.packSize * conv.factor : null,
-        packPriceCents: row.packPriceCents,
+        ...convertedStoredPrice(
+          {
+            costPerUnitCents: row.costPerUnitCents,
+            packSize: row.packSize,
+            packPriceCents: row.packPriceCents,
+            priceKind: row.priceKind ?? 'set',
+          },
+          conv.factor,
+        ),
       };
       changes.push(`counted in ${row.unit} → ${conv.unit} (stock and recipes ×${conv.factor})`);
     }
@@ -435,8 +443,13 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       }
     }
     if (unitCost(current) !== unitCost(ing)) {
+      // A batch made here keeps the price worked out from its recipe while
+      // everything in it has a price; the sheet's is then only a reference
+      // (costing spec D4; menu-import-repo applyMenuImport).
+      const madeHere = ing.batch !== null || (live.batchLines.get(row.id)?.length ?? 0) > 0;
       changes.push(
-        `cost ${formatUnitCost(current)} → ${formatUnitCost({ ...ing, unit: current.unit, costPerUnitCents: unitCost(ing) })}`,
+        `cost ${formatUnitCost(current)} → ${formatUnitCost({ ...ing, unit: current.unit, costPerUnitCents: unitCost(ing) })}` +
+          (madeHere ? " (made here: only if something in it has no price; otherwise it's worked out from its batch recipe)" : ''),
       );
     }
     if (!row.notes?.trim() && ing.notes?.trim()) {

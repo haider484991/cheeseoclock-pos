@@ -1,6 +1,7 @@
 import type {
   BusinessReport,
   BusinessReportRequest,
+  PriceKind,
   ReportCategoryLine,
   ReportChannel,
   ReportChannelLine,
@@ -30,6 +31,7 @@ import {
   noteKindAnswer,
   orderKeptCost,
   orderStockNoteKind,
+  packInUnit,
   resolveTargets,
   shareBps,
   tallyFoodCost,
@@ -38,12 +40,14 @@ import {
   wasteReasonOf,
   type FoodCostEstimate,
   type FoodCostLine,
+  type Pack,
   type PriceOf,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 // Read-only modules only, none of them loading Electron: this file also runs
 // in the Reports worker thread (analytics/worker.ts). A test walks its imports.
 import { loadPriceBook, priceOfBook, safeStockValue } from '../db/price-book.js';
+import { loadPriceHistory, type DatedPrice } from '../db/price-history-read.js';
 import { getBusinessSetting } from '../db/business-settings-read.js';
 import { withBillPrinted, withHandPrints } from './print-report.js';
 import {
@@ -752,49 +756,122 @@ function getRefunds(
 // ---------------------------------------------------------------------------
 
 /**
- * Today's effective prices and ingredient units, read once per report and
- * only when needed: for stock rows written before costing started (no value
- * of their own), which are valued like estimates, at today's prices.
+ * Prices for stock rows written before costing started (no value of their
+ * own), which are valued like estimates, read once per report and only
+ * when needed: the price in force when the stock was TAKEN, from the price
+ * history (costing spec 4.5, Phase 4: the starting price for anything
+ * older), else — an ingredient with no history at all — today's price. And
+ * the ingredients' units now.
  */
 interface Pricing {
   priceOf: PriceOf;
   unitOf: (ingredientId: string) => string | undefined;
+  /** The price in force at a time, from the price history; undefined when the ingredient has none. */
+  priceThen: (ingredientId: string, atIso: string) => DatedPrice | undefined;
 }
 function lazyPricing(db: AppDatabase): () => Pricing {
   let p: Pricing | null = null;
   return () => {
     if (p) return p;
     const book = loadPriceBook(db);
-    p = { priceOf: priceOfBook(book), unitOf: (id) => book.ingredients.get(id)?.unit };
+    const history = loadPriceHistory(db);
+    const now = priceOfBook(book);
+    // One answer object per ingredient, so its unit conversion is worked out once (inRowUnit).
+    const todays = new Map<string, ReturnType<PriceOf>>();
+    const priceOf: PriceOf = (id) => {
+      if (!todays.has(id)) todays.set(id, now(id));
+      return todays.get(id);
+    };
+    p = { priceOf, unitOf: (id) => book.ingredients.get(id)?.unit, priceThen: history.priceAt };
     return p;
   };
 }
 
 /**
- * What one stock row is worth, signed like its quantity: the value it kept
- * when written, else (a row from before costing) its quantity in the
- * ingredient's unit now (a row written in kg before a Convert, scaled) at
- * today's price. Null when it can't be valued (a deleted ingredient, a unit
- * that can't be converted).
+ * The price a row from before costing is valued at, as a pack in the unit
+ * the row was written in (a row written in kg before a Convert, a price
+ * kept in g…): the price in force at `takenAt`, else today's. Null when it
+ * can't be (a deleted ingredient, units that don't convert).
  */
+function priceForRow(
+  r: { ingredientId: string; rowUnit: string | null },
+  takenAt: string | null,
+  pricing: () => Pricing,
+): RowPrice | null {
+  const p = pricing();
+  const unitNow = p.unitOf(r.ingredientId);
+  if (unitNow === undefined) return null;
+  // A row with no unit (before 0029) was written in the unit now.
+  const rowUnit = r.rowUnit ?? unitNow;
+  const then = takenAt !== null ? p.priceThen(r.ingredientId, takenAt) : undefined;
+  if (then) return inRowUnit(then, then.pack, then.unit, then.kind, rowUnit);
+  const today = p.priceOf(r.ingredientId);
+  if (!today) return NO_PRICE;
+  return inRowUnit(today, today.pack, unitNow, today.kind, rowUnit);
+}
+
+/**
+ * A price in the unit a row was written in, with what quantities have come
+ * to at it so far (the exact value, worked in BigInt, is the same for the
+ * same quantity at the same price: a year of estimates values "60 g of
+ * cheese" thousands of times).
+ */
+interface RowPrice {
+  price: ReturnType<PriceOf>;
+  values: Map<number, number | null>;
+}
+/** No price anywhere (an ingredient never priced): worth Rs 0, and not priced. */
+const NO_PRICE: RowPrice = { price: undefined, values: new Map() };
+
+/**
+ * A price turned into the unit a row was written in, worked out once per
+ * price and unit (most rows are in the unit the price is kept in, and a
+ * year of estimates looks the same few prices up again and again).
+ */
+const inUnitCache = new WeakMap<object, Map<string, RowPrice | null>>();
+function inRowUnit(key: object, pack: Pack, unit: string, kind: PriceKind, rowUnit: string): RowPrice | null {
+  let byUnit = inUnitCache.get(key);
+  if (!byUnit) inUnitCache.set(key, (byUnit = new Map()));
+  const hit = byUnit.get(rowUnit);
+  if (hit !== undefined) return hit;
+  const inUnit = packInUnit(pack, unit, rowUnit);
+  const out = inUnit === null ? null : { price: { pack: inUnit, kind }, values: new Map<number, number | null>() };
+  byUnit.set(rowUnit, out);
+  return out;
+}
+
+/**
+ * What one stock row is worth, signed like its quantity, and whether that is
+ * a price at all: the value it kept when written (priced unless its basis
+ * was 'none'), else (a row from before costing) its quantity at the price
+ * in force when the stock was taken (`takenAt`; priceForRow), in the unit it
+ * was written in — looked up ONCE per row (a year of estimated orders is
+ * hundreds of thousands of rows). Value null when it can't be valued (a
+ * deleted ingredient, a unit that can't be converted).
+ */
+function rowCost(
+  r: { ingredientId: string; qty: number; rowUnit: string | null; value: number | null; basis?: string | null },
+  pricing: () => Pricing,
+  takenAt: string | null,
+): { value: number | null; priced: boolean } {
+  if (r.value !== null) return { value: r.value, priced: r.basis !== 'none' };
+  const at = priceForRow(r, takenAt, pricing);
+  if (at === null) return { value: null, priced: false };
+  let value = at.values.get(r.qty);
+  if (value === undefined) {
+    value = safeStockValue(r.qty, at.price).valueCents;
+    at.values.set(r.qty, value);
+  }
+  return { value, priced: at.price !== undefined && at.price.kind !== 'unset' };
+}
+
+/** What one stock row is worth (rowCost's value). */
 function rowValue(
   r: { ingredientId: string; qty: number; rowUnit: string | null; value: number | null },
   pricing: () => Pricing,
+  takenAt: string | null,
 ): number | null {
-  if (r.value !== null) return r.value;
-  const p = pricing();
-  const unit = p.unitOf(r.ingredientId);
-  if (unit === undefined) return null;
-  const factor = unitFactor(r.rowUnit, unit);
-  if (factor === null) return null;
-  return safeStockValue(r.qty * factor, p.priceOf(r.ingredientId)).valueCents;
-}
-
-/** A row priced when written, or (from before costing) priced today. */
-function rowPriced(r: { ingredientId: string; value: number | null; basis: string | null }, pricing: () => Pricing): boolean {
-  if (r.value !== null) return r.basis !== 'none';
-  const price = pricing().priceOf(r.ingredientId);
-  return price !== undefined && price.kind !== 'unset';
+  return rowCost(r, pricing, takenAt).value;
 }
 
 /**
@@ -820,7 +897,8 @@ export function getOrderStockOutcomes(
   const rows = db
     .prepare(
       `SELECT m.ref_order_id AS orderId, m.reason AS reason, m.unit AS rowUnit, m.notes AS notes,
-              m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.value_cents AS value
+              m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.value_cents AS value,
+              COALESCE(m.ref_taken_at, m.occurred_at) AS takenAt
          FROM stock_movements m
         WHERE m.ref_order_id IN (SELECT value FROM json_each(?)) AND m.deleted_at IS NULL
           -- unary +: look rows up by order (idx_movements_order), never by reason
@@ -834,6 +912,7 @@ export function getOrderStockOutcomes(
     ingredientId: string;
     qty: number;
     value: number | null;
+    takenAt: string | null;
   }>;
   for (const r of rows) {
     const cur: ReportOrderStock = out.get(r.orderId) ?? {
@@ -848,7 +927,7 @@ export function getOrderStockOutcomes(
     if (said === 'made' || (said === 'not_made' && cur.answer === null)) cur.answer = said;
     if (r.reason === 'waste') {
       cur.outcome = 'wasted';
-      cur.wasteCents += -(rowValue({ ...r, qty: Number(r.qty), value: r.value === null ? null : Number(r.value) }, pricing) ?? 0);
+      cur.wasteCents += -(rowValue({ ...r, qty: Number(r.qty), value: r.value === null ? null : Number(r.value) }, pricing, r.takenAt) ?? 0);
     }
     out.set(r.orderId, cur);
   }
@@ -1055,34 +1134,61 @@ function menuLookup(db: AppDatabase): MenuLookup {
 /**
  * Orders that kept no cost with the sale, estimated from the stock rows they
  * took (their own rows, idx_movements_order): at the value each row kept,
- * else at today's prices (spec 4.5 / D8, Phase 2). Net of anything put back.
+ * else at the price in force when the order FIRST took its stock (spec 4.5
+ * / D8: from the price history since Phase 4 — the starting price for
+ * anything older — so a later price change never moves an old estimate).
+ * A put-back is valued at that same take's price, so it nets exactly. Net
+ * of anything put back.
  */
 function estimateOrders(db: AppDatabase, orderIds: string[], pricing: () => Pricing): Map<string, FoodCostEstimate> {
   const out = new Map<string, FoodCostEstimate>();
   for (const ids of chunks(orderIds)) {
-    for (const r of db
-      .prepare(
-        `SELECT m.ref_order_id AS orderId, m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.unit AS rowUnit,
-                m.value_cents AS value, m.cost_basis AS basis
-           FROM stock_movements m
-          WHERE m.ref_order_id IN (SELECT value FROM json_each(?)) AND m.deleted_at IS NULL AND +m.reason = 'sale'`,
-      )
-      .all(JSON.stringify(ids)) as Array<{
-      orderId: string;
-      ingredientId: string;
-      qty: number;
-      rowUnit: string | null;
-      value: number | null;
-      basis: string | null;
-    }>) {
-      const row = { ...r, qty: Number(r.qty), value: r.value === null ? null : Number(r.value) };
-      const cur = out.get(r.orderId) ?? { costCents: 0, priced: true, tookStock: false };
-      const v = rowValue(row, pricing);
-      if (v === null) cur.priced = false;
-      else cur.costCents += -v;
-      if (!rowPriced(row, pricing)) cur.priced = false;
+    const rows = (
+      db
+        .prepare(
+          `SELECT m.ref_order_id AS orderId, m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.unit AS rowUnit,
+                  m.value_cents AS value, m.cost_basis AS basis, m.occurred_at AS at, m.ref_taken_at AS refTakenAt
+             FROM stock_movements m
+            WHERE m.ref_order_id IN (SELECT value FROM json_each(?)) AND m.deleted_at IS NULL AND +m.reason = 'sale'`,
+        )
+        .all(JSON.stringify(ids)) as Array<{
+        orderId: string;
+        ingredientId: string;
+        qty: number;
+        rowUnit: string | null;
+        value: number | null;
+        basis: string | null;
+        at: string;
+        refTakenAt: string | null;
+      }>
+    ).map((r) => ({
+      // Named, not spread: a year of estimates is hundreds of thousands of rows, and a
+      // spread of a driver's row object costs several times these few reads.
+      orderId: r.orderId,
+      ingredientId: r.ingredientId,
+      qty: Number(r.qty),
+      rowUnit: r.rowUnit,
+      value: r.value === null ? null : Number(r.value),
+      basis: r.basis,
+      at: r.at,
+      refTakenAt: r.refTakenAt,
+    }));
+    // When each order first took stock: its earliest take.
+    const firstTake = new Map<string, string>();
+    for (const r of rows) {
+      if (r.qty >= 0) continue;
+      const t = firstTake.get(r.orderId);
+      if (t === undefined || r.at < t) firstTake.set(r.orderId, r.at);
+    }
+    for (const row of rows) {
+      const takenAt = firstTake.get(row.orderId) ?? row.refTakenAt ?? row.at;
+      const cur = out.get(row.orderId) ?? { costCents: 0, priced: true, tookStock: false };
+      const c = rowCost(row, pricing, takenAt);
+      if (c.value === null) cur.priced = false;
+      else cur.costCents += -c.value;
+      if (!c.priced) cur.priced = false;
       if (row.qty < 0) cur.tookStock = true;
-      out.set(r.orderId, cur);
+      out.set(row.orderId, cur);
     }
   }
   return out;
@@ -1163,7 +1269,7 @@ function foodOfOrders(db: AppDatabase, orderIds: string[], pricing: () => Pricin
 /** Waste booked by hand in [since, until), by when it happened. */
 export const HAND_WASTE_SQL = `
   SELECT NULL AS orderId, m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.unit AS rowUnit,
-         m.value_cents AS value, m.detail AS detail
+         m.value_cents AS value, m.detail AS detail, m.occurred_at AS takenAt
     FROM stock_movements m INDEXED BY idx_movements_reason_time
    WHERE m.reason = 'waste' AND m.occurred_at >= ? AND m.occurred_at < ?
      AND m.deleted_at IS NULL AND m.ref_order_id IS NULL`;
@@ -1171,7 +1277,7 @@ export const HAND_WASTE_SQL = `
 /** The waste of orders started in [since, until) that were cancelled or refunded, by the order. */
 export const ORDER_WASTE_SQL = `
   SELECT m.ref_order_id AS orderId, m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.unit AS rowUnit,
-         m.value_cents AS value, m.detail AS detail
+         m.value_cents AS value, m.detail AS detail, COALESCE(m.ref_taken_at, m.occurred_at) AS takenAt
     FROM orders o
     JOIN stock_movements m ON m.ref_order_id = o.id
    WHERE o.status IN ('void', 'refunded') AND ${IN_RANGE} AND o.deleted_at IS NULL
@@ -1206,14 +1312,23 @@ interface WasteTally {
  */
 function getWaste(db: AppDatabase, range: ReportRange, pricing: () => Pricing): WasteTally {
   const [since, until] = args(range);
-  type Row = { orderId: string | null; ingredientId: string; qty: number; rowUnit: string | null; value: number | null; detail: string | null };
+  type Row = {
+    orderId: string | null;
+    ingredientId: string;
+    qty: number;
+    rowUnit: string | null;
+    value: number | null;
+    detail: string | null;
+    /** When the stock was taken (a cancelled order's: its first take, where the row says). */
+    takenAt: string | null;
+  };
   const handRows = db.prepare(HAND_WASTE_SQL).all(since, until) as Row[];
   const orderRows = db.prepare(ORDER_WASTE_SQL).all(since, until) as Row[];
   const t: WasteTally = { cents: 0, cancelledCents: 0, cancelledOrders: new Set(), rows: 0, byReason: new Map(), byIngredient: new Map() };
   const ordersByReason = new Map<ReportWasteReason, Set<string>>();
   for (const r of [...handRows, ...orderRows]) {
     const row = { ...r, qty: Number(r.qty), value: r.value === null ? null : Number(r.value) };
-    const cents = -(rowValue(row, pricing) ?? 0);
+    const cents = -(rowValue(row, pricing, r.takenAt) ?? 0);
     const reason = wasteReasonOf(r.detail, r.orderId);
     t.cents += cents;
     t.rows += 1;
@@ -1289,7 +1404,8 @@ const IN_PROGRESS = ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'
  * Food cost for one period (spec 4.5), for the orders saved on this till:
  *  - food cost of sales: the cost each counted order kept with its sale,
  *    plus, for orders that kept none, an estimate from the stock they took
- *    at today's prices — dated by the ORDER's trading day, like the sales;
+ *    at the prices of the time (the price in force at each take, from the
+ *    price history) — dated by the ORDER's trading day, like the sales;
  *  - the food cost % on the sales whose cost is fully known, with how much
  *    of the food sales that is ("costs known for 94%"), and the rest listed;
  *  - waste by reason, food sent out but never paid for, orders from earlier

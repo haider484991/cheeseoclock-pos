@@ -94,6 +94,8 @@ import type {
   BatchRecipe,
   IngredientCategory,
   PriceKind,
+  PriceHistoryEntry,
+  TypedPricePer,
   StockMovementSearch,
   StockMovementPage,
 } from './inventory.js';
@@ -996,6 +998,30 @@ export interface IpcContract {
   'inventory:convertIngredientUnit': {
     request: { id: string };
     response: ApiResult<Ingredient>;
+  };
+  /**
+   * "Set price" (costing spec Phase 4): a price as it is bought — Rs X per kg
+   * (or litre), for a pack of N, or per piece — kept exactly, with a line in
+   * the price history. 'free' = it costs nothing (Rs 0); 'estimate' = a
+   * guess. Batches made from it take the new price at once. COST_CAPABILITY.
+   */
+  'inventory:setPrice': {
+    request: {
+      ingredientId: string;
+      per: TypedPricePer;
+      /** Rs X, in paisa. Ignored for 'free'. */
+      priceCents: number;
+      /** N for 'pack': base units in one pack. */
+      packSize?: number | null;
+      priceKind?: 'set' | 'estimate' | 'free';
+      notes?: string | null;
+    };
+    response: ApiResult<Ingredient>;
+  };
+  /** An ingredient's price history, newest first (COST_CAPABILITY). */
+  'inventory:priceHistory': {
+    request: { ingredientId: string; limit?: number };
+    response: ApiResult<PriceHistoryEntry[]>;
   };
 
   // Inventory — recipes (per menu item)
