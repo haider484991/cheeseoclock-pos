@@ -6,11 +6,12 @@
  *    with last week's figure beside it;
  *  - the top five "Do this", each with its rupees a week;
  *  - for a login that may see costs: the three dishes that earn the most per
- *    sale and the three that earn the least (ranked, with no rupee profit on
- *    the page: that is profit.view's, Phase 9), and waste by reason.
+ *    sale and the three that earn the least (ranked; what one sale earns in
+ *    rupees only for profit.view), and waste by reason.
  * Phase 8 adds the last stock-take variance (what went that sales, batches
  * and logged waste don't explain, between the latest two stock takes);
- * Phase 9 profit before overheads.
+ * Phase 9 profit before overheads, for profit.view only (never on the
+ * Dashboard card).
  *
  * The builder is pure (tested): every value escaped, every figure as the
  * main process sent it — which, for a login without costs, has no cost lines
@@ -29,12 +30,16 @@ import { VARIANCE_BAND_LABEL, varianceTotalText } from './varianceFormat';
 
 const esc = escapeHtml;
 const money = (c: number) => esc(formatCents(c));
+const signed = (c: number) => `${c < 0 ? '−' : ''}${money(Math.abs(c))}`;
 
 /** The sheet's HTML (for the Reports page's print sheet). */
-export function buildWeeklySheet(week: OwnerWeek, opts: { canSeeCosts: boolean; madeAt?: Date }): string {
+export function buildWeeklySheet(week: OwnerWeek, opts: { canSeeCosts: boolean; canSeeProfit?: boolean; madeAt?: Date }): string {
   const madeAt = opts.madeAt ?? new Date();
   const costs = opts.canSeeCosts ? week.costs : null;
   const sheet = opts.canSeeCosts ? week.sheet : null;
+  // Rupee profit is profit.view's (costing spec Phase 9): the main process sends it only then.
+  const profit = opts.canSeeProfit && sheet ? sheet.profit : null;
+  const withProfit = opts.canSeeProfit === true && sheet !== null;
   const lines = (opts.canSeeCosts ? week.doThis : week.doThis.filter((i) => !i.cost)).slice(0, 5);
   const p = week.previous;
   const vs = (change: OwnerWeek['change']['sales'], was: string | null) => {
@@ -69,6 +74,11 @@ export function buildWeeklySheet(week: OwnerWeek, opts: { canSeeCosts: boolean; 
       kpi('Waste', money(costs.wasteCents), `<small>thrown away, at cost${wasWaste}</small>`),
     );
   }
+  if (profit) {
+    const was = profit.previousProfitCents !== null ? `, was ${signed(profit.previousProfitCents)}` : '';
+    const unknown = profit.unknownSalesCents > 0 ? `; ${money(profit.unknownSalesCents)} of sales with an unknown cost left out` : '';
+    tiles.push(kpi('Profit before overheads', signed(profit.profitCents), `<small>before rent, salaries and bills${unknown}${was}</small>`));
+  }
   parts.push(`<section><div class="kpis">${tiles.join('')}</div></section>`);
 
   parts.push(
@@ -88,8 +98,13 @@ export function buildWeeklySheet(week: OwnerWeek, opts: { canSeeCosts: boolean; 
     const dishRows = (list: readonly OwnerWeekItem[]) =>
       list.length === 0
         ? '<p class="muted">No dish with a known cost sold yet.</p>'
-        : `<table><thead><tr><th>Dish</th><th class="r">Sold</th><th class="r">Food cost</th></tr></thead><tbody>${list
-            .map((d) => `<tr><td>${esc(d.name)}</td><td class="r">${d.soldThisWeek}</td><td class="r">${esc(formatBps(d.foodCostBps))}</td></tr>`)
+        : `<table><thead><tr><th>Dish</th><th class="r">Sold</th><th class="r">Food cost</th>${withProfit ? '<th class="r">Earns a sale</th>' : ''}</tr></thead><tbody>${list
+            .map(
+              (d) =>
+                `<tr><td>${esc(d.name)}</td><td class="r">${d.soldThisWeek}</td><td class="r">${esc(formatBps(d.foodCostBps))}</td>${
+                  withProfit ? `<td class="r">${d.profitPerSaleCents === null ? '—' : money(d.profitPerSaleCents)}</td>` : ''
+                }</tr>`,
+            )
             .join('')}</tbody></table>`;
     parts.push(
       `<section class="two"><div><h2>Earn the most per sale</h2>${dishRows(sheet.earnsMost)}</div>` +

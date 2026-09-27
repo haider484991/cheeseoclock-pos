@@ -14,7 +14,8 @@
  *   - costs (the Costing page, the batch calculator's rupees) are refused
  *     to the counter the same way, and the food-cost targets are the
  *     owner's alone;
- *   - Reports (every tab's channel, and low stock) likewise;
+ *   - Reports (every tab's channel, and low stock) likewise, and profit
+ *     (the Profit tab, the menu map, What-if; costing spec Phase 9);
  *   - every channel of these modules is classified here, so one added later
  *     fails until someone decides whether the counter may call it.
  *
@@ -370,6 +371,12 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   'reports:variance': undefined,
   // How many tills take orders (read by managers).
   'costing:getTills': undefined,
+  // Profit (costing spec Phase 9): the Profit tab, the menu map and What-if
+  // (profit.view and costs), and foodpanda's commission and the rider cost (read by managers).
+  'reports:profit': REPORT_TODAY(),
+  'reports:menuMap': undefined,
+  'costing:whatIf': { ingredients: [], items: [] },
+  'costing:getChannelFees': undefined,
 });
 
 /** The owner's alone: refused to the counter AND to managers. */
@@ -382,6 +389,11 @@ const OWNER_ONLY = (): Record<string, unknown> => ({
   'reports:setDayparts': { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 15 }, { name: 'Dinner', fromHour: 19, toHour: 23 }] },
   // How many tills take orders (settings.manage, costing spec Phase 8).
   'costing:setTills': { sellingTills: 2 },
+  // foodpanda's commission, payment fees and the rider cost (settings.manage, costing spec Phase 9).
+  'costing:setChannelFees': {
+    fees: { foodpanda: { commissionBps: 2500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 }, paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
+    riderCost: { mode: 'zone_rate', fixedCents: 0 },
+  },
 });
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */

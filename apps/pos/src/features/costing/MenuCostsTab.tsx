@@ -15,7 +15,16 @@ import { groupSizes, splitSize, summarySentence } from './costingFormat';
  * A row opens its cost sheet. Delivery charges and other non-food lines are
  * left out.
  */
-export function MenuCostsTab({ onShowMissing, onShowTargets }: { onShowMissing: () => void; onShowTargets: () => void }) {
+export function MenuCostsTab({
+  onShowMissing,
+  onShowTargets,
+  onTryPrice,
+}: {
+  onShowMissing: () => void;
+  onShowTargets: () => void;
+  /** "Try a price" on a cost sheet (profit.view): What-if with that dish. */
+  onTryPrice?: (menuItemId: string) => void;
+}) {
   const q = useMenuCosts();
   const [category, setCategory] = useSessionState<string>('costing.menu.cat', 'all');
   const [query, setQuery] = useSessionState('costing.menu:q', '');
@@ -126,7 +135,7 @@ export function MenuCostsTab({ onShowMissing, onShowTargets }: { onShowMissing: 
         </div>
       </Card>
 
-      {openId && <ItemCostSheetDrawer menuItemId={openId} onClose={() => setOpenId(null)} />}
+      {openId && <ItemCostSheetDrawer menuItemId={openId} onClose={() => setOpenId(null)} onTryPrice={onTryPrice} />}
     </div>
   );
 }

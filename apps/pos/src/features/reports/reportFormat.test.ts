@@ -228,6 +228,36 @@ const report = (over: Partial<BusinessReport> = {}): BusinessReport => ({
   ...over,
 });
 
+/** A made-up Profit tab (costing spec Phase 9): Rs 1,000 of sales, Rs 300 of food cost. */
+function profitTabOf(base: { sinceIso: string; untilIso: string; engine: 'worker' }): NonNullable<SomeReportTabs['profit']> {
+  return {
+    ...base,
+    steps: [
+      { key: 'sales', cents: 100_000 },
+      { key: 'food_cost', cents: -30_000 },
+      { key: 'unknown_cost', cents: 0 },
+      { key: 'waste', cents: 0 },
+      { key: 'sent_not_paid', cents: 0 },
+      { key: 'commission', cents: 0 },
+      { key: 'payment_fees', cents: 0 },
+      { key: 'rider', cents: 0 },
+    ],
+    profitCents: 70_000,
+    wasteByReason: [],
+    sentNotPaid: { orderCount: 0, costCents: 0, estimatedOrders: 0 },
+    stockLoss: { state: 'not_between', cents: null, scopes: null, message: 'Stock that went missing is taken off only for "Between stock takes".' },
+    channels: [],
+    categories: [],
+    unknownSalesCents: 0,
+    coverageBps: 10_000,
+    estimatedOrders: 0,
+    costingStartedAt: null,
+    fees: { foodpanda: { commissionBps: 2500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 }, paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
+    riderCost: { mode: 'zone_rate', fixedCents: 0 },
+    noRateCount: 0,
+  };
+}
+
 /** The report split into its tabs, as the tab channels hand them over. Without its food cost: no Food cost & stock tab. */
 function tabsOf(r: BusinessReport): SomeReportTabs {
   const base = { sinceIso: r.sinceIso, untilIso: r.untilIso, engine: 'worker' as const };
@@ -243,13 +273,20 @@ function tabsOf(r: BusinessReport): SomeReportTabs {
       dayparts: { lines: [], other: null, isDefault: true },
       dayNotes: [],
     },
-    menu: { ...base, kpis: { menuSalesCents: k.menuSalesCents, itemCount: k.itemCount }, items: r.items, categories: r.categories },
+    menu: { ...base, kpis: { menuSalesCents: k.menuSalesCents, itemCount: k.itemCount }, items: r.items, categories: r.categories, costs: null },
     channels: {
       ...base,
       kpis: { orderCount: k.orderCount, netSalesCents: k.netSalesCents, avgOrderCents: k.avgOrderCents },
       channels: r.channels,
       deliveries: r.deliveries,
+      areas: [],
+      noRateDeliveries: [],
+      noRateCount: 0,
+      profit: null,
     },
+    // Profit (costing spec Phase 9) goes with costs: a login without them has no Profit tab either.
+    ...(r.foodCost ? { profit: profitTabOf(base) } : {}),
+
     ...(r.foodCost
       ? {
           foodStock: {
@@ -360,6 +397,7 @@ describe('CSV for Excel', () => {
       channels: ['ORDER TYPES', 'DELIVERIES BY RIDER', 'DELIVERIES BY AREA'],
       foodStock: ['FOOD COST', 'WASTE BY REASON', 'SALES WITH MISSING COSTS', 'INGREDIENTS WASTED', 'PURCHASES'],
       team: ['STAFF', 'SHIFTS', 'DISCOUNTS BY REASON', 'DISCOUNTS BY PERSON', 'EACH DISCOUNT', 'REFUNDS', 'CANCELLED BEFORE PAYMENT', 'CASH DRAWER OPENED BY HAND'],
+      profit: ['FROM SALES TO PROFIT BEFORE OVERHEADS', 'WHAT EACH ORDER TYPE EARNS', 'PROFIT BY CATEGORY'],
     };
     const r = report({ foodCost: food({ hasCosts: true, hasUsage: true, foodSalesCents: 10_000 }) });
     for (const tab of Object.keys(HEADINGS) as Array<keyof SomeReportTabs>) {

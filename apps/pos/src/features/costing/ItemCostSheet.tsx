@@ -4,7 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ChoiceCostView, CostLineView, ItemCostSheet, PaidExtraView, RequiredGroupView } from '@cheeseoclock/shared-types';
-import { BookOpen, ChevronDown, ChevronRight, Printer, X } from 'lucide-react';
+import { BookOpen, ChevronDown, ChevronRight, FlaskConical, Printer, X } from 'lucide-react';
 import { useItemCostSheet } from './costingQueries';
 import { FoodCostChip } from './CostChip';
 import { BatchBreakdown } from './BatchBreakdown';
@@ -30,8 +30,19 @@ import { usePrintSheet } from './usePrintSheet';
  * made in-house opens up into what it is made of), each choice the customer
  * must make with what every option costs and how often it is picked, the
  * paid extras (price, cost, what you keep) and what each leave-out saves.
+ * For profit.view (costing spec Phase 9): the price that brings it to its
+ * target, and "Try a price" (Costing → What-if with this dish).
  */
-export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: string; onClose: () => void }) {
+export function ItemCostSheetDrawer({
+  menuItemId,
+  onClose,
+  onTryPrice,
+}: {
+  menuItemId: string;
+  onClose: () => void;
+  /** Given (profit.view): "Try a price" opens What-if with this dish. */
+  onTryPrice?: (menuItemId: string) => void;
+}) {
   const q = useItemCostSheet(menuItemId);
   const navigate = useNavigate();
   const printer = usePrintSheet();
@@ -98,6 +109,14 @@ export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: strin
                 </section>
               )}
 
+              {sheet.priceToHitCents !== null && sheet.row.flag !== 'grey' && (
+                <p className="rounded-lg bg-stone-50 px-3 py-2 text-sm dark:bg-stone-800/60">
+                  {sheet.priceToHitCents <= sheet.row.basePriceCents
+                    ? `On its ${formatBps(sheet.row.targetBps)} target at today's price of ${formatCents(sheet.row.basePriceCents)}.`
+                    : `The price that brings it to its ${formatBps(sheet.row.targetBps)} target: ${formatCents(sheet.priceToHitCents)} (now ${formatCents(sheet.row.basePriceCents)}), before tax.`}
+                </p>
+              )}
+
               <p className="text-xs text-stone-500">
                 At today&apos;s prices, from the recipe as it is now; the menu price is before tax. Sold on this till in the
                 last 28 days: {new Intl.NumberFormat('en-PK').format(sheet.row.soldLast28)}.
@@ -117,6 +136,19 @@ export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: strin
             <Button variant="secondary" size="sm" disabled={!sheet} onClick={() => sheet && printer.print(costSheetPrintHtml(sheet))}>
               <Printer className="h-4 w-4" /> Print cost sheet
             </Button>
+            {onTryPrice && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!sheet}
+                onClick={() => {
+                  onTryPrice(menuItemId);
+                  onClose();
+                }}
+              >
+                <FlaskConical className="h-4 w-4" /> Try a price
+              </Button>
+            )}
             <Button variant="ghost" size="sm" className="ml-auto" onClick={onClose}>
               Close
             </Button>

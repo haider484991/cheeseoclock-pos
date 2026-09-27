@@ -2,16 +2,18 @@ import type { ZodError } from 'zod';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler } from '../registry.js';
 import { COST_CAPABILITY, err, ok } from '@cheeseoclock/shared-types';
-import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, WhatIfResult } from '@cheeseoclock/shared-types';
 import {
   batchCalcInputSchema,
   markCostAlertsSeenInputSchema,
   recipeCostInputSchema,
+  setChannelFeesInputSchema,
   setCostAlertSettingsInputSchema,
   setCostingTargetsInputSchema,
   setTillsInputSchema,
+  whatIfInputSchema,
 } from '@cheeseoclock/shared-schemas';
-import { requireCapability, REFUSED } from '../guards.js';
+import { mayProfit, requireCapability, requireProfit, REFUSED } from '../guards.js';
 import {
   getBatchCalc,
   getCostAlerts,
@@ -22,9 +24,18 @@ import {
   getMissingCosts,
   previewRecipeCost,
 } from '../../services/costing-service.js';
-import { getTillsSetting, saveCostAlertSettings, saveCostingTargets, saveTillsSetting } from '../../services/costing-settings.js';
+import {
+  getChannelFees,
+  getTillsSetting,
+  saveChannelFees,
+  saveCostAlertSettings,
+  saveCostingTargets,
+  saveTillsSetting,
+} from '../../services/costing-settings.js';
 import { readTillLink } from '../../services/till-link.js';
 import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/cost-alert-repo.js';
+import { getAnalyticsWorker } from '../../services/analytics/worker-host.js';
+import { workOutExtra, type ReportWorker } from './reports-handlers.js';
 
 /**
  * The Costing page (costing spec Phase 1). Costs are the owner's business
@@ -33,6 +44,12 @@ import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/
  * the food-cost targets and the alert thresholds is the owner's
  * (settings.manage); managers read them. Price alerts (Phase 6): managers
  * and the owner read them and mark them seen.
+ *
+ * Phase 9: foodpanda's commission, payment fees and the rider cost
+ * (costing:getChannelFees — managers read; costing:setChannelFees — the
+ * owner); What-if (costing:whatIf — profit.view and costs; worked out in the
+ * Reports worker, never saved, nothing on the till changes); and the cost
+ * sheet's "price to hit target", left out for a login without profit.view.
  */
 function requireCosts(): AuthenticatedUser {
   return requireCapability(COST_CAPABILITY, REFUSED.costs);
@@ -48,18 +65,25 @@ function validationFailed(error: ZodError) {
   });
 }
 
-export function registerCostingHandlers(ctx: HandlerContext): void {
+/** What the Costing channels need of the Reports worker (What-if runs there). */
+export interface CostingHandlerDeps {
+  worker: () => ReportWorker | null;
+}
+
+export function registerCostingHandlers(ctx: HandlerContext, deps: CostingHandlerDeps = { worker: getAnalyticsWorker }): void {
   defineHandler('costing:menuCosts', ctx, () => {
     requireCosts();
     return ok(getMenuCosts(ctx.db));
   });
 
   defineHandler('costing:itemSheet', ctx, (_ctx, payload) => {
-    requireCosts();
+    const s = requireCosts();
     if (!payload || typeof payload.menuItemId !== 'string') {
       return err({ code: 'validation_failed', message: 'Which menu item?' });
     }
-    return ok(getItemCostSheet(ctx.db, payload.menuItemId));
+    const sheet = getItemCostSheet(ctx.db, payload.menuItemId);
+    // "Price to hit target" is profit.view's (costing spec 4.3, D6).
+    return ok(sheet && !mayProfit(s) ? { ...sheet, priceToHitCents: null } : sheet);
   });
 
   defineHandler('costing:missingCosts', ctx, () => {
@@ -136,5 +160,29 @@ export function registerCostingHandlers(ctx: HandlerContext): void {
     const parsed = setTillsInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(saveTillsSetting(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }, readTillLink(ctx.db)));
+  });
+
+  // ---- Profit (costing spec Phase 9) ----
+  defineHandler('costing:getChannelFees', ctx, () => {
+    requireCosts();
+    return ok(getChannelFees(ctx.db));
+  });
+
+  defineHandler('costing:setChannelFees', ctx, (_ctx, payload) => {
+    requireCosts();
+    const s = requireCapability('settings.manage', "Only the owner can change foodpanda's commission and the rider cost.");
+    const parsed = setChannelFeesInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(saveChannelFees(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+  });
+
+  /** New prices TRIED, never saved: in the Reports worker (the last 28 days' sales), else here. */
+  defineHandler('costing:whatIf', ctx, async (_ctx, payload) => {
+    requireCosts();
+    requireProfit();
+    const parsed = whatIfInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    const { data, engine } = await workOutExtra(ctx.db, deps.worker(), 'whatIf', parsed.data);
+    return ok({ ...(data as Omit<WhatIfResult, 'engine'>), engine });
   });
 }

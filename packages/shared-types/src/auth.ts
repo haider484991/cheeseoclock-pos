@@ -95,7 +95,16 @@ export type Capability =
    * login sees the Live Orders board and the orders of the shift open now
    * (Recent Orders) only (owner, 2026-09-26).
    */
-  | 'order.history';
+  | 'order.history'
+  /**
+   * Rupee profit (costing spec D6, Phase 9): what the shop keeps — the
+   * Profit tab of Reports, profit per dish, category and channel,
+   * foodpanda commission and rider cost, the menu map, Costing → What-if and
+   * "price to hit target". Owner question 8, not answered: managers see it
+   * too (admin + manager). Profit shows what a dish costs as well, so every
+   * check also needs COST_CAPABILITY. Cashiers never.
+   */
+  | 'profit.view';
 
 export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
   admin: new Set<Capability>([
@@ -116,6 +125,7 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'riders.manage',
     'customers.manage',
     'order.history',
+    'profit.view',
   ]),
   manager: new Set<Capability>([
     'menu.manage',
@@ -132,6 +142,8 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'riders.manage',
     'customers.manage',
     'order.history',
+    // Owner question 8 (costing spec Phase 9), not answered: managers see profit too.
+    'profit.view',
   ]),
   // A cashier opens the shift (counts the float in the morning) but never
   // closes it: the close is the drawer count, done by a manager or the owner
@@ -164,6 +176,15 @@ export const hasCapability = (role: Role, capability: Capability): boolean =>
  * Cashiers never see costs.
  */
 export const COST_CAPABILITY = 'menu.manage' as const satisfies Capability;
+
+/**
+ * Who may see rupee profit (costing spec D6, Phase 9): the Profit tab, profit
+ * per dish / category / channel, contribution after foodpanda commission and
+ * rider cost, the menu map, What-if and "price to hit target". Profit also
+ * says what a dish costs, so the main process asks for COST_CAPABILITY as
+ * well wherever it asks for this. Cashiers never see it.
+ */
+export const PROFIT_CAPABILITY = 'profit.view' as const satisfies Capability;
 
 /**
  * The namespace for this project's name-based (v5) ids (costing spec D13):

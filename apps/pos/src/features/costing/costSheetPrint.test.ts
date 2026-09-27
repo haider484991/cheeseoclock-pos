@@ -4,6 +4,7 @@ import { costSheetPrintHtml } from './costSheetPrint';
 
 // Made-up figures.
 const SHEET: ItemCostSheet = {
+  priceToHitCents: null,
   row: {
     menuItemId: 'm1',
     name: 'Fajita <Special> — Medium',
@@ -39,6 +40,7 @@ const SHEET: ItemCostSheet = {
 
 /** The made-up "Cola 345 ml": its bottle has no price, so the till can't cost it. */
 const COLA: ItemCostSheet = {
+  priceToHitCents: null,
   row: {
     ...SHEET.row,
     menuItemId: 'm2',

@@ -12,7 +12,11 @@
  *     recipe; marking the ingredient "free" takes it off;
  *   - the batch calculator (200 g of a 2 kg sauce, every input costed) and
  *     "Make this amount" (inventory:makeBatch with any amount), which any
- *     login may call and which answers with no costs.
+ *     login may call and which answers with no costs;
+ *   - Phase 9: foodpanda's commission and the rider cost (managers read, the
+ *     owner saves — synced and audited); What-if (profit.view): a dearer
+ *     tomato flows through the sauce into every pizza, at the last 4 weeks'
+ *     sales, nothing saved; "price to hit target" only for profit.view.
  *
  * Only `defineHandler` (captured) and the signed-in session are stood in
  * for. node:sqlite behind better-sqlite3's shape; skips where it is
@@ -28,6 +32,8 @@ type Handler = (ctx: unknown, payload: unknown) => unknown;
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (ctx: unknown, payload: unknown) => unknown>(),
   session: null as unknown,
+  /** A test role table with profit.view taken from managers (owner question 8 answered "only me"). */
+  noProfit: false,
 }));
 
 vi.mock('../registry.js', () => {
@@ -49,6 +55,14 @@ vi.mock('../registry.js', () => {
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {} } }));
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] }, app: { getPath: () => '' } }));
 vi.mock('../../services/auth-service.js', () => ({ getCurrentSession: () => h.session }));
+vi.mock('@cheeseoclock/shared-types', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@cheeseoclock/shared-types')>();
+  return {
+    ...orig,
+    hasCapability: (role: Parameters<typeof orig.hasCapability>[0], cap: Parameters<typeof orig.hasCapability>[1]) =>
+      h.noProfit && role === 'manager' && cap === orig.PROFIT_CAPABILITY ? false : orig.hasCapability(role, cap),
+  };
+});
 
 const session = (id: string, role: AuthenticatedUser['role']): AuthenticatedUser => ({
   id: id as UUID,
@@ -93,6 +107,7 @@ beforeEach(async () => {
   if (!DatabaseSync) return;
   h.handlers.clear();
   h.session = null;
+  h.noProfit = false;
   db = openMigrated();
   s = await openCostingShop(db);
   const ctx = { db, deviceId: DEV } as never;
@@ -115,6 +130,16 @@ const READ_CHANNELS = (): Record<string, unknown> => ({
   'costing:getAlertSettings': undefined,
   // How many tills take orders (costing spec Phase 8): managers read it.
   'costing:getTills': undefined,
+  // foodpanda's commission and the rider cost (costing spec Phase 9): managers read them…
+  'costing:getChannelFees': undefined,
+  // …and try prices (profit.view: managers and the owner until owner question 8 says otherwise).
+  'costing:whatIf': { ingredients: [], items: [] },
+});
+
+/** What Costing → Targets & fees saves for Phase 9 (made-up figures). */
+const FEES = () => ({
+  fees: { foodpanda: { commissionBps: 2200, base: 'paid_incl_tax', fixedFeeCents: 2_500, upliftBps: 1000 }, paymentFeeBps: { cash: 0, card: 250, foodpanda: 0, transfer: 0 } },
+  riderCost: { mode: 'fixed', fixedCents: 15_000 },
 });
 
 const ALERT_SETTINGS = () => ({ jumpBps: 1_500, impactWeekCents: 50_000, keyIngredientIds: [s.ing.cheese] });
@@ -127,6 +152,7 @@ live('who may see costs', () => {
       'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 },
       'costing:setAlertSettings': ALERT_SETTINGS(),
       'costing:setTills': { sellingTills: 2 },
+      'costing:setChannelFees': FEES(),
     };
     expect(Object.keys(channels).sort()).toEqual([...h.handlers.keys()].filter((c) => c.startsWith('costing:')).sort());
     for (const [channel, payload] of Object.entries(channels)) {
@@ -601,5 +627,110 @@ live('the costing channels and a growing order history', () => {
       expect({ q, plan }).toEqual({ q, plan: expect.arrayContaining([expect.stringMatching(/^SEARCH o USING INDEX idx_orders_created/)]) });
       expect({ q, scans: plan.filter((d) => /^SCAN (o|oi|oim|m)\b/.test(d)) }).toEqual({ q, scans: [] });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9: fees, What-if, price to hit target
+// ---------------------------------------------------------------------------
+
+/** Sold `n` of an item within the last 28 days (made-up prices): stock taken, cost kept, paid. */
+function sold(item: keyof typeof s.item, n: number, picks: Parameters<typeof s.ring>[0][number][2] = []): void {
+  for (let i = 0; i < n; i++) {
+    const o = s.ring([[item, 1, picks]]);
+    s.r.decrementForOrder(db, o, MANAGER_ACTOR);
+    s.markPaid(o, new Date(Date.now() - 86_400_000));
+  }
+}
+
+live('foodpanda commission and the rider cost (costing spec Phase 9)', () => {
+  it('the defaults until the owner answers; managers read them, only the owner saves them (synced and audited)', async () => {
+    h.session = MANAGER;
+    const view = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees');
+    expect(view).toMatchObject({
+      isDefault: true,
+      fees: { foodpanda: { commissionBps: 2500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 } },
+      riderCost: { mode: 'zone_rate' },
+    });
+    expect(await call('costing:setChannelFees', FEES())).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: "Only the owner can change foodpanda's commission and the rider cost.",
+    });
+    h.session = OWNER;
+    const saved = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:setChannelFees', FEES());
+    expect(saved).toMatchObject({ isDefault: false, ...FEES() });
+    expect(count(`SELECT COUNT(*) AS n FROM business_settings WHERE key IN ('channels.fees', 'delivery.riderCost')`)).toBe(2);
+    expect(count(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`)).toBe(2);
+    expect(count(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'business_settings'`)).toBe(2);
+    // A commission over 100% is refused, with the field named.
+    const bad = FEES();
+    bad.fees.foodpanda.commissionBps = 12_000;
+    expect(await call('costing:setChannelFees', bad)).toMatchObject({ ok: false, code: 'validation_failed' });
+  });
+});
+
+live('What-if (costing spec 4.9)', () => {
+  it('a dearer tomato flows through the sauce into every pizza, at the last 4 weeks\' sales; nothing is saved', async () => {
+    sold('fajitaM', 8);
+    h.session = MANAGER;
+    const before = count(`SELECT COUNT(*) AS n FROM ingredient_costs`) + count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`);
+    const tomato = { ingredientId: s.ing.tomato, packSize: 5_000, packPriceCents: 120_000 }; // Rs 240 a kilo (was Rs 120)
+    const r = await data<import('@cheeseoclock/shared-types').WhatIfResult>('costing:whatIf', { ingredients: [tomato], items: [] });
+    expect(r.engine).toBe('main');
+    // The tomato as tried, and the sauce made from it.
+    expect(r.ingredients.map((i) => [i.ingredientId, i.batch])).toEqual([
+      [s.ing.tomato, false],
+      [s.ing.sauce, true],
+    ]);
+    expect(r.ingredients[0]).toMatchObject({ beforeUnitCostMc: 12_000, afterUnitCostMc: 24_000, changeBps: 10_000 });
+    const fajita = r.rows.find((x) => x.menuItemId === s.item.fajitaM)!;
+    // 50 g of sauce: 2,500 g of tomato in 2,000 g of sauce, 12 paisa a gram more → 62.5 × 12 = 750 paisa more a pizza.
+    expect(fajita.changed).toBe(true);
+    expect(fajita.newCostCents - fajita.costCents).toBe(750);
+    // 8 in 4 weeks = 2 a week: Rs 15 a week less.
+    expect(fajita).toMatchObject({ soldLast28: 8, weeklyUnitsTenths: 20, weekCents: -1_500, breakEvenBps: null });
+    // Every dish with sauce moved; the cola did not.
+    expect(r.rows.find((x) => x.menuItemId === s.item.deal)!.changed).toBe(true);
+    expect(r.rows.find((x) => x.menuItemId === s.item.cola)!.changed).toBe(false);
+    expect(r.rows[0]!.changed).toBe(true);
+    expect(r.totalWeekCents).toBe(r.rows.reduce((a, x) => a + x.weekCents, 0));
+    // Not food (the delivery charge) is not a dish here.
+    expect(r.rows.some((x) => x.menuItemId === s.item.delivery)).toBe(false);
+    // Nothing written: no price, no history row, no sync or audit row.
+    expect(count(`SELECT COUNT(*) AS n FROM ingredient_costs`) + count(`SELECT COUNT(*) AS n FROM sync_queue`) + count(`SELECT COUNT(*) AS n FROM audit_log`)).toBe(before);
+    expect(db.prepare(`SELECT pack_price_cents AS p FROM ingredients WHERE id = ?`).get(s.ing.tomato)).toEqual({ p: 60_000 });
+  });
+
+  it('a menu price tried: per week at the same sales, the break-even volume, and the price that hits the target', async () => {
+    sold('fajitaM', 8);
+    h.session = MANAGER;
+    const r = await data<import('@cheeseoclock/shared-types').WhatIfResult>('costing:whatIf', { ingredients: [], items: [{ menuItemId: s.item.fajitaM, priceCents: 130_000 }] });
+    const f = r.rows.find((x) => x.menuItemId === s.item.fajitaM)!;
+    expect(f).toMatchObject({ basePriceCents: 120_000, newBasePriceCents: 130_000, newPriceCents: 130_000, weekCents: 20_000, changed: true });
+    // Earns about Rs 1,024 now (Rs 1,200 − Rs 176.41); Rs 100 more: sales could fall about 8.9% before it earns less.
+    expect(f.breakEvenBps).toBe(Math.round((-10_000 * 10_000) / (f.profitCents + 10_000)));
+    expect(f.priceToHitCents).not.toBeNull();
+  });
+
+  it('refused to a cashier and — profit.view taken from managers — to a manager; the owner may', async () => {
+    h.session = CASHIER;
+    expect(await call('costing:whatIf', { ingredients: [], items: [] })).toEqual({ ok: false, code: 'forbidden', message: 'Only a manager or the owner can see costs.' });
+    h.session = MANAGER;
+    h.noProfit = true;
+    expect(await call('costing:whatIf', { ingredients: [], items: [] })).toEqual({ ok: false, code: 'forbidden', message: 'Only a manager or the owner can see profit.' });
+    // "Price to hit target" is left out of the cost sheet too; the rest of it stays.
+    const sheet = await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM });
+    expect(sheet.priceToHitCents).toBeNull();
+    expect(sheet.row.costCents).toBeGreaterThan(0);
+    h.session = OWNER;
+    expect((await call('costing:whatIf', { ingredients: [], items: [] })).ok).toBe(true);
+    const own = await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM });
+    // At the suggested 30%: the cost ÷ 0.3, up to the next Rs 10.
+    expect(own.priceToHitCents).toBe(Math.ceil(own.row.costCents / 0.3 / 1_000) * 1_000);
+    expect(await call('costing:whatIf', { ingredients: [{ ingredientId: s.ing.tomato, packSize: 0, packPriceCents: 1 }], items: [] })).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
   });
 });

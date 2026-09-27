@@ -11,6 +11,7 @@ import { COSTING_KEY, useCostAlertSettings, useCostingTargets } from './costingQ
 import { formatBps, parsePercent, parseRupees } from './costingFormat';
 import { DaypartsCard } from './DaypartsCard';
 import { TillsCard } from './TillsCard';
+import { ChannelFeesCard } from './ChannelFeesCard';
 
 /**
  * Food-cost targets per menu category, and the price alerts' thresholds
@@ -35,6 +36,8 @@ export function TargetsTab() {
       <DaypartsCard canEdit={canEdit} />
       {/* How many tills take orders (costing spec Phase 8). */}
       <TillsCard canEdit={canEdit} />
+      {/* foodpanda's commission, card fees and the rider cost (costing spec Phase 9). */}
+      <ChannelFeesCard canEdit={canEdit} />
     </div>
   );
 }

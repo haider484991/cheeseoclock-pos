@@ -219,6 +219,9 @@ const api: RendererApi = {
     setDayparts: (req) => invoke('reports:setDayparts', req),
     // Stock takes: used vs should have used (costing spec Phase 8).
     variance: (req) => invoke('reports:variance', req),
+    // Profit and the menu map (costing spec Phase 9).
+    profit: (req) => invoke('reports:profit', req),
+    menuMap: (req) => invoke('reports:menuMap', req),
   },
   inventory: {
     listIngredients: (req) => invoke('inventory:listIngredients', req),
@@ -272,6 +275,10 @@ const api: RendererApi = {
     setAlertSettings: (req) => invoke('costing:setAlertSettings', req),
     getTills: () => invoke('costing:getTills', undefined),
     setTills: (req) => invoke('costing:setTills', req),
+    // Profit (costing spec Phase 9).
+    getChannelFees: () => invoke('costing:getChannelFees', undefined),
+    setChannelFees: (req) => invoke('costing:setChannelFees', req),
+    whatIf: (req) => invoke('costing:whatIf', req),
   },
 };
 
