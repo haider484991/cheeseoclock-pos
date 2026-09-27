@@ -5,7 +5,8 @@ import { OWNER_CARD_SHOW_MS, cardHideReason, cardHidesInMs, cardMayShow, type Ca
 /**
  * The Dashboard "This week" card at the counter (costing spec §2, Phase 7):
  * hidden until tapped, and hidden again after 2 minutes, on the idle lock,
- * and on a manager's step-in.
+ * and on a step-in. Only the owner sees the card (report.view; managers lost
+ * it on 2026-09-27), so the step-in here is the owner's at a cashier's till.
  */
 const T0 = Date.parse('2026-09-30T10:00:00.000Z');
 const OWNER: CardLogin = { who: 'u_admin:admin', stepInEndsAt: null, stepInHeld: false };
@@ -31,12 +32,12 @@ describe('the "This week" card hides its figures again', () => {
     expect(cardHideReason(shown, { ...OWNER, who: 'u_admin:manager' }, T0 + 1_000)).toBe('otherLogin');
   });
 
-  it("a manager's step-in: hidden when it starts, when the till holds it (StepInHold), and never shown while held", () => {
+  it("the owner's step-in: hidden when it starts, when the till holds it (StepInHold), and never shown while held", () => {
     const ends = new Date(T0 + 10 * 60_000).toISOString();
     // A normal login tapped; then the till becomes a stepping-in login (a cashier's till): hide.
     expect(cardHideReason(shownBy(OWNER), { ...OWNER, stepInEndsAt: ends }, T0 + 1_000)).toBe('stepIn');
     // Tapped during a step-in: stays until the till holds the login…
-    const stepping: CardLogin = { who: 'u_mgr:manager', stepInEndsAt: ends, stepInHeld: false };
+    const stepping: CardLogin = { ...OWNER, stepInEndsAt: ends };
     const shown = shownBy(stepping);
     expect(cardHideReason(shown, stepping, T0 + 60_000)).toBeNull();
     // …which happens at stepInClock's hold time: then the PIN box is over the page and the figures go.
@@ -44,7 +45,7 @@ describe('the "This week" card hides its figures again', () => {
     expect(hold.holdInMs).toBe(10 * 60_000);
     expect(cardHideReason(shown, { ...stepping, stepInHeld: true }, T0 + hold.holdInMs)).toBe('stepIn');
     expect(cardMayShow({ ...stepping, stepInHeld: true })).toBe(false);
-    // The manager types their PIN: a normal login again (no end time) — the figures stay hidden until tapped.
+    // The owner types their PIN: a normal login again (no end time) — the figures stay hidden until tapped.
     expect(cardHideReason(shown, { ...stepping, stepInEndsAt: null }, T0 + 1_000)).toBe('stepIn');
   });
 

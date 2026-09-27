@@ -4,9 +4,12 @@
  * made-up shop, db/costing-shop.fixture.ts):
  *   - one channel per tab, plus low stock; the whole-page reports:business
  *     and the older one-figure channels are no longer registered;
- *   - a cashier is refused every one in the main process; Food cost & stock
- *     is refused to a login without costs even though it may see reports,
- *     and its Team tab carries no waste rupees;
+ *   - Reports are the owner's (report.view; owner, 2026-09-27: "managers
+ *     can't see the reports and settings"): a cashier and a manager are
+ *     refused every one in the main process, the owner's week, day notes,
+ *     the parts of the day and the stock-take variance with them; Food cost
+ *     & stock is refused to a login without costs even though it may see
+ *     reports, and its Team tab carries no waste rupees;
  *   - the figures come from the Reports worker when it is running; when it
  *     is not, the main process works out 31 days at most and says no, in
  *     plain words, to anything longer; superseded, timed-out, crashed and
@@ -36,8 +39,18 @@ type Handler = (ctx: unknown, payload: unknown) => unknown;
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (ctx: unknown, payload: unknown) => unknown>(),
   session: null as unknown,
-  /** A login that may see reports but not costs (no role has that today; the rule must hold when one does). */
+  /**
+   * A login that may see reports but not costs (no role has that today: only
+   * the owner sees reports, and the owner sees costs; the rule must hold when
+   * one does). Takes COST_CAPABILITY away from whoever is signed in.
+   */
   noCosts: false,
+  /**
+   * A login that may see reports but not change the shop's settings (a
+   * manager's until 2026-09-27; no role has that today, the rule must hold
+   * if one does again). Takes settings.manage away from whoever is signed in.
+   */
+  noSettings: false,
   worker: null as unknown,
 }));
 
@@ -65,7 +78,9 @@ vi.mock('@cheeseoclock/shared-types', async (importOriginal) => {
   return {
     ...orig,
     hasCapability: (role: Parameters<typeof orig.hasCapability>[0], cap: Parameters<typeof orig.hasCapability>[1]) =>
-      h.noCosts && cap === orig.COST_CAPABILITY ? false : orig.hasCapability(role, cap),
+      (h.noCosts && cap === orig.COST_CAPABILITY) || (h.noSettings && cap === 'settings.manage')
+        ? false
+        : orig.hasCapability(role, cap),
   };
 });
 
@@ -77,6 +92,8 @@ const session = (id: string, role: AuthenticatedUser['role']): AuthenticatedUser
 });
 const CASHIER = session('u_cash', 'cashier');
 const MANAGER = session('u_mgr', 'manager');
+/** The only login that sees Reports (report.view) since 2026-09-27. */
+const OWNER = session('u_admin', 'admin');
 
 let db: ReturnType<typeof openMigrated>;
 let s: Awaited<ReturnType<typeof openCostingShop>>;
@@ -118,6 +135,7 @@ beforeEach(async () => {
   h.handlers.clear();
   h.session = null;
   h.noCosts = false;
+  h.noSettings = false;
   h.worker = null;
   db = openMigrated();
   s = await openCostingShop(db);
@@ -166,18 +184,33 @@ live('Reports channels', () => {
     ]);
   });
 
-  it('a cashier is refused every tab and low stock in the main process; nobody signed in is "not logged in"', async () => {
-    h.session = CASHIER;
-    for (const channel of [...TABS.map((t) => `reports:${t}`), 'reports:lowStock']) {
-      expect({ channel, ...(await call(channel, AROUND_NOW())) }).toEqual({ channel, ok: false, code: 'forbidden', message: REFUSED['reports'] });
+  it('a cashier and a manager are refused every tab, low stock and the stock-take variance in the main process; nobody signed in is "not logged in"', async () => {
+    // A manager lost Reports on 2026-09-27 ("managers can't see the reports and settings"): the same plain words as the counter.
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      for (const channel of [...TABS.map((t) => `reports:${t}`), 'reports:lowStock']) {
+        expect({ who: who.role, channel, ...(await call(channel, AROUND_NOW())) }).toEqual({
+          who: who.role,
+          channel,
+          ok: false,
+          code: 'forbidden',
+          message: REFUSED['reports'],
+        });
+      }
+      expect({ who: who.role, ...(await call('reports:variance', {})) }).toEqual({ who: who.role, ok: false, code: 'forbidden', message: REFUSED['reports'] });
     }
     h.session = null;
     for (const t of TABS) expect(await call(`reports:${t}`, AROUND_NOW())).toMatchObject({ ok: false, code: 'unauthenticated' });
+    // The owner may.
+    h.session = OWNER;
+    for (const channel of [...TABS.map((t) => `reports:${t}`), 'reports:lowStock']) {
+      expect({ channel, ok: (await call(channel, AROUND_NOW())).ok }).toEqual({ channel, ok: true });
+    }
   });
 
-  it('a manager gets the food cost from Food cost & stock, from the cost each sale kept', async () => {
+  it('the owner gets the food cost from Food cost & stock, from the cost each sale kept', async () => {
     oneSale();
-    h.session = MANAGER;
+    h.session = OWNER;
     const r = await call('reports:foodStock', AROUND_NOW());
     expect(r.ok).toBe(true);
     const tab = (r as { data: { engine: string; foodCost: unknown } }).data;
@@ -188,7 +221,8 @@ live('Reports channels', () => {
 
   it('reports but no costs: Food cost & stock is refused, and Team carries no waste rupees', async () => {
     oneSale();
-    h.session = MANAGER;
+    // The owner's login with costs taken away: the only login with reports today sees costs.
+    h.session = OWNER;
     h.noCosts = true;
     expect(await call('reports:foodStock', AROUND_NOW())).toEqual({ ok: false, code: 'forbidden', message: REFUSED['costs'] });
     const team = await call('reports:team', AROUND_NOW());
@@ -199,7 +233,7 @@ live('Reports channels', () => {
   });
 
   it('checks the period like before: bad dates and over two years are refused', async () => {
-    h.session = MANAGER;
+    h.session = OWNER;
     expect(await call('reports:menu', { sinceIso: 'x', untilIso: 'y' })).toMatchObject({ ok: false, code: 'validation_failed' });
     expect(await call('reports:menu', { sinceIso: '2026-09-02T00:00:00.000Z', untilIso: '2026-09-01T00:00:00.000Z' })).toMatchObject({
       ok: false,
@@ -219,7 +253,7 @@ live('Reports channels', () => {
 live('where a tab is worked out', () => {
   it('the worker, when it is running: its figures, marked as worked out there', async () => {
     oneSale();
-    h.session = MANAGER;
+    h.session = OWNER;
     const { buildReportTab } = await import('../../services/analytics/report-tabs.js');
     const w = fakeWorker('ready', async (kind, req) => buildReportTab(db, kind, req));
     h.worker = w;
@@ -236,7 +270,7 @@ live('where a tab is worked out', () => {
 
   it('no worker (it failed to start): a month on the main process, anything longer refused in plain words', async () => {
     oneSale();
-    h.session = MANAGER;
+    h.session = OWNER;
     const w = fakeWorker('unavailable', () => Promise.reject(new Error('never asked')));
     h.worker = w;
     const month = { sinceIso: new Date(Date.now() - 30 * 86_400_000).toISOString(), untilIso: new Date(Date.now() + 3_600_000).toISOString() };
@@ -250,7 +284,7 @@ live('where a tab is worked out', () => {
   });
 
   it('asked again with other dates, too slow, crashed, failed: each gets its own answer', async () => {
-    h.session = MANAGER;
+    h.session = OWNER;
     const { WorkerRunError } = await import('../../services/analytics/worker-client.js');
     const answer = (code: 'superseded' | 'timeout' | 'crashed' | 'failed', message = 'x') =>
       fakeWorker('ready', () => Promise.reject(new WorkerRunError(code, message)));
@@ -315,7 +349,6 @@ live('stock rows and their values', () => {
 // The owner's week (costing spec Phase 7)
 // ---------------------------------------------------------------------------
 
-const OWNER = session('u_admin', 'admin');
 /** The clock (Date only) for these: Wednesday 30 Sep 2026, 3 pm in Karachi. */
 const WED_3PM = new Date('2026-09-30T10:00:00.000Z');
 const TODAY = () => new Date().toISOString().slice(0, 10);
@@ -336,27 +369,39 @@ live("the owner's week channels (costing Phase 7)", () => {
     vi.useRealTimers();
   });
 
-  it('a cashier is refused the card, the trends, day notes and the parts of the day, and nothing is written', async () => {
-    h.session = CASHIER;
+  it('a cashier and a manager are refused the card, the trends, day notes and the parts of the day, and nothing is written', async () => {
+    saleThisWeek();
     const asks: Array<[string, unknown]> = [
       ['reports:ownerWeek', { week: 'this' }],
+      ['reports:ownerWeek', { week: 'last', sheet: true }],
       ['reports:trends', undefined],
       ['reports:addDayNote', { day: TODAY(), tag: 'rain' }],
       ['reports:removeDayNote', { id: 'no-such-note' }],
       ['reports:getDayparts', undefined],
       ['reports:setDayparts', { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 15 }] }],
     ];
-    for (const [channel, payload] of asks) {
-      expect({ channel, ...(await call(channel, payload)) }).toEqual({ channel, ok: false, code: 'forbidden', message: REFUSED['reports'] });
+    // A manager lost the Dashboard "This week" card with Reports on 2026-09-27.
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      for (const [channel, payload] of asks) {
+        expect({ who: who.role, channel, ...(await call(channel, payload)) }).toEqual({
+          who: who.role,
+          channel,
+          ok: false,
+          code: 'forbidden',
+          message: REFUSED['reports'],
+        });
+      }
     }
     expect(db.prepare(`SELECT COUNT(*) AS n FROM day_notes`).get()).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type IN ('day_notes', 'business_settings')`).get()).toEqual({ n: 0 });
     h.session = null;
     for (const [channel, payload] of asks) expect(await call(channel, payload)).toMatchObject({ ok: false, code: 'unauthenticated' });
   });
 
-  it('a manager gets food cost, waste and the cost lines; a login without costs gets none of them — and nobody gets profit', async () => {
+  it('the owner gets food cost, waste and the cost lines; a login without costs gets none of them — and nobody gets profit', async () => {
     saleThisWeek();
-    h.session = MANAGER;
+    h.session = OWNER;
     const withCosts = await call('reports:ownerWeek', { week: 'this' });
     expect(withCosts).toMatchObject({ ok: true, data: { week: 'this', engine: 'main', current: { orderCount: 1, netSalesCents: 120_000 } } });
     const week = (withCosts as { data: import('@cheeseoclock/shared-types').OwnerWeek }).data;
@@ -384,7 +429,7 @@ live("the owner's week channels (costing Phase 7)", () => {
     const { buildAnalytics } = await import('../../services/analytics/report-tabs.js');
     const worker = fakeWorker('ready', (kind, req) => Promise.resolve(buildAnalytics(db, kind, req, new Date())));
     h.worker = worker;
-    h.session = MANAGER;
+    h.session = OWNER;
     const r = (await call('reports:trends')) as { ok: true; data: import('@cheeseoclock/shared-types').ReportTrends };
     expect(r.ok).toBe(true);
     expect(r.data).toMatchObject({ engine: 'worker', partial: false });
@@ -401,35 +446,46 @@ live("the owner's week channels (costing Phase 7)", () => {
 
   it('without the worker the trends leave out every stretch over 31 days; the card is whole', async () => {
     saleThisWeek();
-    h.session = MANAGER;
+    h.session = OWNER;
     const t = (await call('reports:trends')) as { ok: true; data: import('@cheeseoclock/shared-types').ReportTrends };
     expect(t.data).toMatchObject({ engine: 'main', partial: true, months: [] });
     expect(t.data.lines.map((l) => l.period)).toEqual(['today', 'week', 'month']);
     expect(await call('reports:ownerWeek', undefined)).toMatchObject({ ok: true, data: { week: 'this', engine: 'main' } });
   });
 
-  it('day notes: report.view adds and takes them off, checked in plain words', async () => {
-    h.session = MANAGER;
+  it('day notes: report.view (the owner) adds and takes them off, checked in plain words; a manager cannot take one off', async () => {
+    h.session = OWNER;
     const added = (await call('reports:addDayNote', { day: TODAY(), tag: 'load_shedding', note: 'No power 7 to 9' })) as { ok: true; data: { id: string } };
-    expect(added).toMatchObject({ ok: true, data: { day: TODAY(), tag: 'load_shedding', note: 'No power 7 to 9', addedBy: 'Test Manager' } });
+    expect(added).toMatchObject({ ok: true, data: { day: TODAY(), tag: 'load_shedding', note: 'No power 7 to 9', addedBy: 'Test Owner' } });
     expect(await call('reports:addDayNote', { day: '2026-02-30', tag: 'rain' })).toMatchObject({ ok: false, code: 'validation_failed', message: 'That is not a real date' });
     expect(await call('reports:addDayNote', { day: TODAY(), tag: 'party' })).toMatchObject({ ok: false, code: 'validation_failed', message: 'Pick what the day was' });
     expect(await call('reports:addDayNote', { day: '2099-01-01', tag: 'closed' })).toMatchObject({ ok: false, code: 'validation_failed', message: 'Pick a day within the next year.' });
+    // A real note, not only a made-up id: a manager is refused, and it stays.
+    h.session = MANAGER;
+    expect(await call('reports:removeDayNote', { id: added.data.id })).toEqual({ ok: false, code: 'forbidden', message: REFUSED['reports'] });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM day_notes WHERE id = ? AND deleted_at IS NULL`).get(added.data.id)).toEqual({ n: 1 });
+    h.session = OWNER;
     expect(await call('reports:removeDayNote', { id: added.data.id })).toEqual({ ok: true, data: { removed: true } });
     expect(await call('reports:removeDayNote', { id: added.data.id })).toEqual({ ok: true, data: { removed: false } });
   });
 
   it('the parts of the day: everyone with reports reads them; only the owner changes them, and overlaps are refused', async () => {
-    h.session = MANAGER;
-    expect(await call('reports:getDayparts')).toMatchObject({ ok: true, data: { isDefault: true, savedAt: null } });
     const mine = { dayparts: [{ name: 'Day', fromHour: 11, toHour: 18 }, { name: 'Night', fromHour: 19, toHour: 2 }] };
-    expect(await call('reports:setDayparts', mine)).toEqual({ ok: false, code: 'forbidden', message: 'Only the owner can change the parts of the day.' });
+    // A manager has no reports since 2026-09-27: neither reads nor changes them.
+    h.session = MANAGER;
+    expect(await call('reports:getDayparts')).toEqual({ ok: false, code: 'forbidden', message: REFUSED['reports'] });
+    expect(await call('reports:setDayparts', mine)).toEqual({ ok: false, code: 'forbidden', message: REFUSED['reports'] });
+    // A login with reports but not the shop's settings (a manager's until then) reads them and may not change them.
     h.session = OWNER;
+    h.noSettings = true;
+    expect(await call('reports:getDayparts')).toMatchObject({ ok: true, data: { isDefault: true, savedAt: null } });
+    expect(await call('reports:setDayparts', mine)).toEqual({ ok: false, code: 'forbidden', message: 'Only the owner can change the parts of the day.' });
+    h.noSettings = false;
     expect(
       await call('reports:setDayparts', { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 16 }, { name: 'Tea', fromHour: 16, toHour: 18 }] }),
     ).toMatchObject({ ok: false, code: 'validation_failed', message: '"Lunch" and "Tea" both take the hour from 16:00' });
     expect(await call('reports:setDayparts', mine)).toMatchObject({ ok: true, data: { isDefault: false, dayparts: mine.dayparts } });
-    h.session = MANAGER;
+    h.noSettings = true;
     expect(await call('reports:getDayparts')).toMatchObject({ ok: true, data: { isDefault: false, dayparts: mine.dayparts } });
     // Saved like every shop-wide setting: synced and audited.
     expect(db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`).get()).toEqual({ n: 1 });

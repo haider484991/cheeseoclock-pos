@@ -23,7 +23,7 @@ export const PAGE_ACCESS = {
   '/customers': { capability: 'customers.manage', label: 'Customers' },
   '/reports': { capability: 'report.view', label: 'Reports' },
   '/users': { capability: 'users.manage', label: 'Users' },
-  // Managers reach Settings for the printers; the page shows them nothing else.
+  // The owner's (printer.manage: managers lost it on 2026-09-27).
   '/settings': { capability: 'printer.manage', label: 'Settings' },
 } as const satisfies Record<string, { capability: Capability; label: string; hideWith?: Capability }>;
 

@@ -22,6 +22,8 @@ import { TillsCard } from './TillsCard';
 export function TargetsTab() {
   const q = useCostingTargets();
   const canEdit = useSessionStore((s) => s.can('settings.manage'));
+  // The parts of the day belong to Reports, which managers don't see.
+  const canSeeReports = useSessionStore((s) => s.can('report.view'));
   return (
     <div className="space-y-3">
       {q.data ? (
@@ -32,7 +34,7 @@ export function TargetsTab() {
       )}
       <AlertSettings canEdit={canEdit} />
       {/* The parts of the day Reports → When uses (costing spec Phase 7). */}
-      <DaypartsCard canEdit={canEdit} />
+      {canSeeReports && <DaypartsCard canEdit={canEdit} />}
       {/* How many tills take orders (costing spec Phase 8). */}
       <TillsCard canEdit={canEdit} />
     </div>

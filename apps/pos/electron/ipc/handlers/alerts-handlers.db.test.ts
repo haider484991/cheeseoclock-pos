@@ -2,8 +2,10 @@
  * Settings → Sounds and the pending order alerts through the real `alerts:*`
  * handlers, against a real SQLite database built from every migration:
  *   - anyone (the PIN screen too) can read the sounds and the pending list;
- *   - only a manager or the owner can change the sounds (a cashier cannot
- *     mute the till) or send the test notice, and a change is audited;
+ *   - only the owner can change the sounds or send the test notice, and a
+ *     change is audited: a cashier cannot mute the till, and a manager no
+ *     longer has Settings (printer.manage; owner, 2026-09-27: "managers
+ *     can't see the reports and settings");
  *   - a "did not come in" card is closed only by someone logged in: logged
  *     out, Seen silences it and the phone number stays on screen;
  *   - an order leaves the pending list (stops ringing) once it has moved past
@@ -119,6 +121,9 @@ const session = (id: string, role: AuthenticatedUser['role']): AuthenticatedUser
 });
 const CASHIER = session('u_cash', 'cashier');
 const MANAGER = session('u_mgr', 'manager');
+const OWNER = session('u_admin', 'admin');
+/** What alerts-handlers.ts says to a login without printer.manage (shown as it is). */
+const SOUNDS_REFUSED = 'Only the owner can change the order sounds.';
 
 let db: ReturnType<typeof openMigrated>;
 
@@ -129,11 +134,15 @@ const call = (channel: string, payload?: unknown) => {
 };
 /** The guard's error code, or null when the call went through. */
 function refusal(channel: string, payload?: unknown): string | null {
+  return refusalWords(channel, payload)?.code ?? null;
+}
+/** The guard's error code and words, or null when the call went through. */
+function refusalWords(channel: string, payload?: unknown): { code: string; message: string } | null {
   try {
     call(channel, payload);
     return null;
   } catch (e) {
-    return (e as { apiError?: { code: string } }).apiError?.code ?? 'threw';
+    return (e as { apiError?: { code: string; message: string } }).apiError ?? { code: 'threw', message: String(e) };
   }
 }
 const count = (sql: string, ...p: unknown[]) => Number(db.prepare(sql).get(...p)?.['n'] ?? 0);
@@ -155,6 +164,7 @@ beforeEach(async () => {
   );
   user.run('u_cash', 'Test Cashier', 'cashier', T0, T0, DEV);
   user.run('u_mgr', 'Test Manager', 'manager', T0, T0, DEV);
+  user.run('u_admin', 'Test Owner', 'admin', T0, T0, DEV);
   const { registerAlertsHandlers } = await import('./alerts-handlers.js');
   registerAlertsHandlers({ db, deviceId: DEV } as never);
 });
@@ -176,8 +186,19 @@ describe.skipIf(!Sqlite)('Settings → Sounds through alerts:*', () => {
     expect(call('alerts:getSounds')).toEqual({ ok: true, data: DEFAULT_ALERT_SOUND_SETTINGS });
   });
 
-  it('a manager can: saved checked, kept for this till, and the audit trail says who', () => {
+  it('a manager cannot either (Settings are the owner\'s since 2026-09-27): refused in plain words; nothing is written', () => {
+    const mute = { ...DEFAULT_ALERT_SOUND_SETTINGS, enabled: false };
     h.session = MANAGER;
+    expect(refusalWords('alerts:setSounds', mute)).toEqual({ code: 'forbidden', message: SOUNDS_REFUSED });
+    expect(refusalWords('alerts:testNotice')).toEqual({ code: 'forbidden', message: SOUNDS_REFUSED });
+    expect(count(`SELECT COUNT(*) AS n FROM settings WHERE key = 'alerts.sounds'`)).toBe(0);
+    expect(count(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_id = 'alerts.sounds'`)).toBe(0);
+    // Reading them needs no login, so a manager still hears (and sees) the standard ones.
+    expect(call('alerts:getSounds')).toEqual({ ok: true, data: DEFAULT_ALERT_SOUND_SETTINGS });
+  });
+
+  it('the owner can: saved checked, kept for this till, and the audit trail says who', () => {
+    h.session = OWNER;
     const r = call('alerts:setSounds', { ...DEFAULT_ALERT_SOUND_SETTINGS, enabled: false, volume: 150, junk: 1 }) as {
       ok: true;
       data: typeof DEFAULT_ALERT_SOUND_SETTINGS;
@@ -190,11 +211,11 @@ describe.skipIf(!Sqlite)('Settings → Sounds through alerts:*', () => {
     const audit = db
       .prepare(`SELECT action, actor_user_id FROM audit_log WHERE entity_type = 'settings' AND entity_id = 'alerts.sounds'`)
       .all();
-    expect(audit).toEqual([{ action: 'settings_change', actor_user_id: 'u_mgr' }]);
+    expect(audit).toEqual([{ action: 'settings_change', actor_user_id: 'u_admin' }]);
   });
 
-  it('a manager can send the test notice (none shows here: no window, no notices)', () => {
-    h.session = MANAGER;
+  it('the owner can send the test notice (none shows here: no window, no notices)', () => {
+    h.session = OWNER;
     expect(call('alerts:testNotice')).toEqual({ ok: true, data: { shown: false } });
   });
 });

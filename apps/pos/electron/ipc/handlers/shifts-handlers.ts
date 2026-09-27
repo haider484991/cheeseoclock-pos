@@ -99,7 +99,7 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('shifts:list', ctx, (_ctx, payload) => {
-    requireCapability('report.view', REFUSED.shiftTotals);
+    requireCapability('report.view', REFUSED.shiftHistory);
     return ok(listShifts(ctx.db, payload ?? {}));
   });
 

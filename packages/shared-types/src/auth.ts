@@ -117,6 +117,12 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'customers.manage',
     'order.history',
   ]),
+  // A manager runs the shift: closes it with the drawer count, approves what
+  // a cashier can't do alone, and looks after the menu, stock and customers.
+  // No Reports (sales figures, the Dashboard's "This week" card, shift
+  // history) and no Settings (printers, sounds, backups): those are the
+  // owner's (owner, 2026-09-27: "managers can't see the reports and
+  // settings").
   manager: new Set<Capability>([
     'menu.manage',
     'order.create',
@@ -127,8 +133,6 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'shift.open',
     'shift.close',
     'cash.movement',
-    'report.view',
-    'printer.manage',
     'riders.manage',
     'customers.manage',
     'order.history',

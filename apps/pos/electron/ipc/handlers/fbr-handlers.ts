@@ -29,7 +29,7 @@ function requireSettingsManage(): AuthenticatedUser {
   if (!hasCapability(s.role, 'settings.manage')) {
     throw new IpcGuardError({
       code: 'forbidden',
-      message: 'FBR settings require manager or admin role',
+      message: 'Only the owner can change the FBR settings.',
     });
   }
   return s;

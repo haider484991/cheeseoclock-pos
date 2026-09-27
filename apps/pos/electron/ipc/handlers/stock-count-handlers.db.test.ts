@@ -10,6 +10,9 @@
  *     two tills taking orders with the link off, or the link on but paused —
  *     and says nothing for one till with the link off (the shop as it runs);
  *   - a stock take is no longer booked as a plain stock row;
+ *   - the variance is Reports (report.view), so the owner's since
+ *     2026-09-27: a manager still counts, and is refused the variance in
+ *     plain words;
  *   - without the Reports worker, the variance is worked out here for 31
  *     days or less, and refused in plain words beyond.
  *
@@ -52,6 +55,7 @@ vi.mock('../../services/auth-service.js', () => ({ getCurrentSession: () => h.se
 const session = (id: string, role: AuthenticatedUser['role']): AuthenticatedUser => ({ id: id as UUID, fullName: id, role, sessionId: 'sess' as UUID });
 const CASHIER = session('u_cash', 'cashier');
 const MANAGER = session('u_mgr', 'manager');
+const OWNER = session('u_admin', 'admin');
 
 let db: ReturnType<typeof openMigrated>;
 let s: Awaited<ReturnType<typeof openCostingShop>>;
@@ -127,7 +131,7 @@ live('stock takes over IPC (costing Phase 8)', () => {
         o: { ok: false, code: 'forbidden', message: 'Only a manager or the owner can do a stock take or see what went missing.' },
       });
     }
-    expect(await call('reports:variance', {})).toEqual({ ok: false, code: 'forbidden', message: 'Only a manager or the owner can see reports.' });
+    expect(await call('reports:variance', {})).toEqual({ ok: false, code: 'forbidden', message: 'Only the owner can see reports.' });
     expect(await call('costing:getTills')).toMatchObject({ ok: false, code: 'forbidden' });
     expect(count(`SELECT COUNT(*) AS n FROM stock_counts`)).toBe(0);
     expect(count(`SELECT COUNT(*) AS n FROM stock_movements WHERE reason = 'count'`)).toBe(0);
@@ -179,18 +183,39 @@ live('stock takes over IPC (costing Phase 8)', () => {
     expect(count(`SELECT COUNT(*) AS n FROM stock_movements WHERE reason = 'count'`)).toBe(0);
   });
 
-  it('without the Reports worker the variance is worked out here for 31 days or less, and refused in plain words beyond', async () => {
+  it('a manager counts, but "used vs should have used" is Reports: refused in plain words, and the owner reads it', async () => {
     h.session = MANAGER;
+    clock('2026-08-01T06:00:00.000Z');
+    const first = await countKeyItems();
+    clock('2026-08-20T06:00:00.000Z');
+    const second = await countKeyItems((id, till) => (id === s.ing.chicken ? till - 400 : till));
+    const refused = { ok: false, code: 'forbidden', message: 'Only the owner can see reports.' };
+    expect(await call('reports:variance', {})).toEqual(refused);
+    expect(await call('reports:variance', { fromCountId: first.count.id, toCountId: second.count.id })).toEqual(refused);
+    // The owner reads what the manager's counts found.
+    h.session = OWNER;
+    const v = await data<ReportVariance>('reports:variance', { fromCountId: first.count.id, toCountId: second.count.id });
+    expect(v).toMatchObject({ state: 'ok' });
+    expect(v.lines.find((l) => l.ingredientId === s.ing.chicken)).toMatchObject({ unexplained: 400 });
+  });
+
+  it('without the Reports worker the variance is worked out here for 31 days or less, and refused in plain words beyond', async () => {
+    // The owner reads it (report.view); the manager does the counting (stock takes stay theirs).
+    h.session = OWNER;
     expect(await data<ReportVariance>('reports:variance', {})).toMatchObject({ state: 'no_counts', staleSync: false });
+    h.session = MANAGER;
     clock('2026-08-01T06:00:00.000Z');
     await countKeyItems();
     clock('2026-08-20T06:00:00.000Z');
     await countKeyItems((id, till) => (id === s.ing.chicken ? till - 400 : till));
+    h.session = OWNER;
     const v = await data<ReportVariance>('reports:variance', {});
     expect(v).toMatchObject({ state: 'ok', staleSync: false, link: { on: false } });
     expect(v.lines.find((l) => l.ingredientId === s.ing.chicken)).toMatchObject({ unexplained: 400, unexplainedCents: 36_000 });
+    h.session = MANAGER;
     clock('2026-09-25T06:00:00.000Z');
     const last = await countKeyItems();
+    h.session = OWNER;
     const longer = await call('reports:variance', { toCountId: last.count.id, fromCountId: v.from!.id });
     expect(longer).toMatchObject({ ok: false, code: 'precondition_failed' });
     expect(longer.ok ? '' : longer.message).toMatch(/^Reports over 31 days are worked out in the background/);

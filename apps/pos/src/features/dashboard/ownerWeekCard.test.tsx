@@ -2,7 +2,9 @@
  * The Dashboard "This week" card (costing spec Phase 7), rendered to static
  * markup (react-dom/server, no browser, nothing asks the till):
  *   - hidden until tapped: the first render has the button and no figure;
- *   - not there at all for a cashier;
+ *   - the owner's alone: not there at all for a cashier, nor for a manager
+ *     (no report.view since 2026-09-27: "managers can't see the reports and
+ *     settings");
  *   - the figures: at most five numbers (each with how it moved, never
  *     last week's amount too) and the "Do this" list, never profit; without
  *     costs, no food cost, no waste and no cost line;
@@ -15,7 +17,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
-import type { OwnerWeek } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, hasCapability, type OwnerWeek, type Role } from '@cheeseoclock/shared-types';
 import { OwnerWeekPanel, OwnerWeekView } from './OwnerWeekCard';
 import type { CardLogin } from './ownerCardClock';
 
@@ -26,9 +28,18 @@ const html = (node: ReactNode) =>
     </QueryClientProvider>,
   );
 
+const OWNER: CardLogin = { who: 'u_admin:admin', stepInEndsAt: null, stepInHeld: false };
 const MANAGER: CardLogin = { who: 'u_mgr:manager', stepInEndsAt: null, stepInHeld: false };
+const CASHIER: CardLogin = { who: 'u_cash:cashier', stepInEndsAt: null, stepInHeld: false };
 
-/** A manager's week, made up: every kind of "Do this" line. */
+/** What OwnerWeekCard hands the panel for a role, read from the real role table (packages/shared-types auth.ts). */
+const canFor = (role: Role) => ({
+  canSeeReports: hasCapability(role, 'report.view'),
+  canSeeCosts: hasCapability(role, COST_CAPABILITY),
+  canOpenStock: hasCapability(role, 'menu.manage'),
+});
+
+/** The owner's week, made up: every kind of "Do this" line. */
 const WEEK: OwnerWeek = {
   week: 'this',
   sinceIso: '2026-09-28T00:00:00.000Z',
@@ -60,7 +71,7 @@ const text = (markup: string) => markup.replace(/<[^>]+>/g, ' ').replace(/&#x27;
 
 describe('the "This week" card', () => {
   it('is hidden until tapped: the button, and no figure at all', () => {
-    const out = html(<OwnerWeekPanel login={MANAGER} canSeeReports canSeeCosts canOpenStock />);
+    const out = html(<OwnerWeekPanel login={OWNER} {...canFor('admin')} />);
     expect(out).toContain('This week');
     expect(out).toContain('Show this week&#x27;s figures');
     expect(out).toContain('Hidden until you tap');
@@ -70,8 +81,13 @@ describe('the "This week" card', () => {
   });
 
   it('is not there for a cashier (no report.view), nor on the PIN pad', () => {
-    expect(html(<OwnerWeekPanel login={{ ...MANAGER, who: 'u_cash:cashier' }} canSeeReports={false} canSeeCosts={false} canOpenStock={false} />)).toBe('');
-    expect(html(<OwnerWeekPanel login={{ ...MANAGER, who: null }} canSeeReports canSeeCosts canOpenStock />)).toBe('');
+    expect(html(<OwnerWeekPanel login={CASHIER} {...canFor('cashier')} />)).toBe('');
+    expect(html(<OwnerWeekPanel login={{ ...OWNER, who: null }} {...canFor('admin')} />)).toBe('');
+  });
+
+  it('is not there for a manager either: Reports are the owner\'s since 2026-09-27', () => {
+    expect(canFor('manager').canSeeReports).toBe(false);
+    expect(html(<OwnerWeekPanel login={MANAGER} {...canFor('manager')} />)).toBe('');
   });
 
   it('five numbers means five: each figure with how it moved, and not last week\'s amount beside it', () => {
