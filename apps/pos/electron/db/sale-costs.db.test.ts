@@ -651,8 +651,10 @@ live('Reports: food cost from the cost each sale kept', () => {
       return sum + exTax - (o.tot > 0 ? Math.round((ref * exTax) / o.tot) : 0);
     }, 0);
     expect(f.foodSalesCents + f.feeSalesCents).toBe(paid);
-    // The delivery charge is not food: its share after the 10% off.
-    expect(f.feeSalesCents).toBe(9_000);
+    // The delivery charge is not food, and the 10% off left it alone (owner,
+    // 28 Sep 2026): its full Rs 100. (A discount given before the rule took
+    // its 10% too, Rs 90: pinned in the next test.)
+    expect(f.feeSalesCents).toBe(10_000);
     expect(f.knownSalesCents + f.missingSalesCents).toBe(f.foodSalesCents);
     // The cost: every kept row of a food line, plus the estimate.
     const keptFood = n(
@@ -679,6 +681,28 @@ live('Reports: food cost from the cost each sale kept', () => {
     expect(f.menuFoodCostBps!).toBeLessThan(f.foodCostBps!);
     // Items still add up to menu sales, whatever food cost does.
     expect(r.items.reduce((t2, i) => t2 + i.salesCents, 0)).toBe(r.kpis.menuSalesCents);
+  });
+
+  it('a discount given before the delivery-charge rule (no rule on its row) keeps its old split: the charge took its 10%', async () => {
+    const s = await shop();
+    const day = new Date('2026-09-20T10:00:00.000Z');
+    // Rung as a 0.7.24 till did: then a discount came off the delivery charge too…
+    const { setBusinessSettings } = await import('./repositories/business-settings-repo.js');
+    const setSwitch = (alsoOffDeliveryCharge: boolean) =>
+      setBusinessSettings(s.db, [{ key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge } }], MANAGER);
+    setSwitch(true);
+    const a = s.ring([['fajitaM', 2, ['noOnion', 'extraOnion', 'extraCheese']], ['delivery', 1]]);
+    s.r.applyDiscount(s.db, { orderId: a, discountType: 'percent', value: 10, reason: 'Test' }, CASHIER);
+    // …and its row carries no rule at all (an older till never wrote one).
+    s.db.prepare(`UPDATE order_discounts SET rule_json = NULL WHERE order_id = ?`).run(a);
+    setSwitch(false);
+    s.send(a);
+    s.markPaid(a, day);
+    const f = s.report('2026-09-20T00:00:00.000Z', '2026-09-21T00:00:00.000Z').foodCost!;
+    // The Rs 100 delivery charge took its 10% off: Rs 90, as it was sold. The owner's rule today (No) changes nothing here.
+    expect(f.feeSalesCents).toBe(9_000);
+    const o = s.db.prepare(`SELECT subtotal_cents AS sub, discount_cents AS disc FROM orders WHERE id = ?`).get(a) as { sub: number; disc: number };
+    expect(f.foodSalesCents + f.feeSalesCents).toBe(o.sub - o.disc);
   });
 
   it('food sent out and never paid (a dine-in served unpaid) is its own line, not in the sales', async () => {

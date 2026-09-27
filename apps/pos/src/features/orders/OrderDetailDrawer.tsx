@@ -15,7 +15,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
+import { discountLeavesDeliveryCharge, isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
 import { paperButtonLabel } from '../printing/paperLabels';
@@ -285,7 +285,10 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                 <Row k="Subtotal" v={formatCents(o.subtotalCents)} />
                 {o.discountCents > 0 && (
                   <Row
-                    k={discountLabel(snap.discounts.find((d) => d.reason)?.reason)}
+                    k={discountLabel(
+                      snap.discounts.find((d) => d.reason)?.reason,
+                      discountLeavesDeliveryCharge(snap.discounts[snap.discounts.length - 1], snap.items),
+                    )}
                     v={`− ${formatCents(o.discountCents)}`}
                     tone="emerald"
                   />
@@ -455,7 +458,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   );
 }
 
-function discountLabel(reason: string | null | undefined): string {
+/** "Discount (Staff)"; "Discount (Staff, food only)" when its frozen rule left the delivery charge alone. */
+function discountLabel(reason: string | null | undefined, foodOnly = false): string {
+  if (foodOnly) return `Discount (${reason ? `${reason}, ` : ''}food only)`;
   return reason ? `Discount (${reason})` : 'Discount';
 }
 

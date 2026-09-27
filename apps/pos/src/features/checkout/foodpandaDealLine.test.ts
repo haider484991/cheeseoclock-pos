@@ -44,6 +44,12 @@ describe('the foodpanda deal line', () => {
     expect(foodpandaDealLine(row(0, 'Foodpanda deal 20% off', { ...fp, minOrderCents: null }), 0).note).toBeNull();
   });
 
+  it('under the minimum with a delivery charge on the order: the food is what counts, not the subtotal', () => {
+    // Rs 900 of food + a Rs 200 charge = Rs 1,100: still under a Rs 1,000-of-food minimum.
+    const fp = { dealPercent: 20, shopPercent: 20, dealCents: 0, platformCents: 0, minOrderCents: 100_000, baseCents: 90_000 };
+    expect(foodpandaDealLine(row(0, 'Foodpanda deal 20% off', fp), 110_000).note).toBe(`Takes off from ${formatCents(100_000)} of food`);
+  });
+
   it('a deal row an older till wrote (no figures): still named', () => {
     expect(foodpandaDealLine(row(0, null, null), 0)).toEqual({ label: 'Foodpanda deal', note: null });
   });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_DISCOUNT_DELIVERY,
   DEFAULT_FOODPANDA_CHECKS,
   DEFAULT_FOODPANDA_DEAL,
   DEFAULT_FOODPANDA_FEES,
@@ -50,6 +51,11 @@ describe('the released defaults are pinned', () => {
     expect(FOODPANDA_TABLET_TOLERANCE_CENTS).toBe(100);
   });
 
+  it('discounts.delivery: NO — a discount leaves the delivery charge alone (the owner, 28 Sep 2026; the one default that is not "what the till did before")', () => {
+    expect(DEFAULT_DISCOUNT_DELIVERY).toEqual({ v: 1, alsoOffDeliveryCharge: false });
+    expect(SHOP_SETTING_DEFAULTS['discounts.delivery']).toBe(DEFAULT_DISCOUNT_DELIVERY);
+  });
+
   it('one default per key, frozen, in the format this version writes', () => {
     expect([...SHOP_SETTING_KEYS]).toEqual([
       'foodpanda.deal',
@@ -57,6 +63,7 @@ describe('the released defaults are pinned', () => {
       'foodpanda.checks',
       'discounts.approval',
       'discounts.presets',
+      'discounts.delivery',
       'staff.timing',
       'kitchen.timing',
     ]);

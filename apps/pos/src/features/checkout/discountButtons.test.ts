@@ -47,7 +47,7 @@ describe('the buttons come from the owner’s values', () => {
 describe('the lock follows the owner’s limit', () => {
   it('a button above the limit shows the lock; one at or under it does not', () => {
     const limits = { percentOver: 15, flatOverCents: 25_000 };
-    const locked = (choice: { type: 'percent' | 'flat'; value: number }) => previewDiscount(lines, subtotal, choice, limits).needsApproval;
+    const locked = (choice: { type: 'percent' | 'flat'; value: number }) => previewDiscount(lines, subtotal, choice, { approval: limits, alsoOffDeliveryCharge: false }).needsApproval;
     expect(locked({ type: 'percent', value: 15 })).toBe(false);
     expect(locked({ type: 'percent', value: 20 })).toBe(true);
     // Rs 250 off Rs 2,000 is 12.5%: under both limits. Today's rule (10%) would lock it.
@@ -59,12 +59,12 @@ describe('the lock follows the owner’s limit', () => {
   it('0% locks every button', () => {
     const none = { percentOver: 0, flatOverCents: 0 };
     for (const b of [...presetButtons(DEFAULT_DISCOUNT_PRESETS).percent, ...presetButtons(DEFAULT_DISCOUNT_PRESETS).flat]) {
-      expect({ b: b.label, locked: previewDiscount(lines, subtotal, b.choice, none).needsApproval }).toEqual({ b: b.label, locked: true });
+      expect({ b: b.label, locked: previewDiscount(lines, subtotal, b.choice, { approval: none, alsoOffDeliveryCharge: false }).needsApproval }).toEqual({ b: b.label, locked: true });
     }
   });
 
   it('the money on the bill never depends on the limit', () => {
-    const a = previewDiscount(lines, subtotal, { type: 'percent', value: 20 }, { percentOver: 50, flatOverCents: 500_000 });
+    const a = previewDiscount(lines, subtotal, { type: 'percent', value: 20 }, { approval: { percentOver: 50, flatOverCents: 500_000 }, alsoOffDeliveryCharge: false });
     const b = previewDiscount(lines, subtotal, { type: 'percent', value: 20 });
     expect({ ...a, needsApproval: null }).toEqual({ ...b, needsApproval: null });
   });
@@ -80,13 +80,19 @@ describe('a till whose rules have not come yet (or with nothing saved) uses the 
         flatCents: [10_000, 20_000, 50_000],
         reasons: ['Staff', 'Friends & family', 'Regular customer', 'Complaint'],
       },
+      // A discount leaves the delivery charge alone (the owner, 28 Sep 2026).
+      alsoOffDeliveryCharge: false,
     });
     expect(kitchenTimingOf(null)).toEqual({ amberMin: 15, redMin: 30, notStartedMin: 10, notDoneMin: 30 });
     expect(kitchenTimingOf(undefined)).toBe(DEFAULT_COUNTER_KITCHEN);
   });
 
   it('what the till answered wins', () => {
-    const discounts = { approval: { percentOver: 5, flatOverCents: 0 }, presets: { percents: [5], flatCents: [100], reasons: ['Test'] } };
+    const discounts = {
+      approval: { percentOver: 5, flatOverCents: 0 },
+      presets: { percents: [5], flatCents: [100], reasons: ['Test'] },
+      alsoOffDeliveryCharge: true,
+    };
     const kitchen = { amberMin: 8, redMin: 12, notStartedMin: 6, notDoneMin: 25 };
     expect(discountRulesOf({ discounts })).toBe(discounts);
     expect(kitchenTimingOf({ kitchen })).toBe(kitchen);

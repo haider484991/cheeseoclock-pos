@@ -3,20 +3,24 @@
  * editable for admin… as a developer I should not change anything every
  * time from code").
  *
- * Two cards, each its own synced setting:
+ * Three cards, each its own synced setting:
  *  - when a cashier needs a manager for a discount ('discounts.approval'):
  *    the one rule, pos-domain requiresManagerApproval, used by the F3
  *    screen's locks, the IPC check and the repository's save and cart
  *    re-check, all with this value;
- *  - the F3 screen's one-tap buttons ('discounts.presets').
+ *  - the F3 screen's one-tap buttons ('discounts.presets');
+ *  - whether a discount also comes off the delivery charge
+ *    ('discounts.delivery'; the owner, 28 Sep 2026: "Delivery charges is
+ *    separate we don't want to add discount to it" — default No). Frozen on
+ *    each discount when it is given: a change never moves one already given.
  * The foodpanda deal keeps its own rules (Settings → foodpanda). The owner
- * alone (the main process refuses anyone else); defaults are exactly what
- * the till did before.
+ * alone (the main process refuses anyone else); the first two defaults are
+ * exactly what the till did before, the third is the owner's answer.
  */
 import { useMemo } from 'react';
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { Lock, MousePointerClick, ShieldCheck } from 'lucide-react';
+import { Bike, Lock, MousePointerClick, ShieldCheck } from 'lucide-react';
 import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
@@ -29,16 +33,24 @@ import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting, useShopSettingsLive } from './shop-rules/useShopSetting';
 import { sameValue } from './shop-rules/foodpandaForm';
 import {
+  DELIVERY_NEVER_CHANGED,
+  DELIVERY_QUESTION,
+  DELIVERY_RULE_NOTE,
   EXAMPLE_SMALL_ORDER_CENTS,
   LOWERED_LIMIT_NOTE,
   approvalExample,
   approvalFromForm,
   approvalSummary,
   approvalToForm,
+  deliveryExample,
+  deliveryFromForm,
+  deliverySummary,
+  deliveryToForm,
   presetPreview,
   presetsFromForm,
   presetsSummary,
   presetsToForm,
+  type DeliveryChargeForm,
   type PresetsForm,
 } from './shop-rules/discountRules';
 
@@ -90,9 +102,9 @@ function MoneyCards({
   return (
     <div className="space-y-6">
       <p className="text-sm text-stone-600 dark:text-stone-400">
-        How much a cashier can take off an order alone, and the one-tap buttons on the Discount screen (F3). Both tills use them
-        as soon as they are linked. Only a manager’s or the owner’s PIN or password approves a bigger discount, as before. The
-        foodpanda deal keeps its own rules under foodpanda.
+        How much a cashier can take off an order alone, the one-tap buttons on the Discount screen (F3), and whether a discount
+        also comes off the delivery charge. Both tills use them as soon as they are linked. Only a manager’s or the owner’s PIN
+        or password approves a bigger discount, as before. The foodpanda deal keeps its own rules under foodpanda.
       </p>
 
       <SettingCard
@@ -237,6 +249,80 @@ function MoneyCards({
           <p className="mt-1 text-xs text-stone-500">Up to {PRESET_REASON_MAX_LENGTH} letters each; it prints on the bill.</p>
         </div>
       </SettingCard>
+
+      <DeliveryChargeCard />
     </div>
+  );
+}
+
+/**
+ * "A discount also comes off the delivery charge" ('discounts.delivery'),
+ * loaded on its own so the two cards above never wait for it.
+ */
+function DeliveryChargeCard() {
+  const s = useShopSetting('discounts.delivery');
+  if (s.q.isError) return <p className="py-6 text-center text-stone-500">Could not load “Discounts and the delivery charge”.</p>;
+  if (!s.q.data) return <p className="py-6 text-center text-stone-500">Loading…</p>;
+  return <DeliveryChargeFields s={s} />;
+}
+
+function DeliveryChargeFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.delivery'>> }) {
+  const card = s.q.data as ShopSettingCard<'discounts.delivery'>;
+  const draft = useDraft(card.value, deliveryToForm);
+  const parsed = useMemo(() => deliveryFromForm(draft.form), [draft.form]);
+  // The example follows the choice as soon as it is made; the saved value until then.
+  const shown = parsed.value ?? card.value;
+  const dirty = draft.touched && (parsed.value === null || !sameValue(parsed.value, card.value));
+  const options: Array<{ id: DeliveryChargeForm; label: string; hint: string }> = [
+    { id: 'no', label: 'No', hint: 'A discount is on the food only. The delivery charge is always paid in full.' },
+    { id: 'yes', label: 'Yes', hint: 'A discount comes off the whole bill, the delivery charge too.' },
+  ];
+  return (
+    <SettingCard
+      card={card}
+      title="Discounts and the delivery charge"
+      icon={<Bike className="h-5 w-5" />}
+      intro="The delivery charge is separate from the food. With No, a % off is worked on the food only, rupees off are at most the food, and even 100% off leaves the delivery charge to pay."
+      describe={deliverySummary}
+      dirty={dirty}
+      problem={parsed.problem}
+      busy={s.save.isPending || s.putBack.isPending}
+      onSave={() => parsed.value && s.save.mutate(parsed.value, { onSuccess: draft.reset })}
+      onPutBack={() => s.putBack.mutate(undefined, { onSuccess: draft.reset })}
+      neverChangedText={DELIVERY_NEVER_CHANGED}
+      footer={
+        <div className="mt-4 space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/60 dark:text-amber-100" aria-live="polite">
+          <p>
+            <span className="font-semibold">For example: </span>
+            {deliveryExample(shown)}
+          </p>
+          <p className="text-xs">{DELIVERY_RULE_NOTE}</p>
+        </div>
+      }
+    >
+      <div>
+        <span className={labelClass}>{DELIVERY_QUESTION}</span>
+        <div role="radiogroup" aria-label={DELIVERY_QUESTION} className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          {options.map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              role="radio"
+              aria-checked={draft.form === o.id}
+              onClick={() => draft.set(o.id)}
+              className={cn(
+                'flex flex-col items-start gap-0.5 rounded-lg border-2 p-3 text-left transition-colors disabled:opacity-60',
+                draft.form === o.id
+                  ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                  : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+              )}
+            >
+              <span className="text-sm font-semibold">{o.label}</span>
+              <span className="text-xs text-stone-500">{o.hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </SettingCard>
   );
 }

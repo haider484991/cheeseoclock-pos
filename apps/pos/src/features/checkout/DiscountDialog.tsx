@@ -9,8 +9,12 @@ import { SecretHint } from '../../components/secret/SecretHint';
 import { approvalProblem, secretReady } from '../../components/secret/secretRules';
 import { ownsEnter } from './keys';
 import { useDiscountRules } from '../settings/shop-rules/useShopSetting';
+import { discountLeavesDeliveryCharge } from '@cheeseoclock/shared-types';
 import {
   describeDiscount,
+  describePreview,
+  discountBaseNow,
+  discountBaseText,
   discountDialogPrimary,
   discountDialogStart,
   parseDiscountEntry,
@@ -35,7 +39,9 @@ interface Props {
  * a manager's PIN or password: pos-domain requiresManagerApproval with the
  * owner's limit (by default over 10%, or a flat amount over Rs 500 or over
  * 10% of the order), the same rule the till checks when it saves the
- * discount. Any other amount can still be typed.
+ * discount. Any other amount can still be typed. By default a discount is
+ * worked on the food only (Settings → Money & discounts: the delivery charge
+ * is paid in full), and the dialog says so on an order that has one.
  */
 export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
@@ -73,8 +79,10 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const typed = parseDiscountEntry(customKind, customText);
   const choice = typing ? typed : picked;
 
-  const before = previewDiscount(lines, subtotal, null, limits);
-  const after = previewDiscount(lines, subtotal, choice, limits);
+  const before = previewDiscount(lines, subtotal, null, rules);
+  const after = previewDiscount(lines, subtotal, choice, rules);
+  // What a discount given now is worked on: the food only, unless the owner's switch says every line.
+  const base = discountBaseNow(lines, subtotal, rules);
   const needsPin = after.needsApproval || dealOn;
   const pinOk = secretReady(pin);
   const canApply = !!choice && after.discountCents > 0 && (!needsPin || pinOk) && !saving && !busy;
@@ -94,7 +102,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
     setPicked(next);
     setArmed(true);
     setCustomText('');
-    if ((previewDiscount(lines, subtotal, next, limits).needsApproval || dealOn) && !pinOk) focusPinSoon();
+    if ((previewDiscount(lines, subtotal, next, rules).needsApproval || dealOn) && !pinOk) focusPinSoon();
   }
 
   async function apply(which: DiscountChoice | null = choice) {
@@ -103,7 +111,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
       setError(typing ? 'That amount does not work — check it.' : 'Pick a discount or type an amount.');
       return;
     }
-    const preview = previewDiscount(lines, subtotal, which, limits);
+    const preview = previewDiscount(lines, subtotal, which, rules);
     if (preview.discountCents <= 0) {
       setError('Nothing to take off this order.');
       return;
@@ -178,7 +186,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
     );
 
   function presetButton(key: string, label: string, preset: DiscountChoice) {
-    const p = previewDiscount(lines, subtotal, preset, limits);
+    const p = previewDiscount(lines, subtotal, preset, rules);
     const selected = !typing && sameChoice(picked, preset);
     return (
       <button
@@ -215,12 +223,15 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
             <div>
               <Dialog.Title className="text-xl font-bold">{removingDeal ? 'Take the foodpanda deal off?' : 'Discount'}</Dialog.Title>
               <Dialog.Description className="text-sm text-stone-500 dark:text-stone-400">
-                Order {formatCents(subtotal)} before tax
+                {discountBaseText(base, subtotal)}
                 {current && (
                   <>
                     {' · '}
                     <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                      now {dealOn && current.reason ? `${current.reason} (set by the owner)` : describeDiscount(currentChoice!)}
+                      now{' '}
+                      {dealOn && current.reason
+                        ? `${current.reason} (set by the owner)`
+                        : `${describeDiscount(currentChoice!)}${discountLeavesDeliveryCharge(current, lines) ? ' food' : ''}`}
                     </span>
                   </>
                 )}
@@ -362,10 +373,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
               {choice ? (
                 <>
                   <div className="flex items-baseline justify-between text-sm">
-                    <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                      {describeDiscount(choice)}
-                      {after.capped && ' (the whole order)'}
-                    </span>
+                    <span className="font-semibold text-emerald-700 dark:text-emerald-400">{describePreview(choice, after, base)}</span>
                     <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
                       −{formatCents(after.discountCents)}
                     </span>

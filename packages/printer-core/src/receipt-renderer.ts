@@ -45,7 +45,7 @@
  */
 
 import type { DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
-import { isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
+import { discountBillLabel, isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
 import {
   centreOnPaper,
@@ -532,7 +532,9 @@ function appendSaleBody(
       if (fp && fp.platformCents > 0) b.line(`Foodpanda deal ${fp.dealPercent}% off, paid by foodpanda`, money(fp.platformCents));
       continue;
     }
-    const tag = d.source === 'foodpanda' && d.reason ? d.reason : d.reason ? `Discount (${d.reason})` : 'Discount';
+    // "Discount (Staff)" — or, when its frozen rule left the delivery charge
+    // alone, "Discount 10% (Staff, food only)".
+    const tag = discountBillLabel(d, snapshot.items);
     b.line(tag, `- ${money(d.amountCents)}`);
     if (d.foodpanda && d.foodpanda.platformCents > 0) {
       b.line('foodpanda pays another', money(d.foodpanda.platformCents));

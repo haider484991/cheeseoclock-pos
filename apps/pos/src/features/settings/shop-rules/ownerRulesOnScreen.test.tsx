@@ -89,6 +89,7 @@ const RULES = (over: Partial<CheckoutRules> = {}): CheckoutRules => ({
   discounts: {
     approval: { percentOver: 10, flatOverCents: 20_000 },
     presets: { percents: [5, 15], flatCents: [15_000, 25_000], reasons: ['Birthday', 'Test reason'] },
+    alsoOffDeliveryCharge: false,
   },
   kitchen: { amberMin: 5, redMin: 10, notStartedMin: 5, notDoneMin: 20 },
   foodpanda: { deal: null, checks: { orderCode: 'optional', tabletTotal: 'optional' }, tabletToleranceCents: 100, upliftBps: 0 },
@@ -130,6 +131,33 @@ describe('the Discount screen (F3)', () => {
     expect(labels.some((l) => l.startsWith('20% off'))).toBe(false);
     expect(words).not.toContain('Regular customer');
     expect(labels).toContain('Other percent off');
+  });
+
+  it('on an order with a delivery charge: worked on the food, and it says so (the owner, 28 Sep 2026)', () => {
+    signIn('cashier');
+    useCheckoutStore.setState({
+      snapshot: {
+        order: { id: 'o2', subtotalCents: 220_000, mode: 'delivery' },
+        items: [
+          { id: 'l1', lineTotalCents: 200_000, taxRateBps: 1600, menuItemName: 'Test Pizza' },
+          { id: 'l2', lineTotalCents: 20_000, taxRateBps: 1600, menuItemName: 'Delivery Charge (Rs 200)' },
+        ],
+        discounts: [],
+      } as unknown as OrderSnapshot,
+      busy: false,
+    });
+    const out = render(<DiscountDialog onClose={() => {}} />, [[CHECKOUT_RULES_KEY, RULES()]]);
+    expect(text(out)).toContain('Food Rs 2,000 before tax · delivery charge Rs 200 not discounted');
+    const labels = ariaLabels(out);
+    // A % of the food, not of Rs 2,200.
+    expect(labels).toContain('5% off, takes Rs 100 off');
+    expect(labels).toContain("15% off, takes Rs 300 off, needs a manager's PIN or password");
+    // The owner's switch on: the whole bill, as before.
+    const whole = render(<DiscountDialog onClose={() => {}} />, [
+      [CHECKOUT_RULES_KEY, RULES({ discounts: { ...RULES().discounts, alsoOffDeliveryCharge: true } })],
+    ]);
+    expect(text(whole)).toContain('Order Rs 2,200 before tax');
+    expect(ariaLabels(whole)).toContain('5% off, takes Rs 110 off');
   });
 
   it('nothing saved (or no answer yet): today’s buttons, locks and rule', () => {
@@ -224,6 +252,38 @@ describe('the owner’s cards', () => {
     expect(words).toContain('Discount buttons');
     expect(words).toContain('Reasons: Birthday.');
     expect(words).toContain('Last changed by Test Owner on this till');
+  });
+
+  it('Money & discounts: "A discount also comes off the delivery charge", No by default, its words built from the value', () => {
+    signIn('admin');
+    const seed = (value: { v: number; alsoOffDeliveryCharge: boolean }, never: boolean): Array<[readonly unknown[], unknown]> => [
+      [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', { v: 1, percentOver: 10, flatOverCents: 50_000 })],
+      [
+        [...SHOP_SETTINGS_KEY, 'discounts.presets'],
+        card('discounts.presets', { v: 1, percents: [10], flatCents: [10_000], reasons: ['Staff'] }),
+      ],
+      [
+        [...SHOP_SETTINGS_KEY, 'discounts.delivery'],
+        { ...card('discounts.delivery', value), ...(never ? { isDefault: true, lastChanged: null } : {}) },
+      ],
+    ];
+    const no = render(<MoneySettings />, seed({ v: 1, alsoOffDeliveryCharge: false }, true));
+    const words = text(no);
+    expect(words).toContain('Discounts and the delivery charge');
+    expect(words).toContain('A discount also comes off the delivery charge');
+    expect(words).toContain(
+      'On Rs 2,000 of food with a Rs 200 delivery charge, 10% off takes Rs 200 off (10% of the food). The Rs 200 delivery charge is paid in full: Rs 3,000 off takes Rs 2,000 (all the food), and even 100% off leaves the Rs 200 delivery charge (and its tax) to pay.',
+    );
+    expect(words).toContain('A discount already on an order keeps the rule it was given with, and paid orders never change.');
+    // Never saved is not "as the till always worked" here.
+    expect(words).toContain('Never changed: a discount is on the food only');
+    expect(words).not.toContain('the till works as it always has');
+    expect(no).toMatch(/aria-checked="true"[^>]*>\s*<span[^>]*>No</);
+
+    const yes = text(render(<MoneySettings />, seed({ v: 1, alsoOffDeliveryCharge: true }, false)));
+    expect(yes).toContain(
+      'On Rs 2,000 of food with a Rs 200 delivery charge, 10% off takes Rs 220 off: the delivery charge is discounted too. Rs 3,000 off takes Rs 2,200, and 100% off leaves nothing to pay.',
+    );
   });
 
   it('Staff & kitchen timing: both cards, with examples built from the saved values', () => {

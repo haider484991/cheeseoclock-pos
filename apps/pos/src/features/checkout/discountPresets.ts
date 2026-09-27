@@ -1,14 +1,16 @@
 import {
-  allocateDiscount,
   computeDiscountCents,
-  computeTax,
+  discountBaseCents,
   formatCents,
   requiresManagerApproval,
+  taxAfterDiscount,
+  type TaxedDiscountLine,
 } from '@cheeseoclock/pos-domain';
 import {
   DEFAULT_DISCOUNT_APPROVAL,
+  DEFAULT_DISCOUNT_DELIVERY,
   DEFAULT_DISCOUNT_PRESETS,
-  type ApprovalLimits,
+  type CheckoutRules,
   type DiscountPresets,
 } from '@cheeseoclock/shared-types';
 
@@ -125,45 +127,95 @@ export function describeDiscount(d: DiscountChoice): string {
   return d.type === 'percent' ? `${d.value}% off` : `${formatCents(d.value)} off`;
 }
 
+/**
+ * The preview's words for a choice: "10% off", or "10% off food" when the
+ * order has a delivery charge the discount leaves alone; a rupee amount
+ * bigger than what it is worked on says so ("(the whole order)", "(all the
+ * food)").
+ */
+export function describePreview(d: DiscountChoice, p: Pick<DiscountPreview, 'capped'>, base: Pick<DiscountBaseNow, 'untouchedCents'>): string {
+  const foodOnly = base.untouchedCents > 0;
+  const capped = p.capped ? (foodOnly ? ' (all the food)' : ' (the whole order)') : '';
+  return `${describeDiscount(d)}${foodOnly ? ' food' : ''}${capped}`;
+}
+
+/** The dialog's header: "Order Rs 2,000 before tax", or "Food Rs 2,000 before tax · delivery charge Rs 200 not discounted". */
+export function discountBaseText(p: DiscountBaseNow, subtotalCents: number): string {
+  if (p.untouchedCents > 0) {
+    return `Food ${formatCents(p.baseCents)} before tax · delivery charge ${formatCents(p.untouchedCents)} not discounted`;
+  }
+  return `Order ${formatCents(subtotalCents)} before tax`;
+}
+
 export interface DiscountPreview {
   discountCents: number;
   taxCents: number;
   totalCents: number;
   /** Needs a manager's PIN: pos-domain requiresManagerApproval with the owner's limit, the rule the till enforces when saving. */
   needsApproval: boolean;
-  /** A flat amount bigger than the order: only the order's worth comes off. */
+  /** A flat amount bigger than what it is worked on: only that much comes off. */
   capped: boolean;
 }
 
+/** What a discount given now is worked on, for the dialog's words. */
+export interface DiscountBaseNow {
+  /** Before tax: the food only, or (the owner's switch on) every line — the order's subtotal. */
+  baseCents: number;
+  /** The delivery charge on this order that a discount leaves alone (0 when there is none, or the switch is on). */
+  untouchedCents: number;
+}
+
+/** The F3 screen's rules (checkout:getRules): the approval limit and whether a discount also comes off the delivery charge. */
+export type DiscountScreenRules = Pick<CheckoutRules['discounts'], 'approval' | 'alsoOffDeliveryCharge'>;
+
+/** The released rules: 10% / Rs 500, and a discount leaves the delivery charge alone. */
+export const RELEASED_SCREEN_RULES: DiscountScreenRules = {
+  approval: { percentOver: DEFAULT_DISCOUNT_APPROVAL.percentOver, flatOverCents: DEFAULT_DISCOUNT_APPROVAL.flatOverCents },
+  alsoOffDeliveryCharge: DEFAULT_DISCOUNT_DELIVERY.alsoOffDeliveryCharge,
+};
+
 /**
- * The bill if `choice` were applied now. `lines` are the order's lines in
- * ticket order (their line totals and tax rates); `subtotalCents` is their sum.
- * With no choice it is the bill with no discount. `limits` is the owner's
- * approval limit (checkout:getRules); the released 10% / Rs 500 when absent.
+ * The bill if `choice` were applied now, worked out exactly as the till does
+ * when the discount is saved (order-repo applyDiscount / recomputeOrderTotals,
+ * pos-domain discount-base.ts): a % of the food (every line with the owner's
+ * switch on), a rupee amount at most that, split over the lines in whole
+ * paisa with a delivery charge the discount leaves alone taking none, tax on
+ * what is left of each line; the lock on the same base. `lines` are the
+ * order's lines in ticket order (their totals, tax rates and the names they
+ * were sold under); `subtotalCents` is their sum. With no choice it is the
+ * bill with no discount. `rules` are the owner's (checkout:getRules); the
+ * released ones when absent.
  */
 export function previewDiscount(
-  lines: ReadonlyArray<{ lineTotalCents: number; taxRateBps?: number }>,
+  lines: ReadonlyArray<TaxedDiscountLine>,
   subtotalCents: number,
   choice: DiscountChoice | null,
-  limits: ApprovalLimits = DEFAULT_DISCOUNT_APPROVAL,
+  rules: DiscountScreenRules = RELEASED_SCREEN_RULES,
 ): DiscountPreview {
-  const discountCents = choice ? computeDiscountCents(subtotalCents, choice) : 0;
-  let taxCents = 0;
-  if (subtotalCents > 0) {
-    const shares = allocateDiscount(
-      lines.map((l) => l.lineTotalCents),
-      discountCents,
-    );
-    lines.forEach((line, i) => {
-      const net = Math.max(0, line.lineTotalCents - (shares[i] ?? 0));
-      taxCents += computeTax(net, line.taxRateBps ?? 0, 'exclusive').taxCents as number;
-    });
-  }
+  const alsoOff = rules.alsoOffDeliveryCharge;
+  const { baseCents } = discountBaseNow(lines, subtotalCents, rules);
+  const discountCents = choice ? computeDiscountCents(baseCents, choice) : 0;
+  const taxCents = subtotalCents > 0 ? taxAfterDiscount(lines, discountCents, alsoOff).taxCents : 0;
   return {
     discountCents,
     taxCents,
     totalCents: subtotalCents - discountCents + taxCents,
-    needsApproval: choice ? requiresManagerApproval(choice, subtotalCents, limits) : false,
-    capped: !!choice && choice.type === 'flat' && choice.value > subtotalCents,
+    needsApproval: choice ? requiresManagerApproval(choice, baseCents, rules.approval) : false,
+    capped: !!choice && choice.type === 'flat' && choice.value > baseCents,
   };
+}
+
+/**
+ * What a discount given now is worked on (pos-domain discountBaseCents): with
+ * the switch on, every line — the order's subtotal, exactly as before; else
+ * the food only, and the delivery charge it leaves alone.
+ */
+export function discountBaseNow(
+  lines: ReadonlyArray<TaxedDiscountLine>,
+  subtotalCents: number,
+  rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'> = RELEASED_SCREEN_RULES,
+): DiscountBaseNow {
+  if (rules.alsoOffDeliveryCharge) return { baseCents: subtotalCents, untouchedCents: 0 };
+  const baseCents = discountBaseCents(lines, false);
+  return { baseCents, untouchedCents: Math.max(0, subtotalCents - baseCents) };
 }

@@ -1,11 +1,18 @@
 /**
- * Settings → Money & discounts: the approval limit and the F3 buttons, as
- * typed ↔ as saved, and in plain words. The main process checks every value
+ * Settings → Money & discounts: the approval limit, the F3 buttons and
+ * whether a discount also comes off the delivery charge, as typed ↔ as
+ * saved, and in plain words. The main process checks every value
  * again with the key's schema (shared-schemas business-settings.ts); this
  * only says what is wrong before Save, in the same plain words. Every number
  * in the words comes from the values.
  */
-import { formatCents, mostOffWithoutManagerCents, requiresManagerApproval } from '@cheeseoclock/pos-domain';
+import {
+  computeDiscountCents,
+  discountBaseCents,
+  formatCents,
+  mostOffWithoutManagerCents,
+  requiresManagerApproval,
+} from '@cheeseoclock/pos-domain';
 import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
@@ -17,6 +24,7 @@ import {
   SHOP_SETTING_FORMAT,
   type ApprovalLimits,
   type DiscountApproval,
+  type DiscountDelivery,
   type DiscountPresets,
 } from '@cheeseoclock/shared-types';
 import { centsFromRupeesText } from './foodpandaWords';
@@ -88,6 +96,72 @@ export function approvalExample(a: ApprovalLimits): string {
  */
 export const LOWERED_LIMIT_NOTE =
   'Lowering it takes a discount off an order still being rung up, the next time its items change, if no manager’s PIN or password was typed for it: that includes a discount a manager or the owner gave on their own login. It goes back on with a manager’s PIN or password. Paid orders never change.';
+
+// ------------------------------------------------------ delivery charge --
+
+/** The card's choice: does a discount also come off the delivery charge? */
+export type DeliveryChargeForm = 'yes' | 'no';
+
+export function deliveryToForm(d: Pick<DiscountDelivery, 'alsoOffDeliveryCharge'>): DeliveryChargeForm {
+  return d.alsoOffDeliveryCharge ? 'yes' : 'no';
+}
+
+export function deliveryFromForm(f: DeliveryChargeForm): Parsed<DiscountDelivery> {
+  return { value: { v: SHOP_SETTING_FORMAT['discounts.delivery'], alsoOffDeliveryCharge: f === 'yes' }, problem: null };
+}
+
+/** The question on the card, as the owner reads it. */
+export const DELIVERY_QUESTION = 'A discount also comes off the delivery charge';
+
+/** One line for History (and "Put back the default"). */
+export function deliverySummary(d: Pick<DiscountDelivery, 'alsoOffDeliveryCharge'>): string {
+  return d.alsoOffDeliveryCharge
+    ? 'Yes: a discount comes off the delivery charge too'
+    : 'No: a discount is on the food only; the delivery charge is paid in full';
+}
+
+/** The made-up order the example uses: Rs 2,000 of food and a Rs 200 delivery charge. */
+export const EXAMPLE_FOOD_CENTS = 200_000;
+export const EXAMPLE_DELIVERY_CHARGE_CENTS = 20_000;
+const EXAMPLE_LINES = [
+  { lineTotalCents: EXAMPLE_FOOD_CENTS, menuItemName: 'Example pizza' },
+  { lineTotalCents: EXAMPLE_DELIVERY_CHARGE_CENTS, menuItemName: `Delivery Charge (${formatCents(EXAMPLE_DELIVERY_CHARGE_CENTS)})` },
+];
+
+/**
+ * The worked example, from the value and the till's own maths (pos-domain
+ * discountBaseCents / computeDiscountCents): "On Rs 2,000 of food with a
+ * Rs 200 delivery charge, 10% off takes Rs 200 off. The Rs 200 delivery charge
+ * is paid in full: even 100% off leaves it (and its tax) to pay."
+ */
+export function deliveryExample(d: Pick<DiscountDelivery, 'alsoOffDeliveryCharge'>): string {
+  const also = d.alsoOffDeliveryCharge;
+  const base = discountBaseCents(EXAMPLE_LINES, also);
+  const subtotal = EXAMPLE_FOOD_CENTS + EXAMPLE_DELIVERY_CHARGE_CENTS;
+  const tenOff = computeDiscountCents(base, { type: 'percent', value: 10 });
+  const leftAtAll = subtotal - computeDiscountCents(base, { type: 'percent', value: 100 });
+  const bigFlat = 300_000;
+  const flatOff = computeDiscountCents(base, { type: 'flat', value: bigFlat });
+  const order = `On ${formatCents(EXAMPLE_FOOD_CENTS)} of food with a ${formatCents(EXAMPLE_DELIVERY_CHARGE_CENTS)} delivery charge`;
+  if (also) {
+    return (
+      `${order}, 10% off takes ${formatCents(tenOff)} off: the delivery charge is discounted too. ` +
+      `${formatCents(bigFlat)} off takes ${formatCents(flatOff)}, and 100% off leaves ${leftAtAll > 0 ? formatCents(leftAtAll) : 'nothing'} to pay.`
+    );
+  }
+  return (
+    `${order}, 10% off takes ${formatCents(tenOff)} off (10% of the food). The ${formatCents(EXAMPLE_DELIVERY_CHARGE_CENTS)} delivery charge is paid in full: ` +
+    `${formatCents(bigFlat)} off takes ${formatCents(flatOff)} (all the food), and even 100% off leaves the ${formatCents(leftAtAll)} delivery charge (and its tax) to pay.`
+  );
+}
+
+/** What changing it does, and what it never touches (the note under the example). */
+export const DELIVERY_RULE_NOTE =
+  'A change counts for discounts given from then on, on both tills, and the approval limit is checked on the same amount. A discount already on an order keeps the rule it was given with, and paid orders never change. Website orders keep the website’s own prices. The foodpanda deal follows the rule in force when the order became foodpanda.';
+
+/** "Never changed" is not "as the till always worked" here: until this setting, a discount came off the delivery charge too. */
+export const DELIVERY_NEVER_CHANGED =
+  'Never changed: a discount is on the food only (your rule of 28 Sep 2026). Before this setting, discounts came off the delivery charge too.';
 
 // -------------------------------------------------------------- buttons --
 

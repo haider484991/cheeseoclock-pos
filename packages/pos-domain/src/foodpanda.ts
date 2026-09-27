@@ -54,9 +54,16 @@ export function foodpandaDealLabel(dealPercent: number, shopPercent: number): st
 /**
  * The terms frozen onto an order's discount row when it becomes foodpanda:
  * the deal, and how much dearer the listing is then (`upliftBps`, from
- * 'foodpanda.fees'), since foodpanda's minimum and most-off are in its prices.
+ * 'foodpanda.fees'), since foodpanda's minimum and most-off are in its prices;
+ * and whether it also comes off a delivery charge on the order
+ * ('discounts.delivery' then; left out = every line, as before 0.7.25).
  */
-export function foodpandaDealRule(deal: FoodpandaDeal, settingsAt: string | null, upliftBps = 0): FoodpandaDealRule {
+export function foodpandaDealRule(
+  deal: FoodpandaDeal,
+  settingsAt: string | null,
+  upliftBps = 0,
+  alsoOffDeliveryCharge?: boolean,
+): FoodpandaDealRule {
   const shop = Math.min(deal.shopPercent, deal.percent);
   return {
     kind: 'foodpanda_deal',
@@ -68,6 +75,7 @@ export function foodpandaDealRule(deal: FoodpandaDeal, settingsAt: string | null
     maxOffCents: deal.maxOffCents,
     settingsAt,
     upliftBps: upliftBps > 0 ? upliftBps : 0,
+    ...(typeof alsoOffDeliveryCharge === 'boolean' ? { alsoOffDeliveryCharge } : {}),
   };
 }
 
@@ -102,7 +110,21 @@ export function parseFoodpandaDealRule(json: string | null | undefined): Foodpan
   // A rule written without the uplift was frozen at the till's prices.
   const upliftBps = r['upliftBps'] ?? 0;
   if (!isWholeIn(upliftBps, 0, 10_000)) return null;
-  return { kind: 'foodpanda_deal', v: 1, label, dealPercent, shopPercent, minOrderCents, maxOffCents, settingsAt, upliftBps };
+  // Whether the deal also came off a delivery charge (0.7.25): kept only when
+  // written; a rule without it covered every line, and reads that way.
+  const alsoOff = r['alsoOffDeliveryCharge'];
+  return {
+    kind: 'foodpanda_deal',
+    v: 1,
+    label,
+    dealPercent,
+    shopPercent,
+    minOrderCents,
+    maxOffCents,
+    settingsAt,
+    upliftBps,
+    ...(typeof alsoOff === 'boolean' ? { alsoOffDeliveryCharge: alsoOff } : {}),
+  };
 }
 
 export interface DealAmount {

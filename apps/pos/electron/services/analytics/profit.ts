@@ -29,7 +29,9 @@
  * a line's cost rows folded into one number by an indexed look-up
  * (idx_order_item_costs_line_part); only the others are read line by line,
  * each with its discount and part refunds shared out (pos-domain
- * splitOrderLines — the one allocation the till has).
+ * splitOrderLines — the one allocation the till has; a delivery charge the
+ * discount's FROZEN rule left alone takes none of it, from the rule on the
+ * discount row and the name the line was sold under, never the live setting).
  *
  * The waterfall: sales before tax − food cost of the sales whose cost is
  * known − the sales whose cost is NOT known (set aside, never costed at Rs 0)
@@ -65,9 +67,11 @@ import {
 import {
   addOrderFoodCost,
   contributionCents,
+  discountRuleAlsoOffDeliveryCharge,
   emptyFoodCostTally,
   foodpandaOrderMoney,
   isNoRateDelivery,
+  lineTakesDiscount,
   knownOrderShare,
   knownShareCents,
   mulDivRound,
@@ -87,6 +91,7 @@ import {
 import type { AppDatabase } from '../../db/connection.js';
 import { getBusinessSetting, readShopSetting } from '../../db/business-settings-read.js';
 import {
+  DISCOUNT_RULE,
   FEE_LINE,
   KEPT_TERMS_COLUMNS,
   PLAIN_KEPT,
@@ -189,9 +194,10 @@ export const PROFIT_PLAIN_SQL = `
 export const PROFIT_REST_SQL = `
   WITH ro AS MATERIALIZED (
          SELECT o.rowid AS oid, o.id AS id, o.discount_cents AS disc, o.total_cents AS tot, ${REFUNDED} AS ref,
-                o.mode AS mode, o.source AS source, ${AREA} AS area
+                o.mode AS mode, o.source AS source, ${AREA} AS area, ${DISCOUNT_RULE} AS drule
            FROM orders o WHERE ${IN_RANGE} AND ${COUNTED} AND NOT ${PLAIN_KEPT})
   SELECT ro.oid AS oid, ro.id AS orderId, ro.disc AS disc, ro.tot AS tot, ro.ref AS ref, ro.mode AS mode, ro.source AS source, ro.area AS area,
+         ro.drule AS drule,
          oi.id AS lineId, oi.created_at AS at,
          oi.menu_item_id AS itemId, oi.menu_item_name AS soldName, oi.quantity AS qty, oi.line_total_cents AS lineTotal,
          ${FEE_LINE} AS isFee,
@@ -427,6 +433,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     mode: string;
     source: string;
     area: string | null;
+    drule: string | null;
     lineId: string;
     at: string;
     itemId: string | null;
@@ -448,6 +455,8 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     mode: string;
     source: string;
     area: string | null;
+    /** The discount's frozen rule: it also came off the delivery charge (no rule: yes, as before 0.7.25). */
+    alsoOff: boolean;
     order: FoodCostOrder;
     lines: RestLine[];
   }
@@ -462,6 +471,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
         mode: r.mode,
         source: r.source,
         area: r.area,
+        alsoOff: discountRuleAlsoOffDeliveryCharge(r.drule),
         order: { discountCents: Number(r.disc), totalCents: Number(r.tot), refundedCents: Number(r.ref), lines: [], estimate: null },
         lines: [],
       };
@@ -478,6 +488,8 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
         quantity: Number(r.qty),
         lineTotalCents: Number(r.lineTotal),
         isFee: Number(r.isFee) === 1,
+        // By the name it was SOLD under (never the live menu or "not food" categories).
+        skipsDiscount: !lineTakesDiscount({ menuItemName: r.soldName }, o.alsoOff),
         parts: c.parts,
         costCents: c.cost,
         status: c.status,

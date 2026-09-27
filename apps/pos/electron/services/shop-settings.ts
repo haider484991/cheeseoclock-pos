@@ -69,12 +69,14 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
   const { upliftBps } = readShopSetting(db, 'foodpanda.fees').value;
   const approval = readShopSetting(db, 'discounts.approval').value;
   const presets = readShopSetting(db, 'discounts.presets').value;
+  const delivery = readShopSetting(db, 'discounts.delivery').value;
   const kitchen = readShopSetting(db, 'kitchen.timing').value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
   return {
     discounts: {
       approval: { percentOver: approval.percentOver, flatOverCents: approval.flatOverCents },
       presets: { percents: [...presets.percents], flatCents: [...presets.flatCents], reasons: [...presets.reasons] },
+      alsoOffDeliveryCharge: delivery.alsoOffDeliveryCharge,
     },
     kitchen: {
       amberMin: kitchen.amberMin,

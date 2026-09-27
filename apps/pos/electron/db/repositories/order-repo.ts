@@ -17,24 +17,28 @@ import {
   IS_SALE_SQL,
   NET_TOTAL_SQL,
 } from '../order-history-query.js';
-import { computeTax, kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
+import { kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
 import {
   activeFoodpandaDeal,
-  allocateDiscount,
   computeDiscountCents,
   dealAmount,
   dealMinTillCents,
+  discountBaseCents,
+  discountRuleAlsoOffDeliveryCharge,
   foodpandaDealRule,
   foodpandaTerms,
   parseFoodpandaDealRule,
+  taxAfterDiscount,
+  tillDiscountRule,
   validateOrderForTender,
   validateVoid,
   validateDiscountInput,
   requiresManagerApproval,
 } from '@cheeseoclock/pos-domain';
-import { readApprovalLimits, readShopSetting } from '../business-settings-read.js';
+import { readApprovalLimits, readDiscountAlsoOffDeliveryCharge, readShopSetting } from '../business-settings-read.js';
 import { COC_ID_NAMESPACE, FOODPANDA_ORDER_CODE_MAX } from '@cheeseoclock/shared-types';
 import type {
+  DiscountBaseRule,
   FoodpandaTenderCheck,
   Order,
   OrderItem,
@@ -572,8 +576,16 @@ function putOnFoodpandaDeal(db: AppDatabase, order: Order, actor: Actor & { user
   const setting = readShopSetting(db, 'foodpanda.deal');
   const deal = activeFoodpandaDeal(setting.value, order.createdAt);
   if (!deal) return false;
-  // Frozen with how much dearer the listing is now: foodpanda's minimum and most-off are in its prices.
-  const rule = foodpandaDealRule(deal, setting.savedAt, readShopSetting(db, 'foodpanda.fees').value.upliftBps);
+  // Frozen with how much dearer the listing is now (foodpanda's minimum and
+  // most-off are in its prices), and whether a discount comes off the
+  // delivery charge now (Settings → Money & discounts: by default no — the
+  // deal, its minimum and its most-off are worked on the food).
+  const rule = foodpandaDealRule(
+    deal,
+    setting.savedAt,
+    readShopSetting(db, 'foodpanda.fees').value.upliftBps,
+    readDiscountAlsoOffDeliveryCharge(db),
+  );
   const now = nowIso();
 
   const replaced = db
@@ -1300,10 +1312,42 @@ export interface ApplyDiscountInput {
   approverUserId?: string | null;
 }
 
+/**
+ * Repository-only options of applyDiscount (never through the IPC contract:
+ * the screen can't choose the rule).
+ */
+export interface ApplyDiscountOptions {
+  /**
+   * The rule to freeze on the discount instead of the till's Settings switch
+   * ('discounts.delivery'): the web bridge passes the website's own
+   * (pos-domain websiteDiscountRule), so a web order keeps exactly what the
+   * customer was shown.
+   */
+  rule?: DiscountBaseRule;
+}
+
+/**
+ * An order's live lines as the discount maths sees them (pos-domain
+ * discount-base.ts): what each came to, the name it was sold under and its
+ * tax rate, in the till's order ((created_at, id)) — the order the discount
+ * is split in, here, on the F3 screen and on the FBR invoice.
+ */
+function discountLinesOf(db: AppDatabase, orderId: string): Array<{ lineTotalCents: number; menuItemName: string; taxRateBps: number }> {
+  const rows = db
+    .prepare(
+      `SELECT line_total_cents, menu_item_name, tax_rate_bps_snapshot
+         FROM order_items WHERE order_id = ? AND deleted_at IS NULL
+        ORDER BY created_at, id`,
+    )
+    .all(orderId) as Array<{ line_total_cents: number; menu_item_name: string; tax_rate_bps_snapshot: number }>;
+  return rows.map((r) => ({ lineTotalCents: r.line_total_cents, menuItemName: r.menu_item_name, taxRateBps: r.tax_rate_bps_snapshot }));
+}
+
 export function applyDiscount(
   db: AppDatabase,
   input: ApplyDiscountInput,
   actor: Actor & { userId: string },
+  opts: ApplyDiscountOptions = {},
 ): void {
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
@@ -1314,11 +1358,21 @@ export function applyDiscount(
     const v = validateDiscountInput({ discountType: input.discountType, value: input.value });
     if (!v.ok) throw new Error(v.missing.join('; '));
 
+    // The rule this discount is given under, FROZEN on its row below: does it
+    // also come off the delivery charge? The till's switch as it is now
+    // (Settings → Money & discounts), or the website's own for a web order.
+    // Everything after — each cart change, the tax, the FBR invoice, profit,
+    // a reprint — follows the row, never the live setting.
+    const rule = opts.rule ?? tillDiscountRule(readDiscountAlsoOffDeliveryCharge(db));
+    // What it is worked on: the food only, unless the rule says every line.
+    const base = discountBaseCents(discountLinesOf(db, input.orderId), rule.alsoOffDeliveryCharge);
+
     // Repo-level approval guard — defense in depth even if a future caller
     // bypasses the IPC handler (which already enforces it via verifyManagerPin).
-    // The live limit (Settings → Money & discounts), the same rule as the screen and the handler.
+    // The live limit (Settings → Money & discounts), the same rule as the screen
+    // and the handler, on the same base as the amount.
     if (
-      requiresManagerApproval({ type: input.discountType, value: input.value }, order.subtotalCents, readApprovalLimits(db)) &&
+      requiresManagerApproval({ type: input.discountType, value: input.value }, base, readApprovalLimits(db)) &&
       !input.approverUserId
     ) {
       throw new Error('Manager approval is required for this discount');
@@ -1330,7 +1384,9 @@ export function applyDiscount(
       throw new Error(FOODPANDA_DEAL_NEEDS_MANAGER);
     }
 
-    const amount = computeDiscountCents(order.subtotalCents, {
+    // A % of the base; a rupee amount capped at it (100% off the food leaves
+    // the delivery charge to pay).
+    const amount = computeDiscountCents(base, {
       type: input.discountType,
       value: input.value,
     });
@@ -1355,12 +1411,14 @@ export function applyDiscount(
       });
     }
 
+    // source stays NULL (a staff or website discount: Reports group by it),
+    // and the rule goes in rule_json (migration 0040; synced with the row).
     const discountId = uuidv7();
     db.prepare(
       `INSERT INTO order_discounts
          (id, order_id, discount_type, value, reason, applied_by_user_id, approved_by_user_id,
-          amount_cents, created_at, updated_at, device_id, version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          amount_cents, rule_json, created_at, updated_at, device_id, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     ).run(
       discountId,
       input.orderId,
@@ -1370,6 +1428,7 @@ export function applyDiscount(
       actor.userId,
       input.approverUserId ?? null,
       amount,
+      JSON.stringify(rule),
       now,
       now,
       actor.deviceId,
@@ -1379,7 +1438,7 @@ export function applyDiscount(
       entityType: 'order_discounts',
       entityId: discountId,
       op: 'upsert',
-      payload: { ...input, id: discountId, amountCents: amount },
+      payload: { ...input, id: discountId, amountCents: amount, rule },
     });
     writeAudit(db, {
       entityType: 'order_discounts',
@@ -1387,7 +1446,7 @@ export function applyDiscount(
       action: 'create',
       actorUserId: actor.userId,
       before: null,
-      after: { ...input, amountCents: amount, approverUserId: input.approverUserId },
+      after: { ...input, amountCents: amount, approverUserId: input.approverUserId, rule },
     });
 
     recomputeOrderTotals(db, input.orderId, actor);
@@ -1488,7 +1547,7 @@ function recomputeOrderTotals(
     .prepare(
       `SELECT id, discount_type, value, amount_cents, approved_by_user_id, source, rule_json FROM order_discounts
          WHERE order_id = ? AND deleted_at IS NULL
-         ORDER BY created_at DESC LIMIT 1`,
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
     )
     .get(orderId) as
     | {
@@ -1501,17 +1560,26 @@ function recomputeOrderTotals(
         rule_json: string | null;
       }
     | undefined;
+  // The lines in the till's order: what the discount is worked on and split over.
+  const lines = discountLinesOf(db, orderId);
+  // Does the discount also come off the delivery charge? The rule FROZEN on
+  // its row when it was given — never the live setting. A row with no rule
+  // (given before 0.7.25, or on a 0.7.24 till) covers every line, as then.
+  const alsoOffDeliveryCharge = discountRow ? discountRuleAlsoOffDeliveryCharge(discountRow.rule_json) : true;
+  // What it is worked on: the food only, or every line (the subtotal).
+  const base = discountBaseCents(lines, alsoOffDeliveryCharge);
   let discount = 0;
   if (discountRow) {
     const d = { type: discountRow.discount_type, value: discountRow.value };
     const now = nowIso();
     // The shop's foodpanda deal: re-worked from the terms frozen on the row
-    // (the minimum, the most off), never from the live setting — and never
-    // cleared by the approval re-check (the owner set it). A rule this
-    // version can't read is worked as its type and value, as an older till does.
+    // (the minimum, the most off, the delivery charge), never from the live
+    // setting — and never cleared by the approval re-check (the owner set
+    // it). A rule this version can't read is worked as its type and value on
+    // the whole subtotal, as an older till does.
     const dealRule = discountRow.source === 'foodpanda' ? parseFoodpandaDealRule(discountRow.rule_json) : null;
     if (discountRow.source === 'foodpanda') {
-      discount = dealRule ? dealAmount(dealRule, subtotal).shopCents : computeDiscountCents(subtotal, d);
+      discount = dealRule ? dealAmount(dealRule, base).shopCents : computeDiscountCents(subtotal, d);
       if (discount !== discountRow.amount_cents) {
         db.prepare(
           `UPDATE order_discounts SET amount_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
@@ -1523,7 +1591,7 @@ function recomputeOrderTotals(
           payload: { id: discountRow.id, amountCents: discount },
         });
       }
-    } else if (!discountRow.approved_by_user_id && requiresManagerApproval(d, subtotal, readApprovalLimits(db))) {
+    } else if (!discountRow.approved_by_user_id && requiresManagerApproval(d, base, readApprovalLimits(db))) {
       // Unapproved, and now over the limit: a flat discount that has become
       // more than the % limit of a shrunken cart, or any discount over a
       // limit the owner has lowered since (Settings → Money & discounts, read
@@ -1542,7 +1610,7 @@ function recomputeOrderTotals(
         after: null,
       });
     } else {
-      discount = computeDiscountCents(subtotal, d);
+      discount = computeDiscountCents(base, d);
       if (discount !== discountRow.amount_cents) {
         db.prepare(
           `UPDATE order_discounts SET amount_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
@@ -1559,23 +1627,11 @@ function recomputeOrderTotals(
 
   // Tax = per-line tax on (line_total - its share of the discount) * rate.
   // The discount is split over the lines by weight in whole paisa that add up
-  // to it exactly (allocateDiscount); the FBR mapper and the website's
-  // estimate split it the same way. Lines in insertion order so all three agree.
-  let tax = 0;
-  const lineRows = db
-    .prepare(
-      `SELECT line_total_cents, tax_rate_bps_snapshot
-         FROM order_items WHERE order_id = ? AND deleted_at IS NULL
-        ORDER BY created_at, id`,
-    )
-    .all(orderId) as Array<{ line_total_cents: number; tax_rate_bps_snapshot: number }>;
-  if (subtotal > 0) {
-    const shares = allocateDiscount(lineRows.map((l) => l.line_total_cents), discount);
-    lineRows.forEach((line, i) => {
-      const lineNet = Math.max(0, line.line_total_cents - (shares[i] ?? 0));
-      tax += computeTax(lineNet, line.tax_rate_bps_snapshot, 'exclusive').taxCents as number;
-    });
-  }
+  // to it exactly (pos-domain taxAfterDiscount → allocateDiscount), a
+  // delivery charge the rule leaves alone weighing 0; the F3 preview, the FBR
+  // mapper and the website's estimate split it the same way. Lines in
+  // insertion order so they all agree.
+  const tax = subtotal > 0 ? taxAfterDiscount(lines, discount, alsoOffDeliveryCharge).taxCents : 0;
 
   const total = subtotal - discount + tax;
   const now = nowIso();
@@ -1818,7 +1874,10 @@ function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: nu
     )
     .get(order.id) as { rule_json: string | null } | undefined;
   const rule = parseFoodpandaDealRule(dealRow?.rule_json);
-  const share = rule ? dealAmount(rule, order.subtotalCents) : null;
+  // On what the deal was worked: the food, when its frozen rule left the delivery charge alone.
+  const share = rule
+    ? dealAmount(rule, discountBaseCents(discountLinesOf(db, order.id), rule.alsoOffDeliveryCharge !== false))
+    : null;
   const fees = readShopSetting(db, 'foodpanda.fees');
   const t = foodpandaTerms(
     { subtotalCents: order.subtotalCents, shopDiscountCents: order.discountCents, totalCents: order.totalCents },
@@ -2392,7 +2451,8 @@ export function getOrderSnapshot(
     .prepare(
       `SELECT id, order_id, discount_type, value, reason, applied_by_user_id,
               approved_by_user_id, amount_cents, source, rule_json
-         FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`,
+         FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL
+        ORDER BY created_at, id`,
     )
     .all(orderId) as Array<{
     id: string;
@@ -2407,11 +2467,17 @@ export function getOrderSnapshot(
   }>;
 
   const discounts: OrderSnapshot['discounts'] = discountRows.map((d) => {
+    // Whether it also came off the delivery charge: the rule FROZEN on the
+    // row (none = yes, as every discount before 0.7.25). The FBR mapper, the
+    // receipt and the screens read it from here, never from the setting.
+    const alsoOffDeliveryCharge = discountRuleAlsoOffDeliveryCharge(d.rule_json);
     // The foodpanda deal's figures on this order, from its frozen terms and
-    // the stored subtotal: the whole deal, and foodpanda's part (the bill
-    // says "foodpanda pays another Rs …" when it is shared).
+    // the lines it was worked on (the food, when it left the delivery charge
+    // alone; else the stored subtotal): the whole deal, and foodpanda's part
+    // (the bill says "foodpanda pays another Rs …" when it is shared).
     const rule = d.source === 'foodpanda' ? parseFoodpandaDealRule(d.rule_json) : null;
-    const share = rule ? dealAmount(rule, order.subtotalCents) : null;
+    const dealBase = rule ? (alsoOffDeliveryCharge ? order.subtotalCents : discountBaseCents(items, false)) : 0;
+    const share = rule ? dealAmount(rule, dealBase) : null;
     return {
       id: d.id as OrderSnapshot['discounts'][number]['id'],
       orderId: orderId as OrderSnapshot['discounts'][number]['orderId'],
@@ -2429,10 +2495,12 @@ export function getOrderSnapshot(
               shopPercent: rule.shopPercent,
               dealCents: share.dealCents,
               platformCents: share.platformCents,
-              // At till prices, like the cart's subtotal it is compared with.
+              // At till prices, like the food it is compared with.
               minOrderCents: dealMinTillCents(rule),
+              baseCents: dealBase,
             }
           : null,
+      alsoOffDeliveryCharge,
     };
   });
 

@@ -14,7 +14,8 @@
  *
  * FROZEN DEFAULTS. A key never saved reads as its DEFAULT_* below, which is
  * exactly what the till did before the setting existed, so installing the
- * version changes nothing. A test pins every value (pos-domain
+ * version changes nothing — with ONE owner-decided exception,
+ * 'discounts.delivery' (see DEFAULT_DISCOUNT_DELIVERY). A test pins every value (pos-domain
  * shop-settings.test.ts). They are NEVER edited after release: two tills on
  * different versions with the key unsaved would disagree. A change to how
  * the shop works is a saved setting, not a new default.
@@ -33,6 +34,7 @@ export const SHOP_SETTING_KEYS = [
   'foodpanda.checks',
   'discounts.approval',
   'discounts.presets',
+  'discounts.delivery',
   'staff.timing',
   'kitchen.timing',
 ] as const;
@@ -172,6 +174,29 @@ export interface DiscountPresets {
   reasons: string[];
 }
 
+/**
+ * Whether an order's discount also comes off its delivery charge
+ * ('discounts.delivery'). The owner, 28 Sep 2026: "Delivery charges is
+ * separate we don't want to add discount to it" — so by default NO: a staff
+ * discount (a % or rupees, F3) and the foodpanda deal are worked on the food
+ * only (pos-domain discountBaseCents), a rupee amount is at most the food,
+ * 100% off leaves the delivery charge to pay, and the split for tax, the FBR
+ * invoice and profit gives the delivery charge none of it. The approval
+ * limit is checked on the same food-only amount.
+ *
+ * The rule in force is FROZEN onto each discount row when it is given
+ * (order_discounts.rule_json, DiscountBaseRule below, or the foodpanda
+ * deal's rule), and every reader after the fact follows the row, never this
+ * setting: turning it on or off changes discounts given from then on, never
+ * one already on an order, never a paid order. A website order follows the
+ * website's own pricing, never this switch.
+ */
+export interface DiscountDelivery {
+  v: number;
+  /** true = a discount comes off the whole bill, delivery charge too (the till before 0.7.25). */
+  alsoOffDeliveryCharge: boolean;
+}
+
 export const PRESET_PERCENTS_MAX = 5;
 export const PRESET_FLATS_MAX = 3;
 export const PRESET_FLAT_MAX_CENTS = 500_000;
@@ -244,6 +269,7 @@ export interface ShopSettingValues {
   'foodpanda.checks': FoodpandaChecks;
   'discounts.approval': DiscountApproval;
   'discounts.presets': DiscountPresets;
+  'discounts.delivery': DiscountDelivery;
   'staff.timing': StaffTiming;
   'kitchen.timing': KitchenTiming;
 }
@@ -256,6 +282,7 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'foodpanda.checks': 1,
   'discounts.approval': 1,
   'discounts.presets': 1,
+  'discounts.delivery': 1,
   'staff.timing': 1,
   'kitchen.timing': 1,
 });
@@ -311,6 +338,22 @@ export const DEFAULT_DISCOUNT_PRESETS: Readonly<DiscountPresets> = Object.freeze
   reasons: Object.freeze(['Staff', 'Friends & family', 'Regular customer', 'Complaint']) as string[],
 });
 
+/**
+ * NO: a discount leaves the delivery charge alone (the owner's answer, 28 Sep
+ * 2026). THE ONE DEFAULT THAT IS NOT "what the till did before": until
+ * 0.7.25 a discount came off the delivery charge too. Installing this
+ * version therefore changes discounts given from then on, by the owner's
+ * decision; nothing already on an order or paid moves (each discount row
+ * carries its own frozen rule, and a row with none is read the old way).
+ * A 0.7.24 till still spreads a new discount over every line: update both
+ * tills the same day, as for migration 0040. Frozen from release like the
+ * others: never edit it.
+ */
+export const DEFAULT_DISCOUNT_DELIVERY: Readonly<DiscountDelivery> = Object.freeze({
+  v: 1,
+  alsoOffDeliveryCharge: false,
+});
+
 /** Today: 15 minutes idle (owner / manager), 12 hours a login, a 10-minute step-in, one free reprint within 30 minutes. */
 export const DEFAULT_STAFF_TIMING: Readonly<StaffTiming> = Object.freeze({
   v: 1,
@@ -336,6 +379,7 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'foodpanda.checks': DEFAULT_FOODPANDA_CHECKS,
   'discounts.approval': DEFAULT_DISCOUNT_APPROVAL,
   'discounts.presets': DEFAULT_DISCOUNT_PRESETS,
+  'discounts.delivery': DEFAULT_DISCOUNT_DELIVERY,
   'staff.timing': DEFAULT_STAFF_TIMING,
   'kitchen.timing': DEFAULT_KITCHEN_TIMING,
 });
@@ -379,6 +423,37 @@ export interface FoodpandaDealRule {
    * (pos-domain dealAmount), and the shop's part comes out the same.
    */
   upliftBps: number;
+  /**
+   * Whether the deal also came off a delivery-charge line on the order
+   * ('discounts.delivery' when the order became foodpanda). false = the deal,
+   * its minimum and its most-off are worked on the food only. Absent on a
+   * rule written before 0.7.25 = true (every line, as then). An optional
+   * field of format 1: an older till reading it keeps the rest of the deal.
+   */
+  alsoOffDeliveryCharge?: boolean;
+}
+
+/**
+ * How a staff (F3) or website discount was worked, FROZEN onto its row
+ * (order_discounts.rule_json, source NULL) when it was given. Every later
+ * cart change and every reader after the fact (the tax split, the FBR
+ * invoice of a late or queued sale and of a refund, profit, reprints) follow
+ * THIS, never the live setting. A row with no rule (given before 0.7.25, or
+ * on a 0.7.24 till) reads as `alsoOffDeliveryCharge: true`, exactly as it
+ * was worked then.
+ */
+export interface DiscountBaseRule {
+  kind: 'discount_base';
+  v: 1;
+  /** false = worked on, and split over, the food only (delivery-charge lines take none of it). */
+  alsoOffDeliveryCharge: boolean;
+  /**
+   * Whose rule it is: 'till' = Settings → Money & discounts
+   * ('discounts.delivery') when the discount was given; 'website' = the
+   * website's own pricing for a web order (apps/web lib/pricing priceOrder:
+   * the % over every line it priced), never the till's switch.
+   */
+  from: 'till' | 'website';
 }
 
 /** A discount's foodpanda figures, on the order snapshot (bill, receipt, Pay). */
@@ -396,6 +471,12 @@ export interface FoodpandaDealShare {
    * off, and the cart says from how much it does.
    */
   minOrderCents?: number | null;
+  /**
+   * What the deal is worked on, at till prices: the food (the delivery
+   * charge left out when the deal's rule says so), else the subtotal. The
+   * cart compares the minimum with THIS.
+   */
+  baseCents?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +539,12 @@ export interface CheckoutRules {
   discounts: {
     approval: ApprovalLimits;
     presets: Omit<DiscountPresets, 'v'>;
+    /**
+     * A discount given now also comes off the delivery charge
+     * ('discounts.delivery'): the F3 screen's amounts, locks and words. The
+     * main process reads the setting again when it saves the discount.
+     */
+    alsoOffDeliveryCharge: boolean;
   };
   /** The Live Orders colours and the "waiting too long" reminders. */
   kitchen: Omit<KitchenTiming, 'v'>;

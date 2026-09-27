@@ -520,6 +520,9 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   { key: 'discounts.presets', useDefault: true },
   { key: 'staff.timing', useDefault: true },
   { key: 'kitchen.timing', useDefault: true },
+  // Whether a discount also comes off the delivery charge (owner, 28 Sep 2026).
+  { key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge: true } },
+  { key: 'discounts.delivery', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -850,7 +853,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         });
       }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(7);
+      expect(SHOP_SETTING_KEYS.length).toBe(8);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
@@ -917,6 +920,23 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
       ok: false,
       code: 'precondition_failed',
     });
+  });
+
+  it('the counter reads whether a discount comes off the delivery charge (no by default) — in words with no fee or commission', async () => {
+    const saves = SHOP_SETTING_SAVES();
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<{ discounts: { alsoOffDeliveryCharge: boolean } }>('checkout:getRules');
+      expect(rules.discounts.alsoOffDeliveryCharge).toBe(false);
+    }
+    h.session = OWNER;
+    expect((await call('settings:setBusiness', saves[saves.length - 2])).ok).toBe(true);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<Record<string, unknown>>('checkout:getRules');
+      expect(rules).toMatchObject({ discounts: { alsoOffDeliveryCharge: true } });
+      expect(JSON.stringify(rules)).not.toMatch(/commission|fee|payout/i);
+    }
   });
 
   it('a cashier gets the owner’s deal on a foodpanda order automatically, and can’t change or take it off without a manager', async () => {

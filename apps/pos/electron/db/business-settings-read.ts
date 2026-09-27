@@ -138,6 +138,18 @@ export function readApprovalLimits(db: AppDatabase): ApprovalLimits {
 }
 
 /**
+ * Does a discount given NOW also come off the delivery charge
+ * ('discounts.delivery')? Read live by the main process when a staff
+ * discount is applied or an order becomes foodpanda, and frozen onto that
+ * discount row there (order-repo applyDiscount, putOnFoodpandaDeal). Nothing
+ * after that reads it: the row's own rule decides. No (false) when nothing
+ * is saved — the owner's answer.
+ */
+export function readDiscountAlsoOffDeliveryCharge(db: AppDatabase): boolean {
+  return readShopSetting(db, 'discounts.delivery').value.alsoOffDeliveryCharge;
+}
+
+/**
  * The staff timings ('staff.timing') auth-service, the step-in hold and the
  * reprint rule use, read on every call. A read that fails (it should not)
  * falls back to the released defaults rather than locking the till.

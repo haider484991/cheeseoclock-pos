@@ -2,7 +2,7 @@ import { useRef, useState, type KeyboardEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn, NumberPad } from '@cheeseoclock/ui';
 import { expectedTabletCents, formatCents, tabletDiffers } from '@cheeseoclock/pos-domain';
-import { FOODPANDA_ORDER_CODE_MAX, FOODPANDA_TABLET_TOLERANCE_CENTS } from '@cheeseoclock/shared-types';
+import { FOODPANDA_ORDER_CODE_MAX, FOODPANDA_TABLET_TOLERANCE_CENTS, discountLeavesDeliveryCharge } from '@cheeseoclock/shared-types';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
 import { useCheckoutStore } from '../../stores/checkoutStore';
@@ -240,7 +240,11 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                   </div>
                   {(snapshot.order.discountCents > 0 || dealLine) && (
                     <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                      <dt>{dealLine?.label ?? 'Discount'}</dt>
+                      <dt>
+                        {dealLine?.label ?? 'Discount'}
+                        {/* The delivery charge is paid in full: the discount's own frozen rule says so. */}
+                        {discountLeavesDeliveryCharge(snapshot.discounts[snapshot.discounts.length - 1], snapshot.items) && ' (food only)'}
+                      </dt>
                       <dd className="font-mono">−{formatCents(snapshot.order.discountCents)}</dd>
                     </div>
                   )}

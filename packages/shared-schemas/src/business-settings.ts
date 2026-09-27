@@ -347,6 +347,15 @@ const discountPresetsShape = {
 export const discountPresetsSchema = z.object({ v: writesFormat('discounts.presets'), ...discountPresetsShape }).strict();
 const discountPresetsReadSchema = z.object({ v: readsFormat, ...discountPresetsShape });
 
+const discountDeliveryShape = {
+  alsoOffDeliveryCharge: z.boolean({
+    errorMap: () => ({ message: 'Say whether a discount also comes off the delivery charge: yes or no' }),
+  }),
+};
+/** 'discounts.delivery' as this version writes it. */
+export const discountDeliverySchema = z.object({ v: writesFormat('discounts.delivery'), ...discountDeliveryShape }).strict();
+const discountDeliveryReadSchema = z.object({ v: readsFormat, ...discountDeliveryShape });
+
 const [idleLo, idleHi] = STAFF_TIMING_BOUNDS.idleLogoutMin;
 const [loginLo, loginHi] = STAFF_TIMING_BOUNDS.maxLoginHours;
 const [stepLo, stepHi] = STAFF_TIMING_BOUNDS.stepInMin;
@@ -467,6 +476,7 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'foodpanda.checks': foodpandaChecksSchema,
   'discounts.approval': discountApprovalSchema,
   'discounts.presets': discountPresetsSchema,
+  'discounts.delivery': discountDeliverySchema,
   'staff.timing': staffTimingSchema,
   'kitchen.timing': kitchenTimingSchema,
   'channels.fees': channelFeesSchema,
@@ -497,6 +507,7 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'foodpanda.checks': foodpandaChecksReadSchema,
   'discounts.approval': discountApprovalReadSchema,
   'discounts.presets': discountPresetsReadSchema,
+  'discounts.delivery': discountDeliveryReadSchema,
   'staff.timing': staffTimingReadSchema,
   'kitchen.timing': kitchenTimingReadSchema,
   'channels.fees': channelFeesSchema,
@@ -510,6 +521,7 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'foodpanda.checks': new Set(['v', ...Object.keys(foodpandaChecksShape)]),
   'discounts.approval': new Set(['v', ...Object.keys(discountApprovalShape)]),
   'discounts.presets': new Set(['v', ...Object.keys(discountPresetsShape)]),
+  'discounts.delivery': new Set(['v', ...Object.keys(discountDeliveryShape)]),
   'staff.timing': new Set(['v', ...Object.keys(staffTimingShape)]),
   'kitchen.timing': new Set(['v', ...Object.keys(kitchenTimingShape)]),
 };

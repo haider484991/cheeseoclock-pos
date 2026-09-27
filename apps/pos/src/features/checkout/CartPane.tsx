@@ -19,7 +19,7 @@ import { resetCustomerForm, useCustomerForm } from './useCustomerForm';
 import { CustomerInlinePanel } from './CustomerInlinePanel';
 import { foodpandaDealLine } from './foodpandaDealLine';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
-import { isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { discountLeavesDeliveryCharge, isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 
 interface Props {
   step: 'items' | 'details';
@@ -278,6 +278,8 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
                         <span className="font-normal">
                           {' · '}
                           {discount.discountType === 'percent' ? `${discount.value}%` : formatCents(discount.value)}
+                          {/* The delivery charge is paid in full: the discount's own frozen rule says so. */}
+                          {discountLeavesDeliveryCharge(discount, items) ? ' off food' : ''}
                           {discount.reason ? ` · ${discount.reason}` : ''}
                         </span>
                       )}

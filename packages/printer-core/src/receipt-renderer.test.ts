@@ -162,6 +162,34 @@ describe('renderReceipt', () => {
     expect(text).not.toContain('pending');
   });
 
+  it('a discount that left the delivery charge alone says "food only", from its own frozen rule; one that covered it (or given before the rule) prints as before', () => {
+    const textOf = (s: OrderSnapshot) =>
+      decodeEscPos(renderReceipt(s, { branding }))
+        .map((r) => r.text)
+        .join('\n');
+    const withCharge = (alsoOffDeliveryCharge: boolean | undefined, d: Partial<OrderSnapshot['discounts'][number]> = {}): OrderSnapshot => {
+      const s = snapshot();
+      s.items[1] = { ...s.items[1]!, menuItemName: 'Delivery Charge (Rs 50)', categoryName: 'Delivery Charges' };
+      s.discounts[0] = {
+        ...s.discounts[0]!,
+        ...d,
+        ...(alsoOffDeliveryCharge === undefined ? {} : { alsoOffDeliveryCharge }),
+      };
+      return s;
+    };
+    expect(textOf(withCharge(false))).toContain('Discount (Friends & family - Eid, food only)');
+    expect(textOf(withCharge(false, { discountType: 'percent', value: 10, reason: null }))).toContain('Discount 10% (food only)');
+    for (const legacy of [undefined, true]) {
+      const text = textOf(withCharge(legacy));
+      expect(text).toContain('Discount (Friends & family - Eid)');
+      expect(text).not.toContain('food only');
+    }
+    // No delivery charge on the order: nothing to say.
+    const noCharge = snapshot();
+    noCharge.discounts[0] = { ...noCharge.discounts[0]!, alsoOffDeliveryCharge: false };
+    expect(textOf(noCharge)).not.toContain('food only');
+  });
+
   it('a foodpanda order: the deal as itself, foodpanda’s part on its own line, the foodpanda order number — never the commission', () => {
     const s = snapshot();
     const fp: OrderSnapshot = {

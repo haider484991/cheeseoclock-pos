@@ -4,7 +4,8 @@
  *
  *  - splitOrderLines: an order's lines at what the customer paid, before tax
  *    — the order's discount shared out by allocateDiscount in the order the
- *    till lists the lines (the same shares its tax and FBR invoice use), then
+ *    till lists the lines (the same shares its tax and FBR invoice use; a
+ *    delivery charge the discount's frozen rule left alone takes none), then
  *    the part refunds, taken off before tax, shared out the same way. There
  *    is no other allocation: Reports' food cost uses these same nets.
  *  - foodpanda's commission and price uplift are NOT here: one per-order
@@ -57,14 +58,24 @@ export interface OrderSplit {
  * ref_ex)[ℓ] with ref_ex = round(refunded × Σ lineNet ÷ total); net_ℓ =
  * lineNet_ℓ − ref_ℓ. The lines must be in the till's order ((created_at, id),
  * as recomputeOrderTotals shares the discount). Σ nets = sales before tax exactly.
+ *
+ * `discountSkips[ℓ]`: line ℓ took none of the discount — a delivery charge
+ * the discount's FROZEN rule left alone (discount-base.ts
+ * discountSkipMask), weight 0 in the discount's split exactly as the till
+ * split it. Absent = every line (every discount before 0.7.25). Part refunds
+ * are still spread over every line's net, the delivery charge included.
  */
 export function splitOrderLines(
   lineTotalsCents: readonly number[],
   discountCents: number,
   totalCents: number,
   refundedCents: number,
+  discountSkips?: readonly boolean[],
 ): OrderSplit {
-  const discounts = allocateDiscount(lineTotalsCents, discountCents);
+  const discounts = allocateDiscount(
+    discountSkips ? lineTotalsCents.map((t, i) => (discountSkips[i] ? 0 : t)) : lineTotalsCents,
+    discountCents,
+  );
   const lineNets = lineTotalsCents.map((t, i) => t - (discounts[i] ?? 0));
   const afterDiscount = lineNets.reduce((s, x) => s + x, 0);
   const refundExTaxCents = totalCents > 0 && refundedCents > 0 ? mulDivRound(refundedCents, afterDiscount, totalCents) : 0;

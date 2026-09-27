@@ -24,9 +24,11 @@ export function foodpandaDealLine(
   if (!fp) return { label, note: null };
   if (fp.dealCents <= 0) {
     const min = fp.minOrderCents ?? null;
+    // Compared with what the deal is worked on: the food, when it leaves the delivery charge alone.
+    const worked = fp.baseCents ?? subtotalCents;
     return {
       label,
-      note: min !== null && subtotalCents < min ? `Takes off from ${formatCents(min)} of food` : null,
+      note: min !== null && worked < min ? `Takes off from ${formatCents(min)} of food` : null,
     };
   }
   if (fp.platformCents <= 0) return { label, note: null };

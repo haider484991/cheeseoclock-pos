@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DISCOUNT_APPROVAL,
+  DEFAULT_DISCOUNT_DELIVERY,
   DEFAULT_DISCOUNT_PRESETS,
   DEFAULT_KITCHEN_TIMING,
   DEFAULT_STAFF_TIMING,
@@ -12,6 +13,10 @@ import {
   approvalFromForm,
   approvalSummary,
   approvalToForm,
+  deliveryExample,
+  deliveryFromForm,
+  deliverySummary,
+  deliveryToForm,
   presetPreview,
   presetsFromForm,
   presetsSummary,
@@ -182,5 +187,23 @@ describe('Staff & kitchen timing: the words', () => {
     expect(kitchenTimingExample({ v: 1, amberMin: 20, redMin: 75, notStartedMin: 5, notDoneMin: 120 })).toContain(
       'amber on Live Orders at 7:20 and red at 8:15. A website order still in New at 7:05',
     );
+  });
+});
+
+describe('"A discount also comes off the delivery charge" (the owner, 28 Sep 2026)', () => {
+  it('the choice round-trips; No is the default and reads as such', () => {
+    expect(deliveryToForm(DEFAULT_DISCOUNT_DELIVERY)).toBe('no');
+    expect(deliveryFromForm('no')).toEqual({ value: { v: 1, alsoOffDeliveryCharge: false }, problem: null });
+    expect(deliveryFromForm('yes')).toEqual({ value: { v: 1, alsoOffDeliveryCharge: true }, problem: null });
+    expect(deliveryToForm({ alsoOffDeliveryCharge: true })).toBe('yes');
+    expect(deliverySummary(DEFAULT_DISCOUNT_DELIVERY)).toBe('No: a discount is on the food only; the delivery charge is paid in full');
+    expect(deliverySummary({ alsoOffDeliveryCharge: true })).toBe('Yes: a discount comes off the delivery charge too');
+  });
+
+  it('the example is the till’s own maths on the made-up order', () => {
+    expect(deliveryExample({ alsoOffDeliveryCharge: false })).toContain('10% off takes Rs 200 off (10% of the food)');
+    expect(deliveryExample({ alsoOffDeliveryCharge: false })).toContain('even 100% off leaves the Rs 200 delivery charge (and its tax) to pay');
+    expect(deliveryExample({ alsoOffDeliveryCharge: true })).toContain('10% off takes Rs 220 off');
+    expect(deliveryExample({ alsoOffDeliveryCharge: true })).toContain('100% off leaves nothing to pay');
   });
 });

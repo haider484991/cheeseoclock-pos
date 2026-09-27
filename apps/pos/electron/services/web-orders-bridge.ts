@@ -43,6 +43,7 @@ import {
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
 import { isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
+import { websiteDiscountRule } from '@cheeseoclock/pos-domain';
 import { orderAlerts } from './order-alerts-hub.js';
 import {
   CHUNKS_FORMAT,
@@ -1109,7 +1110,11 @@ class WebOrdersBridge {
         // (the site showed the same maths — apps/web lib/pricing). It is the
         // owner's standing offer, above the percent that needs a manager PIN
         // at the counter, so the bridge's actor (the shop's admin — see
-        // resolveActor) is recorded as its approver.
+        // resolveActor) is recorded as its approver. It is worked by the
+        // WEBSITE's rule, frozen on the row (the % over every line the site
+        // priced, as lib/pricing priceOrder does), never the till's
+        // "discount also comes off the delivery charge" switch: the till
+        // takes off exactly what the customer was shown.
         if (pickup && pickupPercent > 0) {
           applyDiscount(
             db,
@@ -1121,6 +1126,7 @@ class WebOrdersBridge {
               approverUserId: actor.userId,
             },
             actor,
+            { rule: websiteDiscountRule() },
           );
         }
 

@@ -4,11 +4,12 @@
  * The trickiest piece is per-line tax + discount split, because FBR expects
  * each line item to carry its `valueSalesExcludingST` and `salesTaxApplicable`.
  * We mirror what `recomputeOrderTotals` does on the write path: prorate any
- * order-level discount across lines by line-total weight, then compute the
- * line's net (after-discount) and tax exactly the same way.
+ * order-level discount across lines by line-total weight (a delivery charge
+ * the discount's frozen rule left alone weighs 0), then compute the line's
+ * net (after-discount) and tax exactly the same way.
  */
 
-import type { OrderSnapshot } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeLine, type OrderSnapshot } from '@cheeseoclock/shared-types';
 import type { FbrInvoicePayload, FbrInvoiceItem } from './index.js';
 
 export interface FbrSellerInfo {
@@ -43,9 +44,18 @@ export function mapOrderToFbrPayload(
   const discount = order.discountCents;
 
   // The discount split over the lines exactly as the till split it for tax
-  // (pos-domain allocateDiscount — kept in step by hand, fbr-core has no
-  // dependency on pos-domain): whole paisa that add up to the discount.
-  const shares = allocateDiscount(items.map((l) => l.lineTotalCents), subtotal > 0 ? discount : 0);
+  // (pos-domain allocateDiscount / splitDiscount — kept in step by hand,
+  // fbr-core has no dependency on pos-domain): whole paisa that add up to the
+  // discount. A delivery-charge line weighs 0 when the discount's FROZEN rule
+  // left it alone (the snapshot's discount row, never the live setting; a row
+  // with no rule covered every line), so a queued or late invoice, and a
+  // refund's debit note mapped days later, split it as the sale was split.
+  const discounts = snapshot.discounts ?? [];
+  const leavesCharge = discounts[discounts.length - 1]?.alsoOffDeliveryCharge === false;
+  const shares = allocateDiscount(
+    items.map((l) => (leavesCharge && isDeliveryChargeLine(l) ? 0 : l.lineTotalCents)),
+    subtotal > 0 ? discount : 0,
+  );
   const fbrItems: FbrInvoiceItem[] = items.map((line, i) => {
     const lineDiscount = shares[i] ?? 0;
     const netCents = Math.max(0, line.lineTotalCents - lineDiscount);

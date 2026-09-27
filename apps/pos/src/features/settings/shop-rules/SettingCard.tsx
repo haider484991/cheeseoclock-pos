@@ -16,13 +16,13 @@ export function whenSaved(iso: string): string {
  * never was, or (foodpanda's fees) that it was carried over from the earlier
  * version's Costing → Targets & fees and is not saved here yet.
  */
-export function lastChangedText(card: Pick<ShopSettingCard, 'lastChanged' | 'carriedOver'>): string {
+export function lastChangedText(card: Pick<ShopSettingCard, 'lastChanged' | 'carriedOver'>, neverChanged?: string): string {
   const c = card.lastChanged;
   if (card.carriedOver) {
     const by = c ? ` (saved${c.byName ? ` by ${c.byName}` : ''}, ${whenSaved(c.at)})` : '';
     return `Carried over from Costing → Targets & fees${by}: not saved here yet.`;
   }
-  if (!c) return 'Never changed: the till works as it always has.';
+  if (!c) return neverChanged ?? 'Never changed: the till works as it always has.';
   const where = c.onThisTill === true ? ' on this till' : c.onThisTill === false ? ' on the other till' : '';
   return `Last changed by ${c.byName ?? 'someone'}${where}, ${whenSaved(c.at)}`;
 }
@@ -45,6 +45,11 @@ interface Props<K extends ShopSettingKey> {
   children: ReactNode;
   /** Under the fields: the worked example. */
   footer?: ReactNode;
+  /**
+   * What "never changed" means for this rule, when its default is not "the
+   * till as it always worked" ('discounts.delivery').
+   */
+  neverChangedText?: string;
 }
 
 /**
@@ -111,7 +116,7 @@ export function SettingCard<K extends ShopSettingKey>(p: Props<K>) {
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-stone-500">
-        <span>{lastChangedText(card)}</span>
+        <span>{lastChangedText(card, p.neverChangedText)}</span>
         {card.notOnOtherTillYet && (
           <span className="inline-flex items-center gap-1 text-amber-800 dark:text-amber-300">
             <CloudOff className="h-3.5 w-3.5" /> Not on the other till yet

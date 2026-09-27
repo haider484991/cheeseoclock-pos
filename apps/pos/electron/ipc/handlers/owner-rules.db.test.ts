@@ -3,7 +3,9 @@
  * through the real IPC handlers and repositories, on a real SQLite database
  * built from every migration:
  *   - a till with nothing saved answers today's numbers (10% / Rs 500, the
- *     old buttons, amber 15 / red 30, reminders 10 / 30);
+ *     old buttons, amber 15 / red 30, reminders 10 / 30) — and the owner's
+ *     answer for the delivery charge (a discount leaves it alone: the one
+ *     default that is not "as before", 28 Sep 2026);
  *   - every bound is refused in the main process, with the reason, and
  *     nothing is written; the ends of each bound are taken;
  *   - a cashier and a manager are refused settings:setBusiness (and
@@ -111,11 +113,11 @@ const APP = join(HERE, '..', '..', '..');
  * screen files, so it is imported by path, with its shape spelled here.
  */
 type PreviewDiscount = (
-  lines: ReadonlyArray<{ lineTotalCents: number; taxRateBps?: number }>,
+  lines: ReadonlyArray<{ lineTotalCents: number; taxRateBps?: number; menuItemName?: string }>,
   subtotalCents: number,
   choice: { type: 'percent' | 'flat'; value: number } | null,
-  limits?: { percentOver: number; flatOverCents: number },
-) => { needsApproval: boolean };
+  rules?: { approval: { percentOver: number; flatOverCents: number }; alsoOffDeliveryCharge: boolean },
+) => { needsApproval: boolean; discountCents: number; taxCents: number; totalCents: number };
 async function screenPreview(): Promise<PreviewDiscount> {
   const url = pathToFileURL(join(APP, 'src', 'features', 'checkout', 'discountPresets.ts')).href;
   return ((await import(/* @vite-ignore */ url)) as { previewDiscount: PreviewDiscount }).previewDiscount;
@@ -259,12 +261,13 @@ beforeEach(async () => {
   (await import('./settings-handlers.js')).registerSettingsHandlers(ctx);
 });
 
-const NEW_KEYS = ['discounts.approval', 'discounts.presets', 'staff.timing', 'kitchen.timing'] as const;
+const NEW_KEYS = ['discounts.approval', 'discounts.presets', 'discounts.delivery', 'staff.timing', 'kitchen.timing'] as const;
 
 /** A good value for each new key, different from its default. */
 const GOOD: Record<(typeof NEW_KEYS)[number], unknown> = {
   'discounts.approval': { v: 1, percentOver: 15, flatOverCents: 25_000 },
   'discounts.presets': { v: 1, percents: [5, 15], flatCents: [15_000, 25_000], reasons: ['Birthday', 'Test reason'] },
+  'discounts.delivery': { v: 1, alsoOffDeliveryCharge: true },
   'staff.timing': { v: 1, idleLogoutMin: 5, maxLoginHours: 8, stepInMin: 5, freeReprints: 0, reprintWindowMin: 60 },
   'kitchen.timing': { v: 1, amberMin: 5, redMin: 10, notStartedMin: 5, notDoneMin: 20 },
 };
@@ -280,6 +283,8 @@ describe.skipIf(!Sqlite)('a till with nothing saved answers today’s numbers', 
         flatCents: [10_000, 20_000, 50_000],
         reasons: ['Staff', 'Friends & family', 'Regular customer', 'Complaint'],
       },
+      // The owner's answer (28 Sep 2026): a discount leaves the delivery charge alone.
+      alsoOffDeliveryCharge: false,
     });
     expect(rules.kitchen).toEqual({ amberMin: 15, redMin: 30, notStartedMin: 10, notDoneMin: 30 });
     // …and never a cost, a commission or who saved something.
@@ -349,6 +354,14 @@ describe.skipIf(!Sqlite)('the bounds are the main process’s', () => {
       { v: 1, percents: [10], flatCents: [10_000], reasons: [' Staff'] },
       { v: 1, percents: [10], flatCents: [10_000], reasons: ['Two\nlines'] },
       { v: 1, percents: [10], flatCents: [10_000], reasons: ['Staff', 'staff'] },
+    ],
+    'discounts.delivery': [
+      { v: 1, alsoOffDeliveryCharge: 'no' },
+      { v: 1, alsoOffDeliveryCharge: 0 },
+      { v: 1, alsoOffDeliveryCharge: null },
+      { v: 1 },
+      { v: 1, alsoOffDeliveryCharge: false, alsoOffFoodpanda: false },
+      { v: 2, alsoOffDeliveryCharge: false },
     ],
     'staff.timing': [
       { ...(GOOD['staff.timing'] as object), idleLogoutMin: 4 },
@@ -429,6 +442,8 @@ describe.skipIf(!Sqlite)('the bounds are the main process’s', () => {
       ['staff.timing', { v: 1, idleLogoutMin: 60, maxLoginHours: 24, stepInMin: 30, freeReprints: 3, reprintWindowMin: 120 }],
       ['kitchen.timing', { v: 1, amberMin: 5, redMin: 10, notStartedMin: 5, notDoneMin: 10 }],
       ['kitchen.timing', { v: 1, amberMin: 60, redMin: 120, notStartedMin: 60, notDoneMin: 120 }],
+      ['discounts.delivery', { v: 1, alsoOffDeliveryCharge: true }],
+      ['discounts.delivery', { v: 1, alsoOffDeliveryCharge: false }],
     ];
     for (const [key, value] of EDGES) {
       const o = await call('settings:setBusiness', { key, value });
@@ -482,6 +497,7 @@ describe.skipIf(!Sqlite)('only the owner changes them', () => {
       expect(rules.discounts).toEqual({
         approval: { percentOver: 15, flatOverCents: 25_000 },
         presets: { percents: [5, 15], flatCents: [15_000, 25_000], reasons: ['Birthday', 'Test reason'] },
+        alsoOffDeliveryCharge: true,
       });
       expect(rules.kitchen).toEqual({ amberMin: 5, redMin: 10, notStartedMin: 5, notDoneMin: 20 });
       expect(JSON.stringify(rules)).not.toMatch(/idleLogout|maxLogin|stepIn|freeReprints|commission/i);
@@ -513,7 +529,7 @@ describe.skipIf(!Sqlite)('one approval rule in all three places', () => {
       const screenOrder = await openOrder();
       const snap = getOrderSnapshot(db as never, screenOrder)!;
       expect(snap.order.subtotalCents).toBe(200_000);
-      const screen = previewDiscount(snap.items, snap.order.subtotalCents, d, rules.discounts.approval).needsApproval;
+      const screen = previewDiscount(snap.items, snap.order.subtotalCents, d, rules.discounts).needsApproval;
       // 2. The IPC handler, with no manager's PIN.
       h.session = CASHIER;
       const ipcOutcome = await call('orders:applyDiscount', { orderId: screenOrder, discountType: d.type, value: d.value });

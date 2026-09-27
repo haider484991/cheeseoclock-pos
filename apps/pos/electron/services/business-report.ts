@@ -47,7 +47,10 @@ import {
   unitFactor,
   wasteReasonOf,
   dealAmount,
+  discountBaseCents,
+  discountRuleAlsoOffDeliveryCharge,
   foodpandaOrderMoney,
+  lineTakesDiscount,
   parseFoodpandaDealRule,
   type FoodCostEstimate,
   type KeptFoodpandaTerms,
@@ -1107,6 +1110,21 @@ const STATUS_RANK: Record<number, OrderItemCostStatus> = { 0: 'full', 1: 'none',
 export const FEE_LINE = `(TRIM(oi.menu_item_name) LIKE 'delivery charge%' OR oi.menu_item_id IN (SELECT value FROM json_each(?)))`;
 
 /**
+ * An order's live lines as they were sold (what each came to, the name it
+ * was sold under), in the till's order — for re-working a discount from the
+ * rule frozen on it (pos-domain discount-base.ts).
+ */
+function soldLinesOf(db: AppDatabase, orderId: string): Array<{ lineTotalCents: number; menuItemName: string }> {
+  const rows = db
+    .prepare(
+      `SELECT line_total_cents AS t, menu_item_name AS n FROM order_items
+        WHERE order_id = ? AND deleted_at IS NULL ORDER BY created_at, id`,
+    )
+    .all(orderId) as Array<{ t: number; n: string }>;
+  return rows.map((r) => ({ lineTotalCents: Number(r.t), menuItemName: r.n }));
+}
+
+/**
  * A counted order with nothing to share out — no discount, no refund, so
  * every line's net is its menu price — that kept its cost with the sale
  * (alias `o`). These are added up in SQL; only the others are read line by
@@ -1126,8 +1144,22 @@ export const PLAIN_KEPT = `(o.discount_cents = 0
  */
 const PLAIN_ORDERS = `po AS MATERIALIZED (
     SELECT o.id AS id FROM orders o WHERE ${IN_RANGE} AND ${COUNTED} AND ${PLAIN_KEPT})`;
+
+/**
+ * The rule frozen on an order's discount (alias `o`): its newest live
+ * discount row's rule_json, read only when the order has a discount
+ * (idx_order_discounts_order). A reader re-splitting the discount decides
+ * from THIS alone whether a delivery-charge line took a share (pos-domain
+ * discountRuleAlsoOffDeliveryCharge; no rule = it did, as before 0.7.25),
+ * never from the live setting, so turning the switch never moves history.
+ */
+export const DISCOUNT_RULE = `CASE WHEN o.discount_cents > 0 THEN
+      (SELECT d.rule_json FROM order_discounts d
+        WHERE d.order_id = o.id AND d.deleted_at IS NULL
+        ORDER BY d.created_at DESC, d.id DESC LIMIT 1) END`;
+
 const REST_ORDERS = `ro AS MATERIALIZED (
-    SELECT o.id AS id, o.discount_cents AS disc, o.total_cents AS tot, ${REFUNDED} AS ref
+    SELECT o.id AS id, o.discount_cents AS disc, o.total_cents AS tot, ${REFUNDED} AS ref, ${DISCOUNT_RULE} AS drule
       FROM orders o WHERE ${IN_RANGE} AND ${COUNTED} AND NOT ${PLAIN_KEPT})`;
 
 /** A line's cost rows, added up (with the LEFT JOIN of order_item_costs `c`, grouped by line). */
@@ -1141,7 +1173,7 @@ export const LINE_COSTS = `COUNT(c.id) AS parts, COALESCE(SUM(c.cost_cents), 0) 
  */
 export const FOOD_COST_LINES_SQL = `
   WITH ${REST_ORDERS}
-  SELECT ro.id AS orderId, ro.disc AS disc, ro.tot AS tot, ro.ref AS ref,
+  SELECT ro.id AS orderId, ro.disc AS disc, ro.tot AS tot, ro.ref AS ref, ro.drule AS drule,
          oi.id AS lineId, oi.menu_item_id AS itemId, oi.menu_item_name AS soldName,
          oi.quantity AS qty, oi.line_total_cents AS lineTotal, ${FEE_LINE} AS isFee,
          ${LINE_COSTS}
@@ -1777,6 +1809,7 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
     disc: number;
     tot: number;
     ref: number;
+    drule: string | null;
     lineId: string;
     itemId: string | null;
     soldName: string;
@@ -1789,11 +1822,19 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
   }>;
 
   // Group the lines per order (they arrive ordered by order).
-  const orders: Array<{ id: string; disc: number; tot: number; ref: number; lines: FoodCostLine[] }> = [];
+  const orders: Array<{ id: string; disc: number; tot: number; ref: number; alsoOff: boolean; lines: FoodCostLine[] }> = [];
   for (const r of rows) {
     let o = orders[orders.length - 1];
     if (!o || o.id !== r.orderId) {
-      o = { id: r.orderId, disc: Number(r.disc), tot: Number(r.tot), ref: Number(r.ref), lines: [] };
+      o = {
+        id: r.orderId,
+        disc: Number(r.disc),
+        tot: Number(r.tot),
+        ref: Number(r.ref),
+        // The discount's frozen rule: did it also come off the delivery charge?
+        alsoOff: discountRuleAlsoOffDeliveryCharge(r.drule),
+        lines: [],
+      };
       orders.push(o);
     }
     const it = menu.item(r.itemId);
@@ -1804,6 +1845,8 @@ function tallyFoodSales(db: AppDatabase, range: ReportRange, pricing: () => Pric
       quantity: Number(r.qty),
       lineTotalCents: Number(r.lineTotal),
       isFee: Number(r.isFee) === 1,
+      // By the name it was SOLD under, never the live menu or categories.
+      skipsDiscount: !lineTakesDiscount({ menuItemName: r.soldName }, o.alsoOff),
       parts,
       costCents: Number(r.cost),
       status: lineStatus(parts, r.worst),
@@ -2264,7 +2307,10 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     if (r.termsId !== null) platform = Number(r.platform ?? 0);
     else {
       const rule = parseFoodpandaDealRule(r.ruleJson);
-      platform = rule ? dealAmount(rule, sub).platformCents : 0;
+      // Worked on what the frozen rule worked it on: the food, when it left
+      // the delivery charge alone (read from the lines as sold); else the subtotal.
+      const base = rule && rule.alsoOffDeliveryCharge === false ? discountBaseCents(soldLinesOf(db, r.orderId), false) : sub;
+      platform = rule ? dealAmount(rule, base).platformCents : 0;
     }
     // The one per-order rule (Reports → Profit uses it too).
     const m = foodpandaOrderMoney(

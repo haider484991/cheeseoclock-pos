@@ -3,6 +3,9 @@ import {
   FLAT_PRESETS_RUPEES,
   PERCENT_PRESETS,
   describeDiscount,
+  describePreview,
+  discountBaseNow,
+  discountBaseText,
   discountDialogPrimary,
   discountDialogStart,
   flatChoiceRupees,
@@ -147,5 +150,58 @@ describe('the Discount dialog on an order with the owner’s foodpanda deal', ()
     expect(discountDialogPrimary({ dealOn: true, intent: 'change', hasChoice: true })).toBe('apply');
     // No deal on the order: the × intent means nothing.
     expect(discountDialogPrimary({ dealOn: false, intent: 'removeDeal', hasChoice: false })).toBe('apply');
+  });
+});
+
+describe('previewDiscount on an order with a delivery charge (the owner, 28 Sep 2026: no discount on it)', () => {
+  // Made-up: a Rs 1,000 pizza and a Rs 800 side (Rs 1,800 of food) and a Rs 200 delivery charge, all at 16%.
+  const withCharge = [
+    { lineTotalCents: 100_000, taxRateBps: 1600, menuItemName: 'Test Pizza' },
+    { lineTotalCents: 20_000, taxRateBps: 1600, menuItemName: 'Delivery Charge (Rs 200)' },
+    { lineTotalCents: 80_000, taxRateBps: 1600, menuItemName: 'Test Side' },
+  ];
+  const sub = 200_000;
+  const foodOnly = { approval: { percentOver: 10, flatOverCents: 50_000 }, alsoOffDeliveryCharge: false };
+  const everyLine = { ...foodOnly, alsoOffDeliveryCharge: true };
+
+  it('a % is of the food; the delivery charge is taxed in full', () => {
+    // 10% of Rs 1,800 = Rs 180; tax 16% of (900 + 200 + 720) = Rs 291.20.
+    expect(previewDiscount(withCharge, sub, percentChoice(10), foodOnly)).toEqual({
+      discountCents: 18_000,
+      taxCents: 29_120,
+      totalCents: 211_120,
+      needsApproval: false,
+      capped: false,
+    });
+    expect(discountBaseText(discountBaseNow(withCharge, sub, foodOnly), sub)).toBe(
+      'Food Rs 1,800 before tax · delivery charge Rs 200 not discounted',
+    );
+  });
+
+  it('100% off leaves the delivery charge and its tax to pay', () => {
+    expect(previewDiscount(withCharge, sub, percentChoice(100), foodOnly)).toMatchObject({ discountCents: 180_000, taxCents: 3_200, totalCents: 23_200 });
+  });
+
+  it('rupees are capped at the food, and it says so', () => {
+    const p = previewDiscount(withCharge, sub, flatChoiceRupees(5_000), foodOnly);
+    expect(p).toMatchObject({ discountCents: 180_000, capped: true, totalCents: 23_200 });
+    expect(describePreview(flatChoiceRupees(5_000), p, discountBaseNow(withCharge, sub, foodOnly))).toBe('Rs 5,000 off food (all the food)');
+    expect(describePreview(percentChoice(10), previewDiscount(withCharge, sub, percentChoice(10), foodOnly), discountBaseNow(withCharge, sub, foodOnly))).toBe(
+      '10% off food',
+    );
+  });
+
+  it('the lock is on the food: Rs 190 off is over 10% of Rs 1,800 (it was under 10% of Rs 2,000)', () => {
+    expect(previewDiscount(withCharge, sub, flatChoiceRupees(190), foodOnly).needsApproval).toBe(true);
+    expect(previewDiscount(withCharge, sub, flatChoiceRupees(190), everyLine).needsApproval).toBe(false);
+  });
+
+  it('the owner’s switch on: the old maths, exactly as a till before 0.7.25', () => {
+    const legacyLines = withCharge.map(({ lineTotalCents, taxRateBps }) => ({ lineTotalCents, taxRateBps }));
+    for (const choice of [percentChoice(10), percentChoice(100), flatChoiceRupees(5_000), flatChoiceRupees(1)]) {
+      expect(previewDiscount(withCharge, sub, choice, everyLine)).toEqual(previewDiscount(legacyLines, sub, choice, everyLine));
+    }
+    expect(previewDiscount(withCharge, sub, percentChoice(10), everyLine)).toMatchObject({ discountCents: 20_000, taxCents: 28_800 });
+    expect(discountBaseText(discountBaseNow(withCharge, sub, everyLine), sub)).toBe('Order Rs 2,000 before tax');
   });
 });

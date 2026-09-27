@@ -311,6 +311,60 @@ export function isDeliveryChargeName(name: string): boolean {
 }
 
 /**
+ * THE test for "this order line is a delivery charge" wherever a rule treats
+ * one differently from the food: an order's discount leaves it alone (owner,
+ * 28 Sep 2026: "Delivery charges is separate we don't want to add discount
+ * to it"), and so do the tax split, the FBR invoice and profit that follow
+ * the discount. It reads the name the line was SOLD under
+ * (order_items.menu_item_name, written once when the line is added), never
+ * the live menu or a category: renaming an item, or marking a category "not
+ * food" in Costing, can't move yesterday's split. When the charge items get
+ * ids of their own (Settings plan phase 3), this is the one place to change.
+ */
+export function isDeliveryChargeLine(line: { readonly menuItemName?: string | null }): boolean {
+  return typeof line.menuItemName === 'string' && isDeliveryChargeName(line.menuItemName);
+}
+
+/**
+ * The order's discount left its delivery charge alone: the discount's frozen
+ * rule says so (OrderDiscount.alsoOffDeliveryCharge false) and there is a
+ * delivery charge on the order. The bill, the cart and Pay then say "food
+ * only". False for every discount given before the rule existed (they came
+ * off the delivery charge too), so a reprint of an old order never changes.
+ */
+export function discountLeavesDeliveryCharge(
+  discount: { readonly alsoOffDeliveryCharge?: boolean } | null | undefined,
+  items: ReadonlyArray<{ readonly menuItemName?: string | null }>,
+): boolean {
+  return discount?.alsoOffDeliveryCharge === false && items.some(isDeliveryChargeLine);
+}
+
+/**
+ * A discount's words on the printed bill: "Discount (Staff)", "Discount", or
+ * the foodpanda deal's own label, as before — and, when it left the order's
+ * delivery charge alone, "Discount 10% (Staff, food only)" / "Discount (food
+ * only)" / "Foodpanda deal 20% off (food only)". Built from the discount's
+ * frozen rule (discountLeavesDeliveryCharge), never the live setting, so a
+ * DUPLICATE of an old order prints exactly what the first copy did.
+ */
+export function discountBillLabel(
+  d: {
+    readonly discountType: 'percent' | 'flat';
+    readonly value: number;
+    readonly reason?: string | null;
+    readonly source?: string | null;
+    readonly alsoOffDeliveryCharge?: boolean;
+  },
+  items: ReadonlyArray<{ readonly menuItemName?: string | null }>,
+): string {
+  const foodOnly = discountLeavesDeliveryCharge(d, items);
+  if (d.source === 'foodpanda' && d.reason) return foodOnly ? `${d.reason} (food only)` : d.reason;
+  if (!foodOnly) return d.reason ? `Discount (${d.reason})` : 'Discount';
+  const percent = d.discountType === 'percent' ? ` ${d.value}%` : '';
+  return `Discount${percent} (${d.reason ? `${d.reason}, ` : ''}food only)`;
+}
+
+/**
  * The "Delivery Charge (Rs N)" item whose price is this fee, or undefined
  * when the menu has none. Matched on price rather than the exact name so a
  * cashier retyping the name cannot break it.

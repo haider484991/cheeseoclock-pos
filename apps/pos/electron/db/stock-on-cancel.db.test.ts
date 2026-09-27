@@ -30,7 +30,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { validateOrderForTender } from '@cheeseoclock/pos-domain';
+import { validateOrderForTender, websiteDiscountRule } from '@cheeseoclock/pos-domain';
 import type {
   FoodMade,
   OrderMode,
@@ -501,6 +501,8 @@ async function openShop() {
           db,
           { orderId: shell.id, discountType: 'percent', value: 10, reason: 'Website pick-up 10% off', approverUserId: BRIDGE.userId },
           BRIDGE,
+          // The website's own rule, as the bridge freezes it (never the till's switch).
+          { rule: websiteDiscountRule() },
         );
       }
       r.sendOrderToKitchen(db, shell.id, BRIDGE);

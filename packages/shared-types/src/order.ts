@@ -140,6 +140,15 @@ export interface OrderDiscount {
   source?: DiscountSource | null;
   /** A foodpanda deal's figures on this order (the whole deal, foodpanda's part). */
   foodpanda?: FoodpandaDealShare | null;
+  /**
+   * Whether this discount also came off the order's delivery charge, as
+   * FROZEN on its row when it was given (order_discounts.rule_json; pos-domain
+   * discountRuleAlsoOffDeliveryCharge), never the live setting. false = worked
+   * on and split over the food only: the delivery charge takes none of it
+   * (the tax split and the FBR invoice follow). true = over every line, as
+   * every discount before the rule existed (a row with no rule reads true).
+   */
+  alsoOffDeliveryCharge?: boolean;
 }
 
 export interface Payment {

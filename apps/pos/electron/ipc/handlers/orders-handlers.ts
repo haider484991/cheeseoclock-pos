@@ -52,6 +52,7 @@ import {
 import {
   approvalRuleText,
   checkChoicePicks,
+  discountBaseCents,
   kitchenHearsOfClose,
   requiresManagerApproval,
   stockSettlementForCounter,
@@ -59,7 +60,7 @@ import {
   validateOrderForTender,
 } from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
-import { readApprovalLimits } from '../../db/business-settings-read.js';
+import { readApprovalLimits, readDiscountAlsoOffDeliveryCharge } from '../../db/business-settings-read.js';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from '../../db/repositories/modifier-repo.js';
 import { groupDisplayName } from '@cheeseoclock/shared-types';
@@ -309,10 +310,11 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const replacesDeal = hasFoodpandaDeal(ctx.db, payload.orderId);
     // The live limit (Settings → Money & discounts): the screen may be a Save behind, this decides.
     const limits = readApprovalLimits(ctx.db);
-    if (
-      replacesDeal ||
-      requiresManagerApproval({ type: payload.discountType, value: payload.value }, current.order.subtotalCents, limits)
-    ) {
+    // …on what the discount will be worked on: the food only, unless the owner's
+    // switch says it also comes off the delivery charge (the repository freezes
+    // the same switch on the row, and checks again).
+    const base = discountBaseCents(current.items, readDiscountAlsoOffDeliveryCharge(ctx.db));
+    if (replacesDeal || requiresManagerApproval({ type: payload.discountType, value: payload.value }, base, limits)) {
       if (!payload.approverPin) {
         throw new IpcGuardError({
           code: 'precondition_failed',

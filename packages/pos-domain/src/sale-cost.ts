@@ -137,16 +137,19 @@ export function stockValueAt(q: number, price: { pack: Pack; kind: PriceKind } |
  * order the till lists them ((created_at, id), as recomputeOrderTotals):
  * the discount shared out by allocateDiscount, then the part refunds, taken
  * off before tax (ref × (sub − disc) ÷ total), shared out the same way. The
- * nets add up to (sub − disc) − refund-before-tax exactly.
+ * nets add up to (sub − disc) − refund-before-tax exactly. `discountSkips`:
+ * the lines that took none of the discount under its frozen rule (a delivery
+ * charge; profit.ts splitOrderLines).
  */
 export function lineNetsExTax(
   lineTotalsCents: readonly number[],
   discountCents: number,
   totalCents: number,
   refundedCents: number,
+  discountSkips?: readonly boolean[],
 ): number[] {
   // The one allocation (costing spec 4.4), shared with Profit.
-  return splitOrderLines(lineTotalsCents, discountCents, totalCents, refundedCents).nets;
+  return splitOrderLines(lineTotalsCents, discountCents, totalCents, refundedCents, discountSkips).nets;
 }
 
 // ------------------------------------------------------------ food cost --
@@ -159,6 +162,14 @@ export interface FoodCostLine {
   lineTotalCents: number;
   /** A delivery charge or a non-food category: not food sales. */
   isFee: boolean;
+  /**
+   * The line took none of the order's discount: a delivery charge the
+   * discount's FROZEN rule left alone (the row's rule_json and the name the
+   * line was sold under — discount-base.ts discountSkipMask; never `isFee`,
+   * which follows the live "not food" categories). Absent = it took its
+   * share (every discount before 0.7.25).
+   */
+  skipsDiscount?: boolean;
   /** Cost rows kept with the sale for this line (0 when none). */
   parts: number;
   costCents: number;
@@ -279,6 +290,7 @@ export function orderFoodCost(o: FoodCostOrder): OrderFoodCost {
     o.discountCents,
     o.totalCents,
     o.refundedCents,
+    o.lines.some((l) => l.skipsDiscount === true) ? o.lines.map((l) => l.skipsDiscount === true) : undefined,
   );
   const r: OrderFoodCost = {
     nets,
