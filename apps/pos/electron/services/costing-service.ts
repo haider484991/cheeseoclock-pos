@@ -81,7 +81,7 @@ interface MenuItemRow {
   isActive: boolean;
 }
 
-interface MenuData {
+export interface MenuData {
   categories: Array<{ id: string; name: string }>;
   items: MenuItemRow[];
   recipes: Map<string, RecipeLine[]>;
@@ -123,7 +123,14 @@ type SalesNeed =
 
 // ------------------------------------------------------------------ loading --
 
-function loadMenu(db: AppDatabase): MenuData {
+/**
+ * The live menu, recipes and choice groups, no prices: every item, its
+ * recipe lines that can still apply (a live ingredient — the stock SQL joins
+ * it the same way — and a live choice when the line depends on one), and
+ * its groups with their options. Also the recipe calculator's (quantities
+ * only), so both read one menu.
+ */
+export function loadMenu(db: AppDatabase): MenuData {
   const categories = loadCategories(db);
   const items = (
     db
@@ -777,6 +784,17 @@ export function plateAt(ctx: CostingContext, item: MenuItemRow, priceOf: PriceOf
     },
     priceOf,
   );
+}
+
+/**
+ * One item's picks over the last 28 days on this till — units sold, per
+ * choice the units that had it (N_o), per group the units that picked in it
+ * (U_g) — and nothing about money (no sales). For the recipe calculator's
+ * "usual picks" (a stock channel), worked out by the same query as Costing's.
+ */
+export function loadItemPickMix(db: AppDatabase, menuItemId: string, now = new Date()): PickMix {
+  const s = loadSales(db, now, { kind: 'item', itemId: menuItemId }).get(menuItemId);
+  return s ? { units: s.units, picks: s.picks, groupUnits: s.groupUnits } : { units: 0, picks: new Map(), groupUnits: new Map() };
 }
 
 /** The customers' picks of an item over the window (null when it did not sell). */

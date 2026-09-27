@@ -1,5 +1,14 @@
 import { z } from 'zod';
-import { INGREDIENT_CATEGORY_IDS, MOVEMENT_DETAILS, PRICE_KINDS, TYPED_PRICE_PERS, WASTE_REASONS } from '@cheeseoclock/shared-types';
+import {
+  INGREDIENT_CATEGORY_IDS,
+  MOVEMENT_DETAILS,
+  PRICE_KINDS,
+  RECIPE_CALC_MAX_AMOUNT,
+  RECIPE_CALC_MAX_COUNT,
+  RECIPE_CALC_MAX_LINES,
+  TYPED_PRICE_PERS,
+  WASTE_REASONS,
+} from '@cheeseoclock/shared-types';
 import { centsSchema } from './common.js';
 
 /**
@@ -142,6 +151,50 @@ export const batchCalcInputSchema = z.object({
   ingredientId: idSchema,
   amount: wholeUnits.positive({ message: 'Enter how much, at least 1' }).max(100_000_000),
 });
+
+/**
+ * The recipe calculator (inventory:recipeCalc, costing:recipeCalc,
+ * inventory:printPrepList): 1–30 things to make — N of a menu item with
+ * its choices counted, or an amount of a batch in its base unit. Whole
+ * numbers only (stock is whole grams / ml / pieces). Whether each choice is
+ * one of the item's, and not above the count, is checked by the service.
+ */
+const recipeCalcLineSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('item'),
+    menuItemId: idSchema,
+    count: z
+      .number()
+      .int({ message: 'Say how many as a whole number' })
+      .min(1, { message: 'Make at least 1' })
+      .max(RECIPE_CALC_MAX_COUNT, { message: `At most ${RECIPE_CALC_MAX_COUNT.toLocaleString('en-PK')} at once` }),
+    portions: z
+      .array(
+        z.object({
+          modifierId: idSchema,
+          count: z.number().int({ message: 'A choice is counted in whole ones' }).min(0).max(RECIPE_CALC_MAX_COUNT),
+        }),
+      )
+      .max(300),
+  }),
+  z.object({
+    kind: z.literal('batch'),
+    ingredientId: idSchema,
+    amount: wholeUnits
+      .positive({ message: 'Make at least 1' })
+      .max(RECIPE_CALC_MAX_AMOUNT, { message: 'That is more than the calculator works out at once' }),
+  }),
+]);
+
+export const recipeCalcInputSchema = z.object({
+  lines: z
+    .array(recipeCalcLineSchema)
+    .min(1, { message: 'Pick something to make' })
+    .max(RECIPE_CALC_MAX_LINES, { message: `At most ${RECIPE_CALC_MAX_LINES} things at once` }),
+});
+
+/** A menu item's choices and the customers' picks, for the calculator's "usual picks". */
+export const typicalPicksInputSchema = z.object({ menuItemId: idSchema });
 
 /** The recipe editor's live cost: the lines as typed (not saved), for one menu item. */
 export const recipeCostInputSchema = z.object({

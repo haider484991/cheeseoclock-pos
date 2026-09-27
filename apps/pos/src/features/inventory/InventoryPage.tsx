@@ -13,12 +13,16 @@ import { SuppliersTab } from './SuppliersTab';
 import { PurchaseOrdersTab } from './PurchaseOrdersTab';
 import { StockTakesTab } from './StockTakesTab';
 import { STOCK_COUNTS_KEY } from './CountSheet';
-import { Carrot, BookOpen, History, Truck, ClipboardList, ClipboardCheck } from 'lucide-react';
+import { RecipeCalculatorTab } from './RecipeCalculator';
+import { presetRecipeCalculator } from '../costing/deepLinks';
+import { Carrot, BookOpen, History, Truck, ClipboardList, ClipboardCheck, Calculator } from 'lucide-react';
 
-type Tab = 'ingredients' | 'recipes' | 'movements' | 'stocktakes' | 'suppliers' | 'pos';
+type Tab = 'ingredients' | 'calculator' | 'recipes' | 'movements' | 'stocktakes' | 'suppliers' | 'pos';
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof Carrot }> = [
   { id: 'ingredients', label: 'Ingredients', icon: Carrot },
+  // Owner, 2026-09-27: "how much ingredients a recipe needs for making anything".
+  { id: 'calculator', label: 'Recipe calculator', icon: Calculator },
   { id: 'recipes', label: 'Recipes', icon: BookOpen },
   { id: 'movements', label: 'Stock history', icon: History },
   // Costing spec Phase 8: count the shelves; what went missing.
@@ -112,7 +116,16 @@ export function InventoryPage() {
           }}
         />
       )}
-      {tab === 'recipes' && <RecipesTab />}
+      {tab === 'calculator' && <RecipeCalculatorTab />}
+      {tab === 'recipes' && (
+        <RecipesTab
+          onCalculate={(item) => {
+            // "Calculate" on a recipe card: that item added to what is being worked out.
+            presetRecipeCalculator(item);
+            setTab('calculator');
+          }}
+        />
+      )}
       {tab === 'movements' && (
         <MovementsTab ingredient={historyFor} onClearIngredient={() => setHistoryFor(null)} />
       )}
