@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
 import { OrderCtaBand } from '@/components/OrderCtaBand';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
+import { ShopMapCard } from '@/components/ShopMapCard';
 import { Reveal } from '@/components/Reveal';
 import { BUSINESS } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
@@ -95,17 +96,12 @@ export default function DeliveryHubPage() {
                   · {BUSINESS.phoneDisplay} · {BUSINESS.hours}
                 </p>
               </div>
-              <div className="overflow-hidden rounded-2xl border border-white/10">
-                <iframe
-                  title="Cheese O'Clock delivery coverage map — DHA Karachi"
-                  src="https://maps.google.com/maps?q=DHA%20Phase%206%20Karachi&z=12&output=embed"
-                  width="600"
-                  height="320"
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
-                  className="h-[320px] w-full border-0"
-                />
-              </div>
+              <ShopMapCard
+                title="Cheese O'Clock delivery coverage map — DHA Karachi"
+                zoom={12}
+                heightClass="h-[320px]"
+                className="rounded-2xl border border-white/10"
+              />
             </div>
           </Reveal>
         </section>

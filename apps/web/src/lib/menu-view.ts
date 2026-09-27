@@ -55,13 +55,35 @@ export function splitSizedName(name: string): { base: string; size: string | nul
   return { base: parts.join(' — ').trim(), size: size || null };
 }
 
-/** Inches only where the shop prints them (Medium 9", Large 12"). */
-export function sizeLabel(size: string | null): string {
+/**
+ * Sized items that are not pizzas: fries come Regular / Large and drinks
+ * 345 ml / 1 litre, with no inches (partner, 27 Sep 2026: the masala fries
+ * read "Large 12"").
+ */
+const NOT_PIZZA = /\b(?:fries|drinks?|nuggets|wings|burgers?|dips?|shakes?|juices?|water)\b/i;
+
+/** Is this base name ("Fajita Pizza", "Crown Crust", "Fries") a pizza? */
+export function isPizzaName(base: string): boolean {
+  return !NOT_PIZZA.test(base);
+}
+
+/** Inches only on pizzas, where the shop prints them (Medium 9", Large 12"). */
+export function sizeLabel(size: string | null, base: string): string {
   if (!size) return '';
+  if (!isPizzaName(base)) return size;
   const s = size.toLowerCase();
   if (s === 'medium') return 'Medium 9"';
   if (s === 'large') return 'Large 12"';
   return size;
+}
+
+/**
+ * A card's size words: none for a one-size item that is not a pizza (the
+ * printed menu shows the masala fries with no size), else sizeLabel.
+ */
+export function cardSizeLabel(card: Pick<MenuCard, 'name' | 'variants'>, size: string | null): string {
+  if (card.variants.length === 1 && !isPizzaName(card.name)) return '';
+  return sizeLabel(size, card.name);
 }
 
 /**

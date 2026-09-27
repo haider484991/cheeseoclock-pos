@@ -210,7 +210,7 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
                   className="min-h-[32px] rounded-full bg-stone-100 px-2.5 text-xs font-semibold text-stone-800 hover:bg-amber-200 dark:bg-stone-800 dark:text-stone-200 dark:hover:bg-stone-700"
                 >
                   {z.shortName}
-                  {/* Only when the block changes the fee (Clifton 1 & 2). */}
+                  {/* Only when the place changes the fee (Clifton 1 & 2, DHA Phase 8). */}
                   {feeForZones(multi.zoneIds) === null && (
                     <span className="ml-1 font-mono font-normal text-stone-500">{deliveryFeeText([zid])}</span>
                   )}

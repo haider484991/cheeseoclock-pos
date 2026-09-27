@@ -5,6 +5,7 @@ import { Reveal } from '@/components/Reveal';
 import { CheeseTime } from '@/components/CheeseTime';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { PizzaCarousel3D } from '@/components/PizzaCarousel3D';
+import { ShopMapCard } from '@/components/ShopMapCard';
 import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
 import { FEE_SUMMARY } from '@/lib/delivery-zones';
@@ -35,7 +36,7 @@ const STEPS = [
 const FAQS = [
   {
     q: 'Which areas do you deliver to?',
-    a: `DHA Phases 1–8 and Clifton Blocks 1–9, including Emaar Crescent Bay and Creek Vista. Delivery is Rs 200 for DHA Phases 1–8 and Clifton Blocks 3–9, and Rs 250 for Clifton Blocks 1 & 2, Emaar and Creek Vista. We don't deliver outside DHA and Clifton.`,
+    a: `DHA Phases 1–8 and Clifton Blocks 1–9, including Emaar Crescent Bay and Creek Vista. Delivery is Rs 200 for DHA Phases 1–7 and Clifton Blocks 3–9, and Rs 250 for DHA Phase 8, Emaar, Creek Vista and Clifton Blocks 1 & 2. We don't deliver outside DHA and Clifton.`,
   },
   {
     q: 'What are your hours?',
@@ -86,9 +87,26 @@ export default function HomePage() {
                 <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
                 We deliver all over DHA &amp; Clifton
               </p>
-              <h1 className="mt-5 font-display text-[clamp(3rem,8.2vw,6.4rem)] uppercase leading-[0.92] tracking-wide text-cream">
-                It&rsquo;s always
-                <span className="block text-cheese">Cheese O&rsquo;Clock.</span>
+              {/* The brand leads (partner, 27 Sep 2026: "it's always" must not
+                  outweigh the name): a small "It's always" over the real
+                  script wordmark, big. The words stay in the heading for
+                  search and screen readers; the drawing is decoration. */}
+              <h1 className="mt-5">
+                <span className="block font-display text-[clamp(2.1rem,5vw,3.6rem)] uppercase leading-none tracking-wide text-cream">
+                  It&rsquo;s always
+                </span>
+                <span className="sr-only">Cheese O&rsquo;Clock.</span>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/logo-wordmark.svg"
+                  alt=""
+                  aria-hidden
+                  width={642}
+                  height={308}
+                  fetchPriority="high"
+                  decoding="async"
+                  className="mt-3 block h-auto w-[min(88vw,34rem)] drop-shadow-[0_8px_28px_rgba(245,179,1,0.18)] md:mt-4"
+                />
               </h1>
             </div>
 
@@ -318,17 +336,11 @@ export default function HomePage() {
                 </div>
               </div>
               <Reveal delay={100}>
-                <div className="overflow-hidden rounded-3xl border-2 border-ink">
-                  <iframe
-                    title="Cheese O'Clock, Rahat Commercial Area, DHA Phase 6, Karachi on Google Maps"
-                    src={`https://maps.google.com/maps?q=${BUSINESS.latitude},${BUSINESS.longitude}&z=15&output=embed`}
-                    width="600"
-                    height="380"
-                    loading="lazy"
-                    referrerPolicy="no-referrer-when-downgrade"
-                    className="h-[380px] w-full border-0"
-                  />
-                </div>
+                <ShopMapCard
+                  title="Cheese O'Clock, Rahat Commercial Area, DHA Phase 6, Karachi on Google Maps"
+                  heightClass="h-[380px]"
+                  className="rounded-3xl border-2 border-ink"
+                />
                 <address className="mt-3 text-center text-sm not-italic text-ink/65">
                   {BUSINESS.streetAddress}, {BUSINESS.locality} · {BUSINESS.hours}
                 </address>

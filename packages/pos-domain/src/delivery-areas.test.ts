@@ -168,7 +168,13 @@ describe('fees', () => {
   it('knows the fee when every candidate zone agrees', () => {
     expect(feeForZones(['dha-6'])).toBe(20_000);
     expect(feeForZones(['clifton-1'])).toBe(25_000);
-    expect(feeForZones(option('Khayaban-e-Shahbaz').zoneIds)).toBe(20_000);
+    expect(feeForZones(option('Rahat Commercial').zoneIds)).toBe(20_000);
+    expect(feeForZones(['dha-8'])).toBe(25_000);
+  });
+
+  it('asks the phase on a khayaban, now that Phase 8 costs more (owner 2026-09-27)', () => {
+    expect(feeForZones(option('Khayaban-e-Shahbaz').zoneIds)).toBeNull();
+    expect(feeRangeForZones(option('Khayaban-e-Shahbaz').zoneIds)).toEqual({ minCents: 20_000, maxCents: 25_000 });
   });
 
   it('refuses to guess when the block decides the fee', () => {

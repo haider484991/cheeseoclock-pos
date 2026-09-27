@@ -50,13 +50,13 @@ export interface DeliveryZone {
 const RS200 = 20_000;
 const RS250 = 25_000;
 
-function dhaPhase(n: number): DeliveryZone {
+function dhaPhase(n: number, feeCents: number = RS200): DeliveryZone {
   return {
     id: `dha-${n}`,
     name: `DHA Phase ${n}`,
     shortName: `Phase ${n}`,
     group: 'DHA',
-    feeCents: RS200,
+    feeCents,
     aliases: [`phase ${n}`, `ph ${n}`, `ph${n}`, `dha ${n}`, `dha${n}`, `defence phase ${n}`, `defence ${n}`],
     hints: [`${n}`, `p${n}`, `p ${n}`],
   };
@@ -103,7 +103,8 @@ export const DELIVERY_ZONES: readonly DeliveryZone[] = [
   dhaPhase(6),
   dhaPhase(7),
   dhaExtension(7),
-  dhaPhase(8),
+  // Phase 8 is Rs 250 (owner 2026-09-27: "phase 8 250 ki category may jayega").
+  dhaPhase(8, RS250),
   {
     id: 'emaar',
     name: 'Emaar Crescent Bay (DHA)',
@@ -135,8 +136,8 @@ export const DELIVERY_ZONES: readonly DeliveryZone[] = [
 
 /** The two fee tiers in customer words, for copy that summarises the card. */
 export const FEE_SUMMARY = [
-  { feeCents: RS200, places: 'DHA Phases 1–8 · Clifton Blocks 3–9' },
-  { feeCents: RS250, places: 'Clifton Blocks 1 & 2 · Emaar & Creek Vista' },
+  { feeCents: RS200, places: 'DHA Phases 1–7 · Clifton Blocks 3–9' },
+  { feeCents: RS250, places: 'DHA Phase 8 · Emaar & Creek Vista · Clifton Blocks 1 & 2' },
 ] as const;
 
 /** Every delivery address is in Karachi — the city is never in question. */

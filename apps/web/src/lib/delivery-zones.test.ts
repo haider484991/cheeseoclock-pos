@@ -18,13 +18,14 @@ describe('delivery zones', () => {
     expect(new Set(DELIVERY_ZONES.map((z) => z.feeCents))).toEqual(new Set([20_000, 25_000]));
   });
 
-  it('charges Rs 250 exactly for Clifton 1 & 2, Emaar and Creek Vista', () => {
+  it('charges Rs 250 exactly for DHA Phase 8, Emaar, Creek Vista and Clifton 1 & 2', () => {
     const rs250 = DELIVERY_ZONES.filter((z) => z.feeCents === 25_000).map((z) => z.id).sort();
-    expect(rs250).toEqual(['clifton-1', 'clifton-2', 'creek-vista', 'emaar']);
+    expect(rs250).toEqual(['clifton-1', 'clifton-2', 'creek-vista', 'dha-8', 'emaar']);
   });
 
   it('has every DHA phase 1–8 and Clifton block 1–9', () => {
-    for (let p = 1; p <= 8; p++) expect(findZone(`dha-${p}`)?.feeCents).toBe(20_000);
+    for (let p = 1; p <= 7; p++) expect(findZone(`dha-${p}`)?.feeCents).toBe(20_000);
+    expect(findZone('dha-8')?.feeCents).toBe(25_000);
     for (let b = 1; b <= 9; b++) expect(findZone(`clifton-${b}`)).toBeDefined();
   });
 
