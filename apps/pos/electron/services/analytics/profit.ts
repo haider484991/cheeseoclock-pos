@@ -15,13 +15,14 @@
  *
  * foodpanda's money per order is pos-domain foodpandaOrderMoney — THE rule
  * Reports → Channels' foodpanda block uses too (business-report
- * getFoodpanda): the terms kept at payment when the commission was
- * confirmed then, else Settings → foodpanda's fees now (the one reader,
- * readShopSetting). So the Profit tab's "foodpanda commission and fees"
- * (commission + fee + tax on it) and uplift are the Channels block's, to
- * the rupee. foodpanda's part of the deal is neither added nor taken off:
- * sales are the stored subtotal − discount (the shop's part only), which
- * already holds it.
+ * getFoodpanda): the prices kept at payment; the commission, fees and tax
+ * kept then when the commission was confirmed, else Settings → foodpanda's
+ * fees now (the one reader, readShopSetting); less part refunds, as the
+ * sales here are. So the Profit tab's "foodpanda commission and fees"
+ * (commission + tax on it + the fee per order + its % of the total) and
+ * uplift are the Channels block's, to the paisa. foodpanda's part of the
+ * deal is neither added nor taken off: sales are the stored subtotal −
+ * discount (the shop's part only), which already holds it.
  *
  * Speed, as Food cost & stock (costing spec §6): orders with nothing to share
  * out (no discount, no part refund) that kept their cost are added up in SQL,
@@ -109,7 +110,12 @@ const LINK_OFF: TillLinkState = { on: false, stale: false, lastHeardAt: null };
 // ---------------------------------------------------------------- settings --
 
 export interface ProfitSettings {
-  /** The card and wallet fees ('channels.fees'; its retired foodpanda part is never used here). */
+  /**
+   * The card and wallet fees ('channels.fees'; its retired foodpanda part is
+   * never used here). The "Foodpanda" one is always 0 here: foodpanda's fee
+   * on its orders is Settings → foodpanda's (paymentFeeBps), inside what
+   * foodpanda keeps — never charged twice.
+   */
   fees: PaymentFees;
   riderCost: RiderCostSetting;
   /** foodpanda's terms in force now: Settings → foodpanda, through the one reader. */
@@ -125,7 +131,7 @@ export function loadProfitSettings(db: AppDatabase): ProfitSettings {
   const rider = getBusinessSetting(db, 'delivery.riderCost');
   const saved = [fees?.updatedAt, rider?.updatedAt].filter((x): x is string => typeof x === 'string').sort();
   return {
-    fees: { paymentFeeBps: (fees?.value ?? DEFAULT_CHANNEL_FEES).paymentFeeBps },
+    fees: { paymentFeeBps: { ...(fees?.value ?? DEFAULT_CHANNEL_FEES).paymentFeeBps, foodpanda: 0 } },
     riderCost: rider?.value ?? DEFAULT_RIDER_COST,
     foodpanda: readShopSetting(db, 'foodpanda.fees').value,
     isDefault: fees === null && rider === null,
@@ -651,6 +657,8 @@ export function readOrderCosts(db: AppDatabase, range: ReportRange, menu: MenuLo
     commission: number | null;
     fee: number | null;
     commissionTax: number | null;
+    paymentFee: number | null;
+    upliftBps: number | null;
     payout: number | null;
     area: string | null;
     charge: number | null;

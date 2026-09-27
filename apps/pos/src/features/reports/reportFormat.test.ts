@@ -266,7 +266,7 @@ function profitTabOf(base: { sinceIso: string; untilIso: string; engine: 'worker
     estimatedOrders: 0,
     costingStartedAt: null,
     fees: {
-      foodpanda: { v: 1, commissionBps: 2500, confirmed: false, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0 },
+      foodpanda: { v: 1, commissionBps: 2500, confirmed: false, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0, paymentFeeBps: 0 },
       paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 },
     },
     riderCost: { mode: 'zone_rate', fixedCents: 0 },

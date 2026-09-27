@@ -256,11 +256,18 @@ const foodpandaFeesShape = {
   fixedFeeCents: wholeRupees(2_000, 'The fee per order'),
   commissionTaxBps: ratePercentBps('The tax on the commission'),
   upliftBps: upliftBpsSchema,
+  paymentFeeBps: ratePercentBps("foodpanda's fee on the order's total"),
 };
 /** 'foodpanda.fees' as this version writes it. */
 export const foodpandaFeesSchema = z.object({ v: writesFormat('foodpanda.fees'), ...foodpandaFeesShape }).strict();
-// Format 1 gained upliftBps before it was released; a value written without it reads as 0 (the till's prices).
-const foodpandaFeesReadSchema = z.object({ v: readsFormat, ...foodpandaFeesShape, upliftBps: upliftBpsSchema.default(0) });
+// Format 1 gained upliftBps and paymentFeeBps before it was released; a value written without
+// them reads as 0 (the till's prices, no fee on the total).
+const foodpandaFeesReadSchema = z.object({
+  v: readsFormat,
+  ...foodpandaFeesShape,
+  upliftBps: upliftBpsSchema.default(0),
+  paymentFeeBps: foodpandaFeesShape.paymentFeeBps.default(0),
+});
 
 const checkRule = z.enum(['optional', 'required'], { errorMap: () => ({ message: 'Optional or required' }) });
 const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };

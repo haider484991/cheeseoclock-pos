@@ -26,6 +26,12 @@ export function centsFromRupeesText(text: string): number | null {
   return /^\d{1,7}$/.test(t) ? Number(t) * 100 : Number.NaN;
 }
 
+/** "a", "a and b", "a, b and c". */
+export function andList(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts.join('');
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
 /** Who pays for the deal, as the card asks it. */
 export type DealPayer = 'shop' | 'foodpanda' | 'shared';
 
@@ -63,6 +69,7 @@ export function feesSummary(fees: FoodpandaFees): string {
   if (fees.fixedFeeCents > 0) parts.push(`${formatCents(fees.fixedFeeCents)} an order`);
   if (fees.commissionTaxBps > 0) parts.push(`${percentFromBps(fees.commissionTaxBps)} tax on it`);
   if (fees.upliftBps > 0) parts.push(`menu ${percentFromBps(fees.upliftBps)} above the till`);
+  if (fees.paymentFeeBps > 0) parts.push(`${percentFromBps(fees.paymentFeeBps)} of the total`);
   return parts.join(' · ');
 }
 
@@ -89,7 +96,7 @@ export function workedExample(deal: FoodpandaDeal, fees: FoodpandaFees): string 
   if (x.dealPercent === 0) {
     lead = `${order} with no deal`;
   } else {
-    const capped = deal.maxOffCents !== null && x.shopCents + x.platformCents === deal.maxOffCents ? ` (at most ${formatCents(deal.maxOffCents)})` : '';
+    const capped = deal.maxOffCents !== null && x.capped ? ` (at most ${formatCents(deal.maxOffCents)})` : '';
     const payer = dealPayer({ percent: x.dealPercent, shopPercent: x.shopPercent });
     if (payer === 'shop') lead = `${order} with ${x.dealPercent}% off${capped} that you pay`;
     else if (payer === 'foodpanda') {
@@ -105,7 +112,8 @@ export function workedExample(deal: FoodpandaDeal, fees: FoodpandaFees): string 
   const extras: string[] = [];
   if (x.commissionTaxCents > 0) extras.push(`${formatCents(x.commissionTaxCents)} tax on that`);
   if (x.fixedFeeCents > 0) extras.push(`a ${formatCents(x.fixedFeeCents)} fee`);
-  if (extras.length > 0) keeps += `, plus ${extras.join(' and ')}`;
+  if (x.paymentFeeCents > 0) extras.push(`${percentFromBps(x.paymentFeeBps)} of the total (${formatCents(x.paymentFeeCents)})`);
+  if (extras.length > 0) keeps += `, plus ${andList(extras)}`;
   const tail = fees.confirmed ? '' : ` (${rate} is only suggested until you confirm foodpanda's commission below.)`;
   return `${lead}: ${bill}; ${keeps}; you keep ${formatCents(x.youKeepCents)} before food cost.${tail}`;
 }

@@ -7,9 +7,12 @@ import {
 } from '@cheeseoclock/shared-types';
 import {
   LEGACY_COMMISSION_BASE_MAP,
+  LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES,
   activeFoodpandaDeal,
   atFoodpandaPrices,
+  atTillPrices,
   dealAmount,
+  dealMinTillCents,
   expectedTabletCents,
   foodpandaDealLabel,
   foodpandaDealRule,
@@ -19,6 +22,7 @@ import {
   foodpandaTerms,
   foodpandaUpliftCents,
   parseFoodpandaDealRule,
+  type KeptFoodpandaTerms,
   tabletDiffers,
   tabletDifferenceCents,
   tradingDayOfInstant,
@@ -28,7 +32,18 @@ import { allocateDiscount } from './discount.js';
 /** Made-up figures throughout. */
 const deal = (over: Partial<FoodpandaDeal> = {}): FoodpandaDeal => ({ ...DEFAULT_FOODPANDA_DEAL, percent: 20, shopPercent: 20, ...over });
 const fees = (over: Partial<FoodpandaFees> = {}): FoodpandaFees => ({ ...DEFAULT_FOODPANDA_FEES, ...over });
-const rule = (over: Partial<FoodpandaDeal> = {}) => foodpandaDealRule(deal(over), '2026-09-27T09:00:00.000Z');
+const rule = (over: Partial<FoodpandaDeal> = {}, upliftBps = 0) => foodpandaDealRule(deal(over), '2026-09-27T09:00:00.000Z', upliftBps);
+/** Terms kept at payment (order_channel_terms), with what a row of this version always has. */
+const keptTerms = (over: Partial<KeptFoodpandaTerms> = {}): KeptFoodpandaTerms => ({
+  confirmed: true,
+  commissionCents: 0,
+  fixedFeeCents: 0,
+  commissionTaxCents: 0,
+  paymentFeeCents: 0,
+  expectedPayoutCents: null,
+  upliftBps: 0,
+  ...over,
+});
 
 describe('the deal an order gets', () => {
   it('the default (0%) is no deal: foodpanda orders stay at full till price', () => {
@@ -102,10 +117,65 @@ describe('dealAmount: the rupees, from the frozen rule', () => {
   });
 });
 
+describe("dealAmount when foodpanda's menu is dearer: the minimum and the most-off at foodpanda's prices", () => {
+  // Made-up: a 20% deal the shop pays half of, at most Rs 300 off, foodpanda's menu 10% above the till's.
+  const capped = rule({ percent: 20, shopPercent: 10, maxOffCents: 30_000 }, 1_000);
+
+  it("the most-off binds where foodpanda's does, and the till's total at foodpanda's prices is foodpanda's own", () => {
+    // Rs 2,500 at the till is Rs 2,750 on foodpanda: 20% would be Rs 550, so foodpanda takes Rs 300 off
+    // (the shop's part Rs 150) and the order is worth Rs 2,600 there. At the till: Rs 300 at foodpanda's prices.
+    const a = dealAmount(capped, 250_000);
+    expect(a.dealCents).toBe(atTillPrices(30_000, 1_000));
+    expect(a.shopCents + a.platformCents).toBe(a.dealCents);
+    const value = 250_000 - a.shopCents;
+    expect(Math.abs(atFoodpandaPrices(value, 1_000) - (275_000 - 15_000))).toBeLessThanOrEqual(1);
+    // With 16% tax the tablet Pay expects is within a paisa of foodpanda's Rs 3,016: no warning.
+    const total = value + Math.round(value * 0.16);
+    expect(Math.abs(expectedTabletCents(total, 1_000) - 301_600)).toBeLessThanOrEqual(1);
+    expect(tabletDiffers(expectedTabletCents(total, 1_000), 301_600)).toBe(false);
+    // ...and the commission is on foodpanda's Rs 2,600 (to the paisa), not Rs 15 less.
+    const t = foodpandaTerms({ subtotalCents: 250_000, shopDiscountCents: a.shopCents, totalCents: total }, fees({ upliftBps: 1_000 }));
+    expect(Math.abs(t.commissionBaseCents - 260_000)).toBeLessThanOrEqual(1);
+  });
+
+  it("below the cap the deal is the plain % at the till, as at the till's prices", () => {
+    expect(dealAmount(capped, 100_000)).toEqual({ dealCents: 20_000, shopCents: 10_000, platformCents: 10_000 });
+  });
+
+  it("the minimum, typed as foodpanda shows it, is met at foodpanda's prices", () => {
+    const min = rule({ minOrderCents: 150_000 }, 1_000);
+    // Rs 1,400 at the till is Rs 1,540 on foodpanda: foodpanda gives the deal, so the till does.
+    expect(dealAmount(min, 140_000).dealCents).toBe(28_000);
+    // The smallest till subtotal that reaches Rs 1,500 there, and a paisa less does not.
+    const from = dealMinTillCents(min);
+    expect(from).toBe(136_364);
+    expect(dealAmount(min, 136_364).dealCents).toBeGreaterThan(0);
+    expect(dealAmount(min, 136_363).dealCents).toBe(0);
+    // At the till's prices nothing is converted.
+    expect(dealMinTillCents(rule({ minOrderCents: 150_000 }))).toBe(150_000);
+    expect(dealMinTillCents(rule())).toBeNull();
+  });
+
+  it("at the till's prices (the default uplift 0) the rupees are what they always were", () => {
+    for (const sub of [99_900, 150_000, 250_000, 500_000]) {
+      const r = { percent: 20, shopPercent: 10, minOrderCents: 100_000, maxOffCents: 30_000 };
+      expect(dealAmount(rule(r, 0), sub)).toEqual(dealAmount({ ...rule(r), upliftBps: undefined }, sub));
+    }
+    expect(atTillPrices(30_000, 0)).toBe(30_000);
+    expect(atTillPrices(33_000, 1_000)).toBe(30_000);
+  });
+});
+
 describe('the frozen rule survives the trip through rule_json', () => {
-  it('round-trips', () => {
-    const r = rule({ percent: 25, shopPercent: 15, minOrderCents: 80_000, maxOffCents: 50_000 });
+  it('round-trips, with the uplift it was frozen at', () => {
+    const r = rule({ percent: 25, shopPercent: 15, minOrderCents: 80_000, maxOffCents: 50_000 }, 1_250);
+    expect(r.upliftBps).toBe(1_250);
     expect(parseFoodpandaDealRule(JSON.stringify(r))).toEqual(r);
+  });
+
+  it("a rule written without the uplift was frozen at the till's prices", () => {
+    const { upliftBps: _drop, ...older } = rule({ maxOffCents: 30_000 });
+    expect(parseFoodpandaDealRule(JSON.stringify(older))?.upliftBps).toBe(0);
   });
 
   it('anything else is not a deal this version works (the row falls back to its own type and value)', () => {
@@ -119,6 +189,8 @@ describe('the frozen rule survives the trip through rule_json', () => {
       JSON.stringify({ ...rule(), shopPercent: 30 }),
       JSON.stringify({ ...rule(), dealPercent: 12.5 }),
       JSON.stringify({ ...rule(), minOrderCents: -1 }),
+      JSON.stringify({ ...rule(), upliftBps: -100 }),
+      JSON.stringify({ ...rule(), upliftBps: 12.5 }),
     ]) {
       expect({ bad, rule: parseFoodpandaDealRule(bad) }).toEqual({ bad, rule: null });
     }
@@ -142,6 +214,7 @@ describe("foodpanda's money on one order", () => {
       commissionCents: 50_000,
       commissionTaxCents: 8_000,
       fixedFeeCents: 3_000,
+      paymentFeeCents: 0,
       foodpandaKeepsCents: 61_000,
       upliftCents: 0,
       expectedTabletCents: 185_600,
@@ -170,6 +243,15 @@ describe("foodpanda's money on one order", () => {
     expect(foodpandaUpliftCents(90_000, 0)).toBe(0);
   });
 
+  it("foodpanda's fee on the order's total: a % of what the tablet shows, tax included, at its prices", () => {
+    const t = foodpandaTerms({ subtotalCents: 200_000, shopDiscountCents: 40_000, totalCents: 185_600 }, fees({ paymentFeeBps: 200 }));
+    expect(t.paymentFeeCents).toBe(3_712);
+    expect(t.foodpandaKeepsCents).toBe(40_000 + 3_712);
+    expect(t.expectedPayoutCents).toBe(185_600 - 43_712);
+    const dearer = foodpandaTerms({ subtotalCents: 200_000, shopDiscountCents: 40_000, totalCents: 185_600 }, fees({ paymentFeeBps: 200, upliftBps: 1_000 }));
+    expect(dearer.paymentFeeCents).toBe(Math.round(204_160 * 0.02));
+  });
+
   it('the worked example says the dearer listing', () => {
     expect(foodpandaExample(deal(), fees({ upliftBps: 1_000 }))).toMatchObject({
       orderCents: 200_000,
@@ -188,13 +270,14 @@ describe('THE per-order rule every report uses (foodpandaOrderMoney)', () => {
   const order = { subtotalCents: 200_000, discountCents: 40_000, totalCents: 185_600 };
 
   it('kept at payment with a confirmed commission: the kept figures, final, whatever the fees are now', () => {
-    const kept = { confirmed: true, commissionCents: 32_000, fixedFeeCents: 2_000, commissionTaxCents: 5_120, expectedPayoutCents: 185_600 - 39_120 };
-    const m = foodpandaOrderMoney(order, kept, fees({ commissionBps: 3_000, confirmed: true, upliftBps: 1_500 }));
+    const kept = keptTerms({ commissionCents: 32_000, fixedFeeCents: 2_000, commissionTaxCents: 5_120, expectedPayoutCents: 185_600 - 39_120 });
+    const m = foodpandaOrderMoney(order, kept, fees({ commissionBps: 3_000, confirmed: true, upliftBps: 1_500, paymentFeeBps: 300 }));
     expect(m).toEqual({
       estimated: false,
       commissionCents: 32_000,
       commissionTaxCents: 5_120,
       fixedFeeCents: 2_000,
+      paymentFeeCents: 0,
       foodpandaKeepsCents: 39_120,
       upliftCents: 0,
       expectedTabletCents: 185_600,
@@ -203,10 +286,10 @@ describe('THE per-order rule every report uses (foodpandaOrderMoney)', () => {
     });
   });
 
-  it('the uplift a confirmed order kept comes back from its payout, exactly with no tax', () => {
+  it('a row kept without its uplift: the uplift comes back from its payout, exactly with no tax', () => {
     const noTax = { subtotalCents: 200_000, discountCents: 40_000, totalCents: 160_000 };
     const at = foodpandaTerms({ subtotalCents: 200_000, shopDiscountCents: 40_000, totalCents: 160_000 }, fees({ upliftBps: 1_000, confirmed: true }));
-    const kept = { confirmed: true, commissionCents: at.commissionCents, fixedFeeCents: 0, commissionTaxCents: 0, expectedPayoutCents: at.expectedPayoutCents };
+    const kept = keptTerms({ commissionCents: at.commissionCents, expectedPayoutCents: at.expectedPayoutCents, upliftBps: null });
     const m = foodpandaOrderMoney(noTax, kept, fees());
     expect(m.upliftCents).toBe(at.upliftCents);
     expect(m.youKeepCents).toBe(at.youKeepCents);
@@ -217,13 +300,85 @@ describe('THE per-order rule every report uses (foodpandaOrderMoney)', () => {
     expect(Math.abs(m2.upliftCents - taxed.upliftCents)).toBeLessThanOrEqual(1);
   });
 
+  it('a row kept with its uplift: the tablet total and the uplift are exactly those of payment', () => {
+    const at = foodpandaTerms({ subtotalCents: 200_000, shopDiscountCents: 40_000, totalCents: 185_600 }, fees({ upliftBps: 1_000 }));
+    const kept = keptTerms({ commissionCents: at.commissionCents, expectedPayoutCents: at.expectedPayoutCents, upliftBps: 1_000 });
+    const m = foodpandaOrderMoney(order, kept, fees({ upliftBps: 500 }));
+    expect(m).toMatchObject({ upliftCents: at.upliftCents, expectedTabletCents: at.expectedTabletCents, youKeepCents: at.youKeepCents });
+  });
+
   it('not confirmed at payment, or no terms kept: the fees of now, "estimated"', () => {
     const now = fees({ commissionBps: 2_000, confirmed: true });
-    const suggested = { confirmed: false, commissionCents: 40_000, fixedFeeCents: 0, commissionTaxCents: 0, expectedPayoutCents: 145_600 };
+    const suggested = keptTerms({ confirmed: false, commissionCents: 40_000, expectedPayoutCents: 145_600 });
     for (const kept of [suggested, null]) {
       const m = foodpandaOrderMoney(order, kept, now);
       expect(m).toMatchObject({ estimated: true, commissionCents: 32_000, foodpandaKeepsCents: 32_000, youKeepCents: 128_000, expectedPayoutCents: 153_600 });
     }
+  });
+
+  it('a paid order never moves with a later uplift, even while its commission is only suggested', () => {
+    // Paid at the till's prices with the suggested 25%: the tablet showed the till's Rs 1,856, Pay stored no difference.
+    const atPay = foodpandaTerms({ subtotalCents: 200_000, shopDiscountCents: 40_000, totalCents: 185_600 }, fees());
+    const kept = keptTerms({ confirmed: false, commissionCents: atPay.commissionCents, expectedPayoutCents: atPay.expectedPayoutCents });
+    // Later the owner says foodpanda is 10% dearer, and confirms a 20% commission.
+    const now = fees({ upliftBps: 1_000, commissionBps: 2_000, confirmed: true });
+    const m = foodpandaOrderMoney(order, kept, now);
+    expect(m.expectedTabletCents).toBe(185_600);
+    expect(m.upliftCents).toBe(0);
+    // Only the commission is worked again, on the order at the prices it was paid at.
+    expect(m).toMatchObject({ estimated: true, commissionCents: 32_000, youKeepCents: 160_000 - 32_000, expectedPayoutCents: 185_600 - 32_000 });
+    // The same with the row's uplift worked back from its payout (a row kept without uplift_bps).
+    expect(foodpandaOrderMoney(order, { ...kept, upliftBps: null }, now)).toEqual(m);
+    // And the other way: paid at 10% dearer, the uplift put back to 0 later: still 10% for this order.
+    const dearer = foodpandaTerms({ subtotalCents: 200_000, shopDiscountCents: 40_000, totalCents: 185_600 }, fees({ upliftBps: 1_000 }));
+    const keptDearer = keptTerms({ confirmed: false, commissionCents: dearer.commissionCents, expectedPayoutCents: dearer.expectedPayoutCents, upliftBps: 1_000 });
+    expect(foodpandaOrderMoney(order, keptDearer, fees()).expectedTabletCents).toBe(204_160);
+  });
+
+  it("part refunds leave foodpanda's order too: commission, tax, the % of the total, the uplift and the payout, not the fee per order", () => {
+    // Rs 2,000 of food, no tax, 25% confirmed at 10% dearer; half handed back later.
+    const noTax = { subtotalCents: 200_000, discountCents: 0, totalCents: 200_000 };
+    const at = foodpandaTerms(
+      { subtotalCents: 200_000, shopDiscountCents: 0, totalCents: 200_000 },
+      fees({ upliftBps: 1_000, fixedFeeCents: 1_000, paymentFeeBps: 200 }),
+    );
+    const kept = keptTerms({
+      commissionCents: at.commissionCents,
+      fixedFeeCents: at.fixedFeeCents,
+      paymentFeeCents: at.paymentFeeCents,
+      expectedPayoutCents: at.expectedPayoutCents,
+      upliftBps: 1_000,
+    });
+    expect(at).toMatchObject({ commissionCents: 55_000, upliftCents: 20_000, paymentFeeCents: 4_400 });
+    const m = foodpandaOrderMoney({ ...noTax, refundedCents: 100_000 }, kept, fees());
+    // v0.7.20 took its commission after part refunds too: Rs 275 and Rs 100 here.
+    expect(m).toMatchObject({ commissionCents: 27_500, upliftCents: 10_000, fixedFeeCents: 1_000, paymentFeeCents: 2_200 });
+    expect(m.foodpandaKeepsCents).toBe(27_500 + 1_000 + 2_200);
+    expect(m.youKeepCents).toBe(100_000 + 10_000 - 30_700);
+    expect(m.expectedPayoutCents).toBe(110_000 - 30_700);
+    // The tablet Pay checked is the one of payment.
+    expect(m.expectedTabletCents).toBe(220_000);
+    // No refund: nothing changes; all of it handed back: foodpanda keeps only the fee per order.
+    expect(foodpandaOrderMoney({ ...noTax, refundedCents: 0 }, kept, fees())).toEqual(foodpandaOrderMoney(noTax, kept, fees()));
+    expect(foodpandaOrderMoney({ ...noTax, refundedCents: 200_000 }, kept, fees())).toMatchObject({
+      foodpandaKeepsCents: 1_000,
+      upliftCents: 0,
+      youKeepCents: -1_000,
+    });
+  });
+
+  it("foodpanda's fee on the total: kept when confirmed, worked out on the tablet total at payment's prices when not", () => {
+    const at = foodpandaTerms({ subtotalCents: 200_000, shopDiscountCents: 40_000, totalCents: 185_600 }, fees({ paymentFeeBps: 200, upliftBps: 1_000 }));
+    const kept = keptTerms({
+      confirmed: false,
+      commissionCents: at.commissionCents,
+      paymentFeeCents: at.paymentFeeCents,
+      expectedPayoutCents: at.expectedPayoutCents,
+      upliftBps: 1_000,
+    });
+    // Fee put up to 3% later: an unconfirmed order is worked again with it, on its own tablet total.
+    expect(foodpandaOrderMoney(order, kept, fees({ paymentFeeBps: 300 })).paymentFeeCents).toBe(Math.round(204_160 * 0.03));
+    expect(foodpandaOrderMoney(order, { ...kept, confirmed: true }, fees({ paymentFeeBps: 300 })).paymentFeeCents).toBe(at.paymentFeeCents);
   });
 
   it("foodpanda's part of the deal is neither added nor lost: the shop is paid on the food after ITS part", () => {
@@ -236,8 +391,15 @@ describe('THE per-order rule every report uses (foodpandaOrderMoney)', () => {
 });
 
 describe("v0.7.20's foodpanda terms, carried over", () => {
-  it('commission and fixed fee as typed, confirmed, the base mapped, the uplift kept, no tax', () => {
-    expect(foodpandaFeesFromChannelFees({ commissionBps: 2_250, base: 'menu_price', fixedFeeCents: 2_500, upliftBps: 1_000 })).toEqual({
+  const card = { cash: 0, card: 0, foodpanda: 0, transfer: 0 };
+
+  it('what the owner typed: as typed, confirmed, the base mapped, the uplift kept, no tax', () => {
+    expect(
+      foodpandaFeesFromChannelFees({
+        foodpanda: { commissionBps: 2_250, base: 'menu_price', fixedFeeCents: 2_500, upliftBps: 1_000 },
+        paymentFeeBps: card,
+      }),
+    ).toEqual({
       v: 1,
       commissionBps: 2_250,
       confirmed: true,
@@ -245,8 +407,34 @@ describe("v0.7.20's foodpanda terms, carried over", () => {
       fixedFeeCents: 2_500,
       commissionTaxBps: 0,
       upliftBps: 1_000,
+      paymentFeeBps: 0,
     });
     expect(LEGACY_COMMISSION_BASE_MAP).toEqual({ sales_ex_tax: 'after_deal', menu_price: 'before_deal', paid_incl_tax: 'after_deal' });
+  });
+
+  it("v0.7.20's own 25% (saved with every save of the card fees) is not a confirmation: nothing is carried", () => {
+    expect(foodpandaFeesFromChannelFees({ foodpanda: { ...LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES }, paymentFeeBps: card })).toBeNull();
+    expect(foodpandaFeesFromChannelFees({ paymentFeeBps: { ...card, card: 150 } })).toBeNull();
+  });
+
+  it("'paid_incl_tax' maps to the food after the deal, so it is carried over NOT confirmed", () => {
+    const f = foodpandaFeesFromChannelFees({
+      foodpanda: { commissionBps: 2_500, base: 'paid_incl_tax', fixedFeeCents: 0, upliftBps: 0 },
+      paymentFeeBps: card,
+    });
+    expect(f).toMatchObject({ base: 'after_deal', commissionBps: 2_500, confirmed: false });
+  });
+
+  it("its Foodpanda payment fee becomes foodpanda's fee on the total, the default commission still only suggested", () => {
+    expect(
+      foodpandaFeesFromChannelFees({ foodpanda: { ...LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES }, paymentFeeBps: { ...card, foodpanda: 200 } }),
+    ).toEqual({ ...DEFAULT_FOODPANDA_FEES, paymentFeeBps: 200 });
+    expect(
+      foodpandaFeesFromChannelFees({
+        foodpanda: { commissionBps: 3_000, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 },
+        paymentFeeBps: { ...card, foodpanda: 150 },
+      }),
+    ).toMatchObject({ commissionBps: 3_000, confirmed: true, paymentFeeBps: 150 });
   });
 
   it('the worked example follows the values', () => {

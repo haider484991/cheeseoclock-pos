@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_FOODPANDA_DEAL, DEFAULT_FOODPANDA_FEES, type FoodpandaDeal, type FoodpandaFees } from '@cheeseoclock/shared-types';
 import {
+  andList,
   bpsFromPercentText,
   centsFromRupeesText,
   checksSummary,
@@ -11,6 +12,7 @@ import {
   workedExample,
 } from './foodpandaWords';
 import { dealFromForm, dealToForm, feesFromForm, feesToForm, sameValue } from './foodpandaForm';
+import { lastChangedText } from './SettingCard';
 
 const deal = (over: Partial<FoodpandaDeal> = {}): FoodpandaDeal => ({ ...DEFAULT_FOODPANDA_DEAL, percent: 20, shopPercent: 20, ...over });
 const fees = (over: Partial<FoodpandaFees> = {}): FoodpandaFees => ({ ...DEFAULT_FOODPANDA_FEES, confirmed: true, ...over });
@@ -47,6 +49,22 @@ describe('the worked example follows the owner’s values', () => {
       "A Rs 2,000 foodpanda order (Rs 2,200 on your listing, 10% above the till) with 20% off that you pay: the bill shows Rs 1,600 + tax, Rs 1,760 at foodpanda's prices; foodpanda keeps 25% of Rs 1,760 = Rs 440; you keep Rs 1,320 before food cost.",
     );
   });
+
+  it("the most-off at foodpanda's prices: Rs 300 off the Rs 2,200 listing leaves Rs 1,900 there", () => {
+    const text = workedExample(deal({ maxOffCents: 30_000 }), fees({ upliftBps: 1_000 }));
+    expect(text).toContain('with 20% off (at most Rs 300) that you pay');
+    expect(text).toContain("Rs 1,900 at foodpanda's prices");
+  });
+
+  it("foodpanda's fee on the total is in what it keeps", () => {
+    expect(workedExample(deal(), fees({ paymentFeeBps: 200 }))).toContain('= Rs 400, plus 2% of the total (Rs 32); you keep Rs 1,168 before food cost.');
+    expect(workedExample(deal(), fees({ fixedFeeCents: 3_000, commissionTaxBps: 1_600, paymentFeeBps: 200 }))).toContain(
+      '= Rs 400, plus Rs 64 tax on that, a Rs 30 fee and 2% of the total (Rs 32); you keep Rs 1,074 before food cost.',
+    );
+    expect(andList(['a'])).toBe('a');
+    expect(andList(['a', 'b'])).toBe('a and b');
+    expect(andList(['a', 'b', 'c'])).toBe('a, b and c');
+  });
 });
 
 describe('summaries and typing', () => {
@@ -60,6 +78,7 @@ describe('summaries and typing', () => {
       '22.5% before the deal · Rs 30 an order · 16% tax on it',
     );
     expect(feesSummary(fees({ upliftBps: 1_250 }))).toBe('25% after the deal · menu 12.5% above the till');
+    expect(feesSummary(fees({ paymentFeeBps: 200 }))).toBe('25% after the deal · 2% of the total');
     expect(checksSummary({ v: 1, orderCode: 'required', tabletTotal: 'optional' })).toBe('Order number required · tablet total optional');
     expect(dealPayer({ percent: 20, shopPercent: 20 })).toBe('shop');
     expect(dealPayer({ percent: 20, shopPercent: 0 })).toBe('foodpanda');
@@ -86,7 +105,10 @@ describe('the forms', () => {
       expect(back.problem).toBeNull();
       expect(sameValue(back.value, d)).toBe(true);
     }
-    for (const f of [DEFAULT_FOODPANDA_FEES, fees({ commissionBps: 2_250, base: 'before_deal', fixedFeeCents: 3_000, commissionTaxBps: 1_625, upliftBps: 1_250 })]) {
+    for (const f of [
+      DEFAULT_FOODPANDA_FEES,
+      fees({ commissionBps: 2_250, base: 'before_deal', fixedFeeCents: 3_000, commissionTaxBps: 1_625, upliftBps: 1_250, paymentFeeBps: 150 }),
+    ]) {
       const back = feesFromForm(feesToForm(f));
       expect(back.problem).toBeNull();
       expect(sameValue(back.value, f)).toBe(true);
@@ -109,5 +131,14 @@ describe('the forms', () => {
     expect(feesFromForm({ ...g, uplift: '' }).value).toMatchObject({ upliftBps: 0 });
     expect(feesFromForm({ ...g, uplift: '10' }).value).toMatchObject({ upliftBps: 1_000 });
     expect(feesFromForm({ ...g, uplift: '150' }).problem).toMatch(/dearer/);
+    expect(feesFromForm({ ...g, paymentFee: '' }).value).toMatchObject({ paymentFeeBps: 0 });
+    expect(feesFromForm({ ...g, paymentFee: '2.5' }).value).toMatchObject({ paymentFeeBps: 250 });
+    expect(feesFromForm({ ...g, paymentFee: '60' }).problem).toMatch(/order's total/);
+  });
+
+  it('a carried-over card says where its values came from, not "Never changed"', () => {
+    const lastChanged = { at: '2026-09-20T09:00:00.000Z', byName: 'Test Owner', onThisTill: null };
+    expect(lastChangedText({ lastChanged, carriedOver: true })).toMatch(/^Carried over from Costing → Targets & fees \(saved by Test Owner, .+\): not saved here yet\.$/);
+    expect(lastChangedText({ lastChanged: null })).toBe('Never changed: the till works as it always has.');
   });
 });

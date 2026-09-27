@@ -5,6 +5,7 @@ import type {
   FoodpandaFees,
   LegacyCommissionBase,
   LegacyFoodpandaChannelFees,
+  ReportPaymentGroup,
 } from '@cheeseoclock/shared-types';
 import { FOODPANDA_DEAL_MAX_PERCENT, FOODPANDA_TABLET_TOLERANCE_CENTS, SHOP_SETTING_FORMAT } from '@cheeseoclock/shared-types';
 import { mulDivRound } from './units.js';
@@ -50,8 +51,12 @@ export function foodpandaDealLabel(dealPercent: number, shopPercent: number): st
   return `${base} (your part ${shopPercent}%)`;
 }
 
-/** The terms frozen onto an order's discount row when it becomes foodpanda. */
-export function foodpandaDealRule(deal: FoodpandaDeal, settingsAt: string | null): FoodpandaDealRule {
+/**
+ * The terms frozen onto an order's discount row when it becomes foodpanda:
+ * the deal, and how much dearer the listing is then (`upliftBps`, from
+ * 'foodpanda.fees'), since foodpanda's minimum and most-off are in its prices.
+ */
+export function foodpandaDealRule(deal: FoodpandaDeal, settingsAt: string | null, upliftBps = 0): FoodpandaDealRule {
   const shop = Math.min(deal.shopPercent, deal.percent);
   return {
     kind: 'foodpanda_deal',
@@ -62,6 +67,7 @@ export function foodpandaDealRule(deal: FoodpandaDeal, settingsAt: string | null
     minOrderCents: deal.minOrderCents,
     maxOffCents: deal.maxOffCents,
     settingsAt,
+    upliftBps: upliftBps > 0 ? upliftBps : 0,
   };
 }
 
@@ -93,7 +99,10 @@ export function parseFoodpandaDealRule(json: string | null | undefined): Foodpan
   if (!isRupeesOrNull(minOrderCents) || !isRupeesOrNull(maxOffCents)) return null;
   const settingsAt = typeof r['settingsAt'] === 'string' ? r['settingsAt'] : null;
   const label = typeof r['label'] === 'string' && r['label'].trim() ? r['label'] : foodpandaDealLabel(dealPercent, shopPercent);
-  return { kind: 'foodpanda_deal', v: 1, label, dealPercent, shopPercent, minOrderCents, maxOffCents, settingsAt };
+  // A rule written without the uplift was frozen at the till's prices.
+  const upliftBps = r['upliftBps'] ?? 0;
+  if (!isWholeIn(upliftBps, 0, 10_000)) return null;
+  return { kind: 'foodpanda_deal', v: 1, label, dealPercent, shopPercent, minOrderCents, maxOffCents, settingsAt, upliftBps };
 }
 
 export interface DealAmount {
@@ -107,7 +116,12 @@ export interface DealAmount {
 
 /**
  * The deal's rupees on an order of `subtotalCents` of food (till prices,
- * before tax), from the frozen rule:
+ * before tax), from the frozen rule. foodpanda applies the deal to the order
+ * at ITS prices (the listing, `upliftBps` dearer), so the minimum and the
+ * most-off — typed as foodpanda shows them — are compared there, and the
+ * rupees come back at the till's prices; the shop's part at foodpanda's
+ * prices is then foodpanda's own (to the paisa). At the till's prices (0,
+ * the default) nothing is converted:
  *  - below the minimum order the deal is Rs 0 (the row stays on the order
  *    and works again when items are added, so the result never depends on
  *    the order of edits);
@@ -116,14 +130,15 @@ export interface DealAmount {
  *    the paisa; foodpanda's part is the rest.
  */
 export function dealAmount(
-  rule: Pick<FoodpandaDealRule, 'dealPercent' | 'shopPercent' | 'minOrderCents' | 'maxOffCents'>,
+  rule: Pick<FoodpandaDealRule, 'dealPercent' | 'shopPercent' | 'minOrderCents' | 'maxOffCents'> & { upliftBps?: number },
   subtotalCents: number,
 ): DealAmount {
   const none = { dealCents: 0, shopCents: 0, platformCents: 0 };
   if (!(subtotalCents > 0) || !(rule.dealPercent > 0)) return none;
-  if (rule.minOrderCents !== null && subtotalCents < rule.minOrderCents) return none;
+  const upliftBps = rule.upliftBps ?? 0;
+  if (rule.minOrderCents !== null && atFoodpandaPrices(subtotalCents, upliftBps) < rule.minOrderCents) return none;
   let dealCents = Math.round((subtotalCents * Math.min(rule.dealPercent, 100)) / 100);
-  if (rule.maxOffCents !== null) dealCents = Math.min(dealCents, rule.maxOffCents);
+  if (rule.maxOffCents !== null) dealCents = Math.min(dealCents, atTillPrices(rule.maxOffCents, upliftBps));
   dealCents = Math.max(0, Math.min(dealCents, subtotalCents));
   const shopPercent = Math.max(0, Math.min(rule.shopPercent, rule.dealPercent));
   const shopCents = shopPercent === rule.dealPercent ? dealCents : Math.round((dealCents * shopPercent) / rule.dealPercent);
@@ -148,12 +163,36 @@ export function atFoodpandaPrices(cents: number, upliftBps: number): number {
   return cents + foodpandaUpliftCents(cents, upliftBps);
 }
 
+/** A figure at foodpanda's prices back at the till's: round(cents ÷ (1 + uplift)); unchanged at the till's prices. */
+export function atTillPrices(cents: number, upliftBps: number): number {
+  if (!(upliftBps > 0)) return cents;
+  return mulDivRound(Math.round(cents), 10_000, 10_000 + upliftBps);
+}
+
+/**
+ * The food at TILL prices from which a frozen deal takes something off: the
+ * smallest subtotal that is at least the minimum at foodpanda's prices (the
+ * cart says "Takes off from …"). Null = any order.
+ */
+export function dealMinTillCents(rule: Pick<FoodpandaDealRule, 'minOrderCents'> & { upliftBps?: number }): number | null {
+  if (rule.minOrderCents === null) return null;
+  const upliftBps = rule.upliftBps ?? 0;
+  if (!(upliftBps > 0)) return rule.minOrderCents;
+  let s = atTillPrices(rule.minOrderCents, upliftBps);
+  while (s > 0 && atFoodpandaPrices(s - 1, upliftBps) >= rule.minOrderCents) s -= 1;
+  while (atFoodpandaPrices(s, upliftBps) < rule.minOrderCents) s += 1;
+  return s;
+}
+
 // ---------------------------------------------------------------------------
 // foodpanda's money on one order
 // ---------------------------------------------------------------------------
 
 /** The fee terms the money is worked out with ('foodpanda.fees' less the owner's confirmation). */
-export type FoodpandaFeeTerms = Pick<FoodpandaFees, 'commissionBps' | 'base' | 'fixedFeeCents' | 'commissionTaxBps' | 'upliftBps'>;
+export type FoodpandaFeeTerms = Pick<
+  FoodpandaFees,
+  'commissionBps' | 'base' | 'fixedFeeCents' | 'commissionTaxBps' | 'upliftBps' | 'paymentFeeBps'
+>;
 
 /** foodpanda's money on one order, worked out from its fees. Never printed, never in the order's totals. */
 export interface FoodpandaTerms {
@@ -162,7 +201,9 @@ export interface FoodpandaTerms {
   commissionCents: number;
   commissionTaxCents: number;
   fixedFeeCents: number;
-  /** Commission + fee + tax on it. */
+  /** foodpanda's % of the order's total (the tablet's, tax included): 0 unless the owner set one. */
+  paymentFeeCents: number;
+  /** Commission + tax on it + the fee per order + the % of the total. */
   foodpandaKeepsCents: number;
   /**
    * What foodpanda's dearer menu adds to the food after the shop's part of
@@ -177,22 +218,41 @@ export interface FoodpandaTerms {
   youKeepCents: number;
 }
 
+type FoodpandaKeeps = Pick<FoodpandaTerms, 'commissionCents' | 'commissionTaxCents' | 'fixedFeeCents' | 'paymentFeeCents'>;
+
+/** What foodpanda keeps of an order at given prices: the commission on its base, the tax on it, the fee, the % of the total. */
+function keepsAt(fees: FoodpandaFeeTerms, prices: { commissionBaseCents: number; tabletCents: number }): FoodpandaKeeps {
+  const commissionCents = Math.round((prices.commissionBaseCents * fees.commissionBps) / 10_000);
+  return {
+    commissionCents,
+    commissionTaxCents: Math.round((commissionCents * fees.commissionTaxBps) / 10_000),
+    fixedFeeCents: fees.fixedFeeCents,
+    paymentFeeCents: fees.paymentFeeBps > 0 && prices.tabletCents > 0 ? mulDivRound(prices.tabletCents, fees.paymentFeeBps, 10_000) : 0,
+  };
+}
+
+const keepsTotal = (k: FoodpandaKeeps) => k.commissionCents + k.commissionTaxCents + k.fixedFeeCents + k.paymentFeeCents;
+
 /**
- * foodpanda's commission, fee and tax on one order, from its STORED figures:
- * `subtotalCents` (till prices, before tax), `shopDiscountCents` (the
- * order's stored discount: the shop's part of the deal), `totalCents` (the
- * stored total, with tax). The till rings foodpanda at till prices; the
+ * foodpanda's commission, fees and tax on one order, from its STORED
+ * figures: `subtotalCents` (till prices, before tax), `shopDiscountCents`
+ * (the order's stored discount: the shop's part of the deal), `totalCents`
+ * (the stored total, with tax). The till rings foodpanda at till prices; the
  * listing is `upliftBps` dearer, so the order's value on foodpanda — what
  * its vendor side shows, what the commission is on and what it pays out —
  * is the stored value at foodpanda's prices:
  *  - value = subtotal − the shop's part of the deal; uplift = round(value × m);
  *  - 'after_deal' charges the commission on value + uplift, 'before_deal'
  *    on the subtotal at foodpanda's prices;
- *  - the tablet shows the stored total at foodpanda's prices, and foodpanda
- *    pays that less its commission, the fee and the tax on the commission.
+ *  - the tablet shows the stored total at foodpanda's prices; foodpanda
+ *    keeps its % of that (paymentFeeBps) beside the commission, and pays
+ *    the tablet's total less its commission, the fee, its % and the tax on
+ *    the commission.
  * foodpanda's part of the deal is neither here nor in the stored total: the
  * customer saw it off and foodpanda funds it, so the shop is paid on its
  * value after ITS part only — already the stored subtotal − discount.
+ * (An order as paid: foodpandaOrderMoney is the same rule, with the terms
+ * kept at payment and part refunds.)
  */
 export function foodpandaTerms(
   order: { subtotalCents: number; shopDiscountCents: number; totalCents: number },
@@ -202,16 +262,12 @@ export function foodpandaTerms(
   const upliftCents = foodpandaUpliftCents(value, fees.upliftBps);
   const commissionBaseCents =
     fees.base === 'before_deal' ? atFoodpandaPrices(Math.max(0, order.subtotalCents), fees.upliftBps) : value + upliftCents;
-  const commissionCents = Math.round((commissionBaseCents * fees.commissionBps) / 10_000);
-  const commissionTaxCents = Math.round((commissionCents * fees.commissionTaxBps) / 10_000);
-  const fixedFeeCents = fees.fixedFeeCents;
-  const foodpandaKeepsCents = commissionCents + commissionTaxCents + fixedFeeCents;
   const expectedTabletCents = atFoodpandaPrices(order.totalCents, fees.upliftBps);
+  const k = keepsAt(fees, { commissionBaseCents, tabletCents: expectedTabletCents });
+  const foodpandaKeepsCents = keepsTotal(k);
   return {
     commissionBaseCents,
-    commissionCents,
-    commissionTaxCents,
-    fixedFeeCents,
+    ...k,
     foodpandaKeepsCents,
     upliftCents,
     expectedTabletCents,
@@ -221,23 +277,28 @@ export function foodpandaTerms(
 }
 
 /**
- * The terms an order kept when it was paid (order_channel_terms): what the
- * reports read of them. The row has no uplift column; its expected payout
- * was the tablet's total less what foodpanda keeps, which gives it back.
+ * The terms an order kept when it was paid (order_channel_terms), as the
+ * reports read them. Its expected payout was the tablet's total less what
+ * foodpanda keeps, so the tablet total expected at payment comes back from
+ * the row whatever the commission was.
  */
 export interface KeptFoodpandaTerms {
-  /** The owner had confirmed the commission when the order was paid: the kept figures are final. */
+  /** The owner had confirmed the commission when the order was paid: the kept commission, fees and tax are final. */
   confirmed: boolean;
   commissionCents: number;
   fixedFeeCents: number;
   commissionTaxCents: number;
-  /** Null on a row that has none: worked out again with today's uplift. */
+  /** foodpanda's % of the total as kept (0 on a row kept without it). */
+  paymentFeeCents: number;
+  /** Null on a row that has none. */
   expectedPayoutCents: number | null;
+  /** How much dearer the listing was at payment; null on a row kept without it (it comes back from the payout). */
+  upliftBps: number | null;
 }
 
 /** One foodpanda order's money as Reports count it (Channels' foodpanda block AND the Profit tab). */
 export interface FoodpandaOrderMoney extends Omit<FoodpandaTerms, 'commissionBaseCents'> {
-  /** Worked out with the fees in force now (no confirmed commission kept at payment): "estimated". */
+  /** Commission, fees and tax worked out with the fees in force now (no confirmed commission kept at payment): "estimated". */
   estimated: boolean;
 }
 
@@ -245,51 +306,92 @@ export interface FoodpandaOrderMoney extends Omit<FoodpandaTerms, 'commissionBas
  * THE per-order rule for foodpanda's money, for every report — Reports →
  * Channels' foodpanda block (business-report getFoodpanda) and Reports →
  * Profit's commission and uplift (analytics/profit readOrderCosts) — so they
- * agree to the rupee:
- *  - kept at payment with a CONFIRMED commission: the kept commission, fee,
- *    tax and payout, final (next month's commission never rewrites this
- *    month's orders). The uplift kept with them: kept payout + what
- *    foodpanda keeps is the tablet total expected at payment; its extra over
- *    the stored total is the uplift with tax, and the food's part of it is
- *    round(extra × value ÷ total) — exact with no tax or no uplift;
- *  - anything else (paid before terms were kept, or while the commission
- *    was only suggested): foodpandaTerms with today's 'foodpanda.fees', so
- *    confirming the real commission later corrects them.
- * The order's figures are its STORED ones, as paid: a part refund later
- * changes neither (the kept terms could not know of it either). foodpanda's
- * part of the deal never enters: it is inside the stored value the shop is
- * paid on (subtotal − the shop's part), so it is neither added nor lost.
+ * agree to the paisa. `order` is the order's STORED money, with the money
+ * handed back on it since (`refundedCents`, tax included).
+ *
+ *  1. The prices the order was paid at, from its kept terms (a paid order
+ *     never moves with a later change of the uplift): the tablet total Pay
+ *     expected, and the uplift on the food — at the kept uplift, else worked
+ *     back from the kept payout (+ what foodpanda kept: the tablet total to
+ *     the paisa; the food's share of its extra within a paisa); with no
+ *     terms kept (paid before they were), the uplift in force now.
+ *  2. What foodpanda keeps: with a commission CONFIRMED at payment, the kept
+ *     commission, fees and tax, final (next month's commission never
+ *     rewrites this month's orders); otherwise ("estimated": paid while the
+ *     commission was only suggested, or before terms were kept) the fees in
+ *     force now, on the order at the prices of step 1 — so confirming the
+ *     real commission later corrects them, and only them.
+ *  3. Part refunds: the food handed back leaves foodpanda's order too. Its
+ *     share of the total comes off the commission, the tax on it, the % of
+ *     the total, the uplift and the payout (the fee per order stays); the
+ *     food the shop keeps is after them, as Profit's sales are.
+ *
+ * foodpanda's part of the deal never enters: it is inside the stored value
+ * the shop is paid on (subtotal − the shop's part), so it is neither added
+ * nor lost.
  */
 export function foodpandaOrderMoney(
-  order: { subtotalCents: number; discountCents: number; totalCents: number },
+  order: { subtotalCents: number; discountCents: number; totalCents: number; refundedCents?: number },
   kept: KeptFoodpandaTerms | null,
   feesNow: FoodpandaFeeTerms,
 ): FoodpandaOrderMoney {
-  if (kept === null || !kept.confirmed) {
-    const { commissionBaseCents: _base, ...t } = foodpandaTerms(
-      { subtotalCents: order.subtotalCents, shopDiscountCents: order.discountCents, totalCents: order.totalCents },
-      feesNow,
-    );
-    return { ...t, estimated: true };
+  const sub = Math.max(0, order.subtotalCents);
+  const value = Math.max(0, sub - order.discountCents);
+  const total = Math.max(0, order.totalCents);
+
+  // 1) The prices it was paid at.
+  let expectedTabletCents: number;
+  let upliftOf: (cents: number) => number;
+  if (kept !== null && kept.upliftBps === null && kept.expectedPayoutCents !== null) {
+    expectedTabletCents = kept.expectedPayoutCents + keepsTotal(kept);
+    const extra = expectedTabletCents - total;
+    upliftOf = (cents) => (extra > 0 && total > 0 && cents > 0 ? mulDivRound(extra, cents, total) : 0);
+  } else {
+    const upliftBps = kept?.upliftBps ?? feesNow.upliftBps;
+    expectedTabletCents = atFoodpandaPrices(total, upliftBps);
+    upliftOf = (cents) => foodpandaUpliftCents(cents, upliftBps);
   }
-  const value = Math.max(0, order.subtotalCents - order.discountCents);
-  const foodpandaKeepsCents = kept.commissionCents + kept.fixedFeeCents + kept.commissionTaxCents;
-  const expectedTabletCents =
-    kept.expectedPayoutCents === null
-      ? atFoodpandaPrices(order.totalCents, feesNow.upliftBps)
-      : kept.expectedPayoutCents + foodpandaKeepsCents;
-  const extra = expectedTabletCents - order.totalCents;
-  const upliftCents = extra > 0 && order.totalCents > 0 ? mulDivRound(extra, value, order.totalCents) : 0;
+  let upliftCents = upliftOf(value);
+
+  // 2) What foodpanda keeps.
+  const confirmed = kept !== null && kept.confirmed;
+  let k: FoodpandaKeeps = confirmed
+    ? {
+        commissionCents: kept.commissionCents,
+        commissionTaxCents: kept.commissionTaxCents,
+        fixedFeeCents: kept.fixedFeeCents,
+        paymentFeeCents: kept.paymentFeeCents,
+      }
+    : keepsAt(feesNow, {
+        commissionBaseCents: feesNow.base === 'before_deal' ? sub + upliftOf(sub) : value + upliftCents,
+        tabletCents: expectedTabletCents,
+      });
+
+  // 3) Part refunds: their share of the total leaves the order.
+  const refunded = Math.min(Math.max(0, order.refundedCents ?? 0), total);
+  let tabletLeftCents = expectedTabletCents;
+  let foodLeftCents = value;
+  if (refunded > 0) {
+    const left = (cents: number) => cents - mulDivRound(cents, refunded, total);
+    k = {
+      commissionCents: left(k.commissionCents),
+      commissionTaxCents: left(k.commissionTaxCents),
+      fixedFeeCents: k.fixedFeeCents,
+      paymentFeeCents: left(k.paymentFeeCents),
+    };
+    upliftCents = left(upliftCents);
+    tabletLeftCents = left(expectedTabletCents);
+    foodLeftCents = value - Math.min(mulDivRound(refunded, value, total), value);
+  }
+  const foodpandaKeepsCents = keepsTotal(k);
   return {
-    estimated: false,
-    commissionCents: kept.commissionCents,
-    commissionTaxCents: kept.commissionTaxCents,
-    fixedFeeCents: kept.fixedFeeCents,
+    estimated: !confirmed,
+    ...k,
     foodpandaKeepsCents,
     upliftCents,
     expectedTabletCents,
-    expectedPayoutCents: expectedTabletCents - foodpandaKeepsCents,
-    youKeepCents: value + upliftCents - foodpandaKeepsCents,
+    expectedPayoutCents: tabletLeftCents - foodpandaKeepsCents,
+    youKeepCents: foodLeftCents + upliftCents - foodpandaKeepsCents,
   };
 }
 
@@ -312,21 +414,56 @@ export const LEGACY_COMMISSION_BASE_MAP: Readonly<Record<LegacyCommissionBase, F
 });
 
 /**
- * What v0.7.20 saved as foodpanda's terms ('channels.fees' → foodpanda), as
- * the 'foodpanda.fees' in force while Settings → foodpanda has never been
- * saved: its commission and fixed fee, CONFIRMED (the owner typed them), the
- * base mapped (LEGACY_COMMISSION_BASE_MAP), its uplift; no tax on the
- * commission (v0.7.20 had none). Read time only: nothing is rewritten.
+ * v0.7.20's own foodpanda part (its DEFAULT_CHANNEL_FEES): v0.7.20 saved it
+ * with every save of the card fees, whether or not the owner touched it.
  */
-export function foodpandaFeesFromChannelFees(legacy: LegacyFoodpandaChannelFees): FoodpandaFees {
+export const LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES: Readonly<LegacyFoodpandaChannelFees> = Object.freeze({
+  commissionBps: 2_500,
+  base: 'sales_ex_tax',
+  fixedFeeCents: 0,
+  upliftBps: 0,
+});
+
+/**
+ * What v0.7.20's Costing → Targets & fees saved ('channels.fees': its
+ * foodpanda part and its "Foodpanda" payment fee), as the 'foodpanda.fees'
+ * in force while Settings → foodpanda has never been saved. Read time only:
+ * nothing is rewritten.
+ *  - the commission, fixed fee and uplift as saved, the base mapped
+ *    (LEGACY_COMMISSION_BASE_MAP); no tax on the commission (v0.7.20 had none);
+ *  - its "Foodpanda" payment fee as foodpanda's % of the total (Costing no
+ *    longer charges it: it is foodpanda's, so Settings → foodpanda's);
+ *  - CONFIRMED only when the owner can have meant it — the foodpanda part
+ *    differs from v0.7.20's own default, and its base maps exactly
+ *    ('paid_incl_tax' does not: the commission on the tax is lost).
+ *    Otherwise "not confirmed": orders paid meanwhile stay estimated and
+ *    are corrected when he confirms the commission in Settings → foodpanda,
+ *    instead of being frozen at a figure he never chose.
+ * Null when it carries nothing over (no foodpanda part and no payment fee,
+ * or no more than v0.7.20's default): the suggested default applies.
+ */
+export function foodpandaFeesFromChannelFees(legacy: {
+  foodpanda?: LegacyFoodpandaChannelFees | undefined;
+  paymentFeeBps?: Partial<Record<ReportPaymentGroup, number>> | undefined;
+}): FoodpandaFees | null {
+  const fp = legacy.foodpanda ?? LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES;
+  const paymentFeeBps = Math.max(0, legacy.paymentFeeBps?.foodpanda ?? 0);
+  const typed =
+    legacy.foodpanda !== undefined &&
+    (fp.commissionBps !== LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES.commissionBps ||
+      fp.base !== LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES.base ||
+      fp.fixedFeeCents !== LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES.fixedFeeCents ||
+      fp.upliftBps !== LEGACY_DEFAULT_FOODPANDA_CHANNEL_FEES.upliftBps);
+  if (!typed && paymentFeeBps === 0) return null;
   return {
     v: SHOP_SETTING_FORMAT['foodpanda.fees'],
-    commissionBps: legacy.commissionBps,
-    confirmed: true,
-    base: LEGACY_COMMISSION_BASE_MAP[legacy.base],
-    fixedFeeCents: legacy.fixedFeeCents,
+    commissionBps: fp.commissionBps,
+    confirmed: typed && fp.base !== 'paid_incl_tax',
+    base: LEGACY_COMMISSION_BASE_MAP[fp.base],
+    fixedFeeCents: fp.fixedFeeCents,
     commissionTaxBps: 0,
-    upliftBps: legacy.upliftBps,
+    upliftBps: fp.upliftBps,
+    paymentFeeBps,
   };
 }
 
@@ -369,6 +506,8 @@ export interface FoodpandaExample {
   shopCents: number;
   /** foodpanda's part, paid on top (0 unless shared). */
   platformCents: number;
+  /** The deal's most-off held it back (compared at foodpanda's prices, as foodpanda does). */
+  capped: boolean;
   /** The bill before tax (till prices). */
   billCents: number;
   /** The same bill at foodpanda's prices (= billCents with no uplift): what the shop is paid on. */
@@ -378,6 +517,9 @@ export interface FoodpandaExample {
   commissionCents: number;
   commissionTaxCents: number;
   fixedFeeCents: number;
+  /** foodpanda's % of the total (the example has no tax: of the bill at foodpanda's prices). */
+  paymentFeeBps: number;
+  paymentFeeCents: number;
   youKeepCents: number;
 }
 
@@ -387,10 +529,16 @@ export function foodpandaExample(
   orderCents = 200_000,
 ): FoodpandaExample {
   const percent = Math.max(0, Math.min(deal.percent, FOODPANDA_DEAL_MAX_PERCENT));
-  const amount = dealAmount(
-    { dealPercent: percent, shopPercent: deal.shopPercent, minOrderCents: deal.minOrderCents, maxOffCents: deal.maxOffCents },
-    orderCents,
-  );
+  // The deal as an order gets it: at foodpanda's prices (the rule frozen on an order carries the uplift).
+  const rule = {
+    dealPercent: percent,
+    shopPercent: deal.shopPercent,
+    minOrderCents: deal.minOrderCents,
+    maxOffCents: deal.maxOffCents,
+    upliftBps: fees.upliftBps,
+  };
+  const amount = dealAmount(rule, orderCents);
+  const uncapped = dealAmount({ ...rule, maxOffCents: null }, orderCents);
   const billCents = orderCents - amount.shopCents;
   // The example has no tax: the total is the bill before tax, like the sentence.
   const t = foodpandaTerms({ subtotalCents: orderCents, shopDiscountCents: amount.shopCents, totalCents: billCents }, fees);
@@ -402,6 +550,7 @@ export function foodpandaExample(
     shopPercent: amount.dealCents > 0 ? Math.min(deal.shopPercent, percent) : 0,
     shopCents: amount.shopCents,
     platformCents: amount.platformCents,
+    capped: amount.dealCents < uncapped.dealCents,
     billCents,
     billAtFoodpandaCents: billCents + t.upliftCents,
     commissionBps: fees.commissionBps,
@@ -409,6 +558,8 @@ export function foodpandaExample(
     commissionCents: t.commissionCents,
     commissionTaxCents: t.commissionTaxCents,
     fixedFeeCents: t.fixedFeeCents,
+    paymentFeeBps: fees.paymentFeeBps,
+    paymentFeeCents: t.paymentFeeCents,
     youKeepCents: t.youKeepCents,
   };
 }

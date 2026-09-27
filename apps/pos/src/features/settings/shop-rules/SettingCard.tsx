@@ -11,9 +11,17 @@ export function whenSaved(iso: string): string {
   return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-/** "Last changed by Owner on the other till, 27 Sep, 14:02" — or that it never was. */
-export function lastChangedText(card: Pick<ShopSettingCard, 'lastChanged'>): string {
+/**
+ * "Last changed by Owner on the other till, 27 Sep, 14:02" — or that it
+ * never was, or (foodpanda's fees) that it was carried over from the earlier
+ * version's Costing → Targets & fees and is not saved here yet.
+ */
+export function lastChangedText(card: Pick<ShopSettingCard, 'lastChanged' | 'carriedOver'>): string {
   const c = card.lastChanged;
+  if (card.carriedOver) {
+    const by = c ? ` (saved${c.byName ? ` by ${c.byName}` : ''}, ${whenSaved(c.at)})` : '';
+    return `Carried over from Costing → Targets & fees${by}: not saved here yet.`;
+  }
   if (!c) return 'Never changed: the till works as it always has.';
   const where = c.onThisTill === true ? ' on this till' : c.onThisTill === false ? ' on the other till' : '';
   return `Last changed by ${c.byName ?? 'someone'}${where}, ${whenSaved(c.at)}`;

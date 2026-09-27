@@ -130,7 +130,9 @@ function FoodpandaCards({
   const updDeal = (patch: Partial<DealForm>) => dealD.set({ ...dealForm, ...patch });
   const updFees = (patch: Partial<FeesForm>) => feesD.set({ ...feesForm, ...patch });
   const dealDirty = dealD.touched && (dealParsed.value === null || !sameValue(dealParsed.value, dealCard.value));
-  const feesDirty = feesD.touched && (feesParsed.value === null || !sameValue(feesParsed.value, feesCard.value));
+  // Carried over from the earlier version's Costing: not saved here yet, so Save is offered at once.
+  const feesDirty =
+    feesCard.carriedOver === true || (feesD.touched && (feesParsed.value === null || !sameValue(feesParsed.value, feesCard.value)));
   const checksDirty = checksD.touched && !sameValue(checksForm, checksCard.value);
   const percentNow = Number(dealForm.percent);
 
@@ -201,6 +203,12 @@ function FoodpandaCards({
             />
           </div>
         </div>
+        {exampleFees.upliftBps > 0 && (
+          <p className="-mt-2 text-xs text-stone-500">
+            The smallest order and the most off are at foodpanda’s prices, as its app shows them ({percentFromBps(exampleFees.upliftBps)} above
+            the till’s): the till works them out the same way, so your part of the deal matches foodpanda’s.
+          </p>
+        )}
 
         {percentNow > 0 && (
           <div>
@@ -267,7 +275,9 @@ function FoodpandaCards({
       >
         {feesCard.carriedOver && (
           <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:bg-sky-950/60 dark:text-sky-100">
-            Carried over from what you saved in Costing → Targets &amp; fees. foodpanda’s terms live here now: Save to keep them here.
+            Carried over from what you saved in Costing → Targets &amp; fees (its “Foodpanda” payment fee is the fee on the order’s
+            total below). foodpanda’s terms live here now: check them, tick the box if the commission is foodpanda’s real one, and
+            Save to keep them here.
           </p>
         )}
         {!feesCard.value.confirmed && (
@@ -331,7 +341,24 @@ function FoodpandaCards({
             />
             <p className="mt-1 text-xs text-stone-500">
               0 if foodpanda shows the same prices as the till. If a Rs 1,000 pizza is Rs 1,100 on foodpanda, type 10: the tablet total
-              Pay expects, the commission and Reports use foodpanda’s prices. The bill and the FBR invoice stay at the till’s.
+              Pay expects, the deal’s minimum and most off, the commission and Reports use foodpanda’s prices. The bill and the FBR
+              invoice stay at the till’s.
+            </p>
+          </div>
+          <div>
+            <label className={labelClass} htmlFor="fp-payment-fee">
+              foodpanda’s fee on the order’s total (%)
+            </label>
+            <input
+              id="fp-payment-fee"
+              inputMode="decimal"
+              value={feesForm.paymentFee}
+              onChange={(e) => updFees({ paymentFee: e.target.value.replace(/[^\d.]/g, '').slice(0, 6) })}
+              className={inputClass}
+            />
+            <p className="mt-1 text-xs text-stone-500">
+              0 if none. A % foodpanda keeps of the whole total on its tablet, tax included — for taking the money. Only if foodpanda
+              charges it besides the commission: don’t count the same cut twice.
             </p>
           </div>
         </div>

@@ -44,7 +44,7 @@ const base = { sinceIso: '2026-09-26T00:00:00.000Z', untilIso: '2026-09-27T00:00
 const period = periodFor('today', SAT_3PM);
 const html = (node: ReactNode) => renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>);
 const FEES = {
-  foodpanda: { v: 1, commissionBps: 2500, confirmed: false, base: 'after_deal' as const, fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0 },
+  foodpanda: { v: 1, commissionBps: 2500, confirmed: false, base: 'after_deal' as const, fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0, paymentFeeBps: 0 },
   paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 },
 };
 
@@ -154,10 +154,12 @@ describe('profit in plain words (costing spec D15)', () => {
     expect(commissionText(FEES)).toBe(
       'foodpanda commission: 25% (not confirmed yet) of the food after your part of the deal, before tax. foodpanda orders are at till prices. Orders paid with a confirmed commission keep the terms they were paid with; the rest use these (Settings → foodpanda).',
     );
-    const typed = { v: 1, commissionBps: 2200, confirmed: true, base: 'before_deal' as const, fixedFeeCents: 2_500, commissionTaxBps: 1_600, upliftBps: 1000 };
+    const typed = { v: 1, commissionBps: 2200, confirmed: true, base: 'before_deal' as const, fixedFeeCents: 2_500, commissionTaxBps: 1_600, upliftBps: 1000, paymentFeeBps: 0 };
     expect(commissionText({ foodpanda: typed })).toBe(
       "foodpanda commission: 22% of the food before the deal, before tax, plus Rs 25 an order and 16% tax on the commission. foodpanda's menu is 10% above the till's: the difference is its own line, and the commission is on the dearer price. Orders paid with a confirmed commission keep the terms they were paid with; the rest use these (Settings → foodpanda).",
     );
+    // foodpanda's fee on the total (Settings → foodpanda; v0.7.20's "Foodpanda" payment fee) is said with the rest.
+    expect(commissionText({ foodpanda: { ...typed, paymentFeeBps: 200 } })).toContain("plus Rs 25 an order, 16% tax on the commission and 2% of each order's total.");
     expect(riderText({ mode: 'zone_rate', fixedCents: 0 })).toContain("the rider service's rate for each area");
     expect(riderText({ mode: 'fixed', fixedCents: 15_000 })).toBe('Rider cost: Rs 150 a trip.');
   });
@@ -379,6 +381,7 @@ describe('Channels & delivery with profit and delivery areas', () => {
         commissionTaxCents: 0,
         foodpandaKeepsCents: 25_000,
         upliftCents: 0,
+        partRefundCents: 0,
         youKeepCents: 75_000,
         expectedPayoutCents: 91_000,
         estimatedOrders: 0,

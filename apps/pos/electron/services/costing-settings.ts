@@ -104,9 +104,10 @@ export function foodpandaTermsInForce(db: AppDatabase, now: Date = new Date()): 
 
 /**
  * Payment fees and the rider cost in force (costing spec Phase 9; the
- * defaults until saved), and — for the owner (`withFoodpanda`: profit.view)
- * — foodpanda's terms from Settings → foodpanda, for display. A manager
- * gets no foodpanda part: its commission is profit.
+ * defaults until saved; the "Foodpanda" payment fee always 0 — it is
+ * Settings → foodpanda's), and — for the owner (`withFoodpanda`:
+ * profit.view) — foodpanda's terms from Settings → foodpanda, for display.
+ * A manager gets no foodpanda part: its commission is profit.
  */
 export function getChannelFees(db: AppDatabase, withFoodpanda: boolean): ChannelFeesView {
   const p = loadProfitSettings(db);
@@ -122,17 +123,18 @@ export function getChannelFees(db: AppDatabase, withFoodpanda: boolean): Channel
 /**
  * The card fees and how riders are paid: both keys in one transaction
  * (business-settings-repo: synced, audited, both tills). foodpanda's terms
- * are not saved here — Settings → foodpanda keeps them. The foodpanda part
- * v0.7.20 may have stored in 'channels.fees' is KEPT as stored (never taken
- * from the request, which the schema strips): it is what the one reader
+ * are not saved here — Settings → foodpanda keeps them. What v0.7.20 may
+ * have stored of them in 'channels.fees' — its foodpanda part (the schema
+ * strips one from the request) and its "Foodpanda" payment fee (the
+ * request's is ignored) — is KEPT as stored: it is what the one reader
  * carries over while Settings → foodpanda has never been saved, and what a
  * till still on v0.7.20 reads. Answers with the fees as they now stand.
  */
 export function saveChannelFees(db: AppDatabase, req: SetChannelFeesRequest, actor: Actor, withFoodpanda: boolean): ChannelFeesView {
-  const legacy = getBusinessSetting(db, 'channels.fees')?.value.foodpanda;
-  const fees: ChannelFees = legacy
-    ? { foodpanda: legacy, paymentFeeBps: req.fees.paymentFeeBps }
-    : { paymentFeeBps: req.fees.paymentFeeBps };
+  const stored = getBusinessSetting(db, 'channels.fees')?.value;
+  const legacy = stored?.foodpanda;
+  const paymentFeeBps = { ...req.fees.paymentFeeBps, foodpanda: stored?.paymentFeeBps.foodpanda ?? 0 };
+  const fees: ChannelFees = legacy ? { foodpanda: legacy, paymentFeeBps } : { paymentFeeBps };
   setBusinessSettings(
     db,
     [

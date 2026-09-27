@@ -497,7 +497,7 @@ const SHOP_SETTINGS_OWNER_ONLY = (): Record<string, unknown> => ({
 /** Every way a shop rule can be saved: each key, and "Put back the default". */
 const SHOP_SETTING_SAVES = (): unknown[] => [
   { key: 'foodpanda.deal', value: { v: 1, percent: 20, shopPercent: 10, minOrderCents: 50_000, maxOffCents: 40_000, startsOn: null, endsOn: null } },
-  { key: 'foodpanda.fees', value: { v: 1, commissionBps: 2_200, confirmed: true, base: 'after_deal', fixedFeeCents: 2_000, commissionTaxBps: 1_600, upliftBps: 0 } },
+  { key: 'foodpanda.fees', value: { v: 1, commissionBps: 2_200, confirmed: true, base: 'after_deal', fixedFeeCents: 2_000, commissionTaxBps: 1_600, upliftBps: 0, paymentFeeBps: 0 } },
   { key: 'foodpanda.checks', value: { v: 1, orderCode: 'required', tabletTotal: 'required' } },
   { key: 'foodpanda.deal', useDefault: true },
   { key: 'foodpanda.fees', useDefault: true },

@@ -704,7 +704,10 @@ export interface ReportFoodpanda {
   foodpandaDealCents: number;
   /** Σ tax on the bills. */
   taxCents: number;
-  /** What foodpanda keeps: its commission, the fee per order and the tax on the commission… */
+  /**
+   * What foodpanda keeps: its commission, its fees (the fee per order and
+   * its % of the order's total) and the tax on the commission…
+   */
   commissionCents: number;
   feeCents: number;
   commissionTaxCents: number;
@@ -716,11 +719,21 @@ export interface ReportFoodpanda {
    * till rings foodpanda orders at till prices.
    */
   upliftCents: number;
-  /** The food money the shop keeps: sales after its part of the deal, plus the uplift, less what foodpanda keeps (before tax and food cost). */
+  /**
+   * Σ money handed back on these orders (part refunds, tax included, at
+   * till prices). What foodpanda keeps, the uplift, what the shop keeps and
+   * what foodpanda should pay are on the orders LESS these (as Reports →
+   * Profit counts them); the sales and the deal above are as paid.
+   */
+  partRefundCents: number;
+  /** The food money the shop keeps: sales after its part of the deal and part refunds, plus the uplift, less what foodpanda keeps (before tax and food cost). */
   youKeepCents: number;
-  /** What foodpanda should pay for these orders (the bills with tax at foodpanda's prices, less what it keeps). */
+  /** What foodpanda should pay for these orders (the bills with tax at foodpanda's prices, less part refunds and what it keeps). */
   expectedPayoutCents: number;
-  /** Orders with no confirmed commission kept at payment: commission, fee and tax from the fees in force now. */
+  /**
+   * Orders with no confirmed commission kept at payment: commission, fees
+   * and tax from the fees in force now (at the prices of their payment).
+   */
   estimatedOrders: number;
   /** Some commission is a figure the owner has not confirmed. */
   commissionSuggested: boolean;

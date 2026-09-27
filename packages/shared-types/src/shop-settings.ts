@@ -95,6 +95,15 @@ export interface FoodpandaFees {
    * Reports' "price uplift" are worked out at the dearer prices.
    */
   upliftBps: number;
+  /**
+   * foodpanda's fee on each order's total, basis points (0 = none, the
+   * default): a share of the total the foodpanda tablet shows (tax included,
+   * at foodpanda's prices) that foodpanda keeps for taking the money. In
+   * what foodpanda keeps, beside the commission. v0.7.20 kept it as the
+   * "Foodpanda" payment fee in Costing → Targets & fees ('channels.fees'
+   * paymentFeeBps.foodpanda): carried over with the rest, never charged there.
+   */
+  paymentFeeBps: number;
 }
 
 export type FoodpandaCheckRule = 'optional' | 'required';
@@ -145,6 +154,7 @@ export const DEFAULT_FOODPANDA_FEES: Readonly<FoodpandaFees> = Object.freeze({
   fixedFeeCents: 0,
   commissionTaxBps: 0,
   upliftBps: 0,
+  paymentFeeBps: 0,
 });
 
 /** Shown at Pay, optional (today neither is asked). */
@@ -191,6 +201,14 @@ export interface FoodpandaDealRule {
   maxOffCents: number | null;
   /** When the setting was saved (its updated_at); null = the default. */
   settingsAt: string | null;
+  /**
+   * How much dearer the foodpanda listing was when the order became
+   * foodpanda ('foodpanda.fees' upliftBps, basis points; 0 = the till's
+   * prices, and on a rule written without it). foodpanda applies the deal's
+   * minimum and most-off to the order at ITS prices, so the till does too
+   * (pos-domain dealAmount), and the shop's part comes out the same.
+   */
+  upliftBps: number;
 }
 
 /** A discount's foodpanda figures, on the order snapshot (bill, receipt, Pay). */
@@ -202,9 +220,10 @@ export interface FoodpandaDealShare {
   /** foodpanda's part, paid by foodpanda on top of the bill (0 unless shared). */
   platformCents: number;
   /**
-   * The deal's minimum order (food at till prices), as frozen on the order;
-   * null = any order. Below it the deal takes nothing off, and the cart says
-   * from how much it does.
+   * The deal's minimum order as food at TILL prices (the owner types it at
+   * foodpanda's prices: pos-domain dealMinTillCents turns it back), as
+   * frozen on the order; null = any order. Below it the deal takes nothing
+   * off, and the cart says from how much it does.
    */
   minOrderCents?: number | null;
 }
@@ -237,10 +256,11 @@ export interface ShopSettingCard<K extends ShopSettingKey = ShopSettingKey> {
   readOnly: boolean;
   /**
    * 'foodpanda.fees' only: never saved here, and the value in use is what
-   * v0.7.20's Costing → Targets & fees saved (carried over; a Save keeps it here).
+   * v0.7.20's Costing → Targets & fees saved (carried over; a Save keeps it
+   * here, and Save is offered at once). `lastChanged` is then that save.
    */
   carriedOver?: boolean;
-  /** Who saved it last, when, and where; null when never saved. */
+  /** Who saved it last, when, and where; null when never saved (for a carried-over value: the v0.7.20 save). */
   lastChanged: { at: string; byName: string | null; onThisTill: boolean | null } | null;
   /** The link to the other till is on and this till's last save has not reached it yet. */
   notOnOtherTillYet: boolean;

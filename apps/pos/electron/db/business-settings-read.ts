@@ -119,22 +119,22 @@ export function readShopSetting<K extends ShopSettingKey>(db: AppDatabase, key: 
 }
 
 /**
- * v0.7.20 kept foodpanda's commission in 'channels.fees' (Costing → Targets
- * & fees). Settings → foodpanda is now the one place it lives; until the
- * owner saves it there, what he typed in v0.7.20 stays in force: its
- * commission and fixed fee, CONFIRMED (he typed them), the base mapped
- * (pos-domain LEGACY_COMMISSION_BASE_MAP: sales_ex_tax → after_deal,
- * menu_price → before_deal, paid_incl_tax → after_deal), its uplift. Read
- * time only: nothing is rewritten, so both tills read the same thing and the
- * first Save of the card takes over. Null when v0.7.20 saved no foodpanda
- * part (the suggested default applies).
+ * v0.7.20 kept foodpanda's commission, and its "Foodpanda" payment fee, in
+ * 'channels.fees' (Costing → Targets & fees). Settings → foodpanda is now
+ * the one place they live; until the owner saves it there, what v0.7.20
+ * saved stays in force (pos-domain foodpandaFeesFromChannelFees: the base
+ * mapped, the payment fee as foodpanda's % of the total, CONFIRMED only when
+ * the owner can have typed it — not v0.7.20's own default, and a base that
+ * maps exactly). Read time only: nothing is rewritten, so both tills read
+ * the same thing and the first Save of the card takes over. Null when
+ * v0.7.20 saved nothing worth carrying (the suggested default applies).
  */
 function feesCarriedOver(db: AppDatabase): ShopSettingInUse<'foodpanda.fees'> | null {
   const legacy = getBusinessSetting(db, 'channels.fees');
-  const fp = legacy?.value.foodpanda;
-  if (!legacy || !fp) return null;
+  const value = legacy ? foodpandaFeesFromChannelFees(legacy.value) : null;
+  if (!legacy || !value) return null;
   return {
-    value: foodpandaFeesFromChannelFees(fp),
+    value,
     isDefault: false,
     savedAt: legacy.updatedAt,
     savedByUserId: legacy.updatedByUserId,

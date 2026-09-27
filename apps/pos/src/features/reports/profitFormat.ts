@@ -14,6 +14,7 @@ import {
   type RiderCostSetting,
 } from '@cheeseoclock/shared-types';
 import { formatBps } from '../costing/costingFormat';
+import { andList } from '../settings/shop-rules/foodpandaWords';
 
 export const PROFIT_STEP_LABEL: Record<ProfitStepKey, string> = {
   sales: 'Sales before tax',
@@ -102,7 +103,8 @@ export function commissionText(fees: Pick<ProfitFees, 'foodpanda'>): string {
   const extras: string[] = [];
   if (f.fixedFeeCents > 0) extras.push(`${formatCents(f.fixedFeeCents)} an order`);
   if (f.commissionTaxBps > 0) extras.push(`${formatBps(f.commissionTaxBps)} tax on the commission`);
-  const plus = extras.length > 0 ? `, plus ${extras.join(' and ')}` : '';
+  if (f.paymentFeeBps > 0) extras.push(`${formatBps(f.paymentFeeBps)} of each order's total`);
+  const plus = extras.length > 0 ? `, plus ${andList(extras)}` : '';
   const confirmed = f.confirmed ? '' : ' (not confirmed yet)';
   const prices =
     f.upliftBps > 0

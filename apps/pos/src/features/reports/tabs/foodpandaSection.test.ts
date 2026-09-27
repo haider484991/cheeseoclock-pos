@@ -4,7 +4,15 @@
  * Every figure is made up.
  */
 import { describe, expect, it } from 'vitest';
-import { foodpandaEstimateNote } from './FoodpandaSection';
+import { foodpandaEstimateNote, foodpandaKeepSub } from './FoodpandaSection';
+
+describe('under "You keep"', () => {
+  it('says the dearer menu and the part refunds already taken off, when there are any', () => {
+    expect(foodpandaKeepSub({ upliftCents: 0, partRefundCents: 0 })).toBe('Before tax and food cost');
+    expect(foodpandaKeepSub({ upliftCents: 16_000, partRefundCents: 0 })).toBe('With Rs 160 from foodpanda’s dearer menu · before tax and food cost');
+    expect(foodpandaKeepSub({ upliftCents: 0, partRefundCents: 58_000 })).toBe('After Rs 580 handed back · before tax and food cost');
+  });
+});
 
 describe('the foodpanda estimate note', () => {
   it('names the unconfirmed commission the owner typed, not the suggested figure', () => {

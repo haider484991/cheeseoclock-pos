@@ -9,6 +9,7 @@
  * foodpandaOrderMoney) that Reports → Profit uses too: "foodpanda kept" is
  * the foodpanda row's "foodpanda kept" in "What each order type earns", and
  * the price uplift that row's — never a second figure for the same thing.
+ * Part refunds come off both the same way (the note says how much).
  */
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
@@ -22,6 +23,16 @@ function bpsText(bps: number | null): string {
   if (bps === null) return '—';
   const pct = bps / 100;
   return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`;
+}
+
+/** Under "You keep": the dearer menu's share and the part refunds already taken off, when there are any. */
+export function foodpandaKeepSub(fp: Pick<ReportFoodpanda, 'upliftCents' | 'partRefundCents'>): string {
+  const parts: string[] = [];
+  if (fp.upliftCents !== 0) parts.push(`With ${formatCents(fp.upliftCents)} from foodpanda’s dearer menu`);
+  if (fp.partRefundCents > 0) parts.push(`after ${formatCents(fp.partRefundCents)} handed back`);
+  parts.push('before tax and food cost');
+  const text = parts.join(' · ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /**
@@ -74,7 +85,7 @@ export function FoodpandaSection({ foodpanda: fp }: { foodpanda: ReportFoodpanda
         <Kpi
           label="You keep"
           value={formatCents(fp.youKeepCents)}
-          sub={fp.upliftCents !== 0 ? `With ${formatCents(fp.upliftCents)} from foodpanda’s dearer menu · before tax and food cost` : 'Before tax and food cost'}
+          sub={foodpandaKeepSub(fp)}
           big
         />
       </div>
@@ -82,7 +93,8 @@ export function FoodpandaSection({ foodpanda: fp }: { foodpanda: ReportFoodpanda
       <div className="mt-3 space-y-2">
         <Note>
           foodpanda should pay you about <span className="font-semibold">{formatCents(fp.expectedPayoutCents)}</span> for these
-          orders (the bills with tax{fp.upliftCents !== 0 ? ' at foodpanda’s prices' : ''}, less what foodpanda keeps).
+          orders (the bills with tax{fp.upliftCents !== 0 ? ' at foodpanda’s prices' : ''}
+          {fp.partRefundCents > 0 ? ', less what was handed back' : ''}, less what foodpanda keeps).
           {fp.foodCost && (
             <>
               {' '}

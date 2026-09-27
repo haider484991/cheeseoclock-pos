@@ -170,6 +170,8 @@ describe('sync contract: every replicable table carries the sync columns', () =>
       expect.arrayContaining(['order_id', 'deal_bps', 'shop_bps', 'shop_discount_cents', 'platform_funded_cents', 'commission_bps', 'commission_cents', 'expected_payout_cents', 'tablet_total_cents', 'tablet_diff_cents']),
     );
     expect([...(SCHEMA.get('order_discounts') ?? [])]).toEqual(expect.arrayContaining(['source', 'rule_json']));
+    // 0041: and the uplift in force at payment, and foodpanda's % of the total.
+    expect([...(SCHEMA.get('order_channel_terms') ?? [])]).toEqual(expect.arrayContaining(['uplift_bps', 'payment_fee_cents']));
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');

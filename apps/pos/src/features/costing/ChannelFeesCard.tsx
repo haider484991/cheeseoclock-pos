@@ -5,10 +5,12 @@
  * rate for each area. Managers see them; only the owner (settings.manage)
  * changes them — the main process refuses anyone else. Saved for both tills.
  *
- * foodpanda's terms (its commission, fee, tax and dearer prices, and the
+ * foodpanda's terms (its commission, fees, tax and dearer prices, and the
  * deal) live in ONE place, Settings → foodpanda: they are shown here
  * read-only, for the owner (profit.view — the main process leaves them out
- * for a manager), with a button that opens Settings → foodpanda.
+ * for a manager), with a button that opens Settings → foodpanda. That
+ * includes foodpanda's fee on its orders' total, which v0.7.20 had here as
+ * the "Foodpanda" payment fee: no box for it here any more.
  */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -51,14 +53,21 @@ export function ChannelFeesCard({ canEdit }: { canEdit: boolean }) {
   return <ChannelFeesForm key={q.data.savedAt ?? 'default'} view={q.data} canEdit={canEdit} />;
 }
 
-/** What the boxes say, as the setting; or what is wrong, in plain words. foodpanda's terms are not typed here. */
+/** The ways of paying typed here: every one but foodpanda (its fee is Settings → foodpanda's). */
+export const CARD_FEE_GROUPS: ReportPaymentGroup[] = PAYMENT_ORDER.filter((g) => g !== 'foodpanda');
+
+/**
+ * What the boxes say, as the setting; or what is wrong, in plain words.
+ * foodpanda's terms are not typed here: its payment fee goes as 0, and the
+ * main process keeps whatever was stored (costing-settings saveChannelFees).
+ */
 export function readChannelFees(f: {
   payment: Record<ReportPaymentGroup, string>;
   riderMode: RiderCostMode;
   riderFixed: string;
 }): { ok: true; value: SetChannelFeesRequest } | { ok: false; problem: string } {
   const paymentFeeBps = { cash: 0, card: 0, foodpanda: 0, transfer: 0 } as Record<ReportPaymentGroup, number>;
-  for (const g of PAYMENT_ORDER) {
+  for (const g of CARD_FEE_GROUPS) {
     const v = parsePercent(f.payment[g]);
     if (v === null) return { ok: false, problem: `The fee for ${PAYMENT_LABEL[g]} is 0% to 100%.` };
     paymentFeeBps[g] = v;
@@ -79,6 +88,7 @@ export function foodpandaTermsLines(t: FoodpandaTermsInForce): string[] {
     `Commission ${percentFromBps(f.commissionBps)} of the food ${f.base === 'after_deal' ? 'after your part of the deal' : 'before the deal'}, before tax${f.confirmed ? '' : ' — not confirmed yet'}`,
     f.fixedFeeCents > 0 ? `Fee ${formatCents(f.fixedFeeCents)} an order` : 'No fee per order',
   ];
+  if (f.paymentFeeBps > 0) lines.push(`Fee ${percentFromBps(f.paymentFeeBps)} of each order's total`);
   if (f.commissionTaxBps > 0) lines.push(`Tax on the commission ${percentFromBps(f.commissionTaxBps)}`);
   lines.push(f.upliftBps > 0 ? `Menu ${percentFromBps(f.upliftBps)} above the till's prices` : "Menu at the till's prices");
   lines.push(t.deal.percent > 0 ? `Deal: ${dealSummary(t.deal)}${t.dealToday ? '' : ' (not running today)'}` : 'No deal on the listing');
@@ -117,7 +127,7 @@ function ChannelFeesForm({ view, canEdit }: { view: ChannelFeesView; canEdit: bo
   const [payment, setPayment] = useState<Record<ReportPaymentGroup, string>>(() => ({
     cash: pct(view.fees.paymentFeeBps.cash),
     card: pct(view.fees.paymentFeeBps.card),
-    foodpanda: pct(view.fees.paymentFeeBps.foodpanda),
+    foodpanda: '0',
     transfer: pct(view.fees.paymentFeeBps.transfer),
   }));
   const [riderMode, setRiderMode] = useState<RiderCostMode>(view.riderCost.mode);
@@ -125,7 +135,8 @@ function ChannelFeesForm({ view, canEdit }: { view: ChannelFeesView; canEdit: bo
   const reading = readChannelFees({ payment, riderMode, riderFixed });
   const dirty =
     reading.ok &&
-    JSON.stringify(reading.value) !== JSON.stringify({ fees: { paymentFeeBps: view.fees.paymentFeeBps }, riderCost: view.riderCost });
+    JSON.stringify(reading.value) !==
+      JSON.stringify({ fees: { paymentFeeBps: { ...view.fees.paymentFeeBps, foodpanda: 0 } }, riderCost: view.riderCost });
 
   const mut = useMutation({
     mutationFn: (req: SetChannelFeesRequest) => ipc.costing.setChannelFees(req),
@@ -168,7 +179,7 @@ function ChannelFeesForm({ view, canEdit }: { view: ChannelFeesView; canEdit: bo
 
         <fieldset className="space-y-2 text-sm">
           <legend className="mb-1 font-semibold">What taking the money costs</legend>
-          {PAYMENT_ORDER.map((g) => (
+          {CARD_FEE_GROUPS.map((g) => (
             <label key={g} className="flex items-center justify-between gap-2">
               <span>{PAYMENT_LABEL[g]}</span>
               <span className="flex items-center gap-1">

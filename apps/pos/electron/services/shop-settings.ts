@@ -99,8 +99,11 @@ export function itemFoodpandaLine(
 ): ItemFoodpandaLine | null {
   if (!(plate.priceCents > 0)) return null;
   const deal = activeFoodpandaDeal(readShopSetting(db, 'foodpanda.deal').value, now.toISOString());
-  const amount = deal ? dealAmount({ ...foodpandaDealRule(deal, null), minOrderCents: null }, plate.priceCents) : { shopCents: 0 };
   const fees = readShopSetting(db, 'foodpanda.fees').value;
+  // The deal as an order started now gets it (its most-off at foodpanda's prices), minimum aside.
+  const amount = deal
+    ? dealAmount({ ...foodpandaDealRule(deal, null, fees.upliftBps), minOrderCents: null }, plate.priceCents)
+    : { shopCents: 0 };
   // One plate on its own bill, before tax: the order's value at foodpanda's prices is what it sells for.
   const t = foodpandaTerms(
     { subtotalCents: plate.priceCents, shopDiscountCents: amount.shopCents, totalCents: plate.priceCents - amount.shopCents },
@@ -196,7 +199,10 @@ export function getShopSettingCard<K extends ShopSettingKey>(
           byName: row.updatedByUserId ? (names.get(row.updatedByUserId) ?? null) : null,
           onThisTill: history.length > 0 ? history[0]!.onThisTill : null,
         }
-      : null,
+      : inUse.carriedOver && inUse.savedAt
+        ? // Carried over: the v0.7.20 save of Costing → Targets & fees it came from.
+          { at: inUse.savedAt, byName: inUse.savedByUserId ? (names.get(inUse.savedByUserId) ?? null) : null, onThisTill: null }
+        : null,
     notOnOtherTillYet: unsent,
     history,
   };

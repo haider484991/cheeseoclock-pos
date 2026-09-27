@@ -345,7 +345,7 @@ live('the item cost sheet', () => {
     const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
     const owner = { userId: 'u_admin', deviceId: DEV };
     setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null }, owner);
-    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: true, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0 }, owner);
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: true, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0, paymentFeeBps: 0 }, owner);
     h.session = MANAGER;
     const forManager = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
     const price = forManager.row.priceCents;
@@ -370,7 +370,7 @@ live('the item cost sheet', () => {
     // foodpanda 10% dearer: the listing price and the price after the deal at its prices, for both;
     // the commission on that price, and what the shop keeps, for the owner only.
     setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null }, owner);
-    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: false, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 1_000 }, owner);
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: false, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 1_000, paymentFeeBps: 0 }, owner);
     const tillAfter = price - Math.round(price / 5);
     const dearerAfter = tillAfter + Math.round(tillAfter / 10);
     const dearerOwner = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
@@ -387,6 +387,13 @@ live('the item cost sheet', () => {
     expect(dearerManager.row.profitCents).toBeNull();
     expect(dearerManager.priceToHitCents).toBeNull();
     expect(JSON.stringify(dearerManager.onFoodpanda)).not.toMatch(/commission|youKeep/i);
+
+    // foodpanda's fee on the total (Settings → foodpanda) is in what it keeps, for the owner.
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: true, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 1_000, paymentFeeBps: 200 }, owner);
+    h.session = OWNER;
+    const withFee = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    const keeps = Math.round(dearerAfter / 4) + Math.round(dearerAfter / 50);
+    expect(withFee.onFoodpanda!.owner).toMatchObject({ foodpandaKeepsCents: keeps, youKeepCents: dearerAfter - keeps });
   });
 
   it('every line with its price per kg, the batch sauce opened up, paid extras and leave-outs', async () => {
@@ -773,18 +780,24 @@ live('card fees and the rider cost (costing spec Phase 9); foodpanda\'s terms ar
   it("v0.7.20's saved foodpanda part: carried over for display (and in force), and kept as stored when the card fees are saved", async () => {
     const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
     const legacy = { commissionBps: 2_200, base: 'paid_incl_tax' as const, fixedFeeCents: 2_500, upliftBps: 1_000 };
-    setBusinessSetting(db as never, 'channels.fees', { foodpanda: legacy, paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } }, { userId: 'u_admin', deviceId: DEV });
+    // v0.7.20 also had a 2% "Foodpanda" payment fee.
+    setBusinessSetting(db as never, 'channels.fees', { foodpanda: legacy, paymentFeeBps: { cash: 0, card: 0, foodpanda: 200, transfer: 0 } }, { userId: 'u_admin', deviceId: DEV });
     h.session = OWNER;
     const view = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees');
+    // Costing's own list has no foodpanda fee: it is Settings → foodpanda's now.
     expect(view.fees).toEqual({ paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } });
     expect(view.foodpanda).toMatchObject({
-      fees: { commissionBps: 2_200, confirmed: true, base: 'after_deal', fixedFeeCents: 2_500, commissionTaxBps: 0, upliftBps: 1_000 },
+      // "What the customer paid" has no match in Settings → foodpanda: carried over, but not confirmed.
+      fees: { commissionBps: 2_200, confirmed: false, base: 'after_deal', fixedFeeCents: 2_500, commissionTaxBps: 0, upliftBps: 1_000, paymentFeeBps: 200 },
       carriedOver: true,
       isDefault: false,
     });
-    // Saving the card fees with a different foodpanda part: the stored one stays exactly as it was.
-    await data('costing:setChannelFees', { ...FEES(), fees: { ...FEES().fees, foodpanda: { ...legacy, commissionBps: 3_000 } } });
-    expect(JSON.parse(fpRow()!.value_json)).toEqual({ foodpanda: legacy, paymentFeeBps: FEES().fees.paymentFeeBps });
+    // Saving the card fees with a different foodpanda part (and a foodpanda fee typed by an older screen):
+    // the stored ones stay exactly as they were.
+    const fromOlderScreen = { ...FEES(), fees: { paymentFeeBps: { ...FEES().fees.paymentFeeBps, foodpanda: 900 }, foodpanda: { ...legacy, commissionBps: 3_000 } } };
+    await data('costing:setChannelFees', fromOlderScreen);
+    expect(JSON.parse(fpRow()!.value_json)).toEqual({ foodpanda: legacy, paymentFeeBps: { ...FEES().fees.paymentFeeBps, foodpanda: 200 } });
+    expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda?.fees.paymentFeeBps).toBe(200);
     expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda?.fees.commissionBps).toBe(2_200);
     // A manager still gets no foodpanda part.
     h.session = MANAGER;

@@ -21,6 +21,7 @@ import {
   allocateDiscount,
   computeDiscountCents,
   dealAmount,
+  dealMinTillCents,
   foodpandaDealRule,
   foodpandaTerms,
   parseFoodpandaDealRule,
@@ -534,7 +535,8 @@ function putOnFoodpandaDeal(db: AppDatabase, order: Order, actor: Actor & { user
   const setting = readShopSetting(db, 'foodpanda.deal');
   const deal = activeFoodpandaDeal(setting.value, order.createdAt);
   if (!deal) return false;
-  const rule = foodpandaDealRule(deal, setting.savedAt);
+  // Frozen with how much dearer the listing is now: foodpanda's minimum and most-off are in its prices.
+  const rule = foodpandaDealRule(deal, setting.savedAt, readShopSetting(db, 'foodpanda.fees').value.upliftBps);
   const now = nowIso();
 
   const replaced = db
@@ -1730,7 +1732,8 @@ export function orderChannelTermsId(orderId: string): string {
  * A foodpanda order's economics at payment (order_channel_terms, migration
  * 0040), in the tender's transaction: the deal as frozen on the order, the
  * shop's part and foodpanda's, the fees in force now and what they come to
- * (pos-domain foodpandaTerms, at foodpanda's prices when its menu is dearer),
+ * (pos-domain foodpandaTerms, at foodpanda's prices when its menu is dearer:
+ * the uplift in force is kept too, and foodpanda's % of the total, 0041),
  * what foodpanda should pay, and the tablet's total with its difference from
  * the one expected. Reports read it back through foodpandaOrderMoney.
  * Insert-only (a second tender of the same order never happens; the row is
@@ -1769,6 +1772,8 @@ function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: nu
     commissionCents: t.commissionCents,
     fixedFeeCents: t.fixedFeeCents,
     commissionTaxCents: t.commissionTaxCents,
+    paymentFeeCents: t.paymentFeeCents,
+    upliftBps: fees.value.upliftBps,
     expectedPayoutCents: t.expectedPayoutCents,
     tabletTotalCents,
     // Against what the tablet should show: the till's total at foodpanda's prices (Settings → foodpanda).
@@ -1779,9 +1784,9 @@ function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: nu
     `INSERT INTO order_channel_terms
        (id, order_id, channel, deal_label, deal_bps, shop_bps, shop_discount_cents, platform_funded_cents,
         commission_bps, commission_base, commission_confirmed, commission_cents, fixed_fee_cents,
-        commission_tax_cents, expected_payout_cents, tablet_total_cents, tablet_diff_cents, settings_at,
-        created_at, updated_at, device_id, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        commission_tax_cents, payment_fee_cents, uplift_bps, expected_payout_cents, tablet_total_cents,
+        tablet_diff_cents, settings_at, created_at, updated_at, device_id, version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
   ).run(
     terms.id,
     terms.orderId,
@@ -1797,6 +1802,8 @@ function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: nu
     terms.commissionCents,
     terms.fixedFeeCents,
     terms.commissionTaxCents,
+    terms.paymentFeeCents,
+    terms.upliftBps,
     terms.expectedPayoutCents,
     terms.tabletTotalCents,
     terms.tabletDiffCents,
@@ -2309,7 +2316,8 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
               shopPercent: rule.shopPercent,
               dealCents: share.dealCents,
               platformCents: share.platformCents,
-              minOrderCents: rule.minOrderCents,
+              // At till prices, like the cart's subtotal it is compared with.
+              minOrderCents: dealMinTillCents(rule),
             }
           : null,
     };

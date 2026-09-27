@@ -115,7 +115,8 @@ describe('card fees and riders (costing spec Phase 9); foodpanda is Settings →
     riderFixed: '150',
   };
 
-  it('reads what was typed into the setting, exactly — no foodpanda part', () => {
+  it('reads what was typed into the setting, exactly — no foodpanda part, and no foodpanda fee (Settings → foodpanda keeps it)', () => {
+    expect(readChannelFees({ ...typed, payment: { ...typed.payment, foodpanda: '3' } })).toEqual(readChannelFees(typed));
     expect(readChannelFees(typed)).toEqual({
       ok: true,
       value: {
@@ -211,6 +212,15 @@ describe('who sees What-if and the fees', () => {
     expect(owner).toContain('Deal: 20% off, you pay 10%');
     expect(owner).toContain('Change in Settings → foodpanda');
     expect(owner).not.toContain('aria-label="foodpanda commission, %"');
+    // No box for a fee on foodpanda payments: that is foodpanda's, in Settings → foodpanda.
+    expect(owner).not.toContain('aria-label="Fee on Foodpanda payments, %"');
+    expect(owner).toContain('aria-label="Fee on Card payments, %"');
+    const withFee = render(
+      <ChannelFeesCard canEdit />,
+      [[[...COSTING_KEY, 'channelFees'], { ...view, foodpanda: { fees: { ...DEFAULT_FOODPANDA_FEES, paymentFeeBps: 200 }, carriedOver: true, isDefault: false, deal: DEFAULT_FOODPANDA_DEAL, dealToday: false } }]],
+    );
+    expect(withFee).toContain('Fee 2% of each order&#x27;s total');
+    expect(withFee).toContain('Carried over from what you saved here before.');
     // The button opens Settings on its foodpanda tab (Settings reads ?tab=).
     const went: string[] = [];
     openFoodpandaSettings((to) => went.push(to));

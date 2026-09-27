@@ -79,6 +79,8 @@ export interface FeesForm {
   commissionTax: string;
   /** How much above the till's prices the foodpanda menu is (%). */
   uplift: string;
+  /** foodpanda's fee on each order's total (%). */
+  paymentFee: string;
 }
 
 export function feesToForm(f: FoodpandaFees): FeesForm {
@@ -89,6 +91,7 @@ export function feesToForm(f: FoodpandaFees): FeesForm {
     fixedFee: String(f.fixedFeeCents / 100),
     commissionTax: percentFromBps(f.commissionTaxBps).replace('%', ''),
     uplift: percentFromBps(f.upliftBps).replace('%', ''),
+    paymentFee: percentFromBps(f.paymentFeeBps).replace('%', ''),
   };
 }
 
@@ -105,6 +108,10 @@ export function feesFromForm(f: FeesForm): Parsed<FoodpandaFees> {
   if (uplift === null || uplift > 10_000) {
     return { value: null, problem: "How much dearer foodpanda is: a % from 0 to 100 (0 if foodpanda shows the till's prices)." };
   }
+  const paymentFee = f.paymentFee.trim() === '' ? 0 : bpsFromPercentText(f.paymentFee);
+  if (paymentFee === null || paymentFee > 5_000) {
+    return { value: null, problem: "foodpanda's fee on the order's total is a % from 0 to 50 (0 if none)." };
+  }
   return {
     value: {
       v: SHOP_SETTING_FORMAT['foodpanda.fees'],
@@ -114,6 +121,7 @@ export function feesFromForm(f: FeesForm): Parsed<FoodpandaFees> {
       fixedFeeCents: fee ?? 0,
       commissionTaxBps: tax,
       upliftBps: uplift,
+      paymentFeeBps: paymentFee,
     },
     problem: null,
   };

@@ -132,6 +132,7 @@ const fees = (over: Partial<FoodpandaFees> = {}): FoodpandaFees => ({
   fixedFeeCents: 0,
   commissionTaxBps: 0,
   upliftBps: 0,
+  paymentFeeBps: 0,
   ...over,
 });
 
@@ -718,16 +719,17 @@ const legacyChannelFees = (foodpanda: { commissionBps: number; base: 'sales_ex_t
 });
 
 describe.skipIf(!DatabaseSync)("the one reader of foodpanda's fees: v0.7.20's terms carried over", () => {
-  it('never saved in Settings → foodpanda: what v0.7.20 saved is in force — confirmed, the base mapped, the uplift kept — nothing rewritten', async () => {
+  it('never saved in Settings → foodpanda: what v0.7.20 saved is in force — the base mapped, the uplift kept — nothing rewritten', async () => {
     const s = await shop();
     // Nothing saved anywhere: the suggested default.
     expect(s.r.readShopSetting(s.db, 'foodpanda.fees')).toMatchObject({ value: DEFAULT_FOODPANDA_FEES, isDefault: true, carriedOver: false });
     // v0.7.20 saved its card fees with foodpanda at 22.5% of what the customer paid, Rs 25 an order, 10% dearer.
+    // Settings → foodpanda has no "with tax" base: carried over on the food after the deal, and so NOT confirmed.
     s.r.setBusinessSetting(s.db, 'channels.fees', legacyChannelFees({ commissionBps: 2_250, base: 'paid_incl_tax', fixedFeeCents: 2_500, upliftBps: 1_000 }), OWNER);
     const saved = one(s.db, `SELECT updated_at FROM business_settings WHERE key = 'channels.fees'`);
     const inUse = s.r.readShopSetting(s.db, 'foodpanda.fees');
     expect(inUse).toMatchObject({
-      value: { v: 1, commissionBps: 2_250, confirmed: true, base: 'after_deal', fixedFeeCents: 2_500, commissionTaxBps: 0, upliftBps: 1_000 },
+      value: { v: 1, commissionBps: 2_250, confirmed: false, base: 'after_deal', fixedFeeCents: 2_500, commissionTaxBps: 0, upliftBps: 1_000, paymentFeeBps: 0 },
       isDefault: false,
       carriedOver: true,
       savedAt: saved?.['updated_at'],
@@ -740,8 +742,13 @@ describe.skipIf(!DatabaseSync)("the one reader of foodpanda's fees: v0.7.20's te
     expect(s.r.readShopSetting(s.db, 'foodpanda.fees').value).toMatchObject({ base: 'before_deal', commissionBps: 2_000, confirmed: true });
     s.r.setBusinessSetting(s.db, 'channels.fees', legacyChannelFees({ commissionBps: 2_000, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 }), OWNER);
     expect(s.r.readShopSetting(s.db, 'foodpanda.fees').value).toMatchObject({ base: 'after_deal' });
-    // The Settings card shows it, and says so.
-    expect(s.r.getShopSettingCard(s.db, 'foodpanda.fees', LINK_ON)).toMatchObject({ carriedOver: true, isDefault: false, value: { commissionBps: 2_000, confirmed: true } });
+    // The Settings card shows it, and says so — "last changed" is the v0.7.20 save it came from.
+    expect(s.r.getShopSettingCard(s.db, 'foodpanda.fees', LINK_ON)).toMatchObject({
+      carriedOver: true,
+      isDefault: false,
+      value: { commissionBps: 2_000, confirmed: true },
+      lastChanged: { byName: 'Test Owner', onThisTill: null },
+    });
     // Pay keeps the carried-over commission as the owner's (confirmed) on the order.
     const o = s.order('foodpanda');
     s.add(o.id, s.pizza);
@@ -757,6 +764,39 @@ describe.skipIf(!DatabaseSync)("the one reader of foodpanda's fees: v0.7.20's te
     const s = await shop();
     s.r.setBusinessSetting(s.db, 'channels.fees', { paymentFeeBps: { cash: 0, card: 250, foodpanda: 0, transfer: 0 } }, OWNER);
     expect(s.r.readShopSetting(s.db, 'foodpanda.fees')).toMatchObject({ value: DEFAULT_FOODPANDA_FEES, isDefault: true, carriedOver: false });
+  });
+
+  it("v0.7.20's own 25% (saved with every save of its card fees) is no confirmation: orders paid meanwhile stay estimated", async () => {
+    const s = await shop();
+    const br = await import('../services/business-report.js');
+    s.r.setBusinessSetting(s.db, 'channels.fees', legacyChannelFees({ commissionBps: 2_500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 }), OWNER);
+    expect(s.r.readShopSetting(s.db, 'foodpanda.fees')).toMatchObject({ value: DEFAULT_FOODPANDA_FEES, isDefault: true, carriedOver: false });
+    const o = s.order('foodpanda');
+    s.add(o.id, s.pizza);
+    s.payFoodpanda(o.id, { code: 'FP-V' });
+    expect(s.terms(o.id)).toMatchObject({ commission_bps: 2_500, commission_confirmed: 0 });
+    // The owner confirms foodpanda's real 20% in Settings → foodpanda: that order follows (it was never his figure).
+    s.setFees(fees({ commissionBps: 2_000, confirmed: true }));
+    const range = { sinceIso: new Date(Date.now() - 3_600_000).toISOString(), untilIso: new Date(Date.now() + 3_600_000).toISOString() };
+    expect(br.getFoodpanda(s.db, range)).toMatchObject({ commissionCents: 20_000, estimatedOrders: 1 });
+  });
+
+  it("v0.7.20's Foodpanda payment fee is carried over as foodpanda's fee on the total, and Costing no longer charges it", async () => {
+    const s = await shop();
+    s.r.setBusinessSetting(
+      s.db,
+      'channels.fees',
+      { ...legacyChannelFees({ commissionBps: 2_000, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 }), paymentFeeBps: { cash: 0, card: 250, foodpanda: 200, transfer: 0 } },
+      OWNER,
+    );
+    expect(s.r.readShopSetting(s.db, 'foodpanda.fees')).toMatchObject({ value: { commissionBps: 2_000, confirmed: true, paymentFeeBps: 200 }, carriedOver: true });
+    const profit = await import('../services/analytics/profit.js');
+    expect(profit.loadProfitSettings(s.db).fees.paymentFeeBps).toEqual({ cash: 0, card: 250, foodpanda: 0, transfer: 0 });
+    // Paid now: the fee on the total is kept with the order's terms (2% of Rs 1,160).
+    const o = s.order('foodpanda');
+    s.add(o.id, s.pizza);
+    s.payFoodpanda(o.id, { code: 'FP-P' });
+    expect(s.terms(o.id)).toMatchObject({ commission_cents: 20_000, payment_fee_cents: 2_320, uplift_bps: 0, expected_payout_cents: 116_000 - 22_320 });
   });
 });
 
@@ -784,6 +824,103 @@ describe.skipIf(!DatabaseSync)("foodpanda's dearer prices (Settings → foodpand
     const fp = br.getFoodpanda(s.db, range)!;
     expect(fp).toMatchObject({ tabletDiffCount: 0, upliftCents: 16_000, youKeepCents: 160_000 + 16_000 - 44_000 });
     expect(fp.toCheck[0]).toMatchObject({ tillTotalCents: 185_600, expectedTabletCents: 204_160, diffCents: 0, differs: false });
+    expect(s.terms(o.id)).toMatchObject({ uplift_bps: 1_000 });
+  });
+
+  it('a paid order never moves with a later uplift — its tablet check, its uplift — even while its commission is only suggested', async () => {
+    const s = await shop();
+    const br = await import('../services/business-report.js');
+    const profit = await import('../services/analytics/profit.js');
+    const range = { sinceIso: new Date(Date.now() - 3_600_000).toISOString(), untilIso: new Date(Date.now() + 3_600_000).toISOString() };
+    // Default fees (25% suggested, the till's prices). Rs 1,000 of food + 16% tax: the tablet shows the till's Rs 1,160.
+    const a = s.order('foodpanda');
+    s.add(a.id, s.pizza);
+    s.payFoodpanda(a.id, { code: 'FP-A', tablet: 116_000 });
+    expect(s.terms(a.id)).toMatchObject({ tablet_diff_cents: 0, uplift_bps: 0, commission_confirmed: 0 });
+    // B: paid while foodpanda was 10% dearer (still suggested): Rs 1,856 → the tablet shows Rs 2,041.60.
+    s.setDeal(deal());
+    s.setFees({ ...DEFAULT_FOODPANDA_FEES, upliftBps: 1_000 });
+    const b = s.order('foodpanda');
+    s.add(b.id, s.pizza, 2);
+    s.payFoodpanda(b.id, { code: 'FP-B', tablet: 204_160 });
+    expect(s.terms(b.id)).toMatchObject({ tablet_diff_cents: 0, uplift_bps: 1_000 });
+    // Later the owner says 5% dearer: neither order is flagged, neither gains or loses an uplift.
+    s.setFees({ ...DEFAULT_FOODPANDA_FEES, upliftBps: 500 });
+    const fp = br.getFoodpanda(s.db, range)!;
+    expect(fp.tabletDiffCount).toBe(0);
+    expect(fp.toCheck.find((l) => l.orderId === a.id)).toMatchObject({ expectedTabletCents: 116_000, diffCents: 0, differs: false });
+    expect(fp.toCheck.find((l) => l.orderId === b.id)).toMatchObject({ expectedTabletCents: 204_160, diffCents: 0, differs: false });
+    expect(fp.upliftCents).toBe(0 + 16_000);
+    // Confirming his real commission re-works the commission only.
+    s.setFees(fees({ commissionBps: 2_000, confirmed: true, upliftBps: 500 }));
+    const after = br.getFoodpanda(s.db, range)!;
+    expect(after).toMatchObject({ tabletDiffCount: 0, upliftCents: 16_000, estimatedOrders: 2 });
+    // 20% of Rs 1,000 (A at the till's prices) and of Rs 1,760 (B at the prices it was paid at).
+    expect(after.commissionCents).toBe(20_000 + 35_200);
+    // Profit counts the same.
+    const row = profit.buildProfitTab(s.db, range).channels.find((x) => x.channel === 'foodpanda')!;
+    expect(row).toMatchObject({ commissionCents: after.foodpandaKeepsCents, upliftCents: after.upliftCents });
+  });
+
+  it("the deal's most-off and minimum work at foodpanda's prices: a capped order's tablet matches foodpanda's", async () => {
+    const s = await shop();
+    // Made-up: 20% off, the shop pays half, at most Rs 300 off; foodpanda 10% dearer; tablet checked.
+    s.setDeal(deal({ percent: 20, shopPercent: 10, maxOffCents: 30_000 }));
+    s.setFees(fees({ upliftBps: 1_000 }));
+    const o = s.order('foodpanda');
+    s.add(o.id, s.pizza, 2);
+    s.add(o.id, s.side);
+    // Rs 2,500 at the till = Rs 2,750 on foodpanda: Rs 300 off there, the shop's Rs 150 → Rs 2,600, Rs 3,016 with tax.
+    const rule = JSON.parse(String(s.liveDiscounts(o.id).map((d) => (d as Record<string, unknown>)['rule_json'])[0]));
+    expect(rule).toMatchObject({ upliftBps: 1_000, maxOffCents: 30_000 });
+    const snap = s.snap(o.id);
+    expect(snap.order.discountCents).toBe(13_637);
+    s.payFoodpanda(o.id, { code: 'FP-CAP', tablet: 301_600 });
+    const kept = s.terms(o.id)!;
+    // (Rs 17.40 off before: the most-off was taken at the till's prices.) Within a few paisa of tax rounding now.
+    expect(Math.abs(Number(kept['tablet_diff_cents']))).toBeLessThanOrEqual(5);
+    const br = await import('../services/business-report.js');
+    const range = { sinceIso: new Date(Date.now() - 3_600_000).toISOString(), untilIso: new Date(Date.now() + 3_600_000).toISOString() };
+    expect(br.getFoodpanda(s.db, range)).toMatchObject({ tabletDiffCount: 0 });
+    // The commission is on foodpanda's Rs 2,600 (to the paisa): 25% = Rs 650.
+    expect(Math.abs(Number(kept['commission_cents']) - 65_000)).toBeLessThanOrEqual(1);
+
+    // The minimum, typed at foodpanda's prices: Rs 1,500 there is Rs 1,363.64 of food at the till.
+    s.setDeal(deal({ minOrderCents: 150_000 }));
+    const cat = one(s.db, `SELECT category_id AS c, tax_category_id AS t FROM menu_items WHERE id = ?`, s.pizza)!;
+    const dish = s.r.createMenuItem(s.db, { categoryId: String(cat['c']), name: 'Test Platter', basePriceCents: 140_000, taxCategoryId: String(cat['t']) }, MANAGER).id;
+    const m = s.order('foodpanda');
+    s.add(m.id, s.side);
+    // Rs 500 at the till is Rs 550 on foodpanda: under the minimum; the cart says from how much, at the till's prices.
+    expect(s.snap(m.id).order.discountCents).toBe(0);
+    expect(s.snap(m.id).discounts[0]?.foodpanda).toMatchObject({ dealCents: 0, minOrderCents: 136_364 });
+    s.r.removeOrderItem(s.db, m.id, s.snap(m.id).items[0]!.id, CASHIER);
+    s.add(m.id, dish);
+    // Rs 1,400 at the till is Rs 1,540 on foodpanda: foodpanda gives the deal, and so does the till.
+    expect(s.snap(m.id).order.discountCents).toBe(28_000);
+  });
+
+  it('part refunds: Profit and Channels take the same share off what foodpanda keeps, the uplift and the payout', async () => {
+    const s = await shop();
+    const br = await import('../services/business-report.js');
+    const profit = await import('../services/analytics/profit.js');
+    const range = { sinceIso: new Date(Date.now() - 3_600_000).toISOString(), untilIso: new Date(Date.now() + 3_600_000).toISOString() };
+    // 25% confirmed, 10% dearer, 2% of the total, Rs 20 an order. Rs 2,000 of food + 16% tax = Rs 2,320.
+    s.setFees(fees({ upliftBps: 1_000, paymentFeeBps: 200, fixedFeeCents: 2_000 }));
+    const o = s.order('foodpanda');
+    s.add(o.id, s.pizza, 2);
+    s.payFoodpanda(o.id, { code: 'FP-R' });
+    // Half handed back (Rs 1,160, with tax).
+    s.r.refundOrder(s.db, { orderId: o.id, reason: 'One pizza cold', approverUserId: 'u_mgr', amountCents: 116_000 }, MANAGER);
+    const fp = br.getFoodpanda(s.db, range)!;
+    // As paid: 25% of Rs 2,200 = Rs 550; 2% of Rs 2,552 = Rs 51.04; uplift Rs 200. Half of each is left; the fee stays.
+    expect(fp).toMatchObject({ partRefundCents: 116_000, commissionCents: 27_500, upliftCents: 10_000, feeCents: 2_000 + 2_552 });
+    expect(fp.foodpandaKeepsCents).toBe(27_500 + 2_000 + 2_552);
+    expect(fp.youKeepCents).toBe(100_000 + 10_000 - fp.foodpandaKeepsCents);
+    expect(fp.expectedPayoutCents).toBe(255_200 - 127_600 - fp.foodpandaKeepsCents);
+    const row = profit.buildProfitTab(s.db, range).channels.find((x) => x.channel === 'foodpanda')!;
+    expect(row).toMatchObject({ commissionCents: fp.foodpandaKeepsCents, upliftCents: fp.upliftCents, paymentFeeCents: 0 });
+    expect(row.salesCents + row.upliftCents - row.commissionCents).toBe(fp.youKeepCents);
   });
 });
 
@@ -827,19 +964,21 @@ describe.skipIf(!DatabaseSync)('Reports → Profit and Reports → Channels agre
     // By hand (paisa):
     //  A: food 200,000 − the shop's 40,000 = 160,000; uplift 16,000; 25% of 176,000 = 44,000 + 16% tax 7,040 + fee 2,000 = 53,040.
     //  B: 150,000 (foodpanda's 30,000 is not the shop's discount); uplift 15,000; 25% of 165,000 = 41,250 + 6,600 + 2,000 = 49,850.
-    //  C: 100,000; today's: uplift 5,000; 22% of 105,000 = 23,100 + 3,696 + 2,000 = 28,796.
-    //  D: 50,000; today's: uplift 2,500; 22% of 52,500 = 11,550 + 1,848 + 2,000 = 15,398.
-    const keeps = 53_040 + 49_850 + 28_796 + 15_398;
-    const uplift = 16_000 + 15_000 + 5_000 + 2_500;
+    //  C: 100,000, paid at the till's prices (its kept uplift 0: a later uplift never moves it); today's
+    //     commission on it: 22% of 100,000 = 22,000 + 3,520 + 2,000 = 27,520.
+    //  D: 50,000; no terms kept, so today's: uplift 2,500; 22% of 52,500 = 11,550 + 1,848 + 2,000 = 15,398.
+    const keeps = 53_040 + 49_850 + 27_520 + 15_398;
+    const uplift = 16_000 + 15_000 + 0 + 2_500;
+    expect(s.terms(c.id)).toMatchObject({ uplift_bps: 0, commission_confirmed: 0 });
     const fp = br.getFoodpanda(s.db, range)!;
     expect(fp).toMatchObject({
       orderCount: 4,
       tillPriceSalesCents: 500_000,
       shopDealCents: 40_000,
       foodpandaDealCents: 30_000 + 20_000 + 10_000,
-      commissionCents: 44_000 + 41_250 + 23_100 + 11_550,
+      commissionCents: 44_000 + 41_250 + 22_000 + 11_550,
       feeCents: 4 * 2_000,
-      commissionTaxCents: 7_040 + 6_600 + 3_696 + 1_848,
+      commissionTaxCents: 7_040 + 6_600 + 3_520 + 1_848,
       foodpandaKeepsCents: keeps,
       upliftCents: uplift,
       estimatedOrders: 2,

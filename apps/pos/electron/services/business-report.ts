@@ -2068,7 +2068,8 @@ export function buildChannelsTab(
  * readOrderCosts) read the same ones.
  */
 export const KEPT_TERMS_COLUMNS = `t.id AS termsId, t.commission_confirmed AS confirmed, t.commission_cents AS commission,
-         t.fixed_fee_cents AS fee, t.commission_tax_cents AS commissionTax, t.expected_payout_cents AS payout`;
+         t.fixed_fee_cents AS fee, t.commission_tax_cents AS commissionTax, t.payment_fee_cents AS paymentFee,
+         t.uplift_bps AS upliftBps, t.expected_payout_cents AS payout`;
 
 /** A kept-terms row as KEPT_TERMS_COLUMNS reads it, as pos-domain's KeptFoodpandaTerms (null: none kept). */
 export function keptTermsOf(r: {
@@ -2077,6 +2078,8 @@ export function keptTermsOf(r: {
   commission: number | null;
   fee: number | null;
   commissionTax: number | null;
+  paymentFee: number | null;
+  upliftBps: number | null;
   payout: number | null;
 }): KeptFoodpandaTerms | null {
   if (r.termsId === null) return null;
@@ -2085,7 +2088,9 @@ export function keptTermsOf(r: {
     commissionCents: Number(r.commission ?? 0),
     fixedFeeCents: Number(r.fee ?? 0),
     commissionTaxCents: Number(r.commissionTax ?? 0),
+    paymentFeeCents: Number(r.paymentFee ?? 0),
     expectedPayoutCents: r.payout === null ? null : Number(r.payout),
+    upliftBps: r.upliftBps === null ? null : Number(r.upliftBps),
   };
 }
 
@@ -2094,20 +2099,23 @@ export function keptTermsOf(r: {
  * orders with the terms each kept at payment (order_channel_terms). Sales
  * and the deal come from the STORED order totals; foodpanda's money per
  * order from pos-domain foodpandaOrderMoney — the same rule as Reports →
- * Profit, so the two agree to the rupee: the kept commission, fee, tax and
- * payout when the commission was CONFIRMED at payment; otherwise (paid
- * before terms were kept, or while the commission was only suggested) the
- * fees in force now — so confirming the real commission later corrects them
- * — counted as "estimated" (the deal's split and the tablet total are still
- * the ones kept). A fully refunded order is not counted, so it counts no
- * commission. Food cost is the cost each sale kept (order_item_costs);
- * reportTabForLogin clears it for a login without costs.
+ * Profit, so the two agree to the paisa: the tablet total expected and the
+ * uplift as kept at payment (a later uplift never moves a paid order, or
+ * its place in the list to check); the kept commission, fees and tax when
+ * the commission was CONFIRMED at payment, otherwise (paid before terms
+ * were kept, or while the commission was only suggested) the fees in force
+ * now — so confirming the real commission later corrects them — counted as
+ * "estimated"; part refunds taken off as Profit takes them. A fully
+ * refunded order is not counted, so it counts no commission. Food cost is
+ * the cost each sale kept (order_item_costs); reportTabForLogin clears it
+ * for a login without costs.
  */
 export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_LIST_CAP): ReportFoodpanda | null {
   const rows = db
     .prepare(
       `SELECT o.id AS orderId, o.order_number AS orderNumber, o.created_at AS createdAt,
               o.subtotal_cents AS subtotal, o.discount_cents AS discount, o.tax_cents AS tax, o.total_cents AS total,
+              ${REFUNDED} AS refunded,
               ${KEPT_TERMS_COLUMNS},
               t.platform_funded_cents AS platform, t.tablet_total_cents AS tablet,
               (SELECT p.reference_no FROM payments p
@@ -2132,11 +2140,14 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     discount: number;
     tax: number;
     total: number;
+    refunded: number;
     termsId: string | null;
     platform: number | null;
     commission: number | null;
     fee: number | null;
     commissionTax: number | null;
+    paymentFee: number | null;
+    upliftBps: number | null;
     payout: number | null;
     tablet: number | null;
     confirmed: number | null;
@@ -2161,6 +2172,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     commissionTaxCents: 0,
     foodpandaKeepsCents: 0,
     upliftCents: 0,
+    partRefundCents: 0,
     youKeepCents: 0,
     expectedPayoutCents: 0,
     estimatedOrders: 0,
@@ -2180,6 +2192,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     const sub = Number(r.subtotal);
     const disc = Number(r.discount);
     const total = Number(r.total);
+    const refunded = Number(r.refunded);
     // foodpanda's part of the deal: as kept at payment, else from the deal frozen on the order.
     let platform: number;
     if (r.termsId !== null) platform = Number(r.platform ?? 0);
@@ -2188,7 +2201,11 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
       platform = rule ? dealAmount(rule, sub).platformCents : 0;
     }
     // The one per-order rule (Reports → Profit uses it too).
-    const m = foodpandaOrderMoney({ subtotalCents: sub, discountCents: disc, totalCents: total }, keptTermsOf(r), feesNow);
+    const m = foodpandaOrderMoney(
+      { subtotalCents: sub, discountCents: disc, totalCents: total, refundedCents: refunded },
+      keptTermsOf(r),
+      feesNow,
+    );
     if (m.estimated) {
       out.estimatedOrders += 1;
       if (!feesNow.confirmed) {
@@ -2203,10 +2220,11 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     out.foodpandaDealCents += platform;
     out.taxCents += Number(r.tax);
     out.commissionCents += m.commissionCents;
-    out.feeCents += m.fixedFeeCents;
+    out.feeCents += m.fixedFeeCents + m.paymentFeeCents;
     out.commissionTaxCents += m.commissionTaxCents;
     out.foodpandaKeepsCents += m.foodpandaKeepsCents;
     out.upliftCents += m.upliftCents;
+    out.partRefundCents += refunded;
     out.youKeepCents += kept;
     out.expectedPayoutCents += m.expectedPayoutCents;
     if (Number(r.costRows) > 0 && Number(r.failedRows) === 0) {
@@ -2218,7 +2236,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
 
     const code = r.code?.trim() ? r.code.trim() : null;
     const tablet = r.tablet === null ? null : Number(r.tablet);
-    // Against what the tablet should show (the till's total at foodpanda's prices), as Pay checks it.
+    // Against what the tablet should show (the till's total at foodpanda's prices, as kept at payment): as Pay checked it.
     const diff = tablet === null ? null : tablet - m.expectedTabletCents;
     const differs = diff !== null && Math.abs(diff) > FOODPANDA_TABLET_TOLERANCE_CENTS;
     if (code === null) out.missingCodeCount += 1;
