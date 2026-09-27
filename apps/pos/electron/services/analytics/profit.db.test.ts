@@ -170,7 +170,7 @@ live('the profit waterfall (costing spec 4.7)', () => {
 live('rider cost and deliveries with no rate (costing spec 4.7, 4.14)', () => {
   it('the zone’s rate even with the charge discounted; the charge at menu price with no area; neither: Rs 0 and listed', async () => {
     const s = await shop();
-    // DHA Phase 8 is a Rs 250 zone; the order was rung with 10% off (the food's since 0.7.25: the
+    // DHA Phase 8 is a Rs 250 zone; the order was rung with 10% off (the food's since 0.7.26: the
     // Rs 100 delivery charge is paid in full). The rider's cost is the zone's either way.
     s.sale([['fajitaM', 1], ['delivery', 1]], { mode: 'delivery', area: 'DHA Phase 8', discountPct: 10 });
     // No area on the address, a delivery charge on the bill.

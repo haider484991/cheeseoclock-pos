@@ -10,6 +10,7 @@ import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
 import { paperButtonLabel } from '../printing/paperLabels';
+import { receiptDiscountLabel } from './discountWords';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -178,7 +179,8 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
               </div>
               {discounts.map((d) => (
                 <div key={d.id} className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                  <span>Discount ({d.reason ?? (d.discountType === 'percent' ? `${d.value}%` : formatCents(d.value))})</span>
+                  {/* "(10%, food only)" when the discount's own frozen rule left the delivery charge alone. */}
+                  <span>{receiptDiscountLabel(d, items)}</span>
                   <span>−{formatCents(d.amountCents, { showSymbol: false })}</span>
                 </div>
               ))}

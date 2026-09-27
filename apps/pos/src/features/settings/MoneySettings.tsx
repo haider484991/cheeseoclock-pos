@@ -38,6 +38,7 @@ import {
   DELIVERY_RULE_NOTE,
   EXAMPLE_SMALL_ORDER_CENTS,
   LOWERED_LIMIT_NOTE,
+  approvalDeliveryNote,
   approvalExample,
   approvalFromForm,
   approvalSummary,
@@ -81,6 +82,9 @@ function MoneyCards({
 }) {
   const approvalCard = approval.q.data as ShopSettingCard<'discounts.approval'>;
   const presetsCard = presets.q.data as ShopSettingCard<'discounts.presets'>;
+  // "A discount also comes off the delivery charge" (its own card, below): what the limit's % is of on a delivery order.
+  // Not waited for: the note shows once it has loaded.
+  const delivery = useShopSetting('discounts.delivery').q.data?.value ?? null;
 
   const approvalD = useDraft(approvalCard.value, approvalToForm);
   const presetsD = useDraft(presetsCard.value, presetsToForm);
@@ -124,6 +128,7 @@ function MoneyCards({
               <span className="font-semibold">For example: </span>
               {approvalExample(limits)}
             </p>
+            {delivery && <p>{approvalDeliveryNote(delivery)}</p>}
             <p className="text-xs">{LOWERED_LIMIT_NOTE}</p>
           </div>
         }

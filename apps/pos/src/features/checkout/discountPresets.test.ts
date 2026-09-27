@@ -196,7 +196,7 @@ describe('previewDiscount on an order with a delivery charge (the owner, 28 Sep 
     expect(previewDiscount(withCharge, sub, flatChoiceRupees(190), everyLine).needsApproval).toBe(false);
   });
 
-  it('the owner’s switch on: the old maths, exactly as a till before 0.7.25', () => {
+  it('the owner’s switch on: the old maths, exactly as a till before 0.7.26', () => {
     const legacyLines = withCharge.map(({ lineTotalCents, taxRateBps }) => ({ lineTotalCents, taxRateBps }));
     for (const choice of [percentChoice(10), percentChoice(100), flatChoiceRupees(5_000), flatChoiceRupees(1)]) {
       expect(previewDiscount(withCharge, sub, choice, everyLine)).toEqual(previewDiscount(legacyLines, sub, choice, everyLine));

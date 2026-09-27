@@ -10,6 +10,7 @@ import {
   DEFAULT_DISCOUNT_APPROVAL,
   DEFAULT_DISCOUNT_DELIVERY,
   DEFAULT_DISCOUNT_PRESETS,
+  isDeliveryChargeLine,
   type CheckoutRules,
   type DiscountPresets,
 } from '@cheeseoclock/shared-types';
@@ -137,6 +138,46 @@ export function describePreview(d: DiscountChoice, p: Pick<DiscountPreview, 'cap
   const foodOnly = base.untouchedCents > 0;
   const capped = p.capped ? (foodOnly ? ' (all the food)' : ' (the whole order)') : '';
   return `${describeDiscount(d)}${foodOnly ? ' food' : ''}${capped}`;
+}
+
+/** The order's discount as the dialog's header reads it: its choice and reason, and the rule frozen on it (the snapshot's). */
+export interface CurrentDiscountOnOrder extends CurrentDiscount {
+  alsoOffDeliveryCharge?: boolean;
+}
+
+/**
+ * The header's "now …" words for the discount already on the order, and a
+ * note when it was given under the other rule than the one a discount given
+ * now follows (the owner changed "A discount also comes off the delivery
+ * charge", or it was given before the rule existed). The header's first part
+ * follows the switch as it is now (what Apply would do); these follow the
+ * discount's OWN frozen rule (what the order's bill is), so the two never
+ * contradict each other:
+ *  - "10% off food": it leaves the delivery charge alone;
+ *  - "10% off, delivery charge too": it came off the charge, while a
+ *    discount given now would not;
+ *  - "10% off": no delivery charge on the order, or both rules agree.
+ * The owner's foodpanda deal keeps its own words.
+ */
+export function currentDiscountWords(
+  current: CurrentDiscountOnOrder,
+  lines: ReadonlyArray<{ readonly menuItemName?: string | null }>,
+  rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'>,
+): { now: string; ruleNote: string | null } {
+  if (current.source === 'foodpanda' && current.reason) return { now: `${current.reason} (set by the owner)`, ruleNote: null };
+  const choice = describeDiscount({ type: current.discountType, value: current.value });
+  if (!lines.some(isDeliveryChargeLine)) return { now: choice, ruleNote: null };
+  const itCovers = current.alsoOffDeliveryCharge !== false;
+  if (itCovers === rules.alsoOffDeliveryCharge) return { now: itCovers ? choice : `${choice} food`, ruleNote: null };
+  return itCovers
+    ? {
+        now: `${choice}, delivery charge too`,
+        ruleNote: 'Given when a discount also came off the delivery charge. Apply it again to take it off the food only.',
+      }
+    : {
+        now: `${choice} food`,
+        ruleNote: 'Given when a discount was on the food only. Apply it again to take it off the delivery charge too.',
+      };
 }
 
 /** The dialog's header: "Order Rs 2,000 before tax", or "Food Rs 2,000 before tax · delivery charge Rs 200 not discounted". */

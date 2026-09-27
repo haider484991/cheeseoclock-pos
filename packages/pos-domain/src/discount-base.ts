@@ -19,11 +19,11 @@
  * Which line is a delivery charge is shared-types isDeliveryChargeLine (the
  * name it was sold under), the one test. Whether a discount leaves it alone
  * is the RULE FROZEN ON ITS ROW (discountRuleAlsoOffDeliveryCharge), never
- * the live setting: a row with no rule (given before 0.7.25, or on a 0.7.24
+ * the live setting: a row with no rule (given before 0.7.26, or on an older
  * till) is read exactly as it was worked then, over every line.
  */
 import { isDeliveryChargeLine, type DiscountBaseRule } from '@cheeseoclock/shared-types';
-import { allocateDiscount } from './discount.js';
+import { allocateDiscount, weightsThatCarry } from './discount.js';
 import { parseFoodpandaDealRule } from './foodpanda.js';
 import { computeTax } from './tax.js';
 
@@ -57,9 +57,15 @@ export function discountBaseCents(lines: ReadonlyArray<DiscountLine>, alsoOffDel
   return discountWeights(lines, alsoOffDeliveryCharge).reduce((s, w) => s + Math.max(0, w), 0);
 }
 
-/** The discount split over the lines in whole paisa that add up to it (allocateDiscount on the weights). */
+/**
+ * The discount split over the lines in whole paisa that add up to it
+ * (allocateDiscount on the weights). A discount more than the lines it may
+ * come off — only a till older than this rule stores one — is split over
+ * every line, as that till split it (discount.ts weightsThatCarry).
+ */
 export function splitDiscount(lines: ReadonlyArray<DiscountLine>, discountCents: number, alsoOffDeliveryCharge: boolean): number[] {
-  return allocateDiscount(discountWeights(lines, alsoOffDeliveryCharge), discountCents);
+  const totals = lines.map((l) => l.lineTotalCents);
+  return allocateDiscount(weightsThatCarry(totals, discountWeights(lines, alsoOffDeliveryCharge), discountCents), discountCents);
 }
 
 /**
@@ -73,7 +79,7 @@ export function splitDiscountByMask(
   takesNone?: ReadonlyArray<boolean>,
 ): number[] {
   return allocateDiscount(
-    takesNone ? lineTotalsCents.map((t, i) => (takesNone[i] ? 0 : t)) : lineTotalsCents,
+    takesNone ? weightsThatCarry(lineTotalsCents, lineTotalsCents.map((t, i) => (takesNone[i] ? 0 : t)), discountCents) : lineTotalsCents,
     discountCents,
   );
 }
@@ -152,7 +158,7 @@ export function parseDiscountBaseRule(json: string | null | undefined): Discount
  * Did the discount on a row also come off the delivery charge? From the rule
  * FROZEN on that row (rule_json) alone — a staff or website rule, or the
  * foodpanda deal's — never from the live setting. A row with no rule, or one
- * this version can't read, is true: that is how every discount before 0.7.25
+ * this version can't read, is true: that is how every discount before 0.7.26
  * was worked, so its history reads back unchanged.
  */
 export function discountRuleAlsoOffDeliveryCharge(ruleJson: string | null | undefined): boolean {
@@ -161,4 +167,53 @@ export function discountRuleAlsoOffDeliveryCharge(ruleJson: string | null | unde
   const deal = parseFoodpandaDealRule(ruleJson);
   if (deal) return deal.alsoOffDeliveryCharge !== false;
   return true;
+}
+
+/**
+ * Did the discount on an order's STORED bill also come off its delivery
+ * charge? The rule frozen on its row (`frozen`: discountRuleAlsoOffDeliveryCharge),
+ * unless the stored figures can only have been worked over every line. Only
+ * a till older than this rule (0.7.25 or before) stores such a bill: while
+ * the two tills are not yet on the same version, it re-works an open order's
+ * food-only discount over every line on a cart change and leaves the row's
+ * rule as it found it. That shows as:
+ *  - a discount more than the food (one worked on the food never is), or
+ *  - a stored tax that splitting it over every line gives, and the food-only
+ *    split does not (`taxCents`; absent = the first check only).
+ * The readers after the fact (the snapshot: the FBR sale invoice and debit
+ * note, the bill's words; Reports' food cost and profit) then split it over
+ * every line, as that till did, so they add up to the stored bill. Stored
+ * totals are never recomputed here. `lines` in the till's order, with their
+ * tax rates for the second check.
+ */
+export function storedDiscountAlsoOffDeliveryCharge(
+  frozen: boolean,
+  lines: ReadonlyArray<TaxedDiscountLine>,
+  discountCents: number,
+  taxCents?: number,
+): boolean {
+  if (frozen || !(discountCents > 0)) return frozen;
+  // No delivery charge to tell apart: both splits are the same.
+  if (!lines.some((l) => isDeliveryChargeLine(l) && l.lineTotalCents > 0)) return frozen;
+  if (discountCents > discountBaseCents(lines, false)) return true;
+  if (taxCents === undefined) return false;
+  if (taxAfterDiscount(lines, discountCents, false).taxCents === taxCents) return false;
+  return taxAfterDiscount(lines, discountCents, true).taxCents === taxCents;
+}
+
+/**
+ * Reports' readers of an order's lines (food cost, profit): which lines took
+ * none of its discount — the rule frozen on the discount row (`ruleJson`,
+ * null = none), read against the stored bill (storedDiscountAlsoOffDeliveryCharge).
+ * `lines` in the till's order, with the names they were sold under and their
+ * tax rates.
+ */
+export function storedDiscountSkips(
+  ruleJson: string | null | undefined,
+  lines: ReadonlyArray<TaxedDiscountLine>,
+  discountCents: number,
+  taxCents: number,
+): boolean[] {
+  const alsoOff = storedDiscountAlsoOffDeliveryCharge(discountRuleAlsoOffDeliveryCharge(ruleJson), lines, discountCents, taxCents);
+  return discountSkipMask(lines, alsoOff);
 }

@@ -50,12 +50,17 @@ export function mapOrderToFbrPayload(
   // left it alone (the snapshot's discount row, never the live setting; a row
   // with no rule covered every line), so a queued or late invoice, and a
   // refund's debit note mapped days later, split it as the sale was split.
+  // A discount more than the lines it may come off (only a till older than
+  // the rule stores one, re-working it over every line) is split over every
+  // line, as that till split it (pos-domain weightsThatCarry), so the
+  // invoice still adds up to the stored bill.
   const discounts = snapshot.discounts ?? [];
   const leavesCharge = discounts[discounts.length - 1]?.alsoOffDeliveryCharge === false;
-  const shares = allocateDiscount(
-    items.map((l) => (leavesCharge && isDeliveryChargeLine(l) ? 0 : l.lineTotalCents)),
-    subtotal > 0 ? discount : 0,
-  );
+  const orderDiscount = subtotal > 0 ? discount : 0;
+  const totals: number[] = items.map((l) => l.lineTotalCents);
+  const masked: number[] = items.map((l, i) => (leavesCharge && isDeliveryChargeLine(l) ? 0 : totals[i]!));
+  const carry = masked.reduce((s, w) => s + Math.max(0, w), 0);
+  const shares = allocateDiscount(Math.round(orderDiscount) > carry ? totals : masked, orderDiscount);
   const fbrItems: FbrInvoiceItem[] = items.map((line, i) => {
     const lineDiscount = shares[i] ?? 0;
     const netCents = Math.max(0, line.lineTotalCents - lineDiscount);

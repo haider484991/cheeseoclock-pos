@@ -58,16 +58,21 @@ export function requiresManagerApproval(
 
 /**
  * The approval rule in plain words, built from the limits (the F3 screen,
- * the refusal, Settings → Money & discounts): "Up to 10% off, or up to Rs 500
- * off if that is no more than 10% of the order, without a manager."
+ * the refusal): "Up to 10% off, or up to Rs 500 off if that is no more than
+ * 10% of the order, without a manager." `of` is what the limit is checked
+ * on, the same amount the discount is worked on: 'food' on an order with a
+ * delivery charge a discount leaves alone (Settings → Money & discounts:
+ * "A discount also comes off the delivery charge" No), so the words match
+ * the lock — Rs 210 off Rs 2,000 of food and a Rs 200 charge is over 10% of
+ * the food, though under 10% of the order.
  */
-export function approvalRuleText(limits: ApprovalLimits): string {
+export function approvalRuleText(limits: ApprovalLimits, of: 'order' | 'food' = 'order'): string {
   const p = limits.percentOver;
   if (p === 0) return "Every discount needs a manager's PIN or password.";
   if (limits.flatOverCents === 0) {
-    return `Up to ${p}% off without a manager. More, or any amount off in rupees, needs a manager's PIN or password.`;
+    return `Up to ${p}% off${of === 'food' ? ' the food' : ''} without a manager. More, or any amount off in rupees, needs a manager's PIN or password.`;
   }
-  return `Up to ${p}% off, or up to ${formatCents(limits.flatOverCents)} off if that is no more than ${p}% of the order, without a manager. More needs a manager's PIN or password.`;
+  return `Up to ${p}% off, or up to ${formatCents(limits.flatOverCents)} off if that is no more than ${p}% of the ${of}, without a manager. More needs a manager's PIN or password.`;
 }
 
 /**
@@ -78,6 +83,25 @@ export function approvalRuleText(limits: ApprovalLimits): string {
 export function mostOffWithoutManagerCents(limits: ApprovalLimits, subtotalCents: number): number {
   if (!(subtotalCents > 0)) return 0;
   return Math.min(limits.flatOverCents, Math.floor((subtotalCents * limits.percentOver) / 100));
+}
+
+/**
+ * The weights a discount is split by: `masked` (a line the discount leaves
+ * alone — a delivery charge — weighing 0), unless the discount is more than
+ * those lines can carry. One worked on the food never is (it is at most the
+ * food, and the paid bill is stored that way); only a till older than the
+ * delivery-charge rule (0.7.25 or before) can store one, by re-working a
+ * food-only discount over every line on a cart change and leaving the row's
+ * rule as it found it. It is split over every line then (`totals`), as that
+ * till split it, so the shares still add up to the stored discount.
+ */
+export function weightsThatCarry(
+  totals: ReadonlyArray<number>,
+  masked: ReadonlyArray<number>,
+  discountCents: number,
+): ReadonlyArray<number> {
+  const carry = masked.reduce((s, w) => s + Math.max(0, w), 0);
+  return Math.round(discountCents) > carry ? totals : masked;
 }
 
 /**

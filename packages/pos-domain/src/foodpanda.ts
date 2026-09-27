@@ -56,7 +56,7 @@ export function foodpandaDealLabel(dealPercent: number, shopPercent: number): st
  * the deal, and how much dearer the listing is then (`upliftBps`, from
  * 'foodpanda.fees'), since foodpanda's minimum and most-off are in its prices;
  * and whether it also comes off a delivery charge on the order
- * ('discounts.delivery' then; left out = every line, as before 0.7.25).
+ * ('discounts.delivery' then; left out = every line, as before 0.7.26).
  */
 export function foodpandaDealRule(
   deal: FoodpandaDeal,
@@ -110,7 +110,7 @@ export function parseFoodpandaDealRule(json: string | null | undefined): Foodpan
   // A rule written without the uplift was frozen at the till's prices.
   const upliftBps = r['upliftBps'] ?? 0;
   if (!isWholeIn(upliftBps, 0, 10_000)) return null;
-  // Whether the deal also came off a delivery charge (0.7.25): kept only when
+  // Whether the deal also came off a delivery charge (0.7.26): kept only when
   // written; a rule without it covered every line, and reads that way.
   const alsoOff = r['alsoOffDeliveryCharge'];
   return {

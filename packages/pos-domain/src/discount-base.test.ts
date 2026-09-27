@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DISCOUNT_APPROVAL, isDeliveryChargeLine } from '@cheeseoclock/shared-types';
-import { allocateDiscount, computeDiscountCents, requiresManagerApproval } from './discount.js';
+import { allocateDiscount, computeDiscountCents, requiresManagerApproval, weightsThatCarry } from './discount.js';
 import {
   discountBaseCents,
   discountRuleAlsoOffDeliveryCharge,
@@ -10,6 +10,8 @@ import {
   parseDiscountBaseRule,
   splitDiscount,
   splitDiscountByMask,
+  storedDiscountAlsoOffDeliveryCharge,
+  storedDiscountSkips,
   taxAfterDiscount,
   tillDiscountRule,
   websiteDiscountRule,
@@ -156,7 +158,7 @@ describe('the rule frozen on a discount row', () => {
     }
   });
 
-  it('the foodpanda deal: its own rule carries it; a deal frozen before 0.7.25 covers every line', () => {
+  it('the foodpanda deal: its own rule carries it; a deal frozen before 0.7.26 covers every line', () => {
     const deal = { v: 1, percent: 20, shopPercent: 20, minOrderCents: 150_000, maxOffCents: null, startsOn: null, endsOn: null };
     const old = foodpandaDealRule(deal, null, 0);
     expect('alsoOffDeliveryCharge' in old).toBe(false);
@@ -217,5 +219,77 @@ describe('profit and food cost follow the frozen rule', () => {
       estimate: null,
     });
     expect({ food: legacy.foodSalesCents, fee: legacy.feeSalesCents }).toEqual({ food: 180_000, fee: 18_000 });
+  });
+});
+
+/**
+ * Both tills not yet on the same version: a till older than the rule (0.7.25
+ * or before) re-works an open order's food-only discount over every line on
+ * a cart change, and leaves the row's rule saying "food only". Readers then
+ * follow the STORED bill (it is never recomputed), so the FBR invoice, profit
+ * and the refund still add up to it.
+ */
+describe('a food-only discount an older till re-worked over every line', () => {
+  const food = tillDiscountRule(false);
+  const foodJson = JSON.stringify(food);
+  /** What a till before the rule stores: the discount over the subtotal, the tax on its every-line split. */
+  const olderTill = (lines: typeof ORDER, d: { type: 'percent' | 'flat'; value: number }) => {
+    const subtotal = lines.reduce((s, l) => s + l.lineTotalCents, 0);
+    const discountCents = computeDiscountCents(subtotal, d) as number;
+    return { discountCents, taxCents: taxAfterDiscount(lines, discountCents, true).taxCents };
+  };
+
+  it('100% off (Rs 2,200: more than the food): split over every line, never capped at the food', () => {
+    const { discountCents, taxCents } = olderTill(ORDER, { type: 'percent', value: 100 });
+    expect({ discountCents, taxCents }).toEqual({ discountCents: SUBTOTAL, taxCents: 0 });
+    expect(storedDiscountAlsoOffDeliveryCharge(false, ORDER, discountCents, taxCents)).toBe(true);
+    expect(storedDiscountAlsoOffDeliveryCharge(false, ORDER, discountCents)).toBe(true);
+    // Even a reader that is handed the food-only rule adds up to the stored discount.
+    expect(splitDiscount(ORDER, discountCents, false)).toEqual([120_000, 20_000, 80_000]);
+    expect(splitDiscountByMask(ORDER.map((l) => l.lineTotalCents), discountCents, [false, true, false])).toEqual([120_000, 20_000, 80_000]);
+    expect(taxAfterDiscount(ORDER, discountCents, false).taxCents).toBe(0);
+    const s = splitOrderLines(ORDER.map((l) => l.lineTotalCents), discountCents, 0, 0, [false, true, false]);
+    expect(s.salesExTaxCents).toBe(0);
+    expect(s.discounts).toEqual([120_000, 20_000, 80_000]);
+    // The food-only weights carry up to their sum (whole paisa); one paisa more and every line takes a share.
+    expect(weightsThatCarry([1, 2, 3], [1, 0, 3], 4)).toEqual([1, 0, 3]);
+    expect(weightsThatCarry([1, 2, 3], [1, 0, 3], 4.4)).toEqual([1, 0, 3]);
+    expect(weightsThatCarry([1, 2, 3], [1, 0, 3], 5)).toEqual([1, 2, 3]);
+  });
+
+  it('10% with the delivery charge at another tax rate: the stored tax tells the two splits apart', () => {
+    const charge5 = { ...CHARGE, taxRateBps: 500 };
+    const lines = [PIZZA, charge5, SIDE];
+    const { discountCents, taxCents } = olderTill(lines, { type: 'percent', value: 10 });
+    // Rs 220 over every line: food 16% of Rs 1,800 = Rs 288, the charge 5% of Rs 180 = Rs 9.
+    expect({ discountCents, taxCents }).toEqual({ discountCents: 22_000, taxCents: 29_700 });
+    expect(taxAfterDiscount(lines, discountCents, false).taxCents).toBe(29_480);
+    expect(storedDiscountAlsoOffDeliveryCharge(false, lines, discountCents, taxCents)).toBe(true);
+    expect(storedDiscountSkips(foodJson, lines, discountCents, taxCents)).toEqual([false, false, false]);
+    // Without the tax to go by, the frozen rule stands (Rs 220 is under the food).
+    expect(storedDiscountAlsoOffDeliveryCharge(false, lines, discountCents)).toBe(false);
+  });
+
+  it('what this version stores is always read by its frozen rule', () => {
+    for (const d of [
+      { type: 'percent' as const, value: 10 },
+      { type: 'percent' as const, value: 100 },
+      { type: 'flat' as const, value: 33_333 },
+      { type: 'flat' as const, value: 300_000 },
+    ]) {
+      for (const lines of [ORDER, [PIZZA, { ...CHARGE, taxRateBps: 500 }, SIDE]]) {
+        const discountCents = computeDiscountCents(discountBaseCents(lines, false), d) as number;
+        const { taxCents } = taxAfterDiscount(lines, discountCents, false);
+        expect({ d, food: storedDiscountAlsoOffDeliveryCharge(false, lines, discountCents, taxCents) }).toEqual({ d, food: false });
+        expect(storedDiscountSkips(foodJson, lines, discountCents, taxCents)).toEqual([false, true, false]);
+      }
+    }
+  });
+
+  it('a rule that covers every line, a row with no rule, no discount or no delivery charge: nothing to tell apart', () => {
+    expect(storedDiscountAlsoOffDeliveryCharge(true, ORDER, 22_000, 31_680)).toBe(true);
+    expect(storedDiscountSkips(null, ORDER, 22_000, 31_680)).toEqual([false, false, false]);
+    expect(storedDiscountAlsoOffDeliveryCharge(false, ORDER, 0, 35_200)).toBe(false);
+    expect(storedDiscountAlsoOffDeliveryCharge(false, [PIZZA, SIDE], 20_000, 28_800)).toBe(false);
   });
 });

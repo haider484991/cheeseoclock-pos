@@ -60,6 +60,19 @@ describe('the rule in words, built from the limit', () => {
     );
   });
 
+  it('on an order with a delivery charge a discount leaves alone, the words name the food — what the limit is checked on', () => {
+    expect(approvalRuleText({ percentOver: 10, flatOverCents: 50_000 }, 'food')).toBe(
+      "Up to 10% off, or up to Rs 500 off if that is no more than 10% of the food, without a manager. More needs a manager's PIN or password.",
+    );
+    expect(approvalRuleText({ percentOver: 10, flatOverCents: 0 }, 'food')).toBe(
+      "Up to 10% off the food without a manager. More, or any amount off in rupees, needs a manager's PIN or password.",
+    );
+    expect(approvalRuleText({ percentOver: 0, flatOverCents: 50_000 }, 'food')).toBe("Every discount needs a manager's PIN or password.");
+    // The words and the lock agree: Rs 210 off Rs 2,000 of food (a Rs 200 charge on top) is over 10% of the food.
+    expect(requiresManagerApproval({ type: 'flat', value: 21_000 }, 200_000)).toBe(true);
+    expect(approvalRuleText({ percentOver: 10, flatOverCents: 50_000 })).toBe(approvalRuleText({ percentOver: 10, flatOverCents: 50_000 }, 'order'));
+  });
+
   it('the most a cashier can take off alone: the smaller of the rupee limit and the % of the order', () => {
     const limits = { percentOver: 10, flatOverCents: 50_000 };
     expect(mostOffWithoutManagerCents(limits, 200_000)).toBe(20_000);

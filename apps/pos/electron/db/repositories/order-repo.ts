@@ -25,6 +25,7 @@ import {
   dealMinTillCents,
   discountBaseCents,
   discountRuleAlsoOffDeliveryCharge,
+  storedDiscountAlsoOffDeliveryCharge,
   foodpandaDealRule,
   foodpandaTerms,
   parseFoodpandaDealRule,
@@ -1564,7 +1565,7 @@ function recomputeOrderTotals(
   const lines = discountLinesOf(db, orderId);
   // Does the discount also come off the delivery charge? The rule FROZEN on
   // its row when it was given — never the live setting. A row with no rule
-  // (given before 0.7.25, or on a 0.7.24 till) covers every line, as then.
+  // (given before 0.7.26, or on an older till) covers every line, as then.
   const alsoOffDeliveryCharge = discountRow ? discountRuleAlsoOffDeliveryCharge(discountRow.rule_json) : true;
   // What it is worked on: the food only, or every line (the subtotal).
   const base = discountBaseCents(lines, alsoOffDeliveryCharge);
@@ -1874,9 +1875,18 @@ function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: nu
     )
     .get(order.id) as { rule_json: string | null } | undefined;
   const rule = parseFoodpandaDealRule(dealRow?.rule_json);
-  // On what the deal was worked: the food, when its frozen rule left the delivery charge alone.
+  // On what the deal was worked: the food, when its frozen rule left the
+  // delivery charge alone — read against the stored bill (an older till
+  // re-works it over every line: pos-domain storedDiscountAlsoOffDeliveryCharge).
+  const lines = discountLinesOf(db, order.id);
   const share = rule
-    ? dealAmount(rule, discountBaseCents(discountLinesOf(db, order.id), rule.alsoOffDeliveryCharge !== false))
+    ? dealAmount(
+        rule,
+        discountBaseCents(
+          lines,
+          storedDiscountAlsoOffDeliveryCharge(rule.alsoOffDeliveryCharge !== false, lines, order.discountCents, order.taxCents),
+        ),
+      )
     : null;
   const fees = readShopSetting(db, 'foodpanda.fees');
   const t = foodpandaTerms(
@@ -2466,11 +2476,19 @@ export function getOrderSnapshot(
     rule_json: string | null;
   }>;
 
-  const discounts: OrderSnapshot['discounts'] = discountRows.map((d) => {
+  const discounts: OrderSnapshot['discounts'] = discountRows.map((d, i) => {
     // Whether it also came off the delivery charge: the rule FROZEN on the
-    // row (none = yes, as every discount before 0.7.25). The FBR mapper, the
+    // row (none = yes, as every discount before 0.7.26). The FBR mapper, the
     // receipt and the screens read it from here, never from the setting.
-    const alsoOffDeliveryCharge = discountRuleAlsoOffDeliveryCharge(d.rule_json);
+    // The order's discount (its newest row, the one its totals are worked
+    // from) is read against the STORED bill: one a till older than the rule
+    // re-worked over every line reads that way, so the invoice, the debit
+    // note and the words add up to what was stored.
+    const frozen = discountRuleAlsoOffDeliveryCharge(d.rule_json);
+    const alsoOffDeliveryCharge =
+      i === discountRows.length - 1
+        ? storedDiscountAlsoOffDeliveryCharge(frozen, items, order.discountCents, order.taxCents)
+        : frozen;
     // The foodpanda deal's figures on this order, from its frozen terms and
     // the lines it was worked on (the food, when it left the delivery charge
     // alone; else the stored subtotal): the whole deal, and foodpanda's part

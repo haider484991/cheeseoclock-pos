@@ -320,7 +320,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
           code: 'precondition_failed',
           message: replacesDeal
             ? FOODPANDA_DEAL_NEEDS_MANAGER
-            : `Manager approval required for this discount. ${approvalRuleText(limits)}`,
+            : // The rule in words, on what it was checked on: the food, when a delivery charge is left out of it.
+              `Manager approval required for this discount. ${approvalRuleText(limits, base < current.order.subtotalCents ? 'food' : 'order')}`,
         });
       }
       try {

@@ -18,7 +18,7 @@
  * Stored order totals are only read, never changed.
  */
 import type { ProfitStepKey, ReportPaymentGroup, RiderCostSetting } from '@cheeseoclock/shared-types';
-import { allocateDiscount } from './discount.js';
+import { allocateDiscount, weightsThatCarry } from './discount.js';
 import { mulDivRound } from './units.js';
 
 /** round(n ÷ d), half away from zero, d > 0. */
@@ -62,7 +62,7 @@ export interface OrderSplit {
  * `discountSkips[ℓ]`: line ℓ took none of the discount — a delivery charge
  * the discount's FROZEN rule left alone (discount-base.ts
  * discountSkipMask), weight 0 in the discount's split exactly as the till
- * split it. Absent = every line (every discount before 0.7.25). Part refunds
+ * split it. Absent = every line (every discount before 0.7.26). Part refunds
  * are still spread over every line's net, the delivery charge included.
  */
 export function splitOrderLines(
@@ -72,8 +72,12 @@ export function splitOrderLines(
   refundedCents: number,
   discountSkips?: readonly boolean[],
 ): OrderSplit {
+  // A discount more than the lines it may come off (only an older till
+  // stores one) is split over every line, as that till split it.
   const discounts = allocateDiscount(
-    discountSkips ? lineTotalsCents.map((t, i) => (discountSkips[i] ? 0 : t)) : lineTotalsCents,
+    discountSkips
+      ? weightsThatCarry(lineTotalsCents, lineTotalsCents.map((t, i) => (discountSkips[i] ? 0 : t)), discountCents)
+      : lineTotalsCents,
     discountCents,
   );
   const lineNets = lineTotalsCents.map((t, i) => t - (discounts[i] ?? 0));

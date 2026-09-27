@@ -155,6 +155,17 @@ export function deliveryExample(d: Pick<DiscountDelivery, 'alsoOffDeliveryCharge
   );
 }
 
+/**
+ * Under the approval limit's example: on an order with a delivery charge,
+ * what the % limit is of — the same amount a discount is worked on, so it
+ * follows "A discount also comes off the delivery charge" (its saved value).
+ */
+export function approvalDeliveryNote(d: Pick<DiscountDelivery, 'alsoOffDeliveryCharge'>): string {
+  return d.alsoOffDeliveryCharge
+    ? `With a delivery charge on the order, the % is of the whole order, the delivery charge too (“${DELIVERY_QUESTION}”: Yes).`
+    : `With a delivery charge on the order, the % is of the food only: the delivery charge doesn’t count (“${DELIVERY_QUESTION}”: No).`;
+}
+
 /** What changing it does, and what it never touches (the note under the example). */
 export const DELIVERY_RULE_NOTE =
   'A change counts for discounts given from then on, on both tills, and the approval limit is checked on the same amount. A discount already on an order keeps the rule it was given with, and paid orders never change. Website orders keep the website’s own prices. The foodpanda deal follows the rule in force when the order became foodpanda.';

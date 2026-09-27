@@ -67,11 +67,9 @@ import {
 import {
   addOrderFoodCost,
   contributionCents,
-  discountRuleAlsoOffDeliveryCharge,
   emptyFoodCostTally,
   foodpandaOrderMoney,
   isNoRateDelivery,
-  lineTakesDiscount,
   knownOrderShare,
   knownShareCents,
   mulDivRound,
@@ -83,10 +81,12 @@ import {
   riderCost,
   WHOLE_ORDER,
   shareBps,
+  storedDiscountSkips,
   tallyPlainOrders,
   type FoodCostLine,
   type FoodCostOrder,
   type FoodCostTally,
+  type TaxedDiscountLine,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../../db/connection.js';
 import { getBusinessSetting, readShopSetting } from '../../db/business-settings-read.js';
@@ -193,13 +193,14 @@ export const PROFIT_PLAIN_SQL = `
  */
 export const PROFIT_REST_SQL = `
   WITH ro AS MATERIALIZED (
-         SELECT o.rowid AS oid, o.id AS id, o.discount_cents AS disc, o.total_cents AS tot, ${REFUNDED} AS ref,
+         SELECT o.rowid AS oid, o.id AS id, o.discount_cents AS disc, o.tax_cents AS tax, o.total_cents AS tot, ${REFUNDED} AS ref,
                 o.mode AS mode, o.source AS source, ${AREA} AS area, ${DISCOUNT_RULE} AS drule
            FROM orders o WHERE ${IN_RANGE} AND ${COUNTED} AND NOT ${PLAIN_KEPT})
-  SELECT ro.oid AS oid, ro.id AS orderId, ro.disc AS disc, ro.tot AS tot, ro.ref AS ref, ro.mode AS mode, ro.source AS source, ro.area AS area,
+  SELECT ro.oid AS oid, ro.id AS orderId, ro.disc AS disc, ro.tax AS tax, ro.tot AS tot, ro.ref AS ref, ro.mode AS mode, ro.source AS source, ro.area AS area,
          ro.drule AS drule,
          oi.id AS lineId, oi.created_at AS at,
          oi.menu_item_id AS itemId, oi.menu_item_name AS soldName, oi.quantity AS qty, oi.line_total_cents AS lineTotal,
+         oi.tax_rate_bps_snapshot AS rate,
          ${FEE_LINE} AS isFee,
          (SELECT COALESCE(SUM(c.cost_cents), 0) * 8
                  + COALESCE(MAX(CASE c.status WHEN 'failed' THEN 3 WHEN 'partial' THEN 2 WHEN 'none' THEN 1 WHEN 'full' THEN 0 END), 7)
@@ -428,6 +429,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     oid: number;
     orderId: string;
     disc: number;
+    tax: number;
     tot: number;
     ref: number;
     mode: string;
@@ -440,6 +442,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     soldName: string;
     qty: number;
     lineTotal: number;
+    rate: number;
     isFee: number;
     packed: number;
   }>;
@@ -448,6 +451,8 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     id: string;
     itemId: string | null;
     line: FoodCostLine;
+    /** As the discount maths sees it: what it came to, the name it was SOLD under, its tax rate. */
+    sold: TaxedDiscountLine;
   }
   interface RestOrder {
     oid: number;
@@ -455,8 +460,10 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     mode: string;
     source: string;
     area: string | null;
-    /** The discount's frozen rule: it also came off the delivery charge (no rule: yes, as before 0.7.25). */
-    alsoOff: boolean;
+    /** The rule frozen on the order's discount row (null: none — it came off every line, as before 0.7.26). */
+    drule: string | null;
+    /** The stored tax, to read the rule against the stored bill. */
+    tax: number;
     order: FoodCostOrder;
     lines: RestLine[];
   }
@@ -471,7 +478,8 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
         mode: r.mode,
         source: r.source,
         area: r.area,
-        alsoOff: discountRuleAlsoOffDeliveryCharge(r.drule),
+        drule: r.drule,
+        tax: Number(r.tax),
         order: { discountCents: Number(r.disc), totalCents: Number(r.tot), refundedCents: Number(r.ref), lines: [], estimate: null },
         lines: [],
       };
@@ -488,13 +496,12 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
         quantity: Number(r.qty),
         lineTotalCents: Number(r.lineTotal),
         isFee: Number(r.isFee) === 1,
-        // By the name it was SOLD under (never the live menu or "not food" categories).
-        skipsDiscount: !lineTakesDiscount({ menuItemName: r.soldName }, o.alsoOff),
         parts: c.parts,
         costCents: c.cost,
         status: c.status,
         hasRecipeNow: r.itemId !== null && menu.withRecipe.has(r.itemId),
       },
+      sold: { lineTotalCents: Number(r.lineTotal), menuItemName: r.soldName, taxRateBps: Number(r.rate) },
     });
   }
   const orders = [...byOrder.values()];
@@ -502,6 +509,15 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
   for (const o of orders) {
     if (o.lines.length > 1) o.lines.sort(tillOrder);
     o.order.lines = o.lines.map((l) => l.line);
+    // The lines that took none of the discount: a delivery charge its frozen
+    // rule left alone, by the name it was SOLD under (never the live menu or
+    // "not food" categories), read against the stored bill.
+    if (o.order.discountCents > 0) {
+      const skips = storedDiscountSkips(o.drule, o.lines.map((l) => l.sold), o.order.discountCents, o.tax);
+      o.lines.forEach((l, i) => {
+        if (skips[i]) l.line.skipsDiscount = true;
+      });
+    }
   }
   const estimates = opts.estimates
     ? estimateOrders(

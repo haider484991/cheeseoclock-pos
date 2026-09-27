@@ -686,7 +686,7 @@ live('Reports: food cost from the cost each sale kept', () => {
   it('a discount given before the delivery-charge rule (no rule on its row) keeps its old split: the charge took its 10%', async () => {
     const s = await shop();
     const day = new Date('2026-09-20T10:00:00.000Z');
-    // Rung as a 0.7.24 till did: then a discount came off the delivery charge too…
+    // Rung as a 0.7.25 (or older) till did: then a discount came off the delivery charge too…
     const { setBusinessSettings } = await import('./repositories/business-settings-repo.js');
     const setSwitch = (alsoOffDeliveryCharge: boolean) =>
       setBusinessSettings(s.db, [{ key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge } }], MANAGER);

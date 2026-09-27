@@ -27,6 +27,7 @@ import { mayDeleteTestOrder } from './testDeleteCopy';
 import { useSessionStore } from '../../stores/sessionStore';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
+import { drawerDiscountLabel } from '../checkout/discountWords';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './historyFilters';
 import { historyStockStep } from './stockCopy';
@@ -285,7 +286,7 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                 <Row k="Subtotal" v={formatCents(o.subtotalCents)} />
                 {o.discountCents > 0 && (
                   <Row
-                    k={discountLabel(
+                    k={drawerDiscountLabel(
                       snap.discounts.find((d) => d.reason)?.reason,
                       discountLeavesDeliveryCharge(snap.discounts[snap.discounts.length - 1], snap.items),
                     )}
@@ -458,11 +459,6 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   );
 }
 
-/** "Discount (Staff)"; "Discount (Staff, food only)" when its frozen rule left the delivery charge alone. */
-function discountLabel(reason: string | null | undefined, foodOnly = false): string {
-  if (foodOnly) return `Discount (${reason ? `${reason}, ` : ''}food only)`;
-  return reason ? `Discount (${reason})` : 'Discount';
-}
 
 function Row({ k, v, tone, emphasize }: { k: string; v: string; tone?: 'emerald'; emphasize?: boolean }) {
   return (

@@ -111,6 +111,31 @@ function ringUp(): void {
   });
 }
 
+/** Rs 2,000 of food and a Rs 200 delivery charge on the till (made-up lines), with these discount rows. */
+function deliverySnapshot(discounts: unknown[]): OrderSnapshot {
+  return {
+    order: { id: 'o2', subtotalCents: 220_000, mode: 'delivery' },
+    items: [
+      { id: 'l1', lineTotalCents: 200_000, taxRateBps: 1600, menuItemName: 'Test Pizza' },
+      { id: 'l2', lineTotalCents: 20_000, taxRateBps: 1600, menuItemName: 'Delivery Charge (Rs 200)' },
+    ],
+    discounts,
+  } as unknown as OrderSnapshot;
+}
+
+/** A staff 10% on the order; `alsoOff` = the rule frozen on it (undefined = none: given before the rule). */
+function tenPercent(alsoOff: boolean | undefined) {
+  return {
+    id: 'd1',
+    discountType: 'percent',
+    value: 10,
+    reason: null,
+    source: null,
+    amountCents: alsoOff === false ? 20_000 : 22_000,
+    ...(alsoOff === undefined ? {} : { alsoOffDeliveryCharge: alsoOff }),
+  };
+}
+
 describe('the Discount screen (F3)', () => {
   it('shows the owner’s buttons and reasons, the lock above his limit, and his rule in words', () => {
     signIn('cashier');
@@ -158,6 +183,53 @@ describe('the Discount screen (F3)', () => {
     ]);
     expect(text(whole)).toContain('Order Rs 2,200 before tax');
     expect(ariaLabels(whole)).toContain('5% off, takes Rs 110 off');
+  });
+
+  it('the approval rule in words names what the lock checks: the food, on an order with a delivery charge a discount leaves alone', () => {
+    signIn('cashier');
+    useCheckoutStore.setState({ snapshot: deliverySnapshot([]), busy: false });
+    const food = text(render(<DiscountDialog onClose={() => {}} />, [[CHECKOUT_RULES_KEY, RULES()]]));
+    expect(food).toContain(
+      "Up to 10% off, or up to Rs 200 off if that is no more than 10% of the food, without a manager. More needs a manager's PIN or password.",
+    );
+    expect(food).not.toContain('10% of the order');
+    // The owner's switch on: the whole order, as before.
+    const whole = text(
+      render(<DiscountDialog onClose={() => {}} />, [[CHECKOUT_RULES_KEY, RULES({ discounts: { ...RULES().discounts, alsoOffDeliveryCharge: true } })]]),
+    );
+    expect(whole).toContain('no more than 10% of the order, without a manager');
+    // No delivery charge on the order: "of the order", as before.
+    ringUp();
+    expect(text(render(<DiscountDialog onClose={() => {}} />, [[CHECKOUT_RULES_KEY, RULES()]]))).toContain('no more than 10% of the order, without a manager');
+  });
+
+  it('the discount already on the order is described by its OWN rule, and says so when the switch has changed since', () => {
+    signIn('cashier');
+    const rulesNo = [[CHECKOUT_RULES_KEY, RULES()]] as Array<[readonly unknown[], unknown]>;
+    const rulesYes = [[CHECKOUT_RULES_KEY, RULES({ discounts: { ...RULES().discounts, alsoOffDeliveryCharge: true } })]] as Array<
+      [readonly unknown[], unknown]
+    >;
+    // Given on the food only, and the switch still says No: one story.
+    useCheckoutStore.setState({ snapshot: deliverySnapshot([tenPercent(false)]), busy: false });
+    const same = text(render(<DiscountDialog onClose={() => {}} />, rulesNo));
+    expect(same).toContain('Food Rs 2,000 before tax · delivery charge Rs 200 not discounted · now 10% off food');
+    expect(same).not.toContain('Apply it again');
+    // Left open over the update (no rule: it came off the charge too) while the switch says No.
+    useCheckoutStore.setState({ snapshot: deliverySnapshot([tenPercent(undefined)]), busy: false });
+    const legacy = text(render(<DiscountDialog onClose={() => {}} />, rulesNo));
+    expect(legacy).toContain('delivery charge Rs 200 not discounted · now 10% off, delivery charge too');
+    expect(legacy).toContain('Given when a discount also came off the delivery charge. Apply it again to take it off the food only.');
+    // Given on the food only, then the owner turned the switch on.
+    useCheckoutStore.setState({ snapshot: deliverySnapshot([tenPercent(false)]), busy: false });
+    const flipped = text(render(<DiscountDialog onClose={() => {}} />, rulesYes));
+    expect(flipped).toContain('Order Rs 2,200 before tax · now 10% off food');
+    expect(flipped).toContain('Given when a discount was on the food only. Apply it again to take it off the delivery charge too.');
+    // It came off the charge too, and the switch says Yes: as before.
+    useCheckoutStore.setState({ snapshot: deliverySnapshot([tenPercent(true)]), busy: false });
+    const yes = text(render(<DiscountDialog onClose={() => {}} />, rulesYes));
+    expect(yes).toContain('Order Rs 2,200 before tax · now 10% off');
+    expect(yes).not.toContain('Apply it again');
+    expect(yes).not.toContain('10% off food');
   });
 
   it('nothing saved (or no answer yet): today’s buttons, locks and rule', () => {
@@ -283,6 +355,14 @@ describe('the owner’s cards', () => {
     const yes = text(render(<MoneySettings />, seed({ v: 1, alsoOffDeliveryCharge: true }, false)));
     expect(yes).toContain(
       'On Rs 2,000 of food with a Rs 200 delivery charge, 10% off takes Rs 220 off: the delivery charge is discounted too. Rs 3,000 off takes Rs 2,200, and 100% off leaves nothing to pay.',
+    );
+
+    // The approval limit's card says what its % is of on a delivery order: it follows this switch.
+    expect(words).toContain(
+      'With a delivery charge on the order, the % is of the food only: the delivery charge doesn’t count (“A discount also comes off the delivery charge”: No).',
+    );
+    expect(yes).toContain(
+      'With a delivery charge on the order, the % is of the whole order, the delivery charge too (“A discount also comes off the delivery charge”: Yes).',
     );
   });
 

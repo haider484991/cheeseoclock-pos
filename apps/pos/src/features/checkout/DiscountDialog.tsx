@@ -9,8 +9,8 @@ import { SecretHint } from '../../components/secret/SecretHint';
 import { approvalProblem, secretReady } from '../../components/secret/secretRules';
 import { ownsEnter } from './keys';
 import { useDiscountRules } from '../settings/shop-rules/useShopSetting';
-import { discountLeavesDeliveryCharge } from '@cheeseoclock/shared-types';
 import {
+  currentDiscountWords,
   describeDiscount,
   describePreview,
   discountBaseNow,
@@ -56,7 +56,6 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const current = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
   // The shop's foodpanda deal is on this order: only a manager changes it or takes it off (for one order).
   const dealOn = current?.source === 'foodpanda';
-  const currentChoice: DiscountChoice | null = current ? { type: current.discountType, value: current.value } : null;
   // A staff discount opens on itself; the deal opens on nothing (never re-applied as a staff discount).
   const start = discountDialogStart(current);
   const removingDeal = dealOn && intent === 'removeDeal';
@@ -83,6 +82,8 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const after = previewDiscount(lines, subtotal, choice, rules);
   // What a discount given now is worked on: the food only, unless the owner's switch says every line.
   const base = discountBaseNow(lines, subtotal, rules);
+  // The discount already on the order, by its OWN frozen rule (the header's first part follows the switch now).
+  const currentWords = current ? currentDiscountWords(current, lines, rules) : null;
   const needsPin = after.needsApproval || dealOn;
   const pinOk = secretReady(pin);
   const canApply = !!choice && after.discountCents > 0 && (!needsPin || pinOk) && !saving && !busy;
@@ -224,19 +225,20 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
               <Dialog.Title className="text-xl font-bold">{removingDeal ? 'Take the foodpanda deal off?' : 'Discount'}</Dialog.Title>
               <Dialog.Description className="text-sm text-stone-500 dark:text-stone-400">
                 {discountBaseText(base, subtotal)}
-                {current && (
+                {currentWords && (
                   <>
                     {' · '}
-                    <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                      now{' '}
-                      {dealOn && current.reason
-                        ? `${current.reason} (set by the owner)`
-                        : `${describeDiscount(currentChoice!)}${discountLeavesDeliveryCharge(current, lines) ? ' food' : ''}`}
-                    </span>
+                    <span className="font-semibold text-emerald-700 dark:text-emerald-400">now {currentWords.now}</span>
                   </>
                 )}
               </Dialog.Description>
-              {!dealOn && <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{approvalRuleText(limits)}</p>}
+              {currentWords?.ruleNote && <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">{currentWords.ruleNote}</p>}
+              {/* The limit in words, on what it is checked on: the food, when the delivery charge is left out. */}
+              {!dealOn && (
+                <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                  {approvalRuleText(limits, base.untouchedCents > 0 ? 'food' : 'order')}
+                </p>
+              )}
               {dealOn && (
                 <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
                   {removingDeal

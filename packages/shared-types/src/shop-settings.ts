@@ -198,7 +198,7 @@ export interface DiscountPresets {
  */
 export interface DiscountDelivery {
   v: number;
-  /** true = a discount comes off the whole bill, delivery charge too (the till before 0.7.25). */
+  /** true = a discount comes off the whole bill, delivery charge too (the till before 0.7.26). */
   alsoOffDeliveryCharge: boolean;
 }
 
@@ -464,12 +464,13 @@ export const DEFAULT_DISCOUNT_PRESETS: Readonly<DiscountPresets> = Object.freeze
 /**
  * NO: a discount leaves the delivery charge alone (the owner's answer, 28 Sep
  * 2026). THE ONE DEFAULT THAT IS NOT "what the till did before": until
- * 0.7.25 a discount came off the delivery charge too. Installing this
+ * 0.7.26 a discount came off the delivery charge too. Installing this
  * version therefore changes discounts given from then on, by the owner's
  * decision; nothing already on an order or paid moves (each discount row
  * carries its own frozen rule, and a row with none is read the old way).
- * A 0.7.24 till still spreads a new discount over every line: update both
- * tills the same day, as for migration 0040. Frozen from release like the
+ * An older till (0.7.25 or before) still spreads a discount over every line
+ * (when it gives one, re-works one on a cart change, invoices or refunds
+ * one): update both tills the same day, before anyone gives a discount. Frozen from release like the
  * others: never edit it.
  */
 export const DEFAULT_DISCOUNT_DELIVERY: Readonly<DiscountDelivery> = Object.freeze({
@@ -586,7 +587,7 @@ export interface FoodpandaDealRule {
    * Whether the deal also came off a delivery-charge line on the order
    * ('discounts.delivery' when the order became foodpanda). false = the deal,
    * its minimum and its most-off are worked on the food only. Absent on a
-   * rule written before 0.7.25 = true (every line, as then). An optional
+   * rule written before 0.7.26 = true (every line, as then). An optional
    * field of format 1: an older till reading it keeps the rest of the deal.
    */
   alsoOffDeliveryCharge?: boolean;
@@ -597,8 +598,8 @@ export interface FoodpandaDealRule {
  * (order_discounts.rule_json, source NULL) when it was given. Every later
  * cart change and every reader after the fact (the tax split, the FBR
  * invoice of a late or queued sale and of a refund, profit, reprints) follow
- * THIS, never the live setting. A row with no rule (given before 0.7.25, or
- * on a 0.7.24 till) reads as `alsoOffDeliveryCharge: true`, exactly as it
+ * THIS, never the live setting. A row with no rule (given before 0.7.26, or
+ * on an older till) reads as `alsoOffDeliveryCharge: true`, exactly as it
  * was worked then.
  */
 export interface DiscountBaseRule {

@@ -444,11 +444,122 @@ describe.skipIf(!Sqlite)('the approval limit is checked on the food, in all thre
       expect({ alsoOff, screen, ipc: !ipc.ok && ipc.code === 'precondition_failed', repository }).toEqual({ alsoOff, screen: needs, ipc: needs, repository: needs });
     }
   });
+
+  it('the refusal says what it was checked on: "10% of the food" on an order with a delivery charge, "of the order" otherwise', async () => {
+    const orderId = await deliveryOrder();
+    h.session = CASHIER;
+    // Rs 210 is under 10% of the Rs 2,200 order, over 10% of the Rs 2,000 of food: the words must not contradict the refusal.
+    const refused = await call('orders:applyDiscount', { orderId, discountType: 'flat', value: 21_000 });
+    expect(refused).toMatchObject({ ok: false, code: 'precondition_failed' });
+    expect(refused.ok ? '' : refused.message).toBe(
+      "Manager approval required for this discount. Up to 10% off, or up to Rs 500 off if that is no more than 10% of the food, without a manager. More needs a manager's PIN or password.",
+    );
+    // No delivery charge: the order, as before.
+    const plain = await data<{ id: string }>('orders:create', { mode: 'takeaway' });
+    await data('orders:addItem', { orderId: plain.id, menuItemId: menu.pizza, quantity: 2 });
+    const refusedPlain = await call('orders:applyDiscount', { orderId: plain.id, discountType: 'flat', value: 21_000 });
+    expect(refusedPlain.ok ? '' : refusedPlain.message).toContain('no more than 10% of the order, without a manager');
+    // The switch on: the order again.
+    await setSwitch(true);
+    h.session = CASHIER;
+    const refusedYes = await call('orders:applyDiscount', { orderId, discountType: 'flat', value: 23_000 });
+    expect(refusedYes.ok ? '' : refusedYes.message).toContain('no more than 10% of the order, without a manager');
+  });
+});
+
+/**
+ * Both tills not yet on this version: the other till (0.7.25 or before)
+ * changes the cart of an open order whose discount this till gave on the food
+ * only. It re-works the discount over every line and leaves the row's rule
+ * saying "food only"; its rows reach this till by sync. The stored bill is
+ * the truth (never recomputed): the FBR invoice, the debit note, Reports and
+ * the receipt follow how it was worked, and add up to it.
+ */
+describe.skipIf(!Sqlite)('a discount an older till re-worked over every line: readers follow the stored bill', () => {
+  /** The rows as the older till writes them (a cart change there: the discount over the whole subtotal). */
+  async function olderTillReworks(
+    orderId: string,
+    d: { type: 'percent' | 'flat'; value: number },
+  ): Promise<{ discount: number; tax: number; total: number }> {
+    const { computeDiscountCents, taxAfterDiscount } = await import('@cheeseoclock/pos-domain');
+    const s = await snap(orderId);
+    const subtotal = s.order.subtotalCents as number;
+    const discount = computeDiscountCents(subtotal, d) as number;
+    const tax = taxAfterDiscount(s.items, discount, true).taxCents;
+    const total = subtotal - discount + tax;
+    db.prepare(`UPDATE order_discounts SET amount_cents = ?, version = version + 1 WHERE order_id = ? AND deleted_at IS NULL`).run(discount, orderId);
+    db.prepare(`UPDATE orders SET discount_cents = ?, tax_cents = ?, total_cents = ?, version = version + 1 WHERE id = ?`).run(discount, tax, total, orderId);
+    return { discount, tax, total };
+  }
+  /** The FBR sale invoice's totals, in paisa: before tax, tax, and the discount on its lines. */
+  const fbrTotals = (s: OrderSnapshot) => {
+    const items = mapOrderToFbrPayload(s, SELLER).items;
+    const p = (x: number) => Math.round(x * 100);
+    return {
+      net: items.reduce((t, i) => t + p(i.valueSalesExcludingST), 0),
+      tax: items.reduce((t, i) => t + p(i.salesTaxApplicable), 0),
+      discount: items.reduce((t, i) => t + p(i.discount ?? 0), 0),
+    };
+  };
+
+  it('100% off re-worked to Rs 2,200 (more than the food): the invoice is Rs 0, the charge is not invoiced at Rs 232', async () => {
+    const orderId = await deliveryOrder();
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 100, approverPin: MANAGER_SECRET });
+    expect(orderRow(orderId)).toMatchObject({ discount_cents: 200_000, tax_cents: 3_200, total_cents: 23_200 });
+    const stored = await olderTillReworks(orderId, { type: 'percent', value: 100 });
+    expect(stored).toEqual({ discount: 220_000, tax: 0, total: 0 });
+    // The row still says "food only".
+    expect(JSON.parse(String(liveDiscounts(orderId)[0]?.['rule_json']))).toMatchObject({ alsoOffDeliveryCharge: false });
+
+    const s = await snap(orderId);
+    expect(s.discounts).toMatchObject([{ alsoOffDeliveryCharge: true }]);
+    expect(fbrTotals(s)).toEqual({ net: 0, tax: 0, discount: 220_000 });
+    expect(fbrLines(s)['Delivery Charge (Rs 200)']).toEqual({ net: 0, tax: 0, discount: 200 });
+    expect(receiptText(s)).not.toContain('food only');
+  });
+
+  it('10% re-worked to Rs 220 with the charge at 5%: the stored tax tells it; invoice, debit note and Reports add up to the stored bill', async () => {
+    const orderId = await deliveryOrder();
+    // A made-up 5% on this delivery charge (as it was sold), so the two splits tax differently.
+    db.prepare(`UPDATE order_items SET tax_rate_bps_snapshot = 500 WHERE order_id = ? AND menu_item_id = ?`).run(orderId, menu.charge);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 10 });
+    // This till: Rs 200 off the food; tax 16% of Rs 1,800 + 5% of Rs 200.
+    expect(orderRow(orderId)).toMatchObject({ discount_cents: 20_000, tax_cents: 29_800, total_cents: 229_800 });
+    const stored = await olderTillReworks(orderId, { type: 'percent', value: 10 });
+    // The older till: Rs 220 over every line; tax 16% of Rs 1,800 + 5% of Rs 180.
+    expect(stored).toEqual({ discount: 22_000, tax: 29_700, total: 227_700 });
+    await pay(orderId);
+
+    const s = await snap(orderId);
+    expect(s.discounts).toMatchObject([{ alsoOffDeliveryCharge: true }]);
+    expect(fbrTotals(s)).toEqual({ net: 198_000, tax: 29_700, discount: 22_000 });
+    expect(fbrLines(s)['Delivery Charge (Rs 200)']).toEqual({ net: 180, tax: 9, discount: 20 });
+    const note = mapRefundToFbrDebitNote(s, SELLER, { originalIrn: 'IRN-TEST-2', refundedCents: stored.total, refundedAt: new Date().toISOString() });
+    expect(note.items.reduce((t, i) => t + Math.round(i.salesTaxApplicable * 100), 0)).toBe(29_700);
+    // Reports: the charge took its Rs 20 share, as the older till split it; food + fee = sales before tax.
+    expect(await reportsSay()).toEqual({ food: 180_000, fee: 18_000, chargeSales: 18_000 });
+    expect(receiptText(s)).not.toContain('food only');
+  });
+
+  it('the same order as this till stored it is read by its frozen rule (the check never fires on its own bills)', async () => {
+    const orderId = await deliveryOrder();
+    db.prepare(`UPDATE order_items SET tax_rate_bps_snapshot = 500 WHERE order_id = ? AND menu_item_id = ?`).run(orderId, menu.charge);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 10 });
+    await pay(orderId);
+    const s = await snap(orderId);
+    expect(s.discounts).toMatchObject([{ alsoOffDeliveryCharge: false }]);
+    expect(fbrTotals(s)).toEqual({ net: 200_000, tax: 29_800, discount: 20_000 });
+    expect(await reportsSay()).toEqual({ food: 180_000, fee: 20_000, chargeSales: 20_000 });
+    expect(receiptText(s)).toContain('Discount 10% (food only)');
+  });
 });
 
 describe.skipIf(!Sqlite)('history never moves: the rule is the row’s', () => {
   it('a legacy discount row (no rule: an older till) keeps covering the charge on every cart change; paid, nothing moves whatever the switch says', async () => {
-    // Given as a 0.7.24 till gave it: over every line, and no rule on the row.
+    // Given as a 0.7.25 (or older) till gave it: over every line, and no rule on the row.
     await setSwitch(true);
     const orderId = await deliveryOrder();
     h.session = CASHIER;
@@ -500,7 +611,7 @@ describe.skipIf(!Sqlite)('history never moves: the rule is the row’s', () => {
     h.session = CASHIER;
     expect((await data<CheckoutRules>('checkout:getRules')).discounts.alsoOffDeliveryCharge).toBe(true);
 
-    // A new discount: the whole bill, as before 0.7.25 (10% of Rs 2,200; tax 16% of Rs 1,980).
+    // A new discount: the whole bill, as before 0.7.26 (10% of Rs 2,200; tax 16% of Rs 1,980).
     const newId = await deliveryOrder();
     h.session = CASHIER;
     await data('orders:applyDiscount', { orderId: newId, discountType: 'percent', value: 10 });
