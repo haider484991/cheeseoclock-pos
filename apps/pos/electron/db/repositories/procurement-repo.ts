@@ -5,9 +5,12 @@ import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { recordStockMovement } from './stock-movement-repo.js';
 import { setIngredientPrice } from './ingredient-cost-repo.js';
+import { evaluatePriceAlerts, type PriceWritten } from './cost-alert-repo.js';
+import { getBusinessSetting } from '../business-settings-read.js';
 import { findCashMovement, getCurrentShift, linkPayoutToPurchase, recordCashMovement } from './shift-repo.js';
 import { loadPriceBook } from '../price-book.js';
 import {
+  DEFAULT_ALERT_JUMP_BPS,
   billPack,
   checkBillPrice,
   costPerUnitFromPack,
@@ -562,6 +565,15 @@ export function setPurchaseOrderStatus(
 // The price a bill gives (costing spec D1, 4.1)
 // -----------------------------------------------------------------------------
 
+/**
+ * How far a bill's price may be from the usual one before the till asks
+ * (costing spec D1: "the alert threshold, default 10%"): the owner's price
+ * alert threshold ('costing.alerts' jumpBps), the same on both tills.
+ */
+export function priceGuardBps(db: AppDatabase): number {
+  return getBusinessSetting(db, 'costing.alerts')?.value.jumpBps ?? DEFAULT_ALERT_JUMP_BPS;
+}
+
 /** What happened to one line's price, for the audit row and the answer. */
 interface LinePrice {
   ingredientId: string;
@@ -575,6 +587,12 @@ interface LinePrice {
   kept: boolean;
 }
 
+/** The lines' prices, and the price writes the alerts look at once the whole bill is in. */
+interface Priced {
+  line: LinePrice;
+  written: PriceWritten | null;
+}
+
 /**
  * D1's guard for one line, then — when the bill's price is to be used — the
  * one price path (setIngredientPrice): the ingredient keeps its usual pack at
@@ -582,7 +600,9 @@ interface LinePrice {
  * naming the supplier and the purchase, and the batches made from it roll
  * up. Its pack is never cleared. `answer` is the "Use it as the new price?"
  * given on screen; without one the guard's default stands (yes for a
- * purchase order delivered, no for a quick purchase outside 10%).
+ * purchase order delivered, no for a quick purchase outside the band — the
+ * owner's price alert threshold, default 10%). The price alerts look at
+ * every line's price once the whole bill is in (see `written`).
  */
 function priceFromLine(
   db: AppDatabase,
@@ -593,9 +613,10 @@ function priceFromLine(
     purchaseOrderId: string;
     purchaseOrderItemId: string;
     invoiceNo: string | null;
+    thresholdBps: number;
   },
   actor: Actor,
-): LinePrice {
+): Priced {
   const ing = readIngredient(db, line.ingredientId);
   const now = loadPriceBook(db).prices.get(line.ingredientId);
   const current = now
@@ -607,10 +628,12 @@ function priceFromLine(
     usualSize: usualPackSize({ unit: ing.unit, packSize: ing.pack_size === null ? null : Number(ing.pack_size), packPriceCents: ing.pack_price_cents === null ? null : Number(ing.pack_price_cents) }),
     qty: line.qty,
     billCents: line.billCents,
+    thresholdBps: ctx.thresholdBps,
   });
   const used = usesBillPrice(check, line.answer);
+  let written: PriceWritten | null = null;
   if (used) {
-    setIngredientPrice(
+    written = setIngredientPrice(
       db,
       {
         ingredientId: line.ingredientId,
@@ -624,16 +647,29 @@ function priceFromLine(
         notes: ctx.invoiceNo ? `Bill ${ctx.invoiceNo}` : null,
       },
       actor,
-    );
+      { alerts: false },
+    ).written;
   }
   return {
-    ingredientId: line.ingredientId,
-    qty: line.qty,
-    billCents: line.billCents,
-    why: check.why,
-    used,
-    kept: !used && check.why !== 'same' && check.why !== 'zero_bill',
+    line: {
+      ingredientId: line.ingredientId,
+      qty: line.qty,
+      billCents: line.billCents,
+      why: check.why,
+      used,
+      kept: !used && check.why !== 'same' && check.why !== 'zero_bill',
+    },
+    written,
   };
+}
+
+/** The price alerts for a whole bill's prices, once (costing spec Phase 6). */
+function alertsFor(db: AppDatabase, priced: readonly Priced[], actor: Actor): void {
+  evaluatePriceAlerts(
+    db,
+    priced.flatMap((p) => (p.written ? [p.written] : [])),
+    actor,
+  );
 }
 
 /** A stock row at its bill: a delivery or a purchase, worth exactly what was paid. */
@@ -689,7 +725,8 @@ export function receiveDelivery(
       throw new Error(`Cannot receive into a ${po.status} purchase order`);
     }
 
-    const booked: LinePrice[] = [];
+    const booked: Priced[] = [];
+    const thresholdBps = priceGuardBps(db);
     for (const receipt of input.receipts) {
       if (receipt.qtyReceivedNow <= 0) continue;
       const item = po.items.find((i) => i.id === receipt.purchaseOrderItemId);
@@ -730,7 +767,7 @@ export function receiveDelivery(
         priceFromLine(
           db,
           { ingredientId: item.ingredientId, qty: receipt.qtyReceivedNow, billCents: bill, answer: receipt.usePrice ?? input.updateCosts },
-          { kind: 'order', supplierId: po.supplierId, purchaseOrderId: po.id, purchaseOrderItemId: item.id, invoiceNo },
+          { kind: 'order', supplierId: po.supplierId, purchaseOrderId: po.id, purchaseOrderItemId: item.id, invoiceNo, thresholdBps },
           actor,
         ),
       );
@@ -768,8 +805,9 @@ export function receiveDelivery(
       action: 'receive',
       actorUserId: actor.userId,
       before: null,
-      after: { receipts: booked, invoiceNo, newStatus },
+      after: { receipts: booked.map((b) => b.line), invoiceNo, newStatus },
     });
+    alertsFor(db, booked, actor);
   });
   tx();
 
@@ -816,7 +854,7 @@ function writeQuickPurchase(
   input: RecordPurchaseInput,
   actor: Actor & { userId: string },
   how: { fromDrawer: boolean; payoutReason: string | null; boughtAt?: string },
-): { id: string; lines: LinePrice[]; totalCents: number; supplierName: string | null } {
+): { id: string; lines: LinePrice[]; priced: Priced[]; totalCents: number; supplierName: string | null } {
   if (input.lines.length === 0) throw new Error('Add at least one thing that was bought');
   const seen = new Set<string>();
   for (const l of input.lines) {
@@ -843,7 +881,8 @@ function writeQuickPurchase(
   ).run(id, supplierId, boughtAt, boughtAt, totalCents, cleanText(input.notes) ?? how.payoutReason, actor.userId, actor.userId, invoiceNo, now, now, actor.deviceId);
   enqueueSync(db, { entityType: 'purchase_orders', entityId: id, op: 'upsert', payload: { id, kind: 'quick', totalCents } });
 
-  const priced: LinePrice[] = [];
+  const priced: Priced[] = [];
+  const thresholdBps = priceGuardBps(db);
   for (const l of input.lines) {
     const itemId = uuidv7();
     db.prepare(
@@ -875,12 +914,12 @@ function writeQuickPurchase(
       priceFromLine(
         db,
         { ingredientId: l.ingredientId, qty: l.qty, billCents: l.billCents, answer: l.usePrice },
-        { kind: 'quick', supplierId, purchaseOrderId: id, purchaseOrderItemId: itemId, invoiceNo },
+        { kind: 'quick', supplierId, purchaseOrderId: id, purchaseOrderItemId: itemId, invoiceNo, thresholdBps },
         actor,
       ),
     );
   }
-  return { id, lines: priced, totalCents, supplierName };
+  return { id, lines: priced.map((p) => p.line), priced, totalCents, supplierName };
 }
 
 /**
@@ -951,6 +990,7 @@ export function recordPurchase(
         cashMovementId: payout?.id ?? null,
       },
     });
+    alertsFor(db, q.priced, actor);
     return resultOf(db, q.id, q.lines);
   })();
 }
@@ -1001,6 +1041,7 @@ export function payoutToPurchase(
         boughtAt: m.createdAt,
       },
     });
+    alertsFor(db, q.priced, actor);
     return { ...resultOf(db, q.id, q.lines), alreadyLinked: false };
   })();
 }

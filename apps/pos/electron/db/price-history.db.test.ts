@@ -112,6 +112,7 @@ async function repos() {
     ...(await import('./repositories/menu-import-repo.js')),
     ...(await import('./repositories/sync-repo.js')),
     ...(await import('./repositories/apply-remote.js')),
+    ...(await import('./repositories/cost-alert-repo.js')),
     ...(await import('./repositories/order-repo.js')),
     ...(await import('./repositories/shift-repo.js')),
     ...(await import('./price-history-read.js')),
@@ -298,13 +299,14 @@ live('every price-writing path appends exactly one history row, synced and audit
     expect(h).toMatchObject({ source: 'delivery', supplierName: 'Test Dairy', purchaseOrderId: po.id, actorName: 'Test Manager' });
   });
 
-  it('the menu import: one "import" row for a price the file changes', async () => {
+  it('the menu import: one "import" row for a price the file gives (an ingredient with none yet, costing Phase 6)', async () => {
     const s = await shop();
-    const before = historyOf(s.db, s.ing.chili).length;
-    s.r.applyMenuImport(s.db, menuFile([{ name: 'Test chili', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 55_000 }]), 'test.json', OWNER);
-    const row = oneNewRow(s.db, s.ing.chili, before);
-    expect(row).toMatchObject({ source: 'import', pack_size: 1000, pack_price_cents: 55_000 });
-    expect(row.id).toBe(s.r.importPriceRowId(s.ing.chili, s.r.menuFileSha256(menuFile([{ name: 'Test chili', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 55_000 }]))));
+    const before = historyOf(s.db, s.ing.bottle).length;
+    const file = menuFile([{ name: 'Test bottle', unit: 'pcs', costPerUnitCents: 4_000 }]);
+    s.r.applyMenuImport(s.db, file, 'test.json', OWNER);
+    const row = oneNewRow(s.db, s.ing.bottle, before);
+    expect(row).toMatchObject({ source: 'import', pack_size: 1, pack_price_cents: 4_000 });
+    expect(row.id).toBe(s.r.importPriceRowId(s.ing.bottle, s.r.menuFileSha256(file)));
   });
 
   it('a batch rolled up: one "batch" row for the sauce when its tomatoes change', async () => {
@@ -530,6 +532,11 @@ live('the starting prices (seed)', () => {
 live('the menu import on both tills', () => {
   it('one "import" row per ingredient per file (and one rolled-up batch row), settled by id', async () => {
     const s = await shop();
+    // Costing Phase 6: the file prices only what has no price yet — so these two have none.
+    for (const id of [s.ing.chili, s.ing.tomato]) {
+      s.r.setTypedPrice(s.db, { ingredientId: id, typed: { per: 'thousand', priceCents: 0 } }, MANAGER);
+      expect(priceOf(s.db, id)).toMatchObject({ price_kind: 'unset' });
+    }
     const { db2, push } = await secondTill(s.db);
     const file = menuFile([
       { name: 'Test chili', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 55_000 },
@@ -564,10 +571,12 @@ live('the menu import on both tills', () => {
     expect(n(s.db, `SELECT COUNT(*) AS n FROM ingredient_costs`)).toBe(rows);
   });
 
-  it('the same file again after a price was typed by hand: a NEW row after it (the same one on both tills); the first stays as it was', async () => {
+  it('the same file again after a price was typed by hand: the typed price stays (costing Phase 6), nothing is rewritten', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-09-27T09:00:00.000Z'));
     const s = await shop();
+    vi.setSystemTime(new Date('2026-09-27T09:05:00.000Z'));
+    s.r.setTypedPrice(s.db, { ingredientId: s.ing.chili, typed: { per: 'thousand', priceCents: 0 } }, MANAGER); // no price yet
     const { db2, push } = await secondTill(s.db);
     const file = menuFile([{ name: 'Test chili', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 55_000 }]);
     const sha = s.r.menuFileSha256(file);
@@ -576,32 +585,66 @@ live('the menu import on both tills', () => {
     vi.setSystemTime(new Date('2026-09-27T09:20:00.000Z'));
     const typed = s.r.setTypedPrice(s.db, { ingredientId: s.ing.chili, typed: { per: 'thousand', priceCents: 60_000 } }, MANAGER);
     expect(await push(s.db, DEV, db2)).toMatchObject({ waiting: 0, dropped: 0 });
-    // Both tills import the same file again, from the same history.
+    // Both tills import the same file again: the till owns the price now.
     vi.setSystemTime(new Date('2026-09-27T09:30:00.000Z'));
     s.r.applyMenuImport(s.db, file, 'menu.json', OWNER);
     vi.setSystemTime(new Date('2026-09-27T09:31:00.000Z'));
     s.r.applyMenuImport(db2, file, 'menu.json', TILL2_MANAGER);
     vi.useRealTimers();
     const first = s.r.importPriceRowId(s.ing.chili, sha);
-    const again = s.r.priceRowIdAfter(s.ing.chili, first, typed.entryId);
     expect(await push(s.db, DEV, db2)).toMatchObject({ waiting: 0, dropped: 0 });
     expect(await push(db2, TILL_2, s.db)).toMatchObject({ waiting: 0, dropped: 0 });
     for (const db of [s.db, db2]) {
-      // Nothing rewritten: 500 → Sheet 550 (09:10) → Typed 600 (▲ from 550) → Sheet 550 (▼ from 600).
-      expect(historyOf(db, s.ing.chili).map((r) => [r.id, r.source, r.pack_price_cents, r.prev_unit_cost_mc, r.effective_at])).toEqual([
-        [expect.any(String), 'manual', 50_000, null, '2026-09-27T09:00:00.000Z'],
-        [first, 'import', 55_000, 50_000, '2026-09-27T09:10:00.000Z'],
-        [typed.entryId, 'manual', 60_000, 55_000, '2026-09-27T09:20:00.000Z'],
-        [again, 'import', 55_000, 60_000, expect.stringMatching(/^2026-09-27T09:3/)],
+      // 500 → no price → Sheet 550 (09:10, it had none) → Typed 600 (▲ from 550); the second import writes nothing.
+      expect(historyOf(db, s.ing.chili).map((r) => [r.id, r.source, r.pack_price_cents, r.effective_at])).toEqual([
+        [expect.any(String), 'manual', 50_000, '2026-09-27T09:00:00.000Z'],
+        [expect.any(String), 'manual', 0, '2026-09-27T09:05:00.000Z'],
+        [first, 'import', 55_000, '2026-09-27T09:10:00.000Z'],
+        [typed.entryId, 'manual', 60_000, '2026-09-27T09:20:00.000Z'],
       ]);
-      expect(priceOf(db, s.ing.chili)).toMatchObject({ pack_price_cents: 55_000 });
+      expect(priceOf(db, s.ing.chili)).toMatchObject({ pack_price_cents: 60_000 });
       expect(s.r.readParked(db)).toEqual([]);
-      // No history row was ever edited: every one is at its first version, with one 'create' in the trail.
       expect(n(db, `SELECT COUNT(*) AS n FROM ingredient_costs WHERE version <> 1`)).toBe(0);
     }
     expect(n(s.db, `SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'ingredient_costs' AND action <> 'create'`)).toBe(0);
     // The price in force between the first import and the typed price is the file's.
     expect(s.r.loadPriceHistory(s.db).priceAt(s.ing.chili, '2026-09-27T09:15:00.000Z')?.pack).toEqual({ size: 1000, priceCents: 55_000 });
+    expect(chainOk(s.db)).toBe(true);
+  });
+
+  it('the same file again after the price was cleared by hand: a NEW row after the first (the same one on both tills); the first stays as it was', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-27T09:00:00.000Z'));
+    const s = await shop();
+    s.r.setTypedPrice(s.db, { ingredientId: s.ing.chili, typed: { per: 'thousand', priceCents: 0 } }, MANAGER);
+    const { db2, push } = await secondTill(s.db);
+    const file = menuFile([{ name: 'Test chili', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 55_000 }]);
+    const sha = s.r.menuFileSha256(file);
+    vi.setSystemTime(new Date('2026-09-27T09:10:00.000Z'));
+    s.r.applyMenuImport(s.db, file, 'menu.json', OWNER);
+    vi.setSystemTime(new Date('2026-09-27T09:20:00.000Z'));
+    const cleared = s.r.setTypedPrice(s.db, { ingredientId: s.ing.chili, typed: { per: 'thousand', priceCents: 0 } }, MANAGER);
+    expect(priceOf(s.db, s.ing.chili)).toMatchObject({ price_kind: 'unset' });
+    expect(await push(s.db, DEV, db2)).toMatchObject({ waiting: 0, dropped: 0 });
+    vi.setSystemTime(new Date('2026-09-27T09:30:00.000Z'));
+    s.r.applyMenuImport(s.db, file, 'menu.json', OWNER);
+    vi.setSystemTime(new Date('2026-09-27T09:31:00.000Z'));
+    s.r.applyMenuImport(db2, file, 'menu.json', TILL2_MANAGER);
+    vi.useRealTimers();
+    const first = s.r.importPriceRowId(s.ing.chili, sha);
+    const again = s.r.priceRowIdAfter(s.ing.chili, first, cleared.entryId);
+    expect(await push(s.db, DEV, db2)).toMatchObject({ waiting: 0, dropped: 0 });
+    expect(await push(db2, TILL_2, s.db)).toMatchObject({ waiting: 0, dropped: 0 });
+    for (const db of [s.db, db2]) {
+      const imports = historyOf(db, s.ing.chili).filter((r) => r.source === 'import');
+      expect(imports.map((r) => [r.id, r.pack_price_cents])).toEqual([
+        [first, 55_000],
+        [again, 55_000],
+      ]);
+      expect(priceOf(db, s.ing.chili)).toMatchObject({ pack_price_cents: 55_000, price_kind: 'set' });
+      expect(s.r.readParked(db)).toEqual([]);
+      expect(n(db, `SELECT COUNT(*) AS n FROM ingredient_costs WHERE version <> 1`)).toBe(0);
+    }
     expect(chainOk(s.db)).toBe(true);
   });
 
@@ -640,22 +683,50 @@ live('the menu import on both tills', () => {
       },
     ]);
     s.r.applyMenuImport(s.db, dearer, 'menu.json', OWNER);
-    expect(priceOf(s.db, s.ing.sauce)).toMatchObject({ pack_size: 2000, pack_price_cents: 40_625 });
-    const rows = historyOf(s.db, s.ing.sauce);
-    expect(rows.filter((r) => r.source === 'import')).toEqual([]);
-    expect(rows.at(-1)).toMatchObject({ source: 'batch', pack_price_cents: 40_625, prev_unit_cost_mc: 17_813 });
+    // The till keeps its own tomato price (costing Phase 6); the sheet's dearer one is only its reference,
+    // so the sauce keeps following the till's tomatoes — never the sheet's Rs 300.
+    expect(priceOf(s.db, s.ing.tomato)).toMatchObject({ pack_size: 5000, pack_price_cents: 60_000 });
+    expect(s.db.prepare(`SELECT sheet_pack_size AS s, sheet_pack_price_cents AS p FROM ingredients WHERE id = ?`).get(s.ing.tomato)).toEqual({ s: 5000, p: 70_000 });
+    expect(priceOf(s.db, s.ing.sauce)).toEqual(sauceBefore);
+    expect(historyOf(s.db, s.ing.sauce)).toEqual(rowsBefore);
+    expect(s.db.prepare(`SELECT sheet_pack_size AS s, sheet_pack_price_cents AS p FROM ingredients WHERE id = ?`).get(s.ing.sauce)).toEqual({ s: 2000, p: 30_000 });
   });
 
-  it("a batch with an input still unpriced takes the sheet's price, as before", async () => {
+  it('a batch with an input still unpriced keeps the price it has, and Costing → Alerts says so (costing Phase 6)', async () => {
     const s = await shop();
     s.r.setTypedPrice(s.db, { ingredientId: s.ing.garlic, typed: { per: 'thousand', priceCents: 0 } }, MANAGER); // no price
     expect(priceOf(s.db, s.ing.garlic)).toMatchObject({ price_kind: 'unset' });
+    // The garlic change already said the sauce kept its price; seen, so the file's own alert shows.
+    const earlier = s.db.prepare(`SELECT id FROM cost_alerts WHERE kind = 'batch_unpriced_input' AND ingredient_id = ?`).all(s.ing.sauce) as Array<{ id: string }>;
+    expect(earlier).toHaveLength(1);
+    s.r.markCostAlertsSeen(s.db, earlier.map((a) => a.id), MANAGER);
+    const sauceBefore = priceOf(s.db, s.ing.sauce);
+    const rowsBefore = historyOf(s.db, s.ing.sauce);
     const file = menuFile([
       { name: 'Test sauce', unit: 'g', costPerUnitCents: 0, packSize: 2000, packPriceCents: 30_000 },
     ]);
     s.r.applyMenuImport(s.db, file, 'menu.json', OWNER);
-    expect(priceOf(s.db, s.ing.sauce)).toMatchObject({ pack_size: 2000, pack_price_cents: 30_000 });
-    expect(historyOf(s.db, s.ing.sauce).at(-1)).toMatchObject({ source: 'import', pack_price_cents: 30_000 });
+    expect(priceOf(s.db, s.ing.sauce)).toEqual(sauceBefore);
+    expect(historyOf(s.db, s.ing.sauce)).toEqual(rowsBefore);
+    const id = s.r.costAlertId('batch_unpriced_input', s.ing.sauce, s.r.importPriceRowId(s.ing.sauce, s.r.menuFileSha256(file)));
+    const alert = s.db.prepare(`SELECT kind, ingredient_id, seen_at, after_json FROM cost_alerts WHERE id = ?`).get(id) as {
+      kind: string;
+      ingredient_id: string;
+      seen_at: string | null;
+      after_json: string;
+    };
+    expect(alert).toMatchObject({ kind: 'batch_unpriced_input', ingredient_id: s.ing.sauce, seen_at: null });
+    expect(JSON.parse(alert.after_json)).toMatchObject({
+      because: 'import',
+      unpricedInputs: [{ ingredientId: s.ing.garlic, name: 'Test garlic' }],
+      kept: { priceKind: 'set', unitCostMc: 17_813 },
+    });
+    expect(n(s.db, `SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'cost_alerts' AND entity_id = ?`, id)).toBe(1);
+    expect(n(s.db, `SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'cost_alerts' AND entity_id = ?`, id)).toBe(1);
+    // Imported again: the alert is already there (and unseen), nothing new.
+    s.r.applyMenuImport(s.db, file, 'menu.json', OWNER);
+    expect(n(s.db, `SELECT COUNT(*) AS n FROM cost_alerts WHERE kind = 'batch_unpriced_input'`)).toBe(2);
+    expect(chainOk(s.db)).toBe(true);
   });
 });
 

@@ -281,7 +281,7 @@ live('price kinds', () => {
     expect(db.prepare(`SELECT price_kind FROM ingredients WHERE id = ?`).get(cup.id)).toEqual({ price_kind: 'unset' });
   });
 
-  it('the menu import: Rs 0 is unset, a "free" is never overwritten, a guess is an estimate', async () => {
+  it('the menu import: Rs 0 is unset, a "free" is never overwritten, a guess is an estimate (a price the till has stays, costing Phase 6)', async () => {
     const { createIngredient, updateIngredient, findIngredient, listIngredients } = await import('./repositories/ingredient-repo.js');
     const { applyMenuImport } = await import('./repositories/menu-import-repo.js');
     const db = withUsers(openMigrated());
@@ -305,7 +305,9 @@ live('price kinds', () => {
     applyMenuImport(db, file, 'test.json', OWNER);
     const kind = (name: string) => listIngredients(db).find((i) => i.name === name)?.priceKind;
     expect(findIngredient(db, salt.id)?.priceKind).toBe('free');
-    expect(findIngredient(db, oil.id)).toMatchObject({ priceKind: 'estimate', packPriceCents: 50_000 });
+    // The till owns the prices it has (costing Phase 6): the sheet's "guess" is only its reference.
+    expect(findIngredient(db, oil.id)).toMatchObject({ priceKind: 'set', packPriceCents: 50_000 });
+    expect(db.prepare(`SELECT sheet_price_kind AS k FROM ingredients WHERE id = ?`).get(oil.id)).toEqual({ k: 'estimate' });
     expect(kind('Test Bottle')).toBe('unset');
     expect(kind('Test Breading')).toBe('estimate');
     expect(kind('Test Flour')).toBe('set');

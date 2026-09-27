@@ -1,7 +1,8 @@
 import { cn } from '@cheeseoclock/ui';
-import { ListChecks, Target, UtensilsCrossed } from 'lucide-react';
+import { BellRing, ListChecks, Target, UtensilsCrossed } from 'lucide-react';
 import { useSessionState } from '../../components/list';
-import { useMenuCosts } from './costingQueries';
+import { useCostAlerts, useMenuCosts } from './costingQueries';
+import { AlertsTab } from './AlertsTab';
 import { MenuCostsTab } from './MenuCostsTab';
 import { MissingCostsTab } from './MissingCostsTab';
 import { TargetsTab } from './TargetsTab';
@@ -13,11 +14,12 @@ import { TargetsTab } from './TargetsTab';
  * needs fixing links there. Managers and the owner only (COST_CAPABILITY;
  * the main process refuses anyone else).
  */
-type Tab = 'menu' | 'missing' | 'targets';
+type Tab = 'menu' | 'missing' | 'alerts' | 'targets';
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof ListChecks }> = [
   { id: 'menu', label: 'Menu costs', icon: UtensilsCrossed },
   { id: 'missing', label: 'Missing costs', icon: ListChecks },
+  { id: 'alerts', label: 'Alerts', icon: BellRing },
   { id: 'targets', label: 'Targets', icon: Target },
 ];
 
@@ -26,6 +28,9 @@ export function CostingPage() {
   // The badge: what still stops the till costing the menu.
   const menuQ = useMenuCosts();
   const missing = menuQ.data?.missingCount ?? 0;
+  // …and the price alerts not seen yet (costing spec Phase 6).
+  const alertsQ = useCostAlerts();
+  const unseen = alertsQ.data?.unseen ?? 0;
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -64,6 +69,14 @@ export function CostingPage() {
                   {missing}
                 </span>
               )}
+              {t.id === 'alerts' && unseen > 0 && (
+                <span
+                  title={`${unseen} ${unseen === 1 ? 'alert' : 'alerts'} not seen yet`}
+                  className="min-w-[1.25rem] rounded-full bg-amber-100 px-1.5 text-center text-xs font-bold tabular-nums text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+                >
+                  {unseen}
+                </span>
+              )}
             </button>
           );
         })}
@@ -71,6 +84,7 @@ export function CostingPage() {
 
       {tab === 'menu' && <MenuCostsTab onShowMissing={() => setTab('missing')} onShowTargets={() => setTab('targets')} />}
       {tab === 'missing' && <MissingCostsTab />}
+      {tab === 'alerts' && <AlertsTab />}
       {tab === 'targets' && <TargetsTab />}
     </div>
   );

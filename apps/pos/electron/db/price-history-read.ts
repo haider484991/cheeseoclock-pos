@@ -12,6 +12,7 @@ import {
   knownPrices,
   priceInForce,
   toPriceKind,
+  unitCostMc,
   type Pack,
 } from '@cheeseoclock/pos-domain';
 import {
@@ -20,6 +21,7 @@ import {
   type PriceHistoryEntry,
   type PriceKind,
   type PriceSource,
+  type SheetPrice,
 } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from './connection.js';
 
@@ -116,6 +118,41 @@ export function latestPriceTags(db: AppDatabase): Map<string, IngredientPriceTag
     )
     .all() as CostRow[];
   return new Map(rows.map((r) => [r.ingredient_id, tagOf(r)]));
+}
+
+/**
+ * What the costing sheet says each ingredient costs (ingredients.sheet_*,
+ * migration 0036: the menu file's price, kept as a reference only), by
+ * ingredient id. Only ingredients a menu file has named.
+ */
+export function readSheetPrices(db: AppDatabase): Map<string, SheetPrice> {
+  const rows = db
+    .prepare(
+      `SELECT id, sheet_pack_size, sheet_pack_price_cents, sheet_price_kind, sheet_price_at
+         FROM ingredients
+        WHERE deleted_at IS NULL AND sheet_pack_size IS NOT NULL AND sheet_pack_price_cents IS NOT NULL`,
+    )
+    .all() as Array<{
+    id: string;
+    sheet_pack_size: number;
+    sheet_pack_price_cents: number;
+    sheet_price_kind: string | null;
+    sheet_price_at: string | null;
+  }>;
+  const out = new Map<string, SheetPrice>();
+  for (const r of rows) {
+    const size = Number(r.sheet_pack_size);
+    const priceCents = Number(r.sheet_pack_price_cents);
+    if (!(size > 0) || !(priceCents >= 0)) continue;
+    out.set(r.id, {
+      packSize: size,
+      packPriceCents: priceCents,
+      priceKind: toPriceKind(r.sheet_price_kind),
+      unitCostMc: unitCostMc({ size, priceCents }),
+      at: r.sheet_price_at ?? '',
+    });
+  }
+  return out;
 }
 
 /** A price from the history: the pack as it was kept, in the unit it was kept in. */

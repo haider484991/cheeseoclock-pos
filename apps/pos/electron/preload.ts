@@ -219,6 +219,7 @@ const api: RendererApi = {
     convertIngredientUnit: (req) => invoke('inventory:convertIngredientUnit', req),
     setPrice: (req) => invoke('inventory:setPrice', req),
     priceHistory: (req) => invoke('inventory:priceHistory', req),
+    useSheetPrice: (req) => invoke('inventory:useSheetPrice', req),
     getRecipe: (req) => invoke('inventory:getRecipe', req),
     setRecipe: (req) => invoke('inventory:setRecipe', req),
     listRecipeLineCounts: () => invoke('inventory:listRecipeLineCounts', undefined),
@@ -248,6 +249,10 @@ const api: RendererApi = {
     setTargets: (req) => invoke('costing:setTargets', req),
     recipeCost: (req) => invoke('costing:recipeCost', req),
     batchCalc: (req) => invoke('costing:batchCalc', req),
+    alerts: () => invoke('costing:alerts', undefined),
+    markAlertsSeen: (req) => invoke('costing:markAlertsSeen', req),
+    getAlertSettings: () => invoke('costing:getAlertSettings', undefined),
+    setAlertSettings: (req) => invoke('costing:setAlertSettings', req),
   },
 };
 

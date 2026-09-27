@@ -1,29 +1,184 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { CostingTargetsView, SetCostingTargetsRequest } from '@cheeseoclock/shared-types';
-import { CheckCircle2, Lock } from 'lucide-react';
+import type { CostAlertSettingsView, CostingTargetsView, SetCostAlertSettingsRequest, SetCostingTargetsRequest } from '@cheeseoclock/shared-types';
+import { BellRing, CheckCircle2, Lock } from 'lucide-react';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
-import { COSTING_KEY, useCostingTargets } from './costingQueries';
+import { COSTING_KEY, useCostAlertSettings, useCostingTargets } from './costingQueries';
 import { formatBps, parsePercent, parseRupees } from './costingFormat';
 
 /**
- * Food-cost targets per menu category. Until the owner confirms them they
- * are the till's suggestions (Pizza 30%, Burgers 35%, …) and the chips stay
+ * Food-cost targets per menu category, and the price alerts' thresholds
+ * (costing spec Phase 6). Until the owner confirms the targets they are the
+ * till's suggestions (Pizza 30%, Burgers 35%, …) and the chips stay
  * uncoloured. Managers see them; only the owner (settings.manage) changes
  * them — the main process refuses anyone else.
  */
 export function TargetsTab() {
   const q = useCostingTargets();
   const canEdit = useSessionStore((s) => s.can('settings.manage'));
+  return (
+    <div className="space-y-3">
+      {q.data ? (
+        // A fresh form whenever the saved targets change (saved here, or on the other till).
+        <TargetsForm key={q.data.savedAt ?? 'suggested'} view={q.data} canEdit={canEdit} />
+      ) : (
+        <Card className="py-8 text-center text-stone-500">{q.isError ? 'Could not load the targets.' : 'Loading…'}</Card>
+      )}
+      <AlertSettings canEdit={canEdit} />
+    </div>
+  );
+}
+
+/** The price alerts' thresholds and key ingredients (costing spec Phase 6). */
+function AlertSettings({ canEdit }: { canEdit: boolean }) {
+  const q = useCostAlertSettings();
   if (!q.data) {
-    return <Card className="py-8 text-center text-stone-500">{q.isError ? 'Could not load the targets.' : 'Loading…'}</Card>;
+    return <Card className="py-6 text-center text-stone-500">{q.isError ? 'Could not load the price alerts.' : 'Loading…'}</Card>;
   }
-  // A fresh form whenever the saved targets change (saved here, or on the other till).
-  return <TargetsForm key={q.data.savedAt ?? 'suggested'} view={q.data} canEdit={canEdit} />;
+  return <AlertSettingsForm key={q.data.savedAt ?? 'suggested'} view={q.data} canEdit={canEdit} />;
+}
+
+function AlertSettingsForm({ view, canEdit }: { view: CostAlertSettingsView; canEdit: boolean }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [jump, setJump] = useState(pctText(view.jumpBps));
+  const [impact, setImpact] = useState(String(view.impactWeekCents / 100));
+  const [keys, setKeys] = useState<Set<string>>(() => new Set(view.ingredients.filter((i) => i.key).map((i) => i.ingredientId)));
+  const [find, setFind] = useState('');
+
+  const jumpBps = parsePercent(jump);
+  const jumpBad = jumpBps === null || jumpBps < 100;
+  const impactCents = parseRupees(impact);
+  const impactBad = impactCents === null || impactCents > 100_000_000;
+  const problem = jumpBad ? 'A price jump is 1% to 100%.' : impactBad ? 'The weekly amount is Rs 0 to Rs 1,000,000.' : null;
+  const savedKeys = view.ingredients.filter((i) => i.key).map((i) => i.ingredientId);
+  const dirty =
+    jump !== pctText(view.jumpBps) ||
+    impact !== String(view.impactWeekCents / 100) ||
+    keys.size !== savedKeys.length ||
+    savedKeys.some((id) => !keys.has(id));
+
+  // Key ones first, then by name; the box narrows the list.
+  const shown = useMemo(() => {
+    const f = find.trim().toLowerCase();
+    return [...view.ingredients]
+      .filter((i) => f === '' || i.name.toLowerCase().includes(f))
+      .sort((a, b) => Number(keys.has(b.ingredientId)) - Number(keys.has(a.ingredientId)) || a.name.localeCompare(b.name));
+    // Re-sorted on typing only, so a box ticked a moment ago does not jump away.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [find, view.ingredients]);
+
+  const mut = useMutation({
+    mutationFn: (req: SetCostAlertSettingsRequest) => ipc.costing.setAlertSettings(req),
+    onSuccess: () => {
+      toast({ title: 'Price alerts saved', description: 'On both tills, from the next price change.', variant: 'success' });
+      void qc.invalidateQueries({ queryKey: COSTING_KEY });
+    },
+    onError: (e) => toast({ title: 'Could not save the price alerts', description: e instanceof IpcError ? e.message : String(e), variant: 'error' }),
+  });
+
+  const save = () => {
+    if (problem || jumpBps === null || impactCents === null) return;
+    mut.mutate({ jumpBps, impactWeekCents: impactCents, keyIngredientIds: [...keys] });
+  };
+
+  const inputCls =
+    'w-24 rounded-lg border border-stone-300 px-2 py-1.5 text-right font-mono disabled:bg-stone-100 disabled:text-stone-500 dark:border-stone-700 dark:bg-stone-800 dark:disabled:bg-stone-900';
+
+  return (
+    <Card>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div className="max-w-2xl">
+          <h2 className="flex items-center gap-2 font-semibold">
+            <BellRing className="h-4 w-4" /> Price alerts
+          </h2>
+          <p className="mt-0.5 text-sm text-stone-500">
+            When to tell you about a price change on Costing → Alerts. Every Monday you also get the dishes that price changes
+            moved over (or back under) their target.
+          </p>
+          {view.keysSuggested && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+              The key ingredients below are the till&apos;s suggestions until the price alerts are saved.
+            </p>
+          )}
+        </div>
+        {!canEdit && (
+          <p className="inline-flex items-center gap-1.5 rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-600 dark:bg-stone-800 dark:text-stone-300">
+            <Lock className="h-4 w-4" /> Only the owner can change the price alerts.
+          </p>
+        )}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-wrap items-center gap-2 text-sm">
+          A key ingredient&apos;s price moves more than
+          <input type="text" inputMode="decimal" value={jump} disabled={!canEdit} onChange={(e) => setJump(e.target.value)} className={cn(inputCls, jumpBad && 'border-red-500')} />
+          %
+          <span className="w-full text-xs text-stone-500">
+            A bill this far from the usual price also asks before it becomes the price.
+          </span>
+        </label>
+        <label className="flex flex-wrap items-center gap-2 text-sm">
+          Any price change costs the menu more than Rs
+          <input type="text" inputMode="decimal" value={impact} disabled={!canEdit} onChange={(e) => setImpact(e.target.value)} className={cn(inputCls, impactBad && 'border-red-500')} />
+          a week
+          {impactCents !== null && !impactBad && <span className="text-stone-500">({formatCents(impactCents)}, at this till&apos;s sales)</span>}
+        </label>
+      </div>
+
+      <div className="mt-4">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">
+            Key ingredients <span className="font-normal text-stone-500">({keys.size})</span>
+          </h3>
+          <input
+            type="search"
+            value={find}
+            onChange={(e) => setFind(e.target.value)}
+            placeholder="Find an ingredient…"
+            aria-label="Find an ingredient"
+            className="h-9 rounded-lg border border-stone-300 bg-white px-2 text-sm dark:border-stone-700 dark:bg-stone-800"
+          />
+        </div>
+        <div className="grid max-h-64 grid-cols-1 gap-1 overflow-y-auto rounded-lg border border-stone-200 p-2 sm:grid-cols-2 lg:grid-cols-3 dark:border-stone-800">
+          {shown.map((i) => (
+            <label key={i.ingredientId} className="flex items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-stone-50 dark:hover:bg-stone-800">
+              <input
+                type="checkbox"
+                checked={keys.has(i.ingredientId)}
+                disabled={!canEdit}
+                onChange={(e) =>
+                  setKeys((k) => {
+                    const next = new Set(k);
+                    if (e.target.checked) next.add(i.ingredientId);
+                    else next.delete(i.ingredientId);
+                    return next;
+                  })
+                }
+              />
+              <span className="truncate">{i.name}</span>
+              {i.suggested && <span className="text-[11px] text-stone-500">suggested</span>}
+            </label>
+          ))}
+          {shown.length === 0 && <p className="px-1.5 py-1 text-sm text-stone-500">No ingredient matches.</p>}
+        </div>
+      </div>
+
+      {canEdit && (
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-stone-200 pt-4 dark:border-stone-800">
+          {problem && <span className="mr-auto text-sm text-red-700 dark:text-red-400">{problem}</span>}
+          {!problem && <span className="mr-auto text-xs text-stone-500">Saved for both tills.</span>}
+          <Button variant="primary" disabled={mut.isPending || problem !== null || (!dirty && !view.keysSuggested)} onClick={save}>
+            {mut.isPending ? 'Saving…' : view.keysSuggested && !dirty ? 'Use these' : 'Save price alerts'}
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
 }
 
 /** 3000 → "30", 3250 → "32.5". */

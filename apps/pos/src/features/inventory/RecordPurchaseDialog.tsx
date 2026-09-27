@@ -8,7 +8,7 @@ import { Plus, ShoppingBasket, Trash2, Wallet, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { compareText } from '../../components/list';
-import { COSTING_KEY } from '../costing/costingQueries';
+import { COSTING_KEY, useCostAlertSettings } from '../costing/costingQueries';
 import { IngredientSelect } from './IngredientSelect';
 import { lineCheck, lineWords, payoutMatchText, readBill, readBoughtQty, type BoughtQty } from './purchase-view';
 
@@ -76,13 +76,15 @@ export function RecordPurchaseDialog({
   const [lines, setLines] = useState<Line[]>(() => [newLine(ingredientId ?? '')]);
 
   const byId = useMemo(() => new Map<string, Ingredient>((ingQ.data ?? []).map((i) => [i.id, i])), [ingQ.data]);
+  // D1's band is the owner's price alert threshold (costing Phase 6), as the main process reads it.
+  const guardBps = useCostAlertSettings().data?.jumpBps;
   const read = lines.map((l) => {
     const ing = byId.get(l.ingredientId);
     // A number alone under 1,000 of something weighed asks for the unit; what is read is shown under the box.
     const amount: BoughtQty = ing ? readBoughtQty(l.qty, ing.unit) : { qty: null, shows: null, problem: null };
     const qty = amount.qty;
     const bill = readBill(l.bill);
-    const check = ing ? lineCheck(ing, qty, bill, 'quick') : null;
+    const check = ing ? lineCheck(ing, qty, bill, 'quick', guardBps) : null;
     const words = check && qty !== null && bill !== null && ing ? lineWords(check, qty, bill, ing.unit) : null;
     const uses = check ? (check.ask ? (l.answer ?? check.adoptByDefault) : check.adoptByDefault) : false;
     return { line: l, ing, amount, qty, bill, check, words, uses };

@@ -8,6 +8,7 @@ import { ensureDeviceInfo } from './db/repositories/device-repo.js';
 import { ensureSeedUsers } from './db/repositories/user-repo.js';
 import { ensureSeedMenu } from './db/seed.js';
 import { seedPriceHistoryOnce } from './services/costing-seed.js';
+import { startWeeklyDigest } from './services/cost-digest.js';
 import { registerAllIpcHandlers } from './ipc/registry.js';
 import { printSpooler } from './services/print-spooler.js';
 import { getCurrentSession } from './services/auth-service.js';
@@ -184,6 +185,10 @@ async function bootstrap() {
   } catch (err) {
     log.error('Costing: the starting prices could not be written; trying again at the next start', err);
   }
+
+  // The Monday price digest (costing spec Phase 6): looked for a few minutes
+  // after the till opens, then every hour.
+  startWeeklyDigest(db, deviceInfo.deviceId);
 
   // The print log puts each paper down to this till and whoever is signed in.
   printSpooler.init(db, { deviceId: deviceInfo.deviceId, currentUserId: () => getCurrentSession()?.id ?? null });

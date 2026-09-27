@@ -15,8 +15,10 @@ import {
   setRecipeForItem,
   type PriceMeta,
 } from './ingredient-repo.js';
-import { importPriceRowId, rollUpBatches } from './ingredient-cost-repo.js';
+import { importPriceRowId, rollUpBatches, setSheetPrice } from './ingredient-cost-repo.js';
+import { raiseBatchUnpricedAlerts } from './cost-alert-repo.js';
 import { loadPriceBook } from '../price-book.js';
+import { latestPriceTags } from '../price-history-read.js';
 import { setBatchRecipe, clearBatchRecipeLines } from './batch-recipe-repo.js';
 import { listCombos, deleteCombo } from './combo-repo.js';
 import {
@@ -42,6 +44,7 @@ import {
   type ModifierRef,
 } from '../menu-import-plan.js';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
+import { toPriceKind } from '@cheeseoclock/pos-domain';
 import type { MenuImportFreshStart, MenuImportSummary } from '@cheeseoclock/shared-types';
 
 /** The import cannot run as asked (open orders during a fresh start…). */
@@ -66,10 +69,25 @@ export function readMenuSnapshot(db: AppDatabase): MenuSnapshot {
   const batchLines = db
     .prepare(`SELECT ingredient_id, input_ingredient_id, qty FROM batch_recipe_lines WHERE deleted_at IS NULL`)
     .all() as Array<{ ingredient_id: string; input_ingredient_id: string; qty: number }>;
+  // Where each price came from, and the sheet's price kept for it (costing Phase 6: the till keeps its prices).
+  const tags = latestPriceTags(db);
+  const sheets = new Map(
+    (
+      db
+        .prepare(
+          `SELECT id, sheet_pack_size, sheet_pack_price_cents, sheet_price_kind FROM ingredients
+            WHERE deleted_at IS NULL AND sheet_pack_size IS NOT NULL AND sheet_pack_price_cents IS NOT NULL`,
+        )
+        .all() as Array<{ id: string; sheet_pack_size: number; sheet_pack_price_cents: number; sheet_price_kind: string | null }>
+    ).map((r) => [
+      r.id,
+      { packSize: Number(r.sheet_pack_size), packPriceCents: Number(r.sheet_pack_price_cents), priceKind: toPriceKind(r.sheet_price_kind) },
+    ]),
+  );
   return {
     categories: listCategories(db),
     items: listMenuItems(db),
-    ingredients: listIngredients(db),
+    ingredients: listIngredients(db).map((i) => ({ ...i, priceSource: tags.get(i.id)?.source ?? null, sheet: sheets.get(i.id) ?? null })),
     recipes: groupBy(recipes, (r) => r.menu_item_id, (r) => ({
       ingredientId: r.ingredient_id,
       qtyPerUnit: r.qty_per_unit,
@@ -251,20 +269,25 @@ function samePrice(
  * entry and audit row — plus one audit row recording the import itself.
  * Any failure rolls the whole import back.
  *
- * Prices go through the one price path (costing spec Phase 4) as source
- * 'import', each history row with a name-based id from the ingredient and
- * the file's fingerprint (menuFileSha256: sha-256 of its content, so a copy
- * saved with or without a byte-order mark is the same file): importing the
- * same file on both tills gives ONE row per ingredient, which the link
- * settles by id. The batches
- * made from a re-priced ingredient are rolled up once, at the end, after
- * the file's batch recipes are in (also with name-based ids), so they are
- * rolled up from the file's recipes. Which prices a file may overwrite is
- * unchanged here (costing Phase 6) — except a batch made here: once the
- * file's batch recipes are in, a batch whose inputs all have a price keeps
- * the price rolled up from them, and the sheet's figure for it is only a
- * reference (costing spec D4 and section 8: batch costs are always the
- * till's). Only a batch with an input still unpriced takes the sheet's.
+ * Prices (costing spec Phase 6, section 8): the till owns ingredient prices.
+ * The file's price is written only for a NEW ingredient or one with no price
+ * ('unset') — through the one price path as source 'import', each history
+ * row with a name-based id from the ingredient and the file's fingerprint
+ * (menuFileSha256: sha-256 of its content, so a copy saved with or without
+ * a byte-order mark is the same file): importing the same file on both
+ * tills gives ONE row per ingredient, which the link settles by id. Every
+ * other ingredient keeps its price. The file's price is ALWAYS kept as the
+ * sheet's reference (setSheetPrice), shown in Inventory beside the till's.
+ *
+ * A batch made here is costed from its batch recipe (D4: batch costs are
+ * always the till's): once the file's batch recipes are in, a batch whose
+ * inputs all have a price takes the price rolled up from them, and the
+ * sheet's figure for it is only a reference. A batch with an input still
+ * unpriced keeps the price it has (the sheet's only if it had none) and
+ * Costing → Alerts says so (a 'batch_unpriced_input' alert named after the
+ * file's row for it, so both tills raise the same one). The batches made
+ * from a re-priced ingredient are rolled up once, at the end, from the
+ * file's recipes (also with name-based ids).
  */
 export function applyMenuImport(
   db: AppDatabase,
@@ -274,7 +297,8 @@ export function applyMenuImport(
   opts: { fresh?: boolean } = {},
 ): MenuImportSummary {
   const fileSha = menuFileSha256(file);
-  const importPrice: PriceMeta = { source: 'import', rowKey: `import|${fileSha}`, cascade: false };
+  // No alerts per ingredient: the file's prices only fill ingredients with none (never a jump); its batches are looked at at the end.
+  const importPrice: PriceMeta = { source: 'import', rowKey: `import|${fileSha}`, cascade: false, alerts: false };
   const tx = db.transaction((): MenuImportSummary => {
     let removedItems = 0;
     let taxUse: Map<string, number> | undefined;
@@ -318,9 +342,11 @@ export function applyMenuImport(
             writeImportPrice(ing.existingId, ing.update);
           }
         }
+        setSheetPrice(db, ing.existingId, ing.sheet, actor);
         ingredientIds.set(ing.fileKey, ing.existingId);
       } else if (ing.create) {
         const id = createIngredient(db, ing.create, actor, importPrice).id;
+        setSheetPrice(db, id, ing.sheet, actor);
         ingredientIds.set(ing.fileKey, id);
         repriced.push(id);
       }
@@ -345,19 +371,34 @@ export function applyMenuImport(
       );
     }
 
-    // A batch made here that the file prices: with every input priced (the
-    // file's own recipe and prices now in), its roll-up wins and the sheet's
-    // figure is only a reference; with one unpriced, the sheet's price is
-    // what it has, as before.
-    for (const b of batchPrices) {
-      if (loadPriceBook(db).prices.get(b.id)?.batch?.complete) {
-        rollUpBatches(db, [b.id], `import|${fileSha}`, actor, {
+    // Every batch made here that the file names: with every input priced
+    // (the file's own recipe and prices now in), its roll-up wins and the
+    // sheet's figure is only a reference; with one unpriced it keeps the
+    // price it has — the sheet's only when it had none (planned only then)
+    // — and Costing → Alerts says so, once the file is in.
+    const pricedLater = new Map(batchPrices.map((b) => [b.id, b.price]));
+    const fileBatches = [
+      ...new Set(
+        ops.ingredients.flatMap((o) => {
+          const id = o.existingId ?? ingredientIds.get(o.fileKey);
+          return id && (madeHere.has(id) || ops.batches.some((b) => 'fileKey' in b.ingredient && b.ingredient.fileKey === o.fileKey)) ? [id] : [];
+        }),
+      ),
+    ];
+    const unpricedBatches: string[] = [];
+    for (const id of fileBatches) {
+      const rolled = loadPriceBook(db).prices.get(id);
+      if (!rolled?.batch) continue;
+      if (rolled.batch.complete) {
+        rollUpBatches(db, [id], `import|${fileSha}`, actor, {
           self: true,
           note: "From its batch recipe (the costing sheet's figure for it is only a reference)",
         });
-      } else {
-        writeImportPrice(b.id, b.price);
+        continue;
       }
+      const price = pricedLater.get(id);
+      if (price) writeImportPrice(id, price);
+      unpricedBatches.push(id);
     }
 
     // Every batch made from an ingredient this file re-priced takes its
@@ -365,6 +406,15 @@ export function applyMenuImport(
     // only, once per batch per triggering price row (apply-remote never
     // rolls up again).
     for (const id of repriced) rollUpBatches(db, [id], importPriceRowId(id, fileSha), actor);
+
+    // A batch made here that kept its price because something in it has no
+    // price: Costing → Alerts, named after the file's row for it.
+    raiseBatchUnpricedAlerts(
+      db,
+      unpricedBatches,
+      (batchId) => ({ key: importPriceRowId(batchId, fileSha), rowId: importPriceRowId(batchId, fileSha), because: 'import', changedName: null }),
+      actor,
+    );
 
     const groupIds = new Map<string, string>();
     const optionIds = new Map<string, string>();

@@ -15,10 +15,18 @@
  *     in kg (or litres) where the file counts grams (ml) is converted — stock,
  *     low level and recipe lines ×1000, the same physical amounts. Any other
  *     unit mismatch is skipped, and so are the recipes that use it.
- *   - A pack price ("6,000 g for Rs 2,250") decides the per-gram cost.
+ *   - Prices (costing spec Phase 6, section 8): the TILL owns ingredient
+ *     prices. The file's price is used only for a NEW ingredient or one
+ *     with no price yet ('unset'); every other keeps the till's price (from
+ *     a delivery, typed, from an earlier file, or 'free'). The file's price
+ *     is always kept beside it as the sheet's reference (ingredients.sheet_*),
+ *     shown in Inventory with "Use the sheet's price". A batch made here is
+ *     costed from its batch recipe; the sheet's figure for it is only a
+ *     reference (menu-import-repo). The preview says it in ONE line: "Prices:
+ *     12 kept from deliveries, 3 new from the sheet, 0 unpriced."
+ *   - A pack price ("6,000 g for Rs 2,250") is kept exactly as the pack.
  *   - Rs 0 in the file means "not priced yet" ('unset', listed under
- *     Costing → Missing costs) — except for an ingredient the shop marked
- *     'free', which stays free. `priceIsEstimate` marks a guess ('estimate').
+ *     Costing → Missing costs). `priceIsEstimate` marks a guess ('estimate').
  *   - A description is only filled in where the item has none.
  *   - Choice groups ("Choose your dip") are matched by name; missing options
  *     are added, none removed. Items gain the file's groups; groups they
@@ -32,11 +40,16 @@ import {
   baseUnitConversion,
   convertedStoredPrice,
   costPerUnitFromPack,
+  effectivePack,
+  effectivePrices,
   formatCents,
-  formatPack,
-  formatUnitCost,
   hasPrice,
+  mcToCents,
+  mulDivRound,
   normalizeUnit,
+  thousandSize,
+  thousandWord,
+  unitCostMc,
 } from '@cheeseoclock/pos-domain';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
 import type {
@@ -45,8 +58,11 @@ import type {
   MenuImportIngredientPlan,
   MenuImportItemPlan,
   MenuImportPreview,
+  MenuImportPriceOutcome,
+  MenuImportPriceSummary,
   MenuImportSummary,
   PriceKind,
+  PriceSource,
 } from '@cheeseoclock/shared-types';
 
 export interface MenuSnapshot {
@@ -69,6 +85,10 @@ export interface MenuSnapshot {
     packPriceCents: number | null;
     /** Omitted = 'set' (a snapshot from before migration 0032). */
     priceKind?: PriceKind;
+    /** Where its price came from (its newest price history line); null / omitted = not known. */
+    priceSource?: PriceSource | null;
+    /** The sheet's price kept for it now (ingredients.sheet_*); null / omitted = none yet. */
+    sheet?: SheetPrice | null;
     batchYield: number | null;
     batchMethod: string | null;
     notes: string | null;
@@ -101,6 +121,13 @@ export interface MenuSnapshot {
    * start plans against an empty menu but keeps the tax the shop was using.
    */
   taxUse?: Map<string, number>;
+}
+
+/** The costing sheet's price for an ingredient, as the file gives it (ingredients.sheet_*). */
+export interface SheetPrice {
+  packSize: number;
+  packPriceCents: number;
+  priceKind: PriceKind;
 }
 
 /** A reference to an ingredient that exists now, or one the import creates first. */
@@ -137,6 +164,8 @@ export interface MenuImportOps {
     } | null;
     /** Convert kg → g / l → ml (stock and recipe lines ×1000) before the update. */
     convert: boolean;
+    /** The sheet's price, always kept as the reference (after any convert). */
+    sheet: SheetPrice;
   }>;
   items: Array<{
     existingId: string | null;
@@ -248,28 +277,201 @@ function splitSize(name: string): { base: string; size: string } | null {
 
 type Costing = { unit: string; costPerUnitCents: number; packSize: number | null; packPriceCents: number | null };
 
+/**
+ * The file's price for an ingredient as the sheet's reference: its pack
+ * exactly, or (1, its cost per unit) when it gives none; Rs 0 is 'unset',
+ * a guess 'estimate'.
+ */
+export function sheetPriceOf(ing: {
+  costPerUnitCents: number;
+  packSize: number | null;
+  packPriceCents: number | null;
+  priceIsEstimate: boolean;
+}): SheetPrice {
+  const pack =
+    ing.packSize !== null && ing.packSize > 0 && ing.packPriceCents !== null
+      ? { packSize: ing.packSize, packPriceCents: ing.packPriceCents }
+      : { packSize: 1, packPriceCents: ing.costPerUnitCents };
+  return { ...pack, priceKind: importedPriceKind(hasPrice(ing), ing.priceIsEstimate, null) };
+}
+
+/** A price for people: "Rs 1,500 / kg" for something weighed, "Rs 40 / pcs" otherwise. */
+function unitPriceText(unitCostMcValue: number, unit: string): string {
+  const size = thousandSize(unit);
+  const word = thousandWord(unit);
+  if (size !== null && word !== null) return `${formatCents(mulDivRound(unitCostMcValue, size, 1000))} / ${word}`;
+  return `${formatCents(mcToCents(unitCostMcValue))} / ${unit}`;
+}
+
+/** A price the till keeps, by where it came from (its newest price history line). */
+function keptOutcome(source: PriceSource | null): MenuImportPriceOutcome {
+  if (source === 'delivery' || source === 'purchase') return 'kept_delivery';
+  if (source === 'manual') return 'kept_typed';
+  return 'kept';
+}
+
+/** The outcomes where the till keeps the price it has (the sheet's may differ: Inventory offers it). */
+const KEEPS_TILL_PRICE: ReadonlySet<MenuImportPriceOutcome> = new Set(['kept_delivery', 'kept_typed', 'kept', 'batch_kept']);
+
+/** An ingredient's price outcome, before the file's batch recipes are known. */
+interface PriceFact {
+  plan: MenuImportIngredientPlan;
+  fileKey: string;
+  existingId: string | null;
+  /** Its price kind once the file is in (the sheet's where it takes the sheet's, else the till's). */
+  kindAfter: PriceKind;
+  /** Its outcome when no batch recipe prices it. */
+  own: MenuImportPriceOutcome;
+  /** The till's price differs from the sheet's (counts where the till keeps its price). */
+  sheetDiffersIfKept: boolean;
+  /** Where "no price yet: the sheet's …" sits in its changes, to be said right once the batches are known. */
+  sheetChange: { index: number; sheetText: string } | null;
+}
+
+/** What an ingredient with no price takes from the file: the sheet's price, or (a batch its recipe prices) its recipe's. */
+function sheetTakenText(sheetText: string, fromRecipe: boolean): string {
+  return fromRecipe
+    ? `no price yet: worked out from its batch recipe (the sheet's ${sheetText} is only a reference)`
+    : `no price yet: the sheet's ${sheetText}`;
+}
+
+/**
+ * Each ingredient's price outcome as the repository will decide it
+ * (menu-import-repo applyMenuImport): a batch made here — its recipe after
+ * the file, the file's own recipes and prices in — whose every input will
+ * have a price is 'made_here' (its price rolled up from them). One whose
+ * recipe can't price it (something in it has no price) keeps the price it
+ * has, 'batch_kept', and Costing → Alerts says so; with no price of its own
+ * it takes the sheet's or stays unpriced, like any other ingredient. The
+ * same roll-up rule the till prices with (pos-domain effectivePrices), on
+ * the price KINDS only: whether a price is there, not what it is.
+ */
+function settleBatchPrices(facts: readonly PriceFact[], batchOps: MenuImportOps['batches'], live: MenuSnapshot): void {
+  const simId = (f: Pick<PriceFact, 'fileKey' | 'existingId'>) => f.existingId ?? `file:${f.fileKey}`;
+  const refId = (ref: IngredientRef) => ('existingId' in ref ? ref.existingId : `file:${ref.fileKey}`);
+  const kindAfter = new Map<string, PriceKind>(live.ingredients.map((r) => [r.id, r.priceKind ?? 'set']));
+  const yieldAfter = new Map<string, number | null>(live.ingredients.map((r) => [r.id, r.batchYield]));
+  const linesAfter = new Map<string, Array<{ inputId: string; qty: number }>>(live.batchLines);
+  for (const f of facts) kindAfter.set(simId(f), f.kindAfter);
+  for (const b of batchOps) {
+    const id = refId(b.ingredient);
+    yieldAfter.set(id, b.batchYield);
+    linesAfter.set(
+      id,
+      b.lines.map((l) => ({ inputId: refId(l.ingredient), qty: l.qty })),
+    );
+  }
+  const after = effectivePrices(
+    [...kindAfter].map(([id, priceKind]) => ({
+      id,
+      name: id,
+      unit: '',
+      priceKind,
+      costPerUnitCents: 0,
+      packSize: null,
+      packPriceCents: null,
+      batchYield: yieldAfter.get(id) ?? null,
+    })),
+    linesAfter,
+  );
+  for (const f of facts) {
+    const batch = after.get(simId(f))?.batch ?? null;
+    const outcome: MenuImportPriceOutcome = !batch
+      ? f.own
+      : batch.complete
+        ? 'made_here'
+        : f.own === 'new_from_sheet' || f.own === 'unpriced'
+          ? f.own
+          : 'batch_kept';
+    f.plan.price = outcome;
+    f.plan.sheetDiffers = f.sheetDiffersIfKept && KEEPS_TILL_PRICE.has(outcome);
+    if (f.sheetChange) f.plan.changes[f.sheetChange.index] = sheetTakenText(f.sheetChange.sheetText, outcome === 'made_here');
+  }
+}
+
+/** The ingredients' price outcomes, counted (skipped ones left out). */
+export function countPrices(plans: ReadonlyArray<Pick<MenuImportIngredientPlan, 'price' | 'sheetDiffers'>>): MenuImportPriceSummary {
+  const out: MenuImportPriceSummary = {
+    keptFromDeliveries: 0,
+    keptTyped: 0,
+    keptOther: 0,
+    madeHere: 0,
+    batchKept: 0,
+    newFromSheet: 0,
+    unpriced: 0,
+    sheetDiffers: 0,
+  };
+  for (const p of plans) {
+    switch (p.price) {
+      case 'kept_delivery':
+        out.keptFromDeliveries++;
+        break;
+      case 'kept_typed':
+        out.keptTyped++;
+        break;
+      case 'kept':
+      case 'kept_free':
+        out.keptOther++;
+        break;
+      case 'made_here':
+        out.madeHere++;
+        break;
+      case 'batch_kept':
+        out.batchKept++;
+        break;
+      case 'new_from_sheet':
+        out.newFromSheet++;
+        break;
+      case 'unpriced':
+        out.unpriced++;
+        break;
+      default:
+        break;
+    }
+    if (p.sheetDiffers) out.sheetDiffers++;
+  }
+  return out;
+}
+
+/**
+ * The preview's ONE line about prices (costing spec §5, Phase 6): what the
+ * till keeps, where from, what the sheet fills in and what is still
+ * unpriced. "Prices: 12 kept from deliveries, 3 new from the sheet, 0 unpriced."
+ */
+export function priceSummaryLine(p: MenuImportPriceSummary): string {
+  const parts: string[] = [];
+  if (p.keptFromDeliveries > 0) parts.push(`${p.keptFromDeliveries} kept from deliveries`);
+  if (p.keptTyped > 0) parts.push(`${p.keptTyped} kept as typed`);
+  if (p.keptOther > 0) parts.push(`${p.keptOther} kept as they are`);
+  if (p.madeHere > 0) parts.push(`${p.madeHere} worked out from their batch recipe`);
+  if (p.batchKept > 0) {
+    parts.push(
+      p.batchKept === 1
+        ? '1 batch keeps its price (something in it has no price)'
+        : `${p.batchKept} batches keep their price (something in them has no price)`,
+    );
+  }
+  parts.push(`${p.newFromSheet} new from the sheet`);
+  parts.push(`${p.unpriced} unpriced`);
+  return `Prices: ${parts.join(', ')}.`;
+}
+
 /** What a costing works out to per base unit, in paisa (a pack wins over a typed cost). */
 function unitCost(c: Costing): number {
   return c.packSize && c.packPriceCents !== null ? costPerUnitFromPack(c.packPriceCents, c.packSize) : c.costPerUnitCents;
 }
 
 /**
- * The price kind an imported ingredient ends up with (costing spec D4/§8
- * until Phase 6): Rs 0 in the file is 'unset' — never overwriting a 'free'
- * the shop chose — and a price is 'estimate' when the file says it is a
- * guess, else 'set'.
+ * The price kind the file gives an ingredient (costing spec D4 / section 8):
+ * Rs 0 in the file is 'unset' — never overwriting a 'free' the shop chose —
+ * and a price is 'estimate' when the file says it is a guess, else 'set'.
+ * From Phase 6 it only decides a price the sheet gives (a new or unpriced
+ * ingredient) and the sheet's reference.
  */
 export function importedPriceKind(filePriced: boolean, isEstimate: boolean, previous: PriceKind | null): PriceKind {
   if (!filePriced) return previous === 'free' ? 'free' : 'unset';
   return isEstimate ? 'estimate' : 'set';
 }
-
-const PRICE_KIND_WORDS: Record<PriceKind, string> = {
-  set: 'price known',
-  estimate: 'price is a guess',
-  free: 'costs nothing',
-  unset: 'no price yet',
-};
 
 export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuImportPlan {
   const warnings: string[] = [];
@@ -286,6 +488,8 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
     batchRecipesSet: 0,
     skipped: 0,
     removedItems: 0,
+    prices: countPrices([]),
+    priceLine: '',
   };
 
   // ---- Categories ----------------------------------------------------------
@@ -338,6 +542,12 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
   });
 
   // ---- Ingredients ---------------------------------------------------------
+  // Prices (costing spec Phase 6, section 8): once costing has started the
+  // TILL owns ingredient prices. The sheet prices a NEW ingredient, or one
+  // with no price yet ('unset'); every other keeps the till's price (from a
+  // delivery, typed, from an earlier sheet, or 'free'). A batch made here is
+  // costed from its recipe (menu-import-repo decides, once the file's
+  // recipes are in). The sheet's price is ALWAYS kept as the reference.
   const ingredientPlans: MenuImportIngredientPlan[] = [];
   const ingredientOps: MenuImportOps['ingredients'] = [];
   /** file ingredient key → how a recipe line refers to it; absent = skipped */
@@ -347,32 +557,55 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
   const ingredientMatches = matchAll(file.ingredients, live.ingredients);
   /** file ingredient key → the existing row it matched (for batch comparison) */
   const matchedIngredient = new Map<string, MenuSnapshot['ingredients'][number]>();
+  /** What settles each ingredient's price outcome once the file's batch recipes are known (see "Prices" below). */
+  const priceFacts: PriceFact[] = [];
   file.ingredients.forEach((ing, i) => {
     const key = ing.name.toLowerCase();
     const m = ingredientMatches[i]!;
     if (m.row) matchedIngredient.set(key, m.row);
     const filePriced = hasPrice(ing);
+    const sheet = sheetPriceOf(ing);
+    const sheetUnitCostMc = unitCostMc({ size: sheet.packSize, priceCents: sheet.packPriceCents });
     const base = {
       name: ing.name,
       unit: ing.unit,
       costPerUnitCents: unitCost(ing),
       packSize: ing.packSize,
       packPriceCents: ing.packPriceCents,
-      priceKind: importedPriceKind(filePriced, ing.priceIsEstimate, m.row?.priceKind ?? null),
     };
     if (!m.row && m.ambiguous.length > 0) {
       ingredientPlans.push({
         ...base,
+        priceKind: sheet.priceKind,
         action: 'skip',
         existingName: null,
         changes: [],
         reason: `More than one ingredient here could be this one: ${m.ambiguous.map((r) => r.name).join(', ')}`,
+        price: null,
+        tillPrice: null,
+        sheetUnitCostMc,
+        sheetDiffers: false,
       });
       summary.skipped++;
       return;
     }
     if (!m.row) {
-      ingredientPlans.push({ ...base, action: 'create', existingName: null, changes: [], reason: null });
+      // Settled below, once the file's batch recipes are known: a batch whose recipe prices it is 'made_here'.
+      const outcome: MenuImportPriceOutcome = filePriced ? 'new_from_sheet' : 'unpriced';
+      const plan: MenuImportIngredientPlan = {
+        ...base,
+        priceKind: sheet.priceKind,
+        action: 'create',
+        existingName: null,
+        changes: [],
+        reason: null,
+        price: outcome,
+        tillPrice: null,
+        sheetUnitCostMc,
+        sheetDiffers: false,
+      };
+      ingredientPlans.push(plan);
+      priceFacts.push({ plan, fileKey: key, existingId: null, kindAfter: sheet.priceKind, own: outcome, sheetDiffersIfKept: false, sheetChange: null });
       ingredientOps.push({
         fileKey: key,
         existingId: null,
@@ -382,11 +615,12 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
           costPerUnitCents: unitCost(ing),
           packSize: ing.packSize,
           packPriceCents: ing.packPriceCents,
-          priceKind: base.priceKind,
+          priceKind: sheet.priceKind,
           notes: ing.notes,
         },
         update: null,
         convert: false,
+        sheet,
       });
       ingredientRef.set(key, { fileKey: key });
       summary.newIngredients++;
@@ -402,10 +636,15 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       if (!conv || conv.unit !== normalizeUnit(ing.unit)) {
         ingredientPlans.push({
           ...base,
+          priceKind: row.priceKind ?? 'set',
           action: 'skip',
           existingName: row.name,
           changes: [],
           reason: `Counted in "${row.unit}" here but "${ing.unit}" in the file — change one to match, then import again`,
+          price: null,
+          tillPrice: null,
+          sheetUnitCostMc,
+          sheetDiffers: false,
         });
         summary.skipped++;
         return;
@@ -428,47 +667,87 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       changes.push(`counted in ${row.unit} → ${conv.unit} (stock and recipes ×${conv.factor})`);
     }
     const update: NonNullable<MenuImportOps['ingredients'][number]['update']> = {};
-    const packGiven = ing.packSize !== null && ing.packPriceCents !== null;
-    if (packGiven && (current.packSize !== ing.packSize || current.packPriceCents !== ing.packPriceCents)) {
-      update.packSize = ing.packSize;
-      update.packPriceCents = ing.packPriceCents;
-      changes.push(`bought as ${formatPack({ unit: current.unit, packSize: ing.packSize, packPriceCents: ing.packPriceCents })}`);
-    }
-    if (!packGiven && current.costPerUnitCents !== ing.costPerUnitCents) {
-      update.costPerUnitCents = ing.costPerUnitCents;
-      if (current.packSize !== null) {
+    const kindNow = row.priceKind ?? 'set';
+    const tillUnitCostMc = kindNow === 'unset' ? null : unitCostMc(effectivePack(current));
+    // The sheet's price, written only where the till has none (a batch made
+    // here takes it only if its recipe can't price it: menu-import-repo).
+    const takeSheet = kindNow === 'unset' && filePriced;
+    if (takeSheet) {
+      const packGiven = ing.packSize !== null && ing.packPriceCents !== null;
+      if (packGiven) {
+        update.packSize = ing.packSize;
+        update.packPriceCents = ing.packPriceCents;
+      } else {
+        update.costPerUnitCents = ing.costPerUnitCents;
         // A typed cost only counts once the pack that decides the cost is cleared.
-        update.packSize = null;
-        update.packPriceCents = null;
+        if (current.packSize !== null) {
+          update.packSize = null;
+          update.packPriceCents = null;
+        }
       }
+      update.priceKind = sheet.priceKind;
     }
-    if (unitCost(current) !== unitCost(ing)) {
-      // A batch made here keeps the price worked out from its recipe while
-      // everything in it has a price; the sheet's is then only a reference
-      // (costing spec D4; menu-import-repo applyMenuImport).
-      const madeHere = ing.batch !== null || (live.batchLines.get(row.id)?.length ?? 0) > 0;
-      changes.push(
-        `cost ${formatUnitCost(current)} → ${formatUnitCost({ ...ing, unit: current.unit, costPerUnitCents: unitCost(ing) })}` +
-          (madeHere ? " (made here: only if something in it has no price; otherwise it's worked out from its batch recipe)" : ''),
-      );
+    // Its outcome as a bought-in ingredient; a batch whose recipe prices it
+    // becomes 'made_here' below, once the file's batch recipes are known.
+    const outcome: MenuImportPriceOutcome =
+      kindNow === 'unset'
+        ? filePriced
+          ? 'new_from_sheet'
+          : 'unpriced'
+        : kindNow === 'free'
+          ? 'kept_free'
+          : keptOutcome(row.priceSource ?? null);
+    const sheetText = unitPriceText(sheetUnitCostMc, current.unit);
+    let sheetChange: PriceFact['sheetChange'] = null;
+    if (takeSheet) {
+      sheetChange = { index: changes.length, sheetText };
+      changes.push(sheetTakenText(sheetText, false));
     }
+    // The sheet's figure is kept as the reference either way (Inventory shows it beside the till's).
+    const sheetBefore = row.sheet ?? null;
+    const sheetNew =
+      !sheetBefore ||
+      sheetBefore.packSize !== sheet.packSize ||
+      sheetBefore.packPriceCents !== sheet.packPriceCents ||
+      sheetBefore.priceKind !== sheet.priceKind;
+    // A converted ingredient's reference was in the old unit: always noted again.
+    const noteSheet = (sheetNew || convert) && !takeSheet;
+    if (noteSheet) changes.push(filePriced ? `the sheet says ${sheetText} (kept for reference)` : "the sheet has no price for it (kept for reference)");
     if (!row.notes?.trim() && ing.notes?.trim()) {
       changes.push('notes added');
       update.notes = ing.notes;
     }
-    const kindNow = row.priceKind ?? 'set';
-    if (base.priceKind !== kindNow) {
-      update.priceKind = base.priceKind;
-      changes.push(`${PRICE_KIND_WORDS[kindNow]} → ${PRICE_KIND_WORDS[base.priceKind]}`);
-    }
-    const changed = convert || Object.keys(update).length > 0;
-    ingredientPlans.push({ ...base, action: changed ? 'update' : 'same', existingName: row.name, changes, reason: null });
+    const sheetDiffersIfKept = filePriced && tillUnitCostMc !== null && tillUnitCostMc !== sheetUnitCostMc;
+    const changed = convert || Object.keys(update).length > 0 || noteSheet;
+    const plan: MenuImportIngredientPlan = {
+      ...base,
+      priceKind: takeSheet ? sheet.priceKind : kindNow,
+      action: changed ? 'update' : 'same',
+      existingName: row.name,
+      changes,
+      reason: null,
+      price: outcome,
+      tillPrice: tillUnitCostMc === null ? null : { unitCostMc: tillUnitCostMc, priceKind: kindNow, source: row.priceSource ?? null },
+      sheetUnitCostMc,
+      sheetDiffers: sheetDiffersIfKept && KEEPS_TILL_PRICE.has(outcome),
+    };
+    ingredientPlans.push(plan);
+    priceFacts.push({
+      plan,
+      fileKey: key,
+      existingId: row.id,
+      kindAfter: takeSheet ? sheet.priceKind : kindNow,
+      own: outcome,
+      sheetDiffersIfKept,
+      sheetChange,
+    });
     ingredientOps.push({
       fileKey: key,
       existingId: row.id,
       create: null,
       update: Object.keys(update).length > 0 ? update : null,
       convert,
+      sheet,
     });
     ingredientRef.set(key, { existingId: row.id });
     if (changed) summary.updatedIngredients++;
@@ -520,6 +799,11 @@ export function planMenuImport(file: MenuImportFile, live: MenuSnapshot): MenuIm
       summary.updatedIngredients++;
     }
   });
+
+  // ---- Prices: the batches made here ----------------------------------------
+  settleBatchPrices(priceFacts, batchOps, live);
+  summary.prices = countPrices(ingredientPlans);
+  summary.priceLine = priceSummaryLine(summary.prices);
 
   // ---- Choice groups -------------------------------------------------------
   const choicePlans: MenuImportChoiceGroupPlan[] = [];

@@ -141,6 +141,29 @@ export interface Ingredient {
    * Only on the Ingredients list, like `latestPrice`.
    */
   priceFromRecipe?: boolean;
+  /**
+   * What the costing sheet (the menu file) says it costs — a reference only,
+   * never used for costing unless "Use the sheet's price" is tapped (costing
+   * spec Phase 6, D4). Only on the Ingredients list, like `latestPrice`;
+   * null when no menu file has named it.
+   */
+  sheetPrice?: SheetPrice | null;
+}
+
+/**
+ * The costing sheet's price for an ingredient, exactly as the menu file gave
+ * it (ingredients.sheet_*, migration 0036): `packSize` base units for
+ * `packPriceCents` paisa ((1, its cost per unit) when the file gave no pack).
+ */
+export interface SheetPrice {
+  packSize: number;
+  packPriceCents: number;
+  /** 'set', 'estimate' (the sheet says it is a guess) or 'unset' (the sheet says Rs 0). */
+  priceKind: PriceKind;
+  /** One base unit, millicents. */
+  unitCostMc: number;
+  /** When this figure came in (the import that brought it). */
+  at: string;
 }
 
 export interface Recipe {

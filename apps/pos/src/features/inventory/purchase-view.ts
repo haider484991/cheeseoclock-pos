@@ -41,15 +41,27 @@ export function currentPriceOf(i: Pick<Ingredient, 'costPerUnitCents' | 'packSiz
   return { pack: effectivePack(i), kind: i.priceKind, madeHere: i.priceFromRecipe === true };
 }
 
-/** D1's guard for one line of a bill (null until the line can be read). */
+/**
+ * D1's guard for one line of a bill (null until the line can be read).
+ * `thresholdBps` is the owner's price alert threshold (costing Phase 6: the
+ * same band the main process uses); omitted, D1's default of 10%.
+ */
 export function lineCheck(
   i: Pick<Ingredient, 'unit' | 'costPerUnitCents' | 'packSize' | 'packPriceCents' | 'priceKind' | 'priceFromRecipe'>,
   qty: number | null,
   billCents: number | null,
   kind: PurchaseKind,
+  thresholdBps?: number,
 ): PriceCheck | null {
   if (qty === null || qty < 1 || billCents === null || billCents < 0) return null;
-  return checkBillPrice({ kind, current: currentPriceOf(i), usualSize: usualPackSize(i), qty, billCents });
+  return checkBillPrice({
+    kind,
+    current: currentPriceOf(i),
+    usualSize: usualPackSize(i),
+    qty,
+    billCents,
+    ...(thresholdBps !== undefined ? { thresholdBps } : {}),
+  });
 }
 
 const pct = (bps: number) => formatBps(Math.abs(bps));

@@ -49,3 +49,23 @@ export function useItemCostSheet(menuItemId: string) {
     staleTime: 0,
   });
 }
+
+/** Costing → Alerts (Phase 6): not seen yet first; the tab's badge counts the unseen. */
+export function useCostAlerts(enabled = true) {
+  return useQuery({
+    queryKey: [...COSTING_KEY, 'alerts'],
+    queryFn: () => ipc.costing.alerts(),
+    enabled,
+    staleTime: 0,
+  });
+}
+
+/** The alert thresholds and key ingredients; the purchase screens read the price-jump band too (D1). */
+export function useCostAlertSettings(enabled = true) {
+  return useQuery({
+    queryKey: [...COSTING_KEY, 'alertSettings'],
+    queryFn: () => ipc.costing.getAlertSettings(),
+    enabled,
+    staleTime: 0,
+  });
+}

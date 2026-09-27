@@ -16,11 +16,13 @@ import {
   stockStatus,
   stockValueCents,
   thousandSize,
+  effectivePack,
+  unitCostMc,
 } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { Ingredient, IngredientCategory, PriceKind, StockMovementReason, WasteReason } from '@cheeseoclock/shared-types';
-import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat, Tag, ShoppingBasket } from 'lucide-react';
+import { Plus, Edit, Trash2, X, AlertTriangle, Scale, History, PackagePlus, ChefHat, Tag, ShoppingBasket, FileDown } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
   FilterChips,
@@ -46,6 +48,10 @@ import { PriceFields, SetPriceDialog } from './SetPriceDialog';
 import { ChangeMark, PriceHistoryDrawer, SourceChip } from './PriceHistoryDrawer';
 import { initialPriceEntry, perChoices, readPriceEntry, tagView, type PriceEntry } from './price-view';
 import { RecordPurchaseDialog } from './RecordPurchaseDialog';
+import { COSTING_FILE_NOTE, SHEET_SAYS_NOTE, costingFileCsv, costingFileName } from './costing-file';
+import { sheetPriceQuestion, tillPriceIsFromBill } from './sheet-price';
+import { downloadText } from '../reports/exporters';
+import { formatUnitPrice } from '../costing/costingFormat';
 
 const INGREDIENTS_KEY = ['inventory', 'ingredients', 'all'] as const;
 
@@ -173,6 +179,18 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
       toast({ title: 'Could not move it', description: e instanceof IpcError ? e.message : String(e), variant: 'error' }),
   });
 
+  // "Use the sheet's price" (costing spec Phase 6): one ingredient at a time, never all at once.
+  const sheetMut = useMutation({
+    mutationFn: (id: string) => ipc.inventory.useSheetPrice(id),
+    onSuccess: (i) => {
+      toast({ title: `${i.name} now has the sheet's price`, description: 'Saved as a typed price in its price history.', variant: 'success' });
+      void qc.invalidateQueries({ queryKey: ['inventory'] });
+      void qc.invalidateQueries({ queryKey: ['costing'] });
+    },
+    onError: (e) =>
+      toast({ title: "Could not use the sheet's price", description: e instanceof IpcError ? e.message : String(e), variant: 'error' }),
+  });
+
   const sortId = INGREDIENT_SORTS.find((s) => s.sort.key === sort.key && s.sort.dir === sort.dir)?.id ?? '';
   const filtersOn = list.query.trim() !== '' || category !== 'all' || stock !== 'all';
 
@@ -204,9 +222,23 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
             </p>
           )}
         </div>
-        <Button variant="primary" size="sm" onClick={() => setEditing('new')}>
-          <Plus className="h-4 w-4" /> Add ingredient
-        </Button>
+        <div className="flex flex-wrap items-start gap-2">
+          {/* The handoff is said in words on the screen, not in a tooltip: a touch till shows no tooltips (costing spec section 8). */}
+          <div className="flex max-w-[15rem] flex-col items-end gap-0.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!q.data}
+              onClick={() => downloadText(costingFileName(new Date()), costingFileCsv(all))}
+            >
+              <FileDown className="h-4 w-4" /> Prices for the costing file
+            </Button>
+            <span className="text-right text-[11px] leading-snug text-stone-500">{COSTING_FILE_NOTE}</span>
+          </div>
+          <Button variant="primary" size="sm" onClick={() => setEditing('new')}>
+            <Plus className="h-4 w-4" /> Add ingredient
+          </Button>
+        </div>
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -243,6 +275,7 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
         value={category}
         onChange={setCategory}
       />
+      {all.some((i) => i.sheetPrice) && <p className="mb-2 text-xs text-stone-500">{SHEET_SAYS_NOTE}</p>}
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -258,6 +291,7 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
                 onClick={() => setSort(nextSort(sort, 'stock'))}
               />
               <th className="pb-2 text-right">Price</th>
+              <th className="pb-2 pl-3 text-right">Sheet says</th>
               <SortHeader
                 label="Value"
                 align="right"
@@ -316,6 +350,20 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
                     </button>
                   )}
                 </td>
+                <td className="py-2.5 pl-3 text-right">
+                  <SheetCell
+                    ingredient={i}
+                    busy={sheetMut.isPending}
+                    onUse={() => {
+                      // Says what it replaces and where that came from (a bill's price is what the import protects).
+                      const question = sheetPriceQuestion(i);
+                      if (!question) return;
+                      void askConfirm(question).then((ok) => {
+                        if (ok) sheetMut.mutate(i.id);
+                      });
+                    }}
+                  />
+                </td>
                 <td className="whitespace-nowrap py-2.5 pl-3 text-right font-mono text-xs">{formatCents(stockValueCents(i))}</td>
                 <td className="py-2.5 pl-4 text-stone-500">{supplierName(i.defaultSupplierId) ?? '—'}</td>
                 <td className="py-2 pl-2 text-right">
@@ -351,7 +399,7 @@ export function IngredientsTab({ onShowHistory }: { onShowHistory?: (ingredient:
             ))}
             {list.total === 0 && (
               <tr>
-                <td colSpan={7} className="py-10 text-center text-stone-500">
+                <td colSpan={8} className="py-10 text-center text-stone-500">
                   {q.isLoading ? (
                     'Loading…'
                   ) : all.length === 0 ? (
@@ -510,6 +558,47 @@ function PriceCell({ ingredient: i, onHistory }: { ingredient: Ingredient; onHis
         </span>
       )}
     </button>
+  );
+}
+
+/**
+ * What the costing sheet says it costs (costing spec Phase 6): a reference
+ * beside the till's price, with "Use it" when they differ. A batch costed
+ * from its recipe keeps the recipe's price (the sheet's is only a reference).
+ */
+export function SheetCell({ ingredient: i, busy, onUse }: { ingredient: Ingredient; busy: boolean; onUse: () => void }) {
+  const sheet = i.sheetPrice ?? null;
+  if (!sheet) return <span className="text-xs text-stone-400">—</span>;
+  if (sheet.priceKind === 'unset') return <span className="whitespace-nowrap text-xs text-stone-500">no price</span>;
+  const till = i.priceKind === 'unset' ? null : i.priceKind === 'free' ? 0 : unitCostMc(effectivePack(i));
+  const same = till === sheet.unitCostMc && (i.priceKind === sheet.priceKind || i.priceKind === 'set');
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      <span className={cn('whitespace-nowrap font-mono text-xs', !same && 'text-amber-800 dark:text-amber-300')}>
+        {formatUnitPrice(sheet.unitCostMc, i.unit)}
+        {sheet.priceKind === 'estimate' && <span className="ml-1 font-sans text-[11px] text-stone-500">guess</span>}
+      </span>
+      {same ? (
+        <span className="text-[11px] text-stone-500">same</span>
+      ) : i.priceFromRecipe ? (
+        <span className="text-[11px] text-stone-500">reference only (made here)</span>
+      ) : (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onUse}
+          className={cn(
+            'rounded px-1.5 py-0.5 text-[11px] font-semibold disabled:opacity-50',
+            // The till's price is from a bill (what was really paid): the sheet's is offered quietly, never pushed.
+            tillPriceIsFromBill(i)
+              ? 'border border-stone-300 text-stone-600 hover:bg-stone-50 dark:border-stone-700 dark:text-stone-300 dark:hover:bg-stone-800'
+              : 'bg-violet-100 text-violet-900 hover:bg-violet-200 dark:bg-violet-950 dark:text-violet-200',
+          )}
+        >
+          Use the sheet&apos;s price
+        </button>
+      )}
+    </div>
   );
 }
 

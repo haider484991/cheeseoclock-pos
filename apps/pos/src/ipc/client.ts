@@ -323,6 +323,8 @@ export const ipc = {
     /** An ingredient's price history, newest first. */
     priceHistory: (ingredientId: string, limit?: number) =>
       unwrap(window.api.inventory.priceHistory(limit === undefined ? { ingredientId } : { ingredientId, limit })),
+    /** "Use the sheet's price" (costing Phase 6): a typed line in its price history. */
+    useSheetPrice: (ingredientId: string) => unwrap(window.api.inventory.useSheetPrice({ ingredientId })),
     getRecipe: (menuItemId: string) =>
       unwrap(window.api.inventory.getRecipe({ menuItemId })),
     setRecipe: (input: IpcRequest<'inventory:setRecipe'>) =>
@@ -375,6 +377,13 @@ export const ipc = {
     setTargets: (input: IpcRequest<'costing:setTargets'>) => unwrap(window.api.costing.setTargets(input)),
     recipeCost: (input: IpcRequest<'costing:recipeCost'>) => unwrap(window.api.costing.recipeCost(input)),
     batchCalc: (input: IpcRequest<'costing:batchCalc'>) => unwrap(window.api.costing.batchCalc(input)),
+    /** Costing → Alerts (Phase 6): not seen yet first. */
+    alerts: () => unwrap(window.api.costing.alerts()),
+    /** "Seen": answers with the list as it now stands. */
+    markAlertsSeen: (ids: string[]) => unwrap(window.api.costing.markAlertsSeen({ ids })),
+    getAlertSettings: () => unwrap(window.api.costing.getAlertSettings()),
+    /** The owner's alert thresholds (settings.manage). */
+    setAlertSettings: (input: IpcRequest<'costing:setAlertSettings'>) => unwrap(window.api.costing.setAlertSettings(input)),
   },
 };
 

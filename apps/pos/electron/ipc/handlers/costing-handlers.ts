@@ -5,25 +5,33 @@ import { COST_CAPABILITY, err, ok } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import {
   batchCalcInputSchema,
+  markCostAlertsSeenInputSchema,
   recipeCostInputSchema,
+  setCostAlertSettingsInputSchema,
   setCostingTargetsInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { requireCapability, REFUSED } from '../guards.js';
 import {
   getBatchCalc,
+  getCostAlerts,
+  getCostAlertSettings,
   getCostingTargets,
   getItemCostSheet,
   getMenuCosts,
   getMissingCosts,
   previewRecipeCost,
+  saveCostAlertSettings,
   saveCostingTargets,
 } from '../../services/costing-service.js';
+import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/cost-alert-repo.js';
 
 /**
  * The Costing page (costing spec Phase 1). Costs are the owner's business
  * figures: every channel here is refused in the main process to a login
  * without COST_CAPABILITY (a cashier), not only hidden on screen. Changing
- * the food-cost targets is the owner's (settings.manage).
+ * the food-cost targets and the alert thresholds is the owner's
+ * (settings.manage); managers read them. Price alerts (Phase 6): managers
+ * and the owner read them and mark them seen.
  */
 function requireCosts(): AuthenticatedUser {
   return requireCapability(COST_CAPABILITY, REFUSED.costs);
@@ -83,5 +91,35 @@ export function registerCostingHandlers(ctx: HandlerContext): void {
     const parsed = batchCalcInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
     return ok(getBatchCalc(ctx.db, parsed.data.ingredientId, parsed.data.amount));
+  });
+
+  // ---- Price alerts (costing spec Phase 6) ----
+  defineHandler('costing:alerts', ctx, () => {
+    requireCosts();
+    // A Monday digest not written yet on this till is written now (it is
+    // also written at start and every hour; the till's own work, no login's).
+    runWeeklyDigestIfDue(ctx.db, { userId: null, deviceId: ctx.deviceId });
+    return ok(getCostAlerts(ctx.db));
+  });
+
+  defineHandler('costing:markAlertsSeen', ctx, (_ctx, payload) => {
+    const s = requireCosts();
+    const parsed = markCostAlertsSeenInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    markCostAlertsSeen(ctx.db, parsed.data.ids, { userId: s.id, deviceId: ctx.deviceId });
+    return ok(getCostAlerts(ctx.db));
+  });
+
+  defineHandler('costing:getAlertSettings', ctx, () => {
+    requireCosts();
+    return ok(getCostAlertSettings(ctx.db));
+  });
+
+  defineHandler('costing:setAlertSettings', ctx, (_ctx, payload) => {
+    requireCosts();
+    const s = requireCapability('settings.manage', 'Only the owner can change the price alerts.');
+    const parsed = setCostAlertSettingsInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(saveCostAlertSettings(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
   });
 }

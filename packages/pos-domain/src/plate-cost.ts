@@ -429,3 +429,58 @@ export function priceToHitTarget(typicalCostMc: number, targetBps: number, group
   const steps = (neededNum + den - 1n) / den;
   return Number(steps * BigInt(stepCents));
 }
+
+// ------------------------------------------------ price alerts (Phase 6) --
+
+/**
+ * What a change in a dish's cost comes to per week (costing spec Phase 6,
+ * 4.9): a week's units × (cost after − cost before), where a week's units
+ * are a quarter of the last 28 days'. Above 0 it costs the shop, below 0 it
+ * saves. One rounding (half-up on the magnitude, so a rise and the same
+ * fall are the same size), in paisa.
+ */
+export function weeklyImpactCents(unitsLast28: number, costBeforeMc: number, costAfterMc: number): number {
+  if (!(unitsLast28 > 0)) return 0;
+  const num = BigInt(unitsLast28) * BigInt(costAfterMc - costBeforeMc);
+  return divRound(num, 4_000n);
+}
+
+/** A food-cost band that means something to the owner: on target, close, over. */
+export type FoodCostBand = 'green' | 'amber' | 'red';
+
+/** How far back under a line a dish must come before the weekly digest says it moved back (costing spec Phase 6): 1 point. */
+export const FOOD_COST_HYSTERESIS_BPS = 100;
+
+const BAND_RANK: Record<FoodCostBand, number> = { green: 0, amber: 1, red: 2 };
+
+/**
+ * The band a dish is in for the weekly digest, with a margin so a dish
+ * sitting on a line does not flip every week (costing spec Phase 6: "1-point
+ * hysteresis"). With T the target and A the "close" width (bps):
+ *  - with no band before, the plain band (green ≤ T < amber ≤ T+A < red);
+ *  - it moves UP as soon as it crosses a line, exactly as Menu costs colours
+ *    it (amber above T, red above T+A), so a dish Menu costs shows red is
+ *    never missing from the digest;
+ *  - it only moves DOWN when it is at least 1 point back under the line it
+ *    crossed (amber at or under T+A−1, green at or under T−1), so a dish
+ *    wobbling around a line is listed once, not every week;
+ *  - otherwise it stays where it was.
+ * Compared exactly (cost × 10,000 against bps × price), never on a rounded %.
+ */
+export function bandWithHysteresis(
+  prev: FoodCostBand | null,
+  pc: { costMc: number; priceMc: number },
+  t: { bps: number; amberBps: number },
+  hysteresisBps = FOOD_COST_HYSTERESIS_BPS,
+): FoodCostBand {
+  const cost = BigInt(pc.costMc) * 10_000n;
+  const price = BigInt(pc.priceMc);
+  const above = (bps: number) => cost > BigInt(bps) * price;
+  const plain: FoodCostBand = !above(t.bps) ? 'green' : !above(t.bps + t.amberBps) ? 'amber' : 'red';
+  if (prev === null) return plain;
+  if (BAND_RANK[plain] > BAND_RANK[prev]) return plain;
+  const h = hysteresisBps;
+  const down: FoodCostBand = !above(t.bps - h) ? 'green' : !above(t.bps + t.amberBps - h) ? 'amber' : 'red';
+  if (BAND_RANK[down] < BAND_RANK[prev]) return down;
+  return prev;
+}

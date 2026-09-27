@@ -9,6 +9,9 @@ import { describe, expect, it } from 'vitest';
 import { PriceFields, WorkedOutFromRecipe } from './SetPriceDialog';
 import { ChangeMark, SourceChip } from './PriceHistoryDrawer';
 import { PriceLineChart } from '../reports/charts';
+import type { Ingredient, UUID } from '@cheeseoclock/shared-types';
+import { SheetCell } from './IngredientsTab';
+import { COSTING_FILE_NOTE, SHEET_SAYS_NOTE } from './costing-file';
 
 const noop = () => {};
 
@@ -79,5 +82,60 @@ describe('where a price came from, and its change', () => {
     expect((html.match(/<circle/g) ?? []).length).toBe(2);
     expect(html).toContain('Rs 1,320 / kg');
     expect(html).toContain('today');
+  });
+});
+
+describe('"Sheet says" (costing spec Phase 6)', () => {
+  const ing = (p: Partial<Ingredient> = {}): Ingredient => ({
+    id: 'id-cheese' as UUID,
+    name: 'Test cheese',
+    category: 'other',
+    categoryAuto: true,
+    unit: 'g',
+    currentQty: 0,
+    lowThreshold: 0,
+    costPerUnitCents: 130,
+    packSize: 2000,
+    packPriceCents: 260_000,
+    priceKind: 'set',
+    batchYield: null,
+    batchMethod: null,
+    defaultSupplierId: null,
+    sku: null,
+    notes: null,
+    isActive: true,
+    latestPrice: {
+      source: 'delivery',
+      effectiveAt: '2026-09-20T08:00:00.000Z',
+      unit: 'g',
+      packSize: 2000,
+      packPriceCents: 260_000,
+      priceKind: 'set',
+      unitCostMc: 130_000,
+      prevUnitCostMc: 120_000,
+    },
+    priceFromRecipe: false,
+    sheetPrice: { packSize: 1000, packPriceCents: 110_000, priceKind: 'set', unitCostMc: 110_000, at: '2026-09-21T08:00:00.000Z' },
+    ...p,
+  });
+
+  it("offers the sheet's price quietly beside a bill's price, plainly beside a typed one; a recipe's batch says it in words", () => {
+    const bill = renderToStaticMarkup(<SheetCell ingredient={ing()} busy={false} onUse={noop} />);
+    expect(bill).toContain('Rs 1,100 / kg');
+    expect(bill).toContain('Use the sheet&#x27;s price');
+    expect(bill).toContain('border-stone-300');
+    expect(bill).not.toContain('bg-violet-100');
+    const typed = renderToStaticMarkup(<SheetCell ingredient={ing({ latestPrice: { ...ing().latestPrice!, source: 'manual' } })} busy={false} onUse={noop} />);
+    expect(typed).toContain('bg-violet-100');
+    const batch = renderToStaticMarkup(<SheetCell ingredient={ing({ priceFromRecipe: true })} busy={false} onUse={noop} />);
+    expect(batch).toContain('reference only (made here)');
+    expect(batch).not.toContain('<button');
+    expect(batch).not.toContain('title=');
+  });
+
+  it('the handoff and what the column means are words on the screen, not tooltips', () => {
+    expect(COSTING_FILE_NOTE).toMatch(/whoever keeps the costing workbook/);
+    expect(COSTING_FILE_NOTE).toMatch(/nothing to run/);
+    expect(SHEET_SAYS_NOTE).toMatch(/Only a reference/);
   });
 });

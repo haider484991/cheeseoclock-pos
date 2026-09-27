@@ -18,8 +18,8 @@ import {
   useSessionState,
   type ChipOption,
 } from '../../components/list';
-import { COSTING_KEY } from '../costing/costingQueries';
-import { parseRupees } from '../costing/costingFormat';
+import { COSTING_KEY, useCostAlertSettings } from '../costing/costingQueries';
+import { formatBps, parseRupees } from '../costing/costingFormat';
 import { IngredientSelect } from './IngredientSelect';
 import { suggestReorderQty } from './ingredient-list';
 import { initialPriceEntry, perChoices, type PricePer } from './price-view';
@@ -699,6 +699,8 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
 
   const po = q.data;
   const ingOf = (id: string) => ingQ.data?.find((x) => x.id === id);
+  // D1's band is the owner's price alert threshold (costing Phase 6), as the main process reads it.
+  const guardBps = useCostAlertSettings().data?.jumpBps;
 
   const lines = (po?.items ?? []).map((item) => {
     const ing = ingOf(item.ingredientId);
@@ -708,7 +710,7 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
     const qty = read.qty;
     const billText = (bills[item.id] ?? '').trim();
     const bill = billText !== '' ? readBill(billText) : qty !== null ? orderedValueCents(qty, item) : null;
-    const check = ing && qty !== null && bill !== null ? lineCheck(ing, qty, bill, 'order') : null;
+    const check = ing && qty !== null && bill !== null ? lineCheck(ing, qty, bill, 'order', guardBps) : null;
     const words = check && ing && qty !== null && bill !== null ? lineWords(check, qty, bill, ing.unit) : null;
     const uses = check ? (check.ask ? (answers[item.id] ?? check.adoptByDefault) : check.adoptByDefault) : false;
     return { item, ing, qtyText, read, qty, billText, bill, check, words, uses };
@@ -963,8 +965,8 @@ function OpenPoDialog({ poId, onClose }: { poId: string; onClose: () => void }) 
             </table>
             {canReceive && (
               <p className="mt-3 text-xs text-stone-500">
-                The bill box starts at the ordered price for what came. A price more than 10% away from the usual one asks
-                before it is used.
+                The bill box starts at the ordered price for what came. A price more than {formatBps(guardBps ?? 1_000)} away
+                from the usual one asks before it is used.
               </p>
             )}
           </div>

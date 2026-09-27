@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { menuImportFileSchema, setBatchRecipeInputSchema, type MenuImportFile } from '@cheeseoclock/shared-schemas';
-import { importedPriceKind, normalizeName, planMenuImport, type MenuSnapshot } from './menu-import-plan.js';
+import {
+  countPrices,
+  importedPriceKind,
+  normalizeName,
+  planMenuImport,
+  priceSummaryLine,
+  sheetPriceOf,
+  type MenuSnapshot,
+} from './menu-import-plan.js';
 
 function file(partial: Partial<Record<'categories' | 'ingredients' | 'items', unknown[]>>): MenuImportFile {
   return menuImportFileSchema.parse({
@@ -154,7 +162,7 @@ describe('planMenuImport', () => {
     expect(plan.ops.ingredients.find((o) => o.existingId === 'dough')).toBeUndefined();
   });
 
-  it('updates cost and fills empty notes, but keeps the shop name and stock', () => {
+  it("keeps the till's price and fills empty notes, but keeps the shop name and stock (costing Phase 6)", () => {
     const f = file({
       ingredients: [{ name: 'Pan Pizza Dough', aliases: ['Dough'], unit: 'grams', costPerUnitCents: 31, notes: 'Batch recipe…' }],
       items: [],
@@ -163,8 +171,10 @@ describe('planMenuImport', () => {
       f,
       shop({ ingredients: [ing('d', 'Dough', 'g', 20, { notes: '' })] }),
     );
-    expect(plan.preview.ingredients[0]).toMatchObject({ action: 'update', existingName: 'Dough' });
-    expect(plan.ops.ingredients[0]?.update).toEqual({ costPerUnitCents: 31, notes: 'Batch recipe…' });
+    expect(plan.preview.ingredients[0]).toMatchObject({ action: 'update', existingName: 'Dough', price: 'kept', sheetDiffers: true });
+    // No price in the update: the till owns it. The sheet's is kept as the reference.
+    expect(plan.ops.ingredients[0]?.update).toEqual({ notes: 'Batch recipe…' });
+    expect(plan.ops.ingredients[0]?.sheet).toEqual({ packSize: 1, packPriceCents: 31, priceKind: 'set' });
     expect(plan.ops.ingredients[0]?.update).not.toHaveProperty('name');
   });
 
@@ -185,28 +195,33 @@ describe('planMenuImport', () => {
     );
     expect(plan.preview.ingredients[0]).toMatchObject({ action: 'update' });
     expect(plan.preview.ingredients[0]?.changes).toContain('counted in kg → g (stock and recipes ×1000)');
-    expect(plan.preview.ingredients[0]?.changes).toContain('bought as 10,000 g for Rs 1,900');
-    // Rs 190 per kg is Rs 0.19 per g — the cost itself does not change.
-    expect(plan.preview.ingredients[0]?.changes.some((c) => c.startsWith('cost'))).toBe(false);
+    // The till keeps its Rs 190 / kg (the same as the sheet's, now per gram); the sheet's is noted.
+    expect(plan.preview.ingredients[0]?.changes).toContain('the sheet says Rs 190 / kg (kept for reference)');
+    expect(plan.preview.ingredients[0]).toMatchObject({ price: 'kept', sheetDiffers: false, tillPrice: { unitCostMc: 19_000 } });
     expect(plan.ops.ingredients[0]).toMatchObject({
       convert: true,
-      update: { packSize: 10000, packPriceCents: 190000 },
+      update: null,
+      sheet: { packSize: 10000, packPriceCents: 190000, priceKind: 'set' },
     });
     // 1 kg per dough ball = 1,000 g: the recipe is already right once converted.
     expect(plan.preview.items[0]).toMatchObject({ action: 'same', recipeChange: 'same' });
   });
 
-  it('shows the per-gram cost change a new pack price brings', () => {
+  it("shows the sheet's price beside the till's, and keeps the till's (costing Phase 6)", () => {
     const f = file({
       ingredients: [{ name: 'Ketchup', unit: 'g', costPerUnitCents: 44, packSize: 5000, packPriceCents: 220000 }],
       items: [],
     });
-    const plan = planMenuImport(f, shop({ ingredients: [ing('k', 'Ketchup', 'Gram', 30, { notes: 'n' })] }));
-    expect(plan.preview.ingredients[0]?.changes).toEqual([
-      'bought as 5,000 Gram for Rs 2,200',
-      'cost Rs 0.30 / Gram → Rs 0.44 / Gram',
-    ]);
+    const plan = planMenuImport(f, shop({ ingredients: [ing('k', 'Ketchup', 'Gram', 30, { notes: 'n', priceSource: 'delivery' })] }));
+    expect(plan.preview.ingredients[0]?.changes).toEqual(['the sheet says Rs 440 / kg (kept for reference)']);
+    expect(plan.preview.ingredients[0]).toMatchObject({
+      price: 'kept_delivery',
+      sheetDiffers: true,
+      sheetUnitCostMc: 44_000,
+      tillPrice: { unitCostMc: 30_000, priceKind: 'set', source: 'delivery' },
+    });
     expect(plan.ops.ingredients[0]?.convert).toBe(false);
+    expect(plan.ops.ingredients[0]?.update).toBeNull();
   });
 
   it('reports no change when price and recipe already match', () => {
@@ -527,11 +542,13 @@ describe('batch recipes', () => {
   });
 
   it('leaves an identical batch recipe alone, and keeps the shop\'s own method', () => {
+    // The sheet's prices are already noted from an earlier import.
+    const sheet = (cents: number) => ({ packSize: 1, packPriceCents: cents, priceKind: 'set' as const });
     const live = shop({
       ingredients: [
-        ing('m', 'Mayonnaise', 'g', 100, { notes: 'n' }),
-        ing('y', 'Yogurt', 'g', 50, { notes: 'n' }),
-        ing('r', 'Ranch Sauce', 'g', 80, { notes: 'n', batchYield: 150, batchMethod: 'Our way' }),
+        ing('m', 'Mayonnaise', 'g', 100, { notes: 'n', sheet: sheet(100) }),
+        ing('y', 'Yogurt', 'g', 50, { notes: 'n', sheet: sheet(50) }),
+        ing('r', 'Ranch Sauce', 'g', 80, { notes: 'n', batchYield: 150, batchMethod: 'Our way', sheet: sheet(80) }),
       ],
       batchLines: new Map([['r', [{ inputId: 'm', qty: 100 }, { inputId: 'y', qty: 50 }]]]),
     });
@@ -660,20 +677,214 @@ describe('price kinds from the menu file (costing, Phase 1)', () => {
     expect(plan.ops.ingredients.map((o) => o.create?.priceKind)).toEqual(['unset', 'unset', 'estimate', 'set']);
   });
 
-  it('a "free" ingredient is never overwritten by the file\'s Rs 0; a price that became a guess says so', () => {
+  it('a "free" ingredient is never overwritten by the file\'s Rs 0; a till price stays as it is, the sheet\'s guess is its reference', () => {
     const plan = planMenuImport(
       file({ ingredients, items: [] }),
       shop({
         ingredients: [
-          ing('salt', 'Test Salt', 'g', 0, { priceKind: 'free' }),
+          ing('salt', 'Test Salt', 'g', 0, { priceKind: 'free', sheet: { packSize: 1, packPriceCents: 0, priceKind: 'unset' } }),
           ing('breading', 'Test Breading', 'g', 15, { priceKind: 'set' }),
         ],
       }),
     );
     const salt = plan.preview.ingredients.find((i) => i.name === 'Test Salt')!;
-    expect(salt).toMatchObject({ action: 'same', priceKind: 'free', changes: [] });
+    expect(salt).toMatchObject({ action: 'same', priceKind: 'free', changes: [], price: 'kept_free' });
+    // Costing Phase 6: the till owns its prices, their kind included; the sheet's "guess" is noted beside it.
     const breading = plan.preview.ingredients.find((i) => i.name === 'Test Breading')!;
-    expect(breading).toMatchObject({ action: 'update', priceKind: 'estimate', changes: ['price known → price is a guess'] });
-    expect(plan.ops.ingredients.find((o) => o.existingId === 'breading')?.update).toEqual({ priceKind: 'estimate' });
+    expect(breading).toMatchObject({ action: 'update', priceKind: 'set', price: 'kept', sheetDiffers: false });
+    expect(plan.ops.ingredients.find((o) => o.existingId === 'breading')).toMatchObject({
+      update: null,
+      sheet: { packSize: 1, packPriceCents: 15, priceKind: 'estimate' },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Costing Phase 6: the till owns ingredient prices (spec section 8)
+// ---------------------------------------------------------------------------
+
+describe('who owns the price: the import matrix (costing Phase 6)', () => {
+  // Made-up prices (costing spec D11).
+  const sheetFile = () =>
+    file({
+      ingredients: [
+        { name: 'Test Flour', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 12_000 }, // new
+        { name: 'Test Cup', unit: 'pcs', costPerUnitCents: 500 }, // unset on the till
+        { name: 'Test Salt', unit: 'g', costPerUnitCents: 2 }, // free on the till
+        { name: 'Test Cheese', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 150_000 }, // a delivery's price on the till
+        { name: 'Test Oil', unit: 'ml', costPerUnitCents: 0, packSize: 1000, packPriceCents: 40_000 }, // typed on the till
+        { name: 'Test Box', unit: 'pcs', costPerUnitCents: 4_500 }, // from an earlier sheet
+        { name: 'Test Bottle', unit: 'pcs', costPerUnitCents: 0 }, // unset, and the sheet has none either
+      ],
+      items: [],
+    });
+  const till = () =>
+    shop({
+      ingredients: [
+        ing('cup', 'Test Cup', 'pcs', 0, { priceKind: 'unset' }),
+        ing('salt', 'Test Salt', 'g', 0, { priceKind: 'free' }),
+        ing('cheese', 'Test Cheese', 'g', 0, { packSize: 1000, packPriceCents: 177_000, priceSource: 'delivery' }),
+        ing('oil', 'Test Oil', 'ml', 0, { packSize: 1000, packPriceCents: 45_000, priceSource: 'manual' }),
+        ing('box', 'Test Box', 'pcs', 4_000, { priceSource: 'import' }),
+        ing('bottle', 'Test Bottle', 'pcs', 0, { priceKind: 'unset' }),
+      ],
+    });
+  const byName = (plan: ReturnType<typeof planMenuImport>) => new Map(plan.preview.ingredients.map((i) => [i.name, i]));
+  const opOf = (plan: ReturnType<typeof planMenuImport>, id: string) => plan.ops.ingredients.find((o) => o.existingId === id);
+
+  it('a new ingredient and an unpriced one take the sheet; free, delivered, typed and earlier-sheet prices stay', () => {
+    const plan = planMenuImport(sheetFile(), till());
+    const p = byName(plan);
+    expect(p.get('Test Flour')).toMatchObject({ action: 'create', price: 'new_from_sheet', priceKind: 'set' });
+    expect(p.get('Test Cup')).toMatchObject({ price: 'new_from_sheet', priceKind: 'set', changes: ["no price yet: the sheet's Rs 5 / pcs"] });
+    expect(opOf(plan, 'cup')?.update).toEqual({ costPerUnitCents: 500, priceKind: 'set' });
+    expect(p.get('Test Salt')).toMatchObject({ price: 'kept_free', priceKind: 'free' });
+    expect(opOf(plan, 'salt')?.update).toBeNull();
+    expect(p.get('Test Cheese')).toMatchObject({ price: 'kept_delivery', sheetDiffers: true });
+    expect(opOf(plan, 'cheese')?.update).toBeNull();
+    expect(p.get('Test Oil')).toMatchObject({ price: 'kept_typed', sheetDiffers: true });
+    expect(opOf(plan, 'oil')?.update).toBeNull();
+    expect(p.get('Test Box')).toMatchObject({ price: 'kept', sheetDiffers: true });
+    expect(opOf(plan, 'box')?.update).toBeNull();
+    expect(p.get('Test Bottle')).toMatchObject({ price: 'unpriced', priceKind: 'unset' });
+    expect(opOf(plan, 'bottle')?.update).toBeNull();
+  });
+
+  it('the sheet reference is always planned, exactly as the file gives it (Rs 0 as "no price")', () => {
+    const plan = planMenuImport(sheetFile(), till());
+    expect(Object.fromEntries(plan.ops.ingredients.map((o) => [o.fileKey, o.sheet]))).toEqual({
+      'test flour': { packSize: 1000, packPriceCents: 12_000, priceKind: 'set' },
+      'test cup': { packSize: 1, packPriceCents: 500, priceKind: 'set' },
+      'test salt': { packSize: 1, packPriceCents: 2, priceKind: 'set' },
+      'test cheese': { packSize: 1000, packPriceCents: 150_000, priceKind: 'set' },
+      'test oil': { packSize: 1000, packPriceCents: 40_000, priceKind: 'set' },
+      'test box': { packSize: 1, packPriceCents: 4_500, priceKind: 'set' },
+      'test bottle': { packSize: 1, packPriceCents: 0, priceKind: 'unset' },
+    });
+  });
+
+  it('ONE summary line: what is kept, where from, what the sheet fills in, what is still unpriced', () => {
+    const plan = planMenuImport(sheetFile(), till());
+    expect(plan.preview.summary.prices).toEqual({
+      keptFromDeliveries: 1,
+      keptTyped: 1,
+      keptOther: 2,
+      madeHere: 0,
+      batchKept: 0,
+      newFromSheet: 2,
+      unpriced: 1,
+      sheetDiffers: 3,
+    });
+    expect(plan.preview.summary.priceLine).toBe(
+      'Prices: 1 kept from deliveries, 1 kept as typed, 2 kept as they are, 2 new from the sheet, 1 unpriced.',
+    );
+    // The spec's own example, and the counts' words when nothing is kept.
+    expect(
+      priceSummaryLine({ keptFromDeliveries: 12, keptTyped: 0, keptOther: 0, madeHere: 0, batchKept: 0, newFromSheet: 3, unpriced: 0, sheetDiffers: 0 }),
+    ).toBe('Prices: 12 kept from deliveries, 3 new from the sheet, 0 unpriced.');
+    expect(priceSummaryLine(countPrices([]))).toBe('Prices: 0 new from the sheet, 0 unpriced.');
+  });
+
+  it('a batch made here is costed from its recipe: the sheet is only its reference (and fills it only when it has no price)', () => {
+    const f = file({
+      ingredients: [
+        { name: 'Test Tomato', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 12_000 },
+        { name: 'Test Sauce', unit: 'g', costPerUnitCents: 0, packSize: 2000, packPriceCents: 30_000, batch: { yield: 2000, lines: [{ ingredient: 'Test Tomato', qty: 2500 }] } },
+        { name: 'Test Mix', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 90_000 },
+      ],
+      items: [],
+    });
+    const plan = planMenuImport(
+      f,
+      shop({
+        ingredients: [
+          ing('tomato', 'Test Tomato', 'g', 0, { packSize: 1000, packPriceCents: 12_000 }),
+          ing('sauce', 'Test Sauce', 'g', 0, { packSize: 2000, packPriceCents: 35_000, batchYield: 2000 }),
+          ing('mix', 'Test Mix', 'g', 0, { priceKind: 'unset', batchYield: 1000 }),
+        ],
+        batchLines: new Map([
+          ['sauce', [{ inputId: 'tomato', qty: 2500 }]],
+          ['mix', [{ inputId: 'tomato', qty: 1000 }]],
+        ]),
+      }),
+    );
+    const p = byName(plan);
+    expect(p.get('Test Sauce')).toMatchObject({ price: 'made_here', sheetDiffers: false });
+    expect(opOf(plan, 'sauce')?.update).toBeNull();
+    expect(opOf(plan, 'sauce')?.sheet).toEqual({ packSize: 2000, packPriceCents: 30_000, priceKind: 'set' });
+    // No price on the till: the sheet's is planned, for the repository to use only if its recipe can't price it.
+    expect(p.get('Test Mix')).toMatchObject({ price: 'made_here' });
+    expect(p.get('Test Mix')?.changes).toEqual(["no price yet: worked out from its batch recipe (the sheet's Rs 900 / kg is only a reference)"]);
+    expect(opOf(plan, 'mix')?.update).toEqual({ packSize: 1000, packPriceCents: 90_000, priceKind: 'set' });
+    expect(plan.preview.summary.prices.madeHere).toBe(2);
+  });
+
+  it('a batch its recipe cannot price (something in it has no price) is counted as what really happens to it, not "worked out"', () => {
+    // Made-up prices (costing spec D11). Test Pepper is new and Rs 0 in the sheet: every batch using it is incomplete.
+    const f = file({
+      ingredients: [
+        { name: 'Test Tomato', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 12_000 },
+        { name: 'Test Pepper', unit: 'g', costPerUnitCents: 0 },
+        // New, Rs 0 in the sheet: no price anywhere.
+        { name: 'Test Dip', unit: 'g', costPerUnitCents: 0, batch: { yield: 1000, lines: [{ ingredient: 'Test Pepper', qty: 100 }] } },
+        // New, priced in the sheet: it takes the sheet's.
+        { name: 'Test Rub', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 50_000, batch: { yield: 1000, lines: [{ ingredient: 'Test Pepper', qty: 100 }] } },
+        // On the till with a price: it keeps it (and the sheet's differs).
+        { name: 'Test Sauce', unit: 'g', costPerUnitCents: 0, packSize: 2000, packPriceCents: 30_000, batch: { yield: 2000, lines: [{ ingredient: 'Test Tomato', qty: 2500 }, { ingredient: 'Test Pepper', qty: 10 }] } },
+        // On the till with no price, sheet priced: the sheet's, since its recipe can't price it.
+        { name: 'Test Mix', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 90_000, batch: { yield: 1000, lines: [{ ingredient: 'Test Pepper', qty: 5 }] } },
+        // Complete after the file: worked out from its recipe.
+        { name: 'Test Paste', unit: 'g', costPerUnitCents: 0, packSize: 1000, packPriceCents: 20_000, batch: { yield: 1000, lines: [{ ingredient: 'Test Tomato', qty: 1500 }] } },
+      ],
+      items: [],
+    });
+    const plan = planMenuImport(
+      f,
+      shop({
+        ingredients: [
+          ing('tomato', 'Test Tomato', 'g', 0, { packSize: 1000, packPriceCents: 12_000, priceSource: 'delivery' }),
+          ing('sauce', 'Test Sauce', 'g', 0, { packSize: 2000, packPriceCents: 35_000, batchYield: 2000, priceSource: 'batch' }),
+          ing('mix', 'Test Mix', 'g', 0, { priceKind: 'unset', batchYield: 1000 }),
+        ],
+        batchLines: new Map([
+          ['sauce', [{ inputId: 'tomato', qty: 2500 }]],
+          ['mix', [{ inputId: 'tomato', qty: 1000 }]],
+        ]),
+      }),
+    );
+    const p = byName(plan);
+    expect(p.get('Test Pepper')).toMatchObject({ price: 'unpriced' });
+    expect(p.get('Test Dip')).toMatchObject({ price: 'unpriced' });
+    expect(p.get('Test Rub')).toMatchObject({ price: 'new_from_sheet' });
+    expect(p.get('Test Sauce')).toMatchObject({ price: 'batch_kept', sheetDiffers: true });
+    expect(p.get('Test Mix')).toMatchObject({ price: 'new_from_sheet' });
+    expect(p.get('Test Mix')?.changes).toContain("no price yet: the sheet's Rs 900 / kg");
+    expect(p.get('Test Paste')).toMatchObject({ price: 'made_here', sheetDiffers: false });
+    expect(plan.preview.summary.prices).toMatchObject({ madeHere: 1, batchKept: 1, newFromSheet: 2, unpriced: 2, keptFromDeliveries: 1 });
+    expect(plan.preview.summary.priceLine).toBe(
+      'Prices: 1 kept from deliveries, 1 worked out from their batch recipe, 1 batch keeps its price (something in it has no price), 2 new from the sheet, 2 unpriced.',
+    );
+    expect(priceSummaryLine({ ...countPrices([]), batchKept: 3 })).toBe(
+      'Prices: 3 batches keep their price (something in them has no price), 0 new from the sheet, 0 unpriced.',
+    );
+  });
+
+  it("sheetPriceOf: the file's pack exactly, or (1, its cost per unit); Rs 0 is 'unset', a guess 'estimate'", () => {
+    expect(sheetPriceOf({ costPerUnitCents: 0, packSize: 6000, packPriceCents: 225_000, priceIsEstimate: false })).toEqual({
+      packSize: 6000,
+      packPriceCents: 225_000,
+      priceKind: 'set',
+    });
+    expect(sheetPriceOf({ costPerUnitCents: 15, packSize: null, packPriceCents: null, priceIsEstimate: true })).toEqual({
+      packSize: 1,
+      packPriceCents: 15,
+      priceKind: 'estimate',
+    });
+    expect(sheetPriceOf({ costPerUnitCents: 0, packSize: null, packPriceCents: null, priceIsEstimate: false }).priceKind).toBe('unset');
+  });
+
+  it('a fresh start: every ingredient is new, so every priced one comes from the sheet', () => {
+    const plan = planMenuImport(sheetFile(), shop());
+    expect(plan.preview.summary.prices).toMatchObject({ newFromSheet: 6, unpriced: 1, keptFromDeliveries: 0, keptTyped: 0, keptOther: 0 });
   });
 });

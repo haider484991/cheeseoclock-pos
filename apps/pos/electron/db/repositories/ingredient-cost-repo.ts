@@ -4,6 +4,7 @@ import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { loadPriceBook } from '../price-book.js';
+import { evaluatePriceAlerts, type PriceWritten } from './cost-alert-repo.js';
 import { COC_ID_NAMESPACE, type PriceKind, type PriceSource } from '@cheeseoclock/shared-types';
 import {
   batchesUsing,
@@ -31,7 +32,13 @@ import {
  *      audit row;
  *   3. unless told not to, the batches made from it (Cheese Mix from
  *      mozzarella, and anything made with Cheese Mix) take their rolled-up
- *      price, each as a 'batch' row of its own.
+ *      price, each as a 'batch' row of its own;
+ *   4. unless told not to, the price alerts (costing spec Phase 6,
+ *      cost-alert-repo evaluatePriceAlerts): a key ingredient that jumped,
+ *      a change that costs the menu Rs N a week, a batch that kept its old
+ *      price. In its own savepoint: an alert that can't be worked out never
+ *      stops the price. A delivery or a menu file looks at all its prices
+ *      once, at its end, instead.
  *
  * The roll-up runs ONLY here, on the till that wrote the triggering price.
  * The other till receives the price and the batch rows as rows
@@ -39,7 +46,10 @@ import {
  * name-based on the triggering row, so both tills hold the same ones.
  *
  * No other repository writes an ingredient's price columns
- * (price-history.db.test.ts scans for it).
+ * (price-history.db.test.ts scans for it). The costing sheet's price for it
+ * (ingredients.sheet_*, costing spec Phase 6: a reference only, never used
+ * for costing) is written here too (setSheetPrice), and "Use the sheet's
+ * price" turns it into the price (useSheetPrice).
  *
  * The history is APPEND-ONLY: a row, once written, is never edited here —
  * not its price, not its date. A name-based id that is already taken (the
@@ -171,6 +181,12 @@ export interface PriceWriteOptions {
   force?: boolean;
   /** The unit the price stood in before this write, when it was not the ingredient's unit now (a Convert). */
   previousUnit?: string;
+  /**
+   * Look at the new price for alerts now (default yes). A delivery, a
+   * purchase or the menu file says no and looks at all its prices once, at
+   * its end (cost-alert-repo evaluatePriceAlerts with the `written` of each).
+   */
+  alerts?: boolean;
 }
 
 export interface PriceWriteResult {
@@ -178,6 +194,8 @@ export interface PriceWriteResult {
   entryId: string | null;
   /** Batches whose rolled-up price was written back, bottom-up. */
   rolledUp: string[];
+  /** What the alerts need to look at this write later (`alerts: false`); null when nothing was written. */
+  written: PriceWritten | null;
 }
 
 /**
@@ -193,10 +211,15 @@ export function setIngredientPrice(
   opts: PriceWriteOptions = {},
 ): PriceWriteResult {
   return db.transaction((): PriceWriteResult => {
+    const cur = opts.first ? undefined : readPriceCols(db, write.ingredientId);
     const entryId = writePrice(db, write, actor, opts);
     const rolledUp =
       entryId !== null && opts.cascade !== false && !opts.first ? rollUpBatches(db, [write.ingredientId], entryId, actor) : [];
-    return { entryId, rolledUp };
+    const written: PriceWritten | null =
+      entryId !== null && cur ? { ingredientId: write.ingredientId, before: storedOf(cur), entryId, source: write.source } : null;
+    // Step 4: the alerts, on this till only (never for a brand-new ingredient's first price).
+    if (written && opts.alerts !== false) evaluatePriceAlerts(db, [written], actor);
+    return { entryId, rolledUp, written };
   })();
 }
 
@@ -449,6 +472,157 @@ export function rollUpBatches(
     }
     return written;
   })();
+}
+
+// ---------------------------------------------------------------------------
+// The costing sheet's price: a reference (costing spec Phase 6, section 8)
+// ---------------------------------------------------------------------------
+
+/** The costing sheet's price for an ingredient, exactly as the menu file gives it. */
+export interface SheetPriceInput {
+  packSize: number;
+  packPriceCents: number;
+  /** 'set', 'estimate' (the file says it is a guess) or 'unset' (the file says Rs 0). */
+  priceKind: PriceKind;
+}
+
+interface SheetCols {
+  name: string;
+  unit: string;
+  sheet_pack_size: number | null;
+  sheet_pack_price_cents: number | null;
+  sheet_price_kind: string | null;
+  sheet_price_at: string | null;
+}
+
+function readSheetCols(db: AppDatabase, ingredientId: string): SheetCols | undefined {
+  return db
+    .prepare(
+      `SELECT name, unit, sheet_pack_size, sheet_pack_price_cents, sheet_price_kind, sheet_price_at
+         FROM ingredients WHERE id = ? AND deleted_at IS NULL`,
+    )
+    .get(ingredientId) as SheetCols | undefined;
+}
+
+/**
+ * Keep the costing sheet's price for an ingredient as its reference
+ * (ingredients.sheet_*): what Inventory shows beside the till's price, and
+ * what "Use the sheet's price" would use. Never the price costing uses. The
+ * ingredient row with its sync entry and an audit row, one transaction;
+ * nothing is written when the sheet already said exactly this. True when
+ * written.
+ */
+export function setSheetPrice(
+  db: AppDatabase,
+  ingredientId: string,
+  sheet: SheetPriceInput,
+  actor: Actor,
+  opts: {
+    /** When the sheet said it (default now: a menu file); a Convert keeps the date it had. */
+    at?: string;
+    /** The unit the reference was in before (a Convert: the ingredient's unit has just changed). */
+    unitBefore?: string;
+  } = {},
+): boolean {
+  if (!Number.isSafeInteger(sheet.packSize) || sheet.packSize < 1 || !Number.isSafeInteger(sheet.packPriceCents) || sheet.packPriceCents < 0) {
+    throw new Error("The sheet's price must be for at least 1 whole unit, at Rs 0 or more in whole paisa");
+  }
+  return db.transaction((): boolean => {
+    const cur = readSheetCols(db, ingredientId);
+    if (!cur) throw new Error('Ingredient not found');
+    const before =
+      cur.sheet_pack_size === null || cur.sheet_pack_price_cents === null
+        ? null
+        : {
+            packSize: Number(cur.sheet_pack_size),
+            packPriceCents: Number(cur.sheet_pack_price_cents),
+            priceKind: toPriceKind(cur.sheet_price_kind),
+            at: cur.sheet_price_at,
+          };
+    if (
+      before &&
+      before.packSize === sheet.packSize &&
+      before.packPriceCents === sheet.packPriceCents &&
+      before.priceKind === sheet.priceKind
+    ) {
+      return false;
+    }
+    const now = nowIso();
+    const at = opts.at ?? now;
+    db.prepare(
+      `UPDATE ingredients
+          SET sheet_pack_size = ?, sheet_pack_price_cents = ?, sheet_price_kind = ?, sheet_price_at = ?,
+              updated_at = ?, version = version + 1
+        WHERE id = ?`,
+    ).run(sheet.packSize, sheet.packPriceCents, sheet.priceKind, at, now, ingredientId);
+    const after = { ...sheet, at };
+    enqueueSync(db, { entityType: 'ingredients', entityId: ingredientId, op: 'upsert', payload: { id: ingredientId, sheetPrice: after } });
+    writeAudit(db, {
+      entityType: 'ingredients',
+      entityId: ingredientId,
+      action: 'set_sheet_price',
+      actorUserId: actor.userId,
+      before: { sheetPrice: before, unit: opts.unitBefore ?? cur.unit },
+      after: { sheetPrice: after, unit: cur.unit },
+    });
+    return true;
+  })();
+}
+
+/**
+ * The sheet's reference in a new unit, after a Convert that counts `factor`×
+ * as many units (kg → g, l → ml): the same figure, exactly — its pack holds
+ * `factor`× as many units for the same money ("1 kg for Rs 1,500" becomes
+ * "1,000 g for Rs 1,500"), as the price itself is converted (costing spec
+ * 4.1). Kept with the date the sheet said it. Synced and audited
+ * (setSheetPrice); nothing when no menu file has named it. True when written.
+ */
+export function convertSheetPrice(db: AppDatabase, ingredientId: string, factor: number, unitBefore: string, actor: Actor): boolean {
+  if (!Number.isSafeInteger(factor) || factor < 1) throw new Error('A unit change multiplies by a whole number');
+  const cur = readSheetCols(db, ingredientId);
+  if (!cur || cur.sheet_pack_size === null || cur.sheet_pack_price_cents === null || factor === 1) return false;
+  return setSheetPrice(
+    db,
+    ingredientId,
+    { packSize: Number(cur.sheet_pack_size) * factor, packPriceCents: Number(cur.sheet_pack_price_cents), priceKind: toPriceKind(cur.sheet_price_kind) },
+    actor,
+    { ...(cur.sheet_price_at ? { at: cur.sheet_price_at } : {}), unitBefore },
+  );
+}
+
+/**
+ * "Use the sheet's price" (Inventory → Ingredients, costing spec Phase 6):
+ * the costing sheet's price for it becomes its price, exactly as the sheet
+ * gives it, through the one price path — a typed ('manual') line in its
+ * price history, the batches made from it rolled up, the alerts looked at.
+ * Refused when the sheet has no price for it (Rs 0), and for a batch made
+ * here whose inputs all have a price (its price comes from its recipe).
+ */
+export function useSheetPrice(db: AppDatabase, ingredientId: string, actor: Actor): PriceWriteResult {
+  const cur = readSheetCols(db, ingredientId);
+  if (!cur) throw new Error('Ingredient not found');
+  if (cur.sheet_pack_size === null || cur.sheet_pack_price_cents === null) {
+    throw new Error(`The costing sheet has no price for ${cur.name} yet. Import the menu file first.`);
+  }
+  const kind = toPriceKind(cur.sheet_price_kind);
+  if (kind === 'unset') throw new Error(`The costing sheet has no price for ${cur.name} (it says Rs 0).`);
+  if (loadPriceBook(db).prices.get(ingredientId)?.batch?.complete) {
+    throw new Error(
+      `${cur.name} is made here, so its price is worked out from its batch recipe. ` +
+        "The sheet's figure for it is only a reference.",
+    );
+  }
+  return setIngredientPrice(
+    db,
+    {
+      ingredientId,
+      price: { costPerUnitCents: 0, packSize: Number(cur.sheet_pack_size), packPriceCents: Number(cur.sheet_pack_price_cents) },
+      priceKind: kind,
+      source: 'manual',
+      notes: "The costing sheet's price",
+    },
+    actor,
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -348,3 +348,149 @@ export interface MissingCosts {
  */
 export const ORDER_ITEM_COST_STATUSES = ['full', 'partial', 'none', 'failed'] as const;
 export type OrderItemCostStatus = (typeof ORDER_ITEM_COST_STATUSES)[number];
+
+// ------------------------------------------------------------ price alerts --
+
+/**
+ * What the Costing page's Alerts tab tells the owner (costing spec Phase 6,
+ * migration 0036 cost_alerts.kind):
+ *  - 'price_jump':           a key ingredient's price moved more than the
+ *                            alert threshold, or a price change costs at
+ *                            least the weekly threshold at this till's sales;
+ *  - 'weekly_digest':        Monday's list of dishes that price changes moved
+ *                            across their target;
+ *  - 'batch_unpriced_input': a sauce or mix made here kept its old price,
+ *                            because something that goes into it has none.
+ * Worked out only on the till that wrote the price; name-based ids, so the
+ * same alert on both tills is one row.
+ */
+export const COST_ALERT_KINDS = ['price_jump', 'weekly_digest', 'batch_unpriced_input'] as const;
+export type CostAlertKind = (typeof COST_ALERT_KINDS)[number];
+
+/** business_settings 'costing.alerts' (shared-schemas costingAlertsSchema): the alert thresholds. */
+export interface CostAlertSettings {
+  /**
+   * A key ingredient's price moving more than this (basis points: 1,000 =
+   * 10%) is an alert. The same figure is D1's purchase guard: a bill this
+   * far from the usual price asks before it becomes the price.
+   */
+  jumpBps: number;
+  /** Any price change costing at least this much a week (paisa) at this till's sales is an alert. */
+  impactWeekCents: number;
+  /** The key ingredients (cheese, chicken, dough, oil, boxes…): a jump in their price is always an alert. */
+  keyIngredientIds: string[];
+}
+
+export interface KeyIngredientChoice {
+  ingredientId: string;
+  name: string;
+  /** Watched as a key ingredient now (saved, or suggested while nothing is saved). */
+  key: boolean;
+  /** The till suggests it by its name (cheese, chicken, patties, dough, flour, oil, boxes). */
+  suggested: boolean;
+}
+
+export interface CostAlertSettingsView {
+  jumpBps: number;
+  impactWeekCents: number;
+  ingredients: KeyIngredientChoice[];
+  /** Nothing saved yet: the key ingredients are the till's suggestions. */
+  keysSuggested: boolean;
+  /** When the thresholds were last saved (ISO); null = never. */
+  savedAt: string | null;
+}
+
+export type SetCostAlertSettingsRequest = CostAlertSettings;
+
+/** One dish a price change moved, and what that costs per week at this till's sales. */
+export interface CostAlertItemMove {
+  menuItemId: string;
+  name: string;
+  /** The typical price (as on Menu costs). */
+  priceCents: number;
+  costBeforeCents: number;
+  costAfterCents: number;
+  foodCostBeforeBps: number | null;
+  foodCostAfterBps: number | null;
+  /** Units sold in the 28 days the week's figure comes from (a week is a quarter of it). */
+  soldLast28: number;
+  /** (cost after − cost before) × a week's units: above 0 costs you, below 0 saves. */
+  impactWeekCents: number;
+  /** The weekly digest only: its band before and after (green / amber / red). */
+  flagBefore?: FoodCostFlag;
+  flagAfter?: FoodCostFlag;
+  targetBps?: number;
+}
+
+/** A price as an alert shows it: one base unit, in millicents (per gram, it reads as paisa per kg). */
+export interface CostAlertPrice {
+  unitCostMc: number;
+  priceKind: PriceKind;
+}
+
+/** 'price_jump': which ingredient moved, by how much, and which dishes it moved. */
+export interface PriceJumpAlert {
+  kind: 'price_jump';
+  ingredientId: string;
+  ingredientName: string;
+  unit: string;
+  before: CostAlertPrice;
+  after: CostAlertPrice;
+  /** After against before, basis points (+1,800 = 18% dearer); null when there was nothing to compare with. */
+  changeBps: number | null;
+  /** Where the new price came from ('delivery', 'manual'…). */
+  source: string;
+  /** It is a key ingredient, or a key batch made from it moved (the jump rule fired). */
+  key: boolean;
+  /** Key batches made from it that moved with it (Cheese Mix after mozzarella). */
+  keyBatches: Array<{ ingredientId: string; name: string; unit: string; before: CostAlertPrice; after: CostAlertPrice; changeBps: number | null }>;
+  /** The dishes it moved, most per week first (at most 25). */
+  items: CostAlertItemMove[];
+  /** How many dishes it moved in all. */
+  itemsMoved: number;
+}
+
+/** 'batch_unpriced_input': a batch made here kept its old price. */
+export interface BatchUnpricedAlert {
+  kind: 'batch_unpriced_input';
+  ingredientId: string;
+  ingredientName: string;
+  unit: string;
+  unpricedInputs: Array<{ ingredientId: string; name: string }>;
+  /** The price it kept (its own stored price); null when it has none. */
+  kept: CostAlertPrice | null;
+  /** What set it off: the menu file, or a price change of something in it. */
+  because: 'import' | 'price';
+  /** The ingredient whose price changed, for 'price'. */
+  changedName: string | null;
+}
+
+/** 'weekly_digest': dishes whose food cost moved across their target this week because of prices. */
+export interface WeeklyDigestAlert {
+  kind: 'weekly_digest';
+  /** The Monday (trading day, YYYY-MM-DD) the digest is for. */
+  weekOf: string;
+  /** The Monday of the digest it compares with; null for the first. */
+  sinceWeekOf: string | null;
+  changes: CostAlertItemMove[];
+}
+
+export type CostAlertDetail = PriceJumpAlert | BatchUnpricedAlert | WeeklyDigestAlert;
+
+export interface CostAlert {
+  id: string;
+  kind: CostAlertKind;
+  createdAt: string;
+  seenAt: string | null;
+  seenByName: string | null;
+  /** What it costs per week at this till's sales (below 0 saves); 0 when not known. */
+  impactWeekCents: number;
+  /** Null when the alert was written by a newer till in a shape this one can't read. */
+  detail: CostAlertDetail | null;
+}
+
+export interface CostAlertsView {
+  /** Not seen yet first, then seen; newest first within each. */
+  alerts: CostAlert[];
+  unseen: number;
+}

@@ -23,6 +23,7 @@ import {
   recordPurchaseInputSchema,
   payoutToPurchaseInputSchema,
   listDrawerPayoutsInputSchema,
+  useSheetPriceInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
 import { requireCapability, REFUSED } from '../guards.js';
@@ -42,9 +43,9 @@ import {
 } from '../../db/repositories/stock-movement-repo.js';
 import { searchMovements } from '../../db/repositories/stock-movement-search.js';
 import { getBatchRecipe, setBatchRecipe, makeBatch } from '../../db/repositories/batch-recipe-repo.js';
-import { setTypedPrice } from '../../db/repositories/ingredient-cost-repo.js';
+import { setTypedPrice, useSheetPrice } from '../../db/repositories/ingredient-cost-repo.js';
 import { findIngredient } from '../../db/repositories/ingredient-repo.js';
-import { latestPriceTags, listPriceHistory } from '../../db/price-history-read.js';
+import { latestPriceTags, listPriceHistory, readSheetPrices } from '../../db/price-history-read.js';
 import { loadPriceBook } from '../../db/price-book.js';
 import {
   listSuppliers,
@@ -132,13 +133,16 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
     // 4): costs, so COST_CAPABILITY — which stock view already needs.
     // And whether a batch's price is worked out from its recipe (every input
     // priced): "Set price" then points at the recipe instead.
+    // And what the costing sheet says it costs (Phase 6: a reference beside the till's price).
     const tags = latestPriceTags(ctx.db);
     const book = loadPriceBook(ctx.db);
+    const sheets = readSheetPrices(ctx.db);
     return ok(
       listIngredients(ctx.db, payload ?? {}).map((i) => ({
         ...i,
         latestPrice: tags.get(i.id) ?? null,
         priceFromRecipe: book.prices.get(i.id)?.batch?.complete === true,
+        sheetPrice: sheets.get(i.id) ?? null,
       })),
     );
   });
@@ -187,6 +191,17 @@ export function registerInventoryHandlers(ctx: HandlerContext): void {
       { userId: s.id, deviceId: ctx.deviceId },
     );
     const ing = findIngredient(ctx.db, p.ingredientId);
+    if (!ing) return err({ code: 'not_found', message: 'Ingredient not found' });
+    return ok(ing);
+  });
+
+  // "Use the sheet's price" (costing spec Phase 6): a typed line in its history.
+  defineHandler('inventory:useSheetPrice', ctx, (_ctx, payload) => {
+    const s = requireCapability(COST_CAPABILITY, REFUSED.prices);
+    const parsed = useSheetPriceInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    useSheetPrice(ctx.db, parsed.data.ingredientId, { userId: s.id, deviceId: ctx.deviceId });
+    const ing = findIngredient(ctx.db, parsed.data.ingredientId);
     if (!ing) return err({ code: 'not_found', message: 'Ingredient not found' });
     return ok(ing);
   });

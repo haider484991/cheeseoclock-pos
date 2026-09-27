@@ -19,3 +19,4 @@ export * from './batch-scale.js';
 export * from './missing-costs.js';
 export * from './sale-cost.js';
 export * from './purchase.js';
+export * from './cost-alerts.js';

@@ -103,11 +103,14 @@ import type {
 } from './inventory.js';
 import type {
   BatchCalc,
+  CostAlertSettingsView,
+  CostAlertsView,
   CostingTargetsView,
   ItemCostSheet,
   MenuCostsView,
   MissingCosts,
   RecipeCostPreview,
+  SetCostAlertSettingsRequest,
   SetCostingTargetsRequest,
 } from './costing.js';
 import type {
@@ -1025,6 +1028,15 @@ export interface IpcContract {
     request: { ingredientId: string; limit?: number };
     response: ApiResult<PriceHistoryEntry[]>;
   };
+  /**
+   * "Use the sheet's price" (costing spec Phase 6): the price the costing
+   * sheet gave it (the menu file's, kept as a reference) becomes its price —
+   * a typed ('manual') line in its price history. COST_CAPABILITY.
+   */
+  'inventory:useSheetPrice': {
+    request: { ingredientId: string };
+    response: ApiResult<Ingredient>;
+  };
 
   // Inventory — recipes (per menu item)
   'inventory:getRecipe': {
@@ -1261,6 +1273,30 @@ export interface IpcContract {
   'costing:batchCalc': {
     request: { ingredientId: string; amount: number };
     response: ApiResult<BatchCalc>;
+  };
+  /**
+   * Costing → Alerts (costing spec Phase 6): price jumps, the Monday digest
+   * of dishes moved across their target, batches that kept an old price —
+   * not seen yet first. COST_CAPABILITY.
+   */
+  'costing:alerts': {
+    request: undefined;
+    response: ApiResult<CostAlertsView>;
+  };
+  /** "Seen": the alerts leave the list's top (managers and the owner). Answers with the list as it now stands. */
+  'costing:markAlertsSeen': {
+    request: { ids: string[] };
+    response: ApiResult<CostAlertsView>;
+  };
+  /** The alert thresholds and key ingredients (Targets tab). COST_CAPABILITY to read… */
+  'costing:getAlertSettings': {
+    request: undefined;
+    response: ApiResult<CostAlertSettingsView>;
+  };
+  /** …settings.manage to change (the owner). */
+  'costing:setAlertSettings': {
+    request: SetCostAlertSettingsRequest;
+    response: ApiResult<CostAlertSettingsView>;
   };
 
   // Reports: one channel per tab of the Reports page (costing spec Phase 3),

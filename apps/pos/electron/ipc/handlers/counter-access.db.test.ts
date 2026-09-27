@@ -332,6 +332,12 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
   // Prices and their history (costing spec Phase 4): costs, both ways.
   'inventory:priceHistory': { ingredientId: 'no-such-ingredient' },
   'inventory:setPrice': { ingredientId: 'no-such-ingredient', per: 'piece', priceCents: 1_000 },
+  // The costing sheet's price as the price (costing spec Phase 6): a price, so costs.
+  'inventory:useSheetPrice': { ingredientId: 'no-such-ingredient' },
+  // Price alerts (costing spec Phase 6): read, marked seen, and their thresholds read.
+  'costing:alerts': undefined,
+  'costing:markAlertsSeen': { ids: ['no-such-alert'] },
+  'costing:getAlertSettings': undefined,
   // Purchases (costing spec Phase 5): what was paid, and the drawer's payouts.
   'inventory:recordPurchase': { lines: [{ ingredientId: 'no-such-ingredient', qty: 1_000, billCents: 10_000 }], paidFromDrawer: true },
   'inventory:payoutToPurchase': { cashMovementId: 'no-such-payout', lines: [{ ingredientId: 'no-such-ingredient', qty: 1_000, billCents: 10_000 }] },
@@ -351,6 +357,8 @@ const COUNTER_REFUSED = (): Record<string, unknown> => ({
 const OWNER_ONLY = (): Record<string, unknown> => ({
   // The food-cost targets (settings.manage).
   'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 },
+  // The price alerts' thresholds (settings.manage, costing spec Phase 6).
+  'costing:setAlertSettings': { jumpBps: 1_000, impactWeekCents: 100_000, keyIngredientIds: [] },
 });
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */

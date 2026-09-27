@@ -4,7 +4,7 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { clearBatchRecipeLines } from './batch-recipe-repo.js';
-import { priceRowId, setIngredientPrice } from './ingredient-cost-repo.js';
+import { convertSheetPrice, priceRowId, setIngredientPrice } from './ingredient-cost-repo.js';
 import type { Ingredient, IngredientCategory, PriceKind, PriceSource, Recipe } from '@cheeseoclock/shared-types';
 import {
   baseUnitConversion,
@@ -125,6 +125,8 @@ export interface PriceMeta {
   rowKey?: string;
   /** Roll the new price up into the batches made from it (default yes). */
   cascade?: boolean;
+  /** Look at the new price for alerts now (default yes); the menu file looks once, at its end. */
+  alerts?: boolean;
 }
 
 function priceRowIdFor(ingredientId: string, meta: PriceMeta | undefined): string | undefined {
@@ -311,7 +313,7 @@ export function updateIngredient(
           source: price?.source ?? 'manual',
         },
         actor,
-        { id: priceRowIdFor(input.id, price), cascade: price?.cascade },
+        { id: priceRowIdFor(input.id, price), cascade: price?.cascade, alerts: price?.alerts },
       );
     }
   })();
@@ -409,8 +411,13 @@ export function convertIngredientToBaseUnit(
       db,
       { ingredientId: id, price, priceKind: price.priceKind, source: 'convert', notes: `Counted in ${after.unit} instead of ${before.unit}` },
       actor,
-      { force: true, cascade: false, previousUnit: before.unit, id: opts.priceRowKey ? priceRowId(id, opts.priceRowKey) : undefined },
+      // The same value in the new unit: nothing to alert about.
+      { force: true, cascade: false, alerts: false, previousUnit: before.unit, id: opts.priceRowKey ? priceRowId(id, opts.priceRowKey) : undefined },
     );
+    // The costing sheet's reference too (costing Phase 6): the same figure in
+    // the new unit, so "Sheet says", the costing-file CSV and "Use the
+    // sheet's price" never read a price per kg as one per gram.
+    convertSheetPrice(db, id, f, before.unit, actor);
     enqueueSync(db, { entityType: 'ingredients', entityId: id, op: 'upsert', payload: after });
     writeAudit(db, {
       entityType: 'ingredients',

@@ -10,8 +10,9 @@ import type {
 } from '@cheeseoclock/shared-types';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { FileUp, AlertTriangle } from 'lucide-react';
+import { FileUp, AlertTriangle, Tags } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { priceDetailGroups, sheetPriceText, tillPriceText } from './importPrices';
 
 const ACTION_LABEL: Record<MenuImportAction, string> = {
   create: 'New',
@@ -75,7 +76,7 @@ export function ImportTab() {
         title: asFresh ? 'Menu replaced' : 'Menu imported',
         description: asFresh
           ? `${s.removedItems} old items removed; ${s.newItems} items, ${s.newIngredients} ingredients and ${s.recipesSet} recipes loaded. Count your stock next (Inventory).`
-          : `${s.newItems} new items, ${s.updatedItems} updated, ${s.recipesSet} recipes, ${s.newIngredients + s.updatedIngredients} ingredients.`,
+          : `${s.newItems} new items, ${s.updatedItems} updated, ${s.recipesSet} recipes, ${s.newIngredients + s.updatedIngredients} ingredients. ${s.priceLine}`,
         variant: 'success',
       });
       setPreview(null);
@@ -138,7 +139,7 @@ export function ImportTab() {
                   const f = preview.fresh;
                   const ask = f
                     ? `Replace the WHOLE menu with this file?\n\nRemoved: ${f.items.length} menu items, ${f.categories} categories, ${f.combos} combos, ${f.choiceGroups} choice groups and ${f.ingredients} ingredients, with their recipes and stock counts.\nLoaded: ${s.newItems} items, ${s.newIngredients} ingredients, ${s.recipesSet} recipes.\n\nSales history, customers, users, settings and tax stay. A backup is saved first (Settings → Backups).`
-                    : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.`;
+                    : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.\n\n${s.priceLine} The till keeps the prices it has; the sheet's are kept beside them in Inventory.`;
                   void askConfirm(ask).then((ok) => {
                     if (ok) applyMut.mutate(fresh);
                   });
@@ -210,6 +211,7 @@ export function ImportTab() {
                 </div>
               ))}
             </dl>
+            <PriceLine preview={preview} />
             {preview.taxCategoryName && (preview.taxFromFile || s.newItems > 0) && (
               <p className="mt-3 text-xs text-stone-500">
                 {preview.taxFromFile ? 'Tax for the file’s items' : 'New items are charged the tax most of the menu uses'}
@@ -347,6 +349,52 @@ function ItemTable({ rows }: { rows: MenuImportItemPlan[] }) {
   );
 }
 
+/**
+ * Ingredient prices (costing spec Phase 6): ONE line — what the till keeps,
+ * where from, what the sheet fills in — and the details behind a
+ * disclosure. The till owns its prices; there is no "use the sheet's prices
+ * for all": each ingredient has its own "Use the sheet's price" in Inventory.
+ */
+function PriceLine({ preview }: { preview: MenuImportPreview }) {
+  const p = preview.summary.prices;
+  const groups = priceDetailGroups(preview.ingredients);
+  return (
+    <div className="mt-4 rounded-lg bg-stone-50 p-3 text-sm dark:bg-stone-800/50">
+      <p className="flex items-start gap-2 font-medium">
+        <Tags className="mt-0.5 h-4 w-4 flex-none text-stone-500" /> {preview.summary.priceLine}
+      </p>
+      {groups.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-stone-600 dark:text-stone-400">
+            Price details{p.sheetDiffers > 0 ? ` (the sheet's price differs for ${p.sheetDiffers})` : ''}
+          </summary>
+          <p className="mt-2 text-xs text-stone-500">
+            The till keeps the prices it has (from deliveries, typed, or an earlier sheet). The sheet only prices new
+            ingredients and ones with no price yet. Its price is kept beside the till&apos;s in Inventory → Ingredients,
+            with &quot;Use the sheet&apos;s price&quot; on each one.
+          </p>
+          {groups.map((g) => (
+            <div key={g.title} className="mt-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-stone-500">
+                {g.title} ({g.rows.length})
+              </h4>
+              <ul className="mt-1 space-y-0.5">
+                {g.rows.map((r) => (
+                  <li key={r.name} className="flex flex-wrap gap-x-2">
+                    <span className="font-medium">{r.existingName ?? r.name}</span>
+                    <span className="text-stone-600 dark:text-stone-400">{tillPriceText(r)}</span>
+                    <span className={cn('text-stone-500', r.sheetDiffers && 'text-amber-800 dark:text-amber-300')}>{sheetPriceText(r)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+
 function IngredientTable({ rows }: { rows: MenuImportIngredientPlan[] }) {
   if (rows.length === 0) return <p className="text-sm text-stone-500">No changes.</p>;
   return (
@@ -354,7 +402,7 @@ function IngredientTable({ rows }: { rows: MenuImportIngredientPlan[] }) {
       <thead className="text-left text-xs uppercase tracking-wider text-stone-500">
         <tr>
           <th className="pb-2">Ingredient</th>
-          <th className="pb-2 text-right">Cost</th>
+          <th className="pb-2 text-right">Sheet&apos;s price</th>
           <th className="pb-2 pl-4">What happens</th>
         </tr>
       </thead>

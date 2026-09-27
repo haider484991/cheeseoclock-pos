@@ -109,12 +109,22 @@ const READ_CHANNELS = (): Record<string, unknown> => ({
   'costing:getTargets': undefined,
   'costing:recipeCost': { menuItemId: s.item.fajitaM, lines: [] },
   'costing:batchCalc': { ingredientId: s.ing.sauce, amount: 200 },
+  // Price alerts (costing spec Phase 6): managers read them and mark them seen.
+  'costing:alerts': undefined,
+  'costing:markAlertsSeen': { ids: ['no-such-alert'] },
+  'costing:getAlertSettings': undefined,
 });
+
+const ALERT_SETTINGS = () => ({ jumpBps: 1_500, impactWeekCents: 50_000, keyIngredientIds: [s.ing.cheese] });
 
 live('who may see costs', () => {
   it('a cashier is refused every costing channel in the main process, in plain words', async () => {
     h.session = CASHIER;
-    const channels = { ...READ_CHANNELS(), 'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 } };
+    const channels = {
+      ...READ_CHANNELS(),
+      'costing:setTargets': { defaultBps: 3000, amberBps: 500, perCategory: {}, nonFoodCategoryIds: [], priceStepCents: 1000 },
+      'costing:setAlertSettings': ALERT_SETTINGS(),
+    };
     expect(Object.keys(channels).sort()).toEqual([...h.handlers.keys()].filter((c) => c.startsWith('costing:')).sort());
     for (const [channel, payload] of Object.entries(channels)) {
       expect({ channel, o: await call(channel, payload) }).toEqual({
@@ -145,7 +155,43 @@ live('who may see costs', () => {
       priceStepCents: target.priceStepCents,
     });
     expect(o).toEqual({ ok: false, code: 'forbidden', message: 'Only the owner can change the food-cost targets.' });
+    // …nor the price alerts' thresholds (costing spec Phase 6: managers read them).
+    expect(await call('costing:setAlertSettings', ALERT_SETTINGS())).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: 'Only the owner can change the price alerts.',
+    });
     expect(count(`SELECT COUNT(*) AS n FROM business_settings`)).toBe(0);
+  });
+
+  it('the owner changes the price alerts; both tills share them (business_settings, synced and audited)', async () => {
+    h.session = MANAGER;
+    const suggested = await data<{ jumpBps: number; impactWeekCents: number; keysSuggested: boolean; ingredients: Array<{ ingredientId: string; key: boolean }> }>(
+      'costing:getAlertSettings',
+    );
+    // Nothing saved: 10%, Rs 1,000 a week, and the key ingredients suggested by name.
+    expect(suggested).toMatchObject({ jumpBps: 1_000, impactWeekCents: 100_000, keysSuggested: true });
+    expect(suggested.ingredients.filter((i) => i.key).map((i) => i.ingredientId).sort()).toEqual([s.ing.box, s.ing.chicken, s.ing.dough].sort());
+    h.session = OWNER;
+    const saved = await data<{ jumpBps: number; keysSuggested: boolean; ingredients: Array<{ ingredientId: string; key: boolean }> }>(
+      'costing:setAlertSettings',
+      { ...ALERT_SETTINGS(), keyIngredientIds: [s.ing.cheese, 'no-such-ingredient'] },
+    );
+    expect(saved).toMatchObject({ jumpBps: 1_500, keysSuggested: false });
+    expect(saved.ingredients.filter((i) => i.key).map((i) => i.ingredientId)).toEqual([s.ing.cheese]);
+    expect(count(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`)).toBe(1);
+    expect(count(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'business_settings'`)).toBe(1);
+    // A value that does not fit is refused, with the field named.
+    expect(await call('costing:setAlertSettings', { ...ALERT_SETTINGS(), jumpBps: 50 })).toMatchObject({ ok: false, code: 'validation_failed' });
+  });
+
+  it("\"Use the sheet's price\" is refused to a cashier, like every price", async () => {
+    h.session = CASHIER;
+    expect(await call('inventory:useSheetPrice', { ingredientId: s.ing.cheese })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: 'Only a manager or the owner can change prices.',
+    });
   });
 
   it('"Make this amount" stays open to any login (kitchen staff record batches), and answers with no costs', async () => {

@@ -10,13 +10,24 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, BatchCalc, CostingTargetsView, MenuCostRow, MenuCostsView, MissingCosts, UUID } from '@cheeseoclock/shared-types';
+import type {
+  AuthenticatedUser,
+  BatchCalc,
+  CostAlertSettingsView,
+  CostAlertsView,
+  CostingTargetsView,
+  MenuCostRow,
+  MenuCostsView,
+  MissingCosts,
+  UUID,
+} from '@cheeseoclock/shared-types';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { MenuCostsTab } from './MenuCostsTab';
 import { MissingCostsTab } from './MissingCostsTab';
 import { TargetsTab } from './TargetsTab';
 import { BatchBreakdown } from './BatchBreakdown';
+import { AlertsTab } from './AlertsTab';
 
 function signIn(role: AuthenticatedUser['role']) {
   useSessionStore.setState({ user: { id: 'u1' as UUID, fullName: 'Test', role, sessionId: 's1' as UUID }, status: 'authenticated' });
@@ -142,6 +153,110 @@ describe('Costing screens', () => {
     const manager = render(<TargetsTab />, [[['costing', 'targets'], TARGETS]]);
     expect(manager).toContain('Only the owner can change the targets.');
     expect(manager).not.toContain('Use these');
+  });
+
+  it('Alerts: what moved and what it costs per week, in plain words; "Seen" on the new ones, the seen ones folded away', () => {
+    signIn('manager');
+    const view: CostAlertsView = {
+      unseen: 2,
+      alerts: [
+        {
+          id: 'a1',
+          kind: 'price_jump',
+          createdAt: '2026-09-27T10:00:00.000Z',
+          seenAt: null,
+          seenByName: null,
+          impactWeekCents: 234_000,
+          detail: {
+            kind: 'price_jump',
+            ingredientId: 'i1',
+            ingredientName: 'Test mozzarella',
+            unit: 'g',
+            before: { unitCostMc: 150_000, priceKind: 'set' },
+            after: { unitCostMc: 177_000, priceKind: 'set' },
+            changeBps: 1_800,
+            source: 'delivery',
+            key: true,
+            keyBatches: [],
+            items: [],
+            itemsMoved: 6,
+          },
+        },
+        {
+          id: 'a2',
+          kind: 'batch_unpriced_input',
+          createdAt: '2026-09-27T09:00:00.000Z',
+          seenAt: null,
+          seenByName: null,
+          impactWeekCents: 0,
+          detail: {
+            kind: 'batch_unpriced_input',
+            ingredientId: 'b1',
+            ingredientName: 'Test sauce',
+            unit: 'g',
+            unpricedInputs: [{ ingredientId: 'i9', name: 'Test oregano' }],
+            kept: { unitCostMc: 17_813, priceKind: 'set' },
+            because: 'import',
+            changedName: null,
+          },
+        },
+        {
+          id: 'a3',
+          kind: 'weekly_digest',
+          createdAt: '2026-09-21T06:00:00.000Z',
+          seenAt: '2026-09-21T09:00:00.000Z',
+          seenByName: 'Test Owner',
+          impactWeekCents: 45_600,
+          detail: { kind: 'weekly_digest', weekOf: '2026-09-21', sinceWeekOf: '2026-09-14', changes: [] },
+        },
+      ],
+    };
+    const html = render(<AlertsTab />, [[['costing', 'alerts'], view]]);
+    for (const text of [
+      'Test mozzarella went up 18%: Rs 1,500 / kg → Rs 1,770 / kg',
+      '6 dishes cost more to make: about Rs 2,340 a week more at this till&#x27;s sales.',
+      'Test sauce kept its old price',
+      'Set price: Test oregano',
+      'Mark all 2 seen',
+      'Seen (1)',
+      'seen by Test Owner',
+    ]) {
+      expect(html).toContain(text);
+    }
+    // No jargon on screen (D15).
+    expect(html).not.toMatch(/\bbps\b|basis point/i);
+    const none = render(<AlertsTab />, [[['costing', 'alerts'], { unseen: 0, alerts: [] }]]);
+    expect(none).toContain('Nothing new');
+  });
+
+  const ALERT_SETTINGS: CostAlertSettingsView = {
+    jumpBps: 1_000,
+    impactWeekCents: 100_000,
+    ingredients: [
+      { ingredientId: 'i1', name: 'Test chicken', key: true, suggested: true },
+      { ingredientId: 'i2', name: 'Test onion', key: false, suggested: false },
+    ],
+    keysSuggested: true,
+    savedAt: null,
+  };
+
+  it('Targets: the price alerts — the owner edits them, a manager reads them locked', () => {
+    signIn('admin');
+    const owner = render(<TargetsTab />, [
+      [['costing', 'targets'], TARGETS],
+      [['costing', 'alertSettings'], ALERT_SETTINGS],
+    ]);
+    for (const text of ['Price alerts', 'A key ingredient&#x27;s price moves more than', 'A bill this far from the usual price also asks', 'Key ingredients', 'Test chicken', 'suggested']) {
+      expect(owner).toContain(text);
+    }
+    expect(owner).not.toContain('Only the owner can change the price alerts.');
+    signIn('manager');
+    const manager = render(<TargetsTab />, [
+      [['costing', 'targets'], TARGETS],
+      [['costing', 'alertSettings'], ALERT_SETTINGS],
+    ]);
+    expect(manager).toContain('Only the owner can change the price alerts.');
+    expect(manager).not.toContain('Save price alerts');
   });
 
   it('the batch breakdown: exact amount, what stock moves, price, cost and share', () => {

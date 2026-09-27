@@ -6,8 +6,10 @@
  * Everything is worked out here from the live menu, recipes and prices by
  * the pure functions in pos-domain (effectivePrices, expandRecipe via
  * plateCost, scaleBatch, findMissingCosts) — nothing is stored with a sale
- * yet (that is Phase 2). The only write is the owner's targets, through
- * business-settings-repo.
+ * yet (that is Phase 2). The only writes are the owner's targets and alert
+ * thresholds, through business-settings-repo. The price alerts' figures
+ * (Phase 6: which dishes a price change moves, per week) are worked out
+ * here too; the alerts themselves are cost-alert-repo's.
  *
  * Money in paisa, unit costs in millicents, every figure rounded once.
  */
@@ -19,37 +21,49 @@ import {
   maxBatchAmount,
   mulDivRound,
   plateCost,
+  resolveAlertSettings,
   resolveTargets,
   scaleBatch,
   shareBps,
+  suggestedKeyIngredient,
   unitCostMc,
+  weeklyImpactCents,
   type CostedLine,
   type PickMix,
   type PlateCost,
   type PlateGroup,
   type PriceOf,
   type RecipeLine,
+  type ResolvedAlertSettings,
   type ResolvedTarget,
   type ResolvedTargets,
   type ScaleInput,
 } from '@cheeseoclock/pos-domain';
-import type {
-  BatchCalc,
-  BatchCalcLine,
-  CostLineView,
-  CostingTargetsView,
-  FoodCostFlag,
-  ItemCostSheet,
-  MenuCostRow,
-  MenuCostsView,
-  MissingCosts,
-  MissingPriceRow,
-  RecipeCostPreview,
-  SetCostingTargetsRequest,
+import {
+  COST_ALERT_KINDS,
+  type BatchCalc,
+  type BatchCalcLine,
+  type CostAlert,
+  type CostAlertDetail,
+  type CostAlertItemMove,
+  type CostAlertKind,
+  type CostAlertSettingsView,
+  type CostAlertsView,
+  type CostLineView,
+  type CostingTargetsView,
+  type FoodCostFlag,
+  type ItemCostSheet,
+  type MenuCostRow,
+  type MenuCostsView,
+  type MissingCosts,
+  type MissingPriceRow,
+  type RecipeCostPreview,
+  type SetCostAlertSettingsRequest,
+  type SetCostingTargetsRequest,
 } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import { loadPriceBook, type PriceBook } from '../db/price-book.js';
-import { getBusinessSetting, setBusinessSettings } from '../db/repositories/business-settings-repo.js';
+import { getBusinessSetting, setBusinessSetting, setBusinessSettings } from '../db/repositories/business-settings-repo.js';
 import type { Actor } from '../db/repositories/base.js';
 import { COUNTED } from './analytics/sql.js';
 
@@ -196,18 +210,20 @@ function loadMenu(db: AppDatabase): MenuData {
  * afterwards, so the Costing page would slow down with every day of trading.
  */
 const WINDOW_LINES = `orders o CROSS JOIN order_items oi`;
-const IN_WINDOW = `o.created_at >= ? AND ${COUNTED}
+const IN_WINDOW = `o.created_at >= ? AND o.created_at <= ? AND ${COUNTED}
     AND oi.order_id = o.id AND oi.deleted_at IS NULL AND oi.menu_item_id IS NOT NULL`;
 
 /**
  * Units, sales and (when asked) picks per menu item over the last 28 days of
- * counted orders on this till: U = Σ qty; N_o = Σ qty over lines with o
- * picked; U_g = Σ qty over lines with any live choice of group g.
+ * counted orders on this till, up to `now` (the weekly digest looks back
+ * from its own Monday): U = Σ qty; N_o = Σ qty over lines with o picked;
+ * U_g = Σ qty over lines with any live choice of group g.
  */
 function loadSales(db: AppDatabase, now: Date, need: SalesNeed): Map<string, Sales> {
   const since = new Date(now.getTime() - MIX_WINDOW_DAYS * 86_400_000).toISOString();
+  const until = now.toISOString();
   const oneItem = need.kind === 'item' ? ' AND oi.menu_item_id = ?' : '';
-  const params: unknown[] = need.kind === 'item' ? [since, need.itemId] : [since];
+  const params: unknown[] = need.kind === 'item' ? [since, until, need.itemId] : [since, until];
   const out = new Map<string, Sales>();
   for (const r of db
     .prepare(
@@ -715,4 +731,233 @@ export function getBatchCalc(db: AppDatabase, ingredientId: string, amount: numb
   }
   if (!Number.isSafeInteger(amount) || amount < 1) throw new Error('Enter how much, at least 1');
   return batchCalcOf(book, ingredientId, amount * 100, 0, new Set())!;
+}
+
+// ------------------------------------------------ price alerts (Phase 6) --
+//
+// The figures behind Costing → Alerts: which dishes a price change moves and
+// what that comes to per week at this till's sales (4.9: a week is a
+// quarter of the last 28 days' units). The rules and the writes are
+// cost-alert-repo's; these are read-only.
+
+/** Everything the alerts work a plate out from: prices, the menu, the last 28 days' sales and the targets. */
+export type CostingContext = Ctx;
+export type CostingMenuItem = MenuItemRow;
+
+/** The costing figures' inputs now (every item's sales and picks over the last 28 days). */
+export function loadCostingContext(db: AppDatabase, now = new Date()): CostingContext {
+  return loadCtx(db, now, { kind: 'all' });
+}
+
+/** The menu items the figures count: on the till, or hidden but sold in the window. */
+export function itemsOnMenu(ctx: CostingContext): MenuItemRow[] {
+  return ctx.menu.items.filter((i) => onMenu(ctx, i));
+}
+
+/** An item's category target (the suggestion while none is saved). */
+export function targetFor(ctx: CostingContext, categoryId: string): ResolvedTarget {
+  return targetOf(ctx, categoryId);
+}
+
+/** An item's plate at other prices, and (the weekly digest) with the customers' picks as they were. */
+export function plateAt(ctx: CostingContext, item: MenuItemRow, priceOf: PriceOf, mix: PickMix | null | undefined = mixOf(ctx, item.id)): PlateCost {
+  return plateCost(
+    {
+      basePriceCents: item.basePriceCents,
+      recipe: ctx.menu.recipes.get(item.id) ?? [],
+      groups: ctx.menu.groups.get(item.id) ?? [],
+      mix,
+    },
+    priceOf,
+  );
+}
+
+/** The customers' picks of an item over the window (null when it did not sell). */
+export function pickMixOf(ctx: CostingContext, itemId: string): PickMix | null {
+  return mixOf(ctx, itemId);
+}
+
+/** Units of an item sold in the window, on this till. */
+export function soldLast28(ctx: CostingContext, itemId: string): number {
+  return ctx.sales.get(itemId)?.units ?? 0;
+}
+
+/** At most this many dishes are kept with a price alert (the most per week first). */
+export const MOVES_KEPT = 25;
+
+/**
+ * The dishes on the menu a price change moves: every food item whose recipe
+ * (or one of its choices) uses an ingredient in `touched` (the one whose
+ * price changed, and the batches made from it), costed at the prices before
+ * and after, at the customers' usual picks. Most per week first (then by
+ * name).
+ */
+export function dishesMovedBy(
+  ctx: CostingContext,
+  before: PriceOf,
+  after: PriceOf,
+  touched: ReadonlySet<string>,
+): CostAlertItemMove[] {
+  const moves: CostAlertItemMove[] = [];
+  for (const item of itemsOnMenu(ctx)) {
+    const recipe = ctx.menu.recipes.get(item.id) ?? [];
+    if (!recipe.some((l) => touched.has(l.ingredientId))) continue;
+    if (targetOf(ctx, item.categoryId).nonFood) continue;
+    const pb = plateAt(ctx, item, before);
+    const pa = plateAt(ctx, item, after);
+    if (pb.typicalCostMc === pa.typicalCostMc) continue;
+    const units = soldLast28(ctx, item.id);
+    moves.push({
+      menuItemId: item.id,
+      name: item.name,
+      priceCents: pa.typicalPriceCents,
+      costBeforeCents: pb.typicalCostCents,
+      costAfterCents: pa.typicalCostCents,
+      foodCostBeforeBps: pb.foodCostBps,
+      foodCostAfterBps: pa.foodCostBps,
+      soldLast28: units,
+      impactWeekCents: weeklyImpactCents(units, pb.typicalCostMc, pa.typicalCostMc),
+    });
+  }
+  return moves.sort((a, b) => Math.abs(b.impactWeekCents) - Math.abs(a.impactWeekCents) || a.name.localeCompare(b.name));
+}
+
+// ---------------------------------------------------------- the alert list --
+
+interface CostAlertRow {
+  id: string;
+  kind: string;
+  impact_week_cents: number;
+  after_json: string | null;
+  seen_at: string | null;
+  seen_name: string | null;
+  created_at: string;
+}
+
+/** The most alerts the list reads (newest first; not seen yet always first). */
+const ALERTS_LISTED = 200;
+
+function isAlertKind(k: string): k is CostAlertKind {
+  return (COST_ALERT_KINDS as readonly string[]).includes(k);
+}
+
+/**
+ * An alert's figures as written (after_json), or null when they can't be
+ * read (a newer till's shape). The digest's saved bands and picks (`state`,
+ * what the next digest compares with) are the till's, not the screen's.
+ */
+export function readAlertDetail(kind: string, afterJson: string | null): CostAlertDetail | null {
+  if (!afterJson) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(afterJson);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object' || (raw as { kind?: unknown }).kind !== kind) return null;
+  const r = raw as Record<string, unknown>;
+  switch (kind) {
+    case 'price_jump':
+      return typeof r['ingredientName'] === 'string' && Array.isArray(r['items']) ? (r as unknown as CostAlertDetail) : null;
+    case 'batch_unpriced_input':
+      return typeof r['ingredientName'] === 'string' && Array.isArray(r['unpricedInputs']) ? (r as unknown as CostAlertDetail) : null;
+    case 'weekly_digest': {
+      if (typeof r['weekOf'] !== 'string' || !Array.isArray(r['changes'])) return null;
+      const shown: Record<string, unknown> = { ...r };
+      delete shown['state'];
+      return shown as unknown as CostAlertDetail;
+    }
+    default:
+      return null;
+  }
+}
+
+/** A weekly digest that found nothing moved: kept (the next one compares with it), never listed. */
+function isQuietDigest(kind: string, detail: CostAlertDetail | null): boolean {
+  return kind === 'weekly_digest' && detail?.kind === 'weekly_digest' && detail.changes.length === 0;
+}
+
+/**
+ * Costing → Alerts: not seen yet first, then the ones seen, newest first
+ * within each. A digest with nothing to say is not listed. Exposed for the
+ * Dashboard's "Do this" list too (each alert carries what it costs per
+ * week, costing spec 4.17).
+ */
+export function getCostAlerts(db: AppDatabase, limit = ALERTS_LISTED): CostAlertsView {
+  const rows = db
+    .prepare(
+      `SELECT a.id, a.kind, a.impact_week_cents, a.after_json, a.seen_at, a.created_at, u.full_name AS seen_name
+         FROM cost_alerts a
+         LEFT JOIN users u ON u.id = a.seen_by_user_id
+        WHERE a.deleted_at IS NULL
+        ORDER BY a.seen_at IS NOT NULL, a.created_at DESC, a.id
+        LIMIT ?`,
+    )
+    .all(Math.max(1, Math.min(1_000, Math.floor(limit)))) as unknown as CostAlertRow[];
+  const alerts: CostAlert[] = [];
+  for (const r of rows) {
+    if (!isAlertKind(r.kind)) continue;
+    const detail = readAlertDetail(r.kind, r.after_json);
+    if (isQuietDigest(r.kind, detail)) continue;
+    alerts.push({
+      id: r.id,
+      kind: r.kind,
+      createdAt: r.created_at,
+      seenAt: r.seen_at,
+      seenByName: r.seen_name,
+      impactWeekCents: Number(r.impact_week_cents),
+      detail,
+    });
+  }
+  return { alerts, unseen: alerts.filter((a) => a.seenAt === null).length };
+}
+
+// ------------------------------------------------------ the alert settings --
+
+function liveIngredientNames(db: AppDatabase): Array<{ id: string; name: string }> {
+  return db.prepare(`SELECT id, name FROM ingredients WHERE deleted_at IS NULL ORDER BY name`).all() as Array<{ id: string; name: string }>;
+}
+
+/** The thresholds in force now (the saved ones, or the defaults with the key ingredients suggested by name). */
+export function loadAlertSettings(db: AppDatabase, ingredients?: Iterable<{ id: string; name: string }>): ResolvedAlertSettings {
+  const saved = getBusinessSetting(db, 'costing.alerts');
+  return resolveAlertSettings(saved?.value ?? null, ingredients ?? liveIngredientNames(db));
+}
+
+export function getCostAlertSettings(db: AppDatabase): CostAlertSettingsView {
+  const ingredients = liveIngredientNames(db);
+  const saved = getBusinessSetting(db, 'costing.alerts');
+  const s = resolveAlertSettings(saved?.value ?? null, ingredients);
+  return {
+    jumpBps: s.jumpBps,
+    impactWeekCents: s.impactWeekCents,
+    ingredients: ingredients.map((i) => ({
+      ingredientId: i.id,
+      name: i.name,
+      key: s.keyIds.has(i.id),
+      suggested: suggestedKeyIngredient(i.name),
+    })),
+    keysSuggested: s.keysSuggested,
+    savedAt: saved?.updatedAt ?? null,
+  };
+}
+
+/**
+ * Save the owner's alert thresholds (business-settings-repo: synced,
+ * audited). Key ingredients that are no longer there are dropped. Answers
+ * with the settings as they now stand.
+ */
+export function saveCostAlertSettings(db: AppDatabase, req: SetCostAlertSettingsRequest, actor: Actor): CostAlertSettingsView {
+  const live = new Set(liveIngredientNames(db).map((i) => i.id));
+  setBusinessSetting(
+    db,
+    'costing.alerts',
+    {
+      jumpBps: req.jumpBps,
+      impactWeekCents: req.impactWeekCents,
+      keyIngredientIds: [...new Set(req.keyIngredientIds)].filter((id) => live.has(id)),
+    },
+    actor,
+  );
+  return getCostAlertSettings(db);
 }

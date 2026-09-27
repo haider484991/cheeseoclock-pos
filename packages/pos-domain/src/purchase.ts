@@ -23,7 +23,13 @@ import type { PriceKind, PurchaseKind } from '@cheeseoclock/shared-types';
 import { mulDivRound, thousandSize, unitCostMc, valueCents, type Pack } from './units.js';
 import { priceChangeBps } from './ingredient-price.js';
 
-/** How far a bill's price may be from the usual price before the till asks (costing spec D1): 10%, in basis points. */
+/**
+ * How far a bill's price may be from the usual price before the till asks
+ * (costing spec D1): 10%, in basis points. The default only: D1 calls it
+ * "the alert threshold", so from costing Phase 6 the owner sets it with the
+ * price alerts ('costing.alerts' jumpBps, whose default this is), and the
+ * main process and the purchase screens pass it in as `thresholdBps`.
+ */
 export const PRICE_GUARD_BPS = 1_000;
 
 /** A purchase order line's price: its ordered pack, or — a line from before costing Phase 5 — (1, its price per unit). */

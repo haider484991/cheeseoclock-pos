@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { CostingTargets, SetCostingTargetsRequest } from '@cheeseoclock/shared-types';
+import type { CostAlertSettings, CostingTargets, SetCostingTargetsRequest } from '@cheeseoclock/shared-types';
 
 /**
  * Business settings (costing spec §3, migration 0032): shop-wide settings
@@ -40,10 +40,34 @@ export const costingPriceStepSchema = z
   .min(100, { message: 'The price step is at least Rs 1' })
   .max(100_000, { message: 'The price step is at most Rs 1,000' });
 
+/**
+ * Phase 6: the price alerts' thresholds (costing spec D1, Phase 6). A key
+ * ingredient moving more than `jumpBps` is an alert — and the same figure is
+ * D1's purchase guard (a bill that far from the usual price asks first);
+ * any price change costing at least `impactWeekCents` a week at this till's
+ * sales is an alert; `keyIngredientIds` are the key ingredients.
+ */
+export const costingAlertsSchema = z
+  .object({
+    jumpBps: z
+      .number()
+      .int({ message: 'The price-jump threshold is a whole number of basis points' })
+      .min(100, { message: 'A price jump is at least 1%' })
+      .max(10_000, { message: 'A price jump is at most 100%' }),
+    impactWeekCents: z
+      .number()
+      .int({ message: 'The weekly amount is in whole paisa' })
+      .min(0, { message: 'The weekly amount cannot be below Rs 0' })
+      .max(100_000_000, { message: 'The weekly amount is at most Rs 1,000,000' }),
+    keyIngredientIds: z.array(z.string().min(1)).max(1_000),
+  })
+  .strict();
+
 /** Every key and its schema. A key not listed here cannot be written. */
 export const BUSINESS_SETTING_SCHEMAS = {
   'costing.targets': costingTargetsSchema,
   'costing.priceStep': costingPriceStepSchema,
+  'costing.alerts': costingAlertsSchema,
 } as const;
 
 export type BusinessSettingKey = keyof typeof BUSINESS_SETTING_SCHEMAS;
@@ -64,8 +88,20 @@ export const setCostingTargetsInputSchema = z
   })
   .strict();
 
+/** What the Targets tab saves for the alerts (costing:setAlertSettings): the 'costing.alerts' value. */
+export const setCostAlertSettingsInputSchema = costingAlertsSchema;
+
+/** "Seen" on Costing → Alerts: one or more alerts at once. */
+export const markCostAlertsSeenInputSchema = z
+  .object({ ids: z.array(z.string().min(1).max(64)).min(1, { message: 'Which alert?' }).max(500) })
+  .strict();
+
+/** "Use the sheet's price" (Inventory → Ingredients). */
+export const useSheetPriceInputSchema = z.object({ ingredientId: z.string().min(1).max(64) }).strict();
+
 // The IPC contract's types (shared-types) and these schemas must describe the
 // same shape: tsc fails here the moment one changes without the other.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const _targetsShape: Same<z.infer<typeof costingTargetsSchema>, CostingTargets> = true;
 const _setTargetsShape: Same<z.infer<typeof setCostingTargetsInputSchema>, SetCostingTargetsRequest> = true;
+const _alertsShape: Same<z.infer<typeof costingAlertsSchema>, CostAlertSettings> = true;
