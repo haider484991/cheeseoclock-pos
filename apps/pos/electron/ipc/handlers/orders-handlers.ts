@@ -4,7 +4,7 @@ import { requireCapability, REFUSED } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
 import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
-import { orderStockAnswerSchema } from '@cheeseoclock/shared-schemas';
+import { foodpandaTenderCheckSchema, orderStockAnswerSchema } from '@cheeseoclock/shared-schemas';
 import {
   getCurrentSession,
   verifyManagerPin,
@@ -36,6 +36,8 @@ import {
   markOrderServed,
   markOrderDelivered,
   findOrder,
+  hasFoodpandaDeal,
+  FOODPANDA_DEAL_NEEDS_MANAGER,
 } from '../../db/repositories/order-repo.js';
 import {
   checkChoicePicks,
@@ -266,7 +268,10 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // The order's subtotal decides whether a flat amount is more than 10% of it.
     const current = getOrderSnapshot(ctx.db, payload.orderId);
     if (!current) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // The shop's foodpanda deal on this order: changing it is a manager's, whatever the amount.
+    const replacesDeal = hasFoodpandaDeal(ctx.db, payload.orderId);
     if (
+      replacesDeal ||
       requiresManagerApproval(
         { type: payload.discountType, value: payload.value },
         current.order.subtotalCents,
@@ -275,7 +280,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       if (!payload.approverPin) {
         throw new IpcGuardError({
           code: 'precondition_failed',
-          message: 'Manager approval required for this discount',
+          message: replacesDeal ? FOODPANDA_DEAL_NEEDS_MANAGER : 'Manager approval required for this discount',
         });
       }
       try {
@@ -305,9 +310,21 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     return ok(snap);
   });
 
-  defineHandler('orders:clearDiscount', ctx, (_ctx, payload) => {
+  defineHandler('orders:clearDiscount', ctx, async (_ctx, payload) => {
     const s = requireOrderCreate();
-    clearDiscount(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    // Taking the shop's foodpanda deal off is changing it: a manager's PIN or password.
+    let approverUserId: string | null = null;
+    if (hasFoodpandaDeal(ctx.db, payload.orderId)) {
+      if (!payload.approverPin) {
+        throw new IpcGuardError({ code: 'precondition_failed', message: FOODPANDA_DEAL_NEEDS_MANAGER });
+      }
+      try {
+        approverUserId = (await verifyManagerPin(ctx.db, payload.approverPin)).approverUserId;
+      } catch (e) {
+        throw new IpcGuardError({ code: 'forbidden', message: e instanceof Error ? e.message : 'Manager approval failed' });
+      }
+    }
+    clearDiscount(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId }, { approverUserId });
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
@@ -349,8 +366,16 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:tender', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    const fp = foodpandaTenderCheckSchema.safeParse(payload.foodpanda ?? {});
+    if (!fp.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: fp.error.issues[0]?.message ?? 'Check the tablet total' });
+    }
     try {
-      tenderOrder(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+      tenderOrder(
+        ctx.db,
+        { orderId: payload.orderId, payments: payload.payments, foodpanda: fp.data },
+        { userId: s.id, deviceId: ctx.deviceId },
+      );
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',

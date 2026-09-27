@@ -54,6 +54,43 @@ export function parseDiscountEntry(kind: 'percent' | 'flat', text: string): Disc
   return flatChoiceRupees(n);
 }
 
+/**
+ * Why the Discount dialog was opened: 'change' (F3, the discount line, Add
+ * discount) or 'removeDeal' (the × on the owner's foodpanda deal line — the
+ * deal comes off only with a manager's PIN, so the dialog asks for it).
+ */
+export type DiscountDialogIntent = 'change' | 'removeDeal';
+
+/** The order's discount as the dialog sees it (the snapshot's latest discount row). */
+export interface CurrentDiscount {
+  discountType: 'percent' | 'flat';
+  value: number;
+  reason: string | null;
+  source?: string | null;
+}
+
+/**
+ * Where the Discount dialog starts. A staff discount opens on itself (its
+ * choice and its reason), so a tap changes it. The owner's foodpanda deal
+ * opens on NOTHING: re-applying its own % would turn the deal into a staff
+ * discount without its minimum and most-off, under the manager's name — and
+ * its label ("Foodpanda deal 20% off") is not the reason for any other
+ * discount a manager types in its place.
+ */
+export function discountDialogStart(current: CurrentDiscount | null): { picked: DiscountChoice | null; reason: string } {
+  if (!current || current.source === 'foodpanda') return { picked: null, reason: '' };
+  return { picked: { type: current.discountType, value: current.value }, reason: current.reason ?? '' };
+}
+
+/**
+ * What Enter (and the big button) does: take the deal off when the dialog
+ * was opened from the deal's × and nothing else is picked; otherwise apply
+ * the choice.
+ */
+export function discountDialogPrimary(p: { dealOn: boolean; intent: DiscountDialogIntent; hasChoice: boolean }): 'apply' | 'remove' {
+  return p.dealOn && p.intent === 'removeDeal' && !p.hasChoice ? 'remove' : 'apply';
+}
+
 /** "10% off", "Rs 200 off". */
 export function describeDiscount(d: DiscountChoice): string {
   return d.type === 'percent' ? `${d.value}% off` : `${formatCents(d.value)} off`;

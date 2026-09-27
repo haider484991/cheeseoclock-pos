@@ -13,16 +13,21 @@ import {
   PERCENT_PRESETS,
   REASON_PRESETS,
   describeDiscount,
+  discountDialogPrimary,
+  discountDialogStart,
   flatChoiceRupees,
   parseDiscountEntry,
   percentChoice,
   previewDiscount,
   sameChoice,
   type DiscountChoice,
+  type DiscountDialogIntent,
 } from './discountPresets';
 
 interface Props {
   onClose: () => void;
+  /** 'removeDeal': opened from the × on the foodpanda deal's line (Enter takes it off). */
+  intent?: DiscountDialogIntent;
 }
 
 /**
@@ -32,19 +37,24 @@ interface Props {
  * ask for a manager's PIN or password (over 10%, or a flat amount over 10% of
  * the order — the same rule the till checks when it saves the discount).
  */
-export function DiscountDialog({ onClose }: Props) {
+export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const applyDiscount = useCheckoutStore((s) => s.applyDiscount);
   const clearDiscount = useCheckoutStore((s) => s.clearDiscount);
   const busy = useCheckoutStore((s) => s.busy);
 
   const current = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
+  // The shop's foodpanda deal is on this order: only a manager changes it or takes it off (for one order).
+  const dealOn = current?.source === 'foodpanda';
   const currentChoice: DiscountChoice | null = current ? { type: current.discountType, value: current.value } : null;
+  // A staff discount opens on itself; the deal opens on nothing (never re-applied as a staff discount).
+  const start = discountDialogStart(current);
+  const removingDeal = dealOn && intent === 'removeDeal';
 
-  const [picked, setPicked] = useState<DiscountChoice | null>(currentChoice);
+  const [picked, setPicked] = useState<DiscountChoice | null>(start.picked);
   const [customKind, setCustomKind] = useState<'percent' | 'flat'>('percent');
   const [customText, setCustomText] = useState('');
-  const [reason, setReason] = useState(current?.reason ?? '');
+  const [reason, setReason] = useState(start.reason);
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -61,9 +71,10 @@ export function DiscountDialog({ onClose }: Props) {
 
   const before = previewDiscount(lines, subtotal, null);
   const after = previewDiscount(lines, subtotal, choice);
-  const needsPin = after.needsApproval;
+  const needsPin = after.needsApproval || dealOn;
   const pinOk = secretReady(pin);
   const canApply = !!choice && after.discountCents > 0 && (!needsPin || pinOk) && !saving && !busy;
+  const primary = discountDialogPrimary({ dealOn, intent, hasChoice: !!choice });
 
   function focusPinSoon() {
     requestAnimationFrame(() => pinRef.current?.focus());
@@ -79,7 +90,7 @@ export function DiscountDialog({ onClose }: Props) {
     setPicked(next);
     setArmed(true);
     setCustomText('');
-    if (previewDiscount(lines, subtotal, next).needsApproval && !pinOk) focusPinSoon();
+    if ((previewDiscount(lines, subtotal, next).needsApproval || dealOn) && !pinOk) focusPinSoon();
   }
 
   async function apply(which: DiscountChoice | null = choice) {
@@ -93,7 +104,8 @@ export function DiscountDialog({ onClose }: Props) {
       setError('Nothing to take off this order.');
       return;
     }
-    if (preview.needsApproval && !pinOk) {
+    const approval = preview.needsApproval || dealOn;
+    if (approval && !pinOk) {
       setError(pin.trim() ? approvalProblem(pin) : "This discount needs a manager's PIN or password.");
       pinRef.current?.focus();
       return;
@@ -101,12 +113,12 @@ export function DiscountDialog({ onClose }: Props) {
     setSaving(true);
     setError(null);
     try {
-      await applyDiscount(which.type, which.value, reason.trim() || undefined, preview.needsApproval ? pin : undefined);
+      await applyDiscount(which.type, which.value, reason.trim() || undefined, approval ? pin : undefined);
       onClose();
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       setError(`Discount not applied: ${message}`);
-      if (preview.needsApproval) {
+      if (approval) {
         setPin('');
         pinRef.current?.focus();
       }
@@ -117,10 +129,15 @@ export function DiscountDialog({ onClose }: Props) {
 
   async function remove() {
     if (saving || busy) return;
+    if (dealOn && !pinOk) {
+      setError(pin.trim() ? approvalProblem(pin) : "Taking the foodpanda deal off needs a manager's PIN or password.");
+      pinRef.current?.focus();
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await clearDiscount();
+      await clearDiscount(dealOn ? pin : undefined);
       onClose();
     } catch (e) {
       setError(`Could not remove the discount: ${e instanceof Error ? e.message : 'Unknown error'}`);
@@ -131,7 +148,8 @@ export function DiscountDialog({ onClose }: Props) {
 
   // Enter applies from anywhere in the dialog except a button reached with
   // Tab (which does its own thing). In the "other amount" box, Enter goes to
-  // the PIN / password box first when one is needed.
+  // the PIN / password box first when one is needed. Opened from the deal's
+  // ×, with nothing else picked, Enter takes the deal off.
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key !== 'Enter') return;
     const target = e.target as HTMLElement;
@@ -141,7 +159,8 @@ export function DiscountDialog({ onClose }: Props) {
       pinRef.current?.focus();
       return;
     }
-    void apply();
+    if (primary === 'remove') void remove();
+    else void apply();
   }
 
   const presetClass = (selected: boolean) =>
@@ -161,12 +180,12 @@ export function DiscountDialog({ onClose }: Props) {
         type="button"
         onClick={() => pick(preset)}
         aria-pressed={selected}
-        aria-label={`${describeDiscount(preset)}, takes ${formatCents(p.discountCents)} off${p.needsApproval ? ", needs a manager's PIN or password" : ''}`}
+        aria-label={`${describeDiscount(preset)}, takes ${formatCents(p.discountCents)} off${p.needsApproval || dealOn ? ", needs a manager's PIN or password" : ''}`}
         className={presetClass(selected)}
       >
         <span className="text-lg font-bold leading-tight">{label}</span>
         <span className="flex items-center gap-1 text-xs font-medium text-stone-500 dark:text-stone-400">
-          {p.needsApproval && <Lock className="h-3 w-3" aria-hidden="true" />}−{formatCents(p.discountCents, { showSymbol: false })}
+          {(p.needsApproval || dealOn) && <Lock className="h-3 w-3" aria-hidden="true" />}−{formatCents(p.discountCents, { showSymbol: false })}
         </span>
       </button>
     );
@@ -179,26 +198,34 @@ export function DiscountDialog({ onClose }: Props) {
         <Dialog.Content
           onKeyDown={onKeyDown}
           // Keys first: F3, type 15, Enter. Taps on the presets work the same.
+          // From the deal's ×: straight to the manager's PIN, then Enter.
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            customRef.current?.focus();
+            (removingDeal ? pinRef.current : customRef.current)?.focus();
           }}
           className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-24px)] w-[560px] max-w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-xl bg-white p-5 shadow-xl dark:bg-stone-900 dark:text-stone-100"
         >
           <header className="mb-3 flex items-start justify-between gap-3">
             <div>
-              <Dialog.Title className="text-xl font-bold">Discount</Dialog.Title>
+              <Dialog.Title className="text-xl font-bold">{removingDeal ? 'Take the foodpanda deal off?' : 'Discount'}</Dialog.Title>
               <Dialog.Description className="text-sm text-stone-500 dark:text-stone-400">
                 Order {formatCents(subtotal)} before tax
                 {current && (
                   <>
                     {' · '}
                     <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                      now {describeDiscount(currentChoice!)}
+                      now {dealOn && current.reason ? `${current.reason} (set by the owner)` : describeDiscount(currentChoice!)}
                     </span>
                   </>
                 )}
               </Dialog.Description>
+              {dealOn && (
+                <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
+                  {removingDeal
+                    ? "A manager's PIN or password takes it off this order. Or pick what the tablet shows instead."
+                    : "The owner's foodpanda deal: only a manager can change it on this order (for example to what the tablet shows) or take it off."}
+                </p>
+              )}
             </div>
             <Dialog.Close asChild>
               <button
@@ -295,7 +322,7 @@ export function DiscountDialog({ onClose }: Props) {
                   value={reason}
                   maxLength={120}
                   onChange={(e) => setReason(e.target.value)}
-                  placeholder="or type one"
+                  placeholder={dealOn ? 'e.g. as on the tablet' : 'or type one'}
                   className="h-10 min-w-[140px] flex-1 rounded-full border border-stone-200 px-3 text-sm dark:border-stone-700 dark:bg-stone-800"
                 />
               </div>
@@ -361,18 +388,24 @@ export function DiscountDialog({ onClose }: Props) {
           </div>
 
           <footer className="mt-4 flex items-center gap-2">
-            {current && (
+            {current && primary !== 'remove' && (
               <Button variant="ghost" className="text-red-700 dark:text-red-400" disabled={saving || busy} onClick={() => void remove()}>
-                Remove discount
+                {dealOn ? 'Take the deal off' : 'Remove discount'}
               </Button>
             )}
             <div className="flex-1" />
             <Button variant="secondary" onClick={onClose}>
               Cancel
             </Button>
-            <Button variant="primary" size="lg" disabled={!canApply} onClick={() => void apply()}>
-              {saving ? 'Applying…' : choice ? `Apply ${describeDiscount(choice)}` : 'Apply'}
-            </Button>
+            {primary === 'remove' ? (
+              <Button variant="danger" size="lg" disabled={!pinOk || saving || busy} onClick={() => void remove()}>
+                {saving ? 'Taking it off…' : 'Take the deal off'}
+              </Button>
+            ) : (
+              <Button variant="primary" size="lg" disabled={!canApply} onClick={() => void apply()}>
+                {saving ? 'Applying…' : choice ? `Apply ${describeDiscount(choice)}` : 'Apply'}
+              </Button>
+            )}
           </footer>
         </Dialog.Content>
       </Dialog.Portal>

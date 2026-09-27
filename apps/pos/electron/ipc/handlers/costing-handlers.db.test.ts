@@ -302,6 +302,33 @@ live('Menu costs', () => {
 });
 
 live('the item cost sheet', () => {
+  it('"On foodpanda": the price after the deal for a manager; foodpanda’s commission and what you keep for the owner only', async () => {
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    const owner = { userId: 'u_admin', deviceId: DEV };
+    setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null }, owner);
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: true, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0 }, owner);
+    h.session = MANAGER;
+    const forManager = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    const price = forManager.row.priceCents;
+    expect(forManager.onFoodpanda).toMatchObject({ dealPercent: 20, priceCents: price, priceAfterDealCents: price - Math.round(price / 5), owner: null });
+    h.session = OWNER;
+    const forOwner = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    const after = forOwner.onFoodpanda!.priceAfterDealCents;
+    expect(forOwner.onFoodpanda!.owner).toMatchObject({
+      commissionBps: 2_500,
+      confirmed: true,
+      foodpandaKeepsCents: Math.round(after / 4),
+      youKeepCents: after - Math.round(after / 4),
+    });
+
+    // A minimum above one plate's price: the plate is still worked at the deal's
+    // price (as part of an order that reaches it), and the minimum is said.
+    const minimum = Math.ceil((price * 3) / 100) * 100; // whole rupees
+    setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: minimum, maxOffCents: null, startsOn: null, endsOn: null }, owner);
+    const withMinimum = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    expect(withMinimum.onFoodpanda).toMatchObject({ dealPercent: 20, minOrderCents: minimum, priceAfterDealCents: price - Math.round(price / 5) });
+  });
+
   it('every line with its price per kg, the batch sauce opened up, paid extras and leave-outs', async () => {
     h.session = MANAGER;
     const sheet = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;

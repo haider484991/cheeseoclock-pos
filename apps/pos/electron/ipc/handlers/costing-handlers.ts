@@ -1,7 +1,7 @@
 import type { ZodError } from 'zod';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler } from '../registry.js';
-import { COST_CAPABILITY, err, ok } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, err, hasCapability, ok } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import {
   batchCalcInputSchema,
@@ -26,6 +26,7 @@ import {
 import { getTillsSetting, saveCostAlertSettings, saveCostingTargets, saveTillsSetting } from '../../services/costing-settings.js';
 import { getCostedRecipeCalc } from '../../services/recipe-calc-service.js';
 import { readTillLink } from '../../services/till-link.js';
+import { itemFoodpandaLine } from '../../services/shop-settings.js';
 import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/cost-alert-repo.js';
 
 /**
@@ -57,11 +58,17 @@ export function registerCostingHandlers(ctx: HandlerContext): void {
   });
 
   defineHandler('costing:itemSheet', ctx, (_ctx, payload) => {
-    requireCosts();
+    const s = requireCosts();
     if (!payload || typeof payload.menuItemId !== 'string') {
       return err({ code: 'validation_failed', message: 'Which menu item?' });
     }
-    return ok(getItemCostSheet(ctx.db, payload.menuItemId));
+    const sheet = getItemCostSheet(ctx.db, payload.menuItemId);
+    if (!sheet) return ok(null);
+    // "On foodpanda": the price after the deal for anyone who may see costs;
+    // foodpanda's commission and what the shop keeps for the owner only
+    // (managers see Costing — COST_CAPABILITY — but not the owner's fees).
+    const onFoodpanda = itemFoodpandaLine(ctx.db, sheet.row, hasCapability(s.role, 'settings.manage'));
+    return ok({ ...sheet, onFoodpanda });
   });
 
   defineHandler('costing:missingCosts', ctx, () => {

@@ -16,11 +16,15 @@ export function isSetupPhase(db: AppDatabase): boolean {
   return row.n === 0;
 }
 
+/**
+ * The owner's settings (settings.manage: the owner alone since v0.7.18 —
+ * managers and cashiers are refused here, in the main process).
+ */
 export function requireSettingsManage(): AuthenticatedUser {
   const session = getCurrentSession();
   if (!session) throw new IpcGuardError({ code: 'unauthenticated', message: 'Not logged in' });
   if (!hasCapability(session.role, 'settings.manage')) {
-    throw new IpcGuardError({ code: 'forbidden', message: 'Admin or manager required' });
+    throw new IpcGuardError({ code: 'forbidden', message: REFUSED.settings });
   }
   return session;
 }
@@ -78,5 +82,6 @@ export const REFUSED = {
   prices: 'Only a manager or the owner can change prices.',
   purchases: 'Only a manager or the owner can record purchases or see what was spent.',
   reports: 'Only the owner can see reports.',
+  settings: 'Only the owner can change the shop’s settings.',
   stockTakes: 'Only a manager or the owner can do a stock take or see what went missing.',
 } as const;

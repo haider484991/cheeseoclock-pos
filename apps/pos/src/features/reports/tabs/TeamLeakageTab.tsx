@@ -144,6 +144,9 @@ export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 
 export function DiscountsSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 'discounts'> }) {
   const d = report.discounts;
   const { shown, toggle } = useShowAll(d.recent, 8);
+  // "Each discount" is the staff's: the standing offers are listed on their own.
+  const staffCount = d.staffCount ?? d.totalCount;
+  const hasStanding = (d.standing?.length ?? 0) > 0;
   return (
     <Section
       id="discounts"
@@ -175,7 +178,23 @@ export function DiscountsSection({ report }: { report: Pick<ReportTeamTab, 'kpis
               empty="None."
             />
           </Panel>
-          <Panel title="Each discount" className="xl:col-span-2">
+          {hasStanding && (
+            <Panel
+              title="Standing offers"
+              note="Put on by the till from your own settings (Settings → foodpanda), not given by staff. Each order is on Channels → foodpanda orders to check."
+              className="xl:col-span-2"
+            >
+              <DataTable
+                columns={[{ label: 'Offer' }, { label: 'Orders', right: true }, { label: 'Amount', right: true }]}
+                rows={(d.standing ?? []).map((o) => [o.name, o.count, formatCents(o.amountCents)])}
+                empty="None."
+              />
+            </Panel>
+          )}
+          <Panel
+            title={hasStanding ? 'Each discount staff gave' : 'Each discount'}
+            className="xl:col-span-2"
+          >
             <DataTable
               columns={[{ label: 'When' }, { label: 'Order' }, { label: 'Discount', right: true }, { label: 'Reason' }, { label: 'Given by' }, { label: 'Approved by' }]}
               rows={shown.map((x) => [
@@ -189,12 +208,12 @@ export function DiscountsSection({ report }: { report: Pick<ReportTeamTab, 'kpis
                 x.givenBy,
                 x.approvedBy ?? '—',
               ])}
-              empty="None."
+              empty={hasStanding ? 'None: only the standing offers above.' : 'None.'}
             />
             {toggle}
-            {d.recent.length < d.totalCount && (
+            {d.recent.length < staffCount && (
               <p className="mt-2 text-xs text-stone-500">
-                Showing the latest {d.recent.length} of {d.totalCount}. The totals above include all of them.
+                Showing the latest {d.recent.length} of {staffCount}. The totals above include all of them.
               </p>
             )}
           </Panel>

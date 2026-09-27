@@ -12,11 +12,13 @@ import { Bike, Store } from 'lucide-react';
 import { ShareBar } from '../charts';
 import { DataTable, Panel, Section, useShowAll } from '../reportUi';
 import { CHANNEL_LABEL, fmtMinutes, percentOf } from '../reportFormat';
+import { FoodpandaSection } from './FoodpandaSection';
 
 export function ChannelsTab({ data }: { data: ReportChannelsTab }) {
   return (
     <div className="space-y-10">
       <ChannelsSection report={data} />
+      <FoodpandaSection foodpanda={data.foodpanda} />
       <DeliveriesSection report={data} />
     </div>
   );

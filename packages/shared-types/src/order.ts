@@ -1,5 +1,6 @@
 import type { Cents } from './money.js';
 import type { UUID, OrderNumber } from './ids.js';
+import type { DiscountSource, FoodpandaDealShare } from './shop-settings.js';
 
 // 'dine_in' is retained for historical orders; the POS no longer offers it.
 export type OrderMode = 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda';
@@ -107,6 +108,13 @@ export interface OrderDiscount {
   appliedByUserId: UUID;
   approvedByUserId: UUID | null;
   amountCents: Cents;
+  /**
+   * Where it came from (migration 0039): 'foodpanda' = the shop's standing
+   * foodpanda deal, put on automatically; null/absent = typed by staff (F3).
+   */
+  source?: DiscountSource | null;
+  /** A foodpanda deal's figures on this order (the whole deal, foodpanda's part). */
+  foodpanda?: FoodpandaDealShare | null;
 }
 
 export interface Payment {

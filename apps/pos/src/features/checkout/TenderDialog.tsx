@@ -1,12 +1,16 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn, NumberPad } from '@cheeseoclock/ui';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { formatCents, tabletDiffers } from '@cheeseoclock/pos-domain';
+import { FOODPANDA_ORDER_CODE_MAX, FOODPANDA_TABLET_TOLERANCE_CENTS } from '@cheeseoclock/shared-types';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import type { OrderSnapshot, PaymentMethod } from '@cheeseoclock/shared-types';
 import { Banknote, CreditCard, Smartphone, Building, X } from 'lucide-react';
 import { quickCashRupees } from './tenderAmounts';
 import { ownsEnter } from './keys';
+import { foodpandaDealLine } from './foodpandaDealLine';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -49,6 +53,14 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   // the cashier types what they gave.
   const [exact, setExact] = useState(!isFoodpanda && total > 0);
   const [error, setError] = useState<string | null>(null);
+  // foodpanda's order number and the tablet's total (Settings → foodpanda → checks).
+  const rules = useCheckoutRules();
+  const checks = rules.data?.foodpanda.checks ?? { orderCode: 'optional', tabletTotal: 'optional' };
+  const tolerance = rules.data?.foodpanda.tabletToleranceCents ?? FOODPANDA_TABLET_TOLERANCE_CENTS;
+  const [fpCode, setFpCode] = useState('');
+  const [fpTablet, setFpTablet] = useState('');
+  const deal = snapshot.discounts.find((d) => d.source === 'foodpanda') ?? null;
+  const dealLine = deal ? foodpandaDealLine(deal, snapshot.order.subtotalCents) : null;
   const tender = useCheckoutStore((s) => s.tender);
   const busy = useCheckoutStore((s) => s.busy);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -80,6 +92,31 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
     // a second tender, refused, with a "Payment failed" after a good payment.
     if (busy || !enough) return;
     setError(null);
+    let tabletTotalCents: number | null = null;
+    if (isFoodpanda) {
+      if (checks.orderCode === 'required' && !fpCode.trim()) {
+        setError("Type foodpanda's order number — the owner has made it required.");
+        return;
+      }
+      const typed = parseTabletCents(fpTablet);
+      if (Number.isNaN(typed)) {
+        setError('Type the tablet total in rupees, like 1920 or 1920.50.');
+        return;
+      }
+      tabletTotalCents = typed;
+      if (checks.tabletTotal === 'required' && tabletTotalCents === null) {
+        setError('Type the total on the foodpanda tablet — the owner has made it required.');
+        return;
+      }
+      if (tabletTotalCents !== null && tabletDiffers(total, tabletTotalCents, tolerance)) {
+        // A warning to read: Enter (or a held key) lands on "Go back", never on paying anyway.
+        const payAnyway = await askConfirm(
+          `The till says ${formatCents(total)}, the tablet says ${formatCents(tabletTotalCents)} — check the items and the deal.\nPay anyway? The difference is kept, and Reports list this order to check.`,
+          { safeDefault: true, yesLabel: 'Pay anyway', noLabel: 'Go back' },
+        );
+        if (!payAnyway) return;
+      }
+    }
     try {
       await tender(
         nothingToPay
@@ -89,8 +126,10 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                 method,
                 amountCents: total,
                 tenderedCents: methodSpec.showTendered ? tenderedCents : null,
+                ...(isFoodpanda ? { referenceNo: fpCode.trim() || null } : {}),
               },
             ],
+        isFoodpanda ? { tabletTotalCents } : undefined,
       );
       onPaid();
     } catch (e) {
@@ -193,10 +232,16 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                     <dt>Subtotal</dt>
                     <dd className="font-mono">{formatCents(snapshot.order.subtotalCents)}</dd>
                   </div>
-                  {snapshot.order.discountCents > 0 && (
+                  {(snapshot.order.discountCents > 0 || dealLine) && (
                     <div className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                      <dt>Discount</dt>
+                      <dt>{dealLine?.label ?? 'Discount'}</dt>
                       <dd className="font-mono">−{formatCents(snapshot.order.discountCents)}</dd>
+                    </div>
+                  )}
+                  {dealLine?.note && (
+                    <div className="flex justify-between text-xs text-stone-500">
+                      <dt>{dealLine.note}</dt>
+                      <dd />
                     </div>
                   )}
                   <div className="flex justify-between">
@@ -274,12 +319,49 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                   </div>
                 </>
               ) : (
-                <div className="mt-12 rounded-lg bg-stone-100 p-6 text-center dark:bg-stone-800">
-                  <div className="mb-2 text-sm text-stone-500">
-                    {nothingToPay ? 'Nothing to collect' : `Charge to ${methodSpec.label}`}
+                <>
+                  <div className={cn('rounded-lg bg-stone-100 p-6 text-center dark:bg-stone-800', isFoodpanda ? 'mt-0' : 'mt-12')}>
+                    <div className="mb-2 text-sm text-stone-500">
+                      {nothingToPay ? 'Nothing to collect' : `Charge to ${methodSpec.label}`}
+                    </div>
+                    <div className="font-mono text-4xl font-bold">{formatCents(total)}</div>
                   </div>
-                  <div className="font-mono text-4xl font-bold">{formatCents(total)}</div>
-                </div>
+                  {isFoodpanda && (
+                    <div className="mt-4 space-y-3">
+                      <label className="block text-sm">
+                        <span className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
+                          foodpanda order # {checks.orderCode === 'required' ? '(required)' : '(if you have it)'}
+                        </span>
+                        <input
+                          value={fpCode}
+                          maxLength={FOODPANDA_ORDER_CODE_MAX}
+                          onChange={(e) => {
+                            setFpCode(e.target.value);
+                            setError(null);
+                          }}
+                          className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
+                          placeholder="As on the tablet"
+                        />
+                      </label>
+                      <label className="block text-sm">
+                        <span className="mb-1 block text-xs uppercase tracking-wider text-stone-500">
+                          Total on the tablet (Rs) {checks.tabletTotal === 'required' ? '(required)' : '(if you have it)'}
+                        </span>
+                        <input
+                          value={fpTablet}
+                          inputMode="decimal"
+                          onChange={(e) => {
+                            setFpTablet(e.target.value.replace(/[^\d.,]/g, '').slice(0, 12));
+                            setError(null);
+                          }}
+                          className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
+                          // Not the till's total: an empty box must not look filled in and matching.
+                          placeholder="Type what the tablet shows"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -312,6 +394,14 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+/** The tablet total as typed ("1,920" / "1920.50") → paisa; '' → null; anything else → NaN. */
+export function parseTabletCents(input: string): number | null {
+  const t = input.trim().replace(/,/g, '');
+  if (t === '') return null;
+  if (!/^\d{1,9}(\.\d{1,2})?$/.test(t)) return Number.NaN;
+  return Math.round(Number(t) * 100);
 }
 
 function parseTenderedCents(input: string): number {

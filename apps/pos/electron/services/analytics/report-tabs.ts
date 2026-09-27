@@ -109,6 +109,11 @@ export function fitsMainThread(req: Pick<BusinessReportRequest, 'sinceIso' | 'un
 export function reportTabForLogin<K extends ReportTab>(kind: K, data: ReportTabData[K], canSeeCosts: boolean): ReportTabData[K] {
   if (canSeeCosts) return data;
   if (kind === 'foodStock') throw new Error('Only a manager or the owner can see costs.');
+  if (kind === 'channels') {
+    // foodpanda's food cost is costs: left out, the rest of the block stays.
+    const channels = data as ReportTabData['channels'];
+    return (channels.foodpanda ? { ...channels, foodpanda: { ...channels.foodpanda, foodCost: null } } : channels) as ReportTabData[K];
+  }
   if (kind === 'team') {
     const team = data as ReportTabData['team'];
     return {

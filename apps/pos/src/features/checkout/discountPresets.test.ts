@@ -3,6 +3,8 @@ import {
   FLAT_PRESETS_RUPEES,
   PERCENT_PRESETS,
   describeDiscount,
+  discountDialogPrimary,
+  discountDialogStart,
   flatChoiceRupees,
   parseDiscountEntry,
   percentChoice,
@@ -116,5 +118,34 @@ describe('previewDiscount', () => {
 
   it('an empty order has nothing to discount', () => {
     expect(previewDiscount([], 0, percentChoice(50))).toMatchObject({ discountCents: 0, taxCents: 0, totalCents: 0 });
+  });
+});
+
+describe('the Discount dialog on an order with the owner’s foodpanda deal', () => {
+  const deal = { discountType: 'percent' as const, value: 20, reason: 'Foodpanda deal 20% off', source: 'foodpanda' };
+
+  it('opens on nothing: the deal’s own % is never re-applied as a staff discount, and its label is not a reason', () => {
+    expect(discountDialogStart(deal)).toEqual({ picked: null, reason: '' });
+    // A staff discount opens on itself, as before.
+    expect(discountDialogStart({ discountType: 'percent', value: 10, reason: 'Regular customer', source: null })).toEqual({
+      picked: { type: 'percent', value: 10 },
+      reason: 'Regular customer',
+    });
+    expect(discountDialogStart({ discountType: 'flat', value: 20_000, reason: null })).toEqual({ picked: { type: 'flat', value: 20_000 }, reason: '' });
+    expect(discountDialogStart(null)).toEqual({ picked: null, reason: '' });
+  });
+
+  it('× on the deal line, a manager’s PIN, Enter: the deal comes off (it is not put back as a staff 20%)', () => {
+    const start = discountDialogStart(deal);
+    expect(discountDialogPrimary({ dealOn: true, intent: 'removeDeal', hasChoice: start.picked !== null })).toBe('remove');
+    // The manager picks what the tablet shows instead: Enter applies that.
+    expect(discountDialogPrimary({ dealOn: true, intent: 'removeDeal', hasChoice: true })).toBe('apply');
+  });
+
+  it('opened to change it (F3, the deal line): Enter applies a choice and never takes the deal off by itself', () => {
+    expect(discountDialogPrimary({ dealOn: true, intent: 'change', hasChoice: false })).toBe('apply');
+    expect(discountDialogPrimary({ dealOn: true, intent: 'change', hasChoice: true })).toBe('apply');
+    // No deal on the order: the × intent means nothing.
+    expect(discountDialogPrimary({ dealOn: false, intent: 'removeDeal', hasChoice: false })).toBe('apply');
   });
 });

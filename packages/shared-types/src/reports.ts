@@ -15,6 +15,7 @@
  */
 
 import type { WasteReason } from './inventory.js';
+import type { DiscountSource } from './shop-settings.js';
 import type { VarianceBand } from './stock-count.js';
 
 /** Where an order came from, in the owner's words. */
@@ -149,6 +150,11 @@ export interface ReportDiscountLine {
   reason: string;
   givenBy: string;
   approvedBy: string | null;
+  /**
+   * Where it came from: 'foodpanda' = the shop's standing foodpanda deal (put
+   * on automatically, not given by the cashier); null = typed by staff.
+   */
+  source?: DiscountSource | null;
 }
 
 export interface ReportDiscounts {
@@ -156,8 +162,23 @@ export interface ReportDiscounts {
   totalCount: number;
   totalCents: number;
   byReason: Array<{ reason: string; count: number; amountCents: number }>;
+  /** Discounts staff gave (typed at the till). The standing offers are not anyone's. */
   byPerson: Array<{ name: string; count: number; amountCents: number; approvedCount: number }>;
-  /** Most recent first, capped. */
+  /**
+   * The shop's standing offers (the foodpanda deal): put on automatically,
+   * so listed apart from the staff. Σ byPerson + Σ standing = totalCents.
+   */
+  standing?: Array<{ name: string; count: number; amountCents: number }>;
+  /**
+   * How many of the lines staff gave (totalCount less the standing offers'
+   * orders): what `recent` is capped from. Absent from reports built before
+   * standing offers existed, where every line is staff's.
+   */
+  staffCount?: number;
+  /**
+   * The discounts staff gave, most recent first, capped. The standing offers
+   * are not in it: each deal order is on Channels → "foodpanda orders to check".
+   */
   recent: ReportDiscountLine[];
 }
 
@@ -535,6 +556,83 @@ export interface ReportChannelsTab extends ReportTabBase {
   kpis: Pick<ReportKpis, 'orderCount' | 'netSalesCents' | 'avgOrderCents'>;
   channels: ReportChannelLine[];
   deliveries: ReportDeliveries;
+  /** foodpanda: the deal, what foodpanda keeps and what the shop keeps, and the orders to tick off. Null with no foodpanda orders. */
+  foodpanda?: ReportFoodpanda | null;
+}
+
+/**
+ * foodpanda in one period (Settings → foodpanda), from each paid order's
+ * channel terms (order_channel_terms, kept at payment). An order paid before
+ * this version kept none, and one paid while the commission was only
+ * suggested kept a guess: their commission, fee and tax use the fees in
+ * force now and are counted in `estimatedOrders` ("estimated"). Counted
+ * orders only (a fully refunded order counts no commission).
+ */
+export interface ReportFoodpanda {
+  orderCount: number;
+  /** Σ subtotal: the food at till prices, before the deal. */
+  tillPriceSalesCents: number;
+  /** Σ the order's discount: the shop's part of the deal (and any discount a manager put on instead). */
+  shopDealCents: number;
+  /** Σ foodpanda's part of the deal, paid by foodpanda on top. */
+  foodpandaDealCents: number;
+  /** Σ tax on the bills. */
+  taxCents: number;
+  /** Commission + fee per order + tax on the commission. */
+  commissionCents: number;
+  feeCents: number;
+  commissionTaxCents: number;
+  /** The food money the shop keeps: sales after its part of the deal, less what foodpanda keeps (before tax and food cost). */
+  youKeepCents: number;
+  /** What foodpanda should pay for these orders (the bills with tax, less what it keeps). */
+  expectedPayoutCents: number;
+  /** Orders with no confirmed commission kept at payment: commission, fee and tax from the fees in force now. */
+  estimatedOrders: number;
+  /** Some commission is a figure the owner has not confirmed. */
+  commissionSuggested: boolean;
+  /**
+   * The unconfirmed commission those orders were worked out at, basis points
+   * (the note says it); null when every commission is confirmed.
+   */
+  unconfirmedCommissionBps: number | null;
+  /**
+   * The food these orders took, from the cost each sale kept (COST_CAPABILITY
+   * only; null for a login without it, or when no order kept a cost).
+   */
+  foodCost: {
+    /** The orders whose kept cost is known, and their food cost. */
+    costedOrders: number;
+    costCents: number;
+    /** Food cost as a share of those orders' sales after the shop's part of the deal, basis points. */
+    ofSalesBps: number | null;
+    /** …and of what the shop keeps from them. */
+    ofKeptBps: number | null;
+  } | null;
+  /**
+   * Each order to tick off against foodpanda's statement, by trading day,
+   * newest day first; within a day, orders with no foodpanda number or whose
+   * tablet total differs come first. Capped; the counts cover all.
+   */
+  toCheck: ReportFoodpandaCheckLine[];
+  missingCodeCount: number;
+  tabletDiffCount: number;
+}
+
+export interface ReportFoodpandaCheckLine {
+  orderId: string;
+  orderNumber: string;
+  /** The trading day, YYYY-MM-DD. */
+  day: string;
+  createdAt: string;
+  /** foodpanda's order number as typed at Pay; null = not typed. */
+  foodpandaCode: string | null;
+  tillTotalCents: number;
+  /** As typed at Pay; null = not typed. */
+  tabletTotalCents: number | null;
+  /** tablet − till; null when no tablet total. */
+  diffCents: number | null;
+  /** More than Rs 1 apart. */
+  differs: boolean;
 }
 
 /** Food cost & stock (COST_CAPABILITY): food cost, waste, missing costs, food sent out unpaid, purchases. */

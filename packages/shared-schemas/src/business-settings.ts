@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { DAY_NOTE_TAGS, daypartHours } from '@cheeseoclock/shared-types';
+import {
+  DAY_NOTE_TAGS,
+  FOODPANDA_DEAL_MAX_PERCENT,
+  SHOP_SETTING_FORMAT,
+  SHOP_SETTING_KEYS,
+  daypartHours,
+  isShopSettingKey,
+} from '@cheeseoclock/shared-types';
 import type {
   CostAlertSettings,
   CostingTargets,
@@ -7,6 +14,11 @@ import type {
   SetCostAlertSettingsRequest,
   SetCostingTargetsRequest,
   TillsSetting,
+  FoodpandaChecks,
+  FoodpandaDeal,
+  FoodpandaFees,
+  FoodpandaTenderCheck,
+  ShopSettingKey,
 } from '@cheeseoclock/shared-types';
 
 /**
@@ -17,6 +29,16 @@ import type {
  * read back (a row from another till's newer version that does not fit is
  * ignored, never trusted). Each phase adds only its own keys.
  */
+
+/** A real calendar date, YYYY-MM-DD (a trading day). */
+const tradingDay = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Pick a day' })
+  .refine((ymd) => {
+    const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
+    const t = Date.UTC(y, m - 1, d);
+    return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === ymd;
+  }, { message: 'That is not a real date' });
 
 /** A food-cost target or the "close" width: a whole number of basis points, 0–100%. */
 const targetBps = z
@@ -143,6 +165,93 @@ export const analyticsDaypartsSchema = z
     }
   });
 
+// ---------------------------------------------------------------------------
+// The owner's shop rules (Settings → foodpanda …, shared-types shop-settings.ts)
+// ---------------------------------------------------------------------------
+//
+// Each value carries `v`, its format. The WRITE schema is strict and takes
+// only the format this version writes. The READ schema strips fields it does
+// not know and takes any format from 1 up, so a value a newer till saved is
+// still used here (the fields this version knows); storedFormatIsNewer tells
+// the card to go read-only and the repository to refuse a save over it.
+
+/** `v`: the format this version writes (write) or any format from 1 (read). */
+const writesFormat = (key: ShopSettingKey) =>
+  z
+    .number()
+    .int()
+    .refine((v) => v === SHOP_SETTING_FORMAT[key], {
+      message: 'Saved by a different version of the app — update this till to change it',
+    });
+const readsFormat = z.number().int().min(1);
+
+/** Whole rupees in paisa, from Rs 0 up to `maxRupees`. */
+const wholeRupees = (maxRupees: number, what: string) =>
+  z
+    .number()
+    .int({ message: `${what} is in whole rupees` })
+    .min(0, { message: `${what} can't be below Rs 0` })
+    .max(maxRupees * 100, { message: `${what} is at most Rs ${maxRupees.toLocaleString('en-PK')}` })
+    .refine((c) => c % 100 === 0, { message: `${what} is in whole rupees` });
+
+const wholePercent = (what: string) =>
+  z
+    .number()
+    .int({ message: `${what} is a whole %` })
+    .min(0, { message: `${what} can't be below 0%` })
+    .max(FOODPANDA_DEAL_MAX_PERCENT, { message: `${what} is at most ${FOODPANDA_DEAL_MAX_PERCENT}%` });
+
+/** A rate in basis points with at most two decimals of a %, 0–50%. */
+const ratePercentBps = (what: string) =>
+  z
+    .number()
+    .int({ message: `${what} has at most two decimals` })
+    .min(0, { message: `${what} can't be below 0%` })
+    .max(5_000, { message: `${what} is at most 50%` });
+
+const foodpandaDealShape = {
+  percent: wholePercent('The deal'),
+  shopPercent: wholePercent('Your part of the deal'),
+  minOrderCents: wholeRupees(50_000, 'The smallest order').nullable(),
+  maxOffCents: wholeRupees(50_000, 'The most off one order')
+    .refine((c) => c > 0, { message: 'The most off one order must be more than Rs 0 — or leave it empty' })
+    .nullable(),
+  startsOn: tradingDay.nullable(),
+  endsOn: tradingDay.nullable(),
+};
+const dealRules = (d: { percent: number; shopPercent: number; startsOn: string | null; endsOn: string | null }, ctx: z.RefinementCtx) => {
+  if (d.shopPercent > d.percent) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Your part of the deal can’t be more than the deal itself' });
+  }
+  if (d.startsOn && d.endsOn && d.endsOn < d.startsOn) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The deal can’t end before it starts' });
+  }
+};
+
+/** 'foodpanda.deal' as this version writes it. */
+export const foodpandaDealSchema = z
+  .object({ v: writesFormat('foodpanda.deal'), ...foodpandaDealShape })
+  .strict()
+  .superRefine(dealRules);
+const foodpandaDealReadSchema = z.object({ v: readsFormat, ...foodpandaDealShape }).superRefine(dealRules);
+
+const foodpandaFeesShape = {
+  commissionBps: ratePercentBps('The commission'),
+  confirmed: z.boolean(),
+  base: z.enum(['after_deal', 'before_deal'], { errorMap: () => ({ message: 'After the deal, or before it' }) }),
+  fixedFeeCents: wholeRupees(2_000, 'The fee per order'),
+  commissionTaxBps: ratePercentBps('The tax on the commission'),
+};
+/** 'foodpanda.fees' as this version writes it. */
+export const foodpandaFeesSchema = z.object({ v: writesFormat('foodpanda.fees'), ...foodpandaFeesShape }).strict();
+const foodpandaFeesReadSchema = z.object({ v: readsFormat, ...foodpandaFeesShape });
+
+const checkRule = z.enum(['optional', 'required'], { errorMap: () => ({ message: 'Optional or required' }) });
+const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };
+/** 'foodpanda.checks' as this version writes it. */
+export const foodpandaChecksSchema = z.object({ v: writesFormat('foodpanda.checks'), ...foodpandaChecksShape }).strict();
+const foodpandaChecksReadSchema = z.object({ v: readsFormat, ...foodpandaChecksShape });
+
 /** Every key and its schema. A key not listed here cannot be written. */
 export const BUSINESS_SETTING_SCHEMAS = {
   'costing.targets': costingTargetsSchema,
@@ -150,6 +259,9 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'costing.alerts': costingAlertsSchema,
   'analytics.dayparts': analyticsDaypartsSchema,
   'analytics.tills': analyticsTillsSchema,
+  'foodpanda.deal': foodpandaDealSchema,
+  'foodpanda.fees': foodpandaFeesSchema,
+  'foodpanda.checks': foodpandaChecksSchema,
 } as const;
 
 export type BusinessSettingKey = keyof typeof BUSINESS_SETTING_SCHEMAS;
@@ -158,6 +270,66 @@ export type BusinessSettingValue<K extends BusinessSettingKey> = z.infer<(typeof
 export function isBusinessSettingKey(key: string): key is BusinessSettingKey {
   return Object.hasOwn(BUSINESS_SETTING_SCHEMAS, key);
 }
+
+/**
+ * How a stored value is read back. The costing keys have no format and are
+ * read with their write schema, as before (a value that does not fit is "not
+ * set"). The shop rules are read leniently: fields this version does not
+ * know are dropped, any format from 1 up is taken.
+ */
+export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]: z.ZodType<BusinessSettingValue<K>, z.ZodTypeDef, unknown> } = {
+  'costing.targets': costingTargetsSchema,
+  'costing.priceStep': costingPriceStepSchema,
+  'costing.alerts': costingAlertsSchema,
+  'analytics.dayparts': analyticsDaypartsSchema,
+  'analytics.tills': analyticsTillsSchema,
+  'foodpanda.deal': foodpandaDealReadSchema,
+  'foodpanda.fees': foodpandaFeesReadSchema,
+  'foodpanda.checks': foodpandaChecksReadSchema,
+};
+
+/** The fields each shop rule has in the format this version writes. */
+const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string> } = {
+  'foodpanda.deal': new Set(['v', ...Object.keys(foodpandaDealShape)]),
+  'foodpanda.fees': new Set(['v', ...Object.keys(foodpandaFeesShape)]),
+  'foodpanda.checks': new Set(['v', ...Object.keys(foodpandaChecksShape)]),
+};
+
+/**
+ * A stored shop rule saved by a newer version of the app: a higher format,
+ * or fields this version does not know. This till uses what it knows but
+ * shows the card read-only and refuses to save over it (it would silently
+ * drop the rest). Costing keys (no format) are never "newer".
+ */
+export function storedFormatIsNewer(key: BusinessSettingKey, raw: unknown): boolean {
+  if (!isShopSettingKey(key)) return false;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false;
+  const v = (raw as { v?: unknown }).v;
+  if (typeof v === 'number' && v > SHOP_SETTING_FORMAT[key]) return true;
+  const known = SHOP_SETTING_FIELDS[key];
+  return Object.keys(raw).some((f) => !known.has(f));
+}
+
+/** settings:setBusiness: a key and its value, or "Put back the default". The value is checked by the key's schema. */
+export const setShopSettingInputSchema = z.union([
+  z.object({ key: z.enum(SHOP_SETTING_KEYS), useDefault: z.literal(true) }).strict(),
+  z.object({ key: z.enum(SHOP_SETTING_KEYS), value: z.unknown() }).strict(),
+]);
+
+/** settings:getBusiness */
+export const getShopSettingInputSchema = z.object({ key: z.enum(SHOP_SETTING_KEYS) }).strict();
+
+/** The foodpanda half of orders:tender. */
+export const foodpandaTenderCheckSchema = z
+  .object({
+    tabletTotalCents: z
+      .number()
+      .int({ message: 'The tablet total is in paisa' })
+      .min(0, { message: 'The tablet total can’t be below Rs 0' })
+      .max(100_000_000, { message: 'That tablet total is too big — check it' })
+      .nullish(),
+  })
+  .strict();
 
 /** What the Targets screen saves (costing:setTargets): both Phase 1 keys at once. */
 export const setCostingTargetsInputSchema = z
@@ -192,16 +364,6 @@ export const useSheetPriceInputSchema = z.object({ ingredientId: z.string().min(
 /** Costing → Targets saves the parts of the day (reports:setDayparts; the owner only). */
 export const setDaypartsInputSchema = z.object({ dayparts: analyticsDaypartsSchema }).strict();
 
-/** A real calendar date, YYYY-MM-DD (a trading day). */
-const tradingDay = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'Pick a day' })
-  .refine((ymd) => {
-    const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
-    const t = Date.UTC(y, m - 1, d);
-    return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === ymd;
-  }, { message: 'That is not a real date' });
-
 /** A note for a day, added on Reports → When (reports:addDayNote; report.view). */
 export const dayNoteInputSchema = z
   .object({
@@ -231,3 +393,10 @@ const _alertsShape: Same<z.infer<typeof costingAlertsSchema>, CostAlertSettings>
 const _setAlertsShape: Same<z.infer<typeof setCostAlertSettingsInputSchema>, SetCostAlertSettingsRequest> = true;
 const _tillsShape: Same<z.infer<typeof analyticsTillsSchema>, TillsSetting> = true;
 const _daypartsShape: Same<z.infer<typeof analyticsDaypartsSchema>, Daypart[]> = true;
+const _foodpandaDealShape: Same<z.infer<typeof foodpandaDealSchema>, FoodpandaDeal> = true;
+const _foodpandaDealReadShape: Same<z.infer<typeof foodpandaDealReadSchema>, FoodpandaDeal> = true;
+const _foodpandaFeesShape: Same<z.infer<typeof foodpandaFeesSchema>, FoodpandaFees> = true;
+const _foodpandaFeesReadShape: Same<z.infer<typeof foodpandaFeesReadSchema>, FoodpandaFees> = true;
+const _foodpandaChecksShape: Same<z.infer<typeof foodpandaChecksSchema>, FoodpandaChecks> = true;
+const _foodpandaChecksReadShape: Same<z.infer<typeof foodpandaChecksReadSchema>, FoodpandaChecks> = true;
+const _tenderCheckShape: Same<z.infer<typeof foodpandaTenderCheckSchema>, FoodpandaTenderCheck> = true;

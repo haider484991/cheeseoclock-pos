@@ -8,6 +8,8 @@ import type {
   ReportDeliveries,
   ReportDiscountLine,
   ReportDiscounts,
+  ReportFoodpanda,
+  ReportFoodpandaCheckLine,
   ReportDrawerOpenLine,
   ReportFoodCost,
   ReportItemLine,
@@ -28,6 +30,7 @@ import type {
   ReportTabFigures,
 } from '@cheeseoclock/shared-types';
 import { isDeliveryChargeName } from '@cheeseoclock/shared-types';
+import { FOODPANDA_TABLET_TOLERANCE_CENTS } from '@cheeseoclock/shared-types';
 import {
   emptyFoodCostTally,
   type FoodCostTally,
@@ -43,6 +46,9 @@ import {
   tallyPlainOrders,
   unitFactor,
   wasteReasonOf,
+  dealAmount,
+  foodpandaTerms,
+  parseFoodpandaDealRule,
   type FoodCostEstimate,
   type FoodCostLine,
   type Pack,
@@ -53,7 +59,7 @@ import type { AppDatabase } from '../db/connection.js';
 // in the Reports worker thread (analytics/worker.ts). A test walks its imports.
 import { loadPriceBook, priceOfBook, safeStockValue } from '../db/price-book.js';
 import { loadPriceHistory, type DatedPrice } from '../db/price-history-read.js';
-import { getBusinessSetting } from '../db/business-settings-read.js';
+import { getBusinessSetting, readShopSetting } from '../db/business-settings-read.js';
 import { withBillPrinted, withHandPrints } from './print-report.js';
 import { whenExtras } from './analytics/heatmap.js';
 import {
@@ -120,6 +126,12 @@ export interface SaleRow {
   cashierId: string;
   subtotal: number;
   discount: number;
+  /**
+   * Where the order's discount came from (its latest live discount row):
+   * 'foodpanda' = the owner's standing deal, put on by the till; null = typed
+   * by staff, or no discount. Only a staff discount counts against the person.
+   */
+  discountSource: string | null;
   tax: number;
   total: number;
   refunded: number;
@@ -179,10 +191,22 @@ function discountEntered(type: string | null, value: number | null): string | nu
   return `Rs ${new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 }).format(value / 100)}`;
 }
 
-/** Discount lines rolled up by reason and by who gave them. */
+/** What a standing offer is called on Team & leakage, by its source. */
+const STANDING_OFFER_NAME: Record<string, string> = { foodpanda: 'foodpanda deal (set by the owner)' };
+
+/**
+ * Discount lines rolled up by reason and by who gave them. The shop's
+ * standing offers (the foodpanda deal, put on automatically) are listed
+ * apart, as "Standing offers": they are not the cashier's, and counting them
+ * under whoever rang the order — in "Who gave them" or in "Each discount" —
+ * would read as staff leakage. `recent` is therefore the staff's discounts
+ * only; each deal order is on Channels → "foodpanda orders to check".
+ */
 export function summarizeDiscounts(lines: ReportDiscountLine[], cap = REPORT_LIST_CAP): ReportDiscounts {
   const byReason = new Map<string, { reason: string; count: number; amountCents: number }>();
   const byPerson = new Map<string, { name: string; count: number; amountCents: number; approvedCount: number }>();
+  const standing = new Map<string, { name: string; count: number; amountCents: number }>();
+  const staffLines: ReportDiscountLine[] = [];
   let totalCents = 0;
   for (const l of lines) {
     totalCents += l.amountCents;
@@ -191,6 +215,14 @@ export function summarizeDiscounts(lines: ReportDiscountLine[], cap = REPORT_LIS
     r.count += 1;
     r.amountCents += l.amountCents;
     byReason.set(rKey, r);
+    if (l.source) {
+      const o = standing.get(l.source) ?? { name: STANDING_OFFER_NAME[l.source] ?? l.source, count: 0, amountCents: 0 };
+      o.count += 1;
+      o.amountCents += l.amountCents;
+      standing.set(l.source, o);
+      continue;
+    }
+    staffLines.push(l);
     const p = byPerson.get(l.givenBy) ?? { name: l.givenBy, count: 0, amountCents: 0, approvedCount: 0 };
     p.count += 1;
     p.amountCents += l.amountCents;
@@ -204,7 +236,9 @@ export function summarizeDiscounts(lines: ReportDiscountLine[], cap = REPORT_LIS
     totalCents,
     byReason: [...byReason.values()].sort(biggest),
     byPerson: [...byPerson.values()].sort(biggest),
-    recent: lines.slice(0, cap),
+    standing: [...standing.values()].sort(biggest),
+    staffCount: staffLines.length,
+    recent: staffLines.slice(0, cap),
   };
 }
 
@@ -284,12 +318,16 @@ export function aggregateSales(
     // Website orders are booked under whichever manager the bridge ran as;
     // they get their own line instead of inflating that person's sales.
     const staffKey = r.source === 'web' ? 'web' : r.cashierId;
+    // The owner's standing deal (the foodpanda deal) is not the cashier's
+    // discount: it counts in the shop's totals and under "Standing offers",
+    // never against whoever rang the order.
+    const staffDiscount = r.discountSource ? 0 : r.discount;
     const s = staff.get(staffKey);
     if (s) {
       s.orderCount += 1;
       s.netSalesCents += net;
-      s.discountCents += r.discount;
-    } else staff.set(staffKey, { orderCount: 1, netSalesCents: net, discountCents: r.discount });
+      s.discountCents += staffDiscount;
+    } else staff.set(staffKey, { orderCount: 1, netSalesCents: net, discountCents: staffDiscount });
 
     // Own-rider deliveries (phone and website). Foodpanda brings its own riders.
     if (r.mode === 'delivery') {
@@ -361,6 +399,11 @@ function getSaleRows(db: AppDatabase, range: ReportRange): SaleRow[] {
     .prepare(
       `SELECT o.created_at AS createdAt, o.mode AS mode, o.source AS source, o.cashier_id AS cashierId,
               o.subtotal_cents AS subtotal, o.discount_cents AS discount, o.tax_cents AS tax,
+              -- The latest live discount row describes the stored discount (as getDiscountLines reads it).
+              CASE WHEN o.discount_cents > 0 THEN (
+                SELECT d.source FROM order_discounts d
+                 WHERE d.order_id = o.id AND d.deleted_at IS NULL
+                 ORDER BY d.created_at DESC, d.id DESC LIMIT 1) END AS discountSource,
               o.total_cents AS total, ${REFUNDED} AS refunded,
               o.assigned_rider_id AS riderId,
               CASE WHEN o.dispatched_at IS NOT NULL AND o.delivered_at >= o.dispatched_at
@@ -664,7 +707,7 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
     .prepare(
       `SELECT o.id AS orderId, o.order_number AS orderNumber, o.created_at AS createdAt,
               o.discount_cents AS amountCents,
-              d.discount_type AS type, d.value AS value, d.reason AS reason,
+              d.discount_type AS type, d.value AS value, d.reason AS reason, d.source AS source,
               ua.full_name AS givenBy, uap.full_name AS approvedBy
          FROM orders o
          LEFT JOIN order_discounts d ON d.id = (
@@ -684,6 +727,7 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
     type: string | null;
     value: number | null;
     reason: string | null;
+    source: string | null;
     givenBy: string | null;
     approvedBy: string | null;
   }>;
@@ -696,6 +740,7 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
     reason: r.reason?.trim() || 'No reason given',
     givenBy: r.givenBy ?? 'Unknown',
     approvedBy: r.approvedBy,
+    source: r.source === 'foodpanda' ? 'foodpanda' : null,
   }));
 }
 
@@ -1830,7 +1875,181 @@ export function buildChannelsTab(db: AppDatabase, req: BusinessReportRequest): R
     kpis: { orderCount: orders, netSalesCents: net, avgOrderCents: orders > 0 ? Math.round(net / orders) : 0 },
     channels: sales.channels,
     deliveries: sales.deliveries,
+    foodpanda: getFoodpanda(db, range),
   };
+}
+
+/**
+ * foodpanda in one period (Settings → foodpanda): the counted foodpanda
+ * orders with the terms each kept at payment (order_channel_terms). Sales
+ * and the deal come from the STORED order totals; commission, fee and tax
+ * from the kept terms when the commission was CONFIRMED at payment. An order
+ * paid before this version kept none, and one paid while the commission was
+ * only suggested (not confirmed) kept a guess: both are worked out with the
+ * fees in force now — so confirming the real commission later corrects them —
+ * and counted as "estimated" (the deal's split and the tablet total are still
+ * the ones kept). A fully refunded order is not counted, so it counts no
+ * commission. Food cost is the cost each sale kept (order_item_costs);
+ * reportTabForLogin clears it for a login without costs.
+ */
+export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_LIST_CAP): ReportFoodpanda | null {
+  const rows = db
+    .prepare(
+      `SELECT o.id AS orderId, o.order_number AS orderNumber, o.created_at AS createdAt,
+              o.subtotal_cents AS subtotal, o.discount_cents AS discount, o.tax_cents AS tax, o.total_cents AS total,
+              t.id AS termsId, t.platform_funded_cents AS platform, t.commission_cents AS commission,
+              t.fixed_fee_cents AS fee, t.commission_tax_cents AS commissionTax, t.expected_payout_cents AS payout,
+              t.tablet_total_cents AS tablet, t.commission_confirmed AS confirmed,
+              (SELECT p.reference_no FROM payments p
+                WHERE p.order_id = o.id AND p.method = 'foodpanda' AND p.amount_cents > 0 AND p.deleted_at IS NULL
+                ORDER BY p.paid_at LIMIT 1) AS code,
+              (SELECT d.rule_json FROM order_discounts d
+                WHERE d.order_id = o.id AND d.source = 'foodpanda' AND d.deleted_at IS NULL
+                ORDER BY d.created_at DESC LIMIT 1) AS ruleJson,
+              (SELECT COUNT(*) FROM order_item_costs c WHERE c.order_id = o.id AND c.deleted_at IS NULL) AS costRows,
+              (SELECT COUNT(*) FROM order_item_costs c WHERE c.order_id = o.id AND c.deleted_at IS NULL AND c.status = 'failed') AS failedRows,
+              (SELECT COALESCE(SUM(c.cost_cents), 0) FROM order_item_costs c WHERE c.order_id = o.id AND c.deleted_at IS NULL) AS cost
+         FROM orders o
+         LEFT JOIN order_channel_terms t ON t.order_id = o.id AND t.deleted_at IS NULL
+        WHERE ${IN_RANGE} AND ${COUNTED} AND o.mode = 'foodpanda'
+        ORDER BY o.created_at DESC, o.id DESC`,
+    )
+    .all(...args(range)) as Array<{
+    orderId: string;
+    orderNumber: string;
+    createdAt: string;
+    subtotal: number;
+    discount: number;
+    tax: number;
+    total: number;
+    termsId: string | null;
+    platform: number | null;
+    commission: number | null;
+    fee: number | null;
+    commissionTax: number | null;
+    payout: number | null;
+    tablet: number | null;
+    confirmed: number | null;
+    code: string | null;
+    ruleJson: string | null;
+    costRows: number;
+    failedRows: number;
+    cost: number;
+  }>;
+  if (rows.length === 0) return null;
+
+  // The fees in force now, for orders that kept no confirmed commission.
+  const feesNow = readShopSetting(db, 'foodpanda.fees').value;
+  const out: ReportFoodpanda = {
+    orderCount: 0,
+    tillPriceSalesCents: 0,
+    shopDealCents: 0,
+    foodpandaDealCents: 0,
+    taxCents: 0,
+    commissionCents: 0,
+    feeCents: 0,
+    commissionTaxCents: 0,
+    youKeepCents: 0,
+    expectedPayoutCents: 0,
+    estimatedOrders: 0,
+    commissionSuggested: false,
+    unconfirmedCommissionBps: null,
+    foodCost: null,
+    toCheck: [],
+    missingCodeCount: 0,
+    tabletDiffCount: 0,
+  };
+  let costedOrders = 0;
+  let costCents = 0;
+  let costedSales = 0;
+  let costedKept = 0;
+  const lines: Array<ReportFoodpandaCheckLine & { attention: boolean }> = [];
+  for (const r of rows) {
+    const sub = Number(r.subtotal);
+    const disc = Number(r.discount);
+    const total = Number(r.total);
+    let platform: number;
+    let commission: number;
+    let fee: number;
+    let commissionTax: number;
+    let payout: number;
+    if (r.termsId !== null && Number(r.confirmed) === 1) {
+      // Kept at payment with the owner's confirmed commission: final.
+      platform = Number(r.platform ?? 0);
+      commission = Number(r.commission ?? 0);
+      fee = Number(r.fee ?? 0);
+      commissionTax = Number(r.commissionTax ?? 0);
+      payout = Number(r.payout ?? total - commission - fee - commissionTax);
+    } else {
+      // No terms kept (paid before this version), or kept with a commission
+      // that was only suggested: worked out with the fees of now.
+      if (r.termsId !== null) platform = Number(r.platform ?? 0);
+      else {
+        const rule = parseFoodpandaDealRule(r.ruleJson);
+        platform = rule ? dealAmount(rule, sub).platformCents : 0;
+      }
+      const t = foodpandaTerms({ subtotalCents: sub, shopDiscountCents: disc, totalCents: total }, feesNow);
+      commission = t.commissionCents;
+      fee = t.fixedFeeCents;
+      commissionTax = t.commissionTaxCents;
+      payout = t.expectedPayoutCents;
+      out.estimatedOrders += 1;
+      if (!feesNow.confirmed) {
+        out.commissionSuggested = true;
+        out.unconfirmedCommissionBps = feesNow.commissionBps;
+      }
+    }
+    const kept = sub - disc - commission - fee - commissionTax;
+    out.orderCount += 1;
+    out.tillPriceSalesCents += sub;
+    out.shopDealCents += disc;
+    out.foodpandaDealCents += platform;
+    out.taxCents += Number(r.tax);
+    out.commissionCents += commission;
+    out.feeCents += fee;
+    out.commissionTaxCents += commissionTax;
+    out.youKeepCents += kept;
+    out.expectedPayoutCents += payout;
+    if (Number(r.costRows) > 0 && Number(r.failedRows) === 0) {
+      costedOrders += 1;
+      costCents += Number(r.cost);
+      costedSales += sub - disc;
+      costedKept += kept;
+    }
+
+    const code = r.code?.trim() ? r.code.trim() : null;
+    const tablet = r.tablet === null ? null : Number(r.tablet);
+    const diff = tablet === null ? null : tablet - total;
+    const differs = diff !== null && Math.abs(diff) > FOODPANDA_TABLET_TOLERANCE_CENTS;
+    if (code === null) out.missingCodeCount += 1;
+    if (differs) out.tabletDiffCount += 1;
+    lines.push({
+      orderId: r.orderId,
+      orderNumber: r.orderNumber,
+      day: tradingDayOf(r.createdAt),
+      createdAt: r.createdAt,
+      foodpandaCode: code,
+      tillTotalCents: total,
+      tabletTotalCents: tablet,
+      diffCents: diff,
+      differs,
+      attention: code === null || differs,
+    });
+  }
+  out.foodCost =
+    costedOrders > 0
+      ? { costedOrders, costCents, ofSalesBps: shareBps(costCents, costedSales), ofKeptBps: shareBps(costCents, costedKept) }
+      : null;
+  // Newest day first; within a day, the ones to look at first, then newest first.
+  lines.sort(
+    (a, b) =>
+      b.day.localeCompare(a.day) ||
+      Number(b.attention) - Number(a.attention) ||
+      b.createdAt.localeCompare(a.createdAt) ||
+      b.orderId.localeCompare(a.orderId),
+  );
+  out.toCheck = lines.slice(0, cap).map(({ attention: _attention, ...l }) => l);
+  return out;
 }
 
 /** Food cost & stock (COST_CAPABILITY only: the main process refuses the rest before building it). */

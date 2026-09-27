@@ -510,8 +510,21 @@ function appendSaleBody(
   // Totals
   b.line('Subtotal', money(order.subtotalCents));
   for (const d of discounts) {
-    const tag = d.reason ? `Discount (${d.reason})` : 'Discount';
+    // The shop's foodpanda deal prints as itself ("Foodpanda deal 20% off"),
+    // with foodpanda's part on a line of its own when the deal is shared.
+    // foodpanda's commission never prints.
+    if (d.source === 'foodpanda' && d.amountCents === 0) {
+      // Nothing off the shop's bill: foodpanda pays all of the deal (say so,
+      // not "- 0.00"), or the order is under the deal's minimum (no line).
+      const fp = d.foodpanda;
+      if (fp && fp.platformCents > 0) b.line(`Foodpanda deal ${fp.dealPercent}% off, paid by foodpanda`, money(fp.platformCents));
+      continue;
+    }
+    const tag = d.source === 'foodpanda' && d.reason ? d.reason : d.reason ? `Discount (${d.reason})` : 'Discount';
     b.line(tag, `- ${money(d.amountCents)}`);
+    if (d.foodpanda && d.foodpanda.platformCents > 0) {
+      b.line('foodpanda pays another', money(d.foodpanda.platformCents));
+    }
   }
   b.line(taxLabel(snapshot), money(order.taxCents));
   if (dup) b.text(ruleWith('=', ' DUPLICATE ', width)).newline();
@@ -525,6 +538,8 @@ function appendSaleBody(
   const refunds = payments.filter((p) => p.amountCents < 0);
   for (const p of taken) {
     b.line(METHOD_LABEL[p.method] ?? p.method, money(p.amountCents));
+    // foodpanda's own order number, when it was typed at Pay.
+    if (p.method === 'foodpanda' && p.referenceNo) b.line('foodpanda order #', p.referenceNo);
   }
   // Change is what the customer handed over for the CASH part, less that
   // part — not less the whole bill (a card + cash split printed a negative

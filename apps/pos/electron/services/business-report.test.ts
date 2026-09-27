@@ -890,4 +890,26 @@ describe('report helpers', () => {
     ]);
     expect(s.recent).toHaveLength(2);
   });
+
+  it('a standing offer (the foodpanda deal) is under Standing offers only: not a person’s, not in "Each discount"', () => {
+    const line = (orderId: string, amount: number, source: 'foodpanda' | null): ReportDiscountLine => ({
+      orderId,
+      orderNumber: orderId,
+      createdAt: T0,
+      amountCents: amount,
+      entered: '20%',
+      reason: source ? 'Foodpanda deal 20% off' : 'Regular',
+      givenBy: 'Ali',
+      approvedBy: source ? 'Owner' : null,
+      source,
+    });
+    const s = summarizeDiscounts([line('d1', 400, 'foodpanda'), line('s1', 50, null), line('d2', 300, 'foodpanda'), line('s2', 70, null)], 1);
+    expect(s).toMatchObject({ totalCount: 4, totalCents: 820, staffCount: 2 });
+    expect(s.standing).toEqual([{ name: 'foodpanda deal (set by the owner)', count: 2, amountCents: 700 }]);
+    expect(s.byPerson).toEqual([{ name: 'Ali', count: 2, amountCents: 120, approvedCount: 0 }]);
+    // Capped from the staff's lines, newest first as given.
+    expect(s.recent.map((l) => l.orderId)).toEqual(['s1']);
+    // Why still lists every reason (the deal is a reason like any other).
+    expect(s.byReason.map((r) => r.reason)).toEqual(['Foodpanda deal 20% off', 'Regular']);
+  });
 });

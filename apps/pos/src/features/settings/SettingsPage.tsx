@@ -15,6 +15,7 @@ import {
   MinusCircle,
   XCircle,
   Volume2,
+  BadgePercent,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { SoundSettings } from '../notifications/SoundSettings';
@@ -28,9 +29,11 @@ import { BackupsPanel } from './BackupSettings';
 import { useBackupSummary } from './useBackupSummary';
 import { WebsiteSettings } from './WebsiteSettings';
 import { AboutCard } from './AboutCard';
+import { FoodpandaSettings } from './FoodpandaSettings';
 import { useSessionStore } from '../../stores/sessionStore';
 
 export type SettingsTab =
+  | 'foodpanda'
   | 'store'
   | 'printer'
   | 'sounds'
@@ -46,7 +49,13 @@ interface TabDef {
   icon: typeof Store;
 }
 
+/**
+ * The owner's business rules come first (foodpanda; later Money & discounts,
+ * Delivery areas & fees, Shop & website, Staff & kitchen timing), then this
+ * till's printers, sounds, backups, FBR, the second till and About.
+ */
 const TABS: TabDef[] = [
+  { id: 'foodpanda', label: 'foodpanda', icon: BadgePercent },
   { id: 'store', label: 'Shop & logo', icon: Store },
   { id: 'printer', label: 'Printers', icon: Printer },
   { id: 'sounds', label: 'Sounds', icon: Volume2 },
@@ -150,6 +159,7 @@ export function SettingsPage() {
       </nav>
 
       <div role="tabpanel" className="space-y-6">
+        {tab === 'foodpanda' && <FoodpandaSettings />}
         {tab === 'store' && <BrandingSettings />}
         {tab === 'printer' && (
           <>

@@ -17,6 +17,7 @@ import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
 import { resetCustomerForm, useCustomerForm } from './useCustomerForm';
 import { CustomerInlinePanel } from './CustomerInlinePanel';
+import { foodpandaDealLine } from './foodpandaDealLine';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 
@@ -26,6 +27,8 @@ interface Props {
   onBack: () => void;
   onPay: () => void;
   onDiscount: () => void;
+  /** The × on the owner's foodpanda deal line: the Discount dialog, asking for a manager's PIN to take it off. */
+  onRemoveDeal: () => void;
   onSendToKitchen: () => void;
   /** Open the line's choices + allergy / special-request note. */
   onCustomize: (orderItemId: string) => void;
@@ -39,7 +42,7 @@ function shortMissing(missing: string[]): string {
 }
 
 /** The ticket contains items, totals and checkout actions. */
-export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendToKitchen, onCustomize }: Props) {
+export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemoveDeal, onSendToKitchen, onCustomize }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const busy = useCheckoutStore((s) => s.busy);
   const mode = useCheckoutStore((s) => s.mode);
@@ -63,6 +66,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
   const itemCount = items.reduce((n, i) => n + i.quantity, 0);
   const shortNumber = order?.orderNumber.split('-').pop() ?? null;
   const discount = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
+  const dealLine = discount?.source === 'foodpanda' ? foodpandaDealLine(discount, subtotalCents) : null;
 
   // Cash on delivery / pay at pickup is the norm here, so "Send to kitchen"
   // leads for takeaway and delivery. Foodpanda is settled by the platform:
@@ -119,6 +123,11 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
   }
 
   function removeDiscount() {
+    // The shop's foodpanda deal comes off only with a manager's PIN: the Discount dialog asks for it.
+    if (discount?.source === 'foodpanda') {
+      onRemoveDeal();
+      return;
+    }
     clearDiscount().catch((e: unknown) => {
       toast({
         title: 'Could not remove the discount',
@@ -244,7 +253,9 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
             <dt>Subtotal</dt>
             <dd>{formatCents(subtotalCents, { showSymbol: false })}</dd>
           </div>
-          {discountCents > 0 ? (
+          {/* The owner's foodpanda deal shows even when it takes nothing off the shop's bill
+              (foodpanda pays all of it, or the order is under its minimum). */}
+          {discountCents > 0 || dealLine ? (
             <div className="is-discount">
               <dt>
                 <button
@@ -255,16 +266,30 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onSendTo
                   title="Change the discount (F3)"
                 >
                   <Percent className="h-3 w-3" aria-hidden="true" />
-                  Discount
-                  {discount && (
-                    <span className="font-normal">
-                      {' · '}
-                      {discount.discountType === 'percent' ? `${discount.value}%` : formatCents(discount.value)}
-                      {discount.reason ? ` · ${discount.reason}` : ''}
-                    </span>
+                  {dealLine ? (
+                    <>
+                      {dealLine.label}
+                      {dealLine.note && <span className="font-normal">{` · ${dealLine.note}`}</span>}
+                    </>
+                  ) : (
+                    <>
+                      Discount
+                      {discount && (
+                        <span className="font-normal">
+                          {' · '}
+                          {discount.discountType === 'percent' ? `${discount.value}%` : formatCents(discount.value)}
+                          {discount.reason ? ` · ${discount.reason}` : ''}
+                        </span>
+                      )}
+                    </>
                   )}
                 </button>
-                <button type="button" onClick={removeDiscount} aria-label="Remove discount" title="Remove discount">
+                <button
+                  type="button"
+                  onClick={removeDiscount}
+                  aria-label={dealLine ? 'Take the foodpanda deal off (manager)' : 'Remove discount'}
+                  title={dealLine ? 'Take the foodpanda deal off (manager)' : 'Remove discount'}
+                >
                   <X className="h-3 w-3" />
                 </button>
               </dt>

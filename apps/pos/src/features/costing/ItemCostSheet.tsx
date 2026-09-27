@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { ChoiceCostView, CostLineView, ItemCostSheet, PaidExtraView, RequiredGroupView } from '@cheeseoclock/shared-types';
+import type { ChoiceCostView, CostLineView, ItemCostSheet, ItemFoodpandaLine, PaidExtraView, RequiredGroupView } from '@cheeseoclock/shared-types';
 import { BookOpen, Calculator, ChevronDown, ChevronRight, Printer, X } from 'lucide-react';
 import { useItemCostSheet } from './costingQueries';
 import { FoodCostChip } from './CostChip';
@@ -98,6 +98,8 @@ export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: strin
                 </section>
               )}
 
+              {sheet.onFoodpanda && sheet.row.flag !== 'grey' && <OnFoodpanda line={sheet.onFoodpanda} costCents={sheet.row.costCents} />}
+
               <p className="text-xs text-stone-500">
                 At today&apos;s prices, from the recipe as it is now; the menu price is before tax. Sold on this till in the
                 last 28 days: {new Intl.NumberFormat('en-PK').format(sheet.row.soldLast28)}.
@@ -134,6 +136,42 @@ export function ItemCostSheetDrawer({ menuItemId, onClose }: { menuItemId: strin
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/**
+ * "On foodpanda" (Settings → foodpanda): a typical plate at the deal a
+ * foodpanda order started now gets. foodpanda's commission and what the
+ * shop keeps come only for the owner (the main process leaves them out).
+ */
+function OnFoodpanda({ line, costCents }: { line: ItemFoodpandaLine; costCents: number }) {
+  return (
+    <section>
+      <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-stone-500">On foodpanda</h3>
+      <p className="text-sm">
+        {line.dealPercent > 0 ? (
+          <>
+            With the {line.dealPercent}% deal{line.shopPercent < line.dealPercent ? ` (your part ${line.shopPercent}%)` : ''}
+            {line.minOrderCents ? ` on orders from ${formatCents(line.minOrderCents)}` : ''} it sells for{' '}
+            <b>{formatCents(line.priceAfterDealCents)}</b>
+          </>
+        ) : (
+          <>
+            No deal today: it sells for <b>{formatCents(line.priceAfterDealCents)}</b>
+          </>
+        )}
+        ; its food ({formatCents(costCents)}) is {formatBps(line.foodCostBps)} of that.
+        {line.owner && (
+          <>
+            {' '}
+            foodpanda keeps {line.owner.confirmed ? '' : 'about '}
+            {formatCents(line.owner.foodpandaKeepsCents)} ({formatBps(line.owner.commissionBps)} commission
+            {line.owner.confirmed ? '' : ', not confirmed yet'}); you keep <b>{formatCents(line.owner.youKeepCents)}</b>, and the food is{' '}
+            {formatBps(line.owner.foodCostOfKeptBps)} of that.
+          </>
+        )}
+      </p>
+    </section>
   );
 }
 
