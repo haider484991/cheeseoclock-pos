@@ -1,16 +1,19 @@
-import { v5 as uuidv5 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { getBusinessSetting, type StoredBusinessSetting } from '../business-settings-read.js';
-import { COC_ID_NAMESPACE } from '@cheeseoclock/shared-types';
+import { businessSettingId } from '../business-settings-ids.js';
 import {
   BUSINESS_SETTING_SCHEMAS,
   isBusinessSettingKey,
+  storedFormatIsNewer,
   type BusinessSettingKey,
   type BusinessSettingValue,
 } from '@cheeseoclock/shared-schemas';
+
+/** A save over a value a newer version of the app wrote would silently drop what this version does not know. */
+export const NEWER_FORMAT_REFUSAL = 'Saved by a newer version of the app — update this till to change it.';
 
 /**
  * Shop-wide settings both tills share (migration 0032, costing spec §3):
@@ -25,13 +28,13 @@ import {
  *
  * Every value is checked against its key's Zod schema on the way in AND on
  * the way out: a stored value that does not fit (a newer till's format) is
- * read as "not set", never trusted.
+ * read as "not set", never trusted. A shop rule (Settings → foodpanda …)
+ * saved by a newer version of the app is never saved over here: this till
+ * would drop the fields it does not know (NEWER_FORMAT_REFUSAL).
  */
 
-/** The row id for a key: the same on every till. */
-export function businessSettingId(key: string): string {
-  return uuidv5(`business_settings:${key}`, COC_ID_NAMESPACE);
-}
+/** The row id for a key: the same on every till (../business-settings-ids.ts). */
+export { businessSettingId };
 
 // Reading a setting lives in ../business-settings-read.ts (the Reports worker loads it without this write path).
 export { getBusinessSetting, type StoredBusinessSetting };
@@ -71,6 +74,9 @@ export function setBusinessSettings(db: AppDatabase, entries: readonly BusinessS
       const existing = db
         .prepare(`SELECT value_json, deleted_at FROM business_settings WHERE id = ?`)
         .get(id) as { value_json: string; deleted_at: string | null } | undefined;
+      if (existing && existing.deleted_at === null && storedFormatIsNewer(key, safeJson(existing.value_json))) {
+        throw new Error(NEWER_FORMAT_REFUSAL);
+      }
       if (existing) {
         db.prepare(
           `UPDATE business_settings

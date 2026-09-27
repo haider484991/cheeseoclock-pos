@@ -1,4 +1,4 @@
-import { v7 as uuidv7 } from 'uuid';
+import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import log from 'electron-log/main';
 import type { AppDatabase } from '../connection.js';
 import { nowIso, type Actor } from './base.js';
@@ -19,14 +19,23 @@ import {
 } from '../order-history-query.js';
 import { computeTax, kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
 import {
+  activeFoodpandaDeal,
   allocateDiscount,
   computeDiscountCents,
+  dealAmount,
+  dealMinTillCents,
+  foodpandaDealRule,
+  foodpandaTerms,
+  parseFoodpandaDealRule,
   validateOrderForTender,
   validateVoid,
   validateDiscountInput,
   requiresManagerApproval,
 } from '@cheeseoclock/pos-domain';
+import { readShopSetting } from '../business-settings-read.js';
+import { COC_ID_NAMESPACE, FOODPANDA_ORDER_CODE_MAX } from '@cheeseoclock/shared-types';
 import type {
+  FoodpandaTenderCheck,
   Order,
   OrderItem,
   OrderItemModifier,
@@ -381,8 +390,15 @@ function enqueuePaymentSyncAndAudit(
  * recorded as the dialog's default Cash it inflated the drawer's expected
  * cash every night (audit 2026-09-25).
  */
-function assertMethodFitsOrder(mode: OrderMode, method: PaymentMethod): void {
+function assertMethodFitsOrder(mode: OrderMode, method: PaymentMethod, what: 'pay' | 'refund' = 'pay'): void {
   if ((mode === 'foodpanda') === (method === 'foodpanda')) return;
+  if (what === 'refund') {
+    throw new Error(
+      mode === 'foodpanda'
+        ? 'Foodpanda orders are refunded through Foodpanda, never from the drawer — choose Foodpanda as the method'
+        : 'Foodpanda is only for foodpanda orders',
+    );
+  }
   throw new Error(
     mode === 'foodpanda'
       ? 'Foodpanda orders are paid through Foodpanda — choose Foodpanda as the method'
@@ -505,10 +521,138 @@ export function createOrder(
       before: null,
       after: order,
     });
+    // A foodpanda order gets the shop's standing foodpanda deal now, frozen
+    // onto it (nothing in it yet, so its rupees are Rs 0 until items land).
+    if (input.mode === 'foodpanda' && (input.source ?? 'pos') === 'pos') putOnFoodpandaDeal(db, order, actor);
   });
   tx();
   log.info('Order created', { id, mode: input.mode });
   return order;
+}
+
+// -----------------------------------------------------------------------------
+// The foodpanda deal (Settings -> foodpanda; shared-types shop-settings.ts)
+// -----------------------------------------------------------------------------
+
+/**
+ * Who approved the automatic foodpanda deal: the owner who last saved it
+ * (business_settings.updated_by_user_id, the web pick-up pattern), or the
+ * first active admin (the bridge's system actor) when that user is not on
+ * this till. Being approved, the deal is never auto-cleared by the approval
+ * re-check in recomputeOrderTotals.
+ */
+function foodpandaDealApprover(db: AppDatabase, savedByUserId: string | null): string | null {
+  if (savedByUserId) {
+    const u = db.prepare(`SELECT id FROM users WHERE id = ?`).get(savedByUserId) as { id: string } | undefined;
+    if (u) return u.id;
+  }
+  const admin = db
+    .prepare(
+      `SELECT id FROM users
+        WHERE is_active = 1 AND deleted_at IS NULL
+        ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END, created_at
+        LIMIT 1`,
+    )
+    .get() as { id: string } | undefined;
+  return admin?.id ?? null;
+}
+
+/**
+ * Put the shop's foodpanda deal on an order that has just become foodpanda
+ * (createOrder, setOrderMode). One discount row, source 'foodpanda', with
+ * the deal's terms FROZEN in rule_json: the rupees are re-worked from them on
+ * every cart change (recomputeOrderTotals), never from the live setting, so
+ * a Save while this order is open, or one still on its way from the other
+ * till, can't move it. The row replaces any other discount (one discount per
+ * order), audited. No deal today (0%, or outside its dates): nothing is
+ * touched, exactly as before the setting existed. Returns whether a row was
+ * put on. Call inside the caller's transaction.
+ */
+function putOnFoodpandaDeal(db: AppDatabase, order: Order, actor: Actor & { userId: string }): boolean {
+  const setting = readShopSetting(db, 'foodpanda.deal');
+  const deal = activeFoodpandaDeal(setting.value, order.createdAt);
+  if (!deal) return false;
+  // Frozen with how much dearer the listing is now: foodpanda's minimum and most-off are in its prices.
+  const rule = foodpandaDealRule(deal, setting.savedAt, readShopSetting(db, 'foodpanda.fees').value.upliftBps);
+  const now = nowIso();
+
+  const replaced = db
+    .prepare(
+      `SELECT id, discount_type, value, reason, amount_cents, source FROM order_discounts
+        WHERE order_id = ? AND deleted_at IS NULL`,
+    )
+    .all(order.id) as Array<{ id: string; discount_type: string; value: number; reason: string | null; amount_cents: number; source: string | null }>;
+  for (const r of replaced) {
+    db.prepare(
+      `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).run(now, now, r.id);
+    enqueueSync(db, { entityType: 'order_discounts', entityId: r.id, op: 'delete', payload: { id: r.id, deletedAt: now } });
+  }
+  if (replaced.length > 0) {
+    writeAudit(db, {
+      entityType: 'order_discounts',
+      entityId: order.id,
+      action: 'replaced_by_foodpanda_deal',
+      actorUserId: actor.userId,
+      before: replaced,
+      after: null,
+    });
+  }
+
+  const approver = foodpandaDealApprover(db, setting.savedByUserId);
+  const discountId = uuidv7();
+  db.prepare(
+    `INSERT INTO order_discounts
+       (id, order_id, discount_type, value, reason, applied_by_user_id, approved_by_user_id,
+        amount_cents, source, rule_json, created_at, updated_at, device_id, version)
+     VALUES (?, ?, 'percent', ?, ?, ?, ?, 0, 'foodpanda', ?, ?, ?, ?, 1)`,
+  ).run(discountId, order.id, rule.shopPercent, rule.label, actor.userId, approver, JSON.stringify(rule), now, now, actor.deviceId);
+  enqueueSync(db, {
+    entityType: 'order_discounts',
+    entityId: discountId,
+    op: 'upsert',
+    payload: { id: discountId, orderId: order.id, source: 'foodpanda', rule },
+  });
+  writeAudit(db, {
+    entityType: 'order_discounts',
+    entityId: discountId,
+    action: 'apply_foodpanda_deal',
+    actorUserId: actor.userId,
+    before: null,
+    after: { orderId: order.id, source: 'foodpanda', rule, approverUserId: approver },
+  });
+  return true;
+}
+
+/**
+ * Take the foodpanda deal off an order that stopped being foodpanda: the
+ * deal exists only on foodpanda orders. Returns whether anything came off.
+ * Call inside the caller's transaction.
+ */
+function takeOffFoodpandaDeal(db: AppDatabase, orderId: string, actor: Actor & { userId: string }): boolean {
+  const rows = db
+    .prepare(
+      `SELECT id, value, reason, amount_cents, rule_json FROM order_discounts
+        WHERE order_id = ? AND source = 'foodpanda' AND deleted_at IS NULL`,
+    )
+    .all(orderId) as Array<{ id: string; value: number; reason: string | null; amount_cents: number; rule_json: string | null }>;
+  if (rows.length === 0) return false;
+  const now = nowIso();
+  for (const r of rows) {
+    db.prepare(
+      `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).run(now, now, r.id);
+    enqueueSync(db, { entityType: 'order_discounts', entityId: r.id, op: 'delete', payload: { id: r.id, deletedAt: now } });
+    writeAudit(db, {
+      entityType: 'order_discounts',
+      entityId: r.id,
+      action: 'remove_foodpanda_deal',
+      actorUserId: actor.userId,
+      before: r,
+      after: null,
+    });
+  }
+  return true;
 }
 
 /**
@@ -552,7 +696,16 @@ export function setOrderMode(
       before: order,
       after: updated,
     });
-    result = updated;
+
+    // The foodpanda deal follows the order type: put on when it becomes
+    // foodpanda (the terms of NOW, frozen), taken off when it leaves.
+    const wasFoodpanda = order.mode === 'foodpanda';
+    const isFoodpanda = mode === 'foodpanda';
+    let discountChanged = false;
+    if (wasFoodpanda && !isFoodpanda) discountChanged = takeOffFoodpandaDeal(db, orderId, actor);
+    else if (!wasFoodpanda && isFoodpanda && order.source === 'pos') discountChanged = putOnFoodpandaDeal(db, updated, actor);
+    if (discountChanged) recomputeOrderTotals(db, orderId, actor);
+    result = discountChanged ? (findOrder(db, orderId) ?? updated) : updated;
   });
   tx();
   return result;
@@ -1169,6 +1322,12 @@ export function applyDiscount(
     ) {
       throw new Error('Manager approval is required for this discount');
     }
+    // The shop's foodpanda deal on this order: a cashier can't change it. A
+    // manager can, for one order (to match the tablet); it is then a manual
+    // discount with that manager as approver.
+    if (hasFoodpandaDeal(db, input.orderId) && !input.approverUserId) {
+      throw new Error(FOODPANDA_DEAL_NEEDS_MANAGER);
+    }
 
     const amount = computeDiscountCents(order.subtotalCents, {
       type: input.discountType,
@@ -1235,10 +1394,24 @@ export function applyDiscount(
   tx();
 }
 
+/** The order carries the shop's foodpanda deal (a live source 'foodpanda' discount row). */
+export function hasFoodpandaDeal(db: AppDatabase, orderId: string): boolean {
+  return (
+    db
+      .prepare(`SELECT 1 AS x FROM order_discounts WHERE order_id = ? AND source = 'foodpanda' AND deleted_at IS NULL LIMIT 1`)
+      .get(orderId) !== undefined
+  );
+}
+
+/** What a cashier hears when they try to change a foodpanda order's deal. */
+export const FOODPANDA_DEAL_NEEDS_MANAGER =
+  "The foodpanda deal is set by the owner. Only a manager can change it on this order, with their PIN or password.";
+
 export function clearDiscount(
   db: AppDatabase,
   orderId: string,
   actor: Actor & { userId: string },
+  opts: { approverUserId?: string | null } = {},
 ): void {
   const tx = db.transaction(() => {
     // Same gate as applying one: taking a discount off a paid order would
@@ -1249,7 +1422,7 @@ export function clearDiscount(
     const now = nowIso();
     const existing = db
       .prepare(
-        `SELECT id, discount_type, value, amount_cents
+        `SELECT id, discount_type, value, amount_cents, source
            FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`,
       )
       .all(orderId) as Array<{
@@ -1257,8 +1430,11 @@ export function clearDiscount(
       discount_type: string;
       value: number;
       amount_cents: number;
+      source: string | null;
     }>;
     if (existing.length === 0) return; // nothing to clear, no audit noise
+    // Taking the foodpanda deal off is changing it: a manager's, like applyDiscount.
+    if (existing.some((d) => d.source === 'foodpanda') && !opts.approverUserId) throw new Error(FOODPANDA_DEAL_NEEDS_MANAGER);
     db.prepare(
       `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1
         WHERE order_id = ? AND deleted_at IS NULL`,
@@ -1277,7 +1453,7 @@ export function clearDiscount(
       action: 'clear',
       actorUserId: actor.userId,
       before: existing,
-      after: null,
+      after: opts.approverUserId ? { approverUserId: opts.approverUserId } : null,
     });
     recomputeOrderTotals(db, orderId, actor);
   });
@@ -1309,18 +1485,44 @@ function recomputeOrderTotals(
   // nothing (audit 2026-09-25).
   const discountRow = db
     .prepare(
-      `SELECT id, discount_type, value, amount_cents, approved_by_user_id FROM order_discounts
+      `SELECT id, discount_type, value, amount_cents, approved_by_user_id, source, rule_json FROM order_discounts
          WHERE order_id = ? AND deleted_at IS NULL
          ORDER BY created_at DESC LIMIT 1`,
     )
     .get(orderId) as
-    | { id: string; discount_type: 'percent' | 'flat'; value: number; amount_cents: number; approved_by_user_id: string | null }
+    | {
+        id: string;
+        discount_type: 'percent' | 'flat';
+        value: number;
+        amount_cents: number;
+        approved_by_user_id: string | null;
+        source: string | null;
+        rule_json: string | null;
+      }
     | undefined;
   let discount = 0;
   if (discountRow) {
     const d = { type: discountRow.discount_type, value: discountRow.value };
     const now = nowIso();
-    if (requiresManagerApproval(d, subtotal) && !discountRow.approved_by_user_id) {
+    // The shop's foodpanda deal: re-worked from the terms frozen on the row
+    // (the minimum, the most off), never from the live setting — and never
+    // cleared by the approval re-check (the owner set it). A rule this
+    // version can't read is worked as its type and value, as an older till does.
+    const dealRule = discountRow.source === 'foodpanda' ? parseFoodpandaDealRule(discountRow.rule_json) : null;
+    if (discountRow.source === 'foodpanda') {
+      discount = dealRule ? dealAmount(dealRule, subtotal).shopCents : computeDiscountCents(subtotal, d);
+      if (discount !== discountRow.amount_cents) {
+        db.prepare(
+          `UPDATE order_discounts SET amount_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+        ).run(discount, now, discountRow.id);
+        enqueueSync(db, {
+          entityType: 'order_discounts',
+          entityId: discountRow.id,
+          op: 'upsert',
+          payload: { id: discountRow.id, amountCents: discount },
+        });
+      }
+    } else if (requiresManagerApproval(d, subtotal) && !discountRow.approved_by_user_id) {
       // A flat discount that has become more than 10% of a shrunken cart now
       // needs a manager: take it off, the cashier re-applies it (with a PIN).
       db.prepare(
@@ -1428,7 +1630,7 @@ function recordCashSale(
 
 export function tenderOrder(
   db: AppDatabase,
-  input: { orderId: string; payments: TenderInputItem[] },
+  input: { orderId: string; payments: TenderInputItem[]; foodpanda?: FoodpandaTenderCheck | null },
   actor: Actor & { userId: string },
 ): OrderWithDrawer {
   let result!: OrderWithDrawer;
@@ -1486,9 +1688,30 @@ export function tenderOrder(
       }
     }
 
+    // The foodpanda deal exists only on foodpanda orders.
+    if (order.mode !== 'foodpanda' && hasFoodpandaDeal(db, input.orderId)) {
+      throw new Error('This order still has the foodpanda deal but is not a foodpanda order — make it foodpanda again, or take the deal off');
+    }
+    // foodpanda's order number (on the payment) and the tablet's total, as the owner's checks ask.
+    let payments = input.payments;
+    let tabletTotalCents: number | null = null;
+    if (order.mode === 'foodpanda') {
+      const checks = readShopSetting(db, 'foodpanda.checks').value;
+      payments = input.payments.map((p) => ({ ...p, referenceNo: foodpandaOrderCode(p.referenceNo) }));
+      const code = payments.find((p) => p.method === 'foodpanda')?.referenceNo ?? null;
+      if (checks.orderCode === 'required' && payments.length > 0 && code === null) {
+        throw new Error("Type foodpanda's order number — the owner has made it required");
+      }
+      const typed = input.foodpanda?.tabletTotalCents;
+      tabletTotalCents = typeof typed === 'number' && Number.isInteger(typed) && typed >= 0 ? typed : null;
+      if (checks.tabletTotal === 'required' && tabletTotalCents === null) {
+        throw new Error('Type the total on the foodpanda tablet — the owner has made it required');
+      }
+    }
+
     const now = nowIso();
-    const shiftId = input.payments.length > 0 ? shiftForPayment(db, actor.deviceId) : null;
-    for (const p of input.payments) {
+    const shiftId = payments.length > 0 ? shiftForPayment(db, actor.deviceId) : null;
+    for (const p of payments) {
       const pid = uuidv7();
       db.prepare(
         `INSERT INTO payments
@@ -1545,13 +1768,123 @@ export function tenderOrder(
       after: finalized,
     });
 
+    // A foodpanda order's economics, frozen now: next month's terms never rewrite it.
+    if (order.mode === 'foodpanda') writeFoodpandaTerms(db, order, tabletTotalCents, actor);
+
     // Cash in the drawer: its open on record with the sale (the cash part).
-    const drawerOpenId = recordCashSale(db, input.orderId, input.payments, actor);
+    // foodpanda pays foodpanda, never the drawer: no cash leg, no row, no pulse.
+    const drawerOpenId = recordCashSale(db, input.orderId, payments, actor);
     result = { ...finalized, drawerOpenId };
   });
   tx();
   log.info('Order tendered', { id: input.orderId, total: result.totalCents });
   return result;
+}
+
+/** foodpanda's order number as typed: trimmed, no leading '#', at most FOODPANDA_ORDER_CODE_MAX letters; empty = null. */
+export function foodpandaOrderCode(raw: string | null | undefined): string | null {
+  const t = (raw ?? '').replace(/\s+/g, ' ').trim().replace(/^#\s*/, '').slice(0, FOODPANDA_ORDER_CODE_MAX).trim();
+  return t === '' ? null : t;
+}
+
+/** The one channel-terms row of an order: the same id on both tills. */
+export function orderChannelTermsId(orderId: string): string {
+  return uuidv5(`order_channel_terms:${orderId}`, COC_ID_NAMESPACE);
+}
+
+/**
+ * A foodpanda order's economics at payment (order_channel_terms, migration
+ * 0040), in the tender's transaction: the deal as frozen on the order, the
+ * shop's part and foodpanda's, the fees in force now and what they come to
+ * (pos-domain foodpandaTerms, at foodpanda's prices when its menu is dearer:
+ * the uplift in force is kept too, and foodpanda's % of the total, 0041),
+ * what foodpanda should pay, and the tablet's total with its difference from
+ * the one expected. Reports read it back through foodpandaOrderMoney.
+ * Insert-only (a second tender of the same order never happens; the row is
+ * never rewritten), and it never bumps orders.version.
+ */
+function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: number | null, actor: Actor & { userId: string }): void {
+  const id = orderChannelTermsId(order.id);
+  if (db.prepare(`SELECT 1 AS x FROM order_channel_terms WHERE id = ?`).get(id) !== undefined) return;
+  const dealRow = db
+    .prepare(
+      `SELECT rule_json FROM order_discounts
+        WHERE order_id = ? AND source = 'foodpanda' AND deleted_at IS NULL
+        ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(order.id) as { rule_json: string | null } | undefined;
+  const rule = parseFoodpandaDealRule(dealRow?.rule_json);
+  const share = rule ? dealAmount(rule, order.subtotalCents) : null;
+  const fees = readShopSetting(db, 'foodpanda.fees');
+  const t = foodpandaTerms(
+    { subtotalCents: order.subtotalCents, shopDiscountCents: order.discountCents, totalCents: order.totalCents },
+    fees.value,
+  );
+  const now = nowIso();
+  const terms = {
+    id,
+    orderId: order.id,
+    channel: 'foodpanda',
+    dealLabel: rule?.label ?? null,
+    dealBps: rule ? rule.dealPercent * 100 : null,
+    shopBps: rule ? rule.shopPercent * 100 : null,
+    shopDiscountCents: order.discountCents as number,
+    platformFundedCents: share?.platformCents ?? 0,
+    commissionBps: fees.value.commissionBps,
+    commissionBase: fees.value.base,
+    commissionConfirmed: fees.value.confirmed,
+    commissionCents: t.commissionCents,
+    fixedFeeCents: t.fixedFeeCents,
+    commissionTaxCents: t.commissionTaxCents,
+    paymentFeeCents: t.paymentFeeCents,
+    upliftBps: fees.value.upliftBps,
+    expectedPayoutCents: t.expectedPayoutCents,
+    tabletTotalCents,
+    // Against what the tablet should show: the till's total at foodpanda's prices (Settings → foodpanda).
+    tabletDiffCents: tabletTotalCents === null ? null : tabletTotalCents - t.expectedTabletCents,
+    settingsAt: fees.savedAt,
+  };
+  db.prepare(
+    `INSERT INTO order_channel_terms
+       (id, order_id, channel, deal_label, deal_bps, shop_bps, shop_discount_cents, platform_funded_cents,
+        commission_bps, commission_base, commission_confirmed, commission_cents, fixed_fee_cents,
+        commission_tax_cents, payment_fee_cents, uplift_bps, expected_payout_cents, tablet_total_cents,
+        tablet_diff_cents, settings_at, created_at, updated_at, device_id, version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+  ).run(
+    terms.id,
+    terms.orderId,
+    terms.channel,
+    terms.dealLabel,
+    terms.dealBps,
+    terms.shopBps,
+    terms.shopDiscountCents,
+    terms.platformFundedCents,
+    terms.commissionBps,
+    terms.commissionBase,
+    terms.commissionConfirmed ? 1 : 0,
+    terms.commissionCents,
+    terms.fixedFeeCents,
+    terms.commissionTaxCents,
+    terms.paymentFeeCents,
+    terms.upliftBps,
+    terms.expectedPayoutCents,
+    terms.tabletTotalCents,
+    terms.tabletDiffCents,
+    terms.settingsAt,
+    now,
+    now,
+    actor.deviceId,
+  );
+  enqueueSync(db, { entityType: 'order_channel_terms', entityId: id, op: 'upsert', payload: terms });
+  writeAudit(db, {
+    entityType: 'order_channel_terms',
+    entityId: id,
+    action: 'create',
+    actorUserId: actor.userId,
+    before: null,
+    after: terms,
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -1722,6 +2055,12 @@ export function refundOrder(
       throw new Error(`Nothing has been paid on this order yet (it is ${said(order.status)}) — cancel it instead`);
     }
     if (!input.reason.trim()) throw new Error('Refund reason is required');
+    // A method the refund screen chose must fit the order: foodpanda's money
+    // goes back through foodpanda, never out of the drawer (so no drawer row
+    // and no pulse), and no other order's through foodpanda. The screen offers
+    // only that; the main process holds to it. Left to itself the refund
+    // reverses what was paid, in the way it was paid.
+    if (input.method !== undefined) assertMethodFitsOrder(order.mode, input.method, 'refund');
 
     const now = nowIso();
     const shiftId = shiftForPayment(db, actor.deviceId);
@@ -2048,7 +2387,7 @@ export function getOrderSnapshot(
   const discountRows = db
     .prepare(
       `SELECT id, order_id, discount_type, value, reason, applied_by_user_id,
-              approved_by_user_id, amount_cents
+              approved_by_user_id, amount_cents, source, rule_json
          FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`,
     )
     .all(orderId) as Array<{
@@ -2059,18 +2398,39 @@ export function getOrderSnapshot(
     applied_by_user_id: string;
     approved_by_user_id: string | null;
     amount_cents: number;
+    source: string | null;
+    rule_json: string | null;
   }>;
 
-  const discounts: OrderSnapshot['discounts'] = discountRows.map((d) => ({
-    id: d.id as OrderSnapshot['discounts'][number]['id'],
-    orderId: orderId as OrderSnapshot['discounts'][number]['orderId'],
-    discountType: d.discount_type,
-    value: d.value,
-    reason: d.reason,
-    appliedByUserId: d.applied_by_user_id as OrderSnapshot['discounts'][number]['appliedByUserId'],
-    approvedByUserId: (d.approved_by_user_id ?? null) as OrderSnapshot['discounts'][number]['approvedByUserId'],
-    amountCents: d.amount_cents as OrderSnapshot['discounts'][number]['amountCents'],
-  }));
+  const discounts: OrderSnapshot['discounts'] = discountRows.map((d) => {
+    // The foodpanda deal's figures on this order, from its frozen terms and
+    // the stored subtotal: the whole deal, and foodpanda's part (the bill
+    // says "foodpanda pays another Rs …" when it is shared).
+    const rule = d.source === 'foodpanda' ? parseFoodpandaDealRule(d.rule_json) : null;
+    const share = rule ? dealAmount(rule, order.subtotalCents) : null;
+    return {
+      id: d.id as OrderSnapshot['discounts'][number]['id'],
+      orderId: orderId as OrderSnapshot['discounts'][number]['orderId'],
+      discountType: d.discount_type,
+      value: d.value,
+      reason: d.reason,
+      appliedByUserId: d.applied_by_user_id as OrderSnapshot['discounts'][number]['appliedByUserId'],
+      approvedByUserId: (d.approved_by_user_id ?? null) as OrderSnapshot['discounts'][number]['approvedByUserId'],
+      amountCents: d.amount_cents as OrderSnapshot['discounts'][number]['amountCents'],
+      source: d.source === 'foodpanda' ? 'foodpanda' : null,
+      foodpanda:
+        rule && share
+          ? {
+              dealPercent: rule.dealPercent,
+              shopPercent: rule.shopPercent,
+              dealCents: share.dealCents,
+              platformCents: share.platformCents,
+              // At till prices, like the cart's subtotal it is compared with.
+              minOrderCents: dealMinTillCents(rule),
+            }
+          : null,
+    };
+  });
 
   const cashier = db
     .prepare(`SELECT full_name FROM users WHERE id = ?`)
@@ -2814,6 +3174,34 @@ export interface DeleteTestOrderInput {
 }
 
 /**
+ * Soft-delete an order's live foodpanda terms (order_channel_terms, one live
+ * row per order at most), each synced as its row image and audited with the
+ * row as it was, action 'delete_test_order'. Inside the caller's
+ * transaction. Returns the ids deleted (none for a non-foodpanda order, or
+ * one paid before the terms were kept).
+ */
+function softDeleteChannelTerms(db: AppDatabase, orderId: string, now: string, actorUserId: string): string[] {
+  const rows = db
+    .prepare(`SELECT * FROM order_channel_terms WHERE order_id = ? AND deleted_at IS NULL ORDER BY id`)
+    .all(orderId) as Array<Record<string, unknown> & { id: string }>;
+  for (const row of rows) {
+    db.prepare(
+      `UPDATE order_channel_terms SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND deleted_at IS NULL`,
+    ).run(now, now, row.id);
+    enqueueSync(db, { entityType: 'order_channel_terms', entityId: row.id, op: 'delete', payload: { id: row.id, deletedAt: now } });
+    writeAudit(db, {
+      entityType: 'order_channel_terms',
+      entityId: row.id,
+      action: 'delete_test_order',
+      actorUserId,
+      before: row,
+      after: { deletedAt: now },
+    });
+  }
+  return rows.map((r) => r.id);
+}
+
+/**
  * Delete a TEST order, for the owner. One transaction — or nothing:
  *  a. the checks above, then the status the dialog showed, the stock answer
  *     and the reason;
@@ -2823,6 +3211,7 @@ export interface DeleteTestOrderInput {
  *     count as food sold with no money). Stock already dealt with at a cancel
  *     or refund stays as it is ('settled_before');
  *  c. every live payment (sales and refunds) soft-deleted, synced and audited;
+ *     so is a foodpanda order's kept terms row (order_channel_terms);
  *  d. the order soft-deleted with who, why, how and what it did to stock —
  *     its status, lines, discounts, costs, papers and stock rows untouched —
  *     synced, and audited with the full order before;
@@ -2891,6 +3280,12 @@ export function deleteTestOrder(
       });
     }
 
+    // c2. A foodpanda order's terms kept at payment (order_channel_terms,
+    // 0040): its commission and expected payout are money of their own, like
+    // its payments, so they go with them — soft-deleted, synced and audited —
+    // and nothing that reads the table by itself can count a test.
+    const channelTermsIds = softDeleteChannelTerms(db, input.orderId, now, actor.userId);
+
     // e. FBR (pure-local): noop / sandbox submissions still waiting are never sent.
     const fbrSkippedIds = skipFbrForOrder(db, input.orderId);
 
@@ -2920,6 +3315,7 @@ export function deleteTestOrder(
         deleteStock,
         cashByShift: f.cash,
         paymentIds: f.payments.map((p) => p.id),
+        channelTermsIds,
         fbrSkippedIds,
         web: f.web,
       },

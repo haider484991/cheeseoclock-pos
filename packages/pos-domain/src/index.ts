@@ -29,3 +29,4 @@ export * from './profit.js';
 export * from './menu-engineering.js';
 export * from './what-if.js';
 export * from './recipe-calc.js';
+export * from './foodpanda.js';

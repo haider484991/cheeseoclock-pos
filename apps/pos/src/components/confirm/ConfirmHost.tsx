@@ -16,7 +16,20 @@ import { Button } from '@cheeseoclock/ui';
 interface Ask {
   message: string;
   danger: boolean;
+  /** Enter lands on "No": the question stops a mistake, so a second Enter must not wave it through. */
+  focusNo: boolean;
+  yesLabel: string;
+  noLabel: string;
   resolve: (ok: boolean) => void;
+}
+
+/** How a question is asked, when "Yes" / "No" and the usual focus are not right. */
+export interface AskOptions {
+  /** Focus "No" (go back) although the words are not a DANGER word: a warning to read, not a routine yes. */
+  safeDefault?: boolean;
+  /** The buttons' words, e.g. "Pay anyway" / "Go back". */
+  yesLabel?: string;
+  noLabel?: string;
 }
 
 const useConfirmStore = create<{ ask: Ask | null }>(() => ({ ask: null }));
@@ -24,12 +37,31 @@ const useConfirmStore = create<{ ask: Ask | null }>(() => ({ ask: null }));
 /** Words that start a question about losing or replacing something. */
 const DANGER = /^(delete|discard|deactivate|cancel|replace|restore)\b/i;
 
+/**
+ * Which answer Enter lands on when the question opens: "No" for a question
+ * about losing or replacing something (a DANGER word) and for a warning asked
+ * with `safeDefault` (the till says X, the tablet says Y — pay anyway?);
+ * otherwise "Yes".
+ */
+export function confirmFocus(message: string, opts: AskOptions = {}): 'yes' | 'no' {
+  return DANGER.test(message.trim()) || opts.safeDefault === true ? 'no' : 'yes';
+}
+
 /** Ask a yes/no question in the app window; resolves true on Yes. */
-export function askConfirm(message: string): Promise<boolean> {
+export function askConfirm(message: string, opts: AskOptions = {}): Promise<boolean> {
   return new Promise((resolve) => {
     // A second question replaces an open one; the first counts as "No".
     useConfirmStore.getState().ask?.resolve(false);
-    useConfirmStore.setState({ ask: { message, danger: DANGER.test(message.trim()), resolve } });
+    useConfirmStore.setState({
+      ask: {
+        message,
+        danger: DANGER.test(message.trim()),
+        focusNo: confirmFocus(message, opts) === 'no',
+        yesLabel: opts.yesLabel ?? 'Yes',
+        noLabel: opts.noLabel ?? 'No',
+        resolve,
+      },
+    });
   });
 }
 
@@ -60,10 +92,10 @@ export function ConfirmHost() {
         <Dialog.Content
           className="fixed left-1/2 top-1/2 z-[60] w-[460px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-white p-5 shadow-xl dark:bg-stone-900"
           onOpenAutoFocus={(e) => {
-            // Enter should not destroy something by accident: focus "No" on risky questions.
+            // Enter should not destroy something, or wave a warning through, by accident: focus "No" on those.
             e.preventDefault();
             const root = e.currentTarget as HTMLElement;
-            root.querySelector<HTMLButtonElement>(ask.danger ? '[data-answer="no"]' : '[data-answer="yes"]')?.focus();
+            root.querySelector<HTMLButtonElement>(ask.focusNo ? '[data-answer="no"]' : '[data-answer="yes"]')?.focus();
           }}
         >
           <Dialog.Title className="font-semibold">{title}</Dialog.Title>
@@ -76,10 +108,10 @@ export function ConfirmHost() {
           )}
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="secondary" data-answer="no" onClick={() => answer(false)}>
-              No
+              {ask.noLabel}
             </Button>
             <Button variant={ask.danger ? 'danger' : 'primary'} data-answer="yes" onClick={() => answer(true)}>
-              Yes
+              {ask.yesLabel}
             </Button>
           </div>
         </Dialog.Content>

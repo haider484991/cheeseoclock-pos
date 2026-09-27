@@ -159,6 +159,22 @@ describe("the dialog's words", () => {
     expect(testDeleteAlsoLines({ kitchenSlip: false, web: true })).toEqual(['The website will show the order as cancelled.']);
   });
 
+  it('a foodpanda order (Settings → foodpanda, 0.7.22): paid through foodpanda, no drawer cash — and it leaves foodpanda’s figures on Channels', () => {
+    // As the main process previews one (foodpanda-test-orders.db.test.ts): foodpanda's payment, no cash of any shift.
+    const foodpanda: Pick<TestDeletePreview, 'cash' | 'paid'> = { cash: [], paid: [{ method: 'foodpanda', netCents: 185_600 }] };
+    expect(testDeletePaidLine(foodpanda.paid)).toBe('Paid — Foodpanda Rs 1,856');
+    expect(testDeleteCashLines(foodpanda)).toEqual([
+      'Foodpanda Rs 1,856 comes off the foodpanda total, and the order leaves foodpanda’s figures on Reports → Channels (what foodpanda keeps, the payout expected, the orders to check). No cash went into the drawer for it.',
+    ]);
+    // Nothing in the dialog tells the owner to take cash out of the drawer, nor that a shift's expected cash moves.
+    const html = form({ preview: { ...PREVIEW, mode: 'foodpanda', totalCents: 185_600, ...foodpanda } });
+    expect(html).toContain('Paid — Foodpanda Rs 1,856');
+    expect(html).toContain('No cash went into the drawer for it.');
+    expect(html).not.toMatch(/expected cash|take it out/);
+    // The toast after: no word of the shift's cash either.
+    expect(testDeleteToast({ orderNumber: '20260927-0044', deleteStock: 'none', cash: foodpanda.cash })).toBe('Order #0044 deleted as a test order.');
+  });
+
   it('stock, paid, what is missing, and the toast', () => {
     expect(testDeleteStockLine('none')).toBe('This order took no stock.');
     expect(testDeleteStockLine('wasted_before')).toBe('Its food was already counted as waste when it was cancelled.');

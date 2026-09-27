@@ -192,17 +192,15 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
     vals.push(v);
   }
 
-  const before =
-    table.name === 'users'
-      ? (db.prepare(`SELECT * FROM ${quoteIdent(table.name)} WHERE id = ?`).get(change.entityId) as
-          | Row
-          | undefined)
-      : undefined;
-  const isNew =
-    table.name === 'users'
-      ? before === undefined
-      : db.prepare(`SELECT 1 AS x FROM ${quoteIdent(table.name)} WHERE id = ?`).get(change.entityId) ===
-        undefined;
+  // Tables whose remote changes go into this till's own audit trail: who can
+  // sign in (users) and the owner's shop-wide settings (business_settings).
+  const audited = table.name === 'users' || table.name === 'business_settings';
+  const before = audited
+    ? (db.prepare(`SELECT * FROM ${quoteIdent(table.name)} WHERE id = ?`).get(change.entityId) as Row | undefined)
+    : undefined;
+  const isNew = audited
+    ? before === undefined
+    : db.prepare(`SELECT 1 AS x FROM ${quoteIdent(table.name)} WHERE id = ?`).get(change.entityId) === undefined;
 
   if (isNew) {
     // A new row needs every NOT NULL column without a default: the image has
@@ -267,7 +265,35 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
       after: { ...afterImage, fromDeviceId: change.deviceId },
     });
   }
+  if (table.name === 'business_settings') {
+    // A setting saved on the other till: one remote_apply row per key, so a
+    // card's History here shows the other till's saves too (audit_log is this
+    // till's own), with who saved it there. The value as it was sent.
+    writeAudit(db, {
+      entityType: 'business_settings',
+      entityId: change.entityId,
+      action: 'remote_apply',
+      actorUserId: null,
+      before: before ? { key: before['key'], value: parseJsonOr(before['value_json']) } : null,
+      after: {
+        key: image['key'],
+        value: parseJsonOr(image['valueJson']),
+        updatedByUserId: typeof image['updatedByUserId'] === 'string' ? image['updatedByUserId'] : null,
+        deleted: typeof image['deletedAt'] === 'string',
+        fromDeviceId: change.deviceId,
+      },
+    });
+  }
   return { applied: true };
+}
+
+function parseJsonOr(v: unknown): unknown {
+  if (typeof v !== 'string') return v ?? null;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return v;
+  }
 }
 
 /**
@@ -526,6 +552,8 @@ export interface BatchApplyResult {
   waiting: number;
   /** Dropped past the waiting list's cap (still counted in Settings). */
   dropped: number;
+  /** A shop-wide setting from the other till was written here (the screens re-read them). */
+  settingsChanged: boolean;
 }
 
 /** Changes per transaction; the event loop is given back between chunks. */
@@ -553,7 +581,7 @@ export async function applyRemoteBatch(
   const chunk = opts.chunk ?? APPLY_CHUNK;
   const pause = opts.pause ?? (() => new Promise<void>((r) => setImmediate(r)));
   const kept = readParked(db);
-  if (kept.length === 0 && incoming.length === 0) return { applied: 0, stale: 0, waiting: 0, dropped: 0 };
+  if (kept.length === 0 && incoming.length === 0) return { applied: 0, stale: 0, waiting: 0, dropped: 0, settingsChanged: false };
 
   interface Item {
     seq: number;
@@ -568,6 +596,7 @@ export async function applyRemoteBatch(
   const left: Item[] = [];
   let applied = 0;
   let stale = 0;
+  let settingsChanged = false;
   const applyOne = db.transaction((c: SyncChange) => applyRemoteChange(db, c));
 
   for (let pass = 0; pass < APPLY_PASSES && pending.length > 0; pass++) {
@@ -587,6 +616,7 @@ export async function applyRemoteBatch(
           if (r.applied) {
             applied++;
             progress++;
+            if (item.change.entityType === 'business_settings') settingsChanged = true;
           } else if (r.reason === 'stale') {
             stale++;
           } else {
@@ -612,7 +642,7 @@ export async function applyRemoteBatch(
     tries: (item.prior?.tries ?? 0) + 1,
   }));
   const dropped = kept.length > 0 || nextKept.length > 0 ? writeParked(db, nextKept) : 0;
-  return { applied, stale, waiting: nextKept.length - dropped, dropped };
+  return { applied, stale, waiting: nextKept.length - dropped, dropped, settingsChanged };
 }
 
 // -----------------------------------------------------------------------------

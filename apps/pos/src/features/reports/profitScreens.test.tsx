@@ -43,7 +43,10 @@ const SAT_3PM = new Date('2026-09-26T10:00:00.000Z');
 const base = { sinceIso: '2026-09-26T00:00:00.000Z', untilIso: '2026-09-27T00:00:00.000Z', engine: 'worker' as const };
 const period = periodFor('today', SAT_3PM);
 const html = (node: ReactNode) => renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>);
-const FEES = { foodpanda: { commissionBps: 2500, base: 'sales_ex_tax' as const, fixedFeeCents: 0, upliftBps: 0 }, paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } };
+const FEES = {
+  foodpanda: { v: 1, commissionBps: 2500, confirmed: false, base: 'after_deal' as const, fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0, paymentFeeBps: 0 },
+  paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 },
+};
 
 const PROFIT: ReportProfitTab = {
   ...base,
@@ -148,10 +151,15 @@ describe('profit in plain words (costing spec D15)', () => {
   });
 
   it('foodpanda and the rider, as the owner answered (or the defaults)', () => {
-    expect(commissionText(FEES)).toBe('foodpanda commission: 25% of the order before tax, after discounts. foodpanda orders are at till prices.');
-    expect(commissionText({ ...FEES, foodpanda: { commissionBps: 2200, base: 'paid_incl_tax', fixedFeeCents: 2_500, upliftBps: 1000 } })).toBe(
-      "foodpanda commission: 22% of what the customer paid, tax included plus Rs 25 an order. foodpanda's menu is 10% dearer than the till's: the difference is shown as its own line, and the commission is on the dearer price.",
+    expect(commissionText(FEES)).toBe(
+      'foodpanda commission: 25% (not confirmed yet) of the food after your part of the deal, before tax. foodpanda orders are at till prices. Orders paid with a confirmed commission keep the terms they were paid with; the rest use these (Settings → foodpanda).',
     );
+    const typed = { v: 1, commissionBps: 2200, confirmed: true, base: 'before_deal' as const, fixedFeeCents: 2_500, commissionTaxBps: 1_600, upliftBps: 1000, paymentFeeBps: 0 };
+    expect(commissionText({ foodpanda: typed })).toBe(
+      "foodpanda commission: 22% of the food before the deal, before tax, plus Rs 25 an order and 16% tax on the commission. foodpanda's menu is 10% above the till's: the difference is its own line, and the commission is on the dearer price. Orders paid with a confirmed commission keep the terms they were paid with; the rest use these (Settings → foodpanda).",
+    );
+    // foodpanda's fee on the total (Settings → foodpanda; v0.7.20's "Foodpanda" payment fee) is said with the rest.
+    expect(commissionText({ foodpanda: { ...typed, paymentFeeBps: 200 } })).toContain("plus Rs 25 an order, 16% tax on the commission and 2% of each order's total.");
     expect(riderText({ mode: 'zone_rate', fixedCents: 0 })).toContain("the rider service's rate for each area");
     expect(riderText({ mode: 'fixed', fixedCents: 15_000 })).toBe('Rider cost: Rs 150 a trip.');
   });
@@ -372,6 +380,40 @@ describe('Channels & delivery with profit and delivery areas', () => {
     const csv = buildTabCsv('channels', CHANNELS(true), period, SAT_3PM);
     expect(csv).toContain('WHAT EACH ORDER TYPE EARNS');
     expect(csv).toContain('Earns per order Rs');
+  });
+
+  it("foodpanda once: the table's \"foodpanda kept\" and the foodpanda block's are the same figure (one per-order rule)", () => {
+    const withBlock: ReportChannelsTab = {
+      ...CHANNELS(true),
+      foodpanda: {
+        orderCount: 2,
+        tillPriceSalesCents: 110_000,
+        shopDealCents: 10_000,
+        foodpandaDealCents: 0,
+        taxCents: 16_000,
+        commissionCents: 25_000,
+        feeCents: 0,
+        commissionTaxCents: 0,
+        foodpandaKeepsCents: 25_000,
+        upliftCents: 0,
+        partRefundCents: 0,
+        youKeepCents: 75_000,
+        expectedPayoutCents: 91_000,
+        estimatedOrders: 0,
+        commissionSuggested: false,
+        unconfirmedCommissionBps: null,
+        foodCost: null,
+        toCheck: [],
+        missingCodeCount: 0,
+        tabletDiffCount: 0,
+      },
+    };
+    const out = html(<ChannelsTab data={withBlock} />);
+    // The same words and the same rupees in both places; no second "Commission" column meaning something else.
+    expect(out.match(/foodpanda kept/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(out).toContain('Rs 250');
+    expect(out).not.toContain('>Commission<');
+    expect(out).toContain('Settings → foodpanda');
   });
 
   it('without profit.view: the areas without rider or earnings, on screen, in the file and on paper', () => {

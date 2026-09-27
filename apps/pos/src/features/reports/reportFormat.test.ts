@@ -275,7 +275,10 @@ function profitTabOf(base: { sinceIso: string; untilIso: string; engine: 'worker
     coverageBps: 10_000,
     estimatedOrders: 0,
     costingStartedAt: null,
-    fees: { foodpanda: { commissionBps: 2500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 }, paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
+    fees: {
+      foodpanda: { v: 1, commissionBps: 2500, confirmed: false, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0, paymentFeeBps: 0 },
+      paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 },
+    },
     riderCost: { mode: 'zone_rate', fixedCents: 0 },
     noRateCount: 0,
   };
@@ -611,6 +614,50 @@ describe('printout', () => {
     expect(rows).toContainEqual(expect.stringMatching(/,Cash in\/out entries,Drawer opened with no sale,Opening note,Closing note(,|$)/));
     expect(rows).toContainEqual(expect.stringMatching(/,-100\.00,0,0,"Morning, Ali on register","Rs 100 short, change given wrong"(,|$)/));
     expect(rows).toContainEqual(expect.stringMatching(/,-100\.00,0,0,,(,|$)/));
+  });
+
+  it('the shift CSV ends with the drawer log and deleted-test columns, in order, after the ones 0.7.21 shipped', () => {
+    const shift = (id: string, more: Record<string, unknown>) => ({
+      id,
+      openedAt: '2026-09-26T04:00:00.000Z',
+      closedAt: '2026-09-26T16:00:00.000Z',
+      openedBy: 'Sara',
+      closedBy: 'Sara',
+      openingCashCents: 500000,
+      expectedCashCents: 600000,
+      countedCashCents: 600000,
+      varianceCents: 0,
+      cashInCents: 0,
+      cashOutCents: 0,
+      cashMovementCount: 0,
+      noSaleOpens: 0,
+      openingNote: null,
+      closingNote: null,
+      carriedUnpaidCount: 2,
+      carryOverReason: 'Rider still out',
+      ...more,
+    });
+    const csv = tabCsv(
+      'team',
+      report({
+        shifts: [
+          // Used 7 times; Rs 1,250 of its test orders deleted after it closed; 1 of the 2 it carried over later deleted as a test.
+          shift('s1', { drawerOpenCount: 7, testDeletedCashCents: 125_000, carriedTestDeletedCount: 1 }),
+          // A shift from before the drawer log / the test-order delete: the three cells stay empty.
+          shift('s2', {}),
+        ],
+      } as never),
+    );
+    const rows = csv.split(/\r?\n/);
+    // The header: 0.7.21's last two columns, then the three new ones, in this order and last.
+    expect(rows).toContainEqual(
+      expect.stringMatching(
+        /,Unpaid orders carried over,Carry-over reason,Drawer used \(all\),Test orders deleted after close Rs,"Carried over, later deleted as tests"$/,
+      ),
+    );
+    // Each shift's figures under them, in the same order.
+    expect(rows).toContainEqual(expect.stringMatching(/,2,Rider still out,7,1250\.00,1$/));
+    expect(rows).toContainEqual(expect.stringMatching(/,2,Rider still out,,,$/));
   });
 
   it('says how many hand opens there were in all when it prints only some', () => {

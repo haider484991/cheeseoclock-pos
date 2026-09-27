@@ -38,7 +38,7 @@ export function TargetsTab() {
       {canSeeReports && <DaypartsCard canEdit={canEdit} />}
       {/* How many tills take orders (costing spec Phase 8). */}
       <TillsCard canEdit={canEdit} />
-      {/* foodpanda's commission, card fees and the rider cost (costing spec Phase 9). */}
+      {/* Card fees and the rider cost (costing spec Phase 9); foodpanda's terms read-only, from Settings → foodpanda. */}
       <ChannelFeesCard canEdit={canEdit} />
     </div>
   );

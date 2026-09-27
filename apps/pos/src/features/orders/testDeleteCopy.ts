@@ -75,6 +75,13 @@ export function testDeleteCashLines(preview: Pick<TestDeletePreview, 'cash' | 'p
   for (const p of preview.paid) {
     if (p.method === 'cash' || p.netCents === 0) continue;
     const label = PAYMENT_LABELS[p.method];
+    if (p.method === 'foodpanda') {
+      // foodpanda pays foodpanda, never the drawer: nothing to take out of it.
+      lines.push(
+        `${label} ${formatCents(p.netCents)} comes off the ${label.toLowerCase()} total, and the order leaves foodpanda’s figures on Reports → Channels (what foodpanda keeps, the payout expected, the orders to check). No cash went into the drawer for it.`,
+      );
+      continue;
+    }
     lines.push(`${label} ${formatCents(p.netCents)} comes off the ${label.toLowerCase()} total.`);
   }
   if (lines.length === 0) lines.push('No money is left on this order, so no cash or card total changes.');

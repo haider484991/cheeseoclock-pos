@@ -138,7 +138,7 @@ const NO_PROFIT = 'Only the owner can see profit.';
 
 /** What Costing → Targets & fees saves for Phase 9 (made-up figures). */
 const FEES = () => ({
-  fees: { foodpanda: { commissionBps: 2200, base: 'paid_incl_tax', fixedFeeCents: 2_500, upliftBps: 1000 }, paymentFeeBps: { cash: 0, card: 250, foodpanda: 0, transfer: 0 } },
+  fees: { paymentFeeBps: { cash: 0, card: 250, foodpanda: 0, transfer: 0 } },
   riderCost: { mode: 'fixed', fixedCents: 15_000 },
 });
 
@@ -341,6 +341,61 @@ live('Menu costs', () => {
 });
 
 live('the item cost sheet', () => {
+  it('"On foodpanda": the price after the deal for a manager; foodpanda’s commission and what you keep for the owner only (profit.view)', async () => {
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    const owner = { userId: 'u_admin', deviceId: DEV };
+    setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null }, owner);
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: true, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 0, paymentFeeBps: 0 }, owner);
+    h.session = MANAGER;
+    const forManager = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    const price = forManager.row.priceCents;
+    expect(forManager.onFoodpanda).toMatchObject({ dealPercent: 20, priceCents: price, priceAfterDealCents: price - Math.round(price / 5), owner: null });
+    h.session = OWNER;
+    const forOwner = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    const after = forOwner.onFoodpanda!.priceAfterDealCents;
+    expect(forOwner.onFoodpanda!.owner).toMatchObject({
+      commissionBps: 2_500,
+      confirmed: true,
+      foodpandaKeepsCents: Math.round(after / 4),
+      youKeepCents: after - Math.round(after / 4),
+    });
+
+    // A minimum above one plate's price: the plate is still worked at the deal's
+    // price (as part of an order that reaches it), and the minimum is said.
+    const minimum = Math.ceil((price * 3) / 100) * 100; // whole rupees
+    setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: minimum, maxOffCents: null, startsOn: null, endsOn: null }, owner);
+    const withMinimum = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    expect(withMinimum.onFoodpanda).toMatchObject({ dealPercent: 20, minOrderCents: minimum, priceAfterDealCents: price - Math.round(price / 5) });
+
+    // foodpanda 10% dearer: the listing price and the price after the deal at its prices, for both;
+    // the commission on that price, and what the shop keeps, for the owner only.
+    setBusinessSetting(db as never, 'foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null }, owner);
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: false, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 1_000, paymentFeeBps: 0 }, owner);
+    const tillAfter = price - Math.round(price / 5);
+    const dearerAfter = tillAfter + Math.round(tillAfter / 10);
+    const dearerOwner = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    expect(dearerOwner.onFoodpanda).toMatchObject({
+      upliftBps: 1_000,
+      listingPriceCents: price + Math.round(price / 10),
+      priceAfterDealCents: dearerAfter,
+      owner: { confirmed: false, foodpandaKeepsCents: Math.round(dearerAfter / 4), youKeepCents: dearerAfter - Math.round(dearerAfter / 4) },
+    });
+    h.session = MANAGER;
+    const dearerManager = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    expect(dearerManager.onFoodpanda).toMatchObject({ listingPriceCents: price + Math.round(price / 10), priceAfterDealCents: dearerAfter, owner: null });
+    // …and no profit anywhere on a manager's sheet: no "you keep", no price to hit.
+    expect(dearerManager.row.profitCents).toBeNull();
+    expect(dearerManager.priceToHitCents).toBeNull();
+    expect(JSON.stringify(dearerManager.onFoodpanda)).not.toMatch(/commission|youKeep/i);
+
+    // foodpanda's fee on the total (Settings → foodpanda) is in what it keeps, for the owner.
+    setBusinessSetting(db as never, 'foodpanda.fees', { v: 1, commissionBps: 2_500, confirmed: true, base: 'after_deal', fixedFeeCents: 0, commissionTaxBps: 0, upliftBps: 1_000, paymentFeeBps: 200 }, owner);
+    h.session = OWNER;
+    const withFee = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
+    const keeps = Math.round(dearerAfter / 4) + Math.round(dearerAfter / 50);
+    expect(withFee.onFoodpanda!.owner).toMatchObject({ foodpandaKeepsCents: keeps, youKeepCents: dearerAfter - keeps });
+  });
+
   it('every line with its price per kg, the batch sauce opened up, paid extras and leave-outs', async () => {
     h.session = OWNER;
     const sheet = (await data<ItemCostSheet>('costing:itemSheet', { menuItemId: s.item.fajitaM }))!;
@@ -672,30 +727,81 @@ function sold(item: keyof typeof s.item, n: number, picks: Parameters<typeof s.r
   }
 }
 
-live('foodpanda commission and the rider cost (costing spec Phase 9)', () => {
-  it('the defaults until the owner answers; managers read them, only the owner saves them (synced and audited)', async () => {
+live('card fees and the rider cost (costing spec Phase 9); foodpanda\'s terms are Settings → foodpanda\'s', () => {
+  const fpRow = () =>
+    db.prepare(`SELECT value_json FROM business_settings WHERE key = 'channels.fees' AND deleted_at IS NULL`).get() as { value_json: string } | undefined;
+
+  it('the defaults until the owner answers; managers read them without foodpanda, only the owner saves them (synced and audited)', async () => {
     h.session = MANAGER;
     const view = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees');
-    expect(view).toMatchObject({
+    expect(view).toEqual({
       isDefault: true,
-      fees: { foodpanda: { commissionBps: 2500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 } },
-      riderCost: { mode: 'zone_rate' },
+      savedAt: null,
+      fees: { paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
+      riderCost: { mode: 'zone_rate', fixedCents: 0 },
+      // foodpanda's commission is profit: never a manager's.
+      foodpanda: null,
     });
     expect(await call('costing:setChannelFees', FEES())).toEqual({
       ok: false,
       code: 'forbidden',
-      message: "Only the owner can change foodpanda's commission and the rider cost.",
+      message: 'Only the owner can change the card fees and the rider cost.',
     });
     h.session = OWNER;
+    // The owner sees foodpanda's terms in force, read-only: the suggested 25%, not confirmed.
+    expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda).toMatchObject({
+      fees: { commissionBps: 2_500, confirmed: false, base: 'after_deal', upliftBps: 0 },
+      isDefault: true,
+      carriedOver: false,
+      deal: { percent: 0 },
+      dealToday: false,
+    });
     const saved = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:setChannelFees', FEES());
     expect(saved).toMatchObject({ isDefault: false, ...FEES() });
     expect(count(`SELECT COUNT(*) AS n FROM business_settings WHERE key IN ('channels.fees', 'delivery.riderCost')`)).toBe(2);
     expect(count(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`)).toBe(2);
     expect(count(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'business_settings'`)).toBe(2);
-    // A commission over 100% is refused, with the field named.
+    // A payment fee over 100% is refused, with the field named.
     const bad = FEES();
-    bad.fees.foodpanda.commissionBps = 12_000;
+    bad.fees.paymentFeeBps.card = 12_000;
     expect(await call('costing:setChannelFees', bad)).toMatchObject({ ok: false, code: 'validation_failed' });
+  });
+
+  it('a foodpanda part in the request (an older screen) is stripped: never saved, never in force', async () => {
+    h.session = OWNER;
+    const withFoodpanda = { ...FEES(), fees: { ...FEES().fees, foodpanda: { commissionBps: 12_000, base: 'menu_price', fixedFeeCents: 999, upliftBps: 5_000 } } };
+    const saved = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:setChannelFees', withFoodpanda);
+    expect(saved.fees).toEqual(FEES().fees);
+    expect(JSON.parse(fpRow()!.value_json)).toEqual(FEES().fees);
+    // Not carried over either: nothing v0.7.20 saved.
+    expect(saved.foodpanda).toMatchObject({ fees: { commissionBps: 2_500, confirmed: false }, carriedOver: false, isDefault: true });
+  });
+
+  it("v0.7.20's saved foodpanda part: carried over for display (and in force), and kept as stored when the card fees are saved", async () => {
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    const legacy = { commissionBps: 2_200, base: 'paid_incl_tax' as const, fixedFeeCents: 2_500, upliftBps: 1_000 };
+    // v0.7.20 also had a 2% "Foodpanda" payment fee.
+    setBusinessSetting(db as never, 'channels.fees', { foodpanda: legacy, paymentFeeBps: { cash: 0, card: 0, foodpanda: 200, transfer: 0 } }, { userId: 'u_admin', deviceId: DEV });
+    h.session = OWNER;
+    const view = await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees');
+    // Costing's own list has no foodpanda fee: it is Settings → foodpanda's now.
+    expect(view.fees).toEqual({ paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } });
+    expect(view.foodpanda).toMatchObject({
+      // "What the customer paid" has no match in Settings → foodpanda: carried over, but not confirmed.
+      fees: { commissionBps: 2_200, confirmed: false, base: 'after_deal', fixedFeeCents: 2_500, commissionTaxBps: 0, upliftBps: 1_000, paymentFeeBps: 200 },
+      carriedOver: true,
+      isDefault: false,
+    });
+    // Saving the card fees with a different foodpanda part (and a foodpanda fee typed by an older screen):
+    // the stored ones stay exactly as they were.
+    const fromOlderScreen = { ...FEES(), fees: { paymentFeeBps: { ...FEES().fees.paymentFeeBps, foodpanda: 900 }, foodpanda: { ...legacy, commissionBps: 3_000 } } };
+    await data('costing:setChannelFees', fromOlderScreen);
+    expect(JSON.parse(fpRow()!.value_json)).toEqual({ foodpanda: legacy, paymentFeeBps: { ...FEES().fees.paymentFeeBps, foodpanda: 200 } });
+    expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda?.fees.paymentFeeBps).toBe(200);
+    expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda?.fees.commissionBps).toBe(2_200);
+    // A manager still gets no foodpanda part.
+    h.session = MANAGER;
+    expect((await data<import('@cheeseoclock/shared-types').ChannelFeesView>('costing:getChannelFees')).foodpanda).toBeNull();
   });
 });
 

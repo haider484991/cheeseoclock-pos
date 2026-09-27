@@ -1,57 +1,61 @@
 /**
  * Profit (costing spec Phase 9, profit.view): the owner's settings for what
- * a sale costs beyond its food — foodpanda's commission, card and wallet
- * fees, the rider — the menu map (menu engineering, 4.8) and What-if (4.9).
- * The Reports tab types sit with the other tabs in reports.ts.
+ * a sale costs beyond its food — card and wallet fees, the rider — the menu
+ * map (menu engineering, 4.8) and What-if (4.9). foodpanda's commission,
+ * fee, tax and dearer prices are Settings → foodpanda's ('foodpanda.fees',
+ * shop-settings.ts): the ONE place they live. The Reports tab types sit
+ * with the other tabs in reports.ts.
  *
  * Money in paisa, shares in basis points (2500 = 25%), unit prices in
  * millicents (1/1000 paisa). Nothing here ever changes a price on the till.
  */
 import type { FoodCostFlag } from './costing.js';
 import type { ReportEngine, ReportPaymentGroup } from './reports.js';
+import type { FoodpandaDeal, FoodpandaFees } from './shop-settings.js';
 
 // ------------------------------------------------------------- settings --
 
 /**
- * What foodpanda's commission is taken on (costing spec 4.7):
- *  - 'sales_ex_tax':  the order before tax, after discounts and part refunds (the default);
+ * v0.7.20 ONLY. What v0.7.20's Costing → Targets & fees took foodpanda's
+ * commission on:
+ *  - 'sales_ex_tax':  the order before tax, after discounts and part refunds;
  *  - 'paid_incl_tax': what the customer paid, tax included (total − refunds);
  *  - 'menu_price':    the order at menu prices, before any discount.
+ * Read only to carry a saved value over into Settings → foodpanda.
  */
-export const COMMISSION_BASES = ['sales_ex_tax', 'paid_incl_tax', 'menu_price'] as const;
-export type CommissionBase = (typeof COMMISSION_BASES)[number];
+export const LEGACY_COMMISSION_BASES = ['sales_ex_tax', 'paid_incl_tax', 'menu_price'] as const;
+export type LegacyCommissionBase = (typeof LEGACY_COMMISSION_BASES)[number];
 
-/** The owner's words for each base (Targets & fees, the Profit tab's note). */
-export const COMMISSION_BASE_LABEL: Record<CommissionBase, string> = {
-  sales_ex_tax: 'the order before tax, after discounts',
-  paid_incl_tax: 'what the customer paid, tax included',
-  menu_price: 'the order at menu prices, before discounts',
-};
-
-export interface FoodpandaFees {
-  /** Commission, basis points of the base (2500 = 25%, owner question 9 not answered). */
+/**
+ * v0.7.20 ONLY: the foodpanda part of 'channels.fees'. RETIRED: never
+ * edited again, never used for a figure. While Settings → foodpanda
+ * ('foodpanda.fees') has never been saved, the one reader of foodpanda's
+ * fees carries it over (business-settings-read.ts readShopSetting,
+ * pos-domain foodpandaFeesFromChannelFees): what the owner typed stays in
+ * force. A save of the card fees keeps it as it was stored.
+ */
+export interface LegacyFoodpandaChannelFees {
+  /** Commission, basis points of the base (2500 = 25%). */
   commissionBps: number;
-  base: CommissionBase;
-  /** A fixed fee per order on top, paisa (0 when there is none). */
+  base: LegacyCommissionBase;
+  /** A fixed fee per order on top, paisa. */
   fixedFeeCents: number;
-  /**
-   * How much dearer the foodpanda menu is than the till's, basis points (0:
-   * the same prices — foodpanda profit is then "at till prices"). The till
-   * rings foodpanda orders at till prices; the difference is shown as its
-   * own line, "foodpanda price uplift (estimated)", and the commission is
-   * taken on the dearer price. Stored order totals never change.
-   */
+  /** How much dearer the foodpanda menu is than the till's, basis points. */
   upliftBps: number;
 }
 
-/**
- * Business setting 'channels.fees' (costing spec Phase 9): foodpanda's cut,
- * and what each way of paying costs the shop (a share of the money taken
- * that way; 0 = nothing).
- */
-export interface ChannelFees {
-  foodpanda: FoodpandaFees;
+/** What each way of paying costs the shop (a share of the money taken that way; 0 = nothing). */
+export interface PaymentFees {
   paymentFeeBps: Record<ReportPaymentGroup, number>;
+}
+
+/**
+ * Business setting 'channels.fees' as stored (costing spec Phase 9): the
+ * payment fees, and — only when v0.7.20 saved it — its retired foodpanda
+ * part, kept untouched for the carry-over (and for a till still on v0.7.20).
+ */
+export interface ChannelFees extends PaymentFees {
+  foodpanda?: LegacyFoodpandaChannelFees;
 }
 
 /**
@@ -73,29 +77,55 @@ export interface RiderCostSetting {
   fixedCents: number;
 }
 
-/** Until the owner answers question 9: 25% of the order before tax, no fixed fee, foodpanda at till prices. */
-export const DEFAULT_FOODPANDA_COMMISSION_BPS = 2500;
-
-export const DEFAULT_CHANNEL_FEES: ChannelFees = {
-  foodpanda: { commissionBps: DEFAULT_FOODPANDA_COMMISSION_BPS, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 },
+/** Until the owner sets them: no payment fees. */
+export const DEFAULT_CHANNEL_FEES: PaymentFees = {
   paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 },
 };
 
 export const DEFAULT_RIDER_COST: RiderCostSetting = { mode: 'zone_rate', fixedCents: 0 };
 
+/**
+ * foodpanda's terms in force (Settings → foodpanda), as Costing → Targets &
+ * fees shows them, read-only, with a button to Settings → foodpanda.
+ */
+export interface FoodpandaTermsInForce {
+  /** The fees in force: saved in Settings, carried over from v0.7.20, or the suggested default. */
+  fees: FoodpandaFees;
+  /** Carried over from what v0.7.20's Targets & fees saved (Settings → foodpanda never saved). */
+  carriedOver: boolean;
+  /** Nothing saved anywhere: the suggested 25%. */
+  isDefault: boolean;
+  /** The deal on the listing as saved (percent 0 = none)… */
+  deal: FoodpandaDeal;
+  /** …and whether a foodpanda order started now gets it (its dates). */
+  dealToday: boolean;
+}
+
 /** Costing → Targets & fees: the fees in force (the saved ones, or the defaults). */
 export interface ChannelFeesView {
-  fees: ChannelFees;
+  fees: PaymentFees;
   riderCost: RiderCostSetting;
   /** Nothing saved yet: the defaults above. */
   isDefault: boolean;
   savedAt: string | null;
+  /** foodpanda's terms, for the owner (profit.view); null for a manager. */
+  foodpanda: FoodpandaTermsInForce | null;
 }
 
-/** What Costing → Targets & fees saves (costing:setChannelFees; the owner only). */
+/**
+ * What Costing → Targets & fees saves (costing:setChannelFees; the owner
+ * only): the payment fees and the rider cost. foodpanda's terms are saved in
+ * Settings → foodpanda: a foodpanda part in the request is stripped.
+ */
 export interface SetChannelFeesRequest {
-  fees: ChannelFees;
+  fees: PaymentFees;
   riderCost: RiderCostSetting;
+}
+
+/** The fees Reports → Profit and Channels were worked with (for the notes under them). */
+export interface ProfitFees extends PaymentFees {
+  /** foodpanda's terms in force now (orders paid with a confirmed commission keep their own). */
+  foodpanda: FoodpandaFees;
 }
 
 // ----------------------------------------------------------- menu map --

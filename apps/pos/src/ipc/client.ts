@@ -12,6 +12,7 @@ import type {
   IpcRequest,
 } from '@cheeseoclock/shared-types';
 import { STEP_IN_HELD } from '@cheeseoclock/shared-types';
+import type { SetShopSettingRequest, ShopSettingCard, ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
 
 export class IpcError extends Error {
   readonly code: ApiError['code'];
@@ -134,8 +135,9 @@ export const ipc = {
       unwrap(window.api.orders.updateItemOptions(input)),
     applyDiscount: (input: IpcRequest<'orders:applyDiscount'>) =>
       unwrap(window.api.orders.applyDiscount(input)),
-    clearDiscount: (orderId: string) =>
-      unwrap(window.api.orders.clearDiscount({ orderId })),
+    /** A manager's PIN or password is needed to take the shop's foodpanda deal off. */
+    clearDiscount: (orderId: string, approverPin?: string) =>
+      unwrap(window.api.orders.clearDiscount(approverPin ? { orderId, approverPin } : { orderId })),
     setMode: (input: IpcRequest<'orders:setMode'>) => unwrap(window.api.orders.setMode(input)),
     resumeDraft: () => unwrap(window.api.orders.resumeDraft()),
     discardDraft: (orderId: string) => unwrap(window.api.orders.discardDraft({ orderId })),
@@ -443,7 +445,31 @@ export const ipc = {
     /** New prices tried against the last 4 weeks — nothing is saved (profit.view). */
     whatIf: (input: IpcRequest<'costing:whatIf'>) => unwrap(window.api.costing.whatIf(input)),
   },
+  /** The owner's shop rules (Settings → foodpanda …): the owner only. */
+  settings: {
+    /** One card: the value in use, who changed it last, its history. */
+    getBusiness: <K extends ShopSettingKey>(key: K) =>
+      unwrap(window.api.settings.getBusiness({ key })) as Promise<ShopSettingCard<K>>,
+    /** Save a card; answers with it as it now stands. */
+    setBusiness: <K extends ShopSettingKey>(key: K, value: ShopSettingValues[K]) =>
+      unwrap(window.api.settings.setBusiness({ key, value } as SetShopSettingRequest)) as Promise<ShopSettingCard<K>>,
+    /** "Put back the default": writes the default's values. */
+    putBackDefault: <K extends ShopSettingKey>(key: K) =>
+      unwrap(window.api.settings.setBusiness({ key, useDefault: true })) as Promise<ShopSettingCard<K>>,
+  },
+  /** What the counter needs to take an order: the foodpanda deal, Pay's checks. */
+  checkout: {
+    getRules: () => unwrap(window.api.checkout.getRules()),
+  },
 };
+
+/** Listen for the owner's shop rules changing (saved here, or from the other till). */
+export function onShopSettingsChanged(cb: () => void): () => void {
+  const w = window as unknown as {
+    shopSettingsEvents?: { onChanged: (cb: () => void) => () => void };
+  };
+  return w.shopSettingsEvents?.onChanged(cb) ?? (() => {});
+}
 
 /** Listen for fbr:queue-changed broadcasts from the worker. */
 export function onFbrQueueChanged(cb: () => void): () => void {

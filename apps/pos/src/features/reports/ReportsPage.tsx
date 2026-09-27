@@ -379,9 +379,6 @@ function ReportsScreen() {
     writeLastTab(browserStorage(), t);
   };
 
-  // Every tab this login sees, for the period on screen, as one printout.
-  // Tabs already loaded come from the cache; the till works the rest out one
-  // after another, in the background.
   // Print this tab / Download for Excel: Team & leakage adds its drawer log and deleted test orders.
   // Part of Team & leakage could not be read: the paper / file says so in
   // its place, and so does the screen.
@@ -404,6 +401,9 @@ function ReportsScreen() {
     else downloadText(csvFileName(result.period, result.tab), csvTab(result, extras));
   };
 
+  // Every tab this login sees, for the period on screen, as one printout.
+  // Tabs already loaded come from the cache; the till works the rest out one
+  // after another, in the background.
   const printEverything = async () => {
     setPrintingAll(true);
     try {

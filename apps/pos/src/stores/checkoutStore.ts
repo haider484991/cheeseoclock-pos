@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { OrderSnapshot, OrderMode, PaymentMethod } from '@cheeseoclock/shared-types';
+import type { FoodpandaTenderCheck, OrderSnapshot, OrderMode, PaymentMethod } from '@cheeseoclock/shared-types';
 import { isDeliveryChargeName } from '@cheeseoclock/shared-types';
 import { ipc } from '../ipc/client';
 import { addedLineId, createSerialQueue, findMergeableLine } from '../features/checkout/cartLines';
@@ -65,7 +65,8 @@ interface CheckoutState {
     reason?: string,
     approverPin?: string,
   ) => Promise<void>;
-  clearDiscount: () => Promise<void>;
+  /** Taking the shop's foodpanda deal off needs a manager's PIN or password. */
+  clearDiscount: (approverPin?: string) => Promise<void>;
   tender: (
     payments: Array<{
       method: PaymentMethod;
@@ -73,6 +74,8 @@ interface CheckoutState {
       tenderedCents?: number | null;
       referenceNo?: string | null;
     }>,
+    /** A foodpanda order: the total the tablet shows. */
+    foodpanda?: FoodpandaTenderCheck,
   ) => Promise<OrderSnapshot>;
   /**
    * Commit the order without tendering — for the COD entry path on delivery
@@ -302,16 +305,16 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       });
     },
 
-    clearDiscount() {
+    clearDiscount(approverPin) {
       return run(async () => {
         const snap = get().snapshot;
         if (!snap) return;
-        const next = await ipc.orders.clearDiscount(snap.order.id);
+        const next = await ipc.orders.clearDiscount(snap.order.id, approverPin);
         set({ snapshot: next });
       });
     },
 
-    tender(payments) {
+    tender(payments, foodpanda) {
       return run(async () => {
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to tender');
@@ -319,6 +322,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const next = await ipc.orders.tender({
           orderId: snap.order.id,
           payments,
+          ...(foodpanda ? { foodpanda } : {}),
         });
         set({ snapshot: next });
         return next;

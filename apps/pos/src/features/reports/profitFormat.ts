@@ -6,15 +6,15 @@
  */
 import { formatCents } from '@cheeseoclock/pos-domain';
 import {
-  COMMISSION_BASE_LABEL,
   MENU_MAP_WORDS,
-  type ChannelFees,
   type MenuMapItem,
+  type ProfitFees,
   type ProfitStepKey,
   type ReportProfitTab,
   type RiderCostSetting,
 } from '@cheeseoclock/shared-types';
 import { formatBps } from '../costing/costingFormat';
+import { andList } from '../settings/shop-rules/foodpandaWords';
 
 export const PROFIT_STEP_LABEL: Record<ProfitStepKey, string> = {
   sales: 'Sales before tax',
@@ -23,7 +23,8 @@ export const PROFIT_STEP_LABEL: Record<ProfitStepKey, string> = {
   waste: 'Waste',
   sent_not_paid: 'Food sent out, not paid',
   stock_loss: 'Stock that went missing',
-  commission: 'foodpanda commission',
+  // Commission + fee per order + tax on the commission: "foodpanda kept" on Channels' foodpanda block.
+  commission: 'foodpanda commission and fees',
   uplift: 'foodpanda price uplift (estimated)',
   payment_fees: 'Card and wallet fees',
   rider: 'Rider cost',
@@ -86,15 +87,30 @@ export function unknownCostNote(t: Pick<ReportProfitTab, 'steps' | 'coverageBps'
   return `${formatCents(unknown)} of sales have an unknown cost (no recipe, or an ingredient with no price): they are left out of the profit${withThem}, never counted as free.${known}`;
 }
 
-/** What foodpanda's commission is worked on, in a sentence. */
-export function commissionText(fees: ChannelFees): string {
+/** What the commission is taken on, in the owner's words (Settings → foodpanda). */
+export const COMMISSION_BASE_WORDS = {
+  after_deal: 'the food after your part of the deal, before tax',
+  before_deal: 'the food before the deal, before tax',
+} as const;
+
+/**
+ * foodpanda's terms in force (Settings → foodpanda, the one place they
+ * live), in a sentence under Profit and Channels. Orders paid after the
+ * commission was confirmed keep the terms they were paid with.
+ */
+export function commissionText(fees: Pick<ProfitFees, 'foodpanda'>): string {
   const f = fees.foodpanda;
-  const fixed = f.fixedFeeCents > 0 ? ` plus ${formatCents(f.fixedFeeCents)} an order` : '';
+  const extras: string[] = [];
+  if (f.fixedFeeCents > 0) extras.push(`${formatCents(f.fixedFeeCents)} an order`);
+  if (f.commissionTaxBps > 0) extras.push(`${formatBps(f.commissionTaxBps)} tax on the commission`);
+  if (f.paymentFeeBps > 0) extras.push(`${formatBps(f.paymentFeeBps)} of each order's total`);
+  const plus = extras.length > 0 ? `, plus ${andList(extras)}` : '';
+  const confirmed = f.confirmed ? '' : ' (not confirmed yet)';
   const prices =
     f.upliftBps > 0
-      ? ` foodpanda's menu is ${formatBps(f.upliftBps)} dearer than the till's: the difference is shown as its own line, and the commission is on the dearer price.`
+      ? ` foodpanda's menu is ${formatBps(f.upliftBps)} above the till's: the difference is its own line, and the commission is on the dearer price.`
       : ' foodpanda orders are at till prices.';
-  return `foodpanda commission: ${formatBps(f.commissionBps)} of ${COMMISSION_BASE_LABEL[f.base]}${fixed}.${prices}`;
+  return `foodpanda commission: ${formatBps(f.commissionBps)}${confirmed} of ${COMMISSION_BASE_WORDS[f.base]}${plus}.${prices} Orders paid with a confirmed commission keep the terms they were paid with; the rest use these (Settings → foodpanda).`;
 }
 
 /** How a delivery's rider cost is worked out, in a sentence. */

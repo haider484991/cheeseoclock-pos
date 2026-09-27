@@ -126,7 +126,8 @@ export function ChannelProfitSection({ channels }: { channels: ReportChannelProf
             { label: 'Sales before tax', right: true },
             { label: 'Food cost', right: true },
             { label: 'Unknown cost', right: true },
-            { label: 'Commission', right: true },
+            // Commission + fee + tax on it: the same figure as "foodpanda kept" in Channels' foodpanda block.
+            { label: 'foodpanda kept', right: true },
             ...(uplift ? [{ label: 'Price uplift', right: true }] : []),
             { label: 'Card fees', right: true },
             { label: 'Rider', right: true },

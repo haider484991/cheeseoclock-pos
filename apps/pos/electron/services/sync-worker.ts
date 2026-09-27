@@ -16,6 +16,7 @@ import {
   notSavedCount,
 } from '../db/repositories/sync-repo.js';
 import { applyRemoteBatch } from '../db/repositories/apply-remote.js';
+import { broadcastShopSettingsChanged } from './shop-settings-events.js';
 import { destinationSeal, getSyncConfig, readSyncSwitch, syncDestinationKey } from './sync-config.js';
 import { sendEverythingOnce, type SnapshotReader } from './sync-snapshot.js';
 import { makeSyncAdapter } from '../adapters/sync/factory.js';
@@ -157,6 +158,8 @@ export class SyncWorker {
   private async applyPulled(db: AppDatabase, changes: SyncChange[]): Promise<void> {
     const r = await applyRemoteBatch(db, changes);
     if (r.applied > 0) incrementCounter(db, STATE_KEYS.eventsPulled, r.applied);
+    // The owner changed a shop rule on the other till: the screens re-read them.
+    if (r.settingsChanged) broadcastShopSettingsChanged();
     if (r.waiting !== this.lastWaiting || r.dropped > 0) {
       if (r.waiting > 0 || r.dropped > 0) {
         log.warn('Sync: changes from the other till not saved here (kept and retried)', {

@@ -4,14 +4,15 @@
 -- Test orders the OWNER deletes (owner, 27 Sep 2026: "the test order delete
 -- option only for admin and restock back option").
 --
--- A test order is soft-deleted like any row (orders.deleted_at, and each of
--- its payments too), so it drops out of sales, reports, the shift's cash and
--- the customer's history, and stays in the owner's list of deleted test
--- orders. These columns say who deleted it, why, and what happened to its
--- stock; the full order before the delete is in the hash-chained audit row
--- (action delete_test_order). Nothing else about the order changes: not its
--- status, lines, discounts, costs, papers or stock rows. It can't be brought
--- back.
+-- A test order is soft-deleted like any row (orders.deleted_at, each of its
+-- payments too, and a foodpanda order's terms kept at payment,
+-- order_channel_terms from 0040), so it drops out of sales, reports, the
+-- shift's cash, foodpanda's figures and the customer's history, and stays in
+-- the owner's list of deleted test orders. These columns say who deleted
+-- it, why, and what happened to its stock; the full order before the delete
+-- is in the hash-chained audit row (action delete_test_order). Nothing else
+-- about the order changes: not its status, lines, discounts, costs, papers
+-- or stock rows. It can't be brought back.
 --
 -- delete_kind is 'test' (checked in code, no CHECK, so a newer till's kinds
 -- still sync); a discarded cart keeps NULL. delete_stock is 'put_back' |

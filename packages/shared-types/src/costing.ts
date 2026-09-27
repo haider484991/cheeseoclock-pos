@@ -285,6 +285,49 @@ export interface ItemCostSheet {
   groups: RequiredGroupView[];
   paidExtras: PaidExtraView[];
   leaveOuts: LeaveOutView[];
+  /** "On foodpanda" (Settings → foodpanda): filled in by the main process; null when there is no price. */
+  onFoodpanda?: ItemFoodpandaLine | null;
+}
+
+/**
+ * A typical plate of this item sold on foodpanda, at the deal a foodpanda
+ * order started now gets and at foodpanda's prices (Settings → foodpanda).
+ * The listing price and the price after the deal are anyone's who may see
+ * costs; foodpanda's commission and what the shop keeps are profit
+ * (profit.view, the owner's alone) — null for a manager, left out in the
+ * main process.
+ */
+export interface ItemFoodpandaLine {
+  /** 0 when there is no deal today. */
+  dealPercent: number;
+  shopPercent: number;
+  /**
+   * The deal's minimum order (food at till prices); null = any order. The
+   * plate is worked out as part of an order that reaches it, and the sheet
+   * says "on orders from Rs …".
+   */
+  minOrderCents?: number | null;
+  /** The typical price at the till (before the deal and tax). */
+  priceCents: number;
+  /** How much above the till's prices the foodpanda menu is, basis points (0: the same). */
+  upliftBps: number;
+  /** The price on the foodpanda listing: the till's at foodpanda's prices (before the deal and tax). */
+  listingPriceCents: number;
+  /** What the shop sells it for on foodpanda: the listing price less the shop's part of the deal. */
+  priceAfterDealCents: number;
+  /** The plate's cost ÷ the price after the deal, basis points. */
+  foodCostBps: number | null;
+  owner: {
+    commissionBps: number;
+    /** False: the commission is the suggested figure, not one the owner confirmed. */
+    confirmed: boolean;
+    /** Commission + fee + tax on it, for one order of just this plate. */
+    foodpandaKeepsCents: number;
+    /** What the shop keeps from it before food cost. */
+    youKeepCents: number;
+    /** The plate's cost ÷ what the shop keeps, basis points. */
+    foodCostOfKeptBps: number | null;
+  } | null;
 }
 
 /** The recipe editor's live footer: the recipe as typed, not yet saved. */

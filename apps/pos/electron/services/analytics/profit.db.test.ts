@@ -85,6 +85,9 @@ async function shop() {
   /** What an order's lines kept as their cost (order_item_costs). */
   const keptCost = (orderId: string) =>
     Number((db.prepare(`SELECT COALESCE(SUM(cost_cents), 0) AS c FROM order_item_costs WHERE order_id = ?`).get(orderId) as { c: number }).c);
+  // foodpanda's terms as v0.7.20 saved them ('channels.fees'): with Settings → foodpanda never saved,
+  // the one reader carries them over (base sales_ex_tax / paid_incl_tax → after the deal), so these
+  // tests also pin that what the owner typed in v0.7.20 keeps working.
   const setFees = (fees: Record<string, unknown>) =>
     r.setBusinessSetting(
       db,

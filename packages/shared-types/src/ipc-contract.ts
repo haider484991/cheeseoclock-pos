@@ -26,6 +26,13 @@ import type {
   PaymentMethod,
   Rider,
 } from './order.js';
+import type {
+  AnyShopSettingCard,
+  CheckoutRules,
+  FoodpandaTenderCheck,
+  SetShopSettingRequest,
+  ShopSettingKey,
+} from './shop-settings.js';
 import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
 import type {
   DeletedTestsPage,
@@ -541,7 +548,8 @@ export interface IpcContract {
     response: ApiResult<OrderSnapshot>;
   };
   'orders:clearDiscount': {
-    request: { orderId: string };
+    /** Taking the shop's foodpanda deal off an order needs a manager's PIN or password. */
+    request: { orderId: string; approverPin?: string };
     response: ApiResult<OrderSnapshot>;
   };
   /**
@@ -572,8 +580,11 @@ export interface IpcContract {
         method: PaymentMethod;
         amountCents: number;
         tenderedCents?: number | null;
+        /** On a foodpanda order: foodpanda's order number (Settings → foodpanda → checks). */
         referenceNo?: string | null;
       }>;
+      /** A foodpanda order: the total the tablet shows, kept with its channel terms. */
+      foodpanda?: FoodpandaTenderCheck | null;
     };
     response: ApiResult<OrderSnapshot>;
   };
@@ -1538,6 +1549,29 @@ export interface IpcContract {
   'costing:whatIf': {
     request: WhatIfRequest;
     response: ApiResult<WhatIfResult>;
+  };
+
+  // The owner's shop rules (Settings → foodpanda …; shop-settings.ts). One
+  // pair for every key, the key's Zod schema checked in the main process.
+  // Owner only (settings.manage): a manager or a cashier is refused in the
+  // main process, and nothing is written.
+  /** One Settings card: the value in use, who changed it last, its history. */
+  'settings:getBusiness': {
+    request: { key: ShopSettingKey };
+    response: ApiResult<AnyShopSettingCard>;
+  };
+  /** Save a card (or "Put back the default", which writes the default's values). Synced and audited. */
+  'settings:setBusiness': {
+    request: SetShopSettingRequest;
+    response: ApiResult<AnyShopSettingCard>;
+  };
+  /**
+   * What the counter needs to take an order, for any signed-in login: the
+   * foodpanda deal's % and label, what Pay asks. Never commission or costs.
+   */
+  'checkout:getRules': {
+    request: undefined;
+    response: ApiResult<CheckoutRules>;
   };
 
   // Reports: one channel per tab of the Reports page (costing spec Phase 3),

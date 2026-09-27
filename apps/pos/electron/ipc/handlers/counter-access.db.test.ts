@@ -13,10 +13,10 @@
  *   - managers and the owner keep all of it;
  *   - costs (the Costing page, the batch calculator's rupees, the recipe
  *     calculator's) are refused to the counter the same way, and the
- *     food-cost targets and foodpanda's commission and the rider cost
- *     (costing spec Phase 9: managers read them) are the owner's alone to
- *     change; the recipe calculator's quantities and its prep list are
- *     stock, so managers' too;
+ *     food-cost targets, the payment fees and the rider cost (costing spec
+ *     Phase 9: managers read them) are the owner's alone to change; the
+ *     recipe calculator's quantities and its prep list are stock, so
+ *     managers' too;
  *   - Reports (every tab's channel with the Profit tab, low stock, the menu
  *     map, the owner's week, day notes, the stock-take variance, the shift
  *     history list) and this till's printer settings are the owner's alone
@@ -27,7 +27,13 @@
  *     history);
  *   - profit likewise (costing spec Phase 9, owner 2026-09-27: managers keep
  *     costs but see no profit): Costing → What-if is refused to the counter
- *     as costs and to managers as profit, in plain words;
+ *     as costs and to managers as profit, in plain words; foodpanda's
+ *     commission (the cost sheet's foodpanda line, the terms on Targets &
+ *     fees) is left out for a manager;
+ *   - the owner's shop rules (Settings → foodpanda …, 2026-09-27) are the
+ *     owner's alone: every set channel is refused to a cashier AND to a
+ *     manager in the main process, and nothing is written; the counter reads
+ *     only what taking an order needs (checkout:getRules);
  *   - every channel of these modules is classified here, so one added later
  *     fails until someone decides whether the counter may call it.
  *
@@ -217,10 +223,13 @@ async function data<T = unknown>(channel: string, payload?: unknown): Promise<T>
   return o.data as T;
 }
 
-/** How many rows the audit trail, the sync queue, the settings and the day notes hold: a refusal changes none. */
+/** How many rows the audit trail, the sync queue, the settings (both kinds) and the day notes hold: a refusal changes none. */
 const writtenRows = () =>
   Object.fromEntries(
-    ['audit_log', 'sync_queue', 'settings', 'day_notes'].map((t) => [t, db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.['n']]),
+    ['audit_log', 'sync_queue', 'settings', 'business_settings', 'day_notes'].map((t) => [
+      t,
+      db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.['n'],
+    ]),
   );
 
 /** The counter's own "not this order" answers (order-access.ts). */
@@ -313,6 +322,7 @@ beforeEach(async () => {
   (await import('./counter-handlers.js')).registerCounterHandlers(ctx);
   (await import('./costing-handlers.js')).registerCostingHandlers(ctx);
   (await import('./reports-handlers.js')).registerReportsHandlers(ctx);
+  (await import('./settings-handlers.js')).registerSettingsHandlers(ctx);
   s = await seed();
 });
 
@@ -469,15 +479,37 @@ const OWNER_ONLY = (): Record<string, unknown> => ({
   'reports:setDayparts': { dayparts: [{ name: 'Lunch', fromHour: 12, toHour: 15 }, { name: 'Dinner', fromHour: 19, toHour: 23 }] },
   // How many tills take orders (settings.manage, costing spec Phase 8).
   'costing:setTills': { sellingTills: 2 },
-  // foodpanda's commission, payment fees and the rider cost (settings.manage, costing spec Phase 9).
+  // Payment fees and the rider cost (settings.manage, costing spec Phase 9); foodpanda's terms are Settings → foodpanda's.
   'costing:setChannelFees': {
-    fees: { foodpanda: { commissionBps: 2500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 }, paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
+    fees: { paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
     riderCost: { mode: 'zone_rate', fixedCents: 0 },
   },
   // FBR's settings and sending the failed invoices again (settings.manage: never a manager's).
   'fbr:setConfig': { mode: 'noop' },
   'fbr:retryFailed': undefined,
+  // The owner's shop rules (Settings → foodpanda …, 2026-09-27): reading a card
+  // (commission, fees) and saving one, or putting its default back.
+  ...SHOP_SETTINGS_OWNER_ONLY(),
 });
+
+/** The shop-rules channels (settings.manage), with payloads the owner's screen would send. Every set one writes when the owner sends it. */
+const SHOP_SETTINGS_OWNER_ONLY = (): Record<string, unknown> => ({
+  'settings:getBusiness': { key: 'foodpanda.fees' },
+  'settings:setBusiness': {
+    key: 'foodpanda.deal',
+    value: { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
+  },
+});
+
+/** Every way a shop rule can be saved: each key, and "Put back the default". */
+const SHOP_SETTING_SAVES = (): unknown[] => [
+  { key: 'foodpanda.deal', value: { v: 1, percent: 20, shopPercent: 10, minOrderCents: 50_000, maxOffCents: 40_000, startsOn: null, endsOn: null } },
+  { key: 'foodpanda.fees', value: { v: 1, commissionBps: 2_200, confirmed: true, base: 'after_deal', fixedFeeCents: 2_000, commissionTaxBps: 1_600, upliftBps: 0, paymentFeeBps: 0 } },
+  { key: 'foodpanda.checks', value: { v: 1, orderCode: 'required', tabletTotal: 'required' } },
+  { key: 'foodpanda.deal', useDefault: true },
+  { key: 'foodpanda.fees', useDefault: true },
+  { key: 'foodpanda.checks', useDefault: true },
+];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
 const COUNTER_SCOPED = [
@@ -543,6 +575,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'fbr:getQueueStats': undefined,
   // Kitchen staff record a batch they made (any login, on purpose).
   'inventory:makeBatch': {},
+  // What taking an order needs from the owner's shop rules (the foodpanda deal, Pay's checks).
+  'checkout:getRules': undefined,
 });
 
 /**
@@ -716,7 +750,13 @@ describe.skipIf(!Sqlite)("the owner's alone", () => {
       }
     }
     expect(writtenRows()).toEqual(before);
+    // A manager keeps the card fees and the rider cost, but not foodpanda's commission (profit): the
+    // main process leaves Settings → foodpanda's terms out of Targets & fees for anyone but the owner.
+    h.session = MANAGER;
+    const forManager = await call('costing:getChannelFees');
+    expect(forManager).toMatchObject({ ok: true, data: { foodpanda: null } });
     h.session = OWNER;
+    expect(await call('costing:getChannelFees')).toMatchObject({ ok: true, data: { foodpanda: { fees: { commissionBps: 2_500 } } } });
     const lockedOut: string[] = [];
     for (const [channel, payload] of Object.entries(PROFIT())) {
       const why = lockedOutBy(channel, await call(channel, payload));
@@ -783,6 +823,105 @@ describe.skipIf(!Sqlite)('test orders: the owner (admin) login only, and the own
     expect(await data('orders:testDeletePreview', { orderId: s.otherTill })).toMatchObject({
       refusal: 'This order was taken on the other till. Delete it on that till.',
     });
+  });
+});
+
+describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", () => {
+  it('a cashier AND a manager are refused every set channel in the main process, in plain words, and nothing is written', async () => {
+    const before = writtenRows();
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      for (const payload of SHOP_SETTING_SAVES()) {
+        expect({ who: who.role, payload, o: await call('settings:setBusiness', payload) }).toEqual({
+          who: who.role,
+          payload,
+          o: { ok: false, code: 'forbidden', message: REFUSED['settings'] },
+        });
+      }
+      // …nor may they read a card (it carries foodpanda's commission).
+      for (const key of ['foodpanda.deal', 'foodpanda.fees', 'foodpanda.checks']) {
+        expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
+          who: who.role,
+          key,
+          o: { ok: false, code: 'forbidden' },
+        });
+      }
+    }
+    expect(writtenRows()).toEqual(before);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM business_settings`).get()?.['n']).toBe(0);
+  });
+
+  it('the owner saves each one (synced and audited); nobody signed in is refused', async () => {
+    h.session = null;
+    expect(await call('settings:setBusiness', SHOP_SETTING_SAVES()[0])).toMatchObject({ ok: false, code: 'unauthenticated' });
+    expect(await call('checkout:getRules')).toMatchObject({ ok: false, code: 'unauthenticated' });
+    h.session = OWNER;
+    for (const payload of SHOP_SETTING_SAVES()) {
+      const o = await call('settings:setBusiness', payload);
+      expect({ payload, ok: o.ok }).toEqual({ payload, ok: true });
+      // The card that comes back says whether it is the default now: "Put back" writes the default's values.
+      const isDefault = typeof payload === 'object' && payload !== null && 'useDefault' in payload;
+      expect({ payload, o }).toMatchObject({ payload, o: { data: { isDefault } } });
+    }
+    const audited = db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'business_settings'`).get()?.['n'];
+    const queued = db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`).get()?.['n'];
+    expect({ audited, queued }).toEqual({ audited: SHOP_SETTING_SAVES().length, queued: SHOP_SETTING_SAVES().length });
+  });
+
+  it('the counter reads the deal’s % and Pay’s checks — never the commission', async () => {
+    h.session = OWNER;
+    for (const payload of SHOP_SETTING_SAVES().slice(0, 3)) expect((await call('settings:setBusiness', payload)).ok).toBe(true);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<Record<string, unknown>>('checkout:getRules');
+      expect(rules).toMatchObject({
+        foodpanda: {
+          deal: { percent: 20, shopPercent: 10, label: 'Foodpanda deal 20% off (your part 10%)' },
+          checks: { orderCode: 'required', tabletTotal: 'required' },
+        },
+      });
+      expect(JSON.stringify(rules)).not.toMatch(/commission|fee|2200|payout/i);
+    }
+  });
+
+  it('a cashier gets the owner’s deal on a foodpanda order automatically, and can’t change or take it off without a manager', async () => {
+    h.session = OWNER;
+    expect((await call('settings:setBusiness', SHOP_SETTING_SAVES()[0])).ok).toBe(true);
+    h.session = CASHIER;
+    const order = await data<{ id: string }>('orders:create', { mode: 'foodpanda' });
+    const deal = () =>
+      db.prepare(`SELECT source, value FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`).all(order.id);
+    expect(deal()).toEqual([{ source: 'foodpanda', value: 10 }]);
+    const before = writtenRows();
+    for (const [channel, payload] of [
+      ['orders:applyDiscount', { orderId: order.id, discountType: 'percent', value: 5 }],
+      ['orders:clearDiscount', { orderId: order.id }],
+    ] as const) {
+      expect({ channel, o: await call(channel, payload) }).toMatchObject({ channel, o: { ok: false, code: 'precondition_failed' } });
+    }
+    // A PIN that is not a manager's is refused too.
+    expect(await call('orders:clearDiscount', { orderId: order.id, approverPin: '0000' })).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(writtenRows()).toEqual(before);
+    expect(deal()).toEqual([{ source: 'foodpanda', value: 10 }]);
+  });
+
+  it('a value that does not fit is refused with the reason, and nothing is written', async () => {
+    h.session = OWNER;
+    const before = writtenRows();
+    for (const value of [
+      { v: 1, percent: 60, shopPercent: 60, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
+      { v: 1, percent: 12.5, shopPercent: 12.5, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
+      { v: 1, percent: 20, shopPercent: 25, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
+      { v: 1, percent: 20, shopPercent: 20, minOrderCents: 12_345, maxOffCents: null, startsOn: null, endsOn: null },
+      { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: '2026-10-07', endsOn: '2026-10-01' },
+      { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null, extra: true },
+      { v: 2, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
+    ]) {
+      const o = await call('settings:setBusiness', { key: 'foodpanda.deal', value });
+      expect({ value, code: o.ok ? 'ok' : o.code }).toEqual({ value, code: 'validation_failed' });
+    }
+    expect(await call('settings:setBusiness', { key: 'costing.targets', value: {} })).toMatchObject({ ok: false, code: 'validation_failed' });
+    expect(writtenRows()).toEqual(before);
   });
 });
 

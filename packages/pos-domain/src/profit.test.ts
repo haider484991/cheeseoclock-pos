@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHANNEL_FEES, DEFAULT_RIDER_COST } from '@cheeseoclock/shared-types';
+import { DEFAULT_CHANNEL_FEES, DEFAULT_FOODPANDA_FEES, DEFAULT_RIDER_COST } from '@cheeseoclock/shared-types';
 import { allocateDiscount } from './discount.js';
+import { foodpandaOrderMoney } from './foodpanda.js';
 import {
-  commissionBaseCents,
   contributionCents,
-  foodpandaCommissionCents,
-  foodpandaUpliftCents,
   isNoRateDelivery,
   knownOrderShare,
   knownShareCents,
@@ -77,39 +75,20 @@ describe('line allocation (costing spec 4.4)', () => {
   });
 });
 
-describe('foodpanda commission and price uplift (costing spec 4.7)', () => {
-  // Rs 1,000 at menu price, Rs 100 off, 16% tax: Rs 1,044 paid; Rs 900 before tax.
-  const order = { subtotalCents: 100_000, discountCents: 10_000, totalCents: 104_400, refundedCents: 0, salesExTaxCents: 90_000 };
-  const fp = DEFAULT_CHANNEL_FEES.foodpanda;
+describe('foodpanda commission and price uplift: the one per-order rule (foodpanda.ts)', () => {
+  // Rs 1,000 at till prices, the shop's Rs 100 of the deal off, 16% tax: Rs 1,044 paid; Rs 900 before tax.
+  const order = { subtotalCents: 100_000, discountCents: 10_000, totalCents: 104_400 };
 
-  it('defaults to 25% of the order before tax, no fixed fee, no uplift', () => {
-    expect(fp).toEqual({ commissionBps: 2500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 });
-    expect(foodpandaCommissionCents(commissionBaseCents(fp.base, order), fp)).toBe(22_500);
+  it('defaults to the suggested 25% of the food after the deal, no fee, no tax, at till prices', () => {
+    const m = foodpandaOrderMoney(order, null, DEFAULT_FOODPANDA_FEES);
+    expect(m).toMatchObject({ commissionCents: 22_500, foodpandaKeepsCents: 22_500, upliftCents: 0, estimated: true });
   });
 
-  it('on each base the owner can pick', () => {
-    expect(commissionBaseCents('sales_ex_tax', order)).toBe(90_000);
-    expect(commissionBaseCents('paid_incl_tax', order)).toBe(104_400);
-    expect(commissionBaseCents('menu_price', order)).toBe(100_000);
-    expect(commissionBaseCents('paid_incl_tax', { ...order, refundedCents: 4_400 })).toBe(100_000);
-    expect(foodpandaCommissionCents(104_400, fp)).toBe(26_100);
-    expect(foodpandaCommissionCents(100_000, fp)).toBe(25_000);
-  });
-
-  it('adds the fixed fee per order, and rounds once, half up', () => {
-    expect(foodpandaCommissionCents(90_000, { ...fp, fixedFeeCents: 5_000 })).toBe(27_500);
-    // 22% of Rs 1.23 = 27.06 paisa → 27; of Rs 1.25 = 27.5 → 28.
-    expect(foodpandaCommissionCents(123, { ...fp, commissionBps: 2200 })).toBe(27);
-    expect(foodpandaCommissionCents(125, { ...fp, commissionBps: 2200 })).toBe(28);
-    expect(foodpandaCommissionCents(-500, fp)).toBe(0);
-  });
-
-  it('with foodpanda 10% dearer: its own uplift line, and the commission on the dearer price', () => {
-    const up = { ...fp, upliftBps: 1000 };
-    expect(foodpandaUpliftCents(90_000, 1000)).toBe(9_000);
-    expect(foodpandaCommissionCents(90_000, up)).toBe(24_750);
-    // At till prices there is no uplift at all.
-    expect(foodpandaUpliftCents(90_000, 0)).toBe(0);
+  it('with foodpanda 10% dearer: its own uplift, and the commission on the dearer price', () => {
+    const m = foodpandaOrderMoney(order, null, { ...DEFAULT_FOODPANDA_FEES, upliftBps: 1000 });
+    expect(m.upliftCents).toBe(9_000);
+    expect(m.commissionCents).toBe(24_750);
+    expect(m.youKeepCents).toBe(90_000 + 9_000 - 24_750);
   });
 });
 
@@ -161,7 +140,7 @@ describe('contribution: a foodpanda order against the same food delivered by the
       ...food,
       feeSalesCents: 0,
       riderCents: 0,
-      commissionCents: foodpandaCommissionCents(100_000, DEFAULT_CHANNEL_FEES.foodpanda),
+      commissionCents: foodpandaOrderMoney({ subtotalCents: 100_000, discountCents: 0, totalCents: 100_000 }, null, DEFAULT_FOODPANDA_FEES).foodpandaKeepsCents,
       paymentFeeCents: 0,
       upliftCents: 0,
     });
@@ -169,15 +148,15 @@ describe('contribution: a foodpanda order against the same food delivered by the
     expect(fp).toBe(100_000 - 30_000 - 25_000);
     expect(own - fp).toBe(20_000);
     // foodpanda 10% dearer: the uplift comes in, and the commission is on the dearer price.
-    const up = { ...DEFAULT_CHANNEL_FEES.foodpanda, upliftBps: 1000 };
+    const up = foodpandaOrderMoney({ subtotalCents: 100_000, discountCents: 0, totalCents: 100_000 }, null, { ...DEFAULT_FOODPANDA_FEES, upliftBps: 1000 });
     expect(
       contributionCents({
         ...food,
         feeSalesCents: 0,
         riderCents: 0,
-        commissionCents: foodpandaCommissionCents(100_000, up),
+        commissionCents: up.foodpandaKeepsCents,
         paymentFeeCents: 0,
-        upliftCents: foodpandaUpliftCents(100_000, up.upliftBps),
+        upliftCents: up.upliftCents,
       }),
     ).toBe(100_000 - 30_000 - 27_500 + 10_000);
   });

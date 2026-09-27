@@ -7,15 +7,16 @@
  *    till lists the lines (the same shares its tax and FBR invoice use), then
  *    the part refunds, taken off before tax, shared out the same way. There
  *    is no other allocation: Reports' food cost uses these same nets.
- *  - foodpanda's commission, on the base the owner picked, and the price
- *    uplift when the foodpanda menu is dearer than the till's;
+ *  - foodpanda's commission and price uplift are NOT here: one per-order
+ *    rule serves every report (foodpanda.ts foodpandaOrderMoney, Settings →
+ *    foodpanda's terms);
  *  - payment fees; what a delivery costs in rider;
  *  - an order's contribution, and the profit waterfall.
  *
  * Integer paisa throughout, every figure rounded once, half away from zero.
  * Stored order totals are only read, never changed.
  */
-import type { CommissionBase, FoodpandaFees, ProfitStepKey, ReportPaymentGroup, RiderCostSetting } from '@cheeseoclock/shared-types';
+import type { ProfitStepKey, ReportPaymentGroup, RiderCostSetting } from '@cheeseoclock/shared-types';
 import { allocateDiscount } from './discount.js';
 import { mulDivRound } from './units.js';
 
@@ -84,45 +85,6 @@ export function orderSalesExTaxCents(m: OrderMoney): number {
   const afterDiscount = sub - disc;
   const refundExTax = m.totalCents > 0 && m.refundedCents > 0 ? mulDivRound(m.refundedCents, afterDiscount, m.totalCents) : 0;
   return afterDiscount - Math.min(refundExTax, afterDiscount);
-}
-
-// ------------------------------------------------------------ foodpanda --
-
-/**
- * What foodpanda's commission is taken on (costing spec 4.7):
- * 'sales_ex_tax' the order before tax (rev_o, the default), 'paid_incl_tax'
- * what the customer paid (total − refunds), 'menu_price' the subtotal.
- */
-export function commissionBaseCents(base: CommissionBase, m: OrderMoney & { salesExTaxCents: number }): number {
-  switch (base) {
-    case 'sales_ex_tax':
-      return m.salesExTaxCents;
-    case 'paid_incl_tax':
-      return m.totalCents - m.refundedCents;
-    case 'menu_price':
-      return m.subtotalCents;
-  }
-}
-
-/**
- * foodpanda's commission on one order: round(c × base × (1 + m)) + the
- * fixed fee, c the commission and m the uplift (both basis points). With
- * the uplift, foodpanda charged the customer its dearer price, so its cut is
- * on that price. One rounding. A base below 0 counts as 0.
- */
-export function foodpandaCommissionCents(baseCents: number, f: Pick<FoodpandaFees, 'commissionBps' | 'upliftBps' | 'fixedFeeCents'>): number {
-  const num = BigInt(Math.max(0, Math.round(baseCents))) * BigInt(f.commissionBps) * BigInt(10_000 + f.upliftBps);
-  return divRound(num, 100_000_000n) + f.fixedFeeCents;
-}
-
-/**
- * "foodpanda price uplift (estimated)": what the dearer foodpanda menu
- * brought in over the till's prices, round(m × rev_o). Its own line on the
- * Profit tab; the order's stored totals never change.
- */
-export function foodpandaUpliftCents(salesExTaxCents: number, upliftBps: number): number {
-  if (upliftBps <= 0 || salesExTaxCents <= 0) return 0;
-  return divRound(BigInt(salesExTaxCents) * BigInt(upliftBps), 10_000n);
 }
 
 // --------------------------------------------------------- payment fees --

@@ -135,7 +135,7 @@ function menuHasProfit(r: ReportTabData['menu']): boolean {
 
 function channelProfitRows(channels: readonly ReportChannelProfit[]): CsvCell[][] {
   return [
-    ['Order type', 'Orders', 'Sales before tax Rs', 'Of it delivery charges Rs', 'Food cost Rs', 'Sales with unknown cost Rs', 'Commission Rs', 'Price uplift Rs', 'Card and wallet fees Rs', 'Rider Rs', 'Earns Rs (known costs)', 'Per order Rs (known costs)'],
+    ['Order type', 'Orders', 'Sales before tax Rs', 'Of it delivery charges Rs', 'Food cost Rs', 'Sales with unknown cost Rs', 'foodpanda kept Rs', 'Price uplift Rs', 'Card and wallet fees Rs', 'Rider Rs', 'Earns Rs (known costs)', 'Per order Rs (known costs)'],
     ...channels.map((c) => [
       CHANNEL_LABEL[c.channel],
       c.orderCount,
@@ -414,10 +414,19 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     sheet.heading('Discounts by person');
     sheet.push(['Given by', 'Times', 'Amount Rs', 'With manager approval']);
     for (const d of r.discounts.byPerson) sheet.push([d.name, d.count, rs(d.amountCents), d.approvedCount]);
+    if ((r.discounts.standing?.length ?? 0) > 0) {
+      // The shop's standing offers (the foodpanda deal): put on by the till, not by staff.
+      sheet.heading('Standing offers');
+      sheet.push(['Offer', 'Orders', 'Amount Rs']);
+      for (const d of r.discounts.standing ?? []) sheet.push([d.name, d.count, rs(d.amountCents)]);
+    }
+    // The staff's discounts: the standing offers are listed above, not per order.
+    const staffCount = r.discounts.staffCount ?? r.discounts.totalCount;
+    const eachTitle = (r.discounts.standing?.length ?? 0) > 0 ? 'Each discount staff gave' : 'Each discount';
     sheet.heading(
-      r.discounts.recent.length < r.discounts.totalCount
-        ? `Each discount (latest ${r.discounts.recent.length} of ${r.discounts.totalCount})`
-        : 'Each discount',
+      r.discounts.recent.length < staffCount
+        ? `${eachTitle} (latest ${r.discounts.recent.length} of ${staffCount})`
+        : eachTitle,
     );
     sheet.push(['When', 'Order', 'Amount Rs', 'Entered as', 'Reason', 'Given by', 'Approved by']);
     for (const d of r.discounts.recent) {
@@ -1085,7 +1094,11 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
           [1, 2],
         )}</div><div><h2>Discounts — who</h2>${table(
           ['Given by', 'Times', 'Amount'],
-          r.discounts.byPerson.map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
+          [
+            ...r.discounts.byPerson.map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
+            // The standing offers (the foodpanda deal) are the till's, not a person's.
+            ...(r.discounts.standing ?? []).map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
+          ],
           [1, 2],
         )}</div></section>`,
       );
@@ -1145,7 +1158,7 @@ function printHeader(title: string, period: ReportPeriod, madeAt: Date, withComp
 /** What each order type earns, on paper (costing spec Phase 9). */
 function channelProfitPrint(channels: readonly ReportChannelProfit[], note: string): string {
   return `<section><h2>What each order type earns</h2>${table(
-    ['Order type', 'Orders', 'Sales before tax', 'Food cost', 'Commission', 'Rider', 'Earns', 'Per order'],
+    ['Order type', 'Orders', 'Sales before tax', 'Food cost', 'foodpanda kept', 'Rider', 'Earns', 'Per order'],
     channels.map((c) => [
       esc(CHANNEL_LABEL[c.channel]),
       String(c.orderCount),

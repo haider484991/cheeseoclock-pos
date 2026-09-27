@@ -10,6 +10,12 @@
  * delivery zone, its orders, sales, charges collected, time on the road, the
  * customers who came back, and — profit.view — the rider's cost and what an
  * order earns. Deliveries with no area and no delivery charge are listed.
+ *
+ * Settings → foodpanda adds the foodpanda block (the deal, what foodpanda
+ * keeps, what the shop keeps, the orders to check). Its "foodpanda kept" is
+ * the foodpanda row's "foodpanda keeps" in the table above it and its price
+ * uplift that row's: one per-order rule serves both, so one screen never
+ * shows two foodpanda figures for the same thing.
  */
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
@@ -21,6 +27,7 @@ import { CHANNEL_LABEL, fmtMinutes, fmtWhen, percentOf } from '../reportFormat';
 import { formatBps } from '../../costing/costingFormat';
 import { commissionText, riderText } from '../profitFormat';
 import { ChannelProfitSection } from './ProfitTab';
+import { FoodpandaSection } from './FoodpandaSection';
 
 export function ChannelsTab({ data }: { data: ReportChannelsTab }) {
   return (
@@ -34,6 +41,8 @@ export function ChannelsTab({ data }: { data: ReportChannelsTab }) {
           </p>
         </div>
       )}
+      {/* The same foodpanda figures as the table above (one rule, pos-domain foodpandaOrderMoney), in more detail. */}
+      <FoodpandaSection foodpanda={data.foodpanda} />
       <DeliveriesSection report={data} />
     </div>
   );

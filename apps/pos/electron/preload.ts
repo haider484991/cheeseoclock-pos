@@ -293,6 +293,15 @@ const api: RendererApi = {
     setChannelFees: (req) => invoke('costing:setChannelFees', req),
     whatIf: (req) => invoke('costing:whatIf', req),
   },
+  // The owner's shop rules (Settings → foodpanda …): the owner only, checked in the main process.
+  settings: {
+    getBusiness: (req) => invoke('settings:getBusiness', req),
+    setBusiness: (req) => invoke('settings:setBusiness', req),
+  },
+  // What the counter needs to take an order (the foodpanda deal, Pay's checks).
+  checkout: {
+    getRules: () => invoke('checkout:getRules', undefined),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);
@@ -366,6 +375,15 @@ contextBridge.exposeInMainWorld('updaterEvents', {
   checkNow: () => ipcRenderer.invoke('updater:checkNow') as Promise<unknown>,
   installNow: () => {
     ipcRenderer.send('updater:install-now');
+  },
+});
+
+// The owner's shop rules changed (saved here, or arrived from the other till).
+contextBridge.exposeInMainWorld('shopSettingsEvents', {
+  onChanged: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('shop-settings:changed', listener);
+    return () => ipcRenderer.removeListener('shop-settings:changed', listener);
   },
 });
 

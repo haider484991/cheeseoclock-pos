@@ -45,6 +45,15 @@ export function openLowStockInInventory(navigate: Navigate, ingredient: { id: st
   navigate('/inventory');
 }
 
+/**
+ * Settings → foodpanda: the one place foodpanda's commission, fee, tax,
+ * dearer prices and deal are changed (Costing → Targets & fees shows them
+ * read-only). Settings opens a tab from `?tab=` (SettingsPage).
+ */
+export function openFoodpandaSettings(navigate: Navigate): void {
+  navigate('/settings?tab=foodpanda');
+}
+
 /** Costing on one of its tabs (the Dashboard's "Do this": Missing costs, Alerts). */
 export function openCostingTab(navigate: Navigate, tab: 'menu' | 'missing' | 'alerts' | 'targets'): void {
   presetSessionState('costing.tab', tab);

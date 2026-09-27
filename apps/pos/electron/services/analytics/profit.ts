@@ -13,6 +13,17 @@
  * don't say: foodpanda's commission and price uplift, payment fees, and the
  * rider (the zone's rate, else the delivery charge at menu price).
  *
+ * foodpanda's money per order is pos-domain foodpandaOrderMoney — THE rule
+ * Reports → Channels' foodpanda block uses too (business-report
+ * getFoodpanda): the prices kept at payment; the commission, fees and tax
+ * kept then when the commission was confirmed, else Settings → foodpanda's
+ * fees now (the one reader, readShopSetting); less part refunds, as the
+ * sales here are. So the Profit tab's "foodpanda commission and fees"
+ * (commission + tax on it + the fee per order + its % of the total) and
+ * uplift are the Channels block's, to the paisa. foodpanda's part of the
+ * deal is neither added nor taken off: sales are the stored subtotal −
+ * discount (the shop's part only), which already holds it.
+ *
  * Speed, as Food cost & stock (costing spec §6): orders with nothing to share
  * out (no discount, no part refund) that kept their cost are added up in SQL,
  * a line's cost rows folded into one number by an indexed look-up
@@ -36,7 +47,9 @@ import {
   DEFAULT_CHANNEL_FEES,
   DEFAULT_RIDER_COST,
   type BusinessReportRequest,
-  type ChannelFees,
+  type FoodpandaFees,
+  type PaymentFees,
+  type ProfitFees,
   type ReportCategoryProfit,
   type ReportChannel,
   type ReportChannelProfit,
@@ -51,18 +64,15 @@ import {
 } from '@cheeseoclock/shared-types';
 import {
   addOrderFoodCost,
-  commissionBaseCents,
   contributionCents,
   emptyFoodCostTally,
-  foodpandaCommissionCents,
-  foodpandaUpliftCents,
+  foodpandaOrderMoney,
   isNoRateDelivery,
   knownOrderShare,
   knownShareCents,
   mulDivRound,
   orderFoodCost,
   orderKeptCost,
-  orderSalesExTaxCents,
   paymentFeeCents,
   perKnownOrderCents,
   profitWaterfall,
@@ -75,14 +85,16 @@ import {
   type FoodCostTally,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../../db/connection.js';
-import { getBusinessSetting } from '../../db/business-settings-read.js';
+import { getBusinessSetting, readShopSetting } from '../../db/business-settings-read.js';
 import {
   FEE_LINE,
+  KEPT_TERMS_COLUMNS,
   PLAIN_KEPT,
   REPORT_LIST_CAP,
   costingStartedAt,
   estimateOrders,
   getWasteAndUnpaid,
+  keptTermsOf,
   lazyPricing,
   menuLookup,
   type MenuLookup,
@@ -98,24 +110,38 @@ const LINK_OFF: TillLinkState = { on: false, stale: false, lastHeardAt: null };
 // ---------------------------------------------------------------- settings --
 
 export interface ProfitSettings {
-  fees: ChannelFees;
+  /**
+   * The card and wallet fees ('channels.fees'; its retired foodpanda part is
+   * never used here). The "Foodpanda" one is always 0 here: foodpanda's fee
+   * on its orders is Settings → foodpanda's (paymentFeeBps), inside what
+   * foodpanda keeps — never charged twice.
+   */
+  fees: PaymentFees;
   riderCost: RiderCostSetting;
-  /** Nothing saved yet: the defaults (25% foodpanda commission, the zone's rate for a rider). */
+  /** foodpanda's terms in force now: Settings → foodpanda, through the one reader. */
+  foodpanda: FoodpandaFees;
+  /** Neither the card fees nor the rider cost saved yet: the defaults (no fees, the zone's rate for a rider). */
   isDefault: boolean;
   savedAt: string | null;
 }
 
-/** foodpanda's commission, payment fees and the rider cost in force (business settings, or the defaults). */
+/** Payment fees, the rider cost and foodpanda's terms in force (business settings, or the defaults). */
 export function loadProfitSettings(db: AppDatabase): ProfitSettings {
   const fees = getBusinessSetting(db, 'channels.fees');
   const rider = getBusinessSetting(db, 'delivery.riderCost');
   const saved = [fees?.updatedAt, rider?.updatedAt].filter((x): x is string => typeof x === 'string').sort();
   return {
-    fees: fees?.value ?? DEFAULT_CHANNEL_FEES,
+    fees: { paymentFeeBps: { ...(fees?.value ?? DEFAULT_CHANNEL_FEES).paymentFeeBps, foodpanda: 0 } },
     riderCost: rider?.value ?? DEFAULT_RIDER_COST,
+    foodpanda: readShopSetting(db, 'foodpanda.fees').value,
     isDefault: fees === null && rider === null,
     savedAt: saved[saved.length - 1] ?? null,
   };
+}
+
+/** The fees a report was worked with, for the notes under it. */
+export function profitFees(settings: ProfitSettings): ProfitFees {
+  return { paymentFeeBps: settings.fees.paymentFeeBps, foodpanda: settings.foodpanda };
 }
 
 // ------------------------------------------------------------------ the pass --
@@ -510,11 +536,14 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
  * The period's own-rider deliveries and foodpanda orders, one row each (by
  * the orders' date index) — the only orders with a commission or a rider:
  * their stored money, for a delivery the area and the delivery-charge lines
- * at menu price. Params: delivery-charge items (JSON), since, until.
+ * at menu price, for a foodpanda order the terms it kept at payment
+ * (order_channel_terms: one live row per order at most). Params:
+ * delivery-charge items (JSON), since, until.
  */
 export const PROFIT_ORDERS_SQL = `
   SELECT o.rowid AS oid, o.id AS id, o.order_number AS number, o.created_at AS createdAt, o.mode AS mode, o.source AS source,
          o.subtotal_cents AS sub, o.discount_cents AS disc, o.total_cents AS tot, ${REFUNDED} AS ref,
+         ${KEPT_TERMS_COLUMNS},
          ${AREA} AS area,
          CASE WHEN o.mode = 'delivery' THEN
            (SELECT SUM(x.line_total_cents) FROM order_items x
@@ -524,6 +553,7 @@ export const PROFIT_ORDERS_SQL = `
          CASE WHEN o.mode = 'delivery' AND o.dispatched_at IS NOT NULL AND o.delivered_at >= o.dispatched_at
               THEN (julianday(o.delivered_at) - julianday(o.dispatched_at)) * 1440.0 END AS minutesOut
     FROM orders o
+    LEFT JOIN order_channel_terms t ON o.mode = 'foodpanda' AND t.order_id = o.id AND t.deleted_at IS NULL
    WHERE ${IN_RANGE} AND ${COUNTED} AND o.mode IN ('delivery', 'foodpanda')`;
 
 /** How many counted orders of each type. Params: since, until. */
@@ -556,6 +586,7 @@ export interface OrderCosts {
   area: string | null;
   areaKey: string | null;
   minutesOut: number | null;
+  /** foodpanda: what it keeps (commission + fee + tax on the commission), pos-domain foodpandaOrderMoney. */
   commissionCents: number;
   upliftCents: number;
   paymentFeeCents: number;
@@ -576,7 +607,7 @@ export interface OrderCostsRead {
 }
 
 export function readOrderCosts(db: AppDatabase, range: ReportRange, menu: MenuLookup, settings: ProfitSettings): OrderCostsRead {
-  const fp = settings.fees.foodpanda;
+  const fp = settings.foodpanda;
   const byChannel: ChannelCounts = new Map();
   const channel = (c: ReportChannel) => {
     let x = byChannel.get(c);
@@ -621,13 +652,22 @@ export function readOrderCosts(db: AppDatabase, range: ReportRange, menu: MenuLo
     disc: number;
     tot: number;
     ref: number;
+    termsId: string | null;
+    confirmed: number | null;
+    commission: number | null;
+    fee: number | null;
+    commissionTax: number | null;
+    paymentFee: number | null;
+    upliftBps: number | null;
+    payout: number | null;
     area: string | null;
     charge: number | null;
     minutesOut: number | null;
   }>) {
     const money = { subtotalCents: Number(r.sub), discountCents: Number(r.disc), totalCents: Number(r.tot), refundedCents: Number(r.ref) };
-    const salesExTaxCents = orderSalesExTaxCents(money);
     const foodpanda = r.mode === 'foodpanda';
+    // The one per-order rule (the Channels tab's foodpanda block uses it too).
+    const fpMoney = foodpanda ? foodpandaOrderMoney(money, keptTermsOf(r), fp) : null;
     const delivery = r.mode === 'delivery';
     const where = delivery ? areaOf(r.area) : null;
     const rider = { delivery, zoneFeeCents: where?.zoneFeeCents ?? null, chargeCents: r.charge === null ? null : Number(r.charge) };
@@ -642,8 +682,8 @@ export function readOrderCosts(db: AppDatabase, range: ReportRange, menu: MenuLo
       area: r.area,
       areaKey: where?.key ?? null,
       minutesOut: r.minutesOut === null ? null : Number(r.minutesOut),
-      commissionCents: foodpanda ? foodpandaCommissionCents(commissionBaseCents(fp.base, { ...money, salesExTaxCents }), fp) : 0,
-      upliftCents: foodpanda ? foodpandaUpliftCents(salesExTaxCents, fp.upliftBps) : 0,
+      commissionCents: fpMoney?.foodpandaKeepsCents ?? 0,
+      upliftCents: fpMoney?.upliftCents ?? 0,
       paymentFeeCents: feeOf.get(Number(r.oid)) ?? 0,
       riderCents: riderCost(settings.riderCost, rider).cents,
       noRate: isNoRateDelivery(rider),
@@ -947,7 +987,8 @@ export function buildProfitTab(db: AppDatabase, req: BusinessReportRequest): Rep
     sentNotPaidCents: waste.sentNotPaid.costCents,
     stockLossCents: stockLoss.state === 'counted' ? stockLoss.cents : null,
     commissionCents: sum((c) => c.commissionCents),
-    upliftCents: settings.fees.foodpanda.upliftBps > 0 ? sum((c) => c.upliftCents) : null,
+    // Its own step while foodpanda is dearer now, or any order in the period kept a dearer price.
+    upliftCents: settings.foodpanda.upliftBps > 0 || channels.some((c) => c.upliftCents !== 0) ? sum((c) => c.upliftCents) : null,
     paymentFeeCents: sum((c) => c.paymentFeeCents),
     riderCents: sum((c) => c.riderCents),
   });
@@ -968,7 +1009,7 @@ export function buildProfitTab(db: AppDatabase, req: BusinessReportRequest): Rep
     coverageBps: shareBps(total.knownSalesCents, total.foodSalesCents),
     estimatedOrders: total.estimatedOrders,
     costingStartedAt: costingStartedAt(db),
-    fees: settings.fees,
+    fees: profitFees(settings),
     riderCost: settings.riderCost,
     noRateCount: read.orders.filter((o) => o.noRate).length,
   };
@@ -1013,6 +1054,6 @@ export function channelsExtras(
     areas,
     noRateDeliveries: noRate.list,
     noRateCount: noRate.count,
-    profit: withProfit && aside ? { channels: channelProfits(pass, read, aside), fees: settings.fees, riderCost: settings.riderCost } : null,
+    profit: withProfit && aside ? { channels: channelProfits(pass, read, aside), fees: profitFees(settings), riderCost: settings.riderCost } : null,
   };
 }

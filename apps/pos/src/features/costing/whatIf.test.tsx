@@ -15,6 +15,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AuthenticatedUser, ChannelFeesView, MenuCostRow, MenuCostsView, UUID, WhatIfResult, WhatIfRow } from '@cheeseoclock/shared-types';
+import { DEFAULT_FOODPANDA_DEAL, DEFAULT_FOODPANDA_FEES } from '@cheeseoclock/shared-types';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { presetSessionState } from '../../components/list';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -23,6 +24,7 @@ import { WhatIfTab, whatIfTriesKeys } from './WhatIfTab';
 import { ChannelFeesCard, readChannelFees } from './ChannelFeesCard';
 import { CostingPage } from './CostingPage';
 import { COSTING_KEY } from './costingQueries';
+import { openFoodpandaSettings } from './deepLinks';
 
 const row = (p: Partial<WhatIfRow> & Pick<WhatIfRow, 'menuItemId' | 'name'>): WhatIfRow => ({
   categoryId: 'c1',
@@ -106,29 +108,25 @@ describe('What-if (costing spec 4.9)', () => {
   });
 });
 
-describe('foodpanda, card fees and riders (costing spec Phase 9)', () => {
+describe('card fees and riders (costing spec Phase 9); foodpanda is Settings → foodpanda\'s', () => {
   const typed = {
-    commission: '22.5',
-    base: 'paid_incl_tax' as const,
-    fixedFee: '25',
-    uplift: '10',
     payment: { cash: '0', card: '2.5', foodpanda: '0', transfer: '1' },
     riderMode: 'fixed' as const,
     riderFixed: '150',
   };
 
-  it('reads what was typed into the setting, exactly', () => {
+  it('reads what was typed into the setting, exactly — no foodpanda part, and no foodpanda fee (Settings → foodpanda keeps it)', () => {
+    expect(readChannelFees({ ...typed, payment: { ...typed.payment, foodpanda: '3' } })).toEqual(readChannelFees(typed));
     expect(readChannelFees(typed)).toEqual({
       ok: true,
       value: {
-        fees: { foodpanda: { commissionBps: 2_250, base: 'paid_incl_tax', fixedFeeCents: 2_500, upliftBps: 1_000 }, paymentFeeBps: { cash: 0, card: 250, foodpanda: 0, transfer: 100 } },
+        fees: { paymentFeeBps: { cash: 0, card: 250, foodpanda: 0, transfer: 100 } },
         riderCost: { mode: 'fixed', fixedCents: 15_000 },
       },
     });
   });
 
   it('says what is wrong in plain words', () => {
-    expect(readChannelFees({ ...typed, commission: '120' })).toEqual({ ok: false, problem: 'The commission is 0% to 100%.' });
     expect(readChannelFees({ ...typed, payment: { ...typed.payment, card: 'x' } })).toEqual({ ok: false, problem: 'The fee for Card is 0% to 100%.' });
     expect(readChannelFees({ ...typed, riderFixed: 'lots' })).toEqual({ ok: false, problem: 'The rider cost per trip is Rs 0 to Rs 100,000.' });
   });
@@ -189,18 +187,43 @@ describe('who sees What-if and the fees', () => {
     expect(render(<CostingPage />)).not.toContain('What-if');
   });
 
-  it('the fees card: the defaults said as such; a manager reads them, only the owner may save', () => {
+  it('the fees card: the defaults said as such; a manager reads them without foodpanda, only the owner may save', () => {
     const view: ChannelFeesView = {
-      fees: { foodpanda: { commissionBps: 2500, base: 'sales_ex_tax', fixedFeeCents: 0, upliftBps: 0 }, paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
+      fees: { paymentFeeBps: { cash: 0, card: 0, foodpanda: 0, transfer: 0 } },
       riderCost: { mode: 'zone_rate', fixedCents: 0 },
       isDefault: true,
       savedAt: null,
+      foodpanda: null,
     };
     const manager = render(<ChannelFeesCard canEdit={false} />, [[[...COSTING_KEY, 'channelFees'], view]]);
-    expect(manager).toContain('Nothing is saved yet: foodpanda at 25% of the order before tax');
+    expect(manager).toContain('Nothing is saved yet: no card fees');
     expect(manager).toContain('Only the owner can change these.');
     expect(manager).not.toContain('Save the fees');
-    const owner = render(<ChannelFeesCard canEdit />, [[[...COSTING_KEY, 'channelFees'], view]]);
+    // A manager's view has no foodpanda part (the main process leaves it out): no commission at all.
+    expect(manager).not.toMatch(/commission/i);
+    const owner = render(
+      <ChannelFeesCard canEdit />,
+      [[[...COSTING_KEY, 'channelFees'], { ...view, foodpanda: { fees: { ...DEFAULT_FOODPANDA_FEES, upliftBps: 1_000 }, carriedOver: false, isDefault: true, deal: { ...DEFAULT_FOODPANDA_DEAL, percent: 20, shopPercent: 10 }, dealToday: true } }]],
+    );
     expect(owner).toContain('Save the fees');
+    // foodpanda's terms, read-only, with the way to change them.
+    expect(owner).toContain('Commission 25% of the food after your part of the deal, before tax — not confirmed yet');
+    expect(owner).toContain('Menu 10% above the till');
+    expect(owner).toContain('Deal: 20% off, you pay 10%');
+    expect(owner).toContain('Change in Settings → foodpanda');
+    expect(owner).not.toContain('aria-label="foodpanda commission, %"');
+    // No box for a fee on foodpanda payments: that is foodpanda's, in Settings → foodpanda.
+    expect(owner).not.toContain('aria-label="Fee on Foodpanda payments, %"');
+    expect(owner).toContain('aria-label="Fee on Card payments, %"');
+    const withFee = render(
+      <ChannelFeesCard canEdit />,
+      [[[...COSTING_KEY, 'channelFees'], { ...view, foodpanda: { fees: { ...DEFAULT_FOODPANDA_FEES, paymentFeeBps: 200 }, carriedOver: true, isDefault: false, deal: DEFAULT_FOODPANDA_DEAL, dealToday: false } }]],
+    );
+    expect(withFee).toContain('Fee 2% of each order&#x27;s total');
+    expect(withFee).toContain('Carried over from what you saved here before.');
+    // The button opens Settings on its foodpanda tab (Settings reads ?tab=).
+    const went: string[] = [];
+    openFoodpandaSettings((to) => went.push(to));
+    expect(went).toEqual(['/settings?tab=foodpanda']);
   });
 });

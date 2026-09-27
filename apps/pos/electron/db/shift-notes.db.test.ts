@@ -149,9 +149,9 @@ live('shift notes: the opening note and the closing note, each kept', () => {
        VALUES ('s_old', ?, 'u_ali', '2026-09-20T07:00:00.000Z', 400000, 'u_sara', '2026-09-20T20:00:00.000Z',
          700000, 700000, 0, 'Old shift, one note', ?, ?)`,
     ).run(DEV, T0, T0);
-    // The update arrives: 0039 runs on that database, and every migration
-    // after it (0042 drawer log, 0043 test-order delete: Reports reads their
-    // columns too).
+    // The update arrives: 0039 and every later migration run on that database
+    // (0040 / 0041 foodpanda, 0042 drawer log, 0043 test-order delete:
+    // Reports reads their columns too).
     for (const f of migrationFiles().filter((m) => m >= '0039')) db.exec(readFileSync(join(MIGRATIONS, f), 'utf8'));
 
     expect(repo.findShift(db, 's_old')).toMatchObject({ notes: 'Old shift, one note', closeNotes: null, varianceCents: 0 });

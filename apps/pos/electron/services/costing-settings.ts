@@ -6,8 +6,10 @@
  * list, Phase 7): the worker must never load a write path.
  */
 import type {
+  ChannelFees,
   ChannelFeesView,
   CostAlertSettingsView,
+  FoodpandaTermsInForce,
   CostingTargetsView,
   SetChannelFeesRequest,
   SetCostAlertSettingsRequest,
@@ -22,6 +24,8 @@ import { keyItemIds, setKeyItems } from '../db/repositories/ingredient-repo.js';
 import type { Actor } from '../db/repositories/base.js';
 import { getCostAlertSettings, getCostingTargets } from './costing-service.js';
 import { loadProfitSettings } from './analytics/profit.js';
+import { activeFoodpandaDeal } from '@cheeseoclock/pos-domain';
+import { readShopSetting } from '../db/business-settings-read.js';
 
 /**
  * Save the owner's targets and price step, both keys in one transaction
@@ -81,25 +85,63 @@ export function saveTillsSetting(db: AppDatabase, value: TillsSetting, actor: Ac
   return getTillsSetting(db, link);
 }
 
-/** foodpanda's commission, payment fees and the rider cost in force (costing spec Phase 9; the defaults until saved). */
-export function getChannelFees(db: AppDatabase): ChannelFeesView {
-  const p = loadProfitSettings(db);
-  return { fees: p.fees, riderCost: p.riderCost, isDefault: p.isDefault, savedAt: p.savedAt };
+/**
+ * foodpanda's terms in force (Settings → foodpanda), for Costing → Targets &
+ * fees to show read-only: the ONE reader (readShopSetting — saved, carried
+ * over from v0.7.20, or the suggested default) and the deal on the listing.
+ */
+export function foodpandaTermsInForce(db: AppDatabase, now: Date = new Date()): FoodpandaTermsInForce {
+  const fees = readShopSetting(db, 'foodpanda.fees');
+  const deal = readShopSetting(db, 'foodpanda.deal').value;
+  return {
+    fees: fees.value,
+    carriedOver: fees.carriedOver,
+    isDefault: fees.isDefault,
+    deal,
+    dealToday: activeFoodpandaDeal(deal, now.toISOString()) !== null,
+  };
 }
 
 /**
- * The owner's answer to owner question 9 and how riders are paid: both keys
- * in one transaction (business-settings-repo: synced, audited, both tills).
- * Answers with the fees as they now stand.
+ * Payment fees and the rider cost in force (costing spec Phase 9; the
+ * defaults until saved; the "Foodpanda" payment fee always 0 — it is
+ * Settings → foodpanda's), and — for the owner (`withFoodpanda`:
+ * profit.view) — foodpanda's terms from Settings → foodpanda, for display.
+ * A manager gets no foodpanda part: its commission is profit.
  */
-export function saveChannelFees(db: AppDatabase, req: SetChannelFeesRequest, actor: Actor): ChannelFeesView {
+export function getChannelFees(db: AppDatabase, withFoodpanda: boolean): ChannelFeesView {
+  const p = loadProfitSettings(db);
+  return {
+    fees: { paymentFeeBps: p.fees.paymentFeeBps },
+    riderCost: p.riderCost,
+    isDefault: p.isDefault,
+    savedAt: p.savedAt,
+    foodpanda: withFoodpanda ? foodpandaTermsInForce(db) : null,
+  };
+}
+
+/**
+ * The card fees and how riders are paid: both keys in one transaction
+ * (business-settings-repo: synced, audited, both tills). foodpanda's terms
+ * are not saved here — Settings → foodpanda keeps them. What v0.7.20 may
+ * have stored of them in 'channels.fees' — its foodpanda part (the schema
+ * strips one from the request) and its "Foodpanda" payment fee (the
+ * request's is ignored) — is KEPT as stored: it is what the one reader
+ * carries over while Settings → foodpanda has never been saved, and what a
+ * till still on v0.7.20 reads. Answers with the fees as they now stand.
+ */
+export function saveChannelFees(db: AppDatabase, req: SetChannelFeesRequest, actor: Actor, withFoodpanda: boolean): ChannelFeesView {
+  const stored = getBusinessSetting(db, 'channels.fees')?.value;
+  const legacy = stored?.foodpanda;
+  const paymentFeeBps = { ...req.fees.paymentFeeBps, foodpanda: stored?.paymentFeeBps.foodpanda ?? 0 };
+  const fees: ChannelFees = legacy ? { foodpanda: legacy, paymentFeeBps } : { paymentFeeBps };
   setBusinessSettings(
     db,
     [
-      { key: 'channels.fees', value: req.fees },
+      { key: 'channels.fees', value: fees },
       { key: 'delivery.riderCost', value: req.riderCost },
     ],
     actor,
   );
-  return getChannelFees(db);
+  return getChannelFees(db, withFoodpanda);
 }

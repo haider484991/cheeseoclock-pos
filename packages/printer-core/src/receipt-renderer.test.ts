@@ -162,6 +162,75 @@ describe('renderReceipt', () => {
     expect(text).not.toContain('pending');
   });
 
+  it('a foodpanda order: the deal as itself, foodpanda’s part on its own line, the foodpanda order number — never the commission', () => {
+    const s = snapshot();
+    const fp: OrderSnapshot = {
+      ...s,
+      order: { ...s.order, mode: 'foodpanda', source: 'pos', subtotalCents: cents(200_000), discountCents: cents(20_000), taxCents: cents(28_800), totalCents: cents(208_800) },
+      discounts: [
+        {
+          ...s.discounts[0]!,
+          discountType: 'percent',
+          value: 10,
+          reason: 'Foodpanda deal 20% off (your part 10%)',
+          amountCents: cents(20_000),
+          source: 'foodpanda',
+          foodpanda: { dealPercent: 20, shopPercent: 10, dealCents: 40_000, platformCents: 20_000 },
+        },
+      ],
+      payments: [
+        {
+          id: id('p1'),
+          orderId: id('o1'),
+          method: 'foodpanda',
+          amountCents: cents(208_800),
+          tenderedCents: null,
+          referenceNo: 'FP-TEST-1',
+          receivedByUserId: id('u1'),
+          paidAt: '2026-09-14T11:20:00.000Z',
+        },
+      ],
+    };
+    for (const width of [48, 32] as const) {
+      const rows = decodeEscPos(renderReceipt(fp, { width, branding }));
+      const text = rows.map((r) => r.text).join('\n');
+      // A narrow roll wraps the label; the amount stays on it.
+      expect(text).toMatch(/Foodpanda deal 20% off \(your\s+part 10%\)\s+- 200/);
+      expect(text).toMatch(/foodpanda pays another\s+200/);
+      expect(text).toMatch(/foodpanda order #\s+FP-TEST-1/);
+      expect(text).not.toMatch(/commission/i);
+      for (const r of rows) expect(r.text.length * r.scale, JSON.stringify(r.text)).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it('a foodpanda deal that takes nothing off the shop’s bill: “paid by foodpanda”, never “- 0.00”; under its minimum, no line', () => {
+    const s = snapshot();
+    const base: OrderSnapshot = {
+      ...s,
+      order: { ...s.order, mode: 'foodpanda', source: 'pos', subtotalCents: cents(200_000), discountCents: cents(0), taxCents: cents(32_000), totalCents: cents(232_000) },
+      payments: [],
+    };
+    const dealRow = (foodpanda: NonNullable<OrderSnapshot['discounts'][number]['foodpanda']>, reason: string): OrderSnapshot['discounts'] => [
+      { ...s.discounts[0]!, discountType: 'percent', value: 0, reason, amountCents: cents(0), source: 'foodpanda', foodpanda },
+    ];
+    const paidByFoodpanda: OrderSnapshot = {
+      ...base,
+      discounts: dealRow({ dealPercent: 20, shopPercent: 0, dealCents: 40_000, platformCents: 40_000, minOrderCents: null }, 'Foodpanda deal 20% off (foodpanda pays it)'),
+    };
+    const underMinimum: OrderSnapshot = {
+      ...base,
+      discounts: dealRow({ dealPercent: 20, shopPercent: 20, dealCents: 0, platformCents: 0, minOrderCents: 300_000 }, 'Foodpanda deal 20% off'),
+    };
+    for (const width of [48, 32] as const) {
+      const paid = decodeEscPos(renderReceipt(paidByFoodpanda, { width, branding })).map((r) => r.text).join('\n');
+      expect(paid).toMatch(/Foodpanda deal 20% off, paid by\s+foodpanda\s+400/);
+      expect(paid).not.toMatch(/- 0\.00/);
+      const under = decodeEscPos(renderReceipt(underMinimum, { width, branding })).map((r) => r.text).join('\n');
+      expect(under).not.toMatch(/Foodpanda deal/);
+      expect(under).not.toMatch(/- 0\.00/);
+    }
+  });
+
   it('wraps long free text on word boundaries', () => {
     const rows = decodeEscPos(renderReceipt(snapshot(), { width: 48, branding })).map(
       (r) => r.text,

@@ -151,7 +151,8 @@ function menuCostsWithoutProfit(costs: ReportMenuCosts): ReportMenuCosts {
 }
 
 function channelsWithoutProfit(data: ReportChannelsTab): ReportChannelsTab {
-  return { ...data, profit: null, areas: data.areas.map((a) => ({ ...a, riderCents: null, contributionPerOrderCents: null })) };
+  // The foodpanda block is foodpanda's commission and what the shop keeps (and its food cost): profit too.
+  return { ...data, profit: null, foodpanda: null, areas: data.areas.map((a) => ({ ...a, riderCents: null, contributionPerOrderCents: null })) };
 }
 
 /**
@@ -162,7 +163,8 @@ function channelsWithoutProfit(data: ReportChannelsTab): ReportChannelsTab {
  *    over (its channel refuses such a login before building it; this refuses
  *    again);
  *  - without profit.view (Phase 9: `canSeeProfit`, which also needs costs),
- *    Menu has no profit, Channels no rider cost or what orders earn, and the
+ *    Menu has no profit, Channels no rider cost, what orders earn or
+ *    foodpanda block (its commission and what the shop keeps), and the
  *    Profit tab is never handed over.
  */
 export function reportTabForLogin<K extends ReportTab>(kind: K, data: ReportTabData[K], canSeeCosts: boolean, canSeeProfit = false): ReportTabData[K] {

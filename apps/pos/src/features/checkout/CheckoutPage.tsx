@@ -15,6 +15,7 @@ import { ModifierModal } from './ModifierModal';
 import { TenderDialog } from './TenderDialog';
 import { ReceiptDialog } from './ReceiptDialog';
 import { DiscountDialog } from './DiscountDialog';
+import type { DiscountDialogIntent } from './discountPresets';
 import { useTenderGate } from './useTenderGate';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { MenuItem } from '@cheeseoclock/shared-types';
@@ -31,7 +32,8 @@ export function CheckoutPage() {
   const [pizzaChoice, setPizzaChoice] = useState<MenuChoice | null>(null);
   const sizeTriggerRef = useRef<HTMLElement | null>(null);
   const [tenderOpen, setTenderOpen] = useState(false);
-  const [discountOpen, setDiscountOpen] = useState(false);
+  /** The Discount dialog, and why it was opened ('removeDeal': the × on the foodpanda deal). */
+  const [discountOpen, setDiscountOpen] = useState<false | DiscountDialogIntent>(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [checkoutStep, setCheckoutStep] = useState<'items' | 'details'>('items');
@@ -261,7 +263,7 @@ export function CheckoutPage() {
         else void handleSendToKitchen();
       } else if (e.key === 'F3') {
         e.preventDefault();
-        setDiscountOpen(true);
+        setDiscountOpen('change');
       }
     }
     window.addEventListener('keydown', onKey);
@@ -420,7 +422,7 @@ export function CheckoutPage() {
         </div>
       </section>
 
-      <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen(true)} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
+      <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen('change')} onRemoveDeal={() => setDiscountOpen('removeDeal')} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
 
       {pizzaChoice && (
         <PizzaSizeDialog choice={pizzaChoice} returnFocus={sizeTriggerRef.current} onClose={() => setPizzaChoice(null)} onSelect={(item) => { setPizzaChoice(null); void handleAddItem(item); }} />
@@ -475,7 +477,7 @@ export function CheckoutPage() {
         <TenderDialog snapshot={snapshot} onClose={() => setTenderOpen(false)} onPaid={handlePaid} />
       )}
 
-      {discountOpen && snapshot && <DiscountDialog onClose={() => setDiscountOpen(false)} />}
+      {discountOpen && snapshot && <DiscountDialog intent={discountOpen} onClose={() => setDiscountOpen(false)} />}
 
       {receiptOpen && snapshot && <ReceiptDialog snapshot={snapshot} onClose={handleReceiptClose} />}
     </div>

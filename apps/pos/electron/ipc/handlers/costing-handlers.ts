@@ -37,6 +37,7 @@ import {
 } from '../../services/costing-settings.js';
 import { getCostedRecipeCalc } from '../../services/recipe-calc-service.js';
 import { readTillLink } from '../../services/till-link.js';
+import { itemFoodpandaLine } from '../../services/shop-settings.js';
 import { markCostAlertsSeen, runWeeklyDigestIfDue } from '../../db/repositories/cost-alert-repo.js';
 import { getAnalyticsWorker } from '../../services/analytics/worker-host.js';
 import { workOutExtra, type ReportWorker } from './reports-handlers.js';
@@ -49,9 +50,10 @@ import { workOutExtra, type ReportWorker } from './reports-handlers.js';
  * (settings.manage); managers read them. Price alerts (Phase 6): managers
  * and the owner read them and mark them seen.
  *
- * Phase 9: foodpanda's commission, payment fees and the rider cost
- * (costing:getChannelFees — managers read; costing:setChannelFees — the
- * owner); What-if (costing:whatIf — profit.view and costs; worked out in the
+ * Phase 9: payment fees and the rider cost (costing:getChannelFees —
+ * managers read; costing:setChannelFees — the owner). foodpanda's terms live
+ * in Settings → foodpanda: getChannelFees shows them read-only to the owner
+ * (profit.view) and setChannelFees strips a foodpanda part. What-if (costing:whatIf — profit.view and costs; worked out in the
  * Reports worker, never saved, nothing on the till changes); and profit on
  * Menu costs and the cost sheet (what you keep per sale and per paid extra,
  * "price to hit target"), left out for a login without profit.view. Profit
@@ -89,7 +91,13 @@ export function registerCostingHandlers(ctx: HandlerContext, deps: CostingHandle
       return err({ code: 'validation_failed', message: 'Which menu item?' });
     }
     // What you keep and "price to hit target" are profit.view's (costing spec 4.3, D6; owner, 2026-09-27).
-    return ok(itemCostSheetForLogin(getItemCostSheet(ctx.db, payload.menuItemId), mayProfit(s)));
+    const profit = mayProfit(s);
+    const sheet = itemCostSheetForLogin(getItemCostSheet(ctx.db, payload.menuItemId), profit);
+    if (!sheet) return ok(null);
+    // "On foodpanda": the listing price and the price after the deal for anyone
+    // who may see costs; foodpanda's commission and what the shop keeps are
+    // profit — the owner's alone (profit.view), left out here for a manager.
+    return ok({ ...sheet, onFoodpanda: itemFoodpandaLine(ctx.db, sheet.row, profit) });
   });
 
   defineHandler('costing:missingCosts', ctx, () => {
@@ -178,16 +186,18 @@ export function registerCostingHandlers(ctx: HandlerContext, deps: CostingHandle
 
   // ---- Profit (costing spec Phase 9) ----
   defineHandler('costing:getChannelFees', ctx, () => {
-    requireCosts();
-    return ok(getChannelFees(ctx.db));
+    const s = requireCosts();
+    // foodpanda's terms (its commission) are profit: the owner's alone.
+    return ok(getChannelFees(ctx.db, mayProfit(s)));
   });
 
   defineHandler('costing:setChannelFees', ctx, (_ctx, payload) => {
     requireCosts();
-    const s = requireCapability('settings.manage', "Only the owner can change foodpanda's commission and the rider cost.");
+    const s = requireCapability('settings.manage', 'Only the owner can change the card fees and the rider cost.');
+    // A foodpanda part (an older screen) is stripped by the schema: Settings → foodpanda keeps foodpanda's terms.
     const parsed = setChannelFeesInputSchema.safeParse(payload);
     if (!parsed.success) return validationFailed(parsed.error);
-    return ok(saveChannelFees(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }));
+    return ok(saveChannelFees(ctx.db, parsed.data, { userId: s.id, deviceId: ctx.deviceId }, mayProfit(s)));
   });
 
   /** New prices TRIED, never saved: in the Reports worker (the last 28 days' sales), else here. */
