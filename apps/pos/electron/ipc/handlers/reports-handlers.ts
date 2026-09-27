@@ -18,7 +18,13 @@ import {
   type ReportTrends,
   type ReportVariance,
 } from '@cheeseoclock/shared-types';
-import { dayNoteInputSchema, removeDayNoteInputSchema, setDaypartsInputSchema, varianceInputSchema } from '@cheeseoclock/shared-schemas';
+import {
+  dayNoteInputSchema,
+  drawerLogInputSchema,
+  removeDayNoteInputSchema,
+  setDaypartsInputSchema,
+  varianceInputSchema,
+} from '@cheeseoclock/shared-schemas';
 import type { AppDatabase } from '../../db/connection.js';
 import { requireCapability, REFUSED } from '../guards.js';
 import { getLowStock } from '../../services/inventory-service.js';
@@ -32,6 +38,7 @@ import { addDayNote, removeDayNote } from '../../db/repositories/day-note-repo.j
 import { setBusinessSetting } from '../../db/repositories/business-settings-repo.js';
 import { VARIANCE_MAIN_THREAD_MAX_DAYS, varianceWindowDays, type VarianceJob } from '../../services/analytics/stock-control.js';
 import { readTillLink } from '../../services/till-link.js';
+import { listDrawerLog } from '../../db/repositories/drawer-open-repo.js';
 
 /**
  * The Reports page (costing spec Phase 3): one channel per tab —
@@ -261,6 +268,18 @@ export function registerReportsHandlers(ctx: HandlerContext, deps: ReportsHandle
       throw new IpcGuardError({ code: 'precondition_failed', message: got.whyNot, retryable: true });
     }
     return ok(buildAnalytics(ctx.db, 'variance', job, new Date(), { longReads: false }) as ReportVariance);
+  });
+
+  // ---- The cash drawer log (migration 0040) ----
+
+  // Every drawer open, a page at a time: a small keyset read on indexed
+  // columns, so it runs here rather than in the worker. report.view (the
+  // owner): a manager or cashier is refused like the rest of Reports.
+  defineHandler('reports:drawerLog', ctx, (_ctx, payload) => {
+    requireCapability('report.view', REFUSED.reports);
+    const parsed = drawerLogInputSchema.safeParse(payload);
+    if (!parsed.success) return validationFailed(parsed.error);
+    return ok(listDrawerLog(ctx.db, parsed.data, ctx.deviceId));
   });
 
   // ---- The owner's week (costing spec Phase 7) ----

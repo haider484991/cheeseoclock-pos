@@ -7,6 +7,9 @@ import { verifyManagerPin } from './auth-service.js';
 import { drawerFailureText, printSpooler } from './print-spooler.js';
 import { DEFAULT_RECEIPT_CONFIG, getReceiptPrinterConfig, isNoPrinter } from './printer-config.js';
 
+// What a pulse did, as the drawer log keeps it (pure; the spooler settles each row with it).
+export { drawerOutcome } from './drawer-outcome.js';
+
 /**
  * Opening the cash drawer by hand — who may, and what is kept on record.
  *
@@ -18,8 +21,11 @@ import { DEFAULT_RECEIPT_CONFIG, getReceiptPrinterConfig, isNoPrinter } from './
  *    handler).
  *
  * Every open is saved (row + audit, drawer-open-repo) BEFORE the pulse goes
- * out, so it is on record even when the printer then fails. The approval rules
- * live here rather than in the IPC handler so they can be tested.
+ * out, so it is on record even when the printer then fails; the pulse is for
+ * that row and settles its result (opened / did not open / may not have…) in
+ * the drawer log. The approval rules live here rather than in the IPC handler
+ * so they can be tested. The opens for cash (sales, refunds, the float, cash
+ * in / out) are written by the repositories that move the cash (0040).
  */
 
 export class DrawerOpenRefused extends Error {
@@ -84,7 +90,7 @@ export async function openDrawerNoSale(
     { kind: req.kind, reason: req.reason ?? null, approvedByUserId },
     { userId: session.id, deviceId },
   );
-  const result = await printSpooler.kickDrawerNow({ watched: true });
+  const result = await printSpooler.kickDrawerNow({ drawerOpenId: open.id, watched: true });
   return {
     id: open.id,
     opened: result.ok,
@@ -100,8 +106,8 @@ export async function testDrawer(
   session: AuthenticatedUser,
   deviceId: string,
 ): Promise<PrintResult> {
-  recordDrawerOpen(db, { kind: 'test' }, { userId: session.id, deviceId });
-  const result = await printSpooler.kickDrawerNow({ watched: true });
+  const open = recordDrawerOpen(db, { kind: 'test' }, { userId: session.id, deviceId });
+  const result = await printSpooler.kickDrawerNow({ drawerOpenId: open.id, watched: true });
   if (result.ok || !result.error) return result;
   // The settings page shows the message as it is: make it the plain one.
   return { ...result, error: { ...result.error, message: drawerFailureText(result.error) } };

@@ -537,7 +537,15 @@ export function settleOrderStock(
     const question = foodMadeQuestion({ status: input.statusBefore, takenAt: ledger.takenAt, now: Date.now() });
     let outcome: FoodMade;
     let answered: StockSettlement['answered'];
-    if (foodLeftShop(input.statusBefore)) {
+    if (input.how === 'test_deleted') {
+      // The owner deleting a TEST order answers for it — "put it back" even
+      // after a hand-over that never really happened. Everything else (the
+      // other till's share, "already in the stock take", deleted
+      // ingredients, takes from before costing) is the same as a cancel.
+      if (input.foodMade !== 'made' && input.foodMade !== 'not_made') throw new Error(SAY_IF_MADE);
+      outcome = input.foodMade;
+      answered = 'owner';
+    } else if (foodLeftShop(input.statusBefore)) {
       if (input.foodMade === 'not_made') throw new Error(FOOD_LEFT_THE_SHOP);
       outcome = 'made';
       answered = 'forced';

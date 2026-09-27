@@ -9,8 +9,11 @@ import type { OrderStatus } from './order.js';
  */
 export type FoodMade = 'made' | 'not_made';
 
-/** Which money action ended the order. */
-export type OrderStockHow = 'cancelled' | 'refunded';
+/**
+ * Which action ended the order's hold on its stock: a cancel, a full refund,
+ * or the owner deleting it as a test order (0041).
+ */
+export type OrderStockHow = 'cancelled' | 'refunded' | 'test_deleted';
 
 /**
  * Where an order's stock stands:
@@ -122,8 +125,12 @@ export interface OrderStockStatus {
 /** What a cancel or full refund did to stock (`orders:void` / `orders:refund` reply). */
 export interface StockSettlement {
   outcome: FoodMade;
-  /** 'staff': someone answered; 'forced': the food had left the shop, so it could only be waste. */
-  answered: 'staff' | 'forced';
+  /**
+   * 'staff': someone answered; 'forced': the food had left the shop, so it
+   * could only be waste; 'owner': the owner answered while deleting a test
+   * order (put back is allowed even after hand-over: it never really happened).
+   */
+  answered: 'staff' | 'forced' | 'owner';
   how: OrderStockHow;
   statusBefore: OrderStatus;
   lines: OrderStockLine[];

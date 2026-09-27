@@ -5,44 +5,58 @@
  * these figures (reports:team). Phase 10 adds rates, flags and the
  * Exceptions list here.
  */
+import { useState } from 'react';
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
-import { Percent, Receipt, UsersRound } from 'lucide-react';
+import { Percent, Receipt, Trash2, UsersRound } from 'lucide-react';
 import { DataTable, Panel, Section, useShowAll } from '../reportUi';
-import { DRAWER_OPEN_WHY, fmtWhen, methodLabel, percentOf, stockCellText } from '../reportFormat';
+import { fmtWhen, methodLabel, percentOf, stockCellText } from '../reportFormat';
+import { shiftDrawerUseNote, shiftTestDeletedNote } from '../drawerLogFormat';
+import { DrawerLogPanel, ShiftDrawerLogDialog } from './DrawerLog';
+import { DeletedTestOrdersPanel, deletedTestsTitle, useDeletedTests } from '../../orders/DeletedTestOrdersPanel';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-export function TeamLeakageTab({ data }: { data: ReportTeamTab }) {
+/** `onPrint`: prints an HTML body with the Reports print sheet (a shift's drawer log). */
+export function TeamLeakageTab({ data, onPrint }: { data: ReportTeamTab; onPrint?: (html: string) => void }) {
   return (
     <div className="space-y-10">
-      <StaffSection report={data} />
+      <StaffSection report={data} {...(onPrint ? { onPrint } : {})} />
       <DiscountsSection report={data} />
       <RefundsSection report={data} />
+      <DeletedTestsSection sinceIso={data.sinceIso} untilIso={data.untilIso} />
     </div>
   );
 }
 
-/** " · cash in/out 3× · drawer opened 2× with no sale" — what else opened the drawer on a shift. */
+/** " · cash in/out 3× · drawer used 9× (1 no sale)" — what opened the drawer on a shift. */
 function shiftDrawerNote(s: ReportShiftLine): string {
   let note = '';
   if (s.cashMovementCount > 0) note += ` · cash in/out ${s.cashMovementCount}×`;
-  if (s.noSaleOpens > 0) note += ` · drawer opened ${s.noSaleOpens}× with no sale`;
-  return note;
+  return note + shiftDrawerUseNote(s);
 }
 
-export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'drawerOpens' | 'drawerOpenCount'> }) {
+export function StaffSection({
+  report,
+  onPrint,
+}: {
+  report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'sinceIso' | 'untilIso'>;
+  onPrint?: (html: string) => void;
+}) {
   const net = report.kpis.netSalesCents;
-  const opens = useShowAll(report.drawerOpens, 8);
+  const [logShift, setLogShift] = useState<ReportShiftLine | null>(null);
   const closed = report.shifts.filter((s) => s.closedAt !== null && s.varianceCents !== null);
   const drawer = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
   return (
     <Section id="staff" icon={UsersRound} title="Staff and cash drawer">
       <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Orders taken" note="Website orders come in by themselves, so they have their own line.">
+        <Panel
+          title="Orders taken"
+          note="Website orders come in by themselves, so they have their own line. Reprints: a bill or receipt printed again with a print button after one had already gone out. A table's first bill printed with the button says DUPLICATE too, but is not counted here."
+        >
           <DataTable
-            columns={[{ label: 'Taken by' }, { label: 'Orders', right: true }, { label: 'Sales', right: true }, { label: 'Discounts', right: true }, { label: 'Cancelled', right: true }, { label: 'No-sale opens', right: true }, { label: 'Reprints', right: true }]}
+            columns={[{ label: 'Taken by' }, { label: 'Orders', right: true }, { label: 'Sales', right: true }, { label: 'Discounts', right: true }, { label: 'Cancelled', right: true }, { label: 'No-sale opens', right: true }, { label: 'Drawer opens', right: true }, { label: 'Reprints', right: true }]}
             rows={report.staff.map((s) => [
               <span key="n" className={cn('font-medium', s.isWebsite && 'text-sky-700 dark:text-sky-300')}>{s.name}</span>,
               s.orderCount,
@@ -52,7 +66,9 @@ export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 
               s.discountCents > 0 ? formatCents(s.discountCents) : '—',
               s.voidCount > 0 ? <span key="v" className="font-semibold text-amber-700 dark:text-amber-400">{s.voidCount}</span> : '—',
               s.noSaleOpens > 0 ? <span key="d" className="font-semibold text-amber-700 dark:text-amber-400">{s.noSaleOpens}</span> : '—',
-              // Receipts / bills printed again by hand (each says DUPLICATE).
+              // Every time the till opened the drawer for them: cash sales, refunds, cash in / out, float… (0040).
+              (s.drawerOpens ?? 0) > 0 ? s.drawerOpens : '—',
+              // Receipts / bills printed AGAIN by hand, after one had gone out (print-log-sql.ts).
               (s.reprints ?? 0) > 0 ? <span key="r" className="font-semibold text-amber-700 dark:text-amber-400">{s.reprints}</span> : '—',
             ])}
             empty="No orders in this period yet."
@@ -88,6 +104,16 @@ export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 
                   {s.closedAt ? `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}` : `still open · opened by ${s.openedBy}`}
                   {shiftDrawerNote(s)}
                 </div>
+                {shiftTestDeletedNote(s) && (
+                  <div className="text-xs font-medium text-amber-700 dark:text-amber-400">{shiftTestDeletedNote(s)}</div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setLogShift(s)}
+                  className="mt-0.5 text-xs font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-400"
+                >
+                  Drawer log
+                </button>
               </div>,
               formatCents(s.openingCashCents),
               s.cashOutCents > 0 ? formatCents(s.cashOutCents) : '—',
@@ -107,36 +133,29 @@ export function StaffSection({ report }: { report: Pick<ReportTeamTab, 'kpis' | 
           />
         </Panel>
 
-        <Panel
-          title={`Cash drawer opened by hand — ${plural(report.drawerOpenCount, 'time')}`}
-          note="Opened with no sale: the Open drawer button, “Open drawer to count” at close, and Test drawer. A cashier needs a manager's PIN or password."
-          className="xl:col-span-2"
-        >
-          <DataTable
-            columns={[{ label: 'When' }, { label: 'Why' }, { label: 'Opened by' }, { label: 'Approved by' }]}
-            rows={opens.shown.map((d) => [
-              <div key="w">
-                <div>{fmtWhen(d.createdAt)}</div>
-                {d.outsideShift && <div className="text-xs text-amber-700 dark:text-amber-400">No shift open</div>}
-              </div>,
-              <div key="k">
-                <div>{DRAWER_OPEN_WHY[d.kind]}</div>
-                {d.reason && <div className="text-xs text-stone-500">{d.reason}</div>}
-              </div>,
-              d.openedBy,
-              d.approvedBy ?? '—',
-            ])}
-            empty="The drawer was not opened by hand in this period."
-          />
-          {opens.toggle}
-          {report.drawerOpens.length < report.drawerOpenCount && (
-            <p className="mt-2 text-xs text-stone-500">
-              Showing the latest {report.drawerOpens.length} of {report.drawerOpenCount}. The counts per person and per
-              shift include all of them.
-            </p>
-          )}
-        </Panel>
+        <DrawerLogPanel sinceIso={report.sinceIso} untilIso={report.untilIso} />
       </div>
+      {logShift && <ShiftDrawerLogDialog shift={logShift} onClose={() => setLogShift(null)} {...(onPrint ? { onPrint } : {})} />}
+    </Section>
+  );
+}
+
+/**
+ * The owner's deleted test orders taken in the period (0041): "Test orders
+ * deleted — N (Rs X)". Read-only; they are in no other figure of Reports.
+ */
+function DeletedTestsSection({ sinceIso, untilIso }: { sinceIso: string; untilIso: string }) {
+  const q = useDeletedTests(sinceIso, untilIso);
+  return (
+    <Section
+      id="deleted-tests"
+      icon={Trash2}
+      title={deletedTestsTitle(q.data)}
+      subtitle="Orders made to test the till that the owner deleted. They are not in sales, the shifts' cash or any other figure here."
+    >
+      <Panel>
+        <DeletedTestOrdersPanel sinceIso={sinceIso} untilIso={untilIso} />
+      </Panel>
     </Section>
   );
 }

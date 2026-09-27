@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type { BusinessReport, ReportFoodCost, ReportKpis } from '@cheeseoclock/shared-types';
+import type { BusinessReport, DrawerLogPage, ReportFoodCost, ReportKpis } from '@cheeseoclock/shared-types';
 import { periodFor } from './dateRange';
-import { buildPrintEverything, buildTabCsv, buildTabPrintBody, csvFileName, escapeHtml, toCsv, type SomeReportTabs } from './exporters';
+import {
+  TEAM_EXTRA_UNREAD,
+  buildPrintEverything,
+  buildTabCsv,
+  buildTabPrintBody,
+  csvFileName,
+  escapeHtml,
+  toCsv,
+  type SomeReportTabs,
+} from './exporters';
+import { fetchTeamExtras, teamExtrasFailedText } from './teamExtras';
 import {
   MISSING_COST_WHY,
   WASTE_REASON_LABEL,
@@ -317,7 +327,8 @@ describe('CSV for Excel', () => {
     // No-sale drawer opens per person, and the list of each one.
     const team = tabCsv('team', report(), period);
     expect(team).toContain('Cancelled orders,Drawer opened with no sale');
-    expect(team).toMatch(/Ali.*,215\.40,10\.00,1,2\r\n/);
+    // …then every drawer open (0040): none on this made-up line.
+    expect(team).toMatch(/Ali.*,215\.40,10\.00,1,2,\r\n/);
     const withOpen = tabCsv(
       'team',
       report({
@@ -335,11 +346,11 @@ describe('CSV for Excel', () => {
       }),
       period,
     );
-    expect(withOpen).toContain('CASH DRAWER OPENED BY HAND (NO SALE)');
+    expect(withOpen).toContain('CASH DRAWER OPENED BY HAND (NO SALE, COUNT, TEST)');
     expect(withOpen).toMatch(/No sale,Change,Ali,Sara,Yes/);
     // A busy month: the list stops at the cap, and says so.
     const capped = tabCsv('team', report({ drawerOpens: [drawerOpen()], drawerOpenCount: 420 }), period);
-    expect(capped).toContain('CASH DRAWER OPENED BY HAND (NO SALE) — LATEST 1 OF 420');
+    expect(capped).toContain('CASH DRAWER OPENED BY HAND (NO SALE, COUNT, TEST) — LATEST 1 OF 420');
   });
 
   it('names the file after the tab and the period', () => {
@@ -506,7 +517,7 @@ describe('printout', () => {
     );
     expect(html).toContain('<th class="r">Cash in/out</th><th class="r">No-sale opens</th>');
     expect(html).toMatch(/Matched<\/td><td class="r">3<\/td><td class="r">2<\/td>/);
-    expect(html).toContain('Cash drawer opened by hand — 3 times');
+    expect(html).toContain('Cash drawer opened by hand (no sale, count, test) — 3 times');
     expect(html).toMatch(/No sale<\/td><td>Change<\/td><td>Ali<\/td><td>Sara<\/td>/);
     expect(html).toMatch(/To count at close<\/td><td>—<\/td><td>Sara<\/td><td>—<\/td>/);
     expect(html).toContain('(no shift open)');
@@ -520,11 +531,11 @@ describe('printout', () => {
     const period = periodFor('today', SAT_3PM);
     // More than fit on paper; the Excel file has them all.
     let html = tabPrint('team', report({ drawerOpens: many, drawerOpenCount: 30 }), period);
-    expect(html).toContain('Cash drawer opened by hand — 30 times');
+    expect(html).toContain('Cash drawer opened by hand (no sale, count, test) — 30 times');
     expect(html).toContain('Showing the latest 25 of 30. Download for Excel for the full list.');
     // The report itself stopped at its cap: say how many there really were.
     html = tabPrint('team', report({ drawerOpens: many, drawerOpenCount: 420 }), period);
-    expect(html).toContain('Cash drawer opened by hand — 420 times');
+    expect(html).toContain('Cash drawer opened by hand (no sale, count, test) — 420 times');
     expect(html).toContain('Showing the latest 25 of 420. Download for Excel for the latest 30.');
     // None: no section.
     expect(tabPrint('team', report(), period)).not.toContain('Cash drawer opened by hand');
@@ -669,5 +680,180 @@ describe('food cost, in plain words', () => {
       expect(tabPrint(tab, without, period)).not.toContain('Food cost');
     }
     expect(buildPrintEverything(tabsOf(without), period, SAT_3PM)).not.toContain('Food cost');
+  });
+});
+
+describe('Team & leakage in the file and on paper: the drawer log and the deleted test orders (0040 / 0041)', () => {
+  const extras = {
+    drawerLog: {
+      rows: Array.from({ length: 30 }, (_, i) => ({
+        id: `d${i}`,
+        createdAt: new Date(Date.parse('2026-09-26T09:00:00.000Z') + i * 60_000).toISOString(),
+        till: 'this' as const,
+        kind: i === 0 ? 'refund' : 'sale',
+        orderNumber: `20260926-${String(i).padStart(4, '0')}`,
+        orderDeletedAsTest: i === 1,
+        amountCents: i === 0 ? -20_000 : 125_000,
+        reason: null,
+        openedBy: 'Ali',
+        approvedBy: i === 0 ? 'Sara' : null,
+        outcome: i === 2 ? 'not_opened' : 'opened',
+        outcomeNote: i === 2 ? 'The printer is off' : null,
+        outsideShift: false,
+        shiftId: 's1',
+      })),
+      counts: { total: 30, byKind: { sale: 29, refund: 1 }, byOutcome: { opened: 29, not_opened: 1 } },
+      logSince: '2026-09-26T08:00:00.000Z',
+    },
+    deletedTests: {
+      total: 1,
+      totalCents: 125_000,
+      rows: [
+        {
+          orderId: 'o9',
+          orderNumber: '20260926-0099',
+          mode: 'takeaway' as const,
+          status: 'paid' as const,
+          totalCents: 125_000,
+          takenAt: '2026-09-26T09:30:00.000Z',
+          takenBy: 'Ali',
+          deletedAt: '2026-09-26T10:00:00.000Z',
+          deletedBy: 'Owner',
+          reason: 'Printer test',
+          paidCents: 125_000,
+          paidMethods: ['cash' as const],
+          deleteStock: 'put_back' as const,
+          wasteCents: 0,
+          itemsSummary: '1× Test Pizza',
+        },
+      ],
+    },
+  };
+
+  it('Excel: the whole log with its columns, and the deleted test orders', () => {
+    const period = periodFor('today', SAT_3PM);
+    const csv = buildTabCsv('team', tabsOf(report()).team as never, period, SAT_3PM, extras);
+    expect(csv).toContain('CASH DRAWER LOG — USED 30 TIMES');
+    expect(csv).toContain('When,Till,Why,Order,Cash Rs,By,Approved by,Result,Note');
+    expect(csv).toContain(',This till,Refund — Order #0000,20260926-0000,-200.00,Ali,Sara,Opened,');
+    expect(csv).toContain('Cash sale — Order #0001 (deleted test order)');
+    expect(csv).toContain('Did not open — key used?,The printer is off');
+    // All thirty, not only the latest few.
+    expect(csv.split('\r\n').filter((l) => l.includes(',This till,'))).toHaveLength(30);
+    expect(csv).toContain('DELETED TEST ORDERS — 1 (RS 1,250)');
+    expect(csv).toContain('20260926-0099,1× Test Pizza');
+    expect(csv).toContain('Printer test,1250.00,"Rs 1,250 Cash",Put back');
+    // The hand-opened list keeps its own section, named for what it holds.
+    expect(csv).toContain('CASH DRAWER OPENED BY HAND (NO SALE, COUNT, TEST)');
+  });
+
+  it('paper: the counts and the latest 25, and where the rest is', () => {
+    const period = periodFor('today', SAT_3PM);
+    const html = buildTabPrintBody('team', tabsOf(report()).team as never, period, SAT_3PM, extras);
+    expect(html).toContain('Cash drawer log — used 30 times');
+    expect(html).toContain('Cash sales 29 · Refunds 1 · Did not open 1');
+    expect(html).toContain('The latest 25 of 30. The full log is in the Excel file.');
+    expect(html.split('Cash sale — Order #').length - 1).toBe(24);
+    expect(html).toContain('Test orders deleted — 1 (Rs 1,250)');
+    // Print everything carries them too.
+    expect(buildPrintEverything(tabsOf(report()), period, SAT_3PM, extras)).toContain('Cash drawer log — used 30 times');
+    // Without them (not asked for) the tab still prints.
+    expect(buildTabPrintBody('team', tabsOf(report()).team as never, period, SAT_3PM)).not.toContain('Cash drawer log');
+  });
+
+  it('a list that stopped short says "The latest X of N"; one that could not be read says so in its place', () => {
+    const period = periodFor('today', SAT_3PM);
+    const short = {
+      drawerLog: { ...extras.drawerLog, counts: { ...extras.drawerLog.counts, total: 14_000 } },
+      deletedTests: { ...extras.deletedTests, total: 700 },
+    };
+    const csv = buildTabCsv('team', tabsOf(report()).team as never, period, SAT_3PM, short);
+    expect(csv).toContain('CASH DRAWER LOG — USED 14000 TIMES');
+    expect(csv).toContain('The latest 30 of 14000 — narrow the dates for the rest.');
+    expect(csv).toContain('The latest 1 of 700 — narrow the dates for the rest.');
+    const paper = buildTabPrintBody('team', tabsOf(report()).team as never, period, SAT_3PM, short);
+    expect(paper).toContain('The latest 25 of 14000. The Excel file holds the latest 30 — narrow the dates for the rest.');
+    // The whole list: no such line.
+    expect(buildTabCsv('team', tabsOf(report()).team as never, period, SAT_3PM, extras)).not.toContain('narrow the dates');
+
+    const unread = { drawerLog: null, deletedTests: null };
+    const csv2 = buildTabCsv('team', tabsOf(report()).team as never, period, SAT_3PM, unread);
+    expect(csv2).toContain('CASH DRAWER LOG');
+    expect(csv2).toContain('DELETED TEST ORDERS');
+    expect(csv2.split(TEAM_EXTRA_UNREAD).length - 1).toBe(2);
+    const paper2 = buildTabPrintBody('team', tabsOf(report()).team as never, period, SAT_3PM, unread);
+    expect(paper2.split(TEAM_EXTRA_UNREAD).length - 1).toBe(2);
+  });
+});
+
+describe('Team & leakage for paper and file: every page read, nothing dropped without a word', () => {
+  const logPage = (n: number, from: number, nextCursor: string | null, total: number): DrawerLogPage => ({
+    rows: Array.from({ length: n }, (_, i) => ({
+      id: `d${from + i}`,
+      createdAt: '2026-09-26T09:00:00.000Z',
+      till: 'this' as const,
+      kind: 'sale',
+      orderNumber: null,
+      orderDeletedAsTest: false,
+      amountCents: 100,
+      reason: null,
+      openedBy: 'Ali',
+      approvedBy: null,
+      outcome: 'opened' as const,
+      outcomeNote: null,
+      outsideShift: false,
+      shiftId: 's1',
+    })),
+    nextCursor,
+    counts: { total, byKind: { sale: total }, byOutcome: { opened: total } },
+    logSince: null,
+  });
+  const period = { sinceIso: '2026-01-01T00:00:00.000Z', untilIso: '2027-01-01T00:00:00.000Z' };
+  const noTests = () => Promise.resolve({ rows: [], total: 0, totalCents: 0 });
+
+  it('reads the drawer log to the end (a year is more than 10,000 opens) and the deleted tests past 500', async () => {
+    const cursors: Array<string | undefined> = [];
+    const pages = 72; // 14,400 opens at 200 a read
+    const got = await fetchTeamExtras(period, {
+      drawerLog: (q) => {
+        cursors.push(q.cursor);
+        const i = cursors.length - 1;
+        return Promise.resolve(logPage(200, i * 200, i + 1 < pages ? `c${i + 1}` : null, pages * 200));
+      },
+      deletedTests: (q) =>
+        Promise.resolve({
+          rows: Array.from({ length: Math.min(q.limit, 700 - q.offset) }, (_, i) => ({ orderId: `o${q.offset + i}` }) as never),
+          total: 700,
+          totalCents: 70_000,
+        }),
+    });
+    expect(got.failed).toEqual([]);
+    expect(got.drawerLog?.rows).toHaveLength(14_400);
+    expect(cursors.slice(0, 3)).toEqual([undefined, 'c1', 'c2']);
+    expect(got.deletedTests).toMatchObject({ total: 700, totalCents: 70_000 });
+    expect(got.deletedTests?.rows).toHaveLength(700);
+  });
+
+  it('a read that fails is named (for the screen) and left null (for the file); a stuck cursor stops', async () => {
+    const got = await fetchTeamExtras(period, {
+      drawerLog: () => Promise.reject(new Error('Sign in again')),
+      deletedTests: () => Promise.reject(new Error('Sign in again')),
+    });
+    expect(got).toEqual({ drawerLog: null, deletedTests: null, failed: ['the cash drawer log', 'the deleted test orders'] });
+    expect(teamExtrasFailedText(got.failed)).toBe(
+      'Could not read the cash drawer log or the deleted test orders; the paper or file says so where the list would be. Try again in a moment.',
+    );
+    expect(teamExtrasFailedText([])).toBeNull();
+
+    let reads = 0;
+    const stuck = await fetchTeamExtras(period, {
+      drawerLog: () => {
+        reads += 1;
+        return Promise.resolve(logPage(200, 0, 'same', 5_000));
+      },
+      deletedTests: noTests,
+    });
+    expect(reads).toBe(2);
+    expect(stuck.drawerLog?.rows).toHaveLength(400);
   });
 });

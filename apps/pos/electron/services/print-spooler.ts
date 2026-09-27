@@ -21,7 +21,9 @@ import {
   DRAWER_NOT_OPENED_CODE,
   DRAWER_TOO_LATE_CODE,
   DRAWER_UNSURE_CODE,
+  type DrawerOutcome,
   type DrawerSettings,
+  type OrderPapers,
   type OrderSnapshot,
   type OrderStatus,
   type PrintedDocument,
@@ -38,6 +40,7 @@ import {
   getReceiptBranding,
   getReceiptLogo,
   getReceiptPrinterConfig,
+  isNoPrinter,
   markReceiptLogoChecked,
   receiptLogoToPrint,
 } from './printer-config.js';
@@ -49,12 +52,16 @@ import {
   claimNextPendingJob,
   deferJob,
   enqueuePrintJob,
+  findFailedOwnJob,
   findOpenJob,
   hasPrintJob,
+  listDoneWithPlan,
   listInFlightWithPlan,
   markJobDone,
+  markJobDoneKeepPlan,
   markJobFailedPermanently,
   recoverStuckInFlight,
+  requeueFailedJob,
   rescheduleJob,
   retryNow,
   setSendingPlan,
@@ -67,6 +74,7 @@ import {
   docKeyFor,
   latestLoggedSaleFbr,
   legacyPrintCount,
+  listOrderPapers,
   listSeriesPrints,
   recordDocumentPrint,
   userNames,
@@ -77,7 +85,18 @@ import {
   type SeriesPrint,
 } from '../db/repositories/document-print-repo.js';
 import { getFbrMode } from './fbr-config.js';
-import { KITCHEN_REPRINT_STATUSES, isCurrentOrder } from './reprint-policy.js';
+import { KITCHEN_REPRINT_STATUSES } from './reprint-policy.js';
+import { handReprintNumber, labelOrderPapers, seriesHasOriginal } from './order-papers.js';
+import { kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
+import {
+  ALREADY_OPEN_NOTE,
+  ORDER_GONE_NOTE,
+  PRINTER_STARTING_CODE,
+  TOO_LATE_NOTE,
+  drawerFailureText,
+  drawerOutcome,
+} from './drawer-outcome.js';
+import { settleAbandonedDrawerOpens, settleDrawerOpen } from '../db/repositories/drawer-open-repo.js';
 
 /**
  * Background print queue — backed by `print_queue` in SQLite so a crash
@@ -150,8 +169,14 @@ export interface ReprintPlan {
   /** What the order prints as now. */
   document: 'receipt' | 'bill' | 'void';
   copy: ReceiptCopy;
-  /** Papers of this series so far (0: the press prints the original). */
+  /** Papers of this series so far (0: none of this paper printed yet). */
   priorAll: number;
+  /**
+   * The number the press's paper will carry ("Reprint #N"): a paper printed
+   * with a print button always says DUPLICATE (the owner's rule), so the first
+   * hand press of a paper the till never printed by itself is Reprint #1.
+   */
+  reprintNo: number;
   /** Of those, printed by hand (distinct presses), the FBR copy not counted. */
   priorManual: number;
   /** The press prints the first paper that carries the FBR number. */
@@ -173,6 +198,8 @@ export interface ReprintOptions {
 
 /** Why a job was finished without printing: its order was cancelled. */
 export const NOT_PRINTED_CANCELLED = 'Not printed: order cancelled';
+/** Why a job was finished without printing: its order was deleted as a test (orders:deleteTest). */
+export const NOT_PRINTED_DELETED_TEST = 'Not printed — the order was deleted as a test';
 
 const MAX_ATTEMPTS = 5;
 // Backoff schedule: ~immediate, 5s, 30s, 2m, 10m. Past MAX_ATTEMPTS we
@@ -196,8 +223,9 @@ export const MANUAL_KICK_MAX_WAIT_MS = 10_000;
  * so it does not count against it.
  */
 export const MANUAL_KICK_READY_MAX_MS = 30_000;
-/** kickDrawerNow's answer when the printer did not get ready in time: nothing was sent. */
-export const PRINTER_STARTING_CODE = 'printer_starting';
+// kickDrawerNow's "printer still starting" code and the counter's words for a
+// drawer that did not open live in drawer-outcome.ts (pure, shared with the log).
+export { PRINTER_STARTING_CODE, drawerFailureText } from './drawer-outcome.js';
 // How long a payment receipt waits for the FBR invoice number before printing
 // with the "pending" placeholder, counted from when the sale queued it.
 const FBR_IRN_GRACE_MS = 4_000;
@@ -232,19 +260,37 @@ class PrintSpooler {
   private deviceId = 'unknown-device';
   /** Who is signed in now (the person a queued paper is put down to). */
   private currentUserId: () => string | null = () => null;
+  /**
+   * A printed job's papers could not go into the print log (finishPrinted):
+   * they are noted (logKeptPlans) before the next job and before the next
+   * reprint is worked out, so the next copy of that paper still says
+   * DUPLICATE.
+   */
+  private logBacklog = false;
 
   init(db: AppDatabase, opts: { deviceId?: string; currentUserId?: () => string | null } = {}): void {
     this.db = db;
     this.drawerPulsedAt = 0;
+    this.logBacklog = false;
     this.deviceId = opts.deviceId ?? readDeviceId(db);
     this.currentUserId = opts.currentUserId ?? (() => null);
     // Papers that were going out when the app last died may be on paper:
     // into the log as 'unsure', so their re-send says DUPLICATE.
     this.logCutOffSends(db);
+    // Papers that printed but could not be noted last time: noted now.
+    this.logKeptPlans();
     // Recover any jobs that were mid-flight when the app last died.
     const recovered = recoverStuckInFlight(db);
     if (recovered > 0) {
       log.info('Print spooler: recovered stuck in-flight jobs', { recovered });
+    }
+    // Drawer opens the till never learned the result of (it stopped first):
+    // 'unsure' in the drawer log. Not those a waiting drawer job will settle.
+    try {
+      const abandoned = settleAbandonedDrawerOpens(db, this.deviceId);
+      if (abandoned > 0) log.warn('Drawer log: opens with no result after a restart', { abandoned });
+    } catch (e) {
+      log.error('Drawer log: could not check opens left without a result', { error: String(e) });
     }
     // Periodic tick — picks up jobs whose next_attempt_at has come due.
     if (this.tickTimer) clearInterval(this.tickTimer);
@@ -255,21 +301,26 @@ class PrintSpooler {
   }
 
   /**
-   * The one place that turns an order event into paper. `cash` says whether
-   * cash just changed hands (the drawer opens for cash, never for card or
-   * wallet payments).
+   * The one place that turns an order event into paper. `drawerOpenId`: the
+   * drawer_opens row the repository wrote with the cash (a cash sale or a
+   * cash refund) — the drawer opens for it, never for card or wallet
+   * payments. No row, no pulse.
    */
-  onOrderEvent(orderId: string, event: OrderPrintEvent, detail: { cash?: boolean } = {}): void {
+  onOrderEvent(orderId: string, event: OrderPrintEvent, detail: { drawerOpenId?: string | null } = {}): void {
     if (!this.db) {
       log.warn('PrintSpooler not initialized; nothing printed', { orderId, event });
       return;
     }
     const db = this.db;
+    const drawerOpenId = typeof detail.drawerOpenId === 'string' && detail.drawerOpenId ? detail.drawerOpenId : null;
     const snap = getOrderSnapshot(db, orderId);
-    if (!snap) return;
+    if (!snap) {
+      if (drawerOpenId !== null) this.settleDrawer(drawerOpenId, 'not_opened', ORDER_GONE_NOTE);
+      return;
+    }
     const policy = getPrintPolicy(db);
     const delivery = snap.order.mode === 'delivery';
-    const cash = detail.cash === true;
+    const cash = drawerOpenId !== null;
     const copies: ReceiptCopy[] =
       policy.shopCopy === 'always' || (policy.shopCopy === 'delivery' && delivery)
         ? ['customer', 'shop']
@@ -278,9 +329,10 @@ class PrintSpooler {
     // Receipts never carry the drawer pulse: it goes as its own job, first.
     const receipt = (reason: ReceiptJobReason, c: ReceiptCopy[] = copies, extra: { refundAt?: string } = {}) =>
       this.enqueue({ kind: 'receipt', orderId, openDrawer: false, copies: c, reason, requestedByUserId, ...extra });
-    // Cash changed hands: open the drawer now, ahead of any paper. Once per event.
+    // Cash changed hands: open the drawer now, ahead of any paper. Once per
+    // event, for the row written with the cash.
     const drawer = () => {
-      if (cash) this.enqueue({ kind: 'drawer', orderId });
+      if (drawerOpenId !== null) this.enqueue({ kind: 'drawer', orderId, drawerOpenId });
     };
 
     switch (event) {
@@ -341,6 +393,8 @@ class PrintSpooler {
   planReprint(orderId: string, copy: ReceiptCopy = 'customer'): ReprintPlan {
     if (!this.db) throw new Error('Printing is not ready yet');
     const db = this.db;
+    // A paper that printed but is not in the log yet counts: note it first.
+    if (this.logBacklog) this.logKeptPlans();
     // A draft has no bill. Printing one would hand the customer a "TO PAY"
     // slip for an order that can still be discarded without a trace.
     const snap = getOrderSnapshot(db, orderId);
@@ -366,6 +420,7 @@ class PrintSpooler {
       document,
       copy,
       priorAll: series.prior,
+      reprintNo: handReprintNumber(series.rows, series.legacy),
       priorManual: manual.size,
       fbrCopy,
       openJob: findOpenJob(db, orderId, 'receipt', copy),
@@ -373,12 +428,14 @@ class PrintSpooler {
   }
 
   /**
-   * Print the order's customer paper (or its SHOP COPY) again. What it
-   * prints and whether it says DUPLICATE is decided when it prints, from the
-   * order and the print log. A press while that paper is still waiting to
-   * print (printer busy, retrying, waiting for FBR) joins the waiting job:
-   * one paper, never an unmarked original after a marked copy. Never opens
-   * the drawer, never sends anything to FBR again.
+   * Print the order's customer paper (or its SHOP COPY) by hand. What it
+   * prints is decided when it prints, from the order — and, pressed by hand,
+   * it always says DUPLICATE "Reprint #N" (the owner's rule: only the paper
+   * the till prints by itself is the original). A press while that paper is
+   * still waiting to print (printer busy, retrying after a failure, waiting
+   * for FBR) joins the waiting job — one paper, printed as that job would
+   * have been: the till's own paper stays the original. Never opens the
+   * drawer, never sends anything to FBR again.
    */
   reprintReceipt(orderId: string, opts: ReprintOptions = {}): ReprintResult {
     if (!this.db) throw new Error('Printing is not ready yet');
@@ -387,7 +444,8 @@ class PrintSpooler {
     if (plan.openJob) {
       if (plan.openJob.status === 'pending') retryNow(this.db, plan.openJob.id);
       void this.drain();
-      return { status: 'merged', document: plan.document, duplicate: plan.priorAll > 0, printNo: plan.priorAll };
+      const joinedByHand = plan.openJob.payload.kind === 'receipt' && plan.openJob.payload.reason === MANUAL_REASON;
+      return { status: 'merged', document: plan.document, duplicate: joinedByHand, printNo: plan.priorAll };
     }
     opts.check?.(plan);
     this.enqueue({
@@ -399,7 +457,56 @@ class PrintSpooler {
       requestedByUserId: opts.requestedByUserId ?? null,
       approvedByUserId: opts.approvedByUserId ?? null,
     });
-    return { status: 'queued', document: plan.document, duplicate: plan.priorAll > 0, printNo: plan.priorAll };
+    return { status: 'queued', document: plan.document, duplicate: true, printNo: plan.priorAll, reprintNo: plan.reprintNo };
+  }
+
+  /**
+   * What the order's print button would print now (and the DUPLICATE number
+   * it would carry), and every paper the order had on either till, labelled
+   * as it printed — the order panel's "Papers printed" (order-papers.ts).
+   * Read-only.
+   */
+  orderPapers(orderId: string): OrderPapers {
+    if (!this.db) throw new Error('Printing is not ready yet');
+    const db = this.db;
+    if (this.logBacklog) this.logKeptPlans();
+    const snap = getOrderSnapshot(db, orderId);
+    if (!snap) throw new Error('Order not found');
+    let next: OrderPapers['next'] = null;
+    if (snap.order.status !== 'open') {
+      const plan = this.planReprint(orderId, 'customer');
+      next = {
+        document: plan.document,
+        printedBefore: plan.priorAll,
+        reprintNo: plan.reprintNo,
+        waiting: plan.openJob !== null,
+        // The till's own paper failed and nothing came since: the panel sends
+        // THAT again (the original) instead of printing a DUPLICATE.
+        failedJobId: plan.openJob === null ? (findFailedOwnJob(db, orderId, 'customer')?.id ?? null) : null,
+      };
+    }
+    const papers = labelOrderPapers(listOrderPapers(db, orderId), {
+      legacy: (document, _docKey, copy) =>
+        legacyPrintCount(db, { orderId, document, copy, paidAt: snap.order.paidAt }),
+      paidAt: snap.order.paidAt,
+      deviceId: this.deviceId,
+    });
+    return { next, papers };
+  }
+
+  /**
+   * "Try again" on the failed-print note: the job the spooler gave up on goes
+   * again as it was (print-queue-repo requeueFailedJob) — a paper the till
+   * prints by itself stays the original. Returns the job's order, or null
+   * when there was nothing to try again (already printed, a drawer pulse).
+   */
+  retryFailedJob(jobId: string): { orderId: string | null } | null {
+    if (!this.db) throw new Error('Printing is not ready yet');
+    const job = requeueFailedJob(this.db, jobId);
+    if (!job) return null;
+    log.info('Print job sent again by hand after it failed', { jobId, orderId: job.orderId });
+    void this.drain();
+    return { orderId: job.orderId };
   }
 
   /**
@@ -442,12 +549,16 @@ class PrintSpooler {
   /**
    * Pulse the cash drawer right now, straight through the receipt printer:
    * no order, no queue, one attempt. For the Open drawer and Test drawer
-   * buttons and drawer cash in / out. If the printer can't take it within
-   * MANUAL_KICK_MAX_WAIT_MS it is not sent at all (DRAWER_TOO_LATE_CODE).
+   * buttons, the float and drawer cash in / out. If the printer can't take it
+   * within MANUAL_KICK_MAX_WAIT_MS it is not sent at all (DRAWER_TOO_LATE_CODE).
    * `watched`: someone is looking at "Opening…", so a printer that is still
    * starting up first gets MANUAL_KICK_READY_MAX_MS to get ready.
+   *
+   * `drawerOpenId` is REQUIRED: the drawer_opens row this pulse is for, on
+   * record before the pulse (no row, no pulse). Its result is settled before
+   * this returns.
    */
-  async kickDrawerNow(opts: { watched?: boolean } = {}): Promise<PrintResult> {
+  async kickDrawerNow(opts: { drawerOpenId: string; watched?: boolean }): Promise<PrintResult> {
     if (!this.db) {
       return {
         ok: false,
@@ -457,8 +568,9 @@ class PrintSpooler {
     }
     const pressedAt = Date.now();
     let notAfter = pressedAt + MANUAL_KICK_MAX_WAIT_MS;
+    let result: PrintResult;
     try {
-      const result = await this.exclusive(async (): Promise<PrintResult> => {
+      result = await this.exclusive(async (): Promise<PrintResult> => {
         if (Date.now() > notAfter) return tooLate(pressedAt);
         const adapter = this.getAdapter('receipt');
         if (opts.watched) {
@@ -469,9 +581,8 @@ class PrintSpooler {
         return this.sendPulse(adapter, renderDrawerKick(this.drawerSettings()), notAfter);
       });
       if (!result.ok) log.warn('Cash drawer did not open', { error: result.error });
-      return result;
     } catch (e) {
-      return {
+      result = {
         ok: false,
         durationMs: Date.now() - pressedAt,
         error: {
@@ -480,6 +591,33 @@ class PrintSpooler {
           recoverable: false,
         },
       };
+    }
+    const settled = drawerOutcome(result, this.noPrinterSetUp());
+    this.settleDrawer(opts.drawerOpenId, settled.outcome, settled.note);
+    return result;
+  }
+
+  /** No receipt printer is set up (Settings → Printers): a pulse "goes" nowhere. Never throws. */
+  private noPrinterSetUp(): boolean {
+    if (!this.db) return false;
+    try {
+      return isNoPrinter(getReceiptPrinterConfig(this.db) ?? DEFAULT_RECEIPT_CONFIG);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The drawer log's result for a pulse (drawer-open-repo settleDrawerOpen:
+   * the first result wins). Never throws: a result that can't be written is
+   * logged, and the boot check marks the row 'unsure' later.
+   */
+  private settleDrawer(drawerOpenId: string | undefined, outcome: DrawerOutcome, note: string | null): void {
+    if (!this.db || !drawerOpenId) return;
+    try {
+      settleDrawerOpen(this.db, drawerOpenId, outcome, note);
+    } catch (e) {
+      log.error('Drawer log: result not written', { drawerOpenId, outcome, error: String(e) });
     }
   }
 
@@ -507,9 +645,13 @@ class PrintSpooler {
     return (getReceiptPrinterConfig(this.db) ?? DEFAULT_RECEIPT_CONFIG).drawer;
   }
 
-  /** kickDrawerNow without waiting: a failure reaches the till as a warning toast. */
-  kickDrawerSoon(): void {
-    void this.kickDrawerNow()
+  /**
+   * kickDrawerNow without waiting, for the drawer_opens row the float or the
+   * cash in / out wrote (required: no row, no pulse). A failure reaches the
+   * till as a warning toast; the row is settled either way.
+   */
+  kickDrawerSoon(drawerOpenId: string): void {
+    void this.kickDrawerNow({ drawerOpenId })
       .then((r) => {
         if (!r.ok) notifyDrawerNotOpened(undefined, drawerFailureText(r.error), r.error?.maybeSent === true);
       })
@@ -549,6 +691,41 @@ class PrintSpooler {
       cancelled: true,
       requestedByUserId: this.whoIsSignedIn(),
     });
+  }
+
+  /**
+   * An order was just deleted as a test (orders:deleteTest, after its
+   * transaction): whatever has not printed for it never will — tickets and
+   * bills still waiting (a payment receipt or a drawer pulse still waiting
+   * is finished quietly when its turn comes: runJob) — and, when the kitchen
+   * got (or may have got) a ticket and the food had not been handed over, a
+   * CANCELLED slip goes to the line. Never throws: print failure never
+   * blocks anything.
+   */
+  onOrderDeleted(orderId: string, statusBefore: OrderStatus): void {
+    if (!this.db) return;
+    const db = this.db;
+    try {
+      cancelPendingJobs(db, orderId, { bills: true, note: NOT_PRINTED_DELETED_TEST });
+      // A cancelled or refunded order's kitchen already heard (its CANCELLED
+      // slip printed then); food handed over needs no slip.
+      if (statusBefore === 'void' || statusBefore === 'refunded' || !kitchenHearsOfClose(statusBefore)) return;
+      const snap = getOrderSnapshot(db, orderId, { includeDeleted: true });
+      if (!snap) return;
+      const policy = getPrintPolicy(db);
+      if (!policy.kitchenTicket) return;
+      const printing = findOpenJob(db, orderId, 'kitchen')?.status === 'in_flight';
+      if (!printing && this.series(snap, 'kitchen', 'kitchen', 'kitchen').prior === 0) return;
+      this.enqueue({
+        kind: 'kitchen',
+        orderId,
+        reprint: false,
+        cancelled: true,
+        requestedByUserId: this.whoIsSignedIn(),
+      });
+    } catch (e) {
+      log.error('Could not tidy the printer queue after a test order was deleted', { orderId, error: String(e) });
+    }
   }
 
   /** The person signed in now, never throwing. */
@@ -591,8 +768,11 @@ class PrintSpooler {
     }
   }
 
-  /** Papers into the print log, one row each (row + sync + audit). */
-  private logPapers(job: PrintJobRow, papers: PlannedPaper[], outcome: PrintOutcome): void {
+  /**
+   * Papers into the print log, one row each (row + sync + audit). `printedAt`:
+   * when they printed, for papers noted late (logKeptPlans).
+   */
+  private logPapers(job: PrintJobRow, papers: PlannedPaper[], outcome: PrintOutcome, printedAt?: string | null): void {
     if (!this.db) return;
     const db = this.db;
     const orderId = job.payload.orderId;
@@ -615,6 +795,7 @@ class PrintSpooler {
             fbrIrn: p.fbrIrn,
             fbrQrPayload: typeof p.fbrQrPayload === 'string' ? p.fbrQrPayload : null,
             fbrMode: p.fbrMode === 'sandbox' || p.fbrMode === 'production' ? p.fbrMode : null,
+            ...(printedAt ? { createdAt: printedAt } : {}),
           },
           this.deviceId,
         );
@@ -626,7 +807,10 @@ class PrintSpooler {
    * The printer took the job: its papers into the log and the job done, in
    * one transaction (a crash in between would log them twice). The log must
    * never keep a printed job open: if it can't be written, the job is still
-   * marked done (and the gap logged).
+   * marked done — KEEPING its sending plan, so the papers are noted before
+   * the next job and the next reprint (logKeptPlans) and the next copy of
+   * that paper still says DUPLICATE. No toast: nobody at the counter can act
+   * on it.
    */
   private finishPrinted(job: PrintJobRow, papers: PlannedPaper[]): void {
     if (!this.db) return;
@@ -637,9 +821,59 @@ class PrintSpooler {
         markJobDone(db, job.id);
       })();
     } catch (e) {
-      log.error('Print log not written for a printed job', { jobId: job.id, orderId: job.orderId, error: String(e) });
-      markJobDone(db, job.id);
+      log.error('Print log not written for a printed job; kept to note later', {
+        jobId: job.id,
+        orderId: job.orderId,
+        error: String(e),
+      });
+      try {
+        if (papers.length > 0) {
+          markJobDoneKeepPlan(db, job.id);
+          this.logBacklog = true;
+        } else {
+          markJobDone(db, job.id);
+        }
+      } catch (e2) {
+        // The job stays in flight with its plan: the next boot notes its
+        // papers as 'unsure' (logCutOffSends), so a copy still says DUPLICATE.
+        log.error('Printed job could not be marked done', { jobId: job.id, error: String(e2) });
+      }
     }
+  }
+
+  /**
+   * Note the papers of printed jobs that could not go into the log when the
+   * printer took them (finishPrinted), at the time they printed, and clear
+   * their plans — each job in one transaction, so a paper is never noted
+   * twice. At boot, then before the next job and the next reprint while any
+   * are waiting. Never throws; what still fails is tried again next time.
+   */
+  private logKeptPlans(): void {
+    if (!this.db) return;
+    const db = this.db;
+    let failed = false;
+    let kept: Array<{ job: PrintJobRow; plan: unknown }>;
+    try {
+      kept = listDoneWithPlan(db);
+    } catch (e) {
+      log.error('Print spooler: could not read printed jobs still to note', { error: String(e) });
+      this.logBacklog = true;
+      return;
+    }
+    for (const { job, plan } of kept) {
+      try {
+        const papers = readPlan(plan);
+        db.transaction(() => {
+          if (papers.length > 0) this.logPapers(job, papers, 'printed', job.completedAt);
+          setSendingPlan(db, job.id, null);
+        })();
+        log.info('Print spooler: noted a printed job late', { jobId: job.id, orderId: job.orderId, papers: papers.length });
+      } catch (e) {
+        failed = true;
+        log.error('Print spooler: a printed job still could not be noted', { jobId: job.id, error: String(e) });
+      }
+    }
+    this.logBacklog = failed;
   }
 
   /** The printer failed after bytes may have gone out: those papers may exist. */
@@ -808,6 +1042,9 @@ class PrintSpooler {
       try {
         // One job at a time keeps prints to a physical printer in order.
         while (true) {
+          // A printed paper not in the log yet is noted before the next job
+          // is rendered: that job may be its copy.
+          if (this.logBacklog) this.logKeptPlans();
           const job = claimNextPendingJob(db);
           if (!job) break;
           await this.runJob(job);
@@ -828,6 +1065,8 @@ class PrintSpooler {
     if (!this.db) return;
     const db = this.db;
     const isDrawer = job.payload.kind === 'drawer';
+    // The drawer_opens row this pulse is for (none on a pulse an older version queued).
+    const drawerOpenId = job.payload.kind === 'drawer' ? job.payload.drawerOpenId : undefined;
     const queuedAt = Date.parse(job.createdAt);
     const deadline = queuedAt + DRAWER_KICK_MAX_AGE_MS;
     const served = () => {
@@ -836,19 +1075,35 @@ class PrintSpooler {
         orderId: job.orderId,
       });
       markJobDone(db, job.id, ALREADY_OPENED_NOTE);
+      this.settleDrawer(drawerOpenId, 'already_open', ALREADY_OPEN_NOTE);
     };
     let result: PrintResult | typeof ALREADY_OPENED;
     /** The papers this send carries, for the print log. */
     let papers: PlannedPaper[] = [];
     try {
-      const snap = getOrderSnapshot(db, job.payload.orderId);
+      let snap = getOrderSnapshot(db, job.payload.orderId);
       if (!snap) {
-        markJobFailedPermanently(db, job.id, 'Order no longer exists');
-        notifyPrintFailure(job, {
-          code: 'order_missing',
-          message: 'Order no longer exists',
-        });
-        return;
+        const gone = getOrderSnapshot(db, job.payload.orderId, { includeDeleted: true });
+        if (gone && gone.order.deleteKind === 'test') {
+          // Deleted as a test order (orders:deleteTest). Only the kitchen's
+          // CANCELLED slip still prints — the line may be cooking it; nothing
+          // else does, and nobody at the counter is bothered with a toast.
+          if (job.payload.kind === 'kitchen' && job.payload.cancelled === true) {
+            snap = gone;
+          } else {
+            markJobDone(db, job.id, NOT_PRINTED_DELETED_TEST);
+            this.settleDrawer(drawerOpenId, 'not_opened', ORDER_GONE_NOTE);
+            return;
+          }
+        } else {
+          markJobFailedPermanently(db, job.id, 'Order no longer exists');
+          this.settleDrawer(drawerOpenId, 'not_opened', ORDER_GONE_NOTE);
+          notifyPrintFailure(job, {
+            code: 'order_missing',
+            message: 'Order no longer exists',
+          }, false, failedPaperWords(db, job));
+          return;
+        }
       }
       if (cancelledMeanwhile(job.payload, snap)) {
         // The order was cancelled after this was queued: a ticket for the
@@ -863,6 +1118,7 @@ class PrintSpooler {
       if (isDrawer && Date.now() > deadline) {
         log.info('Dropped a late cash-drawer pulse', { jobId: job.id, orderId: job.orderId });
         markJobFailedPermanently(db, job.id, 'Too late to open the drawer');
+        this.settleDrawer(drawerOpenId, 'not_opened', TOO_LATE_NOTE);
         notifyDrawerNotOpened(
           job.orderId,
           `${orderLabel(snap)}: the printer did not answer within a minute of the sale.`,
@@ -884,6 +1140,7 @@ class PrintSpooler {
         }
       }
       const toSend = payload;
+      const order: OrderSnapshot = snap;
       result = await this.exclusive(async (): Promise<PrintResult | typeof ALREADY_OPENED> => {
         if (isDrawer) {
           // The lock may have kept a drawer pulse waiting — behind a slow
@@ -891,7 +1148,7 @@ class PrintSpooler {
           if (this.drawerOpenedSince(queuedAt)) return ALREADY_OPENED;
           if (Date.now() > deadline) return tooLate(queuedAt);
         }
-        const rendered = this.render(job, toSend, snap);
+        const rendered = this.render(job, toSend, order);
         papers = rendered.papers;
         // Just before the bytes go out: if the app dies mid-send, boot finds
         // this and logs the papers as 'unsure' (their re-send says DUPLICATE).
@@ -916,6 +1173,10 @@ class PrintSpooler {
     }
     if (result.ok) {
       this.finishPrinted(job, papers);
+      if (isDrawer) {
+        const settled = drawerOutcome(result, this.noPrinterSetUp());
+        this.settleDrawer(drawerOpenId, settled.outcome, settled.note);
+      }
       return;
     }
     // Part of it may be on paper: the log says so, and the retry says
@@ -931,22 +1192,29 @@ class PrintSpooler {
         // Never retried when it may have gone out (it would open twice), nor
         // when the retry would come too late to be any use.
         markJobFailedPermanently(db, job.id, err?.message ?? 'Unknown printer error');
+        if (err?.code === DRAWER_TOO_LATE_CODE) {
+          this.settleDrawer(drawerOpenId, 'not_opened', TOO_LATE_NOTE);
+        } else {
+          const settled = drawerOutcome(result, false);
+          this.settleDrawer(drawerOpenId, settled.outcome, settled.note);
+        }
         notifyDrawerNotOpened(job.orderId, drawerFailureText(err), unsure);
         return;
       }
+      // Retried in a moment: the result is not known yet (the row stays open).
     } else if (!result.error?.recoverable || attempts >= MAX_ATTEMPTS) {
       markJobFailedPermanently(
         db,
         job.id,
         result.error?.message ?? 'Unknown print error',
       );
-      notifyPrintFailure(job, result.error);
+      notifyPrintFailure(job, result.error, false, failedPaperWords(db, job));
       return;
     }
     rescheduleJob(db, job.id, result.error?.message ?? 'unknown', backoff);
     // Say so on the first miss, not after ~12 minutes of silent retries: the
     // kitchen is waiting on that ticket now (it keeps retrying on its own).
-    if (attempts === 1) notifyPrintFailure(job, result.error, true);
+    if (attempts === 1) notifyPrintFailure(job, result.error, true, failedPaperWords(db, job));
     log.warn('Print job will retry', {
       jobId: job.id,
       jobKind: job.jobKind,
@@ -1053,14 +1321,23 @@ class PrintSpooler {
   }
 
   /**
-   * How a paper of this series is marked, from the log: nothing on the
-   * first; a retry of this very job after the printer failed mid-way says
-   * "Printer retry"; a press of a reprint button "Reprint #N" (N counts the
-   * earlier presses and prints, not the printer's attempts); a second paper
-   * the till printed itself "Copy #N". The first paper printed by hand well
-   * after the sale says "Printed later" — and so does a first paper a
-   * manager had to approve (the first SHOP COPY of a current order): every
-   * approved paper carries the approver's name.
+   * How a paper of this series is marked — THE OWNER'S RULE (27 Sep 2026, in
+   * full in order-papers.ts and Settings → Printing rules): a paper the till
+   * prints by itself in the normal flow is the ORIGINAL; every paper printed
+   * with a print button says DUPLICATE, even the first of its kind.
+   *  - By hand (`manual`): "Reprint #N | time | by X" (and "Approved by"),
+   *    N from handReprintNumber — the first hand press of a paper the till
+   *    never printed by itself is Reprint #1.
+   *  - By the till: nothing on the first (hand-pressed copies before it do
+   *    not count: the till's own paper is the original); a retry of this very
+   *    job after the printer failed mid-way says "Printer retry" (a paper may
+   *    already exist); a second paper the till printed itself "Copy #N".
+   *    A job that failed outright logged nothing, so its retry — the
+   *    spooler's own, or "Try again" on the failed-print note — is the
+   *    original.
+   *  - Kitchen tickets: REPRINT / RE-SENT as before (a hand-pressed ticket
+   *    when none ever went out is simply the kitchen's ticket).
+   * A paid RECEIPT after a BILL is its own series, and so is the SHOP COPY.
    */
   private stampFor(
     series: { rows: SeriesPrint[]; legacy: number; prior: number },
@@ -1068,7 +1345,6 @@ class PrintSpooler {
       jobId: string;
       manual: boolean;
       kitchen: boolean;
-      current: boolean;
       requestedBy: string | null;
       approvedBy: string | null;
       names: Map<string, string>;
@@ -1078,35 +1354,45 @@ class PrintSpooler {
     const now = new Date();
     const byName = ctx.requestedBy ? (ctx.names.get(ctx.requestedBy) ?? null) : null;
     const approvedByName = ctx.approvedBy ? (ctx.names.get(ctx.approvedBy) ?? null) : null;
-    if (series.prior === 0) {
-      if (ctx.manual && !ctx.kitchen && (!ctx.current || !!ctx.approvedBy)) {
-        return { kind: 'late', number: 0, printedAt: now, byName, approvedByName };
-      }
-      return null;
-    }
+    // The papers before this job (its own earlier tries are the same paper).
     const others = series.rows.filter((r) => r.printJobId !== ctx.jobId);
     const earlierPapers = new Set(others.map(jobKey)).size + series.legacy;
     // The first paper, when the log has it (one the old version printed is unknown).
     const firstPrintedAt = series.legacy === 0 && series.rows[0] ? new Date(series.rows[0].createdAt) : null;
-    // Nothing but this job's own fumbled attempts — or, for the kitchen,
-    // nothing that surely printed: the kitchen may have no ticket at all.
-    const onlyThisJob = earlierPapers === 0;
-    const nothingSurelyPrinted = series.legacy === 0 && series.rows.every((r) => r.outcome === 'unsure');
-    if (onlyThisJob || (ctx.kitchen && nothingSurelyPrinted)) {
-      return { kind: 'retry', number: 0, printedAt: now, firstPrintedAt };
+
+    if (ctx.kitchen) {
+      if (series.prior === 0) return null;
+      // Nothing but this job's own fumbled attempts — or nothing that surely
+      // printed: the kitchen may have no ticket at all.
+      const nothingSurelyPrinted = series.legacy === 0 && series.rows.every((r) => r.outcome === 'unsure');
+      if (earlierPapers === 0 || nothingSurelyPrinted) return { kind: 'retry', number: 0, printedAt: now, firstPrintedAt };
+      if (ctx.manual) return { kind: 'reprint', number: earlierPapers, printedAt: now, byName, approvedByName, firstPrintedAt };
+      return { kind: 'copy', number: earlierPapers + 1, printedAt: now, firstPrintedAt };
     }
+
+    // "Original: <time>" names the paper that printed as the original (none
+    // yet when only hand-pressed copies went out; unknown for one the version
+    // before the log printed).
+    const original = series.legacy === 0 ? others.find((r) => r.printNo === 0) : undefined;
+    const originalAt = original ? new Date(original.createdAt) : null;
     if (ctx.manual) {
       return {
         kind: 'reprint',
-        number: earlierPapers,
+        number: handReprintNumber(others, series.legacy),
         printedAt: now,
         byName,
         approvedByName,
-        firstPrintedAt,
+        firstPrintedAt: originalAt,
         ...(ctx.fbrCopy ? { fbrCopy: true } : {}),
       };
     }
-    return { kind: 'copy', number: earlierPapers + 1, printedAt: now, firstPrintedAt };
+
+    // Printed by the till itself.
+    if (!seriesHasOriginal(others, series.legacy)) {
+      // The original — unless this job already tried and the paper may exist.
+      return others.length < series.rows.length ? { kind: 'retry', number: 0, printedAt: now, firstPrintedAt } : null;
+    }
+    return { kind: 'copy', number: earlierPapers + 1, printedAt: now, firstPrintedAt: originalAt };
   }
 
   /** Bytes for a job, the printer they go to, and the papers they carry (for the print log). */
@@ -1130,12 +1416,11 @@ class PrintSpooler {
         let names = new Map<string, string>();
         try {
           const series = this.series(snap, document, document, 'kitchen');
-          names = userNames(db, [requestedBy, snap.order.voidedBy]);
+          names = userNames(db, [requestedBy, snap.order.voidedBy, snap.order.deletedBy ?? null]);
           stamp = this.stampFor(series, {
             jobId: job.id,
             manual: reason === MANUAL_REASON,
             kitchen: true,
-            current: true,
             requestedBy,
             approvedBy: null,
             names,
@@ -1143,13 +1428,28 @@ class PrintSpooler {
           });
           printNo = series.prior;
         } catch (e) {
-          log.warn('Print log unreadable; ticket printed without its stamp', { jobId: job.id, error: String(e) });
+          if (reason === MANUAL_REASON) {
+            // Pressed by hand and the log can't say whether a ticket already
+            // printed: RE-SENT / CHECK FOR TICKET BEFORE COOKING — never an
+            // unmarked ticket the kitchen might cook twice.
+            log.warn('Print log unreadable; ticket re-sent marked RE-SENT', { jobId: job.id, error: String(e) });
+            stamp = { kind: 'retry', number: 0, printedAt: new Date() };
+            printNo = 1;
+          } else {
+            log.warn('Print log unreadable; ticket printed without its stamp', { jobId: job.id, error: String(e) });
+          }
         }
+        // Cancelled, refunded, or deleted as a test order while the kitchen had it.
+        const deletedAsTest = snap.order.deleteKind === 'test' && !!snap.order.deletedAt;
+        const cancelledBy = snap.order.voidedBy ?? (deletedAsTest ? (snap.order.deletedBy ?? null) : null);
+        const cancelledAt = snap.order.voidedAt ?? (deletedAsTest ? (snap.order.deletedAt ?? null) : null);
         const cancelInfo: CancelInfo | null = cancelled
           ? {
-              at: snap.order.voidedAt ? new Date(snap.order.voidedAt) : null,
-              byName: snap.order.voidedBy ? (names.get(snap.order.voidedBy) ?? null) : null,
-              reason: snap.order.voidReason,
+              at: cancelledAt ? new Date(cancelledAt) : null,
+              byName: cancelledBy ? (names.get(cancelledBy) ?? null) : null,
+              reason:
+                snap.order.voidReason ??
+                (deletedAsTest ? `Test order${snap.order.deleteReason ? `: ${snap.order.deleteReason}` : ''}` : null),
             }
           : null;
         return {
@@ -1196,7 +1496,6 @@ class PrintSpooler {
         const manual = payload.reason === MANUAL_REASON;
         const requestedBy = payload.requestedByUserId ?? null;
         const approvedBy = payload.approvedByUserId ?? null;
-        const current = isCurrentOrder(snap.order.status, snap.order.paidAt ?? snap.order.createdAt, Date.now());
         const names = userNames(db, [
           requestedBy,
           approvedBy,
@@ -1242,17 +1541,37 @@ class PrintSpooler {
               jobId: job.id,
               manual,
               kitchen: false,
-              // "Printed later" is for a receipt or a bill; a cancelled-order
-              // or refund slip already says when it happened.
-              current: current || (document !== 'receipt' && document !== 'bill'),
               requestedBy,
               approvedBy,
               names,
               fbrCopy: document === 'receipt' && copy === 'customer' && isFbrCopy(series, fbrSale.fbr?.irn ?? null),
             });
-            printNo = series.prior;
+            // 0 = it printed as the original; a DUPLICATE is at least 1 (a
+            // hand-pressed first paper too — order-papers.ts).
+            printNo = stamp === null ? 0 : Math.max(series.prior, 1);
           } catch (e) {
-            log.warn('Print log unreadable; receipt printed without its stamp', { jobId: job.id, error: String(e) });
+            if (manual) {
+              // Pressed for by hand and the log can't say whether this paper
+              // already printed: fail safe — it says DUPLICATE, without a
+              // number (and counts as a reprint in the log). A paper the till
+              // prints by itself (payment, dispatch, refund) prints unmarked:
+              // a sale's first receipt is never marked DUPLICATE by an error.
+              log.warn('Print log unreadable; paper pressed for by hand marked DUPLICATE', {
+                jobId: job.id,
+                error: String(e),
+              });
+              stamp = {
+                kind: 'reprint',
+                number: 0,
+                numberUnknown: true,
+                printedAt: new Date(),
+                byName: requestedBy ? (names.get(requestedBy) ?? null) : null,
+                approvedByName: approvedBy ? (names.get(approvedBy) ?? null) : null,
+              };
+              printNo = 1;
+            } else {
+              log.warn('Print log unreadable; receipt printed without its stamp', { jobId: job.id, error: String(e) });
+            }
           }
           const opts: Omit<RenderReceiptOpts, 'logo'> = {
             width,
@@ -1450,37 +1769,6 @@ function adapterKey(config: PrinterConnectionConfig): string {
 }
 
 /**
- * Why the drawer did not open, in words for the counter. Never says "try
- * again" when the pulse may already have gone out.
- */
-export function drawerFailureText(err?: PrintResult['error']): string {
-  if (!err) return 'The printer did not take the drawer pulse.';
-  if (err.maybeSent) {
-    return 'The printer had a problem mid-way. Check the drawer: if it is shut, use the key. It may still open by itself when the printer is fixed.';
-  }
-  switch (err.code) {
-    case DRAWER_TOO_LATE_CODE:
-      return 'The printer was busy or slow for too long, so the till did not open the drawer late.';
-    case PRINTER_STARTING_CODE:
-      return 'The till is still getting the printer ready, so nothing was sent. Try again in a few seconds.';
-    case 'printer_offline':
-      return err.message
-        ? `The printer is not ready. ${err.message}`
-        : 'The printer is off, offline, out of paper or its lid is open.';
-    case 'printer_not_sent':
-      return `Windows did not take the drawer pulse. Check the printer is on and plugged in. (${err.message})`;
-    case 'network_error':
-    case 'timeout':
-      return "The printer didn't answer. Check it is switched on and connected.";
-    case 'no_config':
-    case 'bad_printer_name':
-      return 'No receipt printer is set up (Settings → Printers).';
-    default:
-      return err.message || 'The printer did not take the drawer pulse.';
-  }
-}
-
-/**
  * Tell every till window the drawer did not open (warning toast "use the
  * key"), or — `unsure` — that it may or may not have opened.
  */
@@ -1500,10 +1788,39 @@ export function notifyDrawerNotOpened(
   }
 }
 
+/**
+ * What failed, in the note's words: "Receipt for Order #0041", "Kitchen
+ * ticket for Order #0042", "Refund slip for Order #0031". Two failures with
+ * the same printer error must never look like one note — each has its own
+ * "Try again", the only way to still get the till's ORIGINAL paper. Never
+ * throws (a note without the order is better than none).
+ */
+export function failedPaperWords(db: AppDatabase, job: PrintJobRow): string | null {
+  const p = job.payload;
+  try {
+    const snap = job.orderId ? getOrderSnapshot(db, job.orderId, { includeDeleted: true }) : null;
+    const order = snap ? ` for ${orderLabel(snap)}` : '';
+    let paper: string;
+    if (p.kind === 'kitchen') paper = p.cancelled === true ? 'Kitchen CANCELLED slip' : 'Kitchen ticket';
+    else if (p.kind === 'drawer') paper = 'Cash drawer';
+    else if (p.reason === 'refund') paper = 'Refund slip';
+    else if (!snap) paper = 'Receipt';
+    else {
+      const doc = receiptDocumentFor(snap);
+      paper = doc === 'bill' ? 'Bill' : doc === 'void' ? 'Cancelled-order slip' : 'Receipt';
+    }
+    if (p.kind === 'receipt' && p.reason === MANUAL_REASON) paper = `${paper} copy`;
+    return `${paper}${order}`;
+  } catch {
+    return null;
+  }
+}
+
 function notifyPrintFailure(
   job: PrintJobRow,
   error?: { code: string; message: string },
   retrying = false,
+  what: string | null = null,
 ): void {
   if (!retrying) {
     log.error('Print job failed permanently', {
@@ -1516,8 +1833,13 @@ function notifyPrintFailure(
   }
   for (const w of BrowserWindow.getAllWindows()) {
     w.webContents.send('printer:failed', {
+      // "Try again" on the note sends this very job again (printer:retryJob).
+      jobId: job.id,
       jobKind: job.jobKind,
       orderId: job.orderId ?? undefined,
+      // Which paper of which order ("Receipt for Order #0041"): notes about
+      // two orders never look like one.
+      ...(what ? { what } : {}),
       error,
       retrying,
     });

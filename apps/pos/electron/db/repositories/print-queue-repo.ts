@@ -51,6 +51,12 @@ export interface KitchenJobPayload {
 export interface DrawerJobPayload {
   kind: 'drawer';
   orderId: string;
+  /**
+   * The drawer_opens row this pulse is for (migration 0040), written in the
+   * same transaction as the cash: the job settles it (opened / not opened /
+   * unsure…). Absent on a pulse an older version queued.
+   */
+  drawerOpenId?: string;
 }
 
 export type PrintJobPayload = ReceiptJobPayload | KitchenJobPayload | DrawerJobPayload;
@@ -92,6 +98,7 @@ interface RawPayload {
   refundAt?: unknown;
   requestedByUserId?: unknown;
   approvedByUserId?: unknown;
+  drawerOpenId?: unknown;
 }
 
 /** A user id kept only when it is one (a string); anything else is dropped. */
@@ -107,7 +114,9 @@ function parsePayload(kind: PrintJobKind, json: string): PrintJobPayload {
         ? { kind, orderId: raw.orderId, reprint: false, cancelled: true, ...optId(raw.requestedByUserId) }
         : { kind, orderId: raw.orderId, reprint: raw.reprint === true, ...optId(raw.requestedByUserId) };
     case 'drawer':
-      return { kind, orderId: raw.orderId };
+      return typeof raw.drawerOpenId === 'string' && raw.drawerOpenId
+        ? { kind, orderId: raw.orderId, drawerOpenId: raw.drawerOpenId }
+        : { kind, orderId: raw.orderId };
     default:
       // Rows queued before 0.5.7 carry only { orderId, openDrawer }.
       return {
@@ -226,6 +235,48 @@ export function markJobDone(db: AppDatabase, id: string, note: string | null = n
   ).run(now, now, note, id);
 }
 
+/** What a printed job whose papers are still to go into the print log says. */
+export const LOG_PENDING_NOTE = 'Printed; print log not written yet';
+
+/**
+ * The printer took the job but its papers could not be put in the print log
+ * (document_prints) just then: the job is done — it must never print again —
+ * and KEEPS its sending plan, so the papers are noted as soon as the log can
+ * be written (the spooler's logKeptPlans). Without the plan the next copy of
+ * that paper would print as an original.
+ */
+export function markJobDoneKeepPlan(db: AppDatabase, id: string, note: string = LOG_PENDING_NOTE): void {
+  const now = nowIso();
+  db.prepare(
+    `UPDATE print_queue SET status = 'done', completed_at = ?, updated_at = ?, last_error = ?
+      WHERE id = ?`,
+  ).run(now, now, note, id);
+}
+
+/**
+ * Printed jobs whose papers are not in the print log yet (markJobDoneKeepPlan),
+ * oldest first. Never the "legacy" ones migration 0030 marked.
+ */
+export function listDoneWithPlan(db: AppDatabase): Array<{ job: PrintJobRow; plan: unknown }> {
+  const rows = db
+    .prepare(
+      `SELECT ${SELECT}, sending_plan_json AS plan FROM print_queue
+        WHERE status = 'done' AND sending_plan_json IS NOT NULL AND sending_plan_json != '"legacy"'
+        ORDER BY rowid`,
+    )
+    .all() as Array<RawRow & { plan: string }>;
+  const out: Array<{ job: PrintJobRow; plan: unknown }> = [];
+  for (const r of rows) {
+    try {
+      out.push({ job: rowToJob(r), plan: JSON.parse(r.plan) as unknown });
+    } catch {
+      // Unreadable: nothing can be noted from it (and nothing to retry).
+      out.push({ job: rowToJob(r), plan: null });
+    }
+  }
+  return out;
+}
+
 /**
  * A job not yet finished — pending (due, in backoff or waiting for FBR) or
  * being sent now — for this order and kind. For receipts, one that prints
@@ -251,6 +302,29 @@ export function findOpenJob(
     const p = job.payload;
     if (p.kind === 'kitchen' && p.cancelled !== true) return job;
     if (p.kind === 'receipt' && p.reason !== 'refund' && p.copies.includes(copy)) return job;
+  }
+  return null;
+}
+
+/**
+ * The till's OWN customer paper for this order (a sale receipt or bill the
+ * till queued by itself — not a press, not a refund slip) that the printer
+ * gave up on, while it is still the newest such job for the order: nothing
+ * was printed or pressed for since. Sending it again (requeueFailedJob)
+ * prints the ORIGINAL the customer never got — the order panel offers that
+ * in place of its print button, which would print a DUPLICATE (the owner's
+ * rule; "Try again" on the failed-print note does the same).
+ */
+export function findFailedOwnJob(db: AppDatabase, orderId: string, copy: ReceiptCopy = 'customer'): PrintJobRow | null {
+  const rows = db
+    .prepare(`SELECT ${SELECT} FROM print_queue WHERE order_id = ? AND job_kind = 'receipt' ORDER BY rowid DESC`)
+    .all(orderId) as RawRow[];
+  for (const r of rows) {
+    const job = rowToJob(r);
+    const p = job.payload;
+    if (p.kind !== 'receipt' || p.reason === 'refund' || !p.copies.includes(copy)) continue;
+    // The newest paper job of this series decides: a press or a later paper since means no.
+    return job.status === 'failed' && p.reason !== 'reprint' ? job : null;
   }
   return null;
 }
@@ -362,6 +436,31 @@ export function deferJob(db: AppDatabase, id: string, delayMs: number): void {
   ).run(new Date(now + delayMs).toISOString(), new Date(now).toISOString(), id);
 }
 
+/**
+ * "Try again" on the failed-print note: a receipt or kitchen job the spooler
+ * gave up on goes back in the queue AS IT WAS — same job, same reason — so a
+ * paper the till prints by itself is still the original when it finally
+ * prints (the owner's rule; a job that failed outright logged nothing). A
+ * drawer pulse is never sent again (too late: the key). Returns the job's
+ * order when it was re-queued, null when there was nothing to try again.
+ */
+export function requeueFailedJob(db: AppDatabase, id: string): { orderId: string | null; kind: PrintJobKind } | null {
+  const row = db
+    .prepare(`SELECT order_id AS orderId, job_kind AS kind FROM print_queue WHERE id = ? AND status = 'failed'`)
+    .get(id) as { orderId: string | null; kind: PrintJobKind } | undefined;
+  if (!row || (row.kind !== 'receipt' && row.kind !== 'kitchen')) return null;
+  const now = nowIso();
+  const r = db
+    .prepare(
+      `UPDATE print_queue
+          SET status = 'pending', attempts = 0, next_attempt_at = ?, last_error = NULL, updated_at = ?,
+              sending_plan_json = NULL
+        WHERE id = ? AND status = 'failed'`,
+    )
+    .run(now, now, id);
+  return Number(r.changes) > 0 ? row : null;
+}
+
 export function markJobFailedPermanently(
   db: AppDatabase,
   id: string,
@@ -422,16 +521,17 @@ export function listRecentFailedJobs(db: AppDatabase, limit = 20): PrintJobRow[]
 }
 
 /**
- * Finished jobs past their keep time. The ones printed before the print log
- * existed (marked "legacy" by migration 0030) stay: they are the only record
- * that those receipts went out, so a reprint of them still says DUPLICATE.
+ * Finished jobs past their keep time. Only jobs with no plan left: the ones
+ * printed before the print log existed (marked "legacy" by migration 0030)
+ * stay — they are the only record that those receipts went out, so a reprint
+ * of them still says DUPLICATE — and so does a printed job whose papers are
+ * still waiting to go into the log (markJobDoneKeepPlan).
  */
 export function purgeOldDoneJobs(db: AppDatabase, olderThanIso: string): number {
   const result = db
     .prepare(
       `DELETE FROM print_queue
-        WHERE status = 'done' AND completed_at < ?
-          AND (sending_plan_json IS NULL OR sending_plan_json != '"legacy"')`,
+        WHERE status = 'done' AND completed_at < ? AND sending_plan_json IS NULL`,
     )
     .run(olderThanIso);
   return result.changes;

@@ -9,7 +9,11 @@ import { MANUAL_REASON, duplicatePressesSql, type PrintReason } from '../print-l
  * The print log (migrations/0030_document_prints.sql): one row per paper the
  * till put out for an order, or may have. The spooler reads it to decide
  * ORIGINAL or DUPLICATE ("Reprint #2") and writes it once the printer took
- * the bytes. Each row is a synced business row plus a hash-chained audit entry
+ * the bytes. print_no is 0 for a paper that printed as the ORIGINAL; for one
+ * marked DUPLICATE (or REPRINT / RE-SENT) it is how many papers of its series
+ * went out before it, at least 1 — since the owner's rule (27 Sep 2026) a
+ * paper printed with a print button always says DUPLICATE, even the first of
+ * its kind (services/order-papers.ts). Each row is a synced business row plus a hash-chained audit entry
  * (print_original / print_duplicate / print_unsure: who, which order, which
  * copy), so reprints are on the record like voids and no-sale opens.
  *
@@ -46,6 +50,12 @@ export interface RecordDocumentPrintInput {
   fbrQrPayload?: string | null;
   /** Whether that number was a sandbox (test) or a production one. */
   fbrMode?: LoggedFbrMode | null;
+  /**
+   * When the paper printed, if that was before now: a paper noted late (the
+   * log could not be written when the printer took it) keeps its place in
+   * its series. Defaults to now.
+   */
+  createdAt?: string | null;
 }
 
 export type LoggedFbrMode = 'sandbox' | 'production';
@@ -82,7 +92,10 @@ export function docKeyFor(document: PrintedDocument, refundAt?: string | null): 
  */
 export function recordDocumentPrint(db: AppDatabase, input: RecordDocumentPrintInput, deviceId: string): string {
   const id = uuidv7();
-  const now = nowIso();
+  const updatedAt = nowIso();
+  // The print time, when it is known and earlier (a paper noted late); never a time still to come.
+  const at = typeof input.createdAt === 'string' && Number.isFinite(Date.parse(input.createdAt)) ? input.createdAt : null;
+  const now = at !== null && at < updatedAt ? at : updatedAt;
   const fbrIrn = input.fbrIrn ?? null;
   const fbrQrPayload = fbrIrn ? (input.fbrQrPayload ?? null) : null;
   const fbrMode = fbrIrn ? (input.fbrMode ?? null) : null;
@@ -140,7 +153,7 @@ export function recordDocumentPrint(db: AppDatabase, input: RecordDocumentPrintI
         fbrQrPayload,
         fbrMode,
         now,
-        now,
+        updatedAt,
         deviceId,
       );
     },
@@ -170,6 +183,54 @@ export function listSeriesPrints(db: AppDatabase, orderId: string, docKey: strin
     approvedByUserId: (r['approvedByUserId'] as string | null) ?? null,
     fbrIrn: (r['fbrIrn'] as string | null) ?? null,
     createdAt: String(r['createdAt']),
+  }));
+}
+
+/** One paper of an order, any series, with the names of who asked and who approved. */
+export interface OrderPrintRow extends SeriesPrint {
+  document: PrintedDocument;
+  docKey: string;
+  copy: PrintedCopy;
+  requestedByName: string | null;
+  approvedByName: string | null;
+  /** The till that printed it. */
+  deviceId: string;
+}
+
+/**
+ * Every paper of an order in the print log — both tills' (the log syncs) —
+ * oldest first: the order panel's "Papers printed".
+ */
+export function listOrderPapers(db: AppDatabase, orderId: string): OrderPrintRow[] {
+  const rows = db
+    .prepare(
+      `SELECT d.id, d.document, d.doc_key AS docKey, d.copy, d.print_no AS printNo, d.outcome, d.reason,
+              d.print_job_id AS printJobId, d.requested_by_user_id AS requestedByUserId,
+              d.approved_by_user_id AS approvedByUserId, d.fbr_irn AS fbrIrn, d.created_at AS createdAt,
+              d.device_id AS deviceId, ur.full_name AS requestedByName, ua.full_name AS approvedByName
+         FROM document_prints d
+         LEFT JOIN users ur ON ur.id = d.requested_by_user_id
+         LEFT JOIN users ua ON ua.id = d.approved_by_user_id
+        WHERE d.order_id = ? AND d.deleted_at IS NULL
+        ORDER BY d.created_at, d.id`,
+    )
+    .all(orderId) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    id: String(r['id']),
+    document: String(r['document']) as PrintedDocument,
+    docKey: String(r['docKey']),
+    copy: String(r['copy']) as PrintedCopy,
+    printNo: Number(r['printNo']),
+    outcome: r['outcome'] === 'unsure' ? 'unsure' : 'printed',
+    reason: String(r['reason']),
+    printJobId: (r['printJobId'] as string | null) ?? null,
+    requestedByUserId: (r['requestedByUserId'] as string | null) ?? null,
+    approvedByUserId: (r['approvedByUserId'] as string | null) ?? null,
+    fbrIrn: (r['fbrIrn'] as string | null) ?? null,
+    createdAt: String(r['createdAt']),
+    deviceId: String(r['deviceId']),
+    requestedByName: (r['requestedByName'] as string | null) ?? null,
+    approvedByName: (r['approvedByName'] as string | null) ?? null,
   }));
 }
 
@@ -260,7 +321,7 @@ function isSaleReceiptFor(p: JobPayloadBits, copy: PrintedCopy): boolean {
   return copies.includes(copy);
 }
 
-/** DUPLICATE papers printed by hand (the Reprint button) per order, one per press. For Order History. */
+/** Papers printed AGAIN by hand (a print button, after an earlier paper of the same kind) per order, one per press. For Order History. */
 export function reprintCounts(db: AppDatabase, orderIds: readonly string[]): Record<string, number> {
   const out: Record<string, number> = {};
   const ids = [...new Set(orderIds)].filter((x) => typeof x === 'string' && x.length > 0);

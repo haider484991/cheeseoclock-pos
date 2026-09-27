@@ -2,7 +2,7 @@ import * as RadixToast from '@radix-ui/react-toast';
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { cn } from '@cheeseoclock/ui';
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
-import { addToast, toastDuration, visibleToasts, type ToastItem, type ToastVariant } from './toastQueue';
+import { addToast, toastDuration, visibleToasts, type ToastAction, type ToastItem, type ToastVariant } from './toastQueue';
 
 interface ToastContextValue {
   toast: (input: {
@@ -14,6 +14,8 @@ interface ToastContextValue {
      * a success is capped at a few seconds (see toastQueue.ts).
      */
     duration?: number;
+    /** One button on the note; pressing it closes the note. */
+    action?: ToastAction;
   }) => void;
 }
 
@@ -57,7 +59,7 @@ const ICON_TONE: Record<ToastVariant, string> = {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
 
-  const toast = useCallback<ToastContextValue['toast']>(({ title, description, variant = 'info', duration }) => {
+  const toast = useCallback<ToastContextValue['toast']>(({ title, description, variant = 'info', duration, action }) => {
     setItems((prev) =>
       addToast(prev, {
         id: crypto.randomUUID(),
@@ -65,6 +67,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         description,
         variant,
         duration: toastDuration(variant, duration),
+        ...(action ? { action } : {}),
       }),
     );
   }, []);
@@ -115,6 +118,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   </RadixToast.Description>
                 )}
               </div>
+              {t.action && (
+                <RadixToast.Action
+                  altText={t.action.label}
+                  onClick={() => {
+                    t.action?.onClick();
+                    dismiss(t.id);
+                  }}
+                  className="-my-0.5 h-10 shrink-0 whitespace-nowrap rounded-lg border border-black/15 px-3 text-sm font-semibold transition hover:bg-black/5 dark:border-white/25 dark:hover:bg-white/10"
+                >
+                  {t.action.label}
+                </RadixToast.Action>
+              )}
               <RadixToast.Close
                 aria-label="Close"
                 title="Close"

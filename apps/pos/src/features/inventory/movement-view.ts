@@ -64,16 +64,20 @@ const WASTE_WHY: Partial<Record<string, string>> = {
 
 /**
  * The Details column: "Order #42 · Cancelled, not made — put back",
- * "Order #42 · Cancelled after cooking — counted as waste".
+ * "Order #42 · Cancelled after cooking — counted as waste", and for a test
+ * order the owner deleted "Order #42 (deleted test) · Test order deleted…".
  */
 export function movementDetails(m: {
   orderNumber: string | null;
+  orderDeletedAsTest?: boolean | undefined;
   refPurchaseOrderId: string | null;
   purchaseOrderRef: string | null;
   notes: string | null;
 }): string {
   return [
-    m.orderNumber ? `Order #${m.orderNumber.split('-').pop() ?? m.orderNumber}` : null,
+    m.orderNumber
+      ? `Order #${m.orderNumber.split('-').pop() ?? m.orderNumber}${m.orderDeletedAsTest ? ' (deleted test)' : ''}`
+      : null,
     m.refPurchaseOrderId && !(m.notes ?? '').startsWith('PO ') ? `PO ${m.purchaseOrderRef ?? m.refPurchaseOrderId.slice(0, 8)}` : null,
     m.notes,
   ]

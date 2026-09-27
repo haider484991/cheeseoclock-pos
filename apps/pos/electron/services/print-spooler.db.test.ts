@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { escPosToText } from '@cheeseoclock/printer-core';
 import type {
   Cents,
+  DrawerOpenKind,
   OrderNumber,
   OrderSnapshot,
   PrintResult,
@@ -33,6 +34,7 @@ import type {
   UUID,
 } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
+import { recordDrawerOpen } from '../db/repositories/drawer-open-repo.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
@@ -88,7 +90,12 @@ vi.mock('../adapters/printer/factory.js', () => ({
   }),
 }));
 vi.mock('../db/repositories/order-repo.js', () => ({
-  getOrderSnapshot: (_db: unknown, id: string) => h.snapshots.get(id) ?? null,
+  // A deleted order (a test the owner deleted, 0041) is found only with includeDeleted, as in order-repo.
+  getOrderSnapshot: (_db: unknown, id: string, opts: { includeDeleted?: boolean } = {}) => {
+    const snap = h.snapshots.get(id);
+    if (!snap) return null;
+    return snap.order.deletedAt && opts.includeDeleted !== true ? null : snap;
+  },
 }));
 
 // ------------------------------------------------------------------ the db --
@@ -254,6 +261,26 @@ function queueRows(db: AppDatabase, orderId: string, kind?: string) {
     .all(...(kind ? [orderId, kind] : [orderId])) as Array<{ id: string; kind: string; status: string; attempts: number }>;
 }
 
+/**
+ * The drawer_opens row the repository writes WITH the cash (migration 0040):
+ * the pulse is for it — no row, no pulse.
+ */
+function cash(kind: 'sale' | 'refund' = 'sale'): { drawerOpenId: string } {
+  const amountCents = kind === 'refund' ? -116_000 : 116_000;
+  return { drawerOpenId: recordDrawerOpen(db, { kind, amountCents }, { userId: 'u1', deviceId: 'dev-test' }).id };
+}
+/** A row for a pulse by hand (Open drawer), or for the float / cash in / out. */
+function hand(kind: DrawerOpenKind = 'no_sale'): string {
+  return recordDrawerOpen(db, { kind }, { userId: 'u1', deviceId: 'dev-test' }).id;
+}
+/** What the drawer log says about one open (0040). */
+function drawerRow(id: string): { outcome: string | null; note: string | null } {
+  return db.prepare(`SELECT outcome, outcome_note AS note FROM drawer_opens WHERE id = ?`).get(id) as {
+    outcome: string | null;
+    note: string | null;
+  };
+}
+
 // ----------------------------------------------------------------- tests --
 
 let db: AppDatabase;
@@ -297,7 +324,7 @@ function clockAhead(ms: () => number): void {
 describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
   it('a cash sale opens the drawer first, before the kitchen ticket and the receipt, exactly once', async () => {
     const s = await spooler();
-    s.onOrderEvent(order('o0001', 'takeaway'), 'paid', { cash: true });
+    s.onOrderEvent(order('o0001', 'takeaway'), 'paid', cash());
     await s.whenIdle();
     expect(sentKinds()).toEqual(['drawer', 'kitchen', 'receipt']);
     expect(h.sends[0]!.opts).toMatchObject({ drawer: true });
@@ -316,7 +343,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
       ['o0003', 'easypaisa', 'dine_in'],
       ['o0004', 'foodpanda', 'foodpanda'],
     ] as const) {
-      s.onOrderEvent(order(oid, mode, [{ method, amount: 116_000 }]), 'paid', { cash: false });
+      s.onOrderEvent(order(oid, mode, [{ method, amount: 116_000 }]), 'paid', {});
     }
     await s.whenIdle();
     expect(totalKicks()).toBe(0);
@@ -330,7 +357,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
       { method: 'cash', amount: 60_000 },
       { method: 'card', amount: 56_000 },
     ]);
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     expect(totalKicks()).toBe(1);
     expect(queueRows(db, oid, 'drawer')).toHaveLength(1);
@@ -340,7 +367,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
     const s = await spooler();
     const { getPrintPolicy, setPrintPolicy } = await import('./printer-config.js');
     setPrintPolicy(db, { ...getPrintPolicy(db), shopCopy: 'always' });
-    s.onOrderEvent(order('o0006', 'takeaway'), 'paid', { cash: true });
+    s.onOrderEvent(order('o0006', 'takeaway'), 'paid', cash());
     await s.whenIdle();
     const receipt = h.sends[sentKinds().indexOf('receipt')]!;
     expect(escPosToText(receipt.bytes)).toContain('SHOP COPY');
@@ -350,12 +377,12 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
 
   it('a cash refund opens it before the refund slip; a card refund does not', async () => {
     const s = await spooler();
-    s.onOrderEvent(order('o0007', 'takeaway'), 'refunded', { cash: true });
+    s.onOrderEvent(order('o0007', 'takeaway'), 'refunded', cash('refund'));
     await s.whenIdle();
     expect(sentKinds()).toEqual(['drawer', 'receipt']);
     expect(totalKicks()).toBe(1);
     h.sends.length = 0;
-    s.onOrderEvent(order('o0008', 'takeaway', [{ method: 'card', amount: 116_000 }]), 'refunded', { cash: false });
+    s.onOrderEvent(order('o0008', 'takeaway', [{ method: 'card', amount: 116_000 }]), 'refunded', {});
     await s.whenIdle();
     expect(sentKinds()).toEqual(['receipt']);
     expect(totalKicks()).toBe(0);
@@ -365,7 +392,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
     const s = await spooler();
     // Paid up front in cash; the bill prints at dispatch.
     const d1 = order('o0011', 'delivery');
-    s.onOrderEvent(d1, 'paid', { cash: true });
+    s.onOrderEvent(d1, 'paid', cash());
     await s.whenIdle();
     expect(sentKinds()).toEqual(['drawer', 'kitchen']);
     s.onOrderEvent(d1, 'dispatched');
@@ -380,7 +407,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
     s.onOrderEvent(d2, 'dispatched');
     await s.whenIdle();
     expect(sentKinds()).toEqual(['kitchen', 'receipt']);
-    s.onOrderEvent(d2, 'payment_captured', { cash: true });
+    s.onOrderEvent(d2, 'payment_captured', cash());
     await s.whenIdle();
     expect(sentKinds()).toEqual(['kitchen', 'receipt', 'drawer']);
     expect(queueRows(db, d2, 'drawer')).toHaveLength(1);
@@ -388,7 +415,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
     // No bill went out yet: the pulse, then the receipt.
     h.sends.length = 0;
     const d3 = order('o0013', 'delivery');
-    s.onOrderEvent(d3, 'payment_captured', { cash: true });
+    s.onOrderEvent(d3, 'payment_captured', cash());
     await s.whenIdle();
     expect(sentKinds()).toEqual(['drawer', 'receipt']);
     expect(totalKicks()).toBe(1);
@@ -404,7 +431,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
       drawer: { pin: 5, pulseMs: 100 },
     });
     s.resetAdapter();
-    s.onOrderEvent(order('o0014', 'takeaway'), 'paid', { cash: true });
+    s.onOrderEvent(order('o0014', 'takeaway'), 'paid', cash());
     await s.whenIdle();
     const first = h.sends[0]!;
     expect(first.config.drawer).toEqual({ pin: 5, pulseMs: 100 });
@@ -436,7 +463,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when it opens', () => {
     enqueuePrintJob(db, { kind: 'receipt', orderId: oa, openDrawer: false, copies: ['customer'], reason: 'payment' });
     await s.whenIdle();
     expect(h.sends).toHaveLength(0); // waiting for FBR, not holding the queue
-    s.onOrderEvent(order('o0024', 'takeaway'), 'paid', { cash: true });
+    s.onOrderEvent(order('o0024', 'takeaway'), 'paid', cash());
     await s.whenIdle();
     expect(sentKinds().slice(0, 1)).toEqual(['drawer']);
     const receipt = queueRows(db, oa, 'receipt')[0]!;
@@ -450,7 +477,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when the printer fails', () => {
     const s = await spooler();
     h.script.push(failCode('printer_offline'));
     const oid = order('o0031', 'takeaway');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     const [job] = queueRows(db, oid, 'drawer');
     expect(job).toMatchObject({ status: 'pending', attempts: 1 });
@@ -479,7 +506,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when the printer fails', () => {
     const s = await spooler();
     h.script.push(failCode('printer_maybe_sent', { recoverable: false, maybeSent: true }));
     const oid = order('o0032', 'takeaway');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     expect(drawerSends()).toBe(1);
     expect(queueRows(db, oid, 'drawer')[0]!.status).toBe('failed');
@@ -492,7 +519,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when the printer fails', () => {
     // A timeout that may have delivered it is treated the same way.
     h.sends.length = 0;
     h.script.push(failCode('timeout', { recoverable: true, maybeSent: true }));
-    s.onOrderEvent(order('o0033', 'takeaway'), 'paid', { cash: true });
+    s.onOrderEvent(order('o0033', 'takeaway'), 'paid', cash());
     await s.whenIdle();
     expect(drawerSends()).toBe(1);
     expect(queueRows(db, 'o0033', 'drawer')[0]!.status).toBe('failed');
@@ -502,7 +529,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: when the printer fails', () => {
     const s = await spooler();
     h.script.push(failCode('printer_offline'));
     const oid = order('o0034', 'takeaway');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     const [job] = queueRows(db, oid, 'drawer');
     // 50 s after the sale the second try fails too; the third would be 30 s later.
@@ -530,11 +557,11 @@ describe.skipIf(!DatabaseSync)('cash drawer: when the printer fails', () => {
           release = () => resolve(failCode('printer_offline')());
         }),
     );
-    const held = s.kickDrawerNow();
+    const held = s.kickDrawerNow({ drawerOpenId: hand() });
     await vi.waitFor(() => expect(h.sends).toHaveLength(1));
     // A cash sale now: its pulse is claimed and waits for the printer.
     const oid = order('o0037', 'takeaway');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     expect(queueRows(db, oid, 'drawer')[0]!.status).toBe('in_flight');
     // …for over a minute.
     clockAhead(() => 61_000);
@@ -580,7 +607,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: never twice for the same cash', () 
     const s = await spooler();
     h.script.push(failCode('printer_offline'));
     const oid = order('o0041', 'takeaway');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     const [job] = queueRows(db, oid, 'drawer');
     expect(job).toMatchObject({ status: 'pending', attempts: 1 });
@@ -588,7 +615,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: never twice for the same cash', () 
     // The printer is back; a manager presses Open drawer (or a cash in / out,
     // a shift open, Open drawer to count) a few seconds after the sale.
     backdate(db, job!.id, 3_000);
-    expect((await s.kickDrawerNow()).ok).toBe(true);
+    expect((await s.kickDrawerNow({ drawerOpenId: hand() })).ok).toBe(true);
     expect(drawerSends()).toBe(2);
     // The sale's retry comes due: the drawer already opened for that cash.
     backdate(db, job!.id, 3_000);
@@ -609,10 +636,10 @@ describe.skipIf(!DatabaseSync)('cash drawer: never twice for the same cash', () 
     const o1 = order('o0042', 'takeaway');
     const o2 = order('o0043', 'takeaway');
     h.script.push(failCode('printer_offline'));
-    s.onOrderEvent(o1, 'paid', { cash: true });
+    s.onOrderEvent(o1, 'paid', cash());
     await s.whenIdle();
     h.script.push(failCode('printer_offline'));
-    s.onOrderEvent(o2, 'paid', { cash: true });
+    s.onOrderEvent(o2, 'paid', cash());
     await s.whenIdle();
     expect(drawerSends()).toBe(2);
     const j1 = queueRows(db, o1, 'drawer')[0]!;
@@ -629,12 +656,12 @@ describe.skipIf(!DatabaseSync)('cash drawer: never twice for the same cash', () 
     const s = await spooler();
     h.script.push(failCode('printer_offline'));
     const oid = order('o0044', 'takeaway');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     const job = queueRows(db, oid, 'drawer')[0]!;
     backdate(db, job.id, 3_000);
     h.script.push(failCode('printer_offline'));
-    expect((await s.kickDrawerNow()).ok).toBe(false);
+    expect((await s.kickDrawerNow({ drawerOpenId: hand() })).ok).toBe(false);
     backdate(db, job.id, 3_000);
     await s.whenIdle();
     expect(drawerSends()).toBe(3); // the sale's, the hand-pressed one, the retry
@@ -649,12 +676,12 @@ describe.skipIf(!DatabaseSync)('cash drawer: never twice for the same cash', () 
     const s = await spooler();
     h.script.push(failCode('printer_offline'));
     const oid = order('o0045', 'takeaway');
-    s.onOrderEvent(oid, 'paid', { cash: true });
+    s.onOrderEvent(oid, 'paid', cash());
     await s.whenIdle();
     const job = queueRows(db, oid, 'drawer')[0]!;
     backdate(db, job.id, 3_000);
     h.script.push(failCode('timeout', { maybeSent: true }));
-    expect((await s.kickDrawerNow()).error?.maybeSent).toBe(true);
+    expect((await s.kickDrawerNow({ drawerOpenId: hand() })).error?.maybeSent).toBe(true);
     backdate(db, job.id, 3_000);
     await s.whenIdle();
     expect(drawerSends()).toBe(2);
@@ -663,9 +690,9 @@ describe.skipIf(!DatabaseSync)('cash drawer: never twice for the same cash', () 
 
   it('a sale after the drawer opened still opens it', async () => {
     const s = await spooler();
-    expect((await s.kickDrawerNow()).ok).toBe(true);
+    expect((await s.kickDrawerNow({ drawerOpenId: hand() })).ok).toBe(true);
     await new Promise((r) => setTimeout(r, 5));
-    s.onOrderEvent(order('o0046', 'takeaway'), 'paid', { cash: true });
+    s.onOrderEvent(order('o0046', 'takeaway'), 'paid', cash());
     await s.whenIdle();
     expect(drawerSends()).toBe(2);
   });
@@ -674,7 +701,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: never twice for the same cash', () 
 describe.skipIf(!DatabaseSync)('cash drawer: by hand', () => {
   it('kickDrawerNow sends only the pulse, once, with no queue row', async () => {
     const s = await spooler();
-    const result = await s.kickDrawerNow();
+    const result = await s.kickDrawerNow({ drawerOpenId: hand() });
     expect(result.ok).toBe(true);
     expect(h.sends).toHaveLength(1);
     expect(escPosToText(h.sends[0]!.bytes)).toBe('[drawer pin 2, 50 ms]');
@@ -685,7 +712,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: by hand', () => {
   it('a failed pulse by hand is not retried', async () => {
     const s = await spooler();
     h.script.push(failCode('printer_offline'));
-    const result = await s.kickDrawerNow();
+    const result = await s.kickDrawerNow({ drawerOpenId: hand() });
     expect(result.ok).toBe(false);
     await s.whenIdle();
     expect(h.sends).toHaveLength(1);
@@ -697,7 +724,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: by hand', () => {
     const printer = { transport: 'network' as const, network: { host: '192.0.2.10', port: 9100 }, width: 48 as const };
     setReceiptPrinterConfig(db, printer);
     s.resetAdapter();
-    expect((await s.kickDrawerNow()).ok).toBe(true);
+    expect((await s.kickDrawerNow({ drawerOpenId: hand() })).ok).toBe(true);
     const made = h.made;
     const shut = h.disconnected;
     // The "Drawer won't open?" checklist: 100 ms, then pin 5 — saved and tested each time.
@@ -707,19 +734,19 @@ describe.skipIf(!DatabaseSync)('cash drawer: by hand', () => {
     ] as const) {
       setReceiptPrinterConfig(db, { ...printer, drawer });
       s.resetAdapter();
-      expect((await s.kickDrawerNow({ watched: true })).ok).toBe(true);
+      expect((await s.kickDrawerNow({ drawerOpenId: hand(), watched: true })).ok).toBe(true);
       expect(escPosToText(h.sends.at(-1)!.bytes)).toBe(`[drawer pin ${drawer.pin}, ${drawer.pulseMs} ms]`);
     }
     expect(h.made).toBe(made);
     expect(h.disconnected).toBe(shut);
     // A sale's pulse uses the new setting too.
-    s.onOrderEvent(order('o0051', 'takeaway'), 'paid', { cash: true });
+    s.onOrderEvent(order('o0051', 'takeaway'), 'paid', cash());
     await s.whenIdle();
     expect(escPosToText(h.sends[sentKinds().lastIndexOf('drawer')]!.bytes)).toBe('[drawer pin 5, 100 ms]');
     // A different printer does get a new adapter, and the old one is shut down.
     setReceiptPrinterConfig(db, { ...printer, network: { host: '192.0.2.11', port: 9100 } });
     s.resetAdapter();
-    expect((await s.kickDrawerNow()).ok).toBe(true);
+    expect((await s.kickDrawerNow({ drawerOpenId: hand() })).ok).toBe(true);
     expect(h.made).toBe(made + 1);
     expect(h.disconnected).toBe(shut + 1);
   });
@@ -733,7 +760,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: by hand', () => {
       ahead += 12_000;
     };
     const pressedAt = Date.now();
-    const r = await s.kickDrawerNow({ watched: true });
+    const r = await s.kickDrawerNow({ drawerOpenId: hand(), watched: true });
     expect(r.ok).toBe(true);
     const sent = h.sends.at(-1)!;
     expect(sent.opts!.notAfter).toBeGreaterThan(pressedAt + 12_000);
@@ -745,7 +772,7 @@ describe.skipIf(!DatabaseSync)('cash drawer: by hand', () => {
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     h.onConnect = () => new Promise<void>(() => {}); // never ready
-    const pending = s.kickDrawerNow({ watched: true });
+    const pending = s.kickDrawerNow({ drawerOpenId: hand(), watched: true });
     await vi.advanceTimersByTimeAsync(30_001);
     const r = await pending;
     expect(r.ok).toBe(false);
@@ -758,14 +785,14 @@ describe.skipIf(!DatabaseSync)('cash drawer: by hand', () => {
   it('an unwatched pulse (cash in / out, shift open) does not wait for a slow printer', async () => {
     const s = await spooler();
     h.onConnect = () => new Promise<void>(() => {}); // never ready
-    expect((await s.kickDrawerNow()).ok).toBe(true); // straight to send; the adapter enforces the 10 s
+    expect((await s.kickDrawerNow({ drawerOpenId: hand() })).ok).toBe(true); // straight to send; the adapter enforces the 10 s
     expect(h.sends[0]!.opts!.notAfter).toBeLessThanOrEqual(Date.now() + 10_000);
   });
 
   it('kickDrawerSoon tells the till when it did not open', async () => {
     const s = await spooler();
     h.script.push(failCode('network_error'));
-    s.kickDrawerSoon();
+    s.kickDrawerSoon(hand('payin'));
     await vi.waitFor(() => expect(drawerEvents()).toHaveLength(1));
     const err = drawerEvents()[0]!.payload['error'] as { code: string; message: string };
     expect(err.code).toBe('drawer_not_opened');
@@ -817,5 +844,237 @@ describe.skipIf(!DatabaseSync)('kitchen: a cancelled order', () => {
     await s.whenIdle();
     expect(h.sends).toHaveLength(0);
     expect(queueRows(db, 'o0102')).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!DatabaseSync)('the drawer log: every pulse is for a row, and settles it (0040)', () => {
+  // A real receipt printer is set up (with none, a pulse that "went" is 'no_printer').
+  beforeEach(async () => {
+    const { setReceiptPrinterConfig } = await import('./printer-config.js');
+    setReceiptPrinterConfig(db, { transport: 'network', network: { host: '192.0.2.9', port: 9100 }, width: 48 });
+    (await spooler()).resetAdapter();
+  });
+
+  it('no printer set up: the pulse "goes" nowhere, and the log says so', async () => {
+    const { setReceiptPrinterConfig, DEFAULT_RECEIPT_CONFIG } = await import('./printer-config.js');
+    setReceiptPrinterConfig(db, DEFAULT_RECEIPT_CONFIG);
+    const s = await spooler();
+    s.resetAdapter();
+    const c = cash();
+    s.onOrderEvent(order('o0300', 'takeaway'), 'paid', c);
+    await s.whenIdle();
+    expect(drawerRow(c.drawerOpenId)).toEqual({ outcome: 'no_printer', note: 'No receipt printer is set up' });
+  });
+
+  it('no row, no pulse: a payment event without the row queues no drawer job', async () => {
+    const s = await spooler();
+    s.onOrderEvent(order('o0301', 'takeaway'), 'paid', {});
+    await s.whenIdle();
+    expect(drawerSends()).toBe(0);
+    const c = cash();
+    s.onOrderEvent(order('o0302', 'takeaway'), 'paid', c);
+    await s.whenIdle();
+    expect(drawerSends()).toBe(1);
+    const job = db.prepare(`SELECT payload_json AS p FROM print_queue WHERE order_id = 'o0302' AND job_kind = 'drawer'`).get() as { p: string };
+    expect(JSON.parse(job.p)).toEqual({ kind: 'drawer', orderId: 'o0302', drawerOpenId: c.drawerOpenId });
+  });
+
+  it('opened: the printer took the pulse', async () => {
+    const s = await spooler();
+    const c = cash();
+    s.onOrderEvent(order('o0303', 'takeaway'), 'paid', c);
+    await s.whenIdle();
+    expect(drawerRow(c.drawerOpenId)).toEqual({ outcome: 'opened', note: null });
+    // Settled once, with its own sync and audit rows.
+    const audit = db.prepare(`SELECT action FROM audit_log WHERE entity_id = ? ORDER BY rowid`).all(c.drawerOpenId) as Array<{ action: string }>;
+    expect(audit.map((a) => a.action)).toEqual(['drawer_sale', 'drawer_result']);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_id = ?`).get(c.drawerOpenId) as { n: number }).n).toBe(2);
+  });
+
+  it('a retry in a moment leaves the result open; the retry that goes out settles it', async () => {
+    const s = await spooler();
+    h.script.push(failCode('printer_offline'));
+    const c = cash();
+    const oid = order('o0304', 'takeaway');
+    s.onOrderEvent(oid, 'paid', c);
+    await s.whenIdle();
+    expect(drawerRow(c.drawerOpenId).outcome).toBeNull();
+    const job = queueRows(db, oid, 'drawer')[0]!;
+    backdate(db, job.id, 2_000);
+    await s.whenIdle();
+    expect(drawerRow(c.drawerOpenId)).toEqual({ outcome: 'opened', note: null });
+  });
+
+  it('did not open: the printer gave up for sure — with why, in plain words', async () => {
+    const s = await spooler();
+    h.script.push(() => ({ ok: false, durationMs: 1, error: { code: 'no_config', message: 'none', recoverable: false } }));
+    const c = cash();
+    s.onOrderEvent(order('o0305', 'takeaway'), 'paid', c);
+    await s.whenIdle();
+    expect(drawerRow(c.drawerOpenId)).toEqual({ outcome: 'not_opened', note: 'No receipt printer is set up (Settings → Printers).' });
+  });
+
+  it('may not have opened: the printer failed after the pulse may have gone out', async () => {
+    const s = await spooler();
+    h.script.push(failCode('timeout', { maybeSent: true }));
+    const c = cash();
+    s.onOrderEvent(order('o0306', 'takeaway'), 'paid', c);
+    await s.whenIdle();
+    expect(drawerRow(c.drawerOpenId).outcome).toBe('unsure');
+    expect(drawerRow(c.drawerOpenId).note).toMatch(/Check the drawer/);
+  });
+
+  it('too late: the printer did not answer within a minute', async () => {
+    const s = await spooler();
+    h.script.push(failCode('printer_offline'));
+    const c = cash();
+    const oid = order('o0307', 'takeaway');
+    s.onOrderEvent(oid, 'paid', c);
+    await s.whenIdle();
+    backdate(db, queueRows(db, oid, 'drawer')[0]!.id, 61_000);
+    await s.whenIdle();
+    expect(drawerRow(c.drawerOpenId)).toEqual({ outcome: 'not_opened', note: 'The printer did not answer within a minute — was the key used?' });
+  });
+
+  it('already open: a later pulse opened it first', async () => {
+    const s = await spooler();
+    h.script.push(failCode('printer_offline'));
+    const c = cash();
+    const oid = order('o0308', 'takeaway');
+    s.onOrderEvent(oid, 'paid', c);
+    await s.whenIdle();
+    const job = queueRows(db, oid, 'drawer')[0]!;
+    backdate(db, job.id, 3_000);
+    const byHand = hand();
+    expect((await s.kickDrawerNow({ drawerOpenId: byHand })).ok).toBe(true);
+    expect(drawerRow(byHand).outcome).toBe('opened');
+    backdate(db, job.id, 3_000);
+    await s.whenIdle();
+    expect(drawerRow(c.drawerOpenId)).toEqual({ outcome: 'already_open', note: 'Opened by a later pulse' });
+  });
+
+  it('by hand (Open drawer, the float, cash in / out): settled before kickDrawerNow returns; a refusal too', async () => {
+    const s = await spooler();
+    const ok = hand('float');
+    await s.kickDrawerNow({ drawerOpenId: ok });
+    expect(drawerRow(ok).outcome).toBe('opened');
+    h.script.push(failCode('printer_offline'));
+    const off = hand('payout');
+    expect((await s.kickDrawerNow({ drawerOpenId: off })).ok).toBe(false);
+    expect(drawerRow(off)).toEqual({ outcome: 'not_opened', note: 'The printer is not ready. fake printer_offline' });
+    // kickDrawerSoon settles too (after the answer).
+    const soon = hand('payin');
+    s.kickDrawerSoon(soon);
+    await vi.waitFor(() => expect(drawerRow(soon).outcome).toBe('opened'));
+    // The first result wins: a second settle writes nothing.
+    const { settleDrawerOpen } = await import('../db/repositories/drawer-open-repo.js');
+    expect(settleDrawerOpen(db, ok, 'unsure', 'late')).toBe(false);
+    expect(drawerRow(ok).outcome).toBe('opened');
+  });
+
+  it('a mock printer that fails every time still gives exactly one row per cash event, each settled', async () => {
+    const s = await spooler();
+    for (let i = 0; i < 20; i += 1) h.script.push(() => ({ ok: false, durationMs: 1, error: { code: 'printer_not_sent', message: 'x', recoverable: false } }));
+    const ids = ['o0311', 'o0312', 'o0313'].map((oid) => {
+      const c = cash();
+      s.onOrderEvent(order(oid, 'takeaway'), 'paid', c);
+      return c.drawerOpenId;
+    });
+    await s.whenIdle();
+    expect(ids.map((x) => drawerRow(x).outcome)).toEqual(['not_opened', 'not_opened', 'not_opened']);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM drawer_opens WHERE kind = 'sale'`).get() as { n: number }).n).toBe(3);
+  });
+
+  it('after a restart: an open with no result and no job left is "unsure"; not one before the log started, nor one a waiting job will settle', async () => {
+    const s = await spooler();
+    const { settleAbandonedDrawerOpens } = await import('../db/repositories/drawer-open-repo.js');
+    const abandoned = hand('sale');
+    const waiting = cash();
+    const { enqueuePrintJob } = await import('../db/repositories/print-queue-repo.js');
+    enqueuePrintJob(db, { kind: 'drawer', orderId: 'o0321', drawerOpenId: waiting.drawerOpenId });
+    // A 0.7.18 row (no result ever), written before the log started.
+    const old = hand('no_sale');
+    db.prepare(`UPDATE drawer_opens SET created_at = '2020-01-01T00:00:00.000Z' WHERE id = ?`).run(old);
+    expect(settleAbandonedDrawerOpens(db, 'dev-test')).toBe(1);
+    expect(drawerRow(abandoned)).toEqual({ outcome: 'unsure', note: 'The till stopped before it knew whether the drawer opened' });
+    expect(drawerRow(waiting.drawerOpenId).outcome).toBeNull();
+    expect(drawerRow(old).outcome).toBeNull();
+    // The other till's rows are never touched here.
+    expect(settleAbandonedDrawerOpens(db, 'another-till')).toBe(0);
+    void s;
+  });
+});
+
+describe.skipIf(!DatabaseSync)('a test order the owner deleted (0041)', () => {
+  const deleteAsTest = (oid: string) =>
+    Object.assign(h.snapshots.get(oid)!.order, {
+      deletedAt: new Date().toISOString(),
+      deletedBy: 'u1',
+      deleteKind: 'test',
+      deleteReason: 'Printer test',
+    });
+
+  it('its receipt and drawer pulse still waiting are finished quietly: no paper, no pulse, no note to the counter', async () => {
+    const s = await spooler();
+    h.script.push(failCode('printer_offline'), failCode('printer_offline'));
+    const c = cash();
+    const oid = order('o0401', 'takeaway');
+    s.onOrderEvent(oid, 'paid', c);
+    await s.whenIdle();
+    const sendsBefore = h.sends.length;
+    const eventsBefore = h.events.length;
+    deleteAsTest(oid);
+    s.onOrderDeleted(oid, 'sent_to_kitchen');
+    db.prepare(`UPDATE print_queue SET next_attempt_at = ? WHERE order_id = ? AND status = 'pending'`).run(new Date(Date.now() - 1).toISOString(), oid);
+    await s.whenIdle();
+    const rows = db.prepare(`SELECT job_kind AS kind, status, last_error AS note FROM print_queue WHERE order_id = ? ORDER BY rowid`).all(oid);
+    expect(rows.every((r) => (r as { status: string }).status === 'done')).toBe(true);
+    expect(rows.map((r) => (r as { note: string }).note)).toContain('Not printed — the order was deleted as a test');
+    // Only the kitchen's CANCELLED slip may still go out (its ticket may have printed): no receipt, no pulse.
+    const after = h.sends.slice(sendsBefore).map((x) => escPosToText(x.bytes));
+    expect(after.every((t) => t.includes('CANCELLED'))).toBe(true);
+    expect(h.sends.slice(sendsBefore).some((x) => kicks(x.bytes) > 0)).toBe(false);
+    expect(h.events.slice(eventsBefore).filter((e) => e.channel === 'printer:failed')).toEqual([]);
+    expect(drawerRow(c.drawerOpenId)).toEqual({ outcome: 'not_opened', note: 'Order deleted before the drawer opened' });
+  });
+
+  it('the kitchen gets a CANCELLED slip while it was cooking the test — not once the food was handed over', async () => {
+    const s = await spooler();
+    const cooking = order('o0402', 'takeaway', []);
+    s.onOrderEvent(cooking, 'sent_to_kitchen');
+    await s.whenIdle();
+    expect(sentKinds()).toEqual(['kitchen']);
+    deleteAsTest(cooking);
+    s.onOrderDeleted(cooking, 'preparing');
+    await s.whenIdle();
+    expect(sentKinds()).toEqual(['kitchen', 'kitchen']);
+    const slip = escPosToText(h.sends[1]!.bytes);
+    expect(slip).toContain('* CANCELLED *');
+    expect(slip).toContain('DO NOT MAKE - DO NOT SEND');
+    expect(slip).toContain('Test order: Printer test');
+
+    h.sends.length = 0;
+    const handed = order('o0403', 'takeaway', []);
+    s.onOrderEvent(handed, 'sent_to_kitchen');
+    await s.whenIdle();
+    h.sends.length = 0;
+    deleteAsTest(handed);
+    s.onOrderDeleted(handed, 'served');
+    await s.whenIdle();
+    expect(h.sends).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!DatabaseSync)('no row, no pulse — by type', () => {
+  it('kickDrawerNow and kickDrawerSoon do not compile without the drawer_opens row', async () => {
+    const s = await spooler();
+    // Never called: only the compiler looks at these.
+    const typeOnly = () => {
+      // @ts-expect-error — the id of the row the pulse is for is required
+      void s.kickDrawerNow({ watched: true });
+      // @ts-expect-error — the same for the pulse that does not wait
+      s.kickDrawerSoon();
+    };
+    expect(typeof typeOnly).toBe('function');
   });
 });

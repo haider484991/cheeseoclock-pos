@@ -158,7 +158,9 @@ describe.skipIf(!DatabaseSync)('drawer opens: row + sync + audit together', () =
     const again = recordDrawerOpen(db, { kind: 'count' }, MANAGER);
     expect(again.kind).toBe('no_sale');
     expect(again.reason).toBe('Opened again to count');
+    // The float goes in first (the drawer pops even for Rs 0: migration 0040).
     expect(auditRows().map((r) => r.action).filter((a) => a.startsWith('drawer_'))).toEqual([
+      'drawer_float',
       'drawer_count',
       'drawer_no_sale',
     ]);

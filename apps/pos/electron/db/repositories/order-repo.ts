@@ -5,7 +5,9 @@ import { nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { decrementForOrder } from './stock-movement-repo.js';
-import { settleOrderStock } from './order-stock-repo.js';
+import { getOrderStockStatus, settleOrderStock } from './order-stock-repo.js';
+import { recordDrawerOpen } from './drawer-open-repo.js';
+import { skipFbrForOrder, touchedFbrProduction } from './fbr-queue-repo.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from './modifier-repo.js';
 import {
   buildOrderHistoryWhere,
@@ -15,7 +17,7 @@ import {
   IS_SALE_SQL,
   NET_TOTAL_SQL,
 } from '../order-history-query.js';
-import { computeTax } from '@cheeseoclock/pos-domain';
+import { computeTax, kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
 import {
   allocateDiscount,
   computeDiscountCents,
@@ -36,7 +38,14 @@ import type {
   OrderStockAnswer,
   PrepStation,
   StockSettlement,
+  TestDeleteStock,
   UUID,
+  DeletedTestsPage,
+  OrderStockStatus,
+  TestDeletePreview,
+  TestDeleteResult,
+  TestDeleteShiftCash,
+  TestDeleteStockState,
 } from '@cheeseoclock/shared-types';
 import type {
   OrderHistoryFilter,
@@ -75,6 +84,11 @@ interface OrderRow {
   updated_at: string;
   device_id: string;
   version: number;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
+  delete_reason?: string | null;
+  delete_kind?: string | null;
+  delete_stock?: string | null;
 }
 
 /**
@@ -119,7 +133,22 @@ function rowToOrder(row: OrderRow): Order {
     assignedRiderId: (row.assigned_rider_id ?? null) as Order['assignedRiderId'],
     dispatchedAt: row.dispatched_at,
     deliveredAt: row.delivered_at,
+    // Only a deleted order (read with includeDeleted) carries these: a live
+    // order's images and audit rows stay exactly as they were.
+    ...(row.deleted_at
+      ? {
+          deletedAt: row.deleted_at,
+          deletedBy: (row.deleted_by ?? null) as Order['voidedBy'],
+          deleteReason: row.delete_reason ?? null,
+          deleteKind: row.delete_kind === 'test' ? ('test' as const) : null,
+          deleteStock: isTestDeleteStock(row.delete_stock) ? row.delete_stock : null,
+        }
+      : {}),
   };
+}
+
+function isTestDeleteStock(v: unknown): v is TestDeleteStock {
+  return v === 'put_back' || v === 'waste' || v === 'none' || v === 'settled_before';
 }
 
 const ORDER_SELECT = `
@@ -127,7 +156,8 @@ const ORDER_SELECT = `
   subtotal_cents, discount_cents, tax_cents, total_cents, paid_at, voided_at, voided_by, void_reason,
   customer_name_snapshot, customer_phone_snapshot, delivery_address_snapshot, delivery_notes,
   assigned_rider_id, dispatched_at, delivered_at,
-  created_at, updated_at, device_id, version
+  created_at, updated_at, device_id, version,
+  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock
 `;
 
 export function findOrder(db: AppDatabase, id: string): Order | null {
@@ -1372,12 +1402,36 @@ export interface TenderInputItem {
   referenceNo?: string | null;
 }
 
+/**
+ * An order after money changed hands, and the drawer_opens row (0040) its
+ * drawer pulse is for — written in the same transaction as the cash, only
+ * when cash moved (null for card, wallet or Foodpanda). The handler passes
+ * the id to the spooler: no row, no pulse.
+ */
+export type OrderWithDrawer = Order & { drawerOpenId: string | null };
+
+/**
+ * The drawer_opens row for cash taken on an order: one per payment event,
+ * for the CASH part only (a split cash + card payment opens it for the cash).
+ * Null when no cash moved. Inside the caller's transaction.
+ */
+function recordCashSale(
+  db: AppDatabase,
+  orderId: string,
+  payments: ReadonlyArray<{ method: PaymentMethod; amountCents: number }>,
+  actor: Actor & { userId: string },
+): string | null {
+  const cash = payments.filter((p) => p.method === 'cash').reduce((n, p) => n + p.amountCents, 0);
+  if (cash <= 0) return null;
+  return recordDrawerOpen(db, { kind: 'sale', orderId, amountCents: cash }, actor).id;
+}
+
 export function tenderOrder(
   db: AppDatabase,
   input: { orderId: string; payments: TenderInputItem[] },
   actor: Actor & { userId: string },
-): Order {
-  let result!: Order;
+): OrderWithDrawer {
+  let result!: OrderWithDrawer;
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
@@ -1491,7 +1545,9 @@ export function tenderOrder(
       after: finalized,
     });
 
-    result = finalized;
+    // Cash in the drawer: its open on record with the sale (the cash part).
+    const drawerOpenId = recordCashSale(db, input.orderId, input.payments, actor);
+    result = { ...finalized, drawerOpenId };
   });
   tx();
   log.info('Order tendered', { id: input.orderId, total: result.totalCents });
@@ -1509,6 +1565,12 @@ export interface OrderCloseResult {
   stock: StockSettlement | null;
   /** The status it had just before (the kitchen gets a CANCELLED slip while it was cooking). */
   statusBefore: OrderStatus;
+  /**
+   * The drawer_opens row (0040) for cash handed back by THIS refund, written
+   * in the same transaction; null when no cash went back (a card refund, a
+   * cancel of an unpaid order).
+   */
+  drawerOpenId: string | null;
 }
 
 /** The dialog showed one status; the order has moved on since (the kitchen tapped a button). */
@@ -1577,7 +1639,8 @@ export function voidOrder(
       before: order,
       after: voided,
     });
-    result = { order: voided, stock, statusBefore: order.status };
+    // Nothing was paid on a cancelled order: no cash moves, the drawer stays shut.
+    result = { order: voided, stock, statusBefore: order.status, drawerOpenId: null };
   });
   tx();
   return result;
@@ -1619,6 +1682,23 @@ export function refundOrder(
   actor: Actor & { userId: string },
 ): OrderCloseResult {
   let result!: OrderCloseResult;
+  // Cash handed back by THIS refund opens the drawer: its row, with who
+  // pressed Refund and the manager who allowed it (null when they are the
+  // same person), amount negative (cash out). Null when no cash went back.
+  const cashBack = (rows: ReadonlyArray<{ method: PaymentMethod; amountCents: number }>): string | null => {
+    const cash = rows.filter((r) => r.method === 'cash').reduce((n, r) => n + r.amountCents, 0);
+    if (cash <= 0) return null;
+    return recordDrawerOpen(
+      db,
+      {
+        kind: 'refund',
+        orderId: input.orderId,
+        amountCents: -cash,
+        approvedByUserId: input.approverUserId === actor.userId ? null : input.approverUserId,
+      },
+      actor,
+    ).id;
+  };
   const settle = (statusBefore: OrderStatus): StockSettlement | null =>
     settleOrderStock(
       db,
@@ -1746,7 +1826,8 @@ export function refundOrder(
         before: order,
         after,
       });
-      result = { order: after, stock, statusBefore: order.status };
+      const drawerOpenId = cashBack([{ method, amountCents: requested }]);
+      result = { order: after, stock, statusBefore: order.status, drawerOpenId };
       return;
     }
 
@@ -1822,7 +1903,8 @@ export function refundOrder(
       before: order,
       after,
     });
-    result = { order: after, stock, statusBefore: order.status };
+    const drawerOpenId = cashBack(reversals);
+    result = { order: after, stock, statusBefore: order.status, drawerOpenId };
   });
   tx();
   log.info('Order refunded', { id: input.orderId });
@@ -1833,9 +1915,20 @@ export function refundOrder(
 // Snapshot (for receipt + reports)
 // -----------------------------------------------------------------------------
 
-export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapshot | null {
+/**
+ * One order in full. A deleted order is not found — unless `includeDeleted`
+ * (the owner's list of deleted test orders, the kitchen's CANCELLED slip for
+ * one, the audit's before-image): then its delete columns are on the order and
+ * its deleted payments are in, each marked with its deletedAt.
+ */
+export function getOrderSnapshot(
+  db: AppDatabase,
+  orderId: string,
+  opts: { includeDeleted?: boolean } = {},
+): OrderSnapshot | null {
+  const withDeleted = opts.includeDeleted === true;
   const orderRow = db
-    .prepare(`SELECT ${ORDER_SELECT} FROM orders WHERE id = ? AND deleted_at IS NULL`)
+    .prepare(`SELECT ${ORDER_SELECT} FROM orders WHERE id = ?${withDeleted ? '' : ' AND deleted_at IS NULL'}`)
     .get(orderId) as OrderRow | undefined;
   if (!orderRow) return null;
 
@@ -1926,8 +2019,8 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
   const paymentRows = db
     .prepare(
       `SELECT id, order_id, method, amount_cents, tendered_cents, reference_no,
-              received_by_user_id, paid_at
-         FROM payments WHERE order_id = ? AND deleted_at IS NULL ORDER BY paid_at`,
+              received_by_user_id, paid_at, deleted_at
+         FROM payments WHERE order_id = ?${withDeleted ? '' : ' AND deleted_at IS NULL'} ORDER BY paid_at`,
     )
     .all(orderId) as Array<{
     id: string;
@@ -1937,6 +2030,7 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     reference_no: string | null;
     received_by_user_id: string;
     paid_at: string;
+    deleted_at: string | null;
   }>;
 
   const payments: Payment[] = paymentRows.map((p) => ({
@@ -1948,6 +2042,7 @@ export function getOrderSnapshot(db: AppDatabase, orderId: string): OrderSnapsho
     referenceNo: p.reference_no,
     receivedByUserId: p.received_by_user_id as Payment['receivedByUserId'],
     paidAt: p.paid_at,
+    ...(p.deleted_at ? { deletedAt: p.deleted_at } : {}),
   }));
 
   const discountRows = db
@@ -2321,8 +2416,8 @@ export function markOrderServed(
     };
   },
   actor: Actor & { userId: string },
-): Order {
-  let result!: Order;
+): OrderWithDrawer {
+  let result!: OrderWithDrawer;
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
@@ -2418,7 +2513,9 @@ export function markOrderServed(
       before: order,
       after,
     });
-    result = after;
+    // Cash collected at the table / counter: a cash sale's drawer open.
+    const drawerOpenId = input.payment ? recordCashSale(db, input.orderId, [input.payment], actor) : null;
+    result = { ...after, drawerOpenId };
   });
   tx();
   log.info('Order served', { id: input.orderId, withPayment: !!input.payment });
@@ -2442,8 +2539,8 @@ export function markOrderDelivered(
     };
   },
   actor: Actor & { userId: string },
-): Order {
-  let result!: Order;
+): OrderWithDrawer {
+  let result!: OrderWithDrawer;
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
@@ -2544,7 +2641,9 @@ export function markOrderDelivered(
       before: order,
       after,
     });
-    result = after;
+    // Cash on delivery brought back by the rider: a cash sale's drawer open.
+    const drawerOpenId = input.payment ? recordCashSale(db, input.orderId, [input.payment], actor) : null;
+    result = { ...after, drawerOpenId };
   });
   tx();
   log.info('Order delivered', {
@@ -2552,4 +2651,358 @@ export function markOrderDelivered(
     withPayment: !!input.payment,
   });
   return result;
+}
+
+// -----------------------------------------------------------------------------
+// Deleting a test order — the owner only (migration 0041)
+// -----------------------------------------------------------------------------
+
+/** The owner's refusals, word for word (the dialog shows them as they are). */
+export const TEST_DELETE_REFUSED = {
+  gone: "This order is already deleted or can't be found.",
+  open: 'This order is still being rung up. Use Discard at Checkout instead.',
+  changed: 'This order changed while the window was open. Close it and check the order again.',
+  otherTillOrder: 'This order was taken on the other till. Delete it on that till.',
+  otherTillPayment: "Part of this order was paid on the other till, so it can't be deleted here. Cancel or refund it instead.",
+  fbr: "This sale was sent to FBR, so it can't be deleted. Refund it instead.",
+  restock: 'Choose whether to put the stock back.',
+  reason: 'Write why this was a test order.',
+} as const;
+
+/** What deleting would touch, read in one place so the preview and the delete can't drift. */
+export interface TestDeleteFacts {
+  order: Order;
+  snapshot: OrderSnapshot;
+  statusBefore: OrderStatus;
+  /** Live payment rows (sales and refunds). */
+  payments: Array<{ id: string; method: PaymentMethod; amountCents: number; shiftId: string | null }>;
+  paid: TestDeletePreview['paid'];
+  stockStatus: OrderStockStatus | null;
+  stockState: TestDeleteStockState;
+  cash: TestDeleteShiftCash[];
+  web: boolean;
+  kitchenSlip: boolean;
+}
+
+export type TestDeleteCheck = { ok: false; refusal: string; facts: TestDeleteFacts | null } | { ok: true; facts: TestDeleteFacts };
+
+/**
+ * Whether this order may be deleted as a test on this till, and what that
+ * would touch. Pure read. The refusals that don't depend on what the owner
+ * typed, in order: gone, still a cart, taken on the other till, paid (in
+ * part) on the other till, sent to FBR in production (any status, or a
+ * paper that printed a production number). Same till only: its FBR queue,
+ * website import, print jobs and shift cash are all on this till.
+ */
+export function checkTestDelete(db: AppDatabase, orderId: string, deviceId: string, nowMs: number = Date.now()): TestDeleteCheck {
+  const snapshot = getOrderSnapshot(db, orderId);
+  if (!snapshot) return { ok: false, refusal: TEST_DELETE_REFUSED.gone, facts: null };
+  const order = snapshot.order;
+  const row = db.prepare(`SELECT device_id FROM orders WHERE id = ?`).get(orderId) as { device_id: string };
+
+  const payments = (
+    db
+      .prepare(
+        `SELECT p.id, p.method, p.amount_cents, COALESCE(p.shift_id, o.shift_id) AS shift_id, p.device_id
+           FROM payments p JOIN orders o ON o.id = p.order_id
+          WHERE p.order_id = ? AND p.deleted_at IS NULL
+          ORDER BY p.paid_at, p.id`,
+      )
+      .all(orderId) as Array<{ id: string; method: PaymentMethod; amount_cents: number; shift_id: string | null; device_id: string }>
+  ).map((p) => ({ id: p.id, method: p.method, amountCents: Number(p.amount_cents), shiftId: p.shift_id, deviceId: p.device_id }));
+
+  const paidBy = new Map<PaymentMethod, number>();
+  for (const p of payments) paidBy.set(p.method, (paidBy.get(p.method) ?? 0) + p.amountCents);
+  const paid = [...paidBy].filter(([, n]) => n !== 0).map(([method, netCents]) => ({ method, netCents }));
+
+  const cashBy = new Map<string, number>();
+  for (const p of payments) {
+    if (p.method !== 'cash' || !p.shiftId) continue;
+    cashBy.set(p.shiftId, (cashBy.get(p.shiftId) ?? 0) + p.amountCents);
+  }
+  const cash: TestDeleteShiftCash[] = [...cashBy]
+    .filter(([, n]) => n !== 0)
+    .map(([shiftId, netCents]) => {
+      const s = db.prepare(`SELECT closed_at FROM shifts WHERE id = ?`).get(shiftId) as { closed_at: string | null } | undefined;
+      return { shiftId, open: s !== undefined && s.closed_at === null, netCents };
+    });
+
+  const stockStatus = order.status === 'open' ? null : getOrderStockStatus(db, orderId, deviceId, nowMs);
+  const stockState: TestDeleteStockState =
+    stockStatus === null || stockStatus.state === 'none'
+      ? 'none'
+      : stockStatus.state === 'out' || stockStatus.state === 'kept'
+        ? 'holds'
+        : stockStatus.state === 'wasted'
+          ? 'wasted_before'
+          : 'returned_before';
+
+  const web =
+    order.source === 'web' ||
+    db.prepare(`SELECT 1 AS x FROM web_order_imports WHERE pos_order_id = ? LIMIT 1`).get(orderId) !== undefined;
+  // The kitchen hears of it when the food had not been handed over, the order
+  // was not already cancelled (that slip printed then), and a ticket printed
+  // or may have (the print log), or is printing now.
+  const ticket =
+    db
+      .prepare(`SELECT 1 AS x FROM document_prints WHERE order_id = ? AND doc_key = 'kitchen' AND copy = 'kitchen' AND deleted_at IS NULL LIMIT 1`)
+      .get(orderId) !== undefined ||
+    db
+      .prepare(
+        `SELECT 1 AS x FROM print_queue WHERE order_id = ? AND job_kind = 'kitchen' AND status = 'in_flight'
+            AND COALESCE(json_extract(payload_json, '$.cancelled'), 0) = 0 LIMIT 1`,
+      )
+      .get(orderId) !== undefined;
+  const kitchenSlip =
+    ticket && order.status !== 'void' && order.status !== 'refunded' && kitchenHearsOfClose(order.status);
+
+  const facts: TestDeleteFacts = {
+    order,
+    snapshot,
+    statusBefore: order.status,
+    payments: payments.map(({ deviceId: _d, ...p }) => p),
+    paid,
+    stockStatus,
+    stockState,
+    cash,
+    web,
+    kitchenSlip,
+  };
+  if (order.status === 'open') return { ok: false, refusal: TEST_DELETE_REFUSED.open, facts };
+  if (row.device_id !== deviceId) return { ok: false, refusal: TEST_DELETE_REFUSED.otherTillOrder, facts };
+  if (payments.some((p) => p.deviceId !== deviceId)) return { ok: false, refusal: TEST_DELETE_REFUSED.otherTillPayment, facts };
+  if (touchedFbrProduction(db, orderId)) return { ok: false, refusal: TEST_DELETE_REFUSED.fbr, facts };
+  return { ok: true, facts };
+}
+
+/** What the delete dialog shows (orders:testDeletePreview). Throws the "gone" refusal for no such order. */
+export function testDeletePreview(db: AppDatabase, orderId: string, deviceId: string, nowMs: number = Date.now()): TestDeletePreview {
+  const check = checkTestDelete(db, orderId, deviceId, nowMs);
+  const f = check.facts;
+  if (!f) throw new Error(TEST_DELETE_REFUSED.gone);
+  const s = f.snapshot;
+  return {
+    orderId,
+    orderNumber: s.order.orderNumber,
+    status: s.order.status,
+    mode: s.order.mode,
+    totalCents: s.order.totalCents,
+    takenAt: s.order.createdAt,
+    takenBy: s.cashierName,
+    items: s.items.filter((i) => !i.parentOrderItemId).map((i) => ({ name: i.menuItemName, quantity: i.quantity })),
+    paid: f.paid,
+    refusal: check.ok ? null : check.refusal,
+    stock: { state: f.stockState, lines: f.stockState === 'holds' ? (f.stockStatus?.lines ?? []) : [] },
+    cash: f.cash,
+    kitchenSlip: f.kitchenSlip,
+    web: f.web,
+  };
+}
+
+export interface DeleteTestOrderInput {
+  orderId: string;
+  reason: string;
+  /** "Put the stock back?" — true yes (not made), false no (made: waste), null when it holds none. */
+  restock: boolean | null;
+  /** The status the dialog showed. */
+  expectStatus: OrderStatus;
+  /** The owner whose PIN or password confirmed it (deleted_by). */
+  ownerUserId: string;
+}
+
+/**
+ * Delete a TEST order, for the owner. One transaction — or nothing:
+ *  a. the checks above, then the status the dialog showed, the stock answer
+ *     and the reason;
+ *  b. stock: what it still holds is settled per the answer ("put it back" =
+ *     not made, even after a hand-over that never really happened; "don't"
+ *     = made, ALWAYS booked as waste — never left as sale rows, which would
+ *     count as food sold with no money). Stock already dealt with at a cancel
+ *     or refund stays as it is ('settled_before');
+ *  c. every live payment (sales and refunds) soft-deleted, synced and audited;
+ *  d. the order soft-deleted with who, why, how and what it did to stock —
+ *     its status, lines, discounts, costs, papers and stock rows untouched —
+ *     synced, and audited with the full order before;
+ *  e. its FBR submissions still waiting (noop / sandbox) skipped.
+ * A refusal throws its words and writes nothing.
+ */
+export function deleteTestOrder(
+  db: AppDatabase,
+  input: DeleteTestOrderInput,
+  actor: Actor & { userId: string },
+): TestDeleteResult {
+  return db.transaction((): TestDeleteResult => {
+    // The refusals in the owner's order: gone, still a cart, moved on since
+    // the dialog read it, then the till / FBR checks, then the answers.
+    const current = findOrder(db, input.orderId);
+    if (!current) throw new Error(TEST_DELETE_REFUSED.gone);
+    if (current.status === 'open') throw new Error(TEST_DELETE_REFUSED.open);
+    if (current.status !== input.expectStatus) throw new Error(TEST_DELETE_REFUSED.changed);
+    const check = checkTestDelete(db, input.orderId, actor.deviceId);
+    if (!check.ok) throw new Error(check.refusal);
+    const f = check.facts;
+    if (f.stockState === 'holds' && typeof input.restock !== 'boolean') throw new Error(TEST_DELETE_REFUSED.restock);
+    const reason = (input.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!reason) throw new Error(TEST_DELETE_REFUSED.reason);
+    const before = getOrderSnapshot(db, input.orderId)!;
+    const now = nowIso();
+
+    // b. Stock
+    let stock: StockSettlement | null = null;
+    let deleteStock: TestDeleteStock;
+    if (f.stockState === 'holds') {
+      stock = settleOrderStock(
+        db,
+        {
+          orderId: input.orderId,
+          how: 'test_deleted',
+          statusBefore: f.statusBefore,
+          foodMade: input.restock === true ? 'not_made' : 'made',
+          // One answer for everything, sealed drinks included.
+          putBack: [],
+          approverUserId: input.ownerUserId,
+        },
+        actor,
+      );
+      deleteStock = input.restock === true ? 'put_back' : 'waste';
+    } else {
+      deleteStock = f.stockState === 'none' ? 'none' : 'settled_before';
+    }
+
+    // c. Payments
+    for (const p of f.payments) {
+      const row = db.prepare(`SELECT * FROM payments WHERE id = ?`).get(p.id) as Record<string, unknown>;
+      db.prepare(`UPDATE payments SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND deleted_at IS NULL`).run(
+        now,
+        now,
+        p.id,
+      );
+      enqueueSync(db, { entityType: 'payments', entityId: p.id, op: 'delete', payload: { id: p.id, deletedAt: now } });
+      writeAudit(db, {
+        entityType: 'payments',
+        entityId: p.id,
+        action: 'delete_test_order',
+        actorUserId: actor.userId,
+        before: row,
+        after: { deletedAt: now },
+      });
+    }
+
+    // e. FBR (pure-local): noop / sandbox submissions still waiting are never sent.
+    const fbrSkippedIds = skipFbrForOrder(db, input.orderId);
+
+    // d. The order
+    const upd = db
+      .prepare(
+        `UPDATE orders
+            SET deleted_at = ?, deleted_by = ?, delete_reason = ?, delete_kind = 'test', delete_stock = ?,
+                updated_at = ?, version = version + 1
+          WHERE id = ? AND deleted_at IS NULL`,
+      )
+      .run(now, input.ownerUserId, reason, deleteStock, now, input.orderId);
+    if (Number(upd.changes) === 0) throw new Error(TEST_DELETE_REFUSED.gone);
+    enqueueSync(db, { entityType: 'orders', entityId: input.orderId, op: 'delete', payload: { id: input.orderId, deletedAt: now } });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: input.orderId,
+      action: 'delete_test_order',
+      actorUserId: actor.userId,
+      before,
+      after: {
+        deletedAt: now,
+        deletedBy: input.ownerUserId,
+        reason,
+        restock: input.restock,
+        statusBefore: f.statusBefore,
+        deleteStock,
+        cashByShift: f.cash,
+        paymentIds: f.payments.map((p) => p.id),
+        fbrSkippedIds,
+        web: f.web,
+      },
+    });
+    log.info('Test order deleted', { id: input.orderId, deleteStock, payments: f.payments.length });
+    return {
+      orderId: input.orderId,
+      orderNumber: f.order.orderNumber,
+      statusBefore: f.statusBefore,
+      deleteStock,
+      stock,
+      cash: f.cash,
+      kitchenSlip: f.kitchenSlip,
+      web: f.web,
+    };
+  })();
+}
+
+/**
+ * The owner's list of deleted test orders, by when the order was taken,
+ * newest deletion first. Read-only; nothing here can bring one back.
+ */
+export function listDeletedTests(
+  db: AppDatabase,
+  q: { sinceIso: string; untilIso: string; limit?: number | undefined; offset?: number | undefined },
+): DeletedTestsPage {
+  const limit = Math.min(Math.max(Math.floor(q.limit ?? 100), 1), 500);
+  const offset = Math.max(Math.floor(q.offset ?? 0), 0);
+  const where = `o.deleted_at IS NOT NULL AND o.delete_kind = 'test' AND o.created_at >= ? AND o.created_at < ?`;
+  const rows = db
+    .prepare(
+      `SELECT o.id, o.order_number, o.mode, o.status, o.total_cents, o.created_at, o.deleted_at,
+              o.delete_reason, o.delete_stock,
+              COALESCE(uc.full_name, 'Unknown') AS taken_by, COALESCE(ud.full_name, 'Unknown') AS deleted_by,
+              (SELECT COALESCE(SUM(p.amount_cents), 0) FROM payments p WHERE p.order_id = o.id) AS paid_cents,
+              (SELECT group_concat(DISTINCT p.method) FROM payments p WHERE p.order_id = o.id AND p.amount_cents > 0) AS methods,
+              (SELECT COALESCE(-SUM(m.value_cents), 0) FROM stock_movements m
+                WHERE m.ref_order_id = o.id AND m.reason = 'waste' AND m.deleted_at IS NULL) AS waste_cents,
+              (SELECT group_concat(oi.quantity || '× ' || oi.menu_item_name, ', ') FROM order_items oi
+                WHERE oi.order_id = o.id AND oi.deleted_at IS NULL AND oi.parent_order_item_id IS NULL) AS items
+         FROM orders o
+         LEFT JOIN users uc ON uc.id = o.cashier_id
+         LEFT JOIN users ud ON ud.id = o.deleted_by
+        WHERE ${where}
+        ORDER BY o.deleted_at DESC, o.id DESC
+        LIMIT ? OFFSET ?`,
+    )
+    .all(q.sinceIso, q.untilIso, limit, offset) as Array<{
+    id: string;
+    order_number: string;
+    mode: OrderMode;
+    status: OrderStatus;
+    total_cents: number;
+    created_at: string;
+    deleted_at: string;
+    delete_reason: string | null;
+    delete_stock: string | null;
+    taken_by: string;
+    deleted_by: string;
+    paid_cents: number;
+    methods: string | null;
+    waste_cents: number;
+    items: string | null;
+  }>;
+  const totals = db
+    .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(o.total_cents), 0) AS cents FROM orders o WHERE ${where}`)
+    .get(q.sinceIso, q.untilIso) as { n: number; cents: number };
+  return {
+    rows: rows.map((r) => ({
+      orderId: r.id,
+      orderNumber: r.order_number,
+      mode: r.mode,
+      status: r.status,
+      totalCents: Number(r.total_cents),
+      takenAt: r.created_at,
+      takenBy: r.taken_by,
+      deletedAt: r.deleted_at,
+      deletedBy: r.deleted_by,
+      reason: r.delete_reason,
+      paidCents: Number(r.paid_cents),
+      paidMethods: (r.methods ? r.methods.split(',') : []) as PaymentMethod[],
+      deleteStock: isTestDeleteStock(r.delete_stock) ? r.delete_stock : null,
+      wasteCents: Number(r.waste_cents),
+      itemsSummary: r.items ?? '',
+    })),
+    total: Number(totals.n),
+    totalCents: Number(totals.cents),
+  };
 }

@@ -7,6 +7,7 @@
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import type { ReportFoodCost, ReportKpis, ReportPurchases, ReportTabData, ReportTrends } from '@cheeseoclock/shared-types';
 import { periodFor } from './dateRange';
@@ -97,7 +98,14 @@ const team = (withCosts: boolean): ReportTabData['team'] => ({
   foodCost: withCosts ? { hasCosts: true } : null,
 });
 
-const html = (node: ReactNode) => renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>);
+// Team & leakage reads its drawer log and deleted test orders itself (nothing is fetched in a static render).
+const queries = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+const html = (node: ReactNode) =>
+  renderToStaticMarkup(
+    <QueryClientProvider client={queries}>
+      <MemoryRouter>{node}</MemoryRouter>
+    </QueryClientProvider>,
+  );
 
 describe('the Reports tabs render their own figures', () => {
   it('Overview: the headline, how customers paid, and website vs till', () => {

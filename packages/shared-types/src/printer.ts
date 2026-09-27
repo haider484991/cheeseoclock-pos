@@ -59,9 +59,10 @@ export type ReceiptCopy = 'customer' | 'shop';
 export type PrintedDocument = 'receipt' | 'bill' | 'refund' | 'void' | 'kitchen' | 'kitchen_cancel';
 
 /**
- * What a reprint button did:
- *  - queued: a new paper is on its way (`duplicate`: it says DUPLICATE,
- *    `printNo` papers of this document went out before it);
+ * What a print button did:
+ *  - queued: a new paper is on its way (`duplicate`: it says DUPLICATE —
+ *    always, for a customer paper printed by hand; `printNo` papers of this
+ *    document went out before it);
  *  - merged: that paper was still waiting to print (the printer is busy or
  *    retrying), so it was sent now instead of printing a second one.
  * For a kitchen ticket `duplicate` means it says REPRINT / DO NOT COOK TWICE
@@ -74,6 +75,81 @@ export interface ReprintResult {
   duplicate: boolean;
   printNo: number;
   resent?: boolean;
+  /**
+   * The number the paper will carry ("Reprint #N"). Set on a queued
+   * customer paper: 1 for the first hand press of a paper the till never
+   * printed by itself.
+   */
+  reprintNo?: number;
+}
+
+/**
+ * The rule every customer paper follows (the owner, 27 Sep 2026; shown in
+ * Settings → Printing rules and kept in the code's comments): a paper's
+ * SERIES is the order + what it is when it prints (BILL, RECEIPT, CANCELLED
+ * ORDER, REFUND <time>) + which copy (customer or shop), counted across both
+ * tills. The paper the till prints BY ITSELF (the receipt at Pay, or when
+ * an order is paid as it is served or handed over; the delivery bill when the
+ * rider leaves; the refund slip) is the ORIGINAL. The till never prints a
+ * customer paper at Send or when a website order arrives. EVERY paper printed
+ * with a print button says DUPLICATE with its reprint number, time and who —
+ * even the first of its kind, so a bill asked for before payment always
+ * does. Only a failed automatic job sent again (the till's own retry, or
+ * "Try again" on the failed-print note) is still the original. A paid
+ * RECEIPT after a BILL is a new series (it carries the FBR number).
+ */
+
+/** How one printed paper is marked, in the words the order panel shows. */
+export type OrderPaperLabel =
+  | 'Original'
+  | 'Printed later'
+  | `Reprint #${number}`
+  | `Copy #${number}`
+  | 'Printer retry'
+  | 'RE-SENT'
+  | 'May have printed';
+
+/** One paper in an order's print log, oldest first (either till). */
+export interface OrderPaperLine {
+  /** When it printed (ISO). */
+  at: string;
+  document: PrintedDocument;
+  copy: ReceiptCopy | 'kitchen';
+  label: OrderPaperLabel;
+  /** It said DUPLICATE (a customer paper) or REPRINT / RE-SENT (a kitchen ticket). */
+  duplicate: boolean;
+  /** Who asked (who pressed the button; for an automatic paper, who was signed in). */
+  byName: string | null;
+  approvedByName: string | null;
+  /** payment, dispatch, refund, reprint (by hand), auto (kitchen), cancel. */
+  reason: string;
+  /** Printed on the other till. */
+  otherTill: boolean;
+}
+
+/**
+ * What the print button of an order would print now, and every paper the
+ * order had (the order panel's "Papers printed"). `next` is null for an
+ * order still being rung up (there is nothing to print yet).
+ */
+export interface OrderPapers {
+  next: {
+    document: 'bill' | 'receipt' | 'void';
+    /** Papers of that series so far (0: none printed yet). A press prints a DUPLICATE either way. */
+    printedBefore: number;
+    /** The number the press's paper will carry ("Reprint #N"). */
+    reprintNo: number;
+    /** A paper of that series is still waiting to print: a press joins it. */
+    waiting: boolean;
+    /**
+     * The till's own paper for this order (the receipt at payment, the bill
+     * when the rider left…) failed to print and nothing was printed since:
+     * the print job to send again (printer:retryJob) — it prints as the
+     * ORIGINAL, where the print button would print a DUPLICATE. Null: none.
+     */
+    failedJobId?: string | null;
+  } | null;
+  papers: OrderPaperLine[];
 }
 
 /**

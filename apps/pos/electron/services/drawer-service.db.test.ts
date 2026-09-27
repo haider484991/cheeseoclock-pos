@@ -118,6 +118,9 @@ const opens = () =>
   db
     .prepare(`SELECT kind, reason, user_id AS userId, approved_by_user_id AS approver FROM drawer_opens ORDER BY rowid`)
     .all() as Array<Record<string, unknown>>;
+/** What the drawer log says each open did (0040: settled by its pulse). */
+const results = () =>
+  db.prepare(`SELECT outcome, outcome_note AS note FROM drawer_opens ORDER BY rowid`).all() as Array<Record<string, unknown>>;
 
 beforeEach(async () => {
   if (!DatabaseSync) return;
@@ -157,6 +160,11 @@ describe.skipIf(!DatabaseSync)('Open drawer (no sale)', () => {
     expect(h.sends).toHaveLength(2);
     expect(h.sends[0]!.opts).toMatchObject({ drawer: true });
     expect(h.pins).toEqual([]);
+    // Recorded first, then the pulse for that row, which settles it.
+    expect(results()).toEqual([
+      { outcome: 'opened', note: null },
+      { outcome: 'opened', note: null },
+    ]);
   });
 
   it('a cashier without a PIN, or with a wrong one, is refused: nothing saved, nothing opened', async () => {
@@ -199,6 +207,7 @@ describe.skipIf(!DatabaseSync)('Open drawer (no sale)', () => {
     expect(r.message).toMatch(/didn't answer/);
     expect(opens()).toHaveLength(1);
     expect(h.sends).toHaveLength(1); // never retried
+    expect(results()).toEqual([{ outcome: 'not_opened', note: "The printer didn't answer. Check it is switched on and connected." }]);
   });
 
   it('says "unsure" when the pulse may have gone out', async () => {
@@ -210,6 +219,7 @@ describe.skipIf(!DatabaseSync)('Open drawer (no sale)', () => {
     }));
     const r = await openDrawerNoSale(db, MANAGER, DEV, { kind: 'no_sale' });
     expect(r).toMatchObject({ opened: false, unsure: true });
+    expect(results()[0]).toMatchObject({ outcome: 'unsure' });
   });
 
   it('on the no-printer setup it is noted, and the answer says nothing opened', async () => {
@@ -219,6 +229,7 @@ describe.skipIf(!DatabaseSync)('Open drawer (no sale)', () => {
     const r = await openDrawerNoSale(db, MANAGER, DEV, { kind: 'no_sale' });
     expect(r.noPrinter).toBe(true);
     expect(opens()).toHaveLength(1);
+    expect(results()).toEqual([{ outcome: 'no_printer', note: 'No receipt printer is set up' }]);
   });
 });
 
@@ -238,8 +249,9 @@ describe.skipIf(!DatabaseSync)('Open drawer to count', () => {
     openShift(db, { openingCashCents: 0 }, { userId: 'u_mgr', deviceId: DEV });
     await openDrawerNoSale(db, MANAGER, DEV, { kind: 'count' });
     await openDrawerNoSale(db, MANAGER, DEV, { kind: 'count' });
-    // Pressing it again shows up as a no-sale open.
-    expect(opens().map((o) => o['kind'])).toEqual(['count', 'no_sale']);
+    // Pressing it again shows up as a no-sale open (after the float the shift
+    // wrote when it opened: 0040 — this test pulses only for the count).
+    expect(opens().map((o) => o['kind'])).toEqual(['float', 'count', 'no_sale']);
     expect(h.sends).toHaveLength(2);
   });
 
@@ -259,6 +271,7 @@ describe.skipIf(!DatabaseSync)('Test drawer', () => {
     expect(r.ok).toBe(true);
     expect(opens()).toEqual([{ kind: 'test', reason: null, userId: 'u_mgr', approver: null }]);
     expect(h.sends).toHaveLength(1);
+    expect(results()).toEqual([{ outcome: 'opened', note: null }]);
   });
 
   it('a failure comes back in plain words', async () => {

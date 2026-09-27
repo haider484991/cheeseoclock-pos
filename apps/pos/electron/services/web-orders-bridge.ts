@@ -1184,7 +1184,7 @@ class WebOrdersBridge {
     const db = this.db!;
     const rows = db
       .prepare(
-        `SELECT wi.web_order_id, wi.last_pushed_status, o.status AS pos_status
+        `SELECT wi.web_order_id, wi.last_pushed_status, o.status AS pos_status, o.deleted_at AS pos_deleted_at
            FROM web_order_imports wi
            JOIN orders o ON o.id = wi.pos_order_id
           WHERE wi.status = 'imported'
@@ -1195,10 +1195,14 @@ class WebOrdersBridge {
       web_order_id: string;
       last_pushed_status: string | null;
       pos_status: OrderStatus;
+      pos_deleted_at: string | null;
     }>;
 
     for (const row of rows) {
-      const webStatus = mapPosStatusToWeb(row.pos_status);
+      // An order deleted here (the owner deleting a test order, 0041) is
+      // cancelled as far as the customer is concerned. A site that already
+      // holds a final status keeps it (it answers updated:false below).
+      const webStatus = row.pos_deleted_at ? 'cancelled' : mapPosStatusToWeb(row.pos_status);
       if (!webStatus || webStatus === row.last_pushed_status) continue;
       const res = await this.api(cfg, `/api/bridge/orders/${row.web_order_id}/status`, {
         method: 'POST',

@@ -216,6 +216,21 @@ describe.skipIf(!Sqlite)('signing in with a PIN or a password', () => {
     expect(n(raw, `SELECT failed_count AS n FROM login_attempts WHERE pin_hash = '__device__'`)).toBe(3);
   });
 
+  it("the owner's PIN or password typed again (deleting a test order): only the owner's; a manager's is refused and counted, and the lock holds", async () => {
+    const m = await mods();
+    expect(await m.verifyOwnerSecret(db, 'Owner pass 1')).toEqual({ ownerUserId: ids['owner'], ownerName: 'Owner' });
+    // A manager's real password, a cashier's and a wrong one: the same answer, each counted.
+    await expect(m.verifyOwnerSecret(db, 'Manager pass 2')).rejects.toThrow(m.NOT_THE_OWNER);
+    await expect(m.verifyOwnerSecret(db, 'Cashier pass 3')).rejects.toThrow(m.NOT_THE_OWNER);
+    await expect(m.verifyOwnerSecret(db, 'Nobody pass 9')).rejects.toThrow(m.NOT_THE_OWNER);
+    expect(n(raw, `SELECT failed_count AS n FROM login_attempts WHERE pin_hash = '__device__'`)).toBe(3);
+    await expect(m.verifyOwnerSecret(db, 'Nobody pass 8')).rejects.toThrow(m.NOT_THE_OWNER);
+    await expect(m.verifyOwnerSecret(db, 'Nobody pass 7')).rejects.toThrow(m.NOT_THE_OWNER);
+    // Locked: even the owner's own is refused until the lock passes.
+    await expect(m.verifyOwnerSecret(db, 'Owner pass 1')).rejects.toThrow(/Too many failed attempts/);
+    expect(m.NOT_THE_OWNER).toBe("That is not the owner's PIN or password.");
+  });
+
   it('refuses a secret that breaks the rules without counting it or hashing it', async () => {
     const m = await mods();
     await expect(m.login(db, '12', 'dev-A')).rejects.toThrow('A PIN is 4 to 12 numbers');

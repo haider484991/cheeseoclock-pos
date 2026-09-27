@@ -94,27 +94,41 @@ export interface PendingFbrJob {
   modeAtEnqueue: FbrMode;
 }
 
+/** Why a submission of a deleted order was never sent. */
+export const FBR_SKIPPED_DELETED_TEST = 'Deleted as a test order';
+
 export function claimNextPendingJob(db: AppDatabase): PendingFbrJob | null {
   const now = nowIso();
-  const row = db
-    .prepare(
-      `SELECT id, order_id, payload_json, attempts, mode_at_enqueue
-         FROM fbr_submission_queue
-        WHERE status IN ('pending', 'failed')
-          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-        ORDER BY enqueued_at
-        LIMIT 1`,
-    )
-    .get(now) as
+  let row:
     | {
         id: string;
         order_id: string;
         payload_json: string;
         attempts: number;
         mode_at_enqueue: FbrMode;
+        order_deleted: string | null;
       }
     | undefined;
-  if (!row) return null;
+  for (;;) {
+    row = db
+      .prepare(
+        `SELECT q.id, q.order_id, q.payload_json, q.attempts, q.mode_at_enqueue, o.deleted_at AS order_deleted
+           FROM fbr_submission_queue q
+           LEFT JOIN orders o ON o.id = q.order_id
+          WHERE q.status IN ('pending', 'failed')
+            AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= ?)
+          ORDER BY q.enqueued_at
+          LIMIT 1`,
+      )
+      .get(now) as typeof row;
+    if (!row) return null;
+    // An order deleted (as a test) meanwhile is never submitted: skipped.
+    if (row.order_deleted === null) break;
+    db.prepare(
+      `UPDATE fbr_submission_queue SET status = 'skipped', last_error = ?, next_attempt_at = NULL, updated_at = ?
+        WHERE id = ?`,
+    ).run(FBR_SKIPPED_DELETED_TEST, now, row.id);
+  }
   // Optimistically bump attempts so concurrent claims don't double-submit.
   db.prepare(
     `UPDATE fbr_submission_queue SET attempts = attempts + 1, updated_at = ? WHERE id = ?`,
@@ -232,6 +246,43 @@ export function getFbrDebitNotes(db: AppDatabase, orderId: string, refIds: reado
     )
     .all(orderId, ...refIds) as Row[];
   return rows.map(toRow);
+}
+
+/**
+ * A test order was deleted (0041): its submissions still waiting — pending,
+ * or failed and waiting for a retry — are never sent: 'skipped', with why.
+ * Only noop or sandbox rows can be here (an order with a production row is
+ * never deleted). Pure-local, like the rest of this queue; the order's
+ * delete audit row lists the ids. Returns them.
+ */
+export function skipFbrForOrder(db: AppDatabase, orderId: string, why: string = FBR_SKIPPED_DELETED_TEST): string[] {
+  const rows = db
+    .prepare(`SELECT id FROM fbr_submission_queue WHERE order_id = ? AND status IN ('pending', 'failed') ORDER BY enqueued_at`)
+    .all(orderId) as Array<{ id: string }>;
+  if (rows.length === 0) return [];
+  const now = nowIso();
+  db.prepare(
+    `UPDATE fbr_submission_queue SET status = 'skipped', last_error = ?, next_attempt_at = NULL, updated_at = ?
+      WHERE order_id = ? AND status IN ('pending', 'failed')`,
+  ).run(why, now, orderId);
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Whether anything about this order ever went to FBR in production mode: a
+ * production submission of any status, or a paper that printed a
+ * production FBR number (either till: the print log syncs). Such an order
+ * can't be deleted as a test — it is refunded instead.
+ */
+export function touchedFbrProduction(db: AppDatabase, orderId: string): boolean {
+  const queued = db
+    .prepare(`SELECT 1 AS x FROM fbr_submission_queue WHERE order_id = ? AND mode_at_enqueue = 'production' LIMIT 1`)
+    .get(orderId);
+  if (queued) return true;
+  const printed = db
+    .prepare(`SELECT 1 AS x FROM document_prints WHERE order_id = ? AND fbr_mode = 'production' LIMIT 1`)
+    .get(orderId);
+  return printed !== undefined;
 }
 
 export function retryAllFailed(db: AppDatabase): number {

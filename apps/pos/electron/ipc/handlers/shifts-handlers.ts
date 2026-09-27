@@ -58,7 +58,7 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   defineHandler('shifts:open', ctx, (_ctx, payload) => {
     const s = requireShiftManage('shift.open');
     try {
-      const shift = openShift(
+      const { drawerOpenId, ...shift } = openShift(
         ctx.db,
         {
           openingCashCents: Math.round(payload.openingCashCents),
@@ -66,8 +66,9 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
         },
         { userId: s.id, deviceId: ctx.deviceId },
       );
-      // The drawer opens to put the float in (a failure is a toast, not an error).
-      printSpooler.kickDrawerSoon();
+      // The drawer opens to put the float in, for the 'float' row written with
+      // the shift (a failure is a toast, not an error).
+      printSpooler.kickDrawerSoon(drawerOpenId);
       return ok(shift);
     } catch (e) {
       throw new IpcGuardError({
@@ -130,7 +131,7 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
       }
     }
     try {
-      const movement = recordCashMovement(
+      const { drawerOpenId, ...movement } = recordCashMovement(
         ctx.db,
         {
           type: payload.type,
@@ -140,8 +141,9 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
         },
         { userId: s.id, deviceId: ctx.deviceId },
       );
-      // Cash in, cash out or a rider tip: the drawer opens for the notes.
-      printSpooler.kickDrawerSoon();
+      // Cash in, cash out or a rider tip: the drawer opens for the notes, for
+      // the row written with the movement.
+      printSpooler.kickDrawerSoon(drawerOpenId);
       return ok(movement);
     } catch (e) {
       throw new IpcGuardError({

@@ -8,6 +8,7 @@ import {
   MapPin,
   Phone,
   Printer,
+  Trash2,
   Undo2,
   UserRound,
   X,
@@ -16,9 +17,14 @@ import {
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
-import { reprintReceipt, reprintToast } from '../printing/reprint';
+import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
+import { paperButtonLabel } from '../printing/paperLabels';
+import { PapersPrinted } from '../printing/PapersPrinted';
 import { useToast } from '../../components/toast/ToastProvider';
 import { VoidOrderDialog } from './VoidOrderDialog';
+import { DeleteTestOrderDialog } from './DeleteTestOrderDialog';
+import { mayDeleteTestOrder } from './testDeleteCopy';
+import { useSessionStore } from '../../stores/sessionStore';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
@@ -43,7 +49,11 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   const [voidOpen, setVoidOpen] = useState(false);
   const [refundOpen, setRefundOpen] = useState(false);
   const [collectOpen, setCollectOpen] = useState(false);
-  const dialogOpen = voidOpen || refundOpen || collectOpen;
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const dialogOpen = voidOpen || refundOpen || collectOpen || deleteOpen;
+  // "Delete test order…" is the owner's alone (the main process checks again,
+  // and asks for the owner's PIN or password in the dialog).
+  const role = useSessionStore((st) => st.user?.role ?? null);
 
   const snapQ = useQuery({
     queryKey: ['orders', 'detail', orderId],
@@ -59,6 +69,16 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
     enabled: ended,
   });
   const stockStep = ended && stockQ.data ? historyStockStep(stockQ.data) : null;
+  // What the print button would print (and whether that is the original),
+  // and every paper the order had. Under ['orders']: a cancel or refund
+  // refreshes it; while a paper waits for the printer it is read again.
+  const papersQ = useQuery({
+    queryKey: ['orders', 'papers', orderId],
+    queryFn: () => ipc.printer.orderPapers(orderId),
+    enabled: !!snap && snap.order.status !== 'open',
+    refetchInterval: (q) => (q.state.data?.next?.waiting ? 1_500 : false),
+  });
+  const papers = papersQ.data?.papers ?? [];
 
   // Esc closes the drawer — but not while a dialog on top of it is open
   // (Esc there closes just the dialog).
@@ -74,14 +94,42 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   const errorToast = (title: string) => (e: unknown) =>
     toast({ title, description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' });
 
+  // The paper goes into the print log once the printer took it: read the
+  // papers again now (it is waiting) and shortly after.
+  const refreshPapers = () => {
+    void papersQ.refetch();
+    setTimeout(() => void papersQ.refetch(), 2_000);
+  };
   const reprintMut = useMutation({
     mutationFn: () => reprintReceipt(orderId),
-    onSuccess: (r) => toast({ title: reprintToast(r) }),
-    onError: errorToast('Reprint failed'),
+    onSuccess: (r) => {
+      toast({ title: reprintToast(r) });
+      refreshPapers();
+    },
+    onError: errorToast('Print failed'),
   });
+  // The till's own paper failed and nothing came since: the button sends that
+  // job again — the original, like "Try again" on the failed-print note —
+  // even after the note was closed or the till restarted.
+  const failedNext = papersQ.data?.next?.failedJobId ? papersQ.data.next : null;
+  const retryFailedMut = useMutation({
+    mutationFn: (jobId: string) => ipc.printer.retryJob(jobId),
+    onSuccess: (r) => {
+      toast({ title: failedRetryToast(failedNext?.document ?? 'receipt', r.requeued) });
+      refreshPapers();
+    },
+    onError: errorToast('Print failed'),
+  });
+  const printPaper = () => {
+    if (failedNext?.failedJobId) retryFailedMut.mutate(failedNext.failedJobId);
+    else reprintMut.mutate();
+  };
   const reprintKitchenMut = useMutation({
     mutationFn: () => ipc.printer.reprintKitchen(orderId),
-    onSuccess: (r) => toast({ title: reprintToast(r) }),
+    onSuccess: (r) => {
+      toast({ title: reprintToast(r) });
+      refreshPapers();
+    },
     onError: errorToast('Reprint failed'),
   });
 
@@ -103,6 +151,17 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   // shows in history, but the guard stays in case one is opened directly).
   const canCancel = !!o && owed && o.status !== 'open';
   const inKitchen = !!o && offersKitchenReprint(o.status);
+  const canDeleteTest = mayDeleteTestOrder(role, o?.status);
+
+  // A deleted test order is gone from every list, shift, stock figure and
+  // report: read them all again, and close this panel.
+  const afterDelete = () => {
+    setDeleteOpen(false);
+    for (const key of ['orders', 'shifts', 'inventory', 'customers', 'reports', 'costing'] as const) {
+      void qc.invalidateQueries({ queryKey: [key] });
+    }
+    onClose();
+  };
 
   return (
     <>
@@ -296,6 +355,8 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   <strong>{o.status === 'refunded' ? 'Refund reason:' : 'Cancel reason:'}</strong> {o.voidReason}
                 </div>
               )}
+
+              <PapersPrinted papers={papers} orderCreatedAt={o.createdAt} />
             </div>
 
             <footer className="space-y-2 border-t border-stone-200 px-4 py-3 dark:border-stone-700">
@@ -310,11 +371,12 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   variant="secondary"
                   size="md"
                   className="flex-1 whitespace-nowrap"
-                  onClick={() => reprintMut.mutate()}
-                  disabled={reprintMut.isPending}
+                  onClick={printPaper}
+                  disabled={reprintMut.isPending || retryFailedMut.isPending}
+                  title="Print bill or receipt"
                 >
                   <Printer className="h-4 w-4" />
-                  {reprintMut.isPending ? 'Sending…' : 'Reprint receipt'}
+                  {reprintMut.isPending || retryFailedMut.isPending ? 'Sending…' : paperButtonLabel(papersQ.data?.next)}
                 </Button>
                 {inKitchen && (
                   <Button
@@ -355,6 +417,19 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   )}
                 </div>
               )}
+              {canDeleteTest && (
+                <div className="flex items-center border-t border-stone-100 pt-2 dark:border-stone-800">
+                  <Button
+                    variant="ghost"
+                    size="md"
+                    className="w-full whitespace-nowrap text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950"
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete test order…
+                  </Button>
+                </div>
+              )}
             </footer>
           </>
         )}
@@ -365,6 +440,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
       )}
       {refundOpen && snap && (
         <RefundOrderDialog snap={snap} onClose={() => setRefundOpen(false)} onDone={afterChange(() => setRefundOpen(false))} />
+      )}
+      {deleteOpen && snap && (
+        <DeleteTestOrderDialog snap={snap} onClose={() => setDeleteOpen(false)} onDone={afterDelete} />
       )}
       {collectOpen && snap && (
         <MarkDeliveredDialog snap={snap} onClose={() => setCollectOpen(false)} onDone={afterChange(() => setCollectOpen(false))} />

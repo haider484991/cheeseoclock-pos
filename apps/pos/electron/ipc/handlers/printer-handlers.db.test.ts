@@ -271,9 +271,10 @@ const idle = async () => (await import('../../services/print-spooler.js')).print
 describe.skipIf(!DatabaseSync)('printer:reprint — who may print a paid receipt again', () => {
   it('a cashier: one copy of a current order free, the next needs a manager', async () => {
     const oid = order('o0001', 3);
+    // Pressed by hand, it says DUPLICATE (the owner's rule) — still the cashier's one free copy.
     await expect(call('printer:reprint', { orderId: oid })).resolves.toEqual({
       ok: true,
-      data: { status: 'queued', document: 'receipt', duplicate: false, printNo: 0 },
+      data: { status: 'queued', document: 'receipt', duplicate: true, printNo: 0, reprintNo: 1 },
     });
     await idle();
     const again = await refusal(call('printer:reprint', { orderId: oid }));
@@ -294,8 +295,10 @@ describe.skipIf(!DatabaseSync)('printer:reprint — who may print a paid receipt
     const ok = (await call('printer:reprint', { orderId: oid, approverPin: 'Manager-pass-7' })) as { data: { status: string } };
     expect(ok.data.status).toBe('queued');
     await idle();
-    expect(logRows(oid)).toEqual([{ print_no: 0, reason: 'reprint', requestedBy: 'u_cash', approvedBy: 'u_mgr' }]);
-    expect(last()).toContain('Printed later:');
+    // A paper printed by hand is a DUPLICATE, even the first (the owner's rule): never "Printed later".
+    expect(logRows(oid)).toEqual([{ print_no: 1, reason: 'reprint', requestedBy: 'u_cash', approvedBy: 'u_mgr' }]);
+    expect(last()).not.toContain('Printed later');
+    expect(last()).toContain('Reprint #1');
     expect(last()).toContain('by Ali Akbar');
     expect(last()).toContain('Approved by: Sana Khan');
   });
@@ -317,19 +320,20 @@ describe.skipIf(!DatabaseSync)('printer:reprint — who may print a paid receipt
       await idle();
     }
     expect(h.sends).toHaveLength(3);
-    expect(last()).toContain('Reprint #2');
+    // Three presses of a paper the till never printed by itself: Reprint #1, #2, #3.
+    expect(last()).toContain('Reprint #3');
   });
 
-  it('the shop copy again is a manager’s — and the first one carries the approver, though it is no DUPLICATE', async () => {
+  it('the shop copy again is a manager’s — and, printed by hand, even the first one says DUPLICATE with the approver', async () => {
     const oid = order('o0005', 3);
     const r = await refusal(call('printer:reprint', { orderId: oid, copy: 'shop' }));
-    // printNo 0: the screen tells the manager this paper will not say DUPLICATE.
+    // printNo 0: no shop copy printed before (the paper still says DUPLICATE: pressed by hand).
     expect(r.details).toMatchObject({ needs: 'manager_pin', printNo: 0 });
     await call('printer:reprint', { orderId: oid, copy: 'shop', approverPin: 'Manager-pass-7' });
     await idle();
     expect(last()).toContain('SHOP COPY');
     expect(last()).toContain('Approved by: Sana Khan');
-    expect(last()).not.toContain('DUPLICATE');
+    expect(last()).toContain('** DUPLICATE - Reprint #1 **');
     // The second one does say DUPLICATE, and the screen is told so.
     const again = await refusal(call('printer:reprint', { orderId: oid, copy: 'shop' }));
     expect(again.details).toMatchObject({ needs: 'manager_pin', printNo: 1 });
@@ -375,19 +379,21 @@ describe.skipIf(!DatabaseSync)('printer:reprintKitchen and printer:reprintCounts
     await expect(call('printer:reprintKitchen', { orderId: oid })).rejects.toThrow(/cancelled/);
   });
 
-  it('counts DUPLICATEs printed by hand per order, for Order History — not the first paper', async () => {
+  it('counts papers printed AGAIN by hand per order, for Order History — the first hand press says DUPLICATE but is not a reprint', async () => {
     h.session = session('u_mgr', 'manager');
     const a = order('o0201', 3);
     const b = order('o0202', 3);
-    // Its receipt never printed at the sale: the first press prints the ORIGINAL…
-    await call('printer:reprint', { orderId: a });
-    await idle();
-    expect(last()).not.toContain('DUPLICATE');
     await expect(call('printer:reprintCounts', { orderIds: [a, b] })).resolves.toEqual({ ok: true, data: {} });
-    // …the second a DUPLICATE: "Reprinted ×1", and that copy does say DUPLICATE.
+    // Its receipt never printed at the sale: still, a press prints a DUPLICATE (the owner's rule)…
     await call('printer:reprint', { orderId: a });
     await idle();
-    expect(last()).toContain('DUPLICATE');
+    expect(last()).toContain('** DUPLICATE - Reprint #1 **');
+    // …but it is the only receipt there is: not a reprint in Order History.
+    await expect(call('printer:reprintCounts', { orderIds: [a, b] })).resolves.toEqual({ ok: true, data: {} });
+    // The second press prints the same paper again: "Reprinted ×1".
+    await call('printer:reprint', { orderId: a });
+    await idle();
+    expect(last()).toContain('** DUPLICATE - Reprint #2 **');
     await expect(call('printer:reprintCounts', { orderIds: [a, b] })).resolves.toEqual({ ok: true, data: { [a]: 1 } });
   });
 

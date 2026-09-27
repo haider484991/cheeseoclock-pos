@@ -494,6 +494,10 @@ export function decrementForOrder(
   orderId: string,
   actor: Actor,
 ): Array<{ ingredientId: string; name: string; unit: string; resultingQty: number; threshold: number }> {
+  // A deleted order (a test the owner deleted, 0041; a discarded cart) takes
+  // nothing more: its stock was settled when it was deleted.
+  const live = db.prepare(`SELECT 1 AS x FROM orders WHERE id = ? AND deleted_at IS NULL`).get(orderId);
+  if (!live) return [];
   // The cheap early exit: the stock is out, and every line keeps its cost
   // (or the order was sent before costing started and never will).
   const nothingToCost = () => !db.prepare(LINE_WITHOUT_COST).get(orderId) || !!db.prepare(TAKEN_BEFORE_COSTING).get(orderId);

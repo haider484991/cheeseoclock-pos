@@ -90,6 +90,9 @@ const api: RendererApi = {
     void: (req) => invoke('orders:void', req),
     refund: (req) => invoke('orders:refund', req),
     stockStatus: (req) => invoke('orders:stockStatus', req),
+    testDeletePreview: (req) => invoke('orders:testDeletePreview', req),
+    deleteTest: (req) => invoke('orders:deleteTest', req),
+    listDeletedTests: (req) => invoke('orders:listDeletedTests', req),
     attachCustomer: (req) => invoke('orders:attachCustomer', req),
     detachCustomer: (req) => invoke('orders:detachCustomer', req),
     listActive: (req) => invoke('orders:listActive', req),
@@ -193,6 +196,8 @@ const api: RendererApi = {
     reprint: (req) => invoke('printer:reprint', req),
     reprintKitchen: (req) => invoke('printer:reprintKitchen', req),
     reprintCounts: (req) => invoke('printer:reprintCounts', req),
+    orderPapers: (req) => invoke('printer:orderPapers', req),
+    retryJob: (req) => invoke('printer:retryJob', req),
   },
   fbr: {
     getConfig: () => invoke('fbr:getConfig', undefined),
@@ -219,6 +224,7 @@ const api: RendererApi = {
     setDayparts: (req) => invoke('reports:setDayparts', req),
     // Stock takes: used vs should have used (costing spec Phase 8).
     variance: (req) => invoke('reports:variance', req),
+    drawerLog: (req) => invoke('reports:drawerLog', req),
   },
   inventory: {
     listIngredients: (req) => invoke('inventory:listIngredients', req),
@@ -279,9 +285,17 @@ contextBridge.exposeInMainWorld('api', api);
 
 // Subscribe to printer failure events (one-way main → renderer) so the renderer
 // can surface a toast. Unsubscribe handle is returned so React effects clean up.
+type PrinterFailedEvent = {
+  jobId?: string;
+  jobKind: string;
+  orderId?: string;
+  what?: string;
+  error?: { code: string; message: string };
+  retrying?: boolean;
+};
 contextBridge.exposeInMainWorld('printerEvents', {
-  onFailed: (cb: (payload: { jobKind: string; orderId?: string; error?: { code: string; message: string } }) => void) => {
-    const listener = (_e: unknown, payload: { jobKind: string; orderId?: string; error?: { code: string; message: string } }) => cb(payload);
+  onFailed: (cb: (payload: PrinterFailedEvent) => void) => {
+    const listener = (_e: unknown, payload: PrinterFailedEvent) => cb(payload);
     ipcRenderer.on('printer:failed', listener);
     return () => ipcRenderer.removeListener('printer:failed', listener);
   },

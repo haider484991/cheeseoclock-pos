@@ -83,6 +83,11 @@ vi.mock('../../services/auth-service.js', () => ({
   verifyManagerPin: async () => {
     throw new Error("That is not a manager's PIN or password");
   },
+  // The owner's PIN typed again to delete a test order (0041): only this made-up one is the owner's.
+  verifyOwnerSecret: async (_db: unknown, secret: string) => {
+    if (secret === 'Owner-pass-9') return { ownerUserId: 'u_admin', ownerName: 'Test Owner' };
+    throw new Error("That is not the owner's PIN or password.");
+  },
 }));
 // The spooler records what it was asked and prints nothing; any method works,
 // so the reprint work going on beside this one can add its own.
@@ -392,6 +397,8 @@ const REPORTS = (): Record<string, unknown> => ({
   'reports:getDayparts': undefined,
   // Stock takes' "used vs should have used" (costing spec Phase 8).
   'reports:variance': undefined,
+  // The cash drawer log (0040): every open, who, why and whether it opened.
+  'reports:drawerLog': REPORT_TODAY(),
   // Shift history: every past shift with its totals.
   'shifts:list': {},
 });
@@ -443,6 +450,8 @@ const COUNTER_SCOPED = [
   'customers:attachToOrder',
   'printer:reprint',
   'printer:reprintKitchen',
+  // What the print button would print and the order's papers: the same orders as a reprint.
+  'printer:orderPapers',
   'shifts:listCashMovements',
   'fbr:getInvoiceStatus',
 ];
@@ -485,6 +494,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'printer:listSystemPrinters': undefined,
   // How many times a paper was printed by hand: numbers only, for orders the screen already shows.
   'printer:reprintCounts': { orderIds: [] },
+  // "Try again" on the failed-print note: that very job again (its order's reprint rule when it has one).
+  'printer:retryJob': { jobId: 'no-such-job' },
   'fbr:getConfig': undefined,
   'fbr:getQueueStats': undefined,
   // Kitchen staff record a batch they made (any login, on purpose).
@@ -533,6 +544,23 @@ const ALREADY_MANAGERS = (): Record<string, unknown> => ({
   'inventory:createPurchaseOrder': {},
   'inventory:setPurchaseOrderStatus': {},
   'inventory:receiveDelivery': {},
+});
+
+/**
+ * Deleting a test order (0041): the OWNER (admin) login only — a manager and
+ * a cashier are refused before anything is read — and the delete itself
+ * needs the owner's PIN or password typed again.
+ */
+const TEST_ORDERS_OWNER = (): Record<string, unknown> => ({
+  'orders:testDeletePreview': { orderId: s.paidNow },
+  'orders:listDeletedTests': REPORT_TODAY(),
+  'orders:deleteTest': {
+    orderId: s.paidNow,
+    reason: 'Printer test',
+    restock: null,
+    ownerSecret: 'Owner-pass-9',
+    expectStatus: 'paid',
+  },
 });
 
 /**
@@ -619,6 +647,66 @@ describe.skipIf(!Sqlite)("the owner's alone", () => {
       if (why) lockedOut.push(`${channel} — ${why}`);
     }
     expect(lockedOut).toEqual([]);
+  });
+});
+
+describe.skipIf(!Sqlite)('test orders: the owner (admin) login only, and the owner\'s PIN or password to delete', () => {
+  it('a cashier and a manager are refused every test-order channel in plain words, and nothing is written', async () => {
+    const before = writtenRows();
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      for (const [channel, payload] of Object.entries(TEST_ORDERS_OWNER())) {
+        const o = await call(channel, payload);
+        expect({ channel, who: who.role, o }).toEqual({
+          channel,
+          who: who.role,
+          o: {
+            ok: false,
+            code: 'forbidden',
+            message:
+              channel === 'orders:listDeletedTests'
+                ? 'The list of deleted test orders needs the owner (admin) login'
+                : 'Deleting a test order needs the owner (admin) login',
+          },
+        });
+      }
+    }
+    h.session = null;
+    for (const [channel, payload] of Object.entries(TEST_ORDERS_OWNER())) {
+      expect({ channel, code: (await call(channel, payload)) }).toMatchObject({ channel, code: { ok: false, code: 'unauthenticated' } });
+    }
+    expect(writtenRows()).toEqual(before);
+  });
+
+  it("the owner: a manager's PIN is not the owner's (nothing written); with the owner's the test order is deleted", async () => {
+    h.session = OWNER;
+    expect(await data('orders:testDeletePreview', { orderId: s.paidNow })).toMatchObject({ orderId: s.paidNow, refusal: null });
+    const before = writtenRows();
+    const wrong = await call('orders:deleteTest', { ...(TEST_ORDERS_OWNER()['orders:deleteTest'] as object), ownerSecret: 'Manager-pass-7' });
+    expect(wrong).toEqual({ ok: false, code: 'forbidden', message: "That is not the owner's PIN or password." });
+    expect(writtenRows()).toEqual(before);
+    const done = await data<{ orderId: string; deleteStock: string }>('orders:deleteTest', TEST_ORDERS_OWNER()['orders:deleteTest']);
+    expect(done).toMatchObject({ orderId: s.paidNow, deleteStock: 'none' });
+    expect(db.prepare(`SELECT delete_kind AS k, deleted_by AS by FROM orders WHERE id = ?`).get(s.paidNow)).toEqual({ k: 'test', by: 'u_admin' });
+    // The kitchen and the printer queue were told after the commit.
+    expect(h.spool.map((c) => c.method)).toContain('onOrderDeleted');
+    const lastTwoDays = { sinceIso: new Date(Date.now() - 48 * HOUR).toISOString(), untilIso: new Date(Date.now() + HOUR).toISOString() };
+    const list = await data<{ total: number; rows: Array<{ orderId: string; reason: string }> }>('orders:listDeletedTests', lastTwoDays);
+    expect(list.total).toBe(1);
+    expect(list.rows[0]).toMatchObject({ orderId: s.paidNow, reason: 'Printer test' });
+    // A second delete: already gone.
+    expect(await call('orders:deleteTest', TEST_ORDERS_OWNER()['orders:deleteTest'])).toMatchObject({
+      ok: false,
+      code: 'precondition_failed',
+      message: "This order is already deleted or can't be found.",
+    });
+  });
+
+  it('the other till\'s order is refused in its words, even for the owner', async () => {
+    h.session = OWNER;
+    expect(await data('orders:testDeletePreview', { orderId: s.otherTill })).toMatchObject({
+      refusal: 'This order was taken on the other till. Delete it on that till.',
+    });
   });
 });
 
@@ -1041,6 +1129,7 @@ describe.skipIf(!Sqlite)('every channel is classified', () => {
       REPORTS: Object.keys(REPORTS()),
       PRINTER_SETTINGS: Object.keys(PRINTER_SETTINGS()),
       OWNER_ONLY: Object.keys(OWNER_ONLY()),
+      TEST_ORDERS_OWNER: Object.keys(TEST_ORDERS_OWNER()),
       COUNTER_SCOPED,
       COUNTER_ALLOWED: Object.keys(COUNTER_ALLOWED()),
       ALREADY_MANAGERS: Object.keys(ALREADY_MANAGERS()),

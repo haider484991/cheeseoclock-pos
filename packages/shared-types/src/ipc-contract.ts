@@ -27,6 +27,13 @@ import type {
   Rider,
 } from './order.js';
 import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
+import type {
+  DeletedTestsPage,
+  DeleteTestOrderRequest,
+  ListDeletedTestsRequest,
+  TestDeletePreview,
+  TestDeleteResult,
+} from './test-orders.js';
 
 /**
  * The stock half of a cancel or a full refund (see order-stock.ts). Needed
@@ -73,6 +80,8 @@ import type {
   ReportOverviewTab,
   ReportTabRequest,
   ReportTeamTab,
+  DrawerLogPage,
+  DrawerLogRequest,
   ReportTrends,
   ReportWhenTab,
   SetDaypartsRequest,
@@ -86,6 +95,7 @@ import type {
   ReceiptLogoStatus,
   ReceiptCopy,
   ReprintResult,
+  OrderPapers,
   SystemPrinterInfo,
 } from './printer.js';
 import type {
@@ -572,6 +582,30 @@ export interface IpcContract {
     request: { orderId: string };
     response: ApiResult<OrderStockStatus>;
   };
+  /**
+   * Deleting a TEST order (migration 0041) — the owner (admin) only, with the
+   * owner's PIN or password typed again. What the dialog shows first:
+   * whether it may be deleted (and why not, in plain words), its stock, its
+   * cash per shift, the kitchen slip and the website. Nothing is written.
+   */
+  'orders:testDeletePreview': {
+    request: { orderId: string };
+    response: ApiResult<TestDeletePreview>;
+  };
+  /**
+   * Delete it: the order and its payments soft-deleted, its stock put back or
+   * booked as waste, its waiting FBR rows skipped — one transaction, synced
+   * and audited. It can't be brought back.
+   */
+  'orders:deleteTest': {
+    request: DeleteTestOrderRequest;
+    response: ApiResult<TestDeleteResult>;
+  };
+  /** The owner's list of deleted test orders, by when the order was taken. Read-only. */
+  'orders:listDeletedTests': {
+    request: ListDeletedTestsRequest;
+    response: ApiResult<DeletedTestsPage>;
+  };
 
   // Live order tracking — state transitions for the Live Orders board.
   // Server enforces legal transitions; client passes the orderId only.
@@ -911,6 +945,27 @@ export interface IpcContract {
   'printer:reprintCounts': {
     request: { orderIds: string[] };
     response: ApiResult<Record<string, number>>;
+  };
+  /**
+   * What the order's print button would print now — the bill, the receipt or
+   * the cancelled-order slip, how many of it printed before and the DUPLICATE
+   * number the press would carry — and every paper the order had on either
+   * till, as each was marked. Read-only. Signed in, and the same orders as
+   * printer:reprint (a counter login: the board and this shift's).
+   */
+  'printer:orderPapers': {
+    request: { orderId: string };
+    response: ApiResult<OrderPapers>;
+  };
+  /**
+   * "Try again" on the failed-print note: the receipt or kitchen job the till
+   * gave up on is sent again as it was, so the paper the till prints by
+   * itself stays the ORIGINAL. Signed in, and the same orders as
+   * printer:reprint. `requeued: false` when there was nothing to try again.
+   */
+  'printer:retryJob': {
+    request: { jobId: string };
+    response: ApiResult<{ requeued: boolean }>;
   };
 
   // FBR (Pakistan Digital Invoicing)
@@ -1466,6 +1521,16 @@ export interface IpcContract {
   'reports:variance': {
     request: VarianceRequest | undefined;
     response: ApiResult<ReportVariance>;
+  };
+  /**
+   * The cash drawer log (migration 0040): every time the till opened the
+   * drawer — cash sales, refunds, cash in and out, the float, counting, no
+   * sale, tests — who, why, for how much, and whether it opened. Newest
+   * first, a page at a time. report.view (the owner).
+   */
+  'reports:drawerLog': {
+    request: DrawerLogRequest;
+    response: ApiResult<DrawerLogPage>;
   };
 
   // Customers

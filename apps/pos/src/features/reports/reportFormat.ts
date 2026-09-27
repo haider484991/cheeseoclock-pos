@@ -58,6 +58,8 @@ export const DRAWER_OPEN_WHY: Record<BusinessReport['drawerOpens'][number]['kind
   no_sale: 'No sale',
   count: 'To count at close',
   test: 'Test (settings)',
+  // A kind this till doesn't know (a newer till wrote it): never passed off as "No sale".
+  other: 'Other',
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -273,6 +275,7 @@ export function cancelledWasteText(f: Pick<ReportFoodCost, 'cancelledWasteCents'
 /** Why food was thrown away, in the owner's words (screen, Excel and paper). */
 export const WASTE_REASON_LABEL: Record<ReportWasteReason, string> = {
   cancelled_made: 'Cancelled after cooking',
+  test_order: 'Test orders (deleted)',
   burnt: 'Burnt',
   dropped: 'Dropped',
   expired: 'Expired / went off',

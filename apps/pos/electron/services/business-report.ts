@@ -540,6 +540,7 @@ function withStaffCounts(
   voids: Array<{ staffKey: string }>,
   noSaleOpens: Map<string, number>,
   userName: (id: string) => string | null,
+  drawerOpens: Map<string, number> = new Map(),
 ): ReportStaffLine[] {
   const voidCounts = new Map<string, number>();
   for (const v of voids) voidCounts.set(v.staffKey, (voidCounts.get(v.staffKey) ?? 0) + 1);
@@ -547,8 +548,9 @@ function withStaffCounts(
     ...s,
     voidCount: voidCounts.get(s.key) ?? 0,
     noSaleOpens: noSaleOpens.get(s.key) ?? 0,
+    drawerOpens: drawerOpens.get(s.key) ?? 0,
   }));
-  for (const key of new Set([...voidCounts.keys(), ...noSaleOpens.keys()])) {
+  for (const key of new Set([...voidCounts.keys(), ...noSaleOpens.keys(), ...drawerOpens.keys()])) {
     if (lines.some((l) => l.key === key)) continue;
     lines.push({
       key,
@@ -559,6 +561,7 @@ function withStaffCounts(
       discountCents: 0,
       voidCount: voidCounts.get(key) ?? 0,
       noSaleOpens: noSaleOpens.get(key) ?? 0,
+      drawerOpens: drawerOpens.get(key) ?? 0,
     });
   }
   return lines;
@@ -570,6 +573,14 @@ function withStaffCounts(
  * one is saved as no_sale — see drawer-open-repo).
  */
 const NO_SALE_KINDS = `('no_sale', 'test')`;
+
+/**
+ * The opens BY HAND — the Open drawer button, "Open drawer to count" and Test
+ * drawer. Since the drawer log (0040) drawer_opens also holds every cash
+ * sale, refund, float and cash in / out, so the "opened by hand" figure and
+ * list name these kinds; the whole log is reports:drawerLog.
+ */
+const MANUAL_KINDS = `('no_sale', 'count', 'test')`;
 
 /** Who opened the drawer with no sale in the period, and how often. */
 function getNoSaleOpensByUser(db: AppDatabase, range: ReportRange): Map<string, number> {
@@ -583,18 +594,30 @@ function getNoSaleOpensByUser(db: AppDatabase, range: ReportRange): Map<string, 
   return new Map(rows.map((r) => [r.userId, Number(r.n)]));
 }
 
-/** How many manual drawer opens (all kinds) the period had — the list below is capped. */
+/** Who had the drawer opened in the period, and how often — every kind (the drawer log, 0040). */
+function getDrawerOpensByUser(db: AppDatabase, range: ReportRange): Map<string, number> {
+  const rows = db
+    .prepare(
+      `SELECT user_id AS userId, COUNT(*) AS n FROM drawer_opens
+        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL
+        GROUP BY user_id`,
+    )
+    .all(...args(range)) as Array<{ userId: string; n: number }>;
+  return new Map(rows.map((r) => [r.userId, Number(r.n)]));
+}
+
+/** How many drawer opens BY HAND (no sale, count, test) the period had — the list below is capped. */
 function getDrawerOpenCount(db: AppDatabase, range: ReportRange): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM drawer_opens
-        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL`,
+        WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL AND kind IN ${MANUAL_KINDS}`,
     )
     .get(...args(range)) as { n: number } | undefined;
   return Number(row?.n ?? 0);
 }
 
-/** Every manual drawer open in the period (all kinds), newest first, capped. */
+/** Every drawer open BY HAND (no sale, count, test) in the period, newest first, capped. */
 function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLine[] {
   const rows = db
     .prepare(
@@ -604,7 +627,7 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
          FROM drawer_opens d
          LEFT JOIN users u ON u.id = d.user_id
          LEFT JOIN users ua ON ua.id = d.approved_by_user_id
-        WHERE d.created_at >= ? AND d.created_at < ? AND d.deleted_at IS NULL
+        WHERE d.created_at >= ? AND d.created_at < ? AND d.deleted_at IS NULL AND d.kind IN ${MANUAL_KINDS}
         ORDER BY d.created_at DESC, d.id DESC
         LIMIT ${REPORT_LIST_CAP}`,
     )
@@ -621,8 +644,8 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
   return rows.map((r) => ({
     id: r.id,
     createdAt: r.createdAt,
-    // A kind this till doesn't know yet (from a newer one) reads as a no-sale open.
-    kind: r.kind === 'count' || r.kind === 'test' ? r.kind : 'no_sale',
+    // Only the kinds by hand reach here; anything else (a till's bug) is 'Other', never 'no sale'.
+    kind: r.kind === 'no_sale' || r.kind === 'count' || r.kind === 'test' ? r.kind : 'other',
     reason: r.reason,
     openedBy: r.openedBy,
     approvedBy: r.approverId === null ? null : (r.approvedBy ?? 'Unknown'),
@@ -646,7 +669,17 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
               (SELECT COUNT(*) FROM cash_movements m
                 WHERE m.shift_id = s.id AND m.deleted_at IS NULL) AS cashMovementCount,
               (SELECT COUNT(*) FROM drawer_opens d
-                WHERE d.shift_id = s.id AND d.deleted_at IS NULL AND d.kind IN ${NO_SALE_KINDS}) AS noSaleOpens
+                WHERE d.shift_id = s.id AND d.deleted_at IS NULL AND d.kind IN ${NO_SALE_KINDS}) AS noSaleOpens,
+              (SELECT COUNT(*) FROM drawer_opens d
+                WHERE d.shift_id = s.id AND d.deleted_at IS NULL) AS drawerOpenCount,
+              -- Test orders deleted AFTER the shift closed (0041): the saved
+              -- expected / counted / short-over are never rewritten, so the
+              -- cash is noted instead (signed: sales less refunds).
+              COALESCE((SELECT SUM(p.amount_cents) FROM payments p
+                          JOIN orders o ON o.id = p.order_id
+                         WHERE COALESCE(p.shift_id, o.shift_id) = s.id AND p.method = 'cash'
+                           AND p.deleted_at IS NOT NULL AND s.closed_at IS NOT NULL AND p.deleted_at > s.closed_at
+                           AND o.delete_kind = 'test'), 0) AS testDeletedCashCents
          FROM shifts s
          LEFT JOIN users uo ON uo.id = s.opened_by_user_id
          LEFT JOIN users uc ON uc.id = s.closed_by_user_id
@@ -1311,8 +1344,24 @@ export const ORDER_WASTE_SQL = `
    WHERE o.status IN ('void', 'refunded') AND ${IN_RANGE} AND o.deleted_at IS NULL
      AND +m.reason = 'waste' AND m.deleted_at IS NULL`;
 
+/**
+ * The waste of test orders started in [since, until) that the owner deleted
+ * (0041), whatever their status — "Don't put it back" books the food as
+ * waste, and so may a cancel before the delete. Reason 'test_order'. The
+ * query above keeps o.deleted_at IS NULL, so nothing is counted twice and
+ * Waste still matches the waste the stock ledger holds.
+ */
+export const TEST_ORDER_WASTE_SQL = `
+  SELECT m.ref_order_id AS orderId, m.ingredient_id AS ingredientId, m.delta_qty AS qty, m.unit AS rowUnit,
+         m.value_cents AS value, m.detail AS detail, COALESCE(m.ref_taken_at, m.occurred_at) AS takenAt
+    FROM orders o
+    JOIN stock_movements m ON m.ref_order_id = o.id
+   WHERE o.deleted_at IS NOT NULL AND o.delete_kind = 'test' AND ${IN_RANGE}
+     AND +m.reason = 'waste' AND m.deleted_at IS NULL`;
+
 const WASTE_ORDER: readonly ReportWasteReason[] = [
   'cancelled_made',
+  'test_order',
   'burnt',
   'dropped',
   'expired',
@@ -1352,15 +1401,17 @@ function getWaste(db: AppDatabase, range: ReportRange, pricing: () => Pricing): 
   };
   const handRows = db.prepare(HAND_WASTE_SQL).all(since, until) as Row[];
   const orderRows = db.prepare(ORDER_WASTE_SQL).all(since, until) as Row[];
+  const testRows = (db.prepare(TEST_ORDER_WASTE_SQL).all(since, until) as Row[]).map((r) => ({ ...r, testOrder: true }));
   const t: WasteTally = { cents: 0, cancelledCents: 0, cancelledOrders: new Set(), rows: 0, byReason: new Map(), byIngredient: new Map() };
   const ordersByReason = new Map<ReportWasteReason, Set<string>>();
-  for (const r of [...handRows, ...orderRows]) {
+  for (const r of [...handRows, ...orderRows, ...testRows] as Array<Row & { testOrder?: boolean }>) {
     const row = { ...r, qty: Number(r.qty), value: r.value === null ? null : Number(r.value) };
     const cents = -(rowValue(row, pricing, r.takenAt) ?? 0);
-    const reason = wasteReasonOf(r.detail, r.orderId);
+    // A deleted test order's food is its own line ("Test orders (deleted)"), not a cancel.
+    const reason: ReportWasteReason = r.testOrder === true ? 'test_order' : wasteReasonOf(r.detail, r.orderId);
     t.cents += cents;
     t.rows += 1;
-    if (r.orderId !== null) {
+    if (r.orderId !== null && r.testOrder !== true) {
       t.cancelledCents += cents;
       t.cancelledOrders.add(r.orderId);
     }
@@ -1882,7 +1933,12 @@ export function buildTeamTab(db: AppDatabase, req: BusinessReportRequest): Repor
       voidCount: nonSales.voidCount,
       voidCents: nonSales.voidCents,
     },
-    staff: withHandPrints(db, range, withStaffCounts(sales.staff, voidRows, getNoSaleOpensByUser(db, range), names.user), names.user),
+    staff: withHandPrints(
+      db,
+      range,
+      withStaffCounts(sales.staff, voidRows, getNoSaleOpensByUser(db, range), names.user, getDrawerOpensByUser(db, range)),
+      names.user,
+    ),
     shifts: getShifts(db, range),
     discounts: summarizeDiscounts(getDiscountLines(db, range)),
     refunds: refunds.slice(0, REPORT_LIST_CAP),

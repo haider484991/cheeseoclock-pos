@@ -404,6 +404,30 @@ describe('DUPLICATE', () => {
     expect(t).toContain('Printed later: 26/09/2026 22:10 by Sana Khan');
   });
 
+  it('pressed for by hand while the print log could not be read: still DUPLICATE, with no number', () => {
+    const stamp: CopyStamp = {
+      kind: 'reprint',
+      number: 0,
+      numberUnknown: true,
+      printedAt: at(19, 52),
+      byName: 'Ali Akbar',
+      approvedByName: 'Sana Khan',
+    };
+    const t = text(renderReceipt(paid(), { branding, stamp, fbr }));
+    expect(t[0]).toBe('*'.repeat(48));
+    expect(t[1]).toBe('DUPLICATE');
+    expect(t[2]).toBe('Reprint | 26/09/2026 19:52 | by Ali Akbar');
+    expect(t[3]).toBe('Approved by: Sana Khan');
+    expect(t).toContain('PAID - CASH (DUPLICATE)');
+    expect(t).toContain('** DUPLICATE **');
+    // No made-up number anywhere, and no "Original: …" it can't know.
+    expect(t.join('\n')).not.toMatch(/Reprint #|Copy #|Original:/);
+    // A bill pressed for the same way says the same.
+    const bill = text(renderReceipt(codBill(), { branding, stamp }));
+    expect(bill[1]).toBe('DUPLICATE');
+    expect(bill).toContain('** DUPLICATE **');
+  });
+
   it('a SHOP COPY reprinted is both, and still has no FBR block', () => {
     const t = text(renderReceipt(paid(), { branding, copy: 'shop', stamp: reprint2, fbr }));
     expect(t[1]).toBe('DUPLICATE');

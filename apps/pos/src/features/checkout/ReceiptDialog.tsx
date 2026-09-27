@@ -8,7 +8,8 @@ import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { CheckCircle2, Printer, Hourglass, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { reprintReceipt, reprintToast } from '../printing/reprint';
+import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
+import { paperButtonLabel } from '../printing/paperLabels';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -58,11 +59,47 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
     [qc, order.id],
   );
 
+  // What the print button would print: the receipt printing now ("Printing…"),
+  // one already out ("Reprint receipt"), or — a delivery whose bill prints
+  // when the rider leaves — nothing yet. Pressed by hand, the paper always
+  // says DUPLICATE (the owner's rule): the original is the one the till
+  // prints by itself, here when the rider leaves.
+  const papersQ = useQuery({
+    queryKey: ['orders', 'papers', order.id],
+    queryFn: () => ipc.printer.orderPapers(order.id),
+    refetchInterval: (q) => (q.state.data?.next?.waiting ? 1_500 : false),
+  });
+  const policyQ = useQuery({
+    queryKey: ['printer', 'config'],
+    queryFn: () => ipc.printer.getConfig(),
+    enabled: order.mode === 'delivery',
+    staleTime: 60_000,
+  });
+  const next = papersQ.data?.next ?? null;
+  const receiptNotYetPrinted =
+    order.mode === 'delivery' &&
+    !order.dispatchedAt &&
+    policyQ.data?.policy.deliveryBillOnDispatch === true &&
+    next?.document === 'receipt' &&
+    next.printedBefore === 0 &&
+    !next.waiting;
+  const buttonLabel = receiptNotYetPrinted ? 'Print receipt now' : paperButtonLabel(next);
+
   async function reprint() {
     setReprinting(true);
     try {
-      // Says DUPLICATE on paper; asks for a manager after the cashier's one copy.
-      toast({ title: reprintToast(await reprintReceipt(order.id)), variant: 'success' });
+      if (next?.failedJobId) {
+        // The receipt the till printed by itself failed: send THAT again —
+        // it is the original the customer never got.
+        const r = await ipc.printer.retryJob(next.failedJobId);
+        toast({ title: failedRetryToast(next.document, r.requeued), variant: r.requeued ? 'success' : 'info' });
+      } else {
+        // Printed by hand: it says DUPLICATE (the one the till printed by
+        // itself is the original); after the cashier's one copy, a manager.
+        toast({ title: reprintToast(await reprintReceipt(order.id)), variant: 'success' });
+      }
+      void papersQ.refetch();
+      setTimeout(() => void papersQ.refetch(), 2_000);
     } catch (e) {
       toast({
         title: 'Reprint failed',
@@ -184,6 +221,11 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
             <FbrBlock status={fbrQ.data} />
           </div>
 
+          {receiptNotYetPrinted && (
+            <p className="border-t border-stone-200 px-4 pt-3 text-xs text-stone-600 dark:border-stone-800 dark:text-stone-300">
+              Printed now, this receipt says DUPLICATE. The original prints by itself when the rider leaves.
+            </p>
+          )}
           <footer className="flex gap-2 border-t border-stone-200 p-4 dark:border-stone-800">
             <Button ref={newOrderRef} variant="primary" size="lg" className="flex-[2]" onClick={onClose}>
               New order
@@ -191,17 +233,13 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
             <Button
               variant="secondary"
               size="lg"
-              className="flex-1"
+              className="flex-1 whitespace-nowrap"
               disabled={reprinting}
               onClick={reprint}
-              title={
-                fbrQ.data?.status === 'sent'
-                  ? 'Reprint with FBR IRN'
-                  : 'Reprint receipt'
-              }
+              title={fbrQ.data?.status === 'sent' ? 'Print the receipt (with the FBR number)' : 'Print bill or receipt'}
             >
               <Printer className="h-4 w-4" />
-              {reprinting ? 'Sending…' : 'Reprint'}
+              {reprinting ? 'Sending…' : buttonLabel}
             </Button>
           </footer>
         </Dialog.Content>

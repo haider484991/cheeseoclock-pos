@@ -4,6 +4,7 @@ import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
+import { recordDrawerOpen } from './drawer-open-repo.js';
 import type {
   CashMovement,
   CashMovementType,
@@ -129,7 +130,31 @@ export interface OpenShiftInput {
   notes?: string | null;
 }
 
+/** A shift just opened, and the drawer_opens row its float pulse is for. */
+export type OpenedShift = Shift & { drawerOpenId: string };
+
+/**
+ * Open a shift on this till. The drawer pops to put the float in — even a
+ * Rs 0 float — so its drawer_opens row ('float', the opening cash) is written
+ * in the same transaction; the handler pulses the drawer for that row only.
+ */
 export function openShift(
+  db: AppDatabase,
+  input: OpenShiftInput,
+  actor: Actor & { userId: string },
+): OpenedShift {
+  return db.transaction((): OpenedShift => {
+    const shift = openShiftRow(db, input, actor);
+    const drawer = recordDrawerOpen(
+      db,
+      { kind: 'float', amountCents: shift.openingCashCents },
+      actor,
+    );
+    return { ...shift, drawerOpenId: drawer.id };
+  })();
+}
+
+function openShiftRow(
   db: AppDatabase,
   input: OpenShiftInput,
   actor: Actor & { userId: string },
@@ -244,7 +269,8 @@ export function closeShift(
            COALESCE(SUM(CASE WHEN p.amount_cents < 0 THEN -p.amount_cents ELSE 0 END), 0) AS refunds
           FROM payments p
           JOIN orders o ON o.id = p.order_id
-         WHERE COALESCE(p.shift_id, o.shift_id) = ? AND p.method = 'cash' AND p.deleted_at IS NULL`,
+         WHERE COALESCE(p.shift_id, o.shift_id) = ? AND p.method = 'cash' AND p.deleted_at IS NULL
+           AND o.deleted_at IS NULL`,
       )
       .get(input.shiftId) as { sales: number; refunds: number };
     const moves = cashMovementTotals(db, input.shiftId);
@@ -336,7 +362,7 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
               COALESCE(SUM(CASE WHEN p.amount_cents < 0 THEN -p.amount_cents ELSE 0 END), 0) AS refunds
          FROM payments p
          JOIN orders o ON o.id = p.order_id
-        WHERE COALESCE(p.shift_id, o.shift_id) = ? AND p.deleted_at IS NULL
+        WHERE COALESCE(p.shift_id, o.shift_id) = ? AND p.deleted_at IS NULL AND o.deleted_at IS NULL
         GROUP BY p.method
         ORDER BY SUM(ABS(p.amount_cents)) DESC`,
     )
@@ -546,11 +572,39 @@ export interface RecordCashMovementInput {
   refPurchaseOrderId?: string | null;
 }
 
+/** A cash movement just recorded, and the drawer_opens row its pulse is for. */
+export type RecordedCashMovement = CashMovement & { drawerOpenId: string };
+
 /**
  * Record cash into or out of this till's open drawer. It belongs to the shift
- * open on this device now — there is no drawer to put it in otherwise.
+ * open on this device now — there is no drawer to put it in otherwise. The
+ * drawer opens for the notes, so its drawer_opens row (kind = the movement
+ * type, the amount signed: + cash in, − cash out or a tip) is written in the
+ * same transaction — also inside a caller's (a purchase paid from the drawer).
  */
 export function recordCashMovement(
+  db: AppDatabase,
+  input: RecordCashMovementInput,
+  actor: Actor & { userId: string },
+): RecordedCashMovement {
+  return db.transaction((): RecordedCashMovement => {
+    const movement = recordCashMovementRow(db, input, actor);
+    const drawer = recordDrawerOpen(
+      db,
+      {
+        kind: movement.type,
+        reason: movement.reason,
+        approvedByUserId: movement.approvedByUserId,
+        cashMovementId: movement.id,
+        amountCents: movement.type === 'payin' ? movement.amountCents : -movement.amountCents,
+      },
+      actor,
+    );
+    return { ...movement, drawerOpenId: drawer.id };
+  })();
+}
+
+function recordCashMovementRow(
   db: AppDatabase,
   input: RecordCashMovementInput,
   actor: Actor & { userId: string },

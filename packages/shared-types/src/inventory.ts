@@ -316,6 +316,8 @@ export interface StockMovementEntry extends StockMovement {
   actorName: string | null;
   /** The order's number when the movement came from a sale. */
   orderNumber: string | null;
+  /** That order was deleted by the owner as a test order (0041): "#0042 (deleted test)". */
+  orderDeletedAsTest?: boolean;
   /** The purchase order's reference when the movement came from a delivery. */
   purchaseOrderRef: string | null;
 }
@@ -431,6 +433,11 @@ export interface RecordPurchaseResult {
   pricesUsed: UUID[];
   /** Ingredients whose price was kept although this bill's differs (the stock still came in at the bill). */
   pricesKept: UUID[];
+  /**
+   * Paid from the drawer: the drawer_opens row (0040) of the payout, written
+   * in the same transaction — the drawer is pulsed for it. Null otherwise.
+   */
+  payoutDrawerOpenId?: string | null;
 }
 
 /**

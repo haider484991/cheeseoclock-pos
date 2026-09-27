@@ -46,22 +46,39 @@ export function reprintKitchen(orderId: string): Promise<ReprintResult> {
   return ipc.printer.reprintKitchen(orderId);
 }
 
-/** What the toast says after a reprint button. */
+/** The paper, as the toast names it. */
+const PAPER_WORD: Record<'bill' | 'receipt' | 'void' | 'refund', string> = {
+  bill: 'Bill',
+  receipt: 'Receipt',
+  void: 'Cancelled-order slip',
+  refund: 'Refund slip',
+};
+
+/**
+ * The toast after the order panel sent the till's own failed paper again
+ * (next.failedJobId → printer:retryJob): it prints as the original.
+ */
+export function failedRetryToast(document: 'bill' | 'receipt' | 'void', requeued: boolean): string {
+  if (!requeued) return 'Nothing to send again — it already printed.';
+  return `${PAPER_WORD[document]} sent to the printer again — it is the one the till owed, so it prints as the original.`;
+}
+
+/**
+ * What the toast says after a print button: what printed, and that it says
+ * DUPLICATE. The owner's rule (27 Sep 2026): only the paper the till prints
+ * by itself is the original; a paper printed with a print button is always
+ * marked DUPLICATE "Reprint #N" — the first one of its kind too.
+ */
 export function reprintToast(r: ReprintResult): string {
-  if (r.status === 'merged') return 'Already on its way to the printer';
-  switch (r.document) {
-    case 'void':
-      return 'Cancelled-order slip sent to printer';
-    case 'kitchen':
-    case 'kitchen_cancel':
-      // Say what the paper says: the kitchen is told by the cashier too.
-      if (r.resent) return 'Kitchen ticket re-sent — the kitchen should check the rail before cooking';
-      return r.duplicate ? 'Kitchen ticket sent — marked REPRINT' : 'Kitchen ticket sent to printer';
-    case 'bill':
-      return r.duplicate ? 'Bill sent — marked DUPLICATE' : 'Bill (not paid) sent to printer';
-    case 'refund':
-      return r.duplicate ? 'Refund slip sent — marked DUPLICATE' : 'Refund slip sent to printer';
-    default:
-      return r.duplicate ? 'Receipt sent — marked DUPLICATE' : 'Receipt sent to printer';
+  if (r.status === 'merged') return 'Already printing — no second copy was made.';
+  if (r.document === 'kitchen' || r.document === 'kitchen_cancel') {
+    // Say what the paper says: the kitchen is told by the cashier too.
+    if (r.resent) return 'Kitchen ticket re-sent — the kitchen should check the rail before cooking';
+    return r.duplicate ? 'Kitchen ticket sent — marked REPRINT' : 'Kitchen ticket sent to printer';
   }
+  const word = PAPER_WORD[r.document];
+  if (!r.duplicate) return `${word} sent to the printer.`;
+  const n = r.reprintNo && r.reprintNo > 0 ? ` (Reprint #${r.reprintNo})` : '';
+  if (r.printNo === 0) return `${word} printed — marked DUPLICATE${n}. A paper printed by hand always says DUPLICATE.`;
+  return `${word} printed again — marked DUPLICATE${n}`;
 }

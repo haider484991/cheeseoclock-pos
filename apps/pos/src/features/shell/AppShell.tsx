@@ -9,6 +9,7 @@ import { ipc, onLowStock, onPrinterFailed, onWebOrderReceived } from '../../ipc/
 import { useToast } from '../../components/toast/ToastProvider';
 import { useQueryClient } from '@tanstack/react-query';
 import { DRAWER_NOT_OPENED_CODE, DRAWER_UNSURE_CODE } from '@cheeseoclock/shared-types';
+import { failedPrintNote } from '../printing/failedPrintNote';
 
 export function AppShell() {
   const user = useSessionStore((s) => s.user);
@@ -67,20 +68,25 @@ export function AppShell() {
         });
         return;
       }
-      toast({
-        title: payload.retrying
-          ? `Printer not responding — ${payload.jobKind === 'kitchen' ? 'kitchen ticket' : payload.jobKind === 'drawer' ? 'cash drawer' : 'receipt'} will retry`
-          : 'Print failed',
-        description:
-          payload.error?.message ??
-          (payload.jobKind === 'kitchen'
-            ? 'Could not print kitchen ticket'
-            : payload.jobKind === 'drawer'
-              ? 'Could not open the cash drawer'
-              : 'Could not print receipt'),
-        // A retry on its way is a warning that clears itself; a final failure stays until closed.
-        variant: payload.retrying ? 'warning' : 'error',
-      });
+      // Given up on a receipt or kitchen ticket: the note names the paper and
+      // the order, and "Try again" sends that very job again, so the paper
+      // the till prints by itself stays the original (a print button would
+      // print a DUPLICATE). failedPrintNote.ts.
+      toast(
+        failedPrintNote(payload, (jobId) => {
+          ipc.printer
+            .retryJob(jobId)
+            .then((r) =>
+              toast({
+                title: r.requeued ? 'Sent to the printer again' : 'Nothing to print again — it already printed',
+                variant: r.requeued ? 'success' : 'info',
+              }),
+            )
+            .catch((e: unknown) =>
+              toast({ title: 'Could not try again', description: e instanceof Error ? e.message : String(e), variant: 'error' }),
+            );
+        }),
+      );
     });
   }, [toast]);
 
