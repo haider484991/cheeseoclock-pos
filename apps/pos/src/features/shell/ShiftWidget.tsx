@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Lock, ShieldCheck, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { IpcRequest, ShiftCloseCheck, UnpaidOrderAtClose } from '@cheeseoclock/shared-types';
+import type { IpcRequest, OpeningFloatPrefill, ShiftCloseCheck, UnpaidOrderAtClose } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -321,21 +321,47 @@ function formatElapsed(openedAtIso: string): string {
 // Open shift dialog
 // ---------------------------------------------------------------------------
 
+/** The line over the Open shift box: where its starting figure came from. Null when it starts at 0 (a first shift). */
+export function openingFloatNote(start: OpeningFloatPrefill): string | null {
+  switch (start.from) {
+    case 'last_count':
+      return start.lastCount
+        ? `The last shift closed with ${formatCents(start.lastCount.countedCashCents)} in the drawer. Count it again and change this if it is different.`
+        : null;
+    case 'fixed':
+      return `This till starts each shift with ${formatCents(start.prefillCents ?? 0)} (Settings). Count the drawer and change this if it is different.`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * What the Open shift box shows until someone types: the starting figure in
+ * rupees (the owner's fixed float, or the last count), or 0 on a first shift
+ * and while the till has not answered yet.
+ */
+export function openingFloatBoxStart(start: OpeningFloatPrefill | undefined): string {
+  return start && start.prefillCents !== null ? String(start.prefillCents / 100) : '0';
+}
+
 /** Count the float and open a shift: the top bar's "Open shift", and the no-shift banner's. */
 export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
-  const [opening, setOpening] = useState('0');
   const [notes, setNotes] = useState('');
   const { toast } = useToast();
   const qc = useQueryClient();
-  // The float starts from what the last shift on this till counted: the cash
-  // that stayed in the drawer overnight. Typed in fresh every morning, it was
-  // routinely left at 0 and the whole float showed up as "over" at close.
-  const lastQ = useQuery({ queryKey: ['shifts', 'lastCount'], queryFn: () => ipc.shifts.lastCount() });
-  const last = lastQ.data;
-  const [touched, setTouched] = useState(false);
-  useEffect(() => {
-    if (last && !touched) setOpening(String(last.countedCashCents / 100));
-  }, [last, touched]);
+  // The float starts from what the last shift on this till counted — the cash
+  // that stayed in the drawer overnight — or, when the owner set one for this
+  // till, a fixed float (Settings → Staff & kitchen). Typed in fresh every
+  // morning, it was routinely left at 0 and the whole float showed up as
+  // "over" at close. Only a starting figure: the float is still counted here.
+  const floatQ = useQuery({ queryKey: ['shifts', 'openingFloat'], queryFn: () => ipc.shifts.openingFloat() });
+  const start = floatQ.data;
+  // Until someone types, the box shows the starting figure (worked out from
+  // the till's answer on every render, not copied in by an effect); once
+  // typed, what was typed — a late answer never overwrites it.
+  const [typed, setTyped] = useState<string | null>(null);
+  const opening = typed ?? openingFloatBoxStart(start);
+  const startNote = start ? openingFloatNote(start) : null;
 
   const openMut = useMutation({
     mutationFn: () =>
@@ -388,19 +414,11 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                 Opening cash (Rs)
               </span>
-              {last && (
-                <span className="mb-1 block text-xs text-stone-500">
-                  The last shift closed with {formatCents(last.countedCashCents)} in the drawer. Count
-                  it again and change this if it is different.
-                </span>
-              )}
+              {startNote && <span className="mb-1 block text-xs text-stone-500">{startNote}</span>}
               <input
                 inputMode="decimal"
                 value={opening}
-                onChange={(e) => {
-                  setTouched(true);
-                  setOpening(e.target.value);
-                }}
+                onChange={(e) => setTyped(e.target.value)}
                 autoFocus
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />

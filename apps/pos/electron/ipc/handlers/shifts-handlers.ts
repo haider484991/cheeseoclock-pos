@@ -1,6 +1,7 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { ok, hasCapability } from '@cheeseoclock/shared-types';
+import { openingFloatPrefill } from '@cheeseoclock/pos-domain';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession, verifyManagerPin } from '../../services/auth-service.js';
 import {
@@ -20,6 +21,7 @@ import { printSpooler } from '../../services/print-spooler.js';
 import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-service.js';
 import { followShiftForWebOrders } from '../../services/web-orders-shift-pause.js';
 import { requireCapability, REFUSED } from '../guards.js';
+import { readOpeningFloat } from '../../services/till-settings.js';
 
 /**
  * Shifts IPC. Open/close are gated on the `shift.open` / `shift.close`
@@ -187,6 +189,15 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   defineHandler('shifts:lastCount', ctx, () => {
     requireSession();
     return ok(getLastCount(ctx.db, ctx.deviceId));
+  });
+
+  // What the Open shift box starts the count on: this till's last count, or
+  // the owner's fixed float (Settings → Staff & kitchen, this till only).
+  // Anyone who may open a shift reads it (a cashier opens the morning shift);
+  // it is only a starting figure — the float is still counted and typed.
+  defineHandler('shifts:openingFloat', ctx, () => {
+    requireSession();
+    return ok(openingFloatPrefill(readOpeningFloat(ctx.db), getLastCount(ctx.db, ctx.deviceId)));
   });
 
   // Cash in/out of the drawer. A manager or the owner records it directly; a

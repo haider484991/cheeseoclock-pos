@@ -1,6 +1,6 @@
 import type { Cents } from './money.js';
 import type { UUID, OrderNumber } from './ids.js';
-import type { DiscountSource, FoodpandaDealShare } from './shop-settings.js';
+import type { DiscountSource, FoodpandaDealShare, OfferShare, OrderCameBy } from './shop-settings.js';
 
 // 'dine_in' is retained for historical orders; the POS no longer offers it.
 export type OrderMode = 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda';
@@ -85,6 +85,14 @@ export interface Order {
   deleteKind?: OrderDeleteKind | null;
   /** What deleting it as a test did to its stock. */
   deleteStock?: TestDeleteStock | null;
+  /**
+   * How the order came in (orders.came_by, migration 0044): the counter's
+   * Walk-in / Phone / WhatsApp chip, or 'website' / 'foodpanda', filled in
+   * by the order itself. Absent = not asked, or an order from before 0044.
+   * Locked when the order is sent: a change after that needs a manager's PIN
+   * and is audited (order-repo setOrderCameBy).
+   */
+  cameBy?: OrderCameBy | null;
 }
 
 /** How an order was deleted: 'test' — the owner deleted it as a test order (0043). */
@@ -135,11 +143,14 @@ export interface OrderDiscount {
   amountCents: Cents;
   /**
    * Where it came from (migration 0040): 'foodpanda' = the shop's standing
-   * foodpanda deal, put on automatically; null/absent = typed by staff (F3).
+   * foodpanda deal, put on automatically; 'offer' = one of the owner's
+   * automatic offers (Money & discounts); null/absent = typed by staff (F3).
    */
   source?: DiscountSource | null;
   /** A foodpanda deal's figures on this order (the whole deal, foodpanda's part). */
   foodpanda?: FoodpandaDealShare | null;
+  /** One of the owner's automatic offers (source 'offer'): its name and frozen terms, and whether the cashier took it off. */
+  offer?: OfferShare | null;
   /**
    * Whether this discount also came off the order's delivery charge, as
    * FROZEN on its row when it was given (order_discounts.rule_json; pos-domain
@@ -228,4 +239,20 @@ export function orderNotesOf(s: {
   if (fromOrder) notes.push(fromOrder);
   if (fromCounter && fromCounter !== fromOrder) notes.push(fromCounter);
   return notes;
+}
+
+/** Who a website order was taken by, on paper. */
+export const WEBSITE_CASHIER_NAME = 'Website';
+
+/**
+ * Who took the order, as the papers print it: "Cashier: …" on a bill, a
+ * receipt or a refund slip, and the name on a kitchen ticket. A website
+ * order says "Website". The till files a website order under its first
+ * owner login (web-orders-bridge resolveActor), because orders.cashier_id
+ * must name a user; that stays as it is for the audit trail, and only the
+ * paper says where the order came from. It is decided from the order
+ * itself, so a reprint of an old website order says "Website" too.
+ */
+export function paperCashierName(s: { order: Pick<Order, 'source'>; cashierName: string }): string {
+  return s.order.source === 'web' ? WEBSITE_CASHIER_NAME : s.cashierName;
 }

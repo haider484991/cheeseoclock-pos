@@ -1,7 +1,13 @@
 import { create } from 'zustand';
-import type { FoodpandaTenderCheck, OrderSnapshot, OrderMode, PaymentMethod } from '@cheeseoclock/shared-types';
+import type { CameBy, FoodpandaTenderCheck, OrderSnapshot, OrderMode, PaymentMethod } from '@cheeseoclock/shared-types';
+import { isCameBy } from '@cheeseoclock/shared-types';
 import { ipc } from '../ipc/client';
 import { addedLineId, createSerialQueue, findMergeableLine } from '../features/checkout/cartLines';
+import {
+  deliveryChargeAskFor,
+  noteDeliveryChargeAsked,
+  type DeliveryChargeAskState,
+} from '../features/checkout/deliveryChargeAsk';
 
 /** The ticket line the cashier last added to or changed — the ticket flashes it, and +/- keys act on it. */
 export interface LineTouch {
@@ -17,6 +23,12 @@ interface CheckoutState {
   mode: OrderMode;
   /** Optional dine-in table selection. */
   tableId: string | null;
+  /**
+   * How the order came in (Walk-in · Phone · WhatsApp), as the chips show it:
+   * the open order's, or the one tapped before the first item (it goes on the
+   * order when it is created). Null = not said.
+   */
+  cameBy: CameBy | null;
   /** A change to the order is still on its way to the till (Pay / Send wait for it). */
   busy: boolean;
   lastTouch: LineTouch | null;
@@ -25,6 +37,12 @@ interface CheckoutState {
    *  reports agree with the on-screen choice. Rejects if the write fails. */
   setMode: (mode: OrderMode) => Promise<void>;
   setTableId: (id: string | null) => void;
+  /**
+   * Tap a came-by chip (tap it again: not said). Saved on the open order in
+   * turn with the other taps; the owner's automatic offers follow it there.
+   * Rejects when the till refuses it.
+   */
+  setCameBy: (cameBy: CameBy | null) => Promise<void>;
 
   /**
    * After a restart: pick the unfinished order back up from the database so
@@ -63,16 +81,31 @@ interface CheckoutState {
    * that area's delivery charge on the open order (swaps a wrong one, takes
    * it off when the area is cleared). `mayStartOrder`: with no order yet,
    * start one to carry the charge (only when there is a charge to put on).
+   * `ask`: the customer panel's automatic ask (deliveryChargeAsk.ts) —
+   * checked and remembered when its turn in the queue comes, so an ask Send
+   * or Pay already made (settleDeliveryCharge) is not made twice. Never for
+   * an order already sent or paid: nothing is started in its place.
    */
-  setDeliveryArea: (area: string, opts?: { mayStartOrder?: boolean }) => Promise<void>;
+  setDeliveryArea: (area: string, opts?: { mayStartOrder?: boolean; ask?: DeliveryChargeAskState }) => Promise<void>;
   applyDiscount: (
     discountType: 'percent' | 'flat',
     value: number,
     reason?: string,
     approverPin?: string,
   ) => Promise<void>;
-  /** Taking the shop's foodpanda deal off needs a manager's PIN or password. */
+  /**
+   * Taking the shop's foodpanda deal off needs a manager's PIN or password.
+   * The × on one of the owner's automatic offers takes it off this order
+   * (it stays off); clearing that again puts the offers back.
+   */
   clearDiscount: (approverPin?: string) => Promise<void>;
+  /**
+   * Before Pay opens: the customer typed in is saved on the order, so the
+   * bill Pay shows is final — an automatic offer that needs the customer's
+   * phone goes on NOW, not inside the payment (which would then no longer
+   * match the bill). Resolves with the order as it is.
+   */
+  prepareToPay: () => Promise<OrderSnapshot | null>;
   tender: (
     payments: Array<{
       method: PaymentMethod;
@@ -101,19 +134,35 @@ function touch(lineId: string | null | undefined): LineTouch | null {
   return lineId ? { lineId, seq: ++touchSeq } : null;
 }
 
+/** The chip an order shows: its own came-by when it is one of the counter's three. */
+function chipOf(snap: OrderSnapshot | null | undefined): CameBy | null {
+  const c = snap?.order.cameBy;
+  return isCameBy(c) ? c : null;
+}
+
 export const useCheckoutStore = create<CheckoutState>((set, get) => {
   // Every change to the order goes through this one queue, in tap order.
   // Side by side, two quick first taps each created an order (one orphaned),
   // and a Pay could read the order before the last item had landed.
   const run = createSerialQueue((busy) => set({ busy }));
 
+  /**
+   * What the customer form last saved on which order: Pay saves it before it
+   * opens (prepareToPay), so the payment does not save it a second time (a
+   * typed address would be added twice). Any change to the form saves again.
+   */
+  let committed: string | null = null;
+
   /** The open order, created if there is none. Only call inside `run`. */
   async function ensureOrderNow(): Promise<OrderSnapshot> {
     const existing = get().snapshot;
     if (existing && existing.order.status === 'open') return existing;
+    const mode = get().mode;
+    const cameBy = mode === 'takeaway' || mode === 'delivery' ? get().cameBy : null;
     const order = await ipc.orders.create({
-      mode: get().mode,
+      mode,
       tableId: get().tableId,
+      ...(cameBy ? { cameBy } : {}),
     });
     const snap = await ipc.orders.get(order.id);
     if (!snap) throw new Error('Order vanished after create');
@@ -127,20 +176,66 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
    */
   async function commitCustomer(orderId: string, purpose: string): Promise<void> {
     // Lazy-imported to avoid a circular dep with the checkout feature.
-    const { commitCustomerToOrder } = await import('../features/checkout/CustomerInlinePanel');
-    const { getCustomerFormSnapshot } = await import('../features/checkout/useCustomerForm');
+    const { commitCustomerToOrder, formAfterCommit } = await import('../features/checkout/CustomerInlinePanel');
+    const { getCustomerFormSnapshot, setCustomerForm } = await import('../features/checkout/useCustomerForm');
+    const form = getCustomerFormSnapshot();
+    const mode = get().mode;
+    const sig = JSON.stringify({ orderId, mode, form });
+    if (sig === committed) return;
     try {
-      await commitCustomerToOrder(orderId, get().mode, getCustomerFormSnapshot());
+      const saved = await commitCustomerToOrder(orderId, mode, form);
+      // The form now points at the customer and address it saved, so a later
+      // save (the note changed after Pay was closed) reuses them instead of
+      // adding the address — or a nameless customer — a second time. Only
+      // when nothing was typed meanwhile.
+      if (saved && getCustomerFormSnapshot() === form) {
+        const next = formAfterCommit(form, saved);
+        setCustomerForm(next);
+        committed = JSON.stringify({ orderId, mode, form: next });
+      } else {
+        committed = sig;
+      }
     } catch (e) {
       // Don't block the sale on customer-write failure — surface via log.
       console.warn(`Customer commit failed (proceeding with ${purpose}):`, e);
     }
   }
 
+  /**
+   * The picked area's delivery charge, before the order is handed off (Send,
+   * Pay opening, the payment). The owner, 28 Sep 2026: "if delivery area
+   * selected the delivery fee should be automatically added". The customer
+   * panel asks a moment after the area last changed (DeliveryChargeRow), so
+   * a quick F2 or Pay — or leaving the panel before then — would otherwise
+   * send the order with its area and no charge. Asked only when the panel has
+   * not already asked about exactly this (deliveryChargeAsk.ts): a charge
+   * the cashier took off by hand stays off. The main process decides
+   * (orders:setDeliveryArea), and re-works the automatic offer on the food.
+   * Runs inside a queued job. A failure stops the hand-off with the reason
+   * (it is asked again next time): a delivery never leaves without its
+   * charge unnoticed.
+   */
+  async function settleDeliveryCharge(orderId: string): Promise<void> {
+    const mode = get().mode;
+    if (mode !== 'delivery') return;
+    const { getCustomerFormSnapshot } = await import('../features/checkout/useCustomerForm');
+    const now: DeliveryChargeAskState = { orderId, mode, area: getCustomerFormSnapshot().area, wouldAdd: false };
+    if (deliveryChargeAskFor(now) !== 'ask') return;
+    let next: OrderSnapshot;
+    try {
+      next = await ipc.orders.setDeliveryArea({ orderId, area: now.area.trim() || null });
+    } catch (e) {
+      throw new Error(`Could not put the delivery charge on: ${e instanceof Error ? e.message : 'unknown error'}`);
+    }
+    noteDeliveryChargeAsked(now);
+    if (get().snapshot?.order.id === next.order.id) set({ snapshot: next });
+  }
+
   return {
     snapshot: null,
     mode: 'takeaway',
     tableId: null,
+    cameBy: null,
     busy: false,
     lastTouch: null,
 
@@ -155,7 +250,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
           // the order leaves Delivery (setOrderMode), and puts the area's back when it returns
           // (the customer panel asks, orders:setDeliveryArea).
           const next = await ipc.orders.setMode({ orderId: snap.order.id, mode });
-          set({ snapshot: next, mode: next.order.mode, tableId: next.order.tableId });
+          set({ snapshot: next, mode: next.order.mode, tableId: next.order.tableId, cameBy: chipOf(next) });
         } catch (e) {
           // Persist failed — snap the UI back to the order's real mode so the
           // screen and the saved order can't disagree (that divergence was the
@@ -169,12 +264,29 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       set({ tableId: id });
     },
 
+    async setCameBy(cameBy) {
+      const was = get().cameBy;
+      // The chip lights at once; the order follows in turn with the taps.
+      set({ cameBy });
+      await run(async () => {
+        const snap = get().snapshot;
+        if (!snap || snap.order.status !== 'open') return;
+        try {
+          const next = await ipc.orders.setCameBy({ orderId: snap.order.id, cameBy });
+          set({ snapshot: next, cameBy: chipOf(next) });
+        } catch (e) {
+          set({ cameBy: was });
+          throw e;
+        }
+      });
+    },
+
     resumeDraft() {
       return run(async () => {
         const existing = get().snapshot;
         if (existing) return existing;
         const snap = await ipc.orders.resumeDraft();
-        if (snap) set({ snapshot: snap, mode: snap.order.mode, tableId: snap.order.tableId });
+        if (snap) set({ snapshot: snap, mode: snap.order.mode, tableId: snap.order.tableId, cameBy: chipOf(snap) });
         return snap;
       });
     },
@@ -294,7 +406,14 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
     setDeliveryArea(area, opts = {}) {
       return run(async () => {
         const snap = get().snapshot;
-        let orderId = snap && snap.order.status === 'open' ? snap.order.id : null;
+        // The order was just sent or paid (the screen not cleared yet): a late ask is not a new order.
+        if (snap && snap.order.status !== 'open') return;
+        if (opts.ask) {
+          // Send or Pay may have asked about exactly this already (settleDeliveryCharge).
+          if (deliveryChargeAskFor(opts.ask) === 'same') return;
+          noteDeliveryChargeAsked(opts.ask);
+        }
+        let orderId = snap ? snap.order.id : null;
         if (!orderId) {
           // No order: nothing to take off; start one only to carry a charge.
           if (!opts.mayStartOrder || get().mode !== 'delivery' || !area.trim()) return;
@@ -329,11 +448,25 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       });
     },
 
+    prepareToPay() {
+      return run(async () => {
+        const snap = get().snapshot;
+        if (!snap || snap.order.status !== 'open') return snap;
+        await commitCustomer(snap.order.id, 'pay');
+        // The area's delivery charge too: Pay shows the final bill.
+        await settleDeliveryCharge(snap.order.id);
+        const next = await ipc.orders.get(snap.order.id);
+        if (next) set({ snapshot: next });
+        return next ?? snap;
+      });
+    },
+
     tender(payments, foodpanda) {
       return run(async () => {
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to tender');
         await commitCustomer(snap.order.id, 'tender');
+        await settleDeliveryCharge(snap.order.id);
         const next = await ipc.orders.tender({
           orderId: snap.order.id,
           payments,
@@ -349,6 +482,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to send');
         await commitCustomer(snap.order.id, 'send to kitchen');
+        await settleDeliveryCharge(snap.order.id);
         const next = await ipc.orders.sendToKitchen(snap.order.id);
         set({ snapshot: next });
         return next;
@@ -370,7 +504,8 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       void import('../features/checkout/useCustomerForm').then(({ resetCustomerForm }) =>
         resetCustomerForm(),
       );
-      set({ snapshot: null, tableId: null, lastTouch: null });
+      committed = null;
+      set({ snapshot: null, tableId: null, lastTouch: null, cameBy: null });
     },
   };
 });

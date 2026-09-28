@@ -20,10 +20,10 @@
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportChannelsTab } from '@cheeseoclock/shared-types';
-import { Bike, MapPin, Store } from 'lucide-react';
+import { Bike, MapPin, Store, Waypoints } from 'lucide-react';
 import { ShareBar } from '../charts';
 import { DataTable, Note, Panel, Section, useShowAll } from '../reportUi';
-import { CHANNEL_LABEL, fmtMinutes, fmtWhen, percentOf } from '../reportFormat';
+import { CHANNEL_LABEL, cameByLabel, fmtMinutes, fmtWhen, percentOf } from '../reportFormat';
 import { formatBps } from '../../costing/costingFormat';
 import { commissionText, riderText } from '../profitFormat';
 import { ChannelProfitSection } from './ProfitTab';
@@ -33,6 +33,7 @@ export function ChannelsTab({ data }: { data: ReportChannelsTab }) {
   return (
     <div className="space-y-10">
       <ChannelsSection report={data} />
+      <CameBySection report={data} />
       {data.profit && (
         <div className="space-y-2">
           <ChannelProfitSection channels={data.profit.channels} />
@@ -68,6 +69,42 @@ export function ChannelsSection({ report }: { report: Pick<ReportChannelsTab, 'k
               ? ['All orders', report.kpis.orderCount, formatCents(net), formatCents(report.kpis.avgOrderCents), '100%', '']
               : undefined
           }
+          empty="No sales in this period yet."
+        />
+      </Panel>
+    </Section>
+  );
+}
+
+/**
+ * How the orders came in (orders.came_by, migration 0044): Walk-in, Phone and
+ * WhatsApp as the cashier tapped them, website and foodpanda orders by
+ * themselves — even with no offers — and what the owner's automatic offers
+ * took off each. An order from before 0044 reads as not asked (a website
+ * or foodpanda one as such).
+ */
+export function CameBySection({ report }: { report: Pick<ReportChannelsTab, 'kpis' | 'cameBy'> }) {
+  const lines = report.cameBy ?? [];
+  if (lines.length === 0) return null;
+  const orders = report.kpis.orderCount;
+  return (
+    <Section
+      id="came-by"
+      icon={Waypoints}
+      title="How orders came in"
+      subtitle="Walk-in, Phone and WhatsApp as the cashier tapped them; website and foodpanda orders say so themselves. Not asked: no button was tapped."
+    >
+      <Panel note="Offers: the orders the owner’s automatic offers took something off, and how much (Settings → Money & discounts).">
+        <DataTable
+          columns={[{ label: 'Came in by' }, { label: 'Orders', right: true }, { label: 'Share of orders', right: true }, { label: 'Sales', right: true }, { label: 'With an offer', right: true }, { label: 'Offers took off', right: true }]}
+          rows={lines.map((l) => [
+            <span key="l" className={cn('font-medium', l.cameBy === 'not_asked' && 'text-stone-500')}>{cameByLabel(l.cameBy)}</span>,
+            l.orderCount,
+            percentOf(l.orderCount, orders),
+            formatCents(l.netSalesCents),
+            l.offerCount,
+            l.offerCents > 0 ? formatCents(l.offerCents) : '—',
+          ])}
           empty="No sales in this period yet."
         />
       </Panel>

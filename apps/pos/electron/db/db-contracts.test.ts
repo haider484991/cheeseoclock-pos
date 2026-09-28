@@ -172,6 +172,8 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     expect([...(SCHEMA.get('order_discounts') ?? [])]).toEqual(expect.arrayContaining(['source', 'rule_json']));
     // 0041: and the uplift in force at payment, and foodpanda's % of the total.
     expect([...(SCHEMA.get('order_channel_terms') ?? [])]).toEqual(expect.arrayContaining(['uplift_bps', 'payment_fee_cents']));
+    // 0044: how an order came in (Walk-in / Phone / WhatsApp, website, foodpanda) travels with the order.
+    expect([...(SCHEMA.get('orders') ?? [])]).toEqual(expect.arrayContaining(['came_by']));
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');
@@ -284,7 +286,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -295,6 +297,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0041_channel_terms_uplift_and_fee.sql',
       '0042_drawer_log.sql',
       '0043_order_test_delete.sql',
+      '0044_order_came_by.sql',
     ]);
   });
 
@@ -304,5 +307,11 @@ describe('migrations: numbered in order, one file per number', () => {
       expect({ f, touches: /\bshifts\b|close_notes|carried_unpaid_count|carry_over_reason/i.test(sql) }).toEqual({ f, touches: false });
       expect({ f, touches: /\border_discounts\b|\border_channel_terms\b/i.test(sql) }).toEqual({ f, touches: false });
     }
+  });
+
+  it('0044 only adds orders.came_by: a plain nullable column, no CHECK, no backfill, nothing else touched', () => {
+    const sql = stripComments(readFileSync(join(MIGRATIONS_DIR, '0044_order_came_by.sql'), 'utf8')).trim();
+    expect(sql.replace(/\s+/g, ' ')).toBe('ALTER TABLE orders ADD COLUMN came_by TEXT;');
+    expect(/\border_discounts\b|\border_channel_terms\b|\bshifts\b|\bCHECK\b|\bUPDATE\b/i.test(sql)).toBe(false);
   });
 });

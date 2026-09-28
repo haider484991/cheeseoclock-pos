@@ -3,7 +3,7 @@ import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
-import { findOrder } from './order-repo.js';
+import { findOrder, refreshOrderOffer } from './order-repo.js';
 import { deliveryAreas, normalizePhone, phoneSearchTerms } from '@cheeseoclock/pos-domain';
 import { readDeliveryZones } from '../business-settings-read.js';
 import type {
@@ -811,6 +811,10 @@ export function snapshotCustomerOntoOrder(
       before,
       after: orderCustomerImage(db, input.orderId),
     });
+    // The customer's phone is on the order now: the owner's automatic offers
+    // that need it (Phone / WhatsApp, once per customer per day) are worked
+    // out again (an open counter order only).
+    refreshOrderOffer(db, input.orderId, actor);
   });
   tx();
 }
@@ -884,6 +888,8 @@ export function detachCustomerFromOrder(db: AppDatabase, orderId: string, actor:
       before,
       after: orderCustomerImage(db, orderId),
     });
+    // No phone on the order any more: an offer that needed it comes off.
+    refreshOrderOffer(db, orderId, actor);
   });
   tx();
 }

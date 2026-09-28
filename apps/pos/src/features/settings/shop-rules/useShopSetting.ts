@@ -3,12 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
 import { ipc, IpcError, onShopSettingsChanged, onSyncStatusChanged } from '../../../ipc/client';
 import { useToast } from '../../../components/toast/ToastProvider';
-import type { CounterStockRules } from '@cheeseoclock/shared-types';
+import type { CounterOrderReasons, CounterStockRules } from '@cheeseoclock/shared-types';
 import { deliveryAreas, type DeliveryAreas } from '@cheeseoclock/pos-domain';
 import {
   deliveryZonesOf,
   discountRulesOf,
   kitchenTimingOf,
+  orderReasonsOf,
   stockRulesOf,
   type CounterDiscountRules,
   type CounterKitchenTiming,
@@ -82,6 +83,14 @@ export function useStockRules(): CounterStockRules {
 export function useDeliveryAreas(): DeliveryAreas {
   const q = useCheckoutRules();
   return deliveryAreas(deliveryZonesOf(q.data));
+}
+
+/**
+ * The Cancel, Refund and Cash out reason buttons (Settings → Staff &
+ * kitchen) — the released ones until the till has answered.
+ */
+export function useOrderReasons(): CounterOrderReasons {
+  return orderReasonsOf(useCheckoutRules().data);
 }
 
 /**

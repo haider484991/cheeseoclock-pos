@@ -41,3 +41,8 @@ export function getCustomerFormSnapshot(): CustomerFormState {
 export function resetCustomerForm(): void {
   store.getState().reset();
 }
+
+/** Replace the form from outside React (the checkout store, once the customer is saved on the order). */
+export function setCustomerForm(next: CustomerFormState): void {
+  store.getState().setForm(next);
+}

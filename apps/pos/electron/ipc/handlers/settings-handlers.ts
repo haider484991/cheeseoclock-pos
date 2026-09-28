@@ -4,8 +4,10 @@ import { requireSettingsManage } from '../guards.js';
 import { ok, type AnyShopSettingCard, type ShopSettingCard, type ShopSettingKey } from '@cheeseoclock/shared-types';
 import {
   getShopSettingInputSchema,
+  getTillSettingInputSchema,
   saveDeliveryZonesInputSchema,
   setShopSettingInputSchema,
+  setTillSettingInputSchema,
 } from '@cheeseoclock/shared-schemas';
 import { getCurrentSession } from '../../services/auth-service.js';
 import { checkoutRules, getShopSettingCard, putBackValue } from '../../services/shop-settings.js';
@@ -14,6 +16,7 @@ import { readTillLink } from '../../services/till-link.js';
 import { broadcastShopSettingsChanged } from '../../services/shop-settings-events.js';
 import { websiteSettingsChanged } from '../../services/website-settings-events.js';
 import { saveDeliveryZones } from '../../db/repositories/delivery-zones-repo.js';
+import { anyTillSettingCard, setTillSetting } from '../../services/till-settings.js';
 import type { AppDatabase } from '../../db/connection.js';
 
 /**
@@ -29,6 +32,9 @@ import type { AppDatabase } from '../../db/connection.js';
  *    have their own channel because their Save also makes the
  *    "Delivery Charge (Rs N)" menu items (delivery-zones-repo, one
  *    transaction); settings:setBusiness refuses 'delivery.zones'.
+ *  - settings:getTill / settings:setTill: the settings that belong to THIS
+ *    till (its receipt's extra lines, its opening float; till-settings.ts),
+ *    the owner alone the same way. Never synced.
  *  - checkout:getRules: any signed-in login; the deal's % and label and
  *    what Pay asks, the areas and fees, never the commission, fees or costs.
  *
@@ -87,6 +93,30 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
     broadcastShopSettingsChanged();
     websiteSettingsChanged();
     return ok(getShopSettingCard(ctx.db, 'delivery.zones', readTillLink(ctx.db)) as ShopSettingCard<'delivery.zones'>);
+  });
+
+  defineHandler('settings:getTill', ctx, (_ctx, payload) => {
+    requireSettingsManage();
+    const parsed = getTillSettingInputSchema.safeParse(payload);
+    if (!parsed.success) throw new IpcGuardError({ code: 'validation_failed', message: 'Which setting?' });
+    return ok(anyTillSettingCard(ctx.db, parsed.data.key));
+  });
+
+  defineHandler('settings:setTill', ctx, (_ctx, payload) => {
+    const s = requireSettingsManage();
+    const parsed = setTillSettingInputSchema.safeParse(payload);
+    if (!parsed.success) throw new IpcGuardError({ code: 'validation_failed', message: 'Which setting, and what to save?' });
+    try {
+      // The key's schema checks the value; "Put back the default" writes the default's values.
+      setTillSetting(ctx.db, parsed.data, s.id);
+    } catch (e) {
+      // The schema's own words ("Keep each extra line to 64 letters") — a database error stays hidden.
+      if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype) {
+        throw new IpcGuardError({ code: 'validation_failed', message: e.message });
+      }
+      throw e;
+    }
+    return ok(anyTillSettingCard(ctx.db, parsed.data.key));
   });
 
   defineHandler('checkout:getRules', ctx, () => {

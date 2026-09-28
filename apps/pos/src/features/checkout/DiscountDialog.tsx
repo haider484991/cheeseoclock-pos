@@ -56,6 +56,9 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const current = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
   // The shop's foodpanda deal is on this order: only a manager changes it or takes it off (for one order).
   const dealOn = current?.source === 'foodpanda';
+  // One of the owner's automatic offers: a discount applied here replaces it under the usual rule
+  // (no PIN of its own); Remove takes it off this order, and on one taken off it is put back.
+  const offerOn = current?.source === 'offer' ? { declined: current.offer?.declined === true } : null;
   // A staff discount opens on itself; the deal opens on nothing (never re-applied as a staff discount).
   const start = discountDialogStart(current);
   const removingDeal = dealOn && intent === 'removeDeal';
@@ -239,6 +242,13 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                   {approvalRuleText(limits, base.untouchedCents > 0 ? 'food' : 'order')}
                 </p>
               )}
+              {offerOn && (
+                <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
+                  {offerOn.declined
+                    ? "The owner's automatic offer was taken off this order. Put it back, or give a discount instead."
+                    : "The owner's automatic offer is on this order. A discount you apply replaces it (the usual manager rule applies)."}
+                </p>
+              )}
               {dealOn && (
                 <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
                   {removingDeal
@@ -407,7 +417,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
           <footer className="mt-4 flex items-center gap-2">
             {current && primary !== 'remove' && (
               <Button variant="ghost" className="text-red-700 dark:text-red-400" disabled={saving || busy} onClick={() => void remove()}>
-                {dealOn ? 'Take the deal off' : 'Remove discount'}
+                {dealOn ? 'Take the deal off' : offerOn ? (offerOn.declined ? 'Put the offer back' : 'Take the offer off') : 'Remove discount'}
               </Button>
             )}
             <div className="flex-1" />

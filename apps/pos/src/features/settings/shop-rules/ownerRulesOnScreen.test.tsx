@@ -400,7 +400,8 @@ describe('the owner’s cards', () => {
       'Money & discounts',
       'Delivery areas & fees',
       'Shop & logo',
-      'Staff & kitchen timing',
+      // "Staff & kitchen timing" up to v0.7.26, until the opening float and the reason buttons joined the timings.
+      'Staff & kitchen',
       'Kitchen & stock',
       'Printers',
     ]);

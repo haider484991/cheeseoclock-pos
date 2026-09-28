@@ -28,6 +28,7 @@ import type {
 } from './order.js';
 import type {
   AnyShopSettingCard,
+  CameBy,
   CheckoutRules,
   FoodpandaTenderCheck,
   SaveDeliveryZonesRequest,
@@ -35,6 +36,7 @@ import type {
   ShopSettingCard,
   ShopSettingKey,
 } from './shop-settings.js';
+import type { AnyTillSettingCard, OpeningFloatPrefill, SetTillSettingRequest, TillSettingKey } from './till-settings.js';
 import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
 import type {
   DeletedTestsPage,
@@ -482,8 +484,22 @@ export interface IpcContract {
       customerId?: string | null;
       customerAddressId?: string | null;
       notes?: string | null;
+      /** A counter order: how it came in, when the cashier tapped a chip before the first item. */
+      cameBy?: CameBy | null;
     };
     response: ApiResult<Order>;
+  };
+  /**
+   * How a counter order came in (Walk-in · Phone · WhatsApp; null = not
+   * said). While the order is being rung up, any login that takes orders
+   * sets it and the owner's automatic offers are worked out again. Once it
+   * is sent it is locked: changing it needs a manager's PIN or password and
+   * is audited (the offer on the order does not change then). Never on a
+   * website or foodpanda order (they fill it in themselves).
+   */
+  'orders:setCameBy': {
+    request: { orderId: string; cameBy: CameBy | null; approverPin?: string };
+    response: ApiResult<OrderSnapshot>;
   };
   'orders:attachCustomer': {
     request: {
@@ -550,7 +566,12 @@ export interface IpcContract {
     response: ApiResult<OrderSnapshot>;
   };
   'orders:clearDiscount': {
-    /** Taking the shop's foodpanda deal off an order needs a manager's PIN or password. */
+    /**
+     * Taking the shop's foodpanda deal off an order needs a manager's PIN or
+     * password. On one of the owner's automatic offers it takes the offer off
+     * THIS order (it stays off, Rs 0; no PIN: the bill only goes up); on an
+     * offer taken off it puts the offers back.
+     */
     request: { orderId: string; approverPin?: string };
     response: ApiResult<OrderSnapshot>;
   };
@@ -796,6 +817,14 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<{ countedCashCents: number; closedAt: string } | null>;
   };
+  /**
+   * What the Open shift box starts the float count on (this till's setting:
+   * its last count, or the owner's fixed float). Any signed-in login.
+   */
+  'shifts:openingFloat': {
+    request: undefined;
+    response: ApiResult<OpeningFloatPrefill>;
+  };
   /** Cash in / out of the drawer that is not a sale. A cashier needs a manager PIN. */
   'shifts:recordCashMovement': {
     request: { type: CashMovementType; amountCents: number; reason: string; approverPin?: string };
@@ -945,6 +974,8 @@ export interface IpcContract {
         /** At the bottom of receipts. '' = none; a till that never set one reads the shop's own site. */
         websiteLine?: string;
         footerLine?: string;
+        /** The owner's extra lines under the thank-you line (none to three). */
+        extraLines?: string[];
         logoUrl?: string;
       };
       transports: PrinterTransport[];
@@ -980,6 +1011,8 @@ export interface IpcContract {
       /** Send '' to print no website (left out, a till reads the shop's own site). */
       websiteLine?: string;
       footerLine?: string;
+      /** Left out: the extra lines stored are kept (they have their own card, settings:setTill). */
+      extraLines?: string[];
       logoUrl?: string;
     };
     response: ApiResult<{ ok: true }>;
@@ -1588,6 +1621,19 @@ export interface IpcContract {
   'settings:setBusiness': {
     request: SetShopSettingRequest;
     response: ApiResult<AnyShopSettingCard>;
+  };
+  // The owner's settings that belong to THIS till (till-settings.ts: the
+  // receipt's extra lines, the opening float). Never synced. Owner only
+  // (settings.manage), checked in the main process.
+  /** One "this till" card: the value in use, who changed it last, its history. */
+  'settings:getTill': {
+    request: { key: TillSettingKey };
+    response: ApiResult<AnyTillSettingCard>;
+  };
+  /** Save a "this till" card (or put its default back). Audited. */
+  'settings:setTill': {
+    request: SetTillSettingRequest;
+    response: ApiResult<AnyTillSettingCard>;
   };
   /**
    * Settings → Delivery areas: save the areas and fees (or put back the

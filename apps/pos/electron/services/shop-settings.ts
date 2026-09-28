@@ -34,6 +34,7 @@ import {
   foodpandaTerms,
   shareBps,
   stockRulesPutBack,
+  tradingDayOfInstant,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 import {
@@ -78,9 +79,13 @@ export function getShopSettings(db: AppDatabase): ShopSettings {
  * signed-in login: when a discount needs a manager and the F3 buttons (the
  * screen's locks; the main process decides again on save), the Live Orders
  * colours and reminder minutes, the foodpanda deal an order started now
- * gets (its % and label, never who saved it), what Pay asks, and how much
+ * gets (its % and label, never who saved it), what Pay asks, how much
  * dearer the foodpanda listing is (a price: the tablet's total is the
- * till's at those prices). Never the commission, fees or costs.
+ * till's at those prices), the owner's automatic offers that are on with
+ * whether the cashier is asked how each order came in (the screen's
+ * buttons and hints; the main process decides every offer itself), and the
+ * Cancel, Refund and Cash out reason buttons. Never the commission, fees or
+ * costs.
  */
 export function checkoutRules(db: AppDatabase, now: Date = new Date()): CheckoutRules {
   const deal = readShopSetting(db, 'foodpanda.deal').value;
@@ -91,8 +96,12 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
   const delivery = readShopSetting(db, 'discounts.delivery').value;
   const kitchen = readShopSetting(db, 'kitchen.timing').value;
   const stock = readShopSetting(db, 'stock.rules').value;
+  const offersSetting = readShopSetting(db, 'discounts.offers');
+  const offers = offersSetting.value;
+  const reasons = readShopSetting(db, 'orders.reasons').value;
   const zones = readDeliveryZones(db);
   const active = activeFoodpandaDeal(deal, now.toISOString());
+  const today = tradingDayOfInstant(now.toISOString()) ?? '';
   return {
     discounts: {
       approval: { percentOver: approval.percentOver, flatOverCents: approval.flatOverCents },
@@ -111,6 +120,25 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
       reorderMultiple: stock.reorderMultiple,
       wasteReasons: stock.wasteReasons.map((r) => ({ id: r.id, label: r.label, hidden: r.hidden })),
       reminders: { keyItemsEveryDays: stock.reminders.keyItemsEveryDays, fullEveryDays: stock.reminders.fullEveryDays },
+    },
+    // The owner's automatic offers that are on and have not ended (the
+    // screen checks each one's dates, days and hours against the order's
+    // start: the counter keeps this answer across the day change, so an
+    // offer that starts tomorrow must already be here), and whether the
+    // cashier is asked how each order came in. None when a newer version of
+    // the app saved them: this till never puts those on (order-repo), so the
+    // screen does not promise them. Never who saved them.
+    offers: {
+      askCameBy: offers.askCameBy,
+      offers: offersSetting.newerFormat
+        ? []
+        : offers.offers.filter((o) => o.on && !(o.endsOn && o.endsOn < today)).map((o) => structuredClone(o)),
+    },
+    // The Cancel, Refund and Cash out reason buttons (Settings → Staff & kitchen).
+    reasons: {
+      cancel: reasons.cancel.map((r) => ({ id: r.id, label: r.label, food: r.food })),
+      refund: reasons.refund.map((r) => ({ id: r.id, label: r.label, food: r.food })),
+      cashOut: [...reasons.cashOut],
     },
     // Settings → Delivery areas: every area (switched-off ones too: old addresses) with its fee and fee item.
     delivery: {

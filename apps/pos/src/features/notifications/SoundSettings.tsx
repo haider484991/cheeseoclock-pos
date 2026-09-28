@@ -27,6 +27,7 @@ import { getSoundPlayer } from './audioEngine';
 import { NEW_ORDER_TONE_LABELS, soundForEvent, type SoundId } from './tones';
 import { ALERT_SOUNDS_QUERY_KEY } from './useAlertSoundSettings';
 import { waitingRuleText } from './waitingReminders';
+import { printerProblemRuleText } from './eventTones';
 import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
 
 function sameSettings(a: AlertSoundSettings, b: AlertSoundSettings): boolean {
@@ -240,7 +241,7 @@ export function SoundSettings() {
         <Rule
           icon={Printer}
           title="Printer problem"
-          body="A short falling beep when a ticket or receipt does not print. At most once every 2 minutes, so a printer that is off does not beep on every sale."
+          body={printerProblemRuleText()}
           dimmed={muted}
           control={
             <EventControl

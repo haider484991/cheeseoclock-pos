@@ -1,0 +1,20 @@
+-- 0044_order_came_by.sql
+-- How an order came in (owner, 28 Sep 2026: automatic offers by how the
+-- order came in — Settings → Money & discounts, 'discounts.offers').
+--
+--   came_by   'walk_in' | 'phone' | 'whatsapp' — the counter's chips on a
+--             takeaway or delivery order; 'website' / 'foodpanda' — filled in
+--             by a website or foodpanda order itself (order-repo createOrder,
+--             setOrderMode). NULL = not asked, or an order from before this
+--             migration (Reports read an old website or foodpanda order as
+--             such, and any other as "not asked"). Locked when the order is
+--             sent: a change after that needs a manager's PIN and leaves an
+--             audit row (order-repo setOrderCameBy).
+--
+-- A plain nullable ADD COLUMN, no CHECK and no backfill: the values allowed
+-- are checked in code (shared-types OrderCameBy), so a newer till's value
+-- never fails to land here (the 0033 practice). Row images are built from
+-- the live schema, so the column travels without a sync-core change; a till
+-- without it ignores it. The "once per customer per day" look-up walks
+-- idx_orders_created (0023) for the day's orders.
+ALTER TABLE orders ADD COLUMN came_by TEXT;

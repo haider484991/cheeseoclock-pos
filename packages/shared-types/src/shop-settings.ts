@@ -8,11 +8,14 @@
  *
  * Phase 1 is foodpanda: the deal on the listing, foodpanda's fees and the
  * checks at Pay. Phase 2 the approval limit and the discount buttons (Money
- * & discounts); phase 6 the staff and kitchen timings; phase 7 the stock
- * rules and what a menu file import may change (Kitchen & stock); phase 3
- * the delivery areas and fees, the website pick-up discount and whether the
- * menu goes to the website by itself. Later phases add their own keys here
- * (offers, the shop profile…), each with a frozen default.
+ * & discounts); phase 4 the automatic offers and the came-by question
+ * (Money & discounts, 'discounts.offers'); phase 6 the staff and kitchen
+ * timings; phase 7 the stock rules and what a menu file import may change
+ * (Kitchen & stock); then the Cancel, Refund and Cash out reason buttons
+ * (Staff & kitchen, 'orders.reasons'); phase 3 the delivery areas and fees,
+ * the website pick-up discount and whether the menu goes to the website by
+ * itself. Later phases add their own keys here (the shop profile…), each
+ * with a frozen default.
  *
  * FROZEN DEFAULTS. A key never saved reads as its DEFAULT_* below, which is
  * exactly what the till did before the setting existed, so installing the
@@ -50,6 +53,8 @@ export const SHOP_SETTING_KEYS = [
   'kitchen.timing',
   'stock.rules',
   'menu.importPolicy',
+  'discounts.offers',
+  'orders.reasons',
   'discounts.websitePickup',
   'delivery.zones',
   'online.options',
@@ -402,6 +407,175 @@ export interface MenuImportPolicy {
 }
 
 // ---------------------------------------------------------------------------
+// Automatic offers by how the order came in (phase 4, Money & discounts)
+// ---------------------------------------------------------------------------
+
+/**
+ * How a counter order came in, as the cashier taps it on the order
+ * (Walk-in · Phone · WhatsApp). Kept on the order (orders.came_by, migration
+ * 0044); it locks when the order is sent, and a change after that needs a
+ * manager's PIN and is audited.
+ */
+export const CAME_BY_CHOICES = ['walk_in', 'phone', 'whatsapp'] as const;
+export type CameBy = (typeof CAME_BY_CHOICES)[number];
+
+/** orders.came_by: the counter's three, or what a website or foodpanda order fills in itself. */
+export type OrderCameBy = CameBy | 'website' | 'foodpanda';
+
+/** The words for each, on the chips, the order and Reports. */
+export const CAME_BY_LABEL: Readonly<Record<OrderCameBy, string>> = Object.freeze({
+  walk_in: 'Walk-in',
+  phone: 'Phone',
+  whatsapp: 'WhatsApp',
+  website: 'Website',
+  foodpanda: 'foodpanda',
+});
+
+export function isCameBy(v: unknown): v is CameBy {
+  return typeof v === 'string' && (CAME_BY_CHOICES as readonly string[]).includes(v);
+}
+
+/** An order type an automatic offer can be on: the counter's own (foodpanda has its deal; the website prices its own orders). */
+export type OfferOrderType = 'takeaway' | 'delivery';
+export const OFFER_ORDER_TYPES: readonly OfferOrderType[] = Object.freeze(['takeaway', 'delivery']);
+
+/**
+ * One automatic offer (the owner, 28 Sep 2026: "the offer discount should
+ * have settings … so it automatically applies on the whole order except
+ * delivery fee"). While a COUNTER order is being rung up (source 'pos', not
+ * foodpanda — never a website or foodpanda order), the till puts on the
+ * biggest offer that fits, by itself: no F3, no PIN. It is worked on the
+ * food (the delivery charge is paid in full unless the owner's "A discount
+ * also comes off the delivery charge" says otherwise), and its terms are
+ * FROZEN onto the order's discount row when it goes on (OfferRule), so a
+ * Save while the order is open, or one still on its way from the other
+ * till, can't move it.
+ */
+export interface ChannelOffer {
+  /** Fixed when the offer is added; the frozen rule and Reports keep it (letters, digits, - and _). */
+  id: string;
+  /** Prints on the bill and the receipt; one line, 30 letters at most, no two the same. */
+  name: string;
+  /** Off = no new order gets it (an order already open keeps what it has). */
+  on: boolean;
+  /**
+   * How the order must have come in: 'any' (the cashier needn't say), or
+   * some of Walk-in / Phone / WhatsApp. Phone and WhatsApp need the
+   * customer's phone on the order.
+   */
+  cameBy: 'any' | CameBy[];
+  /** Takeaway and / or delivery. A new offer is delivery only: there the rider, not the cashier, takes the cash. */
+  orderTypes: OfferOrderType[];
+  /** A % of the food (whole %, 1–50) or rupees off (paisa, whole rupees, Rs 1–5,000). */
+  type: 'percent' | 'flat';
+  value: number;
+  /** Only when the food comes to at least this (paisa, whole rupees); null = any order. */
+  minOrderCents: number | null;
+  /** The most it takes off one order (paisa, whole rupees); null = no limit. */
+  maxOffCents: number | null;
+  /** The days it runs: 0 = Monday … 6 = Sunday — the TRADING day's (an order at 01:30 on Saturday is Friday's). */
+  days: number[];
+  /**
+   * The Pakistan clock hours it runs, first and last hour inclusive (12 → 15
+   * = 12:00 to 15:59; 22 → 1 runs past midnight); null = all day. When the
+   * ORDER WAS STARTED decides.
+   */
+  hours: { fromHour: number; toHour: number } | null;
+  /** First and last trading day (YYYY-MM-DD) it runs; null = no limit. */
+  startsOn: string | null;
+  endsOn: string | null;
+  /** One order a day for each customer phone (it needs the customer's phone on the order). */
+  oncePerCustomerPerDay: boolean;
+}
+
+/**
+ * The automatic offers ('discounts.offers') and whether the cashier is asked
+ * how each counter order came in. NOTE for the website: offers on WEBSITE
+ * orders come later, through the website settings block the menu publish
+ * carries (Settings plan step 3), and are priced by the website itself;
+ * pos-domain matchOffer never applies an offer to a web or foodpanda order.
+ */
+export interface DiscountOffers {
+  v: number;
+  /**
+   * Show the Walk-in · Phone · WhatsApp chips on every counter takeaway and
+   * delivery order, and wait for one before Send or Pay (Reports get a
+   * channel split even with no offers). Off: the chips show only when an
+   * offer that is on needs them.
+   */
+  askCameBy: boolean;
+  /** In the order the owner lists them; at most OFFERS_MAX. */
+  offers: ChannelOffer[];
+}
+
+export const OFFERS_MAX = 10;
+export const OFFER_NAME_MAX = 30;
+export const OFFER_MAX_PERCENT = 50;
+/** Rs 5,000 off at most. */
+export const OFFER_MAX_FLAT_CENTS = 500_000;
+/** The minimum order and the most off: Rs 50,000 at most. */
+export const OFFER_MAX_ORDER_CENTS = 5_000_000;
+export const OFFER_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+
+// ---------------------------------------------------------------------------
+// Reason buttons (Settings → Staff & kitchen)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a reason button says about "Was the food made?": 'made', 'not_made',
+ * or 'ask' (nothing: staff tap Made or Not made).
+ */
+export type ReasonFoodAnswer = 'made' | 'not_made' | 'ask';
+
+/**
+ * One button on the Cancel or Refund box. What is SAVED is the label's text
+ * (the order's cancel reason, the refund's reason), exactly as before the
+ * buttons were editable: Team & leakage lists every row by the words it was
+ * saved with, so renaming a button never changes an old row. The id only
+ * lets the Settings card follow a button while it is renamed or moved.
+ *
+ * `food` fills "Was the food made?" only while nobody has answered it: never
+ * over a tap, never over the "Made" the till starts on once cooking was
+ * marked, and never once the food has left the shop (then there is no
+ * question: the till counts it as waste whatever is tapped, and refuses
+ * "not made" — pos-domain FOOD_LEFT_SHOP).
+ */
+export interface OrderReasonButton {
+  id: string;
+  /** On the button, and saved as the reason (30 letters at most). */
+  label: string;
+  food: ReasonFoodAnswer;
+}
+
+/**
+ * The reason buttons ('orders.reasons'): the Cancel box's and the Refund
+ * box's, and the drawer's "Cash out" ones. A reason and the manager's PIN
+ * are still needed for every cancel and refund (the main process checks),
+ * and any other reason can still be typed. Nothing here changes who may do
+ * what.
+ */
+export interface OrderReasons {
+  v: number;
+  /** The Cancel box's buttons, in order: one to eight. */
+  cancel: OrderReasonButton[];
+  /** The Refund box's buttons: one to eight. */
+  refund: OrderReasonButton[];
+  /**
+   * What cash taken out of the drawer was for (Drawer cash in / out → Cash
+   * out): none to eight buttons that fill the "What was it for?" box. None
+   * (today): it is typed.
+   */
+  cashOut: string[];
+}
+
+export const ORDER_REASONS_MAX = 8;
+export const CASH_OUT_REASONS_MAX = 8;
+/** A reason button's words: one line, this many letters at most (a cash-out reason is kept to 80). */
+export const ORDER_REASON_LABEL_MAX = 30;
+/** A reason button's id: lower-case letters, digits and "_". */
+export const ORDER_REASON_ID_RE = /^[a-z0-9_]{1,40}$/;
+
+// ---------------------------------------------------------------------------
 // Delivery areas & fees, the website's pick-up, online options (phase 3)
 // ---------------------------------------------------------------------------
 
@@ -463,6 +637,8 @@ export interface ShopSettingValues {
   'kitchen.timing': KitchenTiming;
   'stock.rules': StockRules;
   'menu.importPolicy': MenuImportPolicy;
+  'discounts.offers': DiscountOffers;
+  'orders.reasons': OrderReasons;
   'discounts.websitePickup': WebsitePickup;
   'delivery.zones': DeliveryZones;
   'online.options': OnlineOptions;
@@ -481,6 +657,8 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'kitchen.timing': 1,
   'stock.rules': 1,
   'menu.importPolicy': 1,
+  'discounts.offers': 1,
+  'orders.reasons': 1,
   'discounts.websitePickup': 1,
   'delivery.zones': 1,
   'online.options': 1,
@@ -607,6 +785,41 @@ export const DEFAULT_MENU_IMPORT_POLICY: Readonly<MenuImportPolicy> = Object.fre
   tax: 'file',
 });
 
+/**
+ * Today: NO offers, and the cashier is not asked how an order came in — so
+ * nothing changes until the owner adds an offer or turns the question on.
+ */
+export const DEFAULT_DISCOUNT_OFFERS: Readonly<DiscountOffers> = Object.freeze({
+  v: 1,
+  askCameBy: false,
+  offers: Object.freeze([]) as unknown as ChannelOffer[],
+});
+
+const reasonButton = (id: string, label: string, food: ReasonFoodAnswer): OrderReasonButton => Object.freeze({ id, label, food });
+
+/**
+ * Today's buttons, in today's order (they were typed into the Cancel and
+ * Refund boxes: stockCopy.ts CANCEL_REASONS / REFUND_REASONS), and no
+ * cash-out buttons.
+ */
+export const DEFAULT_ORDER_REASONS: Readonly<OrderReasons> = Object.freeze({
+  v: 1,
+  cancel: Object.freeze([
+    reasonButton('customer_cancelled', 'Customer cancelled', 'ask'),
+    reasonButton('refused_at_door', 'Refused at the door', 'made'),
+    reasonButton('not_collected', 'Not collected', 'made'),
+    reasonButton('wrong_order_duplicate', 'Wrong order / duplicate', 'not_made'),
+    reasonButton('out_of_stock', 'Out of stock', 'not_made'),
+  ]) as OrderReasonButton[],
+  refund: Object.freeze([
+    reasonButton('customer_unhappy', 'Customer unhappy', 'ask'),
+    reasonButton('wrong_order', 'Wrong order', 'ask'),
+    reasonButton('cancelled_by_foodpanda', 'Cancelled by Foodpanda', 'ask'),
+    reasonButton('out_of_stock', 'Out of stock', 'not_made'),
+  ]) as OrderReasonButton[],
+  cashOut: Object.freeze([] as string[]) as string[],
+}) as Readonly<OrderReasons>;
+
 /** Today: offered, 10% off (the printed menu's "10% OFF · order online & pick up"). */
 export const DEFAULT_WEBSITE_PICKUP: Readonly<WebsitePickup> = Object.freeze({
   v: 1,
@@ -656,6 +869,8 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'kitchen.timing': DEFAULT_KITCHEN_TIMING,
   'stock.rules': DEFAULT_STOCK_RULES,
   'menu.importPolicy': DEFAULT_MENU_IMPORT_POLICY,
+  'discounts.offers': DEFAULT_DISCOUNT_OFFERS,
+  'orders.reasons': DEFAULT_ORDER_REASONS,
   'discounts.websitePickup': DEFAULT_WEBSITE_PICKUP,
   'delivery.zones': DEFAULT_DELIVERY_ZONES,
   'online.options': DEFAULT_ONLINE_OPTIONS,
@@ -671,8 +886,14 @@ export const FOODPANDA_ORDER_CODE_MAX = 40;
 // The deal as it is frozen onto an order
 // ---------------------------------------------------------------------------
 
-/** Where an order's discount came from: null = typed by staff (F3). */
-export type DiscountSource = 'foodpanda';
+/**
+ * Where an order's discount came from: null = typed by staff (F3);
+ * 'foodpanda' = the shop's foodpanda deal; 'offer' = one of the owner's
+ * automatic offers (Money & discounts). Both of those are put on by the
+ * till, approved by the owner who saved them, and listed in Reports as
+ * "Standing offers", never against the cashier.
+ */
+export type DiscountSource = 'foodpanda' | 'offer';
 
 /**
  * The foodpanda deal's terms, frozen onto the order's discount row
@@ -731,6 +952,58 @@ export interface DiscountBaseRule {
    * the % over every line it priced), never the till's switch.
    */
   from: 'till' | 'website';
+}
+
+/**
+ * An automatic offer's terms as they were when it went on an order, FROZEN
+ * on its discount row. Everything after — each cart change, the tax, the FBR
+ * invoice, profit, Reports, a reprint — reads THESE, never the live setting.
+ */
+export interface OfferTerms {
+  v: 1;
+  id: string;
+  /** The offer's name: prints on the bill (the row's reason too). */
+  name: string;
+  type: 'percent' | 'flat';
+  value: number;
+  minOrderCents: number | null;
+  maxOffCents: number | null;
+  cameBy: 'any' | CameBy[];
+  orderTypes: OfferOrderType[];
+  oncePerCustomerPerDay: boolean;
+  /** When 'discounts.offers' was saved (its updated_at); null = never saved. */
+  settingsAt: string | null;
+  /**
+   * The cashier took the offer off this order (the × on its line): the row
+   * stays at Rs 0 so the offer does not come straight back; "Put it back"
+   * removes it. Absent = the offer is on.
+   */
+  declined?: true;
+}
+
+/**
+ * An automatic offer frozen on its row (order_discounts.rule_json, source
+ * 'offer'). It IS a till discount rule (kind 'discount_base', from 'till':
+ * whether it also came off the delivery charge — 'discounts.delivery' when
+ * it went on, No by default), carrying the offer's terms in `offer`. So a
+ * till of 0.7.26, which knows the rule but not offers, still splits it over
+ * the food for the tax, the FBR invoice and profit, exactly as this till.
+ */
+export interface OfferRule extends DiscountBaseRule {
+  from: 'till';
+  offer: OfferTerms;
+}
+
+/** An automatic offer on the order snapshot (cart, Pay, bill, the order drawer). */
+export interface OfferShare {
+  id: string;
+  name: string;
+  type: 'percent' | 'flat';
+  value: number;
+  minOrderCents: number | null;
+  maxOffCents: number | null;
+  /** Taken off this order by the cashier (Rs 0, "Put it back" undoes it). */
+  declined: boolean;
 }
 
 /** A discount's foodpanda figures, on the order snapshot (bill, receipt, Pay). */
@@ -855,6 +1128,21 @@ export interface CheckoutRules {
    */
   stock?: CounterStockRules;
   /**
+   * The owner's automatic offers (Money & discounts) the counter shows: the
+   * offers that are on and run today, and whether the cashier is asked how
+   * each order came in. The till decides every offer again when the order
+   * changes (pos-domain matchOffer in the main process). Kept apart from
+   * `discounts` (the F3 screen's). Absent (a test, or before the till
+   * answers): no offers, not asked.
+   */
+  offers?: CounterOffers;
+  /**
+   * The reason buttons (Settings → Staff & kitchen): the Cancel and Refund
+   * boxes' and the drawer's Cash out ones. Absent (a test, or before the
+   * till answers): the released ones.
+   */
+  reasons?: CounterOrderReasons;
+  /**
    * Settings → Delivery areas: every area (switched-off ones too, so an old
    * address is still recognised) with its fee and fee item — the area
    * picker, the delivery-charge button, the Customers filter. Absent (a
@@ -881,6 +1169,16 @@ export interface CheckoutRules {
     upliftBps: number;
   };
 }
+
+/** The offers as the counter sees them (checkout:getRules). */
+export interface CounterOffers {
+  askCameBy: boolean;
+  /** On, and today inside their dates (days and hours are checked against the order's start). */
+  offers: ChannelOffer[];
+}
+
+/** The reason buttons as the counter uses them (checkout:getRules). */
+export type CounterOrderReasons = Omit<OrderReasons, 'v'>;
 
 /** The stock rules as the counter and Inventory use them (checkout:getRules): no variance figures. */
 export interface CounterStockRules {

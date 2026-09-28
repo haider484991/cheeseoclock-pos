@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { OrderStockLine, OrderStockStatus, StockSettlement } from '@cheeseoclock/shared-types';
+import { foodMadeQuestion } from '@cheeseoclock/pos-domain';
 import {
   CANCEL_REASONS,
   REFUND_REASONS,
+  reasonChips,
   aboutCost,
   answerFromReason,
   cancelToast,
@@ -204,6 +206,51 @@ describe('reason chips', () => {
   it('a later chip replaces an earlier chip\'s answer; one that says nothing about the food clears it', () => {
     expect(answerFromReason(CANCEL_REASONS, 'Not collected', SENT, 'reason')).toEqual({ keep: false, answer: 'made' });
     expect(answerFromReason(CANCEL_REASONS, 'Customer cancelled', SENT, 'reason')).toEqual({ keep: false, answer: null });
+  });
+});
+
+describe('the owner’s reason buttons (Settings → Staff & kitchen) as the boxes’ chips', () => {
+  it('by default: exactly the chips the boxes had before the buttons could be edited, in the same order', () => {
+    expect(CANCEL_REASONS).toEqual([
+      { label: 'Customer cancelled' },
+      { label: 'Refused at the door', foodMade: 'made' },
+      { label: 'Not collected', foodMade: 'made' },
+      { label: 'Wrong order / duplicate', foodMade: 'not_made' },
+      { label: 'Out of stock', foodMade: 'not_made' },
+    ]);
+    expect(REFUND_REASONS).toEqual([
+      { label: 'Customer unhappy' },
+      { label: 'Wrong order' },
+      { label: 'Cancelled by Foodpanda' },
+      { label: 'Out of stock', foodMade: 'not_made' },
+    ]);
+  });
+
+  it("'ask' says nothing about the food; 'made' and 'not_made' answer it", () => {
+    expect(
+      reasonChips([
+        { label: 'Test ask', food: 'ask' },
+        { label: 'Test made', food: 'made' },
+        { label: 'Test not made', food: 'not_made' },
+      ]),
+    ).toEqual([{ label: 'Test ask' }, { label: 'Test made', foodMade: 'made' }, { label: 'Test not made', foodMade: 'not_made' }]);
+  });
+
+  it('a pre-answer never overrides the food having left the shop (FOOD_LEFT_SHOP): the question is not asked there', () => {
+    const chips = reasonChips([
+      { label: 'Test not made', food: 'not_made' },
+      { label: 'Test made', food: 'made' },
+    ]);
+    for (const status of ['out_for_delivery', 'served', 'delivered', 'paid'] as const) {
+      const q = foodMadeQuestion({ status, takenAt: null, now: 0, probablyMadeMin: 8 });
+      expect(q.ask).toBe('made_only');
+      for (const label of ['Test not made', 'Test made']) {
+        expect({ status, label, r: answerFromReason(chips, label, q, null) }).toEqual({ status, label, r: { keep: true } });
+      }
+    }
+    // Still in the kitchen, nobody answered: the owner's "not made" button answers it.
+    const sent = foodMadeQuestion({ status: 'sent_to_kitchen', takenAt: null, now: 0 });
+    expect(answerFromReason(chips, 'Test not made', sent, null)).toEqual({ keep: false, answer: 'not_made' });
   });
 });
 

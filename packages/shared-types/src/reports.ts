@@ -15,7 +15,7 @@
  */
 
 import type { WasteReason, WasteReasonId } from './inventory.js';
-import type { DiscountSource } from './shop-settings.js';
+import type { DiscountSource, OrderCameBy } from './shop-settings.js';
 import type { StockCountScope, VarianceBand } from './stock-count.js';
 import type { ProfitFees, RiderCostSetting } from './profit.js';
 
@@ -92,6 +92,26 @@ export interface ReportChannelLine {
   netSalesCents: number;
 }
 
+/**
+ * How a counted order came in (orders.came_by, migration 0044): the
+ * counter's Walk-in / Phone / WhatsApp chip, the website, foodpanda — or
+ * 'not_asked' (a counter order nobody tapped, or one from before 0044; an
+ * old website or foodpanda order reads as such).
+ */
+export type ReportCameBy = OrderCameBy | 'not_asked';
+
+export interface ReportCameByLine {
+  cameBy: ReportCameBy;
+  orderCount: number;
+  netSalesCents: number;
+  /** Orders the owner's automatic offers took something off, and how much. */
+  offerCount: number;
+  offerCents: number;
+}
+
+/** A cashier's figure over 1.5 × the shop's this period (Team & leakage, "Came by & offers"). */
+export type OfferFlag = 'phone_share' | 'offer_rupees';
+
 export interface ReportStaffLine {
   /** User id, or 'web' for orders that came in from the website. */
   key: string;
@@ -112,6 +132,21 @@ export interface ReportStaffLine {
   drawerOpens?: number;
   /** Receipts / bills / slips this person printed again by hand (the print log). */
   reprints?: number;
+  /**
+   * The owner's abuse check on automatic offers: the counter takeaway and
+   * delivery orders this person took whose way in was tapped (Walk-in,
+   * Phone or WhatsApp — orders nobody was asked about are left out), how
+   * many of them were marked Phone or WhatsApp, and how many an offer took
+   * something off, and how much. An offer is money a cashier could claim by
+   * tapping the wrong chip on a cash sale. Absent from a till before the
+   * automatic offers.
+   */
+  counterOrders?: number;
+  phoneOrWhatsapp?: number;
+  offerCount?: number;
+  offerCents?: number;
+  /** Over 1.5 × the shop's rate this period (on at least two such orders). */
+  flags?: OfferFlag[];
 }
 
 export interface ReportShiftLine {
@@ -249,9 +284,12 @@ export interface ReportDiscountLine {
   approvedBy: string | null;
   /**
    * Where it came from: 'foodpanda' = the shop's standing foodpanda deal (put
-   * on automatically, not given by the cashier); null = typed by staff.
+   * on automatically, not given by the cashier); 'offer' = one of the owner's
+   * automatic offers (its name is `reason`); null = typed by staff.
    */
   source?: DiscountSource | null;
+  /** An automatic offer's id, as frozen on the order (the Standing offers group by it). */
+  offerId?: string | null;
 }
 
 export interface ReportDiscounts {
@@ -758,6 +796,8 @@ export interface ReportDeliveryException {
 export interface ReportChannelsTab extends ReportTabBase {
   kpis: Pick<ReportKpis, 'orderCount' | 'netSalesCents' | 'avgOrderCents'>;
   channels: ReportChannelLine[];
+  /** How the orders came in (Walk-in, Phone, WhatsApp, website, foodpanda, not asked), most orders first. Absent from a till before the automatic offers. */
+  cameBy?: ReportCameByLine[];
   deliveries: ReportDeliveries;
   /** Costing spec 4.11: own-rider deliveries by area, most orders first. */
   areas: ReportDeliveryArea[];
@@ -899,6 +939,14 @@ export interface ReportTeamTab extends ReportTabBase {
   voids: ReportVoidLine[];
   drawerOpens: ReportDrawerOpenLine[];
   drawerOpenCount: number;
+  /** The shop's own rates the staff's "Came by & offers" figures are flagged against. Absent from a till before the automatic offers. */
+  offerCheck?: ReportOfferCheck;
+  /**
+   * "Once a customer a day" offers one phone got more than once on the same
+   * trading day (with the link between the tills down, each till can give it
+   * once). Sent or paid orders only. Absent from a till before the automatic offers.
+   */
+  offerRepeats?: ReportOfferRepeat[];
   /**
    * Whether the Stock column may show what wasted food cost ("Wasted · Rs
    * 180"): null for a login without COST_CAPABILITY (those rupees are 0).
@@ -1463,4 +1511,37 @@ export interface OwnerWeek {
   doThisFailed: string[];
   /** The printed sheet's cost lines: only when asked for the sheet, and null for a login without COST_CAPABILITY. */
   sheet: OwnerWeekSheet | null;
+}
+
+/**
+ * The shop's own rates this period, for Team & leakage's "Came by & offers":
+ * of the counter takeaway and delivery orders whose way in was tapped, the
+ * share marked Phone or WhatsApp, and the offers' rupees per order. A
+ * cashier over `factorPct` % of either (150 = 1.5 ×), on at least
+ * `minMarked` such orders of their own, is flagged.
+ */
+export interface ReportOfferCheck {
+  counterOrders: number;
+  phoneOrWhatsapp: number;
+  offerOrders: number;
+  offerCents: number;
+  /** Basis points of the counter orders (2500 = 25%). */
+  phoneShareBps: number;
+  offerCentsPerOrder: number;
+  factorPct: number;
+  minMarked: number;
+}
+
+/** One phone that got a "once a customer a day" offer more than once on one trading day (Team & leakage). */
+export interface ReportOfferRepeat {
+  /** The trading day (YYYY-MM-DD, from 05:00). */
+  day: string;
+  /** The offer, by the name its bills printed (the first order's). */
+  offerName: string;
+  /** The customer's phone: its last four digits only, so the printout carries no number. */
+  phoneEnds: string;
+  /** The orders that got it, earliest first. */
+  orderNumbers: string[];
+  /** What it took off them, together. */
+  amountCents: number;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { discountBaseCents, formatCents, normalizePhone, offerHint } from '@cheeseoclock/pos-domain';
 import {
   Minus,
   Plus,
@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   ArrowRight,
   ArrowLeft,
+  RotateCcw,
 } from 'lucide-react';
 import { cn } from '@cheeseoclock/ui';
 import { useTenderGate } from './useTenderGate';
@@ -20,7 +21,8 @@ import { CustomerInlinePanel } from './CustomerInlinePanel';
 import { foodpandaDealLine } from './foodpandaDealLine';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { isDeliveryChargeName, isLeaveOutChoice } from '@cheeseoclock/shared-types';
-import { cartDiscountDetail } from './discountWords';
+import { cartDiscountDetail, cartOfferDetail, offerOnOrder } from './discountWords';
+import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
 
 interface Props {
   step: 'items' | 'details';
@@ -40,6 +42,13 @@ function shortMissing(missing: string[]): string {
   return missing
     .map((m) => m.replace(/^\w[\w-]* needs (a |an |the )?/i, '').replace(/^delivery /i, ''))
     .join(', ');
+}
+
+/** What the × beside the order's discount does, in words. */
+function removeLabel(deal: boolean, offer: { declined: boolean } | null): string {
+  if (deal) return 'Take the foodpanda deal off (manager)';
+  if (offer) return offer.declined ? 'Put the offer back' : 'Take the offer off this order';
+  return 'Remove discount';
 }
 
 /** The ticket contains items, totals and checkout actions. */
@@ -68,6 +77,27 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
   const shortNumber = order?.orderNumber.split('-').pop() ?? null;
   const discount = snapshot?.discounts[snapshot.discounts.length - 1] ?? null;
   const dealLine = discount?.source === 'foodpanda' ? foodpandaDealLine(discount, subtotalCents) : null;
+  // One of the owner's automatic offers (Settings → Money & discounts): put on by the till itself.
+  const offerOn = offerOnOrder(discount);
+  const rules = useCheckoutRules();
+  // No discount yet: an offer that would go on once the phone is saved, or from how much food.
+  const hint =
+    !discount && order && order.status === 'open'
+      ? offerHint(
+          {
+            source: order.source,
+            mode: order.mode,
+            cameBy: order.cameBy ?? null,
+            // A Pakistani number, as the main process counts it (any text is not a phone).
+            hasPhone: normalizePhone(snapshot?.customerPhone) !== null,
+            createdAt: order.createdAt,
+            foodCents: discountBaseCents(items, false),
+            subtotalCents,
+          },
+          rules.data?.offers,
+          rules.data?.discounts.alsoOffDeliveryCharge ?? false,
+        )
+      : null;
 
   // Cash on delivery / pay at pickup is the norm here, so "Send to kitchen"
   // leads for takeaway and delivery. Foodpanda is settled by the platform:
@@ -129,9 +159,11 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
       onRemoveDeal();
       return;
     }
+    // An automatic offer: the × takes it off this order (it stays off); on one
+    // taken off, the same button puts it back. Neither needs a PIN.
     clearDiscount().catch((e: unknown) => {
       toast({
-        title: 'Could not remove the discount',
+        title: offerOn?.declined ? 'Could not put the offer back' : 'Could not remove the discount',
         description: e instanceof Error ? e.message : 'Unknown error',
         variant: 'error',
       });
@@ -256,7 +288,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
           </div>
           {/* The owner's foodpanda deal shows even when it takes nothing off the shop's bill
               (foodpanda pays all of it, or the order is under its minimum). */}
-          {discountCents > 0 || dealLine ? (
+          {discountCents > 0 || dealLine || offerOn ? (
             <div className="is-discount">
               <dt>
                 <button
@@ -271,6 +303,13 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
                     <>
                       {dealLine.label}
                       {dealLine.note && <span className="font-normal">{` · ${dealLine.note}`}</span>}
+                    </>
+                  ) : offerOn && discount ? (
+                    <>
+                      {offerOn.name}
+                      <span className="font-normal">
+                        {offerOn.declined ? ' · taken off this order' : cartOfferDetail(discount, items)}
+                      </span>
                     </>
                   ) : (
                     <>
@@ -287,13 +326,14 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
                 <button
                   type="button"
                   onClick={removeDiscount}
-                  aria-label={dealLine ? 'Take the foodpanda deal off (manager)' : 'Remove discount'}
-                  title={dealLine ? 'Take the foodpanda deal off (manager)' : 'Remove discount'}
+                  aria-label={removeLabel(dealLine !== null, offerOn)}
+                  title={removeLabel(dealLine !== null, offerOn)}
                 >
-                  <X className="h-3 w-3" />
+                  {offerOn?.declined ? <RotateCcw className="h-3 w-3" /> : <X className="h-3 w-3" />}
                 </button>
               </dt>
-              <dd>−{formatCents(discountCents, { showSymbol: false })}</dd>
+              {/* An offer taken off takes nothing off: no −0.00. */}
+              <dd>{offerOn?.declined ? '' : `−${formatCents(discountCents, { showSymbol: false })}`}</dd>
             </div>
           ) : (
             <div>
@@ -321,6 +361,18 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
             <dd>{formatCents(totalCents)}</dd>
           </div>
         </dl>
+
+        {hint && (
+          <p className="ticket-next" role="status">
+            {hint.needs === 'phone'
+              ? normalizePhone(form.phone) !== null
+                ? hint.oncePerDay
+                  ? `${hint.name} goes on when Pay or Send saves the customer’s phone, if that phone has not had it today`
+                  : `${hint.name} goes on when Pay or Send saves the customer’s phone`
+                : `${hint.name} needs the customer’s phone on the order`
+              : `${hint.name} from ${formatCents(hint.fromCents ?? 0)} of food`}
+          </p>
+        )}
 
         {items.length > 0 && !gate.ok && (!needsCustomer || showDetails) && (
           <div className="ticket-gate" role="status">

@@ -4,7 +4,7 @@
  * movement-view.test.ts); `now` is passed in so tests can pin the clock.
  */
 
-import { orderStockNoteKind, releasedWasteReasonLabel } from '@cheeseoclock/pos-domain';
+import { orderStockNoteKind, releasedWasteReasonLabel, tradingDayOfMs, tradingDayStartMs } from '@cheeseoclock/pos-domain';
 import type { StockMovement, WasteReasonSetting } from '@cheeseoclock/shared-types';
 
 export type MovementTone = 'blue' | 'green' | 'red' | 'amber' | 'purple' | 'stone';
@@ -112,29 +112,46 @@ export const DATE_RANGES: ReadonlyArray<{ id: DateRange; label: string }> = [
   { id: 'all', label: 'All time' },
 ];
 
-/** Start of the range as an ISO instant (local midnight), or undefined for all time. */
+/**
+ * Start of the range as an ISO instant, or undefined for all time. Days are
+ * the shop's trading days, 05:00 to 05:00 Pakistan time (the shop trades
+ * noon to 1 am, like Reports and Order History): "Today" at 2 am still
+ * shows the night's stock, and the last 7 days are today and the 6 trading
+ * days before. Up to v0.7.26 it started at the computer's midnight.
+ */
 export function rangeSinceIso(range: DateRange, now: Date = new Date()): string | undefined {
   if (range === 'all') return undefined;
   const days = range === 'today' ? 0 : range === '7d' ? 6 : 29;
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days);
-  return start.toISOString();
+  return new Date(tradingDayStartMs(tradingDayOfMs(now.getTime()) - days)).toISOString();
 }
 
-const time = new Intl.DateTimeFormat('en-PK', { hour: 'numeric', minute: '2-digit', hour12: true });
-const dayMonth = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
-const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+// Pakistan time whatever the computer's time zone, like Order History
+// (historyFilters orderTimeLabel) and the paper (paperLabels).
+const time = new Intl.DateTimeFormat('en-PK', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Karachi' });
+const dayMonth = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Karachi' });
+const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Karachi' });
+const year = new Intl.DateTimeFormat('en-GB', { year: 'numeric', timeZone: 'Asia/Karachi' });
 
-function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-/** "Today 3:04 pm", "Yesterday 9:15 am", "21 Sep 8:00 pm", "3 Mar 2025 1:00 pm". */
+/**
+ * "Today 3:04 pm", "Yesterday 9:15 am", "21 Sep 8:00 pm", "3 Mar 2025 1:00 pm".
+ * Every time and date is Pakistan time (Asia/Karachi), whatever the
+ * computer's time zone. "Today" and "Yesterday" are the shop's trading days
+ * (05:00 to 05:00 Pakistan time), the same as the Today chip
+ * (rangeSinceIso): at 2 am, last night's 11:30 pm is "Today 11:30 pm", and
+ * after 05:00 the night's 2 am is "Yesterday 2:00 am". An older row reads
+ * like Order History (historyFilters orderTimeLabel): its real date and
+ * time, so 1 am on the 22nd is "22 Sep 1:00 am" (never "21 Sep 1:00 am"),
+ * with the year when it is not this year in Pakistan. The time used to
+ * follow the computer's time zone.
+ */
 export function formatWhen(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const t = time.format(d).toLowerCase();
-  if (sameDay(d, now)) return `Today ${t}`;
-  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (sameDay(d, yesterday)) return `Yesterday ${t}`;
-  return `${(d.getFullYear() === now.getFullYear() ? dayMonth : dayMonthYear).format(d)} ${t}`;
+  const day = tradingDayOfMs(d.getTime());
+  const today = tradingDayOfMs(now.getTime());
+  if (day === today) return `Today ${t}`;
+  if (day === today - 1) return `Yesterday ${t}`;
+  const thisYear = year.format(d) === year.format(now);
+  return `${(thisYear ? dayMonth : dayMonthYear).format(d)} ${t}`;
 }

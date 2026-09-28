@@ -591,9 +591,10 @@ function DeliveryChargeRow({ area }: { area: string }) {
       noteDeliveryChargeAsked(now);
       return;
     }
+    // The ask is remembered when its turn in the checkout queue comes (the store): Send and Pay
+    // put a pending charge on themselves (settleDeliveryCharge), and this ask then does nothing.
     const t = setTimeout(() => {
-      noteDeliveryChargeAsked(now);
-      setDeliveryArea(area, { mayStartOrder: wouldAdd }).catch((e: unknown) =>
+      setDeliveryArea(area, { mayStartOrder: wouldAdd, ask: now }).catch((e: unknown) =>
         toast({
           title: 'Could not put the delivery charge on',
           description: e instanceof Error ? e.message : 'Unknown error',
@@ -694,17 +695,22 @@ function DeliveryChargeRow({ area }: { area: string }) {
  *   print on the kitchen ticket or the bill. The same words again write
  *   nothing (setOrderDeliveryNotes).
  * - A saved address picked with "use it next time" becomes the usual one.
+ *
+ * Resolves with the customer and address now on the order (null when none
+ * was written), so the form can point at them: Pay saves the customer before
+ * it opens, and a second save (a note changed after closing Pay) then reuses
+ * them instead of adding the address, or a nameless customer, again.
  */
 export async function commitCustomerToOrder(
   orderId: string,
   mode: 'dine_in' | 'takeaway' | 'delivery' | 'online' | 'foodpanda',
   form: CustomerFormState,
-): Promise<void> {
-  if (mode === 'dine_in' || mode === 'online' || mode === 'foodpanda') return;
+): Promise<{ customerId: string; addressId: string | null } | null> {
+  if (mode === 'dine_in' || mode === 'online' || mode === 'foodpanda') return null;
   const note = form.deliveryNotes.trim() || null;
   if (!form.phone.trim() && !form.name.trim() && !form.addressLine.trim()) {
     await ipc.orders.setNote({ orderId, note });
-    return;
+    return null;
   }
 
   let customerId = form.matchedCustomerId;
@@ -771,4 +777,22 @@ export async function commitCustomerToOrder(
       console.warn('Could not make the address the usual one (order not affected):', e);
     }
   }
+  return { customerId, addressId };
+}
+
+/**
+ * The form once its customer is saved on the order: it points at the saved
+ * customer and address, so saving it again reuses them (no second address,
+ * no second nameless customer). "Use it next time" was done by that save.
+ */
+export function formAfterCommit(
+  form: CustomerFormState,
+  saved: { customerId: string; addressId: string | null },
+): CustomerFormState {
+  return {
+    ...form,
+    matchedCustomerId: saved.customerId,
+    matchedAddressId: saved.addressId ?? form.matchedAddressId,
+    makeDefault: false,
+  };
 }

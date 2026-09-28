@@ -154,6 +154,23 @@ export function toPrinterAscii(s: string): string {
   return out;
 }
 
+/**
+ * The characters of `s` the printer can't put on paper: each prints as '?'
+ * (toPrinterAscii). An Urdu line, an emoji. Each listed once, in order.
+ * Dashes, quotes and accented letters are not listed: they print as their
+ * plain stand-ins.
+ */
+export function unprintableChars(s: string): string[] {
+  const out: string[] = [];
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0;
+    if ((code >= 0x20 && code < 0x7f) || ch === '\n' || ch === '\t') continue;
+    if (TRANSLITERATIONS[ch] !== undefined || withoutAccent(ch) !== null) continue;
+    if (!out.includes(ch)) out.push(ch);
+  }
+  return out;
+}
+
 export class EscPosBuilder {
   private bytes: number[] = [];
   private readonly width: PrinterWidth;

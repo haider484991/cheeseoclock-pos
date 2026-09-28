@@ -3,12 +3,17 @@
  * Pure (no React, no DOM) so they are unit-tested.
  */
 import { formatCents, priceChangeBps } from '@cheeseoclock/pos-domain';
+import { CAME_BY_LABEL } from '@cheeseoclock/shared-types';
 import type {
   BusinessReport,
+  OfferFlag,
+  ReportCameBy,
   ReportChannel,
   ReportChannelLine,
   ReportFoodCost,
   ReportMissingCostWhy,
+  ReportOfferCheck,
+  ReportOfferRepeat,
   ReportOrderStock,
   ReportPaymentGroup,
   ReportPurchaseIngredientLine,
@@ -30,6 +35,51 @@ export const CHANNEL_LABEL: Record<ReportChannel, string> = {
   dine_in: 'Dine-in (old orders)',
   online: 'Online (old orders)',
 };
+
+/** How an order came in, in Reports' words (Channels → "How orders came in"). */
+export function cameByLabel(c: ReportCameBy): string {
+  return c === 'not_asked' ? 'Not asked' : CAME_BY_LABEL[c];
+}
+
+/** Team & leakage's flags on a cashier, in words. */
+export const OFFER_FLAG_WORDS: Record<OfferFlag, string> = {
+  phone_share: 'Phone / WhatsApp',
+  offer_rupees: 'Offer rupees',
+};
+
+/**
+ * The note under "Came by & offers": the shop's own rates this period and
+ * when a cashier is flagged (pos-domain offerFlags), from the values.
+ */
+export function offerCheckNote(c: ReportOfferCheck): string {
+  const factor = (c.factorPct / 100).toLocaleString('en-PK', { maximumFractionDigits: 2 });
+  const share = `${(c.phoneShareBps / 100).toLocaleString('en-PK', { maximumFractionDigits: 1 })}%`;
+  return (
+    `Counter takeaways and deliveries where Walk-in, Phone or WhatsApp was tapped; orders nobody was asked about are left out. ` +
+    `The shop this period: ${share} marked Phone or WhatsApp, ${formatCents(c.offerCentsPerOrder)} of offers an order. ` +
+    `Flagged: over ${factor} × either, on at least ${c.minMarked} such orders. Check those orders' phones against the customers. ` +
+    `Fairest with “Ask how every order came in” on (Settings → Money & discounts).`
+  );
+}
+
+/** One phone that got a "once a customer a day" offer twice on one day, in words (Team & leakage). */
+export function offerRepeatLine(r: Pick<ReportOfferRepeat, 'day' | 'offerName' | 'phoneEnds' | 'orderNumbers'>): {
+  day: string;
+  offer: string;
+  phone: string;
+  orders: string;
+} {
+  return {
+    day: fmtDay(r.day, false),
+    offer: r.offerName,
+    phone: r.phoneEnds ? `ends ${r.phoneEnds}` : '—',
+    orders: r.orderNumbers.join(', '),
+  };
+}
+
+/** The note under "Once a customer a day, given more than once". */
+export const OFFER_REPEATS_NOTE =
+  'Each till checks that phone’s other orders first, but with the link between the tills down each can give it once. Check these orders.';
 
 /**
  * Website orders (pick-up and delivery) against everything rung up at the

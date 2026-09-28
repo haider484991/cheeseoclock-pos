@@ -3,10 +3,12 @@ import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireAdmin, requireCapability, REFUSED } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
 import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
-import type { AuthenticatedUser, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, CameBy, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
 import {
+  cameBySchema,
   deleteTestOrderInputSchema,
   foodpandaTenderCheckSchema,
+  setCameByInputSchema,
   listDeletedTestsInputSchema,
   orderStockAnswerSchema,
   testDeletePreviewInputSchema,
@@ -49,6 +51,8 @@ import {
   testDeletePreview,
   hasFoodpandaDeal,
   FOODPANDA_DEAL_NEEDS_MANAGER,
+  setOrderCameBy,
+  CAME_BY_LOCKED,
 } from '../../db/repositories/order-repo.js';
 import {
   approvalRuleText,
@@ -141,7 +145,24 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const s = requireOrderCreate();
     // The same address rule as the attach channels, before any row is written.
     if (payload.customerId) assertCounterAddress(ctx.db, s, payload.customerId, payload.customerAddressId);
-    const order = createOrder(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    // How it came in, when a chip was tapped before the first item: one of the counter's three.
+    let cameBy: CameBy | null = null;
+    if (payload.cameBy !== undefined && payload.cameBy !== null) {
+      const c = cameBySchema.safeParse(payload.cameBy);
+      if (!c.success) throw new IpcGuardError({ code: 'validation_failed', message: 'Walk-in, Phone or WhatsApp' });
+      cameBy = c.data;
+    }
+    const order = createOrder(
+      ctx.db,
+      {
+        mode: payload.mode,
+        tableId: payload.tableId ?? null,
+        customerId: payload.customerId ?? null,
+        notes: payload.notes ?? null,
+        cameBy,
+      },
+      { userId: s.id, deviceId: ctx.deviceId },
+    );
     // If the cashier already picked a customer, snapshot them onto the order now.
     if (payload.customerId) {
       snapshotCustomerOntoOrder(
@@ -424,6 +445,42 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       throw e;
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  // How a counter order came in (Walk-in · Phone · WhatsApp). While it is
+  // being rung up, any login that takes orders sets it (the owner's automatic
+  // offers follow). Once it is sent it is locked: a manager's PIN or password
+  // changes it, audited, and the bill does not move.
+  defineHandler('orders:setCameBy', ctx, async (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const parsed = setCameByInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new IpcGuardError({ code: 'validation_failed', message: parsed.error.issues[0]?.message ?? 'Walk-in, Phone or WhatsApp' });
+    }
+    const { orderId, cameBy, approverPin } = parsed.data;
+    const order = findOrder(ctx.db, orderId);
+    if (!order) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    assertCounterMaySee(ctx.db, s, order, 'open');
+    let approverUserId: string | null = null;
+    if (order.status !== 'open' && (order.cameBy ?? null) !== cameBy) {
+      if (!approverPin) throw new IpcGuardError({ code: 'precondition_failed', message: CAME_BY_LOCKED });
+      try {
+        approverUserId = (await verifyManagerPin(ctx.db, approverPin)).approverUserId;
+      } catch (e) {
+        throw new IpcGuardError({ code: 'forbidden', message: e instanceof Error ? e.message : 'Manager approval failed' });
+      }
+    }
+    try {
+      setOrderCameBy(ctx.db, orderId, cameBy, { userId: s.id, deviceId: ctx.deviceId }, { approverUserId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not change how the order came in',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     return ok(snap);
   });

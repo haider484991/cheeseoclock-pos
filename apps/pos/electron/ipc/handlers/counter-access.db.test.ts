@@ -501,6 +501,9 @@ const SHOP_SETTINGS_OWNER_ONLY = (): Record<string, unknown> => ({
     key: 'foodpanda.deal',
     value: { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
   },
+  // This till's own (Settings polish, 28 Sep 2026): the receipt's extra lines and the opening float. Never synced.
+  'settings:getTill': { key: 'drawer.openingFloat' },
+  'settings:setTill': { key: 'receipt.extraLines', value: ['Test line on the receipt'] },
   // Settings → Delivery areas (step 3): the areas AND their fee items, one transaction. Free delivery
   // everywhere here (this test till has no tax category for a fee item), so the owner's Save writes.
   'settings:saveDeliveryZones': FREE_DELIVERY_ZONES(),
@@ -561,6 +564,44 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   { key: 'discounts.websitePickup', useDefault: true },
   { key: 'online.options', value: { v: 1, autoPublishMenu: true } },
   { key: 'online.options', useDefault: true },
+  // The automatic offers and the came-by question (Settings step 4).
+  {
+    key: 'discounts.offers',
+    value: {
+      v: 1,
+      askCameBy: true,
+      offers: [
+        {
+          id: 'test-offer',
+          name: 'Test WhatsApp offer',
+          on: true,
+          cameBy: ['whatsapp'],
+          orderTypes: ['delivery'],
+          type: 'percent',
+          value: 10,
+          minOrderCents: null,
+          maxOffCents: null,
+          days: [0, 1, 2, 3, 4, 5, 6],
+          hours: null,
+          startsOn: null,
+          endsOn: null,
+          oncePerCustomerPerDay: false,
+        },
+      ],
+    },
+  },
+  { key: 'discounts.offers', useDefault: true },
+  // The Cancel, Refund and Cash out reason buttons (Settings polish, 28 Sep 2026).
+  {
+    key: 'orders.reasons',
+    value: {
+      v: 1,
+      cancel: [{ id: 'test_cancel', label: 'Test cancel reason', food: 'made' }],
+      refund: [{ id: 'test_refund', label: 'Test refund reason', food: 'ask' }],
+      cashOut: ['Test cash out'],
+    },
+  },
+  { key: 'orders.reasons', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -594,6 +635,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:clearDiscount': { orderId: s.draft },
   'orders:resumeDraft': undefined,
   'orders:setMode': { orderId: s.draft, mode: 'takeaway' },
+  // How a counter order came in (the chips): the cashier's while it is rung up; a manager's PIN once sent.
+  'orders:setCameBy': { orderId: s.draft, cameBy: 'phone' },
   // The delivery area's charge goes on by itself (owner, 28 Sep 2026): any login taking the order.
   'orders:setDeliveryArea': { orderId: s.draft, area: 'DHA Phase 6' },
   'orders:tender': { orderId: s.draft, payments: [] },
@@ -616,6 +659,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'shifts:current': undefined,
   'shifts:open': { openingCashCents: 0 },
   'shifts:lastCount': undefined,
+  // Where the Open shift box starts (this till's last count, or the owner's fixed float): a cashier opens the morning shift.
+  'shifts:openingFloat': undefined,
   'shifts:recordCashMovement': { type: 'payin', amountCents: 10_000, reason: 'Change' },
   'shifts:openDrawer': { kind: 'no_sale', reason: 'Change for a note' },
   'printer:getConfig': undefined,
@@ -900,7 +945,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         });
       }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(13);
+      expect(SHOP_SETTING_KEYS.length).toBe(15);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
@@ -1025,6 +1070,64 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
       expect(rules).toMatchObject({ discounts: { alsoOffDeliveryCharge: true } });
       const { delivery: _areas, ...rest } = rules;
       expect(JSON.stringify(rest)).not.toMatch(/commission|fee|payout/i);
+    }
+  });
+
+  it('the counter reads the offers that run today and the came-by question — never who saved them — and the manager-only change of a sent order', async () => {
+    const offers = SHOP_SETTING_SAVES().find((p) => (p as { key?: string }).key === 'discounts.offers' && 'value' in (p as object)) as {
+      value: { offers: unknown[] };
+    };
+    h.session = OWNER;
+    expect((await call('settings:setBusiness', offers)).ok).toBe(true);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<Record<string, unknown>>('checkout:getRules');
+      expect(rules).toMatchObject({ offers: { askCameBy: true, offers: offers.value.offers } });
+      expect(JSON.stringify(rules)).not.toMatch(/commission|payout|updatedBy|savedBy/i);
+    }
+    // The counter taps a chip on its own draft; once the order is sent a cashier alone can't change it.
+    h.session = CASHIER;
+    const order = await data<{ id: string }>('orders:create', { mode: 'takeaway', cameBy: 'walk_in' });
+    expect(await call('orders:setCameBy', { orderId: order.id, cameBy: 'whatsapp' })).toMatchObject({ ok: true });
+    expect(await call('orders:create', { mode: 'takeaway', cameBy: 'carrier-pigeon' })).toMatchObject({ ok: false, code: 'validation_failed' });
+    // A sent order (out with the rider): a cashier alone is refused, and a PIN that is not a
+    // manager's is refused too — nothing written either way.
+    const before = ['audit_log', 'sync_queue'].map((t) => db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.['n']);
+    const cameByOf = () => db.prepare(`SELECT came_by FROM orders WHERE id = ?`).get(s.boardOld)?.['came_by'] ?? null;
+    const was = cameByOf();
+    expect(await call('orders:setCameBy', { orderId: s.boardOld, cameBy: 'whatsapp' })).toMatchObject({ ok: false, code: 'precondition_failed' });
+    expect(await call('orders:setCameBy', { orderId: s.boardOld, cameBy: 'whatsapp', approverPin: 'not-a-manager' })).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(cameByOf()).toBe(was);
+    expect(['audit_log', 'sync_queue'].map((t) => db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.['n'])).toEqual(before);
+  });
+
+  it('the counter reads the reason buttons (today’s until the owner saves) and where the Open shift box starts — never who saved them', async () => {
+    const mine = SHOP_SETTING_SAVES().find((p) => (p as { key?: string }).key === 'orders.reasons' && 'value' in (p as object)) as {
+      value: { cancel: unknown[]; refund: unknown[]; cashOut: string[] };
+    };
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<{ reasons: { cancel: Array<{ label: string }>; cashOut: string[] } }>('checkout:getRules');
+      expect(rules.reasons.cancel.map((r) => r.label)).toEqual([
+        'Customer cancelled',
+        'Refused at the door',
+        'Not collected',
+        'Wrong order / duplicate',
+        'Out of stock',
+      ]);
+      expect(rules.reasons.cashOut).toEqual([]);
+      // This till closed an earlier shift: the box starts on its count (today's rule).
+      expect(await data('shifts:openingFloat')).toMatchObject({ from: 'last_count', lastCount: { countedCashCents: expect.any(Number) } });
+    }
+    h.session = OWNER;
+    expect((await call('settings:setBusiness', mine)).ok).toBe(true);
+    expect((await call('settings:setTill', { key: 'drawer.openingFloat', value: { mode: 'fixed', fixedCents: 300_000 } })).ok).toBe(true);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<Record<string, unknown>>('checkout:getRules');
+      expect(rules).toMatchObject({ reasons: { cancel: mine.value.cancel, refund: mine.value.refund, cashOut: mine.value.cashOut } });
+      expect(JSON.stringify(rules)).not.toMatch(/updatedBy|u_admin/i);
+      expect(await data('shifts:openingFloat')).toMatchObject({ prefillCents: 300_000, from: 'fixed' });
     }
   });
 

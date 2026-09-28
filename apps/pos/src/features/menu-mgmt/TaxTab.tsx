@@ -5,6 +5,8 @@ import { Button, Card } from '@cheeseoclock/ui';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { TaxCategory } from '@cheeseoclock/shared-types';
+import { STARTING_TAX_RATE_BPS, taxRatePercentText } from '@cheeseoclock/shared-types';
+import { taxRateFieldStart } from './taxForm';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 
@@ -98,7 +100,8 @@ function TaxDialog({
   const qc = useQueryClient();
   const { toast } = useToast();
   const [name, setName] = useState(existing?.name ?? '');
-  const [ratePercent, setRatePercent] = useState(((existing?.rateBps ?? 1600) / 100).toString());
+  // Editing: the category's own rate, as it is. A new one starts at the till's starting rate.
+  const [ratePercent, setRatePercent] = useState(taxRateFieldStart(existing));
 
   const mut = useMutation({
     mutationFn: () => {
@@ -141,7 +144,7 @@ function TaxDialog({
                 value={name}
                 autoFocus
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Standard 16%"
+                placeholder={`Sales tax ${taxRatePercentText(STARTING_TAX_RATE_BPS)}`}
                 className="w-full rounded-lg border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
               />
             </div>
@@ -152,11 +155,11 @@ function TaxDialog({
                 step="0.01"
                 value={ratePercent}
                 onChange={(e) => setRatePercent(e.target.value)}
-                placeholder="16"
+                placeholder={String(STARTING_TAX_RATE_BPS / 100)}
                 className="w-full rounded-lg border border-stone-300 px-3 py-2 font-mono dark:border-stone-700 dark:bg-stone-800"
               />
               <div className="mt-1 text-xs text-stone-500">
-                Stored as basis points internally (16% = 1600 bps).
+                Stored as basis points internally ({taxRatePercentText(STARTING_TAX_RATE_BPS)} = {STARTING_TAX_RATE_BPS} bps).
               </div>
             </div>
           </div>

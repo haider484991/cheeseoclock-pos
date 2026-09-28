@@ -127,7 +127,7 @@ describe('Settings → Kitchen & stock', () => {
     expect(words).toContain('the till keeps Rs 1,200');
   });
 
-  it('only the owner’s login has the tab, in the design’s place: after Staff & kitchen timing, before Printers', () => {
+  it('only the owner’s login has the tab, in the design’s place: after Staff & kitchen, before Printers', () => {
     const tabs = (markup: string) =>
       markup
         .split('role="tab"')
@@ -140,7 +140,7 @@ describe('Settings → Kitchen & stock', () => {
       'Money & discounts',
       'Delivery areas & fees',
       'Shop & logo',
-      'Staff & kitchen timing',
+      'Staff & kitchen',
       'Kitchen & stock',
       'Printers',
     ]);

@@ -119,8 +119,15 @@ export function CheckoutPage() {
     sendingRef.current = true;
     try {
       const next = await useCheckoutStore.getState().sendToKitchen();
+      // Saving the customer's phone at Send can put one of the owner's offers on: say so.
+      const offer = next.discounts[next.discounts.length - 1];
+      const offerNote =
+        offer?.source === 'offer' && offer.amountCents > 0 && offer.reason
+          ? `${offer.reason}: ${formatCents(offer.amountCents)} off (the owner’s offer)`
+          : undefined;
       toast({
         title: `Sent to kitchen · #${next.order.orderNumber.split('-').pop()}`,
+        ...(offerNote ? { description: offerNote } : {}),
         variant: 'success',
       });
       reset();
@@ -133,6 +140,25 @@ export function CheckoutPage() {
     } finally {
       sendingRef.current = false;
     }
+  }
+
+  /**
+   * Pay: the customer typed in is saved on the order FIRST, so the bill Pay
+   * shows is final (an automatic offer that needs the phone goes on now, not
+   * inside the payment). Pay opens either way; it saves again if that failed.
+   */
+  const payingRef = useRef(false);
+  async function openPay() {
+    if (payingRef.current) return;
+    payingRef.current = true;
+    try {
+      await useCheckoutStore.getState().prepareToPay();
+    } catch {
+      // Pay saves the customer itself as before.
+    } finally {
+      payingRef.current = false;
+    }
+    setTenderOpen(true);
   }
 
   /**
@@ -150,7 +176,7 @@ export function CheckoutPage() {
       return;
     }
     if (sendsFirst) void handleSendToKitchen();
-    else setTenderOpen(true);
+    else void openPay();
   }
 
   /**
@@ -259,7 +285,7 @@ export function CheckoutPage() {
           return;
         }
         // Foodpanda has no 'send unpaid': F2 takes the payment too.
-        if (e.key === 'F1' || mode === 'foodpanda') setTenderOpen(true);
+        if (e.key === 'F1' || mode === 'foodpanda') void openPay();
         else void handleSendToKitchen();
       } else if (e.key === 'F3') {
         e.preventDefault();
@@ -422,7 +448,7 @@ export function CheckoutPage() {
         </div>
       </section>
 
-      <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => setTenderOpen(true)} onDiscount={() => setDiscountOpen('change')} onRemoveDeal={() => setDiscountOpen('removeDeal')} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
+      <CartPane step={checkoutStep} onContinue={() => setCheckoutStep('details')} onBack={() => setCheckoutStep('items')} onPay={() => void openPay()} onDiscount={() => setDiscountOpen('change')} onRemoveDeal={() => setDiscountOpen('removeDeal')} onSendToKitchen={handleSendToKitchen} onCustomize={setCustomizeLineId} />
 
       {pizzaChoice && (
         <PizzaSizeDialog choice={pizzaChoice} returnFocus={sizeTriggerRef.current} onClose={() => setPizzaChoice(null)} onSelect={(item) => { setPizzaChoice(null); void handleAddItem(item); }} />

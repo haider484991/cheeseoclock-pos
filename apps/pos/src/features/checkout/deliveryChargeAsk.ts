@@ -13,6 +13,12 @@ import type { OrderMode } from '@cheeseoclock/shared-types';
  * memory inside the row (a ref) was lost with it, and the new row asked
  * again — putting back the charge the cashier had just taken off, swapping
  * a charge tapped on by hand, or taking one off a free area.
+ *
+ * The same memory is read by Send, Pay opening and the payment
+ * (checkoutStore settleDeliveryCharge): an ask the row has not made yet (its
+ * 250 ms wait) is made before the order leaves, and the row's late ask then
+ * finds it made. Both check and remember inside the checkout queue, so
+ * whichever runs first asks and the other does nothing.
  */
 
 export interface DeliveryChargeAskState {

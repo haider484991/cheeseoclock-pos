@@ -361,7 +361,8 @@ export function discountLeavesDeliveryCharge(
 
 /**
  * A discount's words on the printed bill: "Discount (Staff)", "Discount", or
- * the foodpanda deal's own label, as before — and, when it left the order's
+ * the foodpanda deal's own label, as before, or an automatic offer's name
+ * ("WhatsApp 10% off") — and, when it left the order's
  * delivery charge alone, "Discount 10% (Staff, food only)" / "Discount (food
  * only)" / "Foodpanda deal 20% off (food only)". Built from the discount's
  * frozen rule (discountLeavesDeliveryCharge), never the live setting, so a
@@ -378,7 +379,8 @@ export function discountBillLabel(
   items: ReadonlyArray<{ readonly menuItemName?: string | null }>,
 ): string {
   const foodOnly = discountLeavesDeliveryCharge(d, items);
-  if (d.source === 'foodpanda' && d.reason) return foodOnly ? `${d.reason} (food only)` : d.reason;
+  // The foodpanda deal's label, and an automatic offer's NAME (its reason), print as themselves.
+  if ((d.source === 'foodpanda' || d.source === 'offer') && d.reason) return foodOnly ? `${d.reason} (food only)` : d.reason;
   if (!foodOnly) return d.reason ? `Discount (${d.reason})` : 'Discount';
   const percent = d.discountType === 'percent' ? ` ${d.value}%` : '';
   return `Discount${percent} (${d.reason ? `${d.reason}, ` : ''}food only)`;

@@ -13,6 +13,7 @@ import type {
 } from '@cheeseoclock/shared-types';
 import { STEP_IN_HELD } from '@cheeseoclock/shared-types';
 import type { SetShopSettingRequest, ShopSettingCard, ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
+import type { SetTillSettingRequest, TillSettingCard, TillSettingKey, TillSettingValues } from '@cheeseoclock/shared-types';
 
 export class IpcError extends Error {
   readonly code: ApiError['code'];
@@ -141,6 +142,8 @@ export const ipc = {
     setMode: (input: IpcRequest<'orders:setMode'>) => unwrap(window.api.orders.setMode(input)),
     /** The delivery area changed: the main process puts that area's delivery charge on (or swaps / takes it off). */
     setDeliveryArea: (input: IpcRequest<'orders:setDeliveryArea'>) => unwrap(window.api.orders.setDeliveryArea(input)),
+    /** How a counter order came in (Walk-in · Phone · WhatsApp): a manager's PIN once the order has been sent. */
+    setCameBy: (input: IpcRequest<'orders:setCameBy'>) => unwrap(window.api.orders.setCameBy(input)),
     resumeDraft: () => unwrap(window.api.orders.resumeDraft()),
     discardDraft: (orderId: string) => unwrap(window.api.orders.discardDraft({ orderId })),
     tender: (input: IpcRequest<'orders:tender'>) => unwrap(window.api.orders.tender(input)),
@@ -192,6 +195,8 @@ export const ipc = {
     list: (input?: IpcRequest<'shifts:list'>) => unwrap(window.api.shifts.list(input)),
     summary: (shiftId: string) => unwrap(window.api.shifts.summary({ shiftId })),
     lastCount: () => unwrap(window.api.shifts.lastCount()),
+    /** What the Open shift box starts the count on (this till's last count, or the owner's fixed float). */
+    openingFloat: () => unwrap(window.api.shifts.openingFloat()),
     recordCashMovement: (input: IpcRequest<'shifts:recordCashMovement'>) =>
       unwrap(window.api.shifts.recordCashMovement(input)),
     listCashMovements: (shiftId: string) =>
@@ -460,6 +465,14 @@ export const ipc = {
       unwrap(window.api.settings.setBusiness({ key, useDefault: true } as SetShopSettingRequest)) as Promise<ShopSettingCard<K>>,
     /** Settings → Delivery areas: the areas and fees, and the delivery-charge items they need (one transaction). */
     saveDeliveryZones: (input: IpcRequest<'settings:saveDeliveryZones'>) => unwrap(window.api.settings.saveDeliveryZones(input)),
+    /** One "this till" card (the receipt's extra lines, the opening float). */
+    getTill: <K extends TillSettingKey>(key: K) => unwrap(window.api.settings.getTill({ key })) as Promise<TillSettingCard<K>>,
+    /** Save a "this till" card; answers with it as it now stands. */
+    setTill: <K extends TillSettingKey>(key: K, value: TillSettingValues[K]) =>
+      unwrap(window.api.settings.setTill({ key, value } as SetTillSettingRequest)) as Promise<TillSettingCard<K>>,
+    /** "Put back the default" on a "this till" card. */
+    putBackTillDefault: <K extends TillSettingKey>(key: K) =>
+      unwrap(window.api.settings.setTill({ key, useDefault: true })) as Promise<TillSettingCard<K>>,
   },
   /** What the counter needs to take an order: the foodpanda deal, Pay's checks. */
   checkout: {

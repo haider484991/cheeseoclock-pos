@@ -5,6 +5,23 @@ import {
 } from '@cheeseoclock/pos-domain';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { useCustomerForm } from './useCustomerForm';
+import { useCheckoutRules } from '../settings/shop-rules/useShopSetting';
+
+/** What the ticket says is still needed when the owner asks how each order came in and no chip is lit. */
+export const CAME_BY_NEEDED = 'How the order came in (Walk-in, Phone or WhatsApp)';
+
+/**
+ * The owner asks how each counter takeaway and delivery came in (Settings →
+ * Money & discounts): Send and Pay wait for a chip. Pure, for the tests.
+ */
+export function withCameByNeeded(
+  base: ValidationResult,
+  p: { askCameBy: boolean; mode: string; source: string; cameBy: string | null | undefined },
+): ValidationResult {
+  const asked = p.askCameBy && p.source === 'pos' && (p.mode === 'takeaway' || p.mode === 'delivery');
+  if (!asked || p.cameBy) return base;
+  return { ok: false, missing: [...base.missing, CAME_BY_NEEDED] };
+}
 
 /**
  * Live tender-readiness check. Combines the persisted order snapshot with the
@@ -19,6 +36,8 @@ export function useTenderGate(): ValidationResult {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const storeMode = useCheckoutStore((s) => s.mode);
   const tableId = useCheckoutStore((s) => s.tableId);
+  const cameBy = useCheckoutStore((s) => s.cameBy);
+  const askCameBy = useCheckoutRules().data?.offers?.askCameBy ?? false;
   const { form } = useCustomerForm();
 
   return useMemo<ValidationResult>(() => {
@@ -39,7 +58,7 @@ export function useTenderGate(): ValidationResult {
         ? [form.addressLine, form.area, form.city].filter(Boolean).join(', ')
         : null);
 
-    return validateOrderForTender({
+    const base = validateOrderForTender({
       mode,
       itemCount,
       subtotalCents,
@@ -48,5 +67,6 @@ export function useTenderGate(): ValidationResult {
       customerPhone,
       deliveryAddress,
     });
-  }, [snapshot, storeMode, tableId, form]);
+    return withCameByNeeded(base, { askCameBy, mode, source: snapshot?.order.source ?? 'pos', cameBy });
+  }, [snapshot, storeMode, tableId, form, askCameBy, cameBy]);
 }
