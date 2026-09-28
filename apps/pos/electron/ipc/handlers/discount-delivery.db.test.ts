@@ -8,12 +8,16 @@
  *     sale invoice and debit note line by line, profit's split and the
  *     receipt's words — the delivery charge takes none of the discount;
  *   - the approval limit is checked on the same food-only amount, in all
- *     three places (the F3 screen's preview, the IPC check, the repository);
+ *     three places (the F3 screen's preview, the IPC check, the repository),
+ *     and again on it at the next cart change;
  *   - the rule is FROZEN on the discount row: a legacy row (no rule) and a
  *     paid order never move, whatever the switch says after; turning the
  *     switch on restores the old maths for new discounts only;
  *   - a web order keeps the website's own rule (never the till's switch);
- *   - the foodpanda deal works on the food: its % and its minimum.
+ *   - the foodpanda deal works on the food: its % and its minimum, and a
+ *     shared deal's foodpanda part (the terms kept at Pay, and Reports'
+ *     reading of an order with none kept); a deal put on before this rule
+ *     keeps covering the charge on an open order's cart changes.
  *
  * Only `defineHandler` (captured), the signed-in session and the manager
  * check (auth-service), the printer spooler and the FBR worker are stood in
@@ -465,6 +469,45 @@ describe.skipIf(!Sqlite)('the approval limit is checked on the food, in all thre
     const refusedYes = await call('orders:applyDiscount', { orderId, discountType: 'flat', value: 23_000 });
     expect(refusedYes.ok ? '' : refusedYes.message).toContain('no more than 10% of the order, without a manager');
   });
+
+  it('…and re-checked on the food at the next cart change: Rs 210 off, given without a manager on Rs 2,150 of food, comes off with a Rs 150 item', async () => {
+    // A made-up Rs 150 item, sold with the food at the same tax.
+    const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+    const like = db.prepare(`SELECT category_id, tax_category_id FROM menu_items WHERE id = ?`).get(menu.pizza)!;
+    const dip = createMenuItem(
+      db as never,
+      { categoryId: String(like['category_id']), name: 'Test Dip', basePriceCents: 15_000, taxCategoryId: String(like['tax_category_id']) },
+      { userId: 'u_mgr', deviceId: DEV },
+    ).id;
+    for (const alsoOff of [false, true]) {
+      await setSwitch(alsoOff);
+      // Rs 2,150 of food (Rs 2,000 + the Rs 150 item) and the Rs 200 charge.
+      const orderId = await deliveryOrder();
+      h.session = CASHIER;
+      await data('orders:addItem', { orderId, menuItemId: dip, quantity: 1 });
+      // Rs 210 is under 10% of the Rs 2,150 of food: no manager.
+      await data('orders:applyDiscount', { orderId, discountType: 'flat', value: 21_000 });
+      expect(liveDiscounts(orderId)).toMatchObject([{ value: 21_000, amount_cents: 21_000 }]);
+      const discountId = String(db.prepare(`SELECT id FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`).get(orderId)?.['id']);
+      const dipLine = db.prepare(`SELECT id FROM order_items WHERE order_id = ? AND menu_item_id = ? AND deleted_at IS NULL`).get(orderId, dip)!;
+      h.session = CASHIER;
+      await data('orders:removeItem', { orderId, orderItemId: String(dipLine['id']) });
+      if (!alsoOff) {
+        // Rs 2,000 of food: Rs 210 is now over 10% of it (though under 10% of the Rs 2,200 order) — taken off, audited;
+        // the cashier re-applies it with a manager's PIN. Tax 16% of Rs 2,200.
+        expect({ alsoOff, live: liveDiscounts(orderId) }).toEqual({ alsoOff, live: [] });
+        expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 220_000, discount_cents: 0, tax_cents: 35_200, total_cents: 255_200 });
+        const cleared = db
+          .prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'order_discounts' AND entity_id = ? AND action = 'auto_clear_needs_approval'`)
+          .get(discountId);
+        expect(cleared?.['n']).toBe(1);
+      } else {
+        // The switch on (the rule frozen on this row): 10% of the Rs 2,200 order is Rs 220 — it stays.
+        expect({ alsoOff, live: liveDiscounts(orderId) }).toMatchObject({ alsoOff, live: [{ value: 21_000, amount_cents: 21_000 }] });
+        expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 220_000, discount_cents: 21_000 });
+      }
+    }
+  });
 });
 
 /**
@@ -768,5 +811,80 @@ describe.skipIf(!Sqlite)('the foodpanda deal works on the food too', () => {
     h.session = CASHIER;
     await data('orders:addItem', { orderId: before, menuItemId: menu.side, quantity: 1 });
     expect(orderRow(before)).toMatchObject({ subtotal_cents: 270_000, discount_cents: 50_000 });
+  });
+
+  /**
+   * A shared deal — 20% off, the shop's part 10% — on a foodpanda order with
+   * a delivery charge tapped by hand, paid through foodpanda. 20% of the
+   * Rs 2,000 of food is Rs 400: the shop's Rs 200 off the bill and
+   * foodpanda's Rs 200 on top (of Rs 2,200 it would be Rs 220 each).
+   */
+  async function sharedDealOrderPaid(): Promise<string> {
+    await setDeal({ percent: 20, shopPercent: 10 });
+    const orderId = await deliveryOrder('foodpanda');
+    // Tax 16% of Rs 1,800 of food + 16% of the Rs 200 charge.
+    expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 220_000, discount_cents: 20_000, tax_cents: 32_000, total_cents: 232_000 });
+    h.session = CASHIER;
+    await data('orders:tender', { orderId, payments: [{ method: 'foodpanda', amountCents: 232_000 }] });
+    return orderId;
+  }
+
+  it('a shared deal: the terms kept at Pay work foodpanda’s part on the food — Rs 200, not Rs 220', async () => {
+    const orderId = await sharedDealOrderPaid();
+    expect(
+      db
+        .prepare(`SELECT deal_bps, shop_bps, shop_discount_cents, platform_funded_cents FROM order_channel_terms WHERE order_id = ? AND deleted_at IS NULL`)
+        .get(orderId),
+    ).toMatchObject({ deal_bps: 2_000, shop_bps: 1_000, shop_discount_cents: 20_000, platform_funded_cents: 20_000 });
+    // The bill says the same.
+    expect((await snap(orderId)).discounts).toMatchObject([
+      { alsoOffDeliveryCharge: false, foodpanda: { dealPercent: 20, shopPercent: 10, dealCents: 40_000, platformCents: 20_000, baseCents: 200_000 } },
+    ]);
+    // …and Reports → Channels reads the kept figure.
+    const { getFoodpanda } = await import('../../services/business-report.js');
+    expect(getFoodpanda(db as never, NOW_RANGE())).toMatchObject({ orderCount: 1, shopDealCents: 20_000, foodpandaDealCents: 20_000 });
+  });
+
+  it('a shared deal paid with no terms kept (before they were kept): Reports → Channels works foodpanda’s part on the food too', async () => {
+    const orderId = await sharedDealOrderPaid();
+    // As an order paid before a till kept its terms at Pay.
+    db.prepare(`DELETE FROM order_channel_terms WHERE order_id = ?`).run(orderId);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM order_channel_terms`).get()?.['n']).toBe(0);
+    const { getFoodpanda } = await import('../../services/business-report.js');
+    // From the deal frozen on the order, on the Rs 2,000 of food (read from the lines as sold).
+    expect(getFoodpanda(db as never, NOW_RANGE())).toMatchObject({
+      orderCount: 1,
+      tillPriceSalesCents: 220_000,
+      shopDealCents: 20_000,
+      foodpandaDealCents: 20_000,
+      taxCents: 32_000,
+    });
+  });
+
+  it('a deal put on before 0.7.26 (its rule says nothing of the charge) on an order still open: a cart change re-works it over every line, as it was given — never by the switch', async () => {
+    await setSwitch(false);
+    await setDeal({});
+    const orderId = await deliveryOrder('foodpanda');
+    expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 220_000, discount_cents: 40_000 });
+    // The deal row as a 0.7.25 till froze it: the same terms, no alsoOffDeliveryCharge.
+    const legacy = JSON.parse(String(liveDiscounts(orderId)[0]?.['rule_json'])) as Record<string, unknown>;
+    delete legacy['alsoOffDeliveryCharge'];
+    db.prepare(`UPDATE order_discounts SET rule_json = ? WHERE order_id = ? AND source = 'foodpanda' AND deleted_at IS NULL`).run(
+      JSON.stringify(legacy),
+      orderId,
+    );
+    // One more side: 20% of Rs 2,700 (the charge included) = Rs 540 — not 20% of Rs 2,500 of food (Rs 500), the switch's No.
+    // Tax 16% of Rs 2,160.
+    h.session = CASHIER;
+    await data('orders:addItem', { orderId, menuItemId: menu.side, quantity: 1 });
+    expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 270_000, discount_cents: 54_000, tax_cents: 34_560, total_cents: 250_560 });
+    const [row] = liveDiscounts(orderId);
+    expect(row).toMatchObject({ source: 'foodpanda', amount_cents: 54_000 });
+    // The row's rule is left as it was found.
+    expect(JSON.parse(String(row?.['rule_json']))).not.toHaveProperty('alsoOffDeliveryCharge');
+    // The bill and the invoice follow it: the charge takes its 20%.
+    const s = await snap(orderId);
+    expect(s.discounts).toMatchObject([{ alsoOffDeliveryCharge: true, foodpanda: { dealCents: 54_000, baseCents: 270_000 } }]);
+    expect(fbrLines(s)['Delivery Charge (Rs 200)']).toEqual({ net: 160, tax: 25.6, discount: 40 });
   });
 });
