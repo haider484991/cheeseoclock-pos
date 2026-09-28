@@ -99,18 +99,22 @@ export interface CurrentDiscount {
   value: number;
   reason: string | null;
   source?: string | null;
+  /** One of the owner's automatic offers: whether the cashier took it off this order. */
+  offer?: { declined: boolean } | null;
 }
 
 /**
  * Where the Discount dialog starts. A staff discount opens on itself (its
  * choice and its reason), so a tap changes it. The owner's foodpanda deal
- * opens on NOTHING: re-applying its own % would turn the deal into a staff
+ * (and each of his automatic offers) opens on NOTHING: re-applying its own % would turn the deal into a staff
  * discount without its minimum and most-off, under the manager's name — and
  * its label ("Foodpanda deal 20% off") is not the reason for any other
  * discount a manager types in its place.
  */
 export function discountDialogStart(current: CurrentDiscount | null): { picked: DiscountChoice | null; reason: string } {
-  if (!current || current.source === 'foodpanda') return { picked: null, reason: '' };
+  // The owner's automatic offers too: its name is not the reason for a staff discount, and re-applying
+  // it would make it a staff discount without its minimum and most-off.
+  if (!current || current.source === 'foodpanda' || current.source === 'offer') return { picked: null, reason: '' };
   return { picked: { type: current.discountType, value: current.value }, reason: current.reason ?? '' };
 }
 
@@ -165,6 +169,12 @@ export function currentDiscountWords(
   rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'>,
 ): { now: string; ruleNote: string | null } {
   if (current.source === 'foodpanda' && current.reason) return { now: `${current.reason} (set by the owner)`, ruleNote: null };
+  if (current.source === 'offer' && current.reason) {
+    return {
+      now: current.offer?.declined ? `${current.reason} taken off this order` : `${current.reason} (the owner’s offer)`,
+      ruleNote: null,
+    };
+  }
   const choice = describeDiscount({ type: current.discountType, value: current.value });
   if (!lines.some(isDeliveryChargeLine)) return { now: choice, ruleNote: null };
   const itCovers = current.alsoOffDeliveryCharge !== false;

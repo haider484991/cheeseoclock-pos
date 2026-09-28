@@ -10,7 +10,7 @@ import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
 import { paperButtonLabel } from '../printing/paperLabels';
-import { receiptDiscountLabel } from './discountWords';
+import { isOfferTakenOff, receiptDiscountLabel } from './discountWords';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -177,7 +177,8 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                 <span>Subtotal</span>
                 <span>{formatCents(order.subtotalCents, { showSymbol: false })}</span>
               </div>
-              {discounts.map((d) => (
+              {/* An automatic offer the cashier took off takes nothing off: no line (as on the printed bill). */}
+              {discounts.filter((d) => !isOfferTakenOff(d)).map((d) => (
                 <div key={d.id} className="flex justify-between text-emerald-700 dark:text-emerald-300">
                   {/* "(10%, food only)" when the discount's own frozen rule left the delivery charge alone. */}
                   <span>{receiptDiscountLabel(d, items)}</span>

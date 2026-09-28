@@ -13,6 +13,10 @@
  *    ('discounts.delivery'; the owner, 28 Sep 2026: "Delivery charges is
  *    separate we don't want to add discount to it" — default No). Frozen on
  *    each discount when it is given: a change never moves one already given.
+ *  - the automatic offers and the came-by question ('discounts.offers',
+ *    OfferSettings.tsx: the owner, 28 Sep 2026 — "the offer discount should
+ *    have settings … so it automatically applies on the whole order except
+ *    delivery fee"). No offers by default.
  * The foodpanda deal keeps its own rules (Settings → foodpanda). The owner
  * alone (the main process refuses anyone else); the first two defaults are
  * exactly what the till did before, the third is the owner's answer.
@@ -29,6 +33,7 @@ import {
   type ShopSettingCard,
 } from '@cheeseoclock/shared-types';
 import { SettingCard } from './shop-rules/SettingCard';
+import { OffersCard } from './OfferSettings';
 import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting, useShopSettingsLive } from './shop-rules/useShopSetting';
 import { sameValue } from './shop-rules/foodpandaForm';
@@ -106,8 +111,8 @@ function MoneyCards({
   return (
     <div className="space-y-6">
       <p className="text-sm text-stone-600 dark:text-stone-400">
-        How much a cashier can take off an order alone, the one-tap buttons on the Discount screen (F3), and whether a discount
-        also comes off the delivery charge. Both tills use them as soon as they are linked. Only a manager’s or the owner’s PIN
+        How much a cashier can take off an order alone, the one-tap buttons on the Discount screen (F3), the offers the till puts
+        on by itself, and whether a discount also comes off the delivery charge. Both tills use them as soon as they are linked. Only a manager’s or the owner’s PIN
         or password approves a bigger discount, as before. The foodpanda deal keeps its own rules under foodpanda.
       </p>
 
@@ -254,6 +259,8 @@ function MoneyCards({
           <p className="mt-1 text-xs text-stone-500">Up to {PRESET_REASON_MAX_LENGTH} letters each; it prints on the bill.</p>
         </div>
       </SettingCard>
+
+      <OffersCard />
 
       <DeliveryChargeCard />
     </div>

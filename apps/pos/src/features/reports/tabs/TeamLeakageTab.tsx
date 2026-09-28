@@ -17,6 +17,7 @@ import type { ReportPeriod } from '../dateRange';
 import { shiftDrawerUseNote, shiftTestDeletedNote } from '../drawerLogFormat';
 import { DrawerLogPanel, ShiftDrawerLogDialog } from './DrawerLog';
 import { DeletedTestOrdersPanel, deletedTestsTitle, useDeletedTests } from '../../orders/DeletedTestOrdersPanel';
+import { OfferCheckPanel } from './OfferCheckPanel';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -91,7 +92,7 @@ export function StaffSection({
   period,
   onPrint,
 }: {
-  report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'sinceIso' | 'untilIso'>;
+  report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'sinceIso' | 'untilIso'> & Partial<Pick<ReportTeamTab, 'offerCheck'>>;
   now?: Date;
   period?: ShiftHistoryPeriod;
   onPrint?: (html: string) => void;
@@ -125,6 +126,9 @@ export function StaffSection({
             empty="No orders in this period yet."
           />
         </Panel>
+
+        {/* The owner's check on his automatic offers: who marks orders Phone / WhatsApp, and the offers' rupees. */}
+        <OfferCheckPanel staff={report.staff} check={report.offerCheck} />
 
         <Panel
           id={SHIFT_HISTORY_ANCHOR}
@@ -273,7 +277,7 @@ export function DiscountsSection({ report }: { report: Pick<ReportTeamTab, 'kpis
           {hasStanding && (
             <Panel
               title="Standing offers"
-              note="Put on by the till from your own settings (Settings → foodpanda), not given by staff. Each order is on Channels → foodpanda orders to check."
+              note="Put on by the till from your own settings (Settings → foodpanda, and Money & discounts → Automatic offers), not given by staff. Each foodpanda order is on Channels → foodpanda orders to check; how orders came in is on Channels."
               className="xl:col-span-2"
             >
               <DataTable

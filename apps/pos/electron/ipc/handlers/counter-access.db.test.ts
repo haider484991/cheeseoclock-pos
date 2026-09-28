@@ -548,6 +548,33 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   // Whether a discount also comes off the delivery charge (owner, 28 Sep 2026).
   { key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge: true } },
   { key: 'discounts.delivery', useDefault: true },
+  // The automatic offers and the came-by question (Settings step 4).
+  {
+    key: 'discounts.offers',
+    value: {
+      v: 1,
+      askCameBy: true,
+      offers: [
+        {
+          id: 'test-offer',
+          name: 'Test WhatsApp offer',
+          on: true,
+          cameBy: ['whatsapp'],
+          orderTypes: ['delivery'],
+          type: 'percent',
+          value: 10,
+          minOrderCents: null,
+          maxOffCents: null,
+          days: [0, 1, 2, 3, 4, 5, 6],
+          hours: null,
+          startsOn: null,
+          endsOn: null,
+          oncePerCustomerPerDay: false,
+        },
+      ],
+    },
+  },
+  { key: 'discounts.offers', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -581,6 +608,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:clearDiscount': { orderId: s.draft },
   'orders:resumeDraft': undefined,
   'orders:setMode': { orderId: s.draft, mode: 'takeaway' },
+  // How a counter order came in (the chips): the cashier's while it is rung up; a manager's PIN once sent.
+  'orders:setCameBy': { orderId: s.draft, cameBy: 'phone' },
   'orders:tender': { orderId: s.draft, payments: [] },
   'orders:sendToKitchen': { orderId: s.draft },
   'orders:listActive': undefined,
@@ -878,7 +907,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         });
       }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(10);
+      expect(SHOP_SETTING_KEYS.length).toBe(11);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
@@ -983,6 +1012,25 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
       expect(rules).toMatchObject({ discounts: { alsoOffDeliveryCharge: true } });
       expect(JSON.stringify(rules)).not.toMatch(/commission|fee|payout/i);
     }
+  });
+
+  it('the counter reads the offers that run today and the came-by question — never who saved them — and the manager-only change of a sent order', async () => {
+    const offers = SHOP_SETTING_SAVES().find((p) => (p as { key?: string }).key === 'discounts.offers' && 'value' in (p as object)) as {
+      value: { offers: unknown[] };
+    };
+    h.session = OWNER;
+    expect((await call('settings:setBusiness', offers)).ok).toBe(true);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<Record<string, unknown>>('checkout:getRules');
+      expect(rules).toMatchObject({ offers: { askCameBy: true, offers: offers.value.offers } });
+      expect(JSON.stringify(rules)).not.toMatch(/commission|payout|updatedBy|savedBy/i);
+    }
+    // The counter taps a chip on its own draft; once the order is sent a cashier alone can't change it.
+    h.session = CASHIER;
+    const order = await data<{ id: string }>('orders:create', { mode: 'takeaway', cameBy: 'walk_in' });
+    expect(await call('orders:setCameBy', { orderId: order.id, cameBy: 'whatsapp' })).toMatchObject({ ok: true });
+    expect(await call('orders:create', { mode: 'takeaway', cameBy: 'carrier-pigeon' })).toMatchObject({ ok: false, code: 'validation_failed' });
   });
 
   it('a cashier gets the owner’s deal on a foodpanda order automatically, and can’t change or take it off without a manager', async () => {

@@ -3,8 +3,8 @@
  * import.meta.glob) on a real database, as the till runs it at boot:
  *   - a brand-new till runs 0001 up to the newest, in number order, once;
  *   - a till on v0.7.22 (0001..0041 applied: 0040 / 0041 are foodpanda's,
- *     released first) runs just 0042_drawer_log and 0043_order_test_delete,
- *     in that order, after a pre-migrate copy — and its v0.7.22 rows (a paid
+ *     released first) runs just 0042_drawer_log, 0043_order_test_delete and
+ *     0044_order_came_by, in that order, after a pre-migrate copy — and its v0.7.22 rows (a paid
  *     foodpanda order, its deal and the terms kept at payment) come through
  *     untouched and work with the new code (a test delete, foodpanda's
  *     figures);
@@ -90,17 +90,18 @@ live('migrations at boot (migrator.ts)', () => {
     const names = ran(db);
     expect(names).toEqual(migrationFiles());
     expect(names.map((n) => Number(n.slice(0, 4)))).toEqual(names.map((_, i) => i + 1));
-    expect(names.slice(-5)).toEqual([
+    expect(names.slice(-6)).toEqual([
       '0039_shift_close_notes.sql',
       '0040_foodpanda_deal_and_terms.sql',
       '0041_channel_terms_uplift_and_fee.sql',
       '0042_drawer_log.sql',
       '0043_order_test_delete.sql',
+      '0044_order_came_by.sql',
     ]);
     expect(h.snapshots).toEqual([]);
   });
 
-  it('a till on v0.7.22 (0001..0041) runs just 0042 then 0043, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
+  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043 then 0044, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
     const { runMigrations } = await import('./migrator.js');
     h.snapshots.length = 0;
     const db = tillOnV0722();
@@ -118,24 +119,24 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    // Exactly the two, in this order, after everything v0.7.22 had.
-    expect(ran(db)).toEqual([...had, '0042_drawer_log.sql', '0043_order_test_delete.sql']);
+    // Exactly these, in this order, after everything v0.7.22 had.
+    expect(ran(db)).toEqual([...had, '0042_drawer_log.sql', '0043_order_test_delete.sql', '0044_order_came_by.sql']);
     expect(h.snapshots).toHaveLength(1);
     // Their columns and the log's start are there…
     expect(columns(db, 'drawer_opens')).toEqual(expect.arrayContaining(['order_id', 'cash_movement_id', 'amount_cents', 'outcome', 'outcome_note', 'settled_at']));
-    expect(columns(db, 'orders')).toEqual(expect.arrayContaining(['deleted_by', 'delete_reason', 'delete_kind', 'delete_stock']));
+    expect(columns(db, 'orders')).toEqual(expect.arrayContaining(['deleted_by', 'delete_reason', 'delete_kind', 'delete_stock', 'came_by']));
     expect(db.prepare(`SELECT COUNT(*) AS n FROM settings WHERE key = 'drawer.logSince'`).get()).toEqual({ n: 1 });
-    // …and v0.7.22's rows are as they were (the order gains the four delete columns, empty).
+    // …and v0.7.22's rows are as they were (the order gains the four delete columns and came_by, empty: "not asked").
     expect({
       order: one(`SELECT * FROM orders WHERE id = 'o_fp'`),
       discount: one(`SELECT * FROM order_discounts WHERE id = 'd_fp'`),
       payment: one(`SELECT * FROM payments WHERE id = 'p_fp'`),
       terms: one(`SELECT * FROM order_channel_terms WHERE id = 't_fp'`),
-    }).toEqual({ ...before, order: { ...before.order, deleted_by: null, delete_reason: null, delete_kind: null, delete_stock: null } });
+    }).toEqual({ ...before, order: { ...before.order, deleted_by: null, delete_reason: null, delete_kind: null, delete_stock: null, came_by: null } });
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 2);
+    expect(ran(db)).toHaveLength(had.length + 3);
     expect(h.snapshots).toHaveLength(1);
 
     // The new code on the upgraded till: foodpanda's figures read the kept terms…

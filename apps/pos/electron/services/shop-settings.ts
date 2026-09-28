@@ -31,8 +31,10 @@ import {
   foodpandaDealLabel,
   foodpandaDealRule,
   foodpandaTerms,
+  offerRunsOnDay,
   shareBps,
   stockRulesPutBack,
+  tradingDayOfInstant,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 import {
@@ -62,9 +64,12 @@ export function getShopSettings(db: AppDatabase): ShopSettings {
  * signed-in login: when a discount needs a manager and the F3 buttons (the
  * screen's locks; the main process decides again on save), the Live Orders
  * colours and reminder minutes, the foodpanda deal an order started now
- * gets (its % and label, never who saved it), what Pay asks, and how much
+ * gets (its % and label, never who saved it), what Pay asks, how much
  * dearer the foodpanda listing is (a price: the tablet's total is the
- * till's at those prices). Never the commission, fees or costs.
+ * till's at those prices), and the owner's automatic offers that run today
+ * with whether the cashier is asked how each order came in (the screen's
+ * buttons and hints; the main process decides every offer itself). Never
+ * the commission, fees or costs.
  */
 export function checkoutRules(db: AppDatabase, now: Date = new Date()): CheckoutRules {
   const deal = readShopSetting(db, 'foodpanda.deal').value;
@@ -75,7 +80,9 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
   const delivery = readShopSetting(db, 'discounts.delivery').value;
   const kitchen = readShopSetting(db, 'kitchen.timing').value;
   const stock = readShopSetting(db, 'stock.rules').value;
+  const offers = readShopSetting(db, 'discounts.offers').value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
+  const today = tradingDayOfInstant(now.toISOString()) ?? '';
   return {
     discounts: {
       approval: { percentOver: approval.percentOver, flatOverCents: approval.flatOverCents },
@@ -94,6 +101,13 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
       reorderMultiple: stock.reorderMultiple,
       wasteReasons: stock.wasteReasons.map((r) => ({ id: r.id, label: r.label, hidden: r.hidden })),
       reminders: { keyItemsEveryDays: stock.reminders.keyItemsEveryDays, fullEveryDays: stock.reminders.fullEveryDays },
+    },
+    // The owner's automatic offers that are on and run today (their days and
+    // hours are checked against each order's start), and whether the cashier
+    // is asked how each order came in. Never who saved them.
+    offers: {
+      askCameBy: offers.askCameBy,
+      offers: offers.offers.filter((o) => offerRunsOnDay(o, today)).map((o) => structuredClone(o)),
     },
     foodpanda: {
       deal: active

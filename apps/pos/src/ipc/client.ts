@@ -139,6 +139,8 @@ export const ipc = {
     clearDiscount: (orderId: string, approverPin?: string) =>
       unwrap(window.api.orders.clearDiscount(approverPin ? { orderId, approverPin } : { orderId })),
     setMode: (input: IpcRequest<'orders:setMode'>) => unwrap(window.api.orders.setMode(input)),
+    /** How a counter order came in (Walk-in · Phone · WhatsApp): a manager's PIN once the order has been sent. */
+    setCameBy: (input: IpcRequest<'orders:setCameBy'>) => unwrap(window.api.orders.setCameBy(input)),
     resumeDraft: () => unwrap(window.api.orders.resumeDraft()),
     discardDraft: (orderId: string) => unwrap(window.api.orders.discardDraft({ orderId })),
     tender: (input: IpcRequest<'orders:tender'>) => unwrap(window.api.orders.tender(input)),

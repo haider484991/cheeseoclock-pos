@@ -11,7 +11,7 @@ import { Banknote, CreditCard, Smartphone, Building, X } from 'lucide-react';
 import { quickCashRupees } from './tenderAmounts';
 import { ownsEnter } from './keys';
 import { foodpandaDealLine } from './foodpandaDealLine';
-import { payDiscountLabel } from './discountWords';
+import { offerOnOrder, payDiscountLabel } from './discountWords';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -64,6 +64,9 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   const [fpTablet, setFpTablet] = useState('');
   const deal = snapshot.discounts.find((d) => d.source === 'foodpanda') ?? null;
   const dealLine = deal ? foodpandaDealLine(deal, snapshot.order.subtotalCents) : null;
+  // One of the owner's automatic offers: Pay says its name, as the bill prints it.
+  const offerOn = offerOnOrder(snapshot.discounts[snapshot.discounts.length - 1]);
+  const offerLabel = offerOn && !offerOn.declined ? offerOn.name : null;
   const tender = useCheckoutStore((s) => s.tender);
   const busy = useCheckoutStore((s) => s.busy);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -244,7 +247,7 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
                       <dt>
                         {/* "(food only)" when the discount's own frozen rule left the delivery charge alone. */}
                         {payDiscountLabel(
-                          dealLine?.label,
+                          dealLine?.label ?? offerLabel,
                           snapshot.discounts[snapshot.discounts.length - 1],
                           snapshot.items,
                           snapshot.order.discountCents,

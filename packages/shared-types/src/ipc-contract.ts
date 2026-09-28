@@ -28,6 +28,7 @@ import type {
 } from './order.js';
 import type {
   AnyShopSettingCard,
+  CameBy,
   CheckoutRules,
   FoodpandaTenderCheck,
   SetShopSettingRequest,
@@ -480,8 +481,22 @@ export interface IpcContract {
       customerId?: string | null;
       customerAddressId?: string | null;
       notes?: string | null;
+      /** A counter order: how it came in, when the cashier tapped a chip before the first item. */
+      cameBy?: CameBy | null;
     };
     response: ApiResult<Order>;
+  };
+  /**
+   * How a counter order came in (Walk-in · Phone · WhatsApp; null = not
+   * said). While the order is being rung up, any login that takes orders
+   * sets it and the owner's automatic offers are worked out again. Once it
+   * is sent it is locked: changing it needs a manager's PIN or password and
+   * is audited (the offer on the order does not change then). Never on a
+   * website or foodpanda order (they fill it in themselves).
+   */
+  'orders:setCameBy': {
+    request: { orderId: string; cameBy: CameBy | null; approverPin?: string };
+    response: ApiResult<OrderSnapshot>;
   };
   'orders:attachCustomer': {
     request: {
@@ -548,7 +563,12 @@ export interface IpcContract {
     response: ApiResult<OrderSnapshot>;
   };
   'orders:clearDiscount': {
-    /** Taking the shop's foodpanda deal off an order needs a manager's PIN or password. */
+    /**
+     * Taking the shop's foodpanda deal off an order needs a manager's PIN or
+     * password. On one of the owner's automatic offers it takes the offer off
+     * THIS order (it stays off, Rs 0; no PIN: the bill only goes up); on an
+     * offer taken off it puts the offers back.
+     */
     request: { orderId: string; approverPin?: string };
     response: ApiResult<OrderSnapshot>;
   };

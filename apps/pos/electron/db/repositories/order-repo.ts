@@ -28,9 +28,15 @@ import {
   storedDiscountAlsoOffDeliveryCharge,
   foodpandaDealRule,
   foodpandaTerms,
+  matchOffer,
+  offerAmount,
+  offerCanApplyTo,
   parseFoodpandaDealRule,
+  parseOfferRule,
+  declinedOfferRule,
   taxAfterDiscount,
   tillDiscountRule,
+  tradingDayOfInstant,
   validateOrderForTender,
   validateVoid,
   validateDiscountInput,
@@ -39,8 +45,11 @@ import {
 import { readApprovalLimits, readDiscountAlsoOffDeliveryCharge, readShopSetting } from '../business-settings-read.js';
 import { COC_ID_NAMESPACE, FOODPANDA_ORDER_CODE_MAX } from '@cheeseoclock/shared-types';
 import type {
+  CameBy,
   DiscountBaseRule,
   FoodpandaTenderCheck,
+  OfferRule,
+  OrderCameBy,
   Order,
   OrderItem,
   OrderItemModifier,
@@ -103,6 +112,13 @@ interface OrderRow {
   delete_reason?: string | null;
   delete_kind?: string | null;
   delete_stock?: string | null;
+  /** How it came in (0044): 'walk_in' | 'phone' | 'whatsapp' | 'website' | 'foodpanda'; null = not asked. */
+  came_by?: string | null;
+}
+
+const ORDER_CAME_BY: readonly string[] = ['walk_in', 'phone', 'whatsapp', 'website', 'foodpanda'];
+function isOrderCameBy(v: unknown): v is OrderCameBy {
+  return typeof v === 'string' && ORDER_CAME_BY.includes(v);
 }
 
 /**
@@ -147,6 +163,9 @@ function rowToOrder(row: OrderRow): Order {
     assignedRiderId: (row.assigned_rider_id ?? null) as Order['assignedRiderId'],
     dispatchedAt: row.dispatched_at,
     deliveredAt: row.delivered_at,
+    // How it came in (0044), only when it was said: an order nobody asked
+    // about reads exactly as before.
+    ...(isOrderCameBy(row.came_by) ? { cameBy: row.came_by } : {}),
     // Only a deleted order (read with includeDeleted) carries these: a live
     // order's images and audit rows stay exactly as they were.
     ...(row.deleted_at
@@ -171,7 +190,7 @@ const ORDER_SELECT = `
   customer_name_snapshot, customer_phone_snapshot, delivery_address_snapshot, delivery_notes,
   assigned_rider_id, dispatched_at, delivered_at,
   created_at, updated_at, device_id, version,
-  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock
+  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock, came_by
 `;
 
 export function findOrder(db: AppDatabase, id: string): Order | null {
@@ -442,6 +461,19 @@ export interface CreateOrderInput {
   customerId?: string | null;
   notes?: string | null;
   source?: 'pos' | 'web';
+  /** A counter order: how it came in (the chip the cashier tapped before the first item). */
+  cameBy?: CameBy | null;
+}
+
+/**
+ * How a new order came in (orders.came_by, 0044): a website order and a
+ * foodpanda order fill it in themselves; a counter order takes the chip the
+ * cashier tapped, or nothing (not asked).
+ */
+function cameByOfNewOrder(input: CreateOrderInput): OrderCameBy | null {
+  if ((input.source ?? 'pos') === 'web') return 'website';
+  if (input.mode === 'foodpanda') return 'foodpanda';
+  return input.cameBy ?? null;
 }
 
 export function createOrder(
@@ -466,6 +498,7 @@ export function createOrder(
       )
       .get(actor.deviceId) as { id: string } | undefined;
     const shiftId = openShift?.id ?? null;
+    const cameBy = cameByOfNewOrder(input);
     order = {
       id: id as Order['id'],
       orderNumber: orderNumber as Order['orderNumber'],
@@ -489,14 +522,15 @@ export function createOrder(
       assignedRiderId: null,
       dispatchedAt: null,
       deliveredAt: null,
+      ...(cameBy ? { cameBy } : {}),
     };
 
     db.prepare(
       `INSERT INTO orders
          (id, order_number, mode, status, table_id, customer_id, cashier_id, shift_id, source,
           notes, subtotal_cents, discount_cents, tax_cents, total_cents,
-          created_at, updated_at, device_id, version)
-       VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, 1)`,
+          created_at, updated_at, device_id, version, came_by)
+       VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, ?, 1, ?)`,
     ).run(
       id,
       orderNumber,
@@ -510,6 +544,7 @@ export function createOrder(
       now,
       now,
       actor.deviceId,
+      cameBy,
     );
 
     enqueueSync(db, {
@@ -540,10 +575,11 @@ export function createOrder(
 // -----------------------------------------------------------------------------
 
 /**
- * Who approved the automatic foodpanda deal: the owner who last saved it
+ * Who approved an automatic discount — the foodpanda deal or one of the
+ * owner's automatic offers: the owner who last saved it
  * (business_settings.updated_by_user_id, the web pick-up pattern), or the
  * first active admin (the bridge's system actor) when that user is not on
- * this till. Being approved, the deal is never auto-cleared by the approval
+ * this till. Being approved, it is never auto-cleared by the approval
  * re-check in recomputeOrderTotals.
  */
 function foodpandaDealApprover(db: AppDatabase, savedByUserId: string | null): string | null {
@@ -668,6 +704,253 @@ function takeOffFoodpandaDeal(db: AppDatabase, orderId: string, actor: Actor & {
   return true;
 }
 
+// -----------------------------------------------------------------------------
+// The owner's automatic offers (Settings → Money & discounts, 'discounts.offers')
+// -----------------------------------------------------------------------------
+
+/** A live discount row as the offer step reads it. */
+interface LiveDiscountRow {
+  id: string;
+  source: string | null;
+  rule_json: string | null;
+  discount_type: string;
+  value: number;
+  reason: string | null;
+  amount_cents: number;
+}
+
+function liveDiscountRows(db: AppDatabase, orderId: string): LiveDiscountRow[] {
+  return db
+    .prepare(
+      `SELECT id, source, rule_json, discount_type, value, reason, amount_cents FROM order_discounts
+        WHERE order_id = ? AND deleted_at IS NULL
+        ORDER BY created_at, id`,
+    )
+    .all(orderId) as LiveDiscountRow[];
+}
+
+/** Soft-delete offer rows (synced), one audit row each with why. Inside the caller's transaction. */
+function takeOffOfferRows(db: AppDatabase, rows: ReadonlyArray<LiveDiscountRow>, actor: Actor, action: string): void {
+  const now = nowIso();
+  for (const r of rows) {
+    db.prepare(`UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, now, r.id);
+    enqueueSync(db, { entityType: 'order_discounts', entityId: r.id, op: 'delete', payload: { id: r.id, deletedAt: now } });
+    writeAudit(db, { entityType: 'order_discounts', entityId: r.id, action, actorUserId: actor.userId ?? null, before: r, after: null });
+  }
+}
+
+/**
+ * Put an automatic offer's row on an order: source 'offer', the offer's name
+ * as its reason (it prints on the bill), approved by the owner who saved the
+ * offers, its terms FROZEN in rule_json. `declined`: the cashier took it off
+ * (Rs 0, "flat 0", so no till ever works rupees out of it). Its rupees are
+ * worked by recomputeOrderTotals. Inside the caller's transaction.
+ */
+function insertOfferRow(
+  db: AppDatabase,
+  orderId: string,
+  rule: OfferRule,
+  approverUserId: string | null,
+  actor: Actor,
+  action: 'apply_offer' | 'decline_offer',
+): string {
+  const now = nowIso();
+  const id = uuidv7();
+  const appliedBy = actor.userId ?? approverUserId;
+  const declined = rule.offer.declined === true;
+  db.prepare(
+    `INSERT INTO order_discounts
+       (id, order_id, discount_type, value, reason, applied_by_user_id, approved_by_user_id,
+        amount_cents, source, rule_json, created_at, updated_at, device_id, version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'offer', ?, ?, ?, ?, 1)`,
+  ).run(
+    id,
+    orderId,
+    declined ? 'flat' : rule.offer.type,
+    declined ? 0 : rule.offer.value,
+    rule.offer.name,
+    appliedBy,
+    approverUserId,
+    JSON.stringify(rule),
+    now,
+    now,
+    actor.deviceId,
+  );
+  enqueueSync(db, { entityType: 'order_discounts', entityId: id, op: 'upsert', payload: { id, orderId, source: 'offer', rule } });
+  writeAudit(db, {
+    entityType: 'order_discounts',
+    entityId: id,
+    action,
+    actorUserId: actor.userId ?? null,
+    before: null,
+    after: { orderId, source: 'offer', rule, approverUserId },
+  });
+  return id;
+}
+
+/**
+ * The ids of the automatic offers this customer's phone already had today
+ * (the trading day the order was started in) on ANOTHER order that is not
+ * cancelled or deleted: "once per customer per day". Only this till's
+ * orders, and the other till's that have arrived (with the link down it can
+ * repeat once there, which Reports show).
+ */
+function offersUsedToday(db: AppDatabase, orderId: string, phone: string, createdAt: string): Set<string> {
+  const day = tradingDayOfInstant(createdAt);
+  if (!day) return new Set();
+  const from = `${day}T00:00:00.000Z`;
+  const until = new Date(Date.parse(from) + 86_400_000).toISOString();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT json_extract(d.rule_json, '$.offer.id') AS offerId
+         FROM orders o
+         JOIN order_discounts d ON d.order_id = o.id
+        WHERE o.created_at >= ? AND o.created_at < ? AND o.id != ?
+          AND o.deleted_at IS NULL AND o.status != 'void'
+          AND o.customer_phone_snapshot = ?
+          AND d.deleted_at IS NULL AND d.source = 'offer' AND d.amount_cents > 0
+          AND json_valid(d.rule_json)`,
+    )
+    .all(from, until, orderId, phone) as Array<{ offerId: unknown }>;
+  return new Set(rows.map((r) => r.offerId).filter((x): x is string => typeof x === 'string'));
+}
+
+/**
+ * THE offer step: put the owner's automatic offer on an open counter order,
+ * keep it, swap it for a bigger one or take it off — pos-domain matchOffer
+ * with the live setting, the order's frozen offer (if any) competing on its
+ * own terms. Runs at every cart change (recomputeOrderTotals calls it
+ * first), when the order type or how it came in changes, and when its
+ * customer's phone is saved or taken off. Returns whether a row changed.
+ *
+ *  - Only a counter order still being rung up (source 'pos', status 'open');
+ *    a website order never, and a foodpanda order loses any offer row.
+ *  - One discount per order: a staff (F3) or website discount, or the
+ *    foodpanda deal, is never replaced by an offer.
+ *  - An offer the cashier took off (the declined row) stays off until "Put
+ *    it back".
+ *  - The approval limit does not apply: the offer is the owner's own rule,
+ *    approved by the owner who saved it.
+ *
+ * Inside the caller's transaction.
+ */
+function applyOfferStep(db: AppDatabase, orderId: string, actor: Actor): boolean {
+  const order = findOrder(db, orderId);
+  if (!order || order.status !== 'open' || order.source !== 'pos') return false;
+  if (!offerCanApplyTo(order)) {
+    const stray = liveDiscountRows(db, orderId).filter((r) => r.source === 'offer');
+    if (stray.length === 0) return false;
+    takeOffOfferRows(db, stray, actor, 'remove_offer');
+    return true;
+  }
+  const rows = liveDiscountRows(db, orderId);
+  // One discount per order: never over a staff, website or foodpanda row.
+  if (rows.some((r) => r.source !== 'offer')) return false;
+  const offerRows = rows;
+  const latest = offerRows[offerRows.length - 1] ?? null;
+  const current = latest ? parseOfferRule(latest.rule_json) : null;
+  // An offer row this version can't read (a newer till's): left exactly as it is.
+  if (latest && !current) return false;
+  if (current?.offer.declined) return false;
+  const setting = readShopSetting(db, 'discounts.offers');
+  if (!current && setting.value.offers.length === 0) return false;
+
+  const lines = discountLinesOf(db, orderId);
+  const phoneRow = db.prepare(`SELECT customer_phone_snapshot AS phone FROM orders WHERE id = ?`).get(orderId) as
+    | { phone: string | null }
+    | undefined;
+  const phone = phoneRow?.phone?.trim() || null;
+  const onceAny = setting.value.offers.some((o) => o.oncePerCustomerPerDay) || current?.offer.oncePerCustomerPerDay === true;
+  const pick = matchOffer(
+    {
+      source: order.source,
+      mode: order.mode,
+      cameBy: order.cameBy ?? null,
+      hasPhone: phone !== null,
+      createdAt: order.createdAt,
+      foodCents: discountBaseCents(lines, false),
+      subtotalCents: discountBaseCents(lines, true),
+    },
+    setting.value.offers,
+    {
+      alsoOffDeliveryCharge: readDiscountAlsoOffDeliveryCharge(db),
+      settingsAt: setting.savedAt,
+      usedToday: phone && onceAny ? offersUsedToday(db, orderId, phone, order.createdAt) : new Set(),
+      current,
+    },
+  );
+  if (pick?.isCurrent) return false;
+  if (offerRows.length > 0) takeOffOfferRows(db, offerRows, actor, pick ? 'replaced_by_offer' : 'offer_off');
+  if (!pick) return offerRows.length > 0;
+  insertOfferRow(db, orderId, pick.rule, foodpandaDealApprover(db, setting.savedByUserId), actor, 'apply_offer');
+  return true;
+}
+
+/**
+ * Work an open order's automatic offer out again and, when it changed, its
+ * totals: its customer's phone was saved or taken off (customer-repo). Call
+ * inside the caller's transaction.
+ */
+export function refreshOrderOffer(db: AppDatabase, orderId: string, actor: Actor): boolean {
+  if (!applyOfferStep(db, orderId, actor)) return false;
+  recomputeOrderTotals(db, orderId, actor);
+  return true;
+}
+
+/** What a cashier hears when they try to change how a sent order came in without a manager. */
+export const CAME_BY_LOCKED =
+  "This order has been sent, so how it came in is locked. A manager's PIN or password changes it.";
+
+/**
+ * How a counter order came in (Walk-in · Phone · WhatsApp; null = not said).
+ * While the order is being rung up it is the cashier's to set, and the
+ * owner's automatic offers are worked out again. Once the order is sent it
+ * is LOCKED: a change needs a manager (`approverUserId`, checked by the
+ * caller) and leaves its own audit row, and the discount on the order does
+ * not move (the bill may be paid). A website or foodpanda order says how it
+ * came in by itself. Row, sync and audit in one transaction.
+ */
+export function setOrderCameBy(
+  db: AppDatabase,
+  orderId: string,
+  cameBy: CameBy | null,
+  actor: Actor & { userId: string },
+  opts: { approverUserId?: string | null } = {},
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.source !== 'pos' || order.mode === 'foodpanda') {
+      throw new Error('A website or foodpanda order says how it came in by itself');
+    }
+    const was = order.cameBy ?? null;
+    if (was === cameBy) {
+      result = order;
+      return;
+    }
+    const open = order.status === 'open';
+    if (!open && !opts.approverUserId) throw new Error(CAME_BY_LOCKED);
+    if (!open && cameBy === null) throw new Error('Pick how the order came in: Walk-in, Phone or WhatsApp');
+    db.prepare(`UPDATE orders SET came_by = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(cameBy, nowIso(), orderId);
+    const after = findOrder(db, orderId)!;
+    enqueueSync(db, { entityType: 'orders', entityId: orderId, op: 'upsert', payload: after });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      action: open ? 'set_came_by' : 'change_came_by',
+      actorUserId: actor.userId,
+      before: { cameBy: was, status: order.status },
+      after: { cameBy, status: order.status, ...(open ? {} : { approverUserId: opts.approverUserId }) },
+    });
+    // Still being rung up: the offers follow. Sent: the bill stands.
+    if (open) refreshOrderOffer(db, orderId, actor);
+    result = findOrder(db, orderId) ?? after;
+  });
+  tx();
+  return result;
+}
+
 /**
  * Change the mode of an OPEN order (e.g. the cashier picked Takeaway, then
  * switched to Delivery after adding items). Without this the mode was fixed at
@@ -688,13 +971,20 @@ export function setOrderMode(
     if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — its type can't be changed now`);
 
     const tableId = mode === 'dine_in' ? order.tableId : null;
+    // How it came in follows the order type: a foodpanda order says so itself;
+    // one that stops being foodpanda has not been asked yet.
+    const wasCameBy = order.cameBy ?? null;
+    const cameBy: OrderCameBy | null =
+      order.source !== 'pos' ? wasCameBy : mode === 'foodpanda' ? 'foodpanda' : wasCameBy === 'foodpanda' ? null : wasCameBy;
     const now = nowIso();
     db.prepare(
-      `UPDATE orders SET mode = ?, table_id = ?, updated_at = ?, version = version + 1
+      `UPDATE orders SET mode = ?, table_id = ?, came_by = ?, updated_at = ?, version = version + 1
         WHERE id = ?`,
-    ).run(mode, tableId, now, orderId);
+    ).run(mode, tableId, cameBy, now, orderId);
 
-    const updated: Order = { ...order, mode, tableId: tableId as Order['tableId'] };
+    const { cameBy: _was, ...rest } = order;
+    void _was;
+    const updated: Order = { ...rest, mode, tableId: tableId as Order['tableId'], ...(cameBy ? { cameBy } : {}) };
     enqueueSync(db, {
       entityType: 'orders',
       entityId: orderId,
@@ -717,6 +1007,9 @@ export function setOrderMode(
     let discountChanged = false;
     if (wasFoodpanda && !isFoodpanda) discountChanged = takeOffFoodpandaDeal(db, orderId, actor);
     else if (!wasFoodpanda && isFoodpanda && order.source === 'pos') discountChanged = putOnFoodpandaDeal(db, updated, actor);
+    // The owner's automatic offers depend on the order type: worked out again
+    // on every change (a foodpanda order never carries one).
+    if (applyOfferStep(db, orderId, actor)) discountChanged = true;
     if (discountChanged) recomputeOrderTotals(db, orderId, actor);
     result = discountChanged ? (findOrder(db, orderId) ?? updated) : updated;
   });
@@ -1397,8 +1690,8 @@ export function applyDiscount(
     // kept both discounts and summed them.
     const now = nowIso();
     const replaced = db
-      .prepare(`SELECT id FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`)
-      .all(input.orderId) as Array<{ id: string }>;
+      .prepare(`SELECT id, source, reason, amount_cents, rule_json FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`)
+      .all(input.orderId) as Array<{ id: string; source: string | null; reason: string | null; amount_cents: number; rule_json: string | null }>;
     db.prepare(
       `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1
         WHERE order_id = ? AND deleted_at IS NULL`,
@@ -1409,6 +1702,18 @@ export function applyDiscount(
         entityId: r.id,
         op: 'delete',
         payload: { id: r.id, deletedAt: now },
+      });
+    }
+    // An automatic offer this discount replaces (under the normal PIN rule): on record.
+    const offersReplaced = replaced.filter((r) => r.source === 'offer');
+    if (offersReplaced.length > 0) {
+      writeAudit(db, {
+        entityType: 'order_discounts',
+        entityId: input.orderId,
+        action: 'replaced_offer',
+        actorUserId: actor.userId,
+        before: offersReplaced,
+        after: null,
       });
     }
 
@@ -1464,6 +1769,15 @@ export function hasFoodpandaDeal(db: AppDatabase, orderId: string): boolean {
   );
 }
 
+/** The order carries one of the owner's automatic offers (a live source 'offer' row taking something off). */
+export function hasAutomaticOffer(db: AppDatabase, orderId: string): boolean {
+  return (
+    db
+      .prepare(`SELECT 1 AS x FROM order_discounts WHERE order_id = ? AND source = 'offer' AND amount_cents > 0 AND deleted_at IS NULL LIMIT 1`)
+      .get(orderId) !== undefined
+  );
+}
+
 /** What a cashier hears when they try to change a foodpanda order's deal. */
 export const FOODPANDA_DEAL_NEEDS_MANAGER =
   "The foodpanda deal is set by the owner. Only a manager can change it on this order, with their PIN or password.";
@@ -1483,8 +1797,9 @@ export function clearDiscount(
     const now = nowIso();
     const existing = db
       .prepare(
-        `SELECT id, discount_type, value, amount_cents, source
-           FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL`,
+        `SELECT id, discount_type, value, amount_cents, source, rule_json
+           FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL
+          ORDER BY created_at, id`,
       )
       .all(orderId) as Array<{
       id: string;
@@ -1492,10 +1807,34 @@ export function clearDiscount(
       value: number;
       amount_cents: number;
       source: string | null;
+      rule_json: string | null;
     }>;
     if (existing.length === 0) return; // nothing to clear, no audit noise
     // Taking the foodpanda deal off is changing it: a manager's, like applyDiscount.
     if (existing.some((d) => d.source === 'foodpanda') && !opts.approverUserId) throw new Error(FOODPANDA_DEAL_NEEDS_MANAGER);
+    // The × on the owner's automatic offer: it comes off THIS order and stays
+    // off (a Rs 0 row, so the next cart change does not put it straight back).
+    // It only raises the bill, so no PIN; audited. Clearing that row ("Put it
+    // back") lets the offers match again.
+    const latest = existing[existing.length - 1]!;
+    const offerOn = latest.source === 'offer' ? parseOfferRule(latest.rule_json) : null;
+    if (offerOn && !offerOn.offer.declined) {
+      for (const row of existing) {
+        db.prepare(`UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, now, row.id);
+        enqueueSync(db, { entityType: 'order_discounts', entityId: row.id, op: 'delete', payload: { id: row.id, deletedAt: now } });
+      }
+      writeAudit(db, {
+        entityType: 'order_discounts',
+        entityId: orderId,
+        action: 'clear',
+        actorUserId: actor.userId,
+        before: existing,
+        after: null,
+      });
+      insertOfferRow(db, orderId, declinedOfferRule(offerOn), null, actor, 'decline_offer');
+      recomputeOrderTotals(db, orderId, actor);
+      return;
+    }
     db.prepare(
       `UPDATE order_discounts SET deleted_at = ?, updated_at = ?, version = version + 1
         WHERE order_id = ? AND deleted_at IS NULL`,
@@ -1530,6 +1869,10 @@ function recomputeOrderTotals(
   orderId: string,
   actor: Actor,
 ): void {
+  // The owner's automatic offers first: put on, kept, swapped or taken off
+  // for the cart as it is now (a counter order being rung up only).
+  applyOfferStep(db, orderId, actor);
+
   // Subtotal = sum of line_total_cents over non-deleted items
   const subtotalRow = db
     .prepare(
@@ -1579,7 +1922,30 @@ function recomputeOrderTotals(
     // it). A rule this version can't read is worked as its type and value on
     // the whole subtotal, as an older till does.
     const dealRule = discountRow.source === 'foodpanda' ? parseFoodpandaDealRule(discountRow.rule_json) : null;
-    if (discountRow.source === 'foodpanda') {
+    // One of the owner's automatic offers: re-worked from the terms frozen on
+    // the row (its %/rupees, most-off; the minimum on the food; the delivery
+    // charge as its rule says), never from the live setting; never cleared by
+    // the approval re-check (the owner's own rule). Taken off by the cashier:
+    // Rs 0. A rule this version can't read: its type and value on the base.
+    const offerRule = discountRow.source === 'offer' ? parseOfferRule(discountRow.rule_json) : null;
+    if (discountRow.source === 'offer') {
+      discount = offerRule
+        ? offerRule.offer.declined
+          ? 0
+          : offerAmount(offerRule.offer, base, discountBaseCents(lines, false))
+        : computeDiscountCents(base, d);
+      if (discount !== discountRow.amount_cents) {
+        db.prepare(
+          `UPDATE order_discounts SET amount_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+        ).run(discount, now, discountRow.id);
+        enqueueSync(db, {
+          entityType: 'order_discounts',
+          entityId: discountRow.id,
+          op: 'upsert',
+          payload: { id: discountRow.id, amountCents: discount },
+        });
+      }
+    } else if (discountRow.source === 'foodpanda') {
       discount = dealRule ? dealAmount(dealRule, base).shopCents : computeDiscountCents(subtotal, d);
       if (discount !== discountRow.amount_cents) {
         db.prepare(
@@ -1752,6 +2118,10 @@ export function tenderOrder(
     // The foodpanda deal exists only on foodpanda orders.
     if (order.mode !== 'foodpanda' && hasFoodpandaDeal(db, input.orderId)) {
       throw new Error('This order still has the foodpanda deal but is not a foodpanda order — make it foodpanda again, or take the deal off');
+    }
+    // …and the owner's automatic offers only on counter orders: never a website or foodpanda order.
+    if (!offerCanApplyTo(order) && hasAutomaticOffer(db, input.orderId)) {
+      throw new Error("This order has one of the shop's automatic offers, but offers are for counter orders only — take it off");
     }
     // foodpanda's order number (on the payment) and the tablet's total, as the owner's checks ask.
     let payments = input.payments;
@@ -2496,6 +2866,8 @@ export function getOrderSnapshot(
     const rule = d.source === 'foodpanda' ? parseFoodpandaDealRule(d.rule_json) : null;
     const dealBase = rule ? (alsoOffDeliveryCharge ? order.subtotalCents : discountBaseCents(items, false)) : 0;
     const share = rule ? dealAmount(rule, dealBase) : null;
+    // An automatic offer: its name and frozen terms (the cart, Pay and the bill say it).
+    const offer = d.source === 'offer' ? parseOfferRule(d.rule_json) : null;
     return {
       id: d.id as OrderSnapshot['discounts'][number]['id'],
       orderId: orderId as OrderSnapshot['discounts'][number]['orderId'],
@@ -2505,7 +2877,7 @@ export function getOrderSnapshot(
       appliedByUserId: d.applied_by_user_id as OrderSnapshot['discounts'][number]['appliedByUserId'],
       approvedByUserId: (d.approved_by_user_id ?? null) as OrderSnapshot['discounts'][number]['approvedByUserId'],
       amountCents: d.amount_cents as OrderSnapshot['discounts'][number]['amountCents'],
-      source: d.source === 'foodpanda' ? 'foodpanda' : null,
+      source: d.source === 'foodpanda' ? 'foodpanda' : d.source === 'offer' ? 'offer' : null,
       foodpanda:
         rule && share
           ? {
@@ -2518,6 +2890,19 @@ export function getOrderSnapshot(
               baseCents: dealBase,
             }
           : null,
+      ...(offer
+        ? {
+            offer: {
+              id: offer.offer.id,
+              name: offer.offer.name,
+              type: offer.offer.type,
+              value: offer.offer.value,
+              minOrderCents: offer.offer.minOrderCents,
+              maxOffCents: offer.offer.maxOffCents,
+              declined: offer.offer.declined === true,
+            },
+          }
+        : {}),
       alsoOffDeliveryCharge,
     };
   });

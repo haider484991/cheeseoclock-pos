@@ -532,8 +532,10 @@ function appendSaleBody(
       if (fp && fp.platformCents > 0) b.line(`Foodpanda deal ${fp.dealPercent}% off, paid by foodpanda`, money(fp.platformCents));
       continue;
     }
+    // One of the owner's automatic offers the cashier took off: nothing off, no line.
+    if (d.source === 'offer' && d.amountCents === 0) continue;
     // "Discount (Staff)" — or, when its frozen rule left the delivery charge
-    // alone, "Discount 10% (Staff, food only)".
+    // alone, "Discount 10% (Staff, food only)"; an automatic offer by its name.
     const tag = discountBillLabel(d, snapshot.items);
     b.line(tag, `- ${money(d.amountCents)}`);
     if (d.foodpanda && d.foodpanda.platformCents > 0) {

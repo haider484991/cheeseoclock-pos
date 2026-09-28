@@ -190,6 +190,34 @@ describe('renderReceipt', () => {
     expect(textOf(noCharge)).not.toContain('food only');
   });
 
+  it('one of the owner’s automatic offers prints by its NAME (and "food only" when it left the delivery charge alone); one the cashier took off prints nothing', () => {
+    const textOf = (s: OrderSnapshot) =>
+      decodeEscPos(renderReceipt(s, { branding }))
+        .map((r) => r.text)
+        .join('\n');
+    const offerOn = (amountCents: number, alsoOffDeliveryCharge: boolean, charge: boolean): OrderSnapshot => {
+      const s = snapshot();
+      if (charge) s.items[1] = { ...s.items[1]!, menuItemName: 'Delivery Charge (Rs 50)', categoryName: 'Delivery Charges' };
+      s.discounts[0] = {
+        ...s.discounts[0]!,
+        discountType: amountCents > 0 ? 'percent' : 'flat',
+        value: amountCents > 0 ? 10 : 0,
+        reason: 'Test WhatsApp 10%',
+        source: 'offer',
+        amountCents: cents(amountCents),
+        offer: { id: 'test-wa', name: 'Test WhatsApp 10%', type: 'percent', value: 10, minOrderCents: null, maxOffCents: null, declined: amountCents === 0 },
+        alsoOffDeliveryCharge,
+      };
+      return s;
+    };
+    expect(textOf(offerOn(1_000, false, true))).toContain('Test WhatsApp 10% (food only)');
+    expect(textOf(offerOn(1_000, false, true))).not.toContain('Discount');
+    expect(textOf(offerOn(1_000, true, false))).toMatch(/Test WhatsApp 10% +- /);
+    const declined = textOf(offerOn(0, false, true));
+    expect(declined).not.toContain('Test WhatsApp');
+    expect(declined).not.toContain('Discount');
+  });
+
   it('a foodpanda order: the deal as itself, foodpanda’s part on its own line, the foodpanda order number — never the commission', () => {
     const s = snapshot();
     const fp: OrderSnapshot = {

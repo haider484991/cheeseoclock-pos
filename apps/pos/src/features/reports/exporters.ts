@@ -57,6 +57,9 @@ import {
   purchaseChangeText,
   purchaseHeadline,
   purchasePriceText,
+  OFFER_FLAG_WORDS,
+  cameByLabel,
+  offerCheckNote,
 } from './reportFormat';
 import { formatBps, thousandUnit } from '../costing/costingFormat';
 import { DAY_NOTE_TAG_LABEL } from '@cheeseoclock/shared-types';
@@ -281,6 +284,12 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     sheet.heading('Order types');
     sheet.push(['Order type', 'Orders', 'Sales Rs']);
     for (const c of r.channels) sheet.push([CHANNEL_LABEL[c.channel], c.orderCount, rs(c.netSalesCents)]);
+    if ((r.cameBy?.length ?? 0) > 0) {
+      // How the orders came in (orders.came_by, 0044): the counter's buttons, the website, foodpanda, or not asked.
+      sheet.heading('How orders came in');
+      sheet.push(['Came in by', 'Orders', 'Sales Rs', 'With an automatic offer', 'Offers took off Rs']);
+      for (const c of r.cameBy ?? []) sheet.push([cameByLabel(c.cameBy), c.orderCount, rs(c.netSalesCents), c.offerCount, rs(c.offerCents)]);
+    }
     if (r.profit) {
       sheet.heading('What each order type earns (before waste and missing stock)');
       sheet.push(...channelProfitRows(r.profit.channels));
@@ -380,6 +389,22 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     for (const s of r.staff) {
       sheet.push([s.name, s.orderCount, rs(s.netSalesCents), rs(s.discountCents), s.voidCount, s.noSaleOpens, s.drawerOpens ?? null]);
     }
+    if (r.offerCheck && r.offerCheck.counterOrders > 0 && (r.offerCheck.phoneOrWhatsapp > 0 || r.offerCheck.offerCents > 0)) {
+      // The owner's check on his automatic offers (flags over 1.5 × the shop's).
+      sheet.heading('Came by & offers');
+      sheet.push(['Taken by', 'Counter orders', 'Phone or WhatsApp', 'With an offer', 'Offers took off Rs', 'Flag']);
+      for (const s of r.staff.filter((x) => !x.isWebsite && (x.counterOrders ?? 0) > 0)) {
+        sheet.push([
+          s.name,
+          s.counterOrders ?? 0,
+          s.phoneOrWhatsapp ?? 0,
+          s.offerCount ?? 0,
+          rs(s.offerCents ?? 0),
+          s.flags && s.flags.length > 0 ? s.flags.map((f) => OFFER_FLAG_WORDS[f]).join(', ') : null,
+        ]);
+      }
+      sheet.push([offerCheckNote(r.offerCheck)]);
+    }
 
     sheet.heading('Shifts (cash drawer)');
     sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason', 'Drawer used (all)', 'Test orders deleted after close Rs', 'Carried over, later deleted as tests']);
@@ -415,7 +440,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     sheet.push(['Given by', 'Times', 'Amount Rs', 'With manager approval']);
     for (const d of r.discounts.byPerson) sheet.push([d.name, d.count, rs(d.amountCents), d.approvedCount]);
     if ((r.discounts.standing?.length ?? 0) > 0) {
-      // The shop's standing offers (the foodpanda deal): put on by the till, not by staff.
+      // The shop's standing offers (the foodpanda deal, the automatic offers): put on by the till, not by staff.
       sheet.heading('Standing offers');
       sheet.push(['Offer', 'Orders', 'Amount Rs']);
       for (const d of r.discounts.standing ?? []) sheet.push([d.name, d.count, rs(d.amountCents)]);
@@ -1096,7 +1121,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
           ['Given by', 'Times', 'Amount'],
           [
             ...r.discounts.byPerson.map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
-            // The standing offers (the foodpanda deal) are the till's, not a person's.
+            // The standing offers (the foodpanda deal, the automatic offers) are the till's, not a person's.
             ...(r.discounts.standing ?? []).map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
           ],
           [1, 2],

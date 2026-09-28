@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DISCOUNT_DELIVERY,
+  DEFAULT_DISCOUNT_OFFERS,
   DEFAULT_FOODPANDA_CHECKS,
   DEFAULT_FOODPANDA_DEAL,
   DEFAULT_FOODPANDA_FEES,
@@ -56,6 +57,12 @@ describe('the released defaults are pinned', () => {
     expect(SHOP_SETTING_DEFAULTS['discounts.delivery']).toBe(DEFAULT_DISCOUNT_DELIVERY);
   });
 
+  it('discounts.offers: NO offers and the cashier is not asked — nothing changes until the owner adds one', () => {
+    expect(DEFAULT_DISCOUNT_OFFERS).toEqual({ v: 1, askCameBy: false, offers: [] });
+    expect(Object.isFrozen(DEFAULT_DISCOUNT_OFFERS.offers)).toBe(true);
+    expect(SHOP_SETTING_DEFAULTS['discounts.offers']).toBe(DEFAULT_DISCOUNT_OFFERS);
+  });
+
   it('one default per key, frozen, in the format this version writes', () => {
     expect([...SHOP_SETTING_KEYS]).toEqual([
       'foodpanda.deal',
@@ -68,6 +75,7 @@ describe('the released defaults are pinned', () => {
       'kitchen.timing',
       'stock.rules',
       'menu.importPolicy',
+      'discounts.offers',
     ]);
     for (const key of SHOP_SETTING_KEYS) {
       const d = SHOP_SETTING_DEFAULTS[key];

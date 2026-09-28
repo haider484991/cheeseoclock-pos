@@ -3,12 +3,16 @@
  * Pure (no React, no DOM) so they are unit-tested.
  */
 import { formatCents, priceChangeBps } from '@cheeseoclock/pos-domain';
+import { CAME_BY_LABEL } from '@cheeseoclock/shared-types';
 import type {
   BusinessReport,
+  OfferFlag,
+  ReportCameBy,
   ReportChannel,
   ReportChannelLine,
   ReportFoodCost,
   ReportMissingCostWhy,
+  ReportOfferCheck,
   ReportOrderStock,
   ReportPaymentGroup,
   ReportPurchaseIngredientLine,
@@ -30,6 +34,30 @@ export const CHANNEL_LABEL: Record<ReportChannel, string> = {
   dine_in: 'Dine-in (old orders)',
   online: 'Online (old orders)',
 };
+
+/** How an order came in, in Reports' words (Channels → "How orders came in"). */
+export function cameByLabel(c: ReportCameBy): string {
+  return c === 'not_asked' ? 'Not asked' : CAME_BY_LABEL[c];
+}
+
+/** Team & leakage's flags on a cashier, in words. */
+export const OFFER_FLAG_WORDS: Record<OfferFlag, string> = {
+  phone_share: 'Phone / WhatsApp',
+  offer_rupees: 'Offer rupees',
+};
+
+/**
+ * The note under "Came by & offers": the shop's own rates this period and
+ * when a cashier is flagged (pos-domain offerFlags), from the values.
+ */
+export function offerCheckNote(c: ReportOfferCheck): string {
+  const factor = (c.factorPct / 100).toLocaleString('en-PK', { maximumFractionDigits: 2 });
+  const share = `${(c.phoneShareBps / 100).toLocaleString('en-PK', { maximumFractionDigits: 1 })}%`;
+  return (
+    `Counter takeaways and deliveries only. The shop this period: ${share} marked Phone or WhatsApp, ${formatCents(c.offerCentsPerOrder)} of offers an order. ` +
+    `Flagged: over ${factor} × either, with at least ${c.minOrders} counter orders. Check those orders' phones against the customers.`
+  );
+}
 
 /**
  * Website orders (pick-up and delivery) against everything rung up at the

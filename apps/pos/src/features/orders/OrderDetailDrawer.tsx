@@ -28,6 +28,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { drawerDiscountLabel } from '../checkout/discountWords';
+import { CameByRow } from './CameByRow';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './historyFilters';
 import { historyStockStep } from './stockCopy';
@@ -236,6 +237,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                 </section>
               )}
 
+              {/* How a counter order came in (locked at send; a manager changes it, audited). */}
+              <CameByRow snap={snap} />
+
               <section>
                 <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500">Items</h4>
                 <ul className="space-y-1.5">
@@ -289,6 +293,8 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                     k={drawerDiscountLabel(
                       snap.discounts.find((d) => d.reason)?.reason,
                       discountLeavesDeliveryCharge(snap.discounts[snap.discounts.length - 1], snap.items),
+                      // One of the owner's automatic offers: by its name, as the bill prints it.
+                      snap.discounts[snap.discounts.length - 1]?.source === 'offer' ? snap.discounts[snap.discounts.length - 1]?.reason : null,
                     )}
                     v={`− ${formatCents(o.discountCents)}`}
                     tone="emerald"

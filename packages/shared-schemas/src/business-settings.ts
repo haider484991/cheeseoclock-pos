@@ -2,10 +2,17 @@ import { z } from 'zod';
 import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
+  CAME_BY_CHOICES,
   DAY_NOTE_TAGS,
   FOODPANDA_DEAL_MAX_PERCENT,
   KITCHEN_TIMING_BOUNDS,
   LEGACY_COMMISSION_BASES,
+  OFFER_ID_RE,
+  OFFER_MAX_FLAT_CENTS,
+  OFFER_MAX_ORDER_CENTS,
+  OFFER_MAX_PERCENT,
+  OFFER_NAME_MAX,
+  OFFERS_MAX,
   PRESET_FLAT_MAX_CENTS,
   PRESET_FLATS_MAX,
   PRESET_PERCENTS_MAX,
@@ -27,7 +34,10 @@ import {
   isShopSettingKey,
 } from '@cheeseoclock/shared-types';
 import type {
+  CameBy,
   DiscountApproval,
+  DiscountDelivery,
+  DiscountOffers,
   DiscountPresets,
   KitchenTiming,
   MenuImportPolicy,
@@ -510,6 +520,119 @@ const menuImportPolicyShape = { itemPrices: importSide, choices: importSide, rec
 export const menuImportPolicySchema = z.object({ v: writesFormat('menu.importPolicy'), ...menuImportPolicyShape }).strict();
 const menuImportPolicyReadSchema = z.object({ v: readsFormat, ...menuImportPolicyShape });
 
+// ---------------------------------------------------------------------------
+// Automatic offers by how the order came in (phase 4, Money & discounts)
+// ---------------------------------------------------------------------------
+
+/** Walk-in, Phone or WhatsApp: how a counter order came in. */
+export const cameBySchema = z.enum(CAME_BY_CHOICES, { errorMap: () => ({ message: 'Walk-in, Phone or WhatsApp' }) });
+
+/** An offer's name: it prints on the bill, so one line, no spaces at its ends, 30 letters at most. */
+const offerName = z
+  .string()
+  .min(1, { message: 'Give the offer a name — it prints on the bill' })
+  .max(OFFER_NAME_MAX, { message: `Keep an offer's name to ${OFFER_NAME_MAX} letters` })
+  .refine((r) => r.trim() === r && r.trim() !== '', { message: "An offer's name has no spaces at its start or end" })
+  .refine((r) => !/[\r\n\t]/.test(r), { message: "An offer's name is one line" });
+
+const offerCameBy = z.union(
+  [
+    z.literal('any'),
+    z
+      .array(cameBySchema)
+      .min(1, { message: 'Pick how the order came in, or "Any way"' })
+      .max(CAME_BY_CHOICES.length)
+      .refine(allDifferent, { message: 'Pick each way the order came in once' }),
+  ],
+  { errorMap: () => ({ message: 'Pick how the order came in, or "Any way"' }) },
+);
+
+const offerHoursShape = { fromHour: clockHour, toHour: clockHour };
+const offerShape = {
+  id: z.string().regex(OFFER_ID_RE, { message: 'That is not an offer' }),
+  name: offerName,
+  on: z.boolean(),
+  cameBy: offerCameBy,
+  orderTypes: z
+    .array(z.enum(['takeaway', 'delivery'], { errorMap: () => ({ message: 'Takeaway or delivery' }) }))
+    .min(1, { message: 'Pick takeaway, delivery or both' })
+    .max(2)
+    .refine(allDifferent, { message: 'Pick takeaway and delivery once each' }),
+  type: z.enum(['percent', 'flat'], { errorMap: () => ({ message: 'A % off, or rupees off' }) }),
+  value: z.number().int({ message: 'The amount off is a whole number' }),
+  minOrderCents: wholeRupees(OFFER_MAX_ORDER_CENTS / 100, 'The smallest order').nullable(),
+  maxOffCents: wholeRupees(OFFER_MAX_ORDER_CENTS / 100, 'The most off one order')
+    .refine((c) => c > 0, { message: 'The most off one order must be more than Rs 0 — or leave it empty' })
+    .nullable(),
+  days: z
+    .array(wholeIn(0, 6, 'A day'))
+    .min(1, { message: 'Pick at least one day' })
+    .max(7)
+    .refine(allDifferent, { message: 'Pick each day once' }),
+  hours: z.object(offerHoursShape).nullable(),
+  startsOn: tradingDay.nullable(),
+  endsOn: tradingDay.nullable(),
+  oncePerCustomerPerDay: z.boolean(),
+};
+const offerRules = (
+  o: { name: string; type: 'percent' | 'flat'; value: number; startsOn: string | null; endsOn: string | null },
+  ctx: z.RefinementCtx,
+) => {
+  const which = o.name ? `“${o.name}”: ` : '';
+  if (o.type === 'percent' && !(o.value >= 1 && o.value <= OFFER_MAX_PERCENT)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${which}a whole % from 1 to ${OFFER_MAX_PERCENT}` });
+  }
+  if (o.type === 'flat' && !(o.value >= 100 && o.value <= OFFER_MAX_FLAT_CENTS && o.value % 100 === 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `${which}whole rupees from Rs 1 to Rs ${(OFFER_MAX_FLAT_CENTS / 100).toLocaleString('en-PK')}`,
+    });
+  }
+  if (o.startsOn && o.endsOn && o.endsOn < o.startsOn) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${which}it can’t end before it starts` });
+  }
+};
+const offersListRules = (offers: ReadonlyArray<{ id: string; name: string }>, ctx: z.RefinementCtx) => {
+  if (new Set(offers.map((o) => o.id)).size !== offers.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Two offers have the same id' });
+  }
+  if (!allDifferent(offers.map((o) => o.name))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Two offers have the same name — they print on the bill' });
+  }
+};
+const offersList = <T extends z.ZodType<{ id: string; name: string }>>(item: T) =>
+  z
+    .array(item)
+    .max(OFFERS_MAX, { message: `At most ${OFFERS_MAX} offers` })
+    .superRefine(offersListRules);
+
+/** The offers' fields as this version writes them (strict all the way down). */
+const discountOffersWriteShape = {
+  askCameBy: z.boolean({ errorMap: () => ({ message: 'Say whether the cashier is asked how the order came in' }) }),
+  offers: offersList(z.object({ ...offerShape, hours: z.object(offerHoursShape).strict().nullable() }).strict().superRefine(offerRules)),
+};
+/** …and as they are read: a newer till's fields this version does not know are dropped. */
+const discountOffersReadShape = {
+  askCameBy: z.boolean(),
+  offers: offersList(z.object(offerShape).superRefine(offerRules)),
+};
+/**
+ * 'discounts.offers' as this version writes it. Website offers are not part
+ * of it: they come later with the website settings block (Settings plan step
+ * 3), and the till never puts an automatic offer on a web order.
+ */
+export const discountOffersSchema = z.object({ v: writesFormat('discounts.offers'), ...discountOffersWriteShape }).strict();
+const discountOffersReadSchema = z.object({ v: readsFormat, ...discountOffersReadShape });
+
+/** orders:setCameBy — a manager's PIN or password only once the order has been sent. */
+export const setCameByInputSchema = z
+  .object({
+    orderId: z.string().min(1).max(64),
+    cameBy: cameBySchema.nullable(),
+    approverPin: z.string().max(200).optional(),
+  })
+  .strict();
+
 const checkRule = z.enum(['optional', 'required'], { errorMap: () => ({ message: 'Optional or required' }) });
 const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };
 /** 'foodpanda.checks' as this version writes it. */
@@ -593,6 +716,7 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'kitchen.timing': kitchenTimingSchema,
   'stock.rules': stockRulesSchema,
   'menu.importPolicy': menuImportPolicySchema,
+  'discounts.offers': discountOffersSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 } as const;
@@ -626,6 +750,7 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'kitchen.timing': kitchenTimingReadSchema,
   'stock.rules': stockRulesReadSchema,
   'menu.importPolicy': menuImportPolicyReadSchema,
+  'discounts.offers': discountOffersReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 };
@@ -642,6 +767,7 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'kitchen.timing': new Set(['v', ...Object.keys(kitchenTimingShape)]),
   'stock.rules': new Set(['v', ...Object.keys(stockRulesWriteShape)]),
   'menu.importPolicy': new Set(['v', ...Object.keys(menuImportPolicyShape)]),
+  'discounts.offers': new Set(['v', ...Object.keys(discountOffersWriteShape)]),
 };
 
 /**
@@ -656,7 +782,22 @@ export function storedFormatIsNewer(key: BusinessSettingKey, raw: unknown): bool
   const v = (raw as { v?: unknown }).v;
   if (typeof v === 'number' && v > SHOP_SETTING_FORMAT[key]) return true;
   const known = SHOP_SETTING_FIELDS[key];
-  return Object.keys(raw).some((f) => !known.has(f));
+  if (Object.keys(raw).some((f) => !known.has(f))) return true;
+  // An offer (or its hours) with fields this version does not know: a newer till's too.
+  if (key === 'discounts.offers') {
+    const offers = (raw as { offers?: unknown }).offers;
+    if (Array.isArray(offers)) {
+      const offerFields = new Set(Object.keys(offerShape));
+      const hourFields = new Set(Object.keys(offerHoursShape));
+      return offers.some((o) => {
+        if (typeof o !== 'object' || o === null) return false;
+        if (Object.keys(o).some((f) => !offerFields.has(f))) return true;
+        const hours = (o as { hours?: unknown }).hours;
+        return typeof hours === 'object' && hours !== null && Object.keys(hours).some((f) => !hourFields.has(f));
+      });
+    }
+  }
+  return false;
 }
 
 /** settings:setBusiness: a key and its value, or "Put back the default". The value is checked by the key's schema. */
@@ -829,6 +970,11 @@ const _stockRulesShape: Same<z.infer<typeof stockRulesSchema>, StockRules> = tru
 const _stockRulesReadShape: Same<z.infer<typeof stockRulesReadSchema>, StockRules> = true;
 const _menuImportPolicyShape: Same<z.infer<typeof menuImportPolicySchema>, MenuImportPolicy> = true;
 const _menuImportPolicyReadShape: Same<z.infer<typeof menuImportPolicyReadSchema>, MenuImportPolicy> = true;
+const _discountDeliveryShape: Same<z.infer<typeof discountDeliverySchema>, DiscountDelivery> = true;
+const _discountDeliveryReadShape: Same<z.infer<typeof discountDeliveryReadSchema>, DiscountDelivery> = true;
+const _discountOffersShape: Same<z.infer<typeof discountOffersSchema>, DiscountOffers> = true;
+const _discountOffersReadShape: Same<z.infer<typeof discountOffersReadSchema>, DiscountOffers> = true;
+const _cameByShape: Same<z.infer<typeof cameBySchema>, CameBy> = true;
 const _feesShape: Same<z.infer<typeof channelFeesSchema>, ChannelFees> = true;
 const _riderShape: Same<z.infer<typeof riderCostSchema>, RiderCostSetting> = true;
 const _setFeesShape: Same<z.infer<typeof setChannelFeesInputSchema>, SetChannelFeesRequest> = true;
