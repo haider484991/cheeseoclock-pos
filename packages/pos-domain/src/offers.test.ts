@@ -7,6 +7,7 @@ import {
   declinedOfferRule,
   matchOffer,
   offerAmount,
+  offerCanApplyTo,
   offerFlags,
   offerHint,
   offerMiss,
@@ -80,6 +81,15 @@ describe('which orders', () => {
     expect(matchOffer(order({ source: 'web' }), offers, opts)).toBeNull();
     expect(matchOffer(order({ mode: 'foodpanda' }), offers, opts)).toBeNull();
     expect(matchOffer(order({ mode: 'dine_in' }), offers, opts)).toBeNull();
+  });
+
+  it('the counter check itself refuses foodpanda and website orders, whatever an offer names', () => {
+    // The schema already limits an offer to takeaway or delivery; this pins the second lock on its own.
+    expect(offerCanApplyTo({ source: 'pos', mode: 'foodpanda' })).toBe(false);
+    expect(offerCanApplyTo({ source: 'web', mode: 'delivery' })).toBe(false);
+    expect(offerCanApplyTo({ source: 'pos', mode: 'delivery' })).toBe(true);
+    const namesFoodpanda = [offer({ cameBy: 'any', orderTypes: ['foodpanda' as unknown as 'delivery'] })];
+    expect(matchOffer(order({ mode: 'foodpanda' }), namesFoodpanda, opts)).toBeNull();
   });
 
   it('the order types it names: a new offer is delivery only, takeaway must be chosen', () => {
