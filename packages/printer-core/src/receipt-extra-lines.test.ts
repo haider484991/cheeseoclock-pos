@@ -366,4 +366,35 @@ describe('automatic offers beside the extra lines and "Cashier: Website"', () =>
       expect(fingerprint(renderReceipt(withOffer(make(), true), { branding }))).toBe(fingerprint(renderReceipt(make(), { branding })));
     }
   });
+
+  it('only a taken-off OFFER is skipped: a staff discount of Rs 0 still prints its line', () => {
+    const s = paid();
+    s.discounts = [
+      {
+        id: id('d_staff'),
+        orderId: id('o1'),
+        discountType: 'flat',
+        value: 0,
+        reason: 'Staff',
+        amountCents: cents(0),
+        appliedByUserId: id('u_owner'),
+        approvedByUserId: null,
+        source: null,
+      },
+    ];
+    const t = text(renderReceipt(s, { branding }));
+    expect(t.some((row) => /Staff/.test(row))).toBe(true);
+    expect(fingerprint(renderReceipt(s, { branding }))).not.toBe(fingerprint(renderReceipt(paid(), { branding })));
+  });
+});
+
+describe('the kitchen ticket never carries the receipt’s extra lines, even if it were handed the branding', () => {
+  it('a kitchen ticket given the shop branding prints none of the extra lines', () => {
+    // The kitchen renderer takes no branding today; this pins that giving it one (by a later change) prints nothing extra.
+    const withBranding = { now: at(19, 40), branding } as unknown as Parameters<typeof renderKitchenTicket>[1];
+    for (const make of [paid, webBill]) {
+      const rows = text(renderKitchenTicket(make(), withBranding));
+      expect(rows.some((row) => LINES.some((l) => row.includes(l.slice(0, 12))))).toBe(false);
+    }
+  });
 });
