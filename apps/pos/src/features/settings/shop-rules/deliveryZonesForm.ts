@@ -19,7 +19,6 @@ import {
   type DeliveryZoneInput,
   type DeliveryZoneSetting,
   type DeliveryZones,
-  type OnlineOptions,
   type SettingsPublishStatus,
   type WebsitePickup,
 } from '@cheeseoclock/shared-types';
@@ -231,13 +230,8 @@ export function pickupExample(p: Pick<WebsitePickup, 'offered' | 'percent'>): st
 export const PICKUP_PRINTED_MENU_NOTE =
   'The printed menu shows the pick-up discount too: reprint it when you change the %.';
 
-// ---------------------------------------------------------- publish by itself --
-
-export function onlineOptionsSummary(o: OnlineOptions): string {
-  return o.autoPublishMenu
-    ? 'The menu goes to the website by itself'
-    : 'The menu goes to the website when published';
-}
+/** What the settings block carries, in the owner's words. */
+const SETTINGS_WORDS = 'Delivery areas, pick-up & website messages';
 
 /** "27 Sep, 14:02" */
 function at(iso: string): string {
@@ -254,10 +248,11 @@ function at(iso: string): string {
 }
 
 /**
- * Where the delivery areas and the pick-up offer stand with the website
- * (the bridge's settingsPublish): "Website updated 27 Sep, 14:02",
- * "Waiting to reach the website", "Website not updated: …". Null when
- * there is nothing to say (nothing saved yet).
+ * Where the website settings — the delivery areas, the pick-up offer and
+ * the website messages (the settings block) — stand with the website (the
+ * bridge's settingsPublish): "Website updated 27 Sep, 14:02", "Waiting to
+ * reach the website", "Website not updated: …". Null when there is nothing
+ * to say (nothing saved yet).
  */
 export function settingsPublishWords(
   s: SettingsPublishStatus | undefined,
@@ -266,15 +261,15 @@ export function settingsPublishWords(
   if (s.state === 'published')
     return {
       tone: 'ok',
-      text: `Delivery areas & pick-up: website updated${s.at ? ` ${at(s.at)}` : ''}.`,
+      text: `${SETTINGS_WORDS}: website updated${s.at ? ` ${at(s.at)}` : ''}.`,
     };
   if (s.state === 'waiting')
     return {
       tone: 'wait',
-      text: `Delivery areas & pick-up: waiting to reach the website.${s.message ? ` ${s.message}` : ''}`,
+      text: `${SETTINGS_WORDS}: waiting to reach the website.${s.message ? ` ${s.message}` : ''}`,
     };
   return {
     tone: 'bad',
-    text: `Delivery areas & pick-up: website not updated: ${s.message ?? 'no reason given'}`,
+    text: `${SETTINGS_WORDS}: website not updated: ${s.message ?? 'no reason given'}`,
   };
 }

@@ -1,0 +1,31 @@
+-- 0045_web_availability.sql
+-- Selling on the website, per item and per category (Settings sweep B5 +
+-- M2; the Menu editor, whoever may edit the menu).
+--
+--   menu_items.web_availability  'on'          on the website, delivery and
+--                                              pick-up (every item: today)
+--                                'pickup_only' on the website, pick-up only
+--                                              (published with pickupOnly;
+--                                              the website refuses it on a
+--                                              delivery, on its server)
+--                                'off'         not on the website (left out
+--                                              of the publish; the till still
+--                                              sells it)
+--   categories.is_on_website     1 = on the website (every category: today);
+--                                0 = none of its items are published.
+--   A delivery charge is always published, whatever these say (the settings
+--   block's fee check needs it).
+--
+-- NOT NULL DEFAULT, no backfill: every existing row reads 'on' / 1, so the
+-- published menu is byte-for-byte what it was (the 0031 / 0038 practice). No
+-- CHECK: the values allowed are checked in code (shared-types
+-- WEB_AVAILABILITIES; a value this version does not know reads as 'on'), so
+-- a newer till's value never fails to land here (the 0033 / 0044 practice).
+-- Row images are built from the live schema, so both columns travel without
+-- a sync-core change; an image from a till without them (v0.7.29) leaves
+-- them as they are here (apply-remote copies only the keys an image carries,
+-- and a new row takes the default). Both tills must run this the same day:
+-- a flag changed while the other till is still on v0.7.29 reaches it without
+-- the column, and its own Publish would put hidden items back (DEPLOY.md).
+ALTER TABLE menu_items ADD COLUMN web_availability TEXT NOT NULL DEFAULT 'on';
+ALTER TABLE categories ADD COLUMN is_on_website INTEGER NOT NULL DEFAULT 1;

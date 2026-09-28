@@ -174,6 +174,9 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     expect([...(SCHEMA.get('order_channel_terms') ?? [])]).toEqual(expect.arrayContaining(['uplift_bps', 'payment_fee_cents']));
     // 0044: how an order came in (Walk-in / Phone / WhatsApp, website, foodpanda) travels with the order.
     expect([...(SCHEMA.get('orders') ?? [])]).toEqual(expect.arrayContaining(['came_by']));
+    // 0045: where an item and a category sell on the website travels with the menu row.
+    expect([...(SCHEMA.get('menu_items') ?? [])]).toEqual(expect.arrayContaining(['web_availability']));
+    expect([...(SCHEMA.get('categories') ?? [])]).toEqual(expect.arrayContaining(['is_on_website']));
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');
@@ -286,7 +289,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -298,6 +301,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0042_drawer_log.sql',
       '0043_order_test_delete.sql',
       '0044_order_came_by.sql',
+      '0045_web_availability.sql',
     ]);
   });
 
@@ -313,5 +317,13 @@ describe('migrations: numbered in order, one file per number', () => {
     const sql = stripComments(readFileSync(join(MIGRATIONS_DIR, '0044_order_came_by.sql'), 'utf8')).trim();
     expect(sql.replace(/\s+/g, ' ')).toBe('ALTER TABLE orders ADD COLUMN came_by TEXT;');
     expect(/\border_discounts\b|\border_channel_terms\b|\bshifts\b|\bCHECK\b|\bUPDATE\b/i.test(sql)).toBe(false);
+  });
+
+  it('0045 only adds the two website columns, NOT NULL with today’s value as the default: no CHECK, no backfill, nothing else touched', () => {
+    const sql = stripComments(readFileSync(join(MIGRATIONS_DIR, '0045_web_availability.sql'), 'utf8')).trim();
+    expect(sql.replace(/\s+/g, ' ')).toBe(
+      "ALTER TABLE menu_items ADD COLUMN web_availability TEXT NOT NULL DEFAULT 'on'; ALTER TABLE categories ADD COLUMN is_on_website INTEGER NOT NULL DEFAULT 1;",
+    );
+    expect(/\bCHECK\b|\bUPDATE\b|\bINSERT\b|\bDROP\b|\bCREATE\b/i.test(sql)).toBe(false);
   });
 });

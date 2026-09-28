@@ -562,7 +562,17 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   // Settings step 3: the website's pick-up offer and "publish the menu by itself" (the areas have their own channel).
   { key: 'discounts.websitePickup', value: { v: 1, offered: false, percent: 15 } },
   { key: 'discounts.websitePickup', useDefault: true },
-  { key: 'online.options', value: { v: 1, autoPublishMenu: true } },
+  {
+    key: 'online.options',
+    value: {
+      v: 2,
+      autoPublishMenu: true,
+      // v0.7.30: the website's messages and smallest delivery order (made-up words and amount).
+      closedNotice: { text: 'Test closed notice', until: '2026-10-03' },
+      announcement: { on: true, text: 'Test announcement' },
+      minDeliveryOrderCents: 100_000,
+    },
+  },
   { key: 'online.options', useDefault: true },
   // The automatic offers and the came-by question (Settings step 4).
   {

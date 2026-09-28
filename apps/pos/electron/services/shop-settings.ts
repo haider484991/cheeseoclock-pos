@@ -298,7 +298,9 @@ export function getShopSettingCard<K extends ShopSettingKey>(
     defaultValue,
     // The value in use IS the default: never saved, or put back ("Put back the
     // default" writes the default's values, so a saved row can be the default).
-    isDefault: !inUse.newerFormat && sameSettingValue(inUse.value, defaultValue),
+    // Compared WITHOUT the format number: an older format's value that reads as
+    // today's (a v0.7.29 'online.options' at its default) is the default too.
+    isDefault: !inUse.newerFormat && sameSettingValue(withoutFormat(inUse.value), withoutFormat(defaultValue)),
     readOnly: inUse.newerFormat,
     ...(key === 'foodpanda.fees' ? { carriedOver: inUse.carriedOver } : {}),
     lastChanged: row
@@ -314,6 +316,13 @@ export function getShopSettingCard<K extends ShopSettingKey>(
     notOnOtherTillYet: unsent,
     history,
   };
+}
+
+/** A shop rule's value without its format number `v` (what it SAYS, not how it was written). */
+function withoutFormat(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { v: _v, ...rest } = value as Record<string, unknown>;
+  return rest;
 }
 
 /** Two setting values are the same whatever order their fields were written in. */

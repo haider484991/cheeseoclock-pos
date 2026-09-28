@@ -174,6 +174,15 @@ function emptyMenu(live: MenuSnapshot, feeItemIds: ReadonlySet<string>): MenuSna
 function freshStartOf(db: AppDatabase, live: MenuSnapshot, feeItemIds: ReadonlySet<string>): MenuImportFreshStart {
   const kept = emptyMenu(live, feeItemIds);
   const keptItems = new Set(kept.items.map((i) => i.id));
+  const keptCategories = new Set(kept.categories.map((c) => c.id));
+  // What the owner set in Menu → On the website that the fresh start takes with it: the file
+  // carries no website setting, so what it brings back is on the website again.
+  const offItems = (
+    db.prepare(`SELECT id FROM menu_items WHERE deleted_at IS NULL AND web_availability <> 'on'`).all() as Array<{ id: string }>
+  ).filter((r) => !keptItems.has(r.id)).length;
+  const offCategories = (
+    db.prepare(`SELECT id FROM categories WHERE deleted_at IS NULL AND is_on_website = 0`).all() as Array<{ id: string }>
+  ).filter((r) => !keptCategories.has(r.id)).length;
   return {
     items: live.items
       .filter((i) => !keptItems.has(i.id))
@@ -184,6 +193,7 @@ function freshStartOf(db: AppDatabase, live: MenuSnapshot, feeItemIds: ReadonlyS
     choiceGroups: live.modifierGroups.length,
     ingredients: live.ingredients.length,
     openOrders: countOpenOrders(db),
+    websiteSettingsLost: offItems + offCategories,
   };
 }
 

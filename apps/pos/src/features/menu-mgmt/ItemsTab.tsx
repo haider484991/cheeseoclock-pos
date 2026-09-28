@@ -8,14 +8,23 @@ import { useToast } from '../../components/toast/ToastProvider';
 import {
   FEE_ITEM_LOCKED_NOTE,
   FEE_ITEM_UNUSED_NOTE,
+  WEB_AVAILABILITIES,
   chargedFeeItemIds,
   deliveryZoneFeeItemIds,
   isDeliveryChargeMenuItem,
   type MenuCostRow,
   type MenuItem,
   type PrepStation,
+  type WebAvailability,
 } from '@cheeseoclock/shared-types';
-import { Plus, Edit, Trash2, X, Eye, EyeOff, ChevronRight, Lock } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Eye, EyeOff, ChevronRight, Lock, Globe, ImageOff } from 'lucide-react';
+import {
+  WEBSITE_CHANGE_NOTE,
+  WEB_AVAILABILITY_WORDS,
+  photoTooBigForWebsite,
+  photoTooBigWords,
+  saysPickupOnly,
+} from '../settings/shop-rules/publishWords';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
@@ -159,6 +168,7 @@ export function ItemsTab() {
               <th className="pb-2 text-right">Price</th>
               {canCost && <th className="pb-2 text-center">Food cost</th>}
               <th className="pb-2">Status</th>
+              <th className="pb-2">Website</th>
               <th className="pb-2">
                 <span className="sr-only">Actions</span>
               </th>
@@ -174,6 +184,11 @@ export function ItemsTab() {
                       {i.name}
                     </button>
                     {i.description && <div className="max-w-md truncate text-xs text-stone-500">{i.description}</div>}
+                    {photoTooBigForWebsite(i.imageUrl) && (
+                      <div className="inline-flex items-center gap-1 text-xs text-amber-800 dark:text-amber-300">
+                        <ImageOff className="h-3 w-3" aria-hidden="true" /> Photo too big for the website: it goes with no picture
+                      </div>
+                    )}
                     {feeLock(i) && (
                       <div className="inline-flex items-center gap-1 text-xs text-amber-800 dark:text-amber-300">
                         <Lock className="h-3 w-3" aria-hidden="true" /> {feeLock(i) === 'charged' ? FEE_ITEM_LOCKED_NOTE : FEE_ITEM_UNUSED_NOTE}
@@ -210,6 +225,9 @@ export function ItemsTab() {
                       {i.isActive ? 'On the till' : 'Hidden'}
                     </button>
                   </td>
+                  <td className="py-2">
+                    <WebsiteChip item={i} categoryOnWebsite={cat?.isOnWebsite ?? true} fee={feeLock(i) !== null} />
+                  </td>
                   <td className="py-2 text-right">
                     <button
                       type="button"
@@ -242,7 +260,7 @@ export function ItemsTab() {
             })}
             {list.items.length === 0 && (
               <tr>
-                <td colSpan={canCost ? 7 : 6} className="py-6 text-center text-stone-500">
+                <td colSpan={canCost ? 8 : 7} className="py-6 text-center text-stone-500">
                   {itemsQ.isLoading ? 'Loading…' : (itemsQ.data?.length ?? 0) === 0 ? 'No items yet — add one, or use Import.' : 'No items match.'}
                 </td>
               </tr>
@@ -271,6 +289,32 @@ export function ItemsTab() {
         />
       )}
     </Card>
+  );
+}
+
+/**
+ * Where an item sells on the website, as the list shows it: its own setting
+ * (Menu → the item), "off with its category" when its category is off the
+ * website, and "always" for a delivery charge (the website adds it to the
+ * bill). Changed in the item's dialog.
+ */
+function WebsiteChip({ item, categoryOnWebsite, fee }: { item: MenuItem; categoryOnWebsite: boolean; fee: boolean }) {
+  if (fee) return <span className="text-xs text-stone-500">Always (delivery charge)</span>;
+  if (!categoryOnWebsite) return <span className="text-xs text-stone-500">Off with its category</span>;
+  const w = item.webAvailability;
+  return (
+    <span
+      title={WEB_AVAILABILITY_WORDS[w].hint}
+      className={cn(
+        'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs',
+        w === 'on' && 'bg-sky-50 text-sky-800 dark:bg-sky-950 dark:text-sky-200',
+        w === 'pickup_only' && 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200',
+        w === 'off' && 'bg-stone-200 text-stone-600 dark:bg-stone-700 dark:text-stone-300',
+      )}
+    >
+      <Globe className="h-3 w-3" aria-hidden="true" />
+      {WEB_AVAILABILITY_WORDS[w].label}
+    </span>
   );
 }
 
@@ -333,6 +377,7 @@ function ItemDialog({
   const [sku, setSku] = useState(existing?.sku ?? '');
   const [barcode, setBarcode] = useState(existing?.barcode ?? '');
   const [isActive, setIsActive] = useState(existing?.isActive ?? true);
+  const [webAvailability, setWebAvailability] = useState<WebAvailability>(existing?.webAvailability ?? 'on');
   const [imageUrl, setImageUrl] = useState<string | null>(existing?.imageUrl ?? null);
   const [attachedGroupIds, setAttachedGroupIds] = useState<Set<string>>(
     () => new Set(attachedQ.data?.map((g) => g.id) ?? []),
@@ -378,6 +423,9 @@ function ItemDialog({
           barcode: barcode.trim() || null,
           imageUrl,
           isActive,
+          // Sent only when changed (a newer till's value, read here as "on", stays as it is); never for a
+          // delivery charge (always on the website).
+          ...(!feeFixed && webAvailability !== existing.webAvailability ? { webAvailability } : {}),
         });
         itemId = updated.id;
       } else {
@@ -392,6 +440,7 @@ function ItemDialog({
           sku: sku.trim() || null,
           barcode: barcode.trim() || null,
           imageUrl,
+          webAvailability,
         });
         itemId = created.id;
       }
@@ -466,6 +515,11 @@ function ItemDialog({
             )}
             <Field label="Photo">
               <ImagePicker value={imageUrl} onChange={setImageUrl} emptyLabel="Tap to add a photo" />
+              {imageUrl && photoTooBigForWebsite(imageUrl) && (
+                <p className="mt-1 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                  <ImageOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" /> {photoTooBigWords(imageUrl)}
+                </p>
+              )}
             </Field>
             <Field label="Name">
               <input
@@ -566,6 +620,41 @@ function ItemDialog({
                 </label>
               </Field>
             )}
+
+            <Field label="On the website">
+              {feeFixed ? (
+                <p className="text-sm text-stone-500">A delivery charge is always on the website (the website adds it to the bill).</p>
+              ) : (
+                <>
+                  <div role="radiogroup" aria-label="On the website" className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {WEB_AVAILABILITIES.map((w) => (
+                      <button
+                        key={w}
+                        type="button"
+                        role="radio"
+                        aria-checked={webAvailability === w}
+                        onClick={() => setWebAvailability(w)}
+                        className={cn(
+                          'flex flex-col items-start gap-0.5 rounded-lg border-2 p-2 text-left transition-colors',
+                          webAvailability === w
+                            ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                            : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                        )}
+                      >
+                        <span className="text-sm font-semibold">{WEB_AVAILABILITY_WORDS[w].label}</span>
+                        <span className="text-xs text-stone-500">{WEB_AVAILABILITY_WORDS[w].hint}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {webAvailability === 'on' && saysPickupOnly(description) && (
+                    <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
+                      The description says “pick-up only”, so the website still takes it for pick-up only. Choose “Pick-up only” here to say so, or change the description.
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-stone-500">{WEBSITE_CHANGE_NOTE}</p>
+                </>
+              )}
+            </Field>
 
             <Field label={`Choices (${attachedGroupIds.size} on this item)`}>
               <div className="rounded-lg border border-stone-200 p-2 dark:border-stone-700">

@@ -539,7 +539,13 @@ live('the settings block of the menu publish', () => {
     settingsRepo.setBusinessSetting(
       db as AppDatabase,
       'online.options',
-      { v: 1, autoPublishMenu: true },
+      {
+        v: 2,
+        autoPublishMenu: true,
+        closedNotice: { text: '', until: null },
+        announcement: { on: false, text: '' },
+        minDeliveryOrderCents: 0,
+      },
       OWNER,
     );
     bridge().menuChanged();
@@ -749,5 +755,101 @@ live('the settings block reaches the website, and stays right, when the tills an
     await bridge().publishMenu();
     expect(menus()).toHaveLength(1);
     expect(menus()[0]).not.toHaveProperty('settings');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v0.7.30: the website's messages and smallest delivery order ('online.options'
+// format 2) travel in the block (shared-types web-bridge.ts, WEBSITE MESSAGES).
+// ---------------------------------------------------------------------------
+
+const messages = {
+  v: 2,
+  autoPublishMenu: false,
+  closedNotice: { text: 'Closed for a made-up holiday', until: '2026-10-03' },
+  announcement: { on: true, text: 'New: a made-up pizza' },
+  minDeliveryOrderCents: 100_000,
+};
+const noMessages = {
+  closedNotice: { text: '', until: null },
+  announcement: { on: false, text: '' },
+  minDeliveryOrderCents: 0,
+};
+
+live('the website messages reach the website in the block, alone', () => {
+  it('a Save of the messages alone changes the stamp and sends the block ALONE — never the menu — with the owner’s words and minimum; the owner’s Publish carries them too', async () => {
+    const db = await till();
+    await bridge().publishMenu();
+    expect(menus()).toHaveLength(1);
+    expect(menus()[0]).not.toHaveProperty('settings');
+    db.prepare(`UPDATE menu_items SET base_price_cents = 123400 WHERE id = ?`).run(items.pizza);
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'online.options', messages, OWNER);
+    await bridge().maybePublishSettings();
+    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
+    const alone = settingsPuts()[0]!;
+    expect(JSON.stringify(alone)).not.toMatch(/123400|Test Pizza/);
+    expect(alone.settings).toMatchObject({
+      settingsRev: 1,
+      closedNotice: messages.closedNotice,
+      announcement: messages.announcement,
+      minDeliveryOrderCents: 100_000,
+    });
+    // Today's areas and pick-up with it (nothing else saved), naming today's charge items.
+    expect(alone.settings.zones.map((z) => z.id)).toEqual(DEFAULT_DELIVERY_ZONES.zones.map((z) => z.id));
+    expect(alone.settings.pickup).toEqual({ offered: true, percent: 10 });
+    expect(publishedSettingsSchema.safeParse(alone.settings).success).toBe(true);
+    expect(settingsBlockProblem(alone.settings, asMenu(alone))).toBeNull();
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+    // Nothing newer: nothing more.
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    // The owner's Publish: the same block inside the menu.
+    await bridge().publishMenu();
+    expect(menus()[1]!.settings).toEqual(alone.settings);
+  });
+
+  it('once any carried key is saved the block always carries all three messages, at their defaults too (sent at the default = cleared on the website)', async () => {
+    const db = await till();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()[0]!.settings).toMatchObject(noMessages);
+    // Words saved, then cleared: the clearing goes too.
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'online.options', messages, OWNER);
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()[1]!.settings).toMatchObject({ settingsRev: 2, announcement: { on: true } });
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'online.options', { ...messages, ...noMessages }, OWNER);
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(3);
+    expect(settingsPuts()[2]!.settings).toMatchObject({ settingsRev: 3, ...noMessages });
+  });
+
+  it('a till upgraded from v0.7.29 with only “Publish by itself” saved (format 1): its block goes by itself, built from today’s defaults, and passes the fee check — the website as today', async () => {
+    const db = await till();
+    const { businessSettingId } = await import('../db/repositories/business-settings-repo.js');
+    db.prepare(
+      `INSERT INTO business_settings (id, key, value_json, updated_by_user_id, created_at, updated_at, device_id, version)
+       VALUES (?, 'online.options', ?, 'u_owner', ?, ?, ?, 1)`,
+    ).run(businessSettingId('online.options'), JSON.stringify({ v: 1, autoPublishMenu: true }), '2026-09-20T10:00:00.000Z', '2026-09-20T10:00:00.000Z', DEV);
+    await bridge().maybePublishSettings();
+    expect(menus()).toHaveLength(0);
+    expect(settingsPuts()).toHaveLength(1);
+    const block = settingsPuts()[0]!.settings;
+    expect(block).toMatchObject({ settingsRev: 1, settingsAt: '2026-09-20T10:00:00.000Z', pickup: { offered: true, percent: 10 }, ...noMessages });
+    expect(block.zones.map((z) => [z.id, z.feeCents, z.active])).toEqual(
+      DEFAULT_DELIVERY_ZONES.zones.map((z) => [z.id, z.feeCents, true]),
+    );
+    expect(settingsBlockProblem(block, asMenu(settingsPuts()[0]!))).toBeNull();
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+  });
+
+  it('the messages saved by a newer version of the app: no block goes from this till, and Settings says which (the website keeps what it has)', async () => {
+    const db = await till();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'online.options', messages, OWNER);
+    syncedRow(db, 'online.options', { version: 2, value: { ...messages, v: 3, openingHours: [] } });
+    await bridge().maybePublishSettings();
+    expect([...menus(), ...settingsPuts()]).toHaveLength(0);
+    expect(publishStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/website messages were saved by a newer version/) });
   });
 });

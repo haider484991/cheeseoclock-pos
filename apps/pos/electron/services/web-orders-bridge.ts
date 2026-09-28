@@ -46,7 +46,7 @@ import { getReceiptBranding } from './printer-config.js';
 import { isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
 import { localSettingsStamp, settingsBlockFor } from './website-settings-block.js';
 import { onWebsiteSettingsChanged } from './website-settings-events.js';
-import { readOnlineOptions } from '../db/business-settings-read.js';
+import { readDeliveryFeeItemIds, readOnlineOptions } from '../db/business-settings-read.js';
 import { websiteDiscountRule, websiteNeedsSettings } from '@cheeseoclock/pos-domain';
 import { orderAlerts } from './order-alerts-hub.js';
 import {
@@ -57,9 +57,17 @@ import {
   type BridgeApi,
 } from './cloud-copy-chunks.js';
 import { dumpDatabase, rebuildDatabase, type RowSink, type RowSource } from './cloud-copy-rows.js';
-import { compareSettingsStamp, feeItemsForBlock } from '@cheeseoclock/shared-types';
+import {
+  PUBLISHED_IMAGE_MAX_CHARS,
+  compareSettingsStamp,
+  feeItemsForBlock,
+  isDeliveryChargeMenuItem,
+  webAvailabilityOf,
+} from '@cheeseoclock/shared-types';
 import type {
   CloudBackupEntry,
+  PhotoLeftOut,
+  PublishMenuSummary,
   PublishMenuResult,
   PublishSettingsBody,
   PublishedMenu,
@@ -465,8 +473,8 @@ class WebOrdersBridge {
           at,
           message:
             held.deviceId === this.deviceId
-              ? 'The website holds newer delivery settings from this till (from before a backup was restored?) — save the delivery areas again here to replace them.'
-              : 'The website holds newer delivery settings from the other till — this till matches them once the till link brings them.',
+              ? 'The website holds newer website settings from this till (from before a backup was restored?) — save the delivery areas, the pick-up offer or the website messages again here to replace them.'
+              : 'The website holds newer website settings from the other till — this till matches them once the till link brings them.',
         };
       }
     }
@@ -1594,7 +1602,7 @@ class WebOrdersBridge {
    * the menu is sent again without it. The till records what the website
    * says it holds. (A Save sends the block ALONE: publishSettingsAlone.)
    */
-  async publishMenu(): Promise<{ categories: number; items: number }> {
+  async publishMenu(): Promise<PublishMenuSummary> {
     if (!this.db) throw new Error('Bridge not initialized');
     const db = this.db;
     const cfg = getWebBridgeConfig(db);
@@ -1604,9 +1612,9 @@ class WebOrdersBridge {
     this.settingsPublishing = true;
     try {
       // Menu and block read together, so the block's fee items are this menu's.
-      const { menu, sb } = db.transaction(() => {
-        const m = buildPublishedMenu(db);
-        return { menu: m, sb: settingsBlockFor(db, m, this.deviceId) };
+      const { menu, photosLeftOut, sb } = db.transaction(() => {
+        const r = buildPublishedMenuReport(db);
+        return { menu: r.menu, photosLeftOut: r.photosLeftOut, sb: settingsBlockFor(db, r.menu, this.deviceId) };
       })();
       const itemCount = menu.categories.reduce((s, c) => s + c.items.length, 0);
       const send = (body: PublishedMenu) => this.api(cfg, '/api/bridge/menu', { method: 'PUT', body: JSON.stringify(body) });
@@ -1634,7 +1642,13 @@ class WebOrdersBridge {
         items: itemCount,
         settings: sentBlock ? (data?.settings ?? 'unknown') : sb.problem ? 'not sent' : 'none',
       });
-      return { categories: menu.categories.length, items: itemCount };
+      // Before, a photo too big for the website was left out silently (sweep B5): say which.
+      if (photosLeftOut.length > 0) {
+        log.warn('Menu published without some photos (too big for the website)', {
+          items: photosLeftOut.map((p) => p.name),
+        });
+      }
+      return { categories: menu.categories.length, items: itemCount, photosLeftOut };
     } finally {
       this.settingsPublishing = false;
       if (this.settingsRecheck) {
@@ -1691,7 +1705,7 @@ class WebOrdersBridge {
       }
       const data = ((await res.json().catch(() => null)) as { data?: Partial<PublishMenuResult> } | null)?.data ?? null;
       this.settingsAnswered(sb.stamp, true, data);
-      log.info('Delivery settings sent to the website (the menu stays as published)', {
+      log.info('Website settings sent to the website (the menu stays as published)', {
         feeItems: body.feeItems.length,
         settings: data?.settings ?? 'unknown',
       });
@@ -1721,7 +1735,7 @@ class WebOrdersBridge {
       // The website kept a newer block (the other till's). Should this till still think it needs
       // its own, the two disagree: never send the same stamp round and round.
       if (stillNeeded && compareSettingsStamp(local, sent) === 0) {
-        this.noteSettings(sent, 'refused', 'The website keeps newer delivery settings than this till’s — save the delivery areas again to replace them.');
+        this.noteSettings(sent, 'refused', 'The website keeps newer website settings than this till’s — save the delivery areas, the pick-up offer or the website messages again to replace them.');
       }
       return;
     }
@@ -1917,40 +1931,66 @@ function mapPosStatusToWeb(pos: OrderStatus): Exclude<WebOrderStatus, 'new'> | n
  * Serialize the active menu for the website. Read-only — direct SELECTs are
  * fine here (the repositories rule covers writes).
  *
- * Images: data-URLs over ~300KB are dropped (null) so a handful of photos
- * can't blow past Vercel's request-body limit.
+ * Images: data-URLs over PUBLISHED_IMAGE_MAX_CHARS (~300KB) are dropped
+ * (null) so a handful of photos can't blow past Vercel's request-body limit
+ * — buildPublishedMenuReport says which, for the owner.
  */
 export function buildPublishedMenu(db: AppDatabase): PublishedMenu {
-  const MAX_IMAGE_CHARS = 300_000;
+  return buildPublishedMenuReport(db).menu;
+}
+
+/**
+ * The menu the website gets, and the items published WITHOUT their photo
+ * (too big: Settings → Online orders and the Menu editor say so).
+ *
+ * Selling on the website (migration 0045; shared-types web-bridge.ts,
+ * SELLING ON THE WEBSITE): an item set "Not on the website", and every item
+ * of a category that is off the website, is left out; a "Pick-up only" item
+ * goes with `pickupOnly: true` — the key is absent on every other item, so
+ * with every item and category at the default (on) the menu is byte-for-byte
+ * what it was. A delivery charge (an area's fee item, or named like one) is
+ * ALWAYS published, whatever its item's or category's website setting: the
+ * settings block's fee check needs it. Empty categories are dropped as before.
+ */
+export function buildPublishedMenuReport(db: AppDatabase): { menu: PublishedMenu; photosLeftOut: PhotoLeftOut[] } {
   const branding = getReceiptBranding(db);
+  const feeItemIds = readDeliveryFeeItemIds(db);
+  const photosLeftOut: PhotoLeftOut[] = [];
 
   const categories = db
     .prepare(
-      `SELECT id, name, display_order FROM categories
+      `SELECT id, name, display_order, is_on_website FROM categories
         WHERE deleted_at IS NULL AND is_active = 1
         ORDER BY display_order`,
     )
-    .all() as Array<{ id: string; name: string; display_order: number }>;
+    .all() as Array<{ id: string; name: string; display_order: number; is_on_website: number }>;
 
-  const items = db
-    .prepare(
-      `SELECT mi.id, mi.category_id, mi.name, mi.description, mi.base_price_cents,
-              mi.image_url, mi.sort_order, IFNULL(tc.rate_bps, 0) AS rate_bps
-         FROM menu_items mi
-         LEFT JOIN tax_categories tc ON tc.id = mi.tax_category_id AND tc.deleted_at IS NULL
-        WHERE mi.deleted_at IS NULL AND mi.is_active = 1
-        ORDER BY mi.sort_order`,
-    )
-    .all() as Array<{
-    id: string;
-    category_id: string;
-    name: string;
-    description: string | null;
-    base_price_cents: number;
-    image_url: string | null;
-    sort_order: number;
-    rate_bps: number;
-  }>;
+  const items = (
+    db
+      .prepare(
+        `SELECT mi.id, mi.category_id, mi.name, mi.description, mi.base_price_cents,
+                mi.image_url, mi.sort_order, IFNULL(tc.rate_bps, 0) AS rate_bps, mi.web_availability
+           FROM menu_items mi
+           LEFT JOIN tax_categories tc ON tc.id = mi.tax_category_id AND tc.deleted_at IS NULL
+          WHERE mi.deleted_at IS NULL AND mi.is_active = 1
+          ORDER BY mi.sort_order`,
+      )
+      .all() as Array<{
+      id: string;
+      category_id: string;
+      name: string;
+      description: string | null;
+      base_price_cents: number;
+      image_url: string | null;
+      sort_order: number;
+      rate_bps: number;
+      web_availability: string;
+    }>
+  ).map((i) => ({
+    ...i,
+    isFee: isDeliveryChargeMenuItem({ id: i.id, name: i.name }, feeItemIds),
+    web: webAvailabilityOf(i.web_availability),
+  }));
 
   const itemGroups = db
     .prepare(
@@ -2006,15 +2046,15 @@ export function buildPublishedMenu(db: AppDatabase): PublishedMenu {
       name: c.name,
       displayOrder: c.display_order,
       items: items
-        .filter((i) => i.category_id === c.id)
+        // A delivery charge always; any other item only while it and its category are on the website.
+        .filter((i) => i.category_id === c.id && (i.isFee || (c.is_on_website !== 0 && i.web !== 'off')))
         .map((i) => ({
           posItemId: i.id,
           name: i.name,
           description: i.description,
           basePriceCents: i.base_price_cents,
           taxRateBps: i.rate_bps,
-          imageUrl:
-            i.image_url && i.image_url.length <= MAX_IMAGE_CHARS ? i.image_url : null,
+          imageUrl: publishedPhoto(i, photosLeftOut),
           sortOrder: i.sort_order,
           modifierGroups: (groupsByItem.get(i.id) ?? []).map((g) => ({
             posGroupId: g.group_id,
@@ -2032,21 +2072,34 @@ export function buildPublishedMenu(db: AppDatabase): PublishedMenu {
               sortOrder: m.sort_order,
             })),
           })),
+          // Only when true: every other item goes exactly as before (no key).
+          ...(i.web === 'pickup_only' && !i.isFee ? { pickupOnly: true } : {}),
         })),
     }))
     .filter((c) => c.items.length > 0);
 
   return {
-    categories: publishedCategories,
-    publishedAt: nowIso(),
-    store: {
-      name: branding.storeName,
-      phone: branding.phoneLine ?? null,
-      whatsapp: null,
-      addressLine: branding.branchLine ?? null,
-      tagline: branding.storeTagline ?? null,
+    menu: {
+      categories: publishedCategories,
+      publishedAt: nowIso(),
+      store: {
+        name: branding.storeName,
+        phone: branding.phoneLine ?? null,
+        whatsapp: null,
+        addressLine: branding.branchLine ?? null,
+        tagline: branding.storeTagline ?? null,
+      },
     },
+    photosLeftOut,
   };
+}
+
+/** An item's photo as published: null when it has none, or it is over PUBLISHED_IMAGE_MAX_CHARS (then noted in `leftOut`). */
+function publishedPhoto(item: { id: string; name: string; image_url: string | null }, leftOut: PhotoLeftOut[]): string | null {
+  if (!item.image_url) return null;
+  if (item.image_url.length <= PUBLISHED_IMAGE_MAX_CHARS) return item.image_url;
+  leftOut.push({ id: item.id, name: item.name });
+  return null;
 }
 
 /** A stamp as one comparable key (the status shows a refusal only while its stamp is current). */

@@ -3,11 +3,15 @@
  * import.meta.glob) on a real database, as the till runs it at boot:
  *   - a brand-new till runs 0001 up to the newest, in number order, once;
  *   - a till on v0.7.22 (0001..0041 applied: 0040 / 0041 are foodpanda's,
- *     released first) runs just 0042_drawer_log, 0043_order_test_delete and
- *     0044_order_came_by, in that order, after a pre-migrate copy — and its v0.7.22 rows (a paid
+ *     released first) runs just 0042_drawer_log, 0043_order_test_delete,
+ *     0044_order_came_by and 0045_web_availability, in that order, after a
+ *     pre-migrate copy — and its v0.7.22 rows (a paid
  *     foodpanda order, its deal and the terms kept at payment) come through
  *     untouched and work with the new code (a test delete, foodpanda's
  *     figures);
+ *   - a till on v0.7.29 (0001..0044) runs just 0045_web_availability: its
+ *     menu rows come through untouched, every item and category reads "on
+ *     the website", and the website gets the menu it got before;
  *   - a till already up to date runs nothing.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
@@ -90,18 +94,19 @@ live('migrations at boot (migrator.ts)', () => {
     const names = ran(db);
     expect(names).toEqual(migrationFiles());
     expect(names.map((n) => Number(n.slice(0, 4)))).toEqual(names.map((_, i) => i + 1));
-    expect(names.slice(-6)).toEqual([
+    expect(names.slice(-7)).toEqual([
       '0039_shift_close_notes.sql',
       '0040_foodpanda_deal_and_terms.sql',
       '0041_channel_terms_uplift_and_fee.sql',
       '0042_drawer_log.sql',
       '0043_order_test_delete.sql',
       '0044_order_came_by.sql',
+      '0045_web_availability.sql',
     ]);
     expect(h.snapshots).toEqual([]);
   });
 
-  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043 then 0044, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
+  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043, 0044 then 0045, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
     const { runMigrations } = await import('./migrator.js');
     h.snapshots.length = 0;
     const db = tillOnV0722();
@@ -120,7 +125,13 @@ live('migrations at boot (migrator.ts)', () => {
     await runMigrations(db);
 
     // Exactly these, in this order, after everything v0.7.22 had.
-    expect(ran(db)).toEqual([...had, '0042_drawer_log.sql', '0043_order_test_delete.sql', '0044_order_came_by.sql']);
+    expect(ran(db)).toEqual([
+      ...had,
+      '0042_drawer_log.sql',
+      '0043_order_test_delete.sql',
+      '0044_order_came_by.sql',
+      '0045_web_availability.sql',
+    ]);
     expect(h.snapshots).toHaveLength(1);
     // Their columns and the log's start are there…
     expect(columns(db, 'drawer_opens')).toEqual(expect.arrayContaining(['order_id', 'cash_movement_id', 'amount_cents', 'outcome', 'outcome_note', 'settled_at']));
@@ -136,7 +147,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 3);
+    expect(ran(db)).toHaveLength(had.length + 4);
     expect(h.snapshots).toHaveLength(1);
 
     // The new code on the upgraded till: foodpanda's figures read the kept terms…
@@ -152,5 +163,60 @@ live('migrations at boot (migrator.ts)', () => {
     expect(db.prepare(`SELECT deleted_at IS NOT NULL AS gone FROM order_channel_terms WHERE id = 't_fp'`).get()).toEqual({ gone: 1 });
     expect(db.prepare(`SELECT deleted_at IS NOT NULL AS gone FROM payments WHERE id = 'p_fp'`).get()).toEqual({ gone: 1 });
     expect(getFoodpanda(db, ALL_TIME)).toBeNull();
+  });
+
+  it('a till on v0.7.29 (0001..0044) runs just 0045, after a pre-migrate copy: its menu rows are untouched, every item and category reads on the website, and the published menu is what it was', async () => {
+    const { runMigrations } = await import('./migrator.js');
+    h.snapshots.length = 0;
+    const db = openMigrated({ stopBefore: '0045' });
+    db.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL)`);
+    const log = db.prepare(`INSERT INTO _migrations (name, ran_at) VALUES (?, ?)`);
+    for (const f of migrationFiles().filter((m) => m < '0045')) log.run(f, T0);
+    // v0.7.29's menu, as its repositories wrote it (made-up names and prices).
+    db.prepare(`INSERT INTO tax_categories (id, name, rate_bps, created_at, updated_at, device_id) VALUES ('t1', 'Test GST', 1600, ?, ?, ?)`).run(T0, T0, DEV);
+    const cat = db.prepare(
+      `INSERT INTO categories (id, name, display_order, color_hex, is_active, created_at, updated_at, device_id) VALUES (?, ?, ?, '#aa5500', ?, ?, ?, ?)`,
+    );
+    cat.run('c_food', 'Test food', 1, 1, T0, T0, DEV);
+    cat.run('c_old', 'Test old', 2, 0, T0, T0, DEV);
+    const item = db.prepare(
+      `INSERT INTO menu_items (id, category_id, name, description, base_price_cents, is_active, prep_station, tax_category_id, sort_order, created_at, updated_at, device_id)
+       VALUES (?, ?, ?, ?, ?, ?, 'kitchen', 't1', ?, ?, ?, ?)`,
+    );
+    item.run('i_pizza', 'c_food', 'Test Pizza', 'Pick-up only', 100_000, 1, 1, T0, T0, DEV);
+    item.run('i_side', 'c_food', 'Test Side', null, 30_000, 0, 2, T0, T0, DEV);
+    const one = (sql: string) => db.prepare(sql).get() as Record<string, unknown>;
+    const before = { pizza: one(`SELECT * FROM menu_items WHERE id = 'i_pizza'`), food: one(`SELECT * FROM categories WHERE id = 'c_food'`) };
+    const had = ran(db);
+    expect(had.at(-1)).toBe('0044_order_came_by.sql');
+    expect(columns(db, 'menu_items')).not.toContain('web_availability');
+    expect(columns(db, 'categories')).not.toContain('is_on_website');
+
+    await runMigrations(db);
+
+    expect(ran(db)).toEqual([...had, '0045_web_availability.sql']);
+    expect(h.snapshots).toHaveLength(1);
+    // Every row as it was, with the two new columns at "on the website".
+    expect({
+      pizza: one(`SELECT * FROM menu_items WHERE id = 'i_pizza'`),
+      food: one(`SELECT * FROM categories WHERE id = 'c_food'`),
+    }).toEqual({ pizza: { ...before.pizza, web_availability: 'on' }, food: { ...before.food, is_on_website: 1 } });
+    expect(db.prepare(`SELECT DISTINCT web_availability AS w FROM menu_items`).all()).toEqual([{ w: 'on' }]);
+    expect(db.prepare(`SELECT DISTINCT is_on_website AS w FROM categories`).all()).toEqual([{ w: 1 }]);
+    // The repositories read them so.
+    const { listMenuItems } = await import('./repositories/menu-item-repo.js');
+    const { listCategories } = await import('./repositories/category-repo.js');
+    expect(listMenuItems(db).map((i) => [i.id, i.webAvailability])).toEqual([
+      ['i_pizza', 'on'],
+      ['i_side', 'on'],
+    ]);
+    expect(listCategories(db).map((c) => [c.id, c.isOnWebsite])).toEqual([
+      ['c_food', true],
+      ['c_old', true],
+    ]);
+    // The next boot: nothing to run, no copy.
+    await runMigrations(db);
+    expect(ran(db)).toHaveLength(had.length + 1);
+    expect(h.snapshots).toHaveLength(1);
   });
 });

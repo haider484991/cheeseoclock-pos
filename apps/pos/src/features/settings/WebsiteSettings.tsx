@@ -1,14 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle, PauseCircle, UploadCloud } from 'lucide-react';
-import type { ShopSettingCard } from '@cheeseoclock/shared-types';
+import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle, PauseCircle, UploadCloud, Megaphone } from 'lucide-react';
+import { ANNOUNCEMENT_MAX, CLOSED_NOTICE_MAX, type ShopSettingCard } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting } from './shop-rules/useShopSetting';
-import { onlineOptionsSummary, settingsPublishWords } from './shop-rules/deliveryZonesForm';
+import { settingsPublishWords } from './shop-rules/deliveryZonesForm';
+import {
+  WEBSITE_MESSAGES_RULES,
+  autoPublishSummary,
+  autoPublishValue,
+  closedNoticeStatus,
+  minimumExample,
+  onlineOptionsPart,
+  todayInKarachi,
+  websiteMessagesFromForm,
+  websiteMessagesSummary,
+  websiteMessagesToForm,
+  type WebsiteMessagesForm,
+} from './shop-rules/websiteMessagesForm';
+import { publishedToast } from './shop-rules/publishWords';
 
 /** The bridge status, with the till's shift pause (webOrdersBridge.status()). */
 type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
@@ -23,6 +37,8 @@ type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
  *    block: sent alone after a Save, and with every menu publish)
  *  - "Publish the menu to the website by itself" ('online.options', off by
  *    default: the owner has not asked for it)
+ *  - the website's messages and its smallest delivery order (the same key,
+ *    format 2 since v0.7.30: its own card, its own "Put back the default")
  * Cloud backups reuse this connection but are managed under Backups.
  */
 export function WebsiteSettings() {
@@ -30,6 +46,7 @@ export function WebsiteSettings() {
     <div className="space-y-6">
       <ConnectionCard />
       <AutoPublishCard />
+      <WebsiteMessagesCard />
     </div>
   );
 }
@@ -85,11 +102,8 @@ function ConnectionCard() {
 
   const publishMut = useMutation({
     mutationFn: () => ipc.webBridge.publishMenu(),
-    onSuccess: (r) =>
-      toast({
-        title: 'Menu published 🎉',
-        description: `${r.items} items in ${r.categories} categories are now live on the website.`,
-      }),
+    // A photo too big for the website is left out: the toast says which (sweep B5).
+    onSuccess: (r) => toast(publishedToast(r)),
     onError: (e) =>
       toast({
         title: 'Publish failed',
@@ -133,10 +147,10 @@ function ConnectionCard() {
         Orders placed on your website land on the Live Orders board and print a
         kitchen ticket, and customers can follow their delivery live. Publish
         the menu whenever you change items or prices (or let it go by itself,
-        below). Delivery areas and the pick-up offer reach the website by
-        themselves when they are saved — only the areas and their delivery
-        charge items, never menu changes you have not published. The same
-        connection carries the online backup copies.
+        below). Delivery areas, the pick-up offer and the website messages
+        reach the website by themselves when they are saved — only those and
+        the delivery charge items, never menu changes you have not published.
+        The same connection carries the online backup copies.
       </p>
 
       {cfgQ.data?.secretUnreadable && (
@@ -306,7 +320,11 @@ function ConnectionCard() {
   );
 }
 
-/** "Publish the menu to the website by itself" ('online.options'): off by default — today's manual publish. */
+/**
+ * "Publish the menu to the website by itself" — one part of 'online.options'
+ * (off by default: today's manual publish). Its Save keeps the website
+ * messages as they are; its "Put back the default" puts back only this.
+ */
 function AutoPublishCard() {
   const s = useShopSetting('online.options');
   if (s.q.isError) return <p className="py-6 text-center text-stone-500">Could not load “Publish the menu by itself”.</p>;
@@ -315,10 +333,12 @@ function AutoPublishCard() {
 }
 
 function AutoPublishFields({ s }: { s: ReturnType<typeof useShopSetting<'online.options'>> }) {
-  const card = s.q.data as ShopSettingCard<'online.options'>;
-  const draft = useDraft(card.value, (v) => v.autoPublishMenu);
-  const value = useMemo(() => ({ v: card.value.v, autoPublishMenu: draft.form }), [card.value.v, draft.form]);
-  const dirty = draft.touched && draft.form !== card.value.autoPublishMenu;
+  const saved = s.q.data as ShopSettingCard<'online.options'>;
+  const card = onlineOptionsPart(saved, 'publish');
+  const draft = useDraft(saved.value, (v) => v.autoPublishMenu);
+  // The whole value in this version's format (a v0.7.29 value is saved as format 2), the messages as saved.
+  const value = useMemo(() => autoPublishValue(saved.value, draft.form), [saved.value, draft.form]);
+  const dirty = draft.touched && draft.form !== saved.value.autoPublishMenu;
   const options = [
     { on: false, label: 'No — when I publish', hint: 'The menu goes to the website after a menu file import or “Publish menu”, as before.' },
     { on: true, label: 'Yes — by itself', hint: 'A few seconds after any change to the menu on this till (items, prices, choices, categories).' },
@@ -329,12 +349,12 @@ function AutoPublishFields({ s }: { s: ReturnType<typeof useShopSetting<'online.
       title="Publish the menu to the website by itself"
       icon={<UploadCloud className="h-5 w-5" />}
       intro="A price changed on the till but not on the website is billed at a price the customer never saw. With Yes, the website follows the till’s menu by itself."
-      describe={onlineOptionsSummary}
+      describe={autoPublishSummary}
       dirty={dirty}
       problem={null}
       busy={s.save.isPending || s.putBack.isPending}
       onSave={() => s.save.mutate(value, { onSuccess: draft.reset })}
-      onPutBack={() => s.putBack.mutate(undefined, { onSuccess: draft.reset })}
+      onPutBack={() => s.save.mutate(card.defaultValue, { onSuccess: draft.reset })}
     >
       <div role="radiogroup" aria-label="Publish the menu by itself" className="grid grid-cols-1 gap-2 md:grid-cols-2">
         {options.map((o) => (
@@ -354,6 +374,140 @@ function AutoPublishFields({ s }: { s: ReturnType<typeof useShopSetting<'online.
           </button>
         ))}
       </div>
+    </SettingCard>
+  );
+}
+
+const inputClass =
+  'w-full rounded-lg border border-stone-300 px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800 disabled:opacity-60';
+const labelClass = 'mb-1 block text-xs uppercase tracking-wider text-stone-500';
+const exampleClass = 'rounded-lg bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/60 dark:text-amber-100';
+
+/**
+ * "Website messages & smallest delivery order" — the other part of
+ * 'online.options' (format 2, v0.7.30): the closed notice (with its last
+ * day), the announcement, and the smallest website DELIVERY order. The
+ * owner only (Settings). A Save reaches the website by itself, in the
+ * settings block, alone — never the menu.
+ */
+function WebsiteMessagesCard() {
+  const s = useShopSetting('online.options');
+  if (s.q.isError) return <p className="py-6 text-center text-stone-500">Could not load the website messages.</p>;
+  if (!s.q.data) return null;
+  return <WebsiteMessagesFields s={s} />;
+}
+
+function WebsiteMessagesFields({ s }: { s: ReturnType<typeof useShopSetting<'online.options'>> }) {
+  const saved = s.q.data as ShopSettingCard<'online.options'>;
+  const card = onlineOptionsPart(saved, 'messages');
+  const draft = useDraft(saved.value, websiteMessagesToForm);
+  const f = draft.form;
+  const today = todayInKarachi();
+  const parsed = useMemo(() => websiteMessagesFromForm(f, saved.value, today), [f, saved.value, today]);
+  const dirty = draft.touched && JSON.stringify(f) !== JSON.stringify(websiteMessagesToForm(saved.value));
+  const set = (patch: Partial<WebsiteMessagesForm>) => draft.set({ ...f, ...patch });
+  const typedMinimum = parsed.value?.minDeliveryOrderCents ?? saved.value.minDeliveryOrderCents;
+  return (
+    <SettingCard
+      card={card}
+      title="Website messages & smallest delivery order"
+      icon={<Megaphone className="h-5 w-5" />}
+      intro={WEBSITE_MESSAGES_RULES.reaches}
+      describe={websiteMessagesSummary}
+      dirty={dirty}
+      problem={parsed.problem}
+      busy={s.save.isPending || s.putBack.isPending}
+      onSave={() => parsed.value && s.save.mutate(parsed.value, { onSuccess: draft.reset })}
+      onPutBack={() => s.save.mutate(card.defaultValue, { onSuccess: draft.reset })}
+      footer={
+        <p className={cn(exampleClass, 'mt-4')} aria-live="polite">
+          <span className="font-semibold">For example: </span>
+          {minimumExample(typedMinimum)}
+        </p>
+      }
+    >
+      <section>
+        <h3 className="text-sm font-semibold">While the website is closed</h3>
+        <p className="mb-2 text-xs text-stone-500">{WEBSITE_MESSAGES_RULES.notice}</p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_12rem]">
+          <div>
+            <label className={labelClass} htmlFor="web-closed-notice">
+              Closed notice
+            </label>
+            <input
+              id="web-closed-notice"
+              value={f.noticeText}
+              maxLength={CLOSED_NOTICE_MAX}
+              placeholder="Empty: the website’s own words"
+              onChange={(e) => set({ noticeText: e.target.value })}
+              className={inputClass}
+            />
+            <p className="mt-1 text-xs text-stone-500">
+              {f.noticeText.length} / {CLOSED_NOTICE_MAX}
+            </p>
+          </div>
+          <div>
+            <label className={labelClass} htmlFor="web-closed-until">
+              Last day (optional)
+            </label>
+            <input
+              id="web-closed-until"
+              type="date"
+              value={f.noticeUntil}
+              min={today}
+              disabled={f.noticeText.trim() === ''}
+              onChange={(e) => set({ noticeUntil: e.target.value })}
+              className={inputClass}
+            />
+          </div>
+        </div>
+        <p className="mt-1 text-xs text-stone-500">{WEBSITE_MESSAGES_RULES.noticeUntil}</p>
+        <p className="mt-1 text-xs font-medium text-stone-600 dark:text-stone-300">
+          {closedNoticeStatus(
+            { text: f.noticeText.trim(), until: f.noticeText.trim() === '' || f.noticeUntil === '' ? null : f.noticeUntil },
+            Date.now(),
+          )}
+        </p>
+      </section>
+
+      <section>
+        <h3 className="text-sm font-semibold">Announcement</h3>
+        <p className="mb-2 text-xs text-stone-500">{WEBSITE_MESSAGES_RULES.announcement}</p>
+        <label className="mb-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={f.announcementOn} onChange={(e) => set({ announcementOn: e.target.checked })} />
+          {f.announcementOn ? 'On the website' : 'Off (nothing shows)'}
+        </label>
+        <label className={labelClass} htmlFor="web-announcement">
+          Announcement
+        </label>
+        <input
+          id="web-announcement"
+          value={f.announcementText}
+          maxLength={ANNOUNCEMENT_MAX}
+          placeholder="For example: New — a made-up pizza this week"
+          onChange={(e) => set({ announcementText: e.target.value })}
+          className={inputClass}
+        />
+        <p className="mt-1 text-xs text-stone-500">
+          {f.announcementText.length} / {ANNOUNCEMENT_MAX}
+        </p>
+      </section>
+
+      <section>
+        <h3 className="text-sm font-semibold">Smallest website delivery order</h3>
+        <p className="mb-2 text-xs text-stone-500">{WEBSITE_MESSAGES_RULES.minimum}</p>
+        <label className={labelClass} htmlFor="web-min-order">
+          Rs (empty = no smallest order)
+        </label>
+        <input
+          id="web-min-order"
+          inputMode="numeric"
+          value={f.minimum}
+          placeholder="No smallest order"
+          onChange={(e) => set({ minimum: e.target.value })}
+          className={cn(inputClass, 'max-w-[12rem] font-mono')}
+        />
+      </section>
     </SettingCard>
   );
 }

@@ -35,6 +35,7 @@
 import { WASTE_REASONS, WASTE_REASON_DEFAULT_LABEL, type WasteReasonId } from './inventory.js';
 import { DELIVERY_ZONES, type DeliveryZoneSetting } from './delivery-areas.js';
 import { PICKUP_DISCOUNT_PERCENT } from './web-bridge.js';
+import { NO_ANNOUNCEMENT, NO_CLOSED_NOTICE, type ClosedNotice, type WebsiteAnnouncement } from './website-messages.js';
 
 /**
  * The keys the Settings cards read (settings:getBusiness). Every one but
@@ -611,7 +612,14 @@ export interface WebsitePickup {
   percent: number;
 }
 
-/** How the till works with the website ('online.options', Settings → Online orders). */
+/**
+ * How the till works with the website ('online.options', Settings → Online
+ * orders). Format 1 (v0.7.29) had only `autoPublishMenu`; format 2 (v0.7.30,
+ * sweep B1) adds the website's messages and its delivery minimum, which
+ * travel in the settings block (web-bridge.ts, WEBSITE MESSAGES). A format-1
+ * value reads with those at their defaults (= today's website); an older
+ * till shows a format-2 value read-only.
+ */
 export interface OnlineOptions {
   v: number;
   /**
@@ -621,6 +629,16 @@ export interface OnlineOptions {
    * sends the menu with the settings either way.
    */
   autoPublishMenu: boolean;
+  /** The owner's words while the website is closed, until a day or with no end; text '' = the website's own (today). */
+  closedNotice: ClosedNotice;
+  /** A line on the website's home and menu pages while on (off = none: today). */
+  announcement: WebsiteAnnouncement;
+  /**
+   * The smallest WEBSITE DELIVERY order's food, before tax and the delivery
+   * charge (paisa, whole rupees, Rs 0–5,000); 0 = no minimum (today). Pick-up
+   * is never refused; orders rung up at the till are never checked.
+   */
+  minDeliveryOrderCents: number;
 }
 
 /** The most off a website pick-up can be (a whole %, 0–50). */
@@ -661,7 +679,8 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'orders.reasons': 1,
   'discounts.websitePickup': 1,
   'delivery.zones': 1,
-  'online.options': 1,
+  // 2 since v0.7.30: the website's messages and delivery minimum (a format-1 value reads them at their defaults).
+  'online.options': 2,
 });
 
 /** foodpanda's commission until the owner confirms his own (costing spec 4.7): shown as "suggested". */
@@ -852,11 +871,20 @@ export const DEFAULT_DELIVERY_ZONES: Readonly<DeliveryZones> = Object.freeze({
   ) as DeliveryZoneSetting[],
 }) as Readonly<DeliveryZones>;
 
-/** Today: the menu goes to the website only after an import or "Publish menu" (the owner has not asked for more). */
+/**
+ * Today: the menu goes to the website only after an import or "Publish menu"
+ * (the owner has not asked for more); no closed notice, no announcement, no
+ * smallest delivery order — the website exactly as before. Format 2 (v0.7.30)
+ * only added the three at today's values: format 1's `autoPublishMenu: false`
+ * is unchanged.
+ */
 export const DEFAULT_ONLINE_OPTIONS: Readonly<OnlineOptions> = Object.freeze({
-  v: 1,
+  v: 2,
   autoPublishMenu: false,
-});
+  closedNotice: NO_CLOSED_NOTICE as ClosedNotice,
+  announcement: NO_ANNOUNCEMENT as WebsiteAnnouncement,
+  minDeliveryOrderCents: 0,
+}) as Readonly<OnlineOptions>;
 
 export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<ShopSettingValues[K]> } = Object.freeze({
   'foodpanda.deal': DEFAULT_FOODPANDA_DEAL,

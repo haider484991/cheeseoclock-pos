@@ -17,6 +17,7 @@ import type {
   Combo,
   TaxCategory,
   PrepStation,
+  WebAvailability,
 } from './menu.js';
 import type {
   Order,
@@ -163,7 +164,7 @@ import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
 import type { CostedRecipeCalc, RecipeCalc, RecipeCalcRequest, TypicalPicksView } from './recipe-calc.js';
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
-import type { SettingsPublishStatus, WebOrdersShiftPause } from './web-bridge.js';
+import type { PublishMenuSummary, SettingsPublishStatus, WebOrdersShiftPause } from './web-bridge.js';
 import type {
   ReportVariance,
   StockCountDetail,
@@ -301,7 +302,8 @@ export interface IpcContract {
     response: ApiResult<Category[]>;
   };
   'menu:createCategory': {
-    request: { name: string; displayOrder: number; colorHex: string };
+    /** isOnWebsite: absent = on the website (the default). */
+    request: { name: string; displayOrder: number; colorHex: string; isOnWebsite?: boolean };
     response: ApiResult<Category>;
   };
   'menu:updateCategory': {
@@ -311,6 +313,8 @@ export interface IpcContract {
       displayOrder?: number;
       colorHex?: string;
       isActive?: boolean;
+      /** On the website (Category.isOnWebsite); absent = unchanged. */
+      isOnWebsite?: boolean;
     };
     response: ApiResult<Category>;
   };
@@ -340,6 +344,8 @@ export interface IpcContract {
       prepStation?: PrepStation;
       taxCategoryId: string;
       sortOrder?: number;
+      /** Where it sells on the website; absent = 'on' (the default). */
+      webAvailability?: WebAvailability;
     };
     response: ApiResult<MenuItem>;
   };
@@ -357,6 +363,8 @@ export interface IpcContract {
       prepStation?: PrepStation;
       taxCategoryId?: string;
       sortOrder?: number;
+      /** Where it sells on the website; absent = unchanged. A delivery charge is always 'on'. */
+      webAvailability?: WebAvailability;
     };
     response: ApiResult<MenuItem>;
   };
@@ -926,10 +934,10 @@ export interface IpcContract {
     request: { siteUrl: string; bridgeSecret: string; id: string };
     response: ApiResult<{ staged: boolean }>;
   };
-  /** Serialize the active menu and PUT it to the website. */
+  /** Serialize the active menu and PUT it to the website (with the photos it had to leave out). */
   'webBridge:publishMenu': {
     request: undefined;
-    response: ApiResult<{ categories: number; items: number }>;
+    response: ApiResult<PublishMenuSummary>;
   };
   'webBridge:pollNow': {
     request: undefined;

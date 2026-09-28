@@ -179,6 +179,13 @@ export interface MenuImportFreshStart {
   ingredients: number;
   /** Unpaid orders still in progress — a fresh start waits until there are none. */
   openOrders: number;
+  /**
+   * Items set "Pick-up only" or "Not on the website", and categories off the
+   * website, that the fresh start removes: what the file brings back is on
+   * the website again (the file carries no website setting) — set them again
+   * in Menu before the next publish.
+   */
+  websiteSettingsLost: number;
 }
 
 export interface MenuImportPreview {

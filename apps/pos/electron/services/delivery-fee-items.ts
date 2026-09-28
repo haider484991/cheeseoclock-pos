@@ -60,11 +60,19 @@ function chargedIds(db: AppDatabase): Set<string> {
   return chargedFeeItemIds(readDeliveryZones(db), items);
 }
 
+/**
+ * A delivery charge is always on the website, whatever its website setting
+ * (the publish keeps it: the website adds it to the bill), so Menu can't set
+ * one to pick-up only or off the website.
+ */
+export const FEE_ITEM_ALWAYS_ON_WEBSITE =
+  'A delivery charge is always on the website (the website adds it to the bill): it can’t be pick-up only or off the website.';
+
 /** Why Menu can't make this change to an item, or null. A field sent unchanged is fine (the item dialog sends them all). */
 export function menuItemEditProblem(
   db: AppDatabase,
   id: string,
-  patch: { name?: string; basePriceCents?: number; isActive?: boolean; categoryId?: string },
+  patch: { name?: string; basePriceCents?: number; isActive?: boolean; categoryId?: string; webAvailability?: string },
 ): string | null {
   const it = itemNow(db, id);
   if (!it) return null;
@@ -73,6 +81,7 @@ export function menuItemEditProblem(
       ? FEE_NAME_TAKEN
       : null;
   }
+  if (patch.webAvailability !== undefined && patch.webAvailability !== 'on') return FEE_ITEM_ALWAYS_ON_WEBSITE;
   // Its name and price make it a charge (the area's fee, the website's check): Settings' alone.
   const feeChanges =
     (patch.name !== undefined && patch.name !== it.name) ||

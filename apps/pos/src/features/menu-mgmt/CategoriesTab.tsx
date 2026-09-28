@@ -10,8 +10,9 @@ import {
   type Category,
 } from '@cheeseoclock/shared-types';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
-import { Plus, Edit, Trash2, X } from 'lucide-react';
+import { Plus, Edit, Trash2, X, Globe } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { WEBSITE_CHANGE_NOTE } from '../settings/shop-rules/publishWords';
 
 const PALETTE = [
   '#dc2626', '#f59e0b', '#16a34a', '#2563eb',
@@ -81,6 +82,7 @@ export function CategoriesTab() {
             <th className="pb-2 text-right">Items</th>
             <th className="pb-2 text-right">Order</th>
             <th className="pb-2">Status</th>
+            <th className="pb-2">Website</th>
             <th className="pb-2">
               <span className="sr-only">Actions</span>
             </th>
@@ -110,6 +112,17 @@ export function CategoriesTab() {
                 ) : (
                   <span className="rounded bg-stone-200 px-2 py-0.5 text-xs text-stone-600 dark:bg-stone-700 dark:text-stone-300">
                     Inactive
+                  </span>
+                )}
+              </td>
+              <td className="py-2">
+                {c.isOnWebsite ? (
+                  <span className="inline-flex items-center gap-1 rounded bg-sky-50 px-2 py-0.5 text-xs text-sky-800 dark:bg-sky-950 dark:text-sky-200">
+                    <Globe className="h-3 w-3" aria-hidden="true" /> On the website
+                  </span>
+                ) : (
+                  <span className="rounded bg-stone-200 px-2 py-0.5 text-xs text-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                    Not on the website
                   </span>
                 )}
               </td>
@@ -146,7 +159,7 @@ export function CategoriesTab() {
           ))}
           {(!q.data || q.data.length === 0) && (
             <tr>
-              <td colSpan={6} className="py-6 text-center text-stone-500">
+              <td colSpan={7} className="py-6 text-center text-stone-500">
                 No categories yet. Click "Add category" to get started.
               </td>
             </tr>
@@ -182,12 +195,21 @@ function CategoryDialog({
   const [displayOrder, setDisplayOrder] = useState(existing?.displayOrder ?? 0);
   const [colorHex, setColorHex] = useState(existing?.colorHex ?? PALETTE[1]!);
   const [isActive, setIsActive] = useState(existing?.isActive ?? true);
+  const [isOnWebsite, setIsOnWebsite] = useState(existing?.isOnWebsite ?? true);
 
   const mut = useMutation({
     mutationFn: () =>
       existing
-        ? ipc.menu.updateCategory({ id: existing.id, name, displayOrder, colorHex, isActive })
-        : ipc.menu.createCategory({ name, displayOrder, colorHex }),
+        ? ipc.menu.updateCategory({
+            id: existing.id,
+            name,
+            displayOrder,
+            colorHex,
+            isActive,
+            // Sent only when changed: a rename leaves the website setting as it is.
+            ...(isOnWebsite !== existing.isOnWebsite ? { isOnWebsite } : {}),
+          })
+        : ipc.menu.createCategory({ name, displayOrder, colorHex, isOnWebsite }),
     onSuccess: () => {
       toast({ title: existing ? 'Category updated' : 'Category created', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['menu'] });
@@ -254,6 +276,17 @@ function CategoryDialog({
                   {holdsDeliveryCharges && <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">{FEE_ITEM_LOCKED_NOTE}</p>}
                 </div>
               )}
+            </div>
+            <div>
+              <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">On the website</label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={isOnWebsite} onChange={(e) => setIsOnWebsite(e.target.checked)} />
+                {isOnWebsite ? 'On the website' : 'Not on the website (the till still sells its items)'}
+              </label>
+              <p className="mt-1 text-xs text-stone-500">
+                Off: none of its items are on the website{holdsDeliveryCharges ? ' — the delivery charges in it still go (the website adds them to the bill)' : ''}. Each item can also be set on its own (Items → the item).{' '}
+                {WEBSITE_CHANGE_NOTE}
+              </p>
             </div>
             <div>
               <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Color</label>

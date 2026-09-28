@@ -1,7 +1,13 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireSettingsManage } from '../guards.js';
-import { ok, type AnyShopSettingCard, type ShopSettingCard, type ShopSettingKey } from '@cheeseoclock/shared-types';
+import {
+  ok,
+  PUBLISHED_SETTING_KEYS,
+  type AnyShopSettingCard,
+  type ShopSettingCard,
+  type ShopSettingKey,
+} from '@cheeseoclock/shared-types';
 import {
   getShopSettingInputSchema,
   getTillSettingInputSchema,
@@ -38,9 +44,10 @@ import type { AppDatabase } from '../../db/connection.js';
  *  - checkout:getRules: any signed-in login; the deal's % and label and
  *    what Pay asks, the areas and fees, never the commission, fees or costs.
  *
- * A Save the website needs (the areas, the pick-up offer) tells the web
- * bridge, which sends the newer settings block ALONE, with only its areas'
- * charge items (never the till's unpublished menu changes).
+ * A Save the website needs (the areas, the pick-up offer, the website's
+ * messages and minimum) tells the web bridge, which sends the newer settings
+ * block ALONE, with only its areas' charge items (never the till's
+ * unpublished menu changes).
  */
 export function registerSettingsHandlers(ctx: HandlerContext): void {
   defineHandler('settings:getBusiness', ctx, (_ctx, payload) => {
@@ -126,8 +133,13 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
   });
 }
 
-/** The keys the website's settings block carries: a Save of one sends the newer block alone. */
-const WEBSITE_KEYS: ReadonlySet<ShopSettingKey> = new Set<ShopSettingKey>(['discounts.websitePickup', 'delivery.zones']);
+/**
+ * The keys the website's settings block carries (shared-types
+ * PUBLISHED_SETTING_KEYS: the areas, the pick-up offer and — since v0.7.30 —
+ * 'online.options', the website's messages and minimum): a Save of one sends
+ * the newer block alone.
+ */
+const WEBSITE_KEYS: ReadonlySet<ShopSettingKey> = new Set<ShopSettingKey>(PUBLISHED_SETTING_KEYS);
 
 function card(db: AppDatabase, key: ShopSettingKey): AnyShopSettingCard {
   return getShopSettingCard(db, key, readTillLink(db)) as AnyShopSettingCard;

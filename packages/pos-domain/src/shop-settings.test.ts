@@ -151,8 +151,17 @@ describe('the released defaults are pinned', () => {
     expect(PICKUP_DISCOUNT_PERCENT).toBe(10);
   });
 
-  it('online.options: the menu goes to the website only when asked (today)', () => {
-    expect(DEFAULT_ONLINE_OPTIONS).toEqual({ v: 1, autoPublishMenu: false });
+  it('online.options: the menu goes to the website only when asked; no closed notice, no announcement, no smallest delivery order (today) — format 2 only added those three', () => {
+    expect(DEFAULT_ONLINE_OPTIONS).toEqual({
+      v: 2,
+      autoPublishMenu: false,
+      closedNotice: { text: '', until: null },
+      announcement: { on: false, text: '' },
+      minDeliveryOrderCents: 0,
+    });
+    expect(SHOP_SETTING_FORMAT['online.options']).toBe(2);
+    expect(Object.isFrozen(DEFAULT_ONLINE_OPTIONS.closedNotice)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_ONLINE_OPTIONS.announcement)).toBe(true);
   });
 
   it('delivery.zones: today’s 21 areas and fees exactly (DHA Phase 8 at Rs 250), all on, no fee item named yet', () => {

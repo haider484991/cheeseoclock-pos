@@ -23,10 +23,12 @@ import {
   deliveryChargeItemName,
   isDeliveryChargeName,
   zoneFeeItem,
+  type ClosedNotice,
   type DeliveryZoneSetting,
   type OrderMode,
   type PublishedSettings,
   type SettingsStamp,
+  type WebsiteAnnouncement,
 } from '@cheeseoclock/shared-types';
 import type { DeliveryAreas } from './delivery-areas.js';
 import { formatCents } from './money.js';
@@ -528,8 +530,12 @@ export function websiteNeedsSettings(
  * too) in display order, each ACTIVE one with a fee naming the item of
  * `menuItems` that carries it (its feeItemId when that item is there at
  * the fee, else today's by name and price); the pick-up offer; the stamp
- * (settingsStampOf) and the sending till. The caller checks it against the
- * same menu (settingsBlockProblem) before sending.
+ * (settingsStampOf) and the sending till; and — from a till of v0.7.30 on,
+ * always, at their defaults too (shared-types web-bridge.ts, WEBSITE
+ * MESSAGES) — the website's messages and delivery minimum. Without
+ * `website` the block is exactly a v0.7.29 till's (the website keeps what
+ * it stored for them). The caller checks it against the same menu
+ * (settingsBlockProblem) before sending.
  */
 export function buildSettingsBlock(input: {
   zones: readonly DeliveryZoneSetting[];
@@ -538,8 +544,21 @@ export function buildSettingsBlock(input: {
   menuItems: ReadonlyArray<{ id: string; name: string; basePriceCents: number }>;
   /** The till sending it. */
   deviceId: string;
+  /** The website's messages and delivery minimum ('online.options'): absent = a v0.7.29-shaped block. */
+  website?: {
+    closedNotice: ClosedNotice;
+    announcement: WebsiteAnnouncement;
+    minDeliveryOrderCents: number;
+  };
 }): PublishedSettings {
   const stamp = settingsStampOf(input.stamps);
+  const website = input.website
+    ? {
+        closedNotice: { text: input.website.closedNotice.text, until: input.website.closedNotice.until },
+        announcement: { on: input.website.announcement.on, text: input.website.announcement.text },
+        minDeliveryOrderCents: input.website.minDeliveryOrderCents,
+      }
+    : {};
   return {
     v: 1,
     settingsAt: stamp.settingsAt,
@@ -561,5 +580,6 @@ export function buildSettingsBlock(input: {
         aliases: [...z.aliases],
       };
     }),
+    ...website,
   };
 }

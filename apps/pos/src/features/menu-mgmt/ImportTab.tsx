@@ -36,6 +36,15 @@ function Badge({ action }: { action: MenuImportAction }) {
   );
 }
 
+/**
+ * A fresh start removes the items the owner set "Pick-up only" or "Not on
+ * the website" (and categories off the website); what the file brings back
+ * is on the website again — the file carries no website setting.
+ */
+export function freshStartWebsiteWords(n: number): string {
+  return `${n} item${n === 1 ? ' or category is' : 's or categories are'} set pick-up only or off the website: what the file brings back is ON the website again. Set ${n === 1 ? 'it' : 'them'} again in Menu before the next publish.`;
+}
+
 /** "Kept on the till: price Rs 1,200 (the file says Rs 1,300)" — what the owner's import rules kept (Settings → Kitchen & stock). */
 function Kept({ notes }: { notes: string[] | undefined }) {
   if (!notes || notes.length === 0) return null;
@@ -259,6 +268,12 @@ export function ImportTab() {
                 Delivery areas) stay. A backup is saved first
                 (Settings → Backups), so the old menu can be restored.
               </p>
+              {preview.fresh.websiteSettingsLost > 0 && (
+                <p className="mt-2 flex items-center gap-2 text-sm text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="h-4 w-4 flex-none" />
+                  {freshStartWebsiteWords(preview.fresh.websiteSettingsLost)}
+                </p>
+              )}
               {preview.fresh.openOrders > 0 && (
                 <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-400">
                   <AlertTriangle className="h-4 w-4 flex-none" />

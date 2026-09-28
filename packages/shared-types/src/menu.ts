@@ -3,12 +3,41 @@ import type { UUID } from './ids.js';
 
 export type PrepStation = 'kitchen' | 'bar' | 'cold';
 
+/**
+ * Where an item sells on the website (Menu → the item → "On the website",
+ * migration 0045 menu_items.web_availability; sweep B5 + M2):
+ *  - 'on' (every item until the owner changes it — today): on the website
+ *    for delivery and pick-up;
+ *  - 'pickup_only': on the website, pick-up only (the website refuses it on
+ *    a delivery, on its server); published with `pickupOnly: true`;
+ *  - 'off': not on the website at all (left out of the publish; the till
+ *    still sells it).
+ * The till always sells the item as before. A delivery charge is always on
+ * the website whatever this says (the website adds it to the bill).
+ */
+export const WEB_AVAILABILITIES = ['on', 'pickup_only', 'off'] as const;
+export type WebAvailability = (typeof WEB_AVAILABILITIES)[number];
+
+/**
+ * A stored value as this version uses it: one it does not know (a newer
+ * till's) reads as 'on' — the item as it was before the setting existed.
+ */
+export function webAvailabilityOf(raw: unknown): WebAvailability {
+  return (WEB_AVAILABILITIES as readonly unknown[]).includes(raw) ? (raw as WebAvailability) : 'on';
+}
+
 export interface Category {
   id: UUID;
   name: string;
   displayOrder: number;
   colorHex: string;
   isActive: boolean;
+  /**
+   * On the website (migration 0045 categories.is_on_website; true for every
+   * category until the owner switches one off): off = none of its items are
+   * published — the till still sells them. Delivery charges in it still go.
+   */
+  isOnWebsite: boolean;
 }
 
 export interface MenuItem {
@@ -26,6 +55,8 @@ export interface MenuItem {
   sortOrder: number;
   currentStock: number | null;
   lowStockThreshold: number | null;
+  /** Where it sells on the website ('on' until the owner changes it; see WEB_AVAILABILITIES). */
+  webAvailability: WebAvailability;
 }
 
 export type ModifierSelectionType = 'single' | 'multi';

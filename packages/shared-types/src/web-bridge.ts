@@ -15,6 +15,8 @@
  * All money in cents, all rates in basis points — same discipline as the POS.
  */
 
+import type { ClosedNotice, WebsiteAnnouncement } from './website-messages.js';
+
 export interface PublishedMenuItem {
   /** POS menu_items.id — the bridge uses this to add real order items. */
   posItemId: string;
@@ -26,6 +28,36 @@ export interface PublishedMenuItem {
   imageUrl: string | null;
   sortOrder: number;
   modifierGroups: PublishedModifierGroup[];
+  /**
+   * Set to "Pick-up only" on the till (Menu → the item → On the website:
+   * MenuItem.webAvailability 'pickup_only'). Sent ONLY as `true`; absent on
+   * every other item, so a menu at the defaults is byte-for-byte the menu an
+   * older till sends. See "SELLING ON THE WEBSITE" below.
+   */
+  pickupOnly?: boolean;
+}
+
+/**
+ * The longest item photo the publish carries (data-URL characters, not
+ * bytes — about 300 KB): a bigger one is left out (the item goes with no
+ * photo) so a handful of old photos can't blow past the website host's
+ * request-size limit. The till says which (Menu editor, publish result).
+ */
+export const PUBLISHED_IMAGE_MAX_CHARS = 300_000;
+
+/** An item whose photo the publish left out (over PUBLISHED_IMAGE_MAX_CHARS). */
+export interface PhotoLeftOut {
+  /** The till's menu_items.id. */
+  id: string;
+  name: string;
+}
+
+/** What the till's "Publish menu" answers (webBridge:publishMenu). */
+export interface PublishMenuSummary {
+  categories: number;
+  items: number;
+  /** Items published WITHOUT their photo (too big for the website), in menu order; [] when none. */
+  photosLeftOut: PhotoLeftOut[];
 }
 
 export interface PublishedModifierGroup {
@@ -200,6 +232,87 @@ export interface PublishedMenu {
 //
 // WITHOUT A BLOCK the website is exactly as today (the compiled
 // DELIVERY_ZONES, FEE_SUMMARY, the heartbeat's %).
+//
+// ---------------------------------------------------------------------------
+// v0.7.30 — WEBSITE MESSAGES (sweep B1) and SELLING ON THE WEBSITE (B5 + M2).
+// The contract between the till (builder A) and the website (builder B).
+// ---------------------------------------------------------------------------
+//
+// DEPLOY ORDER. The website goes first (a push to main deploys it), the tills
+// follow within hours. So the website must behave EXACTLY as today until a
+// till sends the new fields, and keep working when a v0.7.29 till publishes
+// (its block has none of them; its items never carry `pickupOnly`).
+//
+// WEBSITE MESSAGES. The block (PublishedSettings, still `v: 1`) gains three
+// OPTIONAL fields, flat on the block (types and pure helpers:
+// shared-types website-messages.ts; bounds: publishedSettingsSchema):
+//   closedNotice?: { text, until }  text: one line, <= CLOSED_NOTICE_MAX (160)
+//       letters, no WEBSITE_TEXT_FORBIDDEN_RE characters; '' = no notice.
+//       until: 'YYYY-MM-DD', the LAST Karachi calendar day it shows (whole
+//       day included), or null = no end (every night the website is closed).
+//   announcement?: { on, text }     text <= ANNOUNCEMENT_MAX (120), same rule.
+//   minDeliveryOrderCents?: number  paisa, whole rupees, 0..500_000
+//       (MIN_DELIVERY_ORDER_MAX_CENTS); 0 = no minimum.
+// A till of this version ALWAYS sends all three, at their defaults too
+// ('' / null, off, 0): a field sent at its default CLEARS it on the website.
+// A block WITHOUT a field (a v0.7.29 till) means "no word about it": the
+// website KEEPS the value it stored for that field (field by field — the
+// stored block's key survives when the incoming block lacks it), exactly as
+// it keeps the stored block when a publish carries none. Nothing stored for
+// a field = its default = today's website.
+// What the website does with them (the defaults change nothing):
+//   - closedNoticeInForce(block.closedNotice, now) → the owner's words, or
+//     null. While the shop is closed and it is not null, the words REPLACE
+//     the explanation sentence of the closed banner (/menu) and of the long
+//     closed note at checkout, and the `store_closed` refusal sentence (POST
+//     /api/orders; the checkout shows the server's message). The short
+//     labels ("Closed", "View order · closed"…) and the WhatsApp and call
+//     buttons stay as they are. Worked out on the SERVER per request (the
+//     order route; /menu is dynamic and passes the resolved words down):
+//     never on a statically built (ISR) page — `until` must end on time.
+//   - announcementInForce(block.announcement) → the words while on, else
+//     null: the home page's hero/marquee and the /menu header show them;
+//     React text only — never in <title>, meta, JSON-LD or
+//     dangerouslySetInnerHTML. Off: every page byte-for-byte as today.
+//   - minDeliveryOrderCents > 0: a website DELIVERY whose food (each line's
+//     unit price with its choices × quantity, BEFORE tax, the delivery
+//     charge and any discount) is under it is refused ON THE SERVER, after
+//     pricing: 409 { ok:false, error:'below_minimum', message } with a plain
+//     sentence built with formatCents (deliveryMinimumShortfallCents says by
+//     how much). A pick-up is NEVER refused; the checkout shows "add Rs N
+//     more" and blocks. The till's import of a web order never checks it,
+//     and orders rung up at the till are not checked. The FAQ "No minimum on
+//     the website" line is built from it (0 = today's words).
+// The stamp: 'online.options' joins PUBLISHED_SETTING_KEYS, so a Save of the
+// messages alone changes the stamp and is sent ALONE (PUT
+// /api/bridge/settings) like a Save of the areas — never the menu. Nothing
+// changes in the stamp rules; a v0.7.29 till's block (it does not count
+// 'online.options') mostly compares older and is 'ignored_older' once an
+// updated till has sent one, which is fine: the updated till carries its
+// area and pick-up Saves on through the link.
+//
+// SELLING ON THE WEBSITE. Per item (MenuItem.webAvailability: 'on' |
+// 'pickup_only' | 'off') and per category (Category.isOnWebsite), set in the
+// till's Menu editor by whoever may edit the menu (menu.manage):
+//   - 'off' items, and every item of a category that is off the website, are
+//     NOT PUBLISHED (not in PUT /api/bridge/menu, not in feeItems). A web
+//     order for one is refused as today's `item_not_on_menu`; the website
+//     needs nothing new for them.
+//   - 'pickup_only' items are published with `pickupOnly: true`
+//     (PublishedMenuItem); the key is absent on every other item. The
+//     website reads an item as pick-up only when `pickupOnly === true` OR
+//     its description says "pick-up only" (today's rule, kept as the
+//     fallback), shows it so, and refuses a DELIVERY with it on the SERVER
+//     (today's `not_deliverable`); pick-up passes. Its item schema must
+//     accept `pickupOnly: boolean` (optional) — today's strips it, which is
+//     why the website deploys first.
+//   - Delivery-charge items (an area's feeItemId, or named "Delivery
+//     Charge…") are ALWAYS published, whatever their item's or category's
+//     website setting — the block's fee check needs them; the website keeps
+//     leaving them off its menu pages as today.
+//   - Nothing else in the item changes; with every item 'on' and every
+//     category on (the defaults after migration 0045) the published menu is
+//     byte-for-byte today's.
 
 /** The stamp of a block made from defaults only (no key saved on the till). */
 export const DEFAULT_SETTINGS_AT = '1970-01-01T00:00:00.000Z';
@@ -207,8 +320,12 @@ export const DEFAULT_SETTINGS_AT = '1970-01-01T00:00:00.000Z';
 /** The website refuses a block stamped further than this ahead of its own clock. */
 export const SETTINGS_MAX_CLOCK_AHEAD_MS = 10 * 60_000;
 
-/** The shop settings a block carries (their row versions and times make its stamp). */
-export const PUBLISHED_SETTING_KEYS = ['delivery.zones', 'discounts.websitePickup'] as const;
+/**
+ * The shop settings a block carries (their row versions and times make its
+ * stamp). 'online.options' since v0.7.30: its website messages and delivery
+ * minimum travel in the block (a Save of them alone changes the stamp).
+ */
+export const PUBLISHED_SETTING_KEYS = ['delivery.zones', 'discounts.websitePickup', 'online.options'] as const;
 
 /** One delivery area in the settings block. */
 export interface PublishedZone {
@@ -253,6 +370,16 @@ export interface PublishedSettings {
   pickup: PublishedPickup;
   /** Every area, in display order. */
   zones: PublishedZone[];
+  /**
+   * WEBSITE MESSAGES (v0.7.30; absent from a v0.7.29 till's block = keep
+   * what the website stored). The owner's words while the website is
+   * closed; text '' = none.
+   */
+  closedNotice?: ClosedNotice;
+  /** The announcement (off = none). */
+  announcement?: WebsiteAnnouncement;
+  /** The smallest website DELIVERY order's food, paisa (0 = no minimum). */
+  minDeliveryOrderCents?: number;
 }
 
 /**

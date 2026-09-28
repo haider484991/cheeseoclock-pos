@@ -1,6 +1,6 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, err, hasCapability } from '@cheeseoclock/shared-types';
+import { ok, err, hasCapability, WEB_AVAILABILITIES } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
@@ -58,6 +58,26 @@ function refuseIf(problem: string | null): void {
 }
 
 /**
+ * The website fields a Menu save may carry (migration 0045): an item's
+ * webAvailability ('on' | 'pickup_only' | 'off') and a category's
+ * isOnWebsite (yes / no). Absent = unchanged (the default on a new row).
+ * Anything else is refused before a row is touched.
+ */
+function checkWebsiteFields(payload: { webAvailability?: unknown; isOnWebsite?: unknown }): void {
+  const w = payload.webAvailability;
+  if (w !== undefined && !(WEB_AVAILABILITIES as readonly unknown[]).includes(w)) {
+    throw new IpcGuardError({
+      code: 'validation_failed',
+      message: 'Say where it sells on the website: on the website, pick-up only, or not on the website',
+    });
+  }
+  const c = payload.isOnWebsite;
+  if (c !== undefined && typeof c !== 'boolean') {
+    throw new IpcGuardError({ code: 'validation_failed', message: 'Say whether the category is on the website: yes or no' });
+  }
+}
+
+/**
  * The menu changed on this till: with "Publish the menu to the website by
  * itself" on (Settings → Online orders), the bridge sends it a moment later
  * (debounced). Off — the default — nothing happens, as before.
@@ -89,15 +109,21 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
 
   defineHandler('menu:createCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
+    checkWebsiteFields(payload);
     // Never a caller's id: name-based ids are Settings → Delivery areas' own.
-    const { name, displayOrder, colorHex } = payload;
-    const out = createCategory(ctx.db, { name, displayOrder, colorHex }, { userId: s.id, deviceId: ctx.deviceId });
+    const { name, displayOrder, colorHex, isOnWebsite } = payload;
+    const out = createCategory(
+      ctx.db,
+      { name, displayOrder, colorHex, ...(isOnWebsite !== undefined ? { isOnWebsite } : {}) },
+      { userId: s.id, deviceId: ctx.deviceId },
+    );
     menuChanged();
     return ok(out);
   });
 
   defineHandler('menu:updateCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
+    checkWebsiteFields(payload);
     refuseIf(categoryEditProblem(ctx.db, payload.id, { isActive: payload.isActive }));
     const out = updateCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
     menuChanged();
@@ -125,6 +151,7 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
 
   defineHandler('menu:createItem', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
+    checkWebsiteFields(payload);
     refuseIf(menuItemNameProblem(payload.name));
     // Never a caller's id: name-based ids are Settings → Delivery areas' own.
     const { id: _id, ...input } = payload as typeof payload & { id?: unknown };
@@ -135,6 +162,7 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
 
   defineHandler('menu:updateItem', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
+    checkWebsiteFields(payload);
     refuseIf(menuItemEditProblem(ctx.db, payload.id, payload));
     const out = updateMenuItem(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
     menuChanged();

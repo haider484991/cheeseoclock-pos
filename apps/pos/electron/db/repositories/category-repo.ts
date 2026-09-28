@@ -9,6 +9,7 @@ interface Row {
   display_order: number;
   color_hex: string;
   is_active: number;
+  is_on_website: number;
   created_at: string;
   updated_at: string;
   synced_at: string | null;
@@ -24,6 +25,8 @@ function rowToCategory(row: Row): Category {
     displayOrder: row.display_order,
     colorHex: row.color_hex,
     isActive: toBool(row.is_active),
+    // 0 = off the website; anything else (1, a newer till's value) = on, as before 0045.
+    isOnWebsite: row.is_on_website !== 0,
   };
 }
 
@@ -33,7 +36,7 @@ export function listCategories(db: AppDatabase, opts?: { activeOnly?: boolean })
     : 'WHERE deleted_at IS NULL';
   const rows = db
     .prepare(
-      `SELECT id, name, display_order, color_hex, is_active,
+      `SELECT id, name, display_order, color_hex, is_active, is_on_website,
               created_at, updated_at, synced_at, deleted_at, device_id, version
          FROM categories ${where} ORDER BY display_order, name`,
     )
@@ -44,7 +47,7 @@ export function listCategories(db: AppDatabase, opts?: { activeOnly?: boolean })
 export function findCategory(db: AppDatabase, id: string): Category | null {
   const row = db
     .prepare(
-      `SELECT id, name, display_order, color_hex, is_active,
+      `SELECT id, name, display_order, color_hex, is_active, is_on_website,
               created_at, updated_at, synced_at, deleted_at, device_id, version
          FROM categories WHERE id = ? AND deleted_at IS NULL`,
     )
@@ -54,8 +57,11 @@ export function findCategory(db: AppDatabase, id: string): Category | null {
 
 export function createCategory(
   db: AppDatabase,
-  /** `id`: a name-based id both tills make as the same row (Settings → Delivery areas' "Delivery Charges"); else a new v7. */
-  input: { name: string; displayOrder: number; colorHex: string; id?: string },
+  /**
+   * `id`: a name-based id both tills make as the same row (Settings → Delivery areas' "Delivery Charges"); else a new v7.
+   * `isOnWebsite`: absent = on the website (the default).
+   */
+  input: { name: string; displayOrder: number; colorHex: string; id?: string; isOnWebsite?: boolean },
   actor: Actor,
 ): Category {
   const id = input.id ?? uuidv7();
@@ -66,6 +72,7 @@ export function createCategory(
     displayOrder: input.displayOrder,
     colorHex: input.colorHex,
     isActive: true,
+    isOnWebsite: input.isOnWebsite ?? true,
   };
   writeWithSync({
     db,
@@ -78,9 +85,9 @@ export function createCategory(
     after: cat,
     writeRow: () => {
       db.prepare(
-        `INSERT INTO categories (id, name, display_order, color_hex, is_active, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, 1, ?, ?, ?, 1)`,
-      ).run(id, input.name, input.displayOrder, input.colorHex, now, now, actor.deviceId);
+        `INSERT INTO categories (id, name, display_order, color_hex, is_active, is_on_website, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 1)`,
+      ).run(id, input.name, input.displayOrder, input.colorHex, fromBool(cat.isOnWebsite), now, now, actor.deviceId);
     },
   });
   return cat;
@@ -94,12 +101,14 @@ export function updateCategory(
     displayOrder?: number;
     colorHex?: string;
     isActive?: boolean;
+    /** On the website; absent = unchanged. */
+    isOnWebsite?: boolean;
   },
   actor: Actor,
 ): Category {
   const row = db
     .prepare(
-      `SELECT id, name, display_order, color_hex, is_active,
+      `SELECT id, name, display_order, color_hex, is_active, is_on_website,
               created_at, updated_at, synced_at, deleted_at, device_id, version
          FROM categories WHERE id = ? AND deleted_at IS NULL`,
     )
@@ -110,13 +119,17 @@ export function updateCategory(
   const displayOrder = input.displayOrder ?? row.display_order;
   const colorHex = input.colorHex ?? row.color_hex;
   const isActive = input.isActive ?? toBool(row.is_active);
+  const before = rowToCategory(row);
   const updated: Category = {
     id: row.id as Category['id'],
     name,
     displayOrder,
     colorHex,
     isActive,
+    isOnWebsite: input.isOnWebsite ?? before.isOnWebsite,
   };
+  // Written only when the caller sets it (a rename leaves the stored value — a newer till's too — as it is).
+  const setsWeb = input.isOnWebsite !== undefined;
   const now = nowIso();
 
   writeWithSync({
@@ -126,13 +139,13 @@ export function updateCategory(
     op: 'upsert',
     action: 'update',
     actor,
-    before: rowToCategory(row),
+    before,
     after: updated,
     writeRow: () => {
       db.prepare(
-        `UPDATE categories SET name = ?, display_order = ?, color_hex = ?, is_active = ?,
+        `UPDATE categories SET name = ?, display_order = ?, color_hex = ?, is_active = ?,${setsWeb ? ' is_on_website = ?,' : ''}
                                 updated_at = ?, version = version + 1 WHERE id = ?`,
-      ).run(name, displayOrder, colorHex, fromBool(isActive), now, input.id);
+      ).run(name, displayOrder, colorHex, fromBool(isActive), ...(setsWeb ? [fromBool(updated.isOnWebsite)] : []), now, input.id);
     },
   });
   return updated;

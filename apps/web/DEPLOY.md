@@ -143,6 +143,50 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   environments", a sandbox till publishing to a preview would replace the
   live menu and areas.
 
+## Website messages and selling on the website (from v0.7.30)
+
+- **What is new.** On the till the owner sets, in Settings → Online orders →
+  "Website messages & smallest delivery order": a closed notice (with a last
+  day, Karachi time, or none), an announcement, and the smallest website
+  DELIVERY order (Rs 0–5,000; pick-up is never refused, orders rung up at
+  the till are never checked). They travel in the settings block
+  (`closedNotice`, `announcement`, `minDeliveryOrderCents`: shared-types
+  `web-bridge.ts`, WEBSITE MESSAGES). In Menu, whoever may edit the menu
+  sets each item "On the website", "Pick-up only" or "Not on the website",
+  and each category on or off the website (migration 0045). Delivery
+  charges always go. No website schema change.
+- **Deploy the website first** (a push to `main` deploys it). Until a till
+  sends the new fields the website is exactly as before, and a v0.7.29
+  till's publish keeps working: its block has no message fields (the website
+  keeps the ones it stored) and its items never carry `pickupOnly`. An older
+  website drops both — tills first would show no messages and let a
+  pick-up-only item be ordered for delivery. Check it on a Vercel
+  **preview** first, with its own Neon branch and its own `BRIDGE_SECRET`
+  (see above).
+- **Update BOTH tills the same day.** Migration 0045 adds the two columns,
+  and the till link copies menu rows between the tills. A website setting
+  changed on an updated till reaches a v0.7.29 till without the column; when
+  that till updates later, 0045 sets it back to "on" and nothing sends it
+  again, so the tills disagree. And a v0.7.29 till's Publish (or its menu
+  file import, or "Publish the menu by itself") sends every item again —
+  hidden ones back on the website, no pick-up-only flags — until an updated
+  till publishes. **Change nothing under "On the website" (Menu) until both
+  tills show 0.7.30** (Settings → About → App version).
+- **After both tills are updated, the owner, once:** Settings → Online orders
+  → press Save on "Website messages & smallest delivery order" (even with
+  nothing typed — it sends the block from an updated till, alone, never the
+  menu), then press "Publish menu to website" once (the menu with its
+  website settings). The status line under the connection says "Delivery
+  areas, pick-up & website messages: website updated …".
+- A menu file import keeps each item's and category's website setting (a
+  new item comes in on the website). A **fresh start** removes the items and
+  categories and brings the file's back on the website: its preview says how
+  many settings that resets.
+- An item photo too big for the website (over about 300 KB) was left out
+  silently before; now the publish says which items went without a picture,
+  and the Menu editor warns on the item. Pick the photo again (the till
+  makes it smaller).
+
 ## Free-tier limits (plenty for launch)
 
 - Vercel Hobby: 100GB bandwidth/mo, serverless functions included

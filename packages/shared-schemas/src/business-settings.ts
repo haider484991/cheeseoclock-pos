@@ -1,5 +1,10 @@
 import { z } from 'zod';
+import { websiteLine } from './web-settings.js';
 import {
+  ANNOUNCEMENT_MAX,
+  CLOSED_NOTICE_MAX,
+  DEFAULT_ONLINE_OPTIONS,
+  MIN_DELIVERY_ORDER_MAX_CENTS,
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
   CAME_BY_CHOICES,
@@ -860,12 +865,52 @@ const websitePickupShape = {
 export const websitePickupSchema = z.object({ v: writesFormat('discounts.websitePickup'), ...websitePickupShape }).strict();
 const websitePickupReadSchema = z.object({ v: readsFormat, ...websitePickupShape });
 
+// 'online.options' format 2 (v0.7.30): the website's messages and delivery minimum joined
+// `autoPublishMenu`. Their words' rules are the settings block's own (web-settings.ts), so
+// what the till saves always passes the website's check.
+/** A website message as the till saves it: one line of plain words, no spaces at its ends. */
+const savedWebsiteLine = (max: number, what: string) =>
+  websiteLine(max, what).refine((t) => t.trim() === t, { message: `${what[0]!.toUpperCase()}${what.slice(1)} has no spaces at its start or end` });
+const closedNoticeFields = {
+  text: savedWebsiteLine(CLOSED_NOTICE_MAX, 'the closed notice'),
+  until: tradingDay.nullable(),
+};
+const announcementFields = {
+  on: z.boolean({ errorMap: () => ({ message: 'Say whether the announcement shows: yes or no' }) }),
+  text: savedWebsiteLine(ANNOUNCEMENT_MAX, 'the announcement'),
+};
+const announcementHasWords = (a: { on: boolean; text: string }) => !a.on || a.text !== '';
+const ANNOUNCEMENT_NEEDS_WORDS = { message: 'Type the announcement, or switch it off' };
+const minDeliveryOrder = wholeRupees(MIN_DELIVERY_ORDER_MAX_CENTS / 100, 'The smallest website delivery order');
 const onlineOptionsShape = {
   autoPublishMenu: z.boolean({ errorMap: () => ({ message: 'Say whether the menu goes to the website by itself: yes or no' }) }),
+  closedNotice: z.object(closedNoticeFields).strict(),
+  announcement: z.object(announcementFields).strict().refine(announcementHasWords, ANNOUNCEMENT_NEEDS_WORDS),
+  minDeliveryOrderCents: minDeliveryOrder,
 };
-/** 'online.options' as this version writes it. */
+/** 'online.options' as this version writes it (format 2: every field, nothing else). */
 export const onlineOptionsSchema = z.object({ v: writesFormat('online.options'), ...onlineOptionsShape }).strict();
-const onlineOptionsReadSchema = z.object({ v: readsFormat, ...onlineOptionsShape });
+/**
+ * Read: a format-1 value (v0.7.29: `autoPublishMenu` only) reads with the
+ * messages and the minimum at their defaults (today's website). A message
+ * that does not read (a newer till's changed shape) falls back to its
+ * default ALONE — never taking `autoPublishMenu` down with it. Nothing here
+ * depends on today: a notice whose last day is past still reads (it is
+ * simply no longer in force).
+ */
+const onlineOptionsReadSchema = z.object({
+  v: readsFormat,
+  autoPublishMenu: onlineOptionsShape.autoPublishMenu,
+  closedNotice: z
+    .object(closedNoticeFields)
+    .default({ ...DEFAULT_ONLINE_OPTIONS.closedNotice })
+    .catch(() => ({ ...DEFAULT_ONLINE_OPTIONS.closedNotice })),
+  announcement: z
+    .object(announcementFields)
+    .default({ ...DEFAULT_ONLINE_OPTIONS.announcement })
+    .catch(() => ({ ...DEFAULT_ONLINE_OPTIONS.announcement })),
+  minDeliveryOrderCents: minDeliveryOrder.default(DEFAULT_ONLINE_OPTIONS.minDeliveryOrderCents).catch(DEFAULT_ONLINE_OPTIONS.minDeliveryOrderCents),
+});
 
 /**
  * settings:saveDeliveryZones: the whole list as the card sends it (the main
@@ -1032,6 +1077,9 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'online.options': new Set(['v', ...Object.keys(onlineOptionsShape)]),
 };
 
+const CLOSED_NOTICE_FIELDS: ReadonlySet<string> = new Set(Object.keys(closedNoticeFields));
+const ANNOUNCEMENT_FIELDS: ReadonlySet<string> = new Set(Object.keys(announcementFields));
+
 /**
  * A stored shop rule saved by a newer version of the app: a higher format,
  * or fields this version does not know. This till uses what it knows but
@@ -1053,6 +1101,14 @@ export function storedFormatIsNewer(key: BusinessSettingKey, raw: unknown): bool
         (zn) => typeof zn === 'object' && zn !== null && Object.keys(zn).some((f) => !DELIVERY_ZONE_FIELDS.has(f)),
       );
     }
+  }
+  // The website's messages with fields this version does not know: a newer till's too.
+  if (key === 'online.options') {
+    const nested = (field: string, known: ReadonlySet<string>) => {
+      const o = (raw as Record<string, unknown>)[field];
+      return typeof o === 'object' && o !== null && !Array.isArray(o) && Object.keys(o).some((f) => !known.has(f));
+    };
+    return nested('closedNotice', CLOSED_NOTICE_FIELDS) || nested('announcement', ANNOUNCEMENT_FIELDS);
   }
   // An offer (or its hours) with fields this version does not know: a newer till's too.
   if (key === 'discounts.offers') {

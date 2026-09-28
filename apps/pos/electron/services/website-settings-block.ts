@@ -1,7 +1,9 @@
 /**
  * The settings block of the menu publish (shared-types web-bridge.ts, THE
- * SETTINGS BLOCK): the owner's delivery areas and fees and the website's
- * pick-up offer, stamped with the carried keys' row versions and times, and
+ * SETTINGS BLOCK): the owner's delivery areas and fees, the website's
+ * pick-up offer and — since v0.7.30 — the website's messages and delivery
+ * minimum ('online.options', WEBSITE MESSAGES), stamped with the carried
+ * keys' row versions and times, and
  * checked against the very menu it travels with before it goes (the website
  * refuses a block whose active area names an item not in that menu at its
  * fee — and the menu with it). Read-only and free of Electron: the bridge
@@ -20,6 +22,7 @@ import {
   getBusinessSetting,
   readBusinessSettingRow,
   readDeliveryZones,
+  readOnlineOptions,
   readWebsitePickup,
 } from '../db/business-settings-read.js';
 
@@ -43,7 +46,12 @@ export function carriedKeyProblem(db: AppDatabase): string | null {
     if (!readBusinessSettingRow(db, key)) continue;
     const saved = getBusinessSetting(db, key);
     if (!saved || saved.newerFormat) {
-      const what = key === 'delivery.zones' ? 'The delivery areas were' : 'The website pick-up offer was';
+      const what =
+        key === 'delivery.zones'
+          ? 'The delivery areas were'
+          : key === 'discounts.websitePickup'
+            ? 'The website pick-up offer was'
+            : 'The website messages were';
       return `${what} saved by a newer version of the app — update this till (the website keeps what it has).`;
     }
   }
@@ -82,12 +90,20 @@ export function settingsBlockFor(
     c.items.map((i) => ({ id: i.posItemId, name: i.name, basePriceCents: i.basePriceCents })),
   );
   const pickup = readWebsitePickup(db);
+  const online = readOnlineOptions(db);
   const block = buildSettingsBlock({
     zones: readDeliveryZones(db),
     pickup: { offered: pickup.offered, percent: pickup.percent },
     stamps,
     menuItems,
     deviceId,
+    // Always, at their defaults too: a field sent at its default clears it on the website
+    // (one this till leaves out would be KEPT there — a v0.7.29 till's block).
+    website: {
+      closedNotice: online.closedNotice,
+      announcement: online.announcement,
+      minDeliveryOrderCents: online.minDeliveryOrderCents,
+    },
   });
   const problem = settingsBlockProblem(block, menu);
   return problem ? { block: null, problem, stamp } : { block, problem: null, stamp };
