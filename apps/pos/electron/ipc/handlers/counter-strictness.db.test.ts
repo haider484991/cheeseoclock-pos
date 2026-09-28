@@ -402,7 +402,7 @@ describe.skipIf(!Sqlite)('"A discount needs a reason": Yes', () => {
     expect((await data<CheckoutRules>('checkout:getRules')).discounts.reasonRequired).toBe(true);
     const orderId = await openOrder();
     const before = written();
-    for (const reason of [undefined, null, '', '   ', 'No reason given', ' no reason GIVEN ']) {
+    for (const reason of [undefined, null, '', '   ', 'No reason given', ' no reason GIVEN ', 'No  reason   given']) {
       const o = await call('orders:applyDiscount', { orderId, discountType: 'percent', value: 5, ...(reason === undefined ? {} : { reason }) });
       expect({ reason, o }).toEqual({ reason, o: { ok: false, code: 'validation_failed', message: DISCOUNT_REASON_REQUIRED } });
     }
@@ -440,7 +440,7 @@ describe.skipIf(!Sqlite)('"A discount needs a reason": Yes', () => {
     const { applyDiscount } = await repos();
     const orderId = await openOrder();
     const before = written();
-    for (const reason of [undefined, null, '', ' ', 'No reason given']) {
+    for (const reason of [undefined, null, '', ' ', 'No reason given', 'No  reason given']) {
       expect(() =>
         applyDiscount(db as never, { orderId, discountType: 'percent', value: 5, ...(reason === undefined ? {} : { reason }), approverUserId: null }, CASHIER_ACTOR),
       ).toThrow(DISCOUNT_REASON_REQUIRED);
@@ -551,6 +551,31 @@ describe.skipIf(!Sqlite)('"A discount needs a reason": Yes', () => {
     expect(liveDiscounts(other)).toMatchObject([{ value: 10, reason: null }]);
   });
 
+  it('changing a discount given before the Yes: with no reason it is refused and the old one stays; with a reason it is replaced', async () => {
+    const orderId = await openOrder();
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 5 });
+    await ownerSaves('discounts.approval', REASON_ON);
+    h.session = CASHIER;
+    const before = written();
+    for (const reason of [undefined, '', 'NO REASON GIVEN']) {
+      const o = await call('orders:applyDiscount', { orderId, discountType: 'flat', value: 5_000, ...(reason === undefined ? {} : { reason }) });
+      expect({ reason, o }).toMatchObject({ reason, o: { ok: false, code: 'validation_failed', message: DISCOUNT_REASON_REQUIRED } });
+    }
+    expect(written()).toEqual(before);
+    expect(liveDiscounts(orderId)).toMatchObject([{ value: 5, reason: null }]);
+    await data('orders:applyDiscount', { orderId, discountType: 'flat', value: 5_000, reason: 'Complaint' });
+    expect(liveDiscounts(orderId)).toMatchObject([{ value: 5_000, reason: 'Complaint' }]);
+  });
+
+  it('a takeaway order switched to foodpanda gets the deal by itself: no reason asked', async () => {
+    await ownerSaves('foodpanda.deal', { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null });
+    await ownerSaves('discounts.approval', REASON_ON);
+    const orderId = await openOrder('takeaway');
+    h.session = CASHIER;
+    await data('orders:setMode', { orderId, mode: 'foodpanda' });
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: 'foodpanda', value: 20 }]);
+  });
+
   it('a discount already on an open order keeps what it has: switching it on takes nothing off', async () => {
     const orderId = await openOrder();
     await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 5 });
@@ -643,6 +668,34 @@ describe.skipIf(!Sqlite)('the tablet’s tolerance moves Pay and Reports togethe
     }
   });
 
+  it('Reports list EVERY foodpanda order to check; only the ones past the tolerance are marked and counted', async () => {
+    await ownerSaves('foodpanda.checks', checksWith(500));
+    const off3 = await foodpandaOrderPaid(300);
+    const off6 = await foodpandaOrderPaid(600);
+    const fp = (await report()).getFoodpanda(db as never, NOW_RANGE())!;
+    expect(fp.toCheck.map((l) => l.orderId)).toEqual(expect.arrayContaining([off3, off6]));
+    expect(fp.toCheck.find((l) => l.orderId === off3)).toMatchObject({ diffCents: 300, differs: false });
+    expect(fp.toCheck.find((l) => l.orderId === off6)).toMatchObject({ diffCents: 600, differs: true });
+    expect(fp.tabletDiffCount).toBe(1);
+  });
+
+  it('an order paid with NO tablet total typed is never flagged — at Rs 1 and at Rs 0', async () => {
+    const none = await openOrder('foodpanda');
+    await payFoodpanda(none, null);
+    const typed = await foodpandaOrderPaid(0);
+    for (const cents of [100, 0]) {
+      await ownerSaves('foodpanda.checks', checksWith(cents));
+      const fp = (await report()).getFoodpanda(db as never, NOW_RANGE())!;
+      const byId = Object.fromEntries(fp.toCheck.map((l) => [l.orderId, l]));
+      expect({ cents, none: byId[none]?.differs, typed: byId[typed]?.differs, count: fp.tabletDiffCount }).toEqual({
+        cents,
+        none: false,
+        typed: false,
+        count: 0,
+      });
+    }
+  });
+
   it('a tolerance saved on the other till counts here at once, Pay and Reports', async () => {
     const id = await foodpandaOrderPaid(300);
     await fromOtherTill('foodpanda.checks', checksWith(300));
@@ -713,7 +766,7 @@ describe.skipIf(!Sqlite)('the bounds are the main process’s', () => {
     h.session = OWNER;
     const before = written();
     const presets = (reasons: string[]) => ({ v: 1, percents: [10], flatCents: [10_000], reasons });
-    for (const none of ['No reason given', 'no REASON Given']) {
+    for (const none of ['No reason given', 'no REASON Given', 'No  reason given']) {
       expect(await call('settings:setBusiness', { key: 'discounts.presets', value: presets(['Staff', none]) })).toEqual({
         ok: false,
         code: 'validation_failed',

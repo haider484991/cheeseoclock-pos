@@ -32,18 +32,19 @@ import {
   dealSummary,
   feesSummary,
   percentFromBps,
-  toleranceWords,
   workedExample,
   type DealPayer,
 } from './shop-rules/foodpandaWords';
 import {
   checksFromForm,
+  checksIntro,
   checksToForm,
   dealFromForm,
   dealToForm,
   feesFromForm,
   feesToForm,
   sameValue,
+  typeTolerance,
   type DealForm,
   type FeesForm,
 } from './shop-rules/foodpandaForm';
@@ -125,8 +126,6 @@ function FoodpandaCards({
   const dealParsed = useMemo(() => dealFromForm(dealForm), [dealForm]);
   const feesParsed = useMemo(() => feesFromForm(feesForm), [feesForm]);
   const checksParsed = useMemo(() => checksFromForm(checksForm), [checksForm]);
-  // The words follow the tolerance as soon as it reads; the saved one until then.
-  const toleranceNow = checksParsed.value?.tabletToleranceCents ?? checksCard.value.tabletToleranceCents;
   const exampleDeal: FoodpandaDeal = dealParsed.value ?? dealCard.value;
   const exampleFees: FoodpandaFees = feesParsed.value ?? feesCard.value;
 
@@ -383,13 +382,8 @@ function FoodpandaCards({
         card={checksCard}
         title="At Pay on a foodpanda order"
         icon={<ClipboardCheck className="h-5 w-5" />}
-        intro={
-          <>
-            Pay can ask for foodpanda’s order number and the total on the foodpanda tablet. If the till’s total is{' '}
-            {toleranceWords(toleranceNow)}, the till says so and Reports lists the order — how you know the till matches foodpanda,
-            and how a walk-in cash sale rung up as foodpanda shows up.
-          </>
-        }
+        // The words follow the box as it is typed (the saved value while the box holds one the card refuses).
+        intro={checksIntro(checksForm, checksCard.value)}
         describe={checksSummary}
         dirty={checksDirty}
         problem={checksParsed.problem}
@@ -419,7 +413,8 @@ function FoodpandaCards({
             id="fp-tolerance"
             inputMode="numeric"
             value={checksForm.tolerance}
-            onChange={(e) => checksD.set({ ...checksForm, tolerance: e.target.value.replace(/[^\d]/g, '').slice(0, 2) })}
+            // Kept as typed: "0.5" is refused with the card's message, never read as Rs 5.
+            onChange={(e) => checksD.set(typeTolerance(checksForm, e.target.value))}
             className={inputClass}
           />
         </div>

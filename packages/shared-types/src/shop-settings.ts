@@ -265,6 +265,17 @@ export const PRESET_REASON_MAX_LENGTH = 30;
  */
 export const NO_DISCOUNT_REASON_LABEL = 'No reason given';
 
+/**
+ * Do these words read as NO_DISCOUNT_REASON_LABEL — whatever their capitals,
+ * and however many spaces sit between or around the words ("No  reason
+ * given" looks the same on Team & leakage)? THE one comparison: the reason
+ * check (pos-domain discountReasonMissing), the reason buttons' schema and
+ * the Settings form all call it.
+ */
+export function isNoDiscountReasonLabel(text: string): boolean {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase() === NO_DISCOUNT_REASON_LABEL.toLowerCase();
+}
+
 // ---------------------------------------------------------------------------
 // Staff & kitchen timing (phase 6). Only timings: who can do what stays in
 // the role table (auth.ts ROLE_CAPABILITIES), never a switch here.

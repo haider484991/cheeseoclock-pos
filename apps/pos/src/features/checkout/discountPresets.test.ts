@@ -1,15 +1,19 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   FLAT_PRESETS_RUPEES,
   PERCENT_PRESETS,
   describeDiscount,
   describePreview,
+  discountApplyStep,
   discountBaseNow,
   discountBaseText,
   discountDialogPrimary,
   discountDialogStart,
   discountReasonHint,
   discountReasonProblem,
+  discountRefused,
   flatChoiceRupees,
   parseDiscountEntry,
   percentChoice,
@@ -233,5 +237,107 @@ describe('the reason, when the owner has made one required (Settings → Money &
     expect(reasonButtons(saved, true)).toEqual(['Staff', 'Test birthday']);
     // Every button it leaves is one the dialog would take.
     for (const r of reasonButtons(saved, true)) expect(discountReasonProblem(true, r)).toBeNull();
+  });
+
+  it('the words for none with extra spaces between them are no reason either, and never a button', () => {
+    const said = 'Pick or type a reason — the owner has made one required for every discount.';
+    expect(discountReasonProblem(true, 'No  reason given')).toBe(said);
+    expect(discountReasonProblem(true, ' no reason   GIVEN')).toBe(said);
+    expect(reasonButtons(['Staff', 'No  reason given'], true)).toEqual(['Staff']);
+  });
+});
+
+describe('Apply, decided in one place: the button, Enter and a second tap on a preset', () => {
+  const SAID_REASON = 'Pick or type a reason — the owner has made one required for every discount.';
+  // Made-up: 5% off a Rs 2,000 order, no PIN needed; a made-up manager PIN.
+  const base: Parameters<typeof discountApplyStep>[0] = {
+    choice: percentChoice(5),
+    typing: false,
+    discountCents: 10_000,
+    needsApproval: false,
+    reasonRequired: false,
+    reason: '',
+    pin: '',
+  };
+  const step = (over: Partial<typeof base>) => discountApplyStep({ ...base, ...over });
+
+  it('nothing saved (a reason optional): a discount with no reason goes, as before', () => {
+    expect(step({})).toEqual({ kind: 'save', choice: percentChoice(5), reason: undefined, approverPin: undefined });
+    expect(step({ reason: '  Staff ' })).toEqual({ kind: 'save', choice: percentChoice(5), reason: 'Staff', approverPin: undefined });
+    expect(step({ reason: '   ' })).toMatchObject({ kind: 'save', reason: undefined });
+  });
+
+  it('with the owner’s Yes: no reason, spaces or the words for none are refused, the cursor to the reason — any reason goes', () => {
+    for (const reason of ['', '   ', 'No reason given', 'no  REASON given']) {
+      expect({ reason, s: step({ reasonRequired: true, reason }) }).toEqual({
+        reason,
+        s: { kind: 'refuse', message: SAID_REASON, focus: 'reason' },
+      });
+    }
+    expect(step({ reasonRequired: true, reason: 'Birthday' })).toEqual({ kind: 'save', choice: percentChoice(5), reason: 'Birthday', approverPin: undefined });
+  });
+
+  it('the reason is said before the PIN (as the main process does): a PIN typed or not, the reason first', () => {
+    for (const pin of ['', '12', '4827']) {
+      expect({ pin, s: step({ reasonRequired: true, needsApproval: true, pin }) }).toEqual({
+        pin,
+        s: { kind: 'refuse', message: SAID_REASON, focus: 'reason' },
+      });
+    }
+    // With a reason, the PIN is next.
+    expect(step({ reasonRequired: true, reason: 'Complaint', needsApproval: true })).toEqual({
+      kind: 'refuse',
+      message: "This discount needs a manager's PIN or password.",
+      focus: 'pin',
+    });
+    expect(step({ reasonRequired: true, reason: 'Complaint', needsApproval: true, pin: '12' })).toEqual({
+      kind: 'refuse',
+      message: 'A PIN is 4 to 12 numbers',
+      focus: 'pin',
+    });
+    expect(step({ reasonRequired: true, reason: 'Complaint', needsApproval: true, pin: '4827' })).toEqual({
+      kind: 'save',
+      choice: percentChoice(5),
+      reason: 'Complaint',
+      approverPin: '4827',
+    });
+  });
+
+  it('nothing picked, a bad amount or nothing to take off: said, nothing sent', () => {
+    expect(step({ choice: null })).toEqual({ kind: 'refuse', message: 'Pick a discount or type an amount.', focus: null });
+    expect(step({ choice: null, typing: true })).toEqual({ kind: 'refuse', message: 'That amount does not work — check it.', focus: null });
+    expect(step({ discountCents: 0 })).toEqual({ kind: 'refuse', message: 'Nothing to take off this order.', focus: null });
+  });
+
+  it('refused by the main process: its reason words as they are (the PIN kept); anything else "Discount not applied", a PIN sent is cleared', () => {
+    expect(discountRefused(SAID_REASON, true)).toEqual({ error: SAID_REASON, focus: 'reason', clearPin: false });
+    expect(discountRefused(SAID_REASON, false)).toEqual({ error: SAID_REASON, focus: 'reason', clearPin: false });
+    expect(discountRefused("That is not a manager's PIN or password", true)).toEqual({
+      error: "Discount not applied: That is not a manager's PIN or password",
+      focus: 'pin',
+      clearPin: true,
+    });
+    expect(discountRefused('Order not found', false)).toEqual({ error: 'Discount not applied: Order not found', focus: null, clearPin: false });
+  });
+
+  it('the dialog carries it out: its button, Enter and a second tap all go through it', () => {
+    const src = readFileSync(fileURLToPath(new URL('./DiscountDialog.tsx', import.meta.url)), 'utf8');
+    // The button is on exactly when Apply would send it.
+    expect(src).toMatch(/const canApply = applyNow\.kind === 'save' && !saving && !busy;/);
+    // apply() (Enter, a second tap, the button) decides with the same function and stops on a refusal…
+    const apply = src.slice(src.indexOf('async function apply('), src.indexOf('async function remove('));
+    const decide = apply.indexOf('discountApplyStep({');
+    const stop = apply.indexOf("if (step.kind === 'refuse') {");
+    const send = apply.indexOf('await applyDiscount(step.choice.type, step.choice.value, step.reason, step.approverPin)');
+    expect(decide).toBeGreaterThan(-1);
+    expect(stop).toBeGreaterThan(decide);
+    expect(send).toBeGreaterThan(stop);
+    expect(apply.slice(stop, send)).toContain('return;');
+    // …and says the main process's refusal as discountRefused words it.
+    expect(apply).toContain("discountRefused(e instanceof Error ? e.message : 'Unknown error', step.approverPin !== undefined)");
+    expect(apply).toContain('setError(refused.error)');
+    expect(apply).not.toContain('`Discount not applied');
+    // Enter and a second tap call apply() — never applyDiscount directly.
+    expect(src.match(/applyDiscount\(/g)?.length).toBe(1);
   });
 });

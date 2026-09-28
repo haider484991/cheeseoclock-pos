@@ -13,18 +13,21 @@ import {
   currentDiscountWords,
   describeDiscount,
   describePreview,
+  discountApplyStep,
   discountBaseNow,
   discountBaseText,
   discountDialogPrimary,
   discountDialogStart,
   discountReasonHint,
   discountReasonProblem,
+  discountRefused,
   parseDiscountEntry,
   presetButtons,
   previewDiscount,
   reasonButtons,
   sameChoice,
   type DiscountChoice,
+  type DiscountDialogFocus,
   type DiscountDialogIntent,
 } from './discountPresets';
 
@@ -103,11 +106,26 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const pinOk = secretReady(pin);
   // The owner's "a discount needs a reason" (checkout:getRules): the main process decides again on save.
   const reasonProblem = discountReasonProblem(rules.reasonRequired, reason);
-  const canApply = !!choice && after.discountCents > 0 && (!needsPin || pinOk) && reasonProblem === null && !saving && !busy;
+  // The button is on exactly when Apply would send it (Enter and a second tap decide the same way, in apply()).
+  const applyNow = discountApplyStep({
+    choice,
+    typing,
+    discountCents: after.discountCents,
+    needsApproval: needsPin,
+    reasonRequired: rules.reasonRequired,
+    reason,
+    pin,
+  });
+  const canApply = applyNow.kind === 'save' && !saving && !busy;
   const primary = discountDialogPrimary({ dealOn, intent, hasChoice: !!choice });
 
   function focusPinSoon() {
     requestAnimationFrame(() => pinRef.current?.focus());
+  }
+
+  function focusOn(where: DiscountDialogFocus) {
+    if (where === 'reason') reasonRef.current?.focus();
+    else if (where === 'pin') pinRef.current?.focus();
   }
 
   function pick(next: DiscountChoice) {
@@ -125,46 +143,37 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
 
   async function apply(which: DiscountChoice | null = choice) {
     if (saving || busy) return;
-    if (!which) {
-      setError(typing ? 'That amount does not work — check it.' : 'Pick a discount or type an amount.');
-      return;
-    }
-    const preview = previewDiscount(lines, subtotal, which, rules);
-    if (preview.discountCents <= 0) {
-      setError('Nothing to take off this order.');
-      return;
-    }
-    // No reason where the owner wants one: said before the PIN, as the main process does.
-    const reasonSays = discountReasonProblem(rules.reasonRequired, reason);
-    if (reasonSays) {
-      setError(reasonSays);
-      reasonRef.current?.focus();
-      return;
-    }
-    const approval = preview.needsApproval || dealOn;
-    if (approval && !pinOk) {
-      setError(pin.trim() ? approvalProblem(pin) : "This discount needs a manager's PIN or password.");
-      pinRef.current?.focus();
+    const preview = which ? previewDiscount(lines, subtotal, which, rules) : null;
+    // Something picked, something to take off, the reason (said before the PIN, as the main
+    // process does), then the manager's PIN: the same decision as the button's.
+    const step = discountApplyStep({
+      choice: which,
+      typing,
+      discountCents: preview?.discountCents ?? 0,
+      needsApproval: (preview?.needsApproval ?? false) || dealOn,
+      reasonRequired: rules.reasonRequired,
+      reason,
+      pin,
+    });
+    if (step.kind === 'refuse') {
+      setError(step.message);
+      focusOn(step.focus);
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      await applyDiscount(which.type, which.value, reason.trim() || undefined, approval ? pin : undefined);
+      await applyDiscount(step.choice.type, step.choice.value, step.reason, step.approverPin);
       onClose();
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Unknown error';
-      // Refused for its reason alone: the same words the dialog uses, cleared once a reason is given.
-      setError(message === DISCOUNT_REASON_REQUIRED ? message : `Discount not applied: ${message}`);
+      // Refused for its reason alone: the dialog's own words (the PIN stays typed); else
+      // "Discount not applied: …" and a PIN that was sent is cleared for another try.
+      const refused = discountRefused(e instanceof Error ? e.message : 'Unknown error', step.approverPin !== undefined);
+      setError(refused.error);
       // The owner may have just changed the limit (or made a reason required): the screen follows it.
       rules.refetch();
-      if (message === DISCOUNT_REASON_REQUIRED) {
-        // Refused for the reason alone, before any PIN was checked: the PIN stays typed.
-        reasonRef.current?.focus();
-      } else if (approval) {
-        setPin('');
-        pinRef.current?.focus();
-      }
+      if (refused.clearPin) setPin('');
+      focusOn(refused.focus);
     } finally {
       setSaving(false);
     }

@@ -34,7 +34,7 @@ import type {
   OrderItemCostStatus,
   ReportTabFigures,
 } from '@cheeseoclock/shared-types';
-import { isDeliveryChargeMenuItem } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeMenuItem, NO_DISCOUNT_REASON_LABEL } from '@cheeseoclock/shared-types';
 import {
   emptyFoodCostTally,
   type FoodCostTally,
@@ -184,7 +184,8 @@ export function refundReason(referenceNo: string | null, orderReason: string | n
   const fromRef = m?.[1]?.trim();
   if (fromRef) return fromRef;
   const fromOrder = (orderReason ?? '').trim();
-  return fromOrder || 'No reason given';
+  // Team & leakage's one wording for none (shared-types): a refund's, a void's and a discount's alike.
+  return fromOrder || NO_DISCOUNT_REASON_LABEL;
 }
 
 /** Moved to pos-domain (the till's stock dialogs price with it too); kept here for callers. */
@@ -228,7 +229,7 @@ const STANDING_OFFER_NAME: Record<string, string> = { foodpanda: 'foodpanda deal
  */
 function standingKey(l: ReportDiscountLine): { key: string; name: string } {
   if (l.source === 'offer') {
-    const name = l.reason && l.reason !== 'No reason given' ? l.reason : 'Automatic offer';
+    const name = l.reason && l.reason !== NO_DISCOUNT_REASON_LABEL ? l.reason : 'Automatic offer';
     return { key: `offer:${l.offerId ?? ''}:${name.toLowerCase()}`, name: `${name} (automatic offer)` };
   }
   const source = l.source ?? '';
@@ -697,7 +698,7 @@ function getVoids(
   const stock = stockOf(rows.map((r) => r.orderId));
   return rows.map((r) => ({
     ...r,
-    reason: r.reason?.trim() || 'No reason given',
+    reason: r.reason?.trim() || NO_DISCOUNT_REASON_LABEL,
     approvedBy: r.approvedBy ?? 'Unknown',
     takenBy: r.staffKey === 'web' ? 'Website' : (r.takenBy ?? 'Unknown'),
     stock: stock.get(r.orderId) ?? null,
@@ -990,7 +991,7 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
     createdAt: r.createdAt,
     amountCents: r.amountCents,
     entered: discountEntered(r.type, r.value),
-    reason: r.reason?.trim() || 'No reason given',
+    reason: r.reason?.trim() || NO_DISCOUNT_REASON_LABEL,
     givenBy: r.givenBy ?? 'Unknown',
     approvedBy: r.approvedBy,
     source: r.source === 'foodpanda' ? 'foodpanda' : r.source === 'offer' ? 'offer' : null,

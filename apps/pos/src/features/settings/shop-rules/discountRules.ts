@@ -16,6 +16,7 @@ import {
 import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
+  isNoDiscountReasonLabel,
   NO_DISCOUNT_REASON_LABEL,
   PRESET_FLAT_MAX_CENTS,
   PRESET_FLATS_MAX,
@@ -254,7 +255,7 @@ export function presetsFromForm(f: PresetsForm): Parsed<DiscountPresets> {
     return { value: null, problem: 'Two reason buttons are the same.' };
   }
   // The words Reports use for "no reason": the till counts them as none, so the button would never work.
-  if (reasons.some((r) => r.toLowerCase() === NO_DISCOUNT_REASON_LABEL.toLowerCase())) {
+  if (reasons.some(isNoDiscountReasonLabel)) {
     return { value: null, problem: NO_REASON_BUTTON_PROBLEM };
   }
   return {

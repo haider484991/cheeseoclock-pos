@@ -22,6 +22,16 @@ describe('discountReasonMissing (the owner’s "a discount needs a reason")', ()
     expect(NO_DISCOUNT_REASON_LABEL).toBe('No reason given');
   });
 
+  it('the words for none with more spaces between them are no reason either (Team & leakage shows them the same)', () => {
+    for (const r of ['No  reason given', 'no reason   GIVEN', ' No  reason\tgiven ']) {
+      expect({ r, missing: discountReasonMissing(r) }).toEqual({ r, missing: true });
+    }
+    // Other words that merely contain them are a reason, as before.
+    for (const r of ['No reason given by customer', 'Noreason given', 'No reasons given']) {
+      expect({ r, missing: discountReasonMissing(r) }).toEqual({ r, missing: false });
+    }
+  });
+
   it('says what to do in plain words', () => {
     expect(DISCOUNT_REASON_REQUIRED).toBe('Pick or type a reason — the owner has made one required for every discount.');
   });

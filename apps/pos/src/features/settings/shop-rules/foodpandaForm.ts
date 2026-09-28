@@ -13,7 +13,7 @@ import {
   type FoodpandaDeal,
   type FoodpandaFees,
 } from '@cheeseoclock/shared-types';
-import { bpsFromPercentText, centsFromRupeesText, dealPayer, percentFromBps, type DealPayer } from './foodpandaWords';
+import { bpsFromPercentText, centsFromRupeesText, dealPayer, percentFromBps, toleranceWords, type DealPayer } from './foodpandaWords';
 
 export interface DealForm {
   percent: string;
@@ -150,8 +150,10 @@ const TOLERANCE_MAX_RUPEES = FOODPANDA_TABLET_TOLERANCE_MAX_CENTS / 100;
  * wider).
  */
 export function checksFromForm(f: ChecksForm): Parsed<FoodpandaChecks> {
-  const cents = centsFromRupeesText(f.tolerance);
-  if (cents === null || Number.isNaN(cents) || cents > FOODPANDA_TABLET_TOLERANCE_MAX_CENTS) {
+  // Digits only: "0.5", "1,0", "Rs 5" and the like are refused as typed, never read as some other amount.
+  const typed = f.tolerance.trim();
+  const cents = /^\d{1,3}$/.test(typed) ? Number(typed) * 100 : null;
+  if (cents === null || cents > FOODPANDA_TABLET_TOLERANCE_MAX_CENTS) {
     return {
       value: null,
       problem: `The difference allowed on the tablet is whole rupees, Rs 0 to Rs ${TOLERANCE_MAX_RUPEES}.`,
@@ -161,6 +163,31 @@ export function checksFromForm(f: ChecksForm): Parsed<FoodpandaChecks> {
     value: { v: SHOP_SETTING_FORMAT['foodpanda.checks'], orderCode: f.orderCode, tabletTotal: f.tabletTotal, tabletToleranceCents: cents },
     problem: null,
   };
+}
+
+/**
+ * The tolerance box as the owner types: kept exactly as typed. Nothing is
+ * stripped ("0.5" must never turn into "05", Rs 5): checksFromForm refuses
+ * anything that is not whole rupees from Rs 0 to Rs 10, and the card shows
+ * its message.
+ */
+export function typeTolerance(f: ChecksForm, typed: string): ChecksForm {
+  return { ...f, tolerance: typed };
+}
+
+/**
+ * The checks card's intro: "Pay can ask … If the till's total is more than
+ * Rs 5 different, …". It follows the box as the owner types (like the deal
+ * card's worked example), as soon as the box holds a tolerance the card
+ * would save; while it holds one the card refuses, it keeps the saved value
+ * and the card's problem line says what is wrong.
+ */
+export function checksIntro(f: ChecksForm, saved: Pick<FoodpandaChecks, 'tabletToleranceCents'>): string {
+  const cents = checksFromForm(f).value?.tabletToleranceCents ?? saved.tabletToleranceCents;
+  return (
+    `Pay can ask for foodpanda’s order number and the total on the foodpanda tablet. If the till’s total is ${toleranceWords(cents)}, ` +
+    'the till says so and Reports lists the order — how you know the till matches foodpanda, and how a walk-in cash sale rung up as foodpanda shows up.'
+  );
 }
 
 /** Two values are the same setting (the form is not "dirty"). */

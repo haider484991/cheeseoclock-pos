@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FOODPANDA_CHECKS,
@@ -18,7 +20,17 @@ import {
   toleranceWords,
   workedExample,
 } from './foodpandaWords';
-import { checksFromForm, checksToForm, dealFromForm, dealToForm, feesFromForm, feesToForm, sameValue } from './foodpandaForm';
+import {
+  checksFromForm,
+  checksIntro,
+  checksToForm,
+  dealFromForm,
+  dealToForm,
+  feesFromForm,
+  feesToForm,
+  sameValue,
+  typeTolerance,
+} from './foodpandaForm';
 import { lastChangedText } from './SettingCard';
 
 const deal = (over: Partial<FoodpandaDeal> = {}): FoodpandaDeal => ({ ...DEFAULT_FOODPANDA_DEAL, percent: 20, shopPercent: 20, ...over });
@@ -182,5 +194,48 @@ describe('At Pay on a foodpanda order: the difference allowed on the tablet', ()
     expect(toleranceWords(100)).toBe('more than Rs 1 different');
     expect(toleranceWords(1_000)).toBe('more than Rs 10 different');
     expect(toleranceWords(0)).toBe('different at all');
+  });
+
+  it('the box keeps what the owner typed: "0.5" (or "1.5", "10.5") is refused with the card’s message, never read as Rs 5 (or Rs 15, Rs 10)', () => {
+    const start = checksToForm(DEFAULT_FOODPANDA_CHECKS);
+    const said = 'The difference allowed on the tablet is whole rupees, Rs 0 to Rs 10.';
+    for (const typed of ['0.5', '1.5', '10.5', '1,0', 'Rs 5', '5 rupees', '-1', '½']) {
+      const form = typeTolerance(start, typed);
+      expect({ typed, box: form.tolerance, parsed: checksFromForm(form) }).toEqual({ typed, box: typed, parsed: { value: null, problem: said } });
+    }
+    // Whole rupees from Rs 0 to Rs 10 still save, as typed.
+    for (const [typed, cents] of [
+      ['0', 0],
+      ['5', 500],
+      ['10', 1_000],
+      [' 7 ', 700],
+    ] as const) {
+      expect({ typed, parsed: checksFromForm(typeTolerance(start, typed)).value?.tabletToleranceCents }).toEqual({ typed, parsed: cents });
+    }
+  });
+
+  it('the card’s intro follows the box as it is typed; while the box holds a value the card refuses, it says the saved one', () => {
+    const saved = { ...DEFAULT_FOODPANDA_CHECKS, tabletToleranceCents: 300 };
+    const start = checksToForm(saved);
+    expect(checksIntro(start, saved)).toBe(
+      'Pay can ask for foodpanda’s order number and the total on the foodpanda tablet. If the till’s total is more than Rs 3 different, the till says so and Reports lists the order — how you know the till matches foodpanda, and how a walk-in cash sale rung up as foodpanda shows up.',
+    );
+    expect(checksIntro(typeTolerance(start, '7'), saved)).toContain('If the till’s total is more than Rs 7 different, the till says so');
+    expect(checksIntro(typeTolerance(start, '0'), saved)).toContain('If the till’s total is different at all, the till says so');
+    for (const refused of ['', '11', '0.5']) {
+      expect({ refused, intro: checksIntro(typeTolerance(start, refused), saved) }).toEqual({
+        refused,
+        intro: expect.stringContaining('If the till’s total is more than Rs 3 different'),
+      });
+    }
+  });
+
+  it('the card calls both: its intro from the box and the saved value, and the box keeps what is typed', () => {
+    const src = readFileSync(fileURLToPath(new URL('../FoodpandaSettings.tsx', import.meta.url)), 'utf8');
+    expect(src).toContain('intro={checksIntro(checksForm, checksCard.value)}');
+    expect(src).toContain('onChange={(e) => checksD.set(typeTolerance(checksForm, e.target.value))}');
+    // Nothing on the screen rewrites what is typed in the box.
+    const box = src.slice(src.indexOf('id="fp-tolerance"'), src.indexOf('/>', src.indexOf('id="fp-tolerance"')));
+    expect(box).not.toMatch(/replace\(|slice\(/);
   });
 });

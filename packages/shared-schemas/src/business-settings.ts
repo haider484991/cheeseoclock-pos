@@ -26,6 +26,7 @@ import {
   KITCHEN_TIMING_BOUNDS,
   LEGACY_COMMISSION_BASES,
   NO_DISCOUNT_REASON_LABEL,
+  isNoDiscountReasonLabel,
   OFFER_ID_RE,
   OFFER_MAX_FLAT_CENTS,
   OFFER_MAX_ORDER_CENTS,
@@ -400,7 +401,8 @@ const discountPresetsShape = {
 };
 /**
  * Written only: a reason button can't be the words Reports use for "no
- * reason" (NO_DISCOUNT_REASON_LABEL), whatever its capitals. The till counts
+ * reason" (NO_DISCOUNT_REASON_LABEL), whatever its capitals and spacing
+ * (isNoDiscountReasonLabel, the reason check's own comparison). The till counts
  * them as no reason (pos-domain discountReasonMissing), so with "A discount
  * needs a reason" on it would be a button that never works. A list saved
  * before (or by an older till) still reads; the F3 screen leaves such a
@@ -409,7 +411,7 @@ const discountPresetsShape = {
 const discountPresetsWriteShape = {
   ...discountPresetsShape,
   reasons: discountPresetsShape.reasons.refine(
-    (rs) => !rs.some((r) => r.trim().toLowerCase() === NO_DISCOUNT_REASON_LABEL.toLowerCase()),
+    (rs) => !rs.some(isNoDiscountReasonLabel),
     { message: `A reason button can't be “${NO_DISCOUNT_REASON_LABEL}”: Reports use those words for a discount with no reason` },
   ),
 };

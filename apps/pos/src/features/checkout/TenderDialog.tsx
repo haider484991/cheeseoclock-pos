@@ -12,7 +12,7 @@ import { quickCashRupees } from './tenderAmounts';
 import { ownsEnter } from './keys';
 import { foodpandaDealLine } from './foodpandaDealLine';
 import { offerOnOrder, payDiscountLabel } from './discountWords';
-import { tabletAtPay } from './tabletAtPay';
+import { foodpandaPayStep } from './tabletAtPay';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -58,10 +58,6 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
   // foodpanda's order number and the tablet's total (Settings → foodpanda → checks).
   const rules = useCheckoutRules();
   const checks = rules.data?.foodpanda.checks ?? { orderCode: 'optional', tabletTotal: 'optional' };
-  // The tablet shows the till's total at foodpanda's prices (Settings → foodpanda: the listing may be dearer),
-  // within the owner's tolerance — the one Reports use.
-  const tablet = tabletAtPay(rules.data?.foodpanda, total);
-  const tabletExpected = tablet.expectedCents;
   const [fpCode, setFpCode] = useState('');
   const [fpTablet, setFpTablet] = useState('');
   const deal = snapshot.discounts.find((d) => d.source === 'foodpanda') ?? null;
@@ -102,32 +98,19 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
     setError(null);
     let tabletTotalCents: number | null = null;
     if (isFoodpanda) {
-      if (checks.orderCode === 'required' && !fpCode.trim()) {
-        setError("Type foodpanda's order number — the owner has made it required.");
+      // The owner's checks, and the tablet against the till's total at foodpanda's prices (the listing
+      // may be dearer) within the owner's tolerance — the value and rule Reports use: decided in one place.
+      const step = foodpandaPayStep(rules.data?.foodpanda, total, fpCode, fpTablet);
+      if (step.kind === 'refuse') {
+        setError(step.message);
         return;
       }
-      const typed = parseTabletCents(fpTablet);
-      if (Number.isNaN(typed)) {
-        setError('Type the tablet total in rupees, like 1920 or 1920.50.');
-        return;
-      }
-      tabletTotalCents = typed;
-      if (checks.tabletTotal === 'required' && tabletTotalCents === null) {
-        setError('Type the total on the foodpanda tablet — the owner has made it required.');
-        return;
-      }
-      if (tabletTotalCents !== null && tablet.differs(tabletTotalCents)) {
+      if (step.kind === 'ask') {
         // A warning to read: Enter (or a held key) lands on "Go back", never on paying anyway.
-        const expected =
-          tabletExpected === total
-            ? `The till says ${formatCents(total)}`
-            : `The tablet should say ${formatCents(tabletExpected)} (the till's ${formatCents(total)} at foodpanda's prices)`;
-        const payAnyway = await askConfirm(
-          `${expected}, the tablet says ${formatCents(tabletTotalCents)} — check the items and the deal.\nPay anyway? The difference is kept, and Reports list this order to check.`,
-          { safeDefault: true, yesLabel: 'Pay anyway', noLabel: 'Go back' },
-        );
+        const payAnyway = await askConfirm(step.question, { safeDefault: true, yesLabel: 'Pay anyway', noLabel: 'Go back' });
         if (!payAnyway) return;
       }
+      tabletTotalCents = step.tabletTotalCents;
     }
     try {
       await tender(
@@ -414,14 +397,6 @@ export function TenderDialog({ snapshot, onClose, onPaid }: Props) {
       </Dialog.Portal>
     </Dialog.Root>
   );
-}
-
-/** The tablet total as typed ("1,920" / "1920.50") → paisa; '' → null; anything else → NaN. */
-export function parseTabletCents(input: string): number | null {
-  const t = input.trim().replace(/,/g, '');
-  if (t === '') return null;
-  if (!/^\d{1,9}(\.\d{1,2})?$/.test(t)) return Number.NaN;
-  return Math.round(Number(t) * 100);
 }
 
 function parseTenderedCents(input: string): number {

@@ -1,4 +1,10 @@
-import { DEFAULT_DISCOUNT_APPROVAL, NO_DISCOUNT_REASON_LABEL, type ApprovalLimits, type Cents } from '@cheeseoclock/shared-types';
+import {
+  DEFAULT_DISCOUNT_APPROVAL,
+  isNoDiscountReasonLabel,
+  NO_DISCOUNT_REASON_LABEL,
+  type ApprovalLimits,
+  type Cents,
+} from '@cheeseoclock/shared-types';
 import { formatCents } from './money.js';
 
 export type DiscountType = 'percent' | 'flat';
@@ -69,13 +75,14 @@ export const DISCOUNT_REASON_REQUIRED = 'Pick or type a reason — the owner has
 /**
  * Has a discount no reason Team & leakage could group it under? Blank, only
  * spaces, or the words Reports use for "none" ("No reason given", whatever
- * its capitals). THE one test: the F3 screen, the IPC handler and the
- * repository all call it when the owner has made a reason required
+ * its capitals and however many spaces between its words: shared-types
+ * isNoDiscountReasonLabel). THE one test: the F3 screen, the IPC handler and
+ * the repository all call it when the owner has made a reason required
  * ('discounts.approval' reasonRequired).
  */
 export function discountReasonMissing(reason: string | null | undefined): boolean {
   const r = (reason ?? '').trim();
-  return r === '' || r.toLowerCase() === NO_DISCOUNT_REASON_LABEL.toLowerCase();
+  return r === '' || isNoDiscountReasonLabel(r);
 }
 
 /**
