@@ -4,7 +4,8 @@ import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { findOrder } from './order-repo.js';
-import { normalizePhone, phoneSearchTerms, resolveAreaText } from '@cheeseoclock/pos-domain';
+import { deliveryAreas, normalizePhone, phoneSearchTerms } from '@cheeseoclock/pos-domain';
+import { readDeliveryZones } from '../business-settings-read.js';
 import type {
   CustomerAddressMatch,
   Customer,
@@ -166,6 +167,8 @@ export function pageCustomers(
     // with the same reader the area picker uses. There are only as many
     // distinct areas as places people live, so this stays small.
     const wanted = new Set(opts.zoneIds);
+    // The owner's areas (Settings → Delivery areas): a renamed area's old name still counts as it.
+    const { resolveAreaText } = deliveryAreas(readDeliveryZones(db));
     const areas = db
       .prepare(
         `SELECT DISTINCT area FROM customer_addresses

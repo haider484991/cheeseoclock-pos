@@ -19,6 +19,7 @@ import {
   Banknote,
   Timer,
   Boxes,
+  Bike,
 } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { SoundSettings } from '../notifications/SoundSettings';
@@ -36,11 +37,13 @@ import { FoodpandaSettings } from './FoodpandaSettings';
 import { MoneySettings } from './MoneySettings';
 import { TimingSettings } from './TimingSettings';
 import { KitchenStockSettings } from './KitchenStockSettings';
+import { DeliveryAreasSettings } from './DeliveryAreasSettings';
 import { useSessionStore } from '../../stores/sessionStore';
 
 export type SettingsTab =
   | 'foodpanda'
   | 'money'
+  | 'delivery'
   | 'store'
   | 'timing'
   | 'stock'
@@ -60,7 +63,7 @@ interface TabDef {
 
 /**
  * The owner's business rules come first, in the design's order (foodpanda,
- * Money & discounts, [Delivery areas & fees], Shop & logo, Staff & kitchen
+ * Money & discounts, Delivery areas & fees, Shop & logo, Staff & kitchen
  * timing, Kitchen & stock — stock rules, waste reasons, what a menu file
  * may change), then this till's printers (Receipts & printing), sounds,
  * backups, FBR, the second till and About.
@@ -68,6 +71,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'foodpanda', label: 'foodpanda', icon: BadgePercent },
   { id: 'money', label: 'Money & discounts', icon: Banknote },
+  { id: 'delivery', label: 'Delivery areas & fees', icon: Bike },
   { id: 'store', label: 'Shop & logo', icon: Store },
   { id: 'timing', label: 'Staff & kitchen timing', icon: Timer },
   { id: 'stock', label: 'Kitchen & stock', icon: Boxes },
@@ -175,6 +179,7 @@ export function SettingsPage() {
       <div role="tabpanel" className="space-y-6">
         {tab === 'foodpanda' && <FoodpandaSettings />}
         {tab === 'money' && <MoneySettings />}
+        {tab === 'delivery' && <DeliveryAreasSettings />}
         {tab === 'timing' && <TimingSettings />}
         {tab === 'stock' && <KitchenStockSettings />}
         {tab === 'store' && <BrandingSettings />}

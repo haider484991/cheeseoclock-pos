@@ -84,6 +84,7 @@ const api: RendererApi = {
     applyDiscount: (req) => invoke('orders:applyDiscount', req),
     clearDiscount: (req) => invoke('orders:clearDiscount', req),
     setMode: (req) => invoke('orders:setMode', req),
+    setDeliveryArea: (req) => invoke('orders:setDeliveryArea', req),
     resumeDraft: () => invoke('orders:resumeDraft', undefined),
     discardDraft: (req) => invoke('orders:discardDraft', req),
     tender: (req) => invoke('orders:tender', req),
@@ -297,6 +298,7 @@ const api: RendererApi = {
   settings: {
     getBusiness: (req) => invoke('settings:getBusiness', req),
     setBusiness: (req) => invoke('settings:setBusiness', req),
+    saveDeliveryZones: (req) => invoke('settings:saveDeliveryZones', req),
   },
   // What the counter needs to take an order (the foodpanda deal, Pay's checks).
   checkout: {

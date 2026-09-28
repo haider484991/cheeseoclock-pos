@@ -1,31 +1,28 @@
 import { useId, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '@cheeseoclock/ui';
-import { feeForZones, findZone } from '@cheeseoclock/shared-types';
-import {
-  areaOptionWhere,
-  deliveryFeeText,
-  formatAreaText,
-  rankZones,
-  resolveAreaText,
-  suggestDeliveryAreas,
-  zoneUsageFromAreas,
-  type AreaOption,
-} from '@cheeseoclock/pos-domain';
-import { AlertTriangle, Check, MapPin } from 'lucide-react';
+import type { AreaOption, DeliveryAreas } from '@cheeseoclock/pos-domain';
+import { AlertTriangle, Check, MapPin, PauseCircle } from 'lucide-react';
 import { ipc } from '../../ipc/client';
+import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 
 /**
  * Deliveries per zone on this till, from the areas saved on customer
  * addresses. Feeds the "most used first" order of the area picker.
  */
-export function useAreaUsage(): ReadonlyMap<string, number> | undefined {
+export function useAreaUsage(areas: DeliveryAreas): ReadonlyMap<string, number> | undefined {
   const q = useQuery({
     queryKey: ['customers', 'areaUsage'],
     queryFn: () => ipc.customers.areaUsage(),
     staleTime: 5 * 60_000,
   });
-  return useMemo(() => (q.data ? zoneUsageFromAreas(q.data) : undefined), [q.data]);
+  return useMemo(() => (q.data ? areas.zoneUsageFromAreas(q.data) : undefined), [q.data, areas]);
+}
+
+/** "DHA & Clifton": the groups the shop delivers to now (Settings → Delivery areas). */
+export function deliveredGroups(areas: DeliveryAreas): string {
+  const groups = [...new Set(areas.activeZones.map((z) => z.group))];
+  return groups.length <= 1 ? (groups[0] ?? 'no area') : `${groups.slice(0, -1).join(', ')} & ${groups[groups.length - 1]}`;
 }
 
 interface AreaPickerProps {
@@ -40,17 +37,20 @@ interface AreaPickerProps {
 }
 
 /**
- * The delivery area, picked from the one shared list (DHA phases, Clifton
- * blocks, and the commercial areas / landmarks people name instead) — not
- * typed. Typing still works: it searches, and a place that is not on the
- * list is kept but flagged, because the shop delivers in DHA and Clifton only.
+ * The delivery area, picked from the owner's list (Settings → Delivery
+ * areas: DHA phases, Clifton blocks… and the commercial areas / landmarks
+ * people name instead) — not typed. Typing still works: it searches, and a
+ * place that is not on the list is kept but flagged, because the shop
+ * delivers to its own areas only. An area whose delivery is switched off is
+ * not offered; an address that names one says so.
  *
  * A place that does not pin one zone (a Khayaban crossing phases, a Clifton
  * landmark) asks "which phase / block?" with one-tap chips, since the zone
  * decides the fee and where the rider goes.
  */
 export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, autoFocus, id }: AreaPickerProps) {
-  const usage = useAreaUsage();
+  const A = useDeliveryAreas();
+  const usage = useAreaUsage(A);
   const listId = useId();
   const [open, setOpen] = useState(false);
   /** What the cashier has typed since focusing; null = browsing the full list. */
@@ -58,15 +58,16 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
   const [active, setActive] = useState(0);
   const [navigated, setNavigated] = useState(false);
 
-  const resolved = useMemo(() => resolveAreaText(value), [value]);
+  const resolved = useMemo(() => A.resolveAreaText(value), [A, value]);
   const suggestions = useMemo(
-    () => suggestDeliveryAreas(typed ?? '', { limit: typed ? 12 : 40, usage }),
-    [typed, usage],
+    () => A.suggest(typed ?? '', { limit: typed ? 12 : 40, usage }),
+    [A, typed, usage],
   );
-  const quick = useMemo(() => rankZones(usage).slice(0, quickPicks), [usage, quickPicks]);
+  const quick = useMemo(() => A.rankZones(usage).slice(0, quickPicks), [A, usage, quickPicks]);
+  const where = deliveredGroups(A);
 
   function pick(option: AreaOption, zoneId?: string) {
-    onChange(formatAreaText(option, zoneId));
+    onChange(A.formatAreaText(option, zoneId));
     setOpen(false);
     setTyped(null);
     setActive(0);
@@ -101,7 +102,10 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
   }
 
   const multi = resolved.option && resolved.zoneIds.length > 1 ? resolved.option : null;
-  const pinned = resolved.zoneIds.length === 1 ? findZone(resolved.zoneIds[0]) : undefined;
+  /** A road across phases offers only the phases delivered to now. */
+  const multiZones = multi ? multi.zoneIds.filter((zid) => A.isActive(zid)) : [];
+  const pinned = resolved.zoneIds.length === 1 ? A.findZone(resolved.zoneIds[0]) : undefined;
+  const paused = pinned ? !A.isActive(pinned.id) : false;
   const unknown = value.trim() !== '' && resolved.zoneIds.length === 0;
   const activeId = open && suggestions[active] ? `${listId}-${active}` : undefined;
 
@@ -152,11 +156,11 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
         >
           {suggestions.length === 0 ? (
             <li className="px-2 py-2 text-xs text-stone-500">
-              Not on our list — we deliver in DHA and Clifton only. Clear the box to see every area.
+              Not on our list — we deliver in {where} only. Clear the box to see every area.
             </li>
           ) : (
             suggestions.map((o, i) => {
-              const fee = deliveryFeeText(o.zoneIds);
+              const fee = A.deliveryFeeText(o.zoneIds.filter((zid) => A.isActive(zid)));
               return (
                 <li key={o.key} id={`${listId}-${i}`} role="option" aria-selected={i === active}>
                   <button
@@ -175,7 +179,7 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
                       <span className="block truncate text-sm font-semibold text-stone-900 dark:text-stone-100">
                         {o.label}
                       </span>
-                      <span className="block truncate text-[11px] text-stone-500">{areaOptionWhere(o)}</span>
+                      <span className="block truncate text-[11px] text-stone-500">{A.areaOptionWhere(o)}</span>
                     </span>
                     {fee && (
                       <span className="shrink-0 rounded-full bg-stone-100 px-2 py-0.5 font-mono text-[11px] text-stone-700 dark:bg-stone-800 dark:text-stone-300">
@@ -190,17 +194,17 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
         </ul>
       )}
 
-      {!open && multi && (
-        <div className="mt-1.5" role="group" aria-label={multi.group === 'DHA' ? 'Which phase?' : 'Which block?'}>
+      {!open && multi && multiZones.length > 0 && (
+        <div className="mt-1.5" role="group" aria-label={A.whichQuestion(multiZones)}>
           <div className="mb-1 text-[11px] font-semibold text-amber-800 dark:text-amber-300">
-            {multi.label}: which {multi.group === 'DHA' ? 'phase' : 'block'}?
-            {deliveryFeeText(multi.zoneIds) && (
-              <span className="ml-1 font-normal text-stone-500">({deliveryFeeText(multi.zoneIds)})</span>
+            {multi.label}: {A.whichQuestion(multiZones).toLowerCase()}
+            {A.deliveryFeeText(multiZones) && (
+              <span className="ml-1 font-normal text-stone-500">({A.deliveryFeeText(multiZones)})</span>
             )}
           </div>
           <div className="flex flex-wrap gap-1">
-            {multi.zoneIds.map((zid) => {
-              const z = findZone(zid);
+            {multiZones.map((zid) => {
+              const z = A.findZone(zid);
               if (!z) return null;
               return (
                 <button
@@ -211,8 +215,8 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
                 >
                   {z.shortName}
                   {/* Only when the place changes the fee (Clifton 1 & 2, DHA Phase 8). */}
-                  {feeForZones(multi.zoneIds) === null && (
-                    <span className="ml-1 font-mono font-normal text-stone-500">{deliveryFeeText([zid])}</span>
+                  {A.feeForZones(multiZones) === null && (
+                    <span className="ml-1 font-mono font-normal text-stone-500">{A.deliveryFeeText([zid])}</span>
                   )}
                 </button>
               );
@@ -221,17 +225,24 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
         </div>
       )}
 
-      {!open && pinned && (
+      {!open && pinned && !paused && (
         <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-300">
           <Check className="h-3 w-3" aria-hidden="true" />
-          {resolved.option?.kind === 'zone' ? pinned.group : pinned.name} · delivery {deliveryFeeText([pinned.id])}
+          {resolved.option?.kind === 'zone' ? pinned.group : pinned.name} · delivery {A.deliveryFeeText([pinned.id])}
+        </div>
+      )}
+
+      {!open && pinned && paused && (
+        <div className="mt-1 flex items-start gap-1 text-[11px] text-amber-800 dark:text-amber-300">
+          <PauseCircle className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+          <span>Delivery to {pinned.name} is switched off in Settings → Delivery areas.</span>
         </div>
       )}
 
       {!open && unknown && (
         <div className="mt-1 flex items-start gap-1 text-[11px] text-amber-800 dark:text-amber-300">
           <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
-          <span>Not a delivery area on our list (DHA &amp; Clifton only). Tap the box to pick one.</span>
+          <span>Not a delivery area on our list ({where} only). Tap the box to pick one.</span>
         </div>
       )}
 

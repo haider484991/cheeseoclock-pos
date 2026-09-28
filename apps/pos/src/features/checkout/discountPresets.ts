@@ -166,7 +166,7 @@ export function currentDiscountWords(
 ): { now: string; ruleNote: string | null } {
   if (current.source === 'foodpanda' && current.reason) return { now: `${current.reason} (set by the owner)`, ruleNote: null };
   const choice = describeDiscount({ type: current.discountType, value: current.value });
-  if (!lines.some(isDeliveryChargeLine)) return { now: choice, ruleNote: null };
+  if (!lines.some((l) => isDeliveryChargeLine(l))) return { now: choice, ruleNote: null };
   const itCovers = current.alsoOffDeliveryCharge !== false;
   if (itCovers === rules.alsoOffDeliveryCharge) return { now: itCovers ? choice : `${choice} food`, ruleNote: null };
   return itCovers

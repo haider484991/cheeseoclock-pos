@@ -5,8 +5,16 @@ import { Button, Card, ImagePicker, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { MenuCostRow, MenuItem, PrepStation } from '@cheeseoclock/shared-types';
-import { Plus, Edit, Trash2, X, Eye, EyeOff, ChevronRight } from 'lucide-react';
+import {
+  FEE_ITEM_LOCKED_NOTE,
+  deliveryZoneFeeItemIds,
+  isDeliveryChargeMenuItem,
+  type MenuCostRow,
+  type MenuItem,
+  type PrepStation,
+} from '@cheeseoclock/shared-types';
+import { Plus, Edit, Trash2, X, Eye, EyeOff, ChevronRight, Lock } from 'lucide-react';
+import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import {
   FilterChips,
@@ -39,6 +47,8 @@ export function ItemsTab() {
   const [category, setCategory] = useSessionState<string>('menu.items.cat', 'all');
   const [status, setStatus] = useSessionState<StatusFilter>('menu.items.status', 'all');
   const [editing, setEditing] = useState<MenuItem | null | 'new'>(null);
+  // The delivery charges are Settings → Delivery areas': name, price, on/off, category and delete are locked here.
+  const isFee = useIsFeeItem();
 
   const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
   const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
@@ -160,6 +170,11 @@ export function ItemsTab() {
                       {i.name}
                     </button>
                     {i.description && <div className="max-w-md truncate text-xs text-stone-500">{i.description}</div>}
+                    {isFee(i) && (
+                      <div className="inline-flex items-center gap-1 text-xs text-amber-800 dark:text-amber-300">
+                        <Lock className="h-3 w-3" aria-hidden="true" /> {FEE_ITEM_LOCKED_NOTE}
+                      </div>
+                    )}
                   </td>
                   <td className="py-2 text-stone-500">
                     <span className="inline-flex items-center gap-1.5">
@@ -177,9 +192,9 @@ export function ItemsTab() {
                   <td className="py-2">
                     <button
                       type="button"
-                      disabled={activeMut.isPending}
+                      disabled={activeMut.isPending || isFee(i)}
                       onClick={() => activeMut.mutate({ id: i.id, isActive: !i.isActive })}
-                      title={i.isActive ? 'Hide from the till (e.g. sold out)' : 'Put back on the till'}
+                      title={isFee(i) ? FEE_ITEM_LOCKED_NOTE : i.isActive ? 'Hide from the till (e.g. sold out)' : 'Put back on the till'}
                       className={cn(
                         'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs',
                         i.isActive
@@ -203,6 +218,7 @@ export function ItemsTab() {
                     </button>
                     <button
                       type="button"
+                      disabled={isFee(i)}
                       onClick={() => {
                         void askConfirm(
                           `Delete "${i.name}"? Past orders keep their copy. To take it off the till for a while, use "Hidden" instead.`,
@@ -210,9 +226,9 @@ export function ItemsTab() {
                           if (ok) deleteMut.mutate(i.id);
                         });
                       }}
-                      className="rounded p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
+                      className="rounded p-1 text-red-500 hover:bg-red-50 disabled:opacity-30 dark:hover:bg-red-950"
                       aria-label={`Delete ${i.name}`}
-                      title="Delete"
+                      title={isFee(i) ? FEE_ITEM_LOCKED_NOTE : 'Delete'}
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -254,6 +270,13 @@ export function ItemsTab() {
   );
 }
 
+/** Is this item a delivery charge (an area's fee item, or named like one)? Locked in Menu. */
+function useIsFeeItem(): (item: { id: string; name: string }) => boolean {
+  const areas = useDeliveryAreas();
+  const ids = useMemo(() => deliveryZoneFeeItemIds(areas.zones), [areas]);
+  return useCallback((item) => isDeliveryChargeMenuItem(item, ids), [ids]);
+}
+
 /** The item's food-cost chip from Costing; a dot while it loads. */
 function ItemCostChip({ row }: { row: MenuCostRow | undefined }) {
   if (!row) return <span className="text-stone-300 dark:text-stone-600">…</span>;
@@ -271,6 +294,8 @@ function ItemDialog({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  // A delivery charge: its name, price, category and on/off are Settings → Delivery areas'.
+  const locked = useIsFeeItem()(existing ?? { id: '', name: '' });
   const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
   const taxQ = useQuery({ queryKey: ['menu', 'taxCategories'], queryFn: () => ipc.menu.listTaxCategories() });
   const modGroupsQ = useQuery({ queryKey: ['menu', 'modifierGroups'], queryFn: () => ipc.menu.listModifierGroups() });
@@ -415,6 +440,11 @@ function ItemDialog({
             </Dialog.Close>
           </header>
           <div className="flex-1 space-y-3 overflow-auto p-5">
+            {locked && (
+              <p className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                <Lock className="h-4 w-4 shrink-0" /> {FEE_ITEM_LOCKED_NOTE} Its name, price, category and on/off follow the areas’ fees.
+              </p>
+            )}
             <Field label="Photo">
               <ImagePicker value={imageUrl} onChange={setImageUrl} emptyLabel="Tap to add a photo" />
             </Field>
@@ -423,8 +453,9 @@ function ItemDialog({
                 type="text"
                 value={name}
                 autoFocus
+                disabled={locked}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full rounded-lg border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
+                className="w-full rounded-lg border border-stone-300 px-3 py-2 disabled:opacity-60 dark:border-stone-700 dark:bg-stone-800"
               />
             </Field>
             <Field label="Description">
@@ -439,8 +470,9 @@ function ItemDialog({
               <Field label="Category">
                 <select
                   value={categoryId}
+                  disabled={locked}
                   onChange={(e) => setCategoryId(e.target.value)}
-                  className="w-full rounded-lg border border-stone-300 px-3 py-2 dark:border-stone-700 dark:bg-stone-800"
+                  className="w-full rounded-lg border border-stone-300 px-3 py-2 disabled:opacity-60 dark:border-stone-700 dark:bg-stone-800"
                 >
                   {catQ.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
@@ -463,6 +495,7 @@ function ItemDialog({
                   min="0"
                   inputMode="decimal"
                   value={priceRupees}
+                  disabled={locked}
                   onChange={(e) => setPriceRupees(e.target.value)}
                   className={cn(
                     'w-full rounded-lg border px-3 py-2 font-mono dark:bg-stone-800',
@@ -509,7 +542,7 @@ function ItemDialog({
             {existing && (
               <Field label="Status">
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+                  <input type="checkbox" checked={isActive} disabled={locked} onChange={(e) => setIsActive(e.target.checked)} />
                   {isActive ? 'On the till (customers can order it)' : 'Hidden from the till'}
                 </label>
               </Field>

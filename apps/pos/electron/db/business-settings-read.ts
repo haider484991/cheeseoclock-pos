@@ -25,12 +25,19 @@ import {
   type BusinessSettingValue,
 } from '@cheeseoclock/shared-schemas';
 import {
+  DEFAULT_DELIVERY_ZONES,
   DEFAULT_MENU_IMPORT_POLICY,
+  DEFAULT_ONLINE_OPTIONS,
   DEFAULT_STAFF_TIMING,
   DEFAULT_STOCK_RULES,
+  DEFAULT_WEBSITE_PICKUP,
   SHOP_SETTING_DEFAULTS,
+  deliveryZoneFeeItemIds,
   type ApprovalLimits,
+  type DeliveryZoneSetting,
   type MenuImportPolicy,
+  type OnlineOptions,
+  type WebsitePickup,
   type ShopSettingKey,
   type ShopSettingValues,
   type StaffTiming,
@@ -51,14 +58,24 @@ export interface StoredBusinessSetting<K extends BusinessSettingKey> {
 export function readBusinessSettingRow(
   db: AppDatabase,
   key: BusinessSettingKey,
-): { id: string; valueJson: string; updatedAt: string; updatedByUserId: string | null } | null {
+): { id: string; valueJson: string; updatedAt: string; updatedByUserId: string | null; version: number } | null {
   const row = db
     .prepare(
-      `SELECT id, value_json, updated_at, updated_by_user_id FROM business_settings
+      `SELECT id, value_json, updated_at, updated_by_user_id, version FROM business_settings
         WHERE key = ? AND deleted_at IS NULL`,
     )
-    .get(key) as { id: string; value_json: string; updated_at: string; updated_by_user_id: string | null } | undefined;
-  return row ? { id: row.id, valueJson: row.value_json, updatedAt: row.updated_at, updatedByUserId: row.updated_by_user_id } : null;
+    .get(key) as
+    | { id: string; value_json: string; updated_at: string; updated_by_user_id: string | null; version: number }
+    | undefined;
+  return row
+    ? {
+        id: row.id,
+        valueJson: row.value_json,
+        updatedAt: row.updated_at,
+        updatedByUserId: row.updated_by_user_id,
+        version: row.version,
+      }
+    : null;
 }
 
 export function getBusinessSetting<K extends BusinessSettingKey>(db: AppDatabase, key: K): StoredBusinessSetting<K> | null {
@@ -193,6 +210,52 @@ export function readMenuImportPolicy(db: AppDatabase): MenuImportPolicy {
     return readShopSetting(db, 'menu.importPolicy').value;
   } catch {
     return { ...DEFAULT_MENU_IMPORT_POLICY };
+  }
+}
+
+/**
+ * The owner's delivery areas and fees ('delivery.zones', Settings →
+ * Delivery areas), read on every call — the till's area picker and fee
+ * button (checkout:getRules), the order's delivery charge, the Customers
+ * filter, the menu locks and import, Reports (its worker too) and the
+ * website's settings block. Every area, switched-off ones included (an old
+ * address is still recognised). Today's 21 areas and fees when nothing is
+ * saved, or when a read fails (it should not).
+ */
+export function readDeliveryZones(db: AppDatabase | null): DeliveryZoneSetting[] {
+  if (!db) return structuredClone(DEFAULT_DELIVERY_ZONES.zones) as DeliveryZoneSetting[];
+  try {
+    return readShopSetting(db, 'delivery.zones').value.zones;
+  } catch {
+    return structuredClone(DEFAULT_DELIVERY_ZONES.zones) as DeliveryZoneSetting[];
+  }
+}
+
+/**
+ * The menu items the areas charge their fees with (each area's feeItemId):
+ * a menu item is a delivery charge when it is one of these, or — data from
+ * before Settings step 3, or an older till's — when it is named like one
+ * (shared-types isDeliveryChargeMenuItem).
+ */
+export function readDeliveryFeeItemIds(db: AppDatabase | null): Set<string> {
+  return deliveryZoneFeeItemIds(readDeliveryZones(db));
+}
+
+/** The website's pick-up offer ('discounts.websitePickup'): offered, and its whole %. Today's (on, 10%) when nothing is saved. */
+export function readWebsitePickup(db: AppDatabase): WebsitePickup {
+  try {
+    return readShopSetting(db, 'discounts.websitePickup').value;
+  } catch {
+    return { ...DEFAULT_WEBSITE_PICKUP };
+  }
+}
+
+/** How the till works with the website ('online.options'): today's (the menu goes only when asked) when nothing is saved. */
+export function readOnlineOptions(db: AppDatabase): OnlineOptions {
+  try {
+    return readShopSetting(db, 'online.options').value;
+  } catch {
+    return { ...DEFAULT_ONLINE_OPTIONS };
   }
 }
 

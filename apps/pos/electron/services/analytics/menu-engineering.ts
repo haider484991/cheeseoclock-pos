@@ -12,10 +12,10 @@
  *
  * Read-only; never loads Electron (the worker loads it).
  */
-import { isDeliveryChargeName, type MenuMapCategory, type MenuMapRequest, type ReportMenuMap } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeMenuItem, type MenuMapCategory, type MenuMapRequest, type ReportMenuMap } from '@cheeseoclock/shared-types';
 import { DEFAULT_PRICE_STEP_CENTS, menuMap, type MenuMapDishInput } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../../db/connection.js';
-import { getBusinessSetting } from '../../db/business-settings-read.js';
+import { getBusinessSetting, readDeliveryFeeItemIds } from '../../db/business-settings-read.js';
 import { costingStartedAt } from '../business-report.js';
 import { readSales } from './profit.js';
 import { DAY_MS } from './sql.js';
@@ -60,8 +60,9 @@ export function buildMenuMap(db: AppDatabase, req: MenuMapRequest | undefined, n
       knownCostCents: it.costCents,
     });
   }
+  const feeItemIds = readDeliveryFeeItemIds(db);
   for (const i of live) {
-    if (pass.menu.nonFoodCategoryIds.has(i.categoryId) || isDeliveryChargeName(i.name)) continue;
+    if (pass.menu.nonFoodCategoryIds.has(i.categoryId) || isDeliveryChargeMenuItem(i, feeItemIds)) continue;
     if (dishes.get(i.categoryId)?.has(i.id)) continue;
     add(i.categoryId, { id: i.id, name: i.name, units: 0, knownUnits: 0, knownMenuSalesCents: 0, knownCostCents: 0 });
   }

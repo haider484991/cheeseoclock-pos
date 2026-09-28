@@ -10,6 +10,7 @@
  * process decides every discount again when it is saved.
  */
 import {
+  DEFAULT_DELIVERY_ZONES,
   DEFAULT_DISCOUNT_APPROVAL,
   DEFAULT_DISCOUNT_DELIVERY,
   DEFAULT_DISCOUNT_PRESETS,
@@ -17,6 +18,7 @@ import {
   DEFAULT_STOCK_RULES,
   type CheckoutRules,
   type CounterStockRules,
+  type DeliveryZoneSetting,
 } from '@cheeseoclock/shared-types';
 
 export type CounterDiscountRules = CheckoutRules['discounts'];
@@ -61,6 +63,15 @@ export const DEFAULT_COUNTER_STOCK: CounterStockRules = {
   wasteReasons: DEFAULT_STOCK_RULES.wasteReasons.map((r) => ({ ...r })),
   reminders: { ...DEFAULT_STOCK_RULES.reminders },
 };
+
+/**
+ * The delivery areas and fees (Settings → Delivery areas) from
+ * checkout:getRules — every area, switched-off ones too — or the released
+ * 21 until it has answered.
+ */
+export function deliveryZonesOf(rules: Pick<CheckoutRules, 'delivery'> | null | undefined): readonly DeliveryZoneSetting[] {
+  return rules?.delivery?.zones ?? DEFAULT_DELIVERY_ZONES.zones;
+}
 
 /** Inventory's stock rules from checkout:getRules, or the released ones until it has answered. */
 export function stockRulesOf(rules: Pick<CheckoutRules, 'stock'> | null | undefined): CounterStockRules {

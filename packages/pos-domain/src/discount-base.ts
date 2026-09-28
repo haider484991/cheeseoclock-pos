@@ -17,7 +17,12 @@
  *  - the tax: per line, on what is left of it (tax-exclusive).
  *
  * Which line is a delivery charge is shared-types isDeliveryChargeLine (the
- * name it was sold under), the one test. Whether a discount leaves it alone
+ * name it was sold under), the one test. Since Settings step 3 a caller
+ * holding the areas' fee items (deliveryZoneFeeItemIds) may pass them as
+ * `feeItemIds`: a line of one of those items counts too. The readers after
+ * the fact pass none: a fee item's line is always sold under its
+ * "Delivery Charge (Rs N)" name (addOrderItem snapshots it), so both agree
+ * on every order. Whether a discount leaves it alone
  * is the RULE FROZEN ON ITS ROW (discountRuleAlsoOffDeliveryCharge), never
  * the live setting: a row with no rule (given before 0.7.26, or on an older
  * till) is read exactly as it was worked then, over every line.
@@ -32,6 +37,8 @@ export interface DiscountLine {
   lineTotalCents: number;
   /** order_items.menu_item_name; absent = not a delivery charge. */
   menuItemName?: string | null;
+  /** order_items.menu_item_id: a delivery charge too when it is one of `feeItemIds`. */
+  menuItemId?: string | null;
 }
 
 /** A line with the tax rate snapshotted on it (basis points). */
@@ -40,21 +47,33 @@ export interface TaxedDiscountLine extends DiscountLine {
 }
 
 /** Does this line take a share of the discount? Every line does, except a delivery charge when the discount leaves it alone. */
-export function lineTakesDiscount(line: Pick<DiscountLine, 'menuItemName'>, alsoOffDeliveryCharge: boolean): boolean {
-  return alsoOffDeliveryCharge || !isDeliveryChargeLine(line);
+export function lineTakesDiscount(
+  line: Pick<DiscountLine, 'menuItemName' | 'menuItemId'>,
+  alsoOffDeliveryCharge: boolean,
+  feeItemIds?: ReadonlySet<string> | null,
+): boolean {
+  return alsoOffDeliveryCharge || !isDeliveryChargeLine(line, feeItemIds);
 }
 
 /** Each line's weight in the split: its total, or 0 for a line the discount leaves alone. */
-export function discountWeights(lines: ReadonlyArray<DiscountLine>, alsoOffDeliveryCharge: boolean): number[] {
-  return lines.map((l) => (lineTakesDiscount(l, alsoOffDeliveryCharge) ? l.lineTotalCents : 0));
+export function discountWeights(
+  lines: ReadonlyArray<DiscountLine>,
+  alsoOffDeliveryCharge: boolean,
+  feeItemIds?: ReadonlySet<string> | null,
+): number[] {
+  return lines.map((l) => (lineTakesDiscount(l, alsoOffDeliveryCharge, feeItemIds) ? l.lineTotalCents : 0));
 }
 
 /**
  * What the discount is worked on (paisa, before tax): the food only, or —
  * `alsoOffDeliveryCharge` — every line (the whole subtotal, as before).
  */
-export function discountBaseCents(lines: ReadonlyArray<DiscountLine>, alsoOffDeliveryCharge: boolean): number {
-  return discountWeights(lines, alsoOffDeliveryCharge).reduce((s, w) => s + Math.max(0, w), 0);
+export function discountBaseCents(
+  lines: ReadonlyArray<DiscountLine>,
+  alsoOffDeliveryCharge: boolean,
+  feeItemIds?: ReadonlySet<string> | null,
+): number {
+  return discountWeights(lines, alsoOffDeliveryCharge, feeItemIds).reduce((s, w) => s + Math.max(0, w), 0);
 }
 
 /**
@@ -63,9 +82,17 @@ export function discountBaseCents(lines: ReadonlyArray<DiscountLine>, alsoOffDel
  * come off — only a till older than this rule stores one — is split over
  * every line, as that till split it (discount.ts weightsThatCarry).
  */
-export function splitDiscount(lines: ReadonlyArray<DiscountLine>, discountCents: number, alsoOffDeliveryCharge: boolean): number[] {
+export function splitDiscount(
+  lines: ReadonlyArray<DiscountLine>,
+  discountCents: number,
+  alsoOffDeliveryCharge: boolean,
+  feeItemIds?: ReadonlySet<string> | null,
+): number[] {
   const totals = lines.map((l) => l.lineTotalCents);
-  return allocateDiscount(weightsThatCarry(totals, discountWeights(lines, alsoOffDeliveryCharge), discountCents), discountCents);
+  return allocateDiscount(
+    weightsThatCarry(totals, discountWeights(lines, alsoOffDeliveryCharge, feeItemIds), discountCents),
+    discountCents,
+  );
 }
 
 /**

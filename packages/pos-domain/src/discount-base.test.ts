@@ -41,6 +41,24 @@ describe('which line is a delivery charge: the name it was sold under, one test'
     expect(isDeliveryChargeLine({ menuItemName: null })).toBe(false);
     expect(isDeliveryChargeLine({ menuItemName: 'Free delivery charge promo pizza' })).toBe(false);
   });
+
+  it('Settings step 3: a line of one of the areas’ fee items is one too, by id — and the name alone still decides history', () => {
+    const FEE_IDS = new Set(['fee-item-300']);
+    // Sold under a name that does not say it (an older till renamed the item): the id tells.
+    const renamed = { lineTotalCents: 30_000, menuItemName: 'Rider fee', menuItemId: 'fee-item-300', taxRateBps: 1600 };
+    expect(isDeliveryChargeLine(renamed, FEE_IDS)).toBe(true);
+    expect(isDeliveryChargeLine(renamed)).toBe(false);
+    // By name, with or without ids.
+    expect(isDeliveryChargeLine({ ...CHARGE, menuItemId: 'legacy-200' }, FEE_IDS)).toBe(true);
+    expect(isDeliveryChargeLine({ ...PIZZA, menuItemId: 'pizza' }, FEE_IDS)).toBe(false);
+    // The v0.7.26 rule on the discount base: the fee line takes none of it, by id or by name.
+    const order = [{ ...PIZZA, menuItemId: 'pizza' }, renamed, { ...CHARGE, menuItemId: 'legacy-200' }];
+    expect(discountBaseCents(order, false, FEE_IDS)).toBe(120_000);
+    expect(discountBaseCents(order, false)).toBe(150_000);
+    expect(discountBaseCents(order, true, FEE_IDS)).toBe(170_000);
+    expect(lineTakesDiscount(renamed, false, FEE_IDS)).toBe(false);
+    expect(splitDiscount(order, 12_000, false, FEE_IDS)).toEqual([12_000, 0, 0]);
+  });
 });
 
 describe('the base: what a discount is worked on', () => {

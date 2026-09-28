@@ -3,6 +3,21 @@ import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
   DAY_NOTE_TAGS,
+  DELIVERY_FEE_MAX_CENTS,
+  DELIVERY_PLACES,
+  DELIVERY_ZONES,
+  DELIVERY_ZONES_MAX,
+  DELIVERY_ZONE_GROUP_MAX,
+  DELIVERY_ZONE_ID_MAX,
+  DELIVERY_ZONE_ID_RE,
+  DELIVERY_ZONE_NAME_MAX,
+  DELIVERY_ZONE_SHORT_NAME_MAX,
+  DELIVERY_ZONE_SPELLINGS_MAX,
+  DELIVERY_ZONE_SPELLING_MAX,
+  PLAIN_SHOP_SETTING_KEYS,
+  WEBSITE_PICKUP_MAX_PERCENT,
+  normalizeAreaText,
+  zoneAliasProblem,
   FOODPANDA_DEAL_MAX_PERCENT,
   KITCHEN_TIMING_BOUNDS,
   LEGACY_COMMISSION_BASES,
@@ -27,6 +42,11 @@ import {
   isShopSettingKey,
 } from '@cheeseoclock/shared-types';
 import type {
+  DeliveryZones,
+  OnlineOptions,
+  PlainShopSettingKey,
+  SaveDeliveryZonesRequest,
+  WebsitePickup,
   DiscountApproval,
   DiscountPresets,
   KitchenTiming,
@@ -516,6 +536,175 @@ const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };
 export const foodpandaChecksSchema = z.object({ v: writesFormat('foodpanda.checks'), ...foodpandaChecksShape }).strict();
 const foodpandaChecksReadSchema = z.object({ v: readsFormat, ...foodpandaChecksShape });
 
+// ---------------------------------------------------------------------------
+// Delivery areas & fees, the website pick-up, online options (phase 3)
+// ---------------------------------------------------------------------------
+
+/** One line of text: trimmed, not empty, at most `max` letters. */
+const oneLine = (max: number, what: string) =>
+  z
+    .string()
+    .min(1, { message: `${what} can’t be empty` })
+    .max(max, { message: `Keep ${what.toLowerCase()} to ${max} letters` })
+    .refine((t) => t.trim() === t && t.trim() !== '', { message: `${what} has no spaces at its start or end` })
+    .refine((t) => !/[\r\n\t]/.test(t), { message: `${what} is one line` });
+
+const zoneIdSchema = z
+  .string()
+  .max(DELIVERY_ZONE_ID_MAX, { message: 'That area id is too long' })
+  .regex(DELIVERY_ZONE_ID_RE, { message: 'That is not an area id' });
+const spellings = (what: string) =>
+  z
+    .array(z.string().min(1).max(DELIVERY_ZONE_SPELLING_MAX, { message: `Keep a spelling to ${DELIVERY_ZONE_SPELLING_MAX} letters` }))
+    .max(DELIVERY_ZONE_SPELLINGS_MAX, { message: `At most ${DELIVERY_ZONE_SPELLINGS_MAX} ${what} for one area` });
+
+const deliveryZoneShape = {
+  id: zoneIdSchema,
+  name: oneLine(DELIVERY_ZONE_NAME_MAX, 'An area’s name'),
+  shortName: oneLine(DELIVERY_ZONE_SHORT_NAME_MAX, 'An area’s short name'),
+  group: oneLine(DELIVERY_ZONE_GROUP_MAX, 'An area’s group'),
+  feeCents: wholeRupees(DELIVERY_FEE_MAX_CENTS / 100, 'A delivery fee'),
+  feeItemId: z.string().min(1).max(64).nullable(),
+  active: z.boolean(),
+  aliases: spellings('spellings'),
+  hints: spellings('search shortcuts'),
+};
+/** The fields of one area this version writes (a newer till's extra field makes the stored list "newer": storedFormatIsNewer). */
+const DELIVERY_ZONE_FIELDS: ReadonlySet<string> = new Set(Object.keys(deliveryZoneShape));
+
+/** Ids, names and spellings each name ONE area. */
+const zonesAreDistinct = (
+  zones: ReadonlyArray<{ id: string; name: string; aliases: readonly string[] }>,
+  ctx: z.RefinementCtx,
+) => {
+  const ids = new Set<string>();
+  const words = new Map<string, string>();
+  for (const zn of zones) {
+    if (ids.has(zn.id)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Two areas have the id "${zn.id}"` });
+      return;
+    }
+    ids.add(zn.id);
+    for (const w of [zn.name, ...zn.aliases]) {
+      const key = normalizeAreaText(w);
+      if (!key) continue;
+      const other = words.get(key);
+      if (other !== undefined && other !== zn.id) {
+        const otherName = zones.find((x) => x.id === other)?.name ?? other;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `"${w}" names both ${otherName} and ${zn.name} — keep it on one area`,
+        });
+        return;
+      }
+      words.set(key, zn.id);
+    }
+  }
+};
+
+/** What this version writes: every rule of the card. */
+const zonesWriteRules = (
+  zones: ReadonlyArray<{ id: string; name: string; group: string; feeCents: number; feeItemId: string | null; aliases: readonly string[] }>,
+  ctx: z.RefinementCtx,
+) => {
+  zonesAreDistinct(zones, ctx);
+  for (const zn of zones) {
+    for (const a of zn.aliases) {
+      const problem = zoneAliasProblem(a);
+      if (problem) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${zn.name}: ${problem}` });
+        return;
+      }
+    }
+    if (zn.feeCents === 0 && zn.feeItemId !== null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${zn.name} is free to deliver to: it takes no delivery charge item` });
+      return;
+    }
+  }
+  // The released areas are what every version knows (and the website's pages): switch one off, never remove it.
+  const ids = new Set(zones.map((zn) => zn.id));
+  const missing = DELIVERY_ZONES.find((zn) => !ids.has(zn.id));
+  if (missing) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `${missing.name} is one of the shop’s own areas: switch it off instead of removing it`,
+    });
+    return;
+  }
+  // A landmark ("Khayaban-e-Ittehad") lies in areas of one group: the till asks "which phase?" within it.
+  const groupOf = new Map(zones.map((zn) => [zn.id, zn.group.trim().toLowerCase()]));
+  for (const p of DELIVERY_PLACES) {
+    const groups = new Set(p.zoneIds.map((id) => groupOf.get(id)).filter((g): g is string => g !== undefined));
+    if (groups.size > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${p.label} lies in ${p.zoneIds.map((id) => zones.find((x) => x.id === id)?.name ?? id).join(', ')}: keep those areas in one group`,
+      });
+      return;
+    }
+  }
+};
+
+const zonesList = <T extends z.ZodTypeAny>(item: T) =>
+  z
+    .array(item)
+    .min(1, { message: 'Keep at least one delivery area' })
+    .max(DELIVERY_ZONES_MAX, { message: `At most ${DELIVERY_ZONES_MAX} delivery areas, switched-off ones included` });
+
+/** 'delivery.zones' as this version writes it. */
+export const deliveryZonesSchema = z
+  .object({
+    v: writesFormat('delivery.zones'),
+    zones: zonesList(z.object(deliveryZoneShape).strict()).superRefine(zonesWriteRules),
+  })
+  .strict();
+const deliveryZonesReadSchema = z.object({
+  v: readsFormat,
+  // A newer till's fields are dropped; ids and names must still each name one area.
+  zones: zonesList(z.object(deliveryZoneShape)).superRefine(zonesAreDistinct),
+});
+
+const websitePickupShape = {
+  offered: z.boolean({ errorMap: () => ({ message: 'Say whether pick-up is offered on the website: yes or no' }) }),
+  percent: z
+    .number()
+    .int({ message: 'The pick-up discount is a whole %' })
+    .min(0, { message: "The pick-up discount can't be below 0%" })
+    .max(WEBSITE_PICKUP_MAX_PERCENT, { message: `The pick-up discount is at most ${WEBSITE_PICKUP_MAX_PERCENT}%` }),
+};
+/** 'discounts.websitePickup' as this version writes it. */
+export const websitePickupSchema = z.object({ v: writesFormat('discounts.websitePickup'), ...websitePickupShape }).strict();
+const websitePickupReadSchema = z.object({ v: readsFormat, ...websitePickupShape });
+
+const onlineOptionsShape = {
+  autoPublishMenu: z.boolean({ errorMap: () => ({ message: 'Say whether the menu goes to the website by itself: yes or no' }) }),
+};
+/** 'online.options' as this version writes it. */
+export const onlineOptionsSchema = z.object({ v: writesFormat('online.options'), ...onlineOptionsShape }).strict();
+const onlineOptionsReadSchema = z.object({ v: readsFormat, ...onlineOptionsShape });
+
+/**
+ * settings:saveDeliveryZones: the whole list as the card sends it (the main
+ * process decides every fee item; a feeItemId sent is ignored), or "Put
+ * back the default". The full rules are deliveryZonesSchema's, checked on
+ * the list the Save writes.
+ */
+export const saveDeliveryZonesInputSchema = z.union([
+  z.object({ useDefault: z.literal(true) }).strict(),
+  z
+    .object({
+      zones: zonesList(
+        z
+          .object({
+            ...deliveryZoneShape,
+            feeItemId: deliveryZoneShape.feeItemId.optional(),
+          })
+          .strict(),
+      ),
+    })
+    .strict(),
+]);
+
 /** A share of money in basis points, 0–100% (2500 = 25%). */
 const feeBps = (what: string) =>
   z
@@ -593,6 +782,9 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'kitchen.timing': kitchenTimingSchema,
   'stock.rules': stockRulesSchema,
   'menu.importPolicy': menuImportPolicySchema,
+  'discounts.websitePickup': websitePickupSchema,
+  'delivery.zones': deliveryZonesSchema,
+  'online.options': onlineOptionsSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 } as const;
@@ -626,6 +818,9 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'kitchen.timing': kitchenTimingReadSchema,
   'stock.rules': stockRulesReadSchema,
   'menu.importPolicy': menuImportPolicyReadSchema,
+  'discounts.websitePickup': websitePickupReadSchema,
+  'delivery.zones': deliveryZonesReadSchema,
+  'online.options': onlineOptionsReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 };
@@ -642,6 +837,9 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'kitchen.timing': new Set(['v', ...Object.keys(kitchenTimingShape)]),
   'stock.rules': new Set(['v', ...Object.keys(stockRulesWriteShape)]),
   'menu.importPolicy': new Set(['v', ...Object.keys(menuImportPolicyShape)]),
+  'discounts.websitePickup': new Set(['v', ...Object.keys(websitePickupShape)]),
+  'delivery.zones': new Set(['v', 'zones']),
+  'online.options': new Set(['v', ...Object.keys(onlineOptionsShape)]),
 };
 
 /**
@@ -656,13 +854,32 @@ export function storedFormatIsNewer(key: BusinessSettingKey, raw: unknown): bool
   const v = (raw as { v?: unknown }).v;
   if (typeof v === 'number' && v > SHOP_SETTING_FORMAT[key]) return true;
   const known = SHOP_SETTING_FIELDS[key];
-  return Object.keys(raw).some((f) => !known.has(f));
+  if (Object.keys(raw).some((f) => !known.has(f))) return true;
+  // The areas are a list of objects: a field one of them has that this version does not know is newer too.
+  if (key === 'delivery.zones') {
+    const zones = (raw as { zones?: unknown }).zones;
+    if (Array.isArray(zones)) {
+      return zones.some(
+        (zn) => typeof zn === 'object' && zn !== null && Object.keys(zn).some((f) => !DELIVERY_ZONE_FIELDS.has(f)),
+      );
+    }
+  }
+  return false;
 }
 
-/** settings:setBusiness: a key and its value, or "Put back the default". The value is checked by the key's schema. */
+/** The keys settings:setBusiness saves: every shop rule but the delivery areas (settings:saveDeliveryZones). */
+const plainShopSettingKey = z.enum(PLAIN_SHOP_SETTING_KEYS as [PlainShopSettingKey, ...PlainShopSettingKey[]], {
+  errorMap: () => ({ message: 'Which setting?' }),
+});
+
+/**
+ * settings:setBusiness: a key and its value, or "Put back the default". The
+ * value is checked by the key's schema. Never 'delivery.zones': its Save
+ * also makes the delivery-charge items (settings:saveDeliveryZones).
+ */
 export const setShopSettingInputSchema = z.union([
-  z.object({ key: z.enum(SHOP_SETTING_KEYS), useDefault: z.literal(true) }).strict(),
-  z.object({ key: z.enum(SHOP_SETTING_KEYS), value: z.unknown() }).strict(),
+  z.object({ key: plainShopSettingKey, useDefault: z.literal(true) }).strict(),
+  z.object({ key: plainShopSettingKey, value: z.unknown() }).strict(),
 ]);
 
 /** settings:getBusiness */
@@ -829,6 +1046,13 @@ const _stockRulesShape: Same<z.infer<typeof stockRulesSchema>, StockRules> = tru
 const _stockRulesReadShape: Same<z.infer<typeof stockRulesReadSchema>, StockRules> = true;
 const _menuImportPolicyShape: Same<z.infer<typeof menuImportPolicySchema>, MenuImportPolicy> = true;
 const _menuImportPolicyReadShape: Same<z.infer<typeof menuImportPolicyReadSchema>, MenuImportPolicy> = true;
+const _deliveryZonesShape: Same<z.infer<typeof deliveryZonesSchema>, DeliveryZones> = true;
+const _deliveryZonesReadShape: Same<z.infer<typeof deliveryZonesReadSchema>, DeliveryZones> = true;
+const _saveDeliveryZonesShape: Same<z.infer<typeof saveDeliveryZonesInputSchema>, SaveDeliveryZonesRequest> = true;
+const _websitePickupShape: Same<z.infer<typeof websitePickupSchema>, WebsitePickup> = true;
+const _websitePickupReadShape: Same<z.infer<typeof websitePickupReadSchema>, WebsitePickup> = true;
+const _onlineOptionsShape: Same<z.infer<typeof onlineOptionsSchema>, OnlineOptions> = true;
+const _onlineOptionsReadShape: Same<z.infer<typeof onlineOptionsReadSchema>, OnlineOptions> = true;
 const _feesShape: Same<z.infer<typeof channelFeesSchema>, ChannelFees> = true;
 const _riderShape: Same<z.infer<typeof riderCostSchema>, RiderCostSetting> = true;
 const _setFeesShape: Same<z.infer<typeof setChannelFeesInputSchema>, SetChannelFeesRequest> = true;

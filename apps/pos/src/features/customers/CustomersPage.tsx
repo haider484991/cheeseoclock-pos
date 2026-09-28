@@ -2,14 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
-import { deliveryFeeText, formatCents, resolveAreaText } from '@cheeseoclock/pos-domain';
-import {
-  DELIVERY_CITY,
-  DELIVERY_ZONES,
-  type Customer,
-  type CustomerAddress,
-  type CustomerListSort,
-} from '@cheeseoclock/shared-types';
+import { formatCents, type DeliveryAreas } from '@cheeseoclock/pos-domain';
+import { DELIVERY_CITY, type Customer, type CustomerAddress, type CustomerListSort } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { Plus, Edit, X, Phone, Mail, MapPin, History, Star, Trash2, Users } from 'lucide-react';
@@ -23,15 +17,16 @@ import {
   type ChipOption,
 } from '../../components/list';
 import { AreaPicker } from './AreaPicker';
+import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 
-/** "all", a whole group ("group:DHA") or one zone ("zone:dha-6"). */
-type AreaFilter = 'all' | `group:${'DHA' | 'Clifton'}` | `zone:${string}`;
+/** "all", a whole group ("group:DHA") or one zone ("zone:dha-6"). Groups are the owner's (Settings → Delivery areas). */
+type AreaFilter = 'all' | `group:${string}` | `zone:${string}`;
 
-function zoneIdsFor(filter: AreaFilter): string[] | undefined {
+function zoneIdsFor(filter: AreaFilter, areas: DeliveryAreas): string[] | undefined {
   if (filter === 'all') return undefined;
   if (filter.startsWith('group:')) {
     const group = filter.slice('group:'.length);
-    return DELIVERY_ZONES.filter((z) => z.group === group).map((z) => z.id);
+    return areas.zones.filter((z) => z.group === group).map((z) => z.id);
   }
   return [filter.slice('zone:'.length)];
 }
@@ -66,7 +61,8 @@ export function CustomersPage() {
   const [detailFor, setDetailFor] = useState<Customer | null>(null);
 
   const debounced = useDebouncedValue(search.trim(), 250);
-  const zoneIds = useMemo(() => zoneIdsFor(area), [area]);
+  const areas = useDeliveryAreas();
+  const zoneIds = useMemo(() => zoneIdsFor(area, areas), [area, areas]);
 
   const q = useQuery({
     queryKey: ['customers', 'page', { search: debounced, area, sort, page, pageSize }],
@@ -131,22 +127,23 @@ export function CustomersPage() {
               className="h-10 rounded-lg border border-stone-300 bg-white px-2 text-sm dark:border-stone-700 dark:bg-stone-800"
             >
               <option value="all">All areas</option>
-              <option value="group:DHA">All of DHA</option>
-              <option value="group:Clifton">All of Clifton</option>
-              <optgroup label="DHA">
-                {DELIVERY_ZONES.filter((z) => z.group === 'DHA').map((z) => (
-                  <option key={z.id} value={`zone:${z.id}`}>
-                    {z.name}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Clifton">
-                {DELIVERY_ZONES.filter((z) => z.group === 'Clifton').map((z) => (
-                  <option key={z.id} value={`zone:${z.id}`}>
-                    {z.name}
-                  </option>
-                ))}
-              </optgroup>
+              {areas.groups.map((g) => (
+                <option key={`group:${g}`} value={`group:${g}`}>
+                  All of {g}
+                </option>
+              ))}
+              {areas.groups.map((g) => (
+                <optgroup key={g} label={g}>
+                  {areas.zones
+                    .filter((z) => z.group === g)
+                    .map((z) => (
+                      <option key={z.id} value={`zone:${z.id}`}>
+                        {z.name}
+                        {z.active === false ? ' (delivery off)' : ''}
+                      </option>
+                    ))}
+                </optgroup>
+              ))}
             </select>
           </label>
         </div>
@@ -409,6 +406,7 @@ function CustomerDetailDialog({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const areas = useDeliveryAreas();
   const q = useQuery({ queryKey: ['customers', 'detail', customer.id], queryFn: () => ipc.customers.get(customer.id) });
   const historyQ = useQuery({
     queryKey: ['customers', 'history', customer.id],
@@ -485,7 +483,7 @@ function CustomerDetailDialog({
               {q.data?.addresses.length ? (
                 <ul className="space-y-1">
                   {q.data.addresses.map((a) => {
-                    const fee = deliveryFeeText(resolveAreaText(a.area).zoneIds);
+                    const fee = areas.deliveryFeeText(areas.resolveAreaText(a.area).zoneIds);
                     return (
                       <li
                         key={a.id}

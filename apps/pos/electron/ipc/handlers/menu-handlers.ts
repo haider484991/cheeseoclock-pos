@@ -45,6 +45,26 @@ import { MenuImportRefusedError } from '../../db/repositories/menu-import-repo.j
 import { requireAdmin } from '../guards.js';
 import log from 'electron-log/main';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
+import {
+  categoryEditProblem,
+  menuItemDeleteProblem,
+  menuItemEditProblem,
+  menuItemNameProblem,
+} from '../../services/delivery-fee-items.js';
+
+/** A delivery charge is Settings → Delivery areas': Menu's change refused, in words a manager can act on. */
+function refuseIf(problem: string | null): void {
+  if (problem) throw new IpcGuardError({ code: 'precondition_failed', message: problem });
+}
+
+/**
+ * The menu changed on this till: with "Publish the menu to the website by
+ * itself" on (Settings → Online orders), the bridge sends it a moment later
+ * (debounced). Off — the default — nothing happens, as before.
+ */
+function menuChanged(): void {
+  webOrdersBridge.menuChanged();
+}
 
 function requireSession(): AuthenticatedUser {
   const session = getCurrentSession();
@@ -69,17 +89,26 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
 
   defineHandler('menu:createCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(createCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    // Never a caller's id: name-based ids are Settings → Delivery areas' own.
+    const { name, displayOrder, colorHex } = payload;
+    const out = createCategory(ctx.db, { name, displayOrder, colorHex }, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:updateCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(updateCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    refuseIf(categoryEditProblem(ctx.db, payload.id, { isActive: payload.isActive }));
+    const out = updateCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:deleteCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
+    refuseIf(categoryEditProblem(ctx.db, payload.id, { delete: true }));
     deleteCategory(ctx.db, payload.id, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
     return ok({ id: payload.id });
   });
 
@@ -96,17 +125,27 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
 
   defineHandler('menu:createItem', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(createMenuItem(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    refuseIf(menuItemNameProblem(payload.name));
+    // Never a caller's id: name-based ids are Settings → Delivery areas' own.
+    const { id: _id, ...input } = payload as typeof payload & { id?: unknown };
+    const out = createMenuItem(ctx.db, input, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:updateItem', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(updateMenuItem(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    refuseIf(menuItemEditProblem(ctx.db, payload.id, payload));
+    const out = updateMenuItem(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:deleteItem', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
+    refuseIf(menuItemDeleteProblem(ctx.db, payload.id));
     deleteMenuItem(ctx.db, payload.id, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
     return ok({ id: payload.id });
   });
 
@@ -171,6 +210,7 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
       userId: s.id,
       deviceId: ctx.deviceId,
     });
+    menuChanged();
     return ok({ menuItemId: payload.menuItemId });
   });
 
@@ -183,33 +223,43 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
 
   defineHandler('menu:createModifierGroup', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(createModifierGroup(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const out = createModifierGroup(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:updateModifierGroup', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(updateModifierGroup(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const out = updateModifierGroup(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:deleteModifierGroup', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
     deleteModifierGroup(ctx.db, payload.id, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
     return ok({ id: payload.id });
   });
 
   defineHandler('menu:createModifier', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(createModifier(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const out = createModifier(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:updateModifier', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(updateModifier(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const out = updateModifier(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:deleteModifier', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
     deleteModifier(ctx.db, payload.id, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
     return ok({ id: payload.id });
   });
 
@@ -227,17 +277,22 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
 
   defineHandler('menu:createTaxCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(createTaxCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const out = createTaxCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:updateTaxCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
-    return ok(updateTaxCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId }));
+    const out = updateTaxCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
+    return ok(out);
   });
 
   defineHandler('menu:deleteTaxCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
     deleteTaxCategory(ctx.db, payload.id, { userId: s.id, deviceId: ctx.deviceId });
+    menuChanged();
     return ok({ id: payload.id });
   });
 }

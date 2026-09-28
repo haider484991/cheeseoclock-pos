@@ -23,7 +23,10 @@ import {
   computeDiscountCents,
   dealAmount,
   dealMinTillCents,
+  deliveryAreas,
+  deliveryChargeTarget,
   discountBaseCents,
+  planDeliveryChargeLines,
   discountRuleAlsoOffDeliveryCharge,
   storedDiscountAlsoOffDeliveryCharge,
   foodpandaDealRule,
@@ -36,8 +39,20 @@ import {
   validateDiscountInput,
   requiresManagerApproval,
 } from '@cheeseoclock/pos-domain';
-import { readApprovalLimits, readDiscountAlsoOffDeliveryCharge, readShopSetting } from '../business-settings-read.js';
-import { COC_ID_NAMESPACE, FOODPANDA_ORDER_CODE_MAX } from '@cheeseoclock/shared-types';
+import {
+  readApprovalLimits,
+  readDeliveryFeeItemIds,
+  readDeliveryZones,
+  readDiscountAlsoOffDeliveryCharge,
+  readShopSetting,
+} from '../business-settings-read.js';
+import {
+  COC_ID_NAMESPACE,
+  FOODPANDA_ORDER_CODE_MAX,
+  deliveryChargeItemName,
+  isDeliveryChargeLine,
+  isDeliveryChargeMenuItem,
+} from '@cheeseoclock/shared-types';
 import type {
   DiscountBaseRule,
   FoodpandaTenderCheck,
@@ -718,10 +733,92 @@ export function setOrderMode(
     if (wasFoodpanda && !isFoodpanda) discountChanged = takeOffFoodpandaDeal(db, orderId, actor);
     else if (!wasFoodpanda && isFoodpanda && order.source === 'pos') discountChanged = putOnFoodpandaDeal(db, updated, actor);
     if (discountChanged) recomputeOrderTotals(db, orderId, actor);
-    result = discountChanged ? (findOrder(db, orderId) ?? updated) : updated;
+    // Only a delivery pays the delivery charge: leaving Delivery takes its line off here, in the
+    // main process, whoever asks (the till's screen used to do it on its own).
+    const chargesRemoved = mode !== 'delivery' ? removeDeliveryChargeLines(db, orderId, actor) : 0;
+    result = discountChanged || chargesRemoved > 0 ? (findOrder(db, orderId) ?? updated) : updated;
   });
   tx();
   return result;
+}
+
+/** The delivery charge lines on an order (sold under a delivery-charge name, or of an area's fee item). */
+function deliveryChargeLinesOf(
+  db: AppDatabase,
+  orderId: string,
+): Array<{ id: string; menuItemId: string | null; unitPriceCents: number; quantity: number }> {
+  const feeItemIds = readDeliveryFeeItemIds(db);
+  const rows = db
+    .prepare(
+      `SELECT id, menu_item_id, menu_item_name, unit_price_cents, quantity FROM order_items
+        WHERE order_id = ? AND deleted_at IS NULL AND parent_order_item_id IS NULL
+        ORDER BY created_at, id`,
+    )
+    .all(orderId) as Array<{
+    id: string;
+    menu_item_id: string | null;
+    menu_item_name: string;
+    unit_price_cents: number;
+    quantity: number;
+  }>;
+  return rows
+    .filter((r) => isDeliveryChargeLine({ menuItemName: r.menu_item_name, menuItemId: r.menu_item_id }, feeItemIds))
+    .map((r) => ({ id: r.id, menuItemId: r.menu_item_id, unitPriceCents: r.unit_price_cents, quantity: r.quantity }));
+}
+
+/** Take every delivery charge line off an open order (each removal synced and audited). */
+function removeDeliveryChargeLines(db: AppDatabase, orderId: string, actor: Actor & { userId: string }): number {
+  const lines = deliveryChargeLinesOf(db, orderId);
+  for (const l of lines) removeOrderItem(db, orderId, l.id, actor);
+  return lines.length;
+}
+
+/**
+ * The owner's rule of 28 Sep 2026 — "if delivery area selected the delivery
+ * fee should be automatically added" — in the main process, so every path
+ * agrees. On an OPEN counter order:
+ *  - a delivery with an area the shop delivers to: that area's fee item
+ *    (Settings → Delivery areas: its feeItemId, else today's by name and
+ *    price) goes on; a charge at another fee is swapped for it; one already
+ *    there at the right fee is never doubled;
+ *  - the area cleared, a free area, an area whose delivery is switched off,
+ *    or not a delivery: every charge line comes off;
+ *  - an area the till can't pin to one fee (a road across phases before the
+ *    phase is picked, an address it does not know): nothing changes.
+ * Only when the area changes (the customer panel calls it): a cashier who
+ * takes the charge off by hand — any login that may change an open order,
+ * the removal audited like any line — keeps it off until the area changes
+ * again. Never a website order (it arrives with the fee the customer paid)
+ * or a foodpanda one (foodpanda delivers it). One transaction.
+ */
+export function syncOrderDeliveryCharge(
+  db: AppDatabase,
+  orderId: string,
+  area: string | null,
+  actor: Actor & { userId: string },
+): { added: boolean; removed: number } {
+  let out = { added: false, removed: 0 };
+  const tx = db.transaction(() => {
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    // Only the till's own order that is still being built: a website order carries its own fee.
+    if (order.status !== 'open' || order.source !== 'pos') return;
+    const items = db
+      .prepare(`SELECT id, name, base_price_cents FROM menu_items WHERE deleted_at IS NULL AND is_active = 1`)
+      .all() as Array<{ id: string; name: string; base_price_cents: number }>;
+    const target = deliveryChargeTarget(
+      deliveryAreas(readDeliveryZones(db)),
+      order.mode,
+      area,
+      items.map((i) => ({ id: i.id, name: i.name, basePriceCents: i.base_price_cents })),
+    );
+    const plan = planDeliveryChargeLines(target, deliveryChargeLinesOf(db, orderId));
+    for (const id of plan.remove) removeOrderItem(db, orderId, id, actor);
+    if (plan.add) addOrderItem(db, { orderId, menuItemId: plan.add, quantity: 1, modifierIds: [] }, actor);
+    out = { added: plan.add !== null, removed: plan.remove.length };
+  });
+  tx();
+  return out;
 }
 
 /**
@@ -848,6 +945,12 @@ export interface AddItemInput {
   parentOrderItemId?: string | null;
   /** Override base price (used by combo expansion). Otherwise menu_item.base_price. */
   unitPriceOverrideCents?: number;
+  /**
+   * A delivery charge item that has since been switched off still goes on
+   * (the web bridge: a website order placed at a fee Settings → Delivery
+   * areas has just moved carries the old fee's item). Food never does.
+   */
+  allowSwitchedOffDeliveryCharge?: boolean;
 }
 
 /**
@@ -903,8 +1006,8 @@ export function addOrderItem(
 
     const itemRow = db
       .prepare(
-        `SELECT id, name, base_price_cents, prep_station, tax_category_id
-           FROM menu_items WHERE id = ? AND deleted_at IS NULL AND is_active = 1`,
+        `SELECT id, name, base_price_cents, prep_station, tax_category_id, is_active
+           FROM menu_items WHERE id = ? AND deleted_at IS NULL`,
       )
       .get(input.menuItemId) as
       | {
@@ -913,9 +1016,22 @@ export function addOrderItem(
           base_price_cents: number;
           prep_station: PrepStation;
           tax_category_id: string;
+          is_active: number;
         }
       | undefined;
-    if (!itemRow) throw new Error('Menu item not found or inactive');
+    // A delivery charge (an area's fee item, or named like one: Settings → Delivery areas).
+    const isFee = !!itemRow && isDeliveryChargeMenuItem(itemRow, readDeliveryFeeItemIds(db));
+    if (!itemRow || (itemRow.is_active !== 1 && !(isFee && input.allowSwitchedOffDeliveryCharge))) {
+      throw new Error('Menu item not found or inactive');
+    }
+    // foodpanda delivers foodpanda's orders and charges for it: never the shop's delivery charge.
+    if (isFee && order.mode === 'foodpanda') {
+      throw new Error('A foodpanda order never carries the shop’s delivery charge');
+    }
+    // A fee item's line is always sold under a delivery-charge name — the one test every reader of a
+    // stored order uses (isDeliveryChargeLine): an item an older till renamed still reads as a charge.
+    const soldAs =
+      isFee && !isDeliveryChargeLine({ menuItemName: itemRow.name }) ? deliveryChargeItemName(itemRow.base_price_cents) : itemRow.name;
 
     const taxRow = db
       .prepare(`SELECT rate_bps FROM tax_categories WHERE id = ? AND deleted_at IS NULL`)
@@ -980,7 +1096,7 @@ export function addOrderItem(
       itemId,
       input.orderId,
       input.menuItemId,
-      itemRow.name,
+      soldAs,
       input.parentOrderItemId ?? null,
       input.quantity,
       unitPrice,
@@ -1030,7 +1146,7 @@ export function addOrderItem(
       before: null,
       after: {
         ...newItem,
-        menuItemName: itemRow.name,
+        menuItemName: soldAs,
         taxRateBps: rateBps,
         modifiers: modRows.map((m) => ({
           modifierId: m.id,

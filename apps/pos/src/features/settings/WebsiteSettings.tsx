@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Card } from '@cheeseoclock/ui';
-import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle, PauseCircle } from 'lucide-react';
+import { Button, Card, cn } from '@cheeseoclock/ui';
+import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle, PauseCircle, UploadCloud } from 'lucide-react';
+import type { ShopSettingCard } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { SettingCard } from './shop-rules/SettingCard';
+import { useDraft } from './shop-rules/useDraft';
+import { useShopSetting } from './shop-rules/useShopSetting';
+import { onlineOptionsSummary, settingsPublishWords } from './shop-rules/deliveryZonesForm';
 
 /** The bridge status, with the till's shift pause (webOrdersBridge.status()). */
 type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
@@ -13,10 +18,23 @@ type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
  *  - site URL + bridge secret (must match BRIDGE_SECRET on the website host)
  *  - enable/disable polling for online orders
  *  - "Publish menu" pushes the current menu to the site
- *  - live status: last poll, imported count, errors
+ *  - live status: last poll, imported count, errors, and whether the
+ *    website has the owner's delivery areas and pick-up offer (the settings
+ *    block of the menu publish)
+ *  - "Publish the menu to the website by itself" ('online.options', off by
+ *    default: the owner has not asked for it)
  * Cloud backups reuse this connection but are managed under Backups.
  */
 export function WebsiteSettings() {
+  return (
+    <div className="space-y-6">
+      <ConnectionCard />
+      <AutoPublishCard />
+    </div>
+  );
+}
+
+function ConnectionCard() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [siteUrl, setSiteUrl] = useState('');
@@ -90,6 +108,7 @@ export function WebsiteSettings() {
   const online = !!status?.enabled && !!status.ready;
   const lastError = status?.lastError ?? null;
   const authRejected = !!lastError && /\b401\b|unauthor/i.test(lastError);
+  const settingsLine = settingsPublishWords(status?.settingsPublish);
 
   return (
     <Card>
@@ -113,8 +132,10 @@ export function WebsiteSettings() {
       <p className="mb-4 text-sm text-stone-500">
         Orders placed on your website land on the Live Orders board and print a
         kitchen ticket, and customers can follow their delivery live. Publish
-        the menu whenever you change items or prices; the website never updates
-        on its own. The same connection carries the online backup copies.
+        the menu whenever you change items or prices (or let it go by itself,
+        below). Delivery areas and the pick-up offer reach the website by
+        themselves when they are saved. The same connection carries the online
+        backup copies.
       </p>
 
       {cfgQ.data?.secretUnreadable && (
@@ -266,6 +287,72 @@ export function WebsiteSettings() {
           An order couldn&rsquo;t be imported: {status.lastImportError}
         </p>
       )}
+
+      {settingsLine && (
+        <p
+          className={cn(
+            'mt-2 rounded-lg px-3 py-2 text-xs',
+            settingsLine.tone === 'ok' && 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
+            settingsLine.tone === 'wait' && 'bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200',
+            settingsLine.tone === 'bad' && 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-200',
+          )}
+        >
+          {settingsLine.tone === 'ok' ? <CheckCircle2 className="mr-1 inline h-3 w-3" /> : <AlertTriangle className="mr-1 inline h-3 w-3" />}
+          {settingsLine.text}
+        </p>
+      )}
     </Card>
+  );
+}
+
+/** "Publish the menu to the website by itself" ('online.options'): off by default — today's manual publish. */
+function AutoPublishCard() {
+  const s = useShopSetting('online.options');
+  if (s.q.isError) return <p className="py-6 text-center text-stone-500">Could not load “Publish the menu by itself”.</p>;
+  if (!s.q.data) return null;
+  return <AutoPublishFields s={s} />;
+}
+
+function AutoPublishFields({ s }: { s: ReturnType<typeof useShopSetting<'online.options'>> }) {
+  const card = s.q.data as ShopSettingCard<'online.options'>;
+  const draft = useDraft(card.value, (v) => v.autoPublishMenu);
+  const value = useMemo(() => ({ v: card.value.v, autoPublishMenu: draft.form }), [card.value.v, draft.form]);
+  const dirty = draft.touched && draft.form !== card.value.autoPublishMenu;
+  const options = [
+    { on: false, label: 'No — when I publish', hint: 'The menu goes to the website after a menu file import or “Publish menu”, as before.' },
+    { on: true, label: 'Yes — by itself', hint: 'A few seconds after any change to the menu on this till (items, prices, choices, categories).' },
+  ];
+  return (
+    <SettingCard
+      card={card}
+      title="Publish the menu to the website by itself"
+      icon={<UploadCloud className="h-5 w-5" />}
+      intro="A price changed on the till but not on the website is billed at a price the customer never saw. With Yes, the website follows the till’s menu by itself."
+      describe={onlineOptionsSummary}
+      dirty={dirty}
+      problem={null}
+      busy={s.save.isPending || s.putBack.isPending}
+      onSave={() => s.save.mutate(value, { onSuccess: draft.reset })}
+      onPutBack={() => s.putBack.mutate(undefined, { onSuccess: draft.reset })}
+    >
+      <div role="radiogroup" aria-label="Publish the menu by itself" className="grid grid-cols-1 gap-2 md:grid-cols-2">
+        {options.map((o) => (
+          <button
+            key={String(o.on)}
+            type="button"
+            role="radio"
+            aria-checked={draft.form === o.on}
+            onClick={() => draft.set(o.on)}
+            className={cn(
+              'flex flex-col items-start gap-0.5 rounded-lg border-2 p-3 text-left transition-colors disabled:opacity-60',
+              draft.form === o.on ? 'border-amber-500 bg-amber-50 dark:bg-amber-950' : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+            )}
+          >
+            <span className="text-sm font-semibold">{o.label}</span>
+            <span className="text-xs text-stone-500">{o.hint}</span>
+          </button>
+        ))}
+      </div>
+    </SettingCard>
   );
 }

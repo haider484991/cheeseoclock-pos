@@ -255,7 +255,8 @@ export function ImportTab() {
                 {preview.fresh.items.length} menu items, {preview.fresh.categories} categories, {preview.fresh.combos} combos,{' '}
                 {preview.fresh.choiceGroups} choice groups and {preview.fresh.ingredients} ingredients — with their recipes,
                 photos and stock counts. Every ingredient in the file starts at zero stock: count your stock after
-                (Inventory). Sales history, customers, users, settings and tax categories stay. A backup is saved first
+                (Inventory). Sales history, customers, users, settings, tax categories and the delivery charges (Settings →
+                Delivery areas) stay. A backup is saved first
                 (Settings → Backups), so the old menu can be restored.
               </p>
               {preview.fresh.openOrders > 0 && (

@@ -30,7 +30,9 @@ import type {
   AnyShopSettingCard,
   CheckoutRules,
   FoodpandaTenderCheck,
+  SaveDeliveryZonesRequest,
   SetShopSettingRequest,
+  ShopSettingCard,
   ShopSettingKey,
 } from './shop-settings.js';
 import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
@@ -159,7 +161,7 @@ import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
 import type { CostedRecipeCalc, RecipeCalc, RecipeCalcRequest, TypicalPicksView } from './recipe-calc.js';
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
-import type { WebOrdersShiftPause } from './web-bridge.js';
+import type { SettingsPublishStatus, WebOrdersShiftPause } from './web-bridge.js';
 import type {
   ReportVariance,
   StockCountDetail,
@@ -573,6 +575,18 @@ export interface IpcContract {
     request: { orderId: string; mode: OrderMode };
     response: ApiResult<OrderSnapshot>;
   };
+  /**
+   * The delivery area on the till's customer panel changed (owner, 28 Sep
+   * 2026: "if delivery area selected the delivery fee should be
+   * automatically added"). The main process puts the area's fee item on a
+   * delivery order (Settings → Delivery areas), swaps a charge at another
+   * fee for it, and takes the charge off when the area is cleared; never a
+   * second one, never on foodpanda or a website order. `area` null = cleared.
+   */
+  'orders:setDeliveryArea': {
+    request: { orderId: string; area: string | null };
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:tender': {
     request: {
       orderId: string;
@@ -846,6 +860,13 @@ export interface IpcContract {
        * switch is untouched by it.
        */
       shiftPause: WebOrdersShiftPause | null;
+      /**
+       * The owner's settings on the website (the settings block of the menu
+       * publish: delivery areas and fees, the pick-up offer): "Website
+       * updated 14:02", "Waiting to reach the website", "Website not
+       * updated: …". Absent from an older till.
+       */
+      settingsPublish?: SettingsPublishStatus;
     }>;
   };
   /** Upload a fresh gzipped database backup to the cloud right now. */
@@ -1563,10 +1584,21 @@ export interface IpcContract {
     request: { key: ShopSettingKey };
     response: ApiResult<AnyShopSettingCard>;
   };
-  /** Save a card (or "Put back the default", which writes the default's values). Synced and audited. */
+  /** Save a card (or "Put back the default", which writes the default's values). Synced and audited. Never 'delivery.zones'. */
   'settings:setBusiness': {
     request: SetShopSettingRequest;
     response: ApiResult<AnyShopSettingCard>;
+  };
+  /**
+   * Settings → Delivery areas: save the areas and fees (or put back the
+   * default) AND the "Delivery Charge (Rs N)" menu items they need, in ONE
+   * transaction: a name-based id per fee, today's items adopted, an item no
+   * area uses switched off (never deleted). Owner only; synced and audited.
+   * The website gets it with the next menu publish, which follows by itself.
+   */
+  'settings:saveDeliveryZones': {
+    request: SaveDeliveryZonesRequest;
+    response: ApiResult<ShopSettingCard<'delivery.zones'>>;
   };
   /**
    * What the counter needs to take an order, for any signed-in login: the

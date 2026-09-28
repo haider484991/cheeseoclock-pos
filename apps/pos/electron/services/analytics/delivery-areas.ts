@@ -1,9 +1,13 @@
 /**
  * Delivery areas (costing spec 4.11, Phase 9): Reports → Channels &
  * delivery, own-rider deliveries (phone and website) by the area on the
- * order's address — recognised as a delivery zone (the shared list,
- * shared-types delivery-areas.ts, through pos-domain resolveAreaText) where
- * it can be, else as typed, else "Area not recorded".
+ * order's address — recognised as a delivery zone (the owner's areas,
+ * Settings → Delivery areas, read by this worker from its own connection:
+ * useReportZones; a renamed area's old name still counts as it) where it
+ * can be, else as typed, else "Area not recorded". The rider's rate for a
+ * zone stays the rider service's rate card (the compiled list) until
+ * costing Phase 9 copies rider pay onto each order: the owner's charge
+ * changing must not rewrite past profit.
  *
  * Per area: orders, sales, the average order, delivery charges collected,
  * minutes on the road, how many of its customers came back (costing spec
@@ -14,9 +18,20 @@
  *
  * Read-only; never loads Electron (the worker loads it).
  */
-import { feeForZones, findZone, type ReportDeliveryArea } from '@cheeseoclock/shared-types';
-import { WHOLE_ORDER, contributionCents, mulDivRound, normalizePhone, perKnownOrderCents, resolveAreaText, shareBps, type FoodCostTally } from '@cheeseoclock/pos-domain';
+import { DEFAULT_DELIVERY_ZONES, feeForZones, findZone, type ReportDeliveryArea } from '@cheeseoclock/shared-types';
+import {
+  WHOLE_ORDER,
+  contributionCents,
+  deliveryAreas as areasFor,
+  mulDivRound,
+  normalizePhone,
+  perKnownOrderCents,
+  shareBps,
+  type DeliveryAreas,
+  type FoodCostTally,
+} from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../../db/connection.js';
+import { readDeliveryZones } from '../../db/business-settings-read.js';
 import type { ReportRange } from '../business-report.js';
 import { COUNTED, DAY_MS } from './sql.js';
 
@@ -32,22 +47,41 @@ export interface OrderArea {
 
 const NOT_RECORDED: OrderArea = { key: 'none', label: 'Area not recorded', zoneId: null, zoneFeeCents: null };
 
-/** Areas are typed a few dozen ways at most: each is recognised once per report. */
-const seen = new Map<string, OrderArea>();
+/** The areas a report recognises: the owner's, read at the start of each report (useReportZones). */
+let reportAreas: DeliveryAreas = areasFor(DEFAULT_DELIVERY_ZONES.zones);
 
-/** The area on a delivery's address, recognised (costing spec 4.11: the zone's aliases), else as typed. */
-export function areaOf(text: string | null | undefined): OrderArea {
+/**
+ * Read the owner's areas for this report (Settings → Delivery areas; the
+ * worker's own connection). Called where a report reads its orders, before
+ * any areaOf.
+ */
+export function useReportZones(db: AppDatabase): void {
+  reportAreas = areasFor(readDeliveryZones(db));
+}
+
+/** Areas are typed a few dozen ways at most: each is recognised once per zone list (never across a Save). */
+const seen = new WeakMap<DeliveryAreas, Map<string, OrderArea>>();
+
+/**
+ * The area on a delivery's address, recognised (costing spec 4.11: the
+ * zone's names and spellings, a renamed zone's old name included), else as
+ * typed. `zoneFeeCents` is the rider service's rate for it (the compiled
+ * rate card), null for an area the owner added.
+ */
+export function areaOf(text: string | null | undefined, areas: DeliveryAreas = reportAreas): OrderArea {
   const t = (text ?? '').trim();
   if (!t) return NOT_RECORDED;
-  const hit = seen.get(t);
+  let memo = seen.get(areas);
+  if (!memo) seen.set(areas, (memo = new Map()));
+  const hit = memo.get(t);
   if (hit) return hit;
-  const r = resolveAreaText(t);
-  const one = r.zoneIds.length === 1 ? findZone(r.zoneIds[0]) : undefined;
+  const r = areas.resolveAreaText(t);
+  const one = r.zoneIds.length === 1 ? areas.findZone(r.zoneIds[0]) : undefined;
   const out: OrderArea = one
-    ? { key: `zone:${one.id}`, label: one.name, zoneId: one.id, zoneFeeCents: one.feeCents }
+    ? { key: `zone:${one.id}`, label: one.name, zoneId: one.id, zoneFeeCents: findZone(one.id)?.feeCents ?? null }
     : { key: `text:${t.toLowerCase()}`, label: t, zoneId: null, zoneFeeCents: r.zoneIds.length > 1 ? feeForZones(r.zoneIds) : null };
-  if (seen.size > 5_000) seen.clear();
-  seen.set(t, out);
+  if (memo.size > 5_000) memo.clear();
+  memo.set(t, out);
   return out;
 }
 
@@ -77,6 +111,7 @@ export const REPEAT_WINDOW_DAYS = 90;
  * count. Orders with no account and no phone are not counted.
  */
 export function repeatCustomers(db: AppDatabase, range: ReportRange): Map<string, { customers: number; repeat: number }> {
+  useReportZones(db);
   const untilMs = Date.parse(range.untilIso);
   const fromMs = Math.min(Date.parse(range.sinceIso), untilMs - REPEAT_WINDOW_DAYS * DAY_MS);
   /** Every customer's counted orders over the window. */

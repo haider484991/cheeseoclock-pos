@@ -9,9 +9,10 @@
  * Phase 1 is foodpanda: the deal on the listing, foodpanda's fees and the
  * checks at Pay. Phase 2 the approval limit and the discount buttons (Money
  * & discounts); phase 6 the staff and kitchen timings; phase 7 the stock
- * rules and what a menu file import may change (Kitchen & stock). Later phases add
- * their own keys here (delivery areas and fees, offers, the shop profile…),
- * each with a frozen default.
+ * rules and what a menu file import may change (Kitchen & stock); phase 3
+ * the delivery areas and fees, the website pick-up discount and whether the
+ * menu goes to the website by itself. Later phases add their own keys here
+ * (offers, the shop profile…), each with a frozen default.
  *
  * FROZEN DEFAULTS. A key never saved reads as its DEFAULT_* below, which is
  * exactly what the till did before the setting existed, so installing the
@@ -29,8 +30,15 @@
  */
 
 import { WASTE_REASONS, WASTE_REASON_DEFAULT_LABEL, type WasteReasonId } from './inventory.js';
+import { DELIVERY_ZONES, type DeliveryZoneSetting } from './delivery-areas.js';
+import { PICKUP_DISCOUNT_PERCENT } from './web-bridge.js';
 
-/** The keys the Settings cards edit (settings:getBusiness / settings:setBusiness). */
+/**
+ * The keys the Settings cards read (settings:getBusiness). Every one but
+ * 'delivery.zones' is saved through settings:setBusiness; the delivery areas
+ * have their own settings:saveDeliveryZones, because their Save also makes
+ * the delivery-charge menu items (SAVED_WITH_ITS_OWN_CHANNEL).
+ */
 export const SHOP_SETTING_KEYS = [
   'foodpanda.deal',
   'foodpanda.fees',
@@ -42,12 +50,23 @@ export const SHOP_SETTING_KEYS = [
   'kitchen.timing',
   'stock.rules',
   'menu.importPolicy',
+  'discounts.websitePickup',
+  'delivery.zones',
+  'online.options',
 ] as const;
 export type ShopSettingKey = (typeof SHOP_SETTING_KEYS)[number];
 
 export function isShopSettingKey(key: unknown): key is ShopSettingKey {
   return typeof key === 'string' && (SHOP_SETTING_KEYS as readonly string[]).includes(key);
 }
+
+/** Keys settings:setBusiness refuses: they are saved through a channel of their own. */
+export const SAVED_WITH_ITS_OWN_CHANNEL = ['delivery.zones'] as const;
+/** A key settings:setBusiness saves (every shop rule but the delivery areas). */
+export type PlainShopSettingKey = Exclude<ShopSettingKey, (typeof SAVED_WITH_ITS_OWN_CHANNEL)[number]>;
+export const PLAIN_SHOP_SETTING_KEYS: readonly PlainShopSettingKey[] = SHOP_SETTING_KEYS.filter(
+  (k): k is PlainShopSettingKey => !(SAVED_WITH_ITS_OWN_CHANNEL as readonly string[]).includes(k),
+);
 
 /** The most off a foodpanda deal can be (owner bounds: a whole % from 0 to 50). */
 export const FOODPANDA_DEAL_MAX_PERCENT = 50;
@@ -382,6 +401,57 @@ export interface MenuImportPolicy {
   tax: ImportSide;
 }
 
+// ---------------------------------------------------------------------------
+// Delivery areas & fees, the website's pick-up, online options (phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the shop delivers and what each area costs ('delivery.zones',
+ * Settings → Delivery areas). Saved through settings:saveDeliveryZones, ONE
+ * transaction that also makes sure a "Delivery Charge (Rs N)" item exists
+ * for every fee in use (a name-based id, so two tills saving offline make the
+ * same row; today's Rs 200 and Rs 250 items are adopted on the first Save),
+ * points each area at its item (feeItemId) and switches off — never deletes —
+ * an item no area uses any more. An area is switched off, never removed; a
+ * rename keeps the old name as a spelling. The till's area picker, its
+ * delivery-charge button, the Customers filter and Reports read it; the
+ * website gets it in the settings block of the menu publish.
+ */
+export interface DeliveryZones {
+  v: number;
+  /** In the order the till and the website list them. */
+  zones: DeliveryZoneSetting[];
+}
+
+/**
+ * The website's pick-up offer ('discounts.websitePickup', Settings → Money &
+ * discounts): whether customers may choose "I'll pick it up", and the whole %
+ * off they get. It reaches the website in the settings block of the menu
+ * publish, not the heartbeat (both tills beat into one row: a lagging till
+ * would flip the % every beat). The till bills the % the web order carries.
+ */
+export interface WebsitePickup {
+  v: number;
+  offered: boolean;
+  /** A whole %, 0–50. */
+  percent: number;
+}
+
+/** How the till works with the website ('online.options', Settings → Online orders). */
+export interface OnlineOptions {
+  v: number;
+  /**
+   * Send the menu to the website by itself after every change on this till
+   * (a moment later). Off: only after a menu file import or "Publish menu",
+   * as before. A saved change to the delivery areas or the pick-up offer
+   * sends the menu with the settings either way.
+   */
+  autoPublishMenu: boolean;
+}
+
+/** The most off a website pick-up can be (a whole %, 0–50). */
+export const WEBSITE_PICKUP_MAX_PERCENT = 50;
+
 export interface ShopSettingValues {
   'foodpanda.deal': FoodpandaDeal;
   'foodpanda.fees': FoodpandaFees;
@@ -393,6 +463,9 @@ export interface ShopSettingValues {
   'kitchen.timing': KitchenTiming;
   'stock.rules': StockRules;
   'menu.importPolicy': MenuImportPolicy;
+  'discounts.websitePickup': WebsitePickup;
+  'delivery.zones': DeliveryZones;
+  'online.options': OnlineOptions;
 }
 export type ShopSettingValue<K extends ShopSettingKey> = ShopSettingValues[K];
 
@@ -408,6 +481,9 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'kitchen.timing': 1,
   'stock.rules': 1,
   'menu.importPolicy': 1,
+  'discounts.websitePickup': 1,
+  'delivery.zones': 1,
+  'online.options': 1,
 });
 
 /** foodpanda's commission until the owner confirms his own (costing spec 4.7): shown as "suggested". */
@@ -531,6 +607,44 @@ export const DEFAULT_MENU_IMPORT_POLICY: Readonly<MenuImportPolicy> = Object.fre
   tax: 'file',
 });
 
+/** Today: offered, 10% off (the printed menu's "10% OFF · order online & pick up"). */
+export const DEFAULT_WEBSITE_PICKUP: Readonly<WebsitePickup> = Object.freeze({
+  v: 1,
+  offered: true,
+  percent: PICKUP_DISCOUNT_PERCENT,
+});
+
+/**
+ * Today's 21 areas and fees, in today's order: the compiled DELIVERY_ZONES
+ * (DHA 1–7, 2 Ext, 7 Ext and Clifton 3–9 at Rs 200; DHA 8, Emaar, Creek
+ * Vista and Clifton 1–2 at Rs 250), every one on, no fee item named (it is
+ * found by name and price until the first Save).
+ */
+export const DEFAULT_DELIVERY_ZONES: Readonly<DeliveryZones> = Object.freeze({
+  v: 1,
+  zones: Object.freeze(
+    DELIVERY_ZONES.map((z) =>
+      Object.freeze({
+        id: z.id,
+        name: z.name,
+        shortName: z.shortName,
+        group: z.group,
+        feeCents: z.feeCents,
+        feeItemId: null,
+        active: true,
+        aliases: Object.freeze([...z.aliases]) as string[],
+        hints: Object.freeze([...z.hints]) as string[],
+      }),
+    ),
+  ) as DeliveryZoneSetting[],
+}) as Readonly<DeliveryZones>;
+
+/** Today: the menu goes to the website only after an import or "Publish menu" (the owner has not asked for more). */
+export const DEFAULT_ONLINE_OPTIONS: Readonly<OnlineOptions> = Object.freeze({
+  v: 1,
+  autoPublishMenu: false,
+});
+
 export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<ShopSettingValues[K]> } = Object.freeze({
   'foodpanda.deal': DEFAULT_FOODPANDA_DEAL,
   'foodpanda.fees': DEFAULT_FOODPANDA_FEES,
@@ -542,6 +656,9 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'kitchen.timing': DEFAULT_KITCHEN_TIMING,
   'stock.rules': DEFAULT_STOCK_RULES,
   'menu.importPolicy': DEFAULT_MENU_IMPORT_POLICY,
+  'discounts.websitePickup': DEFAULT_WEBSITE_PICKUP,
+  'delivery.zones': DEFAULT_DELIVERY_ZONES,
+  'online.options': DEFAULT_ONLINE_OPTIONS,
 });
 
 /** A tablet total more than this far from the till's total is a mismatch (Rs 1). */
@@ -687,10 +804,26 @@ export interface ShopSettingCard<K extends ShopSettingKey = ShopSettingKey> {
 /** settings:getBusiness answers one card; this is the union over the keys. */
 export type AnyShopSettingCard = { [K in ShopSettingKey]: ShopSettingCard<K> }[ShopSettingKey];
 
-/** settings:setBusiness: a new value for a key, or "Put back the default" (writes the default's values). */
+/**
+ * settings:setBusiness: a new value for a key, or "Put back the default"
+ * (writes the default's values). Never 'delivery.zones' (SaveDeliveryZonesRequest).
+ */
 export type SetShopSettingRequest =
-  | { [K in ShopSettingKey]: { key: K; value: ShopSettingValues[K] } }[ShopSettingKey]
-  | { key: ShopSettingKey; useDefault: true };
+  | { [K in PlainShopSettingKey]: { key: K; value: ShopSettingValues[K] } }[PlainShopSettingKey]
+  | { key: PlainShopSettingKey; useDefault: true };
+
+/**
+ * An area as Settings → Delivery areas sends it: the fee item is the main
+ * process's to decide (feeItemId, when sent, is ignored).
+ */
+export type DeliveryZoneInput = Omit<DeliveryZoneSetting, 'feeItemId'> & { feeItemId?: string | null };
+
+/**
+ * settings:saveDeliveryZones (the owner only): the whole list, or "Put back
+ * the default" (today's 21 areas and fees; an area the owner added stays,
+ * switched off — an area is never removed).
+ */
+export type SaveDeliveryZonesRequest = { zones: DeliveryZoneInput[] } | { useDefault: true };
 
 // ---------------------------------------------------------------------------
 // What the counter needs (checkout:getRules): never commission or costs
@@ -721,6 +854,13 @@ export interface CheckoutRules {
    * released ones.
    */
   stock?: CounterStockRules;
+  /**
+   * Settings → Delivery areas: every area (switched-off ones too, so an old
+   * address is still recognised) with its fee and fee item — the area
+   * picker, the delivery-charge button, the Customers filter. Absent (a
+   * test, or before the till answers): the released 21 areas.
+   */
+  delivery?: { zones: DeliveryZoneSetting[] };
   foodpanda: {
     /** The deal a foodpanda order started now gets; null when there is none today. */
     deal: {

@@ -30,7 +30,7 @@ import type {
   OrderItemCostStatus,
   ReportTabFigures,
 } from '@cheeseoclock/shared-types';
-import { isDeliveryChargeName } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeMenuItem } from '@cheeseoclock/shared-types';
 import { FOODPANDA_TABLET_TOLERANCE_CENTS } from '@cheeseoclock/shared-types';
 import {
   emptyFoodCostTally,
@@ -66,7 +66,7 @@ import type { AppDatabase } from '../db/connection.js';
 // in the Reports worker thread (analytics/worker.ts). A test walks its imports.
 import { loadPriceBook, priceOfBook, safeStockValue } from '../db/price-book.js';
 import { loadPriceHistory, type DatedPrice } from '../db/price-history-read.js';
-import { getBusinessSetting, readShopSetting, readStockRules } from '../db/business-settings-read.js';
+import { getBusinessSetting, readDeliveryFeeItemIds, readShopSetting, readStockRules } from '../db/business-settings-read.js';
 import { withBillPrinted, withHandPrints } from './print-report.js';
 import { whenExtras } from './analytics/heatmap.js';
 import {
@@ -1303,8 +1303,11 @@ export function menuLookup(db: AppDatabase): MenuLookup {
         .all() as Array<{ id: string }>
     ).map((r) => r.id),
   );
-  const feeItems = [...items.values()].filter((i) => isDeliveryChargeName(i.name) || nonFood.has(i.categoryId)).map((i) => i.id);
-  const chargeItems = [...items.values()].filter((i) => isDeliveryChargeName(i.name)).map((i) => i.id);
+  // The delivery charges: the areas' fee items (Settings → Delivery areas) and anything named like one.
+  const feeItemIds = readDeliveryFeeItemIds(db);
+  const isCharge = (i: { id: string; name: string }) => isDeliveryChargeMenuItem(i, feeItemIds);
+  const feeItems = [...items.values()].filter((i) => isCharge(i) || nonFood.has(i.categoryId)).map((i) => i.id);
+  const chargeItems = [...items.values()].filter(isCharge).map((i) => i.id);
   return {
     item: (id) => (id ? items.get(id) : undefined),
     feeItemsJson: JSON.stringify(feeItems),

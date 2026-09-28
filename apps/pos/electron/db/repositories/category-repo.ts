@@ -54,10 +54,11 @@ export function findCategory(db: AppDatabase, id: string): Category | null {
 
 export function createCategory(
   db: AppDatabase,
-  input: { name: string; displayOrder: number; colorHex: string },
+  /** `id`: a name-based id both tills make as the same row (Settings → Delivery areas' "Delivery Charges"); else a new v7. */
+  input: { name: string; displayOrder: number; colorHex: string; id?: string },
   actor: Actor,
 ): Category {
-  const id = uuidv7();
+  const id = input.id ?? uuidv7();
   const now = nowIso();
   const cat: Category = {
     id: id as Category['id'],

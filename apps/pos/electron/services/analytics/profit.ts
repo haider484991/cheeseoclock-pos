@@ -107,7 +107,7 @@ import {
   type ReportRange,
 } from '../business-report.js';
 import { COUNTED, IN_RANGE, REFUNDED, channelOf, paymentGroup } from './sql.js';
-import { areaOf, deliveryAreas, repeatCustomers } from './delivery-areas.js';
+import { areaOf, deliveryAreas, repeatCustomers, useReportZones } from './delivery-areas.js';
 import { buildVariance } from './stock-control.js';
 
 const LINK_OFF: TillLinkState = { on: false, stale: false, lastHeardAt: null };
@@ -635,6 +635,8 @@ export interface OrderCostsRead {
 }
 
 export function readOrderCosts(db: AppDatabase, range: ReportRange, menu: MenuLookup, settings: ProfitSettings): OrderCostsRead {
+  // The owner's areas as this worker reads them now (a renamed area's old name still counts as it).
+  useReportZones(db);
   const fp = settings.foodpanda;
   const byChannel: ChannelCounts = new Map();
   const channel = (c: ReportChannel) => {

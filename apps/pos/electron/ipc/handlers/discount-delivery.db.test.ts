@@ -213,12 +213,19 @@ async function setSwitch(alsoOffDeliveryCharge: boolean): Promise<void> {
 /**
  * A delivery order rung up by the cashier: a Rs 1,000 pizza and two Rs 500
  * sides (Rs 2,000 of food) and the area's Rs 200 delivery charge, all at 16%.
+ *
+ * A foodpanda order never takes the shop's delivery charge since v0.7.27
+ * (the owner, 28 Sep 2026; order-repo refuses it): the foodpanda ones here
+ * are the orders an OLDER till rang up with the charge tapped on by hand
+ * (the line arrives as that till wrote it), whose deal must still be worked
+ * on the food.
  */
 async function deliveryOrder(mode: 'delivery' | 'foodpanda' = 'delivery'): Promise<string> {
   h.session = CASHIER;
   const order = await data<{ id: string }>('orders:create', { mode });
   await data('orders:addItem', { orderId: order.id, menuItemId: menu.pizza, quantity: 1 });
-  await data('orders:addItem', { orderId: order.id, menuItemId: menu.charge, quantity: 1 });
+  if (mode === 'foodpanda') olderTillChargeLine(order.id);
+  else await data('orders:addItem', { orderId: order.id, menuItemId: menu.charge, quantity: 1 });
   await data('orders:addItem', { orderId: order.id, menuItemId: menu.side, quantity: 2 });
   if (mode === 'delivery') {
     const r = await repos();
@@ -227,6 +234,36 @@ async function deliveryOrder(mode: 'delivery' | 'foodpanda' = 'delivery'): Promi
     r.snapshotCustomerOntoOrder(db as never, { orderId: order.id, customerId: c.id, addressId: a.id }, CASHIER_ACTOR);
   }
   return order.id;
+}
+
+/** The Rs 200 charge line as a v0.7.26 till wrote it onto an open order (synced here); the next cart change works it in. */
+function olderTillChargeLine(orderId: string): void {
+  const item = db
+    .prepare(
+      `SELECT mi.name, mi.base_price_cents, mi.tax_category_id, mi.prep_station, tc.rate_bps
+         FROM menu_items mi JOIN tax_categories tc ON tc.id = mi.tax_category_id WHERE mi.id = ?`,
+    )
+    .get(menu.charge) as { name: string; base_price_cents: number; tax_category_id: string; prep_station: string; rate_bps: number };
+  const at = new Date(Date.now() + 1).toISOString();
+  db.prepare(
+    `INSERT INTO order_items
+       (id, order_id, menu_item_id, menu_item_name, combo_id, parent_order_item_id, quantity, unit_price_cents,
+        line_total_cents, tax_category_id, tax_rate_bps_snapshot, prep_station_snapshot, notes, kitchen_status,
+        created_at, updated_at, device_id, version)
+     VALUES (?, ?, ?, ?, NULL, NULL, 1, ?, ?, ?, ?, ?, NULL, 'pending', ?, ?, 'older-till', 1)`,
+  ).run(
+    `older-charge-${orderId}`,
+    orderId,
+    menu.charge,
+    item.name,
+    item.base_price_cents,
+    item.base_price_cents,
+    item.tax_category_id,
+    item.rate_bps,
+    item.prep_station,
+    at,
+    at,
+  );
 }
 
 const orderRow = (orderId: string) =>
@@ -775,7 +812,7 @@ describe.skipIf(!Sqlite)('the foodpanda deal works on the food too', () => {
 
   it('20% of the food only; the charge never lifts the order over the deal’s minimum', async () => {
     await setDeal({ minOrderCents: 210_000 });
-    // Rs 2,000 of food + a Rs 200 charge (tapped by hand on a foodpanda order): under the Rs 2,100 minimum.
+    // Rs 2,000 of food + a Rs 200 charge (tapped by hand on a foodpanda order by an older till): under the Rs 2,100 minimum.
     const orderId = await deliveryOrder('foodpanda');
     const [row] = liveDiscounts(orderId);
     expect(row).toMatchObject({ source: 'foodpanda', value: 20, amount_cents: 0 });

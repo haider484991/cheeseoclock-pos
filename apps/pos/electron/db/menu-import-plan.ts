@@ -40,6 +40,11 @@
  *     item's price, a choice's charge and rules, a recipe (dish or batch),
  *     an item's tax. What the till keeps is listed in the preview ("kept on
  *     the till") and counted in `keptLine`. New things always come in.
+ *   - Delivery charges ("Delivery Charge (Rs 200)") are Settings → Delivery
+ *     areas' (step 3): an item of the file named like one, or a till item
+ *     that is one (an area's feeItemId, or named like one), is left exactly
+ *     as it is — never created, re-priced or changed — and the preview says
+ *     "set in Settings → Delivery areas" (FEE_SET_IN_SETTINGS).
  */
 
 import {
@@ -58,7 +63,10 @@ import {
   unitCostMc,
 } from '@cheeseoclock/pos-domain';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
-import { DEFAULT_MENU_IMPORT_POLICY } from '@cheeseoclock/shared-types';
+import { DEFAULT_MENU_IMPORT_POLICY, isDeliveryChargeMenuItem, isDeliveryChargeName } from '@cheeseoclock/shared-types';
+
+/** What the preview says about a delivery charge in the file: the till's own, never the file's. */
+export const FEE_SET_IN_SETTINGS = 'the delivery fee is set in Settings → Delivery areas';
 import type {
   MenuImportPolicy,
   MenuImportKept,
@@ -501,6 +509,8 @@ export function planMenuImport(
   file: MenuImportFile,
   live: MenuSnapshot,
   policy: Omit<MenuImportPolicy, 'v'> = DEFAULT_MENU_IMPORT_POLICY,
+  /** The areas' fee items (Settings → Delivery areas): never touched by a file. */
+  feeItemIds: ReadonlySet<string> = new Set(),
 ): MenuImportPlan {
   const warnings: string[] = [];
   const summary: MenuImportSummary = {
@@ -1066,6 +1076,23 @@ export function planMenuImport(
       .map((gName) => ({ name: gName, ref: groupRef.get(gName.toLowerCase()) }))
       .filter((x): x is { name: string; ref: GroupRef } => !!x.ref);
     const base = { name: item.name, priceCents: item.priceCents, recipeLines: item.recipe.length };
+
+    // A delivery charge is Settings → Delivery areas': the file's never creates, re-prices or changes one.
+    const feeRow = m.row ?? m.ambiguous.find((r) => isDeliveryChargeMenuItem(r, feeItemIds)) ?? null;
+    if (isDeliveryChargeName(item.name) || (feeRow && isDeliveryChargeMenuItem(feeRow, feeItemIds))) {
+      if (feeRow) matchedItemIds.add(feeRow.id);
+      itemPlans.push({
+        ...base,
+        categoryName: feeRow ? (categoryNameById.get(feeRow.categoryId) ?? '?') : (categoryNameByKey.get(catKey) ?? item.category),
+        action: 'same',
+        existingName: feeRow ? (feeRow.isActive ? feeRow.name : `${feeRow.name} (hidden)`) : null,
+        changes: [],
+        recipeChange: 'none',
+        reason: null,
+        keptOnTill: [FEE_SET_IN_SETTINGS],
+      });
+      return;
+    }
 
     if (!m.row && m.ambiguous.length > 0) {
       itemPlans.push({

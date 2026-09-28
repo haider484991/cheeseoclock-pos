@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_DELIVERY_ZONES,
   DEFAULT_DISCOUNT_DELIVERY,
+  DEFAULT_ONLINE_OPTIONS,
+  DEFAULT_WEBSITE_PICKUP,
+  DELIVERY_ZONES,
+  PICKUP_DISCOUNT_PERCENT,
   DEFAULT_FOODPANDA_CHECKS,
   DEFAULT_FOODPANDA_DEAL,
   DEFAULT_FOODPANDA_FEES,
@@ -68,6 +73,9 @@ describe('the released defaults are pinned', () => {
       'kitchen.timing',
       'stock.rules',
       'menu.importPolicy',
+      'discounts.websitePickup',
+      'delivery.zones',
+      'online.options',
     ]);
     for (const key of SHOP_SETTING_KEYS) {
       const d = SHOP_SETTING_DEFAULTS[key];
@@ -75,5 +83,46 @@ describe('the released defaults are pinned', () => {
       expect(d.v).toBe(SHOP_SETTING_FORMAT[key]);
     }
     expect(Object.isFrozen(SHOP_SETTING_DEFAULTS)).toBe(true);
+  });
+
+  it('discounts.websitePickup: offered, 10% off (today’s website pick-up)', () => {
+    expect(DEFAULT_WEBSITE_PICKUP).toEqual({ v: 1, offered: true, percent: 10 });
+    expect(PICKUP_DISCOUNT_PERCENT).toBe(10);
+  });
+
+  it('online.options: the menu goes to the website only when asked (today)', () => {
+    expect(DEFAULT_ONLINE_OPTIONS).toEqual({ v: 1, autoPublishMenu: false });
+  });
+
+  it('delivery.zones: today’s 21 areas and fees exactly (DHA Phase 8 at Rs 250), all on, no fee item named yet', () => {
+    expect(DEFAULT_DELIVERY_ZONES.v).toBe(1);
+    expect(DEFAULT_DELIVERY_ZONES.zones.map((z) => [z.id, z.feeCents, z.active, z.feeItemId])).toEqual(
+      DELIVERY_ZONES.map((z) => [z.id, z.feeCents, true, null]),
+    );
+    expect(DEFAULT_DELIVERY_ZONES.zones.map((z) => [z.id, z.feeCents])).toEqual([
+      ['dha-1', 20_000],
+      ['dha-2', 20_000],
+      ['dha-2-ext', 20_000],
+      ['dha-3', 20_000],
+      ['dha-4', 20_000],
+      ['dha-5', 20_000],
+      ['dha-6', 20_000],
+      ['dha-7', 20_000],
+      ['dha-7-ext', 20_000],
+      ['dha-8', 25_000],
+      ['emaar', 25_000],
+      ['creek-vista', 25_000],
+      ['clifton-1', 25_000],
+      ['clifton-2', 25_000],
+      ['clifton-3', 20_000],
+      ['clifton-4', 20_000],
+      ['clifton-5', 20_000],
+      ['clifton-6', 20_000],
+      ['clifton-7', 20_000],
+      ['clifton-8', 20_000],
+      ['clifton-9', 20_000],
+    ]);
+    expect(Object.isFrozen(DEFAULT_DELIVERY_ZONES.zones)).toBe(true);
+    for (const z of DEFAULT_DELIVERY_ZONES.zones) expect(Object.isFrozen(z)).toBe(true);
   });
 });

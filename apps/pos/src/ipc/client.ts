@@ -139,6 +139,8 @@ export const ipc = {
     clearDiscount: (orderId: string, approverPin?: string) =>
       unwrap(window.api.orders.clearDiscount(approverPin ? { orderId, approverPin } : { orderId })),
     setMode: (input: IpcRequest<'orders:setMode'>) => unwrap(window.api.orders.setMode(input)),
+    /** The delivery area changed: the main process puts that area's delivery charge on (or swaps / takes it off). */
+    setDeliveryArea: (input: IpcRequest<'orders:setDeliveryArea'>) => unwrap(window.api.orders.setDeliveryArea(input)),
     resumeDraft: () => unwrap(window.api.orders.resumeDraft()),
     discardDraft: (orderId: string) => unwrap(window.api.orders.discardDraft({ orderId })),
     tender: (input: IpcRequest<'orders:tender'>) => unwrap(window.api.orders.tender(input)),
@@ -455,7 +457,9 @@ export const ipc = {
       unwrap(window.api.settings.setBusiness({ key, value } as SetShopSettingRequest)) as Promise<ShopSettingCard<K>>,
     /** "Put back the default": writes the default's values. */
     putBackDefault: <K extends ShopSettingKey>(key: K) =>
-      unwrap(window.api.settings.setBusiness({ key, useDefault: true })) as Promise<ShopSettingCard<K>>,
+      unwrap(window.api.settings.setBusiness({ key, useDefault: true } as SetShopSettingRequest)) as Promise<ShopSettingCard<K>>,
+    /** Settings → Delivery areas: the areas and fees, and the delivery-charge items they need (one transaction). */
+    saveDeliveryZones: (input: IpcRequest<'settings:saveDeliveryZones'>) => unwrap(window.api.settings.saveDeliveryZones(input)),
   },
   /** What the counter needs to take an order: the foodpanda deal, Pay's checks. */
   checkout: {

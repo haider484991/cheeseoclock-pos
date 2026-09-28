@@ -13,14 +13,19 @@
  *    ('discounts.delivery'; the owner, 28 Sep 2026: "Delivery charges is
  *    separate we don't want to add discount to it" — default No). Frozen on
  *    each discount when it is given: a change never moves one already given.
+ * And the website's pick-up offer ('discounts.websitePickup', Settings
+ * step 3): whether customers may pick up, and the whole % off they get —
+ * sent to the website with the menu (the settings block), never the
+ * heartbeat; the till bills the % each web order carries.
  * The foodpanda deal keeps its own rules (Settings → foodpanda). The owner
- * alone (the main process refuses anyone else); the first two defaults are
- * exactly what the till did before, the third is the owner's answer.
+ * alone (the main process refuses anyone else); the defaults are exactly
+ * what the till did before, but "a discount also comes off the delivery
+ * charge", which is the owner's answer.
  */
 import { useMemo } from 'react';
 import { cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { Bike, Lock, MousePointerClick, ShieldCheck } from 'lucide-react';
+import { Bike, Lock, MousePointerClick, ShieldCheck, ShoppingBag } from 'lucide-react';
 import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
@@ -54,6 +59,14 @@ import {
   type DeliveryChargeForm,
   type PresetsForm,
 } from './shop-rules/discountRules';
+import {
+  PICKUP_PRINTED_MENU_NOTE,
+  pickupExample,
+  pickupFromForm,
+  pickupSummary,
+  pickupToForm,
+} from './shop-rules/deliveryZonesForm';
+import { WEBSITE_PICKUP_MAX_PERCENT } from '@cheeseoclock/shared-types';
 
 const inputClass =
   'w-full rounded-lg border border-stone-300 px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800 disabled:opacity-60';
@@ -256,7 +269,88 @@ function MoneyCards({
       </SettingCard>
 
       <DeliveryChargeCard />
+
+      <WebsitePickupCard />
     </div>
+  );
+}
+
+/** The website's pick-up offer ('discounts.websitePickup'), loaded on its own. */
+function WebsitePickupCard() {
+  const s = useShopSetting('discounts.websitePickup');
+  if (s.q.isError) return <p className="py-6 text-center text-stone-500">Could not load “Website pick-up”.</p>;
+  if (!s.q.data) return <p className="py-6 text-center text-stone-500">Loading…</p>;
+  return <WebsitePickupFields s={s} />;
+}
+
+function WebsitePickupFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.websitePickup'>> }) {
+  const card = s.q.data as ShopSettingCard<'discounts.websitePickup'>;
+  const draft = useDraft(card.value, pickupToForm);
+  const parsed = useMemo(() => pickupFromForm(draft.form), [draft.form]);
+  const shown = parsed.value ?? card.value;
+  const dirty = draft.touched && (parsed.value === null || !sameValue(parsed.value, card.value));
+  const options = [
+    { offered: true, label: 'Yes', hint: 'Customers can choose “I’ll pick it up” on the website.' },
+    { offered: false, label: 'No', hint: 'Delivery only on the website.' },
+  ];
+  return (
+    <SettingCard
+      card={card}
+      title="Website pick-up"
+      icon={<ShoppingBag className="h-5 w-5" />}
+      intro="Whether website customers may collect their order from the counter, and the % off they get for it. It reaches the website with the menu; pick-up still needs the shop to be taking orders."
+      describe={pickupSummary}
+      dirty={dirty}
+      problem={parsed.problem}
+      busy={s.save.isPending || s.putBack.isPending}
+      onSave={() => parsed.value && s.save.mutate(parsed.value, { onSuccess: draft.reset })}
+      onPutBack={() => s.putBack.mutate(undefined, { onSuccess: draft.reset })}
+      footer={
+        <div className="mt-4 space-y-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/60 dark:text-amber-100" aria-live="polite">
+          <p>
+            <span className="font-semibold">For example: </span>
+            {pickupExample(shown)}
+          </p>
+          <p className="text-xs">{PICKUP_PRINTED_MENU_NOTE}</p>
+        </div>
+      }
+    >
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div role="radiogroup" aria-label="Offer pick-up on the website" className="grid grid-cols-1 gap-2">
+          {options.map((o) => (
+            <button
+              key={String(o.offered)}
+              type="button"
+              role="radio"
+              aria-checked={draft.form.offered === o.offered}
+              onClick={() => draft.set({ ...draft.form, offered: o.offered })}
+              className={cn(
+                'flex flex-col items-start gap-0.5 rounded-lg border-2 p-3 text-left transition-colors disabled:opacity-60',
+                draft.form.offered === o.offered
+                  ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                  : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+              )}
+            >
+              <span className="text-sm font-semibold">{o.label}</span>
+              <span className="text-xs text-stone-500">{o.hint}</span>
+            </button>
+          ))}
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="pk-percent">
+            % off a pick-up
+          </label>
+          <input
+            id="pk-percent"
+            inputMode="numeric"
+            value={draft.form.percent}
+            onChange={(e) => draft.set({ ...draft.form, percent: e.target.value.replace(/[^\d]/g, '').slice(0, 3) })}
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs text-stone-500">A whole %, 0 to {WEBSITE_PICKUP_MAX_PERCENT}. It is worked on the food (a pick-up has no delivery charge).</p>
+        </div>
+      </div>
+    </SettingCard>
   );
 }
 

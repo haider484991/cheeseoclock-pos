@@ -19,7 +19,7 @@ import { importPriceRowId, rollUpBatches, setSheetPrice } from './ingredient-cos
 import { raiseBatchUnpricedAlerts } from './cost-alert-repo.js';
 import { loadPriceBook } from '../price-book.js';
 import { latestPriceTags } from '../price-history-read.js';
-import { readMenuImportPolicy } from '../business-settings-read.js';
+import { readDeliveryFeeItemIds, readMenuImportPolicy } from '../business-settings-read.js';
 import { setBatchRecipe, clearBatchRecipeLines } from './batch-recipe-repo.js';
 import { listCombos, deleteCombo } from './combo-repo.js';
 import {
@@ -46,7 +46,7 @@ import {
 } from '../menu-import-plan.js';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
 import { toPriceKind } from '@cheeseoclock/pos-domain';
-import type { MenuImportFreshStart, MenuImportSummary } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeMenuItem, type MenuImportFreshStart, type MenuImportSummary } from '@cheeseoclock/shared-types';
 
 /** The import cannot run as asked (open orders during a fresh start…). */
 export class MenuImportRefusedError extends Error {}
@@ -150,11 +150,17 @@ function taxUseOf(live: MenuSnapshot): Map<string, number> {
   return use;
 }
 
-/** The same POS with no menu: what a fresh start plans against (tax categories stay). */
-function emptyMenu(live: MenuSnapshot): MenuSnapshot {
+/**
+ * The same POS with no menu: what a fresh start plans against (tax
+ * categories stay, and so do the delivery charges with their categories:
+ * Settings → Delivery areas', never removed by a file).
+ */
+function emptyMenu(live: MenuSnapshot, feeItemIds: ReadonlySet<string>): MenuSnapshot {
+  const fees = live.items.filter((i) => isDeliveryChargeMenuItem(i, feeItemIds));
+  const feeCategories = new Set(fees.map((i) => i.categoryId));
   return {
-    categories: [],
-    items: [],
+    categories: live.categories.filter((c) => feeCategories.has(c.id)),
+    items: fees,
     ingredients: [],
     recipes: new Map(),
     taxCategories: live.taxCategories,
@@ -165,10 +171,15 @@ function emptyMenu(live: MenuSnapshot): MenuSnapshot {
   };
 }
 
-function freshStartOf(db: AppDatabase, live: MenuSnapshot): MenuImportFreshStart {
+function freshStartOf(db: AppDatabase, live: MenuSnapshot, feeItemIds: ReadonlySet<string>): MenuImportFreshStart {
+  const kept = emptyMenu(live, feeItemIds);
+  const keptItems = new Set(kept.items.map((i) => i.id));
   return {
-    items: live.items.map((i) => i.name).sort((a, b) => a.localeCompare(b)),
-    categories: live.categories.length,
+    items: live.items
+      .filter((i) => !keptItems.has(i.id))
+      .map((i) => i.name)
+      .sort((a, b) => a.localeCompare(b)),
+    categories: live.categories.length - kept.categories.length,
     combos: listCombos(db).length,
     choiceGroups: live.modifierGroups.length,
     ingredients: live.ingredients.length,
@@ -188,9 +199,11 @@ export function planMenuImportFromDb(
   const live = readMenuSnapshot(db);
   // What the file may change on what the till has (Settings → Kitchen & stock; the file wins by default).
   const policy = readMenuImportPolicy(db);
-  if (!opts.fresh) return planMenuImport(file, live, policy);
-  const plan = planMenuImport(file, emptyMenu(live), policy);
-  return { ...plan, preview: { ...plan.preview, fresh: freshStartOf(db, live), untouchedItems: [] } };
+  // The delivery charges are Settings → Delivery areas': left as they are, a fresh start included.
+  const feeItemIds = readDeliveryFeeItemIds(db);
+  if (!opts.fresh) return planMenuImport(file, live, policy, feeItemIds);
+  const plan = planMenuImport(file, emptyMenu(live, feeItemIds), policy, feeItemIds);
+  return { ...plan, preview: { ...plan.preview, fresh: freshStartOf(db, live, feeItemIds), untouchedItems: [] } };
 }
 
 /**
@@ -199,16 +212,29 @@ export function planMenuImportFromDb(
  * category — through the ordinary repositories, so each row syncs and audits.
  * Rows left behind by items deleted earlier are cleared too. Orders keep their
  * own snapshots, so history is unaffected. Returns the number of items removed.
+ *
+ * The delivery charges stay, with their category (Settings → Delivery areas'
+ * items: each area names its own by id, the website checks the fee against
+ * it, and a web order already placed carries it).
  */
-function clearMenu(db: AppDatabase, actor: Actor): number {
+function clearMenu(db: AppDatabase, actor: Actor, feeItemIds: ReadonlySet<string>): number {
   const ids = (sql: string) => (db.prepare(sql).all() as Array<{ id: string }>).map((r) => r.id);
+  const fees = (
+    db.prepare(`SELECT id, name, category_id FROM menu_items WHERE deleted_at IS NULL`).all() as Array<{
+      id: string;
+      name: string;
+      category_id: string;
+    }>
+  ).filter((i) => isDeliveryChargeMenuItem(i, feeItemIds));
+  const keptItems = new Set(fees.map((i) => i.id));
+  const keptCategories = new Set(fees.map((i) => i.category_id));
   for (const id of ids(`SELECT DISTINCT menu_item_id AS id FROM recipes WHERE deleted_at IS NULL`)) {
     setRecipeForItem(db, id, [], actor);
   }
   for (const id of ids(`SELECT DISTINCT menu_item_id AS id FROM menu_item_modifier_groups WHERE deleted_at IS NULL`)) {
     setItemModifierGroups(db, id, [], actor);
   }
-  const items = ids(`SELECT id FROM menu_items WHERE deleted_at IS NULL`);
+  const items = ids(`SELECT id FROM menu_items WHERE deleted_at IS NULL`).filter((id) => !keptItems.has(id));
   for (const id of items) deleteMenuItem(db, id, actor);
   for (const c of listCombos(db)) deleteCombo(db, c.id, actor);
   for (const g of listModifierGroups(db)) {
@@ -219,7 +245,7 @@ function clearMenu(db: AppDatabase, actor: Actor): number {
     clearBatchRecipeLines(db, id, actor);
   }
   for (const i of listIngredients(db)) deleteIngredient(db, i.id, actor);
-  for (const c of listCategories(db)) deleteCategory(db, c.id, actor);
+  for (const c of listCategories(db)) if (!keptCategories.has(c.id)) deleteCategory(db, c.id, actor);
   return items.length;
 }
 
@@ -305,14 +331,20 @@ export function applyMenuImport(
   const tx = db.transaction((): MenuImportSummary => {
     let removedItems = 0;
     let taxUse: Map<string, number> | undefined;
+    const feeItemIds = readDeliveryFeeItemIds(db);
     if (opts.fresh) {
       refuseFreshStartWhileBusy(db);
       taxUse = taxUseOf(readMenuSnapshot(db));
-      removedItems = clearMenu(db, actor);
+      removedItems = clearMenu(db, actor, feeItemIds);
     }
     const snapshot = readMenuSnapshot(db);
     // The owner's import rules as they are now, inside the transaction: what the preview showed, or a Save since.
-    const { ops, preview } = planMenuImport(file, taxUse ? { ...snapshot, taxUse } : snapshot, readMenuImportPolicy(db));
+    const { ops, preview } = planMenuImport(
+      file,
+      taxUse ? { ...snapshot, taxUse } : snapshot,
+      readMenuImportPolicy(db),
+      feeItemIds,
+    );
 
     const taxCategoryId = ops.createTaxCategory
       ? createTaxCategory(db, ops.createTaxCategory, actor).id

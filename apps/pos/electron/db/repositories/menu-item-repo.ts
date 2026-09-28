@@ -93,6 +93,12 @@ export function findMenuItemByBarcode(db: AppDatabase, barcode: string): MenuIte
 }
 
 export interface CreateMenuItemInput {
+  /**
+   * A name-based id (uuid v5), for an item both tills must make as the SAME
+   * row — the delivery-charge items of Settings → Delivery areas. Absent: a
+   * new uuid v7, as for every item the owner adds.
+   */
+  id?: string;
   categoryId: string;
   name: string;
   description?: string | null;
@@ -112,7 +118,7 @@ export function createMenuItem(
   input: CreateMenuItemInput,
   actor: Actor,
 ): MenuItem {
-  const id = uuidv7();
+  const id = input.id ?? uuidv7();
   const now = nowIso();
   const item: MenuItem = {
     id: id as MenuItem['id'],
@@ -253,6 +259,35 @@ export function updateMenuItem(
     },
   });
   return after;
+}
+
+/**
+ * Bring back a soft-deleted item under the same id (row, sync, audit in one
+ * transaction). Only Settings → Delivery areas does it: a fee's name-based
+ * row deleted by a fresh-start import, or on an older till, comes back
+ * rather than a look-alike with a new id. Its recipe and option links stay
+ * gone (a delivery charge has none).
+ */
+export function restoreMenuItem(db: AppDatabase, id: string, actor: Actor): MenuItem {
+  const row = db.prepare(`SELECT ${SELECT_COLUMNS} FROM menu_items WHERE id = ?`).get(id) as Row | undefined;
+  if (!row) throw new Error('Menu item not found');
+  const item = rowToItem(row);
+  if (row.deleted_at === null) return item;
+  const now = nowIso();
+  writeWithSync<MenuItem & { deletedAt?: string | null }>({
+    db,
+    entityType: 'menu_items',
+    entityId: id,
+    op: 'upsert',
+    action: 'restore',
+    actor,
+    before: { ...item, deletedAt: row.deleted_at },
+    after: item,
+    writeRow: () => {
+      db.prepare(`UPDATE menu_items SET deleted_at = NULL, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, id);
+    },
+  });
+  return item;
 }
 
 export function deleteMenuItem(db: AppDatabase, id: string, actor: Actor): void {

@@ -135,7 +135,15 @@ describe('Settings → Kitchen & stock', () => {
         .map((t) => text(`<x ${t.slice(0, t.indexOf('</button>'))}`));
     signIn('admin');
     const all = tabs(render(<SettingsPage />));
-    expect(all.slice(0, 6)).toEqual(['foodpanda', 'Money & discounts', 'Shop & logo', 'Staff & kitchen timing', 'Kitchen & stock', 'Printers']);
+    expect(all.slice(0, 7)).toEqual([
+      'foodpanda',
+      'Money & discounts',
+      'Delivery areas & fees',
+      'Shop & logo',
+      'Staff & kitchen timing',
+      'Kitchen & stock',
+      'Printers',
+    ]);
     for (const role of ['manager', 'cashier'] as const) {
       signIn(role);
       expect({ role, tabs: tabs(render(<SettingsPage />)) }).toEqual({ role, tabs: ['Printers', 'Sounds', 'About'] });

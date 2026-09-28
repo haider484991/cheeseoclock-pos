@@ -11,3 +11,4 @@ export * from './business-settings.js';
 export * from './stock-count.js';
 export * from './test-orders.js';
 export * from './drawer-log.js';
+export * from './web-settings.js';

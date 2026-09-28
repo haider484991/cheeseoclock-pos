@@ -4,7 +4,15 @@ import type { ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-typ
 import { ipc, IpcError, onShopSettingsChanged, onSyncStatusChanged } from '../../../ipc/client';
 import { useToast } from '../../../components/toast/ToastProvider';
 import type { CounterStockRules } from '@cheeseoclock/shared-types';
-import { discountRulesOf, kitchenTimingOf, stockRulesOf, type CounterDiscountRules, type CounterKitchenTiming } from './counterRules';
+import { deliveryAreas, type DeliveryAreas } from '@cheeseoclock/pos-domain';
+import {
+  deliveryZonesOf,
+  discountRulesOf,
+  kitchenTimingOf,
+  stockRulesOf,
+  type CounterDiscountRules,
+  type CounterKitchenTiming,
+} from './counterRules';
 
 /** Every shop-rule query (Settings cards, the counter's rules) is under this key. */
 export const SHOP_SETTINGS_KEY = ['shop-settings'] as const;
@@ -63,6 +71,17 @@ export function useKitchenTiming(opts: { enabled?: boolean } = {}): CounterKitch
  */
 export function useStockRules(): CounterStockRules {
   return stockRulesOf(useCheckoutRules().data);
+}
+
+/**
+ * The delivery areas as the till uses them (Settings → Delivery areas, via
+ * checkout:getRules; the released 21 until the till has answered): the
+ * area picker, the delivery charge, the Customers filter. Built once per
+ * list (pos-domain deliveryAreas is memoised), re-read when a Save lands.
+ */
+export function useDeliveryAreas(): DeliveryAreas {
+  const q = useCheckoutRules();
+  return deliveryAreas(deliveryZonesOf(q.data));
 }
 
 /**

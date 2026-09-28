@@ -4,7 +4,13 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import type { Category } from '@cheeseoclock/shared-types';
+import {
+  FEE_ITEM_LOCKED_NOTE,
+  deliveryZoneFeeItemIds,
+  isDeliveryChargeMenuItem,
+  type Category,
+} from '@cheeseoclock/shared-types';
+import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 
@@ -29,6 +35,12 @@ export function CategoriesTab() {
     }
     return counts;
   }, [itemsQ.data]);
+  // The categories holding a delivery charge that is on: Settings → Delivery areas' — never hidden here.
+  const areas = useDeliveryAreas();
+  const feeCategories = useMemo(() => {
+    const ids = deliveryZoneFeeItemIds(areas.zones);
+    return new Set((itemsQ.data ?? []).filter((i) => i.isActive && isDeliveryChargeMenuItem(i, ids)).map((i) => i.categoryId));
+  }, [itemsQ.data, areas]);
   // The till shows categories in display order; so does this list.
   const categories = useMemo(
     () => [...(q.data ?? [])].sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)),
@@ -145,6 +157,7 @@ export function CategoriesTab() {
         <CategoryDialog
           key={editing === 'new' ? 'new' : editing.id}
           existing={editing === 'new' ? null : editing}
+          holdsDeliveryCharges={editing !== 'new' && feeCategories.has(editing.id)}
           onClose={() => setEditing(null)}
         />
       )}
@@ -154,9 +167,12 @@ export function CategoriesTab() {
 
 function CategoryDialog({
   existing,
+  holdsDeliveryCharges = false,
   onClose,
 }: {
   existing: Category | null;
+  /** It holds a delivery charge that is on: it stays on (the website needs it). */
+  holdsDeliveryCharges?: boolean;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -228,10 +244,13 @@ function CategoryDialog({
                     <input
                       type="checkbox"
                       checked={isActive}
+                      disabled={holdsDeliveryCharges && isActive}
+                      title={holdsDeliveryCharges ? FEE_ITEM_LOCKED_NOTE : undefined}
                       onChange={(e) => setIsActive(e.target.checked)}
                     />
                     {isActive ? 'Active' : 'Inactive'}
                   </label>
+                  {holdsDeliveryCharges && <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">{FEE_ITEM_LOCKED_NOTE}</p>}
                 </div>
               )}
             </div>

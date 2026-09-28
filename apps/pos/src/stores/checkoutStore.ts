@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import type { FoodpandaTenderCheck, OrderSnapshot, OrderMode, PaymentMethod } from '@cheeseoclock/shared-types';
-import { isDeliveryChargeName } from '@cheeseoclock/shared-types';
 import { ipc } from '../ipc/client';
 import { addedLineId, createSerialQueue, findMergeableLine } from '../features/checkout/cartLines';
 
@@ -59,6 +58,13 @@ interface CheckoutState {
    */
   bumpItemQty: (orderItemId: string, delta: number) => Promise<void>;
   removeItem: (orderItemId: string) => Promise<void>;
+  /**
+   * The delivery area on the customer panel changed: the main process puts
+   * that area's delivery charge on the open order (swaps a wrong one, takes
+   * it off when the area is cleared). `mayStartOrder`: with no order yet,
+   * start one to carry the charge (only when there is a charge to put on).
+   */
+  setDeliveryArea: (area: string, opts?: { mayStartOrder?: boolean }) => Promise<void>;
   applyDiscount: (
     discountType: 'percent' | 'flat',
     value: number,
@@ -145,15 +151,10 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const snap = get().snapshot;
         if (!snap || snap.order.status !== 'open') return;
         try {
-          let next = await ipc.orders.setMode({ orderId: snap.order.id, mode });
-          // Only a delivery pays the delivery charge: switching away takes the
-          // "Delivery Charge (Rs N)" line off the bill (called directly — this
-          // already runs inside the queue, so a queued action would wait on itself).
-          if (mode !== 'delivery') {
-            for (const line of next.items.filter((i) => isDeliveryChargeName(i.menuItemName))) {
-              next = await ipc.orders.removeItem({ orderId: next.order.id, orderItemId: line.id });
-            }
-          }
+          // Only a delivery pays the delivery charge: the main process takes its line off when
+          // the order leaves Delivery (setOrderMode), and puts the area's back when it returns
+          // (the customer panel asks, orders:setDeliveryArea).
+          const next = await ipc.orders.setMode({ orderId: snap.order.id, mode });
           set({ snapshot: next, mode: next.order.mode, tableId: next.order.tableId });
         } catch (e) {
           // Persist failed — snap the UI back to the order's real mode so the
@@ -287,6 +288,20 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
           orderItemId,
         });
         set({ snapshot: next });
+      });
+    },
+
+    setDeliveryArea(area, opts = {}) {
+      return run(async () => {
+        const snap = get().snapshot;
+        let orderId = snap && snap.order.status === 'open' ? snap.order.id : null;
+        if (!orderId) {
+          // No order: nothing to take off; start one only to carry a charge.
+          if (!opts.mayStartOrder || get().mode !== 'delivery' || !area.trim()) return;
+          orderId = (await ensureOrderNow()).order.id;
+        }
+        const next = await ipc.orders.setDeliveryArea({ orderId, area: area.trim() || null });
+        if (get().snapshot?.order.id === next.order.id) set({ snapshot: next });
       });
     },
 

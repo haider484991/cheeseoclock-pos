@@ -29,6 +29,7 @@ import {
   applyDiscount,
   clearDiscount,
   setOrderMode,
+  syncOrderDeliveryCharge,
   findResumableDraft,
   discardEmptyDrafts,
   discardDraft,
@@ -398,6 +399,26 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
       throw new IpcGuardError({
         code: 'precondition_failed',
         message: e instanceof Error ? e.message : 'Could not change mode',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  // The owner, 28 Sep 2026: "if delivery area selected the delivery fee should be automatically
+  // added". The repository decides (syncOrderDeliveryCharge): the area's fee on a delivery, swapped
+  // when the area changes, off when it is cleared; never twice, never foodpanda or a website order.
+  defineHandler('orders:setDeliveryArea', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    const area = typeof payload?.area === 'string' ? payload.area.slice(0, 200) : null;
+    if (typeof payload?.orderId !== 'string') throw new IpcGuardError({ code: 'validation_failed', message: 'Which order?' });
+    try {
+      syncOrderDeliveryCharge(ctx.db, payload.orderId, area, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Could not add the delivery charge',
       });
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);

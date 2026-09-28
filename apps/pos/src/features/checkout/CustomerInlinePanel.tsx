@@ -4,15 +4,15 @@ import { cn } from '@cheeseoclock/ui';
 import { ipc } from '../../ipc/client';
 import {
   DELIVERY_CITY,
-  feeForZones,
-  findDeliveryChargeItem,
-  isDeliveryChargeName,
+  deliveryZoneFeeItemIds,
+  isDeliveryChargeLine,
   type CustomerAddress,
   type CustomerAddressMatch,
 } from '@cheeseoclock/shared-types';
-import { counterPhoneLookup, formatCents, resolveAreaText } from '@cheeseoclock/pos-domain';
-import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, RefreshCw } from 'lucide-react';
+import { counterPhoneLookup, deliveryChargeTarget, deliveryChargeWords, formatCents } from '@cheeseoclock/pos-domain';
+import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle } from 'lucide-react';
 import { AreaPicker } from '../customers/AreaPicker';
+import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -30,9 +30,10 @@ import { counterPhoneHint, savedAddressToMakeUsual, typedAddressToSave } from '.
  *   • Phone autocompletes as you type — suggestions appear in a small dropdown.
  *   • Pick a suggestion → name + saved addresses pre-fill (you can still edit).
  *   • If `mode === 'delivery'`: house / street is typed (a saved house number
- *     brings its customer back); the AREA is picked from the shared DHA /
- *     Clifton list, which also gives the delivery fee — with one tap to put
- *     the matching "Delivery Charge" item on the bill.
+ *     brings its customer back); the AREA is picked from the owner's list
+ *     (Settings → Delivery areas), and its delivery charge goes on the bill
+ *     BY ITSELF (owner, 28 Sep 2026) — swapped when the area changes, taken
+ *     off when it is cleared; the main process decides (orders:setDeliveryArea).
  *   • No save buttons. A small status pill says "Existing customer" or "New".
  *
  * At the counter (a login without `customers.manage`, owner 2026-09-26) the
@@ -547,55 +548,99 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
 }
 
 /**
- * The picked area's delivery fee, and one tap to put the matching
- * "Delivery Charge (Rs N)" menu item on the bill — or to swap a charge
- * already there for the right one. Never adds anything by itself.
+ * The picked area's delivery charge — on the bill BY ITSELF (owner, 28 Sep
+ * 2026: "if delivery area selected the delivery fee should be automatically
+ * added"). Whenever the area (or the order type) changes, the main process
+ * brings the bill to it (orders:setDeliveryArea → syncOrderDeliveryCharge):
+ * the area's fee item (Settings → Delivery areas) on, a charge at another
+ * fee swapped, none when the area is cleared, free or switched off; never
+ * twice. This row only says what the bill carries. Any login that can change
+ * an open order may take the charge off by hand (the cart's ×, audited like
+ * any line); it stays off until the area changes, or "Put it back".
  */
 function DeliveryChargeRow({ area }: { area: string }) {
+  const A = useDeliveryAreas();
   const snapshot = useCheckoutStore((s) => s.snapshot);
+  const mode = useCheckoutStore((s) => s.mode);
   const busy = useCheckoutStore((s) => s.busy);
+  const setDeliveryArea = useCheckoutStore((s) => s.setDeliveryArea);
   const { toast } = useToast();
-  const [working, setWorking] = useState(false);
   // Same query (and cache) as the menu grid's "All" view.
   const itemsQ = useQuery({
     queryKey: ['menu', 'items', { categoryId: null, activeOnly: true }],
     queryFn: () => ipc.menu.listItems({ activeOnly: true }),
     staleTime: 60_000,
   });
+  const target = useMemo(() => deliveryChargeTarget(A, mode, area, itemsQ.data ?? []), [A, mode, area, itemsQ.data]);
+  const wouldAdd = target.kind === 'fee' && target.itemId !== null;
+  const orderId = snapshot && snapshot.order.status === 'open' ? snapshot.order.id : null;
 
-  const zoneIds = useMemo(() => resolveAreaText(area).zoneIds, [area]);
-  const fee = feeForZones(zoneIds);
-  if (fee === null) return null;
-
-  const chargeItem = findDeliveryChargeItem(itemsQ.data ?? [], fee);
-  const lines = (snapshot?.items ?? []).filter((l) => isDeliveryChargeName(l.menuItemName));
-  const rightQty = lines.filter((l) => l.unitPriceCents === fee).reduce((n, l) => n + l.quantity, 0);
-  const wrong = lines.filter((l) => l.unitPriceCents !== fee);
-  const disabled = busy || working || !chargeItem;
-
-  async function apply() {
-    if (!chargeItem) return;
-    setWorking(true);
-    try {
-      const store = useCheckoutStore.getState();
-      for (const l of wrong) await store.removeItem(l.id);
-      await store.addItem(chargeItem.id);
-    } catch (e) {
-      toast({
-        title: 'Could not add the delivery charge',
-        description: e instanceof Error ? e.message : 'Unknown error',
-        variant: 'error',
-      });
-    } finally {
-      setWorking(false);
+  // The area, the order type or the order changed: the main process puts the right charge on.
+  // A moment after the last keystroke, so a hand-typed area is asked about once.
+  // Only a CHANGE is asked about: an area picked or changed, or cleared after one was there. A bill
+  // that never had an area is left alone (a charge the cashier tapped on by hand stays).
+  const synced = useRef<{ key: string; orderId: string | null; area: string } | null>(null);
+  useEffect(() => {
+    const a = area.trim();
+    // With no order yet, whether a charge would go on decides whether to start one (the menu may still be loading).
+    const key = `${orderId ?? ''}|${mode}|${a}|${orderId ? '' : String(wouldAdd)}`;
+    if (synced.current?.key === key) return;
+    const hadArea = synced.current !== null && synced.current.orderId === orderId && synced.current.area !== '';
+    if (!a && !hadArea) {
+      synced.current = { key, orderId, area: a };
+      return;
     }
+    const t = setTimeout(() => {
+      synced.current = { key, orderId, area: a };
+      setDeliveryArea(area, { mayStartOrder: wouldAdd }).catch((e: unknown) =>
+        toast({
+          title: 'Could not put the delivery charge on',
+          description: e instanceof Error ? e.message : 'Unknown error',
+          variant: 'error',
+        }),
+      );
+    }, 250);
+    return () => clearTimeout(t);
+    // wouldAdd follows area/mode/menu; the key decides when to ask.
+  }, [orderId, mode, area, wouldAdd, setDeliveryArea, toast]);
+
+  const words = deliveryChargeWords(target);
+  if (!words) return null;
+  const base = 'mt-1 flex flex-wrap items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs';
+  const amber = cn(base, 'bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200');
+
+  if (target.kind !== 'fee') {
+    return (
+      <div className={amber}>
+        <span className="inline-flex items-center gap-1">
+          {target.kind === 'none' && target.reason === 'paused' ? (
+            <PauseCircle className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <Bike className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          {words}
+        </span>
+      </div>
+    );
   }
 
-  const feeText = formatCents(fee);
-  const base =
-    'mt-1 flex flex-wrap items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs';
+  const feeIds = deliveryZoneFeeItemIds(A.zones);
+  const lines = (snapshot?.items ?? []).filter((l) => isDeliveryChargeLine(l, feeIds));
+  const rightQty = lines.filter((l) => l.unitPriceCents === target.feeCents).reduce((n, l) => n + l.quantity, 0);
+  const feeText = formatCents(target.feeCents);
 
-  if (rightQty > 0 && wrong.length === 0) {
+  if (!target.itemId) {
+    return (
+      <div className={amber}>
+        <span className="inline-flex items-center gap-1">
+          <Bike className="h-3.5 w-3.5" aria-hidden="true" />
+          {words}
+        </span>
+      </div>
+    );
+  }
+
+  if (rightQty > 0) {
     return (
       <div className={cn(base, 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200')}>
         <span className="inline-flex items-center gap-1">
@@ -607,28 +652,25 @@ function DeliveryChargeRow({ area }: { area: string }) {
     );
   }
 
+  // Not on the bill yet (being added), or taken off by hand.
   return (
-    <div className={cn(base, 'bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200')}>
+    <div className={amber}>
       <span className="inline-flex items-center gap-1">
         <Bike className="h-3.5 w-3.5" aria-hidden="true" />
-        {wrong.length > 0
-          ? `The bill has a ${formatCents(wrong[0]?.unitPriceCents ?? 0)} delivery charge — this area is ${feeText}`
-          : `Delivery to this area is ${feeText}`}
+        {busy || !orderId ? `Delivery to this area is ${feeText}` : `Delivery to this area is ${feeText} — not on the bill (taken off by hand)`}
       </span>
-      {chargeItem ? (
+      {!busy && orderId && (
         <button
           type="button"
-          disabled={disabled}
-          onClick={() => void apply()}
-          className="inline-flex min-h-[32px] items-center gap-1 rounded-full bg-amber-500 px-3 font-semibold text-stone-900 hover:bg-amber-400 disabled:opacity-50"
+          onClick={() =>
+            void setDeliveryArea(area, { mayStartOrder: true }).catch((e: unknown) =>
+              toast({ title: 'Could not put the delivery charge on', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
+            )
+          }
+          className="inline-flex min-h-[32px] items-center gap-1 rounded-full bg-amber-500 px-3 font-semibold text-stone-900 hover:bg-amber-400"
         >
-          {wrong.length > 0 ? <RefreshCw className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-          {wrong.length > 0 ? `Change to ${feeText}` : `Add ${feeText} to the bill`}
+          <Plus className="h-3.5 w-3.5" /> Put it back
         </button>
-      ) : (
-        <span className="text-[11px] text-stone-500">
-          No “Delivery Charge ({feeText})” item on the menu — add it in Menu to charge it here.
-        </span>
       )}
     </div>
   );

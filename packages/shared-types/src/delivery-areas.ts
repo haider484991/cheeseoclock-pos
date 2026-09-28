@@ -1,20 +1,27 @@
 /**
- * Where Cheese O'Clock delivers — ONE list, shared by the website checkout
- * (apps/web/src/lib/delivery-zones.ts re-exports it) and the till's address
- * entry (the area picker in the POS). Change a zone or a fee here and both
- * move together.
+ * Where Cheese O'Clock delivers: the COMPILED list, today's 21 areas and
+ * fees (source: the Dropoff rider service's 2026 rate card, Zone 1). FROZEN
+ * since Settings step 3: the owner changes areas and fees in Settings →
+ * Delivery areas ('delivery.zones', shop-settings.ts), and this list is only
+ *  - that setting's default (DEFAULT_DELIVERY_ZONES: a till where nothing is
+ *    saved works exactly as before),
+ *  - the website's fallback while it holds no settings block
+ *    (apps/web/src/lib/delivery-zones.ts re-exports it), and
+ *  - the rider service's rate card, which Reports → Profit prices a rider
+ *    trip from (never the owner's charge: a new fee must not rewrite past
+ *    profit; rider pay is costing Phase 9's).
+ * NEVER edit a zone or a fee here again: two tills, or a till and the
+ * website, on different versions would disagree.
  *
- * Zones — source: the Dropoff rider service's 2026 rate card (Zone 1). The
- * owner delivers in DHA and Clifton ONLY; every other Karachi area on that
- * card is deliberately left out, and the website checkout refuses an order
- * without one of these zones (owner, 25 Sep 2026: "customers should not be
- * able to order outside our zones").
+ * The owner delivers in DHA and Clifton ONLY by default; every other Karachi
+ * area on that card is deliberately left out, and the website checkout
+ * refuses an order without one of these zones (owner, 25 Sep 2026:
+ * "customers should not be able to order outside our zones").
  *
- * The fee reaches the till as a real line item: the POS menu carries
- * "Delivery Charge (Rs 200)" and "Delivery Charge (Rs 250)" items (category
- * "Delivery Charges"), and the website server / the till's one-tap button add
- * the one whose price matches the zone. Changing a fee here means changing
- * that POS item's price too.
+ * The fee reaches the till as a real line item: a "Delivery Charge (Rs N)"
+ * menu item (category "Delivery Charges"). Since step 3 each saved zone names
+ * its item (feeItemId), made or adopted by Settings → Delivery areas' Save;
+ * until the first Save the item is found by its name and price, as before.
  *
  * Places — commercial areas, markets, roads and landmarks people name instead
  * of their phase or block ("Bukhari", "Boat Basin"). A place lists the zone(s)
@@ -318,11 +325,24 @@ export function isDeliveryChargeName(name: string): boolean {
  * the discount. It reads the name the line was SOLD under
  * (order_items.menu_item_name, written once when the line is added), never
  * the live menu or a category: renaming an item, or marking a category "not
- * food" in Costing, can't move yesterday's split. When the charge items get
- * ids of their own (Settings plan phase 3), this is the one place to change.
+ * food" in Costing, can't move yesterday's split.
+ *
+ * Settings step 3 gave the charge items ids of their own (each zone's
+ * feeItemId, deliveryZoneFeeItemIds): pass them as `feeItemIds` and a line
+ * of one of those items is a delivery charge too, whatever it was called.
+ * The NAME stays the test for a stored order: every reader after the fact
+ * (the discount's split and tax, the FBR invoice, the receipt, Reports)
+ * calls this without ids, so an order already paid reads back exactly as it
+ * was worked. The two agree on every line sold since: a fee item is always
+ * named deliveryChargeItemName(fee) — Save renames an adopted one, and Menu
+ * locks the name.
  */
-export function isDeliveryChargeLine(line: { readonly menuItemName?: string | null }): boolean {
-  return typeof line.menuItemName === 'string' && isDeliveryChargeName(line.menuItemName);
+export function isDeliveryChargeLine(
+  line: { readonly menuItemName?: string | null; readonly menuItemId?: string | null },
+  feeItemIds?: ReadonlySet<string> | null,
+): boolean {
+  if (typeof line.menuItemName === 'string' && isDeliveryChargeName(line.menuItemName)) return true;
+  return !!feeItemIds && typeof line.menuItemId === 'string' && feeItemIds.has(line.menuItemId);
 }
 
 /**
@@ -336,7 +356,7 @@ export function discountLeavesDeliveryCharge(
   discount: { readonly alsoOffDeliveryCharge?: boolean } | null | undefined,
   items: ReadonlyArray<{ readonly menuItemName?: string | null }>,
 ): boolean {
-  return discount?.alsoOffDeliveryCharge === false && items.some(isDeliveryChargeLine);
+  return discount?.alsoOffDeliveryCharge === false && items.some((l) => isDeliveryChargeLine(l));
 }
 
 /**
@@ -374,4 +394,176 @@ export function findDeliveryChargeItem<T extends { name: string; basePriceCents:
   feeCents: number,
 ): T | undefined {
   return items.find((i) => isDeliveryChargeName(i.name) && i.basePriceCents === feeCents);
+}
+
+// ---------------------------------------------------------------------------
+// The owner's delivery areas (Settings → Delivery areas, 'delivery.zones')
+// ---------------------------------------------------------------------------
+
+/**
+ * One delivery area as the owner keeps it ('delivery.zones', Settings step
+ * 3). The compiled DELIVERY_ZONES are the default. The list's order is the
+ * order the till and the website show them in.
+ */
+export interface DeliveryZoneSetting {
+  /**
+   * Made once when the area is added and never changed: the website sends it,
+   * browsers remember the last one, Reports group by it. Lower case letters,
+   * digits and dashes (DELIVERY_ZONE_ID_RE). A zone is switched off, never
+   * removed.
+   */
+  id: string;
+  /** What the customer picks and what goes on the ticket ("DHA Phase 6"). A rename keeps the old name in `aliases`. */
+  name: string;
+  /** Chip text on the till: "Phase 6", "Block 2", "Emaar". */
+  shortName: string;
+  /** Free text heading: "DHA", "Clifton", "PECHS". */
+  group: string;
+  /** Whole rupees in paisa, Rs 0–2,000. Rs 0 = no delivery charge line (feeItemId null). */
+  feeCents: number;
+  /**
+   * The "Delivery Charge (Rs N)" menu item that carries this fee (made with a
+   * name-based id, or today's item adopted, by Save). Null for Rs 0, and in
+   * the default (never saved): the item is then found by name and price.
+   */
+  feeItemId: string | null;
+  /** Off = delivery there is paused: not offered on the till or the website, still recognised on old addresses. */
+  active: boolean;
+  /** Other ways people write it that cannot mean anywhere else in Karachi (search AND recognition). */
+  aliases: string[];
+  /** Counter shorthand, search only ("6", "block 5"). */
+  hints: string[];
+}
+
+/** An area id: lower case letters and digits in dash-separated words, at most DELIVERY_ZONE_ID_MAX long. */
+export const DELIVERY_ZONE_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const DELIVERY_ZONE_ID_MAX = 40;
+/** The most areas the list holds (switched-off ones included). */
+export const DELIVERY_ZONES_MAX = 60;
+/** A delivery fee is whole rupees from Rs 0 to Rs 2,000 (the owner's bound). */
+export const DELIVERY_FEE_MAX_CENTS = 200_000;
+export const DELIVERY_ZONE_NAME_MAX = 60;
+export const DELIVERY_ZONE_SHORT_NAME_MAX = 20;
+export const DELIVERY_ZONE_GROUP_MAX = 30;
+/** Spellings per area (aliases, and search hints, each). */
+export const DELIVERY_ZONE_SPELLINGS_MAX = 30;
+export const DELIVERY_ZONE_SPELLING_MAX = 60;
+
+/**
+ * Lower case, accents dropped, punctuation to spaces, "ph6" → "ph 6": how an
+ * area typed, saved or searched is compared (the till's area search and the
+ * area list's own checks).
+ */
+export function normalizeAreaText(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[-_.,/()'’&#:;]+/g, ' ')
+    .replace(/([a-z])(\d)/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * An alias is trusted to NAME an area (a saved address, a typed one), so it
+ * must not be counter shorthand that could be anywhere in Karachi: a bare
+ * number, or "block 5" (every society has one). Those belong in the search
+ * hints. Null when it is fine.
+ */
+export function zoneAliasProblem(alias: string): string | null {
+  const n = normalizeAreaText(alias);
+  if (!n) return 'A spelling can’t be empty';
+  if (/^\d+$/.test(n)) return `"${alias}" is only a number — it could be anywhere; keep it as a search shortcut`;
+  if (/^(block|blk) \d+$/.test(n)) return `"${alias}" could be any society's block — write the area too ("clifton ${n.replace(/^\D+/, '')}")`;
+  return null;
+}
+
+/** "Rs 1,500": whole rupees for an item name (no locale: every till writes the same name). */
+function rupeesWords(cents: number): string {
+  const r = Math.round(cents / 100);
+  return `Rs ${String(r).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+}
+
+/**
+ * The seed of a fee's menu item id: the till makes it a uuid v5 of this (its
+ * COC_ID_NAMESPACE), so the Rs 300 item made on two tills saving offline is
+ * the SAME row. Never change it: ids already made would no longer match.
+ */
+export function deliveryChargeItemIdSeed(feeCents: number): string {
+  return `delivery-charge:${feeCents}`;
+}
+
+/**
+ * Menu's word on a delivery charge item: Settings → Delivery areas makes,
+ * prices and switches them, so Menu can't (the main process refuses; the
+ * screen says why). Works for a manager, who can't open Settings.
+ */
+export const FEE_ITEM_LOCKED_NOTE = 'Set delivery fees in Settings → Delivery areas (ask the owner).';
+
+/** The menu category that holds the fee items (made with a name-based id when the shop has none). */
+export const DELIVERY_CHARGES_CATEGORY_NAME = 'Delivery Charges';
+/** Its id's seed (uuid v5, as deliveryChargeItemIdSeed). */
+export const DELIVERY_CHARGES_CATEGORY_ID_SEED = 'category:delivery-charges';
+
+/** The name of the menu item that carries a fee: "Delivery Charge (Rs 200)". The same on every till. */
+export function deliveryChargeItemName(feeCents: number): string {
+  return `Delivery Charge (${rupeesWords(feeCents)})`;
+}
+
+/** Every fee item the areas name (switched-off areas included). */
+export function deliveryZoneFeeItemIds(zones: ReadonlyArray<{ readonly feeItemId?: string | null }>): Set<string> {
+  const ids = new Set<string>();
+  for (const z of zones) if (z.feeItemId) ids.add(z.feeItemId);
+  return ids;
+}
+
+/**
+ * Is this MENU item a delivery charge? One of the areas' fee items (by id),
+ * or — for data from before Settings step 3 and an older till — named like
+ * one. Menu locks it, the menu file import leaves it alone, Reports never
+ * count it as food.
+ */
+export function isDeliveryChargeMenuItem(
+  item: { readonly id: string; readonly name: string },
+  feeItemIds?: ReadonlySet<string> | null,
+): boolean {
+  return (!!feeItemIds && feeItemIds.has(item.id)) || isDeliveryChargeName(item.name);
+}
+
+/**
+ * The menu item that charges an area's fee: its own feeItemId when that item
+ * is there at exactly the fee, else — before the first Save, or while an
+ * older till has moved things — today's match by name and price. Undefined
+ * for a Rs 0 area (no charge line) or when the menu has none.
+ */
+export function zoneFeeItem<T extends { id: string; name: string; basePriceCents: number }>(
+  zone: { readonly feeCents: number; readonly feeItemId?: string | null },
+  items: readonly T[],
+): T | undefined {
+  if (!(zone.feeCents > 0)) return undefined;
+  if (zone.feeItemId) {
+    const own = items.find((i) => i.id === zone.feeItemId);
+    if (own && own.basePriceCents === zone.feeCents) return own;
+  }
+  return findDeliveryChargeItem(items, zone.feeCents);
+}
+
+/**
+ * An id for a new area, made once from its name when it is added:
+ * "PECHS Block 6" → "pechs-block-6" (with "-2", "-3"… when taken).
+ */
+export function newDeliveryZoneId(name: string, taken: ReadonlySet<string>): string {
+  const base =
+    normalizeAreaText(name)
+      .replace(/[^a-z0-9 ]+/g, '')
+      .trim()
+      .replace(/ +/g, '-')
+      .slice(0, DELIVERY_ZONE_ID_MAX - 4)
+      .replace(/-+$/g, '') || 'area';
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const id = `${base}-${n}`;
+    if (!taken.has(id)) return id;
+  }
 }

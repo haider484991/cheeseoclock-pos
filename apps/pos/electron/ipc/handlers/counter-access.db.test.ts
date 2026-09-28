@@ -52,7 +52,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { COST_CAPABILITY, PROFIT_CAPABILITY, SHOP_SETTING_KEYS, hasCapability } from '@cheeseoclock/shared-types';
+import { COST_CAPABILITY, DEFAULT_DELIVERY_ZONES, PROFIT_CAPABILITY, SHOP_SETTING_KEYS, hasCapability } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser, OrderStatus, UUID } from '@cheeseoclock/shared-types';
 import { BOARD_STATUSES, KITCHEN_TICKET_STATUSES, RECENT_AT_COUNTER_LIMIT } from '@cheeseoclock/pos-domain';
 
@@ -501,6 +501,14 @@ const SHOP_SETTINGS_OWNER_ONLY = (): Record<string, unknown> => ({
     key: 'foodpanda.deal',
     value: { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
   },
+  // Settings → Delivery areas (step 3): the areas AND their fee items, one transaction. Free delivery
+  // everywhere here (this test till has no tax category for a fee item), so the owner's Save writes.
+  'settings:saveDeliveryZones': FREE_DELIVERY_ZONES(),
+});
+
+/** Today's 21 areas, every one free to deliver to: a Save that needs no fee item. Made-up. */
+const FREE_DELIVERY_ZONES = () => ({
+  zones: DEFAULT_DELIVERY_ZONES.zones.map((z) => ({ ...z, feeCents: 0, feeItemId: null, aliases: [...z.aliases], hints: [...z.hints] })),
 });
 
 /** Every way a shop rule can be saved: each key, and "Put back the default". */
@@ -548,6 +556,11 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   // Whether a discount also comes off the delivery charge (owner, 28 Sep 2026).
   { key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge: true } },
   { key: 'discounts.delivery', useDefault: true },
+  // Settings step 3: the website's pick-up offer and "publish the menu by itself" (the areas have their own channel).
+  { key: 'discounts.websitePickup', value: { v: 1, offered: false, percent: 15 } },
+  { key: 'discounts.websitePickup', useDefault: true },
+  { key: 'online.options', value: { v: 1, autoPublishMenu: true } },
+  { key: 'online.options', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -581,6 +594,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:clearDiscount': { orderId: s.draft },
   'orders:resumeDraft': undefined,
   'orders:setMode': { orderId: s.draft, mode: 'takeaway' },
+  // The delivery area's charge goes on by itself (owner, 28 Sep 2026): any login taking the order.
+  'orders:setDeliveryArea': { orderId: s.draft, area: 'DHA Phase 6' },
   'orders:tender': { orderId: s.draft, payments: [] },
   'orders:sendToKitchen': { orderId: s.draft },
   'orders:listActive': undefined,
@@ -877,8 +892,15 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
           o: { ok: false, code: 'forbidden', message: REFUSED['settings'] },
         });
       }
+      // …nor save the delivery areas (their Save also writes the fee items), nor put their default back.
+      for (const payload of [FREE_DELIVERY_ZONES(), { useDefault: true }]) {
+        expect({ who: who.role, o: await call('settings:saveDeliveryZones', payload) }).toEqual({
+          who: who.role,
+          o: { ok: false, code: 'forbidden', message: REFUSED['settings'] },
+        });
+      }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(10);
+      expect(SHOP_SETTING_KEYS.length).toBe(13);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
@@ -889,6 +911,23 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
     }
     expect(writtenRows()).toEqual(before);
     expect(db.prepare(`SELECT COUNT(*) AS n FROM business_settings`).get()?.['n']).toBe(0);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM menu_items`).get()?.['n']).toBe(0);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM categories`).get()?.['n']).toBe(0);
+  });
+
+  it('the delivery areas never go through settings:setBusiness — not even for the owner (their Save makes the fee items)', async () => {
+    h.session = OWNER;
+    const before = writtenRows();
+    expect(await call('settings:setBusiness', { key: 'delivery.zones', value: { v: 1, ...FREE_DELIVERY_ZONES() } })).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
+    expect(await call('settings:setBusiness', { key: 'delivery.zones', useDefault: true })).toMatchObject({ ok: false, code: 'validation_failed' });
+    expect(writtenRows()).toEqual(before);
+    // Through its own channel it saves, synced and audited.
+    const o = await call('settings:saveDeliveryZones', FREE_DELIVERY_ZONES());
+    expect(o).toMatchObject({ ok: true, data: { key: 'delivery.zones', isDefault: false } });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'business_settings'`).get()?.['n']).toBe(1);
   });
 
   it('the owner saves each one (synced and audited); nobody signed in is refused', async () => {
@@ -920,7 +959,10 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
           checks: { orderCode: 'required', tabletTotal: 'required' },
         },
       });
-      expect(JSON.stringify(rules)).not.toMatch(/commission|fee|2200|payout/i);
+      // The delivery areas carry their own delivery FEES (the counter charges them); nothing else may say "fee".
+      const { delivery, ...rest } = rules;
+      expect(JSON.stringify(rest)).not.toMatch(/commission|fee|2200|payout/i);
+      expect(JSON.stringify(delivery)).not.toMatch(/commission|2200|payout|rider|updatedBy/i);
     }
   });
 
@@ -981,7 +1023,8 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
       h.session = who;
       const rules = await data<Record<string, unknown>>('checkout:getRules');
       expect(rules).toMatchObject({ discounts: { alsoOffDeliveryCharge: true } });
-      expect(JSON.stringify(rules)).not.toMatch(/commission|fee|payout/i);
+      const { delivery: _areas, ...rest } = rules;
+      expect(JSON.stringify(rest)).not.toMatch(/commission|fee|payout/i);
     }
   });
 
