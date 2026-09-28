@@ -11,6 +11,7 @@ import {
   setFeeFor,
   settingsPublishWords,
   zonesFromForm,
+  zonesExample,
   zonesSummary,
   zonesToForm,
 } from './deliveryZonesForm';
@@ -120,5 +121,16 @@ describe('what a Save says about the website: the areas go ALONE, never the menu
     expect(ZONES_SAVE_NOTE).toMatch(/Menu changes you have not published stay on the till/);
     expect(ZONES_SAVED_TOAST).toMatch(/not the rest of the menu/);
     expect(PICKUP_INTRO).toMatch(/by itself when saved/);
+  });
+});
+
+describe('the worked example under Delivery areas', () => {
+  it('never says a discount can’t come off the charge — the owner may let one (Money & discounts)', () => {
+    const text = zonesExample(DEFAULT_DELIVERY_ZONES.zones);
+    expect(text).toContain('puts “Delivery Charge (Rs 200)” on the bill by itself, and the website charges the same Rs 200.');
+    expect(text).not.toMatch(/never comes off/);
+    expect(text).toContain(
+      'A discount comes off it only when Money & discounts → “A discount also comes off the delivery charge” is Yes.',
+    );
   });
 });

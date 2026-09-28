@@ -77,7 +77,7 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 - **Order didn't arrive?** Settings → Website shows last check time + errors.
   "Check for orders now" forces an immediate poll.
 
-## Delivery areas, fees and the pick-up offer (from v0.7.27)
+## Delivery areas, fees and the pick-up offer (from v0.7.29)
 
 - The owner sets them on the till (Settings → Delivery areas & fees, and Money
   & discounts → Website pick-up). They travel as a settings block, stored in
@@ -98,12 +98,25 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   till sends nothing more by itself. Once the website is updated, save the
   delivery areas again on the till (only the areas go); Publish also works,
   and sends the menu too.
+- **Don't change a fee, or switch an area off, until BOTH tills show 0.7.29**
+  (Settings → About → App version). A Save that leaves no area on at a fee
+  (every Rs 250 area moved to Rs 300, say) switches that fee's charge item
+  off. A till still on 0.7.28 never sends the areas, so while it holds the
+  website link the website keeps charging the old item — and it refuses a
+  website order carrying a switched-off item: after 5 tries (about a minute)
+  it cancels the order on the website. Saving today's fees with every area
+  on (the one Save after the update) keeps today's Rs 200 and Rs 250 items on.
 - `GET /api/bridge/status` also says which block the website holds and
   whether it fits the stored menu: a till reads it once at start-up, so a
   website database rolled back to an older copy gets the areas again.
 - The home, delivery-area and landing pages are static and refreshed from the
-  stored block: at build, after every publish, and at least hourly. With no
-  database, or a database error, they use the built-in areas and fees.
+  stored block: at build, after every publish or areas Save, and at least
+  hourly. The area pages must not set `dynamicParams = false`: with it,
+  `next start` answered 404 for all seven after any publish
+  (`isr-routes.test.ts`). Check the area pages on a Vercel preview after a
+  test publish before merging. With no database they use the built-in
+  areas and fees; on a database error, the last areas and fees that server
+  read, else the built-in ones.
 - Before testing on a Vercel **preview**, give the Preview environment its own
   Neon branch and its own `BRIDGE_SECRET`: with the variables set for "all
   environments", a sandbox till publishing to a preview would replace the

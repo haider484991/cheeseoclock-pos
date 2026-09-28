@@ -42,6 +42,15 @@ function isNextSignal(e: unknown): boolean {
   return (e as { $$typeof?: unknown }).$$typeof === Symbol.for('react.postpone');
 }
 
+/**
+ * The last facts this server read from the database. A read that fails
+ * renders from them: an hourly refresh, or the render after a publish, that
+ * meets a database error must not swap the owner's fees for the built-in
+ * ones and keep that page for an hour. Held per server process (a cold
+ * serverless instance has none yet, and uses the built-in list).
+ */
+let lastRead: SiteFacts | null = null;
+
 async function readSiteFacts(): Promise<SiteFacts> {
   // No database (a build or a preview without one): the compiled list, as today.
   if (!process.env['DATABASE_URL']) return DEFAULT_FACTS;
@@ -50,12 +59,18 @@ async function readSiteFacts(): Promise<SiteFacts> {
     const rows = (await sql()`
       SELECT menu_json -> 'settings' AS settings FROM site_menu WHERE id = 1
     `) as Array<{ settings: unknown }>;
-    return factsFromBlock(parseStoredSettings(rows[0]?.settings ?? null));
+    const facts = factsFromBlock(parseStoredSettings(rows[0]?.settings ?? null));
+    lastRead = facts;
+    return facts;
   } catch (e) {
     if (isNextSignal(e)) throw e;
-    // A page never fails to render over this: the compiled areas and fees, exactly as before settings.
-    console.error('site facts read failed — rendering from the built-in areas and fees', e);
-    return DEFAULT_FACTS;
+    // A page never fails to render over this: the last facts read here, else the compiled areas and
+    // fees exactly as before settings.
+    console.error(
+      `site facts read failed — rendering from ${lastRead ? 'the last areas and fees read' : 'the built-in areas and fees'}`,
+      e,
+    );
+    return lastRead ?? DEFAULT_FACTS;
   }
 }
 
@@ -66,7 +81,8 @@ const dedupe: Dedupe = ((React as unknown as { cache?: Dedupe }).cache ?? ((fn) 
 /**
  * The delivery areas, fees and pick-up offer the pages print: the stored
  * block over the compiled list; the compiled list itself (DEFAULT_FACTS)
- * with no block, no database, or a database error. The pages that call it
+ * with no block or no database; on a database error, the last facts this
+ * server read, else the compiled list. The pages that call it
  * are ISR (force-static + revalidate): read at build and again whenever the
  * till's publish revalidates them (api/bridge/menu).
  */

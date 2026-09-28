@@ -169,7 +169,7 @@ export function zonesExample(
 ): string {
   const z = zones.find((x) => x.active && x.feeCents > 0);
   if (!z) return 'No area charges a delivery fee: a delivery order carries no delivery charge.';
-  return `Picking ${z.name} on a delivery order puts “${deliveryChargeItemName(z.feeCents)}” on the bill by itself, and the website charges the same ${formatCents(z.feeCents)}. A discount never comes off it.`;
+  return `Picking ${z.name} on a delivery order puts “${deliveryChargeItemName(z.feeCents)}” on the bill by itself, and the website charges the same ${formatCents(z.feeCents)}. A discount comes off it only when Money & discounts → “A discount also comes off the delivery charge” is Yes.`;
 }
 
 export const ZONES_SAVE_NOTE =

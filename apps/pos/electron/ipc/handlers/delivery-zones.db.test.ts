@@ -44,6 +44,7 @@ import {
   type WebOrder,
 } from '@cheeseoclock/shared-types';
 import { menuImportFileSchema } from '@cheeseoclock/shared-schemas';
+import { makeDeliveryAreaTeller } from '@cheeseoclock/pos-domain';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
 
@@ -1210,6 +1211,52 @@ describe.skipIf(!Sqlite)(
       await data('orders:removeItem', { orderId, orderItemId: again.id });
       expect(charges(await panelArea(orderId, 'DHA Phase 8'))).toEqual([[menu.d250, 25_000, 1]]);
       // Sent with it, and nothing changed at Send.
+      h.session = CASHIER;
+      expect(charges(await data<OrderSnapshot>('orders:sendToKitchen', { orderId }))).toEqual([[menu.d250, 25_000, 1]]);
+    });
+
+    it('Pay opened, then Takeaway and back to Delivery (the form is emptied), then Send: the order leaves WITH its charge — the row tells nothing for an empty form it never saw filled', async () => {
+      const orderId = await deliveryOrder();
+      // Pay's early save: the customer and the Phase 6 address are on the order, with the fee.
+      expect(charges(await saveCustomer(orderId, await customerAt('DHA Phase 6')))).toEqual([[menu.d200, 20_000, 1]]);
+      h.session = CASHIER;
+      await data('orders:setMode', { orderId, mode: 'takeaway' });
+      expect(charges(await data<OrderSnapshot>('orders:setMode', { orderId, mode: 'delivery' }))).toEqual([
+        [menu.d200, 20_000, 1],
+      ]);
+      // The details step shows again with the form emptied by the switch (OrderDetails) — or after a
+      // restart: a new row, an empty area.
+      const row = makeDeliveryAreaTeller();
+      if (row.shouldTell(orderId, '')) await panelArea(orderId, null);
+      expect(charges(await snap(orderId))).toEqual([[menu.d200, 20_000, 1]]);
+      // Send: the gate passes on the saved address; the empty form saves only the note.
+      h.session = CASHIER;
+      await data('orders:setNote', { orderId, note: null });
+      const sent = await data<OrderSnapshot>('orders:sendToKitchen', { orderId });
+      expect(sent.order.status).toBe('sent_to_kitchen');
+      expect(sent.deliveryAddress).toContain('DHA Phase 6');
+      expect(charges(sent)).toEqual([[menu.d200, 20_000, 1]]);
+      expect(totals(orderId)).toMatchObject({ subtotal_cents: 120_000 });
+    });
+
+    it('taken off by hand, it stays off when the SAME area comes back spelt another way (a customer’s two saved addresses for one place)', async () => {
+      const orderId = await deliveryOrder();
+      const first = await customerAt('DHA Phase 6');
+      const line = (await saveCustomer(orderId, first)).items.find((i) => i.menuItemId === menu.d200)!;
+      h.session = CASHIER;
+      await data('orders:removeItem', { orderId, orderItemId: line.id });
+      // The other saved address (address chip, or Pay's early save), and the panel with that spelling.
+      const second = await data<{ id: string }>('customers:createAddress', {
+        customerId: first.customerId,
+        label: 'Office',
+        addressLine: 'Office 2, Test Lane',
+        area: 'Phase 6, DHA',
+      });
+      expect(charges(await saveCustomer(orderId, { customerId: first.customerId, addressId: second.id }))).toEqual([]);
+      expect(charges(await panelArea(orderId, 'Phase 6, DHA'))).toEqual([]);
+      expect(charges(await panelArea(orderId, 'DHA Phase 6'))).toEqual([]);
+      // Another place is still a change.
+      expect(charges(await panelArea(orderId, 'DHA Phase 8'))).toEqual([[menu.d250, 25_000, 1]]);
       h.session = CASHIER;
       expect(charges(await data<OrderSnapshot>('orders:sendToKitchen', { orderId }))).toEqual([[menu.d250, 25_000, 1]]);
     });

@@ -34,8 +34,7 @@ export interface SiteFacts {
   zones: readonly FactZone[];
   /** The owner's pick-up offer; null = no block, so the till's heartbeat decides (as before). */
   pickup: PublishedPickup | null;
-  settingsAt: string | null;
-  settingsRev: number | null;
+  // Never the block's stamps or device id: the /menu page hands these facts to the browser.
 }
 
 /** The compiled list as facts: every area on, no fee item named (found by name and price, as before). */
@@ -59,8 +58,6 @@ export const DEFAULT_FACTS: SiteFacts = Object.freeze({
   source: 'default',
   zones: DEFAULT_ZONE_FACTS,
   pickup: null,
-  settingsAt: null,
-  settingsRev: null,
 });
 
 /**
@@ -81,8 +78,6 @@ export function factsFromBlock(block: PublishedSettings | null | undefined): Sit
     source: 'settings',
     zones,
     pickup: { offered: block.pickup.offered, percent: block.pickup.percent },
-    settingsAt: block.settingsAt,
-    settingsRev: block.settingsRev,
   };
 }
 

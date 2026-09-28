@@ -1,7 +1,10 @@
 import { BUSINESS } from './business';
 import {
   claimHolds,
+  findFactZone,
+  listWords,
   pausedZones,
+  placesWords,
   renderCopy,
   zonesFeeChip,
   type Copy,
@@ -125,8 +128,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     name: 'DHA Phase 7',
     h1: 'Pizza & Burger Delivery in DHA Phase 7, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 7, Karachi',
-    description:
-      'Pizza & crispy chicken burger delivery to DHA Phase 7 and Phase 7 Ext from our Phase 6 kitchen next door. {fee:dha-7,dha-7-ext} delivery, cash on delivery.',
+    description: {
+      text: 'Pizza & crispy chicken burger delivery to DHA Phase 7 and Phase 7 Ext from our Phase 6 kitchen next door. {fee:dha-7,dha-7-ext} delivery, cash on delivery.',
+      // Names both as delivered to: only while both are (else renderArea's description of what is on and paused).
+      when: { on: ['dha-7', 'dha-7-ext'] },
+    },
     zoneIds: ['dha-7', 'dha-7-ext'],
     intro: [
       'Phase 7 sits right next to our Phase 6 kitchen, so your order is on its way while the cheese is still moving. Every pizza and burger is fired when the ticket comes in.',
@@ -188,8 +194,23 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     name: 'DHA Phase 8',
     h1: 'Pizza & Burger Delivery in DHA Phase 8, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 8, Karachi',
-    description:
-      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side, Emaar Crescent Bay & Creek Vista included. {fee:dha-8,emaar,creek-vista} delivery, cash on delivery, till 1 am.',
+    description: {
+      text: 'Pizza & burgers delivered across DHA Phase 8 — Do Darya side, Emaar Crescent Bay & Creek Vista included. {fee:dha-8,emaar,creek-vista} delivery, cash on delivery, till 1 am.',
+      // "… included": only for the areas delivered to now (Phase 8 itself paused: renderArea's description).
+      when: { on: ['dha-8', 'emaar', 'creek-vista'] },
+      otherwise: {
+        text: 'Pizza & burgers delivered across DHA Phase 8 — Do Darya side & Creek Vista included. {fee:dha-8,creek-vista} delivery, cash on delivery, till 1 am.',
+        when: { on: ['dha-8', 'creek-vista'] },
+        otherwise: {
+          text: 'Pizza & burgers delivered across DHA Phase 8 — Do Darya side & Emaar Crescent Bay included. {fee:dha-8,emaar} delivery, cash on delivery, till 1 am.',
+          when: { on: ['dha-8', 'emaar'] },
+          otherwise: {
+            text: 'Pizza & burgers delivered across DHA Phase 8 — Do Darya side included. {fee:dha-8} delivery, cash on delivery, till 1 am.',
+            when: { on: ['dha-8'] },
+          },
+        },
+      },
+    },
     zoneIds: ['dha-8', 'emaar', 'creek-vista'],
     intro: [
       'Phase 8 runs wide — from the Zulfiqar and Al-Murtaza commercial strips out to the sea at Do Darya — and we deliver across all of it. Orders leave our Phase 6 kitchen boxed straight from the oven.',
@@ -314,8 +335,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     name: 'DHA Phase 4',
     h1: 'Pizza & Burger Delivery in DHA Phase 4, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 4, Karachi',
-    description:
-      'Pizza & crispy chicken burgers delivered to DHA Phase 4 and Phase 3 — 9th Commercial, Sunset side and the residential lanes. {fee:dha-4,dha-3}, cash on delivery.',
+    description: {
+      text: 'Pizza & crispy chicken burgers delivered to DHA Phase 4 and Phase 3 — 9th Commercial, Sunset side and the residential lanes. {fee:dha-4,dha-3}, cash on delivery.',
+      // Names both as delivered to: only while both are (else renderArea's description of what is on and paused).
+      when: { on: ['dha-4', 'dha-3'] },
+    },
     zoneIds: ['dha-4', 'dha-3'],
     intro: [
       'Phase 4 sits between our kitchen and the older phases, and we deliver across all of it — the Sunset Boulevard side, the 9th Commercial strip and the residential lanes in between. Phase 3 next door is covered too. Delivery to either is {fee:dha-4,dha-3}.',
@@ -370,8 +394,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     name: 'DHA Phase 1 & 2',
     h1: 'Pizza & Burger Delivery in DHA Phase 1 & 2, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 1 & 2, Karachi',
-    description:
-      'Pizza & burger delivery to DHA Phase 1, Phase 2 and Phase 2 Ext from our Phase 6 kitchen. {fee:dha-1,dha-2,dha-2-ext} delivery, cash on delivery — order online or WhatsApp.',
+    description: {
+      text: 'Pizza & burger delivery to DHA Phase 1, Phase 2 and Phase 2 Ext from our Phase 6 kitchen. {fee:dha-1,dha-2,dha-2-ext} delivery, cash on delivery — order online or WhatsApp.',
+      // Names all three as delivered to: only while they are (else renderArea's description of what is on and paused).
+      when: { on: ['dha-1', 'dha-2', 'dha-2-ext'] },
+    },
     zoneIds: ['dha-1', 'dha-2', 'dha-2-ext'],
     intro: [
       {
@@ -435,16 +462,9 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     title: 'Pizza & Burger Delivery in Clifton, Karachi',
     description: {
       text: 'Pizza & burgers delivered to Clifton Blocks 1–9 — Boat Basin, Schon Circle and beyond. {fee:clifton-3..9} (Blocks 1 & 2: {fee:clifton-1,clifton-2}). Cash on delivery, open till 1 am.',
-      when: { delivering: true },
-      // Blocks switched off: only the fee of the blocks that are on.
-      otherwise: {
-        text: 'Pizza & burgers delivered to Clifton Blocks 1–9 — Boat Basin, Schon Circle and beyond. {fee:clifton-3..9} delivery. Cash on delivery, open till 1 am.',
-        when: { delivering: true },
-        otherwise: {
-          text: 'Pizza & burgers delivered to Clifton Blocks 1 & 2 — {fee:clifton-1,clifton-2} delivery. Cash on delivery, open till 1 am.',
-          when: { delivering: true },
-        },
-      },
+      // "Blocks 1–9": only while all nine are delivered to. Blocks switched off: renderArea's
+      // description names the blocks that are on, their fee, and the ones paused.
+      when: { on: ['clifton-1..9'] },
     },
     zoneIds: [
       'clifton-1',
@@ -559,9 +579,23 @@ export function renderArea(area: DeliveryArea, facts: SiteFacts): RenderedArea {
   const allPaused = paused.length === area.zoneIds.length;
   let description = renderCopy(area.description, facts);
   if (description === null) {
-    // Its fee can't be named: every area it names is switched off (a fee is never printed for one).
+    // No wording holds: an area it names is switched off (a fee is never printed for one, and an
+    // area is never named as delivered to). It says what is paused — the whole page, or those areas.
     if (paused.length === 0) throw new Error(`areas.ts: "${area.slug}" has no description for these fees`);
-    description = `Pizza & burgers from Cheese O’Clock’s DHA Phase 6 kitchen. Delivery to ${area.name} is paused right now — ${PAUSED_WA}`;
+    if (allPaused) {
+      description = `Pizza & burgers from Cheese O’Clock’s DHA Phase 6 kitchen. Delivery to ${area.name} is paused right now — ${PAUSED_WA}`;
+    } else {
+      const on = area.zoneIds
+        .map((id) => findFactZone(facts, id))
+        .filter((z): z is NonNullable<typeof z> => !!z && z.active);
+      // Numbered places as the fee summary words them ("Clifton Blocks 1–4 & 6–9"); named ones by
+      // their short names ("Emaar and Creek Vista").
+      const words = (zones: readonly FactZone[]) =>
+        zones.some((z) => /\d/.test(z.shortName))
+          ? placesWords(zones).split(' · ').join(', ')
+          : listWords(zones.map((z) => z.shortName));
+      description = `Pizza & burgers from Cheese O’Clock’s Phase 6 kitchen to ${words(on)}: ${feeText(area, facts)}, cash on delivery. ${words(paused)}: paused right now.`;
+    }
   }
   return {
     slug: area.slug,

@@ -473,7 +473,9 @@ class WebOrdersBridge {
     return {
       state: 'waiting',
       at,
-      message: ready ? null : 'This till has no website link: the other till sends it, or connect this one.',
+      message: ready
+        ? null
+        : 'This till has no website link: the other till sends the areas once it has this update (each till’s Settings → About shows its version), or connect this one.',
     };
   }
 

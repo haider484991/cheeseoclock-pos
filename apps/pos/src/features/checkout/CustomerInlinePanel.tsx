@@ -9,7 +9,14 @@ import {
   type CustomerAddress,
   type CustomerAddressMatch,
 } from '@cheeseoclock/shared-types';
-import { counterPhoneLookup, deliveryChargeTarget, deliveryChargeWords, formatCents } from '@cheeseoclock/pos-domain';
+import {
+  counterPhoneLookup,
+  deliveryChargeTarget,
+  deliveryChargeWords,
+  formatCents,
+  makeDeliveryAreaTeller,
+  type DeliveryAreaTeller,
+} from '@cheeseoclock/pos-domain';
 import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle, X } from 'lucide-react';
 import { AreaPicker } from '../customers/AreaPicker';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
@@ -560,7 +567,9 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
  * This row tells the main process the panel's area (a moment after the last
  * keystroke — nothing depends on that moment: Send and Pay save the address
  * with its area themselves), and only SHOWS what the bill carries, with
- * "Take it off" / "Put it back".
+ * "Take it off" / "Put it back". It never tells "no area" for an empty form
+ * it did not see filled (pos-domain makeDeliveryAreaTeller): an order-type switch and a
+ * restart empty the form, not the order's area.
  */
 function DeliveryChargeRow({ area }: { area: string }) {
   const A = useDeliveryAreas();
@@ -582,9 +591,19 @@ function DeliveryChargeRow({ area }: { area: string }) {
   // What the row last told the main process (order · type · area): until then the bill may not show it yet.
   const key = `${orderId ?? ''}|${mode}|${area.trim()}`;
   const [settledKey, setSettledKey] = useState<string | null>(null);
+  // What this row has told the main process: an empty form it never saw filled (an order-type
+  // switch or a restart empties it) is not "no area" — the order keeps its area and charge.
+  const tellerRef = useRef<DeliveryAreaTeller | null>(null);
+  if (!tellerRef.current) tellerRef.current = makeDeliveryAreaTeller();
+  const teller = tellerRef.current;
 
   useEffect(() => {
+    if (!teller.shouldTell(orderId, area)) {
+      setSettledKey(key);
+      return;
+    }
     const t = setTimeout(() => {
+      teller.told(orderId, area);
       setDeliveryArea(area, { mayStartOrder: wouldAdd, forOrderId: orderId }).then(
         () => setSettledKey(key),
         (e: unknown) => {

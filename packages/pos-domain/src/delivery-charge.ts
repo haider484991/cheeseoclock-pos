@@ -332,6 +332,66 @@ export function planDeliveryChargeOnAreaChange(
   return planDeliveryChargeLines(target, lines);
 }
 
+/**
+ * Are two area texts the same place for the delivery charge? The same words
+ * (spaces and case aside), or words that name the same area or areas of the
+ * list: "DHA Phase 6" and "Phase 6, DHA" — a customer's two saved addresses
+ * for one place, picked in turn — are not an area CHANGE, so a charge the
+ * cashier took off by hand stays off. Text that names no area of the list
+ * is compared by its words only.
+ */
+export function sameDeliveryArea(
+  areas: DeliveryAreas,
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const words = (s: string | null | undefined) => (s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (words(a) === words(b)) return true;
+  const place = (s: string | null | undefined) => [...new Set(areas.resolveAreaText(s).zoneIds)].sort().join('|');
+  const pa = place(a);
+  return pa !== '' && pa === place(b);
+}
+
+/**
+ * What the delivery-charge row on the till's customer panel tells the main
+ * process (orders:setDeliveryArea), and what it keeps to itself.
+ *
+ * The main process puts the area's charge on, swaps it, or takes it off when
+ * the area CHANGES (order-repo deliveryChargeForArea). An area the cashier
+ * types or picks is a change, and so is an area CLEARED — one the row told
+ * for this order, then emptied. An empty panel the row never saw filled is
+ * not: the order-type switch empties the customer form, and so does a
+ * restart (the draft comes back, the form does not), while the order keeps
+ * its area and the charge the main process put back for it. Telling "no
+ * area" then took the charge off, and Send let the order go on its saved
+ * address without the fee (review of f55e3f0).
+ *
+ * One per row on screen: a new row (the details step shown again, the till
+ * restarted) starts knowing nothing. It remembers only the order it told.
+ * `told` is called when the ask actually goes (after the row's short wait),
+ * so an area typed and deleted inside that wait was never told.
+ */
+export interface DeliveryAreaTeller {
+  /** Does the row tell the main process this area for this order? */
+  shouldTell(orderId: string | null, area: string): boolean;
+  /** The row told the main process this area for this order. */
+  told(orderId: string | null, area: string): void;
+}
+
+export function makeDeliveryAreaTeller(): DeliveryAreaTeller {
+  let last: { orderId: string | null; area: string } | null = null;
+  return {
+    shouldTell(orderId, area) {
+      if (area.trim() !== '') return true;
+      // Empty: a clear only after an area this row told for this order.
+      return last !== null && last.orderId === orderId && last.area !== '';
+    },
+    told(orderId, area) {
+      last = { orderId, area: area.trim() };
+    },
+  };
+}
+
 /** The line under the area on the till: what the bill carries for it, in words. */
 export function deliveryChargeWords(target: DeliveryChargeTarget): string | null {
   switch (target.kind) {

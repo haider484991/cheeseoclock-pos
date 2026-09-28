@@ -27,6 +27,7 @@ import {
   deliveryChargeTarget,
   discountBaseCents,
   planDeliveryChargeOnAreaChange,
+  sameDeliveryArea,
   type DeliveryChargeTarget,
   discountRuleAlsoOffDeliveryCharge,
   storedDiscountAlsoOffDeliveryCharge,
@@ -1121,11 +1122,6 @@ function cleanArea(area: string | null | undefined): string | null {
   return a || null;
 }
 
-/** The area as the till compares it: cleaned, any case ('' = none). */
-function areaKey(area: string | null | undefined): string {
-  return (cleanArea(area) ?? '').toLowerCase();
-}
-
 /** The area the order's charge last followed (its last DELIVERY_AREA_ACTION row), or null when it never had one. */
 function recordedDeliveryArea(db: AppDatabase, orderId: string): { area: string | null } | null {
   const row = db
@@ -1174,7 +1170,8 @@ function snapshotArea(db: AppDatabase, orderId: string): string | null {
  *    phases): after an area it charged, that charge comes off (changing the
  *    area swaps it); otherwise the bill is left as it is.
  * Only on an area CHANGE ('area': compared with the area recorded last, in
- * DELIVERY_AREA_ACTION), the order becoming a delivery ('mode') or "Put it
+ * DELIVERY_AREA_ACTION, as a place — pos-domain sameDeliveryArea: "Phase 6,
+ * DHA" is not a change from "DHA Phase 6"), the order becoming a delivery ('mode') or "Put it
  * back" ('put_back'): a charge the cashier took off by hand — the removal
  * audited like any line — stays off through saves that do not change the
  * area (Pay's early save, Send, the panel asking again). A takeaway only
@@ -1199,8 +1196,10 @@ export function deliveryChargeForArea(
   const recorded = recordedDeliveryArea(db, orderId);
   const was = recorded ? recorded.area : null;
   const now = event === 'mode' ? (recorded ? recorded.area : snapshotArea(db, orderId)) : cleanArea(area);
-  // Not a change: nothing (a charge taken off by hand stays off).
-  if (event === 'area' && areaKey(was) === areaKey(now)) return none;
+  const areas = deliveryAreas(readDeliveryZones(db));
+  // Not a change: nothing (a charge taken off by hand stays off) — the same words, or the same
+  // place in other words ("DHA Phase 6" / "Phase 6, DHA": a customer's two saved addresses).
+  if (event === 'area' && sameDeliveryArea(areas, was, now)) return none;
   if (event !== 'area' && order.mode !== 'delivery') return none;
 
   let out: { added: string | null; removed: number } = none;
@@ -1211,7 +1210,6 @@ export function deliveryChargeForArea(
         .prepare(`SELECT id, name, base_price_cents FROM menu_items WHERE deleted_at IS NULL AND is_active = 1`)
         .all() as Array<{ id: string; name: string; base_price_cents: number }>
     ).map((i) => ({ id: i.id, name: i.name, basePriceCents: i.base_price_cents }));
-    const areas = deliveryAreas(readDeliveryZones(db));
     target = deliveryChargeTarget(areas, order.mode, now, items);
     const previous = event === 'area' && was ? deliveryChargeTarget(areas, 'delivery', was, items) : null;
     const plan = planDeliveryChargeOnAreaChange(previous, target, deliveryChargeLinesOf(db, orderId));

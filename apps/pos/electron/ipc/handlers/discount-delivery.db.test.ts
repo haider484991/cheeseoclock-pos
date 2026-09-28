@@ -214,7 +214,7 @@ async function setSwitch(alsoOffDeliveryCharge: boolean): Promise<void> {
  * A delivery order rung up by the cashier: a Rs 1,000 pizza and two Rs 500
  * sides (Rs 2,000 of food) and the area's Rs 200 delivery charge, all at 16%.
  *
- * A foodpanda order never takes the shop's delivery charge since v0.7.27
+ * A foodpanda order never takes the shop's delivery charge since v0.7.29
  * (the owner, 28 Sep 2026; order-repo refuses it): the foodpanda ones here
  * are the orders an OLDER till rang up with the charge tapped on by hand
  * (the line arrives as that till wrote it), whose deal must still be worked

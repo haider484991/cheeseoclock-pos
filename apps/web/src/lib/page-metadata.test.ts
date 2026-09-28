@@ -30,7 +30,9 @@ describe('the fee pages', () => {
   it('keep every area page’s slug, title, description and canonical', async () => {
     const area = await import('@/app/delivery/[area]/page');
     expect(area.generateStaticParams()).toEqual(golden.areas.map((a) => ({ area: a.slug })));
-    expect(area.dynamicParams).toBe(false);
+    // No `dynamicParams = false` (isr-routes.test.ts): an unknown slug is the page's own notFound().
+    expect((area as Record<string, unknown>)['dynamicParams']).toBeUndefined();
+    expect(await area.generateMetadata({ params: { area: 'nope' } })).toEqual({});
     for (const g of golden.areas) {
       expect(await area.generateMetadata({ params: { area: g.slug } })).toEqual({
         title: g.title,

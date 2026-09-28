@@ -377,6 +377,19 @@ describe('a block with other fees', () => {
   });
 });
 
+describe('the facts the /menu page hands the browser', () => {
+  it('carry the areas and the pick-up offer only — never the block’s device id or stamps', () => {
+    const facts = factsFromBlock(block((zs) => (zone(zs, 'dha-8').feeCents = 30_000)));
+    const sent = JSON.stringify(facts);
+    for (const secret of ['settingsAt', 'settingsRev', 'settingsTie', 'deviceId', 'till-test', '2026-09-27T10:00:00.000Z']) {
+      expect(sent, secret).not.toContain(secret);
+    }
+    expect(Object.keys(facts).sort()).toEqual(['pickup', 'source', 'zones']);
+    expect(Object.keys(DEFAULT_FACTS).sort()).toEqual(['pickup', 'source', 'zones']);
+    expect(facts.zones.find((z) => z.id === 'dha-8')?.feeCents).toBe(30_000);
+  });
+});
+
 describe('a stored block that lacks a compiled area (a hand-edited row, an older till)', () => {
   it('the area is filled back in from the built-in list — at its built-in fee, on — so its page and the checkout keep it', () => {
     const facts = factsFromBlock({ ...block(), zones: block().zones.filter((z) => z.id !== 'dha-6') });
@@ -421,18 +434,29 @@ describe('fee tokens', () => {
   });
 });
 
-/** The ways JSX and templates hide the space between "Rs" and a number, made plain. */
+/** The ways JSX and templates hide the space between "Rs" and a number, made plain (tags between them too). */
 function plainLine(line: string): string {
   return line
     .replace(/&nbsp;|&#160;|&#xa0;|\u00a0/gi, ' ')
     .replace(/\{\s*(['"`])\s*\1\s*\}/g, ' ')
+    .replace(/<\/?[a-zA-Z][^<>]*>/g, ' ')
     .replace(/[ \t]+/g, ' ');
 }
 
-/** Does this line of source write a rupee amount by hand: "Rs 250", "Rs&nbsp;250", "Rs{' '}250", `Rs ${n}`, formatCents(25_000)? */
+/**
+ * Does this line of source write a rupee amount by hand: "Rs 250", "Rs&nbsp;250", "Rs{' '}250",
+ * "Rs <strong>250</strong>", "PKR 250", "250 rupees", `Rs ${n}`, formatCents(25_000),
+ * formatCents(DELIVERY_FEE)?
+ */
 function typesAFee(line: string): boolean {
   const l = plainLine(line);
-  return /\bRs\.?\s*\d/.test(l) || /\bRs\.?\s*\$\{/.test(l) || /\bformatCents\(\s*\d/.test(l);
+  return (
+    /\b(?:Rs|PKR)\.?\s*\d/.test(l) ||
+    /\b(?:Rs|PKR)\.?\s*\$\{/.test(l) ||
+    /\d\s*rupees?\b/i.test(l) ||
+    /\bformatCents\(\s*\d/.test(l) ||
+    /\bformatCents\(\s*[A-Z][A-Z0-9_]*\s*\)/.test(l)
+  );
 }
 
 describe('no delivery fee is typed by hand', () => {
@@ -446,6 +470,7 @@ describe('no delivery fee is typed by hand', () => {
     ['app/late-night-food-delivery-dha/page.tsx', "small: 'Large · from Rs 480'"],
     ['app/pizza-delivery-dha-karachi/page.tsx', "big: 'From Rs 2,600'"],
     ['app/pizza-delivery-dha-karachi/page.tsx', 'dips are Rs 100 each.'],
+    ['lib/business.ts', "priceRange: 'PKR 400–2,500'"],
     ['lib/format.ts', '/** Rs 1,234 (drops paisa when zero'],
     ['lib/format.ts', 'return `Rs ${rupees'],
     ['lib/menu-view.ts', 'the page can say "Save Rs 650" without a hard-coded number'],
@@ -489,10 +514,28 @@ describe('no delivery fee is typed by hand', () => {
       'const fee = `Rs ${n}`;',
       'formatCents(25_000)',
       'Rs  250',
+      // Review of f55e3f0: a tag between "Rs" and the number, PKR, rupees, a named constant.
+      'Delivery is Rs <strong>250</strong>',
+      '<p>Rs</p> <b>250</b>',
+      'PKR 250',
+      'PKR&nbsp;250',
+      '250 rupees',
+      'Rs. 250',
+      'formatCents(DELIVERY_FEE)',
+      'formatCents( FEE_PHASE_8 )',
     ]) {
       expect(typesAFee(hidden), hidden).toBe(true);
     }
-    for (const fine of ['{fee:dha-6}', 'formatCents(zone.feeCents)', 'Rs: see the menu', 'Track&nbsp;order']) {
+    for (const fine of [
+      '{fee:dha-6}',
+      'formatCents(zone.feeCents)',
+      'Rs: see the menu',
+      'Track&nbsp;order',
+      'Prices in PKR · 15% tax added on the bill',
+      "currenciesAccepted: 'PKR',",
+      'const rupees = cents / 100;',
+      'formatCents(Math.min(...on.map((z) => z.feeCents)))',
+    ]) {
       expect(typesAFee(fine), fine).toBe(false);
     }
   });
@@ -612,6 +655,50 @@ describe('a switched-off area’s fee never appears in the page text; its paused
     );
     expect(renderArea(getArea('dha-phase-1-2')!, offAtItsFee('dha-3')).intro[0]).toMatch(/Delivery here is Rs 200\.$/);
     expect(faqOf('clifton', offAtItsFee('clifton-1'), 'Which Clifton blocks do you deliver to?')).toBeUndefined();
+  });
+
+  it('the Phase 8 description (meta, OG, JSON-LD) never says a switched-off Emaar or Creek Vista is “included” (review of f55e3f0)', () => {
+    const offAtItsFee = (...ids: string[]) =>
+      factsFromBlock(block((zs) => ids.forEach((id) => (zone(zs, id).active = false))));
+    const d = (...ids: string[]) => renderArea(getArea('dha-phase-8')!, offAtItsFee(...ids)).description;
+    expect(d('emaar')).toBe(
+      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side & Creek Vista included. Rs 250 delivery, cash on delivery, till 1 am.',
+    );
+    expect(d('creek-vista')).toBe(
+      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side & Emaar Crescent Bay included. Rs 250 delivery, cash on delivery, till 1 am.',
+    );
+    expect(d('emaar', 'creek-vista')).toBe(
+      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side included. Rs 250 delivery, cash on delivery, till 1 am.',
+    );
+    // Phase 8 itself switched off: what is still delivered to, its fee, and what is paused.
+    expect(d('dha-8')).toBe(
+      'Pizza & burgers from Cheese O’Clock’s Phase 6 kitchen to Emaar and Creek Vista: Rs 250 delivery, cash on delivery. DHA Phase 8: paused right now.',
+    );
+    // Nothing switched off: word for word as today.
+    expect(renderArea(getArea('dha-phase-8')!, factsFromBlock(block())).description).toBe(
+      renderArea(getArea('dha-phase-8')!, DEFAULT_FACTS).description,
+    );
+  });
+
+  it('any area of a page switched off on its own: the description no longer names every area as delivered to — it says what is on, its fee, and what is paused (a meta description, at most 160 characters)', () => {
+    for (const page of DELIVERY_AREAS.filter((a) => a.zoneIds.length > 1)) {
+      const all = renderArea(page, DEFAULT_FACTS).description;
+      for (const id of expandZoneIds(page.zoneIds)) {
+        const facts = factsFromBlock(block((zs) => (zone(zs, id).active = false)));
+        const r = renderArea(page, facts);
+        expect(r.description, `${page.slug} ${id}`).not.toBe(all);
+        expect(r.description.length, `${page.slug} ${id}`).toBeLessThanOrEqual(160);
+        if (!r.description.startsWith('Pizza & burgers delivered across DHA Phase 8')) {
+          expect(r.description, `${page.slug} ${id}`).toMatch(/^Pizza & burgers from Cheese O’Clock’s Phase 6 kitchen to .+: Rs [\d,–]+ delivery, cash on delivery\. .+: paused right now\.$/);
+        }
+      }
+    }
+    expect(renderArea(getArea('clifton')!, factsFromBlock(block((zs) => (zone(zs, 'clifton-5').active = false)))).description).toBe(
+      'Pizza & burgers from Cheese O’Clock’s Phase 6 kitchen to Clifton Blocks 1–4 & 6–9: Rs 200–250 delivery, cash on delivery. Clifton Block 5: paused right now.',
+    );
+    expect(renderArea(getArea('dha-phase-7')!, factsFromBlock(block((zs) => (zone(zs, 'dha-7-ext').active = false)))).description).toBe(
+      'Pizza & burgers from Cheese O’Clock’s Phase 6 kitchen to DHA Phase 7: Rs 200 delivery, cash on delivery. DHA Phase 7 Ext: paused right now.',
+    );
   });
 
   it('every area switched off: no fee anywhere, and the pages say delivery is paused', () => {

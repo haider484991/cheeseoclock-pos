@@ -408,13 +408,33 @@ describe('the pages read the stored block', () => {
     expect(p8.faqs.map((f) => f.a)).toContain('Yes — the Do Darya side is covered at the Phase 8 fee of Rs 300.');
   });
 
-  it('render from the built-in areas on a database error, but let Next’s own signals through', async () => {
+  it('a database error renders from the last facts this server read — never the built-in fees over the owner’s — and lets Next’s own signals through', async () => {
     const m = menu([RS200, RS250, RS300]);
     await publish(m, tillBlock(m, { edit: phase8At300 }));
+    const good = await getSiteFacts();
+    expect(renderArea(getArea('dha-phase-8')!, good).fee).toBe('Rs 250–300 delivery');
+    // A refresh (hourly, or after a publish) that meets a database error keeps the owner's Rs 300.
     db.fail = new Error('connection refused');
-    expect(await getSiteFacts()).toBe(DEFAULT_FACTS);
-    db.fail = Object.assign(new Error('Dynamic server usage: no-store fetch'), { digest: 'DYNAMIC_SERVER_USAGE' });
-    await expect(getSiteFacts()).rejects.toThrow(/Dynamic server usage/);
+    try {
+      expect(await getSiteFacts()).toEqual(good);
+      expect(renderArea(getArea('dha-phase-8')!, await getSiteFacts()).fee).toBe('Rs 250–300 delivery');
+      db.fail = Object.assign(new Error('Dynamic server usage: no-store fetch'), { digest: 'DYNAMIC_SERVER_USAGE' });
+      await expect(getSiteFacts()).rejects.toThrow(/Dynamic server usage/);
+    } finally {
+      db.fail = null;
+    }
+  });
+
+  it('a database error on a server that has read nothing yet renders from the built-in areas', async () => {
+    vi.resetModules();
+    const fresh = await import('@/lib/site-facts');
+    const freshFacts = await import('@/lib/delivery-facts');
+    db.fail = new Error('connection refused');
+    try {
+      expect(await fresh.getSiteFacts()).toBe(freshFacts.DEFAULT_FACTS);
+    } finally {
+      db.fail = null;
+    }
   });
 
   it('render from the built-in areas with no database configured', async () => {

@@ -10,13 +10,17 @@ import { DELIVERY_AREAS, getArea, feeText, renderArea } from '@/lib/areas';
 import { JsonLd, webPageNode } from '@/lib/seo';
 import { getSiteFacts } from '@/lib/site-facts';
 
-export const dynamicParams = false;
-
 /**
  * Static per area, refreshed from the owner's delivery settings (lib/
- * site-facts): at build, whenever a till publishes (api/bridge/menu
- * revalidates), and at least hourly. The slugs never come from the settings:
- * an area the owner switches off keeps its page and says delivery is paused.
+ * site-facts): at build, whenever a till publishes (api/bridge/menu and
+ * api/bridge/settings revalidate), and at least hourly. The slugs never come
+ * from the settings: an area the owner switches off keeps its page and says
+ * delivery is paused.
+ *
+ * No `dynamicParams = false`: a page revalidated on demand leaves Next's
+ * cache, and under `next start` a route with no fallback then answers 404
+ * instead of rendering it again (isr-routes.test.ts). An unknown slug is
+ * still a 404 — the page calls notFound() for it.
  */
 export const dynamic = 'force-static';
 export const revalidate = 3600;

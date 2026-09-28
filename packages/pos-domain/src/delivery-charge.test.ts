@@ -14,9 +14,11 @@ import {
   deliveryChargeTarget,
   deliveryChargeWords,
   deliveryZonesPutBack,
+  makeDeliveryAreaTeller,
   planDeliveryChargeLines,
   planDeliveryChargeOnAreaChange,
   planFeeItems,
+  sameDeliveryArea,
   settingsStampOf,
   websiteNeedsSettings,
   type FeeItemCandidate,
@@ -383,6 +385,19 @@ describe('an AREA CHANGE (owner, 28 Sep 2026: changing the area swaps the charge
     expect(planDeliveryChargeOnAreaChange(t('DHA Phase 6'), t(null), on200)).toEqual({ remove: ['l1'], add: null });
   });
 
+  it('the same place in other words is not a change (two saved addresses for one area); another place is', () => {
+    expect(sameDeliveryArea(A, 'DHA Phase 6', 'Phase 6, DHA')).toBe(true);
+    expect(sameDeliveryArea(A, 'dha  phase 6', 'DHA Phase 6')).toBe(true);
+    expect(sameDeliveryArea(A, 'Khayaban-e-Shahbaz', 'Khayaban-e-Shahbaz, DHA')).toBe(true);
+    expect(sameDeliveryArea(A, 'DHA Phase 6', 'DHA Phase 8')).toBe(false);
+    expect(sameDeliveryArea(A, 'DHA Phase 6', 'Khayaban-e-Shahbaz, DHA')).toBe(false);
+    expect(sameDeliveryArea(A, 'DHA Phase 6', null)).toBe(false);
+    expect(sameDeliveryArea(A, null, '  ')).toBe(true);
+    // Not on the list: by its words only.
+    expect(sameDeliveryArea(A, 'Gulshan Block 13', 'gulshan block 13')).toBe(true);
+    expect(sameDeliveryArea(A, 'Gulshan Block 13', 'Tariq Road')).toBe(false);
+  });
+
   it('the row says so for an area not on the list: no charge from the till, and one it put on for the area before comes off', () => {
     expect(deliveryChargeWords(t('Gulshan Block 13'))).toBe(
       'Not one of the delivery areas (Settings → Delivery areas): the till adds no delivery charge, and takes off the one it added for the area before. Add one by hand if you deliver there.',
@@ -532,5 +547,52 @@ describe('buildSettingsBlock (the website’s settings block)', () => {
     expect(
       compareSettingsStamp({ settingsRev: 3, settingsAt: '2026-09-28T10:00:00.000Z' }, older),
     ).toBeGreaterThan(0);
+  });
+});
+
+describe('what the till’s delivery-charge row tells the main process (review of f55e3f0)', () => {
+  it('a row that shows an EMPTY area (after an order-type switch, or a restart) tells nothing — the order keeps its area and its charge', () => {
+    const row = makeDeliveryAreaTeller();
+    expect(row.shouldTell('o1', '')).toBe(false);
+    expect(row.shouldTell('o1', '   ')).toBe(false);
+  });
+
+  it('an area typed or picked is told; emptied after that, it is told (a clear takes the charge off)', () => {
+    const row = makeDeliveryAreaTeller();
+    expect(row.shouldTell('o1', 'DHA Phase 6')).toBe(true);
+    row.told('o1', 'DHA Phase 6');
+    expect(row.shouldTell('o1', '')).toBe(true);
+    row.told('o1', '');
+    // Already told empty: nothing more.
+    expect(row.shouldTell('o1', '')).toBe(false);
+  });
+
+  it('a row shown again with the area still in the form tells it (the main process sees no change)', () => {
+    expect(makeDeliveryAreaTeller().shouldTell('o1', 'DHA Phase 8')).toBe(true);
+  });
+
+  it('an area typed and deleted inside the wait was never told: the empty one is not told either', () => {
+    const row = makeDeliveryAreaTeller();
+    expect(row.shouldTell('o1', 'P')).toBe(true);
+    // The wait was cut short by the next keystroke: nothing went.
+    expect(row.shouldTell('o1', '')).toBe(false);
+  });
+
+  it('an area told for another order is not this order’s: its empty form tells nothing', () => {
+    const row = makeDeliveryAreaTeller();
+    row.told('o1', 'DHA Phase 6');
+    expect(row.shouldTell('o2', '')).toBe(false);
+    // An area told before the order existed (the row started it) is told again for the order.
+    const first = makeDeliveryAreaTeller();
+    first.told(null, 'DHA Phase 6');
+    expect(first.shouldTell('o3', 'DHA Phase 6')).toBe(true);
+    first.told('o3', 'DHA Phase 6');
+    expect(first.shouldTell('o3', '')).toBe(true);
+  });
+
+  it('each row on screen starts knowing nothing (a new row after the details step is shown again)', () => {
+    const before = makeDeliveryAreaTeller();
+    before.told('o1', 'DHA Phase 6');
+    expect(makeDeliveryAreaTeller().shouldTell('o1', '')).toBe(false);
   });
 });

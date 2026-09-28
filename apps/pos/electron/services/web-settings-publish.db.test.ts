@@ -524,6 +524,10 @@ live('the settings block of the menu publish', () => {
       state: 'waiting',
       message: expect.stringMatching(/no website link/i),
     });
+    // Only an updated till sends the areas: a 0.7.28 one never does (review of f55e3f0), so it says when.
+    expect(publishStatus()?.message).toBe(
+      'This till has no website link: the other till sends the areas once it has this update (each till’s Settings → About shows its version), or connect this one.',
+    );
   });
 
   it('“Publish the menu by itself”: off (the default) nothing goes after a menu change — not even well past its 5 s wait; on, the menu goes 5 s after the last change', async () => {

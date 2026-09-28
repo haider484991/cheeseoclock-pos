@@ -67,7 +67,7 @@ export interface PublishedMenu {
   };
   /**
    * The owner's settings the website needs (Settings step 3): absent from a
-   * till older than v0.7.27, and from a publish whose block did not pass
+   * till older than v0.7.29, and from a publish whose block did not pass
    * settingsBlockProblem against this same menu. See THE SETTINGS BLOCK below.
    */
   settings?: PublishedSettings;
