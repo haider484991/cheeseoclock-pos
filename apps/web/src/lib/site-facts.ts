@@ -100,17 +100,18 @@ export const getSiteFacts: () => Promise<SiteFacts> = dedupe(readSiteFacts);
  * /menu do, for the store-status poll (api/store-status): a /menu page left
  * open drops a notice whose last Karachi day has ended — and shows one saved
  * since — within one poll, instead of keeping what it was served. Never
- * throws: with no database, or on any failure, null (today's words).
+ * throws. undefined = no word (no database — a local preview from
+ * DEV_MENU_FILE — or a failed read): the page keeps what it was served.
  */
-export async function readClosedNotice(nowMs: number = Date.now()): Promise<string | null> {
-  if (!process.env['DATABASE_URL']) return null;
+export async function readClosedNotice(nowMs: number = Date.now()): Promise<string | null | undefined> {
+  if (!process.env['DATABASE_URL']) return undefined;
   try {
     const rows = (await sql()`
       SELECT menu_json -> 'settings' AS settings FROM site_menu WHERE id = 1
     `) as Array<{ settings: unknown }>;
     return closedNoticeInForce(parseStoredSettings(rows[0]?.settings ?? null)?.closedNotice, nowMs);
   } catch (e) {
-    console.error('closed notice read failed — the page says its own closed words', e);
-    return null;
+    console.error('closed notice read failed — the page keeps the words it was served', e);
+    return undefined;
   }
 }

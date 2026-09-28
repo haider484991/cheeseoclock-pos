@@ -422,6 +422,15 @@ describe('the closed notice: the owner’s words through its last Karachi day, t
     expect(await polledNotice()).toBe(NOTICE);
     await publish(m, tillBlock(m, { rev: 3, website: { closedNotice: { text: '', until: null } } }));
     expect(await polledNotice()).toBeNull();
+    // No database (a local preview): no word, so the page keeps what it was served — never a forced "none".
+    await publish(m, tillBlock(m, { rev: 4, website: { closedNotice: { text: NOTICE, until: null } } }));
+    const url = process.env['DATABASE_URL'];
+    delete process.env['DATABASE_URL'];
+    try {
+      expect(await polledNotice()).toBeUndefined();
+    } finally {
+      process.env['DATABASE_URL'] = url;
+    }
   });
 
   it('with no last day it shows every time the website is closed; with no words, today’s', async () => {

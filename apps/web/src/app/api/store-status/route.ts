@@ -14,7 +14,8 @@ export const revalidate = 0;
  * With it (v0.7.30), the owner's closed notice as it stands NOW (the words
  * only, worked out here — never its last day): a page left open past the
  * notice's last Karachi day goes back to its own closed words at the next
- * poll, and a notice saved since shows (null = the page's own words).
+ * poll, and a notice saved since shows (null = the page's own words; no
+ * key = no word, as from an older website: the page keeps what it was served).
  */
 export async function GET(): Promise<Response> {
   const [status, closedNotice] = await Promise.all([getStoreStatus(), readClosedNotice()]);
@@ -25,7 +26,8 @@ export async function GET(): Promise<Response> {
         acceptingOrders: status.acceptingOrders,
         pickupAvailable: status.pickupAvailable,
         pickupDiscountPercent: status.pickupDiscountPercent,
-        closedNotice,
+        // Absent (undefined drops out of the JSON) when there is no word: the page keeps its own.
+        ...(closedNotice === undefined ? {} : { closedNotice }),
       },
     },
     { headers: { 'Cache-Control': 'no-store' } },
