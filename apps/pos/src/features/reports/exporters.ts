@@ -58,8 +58,10 @@ import {
   purchaseHeadline,
   purchasePriceText,
   OFFER_FLAG_WORDS,
+  OFFER_REPEATS_NOTE,
   cameByLabel,
   offerCheckNote,
+  offerRepeatLine,
 } from './reportFormat';
 import { formatBps, thousandUnit } from '../costing/costingFormat';
 import { DAY_NOTE_TAG_LABEL } from '@cheeseoclock/shared-types';
@@ -392,7 +394,7 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     if (r.offerCheck && r.offerCheck.counterOrders > 0 && (r.offerCheck.phoneOrWhatsapp > 0 || r.offerCheck.offerCents > 0)) {
       // The owner's check on his automatic offers (flags over 1.5 × the shop's).
       sheet.heading('Came by & offers');
-      sheet.push(['Taken by', 'Counter orders', 'Phone or WhatsApp', 'With an offer', 'Offers took off Rs', 'Flag']);
+      sheet.push(['Taken by', 'Orders asked', 'Phone or WhatsApp', 'With an offer', 'Offers took off Rs', 'Flag']);
       for (const s of r.staff.filter((x) => !x.isWebsite && (x.counterOrders ?? 0) > 0)) {
         sheet.push([
           s.name,
@@ -404,6 +406,16 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
         ]);
       }
       sheet.push([offerCheckNote(r.offerCheck)]);
+    }
+    if ((r.offerRepeats?.length ?? 0) > 0) {
+      // "Once a customer a day" given twice to one phone on one day (the link between the tills was down).
+      sheet.heading('Once a customer a day, given more than once');
+      sheet.push(['Day', 'Offer', 'Phone', 'Orders', 'Took off Rs']);
+      for (const x of r.offerRepeats ?? []) {
+        const l = offerRepeatLine(x);
+        sheet.push([x.day, l.offer, l.phone, l.orders, rs(x.amountCents)]);
+      }
+      sheet.push([OFFER_REPEATS_NOTE]);
     }
 
     sheet.heading('Shifts (cash drawer)');
@@ -979,6 +991,23 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
         [1, 2, 3],
       )}</section>`,
     ];
+    if ((r.cameBy?.length ?? 0) > 0) {
+      // How the orders came in (orders.came_by, 0044), as on the screen and in the download.
+      parts.push(
+        `<section><h2>How orders came in</h2>${table(
+          ['Came in by', 'Orders', 'Share', 'Sales', 'With an offer', 'Offers took off'],
+          (r.cameBy ?? []).map((c) => [
+            esc(cameByLabel(c.cameBy)),
+            String(c.orderCount),
+            esc(percentOf(c.orderCount, k.orderCount)),
+            money(c.netSalesCents),
+            String(c.offerCount),
+            c.offerCents > 0 ? money(c.offerCents) : '—',
+          ]),
+          [1, 2, 3, 4, 5],
+        )}</section>`,
+      );
+    }
     if (r.profit) parts.push(channelProfitPrint(r.profit.channels, `${commissionText(r.profit.fees)} ${riderText(r.profit.riderCost)}`));
     if (r.deliveries.byRider.length > 0) {
       const withProfit = r.areas.some((a) => a.riderCents !== null);
@@ -1069,6 +1098,39 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
       )}</section>`,
     );
 
+    const check = r.offerCheck;
+    if (check && check.counterOrders > 0 && (check.phoneOrWhatsapp > 0 || check.offerCents > 0)) {
+      // The owner's check on his automatic offers, as on the screen (flags over 1.5 × the shop's).
+      parts.push(
+        `<section><h2>Came by &amp; offers</h2>${table(
+          ['Taken by', 'Orders asked', 'Phone / WhatsApp', 'With an offer', 'Offers took off', 'Flag'],
+          r.staff
+            .filter((s) => !s.isWebsite && (s.counterOrders ?? 0) > 0)
+            .map((s) => [
+              esc(s.name),
+              String(s.counterOrders ?? 0),
+              esc(`${s.phoneOrWhatsapp ?? 0} (${percentOf(s.phoneOrWhatsapp ?? 0, s.counterOrders ?? 0)})`),
+              String(s.offerCount ?? 0),
+              (s.offerCents ?? 0) > 0 ? money(s.offerCents ?? 0) : '—',
+              s.flags && s.flags.length > 0 ? `<b>${esc(s.flags.map((f) => OFFER_FLAG_WORDS[f]).join(', '))}</b>` : '—',
+            ]),
+          [1, 2, 3, 4],
+        )}<p class="muted">${esc(offerCheckNote(check))}</p></section>`,
+      );
+    }
+    if ((r.offerRepeats?.length ?? 0) > 0) {
+      parts.push(
+        `<section><h2>Once a customer a day, given more than once</h2>${table(
+          ['Day', 'Offer', 'Phone', 'Orders', 'Took off'],
+          (r.offerRepeats ?? []).map((x) => {
+            const l = offerRepeatLine(x);
+            return [esc(l.day), esc(l.offer), esc(l.phone), esc(l.orders), money(x.amountCents)];
+          }),
+          [4],
+        )}<p class="muted">${esc(OFFER_REPEATS_NOTE)}</p></section>`,
+      );
+    }
+
     if (r.shifts.length > 0) {
       parts.push(
         `<section><h2>Cash drawer (shifts)</h2>${table(
@@ -1119,13 +1181,19 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
           [1, 2],
         )}</div><div><h2>Discounts — who</h2>${table(
           ['Given by', 'Times', 'Amount'],
-          [
-            ...r.discounts.byPerson.map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
-            // The standing offers (the foodpanda deal, the automatic offers) are the till's, not a person's.
-            ...(r.discounts.standing ?? []).map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
-          ],
+          r.discounts.byPerson.map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
           [1, 2],
-        )}</div></section>`,
+        )}${
+          // The standing offers (the foodpanda deal, the automatic offers) are the till's, not a
+          // person's: apart, as on the screen and in the download — never under "Given by".
+          (r.discounts.standing?.length ?? 0) > 0
+            ? `<h2>Standing offers</h2>${table(
+                ['Offer (set by the owner)', 'Orders', 'Amount'],
+                (r.discounts.standing ?? []).map((d) => [esc(d.name), String(d.count), money(d.amountCents)]),
+                [1, 2],
+              )}`
+            : ''
+        }</div></section>`,
       );
     }
 

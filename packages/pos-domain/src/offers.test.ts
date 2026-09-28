@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DISCOUNT_OFFERS, type ChannelOffer, type CounterOffers } from '@cheeseoclock/shared-types';
 import {
-  OFFER_FLAG_MIN_ORDERS,
+  OFFER_FLAG_MIN_MARKED,
+  cameByWasTapped,
   cameByChipsShown,
   declinedOfferRule,
   matchOffer,
@@ -157,6 +158,16 @@ describe('the offer on the order keeps its frozen terms', () => {
     expect(matchOffer(order(), [bigger], { ...opts, current: frozen })).toMatchObject({ isCurrent: false, amountCents: 50_000 });
   });
 
+  it('the owner saving a bigger offer never moves an order already on screen: it keeps the one it got while that fits', () => {
+    // The owner saved again since the 20% went on: a new 25% is in the list.
+    const bigger = offer({ id: 'big', name: 'Big', cameBy: 'any', value: 25 });
+    const afterSave = { ...opts, settingsAt: '2026-10-02T08:00:00.000Z' };
+    expect(matchOffer(order(), [bigger], { ...afterSave, current: frozen })).toMatchObject({ isCurrent: true, amountCents: 40_000 });
+    // …but once its own terms stop fitting (the chip changed), the list decides afresh.
+    const walkIn = offer({ id: 'walk', name: 'Walk-in 5%', cameBy: ['walk_in'], value: 5 });
+    expect(matchOffer(order({ cameBy: 'walk_in' }), [walkIn], { ...afterSave, current: frozen })?.rule.offer.id).toBe('walk');
+  });
+
   it('when its terms no longer fit (the chip changed, under the minimum) it comes off, and a live one may go on', () => {
     expect(matchOffer(order({ cameBy: 'walk_in' }), [], { ...opts, current: frozen })).toBeNull();
     const walkIn = offer({ id: 'walk', name: 'Walk-in 5%', cameBy: ['walk_in'], value: 5 });
@@ -254,6 +265,12 @@ describe('the counter', () => {
 
   it('hints an offer waiting for the phone, or for more food', () => {
     expect(offerHint(order({ hasPhone: false }), rules(), false)).toEqual({ name: 'Test WhatsApp 10%', needs: 'phone' });
+    // Once a customer a day: only the till knows whether that phone had it today, so the hint says it may not go on.
+    expect(offerHint(order({ hasPhone: false }), rules({ offers: [offer({ oncePerCustomerPerDay: true })] }), false)).toEqual({
+      name: 'Test WhatsApp 10%',
+      needs: 'phone',
+      oncePerDay: true,
+    });
     expect(offerHint(order({ foodCents: 100_000 }), rules({ offers: [offer({ minOrderCents: 150_000 })] }), false)).toEqual({
       name: 'Test WhatsApp 10%',
       needs: 'more_food',
@@ -264,17 +281,36 @@ describe('the counter', () => {
 });
 
 describe('Team & leakage: 1.5 × the shop', () => {
-  const shop = { counterOrders: 100, phoneOrWhatsapp: 20, offerCents: 100_000 };
+  const shop = { counterOrders: 100, phoneOrWhatsapp: 20, offerOrders: 20, offerCents: 100_000 };
 
   it('flags a share of Phone / WhatsApp orders over 1.5 × the shop’s, and offers’ rupees per order likewise', () => {
     // The shop: 20%. 30% is exactly 1.5 ×: not flagged; 31% is.
-    expect(offerFlags({ counterOrders: 100, phoneOrWhatsapp: 30, offerCents: 150_000 }, shop)).toEqual([]);
-    expect(offerFlags({ counterOrders: 100, phoneOrWhatsapp: 31, offerCents: 150_100 }, shop)).toEqual(['phone_share', 'offer_rupees']);
-    expect(offerFlags({ counterOrders: 40, phoneOrWhatsapp: 4, offerCents: 90_000 }, shop)).toEqual(['offer_rupees']);
+    expect(offerFlags({ counterOrders: 100, phoneOrWhatsapp: 30, offerOrders: 30, offerCents: 150_000 }, shop)).toEqual([]);
+    expect(offerFlags({ counterOrders: 100, phoneOrWhatsapp: 31, offerOrders: 31, offerCents: 150_100 }, shop)).toEqual(['phone_share', 'offer_rupees']);
+    expect(offerFlags({ counterOrders: 40, phoneOrWhatsapp: 4, offerOrders: 4, offerCents: 90_000 }, shop)).toEqual(['offer_rupees']);
   });
 
-  it('never with fewer than the minimum orders', () => {
-    expect(offerFlags({ counterOrders: OFFER_FLAG_MIN_ORDERS - 1, phoneOrWhatsapp: 19, offerCents: 90_000 }, shop)).toEqual([]);
-    expect(offerFlags({ counterOrders: 30, phoneOrWhatsapp: 0, offerCents: 0 }, { counterOrders: 0, phoneOrWhatsapp: 0, offerCents: 0 })).toEqual([]);
+  it('no minimum of orders taken: a part-timer with 19 orders, every one marked WhatsApp with Rs 200 off, is flagged', () => {
+    expect(offerFlags({ counterOrders: 19, phoneOrWhatsapp: 19, offerOrders: 19, offerCents: 19 * 20_000 }, shop)).toEqual([
+      'phone_share',
+      'offer_rupees',
+    ]);
+    expect(offerFlags({ counterOrders: 3, phoneOrWhatsapp: 2, offerOrders: 2, offerCents: 40_000 }, shop)).toEqual(['phone_share', 'offer_rupees']);
+  });
+
+  it('one order alone is never a pattern: a flag needs at least two such orders; and nothing against a shop with none', () => {
+    expect(OFFER_FLAG_MIN_MARKED).toBe(2);
+    expect(offerFlags({ counterOrders: 1, phoneOrWhatsapp: 1, offerOrders: 1, offerCents: 20_000 }, shop)).toEqual([]);
+    expect(offerFlags({ counterOrders: 30, phoneOrWhatsapp: 0, offerOrders: 0, offerCents: 0 }, { counterOrders: 0, phoneOrWhatsapp: 0, offerOrders: 0, offerCents: 0 })).toEqual([]);
+    expect(offerFlags({ counterOrders: 0, phoneOrWhatsapp: 0, offerOrders: 0, offerCents: 0 }, shop)).toEqual([]);
+  });
+
+  it('worked on the orders whose way in was tapped: Walk-in, Phone or WhatsApp — never "not asked"', () => {
+    expect(['walk_in', 'phone', 'whatsapp'].map(cameByWasTapped)).toEqual([true, true, true]);
+    expect([null, undefined, 'website', 'foodpanda', 'not_asked'].map(cameByWasTapped)).toEqual([false, false, false, false, false]);
+    // The history reviewer's month: 600 counter orders, 500 from before the offers (never asked), 30 of the
+    // 100 asked marked Phone / WhatsApp; a cashier who worked only since, at exactly that 30%, is not flagged.
+    const asked = { counterOrders: 100, phoneOrWhatsapp: 30, offerOrders: 30, offerCents: 30 * 20_000 };
+    expect(offerFlags({ counterOrders: 40, phoneOrWhatsapp: 12, offerOrders: 12, offerCents: 12 * 20_000 }, asked)).toEqual([]);
   });
 });

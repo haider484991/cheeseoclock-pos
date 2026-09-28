@@ -31,7 +31,6 @@ import {
   foodpandaDealLabel,
   foodpandaDealRule,
   foodpandaTerms,
-  offerRunsOnDay,
   shareBps,
   stockRulesPutBack,
   tradingDayOfInstant,
@@ -66,7 +65,7 @@ export function getShopSettings(db: AppDatabase): ShopSettings {
  * colours and reminder minutes, the foodpanda deal an order started now
  * gets (its % and label, never who saved it), what Pay asks, how much
  * dearer the foodpanda listing is (a price: the tablet's total is the
- * till's at those prices), and the owner's automatic offers that run today
+ * till's at those prices), and the owner's automatic offers that are on
  * with whether the cashier is asked how each order came in (the screen's
  * buttons and hints; the main process decides every offer itself). Never
  * the commission, fees or costs.
@@ -80,7 +79,8 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
   const delivery = readShopSetting(db, 'discounts.delivery').value;
   const kitchen = readShopSetting(db, 'kitchen.timing').value;
   const stock = readShopSetting(db, 'stock.rules').value;
-  const offers = readShopSetting(db, 'discounts.offers').value;
+  const offersSetting = readShopSetting(db, 'discounts.offers');
+  const offers = offersSetting.value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
   const today = tradingDayOfInstant(now.toISOString()) ?? '';
   return {
@@ -102,12 +102,18 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
       wasteReasons: stock.wasteReasons.map((r) => ({ id: r.id, label: r.label, hidden: r.hidden })),
       reminders: { keyItemsEveryDays: stock.reminders.keyItemsEveryDays, fullEveryDays: stock.reminders.fullEveryDays },
     },
-    // The owner's automatic offers that are on and run today (their days and
-    // hours are checked against each order's start), and whether the cashier
-    // is asked how each order came in. Never who saved them.
+    // The owner's automatic offers that are on and have not ended (the
+    // screen checks each one's dates, days and hours against the order's
+    // start: the counter keeps this answer across the day change, so an
+    // offer that starts tomorrow must already be here), and whether the
+    // cashier is asked how each order came in. None when a newer version of
+    // the app saved them: this till never puts those on (order-repo), so the
+    // screen does not promise them. Never who saved them.
     offers: {
       askCameBy: offers.askCameBy,
-      offers: offers.offers.filter((o) => offerRunsOnDay(o, today)).map((o) => structuredClone(o)),
+      offers: offersSetting.newerFormat
+        ? []
+        : offers.offers.filter((o) => o.on && !(o.endsOn && o.endsOn < today)).map((o) => structuredClone(o)),
     },
     foodpanda: {
       deal: active

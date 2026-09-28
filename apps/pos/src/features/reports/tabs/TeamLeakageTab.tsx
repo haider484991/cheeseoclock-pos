@@ -17,7 +17,7 @@ import type { ReportPeriod } from '../dateRange';
 import { shiftDrawerUseNote, shiftTestDeletedNote } from '../drawerLogFormat';
 import { DrawerLogPanel, ShiftDrawerLogDialog } from './DrawerLog';
 import { DeletedTestOrdersPanel, deletedTestsTitle, useDeletedTests } from '../../orders/DeletedTestOrdersPanel';
-import { OfferCheckPanel } from './OfferCheckPanel';
+import { OfferCheckPanel, OfferRepeatsPanel } from './OfferCheckPanel';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -92,7 +92,7 @@ export function StaffSection({
   period,
   onPrint,
 }: {
-  report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'sinceIso' | 'untilIso'> & Partial<Pick<ReportTeamTab, 'offerCheck'>>;
+  report: Pick<ReportTeamTab, 'kpis' | 'staff' | 'shifts' | 'sinceIso' | 'untilIso'> & Partial<Pick<ReportTeamTab, 'offerCheck' | 'offerRepeats'>>;
   now?: Date;
   period?: ShiftHistoryPeriod;
   onPrint?: (html: string) => void;
@@ -129,6 +129,8 @@ export function StaffSection({
 
         {/* The owner's check on his automatic offers: who marks orders Phone / WhatsApp, and the offers' rupees. */}
         <OfferCheckPanel staff={report.staff} check={report.offerCheck} />
+        {/* "Once a customer a day" given twice to one phone on one day (the link between the tills was down). */}
+        <OfferRepeatsPanel repeats={report.offerRepeats} />
 
         <Panel
           id={SHIFT_HISTORY_ANCHOR}

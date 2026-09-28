@@ -25,8 +25,11 @@
  *  - WHICH ONE: the biggest that fits. The one already on the order keeps
  *    its FROZEN terms while they still fit (a Save while the order is open
  *    can't move it; a switched-off offer stops for new orders at once, not
- *    for one already open); a live offer replaces it only by taking more off.
- *    Ties keep the one on the order, then the owner's order of the list.
+ *    for one already open). A live offer replaces it only by taking more off,
+ *    and only from the same Save it went on under (a cart change — the chip,
+ *    the order type — may bring a bigger one in; the owner's next Save never
+ *    moves an order already on screen). Ties keep the one on the order, then
+ *    the owner's order of the list.
  *  - ABUSE: an offer claimed because the order came by Phone or WhatsApp,
  *    and any "once per customer per day" offer, needs the customer's phone on
  *    the order; "once per customer per day" is checked against that phone's
@@ -286,6 +289,9 @@ export function matchOffer(order: OfferOrder, offers: ReadonlyArray<ChannelOffer
       candidates.push({ rule: current, amountCents, isCurrent: true });
     }
   }
+  // The owner saved the offers since the one on the order went on: that Save
+  // must not move an order already on screen, so it stays while it fits.
+  if (currentFits && current && current.offer.settingsAt !== opts.settingsAt) return candidates[0] ?? null;
   for (const offer of offers) {
     // The one on the order keeps its frozen terms while they fit.
     if (currentFits && current && offer.id === current.offer.id) continue;
@@ -323,7 +329,7 @@ export function offerHint(
   order: OfferOrder,
   rules: CounterOffers | null | undefined,
   alsoOffDeliveryCharge: boolean,
-): { name: string; needs: 'phone' | 'more_food'; fromCents?: number } | null {
+): { name: string; needs: 'phone' | 'more_food'; fromCents?: number; oncePerDay?: true } | null {
   if (!rules || !offerCanApplyTo(order)) return null;
   for (const offer of rules.offers) {
     if (!offerRunsAt(offer, order.createdAt)) continue;
@@ -331,7 +337,11 @@ export function offerHint(
     if (miss === 'phone') {
       const withPhone = { ...order, hasPhone: true };
       const rule = offerRule(offerTerms(offer, null), alsoOffDeliveryCharge);
-      if (offerRuleAmount(rule, withPhone) > 0) return { name: offer.name, needs: 'phone' };
+      // "Once a customer a day": only the main process knows whether that
+      // phone had it today, so the hint says it may not go on.
+      if (offerRuleAmount(rule, withPhone) > 0) {
+        return { name: offer.name, needs: 'phone', ...(offer.oncePerCustomerPerDay ? { oncePerDay: true as const } : {}) };
+      }
       continue;
     }
     if (miss !== null) continue;
@@ -348,14 +358,31 @@ export function offerHint(
 
 /** A cashier is flagged over 1.5 × the shop's rate… */
 export const OFFER_FLAG_FACTOR_PCT = 150;
-/** …once they took at least this many counter orders in the period (fewer can't tell). */
-export const OFFER_FLAG_MIN_ORDERS = 20;
+/**
+ * …on at least this many of their orders marked Phone / WhatsApp (or with an
+ * offer): one order alone is never a pattern. No minimum of orders taken, so
+ * a part-timer who marks every order WhatsApp is flagged too.
+ */
+export const OFFER_FLAG_MIN_MARKED = 2;
+
+/** How a counter order came in, as the cashier tapped it: the orders the check is worked on. */
+export function cameByWasTapped(cameBy: string | null | undefined): boolean {
+  return cameBy === 'walk_in' || cameBy === 'phone' || cameBy === 'whatsapp';
+}
 
 export interface OfferCheckFigures {
-  /** Counter takeaway and delivery orders. */
+  /**
+   * Counter takeaway and delivery orders whose way in was tapped (Walk-in,
+   * Phone or WhatsApp). Orders nobody was asked about — from before the
+   * offers, or with "Ask how every order came in" off and no chip shown —
+   * are left out, or they would dilute the shop's rate and flag whoever
+   * worked the hours the chips showed.
+   */
   counterOrders: number;
   /** …marked Phone or WhatsApp. */
   phoneOrWhatsapp: number;
+  /** …that an automatic offer took something off. */
+  offerOrders: number;
   /** What the automatic offers took off them. */
   offerCents: number;
 }
@@ -363,16 +390,23 @@ export interface OfferCheckFigures {
 /**
  * The flags on one cashier's figures against the shop's over the same
  * period: their share of orders marked Phone or WhatsApp, and their offers'
- * rupees per order, each over 1.5 × the shop's. Worked in whole numbers.
+ * rupees per order, each over 1.5 × the shop's — on at least two such
+ * orders. Worked in whole numbers.
  */
 export function offerFlags(person: OfferCheckFigures, shop: OfferCheckFigures): OfferFlag[] {
-  if (person.counterOrders < OFFER_FLAG_MIN_ORDERS || shop.counterOrders <= 0) return [];
+  if (person.counterOrders <= 0 || shop.counterOrders <= 0) return [];
   const flags: OfferFlag[] = [];
   // person.pw / person.orders > 1.5 × shop.pw / shop.orders
-  if (person.phoneOrWhatsapp * shop.counterOrders * 100 > OFFER_FLAG_FACTOR_PCT * shop.phoneOrWhatsapp * person.counterOrders) {
+  if (
+    person.phoneOrWhatsapp >= OFFER_FLAG_MIN_MARKED &&
+    person.phoneOrWhatsapp * shop.counterOrders * 100 > OFFER_FLAG_FACTOR_PCT * shop.phoneOrWhatsapp * person.counterOrders
+  ) {
     flags.push('phone_share');
   }
-  if (person.offerCents * shop.counterOrders * 100 > OFFER_FLAG_FACTOR_PCT * shop.offerCents * person.counterOrders) {
+  if (
+    person.offerOrders >= OFFER_FLAG_MIN_MARKED &&
+    person.offerCents * shop.counterOrders * 100 > OFFER_FLAG_FACTOR_PCT * shop.offerCents * person.counterOrders
+  ) {
     flags.push('offer_rupees');
   }
   return flags;

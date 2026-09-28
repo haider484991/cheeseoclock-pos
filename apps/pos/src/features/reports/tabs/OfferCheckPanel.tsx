@@ -4,15 +4,20 @@
  * cashier could claim by tapping the wrong button (Phone or WhatsApp on a
  * cash walk-in) and keeping the difference, so each cashier's share of
  * counter orders marked Phone or WhatsApp and what the offers took off their
- * orders are shown against the shop's own over the same period; anyone over
- * 1.5 × the shop's, with enough orders to tell, is flagged (pos-domain
- * offerFlags). Shown once there is something to compare.
+ * orders are shown against the shop's own over the same period — on the
+ * orders whose way in was tapped; anyone over 1.5 × the shop's, on at least
+ * two such orders, is flagged (pos-domain offerFlags). Shown once there is
+ * something to compare.
+ *
+ * Beside it, "Once a customer a day, given more than once": one phone that
+ * got such an offer twice on one trading day (the link between the tills
+ * was down), so the owner can check those orders.
  */
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { ReportOfferCheck, ReportStaffLine } from '@cheeseoclock/shared-types';
+import type { ReportOfferCheck, ReportOfferRepeat, ReportStaffLine } from '@cheeseoclock/shared-types';
 import { AlertTriangle } from 'lucide-react';
 import { DataTable, Panel } from '../reportUi';
-import { OFFER_FLAG_WORDS, offerCheckNote, percentOf } from '../reportFormat';
+import { OFFER_FLAG_WORDS, OFFER_REPEATS_NOTE, offerCheckNote, offerRepeatLine, percentOf } from '../reportFormat';
 
 export function OfferCheckPanel({ staff, check }: { staff: ReportStaffLine[]; check: ReportOfferCheck | undefined }) {
   if (!check || check.counterOrders === 0 || (check.phoneOrWhatsapp === 0 && check.offerCents === 0)) return null;
@@ -22,7 +27,7 @@ export function OfferCheckPanel({ staff, check }: { staff: ReportStaffLine[]; ch
       <DataTable
         columns={[
           { label: 'Taken by' },
-          { label: 'Counter orders', right: true },
+          { label: 'Orders asked', right: true },
           { label: 'Phone / WhatsApp', right: true },
           { label: 'With an offer', right: true },
           { label: 'Offers took off', right: true },
@@ -45,6 +50,28 @@ export function OfferCheckPanel({ staff, check }: { staff: ReportStaffLine[]; ch
             '—'
           ),
         ])}
+        empty="None."
+      />
+    </Panel>
+  );
+}
+
+export function OfferRepeatsPanel({ repeats }: { repeats: ReportOfferRepeat[] | undefined }) {
+  if (!repeats || repeats.length === 0) return null;
+  return (
+    <Panel title="Once a customer a day, given more than once" note={OFFER_REPEATS_NOTE} className="xl:col-span-2">
+      <DataTable
+        columns={[{ label: 'Day' }, { label: 'Offer' }, { label: 'Phone' }, { label: 'Orders' }, { label: 'Took off', right: true }]}
+        rows={repeats.map((r) => {
+          const l = offerRepeatLine(r);
+          return [
+            l.day,
+            <span key="o" className="font-medium">{l.offer}</span>,
+            l.phone,
+            <span key="n" className="font-mono text-xs">{l.orders}</span>,
+            formatCents(r.amountCents),
+          ];
+        })}
         empty="None."
       />
     </Panel>

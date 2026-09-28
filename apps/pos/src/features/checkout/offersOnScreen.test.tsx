@@ -40,6 +40,8 @@ import { OrderDetails } from './OrderDetails';
 import { MoneySettings } from '../settings/MoneySettings';
 import { CameByRow } from '../orders/CameByRow';
 import { CHECKOUT_RULES_KEY, SHOP_SETTINGS_KEY } from '../settings/shop-rules/useShopSetting';
+import { resetCustomerForm, setCustomerForm } from './useCustomerForm';
+import { makeEmptyCustomerForm } from './CustomerInlinePanel';
 
 // A server render has no portal: the dialog's parts render in place.
 vi.mock('@radix-ui/react-dialog', async () => {
@@ -284,6 +286,47 @@ describe('the order screen', () => {
     expect(text(cart([[CHECKOUT_RULES_KEY, RULES({ askCameBy: false, offers: [offer()] })]]))).toContain(
       'Test WhatsApp 10% needs the customer’s phone on the order',
     );
+  });
+
+  it('the hint for a once-a-day offer does not promise it: that phone may have had it today (review 28 Sep)', () => {
+    signIn('cashier');
+    useCheckoutStore.setState({ snapshot: order({ discount: null, phone: null }), mode: 'delivery', busy: false });
+    setCustomerForm({ ...makeEmptyCustomerForm(), phone: '0300 1234567' });
+    const rules = (o: ChannelOffer) => [[CHECKOUT_RULES_KEY, RULES({ askCameBy: false, offers: [o] })]] as Array<[readonly unknown[], unknown]>;
+    expect(text(cart(rules(offer())))).toContain('Test WhatsApp 10% goes on when Pay or Send saves the customer’s phone');
+    expect(text(cart(rules(offer({ oncePerCustomerPerDay: true }))))).toContain(
+      'Test WhatsApp 10% goes on when Pay or Send saves the customer’s phone, if that phone has not had it today',
+    );
+    // Any text is not a phone: "1" still needs one (the till gives no offer on it).
+    setCustomerForm({ ...makeEmptyCustomerForm(), phone: '1' });
+    expect(text(cart(rules(offer())))).toContain('Test WhatsApp 10% needs the customer’s phone on the order');
+    resetCustomerForm();
+  });
+
+  it('asked how every order came in: Send and Pay wait for Walk-in, Phone or WhatsApp, and say so', () => {
+    signIn('cashier');
+    const base = order({ discount: null });
+    const takeaway = {
+      ...base,
+      order: { ...base.order, mode: 'takeaway', cameBy: null },
+      items: base.items.filter((i) => !i.menuItemName.startsWith('Delivery')),
+    } as unknown as OrderSnapshot;
+    const seed: Array<[readonly unknown[], unknown]> = [[CHECKOUT_RULES_KEY, RULES({ askCameBy: true, offers: [] })]];
+    const disabled = (markup: string, title: string) => new RegExp(`<button[^>]*disabled=""[^>]*title="${title}`).test(markup);
+    useCheckoutStore.setState({ snapshot: takeaway, mode: 'takeaway', cameBy: null, busy: false });
+    const waiting = cart(seed);
+    expect(text(waiting)).toContain('Still needed: How the order came in (Walk-in, Phone or WhatsApp)');
+    expect(disabled(waiting, 'Send to kitchen')).toBe(true);
+    expect(disabled(waiting, 'Take payment now')).toBe(true);
+    // A chip tapped: both go.
+    useCheckoutStore.setState({ cameBy: 'walk_in' });
+    const ready = cart(seed);
+    expect(text(ready)).not.toContain('Still needed');
+    expect(disabled(ready, 'Send to kitchen')).toBe(false);
+    expect(disabled(ready, 'Take payment now')).toBe(false);
+    // Not asked: nothing waits.
+    useCheckoutStore.setState({ cameBy: null });
+    expect(disabled(cart([[CHECKOUT_RULES_KEY, RULES({ askCameBy: false, offers: [] })]]), 'Send to kitchen')).toBe(false);
   });
 
   it('Pay, the F3 screen and the receipt say the offer by its name', () => {

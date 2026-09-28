@@ -17,6 +17,7 @@ import type {
   ReportItemLine,
   ReportKpis,
   ReportOfferCheck,
+  ReportOfferRepeat,
   ReportOrderStock,
   ReportPaymentGroup,
   ReportPurchases,
@@ -59,7 +60,10 @@ import {
   storedDiscountSkips,
   offerFlags,
   OFFER_FLAG_FACTOR_PCT,
-  OFFER_FLAG_MIN_ORDERS,
+  OFFER_FLAG_MIN_MARKED,
+  cameByWasTapped,
+  normalizePhone,
+  tradingDayOfInstant,
   type OfferCheckFigures,
   type FoodCostEstimate,
   type TaxedDiscountLine,
@@ -211,11 +215,15 @@ function discountEntered(type: string | null, value: number | null): string | nu
 /** What a standing offer is called on Team & leakage, by its source. */
 const STANDING_OFFER_NAME: Record<string, string> = { foodpanda: 'foodpanda deal (set by the owner)' };
 
-/** A standing offer's group: the foodpanda deal, or each automatic offer by its id (its name as it was frozen). */
+/**
+ * A standing offer's group: the foodpanda deal, or each automatic offer by
+ * its id AND the name frozen on the order (the name its bills printed): a
+ * renamed offer shows its older orders under the old name, apart.
+ */
 function standingKey(l: ReportDiscountLine): { key: string; name: string } {
   if (l.source === 'offer') {
     const name = l.reason && l.reason !== 'No reason given' ? l.reason : 'Automatic offer';
-    return { key: `offer:${l.offerId ?? name.toLowerCase()}`, name: `${name} (automatic offer)` };
+    return { key: `offer:${l.offerId ?? ''}:${name.toLowerCase()}`, name: `${name} (automatic offer)` };
   }
   const source = l.source ?? '';
   return { key: source, name: STANDING_OFFER_NAME[source] ?? source };
@@ -328,9 +336,9 @@ export function aggregateSales(
   const days = new Map<number, Tally>();
   const hours = new Map<number, Tally>();
   const channels = new Map<ReportChannel, Tally>();
-  const staff = new Map<string, Tally & { discountCents: number } & OfferCheckFigures & { offerCount: number }>();
+  const staff = new Map<string, Tally & { discountCents: number } & OfferCheckFigures>();
   const cameBy = new Map<ReportCameBy, Tally & { offerCount: number; offerCents: number }>();
-  const offerShop: OfferCheckFigures = { counterOrders: 0, phoneOrWhatsapp: 0, offerCents: 0 };
+  const offerShop: OfferCheckFigures = { counterOrders: 0, phoneOrWhatsapp: 0, offerOrders: 0, offerCents: 0 };
   const riders = new Map<string | null, Tally & { minutes: number; timed: number }>();
   const areas = new Map<string, Tally & { area: string }>();
 
@@ -359,15 +367,22 @@ export function aggregateSales(
     const staffDiscount = r.discountSource ? 0 : r.discount;
     // How it came in, and the offers: an offer is money a cashier could claim
     // by tapping the wrong chip, so each cashier's share of counter orders
-    // marked Phone / WhatsApp and their offers' rupees are kept.
+    // marked Phone / WhatsApp and their offers' rupees are kept — on the
+    // counter takeaways and deliveries whose way in was TAPPED. One nobody
+    // was asked about (before the offers, or with "Ask how every order came
+    // in" off and no chip shown) is left out: counted, it diluted the shop's
+    // rate and flagged whoever worked the hours the chips showed.
     const way = cameByOf(r);
     const offerCents = r.discountSource === 'offer' ? r.discount : 0;
-    const counter = r.source === 'pos' && (r.mode === 'takeaway' || r.mode === 'delivery');
+    const counter = r.source === 'pos' && (r.mode === 'takeaway' || r.mode === 'delivery') && cameByWasTapped(r.cameBy);
     const phoneOrWa = counter && (way === 'phone' || way === 'whatsapp') ? 1 : 0;
+    const checkedOfferCents = counter ? offerCents : 0;
+    const checkedOffer = checkedOfferCents > 0 ? 1 : 0;
     if (counter) {
       offerShop.counterOrders += 1;
       offerShop.phoneOrWhatsapp += phoneOrWa;
-      offerShop.offerCents += offerCents;
+      offerShop.offerOrders += checkedOffer;
+      offerShop.offerCents += checkedOfferCents;
     }
     const s = staff.get(staffKey);
     if (s) {
@@ -376,8 +391,8 @@ export function aggregateSales(
       s.discountCents += staffDiscount;
       s.counterOrders += counter ? 1 : 0;
       s.phoneOrWhatsapp += phoneOrWa;
-      s.offerCents += offerCents;
-      s.offerCount += offerCents > 0 ? 1 : 0;
+      s.offerCents += checkedOfferCents;
+      s.offerOrders += checkedOffer;
     } else {
       staff.set(staffKey, {
         orderCount: 1,
@@ -385,8 +400,8 @@ export function aggregateSales(
         discountCents: staffDiscount,
         counterOrders: counter ? 1 : 0,
         phoneOrWhatsapp: phoneOrWa,
-        offerCents,
-        offerCount: offerCents > 0 ? 1 : 0,
+        offerCents: checkedOfferCents,
+        offerOrders: checkedOffer,
       });
     }
     const w = cameBy.get(way);
@@ -428,11 +443,12 @@ export function aggregateSales(
     byHour: [...hours].map(([hour, t]) => ({ hour, ...t })).sort((a, b) => a.hour - b.hour),
     channels: [...channels].map(([channel, t]) => ({ channel, ...t })).sort(bySales),
     staff: [...staff]
-      .map(([key, t]) => ({
+      .map(([key, { offerOrders, ...t }]) => ({
         key,
         name: key === 'web' ? 'Website orders' : (names.user(key) ?? 'Unknown'),
         isWebsite: key === 'web',
         ...t,
+        offerCount: offerOrders,
       }))
       .sort(bySales),
     deliveries: {
@@ -476,7 +492,7 @@ function offerCheckOf(shop: OfferCheckFigures): ReportOfferCheck {
     phoneShareBps: shop.counterOrders > 0 ? Math.round((shop.phoneOrWhatsapp * 10_000) / shop.counterOrders) : 0,
     offerCentsPerOrder: shop.counterOrders > 0 ? Math.round(shop.offerCents / shop.counterOrders) : 0,
     factorPct: OFFER_FLAG_FACTOR_PCT,
-    minOrders: OFFER_FLAG_MIN_ORDERS,
+    minMarked: OFFER_FLAG_MIN_MARKED,
   };
 }
 
@@ -485,7 +501,7 @@ function withOfferFlags(staff: ReportStaffLine[], shop: OfferCheckFigures): Repo
   return staff.map((s) => {
     if (s.isWebsite || s.counterOrders === undefined) return s;
     const flags = offerFlags(
-      { counterOrders: s.counterOrders, phoneOrWhatsapp: s.phoneOrWhatsapp ?? 0, offerCents: s.offerCents ?? 0 },
+      { counterOrders: s.counterOrders, phoneOrWhatsapp: s.phoneOrWhatsapp ?? 0, offerOrders: s.offerCount ?? 0, offerCents: s.offerCents ?? 0 },
       shop,
     );
     return flags.length > 0 ? { ...s, flags } : s;
@@ -870,6 +886,62 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
         LIMIT ${REPORT_LIST_CAP}`,
     )
     .all(range.untilIso, range.sinceIso) as BusinessReport['shifts'];
+}
+
+/**
+ * "Once a customer a day" offers one phone got more than once on the same
+ * trading day. Each till checks that phone's other orders before putting it
+ * on, but with the link between the tills down each can give it once (the
+ * owner's design accepts that, provided Reports show it): listed here from
+ * both tills' orders once they have arrived. Sent or paid orders only (one
+ * still being rung up can still lose it), never cancelled or deleted ones.
+ * The phone is shown by its last four digits.
+ */
+export function getOfferRepeats(db: AppDatabase, range: ReportRange): ReportOfferRepeat[] {
+  const rows = db
+    .prepare(
+      `SELECT o.order_number AS orderNumber, o.created_at AS createdAt, o.customer_phone_snapshot AS phone,
+              CAST(json_extract(d.rule_json, '$.offer.id') AS TEXT) AS offerId,
+              d.reason AS offerName, d.amount_cents AS amountCents
+         FROM orders o
+         JOIN order_discounts d ON d.order_id = o.id
+        WHERE o.created_at >= ? AND o.created_at < ?
+          AND o.deleted_at IS NULL AND o.status NOT IN ('open', 'void')
+          AND o.customer_phone_snapshot IS NOT NULL
+          AND d.deleted_at IS NULL AND d.source = 'offer' AND d.amount_cents > 0
+          AND json_valid(d.rule_json)
+          AND json_extract(d.rule_json, '$.offer.oncePerCustomerPerDay') = 1
+        ORDER BY o.created_at, o.id`,
+    )
+    .all(...args(range)) as Array<{
+    orderNumber: string;
+    createdAt: string;
+    phone: string;
+    offerId: string | null;
+    offerName: string | null;
+    amountCents: number;
+  }>;
+  const groups = new Map<string, ReportOfferRepeat>();
+  for (const r of rows) {
+    const day = tradingDayOfInstant(r.createdAt);
+    const phone = normalizePhone(r.phone) ?? r.phone.trim();
+    if (!day || !phone || !r.offerId) continue;
+    const key = `${day}|${phone}|${r.offerId}`;
+    const g = groups.get(key);
+    if (g) {
+      g.orderNumbers.push(r.orderNumber);
+      g.amountCents += r.amountCents;
+    } else {
+      groups.set(key, {
+        day,
+        offerName: r.offerName?.trim() || 'Automatic offer',
+        phoneEnds: phone.replace(/\D/g, '').slice(-4),
+        orderNumbers: [r.orderNumber],
+        amountCents: r.amountCents,
+      });
+    }
+  }
+  return [...groups.values()].filter((g) => g.orderNumbers.length > 1).slice(0, REPORT_LIST_CAP);
 }
 
 function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLine[] {
@@ -2583,6 +2655,7 @@ export function buildTeamTab(db: AppDatabase, req: BusinessReportRequest): Repor
       sales.offerShop,
     ),
     offerCheck: offerCheckOf(sales.offerShop),
+    offerRepeats: getOfferRepeats(db, range),
     shifts: getShifts(db, range),
     discounts: summarizeDiscounts(getDiscountLines(db, range)),
     refunds: refunds.slice(0, REPORT_LIST_CAP),

@@ -29,6 +29,7 @@ import {
   foodpandaDealRule,
   foodpandaTerms,
   matchOffer,
+  normalizePhone,
   offerAmount,
   offerCanApplyTo,
   parseFoodpandaDealRule,
@@ -793,10 +794,20 @@ function insertOfferRow(
  * (the trading day the order was started in) on ANOTHER order that is not
  * cancelled or deleted: "once per customer per day". Only this till's
  * orders, and the other till's that have arrived (with the link down it can
- * repeat once there, which Reports show).
+ * repeat once there, which Reports → Team & leakage lists).
+ *
+ * Which order keeps it: one already sent or paid always counts; of two
+ * still being rung up (the link came back with both on screen), the one
+ * started first keeps it and only the later one loses it — each till seeing
+ * the other's used to take it off both. `phones`: the phone as normalised
+ * and as it was typed (an older customer row may hold either).
  */
-function offersUsedToday(db: AppDatabase, orderId: string, phone: string, createdAt: string): Set<string> {
-  const day = tradingDayOfInstant(createdAt);
+function offersUsedToday(
+  db: AppDatabase,
+  order: { id: string; createdAt: string },
+  phones: readonly [string, string],
+): Set<string> {
+  const day = tradingDayOfInstant(order.createdAt);
   if (!day) return new Set();
   const from = `${day}T00:00:00.000Z`;
   const until = new Date(Date.parse(from) + 86_400_000).toISOString();
@@ -807,11 +818,12 @@ function offersUsedToday(db: AppDatabase, orderId: string, phone: string, create
          JOIN order_discounts d ON d.order_id = o.id
         WHERE o.created_at >= ? AND o.created_at < ? AND o.id != ?
           AND o.deleted_at IS NULL AND o.status != 'void'
-          AND o.customer_phone_snapshot = ?
+          AND o.customer_phone_snapshot IN (?, ?)
+          AND (o.status != 'open' OR o.created_at < ? OR (o.created_at = ? AND o.id < ?))
           AND d.deleted_at IS NULL AND d.source = 'offer' AND d.amount_cents > 0
           AND json_valid(d.rule_json)`,
     )
-    .all(from, until, orderId, phone) as Array<{ offerId: unknown }>;
+    .all(from, until, order.id, phones[0], phones[1], order.createdAt, order.createdAt, order.id) as Array<{ offerId: unknown }>;
   return new Set(rows.map((r) => r.offerId).filter((x): x is string => typeof x === 'string'));
 }
 
@@ -831,6 +843,12 @@ function offersUsedToday(db: AppDatabase, orderId: string, phone: string, create
  *    it back".
  *  - The approval limit does not apply: the offer is the owner's own rule,
  *    approved by the owner who saved it.
+ *  - Fails closed: offers saved by a newer version of the app (a field this
+ *    version does not know, say "only on these items") are never put on
+ *    here — this till would take them off every order. The one already on
+ *    the order keeps its frozen terms.
+ *  - "The customer's phone" is a Pakistani number (pos-domain
+ *    normalizePhone), not any text typed into the box.
  *
  * Inside the caller's transaction.
  */
@@ -853,14 +871,19 @@ function applyOfferStep(db: AppDatabase, orderId: string, actor: Actor): boolean
   if (latest && !current) return false;
   if (current?.offer.declined) return false;
   const setting = readShopSetting(db, 'discounts.offers');
-  if (!current && setting.value.offers.length === 0) return false;
+  // Saved by a newer version of the app: none of its offers is put on here.
+  const liveOffers = setting.newerFormat ? [] : setting.value.offers;
+  if (!current && liveOffers.length === 0) return false;
 
   const lines = discountLinesOf(db, orderId);
   const phoneRow = db.prepare(`SELECT customer_phone_snapshot AS phone FROM orders WHERE id = ?`).get(orderId) as
     | { phone: string | null }
     | undefined;
-  const phone = phoneRow?.phone?.trim() || null;
-  const onceAny = setting.value.offers.some((o) => o.oncePerCustomerPerDay) || current?.offer.oncePerCustomerPerDay === true;
+  const typedPhone = phoneRow?.phone?.trim() || null;
+  // A Pakistani number, not any text: "1" is no phone (a made-up one each time
+  // would get round Phone / WhatsApp and "once a customer a day").
+  const phone = normalizePhone(typedPhone);
+  const onceAny = liveOffers.some((o) => o.oncePerCustomerPerDay) || current?.offer.oncePerCustomerPerDay === true;
   const pick = matchOffer(
     {
       source: order.source,
@@ -871,11 +894,12 @@ function applyOfferStep(db: AppDatabase, orderId: string, actor: Actor): boolean
       foodCents: discountBaseCents(lines, false),
       subtotalCents: discountBaseCents(lines, true),
     },
-    setting.value.offers,
+    liveOffers,
     {
       alsoOffDeliveryCharge: readDiscountAlsoOffDeliveryCharge(db),
       settingsAt: setting.savedAt,
-      usedToday: phone && onceAny ? offersUsedToday(db, orderId, phone, order.createdAt) : new Set(),
+      usedToday:
+        phone && onceAny ? offersUsedToday(db, { id: orderId, createdAt: order.createdAt }, [phone, typedPhone ?? phone]) : new Set(),
       current,
     },
   );
@@ -1976,6 +2000,14 @@ function recomputeOrderTotals(
         before: discountRow,
         after: null,
       });
+      // The cashier's discount is gone: the owner's automatic offer may fit
+      // the order again, in this same step — else Pay would charge the full
+      // price until the next cart change. (The offer step ran first, above,
+      // and saw this discount there.)
+      if (applyOfferStep(db, orderId, actor)) {
+        recomputeOrderTotals(db, orderId, actor);
+        return;
+      }
     } else {
       discount = computeDiscountCents(base, d);
       if (discount !== discountRow.amount_cents) {

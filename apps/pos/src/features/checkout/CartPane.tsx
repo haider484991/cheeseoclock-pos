@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
-import { discountBaseCents, formatCents, offerHint } from '@cheeseoclock/pos-domain';
+import { discountBaseCents, formatCents, normalizePhone, offerHint } from '@cheeseoclock/pos-domain';
 import {
   Minus,
   Plus,
@@ -88,7 +88,8 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
             source: order.source,
             mode: order.mode,
             cameBy: order.cameBy ?? null,
-            hasPhone: !!snapshot?.customerPhone,
+            // A Pakistani number, as the main process counts it (any text is not a phone).
+            hasPhone: normalizePhone(snapshot?.customerPhone) !== null,
             createdAt: order.createdAt,
             foodCents: discountBaseCents(items, false),
             subtotalCents,
@@ -364,8 +365,10 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
         {hint && (
           <p className="ticket-next" role="status">
             {hint.needs === 'phone'
-              ? form.phone.trim()
-                ? `${hint.name} goes on when Pay or Send saves the customer’s phone`
+              ? normalizePhone(form.phone) !== null
+                ? hint.oncePerDay
+                  ? `${hint.name} goes on when Pay or Send saves the customer’s phone, if that phone has not had it today`
+                  : `${hint.name} goes on when Pay or Send saves the customer’s phone`
                 : `${hint.name} needs the customer’s phone on the order`
               : `${hint.name} from ${formatCents(hint.fromCents ?? 0)} of food`}
           </p>

@@ -991,3 +991,57 @@ describe('Team & leakage for paper and file: every page read, nothing dropped wi
     expect(stuck.drawerLog?.rows).toHaveLength(400);
   });
 });
+
+describe('the automatic offers on paper and in the file, as on the screen (review 28 Sep)', () => {
+  const period = periodFor('today', SAT_3PM);
+  const r = report();
+  const tabs = tabsOf(r);
+  const channels = {
+    ...tabs.channels!,
+    cameBy: [
+      { cameBy: 'whatsapp' as const, orderCount: 3, netSalesCents: 60_000, offerCount: 3, offerCents: 6_000 },
+      { cameBy: 'not_asked' as const, orderCount: 1, netSalesCents: 20_000, offerCount: 0, offerCents: 0 },
+    ],
+  };
+  const team = {
+    ...tabs.team!,
+    staff: [{ ...r.staff[0]!, counterOrders: 4, phoneOrWhatsapp: 3, offerCount: 3, offerCents: 6_000, flags: ['phone_share' as const] }],
+    offerCheck: { counterOrders: 10, phoneOrWhatsapp: 3, offerOrders: 3, offerCents: 6_000, phoneShareBps: 3_000, offerCentsPerOrder: 600, factorPct: 150, minMarked: 2 },
+    offerRepeats: [{ day: '2026-09-26', offerName: 'Test once a day', phoneEnds: '4567', orderNumbers: ['20260926-0003', '20260926-0009'], amountCents: 4_000 }],
+    discounts: {
+      ...r.discounts,
+      totalCount: 2,
+      totalCents: 5_000,
+      byReason: [{ reason: 'Staff', count: 1, amountCents: 1_000 }],
+      byPerson: [{ name: 'Test Cashier', count: 1, amountCents: 1_000, approvedCount: 0 }],
+      standing: [{ name: 'Test WhatsApp 10% (automatic offer)', count: 2, amountCents: 4_000 }],
+    },
+  };
+
+  it('Channels: "How orders came in" prints too', () => {
+    const html = buildTabPrintBody('channels', channels as never, period, SAT_3PM);
+    expect(html).toContain('<h2>How orders came in</h2>');
+    expect(html).toContain('WhatsApp');
+    expect(html).toContain('Not asked');
+  });
+
+  it('Team & leakage: "Came by & offers" with its flag and note, the once-a-day repeats, and the standing offers apart from who gave discounts', () => {
+    const html = buildTabPrintBody('team', team as never, period, SAT_3PM);
+    expect(html).toContain('<h2>Came by &amp; offers</h2>');
+    expect(html).toContain('<b>Phone / WhatsApp</b>');
+    expect(html).toContain('on at least 2 such orders');
+    expect(html).toContain('<h2>Once a customer a day, given more than once</h2>');
+    expect(html).toContain('ends 4567');
+    expect(html).toContain('20260926-0003, 20260926-0009');
+    // The automatic offer is not listed under "Given by" with the staff.
+    const who = html.slice(html.indexOf('<h2>Discounts — who</h2>'), html.indexOf('<h2>Standing offers</h2>'));
+    expect(who).toContain('Test Cashier');
+    expect(who).not.toContain('automatic offer');
+    expect(html.slice(html.indexOf('<h2>Standing offers</h2>'))).toContain('Test WhatsApp 10% (automatic offer)');
+
+    const csv = buildTabCsv('team', team as never, period, SAT_3PM);
+    expect(csv).toContain('ONCE A CUSTOMER A DAY, GIVEN MORE THAN ONCE');
+    expect(csv).toContain('2026-09-26,Test once a day,ends 4567,"20260926-0003, 20260926-0009",40.00');
+    expect(csv).toContain('Taken by,Orders asked,Phone or WhatsApp,With an offer,Offers took off Rs,Flag');
+  });
+});

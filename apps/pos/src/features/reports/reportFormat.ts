@@ -13,6 +13,7 @@ import type {
   ReportFoodCost,
   ReportMissingCostWhy,
   ReportOfferCheck,
+  ReportOfferRepeat,
   ReportOrderStock,
   ReportPaymentGroup,
   ReportPurchaseIngredientLine,
@@ -54,10 +55,31 @@ export function offerCheckNote(c: ReportOfferCheck): string {
   const factor = (c.factorPct / 100).toLocaleString('en-PK', { maximumFractionDigits: 2 });
   const share = `${(c.phoneShareBps / 100).toLocaleString('en-PK', { maximumFractionDigits: 1 })}%`;
   return (
-    `Counter takeaways and deliveries only. The shop this period: ${share} marked Phone or WhatsApp, ${formatCents(c.offerCentsPerOrder)} of offers an order. ` +
-    `Flagged: over ${factor} × either, with at least ${c.minOrders} counter orders. Check those orders' phones against the customers.`
+    `Counter takeaways and deliveries where Walk-in, Phone or WhatsApp was tapped; orders nobody was asked about are left out. ` +
+    `The shop this period: ${share} marked Phone or WhatsApp, ${formatCents(c.offerCentsPerOrder)} of offers an order. ` +
+    `Flagged: over ${factor} × either, on at least ${c.minMarked} such orders. Check those orders' phones against the customers. ` +
+    `Fairest with “Ask how every order came in” on (Settings → Money & discounts).`
   );
 }
+
+/** One phone that got a "once a customer a day" offer twice on one day, in words (Team & leakage). */
+export function offerRepeatLine(r: Pick<ReportOfferRepeat, 'day' | 'offerName' | 'phoneEnds' | 'orderNumbers'>): {
+  day: string;
+  offer: string;
+  phone: string;
+  orders: string;
+} {
+  return {
+    day: fmtDay(r.day, false),
+    offer: r.offerName,
+    phone: r.phoneEnds ? `ends ${r.phoneEnds}` : '—',
+    orders: r.orderNumbers.join(', '),
+  };
+}
+
+/** The note under "Once a customer a day, given more than once". */
+export const OFFER_REPEATS_NOTE =
+  'Each till checks that phone’s other orders first, but with the link between the tills down each can give it once. Check these orders.';
 
 /**
  * Website orders (pick-up and delivery) against everything rung up at the

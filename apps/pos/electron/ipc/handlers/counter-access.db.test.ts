@@ -1031,6 +1031,15 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
     const order = await data<{ id: string }>('orders:create', { mode: 'takeaway', cameBy: 'walk_in' });
     expect(await call('orders:setCameBy', { orderId: order.id, cameBy: 'whatsapp' })).toMatchObject({ ok: true });
     expect(await call('orders:create', { mode: 'takeaway', cameBy: 'carrier-pigeon' })).toMatchObject({ ok: false, code: 'validation_failed' });
+    // A sent order (out with the rider): a cashier alone is refused, and a PIN that is not a
+    // manager's is refused too — nothing written either way.
+    const before = ['audit_log', 'sync_queue'].map((t) => db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.['n']);
+    const cameByOf = () => db.prepare(`SELECT came_by FROM orders WHERE id = ?`).get(s.boardOld)?.['came_by'] ?? null;
+    const was = cameByOf();
+    expect(await call('orders:setCameBy', { orderId: s.boardOld, cameBy: 'whatsapp' })).toMatchObject({ ok: false, code: 'precondition_failed' });
+    expect(await call('orders:setCameBy', { orderId: s.boardOld, cameBy: 'whatsapp', approverPin: 'not-a-manager' })).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(cameByOf()).toBe(was);
+    expect(['audit_log', 'sync_queue'].map((t) => db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.['n'])).toEqual(before);
   });
 
   it('a cashier gets the owner’s deal on a foodpanda order automatically, and can’t change or take it off without a manager', async () => {

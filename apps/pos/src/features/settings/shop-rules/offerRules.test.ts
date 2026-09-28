@@ -12,6 +12,8 @@ import {
   offersFromForm,
   offersSummary,
   offersToForm,
+  formWithOfferSwitched,
+  withOfferSwitched,
 } from './offerRules';
 import { withCameByNeeded, CAME_BY_NEEDED } from '../../checkout/useTenderGate';
 
@@ -125,5 +127,26 @@ describe('Send and Pay wait for a came-by button when the owner asks', () => {
     expect(withCameByNeeded(ok, { askCameBy: false, mode: 'delivery', source: 'pos', cameBy: null })).toBe(ok);
     expect(withCameByNeeded(ok, { askCameBy: true, mode: 'foodpanda', source: 'pos', cameBy: null })).toBe(ok);
     expect(withCameByNeeded(ok, { askCameBy: true, mode: 'delivery', source: 'web', cameBy: null })).toBe(ok);
+  });
+});
+
+describe('the on / off switch on an offer’s row (saved at once)', () => {
+  it('saves the SAVED offers with only that one switched, and keeps everything typed and not saved on the card', () => {
+    const saved = { v: 1 as const, askCameBy: false, offers: [offer(), offer({ id: 'test-2', name: 'Test second' })] };
+    // The owner is half-way through renaming the second offer, then switches the first off from its row.
+    const typed = offersToForm(saved);
+    typed.offers[1] = { ...typed.offers[1]!, name: 'Test second, renamed' };
+    const sent = withOfferSwitched(saved, 'test-wa');
+    expect(sent.offers.map((o) => [o.name, o.on])).toEqual([
+      ['Test WhatsApp 10%', false],
+      ['Test second', true],
+    ]);
+    expect(saved.offers[0]!.on).toBe(true);
+    const after = formWithOfferSwitched(typed, 'test-wa', false);
+    expect(after.offers.map((o) => [o.name, o.on])).toEqual([
+      ['Test WhatsApp 10%', false],
+      ['Test second, renamed', true],
+    ]);
+    expect(withOfferSwitched(sent, 'test-wa').offers[0]!.on).toBe(true);
   });
 });

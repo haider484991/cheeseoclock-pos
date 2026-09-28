@@ -42,6 +42,8 @@ import {
   offersFromForm,
   offersSummary,
   offersToForm,
+  formWithOfferSwitched,
+  withOfferSwitched,
   type OfferForm,
 } from './shop-rules/offerRules';
 
@@ -92,11 +94,10 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
 
   /** On / off from the row, saved at once (the saved offers, with only this one switched). */
   function quickSwitch(o: ChannelOffer) {
-    const value: DiscountOffers = { ...card.value, offers: card.value.offers.map((x) => (x.id === o.id ? { ...x, on: !x.on } : x)) };
-    s.save.mutate(value, {
+    s.save.mutate(withOfferSwitched(card.value, o.id), {
       onSuccess: () => {
         // Anything typed and not saved stays, with the switch as saved.
-        if (draft.touched) setOffer(o.id, { on: !o.on });
+        if (draft.touched) draft.set(formWithOfferSwitched(draft.form, o.id, !o.on));
       },
     });
   }

@@ -160,14 +160,25 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
    */
   async function commitCustomer(orderId: string, purpose: string): Promise<void> {
     // Lazy-imported to avoid a circular dep with the checkout feature.
-    const { commitCustomerToOrder } = await import('../features/checkout/CustomerInlinePanel');
-    const { getCustomerFormSnapshot } = await import('../features/checkout/useCustomerForm');
+    const { commitCustomerToOrder, formAfterCommit } = await import('../features/checkout/CustomerInlinePanel');
+    const { getCustomerFormSnapshot, setCustomerForm } = await import('../features/checkout/useCustomerForm');
     const form = getCustomerFormSnapshot();
-    const sig = JSON.stringify({ orderId, mode: get().mode, form });
+    const mode = get().mode;
+    const sig = JSON.stringify({ orderId, mode, form });
     if (sig === committed) return;
     try {
-      await commitCustomerToOrder(orderId, get().mode, form);
-      committed = sig;
+      const saved = await commitCustomerToOrder(orderId, mode, form);
+      // The form now points at the customer and address it saved, so a later
+      // save (the note changed after Pay was closed) reuses them instead of
+      // adding the address — or a nameless customer — a second time. Only
+      // when nothing was typed meanwhile.
+      if (saved && getCustomerFormSnapshot() === form) {
+        const next = formAfterCommit(form, saved);
+        setCustomerForm(next);
+        committed = JSON.stringify({ orderId, mode, form: next });
+      } else {
+        committed = sig;
+      }
     } catch (e) {
       // Don't block the sale on customer-write failure — surface via log.
       console.warn(`Customer commit failed (proceeding with ${purpose}):`, e);

@@ -491,6 +491,38 @@ describe.skipIf(!Sqlite)('one discount per order', () => {
     expect(liveDiscounts(orderId)).toMatchObject([{ source: 'offer', amount_cents: 25_000 }]);
   });
 
+  it('an F3 discount over the limit, approved with a manager’s PIN, replaces the offer; the next cart change keeps it; clearing it brings the offer back', async () => {
+    await saveOffers([offer({ cameBy: 'any' })]);
+    const orderId = await counterOrder();
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 20, reason: 'Complaint', approverPin: MANAGER_SECRET });
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: null, value: 20, amount_cents: 40_000, approved_by_user_id: 'u_mgr' }]);
+    expect(audits('replaced_offer')).toHaveLength(1);
+    await data('orders:addItem', { orderId, menuItemId: menu.side, quantity: 1 });
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: null, value: 20, amount_cents: 50_000 }]);
+    await data('orders:clearDiscount', { orderId });
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: 'offer', amount_cents: 25_000 }]);
+  });
+
+  it('when the approval re-check takes a cashier’s F3 discount off, the offer goes back on in the same step — Pay never charges the full price', async () => {
+    // Review 28 Sep (money): the offer step ran before the re-check, saw the F3 row, and nothing asked again.
+    await saveOffers([offer({ cameBy: 'any' })]);
+    const orderId = await counterOrder();
+    expect(orderRow(orderId)).toMatchObject({ discount_cents: 20_000 });
+    h.session = CASHIER;
+    // Rs 150 flat on Rs 2,000 of food: 7.5%, inside the limit, no PIN; it replaces the offer.
+    await data('orders:applyDiscount', { orderId, discountType: 'flat', value: 15_000, reason: 'Staff' });
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: null, amount_cents: 15_000 }]);
+    // The Rs 1,000 pizza comes off: Rs 150 is now 15% of Rs 1,000 of food — over the limit, taken off.
+    const pizza = (await snap(orderId)).items.find((i) => i.menuItemName === 'Test Pizza')!;
+    await data('orders:removeItem', { orderId, orderItemId: pizza.id });
+    expect(audits('auto_clear_needs_approval')).toHaveLength(1);
+    // The owner's 10% is back on the Rs 1,000 of food: Rs 100 off; tax 16% of (900 + 200) = Rs 176.
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: 'offer', amount_cents: 10_000 }]);
+    expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 120_000, discount_cents: 10_000, tax_cents: 17_600, total_cents: 127_600 });
+    expect(chainOk()).toBe(true);
+  });
+
   it('the × takes the offer off THIS order (Rs 0, no PIN) and it stays off; "Put it back" brings it back', async () => {
     await saveOffers([offer({ cameBy: 'any' })]);
     const orderId = await counterOrder();
@@ -580,6 +612,41 @@ describe.skipIf(!Sqlite)('abuse controls', () => {
     expect(liveDiscounts(orderId)).toEqual([]);
   });
 
+  it('“the customer’s phone” is a phone: a customer saved as "1" gets no Phone / WhatsApp or once-a-day offer', async () => {
+    // Review 28 Sep (money): any text counted, so a made-up number claimed the offer on a cash walk-in.
+    await saveOffers([
+      offer({ orderTypes: ['takeaway', 'delivery'] }),
+      offer({ id: 'once', name: 'Test once a day', cameBy: 'any', orderTypes: ['takeaway'], value: 5, oncePerCustomerPerDay: true }),
+    ]);
+    const orderId = await counterOrder({ mode: 'takeaway', cameBy: 'whatsapp', phone: '1' });
+    expect(orderRow(orderId)).toMatchObject({ discount_cents: 0 });
+    expect(liveDiscounts(orderId)).toEqual([]);
+    // A real number, however it is written, does.
+    const real = await counterOrder({ mode: 'takeaway', cameBy: 'whatsapp', phone: '+92 300 123 4567' });
+    expect(orderRow(real)).toMatchObject({ discount_cents: 20_000 });
+  });
+
+  it('once per customer per day, the link back up with both orders on screen: the one started first keeps it, only the later one loses it', async () => {
+    // Review 28 Sep (history): each till saw the other's open order and both took it off.
+    await saveOffers([offer({ cameBy: 'any', oncePerCustomerPerDay: true })]);
+    const first = await counterOrder({ phone: PHONE_A, startedAt: '2026-10-02T09:00:00.000Z' });
+    const later = await counterOrder({ phone: PHONE_B, startedAt: '2026-10-02T09:05:00.000Z' });
+    expect([orderRow(first), orderRow(later)]).toMatchObject([{ discount_cents: 20_000 }, { discount_cents: 20_000 }]);
+    // As if each till had given it to the same phone while the link was down.
+    db.prepare(`UPDATE orders SET customer_phone_snapshot = (SELECT customer_phone_snapshot FROM orders WHERE id = ?) WHERE id = ?`).run(first, later);
+    h.session = CASHIER;
+    await data('orders:addItem', { orderId: first, menuItemId: menu.side, quantity: 1 });
+    await data('orders:addItem', { orderId: later, menuItemId: menu.side, quantity: 1 });
+    expect(orderRow(first)).toMatchObject({ discount_cents: 25_000 });
+    expect(orderRow(later)).toMatchObject({ discount_cents: 0 });
+    // One already paid always counts, even against an order started before it.
+    const early = await counterOrder({ startedAt: '2026-10-03T09:00:00.000Z' });
+    const paid = await counterOrder({ phone: PHONE_B, startedAt: '2026-10-03T09:05:00.000Z' });
+    await pay(paid);
+    await savePhone(early, PHONE_B);
+    expect(orderRow(early)).toMatchObject({ discount_cents: 0 });
+  });
+
   it('once per customer per day: that phone’s second order today gets none; another phone does; the next trading day it does again', async () => {
     await saveOffers([offer({ cameBy: 'any', oncePerCustomerPerDay: true })]);
     const day = '2026-10-02T09:00:00.000Z';
@@ -647,6 +714,18 @@ describe.skipIf(!Sqlite)('history never moves', () => {
     expect(orderRow(await counterOrder())).toMatchObject({ discount_cents: 0 }); // switched off: none
     expect({ row: orderRow(paid), receipt: receiptText(await snap(paid)), fbr: fbrLines(await snap(paid)) }).toEqual(paidBefore);
   });
+
+  it('a Save adding a BIGGER offer does not move an order already on screen either; a new order gets the bigger one', async () => {
+    // Review 28 Sep (history): the new 15% replaced the frozen 10% at the next cart change.
+    await saveOffers([offer({ cameBy: 'any' })]);
+    const open = await counterOrder();
+    expect(liveDiscounts(open)).toMatchObject([{ reason: 'Test WhatsApp 10%', amount_cents: 20_000 }]);
+    await saveOffers([offer({ cameBy: 'any' }), offer({ id: 'test-15', name: 'Test 15%', cameBy: 'any', value: 15 })]);
+    h.session = CASHIER;
+    await data('orders:addItem', { orderId: open, menuItemId: menu.side, quantity: 1 });
+    expect(liveDiscounts(open)).toMatchObject([{ reason: 'Test WhatsApp 10%', amount_cents: 25_000 }]);
+    expect(liveDiscounts(await counterOrder())).toMatchObject([{ reason: 'Test 15%', amount_cents: 30_000 }]);
+  });
 });
 
 describe.skipIf(!Sqlite)('Reports', () => {
@@ -688,10 +767,63 @@ describe.skipIf(!Sqlite)('Reports', () => {
     const one = team.staff.find((s) => s.key === 'u_cash')!;
     const two = team.staff.find((s) => s.key === 'u_cash2')!;
     expect(one).toMatchObject({ counterOrders: 20, phoneOrWhatsapp: 20, offerCount: 20, offerCents: 400_000, discountCents: 0, flags: ['phone_share', 'offer_rupees'] });
-    expect(two).toMatchObject({ counterOrders: 21, phoneOrWhatsapp: 0, offerCents: 0 });
+    // The takeaway nobody asked about is not in the check.
+    expect(two).toMatchObject({ counterOrders: 20, phoneOrWhatsapp: 0, offerCents: 0 });
     expect(two.flags).toBeUndefined();
-    // The shop's rates the flags are against: 20 of 41 counter orders marked WhatsApp.
-    expect(team.offerCheck).toMatchObject({ counterOrders: 41, phoneOrWhatsapp: 20, phoneShareBps: 4_878, factorPct: 150, minOrders: 20 });
+    // The shop's rates the flags are against: 20 of the 40 asked counter orders marked WhatsApp.
+    expect(team.offerCheck).toMatchObject({ counterOrders: 40, phoneOrWhatsapp: 20, offerOrders: 20, phoneShareBps: 5_000, factorPct: 150, minMarked: 2 });
+    expect(team.offerRepeats).toEqual([]);
+  });
+
+  it('Team & leakage compares on the orders whose way in was tapped: orders nobody was asked about never dilute the shop and flag an honest cashier', async () => {
+    // Review 28 Sep (history + screens): orders nobody was asked about diluted the shop's rate.
+    await saveOffers([offer({ cameBy: ['whatsapp'], orderTypes: ['takeaway', 'delivery'] })]);
+    const ring = async (n: number, opts: Parameters<typeof counterOrder>[0], who: AuthenticatedUser) => {
+      for (let i = 0; i < n; i += 1) await pay(await counterOrder({ ...opts, who }), who);
+    };
+    // Cashier one: 4 WhatsApp (with the offer) and 6 walk-ins. Cashier two: 3 WhatsApp, 7 walk-ins, and 10 nobody asked about.
+    await ring(4, { mode: 'takeaway', cameBy: 'whatsapp', phone: PHONE_A }, CASHIER);
+    await ring(6, { mode: 'takeaway', cameBy: 'walk_in' }, CASHIER);
+    await ring(3, { mode: 'takeaway', cameBy: 'whatsapp', phone: PHONE_B }, CASHIER_2);
+    await ring(7, { mode: 'takeaway', cameBy: 'walk_in' }, CASHIER_2);
+    await ring(10, { mode: 'takeaway' }, CASHIER_2);
+    const { buildTeamTab } = await import('../../services/business-report.js');
+    const team = buildTeamTab(db as never, NOW_RANGE());
+    // The shop: 7 of 20 asked (35%). Cashier one's 40% is under 1.5 × (52.5%): no flag.
+    expect(team.offerCheck).toMatchObject({ counterOrders: 20, phoneOrWhatsapp: 7, phoneShareBps: 3_500 });
+    expect(team.staff.find((s) => s.key === 'u_cash')).toMatchObject({ counterOrders: 10, phoneOrWhatsapp: 4, offerCount: 4 });
+    expect(team.staff.find((s) => s.key === 'u_cash')?.flags).toBeUndefined();
+    expect(team.staff.find((s) => s.key === 'u_cash2')).toMatchObject({ orderCount: 20, counterOrders: 10, phoneOrWhatsapp: 3 });
+  });
+
+  it('Standing offers keep a renamed offer’s older orders under the name their bills printed', async () => {
+    // Review 28 Sep (history): grouped by id only, and named after the newest row.
+    await saveOffers([offer({ cameBy: 'any' })]);
+    await pay(await counterOrder({ phone: PHONE_A }));
+    await saveOffers([offer({ cameBy: 'any', name: 'Test renamed 10%' })]);
+    await pay(await counterOrder({ phone: PHONE_A }));
+    const { buildTeamTab } = await import('../../services/business-report.js');
+    const standing = buildTeamTab(db as never, NOW_RANGE()).discounts.standing ?? [];
+    expect([...standing].sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: 'Test renamed 10% (automatic offer)', count: 1, amountCents: 20_000 },
+      { name: 'Test WhatsApp 10% (automatic offer)', count: 1, amountCents: 20_000 },
+    ]);
+  });
+
+  it('a once-a-day offer one phone got twice on one day (the link between the tills was down) is listed, by the phone’s last four digits', async () => {
+    // The owner's design: "with the link down it can repeat once on the other till, which Reports show".
+    await saveOffers([offer({ cameBy: 'any', oncePerCustomerPerDay: true })]);
+    const day = new Date().toISOString().slice(0, 10);
+    const first = await counterOrder({ phone: PHONE_A, startedAt: `${day}T00:10:00.000Z` });
+    const second = await counterOrder({ phone: PHONE_B, startedAt: `${day}T00:20:00.000Z` });
+    await pay(first);
+    await pay(second);
+    // As the other till's order arrived once the link was back: the same phone, the same day.
+    db.prepare(`UPDATE orders SET customer_phone_snapshot = (SELECT customer_phone_snapshot FROM orders WHERE id = ?) WHERE id = ?`).run(first, second);
+    const numbers = [first, second].map((id) => String(db.prepare(`SELECT order_number FROM orders WHERE id = ?`).get(id)?.['order_number']));
+    const { buildTeamTab } = await import('../../services/business-report.js');
+    const team = buildTeamTab(db as never, { sinceIso: `${day}T00:00:00.000Z`, untilIso: new Date(Date.now() + 3_600_000).toISOString() });
+    expect(team.offerRepeats).toEqual([{ day, offerName: 'Test WhatsApp 10%', phoneEnds: '4567', orderNumbers: numbers, amountCents: 40_000 }]);
   });
 });
 
@@ -720,15 +852,34 @@ describe.skipIf(!Sqlite)('only the owner sets the offers', () => {
     expect(await data('settings:getBusiness', { key: 'discounts.offers' })).toMatchObject({ isDefault: false, value: { askCameBy: true } });
   });
 
-  it('saved by a newer version of the app (a field inside an offer this version does not know): used for what it knows, read-only, never saved over', async () => {
+  it('the counter keeps its answer across the day change, so an offer that starts tomorrow is already in it (the screen checks each order’s start); off and ended ones are not', async () => {
+    // Review 28 Sep (screens): read the evening before, an offer starting the next day was missing on that day.
+    const tomorrow = offer({ id: 'sat', name: 'Test from tomorrow', startsOn: '2026-10-03' });
+    await saveOffers([tomorrow, offer({ id: 'off', name: 'Test off', on: false }), offer({ id: 'ended', name: 'Test ended', endsOn: '2026-10-01' })]);
+    const { checkoutRules } = await import('../../services/shop-settings.js');
+    // Friday 2 October, 22:00 Pakistan time.
+    expect(checkoutRules(db as never, new Date('2026-10-02T17:00:00.000Z')).offers).toEqual({ askCameBy: false, offers: [tomorrow] });
+  });
+
+  it('saved by a newer version of the app (a field inside an offer this version does not know): never put on here, read-only, never saved over', async () => {
     await saveOffers([offer({ cameBy: 'any' })]);
+    // An order already carrying the offer keeps its frozen terms.
+    const open = await counterOrder();
+    expect(orderRow(open)).toMatchObject({ discount_cents: 20_000 });
     db.prepare(`UPDATE business_settings SET value_json = ?, version = version + 1 WHERE key = 'discounts.offers'`).run(
       JSON.stringify({ v: 1, askCameBy: false, offers: [{ ...offer({ cameBy: 'any' }), items: ['test-item'] }] }),
     );
     h.session = OWNER;
     expect(await data('settings:getBusiness', { key: 'discounts.offers' })).toMatchObject({ readOnly: true });
-    // The offer still works here, from what this version knows.
-    expect(orderRow(await counterOrder())).toMatchObject({ discount_cents: 20_000 });
+    // Review 28 Sep (history): automatic money fails closed. "Rs 200 off these items only", read here
+    // without its items, would come off every order — so none of those offers goes on here…
+    expect(orderRow(await counterOrder())).toMatchObject({ discount_cents: 0 });
+    // …the counter is not promised any…
+    h.session = CASHIER;
+    expect((await data<CheckoutRules>('checkout:getRules')).offers).toEqual({ askCameBy: false, offers: [] });
+    // …and the order that had one keeps it.
+    await data('orders:addItem', { orderId: open, menuItemId: menu.side, quantity: 1 });
+    expect(orderRow(open)).toMatchObject({ discount_cents: 25_000 });
     h.session = OWNER;
     expect(await call('settings:setBusiness', { key: 'discounts.offers', value: { v: 1, askCameBy: false, offers: [] } })).toMatchObject({
       ok: false,

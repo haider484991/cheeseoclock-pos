@@ -134,16 +134,18 @@ export interface ReportStaffLine {
   reprints?: number;
   /**
    * The owner's abuse check on automatic offers: the counter takeaway and
-   * delivery orders this person took, how many of them were marked Phone or
-   * WhatsApp, and what the offers took off their orders. An offer is money
-   * a cashier could claim by tapping the wrong chip on a cash sale. Absent
-   * from a till before the automatic offers.
+   * delivery orders this person took whose way in was tapped (Walk-in,
+   * Phone or WhatsApp — orders nobody was asked about are left out), how
+   * many of them were marked Phone or WhatsApp, and how many an offer took
+   * something off, and how much. An offer is money a cashier could claim by
+   * tapping the wrong chip on a cash sale. Absent from a till before the
+   * automatic offers.
    */
   counterOrders?: number;
   phoneOrWhatsapp?: number;
   offerCount?: number;
   offerCents?: number;
-  /** Over 1.5 × the shop's rate this period (with enough orders to tell). */
+  /** Over 1.5 × the shop's rate this period (on at least two such orders). */
   flags?: OfferFlag[];
 }
 
@@ -940,6 +942,12 @@ export interface ReportTeamTab extends ReportTabBase {
   /** The shop's own rates the staff's "Came by & offers" figures are flagged against. Absent from a till before the automatic offers. */
   offerCheck?: ReportOfferCheck;
   /**
+   * "Once a customer a day" offers one phone got more than once on the same
+   * trading day (with the link between the tills down, each till can give it
+   * once). Sent or paid orders only. Absent from a till before the automatic offers.
+   */
+  offerRepeats?: ReportOfferRepeat[];
+  /**
    * Whether the Stock column may show what wasted food cost ("Wasted · Rs
    * 180"): null for a login without COST_CAPABILITY (those rupees are 0).
    */
@@ -1507,18 +1515,33 @@ export interface OwnerWeek {
 
 /**
  * The shop's own rates this period, for Team & leakage's "Came by & offers":
- * of the counter takeaway and delivery orders, the share marked Phone or
- * WhatsApp, and the offers' rupees per order. A cashier over
- * `factorPct` % of either (150 = 1.5 ×), with at least `minOrders` counter
- * orders, is flagged.
+ * of the counter takeaway and delivery orders whose way in was tapped, the
+ * share marked Phone or WhatsApp, and the offers' rupees per order. A
+ * cashier over `factorPct` % of either (150 = 1.5 ×), on at least
+ * `minMarked` such orders of their own, is flagged.
  */
 export interface ReportOfferCheck {
   counterOrders: number;
   phoneOrWhatsapp: number;
+  offerOrders: number;
   offerCents: number;
   /** Basis points of the counter orders (2500 = 25%). */
   phoneShareBps: number;
   offerCentsPerOrder: number;
   factorPct: number;
-  minOrders: number;
+  minMarked: number;
+}
+
+/** One phone that got a "once a customer a day" offer more than once on one trading day (Team & leakage). */
+export interface ReportOfferRepeat {
+  /** The trading day (YYYY-MM-DD, from 05:00). */
+  day: string;
+  /** The offer, by the name its bills printed (the first order's). */
+  offerName: string;
+  /** The customer's phone: its last four digits only, so the printout carries no number. */
+  phoneEnds: string;
+  /** The orders that got it, earliest first. */
+  orderNumbers: string[];
+  /** What it took off them, together. */
+  amountCents: number;
 }

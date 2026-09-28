@@ -202,6 +202,20 @@ export function offersFromForm(f: OffersForm): Parsed<DiscountOffers> {
   return { value: { v: SHOP_SETTING_FORMAT['discounts.offers'], askCameBy: f.askCameBy, offers }, problem: null };
 }
 
+/**
+ * An offer's on / off switch on its row, saved at once: the SAVED offers
+ * with only this one switched — nothing typed and not yet saved goes with
+ * it (it is saved by Save, or not at all).
+ */
+export function withOfferSwitched(saved: DiscountOffers, id: string): DiscountOffers {
+  return { ...saved, offers: saved.offers.map((o) => (o.id === id ? { ...o, on: !o.on } : o)) };
+}
+
+/** The form after the switch was saved: that offer's switch as saved, everything else typed kept. */
+export function formWithOfferSwitched(form: OffersForm, id: string, on: boolean): OffersForm {
+  return { ...form, offers: form.offers.map((o) => (o.id === id ? { ...o, on } : o)) };
+}
+
 // -------------------------------------------------------------- words --
 
 /** "10% off", "Rs 300 off". */
