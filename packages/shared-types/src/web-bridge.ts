@@ -84,20 +84,30 @@ export interface PublishedMenu {
 // item. Schema: @cheeseoclock/shared-schemas publishedSettingsSchema (Zod;
 // non-strict, unknown fields are dropped). Money in paisa, whole rupees.
 //
-// THE STAMP. `settingsRev` = the sum of the carried keys' row versions on
-// the till (PUBLISHED_SETTING_KEYS), `settingsAt` = the newest of their
-// updated_at. The tills settle each key by (version, updated_at), so this
-// pair only ever grows as the tills agree; compare with compareSettingsStamp
-// (rev first, then settingsAt). Wall-clock order is NOT the order: a till
-// that saved twice offline wins with an older time.
+// THE STAMP. Three numbers, compared in this order (compareSettingsStamp):
+// `settingsRev` = the sum of the carried keys' row versions on the till
+// (PUBLISHED_SETTING_KEYS), `settingsAt` = the newest of their updated_at,
+// `settingsTie` = the SUM of their updated_at in ms. The tills settle each
+// key by (version, updated_at), so the settled state is at least as new as
+// any till's, key by key — and any state that differs from it compares
+// strictly older on these three (the sum and the newest time alone did not:
+// two area lists saved offline at the same version could share them).
+// Wall-clock order is NOT the order: a till that saved twice offline wins
+// with an older time. `deviceId` = the till that sent the block.
 //
 // WHEN THE TILL SENDS ONE. Only once one of the carried keys is saved on
 // either till (settingsRev >= 1): until then no block is ever sent and the
 // website stays exactly as today. From then on every menu publish carries
 // the block, and ANY till with the website link publishes by itself when
-// its stamp is newer than the one the website last confirmed to it
-// (data.settingsRev / data.settingsAt of the 200 below) — a Save there, or
-// one synced from the other till. The WEBSITE decides what it stores.
+// the website needs it (websiteNeedsSettings in the till): the website holds
+// no block, an older stamp, a block its stored menu lacks a fee item for
+// (settingsProblem below), or this till's own block while this till has
+// saved since at a later time (after a restore from an older backup its
+// versions went back). A Save there, or one synced from the other till.
+// The WEBSITE decides what it stores. A block the website refused, or one
+// the till's own check stopped, is not sent again by itself until the stamp
+// changes (only the owner's Publish sends the menu then): a Save must not
+// push unpublished menu changes to the website every half hour.
 //
 // WHAT THE WEBSITE DOES with a PUT /api/bridge/menu, in ONE SQL statement on
 // the site_menu row (a read-then-write lets an older till wipe a newer block):
@@ -117,27 +127,36 @@ export interface PublishedMenu {
 //        no stored block either);
 //      - a block whose stamp is OLDER than the stored one (compareSettingsStamp
 //        < 0) is dropped, the stored block kept, the menu still stored →
-//        'ignored_older';
+//        'ignored_older' — UNLESS the stored block came from the same till
+//        (deviceId) and this one's settingsAt is later: a till may always
+//        replace its own block with a later Save;
 //      - otherwise (newer or EQUAL) the block is stored with the menu → 'stored'.
-//   4. 200 { ok:true, data: PublishMenuResult }, data.settingsAt /
-//      data.settingsRev = the block stored now (null when none).
-//      revalidatePath after anything was stored.
+//   4. 200 { ok:true, data: PublishMenuResult }: data.settingsAt /
+//      settingsRev / settingsTie / settingsDeviceId = the block held now
+//      (null when none), and data.settingsProblem = settingsBlockProblem of
+//      that held block against the menu stored now (null when it fits): a
+//      kept block may meet a menu from a till that has not received its fee
+//      item yet. revalidatePath after anything was stored.
+//   GET /api/bridge/status answers the same under data.settings
+//   (WebsiteSettingsHeld; null = no block), so a till can see a website that
+//   lost its block (a database rollback).
 //
 // WHAT THE TILL DOES WITH THE ANSWER (web-orders-bridge publishMenu):
-//   - 200 with data.settings 'stored' | 'ignored_older' | 'kept': the block
-//     (or a newer one) is on the website; the till records the higher of
-//     its stamp and data's, and sends again only when it has a newer one;
+//   - 200 with data.settings: it records what the website holds (stamp,
+//     device, problem) and sends again only when websiteNeedsSettings says;
 //   - 200 WITHOUT data.settings: a website older than the block (it dropped
 //     it, the menu is stored); Settings says the website needs its update;
-//   - 400 { ok:false, error:'settings_invalid', message }: the till sends
-//     the same menu again WITHOUT the block (so the menu still goes) and
-//     shows `message` to the owner. Keep that body shape exactly: any other
-//     failure is treated as a failed publish and retried.
+//   - 400 { ok:false, error:'settings_invalid', message }: a Publish sends
+//     the same menu again WITHOUT the block (so the menu still goes); the
+//     till's own publish of the block stops there. Either way `message` is
+//     shown to the owner. Keep that body shape exactly: any other failure is
+//     treated as a failed publish and retried.
 //
-// Because a kept block may meet a menu from an older till that lacks its
-// fee item, the order route looks a zone's item up in the stored menu by
-// feeItemId, then by name and price (today's findDeliveryChargeItem), then
-// writes today's "add the delivery charge by hand" note.
+// Because a kept block may meet a menu that lacks its fee item, the order
+// route looks a zone's item up in the stored menu by feeItemId, then by name
+// and price (today's findDeliveryChargeItem), then writes today's "add the
+// delivery charge by hand" note — the block and the menu from ONE read, so a
+// publish landing in between can't pair an area with another menu's items.
 //
 // ZONES. The till sends EVERY area it has ever had (switched-off ones with
 // active:false; an id never changes and is never removed; the 21 compiled
@@ -203,6 +222,10 @@ export interface PublishedSettings {
   settingsAt: string;
   /** Sum of the carried keys' row versions on the till (0 = none saved). */
   settingsRev: number;
+  /** Sum of the carried keys' updated_at, in ms since 1970 (0 = none saved): the stamp's third number. */
+  settingsTie: number;
+  /** The till that sent it (its device id): a till may replace its own block with a later Save. */
+  deviceId: string;
   pickup: PublishedPickup;
   /** Every area, in display order. */
   zones: PublishedZone[];
@@ -212,8 +235,10 @@ export interface PublishedSettings {
  * Where this till's settings block stands with the website (the bridge's
  * status, Settings → Online orders):
  *  - 'none': nothing to send (no setting in the block is saved on either till);
- *  - 'published': the website holds this till's block, or a newer one (`at`);
- *  - 'waiting': a newer block is waiting to go (no website link, offline, retrying);
+ *  - 'published': the website holds exactly this till's settings, fitting its menu (`at`: when it said so);
+ *  - 'waiting': the website does not hold them yet (no website link, offline,
+ *    a newer block from the other till the link has not brought here, a
+ *    menu missing a fee item) — `message` says which;
  *  - 'refused': the block did not go (`message`: why, in the owner's words);
  *  - 'unsupported': the website is older than the settings block (update it).
  */
@@ -235,19 +260,38 @@ export interface PublishMenuResult {
   /** The block the website holds now (after this publish); null = none. */
   settingsAt?: string | null;
   settingsRev?: number | null;
+  settingsTie?: number | null;
+  /** The till that sent the block the website holds. */
+  settingsDeviceId?: string | null;
+  /**
+   * Why the block the website holds does not fit the menu it holds now (an
+   * active area's fee item missing — a till behind on the link published),
+   * in the owner's words; null when it fits or there is no block.
+   */
+  settingsProblem?: string | null;
 }
 
-/** A block's stamp. */
+/** A block's stamp. `settingsTie` is absent only from a record made before it existed (it then decides nothing). */
 export interface SettingsStamp {
   settingsRev: number;
   settingsAt: string;
+  settingsTie?: number | null;
+}
+
+/** What the website holds (GET /api/bridge/status's data.settings; the same fields as PublishMenuResult's). */
+export interface WebsiteSettingsHeld {
+  settingsRev: number;
+  settingsAt: string;
+  settingsTie: number | null;
+  settingsDeviceId: string | null;
+  settingsProblem: string | null;
 }
 
 /**
  * Order two blocks' stamps: negative when `a` is older than `b`, 0 when
  * the same, positive when newer. The revision first (the tills settle each
- * key by version first), then the time. An unreadable time counts as the
- * oldest.
+ * key by version first), then the newest time, then the sum of the times.
+ * An unreadable time counts as the oldest.
  */
 export function compareSettingsStamp(a: SettingsStamp, b: SettingsStamp): number {
   if (a.settingsRev !== b.settingsRev) return a.settingsRev < b.settingsRev ? -1 : 1;
@@ -255,7 +299,11 @@ export function compareSettingsStamp(a: SettingsStamp, b: SettingsStamp): number
   const tb = Date.parse(b.settingsAt);
   const x = Number.isFinite(ta) ? ta : -Infinity;
   const y = Number.isFinite(tb) ? tb : -Infinity;
-  return x === y ? 0 : x < y ? -1 : 1;
+  if (x !== y) return x < y ? -1 : 1;
+  const ia = a.settingsTie;
+  const ib = b.settingsTie;
+  if (typeof ia !== 'number' || typeof ib !== 'number' || ia === ib) return 0;
+  return ia < ib ? -1 : 1;
 }
 
 /**

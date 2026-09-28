@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DELIVERY_PLACES } from '@cheeseoclock/shared-types';
 import { DELIVERY_AREAS, feeText, getArea } from './areas';
+import { DEFAULT_FACTS } from './delivery-facts';
 import { DELIVERY_ZONES } from './delivery-zones';
 
 describe('delivery area pages', () => {
@@ -10,9 +11,9 @@ describe('delivery area pages', () => {
   });
 
   it('price every page from the shared zone list', () => {
-    for (const a of DELIVERY_AREAS) expect(() => feeText(a)).not.toThrow();
-    expect(feeText(getArea('dha-phase-6')!)).toBe('Rs 200 delivery');
-    expect(feeText(getArea('clifton')!)).toMatch(/^Rs 200.250 delivery$/);
+    for (const a of DELIVERY_AREAS) expect(() => feeText(a, DEFAULT_FACTS)).not.toThrow();
+    expect(feeText(getArea('dha-phase-6')!, DEFAULT_FACTS)).toBe('Rs 200 delivery');
+    expect(feeText(getArea('clifton')!, DEFAULT_FACTS)).toMatch(/^Rs 200.250 delivery$/);
   });
 
   it('link only to pages that exist', () => {

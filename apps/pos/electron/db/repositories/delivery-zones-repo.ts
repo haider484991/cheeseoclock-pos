@@ -12,6 +12,7 @@ import {
   DELIVERY_CHARGES_CATEGORY_ID_SEED,
   DELIVERY_CHARGES_CATEGORY_NAME,
   deliveryChargeItemIdSeed,
+  deliveryChargeItemName,
   deliveryZoneFeeItemIds,
   isDeliveryChargeName,
   type DeliveryZoneInput,
@@ -103,6 +104,11 @@ export function saveDeliveryZones(
     const previousFeeItemIds = current.isDefault
       ? new Set<string>()
       : deliveryZoneFeeItemIds(current.value.zones);
+    // The fees the list charges now (for the default, today's Rs 200 and Rs 250, charged by
+    // name and price): an item at one of them that no area charges after this Save goes off.
+    const previousFees = new Set(
+      current.value.zones.filter((z) => z.feeCents > 0).map((z) => z.feeCents),
+    );
     const fees = new Set(input.filter((z) => z.feeCents > 0).map((z) => z.feeCents));
     const ownIds = new Set([...fees].map(deliveryChargeItemId));
     const rows = (
@@ -131,6 +137,7 @@ export function saveDeliveryZones(
     const plan = planFeeItems({
       zones: input,
       previousFeeItemIds,
+      previousFees,
       items: candidates,
       idForFee: deliveryChargeItemId,
     });
@@ -141,8 +148,21 @@ export function saveDeliveryZones(
     if (!check.success)
       throw new Error(check.error.issues[0]?.message ?? 'Those delivery areas can’t be saved');
 
+    // A new fee item copies an item the areas charge with — the one kept, else one this Save
+    // switches off (every fee raised at once), else today's by name: its tax (a delivery charge
+    // may be taxed apart from the food), kitchen station and category. The food's tax only when
+    // the shop has no fee item at all.
     const kept = plan.actions.filter((a) => a.kind === 'keep').map((a) => byId.get(a.id)!);
-    const template = kept.find((r) => r.deleted_at === null) ?? null;
+    const switchedOff = plan.actions.filter((a) => a.kind === 'switchOff').map((a) => byId.get(a.id)!);
+    const live = (r: ItemRow | undefined): r is ItemRow => !!r && r.deleted_at === null;
+    const template =
+      kept.find(live) ??
+      switchedOff.find(live) ??
+      rows.find((r) => live(r) && previousFeeItemIds.has(r.id)) ??
+      rows
+        .filter((r) => live(r) && isDeliveryChargeName(r.name))
+        .sort((a, b) => b.is_active - a.is_active || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))[0] ??
+      null;
     let feeCategory: string | null = null;
     const categoryForNew = (): string => {
       feeCategory ??= ensureFeeCategory(db, template?.category_id ?? null, actor);
@@ -195,17 +215,21 @@ export function saveDeliveryZones(
         );
         continue;
       }
-      // keep: on, at exactly its fee, under the fee's name, in a category that is on.
+      // keep: on, at exactly its fee, under the fee's name, in a category that is on. WRITTEN even
+      // when nothing changes: this Save's word that the item is on must reach the other till with
+      // the setting that points at it. Two Saves offline — till A moves every Rs 250 area on (the
+      // Rs 250 item switched off), till B keeps one at Rs 250 — are settled row by row by (version,
+      // time): the item row and the setting then both go to the later Save, so an area never ends
+      // up pointing at an item the other Save switched off.
       const r = byId.get(a.id)!;
-      const patch: Parameters<typeof updateMenuItem>[1] = { id: a.id };
+      const patch: Parameters<typeof updateMenuItem>[1] = { id: a.id, isActive: true };
       if (r.name !== a.name) patch.name = a.name;
       if (r.base_price_cents !== a.feeCents) patch.basePriceCents = a.feeCents;
-      if (r.is_active !== 1) patch.isActive = true;
       if (a.adopted) patch.description = FEE_ITEM_DESCRIPTION;
       // Its category deleted (an older till): it moves to the fee category, or the website never sees it.
       const home = db.prepare(`SELECT 1 AS x FROM categories WHERE id = ? AND deleted_at IS NULL`).get(r.category_id);
       if (!home) patch.categoryId = categoryForNew();
-      if (Object.keys(patch).length > 1) updateMenuItem(db, patch, actor);
+      updateMenuItem(db, patch, actor);
       if (home) ensureCategoryOn(db, r.category_id, actor);
     }
 
@@ -215,6 +239,73 @@ export function saveDeliveryZones(
   });
   tx();
   return saved;
+}
+
+/**
+ * A website order's delivery charge line whose item has not reached this till
+ * yet: the owner saved a new fee on the OTHER till, which made its item
+ * (with the fee's name-based id) and published, and the website charged it
+ * before the till link brought the item here. The item is made here with
+ * that same id — the same row the link then settles — exactly as a Save
+ * makes it, so the order imports with its charge instead of failing until it
+ * is cancelled. Only a Save's own item (the line's id IS the fee's
+ * name-based id, and it is named like a charge) is ever made this way;
+ * anything else is left to the import's "not on the menu" path. Returns the
+ * item id, or null. Runs inside the caller's transaction; synced and audited.
+ */
+export function deliveryChargeItemForWebOrder(
+  db: AppDatabase,
+  line: { posItemId: string; name: string; unitPriceCents: number },
+  actor: Actor,
+): string | null {
+  const fee = line.unitPriceCents;
+  if (!(fee > 0) || fee % 100 !== 0 || !isDeliveryChargeName(line.name)) return null;
+  const id = deliveryChargeItemId(fee);
+  if (line.posItemId !== id) return null;
+  const row = db.prepare(`SELECT id, deleted_at FROM menu_items WHERE id = ?`).get(id) as
+    | { id: string; deleted_at: string | null }
+    | undefined;
+  if (row && row.deleted_at === null) return id;
+  const fromHere = (
+    db
+      .prepare(
+        `SELECT id, name, base_price_cents, is_active, deleted_at, created_at, category_id, tax_category_id,
+                prep_station, sort_order
+           FROM menu_items WHERE deleted_at IS NULL`,
+      )
+      .all() as ItemRow[]
+  ).filter((r) => isDeliveryChargeName(r.name));
+  const template =
+    [...fromHere].sort(
+      (a, b) => b.is_active - a.is_active || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+    )[0] ?? null;
+  const categoryId = ensureFeeCategory(db, template?.category_id ?? null, actor);
+  if (row) {
+    restoreMenuItem(db, id, actor);
+    updateMenuItem(
+      db,
+      { id, name: deliveryChargeItemName(fee), basePriceCents: fee, isActive: true, categoryId },
+      actor,
+    );
+    return id;
+  }
+  const tax = template?.tax_category_id ?? mostUsedTaxCategory(db);
+  if (!tax) return null;
+  createMenuItem(
+    db,
+    {
+      id,
+      categoryId,
+      name: deliveryChargeItemName(fee),
+      description: FEE_ITEM_DESCRIPTION,
+      basePriceCents: fee,
+      prepStation: template?.prep_station ?? 'kitchen',
+      taxCategoryId: tax,
+      sortOrder: Math.max(0, ...fromHere.map((r) => r.sort_order + 1)),
+    },
+    actor,
+  );
+  return id;
 }
 
 /** What Menu shows under a fee item. */

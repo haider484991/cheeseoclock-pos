@@ -17,6 +17,7 @@ import {
 } from './backup-service.js';
 import { sealSecret } from './secret-seal.js';
 import { SYNC_SNAPSHOT_KEYS } from '../db/repositories/sync-repo.js';
+import { deliveryChargeItemForWebOrder } from '../db/repositories/delivery-zones-repo.js';
 import {
   createOrder,
   addOrderItem,
@@ -46,7 +47,7 @@ import { isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
 import { localSettingsStamp, settingsBlockFor } from './website-settings-block.js';
 import { onWebsiteSettingsChanged } from './website-settings-events.js';
 import { readOnlineOptions } from '../db/business-settings-read.js';
-import { websiteDiscountRule } from '@cheeseoclock/pos-domain';
+import { websiteDiscountRule, websiteNeedsSettings } from '@cheeseoclock/pos-domain';
 import { orderAlerts } from './order-alerts-hub.js';
 import {
   CHUNKS_FORMAT,
@@ -66,6 +67,7 @@ import type {
   SettingsStamp,
   WebOrder,
   WebOrderStatus,
+  WebsiteSettingsHeld,
   WebOrdersShiftPause,
   OrderStatus,
 } from '@cheeseoclock/shared-types';
@@ -132,12 +134,16 @@ const SETTINGS_STARTUP_CHECK_MS = 15_000;
 /** A failed settings publish (offline) is retried after this, doubling to SETTINGS_RETRY_MAX_MS. */
 const SETTINGS_RETRY_MIN_MS = 60_000;
 const SETTINGS_RETRY_MAX_MS = 15 * 60_000;
-/** A block the website could not take (older website, refused) is tried again this much later, or at the next Save. */
-const SETTINGS_REFUSED_WAIT_MS = 30 * 60_000;
 /** "Publish the menu to the website by itself": this long after the last menu change. */
 const MENU_AUTO_PUBLISH_DELAY_MS = 5_000;
-/** The settings block the website last confirmed from this till (its stamp and when): survives a restart. */
+/** What the website last said it holds (its block's stamp, device, problem; when it said so): survives a restart. */
 const SETTINGS_CONFIRMED_KEY = 'webBridge.settingsConfirmed';
+/**
+ * Why the block for a stamp did not reach the website (refused, the till's own check, an older
+ * website): that stamp is not sent again by itself — only a new stamp (a Save, a synced change) or
+ * the owner's Publish. Survives a restart, so a restart does not push the menu again either.
+ */
+const SETTINGS_NOTE_KEY = 'webBridge.settingsNote';
 /** Audit history kept in the cloud copy. Local and USB copies are complete. */
 const CLOUD_COPY_AUDIT_DAYS = 90;
 
@@ -189,10 +195,19 @@ interface BridgeStatus {
   settingsPublish: SettingsPublishStatus;
 }
 
-/** What the website last confirmed holding from this till (SETTINGS_CONFIRMED_KEY). */
-interface ConfirmedSettings extends SettingsStamp {
-  /** When the website confirmed it (this till's clock). */
+/** What the website last said it holds (SETTINGS_CONFIRMED_KEY). */
+interface WebsiteHeld {
+  /** Its block's stamp, device and fit with its menu; null = it holds no block. */
+  held: { stamp: SettingsStamp; deviceId: string | null; problem: string | null } | null;
+  /** When it said so (this till's clock). */
   confirmedAt: string;
+}
+
+/** Why the block for a stamp did not reach the website (SETTINGS_NOTE_KEY). */
+interface SettingsNote {
+  stampKey: string;
+  state: 'refused' | 'unsupported';
+  message: string;
 }
 
 /** Just enough to talk to the site: the saved config, or one typed into the onboarding wizard. */
@@ -248,11 +263,13 @@ class WebOrdersBridge {
   /** The next look at whether the website needs this till's settings (after a Save, a sync, a retry). */
   private settingsTimer: NodeJS.Timeout | null = null;
   private settingsPublishing = false;
-  /** Not before this (ms): a back-off after a failed, refused or unsupported settings publish. */
+  /** A Save (or a synced change) arrived while a publish was on its way: look again when it ends. */
+  private settingsRecheck = false;
+  /** Once per start: read what the website holds (GET /api/bridge/status) before deciding. */
+  private settingsHeldRead = false;
+  /** Not before this (ms): a back-off after a failed (offline) settings publish. */
   private settingsNextTryAt = 0;
   private settingsRetryMs = 0;
-  /** Why the last block did not reach the website, for the stamp it was about (status shows it while that stamp is current). */
-  private settingsNote: { stampKey: string; state: 'refused' | 'unsupported'; message: string } | null = null;
   private stopSettingsListener: (() => void) | null = null;
   /** "Publish the menu to the website by itself" (Settings → Online orders): the debounce. */
   private menuTimer: NodeJS.Timeout | null = null;
@@ -260,6 +277,7 @@ class WebOrdersBridge {
   init(db: AppDatabase, deviceId: string): void {
     this.db = db;
     this.deviceId = deviceId;
+    this.settingsHeldRead = false;
     // The areas or the pick-up offer changed — saved here or arrived from the other till: the
     // website gets the newer block from ANY till with the link.
     this.stopSettingsListener?.();
@@ -284,32 +302,113 @@ class WebOrdersBridge {
     this.settingsTimer.unref?.();
   }
 
-  /** What the website last confirmed holding from this till, or null. */
-  private confirmedSettings(): ConfirmedSettings | null {
+  /** What the website last said it holds, or null when it has never said (a website older than the block, or no publish yet). */
+  private websiteHeld(): WebsiteHeld | null {
     if (!this.db) return null;
-    const v = getSettingRaw(this.db, SETTINGS_CONFIRMED_KEY) as Partial<ConfirmedSettings> | null;
-    if (!v || typeof v.settingsRev !== 'number' || typeof v.settingsAt !== 'string' || typeof v.confirmedAt !== 'string') return null;
-    return { settingsRev: v.settingsRev, settingsAt: v.settingsAt, confirmedAt: v.confirmedAt };
+    const v = getSettingRaw(this.db, SETTINGS_CONFIRMED_KEY) as Partial<WebsiteHeld> | null;
+    if (!v || typeof v.confirmedAt !== 'string' || !('held' in v)) return null;
+    const h = v.held;
+    if (h === null) return { held: null, confirmedAt: v.confirmedAt };
+    if (!h || typeof h.stamp?.settingsRev !== 'number' || typeof h.stamp.settingsAt !== 'string') return null;
+    return {
+      held: {
+        stamp: {
+          settingsRev: h.stamp.settingsRev,
+          settingsAt: h.stamp.settingsAt,
+          settingsTie: typeof h.stamp.settingsTie === 'number' ? h.stamp.settingsTie : null,
+        },
+        deviceId: typeof h.deviceId === 'string' ? h.deviceId : null,
+        problem: typeof h.problem === 'string' ? h.problem : null,
+      },
+      confirmedAt: v.confirmedAt,
+    };
+  }
+
+  /** Record what the website says it holds (a publish's 200, or its status read). */
+  private recordWebsiteHeld(data: {
+    settingsRev?: number | null;
+    settingsAt?: string | null;
+    settingsTie?: number | null;
+    settingsDeviceId?: string | null;
+    settingsProblem?: string | null;
+  }): void {
+    if (!this.db) return;
+    const held: WebsiteHeld['held'] =
+      typeof data.settingsRev === 'number' && typeof data.settingsAt === 'string'
+        ? {
+            stamp: {
+              settingsRev: data.settingsRev,
+              settingsAt: data.settingsAt,
+              settingsTie: typeof data.settingsTie === 'number' ? data.settingsTie : null,
+            },
+            deviceId: typeof data.settingsDeviceId === 'string' ? data.settingsDeviceId : null,
+            problem: typeof data.settingsProblem === 'string' && data.settingsProblem ? data.settingsProblem : null,
+          }
+        : null;
+    const value: WebsiteHeld = { held, confirmedAt: nowIso() };
+    setSetting(this.db, SETTINGS_CONFIRMED_KEY, value);
+  }
+
+  /** The note about this stamp (refused, the till's own check, an older website), or null. */
+  private settingsNoteFor(stamp: SettingsStamp): SettingsNote | null {
+    if (!this.db) return null;
+    const v = getSettingRaw(this.db, SETTINGS_NOTE_KEY) as Partial<SettingsNote> | null;
+    if (!v || v.stampKey !== stampKey(stamp) || typeof v.message !== 'string') return null;
+    if (v.state !== 'refused' && v.state !== 'unsupported') return null;
+    return { stampKey: v.stampKey, state: v.state, message: v.message };
   }
 
   /**
-   * Send the menu with this till's settings block when the block is NEWER
-   * than what the website last confirmed from here (revision, then time:
-   * compareSettingsStamp) — saved here or synced from the other till. Never
-   * throws; offline it retries with a back-off, and a block the website
-   * could not take waits for the next Save (or SETTINGS_REFUSED_WAIT_MS).
+   * Once per start, read which block the website holds (GET /api/bridge/status): a website whose
+   * database was rolled back, or a till restored from an older backup, would otherwise go on
+   * believing the last answer. A website older than the block says nothing: left as it is.
+   */
+  private async readWebsiteHeldOnce(cfg: WebBridgeConfig): Promise<void> {
+    if (this.settingsHeldRead) return;
+    // One try per start (offline now: the publish's own answer tells the till later).
+    this.settingsHeldRead = true;
+    try {
+      const res = await this.api(cfg, '/api/bridge/status', { method: 'GET' });
+      if (!res.ok) return;
+      const body = (await res.json().catch(() => null)) as { data?: { settings?: unknown } } | null;
+      const data = body?.data;
+      if (!data || typeof data !== 'object' || !('settings' in data)) return;
+      const held = data.settings as Partial<WebsiteSettingsHeld> | null;
+      this.recordWebsiteHeld(held ?? {});
+    } catch (e) {
+      log.warn('Could not read which settings the website holds', { error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /**
+   * Send the menu with this till's settings block when the website NEEDS it
+   * (pos-domain websiteNeedsSettings: no block there, an older one, one its
+   * menu lacks a fee item for, or this till's own older one) — after a Save
+   * here, a change synced from the other till, or at start-up. Never
+   * throws; offline it retries with a back-off. A block that did not go
+   * (refused by the website or by this till's own check, an older website)
+   * is not sent again by itself until the stamp changes: without the block
+   * there is nothing to send, and "Publish the menu by itself" is the
+   * owner's to switch on.
    */
   async maybePublishSettings(): Promise<void> {
-    if (!this.db || this.settingsPublishing) return;
+    if (!this.db) return;
+    if (this.settingsPublishing) {
+      // A Save while a publish is on its way (images take a while): look again when it ends.
+      this.settingsRecheck = true;
+      return;
+    }
     const cfg = getWebBridgeConfig(this.db);
     if (!isWebBridgeReady(cfg).ok) return;
     const local = localSettingsStamp(this.db);
     if (local.settingsRev === 0) return;
-    const confirmed = this.confirmedSettings();
-    if (confirmed && compareSettingsStamp(local, confirmed) <= 0) return;
     if (Date.now() < this.settingsNextTryAt) return;
+    await this.readWebsiteHeldOnce(cfg);
+    const held = this.websiteHeld();
+    if (held && !websiteNeedsSettings(local, held.held, this.deviceId)) return;
+    if (this.settingsNoteFor(local)) return;
     try {
-      await this.publishMenu();
+      await this.publishMenuAndSettings({ auto: true });
       this.settingsRetryMs = 0;
     } catch (e) {
       this.settingsRetryMs = Math.min(SETTINGS_RETRY_MAX_MS, Math.max(SETTINGS_RETRY_MIN_MS, this.settingsRetryMs * 2));
@@ -346,16 +445,30 @@ class WebOrdersBridge {
   private settingsPublishStatus(ready: boolean): SettingsPublishStatus {
     if (!this.db) return { state: 'none', at: null, message: null };
     const local = localSettingsStamp(this.db);
-    const confirmed = this.confirmedSettings();
-    if (local.settingsRev === 0) return { state: 'none', at: confirmed?.confirmedAt ?? null, message: null };
-    if (confirmed && compareSettingsStamp(local, confirmed) <= 0) {
-      return { state: 'published', at: confirmed.confirmedAt, message: null };
+    const known = this.websiteHeld();
+    const at = known?.confirmedAt ?? null;
+    if (local.settingsRev === 0) return { state: 'none', at, message: null };
+    const note = this.settingsNoteFor(local);
+    if (note) return { state: note.state, at, message: note.message };
+    const held = known?.held ?? null;
+    if (held) {
+      const c = compareSettingsStamp(local, held.stamp);
+      if (c === 0 && !held.problem) return { state: 'published', at, message: null };
+      if (c === 0) return { state: 'waiting', at, message: `The website’s menu is missing a delivery charge item (${held.problem}) — this till sends its menu again.` };
+      if (c < 0 && !websiteNeedsSettings(local, held, this.deviceId)) {
+        return {
+          state: 'waiting',
+          at,
+          message:
+            held.deviceId === this.deviceId
+              ? 'The website holds newer delivery settings from this till (from before a backup was restored?) — save the delivery areas again here to replace them.'
+              : 'The website holds newer delivery settings from the other till — this till matches them once the till link brings them.',
+        };
+      }
     }
-    const note = this.settingsNote;
-    if (note && note.stampKey === stampKey(local)) return { state: note.state, at: confirmed?.confirmedAt ?? null, message: note.message };
     return {
       state: 'waiting',
-      at: confirmed?.confirmedAt ?? null,
+      at,
       message: ready ? null : 'This till has no website link: the other till sends it, or connect this one.',
     };
   }
@@ -1238,11 +1351,20 @@ class WebOrdersBridge {
         //    vanished from the menu since publish, the whole import throws and
         //    retries — after MAX_IMPORT_ATTEMPTS it's cancelled with a notice.
         for (const line of web.items) {
+          // A delivery charge the owner has just made on the other till, whose item the link has
+          // not brought here yet: made here with the same (name-based) id rather than failing the
+          // order until it is cancelled.
+          const onMenu = db
+            .prepare(`SELECT 1 AS x FROM menu_items WHERE id = ? AND deleted_at IS NULL`)
+            .get(line.posItemId);
+          const menuItemId = onMenu
+            ? line.posItemId
+            : (deliveryChargeItemForWebOrder(db, line, actor) ?? line.posItemId);
           addOrderItem(
             db,
             {
               orderId: shell.id,
-              menuItemId: line.posItemId,
+              menuItemId,
               quantity: line.quantity,
               modifierIds: line.modifiers.map((m) => m.posModifierId),
               notes: line.notes,
@@ -1458,14 +1580,25 @@ class WebOrdersBridge {
   /**
    * Send the menu to the website, with the owner's settings block (the
    * delivery areas and fees, the pick-up offer) once one of those is saved
-   * (shared-types web-bridge.ts, THE SETTINGS BLOCK). The block is checked
-   * against the same menu first; one that would not pass goes without, and
-   * the reason shows in Settings → Online orders. The website stores menu
-   * and block together or neither: when it refuses the block, the menu is
-   * sent again without it. The till records the block as published only
-   * when the website says it holds it (or a newer one).
+   * (shared-types web-bridge.ts, THE SETTINGS BLOCK) — the owner's Publish,
+   * and "Publish the menu by itself". The block is checked against the same
+   * menu first; one that would not pass goes without, and the reason shows
+   * in Settings → Online orders. The website stores menu and block together
+   * or neither: when it refuses the block, the menu is sent again without
+   * it. The till records what the website says it holds.
    */
   async publishMenu(): Promise<{ categories: number; items: number }> {
+    const r = await this.publishMenuAndSettings({ auto: false });
+    return { categories: r.categories, items: r.items };
+  }
+
+  /**
+   * The publish itself. `auto` = the till sending its settings block by
+   * itself (maybePublishSettings): the menu goes only WITH the block — when
+   * the till's own check stops the block, or the website refuses it, nothing
+   * more is sent and the reason is noted for that stamp.
+   */
+  private async publishMenuAndSettings(opts: { auto: boolean }): Promise<{ categories: number; items: number; sent: boolean }> {
     if (!this.db) throw new Error('Bridge not initialized');
     const db = this.db;
     const cfg = getWebBridgeConfig(db);
@@ -1477,8 +1610,14 @@ class WebOrdersBridge {
       // Menu and block read together, so the block's fee items are this menu's.
       const { menu, sb } = db.transaction(() => {
         const m = buildPublishedMenu(db);
-        return { menu: m, sb: settingsBlockFor(db, m) };
+        return { menu: m, sb: settingsBlockFor(db, m, this.deviceId) };
       })();
+      const itemCount = menu.categories.reduce((s, c) => s + c.items.length, 0);
+      if (opts.auto && !sb.block) {
+        // Nothing the website needs can go: the menu waits for the owner's Publish.
+        if (sb.problem) this.noteSettings(sb.stamp, 'refused', sb.problem);
+        return { categories: menu.categories.length, items: itemCount, sent: false };
+      }
       const send = (body: PublishedMenu) => this.api(cfg, '/api/bridge/menu', { method: 'PUT', body: JSON.stringify(body) });
       let sentBlock = sb.block !== null;
       let res = await send(sb.block ? { ...menu, settings: sb.block } : menu);
@@ -1486,8 +1625,10 @@ class WebOrdersBridge {
         const text = await res.text().catch(() => '');
         const refusal = sb.block ? settingsRefusalOf(text) : null;
         if (refusal === null) throw new Error(`Publish failed: HTTP ${res.status} ${text.slice(0, 200)}`);
-        // The website refused the block, and so the menu with it: the menu goes on its own.
         this.noteSettings(sb.stamp, 'refused', refusal);
+        // The till's own publish of its block stops here: nothing was stored, nothing else to send.
+        if (opts.auto) return { categories: menu.categories.length, items: itemCount, sent: false };
+        // The owner's Publish: the website refused the block, and so the menu with it — the menu goes on its own.
         sentBlock = false;
         res = await send(menu);
         if (!res.ok) {
@@ -1496,46 +1637,62 @@ class WebOrdersBridge {
         }
       }
       const data = ((await res.json().catch(() => null)) as { data?: Partial<PublishMenuResult> } | null)?.data ?? null;
-      if (sentBlock) this.settingsAnswered(sb.stamp, data);
-      else if (sb.problem) this.noteSettings(sb.stamp, 'refused', sb.problem);
+      this.settingsAnswered(sb.stamp, sentBlock, data);
+      if (!sentBlock && sb.problem) this.noteSettings(sb.stamp, 'refused', sb.problem);
 
-      const itemCount = menu.categories.reduce((s, c) => s + c.items.length, 0);
       log.info('Menu published to website', {
         categories: menu.categories.length,
         items: itemCount,
         settings: sentBlock ? (data?.settings ?? 'unknown') : sb.problem ? 'not sent' : 'none',
       });
-      return { categories: menu.categories.length, items: itemCount };
+      return { categories: menu.categories.length, items: itemCount, sent: true };
     } finally {
       this.settingsPublishing = false;
+      if (this.settingsRecheck) {
+        this.settingsRecheck = false;
+        this.scheduleSettingsCheck(SETTINGS_PUBLISH_DELAY_MS);
+      }
     }
   }
 
-  /** What the website said about the block it was sent. */
-  private settingsAnswered(sent: SettingsStamp, data: Partial<PublishMenuResult> | null): void {
+  /** What the website said about a publish (a block sent with it or not). */
+  private settingsAnswered(sent: SettingsStamp, sentBlock: boolean, data: Partial<PublishMenuResult> | null): void {
     if (!this.db) return;
-    const outcome = data?.settings;
-    if (outcome === 'stored' || outcome === 'ignored_older' || outcome === 'kept') {
-      // It holds this block — or, 'ignored_older', a newer one from the other till: nothing more to send.
-      const theirs =
-        typeof data?.settingsRev === 'number' && typeof data?.settingsAt === 'string'
-          ? { settingsRev: data.settingsRev, settingsAt: data.settingsAt }
-          : null;
-      const held = theirs && compareSettingsStamp(theirs, sent) > 0 ? theirs : sent;
-      setSetting(this.db, SETTINGS_CONFIRMED_KEY, { ...held, confirmedAt: nowIso() });
-      this.settingsNote = null;
-      this.settingsNextTryAt = 0;
+    if (!data || data.settings === undefined) {
+      // A website older than the settings block: it dropped it (the menu is stored). Update the website.
+      if (sentBlock) this.noteSettings(sent, 'unsupported', 'The website doesn’t take settings yet — it needs its update; then press Publish.');
       return;
     }
-    // A website older than the settings block: it dropped it (the menu is stored). Update the website.
-    this.noteSettings(sent, 'unsupported', 'The website doesn’t take settings yet — it needs its update.');
+    this.recordWebsiteHeld(data);
+    if (sentBlock && data.settings === 'stored') this.clearSettingsNote();
+    const held = this.websiteHeld()?.held ?? null;
+    const local = localSettingsStamp(this.db);
+    const stillNeeded = websiteNeedsSettings(local, held, this.deviceId);
+    if (sentBlock && data.settings === 'ignored_older') {
+      // The website kept a newer block (the other till's). Should this till still think it needs
+      // its own, the two disagree: never send the same stamp round and round.
+      if (stillNeeded && compareSettingsStamp(local, sent) === 0) {
+        this.noteSettings(sent, 'refused', 'The website keeps newer delivery settings than this till’s — save the delivery areas again to replace them.');
+      }
+      return;
+    }
+    // What the website holds now may still need this till (a Save while this one was on its way, a
+    // menu that lacks the block's fee item after a Publish without the block): look again shortly.
+    // Bounded: each look sends this till's current block, which the website then holds, or stops.
+    if (stillNeeded && !(sentBlock && data.settings === 'stored' && compareSettingsStamp(local, sent) === 0)) {
+      this.scheduleSettingsCheck(SETTINGS_PUBLISH_DELAY_MS);
+    }
   }
 
   private noteSettings(stamp: SettingsStamp, state: 'refused' | 'unsupported', message: string): void {
-    this.settingsNote = { stampKey: stampKey(stamp), state, message };
-    this.settingsNextTryAt = Date.now() + SETTINGS_REFUSED_WAIT_MS;
-    this.scheduleSettingsCheck(SETTINGS_REFUSED_WAIT_MS);
+    if (!this.db) return;
+    const note: SettingsNote = { stampKey: stampKey(stamp), state, message };
+    setSetting(this.db, SETTINGS_NOTE_KEY, note);
     log.warn('Settings not on the website', { state, message });
+  }
+
+  private clearSettingsNote(): void {
+    if (this.db && getSettingRaw(this.db, SETTINGS_NOTE_KEY) !== null) deleteSetting(this.db, SETTINGS_NOTE_KEY);
   }
 }
 
@@ -1845,7 +2002,7 @@ export function buildPublishedMenu(db: AppDatabase): PublishedMenu {
 
 /** A stamp as one comparable key (the status shows a refusal only while its stamp is current). */
 function stampKey(s: SettingsStamp): string {
-  return `${s.settingsRev}|${s.settingsAt}`;
+  return `${s.settingsRev}|${s.settingsAt}|${s.settingsTie ?? ''}`;
 }
 
 /** The website's reason for refusing a settings block (400 settings_invalid), or null for any other failure. */

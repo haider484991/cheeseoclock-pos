@@ -10,7 +10,7 @@ import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
 import { copyText, feeSummary } from '@/lib/delivery-facts';
 import { formatCents } from '@/lib/format';
-import { HOME_FAQ_AREAS, HOME_HERO_FEE, HOME_STAT_FEE } from '@/lib/page-copy';
+import { HOME_DELIVERY_NOTE, HOME_FAQ_AREAS, HOME_HERO_FEE, HOME_STAT_FEE } from '@/lib/page-copy';
 import { getSiteFacts } from '@/lib/site-facts';
 import { menuImageSrcSet } from '@/lib/images';
 import { SIGNATURE_BURGER, SIGNATURE_PIZZAS, VALUE_DEALS } from '@/lib/signatures';
@@ -319,9 +319,7 @@ export default async function HomePage() {
                 All over DHA &amp; Clifton
               </h2>
               <p className="mt-4 max-w-2xl leading-relaxed text-ink/70">
-                Our kitchen is in Rahat Commercial Area, DHA Phase 6. Pick your area at
-                checkout and the delivery charge is added for you — we don&rsquo;t take
-                online orders outside DHA and Clifton.
+                {copyText(HOME_DELIVERY_NOTE, facts)}
               </p>
             </Reveal>
             <div className="mt-10 grid gap-10 lg:grid-cols-[1.15fr_0.85fr]">

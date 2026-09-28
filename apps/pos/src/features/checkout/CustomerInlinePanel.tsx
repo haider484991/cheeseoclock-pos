@@ -12,6 +12,7 @@ import {
 import { counterPhoneLookup, deliveryChargeTarget, deliveryChargeWords, formatCents } from '@cheeseoclock/pos-domain';
 import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle } from 'lucide-react';
 import { AreaPicker } from '../customers/AreaPicker';
+import { deliveryChargeAskFor, noteDeliveryChargeAsked } from './deliveryChargeAsk';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -578,20 +579,20 @@ function DeliveryChargeRow({ area }: { area: string }) {
   // The area, the order type or the order changed: the main process puts the right charge on.
   // A moment after the last keystroke, so a hand-typed area is asked about once.
   // Only a CHANGE is asked about: an area picked or changed, or cleared after one was there. A bill
-  // that never had an area is left alone (a charge the cashier tapped on by hand stays).
-  const synced = useRef<{ key: string; orderId: string | null; area: string } | null>(null);
+  // that never had an area is left alone (a charge the cashier tapped on by hand stays). What was
+  // last asked is remembered outside this row (deliveryChargeAsk.ts): the row is re-created every
+  // time the cashier comes back from "Edit order", where the charge can be taken off by hand.
   useEffect(() => {
-    const a = area.trim();
     // With no order yet, whether a charge would go on decides whether to start one (the menu may still be loading).
-    const key = `${orderId ?? ''}|${mode}|${a}|${orderId ? '' : String(wouldAdd)}`;
-    if (synced.current?.key === key) return;
-    const hadArea = synced.current !== null && synced.current.orderId === orderId && synced.current.area !== '';
-    if (!a && !hadArea) {
-      synced.current = { key, orderId, area: a };
+    const now = { orderId, mode, area, wouldAdd };
+    const todo = deliveryChargeAskFor(now);
+    if (todo === 'same') return;
+    if (todo === 'note') {
+      noteDeliveryChargeAsked(now);
       return;
     }
     const t = setTimeout(() => {
-      synced.current = { key, orderId, area: a };
+      noteDeliveryChargeAsked(now);
       setDeliveryArea(area, { mayStartOrder: wouldAdd }).catch((e: unknown) =>
         toast({
           title: 'Could not put the delivery charge on',
@@ -613,7 +614,7 @@ function DeliveryChargeRow({ area }: { area: string }) {
     return (
       <div className={amber}>
         <span className="inline-flex items-center gap-1">
-          {target.kind === 'none' && target.reason === 'paused' ? (
+          {(target.kind === 'none' && target.reason === 'paused') || (target.kind === 'leave' && target.pausedName) ? (
             <PauseCircle className="h-3.5 w-3.5" aria-hidden="true" />
           ) : (
             <Bike className="h-3.5 w-3.5" aria-hidden="true" />

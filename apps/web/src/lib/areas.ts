@@ -1,6 +1,5 @@
 import { BUSINESS } from './business';
 import {
-  DEFAULT_FACTS,
   claimHolds,
   pausedZones,
   renderCopy,
@@ -387,7 +386,12 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'Do you deliver to Phase 2 Extension?',
-        a: 'Yes, Phase 2 Ext has its own option at checkout. We deliver in DHA and Clifton only, so for boundary streets near Korangi Road, drop us a WhatsApp first and we will confirm your address is in zone.',
+        a: {
+          text: 'Yes, Phase 2 Ext has its own option at checkout. We deliver in DHA and Clifton only, so for boundary streets near Korangi Road, drop us a WhatsApp first and we will confirm your address is in zone.',
+          when: { areasAsBuilt: true },
+          otherwise:
+            'Yes, Phase 2 Ext has its own option at checkout. We deliver in {where} only, so for boundary streets near Korangi Road, drop us a WhatsApp first and we will confirm your address is in zone.',
+        },
       },
       {
         q: 'Is it still cash on delivery this far out?',
@@ -445,8 +449,10 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
         a: 'All of them — Blocks 1 to 9, including Boat Basin and Schon Circle. Delivery is {fee:clifton-3..9} for Blocks 3–9 and {fee:clifton-1,clifton-2} for Blocks 1 and 2.',
       },
       {
+        // True only while the areas are today's: with an area added or switched off, left out.
         q: 'Do you deliver beyond Clifton?',
         a: 'No — we deliver in DHA and Clifton only, and the checkout will not take an address outside those zones.',
+        when: { areasAsBuilt: true },
       },
       {
         q: 'Do you deliver to apartment towers?',
@@ -467,7 +473,7 @@ export function getArea(slug: string): DeliveryArea | undefined {
  * paused" when the owner has switched every one off. Throws on an unknown
  * zone id so a typo fails the build instead of shipping a wrong fee.
  */
-export function feeText(area: DeliveryArea, facts: SiteFacts = DEFAULT_FACTS): string {
+export function feeText(area: DeliveryArea, facts: SiteFacts): string {
   return zonesFeeChip(`areas.ts: "${area.slug}"`, area.zoneIds, facts);
 }
 
@@ -493,7 +499,7 @@ export interface RenderedArea {
   pausedNote: string | null;
 }
 
-export function renderArea(area: DeliveryArea, facts: SiteFacts = DEFAULT_FACTS): RenderedArea {
+export function renderArea(area: DeliveryArea, facts: SiteFacts): RenderedArea {
   const description = renderCopy(area.description, facts);
   if (description === null) throw new Error(`areas.ts: "${area.slug}" has no description for these fees`);
   const paused = pausedZones(area.zoneIds, facts);

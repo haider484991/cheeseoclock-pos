@@ -135,13 +135,21 @@ export function deliveryAreasText(facts: SiteFacts, and: 'and' | '&' = 'and'): s
 /** The menu page's chip: "Delivery Rs N–M · DHA & Clifton", or "Delivery paused" while every area is off. */
 export function deliveryChip(facts: SiteFacts): string {
   const where = deliveryAreasText(facts, '&');
-  return where ? `Delivery ${deliveryFeeRange(facts)} · ${where}` : 'Delivery paused';
+  if (!where) return 'Delivery paused';
+  return allFree(facts) ? `Free delivery · ${where}` : `Delivery ${deliveryFeeRange(facts)} · ${where}`;
+}
+
+/** Every area delivered to now is free (a fee of zero): the chips say "free", never a zero amount. */
+function allFree(facts: SiteFacts): boolean {
+  const on = activeZones(facts);
+  return on.length > 0 && on.every((z) => z.feeCents === 0);
 }
 
 /** The delivery half of the delivery / pick-up toggle: "Rs N–M · DHA & Clifton", or "Paused right now". */
 export function deliveryOptionNote(facts: SiteFacts): string {
   const where = deliveryAreasText(facts, '&');
-  return where ? `${deliveryFeeRange(facts)} · ${where}` : 'Paused right now';
+  if (!where) return 'Paused right now';
+  return `${allFree(facts) ? 'Free' : deliveryFeeRange(facts)} · ${where}`;
 }
 
 export interface ZoneOption {
@@ -158,7 +166,11 @@ export function zoneOptionGroups(zones: readonly FactZone[]): Array<{ group: str
   for (const z of zones) {
     const option: ZoneOption = {
       id: z.id,
-      label: z.active ? `${z.name} — ${formatCents(z.feeCents)}` : `${z.name} — delivery paused`,
+      label: !z.active
+        ? `${z.name} — delivery paused`
+        : z.feeCents === 0
+          ? `${z.name} — free delivery`
+          : `${z.name} — ${formatCents(z.feeCents)}`,
       disabled: !z.active,
     };
     const g = groups.find((x) => x.group === z.group);
@@ -200,6 +212,7 @@ export function zonesFeeChip(pageSlug: string, zoneIds: readonly string[], facts
   const zones = zonesOf(pageSlug, zoneIds, facts);
   const on = zones.filter((z) => z.active);
   if (on.length === 0) return 'Delivery paused';
+  if (on.every((z) => z.feeCents === 0)) return 'Free delivery';
   return `${feeRangeOfFees(on.map((z) => z.feeCents))} delivery`;
 }
 
@@ -228,14 +241,17 @@ export interface FeeTier {
 }
 
 /**
- * The fee tiers in customer words, cheapest first, over the areas on now.
- * With no block it is exactly the compiled FEE_SUMMARY; with one it is
- * written from the areas (placesWords), which gives the same two lines for
- * today's areas and fees (site-copy.test.ts pins it).
+ * The fee tiers in customer words, cheapest first, over the areas on now
+ * (every area while all are paused, so a sentence over it still reads — the
+ * fees they will have again). With no block it is exactly the compiled
+ * FEE_SUMMARY; with one it is written from the areas (placesWords), which
+ * gives the same two lines for today's areas and fees (site-copy.test.ts
+ * pins it).
  */
 export function feeSummary(facts: SiteFacts): FeeTier[] {
   if (facts.source === 'default') return FEE_SUMMARY.map((f) => ({ feeCents: f.feeCents, places: f.places }));
-  return generatedFeeSummary(activeZones(facts));
+  const on = activeZones(facts);
+  return generatedFeeSummary(on.length > 0 ? on : facts.zones);
 }
 
 export function generatedFeeSummary(zones: readonly FactZone[]): FeeTier[] {
@@ -337,20 +353,42 @@ function numberList(ns: readonly number[]): string {
  * A fact a sentence relies on. `sameFee`: these areas all charge one fee.
  * `rateCard`: these areas charge exactly the compiled rate card's fee (the
  * wording explains a fee by that card). Paused areas count with their fee.
+ * `areasAsBuilt`: the areas delivered to now are exactly today's 21 — none
+ * switched off, none added — so a sentence may name them by hand ("DHA
+ * Phases 1–8 and Clifton", "We don't deliver outside DHA and Clifton").
  */
-export type FeeClaim = { sameFee: readonly string[] } | { rateCard: readonly string[] };
+export type FeeClaim =
+  | { sameFee: readonly string[] }
+  | { rateCard: readonly string[] }
+  | { areasAsBuilt: true };
 
 /**
  * Page copy: plain text with fee tokens, or text that holds only under a
- * claim (`otherwise` replaces it when the claim breaks; no `otherwise` =
- * leave it out).
+ * claim — every one of them when `when` is a list — with `otherwise` (plain,
+ * or claimed again) replacing it when the claim breaks; no `otherwise` =
+ * leave it out.
  */
-export type Copy = string | { text: string; when: FeeClaim; otherwise?: string };
+export type Copy =
+  | string
+  | { text: string; when: FeeClaim | readonly FeeClaim[]; otherwise?: Copy };
 
 /** Every compiled area id: `{ rateCard: ALL_COMPILED_ZONE_IDS }` = "the fees are still the rate card's". */
 export const ALL_COMPILED_ZONE_IDS: readonly string[] = Object.freeze(DELIVERY_ZONES.map((z) => z.id));
 
-export function claimHolds(claim: FeeClaim, facts: SiteFacts): boolean {
+export function claimHolds(claim: FeeClaim | readonly FeeClaim[], facts: SiteFacts): boolean {
+  if (isClaimList(claim)) return claim.every((c) => claimHolds(c, facts));
+  if ('areasAsBuilt' in claim) {
+    const on = activeZones(facts).map((z) => z.id);
+    return on.length === ALL_COMPILED_ZONE_IDS.length && ALL_COMPILED_ZONE_IDS.every((id) => on.includes(id));
+  }
+  return feeClaimHolds(claim, facts);
+}
+
+function isClaimList(claim: FeeClaim | readonly FeeClaim[]): claim is readonly FeeClaim[] {
+  return Array.isArray(claim);
+}
+
+function feeClaimHolds(claim: { sameFee: readonly string[] } | { rateCard: readonly string[] }, facts: SiteFacts): boolean {
   if ('sameFee' in claim) {
     const fees = new Set(zonesOf('sameFee', expandZoneIds(claim.sameFee), facts).map((z) => z.feeCents));
     return fees.size === 1;
@@ -362,7 +400,7 @@ export function claimHolds(claim: FeeClaim, facts: SiteFacts): boolean {
 export function renderCopy(copy: Copy, facts: SiteFacts): string | null {
   if (typeof copy === 'string') return fillFees(copy, facts);
   if (claimHolds(copy.when, facts)) return fillFees(copy.text, facts);
-  return copy.otherwise === undefined ? null : fillFees(copy.otherwise, facts);
+  return copy.otherwise === undefined ? null : renderCopy(copy.otherwise, facts);
 }
 
 /** Copy that always prints (a string, or a claim with an `otherwise`). */
@@ -396,7 +434,12 @@ const TOKEN = /\{([a-zA-Z]+)(?::([^{}]*))?\}/g;
  *    of them when every one is paused, so the sentence still reads);
  *  - {fees}: the range across every area on;
  *  - {minFee}: the lowest fee of an area on;
- *  - {summary}: the fee tiers in a sentence (feeSummarySentence).
+ *  - {summary}: the fee tiers in a sentence (feeSummarySentence);
+ *  - {where}: the groups delivered to now ("DHA, Clifton and PECHS"; every
+ *    group while all are paused);
+ *  - {places}: the areas delivered to now in customer words ("DHA Phases
+ *    1–8, Emaar & Creek Vista, Clifton Blocks 1–9"; every area while all
+ *    are paused).
  * An unknown token or area id throws: a typo must fail the tests and the
  * build, never print "{fee:dha-66}" or a wrong fee.
  */
@@ -416,6 +459,14 @@ export function fillFees(text: string, facts: SiteFacts): string {
       }
       case 'summary':
         return feeSummarySentence(facts);
+      case 'where': {
+        const where = deliveryAreasText(facts);
+        return where || listWords([...new Set(facts.zones.map((z) => z.group))]);
+      }
+      case 'places': {
+        const on = activeZones(facts);
+        return placesWords(on.length > 0 ? on : facts.zones).split(' · ').join(', ');
+      }
       default:
         throw new Error(`Unknown fee token ${whole}`);
     }

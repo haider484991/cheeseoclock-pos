@@ -7,8 +7,8 @@ import { ShopMapCard } from '@/components/ShopMapCard';
 import { Reveal } from '@/components/Reveal';
 import { BUSINESS } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { copyText, feeSummarySentence } from '@/lib/delivery-facts';
-import { DELIVERY_HUB_DESCRIPTION } from '@/lib/page-copy';
+import { copyText } from '@/lib/delivery-facts';
+import { DELIVERY_HUB_DESCRIPTION, DELIVERY_HUB_INTRO } from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
 import { getSiteFacts } from '@/lib/site-facts';
 
@@ -47,12 +47,7 @@ export default async function DeliveryHubPage() {
             FOOD DELIVERY AREAS IN DHA &amp; CLIFTON, KARACHI
           </h1>
           <p className="mt-5 max-w-2xl leading-relaxed text-smoke">
-            Every order fires from our kitchen in DHA Phase 6 — daily from 12
-            noon to 1 am, always cash on delivery. We deliver in DHA and
-            Clifton only:{' '}
-            {feeSummarySentence(facts)}
-            . Pick your area below for the streets we cover and answers to the
-            questions your area actually asks.
+            {copyText(DELIVERY_HUB_INTRO, facts)}
           </p>
 
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

@@ -14,9 +14,10 @@ import {
   type PublishedSettings,
   type SettingsStamp,
 } from '@cheeseoclock/shared-types';
-import { buildSettingsBlock, type SettingStamp } from '@cheeseoclock/pos-domain';
+import { buildSettingsBlock, settingsStampOf, type SettingStamp } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 import {
+  getBusinessSetting,
   readBusinessSettingRow,
   readDeliveryZones,
   readWebsitePickup,
@@ -31,32 +32,52 @@ function carriedStamps(db: AppDatabase): Array<SettingStamp | null> {
 }
 
 /**
- * This till's settings stamp: the sum of the carried keys' row versions and
- * their newest updated_at. Rev 0 = neither key is saved on either till —
- * the website then goes on exactly as before (no block is sent).
+ * Why this till can't speak for a carried key, or null: a row saved by a
+ * NEWER version of the app (or one this version can't read). Its version
+ * counts in the stamp, but this till would send its defaults in its place —
+ * and the website takes an equal stamp — so no block goes from here until
+ * this till is updated (the updated till, or the other one, sends it).
  */
-export function localSettingsStamp(db: AppDatabase): SettingsStamp {
-  const b = buildSettingsBlock({
-    zones: [],
-    pickup: { offered: true, percent: 0 },
-    stamps: carriedStamps(db),
-    menuItems: [],
-  });
-  return { settingsRev: b.settingsRev, settingsAt: b.settingsAt };
+export function carriedKeyProblem(db: AppDatabase): string | null {
+  for (const key of PUBLISHED_SETTING_KEYS) {
+    if (!readBusinessSettingRow(db, key)) continue;
+    const saved = getBusinessSetting(db, key);
+    if (!saved || saved.newerFormat) {
+      const what = key === 'delivery.zones' ? 'The delivery areas were' : 'The website pick-up offer was';
+      return `${what} saved by a newer version of the app — update this till (the website keeps what it has).`;
+    }
+  }
+  return null;
+}
+
+/**
+ * This till's settings stamp: the sum of the carried keys' row versions,
+ * their newest updated_at and the sum of their times (pos-domain
+ * settingsStampOf). Rev 0 = neither key is saved on either till — the
+ * website then goes on exactly as before (no block is sent).
+ */
+export function localSettingsStamp(db: AppDatabase): SettingsStamp & { settingsTie: number } {
+  return settingsStampOf(carriedStamps(db));
 }
 
 /**
  * The block to send with `menu`, or why none goes:
  *  - nothing saved (rev 0): no block, no problem — the website stays as today;
+ *  - a carried key this till can't read (carriedKeyProblem): no block;
  *  - the block fails the website's own check against this menu (a fee item
  *    hidden, re-priced by an older till…): no block, and the reason in the
- *    owner's words ("Website not updated: …"); the menu still goes.
+ *    owner's words ("Website not updated: …"); a Publish still sends the menu.
  */
 export function settingsBlockFor(
   db: AppDatabase,
   menu: PublishedMenu,
+  deviceId: string,
 ): { block: PublishedSettings | null; problem: string | null; stamp: SettingsStamp } {
   const stamps = carriedStamps(db);
+  const stamp = settingsStampOf(stamps);
+  if (stamp.settingsRev === 0) return { block: null, problem: null, stamp };
+  const unreadable = carriedKeyProblem(db);
+  if (unreadable) return { block: null, problem: unreadable, stamp };
   const menuItems = menu.categories.flatMap((c) =>
     c.items.map((i) => ({ id: i.posItemId, name: i.name, basePriceCents: i.basePriceCents })),
   );
@@ -66,9 +87,8 @@ export function settingsBlockFor(
     pickup: { offered: pickup.offered, percent: pickup.percent },
     stamps,
     menuItems,
+    deviceId,
   });
-  const stamp = { settingsRev: block.settingsRev, settingsAt: block.settingsAt };
-  if (block.settingsRev === 0) return { block: null, problem: null, stamp };
   const problem = settingsBlockProblem(block, menu);
   return problem ? { block: null, problem, stamp } : { block, problem: null, stamp };
 }

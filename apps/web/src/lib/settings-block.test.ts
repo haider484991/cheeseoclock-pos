@@ -32,12 +32,21 @@ const db = vi.hoisted(() => ({
   pg: null as unknown as { query: (t: string, v: unknown[]) => Promise<{ rows: unknown[] }> },
   /** Make the next queries fail, as a database outage would. */
   fail: null as Error | null,
+  /** Runs once after the next query whose text matches (a till's publish landing in between two reads). */
+  after: null as { match: RegExp; run: () => Promise<void> } | null,
 }));
 vi.mock('@/lib/db', () => ({
   // The Neon client is a tagged template returning rows; PGlite takes $n params.
-  sql: () => (strings: TemplateStringsArray, ...values: unknown[]) => {
-    if (db.fail) return Promise.reject(db.fail);
-    return db.pg.query(strings.reduce((acc, s, i) => acc + (i > 0 ? `$${i}` : '') + s, ''), values).then((r) => r.rows);
+  sql: () => async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    if (db.fail) throw db.fail;
+    const text = strings.reduce((acc, s, i) => acc + (i > 0 ? `$${i}` : '') + s, '');
+    const rows = (await db.pg.query(text, values)).rows;
+    const hook = db.after;
+    if (hook && hook.match.test(text)) {
+      db.after = null;
+      await hook.run();
+    }
+    return rows;
   },
 }));
 const revalidated = vi.hoisted(() => [] as string[]);
@@ -100,15 +109,27 @@ type ZoneEdit = (zones: DeliveryZoneSetting[]) => void;
  */
 function tillBlock(
   m: PublishedMenu,
-  opts: { edit?: ZoneEdit; rev?: number; at?: string; pickup?: { offered: boolean; percent: number } } = {},
+  opts: {
+    edit?: ZoneEdit;
+    rev?: number;
+    at?: string;
+    /** The pick-up offer's row (a second carried key), when saved. */
+    pickupAt?: string;
+    pickup?: { offered: boolean; percent: number };
+    device?: string;
+  } = {},
 ): PublishedSettings {
   const zones = DEFAULT_DELIVERY_ZONES.zones.map((z) => ({ ...z, aliases: [...z.aliases], hints: [...z.hints] }));
   opts.edit?.(zones);
   return buildSettingsBlock({
     zones,
     pickup: opts.pickup ?? { offered: true, percent: 10 },
-    stamps: [{ version: opts.rev ?? 1, updatedAt: opts.at ?? '2026-09-27T10:00:00.000Z' }, null],
+    stamps: [
+      { version: opts.rev ?? 1, updatedAt: opts.at ?? '2026-09-27T10:00:00.000Z' },
+      opts.pickupAt ? { version: 1, updatedAt: opts.pickupAt } : null,
+    ],
     menuItems: m.categories.flatMap((c) => c.items.map((i) => ({ id: i.posItemId, name: i.name, basePriceCents: i.basePriceCents }))),
+    deviceId: opts.device ?? 'till-1',
   });
 }
 const zone = (zs: DeliveryZoneSetting[], id: string) => zs.find((z) => z.id === id)!;
@@ -193,7 +214,16 @@ describe('PUT /api/bridge/menu with the settings block', () => {
     const m = menu([RS200, RS250]);
     const r = await publish(m);
     expect(r.status).toBe(200);
-    expect(r.json.data).toEqual({ categories: 2, items: 3, settings: 'none', settingsAt: null, settingsRev: null });
+    expect(r.json.data).toEqual({
+      categories: 2,
+      items: 3,
+      settings: 'none',
+      settingsAt: null,
+      settingsRev: null,
+      settingsTie: null,
+      settingsDeviceId: null,
+      settingsProblem: null,
+    });
     expect(await storedRow()).toEqual(m);
     expect(await getSiteFacts()).toBe(DEFAULT_FACTS);
     expect(revalidated).toEqual(['/ layout']);
@@ -214,7 +244,13 @@ describe('PUT /api/bridge/menu with the settings block', () => {
     expect(revalidated).toEqual(['/ layout']);
     // The bridge can read back which block the website holds.
     const st = (await (await bridgeStatus.GET(bridge('/api/bridge/status'))).json()) as { data: { settings: unknown } };
-    expect(st.data.settings).toEqual({ settingsRev: 2, settingsAt: '2026-09-27T10:00:00.000Z' });
+    expect(st.data.settings).toEqual({
+      settingsRev: 2,
+      settingsAt: '2026-09-27T10:00:00.000Z',
+      settingsTie: Date.parse('2026-09-27T10:00:00.000Z'),
+      settingsDeviceId: 'till-1',
+      settingsProblem: null,
+    });
   });
 
   it('keeps the stored block when a till publishes without one', async () => {
@@ -233,7 +269,7 @@ describe('PUT /api/bridge/menu with the settings block', () => {
     const m = menu([RS200, RS250, RS300]);
     const newer = tillBlock(m, { edit: phase8At300, rev: 3, at: '2026-09-27T11:00:00.000Z' });
     await publish(m, newer);
-    const stale = tillBlock(m, { rev: 2, at: '2026-09-27T12:00:00.000Z' }); // later clock, fewer saves: older
+    const stale = tillBlock(m, { rev: 2, at: '2026-09-27T12:00:00.000Z', device: 'till-2' }); // the other till: later clock, fewer saves: older
     const m2 = menu([RS200, RS250, RS300], [item('new-item', 'New Test Item', 500)]);
     const r = await publish(m2, stale);
     expect(r.status).toBe(200);
@@ -252,6 +288,55 @@ describe('PUT /api/bridge/menu with the settings block', () => {
     const same = tillBlock(m, { edit: (zs) => (zone(zs, 'emaar').active = false), rev: 5, at: '2026-09-27T09:00:00.000Z' });
     expect((await publish(m, same)).json.data).toMatchObject({ settings: 'stored' });
     expect((await storedRow())?.settings?.zones.find((z) => z.id === 'emaar')?.active).toBe(false);
+  });
+
+  it('the same versions and newest time but another area list (two tills saved offline): the settled list, whose times sum higher, replaces the published one — never the other way', async () => {
+    const m = menu([RS200, RS250, RS300]);
+    // Till A: areas at 10:00, pick-up at 10:05.
+    const published = tillBlock(m, { rev: 1, at: '2026-09-27T10:00:00.000Z', pickupAt: '2026-09-27T10:05:00.000Z' });
+    expect((await publish(m, published)).json.data).toMatchObject({ settings: 'stored', settingsRev: 2, settingsAt: '2026-09-27T10:05:00.000Z' });
+    // What the tills settle on: the other till's areas saved at 10:02 (same version), the same pick-up.
+    const settled = tillBlock(m, { edit: phase8At300, rev: 1, at: '2026-09-27T10:02:00.000Z', pickupAt: '2026-09-27T10:05:00.000Z', device: 'till-2' });
+    expect([settled.settingsRev, settled.settingsAt]).toEqual([published.settingsRev, published.settingsAt]);
+    expect((await publish(m, settled)).json.data).toMatchObject({ settings: 'stored', settingsTie: settled.settingsTie });
+    // Till A, not caught up yet, publishing again: its list is the older one now.
+    expect((await publish(m, published)).json.data).toMatchObject({ settings: 'ignored_older', settingsTie: settled.settingsTie });
+    expect((await storedRow())?.settings?.zones.find((z) => z.id === 'dha-8')).toMatchObject({ feeCents: 30_000 });
+  });
+
+  it('a till may replace its OWN block with a later Save (restored from an older backup), never another till’s', async () => {
+    const m = menu([RS200, RS250, RS300]);
+    await publish(m, tillBlock(m, { rev: 5, at: '2026-09-01T00:00:00.000Z', device: 'till-1' }));
+    // The other till with fewer saves: older, kept out.
+    expect((await publish(m, tillBlock(m, { rev: 3, at: '2026-09-15T00:00:00.000Z', device: 'till-2' }))).json.data).toMatchObject({
+      settings: 'ignored_older',
+      settingsRev: 5,
+    });
+    // The same till, restored (its row back in August): not a later Save — kept out.
+    expect((await publish(m, tillBlock(m, { rev: 3, at: '2026-08-01T00:00:00.000Z', device: 'till-1' }))).json.data).toMatchObject({
+      settings: 'ignored_older',
+    });
+    // The same till's Save after the restore: taken.
+    const after = tillBlock(m, { edit: phase8At300, rev: 4, at: '2026-09-20T00:00:00.000Z', device: 'till-1' });
+    expect((await publish(m, after)).json.data).toMatchObject({ settings: 'stored', settingsRev: 4, settingsDeviceId: 'till-1' });
+    expect((await storedRow())?.settings).toEqual(after);
+  });
+
+  it('a kept block that names a fee item the new menu lacks (a till behind on the link published): stored as asked, and the answer — and the status read — say so', async () => {
+    const m = menu([RS200, RS250, RS300]);
+    await publish(m, tillBlock(m, { edit: phase8At300, rev: 2 }));
+    // A till that has not received the Rs 300 item yet publishes its menu (no block, or an older one).
+    const behind = await publish(menu([RS200, RS250]));
+    expect(behind.json.data).toMatchObject({ settings: 'kept', settingsRev: 2 });
+    expect(behind.json.data?.['settingsProblem']).toMatch(/DHA Phase 8: its "Delivery Charge \(Rs 300\)" item is not on the menu/);
+    const olderBlock = await publish(menu([RS200, RS250]), tillBlock(menu([RS200, RS250]), { rev: 1, device: 'till-2' }));
+    expect(olderBlock.json.data).toMatchObject({ settings: 'ignored_older' });
+    expect(olderBlock.json.data?.['settingsProblem']).toMatch(/DHA Phase 8/);
+    const st = (await (await bridgeStatus.GET(bridge('/api/bridge/status'))).json()) as { data: { settings: { settingsProblem: string | null } } };
+    expect(st.data.settings.settingsProblem).toMatch(/DHA Phase 8/);
+    // The till that has the item sends its menu again: fits.
+    const fixed = await publish(m, tillBlock(m, { edit: phase8At300, rev: 2 }));
+    expect(fixed.json.data).toMatchObject({ settings: 'stored', settingsProblem: null });
   });
 
   it('refuses a block whose fee item is missing or at the wrong price — and stores nothing', async () => {
@@ -361,6 +446,39 @@ describe('POST /api/orders with the settings block', () => {
     // Other areas keep their fee.
     const c3 = await storedOrder((await place({ zoneId: 'clifton-3' })).json.data!.orderId);
     expect(c3.items.at(-1)?.posItemId).toBe('fee-200');
+  });
+
+  it('a till’s publish landing between the order’s two reads: the fee and its item come from the SAME publish (never the old fee with the new menu, never the by-hand note)', async () => {
+    const m250 = menu([RS200, RS250]);
+    await publish(m250, tillBlock(m250, { rev: 1 }));
+    // Right after the order route reads the areas, the owner's Save moves Phase 8 to Rs 300 on its
+    // own item and switches the Rs 250 item off: the menu that lands has no Rs 250 item.
+    const m300 = menu([RS200, RS300]);
+    db.after = {
+      match: /menu_json -> 'settings' AS settings FROM site_menu/,
+      run: async () => {
+        const r = await publish(
+          m300,
+          tillBlock(m300, {
+            rev: 2,
+            edit: (zs) => {
+              for (const z of zs) if (z.feeCents === 25_000) Object.assign(z, { feeCents: 30_000, feeItemId: 'fee-300' });
+            },
+          }),
+        );
+        expect(r.json.data).toMatchObject({ settings: 'stored' });
+      },
+    };
+    const r = await place({ zoneId: 'dha-8' });
+    expect(db.after).toBeNull();
+    expect(r.status).toBe(200);
+    const row = await storedOrder(r.json.data!.orderId);
+    expect(row.items.map((i) => [i.posItemId, i.unitPriceCents])).toEqual([
+      ['test-pizza', 200_000],
+      ['fee-300', 30_000],
+    ]);
+    expect(row.notes).toBeNull();
+    expect(r.json.data).toMatchObject({ subtotalCents: 230_000, taxCents: 34_500, totalCents: 264_500 });
   });
 
   it('refuses an area the owner switched off, and one it does not have', async () => {

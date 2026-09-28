@@ -222,6 +222,19 @@ export function AreaPicker({ value, onChange, variant = 'till', quickPicks = 6, 
               );
             })}
           </div>
+          {multi.zoneIds.some((zid) => !A.isActive(zid)) && (
+            <div className="mt-1 flex items-start gap-1 text-[11px] text-amber-800 dark:text-amber-300">
+              <PauseCircle className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+              <span>
+                Delivery to{' '}
+                {multi.zoneIds
+                  .filter((zid) => !A.isActive(zid))
+                  .map((zid) => A.findZone(zid)?.name ?? zid)
+                  .join(', ')}{' '}
+                is switched off in Settings → Delivery areas.
+              </span>
+            </div>
+          )}
         </div>
       )}
 

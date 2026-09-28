@@ -16,6 +16,8 @@ import {
   deliveryZonesPutBack,
   planDeliveryChargeLines,
   planFeeItems,
+  settingsStampOf,
+  websiteNeedsSettings,
   type FeeItemCandidate,
 } from './delivery-charge.js';
 
@@ -112,6 +114,37 @@ describe('planFeeItems (Settings → Delivery areas, Save)', () => {
     });
     expect(plan.actions).toContainEqual({ kind: 'switchOff', id: 'legacy-250' });
     expect(plan.actions.filter((a) => a.kind === 'switchOff')).toHaveLength(1);
+  });
+
+  it('the FIRST Save that moves every Rs 250 area switches today’s Rs 250 item off (the default found it by name and price) — and a stale item a Save made, but not the owner’s own look-alike', () => {
+    const items = [
+      ...TODAY,
+      item('by-hand', 'Delivery charge long distance', 60_000),
+      // Made by a Save on the other till that the link settled against (two offline Saves).
+      item('v5-fee-35000', 'Delivery Charge (Rs 350)', 35_000),
+    ];
+    const zones = zonesWith((z) => (z.feeCents === 25_000 ? { ...z, feeCents: 30_000 } : z));
+    const plan = planFeeItems({
+      zones,
+      // Nothing saved yet: no area names an item…
+      previousFeeItemIds: new Set(),
+      // …but the default's areas charged Rs 200 and Rs 250, by name and price.
+      previousFees: new Set([20_000, 25_000]),
+      items,
+      idForFee,
+    });
+    expect(plan.actions.filter((a) => a.kind === 'switchOff')).toEqual([
+      { kind: 'switchOff', id: 'legacy-250' },
+      { kind: 'switchOff', id: 'v5-fee-35000' },
+    ]);
+    expect(plan.actions).toContainEqual({
+      kind: 'create',
+      id: 'v5-fee-30000',
+      feeCents: 30_000,
+      name: 'Delivery Charge (Rs 300)',
+    });
+    expect(plan.actions.some((a) => a.id === 'by-hand' || a.id === 'legacy-200' && a.kind === 'switchOff')).toBe(false);
+    expect(plan.actions.some((a) => a.id === 'fries')).toBe(false);
   });
 
   it('never touches an item that only looks like a delivery charge and no area ever pointed at', () => {
@@ -245,6 +278,20 @@ describe('the fee follows the area (owner, 28 Sep 2026)', () => {
     });
   });
 
+  it('a place across areas where one is switched off asks which — it never charges the other area’s fee to someone who may be in the paused one', () => {
+    const B = deliveryAreas(zonesWith((z) => (z.id === 'dha-8' ? { ...z, active: false } : z)));
+    for (const place of ['Khayaban-e-Shahbaz, DHA', 'Khayaban-e-Ittehad, DHA', 'Ittehad Commercial, DHA']) {
+      const { zoneIds } = B.resolveAreaText(place);
+      if (!zoneIds.includes('dha-8') || zoneIds.length < 2) continue;
+      const t = deliveryChargeTarget(B, 'delivery', place, menu);
+      expect(t, place).toEqual({ kind: 'leave', reason: 'which', pausedName: 'DHA Phase 8' });
+      expect(planDeliveryChargeLines(t, [])).toEqual({ remove: [], add: null });
+      expect(deliveryChargeWords(t)).toMatch(/Pick the phase.*DHA Phase 8 is switched off/);
+    }
+    // At least the road the reviewer named crosses into Phase 8.
+    expect(B.resolveAreaText('Khayaban-e-Shahbaz, DHA').zoneIds).toContain('dha-8');
+  });
+
   it('leaves the bill alone until the phase is known, or for an area it does not know', () => {
     expect(deliveryChargeTarget(A, 'delivery', 'Khayaban-e-Shahbaz, DHA', menu)).toEqual({
       kind: 'leave',
@@ -367,6 +414,7 @@ describe('buildSettingsBlock (the website’s settings block)', () => {
       pickup: { offered: true, percent: 10 },
       stamps: [{ version: 2, updatedAt: '2026-09-28T09:00:00.000Z' }, null],
       menuItems,
+      deviceId: 'till-a',
     });
     expect(block.settingsRev).toBe(2);
     expect(block.settingsAt).toBe('2026-09-28T09:00:00.000Z');
@@ -389,11 +437,56 @@ describe('buildSettingsBlock (the website’s settings block)', () => {
       pickup: { offered: false, percent: 0 },
       stamps: [],
       menuItems,
+      deviceId: 'till-a',
     });
     expect(block.zones.find((z) => z.id === 'emaar')?.active).toBe(false);
     expect(settingsBlockProblem(block, menu)).toMatch(/DHA Phase 8/);
     expect(block.settingsRev).toBe(0);
     expect(block.settingsAt).toBe(DEFAULT_SETTINGS_AT);
+  });
+
+  it('two different area lists never share a stamp once the tills settle: the settled one is strictly newer (the sum of the times breaks the tie)', () => {
+    // Till A saves areas ZA at 10:00 and the pick-up offer at 10:05 and publishes; till B, offline,
+    // saved areas ZB at 10:02 (the same version). The link keeps ZB (same version, later time).
+    const published = settingsStampOf([
+      { version: 1, updatedAt: '2026-09-28T10:00:00.000Z' },
+      { version: 1, updatedAt: '2026-09-28T10:05:00.000Z' },
+    ]);
+    const settled = settingsStampOf([
+      { version: 1, updatedAt: '2026-09-28T10:02:00.000Z' },
+      { version: 1, updatedAt: '2026-09-28T10:05:00.000Z' },
+    ]);
+    // The sum of versions and the newest time are the same…
+    expect([settled.settingsRev, settled.settingsAt]).toEqual([published.settingsRev, published.settingsAt]);
+    // …the stamp is not: the till that settled sends it, and the website takes it.
+    expect(compareSettingsStamp(settled, published)).toBeGreaterThan(0);
+    expect(
+      websiteNeedsSettings(settled, { stamp: published, deviceId: 'till-a', problem: null }, 'till-a'),
+    ).toBe(true);
+  });
+
+  it('when the website needs this till’s block', () => {
+    const at = (t: string, rev = 2) => settingsStampOf([{ version: rev, updatedAt: t }, null]);
+    const mine = at('2026-09-28T10:00:00.000Z');
+    const held = (stamp = mine, deviceId: string | null = 'till-a', problem: string | null = null) => ({
+      stamp,
+      deviceId,
+      problem,
+    });
+    // nothing saved: never
+    expect(websiteNeedsSettings(settingsStampOf([null, null]), null, 'till-a')).toBe(false);
+    // no block there / an older one: yes
+    expect(websiteNeedsSettings(mine, null, 'till-a')).toBe(true);
+    expect(websiteNeedsSettings(mine, held(at('2026-09-28T09:00:00.000Z', 1)), 'till-a')).toBe(true);
+    // the same one: no — unless the website's menu lacks its fee item (a till behind on the link published)
+    expect(websiteNeedsSettings(mine, held(), 'till-a')).toBe(false);
+    expect(websiteNeedsSettings(mine, held(mine, 'till-b', 'DHA Phase 8: its item is not on the menu'), 'till-a')).toBe(true);
+    // a newer one from the other till: no (the link brings it)
+    expect(websiteNeedsSettings(mine, held(at('2026-09-28T09:00:00.000Z', 5), 'till-b'), 'till-a')).toBe(false);
+    // this till's own newer-versioned block, and a Save here since at a later time (a restore moved the versions back): yes
+    expect(websiteNeedsSettings(mine, held(at('2026-09-28T09:00:00.000Z', 5), 'till-a'), 'till-a')).toBe(true);
+    // …but not merely restored (its own block is the later one): no
+    expect(websiteNeedsSettings(mine, held(at('2026-09-28T11:00:00.000Z', 5), 'till-a'), 'till-a')).toBe(false);
   });
 
   it('orders stamps by revision first, then time', () => {

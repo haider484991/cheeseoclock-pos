@@ -87,7 +87,11 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   and fees, and the till's heartbeat % for pick-up.
 - **Deploy the website before updating the tills.** An older website drops
   the block (the menu still publishes) and the till's Settings says the
-  website needs its update.
+  website needs its update; once the website is updated, press Publish on
+  the till (it does not keep re-sending the menu by itself).
+- `GET /api/bridge/status` also says which block the website holds and
+  whether it fits the stored menu: a till reads it once at start-up, so a
+  website database rolled back to an older copy gets the areas again.
 - The home, delivery-area and landing pages are static and refreshed from the
   stored block: at build, after every publish, and at least hourly. With no
   database, or a database error, they use the built-in areas and fees.

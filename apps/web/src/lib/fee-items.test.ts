@@ -32,6 +32,8 @@ const settings: PublishedSettings = {
   v: 1,
   settingsAt: '2026-09-27T10:00:00.000Z',
   settingsRev: 2,
+  settingsTie: 0,
+  deviceId: 'till-test',
   pickup: { offered: true, percent: 10 },
   zones: DEFAULT_ZONE_FACTS.map((z) =>
     z.id === 'emaar' ? { ...z, active: false, feeCents: 30_000, feeItemId: 'fee-old' } : z.id === 'dha-8' ? { ...z, feeItemId: 'fee-250' } : z,

@@ -58,6 +58,8 @@ export const publishedSettingsSchema = z
     v: z.number().int().min(1),
     settingsAt: instant,
     settingsRev: z.number().int().min(0),
+    settingsTie: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    deviceId: z.string().max(200),
     pickup: publishedPickupSchema,
     zones: z.array(publishedZoneSchema).min(1).max(DELIVERY_ZONES_MAX),
   })

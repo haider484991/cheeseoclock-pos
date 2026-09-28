@@ -6,9 +6,10 @@ import {
   type PublishSettingsOutcome,
   type PublishedMenu,
   type PublishedSettings,
-  type SettingsStamp,
+  type WebsiteSettingsHeld,
 } from '@cheeseoclock/shared-types';
 import { sql } from './db';
+import { parseStoredSettings } from './site-facts';
 
 /**
  * Storing a menu publish and its settings block (PUT /api/bridge/menu), per
@@ -43,24 +44,43 @@ export function websiteBlockProblem(
   return null;
 }
 
+/** What the website holds, from the stored block and the menu stored with it (null = no block). */
+export function heldSettingsOf(
+  block: PublishedSettings | null,
+  menu: Pick<PublishedMenu, 'categories'> | null,
+): WebsiteSettingsHeld | null {
+  if (!block) return null;
+  return {
+    settingsRev: block.settingsRev,
+    settingsAt: block.settingsAt,
+    settingsTie: typeof block.settingsTie === 'number' ? block.settingsTie : null,
+    settingsDeviceId: typeof block.deviceId === 'string' ? block.deviceId : null,
+    // A kept block may meet a menu from a till the link has not caught up yet: say so, and the
+    // till that holds the block's fee items sends its menu again (pos-domain websiteNeedsSettings).
+    settingsProblem: menu ? settingsBlockProblem(block, menu) : null,
+  };
+}
+
 /**
  * Store the menu, and decide its block, in ONE statement on the site_menu
  * row (a read-then-write would let an older till publishing at the same
  * moment wipe a newer block):
  *  - no block (an older till): the stored block stays, with the new menu;
  *  - a block older than the stored one: dropped, the stored block stays, the
- *    menu is stored;
+ *    menu is stored — unless the stored block came from the same till and
+ *    this one's time is later (a till restored from an older backup that
+ *    has saved since: a till may always replace its own block);
  *  - otherwise (newer or EQUAL, or nothing stored): stored with the menu.
- * The row comparison (rev, at) >= (rev, at) is compareSettingsStamp:
- * revision first, then time.
+ * The row comparison (rev, at, tie) >= (rev, at, tie) is compareSettingsStamp:
+ * revision first, then the newest time, then the sum of the times.
  *
- * @returns the block the website holds now (null = none) and what happened
+ * @returns what the website holds now (null = no block) and what happened
  *   to the one sent.
  */
 export async function storePublishedMenu(
   menu: Omit<PublishedMenu, 'settings'>,
   settings: PublishedSettings | undefined,
-): Promise<{ held: SettingsStamp | null; outcome: PublishSettingsOutcome }> {
+): Promise<{ held: WebsiteSettingsHeld | null; outcome: PublishSettingsOutcome }> {
   const doc: PublishedMenu = settings ? { ...menu, settings } : { ...menu };
   const hasBlock = settings !== undefined;
   const rows = (await sql()`
@@ -70,38 +90,45 @@ export async function storePublishedMenu(
       menu_json = CASE
         WHEN ${hasBlock}::boolean AND (
                site_menu.menu_json -> 'settings' IS NULL
-            OR (${settings?.settingsRev ?? 0}::integer, ${settings?.settingsAt ?? null}::timestamptz)
+            OR (${settings?.settingsRev ?? 0}::integer,
+                ${settings?.settingsAt ?? null}::timestamptz,
+                ${settings?.settingsTie ?? 0}::bigint)
                >= ((site_menu.menu_json #>> '{settings,settingsRev}')::integer,
-                   (site_menu.menu_json #>> '{settings,settingsAt}')::timestamptz))
+                   (site_menu.menu_json #>> '{settings,settingsAt}')::timestamptz,
+                   COALESCE((site_menu.menu_json #>> '{settings,settingsTie}')::bigint, 0))
+            OR (site_menu.menu_json #>> '{settings,deviceId}' = ${settings?.deviceId ?? null}::text
+                AND ${settings?.settingsAt ?? null}::timestamptz
+                    > (site_menu.menu_json #>> '{settings,settingsAt}')::timestamptz))
           THEN EXCLUDED.menu_json
         WHEN site_menu.menu_json -> 'settings' IS NOT NULL
           THEN jsonb_set(EXCLUDED.menu_json - 'settings', '{settings}', site_menu.menu_json -> 'settings')
         ELSE EXCLUDED.menu_json - 'settings'
       END,
       published_at = now()
-    RETURNING menu_json #>> '{settings,settingsAt}' AS settings_at,
-              (menu_json #>> '{settings,settingsRev}')::integer AS settings_rev
-  `) as Array<{ settings_at: string | null; settings_rev: number | string | null }>;
-  const row = rows[0];
-  const held =
-    row && row.settings_at !== null && row.settings_rev !== null
-      ? { settingsAt: row.settings_at, settingsRev: Number(row.settings_rev) }
-      : null;
+    RETURNING menu_json -> 'settings' AS settings
+  `) as Array<{ settings: unknown }>;
+  const block = parseStoredSettings(rows[0]?.settings ?? null);
+  const held = heldSettingsOf(block, menu);
   let outcome: PublishSettingsOutcome;
-  if (settings) outcome = held && compareSettingsStamp(held, settings) === 0 ? 'stored' : 'ignored_older';
-  else outcome = held ? 'kept' : 'none';
+  if (settings) {
+    outcome =
+      held &&
+      held.settingsDeviceId === settings.deviceId &&
+      compareSettingsStamp(held, settings) === 0 &&
+      held.settingsTie === settings.settingsTie
+        ? 'stored'
+        : 'ignored_older';
+  } else outcome = held ? 'kept' : 'none';
   return { held, outcome };
 }
 
-/** The block's stamp the website holds (null = none), for the bridge's status read. */
-export async function storedSettingsStamp(): Promise<SettingsStamp | null> {
+/** The block the website holds (null = none) and whether it fits the menu stored with it, for the bridge's status read. */
+export async function storedSettingsHeld(): Promise<WebsiteSettingsHeld | null> {
   const rows = (await sql()`
-    SELECT menu_json #>> '{settings,settingsAt}' AS settings_at,
-           (menu_json #>> '{settings,settingsRev}')::integer AS settings_rev
-      FROM site_menu WHERE id = 1
-  `) as Array<{ settings_at: string | null; settings_rev: number | string | null }>;
-  const row = rows[0];
-  return row && row.settings_at !== null && row.settings_rev !== null
-    ? { settingsAt: row.settings_at, settingsRev: Number(row.settings_rev) }
-    : null;
+    SELECT menu_json FROM site_menu WHERE id = 1
+  `) as Array<{ menu_json: PublishedMenu | string | null }>;
+  const raw = rows[0]?.menu_json ?? null;
+  const menu = typeof raw === 'string' ? (JSON.parse(raw) as PublishedMenu) : raw;
+  if (!menu) return null;
+  return heldSettingsOf(parseStoredSettings(menu.settings ?? null), menu);
 }

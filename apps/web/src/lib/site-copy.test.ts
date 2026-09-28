@@ -41,6 +41,8 @@ import { validateCheckout } from './checkout-validation';
 import {
   BURGER_FAQ_AREAS,
   DELIVERY_HUB_DESCRIPTION,
+  DELIVERY_HUB_INTRO,
+  HOME_DELIVERY_NOTE,
   HOME_FAQ_AREAS,
   HOME_HERO_FEE,
   HOME_STAT_FEE,
@@ -54,7 +56,7 @@ import sitemap from '../app/sitemap';
 function block(edit: (zones: FactZone[]) => void = () => {}, pickup = { offered: true, percent: 10 }): PublishedSettings {
   const zones = DEFAULT_ZONE_FACTS.map((z) => ({ ...z, aliases: [...z.aliases] }));
   edit(zones);
-  return { v: 1, settingsAt: '2026-09-27T10:00:00.000Z', settingsRev: 3, pickup, zones };
+  return { v: 1, settingsAt: '2026-09-27T10:00:00.000Z', settingsRev: 3, settingsTie: 0, deviceId: 'till-test', pickup, zones };
 }
 const zone = (zones: FactZone[], id: string) => zones.find((z) => z.id === id)!;
 
@@ -74,7 +76,7 @@ describe('with no settings block the site reads exactly as v0.7.26', () => {
       expect(r.adjacent).toEqual(g.adjacent);
       expect(getArea(g.slug)!.zoneIds).toEqual(g.zoneIds);
       expect(r.fee).toBe(g.feeText);
-      expect(feeText(getArea(g.slug)!)).toBe(g.feeText);
+      expect(feeText(getArea(g.slug)!, DEFAULT_FACTS)).toBe(g.feeText);
       expect(`PIZZA & BURGER DELIVERY — ${feeText(getArea(g.slug)!, DEFAULT_FACTS).toUpperCase()}`).toBe(g.ogSubtitle);
       expect(r.pausedNote).toBeNull();
     }
@@ -94,6 +96,13 @@ describe('with no settings block the site reads exactly as v0.7.26', () => {
     expect(copyText(LATE_NIGHT_FAQ_AREAS, DEFAULT_FACTS)).toBe(golden.pages.lateNightFaqAreas);
     expect(copyText(PIZZA_FAQ_AREAS, DEFAULT_FACTS)).toBe(golden.pages.pizzaFaqAreas);
     expect(copyText(BURGER_FAQ_AREAS, DEFAULT_FACTS)).toBe(golden.pages.burgerFaqAreas);
+    // Two paragraphs moved out of the page files into page-copy (v0.7.26's words, the summary as the golden copy has it).
+    expect(copyText(DELIVERY_HUB_INTRO, DEFAULT_FACTS)).toBe(
+      `Every order fires from our kitchen in DHA Phase 6 — daily from 12 noon to 1 am, always cash on delivery. We deliver in DHA and Clifton only: ${golden.feeSummarySentence}. Pick your area below for the streets we cover and answers to the questions your area actually asks.`,
+    );
+    expect(copyText(HOME_DELIVERY_NOTE, DEFAULT_FACTS)).toBe(
+      'Our kitchen is in Rahat Commercial Area, DHA Phase 6. Pick your area at checkout and the delivery charge is added for you — we don’t take online orders outside DHA and Clifton.',
+    );
   });
 
   it('the ordering flow: refusal, checkout messages, chips and the area list', () => {
@@ -249,13 +258,73 @@ describe('a block with other fees', () => {
       { feeCents: 30_000, places: 'DHA Phase 8' },
       { feeCents: 35_000, places: 'PECHS Block 6' },
     ]);
-    // The home page's two-tier sentence gives way to the tiers.
+    // The home page's two-tier sentence gives way to the tiers — and, with Emaar paused and PECHS
+    // added, its areas are written from the owner's list, not "DHA and Clifton".
     expect(copyText(HOME_FAQ_AREAS, facts)).toBe(
-      "DHA Phases 1–8 and Clifton Blocks 1–9, including Emaar Crescent Bay and Creek Vista. Delivery is Rs 200 for DHA Phases 1–7, Clifton Blocks 3, 4 & 6–9; Rs 220 for Clifton Block 5; Rs 250 for DHA Creek Vista, Clifton Blocks 1 & 2; Rs 300 for DHA Phase 8; Rs 350 for PECHS Block 6. We don't deliver outside DHA and Clifton.",
+      "We deliver to DHA Phases 1–8, Creek Vista, Clifton Blocks 1–9, PECHS Block 6. Delivery is Rs 200 for DHA Phases 1–7, Clifton Blocks 3, 4 & 6–9; Rs 220 for Clifton Block 5; Rs 250 for DHA Creek Vista, Clifton Blocks 1 & 2; Rs 300 for DHA Phase 8; Rs 350 for PECHS Block 6. We don't deliver outside DHA, Clifton and PECHS.",
     );
     expect(outsideZoneMessage(facts)).toBe(
       'We deliver in DHA, Clifton and PECHS only. Choose your area from the list — if it is not there, we cannot deliver to it.',
     );
+  });
+
+  it('never says it delivers only to DHA and Clifton once the owner’s areas say otherwise (an area added, a group switched off, every area off)', () => {
+    // A new group, the fees otherwise as today.
+    const pechs = factsFromBlock(
+      block((zs) => {
+        zs.push({ id: 'pechs-6', name: 'PECHS Block 6', shortName: 'Block 6', group: 'PECHS', feeCents: 30_000, feeItemId: 'fee-300', active: true, sort: zs.length, aliases: [] });
+      }),
+    );
+    const everywhere = [
+      copyText(HOME_FAQ_AREAS, pechs),
+      copyText(HOME_DELIVERY_NOTE, pechs),
+      copyText(DELIVERY_HUB_DESCRIPTION, pechs),
+      copyText(DELIVERY_HUB_INTRO, pechs),
+      copyText(LATE_NIGHT_FAQ_AREAS, pechs),
+      copyText(PIZZA_FAQ_AREAS, pechs),
+      copyText(BURGER_FAQ_AREAS, pechs),
+      ...DELIVERY_AREAS.flatMap((a) => renderArea(a, pechs).faqs.map((f) => f.a)),
+    ];
+    for (const t of everywhere) {
+      expect(t).not.toMatch(/(outside|in) DHA and Clifton|DHA and Clifton only/);
+    }
+    expect(copyText(PIZZA_FAQ_AREAS, pechs)).toContain('We deliver in DHA, Clifton and PECHS only.');
+    expect(copyText(LATE_NIGHT_FAQ_AREAS, pechs)).toContain('We do not deliver outside DHA, Clifton and PECHS at any hour.');
+    expect(copyText(HOME_FAQ_AREAS, pechs)).toContain("Rs 300 for PECHS Block 6. We don't deliver outside DHA, Clifton and PECHS.");
+    // "Do you deliver beyond Clifton? No — DHA and Clifton only" is left out; Phase 2 Ext's answer names the owner's groups.
+    expect(renderArea(getArea('clifton')!, pechs).faqs.some((f) => f.q === 'Do you deliver beyond Clifton?')).toBe(false);
+    expect(renderArea(getArea('dha-phase-1-2')!, pechs).faqs.map((f) => f.a)).toContain(
+      'Yes, Phase 2 Ext has its own option at checkout. We deliver in DHA, Clifton and PECHS only, so for boundary streets near Korangi Road, drop us a WhatsApp first and we will confirm your address is in zone.',
+    );
+
+    // Clifton switched off, fees as today: no sentence prices or offers Clifton.
+    const noClifton = factsFromBlock(
+      block((zs) => {
+        for (const z of zs) if (z.group === 'Clifton') z.active = false;
+      }),
+    );
+    for (const t of [copyText(HOME_FAQ_AREAS, noClifton), copyText(LATE_NIGHT_FAQ_AREAS, noClifton), copyText(DELIVERY_HUB_DESCRIPTION, noClifton), copyText(DELIVERY_HUB_INTRO, noClifton)]) {
+      expect(t).not.toContain('Clifton');
+    }
+
+    // Every area switched off: the /delivery paragraph still reads (no "only: ." with the fees missing).
+    const none = factsFromBlock(block((zs) => zs.forEach((z) => (z.active = false))));
+    const intro = copyText(DELIVERY_HUB_INTRO, none);
+    expect(intro).not.toMatch(/: \.|is \./);
+    expect(intro).toContain('Rs 200 for');
+    expect(copyText(HOME_FAQ_AREAS, none)).not.toMatch(/is \.|to \./);
+  });
+
+  it('a free area reads as free, never "Rs 0", on the chips and in the checkout list', () => {
+    const free6 = factsFromBlock(block((zs) => ((zone(zs, 'dha-6').feeCents = 0), (zone(zs, 'dha-6').feeItemId = null))));
+    expect(feeText(getArea('dha-phase-6')!, free6)).toBe('Free delivery');
+    const labels = zoneOptionGroups(free6.zones).flatMap((g) => g.options.map((o) => o.label));
+    expect(labels).toContain('DHA Phase 6 — free delivery');
+    expect(labels.some((l) => /Rs 0\b/.test(l))).toBe(false);
+    const allFree = factsFromBlock(block((zs) => zs.forEach((z) => ((z.feeCents = 0), (z.feeItemId = null)))));
+    expect(deliveryChip(allFree)).toBe('Free delivery · DHA & Clifton');
+    expect(deliveryOptionNote(allFree)).toBe('Free · DHA & Clifton');
+    for (const a of DELIVERY_AREAS) expect(renderArea(a, allFree).fee).toBe('Free delivery');
   });
 
   it('lists a switched-off area in the checkout, not choosable', () => {
@@ -338,6 +407,20 @@ describe('fee tokens', () => {
   });
 });
 
+/** The ways JSX and templates hide the space between "Rs" and a number, made plain. */
+function plainLine(line: string): string {
+  return line
+    .replace(/&nbsp;|&#160;|&#xa0;|\u00a0/gi, ' ')
+    .replace(/\{\s*(['"`])\s*\1\s*\}/g, ' ')
+    .replace(/[ \t]+/g, ' ');
+}
+
+/** Does this line of source write a rupee amount by hand: "Rs 250", "Rs&nbsp;250", "Rs{' '}250", `Rs ${n}`, formatCents(25_000)? */
+function typesAFee(line: string): boolean {
+  const l = plainLine(line);
+  return /\bRs\.?\s*\d/.test(l) || /\bRs\.?\s*\$\{/.test(l) || /\bformatCents\(\s*\d/.test(l);
+}
+
 describe('no delivery fee is typed by hand', () => {
   // Menu prices and comments that are not delivery fees — each one named, so a
   // fee typed into a page ("Rs 300 delivery") fails here: write a token instead.
@@ -350,6 +433,7 @@ describe('no delivery fee is typed by hand', () => {
     ['app/pizza-delivery-dha-karachi/page.tsx', "big: 'From Rs 2,600'"],
     ['app/pizza-delivery-dha-karachi/page.tsx', 'dips are Rs 100 each.'],
     ['lib/format.ts', '/** Rs 1,234 (drops paisa when zero'],
+    ['lib/format.ts', 'return `Rs ${rupees'],
     ['lib/menu-view.ts', 'the page can say "Save Rs 650" without a hard-coded number'],
     ['lib/signatures.ts', '(Medium Rs 1,500, Large Rs 2,000, 1 litre Rs 250)'],
   ];
@@ -370,12 +454,33 @@ describe('no delivery fee is typed by hand', () => {
       readFileSync(path, 'utf8')
         .split(/\r?\n/)
         .forEach((line, i) => {
-          if (!/\bRs\.?\s?\d/.test(line)) return;
-          if (ALLOWED.some(([f, text]) => f === file && line.includes(text))) return;
+          if (!typesAFee(line)) return;
+          // An allowed line is fine only for its own words: a fee added beside them is still caught.
+          const rest = ALLOWED.filter(([f, text]) => f === file && line.includes(text)).reduce((l, [, text]) => l.replace(text, ''), line);
+          if (!typesAFee(rest)) return;
           found.push(`${file}:${i + 1}: ${line.trim()}`);
         });
     }
     expect(found, 'a fee typed by hand — use a {fee:…} token (lib/delivery-facts fillFees)').toEqual([]);
+  });
+
+  it('catches a fee hidden from a plain "Rs 250" search', () => {
+    for (const hidden of [
+      "'Rs 250 delivery'",
+      'Rs.250',
+      'Rs\u00a0250',
+      '<span>Rs&nbsp;250</span>',
+      "<b>Rs{' '}250</b>",
+      '<b>Rs{" "}250</b>',
+      'const fee = `Rs ${n}`;',
+      'formatCents(25_000)',
+      'Rs  250',
+    ]) {
+      expect(typesAFee(hidden), hidden).toBe(true);
+    }
+    for (const fine of ['{fee:dha-6}', 'formatCents(zone.feeCents)', 'Rs: see the menu', 'Track&nbsp;order']) {
+      expect(typesAFee(fine), fine).toBe(false);
+    }
   });
 
   it('keeps the list honest: every allowed line is still there', () => {

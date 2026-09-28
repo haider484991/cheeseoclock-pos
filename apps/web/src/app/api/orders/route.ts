@@ -177,16 +177,16 @@ export async function POST(req: Request): Promise<Response> {
     const facts = factsFromBlock(parseStoredSettings(settingsRows[0]?.settings ?? null));
 
     // Only where the owner delivers — the owner's rule, not a UI nicety.
-    const zone = pickup ? undefined : findFactZone(facts, input.zoneId);
-    if (!pickup && !zone) {
+    const zoneAsked = pickup ? undefined : findFactZone(facts, input.zoneId);
+    if (!pickup && !zoneAsked) {
       return Response.json(
         { ok: false, error: 'outside_zone', message: outsideZoneMessage(facts) },
         { status: 400 },
       );
     }
-    if (zone && !zone.active) {
+    if (zoneAsked && !zoneAsked.active) {
       return Response.json(
-        { ok: false, error: 'zone_paused', message: zonePausedMessage(zone) },
+        { ok: false, error: 'zone_paused', message: zonePausedMessage(zoneAsked) },
         { status: 400 },
       );
     }
@@ -252,6 +252,23 @@ export async function POST(req: Request): Promise<Response> {
     if (!menu) {
       return Response.json({ ok: false, error: 'menu_not_published' }, { status: 409 });
     }
+    // The area again, from the block stored WITH this menu (the same row, the same read): a till's
+    // publish that landed since the check above may have moved the fee to a new item this menu
+    // carries and the old one does not — the fee and its item must come from one publish.
+    const priceFacts = factsFromBlock(parseStoredSettings(menuRows[0]?.menu_json.settings ?? null));
+    const zoneNow = pickup ? undefined : findFactZone(priceFacts, input.zoneId);
+    if (!pickup && !zoneNow) {
+      return Response.json(
+        { ok: false, error: 'outside_zone', message: outsideZoneMessage(priceFacts) },
+        { status: 400 },
+      );
+    }
+    if (zoneNow && !zoneNow.active) {
+      return Response.json(
+        { ok: false, error: 'zone_paused', message: zonePausedMessage(zoneNow) },
+        { status: 400 },
+      );
+    }
     const itemIndex = new Map(
       menu.categories.flatMap((c) => c.items.map((i) => [i.posItemId, i] as const)),
     );
@@ -312,6 +329,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     let orderNotes = input.notes?.trim() || null;
+    const zone = zoneNow;
     if (zone && zone.feeCents > 0) {
       // The area's fee, as the till's own delivery-charge item so the receipt
       // and the rider's cash agree: its own item (feeItemId), else the item

@@ -70,7 +70,9 @@ const MenuSchema = z.object({
  *    the menu again without the block, and shows the owner the reason);
  *  - otherwise lib/publish-settings storePublishedMenu keeps, ignores or
  *    stores the block in the same statement as the menu, and the answer says
- *    which (data.settings) and which block the website now holds.
+ *    which (data.settings), which block the website now holds, and whether
+ *    that block fits the menu just stored (settingsProblem: a kept block may
+ *    name a fee item a till behind on the link does not have yet).
  * The pages that print fees and areas are ISR: revalidated here.
  */
 export async function PUT(req: Request): Promise<Response> {
@@ -108,6 +110,9 @@ export async function PUT(req: Request): Promise<Response> {
       settings: outcome,
       settingsAt: held?.settingsAt ?? null,
       settingsRev: held?.settingsRev ?? null,
+      settingsTie: held?.settingsTie ?? null,
+      settingsDeviceId: held?.settingsDeviceId ?? null,
+      settingsProblem: held?.settingsProblem ?? null,
     };
     return Response.json({ ok: true, data });
   } catch (e) {

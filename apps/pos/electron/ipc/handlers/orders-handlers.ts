@@ -413,13 +413,15 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     const s = requireOrderCreate();
     const area = typeof payload?.area === 'string' ? payload.area.slice(0, 200) : null;
     if (typeof payload?.orderId !== 'string') throw new IpcGuardError({ code: 'validation_failed', message: 'Which order?' });
+    // The repository's own refusals ("…inactive", "A foodpanda order never carries…") reach the
+    // cashier through defineHandler as they are; a database error stays hidden behind a reference.
     try {
       syncOrderDeliveryCharge(ctx.db, payload.orderId, area, { userId: s.id, deviceId: ctx.deviceId });
     } catch (e) {
-      throw new IpcGuardError({
-        code: 'precondition_failed',
-        message: e instanceof Error ? e.message : 'Could not add the delivery charge',
-      });
+      if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.message === 'Order not found') {
+        throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+      }
+      throw e;
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });

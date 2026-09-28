@@ -18,12 +18,14 @@
 import {
   DEFAULT_DELIVERY_ZONES,
   DEFAULT_SETTINGS_AT,
+  compareSettingsStamp,
   deliveryChargeItemName,
   isDeliveryChargeName,
   zoneFeeItem,
   type DeliveryZoneSetting,
   type OrderMode,
   type PublishedSettings,
+  type SettingsStamp,
 } from '@cheeseoclock/shared-types';
 import type { DeliveryAreas } from './delivery-areas.js';
 import { formatCents } from './money.js';
@@ -72,14 +74,28 @@ export interface FeeItemPlan {
  *     keeping its id and renamed to the fee's name;
  *  4. the fee's own row brought back when it was deleted;
  *  5. a new item with the fee's name-based id.
- * An item the saved list pointed at that no area charges now is switched off.
- * Items that only look like a delivery charge and were never an area's are
- * left alone.
+ * A delivery-charge item that is on, and that no area that is on charges
+ * now, is switched off (never deleted) when the areas charged it before:
+ *  - the saved list pointed at it (feeItemId);
+ *  - a Save made it (its fee's name-based id) — left on by a Save on the
+ *    other till that the link settled against (two offline Saves);
+ *  - it is named like a charge at a fee the saved list charged: before the
+ *    first Save the areas charge today's items by name and price, so the
+ *    first Save that moves every Rs 250 area switches today's Rs 250 item
+ *    off (Menu can't switch a fee item off, so nothing else ever would).
+ * Items that only look like a delivery charge, at a fee no area charged
+ * (the owner's own "Delivery charge long distance"), are left alone.
  */
 export function planFeeItems(input: {
   zones: ReadonlyArray<Omit<DeliveryZoneSetting, 'feeItemId'> & { feeItemId?: string | null }>;
   /** The fee items of the list saved now (before this Save): each area's feeItemId. */
   previousFeeItemIds: ReadonlySet<string>;
+  /**
+   * The fees the list saved now (before this Save) charges — for a till
+   * that never saved, the default's Rs 200 and Rs 250, whose items the areas
+   * found by name and price. Absent = none.
+   */
+  previousFees?: ReadonlySet<number>;
   items: readonly FeeItemCandidate[];
   idForFee: (feeCents: number) => string;
 }): FeeItemPlan {
@@ -153,11 +169,16 @@ export function planFeeItems(input: {
   });
 
   const inUse = new Set(chosen.values());
-  for (const id of [...input.previousFeeItemIds].sort()) {
-    const item = byId.get(id);
-    if (!item || item.deleted || !item.isActive || inUse.has(id)) continue;
-    actions.push({ kind: 'switchOff', id });
+  const off = new Set<string>();
+  for (const item of input.items) {
+    if (item.deleted || !item.isActive || inUse.has(item.id)) continue;
+    const theAreas =
+      input.previousFeeItemIds.has(item.id) ||
+      input.idForFee(item.basePriceCents) === item.id ||
+      (isDeliveryChargeName(item.name) && (input.previousFees?.has(item.basePriceCents) ?? false));
+    if (theAreas) off.add(item.id);
   }
+  for (const id of [...off].sort()) actions.push({ kind: 'switchOff', id });
   return { actions, zones };
 }
 
@@ -215,7 +236,12 @@ export type DeliveryChargeReason =
 
 export type DeliveryChargeTarget =
   | { kind: 'none'; reason: 'not_delivery' | 'no_area' | 'free' | 'paused'; zoneName?: string }
-  | { kind: 'leave'; reason: 'unknown_area' | 'which' }
+  | {
+      kind: 'leave';
+      reason: 'unknown_area' | 'which';
+      /** 'which': one of the places it may be has delivery switched off (the cashier must be told). */
+      pausedName?: string;
+    }
   | {
       kind: 'fee';
       feeCents: number;
@@ -243,6 +269,10 @@ export function deliveryChargeTarget(
   if (zones.length === 0) return { kind: 'leave', reason: 'unknown_area' };
   const on = zones.filter((z) => z.active !== false);
   if (on.length === 0) return { kind: 'none', reason: 'paused', zoneName: zones[0]!.name };
+  // A place across areas where one is switched off ("Khayaban-e-Ittehad" with Phase 8 paused): the
+  // customer may be in the paused one, so the till asks which rather than charging the other's fee.
+  const paused = zones.find((z) => z.active === false);
+  if (paused) return { kind: 'leave', reason: 'which', pausedName: paused.name };
   const fee = areas.feeForZones(on.map((z) => z.id));
   if (fee === null) return { kind: 'leave', reason: 'which' };
   if (fee === 0) return { kind: 'none', reason: 'free', zoneName: on[0]!.name };
@@ -294,9 +324,10 @@ export function deliveryChargeWords(target: DeliveryChargeTarget): string | null
       if (target.reason === 'free') return `Delivery to ${target.zoneName ?? 'this area'} is free`;
       return null;
     case 'leave':
-      return target.reason === 'which'
-        ? 'Pick the phase or block to add the delivery charge'
-        : null;
+      if (target.reason !== 'which') return null;
+      return target.pausedName
+        ? `Pick the phase or block to add the delivery charge — delivery to ${target.pausedName} is switched off in Settings → Delivery areas`
+        : 'Pick the phase or block to add the delivery charge';
   }
 }
 
@@ -311,30 +342,79 @@ export interface SettingStamp {
 }
 
 /**
+ * The block's stamp from the carried keys' rows (shared-types web-bridge.ts,
+ * THE STAMP): the sum of their versions, the newest updated_at, and the sum
+ * of their updated_at in ms — so a settled state that differs from a till's
+ * is always strictly newer than it, even at the same versions and newest time.
+ */
+export function settingsStampOf(stamps: ReadonlyArray<SettingStamp | null>): {
+  settingsRev: number;
+  settingsAt: string;
+  settingsTie: number;
+} {
+  let rev = 0;
+  let at = DEFAULT_SETTINGS_AT;
+  let tie = 0;
+  for (const s of stamps) {
+    if (!s) continue;
+    rev += s.version;
+    const ms = Date.parse(s.updatedAt);
+    if (Number.isFinite(ms)) tie += ms;
+    if (ms > Date.parse(at)) at = s.updatedAt;
+  }
+  return { settingsRev: rev, settingsAt: at, settingsTie: tie };
+}
+
+/**
+ * Does the website need this till's settings block? (shared-types
+ * web-bridge.ts, WHEN THE TILL SENDS ONE.) `held` = what the website said it
+ * holds, null when it holds no block or has not said.
+ *  - nothing saved on either till (rev 0): never;
+ *  - no block there, or an older one: yes;
+ *  - the same one, but it names a fee item the website's menu lacks (a till
+ *    behind on the link published over it): yes — this till's menu goes
+ *    with it;
+ *  - this till's own block, and a Save here since at a later time (a restore
+ *    from an older backup moved this till's versions back): yes — the
+ *    website takes a till's later block over its own;
+ *  - a newer one from the other till: no — the link brings it here.
+ */
+export function websiteNeedsSettings(
+  local: SettingsStamp,
+  held: { stamp: SettingsStamp; deviceId: string | null; problem: string | null } | null,
+  deviceId: string,
+): boolean {
+  if (local.settingsRev === 0) return false;
+  if (!held) return true;
+  const c = compareSettingsStamp(local, held.stamp);
+  if (c > 0) return true;
+  if (c === 0) return held.problem !== null;
+  return held.deviceId === deviceId && Date.parse(local.settingsAt) > Date.parse(held.stamp.settingsAt);
+}
+
+/**
  * The settings block for the menu publish: every area (switched-off ones
  * too) in display order, each ACTIVE one with a fee naming the item of
  * `menuItems` that carries it (its feeItemId when that item is there at
  * the fee, else today's by name and price); the pick-up offer; the stamp
- * (sum of the carried keys' versions, their newest updated_at). The caller
- * checks it against the same menu (settingsBlockProblem) before sending.
+ * (settingsStampOf) and the sending till. The caller checks it against the
+ * same menu (settingsBlockProblem) before sending.
  */
 export function buildSettingsBlock(input: {
   zones: readonly DeliveryZoneSetting[];
   pickup: { offered: boolean; percent: number };
   stamps: ReadonlyArray<SettingStamp | null>;
   menuItems: ReadonlyArray<{ id: string; name: string; basePriceCents: number }>;
+  /** The till sending it. */
+  deviceId: string;
 }): PublishedSettings {
-  let rev = 0;
-  let at = DEFAULT_SETTINGS_AT;
-  for (const s of input.stamps) {
-    if (!s) continue;
-    rev += s.version;
-    if (Date.parse(s.updatedAt) > Date.parse(at)) at = s.updatedAt;
-  }
+  const stamp = settingsStampOf(input.stamps);
   return {
     v: 1,
-    settingsAt: at,
-    settingsRev: rev,
+    settingsAt: stamp.settingsAt,
+    settingsRev: stamp.settingsRev,
+    settingsTie: stamp.settingsTie,
+    deviceId: input.deviceId,
     pickup: { offered: input.pickup.offered, percent: input.pickup.percent },
     zones: input.zones.map((z, sort) => {
       const item = z.feeCents > 0 ? zoneFeeItem(z, input.menuItems) : undefined;
