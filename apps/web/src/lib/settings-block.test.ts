@@ -223,6 +223,8 @@ describe('PUT /api/bridge/menu with the settings block', () => {
       settingsTie: null,
       settingsDeviceId: null,
       settingsProblem: null,
+      // v0.7.30: this website keeps the messages and "Pick-up only" (the till notices an older one).
+      websiteMessages: true,
     });
     expect(await storedRow()).toEqual(m);
     expect(await getSiteFacts()).toBe(DEFAULT_FACTS);

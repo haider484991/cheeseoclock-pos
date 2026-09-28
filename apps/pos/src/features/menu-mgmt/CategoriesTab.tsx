@@ -7,12 +7,14 @@ import { useToast } from '../../components/toast/ToastProvider';
 import {
   FEE_ITEM_LOCKED_NOTE,
   chargedFeeItemIds,
+  deliveryZoneFeeItemIds,
+  isDeliveryChargeMenuItem,
   type Category,
 } from '@cheeseoclock/shared-types';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { Plus, Edit, Trash2, X, Globe } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
-import { WEBSITE_CHANGE_NOTE } from '../settings/shop-rules/publishWords';
+import { CATEGORY_WEBSITE_WORDS, WEBSITE_CHANGE_NOTE, categoryWebsiteState } from '../settings/shop-rules/publishWords';
 
 const PALETTE = [
   '#dc2626', '#f59e0b', '#16a34a', '#2563eb',
@@ -42,6 +44,12 @@ export function CategoriesTab() {
     const items = itemsQ.data ?? [];
     const charged = chargedFeeItemIds(areas.zones, items);
     return new Set(items.filter((i) => i.isActive && charged.has(i.id)).map((i) => i.categoryId));
+  }, [itemsQ.data, areas]);
+  // The categories holding any delivery charge the publish sends (it always sends them, its category
+  // off the website or not — web-orders-bridge buildPublishedMenuReport): for the Website column.
+  const chargeHolders = useMemo(() => {
+    const ids = deliveryZoneFeeItemIds(areas.zones);
+    return new Set((itemsQ.data ?? []).filter((i) => i.isActive && isDeliveryChargeMenuItem(i, ids)).map((i) => i.categoryId));
   }, [itemsQ.data, areas]);
   // The till shows categories in display order; so does this list.
   const categories = useMemo(
@@ -116,13 +124,13 @@ export function CategoriesTab() {
                 )}
               </td>
               <td className="py-2">
-                {c.isOnWebsite ? (
+                {categoryWebsiteState(c, chargeHolders.has(c.id)) === 'on' ? (
                   <span className="inline-flex items-center gap-1 rounded bg-sky-50 px-2 py-0.5 text-xs text-sky-800 dark:bg-sky-950 dark:text-sky-200">
-                    <Globe className="h-3 w-3" aria-hidden="true" /> On the website
+                    <Globe className="h-3 w-3" aria-hidden="true" /> {CATEGORY_WEBSITE_WORDS.on}
                   </span>
                 ) : (
                   <span className="rounded bg-stone-200 px-2 py-0.5 text-xs text-stone-600 dark:bg-stone-700 dark:text-stone-300">
-                    Not on the website
+                    {CATEGORY_WEBSITE_WORDS[categoryWebsiteState(c, chargeHolders.has(c.id))]}
                   </span>
                 )}
               </td>

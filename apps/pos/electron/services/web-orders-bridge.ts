@@ -72,6 +72,7 @@ import type {
   PublishSettingsBody,
   PublishedMenu,
   PublishedMenuCategory,
+  PublishedSettings,
   SettingsPublishStatus,
   SettingsStamp,
   WebOrder,
@@ -156,6 +157,34 @@ const SETTINGS_NOTE_KEY = 'webBridge.settingsNote';
 /** Settings → Online orders, when the website is older than the settings block (no /api/bridge/settings, or it dropped the block). */
 const UNSUPPORTED_WEBSITE =
   'The website doesn’t take the delivery areas yet — it needs its update; then save the delivery areas again (Publish also works, and sends the menu too).';
+/**
+ * Settings → Online orders (and the publish toast), when the website is older than v0.7.30: it
+ * took the block and the menu but DROPPED what only v0.7.30 keeps (PublishMenuResult.websiteMessages).
+ */
+export const OLDER_WEBSITE_DROPS =
+  'The website is older than this till: it left out the website messages and “Pick-up only” (a delivery with a pick-up-only item is not refused). It needs its update — then press “Publish menu to website” once.';
+
+/**
+ * Does this publish carry something only a website of v0.7.30 on keeps? A website message off its
+ * default in the block (a closed notice with words, the announcement on, a smallest delivery order)
+ * or an item set "Pick-up only". An older website drops them silently; what is at its default is
+ * the older website's own behaviour, so nothing is lost then.
+ */
+export function carriesWebsiteMessages(
+  block: Pick<PublishedSettings, 'closedNotice' | 'announcement' | 'minDeliveryOrderCents'> | null,
+  menu: Pick<PublishedMenu, 'categories'> | null,
+): boolean {
+  if (
+    block &&
+    ((block.closedNotice?.text ?? '') !== '' ||
+      block.announcement?.on === true ||
+      (block.minDeliveryOrderCents ?? 0) > 0)
+  ) {
+    return true;
+  }
+  return !!menu && menu.categories.some((c) => c.items.some((i) => i.pickupOnly === true));
+}
+
 /** Audit history kept in the cloud copy. Local and USB copies are complete. */
 const CLOUD_COPY_AUDIT_DAYS = 90;
 
@@ -1636,6 +1665,11 @@ class WebOrdersBridge {
       const data = ((await res.json().catch(() => null)) as { data?: Partial<PublishMenuResult> } | null)?.data ?? null;
       this.settingsAnswered(sb.stamp, sentBlock, data);
       if (!sentBlock && sb.problem) this.noteSettings(sb.stamp, 'refused', sb.problem);
+      // An older website took the menu (and the block) but dropped "Pick-up only" and the messages:
+      // say so — the owner's Publish once the website is updated sends them again.
+      const olderWebsite =
+        data?.websiteMessages !== true && carriesWebsiteMessages(sentBlock ? sb.block : null, menu);
+      if (olderWebsite) this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_DROPS);
 
       log.info('Menu published to website', {
         categories: menu.categories.length,
@@ -1648,7 +1682,7 @@ class WebOrdersBridge {
           items: photosLeftOut.map((p) => p.name),
         });
       }
-      return { categories: menu.categories.length, items: itemCount, photosLeftOut };
+      return { categories: menu.categories.length, items: itemCount, photosLeftOut, ...(olderWebsite ? { olderWebsite } : {}) };
     } finally {
       this.settingsPublishing = false;
       if (this.settingsRecheck) {
@@ -1705,6 +1739,10 @@ class WebOrdersBridge {
       }
       const data = ((await res.json().catch(() => null)) as { data?: Partial<PublishMenuResult> } | null)?.data ?? null;
       this.settingsAnswered(sb.stamp, true, data);
+      // An older website stored the areas but dropped the messages: say so, and send this stamp no more by itself.
+      if (data?.websiteMessages !== true && carriesWebsiteMessages(sb.block, null)) {
+        this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_DROPS);
+      }
       log.info('Website settings sent to the website (the menu stays as published)', {
         feeItems: body.feeItems.length,
         settings: data?.settings ?? 'unknown',

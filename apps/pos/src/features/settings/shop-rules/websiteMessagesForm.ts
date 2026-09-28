@@ -67,19 +67,62 @@ export function partIsDefault(value: OnlineOptions, part: OnlineOptionsPart): bo
   );
 }
 
+/** The same part in two values (what one card shows). */
+export function samePart(a: OnlineOptions, b: OnlineOptions, part: OnlineOptionsPart): boolean {
+  if (part === 'publish') return a.autoPublishMenu === b.autoPublishMenu;
+  return (
+    a.closedNotice.text === b.closedNotice.text &&
+    a.closedNotice.until === b.closedNotice.until &&
+    a.announcement.on === b.announcement.on &&
+    a.announcement.text === b.announcement.text &&
+    a.minDeliveryOrderCents === b.minDeliveryOrderCents
+  );
+}
+
 /**
- * The card as ONE part of the key shows it: its own "Default" badge, and a
- * "Put back the default" that writes only its part (the other card's part
- * is kept). History and "last changed" are the key's.
+ * The key's History (newest first) as ONE card shows it: only the saves that
+ * changed ITS part — a Save of the other card is not a change here. The
+ * oldest line is weighed against the default (a first save of the messages
+ * leaves "publish by itself" at its default). A line this version can't read
+ * is kept (it may have changed either).
+ */
+export function partHistory(
+  history: ShopSettingCard<'online.options'>['history'],
+  part: OnlineOptionsPart,
+): ShopSettingCard<'online.options'>['history'] {
+  return history.filter((h, i) => {
+    if (!h.value) return true;
+    const before = i + 1 < history.length ? history[i + 1]!.value : DEFAULT_ONLINE_OPTIONS;
+    return !before || !samePart(h.value, before, part);
+  });
+}
+
+/**
+ * The card as ONE part of the key shows it: its own "Default" badge, a "Put
+ * back the default" that writes only its part (the other card's part is
+ * kept), and its own History and "last changed" — the latest save that
+ * changed its part (partHistory), or "never changed" while it is at its
+ * default with none. Whether the other till has the key yet stays the key's.
  */
 export function onlineOptionsPart(
   card: ShopSettingCard<'online.options'>,
   part: OnlineOptionsPart,
 ): ShopSettingCard<'online.options'> {
+  const history = partHistory(card.history, part);
+  const last = history[0];
+  const isDefault = !card.readOnly && partIsDefault(card.value, part);
   return {
     ...card,
-    isDefault: !card.readOnly && partIsDefault(card.value, part),
+    isDefault,
     defaultValue: putBackPart(card.value, part),
+    history,
+    lastChanged: last
+      ? { at: last.at, byName: last.byName, onThisTill: last.onThisTill }
+      : // No save of this part in the History: never changed while it is at its default; otherwise
+        // (a History cut short, a restored backup) the key's own, rather than a wrong "never".
+        isDefault
+        ? null
+        : card.lastChanged,
   };
 }
 
@@ -207,7 +250,7 @@ export const WEBSITE_MESSAGES_RULES = {
   notice: `The website’s words while it is closed: one line, up to ${CLOSED_NOTICE_MAX} letters (for example “Closed for Eid — back on Monday”). The WhatsApp and call buttons stay. Empty = the website’s own words.`,
   noticeUntil:
     'The last day it shows (Karachi time). With no end date the notice shows every night the website is closed — the website closes by itself when the last shift closes.',
-  announcement: `A line on the website’s home page and menu page while it is on, up to ${ANNOUNCEMENT_MAX} letters (for example a new item or a holiday). It never goes into the page titles or Google’s listing.`,
+  announcement: `A line on the website’s home page and menu page while it is on, up to ${ANNOUNCEMENT_MAX} letters (for example a new item or a holiday). It never goes into the page titles, descriptions or the data written for search engines — but it is words on the home page, so Google may show them in its results, and for a while after you switch it off.`,
   minimum:
     'The smallest website DELIVERY order, in whole rupees: the food, before tax and the delivery charge. Pick-up is never refused, and orders rung up at the till (phone, WhatsApp, walk-in) are not checked.',
   reaches:

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { PublishedSettings } from '@cheeseoclock/shared-types';
+import { closedNoticeInForce, type PublishedSettings } from '@cheeseoclock/shared-types';
 import { publishedSettingsReadSchema } from '@cheeseoclock/shared-schemas/web-settings';
 import { sql } from './db';
 import { DEFAULT_FACTS, factsFromBlock, type SiteFacts } from './delivery-facts';
@@ -93,3 +93,24 @@ const dedupe: Dedupe = ((React as unknown as { cache?: Dedupe }).cache ?? ((fn) 
  * till's publish revalidates them (api/bridge/menu).
  */
 export const getSiteFacts: () => Promise<SiteFacts> = dedupe(readSiteFacts);
+
+/**
+ * The owner's closed notice in force at `nowMs` (v0.7.30), or null: the
+ * page's own closed words. Worked out per request, like the order route and
+ * /menu do, for the store-status poll (api/store-status): a /menu page left
+ * open drops a notice whose last Karachi day has ended — and shows one saved
+ * since — within one poll, instead of keeping what it was served. Never
+ * throws: with no database, or on any failure, null (today's words).
+ */
+export async function readClosedNotice(nowMs: number = Date.now()): Promise<string | null> {
+  if (!process.env['DATABASE_URL']) return null;
+  try {
+    const rows = (await sql()`
+      SELECT menu_json -> 'settings' AS settings FROM site_menu WHERE id = 1
+    `) as Array<{ settings: unknown }>;
+    return closedNoticeInForce(parseStoredSettings(rows[0]?.settings ?? null)?.closedNotice, nowMs);
+  } catch (e) {
+    console.error('closed notice read failed — the page says its own closed words', e);
+    return null;
+  }
+}

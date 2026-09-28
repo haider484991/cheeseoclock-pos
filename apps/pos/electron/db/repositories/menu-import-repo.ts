@@ -36,6 +36,7 @@ import {
 } from './modifier-repo.js';
 import { listTaxCategories, createTaxCategory } from './tax-category-repo.js';
 import {
+  normalizeName,
   planMenuImport,
   type GroupRef,
   type IngredientRef,
@@ -46,7 +47,13 @@ import {
 } from '../menu-import-plan.js';
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
 import { toPriceKind } from '@cheeseoclock/pos-domain';
-import { isDeliveryChargeMenuItem, type MenuImportFreshStart, type MenuImportSummary } from '@cheeseoclock/shared-types';
+import {
+  isDeliveryChargeMenuItem,
+  webAvailabilityOf,
+  type MenuImportFreshStart,
+  type MenuImportSummary,
+  type WebAvailability,
+} from '@cheeseoclock/shared-types';
 
 /** The import cannot run as asked (open orders during a fresh start…). */
 export class MenuImportRefusedError extends Error {}
@@ -171,18 +178,78 @@ function emptyMenu(live: MenuSnapshot, feeItemIds: ReadonlySet<string>): MenuSna
   };
 }
 
-function freshStartOf(db: AppDatabase, live: MenuSnapshot, feeItemIds: ReadonlySet<string>): MenuImportFreshStart {
-  const kept = emptyMenu(live, feeItemIds);
+/**
+ * What the owner set in Menu → On the website on the rows a fresh start
+ * removes (the delivery charges and their categories stay, and keep theirs),
+ * by name (normalizeName, as the import matches): each item set "Pick-up
+ * only" or "Not on the website", each category off the website. The file
+ * carries no website setting, so a fresh start gives the file's item or
+ * category of the SAME name the setting its namesake had — the "kept on the
+ * till" rule of an ordinary import, and the menu the import publishes at
+ * once (menu:importApply) keeps them. Two removed rows of one name that were
+ * set differently carry nothing (never guessed). A value this version does
+ * not know (a newer till's) is not carried.
+ */
+interface WebsiteCarry {
+  items: Map<string, WebAvailability>;
+  offCategories: Set<string>;
+  /** Items and categories set so, by name — what the preview weighs against the file. */
+  setItems: string[];
+  setCategories: string[];
+}
+
+function websiteCarryOf(db: AppDatabase, feeItemIds: ReadonlySet<string>): WebsiteCarry {
+  const kept = emptyMenu(readMenuSnapshot(db), feeItemIds);
   const keptItems = new Set(kept.items.map((i) => i.id));
   const keptCategories = new Set(kept.categories.map((c) => c.id));
-  // What the owner set in Menu → On the website that the fresh start takes with it: the file
-  // carries no website setting, so what it brings back is on the website again.
-  const offItems = (
-    db.prepare(`SELECT id FROM menu_items WHERE deleted_at IS NULL AND web_availability <> 'on'`).all() as Array<{ id: string }>
-  ).filter((r) => !keptItems.has(r.id)).length;
-  const offCategories = (
-    db.prepare(`SELECT id FROM categories WHERE deleted_at IS NULL AND is_on_website = 0`).all() as Array<{ id: string }>
-  ).filter((r) => !keptCategories.has(r.id)).length;
+  const items = new Map<string, WebAvailability | null>();
+  const setItems: string[] = [];
+  for (const r of db
+    .prepare(`SELECT id, name, web_availability FROM menu_items WHERE deleted_at IS NULL`)
+    .all() as Array<{ id: string; name: string; web_availability: string }>) {
+    if (keptItems.has(r.id)) continue;
+    const key = normalizeName(r.name);
+    const w = webAvailabilityOf(r.web_availability);
+    if (items.has(key) && items.get(key) !== w) items.set(key, null);
+    else items.set(key, w);
+  }
+  const carried = new Map<string, WebAvailability>();
+  for (const [key, w] of items) {
+    if (w === null || w === 'on') continue;
+    carried.set(key, w);
+    setItems.push(key);
+  }
+  const categories = new Map<string, boolean | null>();
+  for (const r of db
+    .prepare(`SELECT id, name, is_on_website FROM categories WHERE deleted_at IS NULL`)
+    .all() as Array<{ id: string; name: string; is_on_website: number }>) {
+    if (keptCategories.has(r.id)) continue;
+    const key = normalizeName(r.name);
+    const off = r.is_on_website === 0;
+    if (categories.has(key) && categories.get(key) !== off) categories.set(key, null);
+    else categories.set(key, off);
+  }
+  const offCategories = new Set<string>();
+  for (const [key, off] of categories) if (off === true) offCategories.add(key);
+  return { items: carried, offCategories, setItems, setCategories: [...offCategories] };
+}
+
+function freshStartOf(
+  db: AppDatabase,
+  live: MenuSnapshot,
+  feeItemIds: ReadonlySet<string>,
+  ops: MenuImportOps,
+): MenuImportFreshStart {
+  const kept = emptyMenu(live, feeItemIds);
+  const keptItems = new Set(kept.items.map((i) => i.id));
+  // The website settings the fresh start can't keep: set on a row it removes whose name the file
+  // does not bring back (websiteCarryOf) — what the file brings back under another name is on the
+  // website, and the import publishes the menu at once.
+  const carry = websiteCarryOf(db, feeItemIds);
+  const fileItems = new Set(ops.items.flatMap((o) => (o.create ? [normalizeName(o.create.name)] : [])));
+  const fileCategories = new Set(ops.categories.flatMap((c) => (c.create ? [normalizeName(c.create.name)] : [])));
+  const lost =
+    carry.setItems.filter((k) => !fileItems.has(k)).length + carry.setCategories.filter((k) => !fileCategories.has(k)).length;
   return {
     items: live.items
       .filter((i) => !keptItems.has(i.id))
@@ -193,7 +260,7 @@ function freshStartOf(db: AppDatabase, live: MenuSnapshot, feeItemIds: ReadonlyS
     choiceGroups: live.modifierGroups.length,
     ingredients: live.ingredients.length,
     openOrders: countOpenOrders(db),
-    websiteSettingsLost: offItems + offCategories,
+    websiteSettingsLost: lost,
   };
 }
 
@@ -213,7 +280,7 @@ export function planMenuImportFromDb(
   const feeItemIds = readDeliveryFeeItemIds(db);
   if (!opts.fresh) return planMenuImport(file, live, policy, feeItemIds);
   const plan = planMenuImport(file, emptyMenu(live, feeItemIds), policy, feeItemIds);
-  return { ...plan, preview: { ...plan.preview, fresh: freshStartOf(db, live, feeItemIds), untouchedItems: [] } };
+  return { ...plan, preview: { ...plan.preview, fresh: freshStartOf(db, live, feeItemIds, plan.ops), untouchedItems: [] } };
 }
 
 /**
@@ -341,10 +408,13 @@ export function applyMenuImport(
   const tx = db.transaction((): MenuImportSummary => {
     let removedItems = 0;
     let taxUse: Map<string, number> | undefined;
+    /** A fresh start: the website settings of the rows it removes, for the file's rows of the same name. */
+    let carry: WebsiteCarry | null = null;
     const feeItemIds = readDeliveryFeeItemIds(db);
     if (opts.fresh) {
       refuseFreshStartWhileBusy(db);
       taxUse = taxUseOf(readMenuSnapshot(db));
+      carry = websiteCarryOf(db, feeItemIds);
       removedItems = clearMenu(db, actor, feeItemIds);
     }
     const snapshot = readMenuSnapshot(db);
@@ -362,7 +432,8 @@ export function applyMenuImport(
 
     const categoryIds = new Map<string, string>();
     for (const c of ops.categories) {
-      categoryIds.set(c.fileKey, c.existingId ?? createCategory(db, c.create!, actor).id);
+      const offWebsite = !c.existingId && !!carry && carry.offCategories.has(normalizeName(c.create!.name));
+      categoryIds.set(c.fileKey, c.existingId ?? createCategory(db, { ...c.create!, ...(offWebsite ? { isOnWebsite: false } : {}) }, actor).id);
     }
 
     const ingredientIds = new Map<string, string>();
@@ -509,6 +580,7 @@ export function applyMenuImport(
       if (!itemId && op.create) {
         const categoryId = categoryIds.get(op.create.categoryFileKey);
         if (!categoryId || !taxCategoryId) throw new Error(`No category or tax for ${op.create.name}`);
+        const webAvailability = carry?.items.get(normalizeName(op.create.name));
         itemId = createMenuItem(
           db,
           {
@@ -518,6 +590,7 @@ export function applyMenuImport(
             basePriceCents: op.create.basePriceCents,
             taxCategoryId,
             sortOrder: op.create.sortOrder,
+            ...(webAvailability ? { webAvailability } : {}),
           },
           actor,
         ).id;

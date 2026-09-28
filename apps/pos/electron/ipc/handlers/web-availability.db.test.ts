@@ -640,6 +640,61 @@ live('a menu file import keeps where things sell on the website ("kept on the ti
     expect(wrap).toEqual({ web_availability: 'on' });
   });
 
+  it('a fresh start keeps each website setting for the file’s item or category of the SAME name — the menu it publishes at once keeps them; one brought back under another name is on the website, and the preview counted it', async () => {
+    h.session = MANAGER;
+    await data('menu:updateItem', { id: menu.burger, webAvailability: 'pickup_only' });
+    await data('menu:updateItem', { id: menu.side, webAvailability: 'off' });
+    await data('menu:updateCategory', { id: menu.drinks, isOnWebsite: false });
+    const { applyMenuImport, planMenuImportFromDb } = await import('../../db/repositories/menu-import-repo.js');
+    // The same names (another case and spacing — the import's matching), but the side comes back as "Test Chips".
+    const f = file([
+      { name: 'Test Pizza', category: 'Test food', priceCents: 90_000, recipe: [] },
+      { name: 'test  BURGER', category: 'Test food', priceCents: 61_000, recipe: [] },
+      { name: 'Test Chips', category: 'Test food', priceCents: 31_000, recipe: [] },
+      { name: 'Test Drink', category: 'Test drinks', priceCents: 15_000, recipe: [] },
+    ]);
+    expect(planMenuImportFromDb(db as never, f, { fresh: true }).preview.fresh).toMatchObject({ websiteSettingsLost: 1 });
+    applyMenuImport(db as never, f, 'test.json', OWNER_ACTOR, { fresh: true });
+    const row = (name: string) =>
+      db.prepare(`SELECT id, web_availability FROM menu_items WHERE name = ? AND deleted_at IS NULL`).get(name) as { id: string; web_availability: string };
+    expect(row('test  BURGER').web_availability).toBe('pickup_only');
+    expect(row('test  BURGER').id).not.toBe(menu.burger);
+    expect(row('Test Chips').web_availability).toBe('on');
+    expect(row('Test Pizza').web_availability).toBe('on');
+    expect(db.prepare(`SELECT is_on_website FROM categories WHERE name = 'Test drinks' AND deleted_at IS NULL`).get()).toEqual({ is_on_website: 0 });
+    expect(db.prepare(`SELECT is_on_website FROM categories WHERE name = 'Test food' AND deleted_at IS NULL`).get()).toEqual({ is_on_website: 1 });
+    // What the import publishes straight away: the burger pick-up only, the drinks' category left out.
+    const { menu: m } = await published();
+    expect(new Map(m.categories.map((c) => [c.name, c.items.map((i) => i.name)]))).toEqual(
+      new Map([
+        ['Test food', ['Test Pizza', 'test  BURGER', 'Test Chips']],
+        ['Delivery Charges', ['Delivery Charge (Rs 200)', 'Delivery Charge (Rs 250)']],
+      ]),
+    );
+    const food = m.categories.find((c) => c.name === 'Test food')!;
+    expect(food.items.find((i) => i.name === 'test  BURGER')!.pickupOnly).toBe(true);
+    expect(food.items.find((i) => i.name === 'Test Chips')).not.toHaveProperty('pickupOnly');
+    // Each carried setting is the repositories' (the new row's sync image carries it).
+    const image = db
+      .prepare(`SELECT payload_json FROM sync_queue WHERE entity_type = 'menu_items' AND entity_id = ? ORDER BY rowid DESC LIMIT 1`)
+      .get(row('test  BURGER').id) as { payload_json: string };
+    expect(JSON.parse(image.payload_json)).toMatchObject({ webAvailability: 'pickup_only' });
+  });
+
+  it('two removed items of one name set differently carry nothing (never guessed)', async () => {
+    h.session = MANAGER;
+    await data('menu:updateItem', { id: menu.burger, webAvailability: 'pickup_only' });
+    const twin = await data<MenuItem>('menu:createItem', { categoryId: menu.drinks, name: 'Test Burger', basePriceCents: 1_000, taxCategoryId: menu.tax, webAvailability: 'off' });
+    expect(twin.webAvailability).toBe('off');
+    const { applyMenuImport } = await import('../../db/repositories/menu-import-repo.js');
+    applyMenuImport(db as never, file([{ name: 'Test Burger', category: 'Test food', priceCents: 61_000, recipe: [] }]), 'test.json', OWNER_ACTOR, {
+      fresh: true,
+    });
+    expect(db.prepare(`SELECT web_availability FROM menu_items WHERE name = 'Test Burger' AND deleted_at IS NULL`).all()).toEqual([
+      { web_availability: 'on' },
+    ]);
+  });
+
   it('a fresh start says how many website settings it resets (the file carries none); the delivery charges stay and are skipped', async () => {
     h.session = MANAGER;
     await data('menu:updateItem', { id: menu.burger, webAvailability: 'pickup_only' });

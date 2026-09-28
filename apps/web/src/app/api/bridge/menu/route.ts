@@ -60,6 +60,8 @@ export async function PUT(req: Request): Promise<Response> {
       settingsTie: held?.settingsTie ?? null,
       settingsDeviceId: held?.settingsDeviceId ?? null,
       settingsProblem: held?.settingsProblem ?? null,
+      // This website keeps the block's messages and the items' pickupOnly (an older one drops them).
+      websiteMessages: true,
     };
     return Response.json({ ok: true, data });
   } catch (e) {

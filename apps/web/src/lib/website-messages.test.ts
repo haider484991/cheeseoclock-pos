@@ -60,6 +60,7 @@ const menuRoute = await import('@/app/api/bridge/menu/route');
 const settingsRoute = await import('@/app/api/bridge/settings/route');
 const bridgeStatus = await import('@/app/api/bridge/status/route');
 const orders = await import('@/app/api/orders/route');
+const storeStatus = await import('@/app/api/store-status/route');
 const { getSiteFacts, parseStoredSettings } = await import('@/lib/site-facts');
 // The pages are JSX compiled for React in scope (as Next does it): give the test the same.
 (globalThis as { React?: unknown }).React = await import('react');
@@ -279,6 +280,14 @@ async function menuPageProps(): Promise<{ closedNotice: string | null; facts: ty
   };
 }
 
+/** The closed notice the /menu page's status poll gets (api/store-status), as the browser reads it. */
+async function polledNotice(): Promise<string | null | undefined> {
+  const res = await storeStatus.GET();
+  const json = (await res.json()) as { ok: boolean; data: { acceptingOrders: boolean; closedNotice?: string | null } };
+  expect(json.ok).toBe(true);
+  return json.data.closedNotice;
+}
+
 /** How many times `text` appears in `value` (serialized). */
 function occurrences(value: unknown, text: string): number {
   return JSON.stringify(value).split(text).length - 1;
@@ -326,6 +335,7 @@ describe('nothing new stored: the website exactly as v0.7.29', () => {
       await publish(m, block);
       const p = await menuPageProps();
       expect(p.closedNotice).toBeNull();
+      expect(await polledNotice()).toBeNull();
       expect([p.facts.announcement, p.facts.minDeliveryOrderCents]).toEqual([null, 0]);
       const app = propsWith(await menuPage.default(), 'deliveryFacts')!;
       const settings = (app['menu'] as { settings?: Record<string, unknown> }).settings;
@@ -391,6 +401,8 @@ describe('the closed notice: the owner’s words through its last Karachi day, t
           const r = await place({});
           expect([r.status, r.json.error, r.json.message], at).toEqual([409, 'store_closed', shows ? NOTICE : TODAY_CLOSED]);
           expect((await menuPageProps()).closedNotice, at).toBe(shows ? NOTICE : null);
+          // …and the status a /menu page left open polls: it drops the notice at the same moment.
+          expect(await polledNotice(), at).toBe(shows ? NOTICE : null);
         }
       } finally {
         vi.useRealTimers();
@@ -399,6 +411,18 @@ describe('the closed notice: the owner’s words through its last Karachi day, t
       }
     });
   }
+
+  it('a /menu page left open: its status poll brings a notice saved since, and takes it away once cleared', async () => {
+    await heartbeat(false);
+    const m = menu();
+    await publish(m, tillBlock(m));
+    expect((await menuPageProps()).closedNotice).toBeNull();
+    expect(await polledNotice()).toBeNull();
+    await publish(m, tillBlock(m, { rev: 2, website: { closedNotice: { text: NOTICE, until: null } } }));
+    expect(await polledNotice()).toBe(NOTICE);
+    await publish(m, tillBlock(m, { rev: 3, website: { closedNotice: { text: '', until: null } } }));
+    expect(await polledNotice()).toBeNull();
+  });
 
   it('with no last day it shows every time the website is closed; with no words, today’s', async () => {
     await heartbeat(false);
@@ -592,6 +616,13 @@ describe('a v0.7.29 till’s block keeps what the website stored; a v0.7.30 bloc
     expect(await storedSettings()).toEqual(cleared);
     expect((await getSiteFacts()).announcement).toBeNull();
     expect((await getSiteFacts()).minDeliveryOrderCents).toBe(0);
+  });
+
+  it('both routes tell the till this website keeps the messages and "Pick-up only" (websiteMessages: true) — an older one does not say it', async () => {
+    const m = menu();
+    expect((await publish(m)).json.data).toMatchObject({ websiteMessages: true });
+    expect((await publish(m, tillBlock(m, { rev: 1, website: MESSAGES }))).json.data).toMatchObject({ websiteMessages: true });
+    expect((await save(tillBlock(m, { rev: 2, website: MESSAGES }))).json.data).toMatchObject({ websiteMessages: true });
   });
 
   it('PUT /api/bridge/settings (a Save): the same', async () => {

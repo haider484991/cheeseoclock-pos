@@ -19,7 +19,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PublishedMenu, PublishedMenuItem } from '@cheeseoclock/shared-types';
 import { restoreLines } from './cart';
 import { problemFromServer } from './checkout-validation';
-import { buildMenuView, isPickupOnly } from './menu-view';
+import { buildMenuView, isPickupOnly, pickupOnlyNote } from './menu-view';
 import { validateOrderable } from './order-validation';
 import { publicMenu } from './public-menu';
 import { menuNode } from './seo';
@@ -190,6 +190,80 @@ describe('"Pick-up only" from the till (pickupOnly: true)', () => {
     await publish(menu());
     await publish(menu(item('wings', 'Test Wings', 600)));
     expect((await place({ items: [line('wings')] })).status).toBe(200);
+  });
+});
+
+describe('one size of a pizza set "Pick-up only": only that size is (each size is its own till item)', () => {
+  /** A made-up pizza in two sizes, each a till item of its own, as the till publishes them; `large` as sent. */
+  const sized = (large: Partial<PublishedMenuItem> = { pickupOnly: true }, medium: Partial<PublishedMenuItem> = {}): PublishedMenu => {
+    const m = menu(item('wings', 'Test Wings', 600));
+    return {
+      ...m,
+      categories: [
+        {
+          posCategoryId: 'c-pizza',
+          name: 'Test Pizzas',
+          displayOrder: 0,
+          items: [
+            item('pz-m', 'Test Pizza — Medium', 900, { sortOrder: 1, ...medium }),
+            item('pz-l', 'Test Pizza — Large', 1400, { sortOrder: 2, ...large }),
+          ],
+        },
+        ...m.categories,
+      ],
+    };
+  };
+  const card = (m: PublishedMenu) =>
+    buildMenuView(publicMenu(m))
+      .flatMap((s) => s.cards)
+      .find((c) => c.name === 'Test Pizza')!;
+
+  it('the card: the Medium orders as ever, the Large alone is pick-up only — never the whole card', async () => {
+    await publish(sized());
+    const c = card(await storedMenu());
+    expect(c.pickupOnly).toBe(false);
+    expect(c.variants.map((v) => [v.size, v.pickupOnly])).toEqual([
+      ['Medium', false],
+      ['Large', true],
+    ]);
+    expect(pickupOnlyNote(c)).toBe('Large 12" pick-up only');
+  });
+
+  it('the SERVER refuses only the Large on a delivery, naming its size; the Medium delivers; a pick-up takes the Large', async () => {
+    await publish(sized());
+    expect((await place({ items: [line('pz-m')] })).status).toBe(200);
+    const r = await place({ items: [line('pz-m'), line('pz-l')] });
+    expect([r.status, r.json.error, r.json.message]).toEqual([
+      409,
+      'not_deliverable',
+      "Test Pizza (Large) is pick-up only, so we can't deliver it. Switch to pick-up, or remove it to order delivery.",
+    ]);
+    expect((await place({ fulfilment: 'pickup', addressLine: undefined, zoneId: undefined, items: [line('pz-l')] })).status).toBe(200);
+  });
+
+  it('every size set pick-up only: the whole card is, as before', async () => {
+    await publish(sized({ pickupOnly: true }, { pickupOnly: true }));
+    const c = card(await storedMenu());
+    expect(c.pickupOnly).toBe(true);
+    expect(pickupOnlyNote(c)).toBe('Pick-up only');
+  });
+
+  it('the printed menu’s words on one size still cover the whole card, as before (no flag anywhere)', async () => {
+    await publish(sized({ description: 'Pick up only.' }));
+    const c = card(await storedMenu());
+    expect(c.pickupOnly).toBe(true);
+    expect(c.variants.every((v) => v.pickupOnly)).toBe(true);
+    expect(pickupOnlyNote(c)).toBe('Pick-up only');
+    // …and the server's words for it are today's, with no size.
+    const r = await place({ items: [line('pz-l')] });
+    expect(r.json.message).toBe("Test Pizza is pick-up only, so we can't deliver it. Switch to pick-up, or remove it to order delivery.");
+  });
+
+  it('no flag and no words: nothing pick-up only (the website as before)', async () => {
+    await publish(sized({}));
+    const c = card(await storedMenu());
+    expect([c.pickupOnly, ...c.variants.map((v) => v.pickupOnly)]).toEqual([false, false, false]);
+    expect(pickupOnlyNote(c)).toBeNull();
   });
 });
 

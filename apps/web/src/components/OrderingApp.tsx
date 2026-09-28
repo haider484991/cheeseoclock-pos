@@ -21,6 +21,7 @@ import {
   isDealSection,
   isPickupOnly,
   cardSizeLabel,
+  pickupOnlyNote,
   type MenuCard,
   type MenuVariant,
 } from '@/lib/menu-view';
@@ -132,6 +133,8 @@ export function OrderingApp({
   const [open, setOpen] = useState(acceptingOrders);
   const [canPickup, setCanPickup] = useState(pickupAvailable);
   const [pickupPct, setPickupPct] = useState(pickupDiscountPercent);
+  // The owner's closed notice, kept as current as the rest: its last day ends while the page is open.
+  const [notice, setNotice] = useState<string | null>(closedNotice);
   useEffect(() => {
     let cancelled = false;
     async function check() {
@@ -139,12 +142,19 @@ export function OrderingApp({
         const res = await fetch('/api/store-status', { cache: 'no-store' });
         const json = (await res.json()) as {
           ok: boolean;
-          data?: { acceptingOrders: boolean; pickupAvailable?: boolean; pickupDiscountPercent?: number };
+          data?: {
+            acceptingOrders: boolean;
+            pickupAvailable?: boolean;
+            pickupDiscountPercent?: number;
+            closedNotice?: string | null;
+          };
         };
         if (!cancelled && json.ok && json.data) {
           setOpen(json.data.acceptingOrders);
           setCanPickup(json.data.pickupAvailable === true);
           if (typeof json.data.pickupDiscountPercent === 'number') setPickupPct(json.data.pickupDiscountPercent);
+          // An older website's reply has no word about it: keep what the page was served.
+          if (json.data.closedNotice !== undefined) setNotice(json.data.closedNotice);
         }
       } catch {
         // Keep the last known state; submitting is still guarded server-side.
@@ -285,7 +295,8 @@ export function OrderingApp({
   const pickVariant: PickFn = useCallback(
     (card, variantIndex) => {
       const v = card.variants[variantIndex];
-      if (!v || (card.pickupOnly && !canPickup)) return;
+      // A pick-up-only size is orderable only while online pick-up is (the whole card, or one size).
+      if (!v || (v.pickupOnly && !canPickup)) return;
       if (v.item.modifierGroups.length > 0) {
         setSheet({ card, variantIndex });
       } else {
@@ -377,7 +388,7 @@ export function OrderingApp({
         />
       )}
 
-      {!open && <ClosedBanner notice={closedNotice} />}
+      {!open && <ClosedBanner notice={notice} />}
 
       <CategoryRail sections={railSections} />
 
@@ -488,7 +499,7 @@ export function OrderingApp({
           onZone={chooseZone}
           deliveryFacts={deliveryFacts}
           acceptingOrders={open}
-          closedNotice={closedNotice}
+          closedNotice={notice}
           onClose={closeCheckout}
           orderIdFor={orderIdFor}
           onPlaced={onPlaced}
@@ -730,14 +741,29 @@ function VariantButtons({
   /** On a gold deal card: a solid ink button. */
   onGold?: boolean;
 }) {
-  // Pick-up-only food is orderable only while online pick-up is.
+  // Pick-up-only food is orderable only while online pick-up is: the whole card, or one size of it.
   if (card.pickupOnly && !canPickup) return <PickupOnly />;
   const sized = card.variants.length > 1;
+  const note = pickupOnlyNote(card);
   return (
     <div className={sized ? 'grid grid-cols-2 gap-2' : 'flex flex-wrap items-center gap-2'}>
       {card.variants.map((v, i) => {
         const inCart = qtyByItem.get(v.item.posItemId) ?? 0;
         const hasChoices = v.item.modifierGroups.length > 0;
+        if (v.pickupOnly && !canPickup) {
+          // This size only: the card's other sizes still deliver.
+          return (
+            <span
+              key={v.item.posItemId}
+              className={`flex min-h-[2.75rem] flex-col justify-center rounded-2xl border-2 border-dashed px-3 py-1.5 font-cond text-xs font-bold uppercase leading-tight tracking-wide ${
+                dark ? 'border-cream/30 text-cream/60' : 'border-ink/25 text-ink-muted'
+              }`}
+            >
+              <span>{cardSizeLabel(card, v.size) || variantLabel(card, v)}</span>
+              <span>Pick-up only</span>
+            </span>
+          );
+        }
         return (
           <button
             type="button"
@@ -786,8 +812,8 @@ function VariantButtons({
           </button>
         );
       })}
-      {card.pickupOnly && (
-        <span className="font-cond text-xs font-bold uppercase tracking-wider opacity-70">Pick-up only</span>
+      {note && (!sized || card.pickupOnly || canPickup) && (
+        <span className="font-cond text-xs font-bold uppercase tracking-wider opacity-70">{note}</span>
       )}
     </div>
   );

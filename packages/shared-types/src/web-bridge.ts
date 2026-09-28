@@ -58,6 +58,13 @@ export interface PublishMenuSummary {
   items: number;
   /** Items published WITHOUT their photo (too big for the website), in menu order; [] when none. */
   photosLeftOut: PhotoLeftOut[];
+  /**
+   * true when this publish carried something only a website of v0.7.30 on
+   * keeps (a "Pick-up only" item, or a website message) and the website did
+   * not say it keeps them (PublishMenuResult.websiteMessages): an older
+   * website dropped them. Absent otherwise.
+   */
+  olderWebsite?: boolean;
 }
 
 export interface PublishedModifierGroup {
@@ -420,6 +427,17 @@ export interface PublishMenuResult {
    * in the owner's words; null when it fits or there is no block.
    */
   settingsProblem?: string | null;
+  /**
+   * true from a website of v0.7.30 on (both PUT routes): it keeps the
+   * block's website messages (closedNotice, announcement,
+   * minDeliveryOrderCents) and each item's `pickupOnly`. Absent = an older
+   * website, which drops them silently while still answering 'stored' (the
+   * website's deploy failed or was rolled back, the tills updated): when
+   * this till sent any of them, it says the website needs its update
+   * (web-orders-bridge OLDER_WEBSITE_DROPS) — a Publish once the website is
+   * updated sends them again.
+   */
+  websiteMessages?: boolean;
 }
 
 /** A fee item the block's areas need, as the till's menu has it, with the category it sits in (PUT /api/bridge/settings). */

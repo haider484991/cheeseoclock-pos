@@ -164,40 +164,73 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   **preview** first, with its own Neon branch and its own `BRIDGE_SECRET`
   (see above).
 - **Update BOTH tills the same day.** Migration 0045 adds the two columns,
-  and the till link copies menu rows between the tills. A website setting
-  changed on an updated till reaches a v0.7.29 till without the column; when
-  that till updates later, 0045 sets it back to "on" and nothing sends it
-  again, so the tills disagree. And a v0.7.29 till's Publish (or its menu
+  and the till link copies menu rows between the tills (the link does not
+  tell a till which version the other runs, so nothing in the till warns
+  about this). A website setting changed on an updated till reaches a
+  v0.7.29 till without the column. When that till updates later, 0045 gives
+  the item "On the website" at the SAME row version, and the next change to
+  that item on it (a price, a photo, hiding it for the night) sends "On the
+  website" back to the first till, which takes it: the owner's setting is
+  LOST ON BOTH TILLS, silently, and the next publish from either till puts
+  the item back on the website. And a v0.7.29 till's Publish (or its menu
   file import, or "Publish the menu by itself") sends every item again —
   hidden ones back on the website, no pick-up-only flags — until an updated
   till publishes. **Change nothing under "On the website" (Menu) until both
-  tills show 0.7.30** (Settings → About → App version).
-- **After both tills are updated, the owner, once:** Settings → Online orders
-  → press Save on "Website messages & smallest delivery order" (even with
-  nothing typed — it sends the block from an updated till, alone, never the
-  menu), then press "Publish menu to website" once (the menu with its
-  website settings). The status line under the connection says "Delivery
+  tills show 0.7.30** (Settings → About → App version). If something was
+  changed anyway: once both are updated, open Menu → Items on each till and
+  compare the Website column; set again whatever differs, and publish.
+- **After both tills are updated there is nothing to press.** Every item is
+  "On the website" and every category on it (0045's defaults), which is the
+  menu the website already has, and the website holds no message (today's
+  words). A till that has "Publish the menu by itself" saved sends its
+  block by itself at start (it now counts in the settings stamp; at its
+  defaults it changes nothing on the website). The owner's first Save on
+  "Website messages & smallest delivery order" sends the messages (alone,
+  never the menu); after setting items "Pick-up only" or "Not on the
+  website", press "Publish menu to website" (or let "Publish the menu by
+  itself" do it). The status line under the connection says "Delivery
   areas, pick-up & website messages: website updated …".
+- **If the website is older than the tills** (its deploy failed or was
+  rolled back while the tills updated): an older website takes the menu and
+  the block but drops the messages and "Pick-up only" while saying it
+  stored them. The till notices it (the website does not say
+  `websiteMessages: true`) whenever it sent any of them, and says "The
+  website is older than this till…" in Settings → Online orders and in the
+  publish message; it does not send those settings again by itself. Fix
+  the website, then press "Publish menu to website" once.
 - A menu file import keeps each item's and category's website setting (a
-  new item comes in on the website). A **fresh start** removes the items and
-  categories and brings the file's back on the website: its preview says how
-  many settings that resets.
+  new item comes in on the website). A **fresh start** removes the items
+  and categories but gives the file's item or category of the SAME name
+  (ignoring case, spaces and punctuation) the setting the removed one had.
+  Its preview counts the settings it can't keep (set on items or categories
+  the file does not bring back by that name): anything the file brings back
+  under another name is on the website, and the import publishes the menu
+  at once — set those again in Menu and publish.
+- A deal's choices are not items: an item set "Not on the website" or
+  "Pick-up only" is still a choice in any deal that offers it ("Large:
+  Fajita Pizza"), for delivery too. To stop that, take the choice out of the
+  deal (Menu → Choices). The item's dialog says so.
 - An item photo too big for the website (over about 300 KB) was left out
   silently before; now the publish says which items went without a picture,
-  and the Menu editor warns on the item. Pick the photo again (the till
-  makes it smaller).
+  and the Menu editor warns on the item (only on items that go to the
+  website). Pick the photo again (the till makes it smaller).
 - **What to check on the website.** Before any 0.7.30 till has saved: the
   home page, /menu and the area pages read exactly as before (the Phase 7
   FAQ still says "No minimum on the website"), and an order while the shop
   is closed gets today's "We are not taking online orders…" sentence. After
   the owner's Save: the announcement, while on, shows in the home page's
   hero and ticker and on /menu (the Save refreshes the pages; never in a
-  title or Google's listing); the closed notice replaces the closed
-  explanation on /menu, at checkout and in the order refusal, only while
-  the website is closed and until the end of its last day in Karachi (the
-  WhatsApp buttons stay); a website delivery under the smallest order is
-  refused with how much to add, a pick-up never is. An item set "Pick-up
-  only" shows as pick-up only and a delivery with it is refused.
+  page title, description or structured data — but it is words on the home
+  page, so Google may quote it in its results for a while after it is
+  switched off); the closed notice replaces the closed explanation on
+  /menu, at checkout and in the order refusal, only while the website is
+  closed and until the end of its last day in Karachi (the WhatsApp buttons
+  stay; a /menu page left open drops an ended notice at its next status
+  check, within about a minute); a website delivery under the smallest
+  order is refused with how much to add, a pick-up never is. An item set
+  "Pick-up only" shows as pick-up only and a delivery with it is refused;
+  for a pizza set pick-up only in one size, only that size is (the other
+  sizes still deliver).
 
 ## Free-tier limits (plenty for launch)
 

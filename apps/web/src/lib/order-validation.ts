@@ -20,8 +20,11 @@ export function validateOrderable(
     return 'The delivery charge is added from your delivery area — please refresh the menu.';
   }
   if (fulfilment === 'delivery' && isPickupOnly(item)) {
-    const { base } = splitSizedName(item.name);
-    return `${base} is pick-up only, so we can't deliver it. Switch to pick-up, or remove it to order delivery.`;
+    const { base, size } = splitSizedName(item.name);
+    // The till's "Pick-up only" is per item, and each size is its own item: name the size, as the
+    // other sizes still deliver. The printed menu's words have always meant every size (as before).
+    const what = item.pickupOnly === true && size ? `${base} (${size})` : base;
+    return `${what} is pick-up only, so we can't deliver it. Switch to pick-up, or remove it to order delivery.`;
   }
   return null;
 }

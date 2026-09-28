@@ -99,9 +99,17 @@ function storedAnswer(body: Row) {
         settings: settings ? (takes ? 'stored' : 'ignored_older') : websiteHolds ? 'kept' : 'none',
         ...heldFields(websiteHolds),
         settingsProblem: null,
+        // A website of this version keeps the messages and "Pick-up only" (olderWebsiteAnswer drops the word).
+        websiteMessages: true,
       },
     },
   };
+}
+/** A website older than v0.7.30: takes the block by the same rule, but says nothing of the messages (it dropped them). */
+function olderWebsiteAnswer(body: Row) {
+  const a = storedAnswer(body);
+  const { websiteMessages: _dropped, ...data } = (a.json as { data: Row }).data;
+  return { status: a.status, json: { ok: true, data } };
 }
 function heldFields(b: PublishedSettings | null) {
   return {
@@ -851,5 +859,62 @@ live('the website messages reach the website in the block, alone', () => {
     await bridge().maybePublishSettings();
     expect([...menus(), ...settingsPuts()]).toHaveLength(0);
     expect(publishStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/website messages were saved by a newer version/) });
+  });
+});
+
+live('a website older than the tills (its deploy failed or was rolled back): the till says so', () => {
+  it('a Save of the messages: the older website stores the block but drops them — Settings says it needs its update, and the till sends it no more by itself', async () => {
+    const db = await till();
+    await bridge().publishMenu();
+    answerSettings = olderWebsiteAnswer;
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'online.options', messages, OWNER);
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    expect(publishStatus()).toMatchObject({ state: 'unsupported', message: bridgeMod.OLDER_WEBSITE_DROPS });
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    // The website updated: the owner's Publish sends them again, and the website says it keeps them.
+    answerMenu = storedAnswer;
+    const r = await bridge().publishMenu();
+    expect(r).not.toHaveProperty('olderWebsite');
+    expect(menus().at(-1)!.settings).toMatchObject({ announcement: messages.announcement });
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+  });
+
+  it('a Publish with an item "Pick-up only": the publish says the website is older (the toast), and so does Settings', async () => {
+    const db = await till();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    db.prepare(`UPDATE menu_items SET web_availability = 'pickup_only' WHERE id = ?`).run(items.pizza);
+    answerMenu = olderWebsiteAnswer;
+    const r = await bridge().publishMenu();
+    expect(r.olderWebsite).toBe(true);
+    expect(menus()[0]!.categories.flatMap((c) => c.items).find((i) => i.posItemId === items.pizza)?.pickupOnly).toBe(true);
+    expect(publishStatus()).toMatchObject({ state: 'unsupported', message: bridgeMod.OLDER_WEBSITE_DROPS });
+  });
+
+  it('nothing only v0.7.30 keeps (every item on the website, the messages at their defaults): an older website loses nothing, and nothing is said', async () => {
+    const db = await till();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'online.options', { ...messages, ...noMessages }, OWNER);
+    answerMenu = olderWebsiteAnswer;
+    answerSettings = olderWebsiteAnswer;
+    const r = await bridge().publishMenu();
+    expect(r).not.toHaveProperty('olderWebsite');
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+  });
+
+  it('what only v0.7.30 keeps: a notice with words, the announcement on, a minimum, an item "Pick-up only" — nothing else', () => {
+    const { carriesWebsiteMessages } = bridgeMod;
+    const none = { closedNotice: { text: '', until: null }, announcement: { on: false, text: 'Made-up, switched off' }, minDeliveryOrderCents: 0 };
+    const menuWith = (pickupOnly?: boolean) => ({
+      categories: [{ posCategoryId: 'c', name: 'Test', displayOrder: 0, items: [{ posItemId: 'i', name: 'Test', description: null, basePriceCents: 100, taxRateBps: 0, imageUrl: null, sortOrder: 0, modifierGroups: [], ...(pickupOnly === undefined ? {} : { pickupOnly }) }] }],
+    });
+    expect(carriesWebsiteMessages(null, null)).toBe(false);
+    expect(carriesWebsiteMessages(none, menuWith())).toBe(false);
+    expect(carriesWebsiteMessages({}, menuWith(false))).toBe(false);
+    expect(carriesWebsiteMessages({ ...none, closedNotice: { text: 'Closed', until: null } }, null)).toBe(true);
+    expect(carriesWebsiteMessages({ ...none, announcement: { on: true, text: 'New' } }, null)).toBe(true);
+    expect(carriesWebsiteMessages({ ...none, minDeliveryOrderCents: 100 }, null)).toBe(true);
+    expect(carriesWebsiteMessages(none, menuWith(true))).toBe(true);
   });
 });

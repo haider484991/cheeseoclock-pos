@@ -181,9 +181,11 @@ export interface MenuImportFreshStart {
   openOrders: number;
   /**
    * Items set "Pick-up only" or "Not on the website", and categories off the
-   * website, that the fresh start removes: what the file brings back is on
-   * the website again (the file carries no website setting) — set them again
-   * in Menu before the next publish.
+   * website, that the fresh start removes and the file does NOT bring back
+   * under the same name. The fresh start gives each of the file's items and
+   * categories the website setting of the removed one of the same name (the
+   * file carries none); what comes back under another name is on the
+   * website, and the import publishes the menu at once.
    */
   websiteSettingsLost: number;
 }

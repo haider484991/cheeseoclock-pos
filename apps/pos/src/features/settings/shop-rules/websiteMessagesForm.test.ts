@@ -18,7 +18,19 @@ import {
   websiteMessagesFromForm,
   websiteMessagesToForm,
 } from './websiteMessagesForm';
-import { photoTooBigForWebsite, publishedToast, saysPickupOnly } from './publishWords';
+import {
+  CATEGORY_WEBSITE_WORDS,
+  OLDER_WEBSITE_TOAST,
+  WEBSITE_DEAL_CHOICE_NOTE,
+  WEB_AVAILABILITY_WORDS,
+  categoryWebsiteState,
+  goesToWebsite,
+  itemWebsiteLabel,
+  itemWebsiteState,
+  photoTooBigForWebsite,
+  publishedToast,
+  saysPickupOnly,
+} from './publishWords';
 import { settingsPublishWords } from './deliveryZonesForm';
 
 /**
@@ -223,5 +235,101 @@ describe('publishing: a photo too big for the website is no longer left out sile
     expect(saysPickupOnly('Pickup only on weekends')).toBe(true);
     expect(saysPickupOnly('A made-up pizza')).toBe(false);
     expect(saysPickupOnly(null)).toBe(false);
+  });
+});
+
+describe('each card on the one key shows its OWN changes: History and “last changed”', () => {
+  const OWNER_SAVE = (at: string, value: OnlineOptions | null, onThisTill = true) => ({ at, byName: 'Test Owner', onThisTill, value });
+  // Newest first, as the key's History is: "publish by itself" on (Sep 20), then the messages saved (Sep 28).
+  const history = [
+    OWNER_SAVE('2026-09-28T10:00:00.000Z', WORDS),
+    OWNER_SAVE('2026-09-20T10:00:00.000Z', { ...DEFAULT_ONLINE_OPTIONS, autoPublishMenu: true }, false),
+  ];
+  const keyCard = card(WORDS, {
+    history,
+    lastChanged: { at: '2026-09-28T10:00:00.000Z', byName: 'Test Owner', onThisTill: true },
+  });
+
+  it('a Save of the messages is not a change of “publish by itself” (its History and “last changed” stay its own)', () => {
+    const publish = onlineOptionsPart(keyCard, 'publish');
+    expect(publish.history.map((h) => h.at)).toEqual(['2026-09-20T10:00:00.000Z']);
+    expect(publish.lastChanged).toEqual({ at: '2026-09-20T10:00:00.000Z', byName: 'Test Owner', onThisTill: false });
+    const msgs = onlineOptionsPart(keyCard, 'messages');
+    expect(msgs.history.map((h) => h.at)).toEqual(['2026-09-28T10:00:00.000Z']);
+    expect(msgs.lastChanged).toEqual({ at: '2026-09-28T10:00:00.000Z', byName: 'Test Owner', onThisTill: true });
+  });
+
+  it('a part never saved, at its default: “never changed”; a line this version can’t read is kept on both', () => {
+    const onlyMessages = card({ ...WORDS, autoPublishMenu: false }, {
+      history: [OWNER_SAVE('2026-09-28T10:00:00.000Z', { ...WORDS, autoPublishMenu: false })],
+      lastChanged: { at: '2026-09-28T10:00:00.000Z', byName: 'Test Owner', onThisTill: true },
+    });
+    expect(onlineOptionsPart(onlyMessages, 'publish')).toMatchObject({ history: [], lastChanged: null });
+    expect(onlineOptionsPart(onlyMessages, 'messages').history).toHaveLength(1);
+    const unreadable = card(WORDS, { history: [OWNER_SAVE('2026-09-29T10:00:00.000Z', null), ...history] });
+    for (const part of ['publish', 'messages'] as const) {
+      expect(onlineOptionsPart(unreadable, part).history[0]!.at).toBe('2026-09-29T10:00:00.000Z');
+    }
+  });
+});
+
+describe('the Menu editor says where each item and category really stands on the website (the publish’s own rule)', () => {
+  const item = (over: Partial<{ isActive: boolean; webAvailability: 'on' | 'pickup_only' | 'off' }> = {}) => ({
+    isActive: true,
+    webAvailability: 'on' as const,
+    ...over,
+  });
+  const cat = (over: Partial<{ isActive: boolean; isOnWebsite: boolean }> = {}) => ({ isActive: true, isOnWebsite: true, ...over });
+
+  it('an item hidden on the till, or in a category hidden on the till, is not on the website — whatever it is set to', () => {
+    expect(itemWebsiteState(item({ isActive: false }), cat(), false)).toBe('hidden_on_till');
+    expect(itemWebsiteState(item(), cat({ isActive: false }), false)).toBe('hidden_on_till');
+    expect(itemWebsiteState(item(), cat({ isActive: false }), true)).toBe('hidden_on_till');
+    expect(itemWebsiteLabel('hidden_on_till')).toBe('Not on the website (hidden on the till)');
+    expect(goesToWebsite('hidden_on_till')).toBe(false);
+  });
+
+  it('otherwise: a delivery charge always goes; a category off takes its items off; else the item’s own setting', () => {
+    expect(itemWebsiteState(item({ webAvailability: 'off' }), cat({ isOnWebsite: false }), true)).toBe('fee');
+    expect(itemWebsiteState(item(), cat({ isOnWebsite: false }), false)).toBe('category_off');
+    expect(itemWebsiteState(item({ webAvailability: 'pickup_only' }), cat(), false)).toBe('pickup_only');
+    expect(itemWebsiteState(item(), undefined, false)).toBe('on');
+    expect(['fee', 'on', 'pickup_only', 'off', 'category_off'].map((s) => goesToWebsite(s as never))).toEqual([true, true, true, false, false]);
+  });
+
+  it('a category: hidden on the till → not on the website; off but holding delivery charges → only those go', () => {
+    expect(categoryWebsiteState(cat({ isActive: false }), false)).toBe('hidden_on_till');
+    expect(categoryWebsiteState(cat({ isActive: false, isOnWebsite: true }), true)).toBe('hidden_on_till');
+    expect(categoryWebsiteState(cat(), true)).toBe('on');
+    expect(categoryWebsiteState(cat({ isOnWebsite: false }), true)).toBe('fees_only');
+    expect(categoryWebsiteState(cat({ isOnWebsite: false }), false)).toBe('off');
+    expect(CATEGORY_WEBSITE_WORDS.fees_only).toBe('Only its delivery charges');
+  });
+
+  it('“Pick-up only” says it is this item only (another size is its own) and that it can’t be ordered while pick-up is off; the deal note says deals still offer it', () => {
+    expect(WEB_AVAILABILITY_WORDS.pickup_only.hint).toMatch(/Only this item — another size is its own item/);
+    expect(WEB_AVAILABILITY_WORDS.pickup_only.hint).toMatch(/while online pick-up is off/);
+    expect(WEBSITE_DEAL_CHOICE_NOTE).toMatch(/deal .* still offers it on the website, for delivery too/);
+  });
+});
+
+describe('the announcement’s words promise only what is true of Google', () => {
+  it('never in titles, descriptions or the search data — but page words Google may show, for a while after it is off', () => {
+    expect(WEBSITE_MESSAGES_RULES.announcement).not.toMatch(/never goes into[^.]*Google’s listing/);
+    expect(WEBSITE_MESSAGES_RULES.announcement).toMatch(/Google may show them in its results, and for a while after you switch it off/);
+  });
+});
+
+describe('publishing to a website older than this till', () => {
+  it('the toast says the website needs its update (it dropped “Pick-up only” and the messages)', () => {
+    const t = publishedToast({ categories: 2, items: 9, photosLeftOut: [], olderWebsite: true });
+    expect(t).toEqual({
+      title: 'Menu published — the website needs its update',
+      description: `9 items in 2 categories are now live on the website. ${OLDER_WEBSITE_TOAST}`,
+      variant: 'warning',
+    });
+    const both = publishedToast({ categories: 2, items: 9, photosLeftOut: [{ id: 'a', name: 'Test Pizza' }], olderWebsite: true });
+    expect(both.description).toMatch(/Test Pizza/);
+    expect(both.description).toMatch(/website is older than this till/);
   });
 });

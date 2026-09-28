@@ -23,6 +23,14 @@ export interface MenuVariant {
   /** "Medium", "Large", "345 ml" … or null for an item sold in one size. */
   size: string | null;
   item: PublishedMenuItem;
+  /**
+   * This size can't be delivered: the till set THIS item "Pick-up only"
+   * (v0.7.30, `pickupOnly: true`), or the card's words say "pick-up only"
+   * (today's rule, which has always covered the whole card). Each size is its
+   * own till item, so one size set pick-up only leaves the others deliverable
+   * — as the server has it (order-validation validateOrderable, per item).
+   */
+  pickupOnly: boolean;
 }
 
 export interface MenuCard {
@@ -34,7 +42,11 @@ export interface MenuCard {
   image: string | null;
   /** Cheapest first, so Medium sits left of Large. */
   variants: MenuVariant[];
-  /** Printed menu says "Pick up only" — the website only delivers. */
+  /**
+   * EVERY size is pick-up only (the printed menu's "Pick up only", or the till
+   * set each one so): the whole card is. One size of several set pick-up only
+   * leaves this false — that size's own `pickupOnly` says it.
+   */
   pickupOnly: boolean;
 }
 
@@ -254,7 +266,24 @@ export function orderItemsWithoutDrinkBrand(items: unknown): unknown {
  * "pick-up only" (the printed menu's words).
  */
 export function isPickupOnly(item: Pick<PublishedMenuItem, 'description' | 'pickupOnly'>): boolean {
-  return item.pickupOnly === true || /\bpick[\s-]?up only\b/i.test(item.description ?? '');
+  return item.pickupOnly === true || saysPickupOnly(item.description);
+}
+
+/** The printed menu's words: the description says "pick-up only" ("Pick up only.", "pickup only"). */
+function saysPickupOnly(description: string | null | undefined): boolean {
+  return /\bpick[\s-]?up only\b/i.test(description ?? '');
+}
+
+/**
+ * The card's "pick-up only" words beside its size buttons: 'Pick-up only'
+ * when the whole card is (as before), the sizes that are when only some are
+ * ('Large 12" pick-up only'), else null.
+ */
+export function pickupOnlyNote(card: Pick<MenuCard, 'name' | 'variants' | 'pickupOnly'>): string | null {
+  if (card.pickupOnly) return 'Pick-up only';
+  const sizes = card.variants.filter((v) => v.pickupOnly).map((v) => cardSizeLabel(card, v.size) || v.item.name);
+  if (sizes.length === 0) return null;
+  return `${sizes.join(', ')} pick-up only`;
 }
 
 /**
@@ -324,10 +353,9 @@ function buildSections(menu: PublicMenu): MenuSectionView[] {
         const { base, size } = splitSizedName(item.name);
         const existing = byBase.get(base.toLowerCase());
         if (existing) {
-          existing.variants.push({ size, item });
+          existing.variants.push({ size, item, pickupOnly: false });
           existing.description ??= withoutDrinkBrand(item.description);
           existing.image ??= item.imageUrl;
-          existing.pickupOnly ||= isPickupOnly(item);
           continue;
         }
         byBase.set(base.toLowerCase(), {
@@ -335,13 +363,17 @@ function buildSections(menu: PublicMenu): MenuSectionView[] {
           name: base,
           description: withoutDrinkBrand(item.description),
           image: item.imageUrl ?? shopPhotoFor(base),
-          variants: [{ size, item }],
-          pickupOnly: isPickupOnly(item),
+          variants: [{ size, item, pickupOnly: false }],
+          pickupOnly: false,
         });
       }
       const cards = [...byBase.values()];
       for (const card of cards) {
         card.variants.sort((a, b) => a.item.basePriceCents - b.item.basePriceCents);
+        // The words cover the whole card, as they always have; the till's flag only its own size.
+        const saysIt = card.variants.some((v) => saysPickupOnly(v.item.description));
+        for (const v of card.variants) v.pickupOnly = saysIt || v.item.pickupOnly === true;
+        card.pickupOnly = card.variants.every((v) => v.pickupOnly);
       }
       const name = sectionTitle(c.name);
       return { id: c.posCategoryId, name, anchor: anchorFor(name), cards };

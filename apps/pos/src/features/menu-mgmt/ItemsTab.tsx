@@ -20,10 +20,15 @@ import {
 import { Plus, Edit, Trash2, X, Eye, EyeOff, ChevronRight, Lock, Globe, ImageOff } from 'lucide-react';
 import {
   WEBSITE_CHANGE_NOTE,
+  WEBSITE_DEAL_CHOICE_NOTE,
   WEB_AVAILABILITY_WORDS,
+  goesToWebsite,
+  itemWebsiteLabel,
+  itemWebsiteState,
   photoTooBigForWebsite,
   photoTooBigWords,
   saysPickupOnly,
+  type ItemWebsiteState,
 } from '../settings/shop-rules/publishWords';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
@@ -177,6 +182,7 @@ export function ItemsTab() {
           <tbody>
             {list.items.map((i) => {
               const cat = catById.get(i.categoryId);
+              const web = itemWebsiteState(i, cat, feeLock(i) !== null);
               return (
                 <tr key={i.id} className={cn('border-t border-stone-100 dark:border-stone-800', !i.isActive && 'text-stone-400')}>
                   <td className="py-2">
@@ -184,7 +190,7 @@ export function ItemsTab() {
                       {i.name}
                     </button>
                     {i.description && <div className="max-w-md truncate text-xs text-stone-500">{i.description}</div>}
-                    {photoTooBigForWebsite(i.imageUrl) && (
+                    {goesToWebsite(web) && photoTooBigForWebsite(i.imageUrl) && (
                       <div className="inline-flex items-center gap-1 text-xs text-amber-800 dark:text-amber-300">
                         <ImageOff className="h-3 w-3" aria-hidden="true" /> Photo too big for the website: it goes with no picture
                       </div>
@@ -226,7 +232,7 @@ export function ItemsTab() {
                     </button>
                   </td>
                   <td className="py-2">
-                    <WebsiteChip item={i} categoryOnWebsite={cat?.isOnWebsite ?? true} fee={feeLock(i) !== null} />
+                    <WebsiteChip state={web} />
                   </td>
                   <td className="py-2 text-right">
                     <button
@@ -293,15 +299,17 @@ export function ItemsTab() {
 }
 
 /**
- * Where an item sells on the website, as the list shows it: its own setting
- * (Menu → the item), "off with its category" when its category is off the
- * website, and "always" for a delivery charge (the website adds it to the
- * bill). Changed in the item's dialog.
+ * Where an item stands on the website, as the list shows it — the publish's
+ * own rule (publishWords itemWebsiteState): "not on the website" while it or
+ * its category is hidden on the till, "always" for a delivery charge (the
+ * website adds it to the bill), "off with its category", else its own
+ * setting (Menu → the item). Changed in the item's dialog.
  */
-function WebsiteChip({ item, categoryOnWebsite, fee }: { item: MenuItem; categoryOnWebsite: boolean; fee: boolean }) {
-  if (fee) return <span className="text-xs text-stone-500">Always (delivery charge)</span>;
-  if (!categoryOnWebsite) return <span className="text-xs text-stone-500">Off with its category</span>;
-  const w = item.webAvailability;
+function WebsiteChip({ state }: { state: ItemWebsiteState }) {
+  if (state === 'hidden_on_till' || state === 'fee' || state === 'category_off') {
+    return <span className="text-xs text-stone-500">{itemWebsiteLabel(state)}</span>;
+  }
+  const w = state;
   return (
     <span
       title={WEB_AVAILABILITY_WORDS[w].hint}
@@ -313,7 +321,7 @@ function WebsiteChip({ item, categoryOnWebsite, fee }: { item: MenuItem; categor
       )}
     >
       <Globe className="h-3 w-3" aria-hidden="true" />
-      {WEB_AVAILABILITY_WORDS[w].label}
+      {itemWebsiteLabel(w)}
     </span>
   );
 }
@@ -515,7 +523,9 @@ function ItemDialog({
             )}
             <Field label="Photo">
               <ImagePicker value={imageUrl} onChange={setImageUrl} emptyLabel="Tap to add a photo" />
-              {imageUrl && photoTooBigForWebsite(imageUrl) && (
+              {imageUrl &&
+                photoTooBigForWebsite(imageUrl) &&
+                goesToWebsite(itemWebsiteState({ isActive, webAvailability }, catQ.data?.find((c) => c.id === categoryId), feeFixed)) && (
                 <p className="mt-1 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
                   <ImageOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" /> {photoTooBigWords(imageUrl)}
                 </p>
@@ -651,6 +661,7 @@ function ItemDialog({
                       The description says “pick-up only”, so the website still takes it for pick-up only. Choose “Pick-up only” here to say so, or change the description.
                     </p>
                   )}
+                  {webAvailability !== 'on' && <p className="mt-1 text-xs text-stone-500">{WEBSITE_DEAL_CHOICE_NOTE}</p>}
                   <p className="mt-1 text-xs text-stone-500">{WEBSITE_CHANGE_NOTE}</p>
                 </>
               )}
