@@ -57,6 +57,27 @@ export function requiresManagerApproval(
 }
 
 /**
+ * What Reports → Team & leakage calls a discount given with no reason
+ * (business-report getDiscountLines): typing it is no reason either.
+ */
+export const NO_DISCOUNT_REASON_LABEL = 'No reason given';
+
+/** The refusal, the same on the F3 screen and in the main process. */
+export const DISCOUNT_REASON_REQUIRED = 'Pick or type a reason — the owner has made one required for every discount.';
+
+/**
+ * Has a discount no reason Team & leakage could group it under? Blank, only
+ * spaces, or the words Reports use for "none" ("No reason given", whatever
+ * its capitals). THE one test: the F3 screen, the IPC handler and the
+ * repository all call it when the owner has made a reason required
+ * ('discounts.approval' reasonRequired).
+ */
+export function discountReasonMissing(reason: string | null | undefined): boolean {
+  const r = (reason ?? '').trim();
+  return r === '' || r.toLowerCase() === NO_DISCOUNT_REASON_LABEL.toLowerCase();
+}
+
+/**
  * The approval rule in plain words, built from the limits (the F3 screen,
  * the refusal): "Up to 10% off, or up to Rs 500 off if that is no more than
  * 10% of the order, without a manager." `of` is what the limit is checked

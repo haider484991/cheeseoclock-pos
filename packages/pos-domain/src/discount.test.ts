@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { allocateDiscount, computeDiscountCents, requiresManagerApproval } from './discount.js';
+import {
+  allocateDiscount,
+  computeDiscountCents,
+  DISCOUNT_REASON_REQUIRED,
+  discountReasonMissing,
+  NO_DISCOUNT_REASON_LABEL,
+  requiresManagerApproval,
+} from './discount.js';
+
+describe('discountReasonMissing (the owner’s "a discount needs a reason")', () => {
+  it('a reason picked or typed is a reason', () => {
+    expect(discountReasonMissing('Staff')).toBe(false);
+    expect(discountReasonMissing('  Regular customer ')).toBe(false);
+    expect(discountReasonMissing('x')).toBe(false);
+  });
+
+  it('nothing, only spaces, or the words Reports use for none, is no reason', () => {
+    for (const r of [undefined, null, '', ' ', '\t\n ', NO_DISCOUNT_REASON_LABEL, ' no reason GIVEN ']) {
+      expect({ r, missing: discountReasonMissing(r) }).toEqual({ r, missing: true });
+    }
+    expect(NO_DISCOUNT_REASON_LABEL).toBe('No reason given');
+  });
+
+  it('says what to do in plain words', () => {
+    expect(DISCOUNT_REASON_REQUIRED).toBe('Pick or type a reason — the owner has made one required for every discount.');
+  });
+});
 
 describe('computeDiscountCents', () => {
   it('computes percent discount', () => {

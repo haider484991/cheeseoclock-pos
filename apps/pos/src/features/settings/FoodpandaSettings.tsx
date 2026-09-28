@@ -6,7 +6,8 @@
  * Three cards, each its own synced setting (a Save on one never undoes a
  * Save on another made on the other till): the deal on the listing and who
  * pays for it; foodpanda's fees (Reports and the owner's Costing view only,
- * never printed); what Pay asks. Every new foodpanda order gets the deal
+ * never printed); what Pay asks, and how far the tablet may be from the till
+ * (Pay and Reports use the same value). Every new foodpanda order gets the deal
  * automatically; an order already on screen keeps the deal it started with.
  * The owner alone (the main process refuses anyone else).
  */
@@ -15,8 +16,9 @@ import { cn } from '@cheeseoclock/ui';
 import { BadgePercent, ClipboardCheck, Receipt } from 'lucide-react';
 import {
   FOODPANDA_DEAL_MAX_PERCENT,
+  FOODPANDA_TABLET_TOLERANCE_CENTS,
+  FOODPANDA_TABLET_TOLERANCE_MAX_CENTS,
   type FoodpandaCheckRule,
-  type FoodpandaChecks,
   type FoodpandaDeal,
   type FoodpandaFees,
   type ShopSettingCard,
@@ -24,8 +26,27 @@ import {
 import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting, useShopSettingsLive } from './shop-rules/useShopSetting';
-import { checksSummary, dealSummary, feesSummary, percentFromBps, workedExample, type DealPayer } from './shop-rules/foodpandaWords';
-import { dealFromForm, dealToForm, feesFromForm, feesToForm, sameValue, type DealForm, type FeesForm } from './shop-rules/foodpandaForm';
+import { formatCents } from '@cheeseoclock/pos-domain';
+import {
+  checksSummary,
+  dealSummary,
+  feesSummary,
+  percentFromBps,
+  toleranceWords,
+  workedExample,
+  type DealPayer,
+} from './shop-rules/foodpandaWords';
+import {
+  checksFromForm,
+  checksToForm,
+  dealFromForm,
+  dealToForm,
+  feesFromForm,
+  feesToForm,
+  sameValue,
+  type DealForm,
+  type FeesForm,
+} from './shop-rules/foodpandaForm';
 
 const inputClass =
   'w-full rounded-lg border border-stone-300 px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800 disabled:opacity-60';
@@ -94,13 +115,18 @@ function FoodpandaCards({
 
   const dealD = useDraft(dealCard.value, dealToForm);
   const feesD = useDraft(feesCard.value, feesToForm);
-  const checksD = useDraft<FoodpandaChecks, FoodpandaChecks>(checksCard.value, (v) => ({ ...v }));
+  // Always saved in this version's format (checksFromForm): a value an older version saved (v1)
+  // must not go back as v1 — the main process would refuse it.
+  const checksD = useDraft(checksCard.value, checksToForm);
   const dealForm = dealD.form;
   const feesForm = feesD.form;
   const checksForm = checksD.form;
 
   const dealParsed = useMemo(() => dealFromForm(dealForm), [dealForm]);
   const feesParsed = useMemo(() => feesFromForm(feesForm), [feesForm]);
+  const checksParsed = useMemo(() => checksFromForm(checksForm), [checksForm]);
+  // The words follow the tolerance as soon as it reads; the saved one until then.
+  const toleranceNow = checksParsed.value?.tabletToleranceCents ?? checksCard.value.tabletToleranceCents;
   const exampleDeal: FoodpandaDeal = dealParsed.value ?? dealCard.value;
   const exampleFees: FoodpandaFees = feesParsed.value ?? feesCard.value;
 
@@ -110,7 +136,7 @@ function FoodpandaCards({
   // Carried over from the earlier version's Costing: not saved here yet, so Save is offered at once.
   const feesDirty =
     feesCard.carriedOver === true || (feesD.touched && (feesParsed.value === null || !sameValue(feesParsed.value, feesCard.value)));
-  const checksDirty = checksD.touched && !sameValue(checksForm, checksCard.value);
+  const checksDirty = checksD.touched && (checksParsed.value === null || !sameValue(checksParsed.value, checksCard.value));
   const percentNow = Number(dealForm.percent);
 
   return (
@@ -359,16 +385,16 @@ function FoodpandaCards({
         icon={<ClipboardCheck className="h-5 w-5" />}
         intro={
           <>
-            Pay can ask for foodpanda’s order number and the total on the foodpanda tablet. If the till’s total is more than Rs 1
-            different, the till says so and Reports lists the order — how you know the till matches foodpanda, and how a walk-in
-            cash sale rung up as foodpanda shows up.
+            Pay can ask for foodpanda’s order number and the total on the foodpanda tablet. If the till’s total is{' '}
+            {toleranceWords(toleranceNow)}, the till says so and Reports lists the order — how you know the till matches foodpanda,
+            and how a walk-in cash sale rung up as foodpanda shows up.
           </>
         }
         describe={checksSummary}
         dirty={checksDirty}
-        problem={null}
+        problem={checksParsed.problem}
         busy={checks.save.isPending || checks.putBack.isPending}
-        onSave={() => checks.save.mutate(checksForm, { onSuccess: checksD.reset })}
+        onSave={() => checksParsed.value && checks.save.mutate(checksParsed.value, { onSuccess: checksD.reset })}
         onPutBack={() => checks.putBack.mutate(undefined, { onSuccess: checksD.reset })}
       >
         {(['orderCode', 'tabletTotal'] as const).map((field) => (
@@ -385,6 +411,24 @@ function FoodpandaCards({
             />
           </div>
         ))}
+        <div className="md:w-1/3">
+          <label className={labelClass} htmlFor="fp-tolerance">
+            Difference allowed on the tablet (Rs)
+          </label>
+          <input
+            id="fp-tolerance"
+            inputMode="numeric"
+            value={checksForm.tolerance}
+            onChange={(e) => checksD.set({ ...checksForm, tolerance: e.target.value.replace(/[^\d]/g, '').slice(0, 2) })}
+            className={inputClass}
+          />
+        </div>
+        <p className="-mt-2 text-xs text-stone-500">
+          Whole rupees, Rs 0 to {formatCents(FOODPANDA_TABLET_TOLERANCE_MAX_CENTS)} — never more: it is how a skimmed foodpanda
+          order shows up. {formatCents(FOODPANDA_TABLET_TOLERANCE_CENTS)} by default. At Rs 0 even a few paisa of tax rounding is
+          flagged. Pay and Reports use the same value; Reports use it as it is now for every order, old ones too (each order
+          keeps its own difference, not the value of its day). Update both tills the same day.
+        </p>
       </SettingCard>
     </div>
   );

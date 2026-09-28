@@ -35,7 +35,6 @@ import type {
   ReportTabFigures,
 } from '@cheeseoclock/shared-types';
 import { isDeliveryChargeMenuItem } from '@cheeseoclock/shared-types';
-import { FOODPANDA_TABLET_TOLERANCE_CENTS } from '@cheeseoclock/shared-types';
 import {
   emptyFoodCostTally,
   type FoodCostTally,
@@ -56,6 +55,7 @@ import {
   discountBaseCents,
   foodpandaOrderMoney,
   parseFoodpandaDealRule,
+  tabletDiffers,
   storedDiscountAlsoOffDeliveryCharge,
   storedDiscountSkips,
   offerFlags,
@@ -77,7 +77,13 @@ import type { AppDatabase } from '../db/connection.js';
 // in the Reports worker thread (analytics/worker.ts). A test walks its imports.
 import { loadPriceBook, priceOfBook, safeStockValue } from '../db/price-book.js';
 import { loadPriceHistory, type DatedPrice } from '../db/price-history-read.js';
-import { getBusinessSetting, readDeliveryFeeItemIds, readShopSetting, readStockRules } from '../db/business-settings-read.js';
+import {
+  getBusinessSetting,
+  readDeliveryFeeItemIds,
+  readShopSetting,
+  readStockRules,
+  readTabletToleranceCents,
+} from '../db/business-settings-read.js';
 import { withBillPrinted, withHandPrints } from './print-report.js';
 import { whenExtras } from './analytics/heatmap.js';
 import {
@@ -2483,6 +2489,10 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
 
   // The fees in force now (the one reader), for orders that kept no confirmed commission.
   const feesNow = readShopSetting(db, 'foodpanda.fees').value;
+  // The tablet's tolerance in force now — the SAME reader and rule as Pay (checkout:getRules,
+  // pos-domain tabletDiffers). No order keeps the tolerance of its day (only its difference),
+  // so a changed tolerance re-sorts old orders too; Settings → foodpanda says so.
+  const toleranceCents = readTabletToleranceCents(db);
   const out: ReportFoodpanda = {
     orderCount: 0,
     tillPriceSalesCents: 0,
@@ -2504,6 +2514,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     toCheck: [],
     missingCodeCount: 0,
     tabletDiffCount: 0,
+    tabletToleranceCents: toleranceCents,
   };
   let costedOrders = 0;
   let costCents = 0;
@@ -2566,7 +2577,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     const tablet = r.tablet === null ? null : Number(r.tablet);
     // Against what the tablet should show (the till's total at foodpanda's prices, as kept at payment): as Pay checked it.
     const diff = tablet === null ? null : tablet - m.expectedTabletCents;
-    const differs = diff !== null && Math.abs(diff) > FOODPANDA_TABLET_TOLERANCE_CENTS;
+    const differs = tablet !== null && tabletDiffers(m.expectedTabletCents, tablet, toleranceCents);
     if (code === null) out.missingCodeCount += 1;
     if (differs) out.tabletDiffCount += 1;
     lines.push({

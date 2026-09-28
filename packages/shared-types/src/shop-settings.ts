@@ -155,7 +155,24 @@ export interface FoodpandaChecks {
   orderCode: FoodpandaCheckRule;
   /** The total the foodpanda tablet shows (kept with the order's channel terms). */
   tabletTotal: FoodpandaCheckRule;
+  /**
+   * Format 2: how far the tablet's total may be from the one expected before
+   * Pay says so and Reports list the order (paisa, whole rupees, Rs 0 to
+   * FOODPANDA_TABLET_TOLERANCE_MAX_CENTS). Pay and Reports use the SAME
+   * value; Reports use the one in force now, for old orders too (the
+   * difference itself is kept on each order). A format-1 value reads as
+   * FOODPANDA_TABLET_TOLERANCE_CENTS (Rs 1, as before the setting).
+   */
+  tabletToleranceCents: number;
 }
+
+/** A tablet total more than this far from the till's total is a mismatch (Rs 1): the default, and today's. */
+export const FOODPANDA_TABLET_TOLERANCE_CENTS = 100;
+/**
+ * The most the owner may allow (Rs 10): the tablet check is the only real
+ * proof a foodpanda total is right, so a wide one would hide small skims.
+ */
+export const FOODPANDA_TABLET_TOLERANCE_MAX_CENTS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Money & discounts (phase 2)
@@ -179,6 +196,16 @@ export interface DiscountApproval {
    * discount needs one.
    */
   flatOverCents: number;
+  /**
+   * Format 2: every discount given by hand (F3, any login, the owner too)
+   * needs a reason — refused in the main process without one (orders:
+   * applyDiscount and order-repo applyDiscount). Not the automatic offers,
+   * the foodpanda deal or the website's pick-up %: they carry their own
+   * names. A discount already on an open order keeps what it has. false (the
+   * reason is optional, as before the setting) by default and for a
+   * format-1 value.
+   */
+  reasonRequired: boolean;
 }
 
 /** The limits requiresManagerApproval works with (the setting without its format). */
@@ -649,8 +676,10 @@ export type ShopSettingValue<K extends ShopSettingKey> = ShopSettingValues[K];
 export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Object.freeze({
   'foodpanda.deal': 1,
   'foodpanda.fees': 1,
-  'foodpanda.checks': 1,
-  'discounts.approval': 1,
+  // Format 2 (after v0.7.29): the tablet's tolerance. A format-1 value reads as Rs 1.
+  'foodpanda.checks': 2,
+  // Format 2 (after v0.7.29): "a discount needs a reason". A format-1 value reads as No.
+  'discounts.approval': 2,
   'discounts.presets': 1,
   'discounts.delivery': 1,
   'staff.timing': 1,
@@ -690,21 +719,31 @@ export const DEFAULT_FOODPANDA_FEES: Readonly<FoodpandaFees> = Object.freeze({
   paymentFeeBps: 0,
 });
 
-/** Shown at Pay, optional (today neither is asked). */
+/**
+ * Shown at Pay, optional (today neither is asked); a tablet total more than
+ * Rs 1 away is flagged. Format 2 added the tolerance at today's Rs 1: the
+ * format-1 fields are exactly as released (pinned by pos-domain
+ * shop-settings.test.ts).
+ */
 export const DEFAULT_FOODPANDA_CHECKS: Readonly<FoodpandaChecks> = Object.freeze({
-  v: 1,
+  v: 2,
   orderCode: 'optional',
   tabletTotal: 'optional',
+  tabletToleranceCents: FOODPANDA_TABLET_TOLERANCE_CENTS,
 });
 
 /**
  * Today: over 10%, or over Rs 500 (or over 10% of the order), needs a
- * manager (was MANAGER_APPROVAL_PERCENT_THRESHOLD / _FLAT_CENTS_THRESHOLD).
+ * manager (was MANAGER_APPROVAL_PERCENT_THRESHOLD / _FLAT_CENTS_THRESHOLD),
+ * and the reason is optional. Format 2 added "a discount needs a reason" at
+ * today's No: the format-1 fields are exactly as released (pinned by
+ * pos-domain owner-rules-defaults.test.ts).
  */
 export const DEFAULT_DISCOUNT_APPROVAL: Readonly<DiscountApproval> = Object.freeze({
-  v: 1,
+  v: 2,
   percentOver: 10,
   flatOverCents: 50_000,
+  reasonRequired: false,
 });
 
 /** Today's buttons (owner, 2026-09-26): 10 / 20 / 25 / 50 / 100 %, Rs 100 / 200 / 500, four reasons. */
@@ -875,9 +914,6 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'delivery.zones': DEFAULT_DELIVERY_ZONES,
   'online.options': DEFAULT_ONLINE_OPTIONS,
 });
-
-/** A tablet total more than this far from the till's total is a mismatch (Rs 1). */
-export const FOODPANDA_TABLET_TOLERANCE_CENTS = 100;
 
 /** The longest foodpanda order number kept (payments.reference_no). */
 export const FOODPANDA_ORDER_CODE_MAX = 40;
@@ -1116,6 +1152,12 @@ export interface CheckoutRules {
      * main process reads the setting again when it saves the discount.
      */
     alsoOffDeliveryCharge: boolean;
+    /**
+     * A discount given by hand needs a reason ('discounts.approval'
+     * reasonRequired): the F3 screen marks the reason as needed. The main
+     * process refuses one without it (orders:applyDiscount, order-repo).
+     */
+    reasonRequired: boolean;
   };
   /** The Live Orders colours and the "waiting too long" reminders. */
   kitchen: Omit<KitchenTiming, 'v'>;
@@ -1160,7 +1202,10 @@ export interface CheckoutRules {
     } | null;
     /** What Pay asks on a foodpanda order. */
     checks: { orderCode: FoodpandaCheckRule; tabletTotal: FoodpandaCheckRule };
-    /** A tablet total further than this from the one expected is a mismatch. */
+    /**
+     * A tablet total further than this from the one expected is a mismatch
+     * ('foodpanda.checks' tabletToleranceCents; Reports use the same value).
+     */
     tabletToleranceCents: number;
     /**
      * How much above the till's prices the foodpanda menu is, basis points:

@@ -8,6 +8,8 @@ import {
   discountBaseText,
   discountDialogPrimary,
   discountDialogStart,
+  discountReasonHint,
+  discountReasonProblem,
   flatChoiceRupees,
   parseDiscountEntry,
   percentChoice,
@@ -203,5 +205,24 @@ describe('previewDiscount on an order with a delivery charge (the owner, 28 Sep 
     }
     expect(previewDiscount(withCharge, sub, percentChoice(10), everyLine)).toMatchObject({ discountCents: 20_000, taxCents: 28_800 });
     expect(discountBaseText(discountBaseNow(withCharge, sub, everyLine), sub)).toBe('Order Rs 2,000 before tax');
+  });
+});
+
+describe('the reason, when the owner has made one required (Settings → Money & discounts)', () => {
+  it('by default the reason is optional: no reason is fine, as before', () => {
+    expect(discountReasonHint(false)).toBe('(optional, prints on the bill)');
+    expect(discountReasonProblem(false, '')).toBeNull();
+    expect(discountReasonProblem(false, '   ')).toBeNull();
+  });
+
+  it('required: the row says needed, and Apply waits for a reason — a reason button is one tap', () => {
+    expect(discountReasonHint(true)).toBe('(needed — prints on the bill)');
+    const said = 'Pick or type a reason — the owner has made one required for every discount.';
+    expect(discountReasonProblem(true, '')).toBe(said);
+    expect(discountReasonProblem(true, '   ')).toBe(said);
+    expect(discountReasonProblem(true, 'No reason given')).toBe(said);
+    // A reason button fills the box with its words: that is a reason.
+    expect(discountReasonProblem(true, 'Staff')).toBeNull();
+    expect(discountReasonProblem(true, ' Birthday ')).toBeNull();
   });
 });

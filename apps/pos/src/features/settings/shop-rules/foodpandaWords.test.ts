@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_FOODPANDA_DEAL, DEFAULT_FOODPANDA_FEES, type FoodpandaDeal, type FoodpandaFees } from '@cheeseoclock/shared-types';
+import {
+  DEFAULT_FOODPANDA_CHECKS,
+  DEFAULT_FOODPANDA_DEAL,
+  DEFAULT_FOODPANDA_FEES,
+  type FoodpandaDeal,
+  type FoodpandaFees,
+} from '@cheeseoclock/shared-types';
 import {
   andList,
   bpsFromPercentText,
@@ -9,9 +15,10 @@ import {
   dealSummary,
   feesSummary,
   percentFromBps,
+  toleranceWords,
   workedExample,
 } from './foodpandaWords';
-import { dealFromForm, dealToForm, feesFromForm, feesToForm, sameValue } from './foodpandaForm';
+import { checksFromForm, checksToForm, dealFromForm, dealToForm, feesFromForm, feesToForm, sameValue } from './foodpandaForm';
 import { lastChangedText } from './SettingCard';
 
 const deal = (over: Partial<FoodpandaDeal> = {}): FoodpandaDeal => ({ ...DEFAULT_FOODPANDA_DEAL, percent: 20, shopPercent: 20, ...over });
@@ -79,7 +86,15 @@ describe('summaries and typing', () => {
     );
     expect(feesSummary(fees({ upliftBps: 1_250 }))).toBe('25% after the deal · menu 12.5% above the till');
     expect(feesSummary(fees({ paymentFeeBps: 200 }))).toBe('25% after the deal · 2% of the total');
-    expect(checksSummary({ v: 1, orderCode: 'required', tabletTotal: 'optional' })).toBe('Order number required · tablet total optional');
+    expect(checksSummary({ v: 2, orderCode: 'required', tabletTotal: 'optional', tabletToleranceCents: 100 })).toBe(
+      'Order number required · tablet total optional · flagged when more than Rs 1 different',
+    );
+    expect(checksSummary({ v: 2, orderCode: 'optional', tabletTotal: 'required', tabletToleranceCents: 500 })).toBe(
+      'Order number optional · tablet total required · flagged when more than Rs 5 different',
+    );
+    expect(checksSummary({ v: 2, orderCode: 'optional', tabletTotal: 'optional', tabletToleranceCents: 0 })).toBe(
+      'Order number optional · tablet total optional · flagged when different at all',
+    );
     expect(dealPayer({ percent: 20, shopPercent: 20 })).toBe('shop');
     expect(dealPayer({ percent: 20, shopPercent: 0 })).toBe('foodpanda');
     expect(dealPayer({ percent: 20, shopPercent: 5 })).toBe('shared');
@@ -140,5 +155,32 @@ describe('the forms', () => {
     const lastChanged = { at: '2026-09-20T09:00:00.000Z', byName: 'Test Owner', onThisTill: null };
     expect(lastChangedText({ lastChanged, carriedOver: true })).toMatch(/^Carried over from Costing → Targets & fees \(saved by Test Owner, .+\): not saved here yet\.$/);
     expect(lastChangedText({ lastChanged: null })).toBe('Never changed: the till works as it always has.');
+  });
+});
+
+describe('At Pay on a foodpanda order: the difference allowed on the tablet', () => {
+  it('the default goes into the form and back unchanged (Rs 1)', () => {
+    expect(checksToForm(DEFAULT_FOODPANDA_CHECKS)).toEqual({ orderCode: 'optional', tabletTotal: 'optional', tolerance: '1' });
+    expect(checksFromForm(checksToForm(DEFAULT_FOODPANDA_CHECKS))).toEqual({ value: DEFAULT_FOODPANDA_CHECKS, problem: null });
+  });
+
+  it('a value an older version saved (format 1, read with Rs 1) goes back in THIS version’s format', () => {
+    const readFromV1 = { v: 1, orderCode: 'required' as const, tabletTotal: 'optional' as const, tabletToleranceCents: 100 };
+    expect(checksFromForm(checksToForm(readFromV1)).value).toEqual({ ...readFromV1, v: 2 });
+  });
+
+  it('whole rupees from Rs 0 to Rs 10 — never more (an anti-fraud check)', () => {
+    const form = (tolerance: string) => ({ orderCode: 'optional' as const, tabletTotal: 'required' as const, tolerance });
+    expect(checksFromForm(form('0')).value).toMatchObject({ v: 2, tabletTotal: 'required', tabletToleranceCents: 0 });
+    expect(checksFromForm(form('10')).value).toMatchObject({ tabletToleranceCents: 1_000 });
+    expect(checksFromForm(form(' 5 ')).value).toMatchObject({ tabletToleranceCents: 500 });
+    const said = 'The difference allowed on the tablet is whole rupees, Rs 0 to Rs 10.';
+    for (const t of ['11', '100', '1.5', '-1', '', 'abc']) expect({ t, problem: checksFromForm(form(t)).problem }).toEqual({ t, problem: said });
+  });
+
+  it('the words are built from the value', () => {
+    expect(toleranceWords(100)).toBe('more than Rs 1 different');
+    expect(toleranceWords(1_000)).toBe('more than Rs 10 different');
+    expect(toleranceWords(0)).toBe('different at all');
   });
 });

@@ -468,4 +468,16 @@ describe('the tablet total', () => {
     expect(tabletDiffers(184_300, 184_401)).toBe(true);
     expect(tabletDiffers(184_300, 184_199)).toBe(true);
   });
+
+  it("the owner's tolerance moves the line: Rs 0 flags a paisa, Rs 10 lets Rs 10 through (either way)", () => {
+    expect(tabletDiffers(184_300, 184_301, 0)).toBe(true);
+    expect(tabletDiffers(184_300, 184_300, 0)).toBe(false);
+    expect(tabletDiffers(184_300, 184_800, 500)).toBe(false);
+    expect(tabletDiffers(184_300, 184_801, 500)).toBe(true);
+    expect(tabletDiffers(184_300, 185_300, 1_000)).toBe(false);
+    expect(tabletDiffers(184_300, 183_300, 1_000)).toBe(false);
+    expect(tabletDiffers(184_300, 185_301, 1_000)).toBe(true);
+    // With no tolerance to hand: the released Rs 1.
+    expect(tabletDiffers(184_300, 184_400)).toBe(tabletDiffers(184_300, 184_400, 100));
+  });
 });

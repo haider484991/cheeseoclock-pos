@@ -12,6 +12,7 @@ import {
   DEFAULT_FOODPANDA_FEES,
   DEFAULT_ORDER_REASONS,
   FOODPANDA_TABLET_TOLERANCE_CENTS,
+  FOODPANDA_TABLET_TOLERANCE_MAX_CENTS,
   ORDER_REASON_ID_RE,
   ORDER_REASON_LABEL_MAX,
   ORDER_REASONS_MAX,
@@ -56,9 +57,13 @@ describe('the released defaults are pinned', () => {
     });
   });
 
-  it('foodpanda.checks: shown at Pay, both optional', () => {
-    expect(DEFAULT_FOODPANDA_CHECKS).toEqual({ v: 1, orderCode: 'optional', tabletTotal: 'optional' });
+  it('foodpanda.checks: shown at Pay, both optional; a tablet total more than Rs 1 away is flagged', () => {
+    // Format 2 (after v0.7.29) added the tolerance AT TODAY'S Rs 1. The format-1 fields are exactly as released.
+    const { v, tabletToleranceCents, ...released } = DEFAULT_FOODPANDA_CHECKS;
+    expect(released).toEqual({ orderCode: 'optional', tabletTotal: 'optional' });
+    expect({ v, tabletToleranceCents }).toEqual({ v: 2, tabletToleranceCents: 100 });
     expect(FOODPANDA_TABLET_TOLERANCE_CENTS).toBe(100);
+    expect(FOODPANDA_TABLET_TOLERANCE_MAX_CENTS).toBe(1_000);
   });
 
   it('discounts.delivery: NO — a discount leaves the delivery charge alone (the owner, 28 Sep 2026; the one default that is not "what the till did before")', () => {

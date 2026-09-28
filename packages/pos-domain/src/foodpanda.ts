@@ -504,7 +504,12 @@ export function tabletDifferenceCents(expectedCents: number, tabletTotalCents: n
   return tabletTotalCents - expectedCents;
 }
 
-/** More than Rs 1 apart: the till says so at Pay and Reports lists the order. */
+/**
+ * More than the tolerance apart: the till says so at Pay and Reports lists
+ * the order. THE one rule for both, with the owner's tolerance
+ * ('foodpanda.checks' tabletToleranceCents, read in the main process); the
+ * released Rs 1 only for a caller with no setting to hand.
+ */
 export function tabletDiffers(expectedCents: number, tabletTotalCents: number, toleranceCents = FOODPANDA_TABLET_TOLERANCE_CENTS): boolean {
   return Math.abs(tabletDifferenceCents(expectedCents, tabletTotalCents)) > toleranceCents;
 }

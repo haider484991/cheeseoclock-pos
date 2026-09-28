@@ -5,7 +5,10 @@
  */
 import {
   FOODPANDA_DEAL_MAX_PERCENT,
+  FOODPANDA_TABLET_TOLERANCE_MAX_CENTS,
   SHOP_SETTING_FORMAT,
+  type FoodpandaCheckRule,
+  type FoodpandaChecks,
   type FoodpandaCommissionBase,
   type FoodpandaDeal,
   type FoodpandaFees,
@@ -123,6 +126,39 @@ export function feesFromForm(f: FeesForm): Parsed<FoodpandaFees> {
       upliftBps: uplift,
       paymentFeeBps: paymentFee,
     },
+    problem: null,
+  };
+}
+
+export interface ChecksForm {
+  orderCode: FoodpandaCheckRule;
+  tabletTotal: FoodpandaCheckRule;
+  /** How far the tablet may be from the till before Pay says so, in whole rupees. */
+  tolerance: string;
+}
+
+export function checksToForm(c: FoodpandaChecks): ChecksForm {
+  return { orderCode: c.orderCode, tabletTotal: c.tabletTotal, tolerance: String(c.tabletToleranceCents / 100) };
+}
+
+const TOLERANCE_MAX_RUPEES = FOODPANDA_TABLET_TOLERANCE_MAX_CENTS / 100;
+
+/**
+ * The checks as this version saves them: ALWAYS in its own format (a value
+ * an older version saved, v1, would otherwise go back as v1 and be refused),
+ * the tolerance whole rupees from Rs 0 to Rs 10 (an anti-fraud check: never
+ * wider).
+ */
+export function checksFromForm(f: ChecksForm): Parsed<FoodpandaChecks> {
+  const cents = centsFromRupeesText(f.tolerance);
+  if (cents === null || Number.isNaN(cents) || cents > FOODPANDA_TABLET_TOLERANCE_MAX_CENTS) {
+    return {
+      value: null,
+      problem: `The difference allowed on the tablet is whole rupees, Rs 0 to Rs ${TOLERANCE_MAX_RUPEES}.`,
+    };
+  }
+  return {
+    value: { v: SHOP_SETTING_FORMAT['foodpanda.checks'], orderCode: f.orderCode, tabletTotal: f.tabletTotal, tabletToleranceCents: cents },
     problem: null,
   };
 }

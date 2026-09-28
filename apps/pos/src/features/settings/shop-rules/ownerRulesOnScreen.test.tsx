@@ -28,6 +28,7 @@ import { useCheckoutStore } from '../../../stores/checkoutStore';
 import { DiscountDialog } from '../../checkout/DiscountDialog';
 import { OrdersBoardPage } from '../../orders/OrdersBoardPage';
 import { MoneySettings } from '../MoneySettings';
+import { FoodpandaSettings } from '../FoodpandaSettings';
 import { TimingSettings } from '../TimingSettings';
 import { SettingsPage } from '../SettingsPage';
 import { CHECKOUT_RULES_KEY, SHOP_SETTINGS_KEY } from './useShopSetting';
@@ -90,6 +91,7 @@ const RULES = (over: Partial<CheckoutRules> = {}): CheckoutRules => ({
     approval: { percentOver: 10, flatOverCents: 20_000 },
     presets: { percents: [5, 15], flatCents: [15_000, 25_000], reasons: ['Birthday', 'Test reason'] },
     alsoOffDeliveryCharge: false,
+    reasonRequired: false,
   },
   kitchen: { amberMin: 5, redMin: 10, notStartedMin: 5, notDoneMin: 20 },
   foodpanda: { deal: null, checks: { orderCode: 'optional', tabletTotal: 'optional' }, tabletToleranceCents: 100, upliftBps: 0 },
@@ -310,7 +312,7 @@ describe('the owner’s cards', () => {
     signIn('admin');
     const words = text(
       render(<MoneySettings />, [
-        [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', { v: 1, percentOver: 20, flatOverCents: 100_000 })],
+        [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', { v: 2, percentOver: 20, flatOverCents: 100_000, reasonRequired: false })],
         [
           [...SHOP_SETTINGS_KEY, 'discounts.presets'],
           card('discounts.presets', { v: 1, percents: [5, 25], flatCents: [30_000], reasons: ['Birthday'] }),
@@ -329,7 +331,7 @@ describe('the owner’s cards', () => {
   it('Money & discounts: "A discount also comes off the delivery charge", No by default, its words built from the value', () => {
     signIn('admin');
     const seed = (value: { v: number; alsoOffDeliveryCharge: boolean }, never: boolean): Array<[readonly unknown[], unknown]> => [
-      [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', { v: 1, percentOver: 10, flatOverCents: 50_000 })],
+      [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', { v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: false })],
       [
         [...SHOP_SETTINGS_KEY, 'discounts.presets'],
         card('discounts.presets', { v: 1, percents: [10], flatCents: [10_000], reasons: ['Staff'] }),
@@ -410,5 +412,105 @@ describe('the owner’s cards', () => {
       const other = tabs(render(<SettingsPage />));
       expect({ role, other }).toEqual({ role, other: ['Printers', 'Sounds', 'About'] });
     }
+  });
+});
+
+/** Which radio of a group is chosen: its label (the group found by its aria-label). */
+function chosen(markup: string, group: string): string[] {
+  const at = markup.indexOf(`aria-label="${group}"`);
+  expect(at).toBeGreaterThan(-1);
+  const end = markup.indexOf('</div>', at);
+  return markup
+    .slice(at, end)
+    .split('role="radio"')
+    .slice(1)
+    .filter((b) => b.includes('aria-checked="true"'))
+    .map((b) => text(`<x ${b}`).split(' ')[0] ?? '');
+}
+
+describe('"A discount needs a reason" (Settings sweep B7b)', () => {
+  it('the F3 screen: nothing saved says the reason is optional, as before', () => {
+    signIn('cashier');
+    ringUp();
+    for (const out of [render(<DiscountDialog onClose={() => {}} />), render(<DiscountDialog onClose={() => {}} />, [[CHECKOUT_RULES_KEY, RULES()]])]) {
+      expect(text(out)).toContain('Reason (optional, prints on the bill)');
+      expect(out).toContain('aria-required="false"');
+      expect(text(out)).not.toContain('needed');
+    }
+  });
+
+  it('the F3 screen with the owner’s Yes: the reason is needed, the box says so, and the reason buttons are still one tap', () => {
+    signIn('cashier');
+    ringUp();
+    const out = render(<DiscountDialog onClose={() => {}} />, [
+      [CHECKOUT_RULES_KEY, RULES({ discounts: { ...RULES().discounts, reasonRequired: true } })],
+    ]);
+    expect(text(out)).toContain('Reason (needed — prints on the bill)');
+    expect(out).toContain('aria-required="true"');
+    // The owner's two reason buttons, each a plain button (one tap fills the reason).
+    expect(out.split('aria-pressed="false" class="h-10 rounded-full').length - 1).toBe(2);
+    expect(text(out)).toContain('Birthday');
+    expect(text(out)).toContain('Test reason');
+  });
+
+  it('the Money card asks it, No by default, with what it does in words', () => {
+    signIn('admin');
+    const seed = (approval: ShopSettingCard<'discounts.approval'>['value']): Array<[readonly unknown[], unknown]> => [
+      [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', approval)],
+      [[...SHOP_SETTINGS_KEY, 'discounts.presets'], card('discounts.presets', { v: 1, percents: [10], flatCents: [10_000], reasons: ['Staff'] })],
+    ];
+    const no = render(<MoneySettings />, seed({ v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: false }));
+    expect(text(no)).toContain('A discount needs a reason');
+    expect(chosen(no, 'A discount needs a reason')).toEqual(['No']);
+    expect(text(no)).toContain('from every login, the owner’s too; the till refuses one without.');
+    expect(text(no)).toContain('The automatic offers, the foodpanda deal and the website’s pick-up % carry their own names.');
+    expect(text(no)).toContain('A discount already on an order keeps what it has.');
+    expect(text(no)).toContain('Update both tills the same day');
+    // A format-1 value (saved by v0.7.29) reads as No.
+    const v1 = render(<MoneySettings />, seed({ v: 1, percentOver: 10, flatOverCents: 50_000, reasonRequired: false }));
+    expect(chosen(v1, 'A discount needs a reason')).toEqual(['No']);
+    const yes = render(<MoneySettings />, seed({ v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: true }));
+    expect(chosen(yes, 'A discount needs a reason')).toEqual(['Yes']);
+  });
+});
+
+describe('the foodpanda tablet’s tolerance (Settings sweep B10)', () => {
+  const seed = (checks: ShopSettingCard<'foodpanda.checks'>['value']): Array<[readonly unknown[], unknown]> => [
+    [[...SHOP_SETTINGS_KEY, 'foodpanda.deal'], card('foodpanda.deal', { ...SHOP_SETTING_DEFAULTS['foodpanda.deal'] })],
+    [[...SHOP_SETTINGS_KEY, 'foodpanda.fees'], card('foodpanda.fees', { ...SHOP_SETTING_DEFAULTS['foodpanda.fees'] })],
+    [[...SHOP_SETTINGS_KEY, 'foodpanda.checks'], card('foodpanda.checks', checks)],
+  ];
+  const toleranceBox = (markup: string) => {
+    const at = markup.indexOf('id="fp-tolerance"');
+    expect(at).toBeGreaterThan(-1);
+    const tag = markup.slice(markup.lastIndexOf('<input', at), markup.indexOf('>', at));
+    return tag.slice(tag.indexOf('value="') + 7).split('"')[0];
+  };
+
+  it('Rs 1 by default (and for a format-1 value): the words say Rs 1, the box shows 1', () => {
+    signIn('admin');
+    for (const checks of [
+      { v: 2, orderCode: 'optional' as const, tabletTotal: 'optional' as const, tabletToleranceCents: 100 },
+      { v: 1, orderCode: 'optional' as const, tabletTotal: 'optional' as const, tabletToleranceCents: 100 },
+    ]) {
+      const out = render(<FoodpandaSettings />, seed(checks));
+      expect(text(out)).toContain('If the till’s total is more than Rs 1 different, the till says so and Reports lists the order');
+      expect(toleranceBox(out)).toBe('1');
+      expect(text(out)).toContain('Difference allowed on the tablet (Rs)');
+      expect(text(out)).toContain('Whole rupees, Rs 0 to Rs 10 — never more');
+      expect(text(out)).toContain('Reports use it as it is now for every order, old ones too');
+      expect(text(out)).toContain('At Rs 0 even a few paisa of tax rounding is flagged.');
+    }
+  });
+
+  it('the words follow the owner’s value: Rs 5, and Rs 0', () => {
+    signIn('admin');
+    const five = render(<FoodpandaSettings />, seed({ v: 2, orderCode: 'optional', tabletTotal: 'optional', tabletToleranceCents: 500 }));
+    expect(text(five)).toContain('If the till’s total is more than Rs 5 different');
+    expect(text(five)).not.toContain('more than Rs 1 different');
+    expect(toleranceBox(five)).toBe('5');
+    const zero = render(<FoodpandaSettings />, seed({ v: 2, orderCode: 'optional', tabletTotal: 'optional', tabletToleranceCents: 0 }));
+    expect(text(zero)).toContain('If the till’s total is different at all');
+    expect(toleranceBox(zero)).toBe('0');
   });
 });

@@ -35,10 +35,12 @@ import type { Parsed } from './foodpandaForm';
 export interface ApprovalForm {
   percent: string;
   rupees: string;
+  /** "A discount needs a reason": Yes (true) or No. */
+  reasonRequired: boolean;
 }
 
-export function approvalToForm(a: ApprovalLimits): ApprovalForm {
-  return { percent: String(a.percentOver), rupees: String(a.flatOverCents / 100) };
+export function approvalToForm(a: DiscountApproval): ApprovalForm {
+  return { percent: String(a.percentOver), rupees: String(a.flatOverCents / 100), reasonRequired: a.reasonRequired };
 }
 
 const APPROVAL_MAX_RUPEES = formatCents(APPROVAL_MAX_FLAT_CENTS);
@@ -52,15 +54,39 @@ export function approvalFromForm(f: ApprovalForm): Parsed<DiscountApproval> {
   if (cents === null || Number.isNaN(cents) || cents > APPROVAL_MAX_FLAT_CENTS) {
     return { value: null, problem: `The rupee limit is whole rupees, Rs 0 to ${APPROVAL_MAX_RUPEES}.` };
   }
-  return { value: { v: SHOP_SETTING_FORMAT['discounts.approval'], percentOver: Number(p), flatOverCents: cents }, problem: null };
+  return {
+    value: {
+      v: SHOP_SETTING_FORMAT['discounts.approval'],
+      percentOver: Number(p),
+      flatOverCents: cents,
+      reasonRequired: f.reasonRequired,
+    },
+    problem: null,
+  };
 }
 
-/** One line for History: "Up to 10% or Rs 500 without a manager". */
-export function approvalSummary(a: ApprovalLimits): string {
-  if (a.percentOver === 0) return 'Every discount needs a manager';
-  if (a.flatOverCents === 0) return `Up to ${a.percentOver}% without a manager; any amount in rupees needs one`;
-  return `Up to ${a.percentOver}% or ${formatCents(a.flatOverCents)} without a manager`;
+/**
+ * One line for History: "Up to 10% or Rs 500 without a manager", and
+ * " · a reason is needed" when the owner has made one required.
+ */
+export function approvalSummary(a: ApprovalLimits & { reasonRequired?: boolean }): string {
+  const reason = a.reasonRequired ? ' · a reason is needed' : '';
+  if (a.percentOver === 0) return `Every discount needs a manager${reason}`;
+  if (a.flatOverCents === 0) return `Up to ${a.percentOver}% without a manager; any amount in rupees needs one${reason}`;
+  return `Up to ${a.percentOver}% or ${formatCents(a.flatOverCents)} without a manager${reason}`;
 }
+
+/** The question on the card, as the owner reads it. */
+export const REASON_QUESTION = 'A discount needs a reason';
+
+/**
+ * What "a discount needs a reason" does, under its choice. Every login gives
+ * a discount by hand under it; what the till puts on by itself carries its
+ * own name; a discount already given is not taken off (unlike a lowered
+ * limit); both tills must run this version.
+ */
+export const REASON_RULE_NOTE =
+  'With Yes, every discount given on the Discount screen (F3) needs a reason — a reason button is one tap — from every login, the owner’s too; the till refuses one without. The automatic offers, the foodpanda deal and the website’s pick-up % carry their own names. A discount already on an order keeps what it has. Update both tills the same day: an older till still lets a discount through without a reason.';
 
 /** The two made-up orders the worked example uses. */
 export const EXAMPLE_SMALL_ORDER_CENTS = 200_000;

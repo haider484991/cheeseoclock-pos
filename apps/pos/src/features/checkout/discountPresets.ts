@@ -1,6 +1,8 @@
 import {
   computeDiscountCents,
   discountBaseCents,
+  discountReasonMissing,
+  DISCOUNT_REASON_REQUIRED,
   formatCents,
   requiresManagerApproval,
   taxAfterDiscount,
@@ -125,6 +127,25 @@ export function discountDialogStart(current: CurrentDiscount | null): { picked: 
  */
 export function discountDialogPrimary(p: { dealOn: boolean; intent: DiscountDialogIntent; hasChoice: boolean }): 'apply' | 'remove' {
   return p.dealOn && p.intent === 'removeDeal' && !p.hasChoice ? 'remove' : 'apply';
+}
+
+/**
+ * The words beside the dialog's Reason heading: needed when the owner has
+ * made a reason required (Settings → Money & discounts, via
+ * checkout:getRules), optional otherwise — as before the setting.
+ */
+export function discountReasonHint(reasonRequired: boolean): string {
+  return reasonRequired ? '(needed — prints on the bill)' : '(optional, prints on the bill)';
+}
+
+/**
+ * Why the dialog will not apply a discount yet, as far as its reason goes:
+ * the owner has made one required and none is picked or typed. The same
+ * test as the main process (pos-domain discountReasonMissing), which refuses
+ * the discount without one in any case. Null: the reason is fine.
+ */
+export function discountReasonProblem(reasonRequired: boolean, reason: string): string | null {
+  return reasonRequired && discountReasonMissing(reason) ? DISCOUNT_REASON_REQUIRED : null;
 }
 
 /** "10% off", "Rs 200 off". */

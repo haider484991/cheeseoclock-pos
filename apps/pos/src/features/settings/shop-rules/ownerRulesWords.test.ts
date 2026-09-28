@@ -40,23 +40,47 @@ import { kitchenTimingExample, kitchenTimingSummary, reprintRuleText, staffTimin
  */
 describe('Money & discounts: the approval limit', () => {
   it('reads what is typed, within 0–50% and Rs 0–5,000', () => {
-    expect(approvalFromForm({ percent: '15', rupees: '1,000' })).toEqual({
-      value: { v: 1, percentOver: 15, flatOverCents: 100_000 },
+    expect(approvalFromForm({ percent: '15', rupees: '1,000', reasonRequired: false })).toEqual({
+      value: { v: 2, percentOver: 15, flatOverCents: 100_000, reasonRequired: false },
       problem: null,
     });
-    expect(approvalFromForm({ percent: '0', rupees: '0' }).value).toEqual({ v: 1, percentOver: 0, flatOverCents: 0 });
-    expect(approvalFromForm({ percent: '51', rupees: '500' }).problem).toBe('The % limit is a whole % from 0 to 50.');
-    expect(approvalFromForm({ percent: '', rupees: '500' }).problem).toBe('The % limit is a whole % from 0 to 50.');
-    expect(approvalFromForm({ percent: '10', rupees: '5,001' }).problem).toBe('The rupee limit is whole rupees, Rs 0 to Rs 5,000.');
-    expect(approvalFromForm({ percent: '10', rupees: '' }).problem).toBe('The rupee limit is whole rupees, Rs 0 to Rs 5,000.');
+    expect(approvalFromForm({ percent: '0', rupees: '0', reasonRequired: false }).value).toEqual({
+      v: 2,
+      percentOver: 0,
+      flatOverCents: 0,
+      reasonRequired: false,
+    });
+    expect(approvalFromForm({ percent: '51', rupees: '500', reasonRequired: false }).problem).toBe('The % limit is a whole % from 0 to 50.');
+    expect(approvalFromForm({ percent: '', rupees: '500', reasonRequired: false }).problem).toBe('The % limit is a whole % from 0 to 50.');
+    expect(approvalFromForm({ percent: '10', rupees: '5,001', reasonRequired: false }).problem).toBe(
+      'The rupee limit is whole rupees, Rs 0 to Rs 5,000.',
+    );
+    expect(approvalFromForm({ percent: '10', rupees: '', reasonRequired: false }).problem).toBe('The rupee limit is whole rupees, Rs 0 to Rs 5,000.');
     // The saved value goes into the form and back unchanged.
     expect(approvalFromForm(approvalToForm(DEFAULT_DISCOUNT_APPROVAL)).value).toEqual(DEFAULT_DISCOUNT_APPROVAL);
+    // "A discount needs a reason": the owner's Yes is saved as Yes, and a Yes read back stays Yes.
+    expect(approvalFromForm({ percent: '10', rupees: '500', reasonRequired: true }).value).toEqual({
+      v: 2,
+      percentOver: 10,
+      flatOverCents: 50_000,
+      reasonRequired: true,
+    });
+    const withReason = { ...DEFAULT_DISCOUNT_APPROVAL, reasonRequired: true };
+    expect(approvalToForm(withReason)).toEqual({ percent: '10', rupees: '500', reasonRequired: true });
+    expect(approvalFromForm(approvalToForm(withReason)).value).toEqual(withReason);
+    // A format-1 value (read as No) is saved back in this version's format.
+    expect(approvalFromForm(approvalToForm({ v: 1, percentOver: 10, flatOverCents: 50_000, reasonRequired: false })).value).toEqual(
+      DEFAULT_DISCOUNT_APPROVAL,
+    );
   });
 
   it('says it in words built from the values', () => {
     expect(approvalSummary(DEFAULT_DISCOUNT_APPROVAL)).toBe('Up to 10% or Rs 500 without a manager');
     expect(approvalSummary({ percentOver: 0, flatOverCents: 50_000 })).toBe('Every discount needs a manager');
     expect(approvalSummary({ percentOver: 12, flatOverCents: 0 })).toBe('Up to 12% without a manager; any amount in rupees needs one');
+    // History says when a reason is needed; a format-1 line (read with No) says nothing more.
+    expect(approvalSummary({ ...DEFAULT_DISCOUNT_APPROVAL, reasonRequired: true })).toBe('Up to 10% or Rs 500 without a manager · a reason is needed');
+    expect(approvalSummary({ percentOver: 0, flatOverCents: 0, reasonRequired: true })).toBe('Every discount needs a manager · a reason is needed');
     expect(approvalExample(DEFAULT_DISCOUNT_APPROVAL)).toBe(
       "On a Rs 2,000 order a cashier can give up to 10% off, or up to Rs 200 off in rupees, without a manager. On a Rs 10,000 order: up to 10% off, or up to Rs 500 off in rupees. Anything more needs a manager's PIN or password.",
     );

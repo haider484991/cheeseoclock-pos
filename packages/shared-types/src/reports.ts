@@ -897,6 +897,14 @@ export interface ReportFoodpanda {
   toCheck: ReportFoodpandaCheckLine[];
   missingCodeCount: number;
   tabletDiffCount: number;
+  /**
+   * How far a tablet total may be from the one expected before it is listed
+   * (Settings → foodpanda, 'foodpanda.checks' tabletToleranceCents): the
+   * value in force NOW, the same Pay uses — applied to every order in the
+   * period, old ones too (each order keeps its difference, not the
+   * tolerance of its day).
+   */
+  tabletToleranceCents: number;
 }
 
 export interface ReportFoodpandaCheckLine {

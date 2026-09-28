@@ -73,8 +73,17 @@ export function feesSummary(fees: FoodpandaFees): string {
   return parts.join(' · ');
 }
 
+/**
+ * How far apart the tablet and the till may be before Pay says so and
+ * Reports list the order, in words: "more than Rs 1 different", or at Rs 0
+ * "different at all". Built from the owner's value, never typed by hand.
+ */
+export function toleranceWords(cents: number): string {
+  return cents > 0 ? `more than ${formatCents(cents)} different` : 'different at all';
+}
+
 export function checksSummary(checks: FoodpandaChecks): string {
-  return `Order number ${checks.orderCode} · tablet total ${checks.tabletTotal}`;
+  return `Order number ${checks.orderCode} · tablet total ${checks.tabletTotal} · flagged when ${toleranceWords(checks.tabletToleranceCents)}`;
 }
 
 /**

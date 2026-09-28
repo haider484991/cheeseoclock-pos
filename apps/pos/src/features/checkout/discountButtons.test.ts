@@ -82,6 +82,8 @@ describe('a till whose rules have not come yet (or with nothing saved) uses the 
       },
       // A discount leaves the delivery charge alone (the owner, 28 Sep 2026).
       alsoOffDeliveryCharge: false,
+      // The reason is optional, as before "a discount needs a reason" (format 2).
+      reasonRequired: false,
     });
     expect(kitchenTimingOf(null)).toEqual({ amberMin: 15, redMin: 30, notStartedMin: 10, notDoneMin: 30 });
     expect(kitchenTimingOf(undefined)).toBe(DEFAULT_COUNTER_KITCHEN);
@@ -92,6 +94,7 @@ describe('a till whose rules have not come yet (or with nothing saved) uses the 
       approval: { percentOver: 5, flatOverCents: 0 },
       presets: { percents: [5], flatCents: [100], reasons: ['Test'] },
       alsoOffDeliveryCharge: true,
+      reasonRequired: true,
     };
     const kitchen = { amberMin: 8, redMin: 12, notStartedMin: 6, notDoneMin: 25 };
     expect(discountRulesOf({ discounts })).toBe(discounts);

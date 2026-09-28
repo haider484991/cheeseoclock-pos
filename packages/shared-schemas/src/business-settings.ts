@@ -21,6 +21,8 @@ import {
   normalizeAreaText,
   zoneAliasProblem,
   FOODPANDA_DEAL_MAX_PERCENT,
+  FOODPANDA_TABLET_TOLERANCE_CENTS,
+  FOODPANDA_TABLET_TOLERANCE_MAX_CENTS,
   KITCHEN_TIMING_BOUNDS,
   LEGACY_COMMISSION_BASES,
   OFFER_ID_RE,
@@ -356,10 +358,17 @@ const discountApprovalShape = {
     .min(0, { message: "The % limit can't be below 0%" })
     .max(APPROVAL_MAX_PERCENT, { message: `The % limit is at most ${APPROVAL_MAX_PERCENT}%` }),
   flatOverCents: wholeRupees(APPROVAL_MAX_FLAT_CENTS / 100, 'The rupee limit'),
+  // Format 2: a discount given by hand needs a reason.
+  reasonRequired: z.boolean({ errorMap: () => ({ message: 'A discount needs a reason: Yes or No' }) }),
 };
 /** 'discounts.approval' as this version writes it. */
 export const discountApprovalSchema = z.object({ v: writesFormat('discounts.approval'), ...discountApprovalShape }).strict();
-const discountApprovalReadSchema = z.object({ v: readsFormat, ...discountApprovalShape });
+// A format-1 value (v0.7.29 and before) has no reasonRequired: it reads as No, the reason optional as it was.
+const discountApprovalReadSchema = z.object({
+  v: readsFormat,
+  ...discountApprovalShape,
+  reasonRequired: discountApprovalShape.reasonRequired.default(false),
+});
 
 /** A one-tap reason: printed on the bill, so one line, no spaces at its ends, 30 letters at most. */
 const presetReason = z
@@ -715,10 +724,20 @@ export const orderReasonsSchema = z.object({ v: writesFormat('orders.reasons'), 
 const orderReasonsReadSchema = z.object({ v: readsFormat, ...orderReasonsReadShape });
 
 const checkRule = z.enum(['optional', 'required'], { errorMap: () => ({ message: 'Optional or required' }) });
-const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };
+const foodpandaChecksShape = {
+  orderCode: checkRule,
+  tabletTotal: checkRule,
+  // Format 2: whole rupees, Rs 0 to Rs 10 — an anti-fraud check, never wider.
+  tabletToleranceCents: wholeRupees(FOODPANDA_TABLET_TOLERANCE_MAX_CENTS / 100, 'The difference allowed on the tablet'),
+};
 /** 'foodpanda.checks' as this version writes it. */
 export const foodpandaChecksSchema = z.object({ v: writesFormat('foodpanda.checks'), ...foodpandaChecksShape }).strict();
-const foodpandaChecksReadSchema = z.object({ v: readsFormat, ...foodpandaChecksShape });
+// A format-1 value (v0.7.29 and before) has no tolerance: it reads as Rs 1, as it was.
+const foodpandaChecksReadSchema = z.object({
+  v: readsFormat,
+  ...foodpandaChecksShape,
+  tabletToleranceCents: foodpandaChecksShape.tabletToleranceCents.default(FOODPANDA_TABLET_TOLERANCE_CENTS),
+});
 
 // ---------------------------------------------------------------------------
 // Delivery areas & fees, the website pick-up, online options (phase 3)

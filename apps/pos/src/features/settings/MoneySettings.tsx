@@ -7,7 +7,9 @@
  *  - when a cashier needs a manager for a discount ('discounts.approval'):
  *    the one rule, pos-domain requiresManagerApproval, used by the F3
  *    screen's locks, the IPC check and the repository's save and cart
- *    re-check, all with this value;
+ *    re-check, all with this value — and whether a discount given by hand
+ *    needs a reason (format 2; No by default, as before), refused in the
+ *    main process without one;
  *  - the F3 screen's one-tap buttons ('discounts.presets');
  *  - whether a discount also comes off the delivery charge
  *    ('discounts.delivery'; the owner, 28 Sep 2026: "Delivery charges is
@@ -50,6 +52,8 @@ import {
   DELIVERY_RULE_NOTE,
   EXAMPLE_SMALL_ORDER_CENTS,
   LOWERED_LIMIT_NOTE,
+  REASON_QUESTION,
+  REASON_RULE_NOTE,
   approvalDeliveryNote,
   approvalExample,
   approvalFromForm,
@@ -136,7 +140,7 @@ function MoneyCards({
         card={approvalCard}
         title="When a cashier needs a manager"
         icon={<ShieldCheck className="h-5 w-5" />}
-        intro="A discount above this needs a manager’s PIN or password. The Discount screen shows a lock on it, and the till checks it again when the discount is saved."
+        intro="A discount above this needs a manager’s PIN or password. The Discount screen shows a lock on it, and the till checks it again when the discount is saved. You can also make a reason needed for every discount."
         describe={approvalSummary}
         dirty={approvalDirty}
         problem={approvalParsed.problem}
@@ -186,6 +190,33 @@ function MoneyCards({
               % above: see the example below.
             </p>
           </div>
+        </div>
+        <div>
+          <span className={labelClass}>{REASON_QUESTION}</span>
+          <div role="radiogroup" aria-label={REASON_QUESTION} className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {[
+              { id: false, label: 'No', hint: 'The reason is optional: a cashier may leave it empty.' },
+              { id: true, label: 'Yes', hint: 'Every discount needs a reason: pick a reason button or type one.' },
+            ].map((o) => (
+              <button
+                key={String(o.id)}
+                type="button"
+                role="radio"
+                aria-checked={approvalD.form.reasonRequired === o.id}
+                onClick={() => approvalD.set({ ...approvalD.form, reasonRequired: o.id })}
+                className={cn(
+                  'flex flex-col items-start gap-0.5 rounded-lg border-2 p-3 text-left transition-colors disabled:opacity-60',
+                  approvalD.form.reasonRequired === o.id
+                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                    : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                )}
+              >
+                <span className="text-sm font-semibold">{o.label}</span>
+                <span className="text-xs text-stone-500">{o.hint}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-stone-500">{REASON_RULE_NOTE}</p>
         </div>
       </SettingCard>
 

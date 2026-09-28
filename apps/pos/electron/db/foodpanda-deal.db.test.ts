@@ -395,7 +395,7 @@ describe.skipIf(!DatabaseSync)('the foodpanda deal on an order', () => {
     s.add(a.id, s.pizza);
     s.payFoodpanda(a.id);
     expect(s.terms(a.id)).toMatchObject({ tablet_total_cents: null, tablet_diff_cents: null });
-    s.setChecks({ v: 1, orderCode: 'required', tabletTotal: 'required' });
+    s.setChecks({ v: 2, orderCode: 'required', tabletTotal: 'required', tabletToleranceCents: 100 });
     const b = s.order('foodpanda');
     s.add(b.id, s.pizza);
     expect(() => s.payFoodpanda(b.id, { tablet: 116_000 })).toThrow(/order number/);
@@ -502,7 +502,7 @@ describe.skipIf(!DatabaseSync)('the Settings card', () => {
     expect(back).toMatchObject({ isDefault: true, value: { percent: 0 }, lastChanged: { byName: 'Test Owner', onThisTill: true } });
     expect(back.history.map((h) => h.value?.percent)).toEqual([0, 25, 20]);
     // The same values written in another order are still the default.
-    s.setChecks({ tabletTotal: 'optional', orderCode: 'optional', v: 1 });
+    s.setChecks({ tabletToleranceCents: 100, tabletTotal: 'optional', orderCode: 'optional', v: 2 });
     expect(s.r.getShopSettingCard(s.db, 'foodpanda.checks', LINK_ON).isDefault).toBe(true);
     // Any change is not.
     s.setFees({ ...DEFAULT_FOODPANDA_FEES, confirmed: true });

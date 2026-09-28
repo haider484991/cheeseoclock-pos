@@ -47,12 +47,15 @@ import {
   validateVoid,
   validateDiscountInput,
   requiresManagerApproval,
+  discountReasonMissing,
+  DISCOUNT_REASON_REQUIRED,
 } from '@cheeseoclock/pos-domain';
 import {
   readApprovalLimits,
   readDeliveryFeeItemIds,
   readDeliveryZones,
   readDiscountAlsoOffDeliveryCharge,
+  readDiscountReasonRequired,
   readShopSetting,
 } from '../business-settings-read.js';
 import {
@@ -1917,6 +1920,13 @@ export function applyDiscount(
     // Everything after — each cart change, the tax, the FBR invoice, profit,
     // a reprint — follows the row, never the live setting.
     const rule = opts.rule ?? tillDiscountRule(readDiscountAlsoOffDeliveryCharge(db));
+    // The owner's "a discount needs a reason" (Settings → Money & discounts), read live —
+    // defense in depth behind the IPC handler. Every discount the till gives by hand; not the
+    // website's pick-up % (its rule is the website's and it carries its own name), and never
+    // the automatic offers or the foodpanda deal (their own paths, their own names).
+    if (rule.from === 'till' && readDiscountReasonRequired(db) && discountReasonMissing(input.reason)) {
+      throw new Error(DISCOUNT_REASON_REQUIRED);
+    }
     // What it is worked on: the food only, unless the rule says every line.
     const base = discountBaseCents(discountLinesOf(db, input.orderId), rule.alsoOffDeliveryCharge);
 
