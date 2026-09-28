@@ -1,7 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { approvalRuleText, formatCents } from '@cheeseoclock/pos-domain';
+import { approvalRuleText, DISCOUNT_REASON_REQUIRED, formatCents } from '@cheeseoclock/pos-domain';
 import { Lock, X } from 'lucide-react';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { SecretInput } from '../../components/secret/SecretInput';
@@ -13,15 +13,21 @@ import {
   currentDiscountWords,
   describeDiscount,
   describePreview,
+  discountApplyStep,
   discountBaseNow,
   discountBaseText,
   discountDialogPrimary,
   discountDialogStart,
+  discountReasonHint,
+  discountReasonProblem,
+  discountRefused,
   parseDiscountEntry,
   presetButtons,
   previewDiscount,
+  reasonButtons,
   sameChoice,
   type DiscountChoice,
+  type DiscountDialogFocus,
   type DiscountDialogIntent,
 } from './discountPresets';
 
@@ -41,7 +47,10 @@ interface Props {
  * 10% of the order), the same rule the till checks when it saves the
  * discount. Any other amount can still be typed. By default a discount is
  * worked on the food only (Settings → Money & discounts: the delivery charge
- * is paid in full), and the dialog says so on an order that has one.
+ * is paid in full), and the dialog says so on an order that has one. When the
+ * owner has made a reason required, the Reason row says "needed" and Apply
+ * waits for one (a reason button is still one tap); the main process refuses
+ * a discount without one in any case.
  */
 export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
@@ -66,7 +75,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const [picked, setPicked] = useState<DiscountChoice | null>(start.picked);
   const [customKind, setCustomKind] = useState<'percent' | 'flat'>('percent');
   const [customText, setCustomText] = useState('');
-  const [reason, setReason] = useState(start.reason);
+  const [reason, setReasonText] = useState(start.reason);
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -74,6 +83,12 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const [armed, setArmed] = useState(false);
   const pinRef = useRef<HTMLInputElement>(null);
   const customRef = useRef<HTMLInputElement>(null);
+  const reasonRef = useRef<HTMLInputElement>(null);
+  /** A reason picked or typed: a "reason needed" message has been answered. */
+  function setReason(next: string) {
+    setReasonText(next);
+    setError((e) => (e === DISCOUNT_REASON_REQUIRED ? null : e));
+  }
 
   const lines = snapshot?.items ?? [];
   const subtotal = snapshot?.order.subtotalCents ?? 0;
@@ -89,11 +104,28 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const currentWords = current ? currentDiscountWords(current, lines, rules) : null;
   const needsPin = after.needsApproval || dealOn;
   const pinOk = secretReady(pin);
-  const canApply = !!choice && after.discountCents > 0 && (!needsPin || pinOk) && !saving && !busy;
+  // The owner's "a discount needs a reason" (checkout:getRules): the main process decides again on save.
+  const reasonProblem = discountReasonProblem(rules.reasonRequired, reason);
+  // The button is on exactly when Apply would send it (Enter and a second tap decide the same way, in apply()).
+  const applyNow = discountApplyStep({
+    choice,
+    typing,
+    discountCents: after.discountCents,
+    needsApproval: needsPin,
+    reasonRequired: rules.reasonRequired,
+    reason,
+    pin,
+  });
+  const canApply = applyNow.kind === 'save' && !saving && !busy;
   const primary = discountDialogPrimary({ dealOn, intent, hasChoice: !!choice });
 
   function focusPinSoon() {
     requestAnimationFrame(() => pinRef.current?.focus());
+  }
+
+  function focusOn(where: DiscountDialogFocus) {
+    if (where === 'reason') reasonRef.current?.focus();
+    else if (where === 'pin') pinRef.current?.focus();
   }
 
   function pick(next: DiscountChoice) {
@@ -111,35 +143,37 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
 
   async function apply(which: DiscountChoice | null = choice) {
     if (saving || busy) return;
-    if (!which) {
-      setError(typing ? 'That amount does not work — check it.' : 'Pick a discount or type an amount.');
-      return;
-    }
-    const preview = previewDiscount(lines, subtotal, which, rules);
-    if (preview.discountCents <= 0) {
-      setError('Nothing to take off this order.');
-      return;
-    }
-    const approval = preview.needsApproval || dealOn;
-    if (approval && !pinOk) {
-      setError(pin.trim() ? approvalProblem(pin) : "This discount needs a manager's PIN or password.");
-      pinRef.current?.focus();
+    const preview = which ? previewDiscount(lines, subtotal, which, rules) : null;
+    // Something picked, something to take off, the reason (said before the PIN, as the main
+    // process does), then the manager's PIN: the same decision as the button's.
+    const step = discountApplyStep({
+      choice: which,
+      typing,
+      discountCents: preview?.discountCents ?? 0,
+      needsApproval: (preview?.needsApproval ?? false) || dealOn,
+      reasonRequired: rules.reasonRequired,
+      reason,
+      pin,
+    });
+    if (step.kind === 'refuse') {
+      setError(step.message);
+      focusOn(step.focus);
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      await applyDiscount(which.type, which.value, reason.trim() || undefined, approval ? pin : undefined);
+      await applyDiscount(step.choice.type, step.choice.value, step.reason, step.approverPin);
       onClose();
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Unknown error';
-      setError(`Discount not applied: ${message}`);
-      // The owner may have just changed the limit: the locks follow it.
+      // Refused for its reason alone: the dialog's own words (the PIN stays typed); else
+      // "Discount not applied: …" and a PIN that was sent is cleared for another try.
+      const refused = discountRefused(e instanceof Error ? e.message : 'Unknown error', step.approverPin !== undefined);
+      setError(refused.error);
+      // The owner may have just changed the limit (or made a reason required): the screen follows it.
       rules.refetch();
-      if (approval) {
-        setPin('');
-        pinRef.current?.focus();
-      }
+      if (refused.clearPin) setPin('');
+      focusOn(refused.focus);
     } finally {
       setSaving(false);
     }
@@ -327,10 +361,18 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
 
             <section aria-label="Reason">
               <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-stone-500">
-                Reason <span className="font-normal normal-case tracking-normal">(optional, prints on the bill)</span>
+                Reason{' '}
+                <span
+                  className={cn(
+                    'font-normal normal-case tracking-normal',
+                    reasonProblem && 'font-semibold text-amber-700 dark:text-amber-300',
+                  )}
+                >
+                  {discountReasonHint(rules.reasonRequired)}
+                </span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {rules.presets.reasons.map((r) => (
+                {reasonButtons(rules.presets.reasons, rules.reasonRequired).map((r) => (
                   <button
                     key={r}
                     type="button"
@@ -347,8 +389,11 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                   </button>
                 ))}
                 <input
+                  ref={reasonRef}
                   type="text"
                   aria-label="Reason"
+                  aria-required={rules.reasonRequired}
+                  aria-invalid={error !== null && reasonProblem !== null}
                   value={reason}
                   maxLength={120}
                   onChange={(e) => setReason(e.target.value)}

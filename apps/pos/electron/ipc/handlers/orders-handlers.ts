@@ -58,6 +58,8 @@ import {
   approvalRuleText,
   checkChoicePicks,
   discountBaseCents,
+  discountReasonMissing,
+  DISCOUNT_REASON_REQUIRED,
   kitchenHearsOfClose,
   requiresManagerApproval,
   stockSettlementForCounter,
@@ -65,7 +67,11 @@ import {
   validateOrderForTender,
 } from '@cheeseoclock/pos-domain';
 import { printSpooler } from '../../services/print-spooler.js';
-import { readApprovalLimits, readDiscountAlsoOffDeliveryCharge } from '../../db/business-settings-read.js';
+import {
+  readApprovalLimits,
+  readDiscountAlsoOffDeliveryCharge,
+  readDiscountReasonRequired,
+} from '../../db/business-settings-read.js';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from '../../db/repositories/modifier-repo.js';
 import { groupDisplayName } from '@cheeseoclock/shared-types';
@@ -328,6 +334,13 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // The order's subtotal decides whether a flat amount is more than the % limit of it.
     const current = getOrderSnapshot(ctx.db, payload.orderId);
     if (!current) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    // The owner's "a discount needs a reason" (Settings → Money & discounts), read live: every
+    // discount given here is one given by hand (any login, a manager replacing the foodpanda deal
+    // too). Refused BEFORE the manager's PIN is checked, so a missing reason never uses up a
+    // PIN attempt. The repository checks again.
+    if (readDiscountReasonRequired(ctx.db) && discountReasonMissing(payload.reason)) {
+      throw new IpcGuardError({ code: 'validation_failed', message: DISCOUNT_REASON_REQUIRED });
+    }
     // The shop's foodpanda deal on this order: changing it is a manager's, whatever the amount.
     const replacesDeal = hasFoodpandaDeal(ctx.db, payload.orderId);
     // The live limit (Settings → Money & discounts): the screen may be a Save behind, this decides.

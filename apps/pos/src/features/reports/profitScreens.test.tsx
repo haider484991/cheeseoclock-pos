@@ -406,6 +406,7 @@ describe('Channels & delivery with profit and delivery areas', () => {
         toCheck: [],
         missingCodeCount: 0,
         tabletDiffCount: 0,
+        tabletToleranceCents: 100,
       },
     };
     const out = html(<ChannelsTab data={withBlock} />);
@@ -414,6 +415,13 @@ describe('Channels & delivery with profit and delivery areas', () => {
     expect(out).toContain('Rs 250');
     expect(out).not.toContain('>Commission<');
     expect(out).toContain('Settings → foodpanda');
+    // "Orders to check" says the tolerance in force now (Settings → foodpanda), never a typed Rs 1.
+    const words = (tol: number) =>
+      html(<ChannelsTab data={{ ...withBlock, foodpanda: { ...withBlock.foodpanda!, tabletToleranceCents: tol } }} />).replace(/\s+/g, ' ');
+    expect(words(100)).toContain('a tablet total more than Rs 1 away from what it should show');
+    expect(words(500)).toContain('a tablet total more than Rs 5 away from what it should show');
+    expect(words(500)).not.toContain('more than Rs 1 away');
+    expect(words(0)).toContain('a tablet total not exactly what it should show');
   });
 
   it('without profit.view: the areas without rider or earnings, on screen, in the file and on paper', () => {

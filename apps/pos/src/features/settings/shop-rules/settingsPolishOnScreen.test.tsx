@@ -361,7 +361,7 @@ describe('the new cards: every sentence from the values', () => {
 
 /** checkout:getRules with these reason buttons (the rest as released). */
 const rulesWith = (reasons: CheckoutRules['reasons']): CheckoutRules => ({
-  discounts: { approval: { percentOver: 10, flatOverCents: 50_000 }, presets: { percents: [10], flatCents: [10_000], reasons: ['Staff'] }, alsoOffDeliveryCharge: false },
+  discounts: { approval: { percentOver: 10, flatOverCents: 50_000 }, presets: { percents: [10], flatCents: [10_000], reasons: ['Staff'] }, alsoOffDeliveryCharge: false, reasonRequired: false },
   kitchen: { amberMin: 15, redMin: 30, notStartedMin: 10, notDoneMin: 30 },
   ...(reasons ? { reasons } : {}),
   foodpanda: { deal: null, checks: { orderCode: 'optional', tabletTotal: 'optional' }, tabletToleranceCents: 100, upliftBps: 0 },

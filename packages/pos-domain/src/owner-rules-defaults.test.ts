@@ -26,8 +26,11 @@ import { requiresManagerApproval } from './discount.js';
  * test fails, put the value back.
  */
 describe('the released defaults are today’s numbers', () => {
-  it('discounts.approval: over 10%, or over Rs 500, needs a manager (was MANAGER_APPROVAL_*_THRESHOLD)', () => {
-    expect(DEFAULT_DISCOUNT_APPROVAL).toEqual({ v: 1, percentOver: 10, flatOverCents: 50_000 });
+  it('discounts.approval: over 10%, or over Rs 500, needs a manager (was MANAGER_APPROVAL_*_THRESHOLD); the reason optional', () => {
+    // Format 2 (after v0.7.29) added "a discount needs a reason" AT TODAY'S No. The format-1 fields are exactly as released.
+    const { v, reasonRequired, ...released } = DEFAULT_DISCOUNT_APPROVAL;
+    expect(released).toEqual({ percentOver: 10, flatOverCents: 50_000 });
+    expect({ v, reasonRequired }).toEqual({ v: 2, reasonRequired: false });
     expect(SHOP_SETTING_DEFAULTS['discounts.approval']).toBe(DEFAULT_DISCOUNT_APPROVAL);
   });
 

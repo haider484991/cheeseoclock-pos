@@ -159,6 +159,28 @@ export function readApprovalLimits(db: AppDatabase): ApprovalLimits {
 }
 
 /**
+ * Does a discount given by hand need a reason ('discounts.approval'
+ * reasonRequired)? Read live by the IPC handler and the repository on every
+ * save, so a Save — here or arrived from the other till — counts at once.
+ * No (false: the reason is optional, as before the setting) when nothing is
+ * saved or the saved value is format 1.
+ */
+export function readDiscountReasonRequired(db: AppDatabase): boolean {
+  return readShopSetting(db, 'discounts.approval').value.reasonRequired;
+}
+
+/**
+ * How far a foodpanda tablet total may be from the one expected
+ * ('foodpanda.checks' tabletToleranceCents): THE one reader for Pay
+ * (checkout:getRules) and Reports (business-report, its worker too), so the
+ * two never disagree. Rs 1 when nothing is saved or the saved value is
+ * format 1.
+ */
+export function readTabletToleranceCents(db: AppDatabase): number {
+  return readShopSetting(db, 'foodpanda.checks').value.tabletToleranceCents;
+}
+
+/**
  * Does a discount given NOW also come off the delivery charge
  * ('discounts.delivery')? Read live by the main process when a staff
  * discount is applied or an order becomes foodpanda, and frozen onto that

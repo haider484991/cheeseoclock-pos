@@ -34,8 +34,7 @@ import type {
   OrderItemCostStatus,
   ReportTabFigures,
 } from '@cheeseoclock/shared-types';
-import { isDeliveryChargeMenuItem } from '@cheeseoclock/shared-types';
-import { FOODPANDA_TABLET_TOLERANCE_CENTS } from '@cheeseoclock/shared-types';
+import { isDeliveryChargeMenuItem, NO_DISCOUNT_REASON_LABEL } from '@cheeseoclock/shared-types';
 import {
   emptyFoodCostTally,
   type FoodCostTally,
@@ -56,6 +55,7 @@ import {
   discountBaseCents,
   foodpandaOrderMoney,
   parseFoodpandaDealRule,
+  tabletDiffers,
   storedDiscountAlsoOffDeliveryCharge,
   storedDiscountSkips,
   offerFlags,
@@ -77,7 +77,13 @@ import type { AppDatabase } from '../db/connection.js';
 // in the Reports worker thread (analytics/worker.ts). A test walks its imports.
 import { loadPriceBook, priceOfBook, safeStockValue } from '../db/price-book.js';
 import { loadPriceHistory, type DatedPrice } from '../db/price-history-read.js';
-import { getBusinessSetting, readDeliveryFeeItemIds, readShopSetting, readStockRules } from '../db/business-settings-read.js';
+import {
+  getBusinessSetting,
+  readDeliveryFeeItemIds,
+  readShopSetting,
+  readStockRules,
+  readTabletToleranceCents,
+} from '../db/business-settings-read.js';
 import { withBillPrinted, withHandPrints } from './print-report.js';
 import { whenExtras } from './analytics/heatmap.js';
 import {
@@ -178,7 +184,8 @@ export function refundReason(referenceNo: string | null, orderReason: string | n
   const fromRef = m?.[1]?.trim();
   if (fromRef) return fromRef;
   const fromOrder = (orderReason ?? '').trim();
-  return fromOrder || 'No reason given';
+  // Team & leakage's one wording for none (shared-types): a refund's, a void's and a discount's alike.
+  return fromOrder || NO_DISCOUNT_REASON_LABEL;
 }
 
 /** Moved to pos-domain (the till's stock dialogs price with it too); kept here for callers. */
@@ -222,7 +229,7 @@ const STANDING_OFFER_NAME: Record<string, string> = { foodpanda: 'foodpanda deal
  */
 function standingKey(l: ReportDiscountLine): { key: string; name: string } {
   if (l.source === 'offer') {
-    const name = l.reason && l.reason !== 'No reason given' ? l.reason : 'Automatic offer';
+    const name = l.reason && l.reason !== NO_DISCOUNT_REASON_LABEL ? l.reason : 'Automatic offer';
     return { key: `offer:${l.offerId ?? ''}:${name.toLowerCase()}`, name: `${name} (automatic offer)` };
   }
   const source = l.source ?? '';
@@ -691,7 +698,7 @@ function getVoids(
   const stock = stockOf(rows.map((r) => r.orderId));
   return rows.map((r) => ({
     ...r,
-    reason: r.reason?.trim() || 'No reason given',
+    reason: r.reason?.trim() || NO_DISCOUNT_REASON_LABEL,
     approvedBy: r.approvedBy ?? 'Unknown',
     takenBy: r.staffKey === 'web' ? 'Website' : (r.takenBy ?? 'Unknown'),
     stock: stock.get(r.orderId) ?? null,
@@ -984,7 +991,7 @@ function getDiscountLines(db: AppDatabase, range: ReportRange): ReportDiscountLi
     createdAt: r.createdAt,
     amountCents: r.amountCents,
     entered: discountEntered(r.type, r.value),
-    reason: r.reason?.trim() || 'No reason given',
+    reason: r.reason?.trim() || NO_DISCOUNT_REASON_LABEL,
     givenBy: r.givenBy ?? 'Unknown',
     approvedBy: r.approvedBy,
     source: r.source === 'foodpanda' ? 'foodpanda' : r.source === 'offer' ? 'offer' : null,
@@ -2483,6 +2490,10 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
 
   // The fees in force now (the one reader), for orders that kept no confirmed commission.
   const feesNow = readShopSetting(db, 'foodpanda.fees').value;
+  // The tablet's tolerance in force now — the SAME reader and rule as Pay (checkout:getRules,
+  // pos-domain tabletDiffers). No order keeps the tolerance of its day (only its difference),
+  // so a changed tolerance re-sorts old orders too; Settings → foodpanda says so.
+  const toleranceCents = readTabletToleranceCents(db);
   const out: ReportFoodpanda = {
     orderCount: 0,
     tillPriceSalesCents: 0,
@@ -2504,6 +2515,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     toCheck: [],
     missingCodeCount: 0,
     tabletDiffCount: 0,
+    tabletToleranceCents: toleranceCents,
   };
   let costedOrders = 0;
   let costCents = 0;
@@ -2566,7 +2578,7 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
     const tablet = r.tablet === null ? null : Number(r.tablet);
     // Against what the tablet should show (the till's total at foodpanda's prices, as kept at payment): as Pay checked it.
     const diff = tablet === null ? null : tablet - m.expectedTabletCents;
-    const differs = diff !== null && Math.abs(diff) > FOODPANDA_TABLET_TOLERANCE_CENTS;
+    const differs = tablet !== null && tabletDiffers(m.expectedTabletCents, tablet, toleranceCents);
     if (code === null) out.missingCodeCount += 1;
     if (differs) out.tabletDiffCount += 1;
     lines.push({

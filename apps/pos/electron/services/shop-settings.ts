@@ -12,7 +12,6 @@
  * Read-only and free of Electron: the handlers call it, and so can a worker.
  */
 import {
-  FOODPANDA_TABLET_TOLERANCE_CENTS,
   SHOP_SETTING_DEFAULTS,
   SHOP_SETTING_KEYS,
   type CheckoutRules,
@@ -40,6 +39,7 @@ import type { AppDatabase } from '../db/connection.js';
 import {
   readApprovalLimits,
   readBusinessSettingRow,
+  readDiscountReasonRequired,
   readDeliveryFeeItemIds,
   readDeliveryZones,
   readMenuImportPolicy,
@@ -47,6 +47,7 @@ import {
   readShopSetting,
   readStaffTiming,
   readStockRules,
+  readTabletToleranceCents,
   readWebsitePickup,
   type ShopSettingInUse,
 } from '../db/business-settings-read.js';
@@ -55,6 +56,8 @@ import { businessSettingId } from '../db/business-settings-ids.js';
 export {
   readShopSetting,
   readApprovalLimits,
+  readDiscountReasonRequired,
+  readTabletToleranceCents,
   readStaffTiming,
   readStockRules,
   readMenuImportPolicy,
@@ -107,6 +110,8 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
       approval: { percentOver: approval.percentOver, flatOverCents: approval.flatOverCents },
       presets: { percents: [...presets.percents], flatCents: [...presets.flatCents], reasons: [...presets.reasons] },
       alsoOffDeliveryCharge: delivery.alsoOffDeliveryCharge,
+      // A discount given by hand needs a reason (the screen marks it; the main process refuses one without).
+      reasonRequired: approval.reasonRequired,
     },
     kitchen: {
       amberMin: kitchen.amberMin,
@@ -155,7 +160,8 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
           }
         : null,
       checks: { orderCode: checks.orderCode, tabletTotal: checks.tabletTotal },
-      tabletToleranceCents: FOODPANDA_TABLET_TOLERANCE_CENTS,
+      // The owner's tolerance: the SAME reader Reports use (business-report getFoodpanda).
+      tabletToleranceCents: readTabletToleranceCents(db),
       upliftBps,
     },
   };
@@ -298,8 +304,10 @@ export function getShopSettingCard<K extends ShopSettingKey>(
     defaultValue,
     // The value in use IS the default: never saved, or put back ("Put back the
     // default" writes the default's values, so a saved row can be the default).
-    // Compared WITHOUT the format number: an older format's value that reads as
-    // today's (a v0.7.29 'online.options' at its default) is the default too.
+    // Compared WITHOUT the format number: a value an older version saved (a
+    // v0.7.29 'online.options', 'discounts.approval' or 'foodpanda.checks')
+    // reads with the new fields at their defaults, so a default saved there
+    // is still the default.
     isDefault: !inUse.newerFormat && sameSettingValue(withoutFormat(inUse.value), withoutFormat(defaultValue)),
     readOnly: inUse.newerFormat,
     ...(key === 'foodpanda.fees' ? { carriedOver: inUse.carriedOver } : {}),

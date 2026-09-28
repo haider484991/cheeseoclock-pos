@@ -16,6 +16,8 @@ import {
 import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
+  isNoDiscountReasonLabel,
+  NO_DISCOUNT_REASON_LABEL,
   PRESET_FLAT_MAX_CENTS,
   PRESET_FLATS_MAX,
   PRESET_PERCENTS_MAX,
@@ -35,10 +37,12 @@ import type { Parsed } from './foodpandaForm';
 export interface ApprovalForm {
   percent: string;
   rupees: string;
+  /** "A discount needs a reason": Yes (true) or No. */
+  reasonRequired: boolean;
 }
 
-export function approvalToForm(a: ApprovalLimits): ApprovalForm {
-  return { percent: String(a.percentOver), rupees: String(a.flatOverCents / 100) };
+export function approvalToForm(a: DiscountApproval): ApprovalForm {
+  return { percent: String(a.percentOver), rupees: String(a.flatOverCents / 100), reasonRequired: a.reasonRequired };
 }
 
 const APPROVAL_MAX_RUPEES = formatCents(APPROVAL_MAX_FLAT_CENTS);
@@ -52,15 +56,41 @@ export function approvalFromForm(f: ApprovalForm): Parsed<DiscountApproval> {
   if (cents === null || Number.isNaN(cents) || cents > APPROVAL_MAX_FLAT_CENTS) {
     return { value: null, problem: `The rupee limit is whole rupees, Rs 0 to ${APPROVAL_MAX_RUPEES}.` };
   }
-  return { value: { v: SHOP_SETTING_FORMAT['discounts.approval'], percentOver: Number(p), flatOverCents: cents }, problem: null };
+  return {
+    value: {
+      v: SHOP_SETTING_FORMAT['discounts.approval'],
+      percentOver: Number(p),
+      flatOverCents: cents,
+      reasonRequired: f.reasonRequired,
+    },
+    problem: null,
+  };
 }
 
-/** One line for History: "Up to 10% or Rs 500 without a manager". */
-export function approvalSummary(a: ApprovalLimits): string {
-  if (a.percentOver === 0) return 'Every discount needs a manager';
-  if (a.flatOverCents === 0) return `Up to ${a.percentOver}% without a manager; any amount in rupees needs one`;
-  return `Up to ${a.percentOver}% or ${formatCents(a.flatOverCents)} without a manager`;
+/**
+ * One line for History and "Put back the default": "Up to 10% or Rs 500
+ * without a manager · a reason is optional" — the reason is always said, so a
+ * Yes → No save reads as a change and "Put back the default" says the reason
+ * goes back to optional.
+ */
+export function approvalSummary(a: ApprovalLimits & Pick<DiscountApproval, 'reasonRequired'>): string {
+  const reason = a.reasonRequired ? ' · a reason is needed' : ' · a reason is optional';
+  if (a.percentOver === 0) return `Every discount needs a manager${reason}`;
+  if (a.flatOverCents === 0) return `Up to ${a.percentOver}% without a manager; any amount in rupees needs one${reason}`;
+  return `Up to ${a.percentOver}% or ${formatCents(a.flatOverCents)} without a manager${reason}`;
 }
+
+/** The question on the card, as the owner reads it. */
+export const REASON_QUESTION = 'A discount needs a reason';
+
+/**
+ * What "a discount needs a reason" does, under its choice. Every login gives
+ * a discount by hand under it; what the till puts on by itself carries its
+ * own name; a discount already given is not taken off (unlike a lowered
+ * limit); both tills must run this version.
+ */
+export const REASON_RULE_NOTE =
+  'With Yes, every discount given on the Discount screen (F3) needs a reason — a reason button is one tap — from every login, the owner’s too; the till refuses one without. The automatic offers, the foodpanda deal and the website’s pick-up % carry their own names. A discount already on an order keeps what it has. Update both tills the same day: an older till still lets a discount through without a reason.';
 
 /** The two made-up orders the worked example uses. */
 export const EXAMPLE_SMALL_ORDER_CENTS = 200_000;
@@ -195,6 +225,9 @@ export function presetsToForm(p: Pick<DiscountPresets, 'percents' | 'flatCents' 
 
 const PRESET_FLAT_MAX_RUPEES = formatCents(PRESET_FLAT_MAX_CENTS);
 
+/** The main process refuses the same button (shared-schemas discountPresetsSchema), in these words. */
+export const NO_REASON_BUTTON_PROBLEM = `A reason button can't be “${NO_DISCOUNT_REASON_LABEL}”: Reports use those words for a discount with no reason.`;
+
 export function presetsFromForm(f: PresetsForm): Parsed<DiscountPresets> {
   const percentsText = f.percents.map((t) => t.trim().replace(/%$/, '').trim()).filter((t) => t !== '');
   if (percentsText.length === 0) return { value: null, problem: 'Keep at least one % button.' };
@@ -220,6 +253,10 @@ export function presetsFromForm(f: PresetsForm): Parsed<DiscountPresets> {
   }
   if (new Set(reasons.map((r) => r.toLowerCase())).size !== reasons.length) {
     return { value: null, problem: 'Two reason buttons are the same.' };
+  }
+  // The words Reports use for "no reason": the till counts them as none, so the button would never work.
+  if (reasons.some(isNoDiscountReasonLabel)) {
+    return { value: null, problem: NO_REASON_BUTTON_PROBLEM };
   }
   return {
     value: {

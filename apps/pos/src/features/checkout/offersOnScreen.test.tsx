@@ -118,6 +118,7 @@ const RULES = (offers: CheckoutRules['offers']): CheckoutRules => ({
     approval: { percentOver: 10, flatOverCents: 50_000 },
     presets: { percents: [10, 20], flatCents: [10_000], reasons: ['Staff'] },
     alsoOffDeliveryCharge: false,
+    reasonRequired: false,
   },
   kitchen: { amberMin: 15, redMin: 30, notStartedMin: 10, notDoneMin: 30 },
   ...(offers ? { offers } : {}),
@@ -220,7 +221,7 @@ function card<K extends ShopSettingKey>(key: K, value: ShopSettingCard<K>['value
 
 describe('Settings → Money & discounts → Automatic offers', () => {
   const money = (offers: ShopSettingCard<'discounts.offers'>): Array<[readonly unknown[], unknown]> => [
-    [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', { v: 1, percentOver: 10, flatOverCents: 50_000 })],
+    [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', { v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: false })],
     [[...SHOP_SETTINGS_KEY, 'discounts.presets'], card('discounts.presets', { v: 1, percents: [10], flatCents: [10_000], reasons: ['Staff'] })],
     [[...SHOP_SETTINGS_KEY, 'discounts.delivery'], card('discounts.delivery', { v: 1, alsoOffDeliveryCharge: false })],
     [[...SHOP_SETTINGS_KEY, 'discounts.offers'], offers],

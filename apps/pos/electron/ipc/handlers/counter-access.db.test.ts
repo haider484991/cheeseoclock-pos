@@ -518,12 +518,12 @@ const FREE_DELIVERY_ZONES = () => ({
 const SHOP_SETTING_SAVES = (): unknown[] => [
   { key: 'foodpanda.deal', value: { v: 1, percent: 20, shopPercent: 10, minOrderCents: 50_000, maxOffCents: 40_000, startsOn: null, endsOn: null } },
   { key: 'foodpanda.fees', value: { v: 1, commissionBps: 2_200, confirmed: true, base: 'after_deal', fixedFeeCents: 2_000, commissionTaxBps: 1_600, upliftBps: 0, paymentFeeBps: 0 } },
-  { key: 'foodpanda.checks', value: { v: 1, orderCode: 'required', tabletTotal: 'required' } },
+  { key: 'foodpanda.checks', value: { v: 2, orderCode: 'required', tabletTotal: 'required', tabletToleranceCents: 500 } },
   { key: 'foodpanda.deal', useDefault: true },
   { key: 'foodpanda.fees', useDefault: true },
   { key: 'foodpanda.checks', useDefault: true },
   // Money & discounts (Settings step 2) and Staff & kitchen timing (step 6).
-  { key: 'discounts.approval', value: { v: 1, percentOver: 0, flatOverCents: 0 } },
+  { key: 'discounts.approval', value: { v: 2, percentOver: 0, flatOverCents: 0, reasonRequired: true } },
   { key: 'discounts.presets', value: { v: 1, percents: [5, 50], flatCents: [30_000], reasons: ['Test reason'] } },
   { key: 'staff.timing', value: { v: 1, idleLogoutMin: 60, maxLoginHours: 24, stepInMin: 30, freeReprints: 3, reprintWindowMin: 120 } },
   { key: 'kitchen.timing', value: { v: 1, amberMin: 45, redMin: 90, notStartedMin: 30, notDoneMin: 60 } },
@@ -1012,6 +1012,8 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         foodpanda: {
           deal: { percent: 20, shopPercent: 10, label: 'Foodpanda deal 20% off (your part 10%)' },
           checks: { orderCode: 'required', tabletTotal: 'required' },
+          // The owner's tolerance (Rs 5 here), the one Reports use too.
+          tabletToleranceCents: 500,
         },
       });
       // The delivery areas carry their own delivery FEES (the counter charges them); nothing else may say "fee".
@@ -1031,14 +1033,23 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         discounts: {
           approval: { percentOver: 0, flatOverCents: 0 },
           presets: { percents: [5, 50], flatCents: [30_000], reasons: ['Test reason'] },
+          reasonRequired: true,
         },
         kitchen: { amberMin: 45, redMin: 90, notStartedMin: 30, notDoneMin: 60 },
       });
       expect(JSON.stringify(rules)).not.toMatch(/idleLogout|maxLogin|stepIn|freeReprints|reprintWindow|updatedBy/i);
     }
-    // …and the limit counts at once: with 0%, a cashier's 5% needs a manager.
+    // …and both count at once: with no reason, a cashier's 5% is refused for the reason (before any PIN)…
     h.session = CASHIER;
     expect(await call('orders:applyDiscount', { orderId: s.draft, discountType: 'percent', value: 5 })).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+      message: expect.stringContaining('Pick or type a reason'),
+    });
+    // …and with one, with 0% it needs a manager.
+    expect(
+      await call('orders:applyDiscount', { orderId: s.draft, discountType: 'percent', value: 5, reason: 'Test reason' }),
+    ).toMatchObject({
       ok: false,
       code: 'precondition_failed',
     });

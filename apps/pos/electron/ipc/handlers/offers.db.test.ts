@@ -451,7 +451,7 @@ describe.skipIf(!Sqlite)('an offer goes on by itself, on the food only', () => {
   });
 
   it('the approval limit does not apply: with every discount needing a manager, the owner’s offer still goes on and stays', async () => {
-    await ownerSaves('discounts.approval', { v: 1, percentOver: 0, flatOverCents: 0 });
+    await ownerSaves('discounts.approval', { v: 2, percentOver: 0, flatOverCents: 0, reasonRequired: false });
     await saveOffers([offer({ cameBy: 'any', value: 20 })]);
     const orderId = await counterOrder();
     expect(orderRow(orderId)).toMatchObject({ discount_cents: 40_000 });

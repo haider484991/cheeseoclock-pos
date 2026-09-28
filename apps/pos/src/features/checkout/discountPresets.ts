@@ -1,6 +1,8 @@
 import {
   computeDiscountCents,
   discountBaseCents,
+  discountReasonMissing,
+  DISCOUNT_REASON_REQUIRED,
   formatCents,
   requiresManagerApproval,
   taxAfterDiscount,
@@ -14,6 +16,7 @@ import {
   type CheckoutRules,
   type DiscountPresets,
 } from '@cheeseoclock/shared-types';
+import { approvalProblem, secretReady } from '../../components/secret/secretRules';
 
 /**
  * The discount screen's one-tap choices and the live "what will the bill be"
@@ -125,6 +128,92 @@ export function discountDialogStart(current: CurrentDiscount | null): { picked: 
  */
 export function discountDialogPrimary(p: { dealOn: boolean; intent: DiscountDialogIntent; hasChoice: boolean }): 'apply' | 'remove' {
   return p.dealOn && p.intent === 'removeDeal' && !p.hasChoice ? 'remove' : 'apply';
+}
+
+/**
+ * The words beside the dialog's Reason heading: needed when the owner has
+ * made a reason required (Settings → Money & discounts, via
+ * checkout:getRules), optional otherwise — as before the setting.
+ */
+export function discountReasonHint(reasonRequired: boolean): string {
+  return reasonRequired ? '(needed — prints on the bill)' : '(optional, prints on the bill)';
+}
+
+/**
+ * Why the dialog will not apply a discount yet, as far as its reason goes:
+ * the owner has made one required and none is picked or typed. The same
+ * test as the main process (pos-domain discountReasonMissing), which refuses
+ * the discount without one in any case. Null: the reason is fine.
+ */
+export function discountReasonProblem(reasonRequired: boolean, reason: string): string | null {
+  return reasonRequired && discountReasonMissing(reason) ? DISCOUNT_REASON_REQUIRED : null;
+}
+
+/** Where the dialog puts the cursor after saying why it did not apply. */
+export type DiscountDialogFocus = 'reason' | 'pin' | null;
+
+/** What Apply does — the big button, Enter, or a preset tapped a second time. */
+export type DiscountApplyStep =
+  /** Not applied: this is said (and the cursor goes to the box that needs it). */
+  | { kind: 'refuse'; message: string; focus: DiscountDialogFocus }
+  /** Send it: the reason as typed (undefined when none), the manager's PIN when one is needed. */
+  | { kind: 'save'; choice: DiscountChoice; reason: string | undefined; approverPin: string | undefined };
+
+/**
+ * Apply, decided in one place: the button is on exactly when this says
+ * 'save' (DiscountDialog canApply), and Enter or a second tap on a preset —
+ * which do not go through the button — are refused by the same words. In
+ * order: something picked; something to take off; the owner's "a discount
+ * needs a reason" (said before the PIN, as the main process does, so a PIN
+ * typed is never lost to it); the manager's PIN when the discount needs one.
+ * The main process decides every one again when it saves.
+ */
+export function discountApplyStep(p: {
+  choice: DiscountChoice | null;
+  /** The "Other" box has something in it (it says "check it" rather than "pick one"). */
+  typing: boolean;
+  /** What the choice takes off this order (previewDiscount). */
+  discountCents: number;
+  /** A manager's PIN is needed: over the owner's limit, or the foodpanda deal is on the order. */
+  needsApproval: boolean;
+  reasonRequired: boolean;
+  reason: string;
+  pin: string;
+}): DiscountApplyStep {
+  if (!p.choice) {
+    return { kind: 'refuse', message: p.typing ? 'That amount does not work — check it.' : 'Pick a discount or type an amount.', focus: null };
+  }
+  if (p.discountCents <= 0) return { kind: 'refuse', message: 'Nothing to take off this order.', focus: null };
+  const reasonSays = discountReasonProblem(p.reasonRequired, p.reason);
+  if (reasonSays) return { kind: 'refuse', message: reasonSays, focus: 'reason' };
+  if (p.needsApproval && !secretReady(p.pin)) {
+    const said = (p.pin.trim() ? approvalProblem(p.pin) : null) ?? "This discount needs a manager's PIN or password.";
+    return { kind: 'refuse', message: said, focus: 'pin' };
+  }
+  return { kind: 'save', choice: p.choice, reason: p.reason.trim() || undefined, approverPin: p.needsApproval ? p.pin : undefined };
+}
+
+/**
+ * The main process refused the discount: what the dialog says, where the
+ * cursor goes, and whether the PIN is cleared. Refused for its reason alone
+ * (before any PIN was checked): the dialog's own words, cleared once a
+ * reason is given, and the PIN stays typed. Anything else: "Discount not
+ * applied: …", and a PIN that was sent is cleared for another try.
+ */
+export function discountRefused(message: string, sentPin: boolean): { error: string; focus: DiscountDialogFocus; clearPin: boolean } {
+  if (message === DISCOUNT_REASON_REQUIRED) return { error: message, focus: 'reason', clearPin: false };
+  return { error: `Discount not applied: ${message}`, focus: sentPin ? 'pin' : null, clearPin: sentPin };
+}
+
+/**
+ * The reason buttons the dialog shows: the owner's, except — while a reason
+ * is needed — one reading as no reason ("No reason given"), which the till
+ * would refuse. Settings no longer saves such a button, but a list saved
+ * before, or by an older till, may still have one. Every button otherwise,
+ * as before the setting.
+ */
+export function reasonButtons(reasons: readonly string[], reasonRequired: boolean): readonly string[] {
+  return reasonRequired ? reasons.filter((r) => !discountReasonMissing(r)) : reasons;
 }
 
 /** "10% off", "Rs 200 off". */

@@ -265,7 +265,7 @@ const NEW_KEYS = ['discounts.approval', 'discounts.presets', 'discounts.delivery
 
 /** A good value for each new key, different from its default. */
 const GOOD: Record<(typeof NEW_KEYS)[number], unknown> = {
-  'discounts.approval': { v: 1, percentOver: 15, flatOverCents: 25_000 },
+  'discounts.approval': { v: 2, percentOver: 15, flatOverCents: 25_000, reasonRequired: true },
   'discounts.presets': { v: 1, percents: [5, 15], flatCents: [15_000, 25_000], reasons: ['Birthday', 'Test reason'] },
   'discounts.delivery': { v: 1, alsoOffDeliveryCharge: true },
   'staff.timing': { v: 1, idleLogoutMin: 5, maxLoginHours: 8, stepInMin: 5, freeReprints: 0, reprintWindowMin: 60 },
@@ -285,6 +285,8 @@ describe.skipIf(!Sqlite)('a till with nothing saved answers today’s numbers', 
       },
       // The owner's answer (28 Sep 2026): a discount leaves the delivery charge alone.
       alsoOffDeliveryCharge: false,
+      // The reason is optional, as before the setting.
+      reasonRequired: false,
     });
     expect(rules.kitchen).toEqual({ amberMin: 15, redMin: 30, notStartedMin: 10, notDoneMin: 30 });
     // …and never a cost, a commission or who saved something.
@@ -323,16 +325,24 @@ describe.skipIf(!Sqlite)('the bounds are the main process’s', () => {
   /** Per key: values the main process must refuse (outside a bound, not whole, the wrong shape). */
   const BAD: Record<(typeof NEW_KEYS)[number], Array<Record<string, unknown>>> = {
     'discounts.approval': [
-      { v: 1, percentOver: -1, flatOverCents: 50_000 },
-      { v: 1, percentOver: 51, flatOverCents: 50_000 },
-      { v: 1, percentOver: 10.5, flatOverCents: 50_000 },
-      { v: 1, percentOver: 10, flatOverCents: -100 },
-      { v: 1, percentOver: 10, flatOverCents: 500_100 },
-      { v: 1, percentOver: 10, flatOverCents: 50_050 },
-      { v: 1, percentOver: '10', flatOverCents: 50_000 },
-      { v: 1, percentOver: 10 },
-      { v: 1, percentOver: 10, flatOverCents: 50_000, managerOnly: false },
+      { v: 2, percentOver: -1, flatOverCents: 50_000, reasonRequired: false },
+      { v: 2, percentOver: 51, flatOverCents: 50_000, reasonRequired: false },
+      { v: 2, percentOver: 10.5, flatOverCents: 50_000, reasonRequired: false },
+      { v: 2, percentOver: 10, flatOverCents: -100, reasonRequired: false },
+      { v: 2, percentOver: 10, flatOverCents: 500_100, reasonRequired: false },
+      { v: 2, percentOver: 10, flatOverCents: 50_050, reasonRequired: false },
+      { v: 2, percentOver: '10', flatOverCents: 50_000, reasonRequired: false },
+      { v: 2, percentOver: 10, reasonRequired: false },
+      { v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: false, managerOnly: false },
+      // Format 2 (after v0.7.29): "a discount needs a reason" is Yes or No, and always sent.
       { v: 2, percentOver: 10, flatOverCents: 50_000 },
+      { v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: 'yes' },
+      { v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: 1 },
+      { v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: null },
+      // This version writes format 2 only: the released format 1, and a newer one, are refused.
+      { v: 1, percentOver: 10, flatOverCents: 50_000 },
+      { v: 1, percentOver: 10, flatOverCents: 50_000, reasonRequired: false },
+      { v: 3, percentOver: 10, flatOverCents: 50_000, reasonRequired: false },
     ],
     'discounts.presets': [
       { v: 1, percents: [], flatCents: [10_000], reasons: ['Staff'] },
@@ -414,8 +424,16 @@ describe.skipIf(!Sqlite)('the bounds are the main process’s', () => {
       const o = await call('settings:setBusiness', { key, value });
       return o.ok ? 'saved' : o.message;
     };
-    expect(await why('discounts.approval', { v: 1, percentOver: 51, flatOverCents: 0 })).toBe('The % limit is at most 50%');
-    expect(await why('discounts.approval', { v: 1, percentOver: 10, flatOverCents: 500_100 })).toBe('The rupee limit is at most Rs 5,000');
+    expect(await why('discounts.approval', { v: 2, percentOver: 51, flatOverCents: 0, reasonRequired: false })).toBe('The % limit is at most 50%');
+    expect(await why('discounts.approval', { v: 2, percentOver: 10, flatOverCents: 500_100, reasonRequired: false })).toBe(
+      'The rupee limit is at most Rs 5,000',
+    );
+    expect(await why('discounts.approval', { v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: 'yes' })).toBe(
+      'A discount needs a reason: Yes or No',
+    );
+    expect(await why('discounts.approval', { v: 1, percentOver: 10, flatOverCents: 50_000 })).toBe(
+      'Saved by a different version of the app — update this till to change it',
+    );
     expect(await why('staff.timing', { ...(GOOD['staff.timing'] as object), idleLogoutMin: 0 })).toBe(
       'Signing out an idle owner or manager is at least 5 minutes',
     );
@@ -431,8 +449,8 @@ describe.skipIf(!Sqlite)('the bounds are the main process’s', () => {
   it('the ends of every bound are taken (each save synced and audited)', async () => {
     h.session = OWNER;
     const EDGES: Array<[string, unknown]> = [
-      ['discounts.approval', { v: 1, percentOver: 0, flatOverCents: 0 }],
-      ['discounts.approval', { v: 1, percentOver: 50, flatOverCents: 500_000 }],
+      ['discounts.approval', { v: 2, percentOver: 0, flatOverCents: 0, reasonRequired: false }],
+      ['discounts.approval', { v: 2, percentOver: 50, flatOverCents: 500_000, reasonRequired: true }],
       ['discounts.presets', { v: 1, percents: [1], flatCents: [100], reasons: ['x'.repeat(30)] }],
       [
         'discounts.presets',
@@ -498,6 +516,7 @@ describe.skipIf(!Sqlite)('only the owner changes them', () => {
         approval: { percentOver: 15, flatOverCents: 25_000 },
         presets: { percents: [5, 15], flatCents: [15_000, 25_000], reasons: ['Birthday', 'Test reason'] },
         alsoOffDeliveryCharge: true,
+        reasonRequired: true,
       });
       expect(rules.kitchen).toEqual({ amberMin: 5, redMin: 10, notStartedMin: 5, notDoneMin: 20 });
       expect(JSON.stringify(rules)).not.toMatch(/idleLogout|maxLogin|stepIn|freeReprints|commission/i);
@@ -507,7 +526,7 @@ describe.skipIf(!Sqlite)('only the owner changes them', () => {
 
 describe.skipIf(!Sqlite)('one approval rule in all three places', () => {
   /** Rs 2,000 orders, with the owner's limit of 15% or Rs 250. */
-  const LIMIT = { v: 1, percentOver: 15, flatOverCents: 25_000 };
+  const LIMIT = { v: 2, percentOver: 15, flatOverCents: 25_000, reasonRequired: false };
   const CASES: Array<{ d: { type: 'percent' | 'flat'; value: number }; needs: boolean; why: string }> = [
     { d: { type: 'percent', value: 5 }, needs: false, why: 'well under' },
     { d: { type: 'percent', value: 12 }, needs: false, why: 'over the old 10%, under the owner’s 15%' },
@@ -656,7 +675,7 @@ describe.skipIf(!Sqlite)('lowering the limit', () => {
     expect(orderRow(cashierOrder)).toMatchObject({ subtotal_cents: 200_000, discount_cents: 20_000 });
 
     // The owner lowers the limit to 5%.
-    expect((await saveAsOwner('discounts.approval', { v: 1, percentOver: 5, flatOverCents: 50_000 })).ok).toBe(true);
+    expect((await saveAsOwner('discounts.approval', { v: 2, percentOver: 5, flatOverCents: 50_000, reasonRequired: false })).ok).toBe(true);
     // Nothing moves by itself: the order is as it was until its cart changes.
     expect(liveDiscounts(cashierOrder)).toHaveLength(1);
     expect(orderRow(cashierOrder)).toMatchObject({ discount_cents: 20_000 });
@@ -698,7 +717,7 @@ describe.skipIf(!Sqlite)('lowering the limit', () => {
     expect(liveDiscounts(orderId)).toMatchObject([{ value: 8, approved_by_user_id: null }]);
 
     // The owner lowers the limit to 5%; the next item added takes the manager's 8% off too.
-    expect((await saveAsOwner('discounts.approval', { v: 1, percentOver: 5, flatOverCents: 50_000 })).ok).toBe(true);
+    expect((await saveAsOwner('discounts.approval', { v: 2, percentOver: 5, flatOverCents: 50_000, reasonRequired: false })).ok).toBe(true);
     h.session = MANAGER;
     await data('orders:addItem', { orderId, menuItemId: menu.side, quantity: 1 });
     expect(liveDiscounts(orderId)).toEqual([]);

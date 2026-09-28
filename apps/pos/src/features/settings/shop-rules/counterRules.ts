@@ -30,7 +30,7 @@ export type CounterKitchenTiming = CheckoutRules['kitchen'];
 /**
  * The released F3 rules: over 10% or Rs 500 needs a manager; 10/20/25/50/100 %,
  * Rs 100/200/500, four reasons; a discount leaves the delivery charge alone
- * (the owner's answer, 28 Sep 2026).
+ * (the owner's answer, 28 Sep 2026); the reason optional.
  */
 export const DEFAULT_COUNTER_DISCOUNTS: CounterDiscountRules = {
   approval: { percentOver: DEFAULT_DISCOUNT_APPROVAL.percentOver, flatOverCents: DEFAULT_DISCOUNT_APPROVAL.flatOverCents },
@@ -40,6 +40,7 @@ export const DEFAULT_COUNTER_DISCOUNTS: CounterDiscountRules = {
     reasons: [...DEFAULT_DISCOUNT_PRESETS.reasons],
   },
   alsoOffDeliveryCharge: DEFAULT_DISCOUNT_DELIVERY.alsoOffDeliveryCharge,
+  reasonRequired: DEFAULT_DISCOUNT_APPROVAL.reasonRequired,
 };
 
 /** The released Live Orders timings: amber 15, red 30; reminders at 10 (not started) and 30 (not done). */

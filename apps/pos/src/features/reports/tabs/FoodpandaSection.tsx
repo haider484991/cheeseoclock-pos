@@ -25,6 +25,15 @@ function bpsText(bps: number | null): string {
   return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`;
 }
 
+/**
+ * How far the tablet may be from what it should show before an order is
+ * listed, in words, from the tolerance in force now (Settings → foodpanda;
+ * the same Pay uses): "more than Rs 1 away from", or at Rs 0 "not exactly".
+ */
+export function tabletTotalWords(toleranceCents: number): string {
+  return toleranceCents > 0 ? `more than ${formatCents(toleranceCents)} away from` : 'not exactly';
+}
+
 /** Under "You keep": the dearer menu's share and the part refunds already taken off, when there are any. */
 export function foodpandaKeepSub(fp: Pick<ReportFoodpanda, 'upliftCents' | 'partRefundCents'>): string {
   const parts: string[] = [];
@@ -113,8 +122,8 @@ export function FoodpandaSection({ foodpanda: fp }: { foodpanda: ReportFoodpanda
         note={
           <>
             Tick these off against foodpanda’s statement. First each day: no foodpanda number ({fp.missingCodeCount}) or a
-            tablet total more than Rs 1 away from what it should show ({fp.tabletDiffCount}) — the till’s total, at foodpanda’s
-            prices when its menu is dearer.
+            tablet total {tabletTotalWords(fp.tabletToleranceCents)} what it should show ({fp.tabletDiffCount}) — the till’s total, at
+            foodpanda’s prices when its menu is dearer.
           </>
         }
       >

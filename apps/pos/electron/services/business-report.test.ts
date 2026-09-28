@@ -878,6 +878,14 @@ describe('report helpers', () => {
     expect(refundReason('partial-refund:   ', 'On the order')).toBe('On the order');
   });
 
+  it('never types the words for "no reason": they are NO_DISCOUNT_REASON_LABEL, the words the reason check refuses', () => {
+    // "A discount needs a reason" (pos-domain discountReasonMissing) refuses exactly the words
+    // Team & leakage shows for none; a copy typed here could drift from them unseen.
+    const src = readFileSync(fileURLToPath(new URL('./business-report.ts', import.meta.url)), 'utf8');
+    expect(src).not.toMatch(/['"`]no\s+reason\s+given['"`]/i);
+    expect(src.match(/\bNO_DISCOUNT_REASON_LABEL\b/g)?.length ?? 0).toBeGreaterThanOrEqual(5);
+  });
+
   it('prices ingredients exactly from the pack, rounding once', () => {
     // 6,000 g for Rs 2,250 → 37.5 paisa a gram; 3 g = 112.5 → 113 (not 3 × 38 = 114).
     expect(ingredientCostCents(3, { costPerUnitCents: 38, packSize: 6000, packPriceCents: 225000 })).toBe(113);

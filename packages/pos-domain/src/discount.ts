@@ -1,4 +1,10 @@
-import { DEFAULT_DISCOUNT_APPROVAL, type ApprovalLimits, type Cents } from '@cheeseoclock/shared-types';
+import {
+  DEFAULT_DISCOUNT_APPROVAL,
+  isNoDiscountReasonLabel,
+  NO_DISCOUNT_REASON_LABEL,
+  type ApprovalLimits,
+  type Cents,
+} from '@cheeseoclock/shared-types';
 import { formatCents } from './money.js';
 
 export type DiscountType = 'percent' | 'flat';
@@ -54,6 +60,29 @@ export function requiresManagerApproval(
   if (d.value > limits.flatOverCents) return true;
   const subtotal = subtotalCents === undefined ? undefined : (subtotalCents as number);
   return subtotal !== undefined && subtotal > 0 && d.value * 100 > subtotal * limits.percentOver;
+}
+
+/**
+ * What Reports → Team & leakage calls a discount given with no reason
+ * (business-report getDiscountLines): typing it is no reason either. Kept in
+ * shared-types, where the reason buttons' schema refuses it as a button.
+ */
+export { NO_DISCOUNT_REASON_LABEL };
+
+/** The refusal, the same on the F3 screen and in the main process. */
+export const DISCOUNT_REASON_REQUIRED = 'Pick or type a reason — the owner has made one required for every discount.';
+
+/**
+ * Has a discount no reason Team & leakage could group it under? Blank, only
+ * spaces, or the words Reports use for "none" ("No reason given", whatever
+ * its capitals and however many spaces between its words: shared-types
+ * isNoDiscountReasonLabel). THE one test: the F3 screen, the IPC handler and
+ * the repository all call it when the owner has made a reason required
+ * ('discounts.approval' reasonRequired).
+ */
+export function discountReasonMissing(reason: string | null | undefined): boolean {
+  const r = (reason ?? '').trim();
+  return r === '' || isNoDiscountReasonLabel(r);
 }
 
 /**
