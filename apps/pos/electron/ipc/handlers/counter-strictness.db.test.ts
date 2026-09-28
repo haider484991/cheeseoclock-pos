@@ -34,7 +34,7 @@
 import { createRequire } from 'node:module';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_DISCOUNT_APPROVAL,
@@ -118,6 +118,28 @@ const Sqlite = (() => {
 })();
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = join(HERE, '..', '..', 'db', 'migrations');
+/** The app's root (src/ is the screens, electron/ the main process). */
+const APP = join(HERE, '..', '..', '..');
+
+/**
+ * Screen code, loaded by path as the screen loads it (the main process's
+ * tsconfig does not take screen files): Pay's tablet check
+ * (src/features/checkout/tabletAtPay.ts, what TenderDialog asks) and the F3
+ * screen's reason buttons (src/features/checkout/discountPresets.ts).
+ */
+type TabletAtPay = (
+  foodpanda: Pick<CheckoutRules['foodpanda'], 'tabletToleranceCents' | 'upliftBps'> | undefined,
+  tillTotalCents: number,
+) => { expectedCents: number; toleranceCents: number; differs: (tabletTotalCents: number) => boolean };
+async function payTablet(): Promise<TabletAtPay> {
+  const url = pathToFileURL(join(APP, 'src', 'features', 'checkout', 'tabletAtPay.ts')).href;
+  return ((await import(/* @vite-ignore */ url)) as { tabletAtPay: TabletAtPay }).tabletAtPay;
+}
+type ReasonButtons = (reasons: readonly string[], reasonRequired: boolean) => readonly string[];
+async function f3ReasonButtons(): Promise<ReasonButtons> {
+  const url = pathToFileURL(join(APP, 'src', 'features', 'checkout', 'discountPresets.ts')).href;
+  return ((await import(/* @vite-ignore */ url)) as { reasonButtons: ReasonButtons }).reasonButtons;
+}
 
 function openMigrated() {
   const raw = new Sqlite!(':memory:');
@@ -583,17 +605,22 @@ describe.skipIf(!Sqlite)('the tablet’s tolerance moves Pay and Reports togethe
   it('Rs 5: Pay hears Rs 5, and Reports list only the orders more than Rs 5 apart', async () => {
     await ownerSaves('foodpanda.checks', checksWith(500));
     h.session = CASHIER;
-    expect((await data<CheckoutRules>('checkout:getRules')).foodpanda.tabletToleranceCents).toBe(500);
+    const rules = await data<CheckoutRules>('checkout:getRules');
+    expect(rules.foodpanda.tabletToleranceCents).toBe(500);
     const ids = { at1: await foodpandaOrderPaid(101), at5: await foodpandaOrderPaid(500), over5: await foodpandaOrderPaid(501), short5: await foodpandaOrderPaid(-501) };
+    // Pay's own check (TenderDialog), on the rules it reads: "Pay anyway?" only past Rs 5.
+    const tabletAtPay = await payTablet();
+    const total = Number(orderRow(ids.at1)!['total_cents']);
+    const payAsks = (offCents: number) => tabletAtPay(rules.foodpanda, total).differs(total + offCents);
     const fp = (await report()).getFoodpanda(db as never, NOW_RANGE())!;
     expect(fp.tabletToleranceCents).toBe(500);
     const differs = Object.fromEntries(fp.toCheck.map((l) => [l.orderId, l.differs]));
-    expect({ at1: differs[ids.at1], at5: differs[ids.at5], over5: differs[ids.over5], short5: differs[ids.short5] }).toEqual({
-      at1: false,
-      at5: false,
-      over5: true,
-      short5: true,
-    });
+    const expected = { at1: false, at5: false, over5: true, short5: true };
+    expect({ at1: differs[ids.at1], at5: differs[ids.at5], over5: differs[ids.over5], short5: differs[ids.short5] }).toEqual(expected);
+    expect({ at1: payAsks(101), at5: payAsks(500), over5: payAsks(501), short5: payAsks(-501) }).toEqual(expected);
+    // Before the rules have read, Pay keeps Rs 1 — the till before the setting.
+    expect(tabletAtPay(undefined, 200_000)).toMatchObject({ toleranceCents: 100, expectedCents: 200_000 });
+    expect([tabletAtPay(undefined, 200_000).differs(200_100), tabletAtPay(undefined, 200_000).differs(200_101)]).toEqual([false, true]);
     expect(fp.tabletDiffCount).toBe(2);
     // Each order keeps its own difference: Reports re-read old orders with the value in force now.
     await ownerSaves('foodpanda.checks', checksWith(0));
@@ -680,6 +707,40 @@ describe.skipIf(!Sqlite)('the bounds are the main process’s', () => {
     });
     h.session = CASHIER;
     expect((await data<CheckoutRules>('checkout:getRules')).discounts.reasonRequired).toBe(false);
+  });
+
+  it('a reason button reading as no reason is refused on Save; one saved before (or by an older till) still reads, and the F3 screen leaves it out while a reason is needed', async () => {
+    h.session = OWNER;
+    const before = written();
+    const presets = (reasons: string[]) => ({ v: 1, percents: [10], flatCents: [10_000], reasons });
+    for (const none of ['No reason given', 'no REASON Given']) {
+      expect(await call('settings:setBusiness', { key: 'discounts.presets', value: presets(['Staff', none]) })).toEqual({
+        ok: false,
+        code: 'validation_failed',
+        message: "A reason button can't be “No reason given”: Reports use those words for a discount with no reason",
+      });
+    }
+    expect(written()).toEqual(before);
+    // Any other words are a reason.
+    expect(await call('settings:setBusiness', { key: 'discounts.presets', value: presets(['Staff', 'Test no charge']) })).toMatchObject({ ok: true });
+    // A list with one, from a v0.7.29 till (or saved there before): still read, every button kept.
+    await fromOtherTill('discounts.presets', presets(['Staff', 'No reason given']));
+    const { readShopSetting } = await repos();
+    expect(readShopSetting(db as never, 'discounts.presets').value.reasons).toEqual(['Staff', 'No reason given']);
+    const reasonButtons = await f3ReasonButtons();
+    h.session = CASHIER;
+    const off = await data<CheckoutRules>('checkout:getRules');
+    expect(reasonButtons(off.discounts.presets.reasons, off.discounts.reasonRequired)).toEqual(['Staff', 'No reason given']);
+    // With the owner's Yes, the F3 screen shows only the button the till takes.
+    await fromOtherTill('discounts.approval', REASON_ON);
+    const on = await data<CheckoutRules>('checkout:getRules');
+    expect(reasonButtons(on.discounts.presets.reasons, on.discounts.reasonRequired)).toEqual(['Staff']);
+    const orderId = await openOrder();
+    expect(await call('orders:applyDiscount', { orderId, discountType: 'percent', value: 5, reason: 'No reason given' })).toMatchObject({
+      ok: false,
+      message: DISCOUNT_REASON_REQUIRED,
+    });
+    expect((await call('orders:applyDiscount', { orderId, discountType: 'percent', value: 5, reason: 'Staff' })).ok).toBe(true);
   });
 });
 

@@ -14,6 +14,7 @@ import {
   parseDiscountEntry,
   percentChoice,
   previewDiscount,
+  reasonButtons,
   sameChoice,
 } from './discountPresets';
 
@@ -224,5 +225,13 @@ describe('the reason, when the owner has made one required (Settings → Money &
     // A reason button fills the box with its words: that is a reason.
     expect(discountReasonProblem(true, 'Staff')).toBeNull();
     expect(discountReasonProblem(true, ' Birthday ')).toBeNull();
+  });
+
+  it('a reason button reading as no reason (saved before, or by an older till) is left out while a reason is needed — and only then', () => {
+    const saved = ['Staff', 'No reason given', 'Test birthday', 'NO REASON GIVEN'];
+    expect(reasonButtons(saved, false)).toEqual(saved);
+    expect(reasonButtons(saved, true)).toEqual(['Staff', 'Test birthday']);
+    // Every button it leaves is one the dialog would take.
+    for (const r of reasonButtons(saved, true)) expect(discountReasonProblem(true, r)).toBeNull();
   });
 });

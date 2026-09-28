@@ -1,4 +1,4 @@
-import { DEFAULT_DISCOUNT_APPROVAL, type ApprovalLimits, type Cents } from '@cheeseoclock/shared-types';
+import { DEFAULT_DISCOUNT_APPROVAL, NO_DISCOUNT_REASON_LABEL, type ApprovalLimits, type Cents } from '@cheeseoclock/shared-types';
 import { formatCents } from './money.js';
 
 export type DiscountType = 'percent' | 'flat';
@@ -58,9 +58,10 @@ export function requiresManagerApproval(
 
 /**
  * What Reports → Team & leakage calls a discount given with no reason
- * (business-report getDiscountLines): typing it is no reason either.
+ * (business-report getDiscountLines): typing it is no reason either. Kept in
+ * shared-types, where the reason buttons' schema refuses it as a button.
  */
-export const NO_DISCOUNT_REASON_LABEL = 'No reason given';
+export { NO_DISCOUNT_REASON_LABEL };
 
 /** The refusal, the same on the F3 screen and in the main process. */
 export const DISCOUNT_REASON_REQUIRED = 'Pick or type a reason — the owner has made one required for every discount.';

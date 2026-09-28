@@ -148,6 +148,17 @@ export function discountReasonProblem(reasonRequired: boolean, reason: string): 
   return reasonRequired && discountReasonMissing(reason) ? DISCOUNT_REASON_REQUIRED : null;
 }
 
+/**
+ * The reason buttons the dialog shows: the owner's, except — while a reason
+ * is needed — one reading as no reason ("No reason given"), which the till
+ * would refuse. Settings no longer saves such a button, but a list saved
+ * before, or by an older till, may still have one. Every button otherwise,
+ * as before the setting.
+ */
+export function reasonButtons(reasons: readonly string[], reasonRequired: boolean): readonly string[] {
+  return reasonRequired ? reasons.filter((r) => !discountReasonMissing(r)) : reasons;
+}
+
 /** "10% off", "Rs 200 off". */
 export function describeDiscount(d: DiscountChoice): string {
   return d.type === 'percent' ? `${d.value}% off` : `${formatCents(d.value)} off`;

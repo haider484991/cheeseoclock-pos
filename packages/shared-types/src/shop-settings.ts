@@ -258,6 +258,12 @@ export const PRESET_FLATS_MAX = 3;
 export const PRESET_FLAT_MAX_CENTS = 500_000;
 export const PRESET_REASONS_MAX = 8;
 export const PRESET_REASON_MAX_LENGTH = 30;
+/**
+ * What Reports → Team & leakage calls a discount given with no reason
+ * (business-report getDiscountLines). Typing it is no reason either
+ * (pos-domain discountReasonMissing), so it is never a reason button.
+ */
+export const NO_DISCOUNT_REASON_LABEL = 'No reason given';
 
 // ---------------------------------------------------------------------------
 // Staff & kitchen timing (phase 6). Only timings: who can do what stays in

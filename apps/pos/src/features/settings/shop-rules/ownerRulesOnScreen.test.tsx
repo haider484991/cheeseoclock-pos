@@ -453,6 +453,22 @@ describe('"A discount needs a reason" (Settings sweep B7b)', () => {
     expect(text(out)).toContain('Test reason');
   });
 
+  it('a reason button reading as no reason (saved before, or by an older till) shows only while a reason is optional', () => {
+    signIn('cashier');
+    ringUp();
+    const withNone = (reasonRequired: boolean) =>
+      RULES({ discounts: { ...RULES().discounts, presets: { ...RULES().discounts.presets, reasons: ['Birthday', 'No reason given'] }, reasonRequired } });
+    const buttons = (markup: string) => (markup.match(/aria-pressed="false" class="h-10 rounded-full/g) ?? []).length;
+    const optional = render(<DiscountDialog onClose={() => {}} />, [[CHECKOUT_RULES_KEY, withNone(false)]]);
+    expect(buttons(optional)).toBe(2);
+    expect(text(optional)).toContain('No reason given');
+    // Needed: that button could never be applied, so the dialog leaves it out.
+    const needed = render(<DiscountDialog onClose={() => {}} />, [[CHECKOUT_RULES_KEY, withNone(true)]]);
+    expect(buttons(needed)).toBe(1);
+    expect(text(needed)).toContain('Birthday');
+    expect(text(needed)).not.toContain('No reason given');
+  });
+
   it('the Money card asks it, No by default, with what it does in words', () => {
     signIn('admin');
     const seed = (approval: ShopSettingCard<'discounts.approval'>['value']): Array<[readonly unknown[], unknown]> => [

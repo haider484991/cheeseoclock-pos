@@ -16,6 +16,7 @@ import {
 import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
+  NO_DISCOUNT_REASON_LABEL,
   PRESET_FLAT_MAX_CENTS,
   PRESET_FLATS_MAX,
   PRESET_PERCENTS_MAX,
@@ -66,11 +67,13 @@ export function approvalFromForm(f: ApprovalForm): Parsed<DiscountApproval> {
 }
 
 /**
- * One line for History: "Up to 10% or Rs 500 without a manager", and
- * " · a reason is needed" when the owner has made one required.
+ * One line for History and "Put back the default": "Up to 10% or Rs 500
+ * without a manager · a reason is optional" — the reason is always said, so a
+ * Yes → No save reads as a change and "Put back the default" says the reason
+ * goes back to optional.
  */
-export function approvalSummary(a: ApprovalLimits & { reasonRequired?: boolean }): string {
-  const reason = a.reasonRequired ? ' · a reason is needed' : '';
+export function approvalSummary(a: ApprovalLimits & Pick<DiscountApproval, 'reasonRequired'>): string {
+  const reason = a.reasonRequired ? ' · a reason is needed' : ' · a reason is optional';
   if (a.percentOver === 0) return `Every discount needs a manager${reason}`;
   if (a.flatOverCents === 0) return `Up to ${a.percentOver}% without a manager; any amount in rupees needs one${reason}`;
   return `Up to ${a.percentOver}% or ${formatCents(a.flatOverCents)} without a manager${reason}`;
@@ -221,6 +224,9 @@ export function presetsToForm(p: Pick<DiscountPresets, 'percents' | 'flatCents' 
 
 const PRESET_FLAT_MAX_RUPEES = formatCents(PRESET_FLAT_MAX_CENTS);
 
+/** The main process refuses the same button (shared-schemas discountPresetsSchema), in these words. */
+export const NO_REASON_BUTTON_PROBLEM = `A reason button can't be “${NO_DISCOUNT_REASON_LABEL}”: Reports use those words for a discount with no reason.`;
+
 export function presetsFromForm(f: PresetsForm): Parsed<DiscountPresets> {
   const percentsText = f.percents.map((t) => t.trim().replace(/%$/, '').trim()).filter((t) => t !== '');
   if (percentsText.length === 0) return { value: null, problem: 'Keep at least one % button.' };
@@ -246,6 +252,10 @@ export function presetsFromForm(f: PresetsForm): Parsed<DiscountPresets> {
   }
   if (new Set(reasons.map((r) => r.toLowerCase())).size !== reasons.length) {
     return { value: null, problem: 'Two reason buttons are the same.' };
+  }
+  // The words Reports use for "no reason": the till counts them as none, so the button would never work.
+  if (reasons.some((r) => r.toLowerCase() === NO_DISCOUNT_REASON_LABEL.toLowerCase())) {
+    return { value: null, problem: NO_REASON_BUTTON_PROBLEM };
   }
   return {
     value: {

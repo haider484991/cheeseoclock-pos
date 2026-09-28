@@ -17,11 +17,13 @@ import {
   deliveryFromForm,
   deliverySummary,
   deliveryToForm,
+  NO_REASON_BUTTON_PROBLEM,
   presetPreview,
   presetsFromForm,
   presetsSummary,
   presetsToForm,
 } from './discountRules';
+import { putBackQuestion } from './SettingCard';
 import {
   kitchenFromForm,
   kitchenToForm,
@@ -75,12 +77,19 @@ describe('Money & discounts: the approval limit', () => {
   });
 
   it('says it in words built from the values', () => {
-    expect(approvalSummary(DEFAULT_DISCOUNT_APPROVAL)).toBe('Up to 10% or Rs 500 without a manager');
-    expect(approvalSummary({ percentOver: 0, flatOverCents: 50_000 })).toBe('Every discount needs a manager');
-    expect(approvalSummary({ percentOver: 12, flatOverCents: 0 })).toBe('Up to 12% without a manager; any amount in rupees needs one');
-    // History says when a reason is needed; a format-1 line (read with No) says nothing more.
+    expect(approvalSummary(DEFAULT_DISCOUNT_APPROVAL)).toBe('Up to 10% or Rs 500 without a manager · a reason is optional');
+    expect(approvalSummary({ percentOver: 0, flatOverCents: 50_000, reasonRequired: false })).toBe('Every discount needs a manager · a reason is optional');
+    expect(approvalSummary({ percentOver: 12, flatOverCents: 0, reasonRequired: false })).toBe(
+      'Up to 12% without a manager; any amount in rupees needs one · a reason is optional',
+    );
+    // History and "Put back the default" always say the reason: a Yes → No save reads as a change.
     expect(approvalSummary({ ...DEFAULT_DISCOUNT_APPROVAL, reasonRequired: true })).toBe('Up to 10% or Rs 500 without a manager · a reason is needed');
     expect(approvalSummary({ percentOver: 0, flatOverCents: 0, reasonRequired: true })).toBe('Every discount needs a manager · a reason is needed');
+    expect(approvalSummary({ ...DEFAULT_DISCOUNT_APPROVAL, reasonRequired: true })).not.toBe(approvalSummary(DEFAULT_DISCOUNT_APPROVAL));
+    // On a card set to Yes, "Put back the default" says the reason goes back to optional.
+    expect(putBackQuestion('When a cashier needs a manager', approvalSummary(DEFAULT_DISCOUNT_APPROVAL))).toBe(
+      'Put back the default for “When a cashier needs a manager”?\nIt becomes: Up to 10% or Rs 500 without a manager · a reason is optional. Both tills get it; orders already open keep what they have.',
+    );
     expect(approvalExample(DEFAULT_DISCOUNT_APPROVAL)).toBe(
       "On a Rs 2,000 order a cashier can give up to 10% off, or up to Rs 200 off in rupees, without a manager. On a Rs 10,000 order: up to 10% off, or up to Rs 500 off in rupees. Anything more needs a manager's PIN or password.",
     );
@@ -120,6 +129,12 @@ describe('Money & discounts: the buttons', () => {
     expect(problem({ reasons: ['', '', '', '', '', '', '', ''] })).toBe('Keep at least one reason button.');
     expect(problem({ reasons: ['x'.repeat(31), '', '', '', '', '', '', ''] })).toBe('Keep a reason to 30 letters.');
     expect(problem({ reasons: ['Staff', 'STAFF', '', '', '', '', '', ''] })).toBe('Two reason buttons are the same.');
+    // The words Reports use for "no reason" are no reason (pos-domain discountReasonMissing): never a button.
+    for (const none of ['No reason given', 'no REASON given', '  No  reason given ']) {
+      expect(problem({ reasons: ['Staff', none, '', '', '', '', '', ''] })).toBe(NO_REASON_BUTTON_PROBLEM);
+    }
+    expect(NO_REASON_BUTTON_PROBLEM).toBe("A reason button can't be “No reason given”: Reports use those words for a discount with no reason.");
+    expect(problem({ reasons: ['No reason needed', 'Given free', '', '', '', '', '', ''] })).toBeNull();
   });
 
   it('the example shows the lock on the buttons above the limit, on a Rs 2,000 order', () => {

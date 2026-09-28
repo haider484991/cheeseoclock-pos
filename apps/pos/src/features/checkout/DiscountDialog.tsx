@@ -22,6 +22,7 @@ import {
   parseDiscountEntry,
   presetButtons,
   previewDiscount,
+  reasonButtons,
   sameChoice,
   type DiscountChoice,
   type DiscountDialogIntent,
@@ -362,7 +363,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {rules.presets.reasons.map((r) => (
+                {reasonButtons(rules.presets.reasons, rules.reasonRequired).map((r) => (
                   <button
                     key={r}
                     type="button"
