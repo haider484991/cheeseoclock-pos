@@ -3,6 +3,7 @@ import {
   APPROVAL_MAX_FLAT_CENTS,
   APPROVAL_MAX_PERCENT,
   CAME_BY_CHOICES,
+  CASH_OUT_REASONS_MAX,
   DAY_NOTE_TAGS,
   FOODPANDA_DEAL_MAX_PERCENT,
   KITCHEN_TIMING_BOUNDS,
@@ -13,6 +14,9 @@ import {
   OFFER_MAX_PERCENT,
   OFFER_NAME_MAX,
   OFFERS_MAX,
+  ORDER_REASON_ID_RE,
+  ORDER_REASON_LABEL_MAX,
+  ORDER_REASONS_MAX,
   PRESET_FLAT_MAX_CENTS,
   PRESET_FLATS_MAX,
   PRESET_PERCENTS_MAX,
@@ -41,6 +45,7 @@ import type {
   DiscountPresets,
   KitchenTiming,
   MenuImportPolicy,
+  OrderReasons,
   StaffTiming,
   StockRules,
   ChannelFees,
@@ -633,6 +638,62 @@ export const setCameByInputSchema = z
   })
   .strict();
 
+// ---------------------------------------------------------------------------
+// Reason buttons (Settings → Staff & kitchen): the Cancel, Refund and Cash out ones
+// ---------------------------------------------------------------------------
+
+// A reason is saved as its words on the order or the drawer row, and printed:
+// one line, no control characters, no spaces at its ends.
+// eslint-disable-next-line no-control-regex
+const REASON_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
+const reasonLabel = (what: string) =>
+  z
+    .string()
+    .min(1, { message: `${what} can't be empty` })
+    .max(ORDER_REASON_LABEL_MAX, { message: `Keep ${what.toLowerCase()} to ${ORDER_REASON_LABEL_MAX} letters` })
+    .refine((r) => r.trim() === r && r.trim() !== '', { message: `${what} has no spaces at its start or end` })
+    .refine((r) => !REASON_CONTROL_CHARS.test(r), { message: `${what} is one line of plain words` });
+
+const reasonFood = z.enum(['made', 'not_made', 'ask'], {
+  errorMap: () => ({ message: 'Say what the button answers about the food: made, not made, or ask' }),
+});
+const reasonButtonShape = {
+  id: z.string().regex(ORDER_REASON_ID_RE, { message: 'That is not a reason button' }),
+  label: reasonLabel('A reason button'),
+  food: reasonFood,
+};
+const reasonButtons = <T extends z.ZodType<{ id: string; label: string; food: string }>>(item: T, which: string) =>
+  z
+    .array(item)
+    .min(1, { message: `Keep at least one ${which} reason button` })
+    .max(ORDER_REASONS_MAX, { message: `At most ${ORDER_REASONS_MAX} ${which} reason buttons` })
+    .superRefine((buttons, ctx) => {
+      if (new Set(buttons.map((b) => b.id)).size !== buttons.length) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Two ${which} reason buttons have the same id` });
+      }
+      if (!allDifferent(buttons.map((b) => b.label))) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Two ${which} reason buttons say the same` });
+      }
+    });
+const cashOutReasons = z
+  .array(reasonLabel('A cash-out reason'))
+  .max(CASH_OUT_REASONS_MAX, { message: `At most ${CASH_OUT_REASONS_MAX} cash-out reasons` })
+  .refine(allDifferent, { message: 'Two cash-out reasons are the same' });
+
+const orderReasonsWriteShape = {
+  cancel: reasonButtons(z.object(reasonButtonShape).strict(), 'cancel'),
+  refund: reasonButtons(z.object(reasonButtonShape).strict(), 'refund'),
+  cashOut: cashOutReasons,
+};
+const orderReasonsReadShape = {
+  cancel: reasonButtons(z.object(reasonButtonShape), 'cancel'),
+  refund: reasonButtons(z.object(reasonButtonShape), 'refund'),
+  cashOut: cashOutReasons,
+};
+/** 'orders.reasons' as this version writes it. */
+export const orderReasonsSchema = z.object({ v: writesFormat('orders.reasons'), ...orderReasonsWriteShape }).strict();
+const orderReasonsReadSchema = z.object({ v: readsFormat, ...orderReasonsReadShape });
+
 const checkRule = z.enum(['optional', 'required'], { errorMap: () => ({ message: 'Optional or required' }) });
 const foodpandaChecksShape = { orderCode: checkRule, tabletTotal: checkRule };
 /** 'foodpanda.checks' as this version writes it. */
@@ -717,6 +778,7 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'stock.rules': stockRulesSchema,
   'menu.importPolicy': menuImportPolicySchema,
   'discounts.offers': discountOffersSchema,
+  'orders.reasons': orderReasonsSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 } as const;
@@ -751,6 +813,7 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'stock.rules': stockRulesReadSchema,
   'menu.importPolicy': menuImportPolicyReadSchema,
   'discounts.offers': discountOffersReadSchema,
+  'orders.reasons': orderReasonsReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 };
@@ -768,6 +831,7 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'stock.rules': new Set(['v', ...Object.keys(stockRulesWriteShape)]),
   'menu.importPolicy': new Set(['v', ...Object.keys(menuImportPolicyShape)]),
   'discounts.offers': new Set(['v', ...Object.keys(discountOffersWriteShape)]),
+  'orders.reasons': new Set(['v', ...Object.keys(orderReasonsWriteShape)]),
 };
 
 /**
@@ -975,6 +1039,8 @@ const _discountDeliveryReadShape: Same<z.infer<typeof discountDeliveryReadSchema
 const _discountOffersShape: Same<z.infer<typeof discountOffersSchema>, DiscountOffers> = true;
 const _discountOffersReadShape: Same<z.infer<typeof discountOffersReadSchema>, DiscountOffers> = true;
 const _cameByShape: Same<z.infer<typeof cameBySchema>, CameBy> = true;
+const _orderReasonsShape: Same<z.infer<typeof orderReasonsSchema>, OrderReasons> = true;
+const _orderReasonsReadShape: Same<z.infer<typeof orderReasonsReadSchema>, OrderReasons> = true;
 const _feesShape: Same<z.infer<typeof channelFeesSchema>, ChannelFees> = true;
 const _riderShape: Same<z.infer<typeof riderCostSchema>, RiderCostSetting> = true;
 const _setFeesShape: Same<z.infer<typeof setChannelFeesInputSchema>, SetChannelFeesRequest> = true;

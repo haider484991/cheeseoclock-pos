@@ -33,3 +33,4 @@ export * from './what-if.js';
 export * from './recipe-calc.js';
 export * from './foodpanda.js';
 export * from './offers.js';
+export * from './opening-float.js';

@@ -65,10 +65,11 @@ export function getShopSettings(db: AppDatabase): ShopSettings {
  * colours and reminder minutes, the foodpanda deal an order started now
  * gets (its % and label, never who saved it), what Pay asks, how much
  * dearer the foodpanda listing is (a price: the tablet's total is the
- * till's at those prices), and the owner's automatic offers that are on
- * with whether the cashier is asked how each order came in (the screen's
- * buttons and hints; the main process decides every offer itself). Never
- * the commission, fees or costs.
+ * till's at those prices), the owner's automatic offers that are on with
+ * whether the cashier is asked how each order came in (the screen's
+ * buttons and hints; the main process decides every offer itself), and the
+ * Cancel, Refund and Cash out reason buttons. Never the commission, fees or
+ * costs.
  */
 export function checkoutRules(db: AppDatabase, now: Date = new Date()): CheckoutRules {
   const deal = readShopSetting(db, 'foodpanda.deal').value;
@@ -81,6 +82,7 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
   const stock = readShopSetting(db, 'stock.rules').value;
   const offersSetting = readShopSetting(db, 'discounts.offers');
   const offers = offersSetting.value;
+  const reasons = readShopSetting(db, 'orders.reasons').value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
   const today = tradingDayOfInstant(now.toISOString()) ?? '';
   return {
@@ -114,6 +116,12 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
       offers: offersSetting.newerFormat
         ? []
         : offers.offers.filter((o) => o.on && !(o.endsOn && o.endsOn < today)).map((o) => structuredClone(o)),
+    },
+    // The Cancel, Refund and Cash out reason buttons (Settings → Staff & kitchen).
+    reasons: {
+      cancel: reasons.cancel.map((r) => ({ id: r.id, label: r.label, food: r.food })),
+      refund: reasons.refund.map((r) => ({ id: r.id, label: r.label, food: r.food })),
+      cashOut: [...reasons.cashOut],
     },
     foodpanda: {
       deal: active

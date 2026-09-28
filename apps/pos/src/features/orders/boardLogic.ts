@@ -138,20 +138,6 @@ export function cardItemCount(items: Array<{ parentOrderItemId: unknown; quantit
   return cardLines(items).reduce((s, i) => s + i.quantity, 0);
 }
 
-/**
- * One-tap "cash given" amounts for a bill: the exact amount, then the next
- * round 100 / 500 / 1,000 / 5,000 above it (the notes people hand over).
- * At most four, smallest first, never less than the bill.
- */
-export function quickCashOptions(totalCents: number): number[] {
-  if (!(totalCents > 0)) return [];
-  const out = new Set<number>([totalCents]);
-  for (const step of [100_00, 500_00, 1_000_00, 5_000_00]) {
-    out.add(Math.ceil(totalCents / step) * step);
-  }
-  return [...out].sort((a, b) => a - b).slice(0, 4);
-}
-
 /** "2,000" / " 1850.5 " → cents; blank or junk → NaN. */
 export function parseRupeesToCents(text: string): number {
   const cleaned = text.replace(/[,\s]/g, '').replace(/^rs\.?/i, '');

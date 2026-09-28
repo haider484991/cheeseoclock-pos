@@ -5,8 +5,10 @@
  */
 
 import { formatCents, formatQty } from '@cheeseoclock/pos-domain';
+import { DEFAULT_ORDER_REASONS } from '@cheeseoclock/shared-types';
 import type {
   FoodMade,
+  OrderReasonButton,
   OrderStatus,
   OrderStockLine,
   OrderStockStatus,
@@ -107,22 +109,26 @@ export function kitchenLine(
   return `Tell the kitchen to stop ${shortNumber}.`;
 }
 
-/** Quick reasons for a cancel; the ones that settle the question answer it too. */
-export const CANCEL_REASONS: ReadonlyArray<{ label: string; foodMade?: FoodMade }> = [
-  { label: 'Customer cancelled' },
-  { label: 'Refused at the door', foodMade: 'made' },
-  { label: 'Not collected', foodMade: 'made' },
-  { label: 'Wrong order / duplicate', foodMade: 'not_made' },
-  { label: 'Out of stock', foodMade: 'not_made' },
-];
+/** A reason chip on the Cancel or Refund box: its words, and what it says about the food (nothing: staff tap). */
+export interface ReasonChip {
+  label: string;
+  foodMade?: FoodMade;
+}
 
-/** Quick reasons for a refund. */
-export const REFUND_REASONS: ReadonlyArray<{ label: string; foodMade?: FoodMade }> = [
-  { label: 'Customer unhappy' },
-  { label: 'Wrong order' },
-  { label: 'Cancelled by Foodpanda' },
-  { label: 'Out of stock', foodMade: 'not_made' },
-];
+/**
+ * The owner's reason buttons (Settings → Staff & kitchen, 'orders.reasons')
+ * as the box's chips. A chip only fills the box: what is saved is the words
+ * (typed or tapped), and 'ask' says nothing about the food.
+ */
+export function reasonChips(buttons: ReadonlyArray<Pick<OrderReasonButton, 'label' | 'food'>>): ReasonChip[] {
+  return buttons.map((b) => (b.food === 'ask' ? { label: b.label } : { label: b.label, foodMade: b.food }));
+}
+
+/** The released quick reasons for a cancel; the ones that settle the question answer it too. */
+export const CANCEL_REASONS: ReadonlyArray<ReasonChip> = reasonChips(DEFAULT_ORDER_REASONS.cancel);
+
+/** The released quick reasons for a refund. */
+export const REFUND_REASONS: ReadonlyArray<ReasonChip> = reasonChips(DEFAULT_ORDER_REASONS.refund);
 
 /** Who set the answer on screen: a tap on Made / Not made, a reason chip, or nobody yet. */
 export type AnsweredBy = 'staff' | 'reason' | null;

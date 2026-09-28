@@ -52,6 +52,7 @@ import type { Actor } from './base.js';
 import { priceOfBook, recordStockMovement, safeStockValue } from './stock-movement-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { loadPriceBook } from '../price-book.js';
+import { readShopSetting } from '../business-settings-read.js';
 import {
   answerWentAgainstHint,
   drinksGoBackByDefault,
@@ -462,7 +463,10 @@ export function getOrderStockStatus(
     lines,
     estCostCents: lines.reduce((s, l) => s + l.estCostCents, 0),
     hasCosts: lines.some((l) => l.estCostCents !== 0),
-    question: state === 'out' ? foodMadeQuestion({ status: order.status, takenAt: ledger.takenAt, now: nowMs }) : null,
+    question:
+      state === 'out'
+        ? foodMadeQuestion({ status: order.status, takenAt: ledger.takenAt, now: nowMs, probablyMadeMin: probablyMadeMin(db) })
+        : null,
     kitchenTicket: kitchenTicketState(db, orderId),
     otherTill: ledger.otherTill,
     settledAt: last?.occurred_at ?? null,
@@ -472,6 +476,16 @@ export function getOrderStockStatus(
     wasteCents,
     hiddenLines: 0,
   };
+}
+
+/**
+ * From how long after sending an untouched order is "probably made": the
+ * minute a Live Orders card turns amber (Settings → Staff & kitchen,
+ * 'kitchen.timing' amberMin; 15 when nothing is saved). The hint and the
+ * lean only; food that left the shop has no question whatever it says.
+ */
+function probablyMadeMin(db: AppDatabase): number {
+  return readShopSetting(db, 'kitchen.timing').value.amberMin;
 }
 
 /**
@@ -534,7 +548,12 @@ export function settleOrderStock(
     const holding = ledger.holdings.filter((h) => held(h).need > 0 || h.unconvertible);
     if (!holding.some((h) => held(h).need > 0)) return;
 
-    const question = foodMadeQuestion({ status: input.statusBefore, takenAt: ledger.takenAt, now: Date.now() });
+    const question = foodMadeQuestion({
+      status: input.statusBefore,
+      takenAt: ledger.takenAt,
+      now: Date.now(),
+      probablyMadeMin: probablyMadeMin(db),
+    });
     let outcome: FoodMade;
     let answered: StockSettlement['answered'];
     if (input.how === 'test_deleted') {

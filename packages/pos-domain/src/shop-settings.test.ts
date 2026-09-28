@@ -5,7 +5,11 @@ import {
   DEFAULT_FOODPANDA_CHECKS,
   DEFAULT_FOODPANDA_DEAL,
   DEFAULT_FOODPANDA_FEES,
+  DEFAULT_ORDER_REASONS,
   FOODPANDA_TABLET_TOLERANCE_CENTS,
+  ORDER_REASON_ID_RE,
+  ORDER_REASON_LABEL_MAX,
+  ORDER_REASONS_MAX,
   SHOP_SETTING_DEFAULTS,
   SHOP_SETTING_FORMAT,
   SHOP_SETTING_KEYS,
@@ -63,6 +67,54 @@ describe('the released defaults are pinned', () => {
     expect(SHOP_SETTING_DEFAULTS['discounts.offers']).toBe(DEFAULT_DISCOUNT_OFFERS);
   });
 
+  it('orders.reasons: today’s Cancel and Refund buttons, in today’s order, with what each says about the food; no cash-out buttons', () => {
+    // Exactly the lists the Cancel and Refund boxes had typed in (stockCopy.ts up to v0.7.26).
+    const today = {
+      cancel: [
+        { label: 'Customer cancelled' },
+        { label: 'Refused at the door', foodMade: 'made' },
+        { label: 'Not collected', foodMade: 'made' },
+        { label: 'Wrong order / duplicate', foodMade: 'not_made' },
+        { label: 'Out of stock', foodMade: 'not_made' },
+      ],
+      refund: [{ label: 'Customer unhappy' }, { label: 'Wrong order' }, { label: 'Cancelled by Foodpanda' }, { label: 'Out of stock', foodMade: 'not_made' }],
+    };
+    const asToday = (buttons: ReadonlyArray<{ label: string; food: string }>) =>
+      buttons.map((b) => (b.food === 'ask' ? { label: b.label } : { label: b.label, foodMade: b.food }));
+    expect(asToday(DEFAULT_ORDER_REASONS.cancel)).toEqual(today.cancel);
+    expect(asToday(DEFAULT_ORDER_REASONS.refund)).toEqual(today.refund);
+    expect(DEFAULT_ORDER_REASONS.cashOut).toEqual([]);
+    expect(DEFAULT_ORDER_REASONS.v).toBe(1);
+    expect(DEFAULT_ORDER_REASONS).toEqual({
+      v: 1,
+      cancel: [
+        { id: 'customer_cancelled', label: 'Customer cancelled', food: 'ask' },
+        { id: 'refused_at_door', label: 'Refused at the door', food: 'made' },
+        { id: 'not_collected', label: 'Not collected', food: 'made' },
+        { id: 'wrong_order_duplicate', label: 'Wrong order / duplicate', food: 'not_made' },
+        { id: 'out_of_stock', label: 'Out of stock', food: 'not_made' },
+      ],
+      refund: [
+        { id: 'customer_unhappy', label: 'Customer unhappy', food: 'ask' },
+        { id: 'wrong_order', label: 'Wrong order', food: 'ask' },
+        { id: 'cancelled_by_foodpanda', label: 'Cancelled by Foodpanda', food: 'ask' },
+        { id: 'out_of_stock', label: 'Out of stock', food: 'not_made' },
+      ],
+      cashOut: [],
+    });
+    // Deeply frozen, and inside its own bounds.
+    for (const list of [DEFAULT_ORDER_REASONS.cancel, DEFAULT_ORDER_REASONS.refund, DEFAULT_ORDER_REASONS.cashOut]) {
+      expect(Object.isFrozen(list)).toBe(true);
+      expect(list.length).toBeLessThanOrEqual(ORDER_REASONS_MAX);
+    }
+    for (const b of [...DEFAULT_ORDER_REASONS.cancel, ...DEFAULT_ORDER_REASONS.refund]) {
+      expect(Object.isFrozen(b)).toBe(true);
+      expect(b.label.length).toBeLessThanOrEqual(ORDER_REASON_LABEL_MAX);
+      expect(ORDER_REASON_ID_RE.test(b.id)).toBe(true);
+    }
+    expect(SHOP_SETTING_DEFAULTS['orders.reasons']).toBe(DEFAULT_ORDER_REASONS);
+  });
+
   it('one default per key, frozen, in the format this version writes', () => {
     expect([...SHOP_SETTING_KEYS]).toEqual([
       'foodpanda.deal',
@@ -76,6 +128,7 @@ describe('the released defaults are pinned', () => {
       'stock.rules',
       'menu.importPolicy',
       'discounts.offers',
+      'orders.reasons',
     ]);
     for (const key of SHOP_SETTING_KEYS) {
       const d = SHOP_SETTING_DEFAULTS[key];

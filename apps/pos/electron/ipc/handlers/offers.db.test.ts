@@ -775,6 +775,38 @@ describe.skipIf(!Sqlite)('Reports', () => {
     expect(team.offerRepeats).toEqual([]);
   });
 
+  it('beside the owner’s reason buttons (v0.7.27): the counter gets both, and Team & leakage lists the cancel by its button’s words and the offer under Standing offers', async () => {
+    await saveOffers([offer({ id: 'test-walkin', name: 'Test walk-in 10%', cameBy: ['walk_in'], orderTypes: ['takeaway'] })]);
+    const reasons = {
+      v: 1,
+      cancel: [{ id: 'customer_cancelled', label: 'Test changed mind', food: 'ask' }],
+      refund: [{ id: 'customer_unhappy', label: 'Test unhappy', food: 'ask' }],
+      cashOut: ['Test gas'],
+    };
+    await ownerSaves('orders.reasons', reasons);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<CheckoutRules>('checkout:getRules');
+      expect(rules.reasons).toEqual({ cancel: reasons.cancel, refund: reasons.refund, cashOut: reasons.cashOut });
+      expect(rules.offers?.offers.map((o) => o.name)).toEqual(['Test walk-in 10%']);
+    }
+    // One walk-in takeaway paid with the offer on (Rs 200 off Rs 2,000 of food)…
+    const paid = await counterOrder({ mode: 'takeaway', cameBy: 'walk_in' });
+    expect(liveDiscounts(paid)).toMatchObject([{ source: 'offer', reason: 'Test walk-in 10%', amount_cents: 20_000 }]);
+    await pay(paid);
+    // …and one sent to the kitchen, then cancelled with the owner's renamed button.
+    const cancelled = await counterOrder({ mode: 'takeaway', cameBy: 'walk_in' });
+    await data('orders:sendToKitchen', { orderId: cancelled });
+    await data('orders:void', { orderId: cancelled, reason: 'Test changed mind', approverPin: MANAGER_SECRET, foodMade: 'not_made' });
+
+    const { buildTeamTab } = await import('../../services/business-report.js');
+    const team = buildTeamTab(db as never, NOW_RANGE());
+    expect(team.voids.map((v) => [v.orderId, v.reason])).toEqual([[cancelled, 'Test changed mind']]);
+    expect(team.discounts.standing).toEqual([{ name: 'Test walk-in 10% (automatic offer)', count: 1, amountCents: 20_000 }]);
+    expect(team.discounts.byPerson).toEqual([]);
+    expect(team.staff.find((s) => s.key === 'u_cash')).toMatchObject({ offerCount: 1, offerCents: 20_000, discountCents: 0 });
+  });
+
   it('Team & leakage compares on the orders whose way in was tapped: orders nobody was asked about never dilute the shop and flag an honest cashier', async () => {
     // Review 28 Sep (history + screens): orders nobody was asked about diluted the shop's rate.
     await saveOffers([offer({ cameBy: ['whatsapp'], orderTypes: ['takeaway', 'delivery'] })]);

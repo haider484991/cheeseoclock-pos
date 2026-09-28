@@ -57,6 +57,37 @@ describe('foodMadeQuestion', () => {
     expect(q('sent_to_kitchen', sentMinAgo(15)).lean).toBe('made');
   });
 
+  it("'probably made' follows the owner's amber minute ('kitchen.timing' amberMin), 15 when none is given", () => {
+    const at = (probablyMadeMin: number | undefined, m: number) =>
+      foodMadeQuestion({ status: 'sent_to_kitchen', takenAt: sentMinAgo(m), now: NOW, ...(probablyMadeMin === undefined ? {} : { probablyMadeMin }) });
+    // Amber at 25: 15 minutes is no longer "probably made", 25 is.
+    expect(at(25, 15)).toMatchObject({ lean: null, hint: "Sent to the kitchen 15 min ago · 'Start preparing' not tapped" });
+    expect(at(25, 24 + 59 / 60).lean).toBeNull();
+    expect(at(25, 25)).toMatchObject({ lean: 'made', hint: 'Sent to the kitchen 25 min ago · probably made' });
+    // Amber at 8: already probably made at 8 minutes.
+    expect(at(8, 7.9).lean).toBeNull();
+    expect(at(8, 8)).toMatchObject({ lean: 'made', hint: 'Sent to the kitchen 8 min ago · probably made' });
+    // The default (amber 15) is exactly today's.
+    expect(at(15, 15)).toEqual(at(undefined, 15));
+    expect(at(15, 14.9)).toEqual(at(undefined, 14.9));
+    // A nonsense minute falls back to 15.
+    expect(at(0, 15).lean).toBe('made');
+    expect(at(Number.NaN, 14.9).lean).toBeNull();
+    // Still never an answer while it is in the kitchen.
+    expect(at(8, 30)).toMatchObject({ ask: 'choose', preselect: null });
+  });
+
+  it('the amber minute never overrides the food leaving the shop (FOOD_LEFT_SHOP): no choice there, whatever it is', () => {
+    for (const probablyMadeMin of [5, 15, 60]) {
+      for (const status of ['out_for_delivery', 'served', 'delivered', 'paid'] as const) {
+        expect(foodMadeQuestion({ status, takenAt: sentMinAgo(1), now: NOW, probablyMadeMin })).toMatchObject({
+          ask: 'made_only',
+          preselect: 'made',
+        });
+      }
+    }
+  });
+
   it('with no send time (or a bad one) it only says the button was not tapped', () => {
     for (const t of [null, 'not a date']) {
       expect(q('sent_to_kitchen', t)).toEqual({ ask: 'choose', preselect: null, lean: null, hint: "'Start preparing' not tapped" });

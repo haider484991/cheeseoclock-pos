@@ -240,3 +240,19 @@ export function orderNotesOf(s: {
   if (fromCounter && fromCounter !== fromOrder) notes.push(fromCounter);
   return notes;
 }
+
+/** Who a website order was taken by, on paper. */
+export const WEBSITE_CASHIER_NAME = 'Website';
+
+/**
+ * Who took the order, as the papers print it: "Cashier: …" on a bill, a
+ * receipt or a refund slip, and the name on a kitchen ticket. A website
+ * order says "Website". The till files a website order under its first
+ * owner login (web-orders-bridge resolveActor), because orders.cashier_id
+ * must name a user; that stays as it is for the audit trail, and only the
+ * paper says where the order came from. It is decided from the order
+ * itself, so a reprint of an old website order says "Website" too.
+ */
+export function paperCashierName(s: { order: Pick<Order, 'source'>; cashierName: string }): string {
+  return s.order.source === 'web' ? WEBSITE_CASHIER_NAME : s.cashierName;
+}

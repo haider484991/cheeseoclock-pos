@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { AlertTriangle, ChevronDown, ChevronRight, CloudOff, History, Lock, RotateCcw } from 'lucide-react';
-import type { ShopSettingCard, ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
+import type { ShopSettingCard } from '@cheeseoclock/shared-types';
 import { askConfirm } from '../../../components/confirm/ConfirmHost';
 
 /** "27 Sep, 14:02" */
@@ -27,13 +27,33 @@ export function lastChangedText(card: Pick<ShopSettingCard, 'lastChanged' | 'car
   return `Last changed by ${c.byName ?? 'someone'}${where}, ${whenSaved(c.at)}`;
 }
 
-interface Props<K extends ShopSettingKey> {
-  card: ShopSettingCard<K>;
+/**
+ * What the card shows: a shop rule's (ShopSettingCard, synced between the
+ * tills) or a setting of this till's own (TillSettingCard, `scope: 'till'`).
+ */
+export interface SettingCardData<V> {
+  defaultValue: V;
+  isDefault: boolean;
+  readOnly: boolean;
+  carriedOver?: boolean;
+  lastChanged: { at: string; byName: string | null; onThisTill: boolean | null } | null;
+  notOnOtherTillYet: boolean;
+  history: ReadonlyArray<{ at: string; byName: string | null; onThisTill: boolean; value: V | null }>;
+}
+
+interface Props<V> {
+  card: SettingCardData<V>;
   title: string;
   icon: ReactNode;
   intro: ReactNode;
   /** One line per value, for History. */
-  describe: (value: ShopSettingValues[K]) => string;
+  describe: (value: V) => string;
+  /**
+   * 'shop' (default): a shop rule both tills share. 'till': this till's own
+   * (its receipt lines, its opening float): the words say so, and nothing
+   * goes to the other till.
+   */
+  scope?: 'shop' | 'till';
   /** The form differs from what is saved. */
   dirty: boolean;
   /** Why the form can't be saved yet, in plain words; null when it can. */
@@ -52,22 +72,27 @@ interface Props<K extends ShopSettingKey> {
   neverChangedText?: string;
 }
 
+/** The line the "Put back the default" dialog asks. */
+export function putBackQuestion(title: string, becomes: string, scope: 'shop' | 'till' = 'shop'): string {
+  const who = scope === 'till' ? 'Only this till changes.' : 'Both tills get it; orders already open keep what they have.';
+  return `Put back the default for “${title}”?\nIt becomes: ${becomes}. ${who}`;
+}
+
 /**
- * The owner's settings card, the same for every shop rule: the fields, Save,
- * "Put back the default" (asked in the app's own dialog, and it WRITES the
- * default's values), who changed it last and on which till, whether the
- * other till has it yet, and its History. Read-only when a newer version of
- * the app saved it.
+ * The owner's settings card, the same for every shop rule and for every
+ * setting of this till's own: the fields, Save, "Put back the default"
+ * (asked in the app's own dialog, and it WRITES the default's values), who
+ * changed it last and on which till, whether the other till has it yet, and
+ * its History. Read-only when a newer version of the app saved it.
  */
-export function SettingCard<K extends ShopSettingKey>(p: Props<K>) {
+export function SettingCard<V>(p: Props<V>) {
   const [showHistory, setShowHistory] = useState(false);
   const { card } = p;
   const locked = card.readOnly;
+  const tillOnly = p.scope === 'till';
 
   async function putBack() {
-    const ok = await askConfirm(
-      `Put back the default for “${p.title}”?\nIt becomes: ${p.describe(card.defaultValue)}. Both tills get it; orders already open keep what they have.`,
-    );
+    const ok = await askConfirm(putBackQuestion(p.title, p.describe(card.defaultValue), p.scope));
     if (ok) p.onPutBack();
   }
 
@@ -84,6 +109,7 @@ export function SettingCard<K extends ShopSettingKey>(p: Props<K>) {
             )}
           </h2>
           <div className="mt-0.5 text-sm text-stone-500">{p.intro}</div>
+          {tillOnly && <div className="mt-0.5 text-xs font-medium text-stone-500">This till only: the other till keeps its own.</div>}
         </div>
       </div>
 
@@ -140,7 +166,8 @@ export function SettingCard<K extends ShopSettingKey>(p: Props<K>) {
             <li key={`${h.at}-${i}`} className={cn('flex flex-wrap gap-x-2', i === 0 && 'font-medium')}>
               <span className="font-mono text-stone-500">{whenSaved(h.at)}</span>
               <span>
-                {h.byName ?? 'Someone'} {h.onThisTill ? 'on this till' : 'on the other till'}:
+                {h.byName ?? 'Someone'}
+                {tillOnly ? ':' : h.onThisTill ? ' on this till:' : ' on the other till:'}
               </span>
               <span className="text-stone-700 dark:text-stone-200">{h.value ? p.describe(h.value) : 'a value this version can’t read'}</span>
             </li>

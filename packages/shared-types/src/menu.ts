@@ -164,3 +164,27 @@ export interface TaxCategory {
   name: string;
   rateBps: Bps;
 }
+
+/**
+ * The rate a till's tax starts at: first-time setup's categories and a new
+ * category on Menu → Tax. ONE value for both (they said 17% and 16%).
+ * 15%: the rate the shop charges (owner, 24 Sep 2026: "tax is 15%", added
+ * on top of the menu prices; the printed menu says "15% tax added on the
+ * bill"). Only a starting value on a form: an existing tax category keeps
+ * its own rate, and nothing here writes to one.
+ */
+export const STARTING_TAX_RATE_BPS = 1_500;
+
+/** "15%", "0%", "12.5%": a rate in basis points as the tax forms show it. */
+export function taxRatePercentText(rateBps: number): string {
+  return `${Number((rateBps / 100).toFixed(2))}%`;
+}
+
+/**
+ * What first-time setup offers (each row can be edited or taken off there):
+ * the shop's rate, and zero-rated. The names are built from the rates.
+ */
+export const STARTING_TAX_CATEGORIES: ReadonlyArray<Readonly<{ name: string; rateBps: number }>> = Object.freeze([
+  Object.freeze({ name: `Sales tax ${taxRatePercentText(STARTING_TAX_RATE_BPS)}`, rateBps: STARTING_TAX_RATE_BPS }),
+  Object.freeze({ name: 'Zero-rated', rateBps: 0 }),
+]);

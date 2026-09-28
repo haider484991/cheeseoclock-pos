@@ -11,7 +11,8 @@ import { SecretHint } from '../../components/secret/SecretHint';
 import { approvalProblem } from '../../components/secret/secretRules';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
 import { FoodMadeQuestion, useFoodMadeAnswer } from './FoodMadeQuestion';
-import { CANCEL_REASONS, cancelToast } from './stockCopy';
+import { cancelToast, reasonChips } from './stockCopy';
+import { useOrderReasons } from '../settings/shop-rules/useShopSetting';
 import { shortOrderNumber } from './historyFilters';
 
 interface Props {
@@ -32,6 +33,8 @@ export function VoidOrderDialog({ snap, onClose, onDone }: Props) {
   const { toast } = useToast();
   const fm = useFoodMadeAnswer(snap);
   const short = shortOrderNumber(snap.order.orderNumber);
+  // The owner's buttons (Settings → Staff & kitchen); any other reason can still be typed.
+  const chips = reasonChips(useOrderReasons().cancel);
 
   const voidMut = useMutation({
     mutationFn: () =>
@@ -58,7 +61,7 @@ export function VoidOrderDialog({ snap, onClose, onDone }: Props) {
     setReason(label);
     // Fills the question only while nobody has answered it (never flips a tap
     // or the "Made" the till starts on once cooking was marked).
-    fm.pickReason(CANCEL_REASONS, label);
+    fm.pickReason(chips, label);
   }
 
   function submit() {
@@ -121,7 +124,7 @@ export function VoidOrderDialog({ snap, onClose, onDone }: Props) {
                   Reason
                 </label>
                 <div className="mb-1.5 flex flex-wrap gap-1.5">
-                  {CANCEL_REASONS.map((r) => (
+                  {chips.map((r) => (
                     <button
                       key={r.label}
                       type="button"

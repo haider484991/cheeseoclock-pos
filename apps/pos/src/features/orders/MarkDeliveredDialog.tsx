@@ -7,7 +7,8 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { OrderSnapshot, PaymentMethod } from '@cheeseoclock/shared-types';
-import { parseRupeesToCents, quickCashOptions } from './boardLogic';
+import { parseRupeesToCents } from './boardLogic';
+import { quickCashRupees } from '../checkout/tenderAmounts';
 
 interface Props {
   snap: OrderSnapshot;
@@ -170,8 +171,9 @@ export function MarkDeliveredDialog({ snap, onClose, onDone }: Props) {
                         className="w-full rounded-lg border border-stone-200 px-3 py-2 font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
                       />
                     </label>
-                    <div className="mt-1.5 grid grid-cols-4 gap-1.5">
-                      {quickCashOptions(order.totalCents).map((c) => (
+                    <div className="mt-1.5 grid grid-cols-5 gap-1.5">
+                      {/* Exact, then the same notes Pay offers (tenderAmounts quickCashRupees: one rule). */}
+                      {[order.totalCents, ...quickCashRupees(order.totalCents).map((r) => r * 100)].map((c) => (
                         <button
                           key={c}
                           type="button"

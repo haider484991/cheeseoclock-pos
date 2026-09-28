@@ -29,7 +29,14 @@ import { normalizeUnit, ratioRound } from './units.js';
 
 /** Under this long after sending, an untouched order was probably not started. Wording only. */
 export const PROBABLY_NOT_STARTED_MIN = 5;
-/** From this long after sending it was probably made (the board's own "running late" mark). Wording only. */
+/**
+ * From this long after sending it was probably made: the board's own
+ * "running late" mark, i.e. the minute a Live Orders card turns amber. The
+ * owner sets that minute (Settings → Staff & kitchen, 'kitchen.timing'
+ * amberMin, 15 by default); the till passes it in as `probablyMadeMin`, and
+ * this is the released one when nothing is passed. Wording only: it moves
+ * the hint and the lean, never an answer, and never the FOOD_LEFT_SHOP rule.
+ */
 export const PROBABLY_MADE_MIN = 15;
 
 /** The food has left the shop (with the rider, or handed over): it can't go back on the shelf. */
@@ -76,12 +83,16 @@ export function minutesAgoText(minutes: number): string {
 
 /**
  * How to put the question for an order in `status` whose stock was taken at
- * `takenAt` (ISO), at `now` (epoch ms).
+ * `takenAt` (ISO), at `now` (epoch ms). `probablyMadeMin`: the minute a Live
+ * Orders card turns amber ('kitchen.timing' amberMin); PROBABLY_MADE_MIN
+ * when not given. Only an order still "sent to kitchen" reads it: one whose
+ * food left the shop is 'made_only' whatever it says.
  */
 export function foodMadeQuestion(input: {
   status: OrderStatus;
   takenAt: string | null;
   now: number;
+  probablyMadeMin?: number;
 }): FoodMadeQuestion {
   switch (input.status) {
     case 'preparing':
@@ -101,7 +112,11 @@ export function foodMadeQuestion(input: {
       }
       const minutes = Math.max(0, (input.now - at) / 60_000);
       const ago = `Sent to the kitchen ${minutesAgoText(minutes)}`;
-      if (minutes >= PROBABLY_MADE_MIN) {
+      const probablyMade =
+        typeof input.probablyMadeMin === 'number' && Number.isFinite(input.probablyMadeMin) && input.probablyMadeMin > 0
+          ? input.probablyMadeMin
+          : PROBABLY_MADE_MIN;
+      if (minutes >= probablyMade) {
         return { ask: 'choose', preselect: null, lean: 'made', hint: `${ago} · probably made` };
       }
       return {

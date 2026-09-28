@@ -9,9 +9,11 @@ import {
   ACTIVE_ORDERS_KEY,
   LOW_STOCK_TONE_GAP_MS,
   PRINTER_TONE_GAP_MS,
+  gapWords,
   lowStockTone,
   planWaitingReminders,
   printerFailureEffect,
+  printerProblemRuleText,
   toWaitingOrders,
   type ToneContext,
 } from './eventTones';
@@ -25,6 +27,31 @@ const ctx = (extra: Partial<ToneContext> = {}): ToneContext => ({
   now: NOW,
   lastToneAt: 0,
   ...extra,
+});
+
+describe('Settings → Sounds says the printer beep’s gap from the gap the till keeps (PRINTER_TONE_GAP_MS)', () => {
+  it('today: at most once every 2 minutes', () => {
+    expect(PRINTER_TONE_GAP_MS).toBe(120_000);
+    expect(printerProblemRuleText()).toBe(
+      'A short falling beep when a ticket or receipt does not print. At most once every 2 minutes, so a printer that is off does not beep on every sale.',
+    );
+  });
+
+  it('another gap, other words', () => {
+    expect(printerProblemRuleText(60_000)).toContain('At most once every 1 minute,');
+    expect(printerProblemRuleText(5 * 60_000)).toContain('At most once every 5 minutes,');
+    expect(printerProblemRuleText(90_000)).toContain('At most once every 90 seconds,');
+    expect(gapWords(1_000)).toBe('1 second');
+  });
+
+  it('the Sounds screen uses it and types no number of its own', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { dirname, join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const screen = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'SoundSettings.tsx'), 'utf8');
+    expect(screen).toMatch(/body=\{printerProblemRuleText\(\)\}/);
+    expect(screen).not.toMatch(/once every 2 minutes/);
+  });
 });
 
 describe('printer problem', () => {

@@ -1,8 +1,8 @@
 /**
- * Settings → Staff & kitchen timing (owner, 2026-09-27: "everything should
- * be editable for admin").
+ * Settings → Staff & kitchen (owner, 2026-09-27: "everything should be
+ * editable for admin").
  *
- * Only timings, two cards, each its own synced setting:
+ * The timings, two cards, each its own synced setting:
  *  - staff ('staff.timing'): when an idle owner or manager is signed out,
  *    the longest login, a manager's step-in, and the cashier's free reprints
  *    — read by auth-service, the step-in hold and reprint-policy on both
@@ -10,6 +10,8 @@
  *    DUPLICATE marks and the print log never change;
  *  - kitchen ('kitchen.timing'): the Live Orders colours and the "waiting
  *    too long" reminders.
+ * Then the opening float (this till's own: OpeningFloatCard) and the
+ * Cancel / Refund / Cash out reason buttons (synced: ReasonButtonsCard).
  * Who can do what stays in the role table: no permission switches here. The
  * owner alone (the main process refuses anyone else); the defaults are
  * exactly what the till did before.
@@ -38,6 +40,8 @@ import {
   type StaffTimingForm,
 } from './shop-rules/timingForm';
 import { kitchenTimingExample, kitchenTimingSummary, staffTimingExample, staffTimingSummary } from './shop-rules/timingWords';
+import { OpeningFloatCard } from './OpeningFloatCard';
+import { ReasonButtonsCard } from './ReasonButtonsCard';
 
 const inputClass =
   'w-24 rounded-lg border border-stone-300 px-3 py-2 text-sm dark:border-stone-700 dark:bg-stone-800 disabled:opacity-60';
@@ -48,13 +52,21 @@ export function TimingSettings() {
   const staffS = useShopSetting('staff.timing');
   const kitchenS = useShopSetting('kitchen.timing');
 
-  if (staffS.q.isError || kitchenS.q.isError) {
-    return <p className="py-6 text-center text-stone-500">Could not load Staff &amp; kitchen timing.</p>;
-  }
-  if (!staffS.q.data || !kitchenS.q.data) {
-    return <p className="py-6 text-center text-stone-500">Loading…</p>;
-  }
-  return <TimingCards staff={staffS} kitchen={kitchenS} />;
+  const timings =
+    staffS.q.isError || kitchenS.q.isError ? (
+      <p className="py-6 text-center text-stone-500">Could not load the staff and kitchen timings.</p>
+    ) : !staffS.q.data || !kitchenS.q.data ? (
+      <p className="py-6 text-center text-stone-500">Loading…</p>
+    ) : (
+      <TimingCards staff={staffS} kitchen={kitchenS} />
+    );
+  return (
+    <div className="space-y-6">
+      {timings}
+      <OpeningFloatCard />
+      <ReasonButtonsCard />
+    </div>
+  );
 }
 
 function NumberFields<F extends string>({
@@ -120,8 +132,8 @@ function TimingCards({
   return (
     <div className="space-y-6">
       <p className="text-sm text-stone-600 dark:text-stone-400">
-        How long logins last, and when Live Orders warns about an order. Only the timings: who can do what stays as it is. Both
-        tills use them as soon as they are linked.
+        How long logins last, when Live Orders warns about an order, the opening float and the reason buttons. Who can do what
+        stays as it is. Both tills use the timings and the buttons as soon as they are linked; the opening float is this till’s own.
       </p>
 
       <SettingCard

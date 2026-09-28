@@ -12,7 +12,8 @@ import { approvalProblem } from '../../components/secret/secretRules';
 import type { OrderSnapshot, PaymentMethod } from '@cheeseoclock/shared-types';
 import { parseRupeesToCents } from './boardLogic';
 import { FoodMadeQuestion, useFoodMadeAnswer } from './FoodMadeQuestion';
-import { REFUND_REASONS, refundToast } from './stockCopy';
+import { reasonChips, refundToast } from './stockCopy';
+import { useOrderReasons } from '../settings/shop-rules/useShopSetting';
 import { shortOrderNumber } from './historyFilters';
 
 interface Props {
@@ -47,6 +48,8 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
   const { toast } = useToast();
   const fm = useFoodMadeAnswer(snap);
   const short = shortOrderNumber(snap.order.orderNumber);
+  // The owner's buttons (Settings → Staff & kitchen); any other reason can still be typed.
+  const chips = reasonChips(useOrderReasons().refund);
 
   const partialCents = mode === 'partial' ? parseRupeesToCents(partialStr) : 0;
   const refundAmountCents = mode === 'full' ? remainingCents : Number.isFinite(partialCents) ? partialCents : 0;
@@ -80,7 +83,7 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
     setReason(label);
     // A part refund moves no stock: a chip answers nothing then. Otherwise it
     // fills the question only while nobody has answered it.
-    if (endsOrder) fm.pickReason(REFUND_REASONS, label);
+    if (endsOrder) fm.pickReason(chips, label);
   }
 
   function submit() {
@@ -242,7 +245,7 @@ export function RefundOrderDialog({ snap, onClose, onDone }: Props) {
                   Reason
                 </label>
                 <div className="mb-1.5 flex flex-wrap gap-1.5">
-                  {REFUND_REASONS.map((r) => (
+                  {chips.map((r) => (
                     <button
                       key={r.label}
                       type="button"
