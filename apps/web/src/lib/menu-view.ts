@@ -275,6 +275,17 @@ function saysPickupOnly(description: string | null | undefined): boolean {
 }
 
 /**
+ * Can this size go in the cart now? A pick-up-only size only while online
+ * pick-up is on. The one rule for the card's size buttons, the choices
+ * sheet's sizes and its Add, and the add to the cart; the checkout and the
+ * server still refuse a delivery with it (checkout-validation, the order
+ * route).
+ */
+export function sizeOrderable(variant: Pick<MenuVariant, 'pickupOnly'>, canPickup: boolean): boolean {
+  return !variant.pickupOnly || canPickup;
+}
+
+/**
  * The card's "pick-up only" words beside its size buttons: 'Pick-up only'
  * when the whole card is (as before), the sizes that are when only some are
  * ('Large 12" pick-up only'), else null.

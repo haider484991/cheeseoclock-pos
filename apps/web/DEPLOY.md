@@ -202,10 +202,12 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   new item comes in on the website). A **fresh start** removes the items
   and categories but gives the file's item or category of the SAME name
   (ignoring case, spaces and punctuation) the setting the removed one had.
-  Its preview counts the settings it can't keep (set on items or categories
-  the file does not bring back by that name): anything the file brings back
-  under another name is on the website, and the import publishes the menu
-  at once — set those again in Menu and publish.
+  Its preview counts the settings it can't keep — set on items or categories
+  the file does not bring back by that name, or on two of one name set
+  differently (nothing is carried for that name) — and says nothing about
+  the website when it keeps them all. Whatever of those the file brings back
+  is on the website, and the import publishes the menu at once — set them
+  again in Menu and publish.
 - A deal's choices are not items: an item set "Not on the website" or
   "Pick-up only" is still a choice in any deal that offers it ("Large:
   Fajita Pizza"), for delivery too. To stop that, take the choice out of the
@@ -230,7 +232,9 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   order is refused with how much to add, a pick-up never is. An item set
   "Pick-up only" shows as pick-up only and a delivery with it is refused;
   for a pizza set pick-up only in one size, only that size is (the other
-  sizes still deliver).
+  sizes still deliver) — on the card and in its choices sheet alike: with
+  online pick-up off that size shows "Pick-up only" and can't be chosen or
+  added; with it on, it can, and says it is pick-up only.
 
 ## Free-tier limits (plenty for launch)
 

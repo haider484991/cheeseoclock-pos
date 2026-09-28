@@ -40,13 +40,19 @@ export const ANNOUNCEMENT_MAX = 120;
 export const MIN_DELIVERY_ORDER_MAX_CENTS = 500_000;
 
 /**
- * Characters a website message may not hold: control characters (a line
- * break or a tab too — a message is ONE line), the line and paragraph
- * separators, and the marks that reverse or embed text direction (they can
- * make the words read differently from what was typed).
+ * Characters a website message may not hold, anywhere in it: control
+ * characters (a line break or a tab too — a message is ONE line), the line
+ * and paragraph separators, the marks that reverse or embed text direction
+ * (they can make the words read differently from what was typed: U+200E,
+ * U+200F, U+202A–U+202E, U+2066–U+2069, and the Arabic letter mark U+061C an
+ * Urdu keyboard can type), and the invisible characters (the zero-width
+ * space, non-joiner and joiner U+200B–U+200D, the word joiner and invisible
+ * operators U+2060–U+2064, the byte order mark U+FEFF). Urdu letters
+ * (U+0600–U+06FF but U+061C) are words like any other. The till's Save and
+ * the website's check both use this one rule.
  */
 // eslint-disable-next-line no-control-regex
-export const WEBSITE_TEXT_FORBIDDEN_RE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+export const WEBSITE_TEXT_FORBIDDEN_RE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
 
 /** Today: no notice. */
 export const NO_CLOSED_NOTICE: Readonly<ClosedNotice> = Object.freeze({ text: '', until: null });

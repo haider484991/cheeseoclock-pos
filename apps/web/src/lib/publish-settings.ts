@@ -56,9 +56,17 @@ export function websiteBlockProblem(
  */
 export const KEPT_MESSAGE_FIELDS = ['closedNotice', 'announcement', 'minDeliveryOrderCents'] as const;
 
-/** `incoming` with each message field it lacks taken from `held` (the block the website holds; null = none). */
-export function withKeptMessages(incoming: PublishedSettings, held: PublishedSettings | null): PublishedSettings {
-  if (!held) return incoming;
+/**
+ * `incoming` with each message field it lacks taken from `stored`: the block
+ * the row holds, AS STORED (null = none) — read or not, as the publish's
+ * statement keeps them straight from the row (jsonb). So a Save and a
+ * publish keep the same fields even when the stored block does not read (a
+ * hand-edited row) or one of its messages does not (it reads as absent
+ * either way: parseStoredSettings). Only a JSON object holds fields.
+ */
+export function withKeptMessages(incoming: PublishedSettings, stored: unknown): PublishedSettings {
+  if (stored === null || typeof stored !== 'object' || Array.isArray(stored)) return incoming;
+  const held = stored as Record<string, unknown>;
   const out: Record<string, unknown> = { ...incoming };
   for (const key of KEPT_MESSAGE_FIELDS) {
     if (out[key] === undefined && held[key] !== undefined) out[key] = held[key];
@@ -244,8 +252,9 @@ export async function storeSettingsAlone(
     const patched = withFeeItems(menu, feeItems);
     const problem = websiteBlockProblem(settings, patched);
     if (problem) return { kind: 'invalid', problem };
-    // A message the block lacks (a v0.7.29 till's block) keeps the one stored (withKeptMessages).
-    const kept = withKeptMessages(settings, heldBlock);
+    // A message the block lacks (a v0.7.29 till's block) keeps the one stored, as the row holds it
+    // (withKeptMessages: the publish's statement's rule, the stored block read or not).
+    const kept = withKeptMessages(settings, storedRaw ?? null);
     const doc: PublishedMenu = { ...patched, settings: kept };
     const written = (await sql()`
       UPDATE site_menu SET menu_json = ${JSON.stringify(doc)}

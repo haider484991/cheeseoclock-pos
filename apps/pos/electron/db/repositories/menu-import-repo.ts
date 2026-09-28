@@ -187,8 +187,9 @@ function emptyMenu(live: MenuSnapshot, feeItemIds: ReadonlySet<string>): MenuSna
  * category of the SAME name the setting its namesake had — the "kept on the
  * till" rule of an ordinary import, and the menu the import publishes at
  * once (menu:importApply) keeps them. Two removed rows of one name that were
- * set differently carry nothing (never guessed). A value this version does
- * not know (a newer till's) is not carried.
+ * set differently carry nothing (never guessed): that name's setting is lost
+ * whatever the file holds, and the preview counts it. A value this version
+ * does not know (a newer till's) is not carried.
  */
 interface WebsiteCarry {
   items: Map<string, WebAvailability>;
@@ -196,6 +197,9 @@ interface WebsiteCarry {
   /** Items and categories set so, by name — what the preview weighs against the file. */
   setItems: string[];
   setCategories: string[];
+  /** Names whose removed rows were set differently: nothing carried, so always lost. */
+  conflictingItems: string[];
+  conflictingCategories: string[];
 }
 
 function websiteCarryOf(db: AppDatabase, feeItemIds: ReadonlySet<string>): WebsiteCarry {
@@ -214,7 +218,10 @@ function websiteCarryOf(db: AppDatabase, feeItemIds: ReadonlySet<string>): Websi
     else items.set(key, w);
   }
   const carried = new Map<string, WebAvailability>();
+  const conflictingItems: string[] = [];
   for (const [key, w] of items) {
+    // Set differently (one of them at least pick-up only or off): the new row is on the website.
+    if (w === null) conflictingItems.push(key);
     if (w === null || w === 'on') continue;
     carried.set(key, w);
     setItems.push(key);
@@ -230,8 +237,13 @@ function websiteCarryOf(db: AppDatabase, feeItemIds: ReadonlySet<string>): Websi
     else categories.set(key, off);
   }
   const offCategories = new Set<string>();
-  for (const [key, off] of categories) if (off === true) offCategories.add(key);
-  return { items: carried, offCategories, setItems, setCategories: [...offCategories] };
+  const conflictingCategories: string[] = [];
+  for (const [key, off] of categories) {
+    if (off === true) offCategories.add(key);
+    // One off the website and one on it: the new category is on the website.
+    else if (off === null) conflictingCategories.push(key);
+  }
+  return { items: carried, offCategories, setItems, setCategories: [...offCategories], conflictingItems, conflictingCategories };
 }
 
 function freshStartOf(
@@ -242,14 +254,18 @@ function freshStartOf(
 ): MenuImportFreshStart {
   const kept = emptyMenu(live, feeItemIds);
   const keptItems = new Set(kept.items.map((i) => i.id));
-  // The website settings the fresh start can't keep: set on a row it removes whose name the file
-  // does not bring back (websiteCarryOf) — what the file brings back under another name is on the
-  // website, and the import publishes the menu at once.
+  // The website settings the fresh start can't keep (websiteCarryOf): set on a row it removes whose
+  // name the file does not bring back — what the file brings back under another name is on the
+  // website, and the import publishes the menu at once — and every name whose removed rows were set
+  // differently (nothing is carried for it, file or not).
   const carry = websiteCarryOf(db, feeItemIds);
   const fileItems = new Set(ops.items.flatMap((o) => (o.create ? [normalizeName(o.create.name)] : [])));
   const fileCategories = new Set(ops.categories.flatMap((c) => (c.create ? [normalizeName(c.create.name)] : [])));
   const lost =
-    carry.setItems.filter((k) => !fileItems.has(k)).length + carry.setCategories.filter((k) => !fileCategories.has(k)).length;
+    carry.setItems.filter((k) => !fileItems.has(k)).length +
+    carry.setCategories.filter((k) => !fileCategories.has(k)).length +
+    carry.conflictingItems.length +
+    carry.conflictingCategories.length;
   return {
     items: live.items
       .filter((i) => !keptItems.has(i.id))

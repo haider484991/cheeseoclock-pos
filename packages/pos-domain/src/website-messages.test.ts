@@ -122,6 +122,22 @@ describe('the smallest website delivery order', () => {
 });
 
 describe('what a website message may hold', () => {
+  it('refuses, anywhere in the words, the Arabic letter mark and the invisible characters: zero-width space, non-joiner and joiner, word joiner and invisible operators, byte order mark', () => {
+    for (const code of [0x061c, 0x200b, 0x200c, 0x200d, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xfeff]) {
+      for (const bad of [`Closed${String.fromCharCode(code)}today`, `${String.fromCharCode(code)}Closed`, `Closed${String.fromCharCode(code)}`]) {
+        expect({ code: code.toString(16), refused: WEBSITE_TEXT_FORBIDDEN_RE.test(bad) }).toEqual({ code: code.toString(16), refused: true });
+      }
+    }
+  });
+
+  it('keeps every other Urdu character (U+0600–U+06FF but U+061C) and the characters beside the new ones', () => {
+    const allowed = [0x200a, 0x2010, 0x205f, 0x2065, 0xfefe, 0xff01];
+    for (let code = 0x0600; code <= 0x06ff; code += 1) if (code !== 0x061c) allowed.push(code);
+    const refused = allowed.filter((code) => WEBSITE_TEXT_FORBIDDEN_RE.test(`a${String.fromCharCode(code)}b`));
+    expect(refused.map((c) => c.toString(16))).toEqual([]);
+    expect(WEBSITE_TEXT_FORBIDDEN_RE.test('بند ہے — کل کھلے گا')).toBe(false);
+  });
+
   it('refuses control characters, a line break or tab, line/paragraph separators and direction marks; plain words, Urdu and dashes are fine', () => {
     for (const bad of ['a\nb', 'a\rb', 'a\tb', 'a\u0000b', 'a\u007fb', 'a\u0085b', 'a\u2028b', 'a\u2029b', 'a\u202eb', 'a\u2066b', 'a\u200fb']) {
       expect({ bad, refused: WEBSITE_TEXT_FORBIDDEN_RE.test(bad) }).toEqual({ bad, refused: true });

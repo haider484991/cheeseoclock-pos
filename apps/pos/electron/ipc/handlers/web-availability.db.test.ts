@@ -403,6 +403,16 @@ live('Menu → On the website: what goes to the website', () => {
     expect(settingsBlockFor(db as AppDatabase, m, DEV)).toMatchObject({ problem: null, block: expect.any(Object) });
   });
 
+  it('a delivery charge whose row says pick-up only (an older or newer till, a hand edit) is published WITHOUT pickupOnly: the website adds the fee to deliveries', async () => {
+    db.prepare(`UPDATE menu_items SET web_availability = 'pickup_only' WHERE id = ?`).run(menu.d200);
+    const { menu: m } = await published();
+    const fees = m.categories.find((c) => c.name === 'Delivery Charges')!;
+    expect(fees.items.map((i) => [i.name, 'pickupOnly' in i])).toEqual([
+      ['Delivery Charge (Rs 200)', false],
+      ['Delivery Charge (Rs 250)', false],
+    ]);
+  });
+
   it('a value this version does not know (a newer till’s) reads — and publishes — as on the website', async () => {
     db.prepare(`UPDATE menu_items SET web_availability = 'dine_in_only' WHERE id = ?`).run(menu.side);
     db.prepare(`UPDATE categories SET is_on_website = 7 WHERE id = ?`).run(menu.drinks);
@@ -415,6 +425,16 @@ live('Menu → On the website: what goes to the website', () => {
     h.session = MANAGER;
     await data('menu:updateItem', { id: menu.side, basePriceCents: 31_000 });
     expect(itemRow(db, menu.side)).toMatchObject({ web_availability: 'dine_in_only', base_price_cents: 31_000 });
+  });
+
+  it('a category edit of anything else leaves a value this version does not know as it is (7 stays 7), and off stays off', async () => {
+    db.prepare(`UPDATE categories SET is_on_website = 7 WHERE id = ?`).run(menu.food);
+    h.session = MANAGER;
+    await data('menu:updateCategory', { id: menu.drinks, isOnWebsite: false });
+    await data('menu:updateCategory', { id: menu.food, name: 'Test hot food' });
+    await data('menu:updateCategory', { id: menu.drinks, name: 'Test cold drinks' });
+    expect(categoryRow(db, menu.food)).toMatchObject({ is_on_website: 7, name: 'Test hot food' });
+    expect(categoryRow(db, menu.drinks)).toMatchObject({ is_on_website: 0, name: 'Test cold drinks' });
   });
 
   it('a photo too big for the website is named (the item goes with no picture); a hidden item’s is not; a normal photo goes', async () => {
@@ -681,17 +701,36 @@ live('a menu file import keeps where things sell on the website ("kept on the ti
     expect(JSON.parse(image.payload_json)).toMatchObject({ webAvailability: 'pickup_only' });
   });
 
-  it('two removed items of one name set differently carry nothing (never guessed)', async () => {
+  it('two removed items of one name set differently carry nothing (never guessed) — and the preview counts that name as lost', async () => {
     h.session = MANAGER;
     await data('menu:updateItem', { id: menu.burger, webAvailability: 'pickup_only' });
     const twin = await data<MenuItem>('menu:createItem', { categoryId: menu.drinks, name: 'Test Burger', basePriceCents: 1_000, taxCategoryId: menu.tax, webAvailability: 'off' });
     expect(twin.webAvailability).toBe('off');
-    const { applyMenuImport } = await import('../../db/repositories/menu-import-repo.js');
-    applyMenuImport(db as never, file([{ name: 'Test Burger', category: 'Test food', priceCents: 61_000, recipe: [] }]), 'test.json', OWNER_ACTOR, {
-      fresh: true,
-    });
+    const { applyMenuImport, planMenuImportFromDb } = await import('../../db/repositories/menu-import-repo.js');
+    // The file brings the name back, yet neither setting can be kept: the new row is on the website.
+    const f = file([{ name: 'Test Burger', category: 'Test food', priceCents: 61_000, recipe: [] }]);
+    expect(planMenuImportFromDb(db as never, f, { fresh: true }).preview.fresh).toMatchObject({ websiteSettingsLost: 1 });
+    applyMenuImport(db as never, f, 'test.json', OWNER_ACTOR, { fresh: true });
     expect(db.prepare(`SELECT web_availability FROM menu_items WHERE name = 'Test Burger' AND deleted_at IS NULL`).all()).toEqual([
       { web_availability: 'on' },
+    ]);
+  });
+
+  it('one of two namesakes set and the other left on the website: nothing carried, counted as lost — an item and a category', async () => {
+    h.session = MANAGER;
+    await data('menu:updateItem', { id: menu.side, webAvailability: 'off' });
+    await data('menu:createItem', { categoryId: menu.drinks, name: 'test side', basePriceCents: 1_000, taxCategoryId: menu.tax });
+    await data('menu:updateCategory', { id: menu.drinks, isOnWebsite: false });
+    await data('menu:createCategory', { name: 'TEST DRINKS', displayOrder: 4, colorHex: '#123456' });
+    const { applyMenuImport, planMenuImportFromDb } = await import('../../db/repositories/menu-import-repo.js');
+    const f = file([{ name: 'Test Side', category: 'Test drinks', priceCents: 31_000, recipe: [] }]);
+    expect(planMenuImportFromDb(db as never, f, { fresh: true }).preview.fresh).toMatchObject({ websiteSettingsLost: 2 });
+    applyMenuImport(db as never, f, 'test.json', OWNER_ACTOR, { fresh: true });
+    expect(db.prepare(`SELECT web_availability FROM menu_items WHERE name = 'Test Side' AND deleted_at IS NULL`).all()).toEqual([
+      { web_availability: 'on' },
+    ]);
+    expect(db.prepare(`SELECT is_on_website FROM categories WHERE name = 'Test drinks' AND deleted_at IS NULL`).all()).toEqual([
+      { is_on_website: 1 },
     ]);
   });
 

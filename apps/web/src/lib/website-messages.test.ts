@@ -698,6 +698,39 @@ describe('a v0.7.29 till’s block keeps what the website stored; a v0.7.30 bloc
       expect(await storedSettings()).toEqual({ ...old, ...MESSAGES });
     }
   });
+
+  it('a stored block that does not read, or a stored message that does not (hand-edited rows): a publish and a Save keep the same message fields, as the row holds them', async () => {
+    const m = menu();
+    const EDITS: Array<[string, string]> = [
+      // Two areas with one id: the whole block does not read (the pages use the built-in areas).
+      ['the block', `UPDATE site_menu SET menu_json = jsonb_set(menu_json, '{settings,zones,1,id}', menu_json #> '{settings,zones,0,id}') WHERE id = 1`],
+      // A notice too long: the block reads, that message reads as absent.
+      ['a message', `UPDATE site_menu SET menu_json = jsonb_set(menu_json, '{settings,closedNotice,text}', to_jsonb(repeat('x', 500))) WHERE id = 1`],
+    ];
+    const messagesOf = (block: Record<string, unknown>) =>
+      Object.fromEntries(KEPT_MESSAGE_FIELDS.filter((k) => k in block).map((k) => [k, block[k]]));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const [what, edit] of EDITS) {
+        const after: Record<string, unknown> = {};
+        for (const route of ['publish', 'save'] as const) {
+          await db.pg.query('DELETE FROM site_menu', []);
+          await publish(m, tillBlock(m, { rev: 1, website: MESSAGES }));
+          await db.pg.query(edit, []);
+          const held = (await storedSettings())!;
+          expect(parseStoredSettings(held) === null, what).toBe(what === 'the block');
+          const old = tillBlock(m, { rev: 2, device: 'till-2' }); // a v0.7.29 till: no message fields
+          const r = route === 'publish' ? await publish(m, old) : await save(old);
+          expect(r.json.data, `${what}, ${route}`).toMatchObject({ settings: 'stored' });
+          after[route] = await storedSettings();
+          expect(after[route], `${what}, ${route}`).toEqual({ ...old, ...messagesOf(held) });
+        }
+        expect(after['save'], what).toEqual(after['publish']);
+      }
+    } finally {
+      quiet.mockRestore();
+    }
+  });
 });
 
 describe('the bounds', () => {
@@ -715,6 +748,16 @@ describe('the bounds', () => {
     ['a minimum over Rs 5,000', { minDeliveryOrderCents: 500_100 }],
     ['a minimum in part rupees', { minDeliveryOrderCents: 100_050 }],
     ['a negative minimum', { minDeliveryOrderCents: -100 }],
+    // The Arabic letter mark and the invisible characters, anywhere in the words (the till's Save has the same rule).
+    ...[0x061c, 0x200b, 0x200c, 0x200d, 0x2060, 0x2064, 0xfeff].flatMap((code): Array<[string, Record<string, unknown>]> => {
+      const c = String.fromCharCode(code);
+      const u = `U+${code.toString(16).toUpperCase().padStart(4, '0')}`;
+      return [
+        [`${u} inside the closed notice`, { closedNotice: { text: `Closed${c}today`, until: null } }],
+        [`${u} at the start of the announcement`, { announcement: { on: true, text: `${c}New wrap` } }],
+        [`${u} at the end of the closed notice`, { closedNotice: { text: `Closed${c}`, until: null } }],
+      ];
+    }),
   ];
 
   for (const [what, over] of BAD) {
@@ -738,6 +781,17 @@ describe('the bounds', () => {
       minDeliveryOrderCents: 500_000,
     }) as unknown as PublishedSettings;
     expect((await publish(m, block)).json.data).toMatchObject({ settings: 'stored' });
+    expect(await storedSettings()).toEqual(block);
+  });
+
+  it('takes Urdu words (its letters are words; only the marks and invisible characters are refused)', async () => {
+    const m = menu();
+    const block = at({
+      closedNotice: { text: 'عید کی چھٹی — پیر کو کھلے گا', until: null },
+      announcement: { on: true, text: 'نیا ریپ اس ہفتے' },
+    }) as unknown as PublishedSettings;
+    expect((await publish(m, block)).json.data).toMatchObject({ settings: 'stored' });
+    expect((await save(block)).json.data).toMatchObject({ settings: 'stored' });
     expect(await storedSettings()).toEqual(block);
   });
 

@@ -94,6 +94,10 @@ describe('Settings → Kitchen & stock', () => {
     expect(words).toContain('What a menu file may change');
     expect(words).toContain('the import changes it to Rs 1,300');
     expect(words).toContain('ingredient prices stay the till’s');
+    // The website settings are kept but not listed in the preview: the intro says so.
+    expect(words).toContain(
+      'where each item and category sells on the website (Menu → On the website) is always kept on the till, so the import preview does not list it. The preview lists everything else kept on the till before anything is saved.',
+    );
   });
 
   it('the owner’s values: his numbers, his reasons (a renamed one says what it was; a hidden one says so), and the examples follow', () => {

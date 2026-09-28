@@ -317,7 +317,7 @@ function KitchenStockCards({
         card={importCard}
         title="What a menu file may change"
         icon={<FileInput className="h-5 w-5" />}
-        intro="Menu → Import, on what the till already has. New items, choices, ingredients and recipes always come in; nothing is deleted, renamed or moved; stock is never changed; ingredient prices stay the till’s (the sheet only prices a new ingredient or one with none); where each item and category sells on the website (Menu → On the website) is always kept on the till. The import preview lists everything kept on the till before anything is saved."
+        intro="Menu → Import, on what the till already has. New items, choices, ingredients and recipes always come in; nothing is deleted, renamed or moved; stock is never changed; ingredient prices stay the till’s (the sheet only prices a new ingredient or one with none); where each item and category sells on the website (Menu → On the website) is always kept on the till, so the import preview does not list it. The preview lists everything else kept on the till before anything is saved."
         describe={importPolicySummary}
         dirty={importDirty}
         problem={null}

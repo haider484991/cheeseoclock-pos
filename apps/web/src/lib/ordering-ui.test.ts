@@ -1,0 +1,245 @@
+/**
+ * The ordering page's client components as the server renders them (static
+ * markup: effects do not run, so this is what the page is SERVED): the
+ * /menu closed banner with the owner's notice, the /menu header's
+ * announcement, a size set "Pick-up only" on the card and in the choices
+ * sheet, and the cart's smallest-delivery-order note (v0.7.30, sweep B1 + B5).
+ * Every name and amount is made up.
+ */
+import { describe, expect, it, vi } from 'vitest';
+import type { PublishedMenuItem, PublishedModifierGroup } from '@cheeseoclock/shared-types';
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: () => {}, replace: () => {}, refresh: () => {}, back: () => {} }),
+}));
+
+// The components are JSX compiled for React in scope (as Next does it): give the test the same.
+const React = await import('react');
+(globalThis as { React?: unknown }).React = React;
+const { renderToStaticMarkup } = await import('react-dom/server');
+const { OrderingApp } = await import('@/components/OrderingApp');
+const { ItemSheet } = await import('@/components/ordering/ItemSheet');
+const { MinimumNote } = await import('@/components/ordering/cart-ui');
+const { DEFAULT_FACTS } = await import('@/lib/delivery-facts');
+const { buildMenuView, sizeOrderable } = await import('@/lib/menu-view');
+const { publicMenu } = await import('@/lib/public-menu');
+
+type AppProps = Parameters<typeof OrderingApp>[0];
+type CartProps = Parameters<typeof MinimumNote>[0];
+
+function item(id: string, name: string, priceRs: number, over: Partial<PublishedMenuItem> = {}): PublishedMenuItem {
+  return {
+    posItemId: id,
+    name,
+    description: null,
+    basePriceCents: priceRs * 100,
+    taxRateBps: 1500,
+    imageUrl: null,
+    sortOrder: 0,
+    modifierGroups: [],
+    ...over,
+  };
+}
+
+const STORE = { name: 'Test Shop', phone: null, whatsapp: null, addressLine: null, tagline: null };
+
+/** A pizza in two sizes, the Large set "Pick-up only" on the till, and a side. */
+const MENU = publicMenu({
+  categories: [
+    {
+      posCategoryId: 'c-pizza',
+      name: 'Test Pizzas',
+      displayOrder: 0,
+      items: [
+        item('pz-m', 'Test Pizza — Medium', 900, { sortOrder: 1 }),
+        item('pz-l', 'Test Pizza — Large', 1400, { sortOrder: 2, pickupOnly: true }),
+      ],
+    },
+    { posCategoryId: 'c-side', name: 'Test Sides', displayOrder: 1, items: [item('side', 'Test Fries', 300)] },
+  ],
+  publishedAt: '2026-09-27T09:00:00.000Z',
+  store: STORE,
+});
+
+/** Today's closed explanation on /menu (no notice). */
+const TODAY_CLOSED = 'The kitchen isn’t accepting website orders at the moment';
+
+function app(over: Partial<AppProps> = {}): string {
+  const props: AppProps = {
+    menu: MENU,
+    acceptingOrders: false,
+    pickupAvailable: false,
+    pickupDiscountPercent: 10,
+    deliveryFacts: DEFAULT_FACTS,
+    ...over,
+  };
+  return renderToStaticMarkup(React.createElement(OrderingApp, props));
+}
+
+describe('/menu as served', () => {
+  it('closed with the owner’s notice: the banner says the notice instead of the explanation; its heading and WhatsApp stay', () => {
+    const html = app({ closedNotice: 'Test closed for a holiday until Monday' });
+    expect(html).toContain('Test closed for a holiday until Monday');
+    expect(html).not.toContain(TODAY_CLOSED);
+    expect(html).toContain('not taking online orders right now');
+    expect(html).toMatch(/wa\.me|whatsapp/i);
+  });
+
+  it('closed with no notice: today’s words', () => {
+    expect(app()).toContain(TODAY_CLOSED);
+  });
+
+  it('the announcement shows in the header only when the facts carry it', () => {
+    expect(app({ deliveryFacts: { ...DEFAULT_FACTS, announcement: 'Test new wrap this week' } })).toContain('Test new wrap this week');
+    expect(app()).not.toContain('★');
+  });
+
+  it('one size pick-up only, pick-up off: the Large is a dashed "Pick-up only" chip, the Medium stays a button', () => {
+    const html = app({ acceptingOrders: true, pickupAvailable: false });
+    const card = html.slice(html.indexOf('Test Pizza'), html.indexOf('Test Fries'));
+    expect(card).toContain('border-dashed');
+    expect(card.match(/<button/g) ?? []).toHaveLength(1);
+    expect(card).toMatch(/Medium/);
+  });
+});
+
+describe('the cart’s smallest-delivery-order note', () => {
+  function note(over: Partial<CartProps>): string {
+    const props: CartProps = {
+      cart: [{ key: 'k', item: item('side', 'Test Fries', 300), label: 'Test Fries', quantity: 1, modifierIds: [], notes: null }],
+      subtotal: 30_000,
+      deliveryFee: 0,
+      discount: 0,
+      zone: undefined,
+      tax: 0,
+      total: 30_000,
+      setQty: () => {},
+      onClear: () => {},
+      fulfilment: 'delivery',
+      canPickup: true,
+      pickupPct: 10,
+      onFulfilment: () => {},
+      pickupOnlyInCart: [],
+      feeRange: 'Rs 200–250',
+      deliveryNote: '',
+      minDeliveryOrderCents: 100_000,
+      ...over,
+    };
+    return renderToStaticMarkup(React.createElement(MinimumNote, props));
+  }
+
+  it('a delivery under the minimum says how much more; a pick-up, or no minimum, says nothing', () => {
+    expect(note({})).toContain('Rs 700');
+    expect(note({ fulfilment: 'pickup' })).toBe('');
+    expect(note({ minDeliveryOrderCents: 0 })).toBe('');
+  });
+});
+
+describe('the choices sheet of a pizza whose Large is set "Pick-up only"', () => {
+  const crust = (id: string, modifierId: string): PublishedModifierGroup => ({
+    posGroupId: id,
+    name: 'Crust',
+    selectionType: 'single',
+    minSelect: 0,
+    maxSelect: 1,
+    isRequired: false,
+    sortOrder: 0,
+    modifiers: [{ posModifierId: modifierId, name: 'Thin', priceDeltaCents: 0, isDefault: false, sortOrder: 0 }],
+  });
+  function pizzaCard(largePickupOnly: boolean) {
+    const menu = publicMenu({
+      categories: [
+        {
+          posCategoryId: 'c-pizza',
+          name: 'Test Pizzas',
+          displayOrder: 0,
+          items: [
+            item('pz-m', 'Test Pizza — Medium', 900, { sortOrder: 1, modifierGroups: [crust('g-m', 'm-thin-m')] }),
+            item('pz-l', 'Test Pizza — Large', 1400, {
+              sortOrder: 2,
+              modifierGroups: [crust('g-l', 'm-thin-l')],
+              ...(largePickupOnly ? { pickupOnly: true } : {}),
+            }),
+          ],
+        },
+      ],
+      publishedAt: '2026-09-27T09:00:00.000Z',
+      store: STORE,
+    });
+    const card = buildMenuView(menu)
+      .flatMap((s) => s.cards)
+      .find((c) => c.name === 'Test Pizza');
+    if (!card) throw new Error('no pizza card');
+    return card;
+  }
+  function sheet(canPickup: boolean, initialVariant = 0, largePickupOnly = true): string {
+    return renderToStaticMarkup(
+      React.createElement(ItemSheet, {
+        card: pizzaCard(largePickupOnly),
+        initialVariant,
+        canPickup,
+        onClose: () => {},
+        onConfirm: () => {},
+      }),
+    );
+  }
+  /** The sheet's Size block. */
+  function sizes(html: string): string {
+    const start = html.indexOf('>Size</legend>');
+    return html.slice(start, html.indexOf('</fieldset>', start));
+  }
+  /** The sheet's Add button. */
+  function addButton(html: string): string {
+    const buttons = html.match(/<button[^>]*>[^<]*<\/button>/g) ?? [];
+    return buttons[buttons.length - 1] ?? '';
+  }
+
+  it('is one size only: the Large is pick-up only, the Medium is not, and the card is not', () => {
+    const card = pizzaCard(true);
+    expect(card.pickupOnly).toBe(false);
+    expect(card.variants.map((v) => v.pickupOnly)).toEqual([false, true]);
+  });
+
+  it('online pick-up off: the Large shows "Pick-up only" and is no button (it can’t be chosen); the Medium adds as before', () => {
+    const html = sheet(false);
+    const block = sizes(html);
+    expect(block.match(/<button/g) ?? []).toHaveLength(1);
+    expect(block).toMatch(/<button[^>]*aria-pressed="true"[^>]*>.*Medium/);
+    expect(block).toMatch(/border-dashed[^>]*>.*Large.*Pick-up only/);
+    expect(addButton(html)).toContain('Add · Rs 900');
+    expect(addButton(html)).toContain('aria-disabled="false"');
+  });
+
+  it('online pick-up on: the Large can be chosen and says it is pick-up only; the Medium says nothing of it', () => {
+    const block = sizes(sheet(true));
+    const buttons = block.match(/<button[^>]*>.*?<\/button>/g) ?? [];
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]).toMatch(/Medium/);
+    expect(buttons[0]).not.toMatch(/pick-?up only/i);
+    expect(buttons[1]).toMatch(/Large.*Pick-up only/);
+    expect(block).not.toContain('border-dashed');
+  });
+
+  it('opened on the Large while pick-up was on, then pick-up went off: the Add says pick-up only and adds nothing', () => {
+    const add = addButton(sheet(false, 1));
+    expect(add).toContain('aria-disabled="true"');
+    expect(add).toMatch(/Large.*pick-up only/);
+    expect(add).not.toContain('Add');
+    // Pick-up on: the same Large adds.
+    expect(addButton(sheet(true, 1))).toContain('Add · Rs 1,400');
+  });
+
+  it('with no size set pick-up only (the default) the sheet is the same with pick-up on or off, and says nothing of it', () => {
+    const on = sheet(true, 0, false);
+    expect(sheet(false, 0, false)).toBe(on);
+    expect(on).not.toMatch(/pick-?up only/i);
+    expect(sizes(on).match(/<button/g) ?? []).toHaveLength(2);
+  });
+
+  it('the one rule the card, the sheet and the add to the cart follow', () => {
+    expect(sizeOrderable({ pickupOnly: true }, false)).toBe(false);
+    expect(sizeOrderable({ pickupOnly: true }, true)).toBe(true);
+    expect(sizeOrderable({ pickupOnly: false }, false)).toBe(true);
+    expect(sizeOrderable({ pickupOnly: false }, true)).toBe(true);
+  });
+});

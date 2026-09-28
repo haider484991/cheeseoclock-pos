@@ -14,6 +14,7 @@ import {
   requiredCount,
   sheetGroups,
   cardSizeLabel,
+  sizeOrderable,
   type MenuCard,
   type MenuVariant,
 } from '@/lib/menu-view';
@@ -43,21 +44,30 @@ function isUnmet(g: PublishedModifierGroup, sel: Set<string>): boolean {
 /**
  * Size, then the choices in the till's sequence (required, dips on the side,
  * extras, leave-outs), then the allergy / kitchen note, quantity → Add.
+ *
+ * A size set pick-up only follows the card's rule (sizeOrderable): while
+ * online pick-up is off it shows as "Pick-up only" and can't be chosen or
+ * added; while it is on, it can, and says it is pick-up only.
  */
 export function ItemSheet({
   card,
   initialVariant,
+  canPickup,
   onClose,
   onConfirm,
 }: {
   card: MenuCard;
   initialVariant: number;
+  /** The till takes pick-up orders right now (what the card's size buttons follow). */
+  canPickup: boolean;
   onClose: () => void;
   onConfirm: (variant: MenuVariant, modifierIds: string[], quantity: number, notes: string | null) => void;
 }) {
   const [variantIndex, setVariantIndex] = useState(initialVariant);
   const [notes, setNotes] = useState('');
   const variant = card.variants[variantIndex] ?? card.variants[0]!;
+  // Chosen while pick-up was on, and pick-up has gone off since (the status poll): not added.
+  const unavailable = !sizeOrderable(variant, canPickup);
   const item = variant.item;
   const groups = useMemo(() => sheetGroups(item), [item]);
   const [qty, setQty] = useState(1);
@@ -68,7 +78,7 @@ export function ItemSheet({
   // falling back to that item's defaults.
   function switchVariant(i: number) {
     const next = card.variants[i];
-    if (!next) return;
+    if (!next || !sizeOrderable(next, canPickup)) return;
     const keyOf = (g: PublishedModifierGroup, optionName: string) => `${groupLabel(g)}|${optionLabel(optionName)}`;
     const chosenNames = new Set(
       item.modifierGroups.flatMap((g) =>
@@ -168,24 +178,39 @@ export function ItemSheet({
           <fieldset className="mt-5">
             <legend className="font-cond text-sm font-extrabold uppercase tracking-widest text-ink">Size</legend>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              {card.variants.map((v, i) => (
-                <button
-                  type="button"
-                  key={v.item.posItemId}
-                  onClick={() => switchVariant(i)}
-                  aria-pressed={i === variantIndex}
-                  className={`rounded-2xl border-2 px-3 py-2.5 text-left transition-colors ${
-                    i === variantIndex
-                      ? 'border-ink bg-ink text-cheese'
-                      : 'border-paper-line bg-white text-ink hover:border-ink/40'
-                  }`}
-                >
-                  <span className="block font-cond text-base font-extrabold uppercase">{cardSizeLabel(card, v.size)}</span>
-                  <span className="font-cond text-sm font-bold tabular-nums opacity-80">
-                    {formatCents(v.item.basePriceCents)}
+              {card.variants.map((v, i) =>
+                sizeOrderable(v, canPickup) ? (
+                  <button
+                    type="button"
+                    key={v.item.posItemId}
+                    onClick={() => switchVariant(i)}
+                    aria-pressed={i === variantIndex}
+                    className={`rounded-2xl border-2 px-3 py-2.5 text-left transition-colors ${
+                      i === variantIndex
+                        ? 'border-ink bg-ink text-cheese'
+                        : 'border-paper-line bg-white text-ink hover:border-ink/40'
+                    }`}
+                  >
+                    <span className="block font-cond text-base font-extrabold uppercase">{cardSizeLabel(card, v.size)}</span>
+                    <span className="font-cond text-sm font-bold tabular-nums opacity-80">
+                      {formatCents(v.item.basePriceCents)}
+                    </span>
+                    {/* One size of several pick-up only (the whole card's "Pick-up only" is on the card itself). */}
+                    {v.pickupOnly && !card.pickupOnly && (
+                      <span className="block font-cond text-xs font-bold uppercase tracking-wide opacity-80">Pick-up only</span>
+                    )}
+                  </button>
+                ) : (
+                  // This size is pick-up only and online pick-up is off: shown, never chosen (as on the card).
+                  <span
+                    key={v.item.posItemId}
+                    className="flex flex-col justify-center rounded-2xl border-2 border-dashed border-ink/25 px-3 py-2.5 text-left font-cond text-ink-muted"
+                  >
+                    <span className="block text-base font-extrabold uppercase">{cardSizeLabel(card, v.size)}</span>
+                    <span className="text-sm font-bold uppercase">Pick-up only</span>
                   </span>
-                </button>
-              ))}
+                ),
+              )}
             </div>
           </fieldset>
         )}
@@ -309,19 +334,21 @@ export function ItemSheet({
         <Stepper value={qty} onChange={setQty} label={card.name} min={1} large />
         <button
           type="button"
-          aria-disabled={unmet.length > 0}
-          onClick={() =>
-            unmet.length > 0
-              ? showGroup(unmet[0]!.posGroupId, true)
-              : onConfirm(variant, [...selected], qty, notes.trim() || null)
-          }
+          aria-disabled={unavailable || unmet.length > 0}
+          onClick={() => {
+            if (unavailable) return;
+            if (unmet.length > 0) showGroup(unmet[0]!.posGroupId, true);
+            else onConfirm(variant, [...selected], qty, notes.trim() || null);
+          }}
           className={`min-h-[3.25rem] flex-1 rounded-full bg-ink px-3 py-3 font-cond text-lg font-bold uppercase tracking-wide text-cheese transition-all active:scale-[0.99] ${
-            unmet.length > 0 ? 'opacity-55' : 'hover:bg-ink-soft'
+            unavailable || unmet.length > 0 ? 'opacity-55' : 'hover:bg-ink-soft'
           }`}
         >
-          {unmet.length > 0
-            ? unmetText(unmet[0]!, selected)
-            : `Add${qty > 1 ? ` ${qty}` : ''} · ${formatCents(unit * qty)}`}
+          {unavailable
+            ? `${cardSizeLabel(card, variant.size) || card.name}: pick-up only`
+            : unmet.length > 0
+              ? unmetText(unmet[0]!, selected)
+              : `Add${qty > 1 ? ` ${qty}` : ''} · ${formatCents(unit * qty)}`}
         </button>
       </div>
     </Sheet>

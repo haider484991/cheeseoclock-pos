@@ -72,14 +72,16 @@ export const publishedPickupSchema = z.object({
 /**
  * One line of plain words for the website, at most `max` letters: no control
  * character (a line break or a tab), no line or paragraph separator, no mark
- * that turns the text's direction (WEBSITE_TEXT_FORBIDDEN_RE). '' is allowed
- * (= none).
+ * that turns the text's direction, no invisible character
+ * (WEBSITE_TEXT_FORBIDDEN_RE). '' is allowed (= none).
  */
 export const websiteLine = (max: number, what: string) =>
   z
     .string()
     .max(max, { message: `Keep ${what} to ${max} letters` })
-    .refine((t) => !WEBSITE_TEXT_FORBIDDEN_RE.test(t), { message: `${what[0]!.toUpperCase()}${what.slice(1)} is one line of plain words` });
+    .refine((t) => !WEBSITE_TEXT_FORBIDDEN_RE.test(t), {
+      message: `${what[0]!.toUpperCase()}${what.slice(1)} is one line of plain words (no line break, and no hidden or direction mark — retype it if it was pasted)`,
+    });
 
 /** A real calendar day, YYYY-MM-DD (a Karachi date: the notice's last day). */
 export const calendarDay = z

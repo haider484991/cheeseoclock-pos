@@ -12,6 +12,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { FileUp, AlertTriangle, Tags, ShieldCheck } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { freshStartWebsiteWords } from './freshStartWords';
 import { priceDetailGroups, sheetPriceText, tillPriceText } from './importPrices';
 
 const ACTION_LABEL: Record<MenuImportAction, string> = {
@@ -34,17 +35,6 @@ function Badge({ action }: { action: MenuImportAction }) {
       {ACTION_LABEL[action]}
     </span>
   );
-}
-
-/**
- * A fresh start keeps each website setting ("Pick-up only", "Not on the
- * website", a category off the website) for what the file brings back under
- * the SAME name; `n` = the ones set on items or categories the file does not
- * bring back by name. Anything the file brings back under another name is on
- * the website, and the import publishes the menu straight away.
- */
-export function freshStartWebsiteWords(n: number): string {
-  return `${n} item${n === 1 ? ' or category' : 's or categories'} set pick-up only or off the website ${n === 1 ? 'is' : 'are'} not in the file under the same name. The rest keep their website setting. If the file brings ${n === 1 ? 'it' : 'them'} back under another name, ${n === 1 ? 'it goes' : 'they go'} on the website straight away (the import publishes the menu): set ${n === 1 ? 'it' : 'them'} again in Menu, then press “Publish menu to website”.`;
 }
 
 /** "Kept on the till: price Rs 1,200 (the file says Rs 1,300)" — what the owner's import rules kept (Settings → Kitchen & stock). */

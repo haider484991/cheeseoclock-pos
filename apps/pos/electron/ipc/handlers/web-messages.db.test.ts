@@ -220,6 +220,18 @@ live('the bounds, in the main process', () => {
     expect(await save(v2({ closedNotice: { text: 'عید مبارک — “closed”', until: null } }))).toMatchObject({ ok: true });
   });
 
+  it('the Arabic letter mark and the invisible characters are refused anywhere in the notice or the announcement (the website’s rule); Urdu still saves', async () => {
+    h.session = OWNER;
+    const B = String.fromCharCode;
+    for (const code of [0x061c, 0x200b, 0x200c, 0x200d, 0x2060, 0x2064, 0xfeff]) {
+      for (const bad of [`Closed${B(code)}today`, `${B(code)}Closed`, `Closed${B(code)}`]) {
+        await refused(v2({ closedNotice: { text: bad, until: null } }), /one line of plain words/);
+        await refused(v2({ announcement: { on: true, text: bad } }), /one line of plain words/);
+      }
+    }
+    expect(await save(v2({ announcement: { on: true, text: 'نیا ریپ — اس ہفتے' } }))).toMatchObject({ ok: true });
+  });
+
   it('its last day is a real calendar day or none; a day already past is not the schema’s business (the card checks it when it is typed)', async () => {
     h.session = OWNER;
     await refused(v2({ closedNotice: { text: 'Closed', until: '2026-02-30' } }), /real date/);

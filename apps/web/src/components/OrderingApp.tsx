@@ -22,6 +22,7 @@ import {
   isPickupOnly,
   cardSizeLabel,
   pickupOnlyNote,
+  sizeOrderable,
   type MenuCard,
   type MenuVariant,
 } from '@/lib/menu-view';
@@ -296,7 +297,7 @@ export function OrderingApp({
     (card, variantIndex) => {
       const v = card.variants[variantIndex];
       // A pick-up-only size is orderable only while online pick-up is (the whole card, or one size).
-      if (!v || (v.pickupOnly && !canPickup)) return;
+      if (!v || !sizeOrderable(v, canPickup)) return;
       if (v.item.modifierGroups.length > 0) {
         setSheet({ card, variantIndex });
       } else {
@@ -484,8 +485,11 @@ export function OrderingApp({
         <ItemSheet
           card={sheet.card}
           initialVariant={sheet.variantIndex}
+          canPickup={canPickup}
           onClose={closeSheet}
           onConfirm={(v, ids, qty, notes) => {
+            // The card's rule again at the cart: a pick-up-only size only while online pick-up is on.
+            if (!sizeOrderable(v, canPickup)) return;
             addToCart(v.item, variantLabel(sheet.card, v), ids, qty, notes);
             setSheet(null);
           }}
@@ -750,7 +754,7 @@ function VariantButtons({
       {card.variants.map((v, i) => {
         const inCart = qtyByItem.get(v.item.posItemId) ?? 0;
         const hasChoices = v.item.modifierGroups.length > 0;
-        if (v.pickupOnly && !canPickup) {
+        if (!sizeOrderable(v, canPickup)) {
           // This size only: the card's other sizes still deliver.
           return (
             <span
