@@ -247,8 +247,14 @@ export function orderItemsWithoutDrinkBrand(items: unknown): unknown {
   });
 }
 
-export function isPickupOnly(item: Pick<PublishedMenuItem, 'description'>): boolean {
-  return /\bpick[\s-]?up only\b/i.test(item.description ?? '');
+/**
+ * The item can't be delivered: the till set it "Pick-up only" (v0.7.30,
+ * `pickupOnly: true` in the publish), or — today's rule, kept as the
+ * fallback for a till that does not send the flag — its description says
+ * "pick-up only" (the printed menu's words).
+ */
+export function isPickupOnly(item: Pick<PublishedMenuItem, 'description' | 'pickupOnly'>): boolean {
+  return item.pickupOnly === true || /\bpick[\s-]?up only\b/i.test(item.description ?? '');
 }
 
 /**

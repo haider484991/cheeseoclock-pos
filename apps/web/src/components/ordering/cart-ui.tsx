@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { WebFulfilment } from '@cheeseoclock/shared-types';
+import { deliveryMinimumShortfallCents, type WebFulfilment } from '@cheeseoclock/shared-types';
 import { lineChoices, lineUnitPriceCents, type CartLine } from '@/lib/cart';
-import type { FactZone } from '@/lib/delivery-facts';
+import { deliveryMinimumNote, type FactZone } from '@/lib/delivery-facts';
 import { formatCents } from '@/lib/format';
 import { isPickupOnly } from '@/lib/menu-view';
 
@@ -30,6 +30,8 @@ export interface CartProps {
   feeRange: string;
   /** The delivery option's note: "Rs N–M · DHA & Clifton" (lib/delivery-facts deliveryOptionNote). */
   deliveryNote: string;
+  /** The owner's smallest website delivery order's food, paisa (v0.7.30); 0 = none, as before. */
+  minDeliveryOrderCents: number;
 }
 
 /**
@@ -141,6 +143,7 @@ export function CartPanel(props: CartProps & { acceptingOrders: boolean; onCheck
             </div>
           )}
           <Totals {...props} />
+          <MinimumNote {...props} />
           <button
             type="button"
             onClick={props.onCheckout}
@@ -276,5 +279,21 @@ export function Totals(props: CartProps) {
         </dd>
       </div>
     </dl>
+  );
+}
+
+/**
+ * A delivery under the owner's smallest delivery order (v0.7.30): how much
+ * more food to add. Nothing for a pick-up, an empty cart, or no minimum (as
+ * before). The checkout blocks on it (validateCheckout), and so does the server.
+ */
+export function MinimumNote(props: CartProps) {
+  if (props.fulfilment === 'pickup' || props.cart.length === 0) return null;
+  const short = deliveryMinimumShortfallCents(props.subtotal, props.minDeliveryOrderCents);
+  if (short === 0) return null;
+  return (
+    <p className="mt-2 rounded-xl bg-cheese/25 px-3 py-2 text-xs font-bold leading-snug text-ink">
+      {deliveryMinimumNote(props.minDeliveryOrderCents, short)}
+    </p>
   );
 }

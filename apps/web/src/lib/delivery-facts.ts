@@ -1,6 +1,7 @@
 import {
   DELIVERY_ZONES,
   FEE_SUMMARY,
+  announcementInForce,
   findZone,
   type PublishedPickup,
   type PublishedSettings,
@@ -34,7 +35,24 @@ export interface SiteFacts {
   zones: readonly FactZone[];
   /** The owner's pick-up offer; null = no block, so the till's heartbeat decides (as before). */
   pickup: PublishedPickup | null;
+  /**
+   * The owner's announcement while it is on (Settings → Online orders on the
+   * till, v0.7.30: shared-types announcementInForce), else null — no block,
+   * a block without one (a v0.7.29 till) or switched off: every page as
+   * before. Shown as page text only (the home page's hero and marquee, the
+   * /menu header), never in a title, meta tag or JSON-LD.
+   */
+  announcement: string | null;
+  /**
+   * The smallest website DELIVERY order's food, paisa (v0.7.30); 0 = no
+   * minimum (no block, or a block without it): as before. A pick-up is never
+   * refused; the order route checks it, the checkout says how much to add.
+   */
+  minDeliveryOrderCents: number;
   // Never the block's stamps or device id: the /menu page hands these facts to the browser.
+  // Never the closed notice either: it has a last day, so it is worked out per request on the
+  // server from the block (shared-types closedNoticeInForce: the order route, the /menu page) — an
+  // hourly page must not show it after that day.
 }
 
 /** The compiled list as facts: every area on, no fee item named (found by name and price, as before). */
@@ -58,6 +76,8 @@ export const DEFAULT_FACTS: SiteFacts = Object.freeze({
   source: 'default',
   zones: DEFAULT_ZONE_FACTS,
   pickup: null,
+  announcement: null,
+  minDeliveryOrderCents: 0,
 });
 
 /**
@@ -78,6 +98,9 @@ export function factsFromBlock(block: PublishedSettings | null | undefined): Sit
     source: 'settings',
     zones,
     pickup: { offered: block.pickup.offered, percent: block.pickup.percent },
+    // A block without them (a v0.7.29 till's, and nothing kept from an earlier one): today's site.
+    announcement: announcementInForce(block.announcement),
+    minDeliveryOrderCents: block.minDeliveryOrderCents ?? 0,
   };
 }
 
@@ -189,6 +212,23 @@ export function outsideZoneMessage(facts: SiteFacts): string {
   const where = deliveryAreasText(facts);
   if (!where) return 'We are not delivering anywhere right now. Please order on WhatsApp or give us a call.';
   return `We deliver in ${where} only. Choose your area from the list — if it is not there, we cannot deliver to it.`;
+}
+
+/**
+ * A website delivery whose food is under the owner's smallest delivery order
+ * (api/orders 'below_minimum', and the checkout before it sends): how much
+ * the smallest order is and how much more to add. `canPickup`: pick-up is on
+ * offer now (it has no minimum). Never said for a pick-up.
+ */
+export function deliveryMinimumMessage(minimumCents: number, shortfallCents: number, canPickup: boolean): string {
+  return `Website delivery orders start at ${formatCents(minimumCents)} of food, before tax and the delivery charge. Add ${formatCents(
+    shortfallCents,
+  )} more${canPickup ? ', or choose pick-up (no minimum)' : ' to order delivery'}.`;
+}
+
+/** The cart's note while a delivery is under the smallest order (it does not block until the order is placed). */
+export function deliveryMinimumNote(minimumCents: number, shortfallCents: number): string {
+  return `Add ${formatCents(shortfallCents)} more for delivery — the smallest delivery order is ${formatCents(minimumCents)} of food.`;
 }
 
 /** A switched-off area (api/orders 'zone_paused'). */
@@ -351,13 +391,16 @@ function numberList(ns: readonly number[]): string {
  * `areasAsBuilt`: the areas delivered to now are exactly today's 21 — none
  * switched off, none added — so a sentence may name them by hand ("DHA
  * Phases 1–8 and Clifton", "We don't deliver outside DHA and Clifton").
+ * `noMinimum`: the owner has set no smallest website delivery order (0, as
+ * before v0.7.30) — "No minimum on the website" is true.
  */
 export type FeeClaim =
   | { sameFee: readonly string[] }
   | { rateCard: readonly string[] }
   | { on: readonly string[] }
   | { delivering: true }
-  | { areasAsBuilt: true };
+  | { areasAsBuilt: true }
+  | { noMinimum: true };
 
 /**
  * Page copy: plain text with fee tokens, or text that holds only under a
@@ -379,6 +422,7 @@ export function claimHolds(claim: FeeClaim | readonly FeeClaim[], facts: SiteFac
     return on.length === ALL_COMPILED_ZONE_IDS.length && ALL_COMPILED_ZONE_IDS.every((id) => on.includes(id));
   }
   if ('delivering' in claim) return activeZones(facts).length > 0;
+  if ('noMinimum' in claim) return !(facts.minDeliveryOrderCents > 0);
   if ('on' in claim) return zonesOf('on', expandZoneIds(claim.on), facts).every((z) => z.active);
   return feeClaimHolds(claim, facts);
 }
@@ -418,11 +462,19 @@ export class PausedFeeToken extends Error {
   }
 }
 
+/** {minOrder} with no smallest delivery order set: the text that holds it can't print (renderCopy moves on) — never a zero amount. */
+export class NoMinimumToken extends Error {
+  constructor(token: string) {
+    super(`${token}: the owner has set no smallest delivery order`);
+    this.name = 'NoMinimumToken';
+  }
+}
+
 function fillOrNull(text: string, facts: SiteFacts): string | null {
   try {
     return fillFees(text, facts);
   } catch (e) {
-    if (e instanceof PausedFeeToken) return null;
+    if (e instanceof PausedFeeToken || e instanceof NoMinimumToken) return null;
     throw e;
   }
 }
@@ -465,7 +517,9 @@ const TOKEN = /\{([a-zA-Z]+)(?::([^{}]*))?\}/g;
  *    group while all are paused);
  *  - {places}: the areas delivered to now in customer words ("DHA Phases
  *    1–8, Emaar & Creek Vista, Clifton Blocks 1–9"; every area while all
- *    are paused).
+ *    are paused);
+ *  - {minOrder}: the owner's smallest website delivery order, in rupees;
+ *    throws NoMinimumToken while there is none (claim it: { noMinimum }).
  * An unknown token or area id throws: a typo must fail the tests and the
  * build, never print "{fee:dha-66}" or a wrong fee.
  */
@@ -494,6 +548,10 @@ export function fillFees(text: string, facts: SiteFacts): string {
       case 'places': {
         const on = activeZones(facts);
         return placesWords(on.length > 0 ? on : facts.zones).split(' · ').join(', ');
+      }
+      case 'minOrder': {
+        if (!(facts.minDeliveryOrderCents > 0)) throw new NoMinimumToken(whole);
+        return formatCents(facts.minDeliveryOrderCents);
       }
       default:
         throw new Error(`Unknown fee token ${whole}`);

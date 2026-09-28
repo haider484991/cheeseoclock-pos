@@ -46,6 +46,26 @@ export function websiteBlockProblem(
   return null;
 }
 
+/**
+ * The block's website messages (v0.7.30, shared-types web-bridge.ts: WEBSITE
+ * MESSAGES): a block WITHOUT one of them (a v0.7.29 till's) says nothing
+ * about it, so the website keeps the one it stored — field by field, as it
+ * keeps the whole stored block when a publish carries none. A block WITH one
+ * (a till of v0.7.30 on sends all three, at their defaults too) replaces it.
+ * The same three names are written into storePublishedMenu's statement.
+ */
+export const KEPT_MESSAGE_FIELDS = ['closedNotice', 'announcement', 'minDeliveryOrderCents'] as const;
+
+/** `incoming` with each message field it lacks taken from `held` (the block the website holds; null = none). */
+export function withKeptMessages(incoming: PublishedSettings, held: PublishedSettings | null): PublishedSettings {
+  if (!held) return incoming;
+  const out: Record<string, unknown> = { ...incoming };
+  for (const key of KEPT_MESSAGE_FIELDS) {
+    if (out[key] === undefined && held[key] !== undefined) out[key] = held[key];
+  }
+  return out as unknown as PublishedSettings;
+}
+
 /** What the website holds, from the stored block and the menu stored with it (null = no block). */
 export function heldSettingsOf(
   block: PublishedSettings | null,
@@ -72,7 +92,9 @@ export function heldSettingsOf(
  *    menu is stored — unless the stored block came from the same till and
  *    this one's time is later (a till restored from an older backup that
  *    has saved since: a till may always replace its own block);
- *  - otherwise (newer or EQUAL, or nothing stored): stored with the menu.
+ *  - otherwise (newer or EQUAL, or nothing stored): stored with the menu —
+ *    with the stored block's website messages it lacks kept (a v0.7.29
+ *    till's block has none: KEPT_MESSAGE_FIELDS, withKeptMessages).
  * The row comparison (rev, at, tie) >= (rev, at, tie) is compareSettingsStamp:
  * revision first, then the newest time, then the sum of the times.
  *
@@ -101,7 +123,19 @@ export async function storePublishedMenu(
             OR (site_menu.menu_json #>> '{settings,deviceId}' = ${settings?.deviceId ?? null}::text
                 AND ${settings?.settingsAt ?? null}::timestamptz
                     > (site_menu.menu_json #>> '{settings,settingsAt}')::timestamptz))
-          THEN EXCLUDED.menu_json
+          -- The new block over the website messages of the stored one (KEPT_MESSAGE_FIELDS): a message
+          -- the new block carries wins, one it lacks (a v0.7.29 till) is kept. Nothing else is kept.
+          THEN jsonb_set(
+            EXCLUDED.menu_json,
+            '{settings}',
+            COALESCE(
+              (SELECT jsonb_object_agg(kept.key, kept.value)
+                 FROM jsonb_each(
+                        CASE WHEN jsonb_typeof(site_menu.menu_json -> 'settings') = 'object'
+                             THEN site_menu.menu_json -> 'settings' ELSE '{}'::jsonb END) AS kept
+                WHERE kept.key IN ('closedNotice', 'announcement', 'minDeliveryOrderCents')),
+              '{}'::jsonb)
+            || (EXCLUDED.menu_json -> 'settings'))
         WHEN site_menu.menu_json -> 'settings' IS NOT NULL
           THEN jsonb_set(EXCLUDED.menu_json - 'settings', '{settings}', site_menu.menu_json -> 'settings')
         ELSE EXCLUDED.menu_json - 'settings'
@@ -210,14 +244,16 @@ export async function storeSettingsAlone(
     const patched = withFeeItems(menu, feeItems);
     const problem = websiteBlockProblem(settings, patched);
     if (problem) return { kind: 'invalid', problem };
-    const doc: PublishedMenu = { ...patched, settings };
+    // A message the block lacks (a v0.7.29 till's block) keeps the one stored (withKeptMessages).
+    const kept = withKeptMessages(settings, heldBlock);
+    const doc: PublishedMenu = { ...patched, settings: kept };
     const written = (await sql()`
       UPDATE site_menu SET menu_json = ${JSON.stringify(doc)}
       WHERE id = 1 AND md5(menu_json::text) = ${row.h}
       RETURNING id
     `) as Array<{ id: number }>;
     if (written.length === 1) {
-      return { kind: 'done', held: heldSettingsOf(settings, patched), outcome: 'stored', ...count(patched) };
+      return { kind: 'done', held: heldSettingsOf(kept, patched), outcome: 'stored', ...count(patched) };
     }
     // The stored menu changed since it was read (a publish in between): read it again.
   }

@@ -21,7 +21,7 @@ import {
 } from '@/lib/device-memory';
 import { formatCents } from '@/lib/format';
 import { ALLERGY_NOTICE, isPickupOnly } from '@/lib/menu-view';
-import { CartLineRow, ClearCartButton, FulfilmentToggle, Totals, type CartProps } from './cart-ui';
+import { CartLineRow, ClearCartButton, FulfilmentToggle, MinimumNote, Totals, type CartProps } from './cart-ui';
 import { CloseButton, Sheet } from './Sheet';
 
 export interface PlacedOrder {
@@ -43,6 +43,8 @@ export function CheckoutSheet(
     /** Where the owner delivers and the fees (switched-off areas are listed, not choosable). */
     deliveryFacts: SiteFacts;
     acceptingOrders: boolean;
+    /** The owner's words while the website is closed (v0.7.30, worked out on the server); null = this sheet's own. */
+    closedNotice?: string | null;
     onClose: () => void;
     /** The idempotency key for this cart (same cart → same key, so a resend is not a second order). */
     orderIdFor: () => string;
@@ -114,9 +116,13 @@ export function CheckoutSheet(
       pickupOnlyInCart: props.pickupOnlyInCart,
       canPickup: props.canPickup,
       deliveryAreas: deliveryAreasText(props.deliveryFacts),
+      minDeliveryOrderCents: props.minDeliveryOrderCents,
+      foodSubtotalCents: props.subtotal,
     });
     if (invalid) return show(invalid);
-    if (!props.acceptingOrders) return show({ field: null, message: 'We are not taking online orders right now.' });
+    if (!props.acceptingOrders) {
+      return show({ field: null, message: props.closedNotice ?? 'We are not taking online orders right now.' });
+    }
 
     inFlight.current = true;
     setSubmitting(true);
@@ -369,13 +375,20 @@ export function CheckoutSheet(
             </div>
 
             <Totals {...props} />
+            <MinimumNote {...props} />
 
-            {!props.acceptingOrders && (
-              <p className="mt-3 rounded-xl border-2 border-ink bg-cheese px-3 py-2 text-sm font-semibold text-ink">
-                The kitchen isn&rsquo;t taking website orders at the moment ({BUSINESS.hours.toLowerCase()}). Send
-                this order on WhatsApp instead — we reply fast.
-              </p>
-            )}
+            {!props.acceptingOrders &&
+              (props.closedNotice ? (
+                // The owner's closed notice replaces the explanation; the WhatsApp button below stays.
+                <p className="mt-3 rounded-xl border-2 border-ink bg-cheese px-3 py-2 text-sm font-semibold text-ink">
+                  {props.closedNotice}
+                </p>
+              ) : (
+                <p className="mt-3 rounded-xl border-2 border-ink bg-cheese px-3 py-2 text-sm font-semibold text-ink">
+                  The kitchen isn&rsquo;t taking website orders at the moment ({BUSINESS.hours.toLowerCase()}). Send
+                  this order on WhatsApp instead — we reply fast.
+                </p>
+              ))}
           </>
         )}
       </div>

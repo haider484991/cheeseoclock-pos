@@ -192,7 +192,13 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'Is there a minimum order for Phase 7?',
-        a: 'No minimum on the website. You pay cash on delivery: the menu total plus 15% tax and the {fee:dha-7,dha-7-ext} delivery fee.',
+        a: {
+          text: 'No minimum on the website. You pay cash on delivery: the menu total plus 15% tax and the {fee:dha-7,dha-7-ext} delivery fee.',
+          // The owner's smallest website delivery order (Settings → Online orders on the till).
+          when: { noMinimum: true },
+          otherwise:
+            'For delivery, yes: {minOrder} of food, before tax and the delivery fee — pick-up has no minimum. You pay cash on delivery: the menu total plus 15% tax and the {fee:dha-7,dha-7-ext} delivery fee.',
+        },
       },
     ],
     adjacent: ['dha-phase-6', 'dha-phase-8'],

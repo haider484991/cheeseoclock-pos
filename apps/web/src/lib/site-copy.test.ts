@@ -378,14 +378,22 @@ describe('a block with other fees', () => {
 });
 
 describe('the facts the /menu page hands the browser', () => {
-  it('carry the areas and the pick-up offer only — never the block’s device id or stamps', () => {
-    const facts = factsFromBlock(block((zs) => (zone(zs, 'dha-8').feeCents = 30_000)));
+  it('carry the areas, the pick-up offer, the announcement and the delivery minimum only — never the block’s device id or stamps, nor the closed notice', () => {
+    const facts = factsFromBlock({
+      ...block((zs) => (zone(zs, 'dha-8').feeCents = 30_000)),
+      closedNotice: { text: 'Made-up closed words', until: null },
+      announcement: { on: true, text: 'Made-up announcement' },
+      minDeliveryOrderCents: 100_000,
+    });
     const sent = JSON.stringify(facts);
-    for (const secret of ['settingsAt', 'settingsRev', 'settingsTie', 'deviceId', 'till-test', '2026-09-27T10:00:00.000Z']) {
+    for (const secret of ['settingsAt', 'settingsRev', 'settingsTie', 'deviceId', 'till-test', '2026-09-27T10:00:00.000Z', 'closedNotice', 'Made-up closed words']) {
       expect(sent, secret).not.toContain(secret);
     }
-    expect(Object.keys(facts).sort()).toEqual(['pickup', 'source', 'zones']);
-    expect(Object.keys(DEFAULT_FACTS).sort()).toEqual(['pickup', 'source', 'zones']);
+    // v0.7.30 added the announcement and the delivery minimum (both at today's values without them).
+    expect(Object.keys(facts).sort()).toEqual(['announcement', 'minDeliveryOrderCents', 'pickup', 'source', 'zones']);
+    expect(Object.keys(DEFAULT_FACTS).sort()).toEqual(['announcement', 'minDeliveryOrderCents', 'pickup', 'source', 'zones']);
+    expect([facts.announcement, facts.minDeliveryOrderCents]).toEqual(['Made-up announcement', 100_000]);
+    expect([DEFAULT_FACTS.announcement, DEFAULT_FACTS.minDeliveryOrderCents]).toEqual([null, 0]);
     expect(facts.zones.find((z) => z.id === 'dha-8')?.feeCents).toBe(30_000);
   });
 });

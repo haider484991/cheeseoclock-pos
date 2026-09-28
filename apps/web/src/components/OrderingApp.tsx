@@ -98,6 +98,7 @@ export function OrderingApp({
   pickupAvailable,
   pickupDiscountPercent,
   deliveryFacts,
+  closedNotice = null,
 }: {
   menu: PublicMenu;
   acceptingOrders: boolean;
@@ -107,6 +108,12 @@ export function OrderingApp({
   pickupDiscountPercent: number;
   /** Where the owner delivers and the fees (the settings block with this menu, else the built-in areas). */
   deliveryFacts: SiteFacts;
+  /**
+   * The owner's words while the website is closed (v0.7.30), worked out on
+   * the server for this request (shared-types closedNoticeInForce); null =
+   * the page's own closed words, as before.
+   */
+  closedNotice?: string | null;
 }) {
   // The fee range as the cart says it before an area is chosen: "Rs N–M".
   const feeRange = deliveryFeeRange(deliveryFacts);
@@ -349,11 +356,17 @@ export function OrderingApp({
     pickupOnlyInCart,
     feeRange,
     deliveryNote: deliveryOptionNote(deliveryFacts),
+    minDeliveryOrderCents: deliveryFacts.minDeliveryOrderCents,
   };
 
   return (
     <div className="pb-28 lg:pb-12">
-      <MenuHeader canPickup={canPickup} pickupPct={pickupPct} deliveryChip={deliveryChip(deliveryFacts)} />
+      <MenuHeader
+        canPickup={canPickup}
+        pickupPct={pickupPct}
+        deliveryChip={deliveryChip(deliveryFacts)}
+        announcement={deliveryFacts.announcement}
+      />
 
       {lastOrder && (
         <ReturningBanner
@@ -364,7 +377,7 @@ export function OrderingApp({
         />
       )}
 
-      {!open && <ClosedBanner />}
+      {!open && <ClosedBanner notice={closedNotice} />}
 
       <CategoryRail sections={railSections} />
 
@@ -475,6 +488,7 @@ export function OrderingApp({
           onZone={chooseZone}
           deliveryFacts={deliveryFacts}
           acceptingOrders={open}
+          closedNotice={closedNotice}
           onClose={closeCheckout}
           orderIdFor={orderIdFor}
           onPlaced={onPlaced}
@@ -501,10 +515,13 @@ function MenuHeader({
   canPickup,
   pickupPct,
   deliveryChip,
+  announcement,
 }: {
   canPickup: boolean;
   pickupPct: number;
   deliveryChip: string;
+  /** The owner's announcement while it is on (plain text, never markup), else null: nothing shows. */
+  announcement: string | null;
 }) {
   return (
     <div className="bg-ink text-cream">
@@ -514,6 +531,12 @@ function MenuHeader({
         </p>
         <h1 className="mt-1 font-display text-6xl uppercase leading-none tracking-wide md:text-7xl">The Menu</h1>
         <p className="mt-2 font-cond text-lg font-semibold italic text-cream/80">{BUSINESS.tagline}</p>
+        {announcement && (
+          <p className="mt-4 flex w-fit max-w-2xl items-start gap-2 rounded-2xl border border-cheese/50 bg-cheese/10 px-4 py-2.5 font-cond text-lg font-bold leading-snug text-cheese">
+            <span aria-hidden>★</span>
+            <span>{announcement}</span>
+          </p>
+        )}
         <ul className="mt-5 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide">
           {canPickup && (
             <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
@@ -905,17 +928,23 @@ const DealCard = memo(function DealCard({
 /**
  * Shown when the till is not accepting online orders — the shop is closed, or
  * the POS is switched off. The menu stays browsable and WhatsApp still works,
- * so an interested customer is redirected rather than turned away.
+ * so an interested customer is redirected rather than turned away. The
+ * owner's closed notice (v0.7.30), while there is one, replaces the
+ * explanation; the heading and the WhatsApp buttons stay.
  */
-function ClosedBanner() {
+function ClosedBanner({ notice }: { notice: string | null }) {
   return (
     <div className="mx-auto mt-5 max-w-6xl px-4">
       <div className="rounded-2xl border-2 border-ink bg-cheese p-4 text-ink">
         <p className="font-display text-2xl uppercase tracking-wide">We&rsquo;re not taking online orders right now</p>
-        <p className="mt-1 text-sm font-medium">
-          The kitchen isn&rsquo;t accepting website orders at the moment ({BUSINESS.hours.toLowerCase()}). You can
-          still build your order here and send it to us on WhatsApp from &ldquo;View order&rdquo; — we reply fast.
-        </p>
+        {notice ? (
+          <p className="mt-1 text-sm font-medium">{notice}</p>
+        ) : (
+          <p className="mt-1 text-sm font-medium">
+            The kitchen isn&rsquo;t accepting website orders at the moment ({BUSINESS.hours.toLowerCase()}). You can
+            still build your order here and send it to us on WhatsApp from &ldquo;View order&rdquo; — we reply fast.
+          </p>
+        )}
         <div className="mt-3 flex flex-wrap gap-2">
           {BUSINESS.whatsappLines.map((l) => (
             <a

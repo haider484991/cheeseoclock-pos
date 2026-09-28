@@ -32,6 +32,13 @@ export const ItemSchema = z.object({
   imageUrl: z.string().nullable(),
   sortOrder: z.number(),
   modifierGroups: z.array(GroupSchema),
+  /**
+   * Set "Pick-up only" on the till (v0.7.30, shared-types web-bridge.ts:
+   * SELLING ON THE WEBSITE): sent only as true, absent on every other item —
+   * so a menu without it is stored exactly as before. Without this line the
+   * flag would be stripped here and a delivery with the item let through.
+   */
+  pickupOnly: z.boolean().optional(),
 });
 export const MenuSchema = z.object({
   categories: z.array(

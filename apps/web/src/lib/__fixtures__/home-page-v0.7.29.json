@@ -1,0 +1,2276 @@
+{
+ "type": "Symbol(react.fragment)",
+ "key": null,
+ "props": {
+  "children": [
+   {
+    "type": "SiteHeader",
+    "key": null,
+    "props": {}
+   },
+   {
+    "type": "main",
+    "key": null,
+    "props": {
+     "children": [
+      {
+       "type": "section",
+       "key": null,
+       "props": {
+        "children": [
+         {
+          "type": "div",
+          "key": null,
+          "props": {
+           "aria-hidden": true,
+           "className": "absolute inset-0 bg-[radial-gradient(ellipse_at_72%_45%,rgba(245,179,1,0.16),transparent_58%)]"
+          }
+         },
+         {
+          "type": "div",
+          "key": null,
+          "props": {
+           "aria-hidden": true,
+           "className": "absolute inset-0 opacity-[0.07] [background-image:repeating-linear-gradient(90deg,#F5B301_0_1px,transparent_1px_90px)]"
+          }
+         },
+         {
+          "type": "div",
+          "key": null,
+          "props": {
+           "children": [
+            {
+             "type": "div",
+             "key": null,
+             "props": {
+              "children": [
+               {
+                "type": "p",
+                "key": null,
+                "props": {
+                 "children": [
+                  {
+                   "type": "span",
+                   "key": null,
+                   "props": {
+                    "className": "h-2 w-2 animate-pulse rounded-full bg-emerald-400"
+                   }
+                  },
+                  "We deliver all over DHA & Clifton"
+                 ],
+                 "className": "inline-flex items-center gap-2 rounded-full border border-cheese/40 bg-cheese/10 px-4 py-1.5 font-cond text-sm font-bold uppercase tracking-[0.16em] text-cheese"
+                }
+               },
+               {
+                "type": "h1",
+                "key": null,
+                "props": {
+                 "children": [
+                  {
+                   "type": "span",
+                   "key": null,
+                   "props": {
+                    "children": "It’s always",
+                    "className": "block font-display text-[clamp(2.1rem,5vw,3.6rem)] uppercase leading-none tracking-wide text-cream"
+                   }
+                  },
+                  {
+                   "type": "span",
+                   "key": null,
+                   "props": {
+                    "children": "Cheese O’Clock.",
+                    "className": "sr-only"
+                   }
+                  },
+                  {
+                   "type": "img",
+                   "key": null,
+                   "props": {
+                    "alt": "",
+                    "aria-hidden": true,
+                    "className": "mt-3 block h-auto w-[min(88vw,34rem)] drop-shadow-[0_8px_28px_rgba(245,179,1,0.18)] md:mt-4",
+                    "decoding": "async",
+                    "fetchPriority": "high",
+                    "height": 308,
+                    "src": "/logo-wordmark.svg",
+                    "width": 642
+                   }
+                  }
+                 ],
+                 "className": "mt-5"
+                }
+               }
+              ],
+              "className": "animate-fade-up [grid-area:head] md:self-end md:pr-4"
+             }
+            },
+            {
+             "type": "PizzaCarousel3D",
+             "key": null,
+             "props": {
+              "className": "-mt-6 [grid-area:wheel] md:-mr-6 md:mt-0"
+             }
+            },
+            {
+             "type": "div",
+             "key": null,
+             "props": {
+              "children": [
+               {
+                "type": "p",
+                "key": null,
+                "props": {
+                 "children": "Hygienically Made. Deliciously Unforgettable.",
+                 "className": "mt-6 font-cond text-2xl font-semibold italic text-cream/85 md:mt-4"
+                }
+               },
+               {
+                "type": "p",
+                "key": null,
+                "props": {
+                 "children": "Five signature pizzas, crispy chicken burgers and fries — made to order in DHA Phase 6. Pay cash at your door.",
+                 "className": "mt-3 max-w-md text-lg leading-relaxed text-cream/65"
+                }
+               },
+               {
+                "type": "div",
+                "key": null,
+                "props": {
+                 "children": [
+                  {
+                   "type": "LinkComponent",
+                   "key": null,
+                   "props": {
+                    "children": "Order now →",
+                    "className": "rounded-full bg-cheese px-9 py-4 font-display text-2xl uppercase tracking-wide text-ink shadow-glow transition-all animate-tick-glow hover:bg-cheese-hot hover:shadow-glow-lg active:scale-95",
+                    "href": "/menu"
+                   }
+                  },
+                  {
+                   "type": "a",
+                   "key": null,
+                   "props": {
+                    "children": [
+                     {
+                      "type": "WhatsAppGlyph",
+                      "key": null,
+                      "props": {
+                       "className": "h-5 w-5"
+                      }
+                     },
+                     " WhatsApp"
+                    ],
+                    "className": "flex items-center gap-2 rounded-full border border-cream/25 px-6 py-4 font-cond text-lg font-bold uppercase tracking-wide text-cream transition-all hover:border-cheese hover:text-cheese active:scale-95",
+                    "href": "https://wa.me/923009367865?text=Hi%20Cheese%20O'Clock!%20I'd%20like%20to%20place%20an%20order%3A%20",
+                    "rel": "noopener noreferrer",
+                    "target": "_blank"
+                   }
+                  }
+                 ],
+                 "className": "mt-7 flex flex-wrap items-center gap-3"
+                }
+               },
+               {
+                "type": "ul",
+                "key": null,
+                "props": {
+                 "children": [
+                  {
+                   "type": "li",
+                   "key": null,
+                   "props": {
+                    "children": {
+                     "type": "LinkComponent",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       "Value deals from ",
+                       "Rs 2,600",
+                       " →"
+                      ],
+                      "className": "block rounded-full bg-cheese px-3 py-1.5 text-ink transition-colors hover:bg-cheese-hot",
+                      "href": "/menu#value-deals"
+                     }
+                    }
+                   }
+                  },
+                  {
+                   "type": "li",
+                   "key": null,
+                   "props": {
+                    "children": "Delivery from Rs 200",
+                    "className": "rounded-full border border-cream/15 px-3 py-1.5"
+                   }
+                  },
+                  {
+                   "type": "li",
+                   "key": null,
+                   "props": {
+                    "children": "12 noon – 1 am daily",
+                    "className": "rounded-full border border-cream/15 px-3 py-1.5"
+                   }
+                  },
+                  {
+                   "type": "li",
+                   "key": null,
+                   "props": {
+                    "children": "Cash on delivery",
+                    "className": "rounded-full border border-cream/15 px-3 py-1.5"
+                   }
+                  }
+                 ],
+                 "className": "mt-6 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide text-cream/80"
+                }
+               },
+               {
+                "type": "CheeseTime",
+                "key": null,
+                "props": {
+                 "className": "mt-4 text-sm text-cream/55"
+                }
+               }
+              ],
+              "className": "animate-fade-up [grid-area:rest] md:self-start md:pr-4"
+             }
+            }
+           ],
+           "className": "relative mx-auto grid max-w-6xl gap-x-4 px-4 pb-14 pt-8 [grid-template-areas:'head'_'wheel'_'rest'] md:grid-cols-[0.95fr_1.05fr] md:items-center md:pb-20 md:pt-14 md:[grid-template-areas:'head_wheel'_'rest_wheel']"
+          }
+         }
+        ],
+        "className": "relative overflow-hidden bg-ink"
+       }
+      },
+      {
+       "type": "Marquee",
+       "key": null,
+       "props": {
+        "items": [
+         "HYGIENICALLY MADE. DELICIOUSLY UNFORGETTABLE.",
+         "WE DELIVER ALL OVER DHA & CLIFTON",
+         "OPEN 12 NOON – 1 AM",
+         "CASH ON DELIVERY",
+         "FIVE SIGNATURE PIZZAS",
+         "IT'S ALWAYS CHEESE O'CLOCK"
+        ],
+        "tilted": true
+       }
+      },
+      {
+       "type": "section",
+       "key": null,
+       "props": {
+        "children": [
+         {
+          "type": "div",
+          "key": null,
+          "props": {
+           "aria-hidden": true,
+           "className": "absolute inset-0 opacity-[0.07] [background-image:repeating-linear-gradient(135deg,#151412_0_2px,transparent_2px_22px)]"
+          }
+         },
+         {
+          "type": "div",
+          "key": null,
+          "props": {
+           "children": [
+            {
+             "type": "Reveal",
+             "key": null,
+             "props": {
+              "children": {
+               "type": "div",
+               "key": null,
+               "props": {
+                "children": [
+                 {
+                  "type": "div",
+                  "key": null,
+                  "props": {
+                   "children": [
+                    {
+                     "type": "p",
+                     "key": null,
+                     "props": {
+                      "children": "Every deal comes with a 1 litre soft drink",
+                      "className": "font-cond text-sm font-extrabold uppercase tracking-[0.24em] text-ink/70"
+                     }
+                    },
+                    {
+                     "type": "h2",
+                     "key": null,
+                     "props": {
+                      "children": "Value deals",
+                      "className": "mt-1 font-display text-5xl uppercase leading-none tracking-wide md:text-7xl"
+                     }
+                    }
+                   ]
+                  }
+                 },
+                 {
+                  "type": "p",
+                  "key": null,
+                  "props": {
+                   "children": "Choice of pizzas only from the regular menu.",
+                   "className": "max-w-xs font-cond text-lg font-bold leading-snug"
+                  }
+                 }
+                ],
+                "className": "flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3"
+               }
+              }
+             }
+            },
+            {
+             "type": "div",
+             "key": null,
+             "props": {
+              "children": [
+               {
+                "type": "Reveal",
+                "key": "Big Two",
+                "props": {
+                 "children": {
+                  "type": "LinkComponent",
+                  "key": null,
+                  "props": {
+                   "children": [
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "aria-hidden": true,
+                      "children": [
+                       "0",
+                       1
+                      ],
+                      "className": "pointer-events-none absolute -bottom-8 -right-2 select-none font-display text-[9rem] leading-none text-cheese/10"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Save",
+                         "className": "block text-[0.65rem] tracking-widest"
+                        }
+                       },
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Rs 650",
+                         "className": "mt-0.5 block text-lg"
+                        }
+                       }
+                      ],
+                      "className": "absolute right-4 top-4 -rotate-6 rounded-xl bg-cheese px-2.5 py-1.5 text-center font-cond font-extrabold uppercase leading-none text-ink"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       "Value deal 0",
+                       1
+                      ],
+                      "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": "Big Two",
+                      "className": "mt-1 block pr-20 font-display text-4xl uppercase leading-none tracking-wide"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": "2 Large 12\" + 1 litre soft drink",
+                      "className": "mt-3 block font-cond text-lg font-semibold uppercase leading-snug tracking-wide text-cream/75"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          {
+                           "type": "span",
+                           "key": null,
+                           "props": {
+                            "children": "Rs 4,250",
+                            "className": "block text-sm text-cream/45 line-through"
+                           }
+                          },
+                          {
+                           "type": "span",
+                           "key": null,
+                           "props": {
+                            "children": "Rs 3,600",
+                            "className": "block font-display text-4xl tracking-wide text-cheese"
+                           }
+                          }
+                         ]
+                        }
+                       },
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Order →",
+                         "className": "rounded-full bg-cheese px-4 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink transition-colors group-hover:bg-cheese-hot"
+                        }
+                       }
+                      ],
+                      "className": "relative mt-auto flex items-end justify-between gap-3 pt-6"
+                     }
+                    }
+                   ],
+                   "className": "group relative flex h-full flex-col overflow-hidden rounded-3xl bg-ink p-6 text-cream shadow-soft-lg transition-transform hover:-translate-y-1",
+                   "href": "/menu#value-deals"
+                  }
+                 },
+                 "delay": 0
+                }
+               },
+               {
+                "type": "Reveal",
+                "key": "Family Feast",
+                "props": {
+                 "children": {
+                  "type": "LinkComponent",
+                  "key": null,
+                  "props": {
+                   "children": [
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "aria-hidden": true,
+                      "children": [
+                       "0",
+                       2
+                      ],
+                      "className": "pointer-events-none absolute -bottom-8 -right-2 select-none font-display text-[9rem] leading-none text-cheese/10"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Save",
+                         "className": "block text-[0.65rem] tracking-widest"
+                        }
+                       },
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Rs 650",
+                         "className": "mt-0.5 block text-lg"
+                        }
+                       }
+                      ],
+                      "className": "absolute right-4 top-4 -rotate-6 rounded-xl bg-cheese px-2.5 py-1.5 text-center font-cond font-extrabold uppercase leading-none text-ink"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       "Value deal 0",
+                       2
+                      ],
+                      "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": "Family Feast",
+                      "className": "mt-1 block pr-20 font-display text-4xl uppercase leading-none tracking-wide"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": "1 Medium 9\" + 1 Large 12\" + 1 litre soft drink",
+                      "className": "mt-3 block font-cond text-lg font-semibold uppercase leading-snug tracking-wide text-cream/75"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          {
+                           "type": "span",
+                           "key": null,
+                           "props": {
+                            "children": "Rs 3,750",
+                            "className": "block text-sm text-cream/45 line-through"
+                           }
+                          },
+                          {
+                           "type": "span",
+                           "key": null,
+                           "props": {
+                            "children": "Rs 3,100",
+                            "className": "block font-display text-4xl tracking-wide text-cheese"
+                           }
+                          }
+                         ]
+                        }
+                       },
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Order →",
+                         "className": "rounded-full bg-cheese px-4 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink transition-colors group-hover:bg-cheese-hot"
+                        }
+                       }
+                      ],
+                      "className": "relative mt-auto flex items-end justify-between gap-3 pt-6"
+                     }
+                    }
+                   ],
+                   "className": "group relative flex h-full flex-col overflow-hidden rounded-3xl bg-ink p-6 text-cream shadow-soft-lg transition-transform hover:-translate-y-1",
+                   "href": "/menu#value-deals"
+                  }
+                 },
+                 "delay": 80
+                }
+               },
+               {
+                "type": "Reveal",
+                "key": "Perfect Pair",
+                "props": {
+                 "children": {
+                  "type": "LinkComponent",
+                  "key": null,
+                  "props": {
+                   "children": [
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "aria-hidden": true,
+                      "children": [
+                       "0",
+                       3
+                      ],
+                      "className": "pointer-events-none absolute -bottom-8 -right-2 select-none font-display text-[9rem] leading-none text-cheese/10"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Save",
+                         "className": "block text-[0.65rem] tracking-widest"
+                        }
+                       },
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Rs 650",
+                         "className": "mt-0.5 block text-lg"
+                        }
+                       }
+                      ],
+                      "className": "absolute right-4 top-4 -rotate-6 rounded-xl bg-cheese px-2.5 py-1.5 text-center font-cond font-extrabold uppercase leading-none text-ink"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       "Value deal 0",
+                       3
+                      ],
+                      "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": "Perfect Pair",
+                      "className": "mt-1 block pr-20 font-display text-4xl uppercase leading-none tracking-wide"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": "2 Medium 9\" + 1 litre soft drink",
+                      "className": "mt-3 block font-cond text-lg font-semibold uppercase leading-snug tracking-wide text-cream/75"
+                     }
+                    },
+                    {
+                     "type": "span",
+                     "key": null,
+                     "props": {
+                      "children": [
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          {
+                           "type": "span",
+                           "key": null,
+                           "props": {
+                            "children": "Rs 3,250",
+                            "className": "block text-sm text-cream/45 line-through"
+                           }
+                          },
+                          {
+                           "type": "span",
+                           "key": null,
+                           "props": {
+                            "children": "Rs 2,600",
+                            "className": "block font-display text-4xl tracking-wide text-cheese"
+                           }
+                          }
+                         ]
+                        }
+                       },
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": "Order →",
+                         "className": "rounded-full bg-cheese px-4 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink transition-colors group-hover:bg-cheese-hot"
+                        }
+                       }
+                      ],
+                      "className": "relative mt-auto flex items-end justify-between gap-3 pt-6"
+                     }
+                    }
+                   ],
+                   "className": "group relative flex h-full flex-col overflow-hidden rounded-3xl bg-ink p-6 text-cream shadow-soft-lg transition-transform hover:-translate-y-1",
+                   "href": "/menu#value-deals"
+                  }
+                 },
+                 "delay": 160
+                }
+               }
+              ],
+              "className": "mt-8 grid gap-4 md:grid-cols-3"
+             }
+            }
+           ],
+           "className": "relative mx-auto max-w-6xl px-4 py-16 md:py-20"
+          }
+         }
+        ],
+        "className": "relative overflow-hidden bg-cheese text-ink",
+        "id": "deals"
+       }
+      },
+      {
+       "type": "section",
+       "key": null,
+       "props": {
+        "children": {
+         "type": "div",
+         "key": null,
+         "props": {
+          "children": [
+           {
+            "type": "Reveal",
+            "key": null,
+            "props": {
+             "children": [
+              {
+               "type": "p",
+               "key": null,
+               "props": {
+                "children": "From our kitchen, not a stock library",
+                "className": "font-cond text-sm font-bold uppercase tracking-[0.24em] text-cheese-deep"
+               }
+              },
+              {
+               "type": "div",
+               "key": null,
+               "props": {
+                "children": [
+                 {
+                  "type": "h2",
+                  "key": null,
+                  "props": {
+                   "children": "The signatures",
+                   "className": "font-display text-5xl uppercase tracking-wide md:text-6xl"
+                  }
+                 },
+                 {
+                  "type": "LinkComponent",
+                  "key": null,
+                  "props": {
+                   "children": "Full menu & prices →",
+                   "className": "font-cond text-lg font-bold uppercase tracking-wide text-ink underline decoration-cheese decoration-[3px] underline-offset-4 hover:text-cheese-deep",
+                   "href": "/menu"
+                  }
+                 }
+                ],
+                "className": "mt-2 flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3"
+               }
+              }
+             ]
+            }
+           },
+           {
+            "type": "div",
+            "key": null,
+            "props": {
+             "children": [
+              {
+               "type": "Reveal",
+               "key": "Cheesy Star",
+               "props": {
+                "children": {
+                 "type": "LinkComponent",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "img",
+                       "key": null,
+                       "props": {
+                        "alt": "Cheesy Star from Cheese O'Clock",
+                        "className": "w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105",
+                        "decoding": "async",
+                        "height": 720,
+                        "loading": "lazy",
+                        "sizes": "(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw",
+                        "src": "/images/menu/cheesy-star.webp",
+                        "srcSet": "/images/menu/sm/cheesy-star.webp 400w, /images/menu/cheesy-star.webp 720w",
+                        "width": 720
+                       }
+                      },
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "Rs 2,200",
+                        "className": "absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink"
+                       }
+                      }
+                     ],
+                     "className": "relative grid aspect-[4/3] place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_58%,rgba(245,179,1,0.3),transparent_66%)]"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Signature · Large 12\"",
+                        "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                       }
+                      },
+                      {
+                       "type": "h3",
+                       "key": null,
+                       "props": {
+                        "children": "Cheesy Star",
+                        "className": "mt-1 font-display text-3xl uppercase tracking-wide"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Cut like a star, built for sharing. Fajita chicken, kabab pieces, bell pepper, onion, pickle and olives, with Sriracha mayo dip.",
+                        "className": "mt-2 text-sm leading-relaxed text-cream/65"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Order it →",
+                        "className": "mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese"
+                       }
+                      }
+                     ],
+                     "className": "flex flex-1 flex-col p-5"
+                    }
+                   }
+                  ],
+                  "className": "group flex h-full flex-col overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md transition-transform hover:-translate-y-1",
+                  "href": "/menu#signature-pizzas"
+                 }
+                },
+                "delay": 0
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "Crown Crust",
+               "props": {
+                "children": {
+                 "type": "LinkComponent",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "img",
+                       "key": null,
+                       "props": {
+                        "alt": "Crown Crust from Cheese O'Clock",
+                        "className": "w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105",
+                        "decoding": "async",
+                        "height": 720,
+                        "loading": "lazy",
+                        "sizes": "(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw",
+                        "src": "/images/menu/crown-crust.webp",
+                        "srcSet": "/images/menu/sm/crown-crust.webp 400w, /images/menu/crown-crust.webp 720w",
+                        "width": 720
+                       }
+                      },
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "Rs 2,200",
+                        "className": "absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink"
+                       }
+                      }
+                     ],
+                     "className": "relative grid aspect-[4/3] place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_58%,rgba(245,179,1,0.3),transparent_66%)]"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Signature · Large 12\"",
+                        "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                       }
+                      },
+                      {
+                       "type": "h3",
+                       "key": null,
+                       "props": {
+                        "children": "Crown Crust",
+                        "className": "mt-1 font-display text-3xl uppercase tracking-wide"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Crowned with tikka chicken and seekh kabab, jalapeño, bell pepper, onion and olives, finished with creamy Sriracha.",
+                        "className": "mt-2 text-sm leading-relaxed text-cream/65"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Order it →",
+                        "className": "mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese"
+                       }
+                      }
+                     ],
+                     "className": "flex flex-1 flex-col p-5"
+                    }
+                   }
+                  ],
+                  "className": "group flex h-full flex-col overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md transition-transform hover:-translate-y-1",
+                  "href": "/menu#signature-pizzas"
+                 }
+                },
+                "delay": 80
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "Shawarma Pizza",
+               "props": {
+                "children": {
+                 "type": "LinkComponent",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "img",
+                       "key": null,
+                       "props": {
+                        "alt": "Shawarma Pizza from Cheese O'Clock",
+                        "className": "w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105",
+                        "decoding": "async",
+                        "height": 720,
+                        "loading": "lazy",
+                        "sizes": "(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw",
+                        "src": "/images/menu/shawarma-pizza.webp",
+                        "srcSet": "/images/menu/sm/shawarma-pizza.webp 400w, /images/menu/shawarma-pizza.webp 720w",
+                        "width": 720
+                       }
+                      },
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "Rs 2,200",
+                        "className": "absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink"
+                       }
+                      }
+                     ],
+                     "className": "relative grid aspect-[4/3] place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_58%,rgba(245,179,1,0.3),transparent_66%)]"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Signature · Large 12\"",
+                        "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                       }
+                      },
+                      {
+                       "type": "h3",
+                       "key": null,
+                       "props": {
+                        "children": "Shawarma Pizza",
+                        "className": "mt-1 font-display text-3xl uppercase tracking-wide"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Made with shawarma chicken, crisp fries, pickle and olives, drizzled with shawarma sauce, with a Sriracha sauce.",
+                        "className": "mt-2 text-sm leading-relaxed text-cream/65"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Order it →",
+                        "className": "mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese"
+                       }
+                      }
+                     ],
+                     "className": "flex flex-1 flex-col p-5"
+                    }
+                   }
+                  ],
+                  "className": "group flex h-full flex-col overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md transition-transform hover:-translate-y-1",
+                  "href": "/menu#signature-pizzas"
+                 }
+                },
+                "delay": 160
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "Meat Lovers",
+               "props": {
+                "children": {
+                 "type": "LinkComponent",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "img",
+                       "key": null,
+                       "props": {
+                        "alt": "Meat Lovers from Cheese O'Clock",
+                        "className": "w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105",
+                        "decoding": "async",
+                        "height": 720,
+                        "loading": "lazy",
+                        "sizes": "(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw",
+                        "src": "/images/menu/meat-lovers.webp",
+                        "srcSet": "/images/menu/sm/meat-lovers.webp 400w, /images/menu/meat-lovers.webp 720w",
+                        "width": 720
+                       }
+                      },
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "Rs 2,200",
+                        "className": "absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink"
+                       }
+                      }
+                     ],
+                     "className": "relative grid aspect-[4/3] place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_58%,rgba(245,179,1,0.3),transparent_66%)]"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Signature · Large 12\"",
+                        "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                       }
+                      },
+                      {
+                       "type": "h3",
+                       "key": null,
+                       "props": {
+                        "children": "Meat Lovers",
+                        "className": "mt-1 font-display text-3xl uppercase tracking-wide"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Fajita chicken, Italian minced meat and pepperoni with onion, drizzled with creamy Sriracha sauce.",
+                        "className": "mt-2 text-sm leading-relaxed text-cream/65"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Order it →",
+                        "className": "mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese"
+                       }
+                      }
+                     ],
+                     "className": "flex flex-1 flex-col p-5"
+                    }
+                   }
+                  ],
+                  "className": "group flex h-full flex-col overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md transition-transform hover:-translate-y-1",
+                  "href": "/menu#signature-pizzas"
+                 }
+                },
+                "delay": 0
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "Cheetos",
+               "props": {
+                "children": {
+                 "type": "LinkComponent",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "img",
+                       "key": null,
+                       "props": {
+                        "alt": "Cheetos from Cheese O'Clock",
+                        "className": "w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105",
+                        "decoding": "async",
+                        "height": 720,
+                        "loading": "lazy",
+                        "sizes": "(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw",
+                        "src": "/images/menu/cheetos.webp",
+                        "srcSet": "/images/menu/sm/cheetos.webp 400w, /images/menu/cheetos.webp 720w",
+                        "width": 720
+                       }
+                      },
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "Rs 2,200",
+                        "className": "absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink"
+                       }
+                      }
+                     ],
+                     "className": "relative grid aspect-[4/3] place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_58%,rgba(245,179,1,0.3),transparent_66%)]"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Signature · Large 12\"",
+                        "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                       }
+                      },
+                      {
+                       "type": "h3",
+                       "key": null,
+                       "props": {
+                        "children": "Cheetos",
+                        "className": "mt-1 font-display text-3xl uppercase tracking-wide"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Fajita chicken and jalapeño with creamy cheese and a hot, tangy red spice, with ranch dip.",
+                        "className": "mt-2 text-sm leading-relaxed text-cream/65"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Order it →",
+                        "className": "mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese"
+                       }
+                      }
+                     ],
+                     "className": "flex flex-1 flex-col p-5"
+                    }
+                   }
+                  ],
+                  "className": "group flex h-full flex-col overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md transition-transform hover:-translate-y-1",
+                  "href": "/menu#signature-pizzas"
+                 }
+                },
+                "delay": 80
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "Signature Cheese Dipped",
+               "props": {
+                "children": {
+                 "type": "LinkComponent",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "img",
+                       "key": null,
+                       "props": {
+                        "alt": "Signature Cheese Dipped from Cheese O'Clock",
+                        "className": "w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105",
+                        "decoding": "async",
+                        "height": 720,
+                        "loading": "lazy",
+                        "sizes": "(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw",
+                        "src": "/images/menu/signature-cheese-dipped.webp",
+                        "srcSet": "/images/menu/sm/signature-cheese-dipped.webp 400w, /images/menu/signature-cheese-dipped.webp 720w",
+                        "width": 720
+                       }
+                      },
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "Rs 900",
+                        "className": "absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink"
+                       }
+                      }
+                     ],
+                     "className": "relative grid aspect-[4/3] place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_58%,rgba(245,179,1,0.3),transparent_66%)]"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Signature burger",
+                        "className": "font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese"
+                       }
+                      },
+                      {
+                       "type": "h3",
+                       "key": null,
+                       "props": {
+                        "children": "Signature Cheese Dipped",
+                        "className": "mt-1 font-display text-3xl uppercase tracking-wide"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Thigh-marinated crispy fillet dunked in molten cheese, with signature sauce, lettuce and jalapeño in a brioche bun.",
+                        "className": "mt-2 text-sm leading-relaxed text-cream/65"
+                       }
+                      },
+                      {
+                       "type": "p",
+                       "key": null,
+                       "props": {
+                        "children": "Order it →",
+                        "className": "mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese"
+                       }
+                      }
+                     ],
+                     "className": "flex flex-1 flex-col p-5"
+                    }
+                   }
+                  ],
+                  "className": "group flex h-full flex-col overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md transition-transform hover:-translate-y-1",
+                  "href": "/menu#burgers"
+                 }
+                },
+                "delay": 160
+               }
+              }
+             ],
+             "className": "mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3"
+            }
+           }
+          ],
+          "className": "mx-auto max-w-6xl px-4 py-20 md:py-24"
+         }
+        },
+        "className": "bg-paper text-ink"
+       }
+      },
+      {
+       "type": "section",
+       "key": null,
+       "props": {
+        "children": {
+         "type": "div",
+         "key": null,
+         "props": {
+          "children": [
+           {
+            "type": "Reveal",
+            "key": null,
+            "props": {
+             "children": [
+              {
+               "type": "p",
+               "key": null,
+               "props": {
+                "children": "Delivery",
+                "className": "font-cond text-sm font-bold uppercase tracking-[0.24em] text-cheese-deep"
+               }
+              },
+              {
+               "type": "h2",
+               "key": null,
+               "props": {
+                "children": "All over DHA & Clifton",
+                "className": "mt-2 max-w-3xl font-display text-5xl uppercase tracking-wide md:text-6xl"
+               }
+              },
+              {
+               "type": "p",
+               "key": null,
+               "props": {
+                "children": "Our kitchen is in Rahat Commercial Area, DHA Phase 6. Pick your area at checkout and the delivery charge is added for you — we don’t take online orders outside DHA and Clifton.",
+                "className": "mt-4 max-w-2xl leading-relaxed text-ink/70"
+               }
+              }
+             ]
+            }
+           },
+           {
+            "type": "div",
+            "key": null,
+            "props": {
+             "children": [
+              {
+               "type": "div",
+               "key": null,
+               "props": {
+                "children": [
+                 {
+                  "type": "div",
+                  "key": null,
+                  "props": {
+                   "children": [
+                    {
+                     "type": "Reveal",
+                     "key": "20000",
+                     "props": {
+                      "children": {
+                       "type": "div",
+                       "key": null,
+                       "props": {
+                        "children": [
+                         {
+                          "type": "div",
+                          "key": null,
+                          "props": {
+                           "children": "Rs 200",
+                           "className": "font-display text-5xl tracking-wide"
+                          }
+                         },
+                         {
+                          "type": "div",
+                          "key": null,
+                          "props": {
+                           "children": "DHA Phases 1–7 · Clifton Blocks 3–9",
+                           "className": "mt-2 font-cond text-lg font-bold uppercase leading-snug"
+                          }
+                         }
+                        ],
+                        "className": "h-full rounded-3xl border-2 border-ink bg-white p-5"
+                       }
+                      },
+                      "delay": 0
+                     }
+                    },
+                    {
+                     "type": "Reveal",
+                     "key": "25000",
+                     "props": {
+                      "children": {
+                       "type": "div",
+                       "key": null,
+                       "props": {
+                        "children": [
+                         {
+                          "type": "div",
+                          "key": null,
+                          "props": {
+                           "children": "Rs 250",
+                           "className": "font-display text-5xl tracking-wide"
+                          }
+                         },
+                         {
+                          "type": "div",
+                          "key": null,
+                          "props": {
+                           "children": "DHA Phase 8 · Emaar & Creek Vista · Clifton Blocks 1 & 2",
+                           "className": "mt-2 font-cond text-lg font-bold uppercase leading-snug"
+                          }
+                         }
+                        ],
+                        "className": "h-full rounded-3xl border-2 border-ink bg-white p-5"
+                       }
+                      },
+                      "delay": 60
+                     }
+                    }
+                   ],
+                   "className": "grid gap-3 sm:grid-cols-2"
+                  }
+                 },
+                 {
+                  "type": "div",
+                  "key": null,
+                  "props": {
+                   "children": [
+                    {
+                     "type": "LinkComponent",
+                     "key": "dha-phase-6",
+                     "props": {
+                      "children": [
+                       "DHA Phase 6",
+                       " ",
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          "· ",
+                          "Rs 200 delivery"
+                         ],
+                         "className": "font-semibold text-ink/50"
+                        }
+                       }
+                      ],
+                      "className": "rounded-full border border-ink/15 bg-white px-4 py-2 font-cond text-base font-bold uppercase tracking-wide transition-colors hover:border-ink hover:bg-ink hover:text-cheese",
+                      "href": "/delivery/dha-phase-6"
+                     }
+                    },
+                    {
+                     "type": "LinkComponent",
+                     "key": "dha-phase-7",
+                     "props": {
+                      "children": [
+                       "DHA Phase 7",
+                       " ",
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          "· ",
+                          "Rs 200 delivery"
+                         ],
+                         "className": "font-semibold text-ink/50"
+                        }
+                       }
+                      ],
+                      "className": "rounded-full border border-ink/15 bg-white px-4 py-2 font-cond text-base font-bold uppercase tracking-wide transition-colors hover:border-ink hover:bg-ink hover:text-cheese",
+                      "href": "/delivery/dha-phase-7"
+                     }
+                    },
+                    {
+                     "type": "LinkComponent",
+                     "key": "dha-phase-8",
+                     "props": {
+                      "children": [
+                       "DHA Phase 8",
+                       " ",
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          "· ",
+                          "Rs 250 delivery"
+                         ],
+                         "className": "font-semibold text-ink/50"
+                        }
+                       }
+                      ],
+                      "className": "rounded-full border border-ink/15 bg-white px-4 py-2 font-cond text-base font-bold uppercase tracking-wide transition-colors hover:border-ink hover:bg-ink hover:text-cheese",
+                      "href": "/delivery/dha-phase-8"
+                     }
+                    },
+                    {
+                     "type": "LinkComponent",
+                     "key": "dha-phase-5",
+                     "props": {
+                      "children": [
+                       "DHA Phase 5",
+                       " ",
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          "· ",
+                          "Rs 200 delivery"
+                         ],
+                         "className": "font-semibold text-ink/50"
+                        }
+                       }
+                      ],
+                      "className": "rounded-full border border-ink/15 bg-white px-4 py-2 font-cond text-base font-bold uppercase tracking-wide transition-colors hover:border-ink hover:bg-ink hover:text-cheese",
+                      "href": "/delivery/dha-phase-5"
+                     }
+                    },
+                    {
+                     "type": "LinkComponent",
+                     "key": "dha-phase-4",
+                     "props": {
+                      "children": [
+                       "DHA Phase 4",
+                       " ",
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          "· ",
+                          "Rs 200 delivery"
+                         ],
+                         "className": "font-semibold text-ink/50"
+                        }
+                       }
+                      ],
+                      "className": "rounded-full border border-ink/15 bg-white px-4 py-2 font-cond text-base font-bold uppercase tracking-wide transition-colors hover:border-ink hover:bg-ink hover:text-cheese",
+                      "href": "/delivery/dha-phase-4"
+                     }
+                    },
+                    {
+                     "type": "LinkComponent",
+                     "key": "dha-phase-1-2",
+                     "props": {
+                      "children": [
+                       "DHA Phase 1 & 2",
+                       " ",
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          "· ",
+                          "Rs 200 delivery"
+                         ],
+                         "className": "font-semibold text-ink/50"
+                        }
+                       }
+                      ],
+                      "className": "rounded-full border border-ink/15 bg-white px-4 py-2 font-cond text-base font-bold uppercase tracking-wide transition-colors hover:border-ink hover:bg-ink hover:text-cheese",
+                      "href": "/delivery/dha-phase-1-2"
+                     }
+                    },
+                    {
+                     "type": "LinkComponent",
+                     "key": "clifton",
+                     "props": {
+                      "children": [
+                       "Clifton",
+                       " ",
+                       {
+                        "type": "span",
+                        "key": null,
+                        "props": {
+                         "children": [
+                          "· ",
+                          "Rs 200–250 delivery"
+                         ],
+                         "className": "font-semibold text-ink/50"
+                        }
+                       }
+                      ],
+                      "className": "rounded-full border border-ink/15 bg-white px-4 py-2 font-cond text-base font-bold uppercase tracking-wide transition-colors hover:border-ink hover:bg-ink hover:text-cheese",
+                      "href": "/delivery/clifton"
+                     }
+                    }
+                   ],
+                   "className": "mt-6 flex flex-wrap gap-2"
+                  }
+                 }
+                ]
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": null,
+               "props": {
+                "children": [
+                 {
+                  "type": "ShopMapCard",
+                  "key": null,
+                  "props": {
+                   "className": "rounded-3xl border-2 border-ink",
+                   "heightClass": "h-[380px]",
+                   "title": "Cheese O'Clock, Rahat Commercial Area, DHA Phase 6, Karachi on Google Maps"
+                  }
+                 },
+                 {
+                  "type": "address",
+                  "key": null,
+                  "props": {
+                   "children": [
+                    "Shop 3, Ground Floor, 41-C, Sehar Lane No. 3, Rahat Commercial Area, DHA Phase 6",
+                    ", ",
+                    "Karachi",
+                    " · ",
+                    "Open daily · 12 noon – 1 am"
+                   ],
+                   "className": "mt-3 text-center text-sm not-italic text-ink/65"
+                  }
+                 }
+                ],
+                "delay": 100
+               }
+              }
+             ],
+             "className": "mt-10 grid gap-10 lg:grid-cols-[1.15fr_0.85fr]"
+            }
+           }
+          ],
+          "className": "mx-auto max-w-6xl px-4 py-20 md:py-24"
+         }
+        },
+        "className": "bg-paper text-ink"
+       }
+      },
+      {
+       "type": "section",
+       "key": null,
+       "props": {
+        "children": {
+         "type": "div",
+         "key": null,
+         "props": {
+          "children": [
+           {
+            "type": "Reveal",
+            "key": null,
+            "props": {
+             "children": [
+              {
+               "type": "p",
+               "key": null,
+               "props": {
+                "children": "How it works",
+                "className": "font-cond text-sm font-bold uppercase tracking-[0.24em] text-cheese"
+               }
+              },
+              {
+               "type": "h2",
+               "key": null,
+               "props": {
+                "children": "Oven to door in three steps",
+                "className": "mt-2 font-display text-5xl uppercase tracking-wide text-cream md:text-6xl"
+               }
+              }
+             ]
+            }
+           },
+           {
+            "type": "div",
+            "key": null,
+            "props": {
+             "children": [
+              {
+               "type": "Reveal",
+               "key": "01",
+               "props": {
+                "children": {
+                 "type": "div",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "01",
+                     "className": "font-display text-5xl text-cheese/40"
+                    }
+                   },
+                   {
+                    "type": "h3",
+                    "key": null,
+                    "props": {
+                     "children": "Order in under a minute",
+                     "className": "mt-3 font-cond text-2xl font-bold uppercase tracking-wide text-cream"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Pick from the menu here, or send your order on WhatsApp — both land in the same kitchen queue.",
+                     "className": "mt-2 text-sm leading-relaxed text-cream/60"
+                    }
+                   }
+                  ],
+                  "className": "h-full rounded-3xl border border-cream/10 bg-night-card p-6 transition-colors hover:border-cheese/40"
+                 }
+                },
+                "delay": 0
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "02",
+               "props": {
+                "children": {
+                 "type": "div",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "02",
+                     "className": "font-display text-5xl text-cheese/40"
+                    }
+                   },
+                   {
+                    "type": "h3",
+                    "key": null,
+                    "props": {
+                     "children": "Fired when your ticket prints",
+                     "className": "mt-3 font-cond text-2xl font-bold uppercase tracking-wide text-cream"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Every pizza and burger is made to order in our DHA Phase 6 kitchen and sent out hot.",
+                     "className": "mt-2 text-sm leading-relaxed text-cream/60"
+                    }
+                   }
+                  ],
+                  "className": "h-full rounded-3xl border border-cream/10 bg-night-card p-6 transition-colors hover:border-cheese/40"
+                 }
+                },
+                "delay": 80
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "03",
+               "props": {
+                "children": {
+                 "type": "div",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "03",
+                     "className": "font-display text-5xl text-cheese/40"
+                    }
+                   },
+                   {
+                    "type": "h3",
+                    "key": null,
+                    "props": {
+                     "children": "Pay cash at your door",
+                     "className": "mt-3 font-cond text-2xl font-bold uppercase tracking-wide text-cream"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Follow your order live from kitchen to doorstep, then pay the rider exactly what the printed receipt says.",
+                     "className": "mt-2 text-sm leading-relaxed text-cream/60"
+                    }
+                   }
+                  ],
+                  "className": "h-full rounded-3xl border border-cream/10 bg-night-card p-6 transition-colors hover:border-cheese/40"
+                 }
+                },
+                "delay": 160
+               }
+              }
+             ],
+             "className": "mt-10 grid gap-5 md:grid-cols-3"
+            }
+           },
+           {
+            "type": "Reveal",
+            "key": null,
+            "props": {
+             "children": {
+              "type": "div",
+              "key": null,
+              "props": {
+               "children": [
+                {
+                 "type": "div",
+                 "key": "12 noon – 1 am",
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "12 noon – 1 am",
+                     "className": "font-display text-4xl uppercase tracking-wide text-cheese"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "open every day",
+                     "className": "mt-1 font-cond text-base font-semibold uppercase tracking-wide text-cream/55"
+                    }
+                   }
+                  ],
+                  "className": "bg-night-soft px-6 py-8 text-center"
+                 }
+                },
+                {
+                 "type": "div",
+                 "key": "From Rs 200",
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "From Rs 200",
+                     "className": "font-display text-4xl uppercase tracking-wide text-cheese"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "delivery in DHA & Clifton",
+                     "className": "mt-1 font-cond text-base font-semibold uppercase tracking-wide text-cream/55"
+                    }
+                   }
+                  ],
+                  "className": "bg-night-soft px-6 py-8 text-center"
+                 }
+                },
+                {
+                 "type": "div",
+                 "key": "Cash on delivery",
+                 "props": {
+                  "children": [
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "Cash on delivery",
+                     "className": "font-display text-4xl uppercase tracking-wide text-cheese"
+                    }
+                   },
+                   {
+                    "type": "div",
+                    "key": null,
+                    "props": {
+                     "children": "pay the rider at your door",
+                     "className": "mt-1 font-cond text-base font-semibold uppercase tracking-wide text-cream/55"
+                    }
+                   }
+                  ],
+                  "className": "bg-night-soft px-6 py-8 text-center"
+                 }
+                }
+               ],
+               "className": "mt-12 grid gap-px overflow-hidden rounded-3xl border border-cream/10 bg-cream/10 sm:grid-cols-3"
+              }
+             },
+             "delay": 120
+            }
+           }
+          ],
+          "className": "mx-auto max-w-6xl px-4 py-20 md:py-24"
+         }
+        },
+        "className": "bg-ink"
+       }
+      },
+      {
+       "type": "section",
+       "key": null,
+       "props": {
+        "children": {
+         "type": "div",
+         "key": null,
+         "props": {
+          "children": [
+           {
+            "type": "Reveal",
+            "key": null,
+            "props": {
+             "children": {
+              "type": "h2",
+              "key": null,
+              "props": {
+               "children": "Questions, answered",
+               "className": "font-display text-5xl uppercase tracking-wide text-cream"
+              }
+             }
+            }
+           },
+           {
+            "type": "div",
+            "key": null,
+            "props": {
+             "children": [
+              {
+               "type": "Reveal",
+               "key": "Which areas do you deliver to?",
+               "props": {
+                "children": {
+                 "type": "details",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "summary",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      "Which areas do you deliver to?",
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "+",
+                        "className": "text-2xl text-cheese transition-transform group-open:rotate-45"
+                       }
+                      }
+                     ],
+                     "className": "flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-cond text-xl font-bold uppercase tracking-wide text-cream [&::-webkit-details-marker]:hidden"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "DHA Phases 1–8 and Clifton Blocks 1–9, including Emaar Crescent Bay and Creek Vista. Delivery is Rs 200 for DHA Phases 1–7 and Clifton Blocks 3–9, and Rs 250 for DHA Phase 8, Emaar, Creek Vista and Clifton Blocks 1 & 2. We don't deliver outside DHA and Clifton.",
+                     "className": "px-5 pb-5 leading-relaxed text-cream/65"
+                    }
+                   }
+                  ],
+                  "className": "group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40"
+                 }
+                },
+                "delay": 0
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "What are your hours?",
+               "props": {
+                "children": {
+                 "type": "details",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "summary",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      "What are your hours?",
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "+",
+                        "className": "text-2xl text-cheese transition-transform group-open:rotate-45"
+                       }
+                      }
+                     ],
+                     "className": "flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-cond text-xl font-bold uppercase tracking-wide text-cream [&::-webkit-details-marker]:hidden"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Every day from 12 noon to 1 am.",
+                     "className": "px-5 pb-5 leading-relaxed text-cream/65"
+                    }
+                   }
+                  ],
+                  "className": "group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40"
+                 }
+                },
+                "delay": 50
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "How do I pay?",
+               "props": {
+                "children": {
+                 "type": "details",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "summary",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      "How do I pay?",
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "+",
+                        "className": "text-2xl text-cheese transition-transform group-open:rotate-45"
+                       }
+                      }
+                     ],
+                     "className": "flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-cond text-xl font-bold uppercase tracking-wide text-cream [&::-webkit-details-marker]:hidden"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Cash on delivery. 15% tax is added on the bill, and the printed receipt from the kitchen is the final amount.",
+                     "className": "px-5 pb-5 leading-relaxed text-cream/65"
+                    }
+                   }
+                  ],
+                  "className": "group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40"
+                 }
+                },
+                "delay": 100
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "What sizes do the pizzas come in?",
+               "props": {
+                "children": {
+                 "type": "details",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "summary",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      "What sizes do the pizzas come in?",
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "+",
+                        "className": "text-2xl text-cheese transition-transform group-open:rotate-45"
+                       }
+                      }
+                     ],
+                     "className": "flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-cond text-xl font-bold uppercase tracking-wide text-cream [&::-webkit-details-marker]:hidden"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Regular pizzas come in Medium 9\" and Large 12\". The five signature pizzas are Large 12\".",
+                     "className": "px-5 pb-5 leading-relaxed text-cream/65"
+                    }
+                   }
+                  ],
+                  "className": "group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40"
+                 }
+                },
+                "delay": 150
+               }
+              },
+              {
+               "type": "Reveal",
+               "key": "Can I order on WhatsApp instead?",
+               "props": {
+                "children": {
+                 "type": "details",
+                 "key": null,
+                 "props": {
+                  "children": [
+                   {
+                    "type": "summary",
+                    "key": null,
+                    "props": {
+                     "children": [
+                      "Can I order on WhatsApp instead?",
+                      {
+                       "type": "span",
+                       "key": null,
+                       "props": {
+                        "children": "+",
+                        "className": "text-2xl text-cheese transition-transform group-open:rotate-45"
+                       }
+                      }
+                     ],
+                     "className": "flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-cond text-xl font-bold uppercase tracking-wide text-cream [&::-webkit-details-marker]:hidden"
+                    }
+                   },
+                   {
+                    "type": "p",
+                    "key": null,
+                    "props": {
+                     "children": "Yes — message 0300 9367865 or 0331 2188295 with your order and address, and we'll confirm the total. Same kitchen, same prices.",
+                     "className": "px-5 pb-5 leading-relaxed text-cream/65"
+                    }
+                   }
+                  ],
+                  "className": "group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40"
+                 }
+                },
+                "delay": 200
+               }
+              }
+             ],
+             "className": "mt-8 space-y-3"
+            }
+           }
+          ],
+          "className": "mx-auto max-w-3xl px-4 pb-20 md:pb-24"
+         }
+        },
+        "className": "bg-ink"
+       }
+      },
+      {
+       "type": "section",
+       "key": null,
+       "props": {
+        "children": {
+         "type": "div",
+         "key": null,
+         "props": {
+          "children": [
+           {
+            "type": "h2",
+            "key": null,
+            "props": {
+             "children": "Hungry? It’s Cheese O’Clock.",
+             "className": "font-display text-[clamp(3rem,8vw,6rem)] uppercase leading-[0.92] tracking-wide text-ink"
+            }
+           },
+           {
+            "type": "div",
+            "key": null,
+            "props": {
+             "children": [
+              {
+               "type": "LinkComponent",
+               "key": null,
+               "props": {
+                "children": "Order now →",
+                "className": "rounded-full bg-ink px-9 py-4 font-display text-2xl uppercase tracking-wide text-cheese shadow-soft-lg transition-transform hover:scale-105 active:scale-95",
+                "href": "/menu"
+               }
+              },
+              [
+               {
+                "type": "a",
+                "key": "https://wa.me/923009367865",
+                "props": {
+                 "children": [
+                  {
+                   "type": "WhatsAppGlyph",
+                   "key": null,
+                   "props": {
+                    "className": "h-5 w-5"
+                   }
+                  },
+                  " ",
+                  "0300 9367865"
+                 ],
+                 "className": "flex items-center gap-2 rounded-full border-2 border-ink/30 px-6 py-4 font-cond text-lg font-bold uppercase tracking-wide text-ink transition-colors hover:border-ink active:scale-95",
+                 "href": "https://wa.me/923009367865?text=Hi%20Cheese%20O'Clock!%20I'd%20like%20to%20place%20an%20order%3A%20",
+                 "rel": "noopener noreferrer",
+                 "target": "_blank"
+                }
+               },
+               {
+                "type": "a",
+                "key": "https://wa.me/923312188295",
+                "props": {
+                 "children": [
+                  {
+                   "type": "WhatsAppGlyph",
+                   "key": null,
+                   "props": {
+                    "className": "h-5 w-5"
+                   }
+                  },
+                  " ",
+                  "0331 2188295"
+                 ],
+                 "className": "flex items-center gap-2 rounded-full border-2 border-ink/30 px-6 py-4 font-cond text-lg font-bold uppercase tracking-wide text-ink transition-colors hover:border-ink active:scale-95",
+                 "href": "https://wa.me/923312188295?text=Hi%20Cheese%20O'Clock!%20I'd%20like%20to%20place%20an%20order%3A%20",
+                 "rel": "noopener noreferrer",
+                 "target": "_blank"
+                }
+               }
+              ]
+             ],
+             "className": "flex flex-wrap justify-center gap-3"
+            }
+           },
+           {
+            "type": "p",
+            "key": null,
+            "props": {
+             "children": [
+              "Open daily · 12 noon – 1 am",
+              " · Cash on delivery across DHA & Clifton"
+             ],
+             "className": "font-cond text-base font-bold uppercase tracking-wide text-ink/70"
+            }
+           }
+          ],
+          "className": "mx-auto flex max-w-6xl flex-col items-center gap-6 px-4 py-16 text-center md:py-20"
+         }
+        },
+        "className": "bg-cheese"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "type": "SiteFooter",
+    "key": null,
+    "props": {}
+   },
+   {
+    "type": "WhatsAppFab",
+    "key": null,
+    "props": {}
+   }
+  ]
+ }
+}

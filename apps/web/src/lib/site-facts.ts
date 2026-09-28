@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { PublishedSettings } from '@cheeseoclock/shared-types';
-import { publishedSettingsSchema } from '@cheeseoclock/shared-schemas/web-settings';
+import { publishedSettingsReadSchema } from '@cheeseoclock/shared-schemas/web-settings';
 import { sql } from './db';
 import { DEFAULT_FACTS, factsFromBlock, type SiteFacts } from './delivery-facts';
 
@@ -11,7 +11,13 @@ import { DEFAULT_FACTS, factsFromBlock, type SiteFacts } from './delivery-facts'
  * in words — is lib/delivery-facts.ts.
  */
 
-/** A stored block, checked again on the way out (a hand-edited row must not break a page); null when none or unreadable. */
+/**
+ * A stored block, checked again on the way out (a hand-edited row must not
+ * break a page); null when none or unreadable. A website message that does
+ * not fit (v0.7.30: the closed notice, the announcement, the delivery
+ * minimum) reads as absent — its default, today's site — and never throws
+ * the areas and fees away with it (shared-schemas publishedSettingsReadSchema).
+ */
 export function parseStoredSettings(raw: unknown): PublishedSettings | null {
   if (raw === null || raw === undefined) return null;
   let value: unknown = raw;
@@ -22,7 +28,7 @@ export function parseStoredSettings(raw: unknown): PublishedSettings | null {
       return null;
     }
   }
-  const parsed = publishedSettingsSchema.safeParse(value);
+  const parsed = publishedSettingsReadSchema.safeParse(value);
   if (!parsed.success) {
     console.error('stored settings block unreadable — using the built-in areas and fees', parsed.error.flatten());
     return null;

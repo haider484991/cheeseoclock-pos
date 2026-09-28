@@ -17,11 +17,23 @@ import { SIGNATURE_BURGER, SIGNATURE_PIZZAS, VALUE_DEALS } from '@/lib/signature
 
 const LINEUP = [...SIGNATURE_PIZZAS, SIGNATURE_BURGER];
 
+/** The ticker's words (the owner's announcement, while on, goes first). */
+const MARQUEE = [
+  'HYGIENICALLY MADE. DELICIOUSLY UNFORGETTABLE.',
+  'WE DELIVER ALL OVER DHA & CLIFTON',
+  'OPEN 12 NOON – 1 AM',
+  'CASH ON DELIVERY',
+  'FIVE SIGNATURE PIZZAS',
+  "IT'S ALWAYS CHEESE O'CLOCK",
+];
+
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
  * build, whenever a till publishes (api/bridge/menu revalidates), and at
  * least hourly. force-static keeps the settings read (a no-store fetch) from
- * turning the page dynamic.
+ * turning the page dynamic. The owner's announcement (v0.7.30, off = none)
+ * comes with the same read and the same refresh: page text in the hero and
+ * the ticker only — never the title, a meta tag or the JSON-LD.
  */
 export const dynamic = 'force-static';
 export const revalidate = 3600;
@@ -78,6 +90,7 @@ function WhatsAppGlyph({ className = '' }: { className?: string }) {
 export default async function HomePage() {
   const facts = await getSiteFacts();
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
+  const { announcement } = facts;
   return (
     <>
       <SiteHeader />
@@ -126,6 +139,12 @@ export default async function HomePage() {
             <PizzaCarousel3D className="-mt-6 [grid-area:wheel] md:-mr-6 md:mt-0" />
 
             <div className="animate-fade-up [grid-area:rest] md:self-start md:pr-4">
+              {announcement && (
+                <p className="mt-6 flex w-fit max-w-md items-start gap-2 rounded-2xl border border-cheese/50 bg-cheese/10 px-4 py-2.5 font-cond text-lg font-bold leading-snug text-cheese md:mt-4">
+                  <span aria-hidden>★</span>
+                  <span>{announcement}</span>
+                </p>
+              )}
               <p className="mt-6 font-cond text-2xl font-semibold italic text-cream/85 md:mt-4">
                 {BUSINESS.tagline}
               </p>
@@ -168,17 +187,7 @@ export default async function HomePage() {
         </section>
 
         {/* ============================ MARQUEE ============================ */}
-        <Marquee
-          tilted
-          items={[
-            'HYGIENICALLY MADE. DELICIOUSLY UNFORGETTABLE.',
-            'WE DELIVER ALL OVER DHA & CLIFTON',
-            'OPEN 12 NOON – 1 AM',
-            'CASH ON DELIVERY',
-            'FIVE SIGNATURE PIZZAS',
-            "IT'S ALWAYS CHEESE O'CLOCK",
-          ]}
-        />
+        <Marquee tilted items={announcement ? [announcement, ...MARQUEE] : MARQUEE} />
 
         {/* ========================== VALUE DEALS ========================== */}
         {/* Straight after the marquee, before the signatures (owner 2026-09-25:

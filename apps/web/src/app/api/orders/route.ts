@@ -1,7 +1,13 @@
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { sql } from '@/lib/db';
-import { factsFromBlock, findFactZone, outsideZoneMessage, zonePausedMessage } from '@/lib/delivery-facts';
+import {
+  deliveryMinimumMessage,
+  factsFromBlock,
+  findFactZone,
+  outsideZoneMessage,
+  zonePausedMessage,
+} from '@/lib/delivery-facts';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
 import { formatCents, normalizePhone } from '@/lib/format';
 import { menuWithoutDrinkBrand } from '@/lib/menu-view';
@@ -12,6 +18,8 @@ import { parseStoredSettings } from '@/lib/site-facts';
 import { getStoreStatus } from '@/lib/store-status';
 import { ensureWebOrderColumns } from '@/lib/web-order-columns';
 import {
+  closedNoticeInForce,
+  deliveryMinimumShortfallCents,
   type PublishedMenu,
   type WebFulfilment,
   type WebOrderItem,
@@ -48,7 +56,18 @@ export const dynamic = 'force-dynamic';
  * only while the owner offers it and that till has announced it can import
  * pickup orders, because an older POS would book one as a delivery at full
  * price.
+ *
+ * The owner's website messages (v0.7.30, shared-types web-bridge.ts WEBSITE
+ * MESSAGES), from the same block: while the shop is closed, the owner's
+ * closed notice (until its last Karachi day) is the store_closed sentence;
+ * and a DELIVERY whose food is under the owner's smallest delivery order is
+ * refused ('below_minimum') after pricing — a pick-up never is. With neither
+ * stored, exactly as before.
  */
+
+/** Today's store_closed sentence: what a closed shop says with no closed notice of the owner's. */
+const STORE_CLOSED_MESSAGE =
+  'We are not taking online orders at the moment. Please order on WhatsApp or give us a call — we will take it right away.';
 
 // The messages below reach the customer as written (the checkout shows the
 // first field error), so they are sentences, not Zod's defaults.
@@ -174,7 +193,8 @@ export async function POST(req: Request): Promise<Response> {
     const settingsRows = (await sql()`
       SELECT menu_json -> 'settings' AS settings FROM site_menu WHERE id = 1
     `) as Array<{ settings: unknown }>;
-    const facts = factsFromBlock(parseStoredSettings(settingsRows[0]?.settings ?? null));
+    const block = parseStoredSettings(settingsRows[0]?.settings ?? null);
+    const facts = factsFromBlock(block);
 
     // Only where the owner delivers — the owner's rule, not a UI nicety.
     const zoneAsked = pickup ? undefined : findFactZone(facts, input.zoneId);
@@ -197,12 +217,12 @@ export async function POST(req: Request): Promise<Response> {
     // after it closed.
     const store = await getStoreStatus();
     if (!store.acceptingOrders) {
+      // The owner's closed notice while it is in force (its last Karachi day included), else today's words.
       return Response.json(
         {
           ok: false,
           error: 'store_closed',
-          message:
-            'We are not taking online orders at the moment. Please order on WhatsApp or give us a call — we will take it right away.',
+          message: closedNoticeInForce(block?.closedNotice, Date.now()) ?? STORE_CLOSED_MESSAGE,
         },
         { status: 409 },
       );
@@ -326,6 +346,21 @@ export async function POST(req: Request): Promise<Response> {
         modifiers: mods,
         notes: line.notes?.trim() || null,
       });
+    }
+
+    // The owner's smallest website DELIVERY order (the block stored with this menu; 0 = none, as
+    // before): the food just priced — each line with its choices, times its quantity — before tax,
+    // the delivery charge (added below) and any discount. A pick-up is never refused.
+    if (!pickup) {
+      const minimum = priceFacts.minDeliveryOrderCents;
+      const food = priced.reduce((sum, l) => sum + l.lineTotalCents, 0);
+      const short = deliveryMinimumShortfallCents(food, minimum);
+      if (short > 0) {
+        return Response.json(
+          { ok: false, error: 'below_minimum', message: deliveryMinimumMessage(minimum, short, store.pickupAvailable) },
+          { status: 409 },
+        );
+      }
     }
 
     let orderNotes = input.notes?.trim() || null;

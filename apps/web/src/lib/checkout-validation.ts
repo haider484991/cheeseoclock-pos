@@ -1,5 +1,5 @@
-import type { WebFulfilment } from '@cheeseoclock/shared-types';
-import { DEFAULT_FACTS, deliveryAreasText } from './delivery-facts';
+import { deliveryMinimumShortfallCents, type WebFulfilment } from '@cheeseoclock/shared-types';
+import { DEFAULT_FACTS, deliveryAreasText, deliveryMinimumMessage } from './delivery-facts';
 import { normalizePhone } from './format';
 
 /**
@@ -30,6 +30,10 @@ export interface CheckoutInput {
   canPickup: boolean;
   /** Where the owner delivers, in a sentence ("DHA and Clifton"; '' while every area is off). Default: the built-in areas. */
   deliveryAreas?: string;
+  /** The owner's smallest website delivery order's food, paisa (v0.7.30). Default 0: no minimum, as before. */
+  minDeliveryOrderCents?: number;
+  /** The cart's food: each line with its choices × quantity, before tax, the delivery charge and any discount (lib/cart cartSubtotalCents). */
+  foodSubtotalCents?: number;
 }
 
 export function validateCheckout(v: CheckoutInput): CheckoutProblem | null {
@@ -44,6 +48,11 @@ export function validateCheckout(v: CheckoutInput): CheckoutProblem | null {
         v.canPickup ? `switch to pick-up, or remove ${them}` : `remove ${them}`
       } to order delivery.`,
     };
+  }
+  // The server's rule and words (api/orders 'below_minimum'): a delivery only, never a pick-up.
+  const short = pickup ? 0 : deliveryMinimumShortfallCents(v.foodSubtotalCents ?? 0, v.minDeliveryOrderCents ?? 0);
+  if (short > 0) {
+    return { field: 'cart', message: deliveryMinimumMessage(v.minDeliveryOrderCents ?? 0, short, v.canPickup) };
   }
   if (!pickup && !v.hasZone) {
     const where = v.deliveryAreas ?? deliveryAreasText(DEFAULT_FACTS);
@@ -94,7 +103,9 @@ export function problemFromServer(body: OrderErrorBody | null): CheckoutProblem 
   }
   if (body?.message) {
     const zone = body.error === 'outside_zone' || body.error === 'zone_paused';
-    return { field: zone ? 'zone' : null, message: body.message };
+    // Under the smallest delivery order: the cart is what to change (no "send it on WhatsApp" link).
+    const cart = body.error === 'below_minimum';
+    return { field: zone ? 'zone' : cart ? 'cart' : null, message: body.message };
   }
   switch (body?.error) {
     case 'store_closed':

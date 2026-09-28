@@ -186,6 +186,18 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   silently before; now the publish says which items went without a picture,
   and the Menu editor warns on the item. Pick the photo again (the till
   makes it smaller).
+- **What to check on the website.** Before any 0.7.30 till has saved: the
+  home page, /menu and the area pages read exactly as before (the Phase 7
+  FAQ still says "No minimum on the website"), and an order while the shop
+  is closed gets today's "We are not taking online orders…" sentence. After
+  the owner's Save: the announcement, while on, shows in the home page's
+  hero and ticker and on /menu (the Save refreshes the pages; never in a
+  title or Google's listing); the closed notice replaces the closed
+  explanation on /menu, at checkout and in the order refusal, only while
+  the website is closed and until the end of its last day in Karachi (the
+  WhatsApp buttons stay); a website delivery under the smallest order is
+  refused with how much to add, a pick-up never is. An item set "Pick-up
+  only" shows as pick-up only and a delivery with it is refused.
 
 ## Free-tier limits (plenty for launch)
 

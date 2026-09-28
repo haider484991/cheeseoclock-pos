@@ -9,7 +9,7 @@ import { JsonLd, menuNode, webPageNode } from '@/lib/seo';
 import { getStoreStatus } from '@/lib/store-status';
 import { publicMenu } from '@/lib/public-menu';
 import { parseStoredSettings } from '@/lib/site-facts';
-import type { PublishedMenu } from '@cheeseoclock/shared-types';
+import { closedNoticeInForce, type PublishedMenu } from '@cheeseoclock/shared-types';
 
 export const metadata: Metadata = {
   title: 'Menu & Prices — Pizza, Burgers, Fries',
@@ -53,7 +53,11 @@ export default async function MenuPage() {
   const pickupDiscountPercent = store.pickupDiscountPercent;
   // Where the owner delivers and what it costs: the settings block that came
   // with this menu, else the built-in areas (as before any block).
-  const deliveryFacts = factsFromBlock(parseStoredSettings(menu?.settings ?? null));
+  const block = parseStoredSettings(menu?.settings ?? null);
+  const deliveryFacts = factsFromBlock(block);
+  // The owner's closed notice, worked out here per request (this page is dynamic): its last day
+  // ends on time. null = the page's own closed words, as before.
+  const closedNotice = closedNoticeInForce(block?.closedNotice, Date.now());
   // Sent whole to the browser: the block's areas and pick-up only, never its device id or stamps.
   const shown = menu ? publicMenu(menu) : null;
 
@@ -68,6 +72,7 @@ export default async function MenuPage() {
             pickupAvailable={pickupAvailable}
             pickupDiscountPercent={pickupDiscountPercent}
             deliveryFacts={deliveryFacts}
+            closedNotice={closedNotice}
           />
         ) : (
           <div className="mx-auto max-w-md px-4 py-24 text-center">
