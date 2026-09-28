@@ -7,18 +7,31 @@ import { ShopMapCard } from '@/components/ShopMapCard';
 import { Reveal } from '@/components/Reveal';
 import { BUSINESS } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { FEE_SUMMARY } from '@/lib/delivery-zones';
-import { formatCents } from '@/lib/format';
+import { copyText, feeSummarySentence } from '@/lib/delivery-facts';
+import { DELIVERY_HUB_DESCRIPTION } from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
+import { getSiteFacts } from '@/lib/site-facts';
 
-export const metadata: Metadata = {
-  title: 'Food Delivery Areas in DHA & Clifton, Karachi',
-  description:
-    "Cheese O'Clock delivers pizza & burgers across DHA Phases 1–8 and Clifton from our Phase 6 kitchen. Rs 200–250 delivery, cash on delivery, open daily till 1 am.",
-  alternates: { canonical: '/delivery' },
-};
+/**
+ * Static, refreshed from the owner's delivery settings (lib/site-facts): at
+ * build, whenever a till publishes (api/bridge/menu revalidates), and at
+ * least hourly. force-static keeps the settings read (a no-store fetch) from
+ * turning the page dynamic.
+ */
+export const dynamic = 'force-static';
+export const revalidate = 3600;
 
-export default function DeliveryHubPage() {
+export async function generateMetadata(): Promise<Metadata> {
+  const facts = await getSiteFacts();
+  return {
+    title: 'Food Delivery Areas in DHA & Clifton, Karachi',
+    description: copyText(DELIVERY_HUB_DESCRIPTION, facts),
+    alternates: { canonical: '/delivery' },
+  };
+}
+
+export default async function DeliveryHubPage() {
+  const facts = await getSiteFacts();
   return (
     <>
       <SiteHeader />
@@ -37,9 +50,7 @@ export default function DeliveryHubPage() {
             Every order fires from our kitchen in DHA Phase 6 — daily from 12
             noon to 1 am, always cash on delivery. We deliver in DHA and
             Clifton only:{' '}
-            {FEE_SUMMARY.map(
-              (f) => `${formatCents(f.feeCents)} for ${f.places.replace(' · ', ', ')}`,
-            ).join('; ')}
+            {feeSummarySentence(facts)}
             . Pick your area below for the streets we cover and answers to the
             questions your area actually asks.
           </p>
@@ -54,7 +65,7 @@ export default function DeliveryHubPage() {
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="text-lg font-bold text-cream">{area.name}</h2>
                     <span className="whitespace-nowrap rounded-full bg-cheese/15 px-3 py-1 text-xs font-bold text-cheese group-hover:bg-cheese group-hover:text-night">
-                      🛵 {feeText(area)}
+                      🛵 {feeText(area, facts)}
                     </span>
                   </div>
                   <p className="mt-2 line-clamp-2 text-sm text-smoke">

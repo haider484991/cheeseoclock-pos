@@ -6,15 +6,17 @@ import { groupLabel, isPickupOnly, splitSizedName } from './menu-view';
  * Items the website must not put on an order even though the till published
  * them: the delivery-charge items (the server adds the right one from the
  * customer's zone — a client must not pick its own fee, and a pickup has
- * none), and, on a delivery, items the printed menu marks "Pick up only".
+ * none; recognised by name, and by the settings block's fee items,
+ * `feeItemIds`), and, on a delivery, items the printed menu marks "Pick up only".
  *
  * @returns a customer-facing message, or null when the item may be ordered.
  */
 export function validateOrderable(
   item: PublishedMenuItem,
   fulfilment: WebFulfilment = 'delivery',
+  feeItemIds?: ReadonlySet<string> | null,
 ): string | null {
-  if (isDeliveryChargeItem(item)) {
+  if (isDeliveryChargeItem(item, feeItemIds)) {
     return 'The delivery charge is added from your delivery area — please refresh the menu.';
   }
   if (fulfilment === 'delivery' && isPickupOnly(item)) {

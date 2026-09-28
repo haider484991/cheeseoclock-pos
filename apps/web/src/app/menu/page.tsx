@@ -4,9 +4,11 @@ import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
 import { OrderingApp } from '@/components/OrderingApp';
 import { BUSINESS } from '@/lib/business';
 import { sql } from '@/lib/db';
+import { factsFromBlock } from '@/lib/delivery-facts';
 import { JsonLd, menuNode, webPageNode } from '@/lib/seo';
 import { getStoreStatus } from '@/lib/store-status';
 import { menuWithoutDrinkBrand } from '@/lib/menu-view';
+import { parseStoredSettings } from '@/lib/site-facts';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 
 export const metadata: Metadata = {
@@ -49,6 +51,9 @@ export default async function MenuPage() {
   const accepting = store.acceptingOrders;
   const pickupAvailable = store.pickupAvailable;
   const pickupDiscountPercent = store.pickupDiscountPercent;
+  // Where the owner delivers and what it costs: the settings block that came
+  // with this menu, else the built-in areas (as before any block).
+  const deliveryFacts = factsFromBlock(parseStoredSettings(menu?.settings ?? null));
 
   return (
     <>
@@ -60,6 +65,7 @@ export default async function MenuPage() {
             acceptingOrders={accepting}
             pickupAvailable={pickupAvailable}
             pickupDiscountPercent={pickupDiscountPercent}
+            deliveryFacts={deliveryFacts}
           />
         ) : (
           <div className="mx-auto max-w-md px-4 py-24 text-center">

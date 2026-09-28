@@ -1,6 +1,6 @@
 import type { PublishedMenu, PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
-import { isDeliveryChargeItem } from './delivery-zones';
+import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
 import { formatCents } from './format';
 import { optionLabel, sizeLabel, splitSizedName } from './menu-view';
 import { validateModifierSelection } from './order-validation';
@@ -170,8 +170,9 @@ export function restoreLines(
   saved: readonly SavedLine[],
 ): { lines: CartLine[]; dropped: number } {
   const items = new Map<string, PublishedMenuItem>();
+  const feeItemIds = feeItemIdsOf(menu);
   for (const c of menu.categories) {
-    for (const i of c.items) if (!isDeliveryChargeItem(i)) items.set(i.posItemId, i);
+    for (const i of c.items) if (!isDeliveryChargeItem(i, feeItemIds)) items.set(i.posItemId, i);
   }
   let lines: CartLine[] = [];
   let dropped = 0;

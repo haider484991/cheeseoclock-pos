@@ -5,7 +5,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatCents } from '@/lib/format';
 import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
-import { DELIVERY_ZONES, deliveryChargeItemFor, findZone } from '@/lib/delivery-zones';
+import {
+  deliveryChip,
+  deliveryFeeRange,
+  deliveryOptionNote,
+  findFactZone,
+  type SiteFacts,
+} from '@/lib/delivery-facts';
+import { zoneFeeItemFor } from '@/lib/delivery-zones';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
   ALLERGY_NOTICE,
@@ -43,7 +50,7 @@ import {
   type LastOrder,
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
-import { feeRangeText, trackPath } from '@/lib/order-display';
+import { trackPath } from '@/lib/order-display';
 import type { PublishedMenu, PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
 import { CartPanel, type CartProps } from './ordering/cart-ui';
 import { CheckoutSheet, type PlacedOrder } from './ordering/CheckoutSheet';
@@ -84,13 +91,12 @@ function variantLabel(card: MenuCard, v: MenuVariant): string {
 
 type PickFn = (card: MenuCard, variantIndex: number) => void;
 
-const FEE_RANGE = feeRangeText(DELIVERY_ZONES);
-
 export function OrderingApp({
   menu,
   acceptingOrders,
   pickupAvailable,
   pickupDiscountPercent,
+  deliveryFacts,
 }: {
   menu: PublishedMenu;
   acceptingOrders: boolean;
@@ -98,7 +104,19 @@ export function OrderingApp({
   pickupAvailable: boolean;
   /** The pickup discount that till bills — shown and priced here. */
   pickupDiscountPercent: number;
+  /** Where the owner delivers and the fees (the settings block with this menu, else the built-in areas). */
+  deliveryFacts: SiteFacts;
 }) {
+  // The fee range as the cart says it before an area is chosen: "Rs N–M".
+  const feeRange = deliveryFeeRange(deliveryFacts);
+  /** An area the customer can order to now (a switched-off one is refused by the server too). */
+  const openZone = useCallback(
+    (id: string | null | undefined) => {
+      const z = findFactZone(deliveryFacts, id);
+      return z?.active ? z : undefined;
+    },
+    [deliveryFacts],
+  );
   const router = useRouter();
   // Server-rendered starting point, then kept honest client-side: a customer
   // can sit on this page long after the shop stops taking orders. The POST is
@@ -199,10 +217,11 @@ export function OrderingApp({
     if (lines.length > 0) setCart(lines);
     const details = parseDetails(readStored(STORAGE_KEYS.details));
     const savedZone = details?.zoneId || readStored(STORAGE_KEYS.zone) || '';
-    if (findZone(savedZone)) setZoneId(savedZone);
+    // An area this phone remembers that is unknown now, or switched off, is not picked.
+    if (openZone(savedZone)) setZoneId(savedZone);
     setLastOrder(parseLastOrder(readStored(STORAGE_KEYS.lastOrder), now));
     hydrated.current = true;
-  }, [menu, flash]);
+  }, [menu, flash, openZone]);
 
   // "/menu#value-deals" from the home page: the loading skeleton was on screen
   // when Next looked for the section, so find it now that it exists.
@@ -215,23 +234,24 @@ export function OrderingApp({
 
   function chooseZone(id: string) {
     setZoneId(id);
-    if (findZone(id)) writeStored(STORAGE_KEYS.zone, id);
+    if (openZone(id)) writeStored(STORAGE_KEYS.zone, id);
   }
 
   const [chosenFulfilment, setFulfilment] = useState<WebFulfilment>('delivery');
   // Pickup silently falls back to delivery if the till stops offering it.
   const fulfilment: WebFulfilment = canPickup ? chosenFulfilment : 'delivery';
   const pickup = fulfilment === 'pickup';
-  const zone = pickup ? undefined : findZone(zoneId);
+  const zone = pickup ? undefined : openZone(zoneId);
 
   // Same maths as the server and the till (lib/pricing). The delivery fee is
-  // a real till item, taxed like one; pickup takes its discount off the lot.
+  // a real till item — the same one the server adds (zoneFeeItemFor) — taxed
+  // like one; pickup takes its discount off the lot.
   const subtotal = cartSubtotalCents(cart);
   const priced: PricedLine[] = cart.map((l) => ({
     lineTotalCents: lineUnitPriceCents(l) * l.quantity,
     taxRateBps: l.item.taxRateBps,
   }));
-  const feeItem = zone ? deliveryChargeItemFor(menu, zone.feeCents) : undefined;
+  const feeItem = zone ? zoneFeeItemFor(menu, zone) : undefined;
   const deliveryFee = zone && cart.length > 0 ? zone.feeCents : 0;
   if (deliveryFee > 0) priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0 });
   const totals = priceOrder(priced, pickup ? pickupPct : 0);
@@ -326,12 +346,13 @@ export function OrderingApp({
     pickupPct,
     onFulfilment: setFulfilment,
     pickupOnlyInCart,
-    feeRange: FEE_RANGE,
+    feeRange,
+    deliveryNote: deliveryOptionNote(deliveryFacts),
   };
 
   return (
     <div className="pb-28 lg:pb-12">
-      <MenuHeader canPickup={canPickup} pickupPct={pickupPct} />
+      <MenuHeader canPickup={canPickup} pickupPct={pickupPct} deliveryChip={deliveryChip(deliveryFacts)} />
 
       {lastOrder && (
         <ReturningBanner
@@ -451,6 +472,7 @@ export function OrderingApp({
           {...cartProps}
           zoneId={zoneId}
           onZone={chooseZone}
+          deliveryFacts={deliveryFacts}
           acceptingOrders={open}
           onClose={closeCheckout}
           orderIdFor={orderIdFor}
@@ -474,7 +496,15 @@ function sectionNote(sectionName: string): string | null {
   return null;
 }
 
-function MenuHeader({ canPickup, pickupPct }: { canPickup: boolean; pickupPct: number }) {
+function MenuHeader({
+  canPickup,
+  pickupPct,
+  deliveryChip,
+}: {
+  canPickup: boolean;
+  pickupPct: number;
+  deliveryChip: string;
+}) {
   return (
     <div className="bg-ink text-cream">
       <div className="mx-auto max-w-6xl px-4 pb-7 pt-8 md:pb-9 md:pt-10">
@@ -490,7 +520,7 @@ function MenuHeader({ canPickup, pickupPct }: { canPickup: boolean; pickupPct: n
             </li>
           )}
           <li className={`rounded-full px-3.5 py-1.5 ${canPickup ? 'border border-cream/20' : 'bg-cheese text-ink'}`}>
-            Delivery {FEE_RANGE} · DHA &amp; Clifton
+            {deliveryChip}
           </li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">12 noon – 1 am</li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>

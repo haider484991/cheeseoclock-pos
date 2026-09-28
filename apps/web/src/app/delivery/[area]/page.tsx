@@ -6,22 +6,33 @@ import { OrderCtaBand } from '@/components/OrderCtaBand';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
 import { BUSINESS, waLink } from '@/lib/business';
-import { DELIVERY_AREAS, getArea, feeText } from '@/lib/areas';
+import { DELIVERY_AREAS, getArea, feeText, renderArea } from '@/lib/areas';
 import { JsonLd, webPageNode } from '@/lib/seo';
+import { getSiteFacts } from '@/lib/site-facts';
 
 export const dynamicParams = false;
+
+/**
+ * Static per area, refreshed from the owner's delivery settings (lib/
+ * site-facts): at build, whenever a till publishes (api/bridge/menu
+ * revalidates), and at least hourly. The slugs never come from the settings:
+ * an area the owner switches off keeps its page and says delivery is paused.
+ */
+export const dynamic = 'force-static';
+export const revalidate = 3600;
 
 export function generateStaticParams() {
   return DELIVERY_AREAS.map((a) => ({ area: a.slug }));
 }
 
-export function generateMetadata({
+export async function generateMetadata({
   params,
 }: {
   params: { area: string };
-}): Metadata {
-  const area = getArea(params.area);
-  if (!area) return {};
+}): Promise<Metadata> {
+  const found = getArea(params.area);
+  if (!found) return {};
+  const area = renderArea(found, await getSiteFacts());
   return {
     title: area.title,
     description: area.description,
@@ -35,9 +46,11 @@ export function generateMetadata({
   };
 }
 
-export default function AreaPage({ params }: { params: { area: string } }) {
-  const area = getArea(params.area);
-  if (!area) notFound();
+export default async function AreaPage({ params }: { params: { area: string } }) {
+  const found = getArea(params.area);
+  if (!found) notFound();
+  const facts = await getSiteFacts();
+  const area = renderArea(found, facts);
 
   const adjacent = area.adjacent
     .map((slug) => getArea(slug))
@@ -67,7 +80,7 @@ export default function AreaPage({ params }: { params: { area: string } }) {
 
           <ul className="mt-6 flex flex-wrap gap-2 text-sm font-bold">
             <li className="rounded-full bg-cheese px-4 py-2 text-night">
-              🛵 {feeText(area)}
+              🛵 {area.fee}
             </li>
             <li className="rounded-full border border-white/15 px-4 py-2 text-cream/80">
               💵 Cash on delivery
@@ -76,6 +89,12 @@ export default function AreaPage({ params }: { params: { area: string } }) {
               🌙 {BUSINESS.hours}
             </li>
           </ul>
+
+          {area.pausedNote && (
+            <p role="status" className="mt-6 rounded-2xl border border-cheese/50 bg-cheese/10 px-5 py-4 font-semibold text-cream">
+              {area.pausedNote}
+            </p>
+          )}
 
           {area.intro.map((p) => (
             <p key={p.slice(0, 24)} className="mt-5 leading-relaxed text-cream/80">
@@ -211,7 +230,7 @@ export default function AreaPage({ params }: { params: { area: string } }) {
                       href={`/delivery/${a.slug}`}
                       className="rounded-full border border-white/15 px-4 py-2 text-sm font-semibold text-cream/80 transition-colors hover:border-cheese/60 hover:text-cheese"
                     >
-                      {a.name} · {feeText(a)}
+                      {a.name} · {feeText(a, facts)}
                     </Link>
                   ))}
                   <Link

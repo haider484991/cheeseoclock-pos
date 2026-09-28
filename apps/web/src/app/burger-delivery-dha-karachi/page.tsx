@@ -6,9 +6,19 @@ import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
 import { ShowcaseVisual } from '@/components/ShowcaseVisual';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { FEE_SUMMARY } from '@/lib/delivery-zones';
-import { formatCents } from '@/lib/format';
+import { copyText } from '@/lib/delivery-facts';
+import { BURGER_FAQ_AREAS } from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
+import { getSiteFacts } from '@/lib/site-facts';
+
+/**
+ * Static, refreshed from the owner's delivery settings (lib/site-facts): at
+ * build, whenever a till publishes (api/bridge/menu revalidates), and at
+ * least hourly. force-static keeps the settings read (a no-store fetch) from
+ * turning the page dynamic.
+ */
+export const dynamic = 'force-static';
+export const revalidate = 3600;
 
 export const metadata: Metadata = {
   title: 'Burger Delivery in DHA Karachi — Crispy Chicken on Brioche',
@@ -48,7 +58,7 @@ const FAQS = [
   },
   {
     q: 'Where do you deliver burgers?',
-    a: `DHA and Clifton only, from our kitchen in Rahat Commercial, Phase 6. Delivery is ${FEE_SUMMARY.map((f) => `${formatCents(f.feeCents)} for ${f.places.replace(' · ', ', ')}`).join('; ')}. You can follow your order’s status after checkout.`,
+    a: BURGER_FAQ_AREAS,
   },
   {
     q: 'Can I get a burger deal for a group?',
@@ -60,7 +70,9 @@ const FAQS = [
   },
 ];
 
-export default function BurgerDeliveryPage() {
+export default async function BurgerDeliveryPage() {
+  const facts = await getSiteFacts();
+  const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   return (
     <>
       <SiteHeader />
@@ -127,7 +139,7 @@ export default function BurgerDeliveryPage() {
                   href={`/delivery/${a.slug}`}
                   className="rounded-full border border-white/15 px-4 py-2 text-sm font-semibold text-cream/80 transition-colors hover:border-cheese/60 hover:text-cheese"
                 >
-                  {a.name} · {feeText(a)}
+                  {a.name} · {feeText(a, facts)}
                 </Link>
               ))}
             </div>
@@ -139,7 +151,7 @@ export default function BurgerDeliveryPage() {
                 BURGER DELIVERY FAQS
               </h2>
               <div className="mt-4 space-y-3">
-                {FAQS.map((f) => (
+                {faqs.map((f) => (
                   <details
                     key={f.q}
                     className="group rounded-2xl border border-white/10 bg-night-card open:border-cheese/40"

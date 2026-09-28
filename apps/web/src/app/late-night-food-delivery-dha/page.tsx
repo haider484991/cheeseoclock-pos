@@ -8,7 +8,19 @@ import { ShowcaseVisual } from '@/components/ShowcaseVisual';
 import { CheeseTime } from '@/components/CheeseTime';
 import { BUSINESS } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
+import { copyText } from '@/lib/delivery-facts';
+import { LATE_NIGHT_FAQ_AREAS } from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
+import { getSiteFacts } from '@/lib/site-facts';
+
+/**
+ * Static, refreshed from the owner's delivery settings (lib/site-facts): at
+ * build, whenever a till publishes (api/bridge/menu revalidates), and at
+ * least hourly. force-static keeps the settings read (a no-store fetch) from
+ * turning the page dynamic.
+ */
+export const dynamic = 'force-static';
+export const revalidate = 3600;
 
 export const metadata: Metadata = {
   title: 'Late-Night Food Delivery in DHA Karachi — Open Till 1 am',
@@ -52,7 +64,7 @@ const FAQS = [
   },
   {
     q: 'Which areas do you cover after midnight?',
-    a: 'The same map as daytime: DHA Phases 1–8 and Clifton, at the same Rs 200–250 delivery fees. We do not deliver outside DHA and Clifton at any hour.',
+    a: LATE_NIGHT_FAQ_AREAS,
   },
   {
     q: 'How do I pay late at night?',
@@ -60,7 +72,9 @@ const FAQS = [
   },
 ];
 
-export default function LateNightPage() {
+export default async function LateNightPage() {
+  const facts = await getSiteFacts();
+  const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   return (
     <>
       <SiteHeader />
@@ -134,7 +148,7 @@ export default function LateNightPage() {
                   href={`/delivery/${a.slug}`}
                   className="rounded-full border border-white/15 px-4 py-2 text-sm font-semibold text-cream/80 transition-colors hover:border-cheese/60 hover:text-cheese"
                 >
-                  {a.name} · {feeText(a)}
+                  {a.name} · {feeText(a, facts)}
                 </Link>
               ))}
             </div>
@@ -146,7 +160,7 @@ export default function LateNightPage() {
                 LATE-NIGHT FAQS
               </h2>
               <div className="mt-4 space-y-3">
-                {FAQS.map((f) => (
+                {faqs.map((f) => (
                   <details
                     key={f.q}
                     className="group rounded-2xl border border-white/10 bg-night-card open:border-cheese/40"

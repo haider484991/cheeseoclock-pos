@@ -7,7 +7,7 @@ import { optionLabel } from './menu-view';
 
 /** Small display helpers shared by the ordering page and the tracking page. Pure. */
 
-/** "Rs 200–250" across the delivery zones (or "Rs 200" when every zone costs the same). */
+/** "Rs N–M" across the delivery zones (or "Rs N" when every zone costs the same). */
 export function feeRangeText(zones: ReadonlyArray<{ feeCents: number }>): string {
   if (zones.length === 0) return '';
   const fees = zones.map((z) => z.feeCents);

@@ -8,12 +8,23 @@ import { PizzaCarousel3D } from '@/components/PizzaCarousel3D';
 import { ShopMapCard } from '@/components/ShopMapCard';
 import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { FEE_SUMMARY } from '@/lib/delivery-zones';
+import { copyText, feeSummary } from '@/lib/delivery-facts';
 import { formatCents } from '@/lib/format';
+import { HOME_FAQ_AREAS, HOME_HERO_FEE, HOME_STAT_FEE } from '@/lib/page-copy';
+import { getSiteFacts } from '@/lib/site-facts';
 import { menuImageSrcSet } from '@/lib/images';
 import { SIGNATURE_BURGER, SIGNATURE_PIZZAS, VALUE_DEALS } from '@/lib/signatures';
 
 const LINEUP = [...SIGNATURE_PIZZAS, SIGNATURE_BURGER];
+
+/**
+ * Static, refreshed from the owner's delivery settings (lib/site-facts): at
+ * build, whenever a till publishes (api/bridge/menu revalidates), and at
+ * least hourly. force-static keeps the settings read (a no-store fetch) from
+ * turning the page dynamic.
+ */
+export const dynamic = 'force-static';
+export const revalidate = 3600;
 
 const STEPS = [
   {
@@ -36,7 +47,7 @@ const STEPS = [
 const FAQS = [
   {
     q: 'Which areas do you deliver to?',
-    a: `DHA Phases 1–8 and Clifton Blocks 1–9, including Emaar Crescent Bay and Creek Vista. Delivery is Rs 200 for DHA Phases 1–7 and Clifton Blocks 3–9, and Rs 250 for DHA Phase 8, Emaar, Creek Vista and Clifton Blocks 1 & 2. We don't deliver outside DHA and Clifton.`,
+    a: HOME_FAQ_AREAS,
   },
   {
     q: 'What are your hours?',
@@ -64,7 +75,9 @@ function WhatsAppGlyph({ className = '' }: { className?: string }) {
   );
 }
 
-export default function HomePage() {
+export default async function HomePage() {
+  const facts = await getSiteFacts();
+  const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   return (
     <>
       <SiteHeader />
@@ -145,7 +158,7 @@ export default function HomePage() {
                     Value deals from {formatCents(Math.min(...VALUE_DEALS.map((d) => d.priceRs)) * 100)} →
                   </Link>
                 </li>
-                <li className="rounded-full border border-cream/15 px-3 py-1.5">Delivery from Rs 200</li>
+                <li className="rounded-full border border-cream/15 px-3 py-1.5">{copyText(HOME_HERO_FEE, facts)}</li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">12 noon – 1 am daily</li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">Cash on delivery</li>
               </ul>
@@ -314,7 +327,7 @@ export default function HomePage() {
             <div className="mt-10 grid gap-10 lg:grid-cols-[1.15fr_0.85fr]">
               <div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {FEE_SUMMARY.map((f, i) => (
+                  {feeSummary(facts).map((f, i) => (
                     <Reveal key={f.feeCents} delay={i * 60}>
                       <div className="h-full rounded-3xl border-2 border-ink bg-white p-5">
                         <div className="font-display text-5xl tracking-wide">{formatCents(f.feeCents)}</div>
@@ -330,7 +343,7 @@ export default function HomePage() {
                       href={`/delivery/${area.slug}`}
                       className="rounded-full border border-ink/15 bg-white px-4 py-2 font-cond text-base font-bold uppercase tracking-wide transition-colors hover:border-ink hover:bg-ink hover:text-cheese"
                     >
-                      {area.name} <span className="font-semibold text-ink/50">· {feeText(area)}</span>
+                      {area.name} <span className="font-semibold text-ink/50">· {feeText(area, facts)}</span>
                     </Link>
                   ))}
                 </div>
@@ -377,7 +390,7 @@ export default function HomePage() {
               <div className="mt-12 grid gap-px overflow-hidden rounded-3xl border border-cream/10 bg-cream/10 sm:grid-cols-3">
                 {[
                   ['12 noon – 1 am', 'open every day'],
-                  ['From Rs 200', 'delivery in DHA & Clifton'],
+                  [copyText(HOME_STAT_FEE, facts), 'delivery in DHA & Clifton'],
                   ['Cash on delivery', 'pay the rider at your door'],
                 ].map(([big, small]) => (
                   <div key={big} className="bg-night-soft px-6 py-8 text-center">
@@ -401,7 +414,7 @@ export default function HomePage() {
               </h2>
             </Reveal>
             <div className="mt-8 space-y-3">
-              {FAQS.map((f, i) => (
+              {faqs.map((f, i) => (
                 <Reveal key={f.q} delay={i * 50}>
                   <details className="group rounded-2xl border border-cream/10 bg-night-card open:border-cheese/40">
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-cond text-xl font-bold uppercase tracking-wide text-cream [&::-webkit-details-marker]:hidden">

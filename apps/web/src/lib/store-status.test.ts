@@ -3,6 +3,7 @@ import {
   CLOSED,
   HEARTBEAT_STALE_MS,
   UNCONFIRMED_ORDER_TTL_MS,
+  blockPickupOf,
   evaluateStatus,
   unconfirmedOrderCutoff,
 } from './store-status';
@@ -74,5 +75,33 @@ describe('unconfirmedOrderCutoff', () => {
     // The sweep is `created_at < cutoff`: 46 minutes old goes, 44 stays.
     expect(NOW - 46 * 60_000 < cutoff).toBe(true);
     expect(NOW - 44 * 60_000 < cutoff).toBe(false);
+  });
+});
+
+describe('pick-up from the owner’s settings block', () => {
+  const beat = { accepting_orders: true, updated_at: ago(5_000), pickup: true, pickup_discount_pct: 15 };
+
+  it('with no block, the heartbeat decides, as before', () => {
+    expect(evaluateStatus(beat, NOW)).toMatchObject({ pickupAvailable: true, pickupDiscountPercent: 15 });
+    expect(evaluateStatus({ ...beat, settings_pickup: null }, NOW)).toMatchObject({ pickupAvailable: true, pickupDiscountPercent: 15 });
+  });
+
+  it('with a block, its % wins and its switch must be on', () => {
+    expect(evaluateStatus({ ...beat, settings_pickup: { offered: true, percent: 20 } }, NOW)).toMatchObject({
+      pickupAvailable: true,
+      pickupDiscountPercent: 20,
+    });
+    expect(evaluateStatus({ ...beat, settings_pickup: { offered: false, percent: 20 } }, NOW).pickupAvailable).toBe(false);
+    // …but the till must still be able to import one, and be listening.
+    expect(evaluateStatus({ ...beat, pickup: false, settings_pickup: { offered: true, percent: 20 } }, NOW).pickupAvailable).toBe(false);
+    expect(evaluateStatus({ ...beat, updated_at: ago(HEARTBEAT_STALE_MS + 1_000), settings_pickup: { offered: true, percent: 20 } }, NOW).pickupAvailable).toBe(false);
+  });
+
+  it('an unreadable block is no block', () => {
+    expect(blockPickupOf('{"offered":true,"percent":20}')).toEqual({ offered: true, percent: 20 });
+    expect(blockPickupOf({ offered: true, percent: 60 })).toBeNull();
+    expect(blockPickupOf({ offered: 'yes', percent: 10 })).toBeNull();
+    expect(blockPickupOf('not json')).toBeNull();
+    expect(evaluateStatus({ ...beat, settings_pickup: { offered: true, percent: 12.5 } }, NOW).pickupDiscountPercent).toBe(15);
   });
 });

@@ -1,4 +1,5 @@
 import {
+  deliveryZoneFeeItemIds,
   findDeliveryChargeItem,
   isDeliveryChargeName,
   type PublishedMenu,
@@ -8,20 +9,19 @@ import {
 /**
  * Where the shop delivers, and what each place costs.
  *
- * The list itself lives in @cheeseoclock/shared-types (delivery-areas.ts) —
- * ONE list shared with the till, whose address entry picks from the same
- * zones and shows the same fees. Edit zones and fees there, not here. This
- * module keeps the website's names for it, plus the helpers that know about
- * the published menu.
+ * The owner sets the areas and fees on the till (Settings → Delivery areas
+ * & fees); the till sends them with the menu as the settings block, and the
+ * website reads them through lib/delivery-facts.ts (pages, checkout) and
+ * lib/site-facts.ts (the stored block). Until a block arrives the website
+ * uses the compiled list re-exported here, which is also the till's default:
+ * DHA and Clifton only, and the checkout refuses an order without one of the
+ * areas (owner, 25 Sep 2026: "customers should not be able to order outside
+ * our zones").
  *
- * The owner delivers in DHA and Clifton ONLY, and the checkout refuses an
- * order without one of these zones (owner, 25 Sep 2026: "customers should not
- * be able to order outside our zones").
- *
- * The fee reaches the till as a real line item: the POS menu carries
- * "Delivery Charge (Rs 200)" and "Delivery Charge (Rs 250)" items (category
- * "Delivery Charges"), and the server adds the one whose price matches the
- * zone. Changing a fee means changing that POS item's price too.
+ * The fee reaches the till as a real line item: a "Delivery Charge (Rs N)"
+ * menu item (category "Delivery Charges"). A block names each area's item
+ * (feeItemId); without one — or when a kept block meets a menu from an older
+ * till that lacks the item — the item is found by its name and price.
  */
 export {
   DELIVERY_ZONES,
@@ -31,9 +31,22 @@ export {
   type ZoneGroup,
 } from '@cheeseoclock/shared-types';
 
-/** A POS item the website must never sell on its own. */
-export function isDeliveryChargeItem(item: Pick<PublishedMenuItem, 'name'>): boolean {
-  return isDeliveryChargeName(item.name);
+/**
+ * A POS item the website must never sell on its own: named like a delivery
+ * charge (every stored order, and every fee item the till makes — Menu locks
+ * the name), or one of the settings block's fee items (`feeItemIds`).
+ */
+export function isDeliveryChargeItem(
+  item: Pick<PublishedMenuItem, 'name'> & { posItemId?: string },
+  feeItemIds?: ReadonlySet<string> | null,
+): boolean {
+  if (isDeliveryChargeName(item.name)) return true;
+  return !!feeItemIds && typeof item.posItemId === 'string' && feeItemIds.has(item.posItemId);
+}
+
+/** The fee items the menu's settings block names (empty without a block). */
+export function feeItemIdsOf(menu: Pick<PublishedMenu, 'settings'>): Set<string> {
+  return deliveryZoneFeeItemIds(menu.settings?.zones ?? []);
 }
 
 /**
@@ -50,4 +63,26 @@ export function deliveryChargeItemFor(
     menu.categories.flatMap((c) => c.items),
     feeCents,
   );
+}
+
+/**
+ * The item that charges an area's fee, the same on the server and in the
+ * browser: the area's own fee item (feeItemId) when it is on the menu at
+ * exactly the fee; else today's match by name and price; undefined when
+ * neither (the order then carries the "add the delivery charge by hand"
+ * note) and for a free area (no charge line).
+ */
+export function zoneFeeItemFor(
+  menu: PublishedMenu,
+  zone: { readonly feeCents: number; readonly feeItemId?: string | null },
+): PublishedMenuItem | undefined {
+  if (!(zone.feeCents > 0)) return undefined;
+  if (zone.feeItemId) {
+    for (const c of menu.categories) {
+      for (const i of c.items) {
+        if (i.posItemId === zone.feeItemId && i.basePriceCents === zone.feeCents) return i;
+      }
+    }
+  }
+  return deliveryChargeItemFor(menu, zone.feeCents);
 }

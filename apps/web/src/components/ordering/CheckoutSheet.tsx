@@ -10,7 +10,7 @@ import {
   type CheckoutProblem,
   type OrderErrorBody,
 } from '@/lib/checkout-validation';
-import { DELIVERY_ZONES } from '@/lib/delivery-zones';
+import { checkoutAreaHint, deliveryAreasText, zoneOptionGroups, type SiteFacts } from '@/lib/delivery-facts';
 import {
   STORAGE_KEYS,
   parseDetails,
@@ -40,6 +40,8 @@ export function CheckoutSheet(
   props: CartProps & {
     zoneId: string;
     onZone: (id: string) => void;
+    /** Where the owner delivers and the fees (switched-off areas are listed, not choosable). */
+    deliveryFacts: SiteFacts;
     acceptingOrders: boolean;
     onClose: () => void;
     /** The idempotency key for this cart (same cart → same key, so a resend is not a second order). */
@@ -111,6 +113,7 @@ export function CheckoutSheet(
       cartSize: props.cart.length,
       pickupOnlyInCart: props.pickupOnlyInCart,
       canPickup: props.canPickup,
+      deliveryAreas: deliveryAreasText(props.deliveryFacts),
     });
     if (invalid) return show(invalid);
     if (!props.acceptingOrders) return show({ field: null, message: 'We are not taking online orders right now.' });
@@ -165,8 +168,8 @@ export function CheckoutSheet(
     }
   }
 
-  const dha = DELIVERY_ZONES.filter((z) => z.group === 'DHA');
-  const clifton = DELIVERY_ZONES.filter((z) => z.group === 'Clifton');
+  // The area list by the owner's groups ("DHA", "Clifton", …), in display order.
+  const zoneGroups = zoneOptionGroups(props.deliveryFacts.zones);
   const fieldError = (f: CheckoutField) => (problem?.field === f ? problem.message : null);
   const footerError = problem && (problem.field === null || problem.field === 'cart') ? problem.message : null;
   const waText = whatsappOrderText(props.cart, {
@@ -261,7 +264,7 @@ export function CheckoutSheet(
                   hint={
                     props.zone
                       ? `Delivery to ${props.zone.name}: ${formatCents(props.zone.feeCents)}`
-                      : `We deliver in DHA and Clifton only.${props.canPickup ? ` Elsewhere? Choose pick-up — ${props.pickupPct}% off.` : ''}`
+                      : checkoutAreaHint(props.deliveryFacts, props)
                   }
                 >
                   {(ids) => (
@@ -278,20 +281,15 @@ export function CheckoutSheet(
                       }`}
                     >
                       <option value="">Choose your area…</option>
-                      <optgroup label="DHA">
-                        {dha.map((z) => (
-                          <option key={z.id} value={z.id}>
-                            {z.name} — {formatCents(z.feeCents)}
-                          </option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="Clifton">
-                        {clifton.map((z) => (
-                          <option key={z.id} value={z.id}>
-                            {z.name} — {formatCents(z.feeCents)}
-                          </option>
-                        ))}
-                      </optgroup>
+                      {zoneGroups.map((g) => (
+                        <optgroup key={g.group} label={g.group}>
+                          {g.options.map((o) => (
+                            <option key={o.id} value={o.id} disabled={o.disabled}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
                     </select>
                   )}
                 </FieldShell>

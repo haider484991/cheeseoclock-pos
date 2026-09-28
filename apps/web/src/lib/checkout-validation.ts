@@ -1,4 +1,5 @@
 import type { WebFulfilment } from '@cheeseoclock/shared-types';
+import { DEFAULT_FACTS, deliveryAreasText } from './delivery-facts';
 import { normalizePhone } from './format';
 
 /**
@@ -27,6 +28,8 @@ export interface CheckoutInput {
   pickupOnlyInCart: readonly string[];
   /** Online pick-up is on offer right now. */
   canPickup: boolean;
+  /** Where the owner delivers, in a sentence ("DHA and Clifton"; '' while every area is off). Default: the built-in areas. */
+  deliveryAreas?: string;
 }
 
 export function validateCheckout(v: CheckoutInput): CheckoutProblem | null {
@@ -43,7 +46,13 @@ export function validateCheckout(v: CheckoutInput): CheckoutProblem | null {
     };
   }
   if (!pickup && !v.hasZone) {
-    return { field: 'zone', message: 'Choose your delivery area — we deliver in DHA and Clifton only.' };
+    const where = v.deliveryAreas ?? deliveryAreasText(DEFAULT_FACTS);
+    return {
+      field: 'zone',
+      message: where
+        ? `Choose your delivery area — we deliver in ${where} only.`
+        : `Delivery is paused right now${v.canPickup ? ' — choose pick-up, or order on WhatsApp.' : ' — please order on WhatsApp.'}`,
+    };
   }
   if (v.name.trim().length < 2) return { field: 'name', message: 'Please enter your name.' };
   if (v.phone.trim().length === 0) return { field: 'phone', message: 'Please enter your mobile number.' };
@@ -83,7 +92,10 @@ export function problemFromServer(body: OrderErrorBody | null): CheckoutProblem 
       if (message) return { field: SERVER_FIELDS[key] ?? null, message };
     }
   }
-  if (body?.message) return { field: body.error === 'outside_zone' ? 'zone' : null, message: body.message };
+  if (body?.message) {
+    const zone = body.error === 'outside_zone' || body.error === 'zone_paused';
+    return { field: zone ? 'zone' : null, message: body.message };
+  }
   switch (body?.error) {
     case 'store_closed':
       return { field: null, message: 'We are not taking online orders at the moment. Please order on WhatsApp.' };

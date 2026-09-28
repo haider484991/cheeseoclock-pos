@@ -198,6 +198,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@cheeseoclock/shared-schemas':
+        specifier: workspace:*
+        version: link:../../packages/shared-schemas
       '@cheeseoclock/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types

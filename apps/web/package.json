@@ -13,6 +13,7 @@
     "logo:clean": "node scripts/remove-bg.mjs"
   },
   "dependencies": {
+    "@cheeseoclock/shared-schemas": "workspace:*",
     "@cheeseoclock/shared-types": "workspace:*",
     "@neondatabase/serverless": "^0.10.4",
     "next": "^14.2.21",

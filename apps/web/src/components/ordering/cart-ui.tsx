@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { WebFulfilment } from '@cheeseoclock/shared-types';
 import { lineChoices, lineUnitPriceCents, type CartLine } from '@/lib/cart';
-import type { DeliveryZone } from '@/lib/delivery-zones';
+import type { FactZone } from '@/lib/delivery-facts';
 import { formatCents } from '@/lib/format';
 import { isPickupOnly } from '@/lib/menu-view';
 
@@ -13,7 +13,7 @@ export interface CartProps {
   deliveryFee: number;
   /** Pickup discount (0 on a delivery). */
   discount: number;
-  zone: DeliveryZone | undefined;
+  zone: FactZone | undefined;
   tax: number;
   total: number;
   setQty: (key: string, qty: number) => void;
@@ -26,8 +26,10 @@ export interface CartProps {
   onFulfilment: (f: WebFulfilment) => void;
   /** Labels of pick-up-only lines in the cart (they block a delivery). */
   pickupOnlyInCart: string[];
-  /** "Rs 200–250", from the delivery zones. */
+  /** The fee range across the areas delivered to (lib/delivery-facts deliveryFeeRange). */
   feeRange: string;
+  /** The delivery option's note: "Rs N–M · DHA & Clifton" (lib/delivery-facts deliveryOptionNote). */
+  deliveryNote: string;
 }
 
 /**
@@ -35,7 +37,7 @@ export interface CartProps {
  * menu's headline offer. Hidden entirely while the till can't take pickups.
  */
 export function FulfilmentToggle(
-  props: Pick<CartProps, 'fulfilment' | 'canPickup' | 'pickupPct' | 'onFulfilment' | 'feeRange'>,
+  props: Pick<CartProps, 'fulfilment' | 'canPickup' | 'pickupPct' | 'onFulfilment' | 'deliveryNote'>,
 ) {
   if (!props.canPickup) return null;
   const opt = (f: WebFulfilment, title: string, note: string) => {
@@ -58,7 +60,7 @@ export function FulfilmentToggle(
   };
   return (
     <div className="grid grid-cols-2 gap-2" role="group" aria-label="Delivery or pick-up">
-      {opt('delivery', 'Delivery', `${props.feeRange} · DHA & Clifton`)}
+      {opt('delivery', 'Delivery', props.deliveryNote)}
       {opt('pickup', `Pick up · ${props.pickupPct}% off`, 'Collect from DHA Phase 6')}
     </div>
   );

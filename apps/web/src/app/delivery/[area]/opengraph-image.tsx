@@ -1,5 +1,6 @@
 import { brandOgImage, OG_SIZE } from '@/lib/og';
 import { getArea, feeText } from '@/lib/areas';
+import { getSiteFacts } from '@/lib/site-facts';
 
 export const runtime = 'edge';
 export const alt = "Cheese O'Clock delivery area";
@@ -8,6 +9,8 @@ export const contentType = 'image/png';
 
 export default async function Image({ params }: { params: { area: string } }) {
   const area = getArea(params.area);
+  // The owner's fees (the stored settings block), else the built-in ones; rendered on request.
+  const facts = await getSiteFacts();
 
   let fontData: ArrayBuffer | null = null;
   try {
@@ -21,7 +24,7 @@ export default async function Image({ params }: { params: { area: string } }) {
   return brandOgImage({
     title: area ? area.name.toUpperCase() : 'DHA KARACHI',
     subtitle: area
-      ? `PIZZA & BURGER DELIVERY — ${feeText(area).toUpperCase()}`
+      ? `PIZZA & BURGER DELIVERY — ${feeText(area, facts).toUpperCase()}`
       : 'PIZZA & BURGER DELIVERY',
     fontData,
   });

@@ -4,7 +4,7 @@ import type {
   PublishedModifierGroup,
 } from '@cheeseoclock/shared-types';
 import { groupDisplayName, orderChoiceGroups } from '@cheeseoclock/shared-types';
-import { isDeliveryChargeItem } from './delivery-zones';
+import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
 
 /**
  * Turns the POS's published menu into what the ordering page shows.
@@ -305,12 +305,13 @@ export function buildMenuView(menu: PublishedMenu): MenuSectionView[] {
 }
 
 function buildSections(menu: PublishedMenu): MenuSectionView[] {
+  const feeItemIds = feeItemIdsOf(menu);
   return [...menu.categories]
     .sort((a, b) => a.displayOrder - b.displayOrder)
     .map((c) => {
       const byBase = new Map<string, MenuCard>();
       const items = [...c.items]
-        .filter((i) => !isDeliveryChargeItem(i))
+        .filter((i) => !isDeliveryChargeItem(i, feeItemIds))
         .sort((a, b) => a.sortOrder - b.sortOrder);
       for (const item of items) {
         const { base, size } = splitSizedName(item.name);

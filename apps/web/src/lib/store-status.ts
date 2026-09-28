@@ -1,4 +1,9 @@
-import { LEGACY_PICKUP_DISCOUNT_PERCENT, PICKUP_DISCOUNT_PERCENT } from '@cheeseoclock/shared-types';
+import {
+  LEGACY_PICKUP_DISCOUNT_PERCENT,
+  PICKUP_DISCOUNT_PERCENT,
+  WEBSITE_PICKUP_MAX_PERCENT,
+  type PublishedPickup,
+} from '@cheeseoclock/shared-types';
 import { sql } from './db';
 
 /**
@@ -53,14 +58,17 @@ export interface StoreStatus {
   stale: boolean;
   /**
    * The checkout may offer pickup: the shop is taking orders AND the till
-   * announced it can import pickup orders (POS heartbeat `features`). A till
-   * that predates pickup would book them as deliveries at full price.
+   * announced it can import pickup orders (POS heartbeat `features`) AND —
+   * once the owner's settings block is stored — the owner offers it
+   * (block pickup.offered). A till that predates pickup would book them as
+   * deliveries at full price.
    */
   pickupAvailable: boolean;
   /**
-   * The pickup discount the listening till applies — the site shows and
-   * prices this, so the customer sees what the till will bill. A till that
-   * offers pickup without saying (v0.7.0) applies the legacy 10%.
+   * The pickup discount the site shows and prices: the owner's % from the
+   * settings block once one is stored (the till bills the % the web order
+   * carries); before that, what the listening till announces in its
+   * heartbeat, and the legacy 10% from a till that never said (v0.7.0).
    */
   pickupDiscountPercent: number;
 }
@@ -75,8 +83,30 @@ export const CLOSED: StoreStatus = {
 };
 
 /**
+ * The pick-up offer of a stored settings block (site_menu.menu_json →
+ * settings → pickup), or null when there is none or it is unreadable: then
+ * the heartbeat decides, exactly as before the block.
+ */
+export function blockPickupOf(raw: unknown): PublishedPickup | null {
+  let v: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      v = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!v || typeof v !== 'object') return null;
+  const { offered, percent } = v as { offered?: unknown; percent?: unknown };
+  if (typeof offered !== 'boolean' || typeof percent !== 'number') return null;
+  if (!Number.isInteger(percent) || percent < 0 || percent > WEBSITE_PICKUP_MAX_PERCENT) return null;
+  return { offered, percent };
+}
+
+/**
  * Pure decision so it can be tested without a database: a heartbeat only
- * counts while it is both affirmative and recent.
+ * counts while it is both affirmative and recent. `settings_pickup` is the
+ * stored settings block's pick-up offer (absent or null = no block).
  */
 export function evaluateStatus(
   row: {
@@ -84,6 +114,7 @@ export function evaluateStatus(
     updated_at: string | Date;
     pickup?: boolean | null;
     pickup_discount_pct?: number | null;
+    settings_pickup?: unknown;
   } | null,
   now: number = Date.now(),
 ): StoreStatus {
@@ -94,13 +125,16 @@ export function evaluateStatus(
   // A clock ahead of ours is still a live beat; only age closes the shop.
   const stale = now - ms > HEARTBEAT_STALE_MS;
   const posAccepting = row.accepting_orders === true;
+  // Once the owner's block is stored it decides whether pick-up is offered and
+  // at what %; the heartbeat still says whether the listening till can import one.
+  const block = blockPickupOf(row.settings_pickup);
   return {
     acceptingOrders: posAccepting && !stale,
     posAcceptingOrders: posAccepting,
     updatedAt: updatedAt.toISOString(),
     stale,
-    pickupAvailable: posAccepting && !stale && row.pickup === true,
-    pickupDiscountPercent: row.pickup_discount_pct ?? LEGACY_PICKUP_DISCOUNT_PERCENT,
+    pickupAvailable: posAccepting && !stale && row.pickup === true && (block ? block.offered : true),
+    pickupDiscountPercent: block ? block.percent : (row.pickup_discount_pct ?? LEGACY_PICKUP_DISCOUNT_PERCENT),
   };
 }
 
@@ -156,13 +190,19 @@ export async function getStoreStatus(): Promise<StoreStatus> {
   }
   try {
     await ensureStatusTable();
+    // One read with the stored settings block's pick-up offer, so the two
+    // can't disagree (fail-closed: if it can't be read, the shop is closed).
     const rows = (await sql()`
-      SELECT accepting_orders, updated_at, pickup, pickup_discount_pct FROM store_status WHERE id = 1
+      SELECT s.accepting_orders, s.updated_at, s.pickup, s.pickup_discount_pct,
+             (SELECT m.menu_json -> 'settings' -> 'pickup' FROM site_menu m WHERE m.id = 1) AS settings_pickup
+        FROM store_status s
+       WHERE s.id = 1
     `) as Array<{
       accepting_orders: boolean;
       updated_at: string | Date;
       pickup: boolean;
       pickup_discount_pct: number | null;
+      settings_pickup: unknown;
     }>;
     return evaluateStatus(rows[0] ?? null);
   } catch (e) {

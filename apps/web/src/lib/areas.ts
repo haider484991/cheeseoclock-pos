@@ -1,6 +1,15 @@
 import { BUSINESS } from './business';
-import { findZone } from './delivery-zones';
-import { formatCents } from './format';
+import {
+  DEFAULT_FACTS,
+  claimHolds,
+  pausedZones,
+  renderCopy,
+  zonesFeeChip,
+  type Copy,
+  type FactZone,
+  type FeeClaim,
+  type SiteFacts,
+} from './delivery-facts';
 
 /**
  * Delivery-area data driving the programmatic local-SEO pages at
@@ -15,10 +24,16 @@ import { formatCents } from './format';
  * delivery. Delivery times are NOT confirmed — never write a minute count
  * into this copy. Menu items named here must exist on the printed menu.
  *
- * Fees are never typed into this file's structure: each area lists the
- * checkout zone ids it covers (`zoneIds`) and `feeText` reads the fee from
- * DELIVERY_ZONES, so a rate-card change moves every page's fee chip with it.
- * (Prose that names a fee — "Rs 200" — must be updated by hand.)
+ * Fees are never typed into this file: each area lists the checkout zone
+ * ids it covers (`zoneIds`), `feeText` reads the chip from the delivery
+ * facts, and prose names a fee with a token — {fee:dha-6}, {fee:clifton-3..9}
+ * — filled from the owner's settings (lib/delivery-facts.ts fillFees). A
+ * sentence that is only true while fees keep a shape ("the same fee as
+ * Phase 7") says so with a claim (`when`) and steps aside, or reads its
+ * `otherwise`, when the owner's fees break it. With no settings stored the
+ * pages read exactly as before (site-copy.test.ts). Slugs, names, titles and
+ * H1s never come from the settings: an area the owner switches off keeps its
+ * page and says delivery there is paused.
  */
 
 export interface DeliveryArea {
@@ -29,18 +44,18 @@ export interface DeliveryArea {
   h1: string;
   /** <title> (template suffix appends " · Cheese O'Clock"). */
   title: string;
-  /** Meta description, ≤160 chars. */
-  description: string;
-  /** DELIVERY_ZONES ids (delivery-zones.ts) this page covers — drives feeText. */
+  /** Meta description, ≤160 chars (fee tokens allowed). */
+  description: Copy;
+  /** Delivery area ids this page covers — drives feeText and the paused note. */
   zoneIds: string[];
-  /** Hand-written intro paragraphs — the unique meat of the page. */
-  intro: string[];
+  /** Hand-written intro paragraphs — the unique meat of the page (fee tokens allowed). */
+  intro: Copy[];
   /** Streets / commercial areas / landmarks we actually cover. */
   landmarks: string[];
   /** Real menu items to feature on this page (brand copy, links to /menu). */
   popular: Array<{ name: string; blurb: string }>;
-  /** Area-specific visible FAQ. */
-  faqs: Array<{ q: string; a: string }>;
+  /** Area-specific visible FAQ (fee tokens allowed; `when`: shown only while that holds). */
+  faqs: Array<{ q: Copy; a: Copy; when?: FeeClaim }>;
   /** Slugs of bordering areas for internal linking. */
   adjacent: string[];
 }
@@ -54,11 +69,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 6 — From Our Kitchen Next Door',
     title: 'Pizza & Burger Delivery in DHA Phase 6, Karachi',
     description:
-      'Cheese O’Clock’s kitchen is in Rahat Commercial, Phase 6 — our shortest ride. Pizza & burgers, Rs 200 delivery, cash on delivery. Open daily till 1 am.',
+      'Cheese O’Clock’s kitchen is in Rahat Commercial, Phase 6 — our shortest ride. Pizza & burgers, {fee:dha-6} delivery, cash on delivery. Open daily till 1 am.',
     zoneIds: ['dha-6'],
     intro: [
       `Phase 6 is home turf. Our kitchen is at ${BUSINESS.streetAddress}, so Phase 6 is the shortest ride we make. Every order is fired when it comes in, boxed straight from the oven and sent out hot.`,
-      'From the Bukhari Commercial lanes to the houses off Khayaban-e-Shahbaz, delivery anywhere in Phase 6 is Rs 200. Late study session, family dinner or a midnight craving — we are open every day from 12 noon until 1 am.',
+      'From the Bukhari Commercial lanes to the houses off Khayaban-e-Shahbaz, delivery anywhere in Phase 6 is {fee:dha-6}. Late study session, family dinner or a midnight craving — we are open every day from 12 noon until 1 am.',
     ],
     landmarks: [
       'Rahat Commercial',
@@ -86,7 +101,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Is Phase 6 your quickest delivery area?',
-        a: 'Yes — the kitchen is in Rahat Commercial, Phase 6, so it is the shortest ride we make. Orders are fired when they arrive and sent out hot. Delivery inside Phase 6 is Rs 200.',
+        a: 'Yes — the kitchen is in Rahat Commercial, Phase 6, so it is the shortest ride we make. Orders are fired when they arrive and sent out hot. Delivery inside Phase 6 is {fee:dha-6}.',
       },
       {
         q: 'Do you deliver to Bukhari and Nishat Commercial offices?',
@@ -98,7 +113,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'How do I pay?',
-        a: 'Cash on delivery — pay the rider when your food arrives. Your bill is the menu total plus 15% tax and the Rs 200 delivery fee. No card or app required.',
+        a: 'Cash on delivery — pay the rider when your food arrives. Your bill is the menu total plus 15% tax and the {fee:dha-6} delivery fee. No card or app required.',
       },
     ],
     adjacent: ['dha-phase-7', 'dha-phase-5', 'dha-phase-8'],
@@ -109,11 +124,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 7, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 7, Karachi',
     description:
-      'Pizza & crispy chicken burger delivery to DHA Phase 7 and Phase 7 Ext from our Phase 6 kitchen next door. Rs 200 delivery, cash on delivery.',
+      'Pizza & crispy chicken burger delivery to DHA Phase 7 and Phase 7 Ext from our Phase 6 kitchen next door. {fee:dha-7,dha-7-ext} delivery, cash on delivery.',
     zoneIds: ['dha-7', 'dha-7-ext'],
     intro: [
       'Phase 7 sits right next to our Phase 6 kitchen, so your order is on its way while the cheese is still moving. Every pizza and burger is fired when the ticket comes in.',
-      'We cover the whole phase — the residential streets off Khayaban-e-Sehar, Sehar and Jami Commercial, and Phase 7 Extension — for Rs 200. If you are unsure about your street, send us a WhatsApp before you order.',
+      'We cover the whole phase — the residential streets off Khayaban-e-Sehar, Sehar and Jami Commercial, and Phase 7 Extension — for {fee:dha-7,dha-7-ext}. If you are unsure about your street, send us a WhatsApp before you order.',
     ],
     landmarks: [
       'Khayaban-e-Sehar',
@@ -138,15 +153,24 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you deliver to Phase 7 Extension?',
-        a: 'Yes — Phase 7 Extension has its own option at checkout, at the same Rs 200 fee as Phase 7.',
+        a: {
+          text: 'Yes — Phase 7 Extension has its own option at checkout, at the same {fee:dha-7-ext} fee as Phase 7.',
+          when: { sameFee: ['dha-7', 'dha-7-ext'] },
+          otherwise: 'Yes — Phase 7 Extension has its own option at checkout, with its own {fee:dha-7-ext} fee.',
+        },
       },
       {
         q: 'Which area do I pick at checkout?',
-        a: 'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, either is fine — the fee is Rs 200 both ways.',
+        a: {
+          text: 'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, either is fine — the fee is {fee:dha-6,dha-7} both ways.',
+          when: { sameFee: ['dha-6', 'dha-7'] },
+          otherwise:
+            'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, pick the phase your address is in — Phase 6 is {fee:dha-6}, Phase 7 is {fee:dha-7}.',
+        },
       },
       {
         q: 'Is there a minimum order for Phase 7?',
-        a: 'No minimum on the website. You pay cash on delivery: the menu total plus 15% tax and the Rs 200 delivery fee.',
+        a: 'No minimum on the website. You pay cash on delivery: the menu total plus 15% tax and the {fee:dha-7,dha-7-ext} delivery fee.',
       },
     ],
     adjacent: ['dha-phase-6', 'dha-phase-8'],
@@ -157,11 +181,16 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 8, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 8, Karachi',
     description:
-      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side, Emaar Crescent Bay & Creek Vista included. Rs 250 delivery, cash on delivery, till 1 am.',
+      'Pizza & burgers delivered across DHA Phase 8 — Do Darya side, Emaar Crescent Bay & Creek Vista included. {fee:dha-8,emaar,creek-vista} delivery, cash on delivery, till 1 am.',
     zoneIds: ['dha-8', 'emaar', 'creek-vista'],
     intro: [
       'Phase 8 runs wide — from the Zulfiqar and Al-Murtaza commercial strips out to the sea at Do Darya — and we deliver across all of it. Orders leave our Phase 6 kitchen boxed straight from the oven.',
-      'Delivery is Rs 250 across Phase 8, the same for Emaar Crescent Bay and Creek Vista, which are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+      {
+        text: 'Delivery is {fee:dha-8} across Phase 8, the same for Emaar Crescent Bay and Creek Vista, which are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+        when: { sameFee: ['dha-8', 'emaar', 'creek-vista'] },
+        otherwise:
+          'Delivery is {fee:dha-8} across Phase 8; Emaar Crescent Bay ({fee:emaar}) and Creek Vista ({fee:creek-vista}) are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+      },
     ],
     landmarks: [
       'Zulfiqar Commercial',
@@ -188,11 +217,13 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you deliver near Do Darya?',
-        a: 'Yes — the Do Darya side is covered at the Phase 8 fee of Rs 250.',
+        a: 'Yes — the Do Darya side is covered at the Phase 8 fee of {fee:dha-8}.',
       },
       {
-        q: 'Why is delivery to Phase 8 Rs 250?',
-        a: 'Phase 8 — with Emaar Crescent Bay and Creek Vista — is Rs 250 on our rider service’s rate card, instead of the Rs 200 for Phases 1–7. Pick your area at checkout and the right fee is added for you.',
+        q: 'Why is delivery to Phase 8 {fee:dha-8}?',
+        a: 'Phase 8 — with Emaar Crescent Bay and Creek Vista — is {fee:dha-8,emaar,creek-vista} on our rider service’s rate card, instead of the {fee:dha-1..7,dha-2-ext,dha-7-ext} for Phases 1–7. Pick your area at checkout and the right fee is added for you.',
+        // It explains the fee by the rider service's card: only while the fees are the card's.
+        when: { rateCard: ['dha-1..8', 'dha-2-ext', 'dha-7-ext', 'emaar', 'creek-vista'] },
       },
       {
         q: 'Will the food still be hot in Phase 8?',
@@ -211,10 +242,10 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 5, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 5, Karachi',
     description:
-      'Pizza & crispy chicken burgers delivered across DHA Phase 5 — Khadda Market, 26th Street, Badar Commercial. Rs 200 delivery, cash on delivery.',
+      'Pizza & crispy chicken burgers delivered across DHA Phase 5 — Khadda Market, 26th Street, Badar Commercial. {fee:dha-5} delivery, cash on delivery.',
     zoneIds: ['dha-5'],
     intro: [
-      'Phase 5 neighbours our Phase 6 kitchen, so the ride from oven to gate is a short one — from the Khadda Market lanes to the quieter streets off Khayaban-e-Tanzeem. Delivery anywhere in Phase 5 is Rs 200.',
+      'Phase 5 neighbours our Phase 6 kitchen, so the ride from oven to gate is a short one — from the Khadda Market lanes to the quieter streets off Khayaban-e-Tanzeem. Delivery anywhere in Phase 5 is {fee:dha-5}.',
       'Phase 5 has plenty of food, but most of it means going out. We bring it home instead: crispy chicken burgers in brioche buns, Medium or Large pizzas with a proper cheese pull, and masala fries — all paid in cash at your door.',
     ],
     landmarks: [
@@ -242,7 +273,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you deliver around Khadda Market?',
-        a: 'Yes — Khadda Market and the lanes around it are covered at the standard Phase 5 fee of Rs 200.',
+        a: 'Yes — Khadda Market and the lanes around it are covered at the standard Phase 5 fee of {fee:dha-5}.',
       },
       {
         q: 'Do you cover all of 26th Street?',
@@ -250,7 +281,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'Can I pay by card?',
-        a: 'Not at the moment — every order is cash on delivery. The bill is the menu total plus 15% tax and the Rs 200 delivery fee.',
+        a: 'Not at the moment — every order is cash on delivery. The bill is the menu total plus 15% tax and the {fee:dha-5} delivery fee.',
       },
     ],
     adjacent: ['dha-phase-6', 'dha-phase-4', 'clifton'],
@@ -261,10 +292,10 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 4, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 4, Karachi',
     description:
-      'Pizza & crispy chicken burgers delivered to DHA Phase 4 and Phase 3 — 9th Commercial, Sunset side and the residential lanes. Rs 200, cash on delivery.',
+      'Pizza & crispy chicken burgers delivered to DHA Phase 4 and Phase 3 — 9th Commercial, Sunset side and the residential lanes. {fee:dha-4,dha-3}, cash on delivery.',
     zoneIds: ['dha-4', 'dha-3'],
     intro: [
-      'Phase 4 sits between our kitchen and the older phases, and we deliver across all of it — the Sunset Boulevard side, the 9th Commercial strip and the residential lanes in between. Phase 3 next door is covered too. Delivery to either is Rs 200.',
+      'Phase 4 sits between our kitchen and the older phases, and we deliver across all of it — the Sunset Boulevard side, the 9th Commercial strip and the residential lanes in between. Phase 3 next door is covered too. Delivery to either is {fee:dha-4,dha-3}.',
       `Order on the website in under a minute, or WhatsApp your order and street to ${WA_NUMBERS} — both land in the same kitchen, and both are cash on delivery.`,
     ],
     landmarks: [
@@ -290,7 +321,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you deliver to DHA Phase 3?',
-        a: 'Yes — pick DHA Phase 3 at checkout. It is Rs 200, the same as Phase 4.',
+        a: {
+          text: 'Yes — pick DHA Phase 3 at checkout. It is {fee:dha-3}, the same as Phase 4.',
+          when: { sameFee: ['dha-3', 'dha-4'] },
+          otherwise: 'Yes — pick DHA Phase 3 at checkout. It is {fee:dha-3}; Phase 4 is {fee:dha-4}.',
+        },
       },
       {
         q: 'Do you deliver to offices in 9th Commercial?',
@@ -309,10 +344,15 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in DHA Phase 1 & 2, Karachi',
     title: 'Pizza & Burger Delivery in DHA Phase 1 & 2, Karachi',
     description:
-      'Pizza & burger delivery to DHA Phase 1, Phase 2 and Phase 2 Ext from our Phase 6 kitchen. Rs 200 delivery, cash on delivery — order online or WhatsApp.',
+      'Pizza & burger delivery to DHA Phase 1, Phase 2 and Phase 2 Ext from our Phase 6 kitchen. {fee:dha-1,dha-2,dha-2-ext} delivery, cash on delivery — order online or WhatsApp.',
     zoneIds: ['dha-1', 'dha-2', 'dha-2-ext'],
     intro: [
-      'Phase 1 and Phase 2 are the longest ride from our Phase 6 kitchen, and we will not pretend otherwise. What does not change is how the food leaves: fired to order, boxed straight from the oven and sent out hot — for the same Rs 200 as Phases 3 to 7.',
+      {
+        text: 'Phase 1 and Phase 2 are the longest ride from our Phase 6 kitchen, and we will not pretend otherwise. What does not change is how the food leaves: fired to order, boxed straight from the oven and sent out hot — for the same {fee:dha-1,dha-2,dha-2-ext} as Phases 3 to 7.',
+        when: { sameFee: ['dha-1..7', 'dha-2-ext', 'dha-7-ext'] },
+        otherwise:
+          'Phase 1 and Phase 2 are the longest ride from our Phase 6 kitchen, and we will not pretend otherwise. What does not change is how the food leaves: fired to order, boxed straight from the oven and sent out hot. Delivery here is {fee:dha-1,dha-2,dha-2-ext}.',
+      },
       'We cover Phase 1, Phase 2 and Phase 2 Extension: the Korangi Road side, Defence Mor and the Phase 2 Ext lanes. If your street sits right on the boundary, send a WhatsApp and we will confirm before you order.',
     ],
     landmarks: [
@@ -338,7 +378,12 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Do you really deliver this far from Phase 6?',
-        a: 'Yes. Phase 1, Phase 2 and Phase 2 Extension are all on our delivery map at the Rs 200 fee for DHA Phases 1–7. It is the longest ride we make, so order a little ahead if you are feeding people at a set time.',
+        a: {
+          text: 'Yes. Phase 1, Phase 2 and Phase 2 Extension are all on our delivery map at the {fee:dha-1..7,dha-2-ext,dha-7-ext} fee for DHA Phases 1–7. It is the longest ride we make, so order a little ahead if you are feeding people at a set time.',
+          when: { sameFee: ['dha-1..7', 'dha-2-ext', 'dha-7-ext'] },
+          otherwise:
+            'Yes. Phase 1, Phase 2 and Phase 2 Extension are all on our delivery map, at {fee:dha-1,dha-2,dha-2-ext}. It is the longest ride we make, so order a little ahead if you are feeding people at a set time.',
+        },
       },
       {
         q: 'Do you deliver to Phase 2 Extension?',
@@ -346,7 +391,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'Is it still cash on delivery this far out?',
-        a: 'Always — same as every zone. Pay the rider when the food arrives: the menu total plus 15% tax and the Rs 200 delivery fee.',
+        a: 'Always — same as every zone. Pay the rider when the food arrives: the menu total plus 15% tax and the {fee:dha-1,dha-2,dha-2-ext} delivery fee.',
       },
     ],
     adjacent: ['dha-phase-4'],
@@ -357,7 +402,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     h1: 'Pizza & Burger Delivery in Clifton, Karachi',
     title: 'Pizza & Burger Delivery in Clifton, Karachi',
     description:
-      'Pizza & burgers delivered to Clifton Blocks 1–9 — Boat Basin, Schon Circle and beyond. Rs 200 (Blocks 1 & 2: Rs 250). Cash on delivery, open till 1 am.',
+      'Pizza & burgers delivered to Clifton Blocks 1–9 — Boat Basin, Schon Circle and beyond. {fee:clifton-3..9} (Blocks 1 & 2: {fee:clifton-1,clifton-2}). Cash on delivery, open till 1 am.',
     zoneIds: [
       'clifton-1',
       'clifton-2',
@@ -371,7 +416,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     ],
     intro: [
       'Clifton has no shortage of food streets — what it lacks at midnight is a kitchen still answering. We deliver across Clifton from our DHA Phase 6 kitchen every day until 1 am, cash on delivery.',
-      'Coverage runs across all nine blocks, from Boat Basin and Schon Circle to Bilawal Chowrangi and the Sea View side. Delivery is Rs 200 for Blocks 3–9 and Rs 250 for Blocks 1 and 2.',
+      'Coverage runs across all nine blocks, from Boat Basin and Schon Circle to Bilawal Chowrangi and the Sea View side. Delivery is {fee:clifton-3..9} for Blocks 3–9 and {fee:clifton-1,clifton-2} for Blocks 1 and 2.',
     ],
     landmarks: [
       'Boat Basin',
@@ -397,7 +442,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Which Clifton blocks do you deliver to?',
-        a: 'All of them — Blocks 1 to 9, including Boat Basin and Schon Circle. Delivery is Rs 200 for Blocks 3–9 and Rs 250 for Blocks 1 and 2.',
+        a: 'All of them — Blocks 1 to 9, including Boat Basin and Schon Circle. Delivery is {fee:clifton-3..9} for Blocks 3–9 and {fee:clifton-1,clifton-2} for Blocks 1 and 2.',
       },
       {
         q: 'Do you deliver beyond Clifton?',
@@ -417,20 +462,64 @@ export function getArea(slug: string): DeliveryArea | undefined {
 }
 
 /**
- * The page's delivery-fee label, read from DELIVERY_ZONES: "Rs 200 delivery"
- * when every zone on the page costs the same, "Rs 200–250 delivery" when not.
- * Throws on an unknown zone id so a typo fails the build instead of shipping
- * a wrong fee.
+ * The page's delivery-fee chip: "Rs N delivery" when every area on the
+ * page that is on costs the same, "Rs N–M delivery" when not, "Delivery
+ * paused" when the owner has switched every one off. Throws on an unknown
+ * zone id so a typo fails the build instead of shipping a wrong fee.
  */
-export function feeText(area: DeliveryArea): string {
-  const fees = area.zoneIds.map((id) => {
-    const zone = findZone(id);
-    if (!zone) throw new Error(`areas.ts: "${area.slug}" lists unknown delivery zone "${id}"`);
-    return zone.feeCents;
-  });
-  if (fees.length === 0) throw new Error(`areas.ts: "${area.slug}" lists no delivery zones`);
-  const min = Math.min(...fees);
-  const max = Math.max(...fees);
-  if (min === max) return `${formatCents(min)} delivery`;
-  return `${formatCents(min)}–${formatCents(max).replace(/^Rs\s*/, '')} delivery`;
+export function feeText(area: DeliveryArea, facts: SiteFacts = DEFAULT_FACTS): string {
+  return zonesFeeChip(`areas.ts: "${area.slug}"`, area.zoneIds, facts);
+}
+
+/** An area page's words for these facts: fees filled in, sentences whose claim no longer holds left out. */
+export interface RenderedArea {
+  slug: string;
+  name: string;
+  h1: string;
+  title: string;
+  description: string;
+  intro: string[];
+  landmarks: string[];
+  popular: Array<{ name: string; blurb: string }>;
+  faqs: Array<{ q: string; a: string }>;
+  adjacent: string[];
+  /** The fee chip (feeText). */
+  fee: string;
+  /** The page's areas the owner has switched off; empty normally. */
+  paused: FactZone[];
+  /** Every one of the page's areas is switched off. */
+  allPaused: boolean;
+  /** The page's "delivery is paused" note (the page, its slug and its words stay), or null. */
+  pausedNote: string | null;
+}
+
+export function renderArea(area: DeliveryArea, facts: SiteFacts = DEFAULT_FACTS): RenderedArea {
+  const description = renderCopy(area.description, facts);
+  if (description === null) throw new Error(`areas.ts: "${area.slug}" has no description for these fees`);
+  const paused = pausedZones(area.zoneIds, facts);
+  const allPaused = paused.length === area.zoneIds.length;
+  return {
+    slug: area.slug,
+    name: area.name,
+    h1: area.h1,
+    title: area.title,
+    description,
+    intro: area.intro.map((c) => renderCopy(c, facts)).filter((p): p is string => p !== null),
+    landmarks: [...area.landmarks],
+    popular: area.popular.map((p) => ({ ...p })),
+    faqs: area.faqs.flatMap((f) => {
+      if (f.when && !claimHolds(f.when, facts)) return [];
+      const q = renderCopy(f.q, facts);
+      const a = renderCopy(f.a, facts);
+      return q === null || a === null ? [] : [{ q, a }];
+    }),
+    adjacent: [...area.adjacent],
+    fee: feeText(area, facts),
+    paused,
+    allPaused,
+    pausedNote:
+      paused.length === 0
+        ? null
+        : `Delivery to ${allPaused ? area.name : paused.map((z) => z.name).join(', ')} is paused right now — the checkout can’t take orders ${allPaused ? 'here' : 'there'} for the moment. Message us on WhatsApp and we’ll tell you when it’s back.`,
+  };
 }

@@ -77,6 +77,25 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 - **Order didn't arrive?** Settings → Website shows last check time + errors.
   "Check for orders now" forces an immediate poll.
 
+## Delivery areas, fees and the pick-up offer (from v0.7.27)
+
+- The owner sets them on the till (Settings → Delivery areas & fees, and Money
+  & discounts → Website pick-up). The till sends them with the menu as a
+  settings block (`PUT /api/bridge/menu`); the website stores both in the
+  `site_menu` row. No schema change.
+- Until a block arrives the site is exactly as before: the built-in 21 areas
+  and fees, and the till's heartbeat % for pick-up.
+- **Deploy the website before updating the tills.** An older website drops
+  the block (the menu still publishes) and the till's Settings says the
+  website needs its update.
+- The home, delivery-area and landing pages are static and refreshed from the
+  stored block: at build, after every publish, and at least hourly. With no
+  database, or a database error, they use the built-in areas and fees.
+- Before testing on a Vercel **preview**, give the Preview environment its own
+  Neon branch and its own `BRIDGE_SECRET`: with the variables set for "all
+  environments", a sandbox till publishing to a preview would replace the
+  live menu and areas.
+
 ## Free-tier limits (plenty for launch)
 
 - Vercel Hobby: 100GB bandwidth/mo, serverless functions included

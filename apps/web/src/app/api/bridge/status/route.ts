@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
+import { storedSettingsStamp } from '@/lib/publish-settings';
 import { getStoreStatus, setStoreStatus } from '@/lib/store-status';
 
 export const dynamic = 'force-dynamic';
@@ -45,8 +46,19 @@ export async function PUT(req: Request): Promise<Response> {
   }
 }
 
-/** Bridge: read back what the site currently believes, for diagnostics. */
+/**
+ * Bridge: read back what the site currently believes, for diagnostics — and
+ * which settings block it holds (`settings`: its stamp, null when none), so a
+ * till can tell a website that lost its block (a rollback, a restore).
+ */
 export async function GET(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
-  return Response.json({ ok: true, data: await getStoreStatus() });
+  const [status, settings] = await Promise.all([
+    getStoreStatus(),
+    storedSettingsStamp().catch((e: unknown) => {
+      console.error('stored settings stamp read failed', e);
+      return null;
+    }),
+  ]);
+  return Response.json({ ok: true, data: { ...status, settings } });
 }

@@ -1,12 +1,14 @@
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { sql } from '@/lib/db';
-import { deliveryChargeItemFor, findZone } from '@/lib/delivery-zones';
+import { factsFromBlock, findFactZone, outsideZoneMessage, zonePausedMessage } from '@/lib/delivery-facts';
+import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
 import { formatCents, normalizePhone } from '@/lib/format';
 import { menuWithoutDrinkBrand } from '@/lib/menu-view';
 import { validateModifierSelection, validateOrderable } from '@/lib/order-validation';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import { checkOrderRate, clientIpHash, recordOrderPlaced } from '@/lib/rate-limit';
+import { parseStoredSettings } from '@/lib/site-facts';
 import { getStoreStatus } from '@/lib/store-status';
 import { ensureWebOrderColumns } from '@/lib/web-order-columns';
 import {
@@ -31,15 +33,21 @@ export const dynamic = 'force-dynamic';
  * collected against the POS receipt. Totals follow the till's own maths
  * (lib/pricing).
  *
- * Delivery zones (lib/delivery-zones): a delivery must name one of the
- * shop's DHA / Clifton zones, and anything else is refused. The zone's fee
- * rides to the till as the matching "Delivery Charge (Rs N)" menu item, added
- * here — never chosen by the client.
+ * Delivery areas (lib/delivery-facts): a delivery must name one of the
+ * areas the owner delivers to — the settings block stored with the menu
+ * (Settings → Delivery areas & fees on the till), or the compiled DHA /
+ * Clifton list until a block arrives. Anything else is refused, and so is an
+ * area the owner has switched off. The area's fee rides to the till as its
+ * "Delivery Charge (Rs N)" menu item, added here — never chosen by the
+ * client: the area's own fee item (feeItemId) when the menu has it at the
+ * fee, else today's match by name and price, else a note for the cashier to
+ * add it by hand.
  *
- * Pickup: no zone, no address, the listening till's pickup discount off the
- * order (it announces the percent it will bill) — and only while that till
- * has announced it can import pickup orders, because an older POS would book
- * one as a delivery at full price.
+ * Pickup: no zone, no address, the owner's pick-up % off the order (the
+ * settings block's, or before one the listening till's announced %) — and
+ * only while the owner offers it and that till has announced it can import
+ * pickup orders, because an older POS would book one as a delivery at full
+ * price.
  */
 
 // The messages below reach the customer as written (the checkout shows the
@@ -70,7 +78,7 @@ const PlaceOrderSchema = z
       .min(7, 'Enter a Pakistani mobile number, like 0300 1234567.')
       .max(20, 'Enter a Pakistani mobile number, like 0300 1234567.'),
     addressLine: z.string().trim().max(300, 'Please shorten the address to 300 characters.').optional(),
-    /** One of DELIVERY_ZONES' ids. Required for a delivery: no zone, no delivery. */
+    /** An area id (the settings block's, else the compiled list's). Required for a delivery: no zone, no delivery. */
     zoneId: z.string().trim().max(40).optional(),
     notes: z.string().trim().max(500, 'Please keep the notes under 500 characters.').optional(),
     items: z
@@ -160,16 +168,25 @@ export async function POST(req: Request): Promise<Response> {
       if (existing) return placedResponse(existing, true);
     }
 
-    // DHA and Clifton only — the owner's rule, not a UI nicety.
-    const zone = pickup ? undefined : findZone(input.zoneId);
+    // Where the owner delivers: the settings block stored with the menu, else
+    // the built-in areas. Only the block here (the menu, with its images, is
+    // read after the flood check below).
+    const settingsRows = (await sql()`
+      SELECT menu_json -> 'settings' AS settings FROM site_menu WHERE id = 1
+    `) as Array<{ settings: unknown }>;
+    const facts = factsFromBlock(parseStoredSettings(settingsRows[0]?.settings ?? null));
+
+    // Only where the owner delivers — the owner's rule, not a UI nicety.
+    const zone = pickup ? undefined : findFactZone(facts, input.zoneId);
     if (!pickup && !zone) {
       return Response.json(
-        {
-          ok: false,
-          error: 'outside_zone',
-          message:
-            'We deliver in DHA and Clifton only. Choose your area from the list — if it is not there, we cannot deliver to it.',
-        },
+        { ok: false, error: 'outside_zone', message: outsideZoneMessage(facts) },
+        { status: 400 },
+      );
+    }
+    if (zone && !zone.active) {
+      return Response.json(
+        { ok: false, error: 'zone_paused', message: zonePausedMessage(zone) },
         { status: 400 },
       );
     }
@@ -224,13 +241,13 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
-    // Load the published menu and re-price server-side.
+    // Load the published menu and re-price server-side. Brand-free names (the
+    // till sells drinks as "Pepsi"; customers read "Cola"): what the order
+    // stores and every message below says them as the menu page did. Ids and
+    // prices are the till's own — it imports by id.
     const menuRows = (await sql()`
       SELECT menu_json FROM site_menu WHERE id = 1
     `) as Array<{ menu_json: PublishedMenu }>;
-    // Brand-free names (the till sells drinks as "Pepsi"; customers read
-    // "Cola"): what the order stores and every message below says them as the
-    // menu page did. Ids and prices are the till's own — it imports by id.
     const menu = menuRows[0] ? menuWithoutDrinkBrand(menuRows[0].menu_json) : undefined;
     if (!menu) {
       return Response.json({ ok: false, error: 'menu_not_published' }, { status: 409 });
@@ -238,6 +255,7 @@ export async function POST(req: Request): Promise<Response> {
     const itemIndex = new Map(
       menu.categories.flatMap((c) => c.items.map((i) => [i.posItemId, i] as const)),
     );
+    const feeItemIds = feeItemIdsOf(menu);
 
     const priced: PricedLine[] = [];
     const lines: WebOrderItem[] = [];
@@ -249,7 +267,7 @@ export async function POST(req: Request): Promise<Response> {
           { status: 409 },
         );
       }
-      const notOrderable = validateOrderable(item, input.fulfilment);
+      const notOrderable = validateOrderable(item, input.fulfilment, feeItemIds);
       if (notOrderable) {
         return Response.json(
           { ok: false, error: 'not_deliverable', message: notOrderable },
@@ -294,11 +312,14 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     let orderNotes = input.notes?.trim() || null;
-    if (zone) {
-      // The zone's fee, as the till's own delivery-charge item so the receipt
-      // and the rider's cash agree. A till that has not imported those items
-      // yet still gets the order, with the fee spelled out for the cashier.
-      const feeItem = deliveryChargeItemFor(menu, zone.feeCents);
+    if (zone && zone.feeCents > 0) {
+      // The area's fee, as the till's own delivery-charge item so the receipt
+      // and the rider's cash agree: its own item (feeItemId), else the item
+      // named for that fee. A till whose menu has neither (it has not
+      // imported them, or an older till published over a kept block) still
+      // gets the order, with the fee spelled out for the cashier. A free area
+      // has no charge line.
+      const feeItem = zoneFeeItemFor(menu, zone);
       if (feeItem) {
         priced.push({ lineTotalCents: feeItem.basePriceCents, taxRateBps: feeItem.taxRateBps });
         lines.push({

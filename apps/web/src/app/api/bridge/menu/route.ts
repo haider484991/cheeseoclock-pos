@@ -1,6 +1,9 @@
+import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { sql } from '@/lib/db';
+import type { PublishMenuResult } from '@cheeseoclock/shared-types';
+import { publishedSettingsSchema } from '@cheeseoclock/shared-schemas/web-settings';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
+import { storePublishedMenu, websiteBlockProblem } from '@/lib/publish-settings';
 
 export const dynamic = 'force-dynamic';
 // Menu publishes can carry data-URL images — allow a bigger body.
@@ -50,9 +53,26 @@ const MenuSchema = z.object({
     addressLine: z.string().nullable(),
     tagline: z.string().nullable(),
   }),
+  /**
+   * The owner's settings (Settings step 3): delivery areas and fees, the
+   * pick-up offer. Absent from a till older than the block. Checked with the
+   * menu: a malformed block fails the whole publish ('validation').
+   */
+  settings: publishedSettingsSchema.optional(),
 });
 
-/** Bridge: POS publishes (replaces) the live menu. */
+/**
+ * Bridge: a till publishes (replaces) the live menu, with the owner's
+ * settings block once one is saved (shared-types web-bridge.ts, THE SETTINGS
+ * BLOCK). Menu and block are stored together or not at all:
+ *  - a block that fails its checks against this very menu → 400
+ *    settings_invalid with the reason, and NOTHING is stored (the till sends
+ *    the menu again without the block, and shows the owner the reason);
+ *  - otherwise lib/publish-settings storePublishedMenu keeps, ignores or
+ *    stores the block in the same statement as the menu, and the answer says
+ *    which (data.settings) and which block the website now holds.
+ * The pages that print fees and areas are ISR: revalidated here.
+ */
 export async function PUT(req: Request): Promise<Response> {
   if (!isBridgeAuthorized(req)) return unauthorized();
   try {
@@ -64,14 +84,32 @@ export async function PUT(req: Request): Promise<Response> {
         { status: 400 },
       );
     }
-    await sql()`
-      INSERT INTO site_menu (id, menu_json, published_at)
-      VALUES (1, ${JSON.stringify(parsed.data)}, now())
-      ON CONFLICT (id) DO UPDATE
-        SET menu_json = EXCLUDED.menu_json, published_at = now()
-    `;
-    const itemCount = parsed.data.categories.reduce((s, c) => s + c.items.length, 0);
-    return Response.json({ ok: true, data: { categories: parsed.data.categories.length, items: itemCount } });
+    const { settings, ...menu } = parsed.data;
+    if (settings) {
+      const problem = websiteBlockProblem(settings, menu);
+      if (problem) {
+        return Response.json({ ok: false, error: 'settings_invalid', message: problem }, { status: 400 });
+      }
+    }
+
+    const { held, outcome } = await storePublishedMenu(menu, settings);
+
+    // Refresh the fee and area pages now rather than within the hour.
+    // Outside a Next request (a test) this throws; the publish still stands.
+    try {
+      revalidatePath('/', 'layout');
+    } catch (e) {
+      console.warn('revalidatePath after a menu publish failed', e);
+    }
+
+    const data: PublishMenuResult = {
+      categories: menu.categories.length,
+      items: menu.categories.reduce((s, c) => s + c.items.length, 0),
+      settings: outcome,
+      settingsAt: held?.settingsAt ?? null,
+      settingsRev: held?.settingsRev ?? null,
+    };
+    return Response.json({ ok: true, data });
   } catch (e) {
     console.error('PUT /api/bridge/menu failed', e);
     return Response.json({ ok: false, error: 'internal' }, { status: 500 });

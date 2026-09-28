@@ -68,3 +68,22 @@ describe('problemFromServer', () => {
     expect(problemFromServer(null).message).toMatch(/Could not place the order/);
   });
 });
+
+describe('the owner’s delivery areas', () => {
+  it('names the areas the owner delivers to, and says when delivery is paused everywhere', () => {
+    expect(validateCheckout({ ...OK, hasZone: false, deliveryAreas: 'DHA, Clifton and PECHS' })?.message).toBe(
+      'Choose your delivery area — we deliver in DHA, Clifton and PECHS only.',
+    );
+    expect(validateCheckout({ ...OK, hasZone: false, deliveryAreas: '', canPickup: true })).toEqual({
+      field: 'zone',
+      message: 'Delivery is paused right now — choose pick-up, or order on WhatsApp.',
+    });
+  });
+
+  it('points a switched-off area’s refusal at the area field', () => {
+    expect(problemFromServer({ error: 'zone_paused', message: 'Delivery to Emaar Crescent Bay (DHA) is paused right now.' })).toEqual({
+      field: 'zone',
+      message: 'Delivery to Emaar Crescent Bay (DHA) is paused right now.',
+    });
+  });
+});

@@ -1,7 +1,7 @@
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 import { BUSINESS } from './business';
 import { DELIVERY_AREAS } from './areas';
-import { isDeliveryChargeItem } from './delivery-zones';
+import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
 import { drinkFlavourName, withoutDrinkBrand } from './menu-view';
 
 /**
@@ -113,10 +113,11 @@ export function webSiteNode(): Record<string, unknown> {
 
 /** Menu → MenuSection → MenuItem chain from the POS-published menu. */
 export function menuNode(menu: PublishedMenu): Record<string, unknown> {
+  const feeItemIds = feeItemIdsOf(menu);
   const sections = [...menu.categories]
     .sort((a, b) => a.displayOrder - b.displayOrder)
     // Delivery charges are till items, not food — keep them out of the Menu.
-    .map((c) => ({ ...c, items: c.items.filter((i) => !isDeliveryChargeItem(i)) }))
+    .map((c) => ({ ...c, items: c.items.filter((i) => !isDeliveryChargeItem(i, feeItemIds)) }))
     .filter((c) => c.items.length > 0)
     .map((c) => ({
       '@type': 'MenuSection',
