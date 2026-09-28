@@ -18,6 +18,21 @@ import {
 export const PRINTER_TONE_GAP_MS = 2 * 60_000;
 export const LOW_STOCK_TONE_GAP_MS = 5_000;
 
+/** "2 minutes", "1 minute", "90 seconds": a gap in words. */
+export function gapWords(ms: number): string {
+  if (ms % 60_000 === 0) {
+    const m = ms / 60_000;
+    return `${m} minute${m === 1 ? '' : 's'}`;
+  }
+  const sec = Math.round(ms / 1_000);
+  return `${sec} second${sec === 1 ? '' : 's'}`;
+}
+
+/** Settings → Sounds' words for the printer-problem beep, built from the gap the till keeps between beeps. */
+export function printerProblemRuleText(gapMs: number = PRINTER_TONE_GAP_MS): string {
+  return `A short falling beep when a ticket or receipt does not print. At most once every ${gapWords(gapMs)}, so a printer that is off does not beep on every sale.`;
+}
+
 /**
  * The Live Orders "All" list. The sidebar badge and the board share it (and
  * refresh it every 15 s); the waiting reminder reads the same cache entry and

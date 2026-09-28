@@ -61,15 +61,16 @@ interface TabDef {
 /**
  * The owner's business rules come first, in the design's order (foodpanda,
  * Money & discounts, [Delivery areas & fees], Shop & logo, Staff & kitchen
- * timing, Kitchen & stock — stock rules, waste reasons, what a menu file
- * may change), then this till's printers (Receipts & printing), sounds,
+ * — timings, the opening float, reason buttons —, Kitchen & stock — stock
+ * rules, waste reasons, what a menu file may change), then this till's
+ * printers (Receipts & printing), sounds,
  * backups, FBR, the second till and About.
  */
 const TABS: TabDef[] = [
   { id: 'foodpanda', label: 'foodpanda', icon: BadgePercent },
   { id: 'money', label: 'Money & discounts', icon: Banknote },
   { id: 'store', label: 'Shop & logo', icon: Store },
-  { id: 'timing', label: 'Staff & kitchen timing', icon: Timer },
+  { id: 'timing', label: 'Staff & kitchen', icon: Timer },
   { id: 'stock', label: 'Kitchen & stock', icon: Boxes },
   { id: 'printer', label: 'Printers', icon: Printer },
   { id: 'sounds', label: 'Sounds', icon: Volume2 },

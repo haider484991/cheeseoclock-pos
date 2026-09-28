@@ -4,13 +4,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
-import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { isLeaveOutChoice, paperCashierName } from '@cheeseoclock/shared-types';
 import { CheckCircle2, Printer, Hourglass, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
 import { paperButtonLabel } from '../printing/paperLabels';
 import { receiptDiscountLabel } from './discountWords';
+import { receiptDialogShop } from './receiptDialogShop';
 
 interface Props {
   snapshot: OrderSnapshot;
@@ -35,7 +36,7 @@ const METHOD_LABEL = {
 } as const;
 
 export function ReceiptDialog({ snapshot, onClose }: Props) {
-  const { order, items, payments, discounts, cashierName, tableLabel } = snapshot;
+  const { order, items, payments, discounts, tableLabel } = snapshot;
   const [reprinting, setReprinting] = useState(false);
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -70,12 +71,14 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
     queryFn: () => ipc.printer.orderPapers(order.id),
     refetchInterval: (q) => (q.state.data?.next?.waiting ? 1_500 : false),
   });
+  // This till's printers, what prints when, and the shop's receipt lines
+  // (name, tagline, thank-you and extra lines: Settings → Shop & logo).
   const policyQ = useQuery({
     queryKey: ['printer', 'config'],
     queryFn: () => ipc.printer.getConfig(),
-    enabled: order.mode === 'delivery',
     staleTime: 60_000,
   });
+  const shop = receiptDialogShop(policyQ.data?.branding);
   const next = papersQ.data?.next ?? null;
   const receiptNotYetPrinted =
     order.mode === 'delivery' &&
@@ -137,11 +140,11 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
 
           <div className="flex-1 overflow-auto p-5 font-mono text-sm">
             <div className="text-center">
-              <div className="text-xl font-bold">CheeseOclock</div>
-              <div className="text-xs text-stone-500">Pakistani Pizza • Cafe</div>
+              {shop.name && <div className="break-words text-xl font-bold">{shop.name}</div>}
+              {shop.tagline && <div className="break-words text-xs text-stone-500">{shop.tagline}</div>}
               <div className="mt-3 text-xs text-stone-500">{new Date(order.paidAt ?? Date.now()).toLocaleString()}</div>
               <div className="text-xs">
-                Cashier: {cashierName} · {MODE_LABEL[order.mode]}
+                Cashier: {paperCashierName(snapshot)} · {MODE_LABEL[order.mode]}
                 {tableLabel ? ` · ${tableLabel}` : ''}
               </div>
               <div className="text-xs text-stone-500">Order #{order.orderNumber}</div>
@@ -218,7 +221,12 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
             <hr className="my-3 border-stone-300 dark:border-stone-700" />
 
             <div className="mt-3 text-center text-xs text-stone-500">
-              Thank you — visit us again!
+              <div className="break-words">{shop.thanks}</div>
+              {shop.extraLines.map((l, i) => (
+                <div key={i} className="break-words">
+                  {l}
+                </div>
+              ))}
             </div>
             <FbrBlock status={fbrQ.data} />
           </div>

@@ -1,8 +1,9 @@
 /**
  * The owner's rules as the counter uses them (checkout:getRules, any login):
- * the F3 screen's approval limit and buttons, the Live Orders timings, and
+ * the F3 screen's approval limit and buttons, the Live Orders timings,
  * Inventory's stock rules (the Waste screen's reasons, the stock bar's and
- * "Add low stock"'s multiple, the stock-take reminders).
+ * "Add low stock"'s multiple, the stock-take reminders), and the Cancel,
+ * Refund and Cash out reason buttons.
  *
  * Until the main process has answered — and on a till where nothing is
  * saved — these are the released defaults, which are exactly what the till
@@ -14,8 +15,10 @@ import {
   DEFAULT_DISCOUNT_DELIVERY,
   DEFAULT_DISCOUNT_PRESETS,
   DEFAULT_KITCHEN_TIMING,
+  DEFAULT_ORDER_REASONS,
   DEFAULT_STOCK_RULES,
   type CheckoutRules,
+  type CounterOrderReasons,
   type CounterStockRules,
 } from '@cheeseoclock/shared-types';
 
@@ -65,4 +68,16 @@ export const DEFAULT_COUNTER_STOCK: CounterStockRules = {
 /** Inventory's stock rules from checkout:getRules, or the released ones until it has answered. */
 export function stockRulesOf(rules: Pick<CheckoutRules, 'stock'> | null | undefined): CounterStockRules {
   return rules?.stock ?? DEFAULT_COUNTER_STOCK;
+}
+
+/** The released reason buttons: today's Cancel and Refund ones, no Cash out ones. */
+export const DEFAULT_COUNTER_REASONS: CounterOrderReasons = {
+  cancel: DEFAULT_ORDER_REASONS.cancel.map((r) => ({ ...r })),
+  refund: DEFAULT_ORDER_REASONS.refund.map((r) => ({ ...r })),
+  cashOut: [...DEFAULT_ORDER_REASONS.cashOut],
+};
+
+/** The reason buttons from checkout:getRules, or the released ones until it has answered. */
+export function orderReasonsOf(rules: Pick<CheckoutRules, 'reasons'> | null | undefined): CounterOrderReasons {
+  return rules?.reasons ?? DEFAULT_COUNTER_REASONS;
 }

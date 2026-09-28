@@ -81,16 +81,27 @@ describe('movementLabel', () => {
 });
 
 describe('rangeSinceIso', () => {
-  const now = new Date(2026, 8, 26, 15, 30); // 26 Sep 2026, 3:30 pm local
+  // Pakistan time is UTC+5 all year: 05:00 PKT is 00:00 UTC.
+  const pkt = (day: number, h: number, m = 0) => new Date(Date.UTC(2026, 8, day, h - 5, m));
 
-  it('starts at local midnight', () => {
-    expect(rangeSinceIso('today', now)).toBe(new Date(2026, 8, 26).toISOString());
-    expect(rangeSinceIso('7d', now)).toBe(new Date(2026, 8, 20).toISOString());
-    expect(rangeSinceIso('30d', now)).toBe(new Date(2026, 7, 28).toISOString());
+  it('"Today" starts at 05:00 Pakistan time (the trading day), not at midnight', () => {
+    // 26 Sep, 3:30 pm: today began at 05:00 on the 26th.
+    expect(rangeSinceIso('today', pkt(26, 15, 30))).toBe('2026-09-26T00:00:00.000Z');
+    // 27 Sep, 2 am: still the 26th's trading day — last night's stock shows under Today.
+    expect(rangeSinceIso('today', pkt(27, 2))).toBe('2026-09-26T00:00:00.000Z');
+    // 04:59 is the night before; 05:00 starts a new day.
+    expect(rangeSinceIso('today', pkt(27, 4, 59))).toBe('2026-09-26T00:00:00.000Z');
+    expect(rangeSinceIso('today', pkt(27, 5))).toBe('2026-09-27T00:00:00.000Z');
+  });
+
+  it('the last 7 and 30 days are trading days too', () => {
+    expect(rangeSinceIso('7d', pkt(26, 15, 30))).toBe('2026-09-20T00:00:00.000Z');
+    expect(rangeSinceIso('30d', pkt(26, 15, 30))).toBe('2026-08-28T00:00:00.000Z');
+    expect(rangeSinceIso('7d', pkt(27, 2))).toBe('2026-09-20T00:00:00.000Z');
   });
 
   it('has no start for all time', () => {
-    expect(rangeSinceIso('all', now)).toBeUndefined();
+    expect(rangeSinceIso('all', pkt(26, 15, 30))).toBeUndefined();
   });
 });
 

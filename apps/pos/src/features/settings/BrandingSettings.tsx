@@ -7,6 +7,7 @@ import { Eye, Store } from 'lucide-react';
 import {
   DEFAULT_FOOTER_LINE,
   logoBox,
+  receiptExtraLines,
   receiptHeadLines,
   receiptShopLines,
   type MonoRaster,
@@ -17,6 +18,7 @@ import { darkLogoFix, receiptLogoUpToDate, saveReceiptLogo, type LogoPreview } f
 import { PrintedLogo, useReceiptLogoPreview } from './ReceiptLogoPreview';
 import { SidebarBrand } from '../shell/Sidebar';
 import { LoginBrand } from '../auth/LoginPage';
+import { ReceiptExtraLinesCard } from './ReceiptExtraLinesCard';
 
 const DEFAULT_NAME = 'Cheese O Clock';
 /** The till refuses a longer one (printer-config.ts WEBSITE_MAX_CHARS). */
@@ -184,6 +186,8 @@ export function BrandingSettings() {
         </div>
       </Card>
 
+      <ReceiptExtraLinesCard />
+
       <Card>
         <div className="mb-1 flex items-center gap-2">
           <Eye className="h-5 w-5" />
@@ -210,7 +214,7 @@ export function BrandingSettings() {
             <ReceiptPreview
               logo={receiptLogo}
               paperDots={logoBox(paper).maxWidth}
-              branding={{ storeName: shownName, storeTagline, branchLine, phoneLine, websiteLine, footerLine }}
+              branding={{ storeName: shownName, storeTagline, branchLine, phoneLine, websiteLine, footerLine, extraLines: saved?.extraLines ?? [] }}
             />
             <p
               className={
@@ -289,8 +293,9 @@ function logoNote(p: LogoPreview, on: boolean, logoUrl: string | null): { text: 
 /**
  * The top and bottom of a customer receipt as the printer lays them out, from
  * the same rules the receipt uses (printer-core receiptHeadLines /
- * receiptShopLines): the logo and the tagline on top — the name only when no
- * logo prints — and the address, phone, website and thank-you at the bottom.
+ * receiptShopLines / receiptExtraLines): the logo and the tagline on top —
+ * the name only when no logo prints — and the address, phone, website,
+ * thank-you and the owner's extra lines at the bottom.
  */
 function ReceiptPreview({
   logo,
@@ -304,6 +309,7 @@ function ReceiptPreview({
   const head = receiptHeadLines(branding, logo !== null);
   const bottom = receiptShopLines(branding);
   const thanks = branding.footerLine?.trim() || DEFAULT_FOOTER_LINE;
+  const extra = receiptExtraLines(branding);
   return (
     <div className="mx-auto w-[18rem] max-w-full bg-white px-4 py-5 text-center font-mono text-[11px] leading-snug text-stone-900 shadow-soft ring-1 ring-stone-200">
       {logo && (
@@ -329,6 +335,11 @@ function ReceiptPreview({
         </div>
       ))}
       <div className="break-words">{thanks}</div>
+      {extra.map((line, i) => (
+        <div key={`x${i}`} className="break-words">
+          {line}
+        </div>
+      ))}
     </div>
   );
 }

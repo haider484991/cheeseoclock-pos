@@ -4,7 +4,7 @@
  * movement-view.test.ts); `now` is passed in so tests can pin the clock.
  */
 
-import { orderStockNoteKind, releasedWasteReasonLabel } from '@cheeseoclock/pos-domain';
+import { orderStockNoteKind, releasedWasteReasonLabel, tradingDayOfMs, tradingDayStartMs } from '@cheeseoclock/pos-domain';
 import type { StockMovement, WasteReasonSetting } from '@cheeseoclock/shared-types';
 
 export type MovementTone = 'blue' | 'green' | 'red' | 'amber' | 'purple' | 'stone';
@@ -112,12 +112,17 @@ export const DATE_RANGES: ReadonlyArray<{ id: DateRange; label: string }> = [
   { id: 'all', label: 'All time' },
 ];
 
-/** Start of the range as an ISO instant (local midnight), or undefined for all time. */
+/**
+ * Start of the range as an ISO instant, or undefined for all time. Days are
+ * the shop's trading days, 05:00 to 05:00 Pakistan time (the shop trades
+ * noon to 1 am, like Reports and Order History): "Today" at 2 am still
+ * shows the night's stock, and the last 7 days are today and the 6 trading
+ * days before. Up to v0.7.26 it started at the computer's midnight.
+ */
 export function rangeSinceIso(range: DateRange, now: Date = new Date()): string | undefined {
   if (range === 'all') return undefined;
   const days = range === 'today' ? 0 : range === '7d' ? 6 : 29;
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days);
-  return start.toISOString();
+  return new Date(tradingDayStartMs(tradingDayOfMs(now.getTime()) - days)).toISOString();
 }
 
 const time = new Intl.DateTimeFormat('en-PK', { hour: 'numeric', minute: '2-digit', hour12: true });

@@ -39,13 +39,15 @@
  *            +92 ...                     website: at the bottom, on every
  *            cheeseoclock.net            paper (owner 2026-09-27)
  *           Thank you — visit us again!
+ *           Insta @example               <- the owner's extra lines (up to
+ *                                           three; receipt and bill only)
  *
  *           FBR block (live FBR only)
  *        ** DUPLICATE - Reprint #1 **
  */
 
 import type { DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
-import { discountBillLabel, isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
+import { RECEIPT_EXTRA_LINES_MAX, discountBillLabel, isLeaveOutChoice, orderNotesOf, paperCashierName } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
 import {
   centreOnPaper,
@@ -68,10 +70,30 @@ export interface ReceiptBranding {
   websiteLine?: string;
   /** The thank-you line, under the website (a receipt or bill for the customer only). */
   footerLine?: string;
+  /**
+   * The owner's own lines under the thank-you line (Settings → Shop & logo:
+   * Instagram, the Wi-Fi password, an offer): on the customer's receipt and
+   * bill only, exactly where the thank-you line prints. None (the default)
+   * prints the paper exactly as before.
+   */
+  extraLines?: readonly string[];
 }
 
 /** The thank-you line when the shop set none. */
 export const DEFAULT_FOOTER_LINE = 'Thank you — visit us again!';
+
+/**
+ * The extra lines as they print, in order: each trimmed, empty ones left
+ * out, at most RECEIPT_EXTRA_LINES_MAX (the till refuses more; this only
+ * keeps a stray value from printing a long tail). Each wraps onto the next
+ * row like the thank-you line. The Settings preview shows these too.
+ */
+export function receiptExtraLines(branding: Pick<ReceiptBranding, 'extraLines'>): string[] {
+  return (branding.extraLines ?? [])
+    .map((l) => (typeof l === 'string' ? l.trim() : ''))
+    .filter((l) => l !== '')
+    .slice(0, RECEIPT_EXTRA_LINES_MAX);
+}
 
 /**
  * The shop's lines at the top of a customer paper (owner 2026-09-27: "on
@@ -361,6 +383,7 @@ export function renderReceipt(
   // The shop's address, phone and website, on every paper, then the
   // thank-you: on a receipt and a bill (not once the sale was refunded in
   // full), never on the shop's own copy, a refund slip or a cancelled order.
+  // The owner's extra lines go under the thank-you, on exactly those papers.
   b.align('center');
   const shopLines = receiptShopLines(opts.branding);
   for (const line of shopLines) b.wrappedText(line);
@@ -368,6 +391,7 @@ export function renderReceipt(
     !shopCopy && (doc === 'bill' || (doc === 'receipt' && snapshot.order.status !== 'refunded'));
   if (thanks) {
     b.wrappedText(opts.branding.footerLine?.trim() || DEFAULT_FOOTER_LINE);
+    for (const line of receiptExtraLines(opts.branding)) b.wrappedText(line);
   }
   if (thanks || shopLines.length > 0) b.newline();
 
@@ -491,10 +515,11 @@ function appendSaleBody(
   shopCopy: boolean,
   width: PrinterWidth,
 ): void {
-  const { order, payments, discounts, cashierName } = snapshot;
+  const { order, payments, discounts } = snapshot;
   appendOrderMeta(b, snapshot);
   const dt = new Date(order.paidAt ?? order.createdAt);
-  b.line(`Cashier: ${cashierName}`, formatDateTime(dt));
+  // "Cashier: Website" on a website order (never the login the till files it under).
+  b.line(`Cashier: ${paperCashierName(snapshot)}`, formatDateTime(dt));
 
   // Customer / delivery block (only when present — snapshotted onto the order)
   if (snapshot.customerName || snapshot.customerPhone) {
@@ -682,11 +707,11 @@ function appendRefundBody(
   shopCopy: boolean,
   width: PrinterWidth,
 ): void {
-  const { order, payments, cashierName } = snapshot;
+  const { order, payments } = snapshot;
   const returned = sumOf(refund.rows);
   appendOrderMeta(b, snapshot);
   b.text(`Refunded ${formatDateTime(refund.refundedAt)}`).newline();
-  b.line(`Sale ${formatDateTime(new Date(order.paidAt ?? order.createdAt))}`, `Cashier: ${cashierName}`);
+  b.line(`Sale ${formatDateTime(new Date(order.paidAt ?? order.createdAt))}`, `Cashier: ${paperCashierName(snapshot)}`);
   b.rule();
   for (const r of refund.rows) {
     b.line(`${METHOD_LABEL[r.method] ?? r.method} refund`, money(r.amountCents));
@@ -937,7 +962,8 @@ const MODE_SHOUT: Record<OrderSnapshot['order']['mode'], string> = {
  * items (the counter's "Order notes", a website customer's note — as loud as
  * an allergy note), one double-height row per item with its modifiers and
  * notes beneath, then — for deliveries — the address, so the bag can be
- * matched to its rider.
+ * matched to its rider. Beside the time: who took the order ("Website" for
+ * a website order: paperCashierName).
  *
  * Layout (80mm / 48 cols):
  *
@@ -945,7 +971,7 @@ const MODE_SHOUT: Record<OrderSnapshot['order']['mode'], string> = {
  *                     #0042
  *                    DELIVERY
  *                 WEBSITE ORDER
- *      14/09 19:35                     Ali Akbar
+ *      14/09 19:35                        Website
  *      Customer: Hamza              0300 9367865
  *      !! ORDER NOTE: Ring the upper bell
  *      ----------------------------------------
@@ -1014,7 +1040,7 @@ export function renderKitchenTicket(
 
   b.align('left');
   const when = opts.now ?? new Date();
-  b.line(formatTicketTime(when), snapshot.cashierName);
+  b.line(formatTicketTime(when), paperCashierName(snapshot));
   if (opts.cancelled && opts.cancelInfo) {
     const c = opts.cancelInfo;
     b.bold(true);

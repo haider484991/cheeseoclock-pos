@@ -33,6 +33,7 @@ import type {
   SetShopSettingRequest,
   ShopSettingKey,
 } from './shop-settings.js';
+import type { AnyTillSettingCard, OpeningFloatPrefill, SetTillSettingRequest, TillSettingKey } from './till-settings.js';
 import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
 import type {
   DeletedTestsPage,
@@ -782,6 +783,14 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<{ countedCashCents: number; closedAt: string } | null>;
   };
+  /**
+   * What the Open shift box starts the float count on (this till's setting:
+   * its last count, or the owner's fixed float). Any signed-in login.
+   */
+  'shifts:openingFloat': {
+    request: undefined;
+    response: ApiResult<OpeningFloatPrefill>;
+  };
   /** Cash in / out of the drawer that is not a sale. A cashier needs a manager PIN. */
   'shifts:recordCashMovement': {
     request: { type: CashMovementType; amountCents: number; reason: string; approverPin?: string };
@@ -924,6 +933,8 @@ export interface IpcContract {
         /** At the bottom of receipts. '' = none; a till that never set one reads the shop's own site. */
         websiteLine?: string;
         footerLine?: string;
+        /** The owner's extra lines under the thank-you line (none to three). */
+        extraLines?: string[];
         logoUrl?: string;
       };
       transports: PrinterTransport[];
@@ -959,6 +970,8 @@ export interface IpcContract {
       /** Send '' to print no website (left out, a till reads the shop's own site). */
       websiteLine?: string;
       footerLine?: string;
+      /** Left out: the extra lines stored are kept (they have their own card, settings:setTill). */
+      extraLines?: string[];
       logoUrl?: string;
     };
     response: ApiResult<{ ok: true }>;
@@ -1567,6 +1580,19 @@ export interface IpcContract {
   'settings:setBusiness': {
     request: SetShopSettingRequest;
     response: ApiResult<AnyShopSettingCard>;
+  };
+  // The owner's settings that belong to THIS till (till-settings.ts: the
+  // receipt's extra lines, the opening float). Never synced. Owner only
+  // (settings.manage), checked in the main process.
+  /** One "this till" card: the value in use, who changed it last, its history. */
+  'settings:getTill': {
+    request: { key: TillSettingKey };
+    response: ApiResult<AnyTillSettingCard>;
+  };
+  /** Save a "this till" card (or put its default back). Audited. */
+  'settings:setTill': {
+    request: SetTillSettingRequest;
+    response: ApiResult<AnyTillSettingCard>;
   };
   /**
    * What the counter needs to take an order, for any signed-in login: the

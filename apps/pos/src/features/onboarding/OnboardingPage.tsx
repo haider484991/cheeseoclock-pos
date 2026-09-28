@@ -9,6 +9,7 @@ import { SecretFields } from '../../components/secret/SecretFields';
 import { secretFieldsReady } from '../../components/secret/secretRules';
 import { RestoreFromBackup } from './RestoreFromBackup';
 import { LogoPicker } from '../settings/LogoPicker';
+import { startingTaxRows } from '../menu-mgmt/taxForm';
 import {
   Store,
   Receipt,
@@ -25,7 +26,7 @@ import {
 /**
  * First-run onboarding. Visible until at least one user exists. Collects:
  *   1. Business basics (logo, name, contact)
- *   2. Tax categories (pre-filled with Pakistan defaults)
+ *   2. Tax categories (pre-filled with the till's one starting set: the shop's 15%, and zero-rated)
  *   3. First admin user (name + a number PIN or a password)
  *
  * On finish, calls system:completeOnboarding which atomically creates the
@@ -38,11 +39,8 @@ interface TaxRow {
   rateBps: number;
 }
 
-const DEFAULT_TAX_PRESETS: TaxRow[] = [
-  { name: 'Standard 17%', rateBps: 1700 },
-  { name: 'Beverages 13%', rateBps: 1300 },
-  { name: 'Zero-rated', rateBps: 0 },
-];
+/** The one starting set (shared-types STARTING_TAX_CATEGORIES), each row editable here. */
+const DEFAULT_TAX_PRESETS: TaxRow[] = startingTaxRows();
 
 interface Props {
   onComplete: () => void;

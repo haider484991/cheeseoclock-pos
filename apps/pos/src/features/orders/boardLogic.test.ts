@@ -13,7 +13,6 @@ import {
   nextBoardAction,
   offersKitchenReprint,
   parseRupeesToCents,
-  quickCashOptions,
 } from './boardLogic';
 
 describe('age', () => {
@@ -127,13 +126,8 @@ describe('card lines', () => {
   });
 });
 
+// The board's quick-cash notes are Pay's (checkout/tenderAmounts quickCashRupees): tested there.
 describe('cash helpers', () => {
-  it('offers the exact bill and the notes people hand over', () => {
-    expect(quickCashOptions(185_000)).toEqual([185_000, 190_000, 200_000, 500_000]);
-    expect(quickCashOptions(200_000)).toEqual([200_000, 500_000]);
-    expect(quickCashOptions(0)).toEqual([]);
-  });
-
   it('reads rupees typed with commas', () => {
     expect(parseRupeesToCents('2,000')).toBe(200_000);
     expect(parseRupeesToCents(' 1850.5 ')).toBe(185_050);

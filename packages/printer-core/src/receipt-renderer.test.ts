@@ -393,7 +393,8 @@ describe('renderKitchenTicket', () => {
     expect(r).toContain('KITCHEN');
     expect(r).toContain('#0042');
     expect(r).toContain('DELIVERY');
-    expect(r.some((x) => /^14\/09 19:35\s+Ali Akbar$/.test(x))).toBe(true);
+    // A website order (this one is): "Website" beside the time, not the login the till filed it under.
+    expect(r.some((x) => /^14\/09 19:35\s+Website$/.test(x))).toBe(true);
     expect(r.some((x) => /^Customer: Hamza\s+0300 9367865$/.test(x))).toBe(true);
     expect(r.some((x) => x.startsWith('2 x Chicken Tikka Pizza Large (12")'))).toBe(true);
     expect(r.join(' ')).toContain('with Stuffed Crust');

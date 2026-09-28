@@ -9,7 +9,8 @@
  * Phase 1 is foodpanda: the deal on the listing, foodpanda's fees and the
  * checks at Pay. Phase 2 the approval limit and the discount buttons (Money
  * & discounts); phase 6 the staff and kitchen timings; phase 7 the stock
- * rules and what a menu file import may change (Kitchen & stock). Later phases add
+ * rules and what a menu file import may change (Kitchen & stock); then the
+ * Cancel, Refund and Cash out reason buttons (Staff & kitchen). Later phases add
  * their own keys here (delivery areas and fees, offers, the shop profile…),
  * each with a frozen default.
  *
@@ -42,6 +43,7 @@ export const SHOP_SETTING_KEYS = [
   'kitchen.timing',
   'stock.rules',
   'menu.importPolicy',
+  'orders.reasons',
 ] as const;
 export type ShopSettingKey = (typeof SHOP_SETTING_KEYS)[number];
 
@@ -382,6 +384,64 @@ export interface MenuImportPolicy {
   tax: ImportSide;
 }
 
+// ---------------------------------------------------------------------------
+// Reason buttons (Settings → Staff & kitchen)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a reason button says about "Was the food made?": 'made', 'not_made',
+ * or 'ask' (nothing: staff tap Made or Not made).
+ */
+export type ReasonFoodAnswer = 'made' | 'not_made' | 'ask';
+
+/**
+ * One button on the Cancel or Refund box. What is SAVED is the label's text
+ * (the order's cancel reason, the refund's reason), exactly as before the
+ * buttons were editable: Team & leakage lists every row by the words it was
+ * saved with, so renaming a button never changes an old row. The id only
+ * lets the Settings card follow a button while it is renamed or moved.
+ *
+ * `food` fills "Was the food made?" only while nobody has answered it: never
+ * over a tap, never over the "Made" the till starts on once cooking was
+ * marked, and never once the food has left the shop (then there is no
+ * question: the till counts it as waste whatever is tapped, and refuses
+ * "not made" — pos-domain FOOD_LEFT_SHOP).
+ */
+export interface OrderReasonButton {
+  id: string;
+  /** On the button, and saved as the reason (30 letters at most). */
+  label: string;
+  food: ReasonFoodAnswer;
+}
+
+/**
+ * The reason buttons ('orders.reasons'): the Cancel box's and the Refund
+ * box's, and the drawer's "Cash out" ones. A reason and the manager's PIN
+ * are still needed for every cancel and refund (the main process checks),
+ * and any other reason can still be typed. Nothing here changes who may do
+ * what.
+ */
+export interface OrderReasons {
+  v: number;
+  /** The Cancel box's buttons, in order: one to eight. */
+  cancel: OrderReasonButton[];
+  /** The Refund box's buttons: one to eight. */
+  refund: OrderReasonButton[];
+  /**
+   * What cash taken out of the drawer was for (Drawer cash in / out → Cash
+   * out): none to eight buttons that fill the "What was it for?" box. None
+   * (today): it is typed.
+   */
+  cashOut: string[];
+}
+
+export const ORDER_REASONS_MAX = 8;
+export const CASH_OUT_REASONS_MAX = 8;
+/** A reason button's words: one line, this many letters at most (a cash-out reason is kept to 80). */
+export const ORDER_REASON_LABEL_MAX = 30;
+/** A reason button's id: lower-case letters, digits and "_". */
+export const ORDER_REASON_ID_RE = /^[a-z0-9_]{1,40}$/;
+
 export interface ShopSettingValues {
   'foodpanda.deal': FoodpandaDeal;
   'foodpanda.fees': FoodpandaFees;
@@ -393,6 +453,7 @@ export interface ShopSettingValues {
   'kitchen.timing': KitchenTiming;
   'stock.rules': StockRules;
   'menu.importPolicy': MenuImportPolicy;
+  'orders.reasons': OrderReasons;
 }
 export type ShopSettingValue<K extends ShopSettingKey> = ShopSettingValues[K];
 
@@ -408,6 +469,7 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'kitchen.timing': 1,
   'stock.rules': 1,
   'menu.importPolicy': 1,
+  'orders.reasons': 1,
 });
 
 /** foodpanda's commission until the owner confirms his own (costing spec 4.7): shown as "suggested". */
@@ -531,6 +593,31 @@ export const DEFAULT_MENU_IMPORT_POLICY: Readonly<MenuImportPolicy> = Object.fre
   tax: 'file',
 });
 
+const reasonButton = (id: string, label: string, food: ReasonFoodAnswer): OrderReasonButton => Object.freeze({ id, label, food });
+
+/**
+ * Today's buttons, in today's order (they were typed into the Cancel and
+ * Refund boxes: stockCopy.ts CANCEL_REASONS / REFUND_REASONS), and no
+ * cash-out buttons.
+ */
+export const DEFAULT_ORDER_REASONS: Readonly<OrderReasons> = Object.freeze({
+  v: 1,
+  cancel: Object.freeze([
+    reasonButton('customer_cancelled', 'Customer cancelled', 'ask'),
+    reasonButton('refused_at_door', 'Refused at the door', 'made'),
+    reasonButton('not_collected', 'Not collected', 'made'),
+    reasonButton('wrong_order_duplicate', 'Wrong order / duplicate', 'not_made'),
+    reasonButton('out_of_stock', 'Out of stock', 'not_made'),
+  ]) as OrderReasonButton[],
+  refund: Object.freeze([
+    reasonButton('customer_unhappy', 'Customer unhappy', 'ask'),
+    reasonButton('wrong_order', 'Wrong order', 'ask'),
+    reasonButton('cancelled_by_foodpanda', 'Cancelled by Foodpanda', 'ask'),
+    reasonButton('out_of_stock', 'Out of stock', 'not_made'),
+  ]) as OrderReasonButton[],
+  cashOut: Object.freeze([] as string[]) as string[],
+}) as Readonly<OrderReasons>;
+
 export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<ShopSettingValues[K]> } = Object.freeze({
   'foodpanda.deal': DEFAULT_FOODPANDA_DEAL,
   'foodpanda.fees': DEFAULT_FOODPANDA_FEES,
@@ -542,6 +629,7 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'kitchen.timing': DEFAULT_KITCHEN_TIMING,
   'stock.rules': DEFAULT_STOCK_RULES,
   'menu.importPolicy': DEFAULT_MENU_IMPORT_POLICY,
+  'orders.reasons': DEFAULT_ORDER_REASONS,
 });
 
 /** A tablet total more than this far from the till's total is a mismatch (Rs 1). */
@@ -721,6 +809,12 @@ export interface CheckoutRules {
    * released ones.
    */
   stock?: CounterStockRules;
+  /**
+   * The reason buttons (Settings → Staff & kitchen): the Cancel and Refund
+   * boxes' and the drawer's Cash out ones. Absent (a test, or before the
+   * till answers): the released ones.
+   */
+  reasons?: CounterOrderReasons;
   foodpanda: {
     /** The deal a foodpanda order started now gets; null when there is none today. */
     deal: {
@@ -741,6 +835,9 @@ export interface CheckoutRules {
     upliftBps: number;
   };
 }
+
+/** The reason buttons as the counter uses them (checkout:getRules). */
+export type CounterOrderReasons = Omit<OrderReasons, 'v'>;
 
 /** The stock rules as the counter and Inventory use them (checkout:getRules): no variance figures. */
 export interface CounterStockRules {

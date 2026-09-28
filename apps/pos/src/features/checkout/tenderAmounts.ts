@@ -1,7 +1,10 @@
 /**
- * One-tap cash amounts for the payment screen: the round notes a customer is
- * likely to hand over for this bill, smallest first. "Exact" is its own
- * button, so the bill itself is never one of these.
+ * THE one quick-cash rule: the one-tap "cash given" amounts for a bill, on
+ * Pay and on Live Orders' "Picked up / Delivered + Pay". The round notes a
+ * customer is likely to hand over, smallest first: the next Rs 100, 500,
+ * 1,000 and 5,000 at or above the bill, and for a bill that is already round
+ * the next notes up. "Exact" is its own button on both screens, so the bill
+ * itself is never one of these. At most `count` (4).
  */
 export function quickCashRupees(totalCents: number, count = 4): number[] {
   if (!(totalCents > 0)) return [];

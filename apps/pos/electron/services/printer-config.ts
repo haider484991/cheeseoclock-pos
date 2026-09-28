@@ -4,6 +4,7 @@ import type { AppDatabase } from '../db/connection.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import type { MonoRaster, PrinterConnectionConfig } from '@cheeseoclock/printer-core';
 import { KITCHEN_COPIES_MAX } from '@cheeseoclock/shared-types';
+import { receiptExtraLinesSchema } from '@cheeseoclock/shared-schemas';
 import type {
   DrawerSettings,
   PrintPolicy,
@@ -108,6 +109,15 @@ export const ReceiptBrandingSchema = z.object({
     .regex(/^[^\u0000-\u001f\u007f]*$/, 'The website has unsupported characters')
     .optional(),
   footerLine: z.string().optional(),
+  /**
+   * The owner's own lines under the thank-you line (Settings → Shop & logo →
+   * Extra lines on receipts; 'receipt.extraLines'): none to three, 64
+   * letters each, on a customer's receipt and bill only. Not there (every
+   * till up to v0.7.26, or none saved) = none: the papers print exactly as
+   * before. Saved only through setReceiptExtraLines; a Shop details save
+   * keeps them.
+   */
+  extraLines: receiptExtraLinesSchema.optional(),
   /** Data URL of the company logo (already resized — see ImagePicker). */
   logoUrl: z.string().optional(),
 });
@@ -150,17 +160,45 @@ export function getReceiptBranding(db: AppDatabase): ReceiptBranding {
   const raw = getSettingRaw(db, BRANDING_KEY);
   const parsed = ReceiptBrandingSchema.safeParse(raw ?? {});
   if (parsed.success) return withDefaultWebsite(parsed.data);
-  // A website that no longer passes the check must not cost the shop its
-  // name, address and logo on every receipt: keep the rest, print no website.
-  if (raw && typeof raw === 'object' && 'websiteLine' in raw) {
-    const { websiteLine: _bad, ...rest } = raw as Record<string, unknown>;
-    const retry = ReceiptBrandingSchema.safeParse(rest);
-    if (retry.success) {
-      log.warn('Receipt website unreadable; printing receipts without it');
-      return { ...retry.data, websiteLine: '' };
+  // A website or an extra line that no longer passes the check must not cost
+  // the shop its name, address and logo on every receipt: keep the rest,
+  // print no website (or no extra lines).
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const rec = raw as Record<string, unknown>;
+    const fallbacks: string[][] = [['extraLines'], ['websiteLine'], ['websiteLine', 'extraLines']];
+    for (const drop of fallbacks) {
+      if (!drop.every((f) => f in rec)) continue;
+      const rest = Object.fromEntries(Object.entries(rec).filter(([f]) => !drop.includes(f)));
+      const retry = ReceiptBrandingSchema.safeParse(rest);
+      if (!retry.success) continue;
+      log.warn(`Receipt ${drop.join(' and ')} unreadable; printing receipts without it`);
+      return drop.includes('websiteLine') ? { ...retry.data, websiteLine: '' } : withDefaultWebsite(retry.data);
     }
   }
   return withDefaultWebsite(ReceiptBrandingSchema.parse({})); // returns defaults
+}
+
+/**
+ * The extra lines as stored (an empty list when none were ever saved, or
+ * when what is stored does not pass the check: none print then either).
+ */
+export function getReceiptExtraLines(db: AppDatabase): string[] {
+  const raw = getSettingRaw(db, BRANDING_KEY);
+  const lines = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>)['extraLines'] : undefined;
+  if (lines === undefined) return [];
+  const parsed = receiptExtraLinesSchema.safeParse(lines);
+  return parsed.success ? parsed.data : [];
+}
+
+/**
+ * Save the extra lines ('receipt.extraLines', checked by the caller) into
+ * this till's receipt branding, leaving every other field exactly as it is
+ * stored (a website never set stays "the shop's own site"). Audited.
+ */
+export function setReceiptExtraLines(db: AppDatabase, lines: string[], actorUserId: string | null): void {
+  const raw = getSettingRaw(db, BRANDING_KEY);
+  const base = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  setSetting(db, BRANDING_KEY, { ...base, extraLines: [...lines] }, { actorUserId });
 }
 
 /** Never set (see ReceiptBrandingSchema.websiteLine): the shop's own site. */

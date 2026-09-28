@@ -16,7 +16,7 @@ const hours = (n: number) => `${n} hour${n === 1 ? '' : 's'}`;
  */
 export function reprintRuleText(t: Pick<StaffTiming, 'freeReprints' | 'reprintWindowMin'> | null): string {
   if (!t) {
-    return "A counter login gets a set number of copies of a paid receipt for the order in front of it (Settings → Staff & kitchen timing); any more, or an older order, needs a manager's PIN or password.";
+    return "A counter login gets a set number of copies of a paid receipt for the order in front of it (Settings → Staff & kitchen); any more, or an older order, needs a manager's PIN or password.";
   }
   if (t.freeReprints <= 0) {
     // reprint-policy.ts: the paper that adds the FBR number, when the receipt printed without it, is

@@ -127,7 +127,7 @@ describe('Settings → Kitchen & stock', () => {
     expect(words).toContain('the till keeps Rs 1,200');
   });
 
-  it('only the owner’s login has the tab, in the design’s place: after Staff & kitchen timing, before Printers', () => {
+  it('only the owner’s login has the tab, in the design’s place: after Staff & kitchen, before Printers', () => {
     const tabs = (markup: string) =>
       markup
         .split('role="tab"')
@@ -135,7 +135,7 @@ describe('Settings → Kitchen & stock', () => {
         .map((t) => text(`<x ${t.slice(0, t.indexOf('</button>'))}`));
     signIn('admin');
     const all = tabs(render(<SettingsPage />));
-    expect(all.slice(0, 6)).toEqual(['foodpanda', 'Money & discounts', 'Shop & logo', 'Staff & kitchen timing', 'Kitchen & stock', 'Printers']);
+    expect(all.slice(0, 6)).toEqual(['foodpanda', 'Money & discounts', 'Shop & logo', 'Staff & kitchen', 'Kitchen & stock', 'Printers']);
     for (const role of ['manager', 'cashier'] as const) {
       signIn(role);
       expect({ role, tabs: tabs(render(<SettingsPage />)) }).toEqual({ role, tabs: ['Printers', 'Sounds', 'About'] });

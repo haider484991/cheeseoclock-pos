@@ -158,6 +158,7 @@ const api: RendererApi = {
     list: (req) => invoke('shifts:list', req),
     summary: (req) => invoke('shifts:summary', req),
     lastCount: () => invoke('shifts:lastCount', undefined),
+    openingFloat: () => invoke('shifts:openingFloat', undefined),
     recordCashMovement: (req) => invoke('shifts:recordCashMovement', req),
     listCashMovements: (req) => invoke('shifts:listCashMovements', req),
     openDrawer: (req) => invoke('shifts:openDrawer', req),
@@ -297,6 +298,9 @@ const api: RendererApi = {
   settings: {
     getBusiness: (req) => invoke('settings:getBusiness', req),
     setBusiness: (req) => invoke('settings:setBusiness', req),
+    // This till's own (the receipt's extra lines, the opening float): the owner only too.
+    getTill: (req) => invoke('settings:getTill', req),
+    setTill: (req) => invoke('settings:setTill', req),
   },
   // What the counter needs to take an order (the foodpanda deal, Pay's checks).
   checkout: {

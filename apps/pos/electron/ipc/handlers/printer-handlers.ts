@@ -13,6 +13,7 @@ import {
   getKitchenPrinterConfig,
   getPrintPolicy,
   getReceiptBranding,
+  getReceiptExtraLines,
   getReceiptLogoStatus,
   getReceiptPrinterConfig,
   setKitchenPrinterConfig,
@@ -87,7 +88,11 @@ export function registerPrinterHandlers(ctx: HandlerContext): void {
         message: parsed.error.errors.map((e) => e.message).join(', '),
       });
     }
-    setReceiptBranding(ctx.db, parsed.data, s.id);
+    // The extra lines have their own card (Settings → Shop & logo, settings:setTill):
+    // a Shop details save that does not send them keeps the ones stored.
+    const sent = payload !== null && typeof payload === 'object' && 'extraLines' in payload;
+    const kept = sent ? [] : getReceiptExtraLines(ctx.db);
+    setReceiptBranding(ctx.db, kept.length > 0 ? { ...parsed.data, extraLines: kept } : parsed.data, s.id);
     return ok({ ok: true } as const);
   });
 

@@ -75,6 +75,7 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
   const delivery = readShopSetting(db, 'discounts.delivery').value;
   const kitchen = readShopSetting(db, 'kitchen.timing').value;
   const stock = readShopSetting(db, 'stock.rules').value;
+  const reasons = readShopSetting(db, 'orders.reasons').value;
   const active = activeFoodpandaDeal(deal, now.toISOString());
   return {
     discounts: {
@@ -94,6 +95,12 @@ export function checkoutRules(db: AppDatabase, now: Date = new Date()): Checkout
       reorderMultiple: stock.reorderMultiple,
       wasteReasons: stock.wasteReasons.map((r) => ({ id: r.id, label: r.label, hidden: r.hidden })),
       reminders: { keyItemsEveryDays: stock.reminders.keyItemsEveryDays, fullEveryDays: stock.reminders.fullEveryDays },
+    },
+    // The Cancel, Refund and Cash out reason buttons (Settings → Staff & kitchen).
+    reasons: {
+      cancel: reasons.cancel.map((r) => ({ id: r.id, label: r.label, food: r.food })),
+      refund: reasons.refund.map((r) => ({ id: r.id, label: r.label, food: r.food })),
+      cashOut: [...reasons.cashOut],
     },
     foodpanda: {
       deal: active

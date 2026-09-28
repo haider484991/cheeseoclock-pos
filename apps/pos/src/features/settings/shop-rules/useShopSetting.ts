@@ -3,8 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
 import { ipc, IpcError, onShopSettingsChanged, onSyncStatusChanged } from '../../../ipc/client';
 import { useToast } from '../../../components/toast/ToastProvider';
-import type { CounterStockRules } from '@cheeseoclock/shared-types';
-import { discountRulesOf, kitchenTimingOf, stockRulesOf, type CounterDiscountRules, type CounterKitchenTiming } from './counterRules';
+import type { CounterOrderReasons, CounterStockRules } from '@cheeseoclock/shared-types';
+import {
+  discountRulesOf,
+  kitchenTimingOf,
+  orderReasonsOf,
+  stockRulesOf,
+  type CounterDiscountRules,
+  type CounterKitchenTiming,
+} from './counterRules';
 
 /** Every shop-rule query (Settings cards, the counter's rules) is under this key. */
 export const SHOP_SETTINGS_KEY = ['shop-settings'] as const;
@@ -63,6 +70,14 @@ export function useKitchenTiming(opts: { enabled?: boolean } = {}): CounterKitch
  */
 export function useStockRules(): CounterStockRules {
   return stockRulesOf(useCheckoutRules().data);
+}
+
+/**
+ * The Cancel, Refund and Cash out reason buttons (Settings → Staff &
+ * kitchen) — the released ones until the till has answered.
+ */
+export function useOrderReasons(): CounterOrderReasons {
+  return orderReasonsOf(useCheckoutRules().data);
 }
 
 /**

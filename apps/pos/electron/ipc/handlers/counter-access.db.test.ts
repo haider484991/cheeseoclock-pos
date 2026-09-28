@@ -501,6 +501,9 @@ const SHOP_SETTINGS_OWNER_ONLY = (): Record<string, unknown> => ({
     key: 'foodpanda.deal',
     value: { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
   },
+  // This till's own (Settings polish, 28 Sep 2026): the receipt's extra lines and the opening float. Never synced.
+  'settings:getTill': { key: 'drawer.openingFloat' },
+  'settings:setTill': { key: 'receipt.extraLines', value: ['Test line on the receipt'] },
 });
 
 /** Every way a shop rule can be saved: each key, and "Put back the default". */
@@ -548,6 +551,17 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
   // Whether a discount also comes off the delivery charge (owner, 28 Sep 2026).
   { key: 'discounts.delivery', value: { v: 1, alsoOffDeliveryCharge: true } },
   { key: 'discounts.delivery', useDefault: true },
+  // The Cancel, Refund and Cash out reason buttons (Settings polish, 28 Sep 2026).
+  {
+    key: 'orders.reasons',
+    value: {
+      v: 1,
+      cancel: [{ id: 'test_cancel', label: 'Test cancel reason', food: 'made' }],
+      refund: [{ id: 'test_refund', label: 'Test refund reason', food: 'ask' }],
+      cashOut: ['Test cash out'],
+    },
+  },
+  { key: 'orders.reasons', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -601,6 +615,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'shifts:current': undefined,
   'shifts:open': { openingCashCents: 0 },
   'shifts:lastCount': undefined,
+  // Where the Open shift box starts (this till's last count, or the owner's fixed float): a cashier opens the morning shift.
+  'shifts:openingFloat': undefined,
   'shifts:recordCashMovement': { type: 'payin', amountCents: 10_000, reason: 'Change' },
   'shifts:openDrawer': { kind: 'no_sale', reason: 'Change for a note' },
   'printer:getConfig': undefined,
@@ -878,7 +894,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         });
       }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(10);
+      expect(SHOP_SETTING_KEYS.length).toBe(11);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
@@ -982,6 +998,36 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
       const rules = await data<Record<string, unknown>>('checkout:getRules');
       expect(rules).toMatchObject({ discounts: { alsoOffDeliveryCharge: true } });
       expect(JSON.stringify(rules)).not.toMatch(/commission|fee|payout/i);
+    }
+  });
+
+  it('the counter reads the reason buttons (today’s until the owner saves) and where the Open shift box starts — never who saved them', async () => {
+    const mine = SHOP_SETTING_SAVES().find((p) => (p as { key?: string }).key === 'orders.reasons' && 'value' in (p as object)) as {
+      value: { cancel: unknown[]; refund: unknown[]; cashOut: string[] };
+    };
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<{ reasons: { cancel: Array<{ label: string }>; cashOut: string[] } }>('checkout:getRules');
+      expect(rules.reasons.cancel.map((r) => r.label)).toEqual([
+        'Customer cancelled',
+        'Refused at the door',
+        'Not collected',
+        'Wrong order / duplicate',
+        'Out of stock',
+      ]);
+      expect(rules.reasons.cashOut).toEqual([]);
+      // This till closed an earlier shift: the box starts on its count (today's rule).
+      expect(await data('shifts:openingFloat')).toMatchObject({ from: 'last_count', lastCount: { countedCashCents: expect.any(Number) } });
+    }
+    h.session = OWNER;
+    expect((await call('settings:setBusiness', mine)).ok).toBe(true);
+    expect((await call('settings:setTill', { key: 'drawer.openingFloat', value: { mode: 'fixed', fixedCents: 300_000 } })).ok).toBe(true);
+    for (const who of [CASHIER, MANAGER]) {
+      h.session = who;
+      const rules = await data<Record<string, unknown>>('checkout:getRules');
+      expect(rules).toMatchObject({ reasons: { cancel: mine.value.cancel, refund: mine.value.refund, cashOut: mine.value.cashOut } });
+      expect(JSON.stringify(rules)).not.toMatch(/updatedBy|u_admin/i);
+      expect(await data('shifts:openingFloat')).toMatchObject({ prefillCents: 300_000, from: 'fixed' });
     }
   });
 

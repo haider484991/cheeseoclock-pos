@@ -12,6 +12,7 @@ import { SecretInput } from '../../components/secret/SecretInput';
 import { SecretHint } from '../../components/secret/SecretHint';
 import { secretReady } from '../../components/secret/secretRules';
 import { RecordPurchaseDialog, type PayoutToConvert } from '../inventory/RecordPurchaseDialog';
+import { useOrderReasons } from '../settings/shop-rules/useShopSetting';
 
 const TYPES: Array<{ id: CashMovementType; label: string; hint: string; icon: typeof Wallet }> = [
   { id: 'payout', label: 'Cash out', hint: 'Supplier, gas, an expense', icon: ArrowUpFromLine },
@@ -36,6 +37,9 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
   const [pin, setPin] = useState('');
   const { toast } = useToast();
   const qc = useQueryClient();
+  // The owner's "Cash out" buttons (Settings → Staff & kitchen): they fill the
+  // box, and anything else can still be typed. None by default.
+  const cashOutReasons = useOrderReasons().cashOut;
 
   const listQ = useQuery({
     queryKey: ['shifts', 'cashMovements', shiftId],
@@ -137,11 +141,32 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
             </label>
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
+            <div className="block text-sm">
+              <label htmlFor="cash-reason" className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                 What was it for?
-              </span>
+              </label>
+              {type === 'payout' && cashOutReasons.length > 0 && (
+                <div className="mb-1.5 flex flex-wrap gap-1.5">
+                  {cashOutReasons.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setReason(r)}
+                      aria-pressed={reason === r}
+                      className={cn(
+                        'rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition-colors',
+                        reason === r
+                          ? 'bg-amber-100 text-amber-900 ring-amber-300 dark:bg-amber-950 dark:text-amber-100 dark:ring-amber-700'
+                          : 'bg-stone-50 text-stone-700 ring-stone-200 hover:bg-stone-100 dark:bg-stone-800 dark:text-stone-200 dark:ring-stone-700',
+                      )}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              )}
               <input
+                id="cash-reason"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder={
@@ -149,7 +174,7 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
                 }
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />
-            </label>
+            </div>
             {!canDirect && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950">
                 <div className="mb-2 text-sm font-semibold text-amber-900 dark:text-amber-100">
