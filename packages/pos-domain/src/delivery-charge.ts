@@ -455,7 +455,7 @@ export function deliveryChargeRowState(
       otherQty === 1
         ? `a ${formatCents(others[0]?.unitPriceCents ?? 0)} delivery charge`
         : `${otherQty} delivery charges at other fees (${[...new Set(others.map((l) => formatCents(l.unitPriceCents)))].join(', ')})`;
-    return { kind: 'other', text: `The bill has ${what} — this area is now ${fee}`, action: `Change to ${fee}` };
+    return { kind: 'other', text: `The bill has ${what} — this area’s charge is ${fee}`, action: `Change to ${fee}` };
   }
   if (rightQty > 0) return { kind: 'on', text: `${fee} delivery charge is on the bill`, qty: rightQty };
   if (!told) return { kind: 'telling', text: `Delivery to this area is ${fee}` };

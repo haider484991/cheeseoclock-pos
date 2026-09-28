@@ -131,12 +131,12 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
     another area swaps it. Clearing the area, or switching the order to
     Takeaway or foodpanda, takes it off; switching back to Delivery puts it
     back.
-  - A fee the cashier takes off by hand stays off unless a different area is
-    picked, or the order is switched away from Delivery and back. "Put it
-    back" on the charge row puts it back.
+  - A fee the cashier takes off by hand stays off unless the area is changed
+    (another area, or cleared and picked again), or the order is switched
+    away from Delivery and back. "Put it back" on the charge row puts it back.
   - A charge already on the bill keeps its price when a fee is changed in
     Settings. The charge row then says so ("The bill has a Rs 250 delivery
-    charge — this area is now Rs 300"), and "Change to Rs 300" swaps it in
+    charge — this area’s charge is Rs 300"), and "Change to Rs 300" swaps it in
     one tap. The same happens for another delivery charge tapped on by hand.
 - Before testing on a Vercel **preview**, give the Preview environment its own
   Neon branch and its own `BRIDGE_SECRET`: with the variables set for "all

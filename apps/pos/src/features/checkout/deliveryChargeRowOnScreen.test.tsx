@@ -112,7 +112,7 @@ describe('the delivery-charge row only shows what the bill carries', () => {
     };
     useCheckoutStore.setState({ mode: 'delivery', snapshot: order([['Test Pizza', 100_000], ['Delivery Charge (Rs 250)', 25_000]]) });
     const t = text(panel('DHA Phase 8'));
-    expect(t).toContain('The bill has a Rs 250 delivery charge — this area is now Rs 300');
+    expect(t).toContain('The bill has a Rs 250 delivery charge — this area’s charge is Rs 300');
     expect(t).toContain('Change to Rs 300');
     expect(t).not.toContain('taken off by hand');
     expect(t).not.toContain('Put it back');
@@ -122,7 +122,7 @@ describe('the delivery-charge row only shows what the bill carries', () => {
   it('another charge tapped on by hand: the same words and swap', () => {
     useCheckoutStore.setState({ mode: 'delivery', snapshot: order([['Test Pizza', 100_000], ['Delivery Charge (Rs 200)', 20_000]]) });
     const t = text(panel('DHA Phase 8'));
-    expect(t).toContain('The bill has a Rs 200 delivery charge — this area is now Rs 250');
+    expect(t).toContain('The bill has a Rs 200 delivery charge — this area’s charge is Rs 250');
     expect(t).toContain('Change to Rs 250');
     expect(t).not.toContain('taken off by hand');
   });

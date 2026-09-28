@@ -620,7 +620,7 @@ describe('the delivery-charge row’s words for the bill (review of 865657b)', (
       const s = deliveryChargeRowState(30_000, [line('old', 25_000)], told);
       expect(s).toEqual({
         kind: 'other',
-        text: 'The bill has a Rs 250 delivery charge — this area is now Rs 300',
+        text: 'The bill has a Rs 250 delivery charge — this area’s charge is Rs 300',
         action: 'Change to Rs 300',
       });
       expect(s.text).not.toContain('taken off by hand');
@@ -628,7 +628,7 @@ describe('the delivery-charge row’s words for the bill (review of 865657b)', (
     // Another charge tapped on by hand (Rs 200 on a Rs 250 area): the same.
     expect(deliveryChargeRowState(25_000, [line('x', 20_000)], true)).toMatchObject({
       kind: 'other',
-      text: 'The bill has a Rs 200 delivery charge — this area is now Rs 250',
+      text: 'The bill has a Rs 200 delivery charge — this area’s charge is Rs 250',
     });
   });
 
@@ -643,10 +643,10 @@ describe('the delivery-charge row’s words for the bill (review of 865657b)', (
   it('several charges at other fees: counted and named', () => {
     expect(deliveryChargeRowState(30_000, [line('a', 25_000), line('b', 20_000)], true)).toMatchObject({
       kind: 'other',
-      text: 'The bill has 2 delivery charges at other fees (Rs 250, Rs 200) — this area is now Rs 300',
+      text: 'The bill has 2 delivery charges at other fees (Rs 250, Rs 200) — this area’s charge is Rs 300',
     });
     expect(deliveryChargeRowState(30_000, [line('a', 25_000, 2)], true)).toMatchObject({
-      text: 'The bill has 2 delivery charges at other fees (Rs 250) — this area is now Rs 300',
+      text: 'The bill has 2 delivery charges at other fees (Rs 250) — this area’s charge is Rs 300',
     });
   });
 
