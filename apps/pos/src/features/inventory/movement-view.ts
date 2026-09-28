@@ -125,19 +125,24 @@ export function rangeSinceIso(range: DateRange, now: Date = new Date()): string 
   return new Date(tradingDayStartMs(tradingDayOfMs(now.getTime()) - days)).toISOString();
 }
 
-const time = new Intl.DateTimeFormat('en-PK', { hour: 'numeric', minute: '2-digit', hour12: true });
-// A trading day starts at 00:00 UTC (05:00 Pakistan time), so its date is read in UTC.
-const dayMonth = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
-const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+// Pakistan time whatever the computer's time zone, like Order History
+// (historyFilters orderTimeLabel) and the paper (paperLabels).
+const time = new Intl.DateTimeFormat('en-PK', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Karachi' });
+const dayMonth = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Karachi' });
+const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Karachi' });
+const year = new Intl.DateTimeFormat('en-GB', { year: 'numeric', timeZone: 'Asia/Karachi' });
 
 /**
  * "Today 3:04 pm", "Yesterday 9:15 am", "21 Sep 8:00 pm", "3 Mar 2025 1:00 pm".
- * The day is the shop's trading day (05:00 to 05:00 Pakistan time), the
- * same as the Today chip (rangeSinceIso): at 2 am, last night's 11:30 pm is
- * "Today 11:30 pm", and after 05:00 the night's 2 am is "Yesterday 2:00 am".
- * An older row carries its trading day's date (1 am on the 22nd is the
- * night of the 21st). The words used to follow the computer's midnight,
- * and disagreed with the chip between midnight and 05:00.
+ * Every time and date is Pakistan time (Asia/Karachi), whatever the
+ * computer's time zone. "Today" and "Yesterday" are the shop's trading days
+ * (05:00 to 05:00 Pakistan time), the same as the Today chip
+ * (rangeSinceIso): at 2 am, last night's 11:30 pm is "Today 11:30 pm", and
+ * after 05:00 the night's 2 am is "Yesterday 2:00 am". An older row reads
+ * like Order History (historyFilters orderTimeLabel): its real date and
+ * time, so 1 am on the 22nd is "22 Sep 1:00 am" (never "21 Sep 1:00 am"),
+ * with the year when it is not this year in Pakistan. The time used to
+ * follow the computer's time zone.
  */
 export function formatWhen(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
@@ -147,7 +152,6 @@ export function formatWhen(iso: string, now: Date = new Date()): string {
   const today = tradingDayOfMs(now.getTime());
   if (day === today) return `Today ${t}`;
   if (day === today - 1) return `Yesterday ${t}`;
-  const date = new Date(tradingDayStartMs(day));
-  const thisYear = date.getUTCFullYear() === new Date(tradingDayStartMs(today)).getUTCFullYear();
-  return `${(thisYear ? dayMonth : dayMonthYear).format(date)} ${t}`;
+  const thisYear = year.format(d) === year.format(now);
+  return `${(thisYear ? dayMonth : dayMonthYear).format(d)} ${t}`;
 }

@@ -105,17 +105,27 @@ describe('rangeSinceIso', () => {
   });
 });
 
-describe('formatWhen', () => {
-  const now = new Date(2026, 8, 26, 15, 30);
+// The stock history reads its times like Order History (historyFilters
+// orderTimeLabel): the clock time, and an older row's date, are Pakistan time
+// (Asia/Karachi, UTC+5 all year) whatever the computer's time zone, and
+// "Today" / "Yesterday" are the shop's trading days (05:00 to 05:00), the
+// same as the Today chip. The instants are built in UTC, so this file passes
+// under any TZ (run under UTC, Asia/Karachi and EST5EDT).
+const at = (y: number, month: number, day: number, h: number, m = 0) => new Date(Date.UTC(y, month - 1, day, h - 5, m));
+/** September 2026, Pakistan time. */
+const pkt = (day: number, h: number, m = 0) => at(2026, 9, day, h, m);
 
-  it('says today and yesterday in words', () => {
-    expect(formatWhen(new Date(2026, 8, 26, 15, 4).toISOString(), now)).toMatch(/^Today 3:04\spm$/);
-    expect(formatWhen(new Date(2026, 8, 25, 9, 15).toISOString(), now)).toMatch(/^Yesterday 9:15\sam$/);
+describe('formatWhen', () => {
+  const now = pkt(26, 15, 30);
+
+  it('says today and yesterday in words, with the Pakistan time', () => {
+    expect(formatWhen(pkt(26, 15, 4).toISOString(), now)).toMatch(/^Today 3:04\spm$/);
+    expect(formatWhen(pkt(25, 9, 15).toISOString(), now)).toMatch(/^Yesterday 9:15\sam$/);
   });
 
   it('gives the date for older ones, with the year only when it is not this year', () => {
-    expect(formatWhen(new Date(2026, 8, 21, 20, 0).toISOString(), now)).toMatch(/^21 Sept? 8:00\spm$/);
-    expect(formatWhen(new Date(2025, 2, 3, 13, 0).toISOString(), now)).toMatch(/^3 Mar 2025 1:00\spm$/);
+    expect(formatWhen(pkt(21, 20).toISOString(), now)).toMatch(/^21 Sept? 8:00\spm$/);
+    expect(formatWhen(at(2025, 3, 3, 13).toISOString(), now)).toMatch(/^3 Mar 2025 1:00\spm$/);
   });
 
   it('shows an unreadable time as it is', () => {
@@ -126,44 +136,61 @@ describe('formatWhen', () => {
 describe('formatWhen: "Today" and "Yesterday" are trading days, like the Today chip', () => {
   // Up to the first review, the rows said Today / Yesterday by the computer's
   // midnight while the Today chip starts at 05:00 Pakistan time: at 2 am a
-  // row from 11:30 pm was IN the Today list but said "Yesterday". Pakistan
-  // is UTC+5 all year; the instants are built in UTC so the test does not
-  // depend on the computer's time zone (the checks look at the day only).
-  const pkt = (day: number, h: number, m = 0) => new Date(Date.UTC(2026, 8, day, h - 5, m));
+  // row from 11:30 pm was IN the Today list but said "Yesterday".
 
   it('at 2 am, last night’s 11:30 pm is Today (the Today chip shows it)', () => {
-    expect(formatWhen(pkt(27, 23, 30).toISOString(), pkt(28, 2))).toMatch(/^Today /);
-    expect(formatWhen(pkt(27, 12).toISOString(), pkt(28, 2))).toMatch(/^Today /);
+    expect(formatWhen(pkt(27, 23, 30).toISOString(), pkt(28, 2))).toMatch(/^Today 11:30\spm$/);
+    expect(formatWhen(pkt(27, 12).toISOString(), pkt(28, 2))).toMatch(/^Today 12:00\spm$/);
   });
 
   it('at 6 am, 2 am is Yesterday (the Today chip leaves it out)', () => {
-    expect(formatWhen(pkt(28, 2).toISOString(), pkt(28, 6))).toMatch(/^Yesterday /);
+    expect(formatWhen(pkt(28, 2).toISOString(), pkt(28, 6))).toMatch(/^Yesterday 2:00\sam$/);
   });
 
   it('05:00 starts the day', () => {
-    expect(formatWhen(pkt(28, 4, 59).toISOString(), pkt(28, 5))).toMatch(/^Yesterday /);
-    expect(formatWhen(pkt(28, 5).toISOString(), pkt(28, 12))).toMatch(/^Today /);
-  });
-
-  it('older rows carry their trading day’s date: 1 am on the 22nd is the night of the 21st', () => {
-    expect(formatWhen(pkt(22, 1).toISOString(), pkt(26, 15))).toMatch(/^21 Sept? /);
-    expect(formatWhen(pkt(21, 20).toISOString(), pkt(26, 15))).toMatch(/^21 Sept? /);
-    // New Year's night: 1 am on 1 January is still the old year's last day.
-    expect(formatWhen(new Date(Date.UTC(2026, 0, 1, 1 - 5)).toISOString(), pkt(26, 15))).toMatch(/^31 Dec 2025 /);
+    expect(formatWhen(pkt(28, 4, 59).toISOString(), pkt(28, 5))).toMatch(/^Yesterday 4:59\sam$/);
+    expect(formatWhen(pkt(28, 5).toISOString(), pkt(28, 12))).toMatch(/^Today 5:00\sam$/);
   });
 
   it('agrees with the Today chip at every half hour', () => {
     for (const now of [pkt(28, 2), pkt(28, 4, 59), pkt(28, 5), pkt(28, 13), pkt(28, 23, 59)]) {
       const since = rangeSinceIso('today', now)!;
       for (let k = 0; k < 96; k++) {
-        const at = new Date(now.getTime() - k * 30 * 60_000).toISOString();
-        expect({ now: now.toISOString(), at, today: formatWhen(at, now).startsWith('Today ') }).toEqual({
+        const when = new Date(now.getTime() - k * 30 * 60_000).toISOString();
+        expect({ now: now.toISOString(), when, today: formatWhen(when, now).startsWith('Today ') }).toEqual({
           now: now.toISOString(),
-          at,
-          today: at >= since,
+          when,
+          today: when >= since,
         });
       }
     }
+  });
+});
+
+describe('formatWhen: an older row shows its real Pakistan date and time, like Order History', () => {
+  it('1 am on the 22nd reads "22 Sep 1:00 am", never "21 Sep 1:00 am"', () => {
+    expect(formatWhen(pkt(22, 1).toISOString(), pkt(26, 15))).toMatch(/^22 Sept? 1:00\sam$/);
+    expect(formatWhen(pkt(21, 20).toISOString(), pkt(26, 15))).toMatch(/^21 Sept? 8:00\spm$/);
+    // Just before midnight and just after, Pakistan time — the date turns at midnight.
+    expect(formatWhen(pkt(21, 23, 59).toISOString(), pkt(26, 15))).toMatch(/^21 Sept? 11:59\spm$/);
+    expect(formatWhen(pkt(22, 0, 0).toISOString(), pkt(26, 15))).toMatch(/^22 Sept? 12:00\sam$/);
+  });
+
+  it('an after-midnight row from the night before yesterday: its own date, not Yesterday', () => {
+    // At noon on the 28th, Yesterday is the trading day from 05:00 on the 27th:
+    // 2 am on the 27th belongs to the night of the 26th, and reads as the 27th.
+    expect(formatWhen(pkt(27, 2).toISOString(), pkt(28, 12))).toMatch(/^27 Sept? 2:00\sam$/);
+  });
+
+  it('New Year’s night: 1 am on 1 January reads 1 Jan (this year), 11 pm on 31 December the old year', () => {
+    expect(formatWhen(at(2026, 1, 1, 1).toISOString(), pkt(26, 15))).toMatch(/^1 Jan 1:00\sam$/);
+    expect(formatWhen(at(2025, 12, 31, 23).toISOString(), pkt(26, 15))).toMatch(/^31 Dec 2025 11:00\spm$/);
+  });
+
+  it('the year is left out only for this year in Pakistan', () => {
+    // 2 am on 1 January 2027 is still the trading day of 31 December, but it is 2027 in Pakistan.
+    expect(formatWhen(at(2026, 12, 29, 20).toISOString(), at(2027, 1, 1, 2))).toMatch(/^29 Dec 2026 8:00\spm$/);
+    expect(formatWhen(at(2026, 12, 31, 23).toISOString(), at(2027, 1, 1, 2))).toMatch(/^Today 11:00\spm$/);
   });
 });
 

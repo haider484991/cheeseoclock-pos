@@ -16,7 +16,8 @@
  *     what is saved is the words, so a renamed button leaves old rows in
  *     Team & leakage exactly as they were; a "not made" answer never gets
  *     past the food having left the shop;
- *   - "probably made" follows the owner's amber minute ('kitchen.timing').
+ *   - "probably made" follows the owner's amber minute ('kitchen.timing'),
+ *     on the question and in what a cancel saves (Team & leakage's flag).
  *
  * Only `defineHandler` (captured), the signed-in session and the manager
  * check, the printer spooler and the FBR worker are stood in for. node's own
@@ -562,5 +563,54 @@ describe.skipIf(!Sqlite)('"probably made" follows the owner’s amber minute', (
       lean: 'made',
       hint: expect.stringMatching(/probably made$/),
     });
+  });
+
+  it('saved with the cancel: "not made" 10 minutes after sending goes against the hint at amber 8 (Team & leakage flags it), not at 15', async () => {
+    const { buildTeamTab } = await import('../../services/business-report.js');
+    const start = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      /** Sent at `sentAt`, cancelled "not made" 10 minutes later: what the order's audit row and Team & leakage say. */
+      const cancelledTenMinutesOn = async (sentAt: number) => {
+        vi.setSystemTime(sentAt);
+        const orderId = await sentOrder();
+        vi.setSystemTime(sentAt + 10 * 60_000);
+        h.session = CASHIER;
+        await data('orders:void', { orderId, reason: 'Customer cancelled', approverPin: PIN, foodMade: 'not_made' });
+        const row = db
+          .prepare(`SELECT after_json FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'stock_put_back'`)
+          .get(orderId);
+        const after = JSON.parse(String(row?.['after_json'])) as Record<string, unknown>;
+        const team = buildTeamTab(db as never, {
+          sinceIso: new Date(start - 3_600_000).toISOString(),
+          untilIso: new Date(start + 3 * 3_600_000).toISOString(),
+        });
+        return {
+          hint: after['hint'],
+          lean: after['lean'],
+          againstHint: after['againstHint'],
+          flagged: team.voids.find((v) => v.orderId === orderId)?.stock?.flagged,
+        };
+      };
+      // Today's amber (15): ten minutes is not yet "probably made" — no lean, nothing to flag.
+      expect(await cancelledTenMinutesOn(start)).toEqual({
+        hint: expect.stringMatching(/not tapped$/),
+        lean: null,
+        againstHint: false,
+        flagged: false,
+      });
+      await asOwner(() =>
+        data('settings:setBusiness', { key: 'kitchen.timing', value: { v: 1, amberMin: 8, redMin: 30, notStartedMin: 10, notDoneMin: 30 } }),
+      );
+      // Amber 8: the same ten minutes is "probably made", so "not made" is worth the owner's look.
+      expect(await cancelledTenMinutesOn(start + 3_600_000)).toEqual({
+        hint: expect.stringMatching(/probably made$/),
+        lean: 'made',
+        againstHint: true,
+        flagged: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

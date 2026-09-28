@@ -4,7 +4,8 @@
  * browser; nothing calls the till):
  *   - the receipt after Pay shows the shop's own name, tagline, thank-you
  *     and extra lines (it said "CheeseOclock / Pakistani Pizza • Cafe"
- *     whatever was saved), and "Cashier: Website" on a website order;
+ *     whatever was saved), asks the till for them on every order (not only
+ *     a delivery), and "Cashier: Website" on a website order;
  *   - the new cards — Extra lines on receipts (Shop & logo), Opening float
  *     and Reason buttons (Staff & kitchen) — build every sentence from the
  *     values, and say "this till only" where it is;
@@ -20,7 +21,7 @@
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, QueryObserver, type QueryObserverOptions } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_ORDER_REASONS,
@@ -37,6 +38,7 @@ import {
   type UUID,
 } from '@cheeseoclock/shared-types';
 import { ToastProvider } from '../../../components/toast/ToastProvider';
+import { ipc } from '../../../ipc/client';
 import { useSessionStore } from '../../../stores/sessionStore';
 import { ReceiptDialog } from '../../checkout/ReceiptDialog';
 import { VoidOrderDialog } from '../../orders/VoidOrderDialog';
@@ -85,8 +87,9 @@ function signIn(role: AuthenticatedUser['role']) {
   useSessionStore.setState({ user: { id: 'u1' as UUID, fullName: 'Test', role, sessionId: 's1' as UUID }, status: 'authenticated' });
 }
 
-function render(node: ReactNode, seed: Array<[readonly unknown[], unknown]> = []): string {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const newQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+function render(node: ReactNode, seed: Array<[readonly unknown[], unknown]> = [], qc: QueryClient = newQueryClient()): string {
   for (const [key, data] of seed) qc.setQueryData(key, data);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
@@ -100,13 +103,13 @@ const decode = (s: string) => s.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').
 const text = (markup: string) => decode(markup.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 const noop = () => {};
 
-/** A paid takeaway (Rs 1,160). */
-function paidOrder(source: 'pos' | 'web' = 'pos'): OrderSnapshot {
+/** A paid takeaway (Rs 1,160), or the same order dine-in or delivered. */
+function paidOrder(source: 'pos' | 'web' = 'pos', mode: 'takeaway' | 'dine_in' | 'delivery' = 'takeaway'): OrderSnapshot {
   return {
     order: {
       id: 'o1',
       orderNumber: '20260928-0007',
-      mode: 'takeaway',
+      mode,
       status: 'paid',
       source,
       notes: null,
@@ -200,6 +203,34 @@ describe('the receipt after Pay shows the shop’s own lines (it said "CheeseOcl
     expect(text(render(<ReceiptDialog snapshot={paidOrder('web')} onClose={noop} />, seed))).toContain('Cashier: Website');
     expect(text(render(<ReceiptDialog snapshot={paidOrder('web')} onClose={noop} />, seed))).not.toContain('Test Owner');
     expect(text(render(<ReceiptDialog snapshot={paidOrder('pos')} onClose={noop} />, seed))).toContain('Cashier: Test Owner');
+  });
+
+  // The tests above hand the dialog the till's answer; this one checks the
+  // dialog asks for it on every order. It used to ask on a delivery only (the
+  // query was 'enabled' for delivery): a takeaway or dine-in receipt then
+  // never had the branding, and showed no shop name.
+  it.each(['takeaway', 'dine_in', 'delivery'] as const)('a %s asks the till for the shop’s lines (printer:getConfig) once on screen', async (mode) => {
+    signIn('cashier');
+    const getConfig = vi.spyOn(ipc.printer, 'getConfig').mockResolvedValue(printerConfig({ storeName: 'Test Pizza Shop' })[1] as never);
+    const qc = newQueryClient();
+    try {
+      render(<ReceiptDialog snapshot={paidOrder('pos', mode)} onClose={noop} />, [], qc);
+      const query = qc.getQueryCache().find({ queryKey: ['printer', 'config'], exact: true });
+      expect(query).toBeDefined();
+      // What the dialog's own useQuery does when it goes on screen (a static
+      // render never mounts): watch the query with the dialog's options. A
+      // query switched off for this order never calls the till.
+      const stop = new QueryObserver(qc, query!.options as QueryObserverOptions).subscribe(noop);
+      try {
+        await vi.waitFor(() => expect(getConfig).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(qc.getQueryData<{ branding: { storeName: string } }>(['printer', 'config'])?.branding.storeName).toBe('Test Pizza Shop'));
+      } finally {
+        stop();
+      }
+    } finally {
+      getConfig.mockRestore();
+      qc.clear();
+    }
   });
 });
 
