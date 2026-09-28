@@ -1,17 +1,21 @@
 /**
  * The website gets the owner's settings (Settings step 3: the delivery
- * areas and fees, the pick-up offer) in ONE stamped block inside the menu
- * publish (shared-types web-bridge.ts, THE SETTINGS BLOCK):
+ * areas and fees, the pick-up offer) in ONE stamped block (shared-types
+ * web-bridge.ts, THE SETTINGS BLOCK):
  *   - nothing saved: the menu goes exactly as before, with no block;
- *   - once saved, the block goes with the menu — every area in order, each
- *     one that is on naming its fee item IN THAT SAME MENU at its fee — and
- *     it passes the website's own schema and check;
- *   - the bridge publishes when this till's stamp is NEWER than what the
+ *   - once saved, the owner's Publish sends the block with the menu — every
+ *     area in order, each one that is on naming its fee item IN THAT SAME
+ *     MENU at its fee — and it passes the website's own schema and check;
+ *   - a Save sends the block ALONE (PUT /api/bridge/settings) with only the
+ *     fee items its areas charge: never the till's unpublished menu changes;
+ *   - the bridge sends it when this till's stamp is NEWER than what the
  *     website last confirmed — a Save here or one synced from the other
- *     till — and only then; a website holding a newer block is left alone;
+ *     till (the sync worker's word) — and only then; a website holding a
+ *     newer block is left alone;
  *   - an older website, a refusal, or a fee item hidden by an older till:
- *     the menu still goes, without the block, and Settings says why;
- *   - "Publish the menu by itself" (off by default) sends it after a change.
+ *     nothing more by itself, the owner's Publish still sends the menu
+ *     without the block, and Settings says why;
+ *   - "Publish the menu by itself" (off by default) sends it 5 s after a change.
  *
  * A real database built from every migration (node:sqlite; skipped where it
  * is missing), the real repositories and the real bridge, with `fetch`
@@ -24,11 +28,14 @@ import { DatabaseSync, openMigrated } from '../db/costing-shop.fixture.js';
 import {
   DEFAULT_DELIVERY_ZONES,
   compareSettingsStamp,
+  feeItemsProblem,
   settingsBlockProblem,
   type DeliveryZoneSetting,
+  type PublishSettingsBody,
   type PublishedMenu,
   type PublishedSettings,
 } from '@cheeseoclock/shared-types';
+import { ROW_IMAGE_KEY, type SyncChange } from '@cheeseoclock/sync-core';
 import { publishedSettingsSchema } from '@cheeseoclock/shared-schemas';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
@@ -44,6 +51,9 @@ vi.mock('./print-spooler.js', () => ({ printSpooler: { onOrderEvent: () => {} } 
 vi.mock('./order-alerts-hub.js', () => ({
   orderAlerts: { orderReceived: () => {}, importFailed: () => {} },
 }));
+// The sync worker (its settings hook, Q3) loads these; nothing here opens a real link.
+vi.mock('better-sqlite3', () => ({ default: class {} }));
+vi.mock('../adapters/sync/factory.js', () => ({ makeSyncAdapter: () => ({}) }));
 
 const live = describe.skipIf(!DatabaseSync);
 
@@ -64,6 +74,8 @@ let sent: Sent[] = [];
 let menuGate: Promise<void> | null = null;
 /** How the website answers a menu PUT (default: a website that takes the block). */
 let answerMenu: (body: Row) => { status: number; json: unknown } = storedAnswer;
+/** How the website answers the block alone, PUT /api/bridge/settings (default: it takes it by the same rule). */
+let answerSettings: (body: Row) => { status: number; json: unknown } = storedAnswer;
 
 /** A website that takes the block and holds it (what it held before is kept for a publish without one). */
 let websiteHolds: PublishedSettings | null = null;
@@ -110,9 +122,9 @@ function stubFetch(): void {
       const method = init?.method ?? 'GET';
       const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Row) : null;
       sent.push({ method, path: u.pathname, body });
-      if (u.pathname === '/api/bridge/menu' && method === 'PUT') {
+      if ((u.pathname === '/api/bridge/menu' || u.pathname === '/api/bridge/settings') && method === 'PUT') {
         if (menuGate) await menuGate;
-        const a = answerMenu(body ?? {});
+        const a = (u.pathname === '/api/bridge/menu' ? answerMenu : answerSettings)(body ?? {});
         return new Response(JSON.stringify(a.json), {
           status: a.status,
           headers: { 'Content-Type': 'application/json' },
@@ -141,6 +153,14 @@ const menus = (): Array<PublishedMenu & { settings?: PublishedSettings }> =>
     .filter((s) => s.method === 'PUT' && s.path === '/api/bridge/menu')
     .map((s) => s.body as unknown as PublishedMenu & { settings?: PublishedSettings });
 
+/** Every settings block the bridge has sent ALONE (PUT /api/bridge/settings), oldest first. */
+const settingsPuts = (): PublishSettingsBody[] =>
+  sent.filter((s) => s.method === 'PUT' && s.path === '/api/bridge/settings').map((s) => s.body as unknown as PublishSettingsBody);
+/** The fee items of a block alone, as the menu the website checks it against. */
+const asMenu = (b: PublishSettingsBody): Pick<PublishedMenu, 'categories'> => ({
+  categories: [{ posCategoryId: 'fees', name: 'Delivery Charges', displayOrder: 0, items: b.feeItems.map((f) => f.item) }],
+});
+
 let cfgMod: typeof import('./web-bridge-config.js');
 let bridgeMod: typeof import('./web-orders-bridge.js');
 let zonesRepo: typeof import('../db/repositories/delivery-zones-repo.js');
@@ -152,6 +172,7 @@ beforeEach(async () => {
   if (!DatabaseSync) return;
   sent = [];
   answerMenu = storedAnswer;
+  answerSettings = storedAnswer;
   websiteHolds = null;
   answerStatus = () => ({ ok: true, data: null });
   menuGate = null;
@@ -165,6 +186,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   bridgeMod?.webOrdersBridge.stop();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -224,18 +246,67 @@ const zones = (change: (z: DeliveryZoneSetting) => DeliveryZoneSetting = (z) => 
 const bridge = () => bridgeMod.webOrdersBridge;
 const publishStatus = () => bridge().status().settingsPublish;
 
+live('a Save sends the areas ALONE — never the till’s unpublished menu changes (owner’s Save ≠ Publish)', () => {
+  it('the block goes with only the fee items its areas charge; a price changed on the till and not published stays off the website', async () => {
+    const db = await till();
+    // The website has the menu (the owner's Publish); the owner then changes a price and does not publish.
+    await bridge().publishMenu();
+    db.prepare(`UPDATE menu_items SET base_price_cents = 123400 WHERE id = ?`).run(items.pizza);
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones((z) => (z.id === 'dha-8' ? { ...z, feeCents: 30_000 } : z)) }, OWNER);
+    await bridge().maybePublishSettings();
+    // No menu went: only the owner's own Publish.
+    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
+    const body = settingsPuts()[0]!;
+    expect(JSON.stringify(body)).not.toMatch(/123400|Test Pizza/);
+    expect(body.feeItems.map((f) => [f.item.name, f.item.basePriceCents, f.category.name])).toEqual([
+      ['Delivery Charge (Rs 200)', 20_000, 'Delivery Charges'],
+      ['Delivery Charge (Rs 250)', 25_000, 'Delivery Charges'],
+      ['Delivery Charge (Rs 300)', 30_000, 'Delivery Charges'],
+    ]);
+    expect(settingsBlockProblem(body.settings, asMenu(body))).toBeNull();
+    expect(feeItemsProblem(body.settings, body.feeItems)).toBeNull();
+    expect(publishStatus()).toMatchObject({ state: 'published' });
+  });
+
+  it('a website older than the block alone (404): nothing more is sent by itself — never the menu — and Settings says the website needs its update', async () => {
+    const db = await till();
+    answerSettings = () => ({ status: 404, json: { ok: false, error: 'not_found' } });
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    expect(menus()).toHaveLength(0);
+    expect(publishStatus()).toMatchObject({ state: 'unsupported', message: expect.stringMatching(/needs its update/) });
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    expect(menus()).toHaveLength(0);
+  });
+
+  it('a website with no menu yet (409): nothing more by itself; Settings says to press Publish', async () => {
+    const db = await till();
+    answerSettings = () => ({ status: 409, json: { ok: false, error: 'menu_not_published', message: 'The website has no menu yet.' } });
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    await bridge().maybePublishSettings();
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    expect(menus()).toHaveLength(0);
+    expect(publishStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/press Publish/) });
+  });
+});
+
 live('the settings block of the menu publish', () => {
   it('nothing saved: the menu goes exactly as before — no block — and nothing is sent by itself', async () => {
     await till();
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(0);
+    expect([...menus(), ...settingsPuts()]).toHaveLength(0);
     await bridge().publishMenu();
     expect(menus()).toHaveLength(1);
     expect(menus()[0]).not.toHaveProperty('settings');
+    expect(settingsPuts()).toHaveLength(0);
     expect(publishStatus()).toMatchObject({ state: 'none' });
   });
 
-  it('after a Save the block goes with the menu: every area in order, each on one naming its item in the SAME menu at its fee — it passes the website’s schema and check', async () => {
+  it('after a Save the block goes: every area in order, each on one naming its item at its fee — it passes the website’s schema and check; the owner’s Publish sends it IN the menu', async () => {
     const db = await till();
     zonesRepo.saveDeliveryZones(
       db as AppDatabase,
@@ -251,31 +322,37 @@ live('the settings block of the menu publish', () => {
       OWNER,
     );
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
-    const menu = menus()[0]!;
-    const block = menu.settings!;
+    expect(settingsPuts()).toHaveLength(1);
+    const alone = settingsPuts()[0]!;
+    const block = alone.settings;
     expect(publishedSettingsSchema.safeParse(block).success).toBe(true);
-    expect(settingsBlockProblem(block, menu)).toBeNull();
+    expect(settingsBlockProblem(block, asMenu(alone))).toBeNull();
     expect(block.zones.map((z) => z.id)).toEqual(DEFAULT_DELIVERY_ZONES.zones.map((z) => z.id));
     expect(block.zones.find((z) => z.id === 'emaar')).toMatchObject({ active: false });
     const dha8 = block.zones.find((z) => z.id === 'dha-8')!;
-    const inMenu = menu.categories
-      .flatMap((c) => c.items)
-      .find((i) => i.posItemId === dha8.feeItemId);
-    expect(inMenu).toMatchObject({ name: 'Delivery Charge (Rs 300)', basePriceCents: 30_000 });
+    expect(alone.feeItems.find((f) => f.item.posItemId === dha8.feeItemId)?.item).toMatchObject({
+      name: 'Delivery Charge (Rs 300)',
+      basePriceCents: 30_000,
+    });
     expect(block.pickup).toEqual({ offered: true, percent: 10 });
     expect(block.settingsRev).toBe(1);
     expect(publishStatus()).toMatchObject({ state: 'published', message: null });
     // Confirmed: nothing more goes until something newer.
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
+    expect(menus()).toHaveLength(0);
+    // The owner's Publish: the same block inside the menu, checked against that menu.
+    await bridge().publishMenu();
+    const menu = menus()[0]!;
+    expect(menu.settings).toEqual(block);
+    expect(settingsBlockProblem(menu.settings!, menu)).toBeNull();
   });
 
   it('the bridge sends the block only when it is NEWER — a Save here, one synced from the other till, or the Save event', async () => {
     const db = await till();
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
     // A Save of the pick-up offer here: newer.
     settingsRepo.setBusinessSetting(
       db as AppDatabase,
@@ -284,8 +361,8 @@ live('the settings block of the menu publish', () => {
       OWNER,
     );
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(2);
-    expect(menus()[1]!.settings).toMatchObject({
+    expect(settingsPuts()).toHaveLength(2);
+    expect(settingsPuts()[1]!.settings).toMatchObject({
       settingsRev: 2,
       pickup: { offered: true, percent: 15 },
     });
@@ -293,19 +370,60 @@ live('the settings block of the menu publish', () => {
     db.prepare(
       `UPDATE business_settings SET version = version + 1, updated_at = ?, value_json = ? WHERE key = 'discounts.websitePickup'`,
     ).run('2026-09-28T10:00:00.000Z', JSON.stringify({ v: 1, offered: false, percent: 15 }));
-    // The sync worker's word to the bridge (website-settings-events): published a moment later.
+    // The word to the bridge (website-settings-events): published a moment later.
     const { websiteSettingsChanged } = await import('./website-settings-events.js');
     websiteSettingsChanged();
-    await vi.waitFor(() => expect(menus()).toHaveLength(3), { timeout: 8_000 });
-    expect(menus()[2]!.settings).toMatchObject({ settingsRev: 3, pickup: { offered: false } });
+    await vi.waitFor(() => expect(settingsPuts()).toHaveLength(3), { timeout: 8_000 });
+    expect(settingsPuts()[2]!.settings).toMatchObject({ settingsRev: 3, pickup: { offered: false } });
     // Nothing newer: nothing sent.
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(3);
+    expect(settingsPuts()).toHaveLength(3);
+    expect(menus()).toHaveLength(0);
+  });
+
+  it('the sync worker tells the bridge when a change pulled from the other till is a setting: the block goes alone a moment later', async () => {
+    const db = await till();
+    settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 1, offered: true, percent: 10 }, OWNER);
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    // The other till's Save of the pick-up offer, as the link pulls it (a newer version of the same row).
+    const { businessSettingId } = await import('../db/repositories/business-settings-repo.js');
+    const id = businessSettingId('discounts.websitePickup');
+    const at = new Date(Date.now() + 60_000).toISOString();
+    const change: SyncChange = {
+      entityType: 'business_settings',
+      entityId: id,
+      op: 'upsert',
+      payload: {
+        [ROW_IMAGE_KEY]: 1,
+        id,
+        key: 'discounts.websitePickup',
+        valueJson: JSON.stringify({ v: 1, offered: true, percent: 20 }),
+        updatedByUserId: 'u_owner',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: at,
+        deletedAt: null,
+        deviceId: 'till-2',
+        version: 2,
+      },
+      updatedAt: at,
+      deviceId: 'till-2',
+      version: 2,
+    };
+    const { SyncWorker } = await import('./sync-worker.js');
+    const worker = new SyncWorker() as unknown as { applyPulled: (db: AppDatabase, changes: SyncChange[]) => Promise<void> };
+    await worker.applyPulled(db as AppDatabase, [change]);
+    await vi.waitFor(() => expect(settingsPuts()).toHaveLength(2), { timeout: 8_000 });
+    expect(settingsPuts()[1]!.settings).toMatchObject({ settingsRev: 2, pickup: { percent: 20 } });
+    // A pull with no setting in it says nothing to the bridge.
+    await worker.applyPulled(db as AppDatabase, []);
+    await new Promise((r) => setTimeout(r, 3_600));
+    expect(settingsPuts()).toHaveLength(2);
   });
 
   it('the website holds a newer block (the other till’s): the till does not send its older one again', async () => {
     const db = await till();
-    answerMenu = (body) => ({
+    answerSettings = (body) => ({
       status: 200,
       json: {
         ok: true,
@@ -323,7 +441,7 @@ live('the settings block of the menu publish', () => {
     });
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
     // Not "website updated": the website holds the other till's newer block, which the link brings here.
     expect(publishStatus()).toMatchObject({ state: 'waiting', message: expect.stringMatching(/other till/) });
     settingsRepo.setBusinessSetting(
@@ -333,14 +451,15 @@ live('the settings block of the menu publish', () => {
       OWNER,
     );
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
   });
 
-  it('an older website (no word about settings): the menu is stored, Settings says the website needs its update, and the till does not loop', async () => {
+  it('an older website publishing the menu (no word about settings): the menu is stored, Settings says the website needs its update, and the till does not loop', async () => {
     const db = await till();
     answerMenu = () => ({ status: 200, json: { ok: true, data: { categories: 1, items: 1 } } });
+    answerSettings = () => ({ status: 404, json: { ok: false } });
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
-    await bridge().maybePublishSettings();
+    await bridge().publishMenu();
     expect(menus()).toHaveLength(1);
     expect(publishStatus()).toMatchObject({
       state: 'unsupported',
@@ -348,37 +467,33 @@ live('the settings block of the menu publish', () => {
     });
     await bridge().maybePublishSettings();
     expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(0);
   });
 
-  it('the website refuses the block: the menu goes again without it, and Settings says why', async () => {
+  it('the website refuses the block: nothing more by itself; the owner’s Publish sends the menu again without it, and Settings says why', async () => {
     const db = await till();
-    answerMenu = (body) =>
-      body['settings']
-        ? {
-            status: 400,
-            json: {
-              ok: false,
-              error: 'settings_invalid',
-              message: 'DHA Phase 8: its delivery charge item is not on the menu',
-            },
-          }
-        : storedAnswer(body);
+    const refusal = {
+      status: 400,
+      json: { ok: false, error: 'settings_invalid', message: 'DHA Phase 8: its delivery charge item is not on the menu' },
+    };
+    answerSettings = () => refusal;
+    answerMenu = (body) => (body['settings'] ? refusal : storedAnswer(body));
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
-    // The till's own publish of its block: refused, nothing stored — and nothing more sent by itself
-    // (the menu alone is the owner's to publish: "Publish the menu by itself" is off).
+    // The till's own sending of its block: refused, nothing stored — and nothing more sent by itself.
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
-    expect(menus()[0]).toHaveProperty('settings');
+    await bridge().maybePublishSettings();
+    expect(settingsPuts()).toHaveLength(1);
+    expect(menus()).toHaveLength(0);
     expect(publishStatus()).toEqual({
       state: 'refused',
       at: null,
       message: 'DHA Phase 8: its delivery charge item is not on the menu',
     });
-    // The owner's Publish: the menu goes again without the block.
+    // The owner's Publish: the menu with the block (refused), then the menu without it.
     await bridge().publishMenu();
-    expect(menus()).toHaveLength(3);
-    expect(menus()[1]).toHaveProperty('settings');
-    expect(menus()[2]).not.toHaveProperty('settings');
+    expect(menus()).toHaveLength(2);
+    expect(menus()[0]).toHaveProperty('settings');
+    expect(menus()[1]).not.toHaveProperty('settings');
     expect(publishStatus()).toMatchObject({
       state: 'refused',
       message: 'DHA Phase 8: its delivery charge item is not on the menu',
@@ -390,7 +505,7 @@ live('the settings block of the menu publish', () => {
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
     db.prepare(`UPDATE menu_items SET is_active = 0 WHERE id = ?`).run(items.d250);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(0);
+    expect([...menus(), ...settingsPuts()]).toHaveLength(0);
     expect(publishStatus()).toMatchObject({
       state: 'refused',
       message: expect.stringMatching(/DHA Phase 8|Emaar|Creek|Clifton/),
@@ -411,10 +526,11 @@ live('the settings block of the menu publish', () => {
     });
   });
 
-  it('“Publish the menu by itself”: off (the default) nothing goes after a menu change; on, the menu goes a moment later', async () => {
+  it('“Publish the menu by itself”: off (the default) nothing goes after a menu change — not even well past its 5 s wait; on, the menu goes 5 s after the last change', async () => {
     const db = await till();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     bridge().menuChanged();
-    await new Promise((r) => setTimeout(r, 200));
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(menus()).toHaveLength(0);
     settingsRepo.setBusinessSetting(
       db as AppDatabase,
@@ -423,7 +539,15 @@ live('the settings block of the menu publish', () => {
       OWNER,
     );
     bridge().menuChanged();
-    await vi.waitFor(() => expect(menus()).toHaveLength(1), { timeout: 10_000 });
+    await vi.advanceTimersByTimeAsync(3_000);
+    // Another change restarts the wait.
+    bridge().menuChanged();
+    await vi.advanceTimersByTimeAsync(4_900);
+    expect(menus()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(200);
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(menus()).toHaveLength(1), { timeout: 5_000 });
+    expect(settingsPuts()).toHaveLength(0);
   });
 
   it('the heartbeat is unchanged: pick-up’s % never rides it (both tills beat into one row)', async () => {
@@ -466,23 +590,23 @@ live('the settings block reaches the website, and stays right, when the tills an
     syncedRow(db, 'delivery.zones', { updatedAt: '2026-09-28T10:00:00.000Z' });
     syncedRow(db, 'discounts.websitePickup', { updatedAt: '2026-09-28T10:05:00.000Z' });
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
-    expect(menus()[0]!.settings).toMatchObject({ settingsRev: 2, settingsAt: '2026-09-28T10:05:00.000Z' });
+    expect(settingsPuts()).toHaveLength(1);
+    expect(settingsPuts()[0]!.settings).toMatchObject({ settingsRev: 2, settingsAt: '2026-09-28T10:05:00.000Z' });
     // The other till's areas, saved offline at 10:02 at the same version, win the link: Emaar off.
     const other = zonesValue(db);
     other.zones = other.zones.map((z) => (z.id === 'emaar' ? { ...z, active: false } : z));
     syncedRow(db, 'delivery.zones', { updatedAt: '2026-09-28T10:02:00.000Z', value: other });
     const { websiteSettingsChanged } = await import('./website-settings-events.js');
     websiteSettingsChanged();
-    await vi.waitFor(() => expect(menus()).toHaveLength(2), { timeout: 8_000 });
-    const sentNow = menus()[1]!.settings!;
+    await vi.waitFor(() => expect(settingsPuts()).toHaveLength(2), { timeout: 8_000 });
+    const sentNow = settingsPuts()[1]!.settings;
     expect(sentNow).toMatchObject({ settingsRev: 2, settingsAt: '2026-09-28T10:05:00.000Z' });
     expect(sentNow.zones.find((z) => z.id === 'emaar')).toMatchObject({ active: false });
     expect(websiteHolds?.zones.find((z) => z.id === 'emaar')).toMatchObject({ active: false });
     expect(publishStatus()).toMatchObject({ state: 'published' });
   });
 
-  it('a till behind on the link publishes: the website keeps the other till’s newer block but says its menu lacks the fee item — this till sends its menu again once the link catches it up', async () => {
+  it('a till behind on the link publishes: the website keeps the other till’s newer block but says its menu lacks the fee item — this till sends the block and its fee items (not its menu) once the link catches it up', async () => {
     const db = await till();
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
     // What the other till saved (Phase 8 at Rs 300, its new item): version 4 of the areas at 09:00.
@@ -508,47 +632,45 @@ live('the settings block reaches the website, and stays right, when the tills an
     expect(publishStatus()).toMatchObject({ state: 'waiting', message: expect.stringMatching(/other till/) });
     // Behind: nothing by itself.
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(0);
     // The link comes back: the other till's Save arrives here (its item first, then the areas).
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones((z) => (z.id === 'dha-8' ? { ...z, feeCents: 30_000 } : z)) }, OWNER);
     syncedRow(db, 'delivery.zones', { version: 4, updatedAt: '2026-09-28T09:00:00.000Z' });
-    answerMenu = storedAnswer;
+    // The website holds that same block and says its menu lacks the item: this till sends the item with the block.
+    websiteHolds = settingsPuts()[0]?.settings ?? null;
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(2);
-    const menu = menus()[1]!;
-    expect(menu.settings).toMatchObject(aStamp);
-    const dha8 = menu.settings!.zones.find((z) => z.id === 'dha-8')!;
-    expect(menu.categories.flatMap((c) => c.items).find((i) => i.posItemId === dha8.feeItemId)).toMatchObject({
-      basePriceCents: 30_000,
-    });
+    expect(settingsPuts()).toHaveLength(1);
+    expect(menus()).toHaveLength(1);
+    const alone = settingsPuts()[0]!;
+    expect(alone.settings).toMatchObject(aStamp);
+    const dha8 = alone.settings.zones.find((z) => z.id === 'dha-8')!;
+    expect(alone.feeItems.find((f) => f.item.posItemId === dha8.feeItemId)?.item).toMatchObject({ basePriceCents: 30_000 });
     expect(publishStatus()).toMatchObject({ state: 'published' });
   });
 
   it('a block that did not go is not sent again by itself: not after an unrelated setting syncs in, not after a restart — a new Save or the owner’s Publish sends it', async () => {
     const db = await till();
-    answerMenu = (body) =>
-      body['settings']
-        ? { status: 400, json: { ok: false, error: 'settings_invalid', message: 'The till’s clock is ahead of the website’s.' } }
-        : storedAnswer(body);
+    answerSettings = () => ({ status: 400, json: { ok: false, error: 'settings_invalid', message: 'The till’s clock is ahead of the website’s.' } });
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
     // The other till's kitchen timing arrives: the sync worker tells the bridge a setting changed.
     const { websiteSettingsChanged } = await import('./website-settings-events.js');
     websiteSettingsChanged();
     await new Promise((r) => setTimeout(r, 3_600));
-    expect(menus()).toHaveLength(1);
-    // A restart: still nothing by itself (the unpublished menu changes stay on the till).
+    expect(settingsPuts()).toHaveLength(1);
+    // A restart: still nothing by itself.
     bridge().stop();
     bridge().init(db as AppDatabase, DEV);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
+    expect(menus()).toHaveLength(0);
     expect(publishStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/clock/) });
     // A new Save: a new stamp, sent (and here taken).
-    answerMenu = storedAnswer;
+    answerSettings = storedAnswer;
     settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 1, offered: true, percent: 12 }, OWNER);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(2);
+    expect(settingsPuts()).toHaveLength(2);
     expect(publishStatus()).toMatchObject({ state: 'published' });
   });
 
@@ -558,11 +680,9 @@ live('the settings block reaches the website, and stays right, when the tills an
     // Restored: the areas' row is back at version 1 from August; the website holds this till's version 5 from 1 September.
     syncedRow(db, 'delivery.zones', { updatedAt: '2026-08-01T00:00:00.000Z' });
     websiteHolds = {
-      ...(menus()[0]?.settings ?? {
-        v: 1,
-        pickup: { offered: true, percent: 10 },
-        zones: [],
-      }),
+      v: 1,
+      pickup: { offered: true, percent: 10 },
+      zones: [],
       settingsRev: 5,
       settingsAt: '2026-09-01T00:00:00.000Z',
       settingsTie: Date.parse('2026-09-01T00:00:00.000Z'),
@@ -570,12 +690,12 @@ live('the settings block reaches the website, and stays right, when the tills an
     } as PublishedSettings;
     answerStatus = () => ({ ok: true, data: { acceptingOrders: false, settings: { ...heldFields(websiteHolds), settingsProblem: null } } });
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(0);
+    expect(settingsPuts()).toHaveLength(0);
     expect(publishStatus()).toMatchObject({ state: 'waiting', message: expect.stringMatching(/restored/) });
     // The owner saves the areas again, now.
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones((z) => (z.id === 'emaar' ? { ...z, active: false } : z)) }, OWNER);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
     expect(websiteHolds?.zones.find((z) => z.id === 'emaar')).toMatchObject({ active: false });
     expect(publishStatus()).toMatchObject({ state: 'published' });
   });
@@ -585,31 +705,31 @@ live('the settings block reaches the website, and stays right, when the tills an
     answerStatus = () => ({ ok: true, data: { acceptingOrders: false, settings: websiteHolds ? { ...heldFields(websiteHolds), settingsProblem: null } : null } });
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(1);
+    expect(settingsPuts()).toHaveLength(1);
     expect(publishStatus()).toMatchObject({ state: 'published' });
     websiteHolds = null;
     bridge().stop();
     bridge().init(db as AppDatabase, DEV);
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(2);
-    expect(menus()[1]).toHaveProperty('settings');
+    expect(settingsPuts()).toHaveLength(2);
+    expect(menus()).toHaveLength(0);
   });
 
-  it('a Save while a publish is still on its way is sent when that one ends', async () => {
+  it('a Save while a sending is still on its way is sent when that one ends', async () => {
     const db = await till();
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
     let release!: () => void;
     menuGate = new Promise<void>((r) => (release = r));
     const first = bridge().maybePublishSettings();
-    await vi.waitFor(() => expect(menus()).toHaveLength(1));
-    // The second Save's word arrives while the first is on its way (big photos).
+    await vi.waitFor(() => expect(settingsPuts()).toHaveLength(1));
+    // The second Save's word arrives while the first is on its way.
     settingsRepo.setBusinessSetting(db as AppDatabase, 'discounts.websitePickup', { v: 1, offered: true, percent: 15 }, OWNER);
     await bridge().maybePublishSettings();
     menuGate = null;
     release();
     await first;
-    await vi.waitFor(() => expect(menus()).toHaveLength(2), { timeout: 8_000 });
-    expect(menus()[1]!.settings).toMatchObject({ pickup: { percent: 15 } });
+    await vi.waitFor(() => expect(settingsPuts()).toHaveLength(2), { timeout: 8_000 });
+    expect(settingsPuts()[1]!.settings).toMatchObject({ pickup: { percent: 15 } });
     expect(publishStatus()).toMatchObject({ state: 'published' });
   });
 
@@ -620,7 +740,7 @@ live('the settings block reaches the website, and stays right, when the tills an
     // The other till, on a newer version, saved the pick-up offer in a newer format.
     syncedRow(db, 'discounts.websitePickup', { version: 2, value: { v: 9, offered: true, percent: 20, days: ['fri'] } });
     await bridge().maybePublishSettings();
-    expect(menus()).toHaveLength(0);
+    expect([...menus(), ...settingsPuts()]).toHaveLength(0);
     expect(publishStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/newer version/) });
     await bridge().publishMenu();
     expect(menus()).toHaveLength(1);

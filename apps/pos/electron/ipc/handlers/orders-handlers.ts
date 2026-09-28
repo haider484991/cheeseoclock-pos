@@ -428,16 +428,20 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   });
 
   // The owner, 28 Sep 2026: "if delivery area selected the delivery fee should be automatically
-  // added". The repository decides (syncOrderDeliveryCharge): the area's fee on a delivery, swapped
-  // when the area changes, off when it is cleared; never twice, never foodpanda or a website order.
+  // added". The customer panel's area, or its "Put it back": the repository decides
+  // (syncOrderDeliveryCharge → deliveryChargeForArea) — the area's fee on a delivery, swapped when
+  // the area changes, off when it is cleared; only on a CHANGE (a charge taken off by hand stays
+  // off) unless putBack; never twice, never foodpanda or a website order. The customer save at
+  // Send and Pay does the same inside its own transaction (snapshotCustomerOntoOrder).
   defineHandler('orders:setDeliveryArea', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
     const area = typeof payload?.area === 'string' ? payload.area.slice(0, 200) : null;
     if (typeof payload?.orderId !== 'string') throw new IpcGuardError({ code: 'validation_failed', message: 'Which order?' });
+    const putBack = payload?.putBack === true;
     // The repository's own refusals ("…inactive", "A foodpanda order never carries…") reach the
     // cashier through defineHandler as they are; a database error stays hidden behind a reference.
     try {
-      syncOrderDeliveryCharge(ctx.db, payload.orderId, area, { userId: s.id, deviceId: ctx.deviceId });
+      syncOrderDeliveryCharge(ctx.db, payload.orderId, area, { userId: s.id, deviceId: ctx.deviceId }, { putBack });
     } catch (e) {
       if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.message === 'Order not found') {
         throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });

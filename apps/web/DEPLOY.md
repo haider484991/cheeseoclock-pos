@@ -80,15 +80,24 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 ## Delivery areas, fees and the pick-up offer (from v0.7.27)
 
 - The owner sets them on the till (Settings → Delivery areas & fees, and Money
-  & discounts → Website pick-up). The till sends them with the menu as a
-  settings block (`PUT /api/bridge/menu`); the website stores both in the
-  `site_menu` row. No schema change.
+  & discounts → Website pick-up). They travel as a settings block, stored in
+  the `site_menu` row with the menu. No schema change.
+  - **A Save sends the block alone** (`PUT /api/bridge/settings`) with only the
+    "Delivery Charge (Rs N)" items its areas charge. The website keeps the
+    menu it already has (the last one published) and puts just those items
+    into it. **Saving never publishes menu changes** made on the till and not
+    published: prices, items and photos go only with Publish (or a menu file
+    import, or "Publish the menu by itself" when the owner switches it on).
+  - The owner's Publish sends the whole menu with the block
+    (`PUT /api/bridge/menu`), as before.
 - Until a block arrives the site is exactly as before: the built-in 21 areas
   and fees, and the till's heartbeat % for pick-up.
-- **Deploy the website before updating the tills.** An older website drops
-  the block (the menu still publishes) and the till's Settings says the
-  website needs its update; once the website is updated, press Publish on
-  the till (it does not keep re-sending the menu by itself).
+- **Deploy the website before updating the tills.** An older website has no
+  `/api/bridge/settings` (404) and drops a block sent with the menu; the
+  till's Settings → Online orders says the website needs its update, and the
+  till sends nothing more by itself. Once the website is updated, save the
+  delivery areas again on the till (only the areas go); Publish also works,
+  and sends the menu too.
 - `GET /api/bridge/status` also says which block the website holds and
   whether it fits the stored menu: a till reads it once at start-up, so a
   website database rolled back to an older copy gets the areas again.

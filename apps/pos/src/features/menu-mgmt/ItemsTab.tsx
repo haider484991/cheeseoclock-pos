@@ -7,6 +7,8 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import {
   FEE_ITEM_LOCKED_NOTE,
+  FEE_ITEM_UNUSED_NOTE,
+  chargedFeeItemIds,
   deliveryZoneFeeItemIds,
   isDeliveryChargeMenuItem,
   type MenuCostRow,
@@ -47,8 +49,10 @@ export function ItemsTab() {
   const [category, setCategory] = useSessionState<string>('menu.items.cat', 'all');
   const [status, setStatus] = useSessionState<StatusFilter>('menu.items.status', 'all');
   const [editing, setEditing] = useState<MenuItem | null | 'new'>(null);
-  // The delivery charges are Settings → Delivery areas': name, price, on/off, category and delete are locked here.
-  const isFee = useIsFeeItem();
+  // The delivery charges are Settings → Delivery areas': name and price always; on/off, category and
+  // delete too while an area that is on charges the item ('charged').
+  const feeLock = useFeeLock();
+  const isFee = (i: { id: string; name: string }) => feeLock(i) === 'charged';
 
   const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
   const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
@@ -170,9 +174,9 @@ export function ItemsTab() {
                       {i.name}
                     </button>
                     {i.description && <div className="max-w-md truncate text-xs text-stone-500">{i.description}</div>}
-                    {isFee(i) && (
+                    {feeLock(i) && (
                       <div className="inline-flex items-center gap-1 text-xs text-amber-800 dark:text-amber-300">
-                        <Lock className="h-3 w-3" aria-hidden="true" /> {FEE_ITEM_LOCKED_NOTE}
+                        <Lock className="h-3 w-3" aria-hidden="true" /> {feeLock(i) === 'charged' ? FEE_ITEM_LOCKED_NOTE : FEE_ITEM_UNUSED_NOTE}
                       </div>
                     )}
                   </td>
@@ -270,11 +274,22 @@ export function ItemsTab() {
   );
 }
 
-/** Is this item a delivery charge (an area's fee item, or named like one)? Locked in Menu. */
-function useIsFeeItem(): (item: { id: string; name: string }) => boolean {
+/**
+ * How Menu locks an item that is a delivery charge (an area's fee item, or
+ * named like one), as the main process does (delivery-fee-items.ts):
+ * 'charged' = an area that is on charges it — name, price, on/off, category
+ * and delete are Settings'; 'unused' = no area that is on uses it — it may be
+ * hidden or deleted, its name and price stay Settings'; null = not a charge.
+ */
+function useFeeLock(): (item: { id: string; name: string }) => 'charged' | 'unused' | null {
   const areas = useDeliveryAreas();
+  const itemsQ = useQuery({ queryKey: ['menu', 'items', 'all'], queryFn: () => ipc.menu.listItems() });
   const ids = useMemo(() => deliveryZoneFeeItemIds(areas.zones), [areas]);
-  return useCallback((item) => isDeliveryChargeMenuItem(item, ids), [ids]);
+  const charged = useMemo(() => chargedFeeItemIds(areas.zones, itemsQ.data ?? []), [areas, itemsQ.data]);
+  return useCallback(
+    (item) => (!isDeliveryChargeMenuItem(item, ids) ? null : charged.has(item.id) ? 'charged' : 'unused'),
+    [ids, charged],
+  );
 }
 
 /** The item's food-cost chip from Costing; a dot while it loads. */
@@ -294,8 +309,11 @@ function ItemDialog({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  // A delivery charge: its name, price, category and on/off are Settings → Delivery areas'.
-  const locked = useIsFeeItem()(existing ?? { id: '', name: '' });
+  // A delivery charge: its name and price are Settings → Delivery areas'; its category and on/off too
+  // while an area that is on charges it.
+  const lock = useFeeLock()(existing ?? { id: '', name: '' });
+  const locked = lock === 'charged';
+  const feeFixed = lock !== null;
   const catQ = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
   const taxQ = useQuery({ queryKey: ['menu', 'taxCategories'], queryFn: () => ipc.menu.listTaxCategories() });
   const modGroupsQ = useQuery({ queryKey: ['menu', 'modifierGroups'], queryFn: () => ipc.menu.listModifierGroups() });
@@ -440,9 +458,10 @@ function ItemDialog({
             </Dialog.Close>
           </header>
           <div className="flex-1 space-y-3 overflow-auto p-5">
-            {locked && (
+            {lock && (
               <p className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-                <Lock className="h-4 w-4 shrink-0" /> {FEE_ITEM_LOCKED_NOTE} Its name, price, category and on/off follow the areas’ fees.
+                <Lock className="h-4 w-4 shrink-0" />{' '}
+                {locked ? `${FEE_ITEM_LOCKED_NOTE} Its name, price, category and on/off follow the areas’ fees.` : FEE_ITEM_UNUSED_NOTE}
               </p>
             )}
             <Field label="Photo">
@@ -453,7 +472,7 @@ function ItemDialog({
                 type="text"
                 value={name}
                 autoFocus
-                disabled={locked}
+                disabled={feeFixed}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full rounded-lg border border-stone-300 px-3 py-2 disabled:opacity-60 dark:border-stone-700 dark:bg-stone-800"
               />
@@ -495,7 +514,7 @@ function ItemDialog({
                   min="0"
                   inputMode="decimal"
                   value={priceRupees}
-                  disabled={locked}
+                  disabled={feeFixed}
                   onChange={(e) => setPriceRupees(e.target.value)}
                   className={cn(
                     'w-full rounded-lg border px-3 py-2 font-mono dark:bg-stone-800',

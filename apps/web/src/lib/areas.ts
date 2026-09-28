@@ -54,12 +54,15 @@ export interface DeliveryArea {
   /** Real menu items to feature on this page (brand copy, links to /menu). */
   popular: Array<{ name: string; blurb: string }>;
   /** Area-specific visible FAQ (fee tokens allowed; `when`: shown only while that holds). */
-  faqs: Array<{ q: Copy; a: Copy; when?: FeeClaim }>;
+  faqs: Array<{ q: Copy; a: Copy; when?: FeeClaim | readonly FeeClaim[] }>;
   /** Slugs of bordering areas for internal linking. */
   adjacent: string[];
 }
 
 const WA_NUMBERS = BUSINESS.whatsappLines.map((l) => l.display).join(' or ');
+
+/** The end of a sentence that says delivery is paused. */
+const PAUSED_WA = 'message us on WhatsApp and we’ll tell you when it’s back.';
 
 export const DELIVERY_AREAS: DeliveryArea[] = [
   {
@@ -154,7 +157,8 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
         q: 'Do you deliver to Phase 7 Extension?',
         a: {
           text: 'Yes — Phase 7 Extension has its own option at checkout, at the same {fee:dha-7-ext} fee as Phase 7.',
-          when: { sameFee: ['dha-7', 'dha-7-ext'] },
+          // Phase 7's fee is named too: only while Phase 7 is delivered to.
+          when: [{ sameFee: ['dha-7', 'dha-7-ext'] }, { on: ['dha-7'] }],
           otherwise: 'Yes — Phase 7 Extension has its own option at checkout, with its own {fee:dha-7-ext} fee.',
         },
       },
@@ -162,9 +166,14 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
         q: 'Which area do I pick at checkout?',
         a: {
           text: 'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, either is fine — the fee is {fee:dha-6,dha-7} both ways.',
-          when: { sameFee: ['dha-6', 'dha-7'] },
-          otherwise:
-            'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, pick the phase your address is in — Phase 6 is {fee:dha-6}, Phase 7 is {fee:dha-7}.',
+          when: [{ sameFee: ['dha-6', 'dha-7'] }, { on: ['dha-6', 'dha-7'] }],
+          otherwise: {
+            text: 'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, pick the phase your address is in — Phase 6 is {fee:dha-6}, Phase 7 is {fee:dha-7}.',
+            when: { delivering: true },
+            // A phase switched off: its fee is not named.
+            otherwise:
+              'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, pick the phase your address is in.',
+          },
         },
       },
       {
@@ -186,9 +195,23 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       'Phase 8 runs wide — from the Zulfiqar and Al-Murtaza commercial strips out to the sea at Do Darya — and we deliver across all of it. Orders leave our Phase 6 kitchen boxed straight from the oven.',
       {
         text: 'Delivery is {fee:dha-8} across Phase 8, the same for Emaar Crescent Bay and Creek Vista, which are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
-        when: { sameFee: ['dha-8', 'emaar', 'creek-vista'] },
-        otherwise:
-          'Delivery is {fee:dha-8} across Phase 8; Emaar Crescent Bay ({fee:emaar}) and Creek Vista ({fee:creek-vista}) are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+        // It names Emaar's and Creek Vista's fee as Phase 8's: only while both are delivered to.
+        when: [{ sameFee: ['dha-8', 'emaar', 'creek-vista'] }, { on: ['emaar', 'creek-vista'] }],
+        // Each fee named only for an area that is on (a {fee:…} of a switched-off area can't print).
+        otherwise: {
+          text: 'Delivery is {fee:dha-8} across Phase 8; Emaar Crescent Bay ({fee:emaar}) and Creek Vista ({fee:creek-vista}) are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+          when: { delivering: true },
+          otherwise: {
+            text: 'Delivery is {fee:dha-8} across Phase 8; Creek Vista ({fee:creek-vista}) is its own zone at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+            when: { delivering: true },
+            otherwise: {
+              text: 'Delivery is {fee:dha-8} across Phase 8; Emaar Crescent Bay ({fee:emaar}) is its own zone at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+              when: { delivering: true },
+              otherwise:
+                'Delivery is {fee:dha-8} across Phase 8. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+            },
+          },
+        },
       },
     ],
     landmarks: [
@@ -221,8 +244,9 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       {
         q: 'Why is delivery to Phase 8 {fee:dha-8}?',
         a: 'Phase 8 — with Emaar Crescent Bay and Creek Vista — is {fee:dha-8,emaar,creek-vista} on our rider service’s rate card, instead of the {fee:dha-1..7,dha-2-ext,dha-7-ext} for Phases 1–7. Pick your area at checkout and the right fee is added for you.',
-        // It explains the fee by the rider service's card: only while the fees are the card's.
-        when: { rateCard: ['dha-1..8', 'dha-2-ext', 'dha-7-ext', 'emaar', 'creek-vista'] },
+        // It explains the fee by the rider service's card: only while the fees are the card's, and
+        // it names Emaar's and Creek Vista's with Phase 8's: only while all three are delivered to.
+        when: [{ rateCard: ['dha-1..8', 'dha-2-ext', 'dha-7-ext', 'emaar', 'creek-vista'] }, { on: ['dha-8', 'emaar', 'creek-vista'] }],
       },
       {
         q: 'Will the food still be hot in Phase 8?',
@@ -322,8 +346,12 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
         q: 'Do you deliver to DHA Phase 3?',
         a: {
           text: 'Yes — pick DHA Phase 3 at checkout. It is {fee:dha-3}, the same as Phase 4.',
-          when: { sameFee: ['dha-3', 'dha-4'] },
-          otherwise: 'Yes — pick DHA Phase 3 at checkout. It is {fee:dha-3}; Phase 4 is {fee:dha-4}.',
+          when: [{ sameFee: ['dha-3', 'dha-4'] }, { on: ['dha-4'] }],
+          otherwise: {
+            text: 'Yes — pick DHA Phase 3 at checkout. It is {fee:dha-3}; Phase 4 is {fee:dha-4}.',
+            when: { delivering: true },
+            otherwise: 'Yes — pick DHA Phase 3 at checkout. It is {fee:dha-3}.',
+          },
         },
       },
       {
@@ -348,7 +376,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     intro: [
       {
         text: 'Phase 1 and Phase 2 are the longest ride from our Phase 6 kitchen, and we will not pretend otherwise. What does not change is how the food leaves: fired to order, boxed straight from the oven and sent out hot — for the same {fee:dha-1,dha-2,dha-2-ext} as Phases 3 to 7.',
-        when: { sameFee: ['dha-1..7', 'dha-2-ext', 'dha-7-ext'] },
+        when: [{ sameFee: ['dha-1..7', 'dha-2-ext', 'dha-7-ext'] }, { on: ['dha-1..7', 'dha-2-ext', 'dha-7-ext'] }],
         otherwise:
           'Phase 1 and Phase 2 are the longest ride from our Phase 6 kitchen, and we will not pretend otherwise. What does not change is how the food leaves: fired to order, boxed straight from the oven and sent out hot. Delivery here is {fee:dha-1,dha-2,dha-2-ext}.',
       },
@@ -379,7 +407,7 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
         q: 'Do you really deliver this far from Phase 6?',
         a: {
           text: 'Yes. Phase 1, Phase 2 and Phase 2 Extension are all on our delivery map at the {fee:dha-1..7,dha-2-ext,dha-7-ext} fee for DHA Phases 1–7. It is the longest ride we make, so order a little ahead if you are feeding people at a set time.',
-          when: { sameFee: ['dha-1..7', 'dha-2-ext', 'dha-7-ext'] },
+          when: [{ sameFee: ['dha-1..7', 'dha-2-ext', 'dha-7-ext'] }, { on: ['dha-1..7', 'dha-2-ext', 'dha-7-ext'] }],
           otherwise:
             'Yes. Phase 1, Phase 2 and Phase 2 Extension are all on our delivery map, at {fee:dha-1,dha-2,dha-2-ext}. It is the longest ride we make, so order a little ahead if you are feeding people at a set time.',
         },
@@ -405,8 +433,19 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     name: 'Clifton',
     h1: 'Pizza & Burger Delivery in Clifton, Karachi',
     title: 'Pizza & Burger Delivery in Clifton, Karachi',
-    description:
-      'Pizza & burgers delivered to Clifton Blocks 1–9 — Boat Basin, Schon Circle and beyond. {fee:clifton-3..9} (Blocks 1 & 2: {fee:clifton-1,clifton-2}). Cash on delivery, open till 1 am.',
+    description: {
+      text: 'Pizza & burgers delivered to Clifton Blocks 1–9 — Boat Basin, Schon Circle and beyond. {fee:clifton-3..9} (Blocks 1 & 2: {fee:clifton-1,clifton-2}). Cash on delivery, open till 1 am.',
+      when: { delivering: true },
+      // Blocks switched off: only the fee of the blocks that are on.
+      otherwise: {
+        text: 'Pizza & burgers delivered to Clifton Blocks 1–9 — Boat Basin, Schon Circle and beyond. {fee:clifton-3..9} delivery. Cash on delivery, open till 1 am.',
+        when: { delivering: true },
+        otherwise: {
+          text: 'Pizza & burgers delivered to Clifton Blocks 1 & 2 — {fee:clifton-1,clifton-2} delivery. Cash on delivery, open till 1 am.',
+          when: { delivering: true },
+        },
+      },
+    },
     zoneIds: [
       'clifton-1',
       'clifton-2',
@@ -420,7 +459,19 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     ],
     intro: [
       'Clifton has no shortage of food streets — what it lacks at midnight is a kitchen still answering. We deliver across Clifton from our DHA Phase 6 kitchen every day until 1 am, cash on delivery.',
-      'Coverage runs across all nine blocks, from Boat Basin and Schon Circle to Bilawal Chowrangi and the Sea View side. Delivery is {fee:clifton-3..9} for Blocks 3–9 and {fee:clifton-1,clifton-2} for Blocks 1 and 2.',
+      {
+        text: 'Coverage runs across all nine blocks, from Boat Basin and Schon Circle to Bilawal Chowrangi and the Sea View side. Delivery is {fee:clifton-3..9} for Blocks 3–9 and {fee:clifton-1,clifton-2} for Blocks 1 and 2.',
+        when: { delivering: true },
+        // Blocks switched off: the fee of the blocks that are on only.
+        otherwise: {
+          text: 'Coverage runs from Boat Basin and Schon Circle to Bilawal Chowrangi and the Sea View side. Delivery is {fee:clifton-3..9} for Blocks 3–9.',
+          when: { delivering: true },
+          otherwise: {
+            text: 'Delivery to Clifton Blocks 1 and 2 is {fee:clifton-1,clifton-2}.',
+            when: { delivering: true },
+          },
+        },
+      },
     ],
     landmarks: [
       'Boat Basin',
@@ -446,7 +497,11 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     faqs: [
       {
         q: 'Which Clifton blocks do you deliver to?',
-        a: 'All of them — Blocks 1 to 9, including Boat Basin and Schon Circle. Delivery is {fee:clifton-3..9} for Blocks 3–9 and {fee:clifton-1,clifton-2} for Blocks 1 and 2.',
+        a: {
+          text: 'All of them — Blocks 1 to 9, including Boat Basin and Schon Circle. Delivery is {fee:clifton-3..9} for Blocks 3–9 and {fee:clifton-1,clifton-2} for Blocks 1 and 2.',
+          // Blocks switched off: not "all of them", and no fee for them.
+          when: { on: ['clifton-1..9'] },
+        },
       },
       {
         // True only while the areas are today's: with an area added or switched off, left out.
@@ -500,10 +555,14 @@ export interface RenderedArea {
 }
 
 export function renderArea(area: DeliveryArea, facts: SiteFacts): RenderedArea {
-  const description = renderCopy(area.description, facts);
-  if (description === null) throw new Error(`areas.ts: "${area.slug}" has no description for these fees`);
   const paused = pausedZones(area.zoneIds, facts);
   const allPaused = paused.length === area.zoneIds.length;
+  let description = renderCopy(area.description, facts);
+  if (description === null) {
+    // Its fee can't be named: every area it names is switched off (a fee is never printed for one).
+    if (paused.length === 0) throw new Error(`areas.ts: "${area.slug}" has no description for these fees`);
+    description = `Pizza & burgers from Cheese O’Clock’s DHA Phase 6 kitchen. Delivery to ${area.name} is paused right now — ${PAUSED_WA}`;
+  }
   return {
     slug: area.slug,
     name: area.name,

@@ -39,7 +39,8 @@ import type { AppDatabase } from '../../db/connection.js';
  *    what Pay asks, the areas and fees, never the commission, fees or costs.
  *
  * A Save the website needs (the areas, the pick-up offer) tells the web
- * bridge, which publishes the menu with the newer settings block.
+ * bridge, which sends the newer settings block ALONE, with only its areas'
+ * charge items (never the till's unpublished menu changes).
  */
 export function registerSettingsHandlers(ctx: HandlerContext): void {
   defineHandler('settings:getBusiness', ctx, (_ctx, payload) => {
@@ -125,7 +126,7 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
   });
 }
 
-/** The keys the website's settings block carries: a Save of one sends the menu with a newer block. */
+/** The keys the website's settings block carries: a Save of one sends the newer block alone. */
 const WEBSITE_KEYS: ReadonlySet<ShopSettingKey> = new Set<ShopSettingKey>(['discounts.websitePickup', 'delivery.zones']);
 
 function card(db: AppDatabase, key: ShopSettingKey): AnyShopSettingCard {

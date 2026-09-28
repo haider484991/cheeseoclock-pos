@@ -19,8 +19,9 @@
  *    delivery fee"). No offers by default.
  * And the website's pick-up offer ('discounts.websitePickup', Settings
  * step 3): whether customers may pick up, and the whole % off they get —
- * sent to the website with the menu (the settings block), never the
- * heartbeat; the till bills the % each web order carries. (The automatic
+ * sent to the website in the settings block (by itself after a Save, never
+ * with the unpublished menu; never the heartbeat); the till bills the %
+ * each web order carries. (The automatic
  * offers never touch a website order: the website prices its own.)
  * The foodpanda deal keeps its own rules (Settings → foodpanda). The owner
  * alone (the main process refuses anyone else); the defaults are exactly
@@ -66,6 +67,7 @@ import {
   type PresetsForm,
 } from './shop-rules/discountRules';
 import {
+  PICKUP_INTRO,
   PICKUP_PRINTED_MENU_NOTE,
   pickupExample,
   pickupFromForm,
@@ -306,7 +308,7 @@ function WebsitePickupFields({ s }: { s: ReturnType<typeof useShopSetting<'disco
       card={card}
       title="Website pick-up"
       icon={<ShoppingBag className="h-5 w-5" />}
-      intro="Whether website customers may collect their order from the counter, and the % off they get for it. It reaches the website with the menu; pick-up still needs the shop to be taking orders."
+      intro={PICKUP_INTRO}
       describe={pickupSummary}
       dirty={dirty}
       problem={parsed.problem}

@@ -51,7 +51,8 @@ import {
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
 import { trackPath } from '@/lib/order-display';
-import type { PublishedMenu, PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
+import type { PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
+import type { PublicMenu } from '@/lib/public-menu';
 import { CartPanel, type CartProps } from './ordering/cart-ui';
 import { CheckoutSheet, type PlacedOrder } from './ordering/CheckoutSheet';
 import { ItemSheet } from './ordering/ItemSheet';
@@ -98,7 +99,7 @@ export function OrderingApp({
   pickupDiscountPercent,
   deliveryFacts,
 }: {
-  menu: PublishedMenu;
+  menu: PublicMenu;
   acceptingOrders: boolean;
   /** The till can take pickup orders right now (lib/store-status). */
   pickupAvailable: boolean;
@@ -541,7 +542,7 @@ function ReturningBanner({
   cartEmpty,
   onOrderAgain,
 }: {
-  menu: PublishedMenu;
+  menu: PublicMenu;
   lastOrder: LastOrder;
   cartEmpty: boolean;
   onOrderAgain: () => void;

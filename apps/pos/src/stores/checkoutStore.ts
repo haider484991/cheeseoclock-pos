@@ -3,11 +3,6 @@ import type { CameBy, FoodpandaTenderCheck, OrderSnapshot, OrderMode, PaymentMet
 import { isCameBy } from '@cheeseoclock/shared-types';
 import { ipc } from '../ipc/client';
 import { addedLineId, createSerialQueue, findMergeableLine } from '../features/checkout/cartLines';
-import {
-  deliveryChargeAskFor,
-  noteDeliveryChargeAsked,
-  type DeliveryChargeAskState,
-} from '../features/checkout/deliveryChargeAsk';
 
 /** The ticket line the cashier last added to or changed — the ticket flashes it, and +/- keys act on it. */
 export interface LineTouch {
@@ -78,15 +73,21 @@ interface CheckoutState {
   removeItem: (orderItemId: string) => Promise<void>;
   /**
    * The delivery area on the customer panel changed: the main process puts
-   * that area's delivery charge on the open order (swaps a wrong one, takes
-   * it off when the area is cleared). `mayStartOrder`: with no order yet,
-   * start one to carry the charge (only when there is a charge to put on).
-   * `ask`: the customer panel's automatic ask (deliveryChargeAsk.ts) —
-   * checked and remembered when its turn in the queue comes, so an ask Send
-   * or Pay already made (settleDeliveryCharge) is not made twice. Never for
-   * an order already sent or paid: nothing is started in its place.
+   * that area's delivery charge on the open order when the area CHANGED
+   * (swaps a wrong one, takes it off when the area is cleared) and leaves a
+   * charge taken off by hand alone otherwise (order-repo
+   * deliveryChargeForArea). The customer save at Send and Pay does the same
+   * with the saved address, in the main process: nothing here has to run
+   * before the order leaves. `mayStartOrder`: with no order yet, start one
+   * to carry the charge (only when there is a charge to put on).
+   * `forOrderId`: the order the panel asked about — a late ask for an order
+   * that has since been sent (or cleared) does nothing, and never starts a
+   * new order. `putBack`: the row's "Put it back".
    */
-  setDeliveryArea: (area: string, opts?: { mayStartOrder?: boolean; ask?: DeliveryChargeAskState }) => Promise<void>;
+  setDeliveryArea: (
+    area: string,
+    opts?: { mayStartOrder?: boolean; forOrderId?: string | null; putBack?: boolean },
+  ) => Promise<void>;
   applyDiscount: (
     discountType: 'percent' | 'flat',
     value: number,
@@ -201,36 +202,6 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
     }
   }
 
-  /**
-   * The picked area's delivery charge, before the order is handed off (Send,
-   * Pay opening, the payment). The owner, 28 Sep 2026: "if delivery area
-   * selected the delivery fee should be automatically added". The customer
-   * panel asks a moment after the area last changed (DeliveryChargeRow), so
-   * a quick F2 or Pay — or leaving the panel before then — would otherwise
-   * send the order with its area and no charge. Asked only when the panel has
-   * not already asked about exactly this (deliveryChargeAsk.ts): a charge
-   * the cashier took off by hand stays off. The main process decides
-   * (orders:setDeliveryArea), and re-works the automatic offer on the food.
-   * Runs inside a queued job. A failure stops the hand-off with the reason
-   * (it is asked again next time): a delivery never leaves without its
-   * charge unnoticed.
-   */
-  async function settleDeliveryCharge(orderId: string): Promise<void> {
-    const mode = get().mode;
-    if (mode !== 'delivery') return;
-    const { getCustomerFormSnapshot } = await import('../features/checkout/useCustomerForm');
-    const now: DeliveryChargeAskState = { orderId, mode, area: getCustomerFormSnapshot().area, wouldAdd: false };
-    if (deliveryChargeAskFor(now) !== 'ask') return;
-    let next: OrderSnapshot;
-    try {
-      next = await ipc.orders.setDeliveryArea({ orderId, area: now.area.trim() || null });
-    } catch (e) {
-      throw new Error(`Could not put the delivery charge on: ${e instanceof Error ? e.message : 'unknown error'}`);
-    }
-    noteDeliveryChargeAsked(now);
-    if (get().snapshot?.order.id === next.order.id) set({ snapshot: next });
-  }
-
   return {
     snapshot: null,
     mode: 'takeaway',
@@ -247,8 +218,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         if (!snap || snap.order.status !== 'open') return;
         try {
           // Only a delivery pays the delivery charge: the main process takes its line off when
-          // the order leaves Delivery (setOrderMode), and puts the area's back when it returns
-          // (the customer panel asks, orders:setDeliveryArea).
+          // the order leaves Delivery, and puts the area's back when it returns (setOrderMode).
           const next = await ipc.orders.setMode({ orderId: snap.order.id, mode });
           set({ snapshot: next, mode: next.order.mode, tableId: next.order.tableId, cameBy: chipOf(next) });
         } catch (e) {
@@ -408,18 +378,19 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const snap = get().snapshot;
         // The order was just sent or paid (the screen not cleared yet): a late ask is not a new order.
         if (snap && snap.order.status !== 'open') return;
-        if (opts.ask) {
-          // Send or Pay may have asked about exactly this already (settleDeliveryCharge).
-          if (deliveryChargeAskFor(opts.ask) === 'same') return;
-          noteDeliveryChargeAsked(opts.ask);
-        }
+        // Asked about an order that has left the screen since (sent, then cleared): nothing to do.
+        if (opts.forOrderId && snap?.order.id !== opts.forOrderId) return;
         let orderId = snap ? snap.order.id : null;
         if (!orderId) {
           // No order: nothing to take off; start one only to carry a charge.
           if (!opts.mayStartOrder || get().mode !== 'delivery' || !area.trim()) return;
           orderId = (await ensureOrderNow()).order.id;
         }
-        const next = await ipc.orders.setDeliveryArea({ orderId, area: area.trim() || null });
+        const next = await ipc.orders.setDeliveryArea({
+          orderId,
+          area: area.trim() || null,
+          ...(opts.putBack ? { putBack: true } : {}),
+        });
         if (get().snapshot?.order.id === next.order.id) set({ snapshot: next });
       });
     },
@@ -452,9 +423,9 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       return run(async () => {
         const snap = get().snapshot;
         if (!snap || snap.order.status !== 'open') return snap;
+        // The saved address brings its area's delivery charge with it (the main process, in the
+        // same transaction): Pay shows the final bill.
         await commitCustomer(snap.order.id, 'pay');
-        // The area's delivery charge too: Pay shows the final bill.
-        await settleDeliveryCharge(snap.order.id);
         const next = await ipc.orders.get(snap.order.id);
         if (next) set({ snapshot: next });
         return next ?? snap;
@@ -466,7 +437,6 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to tender');
         await commitCustomer(snap.order.id, 'tender');
-        await settleDeliveryCharge(snap.order.id);
         const next = await ipc.orders.tender({
           orderId: snap.order.id,
           payments,
@@ -482,7 +452,6 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to send');
         await commitCustomer(snap.order.id, 'send to kitchen');
-        await settleDeliveryCharge(snap.order.id);
         const next = await ipc.orders.sendToKitchen(snap.order.id);
         set({ snapshot: next });
         return next;

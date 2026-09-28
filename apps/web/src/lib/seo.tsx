@@ -1,4 +1,4 @@
-import type { PublishedMenu } from '@cheeseoclock/shared-types';
+import type { PublicMenu } from './public-menu';
 import { BUSINESS } from './business';
 import { DELIVERY_AREAS } from './areas';
 import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
@@ -112,7 +112,7 @@ export function webSiteNode(): Record<string, unknown> {
 }
 
 /** Menu → MenuSection → MenuItem chain from the POS-published menu. */
-export function menuNode(menu: PublishedMenu): Record<string, unknown> {
+export function menuNode(menu: PublicMenu): Record<string, unknown> {
   const feeItemIds = feeItemIdsOf(menu);
   const sections = [...menu.categories]
     .sort((a, b) => a.displayOrder - b.displayOrder)

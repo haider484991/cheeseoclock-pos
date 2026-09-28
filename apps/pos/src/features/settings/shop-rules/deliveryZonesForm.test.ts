@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DELIVERY_ZONES } from '@cheeseoclock/shared-types';
 import {
+  PICKUP_INTRO,
+  ZONES_SAVED_TOAST,
+  ZONES_SAVE_NOTE,
   moveZoneRow,
   newZoneRow,
   pickupExample,
@@ -104,5 +107,18 @@ describe('Settings → Online orders: where the areas stand with the website', (
     expect(
       settingsPublishWords({ state: 'refused', at: null, message: 'DHA Phase 8: no item' })?.text,
     ).toMatch(/website not updated: DHA Phase 8: no item/);
+  });
+});
+
+describe('what a Save says about the website: the areas go ALONE, never the menu', () => {
+  it('the areas’ Save note, the saved message and the pick-up card never say the menu goes with them', () => {
+    for (const t of [ZONES_SAVE_NOTE, ZONES_SAVED_TOAST, PICKUP_INTRO]) {
+      expect(t).toEqual(expect.any(String));
+      expect(t).not.toMatch(/with the menu|menu changes not published yet go/i);
+    }
+    // And they say what stays on the till.
+    expect(ZONES_SAVE_NOTE).toMatch(/Menu changes you have not published stay on the till/);
+    expect(ZONES_SAVED_TOAST).toMatch(/not the rest of the menu/);
+    expect(PICKUP_INTRO).toMatch(/by itself when saved/);
   });
 });

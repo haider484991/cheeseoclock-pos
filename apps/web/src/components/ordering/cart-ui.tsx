@@ -261,7 +261,7 @@ export function Totals(props: CartProps) {
       ) : (
         <div className="flex justify-between text-ink-muted">
           <dt>Delivery{props.zone ? ` · ${props.zone.name}` : ''}</dt>
-          <dd className="tabular-nums">{props.zone ? formatCents(props.deliveryFee) : props.feeRange}</dd>
+          <dd className="tabular-nums">{props.zone ? formatCents(props.deliveryFee) : props.feeRange || 'Paused'}</dd>
         </div>
       )}
       <div className="flex justify-between text-ink-muted">

@@ -254,6 +254,7 @@ beforeEach(async () => {
   (await import('./orders-handlers.js')).registerOrdersHandlers(ctx);
   (await import('./settings-handlers.js')).registerSettingsHandlers(ctx);
   (await import('./menu-handlers.js')).registerMenuHandlers(ctx);
+  (await import('./customers-handlers.js')).registerCustomersHandlers(ctx);
 });
 
 /** The released areas as the owner's screen sends them, changed where asked. */
@@ -717,6 +718,64 @@ describe.skipIf(!Sqlite)('Menu: a delivery charge is Settings → Delivery areas
     });
     expect(made.id).not.toBe(fee300());
   });
+
+  it('a charge item at a fee NO area that is on uses can be switched off and deleted in Menu (its name and price stay locked); the one an area charges stays locked', async () => {
+    // An old "Delivery Charge (Rs 150)" nobody charges any more, on (a cashier could ring it up).
+    const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+    const d150 = createMenuItem(
+      db as never,
+      { categoryId: menu.fees, name: 'Delivery Charge (Rs 150)', basePriceCents: 15_000, taxCategoryId: menu.tax },
+      OWNER_ACTOR,
+    ).id;
+    // Every Rs 250 area raised to Rs 300: today's Rs 250 item is switched off by the Save, and no area that is on uses it.
+    await save(zones((z) => (z.feeCents === 25_000 ? { ...z, feeCents: 30_000 } : z)));
+    expect(itemRow(menu.d250)).toMatchObject({ is_active: 0 });
+    h.session = OWNER;
+    // The Rs 150: hidden, then deleted — like any item.
+    expect((await call('menu:updateItem', { id: d150, isActive: false })).ok).toBe(true);
+    expect(itemRow(d150)).toMatchObject({ is_active: 0 });
+    // Its price and name still make it a charge: Settings sets those.
+    expect(await call('menu:updateItem', { id: d150, basePriceCents: 40_000 })).toMatchObject({ ok: false, code: 'precondition_failed' });
+    expect(await call('menu:updateItem', { id: d150, name: 'Delivery Charge (Rs 400)' })).toMatchObject({ ok: false, code: 'precondition_failed' });
+    expect((await call('menu:deleteItem', { id: d150 })).ok).toBe(true);
+    expect(itemRow(d150)?.['deleted_at']).not.toBeNull();
+    // The switched-off Rs 250 (no area that is on charges it): deleted too.
+    expect((await call('menu:deleteItem', { id: menu.d250 })).ok).toBe(true);
+    // The Rs 200 and Rs 300 are charged by areas that are on: still locked.
+    for (const id of [menu.d200, fee300()]) {
+      expect(await call('menu:updateItem', { id, isActive: false })).toMatchObject({ ok: false, message: FEE_ITEM_LOCKED_NOTE });
+      expect(await call('menu:deleteItem', { id })).toMatchObject({ ok: false, message: FEE_ITEM_LOCKED_NOTE });
+    }
+    // An area switched off frees its item once no area that is on charges that fee.
+    await save(zones((z) => (z.feeCents === 25_000 ? { ...z, feeCents: 30_000, active: false } : z)));
+    expect(itemRow(fee300())).toMatchObject({ is_active: 0 });
+    expect((await call('menu:deleteItem', { id: fee300() })).ok).toBe(true);
+    // A website order placed at a fee whose item was deleted meanwhile (the website still held the older block) still imports.
+    const orderId = await importWebOrder(
+      webOrder('web-deleted-250', [
+        [menu.pizza, 1, 100_000],
+        [menu.d250, 1, 25_000, 'Delivery Charge (Rs 250)'],
+      ]),
+    );
+    expect((await snap(orderId)).items.map((i) => [i.menuItemId, i.unitPriceCents])).toContainEqual([menu.d250, 25_000]);
+    // Brought back switched off (a cashier can't ring it up), synced and audited.
+    expect(itemRow(menu.d250)).toMatchObject({ is_active: 0, deleted_at: null });
+  });
+
+  it('a category holding only charge items no area that is on uses can be hidden; the one holding a charged item can’t', async () => {
+    const { createCategory } = await import('../../db/repositories/category-repo.js');
+    const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+    const old = createCategory(db as never, { name: 'Old charges', displayOrder: 9, colorHex: '#777777' }, OWNER_ACTOR);
+    createMenuItem(
+      db as never,
+      { categoryId: old.id, name: 'Delivery Charge (Rs 150)', basePriceCents: 15_000, taxCategoryId: menu.tax },
+      OWNER_ACTOR,
+    );
+    await save(zones());
+    h.session = OWNER;
+    expect((await call('menu:updateCategory', { id: old.id, isActive: false })).ok).toBe(true);
+    expect(await call('menu:updateCategory', { id: menu.fees, isActive: false })).toMatchObject({ ok: false, code: 'precondition_failed' });
+  });
 });
 
 describe.skipIf(!Sqlite)('the menu file import leaves the delivery charges alone', () => {
@@ -828,11 +887,26 @@ describe.skipIf(!Sqlite)(
       expect(s.order.subtotalCents).toBe(100_000);
     });
 
-    it('a road across phases waits for the phase; an area not on the list leaves the bill alone', async () => {
+    it('a road across phases waits for the phase; an area not on the list, after a known one, takes the old charge OFF (changing the area swaps it)', async () => {
       const orderId = await deliveryOrder();
       expect(charges(await area(orderId, 'Khayaban-e-Shahbaz, DHA'))).toEqual([]);
       await area(orderId, 'DHA Phase 6');
-      expect(charges(await area(orderId, 'Gulshan Block 13'))).toEqual([[menu.d200, 20_000, 1]]);
+      expect(charges(await area(orderId, 'Gulshan Block 13'))).toEqual([]);
+      // Recorded: which area, and that the till took the Rs 200 off.
+      expect(lastAreaAudit(orderId)).toMatchObject({
+        actor_user_id: 'u_cash',
+        before: { area: 'DHA Phase 6' },
+        after: { area: 'Gulshan Block 13', event: 'area', target: 'unknown_area', removed: 1, added: null },
+      });
+      // A road across phases after a known phase: the phase's fee may be wrong — it comes off too, and the till asks which phase.
+      await area(orderId, 'DHA Phase 8');
+      expect(charges(await area(orderId, 'Khayaban-e-Shahbaz, DHA'))).toEqual([]);
+    });
+
+    it('an area not on the list typed FIRST leaves a charge tapped on by hand alone (the till put none on to take off)', async () => {
+      const orderId = await deliveryOrder();
+      await data('orders:addItem', { orderId, menuItemId: menu.d250, quantity: 1 });
+      expect(charges(await area(orderId, 'Gulshan Block 13'))).toEqual([[menu.d250, 25_000, 1]]);
     });
 
     it('an area switched off in Settings adds nothing (and takes a charge from the last area off)', async () => {
@@ -871,11 +945,14 @@ describe.skipIf(!Sqlite)(
         actor_user_id: 'u_cash',
         action: 'delete',
       });
-      // Nothing puts it back by itself (the screen asks only when the area changes)…
+      // Nothing puts it back by itself: another item, the panel asking about the same area again…
       await data('orders:addItem', { orderId, menuItemId: menu.side, quantity: 1 });
       expect(charges(await snap(orderId))).toEqual([]);
-      // …picking the area again does.
-      expect(charges(await area(orderId, 'DHA Phase 6'))).toEqual([[menu.d200, 20_000, 1]]);
+      expect(charges(await area(orderId, 'DHA Phase 6'))).toEqual([]);
+      // …"Put it back" does.
+      expect(
+        charges(await data<OrderSnapshot>('orders:setDeliveryArea', { orderId, area: 'DHA Phase 6', putBack: true })),
+      ).toEqual([[menu.d200, 20_000, 1]]);
     });
 
     it('foodpanda never gets the shop’s delivery charge: not by the area, not by hand, and a delivery that becomes foodpanda loses it', async () => {
@@ -969,6 +1046,282 @@ describe.skipIf(!Sqlite)(
   },
 );
 
+describe.skipIf(!Sqlite)(
+  'every path that gives a counter delivery its area puts the charge on in the SAME transaction (no screen timer)',
+  () => {
+    const charges = (s: OrderSnapshot) =>
+      s.items
+        .filter((i) => isDeliveryChargeName(i.menuItemName))
+        .map((i) => [i.menuItemId, i.unitPriceCents, i.quantity]);
+    async function deliveryOrder(mode: 'delivery' | 'foodpanda' = 'delivery'): Promise<string> {
+      h.session = CASHIER;
+      const order = await data<{ id: string }>('orders:create', { mode });
+      await data('orders:addItem', { orderId: order.id, menuItemId: menu.pizza, quantity: 1 });
+      return order.id;
+    }
+    let phoneSeq = 0;
+    /** A customer with one address in this area, as the counter saves them at Send or Pay. */
+    async function customerAt(areaText: string | null): Promise<{ customerId: string; addressId: string }> {
+      h.session = CASHIER;
+      phoneSeq += 1;
+      const c = await data<{ id: string }>('customers:create', {
+        name: 'Test Customer',
+        phone: `0300555${String(1000 + phoneSeq)}`,
+      });
+      const a = await data<{ id: string }>('customers:createAddress', {
+        customerId: c.id,
+        label: 'Order',
+        addressLine: `House ${phoneSeq}, Test Lane`,
+        area: areaText,
+      });
+      return { customerId: c.id, addressId: a.id };
+    }
+    /** What Send's and Pay's customer save does (commitCustomerToOrder → customers:attachToOrder). */
+    async function saveCustomer(orderId: string, c: { customerId: string; addressId: string }): Promise<OrderSnapshot> {
+      h.session = CASHIER;
+      return data<OrderSnapshot>('customers:attachToOrder', {
+        orderId,
+        customerId: c.customerId,
+        addressId: c.addressId,
+        deliveryNotes: null,
+      });
+    }
+    const panelArea = (orderId: string, a: string | null) =>
+      data<OrderSnapshot>('orders:setDeliveryArea', { orderId, area: a });
+    const totals = (orderId: string) =>
+      db.prepare(`SELECT status, subtotal_cents, total_cents FROM orders WHERE id = ?`).get(orderId);
+
+    it('area then an immediate Send (the panel never asked): the customer save at Send puts the fee on before the order leaves', async () => {
+      const orderId = await deliveryOrder();
+      const saved = await saveCustomer(orderId, await customerAt('DHA Phase 6'));
+      expect(charges(saved)).toEqual([[menu.d200, 20_000, 1]]);
+      h.session = CASHIER;
+      const sent = await data<OrderSnapshot>('orders:sendToKitchen', { orderId });
+      expect(sent.order.status).toBe('sent_to_kitchen');
+      expect(charges(sent)).toEqual([[menu.d200, 20_000, 1]]);
+      expect(totals(orderId)).toMatchObject({ subtotal_cents: 120_000 });
+      expect(lastAreaAudit(orderId)).toMatchObject({
+        before: { area: null },
+        after: { area: 'DHA Phase 6', event: 'area', target: 'fee', feeCents: 20_000, added: menu.d200, removed: 0 },
+      });
+    });
+
+    it('area then an immediate Pay: Pay’s early save puts the fee on, so the payment takes the bill with it', async () => {
+      const orderId = await deliveryOrder();
+      await saveCustomer(orderId, await customerAt('DHA Phase 8'));
+      const o = totals(orderId)!;
+      expect(o).toMatchObject({ subtotal_cents: 125_000 });
+      h.session = CASHIER;
+      await data('orders:tender', {
+        orderId,
+        payments: [{ method: 'cash', amountCents: Number(o['total_cents']), tenderedCents: Number(o['total_cents']) }],
+      });
+      const paid = await snap(orderId);
+      expect(paid.order.status).not.toBe('open');
+      expect(charges(paid)).toEqual([[menu.d250, 25_000, 1]]);
+    });
+
+    it('ONE transaction: when the charge can’t go on, the customer save is undone with it (nothing half-written)', async () => {
+      const orderId = await deliveryOrder();
+      const c = await customerAt('DHA Phase 6');
+      const before = writtenRows();
+      db.exec(
+        `CREATE TRIGGER test_no_fee BEFORE INSERT ON order_items WHEN NEW.menu_item_id = '${menu.d200}'
+           BEGIN SELECT RAISE(ABORT, 'test: the charge line refused'); END`,
+      );
+      try {
+        h.session = CASHIER;
+        expect(
+          await call('customers:attachToOrder', { orderId, customerId: c.customerId, addressId: c.addressId }),
+        ).toMatchObject({ ok: false });
+      } finally {
+        db.exec(`DROP TRIGGER test_no_fee`);
+      }
+      expect(db.prepare(`SELECT customer_id, delivery_address_snapshot FROM orders WHERE id = ?`).get(orderId)).toEqual({
+        customer_id: null,
+        delivery_address_snapshot: null,
+      });
+      expect(writtenRows()).toEqual(before);
+      expect(lastAreaAudit(orderId)).toBeNull();
+    });
+
+    it('an address change swaps the fee; the same address again never doubles it', async () => {
+      const orderId = await deliveryOrder();
+      expect(charges(await saveCustomer(orderId, await customerAt('DHA Phase 6')))).toEqual([[menu.d200, 20_000, 1]]);
+      const phase8 = await customerAt('DHA Phase 8');
+      expect(charges(await saveCustomer(orderId, phase8))).toEqual([[menu.d250, 25_000, 1]]);
+      expect(charges(await saveCustomer(orderId, phase8))).toEqual([[menu.d250, 25_000, 1]]);
+      expect(totals(orderId)).toMatchObject({ subtotal_cents: 125_000 });
+    });
+
+    it('clear: the area cleared on the panel, or the customer taken off the order, takes the charge off', async () => {
+      const orderId = await deliveryOrder();
+      const c = await customerAt('DHA Phase 6');
+      await saveCustomer(orderId, c);
+      expect(charges(await panelArea(orderId, null))).toEqual([]);
+      // Saved again with the Phase 6 address: the area came back.
+      expect(charges(await saveCustomer(orderId, c))).toEqual([[menu.d200, 20_000, 1]]);
+      h.session = CASHIER;
+      await data('orders:detachCustomer', { orderId });
+      expect(charges(await snap(orderId))).toEqual([]);
+    });
+
+    it('leaving Delivery takes it off; coming back with the address on the order puts it back (no panel ask needed)', async () => {
+      const orderId = await deliveryOrder();
+      await saveCustomer(orderId, await customerAt('DHA Phase 6'));
+      h.session = CASHIER;
+      expect(charges(await data<OrderSnapshot>('orders:setMode', { orderId, mode: 'takeaway' }))).toEqual([]);
+      expect(charges(await data<OrderSnapshot>('orders:setMode', { orderId, mode: 'delivery' }))).toEqual([
+        [menu.d200, 20_000, 1],
+      ]);
+      expect(totals(orderId)).toMatchObject({ subtotal_cents: 120_000 });
+      // The panel's ask for the same area on the way back: nothing more.
+      expect(charges(await panelArea(orderId, 'DHA Phase 6'))).toEqual([[menu.d200, 20_000, 1]]);
+      // A takeaway rung up with the area on the panel, then made a delivery: the recorded area's fee goes on.
+      const other = await deliveryOrder();
+      await data('orders:setMode', { orderId: other, mode: 'takeaway' });
+      await panelArea(other, 'DHA Phase 8');
+      expect(charges(await snap(other))).toEqual([]);
+      expect(charges(await data<OrderSnapshot>('orders:setMode', { orderId: other, mode: 'delivery' }))).toEqual([
+        [menu.d250, 25_000, 1],
+      ]);
+    });
+
+    it('a charge taken off by hand stays off through Pay’s early save, the panel asking again, another item and Send — “Put it back” or ANOTHER area puts one on', async () => {
+      const orderId = await deliveryOrder();
+      const s = await panelArea(orderId, 'DHA Phase 6');
+      const line = s.items.find((i) => i.menuItemId === menu.d200)!;
+      h.session = CASHIER;
+      await data('orders:removeItem', { orderId, orderItemId: line.id });
+      // Pay's early save: the same area on the saved address.
+      const c = await customerAt('DHA Phase 6');
+      expect(charges(await saveCustomer(orderId, c))).toEqual([]);
+      // The row comes back after "Edit order" and asks again, spelt its own way.
+      expect(charges(await panelArea(orderId, 'DHA Phase 6'))).toEqual([]);
+      expect(charges(await panelArea(orderId, '  dha   phase 6 '))).toEqual([]);
+      await data('orders:addItem', { orderId, menuItemId: menu.side, quantity: 1 });
+      expect(charges(await saveCustomer(orderId, c))).toEqual([]);
+      // "Put it back".
+      expect(
+        charges(await data<OrderSnapshot>('orders:setDeliveryArea', { orderId, area: 'DHA Phase 6', putBack: true })),
+      ).toEqual([[menu.d200, 20_000, 1]]);
+      // Off again by hand; another area is a change: its fee goes on.
+      const again = (await snap(orderId)).items.find((i) => i.menuItemId === menu.d200)!;
+      await data('orders:removeItem', { orderId, orderItemId: again.id });
+      expect(charges(await panelArea(orderId, 'DHA Phase 8'))).toEqual([[menu.d250, 25_000, 1]]);
+      // Sent with it, and nothing changed at Send.
+      h.session = CASHIER;
+      expect(charges(await data<OrderSnapshot>('orders:sendToKitchen', { orderId }))).toEqual([[menu.d250, 25_000, 1]]);
+    });
+
+    it('a website order: the import’s own customer save adds nothing, whatever its area; the till’s area paths never touch it', async () => {
+      const orderId = await importWebOrder({
+        ...webOrder('web-area-8', [
+          [menu.pizza, 1, 100_000],
+          [menu.d200, 1, 20_000],
+        ]),
+        area: 'DHA Phase 8',
+      });
+      expect(charges(await snap(orderId))).toEqual([[menu.d200, 20_000, 1]]);
+      expect(lastAreaAudit(orderId)).toBeNull();
+      h.session = CASHIER;
+      expect(charges(await panelArea(orderId, 'DHA Phase 6'))).toEqual([[menu.d200, 20_000, 1]]);
+    });
+
+    it('foodpanda: an address in an area adds nothing (foodpanda delivers it)', async () => {
+      const orderId = await deliveryOrder('foodpanda');
+      expect(charges(await saveCustomer(orderId, await customerAt('DHA Phase 6')))).toEqual([]);
+      expect(charges(await panelArea(orderId, 'DHA Phase 8'))).toEqual([]);
+    });
+
+    it('a paused area adds none and says so; changing to it takes the last area’s charge off', async () => {
+      await save(zones((z) => (z.id === 'dha-8' ? { ...z, active: false } : z)));
+      const orderId = await deliveryOrder();
+      expect(charges(await saveCustomer(orderId, await customerAt('DHA Phase 6')))).toEqual([[menu.d200, 20_000, 1]]);
+      expect(charges(await saveCustomer(orderId, await customerAt('DHA Phase 8')))).toEqual([]);
+      expect(lastAreaAudit(orderId)).toMatchObject({ after: { area: 'DHA Phase 8', target: 'paused', removed: 1 } });
+    });
+
+    it('an unknown area on the saved address, after a known one, takes the old fee off', async () => {
+      const orderId = await deliveryOrder();
+      await saveCustomer(orderId, await customerAt('DHA Phase 6'));
+      expect(charges(await saveCustomer(orderId, await customerAt('Gulshan-e-Iqbal Block 13')))).toEqual([]);
+    });
+  },
+);
+
+describe.skipIf(!Sqlite)('Save and the import: the guarantees nothing else checked', () => {
+  it('two tills with no delivery charges make the SAME “Delivery Charges” category (a name-based id), so the link settles one row', async () => {
+    const { saveDeliveryZones, deliveryChargesCategoryId } = await import('../../db/repositories/delivery-zones-repo.js');
+    /** A till whose menu has food only: no charge items, no "Delivery Charges" category. */
+    const foodOnly = async () => {
+      const d = openMigrated();
+      await seedTill(d);
+      d.exec(`UPDATE menu_items SET deleted_at = '${T0}' WHERE name LIKE 'Delivery Charge%'`);
+      d.exec(`UPDATE categories SET deleted_at = '${T0}' WHERE name = 'Delivery Charges'`);
+      return d;
+    };
+    const categoryOfFees = (d: Db) =>
+      d
+        .prepare(
+          `SELECT DISTINCT category_id FROM menu_items WHERE deleted_at IS NULL AND name LIKE 'Delivery Charge%'`,
+        )
+        .all()
+        .map((r) => r['category_id']);
+    const a = await foodOnly();
+    const b = await foodOnly();
+    saveDeliveryZones(a as never, { useDefault: true }, OWNER_ACTOR);
+    saveDeliveryZones(b as never, { useDefault: true }, { userId: 'u_admin', deviceId: 'dev-till-2' });
+    expect(categoryOfFees(a)).toEqual([deliveryChargesCategoryId()]);
+    expect(categoryOfFees(b)).toEqual([deliveryChargesCategoryId()]);
+    expect(deliveryChargesCategoryId()).toBe(uuidv5('category:delivery-charges', COC_ID_NAMESPACE));
+  });
+
+  it('a Save that fails halfway leaves nothing: the fee item it made before the failure is gone too (ONE transaction)', async () => {
+    const before = writtenRows();
+    // The last write of a Save is the setting's row: make it fail after the Rs 300 item was made.
+    db.exec(
+      `CREATE TRIGGER test_no_setting BEFORE INSERT ON business_settings
+         BEGIN SELECT RAISE(ABORT, 'test: the setting row refused'); END`,
+    );
+    try {
+      expect((await save(zones((z) => (z.id === 'dha-8' ? { ...z, feeCents: 30_000 } : z)))).ok).toBe(false);
+    } finally {
+      db.exec(`DROP TRIGGER test_no_setting`);
+    }
+    expect(itemRow(fee300())).toBeUndefined();
+    expect(itemRow(menu.d250)).toMatchObject({ is_active: 1, name: 'Delivery Charge (Rs 250)' });
+    expect(writtenRows()).toEqual(before);
+  });
+
+  it('a fee item an older till renamed is still the areas’ (known by its id): a file line with its new name never re-prices it', async () => {
+    await save(zones());
+    // An older till (no Menu lock) renamed the Rs 200 item; the areas still point at it.
+    db.prepare(`UPDATE menu_items SET name = 'Rider fee' WHERE id = ?`).run(menu.d200);
+    const { planMenuImportFromDb } = await import('../../db/repositories/menu-import-repo.js');
+    const { FEE_SET_IN_SETTINGS } = await import('../../db/menu-import-plan.js');
+    const file = menuImportFileSchema.parse({
+      format: 'cheeseoclock-menu-import',
+      version: 1,
+      source: 'test',
+      categories: [{ name: 'Test food' }, { name: 'Delivery Charges' }],
+      ingredients: [],
+      items: [
+        { name: 'Test Pizza', category: 'Test food', priceCents: 100_000, recipe: [] },
+        { name: 'Rider fee', category: 'Delivery Charges', priceCents: 26_000, recipe: [] },
+      ],
+    });
+    const plan = planMenuImportFromDb(db as never, file);
+    expect(plan.preview.items.find((i) => i.name === 'Rider fee')).toMatchObject({
+      action: 'same',
+      keptOnTill: [FEE_SET_IN_SETTINGS],
+    });
+    // A fresh start keeps it too.
+    const fresh = planMenuImportFromDb(db as never, file, { fresh: true });
+    expect(fresh.preview.fresh?.items).not.toContain('Rider fee');
+  });
+});
+
 describe('the till reads the areas from the setting, never the compiled list', () => {
   it('no screen or main-process file calls the compiled list’s helpers (a new call site must take the zones)', () => {
     const APP = join(HERE, '..', '..', '..');
@@ -1006,6 +1359,22 @@ describe('the till reads the areas from the setting, never the compiled list', (
 });
 
 // ---------------------------------------------------------------------------
+
+/** The order's last "delivery area" audit row (what the charge follows), parsed. */
+function lastAreaAudit(orderId: string): { actor_user_id: unknown; before: unknown; after: unknown } | null {
+  const r = db
+    .prepare(
+      `SELECT actor_user_id, before_json, after_json FROM audit_log
+        WHERE entity_type = 'orders' AND entity_id = ? AND action = 'delivery_area' ORDER BY rowid DESC LIMIT 1`,
+    )
+    .get(orderId);
+  if (!r) return null;
+  return {
+    actor_user_id: r['actor_user_id'],
+    before: r['before_json'] ? JSON.parse(String(r['before_json'])) : null,
+    after: r['after_json'] ? JSON.parse(String(r['after_json'])) : null,
+  };
+}
 
 async function snap(orderId: string): Promise<OrderSnapshot> {
   return (await import('../../db/repositories/order-repo.js')).getOrderSnapshot(

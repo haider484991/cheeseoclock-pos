@@ -26,7 +26,8 @@ import {
   deliveryAreas,
   deliveryChargeTarget,
   discountBaseCents,
-  planDeliveryChargeLines,
+  planDeliveryChargeOnAreaChange,
+  type DeliveryChargeTarget,
   discountRuleAlsoOffDeliveryCharge,
   storedDiscountAlsoOffDeliveryCharge,
   foodpandaDealRule,
@@ -1051,9 +1052,15 @@ export function setOrderMode(
     if (applyOfferStep(db, orderId, actor)) discountChanged = true;
     if (discountChanged) recomputeOrderTotals(db, orderId, actor);
     // Only a delivery pays the delivery charge: leaving Delivery takes its line off here, in the
-    // main process, whoever asks (the till's screen used to do it on its own).
-    const chargesRemoved = mode !== 'delivery' ? removeDeliveryChargeLines(db, orderId, actor) : 0;
-    result = discountChanged || chargesRemoved > 0 ? (findOrder(db, orderId) ?? updated) : updated;
+    // main process, whoever asks (the till's screen used to do it on its own); becoming a delivery
+    // puts on the charge of the area the order already has (deliveryChargeForArea, 'mode').
+    let chargesChanged = false;
+    if (mode !== 'delivery') chargesChanged = removeDeliveryChargeLines(db, orderId, actor) > 0;
+    else if (order.mode !== 'delivery') {
+      const r = deliveryChargeForArea(db, orderId, null, 'mode', actor);
+      chargesChanged = r.added !== null || r.removed > 0;
+    }
+    result = discountChanged || chargesChanged ? (findOrder(db, orderId) ?? updated) : updated;
   });
   tx();
   return result;
@@ -1091,48 +1098,162 @@ function removeDeliveryChargeLines(db: AppDatabase, orderId: string, actor: Acto
 }
 
 /**
+ * The audit action recording the area an order's delivery charge follows
+ * (deliveryChargeForArea): before/after { area }, and what the till did.
+ * It is the till's memory of the area it last brought the charge to, so a
+ * save that does not CHANGE the area never puts back a charge taken off by
+ * hand.
+ */
+export const DELIVERY_AREA_ACTION = 'delivery_area';
+
+/** What brought the till to the delivery charge (deliveryChargeForArea). */
+export type DeliveryAreaEvent =
+  /** The area was set or changed: the customer panel, an address saved on the order, the customer taken off. */
+  | 'area'
+  /** The order became a delivery (setOrderMode): the area it has decides the charge again. */
+  | 'mode'
+  /** "Put it back" on the till's delivery-charge row: the area's charge, whatever was taken off by hand. */
+  | 'put_back';
+
+/** The area as recorded: trimmed, inner spaces collapsed, at most 200 characters; null for none. */
+function cleanArea(area: string | null | undefined): string | null {
+  const a = (area ?? '').trim().replace(/\s+/g, ' ').slice(0, 200);
+  return a || null;
+}
+
+/** The area as the till compares it: cleaned, any case ('' = none). */
+function areaKey(area: string | null | undefined): string {
+  return (cleanArea(area) ?? '').toLowerCase();
+}
+
+/** The area the order's charge last followed (its last DELIVERY_AREA_ACTION row), or null when it never had one. */
+function recordedDeliveryArea(db: AppDatabase, orderId: string): { area: string | null } | null {
+  const row = db
+    .prepare(
+      `SELECT after_json FROM audit_log
+        WHERE entity_type = 'orders' AND entity_id = ? AND action = ?
+        ORDER BY rowid DESC LIMIT 1`,
+    )
+    .get(orderId, DELIVERY_AREA_ACTION) as { after_json: string | null } | undefined;
+  if (!row) return null;
+  try {
+    const after = JSON.parse(row.after_json ?? 'null') as { area?: unknown } | null;
+    return { area: typeof after?.area === 'string' ? after.area : null };
+  } catch {
+    return { area: null };
+  }
+}
+
+/** The area of the address saved on the order (delivery_address_snapshot), or null. */
+function snapshotArea(db: AppDatabase, orderId: string): string | null {
+  const row = db.prepare(`SELECT delivery_address_snapshot AS a FROM orders WHERE id = ?`).get(orderId) as
+    | { a: string | null }
+    | undefined;
+  if (!row?.a) return null;
+  try {
+    const a = JSON.parse(row.a) as { area?: unknown };
+    return typeof a.area === 'string' ? cleanArea(a.area) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The owner's rule of 28 Sep 2026 — "if delivery area selected the delivery
- * fee should be automatically added" — in the main process, so every path
- * agrees. On an OPEN counter order:
- *  - a delivery with an area the shop delivers to: that area's fee item
- *    (Settings → Delivery areas: its feeItemId, else today's by name and
- *    price) goes on; a charge at another fee is swapped for it; one already
- *    there at the right fee is never doubled;
- *  - the area cleared, a free area, an area whose delivery is switched off,
- *    or not a delivery: every charge line comes off;
- *  - an area the till can't pin to one fee (a road across phases before the
- *    phase is picked, an address it does not know): nothing changes.
- * Only when the area changes (the customer panel calls it): a cashier who
- * takes the charge off by hand — any login that may change an open order,
- * the removal audited like any line — keeps it off until the area changes
- * again. Never a website order (it arrives with the fee the customer paid)
- * or a foodpanda one (foodpanda delivers it). One transaction.
+ * fee should be automatically added" — in the main process, INSIDE the
+ * caller's transaction, for every path that gives a counter order its area:
+ * the customer panel (orders:setDeliveryArea), an address saved on the
+ * order (snapshotCustomerOntoOrder: Send's and Pay's customer save, an
+ * address change), the customer taken off (detachCustomerFromOrder), and
+ * the order becoming a delivery (setOrderMode). On an OPEN counter delivery:
+ *  - an area the shop delivers to: its fee item (Settings → Delivery areas:
+ *    its feeItemId, else today's by name and price) goes on; a charge at
+ *    another fee is swapped for it; one at the right fee is never doubled;
+ *  - the area cleared, a free area, an area switched off: the charge comes off;
+ *  - an area the till can't pin to one fee (not on the list, a road across
+ *    phases): after an area it charged, that charge comes off (changing the
+ *    area swaps it); otherwise the bill is left as it is.
+ * Only on an area CHANGE ('area': compared with the area recorded last, in
+ * DELIVERY_AREA_ACTION), the order becoming a delivery ('mode') or "Put it
+ * back" ('put_back'): a charge the cashier took off by hand — the removal
+ * audited like any line — stays off through saves that do not change the
+ * area (Pay's early save, Send, the panel asking again). A takeaway only
+ * records the area (its charge goes on if it becomes a delivery). Never a
+ * website order (it arrives with the fee the customer paid) or a foodpanda
+ * one (foodpanda delivers it). Each line change is synced and audited
+ * (addOrderItem / removeOrderItem), and the event is audited on the order.
+ * `area` for 'mode' is ignored: the recorded area, else the saved address's.
+ */
+export function deliveryChargeForArea(
+  db: AppDatabase,
+  orderId: string,
+  area: string | null,
+  event: DeliveryAreaEvent,
+  actor: Actor,
+): { added: string | null; removed: number } {
+  const none = { added: null, removed: 0 };
+  const order = findOrder(db, orderId);
+  // Only the till's own order that is still being built: a website order carries its own fee.
+  if (!order || order.status !== 'open' || order.source !== 'pos' || !actor.userId) return none;
+  const who = { ...actor, userId: actor.userId };
+  const recorded = recordedDeliveryArea(db, orderId);
+  const was = recorded ? recorded.area : null;
+  const now = event === 'mode' ? (recorded ? recorded.area : snapshotArea(db, orderId)) : cleanArea(area);
+  // Not a change: nothing (a charge taken off by hand stays off).
+  if (event === 'area' && areaKey(was) === areaKey(now)) return none;
+  if (event !== 'area' && order.mode !== 'delivery') return none;
+
+  let out: { added: string | null; removed: number } = none;
+  let target: DeliveryChargeTarget | null = null;
+  if (order.mode === 'delivery') {
+    const items = (
+      db
+        .prepare(`SELECT id, name, base_price_cents FROM menu_items WHERE deleted_at IS NULL AND is_active = 1`)
+        .all() as Array<{ id: string; name: string; base_price_cents: number }>
+    ).map((i) => ({ id: i.id, name: i.name, basePriceCents: i.base_price_cents }));
+    const areas = deliveryAreas(readDeliveryZones(db));
+    target = deliveryChargeTarget(areas, order.mode, now, items);
+    const previous = event === 'area' && was ? deliveryChargeTarget(areas, 'delivery', was, items) : null;
+    const plan = planDeliveryChargeOnAreaChange(previous, target, deliveryChargeLinesOf(db, orderId));
+    for (const id of plan.remove) removeOrderItem(db, orderId, id, who);
+    if (plan.add) addOrderItem(db, { orderId, menuItemId: plan.add, quantity: 1, modifierIds: [] }, who);
+    out = { added: plan.add, removed: plan.remove.length };
+  }
+  writeAudit(db, {
+    entityType: 'orders',
+    entityId: orderId,
+    action: DELIVERY_AREA_ACTION,
+    actorUserId: actor.userId,
+    before: { area: was },
+    after: {
+      area: now,
+      event,
+      mode: order.mode,
+      target: target ? (target.kind === 'fee' ? 'fee' : target.reason) : null,
+      feeCents: target?.kind === 'fee' ? target.feeCents : null,
+      added: out.added,
+      removed: out.removed,
+    },
+  });
+  return out;
+}
+
+/**
+ * orders:setDeliveryArea — the customer panel's area, or its "Put it back",
+ * on an open counter order, in one transaction (deliveryChargeForArea).
  */
 export function syncOrderDeliveryCharge(
   db: AppDatabase,
   orderId: string,
   area: string | null,
   actor: Actor & { userId: string },
+  opts: { putBack?: boolean } = {},
 ): { added: boolean; removed: number } {
   let out = { added: false, removed: 0 };
   const tx = db.transaction(() => {
-    const order = findOrder(db, orderId);
-    if (!order) throw new Error('Order not found');
-    // Only the till's own order that is still being built: a website order carries its own fee.
-    if (order.status !== 'open' || order.source !== 'pos') return;
-    const items = db
-      .prepare(`SELECT id, name, base_price_cents FROM menu_items WHERE deleted_at IS NULL AND is_active = 1`)
-      .all() as Array<{ id: string; name: string; base_price_cents: number }>;
-    const target = deliveryChargeTarget(
-      deliveryAreas(readDeliveryZones(db)),
-      order.mode,
-      area,
-      items.map((i) => ({ id: i.id, name: i.name, basePriceCents: i.base_price_cents })),
-    );
-    const plan = planDeliveryChargeLines(target, deliveryChargeLinesOf(db, orderId));
-    for (const id of plan.remove) removeOrderItem(db, orderId, id, actor);
-    if (plan.add) addOrderItem(db, { orderId, menuItemId: plan.add, quantity: 1, modifierIds: [] }, actor);
-    out = { added: plan.add !== null, removed: plan.remove.length };
+    if (!findOrder(db, orderId)) throw new Error('Order not found');
+    const r = deliveryChargeForArea(db, orderId, area, opts.putBack ? 'put_back' : 'area', actor);
+    out = { added: r.added !== null, removed: r.removed };
   });
   tx();
   return out;

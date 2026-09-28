@@ -20,7 +20,7 @@ type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
  *  - "Publish menu" pushes the current menu to the site
  *  - live status: last poll, imported count, errors, and whether the
  *    website has the owner's delivery areas and pick-up offer (the settings
- *    block of the menu publish)
+ *    block: sent alone after a Save, and with every menu publish)
  *  - "Publish the menu to the website by itself" ('online.options', off by
  *    default: the owner has not asked for it)
  * Cloud backups reuse this connection but are managed under Backups.
@@ -134,8 +134,9 @@ function ConnectionCard() {
         kitchen ticket, and customers can follow their delivery live. Publish
         the menu whenever you change items or prices (or let it go by itself,
         below). Delivery areas and the pick-up offer reach the website by
-        themselves when they are saved. The same connection carries the online
-        backup copies.
+        themselves when they are saved — only the areas and their delivery
+        charge items, never menu changes you have not published. The same
+        connection carries the online backup copies.
       </p>
 
       {cfgQ.data?.secretUnreadable && (

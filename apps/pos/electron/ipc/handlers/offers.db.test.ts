@@ -1017,6 +1017,24 @@ describe.skipIf(!Sqlite)('the automatic delivery charge and the offers', () => {
     expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 270_000, discount_cents: 25_000 });
   });
 
+  it('Send’s or Pay’s customer save puts the area’s charge on (no panel ask) and the offer stays 10% of the FOOD, its minimum on the food', async () => {
+    await saveOffers([offer(), offer({ id: 'test-min', name: 'Test min 10%', cameBy: 'any', minOrderCents: 210_000 })]);
+    const orderId = await deliveryWithoutCharge();
+    const r = await repos();
+    const actor = { userId: CASHIER.id, deviceId: DEV };
+    const c = r.createCustomer(db as never, { name: 'Test Customer', phone: PHONE_A }, actor);
+    const a = r.createAddress(db as never, { customerId: c.id, label: 'Home', addressLine: 'House 1, Test Street', area: 'DHA Phase 6' }, actor);
+    h.session = CASHIER;
+    const s = await data<OrderSnapshot>('customers:attachToOrder', { orderId, customerId: c.id, addressId: a.id, deliveryNotes: null });
+    expect(chargeLines(s)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+    // Rs 2,200 on the bill: the WhatsApp 10% is Rs 200 (of the Rs 2,000 of food), never Rs 220; the
+    // Rs 2,100 minimum is not reached by the charge.
+    expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 220_000, discount_cents: 20_000, tax_cents: 32_000, total_cents: 232_000 });
+    expect(liveDiscounts(orderId)).toHaveLength(1);
+    await pay(orderId);
+    expect(fbrLines(await snap(orderId))['Delivery Charge (Rs 200)']).toMatchObject({ net: 200, tax: 32, discount: 0 });
+  });
+
   it('a delivery-only offer and the charge both leave with Delivery (takeaway), and both come back with it', async () => {
     await saveOffers([offer({ id: 'test-del', name: 'Test delivery 10%', cameBy: 'any' })]);
     const orderId = await deliveryWithoutCharge(null);

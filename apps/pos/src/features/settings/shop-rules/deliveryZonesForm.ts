@@ -173,7 +173,15 @@ export function zonesExample(
 }
 
 export const ZONES_SAVE_NOTE =
-  'Save also makes the “Delivery Charge (Rs …)” items the fees need (Menu shows them locked) and sends the menu to the website with the areas — menu changes not published yet go with it. An area is switched off, never removed: its website page stays and says delivery is paused.';
+  'Save also makes the “Delivery Charge (Rs …)” items the fees need (Menu shows them locked) and sends the website the areas and those charge items only. Menu changes you have not published stay on the till until you press Publish. An area is switched off, never removed: its website page stays and says delivery is paused.';
+
+/** The message after the areas are saved. */
+export const ZONES_SAVED_TOAST =
+  'On both tills once they are linked. The website gets the areas and their charge items by itself — not the rest of the menu.';
+
+/** Money & discounts → Website pick-up: the card's introduction. */
+export const PICKUP_INTRO =
+  'Whether website customers may collect their order from the counter, and the % off they get for it. It reaches the website by itself when saved (the menu is not sent with it); pick-up still needs the shop to be taking orders.';
 
 // --------------------------------------------------------------- pick-up --
 

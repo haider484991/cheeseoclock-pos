@@ -1,4 +1,5 @@
-import type { PublishedMenu, PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
+import type { PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
+import type { PublicMenu } from './public-menu';
 import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
 import { formatCents } from './format';
@@ -166,7 +167,7 @@ export function parseSavedLines(value: unknown): SavedLine[] {
  * never restored: the server adds the fee from the area.
  */
 export function restoreLines(
-  menu: PublishedMenu,
+  menu: PublicMenu,
   saved: readonly SavedLine[],
 ): { lines: CartLine[]; dropped: number } {
   const items = new Map<string, PublishedMenuItem>();
@@ -199,7 +200,7 @@ export function restoreLines(
 }
 
 /** A short "2 × Big Two, Fajita Pizza · Large 12" +1 more" for a saved order. */
-export function linesSummary(menu: PublishedMenu, saved: readonly SavedLine[], max = 2): string {
+export function linesSummary(menu: PublicMenu, saved: readonly SavedLine[], max = 2): string {
   const { lines } = restoreLines(menu, saved);
   const parts = lines.slice(0, max).map((l) => (l.quantity > 1 ? `${l.quantity} × ${l.label}` : l.label));
   const more = lines.length - max;

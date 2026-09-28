@@ -6,8 +6,7 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import {
   FEE_ITEM_LOCKED_NOTE,
-  deliveryZoneFeeItemIds,
-  isDeliveryChargeMenuItem,
+  chargedFeeItemIds,
   type Category,
 } from '@cheeseoclock/shared-types';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
@@ -35,11 +34,13 @@ export function CategoriesTab() {
     }
     return counts;
   }, [itemsQ.data]);
-  // The categories holding a delivery charge that is on: Settings → Delivery areas' — never hidden here.
+  // The categories holding a delivery charge that is on and that an area that is on charges:
+  // Settings → Delivery areas' — never hidden here (the main process refuses it too).
   const areas = useDeliveryAreas();
   const feeCategories = useMemo(() => {
-    const ids = deliveryZoneFeeItemIds(areas.zones);
-    return new Set((itemsQ.data ?? []).filter((i) => i.isActive && isDeliveryChargeMenuItem(i, ids)).map((i) => i.categoryId));
+    const items = itemsQ.data ?? [];
+    const charged = chargedFeeItemIds(areas.zones, items);
+    return new Set(items.filter((i) => i.isActive && charged.has(i.id)).map((i) => i.categoryId));
   }, [itemsQ.data, areas]);
   // The till shows categories in display order; so does this list.
   const categories = useMemo(

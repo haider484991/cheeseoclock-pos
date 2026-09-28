@@ -551,6 +551,34 @@ describe('POST /api/orders with the settings block', () => {
     expect(row.notes).toBeNull();
   });
 
+  it('charges the area’s OWN fee item even when another item has the same name and price (never the first look-alike)', async () => {
+    const lookAlike = item('fee-250-old', 'Delivery Charge (Rs 250)', 250);
+    const own = item('fee-250-own', 'Delivery Charge (Rs 250)', 250);
+    const m = menu([RS200, lookAlike, own]);
+    await publish(
+      m,
+      tillBlock(m, {
+        edit: (zs) => {
+          for (const z of zs) if (z.feeCents === 25_000) z.feeItemId = 'fee-250-own';
+        },
+      }),
+    );
+    const r = await place({ zoneId: 'dha-8' });
+    expect(r.status).toBe(200);
+    expect((await storedOrder(r.json.data!.orderId)).items.at(-1)).toMatchObject({ posItemId: 'fee-250-own', unitPriceCents: 25_000 });
+  });
+
+  it('never sells an area’s fee item as food — even one an older till renamed, known only by its id', async () => {
+    const m = menu([RS200, RS250, RS300]);
+    await publish(m, tillBlock(m, { edit: phase8At300 }));
+    // An older till (no block, no Menu lock) publishes with the Rs 300 item renamed: the website keeps the block.
+    const renamed = menu([RS200, RS250, { ...RS300, name: 'Rider fee' }]);
+    expect((await publish(renamed)).json.data).toMatchObject({ settings: 'kept' });
+    const r = await place({ zoneId: 'dha-6', items: [{ posItemId: 'fee-300', quantity: 1, modifierIds: [] }] });
+    expect(r.status).toBe(409);
+    expect(r.json.error).toBe('not_deliverable');
+  });
+
   it('never sells a fee item as food', async () => {
     const m = menu([RS200, RS250, RS300]);
     await publish(m, tillBlock(m, { edit: phase8At300 }));
@@ -589,5 +617,56 @@ describe('pick-up from the block', () => {
     const m = menu([RS200, RS250]);
     await publish(m, tillBlock(m, { pickup: { offered: true, percent: 10 } }));
     expect((await status()).pickupAvailable).toBe(false);
+  });
+});
+
+/** The props of the first element in `node` whose props carry `key` (a server page's element tree). */
+function propsWith(node: unknown, key: string): Record<string, unknown> | null {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const found = propsWith(n, key);
+      if (found) return found;
+    }
+    return null;
+  }
+  const props = (node as { props?: Record<string, unknown> }).props;
+  if (!props) return null;
+  if (key in props) return props;
+  return propsWith(props['children'], key);
+}
+
+describe('the public menu shows the areas and pick-up, never the till’s device id or the block’s stamps', () => {
+  it('GET /api/menu and the /menu page’s props: no deviceId, settingsAt, settingsRev or settingsTie — the ordering app still knows the fee items', async () => {
+    const m = menu([RS200, RS250, RS300]);
+    const block = tillBlock(m, { edit: phase8At300, rev: 3, device: 'test-till-device-7' });
+    await publish(m, block);
+
+    const menuApi = await import('@/app/api/menu/route');
+    const body = (await (await menuApi.GET()).json()) as { data: PublishedMenu & { settings?: Record<string, unknown> } };
+    expect(JSON.stringify(body)).not.toMatch(/test-till-device-7|deviceId|settingsAt|settingsRev|settingsTie/);
+    expect(body.data.settings).toEqual({ v: block.v, pickup: block.pickup, zones: block.zones });
+    expect(body.data.categories).toEqual(m.categories);
+
+    // The page is JSX compiled for React in scope (as Next does it): give the test the same.
+    (globalThis as { React?: unknown }).React = await import('react');
+    const page = await import('@/app/menu/page');
+    const props = propsWith(await page.default(), 'deliveryFacts');
+    expect(props).not.toBeNull();
+    const pageMenu = props!['menu'] as PublishedMenu & { settings?: Record<string, unknown> };
+    expect(JSON.stringify(pageMenu)).not.toMatch(/test-till-device-7|deviceId|settingsAt|settingsRev|settingsTie/);
+    expect(pageMenu.settings?.['zones']).toEqual(block.zones);
+    // The page's facts still come from the whole block (Phase 8 at Rs 300).
+    const facts = props!['deliveryFacts'] as { source: string; zones: Array<{ id: string; feeCents: number }> };
+    expect(facts.source).toBe('settings');
+    expect(facts.zones.find((z) => z.id === 'dha-8')?.feeCents).toBe(30_000);
+  });
+
+  it('with no block the public menu is exactly as before (no settings key)', async () => {
+    const m = menu([RS200, RS250]);
+    await publish(m);
+    const menuApi = await import('@/app/api/menu/route');
+    const body = (await (await menuApi.GET()).json()) as { data: PublishedMenu };
+    expect(body.data).toEqual(m);
   });
 });

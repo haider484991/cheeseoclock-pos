@@ -1,12 +1,16 @@
 import { sql } from '@/lib/db';
-import { menuWithoutDrinkBrand } from '@/lib/menu-view';
+import { publicMenu } from '@/lib/public-menu';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
 
-/** Public: the currently-published menu (or 404 until the POS publishes). */
+/**
+ * Public: the currently-published menu (or 404 until the POS publishes) —
+ * without the drink brand, and with the settings block's areas and pick-up
+ * only (never the sending till's device id or the block's stamps).
+ */
 export async function GET(): Promise<Response> {
   try {
     const rows = (await sql()`
@@ -20,7 +24,7 @@ export async function GET(): Promise<Response> {
       );
     }
     return Response.json(
-      { ok: true, data: menuWithoutDrinkBrand(row.menu_json) },
+      { ok: true, data: publicMenu(row.menu_json) },
       // Cache at the CDN for 60s — menu changes are infrequent and the POS
       // republish simply overwrites; a stale minute is fine.
       { headers: { 'Cache-Control': 's-maxage=60, stale-while-revalidate=300' } },

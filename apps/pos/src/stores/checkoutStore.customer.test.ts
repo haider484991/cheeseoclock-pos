@@ -24,12 +24,7 @@ vi.mock('../ipc/client', () => {
   const snap = { order: { id: 'o1', status: 'open', mode: 'delivery', source: 'pos', tableId: null }, items: [], discounts: [] };
   return {
     ipc: {
-      orders: {
-        setNote: record('orders.setNote'),
-        get: record('orders.get', () => snap),
-        // Settings step 3: Pay puts the typed area's delivery charge on first too (the main process decides).
-        setDeliveryArea: record('orders.setDeliveryArea', () => snap),
-      },
+      orders: { setNote: record('orders.setNote'), get: record('orders.get', () => snap) },
       customers: {
         get: record('customers.get', (id) => ({ id, name: 'Test Customer', addresses: [] })),
         findByPhone: record('customers.findByPhone', () => null),
@@ -44,7 +39,6 @@ vi.mock('../ipc/client', () => {
 import { useCheckoutStore } from './checkoutStore';
 import { getCustomerFormSnapshot, resetCustomerForm, setCustomerForm } from '../features/checkout/useCustomerForm';
 import { makeEmptyCustomerForm } from '../features/checkout/CustomerInlinePanel';
-import { forgetDeliveryChargeAsked } from '../features/checkout/deliveryChargeAsk';
 
 const made = (name: string) => calls.list.filter(([n]) => n === name).map(([, input]) => input);
 const openOrder = (mode: 'delivery' | 'takeaway') =>
@@ -55,7 +49,6 @@ afterEach(async () => {
   useCheckoutStore.getState().reset();
   await Promise.resolve();
   resetCustomerForm();
-  forgetDeliveryChargeAsked();
 });
 
 describe('Pay saves the customer first; a second save reuses what the first made', () => {

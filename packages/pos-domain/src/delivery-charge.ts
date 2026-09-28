@@ -10,8 +10,9 @@
  *  - deliveryChargeTarget / planDeliveryChargeLines: the owner's rule of
  *    28 Sep 2026 — "if delivery area selected the delivery fee should be
  *    automatically added". Picking an area on a delivery order puts its
- *    fee's item on the bill; another area swaps it; clearing the area or
- *    leaving Delivery takes it off. Never twice, never on foodpanda.
+ *    fee's item on the bill; another area swaps it (one the till can't pin
+ *    to a fee takes the old charge off); clearing the area or leaving
+ *    Delivery takes it off. Never twice, never on foodpanda.
  *  - buildSettingsBlock: the stamped settings block that travels with the
  *    menu to the website (shared-types web-bridge.ts, THE SETTINGS BLOCK).
  */
@@ -229,9 +230,9 @@ export type DeliveryChargeReason =
   | 'free'
   /** Delivery to that area is switched off in Settings → Delivery areas. */
   | 'paused'
-  /** The text does not name an area the shop knows: lines left as they are. */
+  /** The text does not name an area the shop knows: lines left as they are (after an area the till charged, that charge comes off: planDeliveryChargeOnAreaChange). */
   | 'unknown_area'
-  /** A place across areas of different fees ("which phase?"): lines left as they are. */
+  /** A place across areas of different fees ("which phase?"): lines left as they are (after an area the till charged, that charge comes off). */
   | 'which';
 
 export type DeliveryChargeTarget =
@@ -311,6 +312,26 @@ export function planDeliveryChargeLines(
   return { remove, add: right.length === 0 ? target.itemId : null };
 }
 
+/**
+ * The change an AREA CHANGE brings (the owner's rule: changing the area
+ * swaps the charge). As planDeliveryChargeLines, except that a new area the
+ * till can't pin to one fee ('leave': not on the list, or a road across
+ * phases) after an area the till charged a fee for takes that charge off —
+ * it was the old area's, and nothing says it is this one's. After no area,
+ * or one the till charged nothing for, a charge tapped on by hand is left
+ * alone. `previous` = the target of the area before (null = none yet).
+ */
+export function planDeliveryChargeOnAreaChange(
+  previous: DeliveryChargeTarget | null,
+  target: DeliveryChargeTarget,
+  lines: readonly ChargeLine[],
+): { remove: string[]; add: string | null } {
+  if (target.kind === 'leave') {
+    return previous?.kind === 'fee' ? { remove: lines.map((l) => l.id), add: null } : { remove: [], add: null };
+  }
+  return planDeliveryChargeLines(target, lines);
+}
+
 /** The line under the area on the till: what the bill carries for it, in words. */
 export function deliveryChargeWords(target: DeliveryChargeTarget): string | null {
   switch (target.kind) {
@@ -324,7 +345,9 @@ export function deliveryChargeWords(target: DeliveryChargeTarget): string | null
       if (target.reason === 'free') return `Delivery to ${target.zoneName ?? 'this area'} is free`;
       return null;
     case 'leave':
-      if (target.reason !== 'which') return null;
+      if (target.reason === 'unknown_area') {
+        return 'Not one of the delivery areas (Settings → Delivery areas): the till adds no delivery charge, and takes off the one it added for the area before. Add one by hand if you deliver there.';
+      }
       return target.pausedName
         ? `Pick the phase or block to add the delivery charge — delivery to ${target.pausedName} is switched off in Settings → Delivery areas`
         : 'Pick the phase or block to add the delivery charge';

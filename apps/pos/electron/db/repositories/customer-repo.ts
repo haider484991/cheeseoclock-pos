@@ -3,7 +3,7 @@ import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
-import { findOrder, refreshOrderOffer } from './order-repo.js';
+import { deliveryChargeForArea, findOrder, refreshOrderOffer } from './order-repo.js';
 import { deliveryAreas, normalizePhone, phoneSearchTerms } from '@cheeseoclock/pos-domain';
 import { readDeliveryZones } from '../business-settings-read.js';
 import type {
@@ -765,6 +765,8 @@ export function snapshotCustomerOntoOrder(
   const customer = findCustomer(db, input.customerId);
   if (!customer) throw new Error('Customer not found');
   let addressSnap: string | null = null;
+  /** The saved address's area (undefined = no address saved on the order by this call). */
+  let addressArea: string | null | undefined;
   if (input.addressId) {
     const addr = db
       .prepare(`SELECT ${ADDR_SELECT} FROM customer_addresses WHERE id = ?`)
@@ -777,6 +779,7 @@ export function snapshotCustomerOntoOrder(
         city: addr.city,
         notes: addr.notes,
       });
+      addressArea = addr.area ?? null;
     }
   }
   const tx = db.transaction(() => {
@@ -815,6 +818,11 @@ export function snapshotCustomerOntoOrder(
     // that need it (Phone / WhatsApp, once per customer per day) are worked
     // out again (an open counter order only).
     refreshOrderOffer(db, input.orderId, actor);
+    // An address saved on the order gives it its area (Send's and Pay's customer save, an address
+    // change): the area's delivery charge goes on, is swapped or comes off HERE, in this
+    // transaction — the owner's rule never waits on the screen (order-repo deliveryChargeForArea;
+    // only an area CHANGE, so a charge taken off by hand stays off).
+    if (addressArea !== undefined) deliveryChargeForArea(db, input.orderId, addressArea, 'area', actor);
   });
   tx();
 }
@@ -890,6 +898,8 @@ export function detachCustomerFromOrder(db: AppDatabase, orderId: string, actor:
     });
     // No phone on the order any more: an offer that needed it comes off.
     refreshOrderOffer(db, orderId, actor);
+    // No address, no area: the charge the till put on for it comes off (deliveryChargeForArea).
+    deliveryChargeForArea(db, orderId, null, 'area', actor);
   });
   tx();
 }

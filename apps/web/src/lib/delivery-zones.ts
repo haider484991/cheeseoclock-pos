@@ -2,9 +2,9 @@ import {
   deliveryZoneFeeItemIds,
   findDeliveryChargeItem,
   isDeliveryChargeName,
-  type PublishedMenu,
   type PublishedMenuItem,
 } from '@cheeseoclock/shared-types';
+import type { PublicMenu } from './public-menu';
 
 /**
  * Where the shop delivers, and what each place costs.
@@ -45,7 +45,7 @@ export function isDeliveryChargeItem(
 }
 
 /** The fee items the menu's settings block names (empty without a block). */
-export function feeItemIdsOf(menu: Pick<PublishedMenu, 'settings'>): Set<string> {
+export function feeItemIdsOf(menu: Pick<PublicMenu, 'settings'>): Set<string> {
   return deliveryZoneFeeItemIds(menu.settings?.zones ?? []);
 }
 
@@ -56,7 +56,7 @@ export function feeItemIdsOf(menu: Pick<PublishedMenu, 'settings'>): Set<string>
  * retyping the name cannot break checkout.
  */
 export function deliveryChargeItemFor(
-  menu: PublishedMenu,
+  menu: Pick<PublicMenu, 'categories'>,
   feeCents: number,
 ): PublishedMenuItem | undefined {
   return findDeliveryChargeItem(
@@ -73,7 +73,7 @@ export function deliveryChargeItemFor(
  * note) and for a free area (no charge line).
  */
 export function zoneFeeItemFor(
-  menu: PublishedMenu,
+  menu: Pick<PublicMenu, 'categories'>,
   zone: { readonly feeCents: number; readonly feeItemId?: string | null },
 ): PublishedMenuItem | undefined {
   if (!(zone.feeCents > 0)) return undefined;

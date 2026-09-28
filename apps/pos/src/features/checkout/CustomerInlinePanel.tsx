@@ -10,9 +10,8 @@ import {
   type CustomerAddressMatch,
 } from '@cheeseoclock/shared-types';
 import { counterPhoneLookup, deliveryChargeTarget, deliveryChargeWords, formatCents } from '@cheeseoclock/pos-domain';
-import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle } from 'lucide-react';
+import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle, X } from 'lucide-react';
 import { AreaPicker } from '../customers/AreaPicker';
-import { deliveryChargeAskFor, noteDeliveryChargeAsked } from './deliveryChargeAsk';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -34,7 +33,8 @@ import { counterPhoneHint, savedAddressToMakeUsual, typedAddressToSave } from '.
  *     brings its customer back); the AREA is picked from the owner's list
  *     (Settings → Delivery areas), and its delivery charge goes on the bill
  *     BY ITSELF (owner, 28 Sep 2026) — swapped when the area changes, taken
- *     off when it is cleared; the main process decides (orders:setDeliveryArea).
+ *     off when it is cleared; the main process decides, on this panel's area
+ *     (orders:setDeliveryArea) and on the address saved at Send and Pay.
  *   • No save buttons. A small status pill says "Existing customer" or "New".
  *
  * At the counter (a login without `customers.manage`, owner 2026-09-26) the
@@ -551,13 +551,16 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
 /**
  * The picked area's delivery charge — on the bill BY ITSELF (owner, 28 Sep
  * 2026: "if delivery area selected the delivery fee should be automatically
- * added"). Whenever the area (or the order type) changes, the main process
- * brings the bill to it (orders:setDeliveryArea → syncOrderDeliveryCharge):
- * the area's fee item (Settings → Delivery areas) on, a charge at another
- * fee swapped, none when the area is cleared, free or switched off; never
- * twice. This row only says what the bill carries. Any login that can change
- * an open order may take the charge off by hand (the cart's ×, audited like
- * any line); it stays off until the area changes, or "Put it back".
+ * added"). The main process decides, on every path that gives the order its
+ * area (order-repo deliveryChargeForArea): this panel's area, the customer
+ * saved at Send and Pay, the order becoming a delivery. The area's fee item
+ * (Settings → Delivery areas) goes on, a charge at another fee is swapped,
+ * none when the area is cleared, free or switched off, never twice; and
+ * only when the area CHANGES, so a charge taken off by hand stays off.
+ * This row tells the main process the panel's area (a moment after the last
+ * keystroke — nothing depends on that moment: Send and Pay save the address
+ * with its area themselves), and only SHOWS what the bill carries, with
+ * "Take it off" / "Put it back".
  */
 function DeliveryChargeRow({ area }: { area: string }) {
   const A = useDeliveryAreas();
@@ -565,6 +568,7 @@ function DeliveryChargeRow({ area }: { area: string }) {
   const mode = useCheckoutStore((s) => s.mode);
   const busy = useCheckoutStore((s) => s.busy);
   const setDeliveryArea = useCheckoutStore((s) => s.setDeliveryArea);
+  const removeItem = useCheckoutStore((s) => s.removeItem);
   const { toast } = useToast();
   // Same query (and cache) as the menu grid's "All" view.
   const itemsQ = useQuery({
@@ -575,36 +579,28 @@ function DeliveryChargeRow({ area }: { area: string }) {
   const target = useMemo(() => deliveryChargeTarget(A, mode, area, itemsQ.data ?? []), [A, mode, area, itemsQ.data]);
   const wouldAdd = target.kind === 'fee' && target.itemId !== null;
   const orderId = snapshot && snapshot.order.status === 'open' ? snapshot.order.id : null;
+  // What the row last told the main process (order · type · area): until then the bill may not show it yet.
+  const key = `${orderId ?? ''}|${mode}|${area.trim()}`;
+  const [settledKey, setSettledKey] = useState<string | null>(null);
 
-  // The area, the order type or the order changed: the main process puts the right charge on.
-  // A moment after the last keystroke, so a hand-typed area is asked about once.
-  // Only a CHANGE is asked about: an area picked or changed, or cleared after one was there. A bill
-  // that never had an area is left alone (a charge the cashier tapped on by hand stays). What was
-  // last asked is remembered outside this row (deliveryChargeAsk.ts): the row is re-created every
-  // time the cashier comes back from "Edit order", where the charge can be taken off by hand.
   useEffect(() => {
-    // With no order yet, whether a charge would go on decides whether to start one (the menu may still be loading).
-    const now = { orderId, mode, area, wouldAdd };
-    const todo = deliveryChargeAskFor(now);
-    if (todo === 'same') return;
-    if (todo === 'note') {
-      noteDeliveryChargeAsked(now);
-      return;
-    }
-    // The ask is remembered when its turn in the checkout queue comes (the store): Send and Pay
-    // put a pending charge on themselves (settleDeliveryCharge), and this ask then does nothing.
     const t = setTimeout(() => {
-      setDeliveryArea(area, { mayStartOrder: wouldAdd, ask: now }).catch((e: unknown) =>
-        toast({
-          title: 'Could not put the delivery charge on',
-          description: e instanceof Error ? e.message : 'Unknown error',
-          variant: 'error',
-        }),
+      setDeliveryArea(area, { mayStartOrder: wouldAdd, forOrderId: orderId }).then(
+        () => setSettledKey(key),
+        (e: unknown) => {
+          setSettledKey(key);
+          toast({
+            title: 'Could not put the delivery charge on',
+            description: e instanceof Error ? e.message : 'Unknown error',
+            variant: 'error',
+          });
+        },
       );
     }, 250);
     return () => clearTimeout(t);
-    // wouldAdd follows area/mode/menu; the key decides when to ask.
-  }, [orderId, mode, area, wouldAdd, setDeliveryArea, toast]);
+    // wouldAdd follows area/mode/menu; the key decides what the main process is told.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, wouldAdd, setDeliveryArea, toast]);
 
   const words = deliveryChargeWords(target);
   if (!words) return null;
@@ -628,8 +624,12 @@ function DeliveryChargeRow({ area }: { area: string }) {
 
   const feeIds = deliveryZoneFeeItemIds(A.zones);
   const lines = (snapshot?.items ?? []).filter((l) => isDeliveryChargeLine(l, feeIds));
-  const rightQty = lines.filter((l) => l.unitPriceCents === target.feeCents).reduce((n, l) => n + l.quantity, 0);
+  const right = lines.filter((l) => l.unitPriceCents === target.feeCents);
+  const rightQty = right.reduce((n, l) => n + l.quantity, 0);
   const feeText = formatCents(target.feeCents);
+  const pill = 'inline-flex min-h-[32px] items-center gap-1 rounded-full px-3 font-semibold';
+  const failed = (title: string) => (e: unknown) =>
+    toast({ title, description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' });
 
   if (!target.itemId) {
     return (
@@ -650,26 +650,37 @@ function DeliveryChargeRow({ area }: { area: string }) {
           {feeText} delivery charge is on the bill
           {rightQty > 1 && <strong className="ml-1 text-amber-700 dark:text-amber-300">— {rightQty} times, check it</strong>}
         </span>
+        {!busy && orderId && (
+          <button
+            type="button"
+            onClick={() => {
+              // Taken off by hand: it stays off until the area changes, or "Put it back" (the removal is audited).
+              for (const l of right) void removeItem(l.id).catch(failed('Could not take the delivery charge off'));
+            }}
+            className={cn(pill, 'bg-white/70 text-emerald-900 hover:bg-white dark:bg-stone-800 dark:text-emerald-100')}
+          >
+            <X className="h-3.5 w-3.5" /> Take it off
+          </button>
+        )}
       </div>
     );
   }
 
-  // Not on the bill yet (being added), or taken off by hand.
+  // Not on the bill: still being told (a moment after the area changed), or taken off by hand.
+  const settling = busy || !orderId || settledKey !== key;
   return (
     <div className={amber}>
       <span className="inline-flex items-center gap-1">
         <Bike className="h-3.5 w-3.5" aria-hidden="true" />
-        {busy || !orderId ? `Delivery to this area is ${feeText}` : `Delivery to this area is ${feeText} — not on the bill (taken off by hand)`}
+        {settling ? `Delivery to this area is ${feeText}` : `Delivery to this area is ${feeText} — not on the bill (taken off by hand)`}
       </span>
-      {!busy && orderId && (
+      {!settling && (
         <button
           type="button"
           onClick={() =>
-            void setDeliveryArea(area, { mayStartOrder: true }).catch((e: unknown) =>
-              toast({ title: 'Could not put the delivery charge on', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
-            )
+            void setDeliveryArea(area, { putBack: true, forOrderId: orderId }).catch(failed('Could not put the delivery charge on'))
           }
-          className="inline-flex min-h-[32px] items-center gap-1 rounded-full bg-amber-500 px-3 font-semibold text-stone-900 hover:bg-amber-400"
+          className={cn(pill, 'bg-amber-500 text-stone-900 hover:bg-amber-400')}
         >
           <Plus className="h-3.5 w-3.5" /> Put it back
         </button>

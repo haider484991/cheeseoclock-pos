@@ -97,17 +97,39 @@ export interface PublishedMenu {
 //
 // WHEN THE TILL SENDS ONE. Only once one of the carried keys is saved on
 // either till (settingsRev >= 1): until then no block is ever sent and the
-// website stays exactly as today. From then on every menu publish carries
-// the block, and ANY till with the website link publishes by itself when
-// the website needs it (websiteNeedsSettings in the till): the website holds
-// no block, an older stamp, a block its stored menu lacks a fee item for
-// (settingsProblem below), or this till's own block while this till has
-// saved since at a later time (after a restore from an older backup its
-// versions went back). A Save there, or one synced from the other till.
-// The WEBSITE decides what it stores. A block the website refused, or one
-// the till's own check stopped, is not sent again by itself until the stamp
-// changes (only the owner's Publish sends the menu then): a Save must not
-// push unpublished menu changes to the website every half hour.
+// website stays exactly as today. From then on every menu publish (the
+// owner's Publish, a menu file import, "Publish the menu by itself")
+// carries the block. And ANY till with the website link sends the block
+// ALONE by itself (PUT /api/bridge/settings, below) when the website needs
+// it (websiteNeedsSettings in the till): the website holds no block, an
+// older stamp, a block its stored menu lacks a fee item for (settingsProblem
+// below), or this till's own block while this till has saved since at a
+// later time (after a restore from an older backup its versions went back).
+// A Save there, or one synced from the other till. A Save NEVER sends the
+// till's menu: menu changes not published stay on the till. The WEBSITE
+// decides what it stores. A block the website refused, or one the till's
+// own check stopped, is not sent again by itself until the stamp changes.
+//
+// THE BLOCK ALONE: PUT /api/bridge/settings (PublishSettingsBody) = the
+// block and `feeItems`, the "Delivery Charge (Rs N)" items its ACTIVE areas
+// name (each as the till's menu has it, with its category). The website
+// stores the block with the menu it ALREADY holds — the last one published
+// — with only those items put in (replaced in place when there, else added
+// to their category, made when missing): never food, never another price.
+//   - no menu stored yet → 409 { ok:false, error:'menu_not_published' }
+//     (the till says "press Publish");
+//   - a fee item no active area of the block names at its fee, or not named
+//     as a delivery charge → 400 { ok:false, error:'validation' };
+//   - settingsBlockProblem against the menu WITH the items → 400
+//     settings_invalid (as below), nothing stored;
+//   - the stamp rule of step 3 below; an older block writes nothing
+//     ('ignored_older');
+//   - one guarded UPDATE (the menu as read, unchanged): a menu publish that
+//     lands between the read and the write is never overwritten — the
+//     website reads again and puts the items into the new menu;
+//   - 200 { ok:true, data: PublishMenuResult } for the menu stored now.
+// A website older than this route answers 404: the till says the website
+// needs its update, and sends nothing more by itself.
 //
 // WHAT THE WEBSITE DOES with a PUT /api/bridge/menu, in ONE SQL statement on
 // the site_menu row (a read-then-write lets an older till wipe a newer block):
@@ -141,16 +163,18 @@ export interface PublishedMenu {
 //   (WebsiteSettingsHeld; null = no block), so a till can see a website that
 //   lost its block (a database rollback).
 //
-// WHAT THE TILL DOES WITH THE ANSWER (web-orders-bridge publishMenu):
+// WHAT THE TILL DOES WITH THE ANSWER (web-orders-bridge publishMenu and
+// publishSettingsAlone):
 //   - 200 with data.settings: it records what the website holds (stamp,
 //     device, problem) and sends again only when websiteNeedsSettings says;
-//   - 200 WITHOUT data.settings: a website older than the block (it dropped
-//     it, the menu is stored); Settings says the website needs its update;
+//   - 200 WITHOUT data.settings (a menu publish), or 404 (the block alone):
+//     a website older than the block; Settings says the website needs its
+//     update;
 //   - 400 { ok:false, error:'settings_invalid', message }: a Publish sends
 //     the same menu again WITHOUT the block (so the menu still goes); the
-//     till's own publish of the block stops there. Either way `message` is
-//     shown to the owner. Keep that body shape exactly: any other failure is
-//     treated as a failed publish and retried.
+//     block alone stops there. Either way `message` is shown to the owner.
+//     Keep that body shape exactly: any other failure is treated as a
+//     failed publish and retried.
 //
 // Because a kept block may meet a menu that lacks its fee item, the order
 // route looks a zone's item up in the stored menu by feeItemId, then by name
@@ -269,6 +293,61 @@ export interface PublishMenuResult {
    * in the owner's words; null when it fits or there is no block.
    */
   settingsProblem?: string | null;
+}
+
+/** A fee item the block's areas need, as the till's menu has it, with the category it sits in (PUT /api/bridge/settings). */
+export interface PublishedFeeItem {
+  category: Pick<PublishedMenuCategory, 'posCategoryId' | 'name' | 'displayOrder'>;
+  item: PublishedMenuItem;
+}
+
+/** Body of PUT /api/bridge/settings: the settings block alone, with its areas' fee items (THE BLOCK ALONE). */
+export interface PublishSettingsBody {
+  settings: PublishedSettings;
+  feeItems: PublishedFeeItem[];
+}
+
+/**
+ * The fee items `block`'s ACTIVE areas name, from `menu` (the till's own),
+ * with their categories, in the menu's order: what goes with the block
+ * alone (PUT /api/bridge/settings). An area whose item is not in the menu
+ * contributes none (settingsBlockProblem says so first).
+ */
+export function feeItemsForBlock(
+  block: Pick<PublishedSettings, 'zones'>,
+  menu: Pick<PublishedMenu, 'categories'>,
+): PublishedFeeItem[] {
+  const wanted = new Set(block.zones.filter((z) => z.active && z.feeCents > 0 && z.feeItemId).map((z) => z.feeItemId!));
+  const out: PublishedFeeItem[] = [];
+  for (const c of menu.categories) {
+    for (const item of c.items) {
+      if (!wanted.has(item.posItemId)) continue;
+      wanted.delete(item.posItemId);
+      out.push({ category: { posCategoryId: c.posCategoryId, name: c.name, displayOrder: c.displayOrder }, item });
+    }
+  }
+  return out;
+}
+
+/**
+ * Why the website refuses these fee items with this block (THE BLOCK
+ * ALONE), or null: each must be named as a delivery charge and be the item
+ * an ACTIVE area of the block charges, at its fee — so the block alone can
+ * never change food or any other price on the website's menu.
+ */
+export function feeItemsProblem(block: Pick<PublishedSettings, 'zones'>, feeItems: readonly PublishedFeeItem[]): string | null {
+  const charged = new Map<string, number>();
+  for (const z of block.zones) if (z.active && z.feeCents > 0 && z.feeItemId) charged.set(z.feeItemId, z.feeCents);
+  const seen = new Set<string>();
+  for (const { item } of feeItems) {
+    if (seen.has(item.posItemId)) return `"${item.name}" is sent twice`;
+    seen.add(item.posItemId);
+    if (!/^delivery charge/i.test(item.name.trim())) return `"${item.name}" is not a delivery charge item`;
+    const fee = charged.get(item.posItemId);
+    if (fee === undefined) return `"${item.name}" is not the delivery charge item of any area that is on`;
+    if (fee !== item.basePriceCents) return `"${item.name}" does not cost what its areas charge`;
+  }
+  return null;
 }
 
 /** A block's stamp. `settingsTie` is absent only from a record made before it existed (it then decides nothing). */

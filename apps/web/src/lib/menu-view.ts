@@ -5,6 +5,7 @@ import type {
 } from '@cheeseoclock/shared-types';
 import { groupDisplayName, orderChoiceGroups } from '@cheeseoclock/shared-types';
 import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
+import type { PublicMenu } from './public-menu';
 
 /**
  * Turns the POS's published menu into what the ordering page shows.
@@ -197,7 +198,7 @@ export function withoutDrinkBrand(text: string | null): string | null {
  * order stores. A drink group's choices fail closed (drinkChoiceName). Ids and
  * prices are untouched, so an order still names the till's own items and choices.
  */
-export function menuWithoutDrinkBrand(menu: PublishedMenu): PublishedMenu {
+export function menuWithoutDrinkBrand<M extends Pick<PublishedMenu, 'categories'>>(menu: M): M {
   return {
     ...menu,
     categories: menu.categories.map((c) => ({
@@ -299,12 +300,12 @@ export function isDealSection(sectionName: string): boolean {
  * The value deals lead the ordering page (owner 2026-09-25: "deals should be
  * prominent"); every other section keeps the till's order.
  */
-export function buildMenuView(menu: PublishedMenu): MenuSectionView[] {
+export function buildMenuView(menu: PublicMenu): MenuSectionView[] {
   const sections = buildSections(menu);
   return [...sections.filter((s) => isDealSection(s.name)), ...sections.filter((s) => !isDealSection(s.name))];
 }
 
-function buildSections(menu: PublishedMenu): MenuSectionView[] {
+function buildSections(menu: PublicMenu): MenuSectionView[] {
   const feeItemIds = feeItemIdsOf(menu);
   return [...menu.categories]
     .sort((a, b) => a.displayOrder - b.displayOrder)
@@ -393,7 +394,7 @@ export const ALLERGY_NOTICE =
  * ("… + 1 litre soft drink" → the 1 litre drink item). Null when anything can't be
  * priced — then the page shows no saving rather than a wrong one.
  */
-export function dealWorthCents(menu: PublishedMenu, deal: PublishedMenuItem): number | null {
+export function dealWorthCents(menu: PublicMenu, deal: PublishedMenuItem): number | null {
   if (deal.modifierGroups.length === 0) return null;
   const all = menu.categories.flatMap((c) => c.items);
   const priceOf = new Map<string, number>();

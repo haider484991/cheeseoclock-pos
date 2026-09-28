@@ -1,22 +1,22 @@
 /**
  * The owner, 28 Sep 2026: "if delivery area selected the delivery fee should
- * be automatically added". The customer panel asks the main process a moment
- * after the area last changed (DeliveryChargeRow, 250 ms), so Send, Pay
- * opening (v0.7.28's early customer save) and the payment put a pending
- * charge on THEMSELVES before the order is handed off — a quick F2 or Pay
- * never sends a delivery with its area and no charge. What the panel already
- * asked is never asked again (a charge taken off by hand stays off), and the
- * panel's late ask neither asks twice nor starts a new order once the order
- * has been sent. Nothing calls the till: the IPC client is a stand-in that
- * records the calls. Order ids and areas are made up.
+ * be automatically added". The main process puts the charge on with the
+ * area on every path (order-repo deliveryChargeForArea): the customer
+ * panel's area, and the customer saved at Send and Pay, in the same
+ * transaction as the address. So Send and Pay need nothing of their own
+ * before the order leaves (no screen timer to wait for, no second ask), and
+ * the panel's late ask for an order that has since been sent — or cleared
+ * off the screen — neither asks nor starts a new order. "Put it back" says
+ * so to the main process. Nothing calls the till: the IPC client is a
+ * stand-in that records the calls. Order ids and areas are made up.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
 
-const calls = vi.hoisted(() => ({ list: [] as Array<[string, unknown]>, failNext: null as string | null }));
+const calls = vi.hoisted(() => ({ list: [] as Array<[string, unknown]> }));
 vi.mock('../ipc/client', () => {
-  const order = (status: string) => ({
-    order: { id: 'o1', status, mode: 'delivery', source: 'pos', tableId: null },
+  const order = (id: string, status: string) => ({
+    order: { id, status, mode: 'delivery', source: 'pos', tableId: null },
     items: [],
     discounts: [],
   });
@@ -24,10 +24,6 @@ vi.mock('../ipc/client', () => {
     (name: string, reply: (input: unknown) => unknown = () => ({})) =>
     async (input: unknown) => {
       calls.list.push([name, input]);
-      if (calls.failNext === name) {
-        calls.failNext = null;
-        throw new Error('Test refusal');
-      }
       return reply(input);
     };
   return {
@@ -35,10 +31,10 @@ vi.mock('../ipc/client', () => {
       orders: {
         create: record('orders.create', () => ({ id: 'o2' })),
         setNote: record('orders.setNote'),
-        get: record('orders.get', () => order('open')),
-        setDeliveryArea: record('orders.setDeliveryArea', () => order('open')),
-        sendToKitchen: record('orders.sendToKitchen', () => order('sent')),
-        tender: record('orders.tender', () => order('paid')),
+        get: record('orders.get', (id) => order(String(id), 'open')),
+        setDeliveryArea: record('orders.setDeliveryArea', (input) => order((input as { orderId: string }).orderId, 'open')),
+        sendToKitchen: record('orders.sendToKitchen', () => order('o1', 'sent_to_kitchen')),
+        tender: record('orders.tender', () => order('o1', 'paid')),
       },
       customers: {},
     },
@@ -48,7 +44,6 @@ vi.mock('../ipc/client', () => {
 import { useCheckoutStore } from './checkoutStore';
 import { resetCustomerForm, setCustomerForm } from '../features/checkout/useCustomerForm';
 import { makeEmptyCustomerForm } from '../features/checkout/CustomerInlinePanel';
-import { forgetDeliveryChargeAsked, noteDeliveryChargeAsked, type DeliveryChargeAskState } from '../features/checkout/deliveryChargeAsk';
 
 const names = () => calls.list.map(([n]) => n);
 const made = (name: string) => calls.list.filter(([n]) => n === name).map(([, input]) => input);
@@ -60,82 +55,64 @@ function deliveryWithArea(area: string, mode: 'delivery' | 'takeaway' = 'deliver
   useCheckoutStore.setState({ snapshot: openOrder(mode), mode });
   setCustomerForm({ ...makeEmptyCustomerForm(), area });
 }
-/** What the panel's row asks with (its effect's key) for the open order. */
-const panelAsk = (area: string): DeliveryChargeAskState => ({ orderId: 'o1', mode: 'delivery', area, wouldAdd: true });
 
 afterEach(async () => {
   calls.list.length = 0;
-  calls.failNext = null;
   useCheckoutStore.getState().reset();
   await Promise.resolve();
   resetCustomerForm();
-  forgetDeliveryChargeAsked();
 });
 
-describe('Send and Pay put the picked area’s delivery charge on before the order leaves', () => {
-  it('F2 before the panel asked: the charge goes on, THEN the order is sent; the panel’s late ask asks nothing and starts no order', async () => {
+describe('the area’s delivery charge needs nothing from Send or Pay (the main process puts it on with the saved address)', () => {
+  it('F2 straight after picking the area: Send saves the customer and sends — no ask of its own, nothing to wait for', async () => {
     deliveryWithArea('DHA Phase 6');
     await useCheckoutStore.getState().sendToKitchen();
-    expect(made('orders.setDeliveryArea')).toEqual([{ orderId: 'o1', area: 'DHA Phase 6' }]);
-    expect(names().indexOf('orders.setDeliveryArea')).toBeLessThan(names().indexOf('orders.sendToKitchen'));
-
-    // The panel's 250 ms ask fires after Send (the screen not cleared yet).
-    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, ask: panelAsk('DHA Phase 6') });
-    // Any other ask that lands before the screen clears: the sent order is not replaced by a new one.
-    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 8', { mayStartOrder: true });
-    expect(made('orders.setDeliveryArea')).toHaveLength(1);
-    expect(made('orders.create')).toEqual([]);
+    expect(made('orders.setDeliveryArea')).toEqual([]);
+    expect(names()).toContain('orders.sendToKitchen');
   });
 
-  it('Pay: the early customer save puts the charge on before Pay opens (the bill Pay shows is final); the payment does not ask again', async () => {
+  it('Pay opening and the payment: no ask of their own either', async () => {
     deliveryWithArea('DHA Phase 8');
     await useCheckoutStore.getState().prepareToPay();
-    expect(names()).toEqual(['orders.setNote', 'orders.setDeliveryArea', 'orders.get']);
-    expect(made('orders.setDeliveryArea')).toEqual([{ orderId: 'o1', area: 'DHA Phase 8' }]);
-    // The panel's ask for the same area, queued behind Pay: nothing.
-    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 8', { mayStartOrder: true, ask: panelAsk('DHA Phase 8') });
     await useCheckoutStore.getState().tender([]);
-    expect(made('orders.setDeliveryArea')).toHaveLength(1);
+    expect(made('orders.setDeliveryArea')).toEqual([]);
     expect(made('orders.tender')).toHaveLength(1);
   });
 
-  it('the panel asked first: Send does not ask again — a charge the cashier then took off by hand stays off', async () => {
+  it('the panel’s late ask for an order already sent does nothing — before the screen clears, and after (never a new order)', async () => {
     deliveryWithArea('DHA Phase 6');
-    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, ask: panelAsk('DHA Phase 6') });
-    expect(made('orders.setDeliveryArea')).toHaveLength(1);
-    // (the × on the charge line, on "Review order")
     await useCheckoutStore.getState().sendToKitchen();
-    expect(made('orders.setDeliveryArea')).toHaveLength(1);
-    expect(made('orders.sendToKitchen')).toHaveLength(1);
-  });
-
-  it('the area cleared after one was asked about: Send takes the charge off; an area that was never there asks nothing', async () => {
-    noteDeliveryChargeAsked(panelAsk('DHA Phase 6'));
-    deliveryWithArea('');
-    await useCheckoutStore.getState().sendToKitchen();
-    expect(made('orders.setDeliveryArea')).toEqual([{ orderId: 'o1', area: null }]);
-
-    calls.list.length = 0;
-    forgetDeliveryChargeAsked();
-    deliveryWithArea('');
-    await useCheckoutStore.getState().sendToKitchen();
+    // Before the screen clears: the sent order is still in hand.
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, forOrderId: 'o1' });
+    // After it clears (reset): the ask was for o1, which has left the screen.
+    useCheckoutStore.getState().reset();
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, forOrderId: 'o1' });
     expect(made('orders.setDeliveryArea')).toEqual([]);
+    expect(made('orders.create')).toEqual([]);
+    expect(useCheckoutStore.getState().snapshot).toBeNull();
   });
 
-  it('a takeaway never asks (the main process took any charge off with the type)', async () => {
-    deliveryWithArea('DHA Phase 6', 'takeaway');
-    await useCheckoutStore.getState().sendToKitchen();
-    await useCheckoutStore.getState().prepareToPay();
-    expect(made('orders.setDeliveryArea')).toEqual([]);
-  });
-
-  it('the till refuses the charge: Send stops with the reason and nothing is sent; the next Send asks again', async () => {
+  it('the panel tells the main process the area (it decides whether it changed); “Put it back” says so', async () => {
     deliveryWithArea('DHA Phase 6');
-    calls.failNext = 'orders.setDeliveryArea';
-    await expect(useCheckoutStore.getState().sendToKitchen()).rejects.toThrow('Could not put the delivery charge on: Test refusal');
-    expect(made('orders.sendToKitchen')).toEqual([]);
-    await useCheckoutStore.getState().sendToKitchen();
-    expect(made('orders.setDeliveryArea')).toHaveLength(2);
-    expect(made('orders.sendToKitchen')).toHaveLength(1);
+    await useCheckoutStore.getState().setDeliveryArea(' DHA Phase 6 ', { mayStartOrder: true, forOrderId: 'o1' });
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { putBack: true, forOrderId: 'o1' });
+    await useCheckoutStore.getState().setDeliveryArea('', { forOrderId: 'o1' });
+    expect(made('orders.setDeliveryArea')).toEqual([
+      { orderId: 'o1', area: 'DHA Phase 6' },
+      { orderId: 'o1', area: 'DHA Phase 6', putBack: true },
+      { orderId: 'o1', area: null },
+    ]);
+  });
+
+  it('no order yet: an area with a charge starts one to carry it; one without (or not a delivery) starts none', async () => {
+    useCheckoutStore.setState({ snapshot: null, mode: 'delivery' });
+    await useCheckoutStore.getState().setDeliveryArea('Gulshan Block 13', { mayStartOrder: false, forOrderId: null });
+    useCheckoutStore.setState({ mode: 'takeaway' });
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, forOrderId: null });
+    expect(made('orders.create')).toEqual([]);
+    useCheckoutStore.setState({ mode: 'delivery' });
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, forOrderId: null });
+    expect(made('orders.create')).toHaveLength(1);
+    expect(made('orders.setDeliveryArea')).toEqual([{ orderId: 'o2', area: 'DHA Phase 6' }]);
   });
 });

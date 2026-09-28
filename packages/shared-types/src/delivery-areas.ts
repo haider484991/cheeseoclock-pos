@@ -503,6 +503,10 @@ export function deliveryChargeItemIdSeed(feeCents: number): string {
  */
 export const FEE_ITEM_LOCKED_NOTE = 'Set delivery fees in Settings → Delivery areas (ask the owner).';
 
+/** Menu's note on a charge item no area that is on uses: it may go, its fee stays Settings'. */
+export const FEE_ITEM_UNUSED_NOTE =
+  'No delivery area that is on charges this fee: it can be hidden or deleted. Its name and price are set in Settings → Delivery areas.';
+
 /** The menu category that holds the fee items (made with a name-based id when the shop has none). */
 export const DELIVERY_CHARGES_CATEGORY_NAME = 'Delivery Charges';
 /** Its id's seed (uuid v5, as deliveryChargeItemIdSeed). */
@@ -531,6 +535,32 @@ export function isDeliveryChargeMenuItem(
   feeItemIds?: ReadonlySet<string> | null,
 ): boolean {
   return (!!feeItemIds && feeItemIds.has(item.id)) || isDeliveryChargeName(item.name);
+}
+
+/**
+ * The menu items the areas that are ON charge their fees with — what Menu
+ * locks outright (name, price, on/off, category, delete): each such area's
+ * own feeItemId when that item is there at its fee, and the item the area
+ * is charged with now (zoneFeeItem among the items that are on — before
+ * the first Save, today's by name and price). A charge item no area that is
+ * on uses may be hidden or deleted in Menu like any item; its name and
+ * price still make it a charge, so those stay Settings'.
+ */
+export function chargedFeeItemIds(
+  /** `active` absent = on (as the till's reader has it). */
+  zones: ReadonlyArray<{ readonly active?: boolean; readonly feeCents: number; readonly feeItemId?: string | null }>,
+  items: ReadonlyArray<{ readonly id: string; readonly name: string; readonly basePriceCents: number; readonly isActive: boolean }>,
+): Set<string> {
+  const on = items.filter((i) => i.isActive);
+  const ids = new Set<string>();
+  for (const z of zones) {
+    if (z.active === false || !(z.feeCents > 0)) continue;
+    const own = z.feeItemId ? items.find((i) => i.id === z.feeItemId && i.basePriceCents === z.feeCents) : undefined;
+    if (own) ids.add(own.id);
+    const charged = zoneFeeItem(z, on);
+    if (charged) ids.add(charged.id);
+  }
+  return ids;
 }
 
 /**

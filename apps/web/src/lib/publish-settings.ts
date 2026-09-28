@@ -4,7 +4,9 @@ import {
   compareSettingsStamp,
   settingsBlockProblem,
   type PublishSettingsOutcome,
+  type PublishedFeeItem,
   type PublishedMenu,
+  type PublishedMenuCategory,
   type PublishedSettings,
   type WebsiteSettingsHeld,
 } from '@cheeseoclock/shared-types';
@@ -131,4 +133,93 @@ export async function storedSettingsHeld(): Promise<WebsiteSettingsHeld | null> 
   const menu = typeof raw === 'string' ? (JSON.parse(raw) as PublishedMenu) : raw;
   if (!menu) return null;
   return heldSettingsOf(parseStoredSettings(menu.settings ?? null), menu);
+}
+
+/**
+ * `menu` with the block's fee items put in (THE BLOCK ALONE, shared-types
+ * web-bridge.ts): an item already there is replaced in place (never twice —
+ * taken out of any other category), one that is not is added at the end of
+ * its category, and a category the menu lacks is made. Nothing else moves.
+ */
+export function withFeeItems<M extends Pick<PublishedMenu, 'categories'>>(menu: M, feeItems: readonly PublishedFeeItem[]): M {
+  const categories: PublishedMenuCategory[] = menu.categories.map((c) => ({ ...c, items: [...c.items] }));
+  for (const { category, item } of feeItems) {
+    let placed = false;
+    for (const c of categories) {
+      for (let i = c.items.length - 1; i >= 0; i -= 1) {
+        if (c.items[i]!.posItemId !== item.posItemId) continue;
+        if (!placed && c.posCategoryId === category.posCategoryId) {
+          c.items[i] = item;
+          placed = true;
+        } else c.items.splice(i, 1);
+      }
+    }
+    if (placed) continue;
+    let home = categories.find((c) => c.posCategoryId === category.posCategoryId);
+    if (!home) {
+      home = { posCategoryId: category.posCategoryId, name: category.name, displayOrder: category.displayOrder, items: [] };
+      categories.push(home);
+    }
+    home.items.push(item);
+  }
+  return { ...menu, categories };
+}
+
+/** Is `block` to replace `held` (the stamp rule of a menu publish, step 3 of THE SETTINGS BLOCK)? */
+function blockReplaces(block: PublishedSettings, held: PublishedSettings | null): boolean {
+  if (!held) return true;
+  if (compareSettingsStamp(block, held) >= 0) return true;
+  return held.deviceId === block.deviceId && Date.parse(block.settingsAt) > Date.parse(held.settingsAt);
+}
+
+export type StoreSettingsAloneResult =
+  | { kind: 'no_menu' }
+  | { kind: 'invalid'; problem: string }
+  | { kind: 'done'; held: WebsiteSettingsHeld | null; outcome: PublishSettingsOutcome; categories: number; items: number };
+
+/**
+ * PUT /api/bridge/settings: store the block with the menu the website
+ * ALREADY holds (the last one published) and only the block's fee items put
+ * in (withFeeItems) — never the till's current menu. Read, then ONE guarded
+ * UPDATE: only if the stored menu is still the one read (its md5) and the
+ * stamp rule still holds, so a menu publish landing in between is never
+ * overwritten with the older menu (read again, up to a few times). An older
+ * block writes nothing. The caller checked the fee items (feeItemsProblem).
+ */
+export async function storeSettingsAlone(
+  settings: PublishedSettings,
+  feeItems: readonly PublishedFeeItem[],
+): Promise<StoreSettingsAloneResult> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const rows = (await sql()`
+      SELECT menu_json, md5(menu_json::text) AS h FROM site_menu WHERE id = 1
+    `) as Array<{ menu_json: PublishedMenu | string | null; h: string }>;
+    const row = rows[0];
+    const raw = row?.menu_json ?? null;
+    const stored = typeof raw === 'string' ? (JSON.parse(raw) as PublishedMenu) : raw;
+    if (!row || !stored) return { kind: 'no_menu' };
+    const { settings: storedRaw, ...menu } = stored;
+    const heldBlock = parseStoredSettings(storedRaw ?? null);
+    const count = (m: Pick<PublishedMenu, 'categories'>) => ({
+      categories: m.categories.length,
+      items: m.categories.reduce((n, c) => n + c.items.length, 0),
+    });
+    if (!blockReplaces(settings, heldBlock)) {
+      return { kind: 'done', held: heldSettingsOf(heldBlock, menu), outcome: 'ignored_older', ...count(menu) };
+    }
+    const patched = withFeeItems(menu, feeItems);
+    const problem = websiteBlockProblem(settings, patched);
+    if (problem) return { kind: 'invalid', problem };
+    const doc: PublishedMenu = { ...patched, settings };
+    const written = (await sql()`
+      UPDATE site_menu SET menu_json = ${JSON.stringify(doc)}
+      WHERE id = 1 AND md5(menu_json::text) = ${row.h}
+      RETURNING id
+    `) as Array<{ id: number }>;
+    if (written.length === 1) {
+      return { kind: 'done', held: heldSettingsOf(settings, patched), outcome: 'stored', ...count(patched) };
+    }
+    // The stored menu changed since it was read (a publish in between): read it again.
+  }
+  throw new Error('site_menu kept changing while the settings were stored');
 }

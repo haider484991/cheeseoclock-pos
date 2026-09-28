@@ -15,6 +15,7 @@ import {
   deliveryChargeWords,
   deliveryZonesPutBack,
   planDeliveryChargeLines,
+  planDeliveryChargeOnAreaChange,
   planFeeItems,
   settingsStampOf,
   websiteNeedsSettings,
@@ -352,6 +353,40 @@ describe('the fee follows the area (owner, 28 Sep 2026)', () => {
     expect(
       planDeliveryChargeLines(which, [{ id: 'l1', unitPriceCents: 20_000, quantity: 1 }]),
     ).toEqual({ remove: [], add: null });
+  });
+});
+
+describe('an AREA CHANGE (owner, 28 Sep 2026: changing the area swaps the charge)', () => {
+  const A = deliveryAreas(DEFAULT_DELIVERY_ZONES.zones);
+  const menu = [
+    { id: 'legacy-200', name: 'Delivery Charge (Rs 200)', basePriceCents: 20_000 },
+    { id: 'legacy-250', name: 'Delivery Charge (Rs 250)', basePriceCents: 25_000 },
+  ];
+  const on200 = [{ id: 'l1', unitPriceCents: 20_000, quantity: 1 }];
+  const t = (area: string | null) => deliveryChargeTarget(A, 'delivery', area, menu);
+
+  it('an area the till can’t pin to one fee, after one it charged, takes that charge off', () => {
+    expect(planDeliveryChargeOnAreaChange(t('DHA Phase 6'), t('Gulshan Block 13'), on200)).toEqual({ remove: ['l1'], add: null });
+    expect(planDeliveryChargeOnAreaChange(t('DHA Phase 6'), t('Khayaban-e-Shahbaz, DHA'), on200)).toEqual({ remove: ['l1'], add: null });
+  });
+
+  it('after no area, an unknown one, a free or paused one, it leaves a charge tapped on by hand alone', () => {
+    expect(planDeliveryChargeOnAreaChange(null, t('Gulshan Block 13'), on200)).toEqual({ remove: [], add: null });
+    expect(planDeliveryChargeOnAreaChange(t(null), t('Gulshan Block 13'), on200)).toEqual({ remove: [], add: null });
+    expect(planDeliveryChargeOnAreaChange(t('Gulshan Block 13'), t('Tariq Road'), on200)).toEqual({ remove: [], add: null });
+  });
+
+  it('otherwise exactly as planDeliveryChargeLines: add, swap, never double, off', () => {
+    expect(planDeliveryChargeOnAreaChange(null, t('DHA Phase 6'), [])).toEqual({ remove: [], add: 'legacy-200' });
+    expect(planDeliveryChargeOnAreaChange(t('DHA Phase 6'), t('DHA Phase 8'), on200)).toEqual({ remove: ['l1'], add: 'legacy-250' });
+    expect(planDeliveryChargeOnAreaChange(t('DHA Phase 8'), t('DHA Phase 6'), on200)).toEqual({ remove: [], add: null });
+    expect(planDeliveryChargeOnAreaChange(t('DHA Phase 6'), t(null), on200)).toEqual({ remove: ['l1'], add: null });
+  });
+
+  it('the row says so for an area not on the list: no charge from the till, and one it put on for the area before comes off', () => {
+    expect(deliveryChargeWords(t('Gulshan Block 13'))).toBe(
+      'Not one of the delivery areas (Settings → Delivery areas): the till adds no delivery charge, and takes off the one it added for the area before. Add one by hand if you deliver there.',
+    );
   });
 });
 

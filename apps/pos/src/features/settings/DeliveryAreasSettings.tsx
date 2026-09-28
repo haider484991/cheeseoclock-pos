@@ -10,7 +10,8 @@
  * A rename keeps the old name as a spelling. An area is switched off, never
  * removed. Save (settings:saveDeliveryZones) also makes the
  * "Delivery Charge (Rs N)" items the fees need, in one transaction, and the
- * website gets the areas with the next menu publish, which follows by itself.
+ * website gets the areas by themselves with only those items (the bridge's
+ * block alone) — never the till's unpublished menu changes.
  */
 import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -29,6 +30,7 @@ import {
   useShopSettingsLive,
 } from './shop-rules/useShopSetting';
 import {
+  ZONES_SAVED_TOAST,
   ZONES_SAVE_NOTE,
   moveZoneRow,
   newZoneRow,
@@ -78,7 +80,7 @@ function ZonesCard({ card }: { card: ShopSettingCard<'delivery.zones'> }) {
     void qc.invalidateQueries({ queryKey: ['menu'] });
     toast({
       title: what,
-      description: 'On both tills once they are linked; the website gets it with the menu.',
+      description: ZONES_SAVED_TOAST,
       variant: 'success',
     });
     draft.reset();

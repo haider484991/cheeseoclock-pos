@@ -602,10 +602,14 @@ export interface IpcContract {
    * automatically added"). The main process puts the area's fee item on a
    * delivery order (Settings → Delivery areas), swaps a charge at another
    * fee for it, and takes the charge off when the area is cleared; never a
-   * second one, never on foodpanda or a website order. `area` null = cleared.
+   * second one, never on foodpanda or a website order. `area` null =
+   * cleared. Only when the area CHANGES (a charge taken off by hand stays
+   * off); `putBack` = the row's "Put it back": the area's charge whatever.
+   * The customer save at Send and Pay (customers:attachToOrder) does the
+   * same with the saved address's area, in its own transaction.
    */
   'orders:setDeliveryArea': {
-    request: { orderId: string; area: string | null };
+    request: { orderId: string; area: string | null; putBack?: boolean };
     response: ApiResult<OrderSnapshot>;
   };
   'orders:tender': {
@@ -1640,7 +1644,8 @@ export interface IpcContract {
    * default) AND the "Delivery Charge (Rs N)" menu items they need, in ONE
    * transaction: a name-based id per fee, today's items adopted, an item no
    * area uses switched off (never deleted). Owner only; synced and audited.
-   * The website gets it with the next menu publish, which follows by itself.
+   * The website gets the areas by themselves, with only their charge items
+   * (the block alone) — never the till's unpublished menu changes.
    */
   'settings:saveDeliveryZones': {
     request: SaveDeliveryZonesRequest;

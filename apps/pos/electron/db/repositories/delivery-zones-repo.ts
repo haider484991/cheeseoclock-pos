@@ -261,7 +261,18 @@ export function deliveryChargeItemForWebOrder(
   const fee = line.unitPriceCents;
   if (!(fee > 0) || fee % 100 !== 0 || !isDeliveryChargeName(line.name)) return null;
   const id = deliveryChargeItemId(fee);
-  if (line.posItemId !== id) return null;
+  if (line.posItemId !== id) {
+    // A charge item Menu deleted (no area that is on charged it) while the website still held an
+    // older block that charged it: back, switched off — the order keeps the fee the customer saw,
+    // and a cashier still can't ring it up.
+    const gone = db
+      .prepare(`SELECT id, name, base_price_cents, deleted_at FROM menu_items WHERE id = ?`)
+      .get(line.posItemId) as { id: string; name: string; base_price_cents: number; deleted_at: string | null } | undefined;
+    if (!gone || gone.deleted_at === null || !isDeliveryChargeName(gone.name) || gone.base_price_cents !== fee) return null;
+    restoreMenuItem(db, gone.id, actor);
+    updateMenuItem(db, { id: gone.id, isActive: false }, actor);
+    return gone.id;
+  }
   const row = db.prepare(`SELECT id, deleted_at FROM menu_items WHERE id = ?`).get(id) as
     | { id: string; deleted_at: string | null }
     | undefined;

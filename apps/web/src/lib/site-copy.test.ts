@@ -236,9 +236,9 @@ describe('a block with other fees', () => {
     expect(p8.fee).toBe('Rs 250–300 delivery'); // Emaar is off; Phase 8 and Creek Vista are on
     expect(p8.description).toContain('Rs 250–300 delivery');
     expect(p8.faqs.map((f) => f.a)).toContain('Yes — the Do Darya side is covered at the Phase 8 fee of Rs 300.');
-    // "the same for Emaar and Creek Vista" is no longer true: the other wording.
+    // "the same for Emaar and Creek Vista" is no longer true, and Emaar is off: its fee is not named.
     expect(p8.intro[1]).toBe(
-      'Delivery is Rs 300 across Phase 8; Emaar Crescent Bay (Rs 250) and Creek Vista (Rs 250) are their own zones at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+      'Delivery is Rs 300 across Phase 8; Creek Vista (Rs 250) is its own zone at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
     );
     // "Why is Phase 8 Rs 250 — the rider service's card" explains a card the fee no longer follows: left out.
     expect(p8.faqs.some((f) => f.q.startsWith('Why is delivery to Phase 8'))).toBe(false);
@@ -307,11 +307,13 @@ describe('a block with other fees', () => {
       expect(t).not.toContain('Clifton');
     }
 
-    // Every area switched off: the /delivery paragraph still reads (no "only: ." with the fees missing).
+    // Every area switched off: the /delivery paragraph still reads (no "only: ." with the fees missing),
+    // and names no fee (an area switched off never has its fee printed): it says delivery is paused.
     const none = factsFromBlock(block((zs) => zs.forEach((z) => (z.active = false))));
     const intro = copyText(DELIVERY_HUB_INTRO, none);
     expect(intro).not.toMatch(/: \.|is \./);
-    expect(intro).toContain('Rs 200 for');
+    expect(intro).not.toMatch(/Rs \d/);
+    expect(intro).toContain('Delivery is paused right now');
     expect(copyText(HOME_FAQ_AREAS, none)).not.toMatch(/is \.|to \./);
   });
 
@@ -349,8 +351,10 @@ describe('a block with other fees', () => {
     expect(c.pausedNote).toBe(
       'Delivery to Clifton is paused right now — the checkout can’t take orders here for the moment. Message us on WhatsApp and we’ll tell you when it’s back.',
     );
-    // Its words still read (the fee it will have when delivery is back).
-    expect(c.intro[1]).toContain('Delivery is Rs 200 for Blocks 3–9 and Rs 250 for Blocks 1 and 2.');
+    // Its words still read, with no fee named for blocks switched off; the description says it is paused.
+    expect(c.intro.join(' ')).not.toMatch(/Rs \d/);
+    expect(c.faqs.map((f) => f.a).join(' ')).not.toMatch(/Rs \d/);
+    expect(c.description).toMatch(/Delivery to Clifton is paused right now/);
     expect(sitemap().some((e) => e.url.endsWith('/delivery/clifton'))).toBe(true);
     expect(outsideZoneMessage(offClifton)).toMatch(/^We deliver in DHA only\./);
 
@@ -369,7 +373,17 @@ describe('a block with other fees', () => {
     expect(deliveryChip(none)).toBe('Delivery paused');
     expect(deliveryOptionNote(none)).toBe('Paused right now');
     expect(outsideZoneMessage(none)).toMatch(/not delivering anywhere/);
-    expect(copyText(HOME_HERO_FEE, none)).toBe('Delivery from Rs 200');
+    expect(copyText(HOME_HERO_FEE, none)).toBe('Delivery paused right now');
+  });
+});
+
+describe('a stored block that lacks a compiled area (a hand-edited row, an older till)', () => {
+  it('the area is filled back in from the built-in list — at its built-in fee, on — so its page and the checkout keep it', () => {
+    const facts = factsFromBlock({ ...block(), zones: block().zones.filter((z) => z.id !== 'dha-6') });
+    const dha6 = facts.zones.find((z) => z.id === 'dha-6');
+    expect(dha6).toMatchObject({ feeCents: 20_000, active: true, name: 'DHA Phase 6' });
+    expect(facts.zones.map((z) => z.id).sort()).toEqual(DEFAULT_ZONE_FACTS.map((z) => z.id).sort());
+    expect(renderArea(getArea('dha-phase-6')!, facts).fee).toBe('Rs 200 delivery');
   });
 });
 
@@ -504,5 +518,107 @@ describe('no delivery fee is typed by hand', () => {
         });
     }
     expect(found).toEqual([]);
+  });
+});
+
+/**
+ * Every line of page text the site builds from the fees: the area pages
+ * (description, intro, FAQs, fee chip), the home, delivery-hub and landing
+ * pages' fee sentences, the fee tiers and the site's chips.
+ */
+function generatedText(facts: SiteFacts): string {
+  const pages = DELIVERY_AREAS.map((a) => renderArea(a, facts)).flatMap((r) => [
+    r.description,
+    ...r.intro,
+    ...r.faqs.flatMap((f) => [f.q, f.a]),
+    r.fee,
+  ]);
+  const copies = [
+    HOME_FAQ_AREAS,
+    HOME_DELIVERY_NOTE,
+    HOME_HERO_FEE,
+    HOME_STAT_FEE,
+    DELIVERY_HUB_DESCRIPTION,
+    DELIVERY_HUB_INTRO,
+    LATE_NIGHT_FAQ_AREAS,
+    PIZZA_FAQ_AREAS,
+    BURGER_FAQ_AREAS,
+  ].map((c) => copyText(c, facts));
+  const tiers = feeSummary(facts).map((t) => `${t.feeCents} ${t.places}`);
+  return [...pages, ...copies, ...tiers, deliveryChip(facts), deliveryOptionNote(facts), deliveryFeeRange(facts)].join('\n');
+}
+
+describe('a switched-off area’s fee never appears in the page text; its paused note stays', () => {
+  /** A made-up fee no area has, so any line that prints it is caught. */
+  const PAUSED = 77_700;
+  const off = (ids: readonly string[]) =>
+    factsFromBlock(
+      block((zs) => {
+        for (const id of ids) {
+          zone(zs, id).active = false;
+          zone(zs, id).feeCents = PAUSED;
+        }
+      }),
+    );
+
+  it('each area switched off on its own: its fee is on no page, and its page says it is paused', () => {
+    for (const z of DEFAULT_ZONE_FACTS) {
+      const facts = off([z.id]);
+      expect(generatedText(facts), z.id).not.toContain('Rs 777');
+      const page = DELIVERY_AREAS.find((a) => a.zoneIds.includes(z.id))!;
+      expect(renderArea(page, facts).pausedNote, z.id).toContain(z.name);
+    }
+  });
+
+  it('a group switched off — Emaar and Creek Vista, Clifton Blocks 1 & 2, all of Clifton, a whole page — the same', () => {
+    for (const ids of [
+      ['emaar', 'creek-vista'],
+      ['dha-8', 'emaar', 'creek-vista'],
+      ['clifton-1', 'clifton-2'],
+      ['clifton-3', 'clifton-4', 'clifton-5', 'clifton-6', 'clifton-7', 'clifton-8', 'clifton-9'],
+      DEFAULT_ZONE_FACTS.filter((z) => z.group === 'Clifton').map((z) => z.id),
+      ['dha-6', 'dha-7'],
+      ['dha-1', 'dha-2', 'dha-2-ext'],
+    ]) {
+      const facts = off(ids);
+      expect(generatedText(facts), ids.join()).not.toContain('Rs 777');
+      for (const a of DELIVERY_AREAS.filter((p) => p.zoneIds.some((id) => ids.includes(id)))) {
+        expect(renderArea(a, facts).pausedNote, `${a.slug} ${ids.join()}`).not.toBeNull();
+      }
+    }
+  });
+
+  it('the Phase 8 page with Emaar switched off names Phase 8’s and Creek Vista’s fees, not Emaar’s', () => {
+    const p8 = renderArea(getArea('dha-phase-8')!, off(['emaar']));
+    expect(p8.intro.join(' ')).toContain('Delivery is Rs 250 across Phase 8; Creek Vista (Rs 250) is its own zone at checkout.');
+    expect(p8.pausedNote).toMatch(/^Delivery to Emaar Crescent Bay \(DHA\) is paused right now/);
+    expect(p8.fee).toBe('Rs 250 delivery');
+  });
+
+  it('an area switched off at the SAME fee as its neighbours is not spoken for beside their fee ("the same for …", "all of them")', () => {
+    const offAtItsFee = (id: string) => factsFromBlock(block((zs) => (zone(zs, id).active = false)));
+    const p8 = renderArea(getArea('dha-phase-8')!, offAtItsFee('emaar'));
+    expect(p8.intro[1]).toBe(
+      'Delivery is Rs 250 across Phase 8; Creek Vista (Rs 250) is its own zone at checkout. Do Darya plans fell through? Skip the restaurant queue, order in and pay the rider cash.',
+    );
+    expect(p8.faqs.some((f) => f.q.startsWith('Why is delivery to Phase 8'))).toBe(false);
+    const faqOf = (slug: string, facts: SiteFacts, q: string) => renderArea(getArea(slug)!, facts).faqs.find((f) => f.q === q)?.a;
+    expect(faqOf('dha-phase-4', offAtItsFee('dha-4'), 'Do you deliver to DHA Phase 3?')).toBe('Yes — pick DHA Phase 3 at checkout. It is Rs 200.');
+    expect(faqOf('dha-phase-7', offAtItsFee('dha-7'), 'Do you deliver to Phase 7 Extension?')).toBe(
+      'Yes — Phase 7 Extension has its own option at checkout, with its own Rs 200 fee.',
+    );
+    expect(faqOf('dha-phase-7', offAtItsFee('dha-6'), 'Which area do I pick at checkout?')).toBe(
+      'DHA Phase 7, or DHA Phase 7 Extension if you are in Ext. If your street sits on the Phase 6 border, pick the phase your address is in.',
+    );
+    expect(renderArea(getArea('dha-phase-1-2')!, offAtItsFee('dha-3')).intro[0]).toMatch(/Delivery here is Rs 200\.$/);
+    expect(faqOf('clifton', offAtItsFee('clifton-1'), 'Which Clifton blocks do you deliver to?')).toBeUndefined();
+  });
+
+  it('every area switched off: no fee anywhere, and the pages say delivery is paused', () => {
+    const facts = factsFromBlock(block((zs) => zs.forEach((z) => ((z.active = false), (z.feeCents = PAUSED)))));
+    expect(generatedText(facts)).not.toContain('Rs 777');
+    expect(copyText(HOME_HERO_FEE, facts)).toBe('Delivery paused right now');
+    expect(feeSummary(facts)).toEqual([]);
+    for (const a of DELIVERY_AREAS) expect(renderArea(a, facts).description).toMatch(/paused right now/);
   });
 });

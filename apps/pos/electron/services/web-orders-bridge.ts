@@ -57,10 +57,11 @@ import {
   type BridgeApi,
 } from './cloud-copy-chunks.js';
 import { dumpDatabase, rebuildDatabase, type RowSink, type RowSource } from './cloud-copy-rows.js';
-import { compareSettingsStamp } from '@cheeseoclock/shared-types';
+import { compareSettingsStamp, feeItemsForBlock } from '@cheeseoclock/shared-types';
 import type {
   CloudBackupEntry,
   PublishMenuResult,
+  PublishSettingsBody,
   PublishedMenu,
   PublishedMenuCategory,
   SettingsPublishStatus,
@@ -144,6 +145,9 @@ const SETTINGS_CONFIRMED_KEY = 'webBridge.settingsConfirmed';
  * the owner's Publish. Survives a restart, so a restart does not push the menu again either.
  */
 const SETTINGS_NOTE_KEY = 'webBridge.settingsNote';
+/** Settings → Online orders, when the website is older than the settings block (no /api/bridge/settings, or it dropped the block). */
+const UNSUPPORTED_WEBSITE =
+  'The website doesn’t take the delivery areas yet — it needs its update; then save the delivery areas again (Publish also works, and sends the menu too).';
 /** Audit history kept in the cloud copy. Local and USB copies are complete. */
 const CLOUD_COPY_AUDIT_DAYS = 90;
 
@@ -381,15 +385,15 @@ class WebOrdersBridge {
   }
 
   /**
-   * Send the menu with this till's settings block when the website NEEDS it
-   * (pos-domain websiteNeedsSettings: no block there, an older one, one its
-   * menu lacks a fee item for, or this till's own older one) — after a Save
-   * here, a change synced from the other till, or at start-up. Never
-   * throws; offline it retries with a back-off. A block that did not go
-   * (refused by the website or by this till's own check, an older website)
-   * is not sent again by itself until the stamp changes: without the block
-   * there is nothing to send, and "Publish the menu by itself" is the
-   * owner's to switch on.
+   * Send this till's settings block ALONE (PUT /api/bridge/settings, with
+   * only the fee items its areas charge — never this till's menu) when the
+   * website NEEDS it (pos-domain websiteNeedsSettings: no block there, an
+   * older one, one its menu lacks a fee item for, or this till's own older
+   * one) — after a Save here, a change synced from the other till, or at
+   * start-up. A Save never publishes menu changes the owner has not
+   * published. Never throws; offline it retries with a back-off. A block
+   * that did not go (refused by the website or by this till's own check, an
+   * older website) is not sent again by itself until the stamp changes.
    */
   async maybePublishSettings(): Promise<void> {
     if (!this.db) return;
@@ -408,7 +412,7 @@ class WebOrdersBridge {
     if (held && !websiteNeedsSettings(local, held.held, this.deviceId)) return;
     if (this.settingsNoteFor(local)) return;
     try {
-      await this.publishMenuAndSettings({ auto: true });
+      await this.publishSettingsAlone(cfg);
       this.settingsRetryMs = 0;
     } catch (e) {
       this.settingsRetryMs = Math.min(SETTINGS_RETRY_MAX_MS, Math.max(SETTINGS_RETRY_MIN_MS, this.settingsRetryMs * 2));
@@ -454,7 +458,7 @@ class WebOrdersBridge {
     if (held) {
       const c = compareSettingsStamp(local, held.stamp);
       if (c === 0 && !held.problem) return { state: 'published', at, message: null };
-      if (c === 0) return { state: 'waiting', at, message: `The website’s menu is missing a delivery charge item (${held.problem}) — this till sends its menu again.` };
+      if (c === 0) return { state: 'waiting', at, message: `The website’s menu is missing a delivery charge item (${held.problem}) — this till sends the delivery charge items again (not the rest of the menu).` };
       if (c < 0 && !websiteNeedsSettings(local, held, this.deviceId)) {
         return {
           state: 'waiting',
@@ -1578,27 +1582,17 @@ class WebOrdersBridge {
   // ---- menu publish -------------------------------------------------------
 
   /**
-   * Send the menu to the website, with the owner's settings block (the
-   * delivery areas and fees, the pick-up offer) once one of those is saved
-   * (shared-types web-bridge.ts, THE SETTINGS BLOCK) — the owner's Publish,
-   * and "Publish the menu by itself". The block is checked against the same
-   * menu first; one that would not pass goes without, and the reason shows
-   * in Settings → Online orders. The website stores menu and block together
-   * or neither: when it refuses the block, the menu is sent again without
-   * it. The till records what the website says it holds.
+   * The owner's Publish (and a menu file import, and "Publish the menu by
+   * itself"): the menu goes to the website, with the owner's settings block
+   * (the delivery areas and fees, the pick-up offer) once one of those is
+   * saved (shared-types web-bridge.ts, THE SETTINGS BLOCK). The block is
+   * checked against the same menu first; one that would not pass goes
+   * without, and the reason shows in Settings → Online orders. The website
+   * stores menu and block together or neither: when it refuses the block,
+   * the menu is sent again without it. The till records what the website
+   * says it holds. (A Save sends the block ALONE: publishSettingsAlone.)
    */
   async publishMenu(): Promise<{ categories: number; items: number }> {
-    const r = await this.publishMenuAndSettings({ auto: false });
-    return { categories: r.categories, items: r.items };
-  }
-
-  /**
-   * The publish itself. `auto` = the till sending its settings block by
-   * itself (maybePublishSettings): the menu goes only WITH the block — when
-   * the till's own check stops the block, or the website refuses it, nothing
-   * more is sent and the reason is noted for that stamp.
-   */
-  private async publishMenuAndSettings(opts: { auto: boolean }): Promise<{ categories: number; items: number; sent: boolean }> {
     if (!this.db) throw new Error('Bridge not initialized');
     const db = this.db;
     const cfg = getWebBridgeConfig(db);
@@ -1613,11 +1607,6 @@ class WebOrdersBridge {
         return { menu: m, sb: settingsBlockFor(db, m, this.deviceId) };
       })();
       const itemCount = menu.categories.reduce((s, c) => s + c.items.length, 0);
-      if (opts.auto && !sb.block) {
-        // Nothing the website needs can go: the menu waits for the owner's Publish.
-        if (sb.problem) this.noteSettings(sb.stamp, 'refused', sb.problem);
-        return { categories: menu.categories.length, items: itemCount, sent: false };
-      }
       const send = (body: PublishedMenu) => this.api(cfg, '/api/bridge/menu', { method: 'PUT', body: JSON.stringify(body) });
       let sentBlock = sb.block !== null;
       let res = await send(sb.block ? { ...menu, settings: sb.block } : menu);
@@ -1626,9 +1615,7 @@ class WebOrdersBridge {
         const refusal = sb.block ? settingsRefusalOf(text) : null;
         if (refusal === null) throw new Error(`Publish failed: HTTP ${res.status} ${text.slice(0, 200)}`);
         this.noteSettings(sb.stamp, 'refused', refusal);
-        // The till's own publish of its block stops here: nothing was stored, nothing else to send.
-        if (opts.auto) return { categories: menu.categories.length, items: itemCount, sent: false };
-        // The owner's Publish: the website refused the block, and so the menu with it — the menu goes on its own.
+        // The website refused the block, and so the menu with it — the menu goes on its own.
         sentBlock = false;
         res = await send(menu);
         if (!res.ok) {
@@ -1645,7 +1632,67 @@ class WebOrdersBridge {
         items: itemCount,
         settings: sentBlock ? (data?.settings ?? 'unknown') : sb.problem ? 'not sent' : 'none',
       });
-      return { categories: menu.categories.length, items: itemCount, sent: true };
+      return { categories: menu.categories.length, items: itemCount };
+    } finally {
+      this.settingsPublishing = false;
+      if (this.settingsRecheck) {
+        this.settingsRecheck = false;
+        this.scheduleSettingsCheck(SETTINGS_PUBLISH_DELAY_MS);
+      }
+    }
+  }
+
+  /**
+   * The till sending its settings block by itself (maybePublishSettings):
+   * the block ALONE (PUT /api/bridge/settings, THE BLOCK ALONE) with only
+   * the "Delivery Charge (Rs N)" items its areas charge, as this till's
+   * menu has them. The website stores it with the menu it already holds —
+   * the last one published — so a Save never publishes a price, an item or
+   * a photo the owner changed on the till and has not published. When the
+   * till's own check stops the block, the website refuses it, the website
+   * has no menu yet or is older than this route, nothing more is sent and
+   * the reason is noted for that stamp. Any other failure throws (retried).
+   */
+  private async publishSettingsAlone(cfg: WebBridgeConfig): Promise<void> {
+    if (!this.db) return;
+    const db = this.db;
+    this.settingsPublishing = true;
+    try {
+      // The block is checked against this till's menu, and its fee items come from it — nothing else of it goes.
+      const { menu, sb } = db.transaction(() => {
+        const m = buildPublishedMenu(db);
+        return { menu: m, sb: settingsBlockFor(db, m, this.deviceId) };
+      })();
+      if (!sb.block) {
+        if (sb.problem) this.noteSettings(sb.stamp, 'refused', sb.problem);
+        return;
+      }
+      const body: PublishSettingsBody = { settings: sb.block, feeItems: feeItemsForBlock(sb.block, menu) };
+      const res = await this.api(cfg, '/api/bridge/settings', { method: 'PUT', body: JSON.stringify(body) });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        if (res.status === 404) {
+          // A website older than the block alone: it needs its update.
+          this.noteSettings(sb.stamp, 'unsupported', UNSUPPORTED_WEBSITE);
+          return;
+        }
+        const refusal = settingsRefusalOf(text);
+        if (refusal !== null) {
+          this.noteSettings(sb.stamp, 'refused', refusal);
+          return;
+        }
+        if (res.status === 409 && /menu_not_published/.test(text)) {
+          this.noteSettings(sb.stamp, 'refused', 'The website has no menu yet — press Publish once (it sends the menu with the delivery areas).');
+          return;
+        }
+        throw new Error(`Settings publish failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+      }
+      const data = ((await res.json().catch(() => null)) as { data?: Partial<PublishMenuResult> } | null)?.data ?? null;
+      this.settingsAnswered(sb.stamp, true, data);
+      log.info('Delivery settings sent to the website (the menu stays as published)', {
+        feeItems: body.feeItems.length,
+        settings: data?.settings ?? 'unknown',
+      });
     } finally {
       this.settingsPublishing = false;
       if (this.settingsRecheck) {
@@ -1660,7 +1707,7 @@ class WebOrdersBridge {
     if (!this.db) return;
     if (!data || data.settings === undefined) {
       // A website older than the settings block: it dropped it (the menu is stored). Update the website.
-      if (sentBlock) this.noteSettings(sent, 'unsupported', 'The website doesn’t take settings yet — it needs its update; then press Publish.');
+      if (sentBlock) this.noteSettings(sent, 'unsupported', UNSUPPORTED_WEBSITE);
       return;
     }
     this.recordWebsiteHeld(data);
@@ -1678,7 +1725,7 @@ class WebOrdersBridge {
     }
     // What the website holds now may still need this till (a Save while this one was on its way, a
     // menu that lacks the block's fee item after a Publish without the block): look again shortly.
-    // Bounded: each look sends this till's current block, which the website then holds, or stops.
+    // Bounded: each look sends this till's current block alone, which the website then holds, or stops.
     if (stillNeeded && !(sentBlock && data.settings === 'stored' && compareSettingsStamp(local, sent) === 0)) {
       this.scheduleSettingsCheck(SETTINGS_PUBLISH_DELAY_MS);
     }

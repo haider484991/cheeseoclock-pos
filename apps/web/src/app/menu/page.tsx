@@ -7,7 +7,7 @@ import { sql } from '@/lib/db';
 import { factsFromBlock } from '@/lib/delivery-facts';
 import { JsonLd, menuNode, webPageNode } from '@/lib/seo';
 import { getStoreStatus } from '@/lib/store-status';
-import { menuWithoutDrinkBrand } from '@/lib/menu-view';
+import { publicMenu } from '@/lib/public-menu';
 import { parseStoredSettings } from '@/lib/site-facts';
 import type { PublishedMenu } from '@cheeseoclock/shared-types';
 
@@ -32,14 +32,14 @@ const devMenuFile =
 
 async function loadMenu(): Promise<PublishedMenu | null> {
   if (devMenuFile) {
-    return menuWithoutDrinkBrand(JSON.parse(await readFile(devMenuFile, 'utf8')) as PublishedMenu);
+    return JSON.parse(await readFile(devMenuFile, 'utf8')) as PublishedMenu;
   }
   try {
     const rows = (await sql()`
       SELECT menu_json FROM site_menu WHERE id = 1
     `) as Array<{ menu_json: PublishedMenu }>;
-    // Sent whole to the browser as the ordering app's props: no drink brand in it.
-    return rows[0] ? menuWithoutDrinkBrand(rows[0].menu_json) : null;
+    // As stored: the page sends the browser publicMenu of it (no drink brand, no device id or stamps).
+    return rows[0]?.menu_json ?? null;
   } catch (e) {
     console.error('menu load failed', e);
     return null;
@@ -54,14 +54,16 @@ export default async function MenuPage() {
   // Where the owner delivers and what it costs: the settings block that came
   // with this menu, else the built-in areas (as before any block).
   const deliveryFacts = factsFromBlock(parseStoredSettings(menu?.settings ?? null));
+  // Sent whole to the browser: the block's areas and pick-up only, never its device id or stamps.
+  const shown = menu ? publicMenu(menu) : null;
 
   return (
     <>
       <SiteHeader />
       <main className="min-h-screen bg-paper text-ink">
-        {menu ? (
+        {shown ? (
           <OrderingApp
-            menu={menu}
+            menu={shown}
             acceptingOrders={accepting}
             pickupAvailable={pickupAvailable}
             pickupDiscountPercent={pickupDiscountPercent}
@@ -106,7 +108,7 @@ export default async function MenuPage() {
               { name: 'Menu', path: '/menu' },
             ],
           }),
-          ...(menu ? [menuNode(menu)] : []),
+          ...(shown ? [menuNode(shown)] : []),
         ]}
       />
     </>
