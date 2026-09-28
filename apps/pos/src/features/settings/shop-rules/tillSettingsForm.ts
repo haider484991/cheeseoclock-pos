@@ -103,8 +103,10 @@ export function openingFloatFromForm(f: OpeningFloatForm): Parsed<OpeningFloatSe
     }
     return { value: { mode: 'fixed', fixedCents: whole }, problem: null };
   }
-  // The last count: a fixed amount typed and left is kept for later, when it fits.
-  return { value: { mode: 'lastCount', fixedCents: whole !== null && whole <= max ? whole : 0 }, problem: null };
+  // The last count keeps no amount: it is then the default's own value, so
+  // the card says Default, and trying a fixed amount and coming back is no
+  // change. (The box keeps what was typed until Save, for switching back.)
+  return { value: { mode: 'lastCount', fixedCents: 0 }, problem: null };
 }
 
 /** One line for History. */

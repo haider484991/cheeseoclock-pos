@@ -38,7 +38,13 @@ export const receiptExtraLinesSchema = z
   .array(receiptExtraLineSchema)
   .max(RECEIPT_EXTRA_LINES_MAX, { message: `At most ${RECEIPT_EXTRA_LINES_MAX} extra lines` });
 
-/** 'drawer.openingFloat': the last count, or a fixed amount in whole rupees from Rs 0 to Rs 100,000. */
+/**
+ * 'drawer.openingFloat': the last count, or a fixed amount in whole rupees
+ * from Rs 0 to Rs 100,000. The last count carries no amount: one sent (or
+ * stored) with it is dropped, so it reads, saves and compares as the
+ * default itself — the card says Default when the till does what the
+ * default does.
+ */
 export const openingFloatSchema = z
   .object({
     mode: z.enum(['lastCount', 'fixed'], { errorMap: () => ({ message: "The last shift's count, or a fixed amount" }) }),
@@ -51,7 +57,8 @@ export const openingFloatSchema = z
       })
       .refine((c) => c % 100 === 0, { message: 'The fixed float is in whole rupees' }),
   })
-  .strict();
+  .strict()
+  .transform((s): OpeningFloatSetting => (s.mode === 'lastCount' ? { mode: 'lastCount', fixedCents: 0 } : s));
 
 /** Every till key and its schema. */
 export const TILL_SETTING_SCHEMAS: { readonly [K in TillSettingKey]: z.ZodType<TillSettingValues[K], z.ZodTypeDef, unknown> } = {

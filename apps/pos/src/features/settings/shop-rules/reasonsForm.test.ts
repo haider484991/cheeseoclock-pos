@@ -8,6 +8,7 @@ import {
   reasonsFromForm,
   reasonsSummary,
   reasonsToForm,
+  reasonsWarnings,
 } from './reasonsForm';
 
 const b = (id: string, label: string, food: OrderReasonButton['food'] = 'ask'): OrderReasonButton => ({ id, label, food });
@@ -39,6 +40,25 @@ describe('reason buttons: the form', () => {
     expect(newReasonId('Out of stock', ['out_of_stock'])).toBe('out_of_stock_2');
     expect(newReasonId('شکریہ', [])).toBe('reason');
     expect(addReason([b('a', 'One')], ' Two ')).toEqual([b('a', 'One'), b('two', 'Two', 'ask')]);
+  });
+
+  it('a Cancel or Refund button with letters the printer has no glyph for: a warning (it prints as "?"), not a refusal', () => {
+    // The words print as "Reason: …" on the refund slip and on a cancelled
+    // order's receipt and kitchen ticket. Up to the first review this card
+    // said nothing, while Extra lines on receipts warns for the same printer.
+    const form = {
+      cancel: [b('a', 'Customer cancelled'), b('b', 'گاہک نے منع کیا')],
+      refund: [b('c', 'Cold 🍕')],
+      cashOut: ['گیس'],
+    };
+    expect(reasonsFromForm(form).value?.cancel.map((x) => x.label)).toEqual(['Customer cancelled', 'گاہک نے منع کیا']);
+    expect(reasonsWarnings(form)).toEqual([
+      'Cancel button 2 (“گاہک نے منع کیا”): گ ا ہ ک ن ے … print as “?” on a cancelled order’s receipt and kitchen ticket — the receipt printer only has English letters. The screens and Team & leakage show it as typed.',
+      'Refund button 1 (“Cold 🍕”): 🍕 prints as “?” on the refund slip — the receipt printer only has English letters. The screens and Team & leakage show it as typed.',
+    ]);
+    // Cash out words never print: no warning. Today's buttons: none.
+    expect(reasonsWarnings({ ...form, cancel: [b('a', 'Test')], refund: [b('c', 'Café — “ok”')] })).toEqual([]);
+    expect(reasonsWarnings(reasonsToForm(DEFAULT_ORDER_REASONS))).toEqual([]);
   });
 
   it('moves a button up', () => {

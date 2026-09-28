@@ -56,7 +56,7 @@ export type OpeningFloatMode = 'lastCount' | 'fixed';
 
 export interface OpeningFloatSetting {
   mode: OpeningFloatMode;
-  /** The fixed amount (paisa, whole rupees, Rs 0 to OPENING_FLOAT_MAX_CENTS); kept when the mode is 'lastCount'. */
+  /** The fixed amount (paisa, whole rupees, Rs 0 to OPENING_FLOAT_MAX_CENTS); always 0 when the mode is 'lastCount' (the schema drops one). */
   fixedCents: number;
 }
 

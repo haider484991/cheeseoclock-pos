@@ -386,6 +386,24 @@ describe.skipIf(!Sqlite)('the opening float, per till', () => {
     expect(opened.openingCashCents).toBe(480_000);
   });
 
+  it('back to the last count is the default again: no fixed amount is kept, the card says Default', async () => {
+    h.session = OWNER;
+    await data('settings:setTill', { key: 'drawer.openingFloat', value: { mode: 'fixed', fixedCents: 500_000 } });
+    // A last-count value that still carries an amount (it does nothing) is saved as the default itself.
+    const card = await data<TillSettingCard<'drawer.openingFloat'>>('settings:setTill', {
+      key: 'drawer.openingFloat',
+      value: { mode: 'lastCount', fixedCents: 500_000 },
+    });
+    expect(card).toMatchObject({ value: { mode: 'lastCount', fixedCents: 0 }, isDefault: true });
+    expect(db.prepare(`SELECT value_json FROM settings WHERE key = 'drawer.openingFloat'`).get()?.['value_json']).toBe(
+      JSON.stringify({ mode: 'lastCount', fixedCents: 0 }),
+    );
+    expect(card.history.map((x) => x.value)).toEqual([
+      { mode: 'lastCount', fixedCents: 0 },
+      { mode: 'fixed', fixedCents: 500_000 },
+    ]);
+  });
+
   it('whole rupees from Rs 0 to Rs 100,000; nothing written when refused; stored on this till only', async () => {
     h.session = OWNER;
     const before = writtenRows();

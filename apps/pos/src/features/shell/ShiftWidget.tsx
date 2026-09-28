@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -335,9 +335,17 @@ export function openingFloatNote(start: OpeningFloatPrefill): string | null {
   }
 }
 
+/**
+ * What the Open shift box shows until someone types: the starting figure in
+ * rupees (the owner's fixed float, or the last count), or 0 on a first shift
+ * and while the till has not answered yet.
+ */
+export function openingFloatBoxStart(start: OpeningFloatPrefill | undefined): string {
+  return start && start.prefillCents !== null ? String(start.prefillCents / 100) : '0';
+}
+
 /** Count the float and open a shift: the top bar's "Open shift", and the no-shift banner's. */
 export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
-  const [opening, setOpening] = useState('0');
   const [notes, setNotes] = useState('');
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -348,10 +356,11 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
   // "over" at close. Only a starting figure: the float is still counted here.
   const floatQ = useQuery({ queryKey: ['shifts', 'openingFloat'], queryFn: () => ipc.shifts.openingFloat() });
   const start = floatQ.data;
-  const [touched, setTouched] = useState(false);
-  useEffect(() => {
-    if (start && start.prefillCents !== null && !touched) setOpening(String(start.prefillCents / 100));
-  }, [start, touched]);
+  // Until someone types, the box shows the starting figure (worked out from
+  // the till's answer on every render, not copied in by an effect); once
+  // typed, what was typed — a late answer never overwrites it.
+  const [typed, setTyped] = useState<string | null>(null);
+  const opening = typed ?? openingFloatBoxStart(start);
   const startNote = start ? openingFloatNote(start) : null;
 
   const openMut = useMutation({
@@ -409,10 +418,7 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
               <input
                 inputMode="decimal"
                 value={opening}
-                onChange={(e) => {
-                  setTouched(true);
-                  setOpening(e.target.value);
-                }}
+                onChange={(e) => setTyped(e.target.value)}
                 autoFocus
                 className="w-full rounded-lg border border-stone-200 px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
               />

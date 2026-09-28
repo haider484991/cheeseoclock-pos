@@ -19,6 +19,14 @@ import { PrintedLogo, useReceiptLogoPreview } from './ReceiptLogoPreview';
 import { SidebarBrand } from '../shell/Sidebar';
 import { LoginBrand } from '../auth/LoginPage';
 import { ReceiptExtraLinesCard } from './ReceiptExtraLinesCard';
+import {
+  EMPTY_SHOP_DETAILS,
+  refillShopDetails,
+  sameShopDetails,
+  shopDetailsFromSaved,
+  type ShopDetailsDraft,
+  type ShopDetailsForm,
+} from './shopDetailsForm';
 
 const DEFAULT_NAME = 'Cheese O Clock';
 /** The till refuses a longer one (printer-config.ts WEBSITE_MAX_CHARS). */
@@ -32,38 +40,24 @@ export function BrandingSettings() {
     queryFn: () => ipc.printer.getConfig(),
   });
 
-  const [storeName, setStoreName] = useState('');
-  const [storeTagline, setStoreTagline] = useState('');
-  const [branchLine, setBranchLine] = useState('');
-  const [phoneLine, setPhoneLine] = useState('');
-  const [websiteLine, setWebsiteLine] = useState('');
-  const [footerLine, setFooterLine] = useState('');
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [draft, setDraft] = useState<ShopDetailsDraft>({ form: EMPTY_SHOP_DETAILS, filledFrom: null });
+  const { storeName, storeTagline, branchLine, phoneLine, websiteLine, footerLine, logoUrl } = draft.form;
+  const setField =
+    <K extends keyof ShopDetailsForm>(field: K) =>
+    (value: ShopDetailsForm[K]) =>
+      setDraft((d) => ({ ...d, form: { ...d.form, [field]: value } }));
 
-  // Hydrate from the saved branding only. The printer cards on another tab
-  // share this query; saving one of them must not wipe what is typed here.
+  // Fill the boxes from the saved Shop details — only when THOSE change. The
+  // same branding holds the Extra lines card's lines (below, on this tab)
+  // and the printer cards on another tab share this query: saving one of
+  // them reloads it, and must not wipe what is typed here (shopDetailsForm).
+  // A till that never set a website reads the shop's own site here (printer-config.ts).
   const saved = cfgQ.data?.branding;
   useEffect(() => {
-    if (!saved) return;
-    setStoreName(saved.storeName);
-    setStoreTagline(saved.storeTagline ?? '');
-    setBranchLine(saved.branchLine ?? '');
-    setPhoneLine(saved.phoneLine ?? '');
-    // A till that never set one reads the shop's own site here (printer-config.ts).
-    setWebsiteLine(saved.websiteLine ?? '');
-    setFooterLine(saved.footerLine ?? '');
-    setLogoUrl(saved.logoUrl ?? null);
+    if (saved) setDraft((d) => refillShopDetails(d, saved));
   }, [saved]);
 
-  const dirty =
-    !!saved &&
-    (storeName !== saved.storeName ||
-      storeTagline !== (saved.storeTagline ?? '') ||
-      branchLine !== (saved.branchLine ?? '') ||
-      phoneLine !== (saved.phoneLine ?? '') ||
-      websiteLine !== (saved.websiteLine ?? '') ||
-      footerLine !== (saved.footerLine ?? '') ||
-      logoUrl !== (saved.logoUrl ?? null));
+  const dirty = !!saved && !sameShopDetails(draft.form, shopDetailsFromSaved(saved));
 
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -124,7 +118,7 @@ export function BrandingSettings() {
         <div className="space-y-5">
           <div>
             <div className="mb-2 text-sm font-medium text-stone-700 dark:text-stone-200">Logo</div>
-            <LogoPicker value={logoUrl} onChange={setLogoUrl} />
+            <LogoPicker value={logoUrl} onChange={setField('logoUrl')} />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -132,35 +126,35 @@ export function BrandingSettings() {
               label="Shop name"
               hint="On receipts only when there is no logo to print: big and bold at the top."
               value={storeName}
-              onChange={setStoreName}
+              onChange={setField('storeName')}
               placeholder={DEFAULT_NAME}
             />
             <Field
               label="Tagline"
               hint="Optional. One short line under the logo."
               value={storeTagline}
-              onChange={setStoreTagline}
+              onChange={setField('storeTagline')}
               placeholder="Pizza · Burgers · Late-night delivery"
             />
             <Field
               label="Address"
               hint="At the bottom of receipts."
               value={branchLine}
-              onChange={setBranchLine}
+              onChange={setField('branchLine')}
               placeholder="DHA Phase 6, Karachi"
             />
             <Field
               label="Phone"
               hint="At the bottom, under the address."
               value={phoneLine}
-              onChange={setPhoneLine}
+              onChange={setField('phoneLine')}
               placeholder="0300 9367865"
             />
             <Field
               label="Website"
               hint="At the bottom, under the phone. Leave empty for none."
               value={websiteLine}
-              onChange={setWebsiteLine}
+              onChange={setField('websiteLine')}
               placeholder="cheeseoclock.net"
               maxLength={WEBSITE_MAX_CHARS}
             />
@@ -169,7 +163,7 @@ export function BrandingSettings() {
             label="Thank-you line"
             hint="Printed at the very bottom of customer receipts and bills."
             value={footerLine}
-            onChange={setFooterLine}
+            onChange={setField('footerLine')}
             placeholder="Thank you — order again on www.cheeseoclock.net"
           />
 

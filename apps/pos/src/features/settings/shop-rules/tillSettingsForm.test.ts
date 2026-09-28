@@ -68,9 +68,14 @@ describe('opening float: the form', () => {
     expect(openingFloatSummary({ mode: 'fixed', fixedCents: 500_000 })).toBe('Rs 5,000 every shift');
   });
 
-  it('back to the last count keeps a fixed amount typed for later (0 when it does not fit)', () => {
-    expect(openingFloatFromForm({ mode: 'lastCount', rupees: '3000' }).value).toEqual({ mode: 'lastCount', fixedCents: 300_000 });
-    expect(openingFloatFromForm({ mode: 'lastCount', rupees: 'x' }).value).toEqual({ mode: 'lastCount', fixedCents: 0 });
+  it('back to the last count saves the default itself: no amount is kept, so the card says Default again', () => {
+    // Up to the first review a fixed amount typed and left was kept
+    // ({ lastCount, 3000 }): the till behaved as the default, but the card
+    // showed no "Default", offered "Put back the default", and switching to
+    // a fixed amount and back said "Not saved yet".
+    for (const rupees of ['3000', '0', 'x', '']) {
+      expect({ rupees, value: openingFloatFromForm({ mode: 'lastCount', rupees }).value }).toEqual({ rupees, value: DEFAULT_OPENING_FLOAT });
+    }
   });
 
   it('the example says the count is still typed and the close stays blind', () => {

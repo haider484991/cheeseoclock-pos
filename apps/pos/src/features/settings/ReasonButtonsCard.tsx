@@ -33,6 +33,7 @@ import {
   reasonsFromForm,
   reasonsSummary,
   reasonsToForm,
+  reasonsWarnings,
   type ReasonList,
   type ReasonsForm,
 } from './shop-rules/reasonsForm';
@@ -56,6 +57,7 @@ function ReasonsCardForm({
 }) {
   const d = useDraft<OrderReasons, ReasonsForm>(card.value, reasonsToForm);
   const parsed = useMemo(() => reasonsFromForm(d.form), [d.form]);
+  const warnings = useMemo(() => reasonsWarnings(d.form), [d.form]);
   const dirty = d.touched && (parsed.value === null || !sameValue(parsed.value, card.value));
   const setList = (which: ReasonList, list: OrderReasonButton[]) => d.set({ ...d.form, [which]: list });
 
@@ -80,6 +82,11 @@ function ReasonsCardForm({
     >
       <ButtonList title="Cancel an order" which="cancel" list={d.form.cancel} onChange={(l) => setList('cancel', l)} />
       <ButtonList title="Refund" which="refund" list={d.form.refund} onChange={(l) => setList('refund', l)} />
+      {warnings.map((w) => (
+        <p key={w} className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          {w}
+        </p>
+      ))}
       <CashOutList list={d.form.cashOut} onChange={(cashOut) => d.set({ ...d.form, cashOut })} />
     </SettingCard>
   );

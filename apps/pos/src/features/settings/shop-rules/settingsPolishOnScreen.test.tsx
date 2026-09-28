@@ -10,7 +10,10 @@
  *     values, and say "this till only" where it is;
  *   - the Cancel, Refund and Cash out boxes offer the owner's buttons, and
  *     today's when nothing is saved;
- *   - the Open shift box says where its figure came from.
+ *   - the board's "Picked up / Delivered + Pay" offers Exact and then
+ *     exactly Pay's quick-cash notes;
+ *   - the Open shift box says where its figure came from, and starts on it;
+ *   - the Reason buttons card warns when a button's words print as "?".
  * Radix's dialog is stood in for by plain elements. Every name and amount
  * is made up.
  */
@@ -40,6 +43,8 @@ import { VoidOrderDialog } from '../../orders/VoidOrderDialog';
 import { RefundOrderDialog } from '../../orders/RefundOrderDialog';
 import { CashMovementDialog } from '../../shell/CashMovementDialog';
 import { OpenShiftDialog } from '../../shell/ShiftWidget';
+import { MarkDeliveredDialog } from '../../orders/MarkDeliveredDialog';
+import { TenderDialog } from '../../checkout/TenderDialog';
 import { ReceiptExtraLinesCard } from '../ReceiptExtraLinesCard';
 import { OpeningFloatCard } from '../OpeningFloatCard';
 import { ReasonButtonsCard } from '../ReasonButtonsCard';
@@ -292,6 +297,34 @@ describe('the new cards: every sentence from the values', () => {
     expect(words).toContain('Cash out offers “Test gas”.');
     expect(words).toContain('every cancel and refund still needs a reason and a manager’s PIN');
     expect(words).not.toContain('This till only');
+    // All English: nothing to warn about.
+    expect(words).not.toContain('print as “?”');
+  });
+
+  it('Reason buttons: a button in Urdu is saved as it is, with a warning that it prints as "?" (like Extra lines)', () => {
+    signIn('admin');
+    const value: OrderReasons = {
+      v: 1,
+      cancel: [{ id: 'a', label: 'گاہک', food: 'ask' }],
+      refund: [{ id: 'c', label: 'Test missing item', food: 'ask' }],
+      cashOut: ['گیس'],
+    };
+    const card: ShopSettingCard<'orders.reasons'> = {
+      key: 'orders.reasons',
+      value,
+      defaultValue: SHOP_SETTING_DEFAULTS['orders.reasons'] as OrderReasons,
+      isDefault: false,
+      readOnly: false,
+      lastChanged: null,
+      notOnOtherTillYet: false,
+      history: [],
+    };
+    const words = text(render(<ReasonButtonsCard />, [[[...SHOP_SETTINGS_KEY, 'orders.reasons'], card]]));
+    expect(words).toContain(
+      'Cancel button 1 (“گاہک”): گ ا ہ ک print as “?” on a cancelled order’s receipt and kitchen ticket — the receipt printer only has English letters.',
+    );
+    // Cash out words never print: no warning for them.
+    expect(words).not.toContain('گیس”)');
   });
 });
 
@@ -340,6 +373,37 @@ describe('the Cancel, Refund and Cash out boxes offer the owner’s buttons', ()
   });
 });
 
+describe('one quick-cash rule on screen: the board’s "Picked up / Delivered + Pay" offers Exact and then Pay’s notes', () => {
+  // Up to the first review this was only checked by reading the source: a
+  // board that dropped its Exact button, or went back to its own rule,
+  // would still have passed.
+  /** The one-tap amounts after "Cash given", as rupees ("Exact" as it is). */
+  const quickAmounts = (markup: string): string[] => {
+    const from = markup.indexOf('grid-cols-5', markup.indexOf('Cash given'));
+    const grid = markup.slice(from, markup.indexOf('</div>', from));
+    return [...grid.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => text(m[1]!).replace(/^Rs /, '').replace(/,/g, ''));
+  };
+  const unpaid = (totalCents: number): OrderSnapshot => {
+    const s = paidOrder();
+    return { ...s, order: { ...s.order, status: 'ready', paidAt: null, totalCents }, payments: [] } as unknown as OrderSnapshot;
+  };
+
+  it('the same amounts as Pay, Exact first — including a round bill and one with paisa', () => {
+    signIn('cashier');
+    const cases: Array<[number, string[]]> = [
+      [123_400, ['Exact', '1300', '1500', '2000', '5000']],
+      // Round: the board used to offer Exact and Rs 5,000 only.
+      [200_000, ['Exact', '2500', '3000', '5000']],
+      [185_050, ['Exact', '1900', '2000', '5000']],
+    ];
+    for (const [totalCents, amounts] of cases) {
+      const board = quickAmounts(render(<MarkDeliveredDialog snap={unpaid(totalCents)} onClose={noop} onDone={noop} />));
+      const pay = quickAmounts(render(<TenderDialog snapshot={unpaid(totalCents)} onClose={noop} onPaid={noop} />));
+      expect({ totalCents, board, pay }).toEqual({ totalCents, board: amounts, pay: amounts });
+    }
+  });
+});
+
 describe('the Open shift box says where its figure came from (only where it starts: the float is counted)', () => {
   it('the owner’s fixed float', () => {
     signIn('cashier');
@@ -349,14 +413,29 @@ describe('the Open shift box says where its figure came from (only where it star
     expect(words).toContain('This till starts each shift with Rs 5,000 (Settings). Count the drawer and change this if it is different.');
   });
 
+  it('the owner’s fixed float: the box starts on it, not on the last count', () => {
+    // Up to the first review only the note was checked here: the box was
+    // filled by an effect, which a static render never runs.
+    signIn('cashier');
+    const markup = render(<OpenShiftDialog onClose={noop} />, [
+      [['shifts', 'openingFloat'], { prefillCents: 500_000, from: 'fixed', lastCount: { countedCashCents: 1_234_500, closedAt: '2026-09-27T20:00:00.000Z' } }],
+    ]);
+    expect(markup).toContain('value="5000"');
+    expect(markup).not.toContain('value="12345"');
+  });
+
   it('the last count (today)', () => {
     signIn('cashier');
-    const words = text(
-      render(<OpenShiftDialog onClose={noop} />, [
-        [['shifts', 'openingFloat'], { prefillCents: 1_234_500, from: 'last_count', lastCount: { countedCashCents: 1_234_500, closedAt: '2026-09-27T20:00:00.000Z' } }],
-      ]),
-    );
-    expect(words).toContain('The last shift closed with Rs 12,345 in the drawer. Count it again and change this if it is different.');
+    const markup = render(<OpenShiftDialog onClose={noop} />, [
+      [['shifts', 'openingFloat'], { prefillCents: 1_234_500, from: 'last_count', lastCount: { countedCashCents: 1_234_500, closedAt: '2026-09-27T20:00:00.000Z' } }],
+    ]);
+    expect(text(markup)).toContain('The last shift closed with Rs 12,345 in the drawer. Count it again and change this if it is different.');
+    expect(markup).toContain('value="12345"');
+  });
+
+  it('before the till answers: the box starts at 0', () => {
+    signIn('cashier');
+    expect(render(<OpenShiftDialog onClose={noop} />)).toContain('value="0"');
   });
 
   it('a first shift: no line, the box starts at 0', () => {

@@ -20,6 +20,7 @@ import {
   type OrderReasons,
   type ReasonFoodAnswer,
 } from '@cheeseoclock/shared-types';
+import { unprintableChars } from '@cheeseoclock/printer-core';
 import type { Parsed } from './foodpandaForm';
 
 export interface ReasonsForm {
@@ -90,6 +91,37 @@ export function reasonsFromForm(f: ReasonsForm): Parsed<OrderReasons> {
   const dup = listProblem(cashOut, 'Cash out buttons');
   if (dup) return fail(dup);
   return { value: { v: SHOP_SETTING_FORMAT['orders.reasons'], cancel: lists.cancel, refund: lists.refund, cashOut }, problem: null };
+}
+
+/** Where a tapped Cancel / Refund button's words print, as "Reason: …" (printer-core receipt-renderer). */
+const PRINTS_ON: Readonly<Record<ReasonList, string>> = Object.freeze({
+  cancel: 'a cancelled order’s receipt and kitchen ticket',
+  refund: 'the refund slip',
+});
+
+/**
+ * A warning for each Cancel or Refund button with letters the receipt
+ * printer has no glyph for (Urdu, an emoji): its words print as "?" on the
+ * papers that say the reason. Not a refusal: the button saves, and the
+ * screens and Team & leakage show it as typed — like Extra lines on
+ * receipts (tillSettingsForm extraLinesWarnings). The Cash out words never
+ * print, so they get none.
+ */
+export function reasonsWarnings(f: Pick<ReasonsForm, 'cancel' | 'refund'>): string[] {
+  const out: string[] = [];
+  for (const which of ['cancel', 'refund'] as const) {
+    const name = which === 'cancel' ? 'Cancel' : 'Refund';
+    for (const [i, b] of f[which].entries()) {
+      const label = b.label.trim();
+      const bad = unprintableChars(label);
+      if (bad.length === 0) continue;
+      const shown = bad.slice(0, 6).join(' ');
+      out.push(
+        `${name} button ${i + 1} (“${label}”): ${shown}${bad.length > 6 ? ' …' : ''} ${bad.length === 1 ? 'prints' : 'print'} as “?” on ${PRINTS_ON[which]} — the receipt printer only has English letters. The screens and Team & leakage show it as typed.`,
+      );
+    }
+  }
+  return out;
 }
 
 /** An id for a new button, from its words, unused in its list ("Rain delay" → "rain_delay", then "rain_delay_2"). */

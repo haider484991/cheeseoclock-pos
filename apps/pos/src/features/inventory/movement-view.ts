@@ -126,20 +126,28 @@ export function rangeSinceIso(range: DateRange, now: Date = new Date()): string 
 }
 
 const time = new Intl.DateTimeFormat('en-PK', { hour: 'numeric', minute: '2-digit', hour12: true });
-const dayMonth = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
-const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+// A trading day starts at 00:00 UTC (05:00 Pakistan time), so its date is read in UTC.
+const dayMonth = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const dayMonthYear = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
-function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-/** "Today 3:04 pm", "Yesterday 9:15 am", "21 Sep 8:00 pm", "3 Mar 2025 1:00 pm". */
+/**
+ * "Today 3:04 pm", "Yesterday 9:15 am", "21 Sep 8:00 pm", "3 Mar 2025 1:00 pm".
+ * The day is the shop's trading day (05:00 to 05:00 Pakistan time), the
+ * same as the Today chip (rangeSinceIso): at 2 am, last night's 11:30 pm is
+ * "Today 11:30 pm", and after 05:00 the night's 2 am is "Yesterday 2:00 am".
+ * An older row carries its trading day's date (1 am on the 22nd is the
+ * night of the 21st). The words used to follow the computer's midnight,
+ * and disagreed with the chip between midnight and 05:00.
+ */
 export function formatWhen(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const t = time.format(d).toLowerCase();
-  if (sameDay(d, now)) return `Today ${t}`;
-  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (sameDay(d, yesterday)) return `Yesterday ${t}`;
-  return `${(d.getFullYear() === now.getFullYear() ? dayMonth : dayMonthYear).format(d)} ${t}`;
+  const day = tradingDayOfMs(d.getTime());
+  const today = tradingDayOfMs(now.getTime());
+  if (day === today) return `Today ${t}`;
+  if (day === today - 1) return `Yesterday ${t}`;
+  const date = new Date(tradingDayStartMs(day));
+  const thisYear = date.getUTCFullYear() === new Date(tradingDayStartMs(today)).getUTCFullYear();
+  return `${(thisYear ? dayMonth : dayMonthYear).format(date)} ${t}`;
 }
