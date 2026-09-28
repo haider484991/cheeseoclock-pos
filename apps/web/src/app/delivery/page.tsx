@@ -6,7 +6,7 @@ import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { ShopMapCard } from '@/components/ShopMapCard';
 import { Reveal } from '@/components/Reveal';
 import { BUSINESS } from '@/lib/business';
-import { DELIVERY_AREAS, feeText } from '@/lib/areas';
+import { DELIVERY_AREAS, coveredLandmarks, feeText } from '@/lib/areas';
 import { copyText } from '@/lib/delivery-facts';
 import { DELIVERY_HUB_DESCRIPTION, DELIVERY_HUB_INTRO } from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
@@ -33,45 +33,49 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function DeliveryHubPage() {
   const facts = await getSiteFacts();
   return (
-    <>
-      <SiteHeader />
-      <main>
-        <section className="mx-auto max-w-6xl px-4 pb-16 pt-12">
-          <nav aria-label="Breadcrumb" className="text-sm text-smoke">
-            <Link href="/" className="hover:text-cheese">
-              Home
-            </Link>{' '}
-            / <span className="text-cream/80">Delivery areas</span>
-          </nav>
-          <h1 className="mt-4 max-w-3xl font-display text-5xl tracking-wide text-cream md:text-7xl">
-            FOOD DELIVERY AREAS IN DHA &amp; CLIFTON, KARACHI
-          </h1>
-          <p className="mt-5 max-w-2xl leading-relaxed text-smoke">
-            {copyText(DELIVERY_HUB_INTRO, facts)}
-          </p>
+      <>
+        <SiteHeader />
+        <main>
+          <section className="mx-auto max-w-6xl px-4 pb-16 pt-12">
+            <nav aria-label="Breadcrumb" className="text-sm text-smoke">
+              <Link href="/" className="hover:text-cheese">
+                Home
+              </Link>{' '}
+              / <span className="text-cream/80">Delivery areas</span>
+            </nav>
+            <h1 className="mt-4 max-w-3xl font-display text-5xl tracking-wide text-cream md:text-7xl">
+              FOOD DELIVERY AREAS IN DHA &amp; CLIFTON, KARACHI
+            </h1>
+            <p className="mt-5 max-w-2xl leading-relaxed text-smoke">
+              {copyText(DELIVERY_HUB_INTRO, facts)}
+            </p>
 
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {DELIVERY_AREAS.map((area, i) => (
-              <Reveal key={area.slug} delay={(i % 3) * 60}>
-                <Link
-                  href={`/delivery/${area.slug}`}
-                  className="group block h-full rounded-2xl border border-white/10 bg-night-card p-5 transition-colors hover:border-cheese/50"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-lg font-bold text-cream">{area.name}</h2>
-                    <span className="whitespace-nowrap rounded-full bg-cheese/15 px-3 py-1 text-xs font-bold text-cheese group-hover:bg-cheese group-hover:text-night">
-                      🛵 {feeText(area, facts)}
-                    </span>
-                  </div>
-                  <p className="mt-2 line-clamp-2 text-sm text-smoke">
-                    {area.landmarks.slice(0, 4).join(' · ')}
-                  </p>
-                  <p className="mt-3 text-sm font-bold text-cheese opacity-0 transition-opacity group-hover:opacity-100">
-                    Delivery details →
-                  </p>
-                </Link>
-              </Reveal>
-            ))}
+            <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {DELIVERY_AREAS.map((area, i) => {
+                // A place the owner switched off is never listed as covered (areas.ts coveredLandmarks).
+                const places = coveredLandmarks(area, facts).slice(0, 4);
+                return (
+                <Reveal key={area.slug} delay={(i % 3) * 60}>
+                  <Link
+                    href={`/delivery/${area.slug}`}
+                    className="group block h-full rounded-2xl border border-white/10 bg-night-card p-5 transition-colors hover:border-cheese/50"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <h2 className="text-lg font-bold text-cream">{area.name}</h2>
+                      <span className="whitespace-nowrap rounded-full bg-cheese/15 px-3 py-1 text-xs font-bold text-cheese group-hover:bg-cheese group-hover:text-night">
+                        🛵 {feeText(area, facts)}
+                      </span>
+                    </div>
+                    {places.length > 0 && (
+                      <p className="mt-2 line-clamp-2 text-sm text-smoke">{places.join(' · ')}</p>
+                    )}
+                    <p className="mt-3 text-sm font-bold text-cheese opacity-0 transition-opacity group-hover:opacity-100">
+                      Delivery details →
+                    </p>
+                  </Link>
+                </Reveal>
+              );
+            })}
           </div>
 
           <Reveal delay={100}>

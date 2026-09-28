@@ -11,13 +11,13 @@ import {
 } from '@cheeseoclock/shared-types';
 import {
   counterPhoneLookup,
+  deliveryChargeRowState,
   deliveryChargeTarget,
   deliveryChargeWords,
-  formatCents,
   makeDeliveryAreaTeller,
   type DeliveryAreaTeller,
 } from '@cheeseoclock/pos-domain';
-import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle, X } from 'lucide-react';
+import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle, RefreshCw, X } from 'lucide-react';
 import { AreaPicker } from '../customers/AreaPicker';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { useCheckoutStore } from '../../stores/checkoutStore';
@@ -563,7 +563,10 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
  * saved at Send and Pay, the order becoming a delivery. The area's fee item
  * (Settings → Delivery areas) goes on, a charge at another fee is swapped,
  * none when the area is cleared, free or switched off, never twice; and
- * only when the area CHANGES, so a charge taken off by hand stays off.
+ * only when the area CHANGES, so a charge taken off by hand stays off. A
+ * charge at another fee on the bill (the fee raised while the order was
+ * open, or another tapped on by hand) is named with the area's fee, with one
+ * tap to swap it (pos-domain deliveryChargeRowState).
  * This row tells the main process the panel's area (a moment after the last
  * keystroke — nothing depends on that moment: Send and Pay save the address
  * with its area themselves), and only SHOWS what the bill carries, with
@@ -644,8 +647,6 @@ function DeliveryChargeRow({ area }: { area: string }) {
   const feeIds = deliveryZoneFeeItemIds(A.zones);
   const lines = (snapshot?.items ?? []).filter((l) => isDeliveryChargeLine(l, feeIds));
   const right = lines.filter((l) => l.unitPriceCents === target.feeCents);
-  const rightQty = right.reduce((n, l) => n + l.quantity, 0);
-  const feeText = formatCents(target.feeCents);
   const pill = 'inline-flex min-h-[32px] items-center gap-1 rounded-full px-3 font-semibold';
   const failed = (title: string) => (e: unknown) =>
     toast({ title, description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' });
@@ -661,13 +662,20 @@ function DeliveryChargeRow({ area }: { area: string }) {
     );
   }
 
-  if (rightQty > 0) {
+  // Still being told the area (a moment after it changed), the bill may not show its charge yet;
+  // once the till has answered, none on the bill means it was taken off by hand.
+  const settling = busy || !orderId || settledKey !== key;
+  const row = deliveryChargeRowState(target.feeCents, lines, !settling);
+  const putBack = () =>
+    void setDeliveryArea(area, { putBack: true, forOrderId: orderId }).catch(failed('Could not put the delivery charge on'));
+
+  if (row.kind === 'on') {
     return (
       <div className={cn(base, 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200')}>
         <span className="inline-flex items-center gap-1">
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
-          {feeText} delivery charge is on the bill
-          {rightQty > 1 && <strong className="ml-1 text-amber-700 dark:text-amber-300">— {rightQty} times, check it</strong>}
+          {row.text}
+          {row.qty > 1 && <strong className="ml-1 text-amber-700 dark:text-amber-300">— {row.qty} times, check it</strong>}
         </span>
         {!busy && orderId && (
           <button
@@ -685,23 +693,33 @@ function DeliveryChargeRow({ area }: { area: string }) {
     );
   }
 
-  // Not on the bill: still being told (a moment after the area changed), or taken off by hand.
-  const settling = busy || !orderId || settledKey !== key;
+  // A charge at another fee on the bill: both fees, and one tap swaps it ("Put it back" in the
+  // main process: the area's charge on, the others off). Never "taken off by hand".
+  if (row.kind === 'other') {
+    return (
+      <div className={amber}>
+        <span className="inline-flex items-center gap-1">
+          <Bike className="h-3.5 w-3.5" aria-hidden="true" />
+          {row.text}
+        </span>
+        {!busy && orderId && (
+          <button type="button" onClick={putBack} className={cn(pill, 'bg-amber-500 text-stone-900 hover:bg-amber-400')}>
+            <RefreshCw className="h-3.5 w-3.5" /> {row.action}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className={amber}>
       <span className="inline-flex items-center gap-1">
         <Bike className="h-3.5 w-3.5" aria-hidden="true" />
-        {settling ? `Delivery to this area is ${feeText}` : `Delivery to this area is ${feeText} — not on the bill (taken off by hand)`}
+        {row.text}
       </span>
-      {!settling && (
-        <button
-          type="button"
-          onClick={() =>
-            void setDeliveryArea(area, { putBack: true, forOrderId: orderId }).catch(failed('Could not put the delivery charge on'))
-          }
-          className={cn(pill, 'bg-amber-500 text-stone-900 hover:bg-amber-400')}
-        >
-          <Plus className="h-3.5 w-3.5" /> Put it back
+      {row.kind === 'off' && (
+        <button type="button" onClick={putBack} className={cn(pill, 'bg-amber-500 text-stone-900 hover:bg-amber-400')}>
+          <Plus className="h-3.5 w-3.5" /> {row.action}
         </button>
       )}
     </div>

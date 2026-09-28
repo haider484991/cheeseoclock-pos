@@ -52,8 +52,13 @@ export interface DeliveryArea {
   zoneIds: string[];
   /** Hand-written intro paragraphs — the unique meat of the page (fee tokens allowed). */
   intro: Copy[];
-  /** Streets / commercial areas / landmarks we actually cover. */
-  landmarks: string[];
+  /**
+   * Streets / commercial areas / landmarks we actually cover, in page order.
+   * A plain name lies in all of the page's areas; `in` names the ones it lies
+   * in. It is listed while one of them is on (`every`: only while all are),
+   * so a place the owner switches off is never listed (coveredLandmarks).
+   */
+  landmarks: Landmark[];
   /** Real menu items to feature on this page (brand copy, links to /menu). */
   popular: Array<{ name: string; blurb: string }>;
   /** Area-specific visible FAQ (fee tokens allowed; `when`: shown only while that holds). */
@@ -61,6 +66,9 @@ export interface DeliveryArea {
   /** Slugs of bordering areas for internal linking. */
   adjacent: string[];
 }
+
+/** A street or spot on an area page (DeliveryArea.landmarks). */
+export type Landmark = string | { name: string; in: readonly string[]; every?: true };
 
 const WA_NUMBERS = BUSINESS.whatsappLines.map((l) => l.display).join(' or ');
 
@@ -139,10 +147,10 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       'We cover the whole phase — the residential streets off Khayaban-e-Sehar, Sehar and Jami Commercial, and Phase 7 Extension — for {fee:dha-7,dha-7-ext}. If you are unsure about your street, send us a WhatsApp before you order.',
     ],
     landmarks: [
-      'Khayaban-e-Sehar',
-      'Sehar Commercial',
-      'Jami Commercial',
-      'Phase 7 Extension',
+      { name: 'Khayaban-e-Sehar', in: ['dha-7'] },
+      { name: 'Sehar Commercial', in: ['dha-7'] },
+      { name: 'Jami Commercial', in: ['dha-7'] },
+      { name: 'Phase 7 Extension', in: ['dha-7-ext'] },
     ],
     popular: [
       {
@@ -236,12 +244,12 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
     ],
     landmarks: [
-      'Zulfiqar Commercial',
-      'Al-Murtaza Commercial',
-      'Do Darya side',
-      'Emaar Crescent Bay',
-      'Creek Vista',
-      'Khayaban-e-Shaheen',
+      { name: 'Zulfiqar Commercial', in: ['dha-8'] },
+      { name: 'Al-Murtaza Commercial', in: ['dha-8'] },
+      { name: 'Do Darya side', in: ['dha-8'] },
+      { name: 'Emaar Crescent Bay', in: ['emaar'] },
+      { name: 'Creek Vista', in: ['creek-vista'] },
+      { name: 'Khayaban-e-Shaheen', in: ['dha-8'] },
     ],
     popular: [
       {
@@ -346,10 +354,10 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       `Order on the website in under a minute, or WhatsApp your order and street to ${WA_NUMBERS} — both land in the same kitchen, and both are cash on delivery.`,
     ],
     landmarks: [
-      '9th Commercial Street',
-      'Sunset Boulevard side',
-      'Phase 4 residential lanes',
-      'DHA Phase 3',
+      { name: '9th Commercial Street', in: ['dha-4'] },
+      { name: 'Sunset Boulevard side', in: ['dha-4'] },
+      { name: 'Phase 4 residential lanes', in: ['dha-4'] },
+      { name: 'DHA Phase 3', in: ['dha-3'] },
     ],
     popular: [
       {
@@ -411,9 +419,9 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
     ],
     landmarks: [
       'Korangi Road stretch',
-      'Defence Mor',
-      'Phase 2 commercial lanes',
-      'Phase 2 Extension',
+      { name: 'Defence Mor', in: ['dha-1', 'dha-2'] },
+      { name: 'Phase 2 commercial lanes', in: ['dha-2'] },
+      { name: 'Phase 2 Extension', in: ['dha-2-ext'] },
     ],
     popular: [
       {
@@ -494,10 +502,15 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
     ],
     landmarks: [
-      'Boat Basin',
+      { name: 'Boat Basin', in: ['clifton-5'] },
       'Schon Circle',
       'Bilawal Chowrangi',
-      'Clifton Blocks 1–9',
+      // Names all nine blocks: listed only while every one is on.
+      {
+        name: 'Clifton Blocks 1–9',
+        in: ['clifton-1', 'clifton-2', 'clifton-3', 'clifton-4', 'clifton-5', 'clifton-6', 'clifton-7', 'clifton-8', 'clifton-9'],
+        every: true,
+      },
       'Sea View apartments side',
     ],
     popular: [
@@ -552,6 +565,27 @@ export function feeText(area: DeliveryArea, facts: SiteFacts): string {
   return zonesFeeChip(`areas.ts: "${area.slug}"`, area.zoneIds, facts);
 }
 
+/** A landmark's name, the page's areas it lies in, and whether it needs all of them on. */
+export function landmarkOf(area: DeliveryArea, l: Landmark): { name: string; in: readonly string[]; every: boolean } {
+  return typeof l === 'string' ? { name: l, in: area.zoneIds, every: false } : { name: l.name, in: l.in, every: !!l.every };
+}
+
+/**
+ * The page's streets and spots the shop delivers to now: a place is listed
+ * while an area of the page it lies in is on (all of them, for one that names
+ * several), so a place the owner switched off is never listed as covered —
+ * on the page ("Streets & spots we cover") or its /delivery card. Every area
+ * on (no block stored): the list as written.
+ */
+export function coveredLandmarks(area: DeliveryArea, facts: SiteFacts): string[] {
+  const off = new Set(pausedZones(area.zoneIds, facts).map((z) => z.id));
+  return area.landmarks.flatMap((l) => {
+    const place = landmarkOf(area, l);
+    const on = place.every ? place.in.every((id) => !off.has(id)) : place.in.some((id) => !off.has(id));
+    return on ? [place.name] : [];
+  });
+}
+
 /** An area page's words for these facts: fees filled in, sentences whose claim no longer holds left out. */
 export interface RenderedArea {
   slug: string;
@@ -560,6 +594,7 @@ export interface RenderedArea {
   title: string;
   description: string;
   intro: string[];
+  /** The streets and spots listed as covered now (coveredLandmarks). */
   landmarks: string[];
   popular: Array<{ name: string; blurb: string }>;
   faqs: Array<{ q: string; a: string }>;
@@ -604,7 +639,7 @@ export function renderArea(area: DeliveryArea, facts: SiteFacts): RenderedArea {
     title: area.title,
     description,
     intro: area.intro.map((c) => renderCopy(c, facts)).filter((p): p is string => p !== null),
-    landmarks: [...area.landmarks],
+    landmarks: coveredLandmarks(area, facts),
     popular: area.popular.map((p) => ({ ...p })),
     faqs: area.faqs.flatMap((f) => {
       if (f.when && !claimHolds(f.when, facts)) return [];

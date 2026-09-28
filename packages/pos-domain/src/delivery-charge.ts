@@ -414,6 +414,54 @@ export function deliveryChargeWords(target: DeliveryChargeTarget): string | null
   }
 }
 
+/**
+ * What the till's delivery-charge row says about the bill for an area it
+ * charges (target 'fee' with its item; CustomerInlinePanel). `lines` are the
+ * order's delivery-charge lines; `told` = the main process has answered the
+ * row's area (until then the bill may not show the area's charge yet).
+ *  - 'on': the area's charge is on the bill ("Take it off"; `qty` > 1: check it).
+ *  - 'other': a charge at ANOTHER fee is on the bill — the fee raised while
+ *    the order was open (a charge on the bill keeps its price), or another
+ *    charge tapped on by hand. Both fees are named, and one tap ("Put it
+ *    back" in the main process: the area's charge, the others off) swaps it.
+ *    Never "taken off by hand": a charge IS on the bill (review of 865657b).
+ *  - 'telling': none on the bill yet, the till still being told: the fee alone.
+ *  - 'off': none on the bill after the till answered: taken off by hand.
+ */
+export type DeliveryChargeRowState =
+  | { kind: 'on'; text: string; qty: number }
+  | { kind: 'other'; text: string; action: string }
+  | { kind: 'telling'; text: string }
+  | { kind: 'off'; text: string; action: 'Put it back' };
+
+export function deliveryChargeRowState(
+  feeCents: number,
+  lines: readonly ChargeLine[],
+  told: boolean,
+): DeliveryChargeRowState {
+  const fee = formatCents(feeCents);
+  const rightQty = lines.filter((l) => l.unitPriceCents === feeCents).reduce((n, l) => n + l.quantity, 0);
+  const others = lines.filter((l) => l.unitPriceCents !== feeCents);
+  const otherQty = others.reduce((n, l) => n + l.quantity, 0);
+  if (otherQty > 0) {
+    if (rightQty > 0) {
+      const what =
+        otherQty === 1
+          ? `a ${formatCents(others[0]?.unitPriceCents ?? 0)} delivery charge`
+          : `${otherQty} other delivery charges`;
+      return { kind: 'other', text: `The bill has ${what} as well as this area’s ${fee} — check it`, action: `Keep only ${fee}` };
+    }
+    const what =
+      otherQty === 1
+        ? `a ${formatCents(others[0]?.unitPriceCents ?? 0)} delivery charge`
+        : `${otherQty} delivery charges at other fees (${[...new Set(others.map((l) => formatCents(l.unitPriceCents)))].join(', ')})`;
+    return { kind: 'other', text: `The bill has ${what} — this area is now ${fee}`, action: `Change to ${fee}` };
+  }
+  if (rightQty > 0) return { kind: 'on', text: `${fee} delivery charge is on the bill`, qty: rightQty };
+  if (!told) return { kind: 'telling', text: `Delivery to this area is ${fee}` };
+  return { kind: 'off', text: `Delivery to this area is ${fee} — not on the bill (taken off by hand)`, action: 'Put it back' };
+}
+
 // ---------------------------------------------------------------------------
 // The website's settings block
 // ---------------------------------------------------------------------------

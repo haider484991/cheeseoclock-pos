@@ -11,6 +11,7 @@ import {
 import { deliveryAreas } from './delivery-areas.js';
 import {
   buildSettingsBlock,
+  deliveryChargeRowState,
   deliveryChargeTarget,
   deliveryChargeWords,
   deliveryZonesPutBack,
@@ -594,5 +595,67 @@ describe('what the till’s delivery-charge row tells the main process (review o
     const before = makeDeliveryAreaTeller();
     before.told('o1', 'DHA Phase 6');
     expect(makeDeliveryAreaTeller().shouldTell('o1', '')).toBe(false);
+  });
+});
+
+/**
+ * What the till's delivery-charge row says about the bill for an area it
+ * charges (CustomerInlinePanel): the area's charge on the bill; a charge at
+ * ANOTHER fee on it — the fee raised while the order was open, or another
+ * charge tapped on by hand — named with the area's fee and one tap to swap
+ * (review of 865657b: it said "not on the bill (taken off by hand)" while a
+ * Rs 250 charge WAS on the bill); none yet while the till is being told; none
+ * after it answered = taken off by hand. Made-up ids.
+ */
+describe('the delivery-charge row’s words for the bill (review of 865657b)', () => {
+  const line = (id: string, cents: number, quantity = 1) => ({ id, unitPriceCents: cents, quantity });
+
+  it('the area’s charge on the bill: says so, with how many', () => {
+    expect(deliveryChargeRowState(30_000, [line('a', 30_000)], true)).toEqual({ kind: 'on', text: 'Rs 300 delivery charge is on the bill', qty: 1 });
+    expect(deliveryChargeRowState(30_000, [line('a', 30_000, 2)], false)).toMatchObject({ kind: 'on', qty: 2 });
+  });
+
+  it('a charge at another fee on the bill (a fee raised while the order is open): both fees and a one-tap swap — never “taken off by hand”', () => {
+    for (const told of [true, false]) {
+      const s = deliveryChargeRowState(30_000, [line('old', 25_000)], told);
+      expect(s).toEqual({
+        kind: 'other',
+        text: 'The bill has a Rs 250 delivery charge — this area is now Rs 300',
+        action: 'Change to Rs 300',
+      });
+      expect(s.text).not.toContain('taken off by hand');
+    }
+    // Another charge tapped on by hand (Rs 200 on a Rs 250 area): the same.
+    expect(deliveryChargeRowState(25_000, [line('x', 20_000)], true)).toMatchObject({
+      kind: 'other',
+      text: 'The bill has a Rs 200 delivery charge — this area is now Rs 250',
+    });
+  });
+
+  it('the area’s charge AND another one on the bill: says both, and the tap keeps only the area’s', () => {
+    expect(deliveryChargeRowState(30_000, [line('old', 25_000), line('new', 30_000)], true)).toEqual({
+      kind: 'other',
+      text: 'The bill has a Rs 250 delivery charge as well as this area’s Rs 300 — check it',
+      action: 'Keep only Rs 300',
+    });
+  });
+
+  it('several charges at other fees: counted and named', () => {
+    expect(deliveryChargeRowState(30_000, [line('a', 25_000), line('b', 20_000)], true)).toMatchObject({
+      kind: 'other',
+      text: 'The bill has 2 delivery charges at other fees (Rs 250, Rs 200) — this area is now Rs 300',
+    });
+    expect(deliveryChargeRowState(30_000, [line('a', 25_000, 2)], true)).toMatchObject({
+      text: 'The bill has 2 delivery charges at other fees (Rs 250) — this area is now Rs 300',
+    });
+  });
+
+  it('none on the bill: the fee alone while the till is being told; after it answered, taken off by hand with “Put it back”', () => {
+    expect(deliveryChargeRowState(30_000, [], false)).toEqual({ kind: 'telling', text: 'Delivery to this area is Rs 300' });
+    expect(deliveryChargeRowState(30_000, [], true)).toEqual({
+      kind: 'off',
+      text: 'Delivery to this area is Rs 300 — not on the bill (taken off by hand)',
+      action: 'Put it back',
+    });
   });
 });

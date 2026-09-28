@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { FEE_SUMMARY, type PublishedSettings } from '@cheeseoclock/shared-types';
 import golden from './__fixtures__/site-copy-v0.7.26.json';
-import { DELIVERY_AREAS, feeText, getArea, renderArea } from './areas';
+import { DELIVERY_AREAS, coveredLandmarks, feeText, getArea, renderArea } from './areas';
 import {
   DEFAULT_FACTS,
   DEFAULT_ZONE_FACTS,
@@ -707,5 +707,72 @@ describe('a switched-off area’s fee never appears in the page text; its paused
     expect(copyText(HOME_HERO_FEE, facts)).toBe('Delivery paused right now');
     expect(feeSummary(facts)).toEqual([]);
     for (const a of DELIVERY_AREAS) expect(renderArea(a, facts).description).toMatch(/paused right now/);
+  });
+});
+
+/**
+ * "Streets & spots we cover" on an area page, and the first four on its
+ * /delivery card, never list a place the owner has switched off (review of
+ * 865657b: Emaar Crescent Bay stayed listed under the paused note). A street
+ * is listed while an area of the page it lies in is on; with no block, the
+ * lists are exactly as before.
+ */
+describe('a switched-off place is not listed as a street or spot we cover', () => {
+  const off = (ids: readonly string[]) =>
+    factsFromBlock(
+      block((zs) => {
+        for (const id of ids) zone(zs, id).active = false;
+      }),
+    );
+  const listed = (slug: string, ids: readonly string[]) => renderArea(getArea(slug)!, off(ids)).landmarks;
+  const card = (slug: string, ids: readonly string[]) => coveredLandmarks(getArea(slug)!, off(ids)).slice(0, 4);
+
+  it('with no block (or every area on) the lists and the cards are exactly as before', () => {
+    for (const g of golden.areas) {
+      expect(coveredLandmarks(getArea(g.slug)!, DEFAULT_FACTS), g.slug).toEqual(g.landmarks);
+      expect(coveredLandmarks(getArea(g.slug)!, factsFromBlock(block())), g.slug).toEqual(g.landmarks);
+      expect(renderArea(getArea(g.slug)!, factsFromBlock(block())).landmarks, g.slug).toEqual(g.landmarks);
+    }
+  });
+
+  it('Phase 8 with Emaar off: Emaar Crescent Bay is not listed, and its card shows the next place instead', () => {
+    expect(listed('dha-phase-8', ['emaar'])).toEqual([
+      'Zulfiqar Commercial',
+      'Al-Murtaza Commercial',
+      'Do Darya side',
+      'Creek Vista',
+      'Khayaban-e-Shaheen',
+    ]);
+    expect(card('dha-phase-8', ['emaar'])).toEqual(['Zulfiqar Commercial', 'Al-Murtaza Commercial', 'Do Darya side', 'Creek Vista']);
+    expect(listed('dha-phase-8', ['creek-vista'])).not.toContain('Creek Vista');
+    // Phase 8 itself off, Emaar and Creek Vista on: only those two are listed.
+    expect(listed('dha-phase-8', ['dha-8'])).toEqual(['Emaar Crescent Bay', 'Creek Vista']);
+  });
+
+  it('each place that is an area of its own goes when that area is off', () => {
+    expect(listed('dha-phase-7', ['dha-7-ext'])).toEqual(['Khayaban-e-Sehar', 'Sehar Commercial', 'Jami Commercial']);
+    expect(listed('dha-phase-7', ['dha-7'])).toEqual(['Phase 7 Extension']);
+    expect(listed('dha-phase-4', ['dha-3'])).not.toContain('DHA Phase 3');
+    expect(listed('dha-phase-4', ['dha-4'])).toEqual(['DHA Phase 3']);
+    expect(listed('dha-phase-1-2', ['dha-2-ext'])).not.toContain('Phase 2 Extension');
+    expect(listed('dha-phase-1-2', ['dha-1', 'dha-2'])).toEqual(['Korangi Road stretch', 'Phase 2 Extension']);
+  });
+
+  it('Clifton: Boat Basin goes with Block 5, and “Clifton Blocks 1–9” with any block', () => {
+    expect(listed('clifton', ['clifton-5'])).toEqual(['Schon Circle', 'Bilawal Chowrangi', 'Sea View apartments side']);
+    expect(listed('clifton', ['clifton-1'])).toEqual(['Boat Basin', 'Schon Circle', 'Bilawal Chowrangi', 'Sea View apartments side']);
+  });
+
+  it('a page whose every area is off lists none (its paused note says so), and neither does its card', () => {
+    for (const a of DELIVERY_AREAS) {
+      expect(renderArea(a, off(a.zoneIds)).landmarks, a.slug).toEqual([]);
+      expect(coveredLandmarks(a, off(a.zoneIds)), a.slug).toEqual([]);
+    }
+  });
+
+  it('the /delivery cards read the covered list, not the page data', () => {
+    const src = readFileSync(fileURLToPath(new URL('../app/delivery/page.tsx', import.meta.url)), 'utf8');
+    expect(src).toContain('coveredLandmarks(area, facts)');
+    expect(src).not.toMatch(/area\.landmarks/);
   });
 });

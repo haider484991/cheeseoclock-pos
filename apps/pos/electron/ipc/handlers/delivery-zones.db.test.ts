@@ -926,6 +926,23 @@ describe.skipIf(!Sqlite)(
       expect(charges(await area(orderId, 'DHA Phase 8'))).toEqual([[fee300(), 30_000, 1]]);
     });
 
+    it('a fee raised while the order is open: the bill keeps its Rs 250 until the row’s one tap swaps it for Rs 300; beside a charge tapped on by hand, the tap keeps only the area’s', async () => {
+      const orderId = await deliveryOrder();
+      expect(charges(await area(orderId, 'DHA Phase 8'))).toEqual([[menu.d250, 25_000, 1]]);
+      expect((await save(zones((z) => (z.id === 'dha-8' ? { ...z, feeCents: 30_000 } : z)))).ok).toBe(true);
+      // No area change: the line keeps the price it was rung up at (the row names both fees).
+      h.session = CASHIER;
+      expect(charges(await area(orderId, 'DHA Phase 8'))).toEqual([[menu.d250, 25_000, 1]]);
+      // The row's "Change to Rs 300" (putBack): the area's charge on, the Rs 250 off.
+      const swap = () =>
+        data<OrderSnapshot>('orders:setDeliveryArea', { orderId, area: 'DHA Phase 8', putBack: true });
+      expect(charges(await swap())).toEqual([[fee300(), 30_000, 1]]);
+      // A Rs 200 tapped on beside it: "Keep only Rs 300".
+      await data('orders:addItem', { orderId, menuItemId: menu.d200, quantity: 1 });
+      expect(charges(await swap())).toEqual([[fee300(), 30_000, 1]]);
+      expect(db.prepare(`SELECT subtotal_cents FROM orders WHERE id = ?`).get(orderId)).toEqual({ subtotal_cents: 130_000 });
+    });
+
     it('a cashier may take it off by hand — audited like any line — and it stays off until the area is picked again', async () => {
       const orderId = await deliveryOrder();
       const s = await area(orderId, 'DHA Phase 6');
@@ -1259,6 +1276,28 @@ describe.skipIf(!Sqlite)(
       expect(charges(await panelArea(orderId, 'DHA Phase 8'))).toEqual([[menu.d250, 25_000, 1]]);
       h.session = CASHIER;
       expect(charges(await data<OrderSnapshot>('orders:sendToKitchen', { orderId }))).toEqual([[menu.d250, 25_000, 1]]);
+    });
+
+    // The owner's summary (apps/web/DEPLOY.md), as a skeptic's probe of 865657b found it: "A fee the
+    // cashier takes off by hand stays off unless a different area is picked, or the order is
+    // switched away from Delivery and back."
+    it('the owner’s sentence: taken off by hand, the fee stays off unless a different area is picked — or the order is switched away from Delivery and back', async () => {
+      const orderId = await deliveryOrder();
+      const c = await customerAt('DHA Phase 6');
+      const line = (await saveCustomer(orderId, c)).items.find((i) => i.menuItemId === menu.d200)!;
+      h.session = CASHIER;
+      await data('orders:removeItem', { orderId, orderItemId: line.id });
+      // Stays off: the same area saved again (Pay's early save), and the panel asking again.
+      expect(charges(await saveCustomer(orderId, c))).toEqual([]);
+      expect(charges(await panelArea(orderId, 'DHA Phase 6'))).toEqual([]);
+      // Away from Delivery and back: becoming a delivery decides the charge again — it goes back on.
+      h.session = CASHIER;
+      expect(charges(await data<OrderSnapshot>('orders:setMode', { orderId, mode: 'takeaway' }))).toEqual([]);
+      expect(charges(await data<OrderSnapshot>('orders:setMode', { orderId, mode: 'delivery' }))).toEqual([
+        [menu.d200, 20_000, 1],
+      ]);
+      // …and Send takes it with the order.
+      expect(charges(await data<OrderSnapshot>('orders:sendToKitchen', { orderId }))).toEqual([[menu.d200, 20_000, 1]]);
     });
 
     it('a website order: the import’s own customer save adds nothing, whatever its area; the till’s area paths never touch it', async () => {

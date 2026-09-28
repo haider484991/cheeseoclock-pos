@@ -13,7 +13,7 @@ import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { OrderSnapshot } from '@cheeseoclock/shared-types';
+import { DEFAULT_DELIVERY_ZONES, type OrderSnapshot } from '@cheeseoclock/shared-types';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { useCheckoutStore } from '../../stores/checkoutStore';
 import { CustomerInlinePanel, makeEmptyCustomerForm } from './CustomerInlinePanel';
@@ -31,11 +31,15 @@ vi.mock('zustand', async (importOriginal) => {
 const MENU = [
   { id: 'fee-200', name: 'Delivery Charge (Rs 200)', basePriceCents: 20_000, isActive: true, categoryId: 'c-fees' },
   { id: 'fee-250', name: 'Delivery Charge (Rs 250)', basePriceCents: 25_000, isActive: true, categoryId: 'c-fees' },
+  { id: 'fee-300', name: 'Delivery Charge (Rs 300)', basePriceCents: 30_000, isActive: true, categoryId: 'c-fees' },
 ];
 
+/** The areas the till has (Settings → Delivery areas); the released ones unless a test raises a fee. */
+let rules: unknown = undefined;
 function render(node: ReactNode): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(['menu', 'items', { categoryId: null, activeOnly: true }], MENU);
+  if (rules !== undefined) qc.setQueryData(['checkout-rules'], rules);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <ToastProvider>{node}</ToastProvider>
@@ -69,7 +73,10 @@ function order(lines: Array<[string, number]>): OrderSnapshot {
 const panel = (area: string) =>
   render(<CustomerInlinePanel mode="delivery" form={{ ...makeEmptyCustomerForm(), area }} setForm={() => {}} />);
 
-afterEach(() => useCheckoutStore.setState({ snapshot: null, mode: 'takeaway' }));
+afterEach(() => {
+  useCheckoutStore.setState({ snapshot: null, mode: 'takeaway' });
+  rules = undefined;
+});
 
 describe('the delivery-charge row only shows what the bill carries', () => {
   it('the area’s charge on the bill: says so, with “Take it off”', () => {
@@ -93,5 +100,41 @@ describe('the delivery-charge row only shows what the bill carries', () => {
     expect(text(panel('Gulshan Block 13'))).toContain(
       'Not one of the delivery areas (Settings → Delivery areas): the till adds no delivery charge, and takes off the one it added for the area before. Add one by hand if you deliver there.',
     );
+  });
+
+  // Review of 865657b: with a charge at ANOTHER fee on the bill the row said "Delivery to this area
+  // is Rs 300 — not on the bill (taken off by hand)" and "Put it back", while Rs 250 WAS on the bill.
+  it('a fee raised while the order is open: the bill’s Rs 250 and the area’s Rs 300, with a one-tap swap — never “taken off by hand”', () => {
+    rules = {
+      delivery: {
+        zones: DEFAULT_DELIVERY_ZONES.zones.map((z) => (z.id === 'dha-8' ? { ...z, feeCents: 30_000, feeItemId: 'fee-300' } : z)),
+      },
+    };
+    useCheckoutStore.setState({ mode: 'delivery', snapshot: order([['Test Pizza', 100_000], ['Delivery Charge (Rs 250)', 25_000]]) });
+    const t = text(panel('DHA Phase 8'));
+    expect(t).toContain('The bill has a Rs 250 delivery charge — this area is now Rs 300');
+    expect(t).toContain('Change to Rs 300');
+    expect(t).not.toContain('taken off by hand');
+    expect(t).not.toContain('Put it back');
+    expect(t).not.toContain('is on the bill');
+  });
+
+  it('another charge tapped on by hand: the same words and swap', () => {
+    useCheckoutStore.setState({ mode: 'delivery', snapshot: order([['Test Pizza', 100_000], ['Delivery Charge (Rs 200)', 20_000]]) });
+    const t = text(panel('DHA Phase 8'));
+    expect(t).toContain('The bill has a Rs 200 delivery charge — this area is now Rs 250');
+    expect(t).toContain('Change to Rs 250');
+    expect(t).not.toContain('taken off by hand');
+  });
+
+  it('the area’s charge and another on the bill: never just “on the bill” — says both, and keeps only the area’s in one tap', () => {
+    useCheckoutStore.setState({
+      mode: 'delivery',
+      snapshot: order([['Test Pizza', 100_000], ['Delivery Charge (Rs 200)', 20_000], ['Delivery Charge (Rs 250)', 25_000]]),
+    });
+    const t = text(panel('DHA Phase 8'));
+    expect(t).toContain('The bill has a Rs 200 delivery charge as well as this area’s Rs 250 — check it');
+    expect(t).toContain('Keep only Rs 250');
+    expect(t).not.toContain('Rs 250 delivery charge is on the bill');
   });
 });

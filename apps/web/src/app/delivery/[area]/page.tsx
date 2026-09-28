@@ -19,8 +19,10 @@ import { getSiteFacts } from '@/lib/site-facts';
  *
  * No `dynamicParams = false`: a page revalidated on demand leaves Next's
  * cache, and under `next start` a route with no fallback then answers 404
- * instead of rendering it again (isr-routes.test.ts). An unknown slug is
- * still a 404 — the page calls notFound() for it.
+ * instead of rendering it again (isr-routes.test.ts). An unknown slug never
+ * gets here: the middleware (src/middleware.ts) sends it to the site's own
+ * 404 page, so it is neither rendered nor cached per slug. The notFound()
+ * below stays as a second guard.
  */
 export const dynamic = 'force-static';
 export const revalidate = 3600;
@@ -140,36 +142,38 @@ export default async function AreaPage({ params }: { params: { area: string } })
             .
           </p>
 
-          {/* Coverage */}
-          <Reveal>
-            <section className="mt-12">
-              <h2 className="font-display text-3xl tracking-wide text-cream">
-                STREETS &amp; SPOTS WE COVER IN {area.name.toUpperCase()}
-              </h2>
-              <ul className="mt-4 flex flex-wrap gap-2">
-                {area.landmarks.map((l) => (
-                  <li
-                    key={l}
-                    className="rounded-full border border-white/10 bg-night-card px-4 py-2 text-sm font-semibold text-cream/80"
+          {/* Coverage: only the places delivered to now (none while the whole page is paused). */}
+          {area.landmarks.length > 0 && (
+            <Reveal>
+              <section className="mt-12">
+                <h2 className="font-display text-3xl tracking-wide text-cream">
+                  STREETS &amp; SPOTS WE COVER IN {area.name.toUpperCase()}
+                </h2>
+                <ul className="mt-4 flex flex-wrap gap-2">
+                  {area.landmarks.map((l) => (
+                    <li
+                      key={l}
+                      className="rounded-full border border-white/10 bg-night-card px-4 py-2 text-sm font-semibold text-cream/80"
+                    >
+                      📍 {l}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-3 text-sm text-smoke">
+                  Not sure about your street?{' '}
+                  <a
+                    href={waLink(`Hi! Do you deliver to my address in ${area.name}? `)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-semibold text-cheese hover:text-cheese-hot"
                   >
-                    📍 {l}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-3 text-sm text-smoke">
-                Not sure about your street?{' '}
-                <a
-                  href={waLink(`Hi! Do you deliver to my address in ${area.name}? `)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-semibold text-cheese hover:text-cheese-hot"
-                >
-                  Ask on WhatsApp
-                </a>{' '}
-                and we will confirm before you order.
-              </p>
-            </section>
-          </Reveal>
+                    Ask on WhatsApp
+                  </a>{' '}
+                  and we will confirm before you order.
+                </p>
+              </section>
+            </Reveal>
+          )}
 
           {/* Popular */}
           <Reveal>

@@ -113,10 +113,31 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   stored block: at build, after every publish or areas Save, and at least
   hourly. The area pages must not set `dynamicParams = false`: with it,
   `next start` answered 404 for all seven after any publish
-  (`isr-routes.test.ts`). Check the area pages on a Vercel preview after a
-  test publish before merging. With no database they use the built-in
-  areas and fees; on a database error, the last areas and fees that server
-  read, else the built-in ones.
+  (`isr-routes.test.ts`). Any other `/delivery/<slug>` (a made-up one,
+  another case or spelling) is sent by the middleware (`src/middleware.ts`,
+  Edge Middleware on Vercel, for `/delivery/<one segment>` only) to the
+  site's own 404 page — "Page not found", uncached — so it is never rendered
+  or cached as a page of its own. Check the area pages on a Vercel preview
+  after a test publish before merging: all seven 200, and `/delivery/nope`
+  404 with "This page went cold" in the page source. With no database they
+  use the built-in areas and fees; on a database error, the last areas and
+  fees that server read, else the built-in ones.
+- A street or spot in an area switched off is not listed under "Streets &
+  spots we cover" on its area page, nor on its `/delivery` card
+  (`lib/areas.ts` `coveredLandmarks`); with every area on, the lists are as
+  before.
+- **On the till (what to tell the owner and the cashiers):**
+  - Picking a delivery area puts its fee on the bill by itself; picking
+    another area swaps it. Clearing the area, or switching the order to
+    Takeaway or foodpanda, takes it off; switching back to Delivery puts it
+    back.
+  - A fee the cashier takes off by hand stays off unless a different area is
+    picked, or the order is switched away from Delivery and back. "Put it
+    back" on the charge row puts it back.
+  - A charge already on the bill keeps its price when a fee is changed in
+    Settings. The charge row then says so ("The bill has a Rs 250 delivery
+    charge — this area is now Rs 300"), and "Change to Rs 300" swaps it in
+    one tap. The same happens for another delivery charge tapped on by hand.
 - Before testing on a Vercel **preview**, give the Preview environment its own
   Neon branch and its own `BRIDGE_SECRET`: with the variables set for "all
   environments", a sandbox till publishing to a preview would replace the
