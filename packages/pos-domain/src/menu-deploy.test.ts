@@ -15,6 +15,7 @@ import {
   menuDeployLocalFor,
   menuDeployNeedsOwner,
   menuDeployNoticeFor,
+  menuDeployPriceJump,
   menuDeployPhaseMessage,
   menuDeployReportKey,
   menuMarkerCovers,
@@ -250,28 +251,86 @@ describe('THE RULE, row by row', () => {
     });
   });
 
-  it('R8: a file that would cut prices to less than half or change the tax waits for the owner even "by themselves"', () => {
-    const held = { attempts: 0, nextTryAt: null, refused: false, held: 'it would cut 2 prices to less than half', error: null, reported: [] };
+  it('R8: a file menuDeployNeedsOwner holds waits for the owner even "by themselves"', () => {
+    const held = { attempts: 0, nextTryAt: null, refused: false, held: 'it would move 2 prices to less than half, more than double or Rs 0 (…)', error: null, reported: [] };
     expect(decideMenuDeployStep(input({ local: held }))).toEqual({
       rule: 'R8',
       phase: 'waiting_for_owner',
       report: { outcome: 'waiting_for_owner' },
       claim: null,
     });
-    // What holds a file, and what does not.
-    expect(menuDeployNeedsOwner({ taxChanges: 0, priceChanges: [{ fromCents: 110_000, toCents: 120_000 }, { fromCents: 50_000, toCents: 30_000 }] })).toBeNull();
-    expect(menuDeployNeedsOwner({ taxChanges: 0, priceChanges: [{ fromCents: 110_000, toCents: 0 }] })).toBe('it would cut 1 price to less than half');
-    expect(menuDeployNeedsOwner({ taxChanges: 0, priceChanges: [{ fromCents: 110_000, toCents: 100 }, { fromCents: 25_000, toCents: 12_499 }] })).toBe(
-      'it would cut 2 prices to less than half',
+    expect(menuDeployPhaseMessage('waiting_for_owner', { fileName: 'm.json', seq: 4, maxFormatVersion: 3, heldReason: 'it would change the tax (Test Pie 16% → 0%)' })).toBe(
+      'A new menu file, file #4 (m.json), waits for your OK: it would change the tax (Test Pie 16% → 0%). Menu → Import shows every change first.',
     );
-    // Exactly half is not less than half; an item that was Rs 0 has nothing to cut.
-    expect(menuDeployNeedsOwner({ taxChanges: 0, priceChanges: [{ fromCents: 25_000, toCents: 12_500 }, { fromCents: 0, toCents: 0 }] })).toBeNull();
-    expect(menuDeployNeedsOwner({ taxChanges: 30, priceChanges: [] })).toBe('it would change the tax on 30 items');
-    expect(menuDeployNeedsOwner({ taxChanges: 1, priceChanges: [{ fromCents: 1_000, toCents: 1 }] })).toBe(
-      'it would cut 1 price to less than half and change the tax on 1 item',
+  });
+
+  it('the owner’s-OK price rule: below half, above double, or to Rs 0 — exactly half and exactly double are ordinary', () => {
+    // (a) below half, (c) Rs 0 from above Rs 0.
+    expect(menuDeployPriceJump(100_000, 49_999)).toBe(true);
+    expect(menuDeployPriceJump(100_000, 0)).toBe(true);
+    expect(menuDeployPriceJump(1, 0)).toBe(true);
+    // (b) above double — a price of Rs 0 getting any charge counts.
+    expect(menuDeployPriceJump(100_000, 200_001)).toBe(true);
+    expect(menuDeployPriceJump(100_000, 1_000_000)).toBe(true);
+    expect(menuDeployPriceJump(0, 1)).toBe(true);
+    // Ordinary.
+    expect(menuDeployPriceJump(100_000, 50_000)).toBe(false);
+    expect(menuDeployPriceJump(100_000, 200_000)).toBe(false);
+    expect(menuDeployPriceJump(100_000, 120_000)).toBe(false);
+    expect(menuDeployPriceJump(100_000, 60_000)).toBe(false);
+    expect(menuDeployPriceJump(0, 0)).toBe(false);
+    expect(menuDeployPriceJump(5_000, 5_000)).toBe(false);
+  });
+
+  it('what holds a file, and the words name each item, choice and tax that tripped it', () => {
+    const none = { priceChanges: [], choiceChanges: [], taxMoves: [], newTax: null };
+    // Ordinary changes: nothing held.
+    expect(
+      menuDeployNeedsOwner({
+        ...none,
+        priceChanges: [
+          { name: 'Test Pie', fromCents: 110_000, toCents: 120_000 },
+          { name: 'Test Roll', fromCents: 50_000, toCents: 30_000 },
+        ],
+        choiceChanges: [{ name: 'Test Chili Dip', group: 'Test dip', fromCents: 5_000, toCents: 7_000 }],
+      }),
+    ).toBeNull();
+    expect(menuDeployNeedsOwner(none)).toBeNull();
+    // A 10× rise on its own (the skeptic's run 2) is held, and named.
+    expect(menuDeployNeedsOwner({ ...none, priceChanges: [{ name: 'Test Pie', fromCents: 110_000, toCents: 1_100_000 }] })).toBe(
+      'it would move 1 price to less than half, more than double or Rs 0 (Test Pie Rs 1,100 → Rs 11,000)',
     );
-    expect(menuDeployPhaseMessage('waiting_for_owner', { fileName: 'm.json', seq: 4, maxFormatVersion: 3, heldReason: 'it would change the tax on 30 items' })).toBe(
-      'A new menu file, file #4 (m.json), waits for your OK: it would change the tax on 30 items. Menu → Import shows every change first.',
+    // A choice cut to Rs 0 on its own is held, with its group.
+    expect(menuDeployNeedsOwner({ ...none, choiceChanges: [{ name: 'Test Chili Dip', group: 'Test dip', fromCents: 5_000, toCents: 0 }] })).toBe(
+      'it would move 1 price to less than half, more than double or Rs 0 (the choice “Test Chili Dip” (Test dip) Rs 50 → Rs 0)',
+    );
+    // Only the ones that tripped it are named.
+    expect(
+      menuDeployNeedsOwner({
+        ...none,
+        priceChanges: [
+          { name: 'Test Pie', fromCents: 110_000, toCents: 100 },
+          { name: 'Test Roll', fromCents: 25_000, toCents: 26_000 },
+          { name: 'Test Lemonade', fromCents: 25_000, toCents: 12_499 },
+        ],
+      }),
+    ).toBe('it would move 2 prices to less than half, more than double or Rs 0 (Test Pie Rs 1,100 → Rs 1, Test Lemonade Rs 250 → Rs 124.99)');
+    // The tax: an item moved onto another rate, or a tax category added.
+    expect(menuDeployNeedsOwner({ ...none, taxMoves: [{ name: 'Test Pie', fromBps: 1_600, toBps: 0 }] })).toBe('it would change the tax (Test Pie 16% → 0%)');
+    expect(menuDeployNeedsOwner({ ...none, newTax: { name: 'Test Tax', rateBps: 1_800 } })).toBe(
+      'it would change the tax (a new tax category, Test Tax (18%))',
+    );
+    expect(
+      menuDeployNeedsOwner({
+        ...none,
+        priceChanges: [{ name: 'Test Pie', fromCents: 1_000, toCents: 1 }],
+        taxMoves: [{ name: 'Test Pie', fromBps: null, toBps: 1_600 }],
+      }),
+    ).toBe('it would move 1 price to less than half, more than double or Rs 0 (Test Pie Rs 10 → Rs 0.01) and change the tax (Test Pie ? → 16%)');
+    // A long list names the first six, then says how many more.
+    const many = Array.from({ length: 9 }, (_, i) => ({ name: `Test Pie ${i + 1}`, fromBps: 1_600, toBps: 0 }));
+    expect(menuDeployNeedsOwner({ ...none, taxMoves: many })).toBe(
+      'it would change the tax (Test Pie 1 16% → 0%, Test Pie 2 16% → 0%, Test Pie 3 16% → 0%, Test Pie 4 16% → 0%, Test Pie 5 16% → 0%, Test Pie 6 16% → 0% and 3 more)',
     );
   });
 
@@ -346,7 +405,7 @@ describe('the words', () => {
     expect(menuDeployPhaseMessage('other_till', { ...ctx, appliedHereButMissing: true })).toBe(
       'This till put in file #4 (test-menu.json) before, but its menu doesn’t have it now (a backup copy restored since?). It is not put in again by itself; the next file from the costing PC goes in as usual.',
     );
-    expect(menuDeployPhaseMessage('waiting_for_owner', { ...ctx, appliedHereButMissing: true })).toContain('one tap puts it in');
+    expect(menuDeployPhaseMessage('waiting_for_owner', { ...ctx, appliedHereButMissing: true })).toContain('the owner’s one tap puts it in');
     expect(menuDeployPhaseMessage('refused', { ...ctx, error: 'The menu file has a problem' })).toContain('Fix the file on the costing PC');
     expect(menuDeployPhaseMessage('applied', { ...ctx, automatic: true })).toBe('This till put in the newest menu file, file #4 (test-menu.json), by itself.');
     for (const phase of [

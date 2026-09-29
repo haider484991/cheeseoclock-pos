@@ -14,10 +14,10 @@ import { FileUp, AlertTriangle, Tags, ShieldCheck } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { useSessionStore } from '../../stores/sessionStore';
 import { freshStartWebsiteWords } from './freshStartWords';
-import { priceDetailGroups, sheetPriceText, tillPriceText } from './importPrices';
+import { importApplyQuestion, priceDetailGroups, sheetPriceText, tillPriceText } from './importPrices';
 import { MenuDeployPanel } from './MenuDeployPanel';
 import { MENU_DEPLOY_KEY, useMenuDeployView } from './useMenuDeploy';
-import { applyButtonLabel, applyQuestion } from '../settings/shop-rules/menuDeployWords';
+import { applyButtonLabel, applyQuestion, ownerNeededWords } from '../settings/shop-rules/menuDeployWords';
 
 const ACTION_LABEL: Record<MenuImportAction, string> = {
   create: 'New',
@@ -67,7 +67,7 @@ export function ImportTab() {
   const fresh = !!preview?.fresh;
   const deploy = useMenuDeployView();
   const isOwner = useSessionStore((st) => st.user?.role === 'admin');
-  /** Taking a file over from a till that stopped halfway is the owner's (the main process says so too). */
+  /** A take-over, and a file that waits for the owner's OK, are the owner's (the main process refuses anyone else too). */
   const needsOwner = !!deploy.data?.applyNeedsOwner && !isOwner;
 
   const pickMut = useMutation({
@@ -199,7 +199,7 @@ export function ImportTab() {
               {fromPackage ? (
                 <Button
                   variant="primary"
-                  title={needsOwner ? 'Taking it over needs the owner’s login' : undefined}
+                  title={needsOwner ? ownerNeededWords(deploy.data ?? { phase: 'waiting_for_owner' }) : undefined}
                   disabled={busy || !deploy.data?.canApplyNow || needsOwner}
                   onClick={() => {
                     void askConfirm(applyQuestion(deploy.data ?? { phase: 'waiting_for_owner' }, s), {
@@ -219,7 +219,7 @@ export function ImportTab() {
                     const f = preview.fresh;
                     const ask = f
                       ? `Replace the WHOLE menu with this file?\n\nRemoved: ${f.items.length} menu items, ${f.categories} categories, ${f.combos} combos, ${f.choiceGroups} choice groups and ${f.ingredients} ingredients, with their recipes and stock counts.\nLoaded: ${s.newItems} items, ${s.newIngredients} ingredients, ${s.recipesSet} recipes.\n\nSales history, customers, users, settings and tax stay. A backup is saved first (Settings → Backups).`
-                      : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.\n\n${s.priceLine} The till keeps the prices it has; the sheet's are kept beside them in Inventory.${s.keptLine ? `\n\n${s.keptLine}` : ''}`;
+                      : importApplyQuestion(s);
                     void askConfirm(ask).then((ok) => {
                       if (ok) applyMut.mutate(fresh);
                     });
@@ -240,7 +240,7 @@ export function ImportTab() {
             {fromPackage && (
               <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
                 The file from the costing PC. It goes in as an update — nothing is removed — with a backup copy made first.
-                {needsOwner ? ' Taking it over from the other till needs the owner’s login.' : ''}
+                {needsOwner ? ` ${ownerNeededWords(deploy.data ?? { phase: 'waiting_for_owner' })}` : ''}
               </p>
             )}
             {!fromPackage && (
@@ -472,7 +472,7 @@ function PriceLine({ preview }: { preview: MenuImportPreview }) {
             Price details{p.sheetDiffers > 0 ? ` (the sheet's price differs for ${p.sheetDiffers})` : ''}
           </summary>
           <p className="mt-2 text-xs text-stone-500">
-            The till keeps the prices it has (from deliveries, typed, or an earlier sheet). The sheet only prices new
+            The till keeps the ingredient prices it has (from deliveries, typed, or an earlier sheet). The sheet only prices new
             ingredients and ones with no price yet. Its price is kept beside the till&apos;s in Inventory → Ingredients,
             with &quot;Use the sheet&apos;s price&quot; on each one.
           </p>

@@ -681,6 +681,30 @@ describe('claiming a file (two linked tills)', () => {
     expect(taken[0]!['detail']).toMatchObject({ from: 'till-A', scope: 'shared' });
   });
 
+  it('a take-over never takes a claim whose lease is still live — the file, or an older one another till holds (the till asks from a "stalled" view that may be old)', async () => {
+    const p = (await uploadOk(key, menuFile('a'), at(0))).package;
+    expect((await claim('till-A', p.id)).status).toBe(200);
+    // Till A's lease has not run out: till B's owner taps "Take it over" from a view that said stalled.
+    const over = await claim('till-B', p.id, { takeOver: true, retry: true });
+    expect(over.status).toBe(409);
+    expect(menuDeployClaimRefusalSchema.parse(await over.json())).toMatchObject({ error: 'claimed', package: { claimedBy: 'till-A', leaseExpired: false } });
+    expect(await pkgRow(p.id)).toMatchObject({ state: 'claimed', claimed_by: 'till-A' });
+    expect(await events('taken_over')).toHaveLength(0);
+    // Till A still holds it, and reports it in.
+    expect((await report('till-A', p.id, 'applied')).status).toBe(200);
+    expect(await pkgRow(p.id)).toMatchObject({ state: 'applied', applied_by: 'till-A' });
+
+    // An older file another till holds, its lease live: a take-over of the newer one is still refused ("busy").
+    const p2 = (await uploadOk(key, menuFile('b'), at(1))).package;
+    expect((await claim('till-A', p2.id, { last: p.seq, lastId: p.id })).status).toBe(200);
+    const p3 = (await uploadOk(key, menuFile('c'), at(2))).package;
+    const busy = await claim('till-B', p3.id, { last: p.seq, lastId: p.id, takeOver: true });
+    expect(busy.status).toBe(409);
+    expect(menuDeployClaimRefusalSchema.parse(await busy.json())).toMatchObject({ error: 'busy', blockedBy: { id: p2.id, leaseExpired: false } });
+    expect(await pkgRow(p2.id)).toMatchObject({ state: 'claimed', claimed_by: 'till-A' });
+    expect(await events('taken_over')).toHaveLength(0);
+  });
+
   it('the first till may still claim its own run-out claim again', async () => {
     const p = (await uploadOk(key, menuFile('a'), at(0))).package;
     await claim('till-A', p.id);

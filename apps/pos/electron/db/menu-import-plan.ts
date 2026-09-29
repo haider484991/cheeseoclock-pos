@@ -517,6 +517,7 @@ export function planMenuImport(
     newItems: 0,
     updatedItems: 0,
     priceChanges: 0,
+    choicePriceChanges: 0,
     taxChanges: 0,
     recipesSet: 0,
     newIngredients: 0,
@@ -982,6 +983,7 @@ export function planMenuImport(
         else {
           oUpdate.priceDeltaCents = o.priceDeltaCents;
           changes.push(`"${om.row.name}" ${formatCents(om.row.priceDeltaCents)} → ${formatCents(o.priceDeltaCents)}`);
+          summary.choicePriceChanges++;
         }
       }
       if (om.row.isDefault !== o.isDefault) {

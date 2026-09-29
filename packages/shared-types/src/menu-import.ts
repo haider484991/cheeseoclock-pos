@@ -132,7 +132,10 @@ export interface MenuImportKept {
 export interface MenuImportSummary {
   newItems: number;
   updatedItems: number;
+  /** Existing menu items whose selling price changes to the file's. */
   priceChanges: number;
+  /** Existing choices whose extra charge changes to the file's ("Test Chili Dip" Rs 50 → Rs 70). */
+  choicePriceChanges: number;
   /** Items moved onto the file's tax rate. */
   taxChanges: number;
   recipesSet: number;

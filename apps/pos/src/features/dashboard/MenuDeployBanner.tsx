@@ -2,15 +2,17 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, Send } from 'lucide-react';
 import { MENU_DEPLOY_PROBLEM_PHASES } from '@cheeseoclock/shared-types';
 import { useMenuDeployView } from '../menu-mgmt/useMenuDeploy';
+import { BANNER_STAYS_WORDS } from '../settings/shop-rules/menuDeployWords';
 
 /**
  * Dashboard → Shop status (the owner): a menu file from the costing PC that
  * needs him — refused, given up after 5 tries, too new for this till, or
  * stopped halfway on the other till (red); or waiting for his OK (amber —
- * it stays here until he looks, whoever was signed in when it arrived and
- * its one-time note went by), or held back by the link to the other till
- * (amber: nothing on the screens says the link is down otherwise). Nothing
- * otherwise.
+ * it stays here until the file is put in, or a newer file replaces it, and
+ * says so: looking at it does not clear it, whoever was signed in when it
+ * arrived and its one-time note went by), or held back by the link to the
+ * other till (amber: nothing on the screens says the link is down
+ * otherwise). Nothing otherwise.
  */
 export function MenuDeployBanner() {
   const q = useMenuDeployView();
@@ -38,6 +40,7 @@ export function MenuDeployBanner() {
               : 'A menu file from the costing PC waits for your OK'}
         </div>
         <p className="mt-1">{view.message}</p>
+        {view.phase === 'waiting_for_owner' && <p className="mt-1 text-xs opacity-80">{BANNER_STAYS_WORDS}</p>}
         {view.phase === 'waiting_link' ? (
           <Link to="/settings?tab=advanced" className="mt-2 inline-block font-semibold underline">
             Open Settings → Second till

@@ -5,18 +5,26 @@
  * from the main process (pos-domain menu-deploy.ts).
  */
 import type { MenuAutoUpdate, MenuAutoUpdateMode, MenuDeployPhase, MenuDeployView } from '@cheeseoclock/shared-types';
+import { importApplyQuestion, type ImportQuestionCounts } from '../../menu-mgmt/importPrices';
+
+/**
+ * THE owner's-OK rule in the owner's words (pos-domain menuDeployNeedsOwner /
+ * menuDeployPriceJump): exactly what holds a file — nothing broader.
+ */
+export const OWNER_OK_RULE_WORDS =
+  'A file that would change the price of a menu item, or the charge of a choice, you already have to less than half, to more than double (a free choice getting a charge counts) or to Rs 0 — or would change the tax (move an item onto another tax, or add a new tax) — waits for your OK, and only the owner’s login can put it in.';
 
 /** The card's two choices, in the owner's words. */
 export const MENU_AUTO_UPDATE_OPTIONS: ReadonlyArray<{ mode: MenuAutoUpdateMode; label: string; help: string }> = [
   {
     mode: 'auto',
     label: 'Apply by themselves',
-    help: 'A new file from the costing PC goes in on one till within minutes — the same update as Menu → Import, with the rules above, a backup copy first — and reaches the other till through the link. A file that would cut prices to less than half, or change the tax, still waits for your OK.',
+    help: `A new file from the costing PC goes in on one till — the same update as Menu → Import, with the rules above, a backup copy first — and reaches the other till through the link. Each till looks about every 3 minutes while online orders are on, every 16 to 24 minutes otherwise, and waits until no order has been rung up on it for 2 minutes. ${OWNER_OK_RULE_WORDS}`,
   },
   {
     mode: 'ask',
     label: 'Wait for my OK (Menu → Import)',
-    help: 'A new file waits in Menu → Import: you see every change first, then put it in with one tap.',
+    help: 'A new file waits in Menu → Import: you see every change first, then put it in with one tap — the owner’s login only.',
   },
 ];
 
@@ -66,11 +74,15 @@ export const NEW_KEY_QUESTION =
 /**
  * What a leaked key could do, and the fix (known limits, said to the owner). True to the code: a
  * file changes item prices, tax and choices as far as "What a menu file may change" above allows
- * (DEFAULT_MENU_IMPORT_POLICY: the file wins on those; only ingredient prices always stay the
- * till's); an unattended file that would cut prices to less than half or change the tax waits.
+ * (DEFAULT_MENU_IMPORT_POLICY: the file wins on those); ingredient prices stay the till's, except
+ * that a new ingredient, or one with no price yet, takes the file's; an unattended file that the
+ * owner's-OK rule holds (OWNER_OK_RULE_WORDS) waits, and only the owner may put it in.
  */
 export const KEY_SAFETY_WORDS =
-  'Anyone with the key can send a menu file. It goes in as Menu → Import would put it in: item prices, tax, choices and recipes change as far as “What a menu file may change” above allows (ingredient prices always stay the till’s), never a fresh start, and a backup copy is made first. A file that would cut prices to less than half, or change the tax, always waits for your OK, and every file is in the history. Worried the key got out? Make a new one: the old one stops at once.';
+  'Anyone with the key can send a menu file. It goes in as Menu → Import would put it in: item prices, tax, choices and recipes change as far as “What a menu file may change” above allows, never a fresh start, and a backup copy is made first. Ingredient prices stay the till’s, except that a new ingredient, or one with no price yet, takes the file’s. A file that would move an item’s price or a choice’s charge to less than half, more than double or Rs 0, or change the tax, waits for the owner’s OK, and every file is in the history. Worried the key got out? Make a new one: the old one stops at once.';
+
+/** The Dashboard's banner for a file waiting for the owner's OK: it stays until the file is put in (looking does not clear it). */
+export const BANNER_STAYS_WORDS = 'This stays here until the file is put in (or a newer file from the costing PC replaces it).';
 
 /** Menu → Import's button for the file waiting for someone: the words the phase sentence names. */
 export function showChangesLabel(view: Pick<MenuDeployView, 'phase'>): string {
@@ -119,14 +131,18 @@ export function applyButtonLabel(view: Pick<MenuDeployView, 'phase'>): string {
 }
 
 /**
- * The question before the Apply tap — today's Menu → Import wording, plus
- * the take-over's warning.
+ * The question before the Apply tap — Menu → Import's question (which prices
+ * change to the file's and which stay the till's), plus the take-over's warning.
  */
-export function applyQuestion(
-  view: Pick<MenuDeployView, 'phase'>,
-  s: { newItems: number; updatedItems: number; priceChanges: number; recipesSet: number; newIngredients: number; updatedIngredients: number; priceLine: string; keptLine: string | null },
-): string {
-  const base = `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.\n\n${s.priceLine} The till keeps the prices it has; the sheet's are kept beside them in Inventory.${s.keptLine ? `\n\n${s.keptLine}` : ''}`;
+export function applyQuestion(view: Pick<MenuDeployView, 'phase'>, s: ImportQuestionCounts): string {
+  const base = importApplyQuestion(s);
   if (view.phase !== 'stalled') return base;
   return `${base}\n\nThe other till started putting this file in and stopped. Take it over only if that till is off or broken: if it did finish, the menu may end up with doubled items.`;
+}
+
+/** Why the Apply button is off for someone who is not the owner (the main process refuses them too). */
+export function ownerNeededWords(view: Pick<MenuDeployView, 'phase'>): string {
+  return view.phase === 'stalled'
+    ? 'Taking it over from the other till needs the owner’s login.'
+    : 'This file waits for the owner’s OK: putting it in needs the owner’s login.';
 }

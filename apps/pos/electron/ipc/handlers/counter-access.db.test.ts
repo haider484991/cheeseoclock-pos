@@ -792,8 +792,10 @@ const TEST_ORDERS_OWNER = (): Record<string, unknown> => ({
 /**
  * Menu files from the costing PC (v0.7.32): whoever manages the menu
  * (menu.manage, like Menu → Import) looks and puts a file in; making the
- * upload key, and taking a file over from a till that stopped halfway, are
- * the owner's. The counter is refused every one.
+ * upload key, taking a file over from a till that stopped halfway, and
+ * putting in a file that waits for the owner's OK ("Wait for my OK", or the
+ * owner's-OK rule: a price to less than half, more than double or Rs 0, or
+ * the tax) are the owner's. The counter is refused every one.
  */
 const MENU_FILES = (): Record<string, unknown> => ({
   'menuDeploy:getStatus': undefined,
@@ -948,6 +950,68 @@ describe.skipIf(!Sqlite)('menu files from the costing PC (v0.7.32)', () => {
       expect({ channel, code: (await call(channel, payload)) }).toMatchObject({ channel, code: { ok: false, code: 'unauthenticated' } });
     }
     expect(writtenRows()).toEqual(before);
+  });
+
+  it('a file that waits for the owner’s OK is the owner’s to put in: a manager’s (or the counter’s) tap is refused in the main process, nothing claimed or written', async () => {
+    const { FakeMenuWebsite, madeUpMenu } = await import('../../services/menu-deploy-website.fixture.js');
+    const { MenuPackageService, setMenuPackageService } = await import('../../services/menu-package-service.js');
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    const clock = { t: Date.now() };
+    const website = new FakeMenuWebsite(clock);
+    setMenuPackageService(
+      new MenuPackageService({
+        db: db as never,
+        deviceId: DEV,
+        deviceName: 'Test Till 1',
+        appVersion: '0.7.32-test',
+        callWebsite: website.fetchFor(DEV),
+        linked: () => true,
+        ordersOn: () => true,
+        publishMenu: async () => {},
+        backup: async () => {},
+        now: () => clock.t,
+        random: () => 0.5,
+      }),
+    );
+    try {
+      // The owner puts a first file in (the till's menu), then the costing PC sends one with a 10× price.
+      h.session = OWNER;
+      const first = website.upload(madeUpMenu('one'));
+      expect(await call('menuDeploy:apply', { packageId: first.id })).toMatchObject({ ok: true });
+      const items = (madeUpMenu('rise')['items'] as Array<Record<string, unknown>>).map((i) =>
+        i['name'] === 'Test Margherita' ? { ...i, priceCents: 1_100_000 } : i,
+      );
+      const held = website.upload(madeUpMenu('rise', { items }));
+      let before = writtenRows();
+      for (const who of [MANAGER, CASHIER]) {
+        h.session = who;
+        for (const payload of [{ packageId: held.id }, { packageId: held.id, retry: true }]) {
+          expect({ who: who.role, o: await call('menuDeploy:apply', payload) }).toMatchObject({ who: who.role, o: { ok: false, code: 'forbidden' } });
+        }
+      }
+      h.session = MANAGER;
+      expect(await call('menuDeploy:apply', { packageId: held.id })).toMatchObject({
+        message: expect.stringContaining('(Test Margherita Rs 1,100 → Rs 11,000). Putting it in needs the owner’s login.'),
+      });
+      expect(website.claims()).toHaveLength(1);
+      expect(writtenRows()).toEqual(before);
+
+      // "Wait for my OK": every file is the owner's, however small the change.
+      setBusinessSetting(db as never, 'menu.autoUpdate', { v: 1, mode: 'ask' }, { userId: 'u_admin', deviceId: DEV });
+      const same = website.upload(madeUpMenu('same'));
+      before = writtenRows();
+      expect(await call('menuDeploy:apply', { packageId: same.id })).toMatchObject({
+        ok: false,
+        code: 'forbidden',
+        message: 'Menu files from the costing PC wait for the owner’s OK (Settings → Kitchen & stock), so putting one in needs the owner’s login.',
+      });
+      expect(website.claims()).toHaveLength(1);
+      expect(writtenRows()).toEqual(before);
+      h.session = OWNER;
+      expect(await call('menuDeploy:apply', { packageId: same.id })).toMatchObject({ ok: true });
+    } finally {
+      setMenuPackageService(null);
+    }
   });
 });
 

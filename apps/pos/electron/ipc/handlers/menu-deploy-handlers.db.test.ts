@@ -6,9 +6,11 @@
  *     characters reach the website; the key itself is in no setting, audit
  *     row, sync entry, log line or error; a website that refuses it changes
  *     nothing on the till;
- *   - putting a file in is menu.manage's (like Menu → Import); taking it over
- *     from a till that stopped halfway is the owner's; the counter is refused
- *     every channel;
+ *   - putting a file in is menu.manage's (like Menu → Import), but a file that
+ *     waits for the owner's OK ("Wait for my OK", the owner's-OK rule, a
+ *     take-over) is the OWNER's — refused to a manager in the main process
+ *     before anything is claimed or written; the counter is refused every
+ *     channel;
  *   - Menu → Import itself: Start fresh still needs the owner, and the menu
  *     goes to the website after an import;
  *   - the file's marker ('menu.lastPackage') is never saved by hand.
@@ -278,5 +280,89 @@ live('Menu → Import is unchanged', () => {
       data: { key: 'menu.autoUpdate', value: { v: 1, mode: 'ask' }, isDefault: false },
     });
     expect(await as(OWNER, 'settings:setBusiness', { key: 'menu.autoUpdate', value: { v: 1, mode: 'sometimes' } })).toMatchObject({ ok: false, code: 'validation_failed' });
+  });
+});
+
+live('who may give the OK: a file that waits for the owner is the owner’s to put in (decided in the main process)', () => {
+  const price = () => (db.prepare(`SELECT base_price_cents AS p FROM menu_items WHERE name = 'Test Margherita' AND deleted_at IS NULL`).get() as { p: number }).p;
+
+  it('"Wait for my OK": a manager’s tap is refused before anything is claimed or written; the owner’s puts it in', async () => {
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    setBusinessSetting(db, 'menu.autoUpdate', { v: 1, mode: 'ask' }, { userId: 'u_admin', deviceId: DEV });
+    const p = website.upload(madeUpMenu('one'));
+    expect(await as(MANAGER, 'menuDeploy:checkNow')).toMatchObject({ ok: true, data: { phase: 'waiting_for_owner', applyNeedsOwner: true } });
+    const rows = () => db.prepare(`SELECT (SELECT COUNT(*) FROM audit_log) AS a, (SELECT COUNT(*) FROM sync_queue) AS q`).get();
+    const before = rows();
+    // A manager may still look at the changes…
+    expect(await as(MANAGER, 'menuDeploy:preview', { packageId: p.id })).toMatchObject({ ok: true, data: { packageId: p.id } });
+    // …but not put it in.
+    expect(await as(MANAGER, 'menuDeploy:apply', { packageId: p.id })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message: 'Menu files from the costing PC wait for the owner’s OK (Settings → Kitchen & stock), so putting one in needs the owner’s login.',
+    });
+    // "Try again" is no way round it.
+    expect(await as(MANAGER, 'menuDeploy:apply', { packageId: p.id, retry: true })).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(website.claims()).toHaveLength(0);
+    expect(menuRows(db).items).toBe(0);
+    expect(rows()).toEqual(before);
+    expect(await as(OWNER, 'menuDeploy:apply', { packageId: p.id })).toMatchObject({ ok: true, data: { newItems: 2 } });
+    expect(menuRows(db).items).toBe(2);
+  });
+
+  it('by themselves, a file the owner’s-OK rule holds (a 10× price): a manager is refused in words that name it; the owner puts it in', async () => {
+    website.upload(madeUpMenu('one'));
+    expect(await as(MANAGER, 'menuDeploy:checkNow')).toMatchObject({ ok: true, data: { phase: 'applied' } });
+    const items = (madeUpMenu('rise')['items'] as Array<Record<string, unknown>>).map((i) =>
+      i['name'] === 'Test Margherita' ? { ...i, priceCents: 1_100_000 } : i,
+    );
+    const p = website.upload(madeUpMenu('rise', { items }));
+    clock.t += 3 * 60_000;
+    expect(await as(MANAGER, 'menuDeploy:checkNow')).toMatchObject({ ok: true, data: { phase: 'waiting_for_owner', applyNeedsOwner: true } });
+    expect(await as(MANAGER, 'menuDeploy:apply', { packageId: p.id })).toEqual({
+      ok: false,
+      code: 'forbidden',
+      message:
+        'This file waits for the owner’s OK: it would move 1 price to less than half, more than double or Rs 0 (Test Margherita Rs 1,100 → Rs 11,000). Putting it in needs the owner’s login.',
+    });
+    expect(website.claims()).toHaveLength(1);
+    expect(price()).toBe(110_000);
+    expect(await as(OWNER, 'menuDeploy:apply', { packageId: p.id })).toMatchObject({ ok: true });
+    expect(price()).toBe(1_100_000);
+  });
+
+  it('what a manager could do before is unchanged: "Try again" on a file that is not held, and Menu → Import’s own file picker even in "Wait for my OK"', async () => {
+    const p = website.upload(madeUpMenu('one'));
+    Object.assign(website.byId(p.id)!, { state: 'failed', attempts: 5, error: 'Test: the disk was full' });
+    expect(await as(MANAGER, 'menuDeploy:checkNow')).toMatchObject({ ok: true, data: { phase: 'gave_up', applyNeedsOwner: false } });
+    expect(await as(MANAGER, 'menuDeploy:apply', { packageId: p.id, retry: true })).toMatchObject({ ok: true, data: { newItems: 2 } });
+    expect(menuRows(db).items).toBe(2);
+
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    setBusinessSetting(db, 'menu.autoUpdate', { v: 1, mode: 'ask' }, { userId: 'u_admin', deviceId: DEV });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coc-menu-file-'));
+    try {
+      const file = path.join(dir, 'picked.json');
+      const items = (madeUpMenu('picked')['items'] as Array<Record<string, unknown>>).map((i) => ({ ...i, priceCents: 1 }));
+      fs.writeFileSync(file, JSON.stringify(madeUpMenu('picked', { items })));
+      process.env['COC_MENU_IMPORT_FILE'] = file;
+      expect(await as(MANAGER, 'menu:importPick')).toMatchObject({ ok: true });
+      expect(await as(MANAGER, 'menu:importApply', { fresh: false })).toMatchObject({ ok: true });
+      expect(price()).toBe(1);
+    } finally {
+      delete process.env['COC_MENU_IMPORT_FILE'];
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a file already in on this till: said plainly, nothing claimed again', async () => {
+    const p = website.upload(madeUpMenu('one'));
+    await as(OWNER, 'menuDeploy:checkNow');
+    expect(await as(OWNER, 'menuDeploy:apply', { packageId: p.id })).toEqual({
+      ok: false,
+      code: 'precondition_failed',
+      message: 'This menu file is already in on this till.',
+    });
+    expect(website.claims()).toHaveLength(1);
   });
 });

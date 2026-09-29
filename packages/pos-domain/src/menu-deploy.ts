@@ -19,9 +19,11 @@
  *   R6  linked, and another till put it in        → other_till (its rows come through the link)
  *   R7  linked, and another till holds it         → other_till, or stalled once its claim ran out
  *                                                   (never taken over by itself)
- *   R8  "Wait for my OK", or the file would cut   → waiting_for_owner (said once)
- *       prices to less than half or change the
- *       tax (menuDeployNeedsOwner: never by itself)
+ *   R8  "Wait for my OK", or the file would move  → waiting_for_owner (said once)
+ *       an existing item's price or a choice's
+ *       charge to less than half, more than
+ *       double or Rs 0, or change the tax
+ *       (menuDeployNeedsOwner: never by itself)
  *   R9  linked, and the link is not working       → waiting_link
  *   R10 a failed try is waiting for its next turn → failed
  *   R11 an order was rung up here a moment ago    → waiting_quiet
@@ -41,6 +43,7 @@ import {
   type MenuDeployPhase,
   type MenuDeployScope,
 } from '@cheeseoclock/shared-types';
+import { formatCents } from './money.js';
 
 /** The newest file as the website describes it (shared-schemas menuPackageMetaSchema: the fields the rule reads). */
 export interface MenuDeployPackageFacts {
@@ -95,8 +98,8 @@ export interface MenuDeployLocalFacts {
   refused: boolean;
   /**
    * Why the file waits for the owner's OK although the till puts files in by
-   * itself (menuDeployNeedsOwner: it would cut prices to less than half, or
-   * change the tax), or null.
+   * itself (menuDeployNeedsOwner: it would move a price to less than half,
+   * more than double or Rs 0, or change the tax — naming each), or null.
    */
   held?: string | null;
   error: string | null;
@@ -208,7 +211,7 @@ export function decideMenuDeployStep(input: MenuDeployDecisionInput): MenuDeploy
     }
   }
 
-  // R8: the owner's OK first — always in "Wait for my OK", and for a file that would cut prices or change the tax.
+  // R8: the owner's OK first — always in "Wait for my OK", and for a file menuDeployNeedsOwner holds (a price jump, the tax).
   if (input.mode === 'ask' || local.held) {
     return step('R8', 'waiting_for_owner', said('waiting_for_owner') ? {} : { report: { outcome: 'waiting_for_owner' } });
   }
@@ -227,26 +230,77 @@ export function decideMenuDeployStep(input: MenuDeployDecisionInput): MenuDeploy
   return step('R12', 'claimed', { claim: { lastPackageSeq: marker?.seq ?? null, lastPackageId: marker?.packageId ?? null } });
 }
 
-/** What an import of the file would change that a till never puts in by itself (read from its plan). */
-export interface MenuDeployPlanFacts {
-  /** Items the file would move onto another tax rate. */
-  taxChanges: number;
-  /** Existing items whose selling price the file would change: from → to (paisa). */
-  priceChanges: ReadonlyArray<{ fromCents: number; toCents: number }>;
+/** A price the file would change on something the till already has: from → to (paisa). */
+export interface MenuDeployPriceMove {
+  /** The item's name, or the choice's (as the till has it). */
+  name: string;
+  fromCents: number;
+  toCents: number;
 }
+
+/**
+ * What an import of the file would change on what the till ALREADY has, read
+ * from its plan (what the owner's import rules let the file change — a price
+ * the till keeps is not here). New items, choices and ingredients are not.
+ */
+export interface MenuDeployPlanFacts {
+  /** Existing menu items whose selling price the file would change. */
+  priceChanges: ReadonlyArray<MenuDeployPriceMove>;
+  /** Existing choices whose extra charge the file would change (`group`: its choice group, as the till has it). */
+  choiceChanges: ReadonlyArray<MenuDeployPriceMove & { group: string }>;
+  /** Existing items the file would move onto another tax category: from → to rate (basis points; null = not known). */
+  taxMoves: ReadonlyArray<{ name: string; fromBps: number | null; toBps: number }>;
+  /** A tax category the file would add (the import makes one when the till has none at the file's rate), or null. */
+  newTax: { name: string; rateBps: number } | null;
+}
+
+/**
+ * THE owner's-OK price rule: a price that would go to less than half of what
+ * it is, to more than double (a price of Rs 0 getting any charge counts), or
+ * from above Rs 0 to Rs 0 (less than half too). Exactly half and exactly
+ * double are ordinary changes.
+ */
+export function menuDeployPriceJump(fromCents: number, toCents: number): boolean {
+  if (fromCents === toCents) return false;
+  return toCents * 2 < fromCents || toCents > fromCents * 2;
+}
+
+/** How many names a held note lists before "and N more" (Menu → Import lists every change). */
+export const MENU_DEPLOY_HELD_NAMES = 6;
+
+function listWords(entries: readonly string[]): string {
+  const shown = entries.slice(0, MENU_DEPLOY_HELD_NAMES);
+  const more = entries.length - shown.length;
+  return more > 0 ? `${shown.join(', ')} and ${more} more` : shown.join(', ');
+}
+
+const pct = (bps: number) => `${bps / 100}%`;
 
 /**
  * Why a file must wait for the owner's OK even when the tills put files in
  * by themselves — or null. The costing PC's upload key is all it takes to
- * send a file, so a file that would sell items for less than half their
- * price (Rs 0 included) or change what tax is charged never goes in
- * unattended; ordinary price changes and new items do.
+ * send a file, so a file never goes in unattended when it would:
+ *   - move an existing item's price or an existing choice's charge to less
+ *     than half, to more than double, or to Rs 0 (menuDeployPriceJump), or
+ *   - change the tax: move an existing item onto another tax category, or
+ *     add a tax category.
+ * Every other change (ordinary price changes, new items, recipes) goes in by
+ * itself. The words name each price and item that tripped it.
  */
 export function menuDeployNeedsOwner(f: MenuDeployPlanFacts): string | null {
-  const cut = f.priceChanges.filter((c) => c.fromCents > 0 && c.toCents * 2 < c.fromCents).length;
+  const jumps = [
+    ...f.priceChanges.filter((c) => menuDeployPriceJump(c.fromCents, c.toCents)).map((c) => `${c.name} ${formatCents(c.fromCents)} → ${formatCents(c.toCents)}`),
+    ...f.choiceChanges
+      .filter((c) => menuDeployPriceJump(c.fromCents, c.toCents))
+      .map((c) => `the choice “${c.name}” (${c.group}) ${formatCents(c.fromCents)} → ${formatCents(c.toCents)}`),
+  ];
+  const tax = [
+    ...f.taxMoves.map((t) => `${t.name} ${t.fromBps === null ? '?' : pct(t.fromBps)} → ${pct(t.toBps)}`),
+    ...(f.newTax ? [`a new tax category, ${f.newTax.name} (${pct(f.newTax.rateBps)})`] : []),
+  ];
   const parts: string[] = [];
-  if (cut > 0) parts.push(`cut ${plural(cut, 'price', 'prices')} to less than half`);
-  if (f.taxChanges > 0) parts.push(`change the tax on ${plural(f.taxChanges, 'item', 'items')}`);
+  if (jumps.length > 0) parts.push(`move ${plural(jumps.length, 'price', 'prices')} to less than half, more than double or Rs 0 (${listWords(jumps)})`);
+  if (tax.length > 0) parts.push(`change the tax (${listWords(tax)})`);
   return parts.length ? `it would ${parts.join(' and ')}` : null;
 }
 
@@ -351,7 +405,7 @@ export function menuDeployPhaseMessage(phase: MenuDeployPhase, ctx: MenuDeployMe
         : 'No menu file has been sent from the costing PC yet.';
     case 'waiting_for_owner':
       if (ctx.appliedHereButMissing) {
-        return `This till put in ${file} before, but its menu doesn’t have it now (a backup copy restored since?). It is not put in again by itself: Menu → Import shows what it would change, and one tap puts it in.`;
+        return `This till put in ${file} before, but its menu doesn’t have it now (a backup copy restored since?). It is not put in again by itself: Menu → Import shows what it would change, and the owner’s one tap puts it in.`;
       }
       if (ctx.heldReason) {
         return `A new menu file, ${file}, waits for your OK: ${ctx.heldReason}. Menu → Import shows every change first.`;
@@ -421,10 +475,10 @@ export function menuDeployNoticeFor(
         kind: 'waiting_for_owner',
         title: 'A new menu file is waiting — Menu → Import',
         description: ctx.heldReason
-          ? `${cap(file)} waits for your OK: ${ctx.heldReason}. See every change, then put it in with one tap.`
+          ? `${cap(file)} waits for your OK: ${ctx.heldReason}. See every change in Menu → Import; the owner puts it in with one tap.`
           : ctx.appliedHereButMissing
             ? menuDeployPhaseMessage('waiting_for_owner', ctx)
-            : `${cap(file)}: see what it changes, then put it in with one tap.`,
+            : `${cap(file)}: see what it changes in Menu → Import; the owner puts it in with one tap.`,
       };
     case 'refused':
     case 'gave_up':

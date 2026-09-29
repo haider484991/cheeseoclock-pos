@@ -10,6 +10,7 @@
 import type { MenuDeployChangedEvent } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import { openTill, linkOn } from '../db/two-tills.fixture.js';
+import { createTaxCategory, listTaxCategories } from '../db/repositories/tax-category-repo.js';
 import type { Clock, FakeMenuWebsite } from './menu-deploy-website.fixture.js';
 import { MenuPackageService } from './menu-package-service.js';
 
@@ -34,6 +35,10 @@ export function serviceTill(
   opts: { db?: AppDatabase; link?: 'on' | 'off'; ordersOn?: boolean; deviceName?: string } = {},
 ): ServiceTill {
   const db = opts.db ?? openTill(deviceId);
+  // The shop's tax, as a till in use has it (madeUpMenu's 16%): a file that ADDS a tax category waits for the owner.
+  if (!listTaxCategories(db).some((t) => t.rateBps === 1_600)) {
+    createTaxCategory(db, { name: 'Test Tax', rateBps: 1_600 }, { userId: 'u_admin', deviceId });
+  }
   if ((opts.link ?? 'on') === 'on') linkOn(db, clock.t);
   const steps: string[] = [];
   const emits: MenuDeployChangedEvent[] = [];

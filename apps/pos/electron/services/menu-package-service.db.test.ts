@@ -115,7 +115,8 @@ live('"Wait for my OK"', () => {
     const p = c.website.upload(madeUpMenu('one'));
     for (let i = 0; i < 3; i++) {
       const v = await c.till.service.checkNow();
-      expect(v).toMatchObject({ phase: 'waiting_for_owner', canApplyNow: true, applyNeedsOwner: false });
+      // Putting it in is the owner's (the handlers pass who tapped; apply() refuses anyone else).
+      expect(v).toMatchObject({ phase: 'waiting_for_owner', canApplyNow: true, applyNeedsOwner: true });
       tick(c, 3 * MIN);
     }
     expect(c.website.claims()).toHaveLength(0);
@@ -128,7 +129,7 @@ live('"Wait for my OK"', () => {
     expect(menuRows(c.till.db).items).toBe(0);
     expect(c.website.claims()).toHaveLength(0);
     // The owner's tap: the same import, by the owner.
-    const sum = await c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' });
+    const sum = await c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true });
     expect(sum.newItems).toBe(2);
     expect(menuRows(c.till.db).items).toBe(2);
     const audit = c.till.db.prepare(`SELECT actor_user_id, after_json FROM audit_log WHERE entity_type = 'menu_import'`).get() as {
@@ -223,7 +224,7 @@ live('where the till stands decides', () => {
     expect(c.website.claims()).toHaveLength(0);
     expect(menuRows(c.till.db).items).toBe(0);
     // The owner's take-over (the handler asks for the owner's login): it goes in, and the website says who took it.
-    await c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { takeOver: true });
+    await c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true, takeOver: true });
     expect(menuRows(c.till.db).items).toBe(2);
     expect(c.website.events.map((e) => e.kind)).toContain('taken_over');
   });
@@ -286,7 +287,7 @@ live('when it goes wrong: said, never a tight loop', () => {
     expect(imports(c.till.db)).toBe(0);
     // "Try again" once the owner fixed it.
     c.till.db.exec(`DROP TRIGGER test_refuse_items`);
-    await c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { retry: true });
+    await c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true, retry: true });
     expect(menuRows(c.till.db).items).toBe(2);
     expect(c.website.byId(p.id)!.state).toBe('applied');
   });
@@ -359,7 +360,7 @@ live('when it goes wrong: said, never a tight loop', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     c.till.service.start();
     try {
-      const tap = c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' });
+      const tap = c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true });
       await vi.waitFor(() => expect(c.website.claims()).toHaveLength(1));
       const looks = c.website.callsTo(/menu-deploy$/).length;
       await vi.advanceTimersByTimeAsync(30_000);
@@ -493,7 +494,7 @@ live('after a restore, a reset website, a slow backup, a file that cuts prices (
     expect(restored.steps).toEqual([]);
     expect(c.website.reports('waiting_for_owner')).toHaveLength(1);
     // The owner's one tap puts it in again.
-    await restored.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' });
+    await restored.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true });
     expect(menuRows(restoredDb).items).toBe(2);
   });
 
@@ -583,7 +584,7 @@ live('after a restore, a reset website, a slow backup, a file that cuts prices (
     expect(imports(t1.db)).toBe(1);
   });
 
-  it('by themselves, but a file that would cut a price to less than half, or change the tax, waits for the owner — never claimed; one tap puts it in', async () => {
+  it('by themselves, but a file that would move a price to less than half, more than double or Rs 0, or change the tax, waits for the owner — never claimed; one tap puts it in', async () => {
     const c = setup();
     c.website.upload(madeUpMenu('one'));
     expect((await c.till.service.checkNow()).phase).toBe('applied');
@@ -595,32 +596,135 @@ live('after a restore, a reset website, a slow backup, a file that cuts prices (
     for (let i = 0; i < 3; i++) {
       tick(c, 3 * MIN);
       const v = await c.till.service.checkNow();
-      expect(v).toMatchObject({ phase: 'waiting_for_owner', canApplyNow: true });
-      expect(v.message).toContain('waits for your OK: it would cut 1 price to less than half');
+      expect(v).toMatchObject({ phase: 'waiting_for_owner', canApplyNow: true, applyNeedsOwner: true });
+      expect(v.message).toContain('waits for your OK: it would move 1 price to less than half, more than double or Rs 0 (Test Margherita Rs 1,100 → Rs 1)');
     }
     expect(c.website.claims()).toHaveLength(1);
     expect(c.website.reports('waiting_for_owner')).toHaveLength(1);
     expect(c.till.steps).toEqual(['backup', 'publish']);
     expect(price()).toBe(110_000);
     expect(c.till.emits.filter((e) => e.notice?.kind === 'waiting_for_owner').map((e) => e.notice!.description)).toEqual([
-      expect.stringContaining('it would cut 1 price to less than half'),
+      expect.stringContaining('(Test Margherita Rs 1,100 → Rs 1)'),
     ]);
     // The owner looked and said yes.
-    await c.till.service.apply(p2.id, { userId: 'u_admin', deviceId: 'till-1' });
+    await c.till.service.apply(p2.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true });
     expect(price()).toBe(100);
 
-    // A file that moves the items onto another tax: the same.
-    const p3 = c.website.upload(madeUpMenu('tax', { tax: { name: 'Test Tax Zero', rateBps: 0 } }));
+    // Back up from Rs 1 to Rs 1,100: more than double — the same.
+    const p3 = c.website.upload(madeUpMenu('back'));
+    tick(c, 3 * MIN);
+    const back = await c.till.service.checkNow();
+    expect(back.phase).toBe('waiting_for_owner');
+    expect(back.message).toContain('(Test Margherita Rs 1 → Rs 1,100)');
+    await c.till.service.apply(p3.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true });
+    expect(price()).toBe(110_000);
+
+    // A file that moves the items onto another tax (and adds that tax category): the same, naming them.
+    const p4 = c.website.upload(madeUpMenu('tax', { tax: { name: 'Test Tax Zero', rateBps: 0 } }));
     tick(c, 3 * MIN);
     const v = await c.till.service.checkNow();
     expect(v.phase).toBe('waiting_for_owner');
-    expect(v.message).toContain('it would change the tax on 2 items');
-    expect(c.website.byId(p3.id)!.state).toBe('pending');
-    // An ordinary price rise goes in by itself.
-    const p4 = c.website.upload(madeUpMenu('dearer', { items: items.map((i) => ({ ...i, priceCents: Number(i['priceCents']) + 5_000 })) }));
+    expect(v.message).toContain(
+      'it would change the tax (Test Margherita 16% → 0%, Test Lemonade 16% → 0%, a new tax category, Test Tax Zero (0%))',
+    );
+    expect(c.website.byId(p4.id)!.state).toBe('pending');
+    // An ordinary price rise (+10%) goes in by itself.
+    const dearer = (madeUpMenu('dearer')['items'] as Array<Record<string, unknown>>).map((i) => ({ ...i, priceCents: Math.round(Number(i['priceCents']) * 1.1) }));
+    const p5 = c.website.upload(madeUpMenu('dearer', { items: dearer }));
     tick(c, 3 * MIN);
     expect((await c.till.service.checkNow()).phase).toBe('applied');
-    expect(c.website.byId(p4.id)!.state).toBe('applied');
+    expect(c.website.byId(p5.id)!.state).toBe('applied');
+    expect(price()).toBe(121_000);
+  });
+
+  it('a price RISE past double, a choice cut to Rs 0, and a free choice given a charge each wait for the owner on their own — named; exactly double goes in', async () => {
+    const c = setup();
+    c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    const price = () => (c.till.db.prepare(`SELECT base_price_cents AS p FROM menu_items WHERE name = 'Test Margherita' AND deleted_at IS NULL`).get() as { p: number }).p;
+    const charge = (name: string) => (c.till.db.prepare(`SELECT price_delta_cents AS p FROM modifiers WHERE name = ? AND deleted_at IS NULL`).get(name) as { p: number }).p;
+    const withItems = (tag: string, f: (i: Record<string, unknown>) => Record<string, unknown>) =>
+      madeUpMenu(tag, { items: (madeUpMenu(tag)['items'] as Array<Record<string, unknown>>).map(f) });
+    const withDips = (tag: string, garlic: number, chili: number) =>
+      madeUpMenu(tag, {
+        modifierGroups: [
+          {
+            name: 'Test dip',
+            selectionType: 'single',
+            minSelect: 1,
+            maxSelect: 1,
+            required: true,
+            options: [
+              { name: 'Test Garlic Dip', priceDeltaCents: garlic, isDefault: true },
+              { name: 'Test Chili Dip', priceDeltaCents: chili },
+            ],
+          },
+        ],
+      });
+
+    // 10× on its own (the skeptic's run 2): it never went in, nor to the website.
+    const rise = c.website.upload(withItems('rise', (i) => (i['name'] === 'Test Margherita' ? { ...i, priceCents: 1_100_000 } : i)));
+    tick(c, 3 * MIN);
+    let v = await c.till.service.checkNow();
+    expect(v).toMatchObject({ phase: 'waiting_for_owner', canApplyNow: true, applyNeedsOwner: true });
+    expect(v.message).toBe(
+      `A new menu file, file #${rise.seq} (test-menu-import.json), waits for your OK: it would move 1 price to less than half, more than double or Rs 0 (Test Margherita Rs 1,100 → Rs 11,000). Menu → Import shows every change first.`,
+    );
+    expect(price()).toBe(110_000);
+    expect(c.till.steps).toEqual(['backup', 'publish']);
+
+    // A choice's charge cut to Rs 0 on its own.
+    const cut = c.website.upload(withDips('dip0', 0, 0));
+    tick(c, 3 * MIN);
+    v = await c.till.service.checkNow();
+    expect(v.phase).toBe('waiting_for_owner');
+    expect(v.message).toContain('(the choice “Test Chili Dip” (Test dip) Rs 50 → Rs 0)');
+    expect(c.website.byId(cut.id)!.state).toBe('pending');
+
+    // A free choice given a charge (more than double of Rs 0), and a choice more than doubled.
+    c.website.upload(withDips('dipup', 1_000, 10_001));
+    tick(c, 3 * MIN);
+    v = await c.till.service.checkNow();
+    expect(v.phase).toBe('waiting_for_owner');
+    expect(v.message).toContain(
+      'it would move 2 prices to less than half, more than double or Rs 0 (the choice “Test Garlic Dip” (Test dip) Rs 0 → Rs 10, the choice “Test Chili Dip” (Test dip) Rs 50 → Rs 100.01)',
+    );
+    expect(charge('Test Garlic Dip')).toBe(0);
+    expect(charge('Test Chili Dip')).toBe(5_000);
+    expect(c.website.claims()).toHaveLength(1);
+
+    // Exactly double: in by itself.
+    const ok = c.website.upload(withDips('dipok', 0, 10_000));
+    tick(c, 3 * MIN);
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    expect(c.website.byId(ok.id)!.state).toBe('applied');
+    expect(charge('Test Chili Dip')).toBe(10_000);
+  });
+
+  it('what the owner’s import rules keep on the till is no change: a 10× price the till keeps goes in by itself (a tax category added still waits)', async () => {
+    const c = setup();
+    c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    const { setBusinessSetting } = await import('../db/repositories/business-settings-repo.js');
+    setBusinessSetting(
+      c.till.db,
+      'menu.importPolicy',
+      { v: 1, itemPrices: 'till', choices: 'till', recipes: 'file', tax: 'till' },
+      { userId: 'u_admin', deviceId: 'till-1' },
+    );
+    const items = (madeUpMenu('kept')['items'] as Array<Record<string, unknown>>).map((i) => ({ ...i, priceCents: Number(i['priceCents']) * 10 }));
+    const p = c.website.upload(madeUpMenu('kept', { items, tax: { name: 'Test Tax Zero', rateBps: 0 } }));
+    tick(c, 3 * MIN);
+    // The tax category the file names would still be added (for new items): that waits.
+    const v = await c.till.service.checkNow();
+    expect(v.phase).toBe('waiting_for_owner');
+    expect(v.message).toContain('it would change the tax (a new tax category, Test Tax Zero (0%))');
+    const p2 = c.website.upload(madeUpMenu('kept2', { items }));
+    tick(c, 3 * MIN);
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    expect(c.website.byId(p2.id)!.state).toBe('applied');
+    expect(c.website.byId(p.id)!.state).toBe('superseded');
+    expect((c.till.db.prepare(`SELECT base_price_cents AS p FROM menu_items WHERE name = 'Test Margherita' AND deleted_at IS NULL`).get() as { p: number }).p).toBe(110_000);
   });
 
   it('a saved "by themselves / wait" this version cannot read (a newer till’s) counts as Wait for my OK', async () => {
@@ -633,5 +737,85 @@ live('after a restore, a reset website, a slow backup, a file that cuts prices (
     expect(v).toMatchObject({ phase: 'waiting_for_owner', mode: 'ask' });
     expect(c.website.claims()).toHaveLength(0);
     expect(menuRows(c.till.db).items).toBe(0);
+  });
+});
+
+live('the tries this till counts itself, and the owner’s tap (the skeptic, 29 Sep)', () => {
+  it('link off, an import that keeps failing: the till’s OWN back-off (1, 2, 4, 8 minutes) and its own count are the only cap — 5 claims, then "gave up", however long it looks', async () => {
+    const { readMenuDeployLocal } = await import('./menu-package-service.js');
+    const c = setup({ link: 'off' });
+    c.till.db.exec(`CREATE TRIGGER test_refuse_items BEFORE INSERT ON menu_items BEGIN SELECT RAISE(ABORT, 'Test: the database said no'); END;`);
+    const p = c.website.upload(madeUpMenu('one'));
+    const t0 = c.clock.t;
+    const claimTimes: number[] = [];
+    for (let minute = 0; minute <= 120; minute++) {
+      const before = c.website.claims().length;
+      await c.till.service.checkNow();
+      if (c.website.claims().length > before) claimTimes.push((c.clock.t - t0) / MIN);
+      if (minute === 0) {
+        // The first failure is written down here, with the time of the next try (the website keeps nothing for a till with its link off).
+        const local = readMenuDeployLocal(c.till.db);
+        expect(local).toMatchObject({ packageId: p.id, attempts: 1 });
+        expect(Date.parse(local.nextTryAt!) - c.clock.t).toBe(1 * MIN);
+      }
+      c.clock.t += MIN;
+    }
+    // Tries at 0, then 1, 2, 4 and 8 minutes after each failure: minutes 0, 1, 3, 7 and 15 — then no more.
+    expect(claimTimes).toEqual([0, 1, 3, 7, 15]);
+    expect(c.website.claims()).toHaveLength(MENU_DEPLOY_MAX_ATTEMPTS);
+    expect(c.website.claims().every((call) => (call.body as { scope?: string }).scope === 'own')).toBe(true);
+    expect(readMenuDeployLocal(c.till.db)).toMatchObject({ attempts: MENU_DEPLOY_MAX_ATTEMPTS });
+    const v = await c.till.service.checkNow();
+    expect(v).toMatchObject({ phase: 'gave_up', canApplyNow: true });
+    // The website's own state never moved (a till with its link off never changes it).
+    expect(c.website.byId(p.id)!.state).toBe('pending');
+    expect(menuRows(c.till.db).items).toBe(0);
+    expect(imports(c.till.db)).toBe(0);
+  });
+
+  it('the owner’s tap during a regular look waits for it to finish — never a second claim or a second import; the file was put in by the look', async () => {
+    const c = setup();
+    const p = c.website.upload(madeUpMenu('one'));
+    let release: () => void = () => {};
+    let held = true;
+    c.till.onBackup.fn = () => (held ? new Promise<void>((r) => (release = r)) : undefined);
+    const look = c.till.service.checkNow();
+    await vi.waitFor(() => expect(c.website.claims()).toHaveLength(1));
+    // The look is making its backup copy (the file is claimed, nothing put in yet) when the owner taps.
+    const tap = c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true, retry: true }).then(
+      () => 'put in',
+      (e: unknown) => (e as Error).message,
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    // The tap has not gone to the website while the look runs.
+    expect(c.website.claims()).toHaveLength(1);
+    held = false;
+    release();
+    expect((await look).phase).toBe('applied');
+    expect(await tap).toBe('This menu file is already in on this till.');
+    expect(c.website.claims()).toHaveLength(1);
+    expect(imports(c.till.db)).toBe(1);
+    expect(c.till.steps).toEqual(['backup', 'publish']);
+  });
+
+  it('the owner’s tap with a broken link to the other till: refused in plain words — nothing claimed, nothing put in', async () => {
+    const c = setup();
+    const { setBusinessSetting } = await import('../db/repositories/business-settings-repo.js');
+    setBusinessSetting(c.till.db, 'menu.autoUpdate', { v: 1, mode: 'ask' }, { userId: 'u_admin', deviceId: 'till-1' });
+    const p = c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('waiting_for_owner');
+    // The last sync pass was an hour ago.
+    c.clock.t += 60 * MIN;
+    await expect(c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true })).rejects.toThrow(
+      'The link to the other till isn’t working. Put the file in once it works again (Settings → Second till), so both tills end up with the same menu.',
+    );
+    expect(c.till.service.view().phase).toBe('waiting_link');
+    expect(c.website.claims()).toHaveLength(0);
+    expect(menuRows(c.till.db).items).toBe(0);
+    expect(c.till.steps).toEqual([]);
+    // Once the link works again, the same tap puts it in.
+    linkOn(c.till.db, c.clock.t);
+    await c.till.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' }, { owner: true });
+    expect(menuRows(c.till.db).items).toBe(2);
   });
 });

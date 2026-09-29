@@ -31,7 +31,17 @@ import { ImportTab } from '../../menu-mgmt/ImportTab';
 import { MenuDeployBanner } from '../../dashboard/MenuDeployBanner';
 import { MENU_DEPLOY_KEY } from '../../menu-mgmt/useMenuDeploy';
 import { SHOP_SETTINGS_KEY } from './useShopSetting';
-import { KEY_DIALOG_STAYS_OPEN, applyQuestion, keyStatusText, menuAutoUpdateSummary, phaseTone } from './menuDeployWords';
+import {
+  BANNER_STAYS_WORDS,
+  KEY_DIALOG_STAYS_OPEN,
+  OWNER_OK_RULE_WORDS,
+  applyQuestion,
+  keyStatusText,
+  menuAutoUpdateSummary,
+  ownerNeededWords,
+  phaseTone,
+} from './menuDeployWords';
+import { importApplyQuestion } from '../../menu-mgmt/importPrices';
 
 // A server render reads a zustand store's INITIAL state; the till's window reads each as it is now.
 vi.mock('zustand', async (importOriginal) => {
@@ -138,7 +148,7 @@ describe('Settings → Kitchen & stock: the menu files from the costing PC', () 
     expect(out).toMatch(/role="radio" aria-checked="true"[^>]*><span[^>]*>Wait for my OK/);
   });
 
-  it('what a leaked key could do is said truly: item prices and tax follow the rules above; big cuts and tax changes wait', () => {
+  it('what a leaked key could do, and what waits for the owner, is said truly — the owner’s-OK rule exactly, nothing broader', () => {
     signIn('admin');
     const words = text(
       render(<MenuFromCostingPc />, [
@@ -148,8 +158,20 @@ describe('Settings → Kitchen & stock: the menu files from the costing PC', () 
     );
     expect(words).not.toMatch(/keeps its prices|keeps the prices/);
     expect(words).toContain('item prices, tax, choices and recipes change as far as “What a menu file may change” above allows');
-    expect(words).toContain('A file that would cut prices to less than half, or change the tax, always waits for your OK');
-    expect(words).toContain('still waits for your OK');
+    // Ingredient prices: the till's, except a new ingredient or one with no price yet.
+    expect(words).toContain('Ingredient prices stay the till’s, except that a new ingredient, or one with no price yet, takes the file’s.');
+    expect(words).not.toContain('ingredient prices always stay the till’s');
+    // The owner's-OK rule, as the code has it (pos-domain menuDeployNeedsOwner): both ways, choices too, Rs 0, the tax.
+    expect(words).toContain(OWNER_OK_RULE_WORDS);
+    expect(OWNER_OK_RULE_WORDS).toContain('to less than half, to more than double (a free choice getting a charge counts) or to Rs 0');
+    expect(OWNER_OK_RULE_WORDS).toContain('the charge of a choice');
+    expect(OWNER_OK_RULE_WORDS).toContain('only the owner’s login can put it in');
+    expect(words).toContain('A file that would move an item’s price or a choice’s charge to less than half, more than double or Rs 0, or change the tax, waits for the owner’s OK');
+    // Never the old, narrower words ("cut prices to less than half" said a rise went in by itself).
+    expect(words).not.toContain('cut prices to less than half');
+    // The timing, truly: about 3 minutes with online orders on, 16 to 24 otherwise, 2 quiet minutes.
+    expect(words).toContain('every 16 to 24 minutes otherwise, and waits until no order has been rung up on it for 2 minutes');
+    expect(words).not.toContain('within minutes');
   });
 
   it('a till with no website link: never "no key yet, make one below" (it cannot see the key, and the button is off)', () => {
@@ -184,9 +206,49 @@ describe('Settings → Kitchen & stock: the menu files from the costing PC', () 
     expect(menuAutoUpdateSummary({ v: 1, mode: 'ask' })).toBe('Menu files wait for your OK (Menu → Import)');
     expect(phaseTone('refused')).toBe('bad');
     expect(phaseTone('applied')).toBe('good');
-    const s = { newItems: 1, updatedItems: 2, priceChanges: 0, recipesSet: 1, newIngredients: 0, updatedIngredients: 0, priceLine: 'Prices: 1 kept.', keptLine: null };
+    const s = {
+      newItems: 1,
+      updatedItems: 2,
+      priceChanges: 3,
+      choicePriceChanges: 1,
+      recipesSet: 1,
+      newIngredients: 0,
+      updatedIngredients: 0,
+      priceLine: 'Prices: 12 kept from deliveries, 3 new from the sheet, 0 unpriced.',
+      keptLine: null,
+    };
     expect(applyQuestion({ phase: 'waiting_for_owner' }, s)).toMatch(/^Apply this menu file\?/);
     expect(applyQuestion({ phase: 'stalled' }, s)).toContain('doubled items');
+    expect(ownerNeededWords({ phase: 'stalled' })).toBe('Taking it over from the other till needs the owner’s login.');
+    expect(ownerNeededWords({ phase: 'waiting_for_owner' })).toBe('This file waits for the owner’s OK: putting it in needs the owner’s login.');
+  });
+
+  it('the question before an import says plainly which prices change to the file’s and which stay the till’s (Menu → Import and the costing PC alike)', () => {
+    const s = {
+      newItems: 1,
+      updatedItems: 2,
+      priceChanges: 3,
+      choicePriceChanges: 1,
+      recipesSet: 1,
+      newIngredients: 0,
+      updatedIngredients: 4,
+      priceLine: 'Prices: 12 kept from deliveries, 3 new from the sheet, 0 unpriced.',
+      keptLine: null,
+    };
+    const q = importApplyQuestion(s);
+    expect(q).toBe(
+      'Apply this menu file?\n\n1 new item, 2 items changed, 1 recipe, 0 new and 4 changed ingredients.\n\n' +
+        'Prices that change to the file’s: 3 menu item prices and 1 choice charge.\n' +
+        'Prices that stay the till’s: every ingredient price, except a new ingredient or one with no price yet, which takes the file’s ' +
+        '(the file’s price is kept beside the till’s in Inventory). Prices: 12 kept from deliveries, 3 new from the sheet, 0 unpriced.',
+    );
+    // The old words sat right after the item price count and read as if item prices stayed too.
+    expect(q).not.toContain('The till keeps the prices it has');
+    expect(applyQuestion({ phase: 'gave_up' }, s)).toBe(q);
+    // What the owner's import rules keep is said after it; nothing changing is said too.
+    const kept = importApplyQuestion({ ...s, priceChanges: 0, choicePriceChanges: 0, keptLine: 'Kept on the till: 3 prices, 1 choice group (Settings → Kitchen & stock).' });
+    expect(kept).toContain('Prices that change to the file’s: none.');
+    expect(kept.endsWith('\n\nKept on the till: 3 prices, 1 choice group (Settings → Kitchen & stock).')).toBe(true);
   });
 });
 
@@ -232,11 +294,14 @@ describe('Dashboard → Shop status', () => {
     for (const phase of ['applied', 'received', 'idle', 'not_linked', 'waiting_quiet'] as const) {
       expect(text(render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], { ...VIEW, phase }]]))).toBe('');
     }
-    // A file waiting for the owner's OK stays on the Dashboard until he looks (its one note may have
-    // gone by while a cashier was signed in).
+    // A file waiting for the owner's OK stays on the Dashboard until it is put in (its one note may have
+    // gone by while a cashier was signed in), and the banner says so.
     const waiting = text(render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], VIEW]]));
     expect(waiting).toContain('A menu file from the costing PC waits for your OK');
     expect(waiting).toContain(VIEW.message);
+    expect(waiting).toContain('This stays here until the file is put in (or a newer file from the costing PC replaces it).');
+    expect(waiting).toContain(BANNER_STAYS_WORDS);
+    expect(text(render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], { ...VIEW, phase: 'refused' }]]))).not.toContain(BANNER_STAYS_WORDS);
     // Held back by a broken link: nothing else on the screens would say so.
     const link = render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], { ...VIEW, phase: 'waiting_link', canApplyNow: false }]]);
     expect(text(link)).toContain('waits for the link to the other till');

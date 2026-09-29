@@ -6,16 +6,26 @@ import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireAdmin } from '../guards.js';
 import { getCurrentSession } from '../../services/auth-service.js';
-import { MenuDeployError, menuPackageService, type MenuPackageService } from '../../services/menu-package-service.js';
+import {
+  MenuDeployError,
+  MenuDeployOwnerOnlyError,
+  menuPackageService,
+  type MenuPackageService,
+} from '../../services/menu-package-service.js';
 import { MenuImportRefusedError } from '../../db/repositories/menu-import-repo.js';
 
 /**
  * Menu files from the costing PC (v0.7.32; services/menu-package-service.ts):
  *
  *  - menuDeploy:getStatus / checkNow / preview / apply — whoever manages the
- *    menu (menu.manage: a manager or the owner), like Menu → Import. Taking a
- *    file over from a till that stopped halfway (`takeOver`) is the owner's
- *    alone: the menu may end up with doubled items.
+ *    menu (menu.manage: a manager or the owner), like Menu → Import. But a
+ *    file that waits for the owner's OK is the OWNER's to put in — decided
+ *    here in the main process, on the file itself (the service's
+ *    ownerOnlyReason): "Wait for my OK", a file the owner's-OK rule holds (a
+ *    price to less than half, more than double or Rs 0, or the tax), a file
+ *    put in before a backup copy was restored, and taking a file over from a
+ *    till that stopped halfway (the menu may end up with doubled items).
+ *    Menu → Import's own file picker is unchanged (a manager's, as before).
  *  - menuDeploy:createKey — the owner alone (admin login). The key is
  *    returned once and never stored, logged or put in an error.
  *
@@ -64,6 +74,8 @@ function notStarted(): MenuDeployView {
 
 /** A refusal in the service's plain words, shown as it is; anything else stays hidden (defineHandler). */
 function plainly(e: unknown): never {
+  // A file that waits for the owner's OK, tapped by someone else: refused like any owner-only step.
+  if (e instanceof MenuDeployOwnerOnlyError) throw new IpcGuardError({ code: 'forbidden', message: e.message });
   if (e instanceof MenuDeployError || e instanceof MenuImportRefusedError) {
     throw new IpcGuardError({ code: 'precondition_failed', message: e.message });
   }
@@ -120,7 +132,9 @@ export function registerMenuDeployHandlers(ctx: HandlerContext): void {
     const s = takeOver ? requireAdmin('Taking a menu file over from the other till') : requireMenuManage();
     const packageId = packageIdOf(payload);
     try {
-      return ok(await service().apply(packageId, { userId: s.id, deviceId: ctx.deviceId }, { takeOver, retry: payload?.retry === true }));
+      return ok(
+        await service().apply(packageId, { userId: s.id, deviceId: ctx.deviceId }, { owner: s.role === 'admin', takeOver, retry: payload?.retry === true }),
+      );
     } catch (e) {
       return plainly(e);
     }

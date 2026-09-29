@@ -381,15 +381,26 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 - **What is new.** The generated menu import file no longer has to be carried
   to the shop. On the costing PC, `py -3 deploy_menu.py` (next to the
   generator in `cheeseoclock-menu\pos-import`, not in this repo) uploads it
-  to the website with the owner's **upload key**; within minutes ONE linked
-  till claims it and puts it in with the same import as Menu → Import (the
-  owner's "What a menu file may change" rules: by default the file's item
-  prices, tax, choices and recipes go in and only ingredient prices stay the
-  till's; never "Start fresh"; a backup copy first), and the other till gets
-  the changes through the link. A file that would cut prices to less than
-  half, or change the tax, waits for the owner's OK even when files go in by
-  themselves. `py -3 deploy_menu.py --status` says which till put it in, or
+  to the website with the owner's **upload key**; ONE linked till claims it
+  and puts it in with the same import as Menu → Import (the owner's "What a
+  menu file may change" rules: by default the file's item prices, tax,
+  choices and recipes go in; ingredient prices stay the till's, except that
+  a new ingredient, or one with no price yet, takes the file's; never "Start
+  fresh"; a backup copy first), and the other till gets the changes through
+  the link. `py -3 deploy_menu.py --status` says which till put it in, or
   why not.
+- **The owner's OK** (pos-domain `menuDeployNeedsOwner` /
+  `menuDeployPriceJump`). Even when files go in by themselves, a file waits
+  for the owner when it would move an existing menu item's price, or an
+  existing choice's charge, to less than half, to more than double (a free
+  choice getting a charge counts) or to Rs 0; or would change the tax (move
+  an existing item onto another tax category, or add a tax category). Only
+  what the owner's import rules let the file change counts (a price the till
+  keeps is no change). The till's message names each item and choice that
+  tripped it. Such a file — and every file in "Wait for my OK" — is put in
+  only with the **owner's** login: `menuDeploy:apply` checks it again in the
+  main process, on the file itself, and refuses a manager (`forbidden`).
+  Menu → Import's own file picker is unchanged (a manager's, as before).
 - **The file is private.** It holds the costs and recipes. The website keeps
   it only in its own tables (`menu_deploy_key`, `menu_packages`,
   `menu_package_events`, in `db/schema.sql` and created on demand by
@@ -429,23 +440,27 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   the tills already have**: it changes nothing and proves the whole path
   (`--status` shows which till took it). After that, `build_and_deploy.cmd`
   builds and uploads in one go.
-- **On the tills.** Every till with the website link looks every 3 minutes
-  while "Accept online orders" is on, every 20 minutes otherwise (Settings →
-  Kitchen & stock → "Check now" looks at once). It waits until no order has
-  been rung up on it for 2 minutes and while the link to the other till is
-  broken; a failed try waits 1, 2, 4, then 8 minutes, and after 5 it stops
+- **On the tills.** Every till with the website link looks about every 3
+  minutes (2.4–3.6) while "Accept online orders" is on, every 16 to 24
+  minutes otherwise (Settings → Kitchen & stock → "Check now" looks at once),
+  so a file takes up to about 25 minutes with online orders off. It waits
+  until no order has been rung up on it for 2 minutes and while the link to
+  the other till is broken; a failed try waits 1, 2, 4, then 8 minutes, and after 5 it stops
   until the owner taps Try again in Menu → Import. The copy made before each
   file goes in shows in Settings → Backups as "Safety copy, made before a
   menu file from the costing PC went in" (the newest copy of each of the last
   5 files is kept, never counted against the daily copies). A file another
   till stopped halfway on is never taken over by itself: Menu → Import offers
-  the owner "Take it over". "Wait for my OK" shows the file in Menu → Import
-  with the normal preview; the Dashboard's Shop status says when a file waits
-  for the owner, was refused, gave up, is too new for the till, or stopped
-  halfway. After a backup copy is restored, a file the till had already put
-  in is never put in again by itself (the owner may have restored the copy to
-  undo it): with the link off it waits for the owner's tap; the next file
-  goes in as usual.
+  the owner "Take it over". A file waiting for the owner's OK shows in
+  Menu → Import with the normal preview; the Dashboard's Shop status shows
+  it until the file is put in (or a newer file replaces it), and says when a
+  file was refused, gave up, is too new for the till, or stopped halfway.
+  After a backup copy is restored, a file the till had already put in is
+  never put in again by itself (the owner may have restored the copy to undo
+  it): with the link off it waits for the owner's tap; the next file goes in
+  as usual. A restore takes everything on that till back to the copy — the
+  orders rung up on it since the copy included (the restore dialog says so,
+  and saves today's data first) — and the other linked till keeps the file.
 - **Vercel previews** use their own Neon branch (and their own
   `BRIDGE_SECRET`, see above). Never put the real upload key on a preview:
   make a throwaway key on a test till linked to the preview.
@@ -466,10 +481,11 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   - A leaked upload key can push a menu. It goes in as Menu → Import would,
     under the owner's "What a menu file may change" rules — by default the
     file's item prices, tax, choices and recipes — never "Start fresh", with
-    a backup first and every step in the history; a file that would cut
-    prices to less than half or change the tax waits for the owner's OK; a
-    new key cancels the old one. For more, set the item-price and tax rules
-    to "Keep the till's", or choose "Wait for my OK".
+    a backup first and every step in the history; a file the owner's-OK
+    rule holds (a price to less than half, more than double or Rs 0, or the
+    tax) waits for the owner's login; a new key cancels the old one. For
+    more, set the item-price and tax rules to "Keep the till's", or choose
+    "Wait for my OK".
   - After restoring a backup on a till whose link to the other till is on,
     the two tills' menus can differ (as with any restore today): "Send
     everything" from the other till puts them level again.

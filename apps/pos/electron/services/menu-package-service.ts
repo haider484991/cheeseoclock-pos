@@ -10,9 +10,12 @@
  * menu-deploy.ts decideMenuDeployStep). When it is this till's turn it
  * CLAIMS the file (the website hands it to ONE till, with a lease) and puts
  * it in exactly as Menu → Import does — plan, then applyMenuImport in one
- * transaction with the owner's import rules (menu.importPolicy: the till's
- * prices kept…), NEVER a fresh start, a backup copy first — and says what
- * became of it. The other till gets the rows, and the marker of the file
+ * transaction with the owner's import rules (menu.importPolicy; ingredient
+ * prices stay the till's except a new or unpriced one), NEVER a fresh start,
+ * a backup copy first — and says what became of it. A file the owner's-OK
+ * rule holds (pos-domain menuDeployNeedsOwner: a price to less than half,
+ * more than double or Rs 0, or the tax) waits, and only the owner's tap puts
+ * it in (apply's `owner`). The other till gets the rows, and the marker of the file
  * ('menu.lastPackage', written in the import's own transaction), through
  * the link, so nothing is doubled.
  *
@@ -76,12 +79,14 @@ import {
   menuDeployReportKey,
   menuMarkerCovers,
   type MenuDeployMessageContext,
+  type MenuDeployPlanFacts,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 import type { Actor } from '../db/repositories/base.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import { getBusinessSetting, readBusinessSettingRow, readShopSetting } from '../db/business-settings-read.js';
-import { applyMenuImport, planMenuImportFromDb } from '../db/repositories/menu-import-repo.js';
+import { applyMenuImport, planMenuImportFromDb, readMenuSnapshot } from '../db/repositories/menu-import-repo.js';
+import type { MenuImportPlan, MenuSnapshot } from '../db/menu-import-plan.js';
 import { MenuImportFileError, menuFileTooNewMessage, parseMenuFileText } from './menu-import-service.js';
 import { readSyncSwitch } from './sync-config.js';
 import { readTillLink } from './till-link.js';
@@ -101,6 +106,48 @@ export class MenuDeployError extends Error {
     super(message);
     this.name = 'MenuDeployError';
   }
+}
+
+/** The file waits for the OWNER's OK and someone else tapped (the handlers answer 'forbidden', in these words). */
+export class MenuDeployOwnerOnlyError extends MenuDeployError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MenuDeployOwnerOnlyError';
+  }
+}
+
+/**
+ * What the plan would change on what the till already has, by name (pos-domain
+ * menuDeployNeedsOwner reads it): menu item prices, choice charges, items moved
+ * onto another tax, a tax category added. Only what the owner's import rules
+ * let the file change is in the plan's ops, so a price the till keeps is not
+ * here. Pure over the plan and the menu it was planned against.
+ */
+export function menuDeployPlanFacts(plan: Pick<MenuImportPlan, 'ops'>, live: Pick<MenuSnapshot, 'items' | 'modifierGroups' | 'taxCategories'>): MenuDeployPlanFacts {
+  const items = new Map(live.items.map((i) => [i.id, i]));
+  const rate = new Map(live.taxCategories.map((t) => [t.id, t.rateBps]));
+  const options = new Map(live.modifierGroups.flatMap((g) => g.modifiers.map((m) => [m.id, { name: m.name, group: g.name, cents: m.priceDeltaCents }] as const)));
+  const ops = plan.ops;
+  const toBps = ops.taxCategoryId !== null ? (rate.get(ops.taxCategoryId) ?? null) : (ops.createTaxCategory?.rateBps ?? null);
+  const priceChanges: Array<MenuDeployPlanFacts['priceChanges'][number]> = [];
+  const choiceChanges: Array<MenuDeployPlanFacts['choiceChanges'][number]> = [];
+  const taxMoves: Array<MenuDeployPlanFacts['taxMoves'][number]> = [];
+  for (const op of ops.items) {
+    const item = op.existingId ? items.get(op.existingId) : undefined;
+    if (!item || !op.update) continue;
+    const to = op.update.basePriceCents;
+    if (to !== undefined && to !== item.basePriceCents) priceChanges.push({ name: item.name, fromCents: item.basePriceCents, toCents: to });
+    if (op.update.useImportTax && toBps !== null) taxMoves.push({ name: item.name, fromBps: rate.get(item.taxCategoryId) ?? null, toBps });
+  }
+  for (const g of ops.modifierGroups) {
+    for (const o of g.options) {
+      const m = o.existingId ? options.get(o.existingId) : undefined;
+      const to = o.update?.priceDeltaCents;
+      if (m && to !== undefined && to !== m.cents) choiceChanges.push({ name: m.name, group: m.group, fromCents: m.cents, toCents: to });
+    }
+  }
+  const newTax = ops.createTaxCategory ? { name: ops.createTaxCategory.name, rateBps: ops.createTaxCategory.rateBps } : null;
+  return { priceChanges, choiceChanges, taxMoves, newTax };
 }
 
 export interface MenuPackageServiceDeps {
@@ -394,7 +441,9 @@ export class MenuPackageService {
           }
         : null,
       canApplyNow: linked && !!pkg && (phase === 'waiting_for_owner' || phase === 'gave_up' || phase === 'stalled'),
-      applyNeedsOwner: phase === 'stalled',
+      // A take-over, and a file that waits for the owner's OK (apply() decides it again, on the file itself).
+      applyNeedsOwner:
+        phase === 'stalled' || phase === 'waiting_for_owner' || (phase === 'gave_up' && (this.mode() === 'ask' || !!local.held)),
       lastCheckedAt: this.lastCheckedAt !== null ? new Date(this.lastCheckedAt).toISOString() : null,
       nextCheckAt: this.nextCheckAt !== null ? new Date(this.nextCheckAt).toISOString() : null,
       lastError: this.lastError ?? local.error,
@@ -622,13 +671,18 @@ export class MenuPackageService {
       });
     }
     if (pkg && decision.claim) {
-      // Unattended: a file that would cut prices to less than half or change the tax waits for the owner.
-      const held = await this.screen(pkg);
-      if (held === undefined) return;
+      // Unattended: a file that would move a price to less than half, more than double or Rs 0, or change the tax, waits for the owner.
+      const screened = await this.holdReason(pkg);
+      if (screened.kind === 'unreachable') {
+        this.failures += 1;
+        this.lastError = screened.message;
+        return;
+      }
+      const held = screened.reason;
       if (held) {
         const now = menuDeployLocalFor(readMenuDeployLocal(db), pkg.id);
         writeMenuDeployLocal(db, { ...now, held });
-        log.info('Menu file waits for the owner (it would change prices or tax a lot)', { file: pkg.fileName, seq: pkg.seq });
+        log.info('Menu file waits for the owner (a price jump or the tax)', { file: pkg.fileName, seq: pkg.seq });
         if (!now.reported.includes(menuDeployReportKey(pkg.id, 'waiting_for_owner'))) {
           await this.report(pkg, scope, 'waiting_for_owner');
         }
@@ -645,31 +699,41 @@ export class MenuPackageService {
   }
 
   /**
-   * Before a file goes in unattended: what its import would change here
-   * (the plan only — nothing is written). A reason when it must wait for the
-   * owner (pos-domain menuDeployNeedsOwner); null when it may go in (or the
-   * file's own problems are for the claim to report); undefined when the
-   * file could not be fetched (look again next time).
+   * What the file's import would change here (the plan only — nothing is
+   * written): the reason it must wait for the owner's OK (pos-domain
+   * menuDeployNeedsOwner, naming each price and item), or null when it may
+   * go in (or the file's own problems are for the claim to report); or
+   * 'unreachable' when the file could not be fetched.
    */
-  private async screen(pkg: MenuPackageMeta): Promise<string | null | undefined> {
+  private async holdReason(pkg: MenuPackageMeta): Promise<{ kind: 'ok'; reason: string | null } | { kind: 'unreachable'; message: string }> {
     const got = await this.fetchPackageFile(pkg.id, pkg.sha256);
-    if (got.kind === 'unreachable') {
-      this.failures += 1;
-      this.lastError = got.message;
-      return undefined;
-    }
-    if (got.kind !== 'ok') return null;
+    if (got.kind === 'unreachable') return { kind: 'unreachable', message: got.message };
+    if (got.kind !== 'ok') return { kind: 'ok', reason: null };
     const db = this.d.db;
+    // Both read at once (no await between): the plan and the names come from the same menu.
+    const live = readMenuSnapshot(db);
     const plan = planMenuImportFromDb(db, got.file);
-    const priceOf = db.prepare(`SELECT base_price_cents AS p FROM menu_items WHERE id = ?`);
-    const priceChanges: Array<{ fromCents: number; toCents: number }> = [];
-    for (const op of plan.ops.items) {
-      const to = op.update?.basePriceCents;
-      if (!op.existingId || to === undefined) continue;
-      const row = priceOf.get(op.existingId) as { p: number } | undefined;
-      if (row) priceChanges.push({ fromCents: Number(row.p), toCents: to });
+    return { kind: 'ok', reason: menuDeployNeedsOwner(menuDeployPlanFacts(plan, live)) };
+  }
+
+  /**
+   * Why putting the newest file in needs the OWNER's login — the file waits
+   * for the owner's OK — or null (a manager may, like Menu → Import): a
+   * take-over; "Wait for my OK"; a file this till put in before whose menu no
+   * longer has it (a backup copy restored since); a file the owner's-OK rule
+   * holds (checked again, on the file itself).
+   */
+  private async ownerOnlyReason(pkg: MenuPackageMeta, takeOver: boolean): Promise<string | null> {
+    if (takeOver) return 'Taking a menu file over from the other till needs the owner’s login.';
+    if (this.mode() === 'ask') {
+      return 'Menu files from the costing PC wait for the owner’s OK (Settings → Kitchen & stock), so putting one in needs the owner’s login.';
     }
-    return menuDeployNeedsOwner({ taxChanges: plan.preview.summary.taxChanges, priceChanges });
+    if (this.appliedHereBefore() && !menuMarkerCovers(readMenuMarker(this.d.db), pkg)) {
+      return 'This till put this file in before, and a backup copy was restored since: putting it in again needs the owner’s login.';
+    }
+    const held = await this.holdReason(pkg);
+    if (held.kind === 'unreachable') throw new MenuDeployError(held.message);
+    return held.reason ? `This file waits for the owner’s OK: ${held.reason}. Putting it in needs the owner’s login.` : null;
   }
 
   /** A package's file from the website (the content route: changes nothing there), checked and read. */
@@ -910,12 +974,15 @@ export class MenuPackageService {
   // ---- the owner's taps ------------------------------------------------------------
 
   /**
-   * Put the newest file in now: the owner's OK in "Wait for my OK", "Try
-   * again" after it failed (`retry`), or taking it over from a till that
-   * stopped halfway (`takeOver`: the handler asks for the owner's login).
+   * Put the newest file in now: the owner's OK (in "Wait for my OK", or for
+   * a file the owner's-OK rule holds), "Try again" after it failed (`retry`),
+   * or taking it over from a till that stopped halfway (`takeOver`).
+   * `owner`: the person who tapped is signed in as the owner. A file that
+   * waits for the owner's OK (ownerOnlyReason) is refused to anyone else,
+   * before anything is claimed or written (MenuDeployOwnerOnlyError).
    * The counter-quiet wait is skipped (someone tapped); a broken link is not.
    */
-  async apply(packageId: string, actor: Actor, opts: { takeOver?: boolean; retry?: boolean } = {}): Promise<MenuImportSummary> {
+  async apply(packageId: string, actor: Actor, opts: { owner: boolean; takeOver?: boolean; retry?: boolean }): Promise<MenuImportSummary> {
     return this.alone(async () => {
       if (!this.d.linked()) throw new MenuDeployError(menuDeployPhaseMessage('not_linked', { maxFormatVersion: MAX_MENU_FILE_VERSION }));
       if (!(await this.fetchStatus())) {
@@ -926,8 +993,14 @@ export class MenuPackageService {
       const pkg = this.status?.latest ?? null;
       if (!pkg || pkg.id !== packageId) throw new MenuDeployError(claimRefusalWords('superseded', null));
       if (pkg.formatVersion > MAX_MENU_FILE_VERSION) throw new MenuDeployError(menuFileTooNewMessage(pkg.formatVersion));
-      const scope = this.scope();
       const db = this.d.db;
+      // In already (put in here, or arrived through the link — a look that ran just before this tap, say): nothing to do.
+      if (menuMarkerCovers(readMenuMarker(db), pkg)) throw new MenuDeployError('This menu file is already in on this till.');
+      if (!opts.owner) {
+        const why = await this.ownerOnlyReason(pkg, opts.takeOver === true);
+        if (why) throw new MenuDeployOwnerOnlyError(why);
+      }
+      const scope = this.scope();
       const link = readTillLink(db, new Date(this.now()));
       if (scope === 'shared' && link.stale) {
         this.setPhase('waiting_link', pkg);
