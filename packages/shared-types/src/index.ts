@@ -18,6 +18,7 @@ export * from './order-stock.js';
 export * from './order-history.js';
 export * from './menu.js';
 export * from './menu-import.js';
+export * from './menu-deploy.js';
 export * from './customer.js';
 export * from './shift.js';
 export * from './printer.js';

@@ -103,6 +103,14 @@ export const menuImportItemSchema = z.object({
   recipe: z.array(menuImportRecipeLineSchema).default([]),
 });
 
+/**
+ * The newest menu file format this build reads: the highest `version` below.
+ * A till sends it when it claims a file from the website (menu-deploy.ts), so
+ * a file in a newer format is never downloaded by a till that would refuse it
+ * ("update the till"). Raise it together with the union (a test pins them).
+ */
+export const MAX_MENU_FILE_VERSION = 3;
+
 export const menuImportFileSchema = z
   .object({
     format: z.literal('cheeseoclock-menu-import'),

@@ -376,6 +376,74 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   JSON-LD and the late-night title change at once; `/_not-found` still
   answers.
 
+## Menu file from the costing PC (from v0.7.32)
+
+- **What is new.** The generated menu import file no longer has to be carried
+  to the shop. On the costing PC, `py -3 deploy_menu.py` (next to the
+  generator in `cheeseoclock-menu\pos-import`, not in this repo) uploads it
+  to the website with the owner's **upload key**; within minutes ONE linked
+  till claims it and puts it in with the same safe import as Menu → Import
+  (till prices kept, never "Start fresh", a backup copy first), and the other
+  till gets the changes through the link. `py -3 deploy_menu.py --status`
+  says which till put it in, or why not.
+- **The file is private.** It holds the costs and recipes. The website keeps
+  it only in its own tables (`menu_deploy_key`, `menu_packages`,
+  `menu_package_events`, in `db/schema.sql` and created on demand by
+  `src/lib/menu-deploy-store.ts`), never in `site_menu` and never with the
+  public menu; only a till with `BRIDGE_SECRET` can download it
+  (`/api/bridge/menu-deploy/<id>/claim` and `/content`). The costing PC's
+  status (`GET /api/menu-deploy`) never includes the file. Every answer is
+  `Cache-Control: no-store`. The newest 5 files keep their content; older
+  ones keep only their history. Never commit a real menu file to this repo.
+- **The upload key.** The owner makes it on a till (Settings → Kitchen &
+  stock → "Menu file from the costing PC"); the till registers only its
+  SHA-256 with the website (`PUT /api/bridge/menu-deploy/key`) and shows the
+  key once, to put on the costing PC (`py -3 deploy_menu.py --setup`, which
+  keeps it in `deploy_menu.local.json`, never in a repo). **Making a new key
+  cancels the old one at once** — the thing to do if a key may have leaked.
+  Keys look like `cocmenu_…`, so a key is never `BRIDGE_SECRET` and
+  `BRIDGE_SECRET` is never a key. Ten wrong keys from one address in 15
+  minutes lock that address out for the rest of the window; 30 uploads a day
+  at most. **No Vercel environment variable changes.**
+- **Deploy the website first** (a push to `main` deploys it). It only adds new
+  routes and tables: no existing route, table or answer changes, and no
+  existing route waits on the new tables, so tills up to v0.7.31 carry on
+  exactly as before (they never call the new routes). Check afterwards that
+  both new doors are shut without a key:
+
+  ```powershell
+  curl.exe -i https://www.cheeseoclock.net/api/menu-deploy          # 401
+  curl.exe -i https://www.cheeseoclock.net/api/bridge/menu-deploy   # 401
+  ```
+
+  A v0.7.32 till against an older website sees 404 and waits quietly
+  ("the website needs its update").
+- **First run.** Install the new till on both tills (nothing happens until an
+  upload key exists). The owner makes the key — for the first run set
+  "Menu updates from the costing file" to **Wait for my OK** — then run
+  `py -3 deploy_menu.py --setup` on the costing PC. Upload first **the file
+  the tills already have**: it changes nothing and proves the whole path
+  (`--status` shows which till took it). After that, `build_and_deploy.cmd`
+  builds and uploads in one go.
+- **Vercel previews** use their own Neon branch (and their own
+  `BRIDGE_SECRET`, see above). Never put the real upload key on a preview:
+  make a throwaway key on a test till linked to the preview.
+- **The tables change only by `ADD COLUMN IF NOT EXISTS`** (in `schema.sql`
+  and in `ensureMenuDeploySchema`, together) — never a rename, a drop or a
+  new CHECK: a till in the field and a website one release behind must keep
+  reading them.
+- **Known limits** (tell the owner; nothing more is built for them):
+  - A claim lost exactly between one till's import and its report leaves the
+    file "stalled". It clears when that till comes back; the owner's
+    take-over also clears it, but may double items.
+  - Two tills that imported on their own with the link off, then linked,
+    may show doubled items (as with manual imports today).
+  - If the website database is ever reset, file numbers start again: import
+    once by hand on the tills afterwards.
+  - A leaked upload key can push a menu. The damage is bounded (the till
+    keeps its prices, never "Start fresh", a backup first, every step in the
+    history); a new key cancels the old one.
+
 ## Free-tier limits (plenty for launch)
 
 - Vercel Hobby: 100GB bandwidth/mo, serverless functions included

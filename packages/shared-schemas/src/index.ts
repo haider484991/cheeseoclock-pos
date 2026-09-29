@@ -7,6 +7,7 @@ export * from './customer.js';
 export * from './settings.js';
 export * from './inventory.js';
 export * from './menu-import.js';
+export * from './menu-deploy.js';
 export * from './business-settings.js';
 export * from './stock-count.js';
 export * from './test-orders.js';

@@ -125,3 +125,72 @@ CREATE TABLE IF NOT EXISTS pos_backup_chunks (
 
 CREATE INDEX IF NOT EXISTS idx_pos_backups_device
   ON pos_backups(device_id, created_at DESC);
+
+-- Menu files from the costing PC (v0.7.32, src/lib/menu-deploy-store.ts, which
+-- also creates these on demand). The PC uploads the generated menu import file
+-- with the owner's upload key, and one linked till claims and imports it. The
+-- file holds costs and recipes: it lives only in menu_packages.content_gz_b64
+-- (gzip of the raw bytes, base64 - text, so its SHA-256 stays true) and is
+-- handed out only behind BRIDGE_SECRET, never with the public menu. Later
+-- columns only ever through ADD COLUMN IF NOT EXISTS (here and in the store).
+
+-- The one upload key: only its SHA-256. A new key replaces the row.
+CREATE TABLE IF NOT EXISTS menu_deploy_key (
+  id          INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  key_hash    TEXT NOT NULL,
+  key_hint    TEXT NOT NULL,
+  device_id   TEXT NOT NULL,
+  device_name TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One row per uploaded file. state: pending, claimed, applied, failed,
+-- refused, superseded (checked in code, no CHECK). Only the newest few keep
+-- their file (content_gz_b64 NULL after that).
+CREATE TABLE IF NOT EXISTS menu_packages (
+  id               UUID PRIMARY KEY,
+  seq              SERIAL UNIQUE,
+  file_name        TEXT NOT NULL,
+  sha256           TEXT NOT NULL,
+  size_bytes       INT NOT NULL,
+  format_version   INT NOT NULL,
+  source           TEXT,
+  generated_at     TIMESTAMPTZ NOT NULL,
+  uploaded_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  uploader         TEXT,
+  item_count       INT NOT NULL,
+  ingredient_count INT NOT NULL,
+  content_gz_b64   TEXT,
+  state            TEXT NOT NULL DEFAULT 'pending',
+  claimed_by       TEXT,
+  claimed_at       TIMESTAMPTZ,
+  lease_until      TIMESTAMPTZ,
+  attempts         INT NOT NULL DEFAULT 0,
+  next_try_at      TIMESTAMPTZ,
+  applied_by       TEXT,
+  applied_at       TIMESTAMPTZ,
+  result_json      JSONB,
+  error            TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_menu_packages_state
+  ON menu_packages(state, seq);
+
+-- The history: uploads, claims, what each till reported, keys made, wrong
+-- keys (with a salted hash of the address, never shown - wrong keys are
+-- counted per address and dropped after 30 days).
+CREATE TABLE IF NOT EXISTS menu_package_events (
+  id          BIGSERIAL PRIMARY KEY,
+  package_id  UUID REFERENCES menu_packages(id),
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  kind        TEXT NOT NULL,
+  device_id   TEXT,
+  device_name TEXT,
+  ip_hash     TEXT,
+  detail      JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_menu_package_events_package
+  ON menu_package_events(package_id, at);
+CREATE INDEX IF NOT EXISTS idx_menu_package_events_kind
+  ON menu_package_events(kind, ip_hash, at);
