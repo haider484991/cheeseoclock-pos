@@ -1009,6 +1009,13 @@ const menuLastPackageShape = {
   packageId: z.string().uuid(),
   /** Its number on the website: a till whose marker is behind never claims a newer one. */
   seq: z.number().int().min(1),
+  /**
+   * When the website took it (its clock). "This till has it, or a newer
+   * one" goes by the package id, then by this time — never by the number
+   * alone: the numbers start again if the website's database is ever reset.
+   * Always written; optional only so a marker without it still reads.
+   */
+  uploadedAt: z.string().datetime({ offset: true }).optional(),
   /** SHA-256 of the file's raw bytes, as the website holds it. */
   sha256: z.string().regex(HEX64),
   fileName: z.string().min(1).max(200),

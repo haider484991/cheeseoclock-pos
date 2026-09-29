@@ -60,7 +60,7 @@ describe('ensureMenuDeploySchema', () => {
     expect(await tables(pg)).toEqual([]);
     const res = await status.GET(tillLook());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, key: null, latest: null, lastApplied: null, tills: [] });
+    expect(await res.json()).toEqual({ ok: true, key: null, latest: null, lastApplied: null, appliedByTills: [], tills: [] });
     expect(await tables(pg)).toEqual(['menu_deploy_key', 'menu_package_events', 'menu_packages']);
   });
 

@@ -228,7 +228,7 @@ export async function readLatestPackage(): Promise<MenuPackageMeta | null> {
  */
 export async function readMenuDeployStatus(opts: { events: boolean }): Promise<MenuDeployStatusResponse> {
   const q = sql();
-  const [keyRows, latest, appliedRows, tillRows, eventRows] = await Promise.all([
+  const [keyRows, latest, appliedRows, tillRows, appliedByRows, eventRows] = await Promise.all([
     rowsOf<{ key_hint: string; created_at: Stamp; device_id: string; device_name: string | null }>(
       q`SELECT key_hint, created_at, device_id, device_name FROM menu_deploy_key WHERE id = 1`,
     ),
@@ -243,6 +243,14 @@ export async function readMenuDeployStatus(opts: { events: boolean }): Promise<M
        WHERE e.package_id = (SELECT id FROM menu_packages ORDER BY seq DESC LIMIT 1)
          AND e.device_id IS NOT NULL
        ORDER BY e.device_id, e.at DESC, e.id DESC
+    `),
+    rowsOf<{ device_id: string }>(q`
+      SELECT DISTINCT e.device_id
+        FROM menu_package_events e
+       WHERE e.package_id = (SELECT id FROM menu_packages ORDER BY seq DESC LIMIT 1)
+         AND e.kind = 'applied'
+         AND e.device_id IS NOT NULL
+       ORDER BY e.device_id
     `),
     opts.events
       ? rowsOf<{
@@ -273,6 +281,7 @@ export async function readMenuDeployStatus(opts: { events: boolean }): Promise<M
     lastApplied: applied
       ? { id: applied.id, seq: Number(applied.seq), appliedBy: applied.applied_by, appliedAt: isoOrNull(applied.applied_at) }
       : null,
+    appliedByTills: appliedByRows.map((r) => r.device_id),
     tills: tillRows
       .map((t) => ({
         deviceId: t.device_id,
@@ -476,17 +485,26 @@ export type ClaimResult =
  * 'shared' (linked tills: ONE imports, the other gets the rows through the
  * link): one UPDATE claims it for a lease, and only when
  *  - it is the newest, still kept, in a format the till reads;
- *  - the till is not behind (no package newer than its marker was applied —
- *    its rows may still be on their way through the link);
+ *  - the till is not behind: no package newer than its marker was put in
+ *    whose rows may still be on their way through the link — one another
+ *    till put in, or one this till put in that another till has received
+ *    (this till's menu lost it: a backup copy restored since; that till goes
+ *    first). A package this till itself put in that no other till has is
+ *    not waited for: nothing of it will ever come through the link;
  *  - no older file is being imported by another till (a live lease, or an
- *    expired one unless the owner takes over);
+ *    expired one unless the owner takes over) — except one the till's
+ *    marker already covers (it is in; only its report was lost);
  *  - it is pending and due, or already this till's (a re-claim, even after
  *    the lease ran out), or another till's that ran out when the owner takes
  *    over, or failed when the owner tries again.
- * The same statement settles older files this till itself still held (it
- * came back after a crash): put in when its marker says so, else superseded;
- * and, on a take-over, other tills' expired claims (superseded). Then the
- * history line: 'taken_over' {from} when it took another till's claim.
+ * The till's marker is read by its package id when it sends one: the
+ * numbers start again if the website's database is ever reset, and an id
+ * the website does not know counts as no marker.
+ * The same statement settles older claims — this till's own (it came back
+ * after a crash) and any its marker covers: put in when the marker is that
+ * package, else superseded — and, on a take-over, other tills' expired
+ * claims (superseded). Then the history line: 'taken_over' {from} when it
+ * took another till's claim.
  */
 export async function claimPackage(id: string, b: MenuDeployClaimBody): Promise<ClaimResult> {
   const detail = detailJson({ scope: b.scope, appVersion: b.appVersion, retry: b.retry || undefined });
@@ -514,7 +532,12 @@ export async function claimPackage(id: string, b: MenuDeployClaimBody): Promise<
   }
 
   const rows = (await sql()`
-    WITH target AS (
+    WITH mk AS (
+      SELECT coalesce((SELECT m.seq FROM menu_packages m WHERE m.id = ${b.lastPackageId}::uuid),
+                      CASE WHEN ${b.lastPackageId}::uuid IS NULL THEN ${b.lastPackageSeq}::int END,
+                      -1) AS s,
+             ${b.lastPackageId}::uuid AS id
+    ), target AS (
       SELECT id, state, claimed_by FROM menu_packages WHERE id = ${id}::uuid
     ), upd AS (
       UPDATE menu_packages p
@@ -524,14 +547,19 @@ export async function claimPackage(id: string, b: MenuDeployClaimBody): Promise<
              lease_until = now() + interval '600 seconds', -- MENU_DEPLOY_LEASE_SECONDS, as a literal
              attempts = CASE WHEN ${b.retry}::boolean THEN 0 ELSE p.attempts END,
              next_try_at = NULL
+        FROM mk
        WHERE p.id = ${id}::uuid
          AND p.content_gz_b64 IS NOT NULL
          AND p.format_version <= ${b.maxFormatVersion}::int
          AND NOT EXISTS (SELECT 1 FROM menu_packages n WHERE n.seq > p.seq)
          AND NOT EXISTS (SELECT 1 FROM menu_packages a
-                          WHERE a.state = 'applied' AND a.seq > coalesce(${b.lastPackageSeq}::int, -1))
+                          WHERE a.state = 'applied' AND a.seq > mk.s
+                            AND (a.applied_by IS DISTINCT FROM ${b.deviceId}::text
+                                 OR EXISTS (SELECT 1 FROM menu_package_events e
+                                             WHERE e.package_id = a.id AND e.kind = 'received'
+                                               AND e.device_id IS DISTINCT FROM ${b.deviceId}::text)))
          AND NOT EXISTS (SELECT 1 FROM menu_packages c
-                          WHERE c.seq < p.seq AND c.state = 'claimed'
+                          WHERE c.seq < p.seq AND c.seq > mk.s AND c.state = 'claimed'
                             AND c.claimed_by IS DISTINCT FROM ${b.deviceId}::text
                             AND (c.lease_until > now() OR NOT ${b.takeOver}::boolean))
          AND (   (p.state = 'pending' AND (p.next_try_at IS NULL OR p.next_try_at <= now() OR ${b.retry}::boolean))
@@ -541,37 +569,45 @@ export async function claimPackage(id: string, b: MenuDeployClaimBody): Promise<
       RETURNING p.*, false AS lease_expired, true AS retry_ready, true AS has_content
     ), older AS (
       UPDATE menu_packages o
-         SET state = CASE WHEN o.claimed_by = ${b.deviceId}::text AND o.seq <= coalesce(${b.lastPackageSeq}::int, -1)
+         SET state = CASE WHEN (mk.id IS NOT NULL AND o.id = mk.id)
+                               OR (mk.id IS NULL AND o.claimed_by = ${b.deviceId}::text AND o.seq <= mk.s)
                           THEN 'applied' ELSE 'superseded' END,
-             applied_by = CASE WHEN o.claimed_by = ${b.deviceId}::text AND o.seq <= coalesce(${b.lastPackageSeq}::int, -1)
+             applied_by = CASE WHEN (mk.id IS NOT NULL AND o.id = mk.id)
+                                    OR (mk.id IS NULL AND o.claimed_by = ${b.deviceId}::text AND o.seq <= mk.s)
                                THEN o.claimed_by ELSE o.applied_by END,
-             applied_at = CASE WHEN o.claimed_by = ${b.deviceId}::text AND o.seq <= coalesce(${b.lastPackageSeq}::int, -1)
+             applied_at = CASE WHEN (mk.id IS NOT NULL AND o.id = mk.id)
+                                    OR (mk.id IS NULL AND o.claimed_by = ${b.deviceId}::text AND o.seq <= mk.s)
                                THEN now() ELSE o.applied_at END,
              claimed_by = NULL, claimed_at = NULL, lease_until = NULL, next_try_at = NULL
-        FROM (SELECT id AS was_id, claimed_by AS was_claimed_by FROM menu_packages WHERE state = 'claimed') w
+        FROM (SELECT id AS was_id, claimed_by AS was_claimed_by FROM menu_packages WHERE state = 'claimed') w, mk
        WHERE o.id = w.was_id
          AND o.state = 'claimed'
          AND o.seq < (SELECT seq FROM upd)
-         AND (o.claimed_by = ${b.deviceId}::text OR (${b.takeOver}::boolean AND o.lease_until <= now()))
-      RETURNING o.id, o.seq, o.state, w.was_claimed_by
+         AND (   o.claimed_by = ${b.deviceId}::text
+              OR o.seq <= mk.s
+              OR (${b.takeOver}::boolean AND o.lease_until <= now()))
+      RETURNING o.id, o.seq, o.state, w.was_claimed_by,
+                (w.was_claimed_by IS DISTINCT FROM ${b.deviceId}::text AND o.seq > mk.s) AS taken
     ), older_ev AS (
+      -- Put in by the till that held it (this one after a crash, or the other one whose rows are here).
       INSERT INTO menu_package_events (package_id, kind, device_id, device_name, detail)
-      SELECT o.id, 'applied', ${b.deviceId}::text, ${b.deviceName}::text,
-             jsonb_build_object('scope', 'shared', 'recovered', true, 'appVersion', ${b.appVersion}::text)
+      SELECT o.id, 'applied', o.was_claimed_by,
+             CASE WHEN o.was_claimed_by = ${b.deviceId}::text THEN ${b.deviceName}::text END,
+             jsonb_build_object('scope', 'shared', 'recovered', true, 'noticedBy', ${b.deviceId}::text,
+                                'appVersion', ${b.appVersion}::text)
         FROM older o WHERE o.state = 'applied'
       RETURNING id
     ), ev AS (
       INSERT INTO menu_package_events (package_id, kind, device_id, device_name, detail)
       SELECT u.id,
              CASE WHEN (t.state = 'claimed' AND t.claimed_by IS DISTINCT FROM ${b.deviceId}::text)
-                       OR EXISTS (SELECT 1 FROM older o WHERE o.was_claimed_by IS DISTINCT FROM ${b.deviceId}::text)
+                       OR EXISTS (SELECT 1 FROM older o WHERE o.taken)
                   THEN 'taken_over' ELSE 'claimed' END,
              ${b.deviceId}::text, ${b.deviceName}::text,
              ${detail}::jsonb || jsonb_build_object(
                'from', coalesce(
                  CASE WHEN t.state = 'claimed' AND t.claimed_by IS DISTINCT FROM ${b.deviceId}::text THEN t.claimed_by END,
-                 (SELECT o.was_claimed_by FROM older o
-                   WHERE o.was_claimed_by IS DISTINCT FROM ${b.deviceId}::text ORDER BY o.seq DESC LIMIT 1)),
+                 (SELECT o.was_claimed_by FROM older o WHERE o.taken ORDER BY o.seq DESC LIMIT 1)),
                'settled', (SELECT count(*)::int FROM older))
         FROM upd u CROSS JOIN target t
       RETURNING id
@@ -625,6 +661,11 @@ export function claimRefusalReason(
 /** 0 rows claimed: read once and say why (409), or 404 for no such package. */
 async function refuseClaim(id: string, b: MenuDeployClaimBody): Promise<ClaimResult> {
   const rows = (await sql()`
+    WITH mk AS (
+      SELECT coalesce((SELECT m.seq FROM menu_packages m WHERE m.id = ${b.lastPackageId}::uuid),
+                      CASE WHEN ${b.lastPackageId}::uuid IS NULL THEN ${b.lastPackageSeq}::int END,
+                      -1) AS s
+    )
     SELECT p.id, p.seq, p.file_name, p.sha256, p.size_bytes, p.format_version, p.source, p.generated_at,
            p.uploaded_at, p.uploader, p.item_count, p.ingredient_count, p.state, p.claimed_by, p.claimed_at,
            p.lease_until, (p.state = 'claimed' AND p.lease_until IS NOT NULL AND p.lease_until <= now()) AS lease_expired,
@@ -632,17 +673,23 @@ async function refuseClaim(id: string, b: MenuDeployClaimBody): Promise<ClaimRes
            p.applied_by, p.applied_at, p.result_json, p.error, (p.content_gz_b64 IS NOT NULL) AS has_content,
            EXISTS (SELECT 1 FROM menu_packages n WHERE n.seq > p.seq) AS has_newer,
            EXISTS (SELECT 1 FROM menu_packages a
-                    WHERE a.state = 'applied' AND a.seq > coalesce(${b.lastPackageSeq}::int, -1)) AS behind
-      FROM menu_packages p
+                    WHERE a.state = 'applied' AND a.seq > mk.s
+                      AND (a.applied_by IS DISTINCT FROM ${b.deviceId}::text
+                           OR EXISTS (SELECT 1 FROM menu_package_events e
+                                       WHERE e.package_id = a.id AND e.kind = 'received'
+                                         AND e.device_id IS DISTINCT FROM ${b.deviceId}::text))) AS behind,
+           mk.s AS marker_seq
+      FROM menu_packages p, mk
      WHERE p.id = ${id}::uuid
-  `) as Array<PackageRow & { has_newer: boolean; behind: boolean }>;
+  `) as Array<PackageRow & { has_newer: boolean; behind: boolean; marker_seq: number }>;
   const row = rows[0];
   if (!row) return { ok: false, status: 404, error: 'not_found' };
   const meta = toPackageMeta(row);
+  // An older claim the till's marker covers is in (only its report was lost): it blocks nothing.
   const blockers = (await sql()`
     SELECT id, seq, claimed_by, (lease_until IS NOT NULL AND lease_until <= now()) AS lease_expired
       FROM menu_packages
-     WHERE seq < ${meta.seq}::int AND state = 'claimed'
+     WHERE seq < ${meta.seq}::int AND seq > ${Number(row.marker_seq)}::int AND state = 'claimed'
        AND claimed_by IS DISTINCT FROM ${b.deviceId}::text
      ORDER BY (lease_until IS NOT NULL AND lease_until <= now()) ASC, seq DESC
      LIMIT 1

@@ -23,6 +23,14 @@ import {
 const HEX64 = /^[0-9a-f]{64}$/;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 const isoDate = z.string().datetime({ offset: true });
+/**
+ * Control characters (C0, DEL, C1). A name the costing PC's --status prints
+ * must not carry them: an escape sequence could rewrite the lines above it
+ * and hide an upload from the one check the owner runs.
+ */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+export const MENU_DEPLOY_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
+const noControlChars = { message: 'no control characters' };
 
 /** How many of each thing an import changed. Numbers only — never a price line, never money. */
 const count = z.number().int().min(0).max(100_000).default(0);
@@ -64,7 +72,8 @@ export const menuDeployUploadBodySchema = z
       .string()
       .min(1)
       .max(200)
-      .refine((s) => !/[/\\]/.test(s), { message: 'a file name, not a path' }),
+      .refine((s) => !/[/\\]/.test(s), { message: 'a file name, not a path' })
+      .refine((s) => !MENU_DEPLOY_CONTROL_CHARS.test(s), noControlChars),
     /** When the generator wrote it (the file's time on the costing PC). */
     generatedAt: isoDate,
     /** SHA-256 (hex) of the raw bytes, before gzip. */
@@ -73,7 +82,11 @@ export const menuDeployUploadBodySchema = z
     sizeBytes: z.number().int().min(1).max(MENU_FILE_MAX_BYTES),
     contentGzB64: z.string().min(1).max(MENU_UPLOAD_MAX_GZ_B64_CHARS).regex(BASE64),
     /** The costing PC's name, for the history. */
-    uploader: z.string().max(100).optional(),
+    uploader: z
+      .string()
+      .max(100)
+      .refine((s) => !MENU_DEPLOY_CONTROL_CHARS.test(s), noControlChars)
+      .optional(),
     /** Upload even though the website holds a file made later. */
     force: z.boolean().default(false),
   })
@@ -102,6 +115,12 @@ export const menuDeployClaimBodySchema = z
     maxFormatVersion: z.number().int().min(1).max(99),
     /** The last package this till has (its synced marker), null when none. */
     lastPackageSeq: z.number().int().min(1).nullable(),
+    /**
+     * …and its id. The website goes by the id when it is given: a marker of a
+     * package it does not know (its database was reset, so the numbers
+     * started again) counts as no marker, never as a number from before.
+     */
+    lastPackageId: z.string().uuid().nullable().default(null),
     /** The owner's take-over of a claim that ran out (may double items). */
     takeOver: z.boolean().default(false),
     /** The owner's "Try again" after 5 failures. */
@@ -197,6 +216,12 @@ export const menuDeployStatusResponseSchema = z.object({
       appliedAt: z.string().nullable(),
     })
     .nullable(),
+  /**
+   * The tills that have said they put the latest package in (either scope).
+   * A till whose menu no longer has it (a backup copy restored since) never
+   * puts it in again by itself.
+   */
+  appliedByTills: z.array(z.string()).default([]),
   /** The newest word from each till about the latest package. */
   tills: z.array(
     z.object({

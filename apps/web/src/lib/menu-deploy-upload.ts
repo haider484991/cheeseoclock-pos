@@ -6,7 +6,7 @@ import {
   MENU_IMPORT_FILE_FORMAT,
   MENU_UPLOAD_MAX_BODY_BYTES,
 } from '@cheeseoclock/shared-types';
-import { menuDeployUploadBodySchema } from '@cheeseoclock/shared-schemas/menu-deploy';
+import { MENU_DEPLOY_CONTROL_CHARS, menuDeployUploadBodySchema } from '@cheeseoclock/shared-schemas/menu-deploy';
 import { logFailure, noStore, refuseUnlessUploadKey } from '@/lib/menu-deploy-auth';
 import { countUploadsToday, insertPackage, pruneAfterUpload, readLatestPackage } from '@/lib/menu-deploy-store';
 import { clientIpHash } from '@/lib/rate-limit';
@@ -18,7 +18,8 @@ import { clientIpHash } from '@/lib/rate-limit';
  * menu import file; the full check is each till's (its import is the same as
  * Menu → Import). Answers:
  *   201 { ok, duplicate: false, package }  stored; the tills pick it up
- *   200 { ok, duplicate: true, package }   this exact file is already the newest
+ *   200 { ok, duplicate: true, package }   this exact file is already the newest (whatever
+ *                                          became of it: put in, waiting, refused, given up)
  *   400 validation | bad_gzip | size_mismatch | checksum_mismatch | not_json | not_a_menu_file
  *   409 older_than_current { current }     the website holds a file made later (force to send anyway)
  *   413 too_large                          over the body or file limit
@@ -77,7 +78,9 @@ export async function handleMenuUpload(req: Request): Promise<Response> {
 
     const newest = await readLatestPackage();
     if (newest) {
-      if (newest.sha256 === body.sha256 && ['pending', 'claimed', 'applied'].includes(newest.state)) {
+      // The same bytes again change nothing — also after a till refused them or gave up on them
+      // (the answer says so; a new copy would only be refused again, or tried 5 more times).
+      if (newest.sha256 === body.sha256 && newest.state !== 'superseded') {
         return noStore({ ok: true, duplicate: true, package: newest }, 200);
       }
       if (!body.force && Date.parse(body.generatedAt) < Date.parse(newest.generatedAt)) {
@@ -133,6 +136,7 @@ export function menuFileShape(
   const items = f['items'];
   const ingredients = f['ingredients'];
   if (!Array.isArray(f['categories']) || !Array.isArray(items) || !Array.isArray(ingredients)) return null;
-  const source = typeof f['source'] === 'string' ? f['source'].slice(0, 300) : null;
+  // No control characters: the costing PC's --status prints it.
+  const source = typeof f['source'] === 'string' ? f['source'].replace(new RegExp(MENU_DEPLOY_CONTROL_CHARS.source, 'g'), ' ').slice(0, 300) : null;
   return { version, source, itemCount: items.length, ingredientCount: ingredients.length };
 }

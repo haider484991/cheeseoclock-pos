@@ -60,6 +60,28 @@ describe('parseMenuFileText: the one check', () => {
     (bad['items'] as Array<Record<string, unknown>>)[0]!['category'] = 'No Such Category';
     expect(() => parseMenuFileText(JSON.stringify(bad))).toThrow(/^The menu file has a problem \(at items\.0\.category\): /);
   });
+
+  it('a choice group no one could satisfy is refused (it would make every item that asks it unsellable)', async () => {
+    const { parseMenuFileText } = await svc();
+    const withGroup = (g: Record<string, unknown>) => {
+      const m = madeUpMenu('groups');
+      const groups = m['modifierGroups'] as Array<Record<string, unknown>>;
+      groups[0] = { ...groups[0]!, ...g };
+      return JSON.stringify(m);
+    };
+    // A single choice that needs two picks.
+    expect(() => parseMenuFileText(withGroup({ selectionType: 'single', minSelect: 2, maxSelect: 2, required: true }))).toThrow(
+      /\(at modifierGroups\.0\.minSelect\): "Test dip" is a single choice but asks for 2 picks/,
+    );
+    // More picks than it has options (the made-up dip has 2).
+    expect(() => parseMenuFileText(withGroup({ selectionType: 'multi', minSelect: 3, maxSelect: 3, required: true }))).toThrow(
+      /"Test dip" asks for 3 picks but has only 2 options/,
+    );
+    // What a real file has: fine.
+    expect(() => parseMenuFileText(withGroup({ selectionType: 'single', minSelect: 1, maxSelect: 1, required: true }))).not.toThrow();
+    expect(() => parseMenuFileText(withGroup({ selectionType: 'multi', minSelect: 2, maxSelect: 2, required: true }))).not.toThrow();
+    expect(() => parseMenuFileText(withGroup({ selectionType: 'multi', minSelect: 0, maxSelect: 1, required: false }))).not.toThrow();
+  });
 });
 
 describe.skipIf(!DatabaseSync)('a picked file (Menu → Import)', () => {

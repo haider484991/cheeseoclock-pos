@@ -377,7 +377,7 @@ class WebOrdersBridge {
       linked: () => (this.db ? isWebBridgeReady(getWebBridgeConfig(this.db)).ok : false),
       ordersOn: () => (this.db ? getWebBridgeConfig(this.db).enabled : false),
       publishMenu: () => this.publishMenu(),
-      backup: (kind) => createBackupAsync({ kind }),
+      backup: (kind, tag) => createBackupAsync({ kind, tag }),
       emit: (e) => notifyRenderer('menuDeploy:changed', e),
     });
     setMenuPackageService(this.menuPackages);

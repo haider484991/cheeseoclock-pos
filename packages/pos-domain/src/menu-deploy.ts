@@ -10,17 +10,26 @@
  *   R2  this till's marker has it (or newer)      → done: applied (by this till) or
  *                                                   received (through the link);
  *                                                   says so to the website once
+ *   R2b the website says this till put it in, but → never again by itself: other_till
+ *       its marker does not have it (a backup       (linked, and it is in on the website),
+ *       copy restored since)                        else waiting_for_owner (said once)
  *   R3  its format is newer than this till reads  → too_old (said once)
  *   R4  refused (the website's word, or this till's own check)  → refused
  *   R5  failed 5 times                            → gave_up (the owner's "Try again")
  *   R6  linked, and another till put it in        → other_till (its rows come through the link)
  *   R7  linked, and another till holds it         → other_till, or stalled once its claim ran out
  *                                                   (never taken over by itself)
- *   R8  "Wait for my OK"                          → waiting_for_owner (said once)
+ *   R8  "Wait for my OK", or the file would cut   → waiting_for_owner (said once)
+ *       prices to less than half or change the
+ *       tax (menuDeployNeedsOwner: never by itself)
  *   R9  linked, and the link is not working       → waiting_link
  *   R10 a failed try is waiting for its next turn → failed
  *   R11 an order was rung up here a moment ago    → waiting_quiet
  *   R12 otherwise                                 → claim it (the website decides who)
+ *
+ * "Has it" goes by the package id, then by when the website took it —
+ * never by its number alone: the numbers start again if the website's
+ * database is ever reset (menuMarkerCovers).
  */
 import {
   MENU_DEPLOY_MAX_ATTEMPTS,
@@ -37,6 +46,8 @@ import {
 export interface MenuDeployPackageFacts {
   id: string;
   seq: number;
+  /** When the website took it (its clock, ISO). */
+  uploadedAt: string;
   fileName: string;
   formatVersion: number;
   state: string;
@@ -50,8 +61,28 @@ export interface MenuDeployPackageFacts {
 export interface MenuDeployMarkerFacts {
   packageId: string;
   seq: number;
+  /** When the website took the file (absent on a marker that does not say). */
+  uploadedAt?: string | null;
   appliedByDevice: string;
   counts: MenuDeployCountsView;
+}
+
+/**
+ * The marker has this package, or a newer one: the same package id, or one
+ * the website took later. Never by the number alone (after a reset of the
+ * website's database a new file #1 is newer than an old #12); a marker that
+ * does not say when falls back to the number.
+ */
+export function menuMarkerCovers(
+  marker: Pick<MenuDeployMarkerFacts, 'packageId' | 'seq' | 'uploadedAt'> | null,
+  pkg: Pick<MenuDeployPackageFacts, 'id' | 'seq' | 'uploadedAt'>,
+): boolean {
+  if (!marker) return false;
+  if (marker.packageId === pkg.id) return true;
+  const m = marker.uploadedAt ? Date.parse(marker.uploadedAt) : Number.NaN;
+  const p = Date.parse(pkg.uploadedAt);
+  if (Number.isFinite(m) && Number.isFinite(p)) return m > p;
+  return marker.seq >= pkg.seq;
 }
 
 /** This till's own bookkeeping for the newest file (pure-local settings 'menuDeploy.local'). */
@@ -62,6 +93,12 @@ export interface MenuDeployLocalFacts {
   nextTryAt: string | null;
   /** This till's full check refused the file (its format is wrong). */
   refused: boolean;
+  /**
+   * Why the file waits for the owner's OK although the till puts files in by
+   * itself (menuDeployNeedsOwner: it would cut prices to less than half, or
+   * change the tax), or null.
+   */
+  held?: string | null;
   error: string | null;
   /** `${packageId}:${outcome}` the website has taken. */
   reported: readonly string[];
@@ -74,6 +111,12 @@ export interface MenuDeployDecisionInput {
   local: MenuDeployLocalFacts;
   deviceId: string;
   scope: MenuDeployScope;
+  /**
+   * The website says THIS till put the newest file in (it said "applied",
+   * in either scope). With no marker of it here, a backup copy was restored
+   * since: it is never put in again by itself.
+   */
+  appliedHereBefore: boolean;
   /** The link to the other till is on and has gone quiet, failing or paused. */
   linkStale: boolean;
   mode: 'auto' | 'ask';
@@ -84,7 +127,7 @@ export interface MenuDeployDecisionInput {
   nowMs: number;
 }
 
-export type MenuDeployRule = 'R1' | 'R2' | 'R3' | 'R4' | 'R5' | 'R6' | 'R7' | 'R8' | 'R9' | 'R10' | 'R11' | 'R12';
+export type MenuDeployRule = 'R1' | 'R2' | 'R2b' | 'R3' | 'R4' | 'R5' | 'R6' | 'R7' | 'R8' | 'R9' | 'R10' | 'R11' | 'R12';
 
 export interface MenuDeployStep {
   rule: MenuDeployRule;
@@ -92,7 +135,7 @@ export interface MenuDeployStep {
   /** Tell the website this now. */
   report: { outcome: MenuDeployOutcome; counts?: MenuDeployCountsView; error?: string } | null;
   /** Ask the website for the file (it decides which till gets it). */
-  claim: { lastPackageSeq: number | null } | null;
+  claim: { lastPackageSeq: number | null; lastPackageId: string | null } | null;
 }
 
 /** How long a till waits after an order before putting a menu file in by itself. */
@@ -123,15 +166,23 @@ export function decideMenuDeployStep(input: MenuDeployDecisionInput): MenuDeploy
   if (!pkg) return step('R1', 'idle');
 
   // R2: done — the file is in on this till (put in here, or arrived through the link).
-  if (marker && marker.seq >= pkg.seq) {
+  if (marker && menuMarkerCovers(marker, pkg)) {
+    // A marker of a NEWER file (the website's database went back): nothing to say about this one.
+    const sameFile = marker.packageId === pkg.id;
     if (marker.appliedByDevice === me) {
-      const sameFile = marker.packageId === pkg.id;
       const otherHoldsIt = pkg.state === 'claimed' && pkg.claimedBy !== null && pkg.claimedBy !== me && !pkg.leaseExpired;
       // Put in here but the website never heard (a lost report, or the till stopped right after the import).
       const tell = sameFile && !said('applied') && (shared ? pkg.state !== 'applied' && !otherHoldsIt : true);
       return step('R2', 'applied', tell ? { report: { outcome: 'applied', counts: marker.counts } } : {});
     }
-    return step('R2', 'received', said('received') ? {} : { report: { outcome: 'received' } });
+    return step('R2', 'received', !sameFile || said('received') ? {} : { report: { outcome: 'received' } });
+  }
+
+  // R2b: this till put it in once, and its menu no longer has it (a backup copy restored since).
+  // Never again by itself: the owner restored that copy, perhaps to undo this very file.
+  if (input.appliedHereBefore) {
+    if (shared && pkg.state === 'applied') return step('R2b', 'other_till');
+    return step('R2b', 'waiting_for_owner', said('waiting_for_owner') ? {} : { report: { outcome: 'waiting_for_owner' } });
   }
 
   // R3: never downloaded.
@@ -157,8 +208,8 @@ export function decideMenuDeployStep(input: MenuDeployDecisionInput): MenuDeploy
     }
   }
 
-  // R8
-  if (input.mode === 'ask') {
+  // R8: the owner's OK first — always in "Wait for my OK", and for a file that would cut prices or change the tax.
+  if (input.mode === 'ask' || local.held) {
     return step('R8', 'waiting_for_owner', said('waiting_for_owner') ? {} : { report: { outcome: 'waiting_for_owner' } });
   }
 
@@ -173,7 +224,30 @@ export function decideMenuDeployStep(input: MenuDeployDecisionInput): MenuDeploy
   if (!input.quiet) return step('R11', 'waiting_quiet');
 
   // R12
-  return step('R12', 'claimed', { claim: { lastPackageSeq: marker?.seq ?? null } });
+  return step('R12', 'claimed', { claim: { lastPackageSeq: marker?.seq ?? null, lastPackageId: marker?.packageId ?? null } });
+}
+
+/** What an import of the file would change that a till never puts in by itself (read from its plan). */
+export interface MenuDeployPlanFacts {
+  /** Items the file would move onto another tax rate. */
+  taxChanges: number;
+  /** Existing items whose selling price the file would change: from → to (paisa). */
+  priceChanges: ReadonlyArray<{ fromCents: number; toCents: number }>;
+}
+
+/**
+ * Why a file must wait for the owner's OK even when the tills put files in
+ * by themselves — or null. The costing PC's upload key is all it takes to
+ * send a file, so a file that would sell items for less than half their
+ * price (Rs 0 included) or change what tax is charged never goes in
+ * unattended; ordinary price changes and new items do.
+ */
+export function menuDeployNeedsOwner(f: MenuDeployPlanFacts): string | null {
+  const cut = f.priceChanges.filter((c) => c.fromCents > 0 && c.toCents * 2 < c.fromCents).length;
+  const parts: string[] = [];
+  if (cut > 0) parts.push(`cut ${plural(cut, 'price', 'prices')} to less than half`);
+  if (f.taxChanges > 0) parts.push(`change the tax on ${plural(f.taxChanges, 'item', 'items')}`);
+  return parts.length ? `it would ${parts.join(' and ')}` : null;
 }
 
 /**
@@ -209,7 +283,7 @@ export function menuClaimRefusalStep(code: MenuClaimRefusal | string): { phase: 
 /** This till's bookkeeping, started afresh when a newer file is the newest (what was said is kept). */
 export function menuDeployLocalFor<L extends MenuDeployLocalFacts & { packageId: string | null }>(local: L, packageId: string): L {
   if (local.packageId === packageId) return local;
-  return { ...local, packageId, attempts: 0, nextTryAt: null, refused: false, error: null };
+  return { ...local, packageId, attempts: 0, nextTryAt: null, refused: false, held: null, error: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -250,8 +324,10 @@ export interface MenuDeployMessageContext {
   maxFormatVersion: number;
   /** other_till: the other till put it in (true), or is putting it in now (false). */
   otherPutIn?: boolean;
-  /** other_till where the website says THIS till put it in, but its menu does not have it (a backup restored?). */
+  /** other_till / waiting_for_owner where the website says THIS till put it in, but its menu does not have it (a backup restored?). */
   appliedHereButMissing?: boolean;
+  /** waiting_for_owner although the tills put files in by themselves: why (menuDeployNeedsOwner). */
+  heldReason?: string | null;
   /** waiting_link: waiting for the other till's last menu changes (not for the link itself). */
   behind?: boolean;
   /** applied: put in by itself. */
@@ -266,7 +342,7 @@ export function menuDeployPhaseMessage(phase: MenuDeployPhase, ctx: MenuDeployMe
   const error = ctx.error?.trim() ? ctx.error.trim().replace(/[.\s]+$/, '') : null;
   switch (phase) {
     case 'not_linked':
-      return 'This till has no website link (Settings → Online orders), so menu files from the costing PC can’t reach it.';
+      return 'This till has no website link (Settings → Online orders), so it does not look for menu files from the costing PC itself. With the link to the other till on (Settings → Second till), a file the other till puts in reaches this till through that link.';
     case 'website_old':
       return 'The website doesn’t take menu files from the costing PC yet — nothing to do until it is updated.';
     case 'idle':
@@ -274,6 +350,12 @@ export function menuDeployPhaseMessage(phase: MenuDeployPhase, ctx: MenuDeployMe
         ? 'This till has not looked for a menu file from the costing PC yet — it does within a minute of starting, or tap Check now.'
         : 'No menu file has been sent from the costing PC yet.';
     case 'waiting_for_owner':
+      if (ctx.appliedHereButMissing) {
+        return `This till put in ${file} before, but its menu doesn’t have it now (a backup copy restored since?). It is not put in again by itself: Menu → Import shows what it would change, and one tap puts it in.`;
+      }
+      if (ctx.heldReason) {
+        return `A new menu file, ${file}, waits for your OK: ${ctx.heldReason}. Menu → Import shows every change first.`;
+      }
       return `A new menu file is waiting for your OK: ${file}. Menu → Import shows what it changes.`;
     case 'waiting_quiet':
       return `A new menu file, ${file}, goes in by itself once no order has been rung up here for a couple of minutes.`;
@@ -283,13 +365,13 @@ export function menuDeployPhaseMessage(phase: MenuDeployPhase, ctx: MenuDeployMe
         : `The link to the other till isn’t working, so ${file} waits: putting it in now could leave the two tills with different menus.`;
     case 'other_till':
       if (ctx.appliedHereButMissing) {
-        return `The website says this till put in ${file}, but its menu doesn’t have it (a backup restored since?). Put it in by hand: Menu → Import.`;
+        return `This till put in ${file} before, but its menu doesn’t have it now (a backup copy restored since?). It is not put in again by itself; the next file from the costing PC goes in as usual.`;
       }
       return ctx.otherPutIn
         ? `The other till put in ${file}; its changes are on the way through the link.`
         : `The other till is putting in ${file} now; its changes come through the link.`;
     case 'stalled':
-      return `The other till started putting in ${file} and stopped. If that till is off or broken, the owner can take it over in Menu → Import — if it did finish, the menu may get doubled items.`;
+      return `The other till started putting in ${file} and stopped. It finishes by itself when that till is back on. If that till is off or broken, the owner can tap Take it over in Menu → Import — if it did finish, the menu may get doubled items.`;
     case 'claimed':
       return `Putting in ${file}…`;
     case 'importing':
@@ -303,7 +385,7 @@ export function menuDeployPhaseMessage(phase: MenuDeployPhase, ctx: MenuDeployMe
         ? `Putting in ${file} failed: ${error}. The till tries again by itself in a few minutes.`
         : `Putting in ${file} has to wait a few minutes after a failed try; the till tries again by itself.`;
     case 'gave_up':
-      return `Putting in ${file} failed ${MENU_DEPLOY_MAX_ATTEMPTS} times${error ? ` (${error})` : ''}. Nothing was changed. Fix what it says, then tap Try again in Menu → Import.`;
+      return `Putting in ${file} failed ${MENU_DEPLOY_MAX_ATTEMPTS} times${error ? ` (${error})` : ''}. Nothing was changed. Tap Try again in Menu → Import; if it fails again, show this message to whoever makes the menu file.`;
     case 'refused':
       return `${cap(file)} was refused${error ? `: ${error}` : ''}. Nothing was changed. Fix the file on the costing PC and send it again.`;
     case 'too_old':
@@ -335,7 +417,15 @@ export function menuDeployNoticeFor(
         description: `${cap(file)} came through the link${ctx.counts ? `: ${menuDeployCountsLine(ctx.counts)}` : ''}.`,
       };
     case 'waiting_for_owner':
-      return { kind: 'waiting_for_owner', title: 'A new menu file is waiting — Menu → Import', description: `${cap(file)}: see what it changes, then put it in with one tap.` };
+      return {
+        kind: 'waiting_for_owner',
+        title: 'A new menu file is waiting — Menu → Import',
+        description: ctx.heldReason
+          ? `${cap(file)} waits for your OK: ${ctx.heldReason}. See every change, then put it in with one tap.`
+          : ctx.appliedHereButMissing
+            ? menuDeployPhaseMessage('waiting_for_owner', ctx)
+            : `${cap(file)}: see what it changes, then put it in with one tap.`,
+      };
     case 'refused':
     case 'gave_up':
     case 'too_old':

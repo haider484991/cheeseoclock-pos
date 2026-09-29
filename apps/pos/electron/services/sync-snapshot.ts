@@ -68,6 +68,17 @@ export interface SendEverythingOptions {
   now?: () => number;
 }
 
+/**
+ * Rows that go out after every table, not with their own: the marker of the
+ * last menu file from the costing PC ('menu.lastPackage'). The other till
+ * takes "I have that file" from it (and never claims a file while it is
+ * behind), so it must not arrive before the menu rows the file made — which
+ * foreign-key order would do, business_settings having no parents.
+ */
+export const SENT_LAST: Readonly<Record<string, { column: string; values: readonly string[] }>> = Object.freeze({
+  business_settings: Object.freeze({ column: 'key', values: Object.freeze(['menu.lastPackage']) }),
+});
+
 export const SNAPSHOT_BATCH_ROWS = 1_000;
 export const SNAPSHOT_BATCH_BYTES = 2_000_000;
 const CLEAR_BATCH_ROWS = 2_000;
@@ -126,19 +137,28 @@ export async function sendEverythingOnce(
       }
     }
 
-    // 2. Every row of every table, parents first.
-    for (const name of order) {
+    // 2. Every row of every table, parents first — and then the rows that go last (SENT_LAST).
+    const passes: Array<{ name: string; last: boolean }> = [
+      ...order.map((name) => ({ name, last: false })),
+      ...order.filter((name) => SENT_LAST[name]).map((name) => ({ name, last: true })),
+    ];
+    for (const { name, last } of passes) {
       const table = tables.get(name);
       if (!table) continue;
+      const held = SENT_LAST[name];
+      const heldSql = held
+        ? ` AND ${last ? '' : 'NOT '}coalesce(${quoteIdent(held.column)} IN (${held.values.map(() => '?').join(', ')}), 0)`
+        : '';
+      const heldValues = held ? [...held.values] : [];
       const select = reader.prepare(
-        `SELECT rowid AS "__rowid", * FROM ${quoteIdent(name)} WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+        `SELECT rowid AS "__rowid", * FROM ${quoteIdent(name)} WHERE rowid > ?${heldSql} ORDER BY rowid LIMIT ?`,
       );
       let after = Number.MIN_SAFE_INTEGER;
       for (;;) {
         await pause();
         if (!opts.shouldContinue()) return (outcome = 'stopped');
         const done = timed(() => {
-          const rows = select.all(after, batchRows) as Array<Record<string, unknown>>;
+          const rows = select.all(after, ...heldValues, batchRows) as Array<Record<string, unknown>>;
           const images: RowImage[] = [];
           let bytes = 0;
           for (const row of rows) {

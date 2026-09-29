@@ -74,4 +74,32 @@ describe('before-menu copies', () => {
     expect(listed.filter((b) => b.fileName.startsWith('before-menu-')).every((b) => b.kind === 'manual')).toBe(true);
     expect(listed.filter((b) => b.kind === 'auto').map((b) => b.fileName)).toEqual(['auto-2026-09-20T00-00-00-000Z.db']);
   });
+
+  it('one bad file tried again and again keeps ONE copy: the copy from before the last good file stays', async () => {
+    const older = Date.now() / 1000 - 3600;
+    let i = 0;
+    const make = async (tag: string) => {
+      const r = await createBackupAsync({ kind: 'before-menu', tag });
+      fs.utimesSync(r.fullPath, older + i, older + i);
+      i++;
+      await new Promise((res) => setTimeout(res, 3));
+      return r.fileName;
+    };
+    const good1 = await make('aaaa1111');
+    const good2 = await make('bbbb2222');
+    const good3 = await make('cccc3333');
+    // File dddd4444 fails ten times; each try takes a copy first.
+    const bad: string[] = [];
+    for (let n = 0; n < 10; n++) bad.push(await make('dddd4444'));
+    expect(bad[0]).toMatch(/^before-menu-.+-fdddd4444\.db$/);
+    const kept = () => fs.readdirSync(path.join(state.userData, 'backups')).filter((f) => f.startsWith('before-menu-')).sort();
+    expect(kept()).toEqual([good1, good2, good3, bad[9]!].sort());
+    // Two more good files: five files kept, the oldest file's copy goes.
+    const good5 = await make('eeee5555');
+    const good6 = await make('ffff6666');
+    expect(kept()).toEqual([good2, good3, bad[9]!, good5, good6].sort());
+    // A tag that is not letters and digits is left off the name (never part of a path).
+    const odd = await createBackupAsync({ kind: 'before-menu', tag: '../x' });
+    expect(odd.fileName).toMatch(/^before-menu-[0-9TZ-]+\.db$/);
+  });
 });

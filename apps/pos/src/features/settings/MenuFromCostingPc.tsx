@@ -27,6 +27,7 @@ import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting } from './shop-rules/useShopSetting';
 import {
+  KEY_DIALOG_STAYS_OPEN,
   KEY_ONCE_WORDS,
   KEY_SAFETY_WORDS,
   MENU_AUTO_UPDATE_OPTIONS,
@@ -148,7 +149,7 @@ function MenuFileCard() {
       {!view && !q.isError && <p className="mt-3 text-sm text-stone-500">Loading…</p>}
       {view && (
         <div className="mt-3 space-y-3">
-          <p className="text-sm font-medium">{keyStatusText(view.key)}</p>
+          <p className="text-sm font-medium">{keyStatusText(view.key, view.websiteLinked)}</p>
           <p className={cn('rounded-lg p-3 text-sm', TONE_CLASS[tone])} aria-live="polite">
             {view.message}
           </p>
@@ -211,14 +212,20 @@ function MenuFileCard() {
   );
 }
 
-/** The new key, shown once, with Copy. Closing forgets it. */
+/**
+ * The new key, shown once, with Copy. Closing forgets it — so it closes only with its own buttons,
+ * never with a tap beside it or Esc (the website already holds the new key; the old one stopped).
+ */
 function KeyOnceDialog({ made, onClose }: { made: MenuDeployKeyMade; onClose: () => void }) {
   const { toast } = useToast();
   return (
-    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
+    <Dialog.Root open>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[560px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
+        <Dialog.Content
+          {...KEY_DIALOG_STAYS_OPEN}
+          className="fixed left-1/2 top-1/2 z-50 w-[560px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900"
+        >
           <header className="mb-3 flex items-start justify-between gap-3">
             <div>
               <Dialog.Title className="text-lg font-semibold">New upload key</Dialog.Title>

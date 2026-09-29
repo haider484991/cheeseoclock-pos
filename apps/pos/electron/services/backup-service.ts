@@ -180,10 +180,16 @@ export interface CreateBackupResult {
   sizeBytes: number;
 }
 
-function newBackupPath(kind: BackupKind): { fileName: string; fullPath: string } {
+/** A before-menu copy's tag: which menu file it was taken for (letters and digits only). */
+const BEFORE_MENU_TAG = /^[a-z0-9]{1,16}$/;
+/** before-menu-<time>-f<tag>.db → the tag, or null for a copy without one. */
+const BEFORE_MENU_TAGGED = /^before-menu-.+-f([a-z0-9]{1,16})\.db$/;
+
+function newBackupPath(kind: BackupKind, tag?: string): { fileName: string; fullPath: string } {
   const dir = ensureBackupDir();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const fileName = `${PREFIX[kind]}${stamp}.db`;
+  const suffix = kind === 'before-menu' && tag && BEFORE_MENU_TAG.test(tag) ? `-f${tag}` : '';
+  const fileName = `${PREFIX[kind]}${stamp}${suffix}.db`;
   return { fileName, fullPath: path.join(dir, fileName) };
 }
 
@@ -203,12 +209,16 @@ export function createBackup(opts: { kind: 'auto' | 'manual' } = { kind: 'manual
   return backupCreated(opts.kind, fileName, fullPath);
 }
 
-/** The same backup without freezing the till while it is written (see snapshotDatabaseAsync). */
+/**
+ * The same backup without freezing the till while it is written (see
+ * snapshotDatabaseAsync). `tag` (before-menu only): the menu file the copy
+ * is taken for — the rotation keeps the newest copy of each file.
+ */
 export async function createBackupAsync(
-  opts: { kind: BackupKind } = { kind: 'manual' },
+  opts: { kind: BackupKind; tag?: string } = { kind: 'manual' },
 ): Promise<CreateBackupResult> {
   if (!dbRef) throw new Error('Backup service not initialised');
-  const { fileName, fullPath } = newBackupPath(opts.kind);
+  const { fileName, fullPath } = newBackupPath(opts.kind, opts.tag);
   await snapshotDatabaseAsync(dbRef, fullPath);
   return backupCreated(opts.kind, fileName, fullPath);
 }
@@ -421,11 +431,30 @@ export function applyPendingRestoreNowAndRelaunch(): void {
 // Internal — runs at bootstrap and on daily timer
 // -----------------------------------------------------------------------------
 
-/** The newest few copies taken before a menu file went in; never an 'auto-' or a 'manual-' one. */
+/**
+ * The copies taken before a menu file went in: the newest copy of each file
+ * (a file tried again and again — each try takes a copy — keeps only its
+ * last one), for the newest few files. So the copy from before the last
+ * good file is never pushed out by one bad file's tries. Never an 'auto-'
+ * or a 'manual-' copy.
+ */
 function rotateBeforeMenuBackups(): void {
   const dir = backupDir();
   const copies = listBackups().filter((b) => b.fileName.startsWith(BEFORE_MENU_BACKUP_PREFIX));
-  for (const old of copies.slice(KEEP_BEFORE_MENU_BACKUPS)) {
+  const seen = new Set<string>();
+  const keep: string[] = [];
+  const drop: typeof copies = [];
+  // Newest first (listBackups' order).
+  for (const c of copies) {
+    const tag = BEFORE_MENU_TAGGED.exec(c.fileName)?.[1] ?? `untagged:${c.fileName}`;
+    if (seen.has(tag) || keep.length >= KEEP_BEFORE_MENU_BACKUPS) {
+      drop.push(c);
+      continue;
+    }
+    seen.add(tag);
+    keep.push(c.fileName);
+  }
+  for (const old of drop) {
     try {
       fs.unlinkSync(path.join(dir, old.fileName));
       log.info('Rotated an old before-menu backup', { fileName: old.fileName });

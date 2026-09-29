@@ -168,7 +168,15 @@ const till = (deviceId: string) => ({ deviceId, deviceName: `Till ${deviceId.sli
 async function claim(
   deviceId: string,
   id: string,
-  opts: { scope?: 'shared' | 'own'; last?: number | null; takeOver?: boolean; retry?: boolean; max?: number } = {},
+  opts: {
+    scope?: 'shared' | 'own';
+    last?: number | null;
+    /** The marker's package id (the till sends it with its number). */
+    lastId?: string | null;
+    takeOver?: boolean;
+    retry?: boolean;
+    max?: number;
+  } = {},
 ): Promise<Response> {
   return call(
     'POST /api/bridge/menu-deploy/[id]/claim',
@@ -180,6 +188,7 @@ async function claim(
           scope: opts.scope ?? 'shared',
           maxFormatVersion: opts.max ?? MAX_MENU_FILE_VERSION,
           lastPackageSeq: opts.last ?? null,
+          lastPackageId: opts.lastId,
           takeOver: opts.takeOver,
           retry: opts.retry,
         },
@@ -530,6 +539,43 @@ describe('uploading a menu file', () => {
     expect(await events('uploaded')).toHaveLength(1);
   });
 
+  it('answers "already there" for a file a till refused or gave up on, adding nothing', async () => {
+    const p = (await uploadOk(key, menuFile('bad'), at(0))).package;
+    await claim('till-A', p.id);
+    await report('till-A', p.id, 'refused', { error: 'Test: a choice group asks for more picks than it has' });
+    const again = await send(key, payload(menuFile('bad'), at(5)));
+    expect(again.status).toBe(200);
+    expect(menuDeployUploadResponseSchema.parse(await again.json())).toMatchObject({
+      duplicate: true,
+      package: { id: p.id, state: 'refused', error: 'Test: a choice group asks for more picks than it has' },
+    });
+
+    const q = (await uploadOk(key, menuFile('flaky'), at(10))).package;
+    for (let i = 0; i < MENU_DEPLOY_MAX_ATTEMPTS; i++) {
+      expect((await claim('till-A', q.id)).status).toBe(200);
+      await report('till-A', q.id, 'failed', { error: 'Test: the disk is full' });
+      await db.pg.query(`UPDATE menu_packages SET next_try_at = now() - interval '1 second' WHERE id = $1::uuid`, [q.id]);
+    }
+    expect((await pkgRow(q.id))['state']).toBe('failed');
+    const twice = await send(key, payload(menuFile('flaky'), at(11)));
+    expect(twice.status).toBe(200);
+    expect(menuDeployUploadResponseSchema.parse(await twice.json())).toMatchObject({ duplicate: true, package: { id: q.id, state: 'failed' } });
+    expect(await count('menu_packages')).toBe(2);
+  });
+
+  it('refuses control characters in the names --status prints, and takes them out of the file’s source', async () => {
+    const esc = '\u001b[3A\u001b[2K';
+    for (const extra of [{ fileName: `x${esc}menu.json` }, { uploader: `PC${esc}` }, { fileName: 'a\u009bmenu.json' }]) {
+      const res = await send(key, payload(menuFile('c'), at(0), extra));
+      expect(res.status, JSON.stringify(extra)).toBe(400);
+      expect(await res.json()).toEqual({ ok: false, error: 'validation' });
+    }
+    expect(await count('menu_packages')).toBe(0);
+    const sourced = { ...menuFile('c'), source: `made-up${esc}source` };
+    const ok = await uploadOk(key, sourced, at(0));
+    expect(ok.package.source).toBe('made-up [3A [2Ksource');
+  });
+
   it('refuses a file made before the one it holds, unless forced', async () => {
     await uploadOk(key, menuFile('new'), at(10));
     const res = await send(key, payload(menuFile('old'), at(5)));
@@ -711,6 +757,62 @@ describe('claiming a file (two linked tills)', () => {
     expect(recovered).toHaveLength(1);
   });
 
+  it('an older claim the till’s marker covers blocks nothing, and is recorded as put in by the till that held it', async () => {
+    // Till A put P1 in but its report was lost (P1 still claimed); the link brought P1's rows and marker to till B.
+    const p1 = (await uploadOk(key, menuFile('1'), at(0))).package;
+    await claim('till-A', p1.id);
+    const p2 = (await uploadOk(key, menuFile('2'), at(1))).package;
+    // While A's lease is live, and after it ran out: B (its marker is P1) is neither "busy" nor "stalled".
+    const res = await claim('till-B', p2.id, { last: p1.seq, lastId: p1.id });
+    expect(res.status).toBe(200);
+    expect(await pkgRow(p1.id)).toMatchObject({ state: 'applied', applied_by: 'till-A', claimed_by: null });
+    const recovered = (await events('applied')).filter((e) => (e['detail'] as { recovered?: boolean }).recovered);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ device_id: 'till-A' });
+    expect(recovered[0]!['detail']).toMatchObject({ noticedBy: 'till-B' });
+    // A claim, not a take-over.
+    expect(await events('taken_over')).toHaveLength(0);
+
+    // The same once the lease ran out.
+    const p3 = (await uploadOk(key, menuFile('3'), at(2))).package;
+    await expireLease(p2.id);
+    const late = await claim('till-A', p3.id, { last: p2.seq, lastId: p2.id });
+    expect(late.status).toBe(200);
+    expect(await pkgRow(p2.id)).toMatchObject({ state: 'applied', applied_by: 'till-B' });
+    expect(await events('taken_over')).toHaveLength(0);
+  });
+
+  it('a till whose menu lost a file it put in itself (a backup restored) is not held back by it, unless another till received it', async () => {
+    const p1 = (await uploadOk(key, menuFile('1'), at(0))).package;
+    await claim('till-A', p1.id);
+    await report('till-A', p1.id, 'applied');
+    const p2 = (await uploadOk(key, menuFile('2'), at(1))).package;
+    // Till A's marker went back with the restore; no other till has P1: nothing will ever come through the link.
+    expect((await claim('till-A', p2.id, { last: null })).status).toBe(200);
+
+    // With another till holding P1's rows, that till goes first.
+    await report('till-A', p2.id, 'applied');
+    await report('till-B', p2.id, 'received');
+    const p3 = (await uploadOk(key, menuFile('3'), at(2))).package;
+    const behind = await claim('till-A', p3.id, { last: p1.seq, lastId: p1.id });
+    expect(behind.status).toBe(409);
+    expect((await behind.json()).error).toBe('behind');
+    expect((await claim('till-B', p3.id, { last: p2.seq, lastId: p2.id })).status).toBe(200);
+  });
+
+  it('goes by the marker’s package id: one the website does not know (its database was reset) counts as none', async () => {
+    const p1 = (await uploadOk(key, menuFile('1'), at(0))).package;
+    await claim('till-A', p1.id);
+    await report('till-A', p1.id, 'applied');
+    const p2 = (await uploadOk(key, menuFile('2'), at(1))).package;
+    // Till B's marker is file #12 of the website's old numbers: it has NOT got P1.
+    const unknown = '0190a0a0-0000-7000-8000-00000000000c';
+    const res = await claim('till-B', p2.id, { last: 12, lastId: unknown });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('behind');
+    expect((await claim('till-B', p2.id, { last: p1.seq, lastId: p1.id })).status).toBe(200);
+  });
+
   it('two tills asking at once: exactly one gets it', async () => {
     const p = (await uploadOk(key, menuFile('a'), at(0))).package;
     const [a, b] = await Promise.all([claim('till-A', p.id), claim('till-B', p.id)]);
@@ -874,6 +976,24 @@ describe('reporting what became of a file', () => {
     expect((await claim('till-C', p.id, { scope: 'own' })).status).toBe(200);
   });
 
+  it('names the tills that said they put the latest file in, in either scope', async () => {
+    const st0 = menuDeployStatusResponseSchema.parse(await (await tillStatus()).json());
+    expect(st0.appliedByTills).toEqual([]);
+    await claim('till-A', p.id, { scope: 'own' });
+    await report('till-A', p.id, 'applied', { scope: 'own' });
+    await report('till-B', p.id, 'waiting_for_owner');
+    const st = menuDeployStatusResponseSchema.parse(await (await tillStatus()).json());
+    // The package itself is untouched by a till with its link off …
+    expect(st.latest?.state).toBe('pending');
+    // … but the website remembers that till put it in (its menu may lose it to a restore).
+    expect(st.appliedByTills).toEqual(['till-A']);
+    const pc = menuDeployStatusResponseSchema.parse(await (await pcStatus(key)).json());
+    expect(pc.appliedByTills).toEqual(['till-A']);
+    // A newer file starts afresh.
+    await uploadOk(key, menuFile('b'), at(5));
+    expect(menuDeployStatusResponseSchema.parse(await (await tillStatus()).json()).appliedByTills).toEqual([]);
+  });
+
   it('writes down a till waiting for the owner, and a till too old for the file', async () => {
     await report('till-A', p.id, 'waiting_for_owner');
     await report('till-B', p.id, 'too_old');
@@ -909,7 +1029,7 @@ describe('what the website shows, and to whom', () => {
 
   it('answers an empty website plainly', async () => {
     const st = menuDeployStatusResponseSchema.parse(await (await tillStatus()).json());
-    expect(st).toEqual({ ok: true, key: null, latest: null, lastApplied: null, tills: [] });
+    expect(st).toEqual({ ok: true, key: null, latest: null, lastApplied: null, appliedByTills: [], tills: [] });
   });
 
   it('never lets the file out without a key: not the public menu, not a refusal, not a status', async () => {

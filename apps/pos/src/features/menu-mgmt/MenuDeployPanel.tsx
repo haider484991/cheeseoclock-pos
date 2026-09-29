@@ -4,7 +4,7 @@ import { Eye, Send } from 'lucide-react';
 import type { MenuDeployView, MenuImportPreview } from '@cheeseoclock/shared-types';
 import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { dayTime, phaseTone } from '../settings/shop-rules/menuDeployWords';
+import { dayTime, phaseTone, showChangesLabel } from '../settings/shop-rules/menuDeployWords';
 
 const TONE_CLASS = {
   good: 'border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100',
@@ -59,7 +59,7 @@ export function MenuDeployPanel({
         </div>
         {view.canApplyNow && view.package && (
           <Button variant="secondary" disabled={busy || previewMut.isPending} onClick={() => previewMut.mutate(view.package!.id)}>
-            <Eye className="h-4 w-4" /> {previewMut.isPending ? 'Reading…' : 'Show the changes'}
+            <Eye className="h-4 w-4" /> {previewMut.isPending ? 'Reading…' : showChangesLabel(view)}
           </Button>
         )}
       </div>

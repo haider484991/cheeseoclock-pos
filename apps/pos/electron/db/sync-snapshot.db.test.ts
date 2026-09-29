@@ -607,6 +607,52 @@ describe.skipIf(!Sqlite)('send everything once', () => {
     expect(changes.map((c) => m.applyRemoteChange(rx.db, c).reason)).toEqual(changes.map(() => 'stale'));
   });
 
+  it('sends the marker of the last menu file from the costing PC after every other row (never before the menu rows it made)', async () => {
+    const m = await mods();
+    const { setBusinessSetting } = await import('./repositories/business-settings-repo.js');
+    const s = await shopThatClearedItsQueue();
+    setBusinessSetting(s.db, 'menu.autoUpdate', { v: 1, mode: 'ask' }, actor);
+    setBusinessSetting(
+      s.db,
+      'menu.lastPackage',
+      {
+        v: 1,
+        packageId: '0190a0a0-0000-7000-8000-000000000001',
+        seq: 1,
+        uploadedAt: '2026-09-29T09:00:00.000Z',
+        sha256: 'a'.repeat(64),
+        fileName: 'test-menu-import.json',
+        appliedByDevice: 'dev-A',
+        appliedAt: '2026-09-29T09:01:00.000Z',
+        automatic: true,
+        counts: { newItems: 1, updatedItems: 0, priceChanges: 0, newIngredients: 0, updatedIngredients: 0, newCategories: 0, recipesSet: 0, choiceGroupsChanged: 0, batchRecipesSet: 0, skipped: 0 },
+      },
+      actor,
+    );
+    expect(
+      await m.sendEverythingOnce(s.db, { openReader: readerFor(s.file!), shouldContinue: () => true, batchRows: 7, pause: noPause }),
+    ).toBe('done');
+    const pending = m.listPendingSync(s.db, 1_000_000);
+    const keyOf = (p: { payload: unknown }) => (p.payload as Record<string, unknown>)['key'] ?? null;
+    // One image of each; the marker is the very last row sent, after every menu row.
+    const markers = pending.filter((p) => p.entityType === 'business_settings' && keyOf(p) === 'menu.lastPackage');
+    expect(markers).toHaveLength(1);
+    expect(pending[pending.length - 1]).toBe(markers[0]);
+    expect(pending.filter((p) => p.entityType === 'business_settings' && keyOf(p) === 'menu.autoUpdate')).toHaveLength(1);
+    // Everything else still goes in foreign-key order, the other settings with their table.
+    const order = m.snapshotOrder(s.db);
+    const rest = pending.slice(0, -1).map((p) => order.indexOf(p.entityType));
+    expect(rest).toEqual([...rest].sort((a, b) => a - b));
+    const lastMenuRow = Math.max(...['menu_items', 'categories', 'recipes'].map((t) => pending.map((p) => p.entityType).lastIndexOf(t)));
+    expect(lastMenuRow).toBeGreaterThan(0);
+    expect(pending.indexOf(markers[0]!)).toBeGreaterThan(lastMenuRow);
+    // And it still rebuilds the other till exactly.
+    const rx = makeDb();
+    const changes = JSON.parse(JSON.stringify(pending.map((p) => m.pendingToChange(p, 'dev-A')))) as SyncChange[];
+    expect(changes.map((c) => m.applyRemoteChange(rx.db, c)).filter((x) => !x.applied)).toEqual([]);
+    expect(rx.raw.prepare(`SELECT key FROM business_settings WHERE key = 'menu.lastPackage'`).get()).toBeTruthy();
+  });
+
   // Tables go out parents first: categories … menu_items … users … orders …
   // order_items, payments … stock_movements. A sale landing after `orders`
   // went out is the case where an unpinned read would send the new order's

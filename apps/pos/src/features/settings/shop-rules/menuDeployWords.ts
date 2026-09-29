@@ -11,7 +11,7 @@ export const MENU_AUTO_UPDATE_OPTIONS: ReadonlyArray<{ mode: MenuAutoUpdateMode;
   {
     mode: 'auto',
     label: 'Apply by themselves',
-    help: 'A new file from the costing PC goes in on one till within minutes — the same safe update as Menu → Import, with the rules above, a backup copy first — and reaches the other till through the link.',
+    help: 'A new file from the costing PC goes in on one till within minutes — the same update as Menu → Import, with the rules above, a backup copy first — and reaches the other till through the link. A file that would cut prices to less than half, or change the tax, still waits for your OK.',
   },
   {
     mode: 'ask',
@@ -42,8 +42,14 @@ export function dayTime(iso: string): string {
   return `${dayMonth(iso)}, ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
-/** "Upload key made 29 Sep on this till (…ab12)" — or that there is none. Never the key. */
-export function keyStatusText(key: MenuDeployView['key']): string {
+/**
+ * "Upload key made 29 Sep on this till (…ab12)" — or that there is none. Never the key.
+ * A till with no website link cannot see the key (it may well exist, made on the other till).
+ */
+export function keyStatusText(key: MenuDeployView['key'], websiteLinked = true): string {
+  if (!key && !websiteLinked) {
+    return 'This till has no website link, so it cannot see the upload key. The key is made, and checked, on a till that has the website link (Settings → Online orders).';
+  }
   if (!key) return 'No upload key yet: make one below, then put it on the costing PC.';
   const where = key.madeOnThisTill ? 'this till' : key.deviceName?.trim() || 'the other till';
   return `Upload key made ${dayMonth(key.createdAt)} on ${where} (…${key.keyHint}).`;
@@ -57,9 +63,31 @@ export const KEY_ONCE_WORDS =
 export const NEW_KEY_QUESTION =
   'Make a new upload key for the costing PC?\n\nThe old key stops working at once: the costing PC needs the new one (py -3 deploy_menu.py --setup) before it can send another menu file.';
 
-/** What a leaked key could do, and the fix (known limits, said to the owner). */
+/**
+ * What a leaked key could do, and the fix (known limits, said to the owner). True to the code: a
+ * file changes item prices, tax and choices as far as "What a menu file may change" above allows
+ * (DEFAULT_MENU_IMPORT_POLICY: the file wins on those; only ingredient prices always stay the
+ * till's); an unattended file that would cut prices to less than half or change the tax waits.
+ */
 export const KEY_SAFETY_WORDS =
-  'Anyone with the key can send a menu file — but it goes in only as the safe update (the till keeps its prices and your rules above, never a fresh start, a backup copy first) and every file is in the history. Worried the key got out? Make a new one: the old one stops at once.';
+  'Anyone with the key can send a menu file. It goes in as Menu → Import would put it in: item prices, tax, choices and recipes change as far as “What a menu file may change” above allows (ingredient prices always stay the till’s), never a fresh start, and a backup copy is made first. A file that would cut prices to less than half, or change the tax, always waits for your OK, and every file is in the history. Worried the key got out? Make a new one: the old one stops at once.';
+
+/** Menu → Import's button for the file waiting for someone: the words the phase sentence names. */
+export function showChangesLabel(view: Pick<MenuDeployView, 'phase'>): string {
+  if (view.phase === 'stalled') return 'Take it over…';
+  if (view.phase === 'gave_up') return 'Try again…';
+  return 'Show the changes';
+}
+
+/**
+ * The new key's window closes only with its buttons: a tap beside it or Esc would lose the key the
+ * website already holds (the old key stopped), and the owner would have to make yet another.
+ */
+export const KEY_DIALOG_STAYS_OPEN = {
+  onEscapeKeyDown: (e: { preventDefault: () => void }) => e.preventDefault(),
+  onPointerDownOutside: (e: { preventDefault: () => void }) => e.preventDefault(),
+  onInteractOutside: (e: { preventDefault: () => void }) => e.preventDefault(),
+} as const;
 
 export type Tone = 'good' | 'warn' | 'bad' | 'plain';
 

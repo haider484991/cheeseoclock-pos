@@ -190,6 +190,12 @@ export class FakeMenuWebsite {
     this.drops.push({ re, afterWork: opts.afterWork === true });
   }
 
+  /** The website answers the next call to a path like `re` with this error status (and does nothing). */
+  refuseNext(re: RegExp, status: number): void {
+    this.refusals.push({ re, status });
+  }
+  private refusals: Array<{ re: RegExp; status: number }> = [];
+
   byId(id: string): FakePackage | undefined {
     return this.packages.find((p) => p.id === id);
   }
@@ -261,6 +267,8 @@ export class FakeMenuWebsite {
       const i = this.drops.findIndex((d) => d.re.test(path));
       const drop = i >= 0 ? this.drops.splice(i, 1)[0]! : null;
       if (drop && !drop.afterWork) throw new TypeError('fetch failed');
+      const r = this.refusals.findIndex((x) => x.re.test(path));
+      if (r >= 0) return this.json({ ok: false, error: 'internal' }, this.refusals.splice(r, 1)[0]!.status);
       const res = this.route(method, path, body);
       if (drop) throw new TypeError('fetch failed');
       return res;
@@ -297,6 +305,9 @@ export class FakeMenuWebsite {
       key: this.key ? { keyHint: this.key.keyHint, createdAt: iso(this.key.createdAt), deviceId: this.key.deviceId, deviceName: this.key.deviceName } : null,
       latest: latest ? this.meta(latest) : null,
       lastApplied: applied ? { id: applied.id, seq: applied.seq, appliedBy: applied.appliedBy, appliedAt: applied.appliedAt ? iso(applied.appliedAt) : null } : null,
+      appliedByTills: latest
+        ? [...new Set(this.events.filter((e) => e.packageId === latest.id && e.kind === 'applied' && e.deviceId).map((e) => e.deviceId!))].sort()
+        : [],
       tills: [...tills.values()].map((e) => ({ deviceId: e.deviceId, deviceName: e.deviceName, kind: e.kind, at: iso(e.at), detail: e.detail })),
     };
     if (history) {
@@ -335,6 +346,27 @@ export class FakeMenuWebsite {
     return p.state === 'claimed' && p.leaseUntil !== null && p.leaseUntil <= this.now;
   }
 
+  /** The claiming till's marker as a number here: by its package id when sent (unknown = none), else its number. */
+  private markerSeq(b: MenuDeployClaimBody): number {
+    if (b.lastPackageId) return this.byId(b.lastPackageId)?.seq ?? -1;
+    return b.lastPackageSeq ?? -1;
+  }
+
+  /**
+   * A file put in that this till has not got: another till's, or its own that another till
+   * received (its menu lost it to a restore; that till goes first) — never its own alone.
+   */
+  private behind(b: MenuDeployClaimBody): boolean {
+    const mk = this.markerSeq(b);
+    return this.packages.some(
+      (a) =>
+        a.state === 'applied' &&
+        a.seq > mk &&
+        (a.appliedBy !== b.deviceId ||
+          this.events.some((e) => e.packageId === a.id && e.kind === 'received' && e.deviceId !== b.deviceId)),
+    );
+  }
+
   private claim(id: string, raw: unknown): Response {
     const parsed = menuDeployClaimBodySchema.safeParse(raw);
     if (!parsed.success) return this.json({ ok: false, error: 'validation' }, 400);
@@ -350,9 +382,10 @@ export class FakeMenuWebsite {
       if (newest && p.contentGzB64 !== null && p.formatVersion <= b.maxFormatVersion && p.state !== 'refused') return ok('claimed', {});
       return this.refuse(p, b);
     }
-    const behind = this.packages.some((a) => a.state === 'applied' && a.seq > (b.lastPackageSeq ?? -1));
+    const mk = this.markerSeq(b);
+    const behind = this.behind(b);
     const blocked = this.packages.some(
-      (c) => c.seq < p.seq && c.state === 'claimed' && c.claimedBy !== b.deviceId && (!this.expired(c) || !b.takeOver),
+      (c) => c.seq < p.seq && c.seq > mk && c.state === 'claimed' && c.claimedBy !== b.deviceId && (!this.expired(c) || !b.takeOver),
     );
     const stateOk =
       (p.state === 'pending' && (p.nextTryAt === null || p.nextTryAt <= this.now || b.retry)) ||
@@ -362,23 +395,27 @@ export class FakeMenuWebsite {
     if (!(newest && p.contentGzB64 !== null && p.formatVersion <= b.maxFormatVersion && !behind && !blocked && stateOk)) {
       return this.refuse(p, b);
     }
-    const from = p.state === 'claimed' && p.claimedBy !== b.deviceId ? p.claimedBy : null;
+    let from = p.state === 'claimed' && p.claimedBy !== b.deviceId ? p.claimedBy : null;
     p.state = 'claimed';
     p.claimedBy = b.deviceId;
     p.claimedAt = this.now;
     p.leaseUntil = this.now + MENU_DEPLOY_LEASE_SECONDS * 1000;
     if (b.retry) p.attempts = 0;
     p.nextTryAt = null;
-    // Older claims settled: this till's own (put in when its marker covers it), or taken over.
+    // Older claims settled: this till's own and any its marker covers (put in when the marker is that
+    // package), or taken over.
     for (const o of this.packages) {
       if (o.seq >= p.seq || o.state !== 'claimed') continue;
-      if (o.claimedBy !== b.deviceId && !(b.takeOver && this.expired(o))) continue;
-      const mine = o.claimedBy === b.deviceId && o.seq <= (b.lastPackageSeq ?? -1);
-      o.state = mine ? 'applied' : 'superseded';
-      if (mine) {
-        o.appliedBy = o.claimedBy;
+      const was = o.claimedBy;
+      if (was !== b.deviceId && o.seq > mk && !(b.takeOver && this.expired(o))) continue;
+      const covers = b.lastPackageId ? o.id === b.lastPackageId : was === b.deviceId && o.seq <= mk;
+      o.state = covers ? 'applied' : 'superseded';
+      if (covers) {
+        o.appliedBy = was;
         o.appliedAt = this.now;
-        this.event('applied', o.id, b.deviceId, b.deviceName, { scope: 'shared', recovered: true });
+        this.event('applied', o.id, was, was === b.deviceId ? b.deviceName : null, { scope: 'shared', recovered: true, noticedBy: b.deviceId });
+      } else if (was !== b.deviceId && o.seq > mk) {
+        from = from ?? was;
       }
       o.claimedBy = null;
       o.claimedAt = null;
@@ -390,9 +427,10 @@ export class FakeMenuWebsite {
 
   private refuse(p: FakePackage, b: MenuDeployClaimBody): Response {
     const hasNewer = this.packages.some((n) => n.seq > p.seq);
-    const behind = this.packages.some((a) => a.state === 'applied' && a.seq > (b.lastPackageSeq ?? -1));
+    const mk = this.markerSeq(b);
+    const behind = this.behind(b);
     const blockers = this.packages
-      .filter((c) => c.seq < p.seq && c.state === 'claimed' && c.claimedBy !== b.deviceId)
+      .filter((c) => c.seq < p.seq && c.seq > mk && c.state === 'claimed' && c.claimedBy !== b.deviceId)
       .sort((x, y) => Number(this.expired(x)) - Number(this.expired(y)) || y.seq - x.seq);
     const blocker = blockers[0] ?? null;
     const meta = this.meta(p);

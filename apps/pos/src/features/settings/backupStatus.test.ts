@@ -112,6 +112,10 @@ describe('mergeCopies', () => {
     expect(last?.where === 'online' && last.fromOtherPc).toBe('Old PC');
     expect(rows[1]?.where === 'online' && rows[1].fromOtherPc).toBeNull();
     expect(localCopyLabel('manual-x.db')).toBe('Saved with “Back up now”');
+    // The copy to restore to undo a menu file from the costing PC can be told apart (the name is not shown).
+    expect(localCopyLabel('before-menu-2026-09-29T09-00-00-000Z-f0b8f6c8e8f8a.db')).toBe(
+      'Safety copy, made before a menu file from the costing PC went in',
+    );
   });
 });
 

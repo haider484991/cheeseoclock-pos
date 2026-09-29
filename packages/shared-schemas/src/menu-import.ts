@@ -89,7 +89,28 @@ export const menuImportModifierGroupSchema = z
       .min(1)
       .max(50),
   })
-  .refine((g) => g.maxSelect >= g.minSelect, { message: 'maxSelect must be at least minSelect' });
+  .superRefine((g, ctx) => {
+    if (g.maxSelect < g.minSelect) {
+      ctx.addIssue({ code: 'custom', path: ['maxSelect'], message: 'maxSelect must be at least minSelect' });
+    }
+    // A group no one can satisfy makes every item that asks it unsellable, on the till and online
+    // (pos-domain checkChoicePicks: a required group needs at least one pick, a single choice at most one).
+    const needed = g.required || g.minSelect > 0 ? Math.max(1, g.minSelect) : 0;
+    if (g.selectionType === 'single' && needed > 1) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['minSelect'],
+        message: `"${g.name}" is a single choice but asks for ${needed} picks`,
+      });
+    }
+    if (needed > g.options.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['minSelect'],
+        message: `"${g.name}" asks for ${needed} picks but has only ${g.options.length} ${g.options.length === 1 ? 'option' : 'options'}`,
+      });
+    }
+  });
 
 export const menuImportItemSchema = z.object({
   name,

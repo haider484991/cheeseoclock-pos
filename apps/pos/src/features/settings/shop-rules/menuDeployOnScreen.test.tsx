@@ -31,7 +31,7 @@ import { ImportTab } from '../../menu-mgmt/ImportTab';
 import { MenuDeployBanner } from '../../dashboard/MenuDeployBanner';
 import { MENU_DEPLOY_KEY } from '../../menu-mgmt/useMenuDeploy';
 import { SHOP_SETTINGS_KEY } from './useShopSetting';
-import { applyQuestion, keyStatusText, menuAutoUpdateSummary, phaseTone } from './menuDeployWords';
+import { KEY_DIALOG_STAYS_OPEN, applyQuestion, keyStatusText, menuAutoUpdateSummary, phaseTone } from './menuDeployWords';
 
 // A server render reads a zustand store's INITIAL state; the till's window reads each as it is now.
 vi.mock('zustand', async (importOriginal) => {
@@ -138,6 +138,43 @@ describe('Settings → Kitchen & stock: the menu files from the costing PC', () 
     expect(out).toMatch(/role="radio" aria-checked="true"[^>]*><span[^>]*>Wait for my OK/);
   });
 
+  it('what a leaked key could do is said truly: item prices and tax follow the rules above; big cuts and tax changes wait', () => {
+    signIn('admin');
+    const words = text(
+      render(<MenuFromCostingPc />, [
+        [[...SHOP_SETTINGS_KEY, 'menu.autoUpdate'], card('menu.autoUpdate', DEFAULT_MENU_AUTO_UPDATE, false)],
+        [[...MENU_DEPLOY_KEY, 'history'], VIEW],
+      ]),
+    );
+    expect(words).not.toMatch(/keeps its prices|keeps the prices/);
+    expect(words).toContain('item prices, tax, choices and recipes change as far as “What a menu file may change” above allows');
+    expect(words).toContain('A file that would cut prices to less than half, or change the tax, always waits for your OK');
+    expect(words).toContain('still waits for your OK');
+  });
+
+  it('a till with no website link: never "no key yet, make one below" (it cannot see the key, and the button is off)', () => {
+    signIn('admin');
+    const noLink: MenuDeployView = { ...VIEW, websiteLinked: false, phase: 'not_linked', key: null, canApplyNow: false, message: 'x' };
+    const words = text(
+      render(<MenuFromCostingPc />, [
+        [[...SHOP_SETTINGS_KEY, 'menu.autoUpdate'], card('menu.autoUpdate', DEFAULT_MENU_AUTO_UPDATE, false)],
+        [[...MENU_DEPLOY_KEY, 'history'], noLink],
+      ]),
+    );
+    expect(words).not.toContain('No upload key yet');
+    expect(words).toContain('This till has no website link, so it cannot see the upload key.');
+    expect(keyStatusText(null, false)).toContain('made, and checked, on a till that has the website link');
+  });
+
+  it('the new key’s window closes only with its own buttons (a tap beside it or Esc would lose the key)', () => {
+    for (const handler of Object.values(KEY_DIALOG_STAYS_OPEN)) {
+      const e = { preventDefault: vi.fn() };
+      handler(e);
+      expect(e.preventDefault).toHaveBeenCalledTimes(1);
+    }
+    expect(Object.keys(KEY_DIALOG_STAYS_OPEN).sort()).toEqual(['onEscapeKeyDown', 'onInteractOutside', 'onPointerDownOutside']);
+  });
+
   it('the words: no key yet, the other till’s key, History lines, tones', () => {
     expect(keyStatusText(null)).toBe('No upload key yet: make one below, then put it on the costing PC.');
     expect(keyStatusText({ keyHint: 'x9Yz', createdAt: '2026-09-28T10:00:00.000Z', deviceName: 'Test Till 2', madeOnThisTill: false })).toBe(
@@ -164,6 +201,16 @@ describe('Menu → Import: the panel above the file picker', () => {
     expect(words).toContain('Choose menu file');
   });
 
+  it('the button says what the sentence says: "Try again…" after it gave up, "Take it over…" when the other till stopped', () => {
+    signIn('admin');
+    const gaveUp: MenuDeployView = { ...VIEW, phase: 'gave_up', message: 'Putting in file #4 failed 5 times. Tap Try again in Menu → Import.' };
+    const w1 = text(render(<ImportTab />, [[[...MENU_DEPLOY_KEY, 'view'], gaveUp]]));
+    expect(w1).toContain('Try again…');
+    expect(w1).not.toContain('Show the changes');
+    const stalled: MenuDeployView = { ...VIEW, phase: 'stalled', applyNeedsOwner: true, message: 'The owner can tap Take it over in Menu → Import.' };
+    expect(text(render(<ImportTab />, [[[...MENU_DEPLOY_KEY, 'view'], stalled]]))).toContain('Take it over…');
+  });
+
   it('put in by itself: the sentence, no button; no website link: no panel at all', () => {
     signIn('manager');
     const applied: MenuDeployView = { ...VIEW, phase: 'applied', mode: 'auto', canApplyNow: false, message: 'This till put in the newest menu file, file #4 (test-menu.json), by itself.' };
@@ -182,9 +229,18 @@ describe('Dashboard → Shop status', () => {
     const words = text(render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], refused]]));
     expect(words).toContain('A menu file from the costing PC needs you');
     expect(words).toContain(refused.message);
-    for (const phase of ['applied', 'received', 'waiting_for_owner', 'idle', 'not_linked'] as const) {
+    for (const phase of ['applied', 'received', 'idle', 'not_linked', 'waiting_quiet'] as const) {
       expect(text(render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], { ...VIEW, phase }]]))).toBe('');
     }
+    // A file waiting for the owner's OK stays on the Dashboard until he looks (its one note may have
+    // gone by while a cashier was signed in).
+    const waiting = text(render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], VIEW]]));
+    expect(waiting).toContain('A menu file from the costing PC waits for your OK');
+    expect(waiting).toContain(VIEW.message);
+    // Held back by a broken link: nothing else on the screens would say so.
+    const link = render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], { ...VIEW, phase: 'waiting_link', canApplyNow: false }]]);
+    expect(text(link)).toContain('waits for the link to the other till');
+    expect(link).toContain('href="/settings?tab=advanced"');
     const tooOld = render(<MenuDeployBanner />, [[[...MENU_DEPLOY_KEY, 'view'], { ...VIEW, phase: 'too_old' }]]);
     expect(tooOld).toContain('href="/settings?tab=about"');
   });

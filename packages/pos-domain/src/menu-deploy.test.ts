@@ -13,9 +13,11 @@ import {
   menuDeployBackoffMs,
   menuDeployCountsLine,
   menuDeployLocalFor,
+  menuDeployNeedsOwner,
   menuDeployNoticeFor,
   menuDeployPhaseMessage,
   menuDeployReportKey,
+  menuMarkerCovers,
   type MenuDeployDecisionInput,
   type MenuDeployPackageFacts,
 } from './menu-deploy.js';
@@ -40,6 +42,7 @@ const COUNTS: MenuDeployCountsView = { ...ZERO, newItems: 3, updatedItems: 5, pr
 const pkg = (over: Partial<MenuDeployPackageFacts> = {}): MenuDeployPackageFacts => ({
   id: 'p2',
   seq: 2,
+  uploadedAt: '2026-09-29T11:00:00.000Z',
   fileName: 'test-menu.json',
   formatVersion: 3,
   state: 'pending',
@@ -56,6 +59,7 @@ const input = (over: Partial<MenuDeployDecisionInput> = {}): MenuDeployDecisionI
   local: { attempts: 0, nextTryAt: null, refused: false, error: null, reported: [] },
   deviceId: ME,
   scope: 'shared',
+  appliedHereBefore: false,
   linkStale: false,
   mode: 'auto',
   maxFormatVersion: 3,
@@ -191,8 +195,84 @@ describe('THE RULE, row by row', () => {
   });
 
   it('R12: otherwise claim it, saying which file this till has last (the website refuses a till that is behind)', () => {
-    expect(decideMenuDeployStep(input())).toEqual({ rule: 'R12', phase: 'claimed', report: null, claim: { lastPackageSeq: 1 } });
-    expect(decideMenuDeployStep(input({ marker: null }))).toMatchObject({ claim: { lastPackageSeq: null } });
+    expect(decideMenuDeployStep(input())).toEqual({ rule: 'R12', phase: 'claimed', report: null, claim: { lastPackageSeq: 1, lastPackageId: 'p1' } });
+    expect(decideMenuDeployStep(input({ marker: null }))).toMatchObject({ claim: { lastPackageSeq: null, lastPackageId: null } });
+  });
+
+  it('"has it" goes by the package id, then by when the website took it — never the number alone (the website’s numbers can start again)', () => {
+    // The website's database was reset: a new file #1 against a marker of the old #12.
+    const old12 = { packageId: 'p-old-12', seq: 12, uploadedAt: '2026-09-20T08:00:00.000Z', appliedByDevice: ME, counts: ZERO };
+    const new1 = pkg({ id: 'p-new-1', seq: 1, uploadedAt: '2026-09-29T11:00:00.000Z' });
+    expect(menuMarkerCovers(old12, new1)).toBe(false);
+    expect(decideMenuDeployStep(input({ marker: old12, pkg: new1 }))).toMatchObject({
+      rule: 'R12',
+      claim: { lastPackageSeq: 12, lastPackageId: 'p-old-12' },
+    });
+    // The website's database went BACK (restored from an older copy): its newest file is older than what this till has.
+    const newer = { packageId: 'p9', seq: 9, uploadedAt: '2026-09-29T11:30:00.000Z', appliedByDevice: OTHER, counts: ZERO };
+    expect(menuMarkerCovers(newer, pkg({ id: 'p5', seq: 5, uploadedAt: '2026-09-29T10:00:00.000Z' }))).toBe(true);
+    // Done, and nothing said about a file that is not the marker's.
+    expect(decideMenuDeployStep(input({ marker: newer, pkg: pkg({ id: 'p5', seq: 5, uploadedAt: '2026-09-29T10:00:00.000Z' }) }))).toMatchObject({
+      rule: 'R2',
+      phase: 'received',
+      report: null,
+      claim: null,
+    });
+    // The same package: covered whatever its number.
+    expect(menuMarkerCovers({ packageId: 'p2', seq: 99, uploadedAt: null }, pkg())).toBe(true);
+    // A marker that does not say when: its number decides.
+    expect(menuMarkerCovers({ packageId: 'p1', seq: 1 }, pkg())).toBe(false);
+    expect(menuMarkerCovers({ packageId: 'p3', seq: 3 }, pkg())).toBe(true);
+    expect(menuMarkerCovers(null, pkg())).toBe(false);
+  });
+
+  it('R2b: the website says this till put it in, but its menu has no marker of it (a backup restored) → never again by itself', () => {
+    // Link off: waits for the owner (one tap puts it in again), said once.
+    expect(decideMenuDeployStep(input({ scope: 'own', marker: null, appliedHereBefore: true }))).toEqual({
+      rule: 'R2b',
+      phase: 'waiting_for_owner',
+      report: { outcome: 'waiting_for_owner' },
+      claim: null,
+    });
+    const said = { attempts: 0, nextTryAt: null, refused: false, error: null, reported: [menuDeployReportKey('p2', 'waiting_for_owner')] };
+    expect(decideMenuDeployStep(input({ scope: 'own', marker: null, appliedHereBefore: true, local: said }))).toMatchObject({
+      rule: 'R2b',
+      report: null,
+      claim: null,
+    });
+    // Linked, and in on the website: nothing to tap (its rows are the other till's business now).
+    expect(
+      decideMenuDeployStep(input({ marker: null, appliedHereBefore: true, pkg: pkg({ state: 'applied', appliedBy: ME }) })),
+    ).toMatchObject({ rule: 'R2b', phase: 'other_till', report: null, claim: null });
+    // The marker has it: R2 as ever.
+    expect(decideMenuDeployStep(input({ marker: { packageId: 'p2', seq: 2, appliedByDevice: ME, counts: ZERO }, appliedHereBefore: true }))).toMatchObject({
+      rule: 'R2',
+    });
+  });
+
+  it('R8: a file that would cut prices to less than half or change the tax waits for the owner even "by themselves"', () => {
+    const held = { attempts: 0, nextTryAt: null, refused: false, held: 'it would cut 2 prices to less than half', error: null, reported: [] };
+    expect(decideMenuDeployStep(input({ local: held }))).toEqual({
+      rule: 'R8',
+      phase: 'waiting_for_owner',
+      report: { outcome: 'waiting_for_owner' },
+      claim: null,
+    });
+    // What holds a file, and what does not.
+    expect(menuDeployNeedsOwner({ taxChanges: 0, priceChanges: [{ fromCents: 110_000, toCents: 120_000 }, { fromCents: 50_000, toCents: 30_000 }] })).toBeNull();
+    expect(menuDeployNeedsOwner({ taxChanges: 0, priceChanges: [{ fromCents: 110_000, toCents: 0 }] })).toBe('it would cut 1 price to less than half');
+    expect(menuDeployNeedsOwner({ taxChanges: 0, priceChanges: [{ fromCents: 110_000, toCents: 100 }, { fromCents: 25_000, toCents: 12_499 }] })).toBe(
+      'it would cut 2 prices to less than half',
+    );
+    // Exactly half is not less than half; an item that was Rs 0 has nothing to cut.
+    expect(menuDeployNeedsOwner({ taxChanges: 0, priceChanges: [{ fromCents: 25_000, toCents: 12_500 }, { fromCents: 0, toCents: 0 }] })).toBeNull();
+    expect(menuDeployNeedsOwner({ taxChanges: 30, priceChanges: [] })).toBe('it would change the tax on 30 items');
+    expect(menuDeployNeedsOwner({ taxChanges: 1, priceChanges: [{ fromCents: 1_000, toCents: 1 }] })).toBe(
+      'it would cut 1 price to less than half and change the tax on 1 item',
+    );
+    expect(menuDeployPhaseMessage('waiting_for_owner', { fileName: 'm.json', seq: 4, maxFormatVersion: 3, heldReason: 'it would change the tax on 30 items' })).toBe(
+      'A new menu file, file #4 (m.json), waits for your OK: it would change the tax on 30 items. Menu → Import shows every change first.',
+    );
   });
 
   it('the order of the rows: a file this till has beats everything; too new beats refused; refused beats given up', () => {
@@ -227,7 +307,7 @@ describe('bookkeeping', () => {
   it('a newer file starts the tries afresh; what was said is kept', () => {
     const old = { v: 1, packageId: 'p1', attempts: 3, nextTryAt: '2026-09-29T12:00:00.000Z', refused: true, error: 'x', reported: ['p1:received'], notified: ['p1:received'] };
     expect(menuDeployLocalFor(old, 'p1')).toBe(old);
-    expect(menuDeployLocalFor(old, 'p2')).toEqual({ ...old, packageId: 'p2', attempts: 0, nextTryAt: null, refused: false, error: null });
+    expect(menuDeployLocalFor(old, 'p2')).toEqual({ ...old, packageId: 'p2', attempts: 0, nextTryAt: null, refused: false, held: null, error: null });
   });
 });
 
@@ -252,11 +332,21 @@ describe('the words', () => {
       'The other till put in file #4 (test-menu.json); its changes are on the way through the link.',
     );
     expect(menuDeployPhaseMessage('waiting_link', { ...ctx, behind: true })).toContain('waits for the other till’s last menu changes');
-    expect(menuDeployPhaseMessage('stalled', ctx)).toContain('the owner can take it over in Menu → Import');
+    // The buttons it names are the buttons on the screen (menuDeployWords: "Take it over…", "Try again…").
+    expect(menuDeployPhaseMessage('stalled', ctx)).toContain('the owner can tap Take it over in Menu → Import');
+    expect(menuDeployPhaseMessage('stalled', ctx)).toContain('It finishes by itself when that till is back on');
     expect(menuDeployPhaseMessage('stalled', ctx)).toContain('doubled items');
     expect(menuDeployPhaseMessage('gave_up', { ...ctx, error: 'The disk is full.' })).toBe(
-      'Putting in file #4 (test-menu.json) failed 5 times (The disk is full). Nothing was changed. Fix what it says, then tap Try again in Menu → Import.',
+      'Putting in file #4 (test-menu.json) failed 5 times (The disk is full). Nothing was changed. Tap Try again in Menu → Import; if it fails again, show this message to whoever makes the menu file.',
     );
+    // A till with no website link of its own: it does not say files can't reach it (the other till's link brings them).
+    expect(menuDeployPhaseMessage('not_linked', ctx)).not.toContain('can’t reach');
+    expect(menuDeployPhaseMessage('not_linked', ctx)).toContain('Settings → Second till');
+    // A backup restored since this till put the file in: never "put it in by hand" from a picked file.
+    expect(menuDeployPhaseMessage('other_till', { ...ctx, appliedHereButMissing: true })).toBe(
+      'This till put in file #4 (test-menu.json) before, but its menu doesn’t have it now (a backup copy restored since?). It is not put in again by itself; the next file from the costing PC goes in as usual.',
+    );
+    expect(menuDeployPhaseMessage('waiting_for_owner', { ...ctx, appliedHereButMissing: true })).toContain('one tap puts it in');
     expect(menuDeployPhaseMessage('refused', { ...ctx, error: 'The menu file has a problem' })).toContain('Fix the file on the costing PC');
     expect(menuDeployPhaseMessage('applied', { ...ctx, automatic: true })).toBe('This till put in the newest menu file, file #4 (test-menu.json), by itself.');
     for (const phase of [

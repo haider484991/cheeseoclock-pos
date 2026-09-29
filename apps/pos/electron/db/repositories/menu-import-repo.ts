@@ -703,6 +703,7 @@ export function applyMenuImport(
           v: 1,
           packageId: pkg.id,
           seq: pkg.seq,
+          uploadedAt: pkg.uploadedAt,
           sha256: pkg.sha256,
           fileName: pkg.fileName,
           appliedByDevice: actor.deviceId,

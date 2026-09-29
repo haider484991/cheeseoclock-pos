@@ -169,11 +169,20 @@ live('the upload key', () => {
     const first = (await as(OWNER, 'menuDeploy:createKey')) as { ok: true; data: { key: string; keyHint: string } };
     const keyInfo = () => db.prepare(`SELECT value_json AS v FROM settings WHERE key = 'menuDeploy.keyInfo'`).get() as { v: string };
     const before = keyInfo().v;
-    website.down = true;
+    website.refuseNext(/\/key$/, 500);
     const o = await as(OWNER, 'menuDeploy:createKey');
     expect(o).toEqual({ ok: false, code: 'precondition_failed', message: 'The website did not take the new key — nothing changed; the old key still works.' });
     expect(keyInfo().v).toBe(before);
     expect(website.key!.keyHint).toBe(first.data.keyHint);
+    // No answer at all (the website slow to wake): it may have saved the key after the till stopped
+    // waiting, so the words never promise the old key still works.
+    website.down = true;
+    const unsure = await as(OWNER, 'menuDeploy:createKey');
+    expect(unsure).toMatchObject({ ok: false, code: 'precondition_failed' });
+    expect((unsure as { message: string }).message).toBe(
+      'The website did not answer in time. It may have saved the new key anyway, and then the old key has stopped working: make a new key again, and put that one on the costing PC.',
+    );
+    expect(keyInfo().v).toBe(before);
     website.down = false;
     const second = (await as(OWNER, 'menuDeploy:createKey')) as { ok: true; data: { key: string; keyHint: string } };
     expect(second.data.key).not.toBe(first.data.key);

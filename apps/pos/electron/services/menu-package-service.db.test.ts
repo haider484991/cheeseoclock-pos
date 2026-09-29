@@ -19,7 +19,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MENU_DEPLOY_MAX_ATTEMPTS } from '@cheeseoclock/shared-types';
 import { DatabaseSync } from '../db/costing-shop.fixture.js';
-import { linkOn } from '../db/two-tills.fixture.js';
+import { linkOn, openTill, push } from '../db/two-tills.fixture.js';
 import type { AppDatabase } from '../db/connection.js';
 import { FakeMenuWebsite, madeUpMenu, type Clock } from './menu-deploy-website.fixture.js';
 import { menuRows, orderRungUp, serviceTill } from './menu-package-till.fixture.js';
@@ -138,6 +138,8 @@ live('"Wait for my OK"', () => {
     expect(audit.actor_user_id).toBe('u_admin');
     expect(JSON.parse(audit.after_json)).toMatchObject({ fresh: false, package: { id: p.id, automatic: false } });
     expect(c.till.steps).toEqual(['backup', 'publish']);
+    // The owner who tapped hears it from Menu → Import: no second "New menu put in" note.
+    expect(c.till.emits.map((e) => e.notice?.kind).filter(Boolean)).toEqual(['waiting_for_owner']);
   });
 });
 
@@ -442,8 +444,194 @@ live('the upload key', () => {
 
   it('a website that does not take it: nothing changes here, and the words say the old key still works', async () => {
     const c = setup();
-    c.website.down = true;
+    c.website.refuseNext(/\/key$/, 503);
     await expect(c.till.service.createKey('u_admin')).rejects.toThrow('The website did not take the new key — nothing changed; the old key still works.');
     expect(c.till.db.prepare(`SELECT COUNT(*) AS n FROM settings WHERE key = 'menuDeploy.keyInfo'`).get()).toMatchObject({ n: 0 });
+  });
+
+  it('no answer from the website (it may have saved the key after the till stopped waiting): never "the old key still works"', async () => {
+    const c = setup();
+    // The website did its work, and the answer was lost on the way back.
+    c.website.drop(/\/key$/, { afterWork: true });
+    const err = await c.till.service.createKey('u_admin').catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain('still works');
+    expect((err as Error).message).toContain('the old key has stopped working: make a new key again');
+    // It had: the old key is gone there — which is why the words must not promise otherwise.
+    expect(c.website.key).not.toBeNull();
+  });
+
+  it('the website took the key but the till could not note it: the key is still shown (the costing PC would be locked out otherwise)', async () => {
+    const c = setup();
+    // Settings on this till refuse writes for a moment.
+    c.till.db.exec(`CREATE TRIGGER no_key_note BEFORE INSERT ON settings WHEN NEW.key = 'menuDeploy.keyInfo' BEGIN SELECT RAISE(ABORT, 'test: disk busy'); END`);
+    const made = await c.till.service.createKey('u_admin');
+    expect(made.key).toMatch(/^cocmenu_/);
+    expect(c.website.key!.keyHint).toBe(made.keyHint);
+  });
+});
+
+live('after a restore, a reset website, a slow backup, a file that cuts prices (the review, 29 Sep)', () => {
+  it('link off: after the before-menu copy is restored, the same file is NOT put in again by itself; one tap does', async () => {
+    const c = setup({ link: 'off' });
+    const p = c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    expect(menuRows(c.till.db).items).toBe(2);
+    c.till.service.stop();
+    // The owner restores the copy made before the import (the menu as it was) and the till starts again.
+    const restoredDb = openTill('till-1');
+    c.clock.t += 5 * MIN;
+    const restored = serviceTill('till-1', c.website, c.clock, { link: 'off', db: restoredDb });
+    for (let i = 0; i < 3; i++) {
+      const v = await restored.service.checkNow();
+      expect(v).toMatchObject({ phase: 'waiting_for_owner', canApplyNow: true });
+      expect(v.message).toContain('It is not put in again by itself');
+      c.clock.t += 20 * MIN;
+    }
+    expect(menuRows(restoredDb).items).toBe(0);
+    expect(c.website.claims()).toHaveLength(1);
+    expect(restored.steps).toEqual([]);
+    expect(c.website.reports('waiting_for_owner')).toHaveLength(1);
+    // The owner's one tap puts it in again.
+    await restored.service.apply(p.id, { userId: 'u_admin', deviceId: 'till-1' });
+    expect(menuRows(restoredDb).items).toBe(2);
+  });
+
+  it('linked, the before-menu copy restored on the only till that looks: the file is not put in again, and the NEXT file goes in (never "waiting" for ever)', async () => {
+    const c = setup();
+    c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    c.till.service.stop();
+    const restoredDb = openTill('till-1');
+    c.clock.t += 5 * MIN;
+    const restored = serviceTill('till-1', c.website, c.clock, { db: restoredDb });
+    const v = await restored.service.checkNow();
+    expect(v.phase).toBe('other_till');
+    expect(v.message).toContain('It is not put in again by itself');
+    expect(v.canApplyNow).toBe(false);
+    expect(menuRows(restoredDb).items).toBe(0);
+    const p2 = c.website.upload(madeUpMenu('two', { source: 'test menu two' }));
+    c.clock.t += 3 * MIN;
+    linkOn(restoredDb, c.clock.t);
+    expect((await restored.service.checkNow()).phase).toBe('applied');
+    expect(menuRows(restoredDb).items).toBe(2);
+    expect(c.website.byId(p2.id)).toMatchObject({ state: 'applied', appliedBy: 'till-1' });
+  });
+
+  it('a lost "applied" report and a newer file: the other till (which has the first file through the link) is not told "stalled" — it puts the new one in', async () => {
+    const clock: Clock = { t: T0 };
+    const website = new FakeMenuWebsite(clock);
+    const t1 = serviceTill('till-1', website, clock);
+    const t2 = serviceTill('till-2', website, clock);
+    const p1 = website.upload(madeUpMenu('one'));
+    website.drop(/\/report$/);
+    expect((await t1.service.checkNow()).phase).toBe('applied');
+    expect(website.byId(p1.id)!.state).toBe('claimed');
+    expect((await push(t1.db, 'till-1', t2.db)).waiting).toBe(0);
+    expect((await t2.service.checkNow()).phase).toBe('received');
+    const p2 = website.upload(madeUpMenu('two', { source: 'test menu two' }));
+    // Till 1 is busy at the counter; its claim on file 1 has run out.
+    clock.t += 11 * MIN;
+    linkOn(t1.db, clock.t);
+    linkOn(t2.db, clock.t);
+    orderRungUp(t1.db, 'till-1', clock.t - 30_000);
+    expect((await t1.service.checkNow()).phase).toBe('waiting_quiet');
+    const v2 = await t2.service.checkNow();
+    expect(v2.phase).toBe('applied');
+    expect(website.byId(p1.id)).toMatchObject({ state: 'applied', appliedBy: 'till-1' });
+    expect(website.byId(p2.id)).toMatchObject({ state: 'applied', appliedBy: 'till-2' });
+    expect(website.events.filter((e) => e.kind === 'taken_over')).toHaveLength(0);
+  });
+
+  it('the website’s database was reset (its numbers start again): a new file #1 still goes in', async () => {
+    const c = setup();
+    const old = c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    c.till.service.stop();
+    c.clock.t += 60 * MIN;
+    const fresh = new FakeMenuWebsite(c.clock);
+    const again = serviceTill('till-1', fresh, c.clock, { db: c.till.db });
+    const p = fresh.upload(madeUpMenu('two', { source: 'test menu two' }));
+    expect(p.seq).toBe(old.seq);
+    const v = await again.service.checkNow();
+    expect(v.phase).toBe('applied');
+    expect(fresh.claims()).toHaveLength(1);
+    expect(fresh.claims()[0]!.body).toMatchObject({ lastPackageSeq: old.seq, lastPackageId: old.id });
+    expect(fresh.byId(p.id)).toMatchObject({ state: 'applied', appliedBy: 'till-1' });
+    expect(imports(c.till.db)).toBe(2);
+  });
+
+  it('a backup copy that takes 9 minutes: the till claims again and puts the file in; the other till never sees it as stalled', async () => {
+    const clock: Clock = { t: T0 };
+    const website = new FakeMenuWebsite(clock);
+    const t1 = serviceTill('till-1', website, clock);
+    const t2 = serviceTill('till-2', website, clock);
+    const p = website.upload(madeUpMenu('one'));
+    let seenByTill2: string | null = null;
+    t1.onBackup.fn = async () => {
+      clock.t += 9 * MIN;
+      linkOn(t2.db, clock.t);
+      seenByTill2 = (await t2.service.checkNow()).phase;
+    };
+    const v = await t1.service.checkNow();
+    expect(v.phase).toBe('applied');
+    expect(seenByTill2).toBe('other_till');
+    expect(t1.steps.filter((s) => s === 'backup')).toHaveLength(1);
+    expect(website.claims('till-1')).toHaveLength(2);
+    expect(website.byId(p.id)).toMatchObject({ state: 'applied', appliedBy: 'till-1' });
+    expect(menuRows(t1.db).items).toBe(2);
+    expect(imports(t1.db)).toBe(1);
+  });
+
+  it('by themselves, but a file that would cut a price to less than half, or change the tax, waits for the owner — never claimed; one tap puts it in', async () => {
+    const c = setup();
+    c.website.upload(madeUpMenu('one'));
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    const price = () => (c.till.db.prepare(`SELECT base_price_cents AS p FROM menu_items WHERE name = 'Test Margherita' AND deleted_at IS NULL`).get() as { p: number }).p;
+    expect(price()).toBe(110_000);
+    const base = madeUpMenu('cheap');
+    const items = (base['items'] as Array<Record<string, unknown>>).map((i) => (i['name'] === 'Test Margherita' ? { ...i, priceCents: 100 } : i));
+    const p2 = c.website.upload({ ...base, items });
+    for (let i = 0; i < 3; i++) {
+      tick(c, 3 * MIN);
+      const v = await c.till.service.checkNow();
+      expect(v).toMatchObject({ phase: 'waiting_for_owner', canApplyNow: true });
+      expect(v.message).toContain('waits for your OK: it would cut 1 price to less than half');
+    }
+    expect(c.website.claims()).toHaveLength(1);
+    expect(c.website.reports('waiting_for_owner')).toHaveLength(1);
+    expect(c.till.steps).toEqual(['backup', 'publish']);
+    expect(price()).toBe(110_000);
+    expect(c.till.emits.filter((e) => e.notice?.kind === 'waiting_for_owner').map((e) => e.notice!.description)).toEqual([
+      expect.stringContaining('it would cut 1 price to less than half'),
+    ]);
+    // The owner looked and said yes.
+    await c.till.service.apply(p2.id, { userId: 'u_admin', deviceId: 'till-1' });
+    expect(price()).toBe(100);
+
+    // A file that moves the items onto another tax: the same.
+    const p3 = c.website.upload(madeUpMenu('tax', { tax: { name: 'Test Tax Zero', rateBps: 0 } }));
+    tick(c, 3 * MIN);
+    const v = await c.till.service.checkNow();
+    expect(v.phase).toBe('waiting_for_owner');
+    expect(v.message).toContain('it would change the tax on 2 items');
+    expect(c.website.byId(p3.id)!.state).toBe('pending');
+    // An ordinary price rise goes in by itself.
+    const p4 = c.website.upload(madeUpMenu('dearer', { items: items.map((i) => ({ ...i, priceCents: Number(i['priceCents']) + 5_000 })) }));
+    tick(c, 3 * MIN);
+    expect((await c.till.service.checkNow()).phase).toBe('applied');
+    expect(c.website.byId(p4.id)!.state).toBe('applied');
+  });
+
+  it('a saved "by themselves / wait" this version cannot read (a newer till’s) counts as Wait for my OK', async () => {
+    const c = setup();
+    const { setBusinessSetting } = await import('../db/repositories/business-settings-repo.js');
+    setBusinessSetting(c.till.db, 'menu.autoUpdate', { v: 1, mode: 'auto' }, { userId: 'u_admin', deviceId: 'till-1' });
+    c.till.db.prepare(`UPDATE business_settings SET value_json = ? WHERE key = 'menu.autoUpdate'`).run(JSON.stringify({ v: 2, mode: 'after_hours' }));
+    c.website.upload(madeUpMenu('one'));
+    const v = await c.till.service.checkNow();
+    expect(v).toMatchObject({ phase: 'waiting_for_owner', mode: 'ask' });
+    expect(c.website.claims()).toHaveLength(0);
+    expect(menuRows(c.till.db).items).toBe(0);
   });
 });

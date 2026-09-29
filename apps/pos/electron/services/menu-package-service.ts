@@ -70,15 +70,17 @@ import {
   menuClaimRefusalStep,
   menuDeployBackoffMs,
   menuDeployLocalFor,
+  menuDeployNeedsOwner,
   menuDeployNoticeFor,
   menuDeployPhaseMessage,
   menuDeployReportKey,
+  menuMarkerCovers,
   type MenuDeployMessageContext,
 } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
 import type { Actor } from '../db/repositories/base.js';
 import { getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
-import { getBusinessSetting, readShopSetting } from '../db/business-settings-read.js';
+import { getBusinessSetting, readBusinessSettingRow, readShopSetting } from '../db/business-settings-read.js';
 import { applyMenuImport, planMenuImportFromDb } from '../db/repositories/menu-import-repo.js';
 import { MenuImportFileError, menuFileTooNewMessage, parseMenuFileText } from './menu-import-service.js';
 import { readSyncSwitch } from './sync-config.js';
@@ -114,8 +116,8 @@ export interface MenuPackageServiceDeps {
   ordersOn: () => boolean;
   /** The same publish as after Menu → Import (the website sells from the menu the till last sent). */
   publishMenu: () => Promise<unknown>;
-  /** A local backup copy, before anything changes. */
-  backup: (kind: 'before-menu') => Promise<unknown>;
+  /** A local backup copy, before anything changes; `tag` names the file it is for (the newest copy per file is kept). */
+  backup: (kind: 'before-menu', tag?: string) => Promise<unknown>;
   now?: () => number;
   emit?: (e: MenuDeployChangedEvent) => void;
   /** 0..1, for the ±20% spread of the checks (tests pin it). */
@@ -158,6 +160,8 @@ const localSchema = z.object({
   nextTryAt: z.string().nullable(),
   error: z.string().nullable(),
   refused: z.boolean().default(false),
+  /** Why the newest file waits for the owner's OK although files go in by themselves (pos-domain menuDeployNeedsOwner). */
+  held: z.string().nullable().default(null),
   reported: z.array(z.string()).default([]),
   notified: z.array(z.string()).default([]),
 });
@@ -170,6 +174,7 @@ const EMPTY_LOCAL: MenuDeployLocal = Object.freeze({
   nextTryAt: null,
   error: null,
   refused: false,
+  held: null,
   reported: [],
   notified: [],
 }) as MenuDeployLocal;
@@ -426,12 +431,28 @@ export class MenuPackageService {
     }
   }
 
+  /**
+   * "Put in by themselves" only when that is what the owner chose, or when
+   * nothing was ever saved (the default). A saved choice this version cannot
+   * read (a newer till's, or a damaged row) is taken as "Wait for my OK":
+   * never put a file in unattended on a guess.
+   */
   private mode(): 'auto' | 'ask' {
     try {
-      return readShopSetting(this.d.db, 'menu.autoUpdate').value.mode;
+      const s = readShopSetting(this.d.db, 'menu.autoUpdate');
+      if (s.isDefault && readBusinessSettingRow(this.d.db, 'menu.autoUpdate') !== null) return 'ask';
+      return s.value.mode === 'auto' ? 'auto' : 'ask';
     } catch {
-      return 'auto';
+      return 'ask';
     }
+  }
+
+  /** The website says this till put the newest file in (it said "applied" about it, either scope). */
+  private appliedHereBefore(): boolean {
+    const s = this.status;
+    const pkg = s?.latest;
+    if (!s || !pkg) return false;
+    return (pkg.state === 'applied' && pkg.appliedBy === this.d.deviceId) || s.appliedByTills.includes(this.d.deviceId);
   }
 
   /** No order rung up on this till for a couple of minutes. */
@@ -452,8 +473,8 @@ export class MenuPackageService {
       formatVersion: pkg?.formatVersion ?? null,
       maxFormatVersion: MAX_MENU_FILE_VERSION,
       otherPutIn: pkg?.state === 'applied',
-      appliedHereButMissing:
-        pkg?.state === 'applied' && pkg.appliedBy === this.d.deviceId && !(marker && marker.seq >= pkg.seq),
+      appliedHereButMissing: !!pkg && this.appliedHereBefore() && !menuMarkerCovers(marker, pkg),
+      heldReason: local.held,
       behind: this.behind,
       automatic: marker?.packageId === pkg?.id ? marker?.automatic : false,
       notLookedYet: this.lastCheckedAt === null,
@@ -462,12 +483,14 @@ export class MenuPackageService {
 
   // ---- telling the screens --------------------------------------------------
 
-  private setPhase(phase: MenuDeployPhase, pkg: MenuPackageMeta | null, opts: { behind?: boolean } = {}): void {
+  /** `noticeShown`: the person who tapped already sees it — the note is marked as given, not sent. */
+  private setPhase(phase: MenuDeployPhase, pkg: MenuPackageMeta | null, opts: { behind?: boolean; noticeShown?: boolean } = {}): void {
     const changed = phase !== this.phase || this.behind !== !!opts.behind;
     this.phase = phase;
     this.behind = !!opts.behind;
     const notice = pkg ? this.noticeOnce(phase, pkg) : null;
-    if (changed || notice) this.d.emit?.({ view: this.view(), notice });
+    const send = opts.noticeShown ? null : notice;
+    if (changed || notice) this.d.emit?.({ view: this.view(), notice: send });
   }
 
   /** A phase that is news, once per file per kind (the owner is not told the same thing twice). */
@@ -585,6 +608,7 @@ export class MenuPackageService {
       local,
       deviceId: this.d.deviceId,
       scope,
+      appliedHereBefore: this.appliedHereBefore(),
       linkStale: link.on && link.stale,
       mode: this.mode(),
       maxFormatVersion: MAX_MENU_FILE_VERSION,
@@ -598,13 +622,86 @@ export class MenuPackageService {
       });
     }
     if (pkg && decision.claim) {
-      const claimed = await this.claim(pkg, scope, { lastPackageSeq: decision.claim.lastPackageSeq });
+      // Unattended: a file that would cut prices to less than half or change the tax waits for the owner.
+      const held = await this.screen(pkg);
+      if (held === undefined) return;
+      if (held) {
+        const now = menuDeployLocalFor(readMenuDeployLocal(db), pkg.id);
+        writeMenuDeployLocal(db, { ...now, held });
+        log.info('Menu file waits for the owner (it would change prices or tax a lot)', { file: pkg.fileName, seq: pkg.seq });
+        if (!now.reported.includes(menuDeployReportKey(pkg.id, 'waiting_for_owner'))) {
+          await this.report(pkg, scope, 'waiting_for_owner');
+        }
+        this.setPhase('waiting_for_owner', pkg);
+        return;
+      }
+      const claimed = await this.claim(pkg, scope, decision.claim);
       if (claimed.kind === 'claimed') {
         await this.importClaimed(claimed.claim, scope, { userId: null, deviceId: this.d.deviceId }, true);
       }
       return;
     }
     this.setPhase(decision.phase, pkg);
+  }
+
+  /**
+   * Before a file goes in unattended: what its import would change here
+   * (the plan only — nothing is written). A reason when it must wait for the
+   * owner (pos-domain menuDeployNeedsOwner); null when it may go in (or the
+   * file's own problems are for the claim to report); undefined when the
+   * file could not be fetched (look again next time).
+   */
+  private async screen(pkg: MenuPackageMeta): Promise<string | null | undefined> {
+    const got = await this.fetchPackageFile(pkg.id, pkg.sha256);
+    if (got.kind === 'unreachable') {
+      this.failures += 1;
+      this.lastError = got.message;
+      return undefined;
+    }
+    if (got.kind !== 'ok') return null;
+    const db = this.d.db;
+    const plan = planMenuImportFromDb(db, got.file);
+    const priceOf = db.prepare(`SELECT base_price_cents AS p FROM menu_items WHERE id = ?`);
+    const priceChanges: Array<{ fromCents: number; toCents: number }> = [];
+    for (const op of plan.ops.items) {
+      const to = op.update?.basePriceCents;
+      if (!op.existingId || to === undefined) continue;
+      const row = priceOf.get(op.existingId) as { p: number } | undefined;
+      if (row) priceChanges.push({ fromCents: Number(row.p), toCents: to });
+    }
+    return menuDeployNeedsOwner({ taxChanges: plan.preview.summary.taxChanges, priceChanges });
+  }
+
+  /** A package's file from the website (the content route: changes nothing there), checked and read. */
+  private async fetchPackageFile(
+    packageId: string,
+    knownSha256: string | null,
+  ): Promise<{ kind: 'ok'; file: MenuImportFile } | { kind: 'unreachable' | 'gone' | 'missing' | 'damaged' | 'bad_file'; message: string }> {
+    let res: Response;
+    try {
+      res = await this.d.callWebsite(`/api/bridge/menu-deploy/${packageId}/content`);
+    } catch {
+      return { kind: 'unreachable', message: 'Could not reach the website to fetch the menu file.' };
+    }
+    if (res.status === 410) return { kind: 'gone', message: claimRefusalWords('gone', null) };
+    if (res.status === 404) return { kind: 'missing', message: 'That menu file is not on the website.' };
+    const parsed = res.ok ? menuDeployContentResponseSchema.safeParse(await res.json().catch(() => null)) : null;
+    if (!parsed?.success) return { kind: 'unreachable', message: `The website did not hand the file over (${res.status}).` };
+    let raw: Buffer;
+    try {
+      raw = gunzipSync(Buffer.from(parsed.data.contentGzB64, 'base64'), { maxOutputLength: MENU_FILE_MAX_BYTES });
+    } catch {
+      return { kind: 'damaged', message: 'The file came through damaged (it would not unpack). Try again.' };
+    }
+    const sha = sha256Hex(raw);
+    if (sha !== parsed.data.sha256 || (knownSha256 !== null && sha !== knownSha256)) {
+      return { kind: 'damaged', message: 'The file came through damaged (its checksum does not match). Try again.' };
+    }
+    try {
+      return { kind: 'ok', file: parseMenuFileText(raw.toString('utf8')) };
+    } catch (e) {
+      return { kind: 'bad_file', message: messageOf(e) };
+    }
   }
 
   // ---- talking to the website --------------------------------------------------
@@ -656,13 +753,14 @@ export class MenuPackageService {
   private async claim(
     pkg: MenuPackageMeta,
     scope: MenuDeployScope,
-    opts: { lastPackageSeq: number | null; takeOver?: boolean; retry?: boolean },
+    opts: { lastPackageSeq: number | null; lastPackageId: string | null; takeOver?: boolean; retry?: boolean },
   ): Promise<ClaimResult> {
     const body: MenuDeployClaimInput = {
       ...this.deviceFields(),
       scope,
       maxFormatVersion: MAX_MENU_FILE_VERSION,
       lastPackageSeq: opts.lastPackageSeq,
+      lastPackageId: opts.lastPackageId,
       takeOver: opts.takeOver === true,
       retry: opts.retry === true,
     };
@@ -736,7 +834,8 @@ export class MenuPackageService {
    */
   private async importClaimed(claim: MenuDeployClaimResponse, scope: MenuDeployScope, actor: Actor, automatic: boolean): Promise<ImportResult> {
     const pkg = claim.package;
-    const deadline = this.now() + Math.max(60_000, claim.leaseSeconds * 1000 - LEASE_MARGIN_MS);
+    const leaseEnd = (c: MenuDeployClaimResponse) => this.now() + Math.max(60_000, c.leaseSeconds * 1000 - LEASE_MARGIN_MS);
+    let deadline = leaseEnd(claim);
     this.setPhase('claimed', pkg);
 
     let raw: Buffer;
@@ -758,15 +857,22 @@ export class MenuPackageService {
 
     this.setPhase('importing', pkg);
     try {
-      await this.d.backup('before-menu');
+      // One copy per file kept (the newest): tries of one file never push out the copy from before an earlier one.
+      await this.d.backup('before-menu', pkg.id.replace(/-/g, '').slice(0, 12));
     } catch (e) {
       return this.failed(pkg, scope, `The backup copy could not be made first, so nothing was changed: ${messageOf(e)}`, true);
     }
-    if (this.now() > deadline) {
-      // The claim is about to run out: stop here; the next look claims it again (this till may).
-      this.lastError = 'The backup copy took too long; the till tries again shortly.';
-      this.setPhase('failed', pkg);
-      return { ok: false, message: this.lastError };
+    if (scope === 'shared' && this.now() > deadline) {
+      // The copy took so long the claim is about to run out (a big database, the laptop asleep):
+      // claim it again — this till may, and the other till must not see it as stalled — before anything changes.
+      const marker = readMenuMarker(this.d.db);
+      const again = await this.claim(pkg, scope, { lastPackageSeq: marker?.seq ?? null, lastPackageId: marker?.packageId ?? null });
+      if (again.kind === 'unreachable') {
+        return this.failed(pkg, scope, 'The backup copy took so long that the claim ran out, and the website could not be reached to keep it; nothing was changed.', true);
+      }
+      if (again.kind === 'refused') return { ok: false, message: claimRefusalWords(again.code, pkg) };
+      deadline = leaseEnd(again.claim);
+      this.setPhase('importing', pkg);
     }
 
     let summary: MenuImportSummary;
@@ -796,7 +902,8 @@ export class MenuPackageService {
     await this.report(pkg, scope, 'applied', { counts });
     // As after Menu → Import: the website sells from the menu the till last sent.
     void this.d.publishMenu().catch((e: unknown) => log.warn('Menu publish after a menu file skipped', { error: messageOf(e) }));
-    this.setPhase('applied', pkg);
+    // Someone's tap hears it from the screen they tapped on: no second note.
+    this.setPhase('applied', pkg, { noticeShown: !automatic });
     return { ok: true, summary };
   }
 
@@ -825,7 +932,7 @@ export class MenuPackageService {
       if (scope === 'shared' && link.stale) {
         this.setPhase('waiting_link', pkg);
         throw new MenuDeployError(
-          'The link to the other till isn’t working. Put the file in once it works again (Settings → Sync), so both tills end up with the same menu.',
+          'The link to the other till isn’t working. Put the file in once it works again (Settings → Second till), so both tills end up with the same menu.',
         );
       }
       // Someone tapped: this till's tries start afresh.
@@ -833,7 +940,12 @@ export class MenuPackageService {
       writeMenuDeployLocal(db, { ...local, attempts: 0, nextTryAt: null, error: null, refused: false });
       const retry = opts.retry === true || pkg.state === 'failed' || !pkg.retryReady;
       const marker = readMenuMarker(db);
-      const claimed = await this.claim(pkg, scope, { lastPackageSeq: marker?.seq ?? null, takeOver: opts.takeOver === true, retry });
+      const claimed = await this.claim(pkg, scope, {
+        lastPackageSeq: marker?.seq ?? null,
+        lastPackageId: marker?.packageId ?? null,
+        takeOver: opts.takeOver === true,
+        retry,
+      });
       if (claimed.kind === 'unreachable') throw new MenuDeployError(claimed.message);
       if (claimed.kind === 'refused') throw new MenuDeployError(claimRefusalWords(claimed.code, pkg));
       const out = await this.importClaimed(claimed.claim, scope, actor, false);
@@ -846,33 +958,9 @@ export class MenuPackageService {
   async preview(packageId: string): Promise<MenuImportPreview & { packageId: string }> {
     if (!this.d.linked()) throw new MenuDeployError(menuDeployPhaseMessage('not_linked', { maxFormatVersion: MAX_MENU_FILE_VERSION }));
     const known = this.status?.latest?.id === packageId ? this.status.latest : null;
-    let res: Response;
-    try {
-      res = await this.d.callWebsite(`/api/bridge/menu-deploy/${packageId}/content`);
-    } catch {
-      throw new MenuDeployError('Could not reach the website to fetch the menu file.');
-    }
-    if (res.status === 410) throw new MenuDeployError(claimRefusalWords('gone', null));
-    if (res.status === 404) throw new MenuDeployError('That menu file is not on the website.');
-    const parsed = res.ok ? menuDeployContentResponseSchema.safeParse(await res.json().catch(() => null)) : null;
-    if (!parsed?.success) throw new MenuDeployError(`The website did not hand the file over (${res.status}).`);
-    let raw: Buffer;
-    try {
-      raw = gunzipSync(Buffer.from(parsed.data.contentGzB64, 'base64'), { maxOutputLength: MENU_FILE_MAX_BYTES });
-    } catch {
-      throw new MenuDeployError('The file came through damaged (it would not unpack). Try again.');
-    }
-    const sha = sha256Hex(raw);
-    if (sha !== parsed.data.sha256 || (known && sha !== known.sha256)) {
-      throw new MenuDeployError('The file came through damaged (its checksum does not match). Try again.');
-    }
-    let file: MenuImportFile;
-    try {
-      file = parseMenuFileText(raw.toString('utf8'));
-    } catch (e) {
-      throw new MenuDeployError(messageOf(e));
-    }
-    const plan = planMenuImportFromDb(this.d.db, file);
+    const got = await this.fetchPackageFile(packageId, known?.sha256 ?? null);
+    if (got.kind !== 'ok') throw new MenuDeployError(got.message);
+    const plan = planMenuImportFromDb(this.d.db, got.file);
     return { ...plan.preview, fileName: known?.fileName ?? 'Menu file from the costing PC', packageId };
   }
 
@@ -893,15 +981,26 @@ export class MenuPackageService {
         method: 'PUT',
         body: JSON.stringify({ keyHash: sha256Hex(key), keyHint, ...this.deviceFields() }),
       });
-    } catch {
-      throw new MenuDeployError(notTaken);
+    } catch (e) {
+      if (e instanceof WebsiteNotReadyError) throw new MenuDeployError(notTaken);
+      // No answer (the website slow to wake, the connection dropped): it may have saved the new
+      // key after the till stopped waiting — and then the old key has stopped. Never say it still works.
+      throw new MenuDeployError(
+        'The website did not answer in time. It may have saved the new key anyway, and then the old key has stopped working: make a new key again, and put that one on the costing PC.',
+      );
     }
     if (res.status === 404) throw new MenuDeployError(`${menuDeployPhaseMessage('website_old', { maxFormatVersion: MAX_MENU_FILE_VERSION })} ${notTaken}`);
     if (!res.ok) throw new MenuDeployError(notTaken);
     // 2xx: the website holds the new key's hash (the old key already stopped working).
     const parsed = menuDeployKeyResponseSchema.safeParse(await res.json().catch(() => null));
     const createdAt = parsed.success ? parsed.data.createdAt : new Date(this.now()).toISOString();
-    setSetting(this.d.db, MENU_DEPLOY_KEY_INFO_KEY, { keyHint, keyCreatedAt: createdAt }, { actorUserId: ownerUserId });
+    try {
+      setSetting(this.d.db, MENU_DEPLOY_KEY_INFO_KEY, { keyHint, keyCreatedAt: createdAt }, { actorUserId: ownerUserId });
+    } catch (e) {
+      // The website has the new key and the old one stopped: the owner must see the key now,
+      // or the costing PC is locked out. Only this till's note of its last 4 characters is lost.
+      log.warn('Menu upload key made, but its note on this till was not saved', { error: messageOf(e) });
+    }
     if (this.status) {
       this.status = { ...this.status, key: { keyHint, createdAt, deviceId: this.d.deviceId, deviceName: this.d.deviceName } };
     }
