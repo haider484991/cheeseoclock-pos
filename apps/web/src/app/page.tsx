@@ -27,9 +27,9 @@ import {
   HOME_STAT_HOURS,
   HOME_STEP_PAY,
 } from '@/lib/page-copy';
-import { lineOrderUrl, nameIsDefault, orderWhatsappUrl, shopHoursLine, whatsappLinesOf } from '@/lib/shop-facts';
+import { lineOrderUrl, nameIsDefault, orderWhatsappUrl, shopHoursLine, shopNameProse, whatsappLinesOf } from '@/lib/shop-facts';
 import { getCopyFacts, getHomeView, requireStoredFacts } from '@/lib/site-facts';
-import { dealSaveCents, dealsFromCents, homeDishes } from '@/lib/home-lineup';
+import { dealSaveCents, dealsAreTodays, dealsFromCents, homeDishes } from '@/lib/home-lineup';
 import { menuImageSrcSet } from '@/lib/images';
 
 /**
@@ -115,6 +115,8 @@ export default async function HomePage() {
   const shop = shopOf(facts);
   const dishes = homeDishes(view);
   const dealsFrom = dealsFromCents(view);
+  // The deals section's two fixed lines are today's three deals' facts (a drink in each, regular pizzas).
+  const todaysDeals = dealsAreTodays(view);
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   const { announcement } = facts;
   const marquee = marqueeItems(facts);
@@ -148,16 +150,12 @@ export default async function HomePage() {
                   that name in plain words (the logo drawing stays until it is
                   redrawn — the till's Shop details card says so). */}
               <h1 className="mt-5">
-                {nameIsDefault(shop) ? (
-                  <>
-                    <span className="block font-display text-[clamp(2.1rem,5vw,3.6rem)] uppercase leading-none tracking-wide text-cream">
-                      It&rsquo;s always
-                    </span>
-                    <span className="sr-only">Cheese O&rsquo;Clock.</span>
-                  </>
-                ) : (
-                  <span className="sr-only">{shop.profile.name}</span>
+                {nameIsDefault(shop) && (
+                  <span className="block font-display text-[clamp(2.1rem,5vw,3.6rem)] uppercase leading-none tracking-wide text-cream">
+                    It&rsquo;s always
+                  </span>
                 )}
+                <span className="sr-only">{`${shopNameProse(shop)}.`}</span>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src="/logo-wordmark.svg"
@@ -251,16 +249,20 @@ export default async function HomePage() {
               <Reveal>
                 <div className="flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3">
                   <div>
-                    <p className="font-cond text-sm font-extrabold uppercase tracking-[0.24em] text-ink/70">
-                      Every deal comes with a 1 litre soft drink
-                    </p>
+                    {todaysDeals && (
+                      <p className="font-cond text-sm font-extrabold uppercase tracking-[0.24em] text-ink/70">
+                        Every deal comes with a 1 litre soft drink
+                      </p>
+                    )}
                     <h2 className="mt-1 font-display text-5xl uppercase leading-none tracking-wide md:text-7xl">
                       Value deals
                     </h2>
                   </div>
-                  <p className="max-w-xs font-cond text-lg font-bold leading-snug">
-                    Choice of pizzas only from the regular menu.
-                  </p>
+                  {todaysDeals && (
+                    <p className="max-w-xs font-cond text-lg font-bold leading-snug">
+                      Choice of pizzas only from the regular menu.
+                    </p>
+                  )}
                 </div>
               </Reveal>
               <div className="mt-8 grid gap-4 md:grid-cols-3">

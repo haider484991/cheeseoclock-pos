@@ -103,6 +103,7 @@ const track = await import('@/app/track/[id]/page');
 const manifest = await import('@/app/manifest');
 const ogRoot = await import('@/app/opengraph-image');
 const ogArea = await import('@/app/delivery/[area]/opengraph-image');
+const errorPage = await import('@/app/error');
 const { CheckoutSheet } = await import('@/components/ordering/CheckoutSheet');
 const { ShopFactsContext } = await import('@/components/ordering/ShopContext');
 const { DEFAULT_FACTS, findFactZone } = await import('@/lib/delivery-facts');
@@ -650,15 +651,14 @@ describe('every page follows the owner’s details', () => {
     'You pay the rider in cash',
     'Allergy? Tell us',
   ];
-  /** The logo's own words stay (the image says them): the home page's H1 names it for screen readers. */
-  const LOGO = 'It’s always Cheese O’Clock.';
 
   it('with every detail the owner’s: no page says today’s name, numbers, address, hours, "daily", "past midnight" or "cash only" — and each says the owner’s', async () => {
     const m = goldenMenu();
     await publish(m, { settings: settingsBlock(m), shop: ownerShop() });
     const pages = await allPages();
     for (const [route, html] of Object.entries(pages)) {
-      const text = visible(html).replace(LOGO, '');
+      // Nothing exempt: the home page's H1 names the owner's shop too (its screen-reader words).
+      const text = visible(html);
       for (const w of TODAYS) expect(text, `${route}: "${w}"`).not.toContain(w);
       // Today's closing time ("11 am" is not it).
       expect(text, route).not.toMatch(/(?<![\d:])1 (am|AM)\b/);
@@ -734,7 +734,11 @@ describe('every page follows the owner’s details', () => {
     expect(dha6).toContain('HUNGRY IN DHA PHASE 6? ORDER UP.');
     const menuText = visible(pages['/menu']!);
     expect(menuText).toContain(OWNER_WEBSITE.allergyNotice);
-    expect(menuText).toContain('pay cash or card on delivery or at the counter');
+    // The rider and the counter take different things: each list its own (never the rider's for both).
+    expect(menuText).toContain('Prices in PKR · 15% tax added on the bill · pay cash or card on delivery and cash, card or EasyPaisa at the counter');
+    expect(menuText).not.toContain('on delivery or at the counter');
+    // The home page's H1: the owner's name in plain words, no pun.
+    expect(pages['/']).toContain('<h1 class="mt-5"><span class="sr-only">Test Kitchen.</span><img ');
     const trackEl = await track.default({ params: { id: 'test-order' } });
     expect(propsWith(trackEl, 'orderId')!['shop']).toEqual(shopFactsFromBlock(ownerShop()));
 
@@ -815,7 +819,8 @@ describe('every page follows the owner’s details', () => {
     expect(pickup).toContain('You pay when you collect — cash, card or EasyPaisa.');
     expect(pickup).toContain('Plot 9, Test Street, Test Phase 1, Karachi');
     const closed = render('delivery', false);
-    expect(visible(closed)).toContain('(open tue–sun · 11 am – 11 pm)');
+    // The day names keep their capitals inside the sentence.
+    expect(visible(closed)).toContain('(open Tue–Sun · 11 am – 11 pm)');
     const wa = hrefs(closed).filter((h) => h.startsWith('https://wa.me/'));
     expect(wa.length).toBeGreaterThan(0);
     for (const h of wa) {
@@ -905,5 +910,124 @@ describe('every page follows the owner’s details', () => {
     // The page-specific messages: their words, today's name.
     const pizzaLinks = hrefs(pages['/pizza']!).filter((h) => h.includes('?text='));
     expect(pizzaLinks.map((h) => new URL(h).searchParams.get('text'))).toContain("Hi Cheese O'Clock! I'd like to order pizza. ");
+  });
+});
+
+// ===========================================================================
+
+describe('after the review: nothing today’s is cached over the owner’s, and every sentence stays true', () => {
+  it('a database error with nothing read yet: every page Next keeps throws (the last good page stays) — never today’s details and no prices kept for an hour; /menu still renders; after one good read, that one', async () => {
+    const m = goldenMenu();
+    await publish(m, { settings: settingsBlock(m), shop: ownerShop() });
+    // A cold server (nothing read yet): fresh modules.
+    vi.resetModules();
+    const fresh = {
+      home: await import('@/app/page'),
+      hub: await import('@/app/delivery/page'),
+      area: await import('@/app/delivery/[area]/page'),
+      pizza: await import('@/app/pizza-delivery-dha-karachi/page'),
+      burger: await import('@/app/burger-delivery-dha-karachi/page'),
+      lateNight: await import('@/app/late-night-food-delivery-dha/page'),
+      notFound: await import('@/app/not-found'),
+      manifest: await import('@/app/manifest'),
+      menu: await import('@/app/menu/page'),
+      facts: await import('@/lib/site-facts'),
+    };
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    db.fail = new Error('connection refused');
+    try {
+      const kept: Array<[string, () => Promise<unknown>]> = [
+        ['/', () => fresh.home.default()],
+        ['/delivery', () => fresh.hub.default()],
+        ['/delivery/dha-phase-6', () => fresh.area.default({ params: { area: 'dha-phase-6' } })],
+        ['/pizza', () => fresh.pizza.default()],
+        ['/burger', () => fresh.burger.default()],
+        ['/late-night', () => fresh.lateNight.default()],
+        ['/_not-found', () => fresh.notFound.default()],
+        ['/manifest.webmanifest', () => fresh.manifest.default()],
+      ];
+      for (const [route, render] of kept) await expect(render(), route).rejects.toThrow(/could not read the owner’s settings and menu/);
+      // /menu is dynamic (never kept): today's details, as before, rather than fail.
+      await expect(fresh.menu.default()).resolves.toBeTruthy();
+      // One good read, then a failure: the pages render from that read (the owner's), as before.
+      db.fail = null;
+      expect((await fresh.facts.getShopFacts()).profile.name).toBe('Test Kitchen');
+      db.fail = new Error('connection refused');
+      for (const [route, render] of kept) await expect(render(), route).resolves.toBeTruthy();
+      expect((await fresh.facts.getShopFacts()).profile.name).toBe('Test Kitchen');
+      expect(await fresh.manifest.default()).toMatchObject({ short_name: 'Test Kitchen' });
+    } finally {
+      db.fail = null;
+      quiet.mockRestore();
+    }
+    // No database at all (a build or a preview without one): today's site, never an error.
+    const url = process.env['DATABASE_URL'];
+    delete process.env['DATABASE_URL'];
+    try {
+      await expect(fresh.home.default()).resolves.toBeTruthy();
+      await expect(fresh.notFound.default()).resolves.toBeTruthy();
+    } finally {
+      process.env['DATABASE_URL'] = url;
+    }
+  });
+
+  it('food taxed at 0%: no page says tax is added — each such sentence reads its own words — and every page renders', async () => {
+    const zero = (mm: PublishedMenu): PublishedMenu => ({ ...mm, categories: mm.categories.map((c) => ({ ...c, items: c.items.map((i) => ({ ...i, taxRateBps: 0 })) })) });
+    const m = zero(goldenMenu());
+    await publish(m, { settings: settingsBlock(m) });
+    const pages = await allPages();
+    for (const [route, html] of Object.entries(pages)) {
+      expect(visible(html), route).not.toMatch(/tax is added|plus tax|tax on the bill|tax added|\d% tax/i);
+    }
+    expect(visible(pages['/']!)).toContain('Cash on delivery. The printed receipt from the kitchen is the final amount.');
+    expect(visible(pages['/']!)).toContain('Cash on delivery');
+    expect(visible(pages['/pizza']!)).toContain('The bill is the menu total plus your area’s delivery fee.');
+    expect(visible(pages['/delivery/dha-phase-6']!)).toContain('Your bill is the menu total plus the Rs 200 delivery fee.');
+    expect(visible(pages['/menu']!)).toContain('Prices in PKR · pay cash on delivery or at the counter');
+  });
+
+  it('the deals section’s two fixed lines are today’s three deals’ facts: another deal featured, and they step aside', async () => {
+    const m = goldenMenu();
+    const deals = m.categories.find((c) => /deals/i.test(c.name))!;
+    deals.items.push({ ...deals.items[0]!, posItemId: 'test-solo-deal', name: 'Test Solo Deal', description: 'One made-up pizza, no drink.', basePriceCents: 150_000, sortOrder: 9, modifierGroups: [] });
+    const LINES = ['Every deal comes with a 1 litre soft drink', 'Choice of pizzas only from the regular menu.'];
+    await publish(m, { shop: tillShop() });
+    let text = visible(await page(React.createElement(home.default)));
+    for (const l of LINES) expect(text).toContain(l);
+    const lineup: WebsiteHome = { ...structuredClone(DEFAULT_WEBSITE_HOME), deals: [...structuredClone(DEFAULT_WEBSITE_HOME.deals), { itemRef: { posItemId: 'test-solo-deal', name: 'Test Solo Deal' } }] };
+    await publish(m, { shop: tillShop({ rev: 2, home: lineup }) });
+    text = visible(await page(React.createElement(home.default)));
+    expect(text).toContain('Test Solo Deal');
+    for (const l of LINES) expect(text).not.toContain(l);
+  });
+
+  it('what the rider takes: "no online payments" only while cash only; /menu names each list, or one for both when they match; the closed banner keeps the day names’ capitals', async () => {
+    await publish(goldenMenu(), { shop: tillShop() });
+    expect(visible(await page(React.createElement(pizza.default)))).toContain('No app downloads, no online payments: the box goes from the oven');
+    await publish(goldenMenu(), { shop: tillShop({ rev: 2, website: { doorPayments: ['cash', 'easypaisa'], pickupPayments: ['cash', 'easypaisa'] } }) });
+    const p = visible(await page(React.createElement(pizza.default)));
+    expect(p).not.toContain('no online payments');
+    expect(p).toContain('No app downloads, nothing to pay before it arrives: the box goes from the oven');
+    expect(visible(await page(React.createElement(menuPage.default)))).toContain('pay cash or EasyPaisa on delivery or at the counter');
+    await publish(goldenMenu(), { shop: tillShop({ rev: 3, hours: { opens: '11:00', closes: '23:00', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat'] } }) });
+    await heartbeat(false);
+    expect(visible(await page(React.createElement(menuPage.default)))).toContain('(open Mon–Sat · 11 am – 11 pm)');
+  });
+
+  it('the error screen (in the browser) calls and WhatsApps the owner’s numbers, handed down by the root layout; on its own, today’s', async () => {
+    await publish(goldenMenu(), { shop: ownerShop() });
+    const ErrorPage = errorPage.default;
+    const html = await page(React.createElement(ErrorPage, { error: new Error('made-up crash'), reset: () => {} }));
+    const text = visible(html);
+    expect(text).toContain('Test Kitchen');
+    expect(text).toContain('Call 0300 1112233');
+    expect(text).not.toMatch(/9367865|2188295|Cheese O/);
+    expect(hrefs(html)).toContain('tel:+923001112233');
+    const wa = hrefs(html).filter((h) => h.startsWith('https://wa.me/'));
+    expect(wa).toHaveLength(1);
+    expect(wa[0]).toMatch(/^https:\/\/wa\.me\/923214445566\?text=/);
+    expect(new URL(wa[0]!).searchParams.get('text')).toBe(OWNER_WEBSITE.whatsappGreeting);
+    const alone = visible(renderToStaticMarkup(React.createElement(ErrorPage, { error: new Error('made-up crash'), reset: () => {} })));
+    expect(alone).toContain('Call 0300 9367865');
   });
 });

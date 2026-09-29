@@ -546,6 +546,21 @@ function isClaimList(claim: CopyClaim | readonly CopyClaim[]): claim is readonly
   return Array.isArray(claim);
 }
 
+/**
+ * Copy that names tax ({tax} / {Tax}) — "the menu total plus 15% tax" — with
+ * its words for food taxed at 0% (`noTax`: no tax is added, so nothing may
+ * say it is). While tax is added (every menu so far, and the menu unknown)
+ * it reads exactly as `withTax`, whose own claims hold as before; each of
+ * them needs an `otherwise` (a sentence left out while tax is added would
+ * have no words to fall back on).
+ */
+export function taxed(withTax: Copy, noTax: Copy): Copy {
+  if (typeof withTax === 'string') return { text: withTax, when: { taxAdded: true }, otherwise: noTax };
+  if (withTax.otherwise === undefined) throw new Error(`taxed(): copy that names tax needs an otherwise — ${withTax.text}`);
+  const when = isClaimList(withTax.when) ? withTax.when : [withTax.when];
+  return { text: withTax.text, when: [...when, { taxAdded: true }], otherwise: taxed(withTax.otherwise, noTax) };
+}
+
 function feeClaimHolds(claim: { sameFee: readonly string[] } | { rateCard: readonly string[] }, facts: SiteFacts): boolean {
   if ('sameFee' in claim) {
     const fees = new Set(zonesOf('sameFee', expandZoneIds(claim.sameFee), facts).map((z) => z.feeCents));

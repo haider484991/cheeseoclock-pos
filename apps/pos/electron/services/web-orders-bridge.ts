@@ -268,6 +268,12 @@ interface SettingsNote {
   stampKey: string;
   state: 'refused' | 'unsupported';
   message: string;
+  /**
+   * The website had no menu yet (409 menu_not_published): not the block's
+   * fault — the next start tries again by itself (the menu may have come
+   * from the other till since). Shop block only.
+   */
+  noMenu?: true;
 }
 
 /** What the website last said it holds of the shop block (SHOP_CONFIRMED_KEY). */
@@ -499,7 +505,10 @@ class WebOrdersBridge {
       if ('shop' in data) {
         const shop = data.shop as Partial<WebsiteShopHeld> | null;
         this.recordShopHeld({ ...(shop ?? {}), homeMissing: Array.isArray(data.homeMissing) ? (data.homeMissing as string[]) : undefined });
-        if (this.shopNoteState() === 'unsupported') this.clearShopNote();
+        // An updated website clears "it needs its update"; a website that had no menu may have one now
+        // (the owner published on the other till): either way the block goes again by itself.
+        const note = this.shopNoteRaw();
+        if (note && (note.state === 'unsupported' || note.noMenu)) this.clearShopNote();
       }
       if (!('settings' in data)) return;
       const held = data.settings as Partial<WebsiteSettingsHeld> | null;
@@ -1981,7 +1990,7 @@ class WebOrdersBridge {
           return;
         }
         if (res.status === 409 && /menu_not_published/.test(text)) {
-          this.noteShop(shop.stamp, 'refused', 'The website has no menu yet — press Publish once (it sends the menu with the shop details).');
+          this.noteShop(shop.stamp, 'refused', 'The website has no menu yet — press Publish once (it sends the menu with the shop details).', { noMenu: true });
           return;
         }
         throw new Error(`Shop details publish failed: HTTP ${res.status} ${text.slice(0, 200)}`);
@@ -2060,6 +2069,10 @@ class WebOrdersBridge {
       : (this.shopHeld()?.homeMissing ?? null);
     const value: WebsiteShopHeldRecord = { held, homeMissing, confirmedAt: nowIso() };
     setSetting(this.db, SHOP_CONFIRMED_KEY, value);
+    // The website holds the very stamp a note is about (sent by the other till, say): nothing is
+    // wrong with it any more — the note goes (else Settings would say "not updated" for a block it holds).
+    const note = this.shopNoteRaw();
+    if (held && note && note.stampKey === shopStampKey(held.stamp)) this.clearShopNote();
   }
 
   /** The note about this shop stamp (refused, this till's own check, an older website), or null. */
@@ -2071,16 +2084,18 @@ class WebOrdersBridge {
     return { stampKey: v.stampKey, state: v.state, message: v.message };
   }
 
-  /** The shop note's state, whatever its stamp (an updated website clears an 'unsupported' one). */
-  private shopNoteState(): SettingsNote['state'] | null {
+  /** The shop note, whatever its stamp (an updated website clears an 'unsupported' one, a start a 'no menu' one). */
+  private shopNoteRaw(): SettingsNote | null {
     if (!this.db) return null;
     const v = getSettingRaw(this.db, SHOP_NOTE_KEY) as Partial<SettingsNote> | null;
-    return v && (v.state === 'refused' || v.state === 'unsupported') ? v.state : null;
+    if (!v || typeof v.stampKey !== 'string' || typeof v.message !== 'string') return null;
+    if (v.state !== 'refused' && v.state !== 'unsupported') return null;
+    return { stampKey: v.stampKey, state: v.state, message: v.message, ...(v.noMenu === true ? { noMenu: true as const } : {}) };
   }
 
-  private noteShop(stamp: ShopStamp, state: 'refused' | 'unsupported', message: string): void {
+  private noteShop(stamp: ShopStamp, state: 'refused' | 'unsupported', message: string, opts: { noMenu?: true } = {}): void {
     if (!this.db) return;
-    const note: SettingsNote = { stampKey: shopStampKey(stamp), state, message };
+    const note: SettingsNote = { stampKey: shopStampKey(stamp), state, message, ...(opts.noMenu ? { noMenu: true as const } : {}) };
     setSetting(this.db, SHOP_NOTE_KEY, note);
     log.warn('Shop details not on the website', { state, message });
   }

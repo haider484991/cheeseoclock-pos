@@ -396,6 +396,55 @@ live('a Save sends the shop block ALONE — never the menu, never the settings b
     expect(shopStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/press Publish/) });
   });
 
+  it('no menu yet (409), then the owner publishes on the OTHER till (a v0.7.30 one: a menu, no shop block): the next start sends the block by itself', async () => {
+    const db = await till({ menuOnWebsite: false });
+    save(db, 'shop.hours', hours('11:00', '23:00'));
+    await bridge().maybePublishShop();
+    expect(shopStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/press Publish/) });
+    // The other till's Publish: the website has a menu now, and no shop block.
+    websiteMenu = { categories: [{ posCategoryId: 'c', name: 'Test food', displayOrder: 1, items: [] }] };
+    answerStatus = () => ({ ok: true, data: { settings: null, shop: null, homeMissing: [] } });
+    bridge().stop();
+    bridge().init(db as AppDatabase, DEV);
+    await bridge().maybePublishShop();
+    expect(shopPuts()).toHaveLength(2);
+    expect(websiteShop).toMatchObject({ shopRev: 1, deviceId: DEV, hours: { opens: '11:00', closes: '23:00' } });
+    expect(shopStatus()).toMatchObject({ state: 'published' });
+    expect(menus()).toHaveLength(0);
+  });
+
+  it('no menu yet (409), still none at the next start: one more try, then nothing more by itself (no loop)', async () => {
+    const db = await till({ menuOnWebsite: false });
+    save(db, 'shop.hours', hours('11:00', '23:00'));
+    await bridge().maybePublishShop();
+    answerStatus = () => ({ ok: true, data: { settings: null, shop: null, homeMissing: [] } });
+    bridge().stop();
+    bridge().init(db as AppDatabase, DEV);
+    await bridge().maybePublishShop();
+    await bridge().maybePublishShop();
+    expect(shopPuts()).toHaveLength(2);
+    expect(shopStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/press Publish/) });
+  });
+
+  it('no menu yet (409), then the UPDATED other till publishes this very stamp: the next start finds it held — "published", nothing sent again', async () => {
+    const db = await till({ menuOnWebsite: false });
+    save(db, 'shop.hours', hours('11:00', '23:00'));
+    await bridge().maybePublishShop();
+    const block = shopPuts()[0]!.shop;
+    // The other till's Publish carried the same saved rows (the same stamp), from its own device.
+    websiteMenu = { categories: [{ posCategoryId: 'c', name: 'Test food', displayOrder: 1, items: [] }] };
+    websiteShop = { ...block, deviceId: 'till-2' };
+    answerStatus = () => ({
+      ok: true,
+      data: { settings: null, shop: { shopRev: block.shopRev, shopAt: block.shopAt, shopTie: block.shopTie, shopDeviceId: 'till-2' }, homeMissing: [] },
+    });
+    bridge().stop();
+    bridge().init(db as AppDatabase, DEV);
+    await bridge().maybePublishShop();
+    expect(shopPuts()).toHaveLength(1);
+    expect(shopStatus()).toMatchObject({ state: 'published', message: null });
+  });
+
   it('a Save while the menu is on its way: the shop block goes when that one ends', async () => {
     const db = await till();
     save(db, 'shop.hours', hours('11:00', '23:00'));
@@ -600,5 +649,22 @@ live('the website or this till can’t take the shop block', () => {
     expect(menus()[0]).toHaveProperty('settings');
     // …and this till never saves over it (the card is read-only; the repository refuses).
     expect(() => save(db, 'shop.hours', hours('12:00', '01:00'))).toThrow(/newer version/);
+  });
+
+  it('…and once the newer till has put that very stamp on the website, this till’s next start finds it held: "published", not "refused" — and it still sends nothing', async () => {
+    const db = await till();
+    save(db, 'shop.hours', hours('11:00', '23:00'));
+    syncedRow(db, 'shop.hours', { version: 2, value: { v: 9, opens: '11:00', closes: '23:00', days: ['mon'], holidays: [] } });
+    await bridge().maybePublishShop();
+    expect(shopStatus()).toMatchObject({ state: 'refused' });
+    // The newer till sent the same saved rows (the same stamp) from its own device.
+    const { localShopStamp } = await import('./website-shop-block.js');
+    const stamp = localShopStamp(db as AppDatabase);
+    answerStatus = () => ({ ok: true, data: { settings: null, shop: { ...stamp, shopDeviceId: 'till-2' }, homeMissing: [] } });
+    bridge().stop();
+    bridge().init(db as AppDatabase, DEV);
+    await bridge().maybePublishShop();
+    expect(shopPuts()).toHaveLength(0);
+    expect(shopStatus()).toMatchObject({ state: 'published', message: null });
   });
 });

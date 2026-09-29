@@ -263,8 +263,14 @@ describe('the home page follows the published menu', () => {
     expect(gridNames(html)).toEqual(['Fajita Pizza', 'Classic Supreme']);
     expect(carouselDots(html)).toEqual(['Fajita Pizza', 'Classic Supreme']);
     const text = visible(html);
-    expect(text).toContain('Signature · Large 12" Fajita Pizza Made-up words, with a soft drink.');
-    expect(text).toContain('Signature · Medium 9" Classic Supreme More made-up words.');
+    // Regular pizzas, not signatures: labelled and linked by their own section on /menu.
+    expect(text).toContain('Regular Pizzas · Large 12" Fajita Pizza Made-up words, with a soft drink.');
+    expect(text).toContain('Regular Pizzas · Medium 9" Classic Supreme More made-up words.');
+    expect(text).not.toMatch(/Signature · /);
+    expect(html).not.toContain('/menu#signature-pizzas');
+    expect(html).toContain('href="/menu#regular-pizzas"');
+    // The carousel's front slide says so too, and its "Order this" goes there.
+    expect(html).toMatch(/text-cheese">Regular Pizzas · (<!-- -->)?Large 12&quot;<\/p>/);
     expect(text).not.toMatch(/pepsi/i);
     // The front slide's line under its name: the owner's headline.
     expect(text).toContain('Fajita Pizza A made-up line Rs 2,000 Order this →');
@@ -328,10 +334,17 @@ describe('the lineup, worked out (lib/home-lineup)', () => {
       deals: [],
     };
     const view = resolveHome(lineup, m);
-    expect(view.pizzas.map((p) => [p.key, p.label])).toEqual([
-      ['Fajita Pizza', 'Signature · Medium 9"'],
-      ['Fajita Pizza · Large 12"', 'Signature · Large 12"'],
+    expect(view.pizzas.map((p) => [p.key, p.label, p.href])).toEqual([
+      ['Fajita Pizza', 'Regular Pizzas · Medium 9"', '/menu#regular-pizzas'],
+      ['Fajita Pizza · Large 12"', 'Regular Pizzas · Large 12"', '/menu#regular-pizzas'],
     ]);
+    // Today's: the signatures section and the Signature Cheese Dipped in Burgers, as always.
+    const today = resolveHome(DEFAULT_WEBSITE_HOME, m);
+    expect(new Set(today.pizzas.map((p) => [p.label, p.kind, p.href].join('|')))).toEqual(new Set(['Signature · Large 12"|Signature|/menu#signature-pizzas']));
+    expect([today.burger?.label, today.burger?.href]).toEqual(['Signature burger', '/menu#burgers']);
+    // Another burger featured: not called a signature.
+    const plain = resolveHome({ pizzas: DEFAULT_WEBSITE_HOME.pizzas, burger: { itemRef: { posItemId: null, name: 'Classic Crispy Chicken' } }, deals: [] }, m);
+    expect([plain.burger?.label, plain.burger?.href]).toEqual(['Burgers', '/menu#burgers']);
   });
 
   it('one pizza: a turntable with no arrows and no dots; none: nothing', () => {
@@ -357,6 +370,12 @@ describe('the landing pages’ prices ({price:…}, lib/menu-prices)', () => {
       burgerCheese: 'Rs 100',
       dip: 'Rs 100',
     });
+  });
+
+  it('a pick-up-only item is no delivery price: the delivery pages leave it out (the till’s flag, or its description)', () => {
+    expect(priceWords('burgers', menuWith({ 'Nashville Authentic (Hot)': { pickupOnly: true } }))).toBe('Rs 700 – Rs 900');
+    expect(priceWords('sides', menuWith({ 'Fries — Regular': { description: 'Pick up only.' } }))).toBe('Rs 450');
+    expect(priceWords('masalaFries', menuWith({ 'Signature Masala Fries — Large': { pickupOnly: true }, 'Signature Mayo Masala Fries — Large': { pickupOnly: true } }))).toBeNull();
   });
 
   it('what the menu can’t say has no words — unknown, the items gone, choices at two prices — and a typo throws', () => {

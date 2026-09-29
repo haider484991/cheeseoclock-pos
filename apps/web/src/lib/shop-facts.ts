@@ -3,7 +3,9 @@ import {
   DEFAULT_SHOP_PROFILE,
   DEFAULT_SHOP_WEBSITE,
   DEFAULT_WEBSITE_HOME,
+  daysWords,
   hoursLine,
+  hoursRange,
   nameInProse,
   telUrl,
   waLinkWith,
@@ -138,6 +140,23 @@ export function shopTelUrl(shop: ShopFacts): string {
   return telUrl(shop.profile.phone.e164);
 }
 
+/**
+ * How to reach the shop, for the page shown when another page crashes
+ * (app/error.tsx): it runs in the browser and can't read the database, so
+ * the root layout hands these down (components/ordering/ShopContext
+ * ShopContactProvider) — the owner's numbers, never yesterday's.
+ */
+export interface ShopContact {
+  name: string;
+  phoneDisplay: string;
+  telUrl: string;
+  whatsappUrl: string;
+}
+
+export function shopContactOf(shop: ShopFacts): ShopContact {
+  return { name: shop.profile.name, phoneDisplay: shop.profile.phone.display, telUrl: shopTelUrl(shop), whatsappUrl: orderWhatsappUrl(shop) };
+}
+
 /** The name in running text (curly apostrophe): "Cheese O’Clock". */
 export function shopNameProse(shop: ShopFacts): string {
   return nameInProse(shop.profile.name);
@@ -151,4 +170,13 @@ export function nameIsDefault(shop: ShopFacts): boolean {
 /** "Open daily · 12 noon – 1 am". */
 export function shopHoursLine(shop: ShopFacts): string {
   return hoursLine(shop.hours);
+}
+
+/**
+ * The hours inside a sentence — "(open daily · 12 noon – 1 am)", "(open
+ * Tue–Sun · 11 am – 11 pm)": only the leading word is lower-cased, the day
+ * names keep their capitals.
+ */
+export function shopHoursInSentence(shop: ShopFacts): string {
+  return `open ${daysWords(shop.hours.days)} · ${hoursRange(shop.hours)}`;
 }

@@ -397,7 +397,8 @@ describe('the routes', () => {
       }),
     );
     expect(res.status).toBe(200);
-  });
+    // A fresh PGlite and the route modules: slow on a loaded machine (the whole suite runs in parallel).
+  }, 60_000);
 
   it('/api/menu names no brand', async () => {
     const { GET } = await import('@/app/api/menu/route');

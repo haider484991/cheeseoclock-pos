@@ -14,7 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { PublishedShopHours, PublishedShopWebsite } from '@cheeseoclock/shared-types';
 import { cheeseTimeFallback, cheeseTimeLine, karachiClock, nextOpening, openByHours } from './cheese-time';
-import { CantPrint, DEFAULT_FACTS, NoMinimumToken, PausedFeeToken, claimHolds, copyText, fillFees, renderCopy, type CopyFacts } from './delivery-facts';
+import { CantPrint, DEFAULT_FACTS, NoMinimumToken, PausedFeeToken, claimHolds, copyText, fillFees, renderCopy, taxed, type Copy, type CopyFacts } from './delivery-facts';
+import * as pageCopy from './page-copy';
+import { DELIVERY_AREAS } from './areas';
 import {
   DEFAULT_SHOP_FACTS,
   nameIsDefault,
@@ -168,23 +170,71 @@ describe('tax in words: the food’s one rate from the published menu', () => {
     expect(taxBpsOf(m, new Set(['fee']))).toBe(1650);
   });
 
-  it('food at two rates names no number: "tax" / "Tax"; a rate of 0 names none either', () => {
+  it('food at two rates names no number: "tax" / "Tax"', () => {
     expect(taxBpsOf(menu(item('a', 'Test Pizza', 1500), item('b', 'Test Drink — 1 litre', 1300)))).toBeNull();
     const words = '{Tax} is added; plus {tax} and';
     expect(fillFees(words, { ...DEFAULT_FACTS, taxBps: null })).toBe('Tax is added; plus tax and');
-    expect(fillFees(words, { ...DEFAULT_FACTS, taxBps: 0 })).toBe('Tax is added; plus tax and');
     expect(fillFees(words, { ...DEFAULT_FACTS, taxBps: 1650 })).toBe('16.5% tax is added; plus 16.5% tax and');
     expect(claimHolds({ oneTaxRate: true }, { ...DEFAULT_FACTS, taxBps: null })).toBe(false);
   });
+
+  it('food taxed at 0%: no sentence says tax is added — {tax} can’t print, and taxed() copy reads its own words', () => {
+    const zero = { ...DEFAULT_FACTS, taxBps: 0 };
+    expect(taxBpsOf(menu(item('a', 'Test Pizza', 0), item('b', 'Test Fries', 0)))).toBe(0);
+    expect(() => fillFees('{Tax} is added', zero)).toThrow(CantPrint);
+    expect(claimHolds({ taxAdded: true }, zero)).toBe(false);
+    // Tax is added at one rate, at mixed rates, and with the menu unknown (today's 15%).
+    for (const taxBps of [1500, null, undefined]) expect(claimHolds({ taxAdded: true }, { ...DEFAULT_FACTS, taxBps })).toBe(true);
+    const copy = taxed({ text: 'Cash only. Plus {tax}.', when: { cashOnly: true }, otherwise: 'Pay {doorPayments}. Plus {tax}.' }, {
+      text: 'Cash only.',
+      when: { cashOnly: true },
+      otherwise: 'Pay {doorPayments}.',
+    });
+    expect(copyText(copy, DEFAULT_FACTS)).toBe('Cash only. Plus 15% tax.');
+    expect(copyText(copy, zero)).toBe('Cash only.');
+    const cardShop = { ...DEFAULT_SHOP_FACTS, website: { ...DEFAULT_SHOP_FACTS.website, doorPayments: ['cash', 'card'] as PublishedShopWebsite['doorPayments'] } };
+    expect(copyText(copy, { ...DEFAULT_FACTS, shop: cardShop })).toBe('Pay cash or card. Plus 15% tax.');
+    expect(copyText(copy, { ...zero, shop: cardShop })).toBe('Pay cash or card.');
+    expect(() => taxed({ text: 'No otherwise {tax}', when: { cashOnly: true } }, 'x')).toThrow(/needs an otherwise/);
+  });
+
+  it('every sentence of the pages that names tax has its words for food at 0% — and none of them says tax is added', () => {
+    const zero: CopyFacts = { ...DEFAULT_FACTS, taxBps: 0 };
+    const cardShop = {
+      ...DEFAULT_SHOP_FACTS,
+      website: { ...DEFAULT_SHOP_FACTS.website, doorPayments: ['cash', 'card'] as PublishedShopWebsite['doorPayments'], pickupPayments: ['cash'] as PublishedShopWebsite['pickupPayments'] },
+    };
+    const copies: Array<[string, Copy]> = [];
+    for (const [name, v] of Object.entries(pageCopy)) {
+      if (typeof v === 'string' || (v && typeof v === 'object' && 'text' in v)) copies.push([name, v as Copy]);
+    }
+    for (const a of DELIVERY_AREAS) {
+      a.faqs.forEach((f, i) => copies.push([`${a.slug} faq ${i}`, f.a]));
+      a.intro.forEach((c, i) => copies.push([`${a.slug} intro ${i}`, c]));
+    }
+    const namesTax = (c: Copy): boolean =>
+      typeof c === 'string' ? /\{[Tt]ax\}/.test(c) : /\{[Tt]ax\}/.test(c.text) || (c.otherwise !== undefined && namesTax(c.otherwise));
+    const taxing = copies.filter(([, c]) => namesTax(c));
+    expect(taxing.length).toBeGreaterThanOrEqual(10);
+    for (const facts of [zero, { ...zero, shop: cardShop }]) {
+      for (const [name, c] of taxing) {
+        const out = renderCopy(c, facts);
+        expect(out, name).not.toBeNull();
+        expect(out!, name).not.toMatch(/\btax is added|plus tax|tax on the bill|tax added/i);
+      }
+    }
+    // With tax added, every one reads as before (the rate named).
+    for (const [name, c] of taxing) expect(renderCopy(c, DEFAULT_FACTS), name).toMatch(/15% tax/);
+  });
 });
 
-describe('the brand line (CheeseTime): by the hours, and by whether the till is taking orders', () => {
+describe('the brand line (CheeseTime): by the owner’s hours alone, as v0.7.30 by today’s', () => {
   const H = { opens: '12:00', closes: '01:00', days: ALL_DAYS };
   const at = (hh: number, mm = 0) => hh * 60 + mm;
   const words = (o: Partial<Parameters<typeof cheeseTimeLine>[0]>) =>
-    cheeseTimeLine({ hours: H, nameIsDefault: true, nameProse: 'Cheese O’Clock', day: 'mon', now: at(20), accepting: null, ...o });
+    cheeseTimeLine({ hours: H, nameIsDefault: true, nameProse: 'Cheese O’Clock', day: 'mon', now: at(20), ...o });
 
-  it('the served line and today’s words by the clock (the status unknown): as before', () => {
+  it('the served line and today’s words by the clock: as before', () => {
     expect(cheeseTimeFallback({ nameIsDefault: true, nameProse: 'Cheese O’Clock' })).toBe('It’s always Cheese O’Clock in DHA.');
     expect(words({ now: at(20, 47) })).toBe('definitely Cheese O’Clock.');
     expect(words({ now: at(0, 30) })).toBe('definitely Cheese O’Clock.');
@@ -193,10 +243,15 @@ describe('the brand line (CheeseTime): by the hours, and by whether the till is 
     expect(words({ now: at(1) })).toBe('we open at 12 noon. Almost Cheese O’Clock.');
   });
 
-  it('the till’s status wins: taking orders → open; not taking them inside the hours → say so; outside → when it opens', () => {
-    expect(words({ now: at(9), accepting: true })).toBe('definitely Cheese O’Clock.');
-    expect(words({ now: at(20), accepting: false })).toBe('the kitchen isn’t taking website orders just now — WhatsApp us.');
-    expect(words({ now: at(9), accepting: false })).toBe('we open at 12 noon. Almost Cheese O’Clock.');
+  it('never asks the website: no request per page view, and the words are v0.7.30’s (the shift’s state is /menu’s to say)', () => {
+    const src = readFileSync(new URL('../components/CheeseTimeClient.tsx', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/\bfetch\s*\(/);
+    expect(src).not.toContain('store-status');
+    expect(src).not.toContain('visibilitychange');
+    // The line never speaks of website orders (v0.7.30 had only the two).
+    for (const now of [at(0, 30), at(1), at(9), at(11, 59), at(12), at(20)]) {
+      expect(words({ now })).toMatch(/^(definitely Cheese O’Clock\.|we open at 12 noon\. Almost Cheese O’Clock\.)$/);
+    }
   });
 
   it('the owner’s hours and days, and another name (no pun)', () => {
@@ -208,8 +263,8 @@ describe('the brand line (CheeseTime): by the hours, and by whether the till is 
     expect(nextOpening(hours, 'thu', at(23, 30))).toBe('tomorrow at 11:30 am');
     expect(nextOpening(hours, 'mon', at(9))).toBe('at 11:30 am');
     const other = { hours, nameIsDefault: false, nameProse: 'Made-Up Kitchen' };
-    expect(cheeseTimeLine({ ...other, day: 'sat', now: at(13), accepting: null })).toBe('we open on Monday at 11:30 am.');
-    expect(cheeseTimeLine({ ...other, day: 'mon', now: at(13), accepting: true })).toBe('the kitchen is open.');
+    expect(cheeseTimeLine({ ...other, day: 'sat', now: at(13) })).toBe('we open on Monday at 11:30 am.');
+    expect(cheeseTimeLine({ ...other, day: 'mon', now: at(13) })).toBe('the kitchen is open.');
     expect(cheeseTimeFallback(other)).toBe('Hot from our kitchen in DHA.');
     // After midnight belongs to the day that opened: open till 01:00 on Sunday night only if Sunday is open.
     const sunOff = { opens: '12:00', closes: '01:00', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as PublishedShopHours['days'] };
@@ -303,7 +358,6 @@ describe('the shop’s details are never typed by hand in the website’s source
   ];
   // The logo's own words (the image says them) and the share images' static alt text.
   const NAME_ALLOWED: Array<[string, string]> = [
-    ['app/page.tsx', '<span className="sr-only">Cheese O&rsquo;Clock.</span>'],
     ['components/BrandMark.tsx', 'alt="Cheese O\'Clock"'],
     ['components/Logo.tsx', 'Cheese O&rsquo;Clock'],
     ['app/opengraph-image.tsx', '"Cheese O\'Clock — Pizza & Burger Delivery in DHA Karachi"'],

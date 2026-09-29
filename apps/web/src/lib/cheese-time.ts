@@ -3,10 +3,10 @@ import { SCHEMA_ORG_DAY, SHOP_DAYS, timeWords, type PublishedShopHours, type Sho
 /**
  * The brand line under the home page's and the late-night page's hero
  * ("It's 8:47 PM in DHA — definitely Cheese O’Clock."), worked out from the
- * owner's opening hours (display only) and, once the page has asked, from
- * whether the till is taking website orders right now (GET
- * /api/store-status: the shift decides, never the hours). Pure: the clock
- * and the status come in (components/CheeseTimeClient.tsx reads them).
+ * owner's opening hours (display only: website orders follow the till's
+ * shift, and /menu says when it is not taking them) — as v0.7.30 worked it
+ * out from today's hours. Pure: the clock comes in
+ * (components/CheeseTimeClient.tsx reads it).
  */
 
 /** Minutes after midnight of "HH:MM". */
@@ -62,21 +62,13 @@ export function cheeseTimeFallback(o: Pick<CheeseTimeInput, 'nameIsDefault' | 'n
 }
 
 /**
- * What follows "It's 8:47 PM in DHA — ":
- *  - taking website orders (the till's status) → "definitely Cheese O’Clock."
- *    (another name: "the kitchen is open.");
- *  - not taking them while the hours say open (the shift not opened yet, a
- *    pause) → "the kitchen isn’t taking website orders just now — WhatsApp us.";
- *  - not taking them, and closed by the hours → "we open at 12 noon. Almost
- *    Cheese O’Clock." (tomorrow / on Monday when not today);
- *  - `accepting` null (the status could not be read) → by the hours alone,
- *    as the line always was.
+ * What follows "It's 8:47 PM in DHA — ", by the hours:
+ *  - open → "definitely Cheese O’Clock." (another name: "the kitchen is open.");
+ *  - closed → "we open at 12 noon. Almost Cheese O’Clock." (tomorrow / on
+ *    Monday when not today; another name: without the pun).
  */
-export function cheeseTimeLine(o: CheeseTimeInput & { day: ShopDay; now: number; accepting: boolean | null }): string {
-  const open = openByHours(o.hours, o.day, o.now);
-  const taking = o.accepting ?? open;
-  if (taking) return o.nameIsDefault ? `definitely ${o.nameProse}.` : 'the kitchen is open.';
-  if (open) return 'the kitchen isn’t taking website orders just now — WhatsApp us.';
+export function cheeseTimeLine(o: CheeseTimeInput & { day: ShopDay; now: number }): string {
+  if (openByHours(o.hours, o.day, o.now)) return o.nameIsDefault ? `definitely ${o.nameProse}.` : 'the kitchen is open.';
   const when = `we open ${nextOpening(o.hours, o.day, o.now)}.`;
   return o.nameIsDefault ? `${when} Almost ${o.nameProse}.` : when;
 }

@@ -57,9 +57,9 @@ export async function generateMetadata({
 }
 
 export default async function AreaPage({ params }: { params: { area: string } }) {
-  await requireStoredFacts();
   const found = getArea(params.area);
   if (!found) notFound();
+  await requireStoredFacts();
   const facts = await getCopyFacts();
   const shop = shopOf(facts);
   const area = renderArea(found, facts);

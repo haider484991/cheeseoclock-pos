@@ -1,5 +1,6 @@
 import { matchHomeItem } from '@cheeseoclock/shared-types';
 import { formatCents } from './format';
+import { isPickupOnly } from './menu-view';
 
 /**
  * The prices the landing pages name (the value deals "from" the cheapest,
@@ -30,6 +31,9 @@ export interface PriceMenu {
       name: string;
       basePriceCents: number;
       sortOrder: number;
+      /** A pick-up-only item (the till's flag, or its description says so) is not a delivery price. */
+      description?: string | null;
+      pickupOnly?: boolean;
       modifierGroups: ReadonlyArray<{ name: string; modifiers: ReadonlyArray<{ name: string; priceDeltaCents: number }> }>;
     }>;
   }>;
@@ -87,12 +91,17 @@ export function isPriceKey(key: string): key is PriceKey {
 
 const fold = (s: string) => s.replace(/[‘’ʼ]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
 
-/** The prices of the line's items that are on the menu (delivery charges never count). */
+/**
+ * The prices of the line's items that are on the menu for DELIVERY: every
+ * page that names them is a delivery page, so an item the till made
+ * pick-up only (menu-view isPickupOnly) does not count, nor does a delivery
+ * charge.
+ */
 function itemPrices(names: readonly string[], menu: PriceMenu, feeItemIds: ReadonlySet<string> | null | undefined): number[] {
   const out: number[] = [];
   for (const name of names) {
     const item = matchHomeItem({ posItemId: null, name }, menu, feeItemIds);
-    if (item) out.push(item.basePriceCents);
+    if (item && !isPickupOnly({ description: item.description ?? null, pickupOnly: item.pickupOnly })) out.push(item.basePriceCents);
   }
   return out;
 }

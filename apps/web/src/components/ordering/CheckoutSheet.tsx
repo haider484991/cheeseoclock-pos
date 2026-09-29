@@ -22,7 +22,7 @@ import {
 import { formatCents } from '@/lib/format';
 import { isPickupOnly } from '@/lib/menu-view';
 import { CHECKOUT_PAY_DELIVERY, CHECKOUT_PAY_PICKUP } from '@/lib/page-copy';
-import { shopHoursLine, whatsappUrlWith } from '@/lib/shop-facts';
+import { shopHoursInSentence, whatsappUrlWith } from '@/lib/shop-facts';
 import { CartLineRow, ClearCartButton, FulfilmentToggle, MinimumNote, Totals, type CartProps } from './cart-ui';
 import { CloseButton, Sheet } from './Sheet';
 import { useShopFacts } from './ShopContext';
@@ -393,7 +393,7 @@ export function CheckoutSheet(
                 </p>
               ) : (
                 <p className="mt-3 rounded-xl border-2 border-ink bg-cheese px-3 py-2 text-sm font-semibold text-ink">
-                  The kitchen isn&rsquo;t taking website orders at the moment ({shopHoursLine(shop).toLowerCase()}). Send
+                  The kitchen isn&rsquo;t taking website orders at the moment ({shopHoursInSentence(shop)}). Send
                   this order on WhatsApp instead — we reply fast.
                 </p>
               ))}

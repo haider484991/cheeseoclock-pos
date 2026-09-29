@@ -42,6 +42,10 @@ export interface CarouselPizza {
   name: string;
   /** 'Large 12"' ('' = none). */
   size: string;
+  /** The word before the size: 'Signature', or the item's /menu section (lib/home-lineup HomeDish.kind). */
+  kind: string;
+  /** Where "Order this →" goes on /menu: the item's own section. */
+  href: string;
   /** The line under the name ('' = none). */
   hook: string;
   /** The photo's src; null = a plain disc. */
@@ -359,10 +363,11 @@ export function PizzaCarousel3DClient({
       <div className="-mt-4 text-center sm:-mt-8" aria-live="polite">
         {current.size ? (
           <p className="font-cond text-xs font-bold uppercase tracking-[0.3em] text-cheese">
-            Signature · {current.size}
+            {`${current.kind} · `}
+            {current.size}
           </p>
         ) : (
-          <p className="font-cond text-xs font-bold uppercase tracking-[0.3em] text-cheese">Signature</p>
+          <p className="font-cond text-xs font-bold uppercase tracking-[0.3em] text-cheese">{current.kind}</p>
         )}
         <h2 key={current.name} className="animate-pop-in font-display text-4xl uppercase tracking-wide text-cream md:text-5xl">
           {current.name}
@@ -377,7 +382,7 @@ export function PizzaCarousel3DClient({
             </span>
           )}
           <Link
-            href="/menu#signature-pizzas"
+            href={current.href}
             className="font-cond text-lg font-bold uppercase tracking-wide text-cream underline decoration-cheese decoration-2 underline-offset-4 hover:text-cheese"
           >
             Order this →

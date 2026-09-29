@@ -6,6 +6,7 @@ import {
   placesWords,
   renderCopy,
   shopOf,
+  taxed,
   zonesFeeChip,
   type Copy,
   type CopyFacts,
@@ -41,7 +42,8 @@ import { shopNameProse } from './shop-facts';
  * page and says delivery there is paused.
  *
  * The shop's details work the same way (sweep B2 + B4, lib/delivery-facts
- * fillFees): {closes}, {waNumbers}, {street}, {nameProse}, {tax},
+ * fillFees): {closes}, {waNumbers}, {street}, {nameProse}, {tax} (in taxed(),
+ * with its words for food taxed at 0%),
  * {doorPayments} …, and a sentence true only for today's hours or cash only
  * carries { everyDay }, { closesAfterMidnight } or { cashOnly }.
  */
@@ -141,12 +143,19 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'How do I pay?',
-        a: {
-          text: 'Cash on delivery — pay the rider when your food arrives. Your bill is the menu total plus {tax} and the {fee:dha-6} delivery fee. No card or app required.',
-          when: { cashOnly: true },
-          otherwise:
-            '{DoorPayments} on delivery — pay the rider when your food arrives. Your bill is the menu total plus {tax} and the {fee:dha-6} delivery fee.',
-        },
+        a: taxed(
+          {
+            text: 'Cash on delivery — pay the rider when your food arrives. Your bill is the menu total plus {tax} and the {fee:dha-6} delivery fee. No card or app required.',
+            when: { cashOnly: true },
+            otherwise:
+              '{DoorPayments} on delivery — pay the rider when your food arrives. Your bill is the menu total plus {tax} and the {fee:dha-6} delivery fee.',
+          },
+          {
+            text: 'Cash on delivery — pay the rider when your food arrives. Your bill is the menu total plus the {fee:dha-6} delivery fee. No card or app required.',
+            when: { cashOnly: true },
+            otherwise: '{DoorPayments} on delivery — pay the rider when your food arrives. Your bill is the menu total plus the {fee:dha-6} delivery fee.',
+          },
+        ),
       },
     ],
     adjacent: ['dha-phase-7', 'dha-phase-5', 'dha-phase-8'],
@@ -212,13 +221,21 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'Is there a minimum order for Phase 7?',
-        a: {
-          text: 'No minimum on the website. You pay {doorPayments} on delivery: the menu total plus {tax} and the {fee:dha-7,dha-7-ext} delivery fee.',
-          // The owner's smallest website delivery order (Settings → Online orders on the till).
-          when: { noMinimum: true },
-          otherwise:
-            'For delivery, yes: {minOrder} of food, before tax and the delivery fee — pick-up has no minimum. You pay {doorPayments} on delivery: the menu total plus {tax} and the {fee:dha-7,dha-7-ext} delivery fee.',
-        },
+        a: taxed(
+          {
+            text: 'No minimum on the website. You pay {doorPayments} on delivery: the menu total plus {tax} and the {fee:dha-7,dha-7-ext} delivery fee.',
+            // The owner's smallest website delivery order (Settings → Online orders on the till).
+            when: { noMinimum: true },
+            otherwise:
+              'For delivery, yes: {minOrder} of food, before tax and the delivery fee — pick-up has no minimum. You pay {doorPayments} on delivery: the menu total plus {tax} and the {fee:dha-7,dha-7-ext} delivery fee.',
+          },
+          {
+            text: 'No minimum on the website. You pay {doorPayments} on delivery: the menu total plus the {fee:dha-7,dha-7-ext} delivery fee.',
+            when: { noMinimum: true },
+            otherwise:
+              'For delivery, yes: {minOrder} of food, before the delivery fee — pick-up has no minimum. You pay {doorPayments} on delivery: the menu total plus the {fee:dha-7,dha-7-ext} delivery fee.',
+          },
+        ),
       },
     ],
     adjacent: ['dha-phase-6', 'dha-phase-8'],
@@ -368,11 +385,18 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'Can I pay by card?',
-        a: {
-          text: 'Not at the moment — every order is cash on delivery. The bill is the menu total plus {tax} and the {fee:dha-5} delivery fee.',
-          when: { cashOnly: true },
-          otherwise: 'The rider takes {doorPayments}. The bill is the menu total plus {tax} and the {fee:dha-5} delivery fee.',
-        },
+        a: taxed(
+          {
+            text: 'Not at the moment — every order is cash on delivery. The bill is the menu total plus {tax} and the {fee:dha-5} delivery fee.',
+            when: { cashOnly: true },
+            otherwise: 'The rider takes {doorPayments}. The bill is the menu total plus {tax} and the {fee:dha-5} delivery fee.',
+          },
+          {
+            text: 'Not at the moment — every order is cash on delivery. The bill is the menu total plus the {fee:dha-5} delivery fee.',
+            when: { cashOnly: true },
+            otherwise: 'The rider takes {doorPayments}. The bill is the menu total plus the {fee:dha-5} delivery fee.',
+          },
+        ),
       },
     ],
     adjacent: ['dha-phase-6', 'dha-phase-4', 'clifton'],
@@ -501,7 +525,10 @@ export const DELIVERY_AREAS: DeliveryArea[] = [
       },
       {
         q: 'Is it still cash on delivery this far out?',
-        a: 'Always — same as every zone. Pay the rider when the food arrives: the menu total plus {tax} and the {fee:dha-1,dha-2,dha-2-ext} delivery fee.',
+        a: taxed(
+          'Always — same as every zone. Pay the rider when the food arrives: the menu total plus {tax} and the {fee:dha-1,dha-2,dha-2-ext} delivery fee.',
+          'Always — same as every zone. Pay the rider when the food arrives: the menu total plus the {fee:dha-1,dha-2,dha-2-ext} delivery fee.',
+        ),
       },
     ],
     adjacent: ['dha-phase-4'],

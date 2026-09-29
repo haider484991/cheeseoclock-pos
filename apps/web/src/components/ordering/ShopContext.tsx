@@ -1,7 +1,7 @@
 'use client';
 
-import { createContext, useContext } from 'react';
-import { DEFAULT_SHOP_FACTS, type ShopFacts } from '@/lib/shop-facts';
+import { createContext, useContext, type ReactNode } from 'react';
+import { DEFAULT_SHOP_FACTS, shopContactOf, type ShopContact, type ShopFacts } from '@/lib/shop-facts';
 
 /**
  * The shop's details (lib/shop-facts) for the ordering page's deep parts —
@@ -14,4 +14,19 @@ export const ShopFactsContext = createContext<ShopFacts>(DEFAULT_SHOP_FACTS);
 
 export function useShopFacts(): ShopFacts {
   return useContext(ShopFactsContext);
+}
+
+/**
+ * How to reach the shop, for every page's error screen (app/error.tsx runs in
+ * the browser, inside the root layout, and can't read the database). The
+ * root layout provides the owner's; without it: today's.
+ */
+const ShopContactContext = createContext<ShopContact>(shopContactOf(DEFAULT_SHOP_FACTS));
+
+export function ShopContactProvider({ contact, children }: { contact: ShopContact; children: ReactNode }) {
+  return <ShopContactContext.Provider value={contact}>{children}</ShopContactContext.Provider>;
+}
+
+export function useShopContact(): ShopContact {
+  return useContext(ShopContactContext);
 }

@@ -55,6 +55,7 @@ import {
   allergyLacksGuarantee,
   allergySummary,
   cardPart,
+  closesLabel,
   closingTimes,
   contactFromForm,
   contactSummary,
@@ -336,8 +337,7 @@ function OpeningHoursFields({ s }: { s: ReturnType<typeof useShopSetting<'shop.h
             {!closes.includes(f.closes) && <option value={f.closes}>{timeLabel(f.closes)} (pick again)</option>}
             {closes.map((t) => (
               <option key={t} value={t}>
-                {timeLabel(t)}
-                {t < '05:00' ? ' (after midnight)' : ''}
+                {closesLabel(t)}
               </option>
             ))}
           </select>
@@ -682,6 +682,7 @@ function HomePageFields({ s }: { s: ReturnType<typeof useShopSetting<'website.ho
               .filter((e) => e.item)
               .map((e) => `${e.item!.name} ${formatCents(e.item!.priceCents)}`)
               .join(' · ') || 'no featured items'}
+            <span className="mt-1 block text-xs">{WEBSITE_SHOP_WORDS.homePreview}</span>
           </div>
         </div>
       }
@@ -743,7 +744,7 @@ function EntryRow(p: {
           }}
           className={cn(inputClass, 'max-w-md')}
         >
-          {!p.found && <option value="">Not on the website: {p.entry.itemRef.name}</option>}
+          {!p.found && <option value="">Not found: {p.entry.itemRef.name}</option>}
           {p.items.map((i) => (
             <option key={i.id} value={i.id}>
               {i.name} · {formatCents(i.priceCents)}

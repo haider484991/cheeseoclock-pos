@@ -1,4 +1,4 @@
-import { ALL_COMPILED_ZONE_IDS, type Copy } from './delivery-facts';
+import { ALL_COMPILED_ZONE_IDS, taxed, type Copy } from './delivery-facts';
 
 /**
  * Page sentences that name a delivery fee or where the shop delivers — and
@@ -117,7 +117,8 @@ export const BURGER_FAQ_AREAS: Copy = {
 //  - the name: {name} / {nameProse}; a line built on its pun ("It's always
 //    …") prints only while the name is today's ({ nameIsDefault }), else
 //    plain words;
-//  - tax: {tax} / {Tax} — the food's one rate, or no number.
+//  - tax: {tax} / {Tax} — the food's one rate, or no number; every sentence
+//    that names tax is taxed(…, its words for food taxed at 0%).
 // ---------------------------------------------------------------------------
 
 /** The root layout: the site's title, and the template every page's title goes into. */
@@ -147,7 +148,7 @@ export const WA_LATE_NIGHT: Copy = 'Hi {name}! Late night order please: ';
 export const WA_HUB: Copy = 'Hi {name}! Do you deliver to my area? My address is: ';
 
 /** Footer: the chip under the tagline. */
-export const FOOTER_PAY_CHIP: Copy = 'Cash on delivery · {tax} on the bill';
+export const FOOTER_PAY_CHIP: Copy = taxed('Cash on delivery · {tax} on the bill', 'Cash on delivery');
 /** Footer: the late-night page's link (the page is always there; its title follows the closing time). */
 export const FOOTER_LATE_LINK: Copy = 'Late-night delivery (till {closes})';
 
@@ -174,8 +175,10 @@ export const HOME_STAT_DAYS: Copy = { text: 'open every day', when: { everyDay: 
 /** Home FAQ, "What are your hours?". */
 export const HOME_FAQ_HOURS: Copy = { text: 'Every day from {opens} to {closes}.', when: { everyDay: true }, otherwise: '{days} from {opens} to {closes}.' };
 /** Home FAQ, "How do I pay?". */
-export const HOME_FAQ_PAY: Copy =
-  '{DoorPayments} on delivery. {Tax} is added on the bill, and the printed receipt from the kitchen is the final amount.';
+export const HOME_FAQ_PAY: Copy = taxed(
+  '{DoorPayments} on delivery. {Tax} is added on the bill, and the printed receipt from the kitchen is the final amount.',
+  '{DoorPayments} on delivery. The printed receipt from the kitchen is the final amount.',
+);
 /** Home FAQ, "Can I order on WhatsApp instead?". */
 export const HOME_FAQ_WHATSAPP: Copy =
   "Yes — message {waNumbers} with your order and address, and we'll confirm the total. Same kitchen, same prices.";
@@ -194,12 +197,22 @@ export const PIZZA_INTRO: Copy = {
   otherwise:
     'Craving pizza in DHA? Ours bakes in our Phase 6 kitchen and rides out across every DHA phase and Clifton — Signature pies and regular pizzas in Medium 9" or Large 12", fired to order and paid at your door. Order on the website in under a minute, or send your order on WhatsApp; both land straight in the kitchen.',
 };
+/** Under the intro: nothing to install, nothing to pay online — while the rider takes cash only (a wallet or a bank transfer at the door is paid online). */
+export const PIZZA_NO_APP: Copy = {
+  text: 'No app downloads, no online payments: the box goes from the oven to the rider and is opened by you. If a pizza ever arrives in a state we would not serve, message us on WhatsApp.',
+  when: { cashOnly: true },
+  otherwise:
+    'No app downloads, nothing to pay before it arrives: the box goes from the oven to the rider and is opened by you. If a pizza ever arrives in a state we would not serve, message us on WhatsApp.',
+};
 export const PIZZA_FAQ_LATE: Copy = {
   text: 'Yes — we take orders every day from {opens} until {closes}, on the website and on WhatsApp.',
   when: { everyDay: true },
   otherwise: 'Yes — we take orders {days}, from {opens} until {closes}, on the website and on WhatsApp.',
 };
-export const PIZZA_FAQ_PAY: Copy = '{DoorPayments} on delivery on every order. The bill is the menu total plus {tax} and your area’s delivery fee.';
+export const PIZZA_FAQ_PAY: Copy = taxed(
+  '{DoorPayments} on delivery on every order. The bill is the menu total plus {tax} and your area’s delivery fee.',
+  '{DoorPayments} on delivery on every order. The bill is the menu total plus your area’s delivery fee.',
+);
 /** The order band's heading (upper-cased). */
 export const PIZZA_CTA: Copy = { text: "PIZZA CRAVING? IT'S {name}.", when: { nameIsDefault: true }, otherwise: 'PIZZA CRAVING? ORDER UP.' };
 /** The page's JSON-LD WebPage description. */
@@ -215,11 +228,18 @@ export const BURGER_INTRO_ORDER: Copy = {
   when: { everyDay: true },
   otherwise: 'Order online in under a minute or send a WhatsApp — both are cash on delivery, {days}, from {opens} to {closes}.',
 };
-export const BURGER_FAQ_PAY: Copy = {
-  text: 'Cash on delivery on every order — no cards or wallets needed. The bill is the menu total plus {tax} and your area’s delivery fee.',
-  when: { cashOnly: true },
-  otherwise: 'No — the rider takes {doorPayments}. The bill is the menu total plus {tax} and your area’s delivery fee.',
-};
+export const BURGER_FAQ_PAY: Copy = taxed(
+  {
+    text: 'Cash on delivery on every order — no cards or wallets needed. The bill is the menu total plus {tax} and your area’s delivery fee.',
+    when: { cashOnly: true },
+    otherwise: 'No — the rider takes {doorPayments}. The bill is the menu total plus {tax} and your area’s delivery fee.',
+  },
+  {
+    text: 'Cash on delivery on every order — no cards or wallets needed. The bill is the menu total plus your area’s delivery fee.',
+    when: { cashOnly: true },
+    otherwise: 'No — the rider takes {doorPayments}. The bill is the menu total plus your area’s delivery fee.',
+  },
+);
 /** The order band's heading (upper-cased). */
 export const BURGER_CTA: Copy = { text: "BURGER MOOD? IT'S {name}.", when: { nameIsDefault: true }, otherwise: 'BURGER MOOD? ORDER UP.' };
 /** The page's JSON-LD WebPage description. */
@@ -276,8 +296,10 @@ export const LATE_NIGHT_FAQ_AREAS_Q: Copy = {
   when: { closesAfterMidnight: true },
   otherwise: 'Which areas do you cover late at night?',
 };
-export const LATE_NIGHT_FAQ_PAY: Copy =
-  '{DoorPayments} on delivery, same as always — the menu total plus {tax} and your area’s delivery fee. If the house is asleep, say so in the order notes and keep your phone on for the rider.';
+export const LATE_NIGHT_FAQ_PAY: Copy = taxed(
+  '{DoorPayments} on delivery, same as always — the menu total plus {tax} and your area’s delivery fee. If the house is asleep, say so in the order notes and keep your phone on for the rider.',
+  '{DoorPayments} on delivery, same as always — the menu total plus your area’s delivery fee. If the house is asleep, say so in the order notes and keep your phone on for the rider.',
+);
 /** The order band's heading (upper-cased). */
 export const LATE_NIGHT_CTA: Copy = {
   text: 'MIDNIGHT CRAVING? STILL {name}.',
@@ -304,8 +326,23 @@ export const MENU_DESCRIPTION: Copy =
   'Full {name} menu with prices in PKR — five signature pizzas, regular pizzas in Medium 9" and Large 12", crispy chicken burgers, fries, wings and value deals. Cash on delivery across DHA & Clifton.';
 /** /menu's JSON-LD WebPage name. */
 export const MENU_PAGE_NAME: Copy = '{name} Menu & Prices';
-/** /menu, the line under the sections. */
-export const MENU_FOOT_LINE: Copy = 'Prices in PKR · {tax} added on the bill · pay {doorPayments} on delivery or at the counter';
+/**
+ * /menu, the line under the sections. "on delivery or at the counter" names
+ * one list for both only while the rider and the counter take the same;
+ * otherwise each its own.
+ */
+export const MENU_FOOT_LINE: Copy = taxed(
+  {
+    text: 'Prices in PKR · {tax} added on the bill · pay {doorPayments} on delivery or at the counter',
+    when: { samePayments: true },
+    otherwise: 'Prices in PKR · {tax} added on the bill · pay {doorPayments} on delivery and {pickupPayments} at the counter',
+  },
+  {
+    text: 'Prices in PKR · pay {doorPayments} on delivery or at the counter',
+    when: { samePayments: true },
+    otherwise: 'Prices in PKR · pay {doorPayments} on delivery and {pickupPayments} at the counter',
+  },
+);
 /** The checkout's last line: how the customer pays (delivery, pick-up). */
 export const CHECKOUT_PAY_DELIVERY: Copy = {
   text: 'You pay the rider in cash. The printed receipt from the kitchen is the final bill.',

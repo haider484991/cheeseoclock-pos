@@ -20,7 +20,9 @@ import {
   SHOP_CARD_FIELDS,
   allergyFromForm,
   allergyLacksGuarantee,
+  WEBSITE_SHOP_WORDS,
   cardPart,
+  closesLabel,
   closingTimes,
   contactFromForm,
   contactSummary,
@@ -149,6 +151,19 @@ describe('Opening hours', () => {
     expect(hoursFromForm({ opens: '12:00', closes: '01:00', days: [] }, DEFAULT_SHOP_HOURS).problem).toMatch(/at least one day/);
   });
 
+  it('the Closes list calls a time "after midnight" only when the website does: midnight itself is not (its late-night warning agrees)', () => {
+    expect(closesLabel('00:00')).toBe('midnight');
+    expect(hoursEffects({ ...DEFAULT_SHOP_HOURS, closes: '00:00' }).join(' ')).toMatch(/needs a closing time after midnight/);
+    expect(closesLabel('00:15')).toBe('12:15 am (after midnight)');
+    expect(closesLabel('01:00')).toBe('1 am (after midnight)');
+    expect(closesLabel('04:45')).toBe('4:45 am (after midnight)');
+    expect(closesLabel('23:45')).toBe('11:45 pm');
+    // The card's list is these words.
+    const cards = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'WebsiteShopSettings.tsx'), 'utf8');
+    expect(cards).toContain('{closesLabel(t)}');
+    expect(cards).not.toMatch(/'\s*\(after midnight\)'/);
+  });
+
   it('says what else follows: no "daily", no late night, no lunch — and nothing for today’s hours', () => {
     expect(hoursEffects(DEFAULT_SHOP_HOURS)).toEqual([]);
     const effects = hoursEffects({ opens: '14:00', closes: '23:00', days: ['mon', 'tue'] });
@@ -255,12 +270,15 @@ const menuItems = [
   item('fee-1', 'c-fees', 'Delivery Charge (Rs 200)', 20_000),
   item('fee-2', 'c-fees', 'Test Area Fee', 25_000),
   item('d-1', 'c-deal', 'Test Deal', 300_000),
+  // On the website at Rs 0 (priced only by its choices): the website never features it.
+  item('p-7', 'c-pizza', 'Test Zero Pizza', 0),
 ];
 const pickable = pickableItems(menuItems, cats, new Set(['fee-2']));
 
 describe('the Home page card: only items on the website, never a delivery charge', () => {
-  it('lists what the next publish sends (pick-up only too), in the menu’s order — not items off the website, hidden, or delivery charges', () => {
+  it('lists what the next publish sends (pick-up only too), in the menu’s order — not items off the website, hidden, at Rs 0, or delivery charges', () => {
     expect(pickable.map((i) => i.id)).toEqual(['d-1', 'p-2', 'p-1', 'p-3']);
+    expect(pickable.some((i) => i.priceCents === 0)).toBe(false);
     expect(pickable[0]).toMatchObject({ name: 'Test Deal', priceCents: 300_000, categoryName: 'Test Deals' });
   });
 
@@ -276,6 +294,9 @@ describe('the Home page card: only items on the website, never a delivery charge
     expect(p.deals[0]!.item?.id).toBe('d-1');
     expect(homeMissingHere(home, pickable)).toEqual(['Gone Pizza', 'Test Off Pizza']);
     expect(homeMissingWords(['Gone Pizza', 'Test Off Pizza'])).toMatch(/left off the home page: “Gone Pizza” and “Test Off Pizza”/);
+    // An item on the website at Rs 0 is left off too: the words say "at a price", never only "not on the website".
+    expect(homePreview({ pizzas: [{ itemRef: { posItemId: 'p-7', name: 'Test Zero Pizza' } }], burger: null, deals: [] }, pickable).pizzas[0]!.item).toBeNull();
+    expect(homeMissingWords(['Test Zero Pizza'])).toMatch(/^Not on the website’s menu at a price, so left off the home page: “Test Zero Pizza”\. Put the item on the website with its price/);
     expect(homeMissingWords([])).toBeNull();
     // Today's lineup against this made-up menu: all missing.
     expect(homeMissingHere(DEFAULT_WEBSITE_HOME, pickable)).toHaveLength(9);
@@ -364,6 +385,18 @@ describe('M6: one fallback name for the till’s own screens', () => {
   it('the printed receipt keeps its own default (not this setting): Receipt branding’s name is untouched', () => {
     expect(read('features/settings/BrandingSettings.tsx')).toMatch(/const DEFAULT_NAME = 'Cheese O Clock';/);
     expect(read('features/settings/BrandingSettings.tsx')).toMatch(/Receipt: shop details \(this till\)/);
+  });
+
+  it('the Home card’s preview says its prices are the till’s and a Save sends no menu (press Publish after menu changes)', () => {
+    const cards = read('features/settings/WebsiteShopSettings.tsx');
+    expect(cards).toContain('{WEBSITE_SHOP_WORDS.homePreview}');
+    expect(WEBSITE_SHOP_WORDS.homePreview).toMatch(/this till’s/);
+    expect(WEBSITE_SHOP_WORDS.homePreview).toMatch(/press Publish/);
+    expect(cards).not.toMatch(/Not on the website: \{p\.entry/);
+  });
+
+  it('a new name: the card says the WhatsApp greeting is its own setting to change too', () => {
+    expect(WEBSITE_SHOP_WORDS.nameRebrand).toMatch(/greeting on the “Order on WhatsApp” buttons is its own setting/);
   });
 
   it('Shop & logo shows the website’s shop details group, on the owner-only tab', () => {

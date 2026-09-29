@@ -14,6 +14,7 @@ import {
   PIZZA_FAQ_LATE,
   PIZZA_FAQ_PAY,
   PIZZA_INTRO,
+  PIZZA_NO_APP,
   PIZZA_PAGE_DESCRIPTION,
   WA_PIZZA,
 } from '@/lib/page-copy';
@@ -127,11 +128,7 @@ export default async function PizzaDeliveryPage() {
             PIZZA DELIVERY IN DHA KARACHI — FIRED TO ORDER
           </h1>
           <p className="mt-5 leading-relaxed text-cream/80">{copyText(PIZZA_INTRO, facts)}</p>
-          <p className="mt-4 leading-relaxed text-cream/80">
-            No app downloads, no online payments: the box goes from the oven
-            to the rider and is opened by you. If a pizza ever arrives in a
-            state we would not serve, message us on WhatsApp.
-          </p>
+          <p className="mt-4 leading-relaxed text-cream/80">{copyText(PIZZA_NO_APP, facts)}</p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
               href="/menu"

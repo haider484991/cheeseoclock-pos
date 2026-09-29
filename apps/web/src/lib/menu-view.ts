@@ -329,7 +329,8 @@ export function sectionTitle(categoryName: string): string {
   return SECTION_TITLES[categoryName.trim().toLowerCase()] ?? categoryName;
 }
 
-function anchorFor(name: string): string {
+/** A section's anchor on /menu, from its title (sectionTitle): "Signature Pizzas" → signature-pizzas. */
+export function anchorFor(name: string): string {
   return name
     .toLowerCase()
     .replace(/&/g, 'and')

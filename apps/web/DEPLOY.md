@@ -282,11 +282,13 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   read never makes it dynamic: it takes the details at build, and again
   after a publish revalidates the site. The app manifest is static and
   follows within the hour (a publish's revalidation does not reach a route
-  handler). `error.tsx` runs in the browser and always shows today's
-  details. Check with a build that the route table is unchanged
-  (`○ /`, `○ /_not-found`, `● /delivery/[area]`, `ƒ /menu`, `ƒ /track/[id]`),
-  also with a bogus `DATABASE_URL` (`postgres://u:p@db.invalid/x`) so the
-  reads are attempted during the build.
+  handler). `error.tsx` runs in the browser: the root layout hands it the
+  owner's name and numbers (`ShopContactProvider`). Check with a build that
+  the route table is unchanged (`○ /`, `○ /_not-found`, `● /delivery/[area]`,
+  `ƒ /menu`, `ƒ /track/[id]`), with no `DATABASE_URL`, and with one that
+  answers (a Neon branch, or a local stand-in) so the reads are made during
+  the build. A `DATABASE_URL` that can't be reached now FAILS the build by
+  design (see "A database the website can't read" below).
 - **The words.** Hours are tokens (`{hours}`, `{opens}`, `{closes}`, `{days}`);
   "daily", "every day" and "every night" show only while the shop opens all
   seven days; "past midnight" (the late-night page's premise) only while it
@@ -299,11 +301,20 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   `sameAs`, both only when there is one. The logo, the share images' alt
   text and the prose naming the kitchen's street ("Rahat Commercial", "our
   Phase 6 kitchen") stay in code: the till's address card says so.
-- **The home page's brand line (CheeseTime)** now asks `/api/store-status`
-  once after the page loads (and again when the tab comes back): while the
-  till is not taking website orders inside the opening hours it says so
-  ("the kitchen isn't taking website orders just now — WhatsApp us") instead
-  of "definitely Cheese O'Clock". The page as served is unchanged.
+- **The home page's brand line (CheeseTime)** works from the owner's opening
+  hours alone, as v0.7.30 did from today's: it never asks the website (no
+  request per page view). Whether the kitchen is taking website orders is
+  `/menu`'s closed banner's to say.
+- **A database the website can't read.** A page Next KEEPS (the home page,
+  the delivery hub and area pages, the three landing pages, `/_not-found`,
+  the app manifest) whose read fails on a server that has read nothing yet
+  now FAILS instead of rendering today's details with no prices: Next keeps
+  serving the last good page and tries again. So a **build** (`next build`
+  with a `DATABASE_URL`) whose database can't be reached fails, and the
+  live site stays on the last deploy — redeploy once Neon answers. A read
+  that fails after one succeeded renders from that one (as before); no
+  `DATABASE_URL` at all builds today's site (without menu prices); `/menu`
+  and `/track` (dynamic) still render from today's details rather than fail.
 - **Prices, deals and tax from the menu (sweep B2).** No menu price is typed
   in the website's code any more: the home page's featured pizzas, burger and
   value deals (the owner's Home page card; today's five signature pizzas, the

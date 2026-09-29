@@ -1,5 +1,5 @@
 import { homeLineup, type HomeEntry, type PublishedMenuCategory, type PublishedWebsiteHome } from '@cheeseoclock/shared-types';
-import { dealWorthCents, drinkFlavourName, shopPhotoFor, sizeLabel, splitSizedName, withoutDrinkBrand } from './menu-view';
+import { anchorFor, dealWorthCents, drinkFlavourName, sectionTitle, shopPhotoFor, sizeLabel, splitSizedName, withoutDrinkBrand } from './menu-view';
 import { curatedDealWhat, curatedDish } from './signatures';
 
 /**
@@ -43,8 +43,10 @@ export interface HomeDish {
   name: string;
   /** 'Large 12"' ('' = none). */
   size: string;
-  /** The card's small line: 'Signature · Large 12"', 'Signature burger'. */
+  /** The card's small line: 'Signature · Large 12"', 'Signature burger'; another section's item: 'Regular Pizzas · Large 12"'. */
   label: string;
+  /** The carousel's word before the size: 'Signature', else the item's /menu section ('Regular Pizzas'). */
+  kind: string;
   /** The carousel's line under the name ('' = none). */
   hook: string;
   description: string | null;
@@ -54,8 +56,28 @@ export interface HomeDish {
   shopPhoto: boolean;
   /** The menu's price; null = the menu unknown (no badge). */
   priceCents: number | null;
-  /** Where "Order it →" goes on /menu. */
+  /** Where "Order it →" goes on /menu: the item's own section there. */
   href: string;
+}
+
+/**
+ * Where a featured item sits on /menu, and whether it is a signature: its
+ * section's anchor (the same one /menu gives it: menu-view sectionTitle +
+ * anchorFor), and "signature" when its section or its name says so. Today's
+ * lineup reads as always (the Signature Pizzas section; the Signature Cheese
+ * Dipped in Burgers); an owner's pick from another section is labelled and
+ * linked by that section ("Regular Pizzas · Large 12"", #regular-pizzas),
+ * never called a signature. The menu unknown (no item): today's places.
+ */
+function placeOf(slot: Slot, itemName: string | null, categoryName: string | null): { signature: boolean; section: string; href: string } {
+  if (itemName === null || categoryName === null) {
+    return slot === 'burger'
+      ? { signature: true, section: 'Burgers', href: '/menu#burgers' }
+      : { signature: true, section: 'Signature Pizzas', href: '/menu#signature-pizzas' };
+  }
+  const section = sectionTitle(categoryName);
+  const signature = /\bsignature\b/i.test(categoryName) || /\bsignature\b/i.test(itemName);
+  return { signature, section, href: `/menu#${anchorFor(section)}` };
 }
 
 /** A featured value deal as the home page shows it. */
@@ -97,22 +119,26 @@ function dish(
   slot: Slot,
   item: { posItemId: string; name: string; description: string | null; basePriceCents: number } | null,
   photos: Readonly<Record<string, string>> | undefined,
+  categoryName: string | null = null,
 ): Omit<HomeDish, 'key'> {
   const { base, size } = splitSizedName(item ? item.name : entry.itemRef.name);
   const curated = curatedDish(base);
   const shopPhoto = shopPhotoFor(base);
   const photoVersion = item ? photos?.[item.posItemId] : undefined;
   const sizeWords = sizeLabel(size, base);
+  const place = placeOf(slot, item ? item.name : null, categoryName);
+  const kind = place.signature ? 'Signature' : place.section;
   return {
     name: drinkFlavourName(base),
     size: sizeWords,
-    label: slot === 'burger' ? 'Signature burger' : sizeWords ? `Signature · ${sizeWords}` : 'Signature',
+    label: slot === 'burger' && place.signature ? 'Signature burger' : sizeWords ? `${kind} · ${sizeWords}` : kind,
+    kind,
     hook: ownWords(entry.headline) ?? curated?.hook ?? '',
     description: ownWords(entry.text) ?? curated?.description ?? (item ? withoutDrinkBrand(item.description) : null),
     image: shopPhoto ?? (item && photoVersion ? tillPhotoSrc(item.posItemId, photoVersion) : null),
     shopPhoto: shopPhoto !== null,
     priceCents: item ? item.basePriceCents : null,
-    href: slot === 'burger' ? '/menu#burgers' : '/menu#signature-pizzas',
+    href: place.href,
   };
 }
 
@@ -157,8 +183,14 @@ export function resolveHome(
     };
   }
   const lineup = homeLineup(home, menu, feeItemIds);
-  const pizzas = lineup.pizzas.flatMap((l) => (l.item ? [dish(l.entry, 'pizza', l.item, menu.photos)] : []));
-  const burger = lineup.burger?.item ? dish(lineup.burger.entry, 'burger', lineup.burger.item, menu.photos) : null;
+  // Each item's section on the menu (its label and its link on /menu).
+  const categoryOf = new Map<string, string>();
+  for (const c of menu.categories) for (const i of c.items) if (!categoryOf.has(i.posItemId)) categoryOf.set(i.posItemId, c.name);
+  const sectionOf = (id: string) => categoryOf.get(id) ?? null;
+  const pizzas = lineup.pizzas.flatMap((l) => (l.item ? [dish(l.entry, 'pizza', l.item, menu.photos, sectionOf(l.item.posItemId))] : []));
+  const burger = lineup.burger?.item
+    ? dish(lineup.burger.entry, 'burger', lineup.burger.item, menu.photos, sectionOf(lineup.burger.item.posItemId))
+    : null;
   const dishes = withKeys([...pizzas, ...(burger ? [burger] : [])]);
   return {
     menuKnown: true,
@@ -184,6 +216,16 @@ export function resolveHome(
 /** The signatures grid: the pizzas, then the burger. */
 export function homeDishes(view: HomeView): HomeDish[] {
   return [...view.pizzas, ...(view.burger ? [view.burger] : [])];
+}
+
+/**
+ * The deals section's two fixed lines ("Every deal comes with a 1 litre soft
+ * drink", "Choice of pizzas only from the regular menu") are facts of
+ * today's three deals (lib/signatures): they print only while every deal
+ * shown is one of them.
+ */
+export function dealsAreTodays(view: HomeView): boolean {
+  return view.deals.every((d) => curatedDealWhat(d.name) !== null);
 }
 
 /** The hero's "Value deals from …": the cheapest deal shown with a price, or null. */

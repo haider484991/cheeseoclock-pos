@@ -139,7 +139,7 @@ export const WEBSITE_SHOP_WORDS = {
   name:
     'The website’s name for the shop: page titles, search results, the footer, the share pictures and WhatsApp messages. Not the printed receipt (Receipt: shop details, above, each till its own) and not the FBR invoice (Settings → FBR).',
   nameRebrand:
-    'The logo, the website address and the printed menu don’t change by themselves. Lines built on today’s name (like “It’s always Cheese O’Clock”) switch to plain words.',
+    'The logo, the website address and the printed menu don’t change by themselves. Lines built on today’s name (like “It’s always Cheese O’Clock”) switch to plain words. The greeting on the “Order on WhatsApp” buttons is its own setting (WhatsApp & social, below): change it to the new name too.',
   address:
     'The map pin, the Maps link and the Google listing stay as they are, and so do a few sentences that name the area (“our DHA Phase 6 kitchen”, “Rahat Commercial”) — ask whoever looks after the website to change those.',
   priceRange: 'For search engines (it is not shown on the pages). It should match the price range on your Google listing.',
@@ -154,6 +154,8 @@ export const WEBSITE_SHOP_WORDS = {
     'Shown on the menu page and at checkout. Keep the “shares equipment, can’t guarantee” sentence: it is what protects the shop. It is the printed menu’s wording too.',
   home:
     'Which items the home page features. Prices come from the menu. An item not on the website’s menu (hidden, off the website, renamed or deleted) is left off the home page — never shown at Rs 0. Drink brand names are never shown.',
+  homePreview:
+    'Prices here are this till’s. Saving sends only the home page: the website shows the menu as last published — after changing prices or adding an item, press Publish.',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -290,6 +292,16 @@ export function hoursEffects(h: Pick<ShopHours, 'opens' | 'closes' | 'days'>): s
 
 /** "12 noon" for a time, for the card's lists. */
 export const timeLabel = timeWords;
+
+/**
+ * A closing time in the card's list: "1 am (after midnight)" for the times
+ * the website counts as after midnight (closesAfterMidnight: 00:15–04:45);
+ * midnight itself is just "midnight" — the late-night page does not count
+ * closing AT midnight as after it, and the card must not say it does.
+ */
+export function closesLabel(t: string): string {
+  return closesAfterMidnight({ closes: t }) ? `${timeWords(t)} (after midnight)` : timeWords(t);
+}
 
 // ---------------------------------------------------------------------------
 // Payments at the door ('shop.website' doorPayments, pickupPayments)
@@ -433,8 +445,10 @@ export interface PickableItem {
 
 /**
  * The items the home page can feature: those the next publish sends
- * (publishWords itemWebsiteState: on the website or pick-up only), never a
- * delivery charge, in the menu's order (categories by display order).
+ * (publishWords itemWebsiteState: on the website or pick-up only), priced
+ * above Rs 0 (the website never features one at Rs 0 — shared-types
+ * matchHomeItem), never a delivery charge, in the menu's order (categories
+ * by display order).
  */
 export function pickableItems(
   items: readonly MenuItem[],
@@ -444,6 +458,7 @@ export function pickableItems(
   const cats = new Map(categories.map((c) => [c.id, c]));
   return items
     .filter((i) => {
+      if (!(i.basePriceCents > 0)) return false;
       const fee = isDeliveryChargeMenuItem(i, feeItemIds);
       const state = itemWebsiteState(i, cats.get(i.categoryId), fee);
       return state !== 'fee' && goesToWebsite(state);
@@ -483,10 +498,14 @@ export function homeMissingHere(home: Pick<WebsiteHome, 'pizzas' | 'burger' | 'd
   return [...p.pizzas, ...(p.burger ? [p.burger] : []), ...p.deals].filter((e) => e.item === null).map((e) => e.entry.itemRef.name);
 }
 
-/** "Not on the website’s menu, so left off the home page: A and B." (null when all are there) */
+/**
+ * "Not on the website’s menu at a price, so left off the home page: A and
+ * B." (null when all are there). "At a price": an item on the website at Rs
+ * 0 is left off too (never shown at Rs 0).
+ */
 export function homeMissingWords(names: readonly string[]): string | null {
   if (names.length === 0) return null;
-  return `Not on the website’s menu, so left off the home page: ${andList(names.map((n) => `“${n}”`))}. Put the item on the website (Menu), or pick another here.`;
+  return `Not on the website’s menu at a price, so left off the home page: ${andList(names.map((n) => `“${n}”`))}. Put the item on the website with its price (Menu), or pick another here.`;
 }
 
 /** An entry for a picked item: its id and its name as the till has it; the words kept. */

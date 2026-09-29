@@ -15,7 +15,7 @@ import {
 } from '@/lib/delivery-facts';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
 import { MENU_FOOT_LINE } from '@/lib/page-copy';
-import { DEFAULT_SHOP_FACTS, lineOrderUrl, orderWhatsappUrl, shopHoursLine, whatsappLinesOf, type ShopFacts } from '@/lib/shop-facts';
+import { DEFAULT_SHOP_FACTS, lineOrderUrl, orderWhatsappUrl, shopHoursInSentence, whatsappLinesOf, type ShopFacts } from '@/lib/shop-facts';
 import { taxBpsOf } from '@/lib/tax-words';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
@@ -999,7 +999,7 @@ function ClosedBanner({ notice }: { notice: string | null }) {
           <p className="mt-1 text-sm font-medium">{notice}</p>
         ) : (
           <p className="mt-1 text-sm font-medium">
-            The kitchen isn&rsquo;t accepting website orders at the moment ({shopHoursLine(shop).toLowerCase()}). You can
+            The kitchen isn&rsquo;t accepting website orders at the moment ({shopHoursInSentence(shop)}). You can
             still build your order here and send it to us on WhatsApp from &ldquo;View order&rdquo; — we reply fast.
           </p>
         )}

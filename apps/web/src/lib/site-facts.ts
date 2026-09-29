@@ -212,7 +212,10 @@ const getPageData = async (): Promise<PageData> => (await getPageRead()).data;
  * A read that fails AFTER one succeeded renders from that one (as before),
  * and no database at all is today's site (a build or preview without one).
  * The dynamic pages (/menu, /track) never call it: they render from the
- * built-in details, as before, rather than fail.
+ * built-in details, as before, rather than fail. (/_not-found is kept too:
+ * built once, and rendered again after a publish revalidates the site; no
+ * page calls notFound() on demand — an unknown area slug is rewritten to
+ * it by the middleware before the area page runs.)
  */
 export async function requireStoredFacts(): Promise<void> {
   if ((await getPageRead()).unread) {
