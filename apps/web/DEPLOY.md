@@ -425,6 +425,18 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   the tills already have**: it changes nothing and proves the whole path
   (`--status` shows which till took it). After that, `build_and_deploy.cmd`
   builds and uploads in one go.
+- **On the tills.** Every till with the website link looks every 3 minutes
+  while "Accept online orders" is on, every 20 minutes otherwise (Settings →
+  Kitchen & stock → "Check now" looks at once). It waits until no order has
+  been rung up on it for 2 minutes and while the link to the other till is
+  broken; a failed try waits 1, 2, 4, then 8 minutes, and after 5 it stops
+  until the owner taps Try again in Menu → Import. The copy made before each
+  file goes in is `before-menu-…` in Settings → Backups (the newest 5 are
+  kept, never counted against the daily copies). A file another till
+  stopped halfway on is never taken over by itself: Menu → Import offers the
+  owner "Take it over". "Wait for my OK" shows the file in Menu → Import with
+  the normal preview; the Dashboard's Shop status says when a file was
+  refused, gave up, is too new for the till, or stopped halfway.
 - **Vercel previews** use their own Neon branch (and their own
   `BRIDGE_SECRET`, see above). Never put the real upload key on a preview:
   make a throwaway key on a test till linked to the preview.

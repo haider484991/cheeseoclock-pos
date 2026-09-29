@@ -3,6 +3,7 @@ import type {
   IpcChannel,
   IpcRequest,
   IpcResponse,
+  MenuDeployChangedEvent,
   RendererApi,
 } from '@cheeseoclock/shared-types';
 
@@ -309,6 +310,14 @@ const api: RendererApi = {
   checkout: {
     getRules: () => invoke('checkout:getRules', undefined),
   },
+  // Menu files from the costing PC (v0.7.32).
+  menuDeploy: {
+    getStatus: (req) => invoke('menuDeploy:getStatus', req),
+    checkNow: () => invoke('menuDeploy:checkNow', undefined),
+    createKey: () => invoke('menuDeploy:createKey', undefined),
+    preview: (req) => invoke('menuDeploy:preview', req),
+    apply: (req) => invoke('menuDeploy:apply', req),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);
@@ -391,6 +400,15 @@ contextBridge.exposeInMainWorld('shopSettingsEvents', {
     const listener = () => cb();
     ipcRenderer.on('shop-settings:changed', listener);
     return () => ipcRenderer.removeListener('shop-settings:changed', listener);
+  },
+});
+
+// A menu file from the costing PC: where this till stands, and a note when it is news (v0.7.32).
+contextBridge.exposeInMainWorld('menuDeployEvents', {
+  onChanged: (cb: (payload: MenuDeployChangedEvent) => void) => {
+    const listener = (_e: unknown, payload: MenuDeployChangedEvent) => cb(payload);
+    ipcRenderer.on('menuDeploy:changed', listener);
+    return () => ipcRenderer.removeListener('menuDeploy:changed', listener);
   },
 });
 

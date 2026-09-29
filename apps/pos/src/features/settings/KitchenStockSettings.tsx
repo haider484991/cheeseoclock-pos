@@ -16,6 +16,9 @@
  *  - what a menu file import may change on what the till already has
  *    ('menu.importPolicy'); the import preview lists what was "kept on the
  *    till".
+ *  - below it, the menu files from the costing PC (v0.7.32,
+ *    MenuFromCostingPc.tsx): put in by themselves or wait for the owner's
+ *    OK ('menu.autoUpdate'), and the upload key — each loading on its own.
  * The default food-cost target is on Costing → Targets, where the other
  * targets are. The owner alone (the main process refuses anyone else); the
  * defaults are exactly what the till did before.
@@ -33,6 +36,7 @@ import {
   type StockRules,
 } from '@cheeseoclock/shared-types';
 import { SettingCard } from './shop-rules/SettingCard';
+import { MenuFromCostingPc } from './MenuFromCostingPc';
 import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting, useShopSettingsLive } from './shop-rules/useShopSetting';
 import { sameValue } from './shop-rules/foodpandaForm';
@@ -366,6 +370,8 @@ function KitchenStockCards({
           ))}
         </ul>
       </SettingCard>
+
+      <MenuFromCostingPc />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import {
   DEFAULT_DISCOUNT_APPROVAL,
   DEFAULT_DISCOUNT_PRESETS,
   DEFAULT_KITCHEN_TIMING,
+  DEFAULT_MENU_AUTO_UPDATE,
   DEFAULT_STAFF_TIMING,
   KITCHEN_TIMING_BOUNDS,
   PRESET_FLAT_MAX_CENTS,
@@ -56,6 +57,13 @@ describe('the released defaults are today’s numbers', () => {
       freeReprints: 1,
       reprintWindowMin: 30,
     });
+  });
+
+  it('menu.autoUpdate: menu files from the costing PC go in by themselves (owner, 29 Sep 2026), format 1 — nothing happens until he makes an upload key', () => {
+    expect(DEFAULT_MENU_AUTO_UPDATE).toEqual({ v: 1, mode: 'auto' });
+    expect(Object.isFrozen(DEFAULT_MENU_AUTO_UPDATE)).toBe(true);
+    expect(SHOP_SETTING_FORMAT['menu.autoUpdate']).toBe(1);
+    expect(SHOP_SETTING_DEFAULTS['menu.autoUpdate']).toBe(DEFAULT_MENU_AUTO_UPDATE);
   });
 
   it('kitchen.timing: amber 15, red 30; reminders at 10 (not started) and 30 (not done)', () => {

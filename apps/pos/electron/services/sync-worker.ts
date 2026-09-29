@@ -18,6 +18,7 @@ import {
 import { applyRemoteBatch } from '../db/repositories/apply-remote.js';
 import { websiteSettingsChanged } from './website-settings-events.js';
 import { broadcastShopSettingsChanged } from './shop-settings-events.js';
+import { nudgeMenuDeploy } from './menu-deploy-events.js';
 import { destinationSeal, getSyncConfig, readSyncSwitch, syncDestinationKey } from './sync-config.js';
 import { sendEverythingOnce, type SnapshotReader } from './sync-snapshot.js';
 import { makeSyncAdapter } from '../adapters/sync/factory.js';
@@ -164,6 +165,8 @@ export class SyncWorker {
     if (r.settingsChanged) {
       broadcastShopSettingsChanged();
       websiteSettingsChanged();
+      // The marker of a menu file the other till put in comes this way: look again soon.
+      nudgeMenuDeploy();
     }
     if (r.waiting !== this.lastWaiting || r.dropped > 0) {
       if (r.waiting > 0 || r.dropped > 0) {

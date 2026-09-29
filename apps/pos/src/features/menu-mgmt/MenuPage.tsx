@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { cn } from '@cheeseoclock/ui';
 import { CategoriesTab } from './CategoriesTab';
 import { ItemsTab } from './ItemsTab';
@@ -18,7 +19,9 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof Folder }> = [
 ];
 
 export function MenuPage() {
-  const [tab, setTab] = useState<Tab>('items');
+  // ?tab=import: the Dashboard's note about a menu file from the costing PC opens Import.
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(() => (params.get('tab') === 'import' ? 'import' : 'items'));
   return (
     <div className="mx-auto max-w-7xl">
       <header className="mb-4">

@@ -6,6 +6,7 @@ import { ipc } from '../../ipc/client';
 import { FbrStatusCard } from './FbrStatusCard';
 import { SyncStatusCard } from './SyncStatusCard';
 import { BackupHealthBanner } from './BackupHealthBanner';
+import { MenuDeployBanner } from './MenuDeployBanner';
 import { OwnerWeekCard } from './OwnerWeekCard';
 import { SettingsOverview } from '../settings/SettingsPage';
 import {
@@ -184,6 +185,8 @@ export function DashboardPage() {
         <section className="space-y-4">
           <SectionTitle>Shop status</SectionTitle>
           <BackupHealthBanner />
+          {/* A menu file from the costing PC that needs the owner (refused, given up, too new, stopped halfway). */}
+          <MenuDeployBanner />
           <SettingsOverview onSelect={(tab) => navigate(`/settings?tab=${tab}`)} />
           {/* Each card shows itself only while that feature is switched on. */}
           <div className="grid grid-cols-1 gap-4 empty:hidden lg:grid-cols-2">

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app, dialog } from 'electron';
-import { menuImportFileSchema, type MenuImportFile } from '@cheeseoclock/shared-schemas';
+import { MAX_MENU_FILE_VERSION, menuImportFileSchema, type MenuImportFile } from '@cheeseoclock/shared-schemas';
 import type { MenuImportPreview, MenuImportSummary } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
 import type { Actor } from '../db/repositories/base.js';
@@ -19,16 +19,27 @@ let picked: { fileName: string; file: MenuImportFile } | null = null;
 
 export class MenuImportFileError extends Error {}
 
-function readMenuFile(filePath: string): MenuImportFile {
-  const stat = fs.statSync(filePath);
-  if (stat.size > MAX_BYTES) throw new MenuImportFileError('That file is too large to be a menu file.');
+/** What a till says about a file written in a newer format than it reads ("update the till"). */
+export function menuFileTooNewMessage(version: number): string {
+  return `This menu file is newer than this till (format ${version}; this till reads up to ${MAX_MENU_FILE_VERSION}). Update the till (Settings → About), then import it again.`;
+}
+
+/**
+ * A menu file's text, checked: the byte-order mark Excel / Notepad may add
+ * dropped, JSON, a format this till reads (a newer one says "update the
+ * till"), then the file's full schema. The ONE check for a picked file and
+ * for a file from the costing PC (services/menu-package-service.ts).
+ */
+export function parseMenuFileText(text: string): MenuImportFile {
   let json: unknown;
   try {
-    const text = fs.readFileSync(filePath, 'utf8');
-    // Excel / Notepad may prefix a byte-order mark.
     json = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
   } catch {
     throw new MenuImportFileError('That file is not a menu file (it is not valid JSON).');
+  }
+  const version = typeof json === 'object' && json !== null ? (json as { version?: unknown }).version : undefined;
+  if (typeof version === 'number' && Number.isInteger(version) && version > MAX_MENU_FILE_VERSION) {
+    throw new MenuImportFileError(menuFileTooNewMessage(version));
   }
   const parsed = menuImportFileSchema.safeParse(json);
   if (!parsed.success) {
@@ -37,6 +48,18 @@ function readMenuFile(filePath: string): MenuImportFile {
     throw new MenuImportFileError(`The menu file has a problem${where}: ${first?.message ?? 'invalid'}`);
   }
   return parsed.data;
+}
+
+function readMenuFile(filePath: string): MenuImportFile {
+  const stat = fs.statSync(filePath);
+  if (stat.size > MAX_BYTES) throw new MenuImportFileError('That file is too large to be a menu file.');
+  let text: string;
+  try {
+    text = fs.readFileSync(filePath, 'utf8');
+  } catch {
+    throw new MenuImportFileError('That file could not be read.');
+  }
+  return parseMenuFileText(text);
 }
 
 /**

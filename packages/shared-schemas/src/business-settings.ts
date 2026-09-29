@@ -8,6 +8,7 @@ import {
   websiteHomeRule,
   websiteLine,
 } from './web-settings.js';
+import { menuDeployCountsSchema } from './menu-deploy.js';
 import {
   ANNOUNCEMENT_MAX,
   CLOSED_NOTICE_MAX,
@@ -68,6 +69,7 @@ import {
   WASTE_REASON_LABEL_MAX,
   daypartHours,
   isShopSettingKey,
+  MENU_AUTO_UPDATE_MODES,
 } from '@cheeseoclock/shared-types';
 import type {
   DeliveryZones,
@@ -85,6 +87,9 @@ import type {
   DiscountOffers,
   DiscountPresets,
   KitchenTiming,
+  MenuAutoUpdate,
+  MenuAutoUpdateMode,
+  MenuDeployCountsView,
   MenuImportPolicy,
   OrderReasons,
   StaffTiming,
@@ -985,6 +990,60 @@ const shopWebsiteReadSchema = z.object({ v: readsFormat, ...shopWebsiteFields })
 export const websiteHomeSchema = z.object({ v: writesFormat('website.home'), ...websiteHomeFields }).strict().superRefine(websiteHomeRule);
 const websiteHomeReadSchema = z.object({ v: readsFormat, ...websiteHomeFields }).superRefine(websiteHomeRule);
 
+// ---------------------------------------------------------------------------
+// Menu files from the costing PC (v0.7.32, shared-types menu-deploy.ts)
+// ---------------------------------------------------------------------------
+
+const menuAutoUpdateShape = {
+  mode: z.enum(MENU_AUTO_UPDATE_MODES as [MenuAutoUpdateMode, ...MenuAutoUpdateMode[]], {
+    errorMap: () => ({ message: 'Put in by themselves, or wait for your OK' }),
+  }),
+};
+/** 'menu.autoUpdate' as this version writes it. */
+export const menuAutoUpdateSchema = z.object({ v: writesFormat('menu.autoUpdate'), ...menuAutoUpdateShape }).strict();
+const menuAutoUpdateReadSchema = z.object({ v: readsFormat, ...menuAutoUpdateShape });
+
+const HEX64 = /^[0-9a-f]{64}$/;
+const menuLastPackageShape = {
+  /** The website's package (menu_packages.id). */
+  packageId: z.string().uuid(),
+  /** Its number on the website: a till whose marker is behind never claims a newer one. */
+  seq: z.number().int().min(1),
+  /** SHA-256 of the file's raw bytes, as the website holds it. */
+  sha256: z.string().regex(HEX64),
+  fileName: z.string().min(1).max(200),
+  /** The till that put it in (device_info.device_id). */
+  appliedByDevice: z.string().min(1).max(100),
+  appliedAt: z.string().datetime({ offset: true }),
+  /** Put in by itself (true), or by someone's tap (false). */
+  automatic: z.boolean(),
+  /** What it changed, numbers only. */
+  counts: menuDeployCountsSchema,
+};
+/**
+ * 'menu.lastPackage': the last menu file from the costing PC put in on
+ * either till — written by the import itself, in its own transaction, and
+ * synced with the rows it made, so the other till knows it has the file once
+ * the rows are here. Not a Settings card: settings:setBusiness refuses it
+ * (it is not a shop rule).
+ */
+export const menuLastPackageSchema = z
+  .object({
+    v: z
+      .number()
+      .int()
+      .refine((v): boolean => v === 1, { message: 'Written by a different version of the app' }),
+    ...menuLastPackageShape,
+  })
+  .strict();
+/**
+ * …and as it is read: leniently. A newer till's marker (a higher format, a
+ * field this version does not know) still reads — "none" would make this
+ * till import the same file again.
+ */
+const menuLastPackageReadSchema = z.object({ v: readsFormat, ...menuLastPackageShape });
+export type MenuLastPackage = z.infer<typeof menuLastPackageSchema>;
+
 /**
  * settings:saveDeliveryZones: the whole list as the card sends it (the main
  * process decides every fee item; a feeItemId sent is ignored), or "Put
@@ -1093,6 +1152,8 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'shop.hours': shopHoursSchema,
   'shop.website': shopWebsiteSchema,
   'website.home': websiteHomeSchema,
+  'menu.autoUpdate': menuAutoUpdateSchema,
+  'menu.lastPackage': menuLastPackageSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 } as const;
@@ -1135,6 +1196,8 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'shop.hours': shopHoursReadSchema,
   'shop.website': shopWebsiteReadSchema,
   'website.home': websiteHomeReadSchema,
+  'menu.autoUpdate': menuAutoUpdateReadSchema,
+  'menu.lastPackage': menuLastPackageReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 };
@@ -1160,6 +1223,7 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'shop.hours': new Set(['v', ...Object.keys(shopHoursFields)]),
   'shop.website': new Set(['v', ...Object.keys(shopWebsiteFields)]),
   'website.home': new Set(['v', ...Object.keys(websiteHomeFields)]),
+  'menu.autoUpdate': new Set(['v', ...Object.keys(menuAutoUpdateShape)]),
 };
 
 /** The fields of the shop keys' nested objects this version writes (a newer till's extra one makes the value "newer"). */
@@ -1442,6 +1506,11 @@ const _shopWebsiteShape: Same<z.infer<typeof shopWebsiteSchema>, ShopWebsite> = 
 const _shopWebsiteReadShape: Same<z.infer<typeof shopWebsiteReadSchema>, ShopWebsite> = true;
 const _websiteHomeShape: Same<z.infer<typeof websiteHomeSchema>, WebsiteHome> = true;
 const _websiteHomeReadShape: Same<z.infer<typeof websiteHomeReadSchema>, WebsiteHome> = true;
+const _menuAutoUpdateShape: Same<z.infer<typeof menuAutoUpdateSchema>, MenuAutoUpdate> = true;
+const _menuAutoUpdateReadShape: Same<z.infer<typeof menuAutoUpdateReadSchema>, MenuAutoUpdate> = true;
+const _menuLastPackageReadShape: Same<z.infer<typeof menuLastPackageReadSchema>, MenuLastPackage> = true;
+// The till's view of what a file changed (shared-types menu-deploy-view.ts) is the website's counts, field for field.
+const _menuDeployCountsShape: Same<z.infer<typeof menuDeployCountsSchema>, MenuDeployCountsView> = true;
 const _discountDeliveryReadShape: Same<z.infer<typeof discountDeliveryReadSchema>, DiscountDelivery> = true;
 const _discountOffersShape: Same<z.infer<typeof discountOffersSchema>, DiscountOffers> = true;
 const _discountOffersReadShape: Same<z.infer<typeof discountOffersReadSchema>, DiscountOffers> = true;

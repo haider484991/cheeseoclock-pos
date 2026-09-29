@@ -21,6 +21,7 @@ import { loadPriceBook } from '../price-book.js';
 import { latestPriceTags } from '../price-history-read.js';
 import { readDeliveryFeeItemIds, readMenuImportPolicy } from '../business-settings-read.js';
 import { setBatchRecipe, clearBatchRecipeLines } from './batch-recipe-repo.js';
+import { setBusinessSetting } from './business-settings-repo.js';
 import { listCombos, deleteCombo } from './combo-repo.js';
 import {
   listModifierGroups,
@@ -411,13 +412,31 @@ function samePrice(
  * from a re-priced ingredient are rolled up once, at the end, from the
  * file's recipes (also with name-based ids).
  */
+/**
+ * A menu file from the costing PC (v0.7.32, services/menu-package-service.ts):
+ * the website's package it came in. Never a fresh start.
+ */
+export interface MenuImportPackage {
+  id: string;
+  seq: number;
+  /** SHA-256 of the file's raw bytes, as the website holds it. */
+  sha256: string;
+  fileName: string;
+  uploadedAt: string;
+  generatedAt: string;
+  /** Put in by itself (true), or by someone's tap (false). */
+  automatic: boolean;
+}
+
 export function applyMenuImport(
   db: AppDatabase,
   file: MenuImportFile,
   fileName: string,
   actor: Actor,
-  opts: { fresh?: boolean } = {},
+  opts: { fresh?: boolean; package?: MenuImportPackage } = {},
 ): MenuImportSummary {
+  // A file from the costing PC is ALWAYS the safe update: nothing is removed.
+  if (opts.package && opts.fresh) throw new MenuImportRefusedError('A menu file from the costing PC is never loaded as a fresh start.');
   const fileSha = menuFileSha256(file);
   // No alerts per ingredient: the file's prices only fill ingredients with none (never a jump); its batches are looked at at the end.
   const importPrice: PriceMeta = { source: 'import', rowKey: `import|${fileSha}`, cascade: false, alerts: false };
@@ -644,14 +663,67 @@ export function applyMenuImport(
       }
     }
 
+    const pkg = opts.package;
     writeAudit(db, {
       entityType: 'menu_import',
       entityId: uuidv7(),
       action: 'import',
       actorUserId: actor.userId,
       before: null,
-      after: { fileName, fileSha256: fileSha, source: file.source, fresh: !!opts.fresh, removedItems, summary: preview.summary },
+      after: {
+        fileName,
+        fileSha256: fileSha,
+        source: file.source,
+        fresh: !!opts.fresh,
+        removedItems,
+        summary: preview.summary,
+        ...(pkg
+          ? {
+              package: {
+                id: pkg.id,
+                seq: pkg.seq,
+                sha256: pkg.sha256,
+                fileName: pkg.fileName,
+                uploadedAt: pkg.uploadedAt,
+                generatedAt: pkg.generatedAt,
+                automatic: pkg.automatic,
+              },
+            }
+          : {}),
+      },
     });
+    if (pkg) {
+      // LAST, in the same transaction: the marker travels to the other till
+      // after the rows it made, and a failure anywhere leaves neither.
+      const s = preview.summary;
+      setBusinessSetting(
+        db,
+        'menu.lastPackage',
+        {
+          v: 1,
+          packageId: pkg.id,
+          seq: pkg.seq,
+          sha256: pkg.sha256,
+          fileName: pkg.fileName,
+          appliedByDevice: actor.deviceId,
+          appliedAt: new Date().toISOString(),
+          automatic: pkg.automatic,
+          counts: {
+            newItems: s.newItems,
+            updatedItems: s.updatedItems,
+            priceChanges: s.priceChanges,
+            newIngredients: s.newIngredients,
+            updatedIngredients: s.updatedIngredients,
+            newCategories: s.newCategories,
+            recipesSet: s.recipesSet,
+            choiceGroupsChanged: s.choiceGroupsChanged,
+            batchRecipesSet: s.batchRecipesSet,
+            skipped: s.skipped,
+          },
+        },
+        actor,
+      );
+    }
     return { ...preview.summary, removedItems };
   });
   return tx();

@@ -22,6 +22,7 @@ import { setBusinessSettings, type BusinessSettingEntry } from '../../db/reposit
 import { readTillLink } from '../../services/till-link.js';
 import { broadcastShopSettingsChanged } from '../../services/shop-settings-events.js';
 import { websiteSettingsChanged } from '../../services/website-settings-events.js';
+import { nudgeMenuDeploy } from '../../services/menu-deploy-events.js';
 import { saveDeliveryZones } from '../../db/repositories/delivery-zones-repo.js';
 import { anyTillSettingCard, setTillSetting } from '../../services/till-settings.js';
 import type { AppDatabase } from '../../db/connection.js';
@@ -82,6 +83,8 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
     }
     broadcastShopSettingsChanged();
     if (WEBSITE_KEYS.has(req.key)) websiteSettingsChanged();
+    // "Put in by themselves / wait for my OK": the menu files from the costing PC look again soon.
+    if (req.key === 'menu.autoUpdate') nudgeMenuDeploy();
     return ok(card(ctx.db, req.key));
   });
 

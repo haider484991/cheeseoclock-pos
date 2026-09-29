@@ -53,3 +53,49 @@ describe('a v0.7.29 till and the values this version writes', () => {
     expect(storedFormatIsNewer('foodpanda.checks', oldChecks)).toBe(false);
   });
 });
+
+describe('the two keys of the menu files from the costing PC (v0.7.32)', () => {
+  const marker = {
+    v: 1,
+    packageId: '0b8f6c8e-8f8a-4c8a-9d2e-1c6a7d2b9e10',
+    seq: 4,
+    sha256: 'a'.repeat(64),
+    fileName: 'test-menu.json',
+    appliedByDevice: 'till-1',
+    appliedAt: '2026-09-29T09:00:00.000Z',
+    automatic: true,
+    counts: { newItems: 3, updatedItems: 5 },
+  };
+
+  it('menu.lastPackage: written strictly; a newer till’s marker (a higher format, a field this one does not know) still reads — never as "none"', () => {
+    expect(BUSINESS_SETTING_SCHEMAS['menu.lastPackage'].safeParse(marker).success).toBe(true);
+    expect(BUSINESS_SETTING_SCHEMAS['menu.lastPackage'].safeParse({ ...marker, fromTheFuture: 1 }).success).toBe(false);
+    expect(BUSINESS_SETTING_SCHEMAS['menu.lastPackage'].safeParse({ ...marker, v: 2 }).success).toBe(false);
+    const newer = BUSINESS_SETTING_READ_SCHEMAS['menu.lastPackage'].safeParse({ ...marker, v: 2, fromTheFuture: { x: 1 } });
+    expect(newer).toMatchObject({ success: true, data: { v: 2, packageId: marker.packageId, seq: 4, appliedByDevice: 'till-1' } });
+    // The counts are numbers only; a count it does not know is dropped, a missing one is 0.
+    expect(newer.success && newer.data.counts).toEqual({
+      newItems: 3,
+      updatedItems: 5,
+      priceChanges: 0,
+      newIngredients: 0,
+      updatedIngredients: 0,
+      newCategories: 0,
+      recipesSet: 0,
+      choiceGroupsChanged: 0,
+      batchRecipesSet: 0,
+      skipped: 0,
+    });
+    // Not a shop rule: never "newer" for a card.
+    expect(storedFormatIsNewer('menu.lastPackage', { ...marker, v: 2 })).toBe(false);
+  });
+
+  it('menu.autoUpdate: format 1 as written here; a newer till’s value reads what it knows and shows the card read-only', () => {
+    expect(SHOP_SETTING_FORMAT['menu.autoUpdate']).toBe(1);
+    expect(BUSINESS_SETTING_SCHEMAS['menu.autoUpdate'].safeParse({ v: 1, mode: 'ask' }).success).toBe(true);
+    expect(BUSINESS_SETTING_READ_SCHEMAS['menu.autoUpdate'].safeParse({ v: 2, mode: 'ask', later: true })).toEqual({ success: true, data: { v: 2, mode: 'ask' } });
+    expect(storedFormatIsNewer('menu.autoUpdate', { v: 2, mode: 'ask' })).toBe(true);
+    expect(storedFormatIsNewer('menu.autoUpdate', { v: 1, mode: 'ask', later: true })).toBe(true);
+    expect(storedFormatIsNewer('menu.autoUpdate', { v: 1, mode: 'auto' })).toBe(false);
+  });
+});

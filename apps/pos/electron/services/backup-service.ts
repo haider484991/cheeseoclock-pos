@@ -33,7 +33,23 @@ const PENDING_RESTORE_NAME = 'pending-restore.db';
 const PENDING_RESTORE_INFO = 'pending-restore.json';
 const AUTO_BACKUP_PREFIX = 'auto-';
 const MANUAL_BACKUP_PREFIX = 'manual-';
+/**
+ * The copy taken just before a menu file from the costing PC goes in
+ * (v0.7.32, services/menu-package-service.ts). Its own rotation — the newest
+ * few — so a busy week of menu files never pushes out a daily copy.
+ */
+const BEFORE_MENU_BACKUP_PREFIX = 'before-menu-';
 const KEEP_AUTO_BACKUPS = 14;
+export const KEEP_BEFORE_MENU_BACKUPS = 5;
+
+/** 'auto' = the daily rotation; 'manual' = on demand; 'before-menu' = before a menu file from the costing PC. */
+export type BackupKind = 'auto' | 'manual' | 'before-menu';
+
+const PREFIX: Record<BackupKind, string> = {
+  auto: AUTO_BACKUP_PREFIX,
+  manual: MANUAL_BACKUP_PREFIX,
+  'before-menu': BEFORE_MENU_BACKUP_PREFIX,
+};
 /**
  * The daily copy is checked for this long after boot, then hourly (it is made
  * when the newest one is 23 h old). It used to run synchronously before the
@@ -67,7 +83,7 @@ export interface BackupEntry {
   fullPath: string;
   sizeBytes: number;
   createdAtIso: string;
-  /** 'auto' = daily rotation, 'manual' = on-demand. */
+  /** 'auto' = daily rotation, 'manual' = on-demand (a copy taken before a menu file from the costing PC shows as one too). */
   kind: 'auto' | 'manual';
 }
 
@@ -164,18 +180,18 @@ export interface CreateBackupResult {
   sizeBytes: number;
 }
 
-function newBackupPath(kind: 'auto' | 'manual'): { fileName: string; fullPath: string } {
+function newBackupPath(kind: BackupKind): { fileName: string; fullPath: string } {
   const dir = ensureBackupDir();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const prefix = kind === 'auto' ? AUTO_BACKUP_PREFIX : MANUAL_BACKUP_PREFIX;
-  const fileName = `${prefix}${stamp}.db`;
+  const fileName = `${PREFIX[kind]}${stamp}.db`;
   return { fileName, fullPath: path.join(dir, fileName) };
 }
 
-function backupCreated(kind: 'auto' | 'manual', fileName: string, fullPath: string): CreateBackupResult {
+function backupCreated(kind: BackupKind, fileName: string, fullPath: string): CreateBackupResult {
   const sizeBytes = fs.statSync(fullPath).size;
   log.info('Backup created', { fileName, sizeBytes });
   if (kind === 'auto') rotateAutoBackups();
+  if (kind === 'before-menu') rotateBeforeMenuBackups();
   return { fileName, fullPath, sizeBytes };
 }
 
@@ -189,7 +205,7 @@ export function createBackup(opts: { kind: 'auto' | 'manual' } = { kind: 'manual
 
 /** The same backup without freezing the till while it is written (see snapshotDatabaseAsync). */
 export async function createBackupAsync(
-  opts: { kind: 'auto' | 'manual' } = { kind: 'manual' },
+  opts: { kind: BackupKind } = { kind: 'manual' },
 ): Promise<CreateBackupResult> {
   if (!dbRef) throw new Error('Backup service not initialised');
   const { fileName, fullPath } = newBackupPath(opts.kind);
@@ -404,6 +420,20 @@ export function applyPendingRestoreNowAndRelaunch(): void {
 // -----------------------------------------------------------------------------
 // Internal — runs at bootstrap and on daily timer
 // -----------------------------------------------------------------------------
+
+/** The newest few copies taken before a menu file went in; never an 'auto-' or a 'manual-' one. */
+function rotateBeforeMenuBackups(): void {
+  const dir = backupDir();
+  const copies = listBackups().filter((b) => b.fileName.startsWith(BEFORE_MENU_BACKUP_PREFIX));
+  for (const old of copies.slice(KEEP_BEFORE_MENU_BACKUPS)) {
+    try {
+      fs.unlinkSync(path.join(dir, old.fileName));
+      log.info('Rotated an old before-menu backup', { fileName: old.fileName });
+    } catch (e) {
+      log.warn('Failed to delete an old before-menu backup', e);
+    }
+  }
+}
 
 function rotateAutoBackups(): void {
   const dir = backupDir();

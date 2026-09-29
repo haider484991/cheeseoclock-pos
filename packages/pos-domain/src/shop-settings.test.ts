@@ -147,6 +147,8 @@ describe('the released defaults are pinned', () => {
       'shop.hours',
       'shop.website',
       'website.home',
+      // Menu files from the costing PC (v0.7.32): put in by themselves, or wait for the owner's OK.
+      'menu.autoUpdate',
     ]);
     for (const key of SHOP_SETTING_KEYS) {
       const d = SHOP_SETTING_DEFAULTS[key];

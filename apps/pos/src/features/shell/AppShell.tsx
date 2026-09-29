@@ -5,7 +5,8 @@ import { ReceiptLogoKeeper } from '../settings/ReceiptLogoKeeper';
 import { TopBar } from './TopBar';
 import { StepInHold } from './StepInHold';
 import { useSessionStore } from '../../stores/sessionStore';
-import { ipc, onLowStock, onPrinterFailed, onWebOrderReceived } from '../../ipc/client';
+import { ipc, onLowStock, onMenuDeployChanged, onPrinterFailed, onWebOrderReceived } from '../../ipc/client';
+import { MENU_DEPLOY_KEY } from '../menu-mgmt/useMenuDeploy';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useQueryClient } from '@tanstack/react-query';
 import { DRAWER_NOT_OPENED_CODE, DRAWER_UNSURE_CODE } from '@cheeseoclock/shared-types';
@@ -105,6 +106,24 @@ export function AppShell() {
       void qc.invalidateQueries({ queryKey: ['inventory'] });
     });
   }, [toast, qc]);
+
+  // A menu file from the costing PC (v0.7.32): every screen re-reads the menu and stock (whoever is
+  // signed in); the people who manage the menu get the note — the main process sends each once per file.
+  const canManageMenu = useSessionStore((st) => st.can('menu.manage'));
+  useEffect(() => {
+    return onMenuDeployChanged(({ notice }) => {
+      void qc.invalidateQueries({ queryKey: ['menu'] });
+      void qc.invalidateQueries({ queryKey: ['inventory'] });
+      void qc.invalidateQueries({ queryKey: MENU_DEPLOY_KEY });
+      if (!notice || !canManageMenu) return;
+      toast({
+        title: notice.title,
+        description: notice.description,
+        variant: notice.kind === 'problem' ? 'error' : notice.kind === 'waiting_for_owner' ? 'info' : 'success',
+        duration: 15_000,
+      });
+    });
+  }, [qc, toast, canManageMenu]);
 
   // New online order from the website → refresh the board. The banner, the
   // chime and the "total changed" note come from OrderAlerts (mounted at the

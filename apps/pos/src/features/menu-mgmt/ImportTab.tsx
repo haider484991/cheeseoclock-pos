@@ -12,8 +12,12 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { FileUp, AlertTriangle, Tags, ShieldCheck } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
+import { useSessionStore } from '../../stores/sessionStore';
 import { freshStartWebsiteWords } from './freshStartWords';
 import { priceDetailGroups, sheetPriceText, tillPriceText } from './importPrices';
+import { MenuDeployPanel } from './MenuDeployPanel';
+import { MENU_DEPLOY_KEY, useMenuDeployView } from './useMenuDeploy';
+import { applyButtonLabel, applyQuestion } from '../settings/shop-rules/menuDeployWords';
 
 const ACTION_LABEL: Record<MenuImportAction, string> = {
   create: 'New',
@@ -47,18 +51,32 @@ function Kept({ notes }: { notes: string[] | undefined }) {
   );
 }
 
-/** Menu → Import: load a menu file, read every change, then apply it in one go. */
+/**
+ * Menu → Import: load a menu file, read every change, then apply it in one go.
+ * Above it, the newest file from the costing PC (MenuDeployPanel): its
+ * "Show the changes" puts the same preview here — no Start fresh — and Apply
+ * puts that file in (menuDeploy:apply).
+ */
 export function ImportTab() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [preview, setPreview] = useState<MenuImportPreview | null>(null);
+  /** The preview is of the costing PC's file (not a picked one): its package. */
+  const [fromPackage, setFromPackage] = useState<string | null>(null);
   const [showUnchanged, setShowUnchanged] = useState(false);
   const fresh = !!preview?.fresh;
+  const deploy = useMenuDeployView();
+  const isOwner = useSessionStore((st) => st.user?.role === 'admin');
+  /** Taking a file over from a till that stopped halfway is the owner's (the main process says so too). */
+  const needsOwner = !!deploy.data?.applyNeedsOwner && !isOwner;
 
   const pickMut = useMutation({
     mutationFn: () => ipc.menu.importPick(),
     onSuccess: (p) => {
-      if (p) setPreview(p);
+      if (p) {
+        setPreview(p);
+        setFromPackage(null);
+      }
     },
     onError: (e) =>
       toast({
@@ -102,6 +120,32 @@ export function ImportTab() {
       }),
   });
 
+  // The costing PC's file: put in with the owner's tap ("Try again" after it failed; take-over when the other till stopped).
+  const applyPkgMut = useMutation({
+    mutationFn: (packageId: string) =>
+      ipc.menuDeploy.apply({ packageId, takeOver: deploy.data?.phase === 'stalled', retry: deploy.data?.phase === 'gave_up' }),
+    onSuccess: (sum) => {
+      toast({
+        title: 'Menu file put in',
+        description: `${sum.newItems} new items, ${sum.updatedItems} updated, ${sum.recipesSet} recipes, ${sum.newIngredients + sum.updatedIngredients} ingredients. ${sum.priceLine}`,
+        variant: 'success',
+      });
+      setPreview(null);
+      setFromPackage(null);
+      void qc.invalidateQueries({ queryKey: ['menu'] });
+      void qc.invalidateQueries({ queryKey: ['inventory'] });
+      void qc.invalidateQueries({ queryKey: MENU_DEPLOY_KEY });
+    },
+    onError: (e) => {
+      toast({
+        title: 'Not put in — nothing was changed',
+        description: e instanceof IpcError ? e.message : String(e),
+        variant: 'error',
+      });
+      void qc.invalidateQueries({ queryKey: MENU_DEPLOY_KEY });
+    },
+  });
+
   const s = preview?.summary;
   const nothingToDo =
     !fresh &&
@@ -109,7 +153,7 @@ export function ImportTab() {
     s.newItems + s.updatedItems + s.newIngredients + s.updatedIngredients + s.newCategories +
       s.choiceGroupsChanged + s.batchRecipesSet === 0;
   const blocked = fresh && (preview?.fresh?.openOrders ?? 0) > 0;
-  const busy = pickMut.isPending || modeMut.isPending || applyMut.isPending;
+  const busy = pickMut.isPending || modeMut.isPending || applyMut.isPending || applyPkgMut.isPending;
   // A row the owner's import rules kept is shown even with no change: the preview says what was kept on the till.
   const visibleItems = (preview?.items ?? []).filter((i) => showUnchanged || i.action !== 'same' || (i.keptOnTill?.length ?? 0) > 0);
   const visibleIngredients = (preview?.ingredients ?? []).filter(
@@ -118,6 +162,14 @@ export function ImportTab() {
 
   return (
     <div className="space-y-4">
+      <MenuDeployPanel
+        view={deploy.data}
+        busy={busy}
+        onPreview={(p) => {
+          setPreview(p);
+          setFromPackage(p.packageId);
+        }}
+      />
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-2xl">
@@ -144,65 +196,90 @@ export function ImportTab() {
                 <div className="font-semibold">{preview.fileName}</div>
                 {preview.source && <div className="text-xs text-stone-500">{preview.source}</div>}
               </div>
-              <Button
-                variant={fresh ? 'danger' : 'primary'}
-                disabled={busy || nothingToDo || blocked}
-                onClick={() => {
-                  const f = preview.fresh;
-                  const ask = f
-                    ? `Replace the WHOLE menu with this file?\n\nRemoved: ${f.items.length} menu items, ${f.categories} categories, ${f.combos} combos, ${f.choiceGroups} choice groups and ${f.ingredients} ingredients, with their recipes and stock counts.\nLoaded: ${s.newItems} items, ${s.newIngredients} ingredients, ${s.recipesSet} recipes.\n\nSales history, customers, users, settings and tax stay. A backup is saved first (Settings → Backups).`
-                    : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.\n\n${s.priceLine} The till keeps the prices it has; the sheet's are kept beside them in Inventory.${s.keptLine ? `\n\n${s.keptLine}` : ''}`;
-                  void askConfirm(ask).then((ok) => {
-                    if (ok) applyMut.mutate(fresh);
-                  });
-                }}
-              >
-                {applyMut.isPending
-                  ? fresh
-                    ? 'Replacing…'
-                    : 'Importing…'
-                  : fresh
-                    ? 'Replace the whole menu'
-                    : nothingToDo
-                      ? 'Nothing to change'
-                      : 'Apply import'}
-              </Button>
-            </div>
-            <div className="mt-4 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How to load the file">
-              {[
-                { value: false, title: 'Update the menu', body: 'Add and change what the file says. Everything else stays.' },
-                {
-                  value: true,
-                  title: 'Start fresh',
-                  body: 'Remove the whole menu on this POS, then load the file. Needs the owner login.',
-                },
-              ].map((o) => (
-                <label
-                  key={o.title}
-                  className={cn(
-                    'flex cursor-pointer gap-3 rounded-lg border-2 p-3 text-sm',
-                    fresh === o.value
-                      ? o.value
-                        ? 'border-red-500 bg-red-50 dark:bg-red-950/40'
-                        : 'border-amber-500 bg-amber-50 dark:bg-amber-950/40'
-                      : 'border-stone-200 dark:border-stone-700',
-                  )}
+              {fromPackage ? (
+                <Button
+                  variant="primary"
+                  title={needsOwner ? 'Taking it over needs the owner’s login' : undefined}
+                  disabled={busy || !deploy.data?.canApplyNow || needsOwner}
+                  onClick={() => {
+                    void askConfirm(applyQuestion(deploy.data ?? { phase: 'waiting_for_owner' }, s), {
+                      safeDefault: deploy.data?.phase === 'stalled',
+                    }).then((ok) => {
+                      if (ok) applyPkgMut.mutate(fromPackage);
+                    });
+                  }}
                 >
-                  <input
-                    type="radio"
-                    name="import-mode"
-                    className="mt-1"
-                    checked={fresh === o.value}
-                    disabled={busy}
-                    onChange={() => modeMut.mutate(o.value)}
-                  />
-                  <span>
-                    <span className="block font-semibold">{o.title}</span>
-                    <span className="text-stone-600 dark:text-stone-400">{o.body}</span>
-                  </span>
-                </label>
-              ))}
+                  {applyPkgMut.isPending ? 'Putting it in…' : applyButtonLabel(deploy.data ?? { phase: 'waiting_for_owner' })}
+                </Button>
+              ) : (
+                <Button
+                  variant={fresh ? 'danger' : 'primary'}
+                  disabled={busy || nothingToDo || blocked}
+                  onClick={() => {
+                    const f = preview.fresh;
+                    const ask = f
+                      ? `Replace the WHOLE menu with this file?\n\nRemoved: ${f.items.length} menu items, ${f.categories} categories, ${f.combos} combos, ${f.choiceGroups} choice groups and ${f.ingredients} ingredients, with their recipes and stock counts.\nLoaded: ${s.newItems} items, ${s.newIngredients} ingredients, ${s.recipesSet} recipes.\n\nSales history, customers, users, settings and tax stay. A backup is saved first (Settings → Backups).`
+                      : `Apply this menu file?\n\n${s.newItems} new items, ${s.updatedItems} items changed (${s.priceChanges} price changes), ${s.recipesSet} recipes, ${s.newIngredients} new and ${s.updatedIngredients} changed ingredients.\n\n${s.priceLine} The till keeps the prices it has; the sheet's are kept beside them in Inventory.${s.keptLine ? `\n\n${s.keptLine}` : ''}`;
+                    void askConfirm(ask).then((ok) => {
+                      if (ok) applyMut.mutate(fresh);
+                    });
+                  }}
+                >
+                  {applyMut.isPending
+                    ? fresh
+                      ? 'Replacing…'
+                      : 'Importing…'
+                    : fresh
+                      ? 'Replace the whole menu'
+                      : nothingToDo
+                        ? 'Nothing to change'
+                        : 'Apply import'}
+                </Button>
+              )}
             </div>
+            {fromPackage && (
+              <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
+                The file from the costing PC. It goes in as an update — nothing is removed — with a backup copy made first.
+                {needsOwner ? ' Taking it over from the other till needs the owner’s login.' : ''}
+              </p>
+            )}
+            {!fromPackage && (
+              <div className="mt-4 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How to load the file">
+                {[
+                  { value: false, title: 'Update the menu', body: 'Add and change what the file says. Everything else stays.' },
+                  {
+                    value: true,
+                    title: 'Start fresh',
+                    body: 'Remove the whole menu on this POS, then load the file. Needs the owner login.',
+                  },
+                ].map((o) => (
+                  <label
+                    key={o.title}
+                    className={cn(
+                      'flex cursor-pointer gap-3 rounded-lg border-2 p-3 text-sm',
+                      fresh === o.value
+                        ? o.value
+                          ? 'border-red-500 bg-red-50 dark:bg-red-950/40'
+                          : 'border-amber-500 bg-amber-50 dark:bg-amber-950/40'
+                        : 'border-stone-200 dark:border-stone-700',
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="import-mode"
+                      className="mt-1"
+                      checked={fresh === o.value}
+                      disabled={busy}
+                      onChange={() => modeMut.mutate(o.value)}
+                    />
+                    <span>
+                      <span className="block font-semibold">{o.title}</span>
+                      <span className="text-stone-600 dark:text-stone-400">{o.body}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
               {[
                 ['New items', s.newItems],

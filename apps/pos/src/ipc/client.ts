@@ -13,6 +13,7 @@ import type {
 } from '@cheeseoclock/shared-types';
 import { STEP_IN_HELD } from '@cheeseoclock/shared-types';
 import type { SetShopSettingRequest, ShopSettingCard, ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
+import type { MenuDeployChangedEvent } from '@cheeseoclock/shared-types';
 import type { SetTillSettingRequest, TillSettingCard, TillSettingKey, TillSettingValues } from '@cheeseoclock/shared-types';
 
 export class IpcError extends Error {
@@ -478,7 +479,24 @@ export const ipc = {
   checkout: {
     getRules: () => unwrap(window.api.checkout.getRules()),
   },
+  // Menu files from the costing PC (v0.7.32).
+  menuDeploy: {
+    getStatus: (withHistory = false) => unwrap(window.api.menuDeploy.getStatus({ withHistory })),
+    checkNow: () => unwrap(window.api.menuDeploy.checkNow()),
+    /** The owner's new upload key: shown once, never kept (component state only). */
+    createKey: () => unwrap(window.api.menuDeploy.createKey()),
+    preview: (packageId: string) => unwrap(window.api.menuDeploy.preview({ packageId })),
+    apply: (input: IpcRequest<'menuDeploy:apply'>) => unwrap(window.api.menuDeploy.apply(input)),
+  },
 };
+
+/** Listen for news about the menu files from the costing PC (main 'menuDeploy:changed'). */
+export function onMenuDeployChanged(cb: (payload: MenuDeployChangedEvent) => void): () => void {
+  const w = window as unknown as {
+    menuDeployEvents?: { onChanged: (cb: (p: MenuDeployChangedEvent) => void) => () => void };
+  };
+  return w.menuDeployEvents?.onChanged(cb) ?? (() => {});
+}
 
 /** Listen for the owner's shop rules changing (saved here, or from the other till). */
 export function onShopSettingsChanged(cb: () => void): () => void {

@@ -10,11 +10,13 @@ import { getSyncConfig } from './sync-config.js';
 import { nowIso } from '../db/repositories/base.js';
 import { deleteSetting, getSettingRaw, setSetting } from '../db/repositories/settings-repo.js';
 import {
+  createBackupAsync,
   ensureBackupDir,
   removeDatabaseFiles,
   snapshotDatabaseAsync,
   stageRestoreFromPath,
 } from './backup-service.js';
+import { MenuPackageService, WebsiteNotReadyError, setMenuPackageService } from './menu-package-service.js';
 import { sealSecret } from './secret-seal.js';
 import { SYNC_SNAPSHOT_KEYS } from '../db/repositories/sync-repo.js';
 import { deliveryChargeItemForWebOrder } from '../db/repositories/delivery-zones-repo.js';
@@ -357,12 +359,28 @@ class WebOrdersBridge {
   private shopRecheck = false;
   private shopNextTryAt = 0;
   private shopRetryMs = 0;
+  /** Menu files from the costing PC (v0.7.32): looked for while this till has the website link. */
+  private menuPackages: MenuPackageService | null = null;
 
   init(db: AppDatabase, deviceId: string): void {
     this.db = db;
     this.deviceId = deviceId;
     this.settingsHeldRead = false;
     this.heldReadInFlight = null;
+    this.menuPackages?.stop();
+    this.menuPackages = new MenuPackageService({
+      db,
+      deviceId,
+      deviceName: deviceDisplayName(db),
+      appVersion: app.getVersion(),
+      callWebsite: (path, init) => this.callWebsite(path, init),
+      linked: () => (this.db ? isWebBridgeReady(getWebBridgeConfig(this.db)).ok : false),
+      ordersOn: () => (this.db ? getWebBridgeConfig(this.db).enabled : false),
+      publishMenu: () => this.publishMenu(),
+      backup: (kind) => createBackupAsync({ kind }),
+      emit: (e) => notifyRenderer('menuDeploy:changed', e),
+    });
+    setMenuPackageService(this.menuPackages);
     // The areas or the pick-up offer changed — saved here or arrived from the other till: the
     // website gets the newer block from ANY till with the link.
     this.stopSettingsListener?.();
@@ -687,12 +705,28 @@ class WebOrdersBridge {
     };
   }
 
+  /**
+   * The website's API with this till's bridge secret, for the menu files
+   * from the costing PC (menu-package-service.ts). Throws
+   * WebsiteNotReadyError while the link is not set up.
+   */
+  async callWebsite(path: string, init?: RequestInit): Promise<Response> {
+    if (!this.db) throw new WebsiteNotReadyError();
+    const cfg = getWebBridgeConfig(this.db);
+    if (!isWebBridgeReady(cfg).ok) throw new WebsiteNotReadyError();
+    return this.api(cfg, path, init);
+  }
+
   /** Re-read config and restart the polling loop (after settings change). */
   reschedule(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     if (!this.db) return;
     const cfg = getWebBridgeConfig(this.db);
+    // Menu files from the costing PC: looked for whenever the link is set up — online orders and
+    // cloud copies on or off.
+    if (isWebBridgeReady(cfg).ok) this.menuPackages?.start();
+    else this.menuPackages?.stop();
     // Tell the website at once, above all when this is a switch OFF: the site
     // should stop taking orders the moment the cashier unticks the box, not
     // whenever the last heartbeat happens to go stale.
@@ -743,6 +777,7 @@ class WebOrdersBridge {
     this.shopTimer = null;
     this.stopSettingsListener?.();
     this.stopSettingsListener = null;
+    this.menuPackages?.stop();
   }
 
   status(): BridgeStatus {
@@ -2515,6 +2550,16 @@ export function settingsRefusalOf(body: string): string | null {
     const j = JSON.parse(body) as { error?: unknown; message?: unknown };
     if (j.error !== 'settings_invalid') return null;
     return typeof j.message === 'string' && j.message.trim() ? j.message.trim().slice(0, 300) : 'The website refused the delivery areas.';
+  } catch {
+    return null;
+  }
+}
+
+/** This till's name as the website's history shows it (device_info), or null. */
+function deviceDisplayName(db: AppDatabase): string | null {
+  try {
+    const row = db.prepare(`SELECT display_name FROM device_info WHERE id = 'singleton'`).get() as { display_name: string | null } | undefined;
+    return row?.display_name ?? null;
   } catch {
     return null;
   }

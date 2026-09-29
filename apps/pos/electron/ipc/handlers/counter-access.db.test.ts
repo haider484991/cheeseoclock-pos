@@ -325,6 +325,7 @@ beforeEach(async () => {
   (await import('./costing-handlers.js')).registerCostingHandlers(ctx);
   (await import('./reports-handlers.js')).registerReportsHandlers(ctx);
   (await import('./settings-handlers.js')).registerSettingsHandlers(ctx);
+  (await import('./menu-deploy-handlers.js')).registerMenuDeployHandlers(ctx);
   s = await seed();
 });
 
@@ -645,6 +646,9 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
     value: { v: 1, pizzas: [{ itemRef: { posItemId: null, name: 'Test Pizza — Large' }, headline: 'Test hook' }], burger: null, deals: [] },
   },
   { key: 'website.home', useDefault: true },
+  // Menu files from the costing PC (v0.7.32): put in by themselves, or wait for the owner's OK.
+  { key: 'menu.autoUpdate', value: { v: 1, mode: 'ask' } },
+  { key: 'menu.autoUpdate', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -786,6 +790,20 @@ const TEST_ORDERS_OWNER = (): Record<string, unknown> => ({
 });
 
 /**
+ * Menu files from the costing PC (v0.7.32): whoever manages the menu
+ * (menu.manage, like Menu → Import) looks and puts a file in; making the
+ * upload key, and taking a file over from a till that stopped halfway, are
+ * the owner's. The counter is refused every one.
+ */
+const MENU_FILES = (): Record<string, unknown> => ({
+  'menuDeploy:getStatus': undefined,
+  'menuDeploy:checkNow': undefined,
+  'menuDeploy:preview': { packageId: '0b8f6c8e-8f8a-4c8a-9d2e-1c6a7d2b9e10' },
+  'menuDeploy:apply': { packageId: '0b8f6c8e-8f8a-4c8a-9d2e-1c6a7d2b9e10' },
+  'menuDeploy:createKey': undefined,
+});
+
+/**
  * Channels another piece of work is adding right now, known and left to it
  * (none at the moment). Classify them in one of the lists above once they land.
  */
@@ -908,6 +926,31 @@ describe.skipIf(!Sqlite)("the owner's alone", () => {
   });
 });
 
+describe.skipIf(!Sqlite)('menu files from the costing PC (v0.7.32)', () => {
+  it('the counter is refused every channel; a manager is refused the upload key and a take-over; nothing is written', async () => {
+    const before = writtenRows();
+    h.session = CASHIER;
+    for (const [channel, payload] of Object.entries(MENU_FILES())) {
+      const o = await call(channel, payload);
+      expect({ channel, code: o.ok ? 'ok' : o.code }).toEqual({ channel, code: 'forbidden' });
+    }
+    h.session = MANAGER;
+    expect(await call('menuDeploy:createKey')).toMatchObject({ ok: false, code: 'forbidden', message: 'Making an upload key for the costing PC needs the owner (admin) login' });
+    expect(await call('menuDeploy:apply', { packageId: '0b8f6c8e-8f8a-4c8a-9d2e-1c6a7d2b9e10', takeOver: true })).toMatchObject({
+      ok: false,
+      code: 'forbidden',
+      message: 'Taking a menu file over from the other till needs the owner (admin) login',
+    });
+    // A manager looks (Menu → Import's panel): no website link on this made-up till, and it says so.
+    expect(await call('menuDeploy:getStatus')).toMatchObject({ ok: true, data: { phase: 'not_linked', websiteLinked: false } });
+    h.session = null;
+    for (const [channel, payload] of Object.entries(MENU_FILES())) {
+      expect({ channel, code: (await call(channel, payload)) }).toMatchObject({ channel, code: { ok: false, code: 'unauthenticated' } });
+    }
+    expect(writtenRows()).toEqual(before);
+  });
+});
+
 describe.skipIf(!Sqlite)('test orders: the owner (admin) login only, and the owner\'s PIN or password to delete', () => {
   it('a cashier and a manager are refused every test-order channel in plain words, and nothing is written', async () => {
     const before = writtenRows();
@@ -988,7 +1031,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         });
       }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(19);
+      expect(SHOP_SETTING_KEYS.length).toBe(20);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,
@@ -1680,6 +1723,7 @@ const classification = (): Record<string, string[]> => ({
   COUNTER_SCOPED,
   COUNTER_ALLOWED: Object.keys(COUNTER_ALLOWED()),
   ALREADY_MANAGERS: Object.keys(ALREADY_MANAGERS()),
+  MENU_FILES: Object.keys(MENU_FILES()),
   BEING_ADDED_ELSEWHERE,
 });
 

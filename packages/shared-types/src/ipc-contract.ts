@@ -161,6 +161,7 @@ import type {
   CustomerWithAddresses,
 } from './customer.js';
 import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
+import type { MenuDeployKeyMade, MenuDeployView } from './menu-deploy-view.js';
 import type { CostedRecipeCalc, RecipeCalc, RecipeCalcRequest, TypicalPicksView } from './recipe-calc.js';
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
 import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
@@ -462,6 +463,45 @@ export interface IpcContract {
    */
   'menu:importApply': {
     request: { fresh: boolean } | undefined;
+    response: ApiResult<MenuImportSummary>;
+  };
+
+  // Menu files from the costing PC (v0.7.32, shared-types menu-deploy.ts):
+  // the website hands the newest file to ONE linked till, which puts it in
+  // with the same safe update as menu:importApply (never a fresh start, a
+  // backup copy first); the other till gets it through the link.
+  /** Where this till stands (menu.manage). No network unless `withHistory` (then the website's last lines). */
+  'menuDeploy:getStatus': {
+    request: { withHistory?: boolean } | undefined;
+    response: ApiResult<MenuDeployView>;
+  };
+  /** Ask the website now, and put the file in when the rules allow (menu.manage). */
+  'menuDeploy:checkNow': {
+    request: undefined;
+    response: ApiResult<MenuDeployView>;
+  };
+  /**
+   * The owner makes a new upload key for the costing PC (owner login). Only
+   * its SHA-256 goes to the website; the key is returned ONCE and never
+   * stored on the till. A new key stops the old one at once.
+   */
+  'menuDeploy:createKey': {
+    request: undefined;
+    response: ApiResult<MenuDeployKeyMade>;
+  };
+  /** What putting the website's file in would change — the normal import preview, never a fresh start (menu.manage). */
+  'menuDeploy:preview': {
+    request: { packageId: string };
+    response: ApiResult<MenuImportPreview & { packageId: string }>;
+  };
+  /**
+   * Put the website's file in now (menu.manage): the owner's tap in "Wait for
+   * my OK", "Try again" after it failed (`retry`), or taking it over from a
+   * till that stopped halfway (`takeOver`: the owner's login — the menu may
+   * end up with doubled items).
+   */
+  'menuDeploy:apply': {
+    request: { packageId: string; takeOver?: boolean; retry?: boolean };
     response: ApiResult<MenuImportSummary>;
   };
 

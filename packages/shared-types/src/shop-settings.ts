@@ -78,6 +78,8 @@ export const SHOP_SETTING_KEYS = [
   'shop.hours',
   'shop.website',
   'website.home',
+  // Menu files from the costing PC (v0.7.32, menu-deploy.ts): put in by themselves, or wait for the owner's OK.
+  'menu.autoUpdate',
 ] as const;
 export type ShopSettingKey = (typeof SHOP_SETTING_KEYS)[number];
 
@@ -470,6 +472,23 @@ export interface MenuImportPolicy {
   tax: ImportSide;
 }
 
+/**
+ * Menu files from the costing PC (v0.7.32, 'menu.autoUpdate'; shared-types
+ * menu-deploy.ts, Settings → Kitchen & stock): when a new file reaches the
+ * website, ONE linked till puts it in by itself — the same safe update as
+ * Menu → Import, with the owner's import rules above, never "Start fresh",
+ * a backup copy first — and the other till gets it through the link
+ * ('auto'); or the file waits in Menu → Import, with the normal preview,
+ * for the owner's one tap ('ask').
+ */
+export type MenuAutoUpdateMode = 'auto' | 'ask';
+export const MENU_AUTO_UPDATE_MODES: readonly MenuAutoUpdateMode[] = Object.freeze(['auto', 'ask']);
+
+export interface MenuAutoUpdate {
+  v: number;
+  mode: MenuAutoUpdateMode;
+}
+
 // ---------------------------------------------------------------------------
 // Automatic offers by how the order came in (phase 4, Money & discounts)
 // ---------------------------------------------------------------------------
@@ -727,6 +746,7 @@ export interface ShopSettingValues {
   'shop.hours': ShopHours;
   'shop.website': ShopWebsite;
   'website.home': WebsiteHome;
+  'menu.autoUpdate': MenuAutoUpdate;
 }
 export type ShopSettingValue<K extends ShopSettingKey> = ShopSettingValues[K];
 
@@ -754,6 +774,7 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'shop.hours': 1,
   'shop.website': 1,
   'website.home': 1,
+  'menu.autoUpdate': 1,
 });
 
 /** foodpanda's commission until the owner confirms his own (costing spec 4.7): shown as "suggested". */
@@ -888,6 +909,18 @@ export const DEFAULT_MENU_IMPORT_POLICY: Readonly<MenuImportPolicy> = Object.fre
 });
 
 /**
+ * Menu files from the costing PC put in by themselves (the owner agreed,
+ * 29 Sep 2026). NOT an exception to "installing changes nothing": nothing
+ * reaches a till until the owner makes an upload key (Settings → Kitchen &
+ * stock) and the costing PC uploads a file, so a till that never had one
+ * works exactly as before. Pinned by pos-domain owner-rules-defaults.test.ts.
+ */
+export const DEFAULT_MENU_AUTO_UPDATE: Readonly<MenuAutoUpdate> = Object.freeze({
+  v: 1,
+  mode: 'auto',
+});
+
+/**
  * Today: NO offers, and the cashier is not asked how an order came in — so
  * nothing changes until the owner adds an offer or turns the question on.
  */
@@ -990,6 +1023,7 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'shop.hours': DEFAULT_SHOP_HOURS,
   'shop.website': DEFAULT_SHOP_WEBSITE,
   'website.home': DEFAULT_WEBSITE_HOME,
+  'menu.autoUpdate': DEFAULT_MENU_AUTO_UPDATE,
 });
 
 /** The longest foodpanda order number kept (payments.reference_no). */
