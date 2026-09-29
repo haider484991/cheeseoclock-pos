@@ -28,7 +28,11 @@ import {
   DEFAULT_DELIVERY_ZONES,
   DEFAULT_MENU_IMPORT_POLICY,
   DEFAULT_ONLINE_OPTIONS,
+  DEFAULT_SHOP_HOURS,
+  DEFAULT_SHOP_PROFILE,
+  DEFAULT_SHOP_WEBSITE,
   DEFAULT_STAFF_TIMING,
+  DEFAULT_WEBSITE_HOME,
   DEFAULT_STOCK_RULES,
   DEFAULT_WEBSITE_PICKUP,
   SHOP_SETTING_DEFAULTS,
@@ -37,6 +41,10 @@ import {
   type DeliveryZoneSetting,
   type MenuImportPolicy,
   type OnlineOptions,
+  type ShopHours,
+  type ShopProfile,
+  type ShopWebsite,
+  type WebsiteHome,
   type WebsitePickup,
   type ShopSettingKey,
   type ShopSettingValues,
@@ -278,6 +286,45 @@ export function readOnlineOptions(db: AppDatabase): OnlineOptions {
     return readShopSetting(db, 'online.options').value;
   } catch {
     return { ...DEFAULT_ONLINE_OPTIONS };
+  }
+}
+
+/**
+ * The shop's details the website shows (Shop & logo → "Website: shop details
+ * (both tills)"; shared-types website-shop.ts): today's website when nothing
+ * is saved, or when a read fails (it should not). Fresh copies — never the
+ * frozen defaults. The website gets them in the shop block
+ * (services/website-shop-block.ts).
+ */
+export function readShopProfile(db: AppDatabase): ShopProfile {
+  try {
+    return structuredClone(readShopSetting(db, 'shop.profile').value);
+  } catch {
+    return structuredClone(DEFAULT_SHOP_PROFILE) as ShopProfile;
+  }
+}
+
+export function readShopHours(db: AppDatabase): ShopHours {
+  try {
+    return structuredClone(readShopSetting(db, 'shop.hours').value);
+  } catch {
+    return structuredClone(DEFAULT_SHOP_HOURS) as ShopHours;
+  }
+}
+
+export function readShopWebsite(db: AppDatabase): ShopWebsite {
+  try {
+    return structuredClone(readShopSetting(db, 'shop.website').value);
+  } catch {
+    return structuredClone(DEFAULT_SHOP_WEBSITE) as ShopWebsite;
+  }
+}
+
+export function readWebsiteHome(db: AppDatabase): WebsiteHome {
+  try {
+    return structuredClone(readShopSetting(db, 'website.home').value);
+  } catch {
+    return structuredClone(DEFAULT_WEBSITE_HOME) as WebsiteHome;
   }
 }
 

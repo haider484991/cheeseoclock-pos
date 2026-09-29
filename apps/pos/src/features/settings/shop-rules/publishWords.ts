@@ -8,16 +8,46 @@
 import {
   PUBLISHED_IMAGE_MAX_CHARS,
   type PublishMenuSummary,
+  type SettingsPublishStatus,
   type WebAvailability,
 } from '@cheeseoclock/shared-types';
 import { andList } from './foodpandaWords';
 
-/** The toast after "Publish menu to website". */
-export function publishedToast(r: PublishMenuSummary): {
-  title: string;
-  description: string;
-  variant: 'success' | 'warning';
-} {
+type PublishToast = { title: string; description: string; variant: 'success' | 'warning' };
+
+/**
+ * The toast after "Publish menu to website": the menu's own words (below),
+ * then — from a website with the shop block (sweep B2 + B4) — the home
+ * page's featured items it can't find, and the shop details when they did
+ * not reach it. Nothing added when there is nothing to say.
+ */
+export function publishedToast(r: PublishMenuSummary): PublishToast {
+  const base = menuPublishedToast(r);
+  const extra = [homeMissingSentence(r.homeMissing ?? []), shopNotOnWebsiteSentence(r.shopPublish)].filter((x): x is string => x !== null);
+  if (extra.length === 0) return base;
+  return {
+    title: base.variant === 'success' ? 'Menu published — check the website’s shop details' : base.title,
+    description: `${base.description} ${extra.join(' ')}`,
+    variant: 'warning',
+  };
+}
+
+/** "Home page: “A” and “B” are not on the website’s menu, so they are left off it." (null when none) */
+export function homeMissingSentence(names: readonly string[]): string | null {
+  if (names.length === 0) return null;
+  const quoted = andList(names.slice(0, 5).map((n) => `“${n}”`));
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : '';
+  return `Home page: ${quoted}${more} ${names.length === 1 ? 'is' : 'are'} not on the website’s menu, so ${names.length === 1 ? 'it is' : 'they are'} left off it (Settings → Shop & logo → Home page).`;
+}
+
+/** Why the shop details are not on the website after a publish, or null when they are (or none is saved). */
+export function shopNotOnWebsiteSentence(s: SettingsPublishStatus | undefined): string | null {
+  if (!s || (s.state !== 'refused' && s.state !== 'unsupported')) return null;
+  return `Shop details not on the website: ${s.message ?? 'no reason given'}`;
+}
+
+/** The toast's menu part (as before the shop block). */
+function menuPublishedToast(r: PublishMenuSummary): PublishToast {
   const live = `${r.items} items in ${r.categories} categories are now live on the website.`;
   const left = r.photosLeftOut ?? [];
   const older = r.olderWebsite === true ? ` ${OLDER_WEBSITE_TOAST}` : '';

@@ -256,20 +256,24 @@ function at(iso: string): string {
  */
 export function settingsPublishWords(
   s: SettingsPublishStatus | undefined,
+  what: string = SETTINGS_WORDS,
 ): { tone: 'ok' | 'wait' | 'bad'; text: string } | null {
   if (!s || s.state === 'none') return null;
   if (s.state === 'published')
     return {
       tone: 'ok',
-      text: `${SETTINGS_WORDS}: website updated${s.at ? ` ${at(s.at)}` : ''}.`,
+      text: `${what}: website updated${s.at ? ` ${at(s.at)}` : ''}.`,
     };
   if (s.state === 'waiting')
     return {
       tone: 'wait',
-      text: `${SETTINGS_WORDS}: waiting to reach the website.${s.message ? ` ${s.message}` : ''}`,
+      text: `${what}: waiting to reach the website.${s.message ? ` ${s.message}` : ''}`,
     };
   return {
     tone: 'bad',
-    text: `${SETTINGS_WORDS}: website not updated: ${s.message ?? 'no reason given'}`,
+    text: `${what}: website not updated: ${s.message ?? 'no reason given'}`,
   };
 }
+
+/** The shop block's line in Settings → Online orders (THE SHOP BLOCK): the same words as the settings block's. */
+export const SHOP_DETAILS_WORDS = 'Shop details, hours & home page';

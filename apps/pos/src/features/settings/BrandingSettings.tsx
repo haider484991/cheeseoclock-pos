@@ -105,14 +105,14 @@ export function BrandingSettings() {
       <Card>
         <div className="mb-1 flex items-center gap-2">
           <Store className="h-5 w-5" />
-          <h2 className="text-lg font-semibold">Shop details</h2>
+          <h2 className="text-lg font-semibold">Receipt: shop details (this till)</h2>
         </div>
         <p className="mb-5 text-sm text-stone-500">
           Your logo and name show on the sign-in screen and in the menu bar. Customer receipts start
           with the logo in black and white and the tagline under it (see the preview below); the
           name prints there instead only when there is no logo to print. The address, phone and
-          website go at the bottom, above the thank-you line. The name, tagline, address and phone
-          also go to the website when you publish the menu.
+          website go at the bottom, above the thank-you line. These are this till’s own; what the
+          website shows is below, under “Website: shop details (both tills)”.
         </p>
 
         <div className="space-y-5">

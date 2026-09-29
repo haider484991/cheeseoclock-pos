@@ -8,7 +8,7 @@ import { useToast } from '../../components/toast/ToastProvider';
 import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
 import { useShopSetting } from './shop-rules/useShopSetting';
-import { settingsPublishWords } from './shop-rules/deliveryZonesForm';
+import { SHOP_DETAILS_WORDS, settingsPublishWords } from './shop-rules/deliveryZonesForm';
 import {
   WEBSITE_MESSAGES_RULES,
   autoPublishSummary,
@@ -22,7 +22,7 @@ import {
   websiteMessagesToForm,
   type WebsiteMessagesForm,
 } from './shop-rules/websiteMessagesForm';
-import { publishedToast } from './shop-rules/publishWords';
+import { homeMissingSentence, publishedToast } from './shop-rules/publishWords';
 
 /** The bridge status, with the till's shift pause (webOrdersBridge.status()). */
 type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
@@ -123,6 +123,9 @@ function ConnectionCard() {
   const lastError = status?.lastError ?? null;
   const authRejected = !!lastError && /\b401\b|unauthor/i.test(lastError);
   const settingsLine = settingsPublishWords(status?.settingsPublish);
+  // The shop's details on the website (their own block), and the home page's items it can't find.
+  const shopLine = settingsPublishWords(status?.shopPublish, SHOP_DETAILS_WORDS);
+  const homeLine = homeMissingSentence(status?.homeMissing ?? []);
 
   return (
     <Card>
@@ -315,6 +318,24 @@ function ConnectionCard() {
           {settingsLine.tone === 'ok' ? <CheckCircle2 className="mr-1 inline h-3 w-3" /> : <AlertTriangle className="mr-1 inline h-3 w-3" />}
           {settingsLine.text}
         </p>
+      )}
+
+      {[shopLine, homeLine ? { tone: 'wait' as const, text: homeLine } : null].map(
+        (l) =>
+          l && (
+            <p
+              key={l.text}
+              className={cn(
+                'mt-2 rounded-lg px-3 py-2 text-xs',
+                l.tone === 'ok' && 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
+                l.tone === 'wait' && 'bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200',
+                l.tone === 'bad' && 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-200',
+              )}
+            >
+              {l.tone === 'ok' ? <CheckCircle2 className="mr-1 inline h-3 w-3" /> : <AlertTriangle className="mr-1 inline h-3 w-3" />}
+              {l.text}
+            </p>
+          ),
       )}
     </Card>
   );

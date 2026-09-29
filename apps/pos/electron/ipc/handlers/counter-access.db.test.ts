@@ -1035,6 +1035,30 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
     expect({ audited, queued }).toEqual({ audited: SHOP_SETTING_SAVES().length, queued: SHOP_SETTING_SAVES().length });
   });
 
+  it('a Save the website needs tells the web bridge — the shop’s details too (the shop block) — and no other Save does', async () => {
+    h.session = OWNER;
+    const { onWebsiteSettingsChanged } = await import('../../services/website-settings-events.js');
+    const told: string[] = [];
+    let saving = '';
+    const stop = onWebsiteSettingsChanged(() => told.push(saving));
+    try {
+      for (const payload of SHOP_SETTING_SAVES()) {
+        saving = (payload as { key: string }).key;
+        expect((await call('settings:setBusiness', payload)).ok).toBe(true);
+      }
+    } finally {
+      stop();
+    }
+    expect([...new Set(told)]).toEqual([
+      'discounts.websitePickup',
+      'online.options',
+      'shop.profile',
+      'shop.hours',
+      'shop.website',
+      'website.home',
+    ]);
+  });
+
   it('the counter reads the deal’s % and Pay’s checks — never the commission', async () => {
     h.session = OWNER;
     for (const payload of SHOP_SETTING_SAVES().slice(0, 3)) expect((await call('settings:setBusiness', payload)).ok).toBe(true);

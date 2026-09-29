@@ -212,3 +212,23 @@ describe.skipIf(!Sqlite)('first-time setup through system:completeOnboarding', (
     expect(verifyAuditChain(rows)).toMatchObject({ ok: true, brokenAt: null });
   });
 });
+
+describe.skipIf(!Sqlite)('system:getBranding (the sign-in screen, before anyone logs in)', () => {
+  it('answers the receipt’s name and the website’s name for the shop — today’s until the owner saves another', async () => {
+    const { registerSystemHandlers } = await import('./system-handlers.js');
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    const { DEFAULT_SHOP_PROFILE } = await import('@cheeseoclock/shared-types');
+    const { raw, db } = makeDb();
+    const T0 = '2026-01-01T00:00:00.000Z';
+    raw
+      .prepare(`INSERT INTO users (id, full_name, pin_hash, role, created_at, updated_at, device_id) VALUES ('u_owner', 'Test Owner', 'x', 'admin', ?, ?, 'dev-A')`)
+      .run(T0, T0);
+    const ctx = { db, deviceId: 'dev-A' };
+    registerSystemHandlers(ctx as never);
+    const branding = registered.get('system:getBranding')!;
+    expect(await branding(ctx, undefined)).toMatchObject({ ok: true, data: { shopName: "Cheese O'Clock" } });
+    // The owner's Save of Shop details (made-up name) — synced, both tills.
+    setBusinessSetting(db, 'shop.profile', { ...structuredClone(DEFAULT_SHOP_PROFILE), name: 'Test Shop' } as never, { userId: 'u_owner', deviceId: 'dev-A' });
+    expect(await branding(ctx, undefined)).toMatchObject({ ok: true, data: { shopName: 'Test Shop' } });
+  });
+});

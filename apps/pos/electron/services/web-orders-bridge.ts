@@ -45,9 +45,10 @@ import {
 import { getReceiptBranding } from './printer-config.js';
 import { isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
 import { localSettingsStamp, settingsBlockFor } from './website-settings-block.js';
+import { localShopStamp, shopBlockFor } from './website-shop-block.js';
 import { onWebsiteSettingsChanged } from './website-settings-events.js';
 import { readDeliveryFeeItemIds, readOnlineOptions } from '../db/business-settings-read.js';
-import { websiteDiscountRule, websiteNeedsSettings } from '@cheeseoclock/pos-domain';
+import { websiteDiscountRule, websiteNeedsSettings, websiteNeedsShop } from '@cheeseoclock/pos-domain';
 import { orderAlerts } from './order-alerts-hub.js';
 import {
   CHUNKS_FORMAT,
@@ -60,6 +61,7 @@ import { dumpDatabase, rebuildDatabase, type RowSink, type RowSource } from './c
 import {
   PUBLISHED_IMAGE_MAX_CHARS,
   compareSettingsStamp,
+  compareShopStamp,
   feeItemsForBlock,
   isDeliveryChargeMenuItem,
   webAvailabilityOf,
@@ -70,14 +72,19 @@ import type {
   PublishMenuSummary,
   PublishMenuResult,
   PublishSettingsBody,
+  PublishShopBody,
+  PublishShopResult,
   PublishedMenu,
   PublishedMenuCategory,
   PublishedSettings,
   SettingsPublishStatus,
   SettingsStamp,
+  ShopStamp,
   WebOrder,
   WebOrderStatus,
   WebsiteSettingsHeld,
+  WebsiteShopAnswer,
+  WebsiteShopHeld,
   WebOrdersShiftPause,
   OrderStatus,
 } from '@cheeseoclock/shared-types';
@@ -157,6 +164,14 @@ const SETTINGS_NOTE_KEY = 'webBridge.settingsNote';
 /** Settings → Online orders, when the website is older than the settings block (no /api/bridge/settings, or it dropped the block). */
 const UNSUPPORTED_WEBSITE =
   'The website doesn’t take the delivery areas yet — it needs its update; then save the delivery areas again (Publish also works, and sends the menu too).';
+/** What the website last said it holds of the SHOP block (THE SHOP BLOCK), and its home page's missing items: survives a restart. */
+const SHOP_CONFIRMED_KEY = 'webBridge.shopConfirmed';
+/** Why the shop block for a stamp did not reach the website (refused, this till's own check, an older website). */
+const SHOP_NOTE_KEY = 'webBridge.shopNote';
+/** Settings → Online orders, when the website is older than the shop block (no /api/bridge/shop, or it dropped `shop`). */
+export const UNSUPPORTED_WEBSITE_SHOP =
+  'The website doesn’t take the shop details yet — it needs its update; then it gets them by itself (or press Publish, which sends the menu too).';
+
 /**
  * Settings → Online orders (and the publish toast), when the website is older than v0.7.30: it
  * took the block and the menu but DROPPED what only v0.7.30 keeps (PublishMenuResult.websiteMessages).
@@ -234,6 +249,10 @@ interface BridgeStatus {
   shiftPause: WebOrdersShiftPause | null;
   /** The owner's settings on the website (the settings block of the menu publish). */
   settingsPublish: SettingsPublishStatus;
+  /** The shop's details, hours, website words and home lineup on the website (THE SHOP BLOCK). */
+  shopPublish: SettingsPublishStatus;
+  /** The home page's featured items the website last said it can't find on its menu (hidden); null = it has not said. */
+  homeMissing: string[] | null;
 }
 
 /** What the website last said it holds (SETTINGS_CONFIRMED_KEY). */
@@ -249,6 +268,16 @@ interface SettingsNote {
   stampKey: string;
   state: 'refused' | 'unsupported';
   message: string;
+}
+
+/** What the website last said it holds of the shop block (SHOP_CONFIRMED_KEY). */
+interface WebsiteShopHeldRecord {
+  /** Its block's stamp and device; null = it holds no shop block. */
+  held: { stamp: ShopStamp; deviceId: string | null } | null;
+  /** Its home page's featured items not on its menu; null = it did not say. */
+  homeMissing: string[] | null;
+  /** When it said so (this till's clock). */
+  confirmedAt: string;
 }
 
 /** Just enough to talk to the site: the saved config, or one typed into the onboarding wizard. */
@@ -314,6 +343,12 @@ class WebOrdersBridge {
   private stopSettingsListener: (() => void) | null = null;
   /** "Publish the menu to the website by itself" (Settings → Online orders): the debounce. */
   private menuTimer: NodeJS.Timeout | null = null;
+  /** The next look at whether the website needs this till's SHOP block (its own timer and back-off: THE SHOP BLOCK). */
+  private shopTimer: NodeJS.Timeout | null = null;
+  /** A shop Save arrived while a publish was on its way: look again when it ends. */
+  private shopRecheck = false;
+  private shopNextTryAt = 0;
+  private shopRetryMs = 0;
 
   init(db: AppDatabase, deviceId: string): void {
     this.db = db;
@@ -325,13 +360,44 @@ class WebOrdersBridge {
     this.stopSettingsListener = onWebsiteSettingsChanged(() => this.settingsChanged());
     this.reschedule();
     this.scheduleSettingsCheck(SETTINGS_STARTUP_CHECK_MS);
+    this.scheduleShopCheck(SETTINGS_STARTUP_CHECK_MS);
   }
 
-  /** A setting the website needs changed: publish soon, whatever back-off an older attempt left. */
+  /**
+   * A setting the website needs changed (the settings block's keys or the
+   * shop block's, saved here or synced): look at both soon, whatever back-off
+   * an older attempt left — each block goes only when its own stamp says the
+   * website needs it.
+   */
   settingsChanged(): void {
     this.settingsNextTryAt = 0;
     this.settingsRetryMs = 0;
     this.scheduleSettingsCheck(SETTINGS_PUBLISH_DELAY_MS);
+    this.shopNextTryAt = 0;
+    this.shopRetryMs = 0;
+    this.scheduleShopCheck(SETTINGS_PUBLISH_DELAY_MS);
+  }
+
+  private scheduleShopCheck(ms: number): void {
+    if (this.shopTimer) clearTimeout(this.shopTimer);
+    this.shopTimer = setTimeout(() => {
+      this.shopTimer = null;
+      void this.maybePublishShop();
+    }, ms);
+    this.shopTimer.unref?.();
+  }
+
+  /** A publish (the menu, a block alone) has ended: look again at whatever a Save asked for meanwhile. */
+  private publishingDone(): void {
+    this.settingsPublishing = false;
+    if (this.settingsRecheck) {
+      this.settingsRecheck = false;
+      this.scheduleSettingsCheck(SETTINGS_PUBLISH_DELAY_MS);
+    }
+    if (this.shopRecheck) {
+      this.shopRecheck = false;
+      this.scheduleShopCheck(SETTINGS_PUBLISH_DELAY_MS);
+    }
   }
 
   private scheduleSettingsCheck(ms: number): void {
@@ -411,9 +477,17 @@ class WebOrdersBridge {
     try {
       const res = await this.api(cfg, '/api/bridge/status', { method: 'GET' });
       if (!res.ok) return;
-      const body = (await res.json().catch(() => null)) as { data?: { settings?: unknown } } | null;
+      const body = (await res.json().catch(() => null)) as { data?: { settings?: unknown; shop?: unknown; homeMissing?: unknown } } | null;
       const data = body?.data;
-      if (!data || typeof data !== 'object' || !('settings' in data)) return;
+      if (!data || typeof data !== 'object') return;
+      // A website with the shop block says what it holds of it (null = none): an updated website
+      // clears an "it needs its update" note, so the block goes by itself.
+      if ('shop' in data) {
+        const shop = data.shop as Partial<WebsiteShopHeld> | null;
+        this.recordShopHeld({ ...(shop ?? {}), homeMissing: Array.isArray(data.homeMissing) ? (data.homeMissing as string[]) : undefined });
+        if (this.shopNoteState() === 'unsupported') this.clearShopNote();
+      }
+      if (!('settings' in data)) return;
       const held = data.settings as Partial<WebsiteSettingsHeld> | null;
       this.recordWebsiteHeld(held ?? {});
     } catch (e) {
@@ -457,6 +531,80 @@ class WebOrdersBridge {
       this.scheduleSettingsCheck(this.settingsRetryMs);
       log.warn('Settings publish to the website failed (will retry)', { error: e instanceof Error ? e.message : String(e) });
     }
+  }
+
+  /**
+   * Send this till's SHOP block alone (PUT /api/bridge/shop — never the menu,
+   * never the settings block) when the website needs it (pos-domain
+   * websiteNeedsShop: none held, an older one, or this till's own older one)
+   * — after a Save here, one synced from the other till, or at start-up.
+   * Never throws; offline it retries with its own back-off. A block that did
+   * not go (refused, this till's own check, an older website) is not sent
+   * again by itself until the stamp changes. The same lock as the settings
+   * block: one sending at a time.
+   */
+  async maybePublishShop(): Promise<void> {
+    if (!this.db) return;
+    if (this.settingsPublishing) {
+      this.shopRecheck = true;
+      return;
+    }
+    const cfg = getWebBridgeConfig(this.db);
+    if (!isWebBridgeReady(cfg).ok) return;
+    const local = localShopStamp(this.db);
+    if (local.shopRev === 0) return;
+    if (Date.now() < this.shopNextTryAt) return;
+    await this.readWebsiteHeldOnce(cfg);
+    const held = this.shopHeld();
+    if (held && !websiteNeedsShop(local, held.held, this.deviceId)) return;
+    if (this.shopNoteFor(local)) return;
+    // Another sending started while the website's status was read: after it.
+    if (this.settingsPublishing) {
+      this.shopRecheck = true;
+      return;
+    }
+    try {
+      await this.publishShopAlone(cfg);
+      this.shopRetryMs = 0;
+    } catch (e) {
+      this.shopRetryMs = Math.min(SETTINGS_RETRY_MAX_MS, Math.max(SETTINGS_RETRY_MIN_MS, this.shopRetryMs * 2));
+      this.shopNextTryAt = Date.now() + this.shopRetryMs;
+      this.scheduleShopCheck(this.shopRetryMs);
+      log.warn('Shop details publish to the website failed (will retry)', { error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** Where this till's shop details stand with the website, for Settings → Online orders. */
+  private shopPublishStatus(ready: boolean): SettingsPublishStatus {
+    if (!this.db) return { state: 'none', at: null, message: null };
+    const local = localShopStamp(this.db);
+    const known = this.shopHeld();
+    const at = known?.confirmedAt ?? null;
+    if (local.shopRev === 0) return { state: 'none', at, message: null };
+    const note = this.shopNoteFor(local);
+    if (note) return { state: note.state, at, message: note.message };
+    const held = known?.held ?? null;
+    if (held) {
+      const c = compareShopStamp(local, held.stamp);
+      if (c === 0) return { state: 'published', at, message: null };
+      if (c < 0 && !websiteNeedsShop(local, held, this.deviceId)) {
+        return {
+          state: 'waiting',
+          at,
+          message:
+            held.deviceId === this.deviceId
+              ? 'The website holds newer shop details from this till (from before a backup was restored?) — save a shop card again here to replace them.'
+              : 'The website holds newer shop details from the other till — this till matches them once the till link brings them.',
+        };
+      }
+    }
+    return {
+      state: 'waiting',
+      at,
+      message: ready
+        ? null
+        : 'This till has no website link: the other till sends the shop details once it has this update (each till’s Settings → About shows its version), or connect this one.',
+    };
   }
 
   /**
@@ -568,6 +716,8 @@ class WebOrdersBridge {
     this.settingsTimer = null;
     if (this.menuTimer) clearTimeout(this.menuTimer);
     this.menuTimer = null;
+    if (this.shopTimer) clearTimeout(this.shopTimer);
+    this.shopTimer = null;
     this.stopSettingsListener?.();
     this.stopSettingsListener = null;
   }
@@ -590,6 +740,8 @@ class WebOrdersBridge {
       lastImportError: this.lastImportError,
       shiftPause: pause ? describeShiftPause(pause) : null,
       settingsPublish: this.settingsPublishStatus(cfg ? isWebBridgeReady(cfg).ok : false),
+      shopPublish: this.shopPublishStatus(cfg ? isWebBridgeReady(cfg).ok : false),
+      homeMissing: this.shopHeld()?.homeMissing ?? null,
     };
   }
 
@@ -668,6 +820,8 @@ class WebOrdersBridge {
     void this.maybeCloudBackup(cfg);
     // A newer settings block (saved here or synced from the other till) the website hasn't confirmed.
     void this.maybePublishSettings();
+    // …and the same for the shop block (its own stamp: THE SHOP BLOCK).
+    void this.maybePublishShop();
   }
 
   /**
@@ -1630,6 +1784,11 @@ class WebOrdersBridge {
    * stores menu and block together or neither: when it refuses the block,
    * the menu is sent again without it. The till records what the website
    * says it holds. (A Save sends the block ALONE: publishSettingsAlone.)
+   *
+   * Once one of the shop keys is saved, the SHOP block goes with it too
+   * (THE SHOP BLOCK): refused (shop_invalid), the menu is sent again
+   * without it — the settings block still goes. The website's answer names
+   * the home page's featured items it can't find (homeMissing).
    */
   async publishMenu(): Promise<PublishMenuSummary> {
     if (!this.db) throw new Error('Bridge not initialized');
@@ -1640,31 +1799,48 @@ class WebOrdersBridge {
 
     this.settingsPublishing = true;
     try {
-      // Menu and block read together, so the block's fee items are this menu's.
-      const { menu, photosLeftOut, sb } = db.transaction(() => {
+      // Menu and blocks read together, so the settings block's fee items are this menu's.
+      const { menu, photosLeftOut, sb, shop } = db.transaction(() => {
         const r = buildPublishedMenuReport(db);
-        return { menu: r.menu, photosLeftOut: r.photosLeftOut, sb: settingsBlockFor(db, r.menu, this.deviceId) };
+        return {
+          menu: r.menu,
+          photosLeftOut: r.photosLeftOut,
+          sb: settingsBlockFor(db, r.menu, this.deviceId),
+          shop: shopBlockFor(db, this.deviceId),
+        };
       })();
       const itemCount = menu.categories.reduce((s, c) => s + c.items.length, 0);
       const send = (body: PublishedMenu) => this.api(cfg, '/api/bridge/menu', { method: 'PUT', body: JSON.stringify(body) });
       let sentBlock = sb.block !== null;
-      let res = await send(sb.block ? { ...menu, settings: sb.block } : menu);
-      if (!res.ok) {
+      let sentShop = shop.block !== null;
+      // Nothing saved: exactly the menu as before (no `settings`, no `shop` key).
+      const bodyOf = (): PublishedMenu => ({
+        ...menu,
+        ...(sentBlock && sb.block ? { settings: sb.block } : {}),
+        ...(sentShop && shop.block ? { shop: shop.block } : {}),
+      });
+      let res = await send(bodyOf());
+      // The website refuses a block with the menu: that block is dropped and the menu goes again (at most three sends).
+      while (!res.ok) {
         const text = await res.text().catch(() => '');
-        const refusal = sb.block ? settingsRefusalOf(text) : null;
-        if (refusal === null) throw new Error(`Publish failed: HTTP ${res.status} ${text.slice(0, 200)}`);
-        this.noteSettings(sb.stamp, 'refused', refusal);
-        // The website refused the block, and so the menu with it — the menu goes on its own.
-        sentBlock = false;
-        res = await send(menu);
-        if (!res.ok) {
-          const again = await res.text().catch(() => '');
-          throw new Error(`Publish failed: HTTP ${res.status} ${again.slice(0, 200)}`);
+        const settingsRefusal = sentBlock ? settingsRefusalOf(text) : null;
+        const shopRefusal = settingsRefusal === null && sentShop ? shopRefusalOf(text) : null;
+        if (settingsRefusal !== null) {
+          this.noteSettings(sb.stamp, 'refused', settingsRefusal);
+          sentBlock = false;
+        } else if (shopRefusal !== null) {
+          this.noteShop(shop.stamp, 'refused', shopRefusal);
+          sentShop = false;
+        } else {
+          throw new Error(`Publish failed: HTTP ${res.status} ${text.slice(0, 200)}`);
         }
+        res = await send(bodyOf());
       }
       const data = ((await res.json().catch(() => null)) as { data?: Partial<PublishMenuResult> } | null)?.data ?? null;
       this.settingsAnswered(sb.stamp, sentBlock, data);
       if (!sentBlock && sb.problem) this.noteSettings(sb.stamp, 'refused', sb.problem);
+      this.shopAnswered(shop.stamp, sentShop, data);
+      if (!sentShop && shop.problem) this.noteShop(shop.stamp, 'refused', shop.problem);
       // An older website took the menu (and the block) but dropped "Pick-up only" and the messages:
       // say so — the owner's Publish once the website is updated sends them again.
       const olderWebsite =
@@ -1682,13 +1858,19 @@ class WebOrdersBridge {
           items: photosLeftOut.map((p) => p.name),
         });
       }
-      return { categories: menu.categories.length, items: itemCount, photosLeftOut, ...(olderWebsite ? { olderWebsite } : {}) };
+      const homeMissing = Array.isArray(data?.homeMissing) ? data.homeMissing.filter((n): n is string => typeof n === 'string') : null;
+      if (homeMissing && homeMissing.length > 0) log.warn('The website’s home page is missing featured items (hidden)', { items: homeMissing });
+      const shopPublish = this.shopPublishStatus(true);
+      return {
+        categories: menu.categories.length,
+        items: itemCount,
+        photosLeftOut,
+        ...(olderWebsite ? { olderWebsite } : {}),
+        ...(homeMissing ? { homeMissing } : {}),
+        ...(shopPublish.state !== 'none' ? { shopPublish } : {}),
+      };
     } finally {
-      this.settingsPublishing = false;
-      if (this.settingsRecheck) {
-        this.settingsRecheck = false;
-        this.scheduleSettingsCheck(SETTINGS_PUBLISH_DELAY_MS);
-      }
+      this.publishingDone();
     }
   }
 
@@ -1748,12 +1930,149 @@ class WebOrdersBridge {
         settings: data?.settings ?? 'unknown',
       });
     } finally {
-      this.settingsPublishing = false;
-      if (this.settingsRecheck) {
-        this.settingsRecheck = false;
-        this.scheduleSettingsCheck(SETTINGS_PUBLISH_DELAY_MS);
-      }
+      this.publishingDone();
     }
+  }
+
+  /**
+   * The till sending its SHOP block by itself (maybePublishShop): the block
+   * ALONE (PUT /api/bridge/shop, THE SHOP BLOCK) — the website stores it on
+   * the row it holds and changes nothing else. When this till's own check
+   * stops it, the website refuses it, has no menu yet or is older than the
+   * route, nothing more is sent and the reason is noted for that stamp. Any
+   * other failure throws (retried).
+   */
+  private async publishShopAlone(cfg: WebBridgeConfig): Promise<void> {
+    if (!this.db) return;
+    const db = this.db;
+    this.settingsPublishing = true;
+    try {
+      const shop = shopBlockFor(db, this.deviceId);
+      if (!shop.block) {
+        if (shop.problem) this.noteShop(shop.stamp, 'refused', shop.problem);
+        return;
+      }
+      const body: PublishShopBody = { shop: shop.block };
+      const res = await this.api(cfg, '/api/bridge/shop', { method: 'PUT', body: JSON.stringify(body) });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        if (res.status === 404) {
+          // A website older than the shop block: it needs its update.
+          this.noteShop(shop.stamp, 'unsupported', UNSUPPORTED_WEBSITE_SHOP);
+          return;
+        }
+        const refusal = shopRefusalOf(text);
+        if (refusal !== null) {
+          this.noteShop(shop.stamp, 'refused', refusal);
+          return;
+        }
+        if (res.status === 409 && /menu_not_published/.test(text)) {
+          this.noteShop(shop.stamp, 'refused', 'The website has no menu yet — press Publish once (it sends the menu with the shop details).');
+          return;
+        }
+        throw new Error(`Shop details publish failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+      }
+      const data = ((await res.json().catch(() => null)) as { data?: Partial<PublishShopResult> } | null)?.data ?? null;
+      this.shopAnswered(shop.stamp, true, data);
+      log.info('Shop details sent to the website (the menu stays as published)', { shop: data?.shop ?? 'unknown' });
+    } finally {
+      this.publishingDone();
+    }
+  }
+
+  /** What the website said about the shop block of a publish (sent with it or not), or of the block alone. */
+  private shopAnswered(sent: ShopStamp, sentShop: boolean, data: WebsiteShopAnswer | null): void {
+    if (!this.db) return;
+    if (!data || data.shop === undefined) {
+      // A website older than the shop block: it dropped it (the menu is stored). Update the website.
+      if (sentShop) this.noteShop(sent, 'unsupported', UNSUPPORTED_WEBSITE_SHOP);
+      return;
+    }
+    this.recordShopHeld(data);
+    if (sentShop && data.shop === 'stored') this.clearShopNote();
+    const held = this.shopHeld()?.held ?? null;
+    const local = localShopStamp(this.db);
+    const stillNeeded = websiteNeedsShop(local, held, this.deviceId);
+    if (sentShop && data.shop === 'ignored_older') {
+      // The website kept a newer block (the other till's). Should this till still think it needs its
+      // own, the two disagree: never send the same stamp round and round.
+      if (stillNeeded && compareShopStamp(local, sent) === 0) {
+        this.noteShop(sent, 'refused', 'The website keeps newer shop details than this till’s — save a shop card again to replace them.');
+      }
+      return;
+    }
+    // A Save while this one was on its way, or a website that lost the block: look again shortly.
+    // Bounded: each look sends this till's current block alone, which the website then holds, or stops.
+    if (stillNeeded && !(sentShop && data.shop === 'stored' && compareShopStamp(local, sent) === 0)) {
+      this.scheduleShopCheck(SETTINGS_PUBLISH_DELAY_MS);
+    }
+  }
+
+  /** What the website last said it holds of the shop block, or null when it has never said. */
+  private shopHeld(): WebsiteShopHeldRecord | null {
+    if (!this.db) return null;
+    const v = getSettingRaw(this.db, SHOP_CONFIRMED_KEY) as Partial<WebsiteShopHeldRecord> | null;
+    if (!v || typeof v.confirmedAt !== 'string' || !('held' in v)) return null;
+    const homeMissing = Array.isArray(v.homeMissing) ? v.homeMissing.filter((n): n is string => typeof n === 'string') : null;
+    const h = v.held;
+    if (h === null) return { held: null, homeMissing, confirmedAt: v.confirmedAt };
+    if (!h || typeof h.stamp?.shopRev !== 'number' || typeof h.stamp.shopAt !== 'string') return null;
+    return {
+      held: {
+        stamp: {
+          shopRev: h.stamp.shopRev,
+          shopAt: h.stamp.shopAt,
+          shopTie: typeof h.stamp.shopTie === 'number' ? h.stamp.shopTie : null,
+        },
+        deviceId: typeof h.deviceId === 'string' ? h.deviceId : null,
+      },
+      homeMissing,
+      confirmedAt: v.confirmedAt,
+    };
+  }
+
+  /** Record what the website says it holds of the shop block (an answer, or its status read). */
+  private recordShopHeld(data: WebsiteShopAnswer): void {
+    if (!this.db) return;
+    const held: WebsiteShopHeldRecord['held'] =
+      typeof data.shopRev === 'number' && typeof data.shopAt === 'string'
+        ? {
+            stamp: { shopRev: data.shopRev, shopAt: data.shopAt, shopTie: typeof data.shopTie === 'number' ? data.shopTie : null },
+            deviceId: typeof data.shopDeviceId === 'string' ? data.shopDeviceId : null,
+          }
+        : null;
+    const homeMissing = Array.isArray(data.homeMissing)
+      ? data.homeMissing.filter((n): n is string => typeof n === 'string')
+      : (this.shopHeld()?.homeMissing ?? null);
+    const value: WebsiteShopHeldRecord = { held, homeMissing, confirmedAt: nowIso() };
+    setSetting(this.db, SHOP_CONFIRMED_KEY, value);
+  }
+
+  /** The note about this shop stamp (refused, this till's own check, an older website), or null. */
+  private shopNoteFor(stamp: ShopStamp): SettingsNote | null {
+    if (!this.db) return null;
+    const v = getSettingRaw(this.db, SHOP_NOTE_KEY) as Partial<SettingsNote> | null;
+    if (!v || v.stampKey !== shopStampKey(stamp) || typeof v.message !== 'string') return null;
+    if (v.state !== 'refused' && v.state !== 'unsupported') return null;
+    return { stampKey: v.stampKey, state: v.state, message: v.message };
+  }
+
+  /** The shop note's state, whatever its stamp (an updated website clears an 'unsupported' one). */
+  private shopNoteState(): SettingsNote['state'] | null {
+    if (!this.db) return null;
+    const v = getSettingRaw(this.db, SHOP_NOTE_KEY) as Partial<SettingsNote> | null;
+    return v && (v.state === 'refused' || v.state === 'unsupported') ? v.state : null;
+  }
+
+  private noteShop(stamp: ShopStamp, state: 'refused' | 'unsupported', message: string): void {
+    if (!this.db) return;
+    const note: SettingsNote = { stampKey: shopStampKey(stamp), state, message };
+    setSetting(this.db, SHOP_NOTE_KEY, note);
+    log.warn('Shop details not on the website', { state, message });
+  }
+
+  private clearShopNote(): void {
+    if (this.db && getSettingRaw(this.db, SHOP_NOTE_KEY) !== null) deleteSetting(this.db, SHOP_NOTE_KEY);
   }
 
   /** What the website said about a publish (a block sent with it or not). */
@@ -2143,6 +2462,22 @@ function publishedPhoto(item: { id: string; name: string; image_url: string | nu
 /** A stamp as one comparable key (the status shows a refusal only while its stamp is current). */
 function stampKey(s: SettingsStamp): string {
   return `${s.settingsRev}|${s.settingsAt}|${s.settingsTie ?? ''}`;
+}
+
+/** A shop stamp as one comparable key. */
+function shopStampKey(s: ShopStamp): string {
+  return `${s.shopRev}|${s.shopAt}|${s.shopTie ?? ''}`;
+}
+
+/** The website's reason for refusing a shop block (400 shop_invalid, THE SHOP BLOCK), or null for any other failure. */
+export function shopRefusalOf(body: string): string | null {
+  try {
+    const j = JSON.parse(body) as { error?: unknown; message?: unknown };
+    if (j.error !== 'shop_invalid') return null;
+    return typeof j.message === 'string' && j.message.trim() ? j.message.trim().slice(0, 300) : 'The website refused the shop details.';
+  } catch {
+    return null;
+  }
 }
 
 /** The website's reason for refusing a settings block (400 settings_invalid), or null for any other failure. */

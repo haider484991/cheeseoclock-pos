@@ -212,10 +212,15 @@ export interface IpcContract {
     request: undefined;
     response: ApiResult<{ version: string; isDev: boolean }>;
   };
-  /** Shop name, tagline and logo for the PIN screen — readable before anyone logs in. */
+  /**
+   * Shop name, tagline and logo for the PIN screen — readable before anyone
+   * logs in. `storeName` is this till's receipt name; `shopName` the website's
+   * name for the shop ('shop.profile', both tills; public). Absent from an
+   * older till.
+   */
   'system:getBranding': {
     request: undefined;
-    response: ApiResult<{ storeName: string; storeTagline: string | null; logoUrl: string | null }>;
+    response: ApiResult<{ storeName: string; storeTagline: string | null; logoUrl: string | null; shopName?: string }>;
   };
   'system:getDeviceInfo': {
     request: undefined;
@@ -908,6 +913,18 @@ export interface IpcContract {
        * updated: …". Absent from an older till.
        */
       settingsPublish?: SettingsPublishStatus;
+      /**
+       * The shop's details, hours, website words and home lineup on the
+       * website (THE SHOP BLOCK, web-bridge.ts): the same words as
+       * settingsPublish. Absent from an older till.
+       */
+      shopPublish?: SettingsPublishStatus;
+      /**
+       * The home page's featured items the website said it can't find on its
+       * menu (their cards are hidden); null = it has not said (an older
+       * website, or no publish yet). Absent from an older till.
+       */
+      homeMissing?: string[] | null;
     }>;
   };
   /** Upload a fresh gzipped database backup to the cloud right now. */

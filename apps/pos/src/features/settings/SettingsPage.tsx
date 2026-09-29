@@ -38,6 +38,7 @@ import { MoneySettings } from './MoneySettings';
 import { TimingSettings } from './TimingSettings';
 import { KitchenStockSettings } from './KitchenStockSettings';
 import { DeliveryAreasSettings } from './DeliveryAreasSettings';
+import { WebsiteShopSettings } from './WebsiteShopSettings';
 import { useSessionStore } from '../../stores/sessionStore';
 
 export type SettingsTab =
@@ -183,7 +184,12 @@ export function SettingsPage() {
         {tab === 'delivery' && <DeliveryAreasSettings />}
         {tab === 'timing' && <TimingSettings />}
         {tab === 'stock' && <KitchenStockSettings />}
-        {tab === 'store' && <BrandingSettings />}
+        {tab === 'store' && (
+          <>
+            <BrandingSettings />
+            <WebsiteShopSettings />
+          </>
+        )}
         {tab === 'printer' && (
           <>
             <PrinterSettings />

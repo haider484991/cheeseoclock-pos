@@ -7,17 +7,20 @@ import { ensureDeviceInfo } from '../../db/repositories/device-repo.js';
 import { createUser } from '../../db/repositories/user-repo.js';
 import { createTaxCategory } from '../../db/repositories/tax-category-repo.js';
 import { getReceiptBranding, setReceiptBranding } from '../../services/printer-config.js';
+import { readShopProfile } from '../../db/business-settings-read.js';
 
 export function registerSystemHandlers(ctx: HandlerContext): void {
   // The PIN screen shows the shop's own name and logo. It read them through
   // printer:getConfig, which needs a login, so the login screen never had them.
-  // Only what is printed on every receipt anyway — nothing else leaks here.
+  // Only what is printed on every receipt anyway — nothing else leaks here —
+  // and the shop's name as the website shows it (public: it is on every page).
   defineHandler('system:getBranding', ctx, () => {
     const b = getReceiptBranding(ctx.db);
     return ok({
       storeName: b.storeName,
       storeTagline: b.storeTagline ?? null,
       logoUrl: b.logoUrl ?? null,
+      shopName: readShopProfile(ctx.db).name,
     });
   });
 

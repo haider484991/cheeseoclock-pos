@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '@cheeseoclock/ui';
+import { DEFAULT_SHOP_PROFILE } from '@cheeseoclock/shared-types';
 import { useSessionStore } from '../../stores/sessionStore';
 import { ipc } from '../../ipc/client';
 import {
@@ -77,7 +78,7 @@ export function Sidebar() {
   });
   const liveCount = activeQ.data ?? 0;
   const logoUrl = cfgQ.data?.branding.logoUrl;
-  const storeName = cfgQ.data?.branding.storeName ?? 'CheeseOclock';
+  const storeName = cfgQ.data?.branding.storeName ?? DEFAULT_SHOP_PROFILE.name;
 
   return (
     <aside className="app-sidebar flex w-60 shrink-0 flex-col border-r border-stone-200/70 bg-white/70 backdrop-blur-md dark:border-stone-800/70 dark:bg-stone-900/70">

@@ -4,6 +4,7 @@ import { requireSettingsManage } from '../guards.js';
 import {
   ok,
   PUBLISHED_SETTING_KEYS,
+  SHOP_PUBLISHED_KEYS,
   type AnyShopSettingCard,
   type ShopSettingCard,
   type ShopSettingKey,
@@ -47,7 +48,8 @@ import type { AppDatabase } from '../../db/connection.js';
  * A Save the website needs (the areas, the pick-up offer, the website's
  * messages and minimum) tells the web bridge, which sends the newer settings
  * block ALONE, with only its areas' charge items (never the till's
- * unpublished menu changes).
+ * unpublished menu changes); a Save of the shop's details (Shop & logo →
+ * "Website: shop details") sends the shop block alone the same way.
  */
 export function registerSettingsHandlers(ctx: HandlerContext): void {
   defineHandler('settings:getBusiness', ctx, (_ctx, payload) => {
@@ -134,12 +136,13 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
 }
 
 /**
- * The keys the website's settings block carries (shared-types
+ * The keys the website's blocks carry: the settings block's (shared-types
  * PUBLISHED_SETTING_KEYS: the areas, the pick-up offer and — since v0.7.30 —
- * 'online.options', the website's messages and minimum): a Save of one sends
- * the newer block alone.
+ * 'online.options', the website's messages and minimum) and the shop block's
+ * (SHOP_PUBLISHED_KEYS: the shop's details, hours, website words and home
+ * lineup). A Save of one sends ITS newer block alone — never the menu.
  */
-const WEBSITE_KEYS: ReadonlySet<ShopSettingKey> = new Set<ShopSettingKey>(PUBLISHED_SETTING_KEYS);
+const WEBSITE_KEYS: ReadonlySet<ShopSettingKey> = new Set<ShopSettingKey>([...PUBLISHED_SETTING_KEYS, ...SHOP_PUBLISHED_KEYS]);
 
 function card(db: AppDatabase, key: ShopSettingKey): AnyShopSettingCard {
   return getShopSettingCard(db, key, readTillLink(db)) as AnyShopSettingCard;
