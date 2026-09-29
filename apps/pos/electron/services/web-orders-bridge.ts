@@ -337,6 +337,8 @@ class WebOrdersBridge {
   private settingsRecheck = false;
   /** Once per start: read what the website holds (GET /api/bridge/status) before deciding. */
   private settingsHeldRead = false;
+  /** That read while it is on its way: a second caller (the shop block's check at start-up) waits for the same answer. */
+  private heldReadInFlight: Promise<void> | null = null;
   /** Not before this (ms): a back-off after a failed (offline) settings publish. */
   private settingsNextTryAt = 0;
   private settingsRetryMs = 0;
@@ -354,6 +356,7 @@ class WebOrdersBridge {
     this.db = db;
     this.deviceId = deviceId;
     this.settingsHeldRead = false;
+    this.heldReadInFlight = null;
     // The areas or the pick-up offer changed — saved here or arrived from the other till: the
     // website gets the newer block from ANY till with the link.
     this.stopSettingsListener?.();
@@ -470,10 +473,21 @@ class WebOrdersBridge {
    * database was rolled back, or a till restored from an older backup, would otherwise go on
    * believing the last answer. A website older than the block says nothing: left as it is.
    */
-  private async readWebsiteHeldOnce(cfg: WebBridgeConfig): Promise<void> {
-    if (this.settingsHeldRead) return;
+  private readWebsiteHeldOnce(cfg: WebBridgeConfig): Promise<void> {
+    // Both blocks' checks ask at start-up: the second waits for the first one's answer.
+    if (this.heldReadInFlight) return this.heldReadInFlight;
+    if (this.settingsHeldRead) return Promise.resolve();
     // One try per start (offline now: the publish's own answer tells the till later).
     this.settingsHeldRead = true;
+    const read = this.readWebsiteHeld(cfg).finally(() => {
+      if (this.heldReadInFlight === read) this.heldReadInFlight = null;
+    });
+    this.heldReadInFlight = read;
+    return read;
+  }
+
+  /** GET /api/bridge/status: record which blocks the website holds (never throws). */
+  private async readWebsiteHeld(cfg: WebBridgeConfig): Promise<void> {
     try {
       const res = await this.api(cfg, '/api/bridge/status', { method: 'GET' });
       if (!res.ok) return;

@@ -562,6 +562,29 @@ live('the website or this till can’t take the shop block', () => {
     expect(shopPuts()).toHaveLength(2);
   });
 
+  it('at start-up both blocks’ checks share ONE status read: whichever asks first, the shop block goes again when the website lost it', async () => {
+    const db = await till();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    save(db, 'shop.hours', hours('11:00', '23:00'));
+    await bridge().publishMenu();
+    expect(shopStatus()).toMatchObject({ state: 'published' });
+    // The website lost the shop block (rolled back, updated again); the till still remembers it held it.
+    websiteShop = null;
+    let statusReads = 0;
+    answerStatus = () => {
+      statusReads += 1;
+      return { ok: true, data: { settings: null, shop: null, homeMissing: [] } };
+    };
+    bridge().stop();
+    bridge().init(db as AppDatabase, DEV);
+    await Promise.all([bridge().maybePublishSettings(), bridge().maybePublishShop()]);
+    expect(statusReads).toBe(1);
+    // One sending at a time: the shop block goes once the settings block's is done.
+    await vi.waitFor(() => expect(shopPuts()).toHaveLength(1), { timeout: 8_000 });
+    expect(statusReads).toBe(1);
+    expect(shopStatus()).toMatchObject({ state: 'published' });
+  });
+
   it('a shop key saved by a newer version of the app: no shop block goes from this till (its default would replace the right one); Publish still sends the menu and the settings block', async () => {
     const db = await till();
     zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
