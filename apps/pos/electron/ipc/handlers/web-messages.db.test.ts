@@ -220,15 +220,30 @@ live('the bounds, in the main process', () => {
     expect(await save(v2({ closedNotice: { text: 'عید مبارک — “closed”', until: null } }))).toMatchObject({ ok: true });
   });
 
-  it('the Arabic letter mark and the invisible characters are refused anywhere in the notice or the announcement (the website’s rule); Urdu still saves', async () => {
+  it('every format character — the direction marks, the invisible ones, the soft hyphen, the tag characters — is refused anywhere in the notice or the announcement (the website’s rule), in the card’s words', async () => {
     h.session = OWNER;
-    const B = String.fromCharCode;
-    for (const code of [0x061c, 0x200b, 0x200c, 0x200d, 0x2060, 0x2064, 0xfeff]) {
+    const B = String.fromCodePoint;
+    for (const code of [0x061c, 0x200b, 0x200e, 0x202e, 0x2060, 0x2064, 0x2066, 0xfeff, 0x00ad, 0x180e, 0x206a, 0xfff9, 0xe0001, 0xe0041]) {
       for (const bad of [`Closed${B(code)}today`, `${B(code)}Closed`, `Closed${B(code)}`]) {
         await refused(v2({ closedNotice: { text: bad, until: null } }), /one line of plain words/);
         await refused(v2({ announcement: { on: true, text: bad } }), /one line of plain words/);
       }
     }
+    // The words in full: what is wrong, and what to do when it was pasted.
+    h.session = OWNER;
+    const o = await save(v2({ closedNotice: { text: `Closed${B(0x00ad)}today`, until: null } }));
+    expect(o.ok ? '' : o.message).toContain(
+      'The closed notice is one line of plain words (no line break, and no hidden or direction mark — retype it if it was pasted)',
+    );
+  });
+
+  it('Urdu saves — with the zero-width non-joiner an Urdu keyboard types — and so do emoji built with the joiner (the chef)', async () => {
+    h.session = OWNER;
+    const B = String.fromCodePoint;
+    const urdu = `نیا${B(0x200c)}ریپ — اس ہفتے`;
+    const chef = `New chef ${B(0x1f468, 0x200d, 0x1f373)} in the kitchen`;
+    expect(await save(v2({ closedNotice: { text: urdu, until: null }, announcement: { on: true, text: chef } }))).toMatchObject({ ok: true });
+    expect((await card()).value).toMatchObject({ closedNotice: { text: urdu }, announcement: { on: true, text: chef } });
     expect(await save(v2({ announcement: { on: true, text: 'نیا ریپ — اس ہفتے' } }))).toMatchObject({ ok: true });
   });
 

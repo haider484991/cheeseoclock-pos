@@ -26,6 +26,24 @@ export function centsFromRupeesText(text: string): number | null {
   return /^\d{1,7}$/.test(t) ? Number(t) * 100 : Number.NaN;
 }
 
+/**
+ * Whole rupees as typed, read only when there is one reading: '' → null
+ * (nothing typed); digits ("1500") → paisa; commas only as the till writes
+ * thousands ("1,500", "5,000": a first group of 1–3 digits not starting
+ * with 0, then groups of exactly three) → paisa. Anything else is NaN, never
+ * a guess: a decimal point ("0.5", "10.5"), a comma that is not a thousands
+ * one ("1,0", "10,00", ",500", "0,500" — a decimal comma somewhere else), a
+ * space inside, a sign, a word. (centsFromRupeesText drops every comma, so
+ * it reads "1,0" as Rs 10.)
+ */
+export function centsFromWholeRupeesText(text: string): number | null {
+  const t = text.trim();
+  if (t === '') return null;
+  if (/^\d{1,7}$/.test(t)) return Number(t) * 100;
+  if (/^[1-9]\d{0,2}(,\d{3}){1,2}$/.test(t)) return Number(t.replace(/,/g, '')) * 100;
+  return Number.NaN;
+}
+
 /** "a", "a and b", "a, b and c". */
 export function andList(parts: readonly string[]): string {
   if (parts.length <= 1) return parts.join('');

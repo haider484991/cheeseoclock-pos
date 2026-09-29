@@ -734,6 +734,32 @@ live('a menu file import keeps where things sell on the website ("kept on the ti
     ]);
   });
 
+  it('namesakes set differently are counted as lost file or not: the file that brings neither name back says so too — an item and a category', async () => {
+    h.session = MANAGER;
+    // Two "Test Burger"s (pick-up only, and off the website) and two "Test drinks" (off the website, and on it).
+    await data('menu:updateItem', { id: menu.burger, webAvailability: 'pickup_only' });
+    await data('menu:createItem', { categoryId: menu.drinks, name: 'test burger', basePriceCents: 1_000, taxCategoryId: menu.tax, webAvailability: 'off' });
+    await data('menu:updateCategory', { id: menu.drinks, isOnWebsite: false });
+    await data('menu:createCategory', { name: 'TEST DRINKS', displayOrder: 4, colorHex: '#123456' });
+    const { applyMenuImport, planMenuImportFromDb } = await import('../../db/repositories/menu-import-repo.js');
+    const pizza = { name: 'Test Pizza', category: 'Test food', priceCents: 90_000, recipe: [] };
+    const fileOf = (categories: Array<{ name: string }>, items: unknown[]) =>
+      menuImportFileSchema.parse({ format: 'cheeseoclock-menu-import', version: 1, source: 'test', categories, ingredients: [], items });
+    // The file brings back neither name — no burger, no drinks category: both names are lost.
+    const neither = fileOf([{ name: 'Test food' }], [pizza]);
+    expect(planMenuImportFromDb(db as never, neither, { fresh: true }).preview.fresh).toMatchObject({ websiteSettingsLost: 2 });
+    // The file brings both back: the same two (nothing is carried for either name).
+    const both = fileOf(
+      [{ name: 'Test food' }, { name: 'Test drinks' }],
+      [pizza, { name: 'Test Burger', category: 'Test drinks', priceCents: 61_000, recipe: [] }],
+    );
+    expect(planMenuImportFromDb(db as never, both, { fresh: true }).preview.fresh).toMatchObject({ websiteSettingsLost: 2 });
+    applyMenuImport(db as never, neither, 'test.json', OWNER_ACTOR, { fresh: true });
+    expect(db.prepare(`SELECT name FROM menu_items WHERE deleted_at IS NULL AND name NOT LIKE 'Delivery Charge%'`).all()).toEqual([
+      { name: 'Test Pizza' },
+    ]);
+  });
+
   it('a fresh start says how many website settings it resets (the file carries none); the delivery charges stay and are skipped', async () => {
     h.session = MANAGER;
     await data('menu:updateItem', { id: menu.burger, webAvailability: 'pickup_only' });

@@ -748,9 +748,10 @@ describe('the bounds', () => {
     ['a minimum over Rs 5,000', { minDeliveryOrderCents: 500_100 }],
     ['a minimum in part rupees', { minDeliveryOrderCents: 100_050 }],
     ['a negative minimum', { minDeliveryOrderCents: -100 }],
-    // The Arabic letter mark and the invisible characters, anywhere in the words (the till's Save has the same rule).
-    ...[0x061c, 0x200b, 0x200c, 0x200d, 0x2060, 0x2064, 0xfeff].flatMap((code): Array<[string, Record<string, unknown>]> => {
-      const c = String.fromCharCode(code);
+    // Every format character — the direction marks, the invisible ones, the soft hyphen, the tag
+    // characters — anywhere in the words (the till's Save has the same rule).
+    ...[0x061c, 0x200b, 0x200e, 0x2060, 0x2064, 0x2066, 0xfeff, 0x00ad, 0x180e, 0x206a, 0xfff9, 0xe0001, 0xe0041].flatMap((code): Array<[string, Record<string, unknown>]> => {
+      const c = String.fromCodePoint(code);
       const u = `U+${code.toString(16).toUpperCase().padStart(4, '0')}`;
       return [
         [`${u} inside the closed notice`, { closedNotice: { text: `Closed${c}today`, until: null } }],
@@ -781,6 +782,18 @@ describe('the bounds', () => {
       minDeliveryOrderCents: 500_000,
     }) as unknown as PublishedSettings;
     expect((await publish(m, block)).json.data).toMatchObject({ settings: 'stored' });
+    expect(await storedSettings()).toEqual(block);
+  });
+
+  it('takes the zero-width non-joiner an Urdu keyboard types, and emoji built with the joiner (the chef) — the only two format characters let through', async () => {
+    const m = menu();
+    const B = String.fromCodePoint;
+    const block = at({
+      closedNotice: { text: `عید کی${B(0x200c)}چھٹی — پیر کو کھلے گا`, until: null },
+      announcement: { on: true, text: `New chef ${B(0x1f468, 0x200d, 0x1f373)} — a made-up menu` },
+    }) as unknown as PublishedSettings;
+    expect((await publish(m, block)).json.data).toMatchObject({ settings: 'stored' });
+    expect((await save(block)).json.data).toMatchObject({ settings: 'stored' });
     expect(await storedSettings()).toEqual(block);
   });
 

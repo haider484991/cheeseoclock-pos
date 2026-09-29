@@ -6,6 +6,8 @@
  * sheet, and the cart's smallest-delivery-order note (v0.7.30, sweep B1 + B5).
  * Every name and amount is made up.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { PublishedMenuItem, PublishedModifierGroup } from '@cheeseoclock/shared-types';
 
@@ -241,5 +243,71 @@ describe('the choices sheet of a pizza whose Large is set "Pick-up only"', () =>
     expect(sizeOrderable({ pickupOnly: true }, true)).toBe(true);
     expect(sizeOrderable({ pickupOnly: false }, false)).toBe(true);
     expect(sizeOrderable({ pickupOnly: false }, true)).toBe(true);
+  });
+});
+
+/**
+ * Where a size is chosen and added, each asks the one rule (sizeOrderable)
+ * with whether online pick-up is on NOW. Static rendering runs no click, and
+ * the card and the sheet never offer such a size as a button (tested above),
+ * so these guards are what stops it when pick-up goes off between the render
+ * and the tap (the status poll): read from the source, as the till's
+ * DiscountDialog and delivery-charge row are.
+ */
+describe('the pick-up-only size rule where a size is tapped, switched and added (read from the source)', () => {
+  const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
+  const APP = read('../components/OrderingApp.tsx');
+  const SHEET = read('../components/ordering/ItemSheet.tsx');
+
+  /** From `start` to the brace closing the first `{` at or after it: a function's body, a handler. */
+  function braced(src: string, start: string, from = 0): string {
+    const at = src.indexOf(start, from);
+    expect(at, start).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = src.indexOf('{', at); i < src.length; i += 1) {
+      if (src[i] === '{') depth += 1;
+      else if (src[i] === '}' && --depth === 0) return src.slice(at, i + 1);
+    }
+    throw new Error(`not closed: ${start}`);
+  }
+  /** A self-closing JSX element, `<Tag … />`, its props whole. */
+  function element(src: string, tag: string): string {
+    const at = src.indexOf(`<${tag}`);
+    expect(at, tag).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = at; i < src.length; i += 1) {
+      if (src[i] === '{') depth += 1;
+      else if (src[i] === '}') depth -= 1;
+      else if (depth === 0 && src.startsWith('/>', i)) return src.slice(at, i + 2);
+    }
+    throw new Error(`not closed: <${tag}`);
+  }
+  /** `guard` is in `code`, and every `after` comes after it. */
+  function guardsFirst(code: string, guard: string, ...after: string[]) {
+    const g = code.indexOf(guard);
+    expect(g, guard).toBeGreaterThan(-1);
+    for (const a of after) expect({ a, after: code.indexOf(a) > g }).toEqual({ a, after: true });
+  }
+
+  it('a size tapped on a card (pickVariant): one not orderable now is neither added nor opened in the sheet — and pick-up going on or off reaches it', () => {
+    const pick = braced(APP, 'const pickVariant: PickFn = useCallback(');
+    guardsFirst(pick, 'if (!v || !sizeOrderable(v, canPickup)) return;', 'setSheet(', 'addToCart(');
+    const at = APP.indexOf(pick) + pick.length;
+    expect(APP.slice(at, APP.indexOf(');', at))).toMatch(/\[[^\]]*\bcanPickup\b[^\]]*\]/);
+  });
+
+  it('the sheet opened from the menu is told whether pick-up is on now, and what its Add hands back reaches the cart only if orderable now', () => {
+    expect(APP.match(/<ItemSheet\b/g) ?? []).toHaveLength(1);
+    const sheet = element(APP, 'ItemSheet');
+    expect(sheet).toMatch(/\scanPickup=\{canPickup\}\s/);
+    guardsFirst(braced(sheet, 'onConfirm={'), 'if (!sizeOrderable(v, canPickup)) return;', 'addToCart(', 'setSheet(null)');
+  });
+
+  it('in the sheet, switching to a size not orderable now does nothing; the Add of one (pick-up went off since) adds nothing', () => {
+    guardsFirst(braced(SHEET, 'function switchVariant('), 'if (!next || !sizeOrderable(next, canPickup)) return;', 'setVariantIndex(i)', 'setSelected(');
+    expect(SHEET).toContain('const unavailable = !sizeOrderable(variant, canPickup);');
+    const add = braced(SHEET, 'onClick={', SHEET.indexOf('aria-disabled={unavailable || unmet.length > 0}'));
+    guardsFirst(add, 'if (unavailable) return;', 'onConfirm(');
+    expect(SHEET.match(/onConfirm\(/g) ?? []).toHaveLength(1);
   });
 });

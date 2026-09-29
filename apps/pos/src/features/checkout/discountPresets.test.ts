@@ -333,6 +333,19 @@ describe('Apply, decided in one place: the button, Enter and a second tap on a p
     expect(stop).toBeGreaterThan(decide);
     expect(send).toBeGreaterThan(stop);
     expect(apply.slice(stop, send)).toContain('return;');
+    // …with the owner's "a discount needs a reason" and what is typed — as the button decides (Enter
+    // and a second tap never go past a missing reason to the main process, using up the PIN's try).
+    const calls = src
+      .split('discountApplyStep({')
+      .slice(1)
+      .map((c) => c.slice(0, c.indexOf('})')));
+    expect(calls).toHaveLength(2);
+    for (const args of calls) {
+      expect(args).toMatch(/\sreasonRequired: rules\.reasonRequired,\s/);
+      expect(args).toMatch(/\sreason,\s/);
+      expect(args).toMatch(/\spin,\s/);
+    }
+    expect(apply.slice(decide, stop)).toMatch(/\sreasonRequired: rules\.reasonRequired,\s/);
     // …and says the main process's refusal as discountRefused words it.
     expect(apply).toContain("discountRefused(e instanceof Error ? e.message : 'Unknown error', step.approverPin !== undefined)");
     expect(apply).toContain('setError(refused.error)');

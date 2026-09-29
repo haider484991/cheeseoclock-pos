@@ -71,9 +71,10 @@ export const publishedPickupSchema = z.object({
 
 /**
  * One line of plain words for the website, at most `max` letters: no control
- * character (a line break or a tab), no line or paragraph separator, no mark
- * that turns the text's direction, no invisible character
- * (WEBSITE_TEXT_FORBIDDEN_RE). '' is allowed (= none).
+ * character (a line break or a tab), no line or paragraph separator, and no
+ * format character — a mark that turns the text's direction, an invisible
+ * one — but the zero-width non-joiner and joiner (Urdu keyboards and emoji
+ * use them): WEBSITE_TEXT_FORBIDDEN_RE. '' is allowed (= none).
  */
 export const websiteLine = (max: number, what: string) =>
   z

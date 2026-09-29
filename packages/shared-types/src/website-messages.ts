@@ -40,19 +40,25 @@ export const ANNOUNCEMENT_MAX = 120;
 export const MIN_DELIVERY_ORDER_MAX_CENTS = 500_000;
 
 /**
- * Characters a website message may not hold, anywhere in it: control
- * characters (a line break or a tab too — a message is ONE line), the line
- * and paragraph separators, the marks that reverse or embed text direction
- * (they can make the words read differently from what was typed: U+200E,
- * U+200F, U+202A–U+202E, U+2066–U+2069, and the Arabic letter mark U+061C an
- * Urdu keyboard can type), and the invisible characters (the zero-width
- * space, non-joiner and joiner U+200B–U+200D, the word joiner and invisible
- * operators U+2060–U+2064, the byte order mark U+FEFF). Urdu letters
- * (U+0600–U+06FF but U+061C) are words like any other. The till's Save and
- * the website's check both use this one rule.
+ * Characters a website message may not hold, anywhere in it:
+ * - every control character (Unicode Cc: U+0000-U+001F, U+007F-U+009F; a
+ *   line break or a tab too, a message is ONE line) and the line and
+ *   paragraph separators U+2028, U+2029;
+ * - every format character (Unicode Cf): the marks that turn or embed the
+ *   text's direction (they can make the words read differently from what was
+ *   typed: U+200E, U+200F, U+202A-U+202E, U+2066-U+2069, the Arabic letter
+ *   mark U+061C), the invisible ones (the zero-width space U+200B, the word
+ *   joiner and invisible operators U+2060-U+2064, the byte order mark U+FEFF,
+ *   the soft hyphen U+00AD, U+180E, the Arabic shaping controls
+ *   U+206A-U+206F, U+FFF9-U+FFFB, the tag characters U+E0001 and
+ *   U+E0020-U+E007F) and any other one, whatever Unicode adds;
+ * - EXCEPT the zero-width non-joiner U+200C (an Urdu keyboard types it
+ *   between letters that must not join) and the zero-width joiner U+200D (it
+ *   builds emoji: the chef is the man U+1F468, U+200D, the cooking U+1F373).
+ * Urdu letters are words like any other. The till's Save and the website's
+ * check both use this one rule (shared-schemas websiteLine).
  */
-// eslint-disable-next-line no-control-regex
-export const WEBSITE_TEXT_FORBIDDEN_RE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
+export const WEBSITE_TEXT_FORBIDDEN_RE = /(?![\u200c\u200d])[\p{Cc}\p{Cf}\u2028\u2029]/u;
 
 /** Today: no notice. */
 export const NO_CLOSED_NOTICE: Readonly<ClosedNotice> = Object.freeze({ text: '', until: null });

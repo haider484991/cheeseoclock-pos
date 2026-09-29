@@ -122,28 +122,70 @@ describe('the smallest website delivery order', () => {
 });
 
 describe('what a website message may hold', () => {
-  it('refuses, anywhere in the words, the Arabic letter mark and the invisible characters: zero-width space, non-joiner and joiner, word joiner and invisible operators, byte order mark', () => {
-    for (const code of [0x061c, 0x200b, 0x200c, 0x200d, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xfeff]) {
-      for (const bad of [`Closed${String.fromCharCode(code)}today`, `${String.fromCharCode(code)}Closed`, `Closed${String.fromCharCode(code)}`]) {
-        expect({ code: code.toString(16), refused: WEBSITE_TEXT_FORBIDDEN_RE.test(bad) }).toEqual({ code: code.toString(16), refused: true });
-      }
-    }
+  const C = (...codes: number[]) => String.fromCodePoint(...codes);
+  const hex = (code: number) => `U+${code.toString(16).toUpperCase().padStart(4, '0')}`;
+  const refused = (text: string) => WEBSITE_TEXT_FORBIDDEN_RE.test(text);
+  /** The codes NOT refused inside the words, at their start and at their end. */
+  const letThrough = (codes: readonly number[]) =>
+    codes.filter((code) => ![`Closed${C(code)}today`, `${C(code)}Closed`, `Closed${C(code)}`].every(refused)).map(hex);
+
+  it('refuses, anywhere in the words, the marks that turn the text’s direction: U+061C (an Urdu keyboard can type it), U+200E, U+200F, U+202A–U+202E, U+2066–U+2069', () => {
+    const marks = [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
+    expect(letThrough(marks)).toEqual([]);
   });
 
-  it('keeps every other Urdu character (U+0600–U+06FF but U+061C) and the characters beside the new ones', () => {
-    const allowed = [0x200a, 0x2010, 0x205f, 0x2065, 0xfefe, 0xff01];
-    for (let code = 0x0600; code <= 0x06ff; code += 1) if (code !== 0x061c) allowed.push(code);
-    const refused = allowed.filter((code) => WEBSITE_TEXT_FORBIDDEN_RE.test(`a${String.fromCharCode(code)}b`));
-    expect(refused.map((c) => c.toString(16))).toEqual([]);
-    expect(WEBSITE_TEXT_FORBIDDEN_RE.test('بند ہے — کل کھلے گا')).toBe(false);
+  it('refuses, anywhere in the words, the invisible characters: the zero-width space, the word joiner and invisible operators, the byte order mark, the soft hyphen, U+180E, the Arabic shaping controls, U+FFF9–U+FFFB and the tag characters', () => {
+    const hidden = [
+      0x200b, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xfeff, 0x00ad, 0x180e,
+      0x206a, 0x206b, 0x206c, 0x206d, 0x206e, 0x206f, 0xfff9, 0xfffa, 0xfffb,
+      0xe0001, 0xe0020, 0xe0041, 0xe0067, 0xe007f,
+    ];
+    expect(letThrough(hidden)).toEqual([]);
+    // A flag spelt with tag characters (England's) goes with them.
+    expect(refused(`Closed ${C(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f)}`)).toBe(true);
   });
 
-  it('refuses control characters, a line break or tab, line/paragraph separators and direction marks; plain words, Urdu and dashes are fine', () => {
-    for (const bad of ['a\nb', 'a\rb', 'a\tb', 'a\u0000b', 'a\u007fb', 'a\u0085b', 'a\u2028b', 'a\u2029b', 'a\u202eb', 'a\u2066b', 'a\u200fb']) {
-      expect({ bad, refused: WEBSITE_TEXT_FORBIDDEN_RE.test(bad) }).toEqual({ bad, refused: true });
+  it('lets through the zero-width non-joiner (an Urdu keyboard types it between letters that must not join) and the joiner (emoji are built with it: the chef)', () => {
+    expect(letThrough([0x200c, 0x200d])).toEqual(['U+200C', 'U+200D']);
+    // Made-up Urdu words with the non-joiner typed inside them.
+    expect(refused(`نیا${C(0x200c)}مینو — آج${C(0x200c)}سے`)).toBe(false);
+    // The chef (man U+200D cooking), the cook (woman U+200D cooking) and a family, in an announcement.
+    expect(refused(`New chef ${C(0x1f468, 0x200d, 0x1f373)} and cook ${C(0x1f469, 0x200d, 0x1f373)}`)).toBe(false);
+    expect(refused(C(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467))).toBe(false);
+  });
+
+  it('refuses EVERY format character Unicode has (Cf) and every control character (Cc), and the line and paragraph separators — all but the non-joiner and the joiner; nothing else', () => {
+    const cf = /^\p{Cf}$/u;
+    const cc = /^\p{Cc}$/u;
+    const wrong: string[] = [];
+    let formats = 0;
+    for (let code = 0; code <= 0x10ffff; code += 1) {
+      if (code >= 0xd800 && code <= 0xdfff) continue; // halves of a pair, not characters
+      const ch = C(code);
+      if (cf.test(ch)) formats += 1;
+      const refuse = (cc.test(ch) || cf.test(ch) || code === 0x2028 || code === 0x2029) && code !== 0x200c && code !== 0x200d;
+      if (refused(`a${ch}b`) !== refuse) wrong.push(hex(code));
     }
-    for (const good of ['Closed for Eid — back on Monday', 'عید مبارک', 'Rs 1,000 minimum: “made-up”', '']) {
-      expect({ good, refused: WEBSITE_TEXT_FORBIDDEN_RE.test(good) }).toEqual({ good, refused: false });
+    expect(wrong).toEqual([]);
+    // Not a short list: Unicode 15 already has 170 format characters.
+    expect(formats).toBeGreaterThanOrEqual(170);
+  });
+
+  it('keeps every Urdu letter: in U+0600–U+06FF only its format characters are refused (the number signs U+0600–U+0605, the letter mark U+061C, the end of a verse U+06DD — none is a letter)', () => {
+    const inBlock: string[] = [];
+    for (let code = 0x0600; code <= 0x06ff; code += 1) if (refused(`a${C(code)}b`)) inBlock.push(hex(code));
+    expect(inBlock).toEqual(['U+0600', 'U+0601', 'U+0602', 'U+0603', 'U+0604', 'U+0605', 'U+061C', 'U+06DD']);
+    // Beside the refused ones: a hair space, a hyphen, a medium space, an unassigned code, U+FEFE, a full-width "!".
+    expect([0x200a, 0x2010, 0x205f, 0x2065, 0xfefe, 0xff01].filter((code) => refused(`a${C(code)}b`)).map(hex)).toEqual([]);
+    expect(refused('بند ہے — کل کھلے گا')).toBe(false);
+  });
+
+  it('refuses control characters — a line break or tab, NUL, DEL, a C1 control — and the line/paragraph separators; plain words, Urdu, dashes and emoji are fine', () => {
+    for (const code of [10, 13, 9, 0, 0x1f, 0x7f, 0x80, 0x85, 0x9f, 0x2028, 0x2029]) {
+      expect({ code: hex(code), refused: refused(`a${C(code)}b`) }).toEqual({ code: hex(code), refused: true });
+    }
+    for (const good of ['Closed for Eid — back on Monday', 'عید مبارک', 'Rs 1,000 minimum: “made-up”', `${C(0x1f355)} New: a made-up pizza`, '']) {
+      expect({ good, refused: refused(good) }).toEqual({ good, refused: false });
     }
   });
 });

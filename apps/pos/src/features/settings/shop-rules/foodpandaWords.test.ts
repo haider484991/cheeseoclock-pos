@@ -12,6 +12,7 @@ import {
   andList,
   bpsFromPercentText,
   centsFromRupeesText,
+  centsFromWholeRupeesText,
   checksSummary,
   dealPayer,
   dealSummary,
@@ -122,6 +123,20 @@ describe('summaries and typing', () => {
     expect(centsFromRupeesText('1,500')).toBe(150_000);
     expect(centsFromRupeesText('')).toBeNull();
     expect(centsFromRupeesText('12.5')).toBeNaN();
+  });
+
+  it('reads whole rupees only when there is one reading (the smallest website delivery order box)', () => {
+    expect(centsFromWholeRupeesText('')).toBeNull();
+    expect(centsFromWholeRupeesText('   ')).toBeNull();
+    expect(centsFromWholeRupeesText('0')).toBe(0);
+    expect(centsFromWholeRupeesText('1500')).toBe(150_000);
+    expect(centsFromWholeRupeesText(' 1,500 ')).toBe(150_000);
+    expect(centsFromWholeRupeesText('1,000')).toBe(100_000);
+    expect(centsFromWholeRupeesText('1,234,567')).toBe(123_456_700);
+    expect(centsFromWholeRupeesText('0500')).toBe(50_000);
+    for (const bad of ['1,0', '1,00', '10,00', '0,500', ',500', '500,', '1,,000', '1,0000', '1,000,00', '0.5', '10.5', '1.000', '1 000', '-1', '+1', 'Rs 5', '1e3', 'abc', '12345678']) {
+      expect({ bad, cents: centsFromWholeRupeesText(bad) }).toEqual({ bad, cents: Number.NaN });
+    }
   });
 });
 

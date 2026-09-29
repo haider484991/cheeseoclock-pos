@@ -168,6 +168,41 @@ describe('the messages card: what is typed ↔ the value', () => {
     }
     expect(websiteMessagesFromForm({ ...f, minimum: '5000' }, WORDS, TODAY).problem).toBeNull();
   });
+
+  it('a line that is not plain words is refused in the words the main process uses — what is wrong, and to retype it if it was pasted', () => {
+    const f = websiteMessagesToForm(WORDS);
+    const B = String.fromCodePoint;
+    expect(websiteMessagesFromForm({ ...f, noticeText: `Closed${B(10)}today` }, WORDS, TODAY).problem).toBe(
+      'The closed notice is one line of plain words (no line break, and no hidden or direction mark — retype it if it was pasted)',
+    );
+    expect(websiteMessagesFromForm({ ...f, announcementText: `New${B(0x202e)} pizza` }, WORDS, TODAY).problem).toBe(
+      'The announcement is one line of plain words (no line break, and no hidden or direction mark — retype it if it was pasted)',
+    );
+    // The zero-width non-joiner an Urdu keyboard types, and the chef emoji (built with the joiner): saved.
+    const urdu = `نیا${B(0x200c)}مینو`;
+    const chef = `New chef ${B(0x1f468, 0x200d, 0x1f373)}`;
+    expect(websiteMessagesFromForm({ ...f, noticeText: urdu, announcementText: chef }, WORDS, TODAY)).toMatchObject({
+      value: { closedNotice: { text: urdu }, announcement: { text: chef } },
+      problem: null,
+    });
+  });
+
+  it('the smallest order is whole rupees read ONE way: "1,0", "0.5" or "10.5" is refused in the card’s words, never misread; "1,000" is one thousand', () => {
+    const f = websiteMessagesToForm(WORDS);
+    const said = 'The smallest delivery order is whole rupees from Rs 0 to Rs 5,000 (empty = no smallest order).';
+    for (const bad of ['1,0', '0.5', '10.5', '10,00', '1,00', ',500', '500,', '1,,000', '0,500', '1 000', 'Rs 500', '1e3', '+500', '1.000']) {
+      expect({ bad, r: websiteMessagesFromForm({ ...f, minimum: bad }, WORDS, TODAY) }).toEqual({ bad, r: { value: null, problem: said } });
+    }
+    const cents = (typed: string) => websiteMessagesFromForm({ ...f, minimum: typed }, WORDS, TODAY).value?.minDeliveryOrderCents;
+    expect(cents('1,000')).toBe(100_000);
+    expect(cents(' 1,500 ')).toBe(150_000);
+    expect(cents('5,000')).toBe(500_000);
+    expect(cents('1500')).toBe(150_000);
+    expect(cents('0')).toBe(0);
+    expect(cents('')).toBe(0);
+    // Past Rs 5,000 with or without the comma: the same words.
+    expect(websiteMessagesFromForm({ ...f, minimum: '5,001' }, WORDS, TODAY).problem).toBe(said);
+  });
 });
 
 describe('the card’s words', () => {

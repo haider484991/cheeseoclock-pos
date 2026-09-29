@@ -24,7 +24,7 @@ import {
   type OnlineOptions,
   type ShopSettingCard,
 } from '@cheeseoclock/shared-types';
-import { centsFromRupeesText } from './foodpandaWords';
+import { centsFromWholeRupeesText } from './foodpandaWords';
 import type { Parsed } from './foodpandaForm';
 
 /** The two cards on 'online.options'. */
@@ -176,7 +176,9 @@ export function websiteMessagesFromForm(
   if (until !== null && noticeChanged && until < todayKarachi) {
     return { value: null, problem: 'The notice’s last day has passed — pick today or a later day, or no end date.' };
   }
-  const cents = centsFromRupeesText(f.minimum);
+  // Whole rupees only, read one way: "1,0", "0.5" or "10.5" is refused in the card's words, never
+  // misread (as the tolerance box on the foodpanda card).
+  const cents = centsFromWholeRupeesText(f.minimum);
   if (cents !== null && (!Number.isFinite(cents) || cents > MIN_DELIVERY_ORDER_MAX_CENTS)) {
     return {
       value: null,
