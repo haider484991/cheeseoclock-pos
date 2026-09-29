@@ -18,7 +18,7 @@ import {
 } from '@/lib/page-copy';
 import { shopHoursLine } from '@/lib/shop-facts';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getCopyFacts } from '@/lib/site-facts';
+import { getCopyFacts, requireStoredFacts } from '@/lib/site-facts';
 
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
@@ -39,6 +39,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function DeliveryHubPage() {
+  await requireStoredFacts();
   const facts = await getCopyFacts();
   const shop = shopOf(facts);
   return (

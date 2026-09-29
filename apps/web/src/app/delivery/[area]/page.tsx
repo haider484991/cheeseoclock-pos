@@ -11,7 +11,7 @@ import { AREA_CTA_TAIL } from '@/lib/page-copy';
 import { shopHoursLine, whatsappHello, whatsappLinesOf, whatsappUrlWith } from '@/lib/shop-facts';
 import { waLinkWith } from '@cheeseoclock/shared-types';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getCopyFacts } from '@/lib/site-facts';
+import { getCopyFacts, requireStoredFacts } from '@/lib/site-facts';
 
 /**
  * Static per area, refreshed from the owner's delivery settings (lib/
@@ -57,6 +57,7 @@ export async function generateMetadata({
 }
 
 export default async function AreaPage({ params }: { params: { area: string } }) {
+  await requireStoredFacts();
   const found = getArea(params.area);
   if (!found) notFound();
   const facts = await getCopyFacts();

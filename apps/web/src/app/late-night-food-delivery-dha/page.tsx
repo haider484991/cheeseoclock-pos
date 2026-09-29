@@ -31,7 +31,7 @@ import {
   WA_LATE_NIGHT,
 } from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getCopyFacts } from '@/lib/site-facts';
+import { getCopyFacts, requireStoredFacts } from '@/lib/site-facts';
 
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
@@ -107,6 +107,7 @@ const FAQS = [
 ];
 
 export default async function LateNightPage() {
+  await requireStoredFacts();
   const facts = await getCopyFacts();
   const faqs = FAQS.map((f) => ({ q: copyText(f.q, facts), a: copyText(f.a, facts) }));
   return (

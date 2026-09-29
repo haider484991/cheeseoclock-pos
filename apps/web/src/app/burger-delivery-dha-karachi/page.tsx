@@ -17,7 +17,7 @@ import {
   WA_BURGERS,
 } from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getCopyFacts } from '@/lib/site-facts';
+import { getCopyFacts, requireStoredFacts } from '@/lib/site-facts';
 
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
@@ -111,6 +111,7 @@ const FAQS = [
 ];
 
 export default async function BurgerDeliveryPage() {
+  await requireStoredFacts();
   const facts = await getCopyFacts();
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   const why = WHY.map((w) => ({

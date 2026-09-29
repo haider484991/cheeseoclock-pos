@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
 import { orderLine, orderWhatsappUrl } from '@/lib/shop-facts';
-import { getShopFacts } from '@/lib/site-facts';
+import { getShopFacts, requireStoredFacts } from '@/lib/site-facts';
 
 /**
  * Static (/_not-found is built once and served for every unknown URL). The
@@ -20,6 +20,7 @@ export const metadata: Metadata = {
 
 /** Any unknown URL: say so plainly and put the menu one tap away. */
 export default async function NotFound() {
+  await requireStoredFacts();
   const shop = await getShopFacts();
   return (
     <>

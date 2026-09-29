@@ -2,6 +2,7 @@ import {
   DELIVERY_ZONES,
   FEE_SUMMARY,
   announcementInForce,
+  canonicalPayments,
   cashOnly,
   closesAfterMidnight,
   daysWords,
@@ -129,6 +130,15 @@ export function shopOf(facts: CopyFacts): ShopFacts {
 export function taxBpsIn(facts: CopyFacts): number | null {
   const bps = facts.taxBps === undefined ? DEFAULT_TAX_BPS : facts.taxBps;
   return bps !== null && bps > 0 ? bps : null;
+}
+
+/**
+ * Tax is added to the bill: the food's one rate is above 0, or it has more
+ * than one rate, or the menu is unknown (today's 15%). False only when every
+ * food item is at 0% — then no sentence may say tax is added.
+ */
+export function taxAdded(facts: CopyFacts): boolean {
+  return facts.taxBps !== 0;
 }
 
 /**
@@ -457,6 +467,10 @@ function numberList(ns: readonly number[]): string {
  * `nameIsDefault`: the shop's name is today's — the lines built on its pun
  * ("It’s always Cheese O’Clock") may print.
  * `oneTaxRate`: the food has one tax rate above 0 (the menu unknown: today's).
+ * `taxAdded`: tax is added on the bill — false only when every food item is
+ * at 0% (a sentence that names tax then takes its `otherwise`).
+ * `samePayments`: the counter takes exactly what the rider takes ("pay …
+ * on delivery or at the counter" names one list for both).
  *
  * The published menu (sweep B2, lib/menu-prices.ts):
  * `priced`: this price line has words on the menu — its {price:<key>} token
@@ -476,6 +490,8 @@ export type CopyClaim =
   | { pickupCashOnly: true }
   | { nameIsDefault: true }
   | { oneTaxRate: true }
+  | { taxAdded: true }
+  | { samePayments: true }
   | { priced: PriceKey };
 
 /** A claim page copy relies on (the name from step 3, when every claim was about fees). */
@@ -511,6 +527,12 @@ export function claimHolds(claim: CopyClaim | readonly CopyClaim[], facts: CopyF
   if ('pickupCashOnly' in claim) return cashOnly(shop.website.pickupPayments);
   if ('nameIsDefault' in claim) return nameIsDefault(shop);
   if ('oneTaxRate' in claim) return taxBpsIn(facts) !== null;
+  if ('taxAdded' in claim) return taxAdded(facts);
+  if ('samePayments' in claim) {
+    const door = canonicalPayments(shop.website.doorPayments);
+    const pickup = canonicalPayments(shop.website.pickupPayments);
+    return door.length === pickup.length && door.every((p, i) => p === pickup[i]);
+  }
   if ('priced' in claim) return menuPriceWords(claim.priced, facts) !== null;
   return feeClaimHolds(claim, facts);
 }
@@ -567,6 +589,17 @@ export class NoMinimumToken extends CantPrint {
   constructor(token: string) {
     super(`${token}: the owner has set no smallest delivery order`);
     this.name = 'NoMinimumToken';
+  }
+}
+
+/**
+ * {tax} / {Tax} while every food item is at 0%: no tax is added, so the text
+ * that says it is can't print (renderCopy moves on to its `otherwise`).
+ */
+export class NoTaxToken extends CantPrint {
+  constructor(token: string) {
+    super(`${token}: the food is taxed at 0%`);
+    this.name = 'NoTaxToken';
   }
 }
 
@@ -645,7 +678,8 @@ const TOKEN = /\{([a-zA-Z]+)(?::([^{}]*))?\}/g;
  *    {PickupPayments} what the counter takes;
  *  - {tax} / {Tax}: "15% tax" — the food's one rate (the menu unknown:
  *    today's); "tax" / "Tax" when the food has more than one (never a
- *    wrong number).
+ *    wrong number); every food item at 0% throws NoTaxToken — claim it:
+ *    { taxAdded: true }.
  * The published menu (sweep B2):
  *  - {price:deals} / {price:burgers} / {price:sides} / {price:masalaFries} /
  *    {price:burgerCheese} / {price:dip}: the till's prices for the items a
@@ -739,6 +773,7 @@ function shopToken(name: string, facts: CopyFacts): string | null {
       return capitalised(paymentsWords(shop.website.pickupPayments));
     case 'tax':
     case 'Tax': {
+      if (!taxAdded(facts)) throw new NoTaxToken(`{${name}}`);
       const bps = taxBpsIn(facts);
       if (bps !== null) return `${taxPercentWords(bps)} tax`;
       return name === 'Tax' ? 'Tax' : 'tax';

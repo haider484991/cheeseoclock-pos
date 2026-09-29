@@ -1,7 +1,7 @@
 import type { MetadataRoute } from 'next';
 import { copyText } from '@/lib/delivery-facts';
 import { MANIFEST_NAME, SITE_SHORT_DESCRIPTION } from '@/lib/page-copy';
-import { getCopyFacts } from '@/lib/site-facts';
+import { getCopyFacts, requireStoredFacts } from '@/lib/site-facts';
 
 /**
  * The app manifest names the shop and its hours from the owner's settings
@@ -16,6 +16,7 @@ export const dynamic = 'force-static';
 export const revalidate = 3600;
 
 export default async function manifest(): Promise<MetadataRoute.Manifest> {
+  await requireStoredFacts();
   const facts = await getCopyFacts();
   return {
     name: copyText(MANIFEST_NAME, facts),

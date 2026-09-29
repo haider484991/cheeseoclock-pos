@@ -27,8 +27,8 @@ import {
   HOME_STAT_HOURS,
   HOME_STEP_PAY,
 } from '@/lib/page-copy';
-import { lineOrderUrl, orderWhatsappUrl, shopHoursLine, whatsappLinesOf } from '@/lib/shop-facts';
-import { getCopyFacts, getHomeView } from '@/lib/site-facts';
+import { lineOrderUrl, nameIsDefault, orderWhatsappUrl, shopHoursLine, whatsappLinesOf } from '@/lib/shop-facts';
+import { getCopyFacts, getHomeView, requireStoredFacts } from '@/lib/site-facts';
 import { dealSaveCents, dealsFromCents, homeDishes } from '@/lib/home-lineup';
 import { menuImageSrcSet } from '@/lib/images';
 
@@ -110,6 +110,7 @@ function WhatsAppGlyph({ className = '' }: { className?: string }) {
 }
 
 export default async function HomePage() {
+  await requireStoredFacts();
   const [facts, view] = await Promise.all([getCopyFacts(), getHomeView()]);
   const shop = shopOf(facts);
   const dishes = homeDishes(view);
@@ -143,11 +144,20 @@ export default async function HomePage() {
                   outweigh the name): a small "It's always" over the real
                   script wordmark, big. The words stay in the heading for
                   search and screen readers; the drawing is decoration. */}
+              {/* The pun is today's name's: under another name the heading says
+                  that name in plain words (the logo drawing stays until it is
+                  redrawn — the till's Shop details card says so). */}
               <h1 className="mt-5">
-                <span className="block font-display text-[clamp(2.1rem,5vw,3.6rem)] uppercase leading-none tracking-wide text-cream">
-                  It&rsquo;s always
-                </span>
-                <span className="sr-only">Cheese O&rsquo;Clock.</span>
+                {nameIsDefault(shop) ? (
+                  <>
+                    <span className="block font-display text-[clamp(2.1rem,5vw,3.6rem)] uppercase leading-none tracking-wide text-cream">
+                      It&rsquo;s always
+                    </span>
+                    <span className="sr-only">Cheese O&rsquo;Clock.</span>
+                  </>
+                ) : (
+                  <span className="sr-only">{shop.profile.name}</span>
+                )}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src="/logo-wordmark.svg"

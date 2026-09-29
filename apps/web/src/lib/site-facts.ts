@@ -100,6 +100,13 @@ interface PageData {
   menu: MenuFacts | null;
 }
 
+/** One read, and whether it failed with nothing read before (then `data` is the built-in list and today's details). */
+interface PageRead {
+  data: PageData;
+  /** The database could not be read and this server had read nothing yet: `data` is NOT the owner's. */
+  unread: boolean;
+}
+
 const DEFAULT_PAGE_DATA: PageData = Object.freeze({ site: DEFAULT_FACTS, shop: DEFAULT_SHOP_FACTS, menu: null });
 
 function jsonOf(raw: unknown): unknown {
@@ -143,9 +150,9 @@ function isNextSignal(e: unknown): boolean {
  */
 let lastRead: PageData | null = null;
 
-async function readPageData(): Promise<PageData> {
+async function readPageData(): Promise<PageRead> {
   // No database (a build or a preview without one): the compiled list and today's details, as today.
-  if (!process.env['DATABASE_URL']) return DEFAULT_PAGE_DATA;
+  if (!process.env['DATABASE_URL']) return { data: DEFAULT_PAGE_DATA, unread: false };
   try {
     // The two blocks and the menu without its photos (the row carries the menu's data-URL images):
     // each item keeps its imageUrl key, as null. Categories and items in their stored order. Which
@@ -173,7 +180,7 @@ async function readPageData(): Promise<PageData> {
       menu: row ? menuFactsOf(row.categories, row.photos) : null,
     };
     lastRead = data;
-    return data;
+    return { data, unread: false };
   } catch (e) {
     if (isNextSignal(e)) throw e;
     // A page never fails to render over this: the last facts read here, else the compiled areas and
@@ -182,7 +189,7 @@ async function readPageData(): Promise<PageData> {
       `site facts read failed — rendering from ${lastRead ? 'the last areas and fees read' : 'the built-in areas and fees'}`,
       e,
     );
-    return lastRead ?? DEFAULT_PAGE_DATA;
+    return lastRead ? { data: lastRead, unread: false } : { data: DEFAULT_PAGE_DATA, unread: true };
   }
 }
 
@@ -191,7 +198,29 @@ type Dedupe = <F extends (...args: never[]) => unknown>(fn: F) => F;
 const dedupe: Dedupe = ((React as unknown as { cache?: Dedupe }).cache ?? ((fn) => fn)) as Dedupe;
 
 /** One read per render: the root layout, the page, its metadata and the header and footer share it. */
-const getPageData: () => Promise<PageData> = dedupe(readPageData);
+const getPageRead: () => Promise<PageRead> = dedupe(readPageData);
+const getPageData = async (): Promise<PageData> => (await getPageRead()).data;
+
+/**
+ * For a page Next KEEPS — the ISR pages (force-static + revalidate), the app
+ * manifest, the not-found page built once — called first: when the database
+ * can't be read and this server has read nothing yet, rendering would keep
+ * the built-in details (no menu prices; today's name, numbers and hours over
+ * the owner's) for up to an hour. It throws instead: Next keeps serving the
+ * last good page and tries again within seconds (a failed refresh leaves the
+ * stale page in place), and a build fails with the live site left as it is.
+ * A read that fails AFTER one succeeded renders from that one (as before),
+ * and no database at all is today's site (a build or preview without one).
+ * The dynamic pages (/menu, /track) never call it: they render from the
+ * built-in details, as before, rather than fail.
+ */
+export async function requireStoredFacts(): Promise<void> {
+  if ((await getPageRead()).unread) {
+    throw new Error(
+      'The website could not read the owner’s settings and menu from the database, and has read none yet: the last good page stays.',
+    );
+  }
+}
 
 /**
  * The delivery areas, fees and pick-up offer the pages print: the stored
