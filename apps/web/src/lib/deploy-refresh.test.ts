@@ -56,6 +56,16 @@ describe('refreshing the kept pages after a deploy', () => {
     expect(calls.revalidate).toEqual([['/', 'layout']]);
   });
 
+  it('a /menu visitor (the public store-status poll) refreshes once too, when no till has', async () => {
+    process.env['COC_BUILT_WITH_DB'] = '0';
+    const storeStatus = await import('@/app/api/store-status/route');
+    expect((await storeStatus.GET()).status).toBe(200);
+    expect((await storeStatus.GET()).status).toBe(200);
+    expect(calls.revalidate).toEqual([['/', 'layout']]);
+    expect((await heartbeat()).status).toBe(200); // already refreshed on this instance
+    expect(calls.revalidate).toEqual([['/', 'layout']]);
+  });
+
   it('a build that had the database: nothing to refresh', async () => {
     process.env['COC_BUILT_WITH_DB'] = '1';
     expect((await heartbeat()).status).toBe(200);

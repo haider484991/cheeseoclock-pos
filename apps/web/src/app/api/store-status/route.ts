@@ -1,3 +1,4 @@
+import { refreshPagesAfterDeployOnce } from '@/lib/deploy-refresh';
 import { readClosedNotice } from '@/lib/site-facts';
 import { getStoreStatus } from '@/lib/store-status';
 
@@ -18,6 +19,9 @@ export const revalidate = 0;
  * key = no word, as from an older website: the page keeps what it was served).
  */
 export async function GET(): Promise<Response> {
+  // A /menu visitor after a deploy, as well as a till heartbeat: once per server instance, the
+  // kept pages the build rendered without the database are made stale (lib/deploy-refresh.ts).
+  refreshPagesAfterDeployOnce();
   const [status, closedNotice] = await Promise.all([getStoreStatus(), readClosedNotice()]);
   return Response.json(
     {
