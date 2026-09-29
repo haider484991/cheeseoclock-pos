@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isBridgeAuthorized, unauthorized } from '@/lib/bridge-auth';
+import { refreshPagesAfterDeployOnce } from '@/lib/deploy-refresh';
 import { storedHeld } from '@/lib/publish-settings';
 import { getStoreStatus, setStoreStatus } from '@/lib/store-status';
 
@@ -39,6 +40,9 @@ export async function PUT(req: Request): Promise<Response> {
       pickup: parsed.data.features?.includes('pickup') ?? false,
       pickupDiscountPercent: parsed.data.pickupDiscountPercent ?? null,
     });
+    // The first heartbeat after a deploy: the pages the build rendered without the database are
+    // made stale, so the next visit shows the menu's prices and the owner's details (deploy-refresh).
+    refreshPagesAfterDeployOnce();
     return Response.json({ ok: true, data: status });
   } catch (e) {
     console.error('PUT /api/bridge/status failed', e);

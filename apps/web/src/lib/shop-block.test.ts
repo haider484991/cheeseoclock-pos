@@ -288,6 +288,9 @@ async function metadata(): Promise<Record<string, Record<string, unknown>>> {
 
 beforeAll(async () => {
   process.env['BRIDGE_SECRET'] = SECRET;
+  // These count the publish's own page refresh: build as if with the database, so a heartbeat
+  // here never adds the after-a-deploy refresh (lib/deploy-refresh.ts, tested on its own).
+  process.env['COC_BUILT_WITH_DB'] = '1';
   process.env['DATABASE_URL'] = 'postgres://test.invalid/db';
   db.pg = new PGlite() as unknown as typeof db.pg;
   await (db.pg as unknown as PGlite).exec(readFileSync(new URL('../../db/schema.sql', import.meta.url), 'utf8'));
