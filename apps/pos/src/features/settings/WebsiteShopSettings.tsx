@@ -63,6 +63,7 @@ import {
   googleListingChanges,
   greetingFromForm,
   greetingLink,
+  greetingNameNote,
   greetingOf,
   greetingSummary,
   greetingToForm,
@@ -513,12 +514,27 @@ function GreetingCard() {
   const profile = useShopSetting('shop.profile');
   return (
     <Loaded k="shop.website" what="the WhatsApp greeting">
-      {(s) => <GreetingFields s={s} lines={profile.q.data?.value.whatsappLines ?? []} />}
+      {(s) => (
+        <GreetingFields
+          s={s}
+          lines={profile.q.data?.value.whatsappLines ?? []}
+          shopName={profile.q.data?.value.name ?? null}
+        />
+      )}
     </Loaded>
   );
 }
 
-function GreetingFields({ s, lines }: { s: ReturnType<typeof useShopSetting<'shop.website'>>; lines: Array<{ display: string; e164: string }> }) {
+function GreetingFields({
+  s,
+  lines,
+  shopName,
+}: {
+  s: ReturnType<typeof useShopSetting<'shop.website'>>;
+  lines: Array<{ display: string; e164: string }>;
+  /** Shop details' name (null while it loads): a greeting still naming today's shop under another name is said. */
+  shopName: string | null;
+}) {
   const saved = s.q.data as ShopSettingCard<'shop.website'>;
   const card = cardPart(saved, SHOP_CARD_FIELDS.greeting);
   const draft = useDraft(saved.value, greetingToForm);
@@ -526,6 +542,7 @@ function GreetingFields({ s, lines }: { s: ReturnType<typeof useShopSetting<'sho
   const dirty = draft.touched && draft.form !== greetingToForm(saved.value);
   const greeting = greetingOf(draft.form) || saved.value.whatsappGreeting;
   const link = greetingLink(greeting, { whatsappLines: lines });
+  const nameNote = shopName === null ? null : greetingNameNote(greeting, shopName);
   return (
     <SettingCard
       card={card}
@@ -539,11 +556,16 @@ function GreetingFields({ s, lines }: { s: ReturnType<typeof useShopSetting<'sho
       onSave={() => parsed.value && s.save.mutate(parsed.value, { onSuccess: draft.reset })}
       onPutBack={() => s.save.mutate(card.defaultValue, { onSuccess: draft.reset })}
       footer={
-        link ? (
-          <p className={cn(exampleClass, 'mt-4 break-all')} aria-live="polite">
-            <span className="font-semibold">The customer’s WhatsApp opens with: </span>“{greeting}…”
-            <span className="mt-1 block font-mono text-xs text-stone-600 dark:text-stone-300">{link}</span>
-          </p>
+        link || nameNote ? (
+          <div className="mt-4 space-y-2">
+            {nameNote && <GoogleNote>{nameNote}</GoogleNote>}
+            {link && (
+              <p className={cn(exampleClass, 'break-all')} aria-live="polite">
+                <span className="font-semibold">The customer’s WhatsApp opens with: </span>“{greeting}…”
+                <span className="mt-1 block font-mono text-xs text-stone-600 dark:text-stone-300">{link}</span>
+              </p>
+            )}
+          </div>
         ) : undefined
       }
     >

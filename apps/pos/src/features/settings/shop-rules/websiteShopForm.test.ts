@@ -30,6 +30,7 @@ import {
   googleListingChanges,
   greetingFromForm,
   greetingLink,
+  greetingNameNote,
   greetingOf,
   greetingToForm,
   homeFromForm,
@@ -217,6 +218,23 @@ describe('WhatsApp greeting', () => {
     );
     expect(greetingLink('Hi ', { whatsappLines: [] })).toBeNull();
   });
+
+  it('a greeting still naming today’s shop under another name: the card says so for as long as it lasts', () => {
+    const today = DEFAULT_SHOP_WEBSITE.whatsappGreeting;
+    expect(greetingNameNote(today, DEFAULT_SHOP_PROFILE.name)).toBeNull();
+    expect(greetingNameNote(today, 'Cheese O’Clock')).toBeNull();
+    expect(greetingNameNote(today, 'Test Crust Co')).toBe(
+      'The greeting still says “Cheese O’Clock”, but the shop’s name is now “Test Crust Co” (Shop details): change the greeting too.',
+    );
+    // Typed with a curly apostrophe or other spaces, it is still today's name.
+    expect(greetingNameNote('Hi cheese o’clock!  Order please ', 'Test Crust Co')).toMatch(/still says/);
+    expect(greetingNameNote('Hi Test Crust Co! Order please ', 'Test Crust Co')).toBeNull();
+    // The card shows it (from Shop details' saved name), not only while the name is being typed.
+    const cards = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'WebsiteShopSettings.tsx'), 'utf8');
+    expect(cards).toContain('greetingNameNote(greeting, shopName)');
+    expect(cards).toContain('shopName={profile.q.data?.value.name ?? null}');
+    expect(cards).toContain('{nameNote && <GoogleNote>{nameNote}</GoogleNote>}');
+  });
 });
 
 describe('Allergy notice', () => {
@@ -392,11 +410,20 @@ describe('M6: one fallback name for the till’s own screens', () => {
     expect(cards).toContain('{WEBSITE_SHOP_WORDS.homePreview}');
     expect(WEBSITE_SHOP_WORDS.homePreview).toMatch(/this till’s/);
     expect(WEBSITE_SHOP_WORDS.homePreview).toMatch(/press Publish/);
+    expect(WEBSITE_SHOP_WORDS.homePreview).toMatch(/Saving never sends the menu/);
     expect(cards).not.toMatch(/Not on the website: \{p\.entry/);
   });
 
   it('a new name: the card says the WhatsApp greeting is its own setting to change too', () => {
     expect(WEBSITE_SHOP_WORDS.nameRebrand).toMatch(/greeting on the “Order on WhatsApp” buttons is its own setting/);
+  });
+
+  it('a new name: the card never promises what stays — the share pictures’ hidden description keeps today’s name (Next reads it as a fixed text)', () => {
+    expect(WEBSITE_SHOP_WORDS.nameRebrand).toMatch(/share pictures’ hidden description .* keeps “Cheese O’Clock”/);
+    // What the website does keep: its share images' alt text is a fixed export.
+    const web = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', 'web', 'src', 'app');
+    expect(readFileSync(join(web, 'opengraph-image.tsx'), 'utf8')).toMatch(/export const alt =\s*"Cheese O'Clock/);
+    expect(readFileSync(join(web, 'delivery', '[area]', 'opengraph-image.tsx'), 'utf8')).toMatch(/export const alt = "Cheese O'Clock/);
   });
 
   it('Shop & logo shows the website’s shop details group, on the owner-only tab', () => {

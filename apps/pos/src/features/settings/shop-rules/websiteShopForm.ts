@@ -29,6 +29,7 @@ import {
   homeLineup,
   hoursLine,
   isDeliveryChargeMenuItem,
+  nameInProse,
   normalizePhone,
   opensBy,
   paymentAccepted,
@@ -139,7 +140,7 @@ export const WEBSITE_SHOP_WORDS = {
   name:
     'The website’s name for the shop: page titles, search results, the footer, the share pictures and WhatsApp messages. Not the printed receipt (Receipt: shop details, above, each till its own) and not the FBR invoice (Settings → FBR).',
   nameRebrand:
-    'The logo, the website address and the printed menu don’t change by themselves. Lines built on today’s name (like “It’s always Cheese O’Clock”) switch to plain words. The greeting on the “Order on WhatsApp” buttons is its own setting (WhatsApp & social, below): change it to the new name too.',
+    'The logo, the website address and the printed menu don’t change by themselves, nor does the share pictures’ hidden description for search engines and screen readers (it keeps “Cheese O’Clock” — ask whoever looks after the website). Lines built on today’s name (like “It’s always Cheese O’Clock”) switch to plain words. The greeting on the “Order on WhatsApp” buttons is its own setting (WhatsApp & social, below): change it to the new name too.',
   address:
     'The map pin, the Maps link and the Google listing stay as they are, and so do a few sentences that name the area (“our DHA Phase 6 kitchen”, “Rahat Commercial”) — ask whoever looks after the website to change those.',
   priceRange: 'For search engines (it is not shown on the pages). It should match the price range on your Google listing.',
@@ -155,7 +156,7 @@ export const WEBSITE_SHOP_WORDS = {
   home:
     'Which items the home page features. Prices come from the menu. An item not on the website’s menu (hidden, off the website, renamed or deleted) is left off the home page — never shown at Rs 0. Drink brand names are never shown.',
   homePreview:
-    'Prices here are this till’s. Saving sends only the home page: the website shows the menu as last published — after changing prices or adding an item, press Publish.',
+    'Prices here are this till’s. Saving never sends the menu: the website shows it as last published — after changing prices or adding an item, press Publish.',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -404,6 +405,21 @@ export function greetingFromForm(typed: string, saved: ShopWebsite): Parsed<Shop
 
 export function greetingSummary(w: ShopWebsite): string {
   return `“${w.whatsappGreeting.trim()}”`;
+}
+
+/**
+ * The greeting still names today's shop ("Hi Cheese O'Clock! …") while Shop
+ * details names another: the "Order on WhatsApp" buttons would greet the old
+ * name next to the page-specific messages' new one. The card says so for as
+ * long as it lasts (not only while the name is being typed). null = nothing
+ * to say (today's name, or a greeting without it).
+ */
+export function greetingNameNote(greeting: string, shopName: string): string | null {
+  const today = SHOP_SETTING_DEFAULTS['shop.profile'].name;
+  const fold = (s: string) => s.replace(/[‘’ʼ]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
+  if (fold(shopName) === fold(today)) return null;
+  if (!fold(greeting).includes(fold(today))) return null;
+  return `The greeting still says “${nameInProse(today)}”, but the shop’s name is now “${nameInProse(shopName)}” (Shop details): change the greeting too.`;
 }
 
 /** The link an "Order on WhatsApp" button opens with this greeting (the first WhatsApp number). */

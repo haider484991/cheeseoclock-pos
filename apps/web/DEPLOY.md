@@ -297,10 +297,16 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   cash ONLY step aside once the rider takes more; "Cash on delivery" stays
   (cash is always taken; JSON-LD `paymentAccepted` lists the others after
   it). Lines built on the name's pun ("It's always Cheese O'Clock") show only
-  while the name is today's. Social links show in the footer and in JSON-LD
+  while the name is today's (the home page's H1 then names the owner's shop
+  in plain words). Social links show in the footer and in JSON-LD
   `sameAs`, both only when there is one. The logo, the share images' alt
   text and the prose naming the kitchen's street ("Rahat Commercial", "our
-  Phase 6 kitchen") stay in code: the till's address card says so.
+  Phase 6 kitchen") stay in code: the till's Shop details card says so. The
+  alt text can't follow the name: Next 14 reads `export const alt` as a
+  fixed text, and its only per-request form (`generateImageMetadata`) moves
+  every page's `og:image` to `/opengraph-image/0` — a change with nothing
+  stored. The card also says so while the WhatsApp greeting still names
+  today's shop under another name.
 - **The home page's brand line (CheeseTime)** works from the owner's opening
   hours alone, as v0.7.30 did from today's: it never asks the website (no
   request per page view). Whether the kitchen is taking website orders is
@@ -308,8 +314,12 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 - **A database the website can't read.** A page Next KEEPS (the home page,
   the delivery hub and area pages, the three landing pages, `/_not-found`,
   the app manifest) whose read fails on a server that has read nothing yet
-  now FAILS instead of rendering today's details with no prices: Next keeps
-  serving the last good page and tries again. So a **build** (`next build`
+  now FAILS instead of rendering today's details with no prices: on its
+  hourly refresh Next keeps serving the last good page and tries again
+  (Next 14.2 fails a static render that threw, and its response cache keeps
+  the stale page). Right after a publish Next has already let go of the
+  page (the publish's revalidation), so until the database answers again
+  that page shows an error instead of wrong details. So a **build** (`next build`
   with a `DATABASE_URL`) whose database can't be reached fails, and the
   live site stays on the last deploy — redeploy once Neon answers. A read
   that fails after one succeeded renders from that one (as before); no
