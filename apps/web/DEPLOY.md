@@ -275,6 +275,17 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   today's details. Once the website is back on the new version the tills see
   no block held and send it again by themselves (at start-up, or the next
   Save or Publish).
+- **⚠ After a rollback to v0.7.30, publish once straight away.** Until that
+  first publish, v0.7.30 still serves the row this version stored, and its
+  `publicMenu` (`lib/public-menu.ts` at v0.7.30) passes the whole row on: the
+  public `GET /api/menu` and the `/menu` page's props carry the stored `shop`
+  block WITH its stamps (`shopRev`, `shopAt`, `shopTie`) and the saving till's
+  `deviceId`. Nothing secret is in it (no PIN, no bridge secret; the details
+  themselves are on the pages anyway), but it breaks this contract's "the
+  public never gets the stamps or the device id" for that window. So: press
+  Publish menu on a till right after the rollback (v0.7.30 rebuilds the row
+  without `shop`, and the window closes), or don't roll the website back
+  past this release at all — roll forward with a fix instead.
 - **The pages.** The root layout (metadata and the Restaurant JSON-LD), the
   header and footer, every page and the share images read the details with
   the delivery areas, in ONE query per page (`lib/site-facts.ts`: both blocks

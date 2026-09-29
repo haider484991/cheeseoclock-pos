@@ -366,6 +366,24 @@ describe('the publish toast and Settings → Online orders', () => {
     expect(shopNotOnWebsiteSentence({ state: 'waiting', at: null, message: null })).toBeNull();
   });
 
+  it('the title names what to check: the shop details only when they did not reach the website; the home page when its missing items are the only news', () => {
+    const shopRefused = { state: 'refused' as const, at: null, message: 'Test reason' };
+    const homeOnly = publishedToast({ ...base, homeMissing: ['Gone Pizza'] });
+    expect(homeOnly.title).toBe('Menu published — check the home page');
+    expect(homeOnly.title).not.toMatch(/shop details/);
+    expect(homeOnly.variant).toBe('warning');
+    // The shop details published: the home page is still the only news.
+    expect(publishedToast({ ...base, homeMissing: ['Gone Pizza'], shopPublish: { state: 'published', at: T1, message: null } }).title).toBe(
+      'Menu published — check the home page',
+    );
+    expect(publishedToast({ ...base, shopPublish: shopRefused }).title).toBe('Menu published — check the website’s shop details');
+    expect(publishedToast({ ...base, homeMissing: ['Gone Pizza'], shopPublish: shopRefused }).title).toBe('Menu published — check the website’s shop details');
+    // A photo left out keeps the menu's own title.
+    expect(publishedToast({ ...base, photosLeftOut: [{ id: 'a', name: 'Test Pizza' }], homeMissing: ['Gone Pizza'] }).title).toBe(
+      'Menu published — some photos left out',
+    );
+  });
+
   it('the shop block’s status line reads like the settings block’s', () => {
     expect(settingsPublishWords({ state: 'refused', at: null, message: 'Test reason' }, SHOP_DETAILS_WORDS)).toEqual({
       tone: 'bad',

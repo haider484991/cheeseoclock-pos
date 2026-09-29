@@ -111,6 +111,7 @@ const { DELIVERY_AREAS } = await import('@/lib/areas');
 const { getCopyFacts, getMenuFacts, getShopFacts } = await import('@/lib/site-facts');
 const { DEFAULT_SHOP_FACTS, shopFactsFromBlock } = await import('@/lib/shop-facts');
 const { publicMenu } = await import('@/lib/public-menu');
+const { checkShopBlock } = await import('@/lib/publish-settings');
 
 const SECRET = 'test-bridge-secret-0123456789';
 function bridge(path: string, init?: { method?: string; body?: unknown }) {
@@ -401,6 +402,20 @@ describe('the store rule: the shop block in the publish’s one statement', () =
     // The till then sends the menu again without it: stored, the block kept.
     const again = await publish({ ...m, publishedAt: '2026-09-30T00:00:00.000Z' });
     expect(again.json.data).toMatchObject({ shop: 'kept' });
+  });
+
+  it('the till’s clock may be up to 10 minutes ahead of the website’s, not a millisecond more', () => {
+    const at = '2026-09-28T08:00:00.000Z';
+    const shop = ownerShop({ at });
+    const stamp = Date.parse(at);
+    const TEN_MINUTES = 10 * 60_000;
+    // The website's clock 10 minutes behind the stamp: taken.
+    expect(checkShopBlock(shop, stamp - TEN_MINUTES)).toMatchObject({ ok: true });
+    // One millisecond more: refused, in the owner's words.
+    expect(checkShopBlock(shop, stamp - TEN_MINUTES - 1)).toEqual({ ok: false, problem: expect.stringMatching(/clock is ahead/) });
+    // A stamp behind the website's clock, or on it: taken.
+    expect(checkShopBlock(shop, stamp).ok).toBe(true);
+    expect(checkShopBlock(shop, stamp + 24 * 60 * 60_000).ok).toBe(true);
   });
 
   it('a newer till’s extra field inside the block is dropped, never refused', async () => {

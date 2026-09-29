@@ -19,14 +19,19 @@ type PublishToast = { title: string; description: string; variant: 'success' | '
  * The toast after "Publish menu to website": the menu's own words (below),
  * then — from a website with the shop block (sweep B2 + B4) — the home
  * page's featured items it can't find, and the shop details when they did
- * not reach it. Nothing added when there is nothing to say.
+ * not reach it. Nothing added when there is nothing to say. Its title names
+ * what to check: the shop details only when they did not reach the website;
+ * the home page when its missing items are the only news.
  */
 export function publishedToast(r: PublishMenuSummary): PublishToast {
   const base = menuPublishedToast(r);
-  const extra = [homeMissingSentence(r.homeMissing ?? []), shopNotOnWebsiteSentence(r.shopPublish)].filter((x): x is string => x !== null);
+  const home = homeMissingSentence(r.homeMissing ?? []);
+  const shop = shopNotOnWebsiteSentence(r.shopPublish);
+  const extra = [home, shop].filter((x): x is string => x !== null);
   if (extra.length === 0) return base;
+  const check = shop !== null ? 'Menu published — check the website’s shop details' : 'Menu published — check the home page';
   return {
-    title: base.variant === 'success' ? 'Menu published — check the website’s shop details' : base.title,
+    title: base.variant === 'success' ? check : base.title,
     description: `${base.description} ${extra.join(' ')}`,
     variant: 'warning',
   };

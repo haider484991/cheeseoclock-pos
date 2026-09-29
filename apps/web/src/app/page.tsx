@@ -31,6 +31,7 @@ import { lineOrderUrl, nameIsDefault, orderWhatsappUrl, shopHoursLine, shopNameP
 import { getCopyFacts, getHomeView, requireStoredFacts } from '@/lib/site-facts';
 import { dealSaveCents, dealsAreTodays, dealsFromCents, homeDishes } from '@/lib/home-lineup';
 import { menuImageSrcSet } from '@/lib/images';
+import { PICKUP_ONLY_WORDS } from '@/lib/menu-view';
 
 /**
  * The ticker's words: the shop's tagline, then page-copy's (the hours and
@@ -298,6 +299,12 @@ export default async function HomePage() {
                             {d.what}
                           </span>
                         )}
+                        {/* A deal the till set "Pick-up only": /menu's words, never shown as delivered. */}
+                        {d.pickupOnly && (
+                          <span className="mt-3 block w-fit rounded-full border-2 border-dashed border-cream/30 px-3 py-1 font-cond text-xs font-bold uppercase tracking-wide text-cream/70">
+                            {PICKUP_ONLY_WORDS}
+                          </span>
+                        )}
                         <span className="relative mt-auto flex items-end justify-between gap-3 pt-6">
                           <span>
                             {save !== null && d.worthCents !== null && (
@@ -388,6 +395,12 @@ export default async function HomePage() {
                           {item.label}
                         </p>
                         <h3 className="mt-1 font-display text-3xl uppercase tracking-wide">{item.name}</h3>
+                        {/* An item the till set "Pick-up only": /menu's words, never shown as delivered. */}
+                        {item.pickupOnly && (
+                          <p className="mt-2 w-fit rounded-full border-2 border-dashed border-cream/30 px-3 py-1 font-cond text-xs font-bold uppercase tracking-wide text-cream/70">
+                            {PICKUP_ONLY_WORDS}
+                          </p>
+                        )}
                         {item.description && <p className="mt-2 text-sm leading-relaxed text-cream/65">{item.description}</p>}
                         <p className="mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese">
                           Order it →

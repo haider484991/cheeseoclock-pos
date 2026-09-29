@@ -216,6 +216,29 @@ describe('the home page follows the published menu', () => {
     expect(html).not.toMatch(/Rs 0(?![\d,])/);
   });
 
+  it('a featured item or deal set "Pick-up only" on the till says so on its card, its slide and its deal card, in /menu’s words — never shown as delivered; the rest as before', async () => {
+    await publish(menuWith({ 'Cheesy Star — Large': { pickupOnly: true }, 'Meat Lovers — Large': { pickupOnly: true }, 'Big Two': { pickupOnly: true } }));
+    const html = await homeHtml();
+    const chip = 'rounded-full border-2 border-dashed border-cream/30 px-3 py-1 font-cond text-xs font-bold uppercase tracking-wide text-cream/70';
+    const GRID_CHIP = `<p class="mt-2 w-fit ${chip}">Pick-up only</p>`;
+    const DEAL_CHIP = `<span class="mt-3 block w-fit ${chip}">Pick-up only</span>`;
+    const SLIDE_CHIP = `<span class="${chip}">Pick-up only</span>`;
+    expect(html.split(GRID_CHIP).length - 1).toBe(2);
+    expect(html.split(DEAL_CHIP).length - 1).toBe(1);
+    expect(html.split(SLIDE_CHIP).length - 1).toBe(1);
+    const text = visible(html);
+    // Each on its own card: the Cheesy Star's and the Meat Lovers' (not the Crown Crust's between them), the Big Two's.
+    expect(text).toContain('Signature · Large 12" Cheesy Star Pick-up only ');
+    expect(text).toContain('Signature · Large 12" Meat Lovers Pick-up only ');
+    expect(text).not.toMatch(/Crown Crust Pick-up only|Shawarma Pizza Pick-up only|Cheetos Pick-up only|Signature Cheese Dipped Pick-up only/);
+    expect(text).toMatch(/Big Two 2 Large 12" \+ 1 litre soft drink Pick-up only /);
+    expect(text).not.toMatch(/(Family Feast|Perfect Pair) [^R]* Pick-up only/);
+    // The front slide (the Cheesy Star) beside its price.
+    expect(text).toContain('Rs 2,200 Pick-up only Order this →');
+    // Nothing else on the page moved: without the three notes it is today's page.
+    expect(html.replaceAll(GRID_CHIP, '').replaceAll(DEAL_CHIP, '').replaceAll(SLIDE_CHIP, '')).toBe(GOLDEN_HOME());
+  });
+
   it('none of the lineup on the menu: no turntable, no signatures, no deals and no deals chip — the rest of the page as before', async () => {
     const m = goldenMenu();
     const onlyCharges = { ...m, categories: m.categories.filter((c) => /delivery/i.test(c.name)) };
@@ -345,6 +368,59 @@ describe('the lineup, worked out (lib/home-lineup)', () => {
     // Another burger featured: not called a signature.
     const plain = resolveHome({ pizzas: DEFAULT_WEBSITE_HOME.pizzas, burger: { itemRef: { posItemId: null, name: 'Classic Crispy Chicken' } }, deals: [] }, m);
     expect([plain.burger?.label, plain.burger?.href]).toEqual(['Burgers', '/menu#burgers']);
+  });
+
+  it('pick-up only: the till’s flag, or the printed menu’s words in its description (/menu’s rule); never with the menu unknown', () => {
+    const lineup = {
+      pizzas: [
+        { itemRef: { posItemId: null, name: 'Fajita Pizza — Large' } },
+        { itemRef: { posItemId: null, name: 'Fajita Pizza — Medium' } },
+        { itemRef: { posItemId: null, name: 'Cheesy Star — Large' } },
+      ],
+      burger: { itemRef: { posItemId: null, name: 'Classic Crispy Chicken' } },
+      deals: [{ itemRef: { posItemId: null, name: 'Perfect Pair' } }, { itemRef: { posItemId: null, name: 'Big Two' } }],
+    };
+    const menu = menuWith({
+      'Fajita Pizza — Large': { pickupOnly: true },
+      'Fajita Pizza — Medium': { description: 'Made-up words. Pick up only.' },
+      'Classic Crispy Chicken': { description: 'Made-up words, pickup only' },
+      'Perfect Pair': { pickupOnly: true },
+    });
+    const view = resolveHome(lineup, menu);
+    expect(view.pizzas.map((p) => [p.key, p.pickupOnly])).toEqual([
+      ['Fajita Pizza', true],
+      ['Fajita Pizza · Medium 9"', true],
+      ['Cheesy Star', false],
+    ]);
+    expect(view.burger?.pickupOnly).toBe(true);
+    expect(view.deals.map((d) => [d.name, d.pickupOnly])).toEqual([
+      ['Perfect Pair', true],
+      ['Big Two', false],
+    ]);
+    const unknown = resolveHome(lineup, null);
+    expect([...unknown.pizzas, unknown.burger!, ...unknown.deals].map((x) => x.pickupOnly)).toEqual([false, false, false, false, false, false]);
+  });
+
+  it('an item with no curated words and none of the owner’s: the till’s description, with its drink brand taken out (a deal’s too)', () => {
+    const lineup = {
+      pizzas: [{ itemRef: { posItemId: null, name: 'Fajita Pizza — Large' } }],
+      burger: { itemRef: { posItemId: null, name: 'Classic Crispy Chicken' } },
+      deals: [{ itemRef: { posItemId: null, name: 'Test Party Deal' } }],
+    };
+    const m2 = goldenMenu();
+    m2.categories[4]!.items.push({ ...m2.categories[4]!.items[0]!, posItemId: 'gi-test-deal', name: 'Test Party Deal', description: 'Made-up party deal with a 1.5 litre Pepsi.' });
+    const menu = menuWith(
+      {
+        'Fajita Pizza — Large': { description: 'Made-up words, best with a cold PEPSI.' },
+        'Classic Crispy Chicken': { description: 'Made-up burger words and a pepsi on the side.' },
+      },
+      m2,
+    );
+    const view = resolveHome(lineup, menu);
+    expect(view.pizzas[0]!.description).toBe('Made-up words, best with a cold soft drink.');
+    expect(view.burger!.description).toBe('Made-up burger words and a soft drink on the side.');
+    expect(view.deals[0]!.what).toBe('Made-up party deal with a 1.5 litre soft drink.');
+    expect(JSON.stringify(view)).not.toMatch(/pepsi/i);
   });
 
   it('one pizza: a turntable with no arrows and no dots; none: nothing', () => {

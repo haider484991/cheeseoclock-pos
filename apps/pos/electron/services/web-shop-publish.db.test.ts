@@ -651,6 +651,25 @@ live('the website or this till can’t take the shop block', () => {
     expect(() => save(db, 'shop.hours', hours('12:00', '01:00'))).toThrow(/newer version/);
   });
 
+  it('a block the website’s own schema would refuse (a saved time the link wrote in another form): the till checks before sending — no shop block goes, Settings says why, and Publish still sends the menu', async () => {
+    const db = await till();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    save(db, 'shop.hours', hours('11:00', '23:00'));
+    // The row's time with a space for the "T" (SQLite's own form): the till reads it, the website's schema does not.
+    syncedRow(db, 'shop.hours', { updatedAt: '2026-09-28 08:00:00.000Z' });
+    const { shopBlockFor } = await import('./website-shop-block.js');
+    const r = shopBlockFor(db as AppDatabase, DEV);
+    expect(r.block).toBeNull();
+    expect(r.problem).toMatch(/^The website would refuse the shop details: shopAt is not a time\.$/);
+    await bridge().maybePublishShop();
+    expect(shopPuts()).toHaveLength(0);
+    expect(shopStatus()).toMatchObject({ state: 'refused', message: expect.stringMatching(/website would refuse the shop details/) });
+    await bridge().publishMenu();
+    expect(menus()).toHaveLength(1);
+    expect(menus()[0]).not.toHaveProperty('shop');
+    expect(menus()[0]).toHaveProperty('settings');
+  });
+
   it('…and once the newer till has put that very stamp on the website, this till’s next start finds it held: "published", not "refused" — and it still sends nothing', async () => {
     const db = await till();
     save(db, 'shop.hours', hours('11:00', '23:00'));

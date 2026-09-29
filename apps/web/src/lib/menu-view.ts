@@ -286,12 +286,19 @@ export function sizeOrderable(variant: Pick<MenuVariant, 'pickupOnly'>, canPicku
 }
 
 /**
+ * The menu's words for food that can't be delivered — a card all of whose
+ * sizes are pick-up only says them (pickupOnlyNote), and so does a home page
+ * card of a featured item that is (lib/home-lineup HomeDish.pickupOnly).
+ */
+export const PICKUP_ONLY_WORDS = 'Pick-up only';
+
+/**
  * The card's "pick-up only" words beside its size buttons: 'Pick-up only'
  * when the whole card is (as before), the sizes that are when only some are
  * ('Large 12" pick-up only'), else null.
  */
 export function pickupOnlyNote(card: Pick<MenuCard, 'name' | 'variants' | 'pickupOnly'>): string | null {
-  if (card.pickupOnly) return 'Pick-up only';
+  if (card.pickupOnly) return PICKUP_ONLY_WORDS;
   const sizes = card.variants.filter((v) => v.pickupOnly).map((v) => cardSizeLabel(card, v.size) || v.item.name);
   if (sizes.length === 0) return null;
   return `${sizes.join(', ')} pick-up only`;

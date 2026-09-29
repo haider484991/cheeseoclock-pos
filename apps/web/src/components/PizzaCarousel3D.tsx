@@ -11,7 +11,7 @@ import { PizzaCarousel3DClient } from './PizzaCarousel3DClient';
 export async function PizzaCarousel3D({ className = '' }: { className?: string }) {
   const [view, shop] = await Promise.all([getHomeView(), getShopFacts()]);
   if (view.pizzas.length === 0) return null;
-  const pizzas = view.pizzas.map(({ key, name, size, kind, href, hook, image, shopPhoto, priceCents }) => ({
+  const pizzas = view.pizzas.map(({ key, name, size, kind, href, hook, image, shopPhoto, priceCents, pickupOnly }) => ({
     key,
     name,
     size,
@@ -21,6 +21,7 @@ export async function PizzaCarousel3D({ className = '' }: { className?: string }
     image,
     shopPhoto,
     priceCents,
+    pickupOnly,
   }));
   return <PizzaCarousel3DClient className={className} pizzas={pizzas} shopName={shop.profile.name} />;
 }

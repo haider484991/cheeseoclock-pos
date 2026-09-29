@@ -22,7 +22,9 @@ const { renderToStaticMarkup } = await import('react-dom/server');
 const { OrderingApp } = await import('@/components/OrderingApp');
 const { ItemSheet } = await import('@/components/ordering/ItemSheet');
 const { MinimumNote } = await import('@/components/ordering/cart-ui');
-const { DEFAULT_FACTS } = await import('@/lib/delivery-facts');
+const { DEFAULT_FACTS, copyText } = await import('@/lib/delivery-facts');
+const { DEFAULT_SHOP_FACTS } = await import('@/lib/shop-facts');
+const { HOME_HERO_HOURS } = await import('@/lib/page-copy');
 const { buildMenuView, sizeOrderable } = await import('@/lib/menu-view');
 const { publicMenu } = await import('@/lib/public-menu');
 
@@ -94,6 +96,21 @@ describe('/menu as served', () => {
   it('the announcement shows in the header only when the facts carry it', () => {
     expect(app({ deliveryFacts: { ...DEFAULT_FACTS, announcement: 'Test new wrap this week' } })).toContain('Test new wrap this week');
     expect(app()).not.toContain('★');
+  });
+
+  it('the header’s hours chip names the days when the shop is not open every day, as the home page’s chip does; every day, the hours alone as before', () => {
+    const chip = (html: string) => /<li class="rounded-full border border-cream\/20 px-3\.5 py-1\.5">([^<]*)<\/li>/.exec(html)?.[1];
+    // Today's (open every day): the hours alone, exactly as v0.7.30 printed them.
+    expect(chip(app())).toBe('12 noon – 1 am');
+    // The owner's made-up hours, closed on Mondays: the days follow, in the home chip's words.
+    const tueToSun = { ...DEFAULT_SHOP_FACTS, source: 'settings' as const, hours: { opens: '11:00', closes: '23:00', days: ['tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as ['tue', 'wed', 'thu', 'fri', 'sat', 'sun'] } };
+    expect(chip(app({ shop: tueToSun }))).toBe('11 am – 11 pm · Tue–Sun');
+    expect(chip(app({ shop: tueToSun }))).toBe(copyText(HOME_HERO_HOURS, { ...DEFAULT_FACTS, shop: tueToSun }));
+    const weekends = { ...tueToSun, hours: { ...tueToSun.hours, days: ['sat', 'sun'] as ['sat', 'sun'] } };
+    expect(chip(app({ shop: weekends }))).toBe('11 am – 11 pm · Sat, Sun');
+    // The same hours every day: no days, and never "daily" (the chip reads as it always has).
+    const everyDay = { ...tueToSun, hours: { ...DEFAULT_SHOP_FACTS.hours, opens: '11:00', closes: '23:00' } };
+    expect(chip(app({ shop: everyDay }))).toBe('11 am – 11 pm');
   });
 
   it('one size pick-up only, pick-up off: the Large is a dashed "Pick-up only" chip, the Medium stays a button', () => {

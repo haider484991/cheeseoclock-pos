@@ -1,5 +1,15 @@
 import { homeLineup, type HomeEntry, type PublishedMenuCategory, type PublishedWebsiteHome } from '@cheeseoclock/shared-types';
-import { anchorFor, dealWorthCents, drinkFlavourName, sectionTitle, shopPhotoFor, sizeLabel, splitSizedName, withoutDrinkBrand } from './menu-view';
+import {
+  anchorFor,
+  dealWorthCents,
+  drinkFlavourName,
+  isPickupOnly,
+  sectionTitle,
+  shopPhotoFor,
+  sizeLabel,
+  splitSizedName,
+  withoutDrinkBrand,
+} from './menu-view';
 import { curatedDealWhat, curatedDish } from './signatures';
 
 /**
@@ -17,6 +27,10 @@ import { curatedDealWhat, curatedDish } from './signatures';
  *    card's description / what is in a deal), else the curated words for
  *    today's dishes (lib/signatures), else the till's description. Never a
  *    drink brand (withoutDrinkBrand, drinkFlavourName).
+ *  - Pick-up only: an item the till set "Pick-up only" (or whose
+ *    description says so: menu-view isPickupOnly, /menu's own rule) says so
+ *    on its card, its carousel slide and its deal, in /menu's words
+ *    (PICKUP_ONLY_WORDS) — never shown as if it were delivered.
  *  - Photo: the shop's own cut-out photo of today's dishes (menu-view
  *    shopPhotoFor), else the till's photo of the item (served by
  *    api/menu-photo — never inlined into the page), else none (the page
@@ -56,6 +70,8 @@ export interface HomeDish {
   shopPhoto: boolean;
   /** The menu's price; null = the menu unknown (no badge). */
   priceCents: number | null;
+  /** The item can't be delivered (menu-view isPickupOnly): its card and slide say "Pick-up only". False with the menu unknown. */
+  pickupOnly: boolean;
   /** Where "Order it →" goes on /menu: the item's own section there. */
   href: string;
 }
@@ -90,6 +106,8 @@ export interface HomeDeal {
   priceCents: number | null;
   /** The same food bought one by one (menu-view dealWorthCents); null = can't be priced. */
   worthCents: number | null;
+  /** The deal can't be delivered (menu-view isPickupOnly): its card says "Pick-up only". False with the menu unknown. */
+  pickupOnly: boolean;
 }
 
 export interface HomeView {
@@ -117,7 +135,7 @@ function ownWords(text: string | undefined): string | null {
 function dish(
   entry: HomeEntry,
   slot: Slot,
-  item: { posItemId: string; name: string; description: string | null; basePriceCents: number } | null,
+  item: { posItemId: string; name: string; description: string | null; basePriceCents: number; pickupOnly?: boolean } | null,
   photos: Readonly<Record<string, string>> | undefined,
   categoryName: string | null = null,
 ): Omit<HomeDish, 'key'> {
@@ -138,6 +156,7 @@ function dish(
     image: shopPhoto ?? (item && photoVersion ? tillPhotoSrc(item.posItemId, photoVersion) : null),
     shopPhoto: shopPhoto !== null,
     priceCents: item ? item.basePriceCents : null,
+    pickupOnly: item ? isPickupOnly(item) : false,
     href: place.href,
   };
 }
@@ -178,6 +197,7 @@ export function resolveHome(
           what: ownWords(e.text) ?? curatedDealWhat(e.itemRef.name),
           priceCents: null,
           worthCents: null,
+          pickupOnly: false,
         })),
       ),
     };
@@ -206,6 +226,7 @@ export function resolveHome(
             what: ownWords(l.entry.text) ?? curatedDealWhat(item.name) ?? withoutDrinkBrand(item.description),
             priceCents: item.basePriceCents,
             worthCents: dealWorthCents(menu, item),
+            pickupOnly: isPickupOnly(item),
           },
         ];
       }),

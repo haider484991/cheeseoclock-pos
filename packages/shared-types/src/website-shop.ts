@@ -240,7 +240,8 @@ export const DEFAULT_SHOP_WEBSITE: Readonly<ShopWebsite> = Object.freeze({
   whatsappGreeting: "Hi Cheese O'Clock! I'd like to place an order: ",
   doorPayments: Object.freeze(['cash']) as DoorPayment[],
   pickupPayments: Object.freeze(['cash']) as DoorPayment[],
-  // = apps/web lib/menu-view.ts ALLERGY_NOTICE (owner 2026-09-26), word for word.
+  // The printed menu's allergy words (owner 2026-09-26), word for word as v0.7.30's website printed
+  // them (its apps/web lib/menu-view.ts ALLERGY_NOTICE, now gone: /menu and the checkout print this).
   allergyNotice:
     'Allergy? Tell us in the item’s “Allergy or special request” box and we’ll leave ingredients out. Our kitchen shares equipment, so we can’t guarantee any dish is allergen-free.',
 }) as Readonly<ShopWebsite>;

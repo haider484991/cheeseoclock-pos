@@ -157,8 +157,14 @@ export const FOOTER_LATE_LINK: Copy = 'Late-night delivery (till {closes})';
 /** Home hero, under the tagline. */
 export const HOME_HERO_TEXT: Copy =
   'Five signature pizzas, crispy chicken burgers and fries — made to order in DHA Phase 6. Pay {doorPayments} at your door.';
+/**
+ * An hours chip while the shop is NOT open every day: the hours, then the
+ * days ("11 am – 11 pm · Tue–Sun") — the home hero's chip and the /menu
+ * header's say it in the same words.
+ */
+const HOURS_CHIP_WITH_DAYS: Copy = '{hours} · {days}';
 /** Home hero chip with the hours. */
-export const HOME_HERO_HOURS: Copy = { text: '{hours} daily', when: { everyDay: true }, otherwise: '{hours} · {days}' };
+export const HOME_HERO_HOURS: Copy = { text: '{hours} daily', when: { everyDay: true }, otherwise: HOURS_CHIP_WITH_DAYS };
 /** The ticker's words after the tagline, in order (upper-cased; a line that can't print is left out). */
 export const HOME_MARQUEE: Copy[] = [
   'WE DELIVER ALL OVER DHA & CLIFTON',
@@ -331,6 +337,12 @@ export const MENU_PAGE_NAME: Copy = '{name} Menu & Prices';
  * one list for both only while the rider and the counter take the same;
  * otherwise each its own.
  */
+/**
+ * The /menu header's hours chip: the hours alone while the shop opens every
+ * day (as v0.7.30 printed it), else with the days, as the home hero's chip
+ * says them (HOURS_CHIP_WITH_DAYS) — never hours that read as every day.
+ */
+export const MENU_HEADER_HOURS: Copy = { text: '{hours}', when: { everyDay: true }, otherwise: HOURS_CHIP_WITH_DAYS };
 export const MENU_FOOT_LINE: Copy = taxed(
   {
     text: 'Prices in PKR · {tax} added on the bill · pay {doorPayments} on delivery or at the counter',

@@ -4,7 +4,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatCents } from '@/lib/format';
-import { hoursRange } from '@cheeseoclock/shared-types';
 import {
   copyText,
   deliveryChip,
@@ -14,7 +13,7 @@ import {
   type SiteFacts,
 } from '@/lib/delivery-facts';
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
-import { MENU_FOOT_LINE } from '@/lib/page-copy';
+import { MENU_FOOT_LINE, MENU_HEADER_HOURS } from '@/lib/page-copy';
 import { DEFAULT_SHOP_FACTS, lineOrderUrl, orderWhatsappUrl, shopHoursInSentence, whatsappLinesOf, type ShopFacts } from '@/lib/shop-facts';
 import { taxBpsOf } from '@/lib/tax-words';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
@@ -396,6 +395,7 @@ export function OrderingApp({
         canPickup={canPickup}
         pickupPct={pickupPct}
         deliveryChip={deliveryChip(deliveryFacts)}
+        hoursChip={copyText(MENU_HEADER_HOURS, { ...deliveryFacts, shop })}
         announcement={deliveryFacts.announcement}
         shop={shop}
       />
@@ -551,15 +551,18 @@ function MenuHeader({
   canPickup,
   pickupPct,
   deliveryChip,
+  hoursChip,
   announcement,
   shop,
 }: {
   canPickup: boolean;
   pickupPct: number;
   deliveryChip: string;
+  /** The hours chip (page-copy MENU_HEADER_HOURS): with the days unless the shop opens every day. */
+  hoursChip: string;
   /** The owner's announcement while it is on (plain text, never markup), else null: nothing shows. */
   announcement: string | null;
-  /** The shop's tagline, hours and allergy notice (the owner's). */
+  /** The shop's tagline and allergy notice (the owner's). */
   shop: ShopFacts;
 }) {
   return (
@@ -587,7 +590,7 @@ function MenuHeader({
           <li className={`rounded-full px-3.5 py-1.5 ${canPickup ? 'border border-cream/20' : 'bg-cheese text-ink'}`}>
             {deliveryChip}
           </li>
-          <li className="rounded-full border border-cream/20 px-3.5 py-1.5">{hoursRange(shop.hours)}</li>
+          <li className="rounded-full border border-cream/20 px-3.5 py-1.5">{hoursChip}</li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>
         </ul>
         <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{shop.website.allergyNotice}</p>

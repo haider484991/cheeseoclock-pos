@@ -169,6 +169,13 @@ describe('hours in words', () => {
     expect(opensBy({ opens: '14:00' }, '13:00')).toBe(false);
   });
 
+  it('opensBy: opening AT the time counts ("from 12 noon" lunch holds for a 1 pm opening); a quarter hour later does not', () => {
+    expect(opensBy({ opens: '13:00' }, '13:00')).toBe(true);
+    expect(opensBy({ opens: '12:45' }, '13:00')).toBe(true);
+    expect(opensBy({ opens: '13:15' }, '13:00')).toBe(false);
+    expect(opensBy(DEFAULT_SHOP_HOURS, '13:00')).toBe(true);
+  });
+
   it('days: "daily" only for all seven; runs of three or more as a range; JSON-LD names Monday first', () => {
     expect(daysWords(['mon', 'tue', 'wed', 'thu', 'fri', 'sat'])).toBe('Mon–Sat');
     expect(daysWords(['tue', 'wed', 'thu', 'fri', 'sat', 'sun'])).toBe('Tue–Sun');
@@ -359,5 +366,33 @@ describe('the shop stamp is THE STAMP of the settings block, over the four keys'
     expect(JSON.stringify(block.home)).not.toMatch(/"text"/);
     expect(block.profile.whatsappLines).not.toBe(DEFAULT_SHOP_PROFILE.whatsappLines);
     expect(Object.isFrozen(block.hours.days)).toBe(false);
+  });
+
+  it('the block keeps every list as saved — social links, WhatsApp lines, days, payments and the lineup — each one, in order, as a copy', () => {
+    const profile = {
+      ...DEFAULT_SHOP_PROFILE,
+      name: 'Test Shop',
+      whatsappLines: [
+        { display: '0300 1112233', e164: '+923001112233' },
+        { display: '0321 4445566', e164: '+923214445566' },
+      ],
+      socialLinks: ['https://www.instagram.com/test.shop.example', 'https://www.facebook.com/test.shop.example', 'https://www.tiktok.com/@test.shop.example'],
+    };
+    const hours = { ...DEFAULT_SHOP_HOURS, days: ['tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as typeof SHOP_DAYS[number][] };
+    const website = { ...DEFAULT_SHOP_WEBSITE, doorPayments: ['cash', 'card'] as typeof DEFAULT_SHOP_WEBSITE.doorPayments, pickupPayments: ['cash', 'card', 'easypaisa'] as typeof DEFAULT_SHOP_WEBSITE.pickupPayments };
+    const home = {
+      v: 1,
+      pizzas: [{ itemRef: { posItemId: 'p-1', name: 'Test Star — Large' } }, { itemRef: { posItemId: null, name: 'Test Moon — Large' }, text: 'Made-up words' }],
+      burger: { itemRef: { posItemId: 'b-1', name: 'Test Burger' } },
+      deals: [{ itemRef: { posItemId: 'd-1', name: 'Test Deal' } }],
+    } as WebsiteHome;
+    const block = buildShopBlock({ profile, hours, website, home, stamps: [{ version: 1, updatedAt: T1 }, null, null, null], deviceId: 'till-a' });
+    expect(block.profile.socialLinks).toEqual(profile.socialLinks);
+    expect(block.profile.socialLinks).not.toBe(profile.socialLinks);
+    expect(block.profile.whatsappLines).toEqual(profile.whatsappLines);
+    expect(block.hours.days).toEqual(hours.days);
+    expect(block.website.doorPayments).toEqual(['cash', 'card']);
+    expect(block.website.pickupPayments).toEqual(['cash', 'card', 'easypaisa']);
+    expect(block.home).toEqual({ pizzas: home.pizzas, burger: home.burger, deals: home.deals });
   });
 });

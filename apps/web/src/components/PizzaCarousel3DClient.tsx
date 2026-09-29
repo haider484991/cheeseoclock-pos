@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatCents } from '@/lib/format';
 import { menuImageSrcSet } from '@/lib/images';
+import { PICKUP_ONLY_WORDS } from '@/lib/menu-view';
 
 /**
  * The home hero: the featured pizzas on a turntable in 3D — the owner's
@@ -54,6 +55,8 @@ export interface CarouselPizza {
   shopPhoto: boolean;
   /** null = the menu unknown: no price badge. */
   priceCents: number | null;
+  /** The till set it "Pick-up only": the slide says so beside its price (lib/home-lineup HomeDish.pickupOnly). */
+  pickupOnly: boolean;
 }
 
 /** Pure: where pizza i of a ring spaced `step` degrees apart sits for a ring angle, self-spin and stage radius. */
@@ -379,6 +382,11 @@ export function PizzaCarousel3DClient({
           {current.priceCents !== null && (
             <span className="rounded-full bg-cheese px-4 py-1.5 font-cond text-lg font-extrabold text-ink">
               {formatCents(current.priceCents)}
+            </span>
+          )}
+          {current.pickupOnly && (
+            <span className="rounded-full border-2 border-dashed border-cream/30 px-3 py-1 font-cond text-xs font-bold uppercase tracking-wide text-cream/70">
+              {PICKUP_ONLY_WORDS}
             </span>
           )}
           <Link

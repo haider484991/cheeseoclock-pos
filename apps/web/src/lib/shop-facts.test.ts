@@ -11,6 +11,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import type { PublishedShopHours, PublishedShopWebsite } from '@cheeseoclock/shared-types';
 import { cheeseTimeFallback, cheeseTimeLine, karachiClock, nextOpening, openByHours } from './cheese-time';
@@ -409,5 +410,156 @@ describe('the shop’s details are never typed by hand in the website’s source
     for (const gone of ['name:', 'tagline', 'phone', 'whatsapp', 'streetAddress', 'hours', 'sameAs', 'priceRange', 'WA_ORDER_URL', 'waLink']) {
       expect(business.replace(/^\s*(\*|\/\/).*$/gm, ''), gone).not.toContain(gone);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A sentence true only for today's hours or payments is a claimed Copy
+// ---------------------------------------------------------------------------
+
+/**
+ * A sentence that says the shop opens every day, is open after midnight, or
+ * takes cash only is true for today's details and false for the owner's
+ * next ones: it may print only as the `text` of a Copy whose `when` claims
+ * it ({ everyDay }, { closesAfterMidnight }, { cashOnly } / {
+ * pickupCashOnly }: lib/delivery-facts claimHolds), with its `otherwise`
+ * for the other case. Read from the source's syntax (the TypeScript
+ * parser), so a sentence over several lines, in a template or in JSX is
+ * found too; comments are not page text.
+ */
+interface DayClaimRule {
+  what: string;
+  /** The claims that make the sentence true. */
+  claims: readonly string[];
+  says: (text: string) => boolean;
+}
+
+const SAYS_EVERY_DAY: DayClaimRule = {
+  what: 'open every day',
+  claims: ['everyDay'],
+  says: (t) => /\bevery\s+(?:single\s+)?(?:day|night|evening)\b|\bdaily\b|\b(?:seven|7)\s+days\b|\ball\s+week\b|\b24\s*\/\s*7\b/i.test(t),
+};
+const SAYS_AFTER_MIDNIGHT: DayClaimRule = {
+  what: 'open after midnight',
+  claims: ['closesAfterMidnight'],
+  says: (t) => /\bmidnight\b|\b(?:small|wee)\s+hours\b/i.test(t),
+};
+const SAYS_CASH_ONLY: DayClaimRule = {
+  what: 'cash only',
+  claims: ['cashOnly', 'pickupCashOnly'],
+  says: (t) =>
+    /\bcash[\s-]+only\b|\bonly\s+(?:in\s+)?cash\b|\bin\s+cash\b|\bno\s+(?:credit\s+|debit\s+)?cards?\b|\bno\s+online\s+payments?\b|\bevery\s+order\s+is\s+cash\b|\bcards?\s+(?:are\s+)?not\s+(?:accepted|taken)\b|\bdon[’']?t\s+take\s+cards?\b/i.test(
+      t,
+    ),
+};
+const DAY_CLAIM_RULES = [SAYS_EVERY_DAY, SAYS_AFTER_MIDNIGHT, SAYS_CASH_ONLY];
+
+/** Each piece of text in a source file — its strings, templates and JSX text — with its line. */
+function pageTexts(file: string, source: string): Array<{ node: ts.Node; text: string; line: number }> {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const out: Array<{ node: ts.Node; text: string; line: number }> = [];
+  const visit = (node: ts.Node): void => {
+    let text: string | null = null;
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isJsxText(node)) text = node.text;
+    else if (ts.isTemplateExpression(node)) text = [node.head.text, ...node.templateSpans.map((s) => s.literal.text)].join(' ');
+    if (text !== null && text.trim() !== '') out.push({ node, text, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 });
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/**
+ * Is this text the `text` of a Copy that claims one of these? The nearest
+ * property holding it must be `text:`, beside a `when:` naming the claim —
+ * never its `otherwise`, a plain string, a JSX line or anything else.
+ */
+function claimedText(node: ts.Node, claims: readonly string[]): boolean {
+  for (let n: ts.Node = node; n.parent; n = n.parent) {
+    const p = n.parent;
+    if (!ts.isPropertyAssignment(p) || p.initializer !== n) continue;
+    if (p.name.getText() !== 'text' || !ts.isObjectLiteralExpression(p.parent)) return false;
+    const when = p.parent.properties.find((q) => ts.isPropertyAssignment(q) && q.name.getText() === 'when');
+    return !!when && claims.some((c) => new RegExp(`\\b${c}\\b`).test(when.getText()));
+  }
+  return false;
+}
+
+/** The unclaimed sentences of one source: "file:line: rule: text". */
+function unclaimedIn(file: string, source: string, allowed: ReadonlyArray<[file: string, text: string]> = []): string[] {
+  const found: string[] = [];
+  for (const { node, text, line } of pageTexts(file, source)) {
+    if (allowed.some(([f, t]) => f === file && t === text)) continue;
+    for (const rule of DAY_CLAIM_RULES) {
+      if (rule.says(text) && !claimedText(node, rule.claims)) found.push(`${file}:${line}: ${rule.what}: ${text.trim()}`);
+    }
+  }
+  return found;
+}
+
+describe('no sentence true only for today’s hours or payments is typed outside a claimed Copy', () => {
+  // Words that are not such a sentence, each named.
+  const ALLOWED: Array<[file: string, text: string]> = [
+    // The sitemap's hint to search engines (check /menu daily), not page text.
+    ['app/sitemap.ts', 'daily'],
+    // A question; its answer is the owner's payments (page-copy BURGER_FAQ_PAY: "No — the rider takes …").
+    ['app/burger-delivery-dha-karachi/page.tsx', 'Is payment cash only?'],
+  ];
+
+  it('today’s website source: every such sentence is a Copy’s claimed `text`', () => {
+    const found: string[] = [];
+    for (const path of sources(SRC)) {
+      const file = relative(SRC, path).replace(/\\/g, '/');
+      found.push(...unclaimedIn(file, readFileSync(path, 'utf8'), ALLOWED));
+    }
+    expect(
+      found,
+      'a sentence true only for today’s details — write it as { text, when: { everyDay | closesAfterMidnight | cashOnly }, otherwise } (lib/page-copy.ts)',
+    ).toEqual([]);
+  });
+
+  it('catches one typed anywhere else — a constant, a template, JSX, an `otherwise`, the wrong claim, a plain taxed() line', () => {
+    const one = (file: string, source: string) => unclaimedIn(file, source).map((f) => f.replace(/^[^:]+:\d+: /, ''));
+    // The skeptic's three (S10, S8b, S9b).
+    expect(one('app/x/page.tsx', "export const SK_CASH = 'No card or app required — pay the rider in cash.';")).toEqual([
+      'cash only: No card or app required — pay the rider in cash.',
+    ]);
+    expect(one('lib/areas.ts', "export const SK_MID = 'we deliver after midnight every night';")).toEqual([
+      'open every day: we deliver after midnight every night',
+      'open after midnight: we deliver after midnight every night',
+    ]);
+    expect(one('lib/areas.ts', "export const SK_DAY = 'we are open every day of the week';")).toEqual(['open every day: we are open every day of the week']);
+    expect(one('app/x/page.tsx', 'export const P = () => <p className="x">We bake\n  seven days a week</p>;')).toHaveLength(1);
+    expect(one('lib/x.ts', 'const s = `Open daily till ${closes}`;')).toEqual(['open every day: Open daily till']);
+    expect(one('lib/x.ts', "const c: Copy = { text: 'open every day', when: { everyDay: true }, otherwise: 'open every day, honestly' };")).toEqual([
+      'open every day: open every day, honestly',
+    ]);
+    expect(one('lib/x.ts', "const c: Copy = { text: 'Pay the rider in cash', when: { areasAsBuilt: true }, otherwise: 'Pay the rider' };")).toEqual([
+      'cash only: Pay the rider in cash',
+    ]);
+    expect(one('lib/x.ts', "const faq = { q: 'How do I pay?', a: taxed('Cash only, plus {tax}.', 'Cash only.') };")).toHaveLength(2);
+    expect(one('lib/x.ts', "const c = { text: 'Pay the rider in cash', when: { cashOnly: true }, extra: { text: 'no cards at all' } };")).toEqual([
+      'cash only: no cards at all',
+    ]);
+  });
+
+  it('lets through a claimed `text` (a list of claims too), and words that claim nothing', () => {
+    const one = (file: string, source: string) => unclaimedIn(file, source);
+    expect(
+      one('lib/x.ts', "const c: Copy = { text: 'Past midnight, every night', when: [{ closesAfterMidnight: true }, { everyDay: true }], otherwise: 'Late, {days}' };"),
+    ).toEqual([]);
+    expect(
+      one('lib/x.ts', "const c: Copy = { text: 'You pay in cash when you collect.', when: { pickupCashOnly: true }, otherwise: 'You pay when you collect.' };"),
+    ).toEqual([]);
+    expect(one('lib/x.ts', "const c: Copy = { text: 'Pay in cash', when: { cashOnly: true }, otherwise: { text: 'No cards, just wallets', when: { cashOnly: true } } };")).toEqual([]);
+    for (const fine of ['Cash on delivery', '{days} from {opens} to {closes}', 'Every order fires from our kitchen', 'every DHA phase', 'everyDay', 'closesAfterMidnight', 'weekly']) {
+      expect(DAY_CLAIM_RULES.some((r) => r.says(fine)), fine).toBe(false);
+    }
+    // Comments are not page text.
+    expect(one('lib/x.ts', '// open every day, cash only, after midnight\n/** every night */\nconst x = 1;')).toEqual([]);
+  });
+
+  it('keeps the list honest: every allowed line is still there', () => {
+    for (const [file, text] of ALLOWED) expect(readFileSync(join(SRC, file), 'utf8').includes(text), `${file}: ${text}`).toBe(true);
   });
 });
