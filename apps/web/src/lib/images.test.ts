@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { shopPhotoFor } from './menu-view';
 import { menuImageSrcSet } from './images';
-import { SIGNATURE_BURGER, SIGNATURE_PIZZAS } from './signatures';
+import { CURATED_DISH_NAMES } from './signatures';
 
 describe('menuImageSrcSet', () => {
   it('offers the 400px copy of a shop photo', () => {
@@ -18,9 +18,9 @@ describe('menuImageSrcSet', () => {
   });
 
   it('has a small copy on disk for every photo the site shows', () => {
+    // Every dish the home page has curated words for has a shop photo (the home page's lineup).
     const photos = [
-      ...SIGNATURE_PIZZAS.map((p) => p.image),
-      SIGNATURE_BURGER.image,
+      ...CURATED_DISH_NAMES.map((name) => shopPhotoFor(name)),
       shopPhotoFor('shawarma pizza'),
       shopPhotoFor('signature cheese dipped'),
     ];

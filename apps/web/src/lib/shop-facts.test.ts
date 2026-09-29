@@ -308,8 +308,6 @@ describe('the shop’s details are never typed by hand in the website’s source
     ['components/Logo.tsx', 'Cheese O&rsquo;Clock'],
     ['app/opengraph-image.tsx', '"Cheese O\'Clock — Pizza & Burger Delivery in DHA Karachi"'],
     ['app/delivery/[area]/opengraph-image.tsx', '"Cheese O\'Clock delivery area"'],
-    // Sweep B2 (the carousel's lineup from the menu) passes the name to the carousel with it.
-    ['components/PizzaCarousel3D.tsx', "pizza from Cheese O'Clock"],
   ];
 
   it('no opening hour: the owner’s hours are tokens ({hours}, {opens}, {closes}, {hoursLine})', () => {

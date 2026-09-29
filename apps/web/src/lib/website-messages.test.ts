@@ -36,6 +36,8 @@ import { publishedSettingsSchema } from '@cheeseoclock/shared-schemas/web-settin
 import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
 import golden from './__fixtures__/site-copy-v0.7.26.json';
 import homeV0729 from './__fixtures__/home-page-v0.7.29.json';
+import { goldenMenu } from './__fixtures__/golden-menu';
+import { homeTreeWithMenuUnknown } from './__fixtures__/menu-unknown';
 import { DELIVERY_AREAS, getArea, renderArea } from './areas';
 import { problemFromServer, validateCheckout, type CheckoutInput } from './checkout-validation';
 import { DEFAULT_FACTS, factsFromBlock } from './delivery-facts';
@@ -127,6 +129,18 @@ function menu(): PublishedMenu {
     publishedAt: '2026-09-27T09:00:00.000Z',
     store: { name: 'Test Shop', phone: null, whatsapp: null, addressLine: null, tagline: null },
   };
+}
+
+/**
+ * The made-up menu with today's featured items at the prices the home page
+ * printed (the pages golden's menu, __fixtures__/golden-menu.ts): since sweep
+ * B2 the home page shows its lineup from the published menu — an item not on
+ * it is hidden — so the v0.7.29 home page needs them published.
+ */
+function homeMenu(): PublishedMenu {
+  const m = menu();
+  const food = goldenMenu().categories.filter((c) => !/delivery/i.test(c.name));
+  return { ...m, categories: [...food, ...m.categories] };
 }
 
 interface WebsiteFields {
@@ -312,15 +326,22 @@ afterEach(() => {
 
 describe('nothing new stored: the website exactly as v0.7.29', () => {
   it('the home page is v0.7.29’s element for element — no database, no block, a v0.7.29 till’s block, a block at the defaults, an announcement switched off', async () => {
+    // The menu unknown (no database, nothing published): v0.7.29's without its menu prices (sweep B2)
+    // — 6 price badges, 3 deals' saving, worth and price — and the hero's chip without a price.
+    const unknown = homeTreeWithMenuUnknown(homeV0729);
+    expect([unknown.removed, unknown.chips]).toEqual([15, 1]);
     const url = process.env['DATABASE_URL'];
     delete process.env['DATABASE_URL'];
     try {
-      expect(await homeTree()).toEqual(homeV0729);
+      expect(await homeTree()).toEqual(unknown.tree);
     } finally {
       process.env['DATABASE_URL'] = url;
     }
+    expect(await homeTree()).toEqual(unknown.tree);
+    // Today's menu published: v0.7.29's exactly — with no block too.
+    const m = homeMenu();
+    await publish(m);
     expect(await homeTree()).toEqual(homeV0729);
-    const m = menu();
     expect((await publish(m, tillBlock(m))).json.data).toMatchObject({ settings: 'stored' });
     expect(await homeTree()).toEqual(homeV0729);
     expect((await publish(m, tillBlock(m, { rev: 2, website: {} }))).json.data).toMatchObject({ settings: 'stored' });
@@ -475,7 +496,7 @@ describe('the announcement: page text on the home page and /menu while on', () =
   const WORDS = 'Made-up news: a new test pizza this week';
 
   it('on: the hero and the ticker say it (first), nowhere else; /menu gets it; the JSON-LD never', async () => {
-    const m = menu();
+    const m = homeMenu();
     await publish(m, tillBlock(m, { website: { announcement: { on: true, text: WORDS } } }));
     const home = await homeTree();
     expect(occurrences(home, WORDS)).toBe(2);

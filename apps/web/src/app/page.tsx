@@ -28,11 +28,9 @@ import {
   HOME_STEP_PAY,
 } from '@/lib/page-copy';
 import { lineOrderUrl, orderWhatsappUrl, shopHoursLine, whatsappLinesOf } from '@/lib/shop-facts';
-import { getCopyFacts } from '@/lib/site-facts';
+import { getCopyFacts, getHomeView } from '@/lib/site-facts';
+import { dealSaveCents, dealsFromCents, homeDishes } from '@/lib/home-lineup';
 import { menuImageSrcSet } from '@/lib/images';
-import { SIGNATURE_BURGER, SIGNATURE_PIZZAS, VALUE_DEALS } from '@/lib/signatures';
-
-const LINEUP = [...SIGNATURE_PIZZAS, SIGNATURE_BURGER];
 
 /**
  * The ticker's words: the shop's tagline, then page-copy's (the hours and
@@ -52,6 +50,12 @@ function marqueeItems(facts: CopyFacts): string[] {
  * turning the page dynamic. The owner's announcement (v0.7.30, off = none)
  * comes with the same read and the same refresh: page text in the hero and
  * the ticker only — never the title, a meta tag or the JSON-LD.
+ *
+ * The featured pizzas, burger and value deals (sweep B2) are the owner's
+ * lineup (Settings → Home page; today's with none saved) found on the
+ * published menu, with ITS prices and deal worth — the same read, the same
+ * refresh: a Publish moves them. One not on the menu is hidden, never shown
+ * at a zero price; with the menu unknown (no database) they show without prices.
  */
 export const dynamic = 'force-static';
 export const revalidate = 3600;
@@ -106,8 +110,10 @@ function WhatsAppGlyph({ className = '' }: { className?: string }) {
 }
 
 export default async function HomePage() {
-  const facts = await getCopyFacts();
+  const [facts, view] = await Promise.all([getCopyFacts(), getHomeView()]);
   const shop = shopOf(facts);
+  const dishes = homeDishes(view);
+  const dealsFrom = dealsFromCents(view);
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   const { announcement } = facts;
   const marquee = marqueeItems(facts);
@@ -190,14 +196,26 @@ export default async function HomePage() {
                 </a>
               </div>
               <ul className="mt-6 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide text-cream/80">
-                <li>
-                  <Link
-                    href="/menu#value-deals"
-                    className="block rounded-full bg-cheese px-3 py-1.5 text-ink transition-colors hover:bg-cheese-hot"
-                  >
-                    Value deals from {formatCents(Math.min(...VALUE_DEALS.map((d) => d.priceRs)) * 100)} →
-                  </Link>
-                </li>
+                {/* The cheapest deal shown, at the menu's price; no deal shown: no chip. */}
+                {dealsFrom !== null ? (
+                  <li>
+                    <Link
+                      href="/menu#value-deals"
+                      className="block rounded-full bg-cheese px-3 py-1.5 text-ink transition-colors hover:bg-cheese-hot"
+                    >
+                      Value deals from {formatCents(dealsFrom)} →
+                    </Link>
+                  </li>
+                ) : view.deals.length > 0 ? (
+                  <li>
+                    <Link
+                      href="/menu#value-deals"
+                      className="block rounded-full bg-cheese px-3 py-1.5 text-ink transition-colors hover:bg-cheese-hot"
+                    >
+                      Value deals →
+                    </Link>
+                  </li>
+                ) : null}
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">{copyText(HOME_HERO_FEE, facts)}</li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">{copyText(HOME_HERO_HOURS, facts)}</li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">Cash on delivery</li>
@@ -212,131 +230,164 @@ export default async function HomePage() {
 
         {/* ========================== VALUE DEALS ========================== */}
         {/* Straight after the marquee, before the signatures (owner 2026-09-25:
-            "deals should be prominent"). */}
-        <section id="deals" className="relative overflow-hidden bg-cheese text-ink">
-          <div
-            aria-hidden
-            className="absolute inset-0 opacity-[0.07] [background-image:repeating-linear-gradient(135deg,#151412_0_2px,transparent_2px_22px)]"
-          />
-          <div className="relative mx-auto max-w-6xl px-4 py-16 md:py-20">
-            <Reveal>
-              <div className="flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3">
-                <div>
-                  <p className="font-cond text-sm font-extrabold uppercase tracking-[0.24em] text-ink/70">
-                    Every deal comes with a 1 litre soft drink
+            "deals should be prominent"). No featured deal on the menu: no section. */}
+        {view.deals.length > 0 && (
+          <section id="deals" className="relative overflow-hidden bg-cheese text-ink">
+            <div
+              aria-hidden
+              className="absolute inset-0 opacity-[0.07] [background-image:repeating-linear-gradient(135deg,#151412_0_2px,transparent_2px_22px)]"
+            />
+            <div className="relative mx-auto max-w-6xl px-4 py-16 md:py-20">
+              <Reveal>
+                <div className="flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3">
+                  <div>
+                    <p className="font-cond text-sm font-extrabold uppercase tracking-[0.24em] text-ink/70">
+                      Every deal comes with a 1 litre soft drink
+                    </p>
+                    <h2 className="mt-1 font-display text-5xl uppercase leading-none tracking-wide md:text-7xl">
+                      Value deals
+                    </h2>
+                  </div>
+                  <p className="max-w-xs font-cond text-lg font-bold leading-snug">
+                    Choice of pizzas only from the regular menu.
                   </p>
-                  <h2 className="mt-1 font-display text-5xl uppercase leading-none tracking-wide md:text-7xl">
-                    Value deals
-                  </h2>
                 </div>
-                <p className="max-w-xs font-cond text-lg font-bold leading-snug">
-                  Choice of pizzas only from the regular menu.
-                </p>
-              </div>
-            </Reveal>
-            <div className="mt-8 grid gap-4 md:grid-cols-3">
-              {VALUE_DEALS.map((d, i) => (
-                <Reveal key={d.name} delay={i * 80}>
-                  <Link
-                    href="/menu#value-deals"
-                    className="group relative flex h-full flex-col overflow-hidden rounded-3xl bg-ink p-6 text-cream shadow-soft-lg transition-transform hover:-translate-y-1"
-                  >
-                    <span
-                      aria-hidden
-                      className="pointer-events-none absolute -bottom-8 -right-2 select-none font-display text-[9rem] leading-none text-cheese/10"
-                    >
-                      0{i + 1}
-                    </span>
-                    <span className="absolute right-4 top-4 -rotate-6 rounded-xl bg-cheese px-2.5 py-1.5 text-center font-cond font-extrabold uppercase leading-none text-ink">
-                      <span className="block text-[0.65rem] tracking-widest">Save</span>
-                      <span className="mt-0.5 block text-lg">{formatCents((d.worthRs - d.priceRs) * 100)}</span>
-                    </span>
-                    <span className="font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese">
-                      Value deal 0{i + 1}
-                    </span>
-                    <span className="mt-1 block pr-20 font-display text-4xl uppercase leading-none tracking-wide">
-                      {d.name}
-                    </span>
-                    <span className="mt-3 block font-cond text-lg font-semibold uppercase leading-snug tracking-wide text-cream/75">
-                      {d.what}
-                    </span>
-                    <span className="relative mt-auto flex items-end justify-between gap-3 pt-6">
-                      <span>
-                        <span className="block text-sm text-cream/45 line-through">{formatCents(d.worthRs * 100)}</span>
-                        <span className="block font-display text-4xl tracking-wide text-cheese">
-                          {formatCents(d.priceRs * 100)}
+              </Reveal>
+              <div className="mt-8 grid gap-4 md:grid-cols-3">
+                {view.deals.map((d, i) => {
+                  // The saving and the struck-through worth only when the deal is worth more than it costs.
+                  const save = dealSaveCents(d);
+                  return (
+                    <Reveal key={d.key} delay={i * 80}>
+                      <Link
+                        href="/menu#value-deals"
+                        className="group relative flex h-full flex-col overflow-hidden rounded-3xl bg-ink p-6 text-cream shadow-soft-lg transition-transform hover:-translate-y-1"
+                      >
+                        <span
+                          aria-hidden
+                          className="pointer-events-none absolute -bottom-8 -right-2 select-none font-display text-[9rem] leading-none text-cheese/10"
+                        >
+                          0{i + 1}
                         </span>
-                      </span>
-                      <span className="rounded-full bg-cheese px-4 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink transition-colors group-hover:bg-cheese-hot">
-                        Order →
-                      </span>
-                    </span>
-                  </Link>
-                </Reveal>
-              ))}
+                        {save !== null && (
+                          <span className="absolute right-4 top-4 -rotate-6 rounded-xl bg-cheese px-2.5 py-1.5 text-center font-cond font-extrabold uppercase leading-none text-ink">
+                            <span className="block text-[0.65rem] tracking-widest">Save</span>
+                            <span className="mt-0.5 block text-lg">{formatCents(save)}</span>
+                          </span>
+                        )}
+                        <span className="font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese">
+                          Value deal 0{i + 1}
+                        </span>
+                        <span className="mt-1 block pr-20 font-display text-4xl uppercase leading-none tracking-wide">
+                          {d.name}
+                        </span>
+                        {d.what && (
+                          <span className="mt-3 block font-cond text-lg font-semibold uppercase leading-snug tracking-wide text-cream/75">
+                            {d.what}
+                          </span>
+                        )}
+                        <span className="relative mt-auto flex items-end justify-between gap-3 pt-6">
+                          <span>
+                            {save !== null && d.worthCents !== null && (
+                              <span className="block text-sm text-cream/45 line-through">{formatCents(d.worthCents)}</span>
+                            )}
+                            {d.priceCents !== null && (
+                              <span className="block font-display text-4xl tracking-wide text-cheese">
+                                {formatCents(d.priceCents)}
+                              </span>
+                            )}
+                          </span>
+                          <span className="rounded-full bg-cheese px-4 py-2 font-cond text-base font-extrabold uppercase tracking-wide text-ink transition-colors group-hover:bg-cheese-hot">
+                            Order →
+                          </span>
+                        </span>
+                      </Link>
+                    </Reveal>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
 
         {/* ======================== THE SIGNATURES ========================= */}
-        <section className="bg-paper text-ink">
-          <div className="mx-auto max-w-6xl px-4 py-20 md:py-24">
-            <Reveal>
-              <p className="font-cond text-sm font-bold uppercase tracking-[0.24em] text-cheese-deep">
-                From our kitchen, not a stock library
-              </p>
-              <div className="mt-2 flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3">
-                <h2 className="font-display text-5xl uppercase tracking-wide md:text-6xl">
-                  The signatures
-                </h2>
-                <Link
-                  href="/menu"
-                  className="font-cond text-lg font-bold uppercase tracking-wide text-ink underline decoration-cheese decoration-[3px] underline-offset-4 hover:text-cheese-deep"
-                >
-                  Full menu &amp; prices →
-                </Link>
-              </div>
-            </Reveal>
-            <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-              {LINEUP.map((item, i) => (
-                <Reveal key={item.name} delay={(i % 3) * 80}>
+        {/* No featured pizza or burger on the menu: no section. */}
+        {dishes.length > 0 && (
+          <section className="bg-paper text-ink">
+            <div className="mx-auto max-w-6xl px-4 py-20 md:py-24">
+              <Reveal>
+                <p className="font-cond text-sm font-bold uppercase tracking-[0.24em] text-cheese-deep">
+                  From our kitchen, not a stock library
+                </p>
+                <div className="mt-2 flex flex-wrap items-end justify-between gap-4 border-b-[3px] border-ink pb-3">
+                  <h2 className="font-display text-5xl uppercase tracking-wide md:text-6xl">
+                    The signatures
+                  </h2>
                   <Link
-                    href={item.size === 'Burger' ? '/menu#burgers' : '/menu#signature-pizzas'}
-                    className="group flex h-full flex-col overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md transition-transform hover:-translate-y-1"
+                    href="/menu"
+                    className="font-cond text-lg font-bold uppercase tracking-wide text-ink underline decoration-cheese decoration-[3px] underline-offset-4 hover:text-cheese-deep"
                   >
-                    <div className="relative grid aspect-[4/3] place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_58%,rgba(245,179,1,0.3),transparent_66%)]">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={item.image}
-                        srcSet={menuImageSrcSet(item.image)}
-                        sizes="(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw"
-                        alt={`${item.name} from ${shop.profile.name}`}
-                        width={720}
-                        height={720}
-                        loading="lazy"
-                        decoding="async"
-                        className="w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105"
-                      />
-                      <span className="absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink">
-                        {formatCents(item.priceRs * 100)}
-                      </span>
-                    </div>
-                    <div className="flex flex-1 flex-col p-5">
-                      <p className="font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese">
-                        {item.size === 'Burger' ? 'Signature burger' : `Signature · ${item.size}`}
-                      </p>
-                      <h3 className="mt-1 font-display text-3xl uppercase tracking-wide">{item.name}</h3>
-                      <p className="mt-2 text-sm leading-relaxed text-cream/65">{item.description}</p>
-                      <p className="mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese">
-                        Order it →
-                      </p>
-                    </div>
+                    Full menu &amp; prices →
                   </Link>
-                </Reveal>
-              ))}
+                </div>
+              </Reveal>
+              <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {dishes.map((item, i) => (
+                  <Reveal key={item.key} delay={(i % 3) * 80}>
+                    <Link
+                      href={item.href}
+                      className="group flex h-full flex-col overflow-hidden rounded-3xl bg-ink text-cream shadow-soft-md transition-transform hover:-translate-y-1"
+                    >
+                      <div className="relative grid aspect-[4/3] place-items-center overflow-hidden bg-[radial-gradient(circle_at_50%_58%,rgba(245,179,1,0.3),transparent_66%)]">
+                        {item.image ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={item.image}
+                            srcSet={menuImageSrcSet(item.image)}
+                            sizes="(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw"
+                            alt={`${item.name} from ${shop.profile.name}`}
+                            width={720}
+                            height={720}
+                            loading="lazy"
+                            decoding="async"
+                            className={
+                              item.shopPhoto
+                                ? 'w-[78%] drop-shadow-[0_22px_26px_rgba(0,0,0,0.55)] transition-transform duration-700 group-hover:rotate-[18deg] group-hover:scale-105'
+                                : 'aspect-square w-[64%] rounded-full object-cover shadow-soft-lg transition-transform duration-700 group-hover:scale-105'
+                            }
+                          />
+                        ) : (
+                          // No photo: the name on the gold glow (never a stock picture).
+                          <span
+                            aria-hidden
+                            className="px-6 text-center font-display text-5xl uppercase leading-none tracking-wide text-cheese"
+                          >
+                            {item.name}
+                          </span>
+                        )}
+                        {item.priceCents !== null && (
+                          <span className="absolute left-4 top-4 rounded-full bg-cheese px-3 py-1 font-cond text-sm font-extrabold text-ink">
+                            {formatCents(item.priceCents)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-1 flex-col p-5">
+                        <p className="font-cond text-xs font-bold uppercase tracking-[0.24em] text-cheese">
+                          {item.label}
+                        </p>
+                        <h3 className="mt-1 font-display text-3xl uppercase tracking-wide">{item.name}</h3>
+                        {item.description && <p className="mt-2 text-sm leading-relaxed text-cream/65">{item.description}</p>}
+                        <p className="mt-auto pt-4 font-cond text-base font-bold uppercase tracking-wide text-cheese">
+                          Order it →
+                        </p>
+                      </div>
+                    </Link>
+                  </Reveal>
+                ))}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
 
         {/* ============================ DELIVERY =========================== */}
         <section className="bg-paper text-ink">

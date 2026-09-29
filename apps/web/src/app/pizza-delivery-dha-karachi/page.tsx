@@ -6,7 +6,7 @@ import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
 import { ShowcaseVisual } from '@/components/ShowcaseVisual';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { copyText } from '@/lib/delivery-facts';
+import { copyText, type Copy } from '@/lib/delivery-facts';
 import {
   PIZZA_CTA,
   PIZZA_DESCRIPTION,
@@ -39,29 +39,50 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-const WHY = [
+/** A card of the "why" row: its words as page copy (a price is a {price:…} token, sweep B2). */
+interface WhyCard {
+  img: string | null;
+  alt: string;
+  fallback: { big: Copy; small: Copy };
+  title: string;
+  body: Copy;
+}
+
+const WHY: WhyCard[] = [
   {
-    img: '/images/menu/cheesy-star.webp' as string | null,
+    img: '/images/menu/cheesy-star.webp',
     alt: 'Cheesy Star signature pizza, cut like a star',
     fallback: { big: 'Signature', small: 'Large 12"' },
     title: 'Signature pizzas',
     body: 'Shawarma Pizza, Crown Crust, Cheesy Star, Meat Lovers and Cheetos — the house specials, all Large 12". The Cheesy Star is cut like a star and comes with a Sriracha mayo dip.',
   },
   {
-    img: null as string | null,
+    img: null,
     alt: 'Regular pizzas in Medium 9" and Large 12"',
     fallback: { big: '9" · 12"', small: 'Medium · Large' },
     title: 'Regular pizzas, two sizes',
     body: 'Fajita, Classic Supreme, Malai Supreme, Chicken Tikka, Chicken Tikka Malai, Cheesalious, Veggie Lovers (any five veggies) and Classic Pepperoni — each in Medium 9" or Large 12".',
   },
   {
-    img: null as string | null,
+    img: null,
     alt: 'Value deals with a 1 litre soft drink',
-    fallback: { big: 'From Rs 2,600', small: 'Value deals · 1 litre soft drink' },
+    // The cheapest of the three deals, at the menu's price; the menu unknown or the deals gone: no price.
+    fallback: {
+      big: { text: 'From {price:deals}', when: { priced: 'deals' }, otherwise: 'Value deals' },
+      small: { text: 'Value deals · 1 litre soft drink', when: { priced: 'deals' }, otherwise: '1 litre soft drink' },
+    },
     title: 'Value deals',
     body: 'Big Two (2 Large), Family Feast (1 Medium + 1 Large) and Perfect Pair (2 Medium) — regular-menu pizzas with a 1 litre soft drink, for less than ordering them one by one.',
   },
 ];
+
+/** The dips' one price from the menu; at more than one price (or unknown), no number. */
+const FAQ_CUSTOMIZE: Copy = {
+  text: 'Regular pizzas come in Medium 9" or Large 12" (Signature pizzas are Large 12"), Veggie Lovers takes any five veggies you choose, and dips are {price:dip} each. For anything else, ask us on WhatsApp.',
+  when: { priced: 'dip' },
+  otherwise:
+    'Regular pizzas come in Medium 9" or Large 12" (Signature pizzas are Large 12"), Veggie Lovers takes any five veggies you choose, and dips cost extra. For anything else, ask us on WhatsApp.',
+};
 
 const FAQS = [
   {
@@ -78,13 +99,18 @@ const FAQS = [
   },
   {
     q: 'Can I customize my pizza?',
-    a: 'Regular pizzas come in Medium 9" or Large 12" (Signature pizzas are Large 12"), Veggie Lovers takes any five veggies you choose, and dips are Rs 100 each. For anything else, ask us on WhatsApp.',
+    a: FAQ_CUSTOMIZE,
   },
 ];
 
 export default async function PizzaDeliveryPage() {
   const facts = await getCopyFacts();
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
+  const why = WHY.map((w) => ({
+    ...w,
+    fallback: { big: copyText(w.fallback.big, facts), small: copyText(w.fallback.small, facts) },
+    body: copyText(w.body, facts),
+  }));
   return (
     <>
       <SiteHeader />
@@ -117,7 +143,7 @@ export default async function PizzaDeliveryPage() {
 
         <section className="mx-auto max-w-6xl px-4 py-12">
           <div className="grid gap-5 md:grid-cols-3">
-            {WHY.map((w, i) => (
+            {why.map((w, i) => (
               <Reveal key={w.title} delay={i * 80}>
                 <div className="h-full overflow-hidden rounded-2xl border border-white/10 bg-night-card">
                   <ShowcaseVisual img={w.img} alt={w.alt} fallback={w.fallback} />

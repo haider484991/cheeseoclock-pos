@@ -467,21 +467,27 @@ function typesAFee(line: string): boolean {
   );
 }
 
+/**
+ * Does this line of source hold a menu price as data — a price, worth, cents
+ * or rupee field set to a number ("priceRs: 2200", "basePriceCents: 220_000")
+ * — or turn a rupee number into money by hand ("formatCents(x.priceRs * 100)")?
+ */
+function typesMoneyInData(line: string): boolean {
+  return (
+    /\b\w*(?:[Pp]rice|[Ww]orth|[Cc]ents|Rs|[Rr]upees)\w{0,2}['"]?\s*:\s*[\d_]{2,}/.test(line) ||
+    /\bformatCents\(.*\*\s*100\)/.test(line)
+  );
+}
+
 describe('no delivery fee is typed by hand', () => {
-  // Menu prices and comments that are not delivery fees — each one named, so a
+  // Comments and the one formatter that are not prices — each one named, so a
   // fee typed into a page ("Rs 300 delivery") fails here: write a token instead.
+  // Since sweep B2 no MENU price is typed either: the home page's lineup and
+  // the landing pages' {price:…} tokens read the published menu.
   const ALLOWED: Array<[file: string, text: string]> = [
-    ['app/burger-delivery-dha-karachi/page.tsx', "small: 'Rs 700 – Rs 950'"],
-    ['app/burger-delivery-dha-karachi/page.tsx', 'Add cheese to any burger for Rs 100.'],
-    ['app/burger-delivery-dha-karachi/page.tsx', "small: 'From Rs 300'"],
-    ['app/burger-delivery-dha-karachi/page.tsx', 'Add cheese to any of them for Rs 100.'],
-    ['app/late-night-food-delivery-dha/page.tsx', "small: 'Large · from Rs 480'"],
-    ['app/pizza-delivery-dha-karachi/page.tsx', "big: 'From Rs 2,600'"],
-    ['app/pizza-delivery-dha-karachi/page.tsx', 'dips are Rs 100 each.'],
     ['lib/format.ts', '/** Rs 1,234 (drops paisa when zero'],
     ['lib/format.ts', 'return `Rs ${rupees'],
     ['lib/menu-view.ts', 'the page can say "Save Rs 650" without a hard-coded number'],
-    ['lib/signatures.ts', '(Medium Rs 1,500, Large Rs 2,000, 1 litre Rs 250)'],
   ];
   const SRC = fileURLToPath(new URL('..', import.meta.url));
 
@@ -550,6 +556,54 @@ describe('no delivery fee is typed by hand', () => {
   it('keeps the list honest: every allowed line is still there', () => {
     for (const [file, text] of ALLOWED) {
       expect(readFileSync(join(SRC, file), 'utf8').includes(text), `${file}: ${text}`).toBe(true);
+    }
+  });
+
+  // Sweep B2: a menu price typed into DATA ("priceRs: 2200", "worthRs: 4250")
+  // or turned into money by hand ("formatCents(d.priceRs * 100)") is the
+  // stale-copy problem B2 removed: prices come from the published menu only.
+  it('no menu price in data: no "priceRs: 2200" field, no formatCents(… * 100)', () => {
+    const found: string[] = [];
+    for (const path of sources(SRC)) {
+      const file = relative(SRC, path).replace(/\\/g, '/');
+      readFileSync(path, 'utf8')
+        .split(/\r?\n/)
+        .forEach((line, i) => {
+          if (typesMoneyInData(line)) found.push(`${file}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    expect(found, 'a price typed by hand — read it from the published menu (lib/home-lineup, lib/menu-prices)').toEqual([]);
+  });
+
+  it('catches a price typed into data however it is written', () => {
+    for (const typed of [
+      'priceRs: 2200,',
+      'worthRs: 4250 },',
+      "{ name: 'Big Two', priceRs: 3600, worthRs: 4250 }",
+      'basePriceCents: 220_000,',
+      'priceCents : 90000',
+      "{ 'price': 2600 }",
+      'const deal = { Rs: 2600 };',
+      'dealPriceRs: 26_00',
+      'formatCents(d.priceRs * 100)',
+      'formatCents((d.worthRs - d.priceRs) * 100)',
+      'formatCents(Math.min(...VALUE_DEALS.map((d) => d.priceRs)) * 100)',
+    ]) {
+      expect(typesMoneyInData(typed), typed).toBe(true);
+    }
+    for (const fine of [
+      'priceCents: item.basePriceCents,',
+      'formatCents(d.priceCents)',
+      'worthCents: dealWorthCents(menu, item),',
+      'minDeliveryOrderCents: 0,',
+      'formatCents(Math.min(...on.map((z) => z.feeCents)))',
+      'const rupees = cents / 100;',
+      'priceDeltaCents: m.priceDeltaCents',
+      'className="[perspective:1100px]"',
+      'hours: 24,',
+      'maxChars: 300,',
+    ]) {
+      expect(typesMoneyInData(fine), fine).toBe(false);
     }
   });
 

@@ -6,7 +6,7 @@ import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
 import { ShowcaseVisual } from '@/components/ShowcaseVisual';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { copyText } from '@/lib/delivery-facts';
+import { copyText, type Copy } from '@/lib/delivery-facts';
 import {
   BURGER_CTA,
   BURGER_DESCRIPTION,
@@ -38,34 +38,63 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-const WHY = [
+/** A card of the "why" row: its words as page copy (a price is a {price:…} token, sweep B2). */
+interface WhyCard {
+  img: string | null;
+  alt: string;
+  fallback: { big: Copy; small: Copy };
+  title: string;
+  body: Copy;
+}
+
+const WHY: WhyCard[] = [
   {
-    img: '/images/menu/signature-cheese-dipped.webp' as string | null,
+    img: '/images/menu/signature-cheese-dipped.webp',
     alt: 'Signature Cheese Dipped crispy chicken burger',
     fallback: { big: 'Crispy chicken', small: 'Thigh fillet · brioche bun' },
     title: 'Crispy chicken, thigh meat',
     body: 'Every burger is built on a thigh-marinated crispy chicken fillet in a brioche bun, made when your order comes in.',
   },
   {
-    img: null as string | null,
+    img: null,
     alt: 'Four crispy chicken burgers',
-    fallback: { big: '4 burgers', small: 'Rs 700 – Rs 950' },
+    // The four burgers' prices, cheapest to dearest, and the cheese extra: the menu's.
+    fallback: {
+      big: '4 burgers',
+      small: { text: '{price:burgers}', when: { priced: 'burgers' }, otherwise: 'Mild to Nashville hot' },
+    },
     title: 'Four burgers, pick your level',
-    body: 'Classic Crispy Chicken, Crispy Signature, Signature Cheese Dipped and Nashville Authentic (Hot). Add cheese to any burger for Rs 100.',
+    body: {
+      text: 'Classic Crispy Chicken, Crispy Signature, Signature Cheese Dipped and Nashville Authentic (Hot). Add cheese to any burger for {price:burgerCheese}.',
+      when: { priced: 'burgerCheese' },
+      otherwise:
+        'Classic Crispy Chicken, Crispy Signature, Signature Cheese Dipped and Nashville Authentic (Hot). Add cheese to any burger.',
+    },
   },
   {
-    img: null as string | null,
+    img: null,
     alt: 'Fries and sides',
-    fallback: { big: 'Fries & sides', small: 'From Rs 300' },
+    fallback: {
+      big: 'Fries & sides',
+      small: { text: 'From {price:sides}', when: { priced: 'sides' }, otherwise: 'Fries, nuggets & wings' },
+    },
     title: 'Sides that keep up',
     body: 'Fries, Signature Masala and Mayo Masala Fries, five nuggets with fries and a dip, or six oven-baked wings. (Signature Loaded Fries are pick-up only.)',
   },
 ];
 
+/** The cheese extra's one price from the menu; unknown or at more than one price: no number. */
+const FAQ_WHAT_GOES_IN: Copy = {
+  text: 'A thigh-marinated crispy chicken fillet in a brioche bun. Start with the Classic Crispy Chicken, step up to the Crispy Signature or the Signature Cheese Dipped, or go Nashville Authentic if you want heat. Add cheese to any of them for {price:burgerCheese}.',
+  when: { priced: 'burgerCheese' },
+  otherwise:
+    'A thigh-marinated crispy chicken fillet in a brioche bun. Start with the Classic Crispy Chicken, step up to the Crispy Signature or the Signature Cheese Dipped, or go Nashville Authentic if you want heat. Add cheese to any of them.',
+};
+
 const FAQS = [
   {
     q: 'What goes into your burgers?',
-    a: 'A thigh-marinated crispy chicken fillet in a brioche bun. Start with the Classic Crispy Chicken, step up to the Crispy Signature or the Signature Cheese Dipped, or go Nashville Authentic if you want heat. Add cheese to any of them for Rs 100.',
+    a: FAQ_WHAT_GOES_IN,
   },
   {
     q: 'Where do you deliver burgers?',
@@ -84,6 +113,11 @@ const FAQS = [
 export default async function BurgerDeliveryPage() {
   const facts = await getCopyFacts();
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
+  const why = WHY.map((w) => ({
+    ...w,
+    fallback: { big: copyText(w.fallback.big, facts), small: copyText(w.fallback.small, facts) },
+    body: copyText(w.body, facts),
+  }));
   return (
     <>
       <SiteHeader />
@@ -117,7 +151,7 @@ export default async function BurgerDeliveryPage() {
 
         <section className="mx-auto max-w-6xl px-4 py-12">
           <div className="grid gap-5 md:grid-cols-3">
-            {WHY.map((w, i) => (
+            {why.map((w, i) => (
               <Reveal key={w.title} delay={i * 80}>
                 <div className="h-full overflow-hidden rounded-2xl border border-white/10 bg-night-card">
                   <ShowcaseVisual img={w.img} alt={w.alt} fallback={w.fallback} />

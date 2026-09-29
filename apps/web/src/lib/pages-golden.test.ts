@@ -20,8 +20,10 @@
  *      __fixtures__/golden-menu.ts) and no settings block — /menu open,
  *      then closed;
  *  (c) the same with a v0.7.30 till's settings block at every default.
- * The one expected difference later (sweep B2): with the menu unknown (a)
- * the home page's price badges come from the menu, so none show.
+ * The one difference (sweep B2, since the golden was taken): with the menu
+ * unknown (a) the home and landing pages' prices come from the menu, so none
+ * show — compared against the golden with exactly those prices taken out
+ * (__fixtures__/menu-unknown.ts). States (b) and (c) are the golden byte for byte.
  */
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -30,6 +32,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_DELIVERY_ZONES, type DeliveryZoneSetting, type PublishedMenu, type PublishedSettings } from '@cheeseoclock/shared-types';
 import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
 import { goldenMenu } from './__fixtures__/golden-menu';
+import { MENU_PRICED_ROUTES, htmlWithMenuUnknown } from './__fixtures__/menu-unknown';
 import { renderServer, stableHtml } from './__fixtures__/render-pages';
 
 const db = vi.hoisted(() => ({
@@ -351,7 +354,9 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
   for (const state of ['a', 'b', 'c']) {
     it(`(${state}) every page’s HTML, byte for byte`, () => {
       for (const [route, key] of Object.entries(golden.pages[state]!)) {
-        expect(now.html[now.pages[state]![route]!], `${state} ${route}`).toBe(golden.html[key]);
+        // (a) the menu unknown: the golden without its prices (sweep B2) on the home and landing pages.
+        const want = state === 'a' ? htmlWithMenuUnknown(route, golden.html[key]!) : golden.html[key];
+        expect(now.html[now.pages[state]![route]!], `${state} ${route}`).toBe(want);
       }
     });
 
@@ -372,6 +377,16 @@ describe('nothing new stored: every page exactly as v0.7.30', () => {
   it('the checkout sheet: delivery and pick-up, open and closed', () => {
     for (const [k, html] of Object.entries(golden.checkout)) expect(now.checkout[k], k).toBe(html);
     expect(Object.keys(now.checkout)).toEqual(Object.keys(golden.checkout));
+  });
+
+  it('(a) the menu unknown changes only the pages that print menu prices, and on them only the prices', () => {
+    for (const [route, key] of Object.entries(golden.pages['a']!)) {
+      const was = golden.html[key]!;
+      const is = now.html[now.pages['a']![route]!]!;
+      expect(is === was, route).toBe(!MENU_PRICED_ROUTES.includes(route));
+    }
+    // With the menu published at today's prices, those same pages are the golden exactly.
+    for (const route of MENU_PRICED_ROUTES) expect(now.html[now.pages['b']![route]!], route).toBe(golden.html[golden.pages['b']![route]!]);
   });
 
   it('the golden copy is the one taken from v0.7.30 (a few of its facts, spelled out)', () => {

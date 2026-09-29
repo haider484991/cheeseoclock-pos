@@ -304,6 +304,38 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   till is not taking website orders inside the opening hours it says so
   ("the kitchen isn't taking website orders just now — WhatsApp us") instead
   of "definitely Cheese O'Clock". The page as served is unchanged.
+- **Prices, deals and tax from the menu (sweep B2).** No menu price is typed
+  in the website's code any more: the home page's featured pizzas, burger and
+  value deals (the owner's Home page card; today's five signature pizzas, the
+  Signature Cheese Dipped and the three deals with none saved) show the
+  PUBLISHED menu's prices, and each deal's saving is worked out from the menu
+  (`lib/home-lineup.ts`, `menu-view` `dealWorthCents`); the landing pages'
+  "From …" lines and the cheese and dip extras are `{price:…}` tokens
+  (`lib/menu-prices.ts`); the tax words are the food's one rate
+  (`lib/tax-words.ts`). A Publish moves them (every publish revalidates the
+  site). A featured item the menu no longer has (renamed, deleted, priced at
+  0, off the website) is **hidden** — never shown at a zero price — and the
+  till's publish message says which (`homeMissing`). With the menu **unknown**
+  (a build or preview with no `DATABASE_URL`, nothing published yet) the home
+  page shows its lineup without prices and the landing pages say it without
+  one; with a database the build reads the menu like any page read.
+- **Before the first deploy of B2**, read `GET /api/menu` on the live site
+  and check the names the code looks for are all there, spelled the same:
+  `Cheesy Star — Large`, `Crown Crust — Large`, `Shawarma Pizza — Large`,
+  `Meat Lovers — Large`, `Cheetos — Large`, `Signature Cheese Dipped`,
+  `Big Two`, `Family Feast`, `Perfect Pair` (the home page); the four burgers,
+  the six sides and two masala fries, the `Add cheese` choice in an
+  `Extras · Burgers` group and the `Dips on the side` choices (the landing
+  pages, `PRICE_LINES`); one `… — 1 litre` drink and the deals' `Large:` /
+  `Medium:` pizza choices (the deals' saving); every food item at one tax
+  rate. A name that is missing hides its card or takes the sentence's
+  wording without a price — nothing wrong is printed, but content goes.
+- **A featured item's own photo.** Today's six dishes use the shop's own
+  photos (`public/images/menu`). Another item the owner features shows the
+  till's photo through `GET /api/menu-photo/<posItemId>?v=<version>` (the
+  page links it; the data URL is never inlined into a static page), else a
+  plain panel with its name. The route serves only a published item's
+  raster photo (never SVG), cached for good under its version.
 - **What to check on a Vercel preview** (its own Neon branch and
   `BRIDGE_SECRET`, see above): before any shop card is saved, the home page's
   page source (JSON-LD hours 12:00–01:00, `paymentAccepted` "Cash on

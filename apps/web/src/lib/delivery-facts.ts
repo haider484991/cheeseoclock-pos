@@ -5,6 +5,7 @@ import {
   cashOnly,
   closesAfterMidnight,
   daysWords,
+  deliveryZoneFeeItemIds,
   everyDay,
   findZone,
   hoursLine,
@@ -18,6 +19,7 @@ import {
   type PublishedZone,
 } from '@cheeseoclock/shared-types';
 import { formatCents } from './format';
+import { isPriceKey, priceWords, type PriceKey, type PriceMenu } from './menu-prices';
 import { DEFAULT_SHOP_FACTS, nameIsDefault, whatsappNumbersText, type ShopFacts } from './shop-facts';
 import { DEFAULT_TAX_BPS, taxPercentWords } from './tax-words';
 
@@ -109,6 +111,13 @@ export type CopyFacts = SiteFacts & {
    * (DEFAULT_TAX_BPS, today's 15%).
    */
   taxBps?: number | null;
+  /**
+   * The published menu the price tokens read (sweep B2: {price:deals} …,
+   * lib/menu-prices); absent or null = the menu is unknown (no database,
+   * nothing published): no price prints — the copy's `otherwise` does.
+   * Server only: never handed to the browser.
+   */
+  menu?: PriceMenu | null;
 };
 
 /** The shop's details these facts carry (today's when none). */
@@ -448,6 +457,10 @@ function numberList(ns: readonly number[]): string {
  * `nameIsDefault`: the shop's name is today's — the lines built on its pun
  * ("It’s always Cheese O’Clock") may print.
  * `oneTaxRate`: the food has one tax rate above 0 (the menu unknown: today's).
+ *
+ * The published menu (sweep B2, lib/menu-prices.ts):
+ * `priced`: this price line has words on the menu — its {price:<key>} token
+ * prints (the menu known, its items on it, one price for an "each").
  */
 export type CopyClaim =
   | { sameFee: readonly string[] }
@@ -462,7 +475,8 @@ export type CopyClaim =
   | { cashOnly: true }
   | { pickupCashOnly: true }
   | { nameIsDefault: true }
-  | { oneTaxRate: true };
+  | { oneTaxRate: true }
+  | { priced: PriceKey };
 
 /** A claim page copy relies on (the name from step 3, when every claim was about fees). */
 export type FeeClaim = CopyClaim;
@@ -497,7 +511,13 @@ export function claimHolds(claim: CopyClaim | readonly CopyClaim[], facts: CopyF
   if ('pickupCashOnly' in claim) return cashOnly(shop.website.pickupPayments);
   if ('nameIsDefault' in claim) return nameIsDefault(shop);
   if ('oneTaxRate' in claim) return taxBpsIn(facts) !== null;
+  if ('priced' in claim) return menuPriceWords(claim.priced, facts) !== null;
   return feeClaimHolds(claim, facts);
+}
+
+/** A price line's words from the facts' menu (lib/menu-prices priceWords), or null; an unknown key throws. */
+function menuPriceWords(key: string, facts: CopyFacts): string | null {
+  return priceWords(key, facts.menu, deliveryZoneFeeItemIds(facts.zones));
 }
 
 function isClaimList(claim: CopyClaim | readonly CopyClaim[]): claim is readonly CopyClaim[] {
@@ -547,6 +567,18 @@ export class NoMinimumToken extends CantPrint {
   constructor(token: string) {
     super(`${token}: the owner has set no smallest delivery order`);
     this.name = 'NoMinimumToken';
+  }
+}
+
+/**
+ * {price:<key>} with nothing true to print — the menu unknown, the line's
+ * items not on it, its choices at more than one price: the text that holds
+ * it can't print (renderCopy moves on) — never a zero price, never a stale one.
+ */
+export class NoPriceToken extends CantPrint {
+  constructor(token: string) {
+    super(`${token}: the published menu does not say`);
+    this.name = 'NoPriceToken';
   }
 }
 
@@ -614,6 +646,12 @@ const TOKEN = /\{([a-zA-Z]+)(?::([^{}]*))?\}/g;
  *  - {tax} / {Tax}: "15% tax" — the food's one rate (the menu unknown:
  *    today's); "tax" / "Tax" when the food has more than one (never a
  *    wrong number).
+ * The published menu (sweep B2):
+ *  - {price:deals} / {price:burgers} / {price:sides} / {price:masalaFries} /
+ *    {price:burgerCheese} / {price:dip}: the till's prices for the items a
+ *    page names (lib/menu-prices PRICE_LINES: a price, or a spaced "low –
+ *    high" range); throws NoPriceToken while the menu can't say (unknown, the
+ *    items missing, mixed prices) — claim it: { priced: 'deals' }.
  * An unknown token or area id throws: a typo must fail the tests and the
  * build, never print "{fee:dha-66}" or a wrong fee.
  */
@@ -646,6 +684,13 @@ export function fillFees(text: string, facts: CopyFacts): string {
       case 'minOrder': {
         if (!(facts.minDeliveryOrderCents > 0)) throw new NoMinimumToken(whole);
         return formatCents(facts.minDeliveryOrderCents);
+      }
+      case 'price': {
+        // A key that names no price line is a typo like any unknown token.
+        if (!isPriceKey(arg ?? '')) throw new Error(`Unknown fee token ${whole}`);
+        const words = menuPriceWords(arg ?? '', facts);
+        if (words === null) throw new NoPriceToken(whole);
+        return words;
       }
       default: {
         const shopWords = shopToken(name, facts);

@@ -9,6 +9,7 @@ import {
 import { publishedSettingsReadSchema, publishedShopReadSchema } from '@cheeseoclock/shared-schemas/web-settings';
 import { sql } from './db';
 import { DEFAULT_FACTS, factsFromBlock, type CopyFacts, type SiteFacts } from './delivery-facts';
+import { resolveHome, type HomeView } from './home-lineup';
 import { DEFAULT_SHOP_FACTS, shopFactsFromBlock, type ShopFacts } from './shop-facts';
 import { taxBpsOf } from './tax-words';
 
@@ -83,6 +84,12 @@ export function parseStoredShop(raw: unknown): PublishedShop | null {
  */
 export interface MenuFacts {
   categories: PublishedMenuCategory[];
+  /**
+   * The items the till sent a photo of: posItemId → a short version of the
+   * photo (it changes when the photo does). The home page links a featured
+   * item's photo by it (api/menu-photo) instead of carrying the data URL.
+   */
+  photos: Record<string, string>;
 }
 
 /** Everything a page reads from the database, in one query. */
@@ -95,16 +102,24 @@ interface PageData {
 
 const DEFAULT_PAGE_DATA: PageData = Object.freeze({ site: DEFAULT_FACTS, shop: DEFAULT_SHOP_FACTS, menu: null });
 
-function menuFactsOf(raw: unknown): MenuFacts | null {
-  let value: unknown = raw;
-  if (typeof raw === 'string') {
-    try {
-      value = JSON.parse(raw);
-    } catch {
-      return null;
-    }
+function jsonOf(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
   }
-  return Array.isArray(value) ? { categories: value as PublishedMenuCategory[] } : null;
+}
+
+function menuFactsOf(rawCategories: unknown, rawPhotos: unknown): MenuFacts | null {
+  const value = jsonOf(rawCategories);
+  if (!Array.isArray(value)) return null;
+  const photos: Record<string, string> = {};
+  const p = jsonOf(rawPhotos);
+  if (p && typeof p === 'object' && !Array.isArray(p)) {
+    for (const [id, v] of Object.entries(p as Record<string, unknown>)) if (typeof v === 'string') photos[id] = v;
+  }
+  return { categories: value as PublishedMenuCategory[], photos };
 }
 
 /**
@@ -133,7 +148,9 @@ async function readPageData(): Promise<PageData> {
   if (!process.env['DATABASE_URL']) return DEFAULT_PAGE_DATA;
   try {
     // The two blocks and the menu without its photos (the row carries the menu's data-URL images):
-    // each item keeps its imageUrl key, as null. Categories and items in their stored order.
+    // each item keeps its imageUrl key, as null. Categories and items in their stored order. Which
+    // items HAVE a photo comes as a short version of each (the first 12 of its md5): the home page
+    // links a featured item's photo (api/menu-photo), never inlines it.
     const rows = (await sql()`
       SELECT menu_json -> 'settings' AS settings,
              menu_json -> 'shop' AS shop,
@@ -142,14 +159,18 @@ async function readPageData(): Promise<PageData> {
                          (SELECT COALESCE(jsonb_agg(i.v || '{"imageUrl":null}'::jsonb ORDER BY i.o), '[]'::jsonb)
                             FROM jsonb_array_elements(COALESCE(c.v -> 'items', '[]'::jsonb)) WITH ORDINALITY AS i(v, o)))
                        ORDER BY c.o), '[]'::jsonb)
-                FROM jsonb_array_elements(COALESCE(menu_json -> 'categories', '[]'::jsonb)) WITH ORDINALITY AS c(v, o)) AS categories
+                FROM jsonb_array_elements(COALESCE(menu_json -> 'categories', '[]'::jsonb)) WITH ORDINALITY AS c(v, o)) AS categories,
+             (SELECT COALESCE(jsonb_object_agg(p.v ->> 'posItemId', left(md5(p.v ->> 'imageUrl'), 12)), '{}'::jsonb)
+                FROM jsonb_array_elements(COALESCE(menu_json -> 'categories', '[]'::jsonb)) AS q(v),
+                     jsonb_array_elements(COALESCE(q.v -> 'items', '[]'::jsonb)) AS p(v)
+               WHERE p.v ->> 'posItemId' IS NOT NULL AND p.v ->> 'imageUrl' LIKE 'data:image/%') AS photos
         FROM site_menu WHERE id = 1
-    `) as Array<{ settings: unknown; shop: unknown; categories: unknown }>;
+    `) as Array<{ settings: unknown; shop: unknown; categories: unknown; photos: unknown }>;
     const row = rows[0];
     const data: PageData = {
       site: factsFromBlock(parseStoredSettings(row?.settings ?? null)),
       shop: shopFactsFromBlock(parseStoredShop(row?.shop ?? null)),
-      menu: row ? menuFactsOf(row.categories) : null,
+      menu: row ? menuFactsOf(row.categories, row.photos) : null,
     };
     lastRead = data;
     return data;
@@ -196,14 +217,26 @@ export const getMenuFacts: () => Promise<MenuFacts | null> = dedupe(async () => 
 
 /**
  * What page copy is written from (delivery-facts CopyFacts): the delivery
- * facts, the shop's details, and the food's tax rate from the published menu
+ * facts, the shop's details, the food's tax rate from the published menu
  * (lib/tax-words: the settings block's charge items left out; the menu
- * unknown → today's 15%).
+ * unknown → today's 15%) and the menu itself for the price tokens (sweep B2,
+ * lib/menu-prices; unknown → none print). Server only.
  */
 export const getCopyFacts: () => Promise<CopyFacts> = dedupe(async () => {
   const { site, shop, menu } = await getPageData();
   const feeItemIds = deliveryZoneFeeItemIds(site.zones);
-  return { ...site, shop, taxBps: menu ? taxBpsOf(menu, feeItemIds) : undefined };
+  return { ...site, shop, taxBps: menu ? taxBpsOf(menu, feeItemIds) : undefined, menu };
+});
+
+/**
+ * The home page's featured items (sweep B2, lib/home-lineup): the owner's
+ * lineup (today's with none saved) found on the published menu, with its
+ * prices and deal worth; the menu unknown → the lineup without prices. The
+ * page and its 3D carousel share this one read.
+ */
+export const getHomeView: () => Promise<HomeView> = dedupe(async () => {
+  const { site, shop, menu } = await getPageData();
+  return resolveHome(shop.home, menu, deliveryZoneFeeItemIds(site.zones));
 });
 
 /**

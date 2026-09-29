@@ -7,7 +7,7 @@ import { Reveal } from '@/components/Reveal';
 import { ShowcaseVisual } from '@/components/ShowcaseVisual';
 import { CheeseTime } from '@/components/CheeseTime';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { copyText, type CopyFacts } from '@/lib/delivery-facts';
+import { copyText, type Copy, type CopyFacts } from '@/lib/delivery-facts';
 import {
   LATE_NIGHT_COVERAGE,
   LATE_NIGHT_CTA,
@@ -56,6 +56,13 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
+/** The cheaper of the two masala fries (Large), at the menu's price (sweep B2); unknown or gone: no price. */
+const MASALA_FRIES_FROM: Copy = {
+  text: 'Large · from {price:masalaFries}',
+  when: { priced: 'masalaFries' },
+  otherwise: 'Masala · Mayo Masala',
+};
+
 const NIGHT_PICKS = (facts: CopyFacts) => [
   {
     img: '/images/menu/cheesy-star.webp' as string | null,
@@ -67,7 +74,7 @@ const NIGHT_PICKS = (facts: CopyFacts) => [
   {
     img: null as string | null,
     alt: 'Signature Masala Fries',
-    fallback: { big: 'Masala fries', small: 'Large · from Rs 480' },
+    fallback: { big: 'Masala fries', small: copyText(MASALA_FRIES_FROM, facts) },
     title: 'Masala fries',
     body: 'Signature Masala or Mayo Masala Fries — exam season, match nights, post-shaadi hunger, the fries show up for all of it.',
   },

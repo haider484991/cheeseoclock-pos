@@ -433,9 +433,13 @@ function isDrinkGroup(group: Pick<PublishedModifierGroup, 'name'>): boolean {
  * at the cheapest regular pizza of its size ("Large: Fajita Pizza" → the
  * "Fajita Pizza — Large" item), plus the drink its description promises
  * ("… + 1 litre soft drink" → the 1 litre drink item). Null when anything can't be
- * priced — then the page shows no saving rather than a wrong one.
+ * priced — then the page shows no saving rather than a wrong one. The home
+ * page's deal cards read it too (lib/home-lineup), from the menu without photos.
  */
-export function dealWorthCents(menu: PublicMenu, deal: PublishedMenuItem): number | null {
+export function dealWorthCents(
+  menu: { readonly categories: ReadonlyArray<{ readonly items: readonly PublishedMenuItem[] }> },
+  deal: PublishedMenuItem,
+): number | null {
   if (deal.modifierGroups.length === 0) return null;
   const all = menu.categories.flatMap((c) => c.items);
   const priceOf = new Map<string, number>();
