@@ -10,12 +10,17 @@ import { menuWithoutDrinkBrand } from './menu-view';
  */
 export type PublicSettings = Pick<PublishedSettings, 'v' | 'pickup' | 'zones'>;
 
-/** The menu as the public gets it: GET /api/menu, and the /menu page's props (sent whole to the browser). */
-export type PublicMenu = Omit<PublishedMenu, 'settings'> & { settings?: PublicSettings };
+/**
+ * The menu as the public gets it: GET /api/menu, and the /menu page's props
+ * (sent whole to the browser). Never the shop block (THE SHOP BLOCK): its
+ * stamps and device id are the bridge's; the pages hand the browser the
+ * shop's details as ShopFacts (lib/shop-facts.ts) instead.
+ */
+export type PublicMenu = Omit<PublishedMenu, 'settings' | 'shop'> & { settings?: PublicSettings };
 
-/** The stored menu as the public gets it (no drink brand; the settings block without its device id and stamps). */
+/** The stored menu as the public gets it (no drink brand; the settings block without its device id and stamps; no shop block). */
 export function publicMenu(menu: PublishedMenu): PublicMenu {
-  const { settings, ...rest } = menuWithoutDrinkBrand(menu);
+  const { settings, shop: _shop, ...rest } = menuWithoutDrinkBrand(menu);
   if (!settings) return rest;
   return { ...rest, settings: { v: settings.v, pickup: settings.pickup, zones: settings.zones } };
 }

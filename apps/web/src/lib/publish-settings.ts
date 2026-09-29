@@ -1,21 +1,30 @@
 import {
+  DEFAULT_WEBSITE_HOME,
   DELIVERY_ZONES,
   SETTINGS_MAX_CLOCK_AHEAD_MS,
   compareSettingsStamp,
+  compareShopStamp,
+  deliveryZoneFeeItemIds,
+  homeMissing,
   settingsBlockProblem,
   type PublishSettingsOutcome,
   type PublishedFeeItem,
   type PublishedMenu,
   type PublishedMenuCategory,
   type PublishedSettings,
+  type PublishedShop,
   type WebsiteSettingsHeld,
+  type WebsiteShopHeld,
 } from '@cheeseoclock/shared-types';
+import { publishedShopSchema } from '@cheeseoclock/shared-schemas/web-settings';
 import { sql } from './db';
-import { parseStoredSettings } from './site-facts';
+import { parseStoredSettings, parseStoredShop } from './site-facts';
 
 /**
- * Storing a menu publish and its settings block (PUT /api/bridge/menu), per
- * the contract in shared-types web-bridge.ts ("THE SETTINGS BLOCK").
+ * Storing a menu publish, its settings block and its shop block (PUT
+ * /api/bridge/menu), and either block alone (PUT /api/bridge/settings, PUT
+ * /api/bridge/shop), per the contract in shared-types web-bridge.ts ("THE
+ * SETTINGS BLOCK", "THE SHOP BLOCK").
  */
 
 /**
@@ -91,10 +100,98 @@ export function heldSettingsOf(
   };
 }
 
+// ---------------------------------------------------------------------------
+// THE SHOP BLOCK (sweep B2 + B4)
+// ---------------------------------------------------------------------------
+
+/** A shop block the website refuses (400 shop_invalid): the owner's words, shown on the till. */
+export type ShopBlockCheck = { ok: true; shop: PublishedShop } | { ok: false; problem: string };
+
 /**
- * Store the menu, and decide its block, in ONE statement on the site_menu
- * row (a read-then-write would let an older till publishing at the same
- * moment wipe a newer block):
+ * Check a shop block a till sent (PUT /api/bridge/menu's `shop`, PUT
+ * /api/bridge/shop): its sections within their bounds (shared-schemas
+ * publishedShopSchema — the till's own Save rules), and its stamp not far
+ * ahead of this clock (one till with a wrong clock must not lock every later
+ * block out). The block as checked: a newer till's extra fields dropped.
+ */
+export function checkShopBlock(raw: unknown, now: number = Date.now()): ShopBlockCheck {
+  const parsed = publishedShopSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const where = issue && issue.path.length > 0 ? ` (${issue.path.join('.')})` : '';
+    return { ok: false, problem: issue ? `${issue.message}${where}` : 'The shop details are not in a form the website reads.' };
+  }
+  if (Date.parse(parsed.data.shopAt) - now > SETTINGS_MAX_CLOCK_AHEAD_MS) {
+    return {
+      ok: false,
+      problem: 'The till’s clock is ahead of the website’s — set the till’s date and time, then save the shop details again.',
+    };
+  }
+  return { ok: true, shop: parsed.data };
+}
+
+/** What the website holds of the shop block (null = none), from the stored block. */
+export function heldShopOf(block: PublishedShop | null): WebsiteShopHeld | null {
+  if (!block) return null;
+  return {
+    shopRev: block.shopRev,
+    shopAt: block.shopAt,
+    shopTie: typeof block.shopTie === 'number' ? block.shopTie : null,
+    shopDeviceId: typeof block.deviceId === 'string' ? block.deviceId : null,
+  };
+}
+
+/**
+ * The home page's featured items this menu lacks (their cards are hidden):
+ * the stored block's lineup, or today's with none (DEFAULT_WEBSITE_HOME) —
+ * shared-types homeMissing, the matcher the till's Home page card uses too.
+ * The settings block's delivery charge items are never a featured item. No
+ * menu = nothing hidden (the pages show the lineup without prices).
+ */
+export function homeMissingOn(
+  menu: Pick<PublishedMenu, 'categories'> | null,
+  settings: PublishedSettings | null,
+  shop: PublishedShop | null,
+): string[] {
+  if (!menu) return [];
+  return homeMissing(shop?.home ?? DEFAULT_WEBSITE_HOME, menu, deliveryZoneFeeItemIds(settings?.zones ?? []));
+}
+
+/** What the website did with a publish's shop block: `sent` = the block of this publish (undefined = none). */
+function shopOutcomeOf(sent: PublishedShop | undefined, held: WebsiteShopHeld | null): PublishSettingsOutcome {
+  if (!sent) return held ? 'kept' : 'none';
+  return held && held.shopDeviceId === sent.deviceId && compareShopStamp(held, sent) === 0 && held.shopTie === sent.shopTie
+    ? 'stored'
+    : 'ignored_older';
+}
+
+/** A publish's answer about the shop block (PublishMenuResult / PublishShopResult: WebsiteShopAnswer). */
+export interface ShopAnswer {
+  shop: PublishSettingsOutcome;
+  shopRev: number | null;
+  shopAt: string | null;
+  shopTie: number | null;
+  shopDeviceId: string | null;
+  homeMissing: string[];
+}
+
+function shopAnswerOf(outcome: PublishSettingsOutcome, held: WebsiteShopHeld | null, missing: string[]): ShopAnswer {
+  return {
+    shop: outcome,
+    shopRev: held?.shopRev ?? null,
+    shopAt: held?.shopAt ?? null,
+    shopTie: held?.shopTie ?? null,
+    shopDeviceId: held?.shopDeviceId ?? null,
+    homeMissing: missing,
+  };
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Store the menu, and decide its two blocks, in ONE statement on the
+ * site_menu row (a read-then-write would let an older till publishing at the
+ * same moment wipe a newer block). The settings block:
  *  - no block (an older till): the stored block stays, with the new menu;
  *  - a block older than the stored one: dropped, the stored block stays, the
  *    menu is stored — unless the stored block came from the same till and
@@ -106,51 +203,82 @@ export function heldSettingsOf(
  * The row comparison (rev, at, tie) >= (rev, at, tie) is compareSettingsStamp:
  * revision first, then the newest time, then the sum of the times.
  *
- * @returns what the website holds now (null = no block) and what happened
- *   to the one sent.
+ * The shop block (THE SHOP BLOCK), decided the same way on its own stamp and
+ * independently of the settings block — over the settings step's result:
+ *  - no shop block (every till up to v0.7.30): the stored one stays;
+ *  - an older one: dropped (the stored one stays), unless the same till with
+ *    a later time (shopBlockTakes);
+ *  - otherwise: stored whole.
+ * The caller checked the shop block (checkShopBlock).
+ *
+ * @returns what the website holds now of each block (null = none), what
+ *   happened to the ones sent, and the featured home items the menu lacks.
  */
 export async function storePublishedMenu(
-  menu: Omit<PublishedMenu, 'settings'>,
+  menu: Omit<PublishedMenu, 'settings' | 'shop'>,
   settings: PublishedSettings | undefined,
-): Promise<{ held: WebsiteSettingsHeld | null; outcome: PublishSettingsOutcome }> {
-  const doc: PublishedMenu = settings ? { ...menu, settings } : { ...menu };
+  shop?: PublishedShop,
+): Promise<{ held: WebsiteSettingsHeld | null; outcome: PublishSettingsOutcome; shopAnswer: ShopAnswer }> {
+  const doc: PublishedMenu = { ...menu, ...(settings ? { settings } : {}), ...(shop ? { shop } : {}) };
   const hasBlock = settings !== undefined;
+  const hasShop = shop !== undefined;
   const rows = (await sql()`
     INSERT INTO site_menu (id, menu_json, published_at)
     VALUES (1, ${JSON.stringify(doc)}, now())
     ON CONFLICT (id) DO UPDATE SET
-      menu_json = CASE
-        WHEN ${hasBlock}::boolean AND (
-               site_menu.menu_json -> 'settings' IS NULL
-            OR (${settings?.settingsRev ?? 0}::integer,
-                ${settings?.settingsAt ?? null}::timestamptz,
-                ${settings?.settingsTie ?? 0}::bigint)
-               >= ((site_menu.menu_json #>> '{settings,settingsRev}')::integer,
-                   (site_menu.menu_json #>> '{settings,settingsAt}')::timestamptz,
-                   COALESCE((site_menu.menu_json #>> '{settings,settingsTie}')::bigint, 0))
-            OR (site_menu.menu_json #>> '{settings,deviceId}' = ${settings?.deviceId ?? null}::text
-                AND ${settings?.settingsAt ?? null}::timestamptz
-                    > (site_menu.menu_json #>> '{settings,settingsAt}')::timestamptz))
-          -- The new block over the website messages of the stored one (KEPT_MESSAGE_FIELDS): a message
-          -- the new block carries wins, one it lacks (a v0.7.29 till) is kept. Nothing else is kept.
-          THEN jsonb_set(
-            EXCLUDED.menu_json,
-            '{settings}',
-            COALESCE(
-              (SELECT jsonb_object_agg(kept.key, kept.value)
-                 FROM jsonb_each(
-                        CASE WHEN jsonb_typeof(site_menu.menu_json -> 'settings') = 'object'
-                             THEN site_menu.menu_json -> 'settings' ELSE '{}'::jsonb END) AS kept
-                WHERE kept.key IN ('closedNotice', 'announcement', 'minDeliveryOrderCents')),
-              '{}'::jsonb)
-            || (EXCLUDED.menu_json -> 'settings'))
-        WHEN site_menu.menu_json -> 'settings' IS NOT NULL
-          THEN jsonb_set(EXCLUDED.menu_json - 'settings', '{settings}', site_menu.menu_json -> 'settings')
-        ELSE EXCLUDED.menu_json - 'settings'
-      END,
+      menu_json = (
+        SELECT CASE
+          -- The shop block (THE SHOP BLOCK): sent and newer (or equal, or the same till's later
+          -- Save, or none stored) → the one sent, as the settings step left it in; else the stored
+          -- one; else none.
+          WHEN ${hasShop}::boolean AND (
+                 site_menu.menu_json -> 'shop' IS NULL
+              OR (${shop?.shopRev ?? 0}::integer,
+                  ${shop?.shopAt ?? null}::timestamptz,
+                  ${shop?.shopTie ?? 0}::bigint)
+                 >= ((site_menu.menu_json #>> '{shop,shopRev}')::integer,
+                     (site_menu.menu_json #>> '{shop,shopAt}')::timestamptz,
+                     COALESCE((site_menu.menu_json #>> '{shop,shopTie}')::bigint, 0))
+              OR (site_menu.menu_json #>> '{shop,deviceId}' = ${shop?.deviceId ?? null}::text
+                  AND ${shop?.shopAt ?? null}::timestamptz
+                      > (site_menu.menu_json #>> '{shop,shopAt}')::timestamptz))
+            THEN step.doc
+          WHEN site_menu.menu_json -> 'shop' IS NOT NULL
+            THEN jsonb_set(step.doc - 'shop', '{shop}', site_menu.menu_json -> 'shop')
+          ELSE step.doc - 'shop'
+        END
+        FROM (SELECT CASE
+          WHEN ${hasBlock}::boolean AND (
+                 site_menu.menu_json -> 'settings' IS NULL
+              OR (${settings?.settingsRev ?? 0}::integer,
+                  ${settings?.settingsAt ?? null}::timestamptz,
+                  ${settings?.settingsTie ?? 0}::bigint)
+                 >= ((site_menu.menu_json #>> '{settings,settingsRev}')::integer,
+                     (site_menu.menu_json #>> '{settings,settingsAt}')::timestamptz,
+                     COALESCE((site_menu.menu_json #>> '{settings,settingsTie}')::bigint, 0))
+              OR (site_menu.menu_json #>> '{settings,deviceId}' = ${settings?.deviceId ?? null}::text
+                  AND ${settings?.settingsAt ?? null}::timestamptz
+                      > (site_menu.menu_json #>> '{settings,settingsAt}')::timestamptz))
+            -- The new block over the website messages of the stored one (KEPT_MESSAGE_FIELDS): a message
+            -- the new block carries wins, one it lacks (a v0.7.29 till) is kept. Nothing else is kept.
+            THEN jsonb_set(
+              EXCLUDED.menu_json,
+              '{settings}',
+              COALESCE(
+                (SELECT jsonb_object_agg(kept.key, kept.value)
+                   FROM jsonb_each(
+                          CASE WHEN jsonb_typeof(site_menu.menu_json -> 'settings') = 'object'
+                               THEN site_menu.menu_json -> 'settings' ELSE '{}'::jsonb END) AS kept
+                  WHERE kept.key IN ('closedNotice', 'announcement', 'minDeliveryOrderCents')),
+                '{}'::jsonb)
+              || (EXCLUDED.menu_json -> 'settings'))
+          WHEN site_menu.menu_json -> 'settings' IS NOT NULL
+            THEN jsonb_set(EXCLUDED.menu_json - 'settings', '{settings}', site_menu.menu_json -> 'settings')
+          ELSE EXCLUDED.menu_json - 'settings'
+        END AS doc) AS step),
       published_at = now()
-    RETURNING menu_json -> 'settings' AS settings
-  `) as Array<{ settings: unknown }>;
+    RETURNING menu_json -> 'settings' AS settings, menu_json -> 'shop' AS shop
+  `) as Array<{ settings: unknown; shop: unknown }>;
   const block = parseStoredSettings(rows[0]?.settings ?? null);
   const held = heldSettingsOf(block, menu);
   let outcome: PublishSettingsOutcome;
@@ -163,18 +291,78 @@ export async function storePublishedMenu(
         ? 'stored'
         : 'ignored_older';
   } else outcome = held ? 'kept' : 'none';
-  return { held, outcome };
+  const shopBlock = parseStoredShop(rows[0]?.shop ?? null);
+  const shopHeld = heldShopOf(shopBlock);
+  const shopAnswer = shopAnswerOf(shopOutcomeOf(shop, shopHeld), shopHeld, homeMissingOn(menu, block, shopBlock));
+  return { held, outcome, shopAnswer };
 }
 
-/** The block the website holds (null = none) and whether it fits the menu stored with it, for the bridge's status read. */
-export async function storedSettingsHeld(): Promise<WebsiteSettingsHeld | null> {
+/** What the website holds, for the bridge's status read: each block (null = none) and the featured items the menu lacks. */
+export interface StoredHeld {
+  settings: WebsiteSettingsHeld | null;
+  shop: WebsiteShopHeld | null;
+  homeMissing: string[];
+}
+
+/** Both blocks the website holds (null = none) and whether the settings block fits the menu stored with it: ONE read. */
+export async function storedHeld(): Promise<StoredHeld> {
   const rows = (await sql()`
     SELECT menu_json FROM site_menu WHERE id = 1
   `) as Array<{ menu_json: PublishedMenu | string | null }>;
   const raw = rows[0]?.menu_json ?? null;
   const menu = typeof raw === 'string' ? (JSON.parse(raw) as PublishedMenu) : raw;
-  if (!menu) return null;
-  return heldSettingsOf(parseStoredSettings(menu.settings ?? null), menu);
+  if (!menu) return { settings: null, shop: null, homeMissing: [] };
+  const block = parseStoredSettings(menu.settings ?? null);
+  const shop = parseStoredShop(menu.shop ?? null);
+  return { settings: heldSettingsOf(block, menu), shop: heldShopOf(shop), homeMissing: homeMissingOn(menu, block, shop) };
+}
+
+/** The settings block the website holds (null = none) and whether it fits the menu stored with it. */
+export async function storedSettingsHeld(): Promise<WebsiteSettingsHeld | null> {
+  return (await storedHeld()).settings;
+}
+
+export type StoreShopAloneResult = { kind: 'no_menu' } | ({ kind: 'done' } & ShopAnswer);
+
+/**
+ * PUT /api/bridge/shop (THE BLOCK ALONE of THE SHOP BLOCK): the block on the
+ * stored row, and NOTHING else of it — one guarded UPDATE, jsonb_set of
+ * '{shop}' only where the stamp rule holds against the row as it is (so a
+ * publish landing at the same moment is never overwritten, and an older
+ * block writes nothing: 'ignored_older'). The menu, the settings block and
+ * everything else stay exactly as stored. No row yet: 'no_menu' (the till
+ * says "press Publish"). The caller checked the block (checkShopBlock).
+ */
+export async function storeShopAlone(shop: PublishedShop): Promise<StoreShopAloneResult> {
+  const written = (await sql()`
+    UPDATE site_menu SET menu_json = jsonb_set(menu_json, '{shop}', ${JSON.stringify(shop)}::jsonb)
+     WHERE id = 1 AND (
+             menu_json -> 'shop' IS NULL
+          OR (${shop.shopRev}::integer, ${shop.shopAt}::timestamptz, ${shop.shopTie}::bigint)
+             >= ((menu_json #>> '{shop,shopRev}')::integer,
+                 (menu_json #>> '{shop,shopAt}')::timestamptz,
+                 COALESCE((menu_json #>> '{shop,shopTie}')::bigint, 0))
+          OR (menu_json #>> '{shop,deviceId}' = ${shop.deviceId}::text
+              AND ${shop.shopAt}::timestamptz > (menu_json #>> '{shop,shopAt}')::timestamptz))
+    RETURNING menu_json
+  `) as Array<{ menu_json: PublishedMenu | string }>;
+  const stored = written[0];
+  if (stored) {
+    const menu = typeof stored.menu_json === 'string' ? (JSON.parse(stored.menu_json) as PublishedMenu) : stored.menu_json;
+    const block = parseStoredShop(menu.shop ?? null);
+    const held = heldShopOf(block);
+    return { kind: 'done', ...shopAnswerOf(shopOutcomeOf(shop, held), held, homeMissingOn(menu, parseStoredSettings(menu.settings ?? null), block)) };
+  }
+  // Nothing written: no menu yet, or a newer block held (the row as it is now).
+  const rows = (await sql()`
+    SELECT menu_json FROM site_menu WHERE id = 1
+  `) as Array<{ menu_json: PublishedMenu | string | null }>;
+  const raw = rows[0]?.menu_json ?? null;
+  const menu = typeof raw === 'string' ? (JSON.parse(raw) as PublishedMenu) : raw;
+  if (!menu) return { kind: 'no_menu' };
+  const block = parseStoredShop(menu.shop ?? null);
+  const held = heldShopOf(block);
+  return { kind: 'done', ...shopAnswerOf('ignored_older', held, homeMissingOn(menu, parseStoredSettings(menu.settings ?? null), block)) };
 }
 
 /**

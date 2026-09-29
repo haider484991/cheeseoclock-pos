@@ -2,21 +2,25 @@ import type { Metadata } from 'next';
 import { readFile } from 'node:fs/promises';
 import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
 import { OrderingApp } from '@/components/OrderingApp';
-import { BUSINESS } from '@/lib/business';
 import { sql } from '@/lib/db';
-import { factsFromBlock } from '@/lib/delivery-facts';
+import { copyText, factsFromBlock } from '@/lib/delivery-facts';
+import { MENU_DESCRIPTION, MENU_PAGE_NAME } from '@/lib/page-copy';
 import { JsonLd, menuNode, webPageNode } from '@/lib/seo';
 import { getStoreStatus } from '@/lib/store-status';
 import { publicMenu } from '@/lib/public-menu';
-import { parseStoredSettings } from '@/lib/site-facts';
+import { lineOrderUrl, shopFactsFromBlock, shopHoursLine, whatsappLinesOf } from '@/lib/shop-facts';
+import { getShopFacts, parseStoredSettings, parseStoredShop } from '@/lib/site-facts';
 import { closedNoticeInForce, type PublishedMenu } from '@cheeseoclock/shared-types';
 
-export const metadata: Metadata = {
-  title: 'Menu & Prices — Pizza, Burgers, Fries',
-  description:
-    "Full Cheese O'Clock menu with prices in PKR — five signature pizzas, regular pizzas in Medium 9\" and Large 12\", crispy chicken burgers, fries, wings and value deals. Cash on delivery across DHA & Clifton.",
-  alternates: { canonical: '/menu' },
-};
+/** The description names the shop (the owner's name; today's with none stored). */
+export async function generateMetadata(): Promise<Metadata> {
+  const shop = await getShopFacts();
+  return {
+    title: 'Menu & Prices — Pizza, Burgers, Fries',
+    description: copyText(MENU_DESCRIPTION, { ...factsFromBlock(null), shop }),
+    alternates: { canonical: '/menu' },
+  };
+}
 
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
@@ -60,6 +64,9 @@ export default async function MenuPage() {
   const closedNotice = closedNoticeInForce(block?.closedNotice, Date.now());
   // Sent whole to the browser: the block's areas and pick-up only, never its device id or stamps.
   const shown = menu ? publicMenu(menu) : null;
+  // The shop's details from the row this page read (sweep B2 + B4) — never the shop block's stamps
+  // or device id; with no menu, the pages' own read (today's details with none stored).
+  const shop = menu ? shopFactsFromBlock(parseStoredShop(menu.shop ?? null)) : await getShopFacts();
 
   return (
     <>
@@ -73,6 +80,7 @@ export default async function MenuPage() {
             pickupDiscountPercent={pickupDiscountPercent}
             deliveryFacts={deliveryFacts}
             closedNotice={closedNotice}
+            shop={shop}
           />
         ) : (
           <div className="mx-auto max-w-md px-4 py-24 text-center">
@@ -84,10 +92,10 @@ export default async function MenuPage() {
               directly on WhatsApp — we reply fast.
             </p>
             <div className="mt-6 flex flex-col items-center gap-2">
-              {BUSINESS.whatsappLines.map((l) => (
+              {whatsappLinesOf(shop).map((l) => (
                 <a
                   key={l.url}
-                  href={`${l.url}?text=${encodeURIComponent("Hi Cheese O'Clock! I'd like to place an order: ")}`}
+                  href={lineOrderUrl(shop, l)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="rounded-full bg-ink px-8 py-3.5 font-cond text-lg font-bold uppercase tracking-wide text-cheese transition-transform hover:scale-105"
@@ -96,7 +104,7 @@ export default async function MenuPage() {
                 </a>
               ))}
             </div>
-            <p className="mt-4 text-sm text-ink-muted">{BUSINESS.hours}</p>
+            <p className="mt-4 text-sm text-ink-muted">{shopHoursLine(shop)}</p>
           </div>
         )}
       </main>
@@ -105,7 +113,7 @@ export default async function MenuPage() {
         nodes={[
           ...webPageNode({
             path: '/menu',
-            name: "Cheese O'Clock Menu & Prices",
+            name: copyText(MENU_PAGE_NAME, { ...deliveryFacts, shop }),
             description:
               'Full menu with prices in PKR — signature and regular pizzas, crispy chicken burgers, fries, wings and value deals, delivered across DHA & Clifton.',
             breadcrumb: [
@@ -113,7 +121,7 @@ export default async function MenuPage() {
               { name: 'Menu', path: '/menu' },
             ],
           }),
-          ...(shown ? [menuNode(shown)] : []),
+          ...(shown ? [menuNode(shown, shop)] : []),
         ]}
       />
     </>

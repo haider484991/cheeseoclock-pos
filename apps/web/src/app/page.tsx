@@ -6,26 +6,44 @@ import { CheeseTime } from '@/components/CheeseTime';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { PizzaCarousel3D } from '@/components/PizzaCarousel3D';
 import { ShopMapCard } from '@/components/ShopMapCard';
-import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
+import { BUSINESS } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { copyText, feeSummary } from '@/lib/delivery-facts';
+import { copyText, feeSummary, renderCopy, shopOf, type CopyFacts } from '@/lib/delivery-facts';
 import { formatCents } from '@/lib/format';
-import { HOME_DELIVERY_NOTE, HOME_FAQ_AREAS, HOME_HERO_FEE, HOME_STAT_FEE } from '@/lib/page-copy';
-import { getSiteFacts } from '@/lib/site-facts';
+import {
+  HOME_DELIVERY_NOTE,
+  HOME_FAQ_AREAS,
+  HOME_FAQ_HOURS,
+  HOME_FAQ_PAY,
+  HOME_FAQ_WHATSAPP,
+  HOME_FINAL_HEADING,
+  HOME_HERO_FEE,
+  HOME_HERO_HOURS,
+  HOME_HERO_TEXT,
+  HOME_MAP_TITLE,
+  HOME_MARQUEE,
+  HOME_STAT_DAYS,
+  HOME_STAT_FEE,
+  HOME_STAT_HOURS,
+  HOME_STEP_PAY,
+} from '@/lib/page-copy';
+import { lineOrderUrl, orderWhatsappUrl, shopHoursLine, whatsappLinesOf } from '@/lib/shop-facts';
+import { getCopyFacts } from '@/lib/site-facts';
 import { menuImageSrcSet } from '@/lib/images';
 import { SIGNATURE_BURGER, SIGNATURE_PIZZAS, VALUE_DEALS } from '@/lib/signatures';
 
 const LINEUP = [...SIGNATURE_PIZZAS, SIGNATURE_BURGER];
 
-/** The ticker's words (the owner's announcement, while on, goes first). */
-const MARQUEE = [
-  'HYGIENICALLY MADE. DELICIOUSLY UNFORGETTABLE.',
-  'WE DELIVER ALL OVER DHA & CLIFTON',
-  'OPEN 12 NOON – 1 AM',
-  'CASH ON DELIVERY',
-  'FIVE SIGNATURE PIZZAS',
-  "IT'S ALWAYS CHEESE O'CLOCK",
-];
+/**
+ * The ticker's words: the shop's tagline, then page-copy's (the hours and
+ * the name from the owner's settings); the owner's announcement, while on,
+ * goes first. Upper-cased, as the ticker has always printed them.
+ */
+function marqueeItems(facts: CopyFacts): string[] {
+  const tagline = shopOf(facts).profile.tagline;
+  const words = HOME_MARQUEE.map((c) => renderCopy(c, facts)).filter((w): w is string => w !== null);
+  return [...(tagline ? [tagline] : []), ...words].map((w) => w.toUpperCase());
+}
 
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
@@ -38,7 +56,7 @@ const MARQUEE = [
 export const dynamic = 'force-static';
 export const revalidate = 3600;
 
-const STEPS = [
+const STEPS = (facts: CopyFacts) => [
   {
     n: '01',
     title: 'Order in under a minute',
@@ -51,7 +69,7 @@ const STEPS = [
   },
   {
     n: '03',
-    title: 'Pay cash at your door',
+    title: copyText(HOME_STEP_PAY, facts),
     body: 'Follow your order live from kitchen to doorstep, then pay the rider exactly what the printed receipt says.',
   },
 ];
@@ -63,11 +81,11 @@ const FAQS = [
   },
   {
     q: 'What are your hours?',
-    a: 'Every day from 12 noon to 1 am.',
+    a: HOME_FAQ_HOURS,
   },
   {
     q: 'How do I pay?',
-    a: 'Cash on delivery. 15% tax is added on the bill, and the printed receipt from the kitchen is the final amount.',
+    a: HOME_FAQ_PAY,
   },
   {
     q: 'What sizes do the pizzas come in?',
@@ -75,7 +93,7 @@ const FAQS = [
   },
   {
     q: 'Can I order on WhatsApp instead?',
-    a: `Yes — message ${BUSINESS.whatsappLines.map((l) => l.display).join(' or ')} with your order and address, and we'll confirm the total. Same kitchen, same prices.`,
+    a: HOME_FAQ_WHATSAPP,
   },
 ];
 
@@ -88,9 +106,11 @@ function WhatsAppGlyph({ className = '' }: { className?: string }) {
 }
 
 export default async function HomePage() {
-  const facts = await getSiteFacts();
+  const facts = await getCopyFacts();
+  const shop = shopOf(facts);
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   const { announcement } = facts;
+  const marquee = marqueeItems(facts);
   return (
     <>
       <SiteHeader />
@@ -145,12 +165,13 @@ export default async function HomePage() {
                   <span>{announcement}</span>
                 </p>
               )}
-              <p className="mt-6 font-cond text-2xl font-semibold italic text-cream/85 md:mt-4">
-                {BUSINESS.tagline}
-              </p>
+              {shop.profile.tagline && (
+                <p className="mt-6 font-cond text-2xl font-semibold italic text-cream/85 md:mt-4">
+                  {shop.profile.tagline}
+                </p>
+              )}
               <p className="mt-3 max-w-md text-lg leading-relaxed text-cream/65">
-                Five signature pizzas, crispy chicken burgers and fries — made to
-                order in DHA Phase 6. Pay cash at your door.
+                {copyText(HOME_HERO_TEXT, facts)}
               </p>
               <div className="mt-7 flex flex-wrap items-center gap-3">
                 <Link
@@ -160,7 +181,7 @@ export default async function HomePage() {
                   Order now →
                 </Link>
                 <a
-                  href={WA_ORDER_URL}
+                  href={orderWhatsappUrl(shop)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 rounded-full border border-cream/25 px-6 py-4 font-cond text-lg font-bold uppercase tracking-wide text-cream transition-all hover:border-cheese hover:text-cheese active:scale-95"
@@ -178,7 +199,7 @@ export default async function HomePage() {
                   </Link>
                 </li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">{copyText(HOME_HERO_FEE, facts)}</li>
-                <li className="rounded-full border border-cream/15 px-3 py-1.5">12 noon – 1 am daily</li>
+                <li className="rounded-full border border-cream/15 px-3 py-1.5">{copyText(HOME_HERO_HOURS, facts)}</li>
                 <li className="rounded-full border border-cream/15 px-3 py-1.5">Cash on delivery</li>
               </ul>
               <CheeseTime className="mt-4 text-sm text-cream/55" />
@@ -187,7 +208,7 @@ export default async function HomePage() {
         </section>
 
         {/* ============================ MARQUEE ============================ */}
-        <Marquee tilted items={announcement ? [announcement, ...MARQUEE] : MARQUEE} />
+        <Marquee tilted items={announcement ? [announcement, ...marquee] : marquee} />
 
         {/* ========================== VALUE DEALS ========================== */}
         {/* Straight after the marquee, before the signatures (owner 2026-09-25:
@@ -289,7 +310,7 @@ export default async function HomePage() {
                         src={item.image}
                         srcSet={menuImageSrcSet(item.image)}
                         sizes="(min-width: 1024px) 290px, (min-width: 640px) 36vw, 72vw"
-                        alt={`${item.name} from Cheese O'Clock`}
+                        alt={`${item.name} from ${shop.profile.name}`}
                         width={720}
                         height={720}
                         loading="lazy"
@@ -357,12 +378,12 @@ export default async function HomePage() {
               </div>
               <Reveal delay={100}>
                 <ShopMapCard
-                  title="Cheese O'Clock, Rahat Commercial Area, DHA Phase 6, Karachi on Google Maps"
+                  title={copyText(HOME_MAP_TITLE, facts)}
                   heightClass="h-[380px]"
                   className="rounded-3xl border-2 border-ink"
                 />
                 <address className="mt-3 text-center text-sm not-italic text-ink/65">
-                  {BUSINESS.streetAddress}, {BUSINESS.locality} · {BUSINESS.hours}
+                  {shop.profile.address.street}, {BUSINESS.locality} · {shopHoursLine(shop)}
                 </address>
               </Reveal>
             </div>
@@ -381,7 +402,7 @@ export default async function HomePage() {
               </h2>
             </Reveal>
             <div className="mt-10 grid gap-5 md:grid-cols-3">
-              {STEPS.map((s, i) => (
+              {STEPS(facts).map((s, i) => (
                 <Reveal key={s.n} delay={i * 80}>
                   <div className="h-full rounded-3xl border border-cream/10 bg-night-card p-6 transition-colors hover:border-cheese/40">
                     <div className="font-display text-5xl text-cheese/40">{s.n}</div>
@@ -396,7 +417,7 @@ export default async function HomePage() {
             <Reveal delay={120}>
               <div className="mt-12 grid gap-px overflow-hidden rounded-3xl border border-cream/10 bg-cream/10 sm:grid-cols-3">
                 {[
-                  ['12 noon – 1 am', 'open every day'],
+                  [copyText(HOME_STAT_HOURS, facts), copyText(HOME_STAT_DAYS, facts)],
                   [copyText(HOME_STAT_FEE, facts), 'delivery in DHA & Clifton'],
                   ['Cash on delivery', 'pay the rider at your door'],
                 ].map(([big, small]) => (
@@ -440,7 +461,7 @@ export default async function HomePage() {
         <section className="bg-cheese">
           <div className="mx-auto flex max-w-6xl flex-col items-center gap-6 px-4 py-16 text-center md:py-20">
             <h2 className="font-display text-[clamp(3rem,8vw,6rem)] uppercase leading-[0.92] tracking-wide text-ink">
-              Hungry? It&rsquo;s Cheese O&rsquo;Clock.
+              {copyText(HOME_FINAL_HEADING, facts)}
             </h2>
             <div className="flex flex-wrap justify-center gap-3">
               <Link
@@ -449,10 +470,10 @@ export default async function HomePage() {
               >
                 Order now →
               </Link>
-              {BUSINESS.whatsappLines.map((l) => (
+              {whatsappLinesOf(shop).map((l) => (
                 <a
                   key={l.url}
-                  href={`${l.url}?text=${encodeURIComponent("Hi Cheese O'Clock! I'd like to place an order: ")}`}
+                  href={lineOrderUrl(shop, l)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 rounded-full border-2 border-ink/30 px-6 py-4 font-cond text-lg font-bold uppercase tracking-wide text-ink transition-colors hover:border-ink active:scale-95"
@@ -462,7 +483,7 @@ export default async function HomePage() {
               ))}
             </div>
             <p className="font-cond text-base font-bold uppercase tracking-wide text-ink/70">
-              {BUSINESS.hours} · Cash on delivery across DHA &amp; Clifton
+              {shopHoursLine(shop)} · Cash on delivery across DHA &amp; Clifton
             </p>
           </div>
         </section>

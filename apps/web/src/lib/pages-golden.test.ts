@@ -263,12 +263,13 @@ async function apiMenuBody(): Promise<unknown> {
   return (await res.json()) as unknown;
 }
 
-function routesNow(): Record<string, unknown> {
+async function routesNow(): Promise<Record<string, unknown>> {
   const map = sitemap.default().map((e) => {
     const { lastModified: _clock, ...rest } = e;
     return rest;
   });
-  return { manifest: manifest.default(), robots: robots.default(), sitemap: map };
+  // The manifest reads the owner's settings since sweep B4 (async); v0.7.30's was plain.
+  return { manifest: await manifest.default(), robots: robots.default(), sitemap: map };
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +297,7 @@ async function capture(): Promise<Golden> {
       g.pages['a'] = keep(await allPages({ menuStates: null }));
       g.metadata['a'] = await allMetadata();
       g.images['a'] = await allImages();
-      g.routes['a'] = routesNow();
+      g.routes['a'] = await routesNow();
     } finally {
       process.env['DATABASE_URL'] = url;
     }
@@ -307,14 +308,14 @@ async function capture(): Promise<Golden> {
     g.pages['b'] = keep(await allPages({ menuStates: ['open', 'closed'] }));
     g.metadata['b'] = await allMetadata();
     g.images['b'] = await allImages();
-    g.routes['b'] = routesNow();
+    g.routes['b'] = await routesNow();
     g.apiMenu['b'] = await apiMenuBody();
     // (c) the same with a v0.7.30 till's block at the defaults
     await publish(m, defaultBlock(m));
     g.pages['c'] = keep(await allPages({ menuStates: ['open', 'closed'] }));
     g.metadata['c'] = await allMetadata();
     g.images['c'] = await allImages();
-    g.routes['c'] = routesNow();
+    g.routes['c'] = await routesNow();
     g.apiMenu['c'] = await apiMenuBody();
   } finally {
     quiet.mockRestore();

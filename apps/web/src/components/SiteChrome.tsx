@@ -1,13 +1,24 @@
 import Link from 'next/link';
+import { socialLabel } from '@cheeseoclock/shared-types';
 import { BUSINESS } from '@/lib/business';
+import { copyText, shopOf } from '@/lib/delivery-facts';
+import { FOOTER_LATE_LINK, FOOTER_PAY_CHIP } from '@/lib/page-copy';
+import { orderLine, shopHoursLine, shopTelUrl, whatsappLinesOf } from '@/lib/shop-facts';
+import { getCopyFacts } from '@/lib/site-facts';
 import { BrandMark } from './BrandMark';
 import { RecentOrderLink } from './RecentOrderLink';
 
-export function SiteHeader() {
+/**
+ * The header and footer on every page, with the shop's details from the
+ * owner's settings (lib/site-facts getCopyFacts — one read per page, shared
+ * with the root layout and the page): today's with none stored.
+ */
+export async function SiteHeader() {
+  const shop = shopOf(await getCopyFacts());
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-night/85 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:h-[4.5rem]">
-        <Link href="/" aria-label="Cheese O'Clock home" className="shrink-0">
+        <Link href="/" aria-label={`${shop.profile.name} home`} className="shrink-0">
           <BrandMark className="!h-9 sm:!h-10" />
         </Link>
         <nav aria-label="Main" className="flex items-center gap-0.5 text-sm font-semibold sm:gap-1">
@@ -25,7 +36,7 @@ export function SiteHeader() {
             Delivery areas
           </Link>
           <a
-            href={BUSINESS.whatsappUrl}
+            href={orderLine(shop).url}
             target="_blank"
             rel="noopener noreferrer"
             className="hidden rounded-lg px-3 py-2 text-cream/80 transition-colors hover:bg-white/5 hover:text-cheese md:block"
@@ -44,21 +55,26 @@ export function SiteHeader() {
   );
 }
 
-export function SiteFooter() {
+export async function SiteFooter() {
+  const facts = await getCopyFacts();
+  const shop = shopOf(facts);
+  const { profile } = shop;
   return (
     <footer className="border-t border-white/10 bg-night-soft">
       <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <BrandMark className="!h-11" />
-          <p className="mt-4 max-w-xs font-cond text-lg font-semibold italic text-cream/85">
-            {BUSINESS.tagline}
-          </p>
+          {profile.tagline && (
+            <p className="mt-4 max-w-xs font-cond text-lg font-semibold italic text-cream/85">
+              {profile.tagline}
+            </p>
+          )}
           <p className="mt-2 max-w-xs text-sm leading-relaxed text-smoke">
             Signature pizzas, crispy chicken burgers and fries, made to order in
             DHA Phase 6 and delivered all over DHA &amp; Clifton.
           </p>
           <p className="mt-4 inline-flex items-center gap-2 rounded-full border border-cheese/30 bg-cheese/10 px-3 py-1.5 font-cond text-sm font-bold uppercase tracking-wide text-cheese">
-            Cash on delivery · 15% tax on the bill
+            {copyText(FOOTER_PAY_CHIP, facts)}
           </p>
         </div>
 
@@ -67,13 +83,13 @@ export function SiteFooter() {
             FIND US
           </h3>
           <address className="not-italic leading-relaxed text-cream/80">
-            {BUSINESS.name}
+            {profile.name}
             <br />
-            {BUSINESS.streetAddress},
+            {profile.address.street},
             <br />
-            {BUSINESS.locality} {BUSINESS.postalCode}, {BUSINESS.region}, Pakistan
+            {BUSINESS.locality} {profile.address.postalCode}, {BUSINESS.region}, Pakistan
           </address>
-          <p className="mt-2 text-cream/80">{BUSINESS.hours}</p>
+          <p className="mt-2 text-cream/80">{shopHoursLine(shop)}</p>
           <a
             href={BUSINESS.mapsUrl}
             target="_blank"
@@ -94,7 +110,7 @@ export function SiteFooter() {
                 Order online — full menu
               </Link>
             </li>
-            {BUSINESS.whatsappLines.map((l) => (
+            {whatsappLinesOf(shop).map((l) => (
               <li key={l.url}>
                 <a href={l.url} target="_blank" rel="noopener noreferrer" className="hover:text-cheese">
                   WhatsApp {l.display}
@@ -102,11 +118,23 @@ export function SiteFooter() {
               </li>
             ))}
             <li>
-              <a href={`tel:${BUSINESS.phoneE164}`} className="hover:text-cheese">
-                Call {BUSINESS.phoneDisplay}
+              <a href={shopTelUrl(shop)} className="hover:text-cheese">
+                Call {profile.phone.display}
               </a>
             </li>
           </ul>
+          {/* The owner's live profiles (Settings), only when there are some: JSON-LD sameAs names the same ones. */}
+          {profile.socialLinks.length > 0 && (
+            <ul aria-label="Follow us" className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-cream/80">
+              {profile.socialLinks.map((url) => (
+                <li key={url}>
+                  <a href={url} target="_blank" rel="noopener noreferrer me" className="font-semibold text-cheese hover:text-cheese-hot">
+                    {socialLabel(url)} →
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="text-sm">
@@ -131,15 +159,15 @@ export function SiteFooter() {
             </li>
             <li>
               <Link href="/late-night-food-delivery-dha" className="hover:text-cheese">
-                Late-night delivery (till 1 am)
+                {copyText(FOOTER_LATE_LINK, facts)}
               </Link>
             </li>
           </ul>
         </div>
       </div>
       <div className="border-t border-white/5 py-4 text-center text-xs text-smoke">
-        © {new Date().getFullYear()} {BUSINESS.name} · {BUSINESS.addressLine} ·{' '}
-        {BUSINESS.phoneDisplay}
+        © {new Date().getFullYear()} {profile.name} · {profile.address.areaLine} ·{' '}
+        {profile.phone.display}
       </div>
     </footer>
   );

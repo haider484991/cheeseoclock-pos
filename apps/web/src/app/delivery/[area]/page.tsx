@@ -5,10 +5,13 @@ import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
 import { OrderCtaBand } from '@/components/OrderCtaBand';
 import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
-import { BUSINESS, waLink } from '@/lib/business';
 import { DELIVERY_AREAS, getArea, feeText, renderArea } from '@/lib/areas';
+import { copyText, shopOf } from '@/lib/delivery-facts';
+import { AREA_CTA_TAIL } from '@/lib/page-copy';
+import { shopHoursLine, whatsappHello, whatsappLinesOf, whatsappUrlWith } from '@/lib/shop-facts';
+import { waLinkWith } from '@cheeseoclock/shared-types';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getSiteFacts } from '@/lib/site-facts';
+import { getCopyFacts } from '@/lib/site-facts';
 
 /**
  * Static per area, refreshed from the owner's delivery settings (lib/
@@ -38,13 +41,14 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const found = getArea(params.area);
   if (!found) return {};
-  const area = renderArea(found, await getSiteFacts());
+  const facts = await getCopyFacts();
+  const area = renderArea(found, facts);
   return {
     title: area.title,
     description: area.description,
     alternates: { canonical: `/delivery/${area.slug}` },
     openGraph: {
-      title: `${area.title} · ${BUSINESS.name}`,
+      title: `${area.title} · ${shopOf(facts).profile.name}`,
       description: area.description,
       url: `/delivery/${area.slug}`,
       type: 'website',
@@ -55,14 +59,16 @@ export async function generateMetadata({
 export default async function AreaPage({ params }: { params: { area: string } }) {
   const found = getArea(params.area);
   if (!found) notFound();
-  const facts = await getSiteFacts();
+  const facts = await getCopyFacts();
+  const shop = shopOf(facts);
   const area = renderArea(found, facts);
 
   const adjacent = area.adjacent
     .map((slug) => getArea(slug))
     .filter((a): a is NonNullable<typeof a> => Boolean(a));
 
-  const waMessage = `Hi Cheese O'Clock! I'd like to order in ${area.name}. `;
+  // The page's own words, with the shop's name.
+  const waMessage = `${whatsappHello(shop)} I'd like to order in ${area.name}. `;
 
   return (
     <>
@@ -92,7 +98,7 @@ export default async function AreaPage({ params }: { params: { area: string } })
               💵 Cash on delivery
             </li>
             <li className="rounded-full border border-white/15 px-4 py-2 text-cream/80">
-              🌙 {BUSINESS.hours}
+              🌙 {shopHoursLine(shop)}
             </li>
           </ul>
 
@@ -116,7 +122,7 @@ export default async function AreaPage({ params }: { params: { area: string } })
               ORDER NOW →
             </Link>
             <a
-              href={waLink(waMessage)}
+              href={whatsappUrlWith(shop, waMessage)}
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-full border border-white/20 px-7 py-3.5 font-bold text-cream transition-colors hover:border-cheese/60 hover:text-cheese"
@@ -126,11 +132,11 @@ export default async function AreaPage({ params }: { params: { area: string } })
           </div>
           <p className="mt-3 text-sm text-smoke">
             WhatsApp orders on{' '}
-            {BUSINESS.whatsappLines.map((l, i) => (
+            {whatsappLinesOf(shop).map((l, i) => (
               <span key={l.e164}>
                 {i > 0 && ' or '}
                 <a
-                  href={`${l.url}?text=${encodeURIComponent(waMessage)}`}
+                  href={waLinkWith(l.e164, waMessage)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="font-semibold text-cheese hover:text-cheese-hot"
@@ -162,7 +168,7 @@ export default async function AreaPage({ params }: { params: { area: string } })
                 <p className="mt-3 text-sm text-smoke">
                   Not sure about your street?{' '}
                   <a
-                    href={waLink(`Hi! Do you deliver to my address in ${area.name}? `)}
+                    href={whatsappUrlWith(shop, `Hi! Do you deliver to my address in ${area.name}? `)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-semibold text-cheese hover:text-cheese-hot"
@@ -254,7 +260,7 @@ export default async function AreaPage({ params }: { params: { area: string } })
         </article>
 
         <OrderCtaBand
-          heading={`HUNGRY IN ${area.name.toUpperCase()}? IT'S CHEESE O'CLOCK.`}
+          heading={`HUNGRY IN ${area.name.toUpperCase()}? ${copyText(AREA_CTA_TAIL, facts).toUpperCase()}`}
           waMessage={waMessage}
         />
       </main>

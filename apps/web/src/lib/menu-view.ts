@@ -428,14 +428,6 @@ function isDrinkGroup(group: Pick<PublishedModifierGroup, 'name'>): boolean {
 }
 
 /**
- * What customers read about allergies (owner 2026-09-26). It names no
- * allergen on purpose: a list the kitchen does not keep up to date is worse
- * than none. Same words as the printed menu.
- */
-export const ALLERGY_NOTICE =
-  'Allergy? Tell us in the item\u2019s \u201cAllergy or special request\u201d box and we\u2019ll leave ingredients out. Our kitchen shares equipment, so we can\u2019t guarantee any dish is allergen-free.';
-
-/**
  * What a value deal's contents cost bought one by one, from the live menu, so
  * the page can say "Save Rs 650" without a hard-coded number: each pizza slot
  * at the cheapest regular pizza of its size ("Large: Fajita Pizza" → the

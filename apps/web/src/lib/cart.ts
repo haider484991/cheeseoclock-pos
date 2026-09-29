@@ -1,6 +1,6 @@
 import type { PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
 import type { PublicMenu } from './public-menu';
-import { isLeaveOutChoice } from '@cheeseoclock/shared-types';
+import { DEFAULT_SHOP_PROFILE, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
 import { formatCents } from './format';
 import { optionLabel, sizeLabel, splitSizedName } from './menu-view';
@@ -219,6 +219,8 @@ export function whatsappOrderText(
     areaName?: string | null;
     name?: string | null;
     address?: string | null;
+    /** The shop's name the message greets (the owner's; today's when not given). */
+    shopName?: string;
   },
 ): string {
   const rows = cart.map((l) => {
@@ -228,7 +230,7 @@ export function whatsappOrderText(
     const note = l.notes ? ` — note: ${l.notes}` : '';
     return `• ${l.quantity} × ${l.label}${extra}${note}`;
   });
-  const out = ["Hi Cheese O'Clock! I'd like to order:", ...rows];
+  const out = [`Hi ${opts.shopName ?? DEFAULT_SHOP_PROFILE.name}! I'd like to order:`, ...rows];
   out.push(`Items: ${formatCents(cartSubtotalCents(cart))} (before tax${opts.fulfilment === 'delivery' ? ' and delivery' : ''})`);
   if (opts.fulfilment === 'pickup') {
     out.push('I will pick it up from the shop.');

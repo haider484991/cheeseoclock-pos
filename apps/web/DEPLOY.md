@@ -236,6 +236,82 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   online pick-up off that size shows "Pick-up only" and can't be chosen or
   added; with it on, it can, and says it is pick-up only.
 
+## Shop details and home page (from v0.7.31)
+
+- **What is new.** The owner sets the shop's details in Settings → Shop &
+  logo → "Website: shop details (both tills)": the name, tagline, call line,
+  WhatsApp lines, street address, social links, price range; the opening
+  hours (**display only** — website ordering still follows the till's shift
+  open and close); what the rider and the counter take (website words only,
+  never the till's Pay buttons; cash always); the WhatsApp greeting; the
+  allergy notice; and the home page's featured items. They travel as the
+  **shop block**, a stamped block of its own next to the settings block
+  (shared-types `web-bridge.ts`, THE SHOP BLOCK), stored in the same
+  `site_menu` row under `shop`. No website schema change, no migration.
+- **Nothing changes until the owner saves a shop card.** With no shop block
+  stored, every page is v0.7.30's byte for byte (`lib/pages-golden.test.ts`
+  pins every page's HTML, title, description, canonical, Open Graph, JSON-LD,
+  the manifest, robots.txt, the sitemap and the share images). Today's
+  details are the frozen defaults in `packages/shared-types/src/website-shop.ts`
+  — the only place the shop's name, numbers and address are written.
+- **Deploy the website first** (a push to `main` deploys it), then both tills
+  the same day. An older website strips `shop` from a publish and has no
+  `PUT /api/bridge/shop` (404): the till's Settings → Online orders and the
+  publish message say the website needs its update, and the till sends
+  nothing more by itself. A till up to v0.7.30 never sends `shop`, and the
+  website keeps the stored one (its publish can't clear it).
+- **How it travels.** A shop card Save sends the block ALONE
+  (`PUT /api/bridge/shop`): the website puts it on the stored row and
+  changes nothing else — never the menu, never the settings block. Every
+  Publish (and import, and "Publish the menu by itself") carries it with the
+  menu. An older block (another till's, saved earlier) is ignored; a till
+  may always replace its own with a later Save. A block the website refuses
+  (400 `shop_invalid`, with the reason) never stops the menu: the till sends
+  it again without the block. `GET /api/bridge/status` says which block the
+  website holds (`shop`) and the featured home items it can't find on the
+  menu (`homeMissing`, also in every publish answer).
+- **Rolling the website back to v0.7.30 drops the stored details** at the next
+  publish (v0.7.30 rebuilds the row from each publish): the pages show
+  today's details. Once the website is back on the new version the tills see
+  no block held and send it again by themselves (at start-up, or the next
+  Save or Publish).
+- **The pages.** The root layout (metadata and the Restaurant JSON-LD), the
+  header and footer, every page and the share images read the details with
+  the delivery areas, in ONE query per page (`lib/site-facts.ts`: both blocks
+  and the menu without its photos). `/_not-found` is `force-static`, so that
+  read never makes it dynamic: it takes the details at build, and again
+  after a publish revalidates the site. The app manifest is static and
+  follows within the hour (a publish's revalidation does not reach a route
+  handler). `error.tsx` runs in the browser and always shows today's
+  details. Check with a build that the route table is unchanged
+  (`○ /`, `○ /_not-found`, `● /delivery/[area]`, `ƒ /menu`, `ƒ /track/[id]`),
+  also with a bogus `DATABASE_URL` (`postgres://u:p@db.invalid/x`) so the
+  reads are attempted during the build.
+- **The words.** Hours are tokens (`{hours}`, `{opens}`, `{closes}`, `{days}`);
+  "daily", "every day" and "every night" show only while the shop opens all
+  seven days; "past midnight" (the late-night page's premise) only while it
+  closes after midnight — otherwise that page reads without it (its slug
+  stays; its title and H1 always name the closing time). Sentences that say
+  cash ONLY step aside once the rider takes more; "Cash on delivery" stays
+  (cash is always taken; JSON-LD `paymentAccepted` lists the others after
+  it). Lines built on the name's pun ("It's always Cheese O'Clock") show only
+  while the name is today's. Social links show in the footer and in JSON-LD
+  `sameAs`, both only when there is one. The logo, the share images' alt
+  text and the prose naming the kitchen's street ("Rahat Commercial", "our
+  Phase 6 kitchen") stay in code: the till's address card says so.
+- **The home page's brand line (CheeseTime)** now asks `/api/store-status`
+  once after the page loads (and again when the tab comes back): while the
+  till is not taking website orders inside the opening hours it says so
+  ("the kitchen isn't taking website orders just now — WhatsApp us") instead
+  of "definitely Cheese O'Clock". The page as served is unchanged.
+- **What to check on a Vercel preview** (its own Neon branch and
+  `BRIDGE_SECRET`, see above): before any shop card is saved, the home page's
+  page source (JSON-LD hours 12:00–01:00, `paymentAccepted` "Cash on
+  Delivery", no `sameAs`), the footer and the late-night page read as
+  before. After a test Save of the hours: the footer, the home page, the
+  JSON-LD and the late-night title change at once; `/_not-found` still
+  answers.
+
 ## Free-tier limits (plenty for launch)
 
 - Vercel Hobby: 100GB bandwidth/mo, serverless functions included

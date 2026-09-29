@@ -5,15 +5,19 @@ export const OG_SIZE = { width: 1200, height: 630 };
 /**
  * Shared brand template for opengraph images: warm-black canvas, gold glow,
  * Bebas Neue headline, yellow ticker strip. Each route fetches the font file
- * (bundled via `new URL(..., import.meta.url)`) and passes it in.
+ * (bundled via `new URL(..., import.meta.url)`) and passes it in, and the
+ * shop's hours for the strip (lib/shop-facts hoursRange, upper-cased:
+ * "12 NOON – 1 AM" — the owner's, today's with none stored).
  */
 export function brandOgImage({
   title,
   subtitle,
+  hours,
   fontData,
 }: {
   title: string;
   subtitle: string;
+  hours: string;
   fontData: ArrayBuffer | null;
 }) {
   return new ImageResponse(
@@ -77,7 +81,7 @@ export function brandOgImage({
           <span>·</span>
           <span>DHA &amp; CLIFTON</span>
           <span>·</span>
-          <span>12 NOON – 1 AM</span>
+          <span>{hours}</span>
         </div>
       </div>
     ),

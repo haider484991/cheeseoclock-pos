@@ -1,5 +1,7 @@
+import { paymentAccepted, schemaOrgDays } from '@cheeseoclock/shared-types';
 import type { PublicMenu } from './public-menu';
 import { BUSINESS } from './business';
+import { DEFAULT_SHOP_FACTS, type ShopFacts } from './shop-facts';
 import { DELIVERY_AREAS } from './areas';
 import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
 import { drinkFlavourName, withoutDrinkBrand } from './menu-view';
@@ -26,21 +28,20 @@ const RESTAURANT_ID = `${SITE_URL}/#restaurant`;
 const WEBSITE_ID = `${SITE_URL}/#website`;
 const MENU_ID = `${SITE_URL}/menu#menu`;
 
-const DAYS = [
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-  'Sunday',
-];
-
-export function restaurantNode(): Record<string, unknown> {
+/**
+ * The shop as one Restaurant node (the root layout, every page): its name,
+ * phone, street address, price range, what the rider takes and its opening
+ * hours are the owner's (lib/shop-facts.ts; today's with none stored — so
+ * the node is byte for byte v0.7.30's); the place (city, pin, listing) is
+ * code (lib/business.ts). `sameAs` only while there is a social link, which
+ * the footer then shows too (JSON-LD mirrors visible content).
+ */
+export function restaurantNode(shop: ShopFacts = DEFAULT_SHOP_FACTS): Record<string, unknown> {
+  const { profile, hours, website } = shop;
   return {
     '@type': 'Restaurant',
     '@id': RESTAURANT_ID,
-    name: BUSINESS.name,
+    name: profile.name,
     url: SITE_URL,
     logo: `${SITE_URL}/logo.png`,
     // The shop's own food — never stock photos.
@@ -49,18 +50,18 @@ export function restaurantNode(): Record<string, unknown> {
       `${SITE_URL}/images/menu/crown-crust.webp`,
       `${SITE_URL}/images/menu/signature-cheese-dipped.webp`,
     ],
-    telephone: BUSINESS.phoneE164,
+    telephone: profile.phone.e164,
     servesCuisine: [...BUSINESS.servesCuisine],
-    priceRange: BUSINESS.priceRange,
+    priceRange: profile.priceRange,
     currenciesAccepted: 'PKR',
-    paymentAccepted: 'Cash on Delivery',
+    paymentAccepted: paymentAccepted(website.doorPayments),
     acceptsReservations: false,
     address: {
       '@type': 'PostalAddress',
-      streetAddress: BUSINESS.streetAddress,
+      streetAddress: profile.address.street,
       addressLocality: BUSINESS.locality,
       addressRegion: BUSINESS.region,
-      postalCode: BUSINESS.postalCode,
+      postalCode: profile.address.postalCode,
       addressCountry: BUSINESS.country,
     },
     geo: {
@@ -74,12 +75,12 @@ export function restaurantNode(): Record<string, unknown> {
     openingHoursSpecification: [
       {
         '@type': 'OpeningHoursSpecification',
-        dayOfWeek: DAYS,
-        opens: BUSINESS.openingHours.opens,
-        closes: BUSINESS.openingHours.closes,
+        dayOfWeek: schemaOrgDays(hours.days),
+        opens: hours.opens,
+        closes: hours.closes,
       },
     ],
-    ...(BUSINESS.sameAs.length > 0 ? { sameAs: [...BUSINESS.sameAs] } : {}),
+    ...(profile.socialLinks.length > 0 ? { sameAs: [...profile.socialLinks] } : {}),
     areaServed: DELIVERY_AREAS.map((a) => ({
       '@type': 'Place',
       name: `${a.name}, Karachi`,
@@ -101,18 +102,18 @@ export function restaurantNode(): Record<string, unknown> {
   };
 }
 
-export function webSiteNode(): Record<string, unknown> {
+export function webSiteNode(shop: ShopFacts = DEFAULT_SHOP_FACTS): Record<string, unknown> {
   return {
     '@type': 'WebSite',
     '@id': WEBSITE_ID,
-    name: BUSINESS.name,
+    name: shop.profile.name,
     url: SITE_URL,
     publisher: { '@id': RESTAURANT_ID },
   };
 }
 
 /** Menu → MenuSection → MenuItem chain from the POS-published menu. */
-export function menuNode(menu: PublicMenu): Record<string, unknown> {
+export function menuNode(menu: PublicMenu, shop: ShopFacts = DEFAULT_SHOP_FACTS): Record<string, unknown> {
   const feeItemIds = feeItemIdsOf(menu);
   const sections = [...menu.categories]
     .sort((a, b) => a.displayOrder - b.displayOrder)
@@ -148,7 +149,7 @@ export function menuNode(menu: PublicMenu): Record<string, unknown> {
   return {
     '@type': 'Menu',
     '@id': MENU_ID,
-    name: `${BUSINESS.name} Menu`,
+    name: `${shop.profile.name} Menu`,
     inLanguage: 'en',
     hasMenuSection: sections,
   };

@@ -1,14 +1,17 @@
-import { WA_ORDER_URL } from '@/lib/business';
+import { orderWhatsappUrl } from '@/lib/shop-facts';
+import { getShopFacts } from '@/lib/site-facts';
 
 /**
  * Sticky WhatsApp order button, bottom-right — the documented
  * highest-converting placement for WhatsApp entry in COD markets.
  * Not rendered on /menu (the cart bar owns that edge of the screen).
+ * The order line and the greeting are the owner's (lib/shop-facts).
  */
-export function WhatsAppFab() {
+export async function WhatsAppFab() {
+  const shop = await getShopFacts();
   return (
     <a
-      href={WA_ORDER_URL}
+      href={orderWhatsappUrl(shop)}
       target="_blank"
       rel="noopener noreferrer"
       aria-label="Order on WhatsApp"

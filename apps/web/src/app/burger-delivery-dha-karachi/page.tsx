@@ -7,9 +7,17 @@ import { Reveal } from '@/components/Reveal';
 import { ShowcaseVisual } from '@/components/ShowcaseVisual';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
 import { copyText } from '@/lib/delivery-facts';
-import { BURGER_FAQ_AREAS } from '@/lib/page-copy';
+import {
+  BURGER_CTA,
+  BURGER_DESCRIPTION,
+  BURGER_FAQ_AREAS,
+  BURGER_FAQ_PAY,
+  BURGER_INTRO_ORDER,
+  BURGER_PAGE_DESCRIPTION,
+  WA_BURGERS,
+} from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getSiteFacts } from '@/lib/site-facts';
+import { getCopyFacts } from '@/lib/site-facts';
 
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
@@ -20,12 +28,15 @@ import { getSiteFacts } from '@/lib/site-facts';
 export const dynamic = 'force-static';
 export const revalidate = 3600;
 
-export const metadata: Metadata = {
-  title: 'Burger Delivery in DHA Karachi — Crispy Chicken on Brioche',
-  description:
-    'Crispy chicken burgers — thigh-marinated fillets in brioche buns — delivered across DHA Phases 1–8 and Clifton. Cash on delivery, open daily till 1 am.',
-  alternates: { canonical: '/burger-delivery-dha-karachi' },
-};
+/** The description names the days and the closing time (the owner's hours). */
+export async function generateMetadata(): Promise<Metadata> {
+  const facts = await getCopyFacts();
+  return {
+    title: 'Burger Delivery in DHA Karachi — Crispy Chicken on Brioche',
+    description: copyText(BURGER_DESCRIPTION, facts),
+    alternates: { canonical: '/burger-delivery-dha-karachi' },
+  };
+}
 
 const WHY = [
   {
@@ -66,12 +77,12 @@ const FAQS = [
   },
   {
     q: 'Is payment cash only?',
-    a: 'Cash on delivery on every order — no cards or wallets needed. The bill is the menu total plus 15% tax and your area’s delivery fee.',
+    a: BURGER_FAQ_PAY,
   },
 ];
 
 export default async function BurgerDeliveryPage() {
-  const facts = await getSiteFacts();
+  const facts = await getCopyFacts();
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   return (
     <>
@@ -93,10 +104,7 @@ export default async function BurgerDeliveryPage() {
             fillet in a brioche bun, made when your order lands in our Phase 6
             kitchen and sent out hot across DHA and Clifton.
           </p>
-          <p className="mt-4 leading-relaxed text-cream/80">
-            Order online in under a minute or send a WhatsApp — both are cash
-            on delivery, every day from 12 noon to 1 am.
-          </p>
+          <p className="mt-4 leading-relaxed text-cream/80">{copyText(BURGER_INTRO_ORDER, facts)}</p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
               href="/menu"
@@ -168,10 +176,7 @@ export default async function BurgerDeliveryPage() {
           </Reveal>
         </section>
 
-        <OrderCtaBand
-          heading="BURGER MOOD? IT'S CHEESE O'CLOCK."
-          waMessage="Hi Cheese O'Clock! I'd like to order burgers. "
-        />
+        <OrderCtaBand heading={copyText(BURGER_CTA, facts).toUpperCase()} waMessage={copyText(WA_BURGERS, facts)} />
       </main>
       <SiteFooter />
       <WhatsAppFab />
@@ -179,8 +184,7 @@ export default async function BurgerDeliveryPage() {
         nodes={webPageNode({
           path: '/burger-delivery-dha-karachi',
           name: 'Burger Delivery in DHA Karachi',
-          description:
-            'Crispy chicken burgers in brioche buns, delivered across DHA Karachi and Clifton — cash on delivery, open till 1 am.',
+          description: copyText(BURGER_PAGE_DESCRIPTION, facts),
           breadcrumb: [
             { name: 'Home', path: '/' },
             { name: 'Burger delivery DHA Karachi', path: '/burger-delivery-dha-karachi' },

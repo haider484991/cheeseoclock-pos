@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useRef, useState } from 'react';
-import { BUSINESS, waLink } from '@/lib/business';
+import { BUSINESS } from '@/lib/business';
 import { whatsappOrderText } from '@/lib/cart';
 import {
   problemFromServer,
@@ -10,7 +10,7 @@ import {
   type CheckoutProblem,
   type OrderErrorBody,
 } from '@/lib/checkout-validation';
-import { checkoutAreaHint, deliveryAreasText, zoneOptionGroups, type SiteFacts } from '@/lib/delivery-facts';
+import { checkoutAreaHint, copyText, deliveryAreasText, zoneOptionGroups, type SiteFacts } from '@/lib/delivery-facts';
 import {
   STORAGE_KEYS,
   parseDetails,
@@ -20,9 +20,12 @@ import {
   writeStored,
 } from '@/lib/device-memory';
 import { formatCents } from '@/lib/format';
-import { ALLERGY_NOTICE, isPickupOnly } from '@/lib/menu-view';
+import { isPickupOnly } from '@/lib/menu-view';
+import { CHECKOUT_PAY_DELIVERY, CHECKOUT_PAY_PICKUP } from '@/lib/page-copy';
+import { shopHoursLine, whatsappUrlWith } from '@/lib/shop-facts';
 import { CartLineRow, ClearCartButton, FulfilmentToggle, MinimumNote, Totals, type CartProps } from './cart-ui';
 import { CloseButton, Sheet } from './Sheet';
+import { useShopFacts } from './ShopContext';
 
 export interface PlacedOrder {
   orderId: string;
@@ -51,6 +54,9 @@ export function CheckoutSheet(
     onPlaced: (placed: PlacedOrder) => void;
   },
 ) {
+  // The shop's details (the owner's; OrderingApp provides them): the pick-up address, the allergy
+  // notice, the WhatsApp line and the name in the message, how the customer pays.
+  const shop = useShopFacts();
   const [saved] = useState(() => parseDetails(readStored(STORAGE_KEYS.details)));
   const [name, setName] = useState(saved?.name ?? '');
   const [phone, setPhone] = useState(saved?.phone ?? '');
@@ -183,7 +189,9 @@ export function CheckoutSheet(
     areaName: props.zone?.name,
     name,
     address,
+    shopName: shop.profile.name,
   });
+  const payFacts = { ...props.deliveryFacts, shop };
 
   return (
     <Sheet onClose={props.onClose} label="Your order and checkout">
@@ -257,7 +265,7 @@ export function CheckoutSheet(
                 <div className="rounded-2xl border-2 border-ink bg-white p-4">
                   <p className="font-cond text-sm font-extrabold uppercase tracking-widest text-ink">Collect from</p>
                   <p className="mt-1 text-sm font-semibold text-ink">
-                    {BUSINESS.streetAddress}, {BUSINESS.locality}
+                    {shop.profile.address.street}, {BUSINESS.locality}
                   </p>
                   <p className="mt-1 text-xs text-ink-muted">
                     We&rsquo;ll have it ready — follow it live after you order. Pay at the counter.
@@ -371,7 +379,7 @@ export function CheckoutSheet(
                   </button>
                 )}
               </div>
-              <p className="text-xs leading-snug text-ink-muted">{ALLERGY_NOTICE}</p>
+              <p className="text-xs leading-snug text-ink-muted">{shop.website.allergyNotice}</p>
             </div>
 
             <Totals {...props} />
@@ -385,7 +393,7 @@ export function CheckoutSheet(
                 </p>
               ) : (
                 <p className="mt-3 rounded-xl border-2 border-ink bg-cheese px-3 py-2 text-sm font-semibold text-ink">
-                  The kitchen isn&rsquo;t taking website orders at the moment ({BUSINESS.hours.toLowerCase()}). Send
+                  The kitchen isn&rsquo;t taking website orders at the moment ({shopHoursLine(shop).toLowerCase()}). Send
                   this order on WhatsApp instead — we reply fast.
                 </p>
               ))}
@@ -406,7 +414,7 @@ export function CheckoutSheet(
                 <>
                   {' '}
                   <a
-                    href={waLink(waText)}
+                    href={whatsappUrlWith(shop, waText)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="whitespace-nowrap underline underline-offset-2"
@@ -438,7 +446,7 @@ export function CheckoutSheet(
             </button>
           ) : (
             <a
-              href={waLink(waText)}
+              href={whatsappUrlWith(shop, waText)}
               target="_blank"
               rel="noopener noreferrer"
               className="flex min-h-[3.5rem] w-full items-center justify-center rounded-full bg-[#1FA855] py-3.5 font-cond text-xl font-bold uppercase tracking-wide text-white transition-all hover:bg-[#178a45] active:scale-[0.99]"
@@ -450,8 +458,8 @@ export function CheckoutSheet(
             {!props.acceptingOrders
               ? 'Opens WhatsApp with your order typed out — we confirm the total there.'
               : pickup
-                ? 'You pay in cash when you collect. The printed receipt from the kitchen is the final bill.'
-                : 'You pay the rider in cash. The printed receipt from the kitchen is the final bill.'}
+                ? copyText(CHECKOUT_PAY_PICKUP, payFacts)
+                : copyText(CHECKOUT_PAY_DELIVERY, payFacts)}
           </p>
         </div>
       )}

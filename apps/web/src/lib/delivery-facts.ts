@@ -2,12 +2,24 @@ import {
   DELIVERY_ZONES,
   FEE_SUMMARY,
   announcementInForce,
+  cashOnly,
+  closesAfterMidnight,
+  daysWords,
+  everyDay,
   findZone,
+  hoursLine,
+  hoursRange,
+  nameInProse,
+  opensBy,
+  paymentsWords,
+  timeWords,
   type PublishedPickup,
   type PublishedSettings,
   type PublishedZone,
 } from '@cheeseoclock/shared-types';
 import { formatCents } from './format';
+import { DEFAULT_SHOP_FACTS, nameIsDefault, whatsappNumbersText, type ShopFacts } from './shop-facts';
+import { DEFAULT_TAX_BPS, taxPercentWords } from './tax-words';
 
 /**
  * Where the shop delivers and what it costs, as the website says it: the
@@ -79,6 +91,36 @@ export const DEFAULT_FACTS: SiteFacts = Object.freeze({
   announcement: null,
   minDeliveryOrderCents: 0,
 });
+
+/**
+ * What page copy is written from: the delivery facts above, and (sweep B2 +
+ * B4) the shop's details and the menu's tax rate. Either one absent = today's
+ * (DEFAULT_SHOP_FACTS; DEFAULT_TAX_BPS), so every call that passes plain
+ * SiteFacts (DEFAULT_FACTS, factsFromBlock) reads exactly as before. The
+ * /menu page hands the browser SiteFacts only — the shop's details go as
+ * their own prop (lib/shop-facts.ts), never the block's stamps.
+ */
+export type CopyFacts = SiteFacts & {
+  /** The shop's details (lib/site-facts getShopFacts); absent = today's. */
+  shop?: ShopFacts;
+  /**
+   * The food's one tax rate in basis points (lib/tax-words taxBpsOf); null =
+   * more than one rate (no number is named); absent = the menu is unknown
+   * (DEFAULT_TAX_BPS, today's 15%).
+   */
+  taxBps?: number | null;
+};
+
+/** The shop's details these facts carry (today's when none). */
+export function shopOf(facts: CopyFacts): ShopFacts {
+  return facts.shop ?? DEFAULT_SHOP_FACTS;
+}
+
+/** The tax rate these facts name: a rate above 0, else null (no number). */
+export function taxBpsIn(facts: CopyFacts): number | null {
+  const bps = facts.taxBps === undefined ? DEFAULT_TAX_BPS : facts.taxBps;
+  return bps !== null && bps > 0 ? bps : null;
+}
 
 /**
  * The facts for a stored block (null → DEFAULT_FACTS). The block's areas in
@@ -393,29 +435,52 @@ function numberList(ns: readonly number[]): string {
  * Phases 1–8 and Clifton", "We don't deliver outside DHA and Clifton").
  * `noMinimum`: the owner has set no smallest website delivery order (0, as
  * before v0.7.30) — "No minimum on the website" is true.
+ *
+ * The shop's details (sweep B2 + B4, lib/shop-facts.ts; today's with none
+ * stored — every claim below holds for them):
+ * `everyDay`: open all seven days ("daily", "every day", "every night").
+ * `closesAfterMidnight`: closes after midnight, before 5 am (the late-night
+ * page's premise: "past midnight", "a midnight craving").
+ * `opensBy`: opens at or before this "HH:MM" ("lunch and dinner, from 12
+ * noon" needs it open by 13:00).
+ * `cashOnly` / `pickupCashOnly`: the rider / the counter takes cash only
+ * (website words — "no cards or wallets needed", "you pay in cash").
+ * `nameIsDefault`: the shop's name is today's — the lines built on its pun
+ * ("It’s always Cheese O’Clock") may print.
+ * `oneTaxRate`: the food has one tax rate above 0 (the menu unknown: today's).
  */
-export type FeeClaim =
+export type CopyClaim =
   | { sameFee: readonly string[] }
   | { rateCard: readonly string[] }
   | { on: readonly string[] }
   | { delivering: true }
   | { areasAsBuilt: true }
-  | { noMinimum: true };
+  | { noMinimum: true }
+  | { everyDay: true }
+  | { closesAfterMidnight: true }
+  | { opensBy: string }
+  | { cashOnly: true }
+  | { pickupCashOnly: true }
+  | { nameIsDefault: true }
+  | { oneTaxRate: true };
+
+/** A claim page copy relies on (the name from step 3, when every claim was about fees). */
+export type FeeClaim = CopyClaim;
 
 /**
- * Page copy: plain text with fee tokens, or text that holds only under a
- * claim — every one of them when `when` is a list — with `otherwise` (plain,
- * or claimed again) replacing it when the claim breaks; no `otherwise` =
- * leave it out.
+ * Page copy: plain text with tokens, or text that holds only under a claim —
+ * every one of them when `when` is a list — with `otherwise` (plain, or
+ * claimed again) replacing it when the claim breaks; no `otherwise` = leave
+ * it out.
  */
 export type Copy =
   | string
-  | { text: string; when: FeeClaim | readonly FeeClaim[]; otherwise?: Copy };
+  | { text: string; when: CopyClaim | readonly CopyClaim[]; otherwise?: Copy };
 
 /** Every compiled area id: `{ rateCard: ALL_COMPILED_ZONE_IDS }` = "the fees are still the rate card's". */
 export const ALL_COMPILED_ZONE_IDS: readonly string[] = Object.freeze(DELIVERY_ZONES.map((z) => z.id));
 
-export function claimHolds(claim: FeeClaim | readonly FeeClaim[], facts: SiteFacts): boolean {
+export function claimHolds(claim: CopyClaim | readonly CopyClaim[], facts: CopyFacts): boolean {
   if (isClaimList(claim)) return claim.every((c) => claimHolds(c, facts));
   if ('areasAsBuilt' in claim) {
     const on = activeZones(facts).map((z) => z.id);
@@ -424,10 +489,18 @@ export function claimHolds(claim: FeeClaim | readonly FeeClaim[], facts: SiteFac
   if ('delivering' in claim) return activeZones(facts).length > 0;
   if ('noMinimum' in claim) return !(facts.minDeliveryOrderCents > 0);
   if ('on' in claim) return zonesOf('on', expandZoneIds(claim.on), facts).every((z) => z.active);
+  const shop = shopOf(facts);
+  if ('everyDay' in claim) return everyDay(shop.hours);
+  if ('closesAfterMidnight' in claim) return closesAfterMidnight(shop.hours);
+  if ('opensBy' in claim) return opensBy(shop.hours, claim.opensBy);
+  if ('cashOnly' in claim) return cashOnly(shop.website.doorPayments);
+  if ('pickupCashOnly' in claim) return cashOnly(shop.website.pickupPayments);
+  if ('nameIsDefault' in claim) return nameIsDefault(shop);
+  if ('oneTaxRate' in claim) return taxBpsIn(facts) !== null;
   return feeClaimHolds(claim, facts);
 }
 
-function isClaimList(claim: FeeClaim | readonly FeeClaim[]): claim is readonly FeeClaim[] {
+function isClaimList(claim: CopyClaim | readonly CopyClaim[]): claim is readonly CopyClaim[] {
   return Array.isArray(claim);
 }
 
@@ -445,7 +518,7 @@ function feeClaimHolds(claim: { sameFee: readonly string[] } | { rateCard: reado
  * if its claim broke: its `otherwise`, else nothing — a switched-off area's
  * fee never reaches the page (the page's paused note says why).
  */
-export function renderCopy(copy: Copy, facts: SiteFacts): string | null {
+export function renderCopy(copy: Copy, facts: CopyFacts): string | null {
   if (typeof copy === 'string') return fillOrNull(copy, facts);
   if (claimHolds(copy.when, facts)) {
     const text = fillOrNull(copy.text, facts);
@@ -454,8 +527,15 @@ export function renderCopy(copy: Copy, facts: SiteFacts): string | null {
   return copy.otherwise === undefined ? null : renderCopy(copy.otherwise, facts);
 }
 
+/**
+ * A token with nothing true to print: the text that holds it can't print
+ * (renderCopy moves on to its `otherwise`, else leaves it out) — never a
+ * wrong or empty value. Every such token throws a subclass.
+ */
+export class CantPrint extends Error {}
+
 /** A fee token with no area on to name a fee for: the text that holds it can't print (renderCopy moves on). */
-export class PausedFeeToken extends Error {
+export class PausedFeeToken extends CantPrint {
   constructor(token: string) {
     super(`${token}: every area it names is switched off`);
     this.name = 'PausedFeeToken';
@@ -463,24 +543,24 @@ export class PausedFeeToken extends Error {
 }
 
 /** {minOrder} with no smallest delivery order set: the text that holds it can't print (renderCopy moves on) — never a zero amount. */
-export class NoMinimumToken extends Error {
+export class NoMinimumToken extends CantPrint {
   constructor(token: string) {
     super(`${token}: the owner has set no smallest delivery order`);
     this.name = 'NoMinimumToken';
   }
 }
 
-function fillOrNull(text: string, facts: SiteFacts): string | null {
+function fillOrNull(text: string, facts: CopyFacts): string | null {
   try {
     return fillFees(text, facts);
   } catch (e) {
-    if (e instanceof PausedFeeToken || e instanceof NoMinimumToken) return null;
+    if (e instanceof CantPrint) return null;
     throw e;
   }
 }
 
 /** Copy that always prints (a string, or a claim with an `otherwise`). */
-export function copyText(copy: Copy, facts: SiteFacts): string {
+export function copyText(copy: Copy, facts: CopyFacts): string {
   const out = renderCopy(copy, facts);
   if (out === null) throw new Error(`Copy with no words for these fees: ${typeof copy === 'string' ? copy : copy.text}`);
   return out;
@@ -520,10 +600,24 @@ const TOKEN = /\{([a-zA-Z]+)(?::([^{}]*))?\}/g;
  *    are paused);
  *  - {minOrder}: the owner's smallest website delivery order, in rupees;
  *    throws NoMinimumToken while there is none (claim it: { noMinimum }).
+ * The shop's details (sweep B2 + B4; today's with none stored):
+ *  - {hours} "12 noon – 1 am"; {opens} "12 noon"; {closes} "1 am";
+ *    {days} "daily" (every day) or "Mon–Sat"; {hoursLine} "Open daily ·
+ *    12 noon – 1 am" — the owner's opening hours (display only);
+ *  - {name} "Cheese O'Clock"; {nameProse} "Cheese O’Clock" (the curly
+ *    apostrophe of running text); {phone} the call line as printed;
+ *    {waNumbers} the WhatsApp numbers ("… or …"); {street} the street
+ *    address; {areaLine} its short "area, city" line;
+ *  - {doorPayments} / {DoorPayments} what the rider takes ("cash", "cash or
+ *    card"; capitalised at a sentence's start), {pickupPayments} /
+ *    {PickupPayments} what the counter takes;
+ *  - {tax} / {Tax}: "15% tax" — the food's one rate (the menu unknown:
+ *    today's); "tax" / "Tax" when the food has more than one (never a
+ *    wrong number).
  * An unknown token or area id throws: a typo must fail the tests and the
  * build, never print "{fee:dha-66}" or a wrong fee.
  */
-export function fillFees(text: string, facts: SiteFacts): string {
+export function fillFees(text: string, facts: CopyFacts): string {
   return text.replace(TOKEN, (whole, name: string, arg: string | undefined) => {
     switch (name) {
       case 'fee': {
@@ -553,8 +647,58 @@ export function fillFees(text: string, facts: SiteFacts): string {
         if (!(facts.minDeliveryOrderCents > 0)) throw new NoMinimumToken(whole);
         return formatCents(facts.minDeliveryOrderCents);
       }
-      default:
-        throw new Error(`Unknown fee token ${whole}`);
+      default: {
+        const shopWords = shopToken(name, facts);
+        if (shopWords === null) throw new Error(`Unknown fee token ${whole}`);
+        return shopWords;
+      }
     }
   });
+}
+
+const capitalised = (s: string) => (s ? `${s[0]!.toUpperCase()}${s.slice(1)}` : s);
+
+/** A shop token's words (fillFees), or null for a name that is none. */
+function shopToken(name: string, facts: CopyFacts): string | null {
+  const shop = shopOf(facts);
+  switch (name) {
+    case 'hours':
+      return hoursRange(shop.hours);
+    case 'opens':
+      return timeWords(shop.hours.opens);
+    case 'closes':
+      return timeWords(shop.hours.closes);
+    case 'days':
+      return daysWords(shop.hours.days);
+    case 'hoursLine':
+      return hoursLine(shop.hours);
+    case 'name':
+      return shop.profile.name;
+    case 'nameProse':
+      return nameInProse(shop.profile.name);
+    case 'phone':
+      return shop.profile.phone.display;
+    case 'waNumbers':
+      return whatsappNumbersText(shop);
+    case 'street':
+      return shop.profile.address.street;
+    case 'areaLine':
+      return shop.profile.address.areaLine;
+    case 'doorPayments':
+      return paymentsWords(shop.website.doorPayments);
+    case 'DoorPayments':
+      return capitalised(paymentsWords(shop.website.doorPayments));
+    case 'pickupPayments':
+      return paymentsWords(shop.website.pickupPayments);
+    case 'PickupPayments':
+      return capitalised(paymentsWords(shop.website.pickupPayments));
+    case 'tax':
+    case 'Tax': {
+      const bps = taxBpsIn(facts);
+      if (bps !== null) return `${taxPercentWords(bps)} tax`;
+      return name === 'Tax' ? 'Tax' : 'tax';
+    }
+    default:
+      return null;
+  }
 }

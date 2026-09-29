@@ -26,7 +26,7 @@ function pages(dir: string): string[] {
 
 describe('pages a publish refreshes keep answering', () => {
   it('the publish routes refresh every page (so every ISR page is revalidated on demand)', () => {
-    for (const route of ['api/bridge/menu/route.ts', 'api/bridge/settings/route.ts']) {
+    for (const route of ['api/bridge/menu/route.ts', 'api/bridge/settings/route.ts', 'api/bridge/shop/route.ts']) {
       expect(readFileSync(join(APP, route), 'utf8'), route).toContain("revalidatePath('/', 'layout')");
     }
   });

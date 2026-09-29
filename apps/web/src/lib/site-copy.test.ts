@@ -478,7 +478,6 @@ describe('no delivery fee is typed by hand', () => {
     ['app/late-night-food-delivery-dha/page.tsx', "small: 'Large · from Rs 480'"],
     ['app/pizza-delivery-dha-karachi/page.tsx', "big: 'From Rs 2,600'"],
     ['app/pizza-delivery-dha-karachi/page.tsx', 'dips are Rs 100 each.'],
-    ['lib/business.ts', "priceRange: 'PKR 400–2,500'"],
     ['lib/format.ts', '/** Rs 1,234 (drops paisa when zero'],
     ['lib/format.ts', 'return `Rs ${rupees'],
     ['lib/menu-view.ts', 'the page can say "Save Rs 650" without a hard-coded number'],

@@ -7,10 +7,18 @@ import { ShopMapCard } from '@/components/ShopMapCard';
 import { Reveal } from '@/components/Reveal';
 import { BUSINESS } from '@/lib/business';
 import { DELIVERY_AREAS, coveredLandmarks, feeText } from '@/lib/areas';
-import { copyText } from '@/lib/delivery-facts';
-import { DELIVERY_HUB_DESCRIPTION, DELIVERY_HUB_INTRO } from '@/lib/page-copy';
+import { copyText, shopOf } from '@/lib/delivery-facts';
+import {
+  DELIVERY_HUB_DESCRIPTION,
+  DELIVERY_HUB_INTRO,
+  HUB_LATE_LINK,
+  HUB_MAP_TITLE,
+  HUB_PAGE_DESCRIPTION,
+  WA_HUB,
+} from '@/lib/page-copy';
+import { shopHoursLine } from '@/lib/shop-facts';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getSiteFacts } from '@/lib/site-facts';
+import { getCopyFacts } from '@/lib/site-facts';
 
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
@@ -22,7 +30,7 @@ export const dynamic = 'force-static';
 export const revalidate = 3600;
 
 export async function generateMetadata(): Promise<Metadata> {
-  const facts = await getSiteFacts();
+  const facts = await getCopyFacts();
   return {
     title: 'Food Delivery Areas in DHA & Clifton, Karachi',
     description: copyText(DELIVERY_HUB_DESCRIPTION, facts),
@@ -31,7 +39,8 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function DeliveryHubPage() {
-  const facts = await getSiteFacts();
+  const facts = await getCopyFacts();
+  const shop = shopOf(facts);
   return (
       <>
         <SiteHeader />
@@ -97,17 +106,17 @@ export default async function DeliveryHubPage() {
                   </li>
                   <li>
                     <Link href="/late-night-food-delivery-dha" className="font-semibold text-cheese hover:text-cheese-hot">
-                      Late-night food delivery (open till 1 am) →
+                      {copyText(HUB_LATE_LINK, facts)}
                     </Link>
                   </li>
                 </ul>
                 <p className="mt-6 text-sm leading-relaxed text-smoke">
-                  {BUSINESS.name} · {BUSINESS.streetAddress}, {BUSINESS.locality}{' '}
-                  · {BUSINESS.phoneDisplay} · {BUSINESS.hours}
+                  {shop.profile.name} · {shop.profile.address.street}, {BUSINESS.locality}{' '}
+                  · {shop.profile.phone.display} · {shopHoursLine(shop)}
                 </p>
               </div>
               <ShopMapCard
-                title="Cheese O'Clock delivery coverage map — DHA Karachi"
+                title={copyText(HUB_MAP_TITLE, facts)}
                 zoom={12}
                 heightClass="h-[320px]"
                 className="rounded-2xl border border-white/10"
@@ -118,7 +127,7 @@ export default async function DeliveryHubPage() {
 
         <OrderCtaBand
           heading="YOUR AREA'S ON THE LIST. ORDER UP."
-          waMessage="Hi Cheese O'Clock! Do you deliver to my area? My address is: "
+          waMessage={copyText(WA_HUB, facts)}
         />
       </main>
       <SiteFooter />
@@ -127,8 +136,7 @@ export default async function DeliveryHubPage() {
         nodes={webPageNode({
           path: '/delivery',
           name: 'Food Delivery Areas in DHA & Clifton, Karachi',
-          description:
-            'Delivery coverage, fees and covered streets for every Cheese O’Clock zone across DHA Karachi and Clifton.',
+          description: copyText(HUB_PAGE_DESCRIPTION, facts),
           breadcrumb: [
             { name: 'Home', path: '/' },
             { name: 'Delivery areas', path: '/delivery' },

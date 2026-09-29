@@ -4,18 +4,21 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatCents } from '@/lib/format';
-import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
+import { hoursRange } from '@cheeseoclock/shared-types';
 import {
+  copyText,
   deliveryChip,
   deliveryFeeRange,
   deliveryOptionNote,
   findFactZone,
   type SiteFacts,
 } from '@/lib/delivery-facts';
-import { zoneFeeItemFor } from '@/lib/delivery-zones';
+import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
+import { MENU_FOOT_LINE } from '@/lib/page-copy';
+import { DEFAULT_SHOP_FACTS, lineOrderUrl, orderWhatsappUrl, shopHoursLine, whatsappLinesOf, type ShopFacts } from '@/lib/shop-facts';
+import { taxBpsOf } from '@/lib/tax-words';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
-  ALLERGY_NOTICE,
   buildMenuView,
   dealWorthCents,
   isDealSection,
@@ -59,6 +62,7 @@ import { CartPanel, type CartProps } from './ordering/cart-ui';
 import { CheckoutSheet, type PlacedOrder } from './ordering/CheckoutSheet';
 import { ItemSheet } from './ordering/ItemSheet';
 import { sheetOnTopOfHistory } from './ordering/Sheet';
+import { ShopFactsContext, useShopFacts } from './ordering/ShopContext';
 
 /** Idempotency key for one checkout; the server dedupes resends on it. */
 function newOrderId(): string {
@@ -101,6 +105,7 @@ export function OrderingApp({
   pickupDiscountPercent,
   deliveryFacts,
   closedNotice = null,
+  shop = DEFAULT_SHOP_FACTS,
 }: {
   menu: PublicMenu;
   acceptingOrders: boolean;
@@ -116,6 +121,13 @@ export function OrderingApp({
    * the page's own closed words, as before.
    */
   closedNotice?: string | null;
+  /**
+   * The shop's details (sweep B2 + B4: the tagline, hours, allergy notice,
+   * WhatsApp lines and greeting, what the rider takes), read on the server
+   * from the owner's settings; today's when not given. Never the shop
+   * block's stamps.
+   */
+  shop?: ShopFacts;
 }) {
   // The fee range as the cart says it before an area is chosen: "Rs N–M".
   const feeRange = deliveryFeeRange(deliveryFacts);
@@ -176,6 +188,12 @@ export function OrderingApp({
   }, []);
 
   const sections = useMemo(() => buildMenuView(menu), [menu]);
+  // The words under the sections: the food's one tax rate from this menu (charge items left out) and
+  // what the rider takes.
+  const footLine = useMemo(
+    () => copyText(MENU_FOOT_LINE, { ...deliveryFacts, shop, taxBps: taxBpsOf(menu, feeItemIdsOf(menu)) }),
+    [deliveryFacts, shop, menu],
+  );
   const railSections = useMemo(() => sections.map((s) => ({ anchor: s.anchor, name: s.name })), [sections]);
   // Each deal's contents bought one by one, for its "Save Rs …" badge.
   const dealWorth = useMemo(() => {
@@ -372,12 +390,14 @@ export function OrderingApp({
   };
 
   return (
+    <ShopFactsContext.Provider value={shop}>
     <div className="pb-28 lg:pb-12">
       <MenuHeader
         canPickup={canPickup}
         pickupPct={pickupPct}
         deliveryChip={deliveryChip(deliveryFacts)}
         announcement={deliveryFacts.announcement}
+        shop={shop}
       />
 
       {lastOrder && (
@@ -432,7 +452,7 @@ export function OrderingApp({
             </section>
           ))}
           <p className="mt-10 text-center font-cond text-sm font-semibold uppercase tracking-wider text-ink-muted">
-            Prices in PKR · 15% tax added on the bill · pay cash on delivery or at the counter
+            {footLine}
           </p>
         </div>
 
@@ -510,6 +530,7 @@ export function OrderingApp({
         />
       )}
     </div>
+    </ShopFactsContext.Provider>
   );
 }
 
@@ -531,12 +552,15 @@ function MenuHeader({
   pickupPct,
   deliveryChip,
   announcement,
+  shop,
 }: {
   canPickup: boolean;
   pickupPct: number;
   deliveryChip: string;
   /** The owner's announcement while it is on (plain text, never markup), else null: nothing shows. */
   announcement: string | null;
+  /** The shop's tagline, hours and allergy notice (the owner's). */
+  shop: ShopFacts;
 }) {
   return (
     <div className="bg-ink text-cream">
@@ -545,7 +569,9 @@ function MenuHeader({
           {canPickup ? 'Order online · delivery or pick-up' : 'Order online · cash on delivery'}
         </p>
         <h1 className="mt-1 font-display text-6xl uppercase leading-none tracking-wide md:text-7xl">The Menu</h1>
-        <p className="mt-2 font-cond text-lg font-semibold italic text-cream/80">{BUSINESS.tagline}</p>
+        {shop.profile.tagline && (
+          <p className="mt-2 font-cond text-lg font-semibold italic text-cream/80">{shop.profile.tagline}</p>
+        )}
         {announcement && (
           <p className="mt-4 flex w-fit max-w-2xl items-start gap-2 rounded-2xl border border-cheese/50 bg-cheese/10 px-4 py-2.5 font-cond text-lg font-bold leading-snug text-cheese">
             <span aria-hidden>★</span>
@@ -561,10 +587,10 @@ function MenuHeader({
           <li className={`rounded-full px-3.5 py-1.5 ${canPickup ? 'border border-cream/20' : 'bg-cheese text-ink'}`}>
             {deliveryChip}
           </li>
-          <li className="rounded-full border border-cream/20 px-3.5 py-1.5">12 noon – 1 am</li>
+          <li className="rounded-full border border-cream/20 px-3.5 py-1.5">{hoursRange(shop.hours)}</li>
           <li className="rounded-full border border-cream/20 px-3.5 py-1.5">Cash on delivery</li>
         </ul>
-        <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{ALLERGY_NOTICE}</p>
+        <p className="mt-4 max-w-2xl text-sm leading-snug text-cream/75">{shop.website.allergyNotice}</p>
       </div>
     </div>
   );
@@ -716,9 +742,10 @@ function InCartBadge({ count }: { count: number }) {
 }
 
 function PickupOnly() {
+  const shop = useShopFacts();
   return (
     <a
-      href={WA_ORDER_URL}
+      href={orderWhatsappUrl(shop)}
       target="_blank"
       rel="noopener noreferrer"
       className="inline-flex items-center rounded-full border-2 border-dashed border-ink/25 px-3 py-1.5 font-cond text-sm font-bold uppercase tracking-wide text-ink-muted hover:border-ink/50"
@@ -963,6 +990,7 @@ const DealCard = memo(function DealCard({
  * explanation; the heading and the WhatsApp buttons stay.
  */
 function ClosedBanner({ notice }: { notice: string | null }) {
+  const shop = useShopFacts();
   return (
     <div className="mx-auto mt-5 max-w-6xl px-4">
       <div className="rounded-2xl border-2 border-ink bg-cheese p-4 text-ink">
@@ -971,15 +999,15 @@ function ClosedBanner({ notice }: { notice: string | null }) {
           <p className="mt-1 text-sm font-medium">{notice}</p>
         ) : (
           <p className="mt-1 text-sm font-medium">
-            The kitchen isn&rsquo;t accepting website orders at the moment ({BUSINESS.hours.toLowerCase()}). You can
+            The kitchen isn&rsquo;t accepting website orders at the moment ({shopHoursLine(shop).toLowerCase()}). You can
             still build your order here and send it to us on WhatsApp from &ldquo;View order&rdquo; — we reply fast.
           </p>
         )}
         <div className="mt-3 flex flex-wrap gap-2">
-          {BUSINESS.whatsappLines.map((l) => (
+          {whatsappLinesOf(shop).map((l) => (
             <a
               key={l.url}
-              href={`${l.url}?text=${encodeURIComponent("Hi Cheese O'Clock! I'd like to place an order: ")}`}
+              href={lineOrderUrl(shop, l)}
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-full bg-ink px-5 py-2.5 font-cond font-bold uppercase tracking-wide text-cheese transition-transform hover:scale-105"

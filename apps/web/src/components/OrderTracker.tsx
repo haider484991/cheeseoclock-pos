@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { formatCents } from '@/lib/format';
-import { BUSINESS, waLink } from '@/lib/business';
+import { BUSINESS } from '@/lib/business';
+import { DEFAULT_SHOP_FACTS, orderLine, shopTelUrl, whatsappHello, whatsappUrlWith, type ShopFacts } from '@/lib/shop-facts';
 import { STORAGE_KEYS, parseLastOrder, readStored, serializeReorder, writeStored } from '@/lib/device-memory';
 import { orderItemChoices, orderMoney, savedLinesFromOrderItems, shortOrderNumber } from '@/lib/order-display';
 import { type WebFulfilment, type WebOrderItem, type WebOrderStatus } from '@cheeseoclock/shared-types';
@@ -50,7 +51,11 @@ const POLL_MS = 6_000;
 
 type LoadState = 'loading' | 'ok' | 'need_phone' | 'not_found' | 'offline';
 
-export function OrderTracker({ orderId }: { orderId: string }) {
+/**
+ * `shop`: the shop's details (the owner's, read by the page on the server;
+ * today's when not given) — its name, pick-up address and numbers.
+ */
+export function OrderTracker({ orderId, shop = DEFAULT_SHOP_FACTS }: { orderId: string; shop?: ShopFacts }) {
   const router = useRouter();
   const search = useSearchParams();
   const urlPhone = search.get('phone') ?? '';
@@ -130,14 +135,15 @@ export function OrderTracker({ orderId }: { orderId: string }) {
 
   const statusLabel = order ? currentLabel(order) : null;
   useEffect(() => {
-    if (statusLabel) document.title = `${statusLabel} · Track your order · Cheese O'Clock`;
-  }, [statusLabel]);
+    if (statusLabel) document.title = `${statusLabel} · Track your order · ${shop.profile.name}`;
+  }, [statusLabel, shop.profile.name]);
 
   if (!order) {
     if (state === 'need_phone' || state === 'not_found') {
       return (
         <PhoneGate
           notFound={state === 'not_found'}
+          shop={shop}
           initial={phone}
           onSubmit={(p) => {
             setState('loading');
@@ -155,7 +161,7 @@ export function OrderTracker({ orderId }: { orderId: string }) {
           </div>
           <h1 className="mt-3 text-xl font-black text-cream">Can&rsquo;t reach the server — retrying…</h1>
           <p className="mt-2 text-sm text-smoke">Check your connection. This page keeps trying on its own.</p>
-          <ContactButtons />
+          <ContactButtons shop={shop} />
         </div>
       );
     }
@@ -178,8 +184,9 @@ export function OrderTracker({ orderId }: { orderId: string }) {
   const { food, itemsCents, deliveryCents } = orderMoney(order);
   const number = shortOrderNumber(order.posOrderNumber);
   const celebrate = justPlaced && !cancelled;
-  const waAbout = waLink(
-    `Hi Cheese O'Clock! About my website order${number ? ` #${number}` : ''} (${order.customerName}): `,
+  const waAbout = whatsappUrlWith(
+    shop,
+    `${whatsappHello(shop)} About my website order${number ? ` #${number}` : ''} (${order.customerName}): `,
   );
 
   function orderAgain() {
@@ -231,7 +238,7 @@ export function OrderTracker({ orderId }: { orderId: string }) {
           <div className="mt-3 rounded-xl border border-cheese/30 bg-cheese/10 p-3 text-sm">
             <p className="font-bold text-cream">Pick-up{pct > 0 ? ` · ${pct}% off` : ''} · pay at the counter</p>
             <p className="mt-0.5 text-cream/75">
-              {BUSINESS.streetAddress}, {BUSINESS.locality}
+              {shop.profile.address.street}, {BUSINESS.locality}
             </p>
             <a
               href={BUSINESS.mapsUrl}
@@ -249,8 +256,8 @@ export function OrderTracker({ orderId }: { orderId: string }) {
             <p className="font-bold text-amber-200">The restaurant hasn&rsquo;t confirmed your order yet.</p>
             <p className="text-amber-200/80">
               Please call{' '}
-              <a href={`tel:${BUSINESS.phoneE164}`} className="font-bold underline">
-                {BUSINESS.phoneDisplay}
+              <a href={shopTelUrl(shop)} className="font-bold underline">
+                {shop.profile.phone.display}
               </a>{' '}
               to make sure it was received.
             </p>
@@ -267,8 +274,8 @@ export function OrderTracker({ orderId }: { orderId: string }) {
                 <p className="mt-1 font-bold text-red-300">The restaurant couldn&rsquo;t confirm this order.</p>
                 <p className="text-sm text-red-300/80">
                   Please call{' '}
-                  <a href={`tel:${BUSINESS.phoneE164}`} className="font-bold underline">
-                    {BUSINESS.phoneDisplay}
+                  <a href={shopTelUrl(shop)} className="font-bold underline">
+                    {shop.profile.phone.display}
                   </a>
                   .
                 </p>
@@ -276,7 +283,7 @@ export function OrderTracker({ orderId }: { orderId: string }) {
             ) : (
               <>
                 <p className="mt-1 font-bold text-red-300">This order was cancelled.</p>
-                <p className="text-sm text-red-300/80">If that&rsquo;s unexpected, call us — {BUSINESS.phoneDisplay}.</p>
+                <p className="text-sm text-red-300/80">If that&rsquo;s unexpected, call us — {shop.profile.phone.display}.</p>
               </>
             )}
           </div>
@@ -369,7 +376,7 @@ export function OrderTracker({ orderId }: { orderId: string }) {
 
       <div className="mt-5 grid grid-cols-2 gap-2">
         <a
-          href={`tel:${BUSINESS.phoneE164}`}
+          href={shopTelUrl(shop)}
           className="flex min-h-[3rem] items-center justify-center gap-2 rounded-full border border-white/15 px-4 font-bold text-cream hover:border-cheese/60 hover:text-cheese"
         >
           <span aria-hidden>📞</span> Call us
@@ -413,17 +420,17 @@ function clock(ms: number): string {
   return new Date(ms).toLocaleTimeString('en-PK', { hour: 'numeric', minute: '2-digit' });
 }
 
-function ContactButtons() {
+function ContactButtons({ shop }: { shop: ShopFacts }) {
   return (
     <div className="mt-5 flex flex-wrap justify-center gap-2">
       <a
-        href={`tel:${BUSINESS.phoneE164}`}
+        href={shopTelUrl(shop)}
         className="rounded-full border border-white/15 px-5 py-3 font-bold text-cream hover:border-cheese/60 hover:text-cheese"
       >
-        📞 {BUSINESS.phoneDisplay}
+        📞 {shop.profile.phone.display}
       </a>
       <a
-        href={BUSINESS.whatsappUrl}
+        href={orderLine(shop).url}
         target="_blank"
         rel="noopener noreferrer"
         className="rounded-full border border-white/15 px-5 py-3 font-bold text-cream hover:border-cheese/60 hover:text-cheese"
@@ -442,10 +449,12 @@ function PhoneGate({
   notFound,
   initial,
   onSubmit,
+  shop,
 }: {
   notFound: boolean;
   initial: string;
   onSubmit: (phone: string) => void;
+  shop: ShopFacts;
 }) {
   const [value, setValue] = useState(notFound ? '' : initial);
   return (
@@ -490,7 +499,7 @@ function PhoneGate({
           Show my order
         </button>
       </form>
-      <ContactButtons />
+      <ContactButtons shop={shop} />
     </div>
   );
 }

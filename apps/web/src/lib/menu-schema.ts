@@ -63,6 +63,14 @@ export const MenuSchema = z.object({
    * menu: a malformed block fails the whole publish ('validation').
    */
   settings: publishedSettingsSchema.optional(),
+  /**
+   * The shop's details (sweep B2 + B4, THE SHOP BLOCK): absent from every
+   * till up to v0.7.30 and while nothing is saved. Taken as it comes and
+   * checked APART (lib/publish-settings checkShopBlock): a shop block that
+   * fails is 400 shop_invalid — never 'validation' — so the till can tell it
+   * apart and send the menu again without it.
+   */
+  shop: z.unknown().optional(),
 });
 
 /** PUT /api/bridge/settings: the block alone, with its areas' fee items (shared-types THE BLOCK ALONE). */

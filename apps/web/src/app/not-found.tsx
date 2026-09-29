@@ -1,7 +1,17 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { SiteHeader, SiteFooter } from '@/components/SiteChrome';
-import { BUSINESS, WA_ORDER_URL } from '@/lib/business';
+import { orderLine, orderWhatsappUrl } from '@/lib/shop-facts';
+import { getShopFacts } from '@/lib/site-facts';
+
+/**
+ * Static (/_not-found is built once and served for every unknown URL). The
+ * root layout, the header and the footer read the shop's details from the
+ * database like every page: force-static keeps that read from turning this
+ * page dynamic — it takes the details at build (and again when a publish
+ * revalidates the site).
+ */
+export const dynamic = 'force-static';
 
 export const metadata: Metadata = {
   title: 'Page not found',
@@ -9,7 +19,8 @@ export const metadata: Metadata = {
 };
 
 /** Any unknown URL: say so plainly and put the menu one tap away. */
-export default function NotFound() {
+export default async function NotFound() {
+  const shop = await getShopFacts();
   return (
     <>
       <SiteHeader />
@@ -29,12 +40,12 @@ export default function NotFound() {
             See the menu →
           </Link>
           <a
-            href={WA_ORDER_URL}
+            href={orderWhatsappUrl(shop)}
             target="_blank"
             rel="noopener noreferrer"
             className="rounded-full border border-cream/25 px-6 py-3.5 font-cond text-lg font-bold uppercase tracking-wide text-cream transition-colors hover:border-cheese hover:text-cheese"
           >
-            WhatsApp {BUSINESS.whatsappDisplay}
+            WhatsApp {orderLine(shop).display}
           </a>
         </div>
         <Link href="/" className="mt-6 text-sm font-semibold text-smoke underline underline-offset-4 hover:text-cheese">

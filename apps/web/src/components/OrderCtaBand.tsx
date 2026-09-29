@@ -1,14 +1,20 @@
 import Link from 'next/link';
-import { BUSINESS, waLink } from '@/lib/business';
+import { shopHoursLine, whatsappUrlWith } from '@/lib/shop-facts';
+import { getShopFacts } from '@/lib/site-facts';
 
-/** Yellow conversion band reused across delivery/intent pages. */
-export function OrderCtaBand({
+/**
+ * Yellow conversion band reused across delivery/intent pages. `waMessage`:
+ * the page's own WhatsApp words (with the shop's name); the number, the
+ * hours and the phone are the owner's (lib/shop-facts).
+ */
+export async function OrderCtaBand({
   heading,
   waMessage,
 }: {
   heading: string;
   waMessage: string;
 }) {
+  const shop = await getShopFacts();
   return (
     <section className="bg-cheese">
       <div className="mx-auto flex max-w-6xl flex-col items-center gap-5 px-4 py-14 text-center">
@@ -23,7 +29,7 @@ export function OrderCtaBand({
             ORDER ONLINE →
           </Link>
           <a
-            href={waLink(waMessage)}
+            href={whatsappUrlWith(shop, waMessage)}
             target="_blank"
             rel="noopener noreferrer"
             className="rounded-full border-2 border-night/30 px-7 py-4 text-lg font-bold text-night transition-colors hover:border-night active:scale-95"
@@ -32,7 +38,7 @@ export function OrderCtaBand({
           </a>
         </div>
         <p className="text-sm font-semibold text-night/70">
-          {BUSINESS.hours} · Cash on delivery · {BUSINESS.phoneDisplay}
+          {shopHoursLine(shop)} · Cash on delivery · {shop.profile.phone.display}
         </p>
       </div>
     </section>

@@ -6,12 +6,32 @@ import { WhatsAppFab } from '@/components/WhatsAppFab';
 import { Reveal } from '@/components/Reveal';
 import { ShowcaseVisual } from '@/components/ShowcaseVisual';
 import { CheeseTime } from '@/components/CheeseTime';
-import { BUSINESS } from '@/lib/business';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
-import { copyText } from '@/lib/delivery-facts';
-import { LATE_NIGHT_FAQ_AREAS } from '@/lib/page-copy';
+import { copyText, type CopyFacts } from '@/lib/delivery-facts';
+import {
+  LATE_NIGHT_COVERAGE,
+  LATE_NIGHT_CTA,
+  LATE_NIGHT_DESCRIPTION,
+  LATE_NIGHT_FAQ_AREAS,
+  LATE_NIGHT_FAQ_AREAS_Q,
+  LATE_NIGHT_FAQ_HOW_LATE,
+  LATE_NIGHT_FAQ_PAY,
+  LATE_NIGHT_FAQ_WHATSAPP,
+  LATE_NIGHT_H1,
+  LATE_NIGHT_INTRO,
+  LATE_NIGHT_INTRO_ORDER,
+  LATE_NIGHT_PAGE_DESCRIPTION,
+  LATE_NIGHT_PICK_BIG,
+  LATE_NIGHT_PICK_BODY,
+  LATE_NIGHT_PICK_SMALL,
+  LATE_NIGHT_PICK_TITLE,
+  LATE_NIGHT_PICKS_HEADING,
+  LATE_NIGHT_WINGS_BODY,
+  LATE_NIGHT_TITLE,
+  WA_LATE_NIGHT,
+} from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getSiteFacts } from '@/lib/site-facts';
+import { getCopyFacts } from '@/lib/site-facts';
 
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
@@ -22,20 +42,27 @@ import { getSiteFacts } from '@/lib/site-facts';
 export const dynamic = 'force-static';
 export const revalidate = 3600;
 
-export const metadata: Metadata = {
-  title: 'Late-Night Food Delivery in DHA Karachi — Open Till 1 am',
-  description:
-    'Kitchen open daily till 1 am — pizza, crispy chicken burgers, masala fries & baked wings delivered late across DHA and Clifton. Cash on delivery.',
-  alternates: { canonical: '/late-night-food-delivery-dha' },
-};
+/**
+ * The title, the H1 and the text name the owner's closing time. The page's
+ * premise ("past midnight") holds only while the shop closes after midnight
+ * ({ closesAfterMidnight }): otherwise it reads without it. The slug stays.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const facts = await getCopyFacts();
+  return {
+    title: copyText(LATE_NIGHT_TITLE, facts),
+    description: copyText(LATE_NIGHT_DESCRIPTION, facts),
+    alternates: { canonical: '/late-night-food-delivery-dha' },
+  };
+}
 
-const NIGHT_PICKS = [
+const NIGHT_PICKS = (facts: CopyFacts) => [
   {
     img: '/images/menu/cheesy-star.webp' as string | null,
     alt: 'Cheesy Star signature pizza',
-    fallback: { big: 'Till 1 am', small: 'Ovens on every night' },
-    title: 'The midnight pizza',
-    body: 'The star-cut Cheesy Star, built for sharing — or a Classic Pepperoni in Medium 9" or Large 12". The ovens stay on until we close at 1 am.',
+    fallback: { big: copyText(LATE_NIGHT_PICK_BIG, facts), small: copyText(LATE_NIGHT_PICK_SMALL, facts) },
+    title: copyText(LATE_NIGHT_PICK_TITLE, facts),
+    body: copyText(LATE_NIGHT_PICK_BODY, facts),
   },
   {
     img: null as string | null,
@@ -49,32 +76,32 @@ const NIGHT_PICKS = [
     alt: 'Six oven-baked chicken wings',
     fallback: { big: '6 wings', small: 'Oven-baked · with a dip' },
     title: 'Baked wings',
-    body: 'Six oven-baked wings with a dip, somehow always justified at midnight. Add a cold drink to the order — you know you want to.',
+    body: copyText(LATE_NIGHT_WINGS_BODY, facts),
   },
 ];
 
 const FAQS = [
   {
     q: 'How late can I actually order?',
-    a: 'The kitchen takes orders every single day until 1 am — website and WhatsApp both — and opens again at 12 noon.',
+    a: LATE_NIGHT_FAQ_HOW_LATE,
   },
   {
     q: 'Can I order on WhatsApp late at night?',
-    a: `Yes — until 1 am on ${BUSINESS.whatsappLines.map((l) => l.display).join(' or ')}. Send your order and address and we will confirm the total.`,
+    a: LATE_NIGHT_FAQ_WHATSAPP,
   },
   {
-    q: 'Which areas do you cover after midnight?',
+    q: LATE_NIGHT_FAQ_AREAS_Q,
     a: LATE_NIGHT_FAQ_AREAS,
   },
   {
     q: 'How do I pay late at night?',
-    a: 'Cash on delivery, same as always — the menu total plus 15% tax and your area’s delivery fee. If the house is asleep, say so in the order notes and keep your phone on for the rider.',
+    a: LATE_NIGHT_FAQ_PAY,
   },
 ];
 
 export default async function LateNightPage() {
-  const facts = await getSiteFacts();
-  const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
+  const facts = await getCopyFacts();
+  const faqs = FAQS.map((f) => ({ q: copyText(f.q, facts), a: copyText(f.a, facts) }));
   return (
     <>
       <SiteHeader />
@@ -87,21 +114,11 @@ export default async function LateNightPage() {
             / <span className="text-cream/80">Late-night delivery</span>
           </nav>
           <h1 className="mt-4 font-display text-4xl leading-[0.95] tracking-wide text-cream md:text-6xl">
-            LATE-NIGHT FOOD DELIVERY IN DHA KARACHI — OPEN TILL 1 AM
+            {copyText(LATE_NIGHT_H1, facts).toUpperCase()}
           </h1>
           <CheeseTime className="mt-4 text-sm text-smoke" />
-          <p className="mt-4 leading-relaxed text-cream/80">
-            It is past midnight, half of DHA&rsquo;s kitchens went dark hours
-            ago, and the delivery apps are showing you sad leftovers. Ours is
-            the kitchen still glowing in Phase 6: pizzas baking, crispy chicken
-            burgers coming together and riders rolling out across DHA and
-            Clifton until 1 am — every night, not just weekends.
-          </p>
-          <p className="mt-4 leading-relaxed text-cream/80">
-            Night orders are honestly our favourite. Order before 1 am on the
-            website or WhatsApp, add a note if the house is asleep, and pay the
-            rider in cash at the gate.
-          </p>
+          <p className="mt-4 leading-relaxed text-cream/80">{copyText(LATE_NIGHT_INTRO, facts)}</p>
+          <p className="mt-4 leading-relaxed text-cream/80">{copyText(LATE_NIGHT_INTRO_ORDER, facts)}</p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
               href="/menu"
@@ -115,11 +132,11 @@ export default async function LateNightPage() {
         <section className="mx-auto max-w-6xl px-4 py-12">
           <Reveal>
             <h2 className="font-display text-3xl tracking-wide text-cream">
-              WHAT DHA ORDERS AFTER MIDNIGHT
+              {copyText(LATE_NIGHT_PICKS_HEADING, facts)}
             </h2>
           </Reveal>
           <div className="mt-5 grid gap-5 md:grid-cols-3">
-            {NIGHT_PICKS.map((w, i) => (
+            {NIGHT_PICKS(facts).map((w, i) => (
               <Reveal key={w.title} delay={i * 80}>
                 <div className="h-full overflow-hidden rounded-2xl border border-white/10 bg-night-card">
                   <ShowcaseVisual img={w.img} alt={w.alt} fallback={w.fallback} />
@@ -139,7 +156,7 @@ export default async function LateNightPage() {
               LATE-NIGHT COVERAGE
             </h2>
             <p className="mt-3 text-smoke">
-              Same delivery map and fees all night — DHA and Clifton, until 1 am.
+              {copyText(LATE_NIGHT_COVERAGE, facts)}
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               {DELIVERY_AREAS.map((a) => (
@@ -177,10 +194,7 @@ export default async function LateNightPage() {
           </Reveal>
         </section>
 
-        <OrderCtaBand
-          heading="MIDNIGHT CRAVING? STILL CHEESE O'CLOCK."
-          waMessage="Hi Cheese O'Clock! Late night order please: "
-        />
+        <OrderCtaBand heading={copyText(LATE_NIGHT_CTA, facts).toUpperCase()} waMessage={copyText(WA_LATE_NIGHT, facts)} />
       </main>
       <SiteFooter />
       <WhatsAppFab />
@@ -188,8 +202,7 @@ export default async function LateNightPage() {
         nodes={webPageNode({
           path: '/late-night-food-delivery-dha',
           name: 'Late-Night Food Delivery in DHA Karachi',
-          description:
-            'Pizza, crispy chicken burgers, fries and baked wings delivered across DHA Karachi and Clifton until 1 am every night — cash on delivery.',
+          description: copyText(LATE_NIGHT_PAGE_DESCRIPTION, facts),
           breadcrumb: [
             { name: 'Home', path: '/' },
             { name: 'Late-night delivery', path: '/late-night-food-delivery-dha' },

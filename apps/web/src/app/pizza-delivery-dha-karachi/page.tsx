@@ -7,9 +7,18 @@ import { Reveal } from '@/components/Reveal';
 import { ShowcaseVisual } from '@/components/ShowcaseVisual';
 import { DELIVERY_AREAS, feeText } from '@/lib/areas';
 import { copyText } from '@/lib/delivery-facts';
-import { PIZZA_FAQ_AREAS } from '@/lib/page-copy';
+import {
+  PIZZA_CTA,
+  PIZZA_DESCRIPTION,
+  PIZZA_FAQ_AREAS,
+  PIZZA_FAQ_LATE,
+  PIZZA_FAQ_PAY,
+  PIZZA_INTRO,
+  PIZZA_PAGE_DESCRIPTION,
+  WA_PIZZA,
+} from '@/lib/page-copy';
 import { JsonLd, webPageNode } from '@/lib/seo';
-import { getSiteFacts } from '@/lib/site-facts';
+import { getCopyFacts } from '@/lib/site-facts';
 
 /**
  * Static, refreshed from the owner's delivery settings (lib/site-facts): at
@@ -20,12 +29,15 @@ import { getSiteFacts } from '@/lib/site-facts';
 export const dynamic = 'force-static';
 export const revalidate = 3600;
 
-export const metadata: Metadata = {
-  title: 'Pizza Delivery in DHA Karachi — Medium & Large, Cash on Delivery',
-  description:
-    'Order pizza online for delivery across DHA Phases 1–8 and Clifton — Signature pies and regular pizzas in Medium 9" or Large 12". Cash on delivery, till 1 am.',
-  alternates: { canonical: '/pizza-delivery-dha-karachi' },
-};
+/** The description names the closing time (the owner's hours). The title says "Cash on Delivery": cash is always taken. */
+export async function generateMetadata(): Promise<Metadata> {
+  const facts = await getCopyFacts();
+  return {
+    title: 'Pizza Delivery in DHA Karachi — Medium & Large, Cash on Delivery',
+    description: copyText(PIZZA_DESCRIPTION, facts),
+    alternates: { canonical: '/pizza-delivery-dha-karachi' },
+  };
+}
 
 const WHY = [
   {
@@ -58,11 +70,11 @@ const FAQS = [
   },
   {
     q: 'Do you deliver pizza late at night?',
-    a: 'Yes — we take orders every day from 12 noon until 1 am, on the website and on WhatsApp.',
+    a: PIZZA_FAQ_LATE,
   },
   {
     q: 'How do I pay for my pizza?',
-    a: 'Cash on delivery on every order. The bill is the menu total plus 15% tax and your area’s delivery fee.',
+    a: PIZZA_FAQ_PAY,
   },
   {
     q: 'Can I customize my pizza?',
@@ -71,7 +83,7 @@ const FAQS = [
 ];
 
 export default async function PizzaDeliveryPage() {
-  const facts = await getSiteFacts();
+  const facts = await getCopyFacts();
   const faqs = FAQS.map((f) => ({ q: f.q, a: copyText(f.a, facts) }));
   return (
     <>
@@ -87,13 +99,7 @@ export default async function PizzaDeliveryPage() {
           <h1 className="mt-4 font-display text-4xl leading-[0.95] tracking-wide text-cream md:text-6xl">
             PIZZA DELIVERY IN DHA KARACHI — FIRED TO ORDER
           </h1>
-          <p className="mt-5 leading-relaxed text-cream/80">
-            Craving pizza in DHA? Ours bakes in our Phase 6 kitchen and rides
-            out across every DHA phase and Clifton — Signature pies and regular
-            pizzas in Medium 9&quot; or Large 12&quot;, fired to order and paid
-            in cash at your door. Order on the website in under a minute, or
-            send your order on WhatsApp; both land straight in the kitchen.
-          </p>
+          <p className="mt-5 leading-relaxed text-cream/80">{copyText(PIZZA_INTRO, facts)}</p>
           <p className="mt-4 leading-relaxed text-cream/80">
             No app downloads, no online payments: the box goes from the oven
             to the rider and is opened by you. If a pizza ever arrives in a
@@ -170,10 +176,7 @@ export default async function PizzaDeliveryPage() {
           </Reveal>
         </section>
 
-        <OrderCtaBand
-          heading="PIZZA CRAVING? IT'S CHEESE O'CLOCK."
-          waMessage="Hi Cheese O'Clock! I'd like to order pizza. "
-        />
+        <OrderCtaBand heading={copyText(PIZZA_CTA, facts).toUpperCase()} waMessage={copyText(WA_PIZZA, facts)} />
       </main>
       <SiteFooter />
       <WhatsAppFab />
@@ -181,8 +184,7 @@ export default async function PizzaDeliveryPage() {
         nodes={webPageNode({
           path: '/pizza-delivery-dha-karachi',
           name: 'Pizza Delivery in DHA Karachi',
-          description:
-            'Signature and regular pizzas delivered across DHA Karachi and Clifton — cash on delivery, open till 1 am.',
+          description: copyText(PIZZA_PAGE_DESCRIPTION, facts),
           breadcrumb: [
             { name: 'Home', path: '/' },
             { name: 'Pizza delivery DHA Karachi', path: '/pizza-delivery-dha-karachi' },
