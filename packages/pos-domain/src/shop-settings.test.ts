@@ -142,6 +142,11 @@ describe('the released defaults are pinned', () => {
       'discounts.websitePickup',
       'delivery.zones',
       'online.options',
+      // The shop's details the website shows (sweep B2 + B4): their defaults are pinned in website-shop.test.ts.
+      'shop.profile',
+      'shop.hours',
+      'shop.website',
+      'website.home',
     ]);
     for (const key of SHOP_SETTING_KEYS) {
       const d = SHOP_SETTING_DEFAULTS[key];

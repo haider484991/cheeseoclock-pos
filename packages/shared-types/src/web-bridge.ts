@@ -16,6 +16,7 @@
  */
 
 import type { ClosedNotice, WebsiteAnnouncement } from './website-messages.js';
+import type { ShopHours, ShopProfile, ShopWebsite, WebsiteHome } from './website-shop.js';
 
 export interface PublishedMenuItem {
   /** POS menu_items.id — the bridge uses this to add real order items. */
@@ -65,6 +66,18 @@ export interface PublishMenuSummary {
    * website dropped them. Absent otherwise.
    */
   olderWebsite?: boolean;
+  /**
+   * The home page's featured items the website did not find on the menu it
+   * holds now (PublishMenuResult.homeMissing: their cards are hidden), in the
+   * lineup's order; [] when all are there. Absent from a website older than
+   * the shop block.
+   */
+  homeMissing?: string[];
+  /**
+   * Where the shop details stand with the website after this publish (THE
+   * SHOP BLOCK): absent while none is saved on either till.
+   */
+  shopPublish?: SettingsPublishStatus;
 }
 
 export interface PublishedModifierGroup {
@@ -110,6 +123,18 @@ export interface PublishedMenu {
    * settingsBlockProblem against this same menu. See THE SETTINGS BLOCK below.
    */
   settings?: PublishedSettings;
+  /**
+   * The shop's details, hours, website words and home lineup (sweep B2 +
+   * B4): absent while none of the four keys is saved on either till, from
+   * every till up to v0.7.30, and from a Publish the website refused it on
+   * (then sent again without it). See THE SHOP BLOCK below.
+   *
+   * NOTE `store` above is LEGACY and never read by the website: it is this
+   * till's per-till receipt branding, unstamped (two tills would swap the
+   * website's details on every publish). It stays byte-for-byte as it was
+   * (`whatsapp: null`); the website's shop details are THIS block.
+   */
+  shop?: PublishedShop;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +346,259 @@ export interface PublishedMenu {
 //     category on (the defaults after migration 0045) the published menu is
 //     byte-for-byte today's.
 
+// ---------------------------------------------------------------------------
+// THE SHOP BLOCK (sweep B2 + B4, after v0.7.30) — the shop's name, numbers,
+// address and social links, its opening hours, its website words and the
+// home page's lineup, from Settings → Shop & logo → "Website: shop details
+// (both tills)". The contract between the till (builder A) and the website
+// (builders B and C). Types and pure helpers: website-shop.ts. Bounds:
+// shared-schemas web-settings.ts (publishedShopSchema / publishedShopReadSchema).
+// ---------------------------------------------------------------------------
+//
+// WHY ITS OWN BLOCK. B1 put its three messages INSIDE the settings block and
+// keeps a field a block lacks (KEPT_MESSAGE_FIELDS in the website's one
+// statement) — a per-FIELD rule inside ONE stamp, made only so a v0.7.29
+// till's block can't clear them. It is not a per-section rule to reuse. The
+// shop details travel as a SEPARATE stamped block instead, because:
+//   1. the settings block is refused WHOLE for a fee-item problem
+//      (settingsBlockProblem, carriedKeyProblem): hours or a name must never
+//      wait on a delivery charge item, nor a fee on a bad social link;
+//   2. PUBLISHED_SETTING_KEYS and the settings stamp stay as released: a
+//      v0.7.30 till compares exactly as before, and none of the settings
+//      block's scenarios move;
+//   3. a website that loses the block (a rollback to v0.7.30 rebuilds
+//      menu_json from each publish and drops `shop`) answers no held shop
+//      stamp once it is back, and the tills send it again BY THEMSELVES — a
+//      flat field dropped under an unchanged stamp would wait for a Publish;
+//   4. with nothing saved the publish carries no `shop` key at all: the body
+//      is byte-for-byte a v0.7.30 till's.
+// It REUSES step 3's whole-block rule and arithmetic under shop names
+// (settingsStampOf, compareSettingsStamp, websiteNeedsSettings; pos-domain
+// shopStampOf / websiteNeedsShop), and B1's line rule (websiteLine,
+// WEBSITE_TEXT_FORBIDDEN_RE) and per-section read fallback. B1's field-keep
+// idiom is kept for fields added INSIDE `shop` later: v1 always sends all
+// four sections, every field, at their defaults too.
+//
+// WHAT. PublishedMenu.shop = PublishedShop:
+//   { v: 1, shopRev, shopAt, shopTie, deviceId,
+//     profile: ShopProfile without v,   hours: ShopHours without v,
+//     website: ShopWebsite without v,   home: WebsiteHome without v }
+// from the four keys SHOP_PUBLISHED_KEYS ('shop.profile', 'shop.hours',
+// 'shop.website', 'website.home'). No money travels in it: the home lineup
+// NAMES items (posItemId + name); prices, deal worth and tax come from the
+// menu. Every DEFAULT_* (website-shop.ts) is today's website byte for byte:
+// the website with no block stored uses them.
+//
+// THE STAMP. Exactly THE STAMP of the settings block, over SHOP_PUBLISHED_KEYS:
+// shopRev = the sum of their row versions, shopAt = the newest updated_at,
+// shopTie = the sum of their updated_at in ms (pos-domain shopStampOf).
+// Compare with compareShopStamp (= compareSettingsStamp). deviceId = the
+// sending till. The website's keep-or-take rule is shopBlockTakes.
+//
+// WHEN THE TILL SENDS IT. Only once one of the four keys is saved on either
+// till (shopRev >= 1): until then NO `shop` key is ever sent. From then on:
+//   - EVERY menu publish (the owner's Publish, a menu file import, "Publish
+//     the menu by itself") carries it, next to `settings`;
+//   - ANY till with the website link sends it ALONE (PUT /api/bridge/shop)
+//     when the website needs it (pos-domain websiteNeedsShop: no block held,
+//     an older one, or this till's own older one after a restore) — after a
+//     Save here, one synced from the other till, or at start-up. A Save
+//     NEVER sends the menu or the settings block.
+//   - a till holding one of the four keys saved by a NEWER version of the
+//     app (or one it can't read) sends NO shop block: it would send its
+//     defaults in that key's place (the updated till sends it).
+//
+// THE WEBSITE'S STORE RULE for `shop` — in the SAME single statement that
+// stores the menu and decides the settings block (PUT /api/bridge/menu), and
+// independent of the settings block's outcome:
+//   - no `shop` in the publish (every till up to v0.7.30, or a Publish sent
+//     again without it) → KEEP the stored one → answer shop 'kept' ('none'
+//     when nothing is stored either);
+//   - `shop` whose stamp is OLDER than the stored one (compareShopStamp < 0)
+//     → keep the stored one → 'ignored_older' — UNLESS the stored one came
+//     from the same deviceId and the incoming shopAt is later (a till may
+//     always replace its own block with a later Save): shopBlockTakes;
+//   - otherwise (newer or EQUAL, or nothing stored) → store it whole →
+//     'stored'.
+// The menu (and the settings block, by its own rule) is stored either way.
+// Refused, with NOTHING stored (not the menu either):
+//   - `shop` that fails publishedShopSchema, or whose shopAt is more than
+//     SETTINGS_MAX_CLOCK_AHEAD_MS ahead of the website's clock →
+//     400 { ok:false, error:'shop_invalid', message }. NEVER 'validation'
+//     for the shop block (MenuSchema takes `shop` as unknown and checks it
+//     apart), so the till can tell it apart and send the menu again without
+//     it. Keep that body shape exactly.
+//   The settings block's refusals ('validation', 'settings_invalid') are
+//   unchanged. A publish may be refused for one, then the other: the till
+//   drops whichever was refused and sends again (at most three sends).
+//
+// THE BLOCK ALONE: PUT /api/bridge/shop, body PublishShopBody { shop }.
+//   - no menu stored yet → 409 { ok:false, error:'menu_not_published' }
+//     (the till says "press Publish");
+//   - shop_invalid as above → 400, nothing stored;
+//   - the store rule above on the stored row's `shop` ONLY — one guarded
+//     UPDATE (jsonb_set of '{shop}' WHERE the stamp rule holds against the
+//     row as it is): the menu, the settings block and everything else of
+//     the row stay exactly as stored; an older block writes nothing
+//     ('ignored_older');
+//   - 200 { ok:true, data: PublishShopResult }.
+//   A website older than this route answers 404: the till says the website
+//   needs its update and sends that stamp no more by itself.
+//   revalidatePath('/', 'layout') after 'stored' (every page shows the
+//   details: add the route to isr-routes.test).
+//
+// THE ANSWERS (from a website with the shop block on, ALWAYS — with or
+// without a `shop` sent):
+//   PUT /api/bridge/menu 200 data (PublishMenuResult) gains
+//     shop: PublishSettingsOutcome, and the block held NOW: shopRev, shopAt,
+//     shopTie, shopDeviceId (all null when none), and homeMissing.
+//   PUT /api/bridge/shop 200 data (PublishShopResult): the same fields.
+//   GET /api/bridge/status data gains shop: WebsiteShopHeld | null (null =
+//     no block held) and homeMissing: string[].
+//   An ABSENT `shop` key = a website older than the block (it stripped a
+//   `shop` sent to it): the till says the website needs its update.
+//   homeMissing: the itemRef.name of each featured entry of the lineup in
+//   force — the stored block's `home`, or DEFAULT_WEBSITE_HOME when none —
+//   the website can't find on the menu it holds now (website-shop.ts
+//   homeMissing: the pizzas, then the burger, then the deals; [] = all found).
+//
+// PUBLIC. GET /api/menu, the /menu props and every page NEVER carry the
+// block's stamps or deviceId: publicMenu strips `shop` entirely, and pages
+// read ShopFacts (the four sections, merged over the defaults) instead.
+//
+// WHAT THE PAGES DO WITH IT (the defaults print today's pages exactly):
+//   profile — name: titles, JSON-LD name, OG, manifest, footer, WhatsApp
+//     texts (the page-specific messages keep their words; only the name
+//     comes from here); name-pun slogans take their `otherwise` words once
+//     the name is not the default. tagline, phone (telUrl + JSON-LD
+//     telephone), whatsappLines (the first = the order link; waUrl),
+//     address (street / areaLine / postalCode; the city, region, country,
+//     pin, Maps link and listing id stay in code), socialLinks (footer row
+//     AND JSON-LD sameAs, both only when there is one; socialLabel names
+//     them), priceRange (JSON-LD).
+//   hours — DISPLAY ONLY (ordering follows the shift): hoursLine,
+//     hoursRange, timeWords, everyDay, closesAfterMidnight (the late-night
+//     page's premise; its slug is never removed), opensBy, schemaOrgDays.
+//   website — whatsappGreeting (encoded once: waLinkWith),
+//     doorPayments / pickupPayments (cashOnly, paymentsWords,
+//     paymentAccepted: ['cash'] → "Cash on Delivery" exactly; titles saying
+//     "Cash on Delivery" stay — cash is always taken), allergyNotice.
+//   home — the lineup (homeLineup): a missing item hides its card, slide or
+//     deal; `headline`/`text` absent = today's curated words for today's
+//     items, else the item's description; drink brands never shown.
+//
+// WHAT THE TILL DOES WITH THE ANSWERS (web-orders-bridge):
+//   - 200 with data.shop: records what the website holds (stamp, device,
+//     homeMissing) and sends again only when websiteNeedsShop says;
+//   - 200 WITHOUT data.shop while it sent a block, or 404 from the block
+//     alone: an older website — "the website needs its update"; nothing more
+//     by itself for that stamp (the owner's Publish or a Save after the
+//     website's update sends it; a start-up status read that finds the
+//     updated website clears the note);
+//   - 400 shop_invalid: a Publish sends the same menu again WITHOUT `shop`
+//     (the settings block still goes); the block alone stops there. The
+//     message is shown to the owner either way.
+//
+// DEPLOY ORDER. The website first (a push to main deploys it), the tills the
+// same day. A website older than the block strips `shop` (its MenuSchema is
+// z.object) and has no /api/bridge/shop: the tills say it needs its update.
+// A website ROLLED BACK to v0.7.30 drops the stored `shop` on the next
+// publish (its statement rebuilds menu_json): the pages show the defaults
+// (today's) and, once the website is back, the tills see no held block and
+// send it again by themselves.
+
+/** The four keys the shop block carries (their row versions and times make its stamp). */
+export const SHOP_PUBLISHED_KEYS = ['shop.profile', 'shop.hours', 'shop.website', 'website.home'] as const;
+
+/** The shop block's sections: each key's value without its format `v`. */
+export type PublishedShopProfile = Omit<ShopProfile, 'v'>;
+export type PublishedShopHours = Omit<ShopHours, 'v'>;
+export type PublishedShopWebsite = Omit<ShopWebsite, 'v'>;
+export type PublishedWebsiteHome = Omit<WebsiteHome, 'v'>;
+
+/** The shop block (PublishedMenu.shop, PUT /api/bridge/shop): THE SHOP BLOCK. */
+export interface PublishedShop {
+  /** The block's format: 1. */
+  v: number;
+  /** Sum of the four keys' row versions on the till (0 = none saved: never sent). */
+  shopRev: number;
+  /** Newest updated_at of the four keys (ISO 8601 UTC). */
+  shopAt: string;
+  /** Sum of their updated_at in ms since 1970: the stamp's third number. */
+  shopTie: number;
+  /** The till that sent it: a till may replace its own block with a later Save. */
+  deviceId: string;
+  profile: PublishedShopProfile;
+  hours: PublishedShopHours;
+  website: PublishedShopWebsite;
+  home: PublishedWebsiteHome;
+}
+
+/** The shop block's stamp. `shopTie` null only on a record made without it (it then decides nothing). */
+export interface ShopStamp {
+  shopRev: number;
+  shopAt: string;
+  shopTie?: number | null;
+}
+
+/** Order two shop stamps exactly as compareSettingsStamp orders settings stamps (revision, newest time, sum of times). */
+export function compareShopStamp(a: ShopStamp, b: ShopStamp): number {
+  return compareSettingsStamp(
+    { settingsRev: a.shopRev, settingsAt: a.shopAt, settingsTie: a.shopTie ?? null },
+    { settingsRev: b.shopRev, settingsAt: b.shopAt, settingsTie: b.shopTie ?? null },
+  );
+}
+
+/**
+ * THE WEBSITE'S STORE RULE for the shop block (the SQL implements exactly
+ * this): does `incoming` replace `held` (null = none stored)? Newer or
+ * equal, or the same till's later Save.
+ */
+export function shopBlockTakes(
+  incoming: ShopStamp & { deviceId: string },
+  held: (ShopStamp & { deviceId?: string | null }) | null,
+): boolean {
+  if (!held) return true;
+  if (compareShopStamp(incoming, held) >= 0) return true;
+  return held.deviceId === incoming.deviceId && Date.parse(incoming.shopAt) > Date.parse(held.shopAt);
+}
+
+/** What the website holds of the shop block (GET /api/bridge/status data.shop; null = none). */
+export interface WebsiteShopHeld {
+  shopRev: number;
+  shopAt: string;
+  shopTie: number | null;
+  shopDeviceId: string | null;
+}
+
+/** The shop fields of an answer (PUT /api/bridge/menu, PUT /api/bridge/shop): absent = a website older than the block. */
+export interface WebsiteShopAnswer {
+  /** What the website did with the shop block of this publish (none sent: 'kept' / 'none'). */
+  shop?: PublishSettingsOutcome;
+  /** The block the website holds now (after this publish); null = none. */
+  shopRev?: number | null;
+  shopAt?: string | null;
+  shopTie?: number | null;
+  shopDeviceId?: string | null;
+  /** The featured home items not on the menu the website holds now (their cards are hidden); [] = all found. */
+  homeMissing?: string[];
+}
+
+/** Body of PUT /api/bridge/shop: the shop block alone (THE BLOCK ALONE of THE SHOP BLOCK). */
+export interface PublishShopBody {
+  shop: PublishedShop;
+}
+
+/** data of a 200 from PUT /api/bridge/shop. */
+export interface PublishShopResult extends WebsiteShopAnswer {
+  shop: PublishSettingsOutcome;
+  shopRev: number | null;
+  shopAt: string | null;
+  shopTie: number | null;
+  shopDeviceId: string | null;
+  homeMissing: string[];
+}
+
 /** The stamp of a block made from defaults only (no key saved on the till). */
 export const DEFAULT_SETTINGS_AT = '1970-01-01T00:00:00.000Z';
 
@@ -410,8 +688,12 @@ export interface SettingsPublishStatus {
 /** What the website did with a publish's block. */
 export type PublishSettingsOutcome = 'stored' | 'kept' | 'ignored_older' | 'none';
 
-/** data of a 200 from PUT /api/bridge/menu. `settings` is absent from a website older than the block. */
-export interface PublishMenuResult {
+/**
+ * data of a 200 from PUT /api/bridge/menu. `settings` is absent from a
+ * website older than the settings block, `shop` (WebsiteShopAnswer) from one
+ * older than the shop block.
+ */
+export interface PublishMenuResult extends WebsiteShopAnswer {
   categories: number;
   items: number;
   settings?: PublishSettingsOutcome;

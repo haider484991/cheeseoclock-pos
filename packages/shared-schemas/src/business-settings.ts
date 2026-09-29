@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { websiteLine } from './web-settings.js';
+import {
+  shopHoursFields,
+  shopHoursRule,
+  shopProfileFields,
+  shopWebsiteFields,
+  websiteHomeFields,
+  websiteHomeRule,
+  websiteLine,
+} from './web-settings.js';
 import {
   ANNOUNCEMENT_MAX,
   CLOSED_NOTICE_MAX,
@@ -64,6 +72,10 @@ import {
 import type {
   DeliveryZones,
   OnlineOptions,
+  ShopHours,
+  ShopProfile,
+  ShopWebsite,
+  WebsiteHome,
   PlainShopSettingKey,
   SaveDeliveryZonesRequest,
   WebsitePickup,
@@ -949,6 +961,30 @@ const onlineOptionsReadSchema = z.object({
   minDeliveryOrderCents: minDeliveryOrder.default(DEFAULT_ONLINE_OPTIONS.minDeliveryOrderCents).catch(DEFAULT_ONLINE_OPTIONS.minDeliveryOrderCents),
 });
 
+// ---------------------------------------------------------------------------
+// The shop's details the website shows (sweep B2 + B4; shared-types
+// website-shop.ts, web-bridge.ts THE SHOP BLOCK). Their bounds are the shop
+// block's own (web-settings.ts shopProfileFields…), so a Save always passes
+// the website's check. Format 1; the read schemas take any format from 1 and
+// drop fields this version does not know (storedFormatIsNewer says so).
+// ---------------------------------------------------------------------------
+
+/** 'shop.profile' as this version writes it. */
+export const shopProfileSchema = z.object({ v: writesFormat('shop.profile'), ...shopProfileFields }).strict();
+const shopProfileReadSchema = z.object({ v: readsFormat, ...shopProfileFields });
+
+/** 'shop.hours' as this version writes it (THE rule: shared-types shopHoursProblem). */
+export const shopHoursSchema = z.object({ v: writesFormat('shop.hours'), ...shopHoursFields }).strict().superRefine(shopHoursRule);
+const shopHoursReadSchema = z.object({ v: readsFormat, ...shopHoursFields }).superRefine(shopHoursRule);
+
+/** 'shop.website' as this version writes it. */
+export const shopWebsiteSchema = z.object({ v: writesFormat('shop.website'), ...shopWebsiteFields }).strict();
+const shopWebsiteReadSchema = z.object({ v: readsFormat, ...shopWebsiteFields });
+
+/** 'website.home' as this version writes it. */
+export const websiteHomeSchema = z.object({ v: writesFormat('website.home'), ...websiteHomeFields }).strict().superRefine(websiteHomeRule);
+const websiteHomeReadSchema = z.object({ v: readsFormat, ...websiteHomeFields }).superRefine(websiteHomeRule);
+
 /**
  * settings:saveDeliveryZones: the whole list as the card sends it (the main
  * process decides every fee item; a feeItemId sent is ignored), or "Put
@@ -1053,6 +1089,10 @@ export const BUSINESS_SETTING_SCHEMAS = {
   'discounts.websitePickup': websitePickupSchema,
   'delivery.zones': deliveryZonesSchema,
   'online.options': onlineOptionsSchema,
+  'shop.profile': shopProfileSchema,
+  'shop.hours': shopHoursSchema,
+  'shop.website': shopWebsiteSchema,
+  'website.home': websiteHomeSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 } as const;
@@ -1091,6 +1131,10 @@ export const BUSINESS_SETTING_READ_SCHEMAS: { readonly [K in BusinessSettingKey]
   'discounts.websitePickup': websitePickupReadSchema,
   'delivery.zones': deliveryZonesReadSchema,
   'online.options': onlineOptionsReadSchema,
+  'shop.profile': shopProfileReadSchema,
+  'shop.hours': shopHoursReadSchema,
+  'shop.website': shopWebsiteReadSchema,
+  'website.home': websiteHomeReadSchema,
   'channels.fees': channelFeesSchema,
   'delivery.riderCost': riderCostSchema,
 };
@@ -1112,7 +1156,44 @@ const SHOP_SETTING_FIELDS: { readonly [K in ShopSettingKey]: ReadonlySet<string>
   'discounts.websitePickup': new Set(['v', ...Object.keys(websitePickupShape)]),
   'delivery.zones': new Set(['v', 'zones']),
   'online.options': new Set(['v', ...Object.keys(onlineOptionsShape)]),
+  'shop.profile': new Set(['v', ...Object.keys(shopProfileFields)]),
+  'shop.hours': new Set(['v', ...Object.keys(shopHoursFields)]),
+  'shop.website': new Set(['v', ...Object.keys(shopWebsiteFields)]),
+  'website.home': new Set(['v', ...Object.keys(websiteHomeFields)]),
 };
+
+/** The fields of the shop keys' nested objects this version writes (a newer till's extra one makes the value "newer"). */
+const SHOP_PHONE_FIELDS: ReadonlySet<string> = new Set(['display', 'e164']);
+const SHOP_ADDRESS_FIELDS: ReadonlySet<string> = new Set(['street', 'areaLine', 'postalCode']);
+const HOME_ENTRY_FIELDS: ReadonlySet<string> = new Set(['itemRef', 'headline', 'text']);
+const HOME_ITEM_REF_FIELDS: ReadonlySet<string> = new Set(['posItemId', 'name']);
+
+/** An object (not a list) with a field this version does not know. */
+function hasUnknownField(o: unknown, known: ReadonlySet<string>): boolean {
+  return typeof o === 'object' && o !== null && !Array.isArray(o) && Object.keys(o).some((f) => !known.has(f));
+}
+
+/** A shop key's nested objects with a field this version does not know: a newer till's. */
+function shopNestedIsNewer(key: 'shop.profile' | 'website.home', raw: Record<string, unknown>): boolean {
+  if (key === 'shop.profile') {
+    const lines = Array.isArray(raw['whatsappLines']) ? (raw['whatsappLines'] as unknown[]) : [];
+    return (
+      hasUnknownField(raw['phone'], SHOP_PHONE_FIELDS) ||
+      hasUnknownField(raw['address'], SHOP_ADDRESS_FIELDS) ||
+      lines.some((l) => hasUnknownField(l, SHOP_PHONE_FIELDS))
+    );
+  }
+  const entries = [
+    ...(Array.isArray(raw['pizzas']) ? (raw['pizzas'] as unknown[]) : []),
+    ...(raw['burger'] ? [raw['burger']] : []),
+    ...(Array.isArray(raw['deals']) ? (raw['deals'] as unknown[]) : []),
+  ];
+  return entries.some(
+    (e) =>
+      hasUnknownField(e, HOME_ENTRY_FIELDS) ||
+      (typeof e === 'object' && e !== null && hasUnknownField((e as { itemRef?: unknown }).itemRef, HOME_ITEM_REF_FIELDS)),
+  );
+}
 
 const CLOSED_NOTICE_FIELDS: ReadonlySet<string> = new Set(Object.keys(closedNoticeFields));
 const ANNOUNCEMENT_FIELDS: ReadonlySet<string> = new Set(Object.keys(announcementFields));
@@ -1139,6 +1220,8 @@ export function storedFormatIsNewer(key: BusinessSettingKey, raw: unknown): bool
       );
     }
   }
+  // The shop's details with nested fields this version does not know: a newer till's too.
+  if (key === 'shop.profile' || key === 'website.home') return shopNestedIsNewer(key, raw as Record<string, unknown>);
   // The website's messages with fields this version does not know: a newer till's too.
   if (key === 'online.options') {
     const nested = (field: string, known: ReadonlySet<string>) => {
@@ -1351,6 +1434,14 @@ const _websitePickupReadShape: Same<z.infer<typeof websitePickupReadSchema>, Web
 const _onlineOptionsShape: Same<z.infer<typeof onlineOptionsSchema>, OnlineOptions> = true;
 const _onlineOptionsReadShape: Same<z.infer<typeof onlineOptionsReadSchema>, OnlineOptions> = true;
 const _discountDeliveryShape: Same<z.infer<typeof discountDeliverySchema>, DiscountDelivery> = true;
+const _shopProfileShape: Same<z.infer<typeof shopProfileSchema>, ShopProfile> = true;
+const _shopProfileReadShape: Same<z.infer<typeof shopProfileReadSchema>, ShopProfile> = true;
+const _shopHoursShape: Same<z.infer<typeof shopHoursSchema>, ShopHours> = true;
+const _shopHoursReadShape: Same<z.infer<typeof shopHoursReadSchema>, ShopHours> = true;
+const _shopWebsiteShape: Same<z.infer<typeof shopWebsiteSchema>, ShopWebsite> = true;
+const _shopWebsiteReadShape: Same<z.infer<typeof shopWebsiteReadSchema>, ShopWebsite> = true;
+const _websiteHomeShape: Same<z.infer<typeof websiteHomeSchema>, WebsiteHome> = true;
+const _websiteHomeReadShape: Same<z.infer<typeof websiteHomeReadSchema>, WebsiteHome> = true;
 const _discountDeliveryReadShape: Same<z.infer<typeof discountDeliveryReadSchema>, DiscountDelivery> = true;
 const _discountOffersShape: Same<z.infer<typeof discountOffersSchema>, DiscountOffers> = true;
 const _discountOffersReadShape: Same<z.infer<typeof discountOffersReadSchema>, DiscountOffers> = true;

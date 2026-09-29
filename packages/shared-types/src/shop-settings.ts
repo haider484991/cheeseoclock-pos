@@ -14,8 +14,11 @@
  * (Kitchen & stock); then the Cancel, Refund and Cash out reason buttons
  * (Staff & kitchen, 'orders.reasons'); phase 3 the delivery areas and fees,
  * the website pick-up discount and whether the menu goes to the website by
- * itself. Later phases add their own keys here (the shop profile…), each
- * with a frozen default.
+ * itself; then the shop's details the website shows — its name, numbers,
+ * address and social links, its opening hours, its website words and the
+ * home page's lineup (Shop & logo → "Website: shop details (both tills)",
+ * website-shop.ts). Later phases add their own keys here, each with a frozen
+ * default.
  *
  * FROZEN DEFAULTS. A key never saved reads as its DEFAULT_* below, which is
  * exactly what the till did before the setting existed, so installing the
@@ -36,6 +39,16 @@ import { WASTE_REASONS, WASTE_REASON_DEFAULT_LABEL, type WasteReasonId } from '.
 import { DELIVERY_ZONES, type DeliveryZoneSetting } from './delivery-areas.js';
 import { PICKUP_DISCOUNT_PERCENT } from './web-bridge.js';
 import { NO_ANNOUNCEMENT, NO_CLOSED_NOTICE, type ClosedNotice, type WebsiteAnnouncement } from './website-messages.js';
+import {
+  DEFAULT_SHOP_HOURS,
+  DEFAULT_SHOP_PROFILE,
+  DEFAULT_SHOP_WEBSITE,
+  DEFAULT_WEBSITE_HOME,
+  type ShopHours,
+  type ShopProfile,
+  type ShopWebsite,
+  type WebsiteHome,
+} from './website-shop.js';
 
 /**
  * The keys the Settings cards read (settings:getBusiness). Every one but
@@ -59,6 +72,12 @@ export const SHOP_SETTING_KEYS = [
   'discounts.websitePickup',
   'delivery.zones',
   'online.options',
+  // The shop's details the website shows (sweep B2 + B4; website-shop.ts): they travel in their
+  // own stamped block (web-bridge.ts THE SHOP BLOCK, SHOP_PUBLISHED_KEYS).
+  'shop.profile',
+  'shop.hours',
+  'shop.website',
+  'website.home',
 ] as const;
 export type ShopSettingKey = (typeof SHOP_SETTING_KEYS)[number];
 
@@ -704,6 +723,10 @@ export interface ShopSettingValues {
   'discounts.websitePickup': WebsitePickup;
   'delivery.zones': DeliveryZones;
   'online.options': OnlineOptions;
+  'shop.profile': ShopProfile;
+  'shop.hours': ShopHours;
+  'shop.website': ShopWebsite;
+  'website.home': WebsiteHome;
 }
 export type ShopSettingValue<K extends ShopSettingKey> = ShopSettingValues[K];
 
@@ -727,6 +750,10 @@ export const SHOP_SETTING_FORMAT: Readonly<Record<ShopSettingKey, number>> = Obj
   'delivery.zones': 1,
   // 2 since v0.7.30: the website's messages and delivery minimum (a format-1 value reads them at their defaults).
   'online.options': 2,
+  'shop.profile': 1,
+  'shop.hours': 1,
+  'shop.website': 1,
+  'website.home': 1,
 });
 
 /** foodpanda's commission until the owner confirms his own (costing spec 4.7): shown as "suggested". */
@@ -958,6 +985,11 @@ export const SHOP_SETTING_DEFAULTS: { readonly [K in ShopSettingKey]: Readonly<S
   'discounts.websitePickup': DEFAULT_WEBSITE_PICKUP,
   'delivery.zones': DEFAULT_DELIVERY_ZONES,
   'online.options': DEFAULT_ONLINE_OPTIONS,
+  // Today's website, byte for byte (website-shop.ts; pinned by pos-domain shop-settings.test.ts).
+  'shop.profile': DEFAULT_SHOP_PROFILE,
+  'shop.hours': DEFAULT_SHOP_HOURS,
+  'shop.website': DEFAULT_SHOP_WEBSITE,
+  'website.home': DEFAULT_WEBSITE_HOME,
 });
 
 /** The longest foodpanda order number kept (payments.reference_no). */

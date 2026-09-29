@@ -7,6 +7,7 @@ export * from './order-validation.js';
 export * from './phone.js';
 export * from './delivery-areas.js';
 export * from './delivery-charge.js';
+export * from './shop-block.js';
 export * from './units.js';
 export * from './ingredient-category.js';
 export * from './stock-level.js';

@@ -612,6 +612,39 @@ const SHOP_SETTING_SAVES = (): unknown[] => [
     },
   },
   { key: 'orders.reasons', useDefault: true },
+  // The shop's details the website shows (sweep B2 + B4): made-up name, numbers, words and item names.
+  {
+    key: 'shop.profile',
+    value: {
+      v: 1,
+      name: 'Test Shop',
+      tagline: 'Test tagline',
+      phone: { display: '0300 1234567', e164: '+923001234567' },
+      whatsappLines: [{ display: '0300 1234567', e164: '+923001234567' }],
+      address: { street: 'Test Street 1', areaLine: 'Test Area, Karachi', postalCode: '12345' },
+      socialLinks: ['https://www.instagram.com/test.shop'],
+      priceRange: 'PKR 100–200',
+    },
+  },
+  { key: 'shop.profile', useDefault: true },
+  { key: 'shop.hours', value: { v: 1, opens: '11:00', closes: '23:00', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat'] } },
+  { key: 'shop.hours', useDefault: true },
+  {
+    key: 'shop.website',
+    value: {
+      v: 1,
+      whatsappGreeting: 'Hi Test Shop! ',
+      doorPayments: ['cash', 'card'],
+      pickupPayments: ['cash'],
+      allergyNotice: 'Test allergy notice: tell us and we leave it out (made-up words).',
+    },
+  },
+  { key: 'shop.website', useDefault: true },
+  {
+    key: 'website.home',
+    value: { v: 1, pizzas: [{ itemRef: { posItemId: null, name: 'Test Pizza — Large' }, headline: 'Test hook' }], burger: null, deals: [] },
+  },
+  { key: 'website.home', useDefault: true },
 ];
 
 /** The counter may call these, for some orders / inputs only (tested one by one below). */
@@ -955,7 +988,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
         });
       }
       // …nor may they read a card (foodpanda's carries the commission; every one is the owner's).
-      expect(SHOP_SETTING_KEYS.length).toBe(15);
+      expect(SHOP_SETTING_KEYS.length).toBe(19);
       for (const key of SHOP_SETTING_KEYS) {
         expect({ who: who.role, key, o: await call('settings:getBusiness', { key }) }).toMatchObject({
           who: who.role,

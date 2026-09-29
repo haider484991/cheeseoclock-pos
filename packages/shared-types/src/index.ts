@@ -23,6 +23,8 @@ export * from './shift.js';
 export * from './printer.js';
 export * from './web-bridge.js';
 export * from './website-messages.js';
+export * from './website-shop.js';
+export * from './phone.js';
 export * from './delivery-areas.js';
 export * from './reports.js';
 export * from './alerts.js';
