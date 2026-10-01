@@ -15,7 +15,11 @@
  *     before the website does, and only then;
  *   - what the PIN screen sees (webOrdersPauseView), whether a close would
  *     pause (closeWouldPauseWebOrders), and the start-up heal that lifts a
- *     pause left behind while a shift is open (healShiftPause).
+ *     pause left behind while a shift is open (healShiftPause);
+ *   - from the start (v0.7.33): a till taking website orders with no shift
+ *     open on it — never opened yet, a fresh setup — starts paused, before
+ *     the bridge's first heartbeat (settleShiftPauseAtStart); the owner's
+ *     save is in web-bridge-handlers.db.test.ts.
  *
  * A real database built from every migration (node:sqlite behind
  * better-sqlite3's shape — see costing-shop.fixture.ts; skips where it is
@@ -652,7 +656,7 @@ live('healShiftPause: a pause left behind while a shift is open is lifted at sta
     expect(pauseAudits(db)).toHaveLength(before);
   });
 
-  it('never sets a pause: with none stored it writes nothing, shift or no shift', () => {
+  it('the heal itself never sets a pause: with none stored it writes nothing, shift or no shift', () => {
     const db = openMigrated();
     seedUsers(db);
     pauseMod.healShiftPause(db as AppDatabase, DEV);
@@ -672,5 +676,146 @@ live('healShiftPause: a pause left behind while a shift is open is lifted at sta
       },
     } as unknown as AppDatabase;
     expect(() => pauseMod.healShiftPause(broken, DEV)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+live('from the start: no shift open on this till, no website orders (v0.7.33)', () => {
+  /** A till as it starts: "Accept online orders" and the link as given; the bridge not started yet. */
+  function startingTill(opts: { enabled: boolean; linked?: boolean }): Db {
+    const db = openMigrated();
+    seedUsers(db);
+    cfgMod.setWebBridgeConfig(
+      db as AppDatabase,
+      {
+        enabled: opts.enabled,
+        ...(opts.linked === false ? {} : { siteUrl: SITE, bridgeSecret: 'made-up-secret' }),
+        pollIntervalMs: 20_000,
+        cloudBackupFrequency: 'off',
+      },
+      MANAGER.userId,
+    );
+    return db;
+  }
+
+  /** Start-up as index.ts runs it: settle the pause, then start the bridge, and let its first round finish. */
+  async function boot(db: Db): Promise<void> {
+    pauseMod.settleShiftPauseAtStart(db as AppDatabase, DEV);
+    bridgeMod.webOrdersBridge.init(db as AppDatabase, DEV);
+    await vi.waitFor(() => expect(bridgeMod.webOrdersBridge.status().lastPollAt).not.toBeNull());
+  }
+
+  const pauseView = (db: Db) =>
+    cfgMod.webOrdersPauseView(cfgMod.getWebBridgeConfig(db as AppDatabase), cfgMod.getWebOrdersShiftPause(db as AppDatabase));
+
+  it('a till that never opened a shift starts paused: its first heartbeat says "not accepting", one audit row with no person, the chain whole', async () => {
+    const db = startingTill({ enabled: true });
+    const configBefore = storedConfigJson(db);
+    await boot(db);
+
+    // The website never hears "accepting": the one heartbeat is the paused one.
+    expect(beats()).toEqual([expect.objectContaining({ acceptingOrders: false, deviceId: DEV, reason: 'shift_closed' })]);
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toMatchObject({ reason: 'shift_closed' });
+    // Audited as a close's pause is, with no person: the till did it.
+    expect(pauseAudits(db)).toEqual([expect.objectContaining({ actor_user_id: null, before_json: null })]);
+    expect(verifyAuditChain(auditRows(db)).ok).toBe(true);
+    // The owner's switch untouched; the pause is this till's alone (nothing queued to sync).
+    expect(storedConfigJson(db)).toBe(configBefore);
+    expect(
+      db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_type = 'settings'`).get(),
+    ).toEqual({ n: 0 });
+    // The PIN screen says so, the screens were told, Settings says why, and
+    // this computer is not kept awake (nor the close asked) for website orders.
+    expect(pauseView(db)).toMatchObject({ paused: true, websiteLinkSet: true });
+    expect(watchEvents()).toBe(1);
+    expect(bridgeMod.webOrdersBridge.status().shiftPause).toMatchObject({ reason: 'shift_closed' });
+    expect(bridgeMod.webOrdersBridge.closeImpact().takingOrders).toBe(false);
+  });
+
+  it('a restart while still paused writes nothing more', async () => {
+    const db = startingTill({ enabled: true });
+    pauseMod.settleShiftPauseAtStart(db as AppDatabase, DEV);
+    const first = cfgMod.getWebOrdersShiftPause(db as AppDatabase);
+    await new Promise((r) => setTimeout(r, 5));
+    pauseMod.settleShiftPauseAtStart(db as AppDatabase, DEV);
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toEqual(first);
+    expect(pauseAudits(db)).toHaveLength(1);
+    expect(watchEvents()).toBe(1);
+  });
+
+  it('a shift open on this till at start: never paused, accepting as before', async () => {
+    const db = startingTill({ enabled: true });
+    openShiftOn(db, DEV);
+    await boot(db);
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toBeNull();
+    expect(pauseAudits(db)).toEqual([]);
+    expect(watchEvents()).toBe(0);
+    expect(beats()[0]).toMatchObject({ acceptingOrders: true, deviceId: DEV });
+    expect(beats()[0]).not.toHaveProperty('reason');
+    expect(bridgeMod.webOrdersBridge.closeImpact().takingOrders).toBe(true);
+  });
+
+  it("only another till's shift open: this till starts paused (the same rule as a close)", async () => {
+    const db = startingTill({ enabled: true });
+    openShiftOn(db, OTHER_TILL);
+    await boot(db);
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toMatchObject({ reason: 'shift_closed' });
+    expect(beats()[0]).toMatchObject({ acceptingOrders: false, reason: 'shift_closed' });
+  });
+
+  it('with the switch off, or no website link, nothing is set at start', async () => {
+    for (const opts of [{ enabled: false }, { enabled: true, linked: false }]) {
+      screen.sent = [];
+      const db = startingTill(opts);
+      pauseMod.settleShiftPauseAtStart(db as AppDatabase, DEV);
+      expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toBeNull();
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM settings WHERE key = ?`).get(PAUSE_KEY)).toEqual({ n: 0 });
+      expect(pauseAudits(db)).toEqual([]);
+      expect(watchEvents()).toBe(0);
+      expect(pauseMod.pauseWhileNoShiftOpen(db as AppDatabase, DEV, MANAGER.userId)).toBe(false);
+    }
+  });
+
+  it('the first open lifts it as today: "accepting" again, the opener on the audit row', async () => {
+    const db = startingTill({ enabled: true });
+    await boot(db);
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).not.toBeNull();
+
+    openShiftOn(db, DEV);
+    const before = beats().length;
+    pauseMod.followShiftForWebOrders(db as AppDatabase, DEV, 'opened', CASHIER.userId);
+
+    const beat = await nextBeat(before);
+    expect(beat).toMatchObject({ acceptingOrders: true, deviceId: DEV });
+    expect(beat).not.toHaveProperty('reason');
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toBeNull();
+    expect(pauseView(db)).toMatchObject({ paused: false });
+    expect(bridgeMod.webOrdersBridge.closeImpact().takingOrders).toBe(true);
+    expect(pauseAudits(db).map((a) => a.actor_user_id)).toEqual([null, CASHIER.userId]);
+    expect(verifyAuditChain(auditRows(db)).ok).toBe(true);
+  });
+
+  it('the heal still comes first: a pause left behind with a shift open is lifted, not kept', () => {
+    const db = startingTill({ enabled: true });
+    cfgMod.setWebOrdersShiftPause(db as AppDatabase, { reason: 'shift_closed', since: '2026-10-01T18:42:00.000Z' }, MANAGER.userId);
+    openShiftOn(db, DEV);
+    pauseMod.settleShiftPauseAtStart(db as AppDatabase, DEV);
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toBeNull();
+    expect(pauseAudits(db).map((a) => a.actor_user_id)).toEqual([MANAGER.userId, null]);
+  });
+
+  it('never throws, not even on a broken database', () => {
+    const broken = {
+      prepare: () => {
+        throw new Error('SQLITE_IOERR: disk I/O error');
+      },
+      transaction: () => () => {
+        throw new Error('SQLITE_IOERR: disk I/O error');
+      },
+    } as unknown as AppDatabase;
+    expect(() => pauseMod.settleShiftPauseAtStart(broken, DEV)).not.toThrow();
+    expect(pauseMod.pauseWhileNoShiftOpen(broken, DEV, MANAGER.userId)).toBe(false);
+    expect(watchEvents()).toBe(0);
   });
 });

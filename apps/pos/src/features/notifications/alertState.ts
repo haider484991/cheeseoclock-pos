@@ -442,3 +442,21 @@ export function describeFailure(f: ImportFailureAlert, loggedIn: boolean): Banne
     tooltip,
   };
 }
+
+/**
+ * The words on the small pill (a popup is open: AlertBanner's compact row),
+ * short enough to fit it whole: "New order #0042", "3 new orders"; for the
+ * alarm, "Cancelled #0045" when the website cancelled an order the kitchen
+ * has, else "Order not in". Order numbers only — the pill shows on the PIN
+ * screen too. Empty when nothing rings (the pill is not shown then).
+ */
+export function describePill(s: AlertState): string {
+  const alarm = s.failures.find((f) => !f.silenced);
+  if (alarm) {
+    if (alarm.reason !== 'cancelled_on_site') return 'Order not in';
+    return alarm.orderNumber ? `Cancelled ${shortOrderNumber(alarm.orderNumber)}` : 'Order cancelled';
+  }
+  if (s.orders.length === 0) return '';
+  if (s.orders.length === 1) return `New order ${shortOrderNumber(s.orders[0]!.orderNumber)}`;
+  return `${s.orders.length} new orders`;
+}

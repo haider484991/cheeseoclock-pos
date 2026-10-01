@@ -12,7 +12,11 @@
  *     Checkout's order-type buttons, ticket and Pay button at every window
  *     width (measured against globals.css); on the PIN screen it stays put,
  *     with no Hide;
- *   - a failure card's words take two lines, so the phone at their end shows.
+ *   - a failure card's words take two lines, so the phone at their end shows;
+ *   - so do a note's on the PIN screen, never cut with "…", and the taller
+ *     row stays clear of the PIN keypad (measured in Chromium, Inter 14 px);
+ *   - the pill says which order: "New order #0044", "2 new orders",
+ *     "Cancelled #0045", "Order not in", whole within its width.
  * Every name and amount is made up.
  */
 import { readFileSync } from 'node:fs';
@@ -21,8 +25,8 @@ import { fileURLToPath } from 'node:url';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AlertBanner, NOTE_ROW_SIGNED_IN, type AlertBannerProps } from './AlertBanner';
-import { EMPTY_ALERT_STATE, receiveFailure, receiveOrder, silenceFailures, type AlertState } from './alertState';
+import { AlertBanner, NOTE_ROW_SIGNED_IN, PILL_MAX_WIDTH, type AlertBannerProps } from './AlertBanner';
+import { EMPTY_ALERT_STATE, describePill, receiveFailure, receiveOrder, silenceFailures, type AlertState } from './alertState';
 import type { WatchNote } from './watchNotes';
 
 const TICKET: WatchNote = {
@@ -322,7 +326,7 @@ describe('a failure card shows the whole phone number', () => {
     expect(html).not.toContain('Test Customer');
   });
 
-  it('a new order and a note keep their one-line rows', () => {
+  it('a new order keeps its one-line row', () => {
     const html = banner({ state: withOrder, loggedIn: true });
     expect(box(html).classes).toContain('max-h-[4.5rem]');
     expect(classesOf(html, 'Delivery · Rs 1850 · Test Customer')).toContain('truncate');
@@ -333,7 +337,7 @@ describe('a popup is open (the small pill)', () => {
   it('a note alone shows nothing; a ringing order still gets the pill', () => {
     expect(banner({ notes: [TICKET, UNCONFIRMED], compact: true })).toBe('');
     const pill = banner({ state: withOrder, notes: [TICKET], compact: true });
-    expect(text(pill)).toBe('New order Seen');
+    expect(text(pill)).toBe('New order #0044 Seen');
   });
 
   it('OrderAlerts watches for popups while a note alone shows, so the row never covers a payment', () => {
@@ -356,5 +360,150 @@ describe('OrderAlerts beeps only for what the banner shows', () => {
     expect(src).toMatch(/const notes = shownNotes\(allNotes, hiddenNotes, signedIn\);/);
     expect(src).toMatch(/onHideNote=\{signedIn \? \(n\) => alerts\.hideNote\(n\) : undefined\}/);
     expect(src).toMatch(/signedInChangedAt\.current = Date\.now\(\);[\s\S]{0,120}alerts\.showHiddenNotes\(\);/);
+  });
+});
+
+describe('on the PIN screen a note’s words take two lines, clear of the keypad', () => {
+  // The two the hands-on test of the packaged till saw cut with "…" (v0.7.33).
+  const LATE: WatchNote = {
+    kind: 'unconfirmed',
+    keys: ['unconfirmed:o2'],
+    orderIds: ['o2'],
+    title: 'The website has not confirmed order #0002',
+    detail: 'The till keeps trying. Check the internet — at 12:39 am the website cancels it and tells the customer.',
+  };
+  const WAITING: WatchNote = {
+    kind: 'waiting',
+    keys: ['waiting:o2:30', 'waiting:o3:30', 'waiting:o4:30', 'waiting:o1:30'],
+    orderIds: ['o2', 'o3', 'o4', 'o1'],
+    title: '4 orders are waiting too long',
+    detail: 'Not started: #0002, #0003, #0004 · over 30 min: #0001 — sign in and open Live Orders.',
+  };
+
+  it('the words take up to two lines, never cut with "…"; the title keeps one; the row may be 5.5rem', () => {
+    for (const note of [LATE, WAITING, TICKET, UNCONFIRMED]) {
+      const html = banner({ notes: [note] });
+      expect(classesOf(html, note.detail)).toContain('line-clamp-2');
+      expect(classesOf(html, note.detail)).not.toContain('truncate');
+      expect(classesOf(html, note.title)).toContain('truncate');
+      expect(box(html).classes).toContain('max-h-[5.5rem]');
+      expect(box(html).classes).not.toContain('max-h-[4.5rem]');
+      // Where it was: centred under the toast slot.
+      expect(box(html).style).toContain('top:4.875rem');
+      expect(box(html).classes).toContain('left-1/2');
+    }
+    // A new order on the PIN screen keeps its one line.
+    const order = banner({ state: withOrder });
+    expect(box(order).classes).toContain('max-h-[4.5rem]');
+  });
+
+  it('two lines fit the row, and the row stays above the PIN keypad as one line did', () => {
+    const rem = 16;
+    const html = banner({ notes: [LATE] });
+    const top = Number(/top:([\d.]+)rem/.exec(box(html).style)![1]) * rem;
+    const capClass = box(html).classes.find((c) => c.startsWith('max-h-'))!;
+    const cap = Number(/^max-h-\[([\d.]+)rem\]$/.exec(capClass)![1]) * rem;
+    expect(top).toBe(78);
+    // The words' box: 38rem less the 2 px border each side, pl-4, pr-2, the 24 px icon and its
+    // 12 px gap (no buttons on the PIN screen): 544 px (544.8 measured).
+    const wordsBox = 38 * rem - 2 * 2 - 16 - 8 - 24 - 12;
+    expect(wordsBox).toBe(544);
+    // Measured in Chromium (Electron 32): Inter 14 px, the till's font, and Segoe UI, its fallback.
+    const inter = { late: 658.7, waiting: 584.5 };
+    const segoe = { late: 613.6, waiting: 537 };
+    for (const w of [inter.late, inter.waiting, segoe.late]) {
+      expect(w).toBeGreaterThan(wordsBox); // one line cut them
+      expect(w).toBeLessThan(2 * wordsBox - 120); // two lines hold them, a long word left over included
+    }
+    expect(segoe.waiting).toBeLessThan(wordsBox);
+    // Height: border 4 + padding 16 + the title (18 px × 1.375) + two lines of words (14 px × 1.375).
+    const twoLines = 4 + 16 + 18 * 1.375 + 2 * 14 * 1.375;
+    expect(twoLines).toBe(83.25); // 82.45 measured
+    expect(twoLines).toBeLessThanOrEqual(cap);
+    // The PIN box, the keypad's top, at its highest: a short window with the card at the
+    // top (LoginPage.tsx): 8 page + 24 card + 80 logo + 12 + 36 name + 12 + 24 "Enter your PIN".
+    // (243 px measured at 1024 × 700 with the paused notice.)
+    const keypadTop = 8 + 24 + 80 + 12 + 36 + 12 + 24;
+    expect(top + cap).toBeLessThan(keypadTop); // 166 < 196: clear, even at the cap
+    // One line ended by 78 + 72 = 150 (141.2 measured); two by 166 (160.45): still clear.
+    expect(top + 4.5 * rem).toBeLessThan(keypadTop);
+  });
+});
+
+describe('the pill says which order, whole', () => {
+  const two = receiveOrder(withOrder, { orderId: 'o48', orderNumber: 'CO-20261001-0048', customerName: 'Test Customer' }, 1);
+  const notIn = receiveFailure(
+    EMPTY_ALERT_STATE,
+    {
+      webOrderId: 'w49',
+      customerName: 'Test Customer',
+      customerPhone: '0300-1234567',
+      message: 'gave up after 5 attempts',
+      reason: 'gave_up',
+      silenced: false,
+      at: new Date(0).toISOString(),
+    },
+    0,
+  );
+  const cancelledNoNumber = receiveFailure(
+    EMPTY_ALERT_STATE,
+    {
+      webOrderId: 'w50',
+      customerName: 'Test Customer',
+      customerPhone: null,
+      message: 'cancelled on the website while the kitchen had it',
+      reason: 'cancelled_on_site',
+      silenced: false,
+      at: new Date(0).toISOString(),
+    },
+    0,
+  );
+
+  it('one new order by its number, several counted, the alarm by what happened', () => {
+    expect(describePill(withOrder)).toBe('New order #0044');
+    expect(describePill(two)).toBe('2 new orders');
+    expect(describePill(withAlarm)).toBe('Cancelled #0045'); // the alarm beats the new order, as on the row
+    expect(describePill(cancelledNoNumber)).toBe('Order cancelled');
+    expect(describePill(notIn)).toBe('Order not in');
+    expect(describePill(EMPTY_ALERT_STATE)).toBe('');
+    // On the pill, the same words, with Seen.
+    expect(text(banner({ state: two, compact: true }))).toBe('2 new orders Seen');
+    expect(text(banner({ state: withAlarm, compact: true }))).toBe('Cancelled #0045 Seen');
+    expect(text(banner({ state: notIn, compact: true }))).toBe('Order not in Seen');
+    // Never a name or a phone, signed in or not: the pill shows on the PIN screen too.
+    for (const state of [withOrder, two, withAlarm, notIn]) {
+      for (const loggedIn of [false, true]) {
+        const pill = banner({ state, compact: true, loggedIn });
+        expect(pill).not.toContain('Test Customer');
+        expect(pill).not.toContain('0300');
+      }
+    }
+  });
+
+  it('the words fit the pill whole (they were cut to "New or…" at 11rem)', () => {
+    const pill = banner({ state: withOrder, compact: true });
+    expect(box(pill).classes).toContain(PILL_MAX_WIDTH);
+    expect(box(pill).classes).not.toContain('max-w-[11rem]');
+    const max = Number(/^max-w-\[([\d.]+)rem\]$/.exec(PILL_MAX_WIDTH)![1]) * 16;
+    // Around the words: pl-3, the 16 px bell, two 8 px gaps, Seen (px-3 and its word), pr-1.
+    // Bold 14 px, measured in Chromium: Inter (the till's font), then Segoe UI.
+    const seen = { inter: 34.6, segoe: 31.5 };
+    const words: Record<string, { inter: number; segoe: number }> = {
+      'New order #0044': { inter: 120.6, segoe: 113.9 },
+      'Cancelled #0045': { inter: 118, segoe: 107.6 },
+      '12 new orders': { inter: 94.9, segoe: 93.2 },
+      'Order not in': { inter: 80.6, segoe: 80.6 },
+    };
+    for (const [w, width] of Object.entries(words)) {
+      for (const font of ['inter', 'segoe'] as const) {
+        const around = 12 + 16 + 8 + 8 + (24 + seen[font]) + 4;
+        expect(around + width[font], `${w} in ${font}`).toBeLessThanOrEqual(max);
+      }
+    }
+    // The old width cut even "New order" (70.8 px in Inter).
+    expect(12 + 16 + 8 + 8 + 24 + seen.inter + 4 + 70.8).toBeGreaterThan(11 * 16);
+    // Still a corner pill: at its widest it ends (6 px in) before the 460 px
+    // "Close the till?" box starts at the 1024 px minimum window.
+    expect(6 + max).toBeLessThan((1024 - 460) / 2);
   });
 });

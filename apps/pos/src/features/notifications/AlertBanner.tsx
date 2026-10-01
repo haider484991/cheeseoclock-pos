@@ -1,7 +1,7 @@
 import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { BellRing, CloudOff, Hourglass, PhoneCall, Printer, X, type LucideIcon } from 'lucide-react';
 import { cn } from '@cheeseoclock/ui';
-import { describeFailure, describeNewOrders, isLoud, type AlertState } from './alertState';
+import { describeFailure, describeNewOrders, describePill, isLoud, type AlertState } from './alertState';
 import type { WatchNote } from './watchNotes';
 
 /**
@@ -32,7 +32,10 @@ import type { WatchNote } from './watchNotes';
  * On the PIN screen notes stay where they were, with no Hide.
  *
  * A "did not come in" or "website cancelled" card's words take up to two
- * lines, so the phone number at their end is never cut off.
+ * lines, so the phone number at their end is never cut off; so do a note's
+ * on the PIN screen, so what to do (the time the website cancels, "sign in
+ * and open Live Orders") is never cut with "…" either. A new order's row
+ * keeps one line.
  *
  * Taps on it must not count as "outside" an open popup (which would close
  * the popup): the pointer-down is stopped here, before Radix sees it on the
@@ -79,8 +82,44 @@ const BANNER_TOP_LOGGED_OUT = '4.875rem';
  */
 export const NOTE_ROW_SIGNED_IN =
   'bottom-10 left-[5.25rem] xl:left-[15.5rem] max-h-[7rem] w-[min(38rem,calc(100vw-28.25rem))]';
-/** Every other row: centred under the top bar (or the PIN screen's toast slot), one line of words. */
+/**
+ * Every other row: centred under the top bar (or the PIN screen's toast
+ * slot). A new order's words take one line; a failure card's and a note's
+ * up to two (ROW_TWO_LINES).
+ */
 const ROW_TOP = 'left-1/2 -translate-x-1/2 w-[38rem] max-w-[calc(100vw-2rem)]';
+
+/**
+ * A row under the top whose words take two lines. The words' box is 544 px
+ * (38rem less the border, padding, icon and gap; no buttons on the PIN
+ * screen): in Inter 14 px, "The till keeps trying. Check the internet — at
+ * 12:39 am the website cancels it and tells the customer." is 659 px and
+ * "Not started: #0002, #0003, #0004 · over 30 min: #0001 — sign in and open
+ * Live Orders." 585 px (Segoe UI: 614 and 537). Two lines make the row at
+ * most 83.25 px (border 4, padding 16, title 24.75, words 2 × 19.25; 82.45
+ * measured in Chromium), inside the 5.5rem (88 px) cap. On the PIN screen it
+ * starts at 4.875rem (78 px), so it ends by 166 px (160.45 measured; one
+ * line ended at 141.2). The PIN box, the keypad's top, is never above
+ * 196 px (LoginPage.tsx: 8 page + 24 card + the 80 px logo, gap and name +
+ * 24 "Enter your PIN", on a short window with the card at the top; 243 px
+ * at 1024 × 700 with the paused notice), so the keypad stays clear, as it
+ * did with one line. The extra 19 px only reach further over the logo and,
+ * on a short window, the store name.
+ */
+const ROW_TWO_LINES = 'max-h-[5.5rem]';
+const ROW_ONE_LINE = 'max-h-[4.5rem]';
+
+/**
+ * The pill's widest (it is only as wide as its words). Around the words:
+ * 12 px padding, the 16 px bell, two 8 px gaps, "Seen" (24 px padding and
+ * 34.6 px of Inter bold 14 px) and 4 px: 106.6 px. At 11rem that left
+ * 69.4 px, and "New order" (70.8 px) showed as "New or…". 15rem leaves
+ * 133.4 px: "New order #0042" is 120.6 px (Segoe UI 113.9), "Cancelled
+ * #0045" 118, "12 new orders" 94.9, "Order not in" 80.6. Still a corner
+ * pill: at its widest it ends at 246 px, and at the 1024 px minimum the
+ * 460 px "Close the till?" box starts at 282 px.
+ */
+export const PILL_MAX_WIDTH = 'max-w-[15rem]';
 
 const keepPopupOpen = (e: ReactPointerEvent) => e.stopPropagation();
 const keepFocus = (e: ReactMouseEvent) => e.preventDefault();
@@ -135,14 +174,13 @@ export function AlertBanner(p: AlertBannerProps) {
         onPointerDown={keepPopupOpen}
         style={{ pointerEvents: 'auto' }}
         className={cn(
-          'fixed left-1.5 top-1.5 z-[110] flex max-w-[11rem] items-center gap-2 rounded-full py-1 pl-3 pr-1 text-sm font-bold text-white shadow-soft-lg',
+          'fixed left-1.5 top-1.5 z-[110] flex items-center gap-2 rounded-full py-1 pl-3 pr-1 text-sm font-bold text-white shadow-soft-lg',
+          PILL_MAX_WIDTH,
           alarm ? 'bg-red-600' : 'bg-emerald-600',
         )}
       >
         <BellRing className="h-4 w-4 shrink-0 motion-safe:animate-pulse" aria-hidden="true" />
-        <span className="truncate">
-          {alarm ? 'Order not in' : state.orders.length === 1 ? 'New order' : `${state.orders.length} new`}
-        </span>
+        <span className="truncate">{describePill(state)}</span>
         <button
           type="button"
           onMouseDown={keepFocus}
@@ -232,8 +270,9 @@ export function AlertBanner(p: AlertBannerProps) {
   const more = total - shown;
   // Signed in, a note sits low on the left (NOTE_ROW_SIGNED_IN); every other row under the top.
   const low = tone === 'reminder' && p.loggedIn;
-  // A failure card ends with the phone number to call: its words may take two lines.
-  const failure = tone === 'alarm' || tone === 'note';
+  // A failure card ends with the phone number to call, and a note with what to
+  // do: their words may take two lines. Only a new order's row keeps one.
+  const twoLines = tone !== 'orders';
 
   return (
     <div
@@ -250,7 +289,7 @@ export function AlertBanner(p: AlertBannerProps) {
       className={cn(
         'fixed z-[110] flex items-center gap-3 overflow-hidden rounded-2xl border-2 py-2 pl-4 pr-2 shadow-soft-lg animate-fade-in',
         low ? NOTE_ROW_SIGNED_IN : ROW_TOP,
-        !low && (failure ? 'max-h-[5.5rem]' : 'max-h-[4.5rem]'),
+        !low && (twoLines ? ROW_TWO_LINES : ROW_ONE_LINE),
         tone === 'alarm' && 'border-red-700 bg-red-600 text-white',
         tone === 'orders' && 'border-emerald-700 bg-emerald-600 text-white',
         tone === 'reminder' &&
@@ -270,7 +309,7 @@ export function AlertBanner(p: AlertBannerProps) {
           )}
         </div>
         {text.detail && (
-          <div className={cn('text-sm leading-snug opacity-95', low || failure ? 'line-clamp-2' : 'truncate')}>
+          <div className={cn('text-sm leading-snug opacity-95', low || twoLines ? 'line-clamp-2' : 'truncate')}>
             {text.detail}
           </div>
         )}

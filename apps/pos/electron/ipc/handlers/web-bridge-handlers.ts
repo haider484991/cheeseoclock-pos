@@ -11,6 +11,7 @@ import {
 } from '../../services/web-bridge-config.js';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 import { broadcastAlertWatchChanged } from '../../services/alert-watch-events.js';
+import { pauseWhileNoShiftOpen } from '../../services/web-orders-shift-pause.js';
 
 function maskSecret(secret: string): string {
   if (secret.length <= 4) return '****';
@@ -79,9 +80,16 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
       });
     }
     setWebBridgeConfig(ctx.db, parsed.data, s.id);
+    // Website orders follow the shift (v0.7.33): saved with the switch on and
+    // the link ready while no shift is open on this till, they are paused at
+    // once, as closing the last shift would have, with the owner as the one
+    // who did it — the first shift's open starts them. Before the reschedule,
+    // whose store-status push then tells the website "not accepting" as its
+    // first word, never an "accepting" beat in between. Never throws.
+    pauseWhileNoShiftOpen(ctx.db, ctx.deviceId, s.id);
     webOrdersBridge.reschedule();
-    // "Accept online orders" or the link changed: the PIN screen and the top
-    // bar say whether website orders are paused at once.
+    // "Accept online orders", the link or the pause changed: the PIN screen,
+    // the top bar and keeping this computer awake follow at once.
     broadcastAlertWatchChanged();
     return ok({ ok: true } as const);
   });

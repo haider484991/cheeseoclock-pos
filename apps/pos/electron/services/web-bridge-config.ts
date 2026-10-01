@@ -116,9 +116,10 @@ export function isWebBridgeReady(
 
 /**
  * Website orders paused by the till itself because no shift is open on it
- * (owner, 2026-09-27): set when the last open shift closes, cleared when a
- * shift opens (services/web-orders-shift-pause.ts). Per till and pure-local,
- * like the rest of the settings table.
+ * (owner, 2026-09-27): set when the last open shift closes — and, since
+ * v0.7.33, at start or when the owner saves the link while none is open —
+ * cleared when a shift opens (services/web-orders-shift-pause.ts). Per till
+ * and pure-local, like the rest of the settings table.
  *
  * It lives under its own key, never inside `webBridge.config`: `enabled` there
  * is the owner's hand switch, and the pause must not overwrite it. The till

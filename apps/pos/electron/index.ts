@@ -15,7 +15,7 @@ import { getCurrentSession } from './services/auth-service.js';
 import { fbrWorker } from './services/fbr-worker.js';
 import { syncWorker } from './services/sync-worker.js';
 import { webOrdersBridge } from './services/web-orders-bridge.js';
-import { healShiftPause } from './services/web-orders-shift-pause.js';
+import { settleShiftPauseAtStart } from './services/web-orders-shift-pause.js';
 import { initErrorReporter } from './services/error-reporter.js';
 import { initAutoUpdater } from './services/auto-updater.js';
 import {
@@ -202,9 +202,12 @@ async function bootstrap() {
   printSpooler.init(db, { deviceId: deviceInfo.deviceId, currentUserId: () => getCurrentSession()?.id ?? null });
   fbrWorker.init(db);
   syncWorker.init(db, deviceInfo.deviceId);
-  // A website-orders pause left behind while a shift is open is lifted before
-  // the bridge's first heartbeat (it only ever lifts; it never throws).
-  healShiftPause(db, deviceInfo.deviceId);
+  // Website orders follow the shift from the start, before the bridge's first
+  // heartbeat: a pause left behind while a shift is open is lifted, and a
+  // till that takes website orders with no shift open on it is paused, as a
+  // close would have (v0.7.33: before, the till never set a pause at start,
+  // so one that had never closed a shift kept taking orders). Never throws.
+  settleShiftPauseAtStart(db, deviceInfo.deviceId);
   webOrdersBridge.init(db, deviceInfo.deviceId);
   initBackupService(db);
   auditChainService.verifyInBackground(db);
