@@ -578,7 +578,9 @@ export interface WebOrderImportFailedPayload {
   customerPhone?: string | null;
   /** The till stopped trying (true) or will try again (false / left out by older builds). */
   final?: boolean;
-  reason?: 'gave_up' | 'stale' | 'error';
+  reason?: 'gave_up' | 'stale' | 'error' | 'cancelled_on_site';
+  /** The till's order number (cancelled_on_site: the website cancelled an order the kitchen has). */
+  orderNumber?: string | null;
 }
 
 /** Listen for web-order:import-failed broadcasts from the website bridge. */

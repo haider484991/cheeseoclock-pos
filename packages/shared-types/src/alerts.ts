@@ -132,18 +132,24 @@ export interface OnlineOrderAlert {
 }
 
 /**
- * Why a website order is not on the board.
+ * Why a website order needs a call.
  *   gave_up — the till tried five times and cancelled it on the website;
  *   stale   — it reached the till too late to cook (the till was off);
- *   error   — a failure reported without a reason (older builds).
+ *   error   — a failure reported without a reason (older builds);
+ *   cancelled_on_site — the website cancelled an order the kitchen has (its
+ *             45-minute cancel of an order it never saw confirmed, or by
+ *             hand): the customer was told it did not go through, so someone
+ *             has to call them.
  */
-export type ImportFailureReason = 'gave_up' | 'stale' | 'error';
+export type ImportFailureReason = 'gave_up' | 'stale' | 'error' | 'cancelled_on_site';
 
-/** A website order that did not come in: someone has to call the customer. */
+/** A website order that did not come in, or that the website cancelled: someone has to call the customer. */
 export interface ImportFailureAlert {
   webOrderId: string;
   customerName: string;
   customerPhone: string | null;
+  /** The till's order number. Set only for cancelled_on_site: that order is on the board. */
+  orderNumber?: string | null;
   /** The technical reason, for the tooltip — never the headline. */
   message: string;
   reason: ImportFailureReason;

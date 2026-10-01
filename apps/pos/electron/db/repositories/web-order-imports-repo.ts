@@ -45,6 +45,21 @@ export function markWebOrderAcked(db: AppDatabase, webOrderId: string, at: strin
   ).run(at, at, webOrderId);
 }
 
+/**
+ * The website answered a status push for this order: `status` is what it now
+ * holds (the status pushed, or the final one it kept), so the till stops
+ * pushing it. Any answer is also the website's confirmation that it has the
+ * order: one still waiting for its ack counts as confirmed now (the first
+ * time is kept).
+ */
+export function recordPushedStatus(db: AppDatabase, webOrderId: string, status: string, at: string): void {
+  db.prepare(
+    `UPDATE web_order_imports
+        SET last_pushed_status = ?, acked_at = COALESCE(acked_at, ?), updated_at = ?
+      WHERE web_order_id = ?`,
+  ).run(status, at, at, webOrderId);
+}
+
 /** An imported order the website has not confirmed yet, with what the ack and its check need. */
 export interface UnackedImport {
   webOrderId: string;

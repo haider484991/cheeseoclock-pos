@@ -266,3 +266,73 @@ describe('taskbar flash and Windows notice', () => {
     expect(t.clears()).toBe(1);
   });
 });
+
+describe('the website cancelled an order the kitchen has', () => {
+  const cancel = (webOrderId: string, orderNumber: string | null = 'CO-20261001-0042') => ({
+    webOrderId,
+    customerName: 'Sara',
+    customerPhone: '0300-1234567',
+    orderNumber,
+    message: 'cancelled on the website while the kitchen had it',
+    final: true,
+    reason: 'cancelled_on_site' as const,
+  });
+
+  it('is a loud card that keeps its order number', () => {
+    const t = setup();
+    t.hub.importFailed(cancel('w42'));
+    expect(t.hub.pending().failures).toEqual([
+      expect.objectContaining({ webOrderId: 'w42', reason: 'cancelled_on_site', orderNumber: 'CO-20261001-0042', silenced: false }),
+    ]);
+    expect(t.hub.isLoud()).toBe(true);
+  });
+
+  it('its Windows notice names the order, never the phone', () => {
+    const t = setup();
+    t.hub.importFailed(cancel('w42'));
+    t.advance(NOTICE_DEBOUNCE_MS);
+    expect(t.notices).toEqual([
+      {
+        kind: 'importFailed',
+        title: 'Website cancelled order #0042',
+        body: 'The kitchen has it. Open the till and call the customer.',
+      },
+    ]);
+    expect(JSON.stringify(t.notices)).not.toContain('0300');
+  });
+
+  it('several are counted; other kinds and new orders are mentioned after', () => {
+    const t = setup();
+    t.hub.importFailed(cancel('w42'));
+    t.hub.importFailed(cancel('w43', 'CO-20261001-0043'));
+    t.hub.importFailed({ webOrderId: 'w9', customerName: 'Ali', message: 'gave up', final: true, reason: 'gave_up' });
+    t.hub.orderReceived(web('1'));
+    t.advance(NOTICE_DEBOUNCE_MS);
+    expect(t.notices.at(-1)).toEqual({
+      kind: 'importFailed',
+      title: '2 website orders were cancelled on the website',
+      body: 'The kitchen has them. Open the till and call the customers. Also 1 website order did not come in. Also 1 new online order.',
+    });
+    expect(JSON.stringify(t.notices)).not.toContain('0300');
+  });
+
+  it('a "did not come in" card first: the cancel is counted after it', () => {
+    const t = setup();
+    t.hub.importFailed({ webOrderId: 'w9', customerName: 'Ali', message: 'gave up', final: true, reason: 'gave_up' });
+    t.hub.importFailed(cancel('w42'));
+    t.advance(NOTICE_DEBOUNCE_MS);
+    expect(t.notices.at(-1)).toEqual({
+      kind: 'importFailed',
+      title: 'Website order from Ali did not come in',
+      body: 'Open the till and call the customer. Also 1 website order was cancelled on the website.',
+    });
+  });
+
+  it('without an order number it still never names the customer', () => {
+    const t = setup();
+    t.hub.importFailed(cancel('w42', null));
+    t.advance(NOTICE_DEBOUNCE_MS);
+    expect(t.notices[0]!.title).toBe('Website cancelled an order');
+    expect(t.hub.pending().failures[0]).not.toHaveProperty('orderNumber');
+  });
+});

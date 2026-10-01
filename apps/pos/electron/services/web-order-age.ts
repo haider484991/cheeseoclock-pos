@@ -1,6 +1,15 @@
 import { PICKUP_DISCOUNT_PERCENT } from '@cheeseoclock/shared-types';
 
 /**
+ * The website cancels an order it has not seen confirmed this long after the
+ * customer placed it, and tells them to call: the mirror of
+ * UNCONFIRMED_ORDER_TTL_MS in apps/web/src/lib/store-status.ts. The bridge
+ * refuses to cook an order older than this, and the till shows when the
+ * website will cancel one it has not confirmed yet.
+ */
+export const WEBSITE_UNCONFIRMED_TTL_MS = 45 * 60_000;
+
+/**
  * Is a web order too old to cook? Pure so it can be unit-tested without the
  * bridge. An unparseable timestamp is NOT treated as stale — the website's own
  * sweep still protects that case, and refusing a fresh order on a bad string

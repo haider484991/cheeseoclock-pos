@@ -11,7 +11,8 @@
  *     the newest order, then every 30 s, then silence after an hour (the
  *     banner stays until someone looks). That switch is the chime's only:
  *     the alarm for an order that did not come in always repeats;
- *   - the alarm (an order that did not come in) wins over the chime;
+ *   - the alarm (an order that did not come in, or one the website
+ *     cancelled while the kitchen had it) wins over the chime;
  *   - Seen / Esc acts on the row the banner shows, nothing else: a ringing
  *     alarm is silenced (that one), otherwise the new orders are seen. An
  *     order or alarm that arrived under the finger (in the last 1.5 s, next
@@ -145,13 +146,18 @@ export function receiveOrder(
   };
 }
 
-/** The bridge's import-failed event → a failure card, or null while the till is still retrying. */
+/**
+ * The bridge's import-failed event → a failure card, or null while the till
+ * is still retrying. 'cancelled_on_site' (the website cancelled an order the
+ * kitchen has) is a card and an alarm like a give-up, with the order number.
+ */
 export function failureFromEvent(
   p: {
     webOrderId: string;
     customerName: string;
     message: string;
     customerPhone?: string | null;
+    orderNumber?: string | null;
     final?: boolean;
     reason?: ImportFailureReason;
   },
@@ -162,11 +168,14 @@ export function failureFromEvent(
   // Builds before `final` said "gave up after 5 attempts" on the last one.
   const final = p.final ?? /^gave up/i.test(message);
   if (!final) return null;
-  const reason: ImportFailureReason = p.reason === 'stale' || p.reason === 'gave_up' ? p.reason : 'error';
+  const reason: ImportFailureReason =
+    p.reason === 'stale' || p.reason === 'gave_up' || p.reason === 'cancelled_on_site' ? p.reason : 'error';
+  const orderNumber = typeof p.orderNumber === 'string' && p.orderNumber ? p.orderNumber : null;
   return {
     webOrderId: p.webOrderId,
     customerName: typeof p.customerName === 'string' ? p.customerName : '',
     customerPhone: typeof p.customerPhone === 'string' && p.customerPhone.trim() ? p.customerPhone.trim() : null,
+    ...(orderNumber ? { orderNumber } : {}),
     message,
     reason,
     silenced: reason === 'stale',
@@ -389,6 +398,19 @@ export function describeNewOrders(
 export function describeFailure(f: ImportFailureAlert, loggedIn: boolean): BannerText {
   const name = f.customerName || 'a customer';
   const tooltip = f.message ? `Reason: ${f.message}` : undefined;
+  if (f.reason === 'cancelled_on_site') {
+    // The order number, never the name: this card shows on the PIN screen too.
+    const told = 'The customer was told it did not go through, but the kitchen has it.';
+    return {
+      title: f.orderNumber ? `Website cancelled order ${shortOrderNumber(f.orderNumber)}` : 'Website cancelled an order',
+      detail: !loggedIn
+        ? `${told} Sign in and call them.`
+        : f.customerPhone
+          ? `${told} Call ${f.customerPhone}.`
+          : `${told} Call them.`,
+      tooltip,
+    };
+  }
   if (f.reason === 'stale') {
     return {
       title: `Website order from ${name} came in while the till was off`,

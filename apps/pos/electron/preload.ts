@@ -457,7 +457,9 @@ type WebOrderImportFailedEvent = {
   customerPhone?: string | null;
   /** The till stopped trying: someone has to call the customer. */
   final?: boolean;
-  reason?: 'gave_up' | 'stale' | 'error';
+  reason?: 'gave_up' | 'stale' | 'error' | 'cancelled_on_site';
+  /** The till's order number (cancelled_on_site: the website cancelled an order the kitchen has). */
+  orderNumber?: string | null;
 };
 contextBridge.exposeInMainWorld('webOrderEvents', {
   onReceived: (cb: (payload: WebOrderReceivedEvent) => void) => {

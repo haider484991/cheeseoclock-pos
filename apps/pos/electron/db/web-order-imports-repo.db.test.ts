@@ -30,6 +30,7 @@ import {
   markCancelledOnSite,
   markWebOrderAcked,
   openSiteCancels,
+  recordPushedStatus,
   unconfirmedWebOrders,
   unseenWebOrders,
 } from './repositories/web-order-imports-repo.js';
@@ -172,6 +173,31 @@ live('web-order-imports-repo', () => {
     expect(() => markWebOrderAcked(db as AppDatabase, 'w-unknown', T(2))).not.toThrow();
     expect(listUnackedImports(db as AppDatabase, T(-600)).map((r) => r.webOrderId)).toEqual(['w2']);
     expect(one(db, 'w2')['acked_at']).toBeNull();
+  });
+
+  it('recordPushedStatus: what the website holds now, and its answer confirms an order still waiting for its ack', () => {
+    const db = shop();
+    imported(db, 1);
+    imported(db, 2, { importRow: { acked_at: T(-40) } });
+    recordPushedStatus(db as AppDatabase, 'w1', 'preparing', T(2));
+    expect(pick(one(db, 'w1'), ['last_pushed_status', 'acked_at', 'updated_at'])).toEqual({
+      last_pushed_status: 'preparing',
+      acked_at: T(2),
+      updated_at: T(2),
+    });
+    // The next answer moves the status, never the first confirmation.
+    recordPushedStatus(db as AppDatabase, 'w1', 'delivered', T(7));
+    expect(pick(one(db, 'w1'), ['last_pushed_status', 'acked_at', 'updated_at'])).toEqual({
+      last_pushed_status: 'delivered',
+      acked_at: T(2),
+      updated_at: T(7),
+    });
+    recordPushedStatus(db as AppDatabase, 'w2', 'ready', T(3));
+    expect(pick(one(db, 'w2'), ['last_pushed_status', 'acked_at'])).toEqual({ last_pushed_status: 'ready', acked_at: T(-40) });
+    // It is not a website cancel.
+    expect(one(db, 'w1')['site_cancelled_at']).toBeNull();
+    expect(() => recordPushedStatus(db as AppDatabase, 'w-unknown', 'ready', T(4))).not.toThrow();
+    expect(listUnackedImports(db as AppDatabase, T(-600))).toEqual([]);
   });
 
   it('listUnackedImports: imported, unconfirmed, not cancelled on the website, since the time given, oldest first, with its order', () => {
@@ -373,6 +399,7 @@ live('web-order-imports-repo', () => {
     markCancelledOnSite(db as AppDatabase, 'w3', T(2));
     markAlertsSeen(db as AppDatabase, ['o1', 'o2', 'o3'], T(3));
     markCancelNoted(db as AppDatabase, ['w2', 'w3'], T(4));
+    recordPushedStatus(db as AppDatabase, 'w1', 'preparing', T(5));
 
     expect({ sync: count(db, 'sync_queue'), audit: count(db, 'audit_log') }).toEqual(ledgers);
     expect(db.prepare(`SELECT * FROM orders ORDER BY id`).all()).toEqual(orders);

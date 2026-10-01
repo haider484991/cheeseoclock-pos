@@ -46,7 +46,13 @@ import {
   type WebBridgeConfig,
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
-import { isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
+import { WEBSITE_UNCONFIRMED_TTL_MS, isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
+import {
+  listUnackedImports,
+  markCancelledOnSite,
+  markWebOrderAcked,
+  recordPushedStatus,
+} from '../db/repositories/web-order-imports-repo.js';
 import { localSettingsStamp, settingsBlockFor } from './website-settings-block.js';
 import { localShopStamp, shopBlockFor } from './website-shop-block.js';
 import { onWebsiteSettingsChanged } from './website-settings-events.js';
@@ -102,11 +108,16 @@ import type {
  *      lands on the Live Orders board, print a kitchen copy, then ACK.
  *      Idempotent via the web_order_imports table — a re-poll after a
  *      half-failed ack can't double-import.
+ *   0. Before that GET: ask again for every imported order whose ack the
+ *      website has not confirmed (acked_at, migration 0046). The ack's answer
+ *      is checked, and recorded when it lands.
  *
  * Outbound (same tick):
  *   3. For every imported order whose POS status maps to a different
  *      web-facing status than we last pushed → POST .../status so the
- *      customer's tracking page moves.
+ *      customer's tracking page moves. A website that answers it cancelled
+ *      an order the till did not cancel raises the loud "website cancelled"
+ *      card (reason 'cancelled_on_site').
  *
  * Also owns "Publish menu" — serializes the active menu (categories, items,
  * modifiers, tax rates, images) and PUTs it to the site — and the cloud
@@ -129,10 +140,19 @@ const HEARTBEAT_MS = 60_000;
 /**
  * A web order older than this when first seen is cancelled, not cooked. The
  * website expires unconfirmed orders on the same clock (UNCONFIRMED_ORDER_TTL_MS
- * in apps/web/src/lib/store-status.ts); this is the till's own refusal in case
- * a site deployed before that sweep hands one over after a long outage.
+ * in apps/web/src/lib/store-status.ts, mirrored in web-order-age.ts); this is
+ * the till's own refusal in case a site deployed before that sweep hands one
+ * over after a long outage.
  */
-const MAX_IMPORT_AGE_MS = 45 * 60_000;
+const MAX_IMPORT_AGE_MS = WEBSITE_UNCONFIRMED_TTL_MS;
+/**
+ * The ack retry (retryAcks) looks back this far. An order the website has not
+ * confirmed by then is long past its 45-minute cancel: only the status push
+ * can still learn what happened to it.
+ */
+const ACK_RETRY_WINDOW_MS = 2 * 60 * 60_000;
+/** At most this many unconfirmed orders are asked about per poll (the retry stops at the first failure anyway). */
+const ACK_RETRY_BATCH = 25;
 /**
  * Scheduled cloud backups: after any attempt (success or failure) wait at
  * least this long before trying again, so a failing upload does not retry on
@@ -293,6 +313,25 @@ interface WebsiteShopHeldRecord {
 export interface BridgeConnection {
   siteUrl?: string | undefined;
   bridgeSecret?: string | undefined;
+}
+
+/** An imported order to ack: the website's id and the till's order. */
+interface AckTarget {
+  webOrderId: string;
+  posOrderId: string;
+  orderNumber: string;
+}
+
+/**
+ * How an ack (with its check) ended. 'failed': no answer or a refusal, so
+ * acked_at stays NULL and the next poll asks again.
+ */
+type AckOutcome = 'acked' | 'cancelled_on_site' | 'failed';
+
+/** The parts of an ack or status answer the bridge reads (apps/web .../orders/[id]/ack and /status). */
+interface BridgeAnswer {
+  ok?: unknown;
+  data?: { acked?: unknown; updated?: unknown; finalStatus?: unknown } | null;
 }
 
 const LAST_CLOUD_BACKUP_KEY = 'webBridge.lastCloudBackupAt';
@@ -768,7 +807,8 @@ class WebOrdersBridge {
 
   /**
    * Stop polling — called right before the app restarts for a restore, and
-   * when the person at the till chose "Close the till" (sayTillClosing).
+   * when the person at the till chose "Close the till" (sayTillClosing). The
+   * ack retry rides the poll (tick), so it stops with it.
    */
   stop(): void {
     if (this.timer) clearInterval(this.timer);
@@ -932,6 +972,15 @@ class WebOrdersBridge {
           });
         });
       }
+      // Orders already on the board whose ack the website never confirmed are
+      // asked about again: BEFORE the GET, which is what runs the website's
+      // 45-minute cancel of unconfirmed orders, and whatever the owner's
+      // switch says (orders already taken still need it). Never fatal.
+      await this.retryAcks(cfg).catch((e: unknown) => {
+        log.warn('Web order ack retry failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
       if (cfg.enabled) await this.pullNewOrders(cfg);
       // Status pushes run whether or not new orders are being accepted:
       // unticking "Accept online orders" at closing time used to freeze the
@@ -1544,16 +1593,11 @@ class WebOrdersBridge {
       | { pos_order_id: string | null; status: string; attempts: number }
       | undefined;
     if (existing?.pos_order_id) {
-      // Imported before but the ack may have failed — re-ack and move on.
+      // Imported before, and the website still hands it out as 'new': the
+      // ack never landed. Ack it again (checked, and recorded if it lands).
       const local = findOrder(db, existing.pos_order_id);
       if (local) {
-        await this.api(cfg, `/api/bridge/orders/${web.id}/ack`, {
-          method: 'POST',
-          body: JSON.stringify({
-            posOrderId: local.id,
-            posOrderNumber: local.orderNumber,
-          }),
-        }).catch(() => undefined);
+        await this.ackImported(cfg, { webOrderId: web.id, posOrderId: local.id, orderNumber: local.orderNumber });
       }
       return;
     }
@@ -1735,12 +1779,24 @@ class WebOrdersBridge {
         // 4. Onto the Live Orders board (also validates customer/address).
         sendOrderToKitchen(db, shell.id, actor);
 
+        // When the customer placed it and what the website showed them (0046):
+        // the till shows when the website would cancel it unconfirmed, and a
+        // changed total again after a restart. acked_at and alert_seen_at stay
+        // NULL — not confirmed, not seen — until the ack lands and someone looks.
         db.prepare(
           `UPDATE web_order_imports
               SET pos_order_id = ?, status = 'imported', imported_at = ?,
-                  last_pushed_status = 'accepted', updated_at = ?
+                  last_pushed_status = 'accepted', updated_at = ?,
+                  web_created_at = ?, web_total_cents = ?
             WHERE web_order_id = ?`,
-        ).run(shell.id, now, now, web.id);
+        ).run(
+          shell.id,
+          now,
+          now,
+          typeof web.createdAt === 'string' && web.createdAt ? web.createdAt : null,
+          Number.isInteger(web.totalCents) ? web.totalCents : null,
+          web.id,
+        );
         return shell;
       })();
 
@@ -1788,25 +1844,14 @@ class WebOrdersBridge {
       orderAlerts.orderReceived(received);
       this.lastImportError = null;
 
-      // 6. Ack to the site (flips 'new' → 'accepted'). Its own try: a timeout
-      //    here (shop Wi-Fi) used to land in the import catch below, and staff
-      //    got "Website order not imported — call the customer" for an order
-      //    already on the board — and re-keyed it, so it was cooked twice
-      //    (audit 2026-09-25). The next poll re-acks it (step 0 above).
-      try {
-        await this.api(cfg, `/api/bridge/orders/${web.id}/ack`, {
-          method: 'POST',
-          body: JSON.stringify({
-            posOrderId: order.id,
-            posOrderNumber: order.orderNumber,
-          }),
-        });
-      } catch (e) {
-        log.warn('Web order ack failed (imported; will re-ack next poll)', {
-          webOrderId: web.id,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
+      // 6. Ack to the site (flips 'new' → 'accepted'), its answer checked and
+      //    recorded. ackImported never throws: a timeout here (shop Wi-Fi)
+      //    used to land in the import catch below, and staff got "Website
+      //    order not imported — call the customer" for an order already on
+      //    the board — and re-keyed it, so it was cooked twice (audit
+      //    2026-09-25). An ack that did not land leaves acked_at NULL, and the
+      //    next poll asks again before its GET (retryAcks).
+      await this.ackImported(cfg, { webOrderId: web.id, posOrderId: order.id, orderNumber: order.orderNumber });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       db.prepare(
@@ -1828,13 +1873,180 @@ class WebOrdersBridge {
     }
   }
 
+  // ---- acks ---------------------------------------------------------------
+
+  /**
+   * POST the ack for an order this till imported, and CHECK the answer (it
+   * used to be sent and forgotten, so a lost ack left the order 'new' on the
+   * website until its 45-minute cancel, with nobody at the till knowing).
+   * Never throws: the order is on the board whatever the website says.
+   *   - no answer, or a refusal (not 2xx, or ok:false): 'failed', logged with
+   *     the status. acked_at stays NULL and the next poll asks again.
+   *   - acked:false: the website's order is not 'new' any more. That answer is
+   *     the same for "an earlier ack landed" and "cancelled", so
+   *     confirmNotNew finds out which.
+   *   - anything else (an older website's {data:{}} included): confirmed,
+   *     and recorded.
+   */
+  private async ackImported(cfg: WebBridgeConfig, t: AckTarget): Promise<AckOutcome> {
+    try {
+      let res: Response;
+      try {
+        res = await this.api(cfg, `/api/bridge/orders/${t.webOrderId}/ack`, {
+          method: 'POST',
+          body: JSON.stringify({ posOrderId: t.posOrderId, posOrderNumber: t.orderNumber }),
+        });
+      } catch (e) {
+        log.warn('Web order ack failed (imported; will re-ack next poll)', {
+          webOrderId: t.webOrderId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return 'failed';
+      }
+      const body = res.ok ? await readAnswer(res) : null;
+      if (!res.ok || body?.ok === false) {
+        log.warn('Web order ack refused (imported; will re-ack next poll)', {
+          webOrderId: t.webOrderId,
+          status: res.status,
+        });
+        return 'failed';
+      }
+      if (body?.data?.acked === false) return await this.confirmNotNew(cfg, t);
+      markWebOrderAcked(this.db!, t.webOrderId, nowIso());
+      return 'acked';
+    } catch (e) {
+      log.warn('Web order ack not recorded (will re-ack next poll)', {
+        webOrderId: t.webOrderId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return 'failed';
+    }
+  }
+
+  /**
+   * The ack answered acked:false. The till pushes its own status for the
+   * order — what pushStatusUpdates would send (a deleted order is
+   * 'cancelled') — and reads the status route's answer
+   * (apps/web .../orders/[id]/status/route.ts):
+   *   - updated:true, or a final status it kept (delivered, or the cancel the
+   *     till itself pushed): confirmed, and what it holds recorded;
+   *   - updated:false holding 'cancelled' that the till did not push: the
+   *     website cancelled an order the kitchen has → siteCancelled;
+   *   - 404: the website has no such order — nothing to wait for (logged);
+   *   - no answer or another refusal: 'failed', asked again next poll.
+   * The till's own status can never move the customer's tracker back.
+   */
+  private async confirmNotNew(cfg: WebBridgeConfig, t: AckTarget): Promise<AckOutcome> {
+    const db = this.db!;
+    const pushed = this.webStatusOf(t.posOrderId);
+    let res: Response;
+    try {
+      res = await this.api(cfg, `/api/bridge/orders/${t.webOrderId}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status: pushed }),
+      });
+    } catch (e) {
+      log.warn('Web order check failed (imported; will re-ack next poll)', {
+        webOrderId: t.webOrderId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return 'failed';
+    }
+    if (res.status === 404) {
+      log.warn('Website has no record of an imported order', { webOrderId: t.webOrderId, posOrder: t.orderNumber });
+      markWebOrderAcked(db, t.webOrderId, nowIso());
+      return 'acked';
+    }
+    const body = res.ok ? await readAnswer(res) : null;
+    if (!res.ok || body?.ok === false) {
+      log.warn('Web order check refused (imported; will re-ack next poll)', {
+        webOrderId: t.webOrderId,
+        status: res.status,
+      });
+      return 'failed';
+    }
+    const held = heldStatus(body, pushed);
+    if (held === 'cancelled' && pushed !== 'cancelled') {
+      this.siteCancelled(t.webOrderId, t.posOrderId);
+      return 'cancelled_on_site';
+    }
+    recordPushedStatus(db, t.webOrderId, held, nowIso());
+    return 'acked';
+  }
+
+  /** The status the website should hold for this order, by the till: a deleted order is cancelled. */
+  private webStatusOf(posOrderId: string): Exclude<WebOrderStatus, 'new'> {
+    const row = this.db!
+      .prepare(`SELECT status, deleted_at FROM orders WHERE id = ?`)
+      .get(posOrderId) as { status: OrderStatus; deleted_at: string | null } | undefined;
+    if (!row) return 'accepted';
+    return row.deleted_at ? 'cancelled' : (mapPosStatusToWeb(row.status) ?? 'accepted');
+  }
+
+  /**
+   * Ask again about every order imported in the last 2 hours that the
+   * website has not confirmed, oldest first. It runs before the poll's GET,
+   * which is what runs the website's 45-minute cancel; and it is needed at
+   * all because once the website has accepted an order its GET stops handing
+   * it back, so an ack whose answer was lost would otherwise never be put
+   * right, and the till would warn "not confirmed" for nothing. Stops at the
+   * first failure: offline, that is one call per poll, not 25 timeouts.
+   * A database error throws (the tick logs it).
+   */
+  private async retryAcks(cfg: WebBridgeConfig): Promise<void> {
+    if (!this.db) return;
+    const since = new Date(Date.now() - ACK_RETRY_WINDOW_MS).toISOString();
+    for (const t of listUnackedImports(this.db, since, ACK_RETRY_BATCH)) {
+      if ((await this.ackImported(cfg, t)) === 'failed') break;
+    }
+  }
+
+  /**
+   * The website cancelled an order the kitchen has (its 45-minute cancel of
+   * an order it never saw confirmed, or by hand) and told the customer it
+   * did not go through. Recorded once (markCancelledOnSite); the first time,
+   * every screen gets a loud card and Windows its notice: someone has to call
+   * the customer. The name and phone travel for the signed-in card only (the
+   * notice and the PIN screen never show the phone). Never throws.
+   */
+  private siteCancelled(webOrderId: string, posOrderId: string): void {
+    const db = this.db;
+    if (!db) return;
+    try {
+      if (!markCancelledOnSite(db, webOrderId, nowIso())) return;
+      const o = db
+        .prepare(`SELECT order_number, customer_name_snapshot, customer_phone_snapshot FROM orders WHERE id = ?`)
+        .get(posOrderId) as
+        | { order_number: string; customer_name_snapshot: string | null; customer_phone_snapshot: string | null }
+        | undefined;
+      log.warn('Website cancelled an order the kitchen has', { webOrderId, posOrder: o?.order_number ?? posOrderId });
+      const notice = {
+        webOrderId,
+        customerName: o?.customer_name_snapshot ?? '',
+        customerPhone: o?.customer_phone_snapshot ?? null,
+        orderNumber: o?.order_number ?? null,
+        message: 'cancelled on the website while the kitchen had it',
+        final: true,
+        reason: 'cancelled_on_site' as const,
+      };
+      notifyRenderer('web-order:import-failed', notice);
+      orderAlerts.importFailed(notice);
+    } catch (e) {
+      log.warn('Website cancel of an order not recorded', {
+        webOrderId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   // ---- outbound -----------------------------------------------------------
 
   private async pushStatusUpdates(cfg: WebBridgeConfig): Promise<void> {
     const db = this.db!;
     const rows = db
       .prepare(
-        `SELECT wi.web_order_id, wi.last_pushed_status, o.status AS pos_status, o.deleted_at AS pos_deleted_at
+        `SELECT wi.web_order_id, wi.pos_order_id, wi.last_pushed_status,
+                o.status AS pos_status, o.deleted_at AS pos_deleted_at
            FROM web_order_imports wi
            JOIN orders o ON o.id = wi.pos_order_id
           WHERE wi.status = 'imported'
@@ -1843,6 +2055,7 @@ class WebOrdersBridge {
       )
       .all() as Array<{
       web_order_id: string;
+      pos_order_id: string;
       last_pushed_status: string | null;
       pos_status: OrderStatus;
       pos_deleted_at: string | null;
@@ -1858,17 +2071,19 @@ class WebOrdersBridge {
         method: 'POST',
         body: JSON.stringify({ status: webStatus }),
       });
-      if (res.ok) {
-        // A site that says the order is already final (delivered / cancelled)
-        // answers updated:false — record what it holds so we stop pushing.
-        const body = (await res.json().catch(() => null)) as
-          | { data?: { updated?: boolean; finalStatus?: string } }
-          | null;
-        const held = body?.data?.updated === false ? body.data.finalStatus ?? webStatus : webStatus;
-        db.prepare(
-          `UPDATE web_order_imports SET last_pushed_status = ?, updated_at = ? WHERE web_order_id = ?`,
-        ).run(held, nowIso(), row.web_order_id);
+      if (!res.ok) continue;
+      // A site that says the order is already final (delivered / cancelled)
+      // answers updated:false — record what it holds so we stop pushing.
+      const held = heldStatus(await readAnswer(res), webStatus);
+      // It holds 'cancelled' and the till did not cancel it: the website
+      // cancelled an order the kitchen has. That used to be recorded
+      // silently, and nobody called the customer.
+      if (held === 'cancelled' && webStatus !== 'cancelled') {
+        this.siteCancelled(row.web_order_id, row.pos_order_id);
+        continue;
       }
+      // Any answer is also the website confirming it has the order.
+      recordPushedStatus(db, row.web_order_id, held, nowIso());
     }
   }
 
@@ -2643,6 +2858,22 @@ function deviceDisplayName(db: AppDatabase): string | null {
   } catch {
     return null;
   }
+}
+
+/** An answer's JSON body, or null when it has none or it is not JSON. Never throws. */
+async function readAnswer(res: Response): Promise<BridgeAnswer | null> {
+  try {
+    const body: unknown = await res.json();
+    return body !== null && typeof body === 'object' ? (body as BridgeAnswer) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the website holds after a status push: the final status it kept (updated:false), else the one pushed. */
+function heldStatus(body: BridgeAnswer | null, pushed: string): string {
+  const d = body?.data;
+  return d && d.updated === false && typeof d.finalStatus === 'string' && d.finalStatus ? d.finalStatus : pushed;
 }
 
 function notifyRenderer(channel: string, payload: unknown): void {

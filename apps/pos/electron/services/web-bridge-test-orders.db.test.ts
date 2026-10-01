@@ -82,5 +82,45 @@ describe.skipIf(!DatabaseSync)('the website and a deleted test order', () => {
     sent.length = 0;
     await bridge.pushStatusUpdates({});
     expect(sent).toEqual([]);
+    // The till cancelled them itself: no "website cancelled" card.
+    const { orderAlerts } = await import('./order-alerts-hub.js');
+    expect(orderAlerts.pending().failures).toEqual([]);
+  });
+
+  it('a website that already cancelled a test order the till deleted raises no "website cancelled" card', async () => {
+    const db = openMigrated();
+    const shop = await openCostingShop(db);
+    const orders = await import('../db/repositories/order-repo.js');
+    const { openShift } = await import('../db/repositories/shift-repo.js');
+    openShift(db, { openingCashCents: 0 }, CASHIER);
+    const now = new Date().toISOString();
+    const o = shop.ring([['bakedWings', 1]]);
+    orders.sendOrderToKitchen(db, o, CASHIER);
+    db.prepare(
+      `INSERT INTO web_order_imports (web_order_id, pos_order_id, status, last_pushed_status, imported_at, created_at, updated_at)
+       VALUES ('web-c', ?, 'imported', 'accepted', ?, ?, ?)`,
+    ).run(o, now, now, now);
+    orders.deleteTestOrder(
+      db,
+      { orderId: o, reason: 'Printer test', restock: null, expectStatus: 'sent_to_kitchen', ownerUserId: OWNER.userId },
+      OWNER,
+    );
+
+    const { webOrdersBridge } = await import('./web-orders-bridge.js');
+    const { orderAlerts } = await import('./order-alerts-hub.js');
+    const bridge = webOrdersBridge as unknown as BridgeInside;
+    const sent: Array<[string, unknown]> = [];
+    bridge.db = db;
+    bridge.api = async (_cfg, path, init) => {
+      sent.push([path, JSON.parse(init.body)]);
+      return { ok: true, json: async () => ({ ok: true, data: { updated: false, finalStatus: 'cancelled' } }) };
+    };
+    await bridge.pushStatusUpdates({});
+    expect(sent).toEqual([['/api/bridge/orders/web-c/status', { status: 'cancelled' }]]);
+    const row = db
+      .prepare(`SELECT last_pushed_status AS s, site_cancelled_at AS sc FROM web_order_imports WHERE web_order_id = 'web-c'`)
+      .get();
+    expect(row).toEqual({ s: 'cancelled', sc: null });
+    expect(orderAlerts.pending().failures.filter((f) => f.reason === 'cancelled_on_site')).toEqual([]);
   });
 });

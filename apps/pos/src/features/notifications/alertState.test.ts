@@ -478,3 +478,59 @@ describe('the words on the banner', () => {
     expect(describeFailure(f, false).detail).toBe('It was cancelled on the website. Sign in to see the phone number.');
   });
 });
+
+describe('the website cancelled an order the kitchen has', () => {
+  const event = {
+    webOrderId: 'w42',
+    customerName: 'Sara',
+    customerPhone: ' 0300-1234567 ',
+    orderNumber: 'CO-20261001-0042',
+    message: 'cancelled on the website while the kitchen had it',
+    final: true,
+    reason: 'cancelled_on_site' as const,
+  };
+
+  it('the event keeps its reason and order number, and the card rings like a give-up', () => {
+    const f = failureFromEvent(event, 0)!;
+    expect(f).toMatchObject({
+      webOrderId: 'w42',
+      reason: 'cancelled_on_site',
+      orderNumber: 'CO-20261001-0042',
+      customerPhone: '0300-1234567',
+      silenced: false,
+    });
+    const s = receiveFailure(EMPTY_ALERT_STATE, f, 0);
+    expect(isLoud(s)).toBe(true);
+    expect(dueRing(s, S, 0)).toBe('importFailed');
+    // Other reasons carry no order number.
+    expect(failureFromEvent({ ...event, reason: 'gave_up', orderNumber: undefined }, 0)).not.toHaveProperty('orderNumber');
+  });
+
+  it('signed out: the order number and what happened, never the phone or the name', () => {
+    const f = failureFromEvent(event, 0)!;
+    expect(describeFailure(f, false)).toEqual({
+      title: 'Website cancelled order #0042',
+      detail: 'The customer was told it did not go through, but the kitchen has it. Sign in and call them.',
+      tooltip: 'Reason: cancelled on the website while the kitchen had it',
+    });
+    expect(JSON.stringify(describeFailure(f, false))).not.toMatch(/0300|Sara/);
+  });
+
+  it('signed in: the phone to call, or "call them" without one', () => {
+    const f = failureFromEvent(event, 0)!;
+    expect(describeFailure(f, true).detail).toBe(
+      'The customer was told it did not go through, but the kitchen has it. Call 0300-1234567.',
+    );
+    const noPhone = failureFromEvent({ ...event, customerPhone: null }, 0)!;
+    expect(describeFailure(noPhone, true)).toMatchObject({
+      title: 'Website cancelled order #0042',
+      detail: 'The customer was told it did not go through, but the kitchen has it. Call them.',
+    });
+  });
+
+  it('without an order number the title still names no one', () => {
+    const f = failureFromEvent({ ...event, orderNumber: null }, 0)!;
+    expect(describeFailure(f, false).title).toBe('Website cancelled an order');
+    expect(describeFailure(f, true).title).toBe('Website cancelled an order');
+  });
+});

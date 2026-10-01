@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { PICKUP_DISCOUNT_PERCENT } from '@cheeseoclock/shared-types';
-import { isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WEBSITE_UNCONFIRMED_TTL_MS, isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
 
 const NOW = Date.parse('2026-09-16T18:00:00.000Z');
 const MAX = 45 * 60_000;
@@ -35,5 +38,16 @@ describe('pickupPercentOf', () => {
   it('falls back to the till constant for a site that sends no discount, and caps nonsense', () => {
     expect(pickupPercentOf({ fulfilment: 'pickup', subtotalCents: 200_000 })).toBe(PICKUP_DISCOUNT_PERCENT);
     expect(pickupPercentOf({ fulfilment: 'pickup', subtotalCents: 100, discountCents: 100 })).toBe(50);
+  });
+});
+
+describe('WEBSITE_UNCONFIRMED_TTL_MS', () => {
+  it('is the website’s own 45-minute cancel of unconfirmed orders (apps/web store-status.ts)', () => {
+    expect(WEBSITE_UNCONFIRMED_TTL_MS).toBe(45 * 60_000);
+    const site = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../../web/src/lib/store-status.ts'),
+      'utf8',
+    );
+    expect(site).toMatch(/export const UNCONFIRMED_ORDER_TTL_MS = 45 \* 60_000;/);
   });
 });

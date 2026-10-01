@@ -11,7 +11,8 @@ import {
 
 /**
  * The till's list of website orders nobody has looked at yet, and website
- * orders that did not come in.
+ * orders that did not come in (or that the website cancelled while the
+ * kitchen had them).
  *
  * It lives in the main process, next to the website bridge, because the
  * bridge starts before the screen does: an order imported in the first
@@ -37,12 +38,14 @@ export interface ReceivedWebOrder {
   totalMismatch?: { webTotalCents: number; tillTotalCents: number };
 }
 
-/** What the website bridge sends when a web order could not be imported. */
+/** What the website bridge sends when a web order could not be imported, or the website cancelled one the kitchen has. */
 export interface FailedWebOrder {
   webOrderId: string;
   customerName: string;
   message: string;
   customerPhone?: string | null;
+  /** The till's order number (cancelled_on_site only: that order is on the board). */
+  orderNumber?: string | null;
   final?: boolean;
   reason?: ImportFailureReason;
 }
@@ -128,20 +131,24 @@ export class OrderAlertsHub {
   }
 
   /**
-   * A website order did not come in. Only a final failure is kept: while the
-   * till is still retrying, telling staff to "call the customer" is how an
-   * order got cooked twice (audit 2026-09-25). One card per website order.
+   * A website order did not come in, or the website cancelled one the
+   * kitchen has (cancelled_on_site, loud like a give-up). Only a final
+   * failure is kept: while the till is still retrying, telling staff to
+   * "call the customer" is how an order got cooked twice (audit 2026-09-25).
+   * One card per website order.
    */
   importFailed(p: FailedWebOrder): void {
     try {
       if (!p || typeof p.webOrderId !== 'string' || !p.webOrderId || p.final !== true) return;
       if (this.failures.has(p.webOrderId) || this.seen.has(`f:${p.webOrderId}`)) return;
       const reason: ImportFailureReason =
-        p.reason === 'gave_up' || p.reason === 'stale' ? p.reason : 'error';
+        p.reason === 'gave_up' || p.reason === 'stale' || p.reason === 'cancelled_on_site' ? p.reason : 'error';
+      const orderNumber = typeof p.orderNumber === 'string' && p.orderNumber ? p.orderNumber : null;
       this.failures.set(p.webOrderId, {
         webOrderId: p.webOrderId,
         customerName: text(p.customerName),
         customerPhone: typeof p.customerPhone === 'string' && p.customerPhone.trim() ? p.customerPhone.trim() : null,
+        ...(orderNumber ? { orderNumber } : {}),
         message: text(p.message),
         reason,
         // Came in while the till was off: the website already told the
@@ -213,13 +220,39 @@ export class OrderAlertsHub {
     if (loudFailures.length > 0) {
       const first = loudFailures[0]!;
       const also = orders.length > 0 ? ` Also ${orders.length} new online order${orders.length === 1 ? '' : 's'}.` : '';
+      // The website cancelled orders the kitchen has, and orders that did not
+      // come in: the first one's kind leads, the other kind is counted.
+      const cancels = loudFailures.filter((f) => f.reason === 'cancelled_on_site');
+      const notIn = loudFailures.length - cancels.length;
+      if (first.reason === 'cancelled_on_site') {
+        const alsoNotIn = notIn > 0 ? ` Also ${notIn} website order${notIn === 1 ? '' : 's'} did not come in.` : '';
+        return {
+          kind: 'importFailed',
+          // Never the phone: the notice sits in Action Center.
+          title:
+            cancels.length > 1
+              ? `${cancels.length} website orders were cancelled on the website`
+              : first.orderNumber
+                ? `Website cancelled order ${shortOrderNumber(first.orderNumber)}`
+                : 'Website cancelled an order',
+          body: `${
+            cancels.length > 1
+              ? 'The kitchen has them. Open the till and call the customers.'
+              : 'The kitchen has it. Open the till and call the customer.'
+          }${alsoNotIn}${also}`,
+        };
+      }
+      const alsoCancelled =
+        cancels.length > 0
+          ? ` Also ${cancels.length} website order${cancels.length === 1 ? ' was' : 's were'} cancelled on the website.`
+          : '';
       return {
         kind: 'importFailed',
         title:
-          loudFailures.length === 1
+          notIn === 1
             ? `Website order from ${first.customerName || 'a customer'} did not come in`
-            : `${loudFailures.length} website orders did not come in`,
-        body: `Open the till and call the customer.${also}`,
+            : `${notIn} website orders did not come in`,
+        body: `Open the till and call the customer.${alsoCancelled}${also}`,
       };
     }
     if (orders.length === 0) return null;
