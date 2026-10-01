@@ -12,7 +12,6 @@ import { DEFAULT_FACTS, factsFromBlock, type CopyFacts, type SiteFacts } from '.
 import { resolveHome, type HomeView } from './home-lineup';
 import { DEFAULT_SHOP_FACTS, shopFactsFromBlock, type ShopFacts } from './shop-facts';
 import { taxBpsOf } from './tax-words';
-import { withoutHiddenItems } from './website-hidden-items';
 
 /**
  * What the owner stored with the menu (site_menu.menu_json), for the server:
@@ -127,8 +126,7 @@ function menuFactsOf(rawCategories: unknown, rawPhotos: unknown): MenuFacts | nu
   if (p && typeof p === 'object' && !Array.isArray(p)) {
     for (const [id, v] of Object.entries(p as Record<string, unknown>)) if (typeof v === 'string') photos[id] = v;
   }
-  // Without the items the website hides (lib/website-hidden-items): no page names or prices one.
-  return withoutHiddenItems({ categories: value as PublishedMenuCategory[], photos });
+  return { categories: value as PublishedMenuCategory[], photos };
 }
 
 /**
