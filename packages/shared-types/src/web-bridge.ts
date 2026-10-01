@@ -36,6 +36,12 @@ export interface PublishedMenuItem {
    * older till sends. See "SELLING ON THE WEBSITE" below.
    */
   pickupOnly?: boolean;
+  /**
+   * The till never discounts it (Menu → Categories → Discounts; Value Deals
+   * by its name). Sent ONLY as `true`, so a menu with nothing marked is
+   * byte-for-byte today's. See "NO DISCOUNT ON VALUE DEALS" below.
+   */
+  noDiscount?: boolean;
 }
 
 /**
@@ -345,6 +351,61 @@ export interface PublishedMenu {
 //   - Nothing else in the item changes; with every item 'on' and every
 //     category on (the defaults after migration 0045) the published menu is
 //     byte-for-byte today's.
+
+// ---------------------------------------------------------------------------
+// v0.7.34 — NO DISCOUNT ON VALUE DEALS (owner, 2026-10-02: "Deals never get
+// any discount"). The contract between the till and the website.
+// ---------------------------------------------------------------------------
+//
+// THE MARK. The till marks items no discount by their category (Menu →
+// Categories → Discounts, owner only; a category named for deals or combos,
+// like Value Deals, is marked by its name until the owner sets it). A till of
+// v0.7.34 publishes each marked item with `noDiscount: true`
+// (PublishedMenuItem); the key is absent on every other item and never sent
+// on a delivery-charge item. So a menu with nothing marked, and every
+// publish from a till up to v0.7.33, is byte-for-byte today's.
+//
+// WHAT THE WEBSITE DOES, on the SERVER, from the menu it stores (never from
+// the browser):
+//   - keeps the key: its item schema accepts `noDiscount: boolean`
+//     (optional, no default). Today's strips it, which is why the website
+//     deploys first;
+//   - works a PICK-UP's % on the lines whose item is not marked: their sum
+//     is the base, the discount is rounded once on it and split over them by
+//     weight, and a marked line takes no share (it is taxed on its full
+//     price). The subtotal is still every line. Nothing marked = today's
+//     numbers exactly; marked lines only = no discount;
+//   - copies `noDiscount: true` onto each stored order line (items_json,
+//     WebOrderItem) whose item is marked, on a pick-up AND a delivery, as the
+//     line's LAST key, so an unmarked line's JSON is today's. The
+//     delivery-charge line never carries it;
+//   - answers `noDiscountItems: true` from both PUT routes
+//     (PublishMenuResult), next to `websiteMessages`;
+//   - says NOT_ON_VALUE_DEALS where it applies: the /menu pick-up chip while
+//     the menu has a mark, the pick-up totals and checkout while the cart has
+//     one, the tracker of an order with a flagged line. The tracker's % is
+//     webOrderPickupPercent's.
+//
+// WHAT THE TILL DOES (web-orders-bridge):
+//   - reads the % back with webOrderPickupPercent(web), PICKUP_DISCOUNT_PERCENT
+//     when null: the discount ÷ the lines it was worked on. Never discount ÷
+//     subtotal, which reads Rs 150 off a Rs 1,500 pizza next to a Rs 2,600
+//     deal as 4%;
+//   - a pick-up with ANY flagged line follows the website: its lines take the
+//     website's flags and the web discount is frozen to leave them alone.
+//     Otherwise (a delivery, nothing marked, an older website) its lines take
+//     the till's own category and the web discount covers every line, as
+//     that website priced it. Either way the till takes off exactly what the
+//     customer was shown;
+//   - a pick-up of marked lines only reads 0%: no discount row;
+//   - when its publish carried a mark and the answer lacks `noDiscountItems`,
+//     it says the website is older and needs its update.
+//
+// DEPLOY ORDER. The website first (a push to main deploys it), then the
+// tills. Until a till of v0.7.34 publishes marks the website is exactly as
+// today. A till rolled back below v0.7.34 reads a flagged pick-up as
+// discount ÷ subtotal ('total changed'): Publish on it once, which sends the
+// menu with no marks.
 
 // ---------------------------------------------------------------------------
 // THE SHOP BLOCK (sweep B2 + B4, after v0.7.30) — the shop's name, numbers,
@@ -720,6 +781,13 @@ export interface PublishMenuResult extends WebsiteShopAnswer {
    * updated sends them again.
    */
   websiteMessages?: boolean;
+  /**
+   * true from a website of v0.7.34 on (both PUT routes): it keeps each
+   * item's `noDiscount` and prices pick-ups without those items (NO DISCOUNT
+   * ON VALUE DEALS). Absent = an older website, which strips the key while
+   * still answering 'stored'.
+   */
+  noDiscountItems?: boolean;
 }
 
 /** A fee item the block's areas need, as the till's menu has it, with the category it sits in (PUT /api/bridge/settings). */
@@ -857,6 +925,12 @@ export interface WebOrderItem {
     priceDeltaCents: number;
   }>;
   notes: string | null;
+  /**
+   * Set by the website SERVER from the stored menu item on every order, never
+   * from the browser; sent only as `true`. On a pick-up, the website gave this
+   * line no share of the pick-up %. See "NO DISCOUNT ON VALUE DEALS".
+   */
+  noDiscount?: boolean;
 }
 
 /**
@@ -876,6 +950,43 @@ export const PICKUP_DISCOUNT_PERCENT = 10;
 
 /** What a till that offers pickup but sends no percent (v0.7.0) applies. */
 export const LEGACY_PICKUP_DISCOUNT_PERCENT = 10;
+
+/**
+ * The words for the items no discount comes off (owner, 2026-10-02: "Yes,
+ * say 'not on value deals'"). The website, the till, the bill and the
+ * printed coupon all say this one phrase, never one built from category
+ * names. See "NO DISCOUNT ON VALUE DEALS".
+ */
+export const NOT_ON_VALUE_DEALS = 'not on value deals';
+
+/**
+ * The pick-up percent the customer was shown, read back from the order the
+ * site sent: the discount ÷ the lines it was worked on (the subtotal less
+ * the lines marked `noDiscount`, NO DISCOUNT ON VALUE DEALS). 0 for a
+ * delivery, and for a pick-up of marked lines only. null when the order
+ * carries no discount (a site that predates the field) or no subtotal: the
+ * caller applies PICKUP_DISCOUNT_PERCENT, as before. Kept to 0–50%. With no
+ * marked line this is exactly the till's v0.7.33 pickupPercentOf (discount ÷
+ * subtotal), so every order from an older site reads as it did.
+ */
+export function webOrderPickupPercent(o: {
+  fulfilment?: string;
+  discountCents?: number;
+  subtotalCents: number;
+  items?: ReadonlyArray<{ unitPriceCents: number; quantity: number; noDiscount?: boolean }>;
+}): number | null {
+  if (o.fulfilment !== 'pickup') return 0;
+  if (typeof o.discountCents !== 'number' || !(o.subtotalCents > 0)) return null;
+  let leftOut = 0;
+  for (const line of o.items ?? []) if (line.noDiscount === true) leftOut += line.unitPriceCents * line.quantity;
+  const base = o.subtotalCents - leftOut;
+  if (!(base > 0)) return 0;
+  const pct = Math.round((o.discountCents * 100) / base);
+  // 50 = WEBSITE_PICKUP_MAX_PERCENT, written out because shop-settings.ts
+  // imports this file (importing it back would be a cycle at load time);
+  // apps/web pickup-percent.test.ts keeps the two equal.
+  return Math.max(0, Math.min(50, pct));
+}
 
 /**
  * Capabilities a till announces in its heartbeat (PUT /api/bridge/status).
