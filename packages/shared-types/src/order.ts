@@ -122,6 +122,14 @@ export interface OrderItem {
   taxCategoryId: UUID;
   notes: string | null;
   kitchenStatus: KitchenStatus;
+  /**
+   * Never discounted (migration 0047 order_items.no_discount): a snapshot
+   * taken when the line was added — its category's answer then
+   * (categoryNeverDiscounted), or the website's own flag on a web line; never
+   * on a delivery charge. A later change to the category leaves it as it is.
+   * Absent / false on every line sold before 0.7.34.
+   */
+  noDiscount?: boolean;
 }
 
 export interface OrderItemModifier {

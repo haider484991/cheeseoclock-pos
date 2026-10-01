@@ -9,6 +9,7 @@ import { getOrderStockStatus, settleOrderStock } from './order-stock-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
 import { skipFbrForOrder, touchedFbrProduction } from './fbr-queue-repo.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from './modifier-repo.js';
+import { noDiscountOf } from './category-repo.js';
 import {
   buildOrderHistoryWhere,
   historyPage,
@@ -61,6 +62,7 @@ import {
 import {
   COC_ID_NAMESPACE,
   FOODPANDA_ORDER_CODE_MAX,
+  categoryNeverDiscounted,
   deliveryChargeItemName,
   isDeliveryChargeLine,
   isDeliveryChargeMenuItem,
@@ -1390,6 +1392,14 @@ export interface AddItemInput {
    * areas has just moved carries the old fee's item). Food never does.
    */
   allowSwitchedOffDeliveryCharge?: boolean;
+  /**
+   * BRIDGE-ONLY, like allowSwitchedOffDeliveryCharge: the website's own
+   * "never discounted" flag on this line, which wins over the till's
+   * category (the customer was priced by it). Absent = the category's answer
+   * now. A delivery charge ignores it (always 0). orders:addItem never
+   * passes it, so the renderer can't set it.
+   */
+  noDiscount?: boolean;
 }
 
 /**
@@ -1445,8 +1455,11 @@ export function addOrderItem(
 
     const itemRow = db
       .prepare(
-        `SELECT id, name, base_price_cents, prep_station, tax_category_id, is_active
-           FROM menu_items WHERE id = ? AND deleted_at IS NULL`,
+        `SELECT mi.id, mi.name, mi.base_price_cents, mi.prep_station, mi.tax_category_id, mi.is_active,
+                c.name AS category_name, c.no_discount AS category_no_discount
+           FROM menu_items mi
+      LEFT JOIN categories c ON c.id = mi.category_id
+          WHERE mi.id = ? AND mi.deleted_at IS NULL`,
       )
       .get(input.menuItemId) as
       | {
@@ -1456,6 +1469,8 @@ export function addOrderItem(
           prep_station: PrepStation;
           tax_category_id: string;
           is_active: number;
+          category_name: string | null;
+          category_no_discount: unknown;
         }
       | undefined;
     // A delivery charge (an area's fee item, or named like one: Settings → Delivery areas).
@@ -1471,6 +1486,13 @@ export function addOrderItem(
     // stored order uses (isDeliveryChargeLine): an item an older till renamed still reads as a charge.
     const soldAs =
       isFee && !isDeliveryChargeLine({ menuItemName: itemRow.name }) ? deliveryChargeItemName(itemRow.base_price_cents) : itemRow.name;
+    // Never discounted (0047), frozen on the line like its price: the category's answer now (what the
+    // owner set, else its name), or the website's own flag (bridge only). A delivery charge never is:
+    // whether a discount comes off it is the discount's own rule (alsoOffDeliveryCharge).
+    const noDiscount = isFee
+      ? false
+      : (input.noDiscount ??
+        categoryNeverDiscounted({ name: itemRow.category_name ?? '', noDiscount: noDiscountOf(itemRow.category_no_discount) }));
 
     const taxRow = db
       .prepare(`SELECT rate_bps FROM tax_categories WHERE id = ? AND deleted_at IS NULL`)
@@ -1522,15 +1544,16 @@ export function addOrderItem(
       taxCategoryId: itemRow.tax_category_id as OrderItem['taxCategoryId'],
       notes: input.notes ?? null,
       kitchenStatus: 'pending',
+      noDiscount,
     };
 
     db.prepare(
       `INSERT INTO order_items
          (id, order_id, menu_item_id, menu_item_name, combo_id, parent_order_item_id,
           quantity, unit_price_cents, line_total_cents, tax_category_id, tax_rate_bps_snapshot,
-          prep_station_snapshot, notes, kitchen_status,
+          prep_station_snapshot, notes, kitchen_status, no_discount,
           created_at, updated_at, device_id, version)
-       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, 1)`,
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1)`,
     ).run(
       itemId,
       input.orderId,
@@ -1544,6 +1567,7 @@ export function addOrderItem(
       rateBps,
       itemRow.prep_station,
       input.notes ?? null,
+      noDiscount ? 1 : 0,
       now,
       now,
       actor.deviceId,
@@ -2998,7 +3022,7 @@ export function getOrderSnapshot(
       `SELECT oi.id, oi.order_id, oi.menu_item_id, oi.menu_item_name, oi.combo_id,
               oi.parent_order_item_id, oi.quantity, oi.unit_price_cents, oi.line_total_cents,
               oi.tax_category_id, oi.tax_rate_bps_snapshot, oi.prep_station_snapshot,
-              oi.notes, oi.kitchen_status, oi.created_at, oi.updated_at, oi.device_id, oi.version,
+              oi.notes, oi.kitchen_status, oi.no_discount, oi.created_at, oi.updated_at, oi.device_id, oi.version,
               c.name AS category_name
          FROM order_items oi
     LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
@@ -3020,6 +3044,7 @@ export function getOrderSnapshot(
     prep_station_snapshot: PrepStation;
     notes: string | null;
     kitchen_status: OrderItem['kitchenStatus'];
+    no_discount: number;
     category_name: string | null;
   }>;
 
@@ -3069,6 +3094,8 @@ export function getOrderSnapshot(
     taxRateBps: r.tax_rate_bps_snapshot ?? 0,
     notes: r.notes,
     kitchenStatus: r.kitchen_status,
+    // The line's own snapshot (0047), never worked out again from the category it is in today.
+    noDiscount: r.no_discount === 1,
     menuItemName: r.menu_item_name,
     categoryName: r.category_name ?? '',
     prepStation: r.prep_station_snapshot,

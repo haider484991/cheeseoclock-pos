@@ -294,7 +294,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // Only the fields the contract names. `unitPriceOverrideCents` and
     // `parentOrderItemId` exist for a future server-side combo expander and
     // must never be accepted from the renderer — a free item with a clean
-    // audit row is one DevTools call away otherwise.
+    // audit row is one DevTools call away otherwise. `noDiscount` is the web
+    // bridge's alone: here the line always takes its category's answer.
     const { orderId, menuItemId, quantity, modifierIds, notes } = payload;
     addOrderItem(
       ctx.db,

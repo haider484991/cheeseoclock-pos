@@ -32,8 +32,11 @@ function rowToCategory(row: Row): Category {
   };
 }
 
-/** Never discounted as stored (migration 0047): 1 = yes, 0 = no; NULL, or a value this version does not know, = by its name. */
-function noDiscountOf(raw: unknown): boolean | null {
+/**
+ * Never discounted as stored (migration 0047): 1 = yes, 0 = no; NULL, or a value this version does not know, = by its name.
+ * Also read by order-repo addOrderItem, which snapshots the category's answer onto each new line.
+ */
+export function noDiscountOf(raw: unknown): boolean | null {
   return raw === 1 ? true : raw === 0 ? false : null;
 }
 
