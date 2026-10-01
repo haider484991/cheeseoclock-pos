@@ -61,8 +61,9 @@ export function UpdateBanner() {
 
   const isReady = state.kind === 'ready';
 
+  // z-[115]: above the signed-in note at the bottom left (AlertBanner, z-[110]), so "Restart now" is never covered.
   return (
-    <div className="fixed bottom-4 left-1/2 z-[100] -translate-x-1/2 animate-fade-in">
+    <div className="fixed bottom-4 left-1/2 z-[115] -translate-x-1/2 animate-fade-in">
       <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-amber-50 to-amber-100/80 px-4 py-3 shadow-soft-lg ring-1 ring-amber-200 backdrop-blur-md dark:from-amber-950 dark:to-amber-900/60 dark:ring-amber-800">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-lift">
           {isReady ? <RefreshCcw className="h-5 w-5" /> : <Download className="h-5 w-5 animate-pulse" />}

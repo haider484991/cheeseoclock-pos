@@ -15,8 +15,9 @@ import { ipc, onCloseTillRequested } from '../../ipc/client';
  *
  * Its own store, not askConfirm: a second question there answers an open
  * one "No", it sits under StepInHold, and it has no id to answer the till
- * with. It sits above the toasts and the update banner (z-100) and under the
- * new-order banner (z-110), so a new order still shows over it.
+ * with. It sits above the toasts (z-100) and under the new-order banner
+ * (z-110), so a new order still shows over it. The update banner (z-115) stays
+ * on top: "Restart now" quits the till, which needs no question.
  */
 
 export const CLOSE_TILL_TITLE = 'Close the till?';
