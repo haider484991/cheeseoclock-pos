@@ -10,13 +10,15 @@ import { ipc, onAlertWatchChanged } from '../../ipc/client';
  */
 export const ALERT_WATCH_KEY = ['alerts', 'watch'] as const;
 
-/** Asked again this often; 'alerts:watch-changed' asks sooner. */
-const WATCH_EVERY_MS = 30_000;
+/**
+ * Asked again this often, by OrderAlerts (useAlertWatch: mounted once at the
+ * root, the one poller); 'alerts:watch-changed' asks sooner.
+ */
+export const WATCH_EVERY_MS = 30_000;
 
 const watchQuery = {
   queryKey: ALERT_WATCH_KEY,
   queryFn: () => ipc.alerts.getWatch(),
-  refetchInterval: WATCH_EVERY_MS,
   retry: 1,
 };
 
@@ -26,10 +28,10 @@ function useAlertWatchLive(): void {
   useEffect(() => onAlertWatchChanged(() => void qc.invalidateQueries({ queryKey: ALERT_WATCH_KEY })), [qc]);
 }
 
-/** The whole watch: the PIN screen's reminders. */
+/** The whole watch, polled: the PIN screen's reminders (OrderAlerts only). */
 export function useAlertWatch() {
   useAlertWatchLive();
-  return useQuery(watchQuery);
+  return useQuery({ ...watchQuery, refetchInterval: WATCH_EVERY_MS });
 }
 
 const selectWebOrders = (w: AlertWatch): WebOrdersPauseView => w.webOrders;
@@ -37,8 +39,9 @@ const selectWebOrders = (w: AlertWatch): WebOrdersPauseView => w.webOrders;
 /**
  * Whether website orders are paused on this till because no shift is open:
  * the PIN screen, the no-shift banner and the shift pill. The same entry as
- * useAlertWatch, so no second read. Nothing (undefined) before the till has
- * answered and when it could not answer: a pause is only ever shown on a yes.
+ * useAlertWatch, which keeps it fresh, so no second poll. Nothing
+ * (undefined) before the till has answered and when it could not answer: a
+ * pause is only ever shown on a yes.
  */
 export function useWebOrdersPause(): WebOrdersPauseView | undefined {
   useAlertWatchLive();

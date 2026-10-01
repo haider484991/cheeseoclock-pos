@@ -170,6 +170,7 @@ describe('the PIN screen says "Sign in", like its own button', () => {
         renderToStaticMarkup(
           <AlertBanner
             state={state}
+            notes={[]}
             loggedIn={loggedIn}
             canView={loggedIn}
             compact={false}

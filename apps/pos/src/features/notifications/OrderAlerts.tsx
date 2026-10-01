@@ -34,8 +34,11 @@ import {
 } from './eventTones';
 import { soundForEvent } from './tones';
 import { useAlertSoundSettings } from './useAlertSoundSettings';
+import { ALERT_WATCH_KEY, useAlertWatch } from './useAlertWatch';
 import { boardUnusedText, describeReminders } from './waitingReminders';
+import { notesSignedIn, planWatchTone, watchNotes, type WatchNote } from './watchNotes';
 import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
+import { orderTimeLabel } from '../orders/historyFilters';
 
 /** While something is on the banner, check with the main process this often. */
 const SYNC_EVERY_MS = 5_000;
@@ -111,9 +114,17 @@ function soundOffText(s: AlertSoundSettings): string {
  * Mounted once at the root, next to the update banner, so it works on the
  * PIN screen too: a website order that arrives while nobody is logged in
  * still rings and shows, and anyone can tap Seen (like a doorbell). Printer,
- * low-stock and waiting sounds play only with someone logged in, because
- * the notes that say why they rang are on the logged-in screen — a sound
- * never plays without something on screen saying why.
+ * low-stock and the signed-in waiting sounds play only with someone logged
+ * in, because the notes that say why they rang are on the logged-in screen
+ * — a sound never plays without something on screen saying why.
+ *
+ * It is also the one poller of the watch (alerts:getWatch, every 30 s), and
+ * the banner shows its notes (watchNotes.ts). With nobody signed in (a held
+ * step-in counts), the PIN screen keeps a note up for a kitchen ticket that
+ * did not print, for orders waiting too long and for a website order the
+ * website has not confirmed, and beeps again every 5 minutes until someone
+ * signs in; Seen does not stop them, dealing with them does. Signed in, only
+ * the not-confirmed note shows, beeping once per order.
  */
 export function OrderAlerts() {
   return (
@@ -135,6 +146,8 @@ function OrderAlertsInner() {
   const soundsReady = settled || waitedOut;
   const user = useSessionStore((s) => s.user);
   const loggedIn = user !== null;
+  // For the watch's notes a held step-in is signed out: its guarded reads are refused.
+  const signedIn = notesSignedIn(user);
   const canView = useSessionStore((s) => s.can('order.create'));
   const state = useAlertStore((s) => s.state);
   const { toast } = useToast();
@@ -281,13 +294,18 @@ function OrderAlertsInner() {
           });
           // Logged out, the banner is the only place that can say the kitchen
           // has no ticket — once the till has stopped retrying (eventTones.ts).
-          if (effect.ticketFailedOrderId) alerts.markTicketFailed(effect.ticketFailedOrderId);
+          // The PIN screen's "did not print" note reads the watch now, not
+          // on its next round.
+          if (effect.ticketFailedOrderId) {
+            alerts.markTicketFailed(effect.ticketFailedOrderId);
+            void qc.invalidateQueries({ queryKey: ALERT_WATCH_KEY });
+          }
           if (!effect.tone || !readyRef.current) return;
           lastPrinterTone.current = now;
           player.play('printer', s.volume);
         }),
       ),
-    [player],
+    [player, qc],
   );
 
   const lastLowStockTone = useRef(0);
@@ -414,13 +432,70 @@ function OrderAlertsInner() {
     };
   }, [loggedIn, canView, qc, toast, player]);
 
-  const compact = usePopupOpen(hasPending);
+  // The watch (alerts:getWatch): kitchen tickets that did not print, orders
+  // waiting too long and website orders not confirmed, as notes on the
+  // banner. A sign-in or sign-out reads it again, and until that answer is in
+  // only the not-confirmed note shows and nothing beeps: a ticket reprinted
+  // or an order started while signed in must not beep on the way out.
+  const watch = useAlertWatch();
+  const [notes, setNotes] = useState<WatchNote[]>([]);
+  const lastWatchTone = useRef(0);
+  const announced = useRef<Set<string>>(new Set());
+  const prevSignedIn = useRef(signedIn);
+  const signedInChangedAt = useRef(0);
+  useEffect(() => {
+    if (prevSignedIn.current === signedIn) return;
+    prevSignedIn.current = signedIn;
+    signedInChangedAt.current = Date.now();
+    void qc.invalidateQueries({ queryKey: ALERT_WATCH_KEY });
+  }, [signedIn, qc]);
+  useEffect(() => {
+    const data = watch.data;
+    if (!data) return;
+    try {
+      const now = Date.now();
+      const fresh = watch.dataUpdatedAt >= signedInChangedAt.current;
+      // The new-order row says it too, while the order rings.
+      for (const t of data.ticketsNotPrinted) alerts.markTicketFailed(t.orderId);
+      const next = watchNotes(data, {
+        signedIn: signedIn || !fresh,
+        includeCounter: settingsRef.current.waitingIncludesCounter,
+        ringing: new Set(alerts.getState().orders.map((o) => o.orderId)),
+        now,
+        formatTime: (iso) => orderTimeLabel(iso, new Date(now)),
+      });
+      setNotes(next);
+      // The saved sounds are not in yet: nothing is counted as heard, the next round beeps.
+      if (!fresh || !readyRef.current) return;
+      const s = settingsRef.current;
+      const plan = planWatchTone(next, {
+        signedIn,
+        settings: s,
+        now,
+        lastToneAt: lastWatchTone.current,
+        announced: announced.current,
+        chimeRinging: isLoud(alerts.getState()),
+      });
+      const shown = new Set(next.flatMap((n) => n.keys));
+      announced.current = new Set([...[...announced.current].filter((k) => shown.has(k)), ...plan.announce]);
+      if (plan.sound) {
+        lastWatchTone.current = now;
+        player.play(plan.sound, s.volume);
+      }
+    } catch (e) {
+      warnOnce('Order alerts: the watch failed', e);
+    }
+  }, [watch.data, watch.dataUpdatedAt, signedIn, player]);
+
+  // A note alone also shrinks the banner while a popup is open (it would cover a payment).
+  const compact = usePopupOpen(hasPending || notes.length > 0);
   const offText = loaded && newOrderSoundIsOff(settings) ? soundOffText(settings) : '';
 
   return (
     <>
       <AlertBanner
         state={state}
+        notes={notes}
         loggedIn={loggedIn}
         canView={loggedIn && canView}
         compact={compact}

@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { OrderSource, OrderStatus } from '@cheeseoclock/shared-types';
+import { DEFAULT_KITCHEN_TIMING, type OrderSource, type OrderStatus, type WatchOrder } from '@cheeseoclock/shared-types';
 import {
   BOARD_UNUSED_COUNT,
   NOT_DONE_MIN,
   NOT_STARTED_MIN,
+  PIN_REMIND_EVERY_MS,
   REMIND_WINDOW_MIN,
   describeReminders,
+  describeSignedOutReminders,
   dueWaitingReminders,
+  signedOutDue,
+  waitingRuleText,
   type WaitingOrder,
 } from './waitingReminders';
 
@@ -112,4 +116,80 @@ describe('describeReminders', () => {
     expect(text.title).toBe('3 orders are waiting too long');
     expect(text.description).toBe('not started: #0040 · over 30 min: #0041, #0042. Check them on Live Orders.');
   });
+});
+
+// ---------------------------------------------------------------------------
+// The PIN screen (nobody signed in): from the watch's minutes, for as long as
+// an order is late.
+
+function w(id: string, status: WatchOrder['status'], minutes: number, source: OrderSource = 'web'): WatchOrder {
+  return { orderId: id, orderNumber: `CO-20260926-${id.padStart(4, '0')}`, status, source, minutes };
+}
+const TIMING = { notStartedMin: NOT_STARTED_MIN, notDoneMin: NOT_DONE_MIN };
+const signedOut = (orders: WatchOrder[], opts: Partial<{ includeCounter: boolean; ringing: Set<string> }> = {}) =>
+  signedOutDue(orders, { includeCounter: false, ringing: none, timing: TIMING, ...opts });
+
+describe('signedOutDue (the PIN screen)', () => {
+  it('due at notStartedMin in New and at notDoneMin once started, with no 10-minute cut-off', () => {
+    expect(signedOut([w('1', 'sent_to_kitchen', NOT_STARTED_MIN - 1)]).due).toEqual([]);
+    expect(signedOut([w('1', 'sent_to_kitchen', NOT_STARTED_MIN)]).due).toEqual([
+      { key: '1:10', orderId: '1', orderNumber: 'CO-20260926-0001', kind: 'notStarted', minutes: NOT_STARTED_MIN },
+    ]);
+    expect(signedOut([w('2', 'preparing', NOT_DONE_MIN - 1)]).due).toEqual([]);
+    expect(signedOut([w('2', 'preparing', NOT_DONE_MIN)]).due.map((d) => [d.key, d.kind])).toEqual([['2:30', 'notDone']]);
+    // Long past the signed-in reminder's window, still due.
+    expect(signedOut([w('1', 'sent_to_kitchen', NOT_STARTED_MIN + REMIND_WINDOW_MIN + 60)]).due).toHaveLength(1);
+    expect(signedOut([w('3', 'ready', 170)]).due.map((d) => d.key)).toEqual(['3:30']);
+  });
+
+  it('one reminder per order: still in New after half an hour is "not started", under the same key', () => {
+    const r = signedOut([w('1', 'sent_to_kitchen', 45)]).due;
+    expect(r.map((d) => [d.key, d.kind, d.minutes])).toEqual([['1:10', 'notStarted', 45]]);
+  });
+
+  it('leaves out orders still ringing as a new online order, and counter orders unless the setting says so', () => {
+    expect(signedOut([w('1', 'sent_to_kitchen', 12)], { ringing: new Set(['1']) }).due).toEqual([]);
+    expect(signedOut([w('1', 'sent_to_kitchen', 12, 'pos')]).due).toEqual([]);
+    expect(signedOut([w('1', 'sent_to_kitchen', 12, 'pos')], { includeCounter: true }).due).toHaveLength(1);
+  });
+
+  it('a board nobody moves along stays quiet here too', () => {
+    const stuck = Array.from({ length: BOARD_UNUSED_COUNT }, (_, i) => w(String(i), 'sent_to_kitchen', 25 + i));
+    expect(signedOut([...stuck, w('99', 'preparing', 40)])).toEqual({ due: [], boardUnused: true });
+    expect(signedOut(stuck.slice(1)).boardUnused).toBe(false);
+  });
+
+  it('the owner’s minutes', () => {
+    const timing = { notStartedMin: 6, notDoneMin: 25 };
+    expect(signedOutDue([w('1', 'sent_to_kitchen', 6), w('2', 'ready', 25)], { includeCounter: false, ringing: none, timing }).due.map((d) => d.key)).toEqual([
+      '1:6',
+      '2:25',
+    ]);
+  });
+});
+
+describe('describeSignedOutReminders: sends someone to sign in', () => {
+  it('one order', () => {
+    expect(describeSignedOutReminders(signedOut([w('42', 'sent_to_kitchen', 12)]).due)).toEqual({
+      title: 'Order #0042 not started — 12 min',
+      detail: 'Sign in and open Live Orders.',
+    });
+  });
+
+  it('several', () => {
+    const r = signedOut([w('40', 'preparing', 31), w('42', 'sent_to_kitchen', 12), w('43', 'sent_to_kitchen', 11)]).due;
+    expect(describeSignedOutReminders(r, TIMING)).toEqual({
+      title: '3 orders are waiting too long',
+      detail: 'Not started: #0042, #0043 · over 30 min: #0040 — sign in and open Live Orders.',
+    });
+    const late = signedOut([w('40', 'preparing', 31), w('41', 'ready', 40)]).due;
+    expect(describeSignedOutReminders(late, TIMING).detail).toBe('Over 30 min: #0040, #0041 — sign in and open Live Orders.');
+  });
+});
+
+it('Settings → Sounds says the PIN screen keeps the note up and beeps every 5 minutes', () => {
+  expect(PIN_REMIND_EVERY_MS).toBe(5 * 60_000);
+  expect(waitingRuleText(DEFAULT_KITCHEN_TIMING)).toMatch(
+    / With nobody signed in, the note stays on the PIN screen and beeps again every 5 minutes until someone signs in\.$/,
+  );
 });

@@ -45,7 +45,7 @@ describe('nothing saved: today’s numbers', () => {
 
   it('today’s words, word for word', () => {
     expect(waitingRuleText(DEFAULT_KITCHEN_TIMING)).toBe(
-      'A soft beep and a note when a website order is still not started 10 minutes after it came in, or not done after 30. Once per order, at most one beep every 5 minutes.',
+      'A soft beep and a note when a website order is still not started 10 minutes after it came in, or not done after 30. Once per order, at most one beep every 5 minutes. With nobody signed in, the note stays on the PIN screen and beeps again every 5 minutes until someone signs in.',
     );
     expect(boardUnusedText(DEFAULT_KITCHEN_TIMING)).toBe(
       `${BOARD_UNUSED_COUNT} or more have sat in New for over 20 minutes, so the "waiting too long" reminder stays quiet. Tap each order's next step as you go.`,
@@ -100,7 +100,7 @@ describe('the owner’s kitchen minutes', () => {
     const r = due([o('40', 'sent_to_kitchen', 7), o('41', 'preparing', 26)], timing).due;
     expect(describeReminders(r, timing).description).toBe('not started: #0040 · over 25 min: #0041. Check them on Live Orders.');
     expect(waitingRuleText(timing)).toBe(
-      'A soft beep and a note when a website order is still not started 6 minutes after it came in, or not done after 25. Once per order, at most one beep every 5 minutes.',
+      'A soft beep and a note when a website order is still not started 6 minutes after it came in, or not done after 25. Once per order, at most one beep every 5 minutes. With nobody signed in, the note stays on the PIN screen and beeps again every 5 minutes until someone signs in.',
     );
     expect(boardUnusedText(timing)).toContain('for over 16 minutes');
   });

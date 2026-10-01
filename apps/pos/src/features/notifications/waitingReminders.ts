@@ -15,14 +15,21 @@
  * Each reminder fires only in a 10-minute window after its threshold, so
  * yesterday's forgotten orders never beep. Uses the order list the sidebar
  * already refreshes — no extra polling. Pure; tested in waitingReminders.test.ts.
+ *
+ * With nobody signed in (the PIN screen), the same orders come from the watch
+ * (alerts:getWatch, at most 3 hours old) instead: signedOutDue keeps a note
+ * up for as long as an order is late, and the PIN screen beeps again every
+ * PIN_REMIND_EVERY_MS until someone signs in (watchNotes.ts).
  */
 import { ageMinutes } from '../orders/boardLogic';
 import {
   DEFAULT_KITCHEN_TIMING,
+  orderNumberList,
   shortOrderNumber,
   type KitchenTiming,
   type OrderSource,
   type OrderStatus,
+  type WatchOrder,
 } from '@cheeseoclock/shared-types';
 
 /** The released reminder minutes (the owner's are 'kitchen.timing' notStartedMin / notDoneMin). */
@@ -34,6 +41,8 @@ export const REMIND_WINDOW_MIN = 10;
 export const BOARD_UNUSED_COUNT = 5;
 /** At most one reminder beep this often, however many orders are late. */
 export const REMIND_TONE_GAP_MS = 5 * 60_000;
+/** With nobody signed in, the PIN screen beeps again this often while a note is up. */
+export const PIN_REMIND_EVERY_MS = 5 * 60_000;
 
 /** The reminders' minutes. */
 export type ReminderTiming = Pick<KitchenTiming, 'notStartedMin' | 'notDoneMin'>;
@@ -112,6 +121,45 @@ export function dueWaitingReminders(
   return { due, boardUnused: false };
 }
 
+/**
+ * The PIN screen's "waiting too long" (nobody signed in): the orders late
+ * right now, from the watch's minutes. Unlike dueWaitingReminders there is
+ * no 10-minute window and nothing is remembered: an order stays due for as
+ * long as it is late (the watch leaves out orders over 3 hours old). The
+ * same eligibility (website orders, counter ones too when the Sounds setting
+ * says so) and the same "board not used" rule; orders still ringing as a new
+ * online order are left to the chime.
+ *
+ * One reminder per order: one still in New after notStartedMin is "not
+ * started" however long it has waited (its key stays the same as it passes
+ * notDoneMin); one being made or ready after notDoneMin is "not done".
+ */
+export function signedOutDue(
+  orders: readonly WatchOrder[],
+  opts: { includeCounter: boolean; ringing: ReadonlySet<string>; timing: ReminderTiming },
+): { due: WaitingReminder[]; boardUnused: boolean } {
+  const { notStartedMin, notDoneMin } = opts.timing;
+  const eligible = orders.filter((o) => opts.includeCounter || o.source === 'web');
+  const unusedAfter = boardUnusedMin({ notStartedMin, notDoneMin });
+  const oldNew = eligible.filter((o) => o.status === 'sent_to_kitchen' && o.minutes >= unusedAfter).length;
+  if (oldNew >= BOARD_UNUSED_COUNT) return { due: [], boardUnused: true };
+
+  const due: WaitingReminder[] = [];
+  for (const o of eligible) {
+    if (opts.ringing.has(o.orderId)) continue;
+    const reminder = (kind: WaitingReminder['kind'], threshold: number): WaitingReminder => ({
+      key: `${o.orderId}:${threshold}`,
+      orderId: o.orderId,
+      orderNumber: o.orderNumber,
+      kind,
+      minutes: o.minutes,
+    });
+    if (o.status === 'sent_to_kitchen' && o.minutes >= notStartedMin) due.push(reminder('notStarted', notStartedMin));
+    else if (NOT_DONE_STATUSES.has(o.status) && o.minutes >= notDoneMin) due.push(reminder('notDone', notDoneMin));
+  }
+  return { due, boardUnused: false };
+}
+
 /** One note for everything due this round. */
 export function describeReminders(
   due: readonly WaitingReminder[],
@@ -142,13 +190,35 @@ export function describeReminders(
 }
 
 /**
+ * The PIN screen's note (nobody signed in): describeReminders' title, and a
+ * detail that sends someone to sign in — "Sign in and open Live Orders." for
+ * one order; for several, "Not started: #0042, #0043 · over 30 min: #0040 —
+ * sign in and open Live Orders."
+ */
+export function describeSignedOutReminders(
+  due: readonly WaitingReminder[],
+  timing: ReminderTiming = DEFAULT_REMINDER_TIMING,
+): { title: string; detail: string } {
+  const { title } = describeReminders(due, timing);
+  if (due.length <= 1) return { title, detail: 'Sign in and open Live Orders.' };
+  const nums = (kind: WaitingReminder['kind']) =>
+    orderNumberList(due.filter((d) => d.kind === kind).map((d) => d.orderNumber));
+  const parts: string[] = [];
+  if (due.some((d) => d.kind === 'notStarted')) parts.push(`not started: ${nums('notStarted')}`);
+  if (due.some((d) => d.kind === 'notDone')) parts.push(`over ${timing.notDoneMin} min: ${nums('notDone')}`);
+  const list = parts.join(' · ');
+  return { title, detail: `${list.charAt(0).toUpperCase()}${list.slice(1)} — sign in and open Live Orders.` };
+}
+
+/**
  * Settings → Sounds, "Order waiting too long", in words built from the
  * owner's minutes: "A soft beep and a note when a website order is still not
  * started 10 minutes after it came in, or not done after 30. Once per order,
- * at most one beep every 5 minutes."
+ * at most one beep every 5 minutes. With nobody signed in, the note stays on
+ * the PIN screen and beeps again every 5 minutes until someone signs in."
  */
 export function waitingRuleText(timing: ReminderTiming): string {
-  return `A soft beep and a note when a website order is still not started ${timing.notStartedMin} minutes after it came in, or not done after ${timing.notDoneMin}. Once per order, at most one beep every ${REMIND_TONE_GAP_MS / 60_000} minutes.`;
+  return `A soft beep and a note when a website order is still not started ${timing.notStartedMin} minutes after it came in, or not done after ${timing.notDoneMin}. Once per order, at most one beep every ${REMIND_TONE_GAP_MS / 60_000} minutes. With nobody signed in, the note stays on the PIN screen and beeps again every ${PIN_REMIND_EVERY_MS / 60_000} minutes until someone signs in.`;
 }
 
 /** The note when nobody moves orders along on Live Orders. */

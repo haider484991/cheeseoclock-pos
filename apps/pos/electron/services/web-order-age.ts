@@ -10,6 +10,16 @@ import { PICKUP_DISCOUNT_PERCENT } from '@cheeseoclock/shared-types';
 export const WEBSITE_UNCONFIRMED_TTL_MS = 45 * 60_000;
 
 /**
+ * The bridge asks the website again about an imported order it has not seen
+ * confirmed (retryAcks) for this long after the import. An order the website
+ * has not confirmed by then is long past its 45-minute cancel: only the
+ * status push can still learn what happened to it. Every screen warns about
+ * a not-confirmed order for the same 2 hours (alert-watch.ts), so its "the
+ * till keeps trying" stays true.
+ */
+export const ACK_RETRY_WINDOW_MS = 2 * 60 * 60_000;
+
+/**
  * Is a web order too old to cook? Pure so it can be unit-tested without the
  * bridge. An unparseable timestamp is NOT treated as stale — the website's own
  * sweep still protects that case, and refusing a fresh order on a bad string

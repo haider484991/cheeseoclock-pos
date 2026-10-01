@@ -511,3 +511,126 @@ describe.skipIf(!Sqlite)('the watch through alerts:getWatch (the PIN screen)', (
     expect(readAlertWatch(broken, Date.now())).toEqual(EMPTY_ALERT_WATCH);
   });
 });
+
+describe.skipIf(!Sqlite)('the watch: kitchen orders, tickets not printed and website orders not confirmed (no customer)', () => {
+  // Made up, and on every seeded order: none of it may leave in the watch.
+  const NAME = 'Zarnigar Testcustomer';
+  const PHONE = '0300-5550142';
+  const ADDRESS = 'House 7, Street 9, Madeup Town';
+  /** A little past `min` minutes ago, so the till's whole minutes come out as `min`. */
+  const ago = (min: number) => new Date(Date.now() - min * 60_000 - 5_000).toISOString();
+  const watch = () => (call('alerts:getWatch') as { ok: true; data: AlertWatch }).data;
+
+  function kitchenOrder(
+    n: number,
+    o: { status?: string; source?: 'web' | 'pos'; minutes: number; deleted?: boolean },
+  ): void {
+    const created = ago(o.minutes);
+    db.prepare(
+      `INSERT INTO orders (id, order_number, mode, status, cashier_id, source, customer_name_snapshot,
+                           customer_phone_snapshot, delivery_address_snapshot, total_cents, created_at, updated_at,
+                           deleted_at, device_id)
+       VALUES (?, ?, 'delivery', ?, 'u_cash', ?, ?, ?, ?, 150000, ?, ?, ?, ?)`,
+    ).run(
+      `o${n}`,
+      `CO-20261001-00${n}`,
+      o.status ?? 'sent_to_kitchen',
+      o.source ?? 'web',
+      NAME,
+      PHONE,
+      ADDRESS,
+      created,
+      created,
+      o.deleted ? created : null,
+      DEV,
+    );
+  }
+
+  /** The website order behind o<n>, imported `importedMin` minutes ago; acked or not. */
+  function imported(n: number, o: { importedMin: number; webCreatedMin: number | null; acked: boolean }): void {
+    const at = ago(o.importedMin);
+    db.prepare(
+      `INSERT INTO web_order_imports (web_order_id, pos_order_id, status, attempts, last_pushed_status, imported_at,
+                                      created_at, updated_at, web_created_at, web_total_cents, acked_at)
+       VALUES (?, ?, 'imported', 1, 'accepted', ?, ?, ?, ?, 150000, ?)`,
+    ).run(`w${n}`, `o${n}`, at, at, at, o.webCreatedMin === null ? null : ago(o.webCreatedMin), o.acked ? at : null);
+  }
+
+  async function seed(): Promise<void> {
+    kitchenOrder(61, { minutes: 12 }); // a website order in New for 12 minutes
+    imported(61, { importedMin: 12, webCreatedMin: 13, acked: true });
+    kitchenOrder(62, { minutes: 40, status: 'preparing', source: 'pos' }); // a counter order being made
+    kitchenOrder(63, { minutes: 20, deleted: true });
+    kitchenOrder(64, { minutes: 30, status: 'out_for_delivery' });
+    kitchenOrder(65, { minutes: 4 * 60 }); // four hours old
+    kitchenOrder(66, { minutes: 50, status: 'delivered' });
+    kitchenOrder(67, { minutes: 6 }); // not confirmed for 6 minutes
+    imported(67, { importedMin: 6, webCreatedMin: 7, acked: false });
+    kitchenOrder(68, { minutes: 3 }); // not confirmed for 3 minutes: too soon to warn
+    imported(68, { importedMin: 3, webCreatedMin: 4, acked: false });
+    kitchenOrder(69, { minutes: 10 }); // not confirmed, imported before 0046 kept the website's time
+    imported(69, { importedMin: 10, webCreatedMin: null, acked: false });
+
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    setBusinessSetting(
+      db as never,
+      'kitchen.timing',
+      { v: 1, amberMin: 5, redMin: 10, notStartedMin: 5, notDoneMin: 20 },
+      { userId: 'u_admin', deviceId: DEV },
+    );
+    const { enqueuePrintJob, markJobFailedPermanently } = await import('../../db/repositories/print-queue-repo.js');
+    const job = enqueuePrintJob(db as never, { kind: 'kitchen', orderId: 'o61', reprint: false });
+    markJobFailedPermanently(db as never, job.id, 'Printer offline');
+    // An order forgotten in New since yesterday whose ticket (a Reprint) was given up on just now.
+    kitchenOrder(70, { minutes: 20 * 60 });
+    const old = enqueuePrintJob(db as never, { kind: 'kitchen', orderId: 'o70', reprint: true });
+    markJobFailedPermanently(db as never, old.id, 'Printer offline');
+  }
+
+  it('lists what the kitchen still has, oldest first, in whole minutes, with the owner’s timing', async () => {
+    await seed();
+    const w = watch();
+    expect(w.orders).toEqual([
+      { orderId: 'o62', orderNumber: 'CO-20261001-0062', status: 'preparing', source: 'pos', minutes: 40 },
+      { orderId: 'o61', orderNumber: 'CO-20261001-0061', status: 'sent_to_kitchen', source: 'web', minutes: 12 },
+      { orderId: 'o69', orderNumber: 'CO-20261001-0069', status: 'sent_to_kitchen', source: 'web', minutes: 10 },
+      { orderId: 'o67', orderNumber: 'CO-20261001-0067', status: 'sent_to_kitchen', source: 'web', minutes: 6 },
+      { orderId: 'o68', orderNumber: 'CO-20261001-0068', status: 'sent_to_kitchen', source: 'web', minutes: 3 },
+    ]);
+    // Deleted, out for delivery, delivered and four-hour-old orders are left out; no time leaves, only minutes.
+    expect(w.timing).toEqual({ notStartedMin: 5, notDoneMin: 20 });
+  });
+
+  it('kitchen tickets this till gave up on, and website orders not confirmed for 5 minutes with when the website cancels them', async () => {
+    await seed();
+    const w = watch();
+    // Only for orders up to 3 hours old: the PIN screen does not beep all night for yesterday's.
+    expect(w.ticketsNotPrinted).toEqual([{ orderId: 'o61', orderNumber: 'CO-20261001-0061', failedAt: expect.any(String) }]);
+
+    const created67 = db.prepare(`SELECT web_created_at FROM web_order_imports WHERE web_order_id = 'w67'`).get()?.[
+      'web_created_at'
+    ] as string;
+    expect(w.unconfirmed).toEqual([
+      { orderId: 'o69', orderNumber: 'CO-20261001-0069', minutes: 10, cancelsAt: null },
+      {
+        orderId: 'o67',
+        orderNumber: 'CO-20261001-0067',
+        minutes: 6,
+        cancelsAt: new Date(Date.parse(created67) + 45 * 60_000).toISOString(),
+      },
+    ]);
+    // Once the website confirms it, the note has nothing to say.
+    db.prepare(`UPDATE web_order_imports SET acked_at = ? WHERE web_order_id = 'w67'`).run(new Date().toISOString());
+    expect(watch().unconfirmed.map((u) => u.orderId)).toEqual(['o69']);
+  });
+
+  it('carries no customer name, phone or address, for anyone (the PIN screen reads it)', async () => {
+    await seed();
+    for (const s of [null, CASHIER, OWNER]) {
+      h.session = s;
+      const text = JSON.stringify(watch());
+      for (const secret of [NAME, 'Zarnigar', PHONE, '5550142', ADDRESS, 'Madeup']) expect(text).not.toContain(secret);
+      expect(text).not.toMatch(/created_?at/i);
+    }
+  });
+});

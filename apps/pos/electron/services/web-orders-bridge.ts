@@ -46,7 +46,12 @@ import {
   type WebBridgeConfig,
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
-import { WEBSITE_UNCONFIRMED_TTL_MS, isStaleWebOrder, pickupPercentOf } from './web-order-age.js';
+import {
+  ACK_RETRY_WINDOW_MS,
+  WEBSITE_UNCONFIRMED_TTL_MS,
+  isStaleWebOrder,
+  pickupPercentOf,
+} from './web-order-age.js';
 import {
   listUnackedImports,
   markCancelledOnSite,
@@ -145,12 +150,6 @@ const HEARTBEAT_MS = 60_000;
  * over after a long outage.
  */
 const MAX_IMPORT_AGE_MS = WEBSITE_UNCONFIRMED_TTL_MS;
-/**
- * The ack retry (retryAcks) looks back this far. An order the website has not
- * confirmed by then is long past its 45-minute cancel: only the status push
- * can still learn what happened to it.
- */
-const ACK_RETRY_WINDOW_MS = 2 * 60 * 60_000;
 /** At most this many unconfirmed orders are asked about per poll (the retry stops at the first failure anyway). */
 const ACK_RETRY_BATCH = 25;
 /**

@@ -7,6 +7,7 @@
 import type { AlertSoundSettings, OrderSnapshot } from '@cheeseoclock/shared-types';
 import { ringsFor } from './alertState';
 import {
+  PIN_REMIND_EVERY_MS,
   REMIND_TONE_GAP_MS,
   dueWaitingReminders,
   type ReminderTiming,
@@ -28,9 +29,13 @@ export function gapWords(ms: number): string {
   return `${sec} second${sec === 1 ? '' : 's'}`;
 }
 
-/** Settings → Sounds' words for the printer-problem beep, built from the gap the till keeps between beeps. */
+/**
+ * Settings → Sounds' words for the printer-problem beep, built from the gap
+ * the till keeps between beeps, and how often the PIN screen beeps again for
+ * a kitchen ticket that did not print (PIN_REMIND_EVERY_MS, watchNotes.ts).
+ */
 export function printerProblemRuleText(gapMs: number = PRINTER_TONE_GAP_MS): string {
-  return `A short falling beep when a ticket or receipt does not print. At most once every ${gapWords(gapMs)}, so a printer that is off does not beep on every sale.`;
+  return `A short falling beep when a ticket or receipt does not print. At most once every ${gapWords(gapMs)}, so a printer that is off does not beep on every sale. A kitchen ticket that did not print stays on the PIN screen, beeping every ${gapWords(PIN_REMIND_EVERY_MS)}, until it is reprinted.`;
 }
 
 /**

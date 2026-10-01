@@ -33,8 +33,15 @@ describe('Settings → Sounds says the printer beep’s gap from the gap the til
   it('today: at most once every 2 minutes', () => {
     expect(PRINTER_TONE_GAP_MS).toBe(120_000);
     expect(printerProblemRuleText()).toBe(
-      'A short falling beep when a ticket or receipt does not print. At most once every 2 minutes, so a printer that is off does not beep on every sale.',
+      'A short falling beep when a ticket or receipt does not print. At most once every 2 minutes, so a printer that is off does not beep on every sale. A kitchen ticket that did not print stays on the PIN screen, beeping every 5 minutes, until it is reprinted.',
     );
+  });
+
+  it('says a kitchen ticket that did not print stays on the PIN screen, beeping every 5 minutes (PIN_REMIND_EVERY_MS)', () => {
+    expect(printerProblemRuleText()).toMatch(
+      / A kitchen ticket that did not print stays on the PIN screen, beeping every 5 minutes, until it is reprinted\.$/,
+    );
+    expect(printerProblemRuleText(60_000)).toContain('beeping every 5 minutes');
   });
 
   it('another gap, other words', () => {

@@ -1,13 +1,17 @@
 import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
-import { BellRing, PhoneCall, X } from 'lucide-react';
+import { BellRing, CloudOff, Hourglass, PhoneCall, Printer, X, type LucideIcon } from 'lucide-react';
 import { cn } from '@cheeseoclock/ui';
 import { describeFailure, describeNewOrders, isLoud, type AlertState } from './alertState';
+import type { WatchNote } from './watchNotes';
 
 /**
  * The one-row alert at the top of every screen: a new website order (green),
- * a website order that did not come in (red), or — once its alarm is
- * silenced — the reminder to call that customer (light red), which stays
- * until someone logged in closes it.
+ * a website order that did not come in (red), a note from the watch (amber:
+ * a kitchen ticket that did not print, a website order the website has not
+ * confirmed, an order waiting too long — watchNotes.ts), or — once its alarm
+ * is silenced — the reminder to call that customer (light red), which stays
+ * until someone logged in closes it. One row at a time, in that order; "+N
+ * more" counts the rest.
  *
  * Sized like a toast so it never spreads over the top bar's buttons. It
  * always sits below the one toast slot at the top of the screen, never over
@@ -15,8 +19,10 @@ import { describeFailure, describeNewOrders, isLoud, type AlertState } from './a
  * readable); on the PIN screen, just under the slot, so "PIN is wrong", the
  * lock-out note and "website order is having trouble" are never hidden.
  * While a popup is open (payment, discount…) it shrinks to a small pill in
- * the top-left corner with only "Seen", so a tap cannot leave a payment.
- * Every Seen (row or pill) and Esc do the same thing: seenOnScreen.
+ * the top-left corner with only "Seen", so a tap cannot leave a payment; a
+ * note alone shows nothing then. Every Seen (row or pill) and Esc do the
+ * same thing: seenOnScreen. A note has no Seen: it goes when what it is about
+ * is dealt with.
  *
  * Taps on it must not count as "outside" an open popup (which would close
  * the popup): the pointer-down is stopped here, before Radix sees it on the
@@ -24,6 +30,8 @@ import { describeFailure, describeNewOrders, isLoud, type AlertState } from './a
  */
 export interface AlertBannerProps {
   state: AlertState;
+  /** The watch's notes (watchNotes.ts), most urgent first. */
+  notes: readonly WatchNote[];
   loggedIn: boolean;
   /** Logged in and allowed to open Live Orders. */
   canView: boolean;
@@ -46,6 +54,12 @@ const BANNER_TOP_LOGGED_OUT = '4.875rem';
 
 const keepPopupOpen = (e: ReactPointerEvent) => e.stopPropagation();
 const keepFocus = (e: ReactMouseEvent) => e.preventDefault();
+
+const NOTE_ICONS: Record<WatchNote['kind'], LucideIcon> = {
+  ticket: Printer,
+  unconfirmed: CloudOff,
+  waiting: Hourglass,
+};
 
 function BannerButton(props: { onClick: () => void; children: ReactNode; tone: 'solid' | 'ghost'; label?: string }) {
   return (
@@ -70,7 +84,7 @@ export function AlertBanner(p: AlertBannerProps) {
   const { state } = p;
   const loudFailures = state.failures.filter((f) => !f.silenced);
   const quietFailures = state.failures.filter((f) => f.silenced);
-  const total = state.orders.length + state.failures.length;
+  const total = state.orders.length + state.failures.length + p.notes.length;
   if (total === 0) return null;
 
   if (p.compact) {
@@ -102,7 +116,7 @@ export function AlertBanner(p: AlertBannerProps) {
     );
   }
 
-  let tone: 'alarm' | 'orders' | 'note';
+  let tone: 'alarm' | 'orders' | 'reminder' | 'note';
   let icon: ReactNode;
   let text: { title: string; detail: string; tooltip?: string };
   let buttons: ReactNode;
@@ -136,6 +150,17 @@ export function AlertBanner(p: AlertBannerProps) {
         </BannerButton>
       </>
     );
+  } else if (p.notes.length > 0) {
+    const n = p.notes[0]!;
+    const Icon = NOTE_ICONS[n.kind];
+    tone = 'reminder';
+    icon = <Icon className="h-6 w-6 shrink-0" aria-hidden="true" />;
+    text = { title: n.title, detail: n.detail };
+    buttons = p.canView ? (
+      <BannerButton tone="solid" onClick={p.onView}>
+        View
+      </BannerButton>
+    ) : null;
   } else {
     const f = quietFailures[0]!;
     tone = 'note';
@@ -159,8 +184,9 @@ export function AlertBanner(p: AlertBannerProps) {
 
   return (
     <div
-      role="alert"
-      aria-live="assertive"
+      // A note is news, not an alarm: read out when the screen reader is free.
+      role={tone === 'reminder' ? 'status' : 'alert'}
+      aria-live={tone === 'reminder' ? 'polite' : 'assertive'}
       onPointerDown={keepPopupOpen}
       style={{ pointerEvents: 'auto', top: p.loggedIn ? BANNER_TOP_LOGGED_IN : BANNER_TOP_LOGGED_OUT }}
       title={text.tooltip}
@@ -168,6 +194,8 @@ export function AlertBanner(p: AlertBannerProps) {
         'fixed left-1/2 z-[110] flex max-h-[4.5rem] w-[38rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 overflow-hidden rounded-2xl border-2 py-2 pl-4 pr-2 shadow-soft-lg animate-fade-in',
         tone === 'alarm' && 'border-red-700 bg-red-600 text-white',
         tone === 'orders' && 'border-emerald-700 bg-emerald-600 text-white',
+        tone === 'reminder' &&
+          'border-amber-500 bg-amber-100 text-amber-950 dark:border-amber-600 dark:bg-amber-950 dark:text-amber-50',
         tone === 'note' &&
           'border-red-300 bg-red-50 text-red-950 dark:border-red-700 dark:bg-red-950 dark:text-red-50',
       )}
