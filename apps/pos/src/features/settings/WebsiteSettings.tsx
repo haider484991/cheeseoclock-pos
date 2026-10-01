@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { Globe, Send, RefreshCw, CheckCircle2, AlertTriangle, XCircle, PauseCircle, UploadCloud, Megaphone } from 'lucide-react';
 import { ANNOUNCEMENT_MAX, CLOSED_NOTICE_MAX, type ShopSettingCard } from '@cheeseoclock/shared-types';
-import { ipc } from '../../ipc/client';
+import { ipc, onAlertWatchChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
@@ -68,6 +68,9 @@ function ConnectionCard() {
     queryFn: () => ipc.webBridge.getStatus(),
     refetchInterval: 15_000,
   });
+  // Website orders paused or started again by a shift close or open: On /
+  // Paused flips at once, not on the next poll.
+  useEffect(() => onAlertWatchChanged(() => void qc.invalidateQueries({ queryKey: ['webBridge'] })), [qc]);
 
   // Hydrate the form once when config loads.
   useEffect(() => {

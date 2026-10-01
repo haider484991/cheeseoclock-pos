@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
-import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Lock, ShieldCheck, Wallet, X } from 'lucide-react';
+import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Lock, PauseCircle, ShieldCheck, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { IpcRequest, OpeningFloatPrefill, ShiftCloseCheck, UnpaidOrderAtClose } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
@@ -15,6 +15,7 @@ import { drawerResultToast } from './drawerToast';
 import { PAGE_ACCESS } from './navAccess';
 import { SecretInput } from '../../components/secret/SecretInput';
 import { fmtWhen } from '../reports/reportFormat';
+import { ALERT_WATCH_KEY, useWebOrdersPause } from '../notifications/useAlertWatch';
 import {
   dismissShiftCloseOutcome,
   outcomeFor,
@@ -22,6 +23,14 @@ import {
   useShiftCloseOutcome,
   type ShiftCloseOutcome,
 } from './shiftCloseOutcome';
+import {
+  CLOSE_PAUSES_WEBSITE_NOTE,
+  CLOSE_PAUSES_WEBSITE_TEXT,
+  OPEN_RESUMES_WEBSITE_TEXT,
+  showWebOrdersPaused,
+  WEB_PAUSED_PILL,
+  WEB_PAUSED_PILL_TITLE,
+} from './webOrdersPause';
 
 /**
  * What a cashier who taps the shift pill is told (a touch screen has no mouse
@@ -49,7 +58,8 @@ export const PIN_CLOSE_RESULT_NOTE =
 /**
  * TopBar shift widget. Shows current shift status.
  *  - No shift open → grey pill "Open shift" → opens OpenShiftDialog (anyone,
- *    cashiers included).
+ *    cashiers included). When that paused website orders on this till, an
+ *    amber "Website paused" pill beside it opens the same box.
  *  - Shift open → green pill with elapsed time; only a manager or the owner
  *    can close it (count the drawer). A cashier's tap says so, and who to ask.
  *  - The close result (Expected, Counted, Over / Short) stays up until Done,
@@ -81,6 +91,7 @@ export function ShiftWidget() {
     refetchInterval: 30_000,
   });
   const shift = shiftQ.data;
+  const pause = useWebOrdersPause();
 
   // In every branch below: closing refreshes the shift status, and the
   // result must not go with the "shift open" pill (audit 2026-09-27).
@@ -116,6 +127,17 @@ export function ShiftWidget() {
           <Clock className="h-3.5 w-3.5" />
           Open shift
         </button>
+        {showWebOrdersPaused(pause) && (
+          <button
+            type="button"
+            onClick={() => canOpen && setOpenDlg('open')}
+            title={WEB_PAUSED_PILL_TITLE}
+            className="flex items-center gap-1.5 rounded-xl bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900 ring-1 ring-amber-300 transition-colors hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:ring-amber-700 dark:hover:bg-amber-900"
+          >
+            <PauseCircle className="h-3.5 w-3.5" aria-hidden="true" />
+            {WEB_PAUSED_PILL}
+          </button>
+        )}
         <ShiftHistoryButton />
         {openDlg === 'open' && <OpenShiftDialog onClose={() => setOpenDlg(null)} />}
         {closeResult}
@@ -362,16 +384,23 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
   const [typed, setTyped] = useState<string | null>(null);
   const opening = typed ?? openingFloatBoxStart(start);
   const startNote = start ? openingFloatNote(start) : null;
+  // Closing the last shift paused website orders on this till; opening starts them again.
+  const resumes = showWebOrdersPaused(useWebOrdersPause());
 
   const openMut = useMutation({
-    mutationFn: () =>
+    // `wasPaused`: what the box said when Open was pressed (the pause is lifted by the open itself).
+    mutationFn: (_wasPaused: boolean) =>
       ipc.shifts.open({
         openingCashCents: Math.round((parseFloat(opening) || 0) * 100),
         notes: notes.trim() || null,
       }),
-    onSuccess: () => {
-      toast({ title: 'Shift opened', description: 'New orders go on this shift. The cash drawer opens for the float.' });
+    onSuccess: (_shift, wasPaused) => {
+      toast({
+        title: 'Shift opened',
+        description: `New orders go on this shift. The cash drawer opens for the float.${wasPaused ? ' Website orders are on again.' : ''}`,
+      });
       void qc.invalidateQueries({ queryKey: ['shifts'] });
+      void qc.invalidateQueries({ queryKey: ALERT_WATCH_KEY });
       onClose();
     },
     onError: (e) =>
@@ -410,6 +439,11 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
           </header>
 
           <div className="space-y-3">
+            {resumes && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                {OPEN_RESUMES_WEBSITE_TEXT}
+              </p>
+            )}
             <label className="block text-sm">
               <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
                 Opening cash (Rs)
@@ -444,7 +478,7 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
               variant="success"
               size="md"
               className="flex-1"
-              onClick={() => openMut.mutate()}
+              onClick={() => openMut.mutate(resumes)}
               disabled={openMut.isPending}
             >
               {openMut.isPending ? 'Opening…' : 'Open shift'}
@@ -538,6 +572,9 @@ export function CloseShiftDialog({
   const check = recheck ?? givenCheck ?? checkQ.data;
   const unpaid = check?.unpaidOrders ?? [];
   const needsReason = unpaid.length > 0;
+  // This close leaves no shift open on this till with the owner's switch on:
+  // website orders pause until a shift is opened (said before, not a gate).
+  const pausesWebsite = check?.pausesWebsiteOrders === true;
 
   // A refused close (most often: an order came in unpaid during the count):
   // the list is asked for again, so the new order and the reason box show,
@@ -579,7 +616,12 @@ export function CloseShiftDialog({
         closeShiftRequest({ shiftId, counted, notes, unpaid, carryOverReason, approverPin }),
       ),
     onSuccess: (shift) => {
-      toast({ title: 'Shift closed', description: 'Cash drawer reconciliation saved.' });
+      toast({
+        title: 'Shift closed',
+        description: pausesWebsite
+          ? 'Cash drawer reconciliation saved. Website orders are paused until a shift is opened.'
+          : 'Cash drawer reconciliation saved.',
+      });
       // The result first, then the refresh that turns the pill to "Open
       // shift": the result is kept outside the pill (shiftCloseOutcome.ts),
       // so it stays up until Done. On a manager's PIN (a cashier's login)
@@ -598,6 +640,7 @@ export function CloseShiftDialog({
         });
       }
       void qc.invalidateQueries({ queryKey: ['shifts'] });
+      void qc.invalidateQueries({ queryKey: ALERT_WATCH_KEY });
       onClose();
     },
     onError: (e) => {
@@ -676,6 +719,19 @@ export function CloseShiftDialog({
               />
             </label>
           </div>
+
+          {pausesWebsite && (
+            <div
+              role="note"
+              className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+            >
+              <p className="flex items-center gap-1.5 font-semibold">
+                <PauseCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                {CLOSE_PAUSES_WEBSITE_TEXT}
+              </p>
+              <p className="mt-0.5 text-xs">{CLOSE_PAUSES_WEBSITE_NOTE}</p>
+            </div>
+          )}
 
           <div className="mt-5 flex gap-2">
             <Button variant="ghost" size="md" className="flex-1" onClick={onClose}>

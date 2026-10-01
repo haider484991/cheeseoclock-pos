@@ -14,6 +14,7 @@ import { StoreLogo } from '../settings/StoreLogo';
 import { isTypingField } from '../checkout/keys';
 import { keypadDigits, signInKey, signInProblemTitle, type SignInMode } from './signInKeys';
 import { homeFor } from '../shell/navAccess';
+import { WebOrdersPausedNotice } from '../shell/webOrdersPause';
 
 /**
  * Logo, name and tagline at the top of the sign-in screen. Also drawn by the
@@ -182,20 +183,22 @@ export function LoginPage() {
   const verifying = status === 'loading';
 
   return (
-    <div className="relative flex h-full items-center justify-center overflow-hidden">
-      {/* Ambient gradient orbs */}
-      <div
-        className="pointer-events-none absolute -top-40 -left-40 h-96 w-96 rounded-full opacity-40 blur-3xl"
-        style={{ background: 'radial-gradient(circle, rgba(251,191,36,0.4) 0%, transparent 70%)' }}
-        aria-hidden
-      />
-      <div
-        className="pointer-events-none absolute -bottom-40 -right-40 h-[28rem] w-[28rem] rounded-full opacity-30 blur-3xl"
-        style={{ background: 'radial-gradient(circle, rgba(244,114,182,0.25) 0%, transparent 70%)' }}
-        aria-hidden
-      />
+    // Scrolls rather than clips on a short screen (the window's 700 px minimum):
+    // my-auto centres the card while it fits and starts it at the top when not.
+    <div className="relative flex h-full justify-center overflow-y-auto py-4">
+      {/* Ambient gradient orbs, clipped in their own layer so they add no scroll. */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+        <div
+          className="absolute -top-40 -left-40 h-96 w-96 rounded-full opacity-40 blur-3xl"
+          style={{ background: 'radial-gradient(circle, rgba(251,191,36,0.4) 0%, transparent 70%)' }}
+        />
+        <div
+          className="absolute -bottom-40 -right-40 h-[28rem] w-[28rem] rounded-full opacity-30 blur-3xl"
+          style={{ background: 'radial-gradient(circle, rgba(244,114,182,0.25) 0%, transparent 70%)' }}
+        />
+      </div>
 
-      <div className="relative w-[460px] animate-scale-in">
+      <div className="relative my-auto w-[460px] animate-scale-in">
         <div className="glass-surface rounded-3xl p-8 shadow-soft-lg ring-1 ring-stone-200/60 dark:ring-stone-700/60">
           <LoginBrand logoUrl={logoUrl} storeName={storeName} tagline={tagline} />
           {/* Why the till is back here, when nobody logged out (sessionStore endedNote). */}
@@ -204,6 +207,8 @@ export function LoginPage() {
               {endedNote}
             </p>
           )}
+          {/* Website orders paused on this till because no shift is open. */}
+          <WebOrdersPausedNotice />
           <p className="mb-4 text-center text-xs font-medium uppercase tracking-widest text-stone-400">
             {mode === 'pin' ? 'Enter your PIN' : 'Type your password'}
           </p>

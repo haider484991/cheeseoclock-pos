@@ -10,6 +10,8 @@
  *   C. Unpaid orders on this till are listed in the close box with a
  *      required reason; the result and Shift history say how many were
  *      carried over, why, and who approved it.
+ *   D. (v0.7.33) When the close pauses website orders on this till, the
+ *      close box says so before "Close shift" — a warning, not a gate.
  *
  * Radix's dialog is stood in for by plain elements (a server render has no
  * portal). Every name and amount is made up.
@@ -36,6 +38,7 @@ import {
   UnpaidCarryOver,
 } from './ShiftWidget';
 import type { ShiftCloseOutcome } from './shiftCloseOutcome';
+import { CLOSE_PAUSES_WEBSITE_NOTE, CLOSE_PAUSES_WEBSITE_TEXT } from './webOrdersPause';
 
 // A server render has no portal: the dialog's parts render in place.
 vi.mock('@radix-ui/react-dialog', async () => {
@@ -74,7 +77,11 @@ vi.mock('../../ipc/client', () => {
         close: record('close'),
         openDrawer: record('openDrawer'),
       },
+      alerts: {
+        getWatch: record('getWatch'),
+      },
     },
+    onAlertWatchChanged: () => () => {},
   };
 });
 
@@ -335,6 +342,65 @@ describe('C. unpaid orders: listed, a reason required, then carried over', () =>
     } as unknown as Parameters<typeof TeamLeakageTab>[0]['data'];
     expect(text(render(<TeamLeakageTab now={new Date('2026-09-27T10:00:00.000Z')} data={team} />))).toContain(
       '2 unpaid orders carried over — Rider still out — approved by Sara Manager',
+    );
+  });
+});
+
+describe('D. the close box says when the close pauses website orders', () => {
+  const both = (words: string) => words.includes(CLOSE_PAUSES_WEBSITE_TEXT) && words.includes(CLOSE_PAUSES_WEBSITE_NOTE);
+  /** The close box's "Close shift" button, as rendered. */
+  const closeButton = (node: ReactNode, seed: Array<[readonly unknown[], unknown]> = []) =>
+    buttonWith(render(node, seed), 'Close shift');
+
+  it('on a manager’s PIN (the cashier’s login): both lines, before "Close shift"', () => {
+    signIn('cashier');
+    const out = render(
+      <CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={{ ...VIA_PIN, pausesWebsiteOrders: true }} />,
+    );
+    const words = text(out);
+    expect(both(words)).toBe(true);
+    expect(out).toContain('role="note"');
+    expect(words.indexOf(CLOSE_PAUSES_WEBSITE_TEXT)).toBeLessThan(words.lastIndexOf('Close shift'));
+    // Still no money before the count.
+    expect(words).not.toMatch(/Expected|Cash sales|Paid orders/);
+  });
+
+  it('a manager signed in: the same two lines', () => {
+    signIn('manager');
+    const words = text(
+      render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, [
+        [['shifts', 'closeCheck', 'shift-1'], { closerName: 'Test', viaManagerPin: false, unpaidOrders: [], pausesWebsiteOrders: true }],
+      ]),
+    );
+    expect(both(words)).toBe(true);
+  });
+
+  it('neither line when the close does not pause them', () => {
+    signIn('manager');
+    const pin = text(render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />));
+    const own = text(
+      render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, [
+        [['shifts', 'closeCheck', 'shift-1'], { closerName: 'Test', viaManagerPin: false, unpaidOrders: [], pausesWebsiteOrders: false }],
+      ]),
+    );
+    for (const words of [pin, own]) {
+      expect(words).not.toContain(CLOSE_PAUSES_WEBSITE_TEXT);
+      expect(words).not.toContain(CLOSE_PAUSES_WEBSITE_NOTE);
+    }
+  });
+
+  it('a warning, not a gate: "Close shift" is exactly as it is without it', () => {
+    signIn('manager');
+    // A static render cannot type the count, so the button waits for it in
+    // both; what matters is that the warning changes nothing about it.
+    expect(
+      closeButton(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={{ ...VIA_PIN, pausesWebsiteOrders: true }} />),
+    ).toBe(closeButton(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />));
+    const seeded = (pausesWebsiteOrders: boolean): Array<[readonly unknown[], unknown]> => [
+      [['shifts', 'closeCheck', 'shift-1'], { closerName: 'Test', viaManagerPin: false, unpaidOrders: [], pausesWebsiteOrders }],
+    ];
+    expect(closeButton(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, seeded(true))).toBe(
+      closeButton(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, seeded(false)),
     );
   });
 });

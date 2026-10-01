@@ -123,7 +123,7 @@ export function AlertBanner(p: AlertBannerProps) {
     shown = state.orders.length;
     icon = <BellRing className="h-7 w-7 shrink-0 motion-safe:animate-pulse" aria-hidden="true" />;
     text = describeNewOrders(state.orders, p.formatMoney);
-    if (!p.loggedIn) text = { ...text, detail: text.detail ? `${text.detail} · log in to open Live Orders` : 'Log in to open Live Orders' };
+    if (!p.loggedIn) text = { ...text, detail: text.detail ? `${text.detail} · sign in to open Live Orders` : 'Sign in to open Live Orders' };
     buttons = (
       <>
         {p.canView && (

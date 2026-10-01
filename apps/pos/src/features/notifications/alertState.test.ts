@@ -467,7 +467,7 @@ describe('the words on the banner', () => {
       detail: 'Call 0300-1234567 and take the order by phone.',
       tooltip: 'Reason: SqliteError: FOREIGN KEY constraint failed',
     });
-    expect(describeFailure(f, false).detail).toBe('Log in to see the phone number, then call and take the order by phone.');
+    expect(describeFailure(f, false).detail).toBe('Sign in to see the phone number, then call and take the order by phone.');
     expect(describeFailure(f, false).detail).not.toContain('0300');
   });
 
@@ -475,5 +475,6 @@ describe('the words on the banner', () => {
     const f = failure('w1', { reason: 'stale', silenced: true });
     expect(describeFailure(f, true).title).toBe('Website order from Sara came in while the till was off');
     expect(describeFailure(f, true).detail).toContain('Call 0300-1234567');
+    expect(describeFailure(f, false).detail).toBe('It was cancelled on the website. Sign in to see the phone number.');
   });
 });

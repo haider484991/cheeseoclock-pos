@@ -393,7 +393,7 @@ export function describeFailure(f: ImportFailureAlert, loggedIn: boolean): Banne
     return {
       title: `Website order from ${name} came in while the till was off`,
       detail: !loggedIn
-        ? 'It was cancelled on the website. Log in to see the phone number.'
+        ? 'It was cancelled on the website. Sign in to see the phone number.'
         : f.customerPhone
           ? `It was cancelled on the website. Call ${f.customerPhone} to say sorry, or take it by phone.`
           : 'It was cancelled on the website. Take it by phone if they call.',
@@ -403,7 +403,7 @@ export function describeFailure(f: ImportFailureAlert, loggedIn: boolean): Banne
   return {
     title: `Website order from ${name} did not come in`,
     detail: !loggedIn
-      ? 'Log in to see the phone number, then call and take the order by phone.'
+      ? 'Sign in to see the phone number, then call and take the order by phone.'
       : f.customerPhone
         ? `Call ${f.customerPhone} and take the order by phone.`
         : 'Take the order by phone when they call.',

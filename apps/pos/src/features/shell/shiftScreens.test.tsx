@@ -15,6 +15,8 @@
  *      sign in (it was a disabled button with a hover-only title).
  *   5. "No shift is open" on Checkout and Live Orders, with "Open shift" for
  *      a login that may open one — sending to the kitchen is not blocked.
+ *      When closing the last shift paused website orders on this till
+ *      (v0.7.33), the banner, the top bar and the Open shift box say so.
  *   4. (the card) The Live Orders card shows the order's note: the counter's
  *      "Order notes" box and a website customer's note alike.
  *
@@ -25,21 +27,42 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, OrderSnapshot, Shift, ShiftSummary, UUID } from '@cheeseoclock/shared-types';
+import {
+  EMPTY_ALERT_WATCH,
+  type AlertWatch,
+  type AuthenticatedUser,
+  type OrderSnapshot,
+  type Shift,
+  type ShiftSummary,
+  type UUID,
+  type WebOrdersPauseView,
+} from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { OrderDetails } from '../checkout/OrderDetails';
 import { OrdersBoardPage } from '../orders/OrdersBoardPage';
+import { ALERT_WATCH_KEY } from '../notifications/useAlertWatch';
 import {
   CASHIER_CANNOT_CLOSE,
   CASHIER_CLOSE_HOW,
   CloseShiftNotAllowedDialog,
   CloseShiftResultDialog,
+  OpenShiftDialog,
   PIN_CLOSE_RESULT_NOTE,
   ShiftWidget,
 } from './ShiftWidget';
 import { NO_SHIFT_TEXT, NoShiftBanner } from './NoShiftBanner';
+import {
+  CLOSE_PAUSES_WEBSITE_NOTE,
+  CLOSE_PAUSES_WEBSITE_TEXT,
+  OPEN_RESUMES_WEBSITE_TEXT,
+  WEB_PAUSED_BANNER_TEXT,
+  WEB_PAUSED_LOGIN_TEXT,
+  WEB_PAUSED_PILL,
+  WEB_PAUSED_PILL_TITLE,
+  WEB_PAUSED_TITLE,
+} from './webOrdersPause';
 import {
   dismissShiftCloseOutcome,
   PIN_CLOSE_RESULT_MS,
@@ -355,6 +378,85 @@ describe('"No shift is open" on Checkout and Live Orders', () => {
     const board = [['orders', 'active', 'all'], []] as [readonly unknown[], unknown];
     expect(text(render(<OrdersBoardPage />, [[CURRENT, null], board]))).toContain(NO_SHIFT_TEXT);
     expect(text(render(<OrdersBoardPage />, [[CURRENT, OPEN_SHIFT], board]))).not.toContain(NO_SHIFT_TEXT);
+  });
+});
+
+// ------------------------------------- 5b. website orders paused (v0.7.33) ----
+
+describe('website orders paused because no shift is open on this till', () => {
+  const PAUSED: WebOrdersPauseView = { paused: true, since: '2026-10-01T18:42:00.000Z', websiteLinkSet: true };
+  const watch = (webOrders: WebOrdersPauseView): [readonly unknown[], unknown] => [
+    ALERT_WATCH_KEY,
+    { ...EMPTY_ALERT_WATCH, webOrders } satisfies AlertWatch,
+  ];
+  const NOT_SAID: Array<Array<[readonly unknown[], unknown]>> = [
+    [watch({ ...PAUSED, websiteLinkSet: false })],
+    [watch({ paused: false, websiteLinkSet: true })],
+    [],
+  ];
+
+  it('the words, exactly', () => {
+    expect(WEB_PAUSED_TITLE).toBe('Website orders are paused');
+    expect(WEB_PAUSED_LOGIN_TEXT).toBe('No shift is open on this till. Sign in and open a shift.');
+    expect(WEB_PAUSED_BANNER_TEXT).toBe('Website orders are paused too. Opening the shift starts them again.');
+    expect(WEB_PAUSED_PILL).toBe('Website paused');
+    expect(WEB_PAUSED_PILL_TITLE).toBe(
+      'Website orders are paused: no shift is open on this till. Open a shift to take them again.',
+    );
+    expect(OPEN_RESUMES_WEBSITE_TEXT).toBe('Opening the shift starts website orders again.');
+    expect(CLOSE_PAUSES_WEBSITE_TEXT).toBe('Closing this shift pauses website orders until a shift is opened again.');
+    expect(CLOSE_PAUSES_WEBSITE_NOTE).toBe('Orders already placed still come in and print.');
+  });
+
+  it('the no-shift banner says so under its own words, and the same "Open shift" starts them again', () => {
+    signIn('cashier');
+    const out = render(<NoShiftBanner />, [[CURRENT, null], watch(PAUSED)]);
+    const words = text(out);
+    expect(words).toContain(`${NO_SHIFT_TEXT} ${WEB_PAUSED_BANNER_TEXT}`);
+    expect(buttonWith(out, 'Open shift')).not.toMatch(DISABLED);
+  });
+
+  it('the banner keeps to its own words when the link is not set, when not paused, or before the till has answered', () => {
+    signIn('cashier');
+    for (const seed of NOT_SAID) {
+      const words = text(render(<NoShiftBanner />, [[CURRENT, null], ...seed]));
+      expect(words).toContain(NO_SHIFT_TEXT);
+      expect(words).not.toContain(WEB_PAUSED_BANNER_TEXT);
+    }
+    // A shift open: no banner at all, whatever the watch says.
+    expect(text(render(<NoShiftBanner />, [[CURRENT, OPEN_SHIFT], watch(PAUSED)]))).toBe('');
+  });
+
+  it('the top bar: an amber "Website paused" pill beside "Open shift", with the reason as its title', () => {
+    signIn('cashier');
+    const out = render(<ShiftWidget />, [[CURRENT, null], watch(PAUSED)]);
+    const pill = buttonWith(out, WEB_PAUSED_PILL);
+    expect(pill).toContain(`title="${WEB_PAUSED_PILL_TITLE}"`);
+    expect(pill).not.toMatch(DISABLED);
+    expect(pill).toContain('bg-amber-100');
+    // Beside "Open shift", after it.
+    expect(text(out).indexOf(WEB_PAUSED_PILL)).toBeGreaterThan(text(out).indexOf('Open shift'));
+  });
+
+  it('no pill while a shift is open, when not paused, when the link is not set, or before the till has answered', () => {
+    signIn('manager');
+    expect(text(render(<ShiftWidget />, [[CURRENT, OPEN_SHIFT], watch(PAUSED)]))).not.toContain(WEB_PAUSED_PILL);
+    for (const seed of NOT_SAID) {
+      const words = text(render(<ShiftWidget />, [[CURRENT, null], ...seed]));
+      expect(words).toContain('Open shift');
+      expect(words).not.toContain(WEB_PAUSED_PILL);
+    }
+  });
+
+  it('the Open shift box says opening starts website orders again, only while they are paused', () => {
+    signIn('cashier');
+    const words = text(render(<OpenShiftDialog onClose={() => {}} />, [watch(PAUSED)]));
+    expect(words).toContain(OPEN_RESUMES_WEBSITE_TEXT);
+    // At the top, before the float.
+    expect(words.indexOf(OPEN_RESUMES_WEBSITE_TEXT)).toBeLessThan(words.indexOf('Opening cash (Rs)'));
+    for (const seed of NOT_SAID) {
+      expect(text(render(<OpenShiftDialog onClose={() => {}} />, seed))).not.toContain(OPEN_RESUMES_WEBSITE_TEXT);
+    }
   });
 });
 

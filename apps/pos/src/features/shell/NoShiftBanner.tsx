@@ -4,7 +4,9 @@ import { Button, cn } from '@cheeseoclock/ui';
 import { AlertTriangle, Clock } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useWebOrdersPause } from '../notifications/useAlertWatch';
 import { OpenShiftDialog } from './ShiftWidget';
+import { showWebOrdersPaused, WEB_PAUSED_BANNER_TEXT } from './webOrdersPause';
 
 /** The banner's words (Checkout and Live Orders). */
 export const NO_SHIFT_TEXT = 'No shift is open — open the shift (count the float) before taking payment';
@@ -18,6 +20,8 @@ export const NO_SHIFT_TEXT = 'No shift is open — open the shift (count the flo
  * Shown only once the till has said there is no shift (not while it is still
  * asking, and not when it could not answer). "Open shift" opens the same
  * float count as the top bar's pill, for a login that may open a shift.
+ * When closing the last shift paused website orders on this till, a second
+ * line says so: the same "Open shift" starts them again.
  */
 export function NoShiftBanner({ className }: { className?: string }) {
   const canOpen = useSessionStore((s) => s.can('shift.open'));
@@ -28,6 +32,7 @@ export function NoShiftBanner({ className }: { className?: string }) {
     queryFn: () => ipc.shifts.current(),
     refetchInterval: 30_000,
   });
+  const pause = useWebOrdersPause();
   if (shiftQ.data !== null) return null;
 
   return (
@@ -39,7 +44,10 @@ export function NoShiftBanner({ className }: { className?: string }) {
       )}
     >
       <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden="true" />
-      <p className="min-w-0 flex-1 font-semibold">{NO_SHIFT_TEXT}</p>
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold">{NO_SHIFT_TEXT}</p>
+        {showWebOrdersPaused(pause) && <p className="mt-0.5">{WEB_PAUSED_BANNER_TEXT}</p>}
+      </div>
       {canOpen && (
         <Button variant="primary" size="sm" onClick={() => setOpening(true)}>
           <Clock className="h-4 w-4" aria-hidden="true" />
