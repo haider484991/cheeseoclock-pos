@@ -106,6 +106,7 @@ vi.mock('../../services/web-orders-shift-pause.js', () => ({
   followShiftForWebOrders: (_db: unknown, _device: string, change: string) => {
     h.webOrders.push(change);
   },
+  closeWouldPauseWebOrders: () => false,
 }));
 
 const live = describe.skipIf(!DatabaseSync);

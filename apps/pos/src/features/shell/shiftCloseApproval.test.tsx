@@ -116,7 +116,7 @@ const UNPAID: ShiftCloseCheck['unpaidOrders'] = [
   { orderId: 'o1' as UUID, orderNumber: '20260925-0042', createdAt: '2026-09-25T15:00:00.000Z', totalCents: 124_000 as never, takenBy: 'Ali' },
   { orderId: 'o2' as UUID, orderNumber: '20260927-0007', createdAt: '2026-09-27T16:30:00.000Z', totalCents: 86_000 as never, takenBy: 'Website' },
 ];
-const VIA_PIN: ShiftCloseCheck = { closerName: 'Sara Manager', viaManagerPin: true, unpaidOrders: [] };
+const VIA_PIN: ShiftCloseCheck = { closerName: 'Sara Manager', viaManagerPin: true, unpaidOrders: [], pausesWebsiteOrders: false };
 
 const consoleError = console.error;
 beforeAll(() => {
@@ -181,7 +181,7 @@ describe('A. a cashier’s tap on the shift pill: "A manager closes the shift"',
     const summary = { paidOrderCount: 24, refundedOrderCount: 1 } as unknown as ShiftSummary;
     const out = render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, [
       [['shifts', 'summary', 'shift-1'], summary],
-      [['shifts', 'closeCheck', 'shift-1'], { closerName: 'Test', viaManagerPin: false, unpaidOrders: [] }],
+      [['shifts', 'closeCheck', 'shift-1'], { closerName: 'Test', viaManagerPin: false, unpaidOrders: [], pausesWebsiteOrders: false }],
     ]);
     const words = text(out);
     expect(words).toContain('Paid orders 24');

@@ -854,8 +854,9 @@ export interface IpcContract {
     response: ApiResult<Shift>;
   };
   /**
-   * Before the count: who closes (a cashier's login needs `approverPin`) and
-   * the unpaid orders the close will carry over. Never the expected cash.
+   * Before the count: who closes (a cashier's login needs `approverPin`),
+   * the unpaid orders the close will carry over, and whether closing it
+   * pauses website orders (`pausesWebsiteOrders`). Never the expected cash.
    */
   'shifts:closeCheck': {
     request: { shiftId: string; approverPin?: string };

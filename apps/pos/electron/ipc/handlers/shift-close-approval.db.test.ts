@@ -37,6 +37,7 @@ const h = vi.hoisted(() => ({
   session: null as AuthenticatedUser | null,
   pinChecks: 0,
   webOrders: [] as Array<{ change: string }>,
+  wouldPause: false,
 }));
 
 vi.mock('../registry.js', () => {
@@ -74,10 +75,12 @@ vi.mock('../../services/print-spooler.js', () => ({
   },
 }));
 // Website orders follow the shift (tested in web-orders-shift-pause.db.test.ts): recorded here only.
+// Whether a close would pause them is a stand-in too (its rule is tested there).
 vi.mock('../../services/web-orders-shift-pause.js', () => ({
   followShiftForWebOrders: (_db: unknown, _device: string, change: string) => {
     h.webOrders.push({ change });
   },
+  closeWouldPauseWebOrders: () => h.wouldPause,
 }));
 
 const DEV = 'dev-till-1';
@@ -132,6 +135,7 @@ beforeEach(async () => {
   h.session = null;
   h.pinChecks = 0;
   h.webOrders.length = 0;
+  h.wouldPause = false;
   db = openMigrated();
   const user = db.prepare(
     `INSERT INTO users (id, full_name, pin_hash, role, created_at, updated_at, device_id) VALUES (?, ?, 'x', ?, ?, ?, ?)`,
@@ -175,7 +179,7 @@ live('A. a manager closes the shift on a cashier’s till with their PIN or pass
     const shift = await openShiftAs(CASHIER);
     h.session = CASHIER;
     const check = await call<ShiftCloseCheck>('shifts:closeCheck', { shiftId: shift.id, approverPin: PIN });
-    expect(check).toEqual({ closerName: 'Sara Manager', viaManagerPin: true, unpaidOrders: [] });
+    expect(check).toEqual({ closerName: 'Sara Manager', viaManagerPin: true, unpaidOrders: [], pausesWebsiteOrders: false });
     expect(JSON.stringify(check)).not.toMatch(/expected|cash/i);
     // The shift's totals stay refused to a cashier's login, PIN or not.
     expect(await refusal('shifts:summary', { shiftId: shift.id })).toMatchObject({ code: 'forbidden' });
@@ -238,7 +242,7 @@ live('A. a manager closes the shift on a cashier’s till with their PIN or pass
       h.session = who;
       const before = h.pinChecks;
       const check = await call<ShiftCloseCheck>('shifts:closeCheck', { shiftId: shift.id });
-      expect(check).toEqual({ closerName: who.fullName, viaManagerPin: false, unpaidOrders: [] });
+      expect(check).toEqual({ closerName: who.fullName, viaManagerPin: false, unpaidOrders: [], pausesWebsiteOrders: false });
       const closed = await call<Shift>('shifts:close', { shiftId: shift.id, countedCashCents: 500_000 });
       expect(closed.closedByUserId).toBe(who.id);
       // Their own login: the expected cash comes back, as it always did.
@@ -250,6 +254,24 @@ live('A. a manager closes the shift on a cashier’s till with their PIN or pass
       );
       expect(JSON.parse(audit.after_json)).not.toHaveProperty('approval');
     }
+  });
+
+  it('the close box hears when the close pauses website orders: the owner and a manager’s PIN alike, still no money', async () => {
+    h.wouldPause = true;
+    const viaPin = await openShiftAs(CASHIER);
+    h.session = CASHIER;
+    const pinCheck = await call<ShiftCloseCheck>('shifts:closeCheck', { shiftId: viaPin.id, approverPin: PIN });
+    expect(pinCheck).toEqual({ closerName: 'Sara Manager', viaManagerPin: true, unpaidOrders: [], pausesWebsiteOrders: true });
+    expect(JSON.stringify(pinCheck)).not.toMatch(/expected|cash/i);
+    await call<Shift>('shifts:close', { shiftId: viaPin.id, countedCashCents: 500_000, approverPin: PIN });
+
+    const own = await openShiftAs(OWNER);
+    h.session = OWNER;
+    const ownerCheck = await call<ShiftCloseCheck>('shifts:closeCheck', { shiftId: own.id });
+    expect(ownerCheck).toEqual({ closerName: 'The Owner', viaManagerPin: false, unpaidOrders: [], pausesWebsiteOrders: true });
+    expect(JSON.stringify(ownerCheck)).not.toMatch(/expected|cash/i);
+    // Only a warning: the close goes ahead as before.
+    expect((await call<Shift>('shifts:close', { shiftId: own.id, countedCashCents: 500_000 })).closedAt).not.toBeNull();
   });
 
   it('a manager’s PIN is checked again at the close itself (the renderer is not trusted with it)', async () => {

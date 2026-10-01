@@ -59,6 +59,13 @@ export interface ShiftCloseCheck {
   /** True when a manager's PIN or password approved it on a cashier's login. */
   viaManagerPin: boolean;
   unpaidOrders: UnpaidOrderAtClose[];
+  /**
+   * Closing this shift pauses website orders on this till: the owner's
+   * switch is on, the website link is set, and no other shift stays open
+   * here. A warning for the close box only; the close itself applies the
+   * real rule.
+   */
+  pausesWebsiteOrders: boolean;
 }
 
 /** Per-shift summary numbers used by the close dialog + history view. */

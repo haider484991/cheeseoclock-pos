@@ -107,7 +107,10 @@ vi.mock('../../services/print-spooler.js', () => ({
   ),
 }));
 vi.mock('../../services/fbr-worker.js', () => ({ fbrWorker: { kick: () => {}, resetAdapter: () => {} } }));
-vi.mock('../../services/web-orders-shift-pause.js', () => ({ followShiftForWebOrders: () => {} }));
+vi.mock('../../services/web-orders-shift-pause.js', () => ({
+  followShiftForWebOrders: () => {},
+  closeWouldPauseWebOrders: () => false,
+}));
 
 const live = describe.skipIf(!DatabaseSync);
 const session = (id: string, fullName: string, role: AuthenticatedUser['role']): AuthenticatedUser => ({

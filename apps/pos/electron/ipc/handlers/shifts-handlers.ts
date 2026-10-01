@@ -19,7 +19,7 @@ import {
 import type { AppDatabase } from '../../db/connection.js';
 import { printSpooler } from '../../services/print-spooler.js';
 import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-service.js';
-import { followShiftForWebOrders } from '../../services/web-orders-shift-pause.js';
+import { closeWouldPauseWebOrders, followShiftForWebOrders } from '../../services/web-orders-shift-pause.js';
 import { requireCapability, REFUSED } from '../guards.js';
 import { readOpeningFloat } from '../../services/till-settings.js';
 
@@ -164,9 +164,11 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
     }
   });
 
-  // Before the count: who closes, and the unpaid orders the close will carry
-  // over. The same people as the close itself; no money of the shift (the
-  // count is blind), only the unpaid orders' own totals.
+  // Before the count: who closes, the unpaid orders the close will carry
+  // over, and whether the close pauses website orders on this till (a yes or
+  // no for the close box to warn; the close itself applies the real rule).
+  // The same people as the close itself; no money of the shift (the count is
+  // blind), only the unpaid orders' own totals.
   defineHandler('shifts:closeCheck', ctx, async (_ctx, payload) => {
     const s = requireSession();
     const closer = await shiftCloser(ctx.db, s, payload.approverPin);
@@ -178,6 +180,7 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
       closerName: closer.name,
       viaManagerPin: closer.tillSignedInUserId !== null,
       unpaidOrders: listUnpaidForClose(ctx.db, shift.deviceId),
+      pausesWebsiteOrders: closeWouldPauseWebOrders(ctx.db, ctx.deviceId, shift.id),
     });
   });
 
