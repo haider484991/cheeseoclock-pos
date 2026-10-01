@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  CloseTillAsk,
   IpcChannel,
   IpcRequest,
   IpcResponse,
@@ -29,6 +30,9 @@ const api: RendererApi = {
     getBranding: () => invoke('system:getBranding', undefined),
     getSetupStatus: () => invoke('system:getSetupStatus', undefined),
     completeOnboarding: (req) => invoke('system:completeOnboarding', req),
+    // "Close the till?": on screen, and the answer (no login: the PIN screen asks too).
+    closeShown: (req) => invoke('system:closeShown', req),
+    closeAnswer: (req) => invoke('system:closeAnswer', req),
   },
   auth: {
     login: (req) => invoke('auth:login', req),
@@ -415,6 +419,16 @@ contextBridge.exposeInMainWorld('menuDeployEvents', {
     const listener = (_e: unknown, payload: MenuDeployChangedEvent) => cb(payload);
     ipcRenderer.on('menuDeploy:changed', listener);
     return () => ipcRenderer.removeListener('menuDeploy:changed', listener);
+  },
+});
+
+// X, Alt+F4 or the taskbar's Close while website orders come in through this
+// till: the main process holds the close and asks "Close the till?" here first.
+contextBridge.exposeInMainWorld('tillWindowEvents', {
+  onCloseRequested: (cb: (payload: CloseTillAsk) => void) => {
+    const listener = (_e: unknown, payload: CloseTillAsk) => cb(payload);
+    ipcRenderer.on('system:close-requested', listener);
+    return () => ipcRenderer.removeListener('system:close-requested', listener);
   },
 });
 

@@ -27,6 +27,7 @@ import { sealAllStoredSecrets } from './services/secrets-bootstrap.js';
 import { auditChainService } from './services/audit-chain-service.js';
 import { clearAttention } from './services/order-alerts-hub.js';
 import { APP_USER_MODEL_ID, initTillPower } from './services/till-power-hub.js';
+import { allowTillToClose, attachTillWindow } from './services/till-close-hub.js';
 import { startAnalyticsWorker, stopAnalyticsWorker } from './services/analytics/worker-host.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -80,6 +81,10 @@ async function createMainWindow() {
       autoplayPolicy: 'no-user-gesture-required',
     },
   });
+
+  // X, Alt+F4 or the taskbar's Close while website orders come in through
+  // this till asks "Close the till?" first (till-close.ts).
+  attachTillWindow(mainWindow);
 
   // Nothing else reloads a crashed screen (there is no menu in production to
   // press Ctrl+R), and a dead screen cannot ring for a website order. Reload
@@ -235,8 +240,15 @@ app.whenReady().then(bootstrap).catch((err: unknown) => {
 });
 
 // A notice that stays until dealt with must not outlive the till in Action Center.
-app.on('before-quit', () => clearAttention());
+// Every app.quit() closes the window without asking "Close the till?": an
+// update's "Restart now" (electron-updater's quitAndInstall calls app.quit)
+// and install on quit included. A restore's app.exit(0) fires no 'close'.
+app.on('before-quit', () => {
+  allowTillToClose('quit');
+  clearAttention();
+});
 
+// Reached only once the close guard let the window close (till-close-hub.ts).
 app.on('window-all-closed', () => {
   // The Reports worker's read connection closes first (a couple of seconds
   // at most): the till's own connection must be the last one open, or

@@ -245,6 +245,28 @@ export interface IpcContract {
     };
     response: ApiResult<{ adminUserId: string }>;
   };
+  /**
+   * "Close the till?" is on screen (system:close-requested, CloseTillAsk).
+   * Until the screen says so, the till closes by itself after 5 s (a screen
+   * that cannot show the question cannot take orders either). No login
+   * needed: the PIN screen asks too. `pending` false = the question is out
+   * of date, and the screen drops it.
+   */
+  'system:closeShown': {
+    request: { requestId: string };
+    response: ApiResult<{ pending: boolean }>;
+  };
+  /**
+   * The answer to "Close the till?": `close` true tells the website "not
+   * accepting" (2 s at most) and then closes the till; false keeps it open.
+   * No login needed: anyone at the counter can already press X, so the
+   * question stops a slip, it is not a lock. `closing` false = the question
+   * was out of date and nothing happens.
+   */
+  'system:closeAnswer': {
+    request: { requestId: string; close: boolean };
+    response: ApiResult<{ closing: boolean }>;
+  };
 
   // Auth
   'auth:login': {

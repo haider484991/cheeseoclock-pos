@@ -9,6 +9,7 @@ import { ManagerApprovalHost } from './features/printing/ManagerApprovalHost';
 import { ipc } from './ipc/client';
 import { OnboardingPage } from './features/onboarding/OnboardingPage';
 import { UpdateBanner } from './features/shell/UpdateBanner';
+import { CloseTillHost } from './features/shell/CloseTillHost';
 import { OrderAlerts } from './features/notifications/OrderAlerts';
 import { forgetOnWhoChanges } from './stores/forgetOnSignOut';
 import './styles/globals.css';
@@ -105,6 +106,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <RootGate />
         <ConfirmHost />
         <ManagerApprovalHost />
+        {/* Outside RootGate: "Close the till?" shows on the PIN screen and the loading screen too. */}
+        <CloseTillHost />
       </ToastProvider>
     </QueryClientProvider>
   </React.StrictMode>,

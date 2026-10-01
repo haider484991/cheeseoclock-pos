@@ -8,6 +8,16 @@ import { createUser } from '../../db/repositories/user-repo.js';
 import { createTaxCategory } from '../../db/repositories/tax-category-repo.js';
 import { getReceiptBranding, setReceiptBranding } from '../../services/printer-config.js';
 import { readShopProfile } from '../../db/business-settings-read.js';
+import { tillClose } from '../../services/till-close-hub.js';
+
+/** The close question's id, as the screen sent it back. */
+function closeRequestId(payload: unknown): string {
+  const id = (payload as { requestId?: unknown } | null | undefined)?.requestId;
+  if (typeof id !== 'string' || !id) {
+    throw new IpcGuardError({ code: 'validation_failed', message: 'Missing request' });
+  }
+  return id;
+}
 
 export function registerSystemHandlers(ctx: HandlerContext): void {
   // The PIN screen shows the shop's own name and logo. It read them through
@@ -49,6 +59,23 @@ export function registerSystemHandlers(ctx: HandlerContext): void {
       .prepare(`SELECT COUNT(*) AS n FROM users WHERE deleted_at IS NULL`)
       .get() as { n: number };
     return ok({ completed: row.n > 0, userCount: row.n });
+  });
+
+  /**
+   * "Close the till?" (till-close.ts): the screen says the question is up,
+   * and gives the answer. No login on purpose: the PIN screen asks too, and
+   * anyone at the counter can already press X — the question stops a slip,
+   * it is not a lock.
+   */
+  defineHandler('system:closeShown', ctx, (_ctx, payload) => ok(tillClose.shown(closeRequestId(payload))));
+
+  defineHandler('system:closeAnswer', ctx, (_ctx, payload) => {
+    const requestId = closeRequestId(payload);
+    const close = (payload as { close?: unknown } | null | undefined)?.close;
+    if (typeof close !== 'boolean') {
+      throw new IpcGuardError({ code: 'validation_failed', message: 'Missing answer' });
+    }
+    return ok(tillClose.answer(requestId, close));
   });
 
   /**

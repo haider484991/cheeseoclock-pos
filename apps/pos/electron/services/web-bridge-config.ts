@@ -172,7 +172,8 @@ export function storeAcceptingOrders(
 /**
  * This till is taking website orders now: the website link is set (and its
  * password readable here), the owner's switch is on, and no shift pause.
- * While it is, the computer is kept awake (till-power-hub.ts).
+ * While it is, the computer is kept awake (till-power-hub.ts) and closing
+ * the till window asks first (till-close.ts, through closeImpact).
  */
 export function takingWebOrders(
   cfg: WebBridgeConfig | LoadedWebBridgeConfig,

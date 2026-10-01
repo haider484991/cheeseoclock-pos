@@ -42,6 +42,7 @@ import {
   getWebOrdersShiftPause,
   storeAcceptingOrders,
   storeHeartbeatBody,
+  takingWebOrders,
   type WebBridgeConfig,
 } from './web-bridge-config.js';
 import { getReceiptBranding } from './printer-config.js';
@@ -765,7 +766,10 @@ class WebOrdersBridge {
     );
   }
 
-  /** Stop polling — called right before the app restarts for a restore. */
+  /**
+   * Stop polling — called right before the app restarts for a restore, and
+   * when the person at the till chose "Close the till" (sayTillClosing).
+   */
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
@@ -801,6 +805,79 @@ class WebOrdersBridge {
       shopPublish: this.shopPublishStatus(cfg ? isWebBridgeReady(cfg).ok : false),
       homeMissing: this.shopHeld()?.homeMissing ?? null,
     };
+  }
+
+  /**
+   * What closing the till window would stop (till-close.ts): is the website
+   * taking orders through this till now — the same rule as keeping the
+   * computer awake (takingWebOrders) — and how many website orders are still
+   * on Live Orders. Only orders still live on the board count: one delivered,
+   * cancelled, deleted or voided here is not "still on Live Orders", whatever
+   * its last push to the website said. Never throws: a till that cannot tell
+   * closes as before.
+   */
+  closeImpact(): { takingOrders: boolean; openWebOrders: number } {
+    if (!this.db) return { takingOrders: false, openWebOrders: 0 };
+    let taking = false;
+    try {
+      taking = takingWebOrders(getWebBridgeConfig(this.db), getWebOrdersShiftPause(this.db));
+    } catch (e) {
+      log.warn('Web bridge: could not tell whether website orders are on', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return { takingOrders: false, openWebOrders: 0 };
+    }
+    if (!taking) return { takingOrders: false, openWebOrders: 0 };
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT COUNT(*) AS n
+             FROM web_order_imports wi
+             JOIN orders o ON o.id = wi.pos_order_id
+            WHERE wi.status = 'imported'
+              AND IFNULL(wi.last_pushed_status, '') NOT IN ('delivered', 'cancelled')
+              AND o.deleted_at IS NULL
+              AND o.status IN ('sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery')`,
+        )
+        .get() as { n: number } | undefined;
+      return { takingOrders: true, openWebOrders: Number(row?.n ?? 0) };
+    } catch (e) {
+      // Still ask: the question matters more than the count in it.
+      log.warn('Web bridge: could not count the website orders on Live Orders', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return { takingOrders: true, openWebOrders: 0 };
+    }
+  }
+
+  /**
+   * The person at the till chose "Close the till" while it takes website
+   * orders (till-close.ts): tell the website "not accepting" now, rather
+   * than leaving it open until the last heartbeat goes stale 3 minutes later
+   * with nobody to cook. The poll stops first, so no later heartbeat can
+   * reopen it; the window closes right after, and the next start says
+   * "accepting" again (init → reschedule, then the first tick's heartbeat).
+   * With no link, or the owner's switch off, the website is closed already.
+   *
+   * Two tills: the website keeps one status, so if a second till ever holds
+   * the link too, this closes the website until that till's next heartbeat
+   * (HEARTBEAT_MS). Today only one till has the link.
+   *
+   * Never throws; a failed push is logged, and the website still closes by
+   * itself once the last beat goes stale.
+   */
+  async sayTillClosing(): Promise<void> {
+    if (!this.db) return;
+    try {
+      const cfg = getWebBridgeConfig(this.db);
+      if (!cfg.enabled || !isWebBridgeReady(cfg).ok) return;
+      this.stop();
+      await this.pushStoreStatus(cfg, { closing: true });
+    } catch (e) {
+      log.warn('Store status push as the till closes failed', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   kick(): void {
@@ -1809,11 +1886,14 @@ class WebOrdersBridge {
    * (storeAcceptingOrders). Pushes go one at a time, and the pause is read
    * when a push is sent rather than when it was asked for, so the last word
    * the site hears is always the current one.
+   *
+   * `closing` (sayTillClosing): "not accepting" with no reason, the same
+   * words as the owner's switch-off, so the website needs no change for it.
    */
-  private pushStoreStatus(cfg: WebBridgeConfig): Promise<void> {
+  private pushStoreStatus(cfg: WebBridgeConfig, opts: { closing?: boolean } = {}): Promise<void> {
     const push = this.storePush.then(async () => {
       const pause = this.db ? getWebOrdersShiftPause(this.db) : null;
-      const beat = storeHeartbeatBody(cfg, pause, this.deviceId);
+      const beat = storeHeartbeatBody(opts.closing ? { enabled: false } : cfg, pause, this.deviceId);
       const res = await this.api(cfg, '/api/bridge/status', {
         method: 'PUT',
         body: JSON.stringify(beat),

@@ -13,7 +13,7 @@ import type {
 } from '@cheeseoclock/shared-types';
 import { STEP_IN_HELD } from '@cheeseoclock/shared-types';
 import type { SetShopSettingRequest, ShopSettingCard, ShopSettingKey, ShopSettingValues } from '@cheeseoclock/shared-types';
-import type { MenuDeployChangedEvent } from '@cheeseoclock/shared-types';
+import type { CloseTillAsk, MenuDeployChangedEvent } from '@cheeseoclock/shared-types';
 import type { SetTillSettingRequest, TillSettingCard, TillSettingKey, TillSettingValues } from '@cheeseoclock/shared-types';
 
 export class IpcError extends Error {
@@ -56,6 +56,10 @@ export const ipc = {
     getSetupStatus: () => unwrap(window.api.system.getSetupStatus()),
     completeOnboarding: (input: IpcRequest<'system:completeOnboarding'>) =>
       unwrap(window.api.system.completeOnboarding(input)),
+    /** "Close the till?" is on screen; pending false = out of date, drop it. */
+    closeShown: (requestId: string) => unwrap(window.api.system.closeShown({ requestId })),
+    /** The answer to "Close the till?"; closing false = out of date, nothing happens. */
+    closeAnswer: (requestId: string, close: boolean) => unwrap(window.api.system.closeAnswer({ requestId, close })),
   },
   auth: {
     login: (pin: string) => unwrap(window.api.auth.login({ pin })),
@@ -505,6 +509,14 @@ export function onMenuDeployChanged(cb: (payload: MenuDeployChangedEvent) => voi
     menuDeployEvents?: { onChanged: (cb: (p: MenuDeployChangedEvent) => void) => () => void };
   };
   return w.menuDeployEvents?.onChanged(cb) ?? (() => {});
+}
+
+/** Listen for system:close-requested (X, Alt+F4 or the taskbar's Close while website orders are on). */
+export function onCloseTillRequested(cb: (payload: CloseTillAsk) => void): () => void {
+  const w = window as unknown as {
+    tillWindowEvents?: { onCloseRequested: (cb: (p: CloseTillAsk) => void) => () => void };
+  };
+  return w.tillWindowEvents?.onCloseRequested(cb) ?? (() => {});
 }
 
 /** Listen for the owner's shop rules changing (saved here, or from the other till). */

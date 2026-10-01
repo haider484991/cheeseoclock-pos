@@ -326,6 +326,8 @@ export async function quitAndInstallUpdate(): Promise<void> {
       log.warn('Auto-updater: autoUpdater missing on install');
       return;
     }
+    // quitAndInstall → app.quit() → before-quit → allowTillToClose('quit')
+    // (index.ts): "Restart now" never shows "Close the till?".
     updater.quitAndInstall();
   } catch (e) {
     log.warn('Auto-updater: install failed', e);
