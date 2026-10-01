@@ -289,7 +289,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -302,6 +302,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0043_order_test_delete.sql',
       '0044_order_came_by.sql',
       '0045_web_availability.sql',
+      '0046_web_order_alerts.sql',
     ]);
   });
 
@@ -325,5 +326,35 @@ describe('migrations: numbered in order, one file per number', () => {
       "ALTER TABLE menu_items ADD COLUMN web_availability TEXT NOT NULL DEFAULT 'on'; ALTER TABLE categories ADD COLUMN is_on_website INTEGER NOT NULL DEFAULT 1;",
     );
     expect(/\bCHECK\b|\bUPDATE\b|\bINSERT\b|\bDROP\b|\bCREATE\b/i.test(sql)).toBe(false);
+  });
+
+  it('0046 only adds the six nullable web_order_imports columns, their backfill on imported rows and the unacked index; it touches no other table and stays pure-local', () => {
+    const raw = readFileSync(join(MIGRATIONS_DIR, '0046_web_order_alerts.sql'), 'utf8');
+    const sql = stripComments(raw).trim().replace(/\s+/g, ' ');
+    expect(sql).toBe(
+      [
+        'ALTER TABLE web_order_imports ADD COLUMN web_created_at TEXT;',
+        'ALTER TABLE web_order_imports ADD COLUMN web_total_cents INTEGER;',
+        'ALTER TABLE web_order_imports ADD COLUMN acked_at TEXT;',
+        'ALTER TABLE web_order_imports ADD COLUMN alert_seen_at TEXT;',
+        'ALTER TABLE web_order_imports ADD COLUMN site_cancelled_at TEXT;',
+        'ALTER TABLE web_order_imports ADD COLUMN cancel_noted_at TEXT;',
+        'UPDATE web_order_imports SET acked_at = COALESCE(imported_at, updated_at), alert_seen_at = COALESCE(imported_at, updated_at)',
+        "WHERE status = 'imported' AND pos_order_id IS NOT NULL;",
+        'CREATE INDEX IF NOT EXISTS idx_web_imports_unacked ON web_order_imports(imported_at)',
+        "WHERE status = 'imported' AND acked_at IS NULL;",
+      ].join(' '),
+    );
+    // Every table it names is web_order_imports: no orders, no ledger, no settings.
+    const tables = [...sql.matchAll(/\b(?:ALTER TABLE|UPDATE|ON|INTO|FROM)\s+(\w+)/gi)].map((m) => m[1]);
+    expect(new Set(tables)).toEqual(new Set(['web_order_imports']));
+    expect(/\bCHECK\b|\bNOT NULL DEFAULT\b|\bDROP\b|\bDELETE\b|\bINSERT\b/i.test(sql)).toBe(false);
+    // No BEGIN anywhere, comments included: the migrator runs it in its own transaction (migrator.ts managesOwnTransaction).
+    expect(/\bBEGIN\b/i.test(raw)).toBe(false);
+    // Pure-local: no sync columns, so it must stay on the allowlist.
+    expect(PURE_LOCAL_TABLES.has('web_order_imports')).toBe(true);
+    expect([...(SCHEMA.get('web_order_imports') ?? [])]).toEqual(
+      expect.arrayContaining(['web_created_at', 'web_total_cents', 'acked_at', 'alert_seen_at', 'site_cancelled_at', 'cancel_noted_at']),
+    );
   });
 });

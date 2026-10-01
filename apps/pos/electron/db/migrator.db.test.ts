@@ -4,14 +4,20 @@
  *   - a brand-new till runs 0001 up to the newest, in number order, once;
  *   - a till on v0.7.22 (0001..0041 applied: 0040 / 0041 are foodpanda's,
  *     released first) runs just 0042_drawer_log, 0043_order_test_delete,
- *     0044_order_came_by and 0045_web_availability, in that order, after a
- *     pre-migrate copy — and its v0.7.22 rows (a paid
+ *     0044_order_came_by, 0045_web_availability and 0046_web_order_alerts,
+ *     in that order, after a pre-migrate copy — and its v0.7.22 rows (a paid
  *     foodpanda order, its deal and the terms kept at payment) come through
  *     untouched and work with the new code (a test delete, foodpanda's
  *     figures);
- *   - a till on v0.7.29 (0001..0044) runs just 0045_web_availability: its
- *     menu rows come through untouched, every item and category reads "on
- *     the website", and the website gets the menu it got before;
+ *   - a till on v0.7.29 (0001..0044) runs just 0045_web_availability, then
+ *     0046_web_order_alerts: its menu rows come through untouched, every item
+ *     and category reads "on the website", and the website gets the menu it
+ *     got before;
+ *   - a till on v0.7.32 (0001..0045) runs just 0046_web_order_alerts: its
+ *     website-order rows come through, the ones imported are marked
+ *     confirmed and seen at their import time (so the restart that installs
+ *     it neither warns nor rings), an import attempt still waiting for its
+ *     retry and a failed row are left alone, and the audit chain verifies;
  *   - a till already up to date runs nothing.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
@@ -94,7 +100,7 @@ live('migrations at boot (migrator.ts)', () => {
     const names = ran(db);
     expect(names).toEqual(migrationFiles());
     expect(names.map((n) => Number(n.slice(0, 4)))).toEqual(names.map((_, i) => i + 1));
-    expect(names.slice(-7)).toEqual([
+    expect(names.slice(-8)).toEqual([
       '0039_shift_close_notes.sql',
       '0040_foodpanda_deal_and_terms.sql',
       '0041_channel_terms_uplift_and_fee.sql',
@@ -102,11 +108,12 @@ live('migrations at boot (migrator.ts)', () => {
       '0043_order_test_delete.sql',
       '0044_order_came_by.sql',
       '0045_web_availability.sql',
+      '0046_web_order_alerts.sql',
     ]);
     expect(h.snapshots).toEqual([]);
   });
 
-  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043, 0044 then 0045, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
+  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043, 0044, 0045 then 0046, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
     const { runMigrations } = await import('./migrator.js');
     h.snapshots.length = 0;
     const db = tillOnV0722();
@@ -131,6 +138,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0043_order_test_delete.sql',
       '0044_order_came_by.sql',
       '0045_web_availability.sql',
+      '0046_web_order_alerts.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // Their columns and the log's start are there…
@@ -147,7 +155,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 4);
+    expect(ran(db)).toHaveLength(had.length + 5);
     expect(h.snapshots).toHaveLength(1);
 
     // The new code on the upgraded till: foodpanda's figures read the kept terms…
@@ -165,7 +173,7 @@ live('migrations at boot (migrator.ts)', () => {
     expect(getFoodpanda(db, ALL_TIME)).toBeNull();
   });
 
-  it('a till on v0.7.29 (0001..0044) runs just 0045, after a pre-migrate copy: its menu rows are untouched, every item and category reads on the website, and the published menu is what it was', async () => {
+  it('a till on v0.7.29 (0001..0044) runs just 0045 then 0046, after a pre-migrate copy: its menu rows are untouched, every item and category reads on the website, and the published menu is what it was', async () => {
     const { runMigrations } = await import('./migrator.js');
     h.snapshots.length = 0;
     const db = openMigrated({ stopBefore: '0045' });
@@ -194,7 +202,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0045_web_availability.sql']);
+    expect(ran(db)).toEqual([...had, '0045_web_availability.sql', '0046_web_order_alerts.sql']);
     expect(h.snapshots).toHaveLength(1);
     // Every row as it was, with the two new columns at "on the website".
     expect({
@@ -214,6 +222,80 @@ live('migrations at boot (migrator.ts)', () => {
       ['c_food', true],
       ['c_old', true],
     ]);
+    // The next boot: nothing to run, no copy.
+    await runMigrations(db);
+    expect(ran(db)).toHaveLength(had.length + 2);
+    expect(h.snapshots).toHaveLength(1);
+  });
+
+  it('a till on v0.7.32 (0001..0045) runs just 0046, after a pre-migrate copy: its website-order rows come through, the imported ones read confirmed and seen, a waiting attempt and a failed row do not, and the audit chain verifies', async () => {
+    const { runMigrations } = await import('./migrator.js');
+    const { writeAudit } = await import('./repositories/audit-repo.js');
+    const { verifyAuditChain } = await import('./audit-chain.js');
+    const repo = await import('./repositories/web-order-imports-repo.js');
+    h.snapshots.length = 0;
+    const db = openMigrated({ stopBefore: '0046' });
+    db.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL)`);
+    const log = db.prepare(`INSERT INTO _migrations (name, ran_at) VALUES (?, ?)`);
+    for (const f of migrationFiles().filter((m) => m < '0046')) log.run(f, T0);
+    // v0.7.32's website orders, as its bridge left them (made-up customer): one delivered, one still New.
+    db.prepare(`INSERT INTO users (id, full_name, pin_hash, role, created_at, updated_at, device_id) VALUES ('u_admin', 'Test Owner', 'x', 'admin', ?, ?, ?)`).run(T0, T0, DEV);
+    const order = db.prepare(
+      `INSERT INTO orders (id, order_number, mode, status, cashier_id, source, customer_name_snapshot, customer_phone_snapshot,
+                           total_cents, created_at, updated_at, device_id)
+       VALUES (?, ?, ?, ?, 'u_admin', 'web', 'Test Customer', '0300-0000000', 150000, ?, ?, ?)`,
+    );
+    order.run('o_w1', '20260927-0001', 'delivery', 'delivered', T0, T0, DEV);
+    order.run('o_w2', '20260927-0002', 'takeaway', 'sent_to_kitchen', T0, T0, DEV);
+    for (const id of ['o_w1', 'o_w2']) {
+      writeAudit(db, { entityType: 'order', entityId: id, action: 'create', actorUserId: 'u_admin', before: null, after: { id } });
+    }
+    const imp = db.prepare(
+      `INSERT INTO web_order_imports (web_order_id, pos_order_id, status, attempts, last_error, last_pushed_status, imported_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    imp.run('w1', 'o_w1', 'imported', 1, null, 'delivered', '2026-09-27T10:01:00.000Z', T0, '2026-09-27T11:00:00.000Z');
+    imp.run('w2', 'o_w2', 'imported', 1, null, 'accepted', '2026-09-27T10:02:00.000Z', T0, '2026-09-27T10:02:00.000Z');
+    // An import attempt waiting for its retry (the status column's default), and one the till gave up on.
+    imp.run('w3', null, 'imported', 2, 'item gone', null, null, T0, '2026-09-27T10:03:00.000Z');
+    imp.run('w4', null, 'failed', 0, 'stale', null, null, T0, '2026-09-27T10:04:00.000Z');
+    const all = (sql: string) => db.prepare(sql).all() as Array<Record<string, unknown>>;
+    const before = {
+      imports: all(`SELECT * FROM web_order_imports ORDER BY web_order_id`),
+      orders: all(`SELECT * FROM orders ORDER BY id`),
+      audit: all(`SELECT * FROM audit_log ORDER BY rowid`),
+    };
+    const had = ran(db);
+    expect(had.at(-1)).toBe('0045_web_availability.sql');
+    expect(columns(db, 'web_order_imports')).not.toContain('acked_at');
+
+    await runMigrations(db);
+
+    expect(ran(db)).toEqual([...had, '0046_web_order_alerts.sql']);
+    expect(h.snapshots).toHaveLength(1);
+    const added = ['web_created_at', 'web_total_cents', 'acked_at', 'alert_seen_at', 'site_cancelled_at', 'cancel_noted_at'];
+    expect(columns(db, 'web_order_imports')).toEqual([...Object.keys(before.imports[0] ?? {}), ...added]);
+    // Every row as it was, with the new columns: the imported ones confirmed and seen when they came in.
+    const empty = Object.fromEntries(added.map((c) => [c, null]));
+    const seenAt = (r: Record<string, unknown>) => ({ ...empty, acked_at: r['imported_at'], alert_seen_at: r['imported_at'] });
+    expect(all(`SELECT * FROM web_order_imports ORDER BY web_order_id`)).toEqual(
+      before.imports.map((r) => ({ ...r, ...(r['pos_order_id'] !== null && r['status'] === 'imported' ? seenAt(r) : empty) })),
+    );
+    expect(all(`SELECT web_order_id AS id, acked_at FROM web_order_imports WHERE acked_at IS NOT NULL ORDER BY web_order_id`).map((r) => r['id'])).toEqual(['w1', 'w2']);
+    // Orders and the audit trail untouched, and the chain still verifies.
+    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders);
+    expect(all(`SELECT * FROM audit_log ORDER BY rowid`)).toEqual(before.audit);
+    const chainRows = all(
+      `SELECT rowid, id, entity_type AS entityType, entity_id AS entityId, action, actor_user_id AS actorUserId,
+              before_json AS beforeJson, after_json AS afterJson, ip, created_at AS createdAt,
+              prev_hash AS prevHash, row_hash AS rowHash
+         FROM audit_log ORDER BY rowid`,
+    ).map((r) => ({ ...r, rowid: Number(r['rowid']) })) as unknown as Parameters<typeof verifyAuditChain>[0];
+    expect(verifyAuditChain(chainRows)).toMatchObject({ ok: true, checkedRows: 2 });
+    // The first poll and the first boot find nothing to retry or ring for: the New order was seen on v0.7.32.
+    expect(repo.listUnackedImports(db, '2026-09-27T00:00:00.000Z')).toEqual([]);
+    expect(repo.unseenWebOrders(db, '2026-09-27T00:00:00.000Z')).toEqual([]);
+
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
     expect(ran(db)).toHaveLength(had.length + 1);
