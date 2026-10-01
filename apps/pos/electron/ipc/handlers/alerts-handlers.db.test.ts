@@ -7,7 +7,13 @@
  *     longer has Settings (printer.manage; owner, 2026-09-27: "managers
  *     can't see the reports and settings");
  *   - a "did not come in" card is closed only by someone logged in: logged
- *     out, Seen silences it and the phone number stays on screen;
+ *     out, Seen silences it and the card stays on screen;
+ *   - while nobody is signed in, the pending list carries no phone number
+ *     (the PIN screen); signed in, it does;
+ *   - Seen and a closed "website cancelled" card are saved, so a restart
+ *     (fresh modules, the same database) brings back only the website
+ *     orders still New and unseen from the last 12 hours, and the "website
+ *     cancelled" cards nobody signed in has closed;
  *   - an order leaves the pending list (stops ringing) once it has moved past
  *     New or been deleted — the stillWaiting query in order-alerts-hub.ts;
  *   - anyone (the PIN screen too) can read the watch, which says when website
@@ -266,6 +272,185 @@ describe.skipIf(!Sqlite)('pending order alerts through alerts:*', () => {
     expect(cards(call('alerts:getPending'))).toHaveLength(1);
     h.session = CASHIER;
     expect(cards(call('alerts:acknowledge', req))).toEqual([]);
+  });
+
+  it('signed out, no card carries a phone number (getPending or acknowledge); signed in, they do', async () => {
+    const { orderAlerts } = await import('../../services/order-alerts-hub.js');
+    orderAlerts.importFailed({
+      webOrderId: 'w-phone-1',
+      customerName: 'Sara',
+      customerPhone: '0300-1111111',
+      message: 'gave up after 5 attempts',
+      final: true,
+      reason: 'gave_up',
+    });
+    orderAlerts.importFailed({
+      webOrderId: 'w-phone-2',
+      customerName: 'Ali',
+      customerPhone: '0300-2222222',
+      orderNumber: 'CO-20260926-0042',
+      message: 'cancelled on the website while the kitchen had it',
+      final: true,
+      reason: 'cancelled_on_site',
+    });
+    type Failures = { data: { failures: Array<{ webOrderId: string; customerPhone: string | null }> } };
+    const phones = (r: unknown) =>
+      Object.fromEntries(
+        (r as Failures).data.failures
+          .filter((f) => f.webOrderId.startsWith('w-phone-'))
+          .map((f) => [f.webOrderId, f.customerPhone]),
+      );
+
+    h.session = null;
+    const signedOut = call('alerts:getPending') as Failures;
+    expect(signedOut.data.failures.length).toBeGreaterThanOrEqual(2);
+    expect(signedOut.data.failures.every((f) => f.customerPhone === null)).toBe(true);
+    expect(JSON.stringify(signedOut)).not.toMatch(/0300-/);
+    // Seen on the PIN screen answers with the list too: no phone in it either.
+    const ack = call('alerts:acknowledge', { silenceFailureIds: ['w-phone-1'] });
+    expect(phones(ack)).toEqual({ 'w-phone-1': null, 'w-phone-2': null });
+
+    // The hub still has them: the first read after a sign-in brings them back.
+    h.session = CASHIER;
+    expect(phones(call('alerts:getPending'))).toEqual({ 'w-phone-1': '0300-1111111', 'w-phone-2': '0300-2222222' });
+  });
+});
+
+describe.skipIf(!Sqlite)('pending order alerts across a restart', () => {
+  const isoAgo = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+
+  /** A website order the bridge imported: its POS order and its import row (made-up customer). */
+  function webOrder(
+    n: number,
+    o: {
+      status?: string;
+      deleted?: boolean;
+      importedMin: number;
+      seenMin?: number;
+      siteCancelledMin?: number;
+      cancelNotedMin?: number;
+      webTotalCents?: number | null;
+    },
+  ): void {
+    const id = `o${n}`;
+    const created = isoAgo(o.importedMin + 1);
+    db.prepare(
+      `INSERT INTO orders (id, order_number, mode, status, cashier_id, source, customer_name_snapshot,
+                           customer_phone_snapshot, total_cents, created_at, updated_at, deleted_at, device_id)
+       VALUES (?, ?, 'delivery', ?, 'u_cash', 'web', 'Test Customer', '0300-7654321', 150000, ?, ?, ?, ?)`,
+    ).run(id, `CO-20261001-00${n}`, o.status ?? 'sent_to_kitchen', created, created, o.deleted ? isoAgo(1) : null, DEV);
+    const imported = isoAgo(o.importedMin);
+    db.prepare(
+      `INSERT INTO web_order_imports (web_order_id, pos_order_id, status, attempts, last_pushed_status, imported_at,
+                                      created_at, updated_at, web_total_cents, acked_at, alert_seen_at,
+                                      site_cancelled_at, cancel_noted_at)
+       VALUES (?, ?, 'imported', 1, 'accepted', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      `w${n}`,
+      id,
+      imported,
+      imported,
+      imported,
+      o.webTotalCents === undefined ? 150000 : o.webTotalCents,
+      imported,
+      o.seenMin === undefined ? null : isoAgo(o.seenMin),
+      o.siteCancelledMin === undefined ? null : isoAgo(o.siteCancelledMin),
+      o.cancelNotedMin === undefined ? null : isoAgo(o.cancelNotedMin),
+    );
+  }
+
+  /** The till restarts on the same database: fresh modules, the handlers registered again. */
+  async function restart(): Promise<void> {
+    vi.resetModules();
+    h.handlers.clear();
+    const { registerAlertsHandlers } = await import('./alerts-handlers.js');
+    registerAlertsHandlers({ db, deviceId: DEV } as never);
+  }
+
+  type Pending = {
+    data: {
+      orders: Array<{ orderId: string; receivedAt: string; totalMismatch: unknown }>;
+      failures: Array<{
+        webOrderId: string;
+        reason: string;
+        silenced: boolean;
+        orderNumber?: string | null;
+        customerPhone: string | null;
+      }>;
+    };
+  };
+  const pending = () => call('alerts:getPending') as Pending;
+  const importRow = (n: number) =>
+    db.prepare(`SELECT alert_seen_at, cancel_noted_at FROM web_order_imports WHERE web_order_id = ?`).get(`w${n}`);
+
+  it('Seen sets alert_seen_at, signed out too; the first time is kept', () => {
+    webOrder(41, { importedMin: 5 });
+    h.session = null;
+    call('alerts:acknowledge', { orderIds: ['o41'] });
+    const first = importRow(41)?.['alert_seen_at'];
+    expect(typeof first).toBe('string');
+    call('alerts:acknowledge', { orderIds: ['o41'] });
+    expect(importRow(41)?.['alert_seen_at']).toBe(first);
+  });
+
+  it('only unseen website orders still New from the last 12 hours ring again; seen, started, deleted or older ones do not', async () => {
+    webOrder(41, { importedMin: 120, webTotalCents: 140000 }); // unseen, New, 2 h ago — the total changed
+    webOrder(42, { importedMin: 120, seenMin: 110 }); // seen
+    webOrder(43, { importedMin: 120, status: 'preparing' }); // started
+    webOrder(44, { importedMin: 13 * 60 }); // 13 hours ago
+    webOrder(45, { importedMin: 30, deleted: true }); // deleted
+    webOrder(46, { importedMin: 20, webTotalCents: null }); // unseen, imported before 0046 kept a website total
+    await restart();
+
+    const p = pending().data;
+    expect(p.orders.map((o) => o.orderId)).toEqual(['o41', 'o46']);
+    const importedAt = db.prepare(`SELECT imported_at FROM web_order_imports WHERE web_order_id = 'w41'`).get()?.['imported_at'];
+    // It keeps the time it came in, and the changed total is shown again.
+    expect(p.orders[0]).toMatchObject({
+      receivedAt: importedAt,
+      totalMismatch: { webTotalCents: 140000, tillTotalCents: 150000 },
+    });
+    expect(p.orders[1]!.totalMismatch).toBeNull();
+
+    // Seen on the PIN screen, then another restart: nothing rings.
+    h.session = null;
+    call('alerts:acknowledge', { orderIds: ['o41', 'o46'] });
+    await restart();
+    expect(pending().data.orders).toEqual([]);
+  });
+
+  it('a "website cancelled" card nobody closed comes back loud; signed out it stays (no phone), signed in it is closed for good', async () => {
+    webOrder(51, { importedMin: 90, status: 'preparing', seenMin: 85, siteCancelledMin: 30 }); // open
+    webOrder(52, { importedMin: 90, status: 'preparing', seenMin: 85, siteCancelledMin: 30, cancelNotedMin: 20 }); // closed
+    webOrder(53, { importedMin: 14 * 60, status: 'preparing', seenMin: 14 * 60, siteCancelledMin: 13 * 60 }); // too old
+    await restart();
+
+    h.session = null;
+    expect(pending().data.failures).toEqual([
+      expect.objectContaining({
+        webOrderId: 'w51',
+        reason: 'cancelled_on_site',
+        silenced: false,
+        orderNumber: 'CO-20261001-0051',
+        customerPhone: null,
+      }),
+    ]);
+    h.session = CASHIER;
+    expect(pending().data.failures[0]).toMatchObject({ webOrderId: 'w51', customerPhone: '0300-7654321' });
+
+    // Signed out, the card cannot be closed: it is not marked, and the next restart brings it back.
+    h.session = null;
+    call('alerts:acknowledge', { closeFailureIds: ['w51'], silenceFailureIds: ['w51'] });
+    expect(importRow(51)?.['cancel_noted_at']).toBeNull();
+    await restart();
+    expect(pending().data.failures.map((f) => [f.webOrderId, f.silenced])).toEqual([['w51', false]]);
+
+    // Signed in, closing it marks it, and it never comes back.
+    h.session = CASHIER;
+    call('alerts:acknowledge', { closeFailureIds: ['w51'] });
+    expect(typeof importRow(51)?.['cancel_noted_at']).toBe('string');
+    await restart();
+    expect(pending().data.failures).toEqual([]);
   });
 });
 

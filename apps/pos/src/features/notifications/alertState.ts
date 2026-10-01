@@ -8,9 +8,10 @@
  *   - orders arriving while one is ringing join it: the banner counts them
  *     and they ring with the next repeat, not as a burst of chimes;
  *   - "Keep ringing until someone looks": every 9 s for 10 minutes after
- *     the newest order, then every 30 s, then silence after an hour (the
- *     banner stays until someone looks). That switch is the chime's only:
- *     the alarm for an order that did not come in always repeats;
+ *     the newest order, then every 30 s, then every 2 minutes after an
+ *     hour, until someone looks — it never stops by itself. That switch is
+ *     the chime's only: the alarm for an order that did not come in always
+ *     repeats, on the same steps;
  *   - the alarm (an order that did not come in, or one the website
  *     cancelled while the kitchen had it) wins over the chime;
  *   - Seen / Esc acts on the row the banner shows, nothing else: a ringing
@@ -36,8 +37,13 @@ import {
 export const RING_EVERY_MS = 9_000;
 export const RING_SLOW_AFTER_MS = 10 * 60_000;
 export const RING_SLOW_EVERY_MS = 30_000;
-/** After an hour of nobody looking the chime stops; the banner stays. */
-export const RING_STOP_AFTER_MS = 60 * 60_000;
+/**
+ * After an hour of nobody looking the chime slows again, to every
+ * RING_LATE_EVERY_MS, and keeps going until someone looks (Seen, Live
+ * Orders, or the order moves on): an order nobody has seen never goes quiet.
+ */
+export const RING_LATE_AFTER_MS = 60 * 60_000;
+export const RING_LATE_EVERY_MS = 2 * 60_000;
 /** Two different alerts never start closer together than this. */
 export const MIN_RING_GAP_MS = 3_000;
 /** Seen covers only what was on screen this long before the tap. */
@@ -323,17 +329,21 @@ export function ringingKind(s: AlertState, settings: AlertSoundSettings): RingKi
   return null;
 }
 
-/** How long between repeats, this long after the newest arrival; null: stop repeating. */
+/**
+ * How long between repeats, this long after the newest arrival. It never
+ * says stop (null) any more; the type keeps the guard in dueRing.
+ */
 export function repeatEvery(elapsedMs: number): number | null {
   if (elapsedMs < RING_SLOW_AFTER_MS) return RING_EVERY_MS;
-  if (elapsedMs < RING_STOP_AFTER_MS) return RING_SLOW_EVERY_MS;
-  return null;
+  if (elapsedMs < RING_LATE_AFTER_MS) return RING_SLOW_EVERY_MS;
+  return RING_LATE_EVERY_MS;
 }
 
 /** The repeat rule in words, for Settings → Sounds (kept next to the numbers it describes). */
 export function repeatRuleText(): string {
-  const hours = RING_STOP_AFTER_MS / 3_600_000;
-  return `every ${RING_EVERY_MS / 1000} s, then every ${RING_SLOW_EVERY_MS / 1000} s after ${RING_SLOW_AFTER_MS / 60_000} minutes; it stops after ${hours === 1 ? 'an hour' : `${hours} hours`} and the note stays`;
+  const hours = RING_LATE_AFTER_MS / 3_600_000;
+  const late = RING_LATE_EVERY_MS / 60_000;
+  return `every ${RING_EVERY_MS / 1000} s, then every ${RING_SLOW_EVERY_MS / 1000} s after ${RING_SLOW_AFTER_MS / 60_000} minutes, then every ${late === 1 ? 'minute' : `${late} minutes`} after ${hours === 1 ? 'an hour' : `${hours} hours`}`;
 }
 
 /** Should the till ring now, and with which sound? */

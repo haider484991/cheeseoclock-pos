@@ -11,8 +11,9 @@ import {
   RECONCILE_MARGIN_MS,
   RING_EVERY_MS,
   RING_SLOW_AFTER_MS,
+  RING_LATE_AFTER_MS,
+  RING_LATE_EVERY_MS,
   RING_SLOW_EVERY_MS,
-  RING_STOP_AFTER_MS,
   SEEN_GRACE_MS,
   SEEN_LIMIT,
   acknowledgeOrders,
@@ -27,6 +28,7 @@ import {
   markTicketFailed,
   receiveFailure,
   receiveOrder,
+  repeatEvery,
   repeatRuleText,
   ringsFor,
   seenOnScreen,
@@ -157,14 +159,40 @@ describe('keep ringing until someone looks', () => {
     expect(dueRing(s, S, RING_EVERY_MS)).toBe('newOrder');
   });
 
-  it('slows to every 30 s after 10 minutes, and stops after an hour (the banner stays)', () => {
+  it('slows to every 30 s after 10 minutes, then every 2 minutes after an hour — and never stops by itself', () => {
     const s = rungAt0();
     const late = markRang(s, RING_SLOW_AFTER_MS);
     expect(dueRing(late, S, RING_SLOW_AFTER_MS + RING_EVERY_MS)).toBeNull();
     expect(dueRing(late, S, RING_SLOW_AFTER_MS + RING_SLOW_EVERY_MS)).toBe('newOrder');
-    const hour = markRang(s, RING_STOP_AFTER_MS - 1);
-    expect(dueRing(hour, S, RING_STOP_AFTER_MS + RING_SLOW_EVERY_MS)).toBeNull();
-    expect(isLoud(hour)).toBe(true);
+    // Past the hour: not at +30 s any more, but due again at +2 min.
+    const hour = markRang(s, RING_LATE_AFTER_MS);
+    expect(dueRing(hour, S, RING_LATE_AFTER_MS + RING_SLOW_EVERY_MS)).toBeNull();
+    expect(dueRing(hour, S, RING_LATE_AFTER_MS + RING_LATE_EVERY_MS - 1)).toBeNull();
+    expect(dueRing(hour, S, RING_LATE_AFTER_MS + RING_LATE_EVERY_MS)).toBe('newOrder');
+    // Still ringing six hours on, every 2 minutes.
+    const sixHours = 6 * 60 * 60_000;
+    const later = markRang(s, sixHours);
+    expect(dueRing(later, S, sixHours + RING_LATE_EVERY_MS)).toBe('newOrder');
+    expect(isLoud(later)).toBe(true);
+  });
+
+  it('repeatEvery never says stop: 9 s, 30 s after 10 minutes, 2 minutes after an hour', () => {
+    expect(repeatEvery(0)).toBe(RING_EVERY_MS);
+    expect(repeatEvery(RING_SLOW_AFTER_MS - 1)).toBe(RING_EVERY_MS);
+    expect(repeatEvery(RING_SLOW_AFTER_MS)).toBe(RING_SLOW_EVERY_MS);
+    expect(repeatEvery(RING_LATE_AFTER_MS - 1)).toBe(RING_SLOW_EVERY_MS);
+    expect(repeatEvery(RING_LATE_AFTER_MS)).toBe(RING_LATE_EVERY_MS);
+    for (const h of [2, 6, 12, 48]) expect(repeatEvery(h * 60 * 60_000)).toBe(RING_LATE_EVERY_MS);
+  });
+
+  it('an unseen order left for hours keeps chiming every 2 minutes (the ringer, run for real)', () => {
+    let s = receiveOrder(EMPTY_ALERT_STATE, order('1'), 0);
+    s = ringsBetween(s, 0, RING_LATE_AFTER_MS, S, 1_000).state;
+    const { rings } = ringsBetween(s, RING_LATE_AFTER_MS + 1_000, 3 * 60 * 60_000, S, 1_000);
+    // Two hours past the first hour, a chime every 2 minutes: 60 of them, none closer than 2 minutes.
+    expect(rings).toHaveLength(60);
+    expect(rings.every((r) => r.kind === 'newOrder')).toBe(true);
+    for (let i = 1; i < rings.length; i += 1) expect(rings[i]!.at - rings[i - 1]!.at).toBe(RING_LATE_EVERY_MS);
   });
 
   it('a new order puts the fast repeat back', () => {
@@ -190,14 +218,35 @@ describe('keep ringing until someone looks', () => {
     expect(rings.every((r) => r.kind === 'importFailed')).toBe(true);
   });
 
+  it('the "did not come in" alarm keeps going after an hour too, every 2 minutes', () => {
+    let s = receiveFailure(EMPTY_ALERT_STATE, failure('w1'), 0);
+    s = markRang(s, RING_LATE_AFTER_MS);
+    expect(dueRing(s, S, RING_LATE_AFTER_MS + RING_SLOW_EVERY_MS)).toBeNull();
+    expect(dueRing(s, S, RING_LATE_AFTER_MS + RING_LATE_EVERY_MS)).toBe('importFailed');
+    // With "keep ringing" off too: that switch is the chime's only.
+    const once: AlertSoundSettings = { ...S, repeatUntilSeen: false };
+    const sixHours = 6 * 60 * 60_000;
+    expect(dueRing(markRang(s, sixHours), once, sixHours + RING_LATE_EVERY_MS)).toBe('importFailed');
+  });
+
   it('Settings says what the repeat does, in the numbers it uses', () => {
     expect(repeatRuleText()).toBe(
-      'every 9 s, then every 30 s after 10 minutes; it stops after an hour and the note stays',
+      'every 9 s, then every 30 s after 10 minutes, then every 2 minutes after an hour',
     );
     expect(RING_EVERY_MS).toBe(9_000);
     expect(RING_SLOW_EVERY_MS).toBe(30_000);
     expect(RING_SLOW_AFTER_MS).toBe(10 * 60_000);
-    expect(RING_STOP_AFTER_MS).toBe(60 * 60_000);
+    expect(RING_LATE_AFTER_MS).toBe(60 * 60_000);
+    expect(RING_LATE_EVERY_MS).toBe(2 * 60_000);
+  });
+
+  it('the Sounds screen says the chime goes on until someone looks', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { dirname, join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const screen = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'SoundSettings.tsx'), 'utf8');
+    expect(screen).toContain('the chime repeats ${repeatRuleText()} until someone looks.');
+    expect(screen).not.toMatch(/stops after an hour/);
   });
 });
 

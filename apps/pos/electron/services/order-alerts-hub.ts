@@ -2,11 +2,26 @@ import { BrowserWindow, Notification } from 'electron';
 import log from 'electron-log/main';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { AppDatabase } from '../db/connection.js';
-import { OrderAlertsHub, type AttentionNotice } from './order-alerts.js';
+import {
+  markAlertsSeen,
+  markCancelNoted,
+  openSiteCancels,
+  unseenWebOrders,
+} from '../db/repositories/web-order-imports-repo.js';
+import {
+  FAILURE_TTL_MS,
+  OrderAlertsHub,
+  RESTORE_MAX_AGE_MS,
+  type AttentionNotice,
+  type FailedWebOrder,
+  type ReceivedWebOrder,
+} from './order-alerts.js';
 
 /**
  * The real wiring for OrderAlertsHub: the database (to see which orders have
- * moved along), the taskbar flash and the Windows notice.
+ * moved along, to keep Seen and closed across a restart, and to bring back
+ * what nobody has looked at when the till starts), the taskbar flash and the
+ * Windows notice.
  *
  * The notice is shown by the main process itself, so it still works when the
  * screen is reloading or not answering. It is silent: the till's own chime
@@ -17,9 +32,14 @@ let db: AppDatabase | null = null;
 /** Kept on purpose: a notice that is garbage-collected never reports its click. */
 let current: Notification | null = null;
 
-/** Called once the database is open (IPC registration). */
+/**
+ * Called once the database is open (IPC registration, before the screen
+ * loads): the alerts nobody looked at before the till closed come back, so
+ * the screen's first alerts:getPending already has them.
+ */
 export function attachOrderAlertsDb(database: AppDatabase): void {
   db = database;
+  restoreOrderAlerts();
 }
 
 function tillWindow(): BrowserWindow | null {
@@ -126,4 +146,74 @@ export const orderAlerts = new OrderAlertsHub({
   warn: (message, detail) => log.warn(message, detail),
   schedule: (fn, ms) => setTimeout(fn, ms),
   cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  persistSeen: (ids) => {
+    if (db) markAlertsSeen(db, ids, new Date().toISOString());
+  },
+  persistClosed: (ids) => {
+    if (db) markCancelNoted(db, ids, new Date().toISOString());
+  },
 });
+
+const isoAgo = (ms: number): string => new Date(Date.now() - ms).toISOString();
+
+/** Website orders still New that nobody has seen, imported in the last RESTORE_MAX_AGE_MS. */
+function unseenOrders(database: AppDatabase): ReceivedWebOrder[] {
+  return unseenWebOrders(database, isoAgo(RESTORE_MAX_AGE_MS)).map((o) => ({
+    orderId: o.orderId,
+    orderNumber: o.orderNumber,
+    customerName: o.customerName ?? '',
+    webOrderId: o.webOrderId,
+    fulfilment: o.fulfilment,
+    totalCents: o.totalCents,
+    // Rows from before 0046 have no website total: no "total changed" for them.
+    ...(o.webTotalCents !== null && o.webTotalCents !== o.totalCents
+      ? { totalMismatch: { webTotalCents: o.webTotalCents, tillTotalCents: o.totalCents } }
+      : {}),
+    receivedAt: o.importedAt,
+  }));
+}
+
+/** "Website cancelled" cards nobody signed in has closed, from the last FAILURE_TTL_MS. */
+function openCancelCards(database: AppDatabase): FailedWebOrder[] {
+  return openSiteCancels(database, isoAgo(FAILURE_TTL_MS)).map((c) => ({
+    webOrderId: c.webOrderId,
+    customerName: c.customerName ?? '',
+    // For the signed-in card only: alerts:getPending drops it while nobody is
+    // signed in, and the Windows notice never shows it.
+    customerPhone: c.customerPhone,
+    orderNumber: c.orderNumber,
+    message: 'cancelled on the website while the kitchen had it',
+    final: true,
+    reason: 'cancelled_on_site',
+    at: c.siteCancelledAt,
+  }));
+}
+
+/**
+ * Bring back, after a restart, the website orders nobody has seen and the
+ * "website cancelled" cards nobody has closed. Each read stands alone: one
+ * that fails is logged and the other still comes back. Never throws.
+ */
+export function restoreOrderAlerts(): void {
+  const database = db;
+  if (!database) return;
+  let orders: ReceivedWebOrder[] = [];
+  let failures: FailedWebOrder[] = [];
+  try {
+    orders = unseenOrders(database);
+  } catch (e) {
+    log.warn('Order alerts not restored', { part: 'unseen orders', error: e instanceof Error ? e.message : String(e) });
+  }
+  try {
+    failures = openCancelCards(database);
+  } catch (e) {
+    log.warn('Order alerts not restored', { part: 'website cancels', error: e instanceof Error ? e.message : String(e) });
+  }
+  if (orders.length === 0 && failures.length === 0) return;
+  try {
+    orderAlerts.restore(orders, failures);
+    log.info('Order alerts restored', { orders: orders.length, websiteCancels: failures.length });
+  } catch (e) {
+    log.warn('Order alerts not restored', { error: e instanceof Error ? e.message : String(e) });
+  }
+}

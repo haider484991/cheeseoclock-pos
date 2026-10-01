@@ -7,14 +7,24 @@
 import { describe, expect, it } from 'vitest';
 import {
   FAILURE_TTL_MS,
+  MAX_ORDER_ALERTS,
   NOTICE_DEBOUNCE_MS,
   OrderAlertsHub,
+  RESTORE_MAX_AGE_MS,
   UNCHECKED_ORDER_TTL_MS,
   type AttentionNotice,
+  type FailedWebOrder,
   type ReceivedWebOrder,
 } from './order-alerts.js';
 
-function setup(opts: { waiting?: Set<string> | null; stillWaitingThrows?: boolean } = {}) {
+function setup(
+  opts: {
+    waiting?: Set<string> | null;
+    stillWaitingThrows?: boolean;
+    persistSeen?: (ids: readonly string[]) => void;
+    persistClosed?: (ids: readonly string[]) => void;
+  } = {},
+) {
   let now = Date.parse('2026-09-26T12:00:00.000Z');
   let waiting: Set<string> | null = opts.waiting === undefined ? null : opts.waiting;
   const timers = new Map<number, { at: number; fn: () => void }>();
@@ -42,6 +52,8 @@ function setup(opts: { waiting?: Set<string> | null; stillWaitingThrows?: boolea
     cancel: (h) => {
       timers.delete(h as number);
     },
+    ...(opts.persistSeen ? { persistSeen: opts.persistSeen } : {}),
+    ...(opts.persistClosed ? { persistClosed: opts.persistClosed } : {}),
   });
   const advance = (ms: number) => {
     now += ms;
@@ -334,5 +346,149 @@ describe('the website cancelled an order the kitchen has', () => {
     t.advance(NOTICE_DEBOUNCE_MS);
     expect(t.notices[0]!.title).toBe('Website cancelled an order');
     expect(t.hub.pending().failures[0]).not.toHaveProperty('orderNumber');
+  });
+});
+
+describe('kept across a restart', () => {
+  /** setup()'s clock starts here. */
+  const NOW = Date.parse('2026-09-26T12:00:00.000Z');
+  const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
+  const siteCancel = (webOrderId: string, orderNumber: string, at: string): FailedWebOrder => ({
+    webOrderId,
+    customerName: 'Sara',
+    customerPhone: '0300-1234567',
+    orderNumber,
+    message: 'cancelled on the website while the kitchen had it',
+    final: true,
+    reason: 'cancelled_on_site',
+    at,
+  });
+
+  it('restore() brings unseen orders back with the time they came in, oldest first', () => {
+    const t = setup({ waiting: new Set(['1', '2']) });
+    t.hub.restore([web('2', { receivedAt: ago(30) }), web('1', { receivedAt: ago(120) })], []);
+    const p = t.hub.pending();
+    expect(p.orders.map((o) => [o.orderId, o.receivedAt])).toEqual([
+      ['1', ago(120)],
+      ['2', ago(30)],
+    ]);
+    expect(t.hub.isLoud()).toBe(true);
+    // One Windows notice for the lot, as for orders from one check of the website.
+    t.advance(NOTICE_DEBOUNCE_MS);
+    expect(t.notices).toEqual([
+      { kind: 'newOrder', title: '2 new online orders', body: '#0002, #0001 — click to open the till' },
+    ]);
+  });
+
+  it('restore() skips an order this process has already seen, and one it already has', () => {
+    const t = setup({ waiting: new Set(['1', '2', '3']) });
+    t.hub.orderReceived(web('1'));
+    t.hub.acknowledge({ orderIds: ['1'] }, { loggedIn: false });
+    t.hub.orderReceived(web('2'));
+    t.hub.restore([web('1', { receivedAt: ago(10) }), web('2', { receivedAt: ago(10) }), web('3', { receivedAt: ago(5) })], []);
+    expect(t.hub.pending().orders.map((o) => o.orderId)).toEqual(['3', '2']);
+  });
+
+  it('a time that cannot be read is taken as now', () => {
+    const t = setup({ waiting: new Set(['1']) });
+    t.hub.restore([web('1', { receivedAt: 'not a time' })], []);
+    expect(t.hub.pending().orders[0]!.receivedAt).toBe(new Date(NOW).toISOString());
+  });
+
+  it('keeps the newest 50 when more are unseen', () => {
+    const ids = Array.from({ length: MAX_ORDER_ALERTS + 5 }, (_, i) => String(i + 1));
+    const t = setup({ waiting: new Set(ids) });
+    t.hub.restore(
+      ids.map((id, i) => web(id, { receivedAt: ago(ids.length - i) })),
+      [],
+    );
+    const kept = t.hub.pending().orders.map((o) => o.orderId);
+    expect(kept).toHaveLength(MAX_ORDER_ALERTS);
+    expect(kept[0]).toBe('6');
+    expect(kept.at(-1)).toBe(String(MAX_ORDER_ALERTS + 5));
+  });
+
+  it('a "website cancelled" card comes back loud, with its order number and the time it happened', () => {
+    const t = setup();
+    // What the database gives back carries no 'final': a restored card is final by definition.
+    const { final: _final, ...fromDb } = siteCancel('w42', 'CO-20260926-0042', ago(90));
+    t.hub.restore([], [fromDb]);
+    expect(t.hub.pending().failures).toEqual([
+      expect.objectContaining({
+        webOrderId: 'w42',
+        reason: 'cancelled_on_site',
+        orderNumber: 'CO-20260926-0042',
+        silenced: false,
+        at: ago(90),
+      }),
+    ]);
+    expect(t.hub.isLoud()).toBe(true);
+    // It still goes 12 hours after the cancel, not 12 hours after the restart.
+    t.advance(FAILURE_TTL_MS - 90 * 60_000 + 1);
+    expect(t.hub.pending().failures).toHaveLength(0);
+  });
+
+  it('orders first: a card for an order still on the green row is kept (not taken for "a retry that worked")', () => {
+    const t = setup({ waiting: new Set(['42']) });
+    t.hub.restore([web('42', { webOrderId: 'w42', receivedAt: ago(40) })], [siteCancel('w42', 'CO-20260926-0042', ago(2))]);
+    const p = t.hub.pending();
+    expect(p.orders.map((o) => o.orderId)).toEqual(['42']);
+    expect(p.failures.map((f) => f.webOrderId)).toEqual(['w42']);
+  });
+
+  it('restore() never throws, whatever it is given', () => {
+    const t = setup();
+    expect(() => t.hub.restore(null as never, undefined as never)).not.toThrow();
+    expect(() => t.hub.restore([null as never, { orderId: '' } as never], [null as never, {} as never])).not.toThrow();
+    expect(t.hub.pending()).toEqual({ orders: [], failures: [] });
+  });
+
+  it('looks back as far as a failure card is kept: 12 hours', () => {
+    expect(RESTORE_MAX_AGE_MS).toBe(FAILURE_TTL_MS);
+    expect(RESTORE_MAX_AGE_MS).toBe(12 * 60 * 60_000);
+  });
+
+  it('Seen is saved: acknowledge hands the order ids to persistSeen, signed in or not', () => {
+    const seen: string[][] = [];
+    const t = setup({ waiting: new Set(['1', '2']), persistSeen: (ids) => seen.push([...ids]) });
+    t.hub.orderReceived(web('1'));
+    t.hub.orderReceived(web('2'));
+    t.hub.acknowledge({ orderIds: ['1', 7 as never, '2'] }, { loggedIn: false });
+    t.hub.acknowledge({ orderIds: ['9'] }, { loggedIn: true });
+    // Silencing or closing alone saves no Seen.
+    t.hub.acknowledge({ silenceFailureIds: ['w1'], closeFailureIds: ['w1'] }, { loggedIn: true });
+    expect(seen).toEqual([['1', '2'], ['9']]);
+  });
+
+  it('closing is saved only with someone signed in', () => {
+    const closed: string[][] = [];
+    const t = setup({ persistClosed: (ids) => closed.push([...ids]) });
+    t.hub.importFailed(siteCancel('w42', 'CO-20260926-0042', ago(1)));
+    t.hub.acknowledge({ closeFailureIds: ['w42'] }, { loggedIn: false });
+    expect(closed).toEqual([]);
+    expect(t.hub.pending().failures).toHaveLength(1);
+    t.hub.acknowledge({ closeFailureIds: ['w42', 3 as never] }, { loggedIn: true });
+    expect(closed).toEqual([['w42']]);
+    expect(t.hub.pending().failures).toHaveLength(0);
+  });
+
+  it('a save that throws only warns: the alert is still seen or closed', () => {
+    const t = setup({
+      waiting: new Set(['1']),
+      persistSeen: () => {
+        throw new Error('SQLITE_BUSY');
+      },
+      persistClosed: () => {
+        throw new Error('SQLITE_BUSY');
+      },
+    });
+    t.hub.orderReceived(web('1'));
+    t.hub.importFailed(siteCancel('w42', 'CO-20260926-0042', ago(1)));
+    let p = t.hub.acknowledge({ orderIds: ['1'] }, { loggedIn: false });
+    expect(p.orders).toHaveLength(0);
+    p = t.hub.acknowledge({ closeFailureIds: ['w42'] }, { loggedIn: true });
+    expect(p.failures).toHaveLength(0);
+    expect(t.warnings).toEqual(['Order alert seen-mark not saved', 'Order alert seen-mark not saved']);
+    expect(t.hub.isLoud()).toBe(false);
   });
 });

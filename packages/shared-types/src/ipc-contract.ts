@@ -2125,15 +2125,24 @@ export interface IpcContract {
     response: ApiResult<AlertSoundSettings>;
   };
   /**
-   * Website orders nobody has looked at yet, and website orders that did not
-   * come in. Kept by the main process, so a screen that starts (or restarts)
-   * after they arrived still rings. No login needed.
+   * Website orders nobody has looked at yet, website orders that did not
+   * come in, and website orders the website cancelled while the kitchen had
+   * them. Kept by the main process, so a screen that starts (or restarts)
+   * after they arrived still rings; after a restart of the till itself, the
+   * unseen website orders (12 hours back) and the open "website cancelled"
+   * cards come back from the database. No login needed: while nobody is
+   * signed in, every card's customerPhone is null.
    */
   'alerts:getPending': {
     request: undefined;
     response: ApiResult<PendingAlerts>;
   };
-  /** Seen / silenced / closed. Closing a failure card needs a login. */
+  /**
+   * Seen / silenced / closed. Seen is kept across a restart
+   * (web_order_imports.alert_seen_at), and so is closing a "website
+   * cancelled" card (cancel_noted_at). Closing a card needs a login. The
+   * answer is the pending list, as alerts:getPending gives it.
+   */
   'alerts:acknowledge': {
     request: AcknowledgeAlertsRequest;
     response: ApiResult<PendingAlerts>;

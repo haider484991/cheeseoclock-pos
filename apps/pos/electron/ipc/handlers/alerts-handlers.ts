@@ -1,6 +1,6 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, hasCapability, type AuthenticatedUser } from '@cheeseoclock/shared-types';
+import { ok, hasCapability, type AuthenticatedUser, type PendingAlerts } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../../services/auth-service.js';
 import { getAlertSoundSettings, setAlertSoundSettings } from '../../services/alert-sounds-config.js';
 import { readAlertWatch } from '../../services/alert-watch.js';
@@ -14,7 +14,10 @@ import { attachOrderAlertsDb, orderAlerts, showAttention } from '../../services/
  * Seen (like a doorbell), and the PIN screen says when website orders are
  * paused on this till. The watch carries order numbers, statuses, minutes
  * and times only — no customer, money, website address or password
- * (alert-watch.ts). Changing the sounds is for managers and the owner, the
+ * (alert-watch.ts). While nobody is signed in, the pending list goes out
+ * without the customers' phone numbers: the PIN screen says "Sign in to see
+ * the phone number", and the number comes back on the first read after a
+ * sign-in. Changing the sounds is for managers and the owner, the
  * same owner, who sets up this till's printers (managers lost Settings on
  * 2026-09-27); cashiers and managers cannot mute the till.
  */
@@ -27,6 +30,12 @@ function requireSoundsManage(): AuthenticatedUser {
   return session;
 }
 
+/** The pending list as the screen may see it now: no phone numbers while nobody is signed in. */
+function forScreen(pending: PendingAlerts): PendingAlerts {
+  if (getCurrentSession() !== null) return pending;
+  return { ...pending, failures: pending.failures.map((f) => ({ ...f, customerPhone: null })) };
+}
+
 export function registerAlertsHandlers(ctx: HandlerContext): void {
   attachOrderAlertsDb(ctx.db);
 
@@ -37,10 +46,11 @@ export function registerAlertsHandlers(ctx: HandlerContext): void {
     return ok(setAlertSoundSettings(ctx.db, payload, s.id));
   });
 
-  defineHandler('alerts:getPending', ctx, () => ok(orderAlerts.pending()));
+  defineHandler('alerts:getPending', ctx, () => ok(forScreen(orderAlerts.pending())));
 
+  // Seen and closed are kept across a restart (the hub saves them).
   defineHandler('alerts:acknowledge', ctx, (_ctx, payload) =>
-    ok(orderAlerts.acknowledge(payload ?? {}, { loggedIn: getCurrentSession() !== null })),
+    ok(forScreen(orderAlerts.acknowledge(payload ?? {}, { loggedIn: getCurrentSession() !== null }))),
   );
 
   defineHandler('alerts:getWatch', ctx, () => ok(readAlertWatch(ctx.db, Date.now())));

@@ -160,7 +160,7 @@ export function SoundSettings() {
         <Rule
           icon={BellRing}
           title="New online order"
-          body={`A chime and a big green note on every screen — the PIN screen too. The note stays until someone taps Seen, opens Live Orders or starts the order. With "keep ringing" on, the chime repeats ${repeatRuleText()}.`}
+          body={`A chime and a big green note on every screen — the PIN screen too. The note stays until someone taps Seen, opens Live Orders or starts the order. With "keep ringing" on, the chime repeats ${repeatRuleText()} until someone looks.`}
           dimmed={muted}
           control={
             <div className="flex flex-col items-start gap-3 md:items-end">

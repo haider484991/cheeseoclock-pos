@@ -22,6 +22,12 @@ import {
  * shows the Windows notice itself, so that works even when the screen is not
  * answering.
  *
+ * Seen and closed are also kept in the database (web_order_imports, through
+ * `persistSeen` / `persistClosed`), so a restart brings back only what
+ * nobody has looked at: website orders still New and unseen, and "website
+ * cancelled" cards nobody signed in has closed (`restore`, from
+ * order-alerts-hub.ts at start).
+ *
  * Pure: Electron, the database and the clock come in through `deps` (see
  * order-alerts-hub.ts for the real ones), so the rules are unit-tested.
  * Nothing here throws — a problem with an alert must never break an import.
@@ -36,6 +42,8 @@ export interface ReceivedWebOrder {
   fulfilment?: 'delivery' | 'pickup';
   totalCents?: number | null;
   totalMismatch?: { webTotalCents: number; tillTotalCents: number };
+  /** When the till took it in (ISO). Set when it is restored after a restart; now when left out. */
+  receivedAt?: string;
 }
 
 /** What the website bridge sends when a web order could not be imported, or the website cancelled one the kitchen has. */
@@ -48,6 +56,8 @@ export interface FailedWebOrder {
   orderNumber?: string | null;
   final?: boolean;
   reason?: ImportFailureReason;
+  /** When it happened (ISO). Set when a card is restored after a restart, so it still goes FAILURE_TTL_MS after that; now when left out. */
+  at?: string;
 }
 
 export interface AttentionNotice {
@@ -70,6 +80,10 @@ export interface OrderAlertsDeps {
   warn(message: string, detail?: unknown): void;
   schedule(fn: () => void, ms: number): unknown;
   cancel(handle: unknown): void;
+  /** Someone saw these orders' alert (Seen, View, Live Orders): they do not ring again after a restart. */
+  persistSeen?(orderIds: readonly string[]): void;
+  /** Someone signed in closed these website orders' cards: a "website cancelled" card does not come back after a restart. */
+  persistClosed?(webOrderIds: readonly string[]): void;
 }
 
 /** Most alerts kept (oldest go first). */
@@ -79,6 +93,11 @@ export const MAX_FAILURE_ALERTS = 50;
 export const UNCHECKED_ORDER_TTL_MS = 60 * 60_000;
 /** A failure card nobody closed goes after 12 hours (the next day's shift). */
 export const FAILURE_TTL_MS = 12 * 60 * 60_000;
+/**
+ * How far back a restart looks for website orders nobody has seen: the same
+ * 12 hours a failure card is kept, so one horizon covers both.
+ */
+export const RESTORE_MAX_AGE_MS = FAILURE_TTL_MS;
 /** Orders from one check of the website share one Windows notice. */
 export const NOTICE_DEBOUNCE_MS = 1_000;
 /** Ids already seen, so a repeated event does not ring again. */
@@ -90,6 +109,12 @@ function isoAt(ms: number): string {
 
 function text(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
+}
+
+/** A time given with the alert (ISO), or `fallbackMs` when there is none or it cannot be read. */
+function givenTime(v: unknown, fallbackMs: number): string {
+  const ms = typeof v === 'string' ? Date.parse(v) : Number.NaN;
+  return isoAt(Number.isFinite(ms) ? ms : fallbackMs);
 }
 
 export class OrderAlertsHub {
@@ -114,7 +139,7 @@ export class OrderAlertsHub {
         fulfilment: p.fulfilment === 'pickup' || p.fulfilment === 'delivery' ? p.fulfilment : null,
         totalCents: typeof p.totalCents === 'number' && Number.isFinite(p.totalCents) ? p.totalCents : null,
         totalMismatch: p.totalMismatch ?? null,
-        receivedAt: isoAt(this.deps.now()),
+        receivedAt: givenTime(p.receivedAt, this.deps.now()),
       };
       this.orders.set(alert.orderId, alert);
       while (this.orders.size > MAX_ORDER_ALERTS) {
@@ -154,7 +179,7 @@ export class OrderAlertsHub {
         // Came in while the till was off: the website already told the
         // customer to call. A card, no alarm.
         silenced: reason === 'stale',
-        at: isoAt(this.deps.now()),
+        at: givenTime(p.at, this.deps.now()),
       });
       while (this.failures.size > MAX_FAILURE_ALERTS) {
         const oldest = this.failures.keys().next().value;
@@ -180,30 +205,60 @@ export class OrderAlertsHub {
     };
   }
 
-  /** Seen / silenced / closed. Closing a failure card needs someone logged in. */
+  /**
+   * Seen / silenced / closed. Closing a failure card needs someone logged in.
+   * Seen and closed are also saved (persistSeen / persistClosed), so they
+   * hold across a restart; a save that fails only warns — the alert is still
+   * acknowledged here.
+   */
   acknowledge(req: AcknowledgeAlertsRequest, opts: { loggedIn: boolean }): PendingAlerts {
     try {
+      const seenIds: string[] = [];
       for (const id of req?.orderIds ?? []) {
         if (typeof id !== 'string') continue;
         this.orders.delete(id);
         this.remember(`o:${id}`);
+        seenIds.push(id);
       }
+      if (seenIds.length > 0) this.save(() => this.deps.persistSeen?.(seenIds));
       for (const id of req?.silenceFailureIds ?? []) {
         const f = typeof id === 'string' ? this.failures.get(id) : undefined;
         if (f) f.silenced = true;
       }
       if (opts.loggedIn) {
+        const closedIds: string[] = [];
         for (const id of req?.closeFailureIds ?? []) {
           if (typeof id !== 'string') continue;
           this.failures.delete(id);
           this.remember(`f:${id}`);
+          closedIds.push(id);
         }
+        if (closedIds.length > 0) this.save(() => this.deps.persistClosed?.(closedIds));
       }
       this.afterChange();
     } catch (e) {
       this.deps.warn('Order alerts not acknowledged', e);
     }
     return this.pending();
+  }
+
+  /**
+   * After a restart: website orders nobody has seen (they ring again) and
+   * "website cancelled" cards nobody signed in has closed (loud again), as
+   * the database kept them. Orders go first: a card for an order still on
+   * the green row would otherwise be taken for "a retry that worked" and
+   * dropped. What this process has already seen or closed is skipped, as
+   * for any event. Never throws.
+   */
+  restore(orders: readonly ReceivedWebOrder[], failures: readonly FailedWebOrder[]): void {
+    try {
+      for (const o of orders ?? []) this.orderReceived(o);
+      for (const f of failures ?? []) {
+        if (f) this.importFailed({ ...f, final: true });
+      }
+    } catch (e) {
+      this.deps.warn('Order alerts not restored', e);
+    }
   }
 
   /** True while something should be ringing: an unseen order or an unsilenced failure. */
@@ -274,6 +329,15 @@ export class OrderAlertsHub {
       title: `${orders.length} new online orders`,
       body: `${orderNumberList(orders.map((o) => o.orderNumber))} — click to open the till`,
     };
+  }
+
+  /** Save a Seen / closed mark. A database problem only warns: the alert is acknowledged anyway. */
+  private save(write: () => void): void {
+    try {
+      write();
+    } catch (e) {
+      this.deps.warn('Order alert seen-mark not saved', e);
+    }
   }
 
   private remember(key: string): void {
