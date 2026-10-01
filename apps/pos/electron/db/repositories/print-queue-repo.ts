@@ -329,6 +329,65 @@ export function findFailedOwnJob(db: AppDatabase, orderId: string, copy: Receipt
   return null;
 }
 
+/** The most orders kitchenTicketsNotPrinted lists. */
+export const TICKETS_NOT_PRINTED_MAX = 50;
+
+/** A kitchen ticket this till gave up printing, for an order the kitchen still has. */
+export interface KitchenTicketNotPrinted {
+  orderId: string;
+  orderNumber: string;
+  /** When the printer was given up on (the failed job's last update). */
+  failedAt: string;
+}
+
+/**
+ * "Ticket not printed": orders the kitchen still has (sent, preparing or
+ * ready — KITCHEN_REPRINT_STATUSES — and not deleted) whose kitchen ticket
+ * never reached the kitchen. Worked out from this till's queue and the print
+ * log, so nothing new is stored:
+ *  - the order's newest kitchen job (by rowid), not counting a CANCELLED
+ *    slip, failed for good;
+ *  - no kitchen ticket for it is done here: a Reprint that failed after a
+ *    ticket printed is not "not printed";
+ *  - and the print log has no printed kitchen ticket for it (the other till
+ *    printed one, or this till's done job was cleared after a fortnight).
+ * So the mark goes by itself on Try again (requeueFailedJob: pending again),
+ * on a newer Reprint, once either prints, and when the order leaves the
+ * kitchen. `orderIds` narrows it to those orders (an empty list: none).
+ * Oldest failure first, at most TICKETS_NOT_PRINTED_MAX. Read-only; it may
+ * throw on a database error, so callers wrap it.
+ */
+export function kitchenTicketsNotPrinted(
+  db: AppDatabase,
+  opts: { orderIds?: readonly string[] } = {},
+): KitchenTicketNotPrinted[] {
+  const ids = opts.orderIds === undefined ? null : [...new Set(opts.orderIds)];
+  if (ids !== null && ids.length === 0) return [];
+  const only = ids === null ? '' : `AND o.id IN (${ids.map(() => '?').join(', ')})`;
+  const notASlip = (t: string) => `COALESCE(json_extract(${t}.payload_json, '$.cancelled'), 0) = 0`;
+  return db
+    .prepare(
+      `SELECT o.id AS orderId, o.order_number AS orderNumber, q.updated_at AS failedAt
+         FROM orders o
+         JOIN print_queue q
+           ON q.rowid = (SELECT MAX(k.rowid) FROM print_queue k
+                          WHERE k.order_id = o.id AND k.job_kind = 'kitchen' AND ${notASlip('k')})
+        WHERE o.status IN ('sent_to_kitchen', 'preparing', 'ready')
+          AND o.deleted_at IS NULL
+          ${only}
+          AND q.status = 'failed'
+          AND NOT EXISTS (SELECT 1 FROM print_queue d
+                           WHERE d.order_id = o.id AND d.job_kind = 'kitchen' AND d.status = 'done'
+                             AND ${notASlip('d')})
+          AND NOT EXISTS (SELECT 1 FROM document_prints p
+                           WHERE p.order_id = o.id AND p.doc_key = 'kitchen' AND p.copy = 'kitchen'
+                             AND p.outcome = 'printed' AND p.deleted_at IS NULL)
+        ORDER BY q.updated_at, q.rowid
+        LIMIT ?`,
+    )
+    .all(...(ids ?? []), TICKETS_NOT_PRINTED_MAX) as KitchenTicketNotPrinted[];
+}
+
 /** A pending job goes now (a reprint joined it): no more backoff wait. */
 export function retryNow(db: AppDatabase, id: string): void {
   const now = nowIso();

@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   AuthenticatedUser,
+  OrderSnapshot,
   OrderSnapshotWithStock,
   OrderStockStatus,
   PrinterConnectionConfig,
@@ -34,6 +35,8 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (ctx: unknown, payload: unknown) => Promise<unknown>>(),
   session: null as AuthenticatedUser | null,
   sends: [] as Uint8Array[],
+  /** The fake printer gives up on everything sent while this is on. */
+  printerDown: false,
 }));
 
 vi.mock('../registry.js', () => {
@@ -65,6 +68,9 @@ vi.mock('../../adapters/printer/factory.js', () => ({
     disconnect: async () => {},
     isConnected: () => true,
     send: async (bytes: Uint8Array) => {
+      if (h.printerDown) {
+        return { ok: false, durationMs: 1, error: { code: 'offline', message: 'Printer offline', recoverable: false } };
+      }
       h.sends.push(bytes);
       return { ok: true, durationMs: 1 };
     },
@@ -187,6 +193,7 @@ beforeEach(async () => {
   if (!DatabaseSync) return;
   h.handlers.clear();
   h.sends.length = 0;
+  h.printerDown = false;
   h.session = CASHIER;
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }); // no background ticks
   db = openMigrated();
@@ -446,5 +453,51 @@ describe.skipIf(!DatabaseSync)('orders handlers: "Was the food made?"', () => {
     expect((rest.data as OrderSnapshotWithStock).order.status).toBe('refunded');
     expect((rest.data as OrderSnapshotWithStock).stock).toMatchObject({ outcome: 'not_made', how: 'refunded' });
     expect(cheese()).toBe(10_000);
+  });
+});
+
+describe.skipIf(!DatabaseSync)('orders:listActive: "Ticket not printed" (v0.7.33)', () => {
+  const board = async (payload?: { mode: 'takeaway' | 'delivery' }) =>
+    (await call('orders:listActive', payload)).data as OrderSnapshot[];
+
+  it('marks only the order whose kitchen ticket the printer gave up on; the others are the plain snapshot', async () => {
+    const { printSpooler } = await import('../../services/print-spooler.js');
+    const { getOrderSnapshot } = await import('../../db/repositories/order-repo.js');
+    const printed = await sentOrder();
+    await printSpooler.whenIdle();
+    h.printerDown = true;
+    const failed = await sentOrder();
+    await printSpooler.whenIdle();
+    h.printerDown = false;
+
+    const cards = await board();
+    const card = (id: string) => cards.find((s) => s.order.id === id);
+    expect(cards.map((s) => s.order.id).sort()).toEqual([printed, failed].sort());
+    expect(card(failed)?.kitchenTicketNotPrinted).toBe(true);
+    // Absent, not false, on the others: each is the order as it stands, and nothing else.
+    expect(card(printed)).not.toHaveProperty('kitchenTicketNotPrinted');
+    expect(card(printed)).toEqual(getOrderSnapshot(db as never, printed));
+    expect(card(failed)).toEqual({ ...getOrderSnapshot(db as never, failed), kitchenTicketNotPrinted: true });
+    // A mode filter keeps it.
+    expect((await board({ mode: 'takeaway' })).find((s) => s.order.id === failed)?.kitchenTicketNotPrinted).toBe(true);
+
+    // Reprint, and it printed: the mark is gone by itself.
+    printSpooler.reprintKitchenTicket(failed);
+    await printSpooler.whenIdle();
+    expect((await board()).filter((s) => 'kitchenTicketNotPrinted' in s)).toEqual([]);
+  });
+
+  it('a mark that cannot be read leaves the board as it is, and says so in the log', async () => {
+    const { printSpooler } = await import('../../services/print-spooler.js');
+    const log = (await import('electron-log/main')).default;
+    const warn = vi.spyOn(log, 'warn');
+    h.printerDown = true;
+    const failed = await sentOrder();
+    await printSpooler.whenIdle();
+    db.exec('DROP TABLE document_prints');
+    const cards = await board();
+    expect(cards.map((s) => s.order.id)).toEqual([failed]);
+    expect(cards[0]).not.toHaveProperty('kitchenTicketNotPrinted');
+    expect(warn).toHaveBeenCalledWith('Kitchen ticket marks not read', expect.objectContaining({ error: expect.any(String) }));
   });
 });

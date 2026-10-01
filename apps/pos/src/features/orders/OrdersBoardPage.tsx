@@ -31,7 +31,8 @@ import { AssignRiderDialog } from './AssignRiderDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { VoidOrderDialog } from './VoidOrderDialog';
 import { RefundOrderDialog } from './RefundOrderDialog';
-import { ModeBadge, PaidChip } from './OrderBadges';
+import { ModeBadge, PaidChip, TicketNotPrinted } from './OrderBadges';
+import { ALERT_WATCH_KEY } from '../notifications/useAlertWatch';
 import {
   ageLabel,
   ageMinutes,
@@ -143,7 +144,12 @@ export function OrdersBoardPage() {
   });
   const reprintKitchen = useMutation({
     mutationFn: (orderId: string) => ipc.printer.reprintKitchen(orderId),
-    onSuccess: (r) => toast({ title: reprintToast(r) }),
+    onSuccess: (r) => {
+      toast({ title: reprintToast(r) });
+      // A ticket on its way: "Ticket not printed" goes from the card and the PIN screen at once.
+      void qc.invalidateQueries({ queryKey: ['orders', 'active'] });
+      void qc.invalidateQueries({ queryKey: ALERT_WATCH_KEY });
+    },
     onError: failed('Reprint failed'),
   });
 
@@ -480,6 +486,10 @@ function OrderCard({
         <div className="mt-1.5 rounded-md bg-red-50 px-2 py-1 text-xs font-semibold leading-snug text-red-800 dark:bg-red-950/50 dark:text-red-200">
           Leave out / allergy: {flags.join(' · ')}
         </div>
+      )}
+      {/* The kitchen never got its ticket (this till's printer gave up), while it still has the order. */}
+      {snap.kitchenTicketNotPrinted === true && offersKitchenReprint(order.status) && (
+        <TicketNotPrinted onReprint={onReprintKitchen} />
       )}
       {/* The order's notes: the counter's "Order notes" box and a website customer's note, alike. */}
       {orderNotes.map((note) => (

@@ -208,6 +208,12 @@ export interface OrderSnapshot {
   deliveryNotes?: string | null;
   /** Rider snapshot for the order — null until a rider is assigned. */
   rider: { id: UUID; name: string; phone: string } | null;
+  /**
+   * Only on orders:listActive, from this till's print queue: the kitchen
+   * ticket did not print and nothing has printed it since (Live Orders'
+   * "Ticket not printed"). Absent everywhere else.
+   */
+  kitchenTicketNotPrinted?: boolean;
 }
 
 /**

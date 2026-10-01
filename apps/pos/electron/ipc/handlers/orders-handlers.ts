@@ -3,7 +3,7 @@ import { defineHandler, IpcGuardError } from '../registry.js';
 import { requireAdmin, requireCapability, REFUSED } from '../guards.js';
 import { assertCounterAddress, assertCounterMaySee, assertOrderStillBeingTaken } from '../order-access.js';
 import { COST_CAPABILITY, ok, hasCapability } from '@cheeseoclock/shared-types';
-import type { AuthenticatedUser, CameBy, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, CameBy, OrderSnapshot, OrderStockAnswer, StockSettlement } from '@cheeseoclock/shared-types';
 import {
   cameBySchema,
   deleteTestOrderInputSchema,
@@ -82,11 +82,32 @@ import { enqueueFbrSubmission, getFbrRowByOrder } from '../../db/repositories/fb
 import { fbrWorker } from '../../services/fbr-worker.js';
 import { decrementForOrder } from '../../db/repositories/stock-movement-repo.js';
 import { getOrderStockStatus } from '../../db/repositories/order-stock-repo.js';
+import { kitchenTicketsNotPrinted } from '../../db/repositories/print-queue-repo.js';
+import log from 'electron-log/main';
 import {
   snapshotCustomerOntoOrder,
   detachCustomerFromOrder,
   setOrderDeliveryNotes,
 } from '../../db/repositories/customer-repo.js';
+
+/**
+ * Live Orders' "Ticket not printed": `kitchenTicketNotPrinted: true` on the
+ * cards whose kitchen ticket this till gave up printing (print-queue-repo
+ * kitchenTicketsNotPrinted); the others are left exactly as they were. A mark
+ * that can't be read leaves the board as it is: the orders come first.
+ */
+function withKitchenTicketMarks(db: AppDatabase, snaps: OrderSnapshot[]): OrderSnapshot[] {
+  if (snaps.length === 0) return snaps;
+  let notPrinted: Set<string>;
+  try {
+    notPrinted = new Set(kitchenTicketsNotPrinted(db, { orderIds: snaps.map((s) => s.order.id) }).map((r) => r.orderId));
+  } catch (e) {
+    log.warn('Kitchen ticket marks not read', { error: e instanceof Error ? e.message : String(e) });
+    return snaps;
+  }
+  if (notPrinted.size === 0) return snaps;
+  return snaps.map((s) => (notPrinted.has(s.order.id) ? { ...s, kitchenTicketNotPrinted: true } : s));
+}
 
 /** What requireAdmin names ("… needs the owner (admin) login"). */
 const DELETE_TEST = 'Deleting a test order';
@@ -596,7 +617,7 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
 
   defineHandler('orders:listActive', ctx, (_ctx, payload) => {
     requireOrderCreate();
-    return ok(listActiveOrders(ctx.db, payload ?? {}));
+    return ok(withKitchenTicketMarks(ctx.db, listActiveOrders(ctx.db, payload ?? {})));
   });
 
   defineHandler('orders:markPreparing', ctx, (_ctx, payload) => {

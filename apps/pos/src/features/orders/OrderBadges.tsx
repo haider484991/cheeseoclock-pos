@@ -56,6 +56,33 @@ export function StatusBadge({ status }: { status: OrderStatus }) {
   );
 }
 
+/** The words on Live Orders' red strip, and on its button. */
+export const TICKET_NOT_PRINTED_TEXT = 'Ticket not printed';
+export const TICKET_REPRINT_LABEL = 'Reprint kitchen ticket';
+
+/**
+ * A red strip on a Live Orders card whose kitchen ticket this till gave up
+ * printing (orders:listActive's kitchenTicketNotPrinted), with Reprint. It
+ * goes by itself once a ticket prints, Try again or Reprint is pressed, or
+ * the order leaves the kitchen.
+ */
+export function TicketNotPrinted({ onReprint }: { onReprint: () => void }) {
+  return (
+    <div className="mt-1.5 flex items-center justify-between rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 ring-1 ring-red-200 dark:bg-red-950/50 dark:text-red-200 dark:ring-red-800">
+      <span>{TICKET_NOT_PRINTED_TEXT}</span>
+      <button
+        type="button"
+        onClick={onReprint}
+        aria-label={TICKET_REPRINT_LABEL}
+        title={TICKET_REPRINT_LABEL}
+        className="shrink-0 rounded-md bg-white px-2.5 py-1 text-xs font-bold text-red-700 ring-1 ring-red-300 transition-colors hover:bg-red-100 dark:bg-red-900/40 dark:text-red-100 dark:ring-red-700 dark:hover:bg-red-900/70"
+      >
+        Reprint
+      </button>
+    </div>
+  );
+}
+
 /** Paid / Not paid chip — the question a cashier asks first. */
 export function PaidChip({ paid, className }: { paid: boolean; className?: string }) {
   return (
