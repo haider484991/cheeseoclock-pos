@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   allocateDiscount,
+  approvalRuleText,
   computeDiscountCents,
   DISCOUNT_REASON_REQUIRED,
   discountReasonMissing,
   NO_DISCOUNT_REASON_LABEL,
+  NOTHING_TO_DISCOUNT,
   requiresManagerApproval,
 } from './discount.js';
+import { discountBaseCents } from './discount-base.js';
 
 describe('discountReasonMissing (the owner’s "a discount needs a reason")', () => {
   it('a reason picked or typed is a reason', () => {
@@ -76,6 +79,37 @@ describe('requiresManagerApproval', () => {
     expect(requiresManagerApproval({ type: 'flat', value: 20_100 }, 200_000)).toBe(true);
     // Without a subtotal only the Rs 500 cap applies.
     expect(requiresManagerApproval({ type: 'flat', value: 49_900 })).toBe(false);
+  });
+});
+
+describe('value deals never get a discount: the words and the lock', () => {
+  it('the refusal when only value deals are left, in plain words', () => {
+    expect(NOTHING_TO_DISCOUNT).toBe('Nothing on this order can be discounted: value deals never get a discount.');
+  });
+
+  it('the approval rule says the food was counted without the value deals', () => {
+    expect(approvalRuleText({ percentOver: 10, flatOverCents: 50_000 }, 'food_no_deals')).toBe(
+      "Up to 10% off, or up to Rs 500 off if that is no more than 10% of the food (value deals not counted), without a manager. More needs a manager's PIN or password.",
+    );
+    expect(approvalRuleText({ percentOver: 10, flatOverCents: 0 }, 'food_no_deals')).toBe(
+      "Up to 10% off the food (value deals not counted) without a manager. More, or any amount off in rupees, needs a manager's PIN or password.",
+    );
+    expect(approvalRuleText({ percentOver: 0, flatOverCents: 50_000 }, 'food_no_deals')).toBe("Every discount needs a manager's PIN or password.");
+  });
+
+  it('Rs 499 off Rs 600 of pizza needs a manager, though a made-up Rs 3,600 deal is on the order too', () => {
+    const lines = [
+      { lineTotalCents: 60_000, menuItemName: 'Test Pizza' },
+      { lineTotalCents: 360_000, menuItemName: 'Test Deal for Two', noDiscount: true },
+    ];
+    const base = discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true });
+    expect(base).toBe(60_000);
+    expect(requiresManagerApproval({ type: 'flat', value: 49_900 }, base)).toBe(true);
+    // Rs 400 off is two thirds of the pizza: a manager. Counted over the deal too it
+    // would have slipped through as under 10% of Rs 4,200.
+    const withDeal = discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: false });
+    expect(requiresManagerApproval({ type: 'flat', value: 40_000 }, base)).toBe(true);
+    expect(requiresManagerApproval({ type: 'flat', value: 40_000 }, withDeal)).toBe(false);
   });
 });
 

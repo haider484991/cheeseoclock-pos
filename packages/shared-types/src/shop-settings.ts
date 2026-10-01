@@ -1099,6 +1099,13 @@ export interface DiscountBaseRule {
    * the % over every line it priced), never the till's switch.
    */
   from: 'till' | 'website';
+  /**
+   * true = value-deal lines (order_items.no_discount) take none of it: not
+   * worked on them, not split over them. Absent = every line, as before
+   * 0.7.34. Written only when true, so every other rule's JSON is unchanged
+   * and it stays v 1 (an older till reads the rest of it).
+   */
+  skipsNoDiscountLines?: true;
 }
 
 /**

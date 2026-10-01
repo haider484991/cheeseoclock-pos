@@ -2537,7 +2537,9 @@ export function getFoodpanda(db: AppDatabase, range: ReportRange, cap = REPORT_L
       // stored bill); else the subtotal.
       const sold = rule && rule.alsoOffDeliveryCharge === false ? soldLinesOf(db, r.orderId) : null;
       const base =
-        sold && !storedDiscountAlsoOffDeliveryCharge(false, sold, disc, Number(r.tax)) ? discountBaseCents(sold, false) : sub;
+        sold && !storedDiscountAlsoOffDeliveryCharge(false, sold, disc, Number(r.tax))
+          ? discountBaseCents(sold, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: false })
+          : sub;
       platform = rule ? dealAmount(rule, base).platformCents : 0;
     }
     // The one per-order rule (Reports → Profit uses it too).

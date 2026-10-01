@@ -502,7 +502,7 @@ async function openShop() {
           { orderId: shell.id, discountType: 'percent', value: 10, reason: 'Website pick-up 10% off', approverUserId: BRIDGE.userId },
           BRIDGE,
           // The website's own rule, as the bridge freezes it (never the till's switch).
-          { rule: websiteDiscountRule() },
+          { rule: websiteDiscountRule(false) },
         );
       }
       r.sendOrderToKitchen(db, shell.id, BRIDGE);

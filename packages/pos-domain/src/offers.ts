@@ -18,10 +18,13 @@
  *  - WHEN: when the order was STARTED, Pakistan time: its trading day (from
  *    05:00, so 01:30 on Saturday is Friday's) for the days and the dates, its
  *    clock hour for the hours.
- *  - ON WHAT: the food — the delivery charge is paid in full unless the
- *    owner's "A discount also comes off the delivery charge" said Yes when the
- *    offer went on (frozen with it). The minimum is always measured on the
- *    food.
+ *  - ON WHAT: the food, never value deals (owner, 2 Oct 2026; frozen with
+ *    the offer: skipsNoDiscountLines) — the delivery charge is paid in full
+ *    unless the owner's "A discount also comes off the delivery charge" said
+ *    Yes when the offer went on (frozen with it). The minimum is always
+ *    measured on the same food, value deals left out: a deal and Rs 500 of
+ *    fries is Rs 500 towards a "from Rs 2,000" offer, and an order of deals
+ *    only gets no offer.
  *  - WHICH ONE: the biggest that fits. The one already on the order keeps
  *    its FROZEN terms while they still fit (a Save while the order is open
  *    can't move it; a switched-off offer stops for new orders at once, not
@@ -65,9 +68,18 @@ export interface OfferOrder {
   hasPhone: boolean;
   /** When the order was started (orders.created_at, ISO). */
   createdAt: string;
-  /** The food, before tax (the delivery charge left out): the minimum is measured on it. */
+  /**
+   * What an offer may come off: value deals never. The food, before tax (the
+   * delivery charge and value deals left out: discountBaseCents with
+   * { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true }): an offer
+   * is worked on it, and the minimum is measured on it.
+   */
   foodCents: number;
-  /** Every line, before tax (the subtotal): what an offer that also comes off the delivery charge is worked on. */
+  /**
+   * What an offer may come off: value deals never. Every line but them,
+   * before tax ({ alsoOffDeliveryCharge: true, skipsNoDiscountLines: true }):
+   * what an offer that also comes off the delivery charge is worked on.
+   */
   subtotalCents: number;
 }
 
@@ -133,10 +145,12 @@ export function offerTerms(offer: ChannelOffer, settingsAt: string | null): Offe
  * The rule frozen on the offer's discount row: a till discount rule (kind
  * 'discount_base' — so a till that does not know offers still splits it
  * over the right lines) carrying the offer. `alsoOffDeliveryCharge` is the
- * owner's switch when the offer went on (No by default: the food only).
+ * owner's switch when the offer went on (No by default: the food only); it
+ * always skips value deals (`skipsNoDiscountLines`: an offer never comes off
+ * one).
  */
 export function offerRule(terms: OfferTerms, alsoOffDeliveryCharge: boolean): OfferRule {
-  return { kind: 'discount_base', v: 1, alsoOffDeliveryCharge, from: 'till', offer: terms };
+  return { kind: 'discount_base', v: 1, alsoOffDeliveryCharge, from: 'till', skipsNoDiscountLines: true, offer: terms };
 }
 
 /** The same rule, taken off by the cashier: Rs 0 on the order until "Put it back". */
@@ -193,7 +207,15 @@ export function parseOfferRule(json: string | null | undefined): OfferRule | nul
     settingsAt: typeof t['settingsAt'] === 'string' ? t['settingsAt'] : null,
     ...(t['declined'] === true ? { declined: true as const } : {}),
   };
-  return { kind: 'discount_base', v: 1, alsoOffDeliveryCharge: r['alsoOffDeliveryCharge'], from: 'till', offer: terms };
+  return {
+    kind: 'discount_base',
+    v: 1,
+    alsoOffDeliveryCharge: r['alsoOffDeliveryCharge'],
+    from: 'till',
+    // An offer frozen before 0.7.34 has none: it was worked over the value deals too.
+    ...(r['skipsNoDiscountLines'] === true ? { skipsNoDiscountLines: true as const } : {}),
+    offer: terms,
+  };
 }
 
 /**
@@ -232,8 +254,9 @@ export function offerMiss(
 /**
  * What the offer takes off (paisa): nothing below its minimum (measured on
  * the food); else the % of what it is worked on (`baseCents`: the food, or
- * every line when it also comes off the delivery charge) or its rupees, at
- * most that, and at most its most-off.
+ * every line when it also comes off the delivery charge; value deals never)
+ * or its rupees, at most that, and at most its most-off. Nothing to come off
+ * (an order of value deals only) takes nothing off.
  */
 export function offerAmount(
   terms: Pick<OfferTerms, 'type' | 'value' | 'minOrderCents' | 'maxOffCents'>,

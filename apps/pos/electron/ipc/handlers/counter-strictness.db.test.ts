@@ -546,7 +546,7 @@ describe.skipIf(!Sqlite)('"A discount needs a reason": Yes', () => {
     const { applyDiscount } = await repos();
     const other = await openOrder();
     applyDiscount(db as never, { orderId: other, discountType: 'percent', value: 10, reason: null, approverUserId: 'u_admin' }, CASHIER_ACTOR, {
-      rule: websiteDiscountRule(),
+      rule: websiteDiscountRule(false),
     });
     expect(liveDiscounts(other)).toMatchObject([{ value: 10, reason: null }]);
   });

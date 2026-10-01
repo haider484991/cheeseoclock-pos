@@ -166,7 +166,7 @@ const EXAMPLE_LINES = [
  */
 export function deliveryExample(d: Pick<DiscountDelivery, 'alsoOffDeliveryCharge'>): string {
   const also = d.alsoOffDeliveryCharge;
-  const base = discountBaseCents(EXAMPLE_LINES, also);
+  const base = discountBaseCents(EXAMPLE_LINES, { alsoOffDeliveryCharge: also, skipsNoDiscountLines: false });
   const subtotal = EXAMPLE_FOOD_CENTS + EXAMPLE_DELIVERY_CHARGE_CENTS;
   const tenOff = computeDiscountCents(base, { type: 'percent', value: 10 });
   const leftAtAll = subtotal - computeDiscountCents(base, { type: 'percent', value: 100 });

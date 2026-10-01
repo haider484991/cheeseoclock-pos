@@ -91,7 +91,7 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
             // A Pakistani number, as the main process counts it (any text is not a phone).
             hasPhone: normalizePhone(snapshot?.customerPhone) !== null,
             createdAt: order.createdAt,
-            foodCents: discountBaseCents(items, false),
+            foodCents: discountBaseCents(items, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: false }),
             subtotalCents,
           },
           rules.data?.offers,

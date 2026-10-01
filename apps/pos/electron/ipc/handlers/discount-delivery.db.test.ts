@@ -565,7 +565,7 @@ describe.skipIf(!Sqlite)('a discount an older till re-worked over every line: re
     const s = await snap(orderId);
     const subtotal = s.order.subtotalCents as number;
     const discount = computeDiscountCents(subtotal, d) as number;
-    const tax = taxAfterDiscount(s.items, discount, true).taxCents;
+    const tax = taxAfterDiscount(s.items, discount, { alsoOffDeliveryCharge: true, skipsNoDiscountLines: false }).taxCents;
     const total = subtotal - discount + tax;
     db.prepare(`UPDATE order_discounts SET amount_cents = ?, version = version + 1 WHERE order_id = ? AND deleted_at IS NULL`).run(discount, orderId);
     db.prepare(`UPDATE orders SET discount_cents = ?, tax_cents = ?, total_cents = ?, version = version + 1 WHERE id = ?`).run(discount, tax, total, orderId);

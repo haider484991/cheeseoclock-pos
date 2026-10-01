@@ -335,7 +335,8 @@ export function previewDiscount(
   const alsoOff = rules.alsoOffDeliveryCharge;
   const { baseCents } = discountBaseNow(lines, subtotalCents, rules);
   const discountCents = choice ? computeDiscountCents(baseCents, choice) : 0;
-  const taxCents = subtotalCents > 0 ? taxAfterDiscount(lines, discountCents, alsoOff).taxCents : 0;
+  const scope = { alsoOffDeliveryCharge: alsoOff, skipsNoDiscountLines: false };
+  const taxCents = subtotalCents > 0 ? taxAfterDiscount(lines, discountCents, scope).taxCents : 0;
   return {
     discountCents,
     taxCents,
@@ -356,6 +357,6 @@ export function discountBaseNow(
   rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'> = RELEASED_SCREEN_RULES,
 ): DiscountBaseNow {
   if (rules.alsoOffDeliveryCharge) return { baseCents: subtotalCents, untouchedCents: 0 };
-  const baseCents = discountBaseCents(lines, false);
+  const baseCents = discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: false });
   return { baseCents, untouchedCents: Math.max(0, subtotalCents - baseCents) };
 }

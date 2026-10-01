@@ -19,7 +19,13 @@ import {
   parseOfferRule,
   type OfferOrder,
 } from './offers.js';
-import { discountRuleAlsoOffDeliveryCharge, parseDiscountBaseRule } from './discount-base.js';
+import {
+  discountBaseCents,
+  discountRuleAlsoOffDeliveryCharge,
+  discountRuleScope,
+  parseDiscountBaseRule,
+  type DiscountLine,
+} from './discount-base.js';
 
 /**
  * The owner's automatic offers as pure rules (shared-types
@@ -131,6 +137,49 @@ describe('the whole order except the delivery charge', () => {
 
   it('the most off caps it', () => {
     expect(matchOffer(order(), [offer({ maxOffCents: 15_000 })], opts)?.amountCents).toBe(15_000);
+  });
+});
+
+/**
+ * The owner, 2 Oct 2026: value deals never get any discount, an automatic
+ * offer included. The counter and the main process hand matchOffer the food
+ * an offer may come off (value deals left out: discountBaseCents with the
+ * offer's scope); the minimum is measured on the same food. A made-up
+ * Rs 3,600 deal, Rs 500 of fries and a Rs 200 delivery charge.
+ */
+describe('value deals never: an offer is worked on, and its minimum measured on, the food without them', () => {
+  const DEAL: DiscountLine = { lineTotalCents: 360_000, menuItemName: 'Test Deal for Two', noDiscount: true };
+  const FRIES: DiscountLine = { lineTotalCents: 50_000, menuItemName: 'Test Fries' };
+  const CHARGE: DiscountLine = { lineTotalCents: 20_000, menuItemName: 'Delivery Charge (Rs 200)' };
+  /** The order as the till hands it to an offer: what it may come off, value deals never. */
+  const orderOf = (lines: DiscountLine[], over: Partial<OfferOrder> = {}): OfferOrder =>
+    order({
+      foodCents: discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true }),
+      subtotalCents: discountBaseCents(lines, { alsoOffDeliveryCharge: true, skipsNoDiscountLines: true }),
+      ...over,
+    });
+  const fromRs1000 = offer({ cameBy: 'any', minOrderCents: 100_000 });
+  const noMinimum = offer({ cameBy: 'any' });
+
+  it('an order of deals only gets no offer, and the cart hints none', () => {
+    const dealsOnly = orderOf([DEAL, CHARGE]);
+    expect(dealsOnly.foodCents).toBe(0);
+    expect(matchOffer(dealsOnly, [fromRs1000], opts)).toBeNull();
+    expect(matchOffer(dealsOnly, [noMinimum], opts)).toBeNull();
+    expect(matchOffer(orderOf([DEAL], { mode: 'takeaway' }), [offer({ cameBy: 'any', orderTypes: ['takeaway'] })], opts)).toBeNull();
+    // No "add Rs N more food" and no "save the phone" for an offer that would take nothing off.
+    expect(offerHint(dealsOnly, { askCameBy: false, offers: [fromRs1000] }, false)).toBeNull();
+    expect(offerHint(orderOf([DEAL, CHARGE], { hasPhone: false }), { askCameBy: false, offers: [offer()] }, false)).toBeNull();
+  });
+
+  it('a deal and Rs 500 of fries: Rs 500 towards a "from Rs 2,000" offer, so none; 10% with no minimum is Rs 50', () => {
+    const dealAndFries = orderOf([DEAL, FRIES, CHARGE]);
+    expect(dealAndFries.foodCents).toBe(50_000);
+    expect(matchOffer(dealAndFries, [offer({ cameBy: 'any', minOrderCents: 200_000 })], opts)).toBeNull();
+    expect(matchOffer(dealAndFries, [noMinimum], opts)?.amountCents).toBe(5_000);
+    // The switch on: the delivery charge in too, still never the deal (10% of Rs 700).
+    expect(matchOffer(dealAndFries, [noMinimum], { ...opts, alsoOffDeliveryCharge: true })?.amountCents).toBe(7_000);
+    expect(offerAmount(noMinimum, dealAndFries.foodCents, dealAndFries.foodCents)).toBe(5_000);
   });
 });
 
@@ -247,10 +296,28 @@ describe('the frozen rule', () => {
     const rule = offerRule(offerTerms(offer({ minOrderCents: 100_000, maxOffCents: 30_000 }), '2026-10-01T10:00:00.000Z'), false);
     const json = JSON.stringify(rule);
     expect(parseOfferRule(json)).toEqual(rule);
-    // THE reader every after-the-fact place uses (tax split, FBR, profit): food only.
+    // THE reader every after-the-fact place uses (tax split, FBR, profit): food only, value deals left out.
     expect(discountRuleAlsoOffDeliveryCharge(json)).toBe(false);
-    expect(parseDiscountBaseRule(json)).toEqual({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: false, from: 'till' });
+    expect(parseDiscountBaseRule(json)).toEqual({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: false, from: 'till', skipsNoDiscountLines: true });
     expect(parseOfferRule(JSON.stringify(declinedOfferRule(rule)))?.offer.declined).toBe(true);
+  });
+
+  it('freezes "value deals never" with the offer, and reads it back; an offer frozen before 0.7.34 has none', () => {
+    const rule = offerRule(offerTerms(offer(), '2026-10-01T10:00:00.000Z'), false);
+    expect(rule.skipsNoDiscountLines).toBe(true);
+    expect(offerRule(offerTerms(offer(), null), true).skipsNoDiscountLines).toBe(true);
+    const json = JSON.stringify(rule);
+    expect(parseOfferRule(json)?.skipsNoDiscountLines).toBe(true);
+    expect(discountRuleScope(json)).toEqual({ alsoOffDeliveryCharge: false, skipsNoDiscountLines: true });
+    expect(parseOfferRule(JSON.stringify(declinedOfferRule(rule)))?.skipsNoDiscountLines).toBe(true);
+    // A new offer put on by matchOffer carries it.
+    expect(matchOffer(order(), [offer()], opts)?.rule.skipsNoDiscountLines).toBe(true);
+    // Frozen before 0.7.34: it was worked over the deals too, and is read so.
+    const { skipsNoDiscountLines: _left, ...before } = rule;
+    const old = JSON.stringify(before);
+    expect(parseOfferRule(old)).toEqual(before);
+    expect(Object.keys(parseOfferRule(old) ?? {})).not.toContain('skipsNoDiscountLines');
+    expect(discountRuleScope(old)).toEqual({ alsoOffDeliveryCharge: false, skipsNoDiscountLines: false });
   });
 
   it('a staff or website rule, the foodpanda deal or junk is not an offer', () => {

@@ -370,7 +370,10 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // …on what the discount will be worked on: the food only, unless the owner's
     // switch says it also comes off the delivery charge (the repository freezes
     // the same switch on the row, and checks again).
-    const base = discountBaseCents(current.items, readDiscountAlsoOffDeliveryCharge(ctx.db));
+    const base = discountBaseCents(current.items, {
+      alsoOffDeliveryCharge: readDiscountAlsoOffDeliveryCharge(ctx.db),
+      skipsNoDiscountLines: false,
+    });
     if (replacesDeal || requiresManagerApproval({ type: payload.discountType, value: payload.value }, base, limits)) {
       if (!payload.approverPin) {
         throw new IpcGuardError({

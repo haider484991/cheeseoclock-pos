@@ -73,6 +73,14 @@ export { NO_DISCOUNT_REASON_LABEL };
 export const DISCOUNT_REASON_REQUIRED = 'Pick or type a reason — the owner has made one required for every discount.';
 
 /**
+ * The refusal when every line a till discount could come off is a value deal
+ * (owner, 2 Oct 2026: value deals never get any discount) — the one string
+ * for the F3 screen, the IPC handler and the repository, given before any
+ * manager's PIN is checked.
+ */
+export const NOTHING_TO_DISCOUNT = 'Nothing on this order can be discounted: value deals never get a discount.';
+
+/**
  * Has a discount no reason Team & leakage could group it under? Blank, only
  * spaces, or the words Reports use for "none" ("No reason given", whatever
  * its capitals and however many spaces between its words: shared-types
@@ -93,15 +101,18 @@ export function discountReasonMissing(reason: string | null | undefined): boolea
  * delivery charge a discount leaves alone (Settings → Money & discounts:
  * "A discount also comes off the delivery charge" No), so the words match
  * the lock — Rs 210 off Rs 2,000 of food and a Rs 200 charge is over 10% of
- * the food, though under 10% of the order.
+ * the food, though under 10% of the order. 'food_no_deals' when value deals
+ * were left out of it too: Rs 499 off Rs 600 of pizza and a Rs 3,600 deal is
+ * over 10% of the food it can come off.
  */
-export function approvalRuleText(limits: ApprovalLimits, of: 'order' | 'food' = 'order'): string {
+export function approvalRuleText(limits: ApprovalLimits, of: 'order' | 'food' | 'food_no_deals' = 'order'): string {
   const p = limits.percentOver;
   if (p === 0) return "Every discount needs a manager's PIN or password.";
+  const what = of === 'food_no_deals' ? 'the food (value deals not counted)' : `the ${of}`;
   if (limits.flatOverCents === 0) {
-    return `Up to ${p}% off${of === 'food' ? ' the food' : ''} without a manager. More, or any amount off in rupees, needs a manager's PIN or password.`;
+    return `Up to ${p}% off${of === 'order' ? '' : ` ${what}`} without a manager. More, or any amount off in rupees, needs a manager's PIN or password.`;
   }
-  return `Up to ${p}% off, or up to ${formatCents(limits.flatOverCents)} off if that is no more than ${p}% of the ${of}, without a manager. More needs a manager's PIN or password.`;
+  return `Up to ${p}% off, or up to ${formatCents(limits.flatOverCents)} off if that is no more than ${p}% of ${what}, without a manager. More needs a manager's PIN or password.`;
 }
 
 /**

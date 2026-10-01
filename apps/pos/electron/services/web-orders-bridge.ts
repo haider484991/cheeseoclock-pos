@@ -1805,7 +1805,7 @@ class WebOrdersBridge {
               approverUserId: actor.userId,
             },
             actor,
-            { rule: websiteDiscountRule() },
+            { rule: websiteDiscountRule(false) },
           );
         }
 

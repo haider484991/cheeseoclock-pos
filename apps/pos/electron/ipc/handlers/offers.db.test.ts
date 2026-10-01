@@ -376,6 +376,8 @@ describe.skipIf(!Sqlite)('an offer goes on by itself, on the food only', () => {
       v: 1,
       alsoOffDeliveryCharge: false,
       from: 'till',
+      // Value deals never (owner, 2 Oct 2026): frozen with every offer.
+      skipsNoDiscountLines: true,
       offer: {
         v: 1,
         id: 'test-wa',
