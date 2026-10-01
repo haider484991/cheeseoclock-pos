@@ -10,9 +10,10 @@
  *   - it never throws;
  *   - sayTillClosing sends exactly one "not accepting" (no reason: the
  *     owner's switch-off words) and stops the poll, so no later heartbeat
- *     reopens the website; nothing with no link or the switch off; a website
- *     that cannot be reached does not make it throw; the next start says
- *     "accepting" again.
+ *     reopens the website — nor a kick (the nudge after the computer
+ *     wakes) until a restart or a Save; nothing with no link or the switch
+ *     off; a website that cannot be reached does not make it throw; the next
+ *     start says "accepting" again.
  *
  * A real database built from every migration (node:sqlite behind
  * better-sqlite3's shape — see costing-shop.fixture.ts; skips where it is
@@ -285,5 +286,26 @@ live('sayTillClosing: the website hears "not accepting" before the till closes',
     bridgeMod.webOrdersBridge.init(db as AppDatabase, DEV);
     await vi.waitFor(() => expect(beats().length).toBeGreaterThan(before));
     expect(beats()[before]).toMatchObject({ acceptingOrders: true, deviceId: DEV });
+  });
+
+  it('a kick after the goodbye (the nudge after the computer wakes) asks the website nothing; a Save runs the poll again', async () => {
+    await till({ enabled: true });
+    await bridgeMod.webOrdersBridge.sayTillClosing();
+    expect(beats().at(-1)).toMatchObject({ acceptingOrders: false });
+    // Asleep for longer than a heartbeat: a poll now would say "accepting" first.
+    (bridgeMod.webOrdersBridge as unknown as { lastHeartbeatAt: number }).lastHeartbeatAt = 0;
+    const before = sent.length;
+    const pollsBefore = polls();
+
+    bridgeMod.webOrdersBridge.kick();
+    // Long enough for a poll the kick started to reach the website.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(sent).toHaveLength(before);
+    expect(beats().at(-1)).toMatchObject({ acceptingOrders: false });
+
+    // Settings saved (reschedule): the poll runs again.
+    bridgeMod.webOrdersBridge.reschedule();
+    await vi.waitFor(() => expect(polls()).toBeGreaterThan(pollsBefore));
+    await vi.waitFor(() => expect(beats().at(-1)).toMatchObject({ acceptingOrders: true }));
   });
 });

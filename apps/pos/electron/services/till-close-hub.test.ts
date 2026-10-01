@@ -4,7 +4,8 @@
  * orders through this till, the question goes to the screen with the till
  * brought to the front, a screen Windows says is not responding closes at
  * once, Windows ending the session (WM_QUERYENDSESSION, 'session-end') is let
- * through and a called-off shutdown (WM_ENDSESSION, wParam 0) asks again,
+ * through and a called-off shutdown (WM_ENDSESSION, wParam 0) asks again, as
+ * does an end-session that leaves the till running for 30 s,
  * the app quitting is let through, and "Close the till" says goodbye to the
  * website before the window closes.
  */
@@ -148,6 +149,21 @@ describe('never asked: quitting and Windows ending the session', () => {
     // Called off: asks again.
     f.hooks.get(0x0016)?.(Buffer.alloc(8), Buffer.alloc(8));
     expect(f.pressX()).toBe(true);
+  });
+
+  it('an end-session that leaves the till running (an installer, the Restart Manager): X asks again 30 s later', () => {
+    vi.useFakeTimers();
+    try {
+      const f = attach();
+      f.hooks.get(0x0011)?.(Buffer.alloc(8), Buffer.alloc(8));
+      vi.advanceTimersByTime(29_999);
+      expect(f.pressX()).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(f.pressX()).toBe(true);
+      expect(f.sent).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('only Windows gets the message hooks', () => {

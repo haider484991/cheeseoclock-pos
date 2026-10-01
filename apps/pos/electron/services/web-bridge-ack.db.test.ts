@@ -7,8 +7,9 @@
  *     website showed them (web_created_at, web_total_cents, 0046);
  *   - an ack that lands is recorded (acked_at); one that does not (no
  *     answer, a refusal) is logged with its status and asked again on every
- *     poll before the GET, whatever the owner's switch says, stopping at the
- *     first failure;
+ *     poll before the GET (and before the GET of the owner's switch-off
+ *     drain), whatever the owner's switch says, stopping at the first
+ *     failure; an answer that never comes is given up on in time;
  *   - acked:false is checked with the till's own status: a website that
  *     answers it cancelled an order the kitchen has raises ONE loud
  *     'cancelled_on_site' card with the order number; any other answer (a
@@ -70,7 +71,6 @@ const live = describe.skipIf(!DatabaseSync);
 
 const SITE = 'https://shop.example.test';
 const PHONE = '0300-5550123';
-type Db = ReturnType<typeof openMigrated>;
 type Row = Record<string, unknown>;
 
 /** What the stand-in website answers: a status and a JSON body, or no answer at all. */
@@ -88,6 +88,7 @@ interface BridgeInside {
   importOne(cfg: unknown, web: WebOrder): Promise<void>;
   tick(): Promise<void>;
   retryAcks(cfg: unknown): Promise<void>;
+  cancelUnclaimedOrders(cfg: unknown): Promise<void>;
   pushStatusUpdates(cfg: unknown): Promise<void>;
   reschedule(): void;
   stop(): void;
@@ -282,6 +283,26 @@ live('the ack of an imported website order', () => {
     expect(t.calls.filter(isPull)).toEqual([]);
   });
 
+  it('the owner’s switch-off drain asks again before its GET too, and goes on when that fails', async () => {
+    const t = await till();
+    await t.importWeb('web-1', 'offline');
+    const steps = () => t.calls.map((c) => (isAck(c) ? 'ack' : isPull(c) ? 'pull' : c.path));
+
+    // Still offline for the ack: the drain's GET goes ahead all the same.
+    t.calls.length = 0;
+    t.setSite((c) => (isPull(c) ? NO_ORDERS : 'offline'));
+    await t.bridge.cancelUnclaimedOrders({});
+    expect(steps()).toEqual(['ack', 'pull']);
+    expect(t.row('web-1')['acked_at']).toBeNull();
+
+    // Back online: confirmed before the GET that runs the website's 45-minute cancel.
+    t.calls.length = 0;
+    t.setSite((c) => (isPull(c) ? NO_ORDERS : ACKED));
+    await t.bridge.cancelUnclaimedOrders({});
+    expect(steps()).toEqual(['ack', 'pull']);
+    expect(t.row('web-1')['acked_at']).toEqual(expect.any(String));
+  });
+
   it('offline it stops after one call, and orders older than 2 hours are not asked about', async () => {
     const t = await till();
     await t.importWeb('web-1', 'offline');
@@ -425,6 +446,60 @@ live('the ack of an imported website order', () => {
     await t.bridge.tick();
     expect(t.row('web-1')['acked_at']).toEqual(expect.any(String));
     expect(Number((t.db.prepare(`SELECT COUNT(*) AS n FROM orders`).get() as Row)['n'])).toBe(before);
+  });
+});
+
+live('an answer whose body never comes', () => {
+  it('is given up on when the call’s 20 s are up, the line hung up, and the poll goes on', async () => {
+    const t = await till();
+    await t.importWeb('web-1', 'offline');
+    await t.importWeb('web-2', 'offline');
+    // The real call to the website: the ack's headers come after 5 s, its body never does.
+    delete (t.bridge as Partial<BridgeInside>).api;
+    const hungUp: string[] = [];
+    const asked: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (url: string, init: RequestInit) =>
+          new Promise<Response>((resolve) => {
+            const path = new URL(url).pathname;
+            asked.push(path);
+            setTimeout(() => {
+              const body = new ReadableStream<Uint8Array>({
+                start(c) {
+                  init.signal?.addEventListener('abort', () => {
+                    hungUp.push(path);
+                    c.error(new Error('aborted'));
+                  });
+                },
+              });
+              resolve(new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } }));
+            }, 5_000);
+          }),
+      ),
+    );
+    vi.useFakeTimers();
+    try {
+      let done = false;
+      const retry = t.bridge.retryAcks({ siteUrl: SITE, bridgeSecret: 'made-up-secret' }).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(20_000 - 1);
+      expect(done).toBe(false);
+      expect(hungUp).toEqual([]);
+      // 20 s after the first ack was sent: given up on, and the next order is asked about.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(hungUp).toEqual(['/api/bridge/orders/web-1/ack']);
+      expect(asked).toEqual(['/api/bridge/orders/web-1/ack', '/api/bridge/orders/web-2/ack']);
+      expect(warned('Web bridge: the website’s answer did not come in time')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(done).toBe(true);
+      await retry;
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 });
 

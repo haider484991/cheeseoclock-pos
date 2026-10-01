@@ -333,6 +333,17 @@ interface BridgeAnswer {
   data?: { acked?: unknown; updated?: unknown; finalStatus?: unknown } | null;
 }
 
+/** One call to the website, headers and all, gets this long (api()). */
+const API_TIMEOUT_MS = 20_000;
+/** An ack or status answer whose headers came gets at least this long for its body (readAnswer). */
+const ANSWER_READ_MIN_MS = 1_000;
+/**
+ * The answers api() handed back: by when the body must have come (what is
+ * left of the call's 20 s) and how to hang up on one that has not
+ * (readAnswer).
+ */
+const answerLimits = new WeakMap<Response, { by: number; hangUp: () => void }>();
+
 const LAST_CLOUD_BACKUP_KEY = 'webBridge.lastCloudBackupAt';
 const LAST_CLOUD_META_KEY = 'webBridge.lastCloudBackupMeta';
 /** When an upload was last tried, success or not — throttles scheduled retries. */
@@ -358,6 +369,12 @@ class WebOrdersBridge {
   private systemUserId: string | null = null;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  /**
+   * stop() was called ("Close the till", a restore): no poll runs until
+   * init() or reschedule(), so a late kick (the nudge after the computer
+   * wakes) cannot tell the website "accepting" after the goodbye.
+   */
+  private stopped = false;
   private lastPollAt: string | null = null;
   private lastHeartbeatAt = 0;
   /**
@@ -760,6 +777,7 @@ class WebOrdersBridge {
   reschedule(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.stopped = false;
     if (!this.db) return;
     const cfg = getWebBridgeConfig(this.db);
     // Menu files from the costing PC: looked for whenever the link is set up — online orders and
@@ -807,9 +825,11 @@ class WebOrdersBridge {
   /**
    * Stop polling — called right before the app restarts for a restore, and
    * when the person at the till chose "Close the till" (sayTillClosing). The
-   * ack retry rides the poll (tick), so it stops with it.
+   * ack retry rides the poll (tick), so it stops with it. A kick() after
+   * this runs nothing until init() or reschedule().
    */
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     if (this.settingsTimer) clearTimeout(this.settingsTimer);
@@ -947,7 +967,7 @@ class WebOrdersBridge {
   // -------------------------------------------------------------------------
 
   private async tick(): Promise<void> {
-    if (this.running || !this.db) return;
+    if (this.stopped || this.running || !this.db) return;
     const cfg = getWebBridgeConfig(this.db);
     if (!isWebBridgeReady(cfg).ok) return;
     this.running = true;
@@ -1027,6 +1047,13 @@ class WebOrdersBridge {
     this.running = true;
     try {
       const db = this.db;
+      // As in the poll: orders whose ack the website never confirmed are asked
+      // about BEFORE the GET, which runs the website's 45-minute cancel.
+      await this.retryAcks(cfg).catch((e: unknown) => {
+        log.warn('Web order ack retry failed', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
       const res = await this.api(cfg, this.ordersPath());
       if (!res.ok) throw new Error(`Pull failed: HTTP ${res.status}`);
       const json = (await res.json()) as { ok: boolean; data?: WebOrder[] };
@@ -1504,8 +1531,15 @@ class WebOrdersBridge {
     // this, one stalled request left `this.running` true forever and the
     // bridge silently stopped pulling orders (while manual actions kept
     // working). 20s is generous for one ≤1 MB cloud-copy chunk on shop Wi-Fi.
+    // The clock stops once the headers are in: what is left of it is for
+    // reading an ack or status answer (readAnswer).
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20_000);
+    const by = Date.now() + API_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    const answered = (res: Response): Response => {
+      answerLimits.set(res, { by, hangUp: () => controller.abort() });
+      return res;
+    };
     try {
       const request: RequestInit = {
         ...init,
@@ -1525,16 +1559,16 @@ class WebOrdersBridge {
       const cached = this.canonicalOrigin;
       const origin = cached && cached.for === conn.siteUrl ? cached.origin : conn.siteUrl;
       const res = await fetch(`${origin}${path}`, request);
-      if (res.status < 300 || res.status >= 400) return res;
+      if (res.status < 300 || res.status >= 400) return answered(res);
       // Only honour a redirect that is plain host canonicalisation (apex → www,
       // http → https). Anything that changes the path is not our API.
       const location = res.headers.get('location');
-      if (!location) return res;
+      if (!location) return answered(res);
       const target = new URL(location, `${origin}${path}`);
       const requested = new URL(`${origin}${path}`);
-      if (target.protocol !== 'https:' || target.pathname !== requested.pathname) return res;
+      if (target.protocol !== 'https:' || target.pathname !== requested.pathname) return answered(res);
       this.canonicalOrigin = { for: conn.siteUrl, origin: target.origin };
-      return await fetch(`${target.origin}${path}`, request);
+      return answered(await fetch(`${target.origin}${path}`, request));
     } finally {
       clearTimeout(timer);
     }
@@ -2859,13 +2893,30 @@ function deviceDisplayName(db: AppDatabase): string | null {
   }
 }
 
-/** An answer's JSON body, or null when it has none or it is not JSON. Never throws. */
+/**
+ * An answer's JSON body, or null when it has none, it is not JSON, or it has
+ * not come by the end of its call's 20 s (api() stops its clock once the
+ * headers are in; a body that never came held the poll for up to 5 minutes).
+ * Never throws.
+ */
 async function readAnswer(res: Response): Promise<BridgeAnswer | null> {
+  const limit = answerLimits.get(res);
+  const left = Math.max(ANSWER_READ_MIN_MS, (limit?.by ?? Date.now() + API_TIMEOUT_MS) - Date.now());
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeUp = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(null);
+      limit?.hangUp();
+      log.warn('Web bridge: the website’s answer did not come in time', { status: res.status });
+    }, left);
+  });
   try {
-    const body: unknown = await res.json();
+    const body: unknown = await Promise.race([res.json(), timeUp]);
     return body !== null && typeof body === 'object' ? (body as BridgeAnswer) : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -11,7 +11,10 @@ import type { CloseTillAsk } from '@cheeseoclock/shared-types';
  * It never asks, and the window closes as before, when:
  *  - the app is quitting (app.quit: an update's "Restart now", install on
  *    quit) or Windows is shutting down, restarting or signing out — a held
- *    window there would read "This app is preventing shutdown";
+ *    window there would read "This app is preventing shutdown". A Windows
+ *    end-session that leaves the till running (an installer, the Restart
+ *    Manager) lets it close without asking for SESSION_END_REARM_MS only;
+ *    after that it asks again;
  *  - the screen cannot ask (crashed, or Windows says it is not responding);
  *  - the screen does not say the question is up within ASK_ACK_TIMEOUT_MS:
  *    a till that will not close sends people to Task Manager or the power
@@ -29,6 +32,12 @@ import type { CloseTillAsk } from '@cheeseoclock/shared-types';
 export const ASK_ACK_TIMEOUT_MS = 5_000;
 /** "Close the till" waits this long at most for the website to hear "not accepting". */
 export const GOODBYE_TIMEOUT_MS = 2_000;
+/**
+ * A Windows end-session lets the window close without asking; if the till is
+ * still running this long after the last one, Windows did not end it (an
+ * installer, the Restart Manager), and the next close asks again.
+ */
+export const SESSION_END_REARM_MS = 30_000;
 
 /** Why the window may close without asking. */
 export type CloseAllowReason = 'quit' | 'session-end' | 'answered' | 'no-answer';
@@ -65,6 +74,8 @@ function errorText(e: unknown): string {
 export class TillCloseGuard {
   private allowed: CloseAllowReason | null = null;
   private pending: Pending | null = null;
+  /** Asks again SESSION_END_REARM_MS after the last session end (sessionEndOver). */
+  private sessionEndTimer: unknown = null;
 
   constructor(private readonly deps: TillCloseDeps) {}
 
@@ -135,16 +146,22 @@ export class TillCloseGuard {
   /**
    * Close without asking from now on: the app is quitting, or Windows is
    * ending the session. A question already up is dropped. A session end
-   * never replaces a stronger reason (sessionEndCancelled would undo it).
+   * never replaces a stronger reason (sessionEndCancelled would undo it),
+   * and lasts SESSION_END_REARM_MS from the last one (sessionEndOver).
    */
   allowClose(why: CloseAllowReason): void {
     if (why !== 'session-end' || this.allowed === null) this.allowed = why;
     this.drop();
+    this.stopSessionEndTimer();
+    if (this.allowed === 'session-end') {
+      this.sessionEndTimer = this.deps.schedule(() => this.sessionEndOver(), SESSION_END_REARM_MS);
+    }
   }
 
   /** Windows called the shutdown off (another app refused it): ask again before closing. */
   sessionEndCancelled(): void {
     if (this.allowed !== 'session-end') return;
+    this.stopSessionEndTimer();
     this.allowed = null;
     this.deps.info('Till window: Windows did not shut down after all; asking again before closing');
   }
@@ -167,6 +184,28 @@ export class TillCloseGuard {
     if (!p) return;
     this.pending = null;
     if (!p.acked) this.deps.cancel(p.timer);
+  }
+
+  /**
+   * The till still runs SESSION_END_REARM_MS after Windows' last session end
+   * (an installer or the Restart Manager asked, and nothing ended): ask again
+   * before closing. A quit, an answer or a no-answer is never undone.
+   */
+  private sessionEndOver(): void {
+    try {
+      this.sessionEndTimer = null;
+      if (this.allowed !== 'session-end') return;
+      this.allowed = null;
+      this.deps.info('Till window: Windows did not end the session; asking again before closing');
+    } catch (e) {
+      this.deps.warn('Till window: could not ask again after a session end', { error: errorText(e) });
+    }
+  }
+
+  private stopSessionEndTimer(): void {
+    if (this.sessionEndTimer === null) return;
+    this.deps.cancel(this.sessionEndTimer);
+    this.sessionEndTimer = null;
   }
 
   private noAnswer(p: Pending): void {

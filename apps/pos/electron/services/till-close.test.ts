@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CloseTillAsk } from '@cheeseoclock/shared-types';
-import { ASK_ACK_TIMEOUT_MS, GOODBYE_TIMEOUT_MS, TillCloseGuard } from './till-close.js';
+import { ASK_ACK_TIMEOUT_MS, GOODBYE_TIMEOUT_MS, SESSION_END_REARM_MS, TillCloseGuard } from './till-close.js';
 
 interface SetupOpts {
   /** What closing would stop; null = the website takes no orders through this till. */
@@ -304,6 +304,64 @@ describe('never asked: quitting, Windows ending the session, the screen gone', (
     t.guard.sessionEndCancelled();
     expect(t.guard.onCloseRequested()).toBe('keep-open');
     expect(t.asked).toHaveLength(1);
+  });
+
+  it('a Windows end-session that leaves the till running (an installer, the Restart Manager): asks again 30 s later', () => {
+    const t = setup();
+    t.guard.allowClose('session-end');
+    t.advance(SESSION_END_REARM_MS - 1);
+    expect(t.guard.onCloseRequested()).toBe('close');
+    expect(t.asked).toEqual([]);
+    t.advance(1);
+    expect(t.info).toContain('Till window: Windows did not end the session; asking again before closing');
+    expect(t.guard.onCloseRequested()).toBe('keep-open');
+    expect(t.asked).toHaveLength(1);
+  });
+
+  it('the 30 s count from the last end-session message (WM_QUERYENDSESSION, then session-end)', () => {
+    const t = setup();
+    t.guard.allowClose('session-end');
+    t.advance(20_000);
+    t.guard.allowClose('session-end');
+    t.advance(SESSION_END_REARM_MS - 1);
+    expect(t.guard.onCloseRequested()).toBe('close');
+    t.advance(1);
+    expect(t.guard.onCloseRequested()).toBe('keep-open');
+  });
+
+  it('never asks again after a quit, "Close the till" or a no-answer, whatever Windows said', async () => {
+    // The app quitting, then Windows ending the session…
+    const a = setup();
+    a.guard.allowClose('quit');
+    a.guard.allowClose('session-end');
+    a.advance(SESSION_END_REARM_MS * 2);
+    expect(a.guard.onCloseRequested()).toBe('close');
+
+    // …or the other way round (an update's "Restart now" during a session end).
+    const b = setup();
+    b.guard.allowClose('session-end');
+    b.guard.allowClose('quit');
+    b.advance(SESSION_END_REARM_MS * 2);
+    expect(b.guard.onCloseRequested()).toBe('close');
+
+    // "Close the till" chosen, then Windows ending the session.
+    const c = setup();
+    c.guard.onCloseRequested();
+    c.guard.answer('ask-1', true);
+    c.guard.allowClose('session-end');
+    c.advance(SESSION_END_REARM_MS * 2);
+    await c.settle();
+    expect(c.guard.onCloseRequested()).toBe('close');
+
+    // No word from the screen in 5 s, then Windows ending the session.
+    const d = setup();
+    d.guard.onCloseRequested();
+    d.advance(ASK_ACK_TIMEOUT_MS);
+    d.guard.allowClose('session-end');
+    d.advance(SESSION_END_REARM_MS * 2);
+    expect(d.guard.onCloseRequested()).toBe('close');
+
+    expect([...a.asked, ...b.asked, ...c.asked, ...d.asked]).toHaveLength(2);
   });
 
   it('a called-off shutdown never undoes a quit, whichever came first', () => {
