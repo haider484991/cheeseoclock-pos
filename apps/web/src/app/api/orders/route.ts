@@ -11,6 +11,7 @@ import {
 import { feeItemIdsOf, zoneFeeItemFor } from '@/lib/delivery-zones';
 import { formatCents, normalizePhone } from '@/lib/format';
 import { menuWithoutDrinkBrand } from '@/lib/menu-view';
+import { withoutHiddenItems } from '@/lib/website-hidden-items';
 import { validateModifierSelection, validateOrderable } from '@/lib/order-validation';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import { checkOrderRate, clientIpHash, recordOrderPlaced } from '@/lib/rate-limit';
@@ -268,7 +269,9 @@ export async function POST(req: Request): Promise<Response> {
     const menuRows = (await sql()`
       SELECT menu_json FROM site_menu WHERE id = 1
     `) as Array<{ menu_json: PublishedMenu }>;
-    const menu = menuRows[0] ? menuWithoutDrinkBrand(menuRows[0].menu_json) : undefined;
+    // Without the items the website hides (lib/website-hidden-items): a basket that still has one is
+    // refused like any item the till took off the website.
+    const menu = menuRows[0] ? menuWithoutDrinkBrand(withoutHiddenItems(menuRows[0].menu_json)) : undefined;
     if (!menu) {
       return Response.json({ ok: false, error: 'menu_not_published' }, { status: 409 });
     }

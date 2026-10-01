@@ -1,5 +1,6 @@
 import type { PublishedMenu, PublishedSettings } from '@cheeseoclock/shared-types';
 import { menuWithoutDrinkBrand } from './menu-view';
+import { withoutHiddenItems } from './website-hidden-items';
 
 /**
  * What the public gets of the owner's settings block: the areas (with their
@@ -18,9 +19,9 @@ export type PublicSettings = Pick<PublishedSettings, 'v' | 'pickup' | 'zones'>;
  */
 export type PublicMenu = Omit<PublishedMenu, 'settings' | 'shop'> & { settings?: PublicSettings };
 
-/** The stored menu as the public gets it (no drink brand; the settings block without its device id and stamps; no shop block). */
+/** The stored menu as the public gets it (no item the website hides; no drink brand; the settings block without its device id and stamps; no shop block). */
 export function publicMenu(menu: PublishedMenu): PublicMenu {
-  const { settings, shop: _shop, ...rest } = menuWithoutDrinkBrand(menu);
+  const { settings, shop: _shop, ...rest } = menuWithoutDrinkBrand(withoutHiddenItems(menu));
   if (!settings) return rest;
   return { ...rest, settings: { v: settings.v, pickup: settings.pickup, zones: settings.zones } };
 }
