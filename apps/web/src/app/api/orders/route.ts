@@ -51,11 +51,14 @@ export const dynamic = 'force-dynamic';
  * fee, else today's match by name and price, else a note for the cashier to
  * add it by hand.
  *
- * Pickup: no zone, no address, the owner's pick-up % off the order (the
- * settings block's, or before one the listening till's announced %) — and
- * only while the owner offers it and that till has announced it can import
- * pickup orders, because an older POS would book one as a delivery at full
- * price.
+ * Pickup: no zone, no address, the owner's pick-up % (the settings block's,
+ * or before one the listening till's announced %) off every line except
+ * items the published menu marks no-discount (value deals) — and only while
+ * the owner offers it and that till has announced it can import pickup
+ * orders, because an older POS would book one as a delivery at full price.
+ * Each stored line whose item is marked carries `noDiscount: true`, on a
+ * pick-up and a delivery alike, so the till reads the % back on the lines it
+ * was worked on (shared-types web-bridge.ts, NO DISCOUNT ON VALUE DEALS).
  *
  * The owner's website messages (v0.7.30, shared-types web-bridge.ts WEBSITE
  * MESSAGES), from the same block: while the shop is closed, the owner's
@@ -337,7 +340,14 @@ export async function POST(req: Request): Promise<Response> {
           priceDeltaCents: mod.priceDeltaCents,
         });
       }
-      priced.push({ lineTotalCents: unit * line.quantity, taxRateBps: item.taxRateBps });
+      // A value deal (the stored menu's mark, never the browser's): no share of the pick-up %,
+      // and the flag on its stored line — the LAST key, so an unmarked line's JSON is today's.
+      const marked = item.noDiscount === true;
+      priced.push({
+        lineTotalCents: unit * line.quantity,
+        taxRateBps: item.taxRateBps,
+        ...(marked ? { noDiscount: true } : {}),
+      });
       lines.push({
         posItemId: item.posItemId,
         name: item.name,
@@ -345,6 +355,7 @@ export async function POST(req: Request): Promise<Response> {
         unitPriceCents: unit,
         modifiers: mods,
         notes: line.notes?.trim() || null,
+        ...(marked ? { noDiscount: true as const } : {}),
       });
     }
 

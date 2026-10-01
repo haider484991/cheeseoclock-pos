@@ -228,6 +228,8 @@ describe('PUT /api/bridge/menu with the settings block', () => {
       settingsProblem: null,
       // v0.7.30: this website keeps the messages and "Pick-up only" (the till notices an older one).
       websiteMessages: true,
+      // v0.7.34: it keeps the items' noDiscount and prices pick-ups without them (NO DISCOUNT ON VALUE DEALS).
+      noDiscountItems: true,
       // Sweep B2 + B4 (THE SHOP BLOCK): this website always says what it holds of the shop block
       // (none here), and which of the home page's featured items the menu lacks (all of today's:
       // this made-up menu has none of them).

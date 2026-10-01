@@ -4,14 +4,20 @@
  *
  * Mirrors apps/pos (order-repo recomputeOrderTotals + pos-domain
  * computeDiscountCents / computeTax, exclusive tax): a percent discount is
- * rounded once on the subtotal, then spread over the lines by weight, and
- * each line is taxed on what is left of it. pricing.test.ts runs the POS's
- * own functions next to these to keep the two from drifting.
+ * rounded once on its base — the lines the menu does not mark no-discount
+ * (value deals, shared-types web-bridge.ts NO DISCOUNT ON VALUE DEALS), as
+ * pos-domain discount-base.ts leaves a line out of the base — then spread
+ * over those lines by weight, and each line is taxed on what is left of it.
+ * Nothing marked: the base is the subtotal, exactly as before.
+ * pricing.test.ts runs the POS's own functions next to these to keep the two
+ * from drifting.
  */
 
 export interface PricedLine {
   lineTotalCents: number;
   taxRateBps: number;
+  /** Its menu item is marked no-discount (PublishedMenuItem.noDiscount): it takes no share of the %. */
+  noDiscount?: boolean;
 }
 
 export interface OrderTotals {
@@ -51,12 +57,21 @@ export function allocateDiscount(lineTotalsCents: ReadonlyArray<number>, discoun
   return shares;
 }
 
+/**
+ * Each line's weight in the split (pos-domain discountWeights): its total,
+ * or 0 for a line marked no-discount. Their sum is what the % is worked on.
+ */
+export function discountWeights(lines: ReadonlyArray<PricedLine>): number[] {
+  return lines.map((l) => (l.noDiscount === true ? 0 : l.lineTotalCents));
+}
+
 export function priceOrder(lines: PricedLine[], discountPercent = 0): OrderTotals {
   const subtotal = lines.reduce((s, l) => s + l.lineTotalCents, 0);
-  const discount = percentDiscountCents(subtotal, discountPercent);
+  const weights = discountWeights(lines);
+  const discount = percentDiscountCents(weights.reduce((s, w) => s + w, 0), discountPercent);
   let tax = 0;
   if (subtotal > 0) {
-    const shares = allocateDiscount(lines.map((l) => l.lineTotalCents), discount);
+    const shares = allocateDiscount(weights, discount);
     lines.forEach((line, i) => {
       const net = Math.max(0, line.lineTotalCents - (shares[i] ?? 0));
       tax += Math.round((net * line.taxRateBps) / 10_000);

@@ -77,6 +77,8 @@ export async function PUT(req: Request): Promise<Response> {
       settingsProblem: held?.settingsProblem ?? null,
       // This website keeps the block's messages and the items' pickupOnly (an older one drops them).
       websiteMessages: true,
+      // This website keeps the items' noDiscount and prices pick-ups without them (an older one strips it).
+      noDiscountItems: true,
       // THE SHOP BLOCK: what it did with this publish's (or the stored one), what it holds now.
       ...shopAnswer,
     };

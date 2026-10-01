@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { webOrderPickupPercent, type WebOrderItem } from '@cheeseoclock/shared-types';
 import {
   allocateDiscount as tillAllocate,
   computeDiscountCents,
 } from '../../../../packages/pos-domain/src/discount';
 import { allocateDiscount as fbrAllocate } from '../../../../packages/fbr-core/src/mapper';
 import { computeTax } from '../../../../packages/pos-domain/src/tax';
-import { allocateDiscount, percentDiscountCents, priceOrder, type PricedLine } from './pricing';
+import { allocateDiscount, discountWeights, percentDiscountCents, priceOrder, type PricedLine } from './pricing';
 
 /** The till's recomputeOrderTotals (apps/pos order-repo), built from its own pieces. */
 function tillTotals(lines: PricedLine[], percent: number) {
@@ -67,6 +68,133 @@ describe('the discount split is the same on the till, the FBR invoice and the si
       const web = allocateDiscount(lines, discount);
       expect(web).toEqual(tillAllocate(lines, discount));
       expect(web).toEqual(fbrAllocate(lines, discount));
+    }
+  });
+});
+
+/**
+ * The till's totals with value deals left out (deals plan: THE MATHS), from
+ * its own pieces: the % worked on the lines that take a share
+ * (computeDiscountCents on Σ weights), split by pos-domain allocateDiscount
+ * over the weights (a marked line weighs 0), each line taxed on what is left.
+ * The weights are written out here: pos-domain discount-base.ts learns the
+ * mark with the till's own step.
+ */
+function tillTotalsLeavingOutMarked(lines: PricedLine[], percent: number) {
+  const subtotal = lines.reduce((s, l) => s + l.lineTotalCents, 0);
+  const weights = lines.map((l) => (l.noDiscount === true ? 0 : l.lineTotalCents));
+  const base = weights.reduce((s, w) => s + w, 0);
+  const discount = Math.min(computeDiscountCents(base, { type: 'percent', value: percent }) as number, base);
+  let tax = 0;
+  if (subtotal > 0) {
+    const shares = tillAllocate(weights, discount);
+    // The FBR invoice splits it the same way.
+    expect(fbrAllocate(weights, discount)).toEqual(shares);
+    lines.forEach((l, i) => {
+      const net = Math.max(0, l.lineTotalCents - (shares[i] ?? 0));
+      tax += computeTax(net, l.taxRateBps, 'exclusive').taxCents as number;
+    });
+  }
+  return { subtotalCents: subtotal, discountCents: discount, taxCents: tax, totalCents: subtotal - discount + tax };
+}
+
+describe('value deals take no share of the pick-up % (v0.7.34, NO DISCOUNT ON VALUE DEALS)', () => {
+  it('nothing marked is today: 500 seeded carts, with no key and with `noDiscount: false`', () => {
+    let seed = 734;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let n = 0; n < 500; n++) {
+      const lines: PricedLine[] = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => ({
+        lineTotalCents: Math.floor(rnd() * 900_000) + 1,
+        taxRateBps: [0, 1300, 1500, 1600][Math.floor(rnd() * 4)]!,
+        ...(rnd() < 0.5 ? { noDiscount: false } : {}),
+      }));
+      const bare = lines.map((l) => ({ lineTotalCents: l.lineTotalCents, taxRateBps: l.taxRateBps }));
+      for (const pct of [0, 10, Math.floor(rnd() * 51)]) {
+        expect(priceOrder(lines, pct)).toEqual(tillTotals(bare, pct));
+        expect(discountWeights(lines)).toEqual(bare.map((l) => l.lineTotalCents));
+      }
+    }
+  });
+
+  it('with marked lines, equals a till built from its own pieces on 500 seeded carts', () => {
+    let seed = 2026;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const seen = { someMarked: 0, allMarked: 0 };
+    for (let n = 0; n < 500; n++) {
+      const lines: PricedLine[] = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => ({
+        lineTotalCents: Math.floor(rnd() * 900_000) + 1,
+        taxRateBps: [0, 1300, 1500, 1600][Math.floor(rnd() * 4)]!,
+        ...(rnd() < 0.4 ? { noDiscount: true } : rnd() < 0.5 ? { noDiscount: false } : {}),
+      }));
+      const marked = lines.filter((l) => l.noDiscount === true).length;
+      if (marked === lines.length) seen.allMarked++;
+      else if (marked > 0) seen.someMarked++;
+      for (const pct of [10, Math.floor(rnd() * 51)]) {
+        expect(priceOrder(lines, pct)).toEqual(tillTotalsLeavingOutMarked(lines, pct));
+      }
+    }
+    expect(seen.someMarked).toBeGreaterThan(0);
+    expect(seen.allMarked).toBeGreaterThan(0);
+  });
+
+  it('works the example: Big Two (marked) + Veggie Lovers Large + Nuggets at 15% tax, 10% off', () => {
+    const lines = [
+      { lineTotalCents: 360_000, taxRateBps: 1500, noDiscount: true }, // Big Two
+      { lineTotalCents: 200_000, taxRateBps: 1500 }, // Veggie Lovers Large
+      { lineTotalCents: 67_000, taxRateBps: 1500 }, // Nuggets
+    ];
+    // 10% of Rs 2,670, not of Rs 6,270 (today: 62,700 off, 84,645 tax, 648,945).
+    expect(priceOrder(lines, 10)).toEqual({ subtotalCents: 627_000, discountCents: 26_700, taxCents: 90_045, totalCents: 690_345 });
+    expect(priceOrder(lines, 10)).toEqual(tillTotalsLeavingOutMarked(lines, 10));
+  });
+
+  it('a cart of deals only takes nothing off', () => {
+    const bigTwo = [{ lineTotalCents: 360_000, taxRateBps: 1500, noDiscount: true }];
+    expect(priceOrder(bigTwo, 10)).toEqual({ subtotalCents: 360_000, discountCents: 0, taxCents: 54_000, totalCents: 414_000 });
+  });
+
+  it('a 0-weight line always gets a share of 0, on the site, the till and the FBR invoice', () => {
+    let seed = 5;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let n = 0; n < 500; n++) {
+      const weights = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () => (rnd() < 0.4 ? 0 : Math.floor(rnd() * 400_000) + 1));
+      const base = weights.reduce((s, w) => s + w, 0);
+      const discount = Math.floor(rnd() * (base + 1));
+      const shares = allocateDiscount(weights, discount);
+      weights.forEach((w, i) => {
+        if (w === 0) expect(shares[i]).toBe(0);
+      });
+      expect(shares.reduce((s, x) => s + x, 0)).toBe(base > 0 ? discount : 0);
+      expect(shares).toEqual(tillAllocate(weights, discount));
+      expect(shares).toEqual(fbrAllocate(weights, discount));
+    }
+  });
+
+  it('the till reads back the % the site priced: webOrderPickupPercent of priceOrder, every % from 0 to 50', () => {
+    let seed = 1002;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let p = 0; p <= 50; p++) {
+      for (let n = 0; n < 20; n++) {
+        // At least one unmarked line; every line at least Rs 1, as on the menu.
+        const items: WebOrderItem[] = Array.from({ length: 1 + Math.floor(rnd() * 5) }, (_, i) => ({
+          posItemId: `item-${i}`,
+          name: 'Made-up item',
+          quantity: 1 + Math.floor(rnd() * 4),
+          unitPriceCents: Math.floor(rnd() * 900_000) + 100,
+          modifiers: [],
+          notes: null,
+          ...(i > 0 && rnd() < 0.5 ? { noDiscount: true } : {}),
+        }));
+        const totals = priceOrder(
+          items.map((l) => ({
+            lineTotalCents: l.unitPriceCents * l.quantity,
+            taxRateBps: 1500,
+            ...(l.noDiscount === true ? { noDiscount: true } : {}),
+          })),
+          p,
+        );
+        expect(webOrderPickupPercent({ fulfilment: 'pickup', ...totals, items })).toBe(p);
+      }
     }
   });
 });

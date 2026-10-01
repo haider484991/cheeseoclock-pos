@@ -63,6 +63,8 @@ export async function PUT(req: Request): Promise<Response> {
       settingsProblem: r.held?.settingsProblem ?? null,
       // This website keeps the block's messages and the items' pickupOnly (an older one drops them).
       websiteMessages: true,
+      // This website keeps the items' noDiscount and prices pick-ups without them (an older one strips it).
+      noDiscountItems: true,
     };
     return Response.json({ ok: true, data });
   } catch (e) {

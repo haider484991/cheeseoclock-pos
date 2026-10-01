@@ -39,6 +39,14 @@ export const ItemSchema = z.object({
    * flag would be stripped here and a delivery with the item let through.
    */
   pickupOnly: z.boolean().optional(),
+  /**
+   * Never discounted on the till (v0.7.34, shared-types web-bridge.ts: NO
+   * DISCOUNT ON VALUE DEALS): sent only as true, absent on every other item,
+   * no default — so a menu without it is stored exactly as before. Without
+   * this line the flag would be stripped here and a deal discounted on a
+   * pick-up.
+   */
+  noDiscount: z.boolean().optional(),
 });
 export const MenuSchema = z.object({
   categories: z.array(

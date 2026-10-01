@@ -2,25 +2,45 @@
  * POST /api/orders on a real Postgres (PGlite, in memory, with db/schema.sql):
  * delivery zones are enforced, the zone's fee reaches the till as its
  * "Delivery Charge (Rs N)" item, pick-up-only food is refused for delivery,
- * and pickup (10% off) is offered only while the till announced it.
+ * pickup (10% off) is offered only while the till announced it, and a value
+ * deal the published menu marks takes no share of it (v0.7.34).
  */
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PublishedMenu, PublishedMenuItem, WebOrderItem } from '@cheeseoclock/shared-types';
+import {
+  DEFAULT_DELIVERY_ZONES,
+  webOrderPickupPercent,
+  type PublishedMenu,
+  type PublishedMenuItem,
+  type PublishedSettings,
+  type WebOrderItem,
+} from '@cheeseoclock/shared-types';
+import { buildSettingsBlock } from '../../../../packages/pos-domain/src/delivery-charge';
 
-const db = vi.hoisted(() => ({ pg: null as unknown as { query: (t: string, v: unknown[]) => Promise<{ rows: unknown[] }> } }));
+const db = vi.hoisted(() => ({
+  pg: null as unknown as { query: (t: string, v: unknown[]) => Promise<{ rows: unknown[] }> },
+  /** The values of the last INSERT INTO web_orders, as the route sent them (items_json as its JSON text). */
+  orderInsert: [] as unknown[],
+}));
 vi.mock('@/lib/db', () => ({
   // The Neon client is a tagged template returning rows; PGlite takes $n params.
-  sql: () => (strings: TemplateStringsArray, ...values: unknown[]) =>
-    db.pg.query(strings.reduce((acc, s, i) => acc + (i > 0 ? `$${i}` : '') + s, ''), values).then((r) => r.rows),
+  sql: () => (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const text = strings.reduce((acc, s, i) => acc + (i > 0 ? `$${i}` : '') + s, '');
+    if (text.includes('INSERT INTO web_orders')) db.orderInsert = values;
+    return db.pg.query(text, values).then((r) => r.rows);
+  },
 }));
+vi.mock('next/cache', () => ({ revalidatePath: () => undefined }));
 
 const orders = await import('@/app/api/orders/route');
 const bridgeStatus = await import('@/app/api/bridge/status/route');
 const bridgeOrders = await import('@/app/api/bridge/orders/route');
 const bridgeOrderStatus = await import('@/app/api/bridge/orders/[id]/status/route');
 const storeStatus = await import('@/app/api/store-status/route');
+const bridgeMenu = await import('@/app/api/bridge/menu/route');
+const bridgeSettings = await import('@/app/api/bridge/settings/route');
+const apiMenu = await import('@/app/api/menu/route');
 
 const SECRET = 'test-bridge-secret-0123456789';
 function bridge(path: string, init?: { method?: string; body?: unknown }) {
@@ -395,5 +415,178 @@ describe('two tills and the order journey', () => {
     expect((await push('delivered')).data).toEqual({ updated: true });
     const rows = (await db.pg.query(`SELECT status FROM web_orders WHERE id = $1`, [id])).rows as Array<{ status: string }>;
     expect(rows[0]!.status).toBe('delivered');
+  });
+});
+
+describe('POST /api/orders — value deals take no pick-up discount (v0.7.34, NO DISCOUNT ON VALUE DEALS)', () => {
+  /** menu(true) with a made-up Value Deals section; Big Two marked as a v0.7.34 till publishes it, or not. */
+  function dealsMenu(marked: boolean): PublishedMenu {
+    const m = menu(true);
+    m.categories.splice(2, 0, {
+      posCategoryId: 'c-deals',
+      name: 'Value Deals',
+      displayOrder: 5,
+      items: [item('big-two', 'Big Two', 3600, marked ? { noDiscount: true } : {})],
+    });
+    return m;
+  }
+  /** The till's block for a menu, by its own code (pos-domain buildSettingsBlock): today's areas, pick-up 10%. */
+  function tillBlock(m: PublishedMenu): PublishedSettings {
+    return buildSettingsBlock({
+      zones: DEFAULT_DELIVERY_ZONES.zones.map((z) => ({ ...z, aliases: [...z.aliases], hints: [...z.hints] })),
+      pickup: { offered: true, percent: 10 },
+      stamps: [{ version: 1, updatedAt: '2026-09-27T10:00:00.000Z' }],
+      menuItems: m.categories.flatMap((c) =>
+        c.items.map((i) => ({ id: i.posItemId, name: i.name, basePriceCents: i.basePriceCents })),
+      ),
+      deviceId: 'till-1',
+    });
+  }
+  /** A till's Publish, through the bridge (so the mark must get past its schema). */
+  async function publishFromTill(m: PublishedMenu) {
+    const res = await bridgeMenu.PUT(bridge('/api/bridge/menu', { method: 'PUT', body: m }));
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { data: Record<string, unknown> }).data;
+  }
+  async function storedMenu(): Promise<PublishedMenu> {
+    const rows = (await db.pg.query('SELECT menu_json FROM site_menu WHERE id = 1', [])).rows as Array<{
+      menu_json: PublishedMenu | string;
+    }>;
+    const v = rows[0]!.menu_json;
+    return typeof v === 'string' ? (JSON.parse(v) as PublishedMenu) : v;
+  }
+  const line = (posItemId: string) => ({ posItemId, quantity: 1, modifierIds: [] });
+  /** A stored line as today's route writes it: no noDiscount key. */
+  const todayLine = (posItemId: string, name: string, unitPriceCents: number) => ({
+    posItemId,
+    name,
+    quantity: 1,
+    unitPriceCents,
+    modifiers: [],
+    notes: null,
+  });
+  /** The items_json text the route sent with its last order. */
+  const itemsSent = () => db.orderInsert.find((v) => typeof v === 'string' && v.startsWith('[{"posItemId"'));
+
+  it('the bridge keeps the mark, GET /api/menu shows it, and both PUT answers say this website does', async () => {
+    const m = dealsMenu(true);
+    expect(await publishFromTill(m)).toMatchObject({ websiteMessages: true, noDiscountItems: true });
+    expect(await storedMenu()).toEqual(m);
+    const pub = (await (await apiMenu.GET()).json()) as { data: PublishedMenu };
+    const items = pub.data.categories.flatMap((c) => c.items);
+    expect(items.filter((i) => 'noDiscount' in i).map((i) => [i.posItemId, i.noDiscount])).toEqual([['big-two', true]]);
+    // A Save on the till (the block alone): the same answer, and the stored mark stays.
+    const save = await bridgeSettings.PUT(
+      bridge('/api/bridge/settings', { method: 'PUT', body: { settings: tillBlock(m), feeItems: [] } }),
+    );
+    expect(save.status).toBe(200);
+    expect(((await save.json()) as { data: Record<string, unknown> }).data).toMatchObject({
+      settings: 'stored',
+      websiteMessages: true,
+      noDiscountItems: true,
+    });
+    const { settings: _block, ...menuAfterSave } = await storedMenu();
+    expect(menuAfterSave).toEqual(m);
+  });
+
+  it('a menu with nothing marked (any till up to v0.7.33) is stored exactly as sent, no key added', async () => {
+    const m = dealsMenu(false);
+    await publishFromTill(m);
+    const stored = await storedMenu();
+    expect(stored).toEqual(m);
+    expect(JSON.stringify(stored)).not.toContain('noDiscount');
+  });
+
+  it('a pick-up of Big Two + a pizza: 10% off the pizza only, Big Two’s line says so, the till reads 10%', async () => {
+    await heartbeat(['pickup']);
+    await publishFromTill(dealsMenu(true));
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('big-two'), line('fajita-l')] });
+    expect(r.status).toBe(200);
+    // Rs 200 off the Rs 2,000 pizza (never Rs 560 off Rs 5,600); Big Two taxed on its full Rs 3,600.
+    expect(r.json.data).toMatchObject({
+      subtotalCents: 560_000,
+      discountCents: 20_000,
+      taxCents: 54_000 + 27_000,
+      totalCents: 621_000,
+    });
+    // The flag is the marked line's LAST key; the pizza's line is today's.
+    expect(itemsSent()).toBe(
+      JSON.stringify([
+        { ...todayLine('big-two', 'Big Two', 360_000), noDiscount: true },
+        todayLine('fajita-l', 'Fajita Pizza — Large', 200_000),
+      ]),
+    );
+    const row = await stored(r.json.data!.orderId);
+    expect(row.items.map((i) => i.posItemId)).toEqual(['big-two', 'fajita-l']);
+    expect(row.items[0]!.noDiscount).toBe(true);
+    expect(row.items[1]).not.toHaveProperty('noDiscount');
+    // The till gets the flag, and reads the % back on the lines it was worked on (never 4%).
+    const res = await bridgeOrders.GET(bridge('/api/bridge/orders'));
+    const json = (await res.json()) as {
+      data: Array<{ id: string; fulfilment: string; subtotalCents: number; discountCents: number; items: WebOrderItem[] }>;
+    };
+    const toTill = json.data.find((o) => o.id === r.json.data!.orderId)!;
+    expect(toTill.items.map((i) => i.noDiscount === true)).toEqual([true, false]);
+    expect(webOrderPickupPercent(toTill)).toBe(10);
+  });
+
+  it('a pick-up of deals only takes nothing off, and reads 0%', async () => {
+    await heartbeat(['pickup']);
+    await publishFromTill(dealsMenu(true));
+    const r = await place({ fulfilment: 'pickup', addressLine: undefined, items: [line('big-two')] });
+    expect(r.status).toBe(200);
+    expect(r.json.data).toMatchObject({ subtotalCents: 360_000, discountCents: 0, taxCents: 54_000, totalCents: 414_000 });
+    const row = await stored(r.json.data!.orderId);
+    expect(
+      webOrderPickupPercent({
+        fulfilment: row.fulfilment,
+        subtotalCents: row.subtotal_cents,
+        discountCents: row.discount_cents,
+        items: row.items,
+      }),
+    ).toBe(0);
+  });
+
+  it('a delivery: the flag rides on Big Two’s line too, never on the delivery charge, and nothing comes off', async () => {
+    await publishFromTill(dealsMenu(true));
+    const r = await place({ zoneId: 'dha-6', items: [line('big-two'), line('fajita-l')] });
+    expect(r.status).toBe(200);
+    expect(r.json.data).toMatchObject({ subtotalCents: 580_000, discountCents: 0, taxCents: 87_000, totalCents: 667_000 });
+    expect(itemsSent()).toBe(
+      JSON.stringify([
+        { ...todayLine('big-two', 'Big Two', 360_000), noDiscount: true },
+        todayLine('fajita-l', 'Fajita Pizza — Large', 200_000),
+        todayLine('del-200', 'Delivery Charge (Rs 200)', 20_000),
+      ]),
+    );
+    const row = await stored(r.json.data!.orderId);
+    expect(row.items.map((i) => [i.posItemId, i.noDiscount === true])).toEqual([
+      ['big-two', true],
+      ['fajita-l', false],
+      ['del-200', false],
+    ]);
+  });
+
+  it('nothing marked: items_json is today’s, string for string, and so are the totals; the browser cannot set the flag', async () => {
+    await heartbeat(['pickup']);
+    await publishFromTill(dealsMenu(false));
+    // The browser sends a flag of its own: the order schema drops it.
+    const r = await place({
+      fulfilment: 'pickup',
+      addressLine: undefined,
+      items: [{ ...line('big-two'), noDiscount: true }, line('fajita-l')],
+    });
+    expect(r.status).toBe(200);
+    // 10% of every line, as before: Rs 560 off Rs 5,600, 15% tax on the Rs 5,040 left.
+    expect(r.json.data).toMatchObject({ subtotalCents: 560_000, discountCents: 56_000, taxCents: 75_600, totalCents: 579_600 });
+    expect(itemsSent()).toBe(
+      JSON.stringify([todayLine('big-two', 'Big Two', 360_000), todayLine('fajita-l', 'Fajita Pizza — Large', 200_000)]),
+    );
+    const d = await place({ zoneId: 'clifton-1', items: [line('big-two')] });
+    expect(d.status).toBe(200);
+    expect(itemsSent()).toBe(
+      JSON.stringify([todayLine('big-two', 'Big Two', 360_000), todayLine('del-250', 'Delivery Charge (Rs 250)', 25_000)]),
+    );
+    expect(JSON.stringify((await stored(d.json.data!.orderId)).items)).not.toContain('noDiscount');
   });
 });
