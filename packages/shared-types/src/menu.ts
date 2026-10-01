@@ -38,6 +38,29 @@ export interface Category {
    * published — the till still sells them. Delivery charges in it still go.
    */
   isOnWebsite: boolean;
+  /**
+   * Never discounted (migration 0047 categories.no_discount; the owner's
+   * rule, 2026-10-02): true = no discount comes off its items, false =
+   * discounts come off, null = decided by its name (categoryNeverDiscounted).
+   * Only the owner changes it; a rename stores the old name's answer.
+   */
+  noDiscount?: boolean | null;
+}
+
+/**
+ * A name that says value deals: the whole word deal(s) or combo(s) — Value
+ * Deals, Deals, Combos, Combo Deals, Deal of the Day; never Dealers or
+ * Delivery Charges. The one deals rule (Food cost targets read it too).
+ */
+export const VALUE_DEALS_NAME_RE = /\bdeals?\b|\bcombos?\b/i;
+
+/**
+ * Whether no discount ever comes off a category's items (the owner,
+ * 2026-10-02: "there is no discount on combos"): what the owner set, else
+ * what its name says.
+ */
+export function categoryNeverDiscounted(c: { name: string; noDiscount?: boolean | null }): boolean {
+  return c.noDiscount ?? VALUE_DEALS_NAME_RE.test(c.name);
 }
 
 export interface MenuItem {

@@ -193,6 +193,13 @@ export interface MenuImportFreshStart {
    * every setting is kept (the preview says nothing about them).
    */
   websiteSettingsLost: number;
+  /**
+   * Categories set "Never discounted" yes or no (migration 0047, Category.noDiscount) whose setting the fresh start
+   * can't keep, by name, in the same way: the file does NOT bring the name back, or two removed categories of that
+   * name answer differently. The file's categories otherwise go by their names (deals and combos never discounted).
+   * 0 = every one is kept, or none was set (the preview says nothing).
+   */
+  noDiscountSettingsLost: number;
 }
 
 export interface MenuImportPreview {

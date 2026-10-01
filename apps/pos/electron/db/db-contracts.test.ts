@@ -177,6 +177,9 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     // 0045: where an item and a category sell on the website travels with the menu row.
     expect([...(SCHEMA.get('menu_items') ?? [])]).toEqual(expect.arrayContaining(['web_availability']));
     expect([...(SCHEMA.get('categories') ?? [])]).toEqual(expect.arrayContaining(['is_on_website']));
+    // 0047: a category's "never discounted" travels with it, and so does each order line's snapshot of it.
+    expect([...(SCHEMA.get('categories') ?? [])]).toEqual(expect.arrayContaining(['no_discount']));
+    expect([...(SCHEMA.get('order_items') ?? [])]).toEqual(expect.arrayContaining(['no_discount']));
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');
@@ -289,7 +292,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -303,6 +306,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0044_order_came_by.sql',
       '0045_web_availability.sql',
       '0046_web_order_alerts.sql',
+      '0047_no_discount.sql',
     ]);
   });
 
@@ -356,5 +360,18 @@ describe('migrations: numbered in order, one file per number', () => {
     expect([...(SCHEMA.get('web_order_imports') ?? [])]).toEqual(
       expect.arrayContaining(['web_created_at', 'web_total_cents', 'acked_at', 'alert_seen_at', 'site_cancelled_at', 'cancel_noted_at']),
     );
+  });
+
+  it('0047 only adds the two never-discounted columns: categories.no_discount nullable (NULL = by its name), order_items.no_discount NOT NULL DEFAULT 0; no CHECK, no backfill, nothing else touched', () => {
+    const raw = readFileSync(join(MIGRATIONS_DIR, '0047_no_discount.sql'), 'utf8');
+    const sql = stripComments(raw).trim();
+    expect(sql.replace(/\s+/g, ' ')).toBe(
+      'ALTER TABLE categories ADD COLUMN no_discount INTEGER; ALTER TABLE order_items ADD COLUMN no_discount INTEGER NOT NULL DEFAULT 0;',
+    );
+    expect(/\bCHECK\b|\bUPDATE\b|\bINSERT\b|\bDELETE\b|\bDROP\b|\bCREATE\b/i.test(sql)).toBe(false);
+    // No BEGIN anywhere, comments included: the migrator runs it in its own transaction (migrator.ts managesOwnTransaction).
+    expect(/\bBEGIN\b/i.test(raw)).toBe(false);
+    // Both tables replicate: the columns travel in their row images, no sync-core change.
+    expect(PURE_LOCAL_TABLES.has('categories') || PURE_LOCAL_TABLES.has('order_items')).toBe(false);
   });
 });

@@ -13,7 +13,7 @@ import { useToast } from '../../components/toast/ToastProvider';
 import { FileUp, AlertTriangle, Tags, ShieldCheck } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { useSessionStore } from '../../stores/sessionStore';
-import { freshStartWebsiteWords } from './freshStartWords';
+import { freshStartNoDiscountWords, freshStartWebsiteWords } from './freshStartWords';
 import { importApplyQuestion, priceDetailGroups, sheetPriceText, tillPriceText } from './importPrices';
 import { MenuDeployPanel } from './MenuDeployPanel';
 import { MENU_DEPLOY_KEY, useMenuDeployView } from './useMenuDeploy';
@@ -341,6 +341,12 @@ export function ImportTab() {
                 <p className="mt-2 flex items-center gap-2 text-sm text-amber-800 dark:text-amber-300">
                   <AlertTriangle className="h-4 w-4 flex-none" />
                   {freshStartWebsiteWords(preview.fresh.websiteSettingsLost)}
+                </p>
+              )}
+              {preview.fresh.noDiscountSettingsLost > 0 && (
+                <p className="mt-2 flex items-center gap-2 text-sm text-amber-800 dark:text-amber-300">
+                  <AlertTriangle className="h-4 w-4 flex-none" />
+                  {freshStartNoDiscountWords(preview.fresh.noDiscountSettingsLost)}
                 </p>
               )}
               {preview.fresh.openOrders > 0 && (

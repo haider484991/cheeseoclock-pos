@@ -1,7 +1,7 @@
 import { v7 as uuidv7 } from 'uuid';
 import type { AppDatabase } from '../connection.js';
 import { writeWithSync, nowIso, toBool, fromBool, type Actor } from './base.js';
-import type { Category } from '@cheeseoclock/shared-types';
+import { categoryNeverDiscounted, type Category } from '@cheeseoclock/shared-types';
 
 interface Row {
   id: string;
@@ -10,6 +10,7 @@ interface Row {
   color_hex: string;
   is_active: number;
   is_on_website: number;
+  no_discount: number | null;
   created_at: string;
   updated_at: string;
   synced_at: string | null;
@@ -27,7 +28,13 @@ function rowToCategory(row: Row): Category {
     isActive: toBool(row.is_active),
     // 0 = off the website; anything else (1, a newer till's value) = on, as before 0045.
     isOnWebsite: row.is_on_website !== 0,
+    noDiscount: noDiscountOf(row.no_discount),
   };
+}
+
+/** Never discounted as stored (migration 0047): 1 = yes, 0 = no; NULL, or a value this version does not know, = by its name. */
+function noDiscountOf(raw: unknown): boolean | null {
+  return raw === 1 ? true : raw === 0 ? false : null;
 }
 
 export function listCategories(db: AppDatabase, opts?: { activeOnly?: boolean }): Category[] {
@@ -36,7 +43,7 @@ export function listCategories(db: AppDatabase, opts?: { activeOnly?: boolean })
     : 'WHERE deleted_at IS NULL';
   const rows = db
     .prepare(
-      `SELECT id, name, display_order, color_hex, is_active, is_on_website,
+      `SELECT id, name, display_order, color_hex, is_active, is_on_website, no_discount,
               created_at, updated_at, synced_at, deleted_at, device_id, version
          FROM categories ${where} ORDER BY display_order, name`,
     )
@@ -47,7 +54,7 @@ export function listCategories(db: AppDatabase, opts?: { activeOnly?: boolean })
 export function findCategory(db: AppDatabase, id: string): Category | null {
   const row = db
     .prepare(
-      `SELECT id, name, display_order, color_hex, is_active, is_on_website,
+      `SELECT id, name, display_order, color_hex, is_active, is_on_website, no_discount,
               created_at, updated_at, synced_at, deleted_at, device_id, version
          FROM categories WHERE id = ? AND deleted_at IS NULL`,
     )
@@ -60,8 +67,9 @@ export function createCategory(
   /**
    * `id`: a name-based id both tills make as the same row (Settings → Delivery areas' "Delivery Charges"); else a new v7.
    * `isOnWebsite`: absent = on the website (the default).
+   * `noDiscount`: never discounted, yes or no; absent = NULL, decided by its name (the default).
    */
-  input: { name: string; displayOrder: number; colorHex: string; id?: string; isOnWebsite?: boolean },
+  input: { name: string; displayOrder: number; colorHex: string; id?: string; isOnWebsite?: boolean; noDiscount?: boolean },
   actor: Actor,
 ): Category {
   const id = input.id ?? uuidv7();
@@ -73,6 +81,7 @@ export function createCategory(
     colorHex: input.colorHex,
     isActive: true,
     isOnWebsite: input.isOnWebsite ?? true,
+    noDiscount: input.noDiscount ?? null,
   };
   writeWithSync({
     db,
@@ -85,9 +94,19 @@ export function createCategory(
     after: cat,
     writeRow: () => {
       db.prepare(
-        `INSERT INTO categories (id, name, display_order, color_hex, is_active, is_on_website, created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 1)`,
-      ).run(id, input.name, input.displayOrder, input.colorHex, fromBool(cat.isOnWebsite), now, now, actor.deviceId);
+        `INSERT INTO categories (id, name, display_order, color_hex, is_active, is_on_website, no_discount, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 1)`,
+      ).run(
+        id,
+        input.name,
+        input.displayOrder,
+        input.colorHex,
+        fromBool(cat.isOnWebsite),
+        cat.noDiscount == null ? null : fromBool(cat.noDiscount),
+        now,
+        now,
+        actor.deviceId,
+      );
     },
   });
   return cat;
@@ -103,12 +122,14 @@ export function updateCategory(
     isActive?: boolean;
     /** On the website; absent = unchanged. */
     isOnWebsite?: boolean;
+    /** Never discounted, yes or no; absent = unchanged (but see the rename below). */
+    noDiscount?: boolean;
   },
   actor: Actor,
 ): Category {
   const row = db
     .prepare(
-      `SELECT id, name, display_order, color_hex, is_active, is_on_website,
+      `SELECT id, name, display_order, color_hex, is_active, is_on_website, no_discount,
               created_at, updated_at, synced_at, deleted_at, device_id, version
          FROM categories WHERE id = ? AND deleted_at IS NULL`,
     )
@@ -120,6 +141,10 @@ export function updateCategory(
   const colorHex = input.colorHex ?? row.color_hex;
   const isActive = input.isActive ?? toBool(row.is_active);
   const before = rowToCategory(row);
+  // A rename never changes discounts: with nothing set (the name decides) and a new name that answers
+  // differently ("Value Deals" → "Bundles"), the old name's answer is stored, in this same write.
+  const oldAnswer = categoryNeverDiscounted({ name: row.name });
+  const keepsOldAnswer = input.noDiscount === undefined && before.noDiscount === null && oldAnswer !== categoryNeverDiscounted({ name });
   const updated: Category = {
     id: row.id as Category['id'],
     name,
@@ -127,9 +152,12 @@ export function updateCategory(
     colorHex,
     isActive,
     isOnWebsite: input.isOnWebsite ?? before.isOnWebsite,
+    noDiscount: input.noDiscount ?? (keepsOldAnswer ? oldAnswer : before.noDiscount),
   };
   // Written only when the caller sets it (a rename leaves the stored value — a newer till's too — as it is).
   const setsWeb = input.isOnWebsite !== undefined;
+  // Never discounted likewise, and on the rename that keeps the old answer.
+  const setsNoDiscount = input.noDiscount !== undefined || keepsOldAnswer;
   const now = nowIso();
 
   writeWithSync({
@@ -143,9 +171,18 @@ export function updateCategory(
     after: updated,
     writeRow: () => {
       db.prepare(
-        `UPDATE categories SET name = ?, display_order = ?, color_hex = ?, is_active = ?,${setsWeb ? ' is_on_website = ?,' : ''}
+        `UPDATE categories SET name = ?, display_order = ?, color_hex = ?, is_active = ?,${setsWeb ? ' is_on_website = ?,' : ''}${setsNoDiscount ? ' no_discount = ?,' : ''}
                                 updated_at = ?, version = version + 1 WHERE id = ?`,
-      ).run(name, displayOrder, colorHex, fromBool(isActive), ...(setsWeb ? [fromBool(updated.isOnWebsite)] : []), now, input.id);
+      ).run(
+        name,
+        displayOrder,
+        colorHex,
+        fromBool(isActive),
+        ...(setsWeb ? [fromBool(updated.isOnWebsite)] : []),
+        ...(setsNoDiscount ? [fromBool(updated.noDiscount === true)] : []),
+        now,
+        input.id,
+      );
     },
   });
   return updated;

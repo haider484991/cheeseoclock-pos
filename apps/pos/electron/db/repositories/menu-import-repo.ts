@@ -49,6 +49,7 @@ import {
 import type { MenuImportFile } from '@cheeseoclock/shared-schemas';
 import { toPriceKind } from '@cheeseoclock/pos-domain';
 import {
+  categoryNeverDiscounted,
   isDeliveryChargeMenuItem,
   webAvailabilityOf,
   type MenuImportFreshStart,
@@ -191,6 +192,13 @@ function emptyMenu(live: MenuSnapshot, feeItemIds: ReadonlySet<string>): MenuSna
  * set differently carry nothing (never guessed): that name's setting is lost
  * whatever the file holds, and the preview counts it. A value this version
  * does not know (a newer till's) is not carried.
+ *
+ * Never discounted (Menu → Categories, migration 0047) is carried the same
+ * way: the file's category of a removed one's name gets its answer, yes or
+ * no, where one of that name was set (by the owner, or by a rename) and they
+ * all answer alike. A name that only ever decided by itself carries nothing:
+ * the new category's name decides again. Namesakes that answer differently
+ * carry nothing either (never guessed), and the preview counts them.
  */
 interface WebsiteCarry {
   items: Map<string, WebAvailability>;
@@ -201,6 +209,10 @@ interface WebsiteCarry {
   /** Names whose removed rows were set differently: nothing carried, so always lost. */
   conflictingItems: string[];
   conflictingCategories: string[];
+  /** Never discounted, by name: the set answer of the removed categories of that name. */
+  noDiscount: Map<string, boolean>;
+  /** Names whose removed categories, one of them set, answer differently: nothing carried, so always lost. */
+  conflictingNoDiscount: string[];
 }
 
 function websiteCarryOf(db: AppDatabase, feeItemIds: ReadonlySet<string>): WebsiteCarry {
@@ -244,7 +256,35 @@ function websiteCarryOf(db: AppDatabase, feeItemIds: ReadonlySet<string>): Websi
     // One off the website and one on it: the new category is on the website.
     else if (off === null) conflictingCategories.push(key);
   }
-  return { items: carried, offCategories, setItems, setCategories: [...offCategories], conflictingItems, conflictingCategories };
+  // Never discounted: each name's answer (null once two answer differently), and whether any of them was set.
+  const answers = new Map<string, { answer: boolean | null; set: boolean }>();
+  for (const c of listCategories(db)) {
+    if (keptCategories.has(c.id)) continue;
+    const key = normalizeName(c.name);
+    const answer = categoryNeverDiscounted(c);
+    const seen = answers.get(key);
+    answers.set(key, {
+      answer: !seen || seen.answer === answer ? answer : null,
+      set: (seen?.set ?? false) || c.noDiscount != null,
+    });
+  }
+  const noDiscount = new Map<string, boolean>();
+  const conflictingNoDiscount: string[] = [];
+  for (const [key, { answer, set }] of answers) {
+    if (!set) continue;
+    if (answer === null) conflictingNoDiscount.push(key);
+    else noDiscount.set(key, answer);
+  }
+  return {
+    items: carried,
+    offCategories,
+    setItems,
+    setCategories: [...offCategories],
+    conflictingItems,
+    conflictingCategories,
+    noDiscount,
+    conflictingNoDiscount,
+  };
 }
 
 function freshStartOf(
@@ -267,6 +307,9 @@ function freshStartOf(
     carry.setCategories.filter((k) => !fileCategories.has(k)).length +
     carry.conflictingItems.length +
     carry.conflictingCategories.length;
+  // Never discounted, the same way: set on a category whose name the file does not bring back, or namesakes that differ.
+  const noDiscountLost =
+    [...carry.noDiscount.keys()].filter((k) => !fileCategories.has(k)).length + carry.conflictingNoDiscount.length;
   return {
     items: live.items
       .filter((i) => !keptItems.has(i.id))
@@ -278,6 +321,7 @@ function freshStartOf(
     ingredients: live.ingredients.length,
     openOrders: countOpenOrders(db),
     websiteSettingsLost: lost,
+    noDiscountSettingsLost: noDiscountLost,
   };
 }
 
@@ -443,7 +487,7 @@ export function applyMenuImport(
   const tx = db.transaction((): MenuImportSummary => {
     let removedItems = 0;
     let taxUse: Map<string, number> | undefined;
-    /** A fresh start: the website settings of the rows it removes, for the file's rows of the same name. */
+    /** A fresh start: the website settings (and never discounted) of the rows it removes, for the file's rows of the same name. */
     let carry: WebsiteCarry | null = null;
     const feeItemIds = readDeliveryFeeItemIds(db);
     if (opts.fresh) {
@@ -467,8 +511,18 @@ export function applyMenuImport(
 
     const categoryIds = new Map<string, string>();
     for (const c of ops.categories) {
-      const offWebsite = !c.existingId && !!carry && carry.offCategories.has(normalizeName(c.create!.name));
-      categoryIds.set(c.fileKey, c.existingId ?? createCategory(db, { ...c.create!, ...(offWebsite ? { isOnWebsite: false } : {}) }, actor).id);
+      const key = c.existingId ? null : normalizeName(c.create!.name);
+      const offWebsite = key !== null && !!carry && carry.offCategories.has(key);
+      const noDiscount = key !== null && carry ? carry.noDiscount.get(key) : undefined;
+      categoryIds.set(
+        c.fileKey,
+        c.existingId ??
+          createCategory(
+            db,
+            { ...c.create!, ...(offWebsite ? { isOnWebsite: false } : {}), ...(noDiscount !== undefined ? { noDiscount } : {}) },
+            actor,
+          ).id,
+      );
     }
 
     const ingredientIds = new Map<string, string>();

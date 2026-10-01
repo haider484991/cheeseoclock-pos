@@ -331,8 +331,11 @@ export interface IpcContract {
     response: ApiResult<Category[]>;
   };
   'menu:createCategory': {
-    /** isOnWebsite: absent = on the website (the default). */
-    request: { name: string; displayOrder: number; colorHex: string; isOnWebsite?: boolean };
+    /**
+     * isOnWebsite: absent = on the website (the default). noDiscount (Category.noDiscount): absent = decided by its
+     * name (the default); a value other than the name's answer needs the owner.
+     */
+    request: { name: string; displayOrder: number; colorHex: string; isOnWebsite?: boolean; noDiscount?: boolean };
     response: ApiResult<Category>;
   };
   'menu:updateCategory': {
@@ -344,6 +347,11 @@ export interface IpcContract {
       isActive?: boolean;
       /** On the website (Category.isOnWebsite); absent = unchanged. */
       isOnWebsite?: boolean;
+      /**
+       * Never discounted (Category.noDiscount); absent = unchanged. A change of what the category does now needs the
+       * owner. A rename without it keeps what the old name said.
+       */
+      noDiscount?: boolean;
     };
     response: ApiResult<Category>;
   };

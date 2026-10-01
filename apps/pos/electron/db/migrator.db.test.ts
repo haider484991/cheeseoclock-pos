@@ -4,20 +4,27 @@
  *   - a brand-new till runs 0001 up to the newest, in number order, once;
  *   - a till on v0.7.22 (0001..0041 applied: 0040 / 0041 are foodpanda's,
  *     released first) runs just 0042_drawer_log, 0043_order_test_delete,
- *     0044_order_came_by, 0045_web_availability and 0046_web_order_alerts,
- *     in that order, after a pre-migrate copy — and its v0.7.22 rows (a paid
+ *     0044_order_came_by, 0045_web_availability, 0046_web_order_alerts and
+ *     0047_no_discount, in that order, after a pre-migrate copy — and its
+ *     v0.7.22 rows (a paid
  *     foodpanda order, its deal and the terms kept at payment) come through
  *     untouched and work with the new code (a test delete, foodpanda's
  *     figures);
  *   - a till on v0.7.29 (0001..0044) runs just 0045_web_availability, then
- *     0046_web_order_alerts: its menu rows come through untouched, every item
- *     and category reads "on the website", and the website gets the menu it
- *     got before;
- *   - a till on v0.7.32 (0001..0045) runs just 0046_web_order_alerts: its
- *     website-order rows come through, the ones imported are marked
- *     confirmed and seen at their import time (so the restart that installs
- *     it neither warns nor rings), an import attempt still waiting for its
- *     retry and a failed row are left alone, and the audit chain verifies;
+ *     0046_web_order_alerts and 0047_no_discount: its menu rows come through
+ *     untouched, every item and category reads "on the website", and the
+ *     website gets the menu it got before;
+ *   - a till on v0.7.32 (0001..0045) runs just 0046_web_order_alerts, then
+ *     0047_no_discount: its website-order rows come through, the ones
+ *     imported are marked confirmed and seen at their import time (so the
+ *     restart that installs it neither warns nor rings), an import attempt
+ *     still waiting for its retry and a failed row are left alone, and the
+ *     audit chain verifies;
+ *   - a till on v0.7.33 (0001..0046) runs just 0047_no_discount: its
+ *     categories and order lines come through untouched (no version, no
+ *     updated_at, no sync or audit row), every category reads by its name
+ *     (Value Deals never discounted, Pizza discounted), every line sold
+ *     reads 0, and paid orders keep their stored totals;
  *   - a till already up to date runs nothing.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
@@ -100,7 +107,7 @@ live('migrations at boot (migrator.ts)', () => {
     const names = ran(db);
     expect(names).toEqual(migrationFiles());
     expect(names.map((n) => Number(n.slice(0, 4)))).toEqual(names.map((_, i) => i + 1));
-    expect(names.slice(-8)).toEqual([
+    expect(names.slice(-9)).toEqual([
       '0039_shift_close_notes.sql',
       '0040_foodpanda_deal_and_terms.sql',
       '0041_channel_terms_uplift_and_fee.sql',
@@ -109,11 +116,12 @@ live('migrations at boot (migrator.ts)', () => {
       '0044_order_came_by.sql',
       '0045_web_availability.sql',
       '0046_web_order_alerts.sql',
+      '0047_no_discount.sql',
     ]);
     expect(h.snapshots).toEqual([]);
   });
 
-  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043, 0044, 0045 then 0046, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
+  it('a till on v0.7.22 (0001..0041) runs just 0042, 0043, 0044, 0045, 0046 then 0047, after a pre-migrate copy; its foodpanda rows come through untouched', async () => {
     const { runMigrations } = await import('./migrator.js');
     h.snapshots.length = 0;
     const db = tillOnV0722();
@@ -139,6 +147,7 @@ live('migrations at boot (migrator.ts)', () => {
       '0044_order_came_by.sql',
       '0045_web_availability.sql',
       '0046_web_order_alerts.sql',
+      '0047_no_discount.sql',
     ]);
     expect(h.snapshots).toHaveLength(1);
     // Their columns and the log's start are there…
@@ -155,7 +164,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 5);
+    expect(ran(db)).toHaveLength(had.length + 6);
     expect(h.snapshots).toHaveLength(1);
 
     // The new code on the upgraded till: foodpanda's figures read the kept terms…
@@ -173,7 +182,7 @@ live('migrations at boot (migrator.ts)', () => {
     expect(getFoodpanda(db, ALL_TIME)).toBeNull();
   });
 
-  it('a till on v0.7.29 (0001..0044) runs just 0045 then 0046, after a pre-migrate copy: its menu rows are untouched, every item and category reads on the website, and the published menu is what it was', async () => {
+  it('a till on v0.7.29 (0001..0044) runs just 0045, 0046 then 0047, after a pre-migrate copy: its menu rows are untouched, every item and category reads on the website, and the published menu is what it was', async () => {
     const { runMigrations } = await import('./migrator.js');
     h.snapshots.length = 0;
     const db = openMigrated({ stopBefore: '0045' });
@@ -202,13 +211,13 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0045_web_availability.sql', '0046_web_order_alerts.sql']);
+    expect(ran(db)).toEqual([...had, '0045_web_availability.sql', '0046_web_order_alerts.sql', '0047_no_discount.sql']);
     expect(h.snapshots).toHaveLength(1);
-    // Every row as it was, with the two new columns at "on the website".
+    // Every row as it was, with the two new columns at "on the website" (and 0047's, empty: by its name).
     expect({
       pizza: one(`SELECT * FROM menu_items WHERE id = 'i_pizza'`),
       food: one(`SELECT * FROM categories WHERE id = 'c_food'`),
-    }).toEqual({ pizza: { ...before.pizza, web_availability: 'on' }, food: { ...before.food, is_on_website: 1 } });
+    }).toEqual({ pizza: { ...before.pizza, web_availability: 'on' }, food: { ...before.food, is_on_website: 1, no_discount: null } });
     expect(db.prepare(`SELECT DISTINCT web_availability AS w FROM menu_items`).all()).toEqual([{ w: 'on' }]);
     expect(db.prepare(`SELECT DISTINCT is_on_website AS w FROM categories`).all()).toEqual([{ w: 1 }]);
     // The repositories read them so.
@@ -224,11 +233,11 @@ live('migrations at boot (migrator.ts)', () => {
     ]);
     // The next boot: nothing to run, no copy.
     await runMigrations(db);
-    expect(ran(db)).toHaveLength(had.length + 2);
+    expect(ran(db)).toHaveLength(had.length + 3);
     expect(h.snapshots).toHaveLength(1);
   });
 
-  it('a till on v0.7.32 (0001..0045) runs just 0046, after a pre-migrate copy: its website-order rows come through, the imported ones read confirmed and seen, a waiting attempt and a failed row do not, and the audit chain verifies', async () => {
+  it('a till on v0.7.32 (0001..0045) runs just 0046 then 0047, after a pre-migrate copy: its website-order rows come through, the imported ones read confirmed and seen, a waiting attempt and a failed row do not, and the audit chain verifies', async () => {
     const { runMigrations } = await import('./migrator.js');
     const { writeAudit } = await import('./repositories/audit-repo.js');
     const { verifyAuditChain } = await import('./audit-chain.js');
@@ -271,7 +280,7 @@ live('migrations at boot (migrator.ts)', () => {
 
     await runMigrations(db);
 
-    expect(ran(db)).toEqual([...had, '0046_web_order_alerts.sql']);
+    expect(ran(db)).toEqual([...had, '0046_web_order_alerts.sql', '0047_no_discount.sql']);
     expect(h.snapshots).toHaveLength(1);
     const added = ['web_created_at', 'web_total_cents', 'acked_at', 'alert_seen_at', 'site_cancelled_at', 'cancel_noted_at'];
     expect(columns(db, 'web_order_imports')).toEqual([...Object.keys(before.imports[0] ?? {}), ...added]);
@@ -295,6 +304,82 @@ live('migrations at boot (migrator.ts)', () => {
     // The first poll and the first boot find nothing to retry or ring for: the New order was seen on v0.7.32.
     expect(repo.listUnackedImports(db, '2026-09-27T00:00:00.000Z')).toEqual([]);
     expect(repo.unseenWebOrders(db, '2026-09-27T00:00:00.000Z')).toEqual([]);
+
+    // The next boot: nothing to run, no copy.
+    await runMigrations(db);
+    expect(ran(db)).toHaveLength(had.length + 2);
+    expect(h.snapshots).toHaveLength(1);
+  });
+
+  it('a till on v0.7.33 (0001..0046) runs just 0047, after a pre-migrate copy: its categories and order lines are untouched (no version, no updated_at, no sync or audit row), each category reads by its name, each line sold reads 0, and paid orders keep their stored totals', async () => {
+    const { runMigrations } = await import('./migrator.js');
+    const { writeAudit } = await import('./repositories/audit-repo.js');
+    h.snapshots.length = 0;
+    const db = openMigrated({ stopBefore: '0047' });
+    db.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, ran_at TEXT NOT NULL)`);
+    const log = db.prepare(`INSERT INTO _migrations (name, ran_at) VALUES (?, ?)`);
+    for (const f of migrationFiles().filter((m) => m < '0047')) log.run(f, T0);
+    // v0.7.33's menu and a paid order with a deal and a pizza on it, as its repositories left them (made-up names and prices).
+    db.prepare(`INSERT INTO users (id, full_name, pin_hash, role, created_at, updated_at, device_id) VALUES ('u_admin', 'Test Owner', 'x', 'admin', ?, ?, ?)`).run(T0, T0, DEV);
+    db.prepare(`INSERT INTO tax_categories (id, name, rate_bps, created_at, updated_at, device_id) VALUES ('t1', 'Test GST', 1500, ?, ?, ?)`).run(T0, T0, DEV);
+    const cat = db.prepare(
+      `INSERT INTO categories (id, name, display_order, color_hex, is_active, created_at, updated_at, device_id, version) VALUES (?, ?, ?, '#aa5500', 1, ?, ?, ?, ?)`,
+    );
+    cat.run('c_deals', 'Test Value Deals', 1, T0, T0, DEV, 3);
+    cat.run('c_pizza', 'Test Pizza', 2, T0, T0, DEV, 2);
+    const item = db.prepare(
+      `INSERT INTO menu_items (id, category_id, name, base_price_cents, is_active, prep_station, tax_category_id, sort_order, created_at, updated_at, device_id)
+       VALUES (?, ?, ?, ?, 1, 'kitchen', 't1', ?, ?, ?, ?)`,
+    );
+    item.run('i_deal', 'c_deals', 'Test Big Deal', 360_000, 1, T0, T0, DEV);
+    item.run('i_pizza', 'c_pizza', 'Test Pizza Large', 150_000, 2, T0, T0, DEV);
+    db.prepare(
+      `INSERT INTO orders (id, order_number, mode, status, cashier_id, subtotal_cents, discount_cents, tax_cents, total_cents,
+                           source, paid_at, created_at, updated_at, device_id)
+       VALUES ('o_paid', '20261001-0004', 'takeaway', 'paid', 'u_admin', 510000, 51000, 68850, 527850, 'pos', ?, ?, ?, ?)`,
+    ).run(T0, T0, T0, DEV);
+    const line = db.prepare(
+      `INSERT INTO order_items (id, order_id, menu_item_id, menu_item_name, quantity, unit_price_cents, line_total_cents,
+                                tax_category_id, tax_rate_bps_snapshot, prep_station_snapshot, created_at, updated_at, device_id)
+       VALUES (?, 'o_paid', ?, ?, 1, ?, ?, 't1', 1500, 'kitchen', ?, ?, ?)`,
+    );
+    line.run('l_deal', 'i_deal', 'Test Big Deal', 360_000, 360_000, T0, T0, DEV);
+    line.run('l_pizza', 'i_pizza', 'Test Pizza Large', 150_000, 150_000, T0, T0, DEV);
+    writeAudit(db, { entityType: 'categories', entityId: 'c_deals', action: 'create', actorUserId: 'u_admin', before: null, after: { id: 'c_deals' } });
+    const all = (sql: string) => db.prepare(sql).all() as Array<Record<string, unknown>>;
+    const count = (t: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
+    const before = {
+      categories: all(`SELECT * FROM categories ORDER BY id`),
+      lines: all(`SELECT * FROM order_items ORDER BY id`),
+      orders: all(`SELECT * FROM orders ORDER BY id`),
+      sync: count('sync_queue'),
+      audit: count('audit_log'),
+    };
+    const had = ran(db);
+    expect(had.at(-1)).toBe('0046_web_order_alerts.sql');
+    expect(columns(db, 'categories')).not.toContain('no_discount');
+    expect(columns(db, 'order_items')).not.toContain('no_discount');
+
+    await runMigrations(db);
+
+    expect(ran(db)).toEqual([...had, '0047_no_discount.sql']);
+    expect(h.snapshots).toHaveLength(1);
+    // Every row as it was — the same version and updated_at — with the new column: empty on a category, 0 on a line.
+    expect(all(`SELECT * FROM categories ORDER BY id`)).toEqual(before.categories.map((r) => ({ ...r, no_discount: null })));
+    expect(all(`SELECT * FROM order_items ORDER BY id`)).toEqual(before.lines.map((r) => ({ ...r, no_discount: 0 })));
+    expect(all(`SELECT * FROM orders ORDER BY id`)).toEqual(before.orders);
+    expect(all(`SELECT id, subtotal_cents, discount_cents, tax_cents, total_cents FROM orders`)).toEqual([
+      { id: 'o_paid', subtotal_cents: 510_000, discount_cents: 51_000, tax_cents: 68_850, total_cents: 527_850 },
+    ]);
+    // Nothing to send to the other till, nothing in the audit trail: the migration changed no business fact.
+    expect({ sync: count('sync_queue'), audit: count('audit_log') }).toEqual({ sync: before.sync, audit: before.audit });
+    // Each category reads by its name: the deals never discounted, the pizza discounted.
+    const { listCategories } = await import('./repositories/category-repo.js');
+    const { categoryNeverDiscounted } = await import('@cheeseoclock/shared-types');
+    expect(listCategories(db).map((c) => [c.id, c.noDiscount, categoryNeverDiscounted(c)])).toEqual([
+      ['c_deals', null, true],
+      ['c_pizza', null, false],
+    ]);
 
     // The next boot: nothing to run, no copy.
     await runMigrations(db);

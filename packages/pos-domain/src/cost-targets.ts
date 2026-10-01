@@ -6,7 +6,7 @@
  * red on a number nobody chose.
  */
 
-import type { CostingTargets } from '@cheeseoclock/shared-types';
+import { VALUE_DEALS_NAME_RE, type CostingTargets } from '@cheeseoclock/shared-types';
 
 /** Any category the names below don't place. */
 export const DEFAULT_TARGET_BPS = 3000;
@@ -18,7 +18,8 @@ export const DEFAULT_PRICE_STEP_CENTS = 1000;
 const SUGGESTIONS: Array<[RegExp, number]> = [
   [/\bdrinks?\b|\bbeverages?\b/i, 6000],
   [/\bdips?\b|\bsauces?\b/i, 3000],
-  [/\bdeals?\b|\bcombos?\b/i, 3500],
+  // Value deals: the one deals rule, the same name test as "never discounted" (shared-types categoryNeverDiscounted).
+  [VALUE_DEALS_NAME_RE, 3500],
   [/\bburgers?\b/i, 3500],
   [/\bfries\b|\bsides?\b/i, 3500],
   [/\bpizzas?\b/i, 3000],

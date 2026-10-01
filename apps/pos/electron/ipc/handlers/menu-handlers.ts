@@ -1,10 +1,11 @@
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
-import { ok, err, hasCapability, WEB_AVAILABILITIES } from '@cheeseoclock/shared-types';
+import { ok, err, hasCapability, categoryNeverDiscounted, WEB_AVAILABILITIES } from '@cheeseoclock/shared-types';
 import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../../services/auth-service.js';
 import {
   listCategories,
+  findCategory,
   createCategory,
   updateCategory,
   deleteCategory,
@@ -42,7 +43,7 @@ import {
   MenuImportFileError,
 } from '../../services/menu-import-service.js';
 import { MenuImportRefusedError } from '../../db/repositories/menu-import-repo.js';
-import { requireAdmin } from '../guards.js';
+import { requireAdmin, requireCapability } from '../guards.js';
 import log from 'electron-log/main';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
 import {
@@ -74,6 +75,27 @@ function checkWebsiteFields(payload: { webAvailability?: unknown; isOnWebsite?: 
   const c = payload.isOnWebsite;
   if (c !== undefined && typeof c !== 'boolean') {
     throw new IpcGuardError({ code: 'validation_failed', message: 'Say whether the category is on the website: yes or no' });
+  }
+}
+
+/**
+ * Never discounted, a category's (migration 0047; the owner's rule,
+ * 2026-10-02): yes or no; absent = unchanged (a new category: by its name).
+ * Anything else is refused before a row is touched. A value other than what
+ * the category does `now` (a new one: what its name says) is the owner's
+ * alone (settings.manage): a manager may edit the menu, but must not put the
+ * discounts back on the value deals. The same answer (a box left as it was)
+ * needs no one more, and neither does a rename: the repository keeps the
+ * old name's answer. `now` undefined: no such category (the update says so).
+ */
+function checkNoDiscount(payload: { noDiscount?: unknown }, now: boolean | undefined): void {
+  const v = payload.noDiscount;
+  if (v === undefined) return;
+  if (typeof v !== 'boolean') {
+    throw new IpcGuardError({ code: 'validation_failed', message: 'Say whether its items are never discounted: yes or no' });
+  }
+  if (now !== undefined && v !== now) {
+    requireCapability('settings.manage', 'Only the owner can change which items are never discounted.');
   }
 }
 
@@ -111,10 +133,17 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
     const s = requireMenuManage();
     checkWebsiteFields(payload);
     // Never a caller's id: name-based ids are Settings → Delivery areas' own.
-    const { name, displayOrder, colorHex, isOnWebsite } = payload;
+    const { name, displayOrder, colorHex, isOnWebsite, noDiscount } = payload;
+    checkNoDiscount(payload, categoryNeverDiscounted({ name }));
     const out = createCategory(
       ctx.db,
-      { name, displayOrder, colorHex, ...(isOnWebsite !== undefined ? { isOnWebsite } : {}) },
+      {
+        name,
+        displayOrder,
+        colorHex,
+        ...(isOnWebsite !== undefined ? { isOnWebsite } : {}),
+        ...(noDiscount !== undefined ? { noDiscount } : {}),
+      },
       { userId: s.id, deviceId: ctx.deviceId },
     );
     menuChanged();
@@ -124,6 +153,8 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
   defineHandler('menu:updateCategory', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
     checkWebsiteFields(payload);
+    const current = findCategory(ctx.db, payload.id);
+    checkNoDiscount(payload, current ? categoryNeverDiscounted(current) : undefined);
     refuseIf(categoryEditProblem(ctx.db, payload.id, { isActive: payload.isActive }));
     const out = updateCategory(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
     menuChanged();

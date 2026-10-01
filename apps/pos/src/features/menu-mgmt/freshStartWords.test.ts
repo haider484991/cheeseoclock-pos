@@ -1,12 +1,13 @@
 /**
  * The fresh start's words about the website settings it can't keep: the
  * names the file does not bring back, and the names whose removed items or
- * categories were set differently (the preview counts both).
+ * categories were set differently (the preview counts both). The same for a
+ * category's "Never discounted" setting (migration 0047).
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { freshStartWebsiteWords } from './freshStartWords';
+import { freshStartNoDiscountWords, freshStartWebsiteWords } from './freshStartWords';
 
 describe('a fresh start: the website settings it can’t keep', () => {
   it('one: says why it can’t be kept — not in the file by that name, or two of that name set differently', () => {
@@ -30,6 +31,28 @@ describe('a fresh start: the website settings it can’t keep', () => {
     const before = src.slice(0, words);
     const and = before.lastIndexOf(' && (');
     expect(before.slice(before.lastIndexOf('{', and) + 1, and)).toBe('preview.fresh.websiteSettingsLost > 0');
+    expect(before.slice(and + ' && ('.length)).not.toMatch(/&&|\?|\{/);
+  });
+});
+
+describe('a fresh start: the “Never discounted” settings it can’t keep', () => {
+  it('one, and several: why, what the file’s categories do instead, and where to check', () => {
+    expect(freshStartNoDiscountWords(1)).toBe(
+      '1 category’s “Never discounted” setting can’t be kept (it is not in the file under the same name, or two of that name were set differently). The file’s categories go by their names: deals and combos are never discounted, the rest can be. Check it in Menu → Categories.',
+    );
+    expect(freshStartNoDiscountWords(2)).toBe(
+      '2 categories’ “Never discounted” settings can’t be kept (they are not in the file under the same name, or two of one name were set differently). The file’s categories go by their names: deals and combos are never discounted, the rest can be. Check them in Menu → Categories.',
+    );
+  });
+
+  it('the preview says it only for one or more (ImportTab, read from its source)', () => {
+    const src = readFileSync(fileURLToPath(new URL('./ImportTab.tsx', import.meta.url)), 'utf8');
+    expect(src.match(/freshStartNoDiscountWords\(/g) ?? []).toHaveLength(1);
+    const words = src.indexOf('{freshStartNoDiscountWords(preview.fresh.noDiscountSettingsLost)}');
+    expect(words).toBeGreaterThan(-1);
+    const before = src.slice(0, words);
+    const and = before.lastIndexOf(' && (');
+    expect(before.slice(before.lastIndexOf('{', and) + 1, and)).toBe('preview.fresh.noDiscountSettingsLost > 0');
     expect(before.slice(and + ' && ('.length)).not.toMatch(/&&|\?|\{/);
   });
 });

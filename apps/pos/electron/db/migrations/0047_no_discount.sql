@@ -1,0 +1,38 @@
+-- 0047_no_discount.sql
+-- No discount on value deals (the owner, 2026-10-02: "there is no discount
+-- on combos"): not the website's pick-up %, not the till's discount button
+-- or presets, not an automatic offer. The mark is per category (Menu →
+-- Categories; the owner's alone, settings.manage), and each order line
+-- keeps the answer it was sold under.
+--
+--   categories.no_discount   NULL  decided by the name: the whole word
+--                                  deal(s) or combo(s) is never discounted
+--                                  (Value Deals, Deals, Combos, Combo Deals),
+--                                  any other name is (shared-types
+--                                  categoryNeverDiscounted, the one rule);
+--                            1     never discounted, whatever the name;
+--                            0     discounts come off, whatever the name.
+--                            A value this version does not know (a newer
+--                            till's) reads as NULL. A rename of a category
+--                            with NULL stores the old name's answer when the
+--                            new name would answer differently, so a rename
+--                            never changes discounts.
+--   order_items.no_discount  the category's answer when the line was added,
+--                            a snapshot like unit_price_cents (1 = this
+--                            line takes no share of a discount that leaves
+--                            value deals out). 0 on every line sold before
+--                            this version, and on a delivery charge always.
+--
+-- No backfill: every category reads by its name, so the shop does nothing
+-- and Value Deals is marked from the first boot; there is no SQL copy of the
+-- name rule. Old lines read 0, so every stored total stays what it was. No
+-- CHECK and no index: the values are checked in code (the 0033 / 0044
+-- practice), so a newer till's value never fails to land here. Row images
+-- are built from the live schema, so both columns travel without a
+-- sync-core change; an image from a till without them (v0.7.33) leaves them
+-- as they are here, and a new row takes NULL / 0. Both tills must run this
+-- the same day: a mark set while the other till is still on v0.7.33 reaches
+-- it without the column, and once that till updates, its next edit of the
+-- category sends the mark back empty.
+ALTER TABLE categories ADD COLUMN no_discount INTEGER;
+ALTER TABLE order_items ADD COLUMN no_discount INTEGER NOT NULL DEFAULT 0;
