@@ -5,7 +5,7 @@ import {
   RECEIPT_EXTRA_LINES_MAX,
   TILL_SETTING_KEYS,
 } from '@cheeseoclock/shared-types';
-import type { OpeningFloatSetting, TillSettingKey, TillSettingValues } from '@cheeseoclock/shared-types';
+import type { OpeningFloatSetting, PcPowerSetting, TillSettingKey, TillSettingValues } from '@cheeseoclock/shared-types';
 
 /**
  * The owner's settings that belong to one till (shared-types
@@ -60,10 +60,19 @@ export const openingFloatSchema = z
   .strict()
   .transform((s): OpeningFloatSetting => (s.mode === 'lastCount' ? { mode: 'lastCount', fixedCents: 0 } : s));
 
+/** 'pc.power': two yes/no answers, nothing else. */
+export const pcPowerSchema = z
+  .object({
+    keepAwake: z.boolean({ invalid_type_error: 'Keep this computer awake: yes or no' }),
+    startWithWindows: z.boolean({ invalid_type_error: 'Start the till with Windows: yes or no' }),
+  })
+  .strict();
+
 /** Every till key and its schema. */
 export const TILL_SETTING_SCHEMAS: { readonly [K in TillSettingKey]: z.ZodType<TillSettingValues[K], z.ZodTypeDef, unknown> } = {
   'receipt.extraLines': receiptExtraLinesSchema,
   'drawer.openingFloat': openingFloatSchema,
+  'pc.power': pcPowerSchema,
 };
 
 /** settings:setTill: a key and its value, or "Put back the default". The value is checked by the key's schema. */
@@ -79,3 +88,4 @@ export const getTillSettingInputSchema = z.object({ key: z.enum(TILL_SETTING_KEY
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const _openingFloatShape: Same<z.infer<typeof openingFloatSchema>, OpeningFloatSetting> = true;
 const _extraLinesShape: Same<z.infer<typeof receiptExtraLinesSchema>, string[]> = true;
+const _pcPowerShape: Same<z.infer<typeof pcPowerSchema>, PcPowerSetting> = true;

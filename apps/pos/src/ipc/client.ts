@@ -468,7 +468,7 @@ export const ipc = {
       unwrap(window.api.settings.setBusiness({ key, useDefault: true } as SetShopSettingRequest)) as Promise<ShopSettingCard<K>>,
     /** Settings → Delivery areas: the areas and fees, and the delivery-charge items they need (one transaction). */
     saveDeliveryZones: (input: IpcRequest<'settings:saveDeliveryZones'>) => unwrap(window.api.settings.saveDeliveryZones(input)),
-    /** One "this till" card (the receipt's extra lines, the opening float). */
+    /** One "this till" card (the receipt's extra lines, the opening float, this computer). */
     getTill: <K extends TillSettingKey>(key: K) => unwrap(window.api.settings.getTill({ key })) as Promise<TillSettingCard<K>>,
     /** Save a "this till" card; answers with it as it now stands. */
     setTill: <K extends TillSettingKey>(key: K, value: TillSettingValues[K]) =>
@@ -476,6 +476,13 @@ export const ipc = {
     /** "Put back the default" on a "this till" card. */
     putBackTillDefault: <K extends TillSettingKey>(key: K) =>
       unwrap(window.api.settings.setTill({ key, useDefault: true })) as Promise<TillSettingCard<K>>,
+  },
+  /** This computer (Settings → Online orders): the owner only. */
+  power: {
+    /** Held awake now? Will Windows open the till? When did it last sleep? */
+    getStatus: () => unwrap(window.api.power.getStatus()),
+    /** "Turn it back on": the start-up entry on again in Windows, and awake again if it should be. */
+    turnBackOn: () => unwrap(window.api.power.turnBackOn()),
   },
   /** What the counter needs to take an order: the foodpanda deal, Pay's checks. */
   checkout: {

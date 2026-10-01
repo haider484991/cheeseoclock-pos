@@ -23,6 +23,7 @@ import {
   type WebsiteMessagesForm,
 } from './shop-rules/websiteMessagesForm';
 import { homeMissingSentence, publishedToast } from './shop-rules/publishWords';
+import { ThisComputerCard } from './ThisComputerCard';
 
 /** The bridge status, with the till's shift pause (webOrdersBridge.status()). */
 type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
@@ -39,12 +40,15 @@ type BridgeStatusView = Awaited<ReturnType<typeof ipc.webBridge.getStatus>>;
  *    default: the owner has not asked for it)
  *  - the website's messages and its smallest delivery order (the same key,
  *    format 2 since v0.7.30: its own card, its own "Put back the default")
+ *  - This computer: keep it awake while it takes website orders, start the
+ *    till with Windows ('pc.power', this till only)
  * Cloud backups reuse this connection but are managed under Backups.
  */
 export function WebsiteSettings() {
   return (
     <div className="space-y-6">
       <ConnectionCard />
+      <ThisComputerCard />
       <AutoPublishCard />
       <WebsiteMessagesCard />
     </div>

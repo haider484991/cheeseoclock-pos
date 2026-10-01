@@ -26,6 +26,7 @@ import { recordAppliedRestore } from './services/restore-service.js';
 import { sealAllStoredSecrets } from './services/secrets-bootstrap.js';
 import { auditChainService } from './services/audit-chain-service.js';
 import { clearAttention } from './services/order-alerts-hub.js';
+import { APP_USER_MODEL_ID, initTillPower } from './services/till-power-hub.js';
 import { startAnalyticsWorker, stopAnalyticsWorker } from './services/analytics/worker-host.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -141,8 +142,9 @@ async function bootstrap() {
   });
 
   // Windows only shows notices (new online order) for an app id that matches
-  // the installer's Start-menu shortcut: electron-builder's appId.
-  if (process.platform === 'win32') app.setAppUserModelId(isDev ? process.execPath : 'pk.cheeseoclock.pos');
+  // the installer's Start-menu shortcut: electron-builder's appId. It also
+  // names the till's start-up entry (initTillPower, below).
+  if (process.platform === 'win32') app.setAppUserModelId(isDev ? process.execPath : APP_USER_MODEL_ID);
 
   log.info('Bootstrapping CheeseOclock POS', { version: app.getVersion(), isDev });
 
@@ -201,6 +203,10 @@ async function bootstrap() {
   webOrdersBridge.init(db, deviceInfo.deviceId);
   initBackupService(db);
   auditChainService.verifyInBackground(db);
+  // This computer: kept awake while this till takes website orders, and the
+  // till's start-up entry in Windows (the owner's 'pc.power'). On waking up,
+  // the website bridge looks for orders and says it is open again at once.
+  initTillPower(db, { onWoke: () => webOrdersBridge.kick() });
 
   registerAllIpcHandlers({ db, deviceId: deviceInfo.deviceId });
 

@@ -132,6 +132,16 @@ vi.mock('../../services/system-printers.js', () => ({
   isSystemPrintingSupported: () => false,
   listSystemPrinters: async () => [],
 }));
+// This computer (v0.7.33): what Windows says is stood in for; the guard is the real one.
+vi.mock('../../services/till-power-hub.js', () => {
+  const status = {
+    keepAwake: 'on',
+    startWithWindows: 'on',
+    openedAt: '2026-10-01T09:00:00.000Z',
+    lastSleep: null,
+  };
+  return { tillPowerStatus: () => status, turnTillPowerBackOn: () => status };
+});
 
 interface Stmt {
   run(...p: unknown[]): unknown;
@@ -325,6 +335,7 @@ beforeEach(async () => {
   (await import('./costing-handlers.js')).registerCostingHandlers(ctx);
   (await import('./reports-handlers.js')).registerReportsHandlers(ctx);
   (await import('./settings-handlers.js')).registerSettingsHandlers(ctx);
+  (await import('./power-handlers.js')).registerPowerHandlers(ctx);
   (await import('./menu-deploy-handlers.js')).registerMenuDeployHandlers(ctx);
   s = await seed();
 });
@@ -493,6 +504,9 @@ const OWNER_ONLY = (): Record<string, unknown> => ({
   // The owner's shop rules (Settings → foodpanda …, 2026-09-27): reading a card
   // (commission, fees) and saving one, or putting its default back.
   ...SHOP_SETTINGS_OWNER_ONLY(),
+  // This computer (Settings → Online orders, v0.7.33): its status and "Turn it back on".
+  'power:getStatus': undefined,
+  'power:turnBackOn': undefined,
 });
 
 /** The shop-rules channels (settings.manage), with payloads the owner's screen would send. Every set one writes when the owner sends it. */
@@ -850,6 +864,15 @@ describe.skipIf(!Sqlite)('a cashier is refused the manager areas, in the main pr
 });
 
 describe.skipIf(!Sqlite)("the owner's alone", () => {
+  it('This computer: nobody signed in is refused too; the owner gets what the till is doing', async () => {
+    h.session = null;
+    for (const channel of ['power:getStatus', 'power:turnBackOn']) {
+      expect({ channel, o: await call(channel, undefined) }).toMatchObject({ channel, o: { ok: false, code: 'unauthenticated' } });
+    }
+    h.session = OWNER;
+    expect(await call('power:getStatus', undefined)).toMatchObject({ ok: true, data: { keepAwake: 'on', startWithWindows: 'on' } });
+  });
+
   it('refused to the counter and to managers, in the main process; the owner may', async () => {
     for (const [channel, payload] of Object.entries(OWNER_ONLY())) {
       for (const who of [CASHIER, MANAGER]) {

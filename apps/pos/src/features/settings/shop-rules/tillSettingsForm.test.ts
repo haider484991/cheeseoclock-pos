@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_OPENING_FLOAT } from '@cheeseoclock/shared-types';
+import { DEFAULT_OPENING_FLOAT, DEFAULT_PC_POWER, type TillPowerStatus } from '@cheeseoclock/shared-types';
 import {
+  KEEP_AWAKE_HELP,
+  KEEP_AWAKE_LABEL,
+  PC_POWER_NEVER_CHANGED,
   extraLinesFromForm,
   extraLinesSummary,
   extraLinesToForm,
@@ -9,6 +12,8 @@ import {
   openingFloatFromForm,
   openingFloatSummary,
   openingFloatToForm,
+  pcPowerStatusLines,
+  pcPowerSummary,
 } from './tillSettingsForm';
 
 describe('receipt extra lines: the form', () => {
@@ -83,5 +88,71 @@ describe('opening float: the form', () => {
       expect(openingFloatExample(s)).toContain('still counts the drawer and types the float, and closing stays a blind count');
     }
     expect(openingFloatExample({ mode: 'fixed', fixedCents: 500_000 })).toContain('starts on Rs 5,000 every shift');
+  });
+});
+
+describe('this computer: the words', () => {
+  it('History reads both answers, for all four', () => {
+    expect(pcPowerSummary({ keepAwake: true, startWithWindows: true })).toBe('Kept awake for website orders · starts with Windows');
+    expect(pcPowerSummary({ keepAwake: true, startWithWindows: false })).toBe('Kept awake for website orders · opened by hand');
+    expect(pcPowerSummary({ keepAwake: false, startWithWindows: true })).toBe('Windows decides when it sleeps · starts with Windows');
+    expect(pcPowerSummary({ keepAwake: false, startWithWindows: false })).toBe('Windows decides when it sleeps · opened by hand');
+    expect(pcPowerSummary(DEFAULT_PC_POWER)).toBe('Kept awake for website orders · starts with Windows');
+  });
+
+  it('the owner’s words for keeping it awake, and what never changed means', () => {
+    expect(KEEP_AWAKE_LABEL).toBe('Keep this computer awake while it takes website orders');
+    expect(KEEP_AWAKE_HELP).toBe(
+      'While this till takes website orders (a shift is open and online orders are on), the screen stays on and the computer does not go to sleep. Closing a laptop’s lid or pressing the power button still puts it to sleep.',
+    );
+    expect(PC_POWER_NEVER_CHANGED).toBe('Never changed: this computer stays awake while it takes website orders, and the till starts with Windows.');
+  });
+
+  const status = (over: Partial<TillPowerStatus>): TillPowerStatus => ({
+    keepAwake: 'on',
+    startWithWindows: 'on',
+    openedAt: '2026-10-01T09:00:00.000Z',
+    lastSleep: null,
+    ...over,
+  });
+
+  it('keep awake: whether it is held awake right now, in one line each', () => {
+    const first = (keepAwake: TillPowerStatus['keepAwake']) => pcPowerStatusLines(status({ keepAwake }))[0];
+    expect(first('on')).toEqual({
+      tone: 'good',
+      text: 'Awake now: this till is taking website orders, so Windows won’t let the screen or the computer sleep.',
+    });
+    expect(first('idle')).toEqual({
+      tone: 'off',
+      text: 'Not held awake now: this till is not taking website orders (no shift open, or online orders off). It is kept awake again when it does.',
+    });
+    expect(first('off')).toEqual({ tone: 'off', text: 'Windows may put this computer to sleep.' });
+    expect(first('failed')).toEqual({ tone: 'warn', text: 'Could not keep this computer awake: restart the till. The log file has the reason.' });
+  });
+
+  it('start with Windows: "Turn it back on" only when Windows has it switched off or missing', () => {
+    const second = (startWithWindows: TillPowerStatus['startWithWindows']) => pcPowerStatusLines(status({ startWithWindows }))[1];
+    expect(second('on')).toEqual({ tone: 'good', text: 'Starts with Windows: yes.' });
+    expect(second('off')).toEqual({ tone: 'off', text: 'The till does not start with Windows.' });
+    expect(second('offInWindows')).toEqual({
+      tone: 'warn',
+      text: 'Windows has this switched off (Task Manager → Startup apps).',
+      action: 'turnBackOn',
+    });
+    expect(second('missing')).toEqual({ tone: 'warn', text: 'Windows did not take it.', action: 'turnBackOn' });
+    expect(second('notInstalled')).toEqual({ tone: 'off', text: 'Only the installed till can start with Windows.' });
+  });
+
+  it('the last sleep: from and to, or only from while it never woke; no line when it never slept', () => {
+    const at = (iso: string) =>
+      new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+    expect(pcPowerStatusLines(status({}))).toHaveLength(2);
+    expect(
+      pcPowerStatusLines(status({ lastSleep: { sleptAt: '2026-10-01T18:05:00.000Z', wokeAt: '2026-10-01T19:40:00.000Z' } }))[2],
+    ).toEqual({ tone: 'off', text: `Last time this computer slept: ${at('2026-10-01T18:05:00.000Z')} to ${at('2026-10-01T19:40:00.000Z')}.` });
+    expect(pcPowerStatusLines(status({ lastSleep: { sleptAt: '2026-10-01T18:05:00.000Z', wokeAt: null } }))[2]).toEqual({
+      tone: 'off',
+      text: `Last time this computer slept: ${at('2026-10-01T18:05:00.000Z')}.`,
+    });
   });
 });

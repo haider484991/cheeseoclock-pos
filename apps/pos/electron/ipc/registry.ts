@@ -29,6 +29,7 @@ import { registerAlertsHandlers } from './handlers/alerts-handlers.js';
 import { registerCounterHandlers } from './handlers/counter-handlers.js';
 import { registerCostingHandlers } from './handlers/costing-handlers.js';
 import { registerSettingsHandlers } from './handlers/settings-handlers.js';
+import { registerPowerHandlers } from './handlers/power-handlers.js';
 import { registerMenuDeployHandlers } from './handlers/menu-deploy-handlers.js';
 import { reapStaleSessions } from '../services/auth-service.js';
 import { markHeldStepIn } from './step-in-hold.js';
@@ -151,6 +152,7 @@ export function registerAllIpcHandlers(ctx: HandlerContext): void {
   registerInventoryHandlers(ctx);
   registerCostingHandlers(ctx);
   registerSettingsHandlers(ctx);
+  registerPowerHandlers(ctx);
   registerReportsHandlers(ctx);
   registerCustomersHandlers(ctx);
   registerSyncHandlers(ctx);

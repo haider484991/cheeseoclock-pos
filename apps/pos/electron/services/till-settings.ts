@@ -1,6 +1,7 @@
 /**
  * The owner's settings that belong to this till (shared-types
- * till-settings.ts): the receipt's extra lines and the opening float. Each
+ * till-settings.ts): the receipt's extra lines, the opening float and what
+ * the till does with this computer (keep it awake, start with Windows). Each
  * lives in this till's own `settings` table (never synced), saved through
  * settings-repo setSetting (audited: who, before and after); the Settings
  * card shows the value in use, whether it is the default, who changed it
@@ -25,6 +26,8 @@ import { sameSettingValue } from './shop-settings.js';
 
 /** The opening float's own row in this till's settings table. */
 export const OPENING_FLOAT_KEY = 'drawer.openingFloat';
+/** This computer's row: keep it awake, start the till with Windows (till-power-hub.ts applies it). */
+export const PC_POWER_KEY = 'pc.power';
 
 /**
  * Where each key is kept: its own row, or (the extra lines) one field of the
@@ -33,6 +36,7 @@ export const OPENING_FLOAT_KEY = 'drawer.openingFloat';
 const STORED_AS: { readonly [K in TillSettingKey]: { row: string; field: string | null } } = {
   'receipt.extraLines': { row: BRANDING_KEY, field: 'extraLines' },
   'drawer.openingFloat': { row: OPENING_FLOAT_KEY, field: null },
+  'pc.power': { row: PC_POWER_KEY, field: null },
 };
 
 /** Changes shown under a card. */

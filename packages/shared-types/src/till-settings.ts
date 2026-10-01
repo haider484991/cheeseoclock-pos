@@ -9,7 +9,10 @@
  *
  * FROZEN DEFAULTS, as for the shop rules: a key never saved reads as its
  * DEFAULT_* below, which is exactly what the till did before the setting
- * existed, so installing the version changes nothing.
+ * existed, so installing the version changes nothing. One deliberate
+ * exception: 'pc.power' (keep this computer awake while it takes website
+ * orders, start the till with Windows) is on from the install, because the
+ * owner asked for it (2026-10-01: "yes fix all of them in the till update").
  *
  * No format number: a per-till value never meets another version of the app
  * except this till's own upgrade, and each schema below reads a value an
@@ -17,7 +20,7 @@
  */
 
 /** The keys the "this till" Settings cards edit (settings:getTill / settings:setTill). */
-export const TILL_SETTING_KEYS = ['receipt.extraLines', 'drawer.openingFloat'] as const;
+export const TILL_SETTING_KEYS = ['receipt.extraLines', 'drawer.openingFloat', 'pc.power'] as const;
 export type TillSettingKey = (typeof TILL_SETTING_KEYS)[number];
 
 export function isTillSettingKey(key: unknown): key is TillSettingKey {
@@ -77,17 +80,40 @@ export interface OpeningFloatPrefill {
 }
 
 // ---------------------------------------------------------------------------
+// This computer (Settings → Online orders)
+// ---------------------------------------------------------------------------
+
+/**
+ * What this till does with the computer it runs on (till-power.ts has what
+ * it is doing right now):
+ *  - keepAwake: while this till takes website orders (the website link set,
+ *    "Accept online orders" on, a shift open), Windows may not turn the
+ *    screen off or put the computer to sleep;
+ *  - startWithWindows: Windows opens the till when someone signs in to it
+ *    (the installed till only).
+ */
+export interface PcPowerSetting {
+  keepAwake: boolean;
+  startWithWindows: boolean;
+}
+
+/** Both on: the one default that changes what an install does (see FROZEN DEFAULTS above). */
+export const DEFAULT_PC_POWER: Readonly<PcPowerSetting> = Object.freeze({ keepAwake: true, startWithWindows: true });
+
+// ---------------------------------------------------------------------------
 // The cards
 // ---------------------------------------------------------------------------
 
 export interface TillSettingValues {
   'receipt.extraLines': string[];
   'drawer.openingFloat': OpeningFloatSetting;
+  'pc.power': PcPowerSetting;
 }
 
 export const TILL_SETTING_DEFAULTS: { readonly [K in TillSettingKey]: Readonly<TillSettingValues[K]> } = Object.freeze({
   'receipt.extraLines': DEFAULT_RECEIPT_EXTRA_LINES,
   'drawer.openingFloat': DEFAULT_OPENING_FLOAT,
+  'pc.power': DEFAULT_PC_POWER,
 });
 
 /** One change to a till setting, for the card's History (this till's audit trail). */

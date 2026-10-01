@@ -23,6 +23,7 @@ import { readTillLink } from '../../services/till-link.js';
 import { broadcastShopSettingsChanged } from '../../services/shop-settings-events.js';
 import { websiteSettingsChanged } from '../../services/website-settings-events.js';
 import { nudgeMenuDeploy } from '../../services/menu-deploy-events.js';
+import { tillPowerSettingsChanged } from '../../services/till-power-events.js';
 import { saveDeliveryZones } from '../../db/repositories/delivery-zones-repo.js';
 import { anyTillSettingCard, setTillSetting } from '../../services/till-settings.js';
 import type { AppDatabase } from '../../db/connection.js';
@@ -41,8 +42,9 @@ import type { AppDatabase } from '../../db/connection.js';
  *    "Delivery Charge (Rs N)" menu items (delivery-zones-repo, one
  *    transaction); settings:setBusiness refuses 'delivery.zones'.
  *  - settings:getTill / settings:setTill: the settings that belong to THIS
- *    till (its receipt's extra lines, its opening float; till-settings.ts),
- *    the owner alone the same way. Never synced.
+ *    till (its receipt's extra lines, its opening float, this computer:
+ *    keep it awake, start with Windows; till-settings.ts), the owner alone
+ *    the same way. Never synced. "This computer" is applied at once.
  *  - checkout:getRules: any signed-in login; the deal's % and label and
  *    what Pay asks, the areas and fees, never the commission, fees or costs.
  *
@@ -129,6 +131,8 @@ export function registerSettingsHandlers(ctx: HandlerContext): void {
       }
       throw e;
     }
+    // Save and "Put back the default" alike: kept awake or not, the start-up entry, now.
+    if (parsed.data.key === 'pc.power') tillPowerSettingsChanged();
     return ok(anyTillSettingCard(ctx.db, parsed.data.key));
   });
 

@@ -66,6 +66,10 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: CheeseOclock POS
   uninstallDisplayName: CheeseOclock POS
+  # Uninstalling takes the till's start-up entry out of Windows (Settings →
+  # Online orders → This computer writes it); an update keeps it. Kept out of
+  # build/, which .gitignore leaves out of git.
+  include: installer/remove-startup-entry.nsh
 
 # -----------------------------------------------------------------------------
 # macOS — uncomment + provide signing identity when shipping to Mac.

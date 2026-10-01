@@ -1,7 +1,8 @@
 /**
  * The "this till" cards' forms and words (what is typed ↔ the setting's
- * value), pure: the receipt's extra lines (Settings → Shop & logo) and the
- * opening float (Settings → Staff & kitchen). The bounds are shared-types'
+ * value), pure: the receipt's extra lines (Settings → Shop & logo), the
+ * opening float (Settings → Staff & kitchen) and this computer (Settings →
+ * Online orders). The bounds are shared-types'
  * (RECEIPT_EXTRA_LINES_MAX / _LINE_MAX_CHARS, OPENING_FLOAT_MAX_CENTS), the
  * same ones the main process checks with the key's schema; this only says
  * what is wrong before Save. Every sentence is built from the values.
@@ -13,6 +14,8 @@ import {
   RECEIPT_EXTRA_LINE_MAX_CHARS,
   RECEIPT_EXTRA_LINES_MAX,
   type OpeningFloatSetting,
+  type PcPowerSetting,
+  type TillPowerStatus,
 } from '@cheeseoclock/shared-types';
 import type { Parsed } from './foodpandaForm';
 
@@ -121,4 +124,83 @@ export function openingFloatExample(s: OpeningFloatSetting): string {
       ? `The Open shift box on this till starts on ${formatCents(s.fixedCents)} every shift, whatever the last shift closed with.`
       : "The Open shift box on this till starts on what its last shift closed with: the cash left in the drawer overnight. A first shift starts at Rs 0.";
   return `${start} Whoever opens still counts the drawer and types the float, and closing stays a blind count.`;
+}
+
+// ---------------------------------------------------------------------------
+// This computer
+// ---------------------------------------------------------------------------
+
+/** One line for History. */
+export function pcPowerSummary(v: PcPowerSetting): string {
+  return `${v.keepAwake ? 'Kept awake for website orders' : 'Windows decides when it sleeps'} · ${v.startWithWindows ? 'starts with Windows' : 'opened by hand'}`;
+}
+
+export const PC_POWER_NEVER_CHANGED =
+  'Never changed: this computer stays awake while it takes website orders, and the till starts with Windows.';
+
+/** The first choice's heading (the owner's words, 2026-10-01). */
+export const KEEP_AWAKE_LABEL = 'Keep this computer awake while it takes website orders';
+
+export const KEEP_AWAKE_HELP =
+  'While this till takes website orders (a shift is open and online orders are on), the screen stays on and the computer does not go to sleep. Closing a laptop’s lid or pressing the power button still puts it to sleep.';
+
+export const PC_POWER_LID_TIP = 'On a laptop, set “When I close the lid” to “Do nothing” in Windows’ power settings.';
+
+/** What the till is doing with this computer now, one line each, for the card. */
+export interface PcPowerStatusLine {
+  tone: 'good' | 'warn' | 'off';
+  text: string;
+  /** "Turn it back on" goes with this line. */
+  action?: 'turnBackOn';
+}
+
+export function pcPowerStatusLines(s: TillPowerStatus): PcPowerStatusLine[] {
+  const lines: PcPowerStatusLine[] = [];
+  switch (s.keepAwake) {
+    case 'on':
+      lines.push({ tone: 'good', text: 'Awake now: this till is taking website orders, so Windows won’t let the screen or the computer sleep.' });
+      break;
+    case 'idle':
+      lines.push({
+        tone: 'off',
+        text: 'Not held awake now: this till is not taking website orders (no shift open, or online orders off). It is kept awake again when it does.',
+      });
+      break;
+    case 'off':
+      lines.push({ tone: 'off', text: 'Windows may put this computer to sleep.' });
+      break;
+    case 'failed':
+      lines.push({ tone: 'warn', text: 'Could not keep this computer awake: restart the till. The log file has the reason.' });
+      break;
+  }
+  switch (s.startWithWindows) {
+    case 'on':
+      lines.push({ tone: 'good', text: 'Starts with Windows: yes.' });
+      break;
+    case 'off':
+      lines.push({ tone: 'off', text: 'The till does not start with Windows.' });
+      break;
+    case 'offInWindows':
+      lines.push({ tone: 'warn', text: 'Windows has this switched off (Task Manager → Startup apps).', action: 'turnBackOn' });
+      break;
+    case 'missing':
+      lines.push({ tone: 'warn', text: 'Windows did not take it.', action: 'turnBackOn' });
+      break;
+    case 'notInstalled':
+      lines.push({ tone: 'off', text: 'Only the installed till can start with Windows.' });
+      break;
+  }
+  if (s.lastSleep) {
+    const { sleptAt, wokeAt } = s.lastSleep;
+    lines.push({ tone: 'off', text: `Last time this computer slept: ${at(sleptAt)}${wokeAt ? ` to ${at(wokeAt)}` : ''}.` });
+  }
+  return lines;
+}
+
+/** "27 Sep, 14:02" */
+function at(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 }

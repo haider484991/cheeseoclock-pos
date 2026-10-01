@@ -17,7 +17,10 @@
  *     Team & leakage exactly as they were; a "not made" answer never gets
  *     past the food having left the shop;
  *   - "probably made" follows the owner's amber minute ('kitchen.timing'),
- *     on the question and in what a cancel saves (Team & leakage's flag).
+ *     on the question and in what a cancel saves (Team & leakage's flag);
+ *   - "This computer" ('pc.power', v0.7.33): on by default, the owner's
+ *     alone, audited, never synced, and every Save or "Put back the
+ *     default" is applied at once (onTillPowerSettingsChanged).
  *
  * Only `defineHandler` (captured), the signed-in session and the manager
  * check, the printer spooler and the FBR worker are stood in for. node's own
@@ -425,6 +428,108 @@ describe.skipIf(!Sqlite)('the opening float, per till', () => {
       JSON.stringify({ mode: 'fixed', fixedCents: 10_000_000 }),
     );
     expect(db.prepare(`SELECT COUNT(*) AS n FROM sync_queue WHERE entity_id LIKE '%openingFloat%'`).get()?.['n']).toBe(0);
+  });
+});
+
+describe.skipIf(!Sqlite)('this computer (pc.power): kept awake for website orders, starts with Windows', () => {
+  /** How many times the till was told to apply "This computer" again. */
+  async function applied(): Promise<{ count: () => number; stop: () => void }> {
+    const { onTillPowerSettingsChanged } = await import('../../services/till-power-events.js');
+    let n = 0;
+    const stop = onTillPowerSettingsChanged(() => {
+      n += 1;
+    });
+    return { count: () => n, stop };
+  }
+
+  it('both on by default, before anything is saved', async () => {
+    h.session = OWNER;
+    expect(await data('settings:getTill', { key: 'pc.power' })).toMatchObject({
+      key: 'pc.power',
+      value: { keepAwake: true, startWithWindows: true },
+      defaultValue: { keepAwake: true, startWithWindows: true },
+      isDefault: true,
+      lastChanged: null,
+      history: [],
+    });
+  });
+
+  it('the owner saves (audited, this till only, applied at once); "Put back the default" is applied again', async () => {
+    const heard = await applied();
+    try {
+      h.session = OWNER;
+      const syncedBefore = writtenRows()['sync_queue'];
+      const card = await data<TillSettingCard<'pc.power'>>('settings:setTill', {
+        key: 'pc.power',
+        value: { keepAwake: false, startWithWindows: true },
+      });
+      expect(card).toMatchObject({ value: { keepAwake: false, startWithWindows: true }, isDefault: false, lastChanged: { byName: 'Test Owner' } });
+      expect(heard.count()).toBe(1);
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'settings' AND entity_id = 'pc.power'`).get()?.['n']).toBe(1);
+      expect(writtenRows()['sync_queue']).toBe(syncedBefore);
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM business_settings`).get()?.['n']).toBe(0);
+      expect(card.history.map((x) => x.value)).toEqual([{ keepAwake: false, startWithWindows: true }]);
+
+      const back = await data<TillSettingCard<'pc.power'>>('settings:setTill', { key: 'pc.power', useDefault: true });
+      expect(back).toMatchObject({ value: { keepAwake: true, startWithWindows: true }, isDefault: true });
+      expect(heard.count()).toBe(2);
+      expect(back.history.map((x) => x.value)).toEqual([
+        { keepAwake: true, startWithWindows: true },
+        { keepAwake: false, startWithWindows: true },
+      ]);
+      expect(writtenRows()['sync_queue']).toBe(syncedBefore);
+    } finally {
+      heard.stop();
+    }
+  });
+
+  it('a cashier and a manager are refused, nothing is written and nothing is applied', async () => {
+    const heard = await applied();
+    try {
+      const before = writtenRows();
+      for (const who of [CASHIER, MANAGER]) {
+        h.session = who;
+        expect(await call('settings:getTill', { key: 'pc.power' })).toEqual({ ok: false, code: 'forbidden', message: REFUSED['settings'] });
+        for (const payload of [{ key: 'pc.power', value: { keepAwake: false, startWithWindows: false } }, { key: 'pc.power', useDefault: true }]) {
+          expect(await call('settings:setTill', payload)).toEqual({ ok: false, code: 'forbidden', message: REFUSED['settings'] });
+        }
+      }
+      expect(writtenRows()).toEqual(before);
+      expect(heard.count()).toBe(0);
+    } finally {
+      heard.stop();
+    }
+  });
+
+  it('two yes/no answers and nothing else: anything more is refused, and nothing is written or applied', async () => {
+    const heard = await applied();
+    try {
+      h.session = OWNER;
+      const before = writtenRows();
+      for (const value of [
+        { keepAwake: 'yes', startWithWindows: true },
+        { keepAwake: true },
+        { keepAwake: true, startWithWindows: true, extra: true },
+        null,
+        true,
+      ]) {
+        const o = await call('settings:setTill', { key: 'pc.power', value });
+        expect({ value, code: o.ok ? 'ok' : o.code }).toEqual({ value, code: 'validation_failed' });
+      }
+      expect(await call('settings:setTill', { key: 'pc.power', value: { keepAwake: 'yes', startWithWindows: true } })).toMatchObject({
+        message: 'Keep this computer awake: yes or no',
+      });
+      expect(writtenRows()).toEqual(before);
+      expect(heard.count()).toBe(0);
+    } finally {
+      heard.stop();
+    }
+  });
+
+  it('a stored value that does not fit reads as the default', async () => {
+    db.prepare(`INSERT INTO settings (key, value_json, updated_at) VALUES ('pc.power', ?, ?)`).run(JSON.stringify({ keepAwake: 'no' }), T0);
+    h.session = OWNER;
+    expect(await data('settings:getTill', { key: 'pc.power' })).toMatchObject({ value: { keepAwake: true, startWithWindows: true }, isDefault: true });
   });
 });
 

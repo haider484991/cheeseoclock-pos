@@ -8,8 +8,8 @@ export const TILL_SETTINGS_KEY = ['till-settings'] as const;
 
 /**
  * One "this till" Settings card (owner only): the receipt's extra lines,
- * the opening float. Saved on this till alone (never synced), with Save and
- * "Put back the default", like a shop rule's card.
+ * the opening float, this computer. Saved on this till alone (never synced),
+ * with Save and "Put back the default", like a shop rule's card.
  */
 export function useTillSetting<K extends TillSettingKey>(key: K) {
   const qc = useQueryClient();
@@ -22,9 +22,11 @@ export function useTillSetting<K extends TillSettingKey>(key: K) {
   const done = (what: string) => {
     toast({ title: what, description: 'On this till.', variant: 'success' });
     void qc.invalidateQueries({ queryKey: TILL_SETTINGS_KEY });
-    // What reads them: the receipt branding (the extra lines) and the Open shift box (the float).
+    // What reads them: the receipt branding (the extra lines), the Open shift box (the float)
+    // and "This computer"'s status lines (kept awake now, the start-up entry).
     void qc.invalidateQueries({ queryKey: ['printer', 'config'] });
     void qc.invalidateQueries({ queryKey: ['shifts', 'openingFloat'] });
+    void qc.invalidateQueries({ queryKey: ['power'] });
   };
   const failed = (e: unknown) =>
     toast({ title: 'Not saved', description: e instanceof IpcError ? e.message : String(e), variant: 'error' });

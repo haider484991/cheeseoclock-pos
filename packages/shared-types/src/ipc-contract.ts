@@ -38,6 +38,7 @@ import type {
   ShopSettingKey,
 } from './shop-settings.js';
 import type { AnyTillSettingCard, OpeningFloatPrefill, SetTillSettingRequest, TillSettingKey } from './till-settings.js';
+import type { TillPowerStatus } from './till-power.js';
 import type { FoodMade, OrderStockStatus, StockSettlement } from './order-stock.js';
 import type {
   DeletedTestsPage,
@@ -1693,8 +1694,8 @@ export interface IpcContract {
     response: ApiResult<AnyShopSettingCard>;
   };
   // The owner's settings that belong to THIS till (till-settings.ts: the
-  // receipt's extra lines, the opening float). Never synced. Owner only
-  // (settings.manage), checked in the main process.
+  // receipt's extra lines, the opening float, this computer). Never synced.
+  // Owner only (settings.manage), checked in the main process.
   /** One "this till" card: the value in use, who changed it last, its history. */
   'settings:getTill': {
     request: { key: TillSettingKey };
@@ -1704,6 +1705,23 @@ export interface IpcContract {
   'settings:setTill': {
     request: SetTillSettingRequest;
     response: ApiResult<AnyTillSettingCard>;
+  };
+  // This computer (Settings → Online orders; till-power.ts): what the till is
+  // doing with the computer it runs on. Owner only (settings.manage), checked
+  // in the main process, like the "this till" cards.
+  /** Is this computer held awake now, will Windows open the till at sign-in, when did it last sleep. */
+  'power:getStatus': {
+    request: undefined;
+    response: ApiResult<TillPowerStatus>;
+  };
+  /**
+   * "Turn it back on": puts the start-up entry back on in Windows (also when
+   * Task Manager switched it off), and keeps the computer awake again if it
+   * should be, per the saved setting.
+   */
+  'power:turnBackOn': {
+    request: undefined;
+    response: ApiResult<TillPowerStatus>;
   };
   /**
    * Settings → Delivery areas: save the areas and fees (or put back the

@@ -169,6 +169,18 @@ export function storeAcceptingOrders(
   return cfg.enabled && pause === null;
 }
 
+/**
+ * This till is taking website orders now: the website link is set (and its
+ * password readable here), the owner's switch is on, and no shift pause.
+ * While it is, the computer is kept awake (till-power-hub.ts).
+ */
+export function takingWebOrders(
+  cfg: WebBridgeConfig | LoadedWebBridgeConfig,
+  pause: StoredShiftPause | null,
+): boolean {
+  return isWebBridgeReady(cfg).ok && storeAcceptingOrders(cfg, pause);
+}
+
 /** The heartbeat body (PUT /api/bridge/status) for this config and pause. */
 export function storeHeartbeatBody(
   cfg: Pick<WebBridgeConfig, 'enabled'>,

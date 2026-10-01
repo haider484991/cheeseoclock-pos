@@ -303,9 +303,14 @@ const api: RendererApi = {
     getBusiness: (req) => invoke('settings:getBusiness', req),
     setBusiness: (req) => invoke('settings:setBusiness', req),
     saveDeliveryZones: (req) => invoke('settings:saveDeliveryZones', req),
-    // This till's own (the receipt's extra lines, the opening float): the owner only too.
+    // This till's own (the receipt's extra lines, the opening float, this computer): the owner only too.
     getTill: (req) => invoke('settings:getTill', req),
     setTill: (req) => invoke('settings:setTill', req),
+  },
+  // This computer (Settings → Online orders): the owner only.
+  power: {
+    getStatus: () => invoke('power:getStatus', undefined),
+    turnBackOn: () => invoke('power:turnBackOn', undefined),
   },
   // What the counter needs to take an order (the foodpanda deal, Pay's checks).
   checkout: {
