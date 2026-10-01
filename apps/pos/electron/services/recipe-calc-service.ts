@@ -52,6 +52,7 @@ import {
   choiceGroupKind,
   groupDisplayName,
   orderChoiceGroups,
+  paperClock,
   type PlainDocument,
   type RecipeCalc,
   type RecipeCalcCosts,
@@ -404,10 +405,10 @@ export function getTypicalPicks(db: AppDatabase, menuItemId: string, now = new D
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-/** "27 Sep 2026, 14:05", this till's time. */
+/** "27 Sep 2026, 14:05", Pakistan time (UTC+5) like every paper, whatever the PC's zone. */
 function whenText(d: Date): string {
-  const two = (n: number) => String(n).padStart(2, '0');
-  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${two(d.getHours())}:${two(d.getMinutes())}`;
+  const pk = new Date(d.getTime() + 5 * 3_600_000);
+  return `${pk.getUTCDate()} ${MONTHS[pk.getUTCMonth()]} ${pk.getUTCFullYear()}, ${paperClock(d)}`;
 }
 
 /** The prep list for a request, worked out now (no prices: it goes to the kitchen). */

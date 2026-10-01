@@ -5,7 +5,7 @@
  *  - With no extra lines (none saved, or []) every paper is byte-for-byte
  *    what the till printed before (receipt-goldens.json: 80 papers — every
  *    kind, both widths, with and without the shop's lines, FBR, DUPLICATE,
- *    late, shop copy, kitchen tickets).
+ *    late, shop copy, kitchen tickets), in any time zone.
  *  - The lines print under the thank-you line on the customer's receipt and
  *    bill only: never on a kitchen ticket, a shop copy, a refund slip, a
  *    cancelled order, or a receipt refunded in full (no thank-you there).
@@ -13,7 +13,8 @@
  *    bill, the receipt, the refund slip and the kitchen ticket, reprints
  *    included; the order still records the login the till filed it under.
  *
- * Times are local, so this reads the same in any time zone. Every name is made up.
+ * Times are Pakistan wall-clock instants (papers print Pakistan time), so this
+ * reads the same in any time zone. Every name is made up.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -41,7 +42,8 @@ import {
 
 const id = (s: string) => s as UUID;
 const cents = (n: number) => n as Cents;
-const at = (h: number, m: number) => new Date(2026, 8, 26, h, m);
+/** Pakistan wall-clock time (UTC+5) on 26 Sep 2026. */
+const at = (h: number, m: number) => new Date(Date.UTC(2026, 8, 26, h - 5, m));
 const iso = (h: number, m: number) => at(h, m).toISOString();
 const text = (bytes: Uint8Array) => decodeEscPos(bytes).map((r) => r.text.trim());
 
@@ -72,6 +74,20 @@ describe('no extra lines: every paper is byte-for-byte what it was', () => {
       .filter((c) => fingerprint(c.render((b) => ({ ...b, extraLines: ['', '   '] }))) !== GOLDEN[c.name])
       .map((c) => c.name);
     expect(moved).toEqual([]);
+  });
+
+  it('in any time zone: release CI runs in UTC, the till in Pakistan (papers print Pakistan time)', () => {
+    const was = process.env.TZ;
+    try {
+      for (const zone of ['UTC', 'Asia/Karachi', 'America/New_York']) {
+        process.env.TZ = zone;
+        const moved = cases.filter((c) => fingerprint(c.render((b) => b)) !== GOLDEN[c.name]).map((c) => c.name);
+        expect(moved, zone).toEqual([]);
+      }
+    } finally {
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
   });
 });
 

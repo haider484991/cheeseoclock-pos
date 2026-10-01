@@ -30,7 +30,8 @@ const live = describe.skipIf(!DatabaseSync);
 const DEV = 'till-1';
 const T0 = '2026-01-01T00:00:00.000Z';
 const ALI = { userId: 'u_ali', deviceId: DEV };
-const NOW = new Date(2026, 8, 27, 19, 35);
+/** 27 Sep 2026, 19:35 in Pakistan (UTC+5): papers print Pakistan time in any zone. */
+const NOW = new Date(Date.UTC(2026, 8, 27, 19 - 5, 35));
 const BRANDING = { storeName: 'Test Shop' };
 
 type Db = ReturnType<typeof openMigrated>;

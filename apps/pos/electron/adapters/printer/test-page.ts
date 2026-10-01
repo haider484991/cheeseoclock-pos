@@ -1,4 +1,4 @@
-import type { PrinterWidth } from '@cheeseoclock/shared-types';
+import { paperDateTime, type PrinterWidth } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, appendLogo, type TestPageOptions } from '@cheeseoclock/printer-core';
 
 /**
@@ -42,7 +42,8 @@ export function renderTestPage(
         ? 'Station: Receipt printer'
         : null);
   if (station) b.bold(true).wrappedText(station).bold(false);
-  b.line('Printed', formatLocal(new Date()))
+  // Pakistan time, day first, like every other paper the till prints.
+  b.line('Printed', paperDateTime(new Date()))
     .line('Connection', connection)
     .line('Paper', width === 48 ? '80 mm (48 columns)' : '58 mm (32 columns)');
   if (opts.logoNote) b.line('Logo', opts.logoNote);
@@ -96,10 +97,4 @@ export function renderTestPage(
     .cut(true);
 
   return b.build();
-}
-
-function formatLocal(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  // Day first, like every other paper the till prints.
-  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }

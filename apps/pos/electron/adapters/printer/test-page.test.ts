@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CUT_MARKER, LINES_BEFORE_CUT, decodeEscPos, type MonoRaster } from '@cheeseoclock/printer-core';
 import { renderTestPage } from './test-page.js';
 
@@ -13,6 +13,24 @@ describe('renderTestPage', () => {
       }
     });
   }
+
+  it('says when it printed in Pakistan time, day first, whatever zone the PC is set to', () => {
+    const was = process.env.TZ;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // 14:35 UTC on 14 Sep 2026 is 19:35 in Pakistan; release CI runs in UTC.
+      vi.setSystemTime(new Date('2026-09-14T14:35:00.000Z'));
+      for (const zone of ['UTC', 'America/New_York', 'Asia/Karachi']) {
+        process.env.TZ = zone;
+        const rows = decodeEscPos(renderTestPage(48, 'USB: BC-85AC G1')).map((r) => r.text);
+        expect(rows.some((r) => /^Printed\s+14\/09\/2026 19:35$/.test(r)), zone).toBe(true);
+      }
+    } finally {
+      vi.useRealTimers();
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
+  });
 
   it('names the connection it was sent through', () => {
     const rows = decodeEscPos(renderTestPage(48, 'USB: BC-85AC G1')).map((r) => r.text);

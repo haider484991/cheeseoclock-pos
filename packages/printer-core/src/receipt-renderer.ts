@@ -47,7 +47,16 @@
  */
 
 import type { DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
-import { RECEIPT_EXTRA_LINES_MAX, discountBillLabel, isLeaveOutChoice, orderNotesOf, paperCashierName } from '@cheeseoclock/shared-types';
+import {
+  RECEIPT_EXTRA_LINES_MAX,
+  discountBillLabel,
+  isLeaveOutChoice,
+  orderNotesOf,
+  paperCashierName,
+  paperClock,
+  paperDateTime,
+  paperDayMonthClock,
+} from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
 import {
   centreOnPaper,
@@ -1134,12 +1143,11 @@ export function renderDrawerKick(settings?: Partial<DrawerSettings> | null): Uin
 
 // Helpers ---------------------------------------------------------------------
 
+// Every printed time is Pakistan time, whatever the PC's own zone (shared-types paper-time).
+
+/** "26/09 19:35" (the kitchen ticket). */
 function formatTicketTime(d: Date): string {
-  const day = String(d.getDate()).padStart(2, '0');
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${day}/${m} ${hh}:${mm}`;
+  return paperDayMonthClock(d);
 }
 
 /** Format cents into "1,234.56" with thousands separators, no currency symbol. */
@@ -1158,15 +1166,10 @@ function money(cents: number): string {
 
 /** "26/09/2026 19:35" — the one date format on every paper (Pakistan writes the day first). */
 function formatDateTime(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${day}/${m}/${y} ${formatClock(d)}`;
+  return paperDateTime(d);
 }
 
 /** "19:35" */
 function formatClock(d: Date): string {
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
+  return paperClock(d);
 }

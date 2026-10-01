@@ -23,6 +23,7 @@ export * from './menu-deploy-view.js';
 export * from './customer.js';
 export * from './shift.js';
 export * from './printer.js';
+export * from './paper-time.js';
 export * from './web-bridge.js';
 export * from './website-messages.js';
 export * from './website-shop.js';

@@ -16,7 +16,8 @@
  *   - inventory:typicalPicks gives the choices in the till's order and the
  *     last 28 days' picks as counts;
  *   - inventory:printPrepList prints the prep list (no prices) on the
- *     receipt printer, and a failed print is an answer, not an error.
+ *     receipt printer, in Pakistan time, and a failed print is an answer,
+ *     not an error.
  *
  * Only `defineHandler` (captured), the signed-in session and the print
  * spooler (it records the paper) are stood in for. node:sqlite behind
@@ -494,6 +495,23 @@ live('the prep list', () => {
     expect(text).toMatch(/^Test sauce +500 g$/m);
     expect(text).toMatch(/^ {2}enough in stock here \(100 kg\):\s+no need to make/m);
     expect(text).not.toContain('Test tomato');
+  });
+
+  it('says when it was made in Pakistan time, whatever zone the PC is set to', async () => {
+    h.session = MANAGER;
+    const was = process.env.TZ;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // 19:30 UTC on 30 Sep 2026 is already 1 Oct, 00:30 in Pakistan; release CI runs in UTC.
+      vi.setSystemTime(new Date('2026-09-30T19:30:00.000Z'));
+      process.env.TZ = 'UTC';
+      await data<PrintResult>('inventory:printPrepList', { lines: [item(s.item.fajitaM, 2)] });
+      expect(escPosToText(h.printed[0]!)).toContain('1 Oct 2026, 00:30');
+    } finally {
+      vi.useRealTimers();
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
   });
 
   it('a printer that fails is an answer the screen can show, not an error', async () => {

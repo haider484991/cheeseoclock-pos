@@ -21,7 +21,8 @@ afterAll(() => rmSync(dir.path, { recursive: true, force: true }));
 
 const id = (s: string) => s as UUID;
 const cents = (n: number) => n as Cents;
-const at = (h: number, m: number) => new Date(2026, 8, 26, h, m);
+/** Pakistan wall-clock time (UTC+5) on 26 Sep 2026: papers print Pakistan time in any zone. */
+const at = (h: number, m: number) => new Date(Date.UTC(2026, 8, 26, h - 5, m));
 
 function order(): OrderSnapshot {
   return {

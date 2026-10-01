@@ -9,7 +9,8 @@
  * website order), so a change that moves a single byte of a paper with no
  * extra lines fails receipt-extra-lines.test.ts.
  *
- * Times are built in local time, so the bytes are the same in any time zone.
+ * Times are Pakistan wall-clock instants: papers print Pakistan time, so the
+ * bytes are the same in any time zone.
  * Every name, number and amount is made up.
  */
 import type { Cents, OrderNumber, OrderSnapshot, PrinterWidth, UUID } from '@cheeseoclock/shared-types';
@@ -24,8 +25,8 @@ import {
 
 const id = (s: string) => s as UUID;
 const cents = (n: number) => n as Cents;
-/** Local wall-clock time on 26 Sep 2026. */
-const at = (h: number, m: number) => new Date(2026, 8, 26, h, m);
+/** Pakistan wall-clock time (UTC+5) on 26 Sep 2026. */
+const at = (h: number, m: number) => new Date(Date.UTC(2026, 8, 26, h - 5, m));
 const iso = (h: number, m: number) => at(h, m).toISOString();
 
 /** A paid takeaway at the counter: Rs 1,160 (1,000 + 16% tax), cash. */

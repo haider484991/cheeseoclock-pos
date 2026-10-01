@@ -12,6 +12,7 @@ import {
   typicalPortions,
   type PickMix,
 } from '@cheeseoclock/pos-domain';
+import { paperClock } from '@cheeseoclock/shared-types';
 import type {
   Category,
   Ingredient,
@@ -320,8 +321,11 @@ export function shortFirst<T extends Pick<RecipeCalcQtyRow, 'shortBy'>>(rows: re
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-/** "27 Sep 2026, 14:05" — the prep list's time, as the printed one says it. */
+/**
+ * "27 Sep 2026, 14:05" — the prep list's time, as the printed one says it:
+ * Pakistan time (UTC+5), whatever the PC's zone.
+ */
 export function whenText(d: Date): string {
-  const two = (n: number) => String(n).padStart(2, '0');
-  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${two(d.getHours())}:${two(d.getMinutes())}`;
+  const pk = new Date(d.getTime() + 5 * 3_600_000);
+  return `${pk.getUTCDate()} ${MONTHS[pk.getUTCMonth()]} ${pk.getUTCFullYear()}, ${paperClock(d)}`;
 }

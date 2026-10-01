@@ -13,7 +13,8 @@ import { isDrinkLine, renderKitchenTicket } from './receipt-renderer.js';
 const id = (s: string) => s as UUID;
 const cents = (n: number) => n as Cents;
 const rows = (bytes: Uint8Array) => decodeEscPos(bytes).map((r) => r.text);
-const now = new Date(2026, 8, 28, 19, 35);
+/** 28 Sep 2026, 19:35 in Pakistan (UTC+5): the ticket prints Pakistan time. */
+const now = new Date(Date.UTC(2026, 8, 28, 19 - 5, 35));
 
 type Line = OrderSnapshot['items'][number];
 function line(n: string, name: string, categoryName: string, prepStation: Line['prepStation'], quantity: number, extra: Partial<Line> = {}): Line {

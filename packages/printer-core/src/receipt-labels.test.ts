@@ -4,7 +4,8 @@
  * line), SHOP COPY, the state line (PAID - CASH, TO COLLECT, REFUNDED IN
  * FULL), the FBR states, and the kitchen's REPRINT / RE-SENT / LATE /
  * CANCELLED — decoded back from the bytes, as the printer would print them.
- * Times are built in local time so the test reads the same in any time zone.
+ * Times are Pakistan wall-clock instants (papers print Pakistan time), so the
+ * test reads the same in any time zone.
  */
 import { describe, expect, it } from 'vitest';
 import type { Cents, OrderNumber, OrderSnapshot, UUID } from '@cheeseoclock/shared-types';
@@ -22,8 +23,8 @@ import {
 
 const id = (s: string) => s as UUID;
 const cents = (n: number) => n as Cents;
-/** Local wall-clock time on 26 Sep 2026. */
-const at = (h: number, m: number) => new Date(2026, 8, 26, h, m);
+/** Pakistan wall-clock time (UTC+5) on 26 Sep 2026. */
+const at = (h: number, m: number) => new Date(Date.UTC(2026, 8, 26, h - 5, m));
 const iso = (h: number, m: number) => at(h, m).toISOString();
 
 const branding: ReceiptBranding = { storeName: "Cheese O'Clock", storeTagline: 'Pizza - Phase 6', phoneLine: '0300 0000000' };

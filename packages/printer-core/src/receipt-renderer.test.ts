@@ -17,6 +17,8 @@ import {
 
 const id = (s: string) => s as UUID;
 const cents = (n: number) => n as Cents;
+/** Pakistan wall-clock time (UTC+5) on 14 Sep 2026: papers print Pakistan time in any zone. */
+const pkt = (h: number, m: number) => new Date(Date.UTC(2026, 8, 14, h - 5, m));
 
 /** A delivery order with everything that can make a receipt line long. */
 function snapshot(): OrderSnapshot {
@@ -414,7 +416,7 @@ describe('renderReceipt — copies and balance', () => {
 });
 
 describe('renderKitchenTicket', () => {
-  const now = new Date(2026, 8, 14, 19, 35);
+  const now = pkt(19, 35);
 
   it('shouts the order number and mode, lists what to cook, and never a price', () => {
     const r = rows(renderKitchenTicket(snapshot(), { now }));
@@ -607,7 +609,7 @@ describe('renderReceipt — shop logo', () => {
   });
 
   it('never goes on a kitchen ticket', () => {
-    const now = new Date(2026, 8, 14, 19, 35);
+    const now = pkt(19, 35);
     for (const width of [48, 32] as const) {
       expect(indexOf(renderKitchenTicket(snapshot(), { width, now }), GS_V_0)).toBe(-1);
       expect(indexOf(renderKitchenTicket(snapshot(), { width, now, reprint: true }), GS_V_0)).toBe(-1);
@@ -643,9 +645,9 @@ describe('the shop on a customer paper: logo and tagline on top; address, phone 
   const reprint = {
     kind: 'reprint' as const,
     number: 1,
-    printedAt: new Date(2026, 8, 14, 19, 52),
+    printedAt: pkt(19, 52),
     byName: 'Ali Akbar',
-    firstPrintedAt: new Date(2026, 8, 14, 16, 20),
+    firstPrintedAt: pkt(16, 20),
   };
 
   /** Every customer-facing paper: [name, order, options, has a thank-you line]. */
@@ -661,14 +663,14 @@ describe('the shop on a customer paper: logo and tagline on top; address, phone 
     voided.order.status = 'void';
     voided.order.voidReason = 'Customer cancelled';
     const refund = {
-      refundedAt: new Date(2026, 8, 14, 19, 50),
+      refundedAt: pkt(19, 50),
       rows: [{ method: 'cash', amountCents: 30_000 }],
       reason: 'cold pizza',
       refundedByName: 'Ali Akbar',
       approvedByName: 'Sana Khan',
       totalRefundedCents: 30_000,
     };
-    const cancelled = { at: new Date(2026, 8, 14, 19, 52), byName: 'Sana Khan', reason: 'Customer cancelled' };
+    const cancelled = { at: pkt(19, 52), byName: 'Sana Khan', reason: 'Customer cancelled' };
     return [
       ['receipt', snapshot(), { fbr }, true],
       ['bill', bill, {}, true],
@@ -775,7 +777,7 @@ describe('the shop on a customer paper: logo and tagline on top; address, phone 
  * stay on their lines.
  */
 describe('order notes on the kitchen ticket and the bill / receipt', () => {
-  const now = new Date(2026, 8, 14, 19, 35);
+  const now = pkt(19, 35);
   const COUNTER_NOTE = 'Ring the upper bell, customer asleep downstairs';
 
   /** A counter takeaway with the "Order notes" box filled in and no customer. */

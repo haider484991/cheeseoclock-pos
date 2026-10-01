@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
-import { isLeaveOutChoice, paperCashierName } from '@cheeseoclock/shared-types';
+import { isLeaveOutChoice, paperCashierName, paperDateTime } from '@cheeseoclock/shared-types';
 import { CheckCircle2, Printer, Hourglass, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
@@ -142,7 +142,8 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
             <div className="text-center">
               {shop.name && <div className="break-words text-xl font-bold">{shop.name}</div>}
               {shop.tagline && <div className="break-words text-xs text-stone-500">{shop.tagline}</div>}
-              <div className="mt-3 text-xs text-stone-500">{new Date(order.paidAt ?? Date.now()).toLocaleString()}</div>
+              {/* The paper's own words: Pakistan time, day first ("14/09/2026 19:35"), whatever the PC's zone. */}
+              <div className="mt-3 text-xs text-stone-500">{paperDateTime(order.paidAt ?? Date.now())}</div>
               <div className="text-xs">
                 Cashier: {paperCashierName(snapshot)} · {MODE_LABEL[order.mode]}
                 {tableLabel ? ` · ${tableLabel}` : ''}

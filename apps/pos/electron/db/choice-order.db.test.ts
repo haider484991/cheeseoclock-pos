@@ -194,7 +194,8 @@ describe.skipIf(!DatabaseSync)('choices in the order they were asked', () => {
   it('the kitchen ticket shouts the leave-out first, then lists the rest as asked; the receipt lists them as asked', async () => {
     const { orderId } = ring(['cola', 'noOnion', 'extraCheese', 'thin', 'sideRanch']);
     const snap = r.getOrderSnapshot(db, orderId)!;
-    const ticket = rows(renderKitchenTicket(snap, { now: new Date(2026, 8, 27, 19, 35) }));
+    // 27 Sep, 19:35 in Pakistan (UTC+5): papers print Pakistan time in any zone.
+    const ticket = rows(renderKitchenTicket(snap, { now: new Date(Date.UTC(2026, 8, 27, 19 - 5, 35)) }));
     const first = ticket.indexOf('    NO ONION');
     expect(first).toBeGreaterThan(0);
     expect(ticket.slice(first, first + 5)).toEqual([

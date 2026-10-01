@@ -13,6 +13,7 @@ import {
   readLine,
   shortFirst,
   usualPicks,
+  whenText,
   withItemLine,
   withRecent,
 } from './recipeCalcView';
@@ -246,5 +247,22 @@ describe('the rows', () => {
     expect(shortFirst([{ shortBy: 0, n: 1 }, { shortBy: 5, n: 2 }, { shortBy: 0, n: 3 }]).map((r) => r.n)).toEqual([2, 1, 3]);
     const r = withRecent([{ kind: 'item', id: 'a', name: 'A' }, { kind: 'batch', id: 'b', name: 'B' }], { kind: 'batch', id: 'b', name: 'B' });
     expect(r.map((x) => x.id)).toEqual(['b', 'a']);
+  });
+});
+
+describe('the prep list’s time (Copy as text), as the printed one says it', () => {
+  it('Pakistan time, whatever zone the PC is set to', () => {
+    const was = process.env.TZ;
+    try {
+      for (const zone of ['UTC', 'America/New_York', 'Asia/Karachi']) {
+        process.env.TZ = zone;
+        // 09:05 UTC is 14:05 in Pakistan; 19:30 UTC is already the next day there.
+        expect(whenText(new Date('2026-09-27T09:05:00.000Z')), zone).toBe('27 Sep 2026, 14:05');
+        expect(whenText(new Date('2026-09-30T19:30:00.000Z')), zone).toBe('1 Oct 2026, 00:30');
+      }
+    } finally {
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
   });
 });
