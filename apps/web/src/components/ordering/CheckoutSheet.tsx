@@ -1,6 +1,7 @@
 'use client';
 
 import { useId, useRef, useState } from 'react';
+import { NOT_ON_VALUE_DEALS } from '@cheeseoclock/shared-types';
 import { BUSINESS } from '@/lib/business';
 import { whatsappOrderText } from '@/lib/cart';
 import {
@@ -202,7 +203,7 @@ export function CheckoutSheet(
             {!props.acceptingOrders
               ? 'Online ordering is closed right now'
               : pickup
-                ? `Pick-up · ${props.pickupPct}% off · pay at the counter`
+                ? `Pick-up · ${props.pickupPct}% off${props.dealInCart ? `, ${NOT_ON_VALUE_DEALS}` : ''} · pay at the counter`
                 : 'Cash on delivery · pay the rider'}
           </p>
         </div>

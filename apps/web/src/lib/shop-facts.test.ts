@@ -384,7 +384,9 @@ describe('the shop’s details are never typed by hand in the website’s source
   it('no tax rate: the food’s one rate from the published menu ({tax} / {Tax}; lib/tax-words DEFAULT_TAX_BPS is the one fallback)', () => {
     expect(offending(typesATaxRate, []), 'a tax rate typed by hand').toEqual([]);
     for (const t of ['15% tax', 'plus 15 % tax', '16.5% sales tax', '17% GST']) expect(typesATaxRate(t), t).toBe(true);
-    for (const fine of ['{tax} on the bill', '10% off when you order online', 'Tax (est.)']) expect(typesATaxRate(fine), fine).toBe(false);
+    for (const fine of ['{tax} on the bill', '10% off when you order online', '10% off online pick-up · not on value deals', 'Tax (est.)']) {
+      expect(typesATaxRate(fine), fine).toBe(false);
+    }
   });
 
   it('catches them however they are written', () => {

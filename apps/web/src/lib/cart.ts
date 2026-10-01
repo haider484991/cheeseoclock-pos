@@ -3,7 +3,8 @@ import type { PublicMenu } from './public-menu';
 import { DEFAULT_SHOP_PROFILE, isLeaveOutChoice } from '@cheeseoclock/shared-types';
 import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
 import { formatCents } from './format';
-import { optionLabel, sizeLabel, splitSizedName } from './menu-view';
+import { isNoDiscount, optionLabel, sizeLabel, splitSizedName } from './menu-view';
+import type { PricedLine } from './pricing';
 import { validateModifierSelection } from './order-validation';
 
 /**
@@ -107,6 +108,19 @@ export function cartCount(cart: readonly CartLine[]): number {
 
 export function cartSubtotalCents(cart: readonly CartLine[]): number {
   return cart.reduce((s, l) => s + lineUnitPriceCents(l) * l.quantity, 0);
+}
+
+/**
+ * The cart's lines as lib/pricing prices them, as the order route does on
+ * the server: a value deal (its item marked noDiscount, v0.7.34) takes no
+ * share of the pick-up %.
+ */
+export function cartPricedLines(cart: readonly CartLine[]): PricedLine[] {
+  return cart.map((l) => ({
+    lineTotalCents: lineUnitPriceCents(l) * l.quantity,
+    taxRateBps: l.item.taxRateBps,
+    ...(isNoDiscount(l.item) ? { noDiscount: true } : {}),
+  }));
 }
 
 /**

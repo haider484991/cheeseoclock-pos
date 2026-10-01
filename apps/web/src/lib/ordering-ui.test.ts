@@ -25,8 +25,10 @@ const { MinimumNote } = await import('@/components/ordering/cart-ui');
 const { DEFAULT_FACTS, copyText } = await import('@/lib/delivery-facts');
 const { DEFAULT_SHOP_FACTS } = await import('@/lib/shop-facts');
 const { HOME_HERO_HOURS } = await import('@/lib/page-copy');
-const { buildMenuView, sizeOrderable } = await import('@/lib/menu-view');
+const { buildMenuView, cartDeals, sizeOrderable } = await import('@/lib/menu-view');
 const { publicMenu } = await import('@/lib/public-menu');
+const { cartLineKey, cartPricedLines } = await import('@/lib/cart');
+const { priceOrder } = await import('@/lib/pricing');
 
 type AppProps = Parameters<typeof OrderingApp>[0];
 type CartProps = Parameters<typeof MinimumNote>[0];
@@ -60,6 +62,16 @@ const MENU = publicMenu({
       ],
     },
     { posCategoryId: 'c-side', name: 'Test Sides', displayOrder: 1, items: [item('side', 'Test Fries', 300)] },
+  ],
+  publishedAt: '2026-09-27T09:00:00.000Z',
+  store: STORE,
+});
+
+/** The same menu with a value deal a v0.7.34 till marks (no discount comes off it). */
+const DEALS_MENU = publicMenu({
+  categories: [
+    ...MENU.categories,
+    { posCategoryId: 'c-deals', name: 'Test Deals', displayOrder: 2, items: [item('deal', 'Test Deal', 3600, { noDiscount: true })] },
   ],
   publishedAt: '2026-09-27T09:00:00.000Z',
   store: STORE,
@@ -113,6 +125,16 @@ describe('/menu as served', () => {
     expect(chip(app({ shop: everyDay }))).toBe('11 am – 11 pm');
   });
 
+  it('the pick-up chip says value deals are left out only while the menu marks one (v0.7.34); with pick-up off, no chip as before', () => {
+    const chip = (html: string) => /<li class="rounded-full bg-cheese px-3\.5 py-1\.5 text-ink shadow-glow">([^<]*)<\/li>/.exec(html)?.[1];
+    expect(chip(app({ acceptingOrders: true, pickupAvailable: true }))).toBe('10% off when you order online &amp; pick up');
+    expect(chip(app({ acceptingOrders: true, pickupAvailable: true, menu: DEALS_MENU }))).toBe('10% off online pick-up · not on value deals');
+    expect(chip(app({ acceptingOrders: true, pickupAvailable: true, menu: DEALS_MENU, pickupDiscountPercent: 15 }))).toBe(
+      '15% off online pick-up · not on value deals',
+    );
+    expect(chip(app({ acceptingOrders: true, pickupAvailable: false, menu: DEALS_MENU }))).toBeUndefined();
+  });
+
   it('one size pick-up only, pick-up off: the Large is a dashed "Pick-up only" chip, the Medium stays a button', () => {
     const html = app({ acceptingOrders: true, pickupAvailable: false });
     const card = html.slice(html.indexOf('Test Pizza'), html.indexOf('Test Fries'));
@@ -151,6 +173,54 @@ describe('the cart’s smallest-delivery-order note', () => {
     expect(note({})).toContain('Rs 700');
     expect(note({ fulfilment: 'pickup' })).toBe('');
     expect(note({ minDeliveryOrderCents: 0 })).toBe('');
+  });
+});
+
+describe('the cart’s totals: a value deal takes no share of the pick-up % (v0.7.34), as on the server', () => {
+  const line = (i: PublishedMenuItem, quantity = 1, modifierIds: string[] = []) => ({
+    key: cartLineKey(i.posItemId, modifierIds, null),
+    item: i,
+    label: i.name,
+    quantity,
+    modifierIds,
+    notes: null,
+  });
+  const bigTwo = item('big-two', 'Test Big Two', 3600, { noDiscount: true });
+  const veggie = item('veggie-l', 'Test Veggie — Large', 2000);
+  const nuggets = item('nuggets', 'Test Nuggets', 670);
+
+  it('the priced lines carry the flag on a value deal’s line only (no key on any other, so they price as before)', () => {
+    const priced = cartPricedLines([line(bigTwo), line(veggie, 2), line(nuggets)]);
+    expect(priced).toEqual([
+      { lineTotalCents: 360_000, taxRateBps: 1500, noDiscount: true },
+      { lineTotalCents: 400_000, taxRateBps: 1500 },
+      { lineTotalCents: 67_000, taxRateBps: 1500 },
+    ]);
+    expect(priced.slice(1).some((p) => 'noDiscount' in p)).toBe(false);
+  });
+
+  it('the worked example at 15% tax, 10% off: Big Two 360,000 (a deal) + 200,000 + 67,000 → discount 26,700, tax 90,045, total 690,345', () => {
+    const cart = [line(bigTwo), line(veggie), line(nuggets)];
+    expect(priceOrder(cartPricedLines(cart), 10)).toEqual({ subtotalCents: 627_000, discountCents: 26_700, taxCents: 90_045, totalCents: 690_345 });
+    expect(cartDeals(cart)).toEqual({ dealInCart: true, onlyDeals: false });
+    // Deals only: nothing off, every line taxed in full.
+    expect(priceOrder(cartPricedLines([line(bigTwo)]), 10)).toEqual({ subtotalCents: 360_000, discountCents: 0, taxCents: 54_000, totalCents: 414_000 });
+    expect(cartDeals([line(bigTwo)])).toEqual({ dealInCart: true, onlyDeals: true });
+    // Nothing marked: 10% of every line, as before; an empty cart is neither.
+    const unmarked = [line(item('big-two', 'Test Big Two', 3600)), line(veggie), line(nuggets)];
+    expect(priceOrder(cartPricedLines(unmarked), 10).discountCents).toBe(62_700);
+    expect(cartDeals(unmarked)).toEqual({ dealInCart: false, onlyDeals: false });
+    expect(cartDeals([])).toEqual({ dealInCart: false, onlyDeals: false });
+  });
+
+  it('the page prices its cart with them and hands the deal words their flags (read from the source)', () => {
+    const src = readFileSync(fileURLToPath(new URL('../components/OrderingApp.tsx', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).toContain('const priced: PricedLine[] = cartPricedLines(cart);');
+    expect(src).toContain('const totals = priceOrder(priced, pickup ? pickupPct : 0);');
+    expect(src).toContain('const notOnDeals = useMemo(() => menuHasNoDiscountItems(menu), [menu]);');
+    expect(src).toContain('const { dealInCart, onlyDeals } = cartDeals(cart);');
+    expect(src).toMatch(/minDeliveryOrderCents: deliveryFacts\.minDeliveryOrderCents,\n\s+notOnDeals,\n\s+dealInCart,\n\s+onlyDeals,\n\s+\};/);
+    expect(src).toMatch(/<MenuHeader\n\s+canPickup=\{canPickup\}\n\s+pickupPct=\{pickupPct\}\n\s+notOnDeals=\{notOnDeals\}/);
   });
 });
 

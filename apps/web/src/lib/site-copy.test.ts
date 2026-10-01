@@ -120,6 +120,17 @@ describe('with no settings block the site reads exactly as v0.7.26', () => {
     });
     expect(noZone?.message).toBe(golden.pages.checkoutNoZone);
     expect(checkoutAreaHint(DEFAULT_FACTS, { canPickup: false, pickupPct: 10 })).toBe(golden.pages.checkoutHint);
+    // Pick-up on: its offer, and (v0.7.34) while the menu marks value deals, that they are left out of it.
+    expect(checkoutAreaHint(DEFAULT_FACTS, { canPickup: true, pickupPct: 10 })).toBe(
+      `${golden.pages.checkoutHint} Elsewhere? Choose pick-up — 10% off.`,
+    );
+    expect(checkoutAreaHint(DEFAULT_FACTS, { canPickup: true, pickupPct: 10, notOnDeals: false })).toBe(
+      `${golden.pages.checkoutHint} Elsewhere? Choose pick-up — 10% off.`,
+    );
+    expect(checkoutAreaHint(DEFAULT_FACTS, { canPickup: true, pickupPct: 10, notOnDeals: true })).toBe(
+      'We deliver in DHA and Clifton only. Elsewhere? Choose pick-up — 10% off, not on value deals.',
+    );
+    expect(checkoutAreaHint(DEFAULT_FACTS, { canPickup: false, pickupPct: 10, notOnDeals: true })).toBe(golden.pages.checkoutHint);
     expect(deliveryChip(DEFAULT_FACTS)).toBe(golden.pages.menuHeaderChip);
     expect(deliveryOptionNote(DEFAULT_FACTS)).toBe(golden.pages.fulfilmentDeliveryNote);
     const options = zoneOptionGroups(DEFAULT_FACTS.zones).flatMap((g) =>

@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { deliveryMinimumShortfallCents, type WebFulfilment } from '@cheeseoclock/shared-types';
+import { NOT_ON_VALUE_DEALS, deliveryMinimumShortfallCents, type WebFulfilment } from '@cheeseoclock/shared-types';
 import { lineChoices, lineUnitPriceCents, type CartLine } from '@/lib/cart';
 import { deliveryMinimumNote, type FactZone } from '@/lib/delivery-facts';
 import { formatCents } from '@/lib/format';
-import { isPickupOnly } from '@/lib/menu-view';
+import { NOT_ON_VALUE_DEALS_ALONE, isPickupOnly } from '@/lib/menu-view';
 
 export interface CartProps {
   cart: CartLine[];
@@ -32,6 +32,14 @@ export interface CartProps {
   deliveryNote: string;
   /** The owner's smallest website delivery order's food, paisa (v0.7.30); 0 = none, as before. */
   minDeliveryOrderCents: number;
+  /**
+   * Value deals take no pick-up discount (v0.7.34, lib/menu-view): the menu
+   * marks one (`notOnDeals`), the cart holds one (`dealInCart`), or holds
+   * nothing else (`onlyDeals`). Absent = false: the words as before.
+   */
+  notOnDeals?: boolean;
+  dealInCart?: boolean;
+  onlyDeals?: boolean;
 }
 
 /**
@@ -258,8 +266,14 @@ export function Totals(props: CartProps) {
       </div>
       {pickup ? (
         <div className="flex justify-between font-semibold text-emerald-700">
-          <dt>Pick-up {props.pickupPct}% off</dt>
-          <dd className="tabular-nums">−{formatCents(props.discount)}</dd>
+          <dt>
+            Pick-up {props.pickupPct}% off
+            {props.dealInCart && !props.onlyDeals ? ` (${NOT_ON_VALUE_DEALS})` : ''}
+          </dt>
+          {/* Value deals only: nothing comes off, and the row says why instead of a zero amount. */}
+          <dd className="tabular-nums">
+            {props.onlyDeals ? NOT_ON_VALUE_DEALS_ALONE : <>−{formatCents(props.discount)}</>}
+          </dd>
         </div>
       ) : (
         <div className="flex justify-between text-ink-muted">

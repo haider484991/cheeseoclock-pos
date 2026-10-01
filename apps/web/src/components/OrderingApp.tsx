@@ -19,10 +19,12 @@ import { taxBpsOf } from '@/lib/tax-words';
 import { priceOrder, type PricedLine } from '@/lib/pricing';
 import {
   buildMenuView,
+  cartDeals,
   dealWorthCents,
   isDealSection,
   isPickupOnly,
   cardSizeLabel,
+  menuHasNoDiscountItems,
   pickupOnlyNote,
   sizeOrderable,
   type MenuCard,
@@ -31,8 +33,8 @@ import {
 import {
   addLine,
   cartCount as countLines,
+  cartPricedLines,
   cartSubtotalCents,
-  lineUnitPriceCents,
   linesSummary,
   restoreLines,
   setLineQty,
@@ -55,7 +57,7 @@ import {
 } from '@/lib/device-memory';
 import { menuImageSrcSet } from '@/lib/images';
 import { trackPath } from '@/lib/order-display';
-import type { PublishedMenuItem, WebFulfilment } from '@cheeseoclock/shared-types';
+import { NOT_ON_VALUE_DEALS, type PublishedMenuItem, type WebFulfilment } from '@cheeseoclock/shared-types';
 import type { PublicMenu } from '@/lib/public-menu';
 import { CartPanel, type CartProps } from './ordering/cart-ui';
 import { CheckoutSheet, type PlacedOrder } from './ordering/CheckoutSheet';
@@ -281,12 +283,9 @@ export function OrderingApp({
 
   // Same maths as the server and the till (lib/pricing). The delivery fee is
   // a real till item — the same one the server adds (zoneFeeItemFor) — taxed
-  // like one; pickup takes its discount off the lot.
+  // like one; pickup takes its discount off every line but value deals.
   const subtotal = cartSubtotalCents(cart);
-  const priced: PricedLine[] = cart.map((l) => ({
-    lineTotalCents: lineUnitPriceCents(l) * l.quantity,
-    taxRateBps: l.item.taxRateBps,
-  }));
+  const priced: PricedLine[] = cartPricedLines(cart);
   const feeItem = zone ? zoneFeeItemFor(menu, zone) : undefined;
   const deliveryFee = zone && cart.length > 0 ? zone.feeCents : 0;
   if (deliveryFee > 0) priced.push({ lineTotalCents: deliveryFee, taxRateBps: feeItem?.taxRateBps ?? 0 });
@@ -294,6 +293,9 @@ export function OrderingApp({
   const { discountCents: discount, taxCents: tax, totalCents: total } = totals;
   const cartCount = countLines(cart);
   const pickupOnlyInCart = cart.filter((l) => isPickupOnly(l.item)).map((l) => l.label);
+  // Value deals take no pick-up discount (v0.7.34): the words say so only while the menu marks one.
+  const notOnDeals = useMemo(() => menuHasNoDiscountItems(menu), [menu]);
+  const { dealInCart, onlyDeals } = cartDeals(cart);
 
   const qtyByItem = useMemo(() => {
     const m = new Map<string, number>();
@@ -386,6 +388,9 @@ export function OrderingApp({
     feeRange,
     deliveryNote: deliveryOptionNote(deliveryFacts),
     minDeliveryOrderCents: deliveryFacts.minDeliveryOrderCents,
+    notOnDeals,
+    dealInCart,
+    onlyDeals,
   };
 
   return (
@@ -394,6 +399,7 @@ export function OrderingApp({
       <MenuHeader
         canPickup={canPickup}
         pickupPct={pickupPct}
+        notOnDeals={notOnDeals}
         deliveryChip={deliveryChip(deliveryFacts)}
         hoursChip={copyText(MENU_HEADER_HOURS, { ...deliveryFacts, shop })}
         announcement={deliveryFacts.announcement}
@@ -550,6 +556,7 @@ function sectionNote(sectionName: string): string | null {
 function MenuHeader({
   canPickup,
   pickupPct,
+  notOnDeals,
   deliveryChip,
   hoursChip,
   announcement,
@@ -557,6 +564,8 @@ function MenuHeader({
 }: {
   canPickup: boolean;
   pickupPct: number;
+  /** The menu marks value deals (lib/menu-view menuHasNoDiscountItems): the pick-up chip says they are left out. */
+  notOnDeals: boolean;
   deliveryChip: string;
   /** The hours chip (page-copy MENU_HEADER_HOURS): with the days unless the shop opens every day. */
   hoursChip: string;
@@ -584,7 +593,12 @@ function MenuHeader({
         <ul className="mt-5 flex flex-wrap gap-2 font-cond text-sm font-bold uppercase tracking-wide">
           {canPickup && (
             <li className="rounded-full bg-cheese px-3.5 py-1.5 text-ink shadow-glow">
-              {pickupPct}% off when you order online &amp; pick up
+              {/* With value deals marked: shorter words, so the chip stays one line on a 375 px phone. */}
+              {notOnDeals ? (
+                `${pickupPct}% off online pick-up · ${NOT_ON_VALUE_DEALS}`
+              ) : (
+                <>{pickupPct}% off when you order online &amp; pick up</>
+              )}
             </li>
           )}
           <li className={`rounded-full px-3.5 py-1.5 ${canPickup ? 'border border-cream/20' : 'bg-cheese text-ink'}`}>

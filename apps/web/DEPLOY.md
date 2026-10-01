@@ -63,8 +63,8 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
 1. On your phone, go to cheeseoclock.net → order a pizza → COD checkout
 2. Within ~20s the POS shows a toast "🌐 New online order!" and the order
    appears in Live Orders → New column (with a kitchen ticket printed)
-3. Walk it through the board: Start preparing → Ready → Assign rider →
-   Delivered + collect cash
+3. Walk it through the board: Start preparing → Mark ready → Send out
+   (Assign rider on a till older than v0.7.34) → Delivered + Pay
 4. Watch the tracking page on your phone update at every step
 5. Done — you're taking online orders
 
@@ -489,6 +489,62 @@ Save this — you'll paste it in **two** places (Vercel env + POS Settings).
   - After restoring a backup on a till whose link to the other till is on,
     the two tills' menus can differ (as with any restore today): "Send
     everything" from the other till puts them level again.
+
+## No discount on value deals (from v0.7.34)
+
+- **What is new.** The owner's rule (2026-10-02): value deals never get a
+  discount — not the website's pick-up %, not a discount given at the till,
+  not an automatic offer. On the till the owner marks a category in Menu →
+  Categories → Discounts (owner only); a category named for deals or combos,
+  like Value Deals, is marked by its name until the owner sets it, so the
+  shop has nothing to do. A v0.7.34 till publishes each marked item with
+  `noDiscount: true` (shared-types `web-bridge.ts`, NO DISCOUNT ON VALUE
+  DEALS). The website then works a pick-up's % on the other lines only (a
+  deal is taxed on its full price), puts the mark on the deal's line of the
+  stored order (pick-up and delivery alike, never on the delivery charge)
+  and says "not on value deals": in the /menu chip ("10% off online pick-up
+  · not on value deals") and the checkout's area hint while the menu has a
+  marked item; in the checkout header and the pick-up totals row while the
+  cart has a deal (a cart of deals only shows "Not on value deals" where
+  the amount off would be, never "−Rs 0"); and on the tracking page of an
+  order with a deal, whose % is read on the lines it was worked on (10%,
+  never 4%). No website schema change, no Vercel setting.
+- **Deploy the website first** (a push to `main` deploys it). Nothing changes
+  until a 0.7.34 till publishes: tills up to v0.7.33 send no marks, so every
+  page, price and stored order is exactly as before
+  (`lib/pages-golden.test.ts` passes untouched; `lib/deals-not-discounted.test.ts`
+  pins the one chip that changes once marks arrive). Check it on a Vercel
+  **preview** first, with its own Neon branch and its own `BRIDGE_SECRET`
+  (see above): `PUT /api/bridge/menu` answers `noDiscountItems: true`.
+- **Update BOTH tills the same day.** Change nothing under Menu →
+  Categories (no Discounts change, no rename) until both show 0.7.34
+  (Settings → About → App version). A change made on an updated till
+  reaches a v0.7.33 till without the column, and once that till updates,
+  its next edit of the category sends the old answer back to the first
+  till — the same loss as with "On the website" in v0.7.30 (above).
+- **Then press "Publish menu to website" once**, on the till that holds the
+  website link, after both tills show 0.7.34. Nothing publishes by itself at
+  the install. The deals then carry the mark: the /menu chip reads "10% off
+  online pick-up · not on value deals", and Settings → Online orders shows
+  no "website is older" note. From that publish on, a pick-up of a deal and
+  a pizza takes the % off the pizza only, on the website and the till alike.
+  Check it with one such test pick-up (delete it afterwards): the till's
+  total equals the website's, and no "total changed" alert.
+- **If the website is older than the tills** (its deploy failed or was
+  rolled back): it drops the mark while saying it stored the menu, so it
+  keeps taking the % off deals — and the till follows what the website
+  charged, so the two totals still agree. The till notices (the answer has
+  no `noDiscountItems: true`) and says "The website is older than this till:
+  it still takes the pick-up discount off value deals. It needs its update —
+  then press “Publish menu to website” once." Fix the website, then publish
+  once.
+- **If a till is rolled back below 0.7.34**, press "Publish menu to website"
+  on it once: its publish sends the menu with no marks, and the website
+  goes back to taking the % off every line. Until then that till reads a
+  pick-up of a deal and a pizza as the wrong % ("Online order #N: the
+  total changed").
+- From v0.7.34 a delivery bill prints FOOD TOTAL (with tax) / Delivery
+  charge / CUSTOMER PAYS; the website's totals and tracker do not change.
 
 ## Free-tier limits (plenty for launch)
 

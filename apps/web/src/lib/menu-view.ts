@@ -3,7 +3,7 @@ import type {
   PublishedMenuItem,
   PublishedModifierGroup,
 } from '@cheeseoclock/shared-types';
-import { groupDisplayName, orderChoiceGroups } from '@cheeseoclock/shared-types';
+import { NOT_ON_VALUE_DEALS, groupDisplayName, orderChoiceGroups } from '@cheeseoclock/shared-types';
 import { feeItemIdsOf, isDeliveryChargeItem } from './delivery-zones';
 import type { PublicMenu } from './public-menu';
 
@@ -303,6 +303,44 @@ export function pickupOnlyNote(card: Pick<MenuCard, 'name' | 'variants' | 'picku
   if (sizes.length === 0) return null;
   return `${sizes.join(', ')} pick-up only`;
 }
+
+/**
+ * No discount comes off the item: the till publishes it `noDiscount: true`
+ * (a value deal, v0.7.34 — shared-types web-bridge.ts, NO DISCOUNT ON VALUE
+ * DEALS). The pick-up % leaves its line out, in the cart as on the server.
+ */
+export function isNoDiscount(item: Pick<PublishedMenuItem, 'noDiscount'>): boolean {
+  return item.noDiscount === true;
+}
+
+/**
+ * The menu has an item no discount comes off (a delivery charge never
+ * counts): the /menu chip and the checkout's area hint then say
+ * NOT_ON_VALUE_DEALS. A menu with none — every publish before a v0.7.34
+ * till's — reads exactly as before.
+ */
+export function menuHasNoDiscountItems(menu: Pick<PublicMenu, 'categories' | 'settings'>): boolean {
+  const feeItemIds = feeItemIdsOf(menu);
+  return menu.categories.some((c) => c.items.some((i) => isNoDiscount(i) && !isDeliveryChargeItem(i, feeItemIds)));
+}
+
+/**
+ * The cart's value deals: `dealInCart` when a line is one, `onlyDeals` when
+ * every line is (an empty cart is neither). The pick-up words in the totals
+ * and the checkout follow them; with neither, they read as before.
+ */
+export function cartDeals(cart: ReadonlyArray<{ item: Pick<PublishedMenuItem, 'noDiscount'> }>): {
+  dealInCart: boolean;
+  onlyDeals: boolean;
+} {
+  return {
+    dealInCart: cart.some((l) => isNoDiscount(l.item)),
+    onlyDeals: cart.length > 0 && cart.every((l) => isNoDiscount(l.item)),
+  };
+}
+
+/** NOT_ON_VALUE_DEALS where it stands alone, in place of the amount off (a pick-up of value deals only). */
+export const NOT_ON_VALUE_DEALS_ALONE = `${NOT_ON_VALUE_DEALS.charAt(0).toUpperCase()}${NOT_ON_VALUE_DEALS.slice(1)}`;
 
 /**
  * Real photos of the shop's own food (public/images/menu), keyed by the base

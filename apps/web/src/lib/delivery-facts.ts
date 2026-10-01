@@ -1,6 +1,7 @@
 import {
   DELIVERY_ZONES,
   FEE_SUMMARY,
+  NOT_ON_VALUE_DEALS,
   announcementInForce,
   canonicalPayments,
   cashOnly,
@@ -258,11 +259,19 @@ export function zoneOptionGroups(zones: readonly FactZone[]): Array<{ group: str
   return groups;
 }
 
-/** The hint under the area list before one is chosen. */
-export function checkoutAreaHint(facts: SiteFacts, pickup: { canPickup: boolean; pickupPct: number }): string {
+/**
+ * The hint under the area list before one is chosen. `notOnDeals`: the menu
+ * marks value deals, which take no pick-up discount (v0.7.34), and the
+ * offer says so.
+ */
+export function checkoutAreaHint(
+  facts: SiteFacts,
+  pickup: { canPickup: boolean; pickupPct: number; notOnDeals?: boolean },
+): string {
   const where = deliveryAreasText(facts);
   const first = where ? `We deliver in ${where} only.` : 'Delivery is paused right now.';
-  return `${first}${pickup.canPickup ? ` Elsewhere? Choose pick-up — ${pickup.pickupPct}% off.` : ''}`;
+  const off = `${pickup.pickupPct}% off${pickup.notOnDeals ? `, ${NOT_ON_VALUE_DEALS}` : ''}`;
+  return `${first}${pickup.canPickup ? ` Elsewhere? Choose pick-up — ${off}.` : ''}`;
 }
 
 /**

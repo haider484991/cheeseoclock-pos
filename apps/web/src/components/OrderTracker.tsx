@@ -7,7 +7,7 @@ import { formatCents } from '@/lib/format';
 import { BUSINESS } from '@/lib/business';
 import { DEFAULT_SHOP_FACTS, orderLine, shopTelUrl, whatsappHello, whatsappUrlWith, type ShopFacts } from '@/lib/shop-facts';
 import { STORAGE_KEYS, parseLastOrder, readStored, serializeReorder, writeStored } from '@/lib/device-memory';
-import { orderItemChoices, orderMoney, savedLinesFromOrderItems, shortOrderNumber } from '@/lib/order-display';
+import { orderItemChoices, orderMoney, pickupDiscountWords, savedLinesFromOrderItems, shortOrderNumber } from '@/lib/order-display';
 import { type WebFulfilment, type WebOrderItem, type WebOrderStatus } from '@cheeseoclock/shared-types';
 
 interface TrackedOrder {
@@ -179,8 +179,9 @@ export function OrderTracker({ orderId, shop = DEFAULT_SHOP_FACTS }: { orderId: 
   const STEPS = pickup ? PICKUP_STEPS : DELIVERY_STEPS;
   const idx = STEPS.findIndex((s) => s.key === order.status);
   const discount = order.discountCents ?? 0;
-  // The percent this order got (the till's offer when it was placed).
-  const pct = order.subtotalCents > 0 ? Math.round((discount * 100) / order.subtotalCents) : 0;
+  // The percent this order got (the till's offer when it was placed), on the lines it was worked on:
+  // a value deal took none of it (v0.7.34), and the totals row then says so.
+  const { pct, row: discountRow } = pickupDiscountWords(order);
   const { food, itemsCents, deliveryCents } = orderMoney(order);
   const number = shortOrderNumber(order.posOrderNumber);
   const celebrate = justPlaced && !cancelled;
@@ -357,7 +358,7 @@ export function OrderTracker({ orderId, shop = DEFAULT_SHOP_FACTS }: { orderId: 
             )}
             {discount > 0 && (
               <div className="flex justify-between text-emerald-300">
-                <dt>Pick-up {pct}% off</dt>
+                <dt>{discountRow}</dt>
                 <dd className="font-mono tabular-nums">−{formatCents(discount)}</dd>
               </div>
             )}
