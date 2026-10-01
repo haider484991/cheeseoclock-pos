@@ -902,6 +902,20 @@ export interface WebOrdersShiftPause {
   message: string;
 }
 
+/**
+ * The pause as the PIN screen and the shift controls see it (inside
+ * alerts:getWatch): two yes/no answers and a time, nothing about customers,
+ * orders, money or the connection.
+ */
+export interface WebOrdersPauseView {
+  /** The owner's "Accept online orders" switch is on AND this till paused website orders because no shift is open. */
+  paused: boolean;
+  /** When the pause began (ISO 8601 UTC); only while paused. */
+  since?: string;
+  /** The website address and connection password are set (and readable) on this till. */
+  websiteLinkSet: boolean;
+}
+
 /** Body for PUT /api/bridge/status (the till's heartbeat). */
 export interface BridgeHeartbeatBody {
   acceptingOrders: boolean;

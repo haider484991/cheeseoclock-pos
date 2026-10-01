@@ -8,6 +8,9 @@
  * missing or broken falls back to its default, field by field, and nothing
  * here ever throws.
  */
+import type { OrderSource } from './order.js';
+import { DEFAULT_KITCHEN_TIMING } from './shop-settings.js';
+import type { WebOrdersPauseView } from './web-bridge.js';
 
 /** The moments the till can make a sound for. */
 export type AlertSoundEvent =
@@ -153,6 +156,55 @@ export interface PendingAlerts {
   orders: OnlineOrderAlert[];
   failures: ImportFailureAlert[];
 }
+
+// ---------------------------------------------------------------------------
+// The watch (alerts:getWatch): what every screen may show between logins
+//
+// Read with no login, so it carries order ids, order numbers, statuses,
+// minutes and times only: never a customer's name, phone or address, a
+// website address or a password. The PIN screen polls it, and the main
+// process sends 'alerts:watch-changed' (no payload) when part of it changes.
+
+/** Orders older than this (minutes) are left out of the watch. */
+export const ALERT_WATCH_MAX_AGE_MIN = 180;
+
+/** An order the kitchen has not finished, as the PIN screen may see it. */
+export interface WatchOrder {
+  orderId: string;
+  orderNumber: string;
+  status: 'sent_to_kitchen' | 'preparing' | 'ready';
+  source: OrderSource;
+  /** Whole minutes since the order came in. */
+  minutes: number;
+}
+
+export interface AlertWatch {
+  /** Website orders paused on this till because no shift is open. */
+  webOrders: WebOrdersPauseView;
+  /** Orders still in the kitchen, oldest first. */
+  orders: WatchOrder[];
+  /** The owner's "waiting too long" minutes ('kitchen.timing': Settings → Staff & kitchen timing). */
+  timing: { notStartedMin: number; notDoneMin: number };
+  /** Kitchen tickets this till gave up printing. */
+  ticketsNotPrinted: Array<{ orderId: string; orderNumber: string; failedAt: string }>;
+  /** Website orders the website has not confirmed taking from this till. */
+  unconfirmed: Array<{ orderId: string; orderNumber: string; minutes: number; cancelsAt: string | null }>;
+}
+
+/**
+ * Nothing to show: the answer for any part that could not be read. Frozen
+ * all the way down, so a screen cannot change what the next answer starts from.
+ */
+export const EMPTY_ALERT_WATCH: Readonly<AlertWatch> = Object.freeze({
+  webOrders: Object.freeze({ paused: false, websiteLinkSet: false }),
+  orders: Object.freeze([]) as unknown as WatchOrder[],
+  timing: Object.freeze({
+    notStartedMin: DEFAULT_KITCHEN_TIMING.notStartedMin,
+    notDoneMin: DEFAULT_KITCHEN_TIMING.notDoneMin,
+  }),
+  ticketsNotPrinted: Object.freeze([]) as unknown as AlertWatch['ticketsNotPrinted'],
+  unconfirmed: Object.freeze([]) as unknown as AlertWatch['unconfirmed'],
+});
 
 export interface AcknowledgeAlertsRequest {
   /** New online orders someone has seen. */

@@ -229,6 +229,8 @@ export const ipc = {
     setSounds: (input: IpcRequest<'alerts:setSounds'>) => unwrap(window.api.alerts.setSounds(input)),
     getPending: () => unwrap(window.api.alerts.getPending()),
     acknowledge: (input: IpcRequest<'alerts:acknowledge'>) => unwrap(window.api.alerts.acknowledge(input)),
+    /** What the PIN screen shows between logins (no login needed; numbers, statuses and minutes only). */
+    getWatch: () => unwrap(window.api.alerts.getWatch()),
     testNotice: () => unwrap(window.api.alerts.testNotice()),
   },
   customers: {
@@ -623,4 +625,12 @@ export function onAlertOpen(cb: (payload: AlertOpenPayload) => void): () => void
     alertEvents?: { onOpen: (cb: (p: AlertOpenPayload) => void) => () => void };
   };
   return w.alertEvents?.onOpen(cb) ?? (() => {});
+}
+
+/** Listen for alerts:watch-changed (part of the PIN screen's watch changed: read alerts:getWatch again). */
+export function onAlertWatchChanged(cb: () => void): () => void {
+  const w = window as unknown as {
+    alertEvents?: { onWatchChanged?: (cb: () => void) => () => void };
+  };
+  return w.alertEvents?.onWatchChanged?.(cb) ?? (() => {});
 }

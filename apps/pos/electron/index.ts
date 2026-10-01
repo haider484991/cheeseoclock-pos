@@ -15,6 +15,7 @@ import { getCurrentSession } from './services/auth-service.js';
 import { fbrWorker } from './services/fbr-worker.js';
 import { syncWorker } from './services/sync-worker.js';
 import { webOrdersBridge } from './services/web-orders-bridge.js';
+import { healShiftPause } from './services/web-orders-shift-pause.js';
 import { initErrorReporter } from './services/error-reporter.js';
 import { initAutoUpdater } from './services/auto-updater.js';
 import {
@@ -194,6 +195,9 @@ async function bootstrap() {
   printSpooler.init(db, { deviceId: deviceInfo.deviceId, currentUserId: () => getCurrentSession()?.id ?? null });
   fbrWorker.init(db);
   syncWorker.init(db, deviceInfo.deviceId);
+  // A website-orders pause left behind while a shift is open is lifted before
+  // the bridge's first heartbeat (it only ever lifts; it never throws).
+  healShiftPause(db, deviceInfo.deviceId);
   webOrdersBridge.init(db, deviceInfo.deviceId);
   initBackupService(db);
   auditChainService.verifyInBackground(db);

@@ -10,6 +10,7 @@ import {
   setWebBridgeConfig,
 } from '../../services/web-bridge-config.js';
 import { webOrdersBridge } from '../../services/web-orders-bridge.js';
+import { broadcastAlertWatchChanged } from '../../services/alert-watch-events.js';
 
 function maskSecret(secret: string): string {
   if (secret.length <= 4) return '****';
@@ -79,6 +80,9 @@ export function registerWebBridgeHandlers(ctx: HandlerContext): void {
     }
     setWebBridgeConfig(ctx.db, parsed.data, s.id);
     webOrdersBridge.reschedule();
+    // "Accept online orders" or the link changed: the PIN screen and the top
+    // bar say whether website orders are paused at once.
+    broadcastAlertWatchChanged();
     return ok({ ok: true } as const);
   });
 

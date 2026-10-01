@@ -10,7 +10,12 @@
  *     does not keep this one open);
  *   - orders already placed are still pulled in while paused;
  *   - followShiftForWebOrders never throws: not a broken database, not a
- *     bridge that throws, not a website that cannot be reached.
+ *     bridge that throws, not a website that cannot be reached;
+ *   - the screens hear when the pause changes ('alerts:watch-changed'),
+ *     before the website does, and only then;
+ *   - what the PIN screen sees (webOrdersPauseView), whether a close would
+ *     pause (closeWouldPauseWebOrders), and the start-up heal that lifts a
+ *     pause left behind while a shift is open (healShiftPause).
  *
  * A real database built from every migration (node:sqlite behind
  * better-sqlite3's shape — see costing-shop.fixture.ts; skips where it is
@@ -24,10 +29,16 @@ import { DatabaseSync, openMigrated } from '../db/costing-shop.fixture.js';
 import { verifyAuditChain, type AuditChainRow } from '../db/audit-chain.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
+/** Every channel sent to the one (made-up) till window, oldest first. */
+const screen = vi.hoisted(() => ({ sent: [] as string[] }));
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {} } }));
 vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test', getPath: () => '' },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: {
+    getAllWindows: () => [
+      { isDestroyed: () => false, webContents: { send: (channel: string) => screen.sent.push(channel) } },
+    ],
+  },
   // No OS keychain in a test: secrets are stored as typed.
   safeStorage: { isEncryptionAvailable: () => false },
 }));
@@ -45,6 +56,9 @@ const CASHIER = { userId: 'u_ali', deviceId: DEV };
 const MANAGER = { userId: 'u_sara', deviceId: DEV };
 const SITE = 'https://shop.example.test';
 const PAUSE_KEY = 'webBridge.shiftPause';
+const WATCH_CHANGED = 'alerts:watch-changed';
+/** How many times the screens were told the watch changed (the bridge sends other things too). */
+const watchEvents = (): number => screen.sent.filter((c) => c === WATCH_CHANGED).length;
 
 type Db = ReturnType<typeof openMigrated>;
 type Row = Record<string, unknown>;
@@ -126,6 +140,7 @@ let shifts: typeof import('../db/repositories/shift-repo.js');
 beforeEach(async () => {
   if (!DatabaseSync) return;
   sent = [];
+  screen.sent = [];
   failStatusPushes = false;
   stubFetch();
   // A fresh bridge singleton for every test (it keeps timers and state).
@@ -388,6 +403,7 @@ live('followShiftForWebOrders never throws', () => {
     expect(() => pauseMod.followShiftForWebOrders(broken, DEV, 'closed', MANAGER.userId)).not.toThrow();
     expect(() => pauseMod.followShiftForWebOrders(broken, DEV, 'opened', CASHIER.userId)).not.toThrow();
     expect(refresh).not.toHaveBeenCalled();
+    expect(watchEvents()).toBe(0);
   });
 
   it('when the website cannot be reached: no throw, no unhandled rejection, and the next resume still goes out', async () => {
@@ -427,5 +443,234 @@ live('followShiftForWebOrders never throws', () => {
     expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toBeNull();
     await new Promise((r) => setTimeout(r, 50));
     expect(sent).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/** The config as getWebBridgeConfig loads it; linked = address and password set. */
+function loaded(opts: { enabled: boolean; linked: boolean; secretUnreadable?: boolean }) {
+  return {
+    enabled: opts.enabled,
+    ...(opts.linked ? { siteUrl: SITE, bridgeSecret: 'made-up-secret' } : {}),
+    pollIntervalMs: 20_000,
+    cloudBackupFrequency: 'off' as const,
+    secretUnreadable: opts.secretUnreadable ?? false,
+  };
+}
+
+describe('webOrdersPauseView: what the PIN screen sees (pure)', () => {
+  const pause = { reason: 'shift_closed' as const, since: '2026-10-01T18:42:00.000Z' };
+
+  it('paused, with its start time, only while the owner switch is on', async () => {
+    const m = await import('./web-bridge-config.js');
+    expect(m.webOrdersPauseView(loaded({ enabled: true, linked: true }), pause)).toStrictEqual({
+      paused: true,
+      since: pause.since,
+      websiteLinkSet: true,
+    });
+    // Switched off by hand: the website is shut for that, not for the shift — no `since` at all.
+    expect(m.webOrdersPauseView(loaded({ enabled: false, linked: true }), pause)).toStrictEqual({
+      paused: false,
+      websiteLinkSet: true,
+    });
+  });
+
+  it('says whether the website link is set, and nothing more about it', async () => {
+    const m = await import('./web-bridge-config.js');
+    expect(m.webOrdersPauseView(loaded({ enabled: true, linked: false }), pause)).toStrictEqual({
+      paused: true,
+      since: pause.since,
+      websiteLinkSet: false,
+    });
+    // A password saved on another PC (a restored copy) cannot be used here: no link.
+    const restored = { ...loaded({ enabled: true, linked: true, secretUnreadable: true }), bridgeSecret: undefined };
+    expect(m.webOrdersPauseView(restored, pause).websiteLinkSet).toBe(false);
+    expect(JSON.stringify(m.webOrdersPauseView(loaded({ enabled: true, linked: true }), pause))).not.toMatch(
+      /shop\.example\.test|made-up-secret/,
+    );
+  });
+
+  it('no pause: not paused', async () => {
+    const m = await import('./web-bridge-config.js');
+    expect(m.webOrdersPauseView(loaded({ enabled: true, linked: true }), null)).toStrictEqual({
+      paused: false,
+      websiteLinkSet: true,
+    });
+    expect(m.webOrdersPauseView(loaded({ enabled: false, linked: false }), null)).toStrictEqual({
+      paused: false,
+      websiteLinkSet: false,
+    });
+  });
+});
+
+live('the screens hear when website orders are paused or start again', () => {
+  it('closing the last shift tells them once; a repeat close does not; opening tells them again', async () => {
+    const db = await till({ enabled: true });
+    const first = openShiftOn(db, DEV);
+    expect(watchEvents()).toBe(0);
+
+    closeShiftOn(db, first.id, DEV);
+    pauseMod.followShiftForWebOrders(db as AppDatabase, DEV, 'closed', MANAGER.userId);
+    expect(watchEvents()).toBe(1);
+
+    pauseMod.followShiftForWebOrders(db as AppDatabase, DEV, 'closed', MANAGER.userId);
+    expect(watchEvents()).toBe(1);
+
+    openShiftOn(db, DEV);
+    pauseMod.followShiftForWebOrders(db as AppDatabase, DEV, 'opened', CASHIER.userId);
+    expect(watchEvents()).toBe(2);
+    // A second open has no pause to lift: nothing new to say.
+    pauseMod.followShiftForWebOrders(db as AppDatabase, DEV, 'opened', CASHIER.userId);
+    expect(watchEvents()).toBe(2);
+  });
+
+  it("another till's shift closing while this one is open tells them nothing", async () => {
+    const db = await till({ enabled: true });
+    openShiftOn(db, DEV);
+    const theirs = openShiftOn(db, OTHER_TILL);
+    closeShiftOn(db, theirs.id, OTHER_TILL);
+    pauseMod.followShiftForWebOrders(db as AppDatabase, DEV, 'closed', MANAGER.userId);
+    expect(watchEvents()).toBe(0);
+  });
+
+  it('they hear before the website is told, so a website push that throws still leaves the screen right', async () => {
+    const db = await till({ enabled: true });
+    const shift = openShiftOn(db, DEV);
+    closeShiftOn(db, shift.id, DEV);
+    let heardBeforeTheWebsite: number | null = null;
+    vi.spyOn(bridgeMod.webOrdersBridge, 'refreshStoreStatus').mockImplementation(() => {
+      heardBeforeTheWebsite = watchEvents();
+      throw new Error('bridge exploded');
+    });
+    expect(() =>
+      pauseMod.followShiftForWebOrders(db as AppDatabase, DEV, 'closed', MANAGER.userId),
+    ).not.toThrow();
+    expect(heardBeforeTheWebsite).toBe(1);
+    expect(watchEvents()).toBe(1);
+  });
+});
+
+live('closeWouldPauseWebOrders: the close box can say so first', () => {
+  it("true for this till's only open shift, with the switch on and the link set", async () => {
+    const db = await till({ enabled: true });
+    const shift = openShiftOn(db, DEV);
+    expect(pauseMod.closeWouldPauseWebOrders(db as AppDatabase, DEV, shift.id)).toBe(true);
+    // It only answers: nothing is paused, nothing is sent.
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toBeNull();
+    expect(watchEvents()).toBe(0);
+  });
+
+  it("false with the owner's switch off", async () => {
+    const db = await till({ enabled: false });
+    const shift = openShiftOn(db, DEV);
+    expect(pauseMod.closeWouldPauseWebOrders(db as AppDatabase, DEV, shift.id)).toBe(false);
+  });
+
+  it('false with no website address or password saved', () => {
+    const db = openMigrated();
+    seedUsers(db);
+    cfgMod.setWebBridgeConfig(
+      db as AppDatabase,
+      { enabled: true, pollIntervalMs: 20_000, cloudBackupFrequency: 'off' },
+      MANAGER.userId,
+    );
+    const shift = openShiftOn(db, DEV);
+    expect(pauseMod.closeWouldPauseWebOrders(db as AppDatabase, DEV, shift.id)).toBe(false);
+    // The address alone is not enough either.
+    cfgMod.setWebBridgeConfig(
+      db as AppDatabase,
+      { enabled: true, siteUrl: SITE, pollIntervalMs: 20_000, cloudBackupFrequency: 'off' },
+      MANAGER.userId,
+    );
+    expect(pauseMod.closeWouldPauseWebOrders(db as AppDatabase, DEV, shift.id)).toBe(false);
+  });
+
+  it("false when the shift being closed is another till's and this till keeps its own open", async () => {
+    const db = await till({ enabled: true });
+    const mine = openShiftOn(db, DEV);
+    const theirs = openShiftOn(db, OTHER_TILL);
+    expect(pauseMod.closeWouldPauseWebOrders(db as AppDatabase, DEV, theirs.id)).toBe(false);
+    expect(pauseMod.closeWouldPauseWebOrders(db as AppDatabase, DEV, mine.id)).toBe(true);
+  });
+
+  it('never throws: junk settings or a broken database answer false', () => {
+    const db = openMigrated();
+    seedUsers(db);
+    const shift = openShiftOn(db, DEV);
+    db.prepare(
+      `INSERT INTO settings (key, value_json, updated_at) VALUES ('webBridge.config', '{"enabled":"yes","siteUrl":42', ?)`,
+    ).run('2026-10-01T00:00:00.000Z');
+    expect(pauseMod.closeWouldPauseWebOrders(db as AppDatabase, DEV, shift.id)).toBe(false);
+    db.prepare(`UPDATE settings SET value_json = '{"enabled":"yes","siteUrl":42}' WHERE key = 'webBridge.config'`).run();
+    expect(pauseMod.closeWouldPauseWebOrders(db as AppDatabase, DEV, shift.id)).toBe(false);
+    const broken = {
+      prepare: () => {
+        throw new Error('SQLITE_IOERR: disk I/O error');
+      },
+    } as unknown as AppDatabase;
+    expect(pauseMod.closeWouldPauseWebOrders(broken, DEV, shift.id)).toBe(false);
+  });
+});
+
+live('healShiftPause: a pause left behind while a shift is open is lifted at start', () => {
+  const T0 = '2026-10-01T18:42:00.000Z';
+
+  /** A till whose last close paused website orders (no bridge running: this is start-up). */
+  function pausedTill(): Db {
+    const db = openMigrated();
+    seedUsers(db);
+    cfgMod.setWebOrdersShiftPause(db as AppDatabase, { reason: 'shift_closed', since: T0 }, MANAGER.userId);
+    return db;
+  }
+
+  it('lifts it when a shift is open on this till: one audit row, with no person, and the chain is whole', () => {
+    const db = pausedTill();
+    openShiftOn(db, DEV);
+    const before = pauseAudits(db).length;
+
+    pauseMod.healShiftPause(db as AppDatabase, DEV);
+
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toBeNull();
+    const audits = pauseAudits(db);
+    expect(audits).toHaveLength(before + 1);
+    expect(audits.at(-1)).toMatchObject({ actor_user_id: null });
+    expect(verifyAuditChain(auditRows(db)).ok).toBe(true);
+    // Start-up has no screen to tell yet.
+    expect(watchEvents()).toBe(0);
+  });
+
+  it('keeps it when no shift is open, or only another till has one', () => {
+    const db = pausedTill();
+    const before = pauseAudits(db).length;
+    pauseMod.healShiftPause(db as AppDatabase, DEV);
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toEqual({ reason: 'shift_closed', since: T0 });
+
+    openShiftOn(db, OTHER_TILL);
+    pauseMod.healShiftPause(db as AppDatabase, DEV);
+    expect(cfgMod.getWebOrdersShiftPause(db as AppDatabase)).toEqual({ reason: 'shift_closed', since: T0 });
+    expect(pauseAudits(db)).toHaveLength(before);
+  });
+
+  it('never sets a pause: with none stored it writes nothing, shift or no shift', () => {
+    const db = openMigrated();
+    seedUsers(db);
+    pauseMod.healShiftPause(db as AppDatabase, DEV);
+    openShiftOn(db, DEV);
+    pauseMod.healShiftPause(db as AppDatabase, DEV);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM settings WHERE key = ?`).get(PAUSE_KEY)).toEqual({ n: 0 });
+    expect(pauseAudits(db)).toEqual([]);
+  });
+
+  it('never throws, not even on a broken database', () => {
+    const broken = {
+      prepare: () => {
+        throw new Error('SQLITE_IOERR: disk I/O error');
+      },
+      transaction: () => () => {
+        throw new Error('SQLITE_IOERR: disk I/O error');
+      },
+    } as unknown as AppDatabase;
+    expect(() => pauseMod.healShiftPause(broken, DEV)).not.toThrow();
   });
 });

@@ -164,7 +164,7 @@ import type { MenuImportPreview, MenuImportSummary } from './menu-import.js';
 import type { MenuDeployKeyMade, MenuDeployView } from './menu-deploy-view.js';
 import type { CostedRecipeCalc, RecipeCalc, RecipeCalcRequest, TypicalPicksView } from './recipe-calc.js';
 import type { OrderHistoryFilter, OrderHistoryPage, RecentCounterOrder } from './order-history.js';
-import type { AcknowledgeAlertsRequest, AlertSoundSettings, PendingAlerts } from './alerts.js';
+import type { AcknowledgeAlertsRequest, AlertSoundSettings, AlertWatch, PendingAlerts } from './alerts.js';
 import type { PublishMenuSummary, SettingsPublishStatus, WebOrdersShiftPause } from './web-bridge.js';
 import type {
   ReportVariance,
@@ -2096,6 +2096,19 @@ export interface IpcContract {
   'alerts:acknowledge': {
     request: AcknowledgeAlertsRequest;
     response: ApiResult<PendingAlerts>;
+  };
+  /**
+   * What the PIN screen shows between logins: website orders paused on this
+   * till because no shift is open, orders waiting too long, kitchen tickets
+   * this till gave up printing, and website orders the website has not
+   * confirmed. No login needed (the PIN screen): ids, order numbers,
+   * statuses, minutes and times only — never a name, phone, address, website
+   * address or password. The main process sends 'alerts:watch-changed' (no
+   * payload) when part of it changes; a part it cannot read comes back empty.
+   */
+  'alerts:getWatch': {
+    request: undefined;
+    response: ApiResult<AlertWatch>;
   };
   /** Settings → Sounds → "Test the Windows notice" (manager or owner). */
   'alerts:testNotice': {

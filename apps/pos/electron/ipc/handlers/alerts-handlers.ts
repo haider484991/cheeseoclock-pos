@@ -3,15 +3,19 @@ import { defineHandler, IpcGuardError } from '../registry.js';
 import { ok, hasCapability, type AuthenticatedUser } from '@cheeseoclock/shared-types';
 import { getCurrentSession } from '../../services/auth-service.js';
 import { getAlertSoundSettings, setAlertSoundSettings } from '../../services/alert-sounds-config.js';
+import { readAlertWatch } from '../../services/alert-watch.js';
 import { attachOrderAlertsDb, orderAlerts, showAttention } from '../../services/order-alerts-hub.js';
 
 /**
  * Settings → Sounds and the till's pending order alerts.
  *
- * Reading the sounds and the pending alerts needs no login: the PIN screen
- * rings for a website order too, and anyone at the counter can tap Seen (like
- * a doorbell). Changing the sounds is for managers and the owner, the same
- * owner, who sets up this till's printers (managers lost Settings on
+ * Reading the sounds, the pending alerts and the watch needs no login: the
+ * PIN screen rings for a website order too, anyone at the counter can tap
+ * Seen (like a doorbell), and the PIN screen says when website orders are
+ * paused on this till. The watch carries order numbers, statuses, minutes
+ * and times only — no customer, money, website address or password
+ * (alert-watch.ts). Changing the sounds is for managers and the owner, the
+ * same owner, who sets up this till's printers (managers lost Settings on
  * 2026-09-27); cashiers and managers cannot mute the till.
  */
 function requireSoundsManage(): AuthenticatedUser {
@@ -38,6 +42,8 @@ export function registerAlertsHandlers(ctx: HandlerContext): void {
   defineHandler('alerts:acknowledge', ctx, (_ctx, payload) =>
     ok(orderAlerts.acknowledge(payload ?? {}, { loggedIn: getCurrentSession() !== null })),
   );
+
+  defineHandler('alerts:getWatch', ctx, () => ok(readAlertWatch(ctx.db, Date.now())));
 
   defineHandler('alerts:testNotice', ctx, () => {
     requireSoundsManage();

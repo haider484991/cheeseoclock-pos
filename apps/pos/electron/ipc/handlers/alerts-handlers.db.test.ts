@@ -9,7 +9,10 @@
  *   - a "did not come in" card is closed only by someone logged in: logged
  *     out, Seen silences it and the phone number stays on screen;
  *   - an order leaves the pending list (stops ringing) once it has moved past
- *     New or been deleted — the stillWaiting query in order-alerts-hub.ts.
+ *     New or been deleted — the stillWaiting query in order-alerts-hub.ts;
+ *   - anyone (the PIN screen too) can read the watch, which says when website
+ *     orders are paused on this till and carries no website address or
+ *     password; a part that cannot be read comes back empty.
  *
  * Only `defineHandler`, Electron and the signed-in session are stood in for;
  * the handlers, the settings repository, the audit chain and the hub are the
@@ -22,7 +25,13 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_ALERT_SOUND_SETTINGS, type AuthenticatedUser, type UUID } from '@cheeseoclock/shared-types';
+import {
+  DEFAULT_ALERT_SOUND_SETTINGS,
+  EMPTY_ALERT_WATCH,
+  type AlertWatch,
+  type AuthenticatedUser,
+  type UUID,
+} from '@cheeseoclock/shared-types';
 
 type Handler = (ctx: unknown, payload: unknown) => unknown;
 const h = vi.hoisted(() => ({
@@ -55,6 +64,8 @@ vi.mock('electron', () => ({
       return false;
     }
   },
+  // No OS keychain in a test: the website password is stored as typed.
+  safeStorage: { isEncryptionAvailable: () => false },
 }));
 // Who is signed in: auth-service's job, stood in for here.
 vi.mock('../../services/auth-service.js', () => ({ getCurrentSession: () => h.session }));
@@ -255,5 +266,63 @@ describe.skipIf(!Sqlite)('pending order alerts through alerts:*', () => {
     expect(cards(call('alerts:getPending'))).toHaveLength(1);
     h.session = CASHIER;
     expect(cards(call('alerts:acknowledge', req))).toEqual([]);
+  });
+});
+
+describe.skipIf(!Sqlite)('the watch through alerts:getWatch (the PIN screen)', () => {
+  const SITE = 'https://shop.example.test';
+  const SECRET = 'made-up-secret';
+  const watch = () => call('alerts:getWatch') as { ok: true; data: AlertWatch };
+
+  /** The owner has linked the website and switched orders on; the last shift on this till closed at T0. */
+  async function pausedWithLink(): Promise<void> {
+    const cfg = await import('../../services/web-bridge-config.js');
+    cfg.setWebBridgeConfig(
+      db as never,
+      { enabled: true, siteUrl: SITE, bridgeSecret: SECRET, pollIntervalMs: 20_000, cloudBackupFrequency: 'off' },
+      'u_admin',
+    );
+    cfg.setWebOrdersShiftPause(db as never, { reason: 'shift_closed', since: T0 }, 'u_mgr');
+  }
+
+  it('a fresh till, nobody signed in: nothing paused, no website link, nothing else to show', () => {
+    expect(watch()).toEqual({
+      ok: true,
+      data: expect.objectContaining({ webOrders: { paused: false, websiteLinkSet: false } }),
+    });
+    expect(watch().data).toEqual(EMPTY_ALERT_WATCH);
+  });
+
+  it('paused on this till: says so and since when, in five parts, with no website address or password', async () => {
+    await pausedWithLink();
+    const r = watch();
+    expect(r.ok).toBe(true);
+    expect(r.data.webOrders).toStrictEqual({ paused: true, since: T0, websiteLinkSet: true });
+    expect(Object.keys(r.data).sort()).toEqual(['orders', 'ticketsNotPrinted', 'timing', 'unconfirmed', 'webOrders']);
+    const text = JSON.stringify(r.data);
+    expect(text).not.toContain('shop.example.test');
+    expect(text).not.toContain(SECRET);
+  });
+
+  it('the same answer for every login, and never "unauthenticated"', async () => {
+    await pausedWithLink();
+    h.session = null;
+    expect(refusal('alerts:getWatch')).toBeNull();
+    const signedOut = watch();
+    for (const s of [CASHIER, MANAGER, OWNER]) {
+      h.session = s;
+      expect(refusal('alerts:getWatch')).toBeNull();
+      expect(watch()).toEqual(signedOut);
+    }
+  });
+
+  it('a part that cannot be read comes back empty, and the read never throws', async () => {
+    const { readAlertWatch } = await import('../../services/alert-watch.js');
+    const broken = {
+      prepare: () => {
+        throw new Error('SQLITE_IOERR: disk I/O error');
+      },
+    } as never;
+    expect(readAlertWatch(broken, Date.now())).toEqual(EMPTY_ALERT_WATCH);
   });
 });

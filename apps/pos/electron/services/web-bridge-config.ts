@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   PICKUP_DISCOUNT_PERCENT,
   type BridgeHeartbeatBody,
+  type WebOrdersPauseView,
   type WebOrdersShiftPause,
 } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from '../db/connection.js';
@@ -196,4 +197,21 @@ export function describeShiftPause(pause: StoredShiftPause): WebOrdersShiftPause
     message:
       'Website orders paused: shift closed — they start again when a shift is opened',
   };
+}
+
+/**
+ * The pause as the PIN screen and the shift controls see it (inside
+ * alerts:getWatch). Paused only while the owner's switch is on, the same rule
+ * as storeHeartbeatBody: switched off by hand, the website is shut for that
+ * reason, not for the shift. No connection details leave here, only whether
+ * the link is set.
+ */
+export function webOrdersPauseView(
+  cfg: LoadedWebBridgeConfig,
+  pause: StoredShiftPause | null,
+): WebOrdersPauseView {
+  const websiteLinkSet = isWebBridgeReady(cfg).ok;
+  return cfg.enabled && pause
+    ? { paused: true, since: pause.since, websiteLinkSet }
+    : { paused: false, websiteLinkSet };
 }

@@ -187,6 +187,7 @@ const api: RendererApi = {
     setSounds: (req) => invoke('alerts:setSounds', req),
     getPending: () => invoke('alerts:getPending', undefined),
     acknowledge: (req) => invoke('alerts:acknowledge', req),
+    getWatch: () => invoke('alerts:getWatch', undefined),
     testNotice: () => invoke('alerts:testNotice', undefined),
   },
   printer: {
@@ -453,11 +454,18 @@ contextBridge.exposeInMainWorld('webOrderEvents', {
 });
 
 // A click on the till's Windows notice (new online order, order not in):
-// the main process has already brought the window to the front.
+// the main process has already brought the window to the front. And part of
+// the PIN screen's watch changed (website orders paused or started again):
+// read alerts:getWatch again.
 contextBridge.exposeInMainWorld('alertEvents', {
   onOpen: (cb: (payload: { kind: 'newOrder' | 'importFailed' | 'test' }) => void) => {
     const listener = (_e: unknown, payload: { kind: 'newOrder' | 'importFailed' | 'test' }) => cb(payload);
     ipcRenderer.on('alerts:open', listener);
     return () => ipcRenderer.removeListener('alerts:open', listener);
+  },
+  onWatchChanged: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('alerts:watch-changed', listener);
+    return () => ipcRenderer.removeListener('alerts:watch-changed', listener);
   },
 });
