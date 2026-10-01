@@ -167,8 +167,8 @@ export interface PendingAlerts {
 // The watch (alerts:getWatch): what every screen may show between logins
 //
 // Read with no login, so it carries order ids, order numbers, statuses,
-// minutes and times only: never a customer's name, phone or address, a
-// website address or a password. The PIN screen polls it, and the main
+// minutes, times and whether a shift is open only: never a customer's name,
+// phone or address, a website address or a password. The PIN screen polls it, and the main
 // process sends 'alerts:watch-changed' (no payload) when part of it changes.
 
 /** Orders older than this (minutes) are left out of the watch. */
@@ -195,6 +195,13 @@ export interface AlertWatch {
   ticketsNotPrinted: Array<{ orderId: string; orderNumber: string; failedAt: string }>;
   /** Website orders the website has not confirmed taking from this till. */
   unconfirmed: Array<{ orderId: string; orderNumber: string; minutes: number; cancelsAt: string | null }>;
+  /**
+   * A shift is open on this till. Only yes or no: not who opened it, when,
+   * or any cash, so it is safe for the PIN screen. With none open the shop
+   * is closed (website orders are paused then too), so the PIN screen's
+   * "waiting too long" note stays quiet; it still shows.
+   */
+  shiftOpen: boolean;
 }
 
 /**
@@ -210,6 +217,7 @@ export const EMPTY_ALERT_WATCH: Readonly<AlertWatch> = Object.freeze({
   }),
   ticketsNotPrinted: Object.freeze([]) as unknown as AlertWatch['ticketsNotPrinted'],
   unconfirmed: Object.freeze([]) as unknown as AlertWatch['unconfirmed'],
+  shiftOpen: false,
 });
 
 export interface AcknowledgeAlertsRequest {

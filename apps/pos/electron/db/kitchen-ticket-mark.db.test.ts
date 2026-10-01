@@ -12,7 +12,8 @@
  *     off; one that may or may not have printed does not;
  *   - only orders the kitchen still has: not out with the rider, cancelled,
  *     handed over or deleted;
- *   - the orderIds filter, oldest failure first, and the cap;
+ *   - the orderIds filter, oldest failure first, and the cap (only without
+ *     the filter: the board's own orders are never cut short);
  *   - it reads through indexes, and writes nothing.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
@@ -238,6 +239,25 @@ live('kitchenTicketsNotPrinted', () => {
     expect(all).toHaveLength(50);
     expect(all[0]).toBe(early);
     expect(all).not.toContain(late);
+  });
+
+  it('given the board’s orders, every one not printed: a busy board’s newest failures get their strip too', () => {
+    const db = shop();
+    // 60 tickets given up on, one a minute: the newest are past the cap of 50.
+    const ids: string[] = [];
+    for (let n = 1; n <= 60; n += 1) {
+      const o = order(db, n);
+      failedTicket(db, o, { at: new Date(Date.parse(T0) + n * 60_000).toISOString() });
+      ids.push(o);
+    }
+    const board = listed(db, ids);
+    expect(board).toHaveLength(60);
+    expect(board).toContain('o60');
+    expect(board[board.length - 1]).toBe('o60');
+    // Only the newest one asked about: it is there.
+    expect(listed(db, ['o60'])).toEqual(['o60']);
+    // Without a list the cap stays.
+    expect(listed(db)).toHaveLength(TICKETS_NOT_PRINTED_MAX);
   });
 
   it('reads through the indexes on orders (status), print_queue (order, kind) and document_prints (order)', () => {

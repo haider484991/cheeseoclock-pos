@@ -9,6 +9,7 @@ import {
 import { readShopSetting } from '../db/business-settings-read.js';
 import type { AppDatabase } from '../db/connection.js';
 import { kitchenTicketsNotPrinted } from '../db/repositories/print-queue-repo.js';
+import { getCurrentShift } from '../db/repositories/shift-repo.js';
 import { unconfirmedWebOrders } from '../db/repositories/web-order-imports-repo.js';
 import {
   getWebBridgeConfig,
@@ -33,10 +34,10 @@ export const WATCH_ORDERS_MAX = 200;
  * PIN screen polls it, and 'alerts:watch-changed' (alert-watch-events.ts)
  * asks for it again when part of it changes.
  *
- * Only ids, order numbers, statuses, minutes and times leave here — never a
- * customer's name, phone or address, the website address or the connection
- * password. Each part is read on its own: one that fails comes back empty and
- * the others still show. It never throws.
+ * Only ids, order numbers, statuses, minutes, times and one yes/no leave
+ * here — never a customer's name, phone or address, the website address or
+ * the connection password. Each part is read on its own: one that fails comes
+ * back empty and the others still show. It never throws.
  *
  * The parts:
  *   - webOrders: website orders paused on this till because no shift is open;
@@ -50,9 +51,13 @@ export const WATCH_ORDERS_MAX = 200;
  *     so one forgotten in New since yesterday does not beep all night (Live
  *     Orders keeps its "Ticket not printed" strip whatever the order's age);
  *   - unconfirmed: website orders the website has not confirmed for 5
- *     minutes or more, with when the website cancels each one.
+ *     minutes or more, with when the website cancels each one;
+ *   - shiftOpen: a shift is open on this till (`deviceId`). Only the yes or
+ *     no leaves: not who opened it, when, or any cash. With none open the
+ *     shop is closed and the PIN screen's "waiting too long" note does not
+ *     beep (false, too, when it cannot be read).
  */
-export function readAlertWatch(db: AppDatabase, now: number): AlertWatch {
+export function readAlertWatch(db: AppDatabase, now: number, deviceId: string): AlertWatch {
   const orders = part('orders', [] as WatchOrder[], () => kitchenOrders(db, now));
   return {
     webOrders: part('website pause', EMPTY_ALERT_WATCH.webOrders, () =>
@@ -81,6 +86,11 @@ export function readAlertWatch(db: AppDatabase, now: number): AlertWatch {
         minutes: wholeMinutes(u.importedAt, now),
         cancelsAt: cancelsAt(u.webCreatedAt),
       })),
+    ),
+    shiftOpen: part(
+      'shift',
+      EMPTY_ALERT_WATCH.shiftOpen,
+      () => getCurrentShift(db, deviceId) !== null,
     ),
   };
 }

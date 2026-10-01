@@ -1,10 +1,13 @@
 /**
  * The PIN screen's notes from the watch (alerts:getWatch) and when they beep
  * (watchNotes.ts): the exact words, which notes show signed in and signed out
- * (a held step-in is signed out), and the beeps — at once for something new,
- * then every 5 minutes until someone signs in, never two within a minute,
- * never over the new-order chime, and never with the sound switched off
- * (the note stays). Every order number is made up.
+ * (a held step-in is signed out), Hide on a signed-in note (away until
+ * another order joins it), and the beeps — at once for something new, then
+ * every 5 minutes until someone signs in, never two within a minute, never
+ * over the new-order chime, never for a note a popup hides, a kitchen ticket
+ * only on the printer switch, orders waiting only while a shift is open, and
+ * never with the sound switched off (the note stays). Every order number is
+ * made up.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -17,9 +20,12 @@ import {
 import { orderTimeLabel } from '../orders/historyFilters';
 import { PIN_REMIND_EVERY_MS } from './waitingReminders';
 import {
+  NO_HIDDEN_NOTES,
   PIN_TONE_MIN_GAP_MS,
+  hideNote,
   notesSignedIn,
   planWatchTone,
+  shownNotes,
   watchNotes,
   type WatchNote,
   type WatchNotesContext,
@@ -192,10 +198,23 @@ it('a watch that somehow carried names would still not put one on screen: only n
 // ---------------------------------------------------------------------------
 // The beeps
 
-/** The watch's rounds (every 30 s from `from`), as OrderAlerts plays them: when each beep plays, and which. */
+/**
+ * The watch's rounds (every 30 s from `from`), as OrderAlerts plays them:
+ * when each beep plays, and which. `popupUntil`: a popup covers the banner
+ * until then; `shiftOpen`: whether a shift is open on this till (open unless
+ * said).
+ */
 function rounds(
   notesAt: (t: number) => WatchNote[],
-  o: { from?: number; minutes: number; signedIn?: boolean; settings?: AlertSoundSettings; chimeUntil?: number },
+  o: {
+    from?: number;
+    minutes: number;
+    signedIn?: boolean;
+    settings?: AlertSoundSettings;
+    chimeUntil?: number;
+    popupUntil?: number;
+    shiftOpen?: boolean | ((t: number) => boolean);
+  },
 ): Array<[number, string]> {
   const played: Array<[number, string]> = [];
   let lastToneAt = 0;
@@ -210,6 +229,8 @@ function rounds(
       lastToneAt,
       announced,
       chimeRinging: o.chimeUntil !== undefined && t < o.chimeUntil,
+      notesOnScreen: !(o.popupUntil !== undefined && t < o.popupUntil),
+      shiftOpen: typeof o.shiftOpen === 'function' ? o.shiftOpen(t) : (o.shiftOpen ?? true),
     });
     const shown = new Set(notes.flatMap((n) => n.keys));
     announced = new Set([...[...announced].filter((k) => shown.has(k)), ...plan.announce]);
@@ -253,9 +274,68 @@ describe('the PIN screen’s beep', () => {
       [5, 'printer'],
     ]);
     expect(rounds(() => [...ticketNotes(), ...waitingNotes()], { minutes: 0 })).toEqual([[0, 'printer']]);
-    // The printer sound switched off: the waiting one still says something is wrong.
+  });
+
+  it('a kitchen ticket follows only the "Printer problem" switch, as Settings → Sounds says', () => {
+    // v0.7.33 review: with the printer sound off, a ticket note alone beeped
+    // the waiting sound. Off now means silent (this used to expect 'waiting').
     const noPrinter = { ...S, events: { ...S.events, printerProblem: false } };
-    expect(rounds(() => ticketNotes(), { minutes: 0, settings: noPrinter })).toEqual([[0, 'waiting']]);
+    expect(rounds(() => ticketNotes(), { minutes: 12, settings: noPrinter })).toEqual([]);
+    expect(ticketNotes()).toHaveLength(1); // the note stays
+    // An order waiting too long still beeps on its own switch, the printer one off.
+    expect(rounds(() => [...ticketNotes(), ...waitingNotes()], { minutes: 5, settings: noPrinter })).toEqual([
+      [0, 'waiting'],
+      [5, 'waiting'],
+    ]);
+    // A ticket turning up later, printer sound off: no beep for it.
+    const later = (t: number) => (t >= NOW + 2 * 60_000 ? [...ticketNotes(), ...waitingNotes()] : waitingNotes());
+    expect(rounds(later, { minutes: 4, settings: noPrinter })).toEqual([[0, 'waiting']]);
+    // The reminder sound off and the printer one on: the ticket still beeps its own sound.
+    const noWaiting = { ...S, events: { ...S.events, waitingTooLong: false } };
+    expect(rounds(() => [...ticketNotes(), ...waitingNotes()], { minutes: 0, settings: noWaiting })).toEqual([
+      [0, 'printer'],
+    ]);
+    expect(rounds(() => waitingNotes(), { minutes: 6, settings: noWaiting })).toEqual([]);
+  });
+
+  it('never for a note a popup hides (a held step-in, "Close the till?"): it beeps once it shows', () => {
+    // The popup is up for the first 7 minutes: no beep, and nothing counted as heard.
+    expect(rounds(() => waitingNotes(), { minutes: 13, popupUntil: NOW + 7 * 60_000 })).toEqual([
+      [7, 'waiting'],
+      [12, 'waiting'],
+    ]);
+    expect(rounds(() => ticketNotes(), { minutes: 30, popupUntil: NOW + 31 * 60_000 })).toEqual([]);
+    expect(
+      planWatchTone(waitingNotes(), {
+        signedIn: false,
+        settings: S,
+        now: NOW,
+        lastToneAt: 0,
+        announced: new Set(),
+        chimeRinging: false,
+        notesOnScreen: false,
+        shiftOpen: true,
+      }),
+    ).toEqual({ sound: null, announce: [] });
+  });
+
+  it('orders waiting while no shift is open on this till: the note shows, no beep; the others still beep', () => {
+    // A website order left in Ready after closing: the shop is closed.
+    const left = watchNotes(watchOf({ orders: [order(42, 95, { status: 'ready' })], shiftOpen: false }), ctx());
+    expect(words(left)).toEqual([['waiting', 'Order #0042 waiting 95 min', 'Sign in and open Live Orders.']]);
+    expect(rounds(() => left, { minutes: 180, shiftOpen: false })).toEqual([]);
+    // A kitchen ticket, or a website order not confirmed, still beeps with no shift open.
+    expect(rounds(() => [...ticketNotes(), ...left], { minutes: 5, shiftOpen: false })).toEqual([
+      [0, 'printer'],
+      [5, 'printer'],
+    ]);
+    const notConfirmed = watchNotes(watchOf({ unconfirmed: [unconfirmed(43, null)] }), ctx());
+    expect(rounds(() => [...notConfirmed, ...left], { minutes: 0, shiftOpen: false })).toEqual([[0, 'waiting']]);
+    // A shift opened at 10 minutes (signed out again): it beeps at once, then every 5 minutes.
+    expect(rounds(() => left, { minutes: 16, shiftOpen: (t) => t >= NOW + 10 * 60_000 })).toEqual([
+      [10, 'waiting'],
+      [15, 'waiting'],
+    ]);
   });
 
   it('sounds off, or the reminder and printer sounds off: the notes stay and nothing plays', () => {
@@ -272,7 +352,18 @@ describe('the PIN screen’s beep', () => {
   });
 
   it('nothing to say, nothing plays', () => {
-    expect(planWatchTone([], { signedIn: false, settings: S, now: NOW, lastToneAt: 0, announced: new Set(), chimeRinging: false })).toEqual({
+    expect(
+      planWatchTone([], {
+        signedIn: false,
+        settings: S,
+        now: NOW,
+        lastToneAt: 0,
+        announced: new Set(),
+        chimeRinging: false,
+        notesOnScreen: true,
+        shiftOpen: true,
+      }),
+    ).toEqual({
       sound: null,
       announce: [],
     });
@@ -296,5 +387,66 @@ describe('signed in', () => {
   it('with the reminder sound off, nothing plays', () => {
     const quiet = { ...S, events: { ...S.events, waitingTooLong: false } };
     expect(rounds(() => notConfirmed([42]), { minutes: 5, signedIn: true, settings: quiet })).toEqual([]);
+  });
+
+  it('under a popup (a payment, "Close the till?") no beep: the new order beeps once the note shows', () => {
+    expect(rounds(() => notConfirmed([42]), { minutes: 20, signedIn: true, popupUntil: NOW + 3 * 60_000 })).toEqual([
+      [3, 'waiting'],
+    ]);
+  });
+
+  it('a no-shift till still beeps for a website order not confirmed (the internet is the problem)', () => {
+    expect(rounds(() => notConfirmed([42]), { minutes: 5, signedIn: true, shiftOpen: false })).toEqual([[0, 'waiting']]);
+  });
+});
+
+describe('Hide on a signed-in note', () => {
+  const at745 = '2026-10-01T14:45:00.000Z';
+  const notConfirmed = (ns: number[]) =>
+    watchNotes(watchOf({ unconfirmed: ns.map((n) => unconfirmed(n, at745)) }), ctx({ signedIn: true }));
+
+  it('hides that note, and it stays away while nothing new joins it', () => {
+    const hidden = hideNote(NO_HIDDEN_NOTES, notConfirmed([42])[0]!);
+    expect(shownNotes(notConfirmed([42]), hidden, true)).toEqual([]);
+    // Fewer orders (one got confirmed) is not something new.
+    const two = hideNote(NO_HIDDEN_NOTES, notConfirmed([42, 43])[0]!);
+    expect(shownNotes(notConfirmed([43]), two, true)).toEqual([]);
+    expect(NO_HIDDEN_NOTES).toEqual({});
+  });
+
+  it('comes back when another order joins it, with all its orders', () => {
+    const hidden = hideNote(NO_HIDDEN_NOTES, notConfirmed([42])[0]!);
+    const back = shownNotes(notConfirmed([42, 43]), hidden, true);
+    expect(words(back)).toEqual([
+      ['unconfirmed', 'The website has not confirmed 2 orders', '#0042, #0043 — the till keeps trying. Check the internet.'],
+    ]);
+    // A different order in place of the hidden one is new too.
+    expect(shownNotes(notConfirmed([44]), hidden, true)).toHaveLength(1);
+  });
+
+  it('a new note of another kind is not hidden by it', () => {
+    const hidden = hideNote(NO_HIDDEN_NOTES, notConfirmed([42])[0]!);
+    const both = [...ticketNotes(), ...notConfirmed([42])];
+    expect(shownNotes(both, hidden, true).map((n) => n.kind)).toEqual(['ticket']);
+  });
+
+  it('signed out (the PIN screen, a held step-in) every note shows: nothing hides there', () => {
+    const hidden = hideNote(NO_HIDDEN_NOTES, notConfirmed([42])[0]!);
+    const pin = watchNotes(watchOf({ unconfirmed: [unconfirmed(42, at745)] }), ctx());
+    expect(shownNotes(pin, hidden, false)).toEqual(pin);
+  });
+
+  it('the beep: a hidden note makes none; the order that brings it back beeps once', () => {
+    let hidden = NO_HIDDEN_NOTES;
+    const notesAt = (t: number) => {
+      const all = notConfirmed(t >= NOW + 8 * 60_000 ? [42, 43] : [42]);
+      // Hidden at 2 minutes, as it was then.
+      if (t === NOW + 2 * 60_000) hidden = hideNote(hidden, all[0]!);
+      return shownNotes(all, hidden, true);
+    };
+    expect(rounds(notesAt, { minutes: 20, signedIn: true })).toEqual([
+      [0, 'waiting'],
+      [8, 'waiting'],
+    ]);
   });
 });

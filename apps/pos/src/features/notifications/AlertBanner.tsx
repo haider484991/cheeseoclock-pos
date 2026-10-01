@@ -24,6 +24,16 @@ import type { WatchNote } from './watchNotes';
  * same thing: seenOnScreen. A note has no Seen: it goes when what it is about
  * is dealt with.
  *
+ * Signed in, a note sits low on the left instead (NOTE_ROW_SIGNED_IN): under
+ * the top bar it covered Checkout's Takeaway / Delivery / Foodpanda for as
+ * long as it lasted (up to 2 hours). There it is over the bottom of the menu,
+ * clear of the order ticket and its Pay button, and has "Hide" (onHideNote):
+ * the note goes until something new joins it (watchNotes.ts shownNotes).
+ * On the PIN screen notes stay where they were, with no Hide.
+ *
+ * A "did not come in" or "website cancelled" card's words take up to two
+ * lines, so the phone number at their end is never cut off.
+ *
  * Taps on it must not count as "outside" an open popup (which would close
  * the popup): the pointer-down is stopped here, before Radix sees it on the
  * document, and the buttons never take the keyboard focus from a text box.
@@ -42,6 +52,8 @@ export interface AlertBannerProps {
   /** Seen on any row or the pill: acts on the row shown (the alarm, else the new orders). */
   onSeen: () => void;
   onCloseFailure: (webOrderId: string) => void;
+  /** Signed in (not a held step-in): a note gets "Hide", which puts that note away until it changes. */
+  onHideNote?: ((note: WatchNote) => void) | undefined;
 }
 
 /**
@@ -52,6 +64,24 @@ export interface AlertBannerProps {
 const BANNER_TOP_LOGGED_IN = '4.5rem';
 const BANNER_TOP_LOGGED_OUT = '4.875rem';
 
+/**
+ * A signed-in note: bottom left, never under the top bar. Measured with
+ * Segoe UI on Checkout, where the ticket column is 360 px wide under a
+ * 1172 px window and 400 px from there to 1511 px:
+ *   - left, past the sidebar: its 72 px icon rail below 1280 px (and on
+ *     Checkout), its 240 px full width from 1280 px;
+ *   - bottom 2.5rem, above the "sound off" pill (bottom 0.5rem, 24 px tall);
+ *   - at most 38rem wide and never past 100vw - 28.25rem: at the 1024 px
+ *     minimum it is 572 px wide (84–656 px) and the menu column ends at
+ *     664 px; at 1366 px it is 608 px (248–856 px) against 966 px. So it
+ *     never reaches the ticket, its Pay button, or the order-type buttons.
+ * Title and words may take two lines each; it grows upwards.
+ */
+export const NOTE_ROW_SIGNED_IN =
+  'bottom-10 left-[5.25rem] xl:left-[15.5rem] max-h-[7rem] w-[min(38rem,calc(100vw-28.25rem))]';
+/** Every other row: centred under the top bar (or the PIN screen's toast slot), one line of words. */
+const ROW_TOP = 'left-1/2 -translate-x-1/2 w-[38rem] max-w-[calc(100vw-2rem)]';
+
 const keepPopupOpen = (e: ReactPointerEvent) => e.stopPropagation();
 const keepFocus = (e: ReactMouseEvent) => e.preventDefault();
 
@@ -61,15 +91,24 @@ const NOTE_ICONS: Record<WatchNote['kind'], LucideIcon> = {
   waiting: Hourglass,
 };
 
-function BannerButton(props: { onClick: () => void; children: ReactNode; tone: 'solid' | 'ghost'; label?: string }) {
+function BannerButton(props: {
+  onClick: () => void;
+  children: ReactNode;
+  tone: 'solid' | 'ghost';
+  label?: string;
+  /** Less padding, for a second button next to View. */
+  narrow?: boolean;
+}) {
   return (
     <button
       type="button"
       onMouseDown={keepFocus}
       onClick={props.onClick}
       aria-label={props.label}
+      title={props.label}
       className={cn(
-        'h-11 shrink-0 rounded-xl px-4 text-base font-bold transition-colors',
+        'h-11 shrink-0 rounded-xl text-base font-bold transition-colors',
+        props.narrow ? 'px-3' : 'px-4',
         props.tone === 'solid'
           ? 'bg-white text-stone-900 shadow-soft-sm hover:bg-stone-100'
           : 'bg-black/15 text-current hover:bg-black/25',
@@ -153,14 +192,24 @@ export function AlertBanner(p: AlertBannerProps) {
   } else if (p.notes.length > 0) {
     const n = p.notes[0]!;
     const Icon = NOTE_ICONS[n.kind];
+    const hide = p.onHideNote;
     tone = 'reminder';
     icon = <Icon className="h-6 w-6 shrink-0" aria-hidden="true" />;
     text = { title: n.title, detail: n.detail };
-    buttons = p.canView ? (
-      <BannerButton tone="solid" onClick={p.onView}>
-        View
-      </BannerButton>
-    ) : null;
+    buttons = (
+      <>
+        {p.canView && (
+          <BannerButton tone="solid" onClick={p.onView}>
+            View
+          </BannerButton>
+        )}
+        {hide && (
+          <BannerButton tone="ghost" narrow onClick={() => hide(n)} label="Hide this note until it changes">
+            Hide
+          </BannerButton>
+        )}
+      </>
+    );
   } else {
     const f = quietFailures[0]!;
     tone = 'note';
@@ -181,6 +230,10 @@ export function AlertBanner(p: AlertBannerProps) {
   }
 
   const more = total - shown;
+  // Signed in, a note sits low on the left (NOTE_ROW_SIGNED_IN); every other row under the top.
+  const low = tone === 'reminder' && p.loggedIn;
+  // A failure card ends with the phone number to call: its words may take two lines.
+  const failure = tone === 'alarm' || tone === 'note';
 
   return (
     <div
@@ -188,10 +241,16 @@ export function AlertBanner(p: AlertBannerProps) {
       role={tone === 'reminder' ? 'status' : 'alert'}
       aria-live={tone === 'reminder' ? 'polite' : 'assertive'}
       onPointerDown={keepPopupOpen}
-      style={{ pointerEvents: 'auto', top: p.loggedIn ? BANNER_TOP_LOGGED_IN : BANNER_TOP_LOGGED_OUT }}
+      style={
+        low
+          ? { pointerEvents: 'auto' }
+          : { pointerEvents: 'auto', top: p.loggedIn ? BANNER_TOP_LOGGED_IN : BANNER_TOP_LOGGED_OUT }
+      }
       title={text.tooltip}
       className={cn(
-        'fixed left-1/2 z-[110] flex max-h-[4.5rem] w-[38rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 overflow-hidden rounded-2xl border-2 py-2 pl-4 pr-2 shadow-soft-lg animate-fade-in',
+        'fixed z-[110] flex items-center gap-3 overflow-hidden rounded-2xl border-2 py-2 pl-4 pr-2 shadow-soft-lg animate-fade-in',
+        low ? NOTE_ROW_SIGNED_IN : ROW_TOP,
+        !low && (failure ? 'max-h-[5.5rem]' : 'max-h-[4.5rem]'),
         tone === 'alarm' && 'border-red-700 bg-red-600 text-white',
         tone === 'orders' && 'border-emerald-700 bg-emerald-600 text-white',
         tone === 'reminder' &&
@@ -203,12 +262,18 @@ export function AlertBanner(p: AlertBannerProps) {
       {icon}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <div className="truncate text-lg font-bold leading-snug">{text.title}</div>
+          <div className={cn('min-w-0 text-lg font-bold leading-snug', low ? 'line-clamp-2' : 'truncate')}>
+            {text.title}
+          </div>
           {more > 0 && (
             <span className="shrink-0 rounded-full bg-black/20 px-2 text-xs font-bold">+{more} more</span>
           )}
         </div>
-        {text.detail && <div className="truncate text-sm leading-snug opacity-95">{text.detail}</div>}
+        {text.detail && (
+          <div className={cn('text-sm leading-snug opacity-95', low || failure ? 'line-clamp-2' : 'truncate')}>
+            {text.detail}
+          </div>
+        )}
       </div>
       {buttons}
     </div>

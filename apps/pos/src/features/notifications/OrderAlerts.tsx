@@ -36,7 +36,7 @@ import { soundForEvent } from './tones';
 import { useAlertSoundSettings } from './useAlertSoundSettings';
 import { ALERT_WATCH_KEY, useAlertWatch } from './useAlertWatch';
 import { boardUnusedText, describeReminders } from './waitingReminders';
-import { notesSignedIn, planWatchTone, watchNotes, type WatchNote } from './watchNotes';
+import { notesSignedIn, planWatchTone, shownNotes, watchNotes, type WatchNote } from './watchNotes';
 import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
 import { orderTimeLabel } from '../orders/historyFilters';
 
@@ -123,8 +123,11 @@ function soundOffText(s: AlertSoundSettings): string {
  * step-in counts), the PIN screen keeps a note up for a kitchen ticket that
  * did not print, for orders waiting too long and for a website order the
  * website has not confirmed, and beeps again every 5 minutes until someone
- * signs in; Seen does not stop them, dealing with them does. Signed in, only
- * the not-confirmed note shows, beeping once per order.
+ * signs in (orders waiting: only while a shift is open on this till); Seen
+ * does not stop them, dealing with them does. Signed in, only the
+ * not-confirmed note shows, low on the left, beeping once per order; Hide
+ * puts it away until another order joins it. A note under a popup (the
+ * banner is the small pill then) never beeps: it beeps once it shows.
  */
 export function OrderAlerts() {
   return (
@@ -150,6 +153,7 @@ function OrderAlertsInner() {
   const signedIn = notesSignedIn(user);
   const canView = useSessionStore((s) => s.can('order.create'));
   const state = useAlertStore((s) => s.state);
+  const hiddenNotes = useAlertStore((s) => s.hiddenNotes);
   const { toast } = useToast();
   const qc = useQueryClient();
   const player = getSoundPlayer();
@@ -438,7 +442,9 @@ function OrderAlertsInner() {
   // only the not-confirmed note shows and nothing beeps: a ticket reprinted
   // or an order started while signed in must not beep on the way out.
   const watch = useAlertWatch();
-  const [notes, setNotes] = useState<WatchNote[]>([]);
+  const [allNotes, setNotes] = useState<WatchNote[]>([]);
+  // What the banner shows: signed in, less the notes put away with Hide.
+  const notes = shownNotes(allNotes, hiddenNotes, signedIn);
   const lastWatchTone = useRef(0);
   const announced = useRef<Set<string>>(new Set());
   const prevSignedIn = useRef(signedIn);
@@ -447,6 +453,8 @@ function OrderAlertsInner() {
     if (prevSignedIn.current === signedIn) return;
     prevSignedIn.current = signedIn;
     signedInChangedAt.current = Date.now();
+    // Hide lasts for one login: the next person sees every note.
+    alerts.showHiddenNotes();
     void qc.invalidateQueries({ queryKey: ALERT_WATCH_KEY });
   }, [signedIn, qc]);
   useEffect(() => {
@@ -468,13 +476,17 @@ function OrderAlertsInner() {
       // The saved sounds are not in yet: nothing is counted as heard, the next round beeps.
       if (!fresh || !readyRef.current) return;
       const s = settingsRef.current;
-      const plan = planWatchTone(next, {
+      // Only what the banner can show beeps: a hidden note is not on it, and
+      // a popup shrinks the banner to the pill, which shows no note.
+      const plan = planWatchTone(shownNotes(next, alerts.getHiddenNotes(), signedIn), {
         signedIn,
         settings: s,
         now,
         lastToneAt: lastWatchTone.current,
         announced: announced.current,
         chimeRinging: isLoud(alerts.getState()),
+        notesOnScreen: !popupOpen(),
+        shiftOpen: data.shiftOpen,
       });
       const shown = new Set(next.flatMap((n) => n.keys));
       announced.current = new Set([...[...announced.current].filter((k) => shown.has(k)), ...plan.announce]);
@@ -510,6 +522,7 @@ function OrderAlertsInner() {
           player.stop();
         }}
         onCloseFailure={(id) => alerts.closeFailure(id)}
+        onHideNote={signedIn ? (n) => alerts.hideNote(n) : undefined}
       />
       {offText && (
         // Nobody can switch the order chime off unnoticed: every screen says so.

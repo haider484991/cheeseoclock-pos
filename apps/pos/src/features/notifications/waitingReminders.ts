@@ -19,7 +19,8 @@
  * With nobody signed in (the PIN screen), the same orders come from the watch
  * (alerts:getWatch, at most 3 hours old) instead: signedOutDue keeps a note
  * up for as long as an order is late, and the PIN screen beeps again every
- * PIN_REMIND_EVERY_MS until someone signs in (watchNotes.ts).
+ * PIN_REMIND_EVERY_MS until someone signs in, while a shift is open on this
+ * till (watchNotes.ts).
  */
 import { ageMinutes } from '../orders/boardLogic';
 import {
@@ -215,10 +216,12 @@ export function describeSignedOutReminders(
  * owner's minutes: "A soft beep and a note when a website order is still not
  * started 10 minutes after it came in, or not done after 30. Once per order,
  * at most one beep every 5 minutes. With nobody signed in, the note stays on
- * the PIN screen and beeps again every 5 minutes until someone signs in."
+ * the PIN screen and, while a shift is open, beeps again every 5 minutes
+ * until someone signs in." (No shift open: the shop is closed, the note
+ * stays and makes no sound — watchNotes.ts planWatchTone.)
  */
 export function waitingRuleText(timing: ReminderTiming): string {
-  return `A soft beep and a note when a website order is still not started ${timing.notStartedMin} minutes after it came in, or not done after ${timing.notDoneMin}. Once per order, at most one beep every ${REMIND_TONE_GAP_MS / 60_000} minutes. With nobody signed in, the note stays on the PIN screen and beeps again every ${PIN_REMIND_EVERY_MS / 60_000} minutes until someone signs in.`;
+  return `A soft beep and a note when a website order is still not started ${timing.notStartedMin} minutes after it came in, or not done after ${timing.notDoneMin}. Once per order, at most one beep every ${REMIND_TONE_GAP_MS / 60_000} minutes. With nobody signed in, the note stays on the PIN screen and, while a shift is open, beeps again every ${PIN_REMIND_EVERY_MS / 60_000} minutes until someone signs in.`;
 }
 
 /** The note when nobody moves orders along on Live Orders. */

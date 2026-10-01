@@ -15,11 +15,15 @@
  * The watch carries order numbers, statuses, minutes and times only, so no
  * note can name a customer or show a phone number.
  *
- * Signed in, the till beeps once for each newly unconfirmed order. With
- * nobody signed in it beeps at once for anything new, then again every
- * PIN_REMIND_EVERY_MS while a note is up, until someone signs in; never two
- * beeps closer than PIN_TONE_MIN_GAP_MS, and never while the new-order chime
- * or the alarm rings. A sound switched off keeps the note.
+ * Signed in, the till beeps once for each newly unconfirmed order, and a
+ * note can be hidden until something new joins it (shownNotes). With nobody
+ * signed in it beeps at once for anything new, then again every
+ * PIN_REMIND_EVERY_MS while a note is up, until someone signs in; a kitchen
+ * ticket only on the "Printer problem" switch, and orders waiting too long
+ * only while a shift is open on this till. Never two beeps closer than
+ * PIN_TONE_MIN_GAP_MS, never while the new-order chime or the alarm rings,
+ * and never for a note that is not on screen (a popup over the banner). A
+ * sound switched off keeps the note.
  */
 import {
   orderNumberList,
@@ -145,6 +149,34 @@ function waitingNote(watch: AlertWatch, ctx: WatchNotesContext): WatchNote | nul
   };
 }
 
+/**
+ * Notes put away with Hide (signed in only), by kind: the keys each one had
+ * then. Kept in the alert store and never saved: a restart, a sign-in or a
+ * sign-out brings them back.
+ */
+export type HiddenNotes = Readonly<Partial<Record<WatchNote['kind'], readonly string[]>>>;
+
+export const NO_HIDDEN_NOTES: HiddenNotes = Object.freeze({});
+
+/** Hide: this note, as it is now. */
+export function hideNote(hidden: HiddenNotes, note: WatchNote): HiddenNotes {
+  return { ...hidden, [note.kind]: [...note.keys] };
+}
+
+/**
+ * The notes on the banner. Signed in, a hidden note stays away until it has
+ * something it did not have when it was hidden (another order joins it); one
+ * that only got shorter stays away. Signed out (the PIN screen, or a held
+ * step-in) nothing hides: every note shows.
+ */
+export function shownNotes(notes: readonly WatchNote[], hidden: HiddenNotes, signedIn: boolean): WatchNote[] {
+  if (!signedIn) return [...notes];
+  return notes.filter((n) => {
+    const was = hidden[n.kind];
+    return !was || n.keys.some((k) => !was.includes(k));
+  });
+}
+
 export interface WatchToneContext {
   /** notesSignedIn. */
   signedIn: boolean;
@@ -152,28 +184,52 @@ export interface WatchToneContext {
   now: number;
   /** When a note last beeped (0: never). */
   lastToneAt: number;
-  /** Keys already heard (or that would have been, with the sound off). */
+  /** Keys already heard (signed in, also those that would have been with the sound off). */
   announced: ReadonlySet<string>;
   /** The new-order chime or the alarm is ringing: it has the till's ear. */
   chimeRinging: boolean;
+  /**
+   * The banner shows the notes now. A popup (a payment, the step-in PIN box,
+   * "Close the till?") shrinks it to the pill, which shows no note: a sound
+   * never plays without something on screen saying why.
+   */
+  notesOnScreen: boolean;
+  /** A shift is open on this till (the watch's shiftOpen). With none, the shop is closed. */
+  shiftOpen: boolean;
+}
+
+/**
+ * Which sound a note may make with nobody signed in, if any: a kitchen
+ * ticket only on "Printer problem" (Settings → Sounds says that switch is
+ * its), the others on "Order waiting too long". Orders waiting while no
+ * shift is open on this till make none: the shop is closed (website orders
+ * are paused then too), and the note still shows.
+ */
+function signedOutSound(n: WatchNote, ctx: WatchToneContext): 'printer' | 'waiting' | null {
+  if (n.kind === 'ticket') return ringsFor('printerProblem', ctx.settings) ? 'printer' : null;
+  if (n.kind === 'waiting' && !ctx.shiftOpen) return null;
+  return ringsFor('waitingTooLong', ctx.settings) ? 'waiting' : null;
 }
 
 /**
  * Whether the notes beep now, and with which sound. `announce`: the keys this
  * round counts as heard (the caller adds them to `announced`, keeping only
- * keys still shown). A key held back by the chime or the 60-second gap stays
- * unheard, so it still gets its beep.
+ * keys still shown). A key held back by the chime, the 60-second gap or a
+ * popup over the banner stays unheard, so it still gets its beep once the
+ * note is on screen. With nobody signed in, a note that may not sound
+ * (signedOutSound) is not counted as heard either: it neither beeps nor
+ * brings the 5-minute repeat.
  */
 export function planWatchTone(
   notes: readonly WatchNote[],
   ctx: WatchToneContext,
 ): { sound: 'printer' | 'waiting' | null; announce: string[] } {
   const quiet = { sound: null, announce: [] as string[] };
-  if (notes.length === 0 || ctx.chimeRinging) return quiet;
-  const fresh = notes.flatMap((n) => n.keys).filter((k) => !ctx.announced.has(k));
+  if (notes.length === 0 || ctx.chimeRinging || !ctx.notesOnScreen) return quiet;
   const since = ctx.now - ctx.lastToneAt;
 
   if (ctx.signedIn) {
+    const fresh = notes.flatMap((n) => n.keys).filter((k) => !ctx.announced.has(k));
     // Signed in, only a newly unconfirmed website order beeps, once.
     const freshUnconfirmed = notes.some((n) => n.kind === 'unconfirmed' && n.keys.some((k) => fresh.includes(k)));
     if (!freshUnconfirmed) return { sound: null, announce: fresh };
@@ -181,10 +237,11 @@ export function planWatchTone(
     return { sound: ringsFor('waitingTooLong', ctx.settings) ? 'waiting' : null, announce: fresh };
   }
 
+  const audible = notes.filter((n) => signedOutSound(n, ctx) !== null);
+  if (audible.length === 0) return quiet;
+  const fresh = audible.flatMap((n) => n.keys).filter((k) => !ctx.announced.has(k));
   const due = (fresh.length > 0 && since >= PIN_TONE_MIN_GAP_MS) || since >= PIN_REMIND_EVERY_MS;
   if (!due) return quiet;
-  let sound: 'printer' | 'waiting' | null = null;
-  if (notes.some((n) => n.kind === 'ticket') && ringsFor('printerProblem', ctx.settings)) sound = 'printer';
-  else if (ringsFor('waitingTooLong', ctx.settings)) sound = 'waiting';
+  const sound = audible.some((n) => n.kind === 'ticket') ? 'printer' : 'waiting';
   return { sound, announce: fresh };
 }

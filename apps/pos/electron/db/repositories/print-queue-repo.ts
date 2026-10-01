@@ -329,7 +329,7 @@ export function findFailedOwnJob(db: AppDatabase, orderId: string, copy: Receipt
   return null;
 }
 
-/** The most orders kitchenTicketsNotPrinted lists. */
+/** The most orders kitchenTicketsNotPrinted lists when it is not given `orderIds`. */
 export const TICKETS_NOT_PRINTED_MAX = 50;
 
 /** A kitchen ticket this till gave up printing, for an order the kitchen still has. */
@@ -354,8 +354,10 @@ export interface KitchenTicketNotPrinted {
  * So the mark goes by itself on Try again (requeueFailedJob: pending again),
  * on a newer Reprint, once either prints, and when the order leaves the
  * kitchen. `orderIds` narrows it to those orders (an empty list: none).
- * Oldest failure first, at most TICKETS_NOT_PRINTED_MAX. Read-only; it may
- * throw on a database error, so callers wrap it.
+ * Oldest failure first. Without `orderIds`, at most TICKETS_NOT_PRINTED_MAX;
+ * with them, every one that is not printed (one row per order, so never more
+ * than the list): a busy board's newest failures must get their strip too.
+ * Read-only; it may throw on a database error, so callers wrap it.
  */
 export function kitchenTicketsNotPrinted(
   db: AppDatabase,
@@ -385,7 +387,7 @@ export function kitchenTicketsNotPrinted(
         ORDER BY q.updated_at, q.rowid
         LIMIT ?`,
     )
-    .all(...(ids ?? []), TICKETS_NOT_PRINTED_MAX) as KitchenTicketNotPrinted[];
+    .all(...(ids ?? []), ids === null ? TICKETS_NOT_PRINTED_MAX : ids.length) as KitchenTicketNotPrinted[];
 }
 
 /** A pending job goes now (a reprint joined it): no more backoff wait. */

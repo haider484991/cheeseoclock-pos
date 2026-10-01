@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Button, NumberPad } from '@cheeseoclock/ui';
+import { Button, NumberPad, cn } from '@cheeseoclock/ui';
 import { PIN_MAX_DIGITS, normalizeSecret, secretProblem } from '@cheeseoclock/shared-schemas/sign-in-secret';
 import { DEFAULT_SHOP_PROFILE } from '@cheeseoclock/shared-types';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -17,21 +17,35 @@ import { homeFor } from '../shell/navAccess';
 import { WebOrdersPausedNotice } from '../shell/webOrdersPause';
 
 /**
+ * A window this short or shorter (the 1024×700 minimum, the usual 1366×768
+ * laptop; the same line as Checkout's in globals.css) gets the tighter PIN
+ * screen: the `[@media(max-height:820px)]:` classes below, written out in
+ * full so Tailwind finds them.
+ */
+export const SHORT_SCREEN_MAX_HEIGHT = 820;
+
+/**
  * Logo, name and tagline at the top of the sign-in screen. Also drawn by the
  * Branding settings preview, so what the owner sees there is exactly this.
  * The logo is shown whole: a wide logo gets a wide frame, never a crop.
+ *
+ * `trimWhenShort` (the PIN screen only, never the preview): on a short
+ * window the tagline is left out and the gaps are tighter, so the keypad's
+ * Enter row stays on screen.
  */
 export function LoginBrand({
   logoUrl,
   storeName,
   tagline,
+  trimWhenShort = false,
 }: {
   logoUrl?: string | null | undefined;
   storeName: string;
   tagline?: string | null | undefined;
+  trimWhenShort?: boolean;
 }) {
   return (
-    <div className="mb-4 flex flex-col items-center gap-3">
+    <div className={cn('mb-4 flex flex-col items-center gap-3', trimWhenShort && '[@media(max-height:820px)]:mb-3')}>
       <div className="relative max-w-full">
         <StoreLogo
           src={logoUrl}
@@ -48,9 +62,18 @@ export function LoginBrand({
           <Lock className="h-3.5 w-3.5 text-stone-600 dark:text-stone-300" />
         </div>
       </div>
-      <h1 className="mt-2 text-center text-3xl font-bold tracking-tight">{storeName}</h1>
+      <h1 className={cn('mt-2 text-center text-3xl font-bold tracking-tight', trimWhenShort && '[@media(max-height:820px)]:mt-0')}>
+        {storeName}
+      </h1>
       {tagline && (
-        <p className="text-center text-sm text-stone-500 dark:text-stone-400">{tagline}</p>
+        <p
+          className={cn(
+            'text-center text-sm text-stone-500 dark:text-stone-400',
+            trimWhenShort && '[@media(max-height:820px)]:hidden',
+          )}
+        >
+          {tagline}
+        </p>
       )}
     </div>
   );
@@ -185,7 +208,21 @@ export function LoginPage() {
   return (
     // Scrolls rather than clips on a short screen (the window's 700 px minimum):
     // my-auto centres the card while it fits and starts it at the top when not.
-    <div className="relative flex h-full justify-center overflow-y-auto py-4">
+    //
+    // A short window (820 px or less: SHORT_SCREEN_MAX_HEIGHT) trims what is
+    // not needed to sign in — the tagline, the footer line, some spacing —
+    // so the keypad's Enter row stays on screen with both notes showing
+    // ("login ended on its own", two lines; "Website orders are paused", one
+    // line) and an 88 px logo. Measured in Segoe UI 14 px (Inter the same),
+    // top to the keypad's bottom:
+    //   8 (page) + 24 (card) + 148 (logo 88, gap 12, name 36, gap 12)
+    //   + 60 (ended note) + 40 (paused) + 24 ("Enter your PIN")
+    //   + 364 (PIN box 64, gap 8, keys 4 × 64 + 3 × 12) = 668 px
+    // 32 px to spare at 700. At 768 the whole card fits, centred: keypad
+    // 674, "Use a password" 730, card 754. At 700, with both notes, "Use a
+    // password" (724) is a short scroll away. Before, the same screen ended
+    // the keypad at 782 px (714 with the paused notice alone).
+    <div className="relative flex h-full justify-center overflow-y-auto py-4 [@media(max-height:820px)]:py-2">
       {/* Ambient gradient orbs, clipped in their own layer so they add no scroll. */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
         <div
@@ -199,17 +236,20 @@ export function LoginPage() {
       </div>
 
       <div className="relative my-auto w-[460px] animate-scale-in">
-        <div className="glass-surface rounded-3xl p-8 shadow-soft-lg ring-1 ring-stone-200/60 dark:ring-stone-700/60">
-          <LoginBrand logoUrl={logoUrl} storeName={storeName} tagline={tagline} />
+        <div className="glass-surface rounded-3xl p-8 shadow-soft-lg ring-1 ring-stone-200/60 dark:ring-stone-700/60 [@media(max-height:820px)]:p-6">
+          <LoginBrand logoUrl={logoUrl} storeName={storeName} tagline={tagline} trimWhenShort />
           {/* Why the till is back here, when nobody logged out (sessionStore endedNote). */}
           {endedNote && (
-            <p role="status" className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-center text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            <p
+              role="status"
+              className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-center text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 [@media(max-height:820px)]:mb-2 [@media(max-height:820px)]:py-1.5"
+            >
               {endedNote}
             </p>
           )}
           {/* Website orders paused on this till because no shift is open. */}
           <WebOrdersPausedNotice />
-          <p className="mb-4 text-center text-xs font-medium uppercase tracking-widest text-stone-400">
+          <p className="mb-4 text-center text-xs font-medium uppercase tracking-widest text-stone-400 [@media(max-height:820px)]:mb-2">
             {mode === 'pin' ? 'Enter your PIN' : 'Type your password'}
           </p>
 
@@ -221,8 +261,9 @@ export function LoginPage() {
                 onSubmit={() => void submit()}
                 mask
                 maxLength={PIN_MAX_DIGITS}
+                className="[@media(max-height:820px)]:gap-2"
               />
-              <button type="button" onClick={() => showPassword('')} className={`mt-3 ${SWITCH_BUTTON}`}>
+              <button type="button" onClick={() => showPassword('')} className={`mt-3 ${SWITCH_BUTTON} [@media(max-height:820px)]:mt-2`}>
                 <Keyboard className="h-5 w-5" aria-hidden="true" />
                 Use a password
               </button>
@@ -270,7 +311,7 @@ export function LoginPage() {
           ) : null}
         </div>
 
-        <div className="mt-4 text-center text-[10px] uppercase tracking-widest text-stone-400">
+        <div className="mt-4 text-center text-[10px] uppercase tracking-widest text-stone-400 [@media(max-height:820px)]:hidden">
           Built for restaurants · Offline-first · FBR-ready
         </div>
       </div>

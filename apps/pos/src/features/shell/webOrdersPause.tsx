@@ -9,9 +9,10 @@ import { useWebOrdersPause } from '../notifications/useAlertWatch';
  * stay true if a second till ever holds the website link.
  */
 
-/** The PIN screen's notice. */
+/** The PIN screen's notice: one line, "Website orders are paused — sign in and open a shift." */
 export const WEB_PAUSED_TITLE = 'Website orders are paused';
-export const WEB_PAUSED_LOGIN_TEXT = 'No shift is open on this till. Sign in and open a shift.';
+export const WEB_PAUSED_LOGIN_TEXT = 'sign in and open a shift.';
+export const WEB_PAUSED_LOGIN_LINE = `${WEB_PAUSED_TITLE} — ${WEB_PAUSED_LOGIN_TEXT}`;
 /** The second line of "No shift is open" on Checkout and Live Orders. */
 export const WEB_PAUSED_BANNER_TEXT = 'Website orders are paused too. Opening the shift starts them again.';
 /** The top bar's pill, next to "Open shift". */
@@ -35,8 +36,12 @@ export function showWebOrdersPaused(v: WebOrdersPauseView | undefined | null): b
 
 /**
  * The PIN screen's notice (LoginPage, in the card under the logo): the amber
- * of the "why the till is back here" note, two lines, nothing until the till
- * has said yes.
+ * of the "why the till is back here" note, nothing until the till has said
+ * yes. One line, so the keypad's Enter row stays on a 700 px window: 360 px
+ * of words and icon in Segoe UI 14 px (383 in Inter) against 372 px inside
+ * the card (388 on a short window, where the card's padding is 1.5rem).
+ * On a short window (LoginPage SHORT_SCREEN_MAX_HEIGHT) its spacing is
+ * tighter too: 40 px with its gap, from 70.
  */
 export function WebOrdersPausedNotice() {
   const pause = useWebOrdersPause();
@@ -44,13 +49,10 @@ export function WebOrdersPausedNotice() {
   return (
     <div
       role="status"
-      className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-300 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-800"
+      className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-center text-sm text-amber-900 ring-1 ring-amber-300 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-800 [@media(max-height:820px)]:mb-2 [@media(max-height:820px)]:py-1.5"
     >
-      <p className="flex items-center justify-center gap-1.5 font-semibold">
-        <PauseCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-        {WEB_PAUSED_TITLE}
-      </p>
-      <p className="mt-0.5 text-center">{WEB_PAUSED_LOGIN_TEXT}</p>
+      <PauseCircle className="mr-1.5 inline h-4 w-4 shrink-0 align-[-0.1875rem]" aria-hidden="true" />
+      <span className="font-semibold">{WEB_PAUSED_TITLE}</span> — {WEB_PAUSED_LOGIN_TEXT}
     </div>
   );
 }

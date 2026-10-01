@@ -397,7 +397,8 @@ describe('website orders paused because no shift is open on this till', () => {
 
   it('the words, exactly', () => {
     expect(WEB_PAUSED_TITLE).toBe('Website orders are paused');
-    expect(WEB_PAUSED_LOGIN_TEXT).toBe('No shift is open on this till. Sign in and open a shift.');
+    // v0.7.33 review: one line on the PIN screen now ("Website orders are paused — sign in and open a shift.").
+    expect(WEB_PAUSED_LOGIN_TEXT).toBe('sign in and open a shift.');
     expect(WEB_PAUSED_BANNER_TEXT).toBe('Website orders are paused too. Opening the shift starts them again.');
     expect(WEB_PAUSED_PILL).toBe('Website paused');
     expect(WEB_PAUSED_PILL_TITLE).toBe(

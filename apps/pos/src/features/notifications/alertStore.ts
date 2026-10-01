@@ -23,8 +23,16 @@ import {
   seenOnScreen,
   type AlertState,
 } from './alertState';
+import { NO_HIDDEN_NOTES, hideNote, type HiddenNotes, type WatchNote } from './watchNotes';
 
-export const useAlertStore = create<{ state: AlertState }>(() => ({ state: EMPTY_ALERT_STATE }));
+/**
+ * `hiddenNotes`: the watch's notes someone signed in put away with Hide
+ * (watchNotes.ts shownNotes). Here only, never saved.
+ */
+export const useAlertStore = create<{ state: AlertState; hiddenNotes: HiddenNotes }>(() => ({
+  state: EMPTY_ALERT_STATE,
+  hiddenNotes: NO_HIDDEN_NOTES,
+}));
 
 function update(fn: (s: AlertState) => AlertState): void {
   const current = useAlertStore.getState().state;
@@ -88,6 +96,18 @@ export const alerts = {
   closeFailure(webOrderId: string): void {
     update((s) => closeFailure(s, webOrderId));
     tellMainProcess({ closeFailureIds: [webOrderId], silenceFailureIds: [webOrderId] });
+  },
+  getHiddenNotes(): HiddenNotes {
+    return useAlertStore.getState().hiddenNotes;
+  },
+  /** Hide on a signed-in note: away until something new joins it. */
+  hideNote(note: WatchNote): void {
+    useAlertStore.setState((s) => ({ hiddenNotes: hideNote(s.hiddenNotes, note) }));
+  },
+  /** A sign-in or sign-out: every hidden note shows again. */
+  showHiddenNotes(): void {
+    if (useAlertStore.getState().hiddenNotes === NO_HIDDEN_NOTES) return;
+    useAlertStore.setState({ hiddenNotes: NO_HIDDEN_NOTES });
   },
 };
 

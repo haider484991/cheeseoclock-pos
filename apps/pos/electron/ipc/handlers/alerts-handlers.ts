@@ -12,9 +12,9 @@ import { attachOrderAlertsDb, orderAlerts, showAttention } from '../../services/
  * Reading the sounds, the pending alerts and the watch needs no login: the
  * PIN screen rings for a website order too, anyone at the counter can tap
  * Seen (like a doorbell), and the PIN screen says when website orders are
- * paused on this till. The watch carries order numbers, statuses, minutes
- * and times only — no customer, money, website address or password
- * (alert-watch.ts). While nobody is signed in, the pending list goes out
+ * paused on this till. The watch carries order numbers, statuses, minutes,
+ * times and whether a shift is open only — no customer, money, website
+ * address or password (alert-watch.ts). While nobody is signed in, the pending list goes out
  * without the customers' phone numbers: the PIN screen says "Sign in to see
  * the phone number", and the number comes back on the first read after a
  * sign-in. Changing the sounds is for managers and the owner, the
@@ -53,7 +53,7 @@ export function registerAlertsHandlers(ctx: HandlerContext): void {
     ok(forScreen(orderAlerts.acknowledge(payload ?? {}, { loggedIn: getCurrentSession() !== null }))),
   );
 
-  defineHandler('alerts:getWatch', ctx, () => ok(readAlertWatch(ctx.db, Date.now())));
+  defineHandler('alerts:getWatch', ctx, () => ok(readAlertWatch(ctx.db, Date.now(), ctx.deviceId)));
 
   defineHandler('alerts:testNotice', ctx, () => {
     requireSoundsManage();

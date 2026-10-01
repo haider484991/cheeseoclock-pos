@@ -478,12 +478,19 @@ describe.skipIf(!Sqlite)('the watch through alerts:getWatch (the PIN screen)', (
     expect(watch().data).toEqual(EMPTY_ALERT_WATCH);
   });
 
-  it('paused on this till: says so and since when, in five parts, with no website address or password', async () => {
+  it('paused on this till: says so and since when, in six parts, with no website address or password', async () => {
     await pausedWithLink();
     const r = watch();
     expect(r.ok).toBe(true);
     expect(r.data.webOrders).toStrictEqual({ paused: true, since: T0, websiteLinkSet: true });
-    expect(Object.keys(r.data).sort()).toEqual(['orders', 'ticketsNotPrinted', 'timing', 'unconfirmed', 'webOrders']);
+    expect(Object.keys(r.data).sort()).toEqual([
+      'orders',
+      'shiftOpen',
+      'ticketsNotPrinted',
+      'timing',
+      'unconfirmed',
+      'webOrders',
+    ]);
     const text = JSON.stringify(r.data);
     expect(text).not.toContain('shop.example.test');
     expect(text).not.toContain(SECRET);
@@ -508,7 +515,31 @@ describe.skipIf(!Sqlite)('the watch through alerts:getWatch (the PIN screen)', (
         throw new Error('SQLITE_IOERR: disk I/O error');
       },
     } as never;
-    expect(readAlertWatch(broken, Date.now())).toEqual(EMPTY_ALERT_WATCH);
+    expect(readAlertWatch(broken, Date.now(), DEV)).toEqual(EMPTY_ALERT_WATCH);
+  });
+
+  it('whether a shift is open on this till: only yes or no, the same for every login', () => {
+    const shift = (id: string, device: string, closedAt: string | null) =>
+      db.prepare(
+        `INSERT INTO shifts (id, device_id, opened_by_user_id, opened_at, closed_by_user_id, closed_at, created_at, updated_at)
+         VALUES (?, ?, 'u_cash', ?, ?, ?, ?, ?)`,
+      ).run(id, device, T0, closedAt ? 'u_cash' : null, closedAt, T0, T0);
+    expect(watch().data.shiftOpen).toBe(false);
+    // Closed here, or open on the other till: this till's shop is closed.
+    shift('sh-closed', DEV, '2026-09-26T17:00:00.000Z');
+    shift('sh-other', 'till-2', null);
+    expect(watch().data.shiftOpen).toBe(false);
+    // Open on this till.
+    shift('sh-open', DEV, null);
+    for (const s of [null, CASHIER, MANAGER, OWNER]) {
+      h.session = s;
+      expect(watch().data.shiftOpen).toBe(true);
+      // Not who opened it, nor when.
+      const text = JSON.stringify(watch().data);
+      expect(text).not.toContain('Test Cashier');
+      expect(text).not.toContain('u_cash');
+      expect(text).not.toContain(T0);
+    }
   });
 });
 

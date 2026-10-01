@@ -187,9 +187,9 @@ describe('describeSignedOutReminders: sends someone to sign in', () => {
   });
 });
 
-it('Settings → Sounds says the PIN screen keeps the note up and beeps every 5 minutes', () => {
+it('Settings → Sounds says the PIN screen keeps the note up and beeps every 5 minutes while a shift is open', () => {
   expect(PIN_REMIND_EVERY_MS).toBe(5 * 60_000);
   expect(waitingRuleText(DEFAULT_KITCHEN_TIMING)).toMatch(
-    / With nobody signed in, the note stays on the PIN screen and beeps again every 5 minutes until someone signs in\.$/,
+    / With nobody signed in, the note stays on the PIN screen and, while a shift is open, beeps again every 5 minutes until someone signs in\.$/,
   );
 });
