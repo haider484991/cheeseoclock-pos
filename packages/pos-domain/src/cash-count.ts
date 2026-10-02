@@ -10,6 +10,20 @@
 import type { CashCount, Cents } from '@cheeseoclock/shared-types';
 import { formatCents } from './money.js';
 
+/**
+ * How a close's over / short reads (under Re 1 either way is matched): one
+ * rule for the close result, the shift report, Shift history and Team &
+ * leakage. It lives in shared-types so the shift report's renderer
+ * (printer-core) uses the same function; here for the till's screens.
+ */
+export {
+  CASH_PAISA_DIFFERENCE_LABEL,
+  CASH_VARIANCE_MATCHED_UNDER_CENTS,
+  cashPaisaDifferenceCents,
+  cashVarianceVerdict,
+  type CashVarianceVerdict,
+} from '@cheeseoclock/shared-types';
+
 /** What the count adds up to: each note's value × how many, plus 'Coins and other'. */
 export function cashCountTotalCents(c: CashCount): Cents {
   let total = c.otherCents;

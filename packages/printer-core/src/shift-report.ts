@@ -69,7 +69,10 @@
  * through toPrinterAscii ('—' prints '-', '×' prints 'x').
  */
 import {
+  CASH_PAISA_DIFFERENCE_LABEL,
   SHIFT_REPORT_SECTIONS,
+  cashPaisaDifferenceCents,
+  cashVarianceVerdict,
   paperClock,
   paperDateTime,
   paperDayMonthClock,
@@ -372,7 +375,12 @@ function appendMoneyTaken(p: Paper, r: ShiftReport): void {
   if (r.partPaymentsCents !== 0) row(p, 'Part payments, other shifts', money(r.partPaymentsCents), 2);
 }
 
-/** BY CHANNEL, in Reports' order and words; own and outside riders under a delivery channel that had one. */
+/**
+ * BY CHANNEL, in Reports' order and words; own and outside riders under a
+ * delivery channel that had an outside rider. 'own riders' is left out when
+ * every one of its orders went with an outside rider (no '(0)' row, as
+ * every other section leaves its rows at 0 out).
+ */
 function appendChannels(p: Paper, r: ShiftReport): void {
   if (r.channels.length === 0) {
     strongRow(p, 'BY CHANNEL: none');
@@ -382,7 +390,8 @@ function appendChannels(p: Paper, r: ShiftReport): void {
   for (const c of r.channels) {
     row(p, `${CHANNEL_LABEL[c.channel] ?? c.channel} (${c.orderCount})`, money(c.billedCents));
     if (c.outside) {
-      row(p, `own riders (${c.orderCount - c.outside.orderCount})`, money(c.billedCents - c.outside.billedCents), 2);
+      const own = c.orderCount - c.outside.orderCount;
+      if (own !== 0) row(p, `own riders (${own})`, money(c.billedCents - c.outside.billedCents), 2);
       row(p, `outside riders (${c.outside.orderCount})`, money(c.outside.billedCents), 2);
     }
   }
@@ -429,6 +438,9 @@ function madeSummary(p: Paper, cancelled: readonly ShiftReportCancelled[]): void
 /**
  * CANCELLED AND REFUNDED: this till's orders cancelled in the shift (whether
  * the food was made), then the refunds handed back; each list stops at 10.
+ * 'Refunded (n)' counts the orders as SALES' 'Refunds (n)' does (by the
+ * order, not its number: the two tills number their orders apart, so two
+ * orders can share one).
  */
 function appendCancelsRefunds(p: Paper, r: ShiftReport): void {
   strongRow(p, 'CANCELLED AND REFUNDED');
@@ -445,14 +457,17 @@ function appendCancelsRefunds(p: Paper, r: ShiftReport): void {
     andMore(p, r.cancelled.length, 2);
   }
   if (r.refunds.length > 0) {
-    const orders = new Set(r.refunds.map((x) => x.orderNumber)).size;
-    row(p, `Refunded (${orders})`, money(sum(r.refunds.map((x) => x.cents))));
+    row(p, `Refunded (${r.sales.refunds.orderCount})`, money(sum(r.refunds.map((x) => x.cents))));
     for (const x of r.refunds.slice(0, SHIFT_REPORT_LIST_MAX)) entryRow(p, refundHead(x), x.reason, money(x.cents));
     andMore(p, r.refunds.length, 2);
   }
 }
 
-/** "#0033 22:05 cash", "#0044 18:10 card, part". */
+/**
+ * "#0033 22:05 cash", "#0044 18:10 card, part": ', part' on a refund that
+ * by itself handed back less than its order's total (full is false), so
+ * an order refunded in two parts says part on both rows.
+ */
 function refundHead(x: ShiftReportRefund): string {
   const part = x.full ? '' : ', part';
   return `${shortOrderNumber(x.orderNumber)} ${paperClock(x.at)} ${METHOD_WORD[x.method] ?? x.method}${part}`;
@@ -499,8 +514,12 @@ function appendDrawer(p: Paper, r: ShiftReport): void {
 
 /**
  * CASH COUNTED: each note row above 0 and 'Coins and other', COUNTED, then
- * SHORT / OVER / MATCHES EXPECTED in bold double height. A count not made
- * by note (an older close) prints COUNTED and the result only.
+ * SHORT / OVER / MATCHES EXPECTED in bold double height with the variance
+ * as saved. Under Re 1 either way is MATCHES EXPECTED (cashVarianceVerdict,
+ * the till's one rule): the count is in whole rupees and the tax leaves
+ * paisa on the bills. Such a match that is not 0 says so under it, in
+ * normal size: 'Paisa difference Rs 0.50'. A count not made by note (an
+ * older close) prints COUNTED and the result only.
  */
 function appendCounted(p: Paper, r: ShiftReport): void {
   const d = r.drawer;
@@ -513,9 +532,12 @@ function appendCounted(p: Paper, r: ShiftReport): void {
   }
   strongRow(p, 'COUNTED', money(d.countedCents));
   const v = d.varianceCents;
+  const verdict = cashVarianceVerdict(v);
   p.b.bold(true).doubleHeight(true);
-  row(p, v < 0 ? 'SHORT' : v > 0 ? 'OVER' : 'MATCHES EXPECTED', paperSignedMoney(v));
+  row(p, verdict === 'short' ? 'SHORT' : verdict === 'over' ? 'OVER' : 'MATCHES EXPECTED', paperSignedMoney(v));
   p.b.doubleHeight(false).bold(false);
+  const paisa = cashPaisaDifferenceCents(v);
+  if (paisa !== null) row(p, `${CASH_PAISA_DIFFERENCE_LABEL} Rs ${money(paisa)}`);
 }
 
 /**

@@ -73,6 +73,45 @@ export interface CashCount {
   otherCents: number;
 }
 
+/** How a counted drawer reads against its expected cash. */
+export type CashVarianceVerdict = 'matched' | 'short' | 'over';
+
+/**
+ * A drawer off by less than this (Re 1) reads as matched. No coin under
+ * Re 1 is in use, but the 15% tax leaves many bills on 50 paisa (Rs 517.50),
+ * and the count by note takes whole rupees, so a perfect count can be
+ * Rs 0.50 off (v0.7.35 review: the paisa rule).
+ */
+export const CASH_VARIANCE_MATCHED_UNDER_CENTS = 100;
+
+/** The words for a matched drawer's paisa: 'Paisa difference Rs 0.50'. */
+export const CASH_PAISA_DIFFERENCE_LABEL = 'Paisa difference';
+
+/**
+ * The one rule for how a close's variance (counted − expected) reads, on
+ * every screen and paper that judges it: the close result, the shift
+ * report, Shift history and the Team & leakage banner. Under Re 1 either
+ * way is 'matched'; otherwise below 0 is 'short' and above 0 is 'over'.
+ * The stored variance_cents stays exact; only how it reads changes.
+ *
+ * Here, not in pos-domain, so the shift report's renderer (printer-core,
+ * which depends on shared-types only) uses the same rule; pos-domain
+ * re-exports it (cash-count.ts) and tests it.
+ */
+export function cashVarianceVerdict(varianceCents: number): CashVarianceVerdict {
+  if (Math.abs(varianceCents) < CASH_VARIANCE_MATCHED_UNDER_CENTS) return 'matched';
+  return varianceCents < 0 ? 'short' : 'over';
+}
+
+/**
+ * The paisa a matched drawer was off by, as a positive number of cents
+ * (50 for Rs 0.50 either way), for the line 'Paisa difference Rs 0.50';
+ * null when the drawer matched exactly or did not match.
+ */
+export function cashPaisaDifferenceCents(varianceCents: number): number | null {
+  return varianceCents !== 0 && cashVarianceVerdict(varianceCents) === 'matched' ? Math.abs(varianceCents) : null;
+}
+
 /**
  * An order still unpaid on this till when its shift is being closed: the
  * close box lists them, and the manager gives one reason to carry them all

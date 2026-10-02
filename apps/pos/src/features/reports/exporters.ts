@@ -51,6 +51,7 @@ import {
   shiftCashOutParts,
   shiftCountedNotes,
   shiftDetailLines,
+  shiftResultOf,
   stockCellText,
   unpaidFoodText,
   websiteVsTill,
@@ -851,6 +852,13 @@ export function escapeHtml(s: string): string {
 const esc = escapeHtml;
 const money = (c: number) => esc(formatCents(c));
 
+/** A shift's Result on the A4 paper, as Shift history says it (shiftResultOf: under Re 1 either way is Matched, its paisa under it). */
+function shiftResultHtml(varianceCents: number | null): string {
+  const r = shiftResultOf(varianceCents);
+  if (r === null) return '—';
+  return r.paisa ? `${esc(r.words)}<br><span class="muted">${esc(r.paisa)}</span>` : esc(r.words);
+}
+
 function table(headers: string[], rows: string[][], right: number[] = []): string {
   if (rows.length === 0) return '<p class="muted">None.</p>';
   const cls = (i: number) => (right.includes(i) ? ' class="r"' : '');
@@ -1152,11 +1160,7 @@ const PRINT_PARTS: { [K in ReportTab]: PrintPart<K> } = {
             money(s.openingCashCents),
             s.expectedCashCents === null ? '—' : money(s.expectedCashCents),
             s.countedCashCents === null ? '—' : money(s.countedCashCents),
-            s.varianceCents === null
-              ? '—'
-              : s.varianceCents === 0
-                ? 'Matched'
-                : `${s.varianceCents > 0 ? 'Over' : 'Short'} ${money(Math.abs(s.varianceCents))}`,
+            shiftResultHtml(s.varianceCents),
             String(s.cashMovementCount),
             String(s.noSaleOpens),
             // The count by note (v0.7.35), opening and closing notes, then any unpaid orders carried over — each on its own line.

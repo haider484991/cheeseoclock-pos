@@ -37,6 +37,7 @@ import {
   shiftCountedNotes,
   shiftCountedNotesText,
   shiftDetailLines,
+  shiftResultOf,
   stockCellText,
   unpaidFoodText,
   websiteVsTill,
@@ -590,6 +591,43 @@ describe('printout', () => {
     expect(html).toContain('&lt;i&gt;x&lt;/i&gt;');
     expect(html).not.toContain('<i>x</i>');
     expect(html).not.toContain('Showing the latest');
+  });
+
+  it('the paisa rule: under Re 1 either way is Matched with its paisa under it on the A4 paper; Re 1 is Over or Short; the file keeps the exact figure', () => {
+    const shift = (id: string, varianceCents: number) => ({
+      id,
+      openedAt: '2026-10-02T05:00:00.000Z',
+      closedAt: '2026-10-02T10:30:00.000Z',
+      openedBy: 'Sara',
+      closedBy: 'Sara',
+      openingCashCents: 500000,
+      expectedCashCents: 551750,
+      countedCashCents: 551750 + varianceCents,
+      varianceCents,
+      cashInCents: 0,
+      cashOutCents: 0,
+      cashMovementCount: 0,
+      noSaleOpens: 0,
+      openingNote: null,
+      closingNote: null,
+      carriedUnpaidCount: 0,
+      carryOverReason: null,
+    });
+    expect(shiftResultOf(null)).toBeNull();
+    expect(shiftResultOf(0)).toEqual({ verdict: 'matched', words: 'Matched', paisa: null });
+    expect(shiftResultOf(50)).toEqual({ verdict: 'matched', words: 'Matched', paisa: 'Paisa difference Rs 0.50' });
+    expect(shiftResultOf(-99)).toEqual({ verdict: 'matched', words: 'Matched', paisa: 'Paisa difference Rs 0.99' });
+    expect(shiftResultOf(-100)).toEqual({ verdict: 'short', words: 'Short Rs 1', paisa: null });
+    expect(shiftResultOf(100)).toEqual({ verdict: 'over', words: 'Over Rs 1', paisa: null });
+    expect(shiftResultOf(-10_050)).toEqual({ verdict: 'short', words: 'Short Rs 100.50', paisa: null });
+
+    const shifts = [shift('s1', 50), shift('s2', -100)];
+    const html = tabPrint('team', report({ shifts }));
+    expect(html).toMatch(/Matched<br><span class="muted">Paisa difference Rs 0\.50<\/span><\/td><td class="r">0<\/td>/);
+    expect(html).toMatch(/Short Rs 1<\/td><td class="r">0<\/td>/);
+    const rows = tabCsv('team', report({ shifts })).split(/\r?\n/);
+    expect(rows).toContainEqual(expect.stringMatching(/,5517\.50,5518\.00,0\.50,/));
+    expect(rows).toContainEqual(expect.stringMatching(/,5517\.50,5516\.50,-1\.00,/));
   });
 
   it('the CSV has each shift’s opening and closing note in columns of their own; a shift with none leaves them empty', () => {

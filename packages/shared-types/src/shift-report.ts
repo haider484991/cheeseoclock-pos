@@ -163,7 +163,12 @@ export interface ShiftReportRefund {
   method: string;
   /** Handed back, positive. */
   cents: number;
-  /** True when the order was refunded in full. */
+  /**
+   * True when this refund by itself handed back the order's whole total;
+   * false prints ', part' (v0.7.35 review: the row says what it did, so an
+   * order refunded in two parts, or back through two methods, says part on
+   * both rows). Whether the order ended refunded in full is ORDERS' flag.
+   */
   full: boolean;
   reason: string | null;
 }

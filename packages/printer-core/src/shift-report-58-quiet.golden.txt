@@ -1,0 +1,74 @@
+SHIFT REPORT
+Cheese O'Clock
+Till: DESKTOP-7Q2M1KD
+--------------------------------
+Opened 02/10 10:00      Ali Raza
+Closed 02/10 15:30     Imran Ali
+================================
+SALES              2 orders paid
+Food                    1,250.00
+Delivery charges (1)      200.00
+Sales tax 15%             217.50
+TOTAL (with tax)        1,667.50
+NET SALES               1,667.50
+Average bill              833.75
+--------------------------------
+MONEY TAKEN
+Cash (2)                1,667.50
+TOTAL                   1,667.50
+--------------------------------
+BY CHANNEL
+Takeaway (1)              517.50
+Delivery (1)            1,150.00
+  outside riders (1)    1,150.00
+--------------------------------
+CANCELLED AND REFUNDED
+No cancels or refunds
+--------------------------------
+CASH DRAWER
+Opening float           5,000.00
+Cash sales              1,667.50
+Cash refunds                0.00
+To outside riders (1)    -200.00
+  1 delivery charge kept
+EXPECTED CASH           6,467.50
+--------------------------------
+CASH COUNTED
+Rs 5,000 x 1            5,000.00
+Rs 1,000 x 1            1,000.00
+Rs 100 x 4                400.00
+Rs 50 x 1                  50.00
+Rs 10 x 1                  10.00
+Coins and other             8.00
+COUNTED                 6,468.00
+MATCHES EXPECTED           +0.50
+Paisa difference Rs 0.50
+--------------------------------
+UNPAID - CARRIED OVER: none
+--------------------------------
+ITEMS SOLD (2)          1,250.00
+BURGERS (1)               800.00
+1x Crispy Signature       800.00
+FRIES & SIDES (1)         450.00
+1x Fries - Large          450.00
+--------------------------------
+ORDERS (2)              1,667.50
+#0001 11:05               517.50
+  Takeaway, Cash
+#0002 12:40             1,150.00
+  Delivery, Cash
+================================
+Printed 02/10/2026 15:30 by
+Imran Ali
+Sales = orders paid on this till
+this shift.
+Figures as saved when the shift
+closed.
+-- END OF SHIFT REPORT --
+
+
+
+
+
+
+[cut]

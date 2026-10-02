@@ -281,3 +281,108 @@ export const SAMPLE_SHIFT_REPORT: ShiftReport = {
   items: categories,
   orders,
 };
+
+/**
+ * A quiet afternoon (test fixture): two orders, both paid in cash, on 2 Oct
+ * 2026 from 10:00 to 15:30 Pakistan time, closed by the manager signed in.
+ * It pins two shapes the sample night has not got:
+ *  - the drawer counted to the rupee, Rs 0.50 over: the 15% tax leaves a
+ *    Rs 517.50 bill and the count by note is in whole rupees, so the paper
+ *    says MATCHES EXPECTED with 'Paisa difference Rs 0.50' (v0.7.35, the
+ *    paisa rule: under Re 1 either way matches);
+ *  - every delivery went with an outside rider, so BY CHANNEL prints
+ *    'outside riders (1)' under Delivery and no 'own riders (0)' row.
+ * Written by hand; every figure adds up as the till's would. The menu's
+ * names, categories and prices are the shop's own (Fries — Large Rs 450,
+ * Crispy Signature Rs 800, the area's delivery charge Rs 200, each + 15%).
+ */
+export const QUIET_SHIFT_REPORT: ShiftReport = {
+  v: SHIFT_REPORT_VERSION,
+  shiftId: 'shift-quiet-afternoon',
+  deviceId: 'till-sample-1',
+  tillName: 'DESKTOP-7Q2M1KD',
+  shopName: "Cheese O'Clock",
+  // 10:00 and 15:30 on 2 Oct in Pakistan (UTC+5).
+  openedAt: '2026-10-02T05:00:00.000Z',
+  closedAt: '2026-10-02T10:30:00.000Z',
+  openedBy: 'Ali Raza',
+  closedBy: 'Imran Ali',
+  pinOnLoginOf: null,
+  sales: {
+    orderCount: 2,
+    // Fries Rs 450 + Crispy Signature Rs 800.
+    foodCents: 125_000,
+    delivery: { orderCount: 1, cents: 20_000 },
+    discounts: [],
+    // 15% of Rs 1,450.
+    taxCents: 21_750,
+    taxRateBps: 1500,
+    // Rs 517.50 + Rs 1,150.
+    billedCents: 166_750,
+    refunds: { orderCount: 0, cents: 0 },
+    netCents: 166_750,
+    averageCents: 83_375,
+  },
+  payments: [{ method: 'cash', orderCount: 2, cents: 166_750 }],
+  paymentRefunds: [],
+  moneyTakenCents: 166_750,
+  partPaymentsCents: 0,
+  channels: [
+    { channel: 'takeaway', orderCount: 1, billedCents: 51_750, outside: null },
+    { channel: 'delivery', orderCount: 1, billedCents: 115_000, outside: { orderCount: 1, billedCents: 115_000 } },
+  ],
+  cancelled: [],
+  refunds: [],
+  drawer: {
+    openingCents: 500_000,
+    cashSalesCents: 166_750,
+    cashRefundsCents: 0,
+    cashIn: { count: 0, cents: 0 },
+    cashOut: { count: 0, cents: 0 },
+    riderTips: { count: 0, cents: 0 },
+    // The outside rider kept the Rs 200 charge.
+    riderKept: { count: 1, cents: 20_000, tripCount: 0 },
+    otherCents: 0,
+    // 5,000 + 1,667.50 − 200 = 6,467.50, counted 6,468.00: Rs 0.50 over.
+    expectedCents: 646_750,
+    countedCents: 646_800,
+    varianceCents: 50,
+    countedNotes: {
+      notes: [
+        { faceCents: 500_000, count: 1 },
+        { faceCents: 100_000, count: 1 },
+        { faceCents: 50_000, count: 0 },
+        { faceCents: 10_000, count: 4 },
+        { faceCents: 5_000, count: 1 },
+        { faceCents: 2_000, count: 0 },
+        { faceCents: 1_000, count: 1 },
+      ],
+      otherCents: 800,
+    },
+  },
+  unpaid: { orders: [], reason: null },
+  items: [
+    { category: 'Burgers', quantity: 1, cents: 80_000, items: [{ name: 'Crispy Signature', quantity: 1, cents: 80_000 }] },
+    { category: 'Fries & Sides', quantity: 1, cents: 45_000, items: [{ name: 'Fries — Large', quantity: 1, cents: 45_000 }] },
+  ],
+  orders: [
+    {
+      orderNumber: '20261002-0001',
+      paidAt: '2026-10-02T06:05:00.000Z',
+      channel: 'takeaway',
+      outside: false,
+      methods: ['cash'],
+      totalCents: 51_750,
+      refunded: 'no',
+    },
+    {
+      orderNumber: '20261002-0002',
+      paidAt: '2026-10-02T07:40:00.000Z',
+      channel: 'delivery',
+      outside: true,
+      methods: ['cash'],
+      totalCents: 115_000,
+      refunded: 'no',
+    },
+  ],
+};

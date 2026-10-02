@@ -41,7 +41,12 @@
  *   (5) test orders deleted before the close are nowhere on it;
  *   (9) another till's shift gets no report;
  *   (11) the close reads no food cost;
- *   (12) and reads by index.
+ *   (12) and reads by index;
+ *   (13) each refund row says what it did (v0.7.35 review): ', part' on a
+ *       row of less than the order's total, so two parts of one order both
+ *       say part, and a refund of the whole order by itself does not;
+ *   (14) two orders that share a number (one from each till) are two
+ *       refunded orders on the paper, as SALES counts them.
  *
  * Every try at printing it (step 19f-1): one chained 'shift_report_printed'
  * audit row per try, failed ones too, nothing synced and the shift
@@ -60,9 +65,11 @@
  */
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CashCount, ChannelOffer, ReportShiftLine, Shift, ShiftReport } from '@cheeseoclock/shared-types';
+import type { CashCount, ChannelOffer, ReportShiftLine, Shift, ShiftReport, ShiftReportSection } from '@cheeseoclock/shared-types';
+import { SHIFT_REPORT_SECTIONS, shortOrderNumber as shortNumber } from '@cheeseoclock/shared-types';
 import { parseCashCountJson, parseShiftReportJson } from '@cheeseoclock/shared-schemas';
 import { shiftReportDrawerAddsUp, shiftReportJson } from '@cheeseoclock/pos-domain';
+import { escPosToText, renderShiftReport } from '@cheeseoclock/printer-core';
 import type { SyncChange } from '@cheeseoclock/sync-core';
 import type { AppDatabase } from './connection.js';
 import { DatabaseSync, openMigrated } from './costing-shop.fixture.js';
@@ -701,6 +708,8 @@ const B = {
   manager: { userId: TEST_USERS.manager.userId, deviceId: TILL_B },
 };
 const OWNER = { userId: TEST_USERS.owner.userId, deviceId: TILL_A };
+/** Every section of the paper on (the owner's default). */
+const ALL_SECTIONS_ON = Object.fromEntries(SHIFT_REPORT_SECTIONS.map((s) => [s.key, true])) as Record<ShiftReportSection, boolean>;
 /** Every shift there is: Shift history's period in these tests. */
 const ALL_TIME = { sinceIso: '2000-01-01T00:00:00.000Z', untilIso: '2100-01-01T00:00:00.000Z' };
 
@@ -1255,6 +1264,90 @@ live('the shift report made at the close (shift-report-service, step 19d-3)', ()
       ]),
     );
     expect(reported.report.sales.delivery).toEqual({ orderCount: 1, cents: KEEP });
+  });
+
+  it('(13) each refund row says what it did: two parts of one order both say part; one refund of the whole order does not, nor a part refund of all of it', async () => {
+    const { db, menu, shiftId } = await till();
+    const r = await orderRepo();
+    const approverUserId = A.manager.userId;
+    // Rs 500 back, then the rest (Rs 650) in the same shift: the order ends refunded in full.
+    const twoParts = await paidTakeaway(db, menu, 'card');
+    r.refundOrder(db, { orderId: twoParts.id, reason: 'Test one part', approverUserId, amountCents: 50_000 }, A.manager);
+    r.refundOrder(db, { orderId: twoParts.id, reason: 'Test rest of it', approverUserId, foodMade: 'not_made' }, A.manager);
+    // All of it at once.
+    const whole = await paidTakeaway(db, menu, 'cash');
+    r.refundOrder(db, { orderId: whole.id, reason: 'Test wrong order', approverUserId, foodMade: 'not_made' }, A.manager);
+    // 'Part of it' typed as the whole bill.
+    const partOfAll = await paidTakeaway(db, menu, 'card');
+    r.refundOrder(db, { orderId: partOfAll.id, reason: 'Test all of it', approverUserId, amountCents: partOfAll.total, foodMade: 'not_made' }, A.manager);
+    // Paid Rs 500 cash + the rest by card, all of it back: a row per method, each less than the bill.
+    const split = await paidBy(db, menu, (t) => [
+      { method: 'cash', amountCents: 50_000, tenderedCents: 50_000 },
+      { method: 'card', amountCents: t - 50_000 },
+    ]);
+    r.refundOrder(db, { orderId: split.id, reason: 'Test split back', approverUserId, foodMade: 'not_made' }, A.manager);
+
+    const reported = await closeEvenReported(db, shiftId);
+    await expectWhole(db, shiftId, reported);
+    const { report } = reported;
+    const rowsOf = async (orderId: string) => {
+      const n = await numberOf(db, orderId);
+      return report.refunds.filter((x) => x.orderNumber === n).map((x) => ({ method: x.method, cents: x.cents, full: x.full }));
+    };
+    expect(await rowsOf(twoParts.id)).toEqual([
+      { method: 'card', cents: 50_000, full: false },
+      { method: 'card', cents: BURGER_TOTAL - 50_000, full: false },
+    ]);
+    expect(await rowsOf(whole.id)).toEqual([{ method: 'cash', cents: BURGER_TOTAL, full: true }]);
+    expect(await rowsOf(partOfAll.id)).toEqual([{ method: 'card', cents: BURGER_TOTAL, full: true }]);
+    expect(await rowsOf(split.id)).toEqual([
+      { method: 'cash', cents: 50_000, full: false },
+      { method: 'card', cents: BURGER_TOTAL - 50_000, full: false },
+    ]);
+    // Every one of them ended refunded in full (ORDERS says so); the money is unchanged.
+    expect(report.orders.map((o) => o.refunded)).toEqual(['full', 'full', 'full', 'full']);
+    expect(report.sales.refunds).toEqual({ orderCount: 4, cents: 4 * BURGER_TOTAL });
+
+    // On paper: ', part' on both rows of the order refunded in two parts.
+    const paper = escPosToText(
+      renderShiftReport(report, { width: 48, sections: ALL_SECTIONS_ON, items: 'items', printedAt: report.closedAt, printedByName: 'Test Manager' }),
+    ).split('\n');
+    const short = shortNumber(await numberOf(db, twoParts.id));
+    expect(paper.filter((x) => x.startsWith(`  ${short} `))).toEqual([
+      expect.stringMatching(new RegExp(`^  ${short} \\d\\d:\\d\\d card, part: Test one part +500\\.00$`)),
+      expect.stringMatching(new RegExp(`^  ${short} \\d\\d:\\d\\d card, part: Test rest of it +650\\.00$`)),
+    ]);
+    expect(paper).toContain('Refunded (4)                            4,600.00');
+  });
+
+  it('(14) two orders with one number (one from each till) refunded on one till: Refunded (2), as SALES says Refunds (2)', async () => {
+    const repo = await shiftRepo();
+    const r = await orderRepo();
+    const a = openTill(TILL_A);
+    const b = openTill(TILL_B, { usersFrom: TILL_A });
+    const menu = await menuOn(a, A.manager);
+    repo.openShift(a, { openingCashCents: FLOAT }, A.manager);
+    // Till A's first order of the day, paid in cash there; then till B's own first order: the same number.
+    const fromA = await paidTakeaway(a, menu, 'cash');
+    expect(await push(a, TILL_A, b)).toMatchObject({ waiting: 0, dropped: 0 });
+    const shiftB = repo.openShift(b, { openingCashCents: FLOAT }, B.manager).id;
+    const ownB = await paidTakeaway(b, menu, 'card', B.cashier);
+    expect(await numberOf(b, ownB.id)).toBe(await numberOf(b, fromA.id));
+    // Till B gives part refunds on both.
+    r.refundOrder(b, { orderId: fromA.id, reason: 'Test cold', approverUserId: B.manager.userId, amountCents: 10_000 }, B.manager);
+    r.refundOrder(b, { orderId: ownB.id, reason: 'Test late', approverUserId: B.manager.userId, amountCents: 20_000 }, B.manager);
+
+    const onB = await closeEvenReported(b, shiftB, { actor: B.manager, deviceId: TILL_B });
+    await expectWhole(b, shiftB, onB);
+    expect(onB.report.sales.refunds).toEqual({ orderCount: 2, cents: 30_000 });
+    expect(new Set(onB.report.refunds.map((x) => x.orderNumber)).size).toBe(1);
+    for (const width of [48, 32] as const) {
+      const paper = escPosToText(
+        renderShiftReport(onB.report, { width, sections: ALL_SECTIONS_ON, items: 'items', printedAt: onB.report.closedAt, printedByName: 'Test Manager' }),
+      ).split('\n');
+      expect(paper.find((x) => x.startsWith('Refunds ('))?.replace(/ +/g, ' ')).toBe('Refunds (2) -300.00');
+      expect(paper.find((x) => x.startsWith('Refunded ('))?.replace(/ +/g, ' ')).toBe('Refunded (2) 300.00');
+    }
   });
 
   it('(3) discounts by kind: a staff discount, the website’s, an automatic offer; an offer taken off (Rs 0) does not count', async () => {

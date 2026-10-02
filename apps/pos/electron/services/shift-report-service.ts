@@ -153,7 +153,8 @@ interface PaymentRow {
   paidAt: string;
   referenceNo: string | null;
   orderNumber: string;
-  status: string;
+  /** The order's stored total: a refund row of less is a part refund. */
+  orderTotal: number;
   orderReason: string | null;
 }
 
@@ -187,7 +188,8 @@ function readSettled(db: AppDatabase, shiftId: string): SettledRow[] {
  */
 function readPayments(db: AppDatabase, shiftId: string): PaymentRow[] {
   const cols = `p.id AS id, p.order_id AS orderId, p.method AS method, p.amount_cents AS cents, p.paid_at AS paidAt,
-                p.reference_no AS referenceNo, o.order_number AS orderNumber, o.status AS status, o.void_reason AS orderReason`;
+                p.reference_no AS referenceNo, o.order_number AS orderNumber,
+                o.total_cents AS orderTotal, o.void_reason AS orderReason`;
   return db
     .prepare(
       `SELECT ${cols}
@@ -357,6 +359,10 @@ export function readShiftReportFacts(db: AppDatabase, ctx: ShiftCloseContext): S
     method: p.method,
     cents: Number(p.cents),
   }));
+  // Each refund row says what that row did: 'full' only when it alone handed
+  // back the order's whole total. An order refunded in two parts (or back
+  // through two methods) has two rows of less, and the paper says ', part'
+  // on each; the order's own state is in ORDERS ('(refunded)').
   const refunds: ShiftReportFactsRefund[] = paymentRows
     .filter((p) => Number(p.cents) < 0)
     .map((p) => ({
@@ -365,7 +371,7 @@ export function readShiftReportFacts(db: AppDatabase, ctx: ShiftCloseContext): S
       at: p.paidAt,
       method: p.method,
       cents: -Number(p.cents),
-      full: p.status === 'refunded',
+      full: -Number(p.cents) >= Number(p.orderTotal),
       reason: refundReason(p.referenceNo, p.orderReason),
     }));
 

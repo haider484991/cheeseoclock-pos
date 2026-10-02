@@ -5,7 +5,7 @@
  * Pakistan time whatever the PC's zone, the rules of each section and the
  * owner's switches.
  *
- * Four whole papers are pinned as goldens next to this file
+ * Six whole papers are pinned as goldens next to this file
  * (shift-report-*.golden.txt, the mock printer's text). A golden changes
  * only on purpose: run
  *   SHIFT_REPORT_GOLDENS=write npx vitest run src/shift-report.test.ts
@@ -30,6 +30,7 @@ import { drawerPulseBytes } from './escpos.js';
 import { fingerprint } from './receipt-goldens.fixture.js';
 import { renderShiftReport, SHIFT_REPORT_LIST_MAX, type RenderShiftReportOpts } from './shift-report.js';
 import {
+  QUIET_SHIFT_REPORT,
   SAMPLE_SHIFT_REPORT,
   SAMPLE_SHIFT_REPORT_FINGERPRINT,
   sampleNightAt,
@@ -51,6 +52,9 @@ const REPRINT: Partial<RenderShiftReportOpts> = {
   stamp: { reprintNo: 2, at: REPRINT_AT, byName: 'Imran Ali' },
   sinceClose: { testDeletedCashCents: 120_000 },
 };
+
+/** The quiet afternoon's paper, printed at its close (15:30 on 2 Oct, Pakistan). */
+const QUIET: Partial<RenderShiftReportOpts> = { printedAt: QUIET_SHIFT_REPORT.closedAt };
 
 /** The paper's rows as the mock printer writes them (centred rows lose their spaces). */
 function rowsOf(report: ShiftReport, width: PrinterWidth, more: Partial<RenderShiftReportOpts> = {}): string[] {
@@ -601,6 +605,30 @@ describe('the sample night (shift-report.fixture.ts)', () => {
   });
 });
 
+describe('the quiet afternoon (shift-report.fixture.ts)', () => {
+  const r = QUIET_SHIFT_REPORT;
+
+  it('adds up as the till’s would, and its drawer is Rs 0.50 over: a perfect count of a Rs 517.50 bill', () => {
+    expect(r.orders).toHaveLength(r.sales.orderCount);
+    expect(sum(r.orders.map((o) => o.totalCents))).toBe(r.sales.billedCents);
+    expect(sum(r.channels.map((c) => c.billedCents))).toBe(r.sales.billedCents);
+    expect(sum(r.items.map((c) => c.cents))).toBe(r.sales.foodCents);
+    const s = r.sales;
+    expect(s.foodCents + s.delivery.cents - sum(s.discounts.map((d) => d.cents)) + s.taxCents).toBe(s.billedCents);
+    expect(s.taxCents).toBe(Math.round(((s.foodCents + s.delivery.cents) * 1500) / 10_000));
+    expect(sum(r.payments.map((m) => m.cents)) - sum(r.paymentRefunds.map((m) => m.cents))).toBe(r.moneyTakenCents);
+    expect(r.moneyTakenCents).toBe(s.netCents);
+    const d = r.drawer;
+    expect(d.openingCents + d.cashSalesCents - d.cashRefundsCents + d.cashIn.cents - d.cashOut.cents - d.riderKept.cents + d.otherCents).toBe(
+      d.expectedCents,
+    );
+    expect(sum(d.countedNotes!.notes.map((n) => n.faceCents * n.count)) + d.countedNotes!.otherCents).toBe(d.countedCents);
+    expect(d.countedCents - d.expectedCents).toBe(d.varianceCents);
+    expect(d.varianceCents).toBe(50);
+    expect(r.channels.find((c) => c.channel === 'delivery')?.outside?.orderCount).toBe(1);
+  });
+});
+
 describe('renderShiftReport: the sample night at 80 mm (48 columns)', () => {
   const rows = rowsOf(SAMPLE_SHIFT_REPORT, 48);
 
@@ -652,6 +680,7 @@ describe('every paper', () => {
   const reports: Array<[string, ShiftReport]> = [
     ['the sample night', SAMPLE_SHIFT_REPORT],
     ['a night that pushes every row', stressReport()],
+    ['a quiet afternoon, Rs 0.50 over', QUIET_SHIFT_REPORT],
   ];
   const variants: Array<[string, Partial<RenderShiftReportOpts>]> = [
     ['original', {}],
@@ -854,6 +883,30 @@ describe('BY CHANNEL', () => {
     });
     expect(sectionRows(rowsOf(none, 48), 'BY CHANNEL')).toEqual(['BY CHANNEL: none']);
   });
+
+  it("every delivery with an outside rider: 'outside riders' only, no 'own riders (0)' row (80 and 58 mm)", () => {
+    const r = withReport((x) => {
+      x.channels = [
+        { channel: 'delivery', orderCount: 2, billedCents: 276_000, outside: { orderCount: 2, billedCents: 276_000 } },
+        { channel: 'web_delivery', orderCount: 1, billedCents: 138_000, outside: { orderCount: 1, billedCents: 138_000 } },
+      ];
+    });
+    expect(sectionRows(rowsOf(r, 48), 'BY CHANNEL')).toEqual([
+      'BY CHANNEL',
+      'Delivery (2)                            2,760.00',
+      '  outside riders (2)                    2,760.00',
+      'Website delivery (1)                    1,380.00',
+      '  outside riders (1)                    1,380.00',
+    ]);
+    expect(sectionRows(rowsOf(r, 32), 'BY CHANNEL')).toEqual([
+      'BY CHANNEL',
+      'Delivery (2)            2,760.00',
+      '  outside riders (2)    2,760.00',
+      'Website delivery (1)    1,380.00',
+      '  outside riders (1)    1,380.00',
+    ]);
+    expect(rowsOf(QUIET_SHIFT_REPORT, 48).some((x) => x.includes('own riders'))).toBe(false);
+  });
 });
 
 describe('CANCELLED AND REFUNDED', () => {
@@ -880,6 +933,7 @@ describe('CANCELLED AND REFUNDED', () => {
         full: i > 1,
         reason: 'Cold',
       }));
+      x.sales.refunds = { orderCount: 11, cents: 120_000 };
     });
     const block = sectionRows(rowsOf(r, 48), 'CANCELLED AND REFUNDED');
     // #0200 was refunded twice (two parts): 11 orders, 12 refunds.
@@ -889,6 +943,42 @@ describe('CANCELLED AND REFUNDED', () => {
     expect(block).toContain('  #0202 21:00 card: Cold                  100.00');
     expect(block.filter((x) => x.startsWith('  #02'))).toHaveLength(SHIFT_REPORT_LIST_MAX);
     expect(block.at(-1)).toBe('  and 2 more');
+  });
+
+  it("two orders that share a number (one from each till) are 'Refunded (2)', as SALES says 'Refunds (2)'", () => {
+    // Till A's 20261002-0001 paid on till B, and till B's own 20261002-0001: part refunds on both.
+    const r = withReport((x) => {
+      x.refunds = [
+        { orderNumber: '20261002-0001', at: sampleNightAt('21:00'), method: 'cash', cents: 10_000, full: false, reason: 'Cold' },
+        { orderNumber: '20261002-0001', at: sampleNightAt('21:10'), method: 'card', cents: 20_000, full: false, reason: 'Late' },
+      ];
+      x.sales.refunds = { orderCount: 2, cents: 30_000 };
+    });
+    for (const width of [48, 32] as const) {
+      const rows = rowsOf(r, width);
+      expect(amountRow(sectionRows(rows, 'SALES').find((x) => x.startsWith('Refunds'))!)).toEqual({ label: 'Refunds (2)', cents: -30_000 });
+      expect(amountRow(sectionRows(rows, 'CANCELLED AND REFUNDED').find((x) => x.startsWith('Refunded'))!)).toEqual({
+        label: 'Refunded (2)',
+        cents: 30_000,
+      });
+    }
+  });
+
+  it("an order refunded in two parts says ', part' on both rows; one refund of the whole order says nothing", () => {
+    const r = withReport((x) => {
+      x.refunds = [
+        { orderNumber: sampleNightOrderNumber(201), at: sampleNightAt('21:00'), method: 'card', cents: 50_000, full: false, reason: 'One part' },
+        { orderNumber: sampleNightOrderNumber(201), at: sampleNightAt('21:05'), method: 'card', cents: 65_000, full: false, reason: 'Rest of it' },
+        { orderNumber: sampleNightOrderNumber(202), at: sampleNightAt('21:10'), method: 'cash', cents: 115_000, full: true, reason: 'Cold' },
+      ];
+      x.sales.refunds = { orderCount: 2, cents: 230_000 };
+    });
+    expect(sectionRows(rowsOf(r, 48), 'CANCELLED AND REFUNDED').slice(-4)).toEqual([
+      'Refunded (2)                            2,300.00',
+      '  #0201 21:00 card, part: One part        500.00',
+      '  #0201 21:05 card, part: Rest of it      650.00',
+      '  #0202 21:10 cash: Cold                1,150.00',
+    ]);
   });
 
   it("nobody said whether it was made: 'not asked'; a cancel with no reason prints its order row only", () => {
@@ -998,6 +1088,30 @@ describe('CASH COUNTED', () => {
     const short = escPosToText(bytes).split('\n').indexOf('SHORT                                    -100.00');
     expect(short).toBeGreaterThan(0);
     expect(containsBytes(bytes, [0x1d, 0x21, 0x01, ...new TextEncoder().encode('SHORT')])).toBe(true);
+  });
+
+  it("under Re 1 either way is MATCHES EXPECTED with 'Paisa difference' under it in normal size; Re 1 is SHORT or OVER", () => {
+    /** The sample night counted `variance` paisa off its expected cash (the coins carry the paisa: a made-up count). */
+    const off = (variance: number) =>
+      withReport((x) => {
+        x.drawer.countedCents = x.drawer.expectedCents + variance;
+        x.drawer.varianceCents = variance;
+        x.drawer.countedNotes = null;
+      });
+    const tail = (variance: number, width: PrinterWidth) => sectionRows(rowsOf(off(variance), width), 'CASH COUNTED').slice(2);
+    expect(tail(50, 48)).toEqual(['MATCHES EXPECTED                           +0.50', 'Paisa difference Rs 0.50']);
+    expect(tail(-50, 48)).toEqual(['MATCHES EXPECTED                           -0.50', 'Paisa difference Rs 0.50']);
+    expect(tail(99, 48)).toEqual(['MATCHES EXPECTED                           +0.99', 'Paisa difference Rs 0.99']);
+    expect(tail(-99, 32)).toEqual(['MATCHES EXPECTED           -0.99', 'Paisa difference Rs 0.99']);
+    expect(tail(0, 48)).toEqual(['MATCHES EXPECTED                            0.00']);
+    expect(tail(-100, 48)).toEqual(['SHORT                                      -1.00']);
+    expect(tail(100, 32)).toEqual(['OVER                       +1.00']);
+    // The verdict in bold double height (ESC E 1, GS ! 1); the paisa back in normal size (GS ! 0, ESC E 0).
+    const bytes = renderShiftReport(off(50), opts(48));
+    const ascii = (s: string) => [...new TextEncoder().encode(s)];
+    expect(containsBytes(bytes, [0x1b, 0x45, 0x01, 0x1d, 0x21, 0x01, ...ascii('MATCHES EXPECTED')])).toBe(true);
+    expect(containsBytes(bytes, [0x1d, 0x21, 0x00, 0x1b, 0x45, 0x00, ...ascii('Paisa difference Rs 0.50')])).toBe(true);
+    expect(decodeEscPos(bytes).find((l) => l.text === 'Paisa difference Rs 0.50')?.scale).toBe(1);
   });
 
   it('a count not made by note (an older close) prints COUNTED and the result only', () => {
@@ -1362,8 +1476,10 @@ describe('a reprint', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The goldens: four whole papers of the sample night, row for row, as the
-// mock printer writes them (escPosToText; centred rows lose their spaces).
+// The goldens: four whole papers of the sample night and two of the quiet
+// afternoon (v0.7.35 review: the paisa match, outside riders only), row for
+// row, as the mock printer writes them (escPosToText; centred rows lose their
+// spaces).
 
 /** The golden papers: file name next to this test, and the paper. */
 const GOLDENS: ReadonlyArray<readonly [string, () => Uint8Array]> = [
@@ -1375,6 +1491,10 @@ const GOLDENS: ReadonlyArray<readonly [string, () => Uint8Array]> = [
   ['shift-report-80-sections.golden.txt', () => renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48, { sections: onlyOn('drawer', 'counted', 'unpaid') }))],
   // Reprint #2 the next morning, Rs 1,200 of test orders deleted since the close, 80 mm.
   ['shift-report-80-reprint.golden.txt', () => renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48, REPRINT))],
+  // A quiet afternoon counted Rs 0.50 over (MATCHES EXPECTED, the paisa under it), its one delivery with an outside rider, 80 mm.
+  ['shift-report-80-quiet.golden.txt', () => renderShiftReport(QUIET_SHIFT_REPORT, opts(48, QUIET))],
+  // The same, 58 mm.
+  ['shift-report-58-quiet.golden.txt', () => renderShiftReport(QUIET_SHIFT_REPORT, opts(32, QUIET))],
 ];
 
 const goldenPath = (file: string) => fileURLToPath(new URL(`./${file}`, import.meta.url));
@@ -1423,5 +1543,25 @@ describe('the goldens', () => {
     expect(rows.slice(0, 3)).toEqual(['*'.repeat(48), 'DUPLICATE', 'Reprint #2 | 02/10/2026 09:15 | by Imran Ali']);
     expect(rows.at(-1)).toBe('** DUPLICATE - Reprint #2 **');
     expect(rows).toContain('Since the close: test orders deleted, cash');
+  });
+
+  it('the quiet afternoon: Rs 0.50 over reads MATCHES EXPECTED with the paisa under it; Delivery has outside riders only', () => {
+    for (const [file, width] of [
+      ['shift-report-80-quiet.golden.txt', 48],
+      ['shift-report-58-quiet.golden.txt', 32],
+    ] as const) {
+      const rows = paperRows(file);
+      const counted = sectionRows(rows, 'CASH COUNTED');
+      expect(counted.slice(-2).map((x) => x.replace(/ +/g, ' '))).toEqual(['MATCHES EXPECTED +0.50', 'Paisa difference Rs 0.50']);
+      expect(rows.some((x) => /^(SHORT|OVER)/.test(x))).toBe(false);
+      const channels = sectionRows(rows, 'BY CHANNEL');
+      expect(channels.map((x) => x.replace(/ +/g, ' '))).toEqual([
+        'BY CHANNEL',
+        'Takeaway (1) 517.50',
+        'Delivery (1) 1,150.00',
+        ' outside riders (1) 1,150.00',
+      ]);
+      expect(rows.every((x) => x.length <= width)).toBe(true);
+    }
   });
 });

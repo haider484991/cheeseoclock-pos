@@ -2,7 +2,15 @@
  * Plain-words labels and the small calculations the Reports page shows.
  * Pure (no React, no DOM) so they are unit-tested.
  */
-import { cashCountText, formatCents, priceChangeBps } from '@cheeseoclock/pos-domain';
+import {
+  CASH_PAISA_DIFFERENCE_LABEL,
+  cashCountText,
+  cashPaisaDifferenceCents,
+  cashVarianceVerdict,
+  formatCents,
+  priceChangeBps,
+  type CashVarianceVerdict,
+} from '@cheeseoclock/pos-domain';
 import { CAME_BY_LABEL } from '@cheeseoclock/shared-types';
 import type {
   BusinessReport,
@@ -345,6 +353,26 @@ export function shiftCashOutParts(s: Pick<ReportShiftLine, 'cashOutCents' | 'rid
 } {
   const toRidersCents = Math.max(0, s.riderChargesCents ?? 0);
   return { takenOutCents: Math.max(0, s.cashOutCents - toRidersCents), toRidersCents };
+}
+
+/**
+ * A closed shift's Result in Shift history and on the A4 paper: 'Matched',
+ * 'Over Rs 50' or 'Short Rs 100', by the till's one rule (pos-domain
+ * cashVarianceVerdict, v0.7.35: under Re 1 either way is matched — the
+ * count is in whole rupees and the tax leaves paisa on the bills). A match
+ * that is not 0 gives its paisa too ('Paisa difference Rs 0.50'), else
+ * paisa is null. Null for a shift with no variance (still open). The file
+ * keeps the exact figure.
+ */
+export function shiftResultOf(varianceCents: number | null): { verdict: CashVarianceVerdict; words: string; paisa: string | null } | null {
+  if (varianceCents === null) return null;
+  const verdict = cashVarianceVerdict(varianceCents);
+  const paisa = cashPaisaDifferenceCents(varianceCents);
+  return {
+    verdict,
+    words: verdict === 'matched' ? 'Matched' : `${verdict === 'over' ? 'Over' : 'Short'} ${formatCents(Math.abs(varianceCents))}`,
+    paisa: paisa === null ? null : `${CASH_PAISA_DIFFERENCE_LABEL} ${formatCents(paisa)}`,
+  };
 }
 
 /** What Shift history, the A4 paper and the file call a close's count by note (v0.7.35). */

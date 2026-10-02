@@ -7,7 +7,7 @@
  */
 import { useState } from 'react';
 import { Button, cn } from '@cheeseoclock/ui';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { cashVarianceVerdict, formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
 import { Percent, Printer, Receipt, Trash2, UsersRound } from 'lucide-react';
 import { useToast } from '../../../components/toast/ToastProvider';
@@ -23,6 +23,7 @@ import {
   shiftCashOutParts,
   shiftCountedNotes,
   shiftNoteLines,
+  shiftResultOf,
   stockCellText,
 } from '../reportFormat';
 import { SHIFT_HISTORY_ANCHOR } from '../reportTabs';
@@ -137,11 +138,19 @@ export function shiftHistoryNote(period?: ShiftHistoryPeriod): string {
   return `Every shift that was open at any time in this period${dates}, newest first. Expected = float + cash sales − cash refunds + cash put in − cash taken out. Cash taken out = Taken out + To riders (paid to outside riders: delivery charges kept, and trips). Figures are the ones saved when the shift was closed.`;
 }
 
-/** The shift history's banner: what the closed drawers came to. A shift still open is not counted until it closes. */
+/**
+ * The shift history's banner: what the closed drawers came to. A shift still
+ * open is not counted until it closes. A drawer that matched by the paisa
+ * rule (cashVarianceVerdict: under Re 1 either way) counts as matched, 0,
+ * as its row says 'Matched'; the others add up as counted.
+ */
 export function shiftDrawerBanner(shifts: readonly ReportShiftLine[]): { text: string; tone: 'matched' | 'over' | 'short' } | null {
   const closed = shifts.filter((s) => s.closedAt !== null && s.varianceCents !== null);
   if (closed.length === 0) return null;
-  const drawer = closed.reduce((sum, s) => sum + (s.varianceCents ?? 0), 0);
+  const drawer = closed.reduce((sum, s) => {
+    const v = s.varianceCents ?? 0;
+    return sum + (cashVarianceVerdict(v) === 'matched' ? 0 : v);
+  }, 0);
   const open = shifts.filter((s) => s.closedAt === null).length;
   const text =
     drawer === 0
@@ -230,6 +239,7 @@ export function StaffSection({
             columns={[{ label: 'Shift' }, { label: 'Float', right: true }, { label: 'Taken out', right: true }, { label: 'To riders', right: true }, { label: 'Expected', right: true }, { label: 'Counted', right: true }, { label: 'Result', right: true }]}
             rows={report.shifts.map((s) => {
               const out = shiftCashOutParts(s);
+              const result = shiftResultOf(s.varianceCents);
               // This shift's own drawer log (0042): every opening, who, why, the result.
               const drawerLog = (
                 <button
@@ -290,13 +300,23 @@ export function StaffSection({
                 out.toRidersCents > 0 ? formatCents(out.toRidersCents) : '—',
                 s.expectedCashCents === null ? '—' : formatCents(s.expectedCashCents),
                 s.countedCashCents === null ? '—' : formatCents(s.countedCashCents),
-                s.varianceCents === null ? (
+                result === null ? (
                   '—'
-                ) : s.varianceCents === 0 ? (
-                  <span key="r" className="font-semibold text-emerald-700 dark:text-emerald-400">Matched</span>
                 ) : (
-                  <span key="r" className={cn('font-semibold', s.varianceCents > 0 ? 'text-amber-700 dark:text-amber-400' : 'text-red-700 dark:text-red-400')}>
-                    {s.varianceCents > 0 ? 'Over' : 'Short'} {formatCents(Math.abs(s.varianceCents))}
+                  <span
+                    key="r"
+                    className={cn(
+                      'font-semibold',
+                      result.verdict === 'matched'
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : result.verdict === 'over'
+                          ? 'text-amber-700 dark:text-amber-400'
+                          : 'text-red-700 dark:text-red-400',
+                    )}
+                  >
+                    {result.words}
+                    {/* A match under Re 1 that is not 0 (the paisa rule): the paisa, small, under 'Matched'. */}
+                    {result.paisa && <span className="block text-xs font-normal text-stone-500 dark:text-stone-400">{result.paisa}</span>}
                   </span>
                 ),
               ];

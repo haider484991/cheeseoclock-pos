@@ -462,6 +462,33 @@ describe('the shift history panel', () => {
       ]),
     ).toEqual({ text: 'Over Rs 75 in all, over 2 closed shifts. 1 shift still open: counted when it closes.', tone: 'over' });
   });
+
+  it('under Re 1 either way is Matched, its paisa small under it; Re 1 is Over or Short; the banner counts a paisa match as matched', () => {
+    const NOW2 = new Date('2026-10-03T10:00:00.000Z');
+    const shifts = [
+      closedLine('p4', '2026-10-02T05:00:00.000Z', '2026-10-02T10:30:00.000Z', 50),
+      closedLine('p3', '2026-10-01T05:00:00.000Z', '2026-10-01T10:30:00.000Z', -99),
+      closedLine('p2', '2026-09-30T05:00:00.000Z', '2026-09-30T10:30:00.000Z', -100),
+      closedLine('p1', '2026-09-29T05:00:00.000Z', '2026-09-29T10:30:00.000Z', 100),
+    ];
+    const out = render(<TeamLeakageTab now={NOW2} data={team(shifts)} />);
+    const words = text(out);
+    expect(words).toContain('Rs 6,000 Rs 6,000.50 Matched Paisa difference Rs 0.50');
+    expect(words).toContain('Rs 6,000 Rs 5,999.01 Matched Paisa difference Rs 0.99');
+    expect(words).toContain('Rs 6,000 Rs 5,999 Short Rs 1');
+    expect(words).toContain('Rs 6,000 Rs 6,001 Over Rs 1');
+    expect(words.match(/Paisa difference/g)).toHaveLength(2);
+    expect(out).toContain('<span class="block text-xs font-normal text-stone-500 dark:text-stone-400">Paisa difference Rs 0.50</span>');
+    // The paisa matches count as 0: with the Rs 1 short, Rs 1 short in all (not Rs 1.49).
+    expect(shiftDrawerBanner(shifts.slice(0, 2))).toEqual({ text: 'Every closed drawer matched (2 shifts).', tone: 'matched' });
+    expect(shiftDrawerBanner(shifts.slice(0, 3))).toEqual({ text: 'Short Rs 1 in all, over 3 closed shifts.', tone: 'short' });
+    expect(shiftDrawerBanner([shifts[0]!, shifts[3]!])).toEqual({ text: 'Over Rs 1 in all, over 2 closed shifts.', tone: 'over' });
+    // Three afternoons each Rs 0.50 over: every one matched, not 'Over Rs 1.50'.
+    expect(shiftDrawerBanner([shifts[0]!, { ...shifts[0]!, id: 'p5' }, { ...shifts[0]!, id: 'p6' }])).toEqual({
+      text: 'Every closed drawer matched (3 shifts).',
+      tone: 'matched',
+    });
+  });
 });
 
 // ------------------------------------------- Print shift report (v0.7.35) --

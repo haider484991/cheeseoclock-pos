@@ -5,7 +5,15 @@ import {
   CASH_NOTE_FACE_CENTS,
   type CashCount,
 } from '@cheeseoclock/shared-types';
-import { cashCountJson, cashCountText, cashCountTotalCents } from './cash-count.js';
+import {
+  CASH_PAISA_DIFFERENCE_LABEL,
+  CASH_VARIANCE_MATCHED_UNDER_CENTS,
+  cashCountJson,
+  cashCountText,
+  cashCountTotalCents,
+  cashPaisaDifferenceCents,
+  cashVarianceVerdict,
+} from './cash-count.js';
 
 /**
  * The drawer counted by note at Close shift (owner, 2 Oct 2026): the sum,
@@ -138,5 +146,42 @@ describe('500 seeded counts', () => {
       expect(text).toBe(wanted.length > 0 ? wanted.join(' · ') : null);
       expect(JSON.parse(cashCountJson(c))).toEqual(c);
     }
+  });
+});
+
+describe('cashVarianceVerdict (under Re 1 either way reads as matched: the paisa)', () => {
+  it('-99, 0, 50 and 99 paisa match; -100 is short and 100 is over', () => {
+    expect(cashVarianceVerdict(-99)).toBe('matched');
+    expect(cashVarianceVerdict(-100)).toBe('short');
+    expect(cashVarianceVerdict(0)).toBe('matched');
+    expect(cashVarianceVerdict(50)).toBe('matched');
+    expect(cashVarianceVerdict(99)).toBe('matched');
+    expect(cashVarianceVerdict(100)).toBe('over');
+    expect(CASH_VARIANCE_MATCHED_UNDER_CENTS).toBe(100);
+  });
+
+  it('whole rupees read as before: Rs 100 short, Rs 250 over', () => {
+    expect(cashVarianceVerdict(-10_000)).toBe('short');
+    expect(cashVarianceVerdict(25_000)).toBe('over');
+    expect(cashVarianceVerdict(-150)).toBe('short');
+  });
+
+  it('the review’s night: expected Rs 5,517.50, a perfect count of Rs 5,518 is +0.50 and matches', () => {
+    const expected = 551_750;
+    const counted = cashCountTotalCents(countOf([1, 0, 1, 0, 0, 0, 1], 800));
+    expect(counted).toBe(551_800);
+    expect(cashVarianceVerdict(counted - expected)).toBe('matched');
+    expect(cashPaisaDifferenceCents(counted - expected)).toBe(50);
+  });
+
+  it('the paisa line: the size of a matched variance that is not 0; none for an exact match or a short or over', () => {
+    expect(cashPaisaDifferenceCents(-99)).toBe(99);
+    expect(cashPaisaDifferenceCents(-50)).toBe(50);
+    expect(cashPaisaDifferenceCents(50)).toBe(50);
+    expect(cashPaisaDifferenceCents(99)).toBe(99);
+    expect(cashPaisaDifferenceCents(0)).toBeNull();
+    expect(cashPaisaDifferenceCents(-100)).toBeNull();
+    expect(cashPaisaDifferenceCents(100)).toBeNull();
+    expect(CASH_PAISA_DIFFERENCE_LABEL).toBe('Paisa difference');
   });
 });

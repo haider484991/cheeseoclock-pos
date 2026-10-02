@@ -17,7 +17,14 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { cashCountText, cashCountTotalCents, formatCents } from '@cheeseoclock/pos-domain';
+import {
+  CASH_PAISA_DIFFERENCE_LABEL,
+  cashCountText,
+  cashCountTotalCents,
+  cashPaisaDifferenceCents,
+  cashVarianceVerdict,
+  formatCents,
+} from '@cheeseoclock/pos-domain';
 import type {
   CashCount,
   IpcRequest,
@@ -1188,12 +1195,17 @@ export function ridersPaidLabel(count: number, trips: number): string {
  * v0.7.35: the figures are the ones the close saved (its reply), and a line
  * under "Closed by" says what became of the shift report, with Print again
  * or Try again (shiftReportLine) — on the PIN result too, which still shows
- * no figures.
+ * no figures. Under Re 1 either way reads Matches expected
+ * (cashVarianceVerdict: the count is in whole rupees and the tax leaves
+ * paisa on the bills); the Variance stays the exact figure, and such a match
+ * that is not 0 says 'Paisa difference Rs 0.50' under it.
  */
 export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftCloseOutcome; onDone: () => void }) {
   const { summary } = outcome;
   const cashOut = summary ? closeResultCashOut(summary) : null;
   const variance = outcome.varianceCents;
+  const verdict = cashVarianceVerdict(variance);
+  const paisa = cashPaisaDifferenceCents(variance);
   // The notes counted, on one line under Counted (both closes; none for a count of nothing).
   const notesLine = outcome.countedNotes ? cashCountText(outcome.countedNotes) : null;
   const keepOpen = (e: Event) => e.preventDefault();
@@ -1257,9 +1269,9 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
           <div
             className={cn(
               'rounded-lg p-3 text-sm',
-              variance === 0
+              verdict === 'matched'
                 ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100'
-                : variance > 0
+                : verdict === 'over'
                 ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100'
                 : 'bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-100',
             )}
@@ -1272,12 +1284,17 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
               </span>
             </div>
             <div className="mt-0.5 text-xs">
-              {variance === 0
+              {verdict === 'matched'
                 ? 'Matches expected'
-                : variance > 0
+                : verdict === 'over'
                 ? 'Over (more than expected)'
                 : 'Short (less than expected)'}
             </div>
+            {paisa !== null && (
+              <div className="mt-0.5 text-xs">
+                {CASH_PAISA_DIFFERENCE_LABEL} {formatCents(paisa)}
+              </div>
+            )}
           </div>
 
           {(outcome.closedByName || outcome.carriedUnpaidCount > 0) && (

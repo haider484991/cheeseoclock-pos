@@ -255,6 +255,38 @@ describe('the close result stays on screen until Done', () => {
     expect(out).toContain('bg-amber-50');
   });
 
+  it('under Re 1 either way matches (the count is in whole rupees, the tax leaves paisa): green, the exact Variance, and the paisa under it', () => {
+    signIn('manager');
+    // Expected Rs 5,517.50 (a Rs 517.50 bill on the float), counted Rs 5,518 by note.
+    for (const [variance, sign] of [
+      [50, '+'],
+      [-50, ''],
+      [99, '+'],
+      [-99, ''],
+    ] as const) {
+      showShiftCloseOutcome({ ...SHORT, expectedCents: 551_750, countedCents: 551_750 + variance, varianceCents: variance });
+      const out = render(<ShiftWidget />, [[CURRENT, null]]);
+      const words = text(out);
+      expect(words).toContain(`Variance ${sign}${formatCents(variance)} Matches expected Paisa difference ${formatCents(Math.abs(variance))}`);
+      expect(words).not.toMatch(/Over \(|Short \(/);
+      expect(out).toContain('bg-emerald-50 text-emerald-800');
+      expect(out).not.toContain('bg-amber-50');
+      expect(out).not.toContain('bg-red-50');
+    }
+    expect(formatCents(50)).toBe('Rs 0.50');
+    // Re 1 is a real short or over, with no paisa line; an exact match has none either.
+    showShiftCloseOutcome({ ...SHORT, expectedCents: 551_750, countedCents: 551_650, varianceCents: -100 });
+    const short = text(render(<ShiftWidget />, [[CURRENT, null]]));
+    expect(short).toContain('Short (less than expected)');
+    expect(short).not.toContain('Paisa difference');
+    showShiftCloseOutcome({ ...SHORT, expectedCents: 551_750, countedCents: 551_850, varianceCents: 100 });
+    expect(text(render(<ShiftWidget />, [[CURRENT, null]]))).toContain('Over (more than expected)');
+    showShiftCloseOutcome({ ...SHORT, expectedCents: 551_800, countedCents: 551_800, varianceCents: 0 });
+    const even = text(render(<ShiftWidget />, [[CURRENT, null]]));
+    expect(even).toContain('Matches expected');
+    expect(even).not.toContain('Paisa difference');
+  });
+
   it('Done takes it away; with nothing closed there is no result', () => {
     signIn('manager');
     showShiftCloseOutcome(SHORT);
