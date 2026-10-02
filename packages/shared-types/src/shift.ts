@@ -32,6 +32,45 @@ export interface Shift {
   carriedUnpaidCount: number;
   /** The manager's reason for carrying them over; null when none were carried. */
   carryOverReason: string | null;
+  /**
+   * The drawer counted note by note at Close shift (migration 0050). Null
+   * while open, for a shift closed before v0.7.35 or on an older till, and
+   * when it was counted as one total. countedCashCents stays the truth: it
+   * equals this count's sum at close, and nothing adds this up again.
+   */
+  countedNotes?: CashCount | null;
+}
+
+/**
+ * The note rows of the Close shift count, in the owner's order and in cents
+ * (owner, 2 Oct 2026: "5000rs x note 1000 x 500 100 and 50 and 20 and 10"):
+ * Rs 5,000, 1,000, 500, 100, 50, 20 and 10.
+ */
+export const CASH_NOTE_FACE_CENTS = [500_000, 100_000, 50_000, 10_000, 5_000, 2_000, 1_000] as const;
+
+/** At most this many notes in one row of the count. */
+export const CASH_NOTE_COUNT_MAX = 9_999;
+
+/** 'Coins and other' is at most Rs 99,999, in whole rupees. */
+export const CASH_COUNT_OTHER_MAX_CENTS = 9_999_900;
+
+/** One row of the count: how many notes of one value. */
+export interface CashNoteCount {
+  /** The note's value in cents (Rs 5,000 = 500000). */
+  faceCents: number;
+  /** How many of them; a whole number from 0. */
+  count: number;
+}
+
+/**
+ * The drawer counted by note at Close shift. The Rs 10 row counts Rs 10
+ * notes and Rs 10 coins together. otherCents is 'Coins and other': the
+ * Rs 5, 2 and 1 coins and anything not in a row (an odd Rs 75 note), in
+ * whole rupees. Money in cents throughout.
+ */
+export interface CashCount {
+  notes: CashNoteCount[];
+  otherCents: number;
 }
 
 /**
