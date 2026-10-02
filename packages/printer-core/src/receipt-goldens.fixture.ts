@@ -9,8 +9,8 @@
  * website order), so a change that moves a single byte of a paper with no
  * extra lines fails receipt-extra-lines.test.ts. Papers that did not exist
  * before a version are added with it, never regenerated: v0.7.34's value
- * deals (the receipt-deals-* papers) and its delivery bill (the *-cod-charge*
- * papers).
+ * deals (the receipt-deals-* papers), its delivery bill (the *-cod-charge*
+ * papers) and its outside rider (the *-outside-* and *rider-paid* papers).
  *
  * Times are Pakistan wall-clock instants: papers print Pakistan time, so the
  * bytes are the same in any time zone.
@@ -492,6 +492,54 @@ function codChargeAlsoOff(): OrderSnapshot {
   return paidOnDelivery(s);
 }
 
+/**
+ * SENT OUT WITH AN OUTSIDE RIDER (v0.7.34, Send out): the taxed bill, no
+ * rider of the shop's own named, and what the rider keeps frozen at Rs 200.
+ * Not paid yet: its SHOP COPY says "Outside rider keeps 200.00" and "RIDER
+ * GIVES THE SHOP Rs 4,515.00" under CUSTOMER PAYS.
+ */
+function codChargeOutside(): OrderSnapshot {
+  const s = codCharge();
+  s.order.assignedRiderId = null;
+  s.order.riderKeepsCents = cents(20_000);
+  s.rider = null;
+  return s;
+}
+
+/**
+ * The outside rider paid the shop in cash at 19:55, still out ("Paid now"):
+ * one cash payment of the whole total, no tender. The customer's paper is
+ * still the bill: TO COLLECT Rs 4,715.00, Pay the rider.
+ */
+function codChargeRiderPaidOut(): OrderSnapshot {
+  const s = codChargeOutside();
+  s.order.paidAt = iso(19, 55);
+  s.payments = [
+    {
+      id: id('p4'),
+      orderId: id('o1'),
+      method: 'cash',
+      amountCents: s.order.totalCents,
+      tenderedCents: null,
+      referenceNo: null,
+      receivedByUserId: id('u1'),
+      paidAt: iso(19, 55),
+    },
+  ];
+  return s;
+}
+
+/**
+ * Then Rs 300 went back through him at 20:05, still out (a part refund at
+ * the door). Its SHOP COPY: RIDER PAID THE SHOP Rs 4,515.00 (the frozen
+ * figure), "Refunded to the rider 300.00", and TO COLLECT Rs 4,415.00.
+ */
+function riderPaidPartRefund(): OrderSnapshot {
+  const s = codChargeRiderPaidOut();
+  s.payments.push(refundRow(30_000, 20, 5));
+  return s;
+}
+
 const refundInfo = (): RefundSlipInfo => ({
   refundedAt: at(19, 50),
   rows: [{ method: 'cash', amountCents: 30_000 }],
@@ -565,6 +613,12 @@ function receiptCases(): GoldenCase[] {
     ['receipt-cod-charge-prepaid', codChargePrepaid, {}],
     ['receipt-cod-charge-deal-staff', codChargeDealStaff, {}],
     ['receipt-cod-charge-also-off', codChargeAlsoOff, {}],
+    // AN OUTSIDE RIDER (v0.7.34, Send out): papers that did not exist before, added (never regenerated).
+    // The unpaid SHOP COPY; the customer's bill after the rider paid while out; and,
+    // after a part refund at the door, the SHOP COPY (its rider lines carry the refund).
+    ['bill-cod-charge-outside-shop-copy', codChargeOutside, { copy: 'shop' }],
+    ['bill-cod-charge-rider-paid-out', codChargeRiderPaidOut, {}],
+    ['bill-rider-paid-part-refund', riderPaidPartRefund, { copy: 'shop' }],
   ];
   for (const [paper, snap, opts] of papers) {
     for (const [brandName, branding] of [

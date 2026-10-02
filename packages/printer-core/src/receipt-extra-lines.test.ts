@@ -6,9 +6,11 @@
  *    what the till printed before (receipt-goldens.json: 80 papers — every
  *    kind, both widths, with and without the shop's lines, FBR, DUPLICATE,
  *    late, shop copy, kitchen tickets — and 16 added with v0.7.34's value
- *    deals: a discount that left them alone, and one at Rs 0; and 32 with
+ *    deals: a discount that left them alone, and one at Rs 0; 32 with
  *    its delivery bill: Food / Sales tax / FOOD TOTAL / Delivery charge /
- *    CUSTOMER PAYS), in any time zone.
+ *    CUSTOMER PAYS; and 12 with its outside rider: the SHOP COPY's rider
+ *    lines, and the bill the customer keeps after the rider paid), in any
+ *    time zone.
  *  - The lines print under the thank-you line on the customer's receipt and
  *    bill only: never on a kitchen ticket, a shop copy, a refund slip, a
  *    cancelled order, or a receipt refunded in full (no thank-you there).
@@ -58,8 +60,9 @@ describe('no extra lines: every paper is byte-for-byte what it was', () => {
   it('the golden list covers every paper (and nothing was dropped from it)', () => {
     expect(cases.map((c) => c.name).sort()).toEqual(Object.keys(GOLDEN).sort());
     // 80 papers + 4 value-deals papers × 2 brandings × 2 widths (v0.7.34)
-    // + 8 delivery-bill papers × 2 brandings × 2 widths (v0.7.34).
-    expect(cases.length).toBe(80 + 16 + 32);
+    // + 8 delivery-bill papers × 2 brandings × 2 widths (v0.7.34)
+    // + 3 outside-rider papers × 2 brandings × 2 widths (v0.7.34).
+    expect(cases.length).toBe(80 + 16 + 32 + 12);
   });
 
   it('none saved (the default)', () => {

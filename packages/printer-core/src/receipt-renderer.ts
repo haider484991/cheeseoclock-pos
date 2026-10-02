@@ -74,6 +74,19 @@
  *
  * Every other order (and a delivery with no charge, or one whose total is
  * below its charge) keeps Subtotal / Tax / TOTAL, byte for byte.
+ *
+ * An order sent out with an outside rider (Send out; Order.riderKeepsCents):
+ * its SHOP COPY alone says, under CUSTOMER PAYS (TOTAL on the old layout),
+ * what the rider keeps and hands in, from the figure Send out froze:
+ *
+ *      CUSTOMER PAYS                 Rs 4,715.00
+ *      Outside rider keeps                200.00
+ *      RIDER GIVES THE SHOP          Rs 4,515.00   <- RIDER PAID THE SHOP once
+ *                                                     he has paid
+ *
+ * When he paid the shop while still out (riderSettledWhileOut) the customer
+ * has not paid anyone yet: both copies stay the BILL, TO COLLECT what he
+ * collects at the door (the total less a refund made while he is out).
  */
 
 import type { DeliveryBill, DrawerSettings, OrderSnapshot, PrinterWidth, ReceiptCopy } from '@cheeseoclock/shared-types';
@@ -83,6 +96,7 @@ import {
   discountBillLabel,
   isDeliveryChargeLine,
   isLeaveOutChoice,
+  isOutsideRiderOrder,
   orderNotesOf,
   paperCashierName,
   paperClock,
@@ -168,19 +182,46 @@ export function receiptShopLines(branding: Pick<ReceiptBranding, 'branchLine' | 
  * Which paper a customer-facing job prints as. Decided when it prints, from
  * the order as it is then — never from the button that was pressed:
  *  - receipt: money was taken (PAID), or the order was refunded;
- *  - bill:    money is still owed (BILL - NOT PAID);
+ *  - bill:    money is still owed (BILL - NOT PAID) — by the customer: an
+ *             order the outside rider paid the shop for while still out
+ *             stays a bill (riderSettledWhileOut);
  *  - refund:  the slip for one refund (the job says so — reason 'refund');
  *  - void:    the order was cancelled (CANCELLED ORDER, nothing to pay).
  */
 export type ReceiptDocument = 'receipt' | 'bill' | 'refund' | 'void';
 
 /**
+ * The outside rider paid the shop while he is still out (Send out asks "Has
+ * the rider paid the shop?" — "Paid now", owner 2 Oct 2026): a delivery sent
+ * out with an outside rider (it carries what he keeps, riderKeepsCents),
+ * still out for delivery, and paid at or after it left. The customer has
+ * paid nobody yet, so his paper is still the BILL: TO COLLECT, Pay the rider.
+ *
+ * Read from the order's own facts only, so the paper is the same whether the
+ * rider paid before or after the bill printed, and however often the printer
+ * retried. A customer who paid before the food left (paidAt before
+ * dispatchedAt) is prepaid, not this; once delivered (status paid) the paper
+ * is a receipt again.
+ */
+export function riderSettledWhileOut(
+  order: Pick<OrderSnapshot['order'], 'mode' | 'status' | 'paidAt' | 'dispatchedAt' | 'riderKeepsCents'>,
+): boolean {
+  if (order.mode !== 'delivery' || !isOutsideRiderOrder(order) || order.status !== 'out_for_delivery') return false;
+  if (!order.paidAt || !order.dispatchedAt) return false;
+  const paid = Date.parse(order.paidAt);
+  const left = Date.parse(order.dispatchedAt);
+  return Number.isFinite(paid) && Number.isFinite(left) && paid >= left;
+}
+
+/**
  * The paper an order prints as now (a refund slip is chosen by its job, not
  * here). A cancelled order never prints as a receipt or a bill; an order
- * nobody has paid for yet is a bill, even when its total is 0.
+ * nobody has paid for yet is a bill, even when its total is 0 — and so is
+ * one only its outside rider has paid for, while he is still out.
  */
 export function receiptDocumentFor(s: OrderSnapshot): 'receipt' | 'bill' | 'void' {
   if (s.order.status === 'void') return 'void';
+  if (riderSettledWhileOut(s.order)) return 'bill';
   if (s.order.paidAt || s.order.status === 'refunded') return 'receipt';
   return 'bill';
 }
@@ -572,7 +613,12 @@ function appendSaleBody(
   shopCopy: boolean,
   width: PrinterWidth,
 ): void {
-  const { order, payments } = snapshot;
+  // The outside rider paid the shop while still out: both copies show the
+  // bill as its customer still sees it (no payments, nothing paid, TO COLLECT
+  // what the rider collects at the door); the SHOP COPY's rider lines say
+  // what he paid the shop.
+  const settledOut = doc === 'bill' && riderSettledWhileOut(snapshot.order);
+  const { order, payments } = settledOut ? customerViewOf(snapshot) : snapshot;
   appendOrderMeta(b, snapshot);
   // Paid: when it was paid. A bill: when the order was sent (0048), not when
   // its cart was started; an order from before 0.7.34 has no sentAt and keeps
@@ -618,6 +664,8 @@ function appendSaleBody(
     b.bold(true).doubleHeight(true).line('TOTAL', `Rs ${money(order.totalCents)}`);
     b.bold(false).doubleHeight(false);
   }
+  // What an outside rider keeps and hands in: the shop's copy only.
+  if (shopCopy) appendOutsideRiderLines(b, snapshot, bill, width);
   b.rule();
 
   // Money taken, then money given back.
@@ -650,7 +698,7 @@ function appendSaleBody(
   if (doc === 'receipt') {
     appendPaidState(b, snapshot, taken, refunds, dup, width);
   } else {
-    appendDueState(b, snapshot, takenCents, width);
+    appendDueState(b, snapshot, takenCents, settledOut ? riderCollectsCents(snapshot) : order.totalCents - takenCents, width);
   }
 
   if (shopCopy) {
@@ -794,15 +842,106 @@ function deliveryPaidLine(order: OrderSnapshot['order']): string | null {
   return 'PREPAID - RIDER COLLECTS NOTHING';
 }
 
-/** What is still owed on a bill: the total less the money already taken. */
+/**
+ * What is still owed on a bill: the total less the money already taken — or,
+ * once the outside rider paid the shop while out, what he collects from the
+ * customer (riderCollectsCents).
+ */
 function billDueCents(snapshot: OrderSnapshot): number {
+  if (riderSettledWhileOut(snapshot.order)) return riderCollectsCents(snapshot);
   return snapshot.order.totalCents - sumOf(snapshot.payments.filter((p) => p.amountCents > 0));
 }
 
-/** What is still owed on a bill, and who collects it. */
-function appendDueState(b: EscPosBuilder, snapshot: OrderSnapshot, takenCents: number, width: PrinterWidth): void {
+/**
+ * The order as its customer still sees it after the outside rider paid the
+ * shop while out (riderSettledWhileOut): nothing paid yet, no payment rows.
+ * The money the till holds is the rider's, not the customer's.
+ */
+function customerViewOf(s: OrderSnapshot): OrderSnapshot {
+  return { ...s, order: { ...s.order, paidAt: null }, payments: [] };
+}
+
+/**
+ * What the outside rider collects at the door of an order he paid the shop
+ * for while out: the total, less what was refunded while he was out — that
+ * went back through him (a part refund at the door, order-edit finding #4).
+ */
+function riderCollectsCents(s: OrderSnapshot): number {
+  return s.order.totalCents + sumOf(s.payments.filter((p) => p.amountCents < 0));
+}
+
+/**
+ * Paid before the food left: a customer-prepaid delivery (PREPAID - RIDER
+ * COLLECTS NOTHING). One paid at or after it left was paid by its rider, or
+ * at the door.
+ */
+function paidBeforeItLeft(order: OrderSnapshot['order']): boolean {
+  const paid = order.paidAt ? Date.parse(order.paidAt) : NaN;
+  if (!Number.isFinite(paid)) return false;
+  const left = order.dispatchedAt ? Date.parse(order.dispatchedAt) : NaN;
+  return !(Number.isFinite(left) && paid >= left);
+}
+
+/**
+ * The SHOP COPY's lines for an order sent out with an outside rider (Send
+ * out froze riderKeepsCents), right under CUSTOMER PAYS (TOTAL on the old
+ * layout). Never on the customer's copy; nothing for one of the shop's own
+ * riders. The figures are the frozen keep and the stored total, never worked
+ * out again:
+ *
+ *      Outside rider keeps                200.00
+ *      RIDER GIVES THE SHOP          Rs 4,515.00   <- total − keep
+ *
+ *  - keep 0: "Outside rider keeps nothing (no delivery charge)", or "(already
+ *    paid for this trip)" when the bill still has its charge (the rider was
+ *    paid for this trip on an earlier order of the customer's);
+ *  - once he has paid (while out, at the door, or later): RIDER PAID THE SHOP,
+ *    at the same frozen figure; while he is still out, a refund made since
+ *    went back through him: "Refunded to the rider  300.00" under it;
+ *  - a customer who paid before the food left: the rider's charge came out of
+ *    the drawer at Send out and he hands in nothing — "Paid to him from the
+ *    drawer", "RIDER GIVES THE SHOP NOTHING".
+ */
+function appendOutsideRiderLines(
+  b: EscPosBuilder,
+  snapshot: OrderSnapshot,
+  bill: DeliveryBill | null,
+  width: PrinterWidth,
+): void {
   const { order } = snapshot;
-  const dueCents = order.totalCents - takenCents;
+  const keep = order.riderKeepsCents;
+  if (typeof keep !== 'number') return;
+  if (keep > 0) {
+    b.line('Outside rider keeps', money(keep));
+  } else {
+    // One row when it fits (80 mm, no charge), otherwise the why on its own row.
+    const nothing = 'Outside rider keeps nothing';
+    const why = bill ? '(already paid for this trip)' : '(no delivery charge)';
+    if (nothing.length + 1 + why.length <= width) b.text(`${nothing} ${why}`).newline();
+    else b.text(nothing).newline().wrappedText(why, width);
+  }
+  if (paidBeforeItLeft(order)) {
+    if (keep > 0) b.wrappedText('Paid to him from the drawer', width);
+    b.bold(true).wrappedText('RIDER GIVES THE SHOP NOTHING', width).bold(false);
+    return;
+  }
+  const handsIn = `Rs ${money(order.totalCents - keep)}`;
+  b.bold(true).line(order.paidAt ? 'RIDER PAID THE SHOP' : 'RIDER GIVES THE SHOP', handsIn).bold(false);
+  if (riderSettledWhileOut(order)) {
+    const refunded = order.totalCents - riderCollectsCents(snapshot);
+    if (refunded > 0) b.line('Refunded to the rider', money(refunded));
+  }
+}
+
+/** What is still owed on a bill (dueCents), and who collects it. */
+function appendDueState(
+  b: EscPosBuilder,
+  snapshot: OrderSnapshot,
+  takenCents: number,
+  dueCents: number,
+  width: PrinterWidth,
+): void {
+  const { order } = snapshot;
   const cod = order.mode === 'delivery';
   if (takenCents > 0) b.line('Paid so far', money(takenCents));
   if (dueCents <= 0) {

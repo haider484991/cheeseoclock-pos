@@ -111,6 +111,7 @@ export {
   renderDrawerKick,
   appendLogo,
   receiptDocumentFor,
+  riderSettledWhileOut,
   receiptHeadLines,
   receiptShopLines,
   receiptExtraLines,
