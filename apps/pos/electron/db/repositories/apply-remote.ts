@@ -1,7 +1,9 @@
 /**
  * Apply a remote SyncChange to the local DB. These writes bypass the
  * sync_queue (re-enqueueing would echo every change around the ring forever);
- * those side effects happened on the origin device.
+ * those side effects happened on the origin device. One exception: an order
+ * image refused because this till took money on the order sends this till's
+ * row back (sendOrderBack), once.
  *
  * Two payload shapes arrive:
  *   - Row images (every replicable table, from this version on): the whole
@@ -18,7 +20,7 @@
  * device's local copy is newer). Two exceptions, whatever the versions say:
  * deletion wins for orders and payments (DELETE_WINS), and on an order a
  * cancel or refund is never undone by the other till's status tap, while
- * money taken beats a cancel (orderRace).
+ * money taken beats a cancel or a tap (orderRace).
  *
  * A change that cannot be saved (a parent row not here yet, a clash with a
  * row made on this till) is kept aside, retried on every pull and counted in
@@ -37,9 +39,9 @@ import {
   type SyncChange,
 } from '@cheeseoclock/sync-core';
 import { baseUnitConversion, orderStockNoteKind, returnsToOtherTill, unitFactor } from '@cheeseoclock/pos-domain';
-import { quoteIdent, replicableTables } from '../replicable-schema.js';
+import { quoteIdent, readRowImage, replicableTables } from '../replicable-schema.js';
 import { writeAudit } from './audit-repo.js';
-import { readParked, writeParked, type ParkedChange } from './sync-repo.js';
+import { enqueueSync, readParked, writeParked, type ParkedChange } from './sync-repo.js';
 
 type Row = Record<string, unknown>;
 
@@ -99,15 +101,35 @@ function deleteColumnsOf(table: { columns: ReadonlyArray<{ name: string }> }): s
  *        movements for the order — a trip paid at the cancel — and the
  *        cancel's stock answer). Nothing is reversed: the money already left
  *        the drawer, and the owner sees it in the drawer log;
- *  (2) an older image that is cancelled or refunded, for an order still live
+ *  (2) money taken is never wiped by a tap (two-tills review, v0.7.34): Rider
+ *      paid or Delivered + Pay on one till, and Back to Ready, Assign rider or
+ *      any status tap the other till made before it heard of the money. Which
+ *      row holds more money facts is read from the two rows alone (moneyFacts),
+ *      so both tills give the same answer:
+ *      - a newer image that would undo money taken here — clear paid_at, or
+ *        clear what the outside rider kept on a live order whose money with
+ *        him is settled — is refused: nothing of it is written but a delete
+ *        (DELETE_WINS), and this till's row goes back to the other till
+ *        ('remote_change_refused_paid');
+ *      - an older image that carries money this till's row has not got is
+ *        applied in full, over this till's newer tap ('remote_payment_overrode_change').
+ *        (Newer, it is plain last write wins.)
+ *      Nothing clears paid_at on purpose, and Assign rider and Back to Ready
+ *      refuse once the rider's money is settled, so no real change is lost;
+ *  (3) an older image that is cancelled or refunded, for an order still live
  *      here: only its status and cancel columns are written, the version and
  *      every other column stay ('remote_cancel_applied');
- *  (3) a newer image with a live status, for an order cancelled or refunded
+ *  (4) a newer image with a live status, for an order cancelled or refunded
  *      here: applied, but the status and cancel columns stay
  *      ('remote_change_kept_cancelled');
- *  (4) cancelled or refunded on both: last write wins, as for any row.
+ *  (5) cancelled or refunded on both: last write wins, as for any row.
  * A cancelled order may so keep a racing rider_keeps_cents or dispatched_at;
  * every reader of those skips cancelled and refunded orders.
+ *
+ * Both tills end with the same row: the row with more money facts is a fixed
+ * point (refused on its own till, taken on the other whatever the versions
+ * say), and a refusal sends it back once, so it reaches the other till even
+ * when its first image did not. It never echoes: the other till takes it.
  */
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['void', 'refunded']);
 const CANCEL_COLUMNS = ['status', 'voided_at', 'voided_by', 'void_reason'] as const;
@@ -116,6 +138,7 @@ const CANCEL_COLUMNS = ['status', 'voided_at', 'voided_by', 'void_reason'] as co
 interface LocalOrder {
   status: string;
   paid_at: string | null;
+  rider_keeps_cents: number | null;
   voided_at: string | null;
   voided_by: string | null;
   void_reason: string | null;
@@ -124,23 +147,63 @@ interface LocalOrder {
 type OrderRace =
   | { kind: 'refuse_cancel'; local: LocalOrder; incoming: string }
   | { kind: 'payment_over_cancel'; local: LocalOrder; incoming: string }
+  | { kind: 'refuse_unpaying'; local: LocalOrder; incoming: string }
+  | { kind: 'payment_over_change'; local: LocalOrder; incoming: string }
   | { kind: 'cancel_wins'; local: LocalOrder; incoming: string }
   | { kind: 'keep_cancelled'; local: LocalOrder; incoming: string };
+
+const isSetText = (v: unknown): v is string => typeof v === 'string' && v !== '';
+
+/**
+ * On a paid order, the outside rider's money is settled when he kept
+ * something (rider_keeps_cents above 0): he paid the shop while out (Rider
+ * paid, Delivered + Pay), or the customer paid before and the drawer paid him
+ * at Send out. Either way a payout to him stands.
+ */
+const keptByRider = (keeps: unknown): boolean => typeof keeps === 'number' && keeps > 0;
+
+/**
+ * Which row carries more money facts (orderRace (2)): 'here' when the
+ * incoming image would undo money taken on this till's row, 'theirs' when it
+ * carries money this till's row has not got, null when neither. Paid beats
+ * unpaid, in any status; on two paid rows, both live, a settled outside
+ * rider (keptByRider) beats a row without one. A key the image does not
+ * carry (an older till) leaves that column alone, so it undoes nothing.
+ */
+function moneyFacts(local: LocalOrder, image: RowImage, incoming: string): 'here' | 'theirs' | null {
+  const localPaid = local.paid_at !== null;
+  const incomingPaid = isSetText(image['paidAt']);
+  if (localPaid && !incomingPaid && Object.hasOwn(image, 'paidAt')) return 'here';
+  if (!localPaid && incomingPaid) return 'theirs';
+  if (!localPaid || !incomingPaid || TERMINAL_STATUSES.has(local.status) || TERMINAL_STATUSES.has(incoming)) return null;
+  const settledHere = keptByRider(local.rider_keeps_cents);
+  const settledThere = keptByRider(image['riderKeepsCents']);
+  if (settledHere && !settledThere && Object.hasOwn(image, 'riderKeepsCents')) return 'here';
+  if (!settledHere && settledThere) return 'theirs';
+  return null;
+}
 
 /** Which of the rules above an order image meets here, or null for plain last-write-wins. */
 function orderRace(db: AppDatabase, id: string, image: RowImage, stale: boolean): OrderRace | null {
   const incoming = image['status'];
   if (typeof incoming !== 'string') return null;
   const local = db
-    .prepare(`SELECT status, paid_at, voided_at, voided_by, void_reason FROM orders WHERE id = ?`)
+    .prepare(`SELECT status, paid_at, rider_keeps_cents, voided_at, voided_by, void_reason FROM orders WHERE id = ?`)
     .get(id) as LocalOrder | undefined;
   if (!local) return null;
-  const incomingPaid = typeof image['paidAt'] === 'string' && image['paidAt'] !== '';
+  const incomingPaid = isSetText(image['paidAt']);
   const incomingTerminal = TERMINAL_STATUSES.has(incoming);
   const localTerminal = TERMINAL_STATUSES.has(local.status);
   if (incoming === 'void' && local.paid_at !== null) return { kind: 'refuse_cancel', local, incoming };
   if (incoming !== 'void' && incomingPaid && local.status === 'void' && local.paid_at === null) {
     return { kind: 'payment_over_cancel', local, incoming };
+  }
+  if (incoming !== 'void') {
+    // Only where last write wins would get it wrong: an older image that
+    // undoes money is dropped as stale anyway, a newer one with money applied.
+    const money = moneyFacts(local, image, incoming);
+    if (money === 'here') return stale ? null : { kind: 'refuse_unpaying', local, incoming };
+    if (money === 'theirs') return stale ? { kind: 'payment_over_change', local, incoming } : null;
   }
   if (stale && incomingTerminal && !localTerminal) return { kind: 'cancel_wins', local, incoming };
   if (!stale && !incomingTerminal && localTerminal) return { kind: 'keep_cancelled', local, incoming };
@@ -239,8 +302,17 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
     }
     return refuseRemoteCancel(db, change, image, race);
   }
+  if (race?.kind === 'refuse_unpaying') {
+    // The same for a tap that would undo the money taken here.
+    if (incomingDeleted && localRow !== null && localRow.deleted_at === null) {
+      return applyRemoteDelete(db, table, change, image);
+    }
+    return refuseRemoteUnpaying(db, change, image, race);
+  }
   if (stale && race?.kind === 'cancel_wins') return applyRemoteCancel(db, change, image, race);
-  if (stale && race?.kind !== 'payment_over_cancel') return { applied: false, reason: 'stale' };
+  if (stale && race?.kind !== 'payment_over_cancel' && race?.kind !== 'payment_over_change') {
+    return { applied: false, reason: 'stale' };
+  }
   // A newer change for a row deleted here: applied, but it stays deleted.
   const keepDeleted = deleteWins && localRow !== null && localRow.deleted_at !== null && !incomingDeleted;
   // A newer live change for an order cancelled or refunded here: applied, but it stays so.
@@ -356,6 +428,21 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
     });
   }
   if (race?.kind === 'payment_over_cancel') notePaymentOverCancel(db, change, image, race);
+  if (race?.kind === 'payment_over_change') {
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: change.entityId,
+      action: 'remote_payment_overrode_change',
+      actorUserId: null,
+      before: moneyNote(race.local.status, race.local.paid_at, race.local.rider_keeps_cents),
+      after: {
+        ...moneyNote(race.incoming, image['paidAt'], image['riderKeepsCents']),
+        version: change.version,
+        updatedAt: change.updatedAt,
+        fromDeviceId: change.deviceId,
+      },
+    });
+  }
 
   if (table.name === 'users') {
     // Who can sign in, and as what, changed from another till: keep that in
@@ -449,8 +536,9 @@ function applyRemoteDelete(
  * Money beats a cancel (orderRace (1)): the other till cancelled an order
  * this till has taken money for. Nothing of the image is written — the
  * order, its payment, the rider's payout and the drawer row stay as they are
- * here — and the refusal goes into this till's own audit trail. Nothing to
- * retry, so it is reported as stale.
+ * here — and the refusal goes into this till's own audit trail. This till's
+ * row goes back to the other till (sendOrderBack). Nothing to retry, so it
+ * is reported as stale.
  */
 function refuseRemoteCancel(
   db: AppDatabase,
@@ -471,11 +559,77 @@ function refuseRemoteCancel(
       fromDeviceId: change.deviceId,
     },
   });
+  sendOrderBack(db, change.entityId);
   return { applied: false, reason: 'stale' };
 }
 
 /**
- * A cancel or refund wins (orderRace (2)): an older image that cancelled or
+ * Money taken is never wiped by a tap (orderRace (2)): a newer image from
+ * the other till — Back to Ready, Assign rider, any status tap made before
+ * it heard of the money — would clear this till's paid_at, or what a settled
+ * outside rider kept. Nothing of it is written: the order, its payments, the
+ * rider's payout and the drawer rows stay as they are here. The refusal goes
+ * into this till's own audit trail with what each row said, and this till's
+ * row goes back to the other till (sendOrderBack), which takes it whatever
+ * the versions say. Reported as stale (nothing to retry).
+ */
+function refuseRemoteUnpaying(
+  db: AppDatabase,
+  change: SyncChange,
+  image: RowImage,
+  race: Extract<OrderRace, { kind: 'refuse_unpaying' }>,
+): ApplyResult {
+  writeAudit(db, {
+    entityType: 'orders',
+    entityId: change.entityId,
+    action: 'remote_change_refused_paid',
+    actorUserId: null,
+    before: moneyNote(race.local.status, race.local.paid_at, race.local.rider_keeps_cents),
+    after: {
+      ...moneyNote(race.incoming, image['paidAt'], image['riderKeepsCents']),
+      version: change.version,
+      updatedAt: change.updatedAt,
+      fromDeviceId: change.deviceId,
+    },
+  });
+  sendOrderBack(db, change.entityId);
+  return { applied: false, reason: 'stale' };
+}
+
+/** An order's money facts, for the audit rows of orderRace (2). */
+function moneyNote(status: string, paidAt: unknown, riderKeepsCents: unknown): Record<string, unknown> {
+  return {
+    status,
+    paidAt: typeof paidAt === 'string' ? paidAt : null,
+    riderKeepsCents: typeof riderKeepsCents === 'number' ? riderKeepsCents : null,
+  };
+}
+
+/**
+ * After a refusal (orderRace (1) and (2)): queue this till's row of the
+ * order, as it is now, for the other till — so it ends with the same row
+ * even when the first image of the money never reached it. Skipped when the
+ * newest unsent entry for the order already carries exactly this row. It
+ * never echoes round: the other till takes a row with more money facts than
+ * its own and refuses nothing it takes. The row is not touched here (its
+ * version and updated_at stay as written).
+ */
+function sendOrderBack(db: AppDatabase, orderId: string): void {
+  const image = readRowImage(db, 'orders', orderId);
+  if (!image) return;
+  const queued = db
+    .prepare(
+      `SELECT payload_json FROM sync_queue
+        WHERE entity_type = 'orders' AND entity_id = ? AND synced_at IS NULL
+        ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(orderId) as { payload_json: string } | undefined;
+  if (queued?.payload_json === JSON.stringify(image)) return;
+  enqueueSync(db, { entityType: 'orders', entityId: orderId, op: 'upsert', payload: image });
+}
+
+/**
+ * A cancel or refund wins (orderRace (3)): an older image that cancelled or
  * refunded an order still live here. Only its status and cancel columns are
  * written (who, when, why); the version and every other column stay, so a
  * Send out made here keeps its rider_keeps_cents and dispatched_at.
