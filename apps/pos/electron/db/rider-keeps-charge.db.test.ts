@@ -29,6 +29,13 @@
  *   (7) the settlement lock: once the drawer paid him, or he paid the shop
  *       after it left, Assign rider and Back to Ready are refused in the
  *       words and write nothing; before any money both still work;
+ *   (8) a wasted trip (the owner, 2 Oct 2026: "pay the rider's fee if they
+ *       went"): cancelling an unpaid order he took out must say whether he
+ *       is paid for the trip; Yes = one payout linked to the order ('Trip
+ *       paid to the outside rider — Order #0001 cancelled', why 'trip') and
+ *       one drawer 'payout' row, the drawer opens after the commit; No =
+ *       nothing; refused with no answer, with no shift open, on an order with
+ *       no trip to pay, on a double tap and once he has paid the shop;
  *   and the snapshot's deliveryChargeToRider.
  *
  * Every figure is worked out from the order and deliveryBillOf, never copied
@@ -52,6 +59,8 @@ const h = vi.hoisted(() => ({
   session: null as AuthenticatedUser | null,
   /** The drawer pulses the handlers asked for (kickDrawerSoon's drawer row ids). */
   kicks: [] as string[],
+  /** Manager PINs the stand-in accepts, and whose they are ((8): 'orders:void'). */
+  managerPins: new Map<string, string>(),
 }));
 
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } }));
@@ -86,7 +95,9 @@ vi.mock('../ipc/registry.js', () => {
 // Who is signed in: auth-service's job, stood in for here.
 vi.mock('../services/auth-service.js', () => ({
   getCurrentSession: () => h.session,
-  verifyManagerPin: async () => {
+  verifyManagerPin: async (_db: unknown, pin: string) => {
+    const approverUserId = h.managerPins.get(pin);
+    if (approverUserId) return { approverUserId, approverName: 'Test Manager' };
     throw new Error("That is not a manager's PIN or password");
   },
 }));
@@ -127,6 +138,7 @@ const PK = {
   '19:30': '2026-10-02T14:30:00.000Z',
   '19:45': '2026-10-02T14:45:00.000Z',
   '19:50': '2026-10-02T14:50:00.000Z',
+  '20:00': '2026-10-02T15:00:00.000Z',
   '20:05': '2026-10-02T15:05:00.000Z',
   '20:10': '2026-10-02T15:10:00.000Z',
   '20:20': '2026-10-02T15:20:00.000Z',
@@ -981,5 +993,268 @@ live('(6) the guards', () => {
       r.markOrderDelivered(shop.db, { orderId: o.id, payment: { method: 'cash', amountCents: o.total }, riderKeepsCents: o.keep }, CASHIER),
     ).toThrow(NO_SHIFT);
     expect(ledger(shop.db, o.id)).toEqual(before);
+  });
+});
+
+live("(8) a wasted trip: the cancel says whether the outside rider is paid for it (the owner: \"pay the rider's fee if they went\")", () => {
+  const TRIP_ANSWER = 'Say whether the rider is paid for the trip';
+  const NO_TRIP = 'Nothing to pay the rider for on this order';
+  const NO_SHIFT_TRIP = 'No shift is open on this till — open a shift to pay the rider for the trip';
+  /** The manager's PIN the stand-in accepts for 'orders:void' (made up). */
+  const PIN = '2468';
+  /** A cancel at 20:05, the manager allowing it at the cashier's till. */
+  const cancel = async (shop: Shop, orderId: string, more: { payRiderForTrip?: boolean; actor?: typeof CASHIER } = {}) => {
+    const r = await repo();
+    at('20:05');
+    return r.voidOrder(
+      shop.db,
+      {
+        orderId,
+        reason: 'Customer refused at the door',
+        approverUserId: MANAGER.userId,
+        ...(more.payRiderForTrip !== undefined ? { payRiderForTrip: more.payRiderForTrip } : {}),
+      },
+      more.actor ?? CASHIER,
+    );
+  };
+  const approvals = (db: AppDatabase, orderId: string) => ({
+    payout: db.prepare(`SELECT approved_by_user_id AS a FROM cash_movements WHERE order_id = ?`).all(orderId) as Row[],
+    drawer: db.prepare(`SELECT approved_by_user_id AS a FROM drawer_opens WHERE order_id = ?`).all(orderId) as Row[],
+  });
+  const voidAudit = (db: AppDatabase, orderId: string) =>
+    JSON.parse(
+      String(
+        (db.prepare(`SELECT after_json FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'void'`).get(orderId) as Row)[
+          'after_json'
+        ],
+      ),
+    ) as Row;
+
+  it("Yes: one payout of his Rs 200 linked to the order, audited 'delivery_charge_to_rider' why 'trip', and one drawer 'payout' row for −Rs 200; the shift expects the float less Rs 200", async () => {
+    const shop = await till();
+    const r = await repo();
+    const { closeShift, getShiftSummary } = await shiftRepo();
+    const o = await out(shop);
+    expect(o.keep).toBe(20_000);
+    expect(getShiftSummary(shop.db, shop.shiftId).expectedCashCents).toBe(FLOAT);
+    const before = ledger(shop.db, o.id);
+
+    const done = await cancel(shop, o.id, { payRiderForTrip: true });
+
+    expect(done.order).toMatchObject({ status: 'void', voidReason: 'Customer refused at the door' });
+    expect(done.statusBefore).toBe('out_for_delivery');
+    // What he keeps stays as it was frozen at Send out.
+    expect(r.findOrder(shop.db, o.id)).toMatchObject({ status: 'void', riderKeepsCents: o.keep, paidAt: null });
+    // No money from the customer.
+    expect(paymentsOf(shop.db, o.id)).toEqual([]);
+    const reason = 'Trip paid to the outside rider — Order #0001 cancelled';
+    const payouts = payoutsOf(shop.db, o.id);
+    expect(payouts).toEqual([
+      { id: expect.any(String), shift_id: shop.shiftId, type: 'payout', amount_cents: o.keep, reason, order_id: o.id },
+    ]);
+    expect(done.drawerOpenId).toEqual(expect.any(String));
+    expect(drawerOf(shop.db, done.drawerOpenId!)).toEqual({
+      id: done.drawerOpenId,
+      shift_id: shop.shiftId,
+      kind: 'payout',
+      reason,
+      order_id: o.id,
+      cash_movement_id: payouts[0]!['id'],
+      amount_cents: -20_000,
+      user_id: CASHIER.userId,
+    });
+    // The manager whose PIN allowed the cancel at the cashier's till.
+    expect(approvals(shop.db, o.id)).toEqual({ payout: [{ a: MANAGER.userId }], drawer: [{ a: MANAGER.userId }] });
+    expect(ledger(shop.db, o.id)).toMatchObject({ payments: before.payments, movements: before.movements + 1, drawer: before.drawer + 1 });
+    const money = auditAfter(shop.db, before.audit).filter(
+      (a) => a.entityType === 'cash_movements' || a.entityType === 'drawer_opens' || a.entityType === 'orders',
+    );
+    expect(money.map((a) => `${String(a.entityType)}:${String(a.action)}`)).toEqual([
+      'cash_movements:delivery_charge_to_rider',
+      'drawer_opens:drawer_payout',
+      'orders:void',
+    ]);
+    expect(money[0]!.after).toMatchObject({ why: 'trip', amountCents: o.keep, orderId: o.id });
+    expect(voidAudit(shop.db, o.id)).toMatchObject({ status: 'void', tripPaidCents: 20_000 });
+    expect(r.getOrderSnapshot(shop.db, o.id)!.deliveryChargeToRider).toEqual({ amountCents: o.keep, at: PK['20:05'], why: 'trip' });
+    expect(chainOk(shop.db)).toBe(true);
+
+    const s = getShiftSummary(shop.db, shop.shiftId);
+    expect(s).toMatchObject({ cashSalesCents: 0, cashOutCents: 20_000, riderChargesCents: 20_000, riderChargeCount: 1 });
+    expect(s.expectedCashCents).toBe(FLOAT - 20_000);
+    at('20:30');
+    expect(closeShift(shop.db, { shiftId: shop.shiftId, countedCashCents: FLOAT - 20_000 }, MANAGER)).toMatchObject({ varianceCents: 0 });
+  });
+
+  it('a manager cancelling at the till himself: the payout and the drawer row carry no approver', async () => {
+    const shop = await till();
+    const o = await out(shop);
+    const done = await cancel(shop, o.id, { payRiderForTrip: true, actor: MANAGER });
+    expect(drawerOf(shop.db, done.drawerOpenId!)).toMatchObject({ kind: 'payout', amount_cents: -20_000, user_id: MANAGER.userId });
+    expect(approvals(shop.db, o.id)).toEqual({ payout: [{ a: null }], drawer: [{ a: null }] });
+  });
+
+  it('No: cancelled with no payout and no drawer row; the shift expects the float', async () => {
+    const shop = await till();
+    const r = await repo();
+    const { getShiftSummary } = await shiftRepo();
+    const o = await out(shop);
+    const before = ledger(shop.db, o.id);
+    const done = await cancel(shop, o.id, { payRiderForTrip: false });
+    expect(done).toMatchObject({ order: { status: 'void' }, drawerOpenId: null });
+    expect(payoutsOf(shop.db, o.id)).toEqual([]);
+    expect(ledger(shop.db, o.id)).toMatchObject({ payments: before.payments, movements: before.movements, drawer: before.drawer });
+    expect(voidAudit(shop.db, o.id)).toMatchObject({ status: 'void', tripPaidCents: 0 });
+    expect(r.getOrderSnapshot(shop.db, o.id)!.deliveryChargeToRider).toBeNull();
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({ expectedCashCents: FLOAT, riderChargesCents: 0, riderChargeCount: 0 });
+  });
+
+  it('no answer: refused in the words, the order is still out and nothing is written', async () => {
+    const shop = await till();
+    const r = await repo();
+    const o = await out(shop);
+    const before = ledger(shop.db, o.id);
+    await expect(cancel(shop, o.id)).rejects.toThrow(TRIP_ANSWER);
+    expect(ledger(shop.db, o.id)).toEqual(before);
+    expect(r.findOrder(shop.db, o.id)).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: o.keep });
+  });
+
+  it('no shift open on this till: Yes is refused in the words, the order is still out and nothing is written; No still cancels (no money moves)', async () => {
+    const shop = await till({ shift: false });
+    const r = await repo();
+    const o = await out(shop);
+    const before = ledger(shop.db, o.id);
+    await expect(cancel(shop, o.id, { payRiderForTrip: true })).rejects.toThrow(NO_SHIFT_TRIP);
+    expect(ledger(shop.db, o.id)).toEqual(before);
+    expect(before.order).toMatchObject({ status: 'out_for_delivery', rider_keeps_cents: 20_000, paid_at: null });
+    expect(payoutsOf(shop.db, o.id)).toEqual([]);
+
+    expect((await cancel(shop, o.id, { payRiderForTrip: false })).drawerOpenId).toBeNull();
+    expect(r.findOrder(shop.db, o.id)?.status).toBe('void');
+    expect(payoutsOf(shop.db, o.id)).toEqual([]);
+  });
+
+  it("no trip to pay: Yes is refused on one of the shop's own riders, an outside rider who keeps nothing, an order not out yet, or one he was paid for already; each cancels with no answer", async () => {
+    const shop = await till();
+    const r = await repo();
+    const { recordDeliveryChargeToRider } = await shiftRepo();
+
+    // One of the shop's own riders: exactly as v0.7.33, no question.
+    const own = await out(shop, { own: true });
+    // An outside rider with no delivery charge on the bill: he keeps 0.
+    const free = await out(shop, { charge: false });
+    expect(free.keep).toBe(0);
+    // Ready on the pass, not sent out.
+    at('19:00');
+    const ready = r.createOrder(shop.db, { mode: 'delivery' }, CASHIER);
+    r.addOrderItem(shop.db, { orderId: ready.id, menuItemId: shop.bigTwo, quantity: 1, modifierIds: [] }, CASHIER);
+    r.addOrderItem(shop.db, { orderId: ready.id, menuItemId: shop.charge, quantity: 1, modifierIds: [] }, CASHIER);
+    at('19:30');
+    r.sendOrderToKitchen(shop.db, ready.id, CASHIER);
+    at('19:45');
+    r.markOrderReady(shop.db, ready.id, CASHIER);
+    // A payout for this order already there (the other till paid him): nothing more is due.
+    const settled = await out(shop);
+    at('20:00');
+    recordDeliveryChargeToRider(shop.db, { orderId: settled.id, orderNumber: settled.order.orderNumber, amountCents: settled.keep, why: 'trip' }, MANAGER);
+
+    for (const id of [own.id, free.id, ready.id, settled.id]) {
+      const before = ledger(shop.db, id);
+      await expect(cancel(shop, id, { payRiderForTrip: true })).rejects.toThrow(NO_TRIP);
+      expect(ledger(shop.db, id)).toEqual(before);
+    }
+    for (const id of [own.id, free.id, ready.id, settled.id]) {
+      const done = await cancel(shop, id);
+      expect(done).toMatchObject({ order: { status: 'void' }, drawerOpenId: null });
+    }
+    // Only the one payout written before; none by the cancels.
+    expect(payoutsOf(shop.db, settled.id)).toHaveLength(1);
+    for (const id of [own.id, free.id, ready.id]) expect(payoutsOf(shop.db, id)).toEqual([]);
+  });
+
+  it("a double tap: the second cancel is refused 'Order is already voided' and writes no second payout", async () => {
+    const shop = await till();
+    const { getShiftSummary } = await shiftRepo();
+    const o = await out(shop);
+    await cancel(shop, o.id, { payRiderForTrip: true });
+    const before = ledger(shop.db, o.id);
+    await expect(cancel(shop, o.id, { payRiderForTrip: true })).rejects.toThrow('Order is already voided');
+    expect(ledger(shop.db, o.id)).toEqual(before);
+    expect(payoutsOf(shop.db, o.id)).toHaveLength(1);
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({ expectedCashCents: FLOAT - 20_000, riderChargeCount: 1 });
+  });
+
+  it('once he has paid the shop (Rider paid): the cancel is refused by the paid-order rule, with no trip payout', async () => {
+    const shop = await till();
+    const r = await repo();
+    const o = await out(shop);
+    at('20:00');
+    r.takeRiderPayment(shop.db, { orderId: o.id, method: 'cash', riderKeepsCents: o.keep }, CASHIER);
+    const kept = payoutsOf(shop.db, o.id);
+    expect(kept).toEqual([expect.objectContaining({ reason: 'Delivery charge kept by the outside rider — Order #0001' })]);
+    const before = ledger(shop.db, o.id);
+    await expect(cancel(shop, o.id, { payRiderForTrip: true })).rejects.toThrow('Paid orders must be refunded, not voided');
+    await expect(cancel(shop, o.id)).rejects.toThrow('Paid orders must be refunded, not voided');
+    expect(ledger(shop.db, o.id)).toEqual(before);
+    expect(payoutsOf(shop.db, o.id)).toEqual(kept);
+  });
+
+  it('a throw part-way rolls back the cancel, the payout and the drawer row together', async () => {
+    const shop = await till();
+    const o = await out(shop);
+    shop.db.prepare(
+      `CREATE TRIGGER test_fail_trip BEFORE INSERT ON drawer_opens
+        WHEN NEW.kind = 'payout'
+        BEGIN SELECT RAISE(ABORT, 'Test: the disk is full'); END`,
+    ).run();
+    const before = ledger(shop.db, o.id);
+    await expect(cancel(shop, o.id, { payRiderForTrip: true })).rejects.toThrow('Test: the disk is full');
+    expect(ledger(shop.db, o.id)).toEqual(before);
+    expect(before.order).toMatchObject({ status: 'out_for_delivery' });
+    expect(payoutsOf(shop.db, o.id)).toEqual([]);
+    expect(chainOk(shop.db)).toBe(true);
+  });
+
+  it("'orders:void': Yes opens the drawer once for that row after the commit; No opens nothing; no answer (or not a yes / no) is refused in the words", async () => {
+    const shop = await till();
+    const call = await ordersIpc(shop);
+    h.managerPins.clear();
+    h.managerPins.set(PIN, MANAGER.userId);
+    const ask = (orderId: string, more: Record<string, unknown> = {}) =>
+      call('orders:void', { orderId, reason: 'Customer refused at the door', approverPin: PIN, ...more });
+
+    const unanswered = await out(shop);
+    const before = ledger(shop.db, unanswered.id);
+    at('20:05');
+    await expect(ask(unanswered.id)).rejects.toMatchObject({ apiError: { code: 'precondition_failed', message: TRIP_ANSWER } });
+    await expect(ask(unanswered.id, { payRiderForTrip: 'yes' })).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: TRIP_ANSWER },
+    });
+    expect(ledger(shop.db, unanswered.id)).toEqual(before);
+    expect(h.kicks).toEqual([]);
+
+    const paid = await out(shop);
+    at('20:05');
+    const snap = (await ask(paid.id, { payRiderForTrip: true })).data as { order: { status: string }; deliveryChargeToRider?: unknown };
+    expect(snap.order.status).toBe('void');
+    expect(snap.deliveryChargeToRider).toEqual({ amountCents: 20_000, at: PK['20:05'], why: 'trip' });
+    const rows = shop.db.prepare(`SELECT id, approved_by_user_id AS a FROM drawer_opens WHERE order_id = ? AND kind = 'payout'`).all(paid.id) as Row[];
+    expect(rows).toEqual([{ id: expect.any(String), a: MANAGER.userId }]);
+    expect(h.kicks).toEqual([rows[0]!['id']]);
+
+    // No: nothing paid, the drawer stays shut.
+    const unpaid = await out(shop);
+    at('20:05');
+    await ask(unpaid.id, { payRiderForTrip: false });
+    expect(payoutsOf(shop.db, unpaid.id)).toEqual([]);
+    expect(h.kicks).toEqual([rows[0]!['id']]);
+
+    // The double tap through the IPC: refused, no second pulse.
+    await expect(ask(paid.id, { payRiderForTrip: true })).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: 'Order is already voided' },
+    });
+    expect(h.kicks).toHaveLength(1);
+    expect(payoutsOf(shop.db, paid.id)).toHaveLength(1);
+    h.managerPins.clear();
   });
 });

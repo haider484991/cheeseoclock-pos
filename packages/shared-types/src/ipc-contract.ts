@@ -711,8 +711,17 @@ export interface IpcContract {
     };
     response: ApiResult<OrderSnapshot>;
   };
+  /**
+   * Cancel an unpaid order (a manager's PIN). `payRiderForTrip`: an order sent
+   * out with an outside rider who keeps a delivery charge, not paid yet and
+   * with nothing paid to him yet, must say whether he is paid for the trip
+   * (the owner, 2 Oct 2026: "pay the rider's fee if they went"). true = one
+   * payout of what he keeps, linked to the order, and the drawer opens (only
+   * while a shift is open on this till); false = nothing. Missing on such an
+   * order, or true on any other, is refused in plain words.
+   */
   'orders:void': {
-    request: { orderId: string; reason: string; approverPin: string } & OrderStockAnswer;
+    request: { orderId: string; reason: string; approverPin: string; payRiderForTrip?: boolean } & OrderStockAnswer;
     /** The order after the cancel, plus what it did to stock (null: it held none here). */
     response: ApiResult<OrderSnapshotWithStock>;
   };

@@ -886,11 +886,22 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         message: e instanceof Error ? e.message : 'Manager approval failed',
       });
     }
+    // A wasted trip (the owner, 2 Oct 2026: "pay the rider's fee if they
+    // went"): the cancel box's answer for an outside rider who took it out.
+    // Only a true or false is an answer; the repository refuses a cancel that
+    // needs one and has none.
+    const payRiderForTrip = typeof payload.payRiderForTrip === 'boolean' ? payload.payRiderForTrip : undefined;
     let done: ReturnType<typeof voidOrder>;
     try {
       done = voidOrder(
         ctx.db,
-        { orderId: payload.orderId, reason: payload.reason.trim(), approverUserId, ...answer },
+        {
+          orderId: payload.orderId,
+          reason: payload.reason.trim(),
+          approverUserId,
+          ...answer,
+          ...(payRiderForTrip !== undefined ? { payRiderForTrip } : {}),
+        },
         { userId: s.id, deviceId: ctx.deviceId },
       );
     } catch (e) {
@@ -899,6 +910,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         message: e instanceof Error ? e.message : 'Void failed',
       });
     }
+    // He was paid for the trip from the drawer: it opens for that row, after the commit.
+    if (done.drawerOpenId) printSpooler.kickDrawerSoon(done.drawerOpenId);
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     // A CANCELLED slip for the kitchen when a ticket for this order printed or

@@ -2824,9 +2824,10 @@ export interface OrderCloseResult {
   /** The status it had just before (the kitchen gets a CANCELLED slip while it was cooking). */
   statusBefore: OrderStatus;
   /**
-   * The drawer_opens row (0042) for cash handed back by THIS refund, written
-   * in the same transaction; null when no cash went back (a card refund, a
-   * cancel of an unpaid order).
+   * The drawer_opens row (0042) for cash handed back by THIS refund, or paid
+   * to an outside rider for a wasted trip by THIS cancel, written in the same
+   * transaction; null when no cash moved (a card refund, a cancel of an
+   * unpaid order with no trip paid).
    */
   drawerOpenId: string | null;
 }
@@ -2838,9 +2839,48 @@ function checkExpectedStatus(order: Order, expected: OrderStatus | undefined): v
   }
 }
 
+/** A cancel of an outside rider's trip that does not say whether he is paid for it (the words the screens show). */
+export const TRIP_ANSWER_NEEDED = 'Say whether the rider is paid for the trip';
+/** "Pay the rider for the trip" on a cancel that has no trip to pay (one of the shop's own riders, nothing kept, not out, paid already). */
+export const NO_TRIP_TO_PAY = 'Nothing to pay the rider for on this order';
+/** A trip paid from the drawer with no shift open on this till. */
+export const NO_SHIFT_FOR_TRIP = 'No shift is open on this till — open a shift to pay the rider for the trip';
+
+export interface VoidOrderInput extends OrderStockAnswer {
+  orderId: string;
+  reason: string;
+  approverUserId: string;
+  /**
+   * A wasted trip (the owner, 2 Oct 2026: "pay the rider's fee if they
+   * went"): whether the outside rider who took this order out is paid what
+   * he keeps for the trip. Required when one is due (tripDue); true anywhere
+   * else is refused.
+   */
+  payRiderForTrip?: boolean;
+}
+
+/**
+ * Cancel an order nothing has been paid on (validateVoid). Its stock is put
+ * back or booked as waste per "Was the food made?".
+ *
+ * A wasted trip: an order sent out with an outside rider (rider_keeps_cents
+ * frozen at Send out, above 0), still out for delivery, with no payout to
+ * him for it yet, is cancelled or refused at the door. The cancel must say
+ * whether he is paid for the trip (TRIP_ANSWER_NEEDED otherwise). Yes, while
+ * a shift is open on this till (NO_SHIFT_FOR_TRIP otherwise, nothing
+ * written): in this same transaction, one payout of what he keeps linked to
+ * the order (recordDeliveryChargeToRider, why 'trip') and the drawer's one
+ * 'payout' row for it, with the manager who allowed the cancel when that is
+ * not the person at the till; the caller opens the drawer after the commit.
+ * Yes on any other order is refused (NO_TRIP_TO_PAY). A paid order is never
+ * cancelled (refund it: a payout made when he settled stays his), so a trip
+ * payout never meets a kept one on this till. rider_keeps_cents stays as it
+ * was frozen; the 'void' audit after-image says what the trip cost
+ * (tripPaidCents, 0 when nothing was paid).
+ */
 export function voidOrder(
   db: AppDatabase,
-  input: { orderId: string; reason: string; approverUserId: string } & OrderStockAnswer,
+  input: VoidOrderInput,
   actor: Actor & { userId: string },
 ): OrderCloseResult {
   let result!: OrderCloseResult;
@@ -2851,6 +2891,15 @@ export function voidOrder(
 
     const v = validateVoid({ status: order.status, paidAt: order.paidAt, reason: input.reason });
     if (!v.ok) throw new Error(v.missing.join('; '));
+
+    // The wasted trip, decided before anything is written.
+    const keep = typeof order.riderKeepsCents === 'number' ? (order.riderKeepsCents as number) : 0;
+    const tripDue =
+      isOutsideRiderOrder(order) && order.status === 'out_for_delivery' && keep > 0 && liveRiderPayout(db, order.id) === null;
+    if (tripDue && input.payRiderForTrip === undefined) throw new Error(TRIP_ANSWER_NEEDED);
+    if (input.payRiderForTrip === true && !tripDue) throw new Error(NO_TRIP_TO_PAY);
+    const payTrip = tripDue && input.payRiderForTrip === true;
+    if (payTrip && getCurrentShift(db, actor.deviceId) === null) throw new Error(NO_SHIFT_FOR_TRIP);
 
     const now = nowIso();
     db.prepare(
@@ -2876,6 +2925,32 @@ export function voidOrder(
       actor,
     );
 
+    // The trip, when he is paid for it: his payout (cash_movements.order_id,
+    // audited 'delivery_charge_to_rider' why 'trip') and the drawer's one row,
+    // −what he keeps, with the payout's own reason ('Trip paid to the outside
+    // rider — Order #0042 cancelled').
+    let drawerOpenId: string | null = null;
+    if (payTrip) {
+      const approvedByUserId = input.approverUserId === actor.userId ? null : input.approverUserId;
+      const payoutId = recordDeliveryChargeToRider(
+        db,
+        { orderId: order.id, orderNumber: order.orderNumber, amountCents: keep, why: 'trip', approvedByUserId },
+        actor,
+      );
+      drawerOpenId = recordDrawerOpen(
+        db,
+        {
+          kind: 'payout',
+          reason: findCashMovement(db, payoutId)?.reason ?? null,
+          orderId: order.id,
+          cashMovementId: payoutId,
+          amountCents: -keep,
+          approvedByUserId,
+        },
+        actor,
+      ).id;
+    }
+
     const voided = {
       ...order,
       status: 'void' as OrderStatus,
@@ -2895,10 +2970,11 @@ export function voidOrder(
       action: 'void',
       actorUserId: actor.userId,
       before: order,
-      after: voided,
+      after: { ...voided, tripPaidCents: payTrip ? keep : 0 },
     });
-    // Nothing was paid on a cancelled order: no cash moves, the drawer stays shut.
-    result = { order: voided, stock, statusBefore: order.status, drawerOpenId: null };
+    // Nothing was paid on a cancelled order: no cash comes in. The drawer
+    // opens only to pay the rider for a wasted trip.
+    result = { order: voided, stock, statusBefore: order.status, drawerOpenId };
   });
   tx();
   return result;

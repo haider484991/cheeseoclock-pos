@@ -16,9 +16,10 @@
  *    the Live Orders board and the void / refund lists — and its waste shows
  *    as "Test orders (deleted)";
  *  - FBR rows still waiting are skipped, never sent;
- *  - what the drawer paid an outside rider for it (v0.7.34) goes with it:
- *    the preview's cash is net of it, and a payout made on the other till's
- *    shift refuses the delete there.
+ *  - what the drawer paid an outside rider for it (v0.7.34: a kept charge,
+ *    or a wasted trip paid at a cancel) goes with it: the preview's cash is
+ *    net of it, and a payout made on the other till's shift refuses the
+ *    delete there.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
  * here); skipped where it is missing. Every name, price and amount is made up.
@@ -788,6 +789,34 @@ describe.skipIf(!DatabaseSync)("deleting a test order: what the drawer paid its 
     expect(t.r.testDeletePreview(t.db, d, DEV).cash).toEqual([]);
     t.del(d, false);
     expect(livePayouts(d)).toEqual([]);
+  });
+
+  it('sent out, then cancelled with the rider paid for his wasted trip: the preview is the payout alone, the delete takes it, and the shift expects the float again', async () => {
+    const start = t.expected();
+    const d = await outsideDelivery();
+    t.send(d);
+    t.ready(d);
+    expect(t.r.sendOutOrder(t.db, d, CASHIER).riderKeepsCents).toBe(20_000);
+    const done = t.r.voidOrder(t.db, { orderId: d, reason: 'Test cancel', approverUserId: MANAGER.userId, payRiderForTrip: true }, CASHIER);
+    expect(done).toMatchObject({ order: { status: 'void' }, drawerOpenId: expect.any(String) });
+    const [payout] = livePayouts(d);
+    expect(payout).toMatchObject({ amount_cents: 20_000, shift_id: t.shift().id });
+    expect(String(payout!['reason'])).toMatch(/^Trip paid to the outside rider — Order #\d{4} cancelled$/);
+    expect(t.expected()).toBe(start - 20_000);
+
+    // No money from the customer: the drawer is out only what it paid him.
+    const preview = t.r.testDeletePreview(t.db, d, DEV);
+    expect(preview.refusal).toBeNull();
+    expect(preview.cash).toEqual([{ shiftId: t.shift().id, open: true, netCents: -20_000 }]);
+    expect(t.del(d, null)).toMatchObject({ statusBefore: 'void', deleteStock: 'settled_before', stock: null });
+
+    expect(livePayouts(d)).toEqual([]);
+    const orderAudit = t.one(`SELECT after_json AS a FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'delete_test_order'`, d)!;
+    expect(JSON.parse(String(orderAudit['a']))).toMatchObject({ cashMovementIds: [payout!['id']] });
+    expect(t.expected()).toBe(start);
+    expect(t.r.getShiftSummary(t.db, t.shift().id)).toMatchObject({ riderChargesCents: 0, riderChargeCount: 0, cashOutCents: 0 });
+    expect(t.r.closeShift(t.db, { shiftId: t.shift().id, countedCashCents: start }, MANAGER).varianceCents).toBe(0);
+    expect(verifyAuditChain(t.auditRows()).ok).toBe(true);
   });
 
   it("a payout in the other till's shift (sent out there) -> otherTillPayment, and nothing is written", async () => {
