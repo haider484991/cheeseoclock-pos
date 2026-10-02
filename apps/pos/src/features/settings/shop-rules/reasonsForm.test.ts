@@ -67,12 +67,27 @@ describe('reason buttons: the form', () => {
     expect(moveReasonUp(list, 'a').map((x) => x.id)).toEqual(['a', 'b', 'c']);
   });
 
+  it("Settings → Staff & kitchen starts the Cancel buttons with 'Customer changed order', asking about the food (v0.7.34)", () => {
+    const form = reasonsToForm(DEFAULT_ORDER_REASONS);
+    expect(form.cancel[0]).toEqual(b('customer_changed_order', 'Customer changed order', 'ask'));
+    expect(form.cancel.map((x) => x.label)).toEqual([
+      'Customer changed order',
+      'Customer cancelled',
+      'Refused at the door',
+      'Not collected',
+      'Wrong order / duplicate',
+      'Out of stock',
+    ]);
+    // Not a Refund button.
+    expect(form.refund.map((x) => x.label)).not.toContain('Customer changed order');
+  });
+
   it('History and the example are built from the values', () => {
     expect(reasonsSummary(DEFAULT_ORDER_REASONS)).toBe(
-      'Cancel: Customer cancelled, Refused at the door, Not collected, Wrong order / duplicate, Out of stock · Refund: Customer unhappy, Wrong order, Cancelled by Foodpanda, Out of stock · Cash out: typed',
+      'Cancel: Customer changed order, Customer cancelled, Refused at the door, Not collected, Wrong order / duplicate, Out of stock · Refund: Customer unhappy, Wrong order, Cancelled by Foodpanda, Out of stock · Cash out: typed',
     );
     const ex = reasonsExample(DEFAULT_ORDER_REASONS);
-    expect(ex).toContain('The Cancel box offers 5 buttons and the Refund box 4.');
+    expect(ex).toContain('The Cancel box offers 6 buttons and the Refund box 4.');
     expect(ex).toContain('“Refused at the door” answers Made');
     expect(ex).toContain('“Out of stock” answers Not made');
     expect(ex).toContain('Cash out has no buttons: staff type what it was for.');

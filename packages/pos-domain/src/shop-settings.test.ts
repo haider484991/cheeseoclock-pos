@@ -78,9 +78,11 @@ describe('the released defaults are pinned', () => {
   });
 
   it('orders.reasons: today’s Cancel and Refund buttons, in today’s order, with what each says about the food; no cash-out buttons', () => {
-    // Exactly the lists the Cancel and Refund boxes had typed in (stockCopy.ts up to v0.7.26).
+    // The lists the Cancel and Refund boxes had typed in (stockCopy.ts up to v0.7.26), with
+    // 'Customer changed order' (food: Ask) first on the Cancel box since v0.7.34 (owner, 2 Oct 2026).
     const today = {
       cancel: [
+        { label: 'Customer changed order' },
         { label: 'Customer cancelled' },
         { label: 'Refused at the door', foodMade: 'made' },
         { label: 'Not collected', foodMade: 'made' },
@@ -98,6 +100,7 @@ describe('the released defaults are pinned', () => {
     expect(DEFAULT_ORDER_REASONS).toEqual({
       v: 1,
       cancel: [
+        { id: 'customer_changed_order', label: 'Customer changed order', food: 'ask' },
         { id: 'customer_cancelled', label: 'Customer cancelled', food: 'ask' },
         { id: 'refused_at_door', label: 'Refused at the door', food: 'made' },
         { id: 'not_collected', label: 'Not collected', food: 'made' },

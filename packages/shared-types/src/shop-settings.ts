@@ -933,13 +933,17 @@ export const DEFAULT_DISCOUNT_OFFERS: Readonly<DiscountOffers> = Object.freeze({
 const reasonButton = (id: string, label: string, food: ReasonFoodAnswer): OrderReasonButton => Object.freeze({ id, label, food });
 
 /**
- * Today's buttons, in today's order (they were typed into the Cancel and
- * Refund boxes: stockCopy.ts CANCEL_REASONS / REFUND_REASONS), and no
- * cash-out buttons.
+ * The buttons the Cancel and Refund boxes had typed in (stockCopy.ts
+ * CANCEL_REASONS / REFUND_REASONS), in that order, and no cash-out buttons.
+ * v0.7.34 (owner, 2 Oct 2026) puts 'Customer changed order' first on the
+ * Cancel box: changing an order is cancel and ring again, and its food is
+ * Ask, so food that goes into the new order can be answered "Not made". A
+ * till whose owner saved his own list keeps that list (add it by hand).
  */
 export const DEFAULT_ORDER_REASONS: Readonly<OrderReasons> = Object.freeze({
   v: 1,
   cancel: Object.freeze([
+    reasonButton('customer_changed_order', 'Customer changed order', 'ask'),
     reasonButton('customer_cancelled', 'Customer cancelled', 'ask'),
     reasonButton('refused_at_door', 'Refused at the door', 'made'),
     reasonButton('not_collected', 'Not collected', 'made'),

@@ -183,6 +183,7 @@ describe('reason chips', () => {
     expect(answerFromReason(CANCEL_REASONS, 'Refused at the door', SENT, null)).toEqual({ keep: false, answer: 'made' });
     expect(answerFromReason(CANCEL_REASONS, 'Not collected', SENT, null)).toEqual({ keep: false, answer: 'made' });
     expect(answerFromReason(CANCEL_REASONS, 'Customer cancelled', SENT, null)).toEqual({ keep: true });
+    expect(answerFromReason(CANCEL_REASONS, 'Customer changed order', SENT, null)).toEqual({ keep: true });
     expect(answerFromReason(REFUND_REASONS, 'Out of stock', SENT, null)).toEqual({ keep: false, answer: 'not_made' });
     expect(answerFromReason(REFUND_REASONS, 'Customer unhappy', SENT, null)).toEqual({ keep: true });
   });
@@ -206,12 +207,17 @@ describe('reason chips', () => {
   it('a later chip replaces an earlier chip\'s answer; one that says nothing about the food clears it', () => {
     expect(answerFromReason(CANCEL_REASONS, 'Not collected', SENT, 'reason')).toEqual({ keep: false, answer: 'made' });
     expect(answerFromReason(CANCEL_REASONS, 'Customer cancelled', SENT, 'reason')).toEqual({ keep: false, answer: null });
+    expect(answerFromReason(CANCEL_REASONS, 'Customer changed order', SENT, 'reason')).toEqual({ keep: false, answer: null });
   });
 });
 
 describe('the owner’s reason buttons (Settings → Staff & kitchen) as the boxes’ chips', () => {
-  it('by default: exactly the chips the boxes had before the buttons could be edited, in the same order', () => {
+  it("by default: 'Customer changed order' first (v0.7.34), then the chips the boxes had before the buttons could be edited, in the same order", () => {
+    // Its food is Ask: food that goes into the re-rung order can be answered "Not made".
+    expect(CANCEL_REASONS[0]).toEqual({ label: 'Customer changed order' });
+    expect(CANCEL_REASONS[0]).not.toHaveProperty('foodMade');
     expect(CANCEL_REASONS).toEqual([
+      { label: 'Customer changed order' },
       { label: 'Customer cancelled' },
       { label: 'Refused at the door', foodMade: 'made' },
       { label: 'Not collected', foodMade: 'made' },

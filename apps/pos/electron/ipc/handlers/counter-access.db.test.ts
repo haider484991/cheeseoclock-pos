@@ -1322,6 +1322,7 @@ describe.skipIf(!Sqlite)("the owner's shop rules (Settings → foodpanda …)", 
       h.session = who;
       const rules = await data<{ reasons: { cancel: Array<{ label: string }>; cashOut: string[] } }>('checkout:getRules');
       expect(rules.reasons.cancel.map((r) => r.label)).toEqual([
+        'Customer changed order',
         'Customer cancelled',
         'Refused at the door',
         'Not collected',
