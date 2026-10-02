@@ -16,7 +16,10 @@
  *  - M2: when the log can't be read, a hand-pressed paper still says
  *    DUPLICATE (no number), and a paper the till prints by itself prints
  *    unmarked;
- *  - the order panel's "Papers printed" and what the print button would do.
+ *  - the order panel's "Papers printed" and what the print button would do;
+ *  - v0.7.34: an outside rider who pays the shop (Rider paid) while his bill
+ *    still waits for the printer: the customer's copy is still the bill to
+ *    collect, the SHOP COPY says what he paid, and no second paper prints.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
  * here); skipped where it is missing. Every name and amount is made up.
@@ -404,5 +407,99 @@ describe.skipIf(!DatabaseSync)('when the print log misbehaves', () => {
       [1, 'reprint'],
     ]);
     expect(customerRows(o2).map((x) => [x.printNo, x.reason])).toEqual([[0, 'payment']]);
+  });
+});
+
+describe.skipIf(!DatabaseSync)('an outside rider pays the shop before his bill comes out of the printer (v0.7.34, owner 2026-10-02)', () => {
+  /**
+   * The owner's example: 15% tax, Big Two Rs 3,400 + Fries Rs 500 and the
+   * area's Rs 200 charge (taxed too): FOOD TOTAL Rs 4,515, CUSTOMER PAYS Rs
+   * 4,715, the rider keeps Rs 200. Rung up, sent and ready, as the counter does.
+   */
+  async function readyOutsideDelivery(): Promise<string> {
+    const { createTaxCategory } = await import('../db/repositories/tax-category-repo.js');
+    const { createCategory } = await import('../db/repositories/category-repo.js');
+    const { createMenuItem } = await import('../db/repositories/menu-item-repo.js');
+    const tax = createTaxCategory(db, { name: 'Test GST', rateBps: 1_500 }, MANAGER);
+    const food = createCategory(db, { name: 'Test Burgers', displayOrder: 9, colorHex: '#aa5500' }, MANAGER);
+    const item = (categoryId: string, name: string, basePriceCents: number) =>
+      createMenuItem(db, { categoryId, name, basePriceCents, taxCategoryId: tax.id }, MANAGER).id;
+    const lines = [
+      item(food.id, 'Test Big Two', 340_000),
+      item(food.id, 'Test Fries', 50_000),
+      item(shop.cat.fees, 'Delivery Charge (Rs 200)', 20_000),
+    ];
+    const customer = r.createCustomer(db, { name: 'Test Customer', phone: '03001234567' }, CASHIER);
+    const address = r.createAddress(db, { customerId: customer.id, addressLine: 'House 1, Test Street', area: 'Test Area' }, CASHIER);
+    const o = r.createOrder(db, { mode: 'delivery' }, CASHIER).id;
+    r.snapshotCustomerOntoOrder(db, { orderId: o, customerId: customer.id, addressId: address.id }, CASHIER);
+    for (const menuItemId of lines) r.addOrderItem(db, { orderId: o, menuItemId, quantity: 1, modifierIds: [], notes: null }, CASHIER);
+    r.sendOrderToKitchen(db, o, CASHIER);
+    r.markOrderReady(db, o, CASHIER);
+    return o;
+  }
+  /** One paper per cut. */
+  const papersOf = (bytes: Uint8Array) => {
+    const out: string[][] = [[]];
+    for (const row of escPosToText(bytes).split('\n')) {
+      if (row === '[cut]') out.push([]);
+      else out.at(-1)!.push(row);
+    }
+    return out.filter((p) => p.some((row) => row.trim() !== ''));
+  };
+
+  it("Send out, then Rider paid while the printer is still busy: the customer keeps the BILL (TO COLLECT Rs 4,715.00, Pay the rider); the SHOP COPY says RIDER PAID THE SHOP Rs 4,515.00; no second bill", async () => {
+    const s = await spooler();
+    await policy({ deliveryBillOnDispatch: true, shopCopy: 'delivery' });
+    const o = await readyOutsideDelivery();
+
+    // The printer is busy with the counter's last sale (its drawer pulse is
+    // still going out) when the rider is sent out. (An idle printer takes the
+    // bill the moment it is queued, and reads the order then: the race is a
+    // bill still waiting in the queue when the money comes in.)
+    let release!: () => void;
+    h.script.push(() => new Promise<PrintResult>((resolve) => (release = () => resolve({ ok: true, durationMs: 1 }))));
+    await tenderCash(shop.ring([['fajitaM', 1]]));
+    await vi.waitFor(() => expect(h.sends).toHaveLength(1));
+
+    // Send out: his bill waits behind it.
+    const sent = r.sendOutOrder(db, o, CASHIER);
+    expect(sent).toMatchObject({ totalCents: 471_500, riderKeepsCents: 20_000 });
+    s.onOrderEvent(o, 'dispatched');
+    // Paid now: he hands in the food total before the bill has printed.
+    const paid = r.takeRiderPayment(db, { orderId: o, method: 'cash', riderKeepsCents: 20_000 }, CASHIER);
+    expect(paid).toMatchObject({ status: 'out_for_delivery', paidAt: expect.any(String) });
+    s.onOrderEvent(o, 'payment_captured', { drawerOpenId: paid.drawerOpenId });
+    expect(h.sends).toHaveLength(1);
+    release();
+    await s.whenIdle();
+
+    // Exactly one paper for this order: the bill that left with the food, its two copies.
+    const receipts = (
+      db.prepare(`SELECT payload_json AS p FROM print_queue WHERE order_id = ? AND job_kind = 'receipt' ORDER BY rowid`).all(o) as Array<{ p: string }>
+    ).map((x) => (JSON.parse(x.p) as { reason: string }).reason);
+    expect(receipts).toEqual(['dispatch']);
+    const bills = h.sends.map((b) => papersOf(b)).filter((ps) => ps.some((p) => p.some((row) => row.includes('Test Big Two'))));
+    expect(bills).toHaveLength(1);
+    const [customer, shopCopy] = bills[0]!;
+    expect(bills[0]).toHaveLength(2);
+
+    // The customer's copy: still a bill for the full amount, nothing about PAID or the rider's money.
+    expect(customer).toContain('BILL - NOT PAID');
+    expect(customer!.some((row) => /^TO COLLECT\s+Rs 4,715\.00$/.test(row))).toBe(true);
+    expect(customer).toContain('Pay the rider Rs 4,715.00');
+    expect(customer!.join('\n')).not.toMatch(/PAID - |RIDER PAID|RIDER GIVES|SHOP COPY|DUPLICATE/);
+
+    // The shop's copy: what he paid the shop, after it printed — and the customer still pays him at the door.
+    expect(shopCopy).toContain('SHOP COPY');
+    expect(shopCopy!.some((row) => /^RIDER PAID THE SHOP\s+Rs 4,515\.00$/.test(row))).toBe(true);
+    expect(shopCopy!.join('\n')).not.toMatch(/RIDER GIVES THE SHOP/);
+    expect(shopCopy!.some((row) => /^TO COLLECT\s+Rs 4,715\.00$/.test(row))).toBe(true);
+
+    // The print log: the bill, as the original, with its shop copy; no receipt.
+    expect(logRows(o)).toEqual([
+      { document: 'bill', copy: 'customer', printNo: 0, reason: 'dispatch', outcome: 'printed' },
+      { document: 'bill', copy: 'shop', printNo: 0, reason: 'dispatch', outcome: 'printed' },
+    ]);
   });
 });

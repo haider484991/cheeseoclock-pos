@@ -6,7 +6,8 @@
  *     totals, stock / recipes / suppliers;
  *   - the counter still does its job: a customer found by the WHOLE phone
  *     number (one, never a list), their saved addresses, a new customer, the
- *     address saved with the order, the Live Orders board, Recent Orders;
+ *     address saved with the order, the Live Orders board, Recent Orders,
+ *     Send out and Rider paid (v0.7.34, no manager PIN);
  *   - a counter login opens and reprints only the draft, board orders and
  *     orders of the shift open now; a kitchen ticket only while the kitchen
  *     still has the order; the customer on a sent or paid bill never changes;
@@ -711,6 +712,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:unassignRider': { orderId: s.kitchenNow },
   'orders:markServed': { orderId: s.kitchenNow },
   'orders:markDelivered': { orderId: s.boardOld },
+  // Rider paid (v0.7.34): an outside rider pays the shop while still out, no manager PIN. A paid order: refused, nothing moves.
+  'orders:riderPaid': { orderId: s.paidNow, method: 'cash', riderKeepsCents: 0 },
   'orders:void': { orderId: s.paidNow, reason: 'Customer left' },
   'orders:refund': { orderId: s.paidNow, reason: 'Cold pizza', approverPin: '0000' },
   'orders:discardDraft': { orderId: s.draft },
@@ -1467,6 +1470,33 @@ describe.skipIf(!Sqlite)('the counter still takes orders', () => {
     expect(o).toMatchObject({ ok: true, data: { order: { id: s.kitchenNow, status: 'out_for_delivery', assignedRiderId: null, riderKeepsCents: 0 } } });
     expect(status()).toEqual({ status: 'out_for_delivery', keeps: 0 });
     expect(h.spool.slice(spooled)).toEqual([{ method: 'onOrderEvent', args: [s.kitchenNow, 'dispatched'] }]);
+  });
+
+  it('Rider paid (v0.7.34): a cashier takes the outside rider\'s money with no PIN and the drawer is asked for; nobody signed in is "Not logged in" and nothing moves', async () => {
+    // A made-up Rs 500 bill with no delivery charge on it, sent out.
+    db.prepare(`UPDATE orders SET subtotal_cents = 50000, total_cents = 50000 WHERE id = ?`).run(s.kitchenNow);
+    h.session = CASHIER;
+    expect(await call('orders:sendOut', { orderId: s.kitchenNow })).toMatchObject({ ok: true });
+    const status = () => db.prepare(`SELECT status, paid_at AS paidAt FROM orders WHERE id = ?`).get(s.kitchenNow);
+    const money = () =>
+      ['payments', 'drawer_opens', 'cash_movements'].map((t) => db.prepare(`SELECT COUNT(*) AS n FROM ${t} WHERE order_id = ?`).get(s.kitchenNow)?.['n']);
+    const spooled = h.spool.length;
+    const ask = { orderId: s.kitchenNow, method: 'cash', riderKeepsCents: 0 };
+
+    h.session = null;
+    expect(await call('orders:riderPaid', ask)).toEqual({ ok: false, code: 'unauthenticated', message: 'Not logged in' });
+    expect(status()).toEqual({ status: 'out_for_delivery', paidAt: null });
+    expect(money()).toEqual([0, 0, 0]);
+    expect(h.spool.length).toBe(spooled);
+
+    h.session = CASHIER;
+    const o = await call('orders:riderPaid', ask);
+    expect(o).toMatchObject({ ok: true, data: { order: { id: s.kitchenNow, status: 'out_for_delivery', riderKeepsCents: 0 } } });
+    expect(status()).toMatchObject({ status: 'out_for_delivery', paidAt: expect.any(String) });
+    // He keeps nothing (no delivery charge on it): one payment of the total, one drawer row, no payout.
+    expect(money()).toEqual([1, 1, 0]);
+    const drawerOpenId = db.prepare(`SELECT id FROM drawer_opens WHERE order_id = ?`).get(s.kitchenNow)?.['id'];
+    expect(h.spool.slice(spooled)).toEqual([{ method: 'onOrderEvent', args: [s.kitchenNow, 'payment_captured', { drawerOpenId }] }]);
   });
 
   it('the sweep counts a guard with its own wording as a lock-out', () => {

@@ -112,6 +112,7 @@ const api: RendererApi = {
     unassignRider: (req) => invoke('orders:unassignRider', req),
     markServed: (req) => invoke('orders:markServed', req),
     markDelivered: (req) => invoke('orders:markDelivered', req),
+    riderPaid: (req) => invoke('orders:riderPaid', req),
   },
   sync: {
     getConfig: () => invoke('sync:getConfig', undefined),

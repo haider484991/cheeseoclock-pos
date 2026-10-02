@@ -851,6 +851,13 @@ export interface IpcContract {
    * the COD payment in the same transaction so the order moves directly to
    * paid + delivered. If omitted, the order moves to `delivered` and a tender
    * call is expected later.
+   *
+   * `riderKeepsCents`: on an order sent out with an outside rider (Send out),
+   * what the window showed he keeps (snap.order.riderKeepsCents, unchanged).
+   * It must still be the order's frozen value, or nothing is taken ("This
+   * order changed since this window opened…"); absent (or null) for one of
+   * the shop's own riders. His payment is still the full total: the till
+   * splits a wallet payment itself.
    */
   'orders:markDelivered': {
     request: {
@@ -861,6 +868,28 @@ export interface IpcContract {
         tenderedCents?: number | null;
         referenceNo?: string | null;
       };
+      riderKeepsCents?: number | null;
+    };
+    response: ApiResult<OrderSnapshot>;
+  };
+  /**
+   * Rider paid (owner, 2 Oct 2026: Send out asks "Has the rider paid the
+   * shop?" -> Paid now): an outside rider pays the shop while he is still
+   * out. Cash, EasyPaisa or JazzCash (a card is refused); the till records
+   * the full total and pays his kept delivery charge out of it in the same
+   * step, so the drawer expects what he hands in. The order stays out for
+   * delivery (the customer still pays him at the door); Delivered closes it
+   * later with no payment. `riderKeepsCents` is what the window showed he
+   * keeps (snap.order.riderKeepsCents, unchanged): if the order changed
+   * since, nothing is taken. Any login that takes orders; no manager PIN. A
+   * shift must be open on this till.
+   */
+  'orders:riderPaid': {
+    request: {
+      orderId: string;
+      method: PaymentMethod;
+      referenceNo?: string | null;
+      riderKeepsCents: number;
     };
     response: ApiResult<OrderSnapshot>;
   };
