@@ -223,7 +223,9 @@ export function CashMovementDialog({ shiftId, onClose }: { shiftId: string; onCl
                       {m.userName ? <span className="text-stone-400"> · {m.userName}</span> : null}
                     </span>
                     <span className="flex shrink-0 items-baseline gap-2">
-                      {canPurchase && m.type === 'payout' && (
+                      {/* A payout to an outside rider for an order (his delivery charge or a
+                          wasted trip, v0.7.34) bought nothing: the till refuses to make it a purchase. */}
+                      {canPurchase && m.type === 'payout' && !m.orderId && (
                         m.refPurchaseOrderId ? (
                           <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">a purchase</span>
                         ) : (

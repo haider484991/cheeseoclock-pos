@@ -11,6 +11,9 @@
  *      went with it at once. Only the login that closed sees it, and only
  *      Done closes it. Closed by a manager's PIN on a cashier's login: no
  *      expected cash, and it goes by itself after a minute.
+ *  1b. (v0.7.34) What outside riders kept has a row of its own at the close,
+ *      and "Cash taken out" is the rest; Drawer cash in / out never offers to
+ *      turn a payout to an outside rider into a purchase.
  *   3. A cashier's tap on the shift pill says who can close and how they
  *      sign in (it was a disabled button with a hover-only title).
  *   5. "No shift is open" on Checkout and Live Orders, with "Open shift" for
@@ -31,6 +34,7 @@ import {
   EMPTY_ALERT_WATCH,
   type AlertWatch,
   type AuthenticatedUser,
+  type CashMovement,
   type OrderSnapshot,
   type Shift,
   type ShiftSummary,
@@ -46,12 +50,15 @@ import { ALERT_WATCH_KEY } from '../notifications/useAlertWatch';
 import {
   CASHIER_CANNOT_CLOSE,
   CASHIER_CLOSE_HOW,
+  closeResultCashOut,
   CloseShiftNotAllowedDialog,
   CloseShiftResultDialog,
   OpenShiftDialog,
   PIN_CLOSE_RESULT_NOTE,
+  ridersKeptLabel,
   ShiftWidget,
 } from './ShiftWidget';
+import { CashMovementDialog } from './CashMovementDialog';
 import { NO_SHIFT_TEXT, NoShiftBanner } from './NoShiftBanner';
 import {
   CLOSE_PAUSES_WEBSITE_NOTE,
@@ -310,6 +317,123 @@ describe('the close result stays on screen until Done', () => {
       expect(useShiftCloseOutcome.getState().outcome).toBe(SHORT);
       expect(text(render(<ShiftWidget />, [[CURRENT, null]]))).not.toContain(PIN_CLOSE_RESULT_NOTE);
     });
+  });
+});
+
+// --------------------------- 1b. outside riders at the close (v0.7.34, 18-7) --
+
+describe('the close result: delivery charges kept by outside riders', () => {
+  // Rs 950 out of the drawer in all: Rs 600 to three outside riders (payouts
+  // linked to an order), Rs 250 typed by hand and a Rs 100 rider tip.
+  const WITH_RIDERS = {
+    ...SUMMARY,
+    cashOutCents: 95_000,
+    riderChargesCents: 60_000,
+    riderChargeCount: 3,
+  } as unknown as ShiftSummary;
+
+  it('a row of their own above Expected; "Cash taken out" is the rest, as it always meant', () => {
+    signIn('manager');
+    showShiftCloseOutcome({ ...SHORT, summary: WITH_RIDERS });
+    const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
+    expect(words).toContain(`Delivery charges kept by riders (3 orders) − ${formatCents(60_000)}`);
+    expect(words).toContain(`Cash taken out − ${formatCents(35_000)}`);
+    expect(words).not.toContain(`Cash taken out − ${formatCents(95_000)}`);
+    const riders = words.indexOf('Delivery charges kept by riders');
+    expect(riders).toBeGreaterThan(words.indexOf('Cash taken out'));
+    expect(riders).toBeLessThan(words.indexOf('Expected cash'));
+    // The expected cash is the till's own figure: the riders are already out of it.
+    expect(words).toContain(`Expected cash ${formatCents(1_664_000)}`);
+  });
+
+  it('the words, exactly: one order, or many', () => {
+    expect(ridersKeptLabel(1)).toBe('Delivery charges kept by riders (1 order)');
+    expect(ridersKeptLabel(3)).toBe('Delivery charges kept by riders (3 orders)');
+  });
+
+  it('when riders took all the cash out there is no "Cash taken out" row', () => {
+    signIn('manager');
+    const allRiders = { ...SUMMARY, cashOutCents: 20_000, riderChargesCents: 20_000, riderChargeCount: 1 } as unknown as ShiftSummary;
+    showShiftCloseOutcome({ ...SHORT, summary: allRiders });
+    const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
+    expect(words).toContain(`Delivery charges kept by riders (1 order) − ${formatCents(20_000)}`);
+    expect(words).not.toContain('Cash taken out');
+  });
+
+  it('no riders: no row, and "Cash taken out" exactly as before (also for a summary with no rider figures)', () => {
+    signIn('manager');
+    const none = { ...SUMMARY, riderChargesCents: 0, riderChargeCount: 0 } as unknown as ShiftSummary;
+    for (const summary of [none, SUMMARY]) {
+      showShiftCloseOutcome({ ...SHORT, summary });
+      const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
+      expect(words).toContain(`Cash taken out − ${formatCents(20_000)}`);
+      expect(words).not.toContain('kept by riders');
+    }
+    expect(closeResultCashOut(SUMMARY)).toEqual({ takenOutCents: 20_000, ridersCents: 0, ridersCount: 0 });
+    expect(closeResultCashOut(WITH_RIDERS)).toEqual({ takenOutCents: 35_000, ridersCents: 60_000, ridersCount: 3 });
+  });
+
+  it('closed with a manager’s PIN on the cashier’s login: no takings, so no riders row either', () => {
+    signIn('cashier');
+    showShiftCloseOutcome({ ...SHORT, expectedCents: null, summary: null, viaManagerPin: true });
+    expect(text(render(<ShiftWidget />, [[CURRENT, null]]))).not.toContain('kept by riders');
+  });
+});
+
+describe('Drawer cash in / out: a payout to an outside rider is never a purchase', () => {
+  const at = '2026-10-02T14:00:00.000Z';
+  const move = (over: Partial<CashMovement>): CashMovement => ({
+    id: 'm1' as UUID,
+    shiftId: 'shift-1' as UUID,
+    type: 'payout',
+    amountCents: 20_000 as CashMovement['amountCents'],
+    reason: 'Test gas cylinder',
+    userId: 'u1' as UUID,
+    userName: 'Test Cashier',
+    approvedByUserId: null,
+    createdAt: at,
+    refPurchaseOrderId: null,
+    orderId: null,
+    orderNumber: null,
+    ...over,
+  });
+  const MOVES: CashMovement[] = [
+    move({
+      id: 'm1' as UUID,
+      reason: 'Delivery charge kept by the outside rider — Order #0042',
+      orderId: 'o42' as UUID,
+      orderNumber: '20261002-0042',
+    }),
+    move({ id: 'm2' as UUID, amountCents: 25_000 as CashMovement['amountCents'], reason: 'Test gas cylinder' }),
+    move({ id: 'm3' as UUID, reason: 'Test flour', refPurchaseOrderId: 'po1' as UUID }),
+  ];
+  const listKey = ['shifts', 'cashMovements', 'shift-1'] as const;
+  /** Each row of "This shift", as words. */
+  const rows = (markup: string) =>
+    markup
+      .split('<li')
+      .slice(1)
+      .map((li) => text(`<x${li.slice(0, li.indexOf('</li>'))}`));
+
+  it('the manager: no "Turn into a purchase" on the rider’s payout, which shows its reason as it is; payouts typed by hand unchanged', () => {
+    signIn('manager');
+    const [rider, gas, flour] = rows(render(<CashMovementDialog shiftId="shift-1" onClose={() => {}} />, [[listKey, MOVES]]));
+    expect(rider).toContain('Delivery charge kept by the outside rider — Order #0042');
+    expect(rider).toContain(`− ${formatCents(20_000)}`);
+    expect(rider).not.toContain('Turn into a purchase');
+    expect(rider).not.toContain('a purchase');
+    expect(gas).toContain('Test gas cylinder');
+    expect(gas).toContain('Turn into a purchase');
+    expect(flour).toContain('a purchase');
+    expect(flour).not.toContain('Turn into a purchase');
+  });
+
+  it('a cashier never had the purchase action, and still has none', () => {
+    signIn('cashier');
+    const words = rows(render(<CashMovementDialog shiftId="shift-1" onClose={() => {}} />, [[listKey, MOVES]]));
+    expect(words).toHaveLength(3);
+    expect(words[0]).toContain('Delivery charge kept by the outside rider — Order #0042');
+    expect(words.join(' ')).not.toContain('purchase');
   });
 });
 

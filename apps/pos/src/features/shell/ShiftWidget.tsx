@@ -5,7 +5,13 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Button, cn } from '@cheeseoclock/ui';
 import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Lock, PauseCircle, ShieldCheck, Wallet, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { IpcRequest, OpeningFloatPrefill, ShiftCloseCheck, UnpaidOrderAtClose } from '@cheeseoclock/shared-types';
+import type {
+  IpcRequest,
+  OpeningFloatPrefill,
+  ShiftCloseCheck,
+  ShiftSummary,
+  UnpaidOrderAtClose,
+} from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -828,6 +834,32 @@ function CloseShiftHeader({ onClose, closeLabel = 'Close' }: { onClose: () => vo
 }
 
 /**
+ * The cash taken out of the drawer this shift, as the close result shows it
+ * (v0.7.34). ridersCents: what outside riders kept as their delivery charge,
+ * or were paid for a wasted trip (the payouts linked to an order). The owner
+ * found a shortage at close because of these (2 Oct 2026), so they get a row
+ * of their own. takenOutCents: the rest, cash out typed by hand and rider
+ * tips, so "Cash taken out" means what it always meant. Both are already in
+ * the expected cash: nothing is taken off twice. A summary without the rider
+ * figures counts them as 0.
+ */
+export function closeResultCashOut(
+  summary: Pick<ShiftSummary, 'cashOutCents' | 'riderChargesCents' | 'riderChargeCount'>,
+): { takenOutCents: number; ridersCents: number; ridersCount: number } {
+  const ridersCents = Math.max(0, summary.riderChargesCents ?? 0);
+  return {
+    takenOutCents: Math.max(0, summary.cashOutCents - ridersCents),
+    ridersCents,
+    ridersCount: summary.riderChargeCount ?? 0,
+  };
+}
+
+/** "Delivery charges kept by riders (3 orders)" */
+export function ridersKeptLabel(count: number): string {
+  return `Delivery charges kept by riders (${count} ${count === 1 ? 'order' : 'orders'})`;
+}
+
+/**
  * The close box once the count is in: the shift's cash, Expected, Counted and
  * the Variance (Matches expected / Over / Short), until Done — the same box
  * the close always meant to show, now kept up after the shift status turns
@@ -841,6 +873,7 @@ function CloseShiftHeader({ onClose, closeLabel = 'Close' }: { onClose: () => vo
  */
 export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftCloseOutcome; onDone: () => void }) {
   const { summary } = outcome;
+  const cashOut = summary ? closeResultCashOut(summary) : null;
   const variance = outcome.varianceCents;
   const keepOpen = (e: Event) => e.preventDefault();
   return (
@@ -864,7 +897,12 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
                   <Row k="Cash sales" v={formatCents(summary.cashSalesCents)} />
                   <Row k="Cash refunds" v={`− ${formatCents(summary.cashRefundsCents)}`} />
                   {summary.cashInCents > 0 && <Row k="Cash put in" v={`+ ${formatCents(summary.cashInCents)}`} />}
-                  {summary.cashOutCents > 0 && <Row k="Cash taken out" v={`− ${formatCents(summary.cashOutCents)}`} />}
+                  {cashOut && cashOut.takenOutCents > 0 && (
+                    <Row k="Cash taken out" v={`− ${formatCents(cashOut.takenOutCents)}`} />
+                  )}
+                  {cashOut && cashOut.ridersCents > 0 && (
+                    <Row k={ridersKeptLabel(cashOut.ridersCount)} v={`− ${formatCents(cashOut.ridersCents)}`} />
+                  )}
                 </>
               )}
               {outcome.expectedCents !== null && (

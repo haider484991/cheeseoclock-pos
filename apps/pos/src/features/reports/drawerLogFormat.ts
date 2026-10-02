@@ -54,18 +54,34 @@ function shortNumber(orderNumber: string): string {
   return `#${orderNumber.split('-').pop() ?? orderNumber}`;
 }
 
-/** Why the drawer opened, in the owner's words ("Cash sale — Order #0042"). */
+/** "rider kept Rs 200 delivery charge" from "Rider kept Rs 200 delivery charge": the end of a sentence. */
+function lowerFirst(s: string): string {
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
+/**
+ * Why the drawer opened, in the owner's words ("Cash sale — Order #0042").
+ * Outside riders (v0.7.34): the cash an outside rider hands in is a sale
+ * whose reason says what he kept ("Cash sale — Order #0042 — rider kept
+ * Rs 200 delivery charge"); a payout to him for an order (his charge on a
+ * prepaid order, or a wasted trip) shows its stored reason, which names the
+ * order ("Cash out — Delivery charge kept by the outside rider — Order
+ * #0042").
+ */
 export function drawerWhy(line: Pick<ReportDrawerLogLine, 'kind' | 'orderNumber' | 'orderDeletedAsTest' | 'reason'>): string {
-  const order = line.orderNumber ? ` — Order ${shortNumber(line.orderNumber)}${line.orderDeletedAsTest ? ' (deleted test order)' : ''}` : '';
+  const deleted = line.orderDeletedAsTest ? ' (deleted test order)' : '';
+  const order = line.orderNumber ? ` — Order ${shortNumber(line.orderNumber)}${deleted}` : '';
   const why = (label: string) => (line.reason ? `${label} — ${line.reason}` : label);
   switch (line.kind) {
     case 'sale':
-      return `Cash sale${order}`;
+      return `Cash sale${order}${line.reason ? ` — ${lowerFirst(line.reason)}` : ''}`;
     case 'refund':
       return `Refund${order}`;
     case 'payin':
       return why('Cash in');
     case 'payout':
+      // Linked to an order: its reason already names it; with none, the order does.
+      if (line.orderNumber) return line.reason ? `Cash out — ${line.reason}${deleted}` : `Cash out${order}`;
       return why('Cash out');
     case 'tip_out':
       return why('Rider tip');

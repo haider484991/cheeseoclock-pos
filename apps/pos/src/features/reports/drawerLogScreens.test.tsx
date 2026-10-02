@@ -56,6 +56,35 @@ describe('why the drawer opened, and whether it did', () => {
     expect(drawerWhy(line({ kind: 'something_new', orderNumber: null }))).toBe('Other');
   });
 
+  it('outside riders (v0.7.34): the cash he hands in says what he kept; a payout to him for an order shows its stored reason', () => {
+    // The reason the till stores on the sale row ('Rider kept Rs 200 delivery charge') ends the sentence.
+    expect(drawerWhy(line({ amountCents: 451_500, reason: 'Rider kept Rs 200 delivery charge' }))).toBe(
+      'Cash sale — Order #0042 — rider kept Rs 200 delivery charge',
+    );
+    expect(drawerWhy(line({ reason: 'Rider kept Rs 200 delivery charge', orderDeletedAsTest: true }))).toBe(
+      'Cash sale — Order #0042 (deleted test order) — rider kept Rs 200 delivery charge',
+    );
+    // A prepaid order: the drawer paid him his charge at Send out.
+    const kept = line({ kind: 'payout', amountCents: -20_000, reason: 'Delivery charge kept by the outside rider — Order #0042' });
+    expect(drawerWhy(kept)).toBe('Cash out — Delivery charge kept by the outside rider — Order #0042');
+    expect(drawerWhy({ ...kept, orderDeletedAsTest: true })).toBe(
+      'Cash out — Delivery charge kept by the outside rider — Order #0042 (deleted test order)',
+    );
+    // A wasted trip (the order cancelled after Send out).
+    expect(drawerWhy(line({ kind: 'payout', orderNumber: '20261002-0043', reason: 'Trip paid to the outside rider — Order #0043 cancelled' }))).toBe(
+      'Cash out — Trip paid to the outside rider — Order #0043 cancelled',
+    );
+    // No reason stored: the order still says which one.
+    expect(drawerWhy(line({ kind: 'payout', reason: null }))).toBe('Cash out — Order #0042');
+    // Cash out typed by hand is unchanged, and so is a cash sale with no reason.
+    expect(drawerWhy(line({ kind: 'payout', orderNumber: null, reason: 'Ice' }))).toBe('Cash out — Ice');
+    expect(drawerWhy(line({ kind: 'payout', orderNumber: null, reason: null }))).toBe('Cash out');
+    expect(drawerWhy(line({}))).toBe('Cash sale — Order #0042');
+    // In the file too: the same words in the Why column.
+    const csv = drawerLogCsv([line({ amountCents: 451_500, reason: 'Rider kept Rs 200 delivery charge' })], Date.parse('2026-09-27T15:00:00.000Z'));
+    expect(csv).toContain(',This till,Cash sale — Order #0042 — rider kept Rs 200 delivery charge,20260927-0042,4515.00,');
+  });
+
   it('the result: opened, already open, did not open, may not have, no printer; waiting only for two minutes; "—" before the log', () => {
     const now = Date.parse('2026-09-27T14:01:00.000Z');
     expect(drawerResult(line({ outcome: 'opened' }), now)).toBe('Opened');
@@ -150,6 +179,34 @@ describe('Reports → the drawer log panel', () => {
     }
     // 'All' is the one pressed.
     expect(html).toMatch(/aria-pressed="true"[^>]*>All</);
+  });
+
+  it('outside riders (v0.7.34): the rider’s cash sale and the drawer’s payout to him, on screen', () => {
+    const page: DrawerLogPage = {
+      rows: [
+        line({ amountCents: 451_500, reason: 'Rider kept Rs 200 delivery charge' }),
+        line({ id: 'd2', kind: 'payout', orderNumber: '20260927-0043', amountCents: -20_000, reason: 'Delivery charge kept by the outside rider — Order #0043' }),
+      ],
+      nextCursor: null,
+      counts: { total: 2, byKind: { sale: 1, payout: 1 }, byOutcome: { opened: 2 } },
+      logSince: '2026-09-27T10:00:00.000Z',
+    };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(['reports', 'drawerLog', 'A', 'B', null, 'all'], { pages: [page], pageParams: [null] });
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={qc}>
+        <DrawerLogPanel sinceIso="A" untilIso="B" />
+      </QueryClientProvider>,
+    );
+    for (const words of [
+      'Cash sale — Order #0042 — rider kept Rs 200 delivery charge',
+      '+Rs 4,515',
+      'Cash out — Delivery charge kept by the outside rider — Order #0043',
+      '−Rs 200',
+      'Cash out 1',
+    ]) {
+      expect({ words, found: html.includes(words) }).toEqual({ words, found: true });
+    }
   });
 
   it("a shift's Print / Download CSV: a failed read is told, never swallowed; a good one is handed on", async () => {
