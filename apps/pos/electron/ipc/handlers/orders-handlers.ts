@@ -679,16 +679,21 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   // Assign rider, any login that takes orders and no manager PIN (the drawer
   // log and the close's riders row are the check). The repository freezes
   // what he keeps; the bill goes with the food, once per order on either till.
+  // A prepaid order (owner Q2): the repository paid his delivery charge from
+  // the drawer in the same transaction, and the drawer opens for that row
+  // after the commit (no row, no pulse).
   defineHandler('orders:sendOut', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
+    let drawerOpenId: string | null;
     try {
-      sendOutOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+      drawerOpenId = sendOutOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId }).drawerOpenId;
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',
         message: e instanceof Error ? e.message : 'Send out failed',
       });
     }
+    if (drawerOpenId) printSpooler.kickDrawerSoon(drawerOpenId);
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
     printSpooler.onOrderEvent(payload.orderId, 'dispatched');

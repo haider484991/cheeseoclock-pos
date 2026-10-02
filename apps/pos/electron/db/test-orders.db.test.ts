@@ -15,7 +15,10 @@
  *  - the order is gone from sales, Order History, customers, Recent Orders,
  *    the Live Orders board and the void / refund lists — and its waste shows
  *    as "Test orders (deleted)";
- *  - FBR rows still waiting are skipped, never sent.
+ *  - FBR rows still waiting are skipped, never sent;
+ *  - what the drawer paid an outside rider for it (v0.7.34) goes with it:
+ *    the preview's cash is net of it, and a payout made on the other till's
+ *    shift refuses the delete there.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for Electron
  * here); skipped where it is missing. Every name, price and amount is made up.
@@ -690,5 +693,125 @@ describe.skipIf(!DatabaseSync)('deleting a test order: the two tills agree (dele
     expect(t.r.getOrderSnapshot(t.db, o)).toBeNull();
     expect(t.r.getOrderSnapshot(db2, o)).toBeNull();
     expect(verifyAuditChain(t.auditRows()).ok).toBe(true);
+  });
+});
+
+describe.skipIf(!DatabaseSync)("deleting a test order: what the drawer paid its outside rider goes with it (v0.7.34)", () => {
+  /**
+   * The area's 'Delivery Charge (Rs 200)' (no tax, like the shop here) and a
+   * delivery with a Fajita and that charge, the made-up customer on it, not
+   * sent yet.
+   */
+  const outsideDelivery = async (): Promise<string> => {
+    const { createMenuItem } = await import('./repositories/menu-item-repo.js');
+    const tax = String(t.one(`SELECT tax_category_id AS id FROM menu_items WHERE id = ?`, t.shop.item.delivery)!['id']);
+    const charge = createMenuItem(
+      t.db,
+      { categoryId: t.shop.cat.fees, name: 'Delivery Charge (Rs 200)', basePriceCents: 20_000, taxCategoryId: tax },
+      MANAGER,
+    ).id;
+    const customer = t.r.createCustomer(t.db, { name: 'Test Customer', phone: '03001234567' }, CASHIER);
+    const address = t.r.createAddress(t.db, { customerId: customer.id, addressLine: 'House 1, Test Street', area: 'Test Area' }, CASHIER);
+    const d = t.r.createOrder(t.db, { mode: 'delivery' }, CASHIER).id;
+    t.r.snapshotCustomerOntoOrder(t.db, { orderId: d, customerId: customer.id, addressId: address.id }, CASHIER);
+    t.r.addOrderItem(t.db, { orderId: d, menuItemId: t.shop.item.fajitaM, quantity: 1, modifierIds: [], notes: null }, CASHIER);
+    t.r.addOrderItem(t.db, { orderId: d, menuItemId: charge, quantity: 1, modifierIds: [], notes: null }, CASHIER);
+    return d;
+  };
+  const livePayouts = (o: string) => t.all(`SELECT * FROM cash_movements WHERE order_id = ? AND type = 'payout' AND deleted_at IS NULL`, o);
+
+  it("sent out, then Delivered + Pay in cash: the payout is soft-deleted (sync 'delete', audit 'delete_test_order'), the preview's cash is net of it, and the shift expects the float again", async () => {
+    const start = t.expected();
+    const d = await outsideDelivery();
+    t.send(d);
+    t.ready(d);
+    const keep = t.r.sendOutOrder(t.db, d, CASHIER).riderKeepsCents as number;
+    expect(keep).toBe(20_000);
+    const total = t.total(d);
+    t.r.markOrderDelivered(t.db, { orderId: d, payment: { method: 'cash', amountCents: total }, riderKeepsCents: keep }, CASHIER);
+    // The rider handed in the total less his Rs 200.
+    expect(t.expected()).toBe(start + total - 20_000);
+    const [payout] = livePayouts(d);
+    expect(payout).toMatchObject({ amount_cents: 20_000, shift_id: t.shift().id });
+    const payoutId = String(payout!['id']);
+
+    const preview = t.r.testDeletePreview(t.db, d, DEV);
+    expect(preview.refusal).toBeNull();
+    expect(preview.cash).toEqual([{ shiftId: t.shift().id, open: true, netCents: total - 20_000 }]);
+    const done = t.del(d, false);
+    expect(done.cash).toEqual([{ shiftId: t.shift().id, open: true, netCents: total - 20_000 }]);
+
+    // The payout: soft-deleted, its delete synced and audited with the row as it was.
+    expect(livePayouts(d)).toEqual([]);
+    expect(t.one(`SELECT deleted_at IS NOT NULL AS gone, order_id FROM cash_movements WHERE id = ?`, payoutId)).toEqual({ gone: 1, order_id: d });
+    const sync = t.one(`SELECT op, payload_json AS p FROM sync_queue WHERE entity_type = 'cash_movements' AND entity_id = ? ORDER BY rowid DESC LIMIT 1`, payoutId)!;
+    expect(sync['op']).toBe('delete');
+    expect(JSON.parse(String(sync['p']))).toMatchObject({ id: payoutId, deletedAt: expect.any(String) });
+    const audit = t.one(
+      `SELECT actor_user_id AS actor, before_json AS b, after_json AS a FROM audit_log WHERE entity_type = 'cash_movements' AND entity_id = ? AND action = 'delete_test_order'`,
+      payoutId,
+    )!;
+    expect(audit['actor']).toBe(OWNER.userId);
+    expect(JSON.parse(String(audit['b']))).toMatchObject({ id: payoutId, type: 'payout', amount_cents: 20_000, order_id: d, deleted_at: null });
+    expect(JSON.parse(String(audit['a']))['deletedAt']).toBeTruthy();
+    const orderAudit = t.one(`SELECT after_json AS a FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'delete_test_order'`, d)!;
+    expect(JSON.parse(String(orderAudit['a']))).toMatchObject({ cashMovementIds: [payoutId] });
+    expect(verifyAuditChain(t.auditRows()).ok).toBe(true);
+
+    // The drawer expects the float again: no payment, no payout.
+    expect(t.expected()).toBe(start);
+    expect(t.r.getShiftSummary(t.db, t.shift().id)).toMatchObject({ riderChargesCents: 0, riderChargeCount: 0, cashOutCents: 0 });
+    const closed = t.r.closeShift(t.db, { shiftId: t.shift().id, countedCashCents: start }, MANAGER);
+    expect(closed.varianceCents).toBe(0);
+  });
+
+  it('prepaid at the counter and sent out (the drawer paid him then): net in the preview, the float again after', async () => {
+    const start = t.expected();
+    const d = await outsideDelivery();
+    t.pay(d);
+    t.ready(d);
+    const total = t.total(d);
+    t.r.sendOutOrder(t.db, d, CASHIER);
+    expect(t.expected()).toBe(start + total - 20_000);
+    expect(t.r.testDeletePreview(t.db, d, DEV).cash).toEqual([{ shiftId: t.shift().id, open: true, netCents: total - 20_000 }]);
+    t.del(d, false);
+    expect(livePayouts(d)).toEqual([]);
+    expect(t.expected()).toBe(start);
+  });
+
+  it('paid by EasyPaisa (the wallet for the food total, cash for his fee, the payout): no cash net in the drawer, so none in the preview', async () => {
+    const d = await outsideDelivery();
+    t.send(d);
+    t.ready(d);
+    const keep = t.r.sendOutOrder(t.db, d, CASHIER).riderKeepsCents as number;
+    t.r.markOrderDelivered(t.db, { orderId: d, payment: { method: 'easypaisa', amountCents: t.total(d) }, riderKeepsCents: keep }, CASHIER);
+    expect(t.r.testDeletePreview(t.db, d, DEV).cash).toEqual([]);
+    t.del(d, false);
+    expect(livePayouts(d)).toEqual([]);
+  });
+
+  it("a payout in the other till's shift (sent out there) -> otherTillPayment, and nothing is written", async () => {
+    const TILL_2 = 'till-2';
+    const d = await outsideDelivery();
+    t.pay(d);
+    t.ready(d);
+    // The other till sends it out, its own shift open: its drawer pays the rider.
+    const otherShift = t.r.openShift(t.db, { openingCashCents: 0 }, { userId: MANAGER.userId, deviceId: TILL_2 });
+    t.r.sendOutOrder(t.db, d, { userId: CASHIER.userId, deviceId: TILL_2 });
+    expect(livePayouts(d)).toEqual([expect.objectContaining({ shift_id: otherShift.id, amount_cents: 20_000 })]);
+    // Taken and paid on this till: only the payout is the other till's.
+    expect(t.all(`SELECT DISTINCT device_id FROM payments WHERE order_id = ?`, d)).toEqual([{ device_id: DEV }]);
+
+    const counts = () => ({
+      sync: t.n(`SELECT COUNT(*) AS n FROM sync_queue`),
+      audit: t.n(`SELECT COUNT(*) AS n FROM audit_log`),
+      payouts: livePayouts(d).length,
+      payments: t.n(`SELECT COUNT(*) AS n FROM payments WHERE order_id = ? AND deleted_at IS NULL`, d),
+    });
+    const before = counts();
+    expect(t.r.testDeletePreview(t.db, d, DEV).refusal).toBe(REFUSED.otherTillPayment);
+    expect(() => t.del(d, false)).toThrow(REFUSED.otherTillPayment);
+    expect(counts()).toEqual(before);
+    expect(t.status(d)).toBe('out_for_delivery');
   });
 });

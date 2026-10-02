@@ -15,13 +15,21 @@
  *       then closes it with no second payment and no second payout;
  *   (3) EasyPaisa / JazzCash: the wallet for the food total, cash for his fee,
  *       the payout, and no drawer row — the shift expects the float;
+ *   (4) a prepaid order sent out (owner Q2: "pay the rider's fee AT SEND
+ *       OUT, drawer opens"): the payout and a drawer 'payout' row for −his
+ *       fee in the same transaction as the status change; the shift expects
+ *       the float plus the total less his fee; 'orders:sendOut' opens the
+ *       drawer for that row; with no shift open Send out is refused in its
+ *       own words and writes nothing; he keeps 0 -> no payout, no drawer;
  *   (5) one of the shop's own riders: exactly as v0.7.33 (no payout);
  *   (6) the guards: a card is refused; a window whose riderKeepsCents is not
  *       the order's (or missing) is refused; a throw part-way rolls back the
  *       payment, the payout and the drawer row; a second Delivered never pays
  *       the rider twice; no shift, no money;
+ *   (7) the settlement lock: once the drawer paid him, or he paid the shop
+ *       after it left, Assign rider and Back to Ready are refused in the
+ *       words and write nothing; before any money both still work;
  *   and the snapshot's deliveryChargeToRider.
- * (4) — a prepaid order sent out — is step 18-3's.
  *
  * Every figure is worked out from the order and deliveryBillOf, never copied
  * in. node's own `node:sqlite` stands in for better-sqlite3 (built for
@@ -29,7 +37,7 @@
  * made up.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { deliveryBillOf, type PaymentMethod } from '@cheeseoclock/shared-types';
+import { deliveryBillOf, type AuthenticatedUser, type PaymentMethod, type UUID } from '@cheeseoclock/shared-types';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { riderSettledWhileOut } from '@cheeseoclock/printer-core';
 import type { AppDatabase } from './connection.js';
@@ -38,6 +46,13 @@ import { openTill } from './two-tills.fixture.js';
 import { verifyAuditChain, type AuditChainRow } from './audit-chain.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
+
+const h = vi.hoisted(() => ({
+  handlers: new Map<string, (ctx: unknown, payload: unknown) => Promise<unknown>>(),
+  session: null as AuthenticatedUser | null,
+  /** The drawer pulses the handlers asked for (kickDrawerSoon's drawer row ids). */
+  kicks: [] as string[],
+}));
 
 vi.mock('electron-log/main', () => ({ default: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } }));
 vi.mock('electron', () => ({
@@ -51,6 +66,47 @@ vi.mock('electron', () => ({
     }
   },
 }));
+// The orders handlers, captured instead of registered with Electron ((4): 'orders:sendOut').
+vi.mock('../ipc/registry.js', () => {
+  class IpcGuardError extends Error {
+    readonly apiError: { code: string; message: string };
+    constructor(apiError: { code: string; message: string }) {
+      super(apiError.message);
+      this.apiError = apiError;
+      this.name = 'IpcGuardError';
+    }
+  }
+  return {
+    IpcGuardError,
+    defineHandler: (channel: string, _ctx: unknown, fn: (ctx: unknown, payload: unknown) => Promise<unknown>) => {
+      h.handlers.set(channel, async (ctx, payload) => fn(ctx, payload));
+    },
+  };
+});
+// Who is signed in: auth-service's job, stood in for here.
+vi.mock('../services/auth-service.js', () => ({
+  getCurrentSession: () => h.session,
+  verifyManagerPin: async () => {
+    throw new Error("That is not a manager's PIN or password");
+  },
+}));
+// No printer here: the drawer pulses are only noted, the papers ignored.
+vi.mock('../services/print-spooler.js', () => ({
+  printSpooler: new Proxy(
+    {},
+    {
+      get:
+        (_t, method) =>
+        (...args: unknown[]) => {
+          if (method === 'kickDrawerSoon') h.kicks.push(String(args[0]));
+          return undefined;
+        },
+    },
+  ),
+  drawerFailureText: () => '',
+}));
+vi.mock('../services/fbr-worker.js', () => ({ fbrWorker: { kick: () => {}, resetAdapter: () => {} } }));
+vi.mock('../services/order-alerts-hub.js', () => ({ orderAlerts: { orderReceived: () => {}, importFailed: () => {} } }));
 
 const live = describe.skipIf(!DatabaseSync);
 
@@ -62,6 +118,7 @@ const FLOAT = 500_000;
 const NO_CARD = "An outside rider can't take a card: choose Cash, EasyPaisa or JazzCash.";
 const CHANGED = 'This order changed since this window opened — close it and open the order again.';
 const NO_SHIFT = 'No shift is open on this till — open a shift before taking or returning money';
+const LOCKED = "Money has already been settled with the outside rider for this order — its rider can't be changed now.";
 
 /** Evening times in Pakistan (UTC+5), as instants. */
 const PK = {
@@ -71,6 +128,7 @@ const PK = {
   '19:45': '2026-10-02T14:45:00.000Z',
   '19:50': '2026-10-02T14:50:00.000Z',
   '20:05': '2026-10-02T15:05:00.000Z',
+  '20:10': '2026-10-02T15:10:00.000Z',
   '20:20': '2026-10-02T15:20:00.000Z',
   '20:30': '2026-10-02T15:30:00.000Z',
 } as const;
@@ -145,6 +203,50 @@ async function out(shop: Shop, opts: { charge?: boolean; own?: boolean } = {}) {
     keep: (sent.riderKeepsCents ?? 0) as number,
     /** The bill's FOOD TOTAL (with tax): what he hands over (the total with no charge line). */
     foodTotal: deliveryBillOf(snap)?.foodTotalCents ?? (sent.totalCents as number),
+  };
+}
+
+/**
+ * A counter delivery PAID at the counter in full (cash unless `method` says
+ * otherwise; Pay leaves it sent to the kitchen, paid): the made-up customer,
+ * Big Two + Fries (+ the delivery charge unless `charge` is false), paid at
+ * 19:30, ready at 19:45. Not sent out yet.
+ */
+async function prepaid(shop: Shop, opts: { charge?: boolean; method?: PaymentMethod } = {}) {
+  const r = await repo();
+  const c = await import('./repositories/customer-repo.js');
+  at('19:00');
+  const o = r.createOrder(shop.db, { mode: 'delivery' }, CASHIER);
+  const customer = c.createCustomer(shop.db, { name: 'Test Prepaid Customer', phone: '03005556666' }, CASHIER);
+  const address = c.createAddress(shop.db, { customerId: customer.id, addressLine: 'House 7, Test Street', area: 'Test Block' }, CASHIER);
+  c.snapshotCustomerOntoOrder(shop.db, { orderId: o.id, customerId: customer.id, addressId: address.id }, CASHIER);
+  r.addOrderItem(shop.db, { orderId: o.id, menuItemId: shop.bigTwo, quantity: 1, modifierIds: [] }, CASHIER);
+  r.addOrderItem(shop.db, { orderId: o.id, menuItemId: shop.fries, quantity: 1, modifierIds: [] }, CASHIER);
+  if (opts.charge !== false) r.addOrderItem(shop.db, { orderId: o.id, menuItemId: shop.charge, quantity: 1, modifierIds: [] }, CASHIER);
+  const total = r.findOrder(shop.db, o.id)!.totalCents as number;
+  const method = opts.method ?? 'cash';
+  at('19:30');
+  r.tenderOrder(
+    shop.db,
+    { orderId: o.id, payments: [{ method, amountCents: total, tenderedCents: method === 'cash' ? total : null }] },
+    CASHIER,
+  );
+  at('19:45');
+  r.markOrderReady(shop.db, o.id, CASHIER);
+  return { id: o.id, orderNumber: o.orderNumber, total };
+}
+
+/** The orders handlers on this till, a cashier signed in; `call` runs one as the IPC would. */
+async function ordersIpc(shop: Shop) {
+  h.handlers.clear();
+  h.kicks.length = 0;
+  const { registerOrdersHandlers } = await import('../ipc/handlers/orders-handlers.js');
+  registerOrdersHandlers({ db: shop.db, deviceId: TILL } as never);
+  h.session = { id: CASHIER.userId as UUID, fullName: 'Test Cashier', role: 'cashier', sessionId: 'sess' as UUID };
+  return (channel: string, payload: unknown) => {
+    const fn = h.handlers.get(channel);
+    if (!fn) throw new Error(`No handler for ${channel}`);
+    return fn({ db: shop.db, deviceId: TILL }, payload) as Promise<{ ok: true; data: unknown }>;
   };
 }
 
@@ -494,6 +596,253 @@ live('(3) EasyPaisa / JazzCash: he sends the food total and keeps his fee from t
     r.markOrderDelivered(shop.db, { orderId: o.id, payment: { method: 'easypaisa', amountCents: o.total }, riderKeepsCents: 0 }, CASHIER);
     expect(paymentsOf(shop.db, o.id).map((p) => [p['method'], p['amount_cents']])).toEqual([['easypaisa', o.total]]);
     expect(payoutsOf(shop.db, o.id)).toEqual([]);
+  });
+});
+
+live('(4) a prepaid order sent out: the drawer pays his fee at Send out (owner Q2)', () => {
+  it("one payout and one drawer 'payout' row for −his fee, in the same transaction as the status change; the shift expects the float plus the total less his fee", async () => {
+    const shop = await till();
+    const r = await repo();
+    const { getShiftSummary } = await shiftRepo();
+    const o = await prepaid(shop);
+    expect(r.findOrder(shop.db, o.id)).toMatchObject({ status: 'ready', paidAt: PK['19:30'] });
+    const counterPayments = paymentsOf(shop.db, o.id);
+    expect(counterPayments).toEqual([expect.objectContaining({ method: 'cash', amount_cents: o.total })]);
+    // The counter's cash is in the drawer: the float plus the total.
+    expect(getShiftSummary(shop.db, shop.shiftId).expectedCashCents).toBe(FLOAT + o.total);
+    const before = ledger(shop.db, o.id);
+
+    at('19:50');
+    const sent = r.sendOutOrder(shop.db, o.id, CASHIER);
+
+    const keep = sent.riderKeepsCents as number;
+    const snap = r.getOrderSnapshot(shop.db, o.id)!;
+    // The owner's example: he keeps the Rs 200 charge as sold, the bill's Delivery charge.
+    expect(keep).toBe(20_000);
+    expect(deliveryBillOf(snap)?.deliveryChargeCents).toBe(keep);
+    expect(sent).toMatchObject({ status: 'out_for_delivery', paidAt: PK['19:30'], dispatchedAt: PK['19:50'], drawerOpenId: expect.any(String) });
+    // The customer's money is as it was: one cash payment of the total.
+    expect(paymentsOf(shop.db, o.id)).toEqual(counterPayments);
+    const payouts = payoutsOf(shop.db, o.id);
+    expect(payouts).toEqual([
+      {
+        id: expect.any(String),
+        shift_id: shop.shiftId,
+        type: 'payout',
+        amount_cents: keep,
+        reason: 'Delivery charge kept by the outside rider — Order #0001',
+        order_id: o.id,
+      },
+    ]);
+    expect(drawerOf(shop.db, sent.drawerOpenId!)).toEqual({
+      id: sent.drawerOpenId,
+      shift_id: shop.shiftId,
+      kind: 'payout',
+      reason: 'Delivery charge kept by the outside rider — Order #0001',
+      order_id: o.id,
+      cash_movement_id: payouts[0]!['id'],
+      amount_cents: -keep,
+      user_id: CASHIER.userId,
+    });
+    expect(ledger(shop.db, o.id)).toMatchObject({ payments: before.payments, movements: before.movements + 1, drawer: before.drawer + 1 });
+    expect(auditAfter(shop.db, before.audit).map((a) => `${String(a.entityType)}:${String(a.action)}`)).toEqual([
+      'orders:send_out',
+      'cash_movements:delivery_charge_to_rider',
+      'drawer_opens:drawer_payout',
+    ]);
+    expect(snap.deliveryChargeToRider).toEqual({ amountCents: keep, at: PK['19:50'], why: 'kept' });
+
+    const s = getShiftSummary(shop.db, shop.shiftId);
+    expect(s).toMatchObject({ cashSalesCents: o.total, cashOutCents: keep, riderChargesCents: keep, riderChargeCount: 1 });
+    expect(s.expectedCashCents).toBe(FLOAT + o.total - 20_000);
+    expect(chainOk(shop.db)).toBe(true);
+
+    // Delivered later closes it: no payment, no second payout, no drawer row.
+    const settled = ledger(shop.db, o.id);
+    at('20:20');
+    expect(r.markOrderDelivered(shop.db, { orderId: o.id, riderKeepsCents: keep }, CASHIER)).toMatchObject({ status: 'paid', drawerOpenId: null });
+    expect(ledger(shop.db, o.id)).toMatchObject({ payments: settled.payments, movements: settled.movements, drawer: settled.drawer });
+  });
+
+  it('a throw part-way rolls back the status, the payout and the drawer row together', async () => {
+    const shop = await till();
+    const r = await repo();
+    const o = await prepaid(shop);
+    shop.db.prepare(
+      `CREATE TRIGGER test_fail_payout BEFORE INSERT ON drawer_opens
+        WHEN NEW.kind = 'payout'
+        BEGIN SELECT RAISE(ABORT, 'Test: the disk is full'); END`,
+    ).run();
+    const before = ledger(shop.db, o.id);
+    at('19:50');
+    expect(() => r.sendOutOrder(shop.db, o.id, CASHIER)).toThrow('Test: the disk is full');
+    expect(ledger(shop.db, o.id)).toEqual(before);
+    expect(before.order).toMatchObject({ status: 'ready', rider_keeps_cents: null });
+    expect(payoutsOf(shop.db, o.id)).toEqual([]);
+    expect(chainOk(shop.db)).toBe(true);
+  });
+
+  it("'orders:sendOut' opens the drawer for that row after the commit; an unpaid order, or a prepaid one he keeps nothing on, opens nothing", async () => {
+    const shop = await till();
+    const call = await ordersIpc(shop);
+    const o = await prepaid(shop);
+    at('19:50');
+    const snap = (await call('orders:sendOut', { orderId: o.id })).data as { order: { status: string; riderKeepsCents?: number | null } };
+    expect(snap.order).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 20_000 });
+    const row = shop.db.prepare(`SELECT id FROM drawer_opens WHERE order_id = ? AND kind = 'payout'`).all(o.id) as Row[];
+    expect(row).toHaveLength(1);
+    expect(h.kicks).toEqual([row[0]!['id']]);
+
+    // Cash on delivery: no money at Send out, no drawer.
+    h.kicks.length = 0;
+    const r = await repo();
+    at('19:00');
+    const cod = r.createOrder(shop.db, { mode: 'delivery' }, CASHIER);
+    r.addOrderItem(shop.db, { orderId: cod.id, menuItemId: shop.bigTwo, quantity: 1, modifierIds: [] }, CASHIER);
+    r.addOrderItem(shop.db, { orderId: cod.id, menuItemId: shop.charge, quantity: 1, modifierIds: [] }, CASHIER);
+    at('19:30');
+    r.sendOrderToKitchen(shop.db, cod.id, CASHIER);
+    at('19:50');
+    await call('orders:sendOut', { orderId: cod.id });
+    // Prepaid with no delivery charge: he keeps nothing, so nothing is paid out.
+    const free = await prepaid(shop, { charge: false });
+    at('19:50');
+    await call('orders:sendOut', { orderId: free.id });
+    expect(h.kicks).toEqual([]);
+  });
+
+  it('with no shift open on this till Send out is refused in the words, the order is still Ready and nothing is written', async () => {
+    const shop = await till();
+    const r = await repo();
+    const { closeShift, getShiftSummary } = await shiftRepo();
+    const o = await prepaid(shop);
+    at('19:45');
+    closeShift(shop.db, { shiftId: shop.shiftId, countedCashCents: getShiftSummary(shop.db, shop.shiftId).expectedCashCents }, MANAGER);
+    const before = ledger(shop.db, o.id);
+    const words = `No shift is open on this till — open a shift to give the rider his ${formatCents(20_000)} delivery charge`;
+    expect(words).toBe('No shift is open on this till — open a shift to give the rider his Rs 200 delivery charge');
+
+    at('19:50');
+    expect(() => r.sendOutOrder(shop.db, o.id, CASHIER)).toThrow(words);
+    expect(ledger(shop.db, o.id)).toEqual(before);
+    expect(before.order).toMatchObject({ status: 'ready', rider_keeps_cents: null });
+
+    // Through the IPC: the repository's words, and no drawer.
+    const call = await ordersIpc(shop);
+    await expect(call('orders:sendOut', { orderId: o.id })).rejects.toMatchObject({ apiError: { code: 'precondition_failed', message: words } });
+    expect(ledger(shop.db, o.id)).toEqual(before);
+    expect(h.kicks).toEqual([]);
+  });
+
+  it('prepaid, he keeps 0 (no delivery charge): no payout and no drawer row — even with no shift open, since no money moves', async () => {
+    const shop = await till();
+    const r = await repo();
+    const { closeShift, getShiftSummary } = await shiftRepo();
+    const o = await prepaid(shop, { charge: false });
+    const before = ledger(shop.db, o.id);
+    at('19:50');
+    const sent = r.sendOutOrder(shop.db, o.id, CASHIER);
+    expect(sent).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 0, drawerOpenId: null });
+    expect(payoutsOf(shop.db, o.id)).toEqual([]);
+    expect(ledger(shop.db, o.id)).toMatchObject({ movements: before.movements, drawer: before.drawer, payments: before.payments });
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({ expectedCashCents: FLOAT + o.total, riderChargesCents: 0 });
+
+    const late = await prepaid(shop, { charge: false });
+    at('19:45');
+    closeShift(shop.db, { shiftId: shop.shiftId, countedCashCents: getShiftSummary(shop.db, shop.shiftId).expectedCashCents }, MANAGER);
+    at('19:50');
+    expect(r.sendOutOrder(shop.db, late.id, CASHIER)).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 0, drawerOpenId: null });
+  });
+
+  it('paid by card at the counter: his fee still comes from the drawer in cash', async () => {
+    const shop = await till();
+    const r = await repo();
+    const { getShiftSummary } = await shiftRepo();
+    const o = await prepaid(shop, { method: 'card' });
+    at('19:50');
+    const sent = r.sendOutOrder(shop.db, o.id, CASHIER);
+    expect(drawerOf(shop.db, sent.drawerOpenId!)).toMatchObject({ kind: 'payout', amount_cents: -20_000, order_id: o.id });
+    expect(getShiftSummary(shop.db, shop.shiftId).expectedCashCents).toBe(FLOAT - 20_000);
+  });
+});
+
+live('(7) the settlement lock: Assign rider and Back to Ready, once his money is settled', () => {
+  it('after the drawer paid him at Send out (prepaid): both refused in the words, nothing written', async () => {
+    const shop = await till();
+    const r = await repo();
+    const o = await prepaid(shop);
+    at('19:50');
+    r.sendOutOrder(shop.db, o.id, CASHIER);
+    const before = ledger(shop.db, o.id);
+    at('20:05');
+    expect(() => r.assignRiderToOrder(shop.db, o.id, shop.rider, CASHIER)).toThrow(LOCKED);
+    expect(() => r.unassignRiderFromOrder(shop.db, o.id, CASHIER)).toThrow(LOCKED);
+    expect(ledger(shop.db, o.id)).toEqual(before);
+
+    // Through the IPC: the repository's words.
+    const call = await ordersIpc(shop);
+    await expect(call('orders:assignRider', { orderId: o.id, riderId: shop.rider })).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: LOCKED },
+    });
+    await expect(call('orders:unassignRider', { orderId: o.id })).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: LOCKED },
+    });
+    expect(ledger(shop.db, o.id)).toEqual(before);
+  });
+
+  it('after Rider paid (cash or wallet): both refused, nothing written; after Delivered + Pay too', async () => {
+    const shop = await till();
+    const r = await repo();
+    for (const method of ['cash', 'easypaisa'] as PaymentMethod[]) {
+      const o = await out(shop);
+      at('20:05');
+      r.takeRiderPayment(shop.db, { orderId: o.id, method, riderKeepsCents: o.keep }, CASHIER);
+      const before = ledger(shop.db, o.id);
+      at('20:10');
+      expect(() => r.assignRiderToOrder(shop.db, o.id, shop.rider, CASHIER)).toThrow(LOCKED);
+      expect(() => r.unassignRiderFromOrder(shop.db, o.id, CASHIER)).toThrow(LOCKED);
+      expect(ledger(shop.db, o.id)).toEqual(before);
+    }
+    const closed = await out(shop);
+    at('20:20');
+    r.markOrderDelivered(shop.db, { orderId: closed.id, payment: { method: 'cash', amountCents: closed.total }, riderKeepsCents: closed.keep }, CASHIER);
+    const before = ledger(shop.db, closed.id);
+    expect(() => r.assignRiderToOrder(shop.db, closed.id, shop.rider, CASHIER)).toThrow(LOCKED);
+    expect(() => r.unassignRiderFromOrder(shop.db, closed.id, CASHIER)).toThrow(LOCKED);
+    expect(ledger(shop.db, closed.id)).toEqual(before);
+  });
+
+  it('he paid with nothing to keep (no payout written): still refused, because he paid the shop after it left', async () => {
+    const shop = await till();
+    const r = await repo();
+    const o = await out(shop, { charge: false });
+    at('20:05');
+    r.takeRiderPayment(shop.db, { orderId: o.id, method: 'cash', riderKeepsCents: 0 }, CASHIER);
+    expect(payoutsOf(shop.db, o.id)).toEqual([]);
+    expect(() => r.unassignRiderFromOrder(shop.db, o.id, CASHIER)).toThrow(LOCKED);
+    expect(() => r.assignRiderToOrder(shop.db, o.id, shop.rider, CASHIER)).toThrow(LOCKED);
+  });
+
+  it('before any money both still work: Back to Ready, Send out again, then Assign rider; a prepaid order he keeps nothing on goes back too', async () => {
+    const shop = await till();
+    const r = await repo();
+    const o = await out(shop);
+    at('20:05');
+    const back = r.unassignRiderFromOrder(shop.db, o.id, CASHIER);
+    expect(back.status).toBe('ready');
+    expect(back.riderKeepsCents ?? null).toBeNull();
+    expect(r.sendOutOrder(shop.db, o.id, CASHIER)).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: o.keep });
+    expect(r.assignRiderToOrder(shop.db, o.id, shop.rider, CASHIER)).toMatchObject({ status: 'out_for_delivery', assignedRiderId: shop.rider });
+    expect(payoutsOf(shop.db, o.id)).toEqual([]);
+
+    // Paid at the counter BEFORE it left, nothing paid out: no lock.
+    const free = await prepaid(shop, { charge: false });
+    at('19:50');
+    r.sendOutOrder(shop.db, free.id, CASHIER);
+    at('20:05');
+    expect(r.unassignRiderFromOrder(shop.db, free.id, CASHIER)).toMatchObject({ status: 'ready' });
+    expect(r.sendOutOrder(shop.db, free.id, CASHIER)).toMatchObject({ status: 'out_for_delivery', drawerOpenId: null });
+    expect(r.assignRiderToOrder(shop.db, free.id, shop.rider, CASHIER)).toMatchObject({ assignedRiderId: shop.rider });
   });
 });
 

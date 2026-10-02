@@ -7,7 +7,7 @@ import { writeAudit } from './audit-repo.js';
 import { decrementForOrder } from './stock-movement-repo.js';
 import { getOrderStockStatus, settleOrderStock } from './order-stock-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
-import { findCashMovement, recordDeliveryChargeToRider } from './shift-repo.js';
+import { findCashMovement, getCurrentShift, recordDeliveryChargeToRider } from './shift-repo.js';
 import { skipFbrForOrder, touchedFbrProduction } from './fbr-queue-repo.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from './modifier-repo.js';
 import { noDiscountOf } from './category-repo.js';
@@ -3702,13 +3702,23 @@ export function markOrderReady(
  * order's lines are locked anyway: addOrderItem and the discounts refuse
  * anything past 'open'). One sync row (the image carries riderKeepsCents) and
  * one audit row 'send_out'.
+ *
+ * An order the customer already paid the shop for (prepaid at the counter;
+ * the owner's Q2, 2 Oct 2026: "pay the rider's fee AT SEND OUT, drawer
+ * opens"): the drawer pays the rider what he keeps, in this same transaction
+ * (settleOutsideRider with no payment): one payout linked to the order and
+ * one drawer 'payout' row for it. Only while a shift is open on this till —
+ * with none it is refused in its own words and nothing is written. Nothing
+ * is paid out when he keeps 0. Returns the order with that drawer row's id
+ * (the caller opens the drawer after the commit), null when no money moved.
  */
 export function sendOutOrder(
   db: AppDatabase,
   orderId: string,
   actor: Actor & { userId: string },
-): Order {
-  let result!: Order;
+): OrderWithDrawer {
+  let result!: OrderWithDrawer;
+  const from: OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready'];
   const tx = db.transaction(() => {
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
@@ -3720,11 +3730,18 @@ export function sendOutOrder(
     // owner's Q1, the charge keeps its 15% tax, and that tax is in the FOOD
     // TOTAL he hands over), and never more than the customer pays.
     const keeps = Math.min(deliveryChargeLinesCents(snapshot), order.totalCents);
-    result = setOrderStatus(
+    // Prepaid: the drawer pays his fee now, so a shift must be open here.
+    // Checked before anything is written; an order Send out can't take at
+    // all (cancelled, refunded, closed) gets setOrderStatus's own words.
+    const prepaid = order.paidAt !== null;
+    if (prepaid && keeps > 0 && from.includes(order.status) && getCurrentShift(db, actor.deviceId) === null) {
+      throw new Error(`No shift is open on this till — open a shift to give the rider his ${formatCents(keeps)} delivery charge`);
+    }
+    const sent = setOrderStatus(
       db,
       orderId,
       'out_for_delivery',
-      ['sent_to_kitchen', 'preparing', 'ready'],
+      from,
       [
         { col: 'assigned_rider_id', value: null },
         { col: 'dispatched_at', value: nowIso() },
@@ -3733,6 +3750,9 @@ export function sendOutOrder(
       actor,
       'send_out',
     );
+    // settleOutsideRider reads the frozen keep from the order as it is now.
+    const drawerOpenId = prepaid ? settleOutsideRider(db, sent, null, actor) : null;
+    result = { ...sent, drawerOpenId };
   });
   tx();
   return result;
@@ -3749,6 +3769,7 @@ export function sendOutOrder(
  * is now an own rider's. On an order already sent out (out for delivery, no
  * rider named) it keeps `dispatched_at`: the food left when it was sent out.
  * From Ready, or from one own rider to another, exactly as v0.7.33 did.
+ * Refused once the outside rider's money is settled (RIDER_MONEY_SETTLED).
  */
 export function assignRiderToOrder(
   db: AppDatabase,
@@ -3772,6 +3793,7 @@ export function assignRiderToOrder(
     if (order.mode !== 'delivery') {
       throw new Error('Only delivery orders can be assigned to a rider');
     }
+    if (outsideRiderMoneySettled(db, order)) throw new Error(RIDER_MONEY_SETTLED);
     const alreadySentOut =
       order.status === 'out_for_delivery' && order.assignedRiderId === null && order.dispatchedAt !== null;
     result = setOrderStatus(
@@ -3799,7 +3821,8 @@ export function assignRiderToOrder(
  * (rider_keeps_cents NULL), so it can be sent out or assigned again. Audited
  * 'undo_send_out' when no rider was named (it was sent out), 'unassign_rider'
  * otherwise, as before. Does not clear `dispatched_at` — that's a historical
- * fact even if it gets re-set.
+ * fact even if it gets re-set. Refused once the outside rider's money is
+ * settled (RIDER_MONEY_SETTLED).
  */
 export function unassignRiderFromOrder(
   db: AppDatabase,
@@ -3810,6 +3833,7 @@ export function unassignRiderFromOrder(
   const tx = db.transaction(() => {
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
+    if (outsideRiderMoneySettled(db, order)) throw new Error(RIDER_MONEY_SETTLED);
     if (order.status !== 'out_for_delivery') {
       throw new Error('Only out-for-delivery orders can be taken off a rider or brought back');
     }
@@ -4002,6 +4026,26 @@ function liveRiderPayout(
     )
     .get(orderId) as { id: string; amount_cents: number; created_at: string; reason: string | null } | undefined;
   return row ?? null;
+}
+
+/** Assign rider and Back to Ready, once the outside rider's money is settled (the words the screens show). */
+export const RIDER_MONEY_SETTLED =
+  "Money has already been settled with the outside rider for this order — its rider can't be changed now.";
+
+/**
+ * The outside rider's money for this order is settled: the drawer paid him
+ * (a live payout linked to the order: a prepaid order sent out, Rider paid,
+ * Delivered + Pay, a wasted trip), or he paid the shop for it after it left
+ * (paid_at at or after dispatched_at; any status, a closed order included).
+ * Changing its rider then would leave that money wrong, so Assign rider and
+ * Back to Ready refuse (RIDER_MONEY_SETTLED).
+ */
+function outsideRiderMoneySettled(db: AppDatabase, order: Order): boolean {
+  if (liveRiderPayout(db, order.id) !== null) return true;
+  if (!isOutsideRiderOrder(order) || !order.paidAt || !order.dispatchedAt) return false;
+  const paid = Date.parse(order.paidAt);
+  const left = Date.parse(order.dispatchedAt);
+  return Number.isFinite(paid) && Number.isFinite(left) && paid >= left;
 }
 
 /**
@@ -4405,6 +4449,8 @@ export interface TestDeleteFacts {
   statusBefore: OrderStatus;
   /** Live payment rows (sales and refunds). */
   payments: Array<{ id: string; method: PaymentMethod; amountCents: number; shiftId: string | null }>;
+  /** Live payouts to its outside rider (cash_movements.order_id, 0049): cash that left the drawer for it. */
+  payouts: Array<{ id: string; amountCents: number; shiftId: string }>;
   paid: TestDeletePreview['paid'];
   stockStatus: OrderStockStatus | null;
   stockState: TestDeleteStockState;
@@ -4419,9 +4465,11 @@ export type TestDeleteCheck = { ok: false; refusal: string; facts: TestDeleteFac
  * Whether this order may be deleted as a test on this till, and what that
  * would touch. Pure read. The refusals that don't depend on what the owner
  * typed, in order: gone, still a cart, taken on the other till, paid (in
- * part) on the other till, sent to FBR in production (any status, or a
- * paper that printed a production number). Same till only: its FBR queue,
- * website import, print jobs and shift cash are all on this till.
+ * part) on the other till — or its outside rider paid from the other till's
+ * drawer — sent to FBR in production (any status, or a paper that printed a
+ * production number). Same till only: its FBR queue, website import, print
+ * jobs and shift cash are all on this till. The cash per shift is net of
+ * what the drawer paid its outside rider (the payouts go with the order).
  */
 export function checkTestDelete(db: AppDatabase, orderId: string, deviceId: string, nowMs: number = Date.now()): TestDeleteCheck {
   const snapshot = getOrderSnapshot(db, orderId);
@@ -4444,11 +4492,25 @@ export function checkTestDelete(db: AppDatabase, orderId: string, deviceId: stri
   for (const p of payments) paidBy.set(p.method, (paidBy.get(p.method) ?? 0) + p.amountCents);
   const paid = [...paidBy].filter(([, n]) => n !== 0).map(([method, netCents]) => ({ method, netCents }));
 
+  // What the drawer paid its outside rider (a kept charge or a wasted trip),
+  // and on which till's shift (cash_movements.shift_id is always set).
+  const payoutRows = (
+    db
+      .prepare(
+        `SELECT m.id, m.amount_cents, m.shift_id, COALESCE(s.device_id, m.device_id) AS device_id
+           FROM cash_movements m LEFT JOIN shifts s ON s.id = m.shift_id
+          WHERE m.order_id = ? AND m.type = 'payout' AND m.deleted_at IS NULL
+          ORDER BY m.created_at, m.id`,
+      )
+      .all(orderId) as Array<{ id: string; amount_cents: number; shift_id: string; device_id: string }>
+  ).map((m) => ({ id: m.id, amountCents: Number(m.amount_cents), shiftId: m.shift_id, deviceId: m.device_id }));
+
   const cashBy = new Map<string, number>();
   for (const p of payments) {
     if (p.method !== 'cash' || !p.shiftId) continue;
     cashBy.set(p.shiftId, (cashBy.get(p.shiftId) ?? 0) + p.amountCents);
   }
+  for (const m of payoutRows) cashBy.set(m.shiftId, (cashBy.get(m.shiftId) ?? 0) - m.amountCents);
   const cash: TestDeleteShiftCash[] = [...cashBy]
     .filter(([, n]) => n !== 0)
     .map(([shiftId, netCents]) => {
@@ -4490,6 +4552,7 @@ export function checkTestDelete(db: AppDatabase, orderId: string, deviceId: stri
     snapshot,
     statusBefore: order.status,
     payments: payments.map(({ deviceId: _d, ...p }) => p),
+    payouts: payoutRows.map(({ deviceId: _d, ...m }) => m),
     paid,
     stockStatus,
     stockState,
@@ -4499,7 +4562,9 @@ export function checkTestDelete(db: AppDatabase, orderId: string, deviceId: stri
   };
   if (order.status === 'open') return { ok: false, refusal: TEST_DELETE_REFUSED.open, facts };
   if (row.device_id !== deviceId) return { ok: false, refusal: TEST_DELETE_REFUSED.otherTillOrder, facts };
-  if (payments.some((p) => p.deviceId !== deviceId)) return { ok: false, refusal: TEST_DELETE_REFUSED.otherTillPayment, facts };
+  if (payments.some((p) => p.deviceId !== deviceId) || payoutRows.some((m) => m.deviceId !== deviceId)) {
+    return { ok: false, refusal: TEST_DELETE_REFUSED.otherTillPayment, facts };
+  }
   if (touchedFbrProduction(db, orderId)) return { ok: false, refusal: TEST_DELETE_REFUSED.fbr, facts };
   return { ok: true, facts };
 }
@@ -4577,7 +4642,8 @@ function softDeleteChannelTerms(db: AppDatabase, orderId: string, now: string, a
  *     count as food sold with no money). Stock already dealt with at a cancel
  *     or refund stays as it is ('settled_before');
  *  c. every live payment (sales and refunds) soft-deleted, synced and audited;
- *     so is a foodpanda order's kept terms row (order_channel_terms);
+ *     so is a foodpanda order's kept terms row (order_channel_terms), and
+ *     every payout the drawer made to its outside rider (cash_movements);
  *  d. the order soft-deleted with who, why, how and what it did to stock —
  *     its status, lines, discounts, costs, papers and stock rows untouched —
  *     synced, and audited with the full order before;
@@ -4652,6 +4718,29 @@ export function deleteTestOrder(
     // and nothing that reads the table by itself can count a test.
     const channelTermsIds = softDeleteChannelTerms(db, input.orderId, now, actor.userId);
 
+    // c3. What the drawer paid its outside rider (0049: a kept charge, a
+    // wasted trip) is money of the order too: soft-deleted, synced and
+    // audited, so the shift's expected cash no longer takes it out. Its
+    // drawer row stays: the drawer log has no delete.
+    const cashMovementIds: string[] = [];
+    for (const m of f.payouts) {
+      const row = db.prepare(`SELECT * FROM cash_movements WHERE id = ?`).get(m.id) as Record<string, unknown>;
+      const upd = db
+        .prepare(`UPDATE cash_movements SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND deleted_at IS NULL`)
+        .run(now, now, m.id);
+      if (Number(upd.changes) === 0) continue;
+      enqueueSync(db, { entityType: 'cash_movements', entityId: m.id, op: 'delete', payload: { id: m.id, deletedAt: now } });
+      writeAudit(db, {
+        entityType: 'cash_movements',
+        entityId: m.id,
+        action: 'delete_test_order',
+        actorUserId: actor.userId,
+        before: row,
+        after: { deletedAt: now },
+      });
+      cashMovementIds.push(m.id);
+    }
+
     // e. FBR (pure-local): noop / sandbox submissions still waiting are never sent.
     const fbrSkippedIds = skipFbrForOrder(db, input.orderId);
 
@@ -4682,6 +4771,7 @@ export function deleteTestOrder(
         cashByShift: f.cash,
         paymentIds: f.payments.map((p) => p.id),
         channelTermsIds,
+        cashMovementIds,
         fbrSkippedIds,
         web: f.web,
       },
