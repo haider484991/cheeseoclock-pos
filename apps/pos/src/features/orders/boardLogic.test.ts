@@ -21,8 +21,14 @@ import {
   outsideRiderChipText,
   outsideRiderKeepsText,
   parseRupeesToCents,
+  riderOwesCents,
+  riderOwesText,
+  secondaryBoardAction,
+  sendOutAsks,
+  sendOutSplit,
   sentStepAt,
 } from './boardLogic';
+import { deliveryBillOf } from '@cheeseoclock/shared-types';
 import { orderTimeLabel } from './historyFilters';
 
 describe('age', () => {
@@ -191,6 +197,107 @@ describe('an outside rider on the board (Send out, v0.7.34)', () => {
 
   it('the "Assign rider" link says it is optional and for the shop’s own riders', () => {
     expect(ASSIGN_RIDER_LINK_TITLE).toBe('Optional — one of your own riders (they bring back the full bill)');
+  });
+});
+
+describe('Rider owes / Rider paid on an outside rider’s Out card (v0.7.34, step 18-6)', () => {
+  const STATUSES: OrderStatus[] = ['open', 'sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'served', 'paid', 'void', 'refunded'];
+  const MODES = ['dine_in', 'takeaway', 'delivery', 'online', 'foodpanda'] as const;
+
+  it('secondaryBoardAction: "Rider paid" only on an unpaid delivery out with an outside rider', () => {
+    expect(secondaryBoardAction('out_for_delivery', 'delivery', false, true)).toEqual({ kind: 'rider_paid', label: 'Rider paid' });
+    // Paid (by him, or by the customer before it left): the PAID chip and Delivered only.
+    expect(secondaryBoardAction('out_for_delivery', 'delivery', true, true)).toBeNull();
+    // One of the shop's own riders (outside false): exactly as before, one big button.
+    expect(secondaryBoardAction('out_for_delivery', 'delivery', false, false)).toBeNull();
+    expect(secondaryBoardAction('out_for_delivery', 'delivery', true, false)).toBeNull();
+    for (const status of STATUSES) {
+      for (const mode of MODES) {
+        for (const paid of [false, true]) {
+          for (const outside of [false, true]) {
+            const a = secondaryBoardAction(status, mode, paid, outside);
+            if (a) expect({ status, mode, paid, outside }).toEqual({ status: 'out_for_delivery', mode: 'delivery', paid: false, outside: true });
+          }
+        }
+      }
+    }
+  });
+
+  it('the big button stays the owner’s: Delivered + Pay while he owes, Delivered once paid', () => {
+    expect(nextBoardAction('out_for_delivery', 'delivery', false)).toEqual({ kind: 'hand_over', label: 'Delivered + Pay' });
+    expect(nextBoardAction('out_for_delivery', 'delivery', true)).toEqual({ kind: 'delivered', label: 'Delivered' });
+  });
+
+  /** An order out for delivery: Rs 4,715 (FOOD TOTAL Rs 4,515), what he keeps frozen on it. */
+  const order = (over: Record<string, unknown> = {}) =>
+    ({
+      status: 'out_for_delivery',
+      mode: 'delivery',
+      paidAt: null,
+      totalCents: 471_500,
+      riderKeepsCents: 20_000,
+      ...over,
+    }) as Parameters<typeof riderOwesCents>[0];
+
+  it('riderOwesCents: the total less what he keeps, while he owes it', () => {
+    expect(riderOwesCents(order())).toBe(451_500);
+    expect(riderOwesText(riderOwesCents(order())!)).toBe('Rider owes Rs 4,515');
+    // No delivery charge: he owes the whole bill.
+    expect(riderOwesCents(order({ riderKeepsCents: 0 }))).toBe(471_500);
+    expect(riderOwesText(471_500)).toBe('Rider owes Rs 4,715');
+    // Paid, an own rider's order, an order from before 0.7.34, not out, not a delivery: nothing owed to show.
+    expect(riderOwesCents(order({ paidAt: '2026-10-02T15:00:00.000Z' }))).toBeNull();
+    expect(riderOwesCents(order({ riderKeepsCents: null }))).toBeNull();
+    expect(riderOwesCents(order({ riderKeepsCents: undefined }))).toBeNull();
+    expect(riderOwesCents(order({ status: 'ready' }))).toBeNull();
+    expect(riderOwesCents(order({ status: 'delivered' }))).toBeNull();
+    expect(riderOwesCents(order({ mode: 'takeaway' }))).toBeNull();
+  });
+
+  /** A made-up delivery's lines: food, and the charge as sold. */
+  const snap = (totalCents: number, lines: Array<[string, number]>, paidAt: string | null = null) => ({
+    order: { totalCents, paidAt },
+    items: lines.map(([menuItemName, lineTotalCents]) => ({ menuItemName, lineTotalCents })),
+  });
+
+  it('sendOutSplit: what Send out will freeze — the charge as sold, never more than the bill', () => {
+    // The owner's example: Food 3,900 + 15% tax, Delivery charge 200 + 15% tax.
+    const owner = snap(471_500, [
+      ['Test Family Pizza', 390_000],
+      ['Delivery Charge (Rs 200)', 20_000],
+    ]);
+    expect(sendOutSplit(owner)).toEqual({ customerPaysCents: 471_500, keepsCents: 20_000, givesCents: 451_500 });
+    // The FOOD TOTAL of the delivery bill: the paper and the box say the same.
+    const bill = deliveryBillOf({
+      order: { mode: 'delivery', subtotalCents: 410_000, discountCents: 0, taxCents: 61_500, totalCents: 471_500 },
+      items: owner.items,
+      discounts: [],
+    });
+    expect(sendOutSplit(owner).givesCents).toBe(bill!.foodTotalCents);
+    // No delivery charge: he keeps nothing and hands over the whole bill.
+    expect(sendOutSplit(snap(448_500, [['Test Family Pizza', 390_000]]))).toEqual({
+      customerPaysCents: 448_500,
+      keepsCents: 0,
+      givesCents: 448_500,
+    });
+    // A discount that took the bill below the charge: never more than the customer pays.
+    expect(sendOutSplit(snap(15_000, [['Test Fries', 0], ['Delivery Charge (Rs 200)', 20_000]]))).toEqual({
+      customerPaysCents: 15_000,
+      keepsCents: 15_000,
+      givesCents: 0,
+    });
+    // Two charge lines (two areas' fees): both.
+    expect(sendOutSplit(snap(500_000, [['Delivery Charge (Rs 200)', 20_000], ['Delivery charge (Rs 250)', 25_000]])).keepsCents).toBe(45_000);
+  });
+
+  it('sendOutAsks: only a paid order whose rider keeps nothing goes out in one tap', () => {
+    const lines: Array<[string, number]> = [['Test Family Pizza', 390_000], ['Delivery Charge (Rs 200)', 20_000]];
+    const food: Array<[string, number]> = [['Test Family Pizza', 390_000]];
+    expect(sendOutAsks(snap(471_500, lines))).toBe(true);
+    expect(sendOutAsks(snap(448_500, food))).toBe(true);
+    // Paid: the drawer gives him his charge, so it asks first.
+    expect(sendOutAsks(snap(471_500, lines, '2026-10-02T14:00:00.000Z'))).toBe(true);
+    expect(sendOutAsks(snap(448_500, food, '2026-10-02T14:00:00.000Z'))).toBe(false);
   });
 });
 

@@ -4,7 +4,7 @@
  * quick search. Tested in boardLogic.test.ts.
  */
 import type { KitchenTiming, Order, OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
-import { DEFAULT_KITCHEN_TIMING, isLeaveOutChoice, isOutsideRiderOrder } from '@cheeseoclock/shared-types';
+import { DEFAULT_KITCHEN_TIMING, deliveryChargeLinesCents, isLeaveOutChoice, isOutsideRiderOrder } from '@cheeseoclock/shared-types';
 import { KITCHEN_TICKET_STATUSES, formatCents } from '@cheeseoclock/pos-domain';
 import { orderTimeLabel } from './historyFilters';
 
@@ -124,7 +124,12 @@ export type BoardAction =
   | { kind: 'delivered'; label: string }
   | { kind: 'none'; label: string };
 
-/** The one big button on a card: the next step for this order. */
+/**
+ * The one big button on a card: the next step for this order. An outside
+ * rider's Out card has the same one (the owner, 2 Oct 2026: Delivered + Pay
+ * while the rider owes, Delivered once paid); his "Rider paid" is the
+ * card's second button (secondaryBoardAction).
+ */
 export function nextBoardAction(status: OrderStatus, mode: OrderMode, paid: boolean): BoardAction {
   switch (status) {
     case 'open':
@@ -145,6 +150,81 @@ export function nextBoardAction(status: OrderStatus, mode: OrderMode, paid: bool
     default:
       return { kind: 'none', label: '' };
   }
+}
+
+/** A card's second button, beside the big one. */
+export type SecondaryBoardAction = { kind: 'rider_paid'; label: string };
+
+/**
+ * The card's second button: "Rider paid" on an Out card whose outside rider
+ * has not paid the shop yet (the owner, 2 Oct 2026: "Rider owes Rs …" +
+ * [Rider paid] and [Delivered + Pay]). It takes his money while the order
+ * stays out. `outside`: sent out with an outside rider (isOutsideRiderOrder,
+ * what the till itself goes by). Null on every other card: they keep their
+ * one big button.
+ */
+export function secondaryBoardAction(
+  status: OrderStatus,
+  mode: OrderMode,
+  paid: boolean,
+  outside: boolean,
+): SecondaryBoardAction | null {
+  if (status === 'out_for_delivery' && mode === 'delivery' && outside && !paid) {
+    return { kind: 'rider_paid', label: 'Rider paid' };
+  }
+  return null;
+}
+
+/**
+ * What an outside rider owes the shop on an Out card: the total less what
+ * he keeps (frozen at Send out) — the FOOD TOTAL. Null when he owes
+ * nothing to show: paid, not out, or one of the shop's own riders.
+ */
+export function riderOwesCents(
+  order: Pick<Order, 'status' | 'mode' | 'paidAt' | 'totalCents' | 'riderKeepsCents'>,
+): number | null {
+  if (!secondaryBoardAction(order.status, order.mode, order.paidAt !== null, isOutsideRiderOrder(order))) return null;
+  return order.totalCents - (order.riderKeepsCents ?? 0);
+}
+
+/** "Rider owes Rs 4,515" — the amber words beside an Out card's total. */
+export function riderOwesText(cents: number): string {
+  return `Rider owes ${formatCents(cents)}`;
+}
+
+/** Send out's money, before it is sent: what the customer pays, what the rider keeps, what he hands the shop. */
+export interface SendOutSplit {
+  /** The stored total: CUSTOMER PAYS. */
+  customerPaysCents: number;
+  /** What Send out will freeze for him (Order.riderKeepsCents). */
+  keepsCents: number;
+  /** The total less what he keeps: the FOOD TOTAL (deliveryBillOf's foodTotalCents when the bill has a charge). */
+  givesCents: number;
+}
+
+/**
+ * What Send out will freeze, worked out the way the till does it
+ * (sendOutOrder): the delivery-charge lines as sold
+ * (deliveryChargeLinesCents), never more than the total. Shown in the Send
+ * out box before it is sent; everything after reads the frozen value.
+ */
+export function sendOutSplit(snap: {
+  order: { readonly totalCents: number };
+  items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly lineTotalCents: number }>;
+}): SendOutSplit {
+  const total = snap.order.totalCents;
+  const keeps = Math.min(deliveryChargeLinesCents(snap), total);
+  return { customerPaysCents: total, keepsCents: keeps, givesCents: total - keeps };
+}
+
+/**
+ * Whether a Ready delivery's Send out asks first (SendOutDialog: "Has the
+ * rider paid the shop?", or the drawer paying a prepaid order's rider).
+ * Only an order already paid whose rider keeps nothing goes in one tap:
+ * nothing to ask, and no money moves.
+ */
+export function sendOutAsks(snap: Parameters<typeof sendOutSplit>[0] & { order: Pick<Order, 'paidAt'> }): boolean {
+  return snap.order.paidAt === null || sendOutSplit(snap).keepsCents > 0;
 }
 
 /** The small "Assign rider" link's title on a Ready delivery and an outside rider's Out card. */

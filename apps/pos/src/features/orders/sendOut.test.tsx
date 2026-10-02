@@ -19,6 +19,24 @@
  *    Ready".
  *  - Order History: the panel's chip and "Sent out (outside rider)" step, and
  *    the row's "Rider: outside".
+ *
+ * Step 18-6 (the owner, 2 Oct 2026: Send out asks "Has the rider paid the
+ * shop?" [Paid now · Rs <food total>] / [Pays after delivery]; Out cards:
+ * PAID + [Delivered], or amber "Rider owes Rs <food total>" + [Rider paid]
+ * and [Delivered + Pay]; Q2: a prepaid order's drawer opens at Send out):
+ *  - The Send out box, word for word: not paid (with a delivery charge and
+ *    without), paid with a charge (the drawer opens), a walk-in. "Pays after
+ *    delivery" is focused; every answer asks the till to send it out before
+ *    anything else; Esc and the X change nothing; a refusal keeps it open.
+ *  - On Live Orders: Send out opens the box, except a paid order whose rider
+ *    keeps nothing (one tap); "Paid now" then opens "Rider paid · #0042" on
+ *    the order as the till sent it; the link opens Assign rider instead.
+ *  - Out cards: "Rider owes Rs 4,515" and "Rider paid" while he owes; the
+ *    PAID chip and "Delivered" once paid; own-rider cards as before.
+ *  Live Orders is rendered again after each tap with React's useState kept
+ *  in slots between renders (as in markDeliveredOutside.test.tsx), and the
+ *  Rider paid and Assign rider boxes stood in by stubs that record what they
+ *  were opened with.
  */
 import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
@@ -27,6 +45,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser, OrderHistoryPage as HistoryPage, OrderHistoryRow, OrderSnapshot, OrderStatus, UUID } from '@cheeseoclock/shared-types';
+import { deliveryBillOf, toCents } from '@cheeseoclock/shared-types';
+import { formatCents } from '@cheeseoclock/pos-domain';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { OrdersBoardPage } from './OrdersBoardPage';
@@ -34,7 +54,25 @@ import { AssignRiderDialog, BACK_TO_READY_TITLE } from './AssignRiderDialog';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
 import { OrderHistoryPage } from './OrderHistoryPage';
 import { ASSIGN_RIDER_LINK_TITLE } from './boardLogic';
+import { SendOutDialog } from './SendOutDialog';
+import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { HISTORY_PAGE_SIZE, historyRange } from './historyFilters';
+
+/** useState's slots, kept between renders: `cursor` is where this render is. Every render() starts them afresh. */
+const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0 }));
+
+vi.mock('react', async (importOriginal) => {
+  const React = await importOriginal<typeof import('react')>();
+  function useState<T>(init: T | (() => T)): [T, (next: T | ((prev: T) => T)) => void] {
+    const i = hooks.cursor++;
+    if (i >= hooks.slots.length) hooks.slots.push(typeof init === 'function' ? (init as () => T)() : init);
+    const set = (next: T | ((prev: T) => T)) => {
+      hooks.slots[i] = typeof next === 'function' ? (next as (prev: T) => T)(hooks.slots[i] as T) : next;
+    };
+    return [hooks.slots[i] as T, set];
+  }
+  return { ...React, useState, default: { ...React, useState } };
+});
 
 // A server render reads a zustand store's INITIAL state; the till's window reads each as it is now.
 vi.mock('zustand', async (importOriginal) => {
@@ -57,10 +95,18 @@ vi.mock('@radix-ui/react-dialog', async () => {
     ({ children, className }: P) =>
       h(t, { className, ...extra }, children);
   return {
-    Root: pass,
+    // Esc (or a tap outside) is the Root's onOpenChange(false): kept so a test can press it.
+    Root: ({ children, onOpenChange }: P & { onOpenChange?: (open: boolean) => void }) => {
+      seen.openChange = onOpenChange ?? null;
+      return h(React.Fragment, null, children);
+    },
     Portal: pass,
     Overlay: () => null,
-    Content: tag('div', { role: 'dialog' }),
+    // The open box's body, kept for its plain buttons' taps.
+    Content: ({ children, className }: P) => {
+      seen.content = children;
+      return h('div', { className, role: 'dialog' }, children);
+    },
     Title: tag('h2'),
     Description: tag('p'),
     Close: pass,
@@ -72,10 +118,57 @@ vi.mock('@radix-ui/react-dialog', async () => {
 const seen = vi.hoisted(() => ({
   calls: [] as Array<[string, unknown]>,
   toasts: [] as Array<{ title: string; description?: string; variant?: string }>,
-  buttons: [] as Array<{ words: string; title: string | undefined; tap: (() => void) | undefined }>,
+  buttons: [] as Array<{
+    words: string;
+    title: string | undefined;
+    tap: (() => void) | undefined;
+    autoFocus: boolean | undefined;
+    variant: string | undefined;
+    className: string | undefined;
+    disabled: boolean | undefined;
+  }>,
   /** The till's answer to Send out / Back to Ready: its snapshot, or a refusal in its own words. */
   refuse: null as string | null,
+  /** The snapshot the till answers Send out with (the order as it went out). */
+  answer: null as unknown,
+  /** The till's calls and the screens' callbacks, in the order they happened. */
+  events: [] as string[],
+  /** The open box's Root onOpenChange (Esc), and its body. */
+  openChange: null as ((open: boolean) => void) | null,
+  content: null as unknown,
 }));
+
+/** With `on`, the Rider paid and Assign rider boxes are stand-ins that only record what they were opened with. */
+const stubs = vi.hoisted(() => ({ on: false, deliver: [] as unknown[], assign: [] as unknown[] }));
+
+vi.mock('./MarkDeliveredDialog', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./MarkDeliveredDialog')>();
+  const React = await import('react');
+  return {
+    ...real,
+    MarkDeliveredDialog: (props: Parameters<typeof real.MarkDeliveredDialog>[0]) => {
+      if (!stubs.on) return React.createElement(real.MarkDeliveredDialog, props);
+      if (!stubs.deliver.some((d) => (d as { snap: unknown }).snap === props.snap)) {
+        seen.events.push(props.riderPaidOnly ? 'opened Rider paid' : 'opened Delivered + Pay');
+      }
+      stubs.deliver.push(props);
+      return null;
+    },
+  };
+});
+
+vi.mock('./AssignRiderDialog', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./AssignRiderDialog')>();
+  const React = await import('react');
+  return {
+    ...real,
+    AssignRiderDialog: (props: Parameters<typeof real.AssignRiderDialog>[0]) => {
+      if (!stubs.on) return React.createElement(real.AssignRiderDialog, props);
+      stubs.assign.push(props);
+      return null;
+    },
+  };
+});
 
 vi.mock('../../components/toast/ToastProvider', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../components/toast/ToastProvider')>();
@@ -103,6 +196,10 @@ vi.mock('@cheeseoclock/ui', async (importOriginal) => {
       words: words(props.children).trim(),
       title: props.title,
       tap: onClick ? () => onClick({ preventDefault() {}, stopPropagation() {} } as never) : undefined,
+      autoFocus: props.autoFocus,
+      variant: props.variant,
+      className: props.className,
+      disabled: props.disabled,
     });
     return React.createElement(ui.Button, { ...props, ref });
   });
@@ -113,14 +210,20 @@ vi.mock('../../ipc/client', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../ipc/client')>();
   const answer = (name: string) => async (arg: unknown) => {
     seen.calls.push([name, arg]);
+    seen.events.push(name);
     if (seen.refuse) throw new Error(seen.refuse);
-    return {} as OrderSnapshot;
+    return (seen.answer ?? {}) as OrderSnapshot;
   };
   return {
     ...real,
     ipc: {
       ...real.ipc,
-      orders: { ...real.ipc.orders, sendOut: answer('orders.sendOut'), unassignRider: answer('orders.unassignRider') },
+      orders: {
+        ...real.ipc.orders,
+        sendOut: answer('orders.sendOut'),
+        unassignRider: answer('orders.unassignRider'),
+        markDelivered: answer('orders.markDelivered'),
+      },
     },
   };
 });
@@ -133,6 +236,8 @@ function render(node: ReactNode, seed: Array<[readonly unknown[], unknown]> = []
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const [key, data] of seed) qc.setQueryData(key, data);
   seen.buttons.length = 0;
+  hooks.slots = [];
+  hooks.cursor = 0;
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
@@ -241,6 +346,102 @@ const buttonsWith = (markup: string, words: string) =>
     .filter((b) => text(b) === words);
 const openingTag = (button: string) => button.slice(0, button.indexOf('>') + 1);
 
+/** The same order with no delivery-charge line: Send out freezes Rs 0 for the rider. */
+const noCharge = (s: OrderSnapshot): OrderSnapshot =>
+  ({ ...s, items: s.items.filter((i) => !/^Delivery Charge/.test(i.menuItemName)) }) as OrderSnapshot;
+
+/**
+ * The owner's example: Test Family Pizza Rs 3,900 and 'Delivery Charge (Rs
+ * 200)', 15% tax on both: CUSTOMER PAYS Rs 4,715, FOOD TOTAL Rs 4,515.
+ */
+const ownerExample = (n: number, status: OrderStatus, over: Partial<OrderSnapshot['order']> = {}, rider: OrderSnapshot['rider'] = null) =>
+  delivery(n, status, { subtotalCents: toCents(410_000), taxCents: toCents(61_500), totalCents: toCents(471_500), ...over }, rider);
+
+/** A React element as JSX made it. */
+type El = { type: unknown; props: Record<string, unknown> };
+const isEl = (n: unknown): n is El => typeof n === 'object' && n !== null && 'type' in n && 'props' in n;
+function* walk(node: unknown): Generator<El> {
+  if (Array.isArray(node)) {
+    for (const n of node) yield* walk(n);
+  } else if (isEl(node)) {
+    yield node;
+    yield* walk(node.props['children']);
+  }
+}
+const wordsOf = (node: unknown): string =>
+  typeof node === 'string' || typeof node === 'number'
+    ? String(node)
+    : Array.isArray(node)
+      ? node.map(wordsOf).join('')
+      : isEl(node)
+        ? wordsOf(node.props['children'])
+        : '';
+
+/** Taps the open box's one plain <button> with exactly these words, or this aria-label (the X is "Close"). */
+function tapInBox(words: string): void {
+  const hits = [...walk(seen.content)].filter(
+    (e) => e.type === 'button' && (wordsOf(e.props['children']).trim() === words || e.props['aria-label'] === words),
+  );
+  if (hits.length !== 1) throw new Error(`${hits.length} × button "${words}" in the box`);
+  (hits[0]!.props['onClick'] as () => void)();
+}
+
+/**
+ * Live Orders with these orders, rendered again after every tap with
+ * useState kept in its slots (the same number of calls every render, or the
+ * slots mean nothing). The Rider paid and Assign rider boxes are stubs.
+ */
+function liveOrders(orders: OrderSnapshot[]) {
+  signIn('cashier');
+  stubs.on = true;
+  hooks.slots = [];
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qc.setQueryData(['orders', 'active', 'all'], orders);
+  let html = '';
+  let count = -1;
+  const view = () => {
+    hooks.cursor = 0;
+    seen.buttons.length = 0;
+    seen.content = null;
+    seen.openChange = null;
+    html = renderToStaticMarkup(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ToastProvider>
+            <OrdersBoardPage />
+          </ToastProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    if (count >= 0 && hooks.cursor !== count) throw new Error(`useState was called ${hooks.cursor} times, not ${count}`);
+    count = hooks.cursor;
+  };
+  view();
+  return {
+    view,
+    get words() {
+      return text(html);
+    },
+    /** A ui-kit Button (a card's, the Send out box's), then the board again. */
+    press(words: string) {
+      tap(words);
+      view();
+    },
+    /** A plain button in the open box, then the board again. */
+    tapInBox(words: string) {
+      tapInBox(words);
+      view();
+    },
+    /** Esc on the open box, then the board again. */
+    esc() {
+      seen.openChange!(false);
+      view();
+    },
+  };
+}
+
+type DeliverProps = Parameters<typeof MarkDeliveredDialog>[0];
+
 const consoleError = console.error;
 beforeAll(() => {
   vi.spyOn(console, 'error').mockImplementation((msg: unknown, ...rest: unknown[]) => {
@@ -256,6 +457,13 @@ beforeEach(() => {
   seen.calls.length = 0;
   seen.toasts.length = 0;
   seen.refuse = null;
+  seen.answer = null;
+  seen.events.length = 0;
+  seen.openChange = null;
+  seen.content = null;
+  stubs.on = false;
+  stubs.deliver.length = 0;
+  stubs.assign.length = 0;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -282,8 +490,13 @@ describe('a Ready delivery card: "Send out", and "Assign rider" as a small link'
     }
   });
 
-  it('tapping Send out asks the till once, for this order, and shows no toast', async () => {
-    card(delivery(42, 'ready'));
+  // Changed on purpose in step 18-6 (the owner, 2 Oct 2026: Send out asks
+  // "Has the rider paid the shop?"): Send out was one tap for every Ready
+  // delivery; now only a paid order whose rider keeps nothing goes in one
+  // tap, so these two use that order (the order 16-3 used, #0042 unpaid with
+  // a Rs 200 charge, now opens the Send out box: see below).
+  it('tapping Send out on a paid order with no delivery charge asks the till once, for this order, and shows no toast', async () => {
+    card(noCharge(delivery(42, 'ready', { paidAt: minsAgo(30) })));
     tap('Send out');
     await settle();
     expect(seen.calls).toEqual([['orders.sendOut', 'o42']]);
@@ -292,13 +505,23 @@ describe('a Ready delivery card: "Send out", and "Assign rider" as a small link'
 
   it('a refusal shows "Could not send out" with the till’s own words', async () => {
     seen.refuse = 'This order is already out for delivery';
-    card(delivery(42, 'ready'));
+    card(noCharge(delivery(42, 'ready', { paidAt: minsAgo(30) })));
     tap('Send out');
     await settle();
     expect(seen.calls).toEqual([['orders.sendOut', 'o42']]);
     expect(seen.toasts).toEqual([
       { title: 'Could not send out', description: 'This order is already out for delivery', variant: 'error' },
     ]);
+  });
+
+  it('an unpaid one (and a paid one with a charge) asks the till nothing yet: the Send out box opens', async () => {
+    for (const o of [delivery(42, 'ready'), noCharge(delivery(44, 'ready')), delivery(43, 'ready', { paidAt: minsAgo(30) })]) {
+      card(o);
+      tap('Send out');
+      await settle();
+    }
+    expect(seen.calls).toEqual([]);
+    expect(seen.toasts).toEqual([]);
   });
 
   it('a Ready takeaway or foodpanda card has no rider link, and the takeaway card is the same as before', () => {
@@ -511,6 +734,313 @@ describe('Order History: the row', () => {
     expect(rows.get('#0044')).toContain('Test Customer 03001234567 Rider: Test Rider');
     expect(rows.get('#0044')).not.toContain('outside');
     expect(rows.get('#0042')).not.toContain('Rider:');
+  });
+});
+
+describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
+  /** What onSent was handed: the order as the till sent it out. */
+  const sent: OrderSnapshot[] = [];
+  beforeEach(() => {
+    sent.length = 0;
+  });
+
+  function box(snap: OrderSnapshot): string {
+    signIn('cashier');
+    return text(
+      render(
+        <SendOutDialog
+          snap={snap}
+          onClose={() => seen.events.push('closed')}
+          onSent={(next, riderPaidNow) => {
+            seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent');
+            sent.push(next);
+          }}
+          onAssignInstead={() => seen.events.push('assign instead')}
+        />,
+      ),
+    );
+  }
+  const button = (words: string) => seen.buttons.find((b) => b.words === words);
+
+  it('not paid: the bill split, the question and its two answers, word for word', () => {
+    const o = ownerExample(42, 'ready');
+    expect(box(o)).toBe(
+      'Send out #0042 The bill prints now · Test Customer ' +
+        'Customer pays the rider Rs 4,715 Rider keeps (delivery charge) Rs 200 Rider gives the shop Rs 4,515 ' +
+        'Has the rider paid the shop? Paid now · Rs 4,515 Pays after delivery ' +
+        'One of your own riders? Assign rider instead',
+    );
+    // The delivery bill's figures: he hands over its FOOD TOTAL, the paper's own.
+    const bill = deliveryBillOf(o)!;
+    expect(box(o)).toContain(`Customer pays the rider ${formatCents(bill.customerPaysCents)}`);
+    expect(box(o)).toContain(`Rider keeps (delivery charge) ${formatCents(bill.deliveryChargeCents)}`);
+    expect(box(o)).toContain(`Rider gives the shop ${formatCents(bill.foodTotalCents)}`);
+    expect(seen.buttons.map((b) => b.words)).toEqual([`Paid now · ${formatCents(bill.foodTotalCents)}`, 'Pays after delivery']);
+  });
+
+  it('"Pays after delivery" is focused, so Enter means after; both answers are h-14', () => {
+    box(ownerExample(42, 'ready'));
+    expect(button('Pays after delivery')).toMatchObject({ autoFocus: true, variant: 'primary' });
+    expect(button('Paid now · Rs 4,515')).toMatchObject({ autoFocus: undefined, variant: 'success' });
+    for (const words of ['Pays after delivery', 'Paid now · Rs 4,515']) expect(button(words)!.className).toContain('h-14');
+  });
+
+  it('no delivery charge: "No delivery charge on this bill", and he hands over the whole bill', () => {
+    const words = box(
+      noCharge(delivery(44, 'ready', { subtotalCents: toCents(390_000), taxCents: toCents(58_500), totalCents: toCents(448_500) })),
+    );
+    expect(words).toBe(
+      'Send out #0044 The bill prints now · Test Customer ' +
+        'Customer pays the rider Rs 4,485 No delivery charge on this bill Rider gives the shop Rs 4,485 ' +
+        'Has the rider paid the shop? Paid now · Rs 4,485 Pays after delivery ' +
+        'One of your own riders? Assign rider instead',
+    );
+    expect(words).not.toContain('Rider keeps');
+  });
+
+  it('paid already, with a charge: the drawer gives him Rs 200 and opens (owner Q2)', () => {
+    const words = box(ownerExample(43, 'ready', { paidAt: minsAgo(30) }));
+    expect(words).toBe(
+      'Send out #0043 The bill prints now · Test Customer ' +
+        'Paid already — give the rider Rs 200 from the drawer (his delivery charge). The drawer opens. ' +
+        'Send out · drawer opens ' +
+        'One of your own riders? Assign rider instead',
+    );
+    expect(seen.buttons.map((b) => b.words)).toEqual(['Send out · drawer opens']);
+    expect(button('Send out · drawer opens')).toMatchObject({ autoFocus: true });
+    expect(button('Send out · drawer opens')!.className).toContain('h-14');
+  });
+
+  it('paid already with no charge (Live Orders sends it in one tap): if it opens, nothing moves', () => {
+    const words = box(noCharge(delivery(45, 'ready', { paidAt: minsAgo(30) })));
+    expect(words).toContain('Paid already, and no delivery charge: nothing comes out of the drawer.');
+    expect(seen.buttons.map((b) => b.words)).toEqual(['Send out']);
+    expect(words).not.toContain('drawer opens');
+  });
+
+  it('a walk-in: the customer’s details stay optional', () => {
+    const o = { ...ownerExample(42, 'ready'), customerName: null, customerPhone: null, deliveryAddress: null } as OrderSnapshot;
+    expect(box(o)).toContain('Send out #0042 The bill prints now · Walk-in Customer pays the rider Rs 4,715');
+  });
+
+  it('every answer asks the till to send it out first, then hands on the order as it went out', async () => {
+    const out = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 20_000 as never });
+    for (const [words, heard] of [
+      ['Pays after delivery', 'sent'],
+      ['Paid now · Rs 4,515', 'sent, Paid now'],
+    ] as const) {
+      seen.events.length = 0;
+      seen.calls.length = 0;
+      sent.length = 0;
+      seen.answer = out;
+      box(ownerExample(42, 'ready'));
+      tap(words);
+      await settle();
+      expect(seen.calls).toEqual([['orders.sendOut', 'o42']]);
+      expect(seen.events).toEqual(['orders.sendOut', heard]);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toBe(out);
+    }
+    // Paid already: the same; the drawer is the till's part.
+    seen.events.length = 0;
+    seen.calls.length = 0;
+    box(ownerExample(43, 'ready', { paidAt: minsAgo(30) }));
+    tap('Send out · drawer opens');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', 'o43']]);
+    expect(seen.events).toEqual(['orders.sendOut', 'sent']);
+    expect(seen.toasts).toEqual([]);
+  });
+
+  it('a refusal says "Could not send out" in the till’s words, and nothing else happens', async () => {
+    seen.refuse = 'No shift is open on this till — open a shift to give the rider his Rs 200 delivery charge';
+    box(ownerExample(43, 'ready', { paidAt: minsAgo(30) }));
+    tap('Send out · drawer opens');
+    await settle();
+    expect(seen.events).toEqual(['orders.sendOut']);
+    expect(seen.toasts).toEqual([
+      {
+        title: 'Could not send out',
+        description: 'No shift is open on this till — open a shift to give the rider his Rs 200 delivery charge',
+        variant: 'error',
+      },
+    ]);
+  });
+
+  it('Esc or the X closes it with nothing changed', () => {
+    box(ownerExample(42, 'ready'));
+    seen.openChange!(false);
+    tapInBox('Close');
+    expect(seen.events).toEqual(['closed', 'closed']);
+    expect(seen.calls).toEqual([]);
+  });
+
+  it('"One of your own riders? Assign rider instead": nothing is sent', () => {
+    box(ownerExample(42, 'ready'));
+    tapInBox('One of your own riders? Assign rider instead');
+    expect(seen.events).toEqual(['assign instead']);
+    expect(seen.calls).toEqual([]);
+  });
+});
+
+describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)', () => {
+  it('Send out on an unpaid delivery opens the box; "Paid now" sends it out, then opens "Rider paid · #0042" on the order as sent', async () => {
+    const out = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 20_000 as never });
+    seen.answer = out;
+    const b = liveOrders([ownerExample(42, 'ready')]);
+    expect(b.words).not.toContain('Has the rider paid the shop?');
+    b.press('Send out');
+    expect(b.words).toContain('Send out #0042 The bill prints now · Test Customer');
+    expect(b.words).toContain('Has the rider paid the shop? Paid now · Rs 4,515 Pays after delivery');
+    expect(seen.calls).toEqual([]);
+
+    b.press('Paid now · Rs 4,515');
+    await settle();
+    b.view();
+    // Sent out first, then Rider paid: the rider can only pay for an order that has left.
+    expect(seen.events).toEqual(['orders.sendOut', 'opened Rider paid']);
+    expect(seen.calls).toEqual([['orders.sendOut', 'o42']]);
+    expect(b.words).not.toContain('Has the rider paid the shop?');
+    const riderPaid = stubs.deliver.at(-1) as DeliverProps;
+    expect(riderPaid.snap).toBe(out);
+    expect(riderPaid.riderPaidOnly).toBe(true);
+    expect(seen.toasts).toEqual([]);
+
+    // The real box, opened with exactly those: Rider paid, the food total from him.
+    stubs.on = false;
+    const words = text(render(<MarkDeliveredDialog {...riderPaid} />));
+    expect(words).toContain('Rider paid · #0042 Test Customer · the order stays out for delivery');
+    expect(words).toContain('Customer pays Rs 4,715 Rider keeps — delivery charge − Rs 200 Take from the rider Rs 4,515');
+  });
+
+  it('"Pays after delivery" sends it out and opens nothing more: the card moving is the feedback', async () => {
+    seen.answer = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 20_000 as never });
+    const b = liveOrders([ownerExample(42, 'ready')]);
+    b.press('Send out');
+    b.press('Pays after delivery');
+    await settle();
+    b.view();
+    expect(seen.events).toEqual(['orders.sendOut']);
+    expect(stubs.deliver).toEqual([]);
+    expect(b.words).not.toContain('Has the rider paid the shop?');
+    expect(seen.toasts).toEqual([]);
+  });
+
+  it('Esc closes the box with nothing sent', () => {
+    const b = liveOrders([ownerExample(42, 'ready')]);
+    b.press('Send out');
+    expect(b.words).toContain('Has the rider paid the shop?');
+    b.esc();
+    expect(b.words).not.toContain('Has the rider paid the shop?');
+    expect(seen.calls).toEqual([]);
+  });
+
+  it('the link opens Assign rider on the same order instead, with nothing sent', () => {
+    const ready = ownerExample(42, 'ready');
+    const b = liveOrders([ready]);
+    b.press('Send out');
+    expect(stubs.assign).toEqual([]);
+    b.tapInBox('One of your own riders? Assign rider instead');
+    expect(b.words).not.toContain('Has the rider paid the shop?');
+    expect((stubs.assign.at(-1) as { snap: OrderSnapshot }).snap).toBe(ready);
+    expect(seen.calls).toEqual([]);
+  });
+
+  it('a paid order whose rider keeps nothing goes out in one tap; a paid one with a charge asks first, then opens the drawer', async () => {
+    const one = liveOrders([noCharge(delivery(45, 'ready', { paidAt: minsAgo(30) }))]);
+    one.press('Send out');
+    await settle();
+    one.view();
+    expect(seen.calls).toEqual([['orders.sendOut', 'o45']]);
+    expect(one.words).not.toContain('Send out #0045');
+
+    seen.calls.length = 0;
+    const two = liveOrders([ownerExample(43, 'ready', { paidAt: minsAgo(30) })]);
+    two.press('Send out');
+    expect(seen.calls).toEqual([]);
+    expect(two.words).toContain('Paid already — give the rider Rs 200 from the drawer (his delivery charge). The drawer opens.');
+    two.press('Send out · drawer opens');
+    await settle();
+    two.view();
+    expect(seen.calls).toEqual([['orders.sendOut', 'o43']]);
+    expect(stubs.deliver).toEqual([]);
+    expect(two.words).not.toContain('Paid already');
+  });
+
+  it('an unpaid outside Out card: amber "Rider owes Rs 4,515" by the total, and "Rider paid" beside Delivered + Pay', () => {
+    const c = card(ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never }));
+    expect(text(c)).toContain('Outside rider · out 12m · keeps Rs 200 Assign rider');
+    expect(text(c)).toContain('Rs 4,715 Rider owes Rs 4,515 2 items');
+    expect(text(c)).not.toContain('Not paid');
+    expect(c).toContain('bg-amber-100');
+    expect(buttonsWith(c, 'Delivered + Pay')).toHaveLength(1);
+    const riderPaid = buttonsWith(c, 'Rider paid');
+    expect(riderPaid).toHaveLength(1);
+    // Full height, in the chef-hat button's place: after the big button, before the printer.
+    expect(openingTag(riderPaid[0]!)).toContain('h-11');
+    const row = c.slice(c.indexOf('Delivered + Pay'));
+    expect(row.indexOf('Rider paid')).toBeGreaterThan(0);
+    expect(row.indexOf('Rider paid')).toBeLessThan(row.indexOf('Print bill or receipt'));
+    // He keeps nothing: he owes the whole bill.
+    expect(text(card(ownerExample(49, 'out_for_delivery', { riderKeepsCents: 0 as never })))).toContain('Rs 4,715 Rider owes Rs 4,715');
+  });
+
+  it('"Rider paid" opens the Rider paid box on that order; Delivered + Pay is still the Delivered box', () => {
+    const o = ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never });
+    const b = liveOrders([o]);
+    b.press('Rider paid');
+    const d = stubs.deliver.at(-1) as DeliverProps;
+    expect(d.snap).toBe(o);
+    expect(d.riderPaidOnly).toBe(true);
+    expect(seen.calls).toEqual([]);
+    d.onDone();
+    const rendered = stubs.deliver.length;
+    b.view();
+    expect(stubs.deliver).toHaveLength(rendered);
+
+    b.press('Delivered + Pay');
+    const dp = stubs.deliver.at(-1) as DeliverProps;
+    expect(dp.snap).toBe(o);
+    expect(dp.riderPaidOnly).toBeUndefined();
+  });
+
+  it('paid (by the rider while out, or before it left): the PAID chip and Delivered, which closes it with no payment', async () => {
+    for (const [n, paidAt] of [
+      [52, minsAgo(5)],
+      [53, minsAgo(30)],
+    ] as const) {
+      seen.calls.length = 0;
+      const c = card(ownerExample(n, 'out_for_delivery', { riderKeepsCents: 20_000 as never, paidAt }));
+      expect(text(c)).toContain('Outside rider · out 12m · keeps Rs 200 Assign rider');
+      expect(text(c)).toContain('Rs 4,715 Paid 2 items');
+      expect(text(c)).not.toContain('Rider owes');
+      expect(buttonsWith(c, 'Rider paid')).toEqual([]);
+      expect(buttonsWith(c, 'Delivered')).toHaveLength(1);
+      tap('Delivered');
+      await settle();
+      expect(seen.calls).toEqual([['orders.markDelivered', { orderId: `o${n}` }]]);
+    }
+  });
+
+  it('an own rider’s Out card has neither, paid or not', () => {
+    const { cards } = board([
+      ownerExample(44, 'out_for_delivery', {}, OWN_RIDER),
+      ownerExample(45, 'out_for_delivery', { paidAt: minsAgo(30) }, OWN_RIDER),
+    ]);
+    expect(cards.size).toBe(2);
+    for (const c of cards.values()) {
+      expect(text(c)).not.toContain('Rider owes');
+      expect(buttonsWith(c, 'Rider paid')).toEqual([]);
+    }
+    expect(text(cards.get('#0044')!)).toContain('Rs 4,715 Not paid 2 items');
+  });
+
+  it('a rider an older till named on a sent-out order: the money still goes by what the till froze', () => {
+    // The Delivered box takes the food total for this order too (MarkDeliveredDialog follows the till).
+    const c = card(ownerExample(50, 'out_for_delivery', { riderKeepsCents: 20_000 as never }, OWN_RIDER));
+    expect(text(c)).toContain('Test Rider 03000000001 · out 12m Change');
+    expect(text(c)).toContain('Rs 4,715 Rider owes Rs 4,515');
+    expect(buttonsWith(c, 'Rider paid')).toHaveLength(1);
   });
 });
 

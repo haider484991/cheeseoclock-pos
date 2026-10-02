@@ -25,10 +25,11 @@ import { reprintReceipt, reprintToast } from '../printing/reprint';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useAcknowledgeOnlineOrders } from '../notifications/alertStore';
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
-import { orderNotesOf } from '@cheeseoclock/shared-types';
+import { isOutsideRiderOrder, orderNotesOf } from '@cheeseoclock/shared-types';
 import { NoShiftBanner } from '../shell/NoShiftBanner';
 import { AssignRiderDialog } from './AssignRiderDialog';
 import { MarkDeliveredDialog, REFUSED_ITEM_REFUND } from './MarkDeliveredDialog';
+import { SendOutDialog } from './SendOutDialog';
 import { VoidOrderDialog } from './VoidOrderDialog';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { ModeBadge, PaidChip, TicketNotPrinted } from './OrderBadges';
@@ -50,10 +51,15 @@ import {
   offersKitchenReprint,
   orderClockFrom,
   outsideRiderKeepsText,
+  riderOwesCents,
+  riderOwesText,
+  secondaryBoardAction,
+  sendOutAsks,
   boardColoursText,
   lateCountText,
   type AgeTone,
   type BoardTiming,
+  type SecondaryBoardAction,
 } from './boardLogic';
 import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
 
@@ -72,6 +78,12 @@ import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
  * rider takes it, keeps its delivery charge, and the bill prints. "Assign
  * rider" is the card's small link, for one of the shop's own riders (they
  * bring back the full bill).
+ *
+ * Send out asks "Has the rider paid the shop?" first (SendOutDialog; a paid
+ * order: the drawer pays the rider his charge); only a paid order whose
+ * rider keeps nothing goes in one tap. While an outside rider owes, his Out
+ * card says "Rider owes Rs …" beside the total and has "Rider paid" next to
+ * "Delivered + Pay"; once paid it has the PAID chip and "Delivered".
  */
 
 type ColumnKey = 'new' | 'preparing' | 'ready' | 'out';
@@ -112,6 +124,11 @@ export function OrdersBoardPage() {
   const [search, setSearch] = useState('');
   const [assignFor, setAssignFor] = useState<OrderSnapshot | null>(null);
   const [deliverFor, setDeliverFor] = useState<OrderSnapshot | null>(null);
+  // Send out's question, on a Ready delivery.
+  const [sendOutFor, setSendOutFor] = useState<OrderSnapshot | null>(null);
+  // Rider paid: the outside rider pays the shop while the order stays out
+  // (the Out card's button, or Send out's "Paid now" on the order as sent).
+  const [riderPaidFor, setRiderPaidFor] = useState<OrderSnapshot | null>(null);
   const [voidFor, setVoidFor] = useState<OrderSnapshot | null>(null);
   // A paid order can't be voided (the server refuses): its Cancel is a refund.
   // refusedItem: opened after Delivered + Pay with "Customer refused an item" (Part of it, Cash, the note).
@@ -150,8 +167,9 @@ export function OrdersBoardPage() {
     onSettled: () => void refresh(),
     onError: failed('Could not move the order'),
   });
-  // Send out (the owner, 2 Oct 2026): an outside rider takes a Ready delivery
-  // and the bill prints. No success toast either: the card moves to Out.
+  // Send out in one tap (the owner, 2 Oct 2026): a paid Ready delivery whose
+  // rider keeps nothing; the rest ask first (SendOutDialog). No success toast
+  // either: the card moves to Out.
   const sendOut = useMutation({
     mutationFn: (orderId: string) => ipc.orders.sendOut(orderId),
     onSettled: () => void refresh(),
@@ -286,7 +304,10 @@ export function OrdersBoardPage() {
                   </div>
                 ) : (
                   orders.map((snap) => {
-                    const action = nextBoardAction(snap.order.status, snap.order.mode, snap.order.paidAt !== null);
+                    const paid = snap.order.paidAt !== null;
+                    const action = nextBoardAction(snap.order.status, snap.order.mode, paid);
+                    // Rider paid: by what the till goes by (what he keeps frozen on the order), as the Delivered box does.
+                    const second = secondaryBoardAction(snap.order.status, snap.order.mode, paid, isOutsideRiderOrder(snap.order));
                     return (
                       <OrderCard
                         key={snap.order.id}
@@ -303,7 +324,9 @@ export function OrdersBoardPage() {
                               step.mutate({ orderId: snap.order.id, kind: action.kind });
                               return;
                             case 'send_out':
-                              sendOut.mutate(snap.order.id);
+                              // "Has the rider paid the shop?" (or the drawer pays a prepaid order's rider) first.
+                              if (sendOutAsks(snap)) setSendOutFor(snap);
+                              else sendOut.mutate(snap.order.id);
                               return;
                             case 'hand_over':
                               setDeliverFor(snap);
@@ -314,6 +337,8 @@ export function OrdersBoardPage() {
                         }}
                         primaryLabel={action.kind === 'none' ? null : action.label}
                         primaryKind={action.kind}
+                        secondary={second}
+                        onSecondary={() => setRiderPaidFor(snap)}
                         onChangeRider={() => setAssignFor(snap)}
                         onReprint={() => reprint.mutate(snap.order.id)}
                         onReprintKitchen={() => reprintKitchen.mutate(snap.order.id)}
@@ -334,6 +359,34 @@ export function OrdersBoardPage() {
           onClose={() => setAssignFor(null)}
           onAssigned={() => {
             setAssignFor(null);
+            void refresh();
+          }}
+        />
+      )}
+      {sendOutFor && (
+        <SendOutDialog
+          snap={sendOutFor}
+          onClose={() => setSendOutFor(null)}
+          onSent={(next, riderPaidNow) => {
+            setSendOutFor(null);
+            void refresh();
+            // "Paid now": Rider paid on the order as the till sent it out (what he keeps, frozen).
+            if (riderPaidNow) setRiderPaidFor(next);
+          }}
+          onAssignInstead={() => {
+            const snap = sendOutFor;
+            setSendOutFor(null);
+            setAssignFor(snap);
+          }}
+        />
+      )}
+      {riderPaidFor && (
+        <MarkDeliveredDialog
+          snap={riderPaidFor}
+          riderPaidOnly
+          onClose={() => setRiderPaidFor(null)}
+          onDone={() => {
+            setRiderPaidFor(null);
             void refresh();
           }}
         />
@@ -416,6 +469,9 @@ interface OrderCardProps {
   primaryLabel: string | null;
   primaryKind: ReturnType<typeof nextBoardAction>['kind'];
   onPrimary: () => void;
+  /** The card's second button ("Rider paid"), or null. */
+  secondary: SecondaryBoardAction | null;
+  onSecondary: () => void;
   onChangeRider: () => void;
   onReprint: () => void;
   onReprintKitchen: () => void;
@@ -430,6 +486,8 @@ function OrderCard({
   primaryLabel,
   primaryKind,
   onPrimary,
+  secondary,
+  onSecondary,
   onChangeRider,
   onReprint,
   onReprintKitchen,
@@ -451,6 +509,8 @@ function OrderCard({
   const outside = isOutWithOutsideRider(snap);
   // A Ready delivery goes out with Send out; one of the shop's own riders is this small link.
   const offersAssignLink = order.status === 'ready' && order.mode === 'delivery' && !snap.rider;
+  // An outside rider still owes the shop the food total (the total less what he keeps).
+  const owes = riderOwesCents(order);
   const PrimaryIcon = PRIMARY_ICON[primaryKind];
 
   return (
@@ -601,11 +661,18 @@ function OrderCard({
       )}
 
       <div className="mt-2 flex items-center justify-between border-t border-stone-100 pt-2 dark:border-stone-700">
-        <div className="flex items-center gap-2">
+        <div className={owes === null ? 'flex items-center gap-2' : 'flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'}>
           <span className="font-mono text-base font-bold text-stone-900 dark:text-stone-100">
             {formatCents(order.totalCents)}
           </span>
-          <PaidChip paid={paid} />
+          {owes === null ? (
+            <PaidChip paid={paid} />
+          ) : (
+            // In place of "Not paid": what he hands the shop, the FOOD TOTAL.
+            <span className="inline-flex items-center whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+              {riderOwesText(owes)}
+            </span>
+          )}
         </div>
         <span className="text-xs text-stone-500">
           {itemCount} {itemCount === 1 ? 'item' : 'items'}
@@ -617,12 +684,25 @@ function OrderCard({
           <Button
             size="md"
             variant={PRIMARY_VARIANT[primaryKind]}
-            className="h-11 flex-1 whitespace-nowrap text-sm"
+            // Beside "Rider paid" the words may take two lines on a narrow card.
+            className={secondary ? 'h-11 flex-1 px-2 text-sm leading-tight' : 'h-11 flex-1 whitespace-nowrap text-sm'}
             onClick={onPrimary}
             disabled={busy}
           >
             <PrimaryIcon className="h-4 w-4" />
             {busy ? 'Saving…' : primaryLabel}
+          </Button>
+        )}
+        {/* "Rider paid" in the chef-hat button's place: an Out card never has that one. */}
+        {secondary && (
+          <Button
+            size="md"
+            variant="secondary"
+            className="h-11 shrink-0 px-2 text-xs leading-tight text-amber-900 ring-amber-300 hover:bg-amber-50 dark:text-amber-200 dark:ring-amber-800"
+            onClick={onSecondary}
+            disabled={busy}
+          >
+            {secondary.label}
           </Button>
         )}
         {/* Only while the kitchen still has it: the till refuses the ticket after that. */}
