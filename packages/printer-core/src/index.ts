@@ -122,6 +122,8 @@ export {
   KITCHEN_LATE_MS,
 } from './receipt-renderer.js';
 export { paperMoney, paperSignedMoney, paperRupees } from './paper-money.js';
+export { renderShiftReport, SHIFT_REPORT_LIST_MAX } from './shift-report.js';
+export type { RenderShiftReportOpts, ShiftReportStamp, ShiftReportPaperTime } from './shift-report.js';
 export {
   LOGO_RASTER_ALGO,
   LOGO_BOX,

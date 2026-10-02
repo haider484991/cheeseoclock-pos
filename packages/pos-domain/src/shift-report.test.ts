@@ -112,6 +112,21 @@ function refund(o: ShiftReportFactsOrder, method: string, cents: number, full: b
 
 const sum = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0);
 
+/**
+ * printer-core's fingerprint() (receipt-goldens.fixture.ts) of a text's UTF-8
+ * bytes: its length and two 32-bit hashes, FNV-1a and a multiplicative one.
+ */
+function textFingerprint(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let fnv = 0x811c9dc5;
+  let mul = 0;
+  for (const b of bytes) {
+    fnv = Math.imul(fnv ^ b, 0x01000193) >>> 0;
+    mul = (Math.imul(mul, 31) + b + 1) >>> 0;
+  }
+  return `${bytes.length}:${fnv.toString(16).padStart(8, '0')}:${mul.toString(16).padStart(8, '0')}`;
+}
+
 // -----------------------------------------------------------------------------
 // A small night, every figure worked out by hand
 // -----------------------------------------------------------------------------
@@ -1331,6 +1346,13 @@ describe('the sample night (62 orders): every figure of the sample paper', () =>
     };
     expect(buildShiftReport(reversed)).toEqual(r);
     expect(shiftReportJson(buildShiftReport(reversed))).toBe(shiftReportJson(r));
+  });
+
+  it("printer-core's copy of this report (its shift-report.fixture.ts, which prints the sample paper) is this report", () => {
+    // printer-core cannot import pos-domain, so it keeps the sample night as static
+    // data and pins the same fingerprint (SAMPLE_SHIFT_REPORT_FINGERPRINT). When the
+    // builder's figures for this night change, write that file out again from here.
+    expect(textFingerprint(shiftReportJson(r))).toBe('15105:fb520c02:b4f549ec');
   });
 
   it('the stored text is the report; no cost, waste, commission or profit in it', () => {
