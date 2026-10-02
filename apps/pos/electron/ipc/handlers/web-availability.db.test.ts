@@ -17,7 +17,12 @@
  *   - no discount on value deals (migration 0047): with every category set
  *     to discounted the publish is byte-for-byte v0.7.33's; with nothing set
  *     only the Value Deals items gain `noDiscount: true`; a delivery charge
- *     never carries it.
+ *     never carries it;
+ *   - and on two tills: the owner's explicit answer (0 as well as 1) reaches
+ *     the other till; an older till's row image without the key never resets
+ *     it; a deal rung up on one till arrives on the other never discounted,
+ *     and an older till's order-line image lands as 0 when new and leaves a
+ *     stored answer alone.
  *
  * Only `defineHandler` (captured), the signed-in session, the printer
  * spooler and the FBR worker are stood in for. node's own `node:sqlite`
@@ -26,6 +31,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  categoryNeverDiscounted,
   DEFAULT_DELIVERY_ZONES,
   PUBLISHED_IMAGE_MAX_CHARS,
   type AuthenticatedUser,
@@ -360,23 +366,23 @@ live('the defaults: the website gets exactly the menu it got before', () => {
   });
 });
 
-live('no discount on value deals: what the website gets (migration 0047; web-bridge.ts, NO DISCOUNT ON VALUE DEALS)', () => {
-  /** The owner's Value Deals as a menu file import makes it: nothing set, so its name decides. */
-  async function addValueDeals(): Promise<string> {
-    const x = db as never;
-    const mgr = { userId: 'u_mgr', deviceId: DEV };
-    const { createCategory } = await import('../../db/repositories/category-repo.js');
-    const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
-    const deals = createCategory(x, { name: 'Value Deals', displayOrder: 4, colorHex: '#aa0055' }, mgr);
-    const deal = (name: string, cents: number, sortOrder: number) =>
-      createMenuItem(x, { categoryId: deals.id, name, basePriceCents: cents, taxCategoryId: menu.tax, sortOrder }, mgr);
-    deal('Big Two', 360_000, 4);
-    deal('Family Feast', 520_000, 5);
-    deal('Perfect Pair', 240_000, 6);
-    return deals.id;
-  }
-  const markedNames = (m: PublishedMenu) => m.categories.flatMap((c) => c.items.filter((i) => i.noDiscount === true).map((i) => i.name));
+/** The owner's Value Deals as a menu file import makes it: nothing set, so its name decides. */
+async function addValueDeals(): Promise<string> {
+  const x = db as never;
+  const mgr = { userId: 'u_mgr', deviceId: DEV };
+  const { createCategory } = await import('../../db/repositories/category-repo.js');
+  const { createMenuItem } = await import('../../db/repositories/menu-item-repo.js');
+  const deals = createCategory(x, { name: 'Value Deals', displayOrder: 4, colorHex: '#aa0055' }, mgr);
+  const deal = (name: string, cents: number, sortOrder: number) =>
+    createMenuItem(x, { categoryId: deals.id, name, basePriceCents: cents, taxCategoryId: menu.tax, sortOrder }, mgr);
+  deal('Big Two', 360_000, 4);
+  deal('Family Feast', 520_000, 5);
+  deal('Perfect Pair', 240_000, 6);
+  return deals.id;
+}
+const markedNames = (m: PublishedMenu) => m.categories.flatMap((c) => c.items.filter((i) => i.noDiscount === true).map((i) => i.name));
 
+live('no discount on value deals: what the website gets (migration 0047; web-bridge.ts, NO DISCOUNT ON VALUE DEALS)', () => {
   it('every category set to discounted (an explicit 0, the owner’s): the publish is byte-for-byte v0.7.33’s (at the website defaults, v0.7.29’s above) — no noDiscount key anywhere', async () => {
     await addValueDeals();
     h.session = OWNER;
@@ -622,7 +628,7 @@ live('Menu → On the website: who may change it, and what is refused', () => {
   });
 });
 
-live('the other till: row images with and without the website columns', () => {
+live('the other till: row images with and without the website and never discounted columns', () => {
   async function secondTill(): Promise<Db> {
     const b = openMigrated({});
     const user = b.prepare(
@@ -634,15 +640,19 @@ live('the other till: row images with and without the website columns', () => {
     await push(db, b, DEV);
     return b;
   }
-  /** Send every unsent change `from` → `to`; `older` strips the 0045 columns, as a v0.7.29 till's images are. */
-  async function push(from: Db, to: Db, fromDevice: string, older = false): Promise<void> {
+  /**
+   * Send every unsent change `from` → `to`. `older` makes the row images an older till's: a v0.7.29
+   * till's have neither the 0045 website columns nor 0047's never discounted; a v0.7.33 till's lack 0047's.
+   */
+  async function push(from: Db, to: Db, fromDevice: string, older: 'v0.7.29' | 'v0.7.33' | null = null): Promise<void> {
     const sync = await import('../../db/repositories/sync-repo.js');
     const { applyRemoteBatch } = await import('../../db/repositories/apply-remote.js');
     const pending = sync.listPendingSync(from as never, 5_000);
+    const unknownThere = older === 'v0.7.29' ? ['webAvailability', 'isOnWebsite', 'noDiscount'] : older === 'v0.7.33' ? ['noDiscount'] : [];
     const changes = pending.map((p) => {
       const c = sync.pendingToChange(p, fromDevice);
-      if (!older) return c;
-      const { webAvailability: _w, isOnWebsite: _o, ...image } = c.payload as Record<string, unknown>;
+      if (unknownThere.length === 0) return c;
+      const image = Object.fromEntries(Object.entries(c.payload as Record<string, unknown>).filter(([k]) => !unknownThere.includes(k)));
       return { ...c, payload: image };
     });
     const r = await applyRemoteBatch(to as never, changes, { pause: async () => {} });
@@ -672,7 +682,7 @@ live('the other till: row images with and without the website columns', () => {
     const tillB = { userId: 'u_mgr', deviceId: 'dev-till-2' };
     updateMenuItem(b as never, { id: menu.burger, basePriceCents: 70_000 }, tillB);
     updateCategory(b as never, { id: menu.drinks, name: 'Test soft drinks' }, tillB);
-    await push(b, db, 'dev-till-2', true);
+    await push(b, db, 'dev-till-2', 'v0.7.29');
     expect(itemRow(db, menu.burger)).toMatchObject({ web_availability: 'off', base_price_cents: 70_000 });
     expect(categoryRow(db, menu.drinks)).toMatchObject({ is_on_website: 0, name: 'Test soft drinks' });
     expect(names((await published()).menu)).toEqual([
@@ -688,9 +698,134 @@ live('the other till: row images with and without the website columns', () => {
     const tillB = { userId: 'u_mgr', deviceId: 'dev-till-2' };
     const cat = createCategory(b as never, { name: 'Test desserts', displayOrder: 4, colorHex: '#aa00aa' }, tillB);
     const item = createMenuItem(b as never, { categoryId: cat.id, name: 'Test Brownie', basePriceCents: 25_000, taxCategoryId: menu.tax }, tillB);
-    await push(b, db, 'dev-till-2', true);
+    await push(b, db, 'dev-till-2', 'v0.7.29');
     expect(itemRow(db, item.id)).toMatchObject({ web_availability: 'on' });
     expect(categoryRow(db, cat.id)).toMatchObject({ is_on_website: 1 });
+  });
+
+  // Never discounted on two tills (migration 0047; DEPLOY.md, No discount on value deals).
+  const idOf = (d: Db, name: string) => (d.prepare(`SELECT id FROM menu_items WHERE name = ? AND deleted_at IS NULL`).get(name) as { id: string }).id;
+  const markRow = (d: Db, id: string) => d.prepare(`SELECT name, color_hex, no_discount, version FROM categories WHERE id = ?`).get(id);
+  /** [name sold under, no_discount] per line of the order, as this till stores it. */
+  const soldLines = (d: Db, orderId: string) =>
+    (
+      d
+        .prepare(`SELECT menu_item_name AS name, no_discount AS nd FROM order_items WHERE order_id = ? AND deleted_at IS NULL ORDER BY created_at, id`)
+        .all(orderId) as Array<{ name: string; nd: number }>
+    ).map((r) => [r.name, r.nd]);
+  const orders = () => import('../../db/repositories/order-repo.js');
+  const TILL_A = { userId: 'u_cash', deviceId: DEV };
+  const TILL_B = { userId: 'u_cash', deviceId: 'dev-till-2' };
+
+  it('the owner’s explicit answer reaches the other till — a 0 as well as a 1, never read there as nothing set: its publish and its new lines follow it', async () => {
+    const dealsId = await addValueDeals();
+    const b = await secondTill();
+    expect(markRow(b, dealsId)).toMatchObject({ no_discount: null });
+    h.session = OWNER;
+    await data('menu:updateCategory', { id: dealsId, noDiscount: false });
+    await data('menu:updateCategory', { id: menu.drinks, noDiscount: true });
+    await push(db, b, DEV);
+    expect(markRow(b, dealsId)).toEqual(markRow(db, dealsId));
+    expect(markRow(b, dealsId)).toMatchObject({ name: 'Value Deals', no_discount: 0 });
+    expect(markRow(b, menu.drinks)).toMatchObject({ no_discount: 1 });
+    const { listCategories } = await import('../../db/repositories/category-repo.js');
+    expect(listCategories(b as never).map((c) => [c.name, c.noDiscount, categoryNeverDiscounted(c)])).toEqual([
+      ['Test food', null, false],
+      ['Test drinks', true, true],
+      ['Delivery Charges', null, false],
+      ['Value Deals', false, false],
+    ]);
+    // Till B's publish: the drink marked, the deals not (the owner's 0).
+    expect(markedNames((await published(b)).menu)).toEqual(['Test Drink']);
+    // A Big Two rung up on till B now takes discounts; its drink never does.
+    const r = await orders();
+    const o = r.createOrder(b as never, { mode: 'takeaway' }, TILL_B).id;
+    r.addOrderItem(b as never, { orderId: o, menuItemId: idOf(b, 'Big Two'), quantity: 1, modifierIds: [] }, TILL_B);
+    r.addOrderItem(b as never, { orderId: o, menuItemId: menu.drink, quantity: 1, modifierIds: [] }, TILL_B);
+    expect(soldLines(b, o)).toEqual([
+      ['Big Two', 0],
+      ['Test Drink', 1],
+    ]);
+  });
+
+  it('an older till’s later change to the category (its image has no noDiscount) never resets the answer here — a v0.7.33 till’s, then a v0.7.29 till’s; a new category from one is decided by its name', async () => {
+    const dealsId = await addValueDeals();
+    const b = await secondTill();
+    h.session = OWNER;
+    await data('menu:updateCategory', { id: dealsId, noDiscount: false });
+    await data('menu:updateCategory', { id: menu.drinks, noDiscount: true });
+    await push(db, b, DEV);
+    // Till B is older: it has no such column, so it never kept the answers (here: nothing set).
+    b.prepare(`UPDATE categories SET no_discount = NULL`).run();
+    const { createCategory, findCategory, updateCategory } = await import('../../db/repositories/category-repo.js');
+    const tillB = { userId: 'u_mgr', deviceId: 'dev-till-2' };
+    // Till B on v0.7.33 recolours the deals, renames the drinks and makes a combos category.
+    updateCategory(b as never, { id: dealsId, colorHex: '#bb0066' }, tillB);
+    updateCategory(b as never, { id: menu.drinks, name: 'Test soft drinks' }, tillB);
+    const combos = createCategory(b as never, { name: 'Test Combos', displayOrder: 5, colorHex: '#00aa55' }, tillB);
+    await push(b, db, 'dev-till-2', 'v0.7.33');
+    expect(markRow(db, dealsId)).toEqual({ name: 'Value Deals', color_hex: '#bb0066', no_discount: 0, version: 3 });
+    expect(markRow(db, menu.drinks)).toMatchObject({ name: 'Test soft drinks', no_discount: 1, version: 3 });
+    // Till B, back on v0.7.29, recolours both again.
+    updateCategory(b as never, { id: dealsId, colorHex: '#aa0055' }, tillB);
+    updateCategory(b as never, { id: menu.drinks, colorHex: '#0066bb' }, tillB);
+    await push(b, db, 'dev-till-2', 'v0.7.29');
+    expect(markRow(db, dealsId)).toEqual({ name: 'Value Deals', color_hex: '#aa0055', no_discount: 0, version: 4 });
+    expect(markRow(db, menu.drinks)).toMatchObject({ color_hex: '#0066bb', no_discount: 1, version: 4 });
+    // The new category arrived with nothing set: its name decides (combos are never discounted).
+    expect(markRow(db, combos.id)).toMatchObject({ no_discount: null });
+    expect(categoryNeverDiscounted(findCategory(db as never, combos.id)!)).toBe(true);
+    // What this till publishes still follows the owner's answers: the drink, not the deals.
+    expect(markedNames((await published()).menu)).toEqual(['Test Drink']);
+  });
+
+  it('a deal rung up on this till arrives on the other never discounted (the burger discounted), whatever its category says there later: that till’s discount leaves it alone', async () => {
+    const dealsId = await addValueDeals();
+    const b = await secondTill();
+    const r = await orders();
+    const o = r.createOrder(db as never, { mode: 'takeaway' }, TILL_A).id;
+    r.addOrderItem(db as never, { orderId: o, menuItemId: idOf(db, 'Big Two'), quantity: 1, modifierIds: [] }, TILL_A);
+    r.addOrderItem(db as never, { orderId: o, menuItemId: menu.burger, quantity: 1, modifierIds: [] }, TILL_A);
+    await push(db, b, DEV);
+    expect(soldLines(b, o)).toEqual([
+      ['Big Two', 1],
+      ['Test Burger', 0],
+    ]);
+    expect(r.getOrderSnapshot(b as never, o)!.items.map((i) => [i.menuItemName, i.noDiscount])).toEqual([
+      ['Big Two', true],
+      ['Test Burger', false],
+    ]);
+    // The owner on till B lets the deals take discounts from now on; the line already sold keeps its answer.
+    const { updateCategory } = await import('../../db/repositories/category-repo.js');
+    updateCategory(b as never, { id: dealsId, noDiscount: false }, { userId: 'u_admin', deviceId: 'dev-till-2' });
+    expect(soldLines(b, o)).toEqual([
+      ['Big Two', 1],
+      ['Test Burger', 0],
+    ]);
+    // Till B's 10% staff discount comes off the burger only.
+    r.applyDiscount(b as never, { orderId: o, discountType: 'percent', value: 10, reason: 'Staff', approverUserId: 'u_mgr' }, TILL_B);
+    expect(r.findOrder(b as never, o)!.discountCents).toBe(6_000);
+  });
+
+  it('an order-line image from a v0.7.33 till (no noDiscount): a new line lands as 0 (that till never knew), a change to a line sold here leaves its 1', async () => {
+    await addValueDeals();
+    const b = await secondTill();
+    const r = await orders();
+    const o = r.createOrder(db as never, { mode: 'takeaway' }, TILL_A).id;
+    r.addOrderItem(db as never, { orderId: o, menuItemId: idOf(db, 'Big Two'), quantity: 1, modifierIds: [] }, TILL_A);
+    await push(db, b, DEV);
+    const soldHere = (db.prepare(`SELECT id FROM order_items WHERE order_id = ?`).get(o) as { id: string }).id;
+    // Till B is older: it has no such column, so it never kept the line's answer (here: the default).
+    b.prepare(`UPDATE order_items SET no_discount = 0`).run();
+    // Till B, on v0.7.33, makes it two Big Twos and adds a Family Feast.
+    r.updateOrderItemQuantity(b as never, o, soldHere, 2, TILL_B);
+    r.addOrderItem(b as never, { orderId: o, menuItemId: idOf(b, 'Family Feast'), quantity: 1, modifierIds: [] }, TILL_B);
+    await push(b, db, 'dev-till-2', 'v0.7.33');
+    expect(soldLines(db, o)).toEqual([
+      ['Big Two', 1],
+      ['Family Feast', 0],
+    ]);
+    expect(db.prepare(`SELECT quantity, version FROM order_items WHERE id = ?`).get(soldHere)).toEqual({ quantity: 2, version: 2 });
   });
 });
 
