@@ -185,6 +185,8 @@ describe('sync contract: every replicable table carries the sync columns', () =>
     // 0049: what an outside rider keeps travels with the order, and a payout's order with the payout.
     expect([...(SCHEMA.get('orders') ?? [])]).toEqual(expect.arrayContaining(['rider_keeps_cents']));
     expect([...(SCHEMA.get('cash_movements') ?? [])]).toEqual(expect.arrayContaining(['order_id']));
+    // 0050: the drawer counted note by note at close travels with the shift.
+    expect([...(SCHEMA.get('shifts') ?? [])]).toEqual(expect.arrayContaining(['counted_notes_json']));
     // 0009 swaps payments via a temp table; the rename must survive the drop
     // and the scratch name must not linger.
     expect(REPLICABLE_TABLES).toContain('payments');
@@ -297,7 +299,7 @@ describe('migrations: numbered in order, one file per number', () => {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
-  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), by name', () => {
+  it('run 0001 up to the newest with no gap and no number used twice; 0039 (0.7.21), 0040 and 0041 (0.7.22, foodpanda), then 0042 and 0043, then 0044 (came-by), then 0045 (on the website), then 0046 (website-order alerts), then 0047 (no discount on value deals), then 0048 (when an order was sent), then 0049 (outside riders), then 0050 (the note count at close), by name', () => {
     const numbers = files.map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? NaN));
     expect(numbers).toEqual(numbers.map((_, i) => i + 1));
     // 0040 / 0041 were released in v0.7.22: the drawer log and the test-order
@@ -314,6 +316,7 @@ describe('migrations: numbered in order, one file per number', () => {
       '0047_no_discount.sql',
       '0048_order_sent_at.sql',
       '0049_outside_rider.sql',
+      '0050_shift_counted_notes.sql',
     ]);
   });
 
@@ -410,5 +413,18 @@ describe('migrations: numbered in order, one file per number', () => {
     expect(/\bBEGIN\b/i.test(raw)).toBe(false);
     // Both tables replicate: the columns travel in their row images, no sync-core change.
     expect(PURE_LOCAL_TABLES.has('orders') || PURE_LOCAL_TABLES.has('cash_movements')).toBe(false);
+  });
+
+  it('0050 only adds shifts.counted_notes_json (nullable TEXT, no CHECK, no backfill, no index); nothing else touched', () => {
+    const raw = readFileSync(join(MIGRATIONS_DIR, '0050_shift_counted_notes.sql'), 'utf8');
+    const sql = stripComments(raw).trim();
+    expect(sql.replace(/\s+/g, ' ')).toBe('ALTER TABLE shifts ADD COLUMN counted_notes_json TEXT;');
+    expect(sql.match(/\bALTER TABLE\b/gi)).toHaveLength(1);
+    expect(/\bCHECK\b|\bUPDATE\b|\bINSERT\b|\bDELETE\b|\bDROP\b|\bCREATE\b|\bNOT NULL\b|\bDEFAULT\b/i.test(sql)).toBe(false);
+    expect(/\borders\b|\bcash_movements\b/i.test(sql)).toBe(false);
+    // No BEGIN anywhere, comments included: the migrator runs it in its own transaction (migrator.ts managesOwnTransaction).
+    expect(/\bBEGIN\b/i.test(raw)).toBe(false);
+    // shifts replicates: the column travels in the shift's row image, no sync-core change.
+    expect(PURE_LOCAL_TABLES.has('shifts')).toBe(false);
   });
 });

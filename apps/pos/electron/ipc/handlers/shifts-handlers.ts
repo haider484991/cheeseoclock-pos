@@ -145,6 +145,11 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
           carryOverOrderIds: Array.isArray(payload.carryOverOrderIds)
             ? payload.carryOverOrderIds.filter((id): id is string => typeof id === 'string')
             : null,
+          // The drawer counted note by note, passed on as sent, only after
+          // the PIN check above: the repository is the one strict gate (the
+          // owner's rows, whole notes, a sum that is the counted cash).
+          countedNotes:
+            payload.countedNotes != null && typeof payload.countedNotes === 'object' ? payload.countedNotes : null,
         },
         { userId: closer.userId, deviceId: ctx.deviceId },
         closer.tillSignedInUserId ? { via: 'manager_pin', tillSignedInUserId: closer.tillSignedInUserId } : null,

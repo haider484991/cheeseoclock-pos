@@ -9,7 +9,10 @@
  *      with the manager's PIN on the cashier's till. The main process refuses
  *      a cashier with no PIN or a wrong one. The count stays blind: before
  *      the count the till hands over no money of the shift. A manager or the
- *      owner signed in closes as before.
+ *      owner signed in closes as before. A drawer counted note by note
+ *      (migration 0050) closes the same way and is kept with the shift; a
+ *      count that is not whole notes is refused in plain words, and the PIN
+ *      is checked before the count is looked at.
  *   C. Unpaid orders on this till no longer block the close for good: the
  *      close box lists them, the manager gives one reason, and the shift
  *      closes; the orders stay unpaid for the next shift, each carried order
@@ -25,7 +28,7 @@
  * amount is made up.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, BusinessReportRequest, Shift, ShiftCloseCheck, UUID } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, BusinessReportRequest, CashCount, Shift, ShiftCloseCheck, UUID } from '@cheeseoclock/shared-types';
 import { DatabaseSync, openMigrated } from '../../db/costing-shop.fixture.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
@@ -95,6 +98,23 @@ const CASHIER = session('u_cash', 'Ali Cashier', 'cashier');
 const MANAGER = session('u_mgr', 'Sara Manager', 'manager');
 const OWNER = session('u_owner', 'The Owner', 'admin');
 const PIN = 'Manager-pass-7';
+/** The drawer counted note by note: 1,000 × 4, 500 × 1, 100 × 3, 50 × 1, 20 × 2, 10 × 1 = Rs 4,900 (Rs 100 short). */
+const COUNT_4900: CashCount = {
+  notes: [
+    { faceCents: 500_000, count: 0 },
+    { faceCents: 100_000, count: 4 },
+    { faceCents: 50_000, count: 1 },
+    { faceCents: 10_000, count: 3 },
+    { faceCents: 5_000, count: 1 },
+    { faceCents: 2_000, count: 2 },
+    { faceCents: 1_000, count: 1 },
+  ],
+  otherCents: 0,
+};
+const COUNT_4900_JSON =
+  '{"notes":[{"faceCents":500000,"count":0},{"faceCents":100000,"count":4},{"faceCents":50000,"count":1},' +
+  '{"faceCents":10000,"count":3},{"faceCents":5000,"count":1},{"faceCents":2000,"count":2},' +
+  '{"faceCents":1000,"count":1}],"otherCents":0}';
 
 let db: ReturnType<typeof openMigrated>;
 
@@ -272,6 +292,57 @@ live('A. a manager closes the shift on a cashier’s till with their PIN or pass
     expect(JSON.stringify(ownerCheck)).not.toMatch(/expected|cash/i);
     // Only a warning: the close goes ahead as before.
     expect((await call<Shift>('shifts:close', { shiftId: own.id, countedCashCents: 500_000 })).closedAt).not.toBeNull();
+  });
+
+  it('counted note by note on a cashier’s till: the manager’s PIN closes it, the reply has the count and no expected cash, the audit has both', async () => {
+    const shift = await openShiftAs(CASHIER);
+    h.session = CASHIER;
+    const closed = await call<Shift>('shifts:close', {
+      shiftId: shift.id,
+      countedCashCents: 490_000,
+      countedNotes: COUNT_4900,
+      approverPin: PIN,
+    });
+    expect(closed).toMatchObject({ closedByUserId: 'u_mgr', countedCashCents: 490_000, varianceCents: -10_000, countedNotes: COUNT_4900 });
+    expect(closed.expectedCashCents).toBeNull();
+    expect(row(`SELECT expected_cash_cents, counted_notes_json FROM shifts WHERE id = ?`, shift.id)).toEqual({
+      expected_cash_cents: 500_000,
+      counted_notes_json: COUNT_4900_JSON,
+    });
+    const audit = row<{ after_json: string }>(`SELECT after_json FROM audit_log WHERE action = 'shift_close' AND entity_id = ?`, shift.id);
+    expect(JSON.parse(audit.after_json)).toMatchObject({
+      countedNotes: COUNT_4900,
+      approval: { via: 'manager_pin', tillSignedInUserId: 'u_cash' },
+    });
+  });
+
+  it('a count that is not whole notes is refused in plain words, nothing written; the PIN is checked before the count is looked at', async () => {
+    const shift = await openShiftAs(CASHIER);
+    h.session = CASHIER;
+    const halfNote = { ...COUNT_4900, notes: COUNT_4900.notes.map((n, i) => (i === 2 ? { ...n, count: 1.5 } : n)) };
+    expect(await refusal('shifts:close', { shiftId: shift.id, countedCashCents: 490_000, countedNotes: halfNote, approverPin: PIN })).toEqual({
+      code: 'precondition_failed',
+      message: 'A count is a whole number of notes',
+    });
+    // No PIN, or a wrong one: refused for that, whatever the count says.
+    const { CLOSE_REFUSED } = await import('./shifts-handlers.js');
+    expect(await refusal('shifts:close', { shiftId: shift.id, countedCashCents: 490_000, countedNotes: halfNote })).toEqual({
+      code: 'forbidden',
+      message: CLOSE_REFUSED,
+    });
+    const checks = h.pinChecks;
+    expect(await refusal('shifts:close', { shiftId: shift.id, countedCashCents: 490_000, countedNotes: halfNote, approverPin: '1111' })).toEqual({
+      code: 'forbidden',
+      message: "That is not a manager's PIN or password",
+    });
+    expect(h.pinChecks).toBe(checks + 1);
+    expect(row(`SELECT closed_at, counted_cash_cents, counted_notes_json FROM shifts WHERE id = ?`, shift.id)).toEqual({
+      closed_at: null,
+      counted_cash_cents: null,
+      counted_notes_json: null,
+    });
+    expect(rows(`SELECT 1 FROM audit_log WHERE action = 'shift_close'`)).toHaveLength(0);
+    expect(h.webOrders).toEqual([{ change: 'opened' }]);
   });
 
   it('a manager’s PIN is checked again at the close itself (the renderer is not trusted with it)', async () => {

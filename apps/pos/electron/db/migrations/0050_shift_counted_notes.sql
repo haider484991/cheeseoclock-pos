@@ -1,0 +1,30 @@
+-- 0050_shift_counted_notes.sql
+-- The drawer counted note by note at Close shift (the owner, 2 Oct 2026:
+-- "when closing the cash count should have 5000rs x note 1000 x 500 100 and
+-- 50 and 20 and 10").
+--
+--   shifts.counted_notes_json
+--             how the closing count was made up, as JSON text, in cents
+--             throughout (the note values included, so nothing multiplies
+--             by 100):
+--               {"notes":[{"faceCents":500000,"count":2}, ...,
+--                         {"faceCents":1000,"count":4}],"otherCents":3500}
+--             one row per note the owner listed, in his order (Rs 5,000,
+--             1,000, 500, 100, 50, 20 and 10; the Rs 10 row counts notes and
+--             coins together), then 'Coins and other' (Rs 5, 2 and 1 coins
+--             and anything not in a row) in whole rupees.
+--             counted_cash_cents stays the truth: a close is refused unless
+--             the notes add up to it, and nothing reads this column to add
+--             the drawer up again.
+--             NULL = a shift still open, one closed before 0.7.35, or one
+--             closed on an older till.
+--
+-- Written only by repositories/shift-repo.ts closeShift, with its sync entry
+-- and its hash-chained audit row, and always through pos-domain cashCountJson,
+-- so the same count is always the same text. A plain nullable ADD COLUMN: no
+-- CHECK, no backfill and no index (nothing looks a shift up by it). Row
+-- images are built from the live schema, so the column travels with the
+-- shift without a sync-core change; a till without it ignores the key, and
+-- an image without the key leaves the column here as it is. Install both
+-- tills the same day.
+ALTER TABLE shifts ADD COLUMN counted_notes_json TEXT;

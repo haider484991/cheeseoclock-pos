@@ -75,6 +75,7 @@ export interface OrderStockAnswer {
 /** An order after a cancel / refund, with what it did to stock. */
 export type OrderSnapshotWithStock = OrderSnapshot & { stock: StockSettlement | null };
 import type {
+  CashCount,
   CashMovement,
   CashMovementType,
   DrawerOpenResult,
@@ -960,6 +961,9 @@ export interface IpcContract {
    * that would carry over any other (one that came in during the count) is
    * refused. On a manager's PIN the reply leaves out `expectedCashCents`:
    * the cashier's screen never shows the expected cash.
+   * `countedNotes`: the drawer counted note by note (Close shift's note
+   * counter). When it is sent, `countedCashCents` must equal its sum, or the
+   * close is refused; it is kept on the shift (migration 0050).
    */
   'shifts:close': {
     request: {
@@ -969,6 +973,7 @@ export interface IpcContract {
       approverPin?: string;
       carryOverReason?: string | null;
       carryOverOrderIds?: string[];
+      countedNotes?: CashCount | null;
     };
     response: ApiResult<Shift>;
   };

@@ -6,7 +6,10 @@ import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
 import { shortOrderNumber } from '@cheeseoclock/shared-types';
+import { cashCountInputSchema, parseCashCountJson } from '@cheeseoclock/shared-schemas';
+import { cashCountJson, cashCountTotalCents, formatCents } from '@cheeseoclock/pos-domain';
 import type {
+  CashCount,
   CashMovement,
   CashMovementType,
   DrawerPayout,
@@ -41,6 +44,8 @@ interface ShiftRow {
   close_notes: string | null;
   carried_unpaid_count: number | null;
   carry_over_reason: string | null;
+  /** The note-by-note count at close (migration 0050): cashCountJson's text, or NULL. */
+  counted_notes_json: string | null;
 }
 
 const SHIFT_SELECT = `
@@ -51,7 +56,8 @@ const SHIFT_SELECT = `
   s.opened_at, s.closed_at,
   s.opening_cash_cents, s.counted_cash_cents,
   s.expected_cash_cents, s.variance_cents, s.notes, s.close_notes,
-  s.carried_unpaid_count, s.carry_over_reason
+  s.carried_unpaid_count, s.carry_over_reason,
+  s.counted_notes_json
 `;
 
 function rowToShift(r: ShiftRow): Shift {
@@ -72,7 +78,23 @@ function rowToShift(r: ShiftRow): Shift {
     closeNotes: r.close_notes ?? null,
     carriedUnpaidCount: Number(r.carried_unpaid_count ?? 0),
     carryOverReason: r.carry_over_reason ?? null,
+    countedNotes: countedNotesOf(r),
   };
+}
+
+/**
+ * The note-by-note count of a closed shift, or null. Read leniently
+ * (cashCountSchema): a newer till's extra key, row or paisa still reads.
+ * Text that cannot be read at all is null and noted in the log; the shift
+ * itself always reads (counted_cash_cents is the truth).
+ */
+function countedNotesOf(r: ShiftRow): CashCount | null {
+  const text = r.counted_notes_json;
+  const notes = parseCashCountJson(text);
+  if (notes === null && typeof text === 'string' && text !== '') {
+    log.warn('Shift: the note count could not be read; showing none', { id: r.id });
+  }
+  return notes;
 }
 
 /**
@@ -197,6 +219,7 @@ function openShiftRow(
     closeNotes: null,
     carriedUnpaidCount: 0,
     carryOverReason: null,
+    countedNotes: null,
   };
   writeWithSync({
     db,
@@ -252,6 +275,14 @@ export interface CloseShiftInput {
    * meanwhile simply is not carried. Omitted: no such check (direct callers).
    */
   carryOverOrderIds?: readonly string[] | null;
+  /**
+   * The drawer counted note by note (Close shift's note counter). When it is
+   * given it must be exactly the owner's seven note rows and 'Coins and
+   * other' (cashCountInputSchema), and add up to countedCashCents, or the
+   * close is refused; it is stored as counted_notes_json (migration 0050).
+   * Omitted or null: the shift closes on the total alone, the column NULL.
+   */
+  countedNotes?: CashCount | null;
 }
 
 /**
@@ -320,6 +351,13 @@ export function closeShift(
     if (before.closedAt) throw new Error('Shift is already closed');
     if (input.countedCashCents < 0) throw new Error('Counted cash cannot be negative');
 
+    // The note-by-note count, checked before anything else is looked at or
+    // written. This is the one strict gate (the handler only passes it on):
+    // the owner's rows in his order, whole numbers of notes, coins in whole
+    // rupees, and a sum that is the counted cash. The stored text is always
+    // written by cashCountJson, never taken as sent.
+    const countedNotesJson = countedNotesToStore(input.countedNotes, input.countedCashCents);
+
     // Money still to come in (a rider still out, an order not yet paid). It
     // used to block the close outright (audit 2026-09-25), and one forgotten
     // old order blocked every close. Now the manager closing says why they
@@ -377,6 +415,7 @@ export function closeShift(
           SET closed_by_user_id = ?, closed_at = ?, counted_cash_cents = ?,
               expected_cash_cents = ?, variance_cents = ?,
               close_notes = ?, carried_unpaid_count = ?, carry_over_reason = ?,
+              counted_notes_json = ?,
               updated_at = ?, version = version + 1
         WHERE id = ? AND closed_at IS NULL`,
     ).run(
@@ -388,6 +427,7 @@ export function closeShift(
       input.notes?.trim() || null,
       unpaid.length,
       unpaid.length > 0 ? carryOverReason : null,
+      countedNotesJson,
       now,
       input.shiftId,
     );
@@ -443,8 +483,27 @@ export function closeShift(
     variance: result.varianceCents,
     carriedUnpaid: result.carriedUnpaidCount,
     viaManagerPin: approval !== null,
+    byNote: result.countedNotes != null,
   });
   return result;
+}
+
+/**
+ * The text to store for a close's note-by-note count (cashCountJson), or
+ * null when it was not counted by note. Throws, in the till's own words,
+ * when the count is not one a close may save (cashCountInputSchema: the
+ * first problem found), or when the notes do not add up to the counted cash.
+ */
+function countedNotesToStore(countedNotes: CashCount | null | undefined, countedCashCents: number): string | null {
+  if (countedNotes === null || countedNotes === undefined) return null;
+  const parsed = cashCountInputSchema.safeParse(countedNotes);
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'The note count could not be read');
+  const sum = cashCountTotalCents(parsed.data);
+  const counted = Math.round(countedCashCents);
+  if (sum !== counted) {
+    throw new Error(`The notes counted add up to ${formatCents(sum)}, not ${formatCents(counted)}. Count the drawer again.`);
+  }
+  return cashCountJson(parsed.data);
 }
 
 /**
