@@ -10,7 +10,8 @@
  * extra lines fails receipt-extra-lines.test.ts. Papers that did not exist
  * before a version are added with it, never regenerated: v0.7.34's value
  * deals (the receipt-deals-* papers), its delivery bill (the *-cod-charge*
- * papers) and its outside rider (the *-outside-* and *rider-paid* papers).
+ * papers), its outside rider (the *-outside-* and *rider-paid* papers) and
+ * his refund slips (refund-slip-shop-copy-through-rider and -refused-item).
  *
  * Times are Pakistan wall-clock instants: papers print Pakistan time, so the
  * bytes are the same in any time zone.
@@ -540,6 +541,41 @@ function riderPaidPartRefund(): OrderSnapshot {
   return s;
 }
 
+/** That Rs 300's refund slip: the cash went back through the rider while out (refundHandOver 'rider'). */
+const throughRiderRefundInfo = (): RefundSlipInfo => ({
+  refundedAt: at(20, 5),
+  rows: [{ method: 'cash', amountCents: 30_000 }],
+  reason: 'Test item refused',
+  refundedByName: 'Test Cashier',
+  approvedByName: 'Test Manager',
+  totalRefundedCents: 30_000,
+  handedTo: 'rider',
+});
+
+/**
+ * Delivered + Pay at 20:10 with "Customer refused an item" (the outside
+ * rider, cash: the whole Rs 4,715 taken), then at 20:15 the refused item's
+ * Rs 345 (with its tax) given back with no cash handed out: he brought that
+ * much less (refundHandOver 'none').
+ */
+function refusedItemRefunded(): OrderSnapshot {
+  const s = paidOnDelivery(codChargeOutside());
+  s.payments.push(refundRow(34_500, 20, 15));
+  s.refusedItem = { refundAt: iso(20, 15) };
+  return s;
+}
+
+/** Its refund slip. */
+const refusedItemRefundInfo = (): RefundSlipInfo => ({
+  refundedAt: at(20, 15),
+  rows: [{ method: 'cash', amountCents: 34_500 }],
+  reason: 'Test item refused',
+  refundedByName: 'Test Cashier',
+  approvedByName: 'Test Manager',
+  totalRefundedCents: 34_500,
+  handedTo: 'none',
+});
+
 const refundInfo = (): RefundSlipInfo => ({
   refundedAt: at(19, 50),
   rows: [{ method: 'cash', amountCents: 30_000 }],
@@ -619,6 +655,11 @@ function receiptCases(): GoldenCase[] {
     ['bill-cod-charge-outside-shop-copy', codChargeOutside, { copy: 'shop' }],
     ['bill-cod-charge-rider-paid-out', codChargeRiderPaidOut, {}],
     ['bill-rider-paid-part-refund', riderPaidPartRefund, { copy: 'shop' }],
+    // AN OUTSIDE RIDER'S REFUND SLIPS (v0.7.34, review fixes B): papers that did not exist before, added (never
+    // regenerated). The SHOP COPY of cash given back through him while out ("Given to the rider"), and of the
+    // refused item settled in the same handover ("No cash handed out", no signature).
+    ['refund-slip-shop-copy-through-rider', riderPaidPartRefund, { document: 'refund', refund: throughRiderRefundInfo(), copy: 'shop' }],
+    ['refund-slip-shop-copy-refused-item', refusedItemRefunded, { document: 'refund', refund: refusedItemRefundInfo(), copy: 'shop' }],
   ];
   for (const [paper, snap, opts] of papers) {
     for (const [brandName, branding] of [

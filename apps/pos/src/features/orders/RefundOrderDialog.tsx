@@ -10,6 +10,7 @@ import { SecretInput } from '../../components/secret/SecretInput';
 import { SecretHint } from '../../components/secret/SecretHint';
 import { approvalProblem } from '../../components/secret/secretRules';
 import { isOutsideRiderOrder, type OrderSnapshot, type PaymentMethod } from '@cheeseoclock/shared-types';
+import { riderSettledWhileOut } from '@cheeseoclock/printer-core';
 import { parseRupeesToCents } from './boardLogic';
 import { FoodMadeQuestion, useFoodMadeAnswer } from './FoodMadeQuestion';
 import { reasonChips, refundToast } from './stockCopy';
@@ -23,9 +24,9 @@ interface Props {
   snap: OrderSnapshot;
   onClose: () => void;
   onDone: () => void;
-  /** Open with this choice made (otherwise neither, or 'Part of it' for an outside rider still out). */
+  /** Open with this choice made (otherwise neither, or 'Part of it' while an outside rider who paid the shop is still out). */
   startOn?: RefundMode;
-  /** Open with 'Give back as' on this method (otherwise Cash for an outside rider still out, or how most was paid). */
+  /** Open with 'Give back as' on this method (otherwise Cash while an outside rider who paid the shop is still out, or how most was paid). */
   startMethod?: PaymentMethod;
   /** A line at the top of the box saying why it opened. */
   note?: string;
@@ -41,8 +42,11 @@ interface Props {
  * It opens with neither 'All of it' nor 'Part of it' chosen (owner, 2 Oct
  * 2026), so Enter can never give the whole order back by accident: it only
  * says "Choose All of it or Part of it". An order an outside rider (Send out)
- * still has opens on 'Part of it' with Cash. What the drawer paid that rider
- * is never taken back by a refund, and the box says so.
+ * paid the shop for while he is still out (riderSettledWhileOut: the paper's
+ * own rule) opens on 'Part of it' with Cash: the money goes back through him.
+ * One the customer paid before it left opens neutral, on how it was paid —
+ * he collects nothing for it. What the drawer paid that rider is never taken
+ * back by a refund, and the box says so.
  */
 export function RefundOrderDialog({ snap, onClose, onDone, startOn, startMethod, note }: Props) {
   // What can still be given back: every payment added up (refunds are negative).
@@ -54,8 +58,9 @@ export function RefundOrderDialog({ snap, onClose, onDone, startOn, startMethod,
   const dominantMethod: PaymentMethod =
     positivePayments.slice().sort((a, b) => b.amountCents - a.amountCents)[0]?.method ?? 'cash';
   const isFoodpanda = snap.order.mode === 'foodpanda';
-  // Sent out with an outside rider and not back yet: the money goes through him.
-  const outsideOut = isOutsideRiderOrder(snap.order) && snap.order.status === 'out_for_delivery';
+  // Sent out with an outside rider who paid the shop while out, not back yet: the money goes
+  // through him. The paper's rule (riderSettledWhileOut), so a customer-prepaid order is not this.
+  const outsideOut = riderSettledWhileOut(snap.order);
   // What the drawer paid him for this order (a live payout); a refund never takes it back.
   const riderKeptCents =
     isOutsideRiderOrder(snap.order) && snap.deliveryChargeToRider ? snap.deliveryChargeToRider.amountCents : null;

@@ -879,6 +879,11 @@ export interface IpcContract {
    * order changed since this window opened…"); absent (or null) for one of
    * the shop's own riders. His payment is still the full total: the till
    * splits a wallet payment itself.
+   *
+   * `refusedItem`: Delivered + Pay with "Customer refused an item" (outside
+   * rider only; refused on any other order). The till records that the
+   * item's part refund is still owed (OrderSnapshot.refusedItem) until a
+   * refund on the order settles it.
    */
   'orders:markDelivered': {
     request: {
@@ -890,6 +895,7 @@ export interface IpcContract {
         referenceNo?: string | null;
       };
       riderKeepsCents?: number | null;
+      refusedItem?: boolean;
     };
     response: ApiResult<OrderSnapshot>;
   };

@@ -8,6 +8,7 @@ import { ipc } from '../../ipc/client';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { orderTimeLabel, shortOrderNumber } from './historyFilters';
+import { REFUSED_ITEM_OWED_CHIP, REFUSED_ITEM_OWED_TEXT } from './refusedItemWords';
 
 /**
  * Recent Orders — the counter's small window on this shift (owner,
@@ -160,6 +161,15 @@ function RecentRow({ order: o, onOpen }: { order: RecentCounterOrder; onOpen: ()
         </span>
         <ModeBadge mode={o.mode} />
         <span className="ml-auto flex items-center gap-2">
+          {/* Delivered + Pay with "Customer refused an item": its part refund is not done yet. */}
+          {o.refusedItemRefundOwed === true && (
+            <span
+              title={REFUSED_ITEM_OWED_TEXT}
+              className="whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-800 ring-1 ring-orange-300 dark:bg-orange-950 dark:text-orange-200 dark:ring-orange-800"
+            >
+              {REFUSED_ITEM_OWED_CHIP}
+            </span>
+          )}
           <StatusBadge status={o.status} />
           {!cancelled && <PaidChip paid={o.paid} />}
           <ChevronRight className="h-4 w-4 text-stone-300" />

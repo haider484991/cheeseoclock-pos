@@ -25,7 +25,7 @@ import { reprintReceipt, reprintToast } from '../printing/reprint';
 import { useToast } from '../../components/toast/ToastProvider';
 import { useAcknowledgeOnlineOrders } from '../notifications/alertStore';
 import type { OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
-import { isOutsideRiderOrder, orderNotesOf } from '@cheeseoclock/shared-types';
+import { isOutsideRiderOrder, orderNotesOf, riderKeepsNothingWhy } from '@cheeseoclock/shared-types';
 import { NoShiftBanner } from '../shell/NoShiftBanner';
 import { AssignRiderDialog } from './AssignRiderDialog';
 import { MarkDeliveredDialog, REFUSED_ITEM_REFUND } from './MarkDeliveredDialog';
@@ -645,7 +645,7 @@ function OrderCard({
                 <Truck className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate font-semibold">Outside rider</span>
                 {outMinutes !== null && <span className="whitespace-nowrap text-[10px]">· out {ageLabel(outMinutes)}</span>}
-                <span className="whitespace-nowrap text-[10px]">· {outsideRiderKeepsText(order.riderKeepsCents ?? 0)}</span>
+                <span className="whitespace-nowrap text-[10px]">· {outsideRiderKeepsText(order.riderKeepsCents ?? 0, riderKeepsNothingWhy(snap))}</span>
               </span>
               <button
                 type="button"

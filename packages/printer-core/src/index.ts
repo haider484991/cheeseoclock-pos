@@ -112,6 +112,7 @@ export {
   appendLogo,
   receiptDocumentFor,
   riderSettledWhileOut,
+  refundHandOver,
   receiptHeadLines,
   receiptShopLines,
   receiptExtraLines,

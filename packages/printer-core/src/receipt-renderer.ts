@@ -98,10 +98,12 @@ import {
   isLeaveOutChoice,
   isOutsideRiderOrder,
   orderNotesOf,
+  paidAfterItLeft,
   paperCashierName,
   paperClock,
   paperDateTime,
   paperDayMonthClock,
+  riderKeepsNothingWhy,
   salesTaxLabel,
 } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
@@ -199,18 +201,37 @@ export type ReceiptDocument = 'receipt' | 'bill' | 'refund' | 'void';
  *
  * Read from the order's own facts only, so the paper is the same whether the
  * rider paid before or after the bill printed, and however often the printer
- * retried. A customer who paid before the food left (paidAt before
- * dispatchedAt) is prepaid, not this; once delivered (status paid) the paper
- * is a receipt again.
+ * retried. A customer who paid before the food left (not paidAfterItLeft:
+ * the one rule, shared-types) is prepaid, not this; once delivered (status
+ * paid) the paper is a receipt again. The Refund box reads this too.
  */
 export function riderSettledWhileOut(
   order: Pick<OrderSnapshot['order'], 'mode' | 'status' | 'paidAt' | 'dispatchedAt' | 'riderKeepsCents'>,
 ): boolean {
   if (order.mode !== 'delivery' || !isOutsideRiderOrder(order) || order.status !== 'out_for_delivery') return false;
-  if (!order.paidAt || !order.dispatchedAt) return false;
-  const paid = Date.parse(order.paidAt);
-  const left = Date.parse(order.dispatchedAt);
-  return Number.isFinite(paid) && Number.isFinite(left) && paid >= left;
+  return paidAfterItLeft(order);
+}
+
+/**
+ * Where the cash of one refund went, as the SHOP COPY of its slip says it
+ * (null: to the customer, as every refund before v0.7.34):
+ *  - 'none': the refund that settles "Customer refused an item" at Delivered
+ *    + Pay (OrderSnapshot.refusedItem, its refundAt): the rider brought that
+ *    much less, so no cash leaves the drawer for it;
+ *  - 'rider': an outside rider's order he paid the shop for while out
+ *    (paidAfterItLeft), refunded before it was delivered: the money went back
+ *    through him, and he collects that much less at the door.
+ * `refundAt` is the paid_at the refund's rows share. Read from the order's
+ * own facts, so a slip printed late still says what happened then.
+ */
+export function refundHandOver(s: OrderSnapshot, refundAt: string): 'rider' | 'none' | null {
+  if (s.refusedItem?.refundAt === refundAt) return 'none';
+  const { order } = s;
+  if (order.mode !== 'delivery' || !isOutsideRiderOrder(order) || !paidAfterItLeft(order)) return null;
+  const refunded = Date.parse(refundAt);
+  if (!Number.isFinite(refunded)) return null;
+  const delivered = order.deliveredAt ? Date.parse(order.deliveredAt) : NaN;
+  return Number.isFinite(delivered) && refunded >= delivered ? null : 'rider';
 }
 
 /**
@@ -289,6 +310,12 @@ export interface RefundSlipInfo {
   debitNote?: (FbrPrint & { saleIrn?: string | null }) | null;
   /** Live FBR, the sale was fiscalised, and the debit note is not issued yet. */
   debitNoteMissing?: 'pending' | 'failed' | null;
+  /**
+   * Where the cash went when it was not to the customer (refundHandOver):
+   * the SHOP COPY then says "Given to the rider", or "No cash handed out"
+   * with no signature line. Absent: "Customer received", as before.
+   */
+  handedTo?: 'rider' | 'none' | null;
 }
 
 /** Who cancelled an order, when and why — for the cancelled-order and kitchen CANCELLED slips. */
@@ -665,7 +692,7 @@ function appendSaleBody(
     b.bold(false).doubleHeight(false);
   }
   // What an outside rider keeps and hands in: the shop's copy only.
-  if (shopCopy) appendOutsideRiderLines(b, snapshot, bill, width);
+  if (shopCopy) appendOutsideRiderLines(b, snapshot, width);
   b.rule();
 
   // Money taken, then money given back.
@@ -834,11 +861,11 @@ function deliveryPaidLine(order: OrderSnapshot['order']): string | null {
   const paid = order.paidAt ? Date.parse(order.paidAt) : NaN;
   if (!Number.isFinite(paid)) return null;
   const delivered = order.deliveredAt ? Date.parse(order.deliveredAt) : NaN;
-  const dispatched = order.dispatchedAt ? Date.parse(order.dispatchedAt) : NaN;
   if (Number.isFinite(delivered) && paid >= delivered) {
     return paid - delivered <= 60_000 ? 'PAID ON DELIVERY' : 'PAID AFTER DELIVERY';
   }
-  if (Number.isFinite(dispatched) && paid > dispatched) return null;
+  // Paid at or after it left (the one rule, paidAfterItLeft): while the rider was out.
+  if (paidAfterItLeft(order)) return null;
   return 'PREPAID - RIDER COLLECTS NOTHING';
 }
 
@@ -872,14 +899,12 @@ function riderCollectsCents(s: OrderSnapshot): number {
 
 /**
  * Paid before the food left: a customer-prepaid delivery (PREPAID - RIDER
- * COLLECTS NOTHING). One paid at or after it left was paid by its rider, or
- * at the door.
+ * COLLECTS NOTHING). One paid at or after it left (paidAfterItLeft, the one
+ * rule) was paid by its rider, or at the door.
  */
 function paidBeforeItLeft(order: OrderSnapshot['order']): boolean {
   const paid = order.paidAt ? Date.parse(order.paidAt) : NaN;
-  if (!Number.isFinite(paid)) return false;
-  const left = order.dispatchedAt ? Date.parse(order.dispatchedAt) : NaN;
-  return !(Number.isFinite(left) && paid >= left);
+  return Number.isFinite(paid) && !paidAfterItLeft(order);
 }
 
 /**
@@ -902,12 +927,7 @@ function paidBeforeItLeft(order: OrderSnapshot['order']): boolean {
  *    the drawer at Send out and he hands in nothing — "Paid to him from the
  *    drawer", "RIDER GIVES THE SHOP NOTHING".
  */
-function appendOutsideRiderLines(
-  b: EscPosBuilder,
-  snapshot: OrderSnapshot,
-  bill: DeliveryBill | null,
-  width: PrinterWidth,
-): void {
+function appendOutsideRiderLines(b: EscPosBuilder, snapshot: OrderSnapshot, width: PrinterWidth): void {
   const { order } = snapshot;
   const keep = order.riderKeepsCents;
   if (typeof keep !== 'number') return;
@@ -915,8 +935,9 @@ function appendOutsideRiderLines(
     b.line('Outside rider keeps', money(keep));
   } else {
     // One row when it fits (80 mm, no charge), otherwise the why on its own row.
+    // The why is the screens' too (riderKeepsNothingWhy: the bill still has its charge, or not).
     const nothing = 'Outside rider keeps nothing';
-    const why = bill ? '(already paid for this trip)' : '(no delivery charge)';
+    const why = `(${riderKeepsNothingWhy(snapshot)})`;
     if (nothing.length + 1 + why.length <= width) b.text(`${nothing} ${why}`).newline();
     else b.text(nothing).newline().wrappedText(why, width);
   }
@@ -989,8 +1010,18 @@ function appendRefundBody(
   b.line('Net paid', money(Math.max(0, paid - refund.totalRefundedCents)));
   b.newline();
   if (shopCopy) {
-    b.bold(true).wrappedText(`Customer received Rs ${money(returned)}`, width).bold(false);
-    b.newline().text(`Signature: ${'_'.repeat(Math.max(8, width - 11))}`).newline().newline();
+    // Who took the cash (refundHandOver): the rider signs for it; nobody, when none left the drawer.
+    const handedTo = refund.handedTo ?? null;
+    if (handedTo === 'none') {
+      b.bold(true).wrappedText('No cash handed out', width).bold(false);
+      b.wrappedText(`The rider brought Rs ${money(returned)} less`, width).newline();
+    } else {
+      b.bold(true)
+        .wrappedText(handedTo === 'rider' ? `Given to the rider Rs ${money(returned)}` : `Customer received Rs ${money(returned)}`, width)
+        .bold(false);
+      if (handedTo === 'rider') b.wrappedText(`He collects Rs ${money(returned)} less`, width);
+      b.newline().text(`Signature: ${'_'.repeat(Math.max(8, width - 11))}`).newline().newline();
+    }
   }
   b.align('center').bold(true).wrappedText('REFUND SLIP - NOT A RECEIPT FOR PAYMENT', width).bold(false);
   b.newline();

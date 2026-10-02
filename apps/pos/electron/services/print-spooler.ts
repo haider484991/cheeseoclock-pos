@@ -3,6 +3,7 @@ import { BrowserWindow } from 'electron';
 import type { AppDatabase } from '../db/connection.js';
 import {
   receiptDocumentFor,
+  refundHandOver,
   isDrinkLine,
   renderDrawerKick,
   renderKitchenTicket,
@@ -1590,6 +1591,8 @@ class PrintSpooler {
                   .filter((p) => p.amountCents < 0 && p.paidAt <= refundAt)
                   .reduce((n, p) => n + p.amountCents, 0),
                 ...this.fbrForRefund(snap, thisRefund),
+                // Back through an outside rider, or no cash at all (a refused item): the SHOP COPY says so.
+                handedTo: refundHandOver(snap, refundAt),
               }
             : undefined;
         const cancelled: CancelInfo | null =

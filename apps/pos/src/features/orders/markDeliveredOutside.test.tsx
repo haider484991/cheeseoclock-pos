@@ -19,8 +19,14 @@
  *    the payment is the full total, whatever the method.
  *  - riderPaidOnly: "Rider paid · #0042", orders:riderPaid, the order stays out.
  *  - "Customer refused an item": his cash is taken at the food total, as it
- *    is; then the Refund box opens on Part of it with Cash and the note, from
- *    Live Orders and from the order panel alike.
+ *    is, and the request says refusedItem (the till keeps the item's refund
+ *    as owed until it is done); then the Refund box opens on Part of it with
+ *    Cash and the note, from Live Orders and from the order panel alike. The
+ *    order panel says the refund is not done yet, and its Refund… opens the
+ *    same way, until it is (review fixes B).
+ *  - He keeps nothing: the paper's own reason — "already paid for this trip"
+ *    while the bill has its charge (one trip, one fee), "no delivery charge"
+ *    with none (review fixes B).
  *  - Own rider, takeaway, foodpanda and a prepaid outside order: the box is
  *    byte-identical to the build before this step.
  */
@@ -35,6 +41,7 @@ import { ToastProvider } from '../../components/toast/ToastProvider';
 import { SecretInput } from '../../components/secret/SecretInput';
 import { useSessionStore } from '../../stores/sessionStore';
 import { MarkDeliveredDialog, REFUSED_ITEM_REFUND, type RefundItemNext } from './MarkDeliveredDialog';
+import { REFUSED_ITEM_OWED_TEXT } from './refusedItemWords';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { OrdersBoardPage } from './OrdersBoardPage';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
@@ -552,15 +559,25 @@ describe('Delivered + Pay with an outside rider: the food total from him', () =>
     expect(box.done).toEqual([]);
   });
 
-  it('he keeps nothing (no delivery charge): "Rider keeps nothing", and he hands in the whole bill', async () => {
+  it('he keeps nothing on a bill with its charge (one trip, one fee): "nothing (already paid for this trip)", as the paper says', async () => {
     const box = openBox(outsideOrder({ riderKeepsCents: 0 }));
-    expect(box.words).toContain('Customer pays Rs 4,715 Rider keeps nothing (no delivery charge) Take from the rider Rs 4,715');
+    expect(box.words).toContain('Customer pays Rs 4,715 Rider keeps nothing (already paid for this trip) Take from the rider Rs 4,715');
+    expect(box.words).not.toContain('no delivery charge');
     expect(box.input('cash')['value']).toBe('4715');
     box.enter();
     await settle();
     expect(calls('orders.markDelivered')).toEqual([
       { orderId: 'o1', payment: { method: 'cash', amountCents: 471_500, tenderedCents: null, referenceNo: null }, riderKeepsCents: 0 },
     ]);
+    // Rider paid says it the same way.
+    expect(openBox(outsideOrder({ riderKeepsCents: 0 }), true).words).toContain('Rider keeps nothing (already paid for this trip)');
+  });
+
+  it('he keeps nothing and the bill has no delivery charge: "nothing (no delivery charge)", and he hands in the whole bill', () => {
+    const noCharge = outsideOrder({ riderKeepsCents: 0, subtotalCents: 390_000, taxCents: 58_500, totalCents: 448_500 });
+    const s = { ...noCharge, items: noCharge.items.slice(0, 1) } as OrderSnapshot;
+    const box = openBox(s);
+    expect(box.words).toContain('Customer pays Rs 4,485 Rider keeps nothing (no delivery charge) Take from the rider Rs 4,485');
   });
 
   it('delivered but not paid (the order panel’s Collect payment) is the same outside box', () => {
@@ -658,7 +675,7 @@ describe('"Customer refused an item" (Delivered + Pay, order-edit #5)', () => {
     expect(box.words).not.toContain('The refund box opens next');
   });
 
-  it('Confirm takes the full total his way, then onDone hears {refundItem: true} with the order as the till answered', async () => {
+  it('Confirm takes the full total his way and says refusedItem (its refund owed till done), then onDone hears {refundItem: true}', async () => {
     const box = openBox(outsideOrder());
     box.tap('Customer refused an item');
     box.enter();
@@ -670,6 +687,7 @@ describe('"Customer refused an item" (Delivered + Pay, order-edit #5)', () => {
           orderId: 'o1',
           payment: { method: 'cash', amountCents: 471_500, tenderedCents: null, referenceNo: null },
           riderKeepsCents: 20_000,
+          refusedItem: true,
         },
       ],
     ]);
@@ -784,6 +802,38 @@ describe('Order panel: Collect payment, then the Refund box', () => {
     (stubs.deliver.at(-1) as DeliverProps).onDone();
     panel.view();
     expect(stubs.refund).toEqual([]);
+  });
+
+  it('its refund not done yet: the panel says so, and Refund… opens on Part of it with Cash and the note', () => {
+    signIn('manager');
+    stubs.on = true;
+    const owed = { ...paidAfterDelivered(), refusedItem: { refundAt: null } } as OrderSnapshot;
+    const panel = mount(() => <OrderDetailDrawer orderId="o1" onClose={() => {}} />, [[['orders', 'detail', 'o1'], owed]]);
+    expect(panel.words).toContain(REFUSED_ITEM_OWED_TEXT);
+    expect(REFUSED_ITEM_OWED_TEXT).toBe('Customer refused an item - refund not done yet');
+    expect(panel.words).toContain('the drawer is short by that item until it is refunded');
+    panel.press('Refund…');
+    const refund = stubs.refund.at(-1) as RefundProps;
+    expect(refund.snap).toBe(owed);
+    expect({ startOn: refund.startOn, startMethod: refund.startMethod, note: refund.note }).toEqual(REFUSED_ITEM_REFUND);
+  });
+
+  it('once refunded, or never refused: no words, and Refund… opens neutral as before', () => {
+    signIn('manager');
+    stubs.on = true;
+    for (const snap of [
+      { ...paidAfterDelivered(), refusedItem: { refundAt: NOW } } as OrderSnapshot,
+      paidAfterDelivered(),
+    ]) {
+      stubs.refund.length = 0;
+      const panel = mount(() => <OrderDetailDrawer orderId="o1" onClose={() => {}} />, [[['orders', 'detail', 'o1'], snap]]);
+      expect(panel.words).not.toContain('refund not done yet');
+      panel.press('Refund…');
+      const refund = stubs.refund.at(-1) as RefundProps;
+      expect(refund.startOn).toBeUndefined();
+      expect(refund.startMethod).toBeUndefined();
+      expect(refund.note).toBeUndefined();
+    }
   });
 });
 

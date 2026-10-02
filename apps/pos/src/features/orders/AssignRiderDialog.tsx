@@ -3,6 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Button, cn } from '@cheeseoclock/ui';
 import { Bike, Phone, Plus, Undo2, X } from 'lucide-react';
+import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
@@ -17,6 +18,15 @@ interface Props {
 /** "Back to Ready" on an order sent out with no rider named: its hover words. */
 export const BACK_TO_READY_TITLE =
   'Only if the rider has not left. If he went and came back, cancel the order instead: it asks about his trip.';
+
+/**
+ * The same warning as words in the box, under "Back to Ready", when the
+ * outside rider keeps something: Back to Ready forgets it, so a cancel after
+ * it can no longer pay him for a trip he made.
+ */
+export function backToReadyNote(keepCents: number): string {
+  return `Back to Ready only if the rider has not left. If he went and came back, cancel the order instead, so he can be paid ${formatCents(keepCents)} for the trip.`;
+}
 
 /**
  * Optional: one of the shop's own riders, before or after Send out (they
@@ -38,6 +48,8 @@ export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
   const shortNo = snap.order.orderNumber.split('-').pop();
   // Sent out with an outside rider (Send out): he keeps the delivery charge.
   const sentOut = isOutWithOutsideRider(snap);
+  // What Back to Ready would lose: the trip the cancel box can pay him (none when he keeps nothing).
+  const tripKeepCents = sentOut ? (snap.order.riderKeepsCents ?? 0) : 0;
 
   const ridersQ = useQuery({
     queryKey: ['riders', 'active'],
@@ -223,6 +235,10 @@ export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
                   </Button>
                 )}
               </div>
+              {isOut && !currentRiderId && tripKeepCents > 0 && (
+                // Visible words, not only the button's hover title (a touch screen has no hover).
+                <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-200">{backToReadyNote(tripKeepCents)}</p>
+              )}
             </>
           ) : (
             <form

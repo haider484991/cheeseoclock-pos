@@ -18,6 +18,9 @@ import {
   IS_NOT_PAID_SQL,
   IS_SALE_SQL,
   NET_TOTAL_SQL,
+  REFUSED_ITEM_AUDIT_KEY,
+  REFUSED_ITEM_MARKED_SQL,
+  REFUSED_ITEM_REFUND_OWED_SQL,
 } from '../order-history-query.js';
 import { kitchenHearsOfClose } from '@cheeseoclock/pos-domain';
 import {
@@ -75,6 +78,7 @@ import {
   isDeliveryChargeLine,
   isDeliveryChargeMenuItem,
   isOutsideRiderOrder,
+  paidAfterItLeft,
 } from '@cheeseoclock/shared-types';
 import type {
   CameBy,
@@ -92,6 +96,7 @@ import type {
   OrderSnapshot,
   OrderStockAnswer,
   PrepStation,
+  RefusedItemRefundOwed,
   StockSettlement,
   TestDeleteStock,
   UUID,
@@ -3323,6 +3328,9 @@ export function refundOrder(
     // only that; the main process holds to it. Left to itself the refund
     // reverses what was paid, in the way it was paid.
     if (input.method !== undefined) assertMethodFitsOrder(order.mode, input.method, 'refund');
+    // This refund settles a refused item still owed (Delivered + Pay with "Customer refused an
+    // item"): its audit row says so. What clears it is the refund row itself (refusedItemOf).
+    const settlesRefusedItem = refusedItemOf(db, order)?.refundAt === null;
 
     const now = nowIso();
     const shiftId = shiftForPayment(db, actor.deviceId);
@@ -3425,7 +3433,7 @@ export function refundOrder(
         action: fullyRefunded ? 'refund_partial_final' : 'refund_partial',
         actorUserId: actor.userId,
         before: order,
-        after,
+        after: settlesRefusedItem ? { ...after, refusedItemRefund: true } : after,
       });
       const drawerOpenId = cashBack([{ method, amountCents: requested }]);
       result = { order: after, stock, statusBefore: order.status, drawerOpenId };
@@ -3502,7 +3510,7 @@ export function refundOrder(
       action: 'refund',
       actorUserId: actor.userId,
       before: order,
-      after,
+      after: settlesRefusedItem ? { ...after, refusedItemRefund: true } : after,
     });
     const drawerOpenId = cashBack(reversals);
     result = { order: after, stock, statusBefore: order.status, drawerOpenId };
@@ -3808,6 +3816,10 @@ export function getOrderSnapshot(
   // offer it would get ('Cancel #0042 first to keep the offer'). Every other snapshot reads as before.
   const asksOfferHeld = order.status === 'open' && offerCanApplyTo(order);
 
+  // "Customer refused an item" at Delivered + Pay on this till: whether its part refund is done.
+  // Only on such an order; every other snapshot reads as before.
+  const refusedItem = refusedItemOf(db, order);
+
   return {
     order,
     items,
@@ -3830,6 +3842,7 @@ export function getOrderSnapshot(
     ...(asksRiderPaidEarlier ? { riderPaidEarlier: riderPaidEarlierFor(db, orderId, typedPhone) } : {}),
     ...(asksAddOn ? { addOnTo: addOnToOf(db, orderId) } : {}),
     ...(asksOfferHeld ? { offerHeldBy: offerHeldByFor(db, order, typedPhone, discountRows.length > 0) } : {}),
+    ...(refusedItem ? { refusedItem } : {}),
   };
 }
 
@@ -4421,14 +4434,56 @@ export const RIDER_MONEY_SETTLED =
  * Delivered + Pay, a wasted trip), or he paid the shop for it after it left
  * (paid_at at or after dispatched_at; any status, a closed order included).
  * Changing its rider then would leave that money wrong, so Assign rider and
- * Back to Ready refuse (RIDER_MONEY_SETTLED).
+ * Back to Ready refuse (RIDER_MONEY_SETTLED). "After it left" is the papers'
+ * own rule (shared-types paidAfterItLeft).
  */
 function outsideRiderMoneySettled(db: AppDatabase, order: Order): boolean {
   if (liveRiderPayout(db, order.id) !== null) return true;
-  if (!isOutsideRiderOrder(order) || !order.paidAt || !order.dispatchedAt) return false;
-  const paid = Date.parse(order.paidAt);
-  const left = Date.parse(order.dispatchedAt);
-  return Number.isFinite(paid) && Number.isFinite(left) && paid >= left;
+  return isOutsideRiderOrder(order) && paidAfterItLeft(order);
+}
+
+// -----------------------------------------------------------------------------
+// "Customer refused an item" — the part refund still owed (order-edit #5)
+// -----------------------------------------------------------------------------
+
+/**
+ * OrderSnapshot.refusedItem: only on an outside rider's delivery delivered
+ * with "Customer refused an item" on this till; `refundAt` = its first
+ * refund's paid_at, or null while none.
+ */
+function refusedItemOf(db: AppDatabase, order: Order): NonNullable<OrderSnapshot['refusedItem']> | null {
+  if (order.mode !== 'delivery' || !isOutsideRiderOrder(order) || order.deliveredAt === null) return null;
+  if (order.status !== 'paid' && order.status !== 'refunded') return null;
+  const marked = db.prepare(`SELECT ${REFUSED_ITEM_MARKED_SQL} AS marked FROM orders o WHERE o.id = ?`).get(order.id) as
+    | { marked: number }
+    | undefined;
+  if (!marked || Number(marked.marked) !== 1) return null;
+  const first = db
+    .prepare(`SELECT MIN(paid_at) AS at FROM payments WHERE order_id = ? AND amount_cents < 0 AND deleted_at IS NULL`)
+    .get(order.id) as { at: string | null } | undefined;
+  return { refundAt: first?.at ?? null };
+}
+
+/**
+ * The deliveries of this shift with a refused item still to refund, oldest
+ * first: delivered with "Customer refused an item" on this till, the money
+ * taken in this shift, and no refund on them yet. The Close shift box lists
+ * them so the manager sees why the drawer is short; the close is never
+ * refused for them.
+ */
+export function listRefusedItemRefundsOwed(db: AppDatabase, shiftId: string): RefusedItemRefundOwed[] {
+  const rows = db
+    .prepare(
+      `SELECT o.id, o.order_number
+         FROM orders o
+        WHERE o.deleted_at IS NULL AND o.mode = 'delivery' AND o.status = 'paid' AND o.rider_keeps_cents IS NOT NULL
+          AND EXISTS (SELECT 1 FROM payments sp WHERE sp.order_id = o.id AND sp.shift_id = ? AND sp.amount_cents > 0
+                         AND sp.deleted_at IS NULL)
+          AND ${REFUSED_ITEM_REFUND_OWED_SQL}
+        ORDER BY o.created_at, o.id`,
+    )
+    .all(shiftId) as Array<{ id: string; order_number: string }>;
+  return rows.map((r) => ({ orderId: r.id as RefusedItemRefundOwed['orderId'], orderNumber: r.order_number }));
 }
 
 /**
@@ -4718,6 +4773,13 @@ export function takeRiderPayment(
  * One he already paid for while out (Rider paid) closes with no payment and
  * no second payout. One of the shop's own riders, a takeaway or a foodpanda
  * order goes exactly the v0.7.33 way.
+ *
+ * `refusedItem` (order-edit #5, an outside rider's Delivered + Pay only;
+ * refused on anything else): the customer refused an item at the door. The
+ * money is taken as for any Delivered + Pay, and the audit after-image says
+ * the item's part refund is still owed (REFUSED_ITEM_AUDIT_KEY) — in this
+ * same transaction — until a refund on the order settles it
+ * (OrderSnapshot.refusedItem, the Close shift box).
  */
 export function markOrderDelivered(
   db: AppDatabase,
@@ -4731,6 +4793,8 @@ export function markOrderDelivered(
     };
     /** What the window showed an outside rider keeps (Order.riderKeepsCents); absent for one of the shop's own riders. */
     riderKeepsCents?: number | null;
+    /** "Customer refused an item": its part refund is owed (outside rider's Delivered + Pay only). */
+    refusedItem?: boolean;
   },
   actor: Actor & { userId: string },
 ): OrderWithDrawer {
@@ -4764,6 +4828,8 @@ export function markOrderDelivered(
     // A window that says he keeps something on an order that keeps nothing
     // now (one of the shop's own riders) is a change as well.
     const outside = input.payment !== undefined && (isOutsideRiderOrder(order) || typeof input.riderKeepsCents === 'number');
+    const refusedItem = input.refusedItem === true;
+    if (refusedItem && !outside) throw new Error(REFUSED_ITEM_OUTSIDE_ONLY);
     let outsideDrawerOpenId: string | null = null;
     if (outside && input.payment) {
       const p = input.payment;
@@ -4853,7 +4919,8 @@ export function markOrderDelivered(
       action: input.payment ? 'mark_delivered_with_payment' : 'mark_delivered',
       actorUserId: actor.userId,
       before: order,
-      after,
+      // The refused item's part refund is owed from now on (read back by refusedItemOf).
+      after: refusedItem ? { ...after, [REFUSED_ITEM_AUDIT_KEY]: true } : after,
     });
     // Cash on delivery brought back by the rider: a cash sale's drawer open
     // (an outside rider's was written when he settled).
@@ -4868,9 +4935,14 @@ export function markOrderDelivered(
   log.info('Order delivered', {
     id: input.orderId,
     withPayment: !!input.payment,
+    ...(input.refusedItem === true ? { refusedItem: true } : {}),
   });
   return result;
 }
+
+/** Delivered + Pay with "Customer refused an item" on anything but an outside rider's order (the words the screens show). */
+export const REFUSED_ITEM_OUTSIDE_ONLY =
+  '"Customer refused an item" is only for an outside rider who brings the money back. Use Refund for this order.';
 
 // -----------------------------------------------------------------------------
 // Deleting a test order — the owner only (migration 0043)

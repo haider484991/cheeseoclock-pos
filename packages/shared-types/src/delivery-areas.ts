@@ -553,6 +553,20 @@ export function deliveryBillOf(s: {
 }
 
 /**
+ * Why an outside rider keeps nothing of an order (its frozen riderKeepsCents
+ * is 0), in the words the SHOP COPY prints and every screen shows: the bill
+ * still has its delivery charge (deliveryBillOf) — he was paid for this trip
+ * on an earlier order of the customer's (one trip, one fee) — or the order
+ * has no delivery charge at all.
+ */
+export type RiderKeepsNothingWhy = 'already paid for this trip' | 'no delivery charge';
+
+/** The one rule for RiderKeepsNothingWhy: the paper and the screens read it from here. */
+export function riderKeepsNothingWhy(s: Parameters<typeof deliveryBillOf>[0]): RiderKeepsNothingWhy {
+  return deliveryBillOf(s) !== null ? 'already paid for this trip' : 'no delivery charge';
+}
+
+/**
  * A tax line's words on the delivery bill: "Sales tax 15%", "Sales tax"
  * (no rate, or several), "Sales tax on delivery 15%", "Sales tax on
  * delivery". The rate as the receipt's "Tax (16.5%)" writes it: 1500 →

@@ -11,12 +11,15 @@
  *    with no success toast (the card moving is the feedback); a refusal
  *    shows "Could not send out" with the till's own words.
  *  - An Out card sent out with an outside rider: "Outside rider · out 12m ·
- *    keeps Rs 200" (or "· no delivery charge"), with an "Assign rider" link.
+ *    keeps Rs 200" (or, keeping nothing, the paper's own reason: "· already
+ *    paid for this trip" while the bill has its charge, "· no delivery
+ *    charge" with none), with an "Assign rider" link.
  *  - An own rider's Out card and a Ready takeaway card: byte-identical to the
  *    cards of the build before this step.
  *  - Assign rider on a sent-out order: the description says so, and "Back to
- *    Ready" (its title points to the cancel) toasts "Order #0047 is back in
- *    Ready".
+ *    Ready" (its title points to the cancel, and so do visible words under
+ *    it when he keeps something: the trip Back to Ready can't pay) toasts
+ *    "Order #0047 is back in Ready".
  *  - Order History: the panel's chip and "Sent out (outside rider)" step, and
  *    the row's "Rider: outside".
  *
@@ -57,7 +60,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import { ToastProvider } from '../../components/toast/ToastProvider';
 import { useSessionStore } from '../../stores/sessionStore';
 import { OrdersBoardPage } from './OrdersBoardPage';
-import { AssignRiderDialog, BACK_TO_READY_TITLE } from './AssignRiderDialog';
+import { AssignRiderDialog, BACK_TO_READY_TITLE, backToReadyNote } from './AssignRiderDialog';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
 import { OrderHistoryPage } from './OrderHistoryPage';
 import { ASSIGN_RIDER_LINK_TITLE } from './boardLogic';
@@ -331,6 +334,9 @@ function delivery(
 const sentOut = (n: number, keep: number, over: Partial<OrderSnapshot['order']> = {}) =>
   delivery(n, 'out_for_delivery', { riderKeepsCents: keep as never, ...over });
 
+/** The same order with no delivery charge on its bill (only the pizza). */
+const noChargeLine = (s: OrderSnapshot): OrderSnapshot => ({ ...s, items: s.items.slice(0, 1) });
+
 /** The board with these orders: its markup, and each card's by its short number ("#0042"). */
 function board(orders: OrderSnapshot[]): { html: string; cards: Map<string, string> } {
   signIn('cashier');
@@ -559,8 +565,12 @@ describe('an Out card sent out with an outside rider', () => {
     expect(buttonsWith(c, 'Delivered + Pay')).toHaveLength(1);
   });
 
-  it('"· no delivery charge" when he keeps nothing', () => {
-    expect(text(card(sentOut(49, 0)))).toContain('Outside rider · out 12m · no delivery charge Assign rider');
+  it('he keeps nothing on a bill with its charge (one trip, one fee): "· already paid for this trip", as the paper says', () => {
+    expect(text(card(sentOut(49, 0)))).toContain('Outside rider · out 12m · already paid for this trip Assign rider');
+  });
+
+  it('"· no delivery charge" when he keeps nothing and the bill has none', () => {
+    expect(text(card(noChargeLine(sentOut(49, 0))))).toContain('Outside rider · out 12m · no delivery charge Assign rider');
   });
 
   it('an own rider’s Out card is byte-identical to before (unpaid and paid), with no outside rider row', () => {
@@ -599,6 +609,14 @@ describe('Assign rider on a sent-out order', () => {
     expect(BACK_TO_READY_TITLE).toBe(
       'Only if the rider has not left. If he went and came back, cancel the order instead: it asks about his trip.',
     );
+    // The warning is also words in the box (a touch screen has no hover): what Back to Ready loses.
+    expect(backToReadyNote(20_000)).toBe(
+      'Back to Ready only if the rider has not left. If he went and came back, cancel the order instead, so he can be paid Rs 200 for the trip.',
+    );
+    expect(text(out)).toContain(backToReadyNote(20_000));
+    expect(text(out).indexOf(backToReadyNote(20_000))).toBeGreaterThan(text(out).indexOf('Back to Ready'));
+    // He keeps nothing: there is no trip to pay, so no such words.
+    expect(text(dialog(sentOut(48, 0)))).not.toContain('so he can be paid');
     expect(buttonsWith(out, 'Take rider off')).toEqual([]);
     // One of the shop's own riders can still take it.
     expect(text(out)).toContain('Test Rider');
@@ -665,8 +683,12 @@ describe('Order History: the order panel', () => {
     expect(plainSpaces(p.whatHappened)).toBe('Taken 7:20 pm · by Test Cashier Sent 7:22 pm Sent out (outside rider) 7:48 pm');
   });
 
-  it('no delivery charge kept', () => {
-    expect(panel(sentOut(49, 0)).customer).toContain('Outside rider · no delivery charge');
+  it('nothing kept on a bill with its charge (one trip, one fee): "already paid for this trip", as the paper says', () => {
+    expect(panel(sentOut(49, 0)).customer).toContain('Outside rider · already paid for this trip');
+  });
+
+  it('nothing kept and no delivery charge on the bill', () => {
+    expect(panel(noChargeLine(sentOut(49, 0))).customer).toContain('Outside rider · no delivery charge');
   });
 
   it('delivered later, it still says so', () => {

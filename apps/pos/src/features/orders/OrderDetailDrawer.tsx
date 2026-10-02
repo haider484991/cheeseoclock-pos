@@ -22,6 +22,7 @@ import {
   isLeaveOutChoice,
   isOutsideRiderOrder,
   orderNotesOf,
+  riderKeepsNothingWhy,
   type OrderSnapshot,
 } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
@@ -35,6 +36,7 @@ import { mayDeleteTestOrder } from './testDeleteCopy';
 import { useSessionStore } from '../../stores/sessionStore';
 import { RefundOrderDialog } from './RefundOrderDialog';
 import { MarkDeliveredDialog, REFUSED_ITEM_REFUND } from './MarkDeliveredDialog';
+import { REFUSED_ITEM_OWED_TEXT } from './refusedItemWords';
 import { drawerDiscountLabel } from '../checkout/discountWords';
 import { CameByRow } from './CameByRow';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
@@ -169,6 +171,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   // charge frozen then. One of the shop's own riders reads as before.
   const outside = !!o && !!snap && isOutsideRiderOrder(o) && !snap.rider;
   const canDeleteTest = mayDeleteTestOrder(role, o?.status);
+  // Delivered + Pay with "Customer refused an item" on this till, its part refund not done yet:
+  // the drawer is short by the item until it is. Refund… opens ready for it.
+  const refundOwed = !!snap && snap.refusedItem?.refundAt === null;
 
   // A deleted test order is gone from every list, shift, stock figure and
   // report: read them all again, and close this panel.
@@ -223,6 +228,18 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
         ) : (
           <>
             <div className="flex-1 space-y-4 overflow-y-auto p-5">
+              {refundOwed && (
+                <div
+                  role="note"
+                  className="rounded-lg border border-orange-300 bg-orange-50 p-2.5 text-sm text-orange-900 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-100"
+                >
+                  <p className="font-semibold">{REFUSED_ITEM_OWED_TEXT}</p>
+                  <p className="mt-0.5 text-xs">
+                    The rider brought less than the bill, so the drawer is short by that item until it is refunded. Use
+                    Refund…: Part of it, Cash, and hand out no cash.
+                  </p>
+                </div>
+              )}
               {(snap.customerName || snap.customerPhone || snap.deliveryAddress || snap.rider || outside) && (
                 <section className="space-y-1 rounded-xl bg-stone-50 p-3 text-sm dark:bg-stone-800/60">
                   {snap.customerName && (
@@ -252,7 +269,7 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                   {outside && (
                     <div className="mt-1 flex items-center gap-1.5 rounded-md bg-violet-100 px-2 py-1 text-xs text-violet-800 dark:bg-violet-950 dark:text-violet-200">
                       <Truck className="h-3 w-3" />
-                      {outsideRiderChipText(o.riderKeepsCents ?? 0)}
+                      {outsideRiderChipText(o.riderKeepsCents ?? 0, riderKeepsNothingWhy(snap))}
                     </div>
                   )}
                 </section>
@@ -483,7 +500,13 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
         <VoidOrderDialog snap={snap} onClose={() => setVoidOpen(false)} onDone={afterChange(() => setVoidOpen(false))} />
       )}
       {refundOpen && snap && (
-        <RefundOrderDialog snap={snap} onClose={() => setRefundOpen(false)} onDone={afterChange(() => setRefundOpen(false))} />
+        <RefundOrderDialog
+          snap={snap}
+          // The refused item's refund still owed: Part of it, Cash and the note, as right after Delivered + Pay.
+          {...(refundOwed ? REFUSED_ITEM_REFUND : {})}
+          onClose={() => setRefundOpen(false)}
+          onDone={afterChange(() => setRefundOpen(false))}
+        />
       )}
       {deleteOpen && snap && (
         <DeleteTestOrderDialog snap={snap} onClose={() => setDeleteOpen(false)} onDone={afterDelete} />

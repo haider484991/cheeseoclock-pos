@@ -196,6 +196,12 @@ describe('an outside rider on the board (Send out, v0.7.34)', () => {
     expect(outsideRiderKeepsText(0)).toBe('no delivery charge');
     expect(outsideRiderChipText(20_000)).toBe('Outside rider · kept Rs 200 delivery charge');
     expect(outsideRiderChipText(0)).toBe('Outside rider · no delivery charge');
+    // Keeping nothing on a bill that still has its charge (one trip, one fee): the paper's reason.
+    expect(outsideRiderKeepsText(0, 'already paid for this trip')).toBe('already paid for this trip');
+    expect(outsideRiderChipText(0, 'already paid for this trip')).toBe('Outside rider · already paid for this trip');
+    // What he keeps wins over any reason.
+    expect(outsideRiderKeepsText(20_000, 'already paid for this trip')).toBe('keeps Rs 200');
+    expect(outsideRiderChipText(20_000, 'already paid for this trip')).toBe('Outside rider · kept Rs 200 delivery charge');
   });
 
   it('the "Assign rider" link says it is optional and for the shop’s own riders', () => {

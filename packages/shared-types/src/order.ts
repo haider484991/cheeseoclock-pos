@@ -266,6 +266,19 @@ export interface OrderSnapshot {
    */
   riderPaidEarlier?: { orderId: UUID; orderNumber: OrderNumber; amountCents: Cents } | null;
   /**
+   * "Customer refused an item" (order-edit #5): this till took the outside
+   * rider's money at Delivered + Pay for the whole bill, and the refused
+   * item's part refund settles what he did not bring (the audit after-image
+   * of that Delivered + Pay says so; it never syncs, so only this till
+   * knows). `refundAt`: when that refund was made — the order's first refund
+   * (paid_at of its rows; nothing could be refunded before the order was
+   * paid); null = not done yet: the drawer is short by the item until it is
+   * (the order says so, and so does the Close shift box). The refund it
+   * points at handed out no cash: its slip says so. Absent on every other
+   * order.
+   */
+  refusedItem?: { refundAt: string | null };
+  /**
    * Add-on delivery (the owner, 2 Oct 2026: "if its out then it should
    * charge if the rider is not out"): the delivery of the same phone that this
    * order goes with on one trip, so the till left its area's delivery charge
@@ -352,4 +365,20 @@ export function paperCashierName(s: { order: Pick<Order, 'source'>; cashierName:
  */
 export function isOutsideRiderOrder(o: { readonly riderKeepsCents?: number | null }): boolean {
   return typeof o.riderKeepsCents === 'number';
+}
+
+/**
+ * The money came at or after the food left (paid_at >= dispatched_at): an
+ * outside rider paid the shop while out, or it was paid at the door — not a
+ * customer who paid before it left. The ONE comparison for "paid before it
+ * left" against "the rider paid while out": the papers, the Refund box and
+ * the till's settlement lock all use it, so they can never disagree on the
+ * same order (a Rider paid stamp is clamped to dispatched_at, never before
+ * it). False when either time is missing or unreadable.
+ */
+export function paidAfterItLeft(o: { readonly paidAt: string | null; readonly dispatchedAt: string | null }): boolean {
+  if (!o.paidAt || !o.dispatchedAt) return false;
+  const paid = Date.parse(o.paidAt);
+  const left = Date.parse(o.dispatchedAt);
+  return Number.isFinite(paid) && Number.isFinite(left) && paid >= left;
 }

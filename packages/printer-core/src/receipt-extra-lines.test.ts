@@ -8,8 +8,9 @@
  *    late, shop copy, kitchen tickets — and 16 added with v0.7.34's value
  *    deals: a discount that left them alone, and one at Rs 0; 32 with
  *    its delivery bill: Food / Sales tax / FOOD TOTAL / Delivery charge /
- *    CUSTOMER PAYS; and 12 with its outside rider: the SHOP COPY's rider
- *    lines, and the bill the customer keeps after the rider paid), in any
+ *    CUSTOMER PAYS; 12 with its outside rider: the SHOP COPY's rider
+ *    lines, and the bill the customer keeps after the rider paid; and 8 with
+ *    his refund slips: "Given to the rider", "No cash handed out"), in any
  *    time zone.
  *  - The lines print under the thank-you line on the customer's receipt and
  *    bill only: never on a kitchen ticket, a shop copy, a refund slip, a
@@ -61,8 +62,9 @@ describe('no extra lines: every paper is byte-for-byte what it was', () => {
     expect(cases.map((c) => c.name).sort()).toEqual(Object.keys(GOLDEN).sort());
     // 80 papers + 4 value-deals papers × 2 brandings × 2 widths (v0.7.34)
     // + 8 delivery-bill papers × 2 brandings × 2 widths (v0.7.34)
-    // + 3 outside-rider papers × 2 brandings × 2 widths (v0.7.34).
-    expect(cases.length).toBe(80 + 16 + 32 + 12);
+    // + 3 outside-rider papers × 2 brandings × 2 widths (v0.7.34)
+    // + 2 outside-rider refund slips (SHOP COPY) × 2 brandings × 2 widths (v0.7.34, review fixes B).
+    expect(cases.length).toBe(80 + 16 + 32 + 12 + 8);
   });
 
   it('none saved (the default)', () => {

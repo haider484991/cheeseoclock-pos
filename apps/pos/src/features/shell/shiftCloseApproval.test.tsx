@@ -12,6 +12,10 @@
  *      carried over, why, and who approved it.
  *   D. (v0.7.33) When the close pauses website orders on this till, the
  *      close box says so before "Close shift" — a warning, not a gate.
+ *   E. (v0.7.34, review fixes B) This shift's deliveries whose refused item
+ *      is still to refund ("Customer refused an item" at Delivered + Pay) are
+ *      listed — "#0042: customer refused an item - refund not done yet" — so
+ *      the manager sees why the drawer is short. A note, never a gate.
  *
  * Radix's dialog is stood in for by plain elements (a server render has no
  * portal). Every name and amount is made up.
@@ -35,6 +39,7 @@ import {
   hasNewUnpaid,
   MANAGER_CLOSES_LABEL,
   PIN_CLOSE_RESULT_NOTE,
+  REFUSED_ITEMS_OWED_NOTE,
   UnpaidCarryOver,
 } from './ShiftWidget';
 import type { ShiftCloseOutcome } from './shiftCloseOutcome';
@@ -402,5 +407,62 @@ describe('D. the close box says when the close pauses website orders', () => {
     expect(closeButton(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, seeded(true))).toBe(
       closeButton(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, seeded(false)),
     );
+  });
+});
+
+describe('E. refused items still to refund: listed in the close box, never a gate', () => {
+  const OWED: NonNullable<ShiftCloseCheck['refusedItemRefundsOwed']> = [
+    { orderId: 'o9' as UUID, orderNumber: '20261002-0042' },
+    { orderId: 'o10' as UUID, orderNumber: '20261002-0051' },
+  ];
+  const closeButton = (node: ReactNode, seed: Array<[readonly unknown[], unknown]> = []) =>
+    buttonWith(render(node, seed), 'Close shift');
+
+  it('on a manager’s PIN (the cashier’s login): each order in the words, and why the drawer is short — and still no money', () => {
+    signIn('cashier');
+    const out = render(
+      <CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={{ ...VIA_PIN, refusedItemRefundsOwed: OWED }} />,
+    );
+    const words = text(out);
+    expect(words).toContain('#0042: customer refused an item - refund not done yet');
+    expect(words).toContain('#0051: customer refused an item - refund not done yet');
+    expect(REFUSED_ITEMS_OWED_NOTE).toBe('The drawer is short by each refused item until it is refunded. You can still close the shift.');
+    expect(words).toContain(REFUSED_ITEMS_OWED_NOTE);
+    expect(out).toContain('role="note"');
+    expect(words.indexOf('#0042: customer refused')).toBeLessThan(words.lastIndexOf('Close shift'));
+    expect(words).not.toMatch(/Expected|Cash sales|Paid orders/);
+  });
+
+  it('a manager signed in: the same list, from the check the till sends', () => {
+    signIn('manager');
+    const words = text(
+      render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} />, [
+        [['shifts', 'closeCheck', 'shift-1'], { closerName: 'Test', viaManagerPin: false, unpaidOrders: [], pausesWebsiteOrders: false, refusedItemRefundsOwed: OWED.slice(0, 1) }],
+      ]),
+    );
+    expect(words).toContain('#0042: customer refused an item - refund not done yet');
+    expect(words).not.toContain('#0051');
+  });
+
+  it('none owed: no such words', () => {
+    signIn('manager');
+    const words = text(render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />));
+    expect(words).not.toContain('customer refused an item');
+    expect(words).not.toContain(REFUSED_ITEMS_OWED_NOTE);
+  });
+
+  it('a note, not a gate: "Close shift" is exactly as it is without it', () => {
+    signIn('manager');
+    expect(
+      closeButton(
+        <CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={{ ...VIA_PIN, refusedItemRefundsOwed: OWED }} />,
+      ),
+    ).toBe(closeButton(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />));
+    // With unpaid orders too, it asks only for the carry-over reason, as before.
+    const both = render(
+      <CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={{ ...VIA_PIN, unpaidOrders: UNPAID, refusedItemRefundsOwed: OWED }} />,
+    );
+    expect(text(both)).toContain('Why are they carried over? (required)');
+    expect(text(both)).toContain('#0042: customer refused an item - refund not done yet');
   });
 });

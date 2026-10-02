@@ -3,7 +3,7 @@
  * action it offers, which leave-out / allergy flags it must show, and the
  * quick search. Tested in boardLogic.test.ts.
  */
-import type { KitchenTiming, Order, OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
+import type { KitchenTiming, Order, OrderMode, OrderSnapshot, OrderStatus, RiderKeepsNothingWhy } from '@cheeseoclock/shared-types';
 import { DEFAULT_KITCHEN_TIMING, deliveryChargeLinesCents, isLeaveOutChoice, isOutsideRiderOrder } from '@cheeseoclock/shared-types';
 import { KITCHEN_TICKET_STATUSES, formatCents, normalizePhone } from '@cheeseoclock/pos-domain';
 import { orderTimeLabel } from './historyFilters';
@@ -351,14 +351,19 @@ export function isOutWithOutsideRider(snap: {
   return snap.order.status === 'out_for_delivery' && isOutsideRiderOrder(snap.order) && !snap.rider;
 }
 
-/** What the outside rider keeps, in the Out card's words: "keeps Rs 200", or "no delivery charge" for 0. */
-export function outsideRiderKeepsText(keepCents: number): string {
-  return keepCents > 0 ? `keeps ${formatCents(keepCents)}` : 'no delivery charge';
+/**
+ * What the outside rider keeps, in the Out card's words: "keeps Rs 200", or
+ * for 0 the paper's own reason (riderKeepsNothingWhy of the order): "already
+ * paid for this trip" when the bill still has its charge (one trip, one
+ * fee), else "no delivery charge".
+ */
+export function outsideRiderKeepsText(keepCents: number, nothingWhy: RiderKeepsNothingWhy = 'no delivery charge'): string {
+  return keepCents > 0 ? `keeps ${formatCents(keepCents)}` : nothingWhy;
 }
 
-/** Order History's panel chip for an order sent out with an outside rider: what he kept of the bill. */
-export function outsideRiderChipText(keptCents: number): string {
-  return keptCents > 0 ? `Outside rider · kept ${formatCents(keptCents)} delivery charge` : 'Outside rider · no delivery charge';
+/** Order History's panel chip for an order sent out with an outside rider: what he kept of the bill (0: the paper's reason, as above). */
+export function outsideRiderChipText(keptCents: number, nothingWhy: RiderKeepsNothingWhy = 'no delivery charge'): string {
+  return keptCents > 0 ? `Outside rider · kept ${formatCents(keptCents)} delivery charge` : `Outside rider · ${nothingWhy}`;
 }
 
 /**

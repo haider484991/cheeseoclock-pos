@@ -14,8 +14,11 @@
  *    "Choose All of it or Part of it" and asks nothing of the till.
  *  - 'All of it' then Enter sends the full refund as before; 'Part of it'
  *    works as before.
- *  - An order an outside rider (Send out) still has opens on 'Part of it'
- *    with Cash, and says what goes to the rider. What the drawer paid him
+ *  - An order an outside rider (Send out) paid the shop for while he is
+ *    still out (the paper's rule, riderSettledWhileOut: paid at or after it
+ *    left) opens on 'Part of it' with Cash, and says what goes to the rider.
+ *    One the customer paid before it left opens neutral, on how it was paid,
+ *    with no "he collects … less" (review fixes B). What the drawer paid him
  *    is never taken back, and the box says so, word for word.
  *  - startOn, startMethod and note are honoured.
  *  - Own riders and takeaways: no rider words.
@@ -195,18 +198,30 @@ function takeaway(payments = [pay('cash', 116_000)]): OrderSnapshot {
 
 /**
  * A delivery of Rs 4,715 (Test Family Pizza + 'Delivery Charge (Rs 200)'),
- * paid in cash. `outside`: sent out with an outside rider who keeps Rs 200,
- * and the drawer paid him (`payout`). Otherwise one of the shop's own riders.
+ * sent out 15 minutes ago. `outside`: with an outside rider who keeps Rs 200,
+ * and the drawer paid him (`payout`); he paid the shop in cash while out, 10
+ * minutes ago (Rider paid) — or, with `prepaid`, the customer paid at the
+ * counter 20 minutes ago, before it left (by `method`). Otherwise one of the
+ * shop's own riders, paid in cash 20 minutes ago.
  */
 function delivery(
   status: OrderStatus,
-  { outside, keep = 20_000, payout = true }: { outside: boolean; keep?: number; payout?: boolean },
+  {
+    outside,
+    keep = 20_000,
+    payout = true,
+    prepaid = false,
+    method = 'cash',
+  }: { outside: boolean; keep?: number; payout?: boolean; prepaid?: boolean; method?: PaymentMethod },
 ): OrderSnapshot {
-  const base = takeaway([pay('cash', 471_500)]);
+  // Rider paid while out: at or after it left (the paper's rule). The customer: before it left.
+  const paidAt = outside && !prepaid ? minsAgo(10) : minsAgo(20);
+  const base = takeaway([{ ...pay(method, 471_500), paidAt }]);
   return {
     ...base,
     order: {
       ...base.order,
+      paidAt,
       orderNumber: '20261002-0042',
       mode: 'delivery',
       status,
@@ -509,6 +524,40 @@ describe('an order an outside rider still has (Send out, not back yet)', () => {
     expect(box.words).not.toContain('The rider keeps his');
     box.tap('All of it');
     expect(box.words).not.toContain('The rider kept');
+  });
+});
+
+describe('an outside rider’s order the customer paid for before it left (still out)', () => {
+  it('opens neutral, gives back the way it was paid, and never says the rider collects less', async () => {
+    const box = openBox(delivery('out_for_delivery', { outside: true, prepaid: true, method: 'card' }));
+    expect(box.pressed).toEqual([]);
+    expect(box.giveBack).toBe('Give back — Choose All of it or Part of it.');
+    box.tap('Part of it');
+    expect(box.pressed).toEqual(['Part of it', 'Card']);
+    box.type('amount', '1,000');
+    // The drawer paid him at Send out; that stays his. He collects nothing on this order.
+    expect(box.giveBack).toContain('Rs 1,000 goes back. The rider keeps his Rs 200.');
+    expect(box.words).not.toContain('Give this to the rider');
+    expect(box.words).not.toContain('collects');
+    // Even on Cash: no rider hint.
+    box.tap('Cash');
+    expect(box.words).not.toContain('Give this to the rider');
+    box.tap('Card');
+    box.type('reason', 'Test item refused');
+    box.pin('1234');
+    box.enter();
+    await settle();
+    expect(refundCalls()).toEqual([
+      { orderId: 'o1', reason: 'Test item refused', approverPin: '1234', amountCents: 100_000, method: 'card', expectStatus: 'out_for_delivery' },
+    ]);
+  });
+
+  it('paid by EasyPaisa: opens neutral; Part of it starts on EasyPaisa', () => {
+    const box = openBox(delivery('out_for_delivery', { outside: true, prepaid: true, method: 'easypaisa' }));
+    expect(box.pressed).toEqual([]);
+    box.tap('Part of it');
+    expect(box.pressed).toEqual(['Part of it', 'EasyPaisa']);
+    expect(box.words).not.toContain('Give this to the rider');
   });
 });
 

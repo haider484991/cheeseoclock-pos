@@ -16,6 +16,7 @@ import {
   openShift,
   recordCashMovement,
 } from '../../db/repositories/shift-repo.js';
+import { listRefusedItemRefundsOwed } from '../../db/repositories/order-repo.js';
 import type { AppDatabase } from '../../db/connection.js';
 import { printSpooler } from '../../services/print-spooler.js';
 import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-service.js';
@@ -168,7 +169,9 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
   // over, and whether the close pauses website orders on this till (a yes or
   // no for the close box to warn; the close itself applies the real rule).
   // The same people as the close itself; no money of the shift (the count is
-  // blind), only the unpaid orders' own totals.
+  // blind), only the unpaid orders' own totals. Also this shift's deliveries
+  // whose refused item is still to refund (order numbers only): the drawer is
+  // short by them, and the box says why — never a reason to refuse the close.
   defineHandler('shifts:closeCheck', ctx, async (_ctx, payload) => {
     const s = requireSession();
     const closer = await shiftCloser(ctx.db, s, payload.approverPin);
@@ -176,11 +179,13 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
     if (!shift || shift.closedAt !== null) {
       throw new IpcGuardError({ code: 'precondition_failed', message: 'That shift is not open any more' });
     }
+    const refusedItemRefundsOwed = listRefusedItemRefundsOwed(ctx.db, shift.id);
     return ok({
       closerName: closer.name,
       viaManagerPin: closer.tillSignedInUserId !== null,
       unpaidOrders: listUnpaidForClose(ctx.db, shift.deviceId),
       pausesWebsiteOrders: closeWouldPauseWebOrders(ctx.db, ctx.deviceId, shift.id),
+      ...(refusedItemRefundsOwed.length > 0 ? { refusedItemRefundsOwed } : {}),
     });
   });
 

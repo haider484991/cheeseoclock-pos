@@ -8,6 +8,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type {
   IpcRequest,
   OpeningFloatPrefill,
+  RefusedItemRefundOwed,
   ShiftCloseCheck,
   ShiftSummary,
   UnpaidOrderAtClose,
@@ -21,6 +22,7 @@ import { drawerResultToast } from './drawerToast';
 import { PAGE_ACCESS } from './navAccess';
 import { SecretInput } from '../../components/secret/SecretInput';
 import { fmtWhen } from '../reports/reportFormat';
+import { refusedItemOwedLine } from '../orders/refusedItemWords';
 import { ALERT_WATCH_KEY, useWebOrdersPause } from '../notifications/useAlertWatch';
 import {
   dismissShiftCloseOutcome,
@@ -578,6 +580,8 @@ export function CloseShiftDialog({
   const check = recheck ?? givenCheck ?? checkQ.data;
   const unpaid = check?.unpaidOrders ?? [];
   const needsReason = unpaid.length > 0;
+  // This shift's refused items still to refund: why the drawer is short. Said, never a gate.
+  const refundsOwed = check?.refusedItemRefundsOwed ?? [];
   // This close leaves no shift open on this till with the owner's switch on:
   // website orders pause until a shift is opened (said before, not a gate).
   const pausesWebsite = check?.pausesWebsiteOrders === true;
@@ -663,7 +667,8 @@ export function CloseShiftDialog({
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[460px] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
+        {/* Scrolls inside the window when every note is on (unpaid orders, refused items, website pause). */}
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[95vh] w-[460px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
           <CloseShiftHeader onClose={onClose} />
 
           {viaPin && check && (
@@ -708,6 +713,7 @@ export function CloseShiftDialog({
             {needsReason && (
               <UnpaidCarryOver orders={unpaid} reason={carryOverReason} onReason={setCarryOverReason} />
             )}
+            {refundsOwed.length > 0 && <RefusedItemsOwed orders={refundsOwed} />}
             {!check && checkQ.isError && (
               <p role="alert" className="text-sm font-medium text-red-600 dark:text-red-400">
                 {checkQ.error instanceof Error ? checkQ.error.message : 'Could not check the orders on this till'}
@@ -803,6 +809,31 @@ export function UnpaidCarryOver({
           className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-amber-700 dark:bg-stone-900 dark:text-stone-100"
         />
       </label>
+    </div>
+  );
+}
+
+/** Under the list in the close box: why the drawer is short, and that the close still goes ahead. */
+export const REFUSED_ITEMS_OWED_NOTE = 'The drawer is short by each refused item until it is refunded. You can still close the shift.';
+
+/**
+ * This shift's deliveries with "Customer refused an item" whose part refund
+ * is not done yet (shifts:closeCheck): the rider brought less than the bill,
+ * so the drawer is short by each item. Listed so the manager sees why; the
+ * close is never held up for them.
+ */
+export function RefusedItemsOwed({ orders }: { orders: readonly RefusedItemRefundOwed[] }) {
+  return (
+    <div
+      role="note"
+      className="rounded-lg border border-orange-300 bg-orange-50 p-3 text-sm text-orange-900 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-100"
+    >
+      <ul className="max-h-20 space-y-0.5 overflow-y-auto font-semibold">
+        {orders.map((o) => (
+          <li key={o.orderId}>{refusedItemOwedLine(o.orderNumber)}</li>
+        ))}
+      </ul>
+      <p className="mt-1 text-xs">{REFUSED_ITEMS_OWED_NOTE}</p>
     </div>
   );
 }

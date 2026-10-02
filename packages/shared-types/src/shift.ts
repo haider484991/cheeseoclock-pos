@@ -49,6 +49,18 @@ export interface UnpaidOrderAtClose {
 }
 
 /**
+ * An order of this shift delivered with "Customer refused an item" whose
+ * part refund is not done yet (OrderSnapshot.refusedItem): the rider brought
+ * less than the bill, so the drawer is short by that item until it is
+ * refunded. The close box lists it so the manager sees why; the close is
+ * never refused for it.
+ */
+export interface RefusedItemRefundOwed {
+  orderId: UUID;
+  orderNumber: string;
+}
+
+/**
  * What the close box needs before the count (`shifts:closeCheck`): who is
  * closing (the signed-in manager, or the manager whose PIN was typed on a
  * cashier's till) and the unpaid orders that will be carried over. Never
@@ -59,6 +71,11 @@ export interface ShiftCloseCheck {
   /** True when a manager's PIN or password approved it on a cashier's login. */
   viaManagerPin: boolean;
   unpaidOrders: UnpaidOrderAtClose[];
+  /**
+   * This shift's deliveries with a refused item still to refund
+   * (RefusedItemRefundOwed), oldest first. Absent when there are none.
+   */
+  refusedItemRefundsOwed?: RefusedItemRefundOwed[];
   /**
    * Closing this shift pauses website orders on this till: the owner's
    * switch is on, the website link is set, and no other shift stays open

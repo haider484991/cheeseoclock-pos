@@ -668,6 +668,36 @@ describe.skipIf(!DatabaseSync)('bills, receipts, refunds and cancelled orders', 
     expect(bill[0]).not.toContain('FBR');
   });
 
+  it('an outside rider’s refunds (v0.7.34): back through him while out, or a refused item with no cash handed out — the SHOP COPY says which', async () => {
+    const s = await spooler();
+    // The rider paid the shop while out (paid 2 minutes ago; it left 10 minutes ago), and he is still out.
+    const oid = order('o0320', { mode: 'delivery', status: 'out_for_delivery' });
+    Object.assign(snap(oid).order, { riderKeepsCents: 20_000, dispatchedAt: minutesAgo(10) });
+    addRefund(oid, 30_000, 'Test item refused');
+    s.onOrderEvent(oid, 'refunded', cash('refund'));
+    await s.whenIdle();
+    const slip = texts().find((t) => t.includes('REFUND'))!;
+    expect(count(slip, 'SHOP COPY')).toBe(1);
+    expect(slip).toContain('Given to the rider Rs 300.00');
+    expect(slip).toContain('He collects Rs 300.00 less');
+    expect(slip).toContain('Signature:');
+    expect(slip).not.toContain('Customer received');
+
+    // Delivered + Pay with "Customer refused an item", then the item's refund: no cash handed out, nobody signs.
+    h.sends.length = 0;
+    const o2 = order('o0321', { mode: 'delivery', status: 'paid' });
+    Object.assign(snap(o2).order, { riderKeepsCents: 20_000, dispatchedAt: minutesAgo(10), deliveredAt: snap(o2).order.paidAt });
+    const at = addRefund(o2, 34_500, 'Test item refused');
+    snap(o2).refusedItem = { refundAt: at };
+    s.onOrderEvent(o2, 'refunded', cash('refund'));
+    await s.whenIdle();
+    const refused = texts().find((t) => t.includes('REFUND'))!;
+    expect(count(refused, 'SHOP COPY')).toBe(1);
+    expect(refused).toContain('No cash handed out');
+    expect(refused).toContain('The rider brought Rs 345.00 less');
+    expect(refused).not.toMatch(/Customer received|Given to the rider|Signature/);
+  });
+
   it('a refund prints a REFUND slip — with a signed SHOP COPY when cash went back', async () => {
     const s = await spooler();
     const oid = order('o0303');

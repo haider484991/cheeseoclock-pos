@@ -111,4 +111,10 @@ export interface RecentCounterOrder {
   status: OrderStatus;
   createdAt: string;
   paid: boolean;
+  /**
+   * Delivered + Pay with "Customer refused an item" on this till, and the
+   * item's part refund not done yet (OrderSnapshot.refusedItem): the row
+   * says so. Absent otherwise.
+   */
+  refusedItemRefundOwed?: true;
 }

@@ -839,7 +839,15 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         ctx.db,
         // riderKeepsCents: what an outside rider keeps, as the window showed
         // it (absent for the shop's own riders); the repository checks it.
-        { orderId: payload.orderId, payment: payload.payment, riderKeepsCents: payload.riderKeepsCents },
+        // refusedItem: "Customer refused an item" — its part refund is owed
+        // until it is done (only a true counts; the repository refuses it on
+        // anything but an outside rider's Delivered + Pay).
+        {
+          orderId: payload.orderId,
+          payment: payload.payment,
+          riderKeepsCents: payload.riderKeepsCents,
+          ...(payload.refusedItem === true ? { refusedItem: true } : {}),
+        },
         { userId: s.id, deviceId: ctx.deviceId },
       ).drawerOpenId;
     } catch (e) {

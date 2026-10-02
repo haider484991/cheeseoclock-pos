@@ -6,7 +6,7 @@ import { Banknote, CheckCircle2, CreditCard, PackageX, Smartphone, X } from 'luc
 import { formatCents } from '@cheeseoclock/pos-domain';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { isOutsideRiderOrder, type OrderSnapshot, type PaymentMethod } from '@cheeseoclock/shared-types';
+import { isOutsideRiderOrder, riderKeepsNothingWhy, type OrderSnapshot, type PaymentMethod } from '@cheeseoclock/shared-types';
 import { parseRupeesToCents } from './boardLogic';
 import { quickCashRupees } from '../checkout/tenderAmounts';
 
@@ -24,7 +24,9 @@ export interface RefundItemNext {
  * The Refund box after "Customer refused an item" (order-edit finding #5):
  * 'Part of it', Cash, and why it opened. The rider was taken for the whole
  * food total; the part refund in Cash, with no cash handed out, leaves the
- * drawer at what he really brought.
+ * drawer at what he really brought. Until that refund is done the till keeps
+ * it as owed (Delivered + Pay sends refusedItem): the order and the Close
+ * shift box say so.
  */
 export const REFUSED_ITEM_REFUND = {
   startOn: 'partial',
@@ -95,17 +97,19 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
 
   const deliverMut = useMutation({
     // `refuse`: "Customer refused an item" as it was when Confirm was pressed.
-    mutationFn: (_v: { refuse: boolean }) => {
+    mutationFn: ({ refuse }: { refuse: boolean }) => {
       const referenceNo = method !== 'cash' ? reference.trim() || null : null;
       if (outside) {
         // As the window showed it; the till refuses if the order changed since.
         const riderKeepsCents = order.riderKeepsCents ?? 0;
         if (riderPaidOnly) return ipc.orders.riderPaid({ orderId: order.id, method, referenceNo, riderKeepsCents });
         // The full total, whatever the method: the till splits it and pays his share itself.
+        // A refused item: the till keeps its part refund as owed until it is done.
         return ipc.orders.markDelivered({
           orderId: order.id,
           payment: { method, amountCents: order.totalCents, tenderedCents: null, referenceNo },
           riderKeepsCents,
+          ...(refuse ? { refusedItem: true } : {}),
         });
       }
       const payment = alreadyPaid
@@ -236,7 +240,8 @@ export function MarkDeliveredDialog({ snap, onClose, onDone, riderPaidOnly = fal
                   ) : (
                     <>
                       <dt>Rider keeps</dt>
-                      <dd>nothing (no delivery charge)</dd>
+                      {/* The paper's own reason (riderKeepsNothingWhy): one trip, one fee, or no charge at all. */}
+                      <dd>nothing ({riderKeepsNothingWhy(snap)})</dd>
                     </>
                   )}
                 </div>

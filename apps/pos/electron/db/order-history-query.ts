@@ -228,3 +228,30 @@ export function methodsFromLegs(legs: string | null | undefined): PaymentMethod[
   }
   return [...byMethod.entries()].sort((a, b) => b[1] - a[1]).map(([m]) => m);
 }
+
+// --------------------------------------------- "Customer refused an item" --
+
+/**
+ * The key Delivered + Pay with "Customer refused an item" (order-edit #5)
+ * sets (true) in its audit after-image (action 'mark_delivered_with_payment',
+ * order-repo markOrderDelivered). Kept there, not in a column: no migration,
+ * written in the same transaction as the money, hash-chained so it can't be
+ * edited, and read back the way the add-on delivery's audit row is
+ * (order-repo recordedDeliveryArea). The audit log never syncs, so only the
+ * till that took the money knows — the till whose drawer is short by the item.
+ */
+export const REFUSED_ITEM_AUDIT_KEY = 'refusedItemRefundOwed';
+
+/** The order (`o`) was delivered with "Customer refused an item" on this till (idx_audit_entity). */
+export const REFUSED_ITEM_MARKED_SQL = `EXISTS (SELECT 1 FROM audit_log ra
+    WHERE ra.entity_type = 'orders' AND ra.entity_id = o.id AND ra.action = 'mark_delivered_with_payment'
+      AND json_valid(ra.after_json) AND json_extract(ra.after_json, '$.${REFUSED_ITEM_AUDIT_KEY}') = 1)`;
+
+/**
+ * ...and its part refund is not done yet: no refund at all on the order
+ * (either till's: refunds sync). Nothing could be refunded before Delivered +
+ * Pay (the order was not paid), so the first refund after it is the one that
+ * settles the refused item — whatever its amount, a part or all of it.
+ */
+export const REFUSED_ITEM_REFUND_OWED_SQL = `(${REFUSED_ITEM_MARKED_SQL}
+  AND NOT EXISTS (SELECT 1 FROM payments rp WHERE rp.order_id = o.id AND rp.amount_cents < 0 AND rp.deleted_at IS NULL))`;

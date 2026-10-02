@@ -12,13 +12,23 @@
  * name, number and amount is made up.
  */
 import { describe, expect, it } from 'vitest';
-import { deliveryBillOf, type Cents, type OrderNumber, type OrderSnapshot, type UUID } from '@cheeseoclock/shared-types';
+import {
+  deliveryBillOf,
+  paidAfterItLeft,
+  riderKeepsNothingWhy,
+  type Cents,
+  type OrderNumber,
+  type OrderSnapshot,
+  type UUID,
+} from '@cheeseoclock/shared-types';
 import { QR_MARKER, decodeEscPos } from './escpos-decode.js';
 import {
   receiptDocumentFor,
+  refundHandOver,
   renderReceipt,
   riderSettledWhileOut,
   type ReceiptBranding,
+  type RefundSlipInfo,
   type RenderReceiptOpts,
 } from './receipt-renderer.js';
 
@@ -752,5 +762,149 @@ describe('an outside rider on paper (Send out)', () => {
     const narrow = rowsOf(render(outside(), { copy: 'shop', width: 32 }));
     expect(narrow).toContain('RIDER GIVES THE SHOP Rs 4,515.00');
     expect(narrow).toContain('Outside rider keeps       200.00');
+  });
+});
+
+/**
+ * ONE RULE for "paid before it left" against "the rider paid while out"
+ * (v0.7.34, review fixes B): paid_at at or after dispatched_at, the same
+ * operator everywhere (shared-types paidAfterItLeft). Rider paid is clamped
+ * to dispatched_at, never before it, so the papers must read paid AT the
+ * minute it left as paid while out — the receipt after Delivered too.
+ */
+describe('one rule: paid at or after it left (paidAfterItLeft)', () => {
+  it('at or after: true; before, or a time missing or unreadable: false', () => {
+    const o = (paidAt: string | null, dispatchedAt: string | null) => ({ paidAt, dispatchedAt });
+    expect(paidAfterItLeft(o(iso(19, 55), iso(19, 50)))).toBe(true);
+    expect(paidAfterItLeft(o(iso(19, 50), iso(19, 50)))).toBe(true);
+    expect(paidAfterItLeft(o(iso(19, 49), iso(19, 50)))).toBe(false);
+    expect(paidAfterItLeft(o(null, iso(19, 50)))).toBe(false);
+    expect(paidAfterItLeft(o(iso(19, 55), null))).toBe(false);
+    expect(paidAfterItLeft(o('not a time', iso(19, 50)))).toBe(false);
+  });
+
+  it('Rider paid stamped at the minute it left, then Delivered: the receipt never says PREPAID, and every paper agrees', () => {
+    const atTheMinute = () => {
+      const s = riderPaid(outside());
+      s.order.paidAt = s.order.dispatchedAt;
+      for (const p of s.payments) p.paidAt = s.order.dispatchedAt!;
+      return s;
+    };
+    // While out: the customer still has the bill (paid while out).
+    expect(riderSettledWhileOut(atTheMinute().order)).toBe(true);
+    expect(receiptDocumentFor(atTheMinute())).toBe('bill');
+    // Delivered: a receipt, PAID - CASH — never PREPAID - RIDER COLLECTS NOTHING (the old strict > said it).
+    const after = rowsOf(render(delivered(atTheMinute())));
+    expect(after).toContain('PAID - CASH');
+    expect(after).not.toContain('PREPAID - RIDER COLLECTS NOTHING');
+    // The SHOP COPY says the rider paid the shop, not that the drawer paid him.
+    const shop = rowsOf(render(delivered(atTheMinute()), { copy: 'shop' }));
+    expect(shop.some((r) => /^RIDER PAID THE SHOP\s+Rs 4,515\.00$/.test(r))).toBe(true);
+    expect(shop).not.toContain('RIDER GIVES THE SHOP NOTHING');
+    // One minute before it left: prepaid, on every paper.
+    const before = customerPrepaid(outside());
+    before.order.paidAt = iso(19, 49);
+    expect(riderSettledWhileOut(before.order)).toBe(false);
+    expect(rowsOf(render(before))).toContain('PREPAID - RIDER COLLECTS NOTHING');
+    expect(rowsOf(render(before, { copy: 'shop' }))).toContain('RIDER GIVES THE SHOP NOTHING');
+  });
+});
+
+describe('he keeps nothing: one reason on paper and on screen (riderKeepsNothingWhy)', () => {
+  it('“already paid for this trip” while the bill has its charge; “no delivery charge” with none', () => {
+    const trip = outside(ownerExample(1500), 0);
+    expect(riderKeepsNothingWhy(trip)).toBe('already paid for this trip');
+    expect(rowsOf(render(trip, { copy: 'shop', width: 32 }))).toContain(`(${riderKeepsNothingWhy(trip)})`);
+    const none = outside(delivery([BIG_TWO(), FRIES()], { tax: 58_500 }), 0);
+    expect(riderKeepsNothingWhy(none)).toBe('no delivery charge');
+    expect(rowsOf(render(none, { copy: 'shop' }))).toContain(`Outside rider keeps nothing (${riderKeepsNothingWhy(none)})`);
+  });
+});
+
+/**
+ * AN OUTSIDE RIDER'S REFUND SLIPS (v0.7.34, review fixes B). The SHOP COPY
+ * of a cash refund is the shop's signed record of cash leaving the drawer:
+ * it says who took it. Back through the rider while he is out: "Given to the
+ * rider Rs X" / "He collects Rs X less", and he signs. The refused item
+ * settled in the same handover (Delivered + Pay with "Customer refused an
+ * item"): "No cash handed out" / "The rider brought Rs X less", and no
+ * signature. Every other refund slip prints as before ("Customer received").
+ */
+describe('refund slips of an outside rider’s order', () => {
+  const slip = (refundAt: string, amount: number, handedTo: RefundSlipInfo['handedTo']): RefundSlipInfo => ({
+    refundedAt: new Date(refundAt),
+    rows: [{ method: 'cash', amountCents: amount }],
+    reason: 'Test item refused',
+    refundedByName: 'Test Cashier',
+    approvedByName: 'Test Manager',
+    totalRefundedCents: amount,
+    ...(handedTo === undefined ? {} : { handedTo }),
+  });
+  /** Delivered + Pay at 20:10 with "Customer refused an item", then the item's Rs 345 back at 20:15. */
+  const refusedThenRefunded = () => {
+    const s = refundedWhileOut(paidOnDelivery(outside()), 34_500, 15);
+    s.refusedItem = { refundAt: iso(20, 15) };
+    return s;
+  };
+
+  it('refundHandOver: through the rider while out (part or all of it); none for the refused item; otherwise the customer', () => {
+    // Rider paid while out, Rs 300 back at 20:05, still out: through him.
+    expect(refundHandOver(refundedWhileOut(riderPaid(outside()), 30_000), iso(20, 5))).toBe('rider');
+    // ...by wallet too, and refunded in full while out (status refunded, never delivered).
+    const all = refundedWhileOut(riderPaid(outside(), 'wallet'), 471_500);
+    all.order.status = 'refunded';
+    expect(refundHandOver(all, iso(20, 5))).toBe('rider');
+    // A refund made while out, its slip printed after Delivered: still through him.
+    expect(refundHandOver(delivered(refundedWhileOut(riderPaid(outside()), 30_000)), iso(20, 5))).toBe('rider');
+    // After it was delivered (20:10): the customer.
+    expect(refundHandOver(refundedWhileOut(delivered(riderPaid(outside())), 30_000, 20), iso(20, 20))).toBeNull();
+    // Paid before it left (the customer prepaid): the customer, never the rider.
+    expect(refundHandOver(refundedWhileOut(customerPrepaid(outside()), 30_000), iso(20, 5))).toBeNull();
+    // Delivered + Pay at the door, refunded later with no refused item: the customer.
+    expect(refundHandOver(refundedWhileOut(paidOnDelivery(outside()), 30_000, 20), iso(20, 20))).toBeNull();
+    // The shop's own rider: the customer.
+    expect(refundHandOver(refundedWhileOut(riderPaid(ownerExample(1500)), 30_000), iso(20, 5))).toBeNull();
+    // The refused item: no cash for the refund that settled it; a later one goes to the customer.
+    const refused = refusedThenRefunded();
+    expect(refundHandOver(refused, iso(20, 15))).toBe('none');
+    refused.payments.push(payment('later', 'cash', -10_000, iso(20, 40)));
+    expect(refundHandOver(refused, iso(20, 40))).toBeNull();
+  });
+
+  it('back through the rider: the SHOP COPY says “Given to the rider Rs 300.00”, “He collects Rs 300.00 less”, and he signs', () => {
+    for (const width of [48, 32] as const) {
+      const s = refundedWhileOut(riderPaid(outside()), 30_000);
+      const bytes = render(s, { document: 'refund', refund: slip(iso(20, 5), 30_000, refundHandOver(s, iso(20, 5))), copy: 'shop', width });
+      const rows = rowsOf(bytes);
+      expect(rows).toContain('Given to the rider Rs 300.00');
+      expect(rows).toContain('He collects Rs 300.00 less');
+      expect(rows.some((r) => r.startsWith('Signature: ___'))).toBe(true);
+      expect(rows.join('\n')).not.toContain('Customer received');
+      for (const r of decodeEscPos(bytes)) expect(r.text.length * r.scale).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it('the refused item: “No cash handed out”, “The rider brought Rs 345.00 less”, and no signature line', () => {
+    for (const width of [48, 32] as const) {
+      const s = refusedThenRefunded();
+      const bytes = render(s, { document: 'refund', refund: slip(iso(20, 15), 34_500, refundHandOver(s, iso(20, 15))), copy: 'shop', width });
+      const rows = rowsOf(bytes);
+      expect(rows).toContain('No cash handed out');
+      expect(rows).toContain('The rider brought Rs 345.00 less');
+      expect(rows.join('\n')).not.toMatch(/Customer received|Given to the rider|Signature/);
+      for (const r of decodeEscPos(bytes)) expect(r.text.length * r.scale).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it('the customer’s copy, and every other refund slip, are byte for byte as before', () => {
+    const s = refundedWhileOut(riderPaid(outside()), 30_000);
+    // The customer copy never carries the hand-over words.
+    expect(render(s, { document: 'refund', refund: slip(iso(20, 5), 30_000, 'rider') })).toEqual(
+      render(s, { document: 'refund', refund: slip(iso(20, 5), 30_000, undefined) }),
+    );
+    // No hand-over (or null): "Customer received Rs 300.00" and the signature, exactly as before.
+    const before = render(s, { document: 'refund', refund: slip(iso(20, 5), 30_000, undefined), copy: 'shop' });
+    expect(render(s, { document: 'refund', refund: slip(iso(20, 5), 30_000, null), copy: 'shop' })).toEqual(before);
+    expect(rowsOf(before)).toContain('Customer received Rs 300.00');
   });
 });
