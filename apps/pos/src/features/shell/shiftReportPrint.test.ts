@@ -55,11 +55,15 @@ const {
   printShiftReport,
   printShiftReportAndSay,
   shiftReportApprovalNote,
+  shiftReportPrintNoteId,
   shiftReportRefusedToast,
   shiftReportToast,
+  SHIFT_REPORT_NOT_SAVED,
+  SHIFT_REPORT_SAVED_NO_PRINTER,
   SHIFT_REPORT_SENT,
   SHIFT_REPORT_SENT_DUPLICATE,
 } = await import('./shiftReportPrint');
+const { shiftReportFailedNoteId } = await import('../printing/failedPrintNote');
 const { NO_APPROVAL_MESSAGE } = await import('../printing/reprint');
 const { dismissShiftCloseOutcome, noteShiftReportFailed, showShiftCloseOutcome, useShiftCloseOutcome } = await import(
   './shiftCloseOutcome'
@@ -166,14 +170,18 @@ describe('shiftReportToast — what came out, or why not', () => {
     );
   });
 
-  it('no receipt printer set up: not told to check a printer that is not there', () => {
-    const t = shiftReportToast({
-      printed: false,
-      copy: 'reprint',
-      reprintNo: 1,
-      error: { code: 'no_printer', message: 'No receipt printer is set up on this till' },
-    });
-    expect(t).toEqual({ title: 'The shift report did not print', description: 'No receipt printer is set up on this till.', variant: 'error' });
+  it('(e2e fixes) the "No printer" setup: saved to its file, said in a note that goes by itself (never a red "did not print")', () => {
+    expect(SHIFT_REPORT_SAVED_NO_PRINTER).toBe('Shift report saved (no receipt printer set up).');
+    for (const r of [
+      { printed: true, copy: 'reprint', reprintNo: 2, error: null, toFile: true },
+      { printed: true, copy: 'original', reprintNo: 0, error: null, toFile: true },
+    ] as const) {
+      expect(shiftReportToast(r)).toEqual({ title: SHIFT_REPORT_SAVED_NO_PRINTER, variant: 'info' });
+    }
+    // The file could not be written: said so, with no printer to check.
+    const t = shiftReportToast({ printed: false, copy: 'reprint', reprintNo: 1, error: { code: 'mock_write_failed', message: 'EACCES' }, toFile: true });
+    expect(t).toEqual({ title: SHIFT_REPORT_NOT_SAVED, description: 'EACCES.', variant: 'error' });
+    expect(SHIFT_REPORT_NOT_SAVED).toBe('The shift report was not saved');
     expect(t.description).not.toMatch(/check/i);
   });
 
@@ -191,6 +199,18 @@ describe('shiftReportToast — what came out, or why not', () => {
     });
   });
 });
+
+/** The till's notes as printShiftReportAndSay is given them (useToast()): what it said, and what it closed. */
+function tillNotes() {
+  const said: Array<{ id: string; title: string; description?: string; variant: string }> = [];
+  const dismissed: string[] = [];
+  return {
+    said,
+    dismissed,
+    toast: (t: (typeof said)[number]) => void said.push(t),
+    dismiss: (id: string) => void dismissed.push(id),
+  };
+}
 
 describe('printShiftReportAndSay — print, say it, and tell the close result', () => {
   const closed = () =>
@@ -216,23 +236,66 @@ describe('printShiftReportAndSay — print, say it, and tell the close result', 
     closed();
     noteShiftReportFailed('shift-1', OFF);
     h.answers.push(original);
-    const said: unknown[] = [];
-    await expect(printShiftReportAndSay('shift-1', false, (t) => said.push(t))).resolves.toMatchObject({ copy: 'original' });
-    expect(said).toEqual([{ title: SHIFT_REPORT_SENT, variant: 'success' }]);
+    const notes = tillNotes();
+    await expect(printShiftReportAndSay('shift-1', false, notes)).resolves.toMatchObject({ copy: 'original' });
+    expect(notes.said).toEqual([{ id: shiftReportPrintNoteId('shift-1'), title: SHIFT_REPORT_SENT, variant: 'success' }]);
     expect(useShiftCloseOutcome.getState().outcome?.reportError).toBeNull();
   });
 
-  it('did not print on a printer: the result says why; on no printer it stays as it was', async () => {
+  it('did not print on a printer: the result says why; saved on "No printer": the amber line goes', async () => {
     signedIn();
     closed();
     h.answers.push(() => ({ printed: false, copy: 'reprint', reprintNo: 1, error: { code: 'offline', message: OFF } }));
-    await printShiftReportAndSay('shift-1', true, () => {});
+    await printShiftReportAndSay('shift-1', true, tillNotes());
     expect(useShiftCloseOutcome.getState().outcome?.reportError).toBe(OFF);
 
-    closed();
-    h.answers.push(() => ({ printed: false, copy: 'reprint', reprintNo: 1, error: { code: 'no_printer', message: 'No receipt printer is set up on this till' } }));
-    await printShiftReportAndSay('shift-1', true, () => {});
+    h.answers.push(() => ({ printed: true, copy: 'reprint', reprintNo: 1, error: null, toFile: true }));
+    const notes = tillNotes();
+    await printShiftReportAndSay('shift-1', true, notes);
     expect(useShiftCloseOutcome.getState().outcome?.reportError).toBeNull();
+    expect(notes.said).toEqual([{ id: shiftReportPrintNoteId('shift-1'), title: SHIFT_REPORT_SAVED_NO_PRINTER, variant: 'info' }]);
+  });
+
+  it('(e2e fixes) a later print that comes out closes that shift’s red "did not print" note (its id), and its own note takes the place of the last one', async () => {
+    signedIn();
+    closed();
+    noteShiftReportFailed('shift-1', OFF);
+    // A try that does not print: the till's note stays (its Try again still works), the print's note says why.
+    h.answers.push(() => ({ printed: false, copy: 'original', reprintNo: 0, error: { code: 'offline', message: OFF } }));
+    const failedTry = tillNotes();
+    await printShiftReportAndSay('shift-1', false, failedTry);
+    expect(failedTry.dismissed).toEqual([]);
+    expect(failedTry.said).toEqual([
+      {
+        id: shiftReportPrintNoteId('shift-1'),
+        title: 'The shift report did not print',
+        description: `${OFF} Check the receipt printer, then try again.`,
+        variant: 'error',
+      },
+    ]);
+    // Try again once the printer is back: it prints, and the red notes go.
+    h.answers.push(original);
+    const printed = tillNotes();
+    await printShiftReportAndSay('shift-1', false, printed);
+    expect(printed.dismissed).toEqual([shiftReportFailedNoteId('shift-1')]);
+    // Under the same id as the failed try's note: it takes its place on screen.
+    expect(printed.said).toEqual([{ id: shiftReportPrintNoteId('shift-1'), title: SHIFT_REPORT_SENT, variant: 'success' }]);
+    // A paper that may be in the tray, or a refusal, closes nothing.
+    h.answers.push(() => ({ printed: false, copy: 'reprint', reprintNo: 1, error: { code: 'io', message: OFF, maybeSent: true } }));
+    h.answers.push(needs(PIN_NEEDED));
+    h.secrets.push(null);
+    for (let i = 0; i < 2; i += 1) {
+      const n = tillNotes();
+      await printShiftReportAndSay('shift-1', true, n);
+      expect(n.dismissed).toEqual([]);
+      expect(n.said.map((t) => t.id)).toEqual([shiftReportPrintNoteId('shift-1')]);
+    }
+    // Another shift's print closes only its own.
+    h.answers.push(reprint(1));
+    const other = tillNotes();
+    await printShiftReportAndSay('shift-2', true, other);
+    expect(other.dismissed).toEqual([shiftReportFailedNoteId('shift-2')]);
+    expect(shiftReportPrintNoteId('shift-1')).not.toBe(shiftReportPrintNoteId('shift-2'));
   });
 
   it('refused or cancelled: a toast, never a throw, and the result is left as it was', async () => {
@@ -240,10 +303,12 @@ describe('printShiftReportAndSay — print, say it, and tell the close result', 
     closed();
     h.answers.push(needs(PIN_NEEDED));
     h.secrets.push(null);
-    const said: Array<{ title: string; description?: string }> = [];
+    const notes = tillNotes();
     const before = useShiftCloseOutcome.getState().outcome;
-    await expect(printShiftReportAndSay('shift-1', true, (t) => said.push(t))).resolves.toBeNull();
-    expect(said).toEqual([{ title: 'Shift report not printed', description: NO_APPROVAL_MESSAGE, variant: 'error' }]);
+    await expect(printShiftReportAndSay('shift-1', true, notes)).resolves.toBeNull();
+    expect(notes.said).toEqual([
+      { id: shiftReportPrintNoteId('shift-1'), title: 'Shift report not printed', description: NO_APPROVAL_MESSAGE, variant: 'error' },
+    ]);
     expect(useShiftCloseOutcome.getState().outcome).toBe(before);
   });
 
@@ -252,7 +317,7 @@ describe('printShiftReportAndSay — print, say it, and tell the close result', 
     closed();
     noteShiftReportFailed('shift-1', OFF);
     h.answers.push(reprint(1));
-    await printShiftReportAndSay('shift-2', true, () => {});
+    await printShiftReportAndSay('shift-2', true, tillNotes());
     expect(useShiftCloseOutcome.getState().outcome?.reportError).toBe(OFF);
   });
 });

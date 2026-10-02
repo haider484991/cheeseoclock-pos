@@ -20,6 +20,7 @@ interface Ask {
   focusNo: boolean;
   yesLabel: string;
   noLabel: string;
+  keyboardAfter: (() => void) | null;
   resolve: (ok: boolean) => void;
 }
 
@@ -30,6 +31,14 @@ export interface AskOptions {
   /** The buttons' words, e.g. "Pay anyway" / "Go back". */
   yesLabel?: string;
   noLabel?: string;
+  /**
+   * Where the keyboard goes once the question has gone, however it was
+   * answered: a button, Enter, Escape or a tap outside it. It runs after
+   * the window is done with the tap: a tap on the dimmed area puts the
+   * keyboard on the page as the question goes (Chromium), so putting it
+   * back as the answer comes in did not hold. Not given: Radix's own way.
+   */
+  keyboardAfter?: () => void;
 }
 
 const useConfirmStore = create<{ ask: Ask | null }>(() => ({ ask: null }));
@@ -59,6 +68,7 @@ export function askConfirm(message: string, opts: AskOptions = {}): Promise<bool
         focusNo: confirmFocus(message, opts) === 'no',
         yesLabel: opts.yesLabel ?? 'Yes',
         noLabel: opts.noLabel ?? 'No',
+        keyboardAfter: opts.keyboardAfter ?? null,
         resolve,
       },
     });
@@ -96,6 +106,13 @@ export function ConfirmHost() {
             e.preventDefault();
             const root = e.currentTarget as HTMLElement;
             root.querySelector<HTMLButtonElement>(ask.focusNo ? '[data-answer="no"]' : '[data-answer="yes"]')?.focus();
+          }}
+          // The question has gone (every answer, a tap outside too): the asker says where the keyboard goes.
+          onCloseAutoFocus={(e) => {
+            const after = ask.keyboardAfter;
+            if (!after) return;
+            e.preventDefault();
+            after();
           }}
         >
           <Dialog.Title className="font-semibold">{title}</Dialog.Title>

@@ -17,9 +17,10 @@
  *       throws — the close resolves 'printing' and the shift is closed; the
  *       till windows get one 'printer:failed' naming the shift.
  *   (3) No paper: printing at close switched off ('off'); the "No printer"
- *       setup ('no_printer': the report goes to its file only, nothing on
- *       record, no failure note); no report saved ('not_made'); the print
- *       settings unreadable ('not_made', never 'Close shift failed').
+ *       setup ('no_printer': the report goes to its file, on record as
+ *       saved there (toFile), a failure note only when the file cannot be
+ *       written); no report saved ('not_made'); the print settings
+ *       unreadable ('not_made', never 'Close shift failed').
  *   (4) The count stays blind: the close check and the count's drawer pulse
  *       print no report, a refused close prints nothing, a manager's PIN
  *       close gets no expected cash and no summary but the FULL paper; the
@@ -39,8 +40,8 @@
  *   (6) Try again prints the ORIGINAL after a failed one, a DUPLICATE once
  *       it came out or may have; a reprint that does not print says why and
  *       leaves its number to the next; two presses at once print #1 and #2;
- *       the "No printer" setup writes the file, puts nothing on record and
- *       says so.
+ *       the "No printer" setup writes the file, puts it on record and says
+ *       so (toFile), so its reprints count #1, #2 like a printer's.
  *   (7) Frozen: after a refund and a deleted test order, a reprint's figures
  *       are the original's to the character; only the DUPLICATE band and the
  *       footer differ, and the footer notes the deleted cash.
@@ -536,7 +537,7 @@ live('(3) no paper', () => {
     expect(parseShiftReportJson(String(storedShift(shiftId)['close_report_json']))).toHaveProperty('report');
   });
 
-  it('the "No printer" setup: no_printer; the report goes to its file only — no failure note and nothing on record, even when the file cannot be written', async () => {
+  it('the "No printer" setup: no_printer; the report goes to its file and on record as saved there (e2e fixes: the file printer counts as printed); a file that cannot be written is told like a paper', async () => {
     const { DEFAULT_RECEIPT_CONFIG } = await import('../../services/printer-config.js');
     await usePrinter(DEFAULT_RECEIPT_CONFIG);
     const shiftId = await openShift();
@@ -548,16 +549,33 @@ live('(3) no paper', () => {
     // To the "No printer" setup's file (the mock printer), like every paper there.
     expect(papers()[0]!.config.network?.host).toBe('mock');
     expect(text).toContain('ORDERS (1)');
-    expect(printAudits(shiftId)).toEqual([]);
+    // On record like a paper, and said to be the file: the next one is Reprint #1.
+    await vi.waitFor(() => expect(printAudits(shiftId)).toHaveLength(1));
+    expect(printAudits(shiftId)[0]).toEqual({
+      actor: 'u_mgr',
+      shiftId,
+      copy: 'original',
+      reprintNo: 0,
+      sections: ALL_SECTIONS,
+      items: 'items',
+      width: 48,
+      outcome: 'ok',
+      errorCode: null,
+      byUserId: 'u_mgr',
+      approvedByUserId: null,
+      toFile: true,
+    });
     expect(failedEvents()).toEqual([]);
 
-    // The next close's file cannot be written: still no failure note, nothing on record.
+    // The next close's file cannot be written: on record as failed, and the till windows are told, naming the shift.
     const next = await openShift();
     h.script.push(() => ({ ok: false, durationMs: 1, error: { code: 'mock_write_failed', message: 'EACCES', recoverable: false } }));
     expect((await close(next, MANAGER)).reportPrint).toBe('no_printer');
     await settledPapers(2);
-    expect(printAudits(next)).toEqual([]);
-    expect(failedEvents()).toEqual([]);
+    await vi.waitFor(() => expect(failedEvents()).toHaveLength(1));
+    expect(failedEvents()[0]!.payload).toMatchObject({ jobKind: 'shift_report', shiftId: next, error: { code: 'mock_write_failed', message: 'EACCES' } });
+    expect(printAudits(next)).toEqual([expect.objectContaining({ copy: 'original', outcome: 'failed', errorCode: 'mock_write_failed', toFile: true })]);
+    expect(verifyAuditChain(auditRows()).ok).toBe(true);
   });
 
   it('no report saved (the maker threw): not_made; the shift is closed, nothing is sent', async () => {
@@ -999,24 +1017,43 @@ live('(6) Try again and the printer’s answer', () => {
     expect(footerOf(second!).at(-1)).toBe('** DUPLICATE - Reprint #2 **');
   });
 
-  it('the "No printer" setup: the paper goes to its file, nothing is put on record, and the reply says no printer', async () => {
+  it('(e2e fixes) the "No printer" setup: the paper goes to its file and on record, the reply says saved (toFile), and the reprints count up: #1, then #2', async () => {
     const { DEFAULT_RECEIPT_CONFIG } = await import('../../services/printer-config.js');
     await usePrinter(DEFAULT_RECEIPT_CONFIG);
     const shiftId = await openShift();
     expect((await close(shiftId, MANAGER)).reportPrint).toBe('no_printer');
     await settledPapers(1);
+    await vi.waitFor(() => expect(printAudits(shiftId)).toHaveLength(1));
 
+    // e2e v0.7.35: every reprint here was 'Reprint #1' (nothing went on record), each with a red "did not print".
+    expect(await printAgain(shiftId, MANAGER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 1, error: null, toFile: true });
+    expect(await printAgain(shiftId, MANAGER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 2, error: null, toFile: true });
+    const [, first, second] = await settledPapers(3);
+    expect(papers().map((p) => p.config.network?.host)).toEqual(['mock', 'mock', 'mock']);
+    expect(footerOf(first!).at(-1)).toBe('** DUPLICATE - Reprint #1 **');
+    expect(footerOf(second!).at(-1)).toBe('** DUPLICATE - Reprint #2 **');
+    expect(printAudits(shiftId).map((r) => [r['copy'], r['reprintNo'], r['outcome'], r['toFile']])).toEqual([
+      ['original', 0, 'ok', true],
+      ['reprint', 1, 'ok', true],
+      ['reprint', 2, 'ok', true],
+    ]);
+    expect(failedEvents()).toEqual([]);
+
+    // A file that cannot be written: not saved, said why, and its number left to the next.
+    h.script.push(() => ({ ok: false, durationMs: 1, error: { code: 'mock_write_failed', message: 'EACCES', recoverable: false } }));
     expect(await printAgain(shiftId, MANAGER)).toEqual({
       printed: false,
       copy: 'reprint',
-      reprintNo: 1,
-      error: { code: 'no_printer', message: 'No receipt printer is set up on this till' },
+      reprintNo: 3,
+      error: { code: 'mock_write_failed', message: 'EACCES' },
+      toFile: true,
     });
-    const [, file] = await settledPapers(2);
-    expect(papers()[1]!.config.network?.host).toBe('mock');
-    expect(footerOf(file!).at(-1)).toBe('** DUPLICATE - Reprint #1 **');
-    expect(printAudits(shiftId)).toEqual([]);
-    expect(failedEvents()).toEqual([]);
+    expect(await printAgain(shiftId, MANAGER)).toMatchObject({ printed: true, reprintNo: 3, toFile: true });
+
+    // A real printer again: no toFile, as before.
+    await usePrinter(PRINTER);
+    expect(await printAgain(shiftId, MANAGER)).toEqual({ printed: true, copy: 'reprint', reprintNo: 4, error: null });
+    expect(printAudits(shiftId).at(-1)).not.toHaveProperty('toFile');
   });
 });
 

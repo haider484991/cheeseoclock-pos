@@ -106,13 +106,13 @@ export function canPrintShiftReport(s: Pick<ReportShiftLine, 'closedAt' | 'hasCl
  * says what came out, or why not.
  */
 function PrintShiftReportButton({ shiftId }: { shiftId: string }) {
-  const { toast } = useToast();
+  const notes = useToast();
   const [busy, setBusy] = useState(false);
   const press = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      await printShiftReportAndSay(shiftId, true, toast);
+      await printShiftReportAndSay(shiftId, true, notes);
     } finally {
       setBusy(false);
     }

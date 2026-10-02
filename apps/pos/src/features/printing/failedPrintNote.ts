@@ -15,13 +15,26 @@ import type { PrinterFailedPayload } from '../../ipc/client';
  * The shift report (v0.7.35) has no job to send again: its note's "Try
  * again" (key 'shift-report:<shiftId>') asks the till to print that shift's
  * report again, and the till prints the ORIGINAL while none came out. It
- * stays until closed, so it still works after the close result is gone.
+ * stays until closed, so it still works after the close result is gone —
+ * or until that shift's report prints after all: the note has its own id
+ * (shiftReportFailedNoteId), and the print that came out closes it.
  */
 export interface FailedPrintNote {
+  /** The note's own id (the shift report's: shiftReportFailedNoteId); none for the others. */
+  id?: string;
   title: string;
   description: string;
   variant: ToastVariant;
   action?: ToastAction;
+}
+
+/**
+ * The id of the note that a shift's report did not print: one note per
+ * shift (a later failure replaces it), closed once a print of that shift's
+ * report comes out (printShiftReportAndSay).
+ */
+export function shiftReportFailedNoteId(shiftId: string): string {
+  return `shift-report-failed:${shiftId}`;
 }
 
 function kindWords(jobKind: string): string {
@@ -51,6 +64,7 @@ function shiftReportNote(payload: PrinterFailedPayload, tryShiftReportAgain?: (s
   const canTry = !!shiftId && !!tryShiftReportAgain;
   const why = sentence(payload.error?.message || 'Could not print the shift report');
   return {
+    ...(shiftId ? { id: shiftReportFailedNoteId(shiftId) } : {}),
     title: SHIFT_REPORT_FAILED_TITLE,
     description: `${why} ${canTry ? SHIFT_REPORT_FAILED_NEXT : SHIFT_REPORT_FAILED_OWNER}`,
     // It stays until closed: the close result may be gone by then.

@@ -250,6 +250,8 @@ function OrderAlertsInner() {
               description: `The website showed ${formatCents(p.totalMismatch.webTotalCents)}, the till bills ${formatCents(p.totalMismatch.tillTotalCents)}. Call ${p.customerName || 'the customer'} before it goes out — and publish the menu again (Settings → Online orders).`,
               variant: 'warning',
               duration: Infinity,
+              // The shop's order, not the last login's: it stays for whoever signs in next.
+              keepOnLogout: true,
             });
           }
         }),
@@ -277,6 +279,7 @@ function OrderAlertsInner() {
             description: "The till is trying again by itself. Don't take it by phone yet — the till will say so if it does not come in.",
             variant: 'warning',
             duration: 20_000,
+            keepOnLogout: true,
           });
         }),
       ),
@@ -399,6 +402,7 @@ function OrderAlertsInner() {
             description: boardUnusedText(timing),
             variant: 'info',
             duration: 15_000,
+            keepOnLogout: true,
           });
         }
         return;
@@ -411,7 +415,7 @@ function OrderAlertsInner() {
         player.play('waiting', s.volume);
       }
       const text = describeReminders(due, timing);
-      toast({ title: text.title, description: text.description, variant: 'warning', duration: 15_000 });
+      toast({ title: text.title, description: text.description, variant: 'warning', duration: 15_000, keepOnLogout: true });
     });
     const check = async () => {
       // The saved sounds are not in yet: nothing is marked, the next round has it.

@@ -1,11 +1,28 @@
 import * as RadixToast from '@radix-ui/react-toast';
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cn } from '@cheeseoclock/ui';
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
-import { addToast, toastDuration, visibleToasts, type ToastAction, type ToastItem, type ToastVariant } from './toastQueue';
+import { useSessionStore } from '../../stores/sessionStore';
+import {
+  addToast,
+  removeToast,
+  signedInPersonChanged,
+  toastDuration,
+  toastsAfterSignOut,
+  visibleToasts,
+  type ToastAction,
+  type ToastItem,
+  type ToastVariant,
+} from './toastQueue';
 
 interface ToastContextValue {
   toast: (input: {
+    /**
+     * The note's own id: a later note with the same id replaces it, and
+     * dismiss(id) closes it (a shift report that printed in the end takes
+     * its "did not print" away). Not given: a fresh one.
+     */
+    id?: string;
     title: string;
     description?: string;
     variant?: ToastVariant;
@@ -16,7 +33,11 @@ interface ToastContextValue {
     duration?: number;
     /** One button on the note; pressing it closes the note. */
     action?: ToastAction;
+    /** Stays up when the person signed in changes: a note about the shop (a website order), not the login. */
+    keepOnLogout?: boolean;
   }) => void;
+  /** Close the note with this id, if it is still up. */
+  dismiss: (id: string) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -50,33 +71,53 @@ const ICON_TONE: Record<ToastVariant, string> = {
 };
 
 /**
+ * Calls `clear` each time the person signed in changes (a log-out, the idle
+ * lock, a hand-back, someone else signing in); returns the stop.
+ */
+export function onSignedInPersonChange(clear: () => void): () => void {
+  return useSessionStore.subscribe((state, before) => {
+    if (signedInPersonChanged(before.user, state.user)) clear();
+  });
+}
+
+/**
  * Pop-up notes. They sit at the top centre, over the empty middle of the top
  * bar — never over the order ticket's Send / Pay / Confirm buttons or the menu
  * grid — and only the cards themselves take clicks, so the space around them
  * stays usable. Every note has a close (X) button and can be swiped up; a
- * success goes by itself in two seconds, an error stays until closed.
+ * success goes by itself in two seconds, an error stays until closed — or
+ * until the person signed in changes: the notes are that login's, and the
+ * next one is not shown them (only a note kept on purpose stays).
  */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
 
-  const toast = useCallback<ToastContextValue['toast']>(({ title, description, variant = 'info', duration, action }) => {
-    setItems((prev) =>
-      addToast(prev, {
-        id: crypto.randomUUID(),
-        title,
-        description,
-        variant,
-        duration: toastDuration(variant, duration),
-        ...(action ? { action } : {}),
-      }),
-    );
-  }, []);
+  const toast = useCallback<ToastContextValue['toast']>(
+    ({ id, title, description, variant = 'info', duration, action, keepOnLogout }) => {
+      setItems((prev) =>
+        addToast(prev, {
+          id: id ?? crypto.randomUUID(),
+          instance: crypto.randomUUID(),
+          title,
+          description,
+          variant,
+          duration: toastDuration(variant, duration),
+          ...(action ? { action } : {}),
+          ...(keepOnLogout ? { keepOnLogout: true } : {}),
+        }),
+      );
+    },
+    [],
+  );
 
   const dismiss = useCallback((id: string) => {
-    setItems((prev) => prev.filter((t) => t.id !== id));
+    setItems((prev) => removeToast(prev, id));
   }, []);
 
-  const value = useMemo(() => ({ toast }), [toast]);
+  // Someone else at the till (or nobody): the last login's notes go with it.
+  useEffect(() => onSignedInPersonChange(() => setItems(toastsAfterSignOut)), []);
+
+  const value = useMemo(() => ({ toast, dismiss }), [toast, dismiss]);
   // ONE note on screen, inside the top bar: a stack reached down over the
   // order-type buttons (owner: notes that "can't be X'd out" slowed confirming).
   // The rest wait behind it, newest first, and the card says how many.
@@ -92,7 +133,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           const moreBehind = i === 0 && waiting > 0 ? waiting : 0;
           return (
             <RadixToast.Root
-              key={t.id}
+              key={t.instance ?? t.id}
               duration={t.duration}
               type={t.variant === 'error' || t.variant === 'warning' ? 'foreground' : 'background'}
               onOpenChange={(open) => !open && dismiss(t.id)}

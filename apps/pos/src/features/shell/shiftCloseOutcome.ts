@@ -133,9 +133,9 @@ export function noteShiftReportFailed(shiftId: string, message: string): void {
 
 /**
  * A shift report printed again from the result or from the note (Try
- * again, Print again, Print it): once a paper came out the amber line goes;
- * one that did not come out on a printer says why. The "No printer" setup
- * prints nothing either way, and its line already says so.
+ * again, Print again, Print it): once a paper came out (or, on the "No
+ * printer" setup, was saved to its file) the amber line goes; one that did
+ * not come out says why.
  */
 export function noteShiftReportPrinted(shiftId: string, r: ShiftReportPrintResult): void {
   const { outcome } = useShiftCloseOutcome.getState();
@@ -144,9 +144,7 @@ export function noteShiftReportPrinted(shiftId: string, r: ShiftReportPrintResul
     if (outcome.reportError !== null) useShiftCloseOutcome.setState({ outcome: { ...outcome, reportError: null } });
     return;
   }
-  if (r.error && r.error.code !== 'no_printer') {
-    useShiftCloseOutcome.setState({ outcome: { ...outcome, reportError: r.error.message } });
-  }
+  if (r.error) useShiftCloseOutcome.setState({ outcome: { ...outcome, reportError: r.error.message } });
 }
 
 /** "Done": the result goes. */

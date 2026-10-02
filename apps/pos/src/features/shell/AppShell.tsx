@@ -18,7 +18,7 @@ export function AppShell() {
   const user = useSessionStore((s) => s.user);
   const navigate = useNavigate();
   const isCheckout = useLocation().pathname === '/checkout';
-  const { toast } = useToast();
+  const { toast, dismiss } = useToast();
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -54,14 +54,15 @@ export function AppShell() {
     return onPrinterFailed((payload) => {
       // The shift report did not print (v0.7.35; the close is saved): the
       // close result says so with Try again, and so does a note that stays
-      // until closed. Try again prints the original while none came out.
+      // until closed — or until a print of that shift's report comes out
+      // (the note's id). Try again prints the original while none came out.
       if (payload.jobKind === 'shift_report') {
         if (payload.shiftId) noteShiftReportFailed(payload.shiftId, payload.error?.message || 'The printer did not take it');
         toast(
           failedPrintNote(
             payload,
             () => {},
-            (shiftId) => void printShiftReportAndSay(shiftId, false, toast),
+            (shiftId) => void printShiftReportAndSay(shiftId, false, { toast, dismiss }),
           ),
         );
         return;
@@ -105,7 +106,7 @@ export function AppShell() {
         }),
       );
     });
-  }, [toast]);
+  }, [toast, dismiss]);
 
   // An order just took an ingredient below its low-stock level: say so once,
   // while there is still time to send someone out for it.

@@ -10,7 +10,16 @@
 export type ToastVariant = 'info' | 'success' | 'warning' | 'error';
 
 export interface ToastItem {
+  /**
+   * The note's id: the caller's own (a note with the same id replaces it, and
+   * closing that id closes it), or a fresh one. Never two notes with one id.
+   */
   id: string;
+  /**
+   * This showing of the note (the screen's key; the id when not set): a note
+   * replaced under the same id comes up afresh, with its own timer.
+   */
+  instance?: string;
   title: string;
   description?: string;
   variant: ToastVariant;
@@ -18,6 +27,11 @@ export interface ToastItem {
   duration: number;
   /** One button on the note ("Try again" on a failed print); pressing it closes the note. */
   action?: ToastAction;
+  /**
+   * Stays when the person signed in changes (toastsAfterSignOut): a note about
+   * the shop (a website order), not about what the last login did.
+   */
+  keepOnLogout?: boolean;
 }
 
 export interface ToastAction {
@@ -72,15 +86,16 @@ function sameMessage(a: ToastItem, b: ToastItem): boolean {
 }
 
 /**
- * Add a note to the list. The same message again replaces the old copy (its
- * timer starts over) instead of stacking — unless the two carry buttons for
- * different things (two failed prints with the same printer error: each keeps
- * its own "Try again"). Over the limit, the oldest note
- * that closes by itself goes first; notes that stay until closed are kept
- * (the screen shows the newest few and says how many more are waiting).
+ * Add a note to the list. A note with the same id is replaced (a shift
+ * report that printed in the end replaces "did not print"); so is the same
+ * message again (its timer starts over) instead of stacking — unless the two
+ * carry buttons for different things (two failed prints with the same
+ * printer error: each keeps its own "Try again"). Over the limit, the oldest
+ * note that closes by itself goes first; notes that stay until closed are
+ * kept (the screen shows the newest few and says how many more are waiting).
  */
 export function addToast(list: ReadonlyArray<ToastItem>, item: ToastItem, max = MAX_VISIBLE_TOASTS): ToastItem[] {
-  const next = list.filter((t) => !sameMessage(t, item));
+  const next = list.filter((t) => t.id !== item.id && !sameMessage(t, item));
   next.push(item);
   while (next.length > max) {
     const i = next.findIndex((t) => t.duration !== Infinity);
@@ -94,4 +109,28 @@ export function addToast(list: ReadonlyArray<ToastItem>, item: ToastItem, max = 
 export function visibleToasts(list: ReadonlyArray<ToastItem>, max = MAX_VISIBLE_TOASTS): { shown: ToastItem[]; waiting: number } {
   const shown = list.slice(Math.max(0, list.length - max));
   return { shown, waiting: list.length - shown.length };
+}
+
+/** The note with this id closed (nothing when there is none). */
+export function removeToast(list: ReadonlyArray<ToastItem>, id: string): ToastItem[] {
+  return list.filter((t) => t.id !== id);
+}
+
+/**
+ * The person signed in changed: a log-out, the idle lock, a hand-back to
+ * the cashier, or someone else signing in. The same login read again (the
+ * till's 30-second check) is not a change.
+ */
+export function signedInPersonChanged(before: { id: string } | null, after: { id: string } | null): boolean {
+  return before !== null && (after === null || after.id !== before.id);
+}
+
+/**
+ * The notes left once the person signed in changed (e2e v0.7.35: the
+ * owner's "The shift report did not print" stayed up for the cashier who
+ * signed in next, over the header's Open shift): only the shop's own,
+ * kept on purpose (keepOnLogout, a website order's note).
+ */
+export function toastsAfterSignOut(list: ReadonlyArray<ToastItem>): ToastItem[] {
+  return list.filter((t) => t.keepOnLogout === true);
 }

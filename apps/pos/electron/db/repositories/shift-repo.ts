@@ -666,6 +666,11 @@ export interface ShiftReportPrintInput {
   byUserId: string | null;
   /** The manager whose PIN or password allowed it on a cashier's login; null otherwise. */
   approvedByUserId: string | null;
+  /**
+   * The "No printer" setup: saved to its file, not printed on paper. On
+   * record all the same (it counts like a paper), and said so in the row.
+   */
+  toFile?: boolean;
 }
 
 const PRINT_OUTCOMES: readonly ShiftReportPrintOutcome[] = ['ok', 'maybe', 'failed'];
@@ -704,6 +709,7 @@ export function recordShiftReportPrint(db: AppDatabase, input: ShiftReportPrintI
     errorCode: input.outcome === 'ok' ? null : (input.errorCode ?? null),
     byUserId: input.byUserId,
     approvedByUserId: input.approvedByUserId,
+    ...(input.toFile === true ? { toFile: true } : {}),
   };
   db.transaction(() => {
     writeAudit(db, {

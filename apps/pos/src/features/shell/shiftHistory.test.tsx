@@ -30,7 +30,8 @@ import { periodFor } from '../reports/dateRange';
 import { canPrintShiftReport, PRINT_SHIFT_REPORT, shiftDrawerBanner, shiftHistoryNote, TeamLeakageTab } from '../reports/tabs/TeamLeakageTab';
 import { shiftCarryOverText, shiftDetailLines } from '../reports/reportFormat';
 import { ShiftWidget } from './ShiftWidget';
-import { SHIFT_REPORT_SENT_DUPLICATE } from './shiftReportPrint';
+import { SHIFT_REPORT_SENT_DUPLICATE, shiftReportPrintNoteId } from './shiftReportPrint';
+import { shiftReportFailedNoteId } from '../printing/failedPrintNote';
 import { IpcError } from '../../ipc/client';
 
 // The shift report printed again from Shift history (v0.7.35): what was
@@ -41,7 +42,9 @@ const printing = vi.hoisted(() => ({
   reply: null as unknown,
   refuse: null as Error | null,
   buttons: [] as Array<{ words: string; tap: (() => void) | undefined; disabled: boolean; className: string }>,
-  toasts: [] as Array<{ title: string; description?: string; variant?: string }>,
+  toasts: [] as Array<{ id?: string; title: string; description?: string; variant?: string }>,
+  /** The notes closed by their id. */
+  dismissed: [] as string[],
 }));
 vi.mock('../../ipc/client', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../ipc/client')>();
@@ -77,10 +80,13 @@ vi.mock('@cheeseoclock/ui', async (importOriginal) => {
 });
 vi.mock('../../components/toast/ToastProvider', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../components/toast/ToastProvider')>();
-  const toast = (t: { title: string; description?: string; variant?: string }) => {
+  const toast = (t: { id?: string; title: string; description?: string; variant?: string }) => {
     printing.toasts.push(t);
   };
-  return { ...real, useToast: () => ({ toast }) };
+  const dismiss = (id: string) => {
+    printing.dismissed.push(id);
+  };
+  return { ...real, useToast: () => ({ toast, dismiss }) };
 });
 
 function signIn(role: AuthenticatedUser['role']) {
@@ -504,6 +510,7 @@ describe('Shift history: Print shift report (v0.7.35)', () => {
     printing.refuse = null;
     printing.buttons.length = 0;
     printing.toasts.length = 0;
+    printing.dismissed.length = 0;
   });
 
   it('is on a closed shift whose close saved its report, beside Drawer log; not on one closed before 0.7.35, nor one still open', () => {
@@ -565,8 +572,10 @@ describe('Shift history: Print shift report (v0.7.35)', () => {
     buttons[1]!.tap!();
     await vi.waitFor(() => expect(printing.toasts).toHaveLength(1));
     expect(printing.requests).toEqual([{ shiftId: 's2', again: true }]);
-    expect(printing.toasts[0]).toEqual({ title: SHIFT_REPORT_SENT_DUPLICATE, variant: 'success' });
+    expect(printing.toasts[0]).toEqual({ id: shiftReportPrintNoteId('s2'), title: SHIFT_REPORT_SENT_DUPLICATE, variant: 'success' });
     expect(SHIFT_REPORT_SENT_DUPLICATE).toBe('Shift report sent to the printer - it says DUPLICATE.');
+    // It came out: the red "did not print" note of that shift, if up, is closed (e2e v0.7.35).
+    expect(printing.dismissed).toEqual([shiftReportFailedNoteId('s2')]);
 
     buttons[0]!.tap!();
     await vi.waitFor(() => expect(printing.toasts).toHaveLength(2));
@@ -580,18 +589,20 @@ describe('Shift history: Print shift report (v0.7.35)', () => {
     signIn('admin');
     const shifts = [reported('s3', '2026-09-25T07:00:00.000Z', '2026-09-25T20:00:00.000Z')];
 
-    // No receipt printer on this till: not a printer to check.
-    printing.reply = { printed: false, copy: 'reprint', reprintNo: 0, error: { code: 'no_printer', message: 'No receipt printer is set up on this till' } };
+    // No receipt printer on this till: saved to its file, said in a note that goes by itself (e2e v0.7.35: a sticky red one).
+    printing.reply = { printed: true, copy: 'reprint', reprintNo: 4, error: null, toFile: true };
     render(<TeamLeakageTab now={NOW} data={team(shifts)} />);
     printButtons()[0]!.tap!();
     await vi.waitFor(() => expect(printing.toasts).toHaveLength(1));
-    expect(printing.toasts[0]).toEqual({ title: 'The shift report did not print', description: 'No receipt printer is set up on this till.', variant: 'error' });
+    expect(printing.toasts[0]).toEqual({ id: shiftReportPrintNoteId('s3'), title: 'Shift report saved (no receipt printer set up).', variant: 'info' });
+    expect(printing.dismissed).toEqual([shiftReportFailedNoteId('s3')]);
 
     // The printer's lid is open: check it, then try again.
     printing.reply = { printed: false, copy: 'reprint', reprintNo: 3, error: { code: 'printer_error', message: 'The printer lid is open' } };
     printButtons()[0]!.tap!();
     await vi.waitFor(() => expect(printing.toasts).toHaveLength(2));
     expect(printing.toasts[1]).toEqual({
+      id: shiftReportPrintNoteId('s3'),
       title: 'The shift report did not print',
       description: 'The printer lid is open. Check the receipt printer, then try again.',
       variant: 'error',
@@ -602,10 +613,13 @@ describe('Shift history: Print shift report (v0.7.35)', () => {
     printButtons()[0]!.tap!();
     await vi.waitFor(() => expect(printing.toasts).toHaveLength(3));
     expect(printing.toasts[2]).toEqual({
+      id: shiftReportPrintNoteId('s3'),
       title: 'Shift report not printed',
       description: 'This shift report was made by a newer till - update this till to print it',
       variant: 'error',
     });
+    // Neither closes the till's "did not print" note: only the saved one above did.
+    expect(printing.dismissed).toEqual([shiftReportFailedNoteId('s3')]);
     expect(printing.requests).toEqual([
       { shiftId: 's3', again: true },
       { shiftId: 's3', again: true },

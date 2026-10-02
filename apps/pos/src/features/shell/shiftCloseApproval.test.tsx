@@ -94,6 +94,7 @@ import {
   type ShiftCloseOutcome,
 } from './shiftCloseOutcome';
 import { CLOSE_PAUSES_WEBSITE_NOTE, CLOSE_PAUSES_WEBSITE_TEXT } from './webOrdersPause';
+import { shiftReportFailedNoteId } from '../printing/failedPrintNote';
 
 // What the last dialog was given to close itself with (Root's onOpenChange,
 // Content's Escape and outside-tap handlers): Radix calls these on Escape
@@ -225,7 +226,9 @@ vi.mock('zustand', async (importOriginal) => {
 // Each Button as rendered, with its words and its tap; and every toast.
 const seen = vi.hoisted(() => ({
   buttons: [] as Array<{ words: string; tap: (() => void) | undefined; disabled: boolean }>,
-  toasts: [] as Array<{ title: string; description?: string; variant?: string }>,
+  toasts: [] as Array<{ id?: string; title: string; description?: string; variant?: string }>,
+  /** The notes closed by their id. */
+  dismissed: [] as string[],
 }));
 vi.mock('@cheeseoclock/ui', async (importOriginal) => {
   const ui = await importOriginal<typeof import('@cheeseoclock/ui')>();
@@ -252,10 +255,13 @@ vi.mock('@cheeseoclock/ui', async (importOriginal) => {
 });
 vi.mock('../../components/toast/ToastProvider', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../components/toast/ToastProvider')>();
-  const toast = (t: { title: string; description?: string; variant?: string }) => {
+  const toast = (t: { id?: string; title: string; description?: string; variant?: string }) => {
     seen.toasts.push(t);
   };
-  return { ...real, useToast: () => ({ toast }) };
+  const dismiss = (id: string) => {
+    seen.dismissed.push(id);
+  };
+  return { ...real, useToast: () => ({ toast, dismiss }) };
 });
 
 /** The last rendered Button with these words. */
@@ -328,6 +334,7 @@ afterEach(() => {
   asked.printRequests.length = 0;
   seen.buttons.length = 0;
   seen.toasts.length = 0;
+  seen.dismissed.length = 0;
   confirmAsk.calls.length = 0;
   confirmAsk.answer = false;
   counter.props = null;
@@ -897,7 +904,9 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     onClose.mockClear();
     confirmAsk.answer = false;
     await leaveCloseShift({ saving: false, started: true, onClose });
-    expect(confirmAsk.calls).toEqual([[STOP_CLOSING_QUESTION, { safeDefault: true, yesLabel: 'Stop', noLabel: 'Keep counting' }]]);
+    expect(confirmAsk.calls).toEqual([
+      [STOP_CLOSING_QUESTION, { safeDefault: true, yesLabel: 'Stop', noLabel: 'Keep counting', keyboardAfter: expect.any(Function) }],
+    ]);
     expect(onClose).not.toHaveBeenCalled();
     confirmAsk.answer = true;
     await leaveCloseShift({ saving: false, started: true, onClose });
@@ -952,9 +961,10 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
   /**
    * The close box's rows, put on its Content (as the till's window has them):
    * the chosen row, and where the keyboard is — 'page' (behind the box) until
-   * a row takes it.
+   * a row takes it. `drop()`: the window puts the keyboard on the page, as
+   * Chromium does when a tap on the dimmed area takes a question away.
    */
-  function plantBox(chosen: string): { focused: () => string } {
+  function plantBox(chosen: string): { focused: () => string; drop: () => void } {
     let focused = 'page';
     const rowFor = (sel: string): string | null =>
       sel === NOTE_COUNTER_CHOSEN_ROW ? chosen : (/^\[data-note-row="([^"]+)"\]$/.exec(sel)?.[1] ?? null);
@@ -972,7 +982,12 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     };
     if (!radix.contentRef) throw new Error('The close box put no ref on its Content: it cannot find its rows');
     (radix.contentRef as { current: unknown }).current = box;
-    return { focused: () => focused };
+    return {
+      focused: () => focused,
+      drop: () => {
+        focused = 'page';
+      },
+    };
   }
 
   it('(review fixes A) the keyboard’s Enter on a tapped pad key goes to the next row: the key is not pressed again, and the shift is never closed', () => {
@@ -1124,6 +1139,70 @@ describe('F. (v0.7.35) the drawer counted note by note at Close shift', () => {
     // A real tap outside (on something still on the page) leaves as before.
     outside({ preventDefault: vi.fn(), detail: { originalEvent: { target: { isConnected: true } } } });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // e2e v0.7.35 (3 Oct 2026, Chromium and the till's Electron): "Stop
+  // closing the shift?" or "Clear every row of this count?" answered by a
+  // tap OUTSIDE the question counts as "Keep counting" and the rows stay, but
+  // the window put the keyboard on the page as the question went, after the
+  // box had put it on the row: digits, Enter and Backspace did nothing.
+
+  /** The question's own "once I have gone" (ConfirmHost calls it after every answer, a tap outside too). */
+  const keyboardAfterOf = (i: number): (() => void) => {
+    const opts = confirmAsk.calls[i]?.[1] as { keyboardAfter?: () => void } | undefined;
+    if (!opts?.keyboardAfter) throw new Error('The question was asked with no keyboardAfter: nothing puts the keyboard back once it has gone');
+    return opts.keyboardAfter;
+  };
+
+  it('(e2e fixes) a tap outside "Stop closing the shift?": once the question has gone, the keyboard is back on the chosen row', async () => {
+    signIn('manager');
+    // A count typed into the Rs 1,000 row; Escape asks.
+    seed.count = noteCounterKey(noteCounterKey(noteCounterInitial(), '5'), 'Enter');
+    render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />);
+    const box = plantBox('1000');
+    confirmAsk.calls.length = 0;
+    confirmAsk.answer = false; // a tap outside the question: answered "Keep counting"
+    (radix.content['onEscapeKeyDown'] as (e: unknown) => void)({ preventDefault() {} });
+    await settle();
+    expect(confirmAsk.calls.map(([q]) => q)).toEqual([STOP_CLOSING_QUESTION]);
+    expect(box.focused()).toBe('1000');
+    // The window drops the keyboard on the page as the question goes; then the question has gone.
+    box.drop();
+    keyboardAfterOf(0)();
+    expect(box.focused()).toBe('1000');
+
+    // "Stop": the box goes, and nothing puts the keyboard back.
+    const onClose = vi.fn();
+    render(<CloseShiftDialog shiftId="shift-1" onClose={onClose} approverPin="Manager-pass-7" check={VIA_PIN} />);
+    const gone = plantBox('1000');
+    confirmAsk.calls.length = 0;
+    confirmAsk.answer = true;
+    tapButton('Cancel');
+    await settle();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    keyboardAfterOf(0)();
+    expect(gone.focused()).toBe('page');
+  });
+
+  it('(e2e fixes) a tap outside "Clear every row of this count?": once the question has gone, the keyboard is back on the row (the chosen one, or Rs 5,000 once cleared)', async () => {
+    signIn('manager');
+    for (const [clear, row] of [
+      [false, '500'],
+      [true, '5000'],
+    ] as const) {
+      seed.count = noteCounterKey(noteCounterKey(noteCounterKey(noteCounterInitial(), '2'), 'Enter'), 'Enter');
+      render(<CloseShiftDialog shiftId="shift-1" onClose={() => {}} approverPin="Manager-pass-7" check={VIA_PIN} />);
+      const box = plantBox('500');
+      confirmAsk.calls.length = 0;
+      confirmAsk.answer = clear;
+      counter.props?.onClear();
+      await settle();
+      expect(confirmAsk.calls.map(([q]) => q)).toEqual([CLEAR_ALL_QUESTION]);
+      expect(box.focused(), `Clear all: ${clear}`).toBe(row);
+      box.drop();
+      keyboardAfterOf(0)();
+      expect(box.focused(), `Clear all: ${clear}, once the question has gone`).toBe(row);
+    }
   });
 
   it('(review fixes A) the check of the orders on this till failed: the footer says so, with Try again, which asks again and puts the keyboard back on the row', async () => {
@@ -1323,6 +1402,9 @@ describe('G. (v0.7.35) the shift report at the close: the result’s line and it
     // It came out: the amber line goes.
     expect(shown()!.reportError).toBeNull();
     expect(text(result())).toContain(`${SHIFT_REPORT_PRINTING} Print again`);
+    // (e2e fixes) and so does the till's sticky red "Shift report did not print … Try again" note for this shift
+    // (left up, its own Try again printed a second paper, 'DUPLICATE Reprint #1').
+    expect(seen.dismissed).toEqual([shiftReportFailedNoteId('shift-1')]);
   });
 
   it('a failure for another shift changes nothing', () => {
@@ -1359,7 +1441,7 @@ describe('G. (v0.7.35) the shift report at the close: the result’s line and it
 
   it('off: says so, with Print it (a DUPLICATE); no printer and not made: the words, no button; an older reply: no line', async () => {
     expect(SHIFT_REPORT_OFF).toBe('Printing the shift report is off (Settings → Printers).');
-    expect(SHIFT_REPORT_NO_PRINTER).toBe('No receipt printer is set up - no shift report printed.');
+    expect(SHIFT_REPORT_NO_PRINTER).toBe('Shift report saved (no receipt printer set up).');
     expect(SHIFT_REPORT_NOT_MADE).toBe('The shift report could not be made. The close is saved.');
     signIn('manager');
 

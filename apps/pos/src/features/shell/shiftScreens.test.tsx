@@ -57,7 +57,10 @@ import { ALERT_WATCH_KEY } from '../notifications/useAlertWatch';
 import {
   CASHIER_CANNOT_CLOSE,
   CASHIER_CLOSE_HOW,
+  CLOSE_RESULT_DESCRIPTION,
+  CLOSE_SHIFT_DESCRIPTION,
   closeResultCashOut,
+  closeResultVarianceText,
   CloseShiftNotAllowedDialog,
   CloseShiftResultDialog,
   OpenShiftDialog,
@@ -229,7 +232,8 @@ describe('the close result stays on screen until Done', () => {
     expect(words).toContain('Open shift');
     expect(words).toContain(`Expected cash ${formatCents(1_664_000)}`);
     expect(words).toContain(`Counted ${formatCents(1_654_000)}`);
-    expect(words).toContain(`Variance ${formatCents(-10_000)}`);
+    // The rows' own minus (e2e v0.7.35: it read "Rs -100" under "− Rs 500").
+    expect(words).toContain('Variance − Rs 100');
     expect(words).toContain('Short (less than expected)');
     // The shift's cash, as the close box has always shown it once the count is in.
     expect(words).toContain(`Cash sales ${formatCents(1_234_000)}`);
@@ -251,7 +255,7 @@ describe('the close result stays on screen until Done', () => {
     signIn('manager');
     showShiftCloseOutcome({ ...SHORT, countedCents: 1_669_000, varianceCents: 5_000 });
     const out = render(<ShiftWidget />, [[CURRENT, null]]);
-    expect(text(out)).toContain(`Variance +${formatCents(5_000)} Over (more than expected)`);
+    expect(text(out)).toContain(`Variance + ${formatCents(5_000)} Over (more than expected)`);
     expect(out).toContain('bg-amber-50');
   });
 
@@ -259,15 +263,15 @@ describe('the close result stays on screen until Done', () => {
     signIn('manager');
     // Expected Rs 5,517.50 (a Rs 517.50 bill on the float), counted Rs 5,518 by note.
     for (const [variance, sign] of [
-      [50, '+'],
-      [-50, ''],
-      [99, '+'],
-      [-99, ''],
+      [50, '+ '],
+      [-50, '− '],
+      [99, '+ '],
+      [-99, '− '],
     ] as const) {
       showShiftCloseOutcome({ ...SHORT, expectedCents: 551_750, countedCents: 551_750 + variance, varianceCents: variance });
       const out = render(<ShiftWidget />, [[CURRENT, null]]);
       const words = text(out);
-      expect(words).toContain(`Variance ${sign}${formatCents(variance)} Matches expected Paisa difference ${formatCents(Math.abs(variance))}`);
+      expect(words).toContain(`Variance ${sign}${formatCents(Math.abs(variance))} Matches expected Paisa difference ${formatCents(Math.abs(variance))}`);
       expect(words).not.toMatch(/Over \(|Short \(/);
       expect(out).toContain('bg-emerald-50 text-emerald-800');
       expect(out).not.toContain('bg-amber-50');
@@ -285,6 +289,24 @@ describe('the close result stays on screen until Done', () => {
     const even = text(render(<ShiftWidget />, [[CURRENT, null]]));
     expect(even).toContain('Matches expected');
     expect(even).not.toContain('Paisa difference');
+  });
+
+  it('(e2e fixes) the words fit a count by note: no "enter the actual total below", and the Variance’s minus is the rows’ minus', () => {
+    // e2e v0.7.35: the result still said "Count cash in the drawer and enter the actual total below." (there is nothing to
+    // enter: the count is by note), and its Variance read "Rs -0.50" under rows that read "− Rs 4,485".
+    expect(CLOSE_RESULT_DESCRIPTION).toBe('Counted note by note.');
+    signIn('manager');
+    showShiftCloseOutcome({ ...SHORT, expectedCents: 551_750, countedCents: 551_700, varianceCents: -50 });
+    const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
+    expect(words).toContain('Close shift Counted note by note. Paid orders 24');
+    expect(words).not.toMatch(/enter the actual total|Count cash in the drawer/);
+    expect(words).toContain(`Cash refunds − ${formatCents(50_000)}`);
+    expect(words).toContain('Variance − Rs 0.50 Matches expected Paisa difference Rs 0.50');
+    expect(words).not.toContain('Rs -');
+    // Every way it can read: short and over with the rows' sign and a space, and a match to the paisa bare.
+    expect([-448_500, -50, 0, 50, 10_000].map(closeResultVarianceText)).toEqual(['− Rs 4,485', '− Rs 0.50', 'Rs 0', '+ Rs 0.50', '+ Rs 100']);
+    // The close box itself keeps its own words.
+    expect(CLOSE_SHIFT_DESCRIPTION).toBe('Count the notes in the drawer, row by row. The till adds them up.');
   });
 
   it('Done takes it away; with nothing closed there is no result', () => {

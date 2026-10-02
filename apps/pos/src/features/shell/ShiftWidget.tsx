@@ -582,6 +582,12 @@ export function hasNewUnpaid(shown: readonly UnpaidOrderAtClose[], now: ShiftClo
 
 /** The words under the Close shift title: the count is by note, and the till adds it up. */
 export const CLOSE_SHIFT_DESCRIPTION = 'Count the notes in the drawer, row by row. The till adds them up.';
+/**
+ * The words under the title once the count is in (the result): it was
+ * counted by note, and there is nothing left to type (e2e v0.7.35: it still
+ * said "enter the actual total below").
+ */
+export const CLOSE_RESULT_DESCRIPTION = 'Counted note by note.';
 
 /** The footer's hints, beside Cancel and Close shift (closeShiftHint). */
 export const CLOSE_HINT_NOT_STARTED = 'Type a count in at least one row (0 if the drawer is empty).';
@@ -623,7 +629,10 @@ export const STOP_CLOSING_QUESTION = 'Stop closing the shift? The count you type
  *   box would go, and the shift close anyway behind the manager's back);
  * - once something is typed, it asks first, with "Keep counting" as the safe
  *   answer: a slip of the hand must not throw a half-done count away;
- *   "Keep counting" calls onStay (the box puts the keyboard back on the row);
+ *   "Keep counting" calls onStay (the box puts the keyboard back on the row),
+ *   as the answer comes in and again once the question has gone: a tap
+ *   outside the question answers "Keep counting" too, and the window drops
+ *   the keyboard on the page as the question goes (e2e, 3 Oct 2026);
  * - otherwise the box just closes.
  */
 export async function leaveCloseShift(p: {
@@ -634,7 +643,15 @@ export async function leaveCloseShift(p: {
 }): Promise<void> {
   if (p.saving) return;
   if (p.started) {
-    const stop = await askConfirm(STOP_CLOSING_QUESTION, { safeDefault: true, yesLabel: 'Stop', noLabel: 'Keep counting' });
+    let stop = false;
+    stop = await askConfirm(STOP_CLOSING_QUESTION, {
+      safeDefault: true,
+      yesLabel: 'Stop',
+      noLabel: 'Keep counting',
+      keyboardAfter: () => {
+        if (!stop) p.onStay?.();
+      },
+    });
     if (!stop) {
       p.onStay?.();
       return;
@@ -643,9 +660,18 @@ export async function leaveCloseShift(p: {
   p.onClose();
 }
 
-/** 'Clear all' asks first, with "Keep counting" as the safe answer; true means clear. */
-export function confirmClearAll(): Promise<boolean> {
-  return askConfirm(CLEAR_ALL_QUESTION, { safeDefault: true, yesLabel: 'Clear all', noLabel: 'Keep counting' });
+/**
+ * 'Clear all' asks first, with "Keep counting" as the safe answer; true
+ * means clear. `keyboardAfter`: where the keyboard goes once the question
+ * has gone, however it was answered (a tap outside it too).
+ */
+export function confirmClearAll(keyboardAfter?: () => void): Promise<boolean> {
+  return askConfirm(CLEAR_ALL_QUESTION, {
+    safeDefault: true,
+    yesLabel: 'Clear all',
+    noLabel: 'Keep counting',
+    ...(keyboardAfter ? { keyboardAfter } : {}),
+  });
 }
 
 /**
@@ -819,10 +845,15 @@ export function CloseShiftDialog({
   };
   const confirmLeave = () => void leaveCloseShift({ saving, started, onClose, onStay: () => keyboardToRow() });
   const clearAll = async () => {
-    const clear = (await confirmClearAll()) && !saving;
-    if (clear) changeCount(noteCounterClear);
     // Cleared: back on the Rs 5,000 row (the chosen row on screen is still the old one until it redraws).
-    keyboardToRow(clear ? NOTE_COUNTER_FIRST_ROW : NOTE_COUNTER_CHOSEN_ROW);
+    // As the answer comes in, and again once the question has gone (a tap outside it drops the keyboard).
+    let row = NOTE_COUNTER_CHOSEN_ROW;
+    const clear = (await confirmClearAll(() => keyboardToRow(row))) && !saving;
+    if (clear) {
+      changeCount(noteCounterClear);
+      row = NOTE_COUNTER_FIRST_ROW;
+    }
+    keyboardToRow(row);
   };
 
   // The keyboard types into the chosen row, like the pad beside it.
@@ -1099,20 +1130,20 @@ export function RefusedItemsOwed({ orders }: { orders: readonly RefusedItemRefun
 
 /**
  * The title of the close box and of its result. `description`: the words
- * under the title (the result keeps its own). `closeDisabled`: the X waits
- * while the close is saving. `className`: the space under it ('mb-4'; the
- * close box has its own padding).
+ * under the title (CLOSE_SHIFT_DESCRIPTION, CLOSE_RESULT_DESCRIPTION).
+ * `closeDisabled`: the X waits while the close is saving. `className`: the
+ * space under it ('mb-4'; the close box has its own padding).
  */
 function CloseShiftHeader({
   onClose,
   closeLabel = 'Close',
-  description = 'Count cash in the drawer and enter the actual total below.',
+  description,
   closeDisabled = false,
   className = 'mb-4',
 }: {
   onClose: () => void;
   closeLabel?: string;
-  description?: string;
+  description: string;
   closeDisabled?: boolean;
   className?: string;
 }) {
@@ -1164,6 +1195,16 @@ export function closeResultCashOut(
     ridersCount,
     tripsCount: Math.min(ridersCount, Math.max(0, summary.riderTripCount ?? 0)),
   };
+}
+
+/**
+ * The close result's Variance in the minus the rows above it use ("− Rs
+ * 4,485"): "− Rs 0.50" short, "+ Rs 100" over, "Rs 0" matched to the paisa
+ * (e2e v0.7.35: it read "Rs -0.50" under "− Rs 4,485").
+ */
+export function closeResultVarianceText(varianceCents: number): string {
+  if (varianceCents === 0) return formatCents(0);
+  return `${varianceCents > 0 ? '+' : '−'} ${formatCents(Math.abs(varianceCents))}`;
 }
 
 /**
@@ -1219,7 +1260,7 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
           onEscapeKeyDown={keepOpen}
           className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-24px)] w-[460px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900"
         >
-          <CloseShiftHeader onClose={onDone} closeLabel="Done" />
+          <CloseShiftHeader onClose={onDone} closeLabel="Done" description={CLOSE_RESULT_DESCRIPTION} />
 
           <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
             <dl className="space-y-0.5 text-emerald-900 dark:text-emerald-100">
@@ -1278,10 +1319,7 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
           >
             <div className="flex items-baseline justify-between">
               <span className="font-semibold">Variance</span>
-              <span className="font-mono text-xl">
-                {variance > 0 ? '+' : ''}
-                {formatCents(variance)}
-              </span>
+              <span className="font-mono text-xl">{closeResultVarianceText(variance)}</span>
             </div>
             <div className="mt-0.5 text-xs">
               {verdict === 'matched'
@@ -1331,7 +1369,8 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
 /** The close result's line about the shift report (v0.7.35), by what became of the paper at the close. */
 export const SHIFT_REPORT_PRINTING = 'Shift report printing - keep it with the cash.';
 export const SHIFT_REPORT_OFF = 'Printing the shift report is off (Settings → Printers).';
-export const SHIFT_REPORT_NO_PRINTER = 'No receipt printer is set up - no shift report printed.';
+/** The "No printer" setup: the report went to its file, as every paper there (Settings → Printers). */
+export const SHIFT_REPORT_NO_PRINTER = 'Shift report saved (no receipt printer set up).';
 export const SHIFT_REPORT_NOT_MADE = 'The shift report could not be made. The close is saved.';
 /** A paper that did not print: the printer's words follow. */
 export const SHIFT_REPORT_FAILED_LINE = 'The shift report did not print:';
@@ -1350,8 +1389,8 @@ export interface ShiftReportLine {
 /**
  * What the close result says about the shift report (final plan step 19g-1):
  * a failure first, in amber, with Try again; else by what the close said —
- * printing (Print again), off (Print it), no printer, not made. Null when
- * the till said nothing about it.
+ * printing (Print again), off (Print it), saved to the "No printer" file,
+ * not made. Null when the till said nothing about it.
  */
 export function shiftReportLine(outcome: Pick<ShiftCloseOutcome, 'reportPrint' | 'reportError'>): ShiftReportLine | null {
   if (outcome.reportError !== null) {
@@ -1382,7 +1421,7 @@ export function shiftReportLine(outcome: Pick<ShiftCloseOutcome, 'reportPrint' |
  * 15 minutes of the close); the toast says what came out.
  */
 function ShiftReportStatus({ outcome }: { outcome: ShiftCloseOutcome }) {
-  const { toast } = useToast();
+  const notes = useToast();
   const [busy, setBusy] = useState(false);
   const line = shiftReportLine(outcome);
   if (!line) return null;
@@ -1391,7 +1430,7 @@ function ShiftReportStatus({ outcome }: { outcome: ShiftCloseOutcome }) {
     if (busy) return;
     setBusy(true);
     try {
-      await printShiftReportAndSay(outcome.shiftId, again, toast);
+      await printShiftReportAndSay(outcome.shiftId, again, notes);
     } finally {
       setBusy(false);
     }

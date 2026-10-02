@@ -228,7 +228,10 @@ export interface ShiftSummary {
  *  - 'off': the owner switched printing at close off on this till
  *    (Settings → Printers → Shift report).
  *  - 'no_printer': this till has no receipt printer (the "No printer"
- *    setup): no paper came out.
+ *    setup): the report is saved to that setup's file, like every paper
+ *    there (userData/printer-mock), and put on record as printed; no paper
+ *    came out. If the file cannot be written, 'printer:failed' follows as
+ *    for a printer.
  *  - 'not_made': no report was saved with the close, or the till could not
  *    start printing it.
  */
@@ -262,14 +265,17 @@ export const SHIFT_REPORT_AGAIN_MS = 15 * 60_000;
  *  - copy 'reprint', reprintNo N: a DUPLICATE 'Reprint #N' (Print again, and
  *    Try again once the original came out or may have).
  * `error` says why it did not print, in plain words (null when it printed):
- * `maybeSent` when a paper may be in the tray all the same; code
- * 'no_printer' on the "No printer" setup, where nothing prints.
+ * `maybeSent` when a paper may be in the tray all the same.
+ * `toFile` on the "No printer" setup: the paper went to that setup's file
+ * (userData/printer-mock), not a printer; `printed` then means it was saved
+ * (and put on record, so the next one is the next Reprint number).
  */
 export interface ShiftReportPrintResult {
   printed: boolean;
   copy: 'original' | 'reprint';
   reprintNo: number;
   error: { code: string; message: string; maybeSent?: boolean } | null;
+  toFile?: boolean;
 }
 
 export type CashMovementType = 'payout' | 'payin' | 'tip_out';
