@@ -390,8 +390,12 @@ export function isOutsideRiderOrder(o: { readonly riderKeepsCents?: number | nul
  * customer who paid before it left. The ONE comparison for "paid before it
  * left" against "the rider paid while out": the papers, the Refund box and
  * the till's settlement lock all use it, so they can never disagree on the
- * same order (a Rider paid stamp is clamped to dispatched_at, never before
- * it). False when either time is missing or unreadable.
+ * same order. The till's stamps keep it true to what happened whatever two
+ * tills' clocks say: Send out (or Assign rider) on an order already paid
+ * stamps dispatched_at strictly after its paid_at, and Rider paid's or
+ * Delivered + Pay's paid_at is never before dispatched_at (order-repo
+ * leftAtFor / notBeforeItLeft). False when either time is missing or
+ * unreadable.
  */
 export function paidAfterItLeft(o: { readonly paidAt: string | null; readonly dispatchedAt: string | null }): boolean {
   if (!o.paidAt || !o.dispatchedAt) return false;

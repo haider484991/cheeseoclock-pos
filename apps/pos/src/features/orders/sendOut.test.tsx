@@ -59,6 +59,14 @@
  *    rider Rs 200 for this trip", not ticked; ticked, a manager's PIN or
  *    password, and the request pays the trip. Assign rider says only the
  *    words. The PIN box is a stand-in here (no state of its own).
+ *
+ * Review fixes D (2 Oct 2026): a card's last row with no "Rider paid" above
+ * it (kitchen, Ready and Out cards) — [the big button] then one group of its
+ * icons that never shrinks and goes under the button, on the right, when the
+ * two don't fit side by side (at 1011 × 663 a kitchen card's Cancel was cut
+ * off and the column scrolled sideways). The cards pinned as "before" are
+ * still compared byte for byte, with that one row change taken back out
+ * (undoRowD).
  */
 import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
@@ -580,7 +588,8 @@ describe('a Ready delivery card: "Send out", and "Assign rider" as a small link'
       expect(buttonsWith(c, 'Assign rider')).toEqual([]);
       expect(buttonsWith(c, 'Send out')).toEqual([]);
     }
-    expect(sha256(cards.get('#0046')!)).toBe(BEFORE.readyTakeaway);
+    // Byte for byte as before but for review fixes D's last row (undoRowD).
+    expect(sha256(undoRowD(cards.get('#0046')!))).toBe(BEFORE.readyTakeaway);
   });
 });
 
@@ -621,13 +630,13 @@ describe('an Out card sent out with an outside rider', () => {
     expect(text(card(noChargeLine(sentOut(49, 0))))).toContain('Outside rider · out 12m · no delivery charge Assign rider');
   });
 
-  it('an own rider’s Out card is byte-identical to before (unpaid and paid), with no outside rider row', () => {
+  it('an own rider’s Out card is byte-identical to before (unpaid and paid), with no outside rider row — but for review fixes D’s last row', () => {
     const { cards } = board([
       delivery(44, 'out_for_delivery', {}, OWN_RIDER),
       delivery(45, 'out_for_delivery', { paidAt: minsAgo(30) }, OWN_RIDER),
     ]);
-    expect(plainSpaces(cards.get('#0044')!)).toBe(OWN_RIDER_CARD_BEFORE.join(''));
-    expect(sha256(cards.get('#0045')!)).toBe(BEFORE.ownRiderPaid);
+    expect(plainSpaces(undoRowD(cards.get('#0044')!))).toBe(OWN_RIDER_CARD_BEFORE.join(''));
+    expect(sha256(undoRowD(cards.get('#0045')!))).toBe(BEFORE.ownRiderPaid);
     for (const c of cards.values()) expect(text(c)).not.toContain('Outside rider');
   });
 
@@ -1073,9 +1082,10 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
     const primary = openingTag(buttonsWith(c, 'Delivered + Pay')[0]!);
     for (const cls of ['h-11', 'flex-1', 'px-2', 'leading-tight']) expect(primary).toContain(cls);
     expect(primary).not.toContain('whitespace-nowrap');
-    // A paid outside card and an own rider's card keep the one row they had (pinned elsewhere too).
+    // A paid outside card and an own rider's card keep the one row they had, with no Rider paid row
+    // (pinned elsewhere too; review fixes D made it the row whose icons drop under the button when narrow).
     const paid = card(ownerExample(52, 'out_for_delivery', { riderKeepsCents: 20_000 as never, paidAt: minsAgo(5) }));
-    expect(paid).toContain('<div class="mt-2 flex items-center gap-1">');
+    expect(paid).toContain(ROW_D);
     expect(paid).not.toContain(ROW);
     // He keeps nothing: he owes the whole bill.
     expect(text(card(ownerExample(49, 'out_for_delivery', { riderKeepsCents: 0 as never })))).toContain('Rs 4,715 Rider owes Rs 4,715');
@@ -1610,9 +1620,106 @@ describe('an add-on that now goes alone (review fixes C): "#0042 is no longer he
 });
 
 // ---------------------------------------------------------------------------
+// Review fixes D: a card's last row with no "Rider paid" above it. At the
+// till's narrowest window (1011 × 663, a 172 px card) a kitchen or Ready
+// card's [Start preparing] [kitchen ticket] [Print] [Cancel] needed about
+// 270 px (measured in Chrome with the till's own CSS): Cancel was cut off and
+// the column scrolled sideways; so did an own rider's [Delivered + Pay]
+// [Print] [Cancel]. Now the icons are one group that never shrinks and goes
+// under the button, on the right, when the two don't fit side by side (there
+// the button takes the whole width); a wide window keeps the one row.
+
+/** The row (flex-wrap: the icons may go to a line of their own). */
+const ROW_D = '<div class="mt-2 flex flex-wrap items-center gap-1">';
+/** The icons' group: pushed to the right, never squeezed. */
+const ICONS_D = '<div class="ml-auto flex shrink-0 items-center gap-1">';
+/** The row as it was before review fixes D (one row, the icons squeezed then cut off). */
+const ROW_BEFORE_D = '<div class="mt-2 flex items-center gap-1">';
+
+/** A card's last row, from the row's own tag to the card's end: [the big button][the icons' group]. */
+function lastRowD(card: string): { primary: string; group: string } {
+  expect(card.split(ROW_D)).toHaveLength(2);
+  expect(card.split(ICONS_D)).toHaveLength(2);
+  const row = card.slice(card.indexOf(ROW_D) + ROW_D.length);
+  const at = row.indexOf(ICONS_D);
+  // The row and the group close together at the card's end.
+  expect(row.endsWith('</div></div>')).toBe(true);
+  return { primary: row.slice(0, at), group: row.slice(at + ICONS_D.length, -'</div></div>'.length) };
+}
+
+/** The card with review fixes D's change taken back out: the row as it was, the icons straight in it. */
+function undoRowD(card: string): string {
+  lastRowD(card);
+  return card.replace(ROW_D, ROW_BEFORE_D).replace(ICONS_D, '').replace(/<\/div><\/div>$/, '</div>');
+}
+
+/** The aria-labels of the icon buttons in this markup, in order. */
+const iconLabels = (markup: string) => [...markup.matchAll(/<button type="button" aria-label="([^"]+)"/g)].map((m) => m[1]);
+
+describe('a card’s last row fits the narrowest window (review fixes D): the icons go under the button when they must', () => {
+  const KITCHEN = ['Reprint kitchen ticket', 'Print bill or receipt', 'Cancel order (manager approval)'];
+  const PLAIN = ['Print bill or receipt', 'Cancel order (manager approval)'];
+  const PAID = ['Print bill or receipt', 'Refund order (manager approval)'];
+  const CASES: Array<[string, string, OrderSnapshot, string[]]> = [
+    ['New (sent to the kitchen)', 'Start preparing', delivery(41, 'sent_to_kitchen'), KITCHEN],
+    ['Preparing', 'Mark ready', delivery(43, 'preparing'), KITCHEN],
+    ['a Ready delivery', 'Send out', delivery(42, 'ready'), KITCHEN],
+    ['a Ready takeaway, unpaid', 'Picked up + Pay', delivery(46, 'ready', {}, null, 'takeaway'), KITCHEN],
+    ['a Ready takeaway, paid', 'Picked up', delivery(48, 'ready', { paidAt: minsAgo(30) }, null, 'takeaway'), ['Reprint kitchen ticket', ...PAID]],
+    ['an own rider’s Out card, unpaid', 'Delivered + Pay', delivery(44, 'out_for_delivery', {}, OWN_RIDER), PLAIN],
+    ['an own rider’s Out card, paid', 'Delivered', delivery(45, 'out_for_delivery', { paidAt: minsAgo(30) }, OWN_RIDER), PAID],
+    ['an outside rider’s Out card, paid', 'Delivered', sentOut(52, 20_000, { paidAt: minsAgo(5) }), PAID],
+  ];
+
+  it.each(CASES)('%s: [%s] then one group of every icon, on the right, never squeezed', (_name, words, snap, icons) => {
+    const c = card(snap);
+    const { primary, group } = lastRowD(c);
+    // The big button first, alone before the group: its words in one line, taking the row's free width.
+    expect(primary.split('<button')).toHaveLength(2);
+    expect(text(primary)).toBe(words);
+    const tag = openingTag(primary);
+    for (const cls of ['h-11', 'flex-1', 'whitespace-nowrap', 'text-sm']) expect(tag).toContain(cls);
+    // No min-w-0: the button's own width is what sends the group to the next line when both don't fit.
+    expect(tag).not.toContain('min-w-0');
+    expect(iconLabels(primary)).toEqual([]);
+    // Every icon in the group, in order, and nothing else in it.
+    expect(iconLabels(group)).toEqual(icons);
+    expect(group.split('<button')).toHaveLength(icons.length + 1);
+    for (const b of group.split('<button').slice(1)) expect(b).toContain('class="flex h-11 w-9 items-center justify-center');
+    // The row wraps; the group is pushed right and keeps its size.
+    expect(c).toContain(ROW_D);
+    expect(c).toContain(ICONS_D);
+  });
+
+  it('only the last row changed: with the change taken out, the card is the one before it, byte for byte (pinned below too)', () => {
+    const c = card(delivery(41, 'sent_to_kitchen'));
+    const before = undoRowD(c);
+    expect(before).not.toContain(ROW_D);
+    expect(before).not.toContain(ICONS_D);
+    expect(before.indexOf(ROW_BEFORE_D)).toBeGreaterThan(0);
+    // The big button and the three icons straight in the old row, as before.
+    const oldRow = before.slice(before.indexOf(ROW_BEFORE_D));
+    expect(iconLabels(oldRow)).toEqual(KITCHEN);
+    expect(text(oldRow)).toBe('Start preparing');
+  });
+
+  it('a card with "Rider paid" keeps review fixes C’s rows: Rider paid full width, then Delivered + Pay with Print and Cancel beside it, no group', () => {
+    const c = card(ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never }));
+    expect(c).not.toContain(ROW_D);
+    expect(c).not.toContain(ICONS_D);
+    const ROW_C = '<div class="mt-1 flex items-center gap-1">';
+    const row = c.slice(c.indexOf(ROW_C));
+    expect(iconLabels(row)).toEqual(PLAIN);
+    expect(text(row)).toBe('Delivered + Pay');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The cards of the build before this step (23e7c86, v0.7.34 step 16-2),
 // rendered from the same made-up orders at the same "now". An own rider's Out
 // card in full; the rest by their SHA-256 (spaces before am/pm made plain).
+// Unchanged by review fixes D: its tests take that change's last row back
+// out first (undoRowD), so everything else is still pinned byte for byte.
 
 const BEFORE = {
   /** #0045: an own rider's Out card, paid. */

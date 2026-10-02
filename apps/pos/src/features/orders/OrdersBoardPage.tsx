@@ -537,6 +537,27 @@ function OrderCard({
   // An outside rider still owes the shop the food total (the total less what he keeps).
   const owes = riderOwesCents(order);
   const PrimaryIcon = PRIMARY_ICON[primaryKind];
+  const icons = (
+    <>
+      {/* Only while the kitchen still has it: the till refuses the ticket after that. */}
+      {offersKitchenReprint(order.status) && (
+        <IconButton label="Reprint kitchen ticket" onClick={onReprintKitchen}>
+          <ChefHat className="h-4 w-4" />
+        </IconButton>
+      )}
+      {/* The bill while unpaid, the receipt once paid. Printed with this button it always says DUPLICATE (the owner's rule; order-papers.ts). */}
+      <IconButton label="Print bill or receipt" onClick={onReprint}>
+        <Printer className="h-4 w-4" />
+      </IconButton>
+      <IconButton
+        label={paid ? 'Refund order (manager approval)' : 'Cancel order (manager approval)'}
+        onClick={onCancel}
+        danger
+      >
+        <XCircle className="h-4 w-4" />
+      </IconButton>
+    </>
+  );
 
   return (
     <article
@@ -719,7 +740,7 @@ function OrderCard({
           {secondary.label}
         </Button>
       )}
-      <div className={secondary ? 'mt-1 flex items-center gap-1' : 'mt-2 flex items-center gap-1'}>
+      <div className={secondary ? 'mt-1 flex items-center gap-1' : CARD_ACTION_ROW}>
         {primaryLabel && (
           <Button
             size="md"
@@ -733,27 +754,25 @@ function OrderCard({
             {busy ? 'Saving…' : primaryLabel}
           </Button>
         )}
-        {/* Only while the kitchen still has it: the till refuses the ticket after that. */}
-        {offersKitchenReprint(order.status) && (
-          <IconButton label="Reprint kitchen ticket" onClick={onReprintKitchen}>
-            <ChefHat className="h-4 w-4" />
-          </IconButton>
-        )}
-        {/* The bill while unpaid, the receipt once paid. Printed with this button it always says DUPLICATE (the owner's rule; order-papers.ts). */}
-        <IconButton label="Print bill or receipt" onClick={onReprint}>
-          <Printer className="h-4 w-4" />
-        </IconButton>
-        <IconButton
-          label={paid ? 'Refund order (manager approval)' : 'Cancel order (manager approval)'}
-          onClick={onCancel}
-          danger
-        >
-          <XCircle className="h-4 w-4" />
-        </IconButton>
+        {secondary ? icons : <div className={CARD_ICONS}>{icons}</div>}
       </div>
     </article>
   );
 }
+
+/**
+ * A card's last row with no "Rider paid" above it: the big button, then its
+ * icons as one group that never shrinks. Where the button's words and the
+ * icons don't fit side by side (the till's narrowest window, 1011 × 663: a
+ * kitchen or Ready card's 'Start preparing' / 'Picked up + Pay' and three
+ * icons need about 270 px of a 172 px card, and Cancel was cut off with the
+ * column scrolling sideways), the group goes under the button on its own
+ * line, on the right, and the button takes the whole width. A wide window
+ * keeps the one row.
+ */
+const CARD_ACTION_ROW = 'mt-2 flex flex-wrap items-center gap-1';
+/** The icons' group in that row (Reprint kitchen ticket, Print, Cancel / Refund). */
+const CARD_ICONS = 'ml-auto flex shrink-0 items-center gap-1';
 
 function IconButton({
   label,

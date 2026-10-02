@@ -4113,10 +4113,48 @@ export function markOrderReady(
 }
 
 /**
+ * When the food left (dispatched_at), as Send out and Assign rider stamp it:
+ * now, except on an order already paid (prepaid at the counter, perhaps on
+ * the other till), where it is always strictly after that payment: paid_at
+ * + 1 ms when this till's clock reads earlier than the one that took the
+ * money (papers note #2, case 1: till B a minute ahead took it, till A sent
+ * it out by its own clock). The papers, the Refund box and the settlement
+ * lock tell "the customer paid before it left" from "the rider paid while
+ * out" by these two stamps alone (shared-types paidAfterItLeft, paid_at >=
+ * dispatched_at), so a prepaid order can never read as the rider's while
+ * out, whatever the clocks say. The other side is kept by the stamps made
+ * after it left: Rider paid's paid_at (its own clamp) and Delivered's
+ * delivered_at and paid_at (notBeforeItLeft) are never before dispatched_at.
+ * An unpaid order — or a paid_at that does not read as a time — gets now,
+ * exactly as before.
+ */
+function leftAtFor(order: Pick<Order, 'paidAt'>, now: string = nowIso()): string {
+  const paid = order.paidAt === null ? NaN : Date.parse(order.paidAt);
+  if (!Number.isFinite(paid) || Date.parse(now) > paid) return now;
+  return new Date(paid + 1).toISOString();
+}
+
+/**
+ * A stamp for something that happens once the food has left (Delivered, and
+ * the payment Delivered + Pay takes): `now`, or the order's dispatched_at
+ * when this till's clock reads earlier than the till that sent it out, as
+ * Rider paid stamps its paid_at. Never before it left, so a rider's money
+ * taken at the door reads as paid after it left (paidAfterItLeft), never as
+ * a customer who paid before. `now` when it has not left (no dispatched_at).
+ */
+function notBeforeItLeft(order: Pick<Order, 'dispatchedAt'>, now: string): string {
+  const left = order.dispatchedAt;
+  if (left === null) return now;
+  const t = Date.parse(left);
+  return Number.isFinite(t) && t > Date.parse(now) ? left : now;
+}
+
+/**
  * Send out (the owner, 2 Oct 2026: "Ready delivery -> Send out"; "Third-party
  * rider keeps the delivery charge: the drawer expects the food total from the
  * rider"): a delivery order the kitchen has goes out with an outside rider.
  * Moves it to `out_for_delivery` with no rider named, stamps `dispatched_at`
+ * (leftAtFor: on a prepaid order always later than its paid_at)
  * and freezes what the rider keeps (orders.rider_keeps_cents, 0049): the
  * order's delivery-charge lines as sold, before tax, never more than the
  * total (deliveryChargeLinesCents; 0 with no charge line). Everything after
@@ -4216,7 +4254,8 @@ export function sendOutOrder(
       from,
       [
         { col: 'assigned_rider_id', value: null },
-        { col: 'dispatched_at', value: nowIso() },
+        // Prepaid: later than the payment, whatever the two tills' clocks say.
+        { col: 'dispatched_at', value: leftAtFor(order) },
         { col: 'rider_keeps_cents', value: keeps },
       ],
       actor,
@@ -4256,7 +4295,9 @@ export function sendOutOrder(
 /**
  * Assign one of the shop's own riders to a delivery order (owner, 2 Oct 2026,
  * Q3: he brings back the full bill). Moves the status to `out_for_delivery`
- * and stamps `dispatched_at`. Allowed from `ready` (the usual path), but also
+ * and stamps `dispatched_at` (leftAtFor: on a prepaid order always later
+ * than its paid_at, so its receipt still says PREPAID - RIDER COLLECTS
+ * NOTHING whatever the clocks say). Allowed from `ready` (the usual path), but also
  * from earlier kitchen states if the dispatcher wants to pre-assign — never
  * from a draft that was not sent (it would skip the stock).
  *
@@ -4298,7 +4339,7 @@ export function assignRiderToOrder(
       ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'],
       [
         { col: 'assigned_rider_id', value: riderId },
-        ...(alreadySentOut ? [] : [{ col: 'dispatched_at', value: nowIso() }]),
+        ...(alreadySentOut ? [] : [{ col: 'dispatched_at', value: leftAtFor(order) }]),
         { col: 'rider_keeps_cents', value: null },
       ],
       actor,
@@ -4879,6 +4920,10 @@ export function takeRiderPayment(
  * the item's part refund is still owed (REFUSED_ITEM_AUDIT_KEY) — in this
  * same transaction — until a refund on the order settles it
  * (OrderSnapshot.refusedItem, the Close shift box).
+ *
+ * delivered_at (and paid_at when the money is taken here) is never before
+ * the order left (notBeforeItLeft): on a till whose clock reads earlier than
+ * the one that sent it out, it is the time it left.
  */
 export function markOrderDelivered(
   db: AppDatabase,
@@ -4994,6 +5039,11 @@ export function markOrderDelivered(
       finalStatus = 'paid';
     }
 
+    // Delivered, and the money taken at the door, are never before it left
+    // (a till whose clock reads earlier than the one that sent it out), as
+    // Rider paid's paid_at: the papers then never read the rider's money as a
+    // customer's who paid before it left.
+    const at = notBeforeItLeft(order, now);
     db.prepare(
       `UPDATE orders SET status = ?, delivered_at = ?,
                           ${input.payment ? 'paid_at = ?,' : ''}
@@ -5001,8 +5051,8 @@ export function markOrderDelivered(
         WHERE id = ?`,
     ).run(
       ...(input.payment
-        ? [finalStatus, now, now, now, input.orderId]
-        : [finalStatus, now, now, input.orderId]),
+        ? [finalStatus, at, at, now, input.orderId]
+        : [finalStatus, at, now, input.orderId]),
     );
 
     const after = findOrder(db, input.orderId)!;
