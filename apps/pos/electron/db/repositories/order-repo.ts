@@ -7,6 +7,7 @@ import { writeAudit } from './audit-repo.js';
 import { decrementForOrder } from './stock-movement-repo.js';
 import { getOrderStockStatus, settleOrderStock } from './order-stock-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
+import { findCashMovement, recordDeliveryChargeToRider } from './shift-repo.js';
 import { skipFbrForOrder, touchedFbrProduction } from './fbr-queue-repo.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from './modifier-repo.js';
 import { noDiscountOf } from './category-repo.js';
@@ -24,6 +25,7 @@ import {
   computeDiscountCents,
   dealAmount,
   dealMinTillCents,
+  formatCents,
   deliveryAreas,
   deliveryChargeTarget,
   discountBaseCents,
@@ -72,6 +74,7 @@ import {
   deliveryChargeLinesCents,
   isDeliveryChargeLine,
   isDeliveryChargeMenuItem,
+  isOutsideRiderOrder,
 } from '@cheeseoclock/shared-types';
 import type {
   CameBy,
@@ -3446,6 +3449,11 @@ export function getOrderSnapshot(
     }
   }
 
+  // What the drawer paid an outside rider for this order (0049): only on an
+  // order that has such a payout, or that went out with one (null until it
+  // is paid), so every other snapshot reads exactly as before.
+  const riderPayout = deliveryChargeToRiderOf(db, orderId);
+
   return {
     order,
     items,
@@ -3460,6 +3468,11 @@ export function getOrderSnapshot(
     // own note (orderNotesOf), not left in the row unread.
     deliveryNotes: orderRow.delivery_notes?.trim() || null,
     rider,
+    ...(riderPayout
+      ? { deliveryChargeToRider: riderPayout }
+      : isOutsideRiderOrder(order)
+        ? { deliveryChargeToRider: null }
+        : {}),
   };
 }
 
@@ -3473,6 +3486,9 @@ export function getOrderSnapshot(
 //   preparing                → ready | out_for_delivery
 //   ready                    → out_for_delivery (delivery)  | served / paid (takeaway, dine-in)
 //   out_for_delivery         → ready (rider un-assigned) | delivered / paid (markOrderDelivered)
+//                              An outside rider who pays the shop while out
+//                              (takeRiderPayment) leaves it out_for_delivery
+//                              with paid_at set; Delivered then closes it.
 //   served / delivered       → paid (markOrderServed / markOrderDelivered with a payment)
 //   unpaid, not void         → void (voidOrder); paid → refunded (refundOrder).
 //                              Either way the stock it holds is settled
@@ -3945,10 +3961,273 @@ export function markOrderServed(
   return result;
 }
 
+// -----------------------------------------------------------------------------
+// An outside rider's money (migration 0049; the owner, 2 Oct 2026: "Third-party
+// rider keeps the delivery charge: the drawer expects the food total from the
+// rider"; "some pay in advance some dont" -> ask at Send out; Q4: a rider who
+// pays by EasyPaisa / JazzCash sends the FOOD TOTAL and keeps his fee from the
+// customer's cash).
+//
+// The sale stays the full total: the payments add up to it, so Reports, the
+// refunds and FBR read it as before. What the rider keeps (the order's frozen
+// rider_keeps_cents) is a cash payout linked to the order, written in the same
+// transaction as the money, and each event writes exactly one drawer row (or
+// none, when no cash reaches the drawer), so the shift's expected cash is what
+// the rider really hands in.
+// -----------------------------------------------------------------------------
+
+/** The outside rider pays the shop in cash or by wallet — never by card (the words the screens show). */
+export const OUTSIDE_RIDER_NO_CARD = "An outside rider can't take a card: choose Cash, EasyPaisa or JazzCash.";
+
+/**
+ * The window's riderKeepsCents is not what the order says now (the other
+ * till sent it out again, assigned one of the shop's own riders, or brought
+ * it back): what the rider hands in may have changed, so nothing is taken.
+ */
+export const RIDER_WINDOW_CHANGED = 'This order changed since this window opened — close it and open the order again.';
+
+/** How shift-repo's recordDeliveryChargeToRider words a wasted trip's payout (its 'kept' one says "Delivery charge kept…"). */
+const TRIP_PAYOUT_REASON_START = 'Trip paid to the outside rider';
+
+/** The oldest live payout to an outside rider for this order (cash_movements.order_id, idx_cash_movements_order). */
+function liveRiderPayout(
+  db: AppDatabase,
+  orderId: string,
+): { id: string; amount_cents: number; created_at: string; reason: string | null } | null {
+  const row = db
+    .prepare(
+      `SELECT id, amount_cents, created_at, reason FROM cash_movements
+        WHERE order_id = ? AND type = 'payout' AND deleted_at IS NULL
+        ORDER BY created_at, id LIMIT 1`,
+    )
+    .get(orderId) as { id: string; amount_cents: number; created_at: string; reason: string | null } | undefined;
+  return row ?? null;
+}
+
+/**
+ * OrderSnapshot.deliveryChargeToRider: the live payout to the outside rider
+ * for this order, or null. Kept or trip is read from its reason (the row has
+ * no column for it, and the reason travels to the other till with the row).
+ */
+function deliveryChargeToRiderOf(db: AppDatabase, orderId: string): NonNullable<OrderSnapshot['deliveryChargeToRider']> | null {
+  const p = liveRiderPayout(db, orderId);
+  if (!p) return null;
+  return {
+    amountCents: Number(p.amount_cents) as Order['totalCents'],
+    at: p.created_at,
+    why: (p.reason ?? '').startsWith(TRIP_PAYOUT_REASON_START) ? 'trip' : 'kept',
+  };
+}
+
+/** How the outside rider settles: Cash, EasyPaisa or JazzCash (Card is refused); null = the customer paid the shop before. */
+interface OutsideRiderPay {
+  method: PaymentMethod;
+  referenceNo?: string | null;
+}
+
+/** One payment leg of a rider's settlement: row + sync + audit, like every payment (tendered_cents NULL). */
+function insertRiderPayment(
+  db: AppDatabase,
+  orderId: string,
+  leg: { method: PaymentMethod; amountCents: number; referenceNo: string | null },
+  shiftId: string,
+  now: string,
+  actor: Actor & { userId: string },
+): void {
+  const pid = uuidv7();
+  db.prepare(
+    `INSERT INTO payments
+       (id, order_id, method, amount_cents, tendered_cents, reference_no,
+        received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 1, ?)`,
+  ).run(pid, orderId, leg.method, leg.amountCents, leg.referenceNo, actor.userId, now, now, now, actor.deviceId, shiftId);
+  enqueuePaymentSyncAndAudit(db, {
+    entityType: 'payments',
+    entityId: pid,
+    op: 'upsert',
+    payload: {
+      id: pid,
+      orderId,
+      method: leg.method,
+      amountCents: leg.amountCents,
+      tenderedCents: null,
+      referenceNo: leg.referenceNo,
+      paidAt: now,
+      receivedByUserId: actor.userId,
+    },
+  }, actor.userId);
+}
+
+/**
+ * Settle an order sent out with an outside rider, INSIDE the caller's
+ * transaction (Rider paid, Delivered + Pay; a prepaid order at Send out, step
+ * 18-3). keep = the order's frozen riderKeepsCents. The payout of `keep` to
+ * the rider is written once (recordDeliveryChargeToRider, why 'kept'):
+ * skipped when keep is 0 or a live payout for this order already exists.
+ *  - cash: ONE payment of the total (tendered_cents NULL: the dialog works out
+ *    the rider's change itself) and ONE drawer 'sale' row for what he hands
+ *    in, total − keep, pointing at the payout, reason 'Rider kept Rs 200
+ *    delivery charge' (none when he keeps nothing);
+ *  - easypaisa / jazzcash: he sends the FOOD TOTAL and keeps his fee from the
+ *    customer's cash (owner Q4): the wallet for total − keep and cash for
+ *    keep (only when he keeps something); NO drawer row — no cash comes in;
+ *  - null (the customer paid the shop before): no payment; the drawer pays
+ *    his fee: one drawer 'payout' row −keep for the payout written now;
+ *  - card, or anything else: refused (OUTSIDE_RIDER_NO_CARD).
+ * Money only changes hands while a shift is open on this till
+ * (shiftForPayment's refusal). Returns the drawer row's id (its pulse), or
+ * null when no drawer row was written.
+ */
+function settleOutsideRider(
+  db: AppDatabase,
+  order: Order,
+  pay: OutsideRiderPay | null,
+  actor: Actor & { userId: string },
+  now: string = nowIso(),
+): string | null {
+  const keep = order.riderKeepsCents;
+  if (typeof keep !== 'number' || !Number.isInteger(keep) || keep < 0) {
+    throw new Error('This order did not go out with an outside rider');
+  }
+  if (pay && pay.method !== 'cash' && pay.method !== 'easypaisa' && pay.method !== 'jazzcash') {
+    throw new Error(OUTSIDE_RIDER_NO_CARD);
+  }
+  const total = order.totalCents as number;
+  const handedIn = total - keep;
+
+  if (pay) {
+    const shiftId = shiftForPayment(db, actor.deviceId);
+    if (pay.method === 'cash') {
+      if (total > 0) insertRiderPayment(db, order.id, { method: 'cash', amountCents: total, referenceNo: null }, shiftId, now, actor);
+    } else {
+      const referenceNo = pay.referenceNo?.trim() || null;
+      if (handedIn > 0) insertRiderPayment(db, order.id, { method: pay.method, amountCents: handedIn, referenceNo }, shiftId, now, actor);
+      if (keep > 0) insertRiderPayment(db, order.id, { method: 'cash', amountCents: keep, referenceNo: null }, shiftId, now, actor);
+    }
+  }
+
+  // His fee, once per order.
+  const payoutId =
+    keep > 0 && liveRiderPayout(db, order.id) === null
+      ? recordDeliveryChargeToRider(db, { orderId: order.id, orderNumber: order.orderNumber, amountCents: keep, why: 'kept' }, actor)
+      : null;
+
+  if (pay === null) {
+    // The customer paid the shop before: the drawer opens to pay his fee.
+    if (payoutId === null) return null;
+    return recordDrawerOpen(
+      db,
+      {
+        kind: 'payout',
+        reason: findCashMovement(db, payoutId)?.reason ?? null,
+        orderId: order.id,
+        cashMovementId: payoutId,
+        amountCents: -keep,
+      },
+      actor,
+    ).id;
+  }
+  if (pay.method !== 'cash' || handedIn <= 0) return null;
+  return recordDrawerOpen(
+    db,
+    {
+      kind: 'sale',
+      reason: keep > 0 ? `Rider kept ${formatCents(keep)} delivery charge` : null,
+      orderId: order.id,
+      cashMovementId: payoutId,
+      amountCents: handedIn,
+    },
+    actor,
+  ).id;
+}
+
+export interface TakeRiderPaymentInput {
+  orderId: string;
+  /** Cash, EasyPaisa or JazzCash (a card is refused). */
+  method: PaymentMethod;
+  /** The wallet's transaction number, when there is one. */
+  referenceNo?: string | null;
+  /** What the window showed the rider keeps: it must still be the order's frozen riderKeepsCents. */
+  riderKeepsCents: number;
+}
+
+/**
+ * Rider paid (Send out's "Has the rider paid the shop?" -> Paid now; the
+ * owner's shortage report of 2 Oct 2026: riders who pay in advance hand over
+ * the bill less their fee): the outside rider pays the shop while he is
+ * still out. Only for an order out for delivery with an outside rider, not
+ * paid yet, with a shift open on this till, and only while the order still
+ * keeps what the window showed (else RIDER_WINDOW_CHANGED; an order now with
+ * one of the shop's own riders keeps nothing, so it is refused the same way).
+ * Settles (settleOutsideRider) and stamps paid_at — never before it left, so
+ * the paper reads it as paid while out (riderSettledWhileOut) — and leaves the
+ * status out for delivery: the customer still pays the rider at the door,
+ * and Delivered closes it with no payment and no second payout. One
+ * transaction; the order's sync row and audit 'rider_paid'. Returns the
+ * order with its drawer row (null when no cash came in).
+ */
+export function takeRiderPayment(
+  db: AppDatabase,
+  input: TakeRiderPaymentInput,
+  actor: Actor & { userId: string },
+): OrderWithDrawer {
+  let result!: OrderWithDrawer;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, input.orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'out_for_delivery') {
+      throw new Error(`This order is ${said(order.status)} — the rider pays the shop only while it is out for delivery`);
+    }
+    if (order.paidAt !== null) throw new Error('Order is already paid');
+    if (!isOutsideRiderOrder(order) || input.riderKeepsCents !== order.riderKeepsCents) {
+      throw new Error(RIDER_WINDOW_CHANGED);
+    }
+    if (!(order.totalCents > 0)) throw new Error('This order has nothing to pay');
+
+    const now = nowIso();
+    const drawerOpenId = settleOutsideRider(db, order, { method: input.method, referenceNo: input.referenceNo ?? null }, actor, now);
+
+    // Paid while out: never stamped before the food left (a clock set back).
+    const paidAt = order.dispatchedAt !== null && order.dispatchedAt > now ? order.dispatchedAt : now;
+    const upd = db
+      .prepare(
+        `UPDATE orders SET paid_at = ?, updated_at = ?, version = version + 1
+          WHERE id = ? AND status = 'out_for_delivery' AND paid_at IS NULL AND rider_keeps_cents = ?
+            AND deleted_at IS NULL`,
+      )
+      .run(paidAt, now, order.id, order.riderKeepsCents);
+    if (upd.changes === 0) {
+      throw new Error('Order changed state before this action could complete. Refresh and try again.');
+    }
+    const after = findOrder(db, order.id)!;
+    enqueueSync(db, { entityType: 'orders', entityId: order.id, op: 'upsert', payload: after });
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: order.id,
+      action: 'rider_paid',
+      actorUserId: actor.userId,
+      before: order,
+      after,
+    });
+    result = { ...after, drawerOpenId };
+  });
+  tx();
+  log.info('Outside rider paid the shop', { id: input.orderId, method: input.method, total: result.totalCents });
+  return result;
+}
+
 /**
  * Mark a delivery order delivered. Optionally records a COD payment in the
  * same transaction — when `payment` is provided we transition straight from
  * `out_for_delivery` (or `ready`) through `delivered` to `paid`.
+ *
+ * An order sent out with an outside rider (Send out, 0049) is settled the
+ * outside rider's way (settleOutsideRider): `riderKeepsCents` is what the
+ * window showed he keeps and must still be the order's frozen value (a
+ * missing one on an outside order is a change too: RIDER_WINDOW_CHANGED).
+ * One he already paid for while out (Rider paid) closes with no payment and
+ * no second payout. One of the shop's own riders, a takeaway or a foodpanda
+ * order goes exactly the v0.7.33 way.
  */
 export function markOrderDelivered(
   db: AppDatabase,
@@ -3960,6 +4239,8 @@ export function markOrderDelivered(
       tenderedCents?: number | null;
       referenceNo?: string | null;
     };
+    /** What the window showed an outside rider keeps (Order.riderKeepsCents); absent for one of the shop's own riders. */
+    riderKeepsCents?: number | null;
   },
   actor: Actor & { userId: string },
 ): OrderWithDrawer {
@@ -3989,7 +4270,27 @@ export function markOrderDelivered(
     // If a payment was supplied, insert it and bump to `paid`. Otherwise just
     // mark `delivered` and leave tendering for later.
     let finalStatus: OrderStatus = alreadyPaid ? 'paid' : 'delivered';
-    if (input.payment) {
+    // An outside rider's money (0049): settled his way, in this transaction.
+    // A window that says he keeps something on an order that keeps nothing
+    // now (one of the shop's own riders) is a change as well.
+    const outside = input.payment !== undefined && (isOutsideRiderOrder(order) || typeof input.riderKeepsCents === 'number');
+    let outsideDrawerOpenId: string | null = null;
+    if (outside && input.payment) {
+      const p = input.payment;
+      if (!isOutsideRiderOrder(order) || input.riderKeepsCents !== order.riderKeepsCents) {
+        throw new Error(RIDER_WINDOW_CHANGED);
+      }
+      if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
+      if (p.amountCents !== order.totalCents) {
+        throw new Error(
+          `COD payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
+            order.totalCents / 100
+          })`,
+        );
+      }
+      outsideDrawerOpenId = settleOutsideRider(db, order, { method: p.method, referenceNo: p.referenceNo ?? null }, actor, now);
+      finalStatus = 'paid';
+    } else if (input.payment) {
       const p = input.payment;
       assertMethodFitsOrder(order.mode, p.method);
       if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
@@ -4064,8 +4365,13 @@ export function markOrderDelivered(
       before: order,
       after,
     });
-    // Cash on delivery brought back by the rider: a cash sale's drawer open.
-    const drawerOpenId = input.payment ? recordCashSale(db, input.orderId, [input.payment], actor) : null;
+    // Cash on delivery brought back by the rider: a cash sale's drawer open
+    // (an outside rider's was written when he settled).
+    const drawerOpenId = outside
+      ? outsideDrawerOpenId
+      : input.payment
+        ? recordCashSale(db, input.orderId, [input.payment], actor)
+        : null;
     result = { ...after, drawerOpenId };
   });
   tx();

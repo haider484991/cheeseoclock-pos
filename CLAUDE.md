@@ -57,6 +57,7 @@ The rules below are **non-negotiable** — breaking any of them silently breaks 
 ## Snapshots
 
 - `order_items.unit_price_cents`, `order_item_modifiers.price_delta_cents` + `modifier_name`, `order_items.tax_category_id`, `order_items.no_discount` are **snapshots at order time**. They are not foreign keys to the live menu. Changing tomorrow's menu must not change yesterday's history.
+- `orders.rider_keeps_cents` (what an outside rider keeps) is **frozen at Send out**. The rider's money, the papers and the screens read the frozen value; never work it out again from the order's lines.
 
 ## Hardware
 

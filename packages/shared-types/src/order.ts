@@ -241,6 +241,18 @@ export interface OrderSnapshot {
   /** Rider snapshot for the order — null until a rider is assigned. */
   rider: { id: UUID; name: string; phone: string } | null;
   /**
+   * What the drawer paid the outside rider for this order (migration 0049: a
+   * live cash payout with cash_movements.order_id): the delivery charge he
+   * kept when the money was settled ('kept': Rider paid, Delivered + Pay, or
+   * a prepaid order sent out), or a trip he went on for an order then
+   * cancelled ('trip'). amountCents is the payout, `at` when it was paid.
+   * Null on an outside-rider order (isOutsideRiderOrder) nothing has been
+   * paid out for yet; absent on every other order with no such payout. A
+   * refund never takes it back. Read from the oldest live payout: two meet
+   * only through a two-till race.
+   */
+  deliveryChargeToRider?: { amountCents: Cents; at: string; why: 'kept' | 'trip' } | null;
+  /**
    * Only on orders:listActive, from this till's print queue: the kitchen
    * ticket did not print and nothing has printed it since (Live Orders'
    * "Ticket not printed"). Absent everywhere else.
