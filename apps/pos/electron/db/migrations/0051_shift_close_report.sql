@@ -1,0 +1,31 @@
+-- 0051_shift_close_report.sql
+-- The shift report printed at Close shift (the owner, 2 Oct 2026: "while
+-- closing there should full sales from printer", and on the sample paper:
+-- "all orders and totals also add seetngs so we can customize").
+--
+--   shifts.close_report_json
+--             the shift report as worked out inside the close, as JSON
+--             text, money in cents throughout: the canonical text of
+--             pos-domain shiftReportJson, version 1 ({"v":1,...}), in the
+--             key order of shared-types ShiftReport.
+--             It always holds EVERY section, the list of every order of the
+--             shift included. The owner's switches in Settings > Printers >
+--             Shift report only change what PRINTS, so a section switched
+--             on later prints from these saved figures.
+--             A reprint prints these saved figures: nothing works them out
+--             again, so a later refund, a renamed item or a deleted test
+--             order never changes a closed shift's paper.
+--             No food cost, waste rupees, commission or profit is ever in it.
+--             NULL = a shift still open, one closed before 0.7.35, one closed
+--             on an older till, or one whose report could not be made (the
+--             close is never refused for that).
+--
+-- Written only by repositories/shift-repo.ts closeShift, in the close's own
+-- UPDATE, with its sync entry and its hash-chained audit row. A plain
+-- nullable ADD COLUMN: no CHECK, no backfill and no index (nothing looks a
+-- shift up by it). Row images are built from the live schema, so the column
+-- travels with the shift without a sync-core change; a till without it
+-- ignores the key, and an image without the key leaves the column here as it
+-- is. Kept apart from 0050 so each step adds only the column its own code
+-- writes. Install both tills the same day.
+ALTER TABLE shifts ADD COLUMN close_report_json TEXT;

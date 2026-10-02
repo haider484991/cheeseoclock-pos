@@ -563,7 +563,9 @@ live('two tills: the count travels with the shift', () => {
       const changes = await queued(a, TILL_A);
       expect(changes.filter((c) => c.entityType === 'shifts').at(-1)?.payload).toMatchObject({ countedNotesJson: EXAMPLE_JSON });
       await applyAll(old, changes);
-      const { counted_notes_json: _text, ...asOnOld } = a.prepare(`SELECT * FROM shifts WHERE id = ?`).get(shiftId) as Row;
+      // Every column the old till has; 0051's saved report (empty: nothing makes it yet) is not one of them either.
+      const { counted_notes_json: _text, close_report_json: _report, ...asOnOld } = a.prepare(`SELECT * FROM shifts WHERE id = ?`).get(shiftId) as Row;
+      expect(cols).not.toContain('close_report_json');
       expect(old.prepare(`SELECT * FROM shifts WHERE id = ?`).get(shiftId)).toEqual(asOnOld);
     });
   }
