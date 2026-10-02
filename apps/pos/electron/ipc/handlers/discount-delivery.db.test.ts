@@ -340,7 +340,14 @@ describe.skipIf(!Sqlite)('a discount leaves the delivery charge alone (the defau
     // The rule is frozen on the row (source stays NULL: a staff discount).
     const [row] = liveDiscounts(orderId);
     expect(row).toMatchObject({ source: null, value: 10, amount_cents: 20_000 });
-    expect(JSON.parse(String(row?.['rule_json']))).toEqual({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: false, from: 'till' });
+    // (A till discount leaves the value deals alone too since 0.7.34: skipsNoDiscountLines.)
+    expect(JSON.parse(String(row?.['rule_json']))).toEqual({
+      kind: 'discount_base',
+      v: 1,
+      alsoOffDeliveryCharge: false,
+      from: 'till',
+      skipsNoDiscountLines: true,
+    });
     // …audited and synced with it.
     const audit = db.prepare(`SELECT after_json FROM audit_log WHERE entity_type = 'order_discounts' AND action = 'create' ORDER BY rowid DESC LIMIT 1`).get();
     expect(JSON.parse(String(audit?.['after_json']))).toMatchObject({ rule: { alsoOffDeliveryCharge: false } });

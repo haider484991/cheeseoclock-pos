@@ -31,8 +31,9 @@ import {
   sameDeliveryArea,
   type DeliveryChargeTarget,
   type DiscountScope,
-  discountRuleAlsoOffDeliveryCharge,
+  discountRuleScope,
   storedDiscountAlsoOffDeliveryCharge,
+  storedDiscountScope,
   foodpandaDealRule,
   foodpandaTerms,
   matchOffer,
@@ -51,6 +52,7 @@ import {
   requiresManagerApproval,
   discountReasonMissing,
   DISCOUNT_REASON_REQUIRED,
+  NOTHING_TO_DISCOUNT,
 } from '@cheeseoclock/pos-domain';
 import {
   readApprovalLimits,
@@ -914,8 +916,10 @@ function applyOfferStep(db: AppDatabase, orderId: string, actor: Actor): boolean
       cameBy: order.cameBy ?? null,
       hasPhone: phone !== null,
       createdAt: order.createdAt,
-      foodCents: discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: false }),
-      subtotalCents: discountBaseCents(lines, { alsoOffDeliveryCharge: true, skipsNoDiscountLines: false }),
+      // What an offer may come off: never the value deals (an offer's rule
+      // skips them), the delivery charge only when the owner's switch says so.
+      foodCents: discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true }),
+      subtotalCents: discountBaseCents(lines, { alsoOffDeliveryCharge: true, skipsNoDiscountLines: true }),
     },
     liveOffers,
     {
@@ -1909,19 +1913,29 @@ export interface ApplyDiscountOptions {
 
 /**
  * An order's live lines as the discount maths sees them (pos-domain
- * discount-base.ts): what each came to, the name it was sold under and its
- * tax rate, in the till's order ((created_at, id)) — the order the discount
- * is split in, here, on the F3 screen and on the FBR invoice.
+ * discount-base.ts): what each came to, the name it was sold under, its tax
+ * rate and its never-discounted mark (0047 order_items.no_discount, frozen
+ * when the line was added), in the till's order ((created_at, id)) — the
+ * order the discount is split in, here, on the F3 screen and on the FBR
+ * invoice.
  */
-function discountLinesOf(db: AppDatabase, orderId: string): Array<{ lineTotalCents: number; menuItemName: string; taxRateBps: number }> {
+function discountLinesOf(
+  db: AppDatabase,
+  orderId: string,
+): Array<{ lineTotalCents: number; menuItemName: string; taxRateBps: number; noDiscount: boolean }> {
   const rows = db
     .prepare(
-      `SELECT line_total_cents, menu_item_name, tax_rate_bps_snapshot
+      `SELECT line_total_cents, menu_item_name, tax_rate_bps_snapshot, no_discount
          FROM order_items WHERE order_id = ? AND deleted_at IS NULL
         ORDER BY created_at, id`,
     )
-    .all(orderId) as Array<{ line_total_cents: number; menu_item_name: string; tax_rate_bps_snapshot: number }>;
-  return rows.map((r) => ({ lineTotalCents: r.line_total_cents, menuItemName: r.menu_item_name, taxRateBps: r.tax_rate_bps_snapshot }));
+    .all(orderId) as Array<{ line_total_cents: number; menu_item_name: string; tax_rate_bps_snapshot: number; no_discount: number }>;
+  return rows.map((r) => ({
+    lineTotalCents: r.line_total_cents,
+    menuItemName: r.menu_item_name,
+    taxRateBps: r.tax_rate_bps_snapshot,
+    noDiscount: r.no_discount === 1,
+  }));
 }
 
 export function applyDiscount(
@@ -1940,11 +1954,14 @@ export function applyDiscount(
     if (!v.ok) throw new Error(v.missing.join('; '));
 
     // The rule this discount is given under, FROZEN on its row below: does it
-    // also come off the delivery charge? The till's switch as it is now
-    // (Settings → Money & discounts), or the website's own for a web order.
-    // Everything after — each cart change, the tax, the FBR invoice, profit,
-    // a reprint — follows the row, never the live setting.
-    const rule = opts.rule ?? tillDiscountRule(readDiscountAlsoOffDeliveryCharge(db), false);
+    // also come off the delivery charge, and does it leave the value deals
+    // alone? The till's switch as it is now (Settings → Money & discounts),
+    // and never on a value deal (owner, 2 Oct 2026) — except on a foodpanda
+    // order, where a manager's discount must match the tablet, which covers
+    // them; or the website's own for a web order. Everything after — each
+    // cart change, the tax, the FBR invoice, profit, a reprint — follows the
+    // row, never the live setting.
+    const rule = opts.rule ?? tillDiscountRule(readDiscountAlsoOffDeliveryCharge(db), order.mode !== 'foodpanda');
     // The owner's "a discount needs a reason" (Settings → Money & discounts), read live —
     // defense in depth behind the IPC handler. Every discount the till gives by hand; not the
     // website's pick-up % (its rule is the website's and it carries its own name), and never
@@ -1952,11 +1969,22 @@ export function applyDiscount(
     if (rule.from === 'till' && readDiscountReasonRequired(db) && discountReasonMissing(input.reason)) {
       throw new Error(DISCOUNT_REASON_REQUIRED);
     }
-    // What it is worked on: the food only, unless the rule says every line.
-    const base = discountBaseCents(discountLinesOf(db, input.orderId), {
+    // What it is worked on: the lines its rule lets it come off — the food
+    // only, unless it says every line; never the value deals when it skips them.
+    const lines = discountLinesOf(db, input.orderId);
+    const base = discountBaseCents(lines, {
       alsoOffDeliveryCharge: rule.alsoOffDeliveryCharge,
-      skipsNoDiscountLines: false,
+      skipsNoDiscountLines: rule.skipsNoDiscountLines === true,
     });
+    // Nothing it may come off: every line it could is a value deal. A till
+    // discount is refused (the IPC handler refuses first, before any PIN is
+    // checked). The website's pick-up % writes nothing — the customer was
+    // shown no discount — and never throws: a refusal inside the web import
+    // would retry it until the order is cancelled.
+    if (base === 0 && rule.skipsNoDiscountLines === true && lines.some((l) => l.noDiscount)) {
+      if (rule.from === 'website') return;
+      throw new Error(NOTHING_TO_DISCOUNT);
+    }
 
     // Repo-level approval guard — defense in depth even if a future caller
     // bypasses the IPC handler (which already enforces it via verifyManagerPin).
@@ -2203,14 +2231,18 @@ function recomputeOrderTotals(
     | undefined;
   // The lines in the till's order: what the discount is worked on and split over.
   const lines = discountLinesOf(db, orderId);
-  // Does the discount also come off the delivery charge? The rule FROZEN on
-  // its row when it was given — never the live setting. A row with no rule
-  // (given before 0.7.26, or on an older till) covers every line, as then.
-  const scope: DiscountScope = {
-    alsoOffDeliveryCharge: discountRow ? discountRuleAlsoOffDeliveryCharge(discountRow.rule_json) : true,
-    skipsNoDiscountLines: false,
-  };
-  // What it is worked on: the food only, or every line (the subtotal).
+  // Does the discount also come off the delivery charge, and does it leave
+  // the value deals alone? The rule FROZEN on its row when it was given —
+  // never the live setting. A row with no rule (given before 0.7.26, or on
+  // an older till) covers every line, as then; one from before 0.7.34, and
+  // the foodpanda deal, cover the value deals.
+  const scope: DiscountScope = discountRow
+    ? discountRuleScope(discountRow.rule_json)
+    : { alsoOffDeliveryCharge: true, skipsNoDiscountLines: false };
+  // What it is worked on: the food only, or every line (the subtotal); the
+  // value deals left out when the rule skips them. A staff discount whose
+  // lines are all value deals now (the pizza taken off) stays on at Rs 0,
+  // and works again when food is added.
   const base = discountBaseCents(lines, scope);
   let discount = 0;
   if (discountRow) {
@@ -2223,10 +2255,11 @@ function recomputeOrderTotals(
     // the whole subtotal, as an older till does.
     const dealRule = discountRow.source === 'foodpanda' ? parseFoodpandaDealRule(discountRow.rule_json) : null;
     // One of the owner's automatic offers: re-worked from the terms frozen on
-    // the row (its %/rupees, most-off; the minimum on the food; the delivery
-    // charge as its rule says), never from the live setting; never cleared by
-    // the approval re-check (the owner's own rule). Taken off by the cashier:
-    // Rs 0. A rule this version can't read: its type and value on the base.
+    // the row (its %/rupees, most-off; the minimum on the food, without the
+    // value deals when its rule skips them; the delivery charge as its rule
+    // says), never from the live setting; never cleared by the approval
+    // re-check (the owner's own rule). Taken off by the cashier: Rs 0. A rule
+    // this version can't read: its type and value on the base.
     const offerRule = discountRow.source === 'offer' ? parseOfferRule(discountRow.rule_json) : null;
     if (discountRow.source === 'offer') {
       discount = offerRule
@@ -2235,7 +2268,7 @@ function recomputeOrderTotals(
           : offerAmount(
               offerRule.offer,
               base,
-              discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: false }),
+              discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: scope.skipsNoDiscountLines }),
             )
         : computeDiscountCents(base, d);
       if (discount !== discountRow.amount_cents) {
@@ -2307,9 +2340,9 @@ function recomputeOrderTotals(
   // Tax = per-line tax on (line_total - its share of the discount) * rate.
   // The discount is split over the lines by weight in whole paisa that add up
   // to it exactly (pos-domain taxAfterDiscount → allocateDiscount), a
-  // delivery charge the rule leaves alone weighing 0; the F3 preview, the FBR
-  // mapper and the website's estimate split it the same way. Lines in
-  // insertion order so they all agree.
+  // delivery charge or a value deal the rule leaves alone weighing 0; the F3
+  // preview, the FBR mapper and the website's estimate split it the same
+  // way. Lines in insertion order so they all agree.
   const tax = subtotal > 0 ? taxAfterDiscount(lines, discount, scope).taxCents : 0;
 
   const total = subtotal - discount + tax;
@@ -2560,6 +2593,7 @@ function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: nu
   // On what the deal was worked: the food, when its frozen rule left the
   // delivery charge alone — read against the stored bill (an older till
   // re-works it over every line: pos-domain storedDiscountAlsoOffDeliveryCharge).
+  // The value deals always count: the deal matches the tablet, which covers them.
   const lines = discountLinesOf(db, order.id);
   const share = rule
     ? dealAmount(
@@ -3167,18 +3201,19 @@ export function getOrderSnapshot(
   }>;
 
   const discounts: OrderSnapshot['discounts'] = discountRows.map((d, i) => {
-    // Whether it also came off the delivery charge: the rule FROZEN on the
-    // row (none = yes, as every discount before 0.7.26). The FBR mapper, the
-    // receipt and the screens read it from here, never from the setting.
-    // The order's discount (its newest row, the one its totals are worked
-    // from) is read against the STORED bill: one a till older than the rule
-    // re-worked over every line reads that way, so the invoice, the debit
-    // note and the words add up to what was stored.
-    const frozen = discountRuleAlsoOffDeliveryCharge(d.rule_json);
-    const alsoOffDeliveryCharge =
-      i === discountRows.length - 1
-        ? storedDiscountAlsoOffDeliveryCharge(frozen, items, order.discountCents, order.taxCents)
-        : frozen;
+    // Which lines it came off: whether it also came off the delivery charge
+    // (none = yes, as every discount before 0.7.26) and whether it left the
+    // value deals alone (none = no, as every discount before 0.7.34), from
+    // the rule FROZEN on the row, with each line's own never-discounted mark.
+    // The FBR mapper, the receipt and the screens read both from here, never
+    // from the setting or the category a line is in today. The order's
+    // discount (its newest row, the one its totals are worked from) is read
+    // against the STORED bill: one a till older than the rule re-worked over
+    // more lines reads that way, so the invoice, the debit note and the words
+    // add up to what was stored.
+    const frozen = discountRuleScope(d.rule_json);
+    const { alsoOffDeliveryCharge, skipsNoDiscountLines } =
+      i === discountRows.length - 1 ? storedDiscountScope(frozen, items, order.discountCents, order.taxCents) : frozen;
     // The foodpanda deal's figures on this order, from its frozen terms and
     // the lines it was worked on (the food, when it left the delivery charge
     // alone; else the stored subtotal): the whole deal, and foodpanda's part
@@ -3228,6 +3263,7 @@ export function getOrderSnapshot(
           }
         : {}),
       alsoOffDeliveryCharge,
+      skipsNoDiscountLines,
     };
   });
 

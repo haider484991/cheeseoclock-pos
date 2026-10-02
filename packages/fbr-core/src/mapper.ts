@@ -4,9 +4,9 @@
  * The trickiest piece is per-line tax + discount split, because FBR expects
  * each line item to carry its `valueSalesExcludingST` and `salesTaxApplicable`.
  * We mirror what `recomputeOrderTotals` does on the write path: prorate any
- * order-level discount across lines by line-total weight (a delivery charge
- * the discount's frozen rule left alone weighs 0), then compute the line's
- * net (after-discount) and tax exactly the same way.
+ * order-level discount across lines by line-total weight (a delivery charge,
+ * or a value deal, that the discount's frozen rule left alone weighs 0), then
+ * compute the line's net (after-discount) and tax exactly the same way.
  */
 
 import { isDeliveryChargeLine, type OrderSnapshot } from '@cheeseoclock/shared-types';
@@ -44,21 +44,29 @@ export function mapOrderToFbrPayload(
   const discount = order.discountCents;
 
   // The discount split over the lines exactly as the till split it for tax
-  // (pos-domain allocateDiscount / splitDiscount — kept in step by hand,
-  // fbr-core has no dependency on pos-domain): whole paisa that add up to the
-  // discount. A delivery-charge line weighs 0 when the discount's FROZEN rule
-  // left it alone (the snapshot's discount row, never the live setting; a row
-  // with no rule covered every line), so a queued or late invoice, and a
-  // refund's debit note mapped days later, split it as the sale was split.
-  // A discount more than the lines it may come off (only a till older than
-  // the rule stores one, re-working it over every line) is split over every
-  // line, as that till split it (pos-domain weightsThatCarry), so the
-  // invoice still adds up to the stored bill.
+  // (pos-domain allocateDiscount / splitDiscount and lineTakesDiscount — kept
+  // in step by hand, fbr-core has no dependency on pos-domain): whole paisa
+  // that add up to the discount. A line weighs 0 when the discount's FROZEN
+  // rule left it alone (the snapshot's discount row as read against the
+  // stored bill, never the live setting; a row with no rule covered every
+  // line): a delivery-charge line (alsoOffDeliveryCharge false), and a
+  // value-deal line (its own noDiscount snapshot) when the rule skipped them
+  // (skipsNoDiscountLines; absent on every row before 0.7.34, and never on
+  // the foodpanda deal). So a queued or late invoice, and a refund's debit
+  // note mapped days later, split it as the sale was split. A discount more
+  // than the lines it may come off (only a till older than the rule stores
+  // one, re-working it over more lines) is split over every line, as that
+  // till split it (pos-domain weightsThatCarry), so the invoice still adds up
+  // to the stored bill.
   const discounts = snapshot.discounts ?? [];
-  const leavesCharge = discounts[discounts.length - 1]?.alsoOffDeliveryCharge === false;
+  const last = discounts[discounts.length - 1];
+  const leavesCharge = last?.alsoOffDeliveryCharge === false;
+  const leavesMarked = last?.skipsNoDiscountLines === true;
   const orderDiscount = subtotal > 0 ? discount : 0;
   const totals: number[] = items.map((l) => l.lineTotalCents);
-  const masked: number[] = items.map((l, i) => (leavesCharge && isDeliveryChargeLine(l) ? 0 : totals[i]!));
+  const masked: number[] = items.map((l, i) =>
+    (leavesCharge && isDeliveryChargeLine(l)) || (leavesMarked && l.noDiscount === true) ? 0 : totals[i]!,
+  );
   const carry = masked.reduce((s, w) => s + Math.max(0, w), 0);
   const shares = allocateDiscount(Math.round(orderDiscount) > carry ? totals : masked, orderDiscount);
   const fbrItems: FbrInvoiceItem[] = items.map((line, i) => {

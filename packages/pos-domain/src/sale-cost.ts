@@ -164,11 +164,12 @@ export interface FoodCostLine {
   /** A delivery charge or a non-food category: not food sales. */
   isFee: boolean;
   /**
-   * The line took none of the order's discount: a delivery charge the
-   * discount's FROZEN rule left alone (the row's rule_json and the name the
-   * line was sold under — discount-base.ts discountSkipMask; never `isFee`,
-   * which follows the live "not food" categories). Absent = it took its
-   * share (every discount before 0.7.26).
+   * The line took none of the order's discount: a delivery charge, or a
+   * value deal, that the discount's FROZEN rule left alone (the row's
+   * rule_json, the name the line was sold under and its own no_discount
+   * snapshot — discount-base.ts discountSkipMask; never `isFee`, which
+   * follows the live "not food" categories, nor the category the item is in
+   * today). Absent = it took its share (every discount before 0.7.26).
    */
   skipsDiscount?: boolean;
   /** Cost rows kept with the sale for this line (0 when none). */

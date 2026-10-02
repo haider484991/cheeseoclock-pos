@@ -59,11 +59,12 @@ export interface OrderSplit {
  * lineNet_ℓ − ref_ℓ. The lines must be in the till's order ((created_at, id),
  * as recomputeOrderTotals shares the discount). Σ nets = sales before tax exactly.
  *
- * `discountSkips[ℓ]`: line ℓ took none of the discount — a delivery charge
- * the discount's FROZEN rule left alone (discount-base.ts
- * discountSkipMask), weight 0 in the discount's split exactly as the till
- * split it. Absent = every line (every discount before 0.7.26). Part refunds
- * are still spread over every line's net, the delivery charge included.
+ * `discountSkips[ℓ]`: line ℓ took none of the discount — a delivery charge,
+ * or a value deal (the line's own no_discount snapshot), that the discount's
+ * FROZEN rule left alone (discount-base.ts discountSkipMask), weight 0 in the
+ * discount's split exactly as the till split it. Absent = every line (every
+ * discount before 0.7.26). Part refunds are still spread over every line's
+ * net, the delivery charge and the value deals included.
  */
 export function splitOrderLines(
   lineTotalsCents: readonly number[],

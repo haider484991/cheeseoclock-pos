@@ -61,6 +61,7 @@ import {
   discountReasonMissing,
   DISCOUNT_REASON_REQUIRED,
   kitchenHearsOfClose,
+  NOTHING_TO_DISCOUNT,
   requiresManagerApproval,
   stockSettlementForCounter,
   stockStatusForCounter,
@@ -368,20 +369,32 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // The live limit (Settings → Money & discounts): the screen may be a Save behind, this decides.
     const limits = readApprovalLimits(ctx.db);
     // …on what the discount will be worked on: the food only, unless the owner's
-    // switch says it also comes off the delivery charge (the repository freezes
-    // the same switch on the row, and checks again).
+    // switch says it also comes off the delivery charge; never the value deals,
+    // except on a foodpanda order (a manager matching the tablet, which covers
+    // them). The repository freezes the same on the row, and checks again.
+    const skipsDeals = current.order.mode !== 'foodpanda';
     const base = discountBaseCents(current.items, {
       alsoOffDeliveryCharge: readDiscountAlsoOffDeliveryCharge(ctx.db),
-      skipsNoDiscountLines: false,
+      skipsNoDiscountLines: skipsDeals,
     });
+    const leavesDeals = skipsDeals && current.items.some((i) => i.noDiscount === true);
+    // Every line it could come off is a value deal: refused BEFORE the manager's PIN is
+    // checked, so it never uses up a PIN attempt. The repository refuses too.
+    if (base === 0 && leavesDeals) {
+      throw new IpcGuardError({ code: 'precondition_failed', message: NOTHING_TO_DISCOUNT });
+    }
     if (replacesDeal || requiresManagerApproval({ type: payload.discountType, value: payload.value }, base, limits)) {
       if (!payload.approverPin) {
         throw new IpcGuardError({
           code: 'precondition_failed',
           message: replacesDeal
             ? FOODPANDA_DEAL_NEEDS_MANAGER
-            : // The rule in words, on what it was checked on: the food, when a delivery charge is left out of it.
-              `Manager approval required for this discount. ${approvalRuleText(limits, base < current.order.subtotalCents ? 'food' : 'order')}`,
+            : // The rule in words, on what it was checked on: the food without the value deals when
+              // they were left out of it; the food, when only a delivery charge is.
+              `Manager approval required for this discount. ${approvalRuleText(
+                limits,
+                leavesDeals ? 'food_no_deals' : base < current.order.subtotalCents ? 'food' : 'order',
+              )}`,
         });
       }
       try {

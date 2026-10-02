@@ -29,9 +29,10 @@
  * a line's cost rows folded into one number by an indexed look-up
  * (idx_order_item_costs_line_part); only the others are read line by line,
  * each with its discount and part refunds shared out (pos-domain
- * splitOrderLines — the one allocation the till has; a delivery charge the
- * discount's FROZEN rule left alone takes none of it, from the rule on the
- * discount row and the name the line was sold under, never the live setting).
+ * splitOrderLines — the one allocation the till has; a delivery charge or a
+ * value deal the discount's FROZEN rule left alone takes none of it, from the
+ * rule on the discount row, the name the line was sold under and its own
+ * never-discounted mark, never the live setting).
  *
  * The waterfall: sales before tax − food cost of the sales whose cost is
  * known − the sales whose cost is NOT known (set aside, never costed at Rs 0)
@@ -200,7 +201,7 @@ export const PROFIT_REST_SQL = `
          ro.drule AS drule,
          oi.id AS lineId, oi.created_at AS at,
          oi.menu_item_id AS itemId, oi.menu_item_name AS soldName, oi.quantity AS qty, oi.line_total_cents AS lineTotal,
-         oi.tax_rate_bps_snapshot AS rate,
+         oi.tax_rate_bps_snapshot AS rate, oi.no_discount AS nd,
          ${FEE_LINE} AS isFee,
          (SELECT COALESCE(SUM(c.cost_cents), 0) * 8
                  + COALESCE(MAX(CASE c.status WHEN 'failed' THEN 3 WHEN 'partial' THEN 2 WHEN 'none' THEN 1 WHEN 'full' THEN 0 END), 7)
@@ -443,6 +444,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     qty: number;
     lineTotal: number;
     rate: number;
+    nd: number;
     isFee: number;
     packed: number;
   }>;
@@ -451,7 +453,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
     id: string;
     itemId: string | null;
     line: FoodCostLine;
-    /** As the discount maths sees it: what it came to, the name it was SOLD under, its tax rate. */
+    /** As the discount maths sees it: what it came to, the name it was SOLD under, its tax rate, its never-discounted mark. */
     sold: TaxedDiscountLine;
   }
   interface RestOrder {
@@ -501,7 +503,7 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
         status: c.status,
         hasRecipeNow: r.itemId !== null && menu.withRecipe.has(r.itemId),
       },
-      sold: { lineTotalCents: Number(r.lineTotal), menuItemName: r.soldName, taxRateBps: Number(r.rate) },
+      sold: { lineTotalCents: Number(r.lineTotal), menuItemName: r.soldName, taxRateBps: Number(r.rate), noDiscount: Number(r.nd) === 1 },
     });
   }
   const orders = [...byOrder.values()];
@@ -509,9 +511,10 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
   for (const o of orders) {
     if (o.lines.length > 1) o.lines.sort(tillOrder);
     o.order.lines = o.lines.map((l) => l.line);
-    // The lines that took none of the discount: a delivery charge its frozen
-    // rule left alone, by the name it was SOLD under (never the live menu or
-    // "not food" categories), read against the stored bill.
+    // The lines that took none of the discount: a delivery charge or a value
+    // deal its frozen rule left alone, by the name the line was SOLD under and
+    // its own never-discounted mark (never the live menu or "not food"
+    // categories), read against the stored bill.
     if (o.order.discountCents > 0) {
       const skips = storedDiscountSkips(o.drule, o.lines.map((l) => l.sold), o.order.discountCents, o.tax);
       o.lines.forEach((l, i) => {

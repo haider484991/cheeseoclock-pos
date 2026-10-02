@@ -168,6 +168,16 @@ export interface OrderDiscount {
    * every discount before the rule existed (a row with no rule reads true).
    */
   alsoOffDeliveryCharge?: boolean;
+  /**
+   * Whether this discount left the value deals alone (the order lines marked
+   * noDiscount), as FROZEN on its row (pos-domain discountRuleScope) and, on
+   * the order's newest row, read against the stored bill (storedDiscountScope:
+   * false when a till older than the rule re-worked it over the deals too).
+   * true = not worked on them, not split over them (the tax split and the FBR
+   * invoice follow). false / absent = over them too, as every discount before
+   * 0.7.34, the foodpanda deal and a manager's discount on a foodpanda order.
+   */
+  skipsNoDiscountLines?: boolean;
 }
 
 export interface Payment {
