@@ -282,7 +282,8 @@ live('kitchenTicketsNotPrinted', () => {
       // Every table is searched through an index (the plan names tables by their aliases): never a full scan.
       expect(p).not.toMatch(/\bSCAN\b/);
     }
-    expect(plan()).toContain('idx_orders_status_created');
+    // Orders by their status: since 0048 SQLite may take idx_orders_status_sent, which also leads with status.
+    expect(plan()).toMatch(/SEARCH o USING INDEX idx_orders_status_(created|sent) \(status=\?\)/);
   });
 
   it('reads only: no sync entry, no audit row, nothing changed in the queue', () => {

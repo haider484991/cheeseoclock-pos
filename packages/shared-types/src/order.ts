@@ -65,6 +65,12 @@ export interface Order {
   taxCents: Cents;
   totalCents: Cents;
   createdAt: string;
+  /**
+   * When the order first left open (orders.sent_at, migration 0048): Send to
+   * kitchen, Pay now or a website order's import. Stamped once, never moved.
+   * Absent before 0.7.34 and on an order never sent: read createdAt then.
+   */
+  sentAt?: string | null;
   paidAt: string | null;
   voidedAt: string | null;
   voidedBy: UUID | null;

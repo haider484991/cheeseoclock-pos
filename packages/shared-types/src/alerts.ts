@@ -171,7 +171,7 @@ export interface PendingAlerts {
 // phone or address, a website address or a password. The PIN screen polls it, and the main
 // process sends 'alerts:watch-changed' (no payload) when part of it changes.
 
-/** Orders older than this (minutes) are left out of the watch. */
+/** Orders sent longer ago than this (minutes; started, before 0.7.34) are left out of the watch. */
 export const ALERT_WATCH_MAX_AGE_MIN = 180;
 
 /** An order the kitchen has not finished, as the PIN screen may see it. */
@@ -180,7 +180,7 @@ export interface WatchOrder {
   orderNumber: string;
   status: 'sent_to_kitchen' | 'preparing' | 'ready';
   source: OrderSource;
-  /** Whole minutes since the order came in. */
+  /** Whole minutes since the order was sent (since it was started, for an order from before 0.7.34). */
   minutes: number;
 }
 

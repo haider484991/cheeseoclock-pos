@@ -552,16 +552,17 @@ describe.skipIf(!Sqlite)('the watch: kitchen orders, tickets not printed and web
   const ago = (min: number) => new Date(Date.now() - min * 60_000 - 5_000).toISOString();
   const watch = () => (call('alerts:getWatch') as { ok: true; data: AlertWatch }).data;
 
+  /** An order started `minutes` ago; `sentAt` when it was sent (0048), none = from before 0.7.34. */
   function kitchenOrder(
     n: number,
-    o: { status?: string; source?: 'web' | 'pos'; minutes: number; deleted?: boolean },
+    o: { status?: string; source?: 'web' | 'pos'; minutes: number; deleted?: boolean; sentAt?: string },
   ): void {
     const created = ago(o.minutes);
     db.prepare(
       `INSERT INTO orders (id, order_number, mode, status, cashier_id, source, customer_name_snapshot,
                            customer_phone_snapshot, delivery_address_snapshot, total_cents, created_at, updated_at,
-                           deleted_at, device_id)
-       VALUES (?, ?, 'delivery', ?, 'u_cash', ?, ?, ?, ?, 150000, ?, ?, ?, ?)`,
+                           deleted_at, device_id, sent_at)
+       VALUES (?, ?, 'delivery', ?, 'u_cash', ?, ?, ?, ?, 150000, ?, ?, ?, ?, ?)`,
     ).run(
       `o${n}`,
       `CO-20261001-00${n}`,
@@ -574,6 +575,7 @@ describe.skipIf(!Sqlite)('the watch: kitchen orders, tickets not printed and web
       created,
       o.deleted ? created : null,
       DEV,
+      o.sentAt ?? null,
     );
   }
 
@@ -632,6 +634,25 @@ describe.skipIf(!Sqlite)('the watch: kitchen orders, tickets not printed and web
     expect(w.timing).toEqual({ notStartedMin: 5, notDoneMin: 20 });
   });
 
+  it('counts from when the order was sent (owner, 2 Oct 2026): started 4 hours ago and sent 10 minutes ago, it is listed with 10 minutes, in its place by when it was sent; sent over 3 hours ago, it is left out', async () => {
+    await seed();
+    // Rung up 4 hours ago, sent 10 minutes (and 30 seconds) ago: inside the 3-hour window, before o69 (10 minutes 5 seconds).
+    kitchenOrder(71, { minutes: 4 * 60, source: 'pos', sentAt: new Date(Date.now() - 10 * 60_000 - 30_000).toISOString() });
+    // Rung up 5 hours ago and sent 3 hours 10 minutes ago: outside it, whatever its start.
+    kitchenOrder(72, { minutes: 5 * 60, source: 'pos', sentAt: new Date(Date.now() - 190 * 60_000).toISOString() });
+    // Rung up 50 minutes ago and sent 2 minutes ago: 2 minutes, not 50.
+    kitchenOrder(73, { minutes: 50, status: 'preparing', source: 'pos', sentAt: new Date(Date.now() - 2 * 60_000 - 10_000).toISOString() });
+    expect(watch().orders).toEqual([
+      { orderId: 'o62', orderNumber: 'CO-20261001-0062', status: 'preparing', source: 'pos', minutes: 40 },
+      { orderId: 'o61', orderNumber: 'CO-20261001-0061', status: 'sent_to_kitchen', source: 'web', minutes: 12 },
+      { orderId: 'o71', orderNumber: 'CO-20261001-0071', status: 'sent_to_kitchen', source: 'pos', minutes: 10 },
+      { orderId: 'o69', orderNumber: 'CO-20261001-0069', status: 'sent_to_kitchen', source: 'web', minutes: 10 },
+      { orderId: 'o67', orderNumber: 'CO-20261001-0067', status: 'sent_to_kitchen', source: 'web', minutes: 6 },
+      { orderId: 'o68', orderNumber: 'CO-20261001-0068', status: 'sent_to_kitchen', source: 'web', minutes: 3 },
+      { orderId: 'o73', orderNumber: 'CO-20261001-0073', status: 'preparing', source: 'pos', minutes: 2 },
+    ]);
+  });
+
   it('kitchen tickets this till gave up on, and website orders not confirmed for 5 minutes with when the website cancels them', async () => {
     await seed();
     const w = watch();
@@ -657,11 +678,14 @@ describe.skipIf(!Sqlite)('the watch: kitchen orders, tickets not printed and web
 
   it('carries no customer name, phone or address, for anyone (the PIN screen reads it)', async () => {
     await seed();
+    // …nor when an order was sent: only its minutes.
+    kitchenOrder(71, { minutes: 30, sentAt: new Date(Date.now() - 5 * 60_000).toISOString() });
     for (const s of [null, CASHIER, OWNER]) {
       h.session = s;
       const text = JSON.stringify(watch());
       for (const secret of [NAME, 'Zarnigar', PHONE, '5550142', ADDRESS, 'Madeup']) expect(text).not.toContain(secret);
       expect(text).not.toMatch(/created_?at/i);
+      expect(text).not.toMatch(/sent_?at/i);
     }
   });
 });

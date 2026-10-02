@@ -142,6 +142,8 @@ interface OrderRow {
   delete_stock?: string | null;
   /** How it came in (0044): 'walk_in' | 'phone' | 'whatsapp' | 'website' | 'foodpanda'; null = not asked. */
   came_by?: string | null;
+  /** When it first left 'open' (0048); null = before 0.7.34, or never sent. */
+  sent_at?: string | null;
 }
 
 const ORDER_CAME_BY: readonly string[] = ['walk_in', 'phone', 'whatsapp', 'website', 'foodpanda'];
@@ -184,6 +186,10 @@ function rowToOrder(row: OrderRow): Order {
     taxCents: row.tax_cents as Order['taxCents'],
     totalCents: row.total_cents as Order['totalCents'],
     createdAt: row.created_at,
+    // When it was sent (0048), only once it was: an order never sent, or one
+    // from before 0.7.34, reads exactly as before (every reader falls back to
+    // createdAt).
+    ...(row.sent_at ? { sentAt: row.sent_at } : {}),
     paidAt: row.paid_at,
     voidedAt: row.voided_at,
     voidedBy: row.voided_by as Order['voidedBy'],
@@ -218,8 +224,17 @@ const ORDER_SELECT = `
   customer_name_snapshot, customer_phone_snapshot, delivery_address_snapshot, delivery_notes,
   assigned_rider_id, dispatched_at, delivered_at,
   created_at, updated_at, device_id, version,
-  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock, came_by
+  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock, came_by, sent_at
 `;
+
+/**
+ * The Live Orders clock in SQL (the owner, 2 Oct 2026: count the card from
+ * when the order is sent): when the order was sent, or when it was started
+ * for one from before 0.7.34. Written exactly like the expression of
+ * idx_orders_status_sent (migration 0048), so a query that filters or sorts
+ * on it can use that index.
+ */
+export const ORDER_CLOCK_SQL = 'COALESCE(sent_at, created_at)';
 
 export function findOrder(db: AppDatabase, id: string): Order | null {
   const row = db
@@ -2617,12 +2632,14 @@ export function tenderOrder(
     // `paid` straight from tender used to make prepaid deliveries vanish from
     // the board with no way to assign a rider.
     const nextStatus: OrderStatus = 'sent_to_kitchen';
+    // Paid and sent in one step (Pay now, foodpanda's pay-and-send): sent now
+    // too (0048), stamped once like Send to kitchen.
     db.prepare(
-      `UPDATE orders SET status = ?, paid_at = ?, updated_at = ?, version = version + 1
+      `UPDATE orders SET status = ?, paid_at = ?, sent_at = COALESCE(sent_at, ?), updated_at = ?, version = version + 1
         WHERE id = ?`,
-    ).run(nextStatus, now, now, input.orderId);
+    ).run(nextStatus, now, now, now, input.orderId);
 
-    const finalized = { ...order, status: nextStatus, paidAt: now };
+    const finalized = { ...order, status: nextStatus, paidAt: now, sentAt: order.sentAt ?? now };
     enqueueSync(db, {
       entityType: 'orders',
       entityId: input.orderId,
@@ -3465,8 +3482,9 @@ const ACTIVE_STATUSES: OrderStatus[] = [
 
 /**
  * Active orders for the Live Orders board: anything that isn't done, voided,
- * or refunded. Returned as full snapshots so the UI doesn't need a second
- * round-trip per card.
+ * or refunded, the one sent longest ago first (ORDER_CLOCK_SQL: started,
+ * for an order from before 0.7.34). Returned as full snapshots so the UI
+ * doesn't need a second round-trip per card.
  */
 export function listActiveOrders(
   db: AppDatabase,
@@ -3483,7 +3501,7 @@ export function listActiveOrders(
   const rows = db
     .prepare(
       `SELECT id FROM orders WHERE ${conditions.join(' AND ')}
-        ORDER BY created_at ASC LIMIT 200`,
+        ORDER BY ${ORDER_CLOCK_SQL} ASC, created_at ASC LIMIT 200`,
     )
     .all(...params) as Array<{ id: string }>;
   // Reuse getOrderSnapshot so the rider join + delivery address logic is
@@ -3518,6 +3536,13 @@ function setOrderStatus(
     for (const e of extraSet) {
       setParts.push(`${e.col} = ?`);
       setParams.push(e.value);
+    }
+    // The first time the order leaves 'open' (Send to kitchen, a website
+    // order's import) is when it was sent (0048): stamped once, never moved
+    // by a second Send or any later status.
+    if (order.status === 'open' && next !== 'open') {
+      setParts.push('sent_at = COALESCE(sent_at, ?)');
+      setParams.push(now);
     }
     // Race-safe UPDATE: gate on the *current* status matching one of the
     // legalFrom values. If two dispatchers click the same action within ms,

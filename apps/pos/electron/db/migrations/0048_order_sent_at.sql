@@ -1,0 +1,23 @@
+-- 0048_order_sent_at.sql
+-- When an order was sent (the owner, 2 Oct 2026: count the Live Orders card
+-- "from when the order is sent", not from when the cart was started).
+--
+--   sent_at   the first time the order left 'open': Send to kitchen, Pay now
+--             (pay and send in one step, a foodpanda order's too) or a
+--             website order committed at import (order-repo setOrderStatus
+--             and tenderOrder). Stamped once and never moved: Preparing,
+--             Ready, a second Send or any later status leaves it as it is.
+--             NULL = an order from before 0.7.34, or one never sent (a cart,
+--             a cart cancelled); every reader then falls back to created_at
+--             (order-repo ORDER_CLOCK_SQL, written exactly like the index
+--             below, so the index serves it).
+--
+-- A plain nullable ADD COLUMN, no CHECK and no backfill: an older order keeps
+-- reading from when it was started. Row images are built from the live
+-- schema, so the column travels without a sync-core change; a till without it
+-- (v0.7.33) ignores the key, and an image without the key leaves the column
+-- here as it is. Install both tills the same day. The index serves what the
+-- kitchen still has, by status, oldest sent first: the Live Orders board and
+-- the PIN screen's watch (alert-watch.ts).
+ALTER TABLE orders ADD COLUMN sent_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_orders_status_sent ON orders(status, COALESCE(sent_at, created_at)) WHERE deleted_at IS NULL;
