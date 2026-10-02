@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Button, cn } from '@cheeseoclock/ui';
+import { Button, cn, NumberPad } from '@cheeseoclock/ui';
 import { Banknote, BookOpenCheck, ChevronRight, Clock, History, Inbox, Lock, PauseCircle, ShieldCheck, Wallet, X } from 'lucide-react';
-import { formatCents } from '@cheeseoclock/pos-domain';
+import { cashCountText, cashCountTotalCents, formatCents } from '@cheeseoclock/pos-domain';
 import type {
+  CashCount,
   IpcRequest,
   OpeningFloatPrefill,
   RefusedItemRefundOwed,
@@ -15,8 +16,10 @@ import type {
 } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
+import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { useSessionStore } from '../../stores/sessionStore';
 import { openShiftHistory } from '../costing/deepLinks';
+import { isTypingField, ownsEnter } from '../checkout/keys';
 import { CashMovementDialog } from './CashMovementDialog';
 import { drawerResultToast } from './drawerToast';
 import { PAGE_ACCESS } from './navAccess';
@@ -24,6 +27,20 @@ import { SecretInput } from '../../components/secret/SecretInput';
 import { fmtWhen } from '../reports/reportFormat';
 import { refusedItemOwedLine } from '../orders/refusedItemWords';
 import { ALERT_WATCH_KEY, useWebOrdersPause } from '../notifications/useAlertWatch';
+import { CLEAR_ALL_QUESTION, NOTE_COUNTER_FIRST_ROW, NoteCounter, noteCounterKeyAction } from './NoteCounter';
+import {
+  noteCounterCell,
+  noteCounterClear,
+  noteCounterInitial,
+  noteCounterKey,
+  noteCounterMaxDigits,
+  noteCounterOtherIsLarge,
+  noteCounterPad,
+  noteCounterSelect,
+  noteCounterStarted,
+  noteCounterToCount,
+  type NoteCounterState,
+} from './noteCounterState';
 import {
   dismissShiftCloseOutcome,
   outcomeFor,
@@ -503,14 +520,16 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
 // ---------------------------------------------------------------------------
 
 /**
- * What the close box sends. The ids of the unpaid orders it showed go with
- * it (none shown: an empty list), so the till refuses a close that would
- * carry over an order that came in during the count on a reason the manager
- * gave for the others — or with no reason asked at all (shift-repo).
+ * What the close box sends. The count goes note by note (the owner: always
+ * by note) with the total it adds up to; the till checks the two agree and
+ * keeps both (shift-repo closeShift). The ids of the unpaid orders it showed
+ * go with it (none shown: an empty list), so the till refuses a close that
+ * would carry over an order that came in during the count on a reason the
+ * manager gave for the others — or with no reason asked at all (shift-repo).
  */
 export function closeShiftRequest(p: {
   shiftId: string;
-  counted: string;
+  count: CashCount;
   notes: string;
   unpaid: readonly UnpaidOrderAtClose[];
   carryOverReason: string;
@@ -518,7 +537,8 @@ export function closeShiftRequest(p: {
 }): IpcRequest<'shifts:close'> {
   return {
     shiftId: p.shiftId,
-    countedCashCents: Math.round((parseFloat(p.counted) || 0) * 100),
+    countedCashCents: cashCountTotalCents(p.count),
+    countedNotes: p.count,
     notes: p.notes.trim() || null,
     ...(p.unpaid.length > 0 ? { carryOverReason: p.carryOverReason.trim() } : {}),
     carryOverOrderIds: p.unpaid.map((o) => o.orderId),
@@ -532,13 +552,73 @@ export function hasNewUnpaid(shown: readonly UnpaidOrderAtClose[], now: ShiftClo
   return now.unpaidOrders.some((o) => !seen.has(o.orderId));
 }
 
+/** The words under the Close shift title: the count is by note, and the till adds it up. */
+export const CLOSE_SHIFT_DESCRIPTION = 'Count the notes in the drawer, row by row. The till adds them up.';
+
+/** The footer's hints, beside Cancel and Close shift (closeShiftHint). */
+export const CLOSE_HINT_NOT_STARTED = 'Type a count in at least one row (0 if the drawer is empty).';
+export const CLOSE_HINT_CHECKING = 'Checking the orders on this till…';
+export const CLOSE_HINT_REASON = 'Give a reason for the unpaid orders (below the count).';
+export const CLOSE_HINT_COINS_LARGE = 'Rs 1,000 or more in coins and other: count the notes in their own rows.';
+
 /**
- * The close box: open the drawer, count it (blind), a closing note, and —
- * when orders on this till are still unpaid — the list of them and the
- * manager's reason for carrying them over to the next shift. `approverPin`
- * and `check`: a manager's PIN typed on a cashier's login (already checked
- * by CloseShiftNotAllowedDialog); every call below carries it again and the
- * main process checks it again.
+ * The one hint the close box's footer shows, first match wins: nothing typed
+ * yet; the till still checking this till's orders; no reason for the unpaid
+ * orders; then, amber and never in the way, a large 'Coins and other' (notes
+ * belong in their own rows). Null when there is nothing to say. The first
+ * three are why Close shift is not ready.
+ */
+export function closeShiftHint(p: {
+  started: boolean;
+  checked: boolean;
+  reasonMissing: boolean;
+  otherIsLarge: boolean;
+}): { text: string; amber: boolean } | null {
+  if (!p.started) return { text: CLOSE_HINT_NOT_STARTED, amber: false };
+  if (!p.checked) return { text: CLOSE_HINT_CHECKING, amber: false };
+  if (p.reasonMissing) return { text: CLOSE_HINT_REASON, amber: false };
+  if (p.otherIsLarge) return { text: CLOSE_HINT_COINS_LARGE, amber: true };
+  return null;
+}
+
+/** What leaving the box asks once a count is typed (never the browser's own confirm()). */
+export const STOP_CLOSING_QUESTION = 'Stop closing the shift? The count you typed is not kept.';
+
+/**
+ * Leaving the close box (Cancel, the X, Escape, a tap outside), all one way:
+ * - while the close is saving, nothing happens (the reply is on its way: the
+ *   box would go, and the shift close anyway behind the manager's back);
+ * - once something is typed, it asks first, with "Keep counting" as the safe
+ *   answer: a slip of the hand must not throw a half-done count away;
+ * - otherwise the box just closes.
+ */
+export async function leaveCloseShift(p: { saving: boolean; started: boolean; onClose: () => void }): Promise<void> {
+  if (p.saving) return;
+  if (p.started) {
+    const stop = await askConfirm(STOP_CLOSING_QUESTION, { safeDefault: true, yesLabel: 'Stop', noLabel: 'Keep counting' });
+    if (!stop) return;
+  }
+  p.onClose();
+}
+
+/** 'Clear all' asks first, with "Keep counting" as the safe answer; true means clear. */
+export function confirmClearAll(): Promise<boolean> {
+  return askConfirm(CLEAR_ALL_QUESTION, { safeDefault: true, yesLabel: 'Clear all', noLabel: 'Keep counting' });
+}
+
+/**
+ * The close box: open the drawer, count it note by note (blind), a closing
+ * note, and — when orders on this till are still unpaid — the list of them
+ * and the manager's reason for carrying them over to the next shift.
+ * `approverPin` and `check`: a manager's PIN typed on a cashier's login
+ * (already checked by CloseShiftNotAllowedDialog); every call below carries
+ * it again and the main process checks it again.
+ *
+ * It fits a 1024 × 700 till (1011 × 663 inside the window) with the website
+ * pause line on: the header (with that line) and the footer (the hint,
+ * Cancel and Close shift) stay put, and only the middle scrolls when the
+ * unpaid orders make it long. The count is always by note (the owner: no
+ * "type the total"); the Open shift box keeps its one figure.
  */
 export function CloseShiftDialog({
   shiftId,
@@ -551,7 +631,7 @@ export function CloseShiftDialog({
   approverPin?: string;
   check?: ShiftCloseCheck;
 }) {
-  const [counted, setCounted] = useState('');
+  const [count, setCount] = useState(noteCounterInitial);
   const [notes, setNotes] = useState('');
   const [carryOverReason, setCarryOverReason] = useState('');
   const { toast } = useToast();
@@ -621,10 +701,7 @@ export function CloseShiftDialog({
   });
 
   const closeMut = useMutation({
-    mutationFn: () =>
-      ipc.shifts.close(
-        closeShiftRequest({ shiftId, counted, notes, unpaid, carryOverReason, approverPin }),
-      ),
+    mutationFn: (request: IpcRequest<'shifts:close'>) => ipc.shifts.close(request),
     onSuccess: (shift) => {
       toast({
         title: 'Shift closed',
@@ -642,6 +719,7 @@ export function CloseShiftDialog({
           shiftId,
           expectedCents: viaPin ? null : (shift.expectedCashCents ?? 0),
           countedCents: shift.countedCashCents ?? 0,
+          countedNotes: shift.countedNotes ?? null,
           varianceCents: shift.varianceCents ?? 0,
           summary: summary ?? null,
           closedByName: shift.closedByName ?? check?.closerName ?? null,
@@ -663,100 +741,176 @@ export function CloseShiftDialog({
     },
   });
 
+  const saving = closeMut.isPending;
+  const started = noteCounterStarted(count);
+  const reasonMissing = needsReason && !carryOverReason.trim();
+  const hint = closeShiftHint({ started, checked: !!check, reasonMissing, otherIsLarge: noteCounterOtherIsLarge(count) });
+
+  // While the close is saving the count stays as it was sent.
+  const changeCount = (change: (s: NoteCounterState) => NoteCounterState) => {
+    if (!saving) setCount(change);
+  };
+  const confirmLeave = () => void leaveCloseShift({ saving, started, onClose });
+  const clearAll = async () => {
+    if (await confirmClearAll()) changeCount(noteCounterClear);
+  };
+
+  // The keyboard types into the chosen row, like the pad beside it.
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    const target = e.target as HTMLElement;
+    const action = noteCounterKeyAction({
+      key: e.key,
+      ctrlKey: e.ctrlKey,
+      altKey: e.altKey,
+      metaKey: e.metaKey,
+      repeat: e.repeat,
+      isComposing: e.nativeEvent.isComposing,
+      typing: isTypingField(target),
+      ownsEnter: ownsEnter(target),
+      onRow: target.dataset['noteRow'] !== undefined,
+    });
+    if (action === null) return;
+    e.preventDefault();
+    if (action === 'count') changeCount((s) => noteCounterKey(s, e.key));
+  }
+
   return (
-    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
+    <Dialog.Root open onOpenChange={(o) => !o && confirmLeave()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-        {/* Scrolls inside the window when every note is on (unpaid orders, refused items, website pause). */}
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[95vh] w-[460px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900">
-          <CloseShiftHeader onClose={onClose} />
-
-          {viaPin && check && (
-            <p className="mb-3 rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-700 dark:bg-stone-800 dark:text-stone-200">
-              Closing as <span className="font-semibold">{check.closerName}</span> (manager's PIN).
-            </p>
-          )}
-
-          {summary && (
-            <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-sm dark:bg-emerald-950/30">
-              <dl className="space-y-0.5 text-emerald-900 dark:text-emerald-100">
-                <Row k="Paid orders" v={String(summary.paidOrderCount)} />
-                <Row k="Refunds" v={String(summary.refundedOrderCount)} />
-              </dl>
-            </div>
-          )}
-
-          <div className="space-y-3">
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full"
-              disabled={countMut.isPending}
-              onClick={() => countMut.mutate()}
-            >
-              <Inbox className="h-4 w-4" />
-              {countMut.isPending ? 'Opening…' : 'Open drawer to count'}
-            </Button>
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
-                Counted cash in drawer (Rs)
-              </span>
-              <input
-                inputMode="decimal"
-                value={counted}
-                onChange={(e) => setCounted(e.target.value)}
-                placeholder="0"
-                autoFocus
-                className="w-full rounded-lg border border-stone-200 px-3 py-2 text-right font-mono text-lg focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
-              />
-            </label>
-            {needsReason && (
-              <UnpaidCarryOver orders={unpaid} reason={carryOverReason} onReason={setCarryOverReason} />
-            )}
-            {refundsOwed.length > 0 && <RefusedItemsOwed orders={refundsOwed} />}
-            {!check && checkQ.isError && (
-              <p role="alert" className="text-sm font-medium text-red-600 dark:text-red-400">
-                {checkQ.error instanceof Error ? checkQ.error.message : 'Could not check the orders on this till'}
+        <Dialog.Content
+          onKeyDown={onKeyDown}
+          // The keyboard starts on the Rs 5,000 row, not on the X.
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            (e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>(NOTE_COUNTER_FIRST_ROW)?.focus();
+          }}
+          // Escape and a tap outside go the same way as Cancel: asked first once counting started.
+          onEscapeKeyDown={(e) => {
+            e.preventDefault();
+            confirmLeave();
+          }}
+          onPointerDownOutside={(e) => {
+            e.preventDefault();
+            confirmLeave();
+          }}
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-24px)] w-[780px] max-w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl bg-white shadow-soft-lg outline-none dark:bg-stone-900"
+        >
+          <div className="shrink-0 p-5 pb-3">
+            <CloseShiftHeader onClose={confirmLeave} closeDisabled={saving} description={CLOSE_SHIFT_DESCRIPTION} className="" />
+            {pausesWebsite && (
+              <p
+                role="note"
+                className="mt-1 flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
+              >
+                <PauseCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>
+                  <b>{CLOSE_PAUSES_WEBSITE_TEXT}</b> {CLOSE_PAUSES_WEBSITE_NOTE}
+                </span>
               </p>
             )}
-            <label className="block text-sm">
-              <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">
-                Closing note (optional)
-              </span>
-              <input
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Variance reason, cashier handover, etc."
-                className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
-              />
-            </label>
           </div>
 
-          {pausesWebsite && (
-            <div
-              role="note"
-              className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
-            >
-              <p className="flex items-center gap-1.5 font-semibold">
-                <PauseCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-                {CLOSE_PAUSES_WEBSITE_TEXT}
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3">
+            {((viaPin && check) || summary || needsReason) && (
+              <p className="mb-2 flex flex-wrap items-center gap-x-2 text-xs text-stone-600 dark:text-stone-300">
+                {viaPin && check && (
+                  <span>
+                    Closing as <span className="font-semibold">{check.closerName}</span> (manager's PIN).
+                  </span>
+                )}
+                {summary && (
+                  <span>
+                    Paid orders {summary.paidOrderCount} · Refunds {summary.refundedOrderCount}
+                  </span>
+                )}
+                {needsReason && (
+                  <span className="rounded-full bg-amber-100 px-2 font-semibold text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                    {unpaid.length === 1 ? '1 unpaid order' : `${unpaid.length} unpaid orders`}: give a reason below
+                  </span>
+                )}
               </p>
-              <p className="mt-0.5 text-xs">{CLOSE_PAUSES_WEBSITE_NOTE}</p>
-            </div>
-          )}
+            )}
 
-          <div className="mt-5 flex gap-2">
-            <Button variant="ghost" size="md" className="flex-1" onClick={onClose}>
+            <div className="grid grid-cols-[1fr_260px] gap-5">
+              <NoteCounter
+                state={count}
+                onSelect={(row) => changeCount((s) => noteCounterSelect(s, row))}
+                onClear={() => void clearAll()}
+              />
+              <div className="space-y-3">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="w-full"
+                  disabled={countMut.isPending}
+                  onClick={() => countMut.mutate()}
+                >
+                  <Inbox className="h-4 w-4" />
+                  {countMut.isPending ? 'Opening…' : 'Open drawer to count'}
+                </Button>
+                <NumberPad
+                  value={noteCounterCell(count)}
+                  onChange={(next) => changeCount((s) => noteCounterPad(s, next))}
+                  onSubmit={() => changeCount((s) => noteCounterKey(s, 'Enter'))}
+                  maxLength={noteCounterMaxDigits(count.active)}
+                  showDisplay={false}
+                  enterLabel="Next"
+                  keyClassName="h-14"
+                  keyTabIndex={-1}
+                  label="Number pad for the note count"
+                />
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium text-stone-700 dark:text-stone-200">Closing note (optional)</span>
+                  <input
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Variance reason, cashier handover, etc."
+                    className="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200 dark:border-stone-700 dark:bg-stone-800"
+                  />
+                </label>
+              </div>
+            </div>
+
+            {(needsReason || refundsOwed.length > 0 || (!check && checkQ.isError)) && (
+              <div className="mt-3 space-y-3">
+                {needsReason && (
+                  <UnpaidCarryOver orders={unpaid} reason={carryOverReason} onReason={setCarryOverReason} />
+                )}
+                {refundsOwed.length > 0 && <RefusedItemsOwed orders={refundsOwed} />}
+                {!check && checkQ.isError && (
+                  <p role="alert" className="text-sm font-medium text-red-600 dark:text-red-400">
+                    {checkQ.error instanceof Error ? checkQ.error.message : 'Could not check the orders on this till'}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2 border-t border-stone-200 px-5 pb-5 pt-3 dark:border-stone-800">
+            <p
+              className={cn(
+                'min-w-0 flex-1 text-xs',
+                hint?.amber ? 'font-semibold text-amber-700 dark:text-amber-300' : 'text-stone-500 dark:text-stone-400',
+              )}
+            >
+              {hint?.text}
+            </p>
+            <Button variant="ghost" size="md" className="w-28" onClick={confirmLeave} disabled={saving}>
               Cancel
             </Button>
             <Button
               variant="primary"
               size="md"
-              className="flex-1"
-              onClick={() => closeMut.mutate()}
-              disabled={closeMut.isPending || counted === '' || !check || (needsReason && !carryOverReason.trim())}
+              className="w-40"
+              onClick={() =>
+                closeMut.mutate(
+                  closeShiftRequest({ shiftId, count: noteCounterToCount(count), notes, unpaid, carryOverReason, approverPin }),
+                )
+              }
+              disabled={saving || !started || !check || reasonMissing}
             >
-              {closeMut.isPending ? 'Closing…' : 'Close shift'}
+              {saving ? 'Closing…' : 'Close shift'}
             </Button>
           </div>
         </Dialog.Content>
@@ -838,24 +992,41 @@ export function RefusedItemsOwed({ orders }: { orders: readonly RefusedItemRefun
   );
 }
 
-function CloseShiftHeader({ onClose, closeLabel = 'Close' }: { onClose: () => void; closeLabel?: string }) {
+/**
+ * The title of the close box and of its result. `description`: the words
+ * under the title (the result keeps its own). `closeDisabled`: the X waits
+ * while the close is saving. `className`: the space under it ('mb-4'; the
+ * close box has its own padding).
+ */
+function CloseShiftHeader({
+  onClose,
+  closeLabel = 'Close',
+  description = 'Count cash in the drawer and enter the actual total below.',
+  closeDisabled = false,
+  className = 'mb-4',
+}: {
+  onClose: () => void;
+  closeLabel?: string;
+  description?: string;
+  closeDisabled?: boolean;
+  className?: string;
+}) {
   return (
-    <header className="mb-4 flex items-start justify-between gap-3">
+    <header className={cn('flex items-start justify-between gap-3', className)}>
       <div className="flex items-start gap-2">
         <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200">
           <Banknote className="h-4 w-4" />
         </span>
         <div>
           <Dialog.Title className="text-lg font-semibold">Close shift</Dialog.Title>
-          <Dialog.Description className="mt-0.5 text-xs text-stone-500">
-            Count cash in the drawer and enter the actual total below.
-          </Dialog.Description>
+          <Dialog.Description className="mt-0.5 text-xs text-stone-500">{description}</Dialog.Description>
         </div>
       </div>
       <button
         type="button"
         onClick={onClose}
-        className="rounded p-1 text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800"
+        disabled={closeDisabled}
+        className="rounded p-1 text-stone-400 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-stone-800"
         aria-label={closeLabel}
       >
         <X className="h-4 w-4" />
@@ -920,6 +1091,8 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
   const { summary } = outcome;
   const cashOut = summary ? closeResultCashOut(summary) : null;
   const variance = outcome.varianceCents;
+  // The notes counted, on one line under Counted (both closes; none for a count of nothing).
+  const notesLine = outcome.countedNotes ? cashCountText(outcome.countedNotes) : null;
   const keepOpen = (e: Event) => e.preventDefault();
   return (
     <Dialog.Root open>
@@ -929,7 +1102,7 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
           onPointerDownOutside={keepOpen}
           onInteractOutside={keepOpen}
           onEscapeKeyDown={keepOpen}
-          className="fixed left-1/2 top-1/2 z-50 w-[460px] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900"
+          className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-24px)] w-[460px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-white p-5 shadow-soft-lg dark:bg-stone-900"
         >
           <CloseShiftHeader onClose={onDone} closeLabel="Done" />
 
@@ -961,6 +1134,20 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
                 </div>
               )}
               <Row k="Counted" v={formatCents(outcome.countedCents)} />
+              {notesLine && (
+                <div className="text-xs text-emerald-800 dark:text-emerald-200">
+                  <dt className="sr-only">Notes counted</dt>
+                  {/* A long count wraps between its parts, never inside one ("coins and other Rs | 35"). */}
+                  <dd>
+                    {notesLine.split(' · ').map((part, i) => (
+                      <span key={i}>
+                        {i > 0 && ' · '}
+                        <span className="whitespace-nowrap">{part}</span>
+                      </span>
+                    ))}
+                  </dd>
+                </div>
+              )}
             </dl>
           </div>
 

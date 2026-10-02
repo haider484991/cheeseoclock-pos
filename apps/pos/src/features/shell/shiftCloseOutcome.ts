@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ShiftSummary } from '@cheeseoclock/shared-types';
+import type { CashCount, ShiftSummary } from '@cheeseoclock/shared-types';
 import { useSessionStore } from '../../stores/sessionStore';
 
 /**
@@ -27,6 +27,12 @@ export interface ShiftCloseOutcome {
   /** What the drawer should have held; null on a manager's PIN (never on a cashier's screen). */
   expectedCents: number | null;
   countedCents: number;
+  /**
+   * The notes counted (v0.7.35: the close counts the drawer note by note),
+   * shown on one line under Counted, on either close; null when the till's
+   * reply has none (a shift closed on an older till).
+   */
+  countedNotes: CashCount | null;
   /** counted − expected: negative is short, positive is over. */
   varianceCents: number;
   /**

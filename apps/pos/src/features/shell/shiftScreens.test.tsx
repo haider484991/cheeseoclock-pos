@@ -24,6 +24,8 @@
  *      a login that may open one — sending to the kitchen is not blocked.
  *      When closing the last shift paused website orders on this till
  *      (v0.7.33), the banner, the top bar and the Open shift box say so.
+ *  5c. (v0.7.35) The drawer is counted note by note at Close shift only: the
+ *      Open shift box keeps its one figure (owner, 2 Oct 2026).
  *   4. (the card) The Live Orders card shows the order's note: the counter's
  *      "Order notes" box and a website customer's note alike.
  *
@@ -39,6 +41,7 @@ import {
   type AlertWatch,
   type AuthenticatedUser,
   type CashMovement,
+  type OpeningFloatPrefill,
   type OrderSnapshot,
   type Shift,
   type ShiftSummary,
@@ -187,6 +190,7 @@ const SHORT: ShiftCloseOutcome = {
   shiftId: 'shift-1',
   expectedCents: 1_664_000,
   countedCents: 1_654_000,
+  countedNotes: null,
   varianceCents: -10_000,
   summary: SUMMARY,
   closedByName: 'Sara',
@@ -623,6 +627,30 @@ describe('website orders paused because no shift is open on this till', () => {
     for (const seed of NOT_SAID) {
       expect(text(render(<OpenShiftDialog onClose={() => {}} />, seed))).not.toContain(OPEN_RESUMES_WEBSITE_TEXT);
     }
+  });
+});
+
+// ------------------------- 5c. the morning float stays one box (v0.7.35) ------
+
+describe('the Open shift box keeps its one figure: the note count is for closing only', () => {
+  it('exactly one Rs box, filled in from the last count, and no note rows (owner, 2 Oct 2026)', () => {
+    signIn('manager');
+    const start: OpeningFloatPrefill = {
+      prefillCents: 1_427_500,
+      from: 'last_count',
+      lastCount: { countedCashCents: 1_427_500, closedAt: '2026-10-01T21:00:00.000Z' },
+    };
+    const out = render(<OpenShiftDialog onClose={() => {}} />, [[['shifts', 'openingFloat'], start]]);
+    const words = text(out);
+    expect(words).toContain('Opening cash (Rs)');
+    expect(words).toContain(`The last shift closed with ${formatCents(1_427_500)} in the drawer.`);
+    // One figure box (the opening note is the only other box), holding the last count.
+    // (React writes the attribute as inputMode; HTML reads it in any case.)
+    expect(out.match(/inputmode="decimal"/gi)).toHaveLength(1);
+    expect(out.match(/<input/g)).toHaveLength(2);
+    expect(out).toMatch(/<input inputmode="decimal"[^>]* value="14275"\/>/i);
+    expect(out).not.toContain('data-note-row');
+    expect(words).not.toMatch(/Counted cash|Coins and other|Number pad/);
   });
 });
 
