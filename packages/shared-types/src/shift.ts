@@ -112,6 +112,15 @@ export interface ShiftSummary {
   riderChargesCents: Cents;
   /** How many payouts riderChargesCents is (one per order, as a rule). */
   riderChargeCount: number;
+  /**
+   * How many of those were a trip paid (an order cancelled or refused at the
+   * door after he went, or an add-on that went alone) rather than a delivery
+   * charge he kept; the rest are kept charges. The close result says both
+   * (e2e, 2 Oct 2026).
+   */
+  riderTripCount: number;
+  /** The float counted when the shift was opened: the close result's first money row. */
+  openingCashCents: Cents;
   /** opening + cashSales − cashRefunds + cashIn − cashOut. */
   expectedCashCents: Cents;
   byMethod: Array<{

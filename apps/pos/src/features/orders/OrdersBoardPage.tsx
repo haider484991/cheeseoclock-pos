@@ -90,8 +90,10 @@ import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
  * paid on the Ready order: it sends it out and takes his money in one step,
  * then the bill prints (its SHOP COPY says RIDER PAID THE SHOP); closed
  * without paying, it still sends it out. While an outside rider owes, his Out
- * card says "Rider owes Rs …" beside the total and has "Rider paid" next to
- * "Delivered + Pay"; once paid it has the PAID chip and "Delivered".
+ * card says "Rider owes Rs …" in his box and has "Rider paid" above
+ * "Delivered + Pay"; once paid it has the PAID chip and "Delivered". Out
+ * cards are short enough for the column at the till's narrowest window
+ * (OUT_CARD_*, e2e fixes B).
  */
 
 type ColumnKey = 'new' | 'preparing' | 'ready' | 'out';
@@ -562,23 +564,33 @@ function OrderCard({
   const offersAssignLink = order.status === 'ready' && order.mode === 'delivery' && !snap.rider;
   // An outside rider still owes the shop the food total (the total less what he keeps).
   const owes = riderOwesCents(order);
+  // An Out card is kept short enough for the column at the till's narrowest window (OUT_CARD_*, below).
+  const isOut = order.status === 'out_for_delivery';
+  // In place of "Not paid": what he hands the shop, the FOOD TOTAL — the last line of the rider's box.
+  const owesChip = owes !== null && (
+    <div>
+      <span className={OWES_CHIP}>{riderOwesText(owes)}</span>
+    </div>
+  );
   const PrimaryIcon = PRIMARY_ICON[primaryKind];
-  const icons = (
+  // `short`: 40 px tall, beside Rider paid (the big buttons' rows are 44).
+  const icons = (short = false) => (
     <>
       {/* Only while the kitchen still has it: the till refuses the ticket after that. */}
       {offersKitchenReprint(order.status) && (
-        <IconButton label="Reprint kitchen ticket" onClick={onReprintKitchen}>
+        <IconButton label="Reprint kitchen ticket" onClick={onReprintKitchen} short={short}>
           <ChefHat className="h-4 w-4" />
         </IconButton>
       )}
       {/* The bill while unpaid, the receipt once paid. Printed with this button it always says DUPLICATE (the owner's rule; order-papers.ts). */}
-      <IconButton label="Print bill or receipt" onClick={onReprint}>
+      <IconButton label="Print bill or receipt" onClick={onReprint} short={short}>
         <Printer className="h-4 w-4" />
       </IconButton>
       <IconButton
         label={paid ? 'Refund order (manager approval)' : 'Cancel order (manager approval)'}
         onClick={onCancel}
         danger
+        short={short}
       >
         <XCircle className="h-4 w-4" />
       </IconButton>
@@ -598,7 +610,8 @@ function OrderCard({
             <span className="font-mono text-lg font-bold leading-none text-stone-900 dark:text-stone-100">
               #{order.orderNumber.split('-').pop() ?? order.orderNumber}
             </span>
-            <ModeBadge mode={order.mode} />
+            {/* Out for delivery: the column already says so, and the badge took a line of its own. */}
+            {!(isOut && order.mode === 'delivery') && <ModeBadge mode={order.mode} />}
             {order.source === 'web' && (
               // A website takeaway is a customer on the way to collect it, with
               // the online pick-up discount already on the bill.
@@ -630,21 +643,35 @@ function OrderCard({
         </span>
       </header>
 
-      <ul className="space-y-0.5 text-sm text-stone-700 dark:text-stone-300">
-        {lines.slice(0, MAX_LINES).map((i) => (
-          <li key={i.id}>
-            <div className="truncate">
-              <span className="font-bold text-stone-900 dark:text-stone-100">{i.quantity}×</span> {i.menuItemName}
-            </div>
-            {cardLineDetails(i, snap.items).map((d, n) => (
-              <div key={n} className="ml-5 text-xs leading-snug text-stone-500 dark:text-stone-400">
-                {d}
+      {isOut ? (
+        // Out for delivery: the food has left, so its lines are one short paragraph of two lines at most.
+        <p className={OUT_CARD_ITEMS}>
+          {lines.map((i, n) => (
+            <span key={i.id}>
+              {n > 0 && ' · '}
+              <span className="font-bold text-stone-900 dark:text-stone-100">{i.quantity}×</span>
+              {'\u00a0'}
+              {i.menuItemName}
+            </span>
+          ))}
+        </p>
+      ) : (
+        <ul className="space-y-0.5 text-sm text-stone-700 dark:text-stone-300">
+          {lines.slice(0, MAX_LINES).map((i) => (
+            <li key={i.id}>
+              <div className="truncate">
+                <span className="font-bold text-stone-900 dark:text-stone-100">{i.quantity}×</span> {i.menuItemName}
               </div>
-            ))}
-          </li>
-        ))}
-        {lines.length > MAX_LINES && <li className="text-xs text-stone-400">+{lines.length - MAX_LINES} more…</li>}
-      </ul>
+              {cardLineDetails(i, snap.items).map((d, n) => (
+                <div key={n} className="ml-5 text-xs leading-snug text-stone-500 dark:text-stone-400">
+                  {d}
+                </div>
+              ))}
+            </li>
+          ))}
+          {lines.length > MAX_LINES && <li className="text-xs text-stone-400">+{lines.length - MAX_LINES} more…</li>}
+        </ul>
+      )}
 
       {/* Leave-outs and allergy / special-request notes, whatever line they are on:
           the card lists four lines at most, and this must not be one of the hidden ones. */}
@@ -668,7 +695,7 @@ function OrderCard({
       ))}
 
       {(order.mode === 'delivery' || snap.customerPhone) && (
-        <div className="mt-2 space-y-1 rounded-lg bg-stone-50 p-2 text-xs dark:bg-stone-900/60">
+        <div className={isOut ? OUT_CARD_CONTACT : 'mt-2 space-y-1 rounded-lg bg-stone-50 p-2 text-xs dark:bg-stone-900/60'}>
           {snap.customerPhone && (
             <div className="flex items-center gap-1.5 font-mono text-stone-600 dark:text-stone-300">
               <Phone className="h-3 w-3 shrink-0" />
@@ -682,42 +709,44 @@ function OrderCard({
             </div>
           )}
           {snap.rider && (
-            <div className="flex items-center justify-between gap-1.5 rounded-md bg-violet-50 p-1.5 text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <Bike className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate font-semibold">{snap.rider.name}</span>
-                <span className="font-mono text-[10px]">{snap.rider.phone}</span>
-                {outMinutes !== null && <span className="whitespace-nowrap text-[10px]">· out {ageLabel(outMinutes)}</span>}
-              </span>
-              {order.status === 'out_for_delivery' && (
-                <button
-                  type="button"
-                  className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300"
-                  onClick={onChangeRider}
-                >
-                  Change
-                </button>
-              )}
+            // One of the shop's own riders: his name and Change on the first line, his phone and
+            // how long he has been out under them (on one line they ran into Change at 1011 × 663).
+            <div className={RIDER_BOX}>
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <Bike className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate font-semibold">{snap.rider.name}</span>
+                </span>
+                {isOut && (
+                  <button type="button" className={RIDER_LINK} onClick={onChangeRider}>
+                    Change
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-1.5 pl-5 text-[10px]">
+                <span className="font-mono">{snap.rider.phone}</span>
+                {outMinutes !== null && <span className="whitespace-nowrap">· out {ageLabel(outMinutes)}</span>}
+              </div>
+              {owesChip}
             </div>
           )}
           {outside && (
             // One wrapping row: "Outside rider" stays whole on a narrow card (it was cut to "Outside …");
-            // what does not fit goes to the next line, the link last, on the right.
-            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-md bg-violet-50 p-1.5 text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">
-              <span className="flex items-center gap-1.5 whitespace-nowrap font-semibold">
-                <Truck className="h-3.5 w-3.5 shrink-0" />
-                Outside rider
-              </span>
-              {outMinutes !== null && <span className="whitespace-nowrap text-[10px]">· out {ageLabel(outMinutes)}</span>}
-              <span className="whitespace-nowrap text-[10px]">· {outsideRiderKeepsText(order.riderKeepsCents ?? 0, riderKeepsNothingWhy(snap))}</span>
-              <button
-                type="button"
-                className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300"
-                onClick={onChangeRider}
-                title={ASSIGN_RIDER_LINK_TITLE}
-              >
-                Assign rider
-              </button>
+            // what does not fit goes to the next line, the link last, on the right. While he owes, the
+            // amber "Rider owes Rs …" is the box's last line.
+            <div className={RIDER_BOX}>
+              <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+                <span className="flex items-center gap-1.5 whitespace-nowrap font-semibold">
+                  <Truck className="h-3.5 w-3.5 shrink-0" />
+                  Outside rider
+                </span>
+                {outMinutes !== null && <span className="whitespace-nowrap text-[10px]">· out {ageLabel(outMinutes)}</span>}
+                <span className="whitespace-nowrap text-[10px]">· {outsideRiderKeepsText(order.riderKeepsCents ?? 0, riderKeepsNothingWhy(snap))}</span>
+                <button type="button" className={cn('ml-auto', RIDER_LINK)} onClick={onChangeRider} title={ASSIGN_RIDER_LINK_TITLE}>
+                  Assign rider
+                </button>
+              </div>
+              {owesChip}
             </div>
           )}
           {offersAssignLink && (
@@ -734,54 +763,69 @@ function OrderCard({
         </div>
       )}
 
-      <div className="mt-2 flex items-center justify-between border-t border-stone-100 pt-2 dark:border-stone-700">
-        <div className={owes === null ? 'flex items-center gap-2' : 'flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'}>
-          <span className="font-mono text-base font-bold text-stone-900 dark:text-stone-100">
+      {isOut ? (
+        // The bill and, unless his box says what he owes, whether it is paid. No item count: the
+        // three did not fit side by side, and the count has no job once the food has left.
+        <div className={OUT_CARD_TOTAL}>
+          <span className="whitespace-nowrap font-mono text-base font-bold text-stone-900 dark:text-stone-100">
             {formatCents(order.totalCents)}
           </span>
-          {owes === null ? (
-            <PaidChip paid={paid} />
-          ) : (
-            // In place of "Not paid": what he hands the shop, the FOOD TOTAL.
-            <span className="inline-flex items-center whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-              {riderOwesText(owes)}
-            </span>
-          )}
+          {owes === null && <PaidChip paid={paid} />}
         </div>
-        <span className="text-xs text-stone-500">
-          {itemCount} {itemCount === 1 ? 'item' : 'items'}
-        </span>
-      </div>
-
-      {/* "Rider paid" on its own row, full width, above the card's usual row: beside Delivered + Pay
-          it pushed Print and Cancel off a narrow card (review 2 Oct 2026, at 1011 × 663). */}
-      {secondary && (
-        <Button
-          size="md"
-          variant="secondary"
-          className="mt-2 h-11 w-full text-sm text-amber-900 ring-amber-300 hover:bg-amber-50 dark:text-amber-200 dark:ring-amber-800"
-          onClick={onSecondary}
-          disabled={busy}
-        >
-          {secondary.label}
-        </Button>
+      ) : (
+        <div className="mt-2 flex items-center justify-between border-t border-stone-100 pt-2 dark:border-stone-700">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-base font-bold text-stone-900 dark:text-stone-100">
+              {formatCents(order.totalCents)}
+            </span>
+            <PaidChip paid={paid} />
+          </div>
+          <span className="text-xs text-stone-500">
+            {itemCount} {itemCount === 1 ? 'item' : 'items'}
+          </span>
+        </div>
       )}
-      <div className={secondary ? 'mt-1 flex items-center gap-1' : CARD_ACTION_ROW}>
-        {primaryLabel && (
-          <Button
-            size="md"
-            variant={PRIMARY_VARIANT[primaryKind]}
-            // Under "Rider paid" the words may take two lines on a narrow card, so the icons keep their room.
-            className={secondary ? 'h-11 flex-1 px-2 text-sm leading-tight' : 'h-11 flex-1 whitespace-nowrap text-sm'}
-            onClick={onPrimary}
-            disabled={busy}
-          >
-            <PrimaryIcon className="h-4 w-4" />
-            {busy ? 'Saving…' : primaryLabel}
-          </Button>
-        )}
-        {secondary ? icons : <div className={CARD_ICONS}>{icons}</div>}
-      </div>
+
+      {secondary ? (
+        // While an outside rider owes: [Rider paid] with Print and Cancel beside it, then the big
+        // button on a line of its own, its words in one line (beside the icons they took two).
+        <>
+          <div className={OUT_CARD_SECOND_ROW}>
+            <Button size="md" variant="secondary" className={OUT_CARD_SECOND_BUTTON} onClick={onSecondary} disabled={busy}>
+              {secondary.label}
+            </Button>
+            <div className={CARD_ICONS}>{icons(true)}</div>
+          </div>
+          {primaryLabel && (
+            <Button
+              size="md"
+              variant={PRIMARY_VARIANT[primaryKind]}
+              className={OUT_CARD_PRIMARY_ALONE}
+              onClick={onPrimary}
+              disabled={busy}
+            >
+              <PrimaryIcon className="h-4 w-4" />
+              {busy ? 'Saving…' : primaryLabel}
+            </Button>
+          )}
+        </>
+      ) : (
+        <div className={CARD_ACTION_ROW}>
+          {primaryLabel && (
+            <Button
+              size="md"
+              variant={PRIMARY_VARIANT[primaryKind]}
+              className="h-11 flex-1 whitespace-nowrap text-sm"
+              onClick={onPrimary}
+              disabled={busy}
+            >
+              <PrimaryIcon className="h-4 w-4" />
+              {busy ? 'Saving…' : primaryLabel}
+            </Button>
+          )}
+          <div className={CARD_ICONS}>{icons()}</div>
+        </div>
+      )}
     </article>
   );
 }
@@ -800,15 +844,54 @@ const CARD_ACTION_ROW = 'mt-2 flex flex-wrap items-center gap-1';
 /** The icons' group in that row (Reprint kitchen ticket, Print, Cancel / Refund). */
 const CARD_ICONS = 'ml-auto flex shrink-0 items-center gap-1';
 
+/*
+ * Out for delivery cards (e2e fixes B, 2 Oct 2026). At the till's narrowest
+ * window (1024 × 700, 1011 × 663 inside) the Out column is 435 px tall and a
+ * card 162 px wide inside (172 with no scroll bar); a 1024 × 700 page is 420
+ * by 157. An outside rider's card was 493 px, so "Rider paid" was cut and
+ * "Delivered + Pay" was below the fold, and with Print and Cancel beside it
+ * its words took two lines. An Out card now has no Delivery badge (the
+ * column says so), its food as one short paragraph, "Rider owes" in the
+ * rider's box, no item count, and Rider paid with the icons beside it above
+ * the big button alone on its line: 395 px (409 with five lines of food, a
+ * long address and an hour out; an own rider's 364), every button's words on
+ * one line. Measured in Chrome with the till's own CSS, in Inter and in the
+ * system font.
+ */
+/** The food on an Out card: one paragraph, two lines at most. */
+const OUT_CARD_ITEMS = 'line-clamp-2 text-sm leading-snug text-stone-700 dark:text-stone-300';
+/** The phone, the address and the rider on an Out card. */
+const OUT_CARD_CONTACT = 'mt-1.5 space-y-1 rounded-lg bg-stone-50 px-2 py-1.5 text-xs dark:bg-stone-900/60';
+/** A rider's box (one of the shop's own, or the outside rider). */
+const RIDER_BOX =
+  'space-y-1 rounded-md bg-violet-50 px-1.5 py-1 leading-tight text-violet-800 dark:bg-violet-950/40 dark:text-violet-200';
+/** Change / Assign rider in a rider's box. */
+const RIDER_LINK =
+  'shrink-0 rounded px-1 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300';
+/** "Rider owes Rs 4,515": amber, in the rider's box. */
+const OWES_CHIP =
+  'inline-flex items-center whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-200';
+/** An Out card's total row: the bill, and PAID / NOT PAID unless the rider's box says what he owes. */
+const OUT_CARD_TOTAL = 'mt-1.5 flex items-center gap-2 border-t border-stone-100 pt-1.5 dark:border-stone-700';
+/** [Rider paid] [Print] [Cancel]. */
+const OUT_CARD_SECOND_ROW = 'mt-1.5 flex items-center gap-1';
+const OUT_CARD_SECOND_BUTTON =
+  'h-10 min-w-0 flex-1 whitespace-nowrap px-1 text-sm text-amber-900 ring-amber-300 hover:bg-amber-50 dark:text-amber-200 dark:ring-amber-800';
+/** The big button under it, alone on its line. */
+const OUT_CARD_PRIMARY_ALONE = 'mt-1 h-11 w-full whitespace-nowrap px-2 text-sm';
+
 function IconButton({
   label,
   onClick,
   danger,
+  short,
   children,
 }: {
   label: string;
   onClick: () => void;
   danger?: boolean;
+  /** 40 px tall instead of 44 (beside Rider paid on an Out card). */
+  short?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -818,7 +901,7 @@ function IconButton({
       aria-label={label}
       title={label}
       className={cn(
-        'flex h-11 w-9 items-center justify-center rounded-lg text-stone-400 transition-colors',
+        `flex ${short ? 'h-10' : 'h-11'} w-9 items-center justify-center rounded-lg text-stone-400 transition-colors`,
         danger
           ? 'hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950 dark:hover:text-red-300'
           : 'hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-700 dark:hover:text-stone-200',

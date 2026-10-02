@@ -324,7 +324,9 @@ describe('the shift history panel', () => {
     // The cash in / out count is the entries typed by hand (the till sends it so).
     expect(words).toContain('closed by Sara · cash in/out 2×');
     // The note says what the two columns are.
-    expect(words).toContain('Cash taken out = Taken out + To riders (delivery charges kept by outside riders, and trips paid for cancelled orders).');
+    // In the close result's words (e2e, 2 Oct 2026): "Paid to outside riders (5): 4 delivery charges kept, 1 trip".
+    expect(words).toContain('Cash taken out = Taken out + To riders (paid to outside riders: delivery charges kept, and trips).');
+    expect(words).not.toContain('trips paid for cancelled orders');
   });
 
   it('an empty period says so plainly', () => {

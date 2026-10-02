@@ -11,8 +11,12 @@
  *      went with it at once. Only the login that closed sees it, and only
  *      Done closes it. Closed by a manager's PIN on a cashier's login: no
  *      expected cash, and it goes by itself after a minute.
- *  1b. (v0.7.34) What outside riders kept has a row of its own at the close,
- *      and "Cash taken out" is the rest; Drawer cash in / out never offers to
+ *  1b. (v0.7.34) What was paid to outside riders has a row of its own at the
+ *      close — "Paid to outside riders (5): 4 delivery charges kept, 1 trip"
+ *      (e2e, 2 Oct 2026: it said "Delivery charges kept by riders (5
+ *      orders)" with a cancelled order's trip among them) — and "Cash taken
+ *      out" is the rest; the opening float is the first money row, so the
+ *      rows add up to Expected cash. Drawer cash in / out never offers to
  *      turn a payout to an outside rider into a purchase.
  *   3. A cashier's tap on the shift pill says who can close and how they
  *      sign in (it was a disabled button with a hover-only title).
@@ -55,7 +59,7 @@ import {
   CloseShiftResultDialog,
   OpenShiftDialog,
   PIN_CLOSE_RESULT_NOTE,
-  ridersKeptLabel,
+  ridersPaidLabel,
   ShiftWidget,
 } from './ShiftWidget';
 import { CashMovementDialog } from './CashMovementDialog';
@@ -322,61 +326,98 @@ describe('the close result stays on screen until Done', () => {
 
 // --------------------------- 1b. outside riders at the close (v0.7.34, 18-7) --
 
-describe('the close result: delivery charges kept by outside riders', () => {
-  // Rs 950 out of the drawer in all: Rs 600 to three outside riders (payouts
-  // linked to an order), Rs 250 typed by hand and a Rs 100 rider tip.
+describe('the close result: what was paid to outside riders', () => {
+  // Rs 950 out of the drawer in all: Rs 600 to outside riders (payouts linked
+  // to an order: two delivery charges kept and one trip for a cancelled
+  // order), Rs 250 typed by hand and a Rs 100 rider tip. Float Rs 5,000.
   const WITH_RIDERS = {
     ...SUMMARY,
     cashOutCents: 95_000,
     riderChargesCents: 60_000,
     riderChargeCount: 3,
+    riderTripCount: 1,
+    openingCashCents: 500_000,
   } as unknown as ShiftSummary;
+  /** Closed Rs 100 short: Expected = 5,000 + 12,340 − 500 − 950 = 15,890. */
+  const RIDERS_CLOSED: ShiftCloseOutcome = { ...SHORT, expectedCents: 1_589_000, countedCents: 1_579_000, summary: WITH_RIDERS };
 
-  it('a row of their own above Expected; "Cash taken out" is the rest, as it always meant', () => {
+  it('a row of their own above Expected, saying what each payout was; "Cash taken out" is the rest, as it always meant', () => {
     signIn('manager');
-    showShiftCloseOutcome({ ...SHORT, summary: WITH_RIDERS });
+    showShiftCloseOutcome(RIDERS_CLOSED);
     const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
-    expect(words).toContain(`Delivery charges kept by riders (3 orders) − ${formatCents(60_000)}`);
+    expect(words).toContain(`Paid to outside riders (3): 2 delivery charges kept, 1 trip − ${formatCents(60_000)}`);
     expect(words).toContain(`Cash taken out − ${formatCents(35_000)}`);
     expect(words).not.toContain(`Cash taken out − ${formatCents(95_000)}`);
-    const riders = words.indexOf('Delivery charges kept by riders');
+    // The old words counted the trip as a kept delivery charge.
+    expect(words).not.toContain('kept by riders');
+    const riders = words.indexOf('Paid to outside riders');
     expect(riders).toBeGreaterThan(words.indexOf('Cash taken out'));
     expect(riders).toBeLessThan(words.indexOf('Expected cash'));
     // The expected cash is the till's own figure: the riders are already out of it.
-    expect(words).toContain(`Expected cash ${formatCents(1_664_000)}`);
+    expect(words).toContain(`Expected cash ${formatCents(1_589_000)}`);
   });
 
-  it('the words, exactly: one order, or many', () => {
-    expect(ridersKeptLabel(1)).toBe('Delivery charges kept by riders (1 order)');
-    expect(ridersKeptLabel(3)).toBe('Delivery charges kept by riders (3 orders)');
+  it('the opening float is the first money row, so the rows on screen add up to Expected cash (e2e: Cash sales − riders ≠ Expected)', () => {
+    signIn('manager');
+    showShiftCloseOutcome(RIDERS_CLOSED);
+    const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
+    expect(words).toContain(
+      `Paid orders 24 Refunds 1 Opening float ${formatCents(500_000)} Cash sales ${formatCents(1_234_000)} Cash refunds − ${formatCents(50_000)} Cash taken out − ${formatCents(35_000)} Paid to outside riders (3): 2 delivery charges kept, 1 trip − ${formatCents(60_000)} Expected cash ${formatCents(1_589_000)}`,
+    );
+    // 5,000 + 12,340 − 500 − 350 − 600 = 15,890: the rows' sum is the till's Expected.
+    expect(500_000 + 1_234_000 - 50_000 - 35_000 - 60_000).toBe(RIDERS_CLOSED.expectedCents);
+    // With cash put in too, it still adds up.
+    const withIn = { ...WITH_RIDERS, cashInCents: 10_000 } as unknown as ShiftSummary;
+    showShiftCloseOutcome({ ...RIDERS_CLOSED, expectedCents: 1_599_000, summary: withIn });
+    expect(text(render(<ShiftWidget />, [[CURRENT, null]]))).toContain(
+      `Opening float ${formatCents(500_000)} Cash sales ${formatCents(1_234_000)} Cash refunds − ${formatCents(50_000)} Cash put in + ${formatCents(10_000)} Cash taken out − ${formatCents(35_000)}`,
+    );
+    // A summary from before the float was in it: no row rather than a wrong one.
+    showShiftCloseOutcome({ ...SHORT, summary: SUMMARY });
+    expect(text(render(<ShiftWidget />, [[CURRENT, null]]))).not.toContain('Opening float');
+  });
+
+  it('the words, exactly: kept charges and trips, one or many, either alone', () => {
+    expect(ridersPaidLabel(5, 1)).toBe('Paid to outside riders (5): 4 delivery charges kept, 1 trip');
+    expect(ridersPaidLabel(3, 0)).toBe('Paid to outside riders (3): 3 delivery charges kept');
+    expect(ridersPaidLabel(1, 0)).toBe('Paid to outside riders (1): 1 delivery charge kept');
+    expect(ridersPaidLabel(1, 1)).toBe('Paid to outside riders (1): 1 trip');
+    expect(ridersPaidLabel(4, 2)).toBe('Paid to outside riders (4): 2 delivery charges kept, 2 trips');
+    expect(ridersPaidLabel(2, 1)).toBe('Paid to outside riders (2): 1 delivery charge kept, 1 trip');
   });
 
   it('when riders took all the cash out there is no "Cash taken out" row', () => {
     signIn('manager');
-    const allRiders = { ...SUMMARY, cashOutCents: 20_000, riderChargesCents: 20_000, riderChargeCount: 1 } as unknown as ShiftSummary;
+    const allRiders = { ...SUMMARY, cashOutCents: 20_000, riderChargesCents: 20_000, riderChargeCount: 1, riderTripCount: 0 } as unknown as ShiftSummary;
     showShiftCloseOutcome({ ...SHORT, summary: allRiders });
     const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
-    expect(words).toContain(`Delivery charges kept by riders (1 order) − ${formatCents(20_000)}`);
+    expect(words).toContain(`Paid to outside riders (1): 1 delivery charge kept − ${formatCents(20_000)}`);
     expect(words).not.toContain('Cash taken out');
   });
 
-  it('no riders: no row, and "Cash taken out" exactly as before (also for a summary with no rider figures)', () => {
+  it('no riders: no row, and "Cash taken out" exactly as before (also for a summary with no rider figures, whose payouts count as kept charges)', () => {
     signIn('manager');
-    const none = { ...SUMMARY, riderChargesCents: 0, riderChargeCount: 0 } as unknown as ShiftSummary;
+    const none = { ...SUMMARY, riderChargesCents: 0, riderChargeCount: 0, riderTripCount: 0 } as unknown as ShiftSummary;
     for (const summary of [none, SUMMARY]) {
       showShiftCloseOutcome({ ...SHORT, summary });
       const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
       expect(words).toContain(`Cash taken out − ${formatCents(20_000)}`);
-      expect(words).not.toContain('kept by riders');
+      expect(words).not.toContain('outside riders');
     }
-    expect(closeResultCashOut(SUMMARY)).toEqual({ takenOutCents: 20_000, ridersCents: 0, ridersCount: 0 });
-    expect(closeResultCashOut(WITH_RIDERS)).toEqual({ takenOutCents: 35_000, ridersCents: 60_000, ridersCount: 3 });
+    expect(closeResultCashOut(SUMMARY)).toEqual({ takenOutCents: 20_000, ridersCents: 0, ridersCount: 0, tripsCount: 0 });
+    expect(closeResultCashOut(WITH_RIDERS)).toEqual({ takenOutCents: 35_000, ridersCents: 60_000, ridersCount: 3, tripsCount: 1 });
+    // No trip figure (a summary from before): every payout reads as a kept charge; never more trips than payouts.
+    const noTrips = { ...WITH_RIDERS, riderTripCount: undefined } as unknown as ShiftSummary;
+    expect(closeResultCashOut(noTrips).tripsCount).toBe(0);
+    expect(closeResultCashOut({ ...WITH_RIDERS, riderTripCount: 9 } as unknown as ShiftSummary).tripsCount).toBe(3);
   });
 
-  it('closed with a manager’s PIN on the cashier’s login: no takings, so no riders row either', () => {
+  it('closed with a manager’s PIN on the cashier’s login: no takings, so no float or riders row either', () => {
     signIn('cashier');
     showShiftCloseOutcome({ ...SHORT, expectedCents: null, summary: null, viaManagerPin: true });
-    expect(text(render(<ShiftWidget />, [[CURRENT, null]]))).not.toContain('kept by riders');
+    const words = text(render(<ShiftWidget />, [[CURRENT, null]]));
+    expect(words).not.toContain('outside riders');
+    expect(words).not.toContain('Opening float');
   });
 });
 

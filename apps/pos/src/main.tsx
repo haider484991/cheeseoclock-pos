@@ -12,6 +12,7 @@ import { UpdateBanner } from './features/shell/UpdateBanner';
 import { CloseTillHost } from './features/shell/CloseTillHost';
 import { OrderAlerts } from './features/notifications/OrderAlerts';
 import { forgetOnWhoChanges } from './stores/forgetOnSignOut';
+import { staleCustomersOnSave } from './features/checkout/customerLookups';
 import './styles/globals.css';
 
 // Renderer-side Sentry — captures React errors + unhandled rejections in the
@@ -56,6 +57,8 @@ const queryClient = new QueryClient({
 queryClient.setQueryDefaults(['menu'], { staleTime: 5 * 60_000 });
 // A new person at the till never inherits what the last one looked at.
 forgetOnWhoChanges(queryClient);
+// A customer saved by Send or Pay is found by the next phone typed, not "No match" for 30 s.
+staleCustomersOnSave(queryClient);
 
 /**
  * Gate the router on whether the device has finished onboarding. If no user

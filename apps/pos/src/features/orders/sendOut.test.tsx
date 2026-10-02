@@ -69,6 +69,17 @@
  * off and the column scrolled sideways). The cards pinned as "before" are
  * still compared byte for byte, with that one row change taken back out
  * (undoRowD).
+ *
+ * E2e fixes B (2 Oct 2026): every Out card fits the Out column at the till's
+ * narrowest window (1011 × 663 inside: 435 px tall, a 162 px card with a
+ * scroll bar; measured in Chrome with the till's own CSS) with its big button
+ * in view and every button's words on one line: no Delivery badge (the
+ * column says so), the food as one paragraph, no item count; an own rider's
+ * box has his name and Change on one line, his phone and "out 12m" under
+ * them; while an outside rider owes, "Rider owes Rs 4,515" is his box's last
+ * line and the card ends [Rider paid] [Print] [Cancel], then [Delivered +
+ * Pay] alone. An own rider's Out card is pinned again in full. Every other
+ * card is as it was.
  */
 import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
@@ -85,7 +96,7 @@ import { OrdersBoardPage } from './OrdersBoardPage';
 import { AssignRiderDialog, BACK_TO_READY_TITLE, backToReadyNote } from './AssignRiderDialog';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
 import { OrderHistoryPage } from './OrderHistoryPage';
-import { ASSIGN_RIDER_LINK_TITLE, type PaidNowAtSendOut } from './boardLogic';
+import { ASSIGN_RIDER_LINK_TITLE, nextBoardAction, type PaidNowAtSendOut } from './boardLogic';
 import { SendOutDialog } from './SendOutDialog';
 import { MarkDeliveredDialog } from './MarkDeliveredDialog';
 import { HISTORY_PAGE_SIZE, historyRange } from './historyFilters';
@@ -632,19 +643,19 @@ describe('an Out card sent out with an outside rider', () => {
     expect(text(card(noChargeLine(sentOut(49, 0))))).toContain('Outside rider · out 12m · no delivery charge Assign rider');
   });
 
-  it('an own rider’s Out card is byte-identical to before (unpaid and paid), with no outside rider row — but for review fixes D’s last row', () => {
+  it('an own rider’s Out card (e2e fixes B) is pinned in full, unpaid and paid, with no outside rider row', () => {
     const { cards } = board([
       delivery(44, 'out_for_delivery', {}, OWN_RIDER),
       delivery(45, 'out_for_delivery', { paidAt: minsAgo(30) }, OWN_RIDER),
     ]);
-    expect(plainSpaces(undoRowD(cards.get('#0044')!))).toBe(OWN_RIDER_CARD_BEFORE.join(''));
-    expect(sha256(undoRowD(cards.get('#0045')!))).toBe(BEFORE.ownRiderPaid);
+    expect(plainSpaces(cards.get('#0044')!)).toBe(OWN_RIDER_CARD.join(''));
+    expect(sha256(cards.get('#0045')!)).toBe(PINNED_B.ownRiderPaid);
     for (const c of cards.values()) expect(text(c)).not.toContain('Outside rider');
   });
 
   it('a rider an older till named on a sent-out order shows as his row, not the outside one', () => {
     const c = card(delivery(50, 'out_for_delivery', { riderKeepsCents: 20_000 as never }, OWN_RIDER));
-    expect(text(c)).toContain('Test Rider 03000000001 · out 12m Change');
+    expect(text(c)).toContain('Test Rider Change 03000000001 · out 12m');
     expect(text(c)).not.toContain('Outside rider');
   });
 });
@@ -1100,40 +1111,36 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
     expect(two.words).not.toContain('Paid already');
   });
 
-  it('an unpaid outside Out card: amber "Rider owes Rs 4,515" by the total; "Rider paid" on its own full-width row above Delivered + Pay, Print and Cancel', () => {
+  it('an unpaid outside Out card (e2e fixes B): amber "Rider owes Rs 4,515" is the last line of his box; [Rider paid] with Print and Cancel beside it, then Delivered + Pay alone on its line', () => {
     const c = card(ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never }));
-    expect(text(c)).toContain('Outside rider · out 12m · keeps Rs 200 Assign rider');
-    expect(text(c)).toContain('Rs 4,715 Rider owes Rs 4,515 2 items Rider paid Delivered + Pay');
+    expect(text(c)).toContain('Outside rider · out 12m · keeps Rs 200 Assign rider Rider owes Rs 4,515 Rs 4,715 Rider paid Delivered + Pay');
     expect(text(c)).not.toContain('Not paid');
-    expect(c).toContain('bg-amber-100');
-    expect(buttonsWith(c, 'Delivered + Pay')).toHaveLength(1);
-    const riderPaid = buttonsWith(c, 'Rider paid');
-    expect(riderPaid).toHaveLength(1);
-    // Full height and full width, on its own row (review, 2 Oct 2026: beside Delivered + Pay the
-    // row needed 217 px of the card's 172 at 1011 × 663, and Print and Cancel went off the card).
-    const tag = openingTag(riderPaid[0]!);
-    for (const cls of ['h-11', 'w-full', 'mt-2']) expect(tag).toContain(cls);
-    expect(tag).not.toContain('shrink-0');
-    // The row under it: Delivered + Pay, Print, Cancel — and no Rider paid.
-    const ROW = '<div class="mt-1 flex items-center gap-1">';
-    expect(c.split(ROW)).toHaveLength(2);
-    const row = c.slice(c.indexOf(ROW));
-    expect(c.indexOf('Rider paid')).toBeLessThan(c.indexOf(ROW));
-    expect(row).not.toContain('Rider paid');
-    expect(row.indexOf('Delivered + Pay')).toBeGreaterThan(0);
-    expect(row.indexOf('Delivered + Pay')).toBeLessThan(row.indexOf('Print bill or receipt'));
-    expect(row.indexOf('Print bill or receipt')).toBeLessThan(row.indexOf('Cancel order (manager approval)'));
-    // Delivered + Pay may take two lines there, so Print and Cancel keep their room on a narrow card.
+    // The chip: in the rider's box after Assign rider, never beside the total (there it took a second line).
+    const box = c.slice(c.indexOf(OUT_RIDER_BOX), c.indexOf(OUT_TOTAL_ROW));
+    expect(box.split(OUT_OWES_CHIP)).toHaveLength(2);
+    expect(box.indexOf(OUT_OWES_CHIP)).toBeGreaterThan(box.indexOf('Assign rider'));
+    expect(text(c.slice(c.indexOf(OUT_TOTAL_ROW), c.indexOf(OUT_SECOND_ROW)))).toBe('Rs 4,715');
+    expect(c.split(OUT_OWES_CHIP)).toHaveLength(2);
+    // [Rider paid] [Print] [Cancel] in one row, 40 px tall, the words in one line (77 px of a 157 px card at 1024 × 700).
+    const row = c.slice(c.indexOf(OUT_SECOND_ROW), c.indexOf('Delivered + Pay'));
+    const riderPaid = openingTag(buttonsWith(c, 'Rider paid')[0]!);
+    for (const cls of ['h-10', 'min-w-0', 'flex-1', 'whitespace-nowrap', 'px-1', 'text-sm']) expect(riderPaid).toContain(cls);
+    expect(riderPaid).not.toContain('w-full');
+    expect(row.indexOf('Rider paid')).toBeLessThan(row.indexOf(ICONS_D));
+    expect(iconLabels(row)).toEqual(['Print bill or receipt', 'Cancel order (manager approval)']);
+    for (const b of row.split('<button type="button" aria-label=').slice(1)) expect(b).toContain('class="flex h-10 w-9 items-center justify-center');
+    // Then Delivered + Pay, full width, its words in one line (beside the icons they took two), the card's last thing.
     const primary = openingTag(buttonsWith(c, 'Delivered + Pay')[0]!);
-    for (const cls of ['h-11', 'flex-1', 'px-2', 'leading-tight']) expect(primary).toContain(cls);
-    expect(primary).not.toContain('whitespace-nowrap');
+    for (const cls of ['mt-1', 'h-11', 'w-full', 'whitespace-nowrap', 'text-sm']) expect(primary).toContain(cls);
+    expect(primary).not.toContain('leading-tight');
+    expect(c.endsWith('Delivered + Pay</button>')).toBe(true);
     // A paid outside card and an own rider's card keep the one row they had, with no Rider paid row
     // (pinned elsewhere too; review fixes D made it the row whose icons drop under the button when narrow).
     const paid = card(ownerExample(52, 'out_for_delivery', { riderKeepsCents: 20_000 as never, paidAt: minsAgo(5) }));
     expect(paid).toContain(ROW_D);
-    expect(paid).not.toContain(ROW);
+    expect(paid).not.toContain(OUT_SECOND_ROW);
     // He keeps nothing: he owes the whole bill.
-    expect(text(card(ownerExample(49, 'out_for_delivery', { riderKeepsCents: 0 as never })))).toContain('Rs 4,715 Rider owes Rs 4,715');
+    expect(text(card(ownerExample(49, 'out_for_delivery', { riderKeepsCents: 0 as never })))).toContain('Rider owes Rs 4,715 Rs 4,715');
   });
 
   it('"Rider paid" opens the Rider paid box on that order; Delivered + Pay is still the Delivered box', () => {
@@ -1163,7 +1170,8 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
       seen.calls.length = 0;
       const c = card(ownerExample(n, 'out_for_delivery', { riderKeepsCents: 20_000 as never, paidAt }));
       expect(text(c)).toContain('Outside rider · out 12m · keeps Rs 200 Assign rider');
-      expect(text(c)).toContain('Rs 4,715 Paid 2 items');
+      expect(text(c)).toContain('Rs 4,715 Paid Delivered');
+      expect(text(c)).not.toContain('items');
       expect(text(c)).not.toContain('Rider owes');
       expect(buttonsWith(c, 'Rider paid')).toEqual([]);
       expect(buttonsWith(c, 'Delivered')).toHaveLength(1);
@@ -1183,14 +1191,14 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
       expect(text(c)).not.toContain('Rider owes');
       expect(buttonsWith(c, 'Rider paid')).toEqual([]);
     }
-    expect(text(cards.get('#0044')!)).toContain('Rs 4,715 Not paid 2 items');
+    expect(text(cards.get('#0044')!)).toContain('Rs 4,715 Not paid Delivered + Pay');
   });
 
   it('a rider an older till named on a sent-out order: the money still goes by what the till froze', () => {
     // The Delivered box takes the food total for this order too (MarkDeliveredDialog follows the till).
     const c = card(ownerExample(50, 'out_for_delivery', { riderKeepsCents: 20_000 as never }, OWN_RIDER));
-    expect(text(c)).toContain('Test Rider 03000000001 · out 12m Change');
-    expect(text(c)).toContain('Rs 4,715 Rider owes Rs 4,515');
+    expect(text(c)).toContain('Test Rider Change 03000000001 · out 12m Rider owes Rs 4,515 Rs 4,715');
+    expect(c.slice(c.indexOf(OUT_RIDER_BOX), c.indexOf(OUT_TOTAL_ROW))).toContain(OUT_OWES_CHIP);
     expect(buttonsWith(c, 'Rider paid')).toHaveLength(1);
   });
 });
@@ -1791,70 +1799,185 @@ describe('a card’s last row fits the narrowest window (review fixes D): the ic
     expect(text(oldRow)).toBe('Start preparing');
   });
 
-  it('a card with "Rider paid" keeps review fixes C’s rows: Rider paid full width, then Delivered + Pay with Print and Cancel beside it, no group', () => {
+  it('a card with "Rider paid" (e2e fixes B): not this row — Rider paid and the icons’ group share one, the big button is alone under it', () => {
     const c = card(ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never }));
     expect(c).not.toContain(ROW_D);
-    expect(c).not.toContain(ICONS_D);
-    const ROW_C = '<div class="mt-1 flex items-center gap-1">';
-    const row = c.slice(c.indexOf(ROW_C));
+    expect(c.split(ICONS_D)).toHaveLength(2);
+    const row = c.slice(c.indexOf(OUT_SECOND_ROW));
     expect(iconLabels(row)).toEqual(PLAIN);
-    expect(text(row)).toBe('Delivered + Pay');
+    expect(text(row)).toBe('Rider paid Delivered + Pay');
   });
 });
 
 // ---------------------------------------------------------------------------
-// The cards of the build before this step (23e7c86, v0.7.34 step 16-2),
-// rendered from the same made-up orders at the same "now". An own rider's Out
-// card in full; the rest by their SHA-256 (spaces before am/pm made plain).
-// Unchanged by review fixes D: its tests take that change's last row back
-// out first (undoRowD), so everything else is still pinned byte for byte.
+// E2e fixes B (2 Oct 2026): Out cards fit the Out column at the till's
+// narrowest window. Measured in Chrome with the till's own compiled CSS and a
+// stand-in app shell (Inter and the system font): at 1011 × 663 inside the
+// column is 435 px tall and a card 162 px wide inside (172 with no scroll
+// bar); a 1024 × 700 page gives 420 by 157. An outside rider's owing card was
+// 493 px ("Rider paid" cut, "Delivered + Pay" below the fold and on two
+// lines); a paid one 492, an own rider's 438. Now 395, 379 and 364 (409 with
+// five lines of food, a long address and an hour out), at both sizes, with
+// every button's words on one line and nothing sticking out sideways. These
+// pin the markup that measured so.
+
+/** The food on an Out card: one paragraph, two lines at most. */
+const OUT_ITEMS = '<p class="line-clamp-2 text-sm leading-snug text-stone-700 dark:text-stone-300">';
+/** Phone, address and rider on an Out card. */
+const OUT_CONTACT = '<div class="mt-1.5 space-y-1 rounded-lg bg-stone-50 px-2 py-1.5 text-xs dark:bg-stone-900/60">';
+/** A rider's box (one of the shop's own, or the outside rider). */
+const OUT_RIDER_BOX =
+  '<div class="space-y-1 rounded-md bg-violet-50 px-1.5 py-1 leading-tight text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">';
+/** An Out card's total row: the bill, and PAID / NOT PAID unless the rider's box says what he owes. */
+const OUT_TOTAL_ROW = '<div class="mt-1.5 flex items-center gap-2 border-t border-stone-100 pt-1.5 dark:border-stone-700">';
+/** [Rider paid] [Print] [Cancel]. */
+const OUT_SECOND_ROW = '<div class="mt-1.5 flex items-center gap-1">';
+/** "Rider owes Rs 4,515", amber. */
+const OUT_OWES_CHIP =
+  '<span class="inline-flex items-center whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-200">Rider owes Rs 4,515</span>';
+/** The Delivery badge every other card has. */
+const DELIVERY_BADGE = 'uppercase ring-1 bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-800">Delivery</span>';
+
+/** Six made-up lines of food (and the delivery charge). */
+const sixLines = (s: OrderSnapshot): OrderSnapshot =>
+  ({
+    ...s,
+    items: ['Test Family Pizza', 'Test Fries', 'Test Garlic Bread', 'Test Wings', 'Test Cold Drink 1.5 L', 'Delivery Charge (Rs 200)'].map((name, i) => ({
+      id: `${s.order.id}-l${i}`,
+      parentOrderItemId: null,
+      quantity: i === 1 ? 2 : 1,
+      menuItemName: name,
+      modifiers: [],
+      notes: null,
+      lineTotalCents: 10_000,
+    })),
+  }) as unknown as OrderSnapshot;
+
+describe('Out cards fit the Out column at the till’s narrowest window (e2e fixes B)', () => {
+  const OUT_CARDS: Array<[string, OrderSnapshot]> = [
+    ['an outside rider’s, owing', ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never })],
+    ['an outside rider’s, paid', ownerExample(52, 'out_for_delivery', { riderKeepsCents: 20_000 as never, paidAt: minsAgo(5) })],
+    ['an own rider’s, unpaid', ownerExample(44, 'out_for_delivery', {}, OWN_RIDER)],
+    ['an own rider’s, paid', ownerExample(45, 'out_for_delivery', { paidAt: minsAgo(30) }, OWN_RIDER)],
+  ];
+
+  it.each(OUT_CARDS)('%s: no Delivery badge (the column says so), the food as one paragraph, no item count', (_name, snap) => {
+    const c = card(snap);
+    expect(c).not.toContain(DELIVERY_BADGE);
+    expect(c.split(OUT_ITEMS)).toHaveLength(2);
+    expect(c).not.toContain('<ul');
+    expect(c).not.toContain('<li');
+    // "1×" stays with its item (a no-break space), the lines joined by " · ".
+    expect(c).toContain('1×</span> Test Family Pizza</span><span> · <span class="font-bold text-stone-900 dark:text-stone-100">1×</span> Delivery Charge (Rs 200)</span></p>');
+    expect(text(c)).not.toMatch(/\d items?\b/);
+    expect(c.split(OUT_CONTACT)).toHaveLength(2);
+    expect(c.split(OUT_RIDER_BOX)).toHaveLength(2);
+    expect(c.split(OUT_TOTAL_ROW)).toHaveLength(2);
+    // Every button under the total is at least 40 px tall, and none of their words may wrap.
+    const bottom = c.slice(c.indexOf(OUT_TOTAL_ROW));
+    const tags = bottom.split('<button').slice(1).map((b) => b.slice(0, b.indexOf('>')));
+    expect(tags.length).toBeGreaterThanOrEqual(3);
+    for (const t of tags) expect(t).toMatch(/\bh-1[01]\b/);
+    const big = openingTag(buttonsWith(c, nextBoardAction(snap.order.status, snap.order.mode, snap.order.paidAt !== null).label)[0]!);
+    expect(big).toContain('whitespace-nowrap');
+    expect(big).toContain('h-11');
+  });
+
+  it('every other card keeps its badge, its list of lines and its count (New, Preparing, Ready)', () => {
+    for (const snap of [delivery(41, 'sent_to_kitchen'), delivery(43, 'preparing'), delivery(42, 'ready')]) {
+      const c = card(snap);
+      expect(c).toContain(DELIVERY_BADGE);
+      expect(c).toContain('<ul class="space-y-0.5 text-sm text-stone-700 dark:text-stone-300">');
+      expect(c).not.toContain(OUT_ITEMS);
+      expect(c).not.toContain(OUT_CONTACT);
+      expect(text(c)).toContain('2 items');
+    }
+  });
+
+  it('six lines of food: an Out card names every one (two lines on screen, cut with "…"); a Ready card still lists four and "+2 more…"', () => {
+    const out = card(sixLines(ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never })));
+    expect(text(out)).toContain('1× Test Family Pizza · 2× Test Fries · 1× Test Garlic Bread · 1× Test Wings · 1× Test Cold Drink 1.5 L · 1× Delivery Charge (Rs 200)');
+    expect(out).not.toContain('more…');
+    const ready = card(sixLines(delivery(42, 'ready')));
+    expect(text(ready)).toContain('+2 more…');
+    expect(text(ready)).toContain('7 items');
+  });
+
+  it('an own rider’s box: his name and Change on the first line, his phone and "· out 12m" under them (on one line they ran into Change)', () => {
+    const c = card(ownerExample(44, 'out_for_delivery', {}, OWN_RIDER));
+    const box = c.slice(c.indexOf(OUT_RIDER_BOX) + OUT_RIDER_BOX.length, c.indexOf(OUT_TOTAL_ROW));
+    const [first, second] = box.split('<div class="flex flex-wrap items-center gap-x-1.5 pl-5 text-[10px]">');
+    expect(first).toContain('<div class="flex items-center justify-between gap-1.5"><span class="flex min-w-0 items-center gap-1.5">');
+    expect(text(first!)).toBe('Test Rider Change');
+    expect(first).toContain('<span class="truncate font-semibold">Test Rider</span>');
+    expect(text(second!)).toBe('03000000001 · out 12m');
+    expect(text(c)).toContain('Rs 4,715 Not paid Delivered + Pay');
+  });
+
+  it('the outside rider’s box: "Outside rider · out 12m · keeps Rs 200" and Assign rider wrap in their own row; while he owes, the chip is the box’s last line', () => {
+    const owing = card(ownerExample(47, 'out_for_delivery', { riderKeepsCents: 20_000 as never }));
+    const box = owing.slice(owing.indexOf(OUT_RIDER_BOX) + OUT_RIDER_BOX.length, owing.indexOf(OUT_TOTAL_ROW));
+    expect(box.startsWith('<div class="flex flex-wrap items-center gap-x-1 gap-y-0.5">')).toBe(true);
+    expect(box.endsWith(`<div>${OUT_OWES_CHIP}</div></div></div>`)).toBe(true);
+    expect(openingTag(buttonsWith(owing, 'Assign rider')[0]!)).toContain('ml-auto shrink-0 rounded px-1 py-0.5 text-[11px]');
+    const paid = card(ownerExample(52, 'out_for_delivery', { riderKeepsCents: 20_000 as never, paidAt: minsAgo(5) }));
+    expect(paid).not.toContain('Rider owes');
+    expect(text(paid)).toContain('Outside rider · out 12m · keeps Rs 200 Assign rider Rs 4,715 Paid Delivered');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pinned cards. A Ready takeaway as in the build before this step (23e7c86,
+// v0.7.34 step 16-2), by its SHA-256 with review fixes D's last row taken
+// back out (undoRowD). An own rider's Out card as e2e fixes B made it: #0044
+// in full, #0045 by its SHA-256 (spaces before am/pm made plain). Rendered
+// from the same made-up orders at the same "now".
 
 const BEFORE = {
-  /** #0045: an own rider's Out card, paid. */
-  ownRiderPaid: '5a1ef36ed15339d90f3fa61b991230ac6e04368160ca97c7843b2eac0d75957d',
   /** #0046: a Ready takeaway, unpaid. */
   readyTakeaway: '609e6fe0caf4e7e91a0ffb286c1fdabbe8e1ea8f2e7263a99e7e5929c8d11c14',
 };
 
+const PINNED_B = {
+  /** #0045: an own rider's Out card, paid. */
+  ownRiderPaid: '08351c6d77ba844b5e69d2a4d91568b1d8fe92f19dfb9060c5b0a26fe969288d',
+};
+
 /** #0044: an own rider's Out card, unpaid (the article's markup after "<article"). */
-const OWN_RIDER_CARD_BEFORE = [
+const OWN_RIDER_CARD = [
   ' class="rounded-xl bg-white p-3 shadow-soft-sm transition-shadow hover:shadow-soft-md dark:bg-stone-800 ring-2 ring-red-500 dark:ring-red-500">',
   '<header class="mb-1.5 flex items-start justify-between gap-2">',
   '<div class="min-w-0">',
   '<div class="flex flex-wrap items-center gap-1.5">',
-  '<span class="font-mono text-lg font-bold leading-none text-stone-900 dark:text-stone-100">#0044</span>',
-  '<span class="inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ring-1 bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-800">Delivery</span></div>',
+  '<span class="font-mono text-lg font-bold leading-none text-stone-900 dark:text-stone-100">#0044</span></div>',
   '<div class="mt-1 flex items-center gap-1.5 truncate text-sm font-semibold text-stone-700 dark:text-stone-200">',
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-user-round h-3.5 w-3.5 shrink-0 text-stone-400"><circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path></svg>',
-  '<span class="truncate">Test Customer</span></div></div>',
-  '<span class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-sm font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-200" title="Sent 7:22 pm · started 7:20 pm">',
+  '<span class="truncate">Test Customer</span></div></div><span class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-sm font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-200" title="Sent 7:22 pm · started 7:20 pm">',
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-hourglass h-3.5 w-3.5"><path d="M5 22h14"></path><path d="M5 2h14"></path><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path></svg>38m</span></header>',
-  '<ul class="space-y-0.5 text-sm text-stone-700 dark:text-stone-300">',
-  '<li>',
-  '<div class="truncate"><span class="font-bold text-stone-900 dark:text-stone-100">1×</span> Test Family Pizza</div></li>',
-  '<li>',
-  '<div class="truncate"><span class="font-bold text-stone-900 dark:text-stone-100">1×</span> Delivery Charge (Rs 200)</div></li></ul>',
-  '<div class="mt-2 space-y-1 rounded-lg bg-stone-50 p-2 text-xs dark:bg-stone-900/60">',
+  '<p class="line-clamp-2 text-sm leading-snug text-stone-700 dark:text-stone-300"><span><span class="font-bold text-stone-900 dark:text-stone-100">1×</span>\u00a0Test Family Pizza</span><span> · <span class="font-bold text-stone-900 dark:text-stone-100">1×</span>\u00a0Delivery Charge (Rs 200)</span></p>',
+  '<div class="mt-1.5 space-y-1 rounded-lg bg-stone-50 px-2 py-1.5 text-xs dark:bg-stone-900/60">',
   '<div class="flex items-center gap-1.5 font-mono text-stone-600 dark:text-stone-300">',
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-phone h-3 w-3 shrink-0"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>03001234567</div>',
   '<div class="flex items-start gap-1.5 text-stone-600 dark:text-stone-300">',
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin mt-0.5 h-3 w-3 shrink-0"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"></path><circle cx="12" cy="10" r="3"></circle></svg><span class="line-clamp-2">House 1, Made-up Street</span></div>',
-  '<div class="flex items-center justify-between gap-1.5 rounded-md bg-violet-50 p-1.5 text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">',
+  '<div class="space-y-1 rounded-md bg-violet-50 px-1.5 py-1 leading-tight text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">',
+  '<div class="flex items-center justify-between gap-1.5">',
   '<span class="flex min-w-0 items-center gap-1.5">',
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-bike h-3.5 w-3.5 shrink-0"><circle cx="18.5" cy="17.5" r="3.5"></circle><circle cx="5.5" cy="17.5" r="3.5"></circle><circle cx="15" cy="5" r="1"></circle><path d="M12 17.5V14l-3-3 4-3 2 3h2"></path></svg>',
-  '<span class="truncate font-semibold">Test Rider</span>',
-  '<span class="font-mono text-[10px]">03000000001</span>',
-  '<span class="whitespace-nowrap text-[10px]">· out 12m</span></span>',
-  '<button type="button" class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300">Change</button></div></div>',
-  '<div class="mt-2 flex items-center justify-between border-t border-stone-100 pt-2 dark:border-stone-700">',
-  '<div class="flex items-center gap-2">',
-  '<span class="font-mono text-base font-bold text-stone-900 dark:text-stone-100">Rs 4,130</span>',
-  '<span class="inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200">Not paid</span></div><span class="text-xs text-stone-500">2 items</span></div>',
-  '<div class="mt-2 flex items-center gap-1">',
+  '<span class="truncate font-semibold">Test Rider</span></span>',
+  '<button type="button" class="shrink-0 rounded px-1 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300">Change</button></div>',
+  '<div class="flex flex-wrap items-center gap-x-1.5 pl-5 text-[10px]">',
+  '<span class="font-mono">03000000001</span>',
+  '<span class="whitespace-nowrap">· out 12m</span></div></div></div>',
+  '<div class="mt-1.5 flex items-center gap-2 border-t border-stone-100 pt-1.5 dark:border-stone-700">',
+  '<span class="whitespace-nowrap font-mono text-base font-bold text-stone-900 dark:text-stone-100">Rs 4,130</span>',
+  '<span class="inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200">Not paid</span></div>',
+  '<div class="mt-2 flex flex-wrap items-center gap-1">',
   '<button type="button" class="inline-flex items-center justify-center gap-2 font-semibold tracking-tight transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-stone-900 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 select-none bg-gradient-to-b from-emerald-500 to-emerald-600 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_1px_2px_rgba(0,0,0,0.05)] hover:from-emerald-400 hover:to-emerald-500 hover:shadow-lift active:from-emerald-600 active:to-emerald-700 focus-visible:ring-emerald-500 px-4 rounded-xl h-11 flex-1 whitespace-nowrap text-sm">',
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-check h-4 w-4"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>Delivered + Pay</button>',
+  '<div class="ml-auto flex shrink-0 items-center gap-1">',
   '<button type="button" aria-label="Print bill or receipt" title="Print bill or receipt" class="flex h-11 w-9 items-center justify-center rounded-lg text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-700 dark:hover:text-stone-200">',
   '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-printer h-4 w-4"><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"></path><rect x="6" y="14" width="12" height="8" rx="1"></rect></svg></button>',
   '<button type="button" aria-label="Cancel order (manager approval)" title="Cancel order (manager approval)" class="flex h-11 w-9 items-center justify-center rounded-lg text-stone-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950 dark:hover:text-red-300">',
-  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-x h-4 w-4"><circle cx="12" cy="12" r="10"></circle><path d="m15 9-6 6"></path><path d="m9 9 6 6"></path></svg></button></div>',
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-x h-4 w-4"><circle cx="12" cy="12" r="10"></circle><path d="m15 9-6 6"></path><path d="m9 9 6 6"></path></svg></button></div></div>',
 ];

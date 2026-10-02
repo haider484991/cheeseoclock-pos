@@ -501,6 +501,14 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
   // the cash taken out went to them.
   const expectedCashCents =
     shift.openingCashCents + cashSalesCents - cashRefundsCents + moves.inCents - moves.outCents;
+  // Of the riders' payouts, the trips paid (the rest are delivery charges kept).
+  const trips = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM cash_movements
+        WHERE shift_id = ? AND deleted_at IS NULL AND type = 'payout' AND order_id IS NOT NULL
+          AND substr(reason, 1, ?) = ?`,
+    )
+    .get(shiftId, TRIP_PAYOUT_REASON_START.length, TRIP_PAYOUT_REASON_START) as { n: number };
 
   return {
     shiftId: shiftId as UUID,
@@ -518,6 +526,8 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
     cashOutCents: moves.outCents as ShiftSummary['cashOutCents'],
     riderChargesCents: moves.riderCents as ShiftSummary['riderChargesCents'],
     riderChargeCount: moves.riderCount,
+    riderTripCount: Number(trips.n),
+    openingCashCents: shift.openingCashCents as ShiftSummary['openingCashCents'],
     expectedCashCents: expectedCashCents as ShiftSummary['expectedCashCents'],
     byMethod,
   };
@@ -839,6 +849,16 @@ function recordCashMovementRow(
   return listCashMovements(db, shift.id).find((m) => m.id === id)!;
 }
 
+/**
+ * How a trip paid to an outside rider is worded ("Trip paid to the outside
+ * rider — Order #0042 cancelled" / "… went alone"); a kept delivery charge
+ * says "Delivery charge kept by the outside rider — Order #0042". The row has
+ * no column for which it is, and the reason travels with it to the other
+ * till, so the two are told apart by these words (the close result, the
+ * order's snapshot).
+ */
+export const TRIP_PAYOUT_REASON_START = 'Trip paid to the outside rider';
+
 /** What an outside rider is paid from the drawer for one order. */
 export interface DeliveryChargeToRiderInput {
   /** The order he was sent out with (cash_movements.order_id). */
@@ -894,8 +914,8 @@ export function recordDeliveryChargeToRider(
       input.why === 'kept'
         ? `Delivery charge kept by the outside rider — Order ${order}`
         : alone
-          ? `Trip paid to the outside rider — Order ${order} went alone`
-          : `Trip paid to the outside rider — Order ${order} cancelled`;
+          ? `${TRIP_PAYOUT_REASON_START} — Order ${order} went alone`
+          : `${TRIP_PAYOUT_REASON_START} — Order ${order} cancelled`;
     const movement = recordCashMovementRow(
       db,
       {

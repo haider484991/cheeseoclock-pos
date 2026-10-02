@@ -12,7 +12,9 @@
  *   - the shift's figures: riderCents / riderCount count only payouts linked
  *     to an order, outCents still holds them, so the expected cash is the
  *     float less the payout by the same formula as before — and a close
- *     counting exactly that is not short;
+ *     counting exactly that is not short; riderTripCount says how many of
+ *     them were trips (by the payout's own words), and the summary carries
+ *     the float, so the close result's rows add up (e2e, 2 Oct 2026);
  *   - the cash list says which order a payout was for; the drawer payouts
  *     that can become a purchase leave it out, and turning it into a purchase
  *     is refused, directly and through procurement-repo;
@@ -356,6 +358,45 @@ live("the shift's figures: the riders' payouts are a part of the cash taken out"
     at('20:10');
     const closed = closeShift(shop.db, { shiftId: shop.shiftId, countedCashCents: FLOAT - KEEP, carryOverReason: 'Test rider still out' }, MANAGER);
     expect(closed).toMatchObject({ expectedCashCents: FLOAT - KEEP, varianceCents: 0 });
+  });
+
+  it('getShiftSummary tells the kept charges from the trips (riderTripCount, by the payout’s own words) and carries the float, so the close result’s rows add up to Expected (e2e, 2 Oct 2026)', async () => {
+    const shop = await till();
+    const { getShiftSummary, recordCashMovement, recordDeliveryChargeToRider, TRIP_PAYOUT_REASON_START } = await shiftRepo();
+    const kept = await sentOut(shop);
+    const cancelled = await sentOut(shop);
+    const alone = await sentOut(shop);
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({ riderChargeCount: 0, riderTripCount: 0, openingCashCents: FLOAT });
+
+    at('20:00');
+    recordDeliveryChargeToRider(shop.db, { orderId: kept.id, orderNumber: kept.orderNumber, amountCents: KEEP, why: 'kept' }, CASHIER);
+    const trip = recordDeliveryChargeToRider(shop.db, { orderId: cancelled.id, orderNumber: cancelled.orderNumber, amountCents: KEEP, why: 'trip' }, CASHIER);
+    recordDeliveryChargeToRider(shop.db, { orderId: alone.id, orderNumber: alone.orderNumber, amountCents: KEEP, why: 'trip', tripWhy: 'went_alone' }, CASHIER);
+    // Typed by hand, whatever its words: never a rider's payout, never a trip.
+    recordCashMovement(shop.db, { type: 'payout', amountCents: 25_000, reason: `${TRIP_PAYOUT_REASON_START} — typed by hand` }, MANAGER);
+
+    const s = getShiftSummary(shop.db, shop.shiftId);
+    expect(s).toMatchObject({
+      cashOutCents: 3 * KEEP + 25_000,
+      riderChargesCents: 3 * KEEP,
+      riderChargeCount: 3,
+      riderTripCount: 2,
+      openingCashCents: FLOAT,
+      expectedCashCents: FLOAT - 3 * KEEP - 25_000,
+    });
+    // The close result's rows: float + cash sales − refunds + put in − taken out − paid to riders = Expected.
+    const takenOut = s.cashOutCents - s.riderChargesCents;
+    expect(s.openingCashCents + s.cashSalesCents - s.cashRefundsCents + s.cashInCents - takenOut - s.riderChargesCents).toBe(s.expectedCashCents);
+    // The words the payouts were written with are the ones counted.
+    const reasons = (shop.db.prepare(`SELECT reason FROM cash_movements WHERE order_id IS NOT NULL ORDER BY rowid`).all() as Array<{ reason: string }>).map((m) => m.reason);
+    expect(reasons).toEqual([
+      `Delivery charge kept by the outside rider — Order #${kept.orderNumber.split('-').pop()}`,
+      `${TRIP_PAYOUT_REASON_START} — Order #${cancelled.orderNumber.split('-').pop()} cancelled`,
+      `${TRIP_PAYOUT_REASON_START} — Order #${alone.orderNumber.split('-').pop()} went alone`,
+    ]);
+    // A deleted trip payout (a test order deleted) no longer counts.
+    shop.db.prepare(`UPDATE cash_movements SET deleted_at = ? WHERE id = ?`).run(PK['20:10'], trip);
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({ riderChargeCount: 2, riderTripCount: 1 });
   });
 });
 

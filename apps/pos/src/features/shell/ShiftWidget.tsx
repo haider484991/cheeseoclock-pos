@@ -866,28 +866,42 @@ function CloseShiftHeader({ onClose, closeLabel = 'Close' }: { onClose: () => vo
 
 /**
  * The cash taken out of the drawer this shift, as the close result shows it
- * (v0.7.34). ridersCents: what outside riders kept as their delivery charge,
- * or were paid for a wasted trip (the payouts linked to an order). The owner
- * found a shortage at close because of these (2 Oct 2026), so they get a row
- * of their own. takenOutCents: the rest, cash out typed by hand and rider
- * tips, so "Cash taken out" means what it always meant. Both are already in
- * the expected cash: nothing is taken off twice. A summary without the rider
- * figures counts them as 0.
+ * (v0.7.34). ridersCents: what the drawer paid outside riders — a delivery
+ * charge he kept, or a trip (the order cancelled or refused at the door
+ * after he went, or an add-on that went alone): the payouts linked to an
+ * order. The owner found a shortage at close because of these (2 Oct 2026),
+ * so they get a row of their own; tripsCount says how many were trips (it
+ * read "Delivery charges kept by riders (5 orders)" with a cancelled order's
+ * trip among them; e2e, 2 Oct 2026). takenOutCents: the rest, cash out typed
+ * by hand and rider tips, so "Cash taken out" means what it always meant.
+ * Both are already in the expected cash: nothing is taken off twice. A
+ * summary without the rider figures counts them as 0.
  */
 export function closeResultCashOut(
-  summary: Pick<ShiftSummary, 'cashOutCents' | 'riderChargesCents' | 'riderChargeCount'>,
-): { takenOutCents: number; ridersCents: number; ridersCount: number } {
+  summary: Pick<ShiftSummary, 'cashOutCents' | 'riderChargesCents' | 'riderChargeCount' | 'riderTripCount'>,
+): { takenOutCents: number; ridersCents: number; ridersCount: number; tripsCount: number } {
   const ridersCents = Math.max(0, summary.riderChargesCents ?? 0);
+  const ridersCount = summary.riderChargeCount ?? 0;
   return {
     takenOutCents: Math.max(0, summary.cashOutCents - ridersCents),
     ridersCents,
-    ridersCount: summary.riderChargeCount ?? 0,
+    ridersCount,
+    tripsCount: Math.min(ridersCount, Math.max(0, summary.riderTripCount ?? 0)),
   };
 }
 
-/** "Delivery charges kept by riders (3 orders)" */
-export function ridersKeptLabel(count: number): string {
-  return `Delivery charges kept by riders (${count} ${count === 1 ? 'order' : 'orders'})`;
+/**
+ * The riders' row: "Paid to outside riders (5): 4 delivery charges kept, 1
+ * trip" — every payout counted once, as what it was. Shift history's note
+ * names them in the same words (shiftHistoryNote).
+ */
+export function ridersPaidLabel(count: number, trips: number): string {
+  const kept = Math.max(0, count - trips);
+  const parts = [
+    kept > 0 ? `${kept} ${kept === 1 ? 'delivery charge' : 'delivery charges'} kept` : null,
+    trips > 0 ? `${trips} ${trips === 1 ? 'trip' : 'trips'}` : null,
+  ].filter((p): p is string => p !== null);
+  return `Paid to outside riders (${count})${parts.length > 0 ? `: ${parts.join(', ')}` : ''}`;
 }
 
 /**
@@ -925,6 +939,10 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
                 <>
                   <Row k="Paid orders" v={String(summary.paidOrderCount)} />
                   <Row k="Refunds" v={String(summary.refundedOrderCount)} />
+                  {/* The float first, so the money rows on screen add up to Expected cash (e2e, 2 Oct 2026). */}
+                  {typeof summary.openingCashCents === 'number' && (
+                    <Row k="Opening float" v={formatCents(summary.openingCashCents)} />
+                  )}
                   <Row k="Cash sales" v={formatCents(summary.cashSalesCents)} />
                   <Row k="Cash refunds" v={`− ${formatCents(summary.cashRefundsCents)}`} />
                   {summary.cashInCents > 0 && <Row k="Cash put in" v={`+ ${formatCents(summary.cashInCents)}`} />}
@@ -932,7 +950,7 @@ export function CloseShiftResultDialog({ outcome, onDone }: { outcome: ShiftClos
                     <Row k="Cash taken out" v={`− ${formatCents(cashOut.takenOutCents)}`} />
                   )}
                   {cashOut && cashOut.ridersCents > 0 && (
-                    <Row k={ridersKeptLabel(cashOut.ridersCount)} v={`− ${formatCents(cashOut.ridersCents)}`} />
+                    <Row k={ridersPaidLabel(cashOut.ridersCount, cashOut.tripsCount)} v={`− ${formatCents(cashOut.ridersCents)}`} />
                   )}
                 </>
               )}

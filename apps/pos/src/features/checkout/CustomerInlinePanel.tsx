@@ -26,6 +26,7 @@ import { useCheckoutStore } from '../../stores/checkoutStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useToast } from '../../components/toast/ToastProvider';
 import { counterPhoneHint, savedAddressToMakeUsual, typedAddressToSave } from './counterCustomer';
+import { customersChanged } from './customerLookups';
 
 /**
  * Inline customer + delivery panel — lives in the second step of the order ticket (no modal).
@@ -844,7 +845,22 @@ export async function commitCustomerToOrder(
     await ipc.orders.setNote({ orderId, note });
     return null;
   }
+  try {
+    return await saveTypedCustomer(orderId, mode, form, note);
+  } finally {
+    // Saved (or tried): the phone typed next is looked up again, not "No match" from
+    // before this save (customerLookups.ts, e2e smoke bug 3).
+    customersChanged();
+  }
+}
 
+/** commitCustomerToOrder's save, once something was typed: the customer, a typed address, the order. */
+async function saveTypedCustomer(
+  orderId: string,
+  mode: 'takeaway' | 'delivery',
+  form: CustomerFormState,
+  note: string | null,
+): Promise<{ customerId: string; addressId: string | null; snapshot: OrderSnapshot | null }> {
   let customerId = form.matchedCustomerId;
   // The name on the reused customer's master record, to compare against
   // what the till typed for this order.

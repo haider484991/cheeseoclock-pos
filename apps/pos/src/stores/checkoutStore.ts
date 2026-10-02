@@ -3,6 +3,7 @@ import type { CameBy, FoodpandaTenderCheck, OrderSnapshot, OrderMode, PaymentMet
 import { isCameBy } from '@cheeseoclock/shared-types';
 import { ipc } from '../ipc/client';
 import { addedLineId, createSerialQueue, findMergeableLine } from '../features/checkout/cartLines';
+import { customersChanged } from '../features/checkout/customerLookups';
 
 /** The ticket line the cashier last added to or changed — the ticket flashes it, and +/- keys act on it. */
 export interface LineTouch {
@@ -538,6 +539,8 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         }
         const next = await ipc.orders.sendToKitchen(snap.order.id);
         set({ snapshot: next });
+        // The customer's lists (their past orders, the phone search) are asked again.
+        customersChanged();
         return next;
       });
     },

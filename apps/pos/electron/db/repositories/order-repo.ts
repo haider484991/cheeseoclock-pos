@@ -7,7 +7,7 @@ import { writeAudit } from './audit-repo.js';
 import { decrementForOrder } from './stock-movement-repo.js';
 import { getOrderStockStatus, settleOrderStock } from './order-stock-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
-import { findCashMovement, getCurrentShift, recordDeliveryChargeToRider } from './shift-repo.js';
+import { findCashMovement, getCurrentShift, recordDeliveryChargeToRider, TRIP_PAYOUT_REASON_START } from './shift-repo.js';
 import { skipFbrForOrder, touchedFbrProduction } from './fbr-queue-repo.js';
 import { listModifierGroupsForItem, listModifiersByGroup } from './modifier-repo.js';
 import { noDiscountOf } from './category-repo.js';
@@ -1352,8 +1352,9 @@ export type DeliveryAreaEvent =
   | 'phone';
 
 /**
- * A live delivery of the same customer that has not gone out yet: an add-on
- * goes with it (deliveryChargeForArea's add-on rule, liveDeliveryNotOutFor).
+ * A live delivery of the same customer that has not gone out yet and pays its
+ * trip (it has its own delivery charge): an add-on goes with it
+ * (deliveryChargeForArea's add-on rule, liveDeliveryNotOutFor).
  */
 export interface DeliveryGoesWith {
   orderId: string;
@@ -1447,11 +1448,17 @@ function addOnPhones(db: AppDatabase, orderId: string, typedPhone: string | null
  * The add-on rule's first delivery (the owner, 2 Oct 2026: "if its out then
  * it should charge if the rider is not out"): another delivery of this phone
  * that the shop still has — sent to the kitchen, being made or Ready, a
- * prepaid one too (Pay leaves a delivery sent to the kitchen, paid) — the
- * first sent. One already out for delivery is a new trip, and so is one
- * delivered, paid, cancelled, refunded or still a cart: none. Either till's
- * rows (the other till's arrive by the link), whatever the source (a website
- * order still in the kitchen is a first delivery too). idx_orders_status_sent.
+ * prepaid one too (Pay leaves a delivery sent to the kitchen, paid) — and
+ * that itself carries a delivery charge (carriesDeliveryCharge): the trip's
+ * paying order, the first sent. One already out for delivery is a new trip,
+ * and so is one delivered, paid, cancelled, refunded or still a cart: none.
+ * Never an add-on with no charge of its own (e2e, 2 Oct 2026): its first
+ * delivery may have gone out already, and an order going with it made a
+ * second trip that charged nothing and paid the rider nothing — with no
+ * paying order in the shop, the next order is a new trip, charged as usual.
+ * Either till's rows (the other till's arrive by the link), whatever the
+ * source (a website order still in the kitchen, its charge on its bill, is a
+ * first delivery too). idx_orders_status_sent.
  */
 function liveDeliveryNotOutFor(
   db: AppDatabase,
@@ -1459,17 +1466,27 @@ function liveDeliveryNotOutFor(
   phones: readonly [string, string] | null,
 ): DeliveryGoesWith | null {
   if (!phones) return null;
-  const row = db
+  const rows = db
     .prepare(
       `SELECT o.id, o.order_number FROM orders o
         WHERE o.id != ? AND o.deleted_at IS NULL AND o.mode = 'delivery'
           AND o.status IN ('sent_to_kitchen', 'preparing', 'ready')
           AND o.customer_phone_snapshot IN (?, ?)
-        ORDER BY COALESCE(o.sent_at, o.created_at), o.id
-        LIMIT 1`,
+        ORDER BY COALESCE(o.sent_at, o.created_at), o.id`,
     )
-    .get(orderId, phones[0], phones[1]) as { id: string; order_number: string } | undefined;
+    .all(orderId, phones[0], phones[1]) as Array<{ id: string; order_number: string }>;
+  const row = rows.find((r) => carriesDeliveryCharge(db, r.id));
   return row ? { orderId: row.id, orderNumber: String(row.order_number) } : null;
+}
+
+/**
+ * The order's bill has a delivery charge on it (a line of an area's fee item,
+ * or named like one, above Rs 0): the order that pays its trip. An add-on
+ * whose charge was left off has none; neither has a delivery whose charge
+ * was taken off by hand.
+ */
+function carriesDeliveryCharge(db: AppDatabase, orderId: string): boolean {
+  return deliveryChargeLinesOf(db, orderId).some((l) => l.unitPriceCents * l.quantity > 0);
 }
 
 type AddOnTo = NonNullable<OrderSnapshot['addOnTo']>;
@@ -1570,8 +1587,9 @@ function snapshotArea(db: AppDatabase, orderId: string): string | null {
  * The add-on rule (the owner, 2 Oct 2026: "if its out then it should charge
  * if the rider is not out"): a counter delivery whose phone (the order's,
  * else `opts.phone`, the one the panel typed; addOnPhones) has another
- * delivery the shop still has — sent to the kitchen, being made or Ready
- * (liveDeliveryNotOutFor) — goes with it on one trip: while the area's
+ * delivery the shop still has — sent to the kitchen, being made or Ready —
+ * that carries its own delivery charge (liveDeliveryNotOutFor; never an
+ * add-on with none) goes with it on one trip: while the area's
  * target is a fee, every charge line comes off and none goes on (recorded
  * charged 'add_on_off', goesWith that order). Once the first is out for
  * delivery (or closed, or still a cart) it is a new trip: charged as usual.
@@ -4548,9 +4566,6 @@ export const RIDER_WINDOW_CHANGED = 'This order changed since this window opened
 
 /** Send out's "Paid now" with a rider's payment that is not one (orders:sendOut riderPayment): nothing is sent. */
 export const RIDER_PAYMENT_UNREADABLE = "The rider's payment could not be read — close this window and try again.";
-
-/** How shift-repo's recordDeliveryChargeToRider words a wasted trip's payout (its 'kept' one says "Delivery charge kept…"). */
-const TRIP_PAYOUT_REASON_START = 'Trip paid to the outside rider';
 
 /** The oldest live payout to an outside rider for this order (cash_movements.order_id, idx_cash_movements_order). */
 function liveRiderPayout(

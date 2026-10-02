@@ -65,7 +65,7 @@ export type ShiftHistoryPeriod = Pick<ReportPeriod, 'dates' | 'isCurrent'>;
  */
 export function shiftHistoryNote(period?: ShiftHistoryPeriod): string {
   const dates = period ? ` (${period.dates}${period.isCurrent ? ', so far' : ''})` : '';
-  return `Every shift that was open at any time in this period${dates}, newest first. Expected = float + cash sales − cash refunds + cash put in − cash taken out. Cash taken out = Taken out + To riders (delivery charges kept by outside riders, and trips paid for cancelled orders). Figures are the ones saved when the shift was closed.`;
+  return `Every shift that was open at any time in this period${dates}, newest first. Expected = float + cash sales − cash refunds + cash put in − cash taken out. Cash taken out = Taken out + To riders (paid to outside riders: delivery charges kept, and trips). Figures are the ones saved when the shift was closed.`;
 }
 
 /** The shift history's banner: what the closed drawers came to. A shift still open is not counted until it closes. */
