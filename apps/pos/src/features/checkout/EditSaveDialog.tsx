@@ -43,7 +43,11 @@ export function EditSaveDialog({ onClose, onSaved }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const saveEdit = useCheckoutStore((s) => s.saveEdit);
   const [made, setMade] = useState<Record<string, FoodMade>>({});
-  const [reason, setReason] = useState('');
+  // A Free order's own reason (given in the Discount box) is the change's: not asked twice.
+  const [reason, setReason] = useState(() => {
+    const free = useCheckoutStore.getState().edit?.ops.find((o) => o.op === 'discount' && o.free === true);
+    return free?.op === 'discount' ? (free.reason ?? '') : '';
+  });
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);

@@ -139,12 +139,17 @@ const DIFF: OrderEditDiff = {
 } as unknown as OrderEditDiff;
 const NEEDS: OrderEditNeeds = { pin: true, why: ['Items the kitchen has come off'], reason: true };
 
-function editing(snapshot: OrderSnapshot, diff: OrderEditDiff = DIFF, needs: OrderEditNeeds = NEEDS) {
+function editing(
+  snapshot: OrderSnapshot,
+  diff: OrderEditDiff = DIFF,
+  needs: OrderEditNeeds = NEEDS,
+  ops: EditSession['ops'] = [{ op: 'add', lineId: 'n1', menuItemId: 'm_n1', quantity: 1, modifierIds: [], notes: null }],
+) {
   const session: EditSession = {
     orderId: 'o9',
     base: BASE,
     baseKey: 'key-1',
-    ops: [{ op: 'add', lineId: 'n1', menuItemId: 'm_n1', quantity: 1, modifierIds: [], notes: null }],
+    ops,
     diff,
     needs,
     returnTo: '/orders',
@@ -220,16 +225,19 @@ describe('the Save box', () => {
     expect(words).not.toContain('Manager PIN');
   });
 
-  it('a Free order: nothing to pay, the drawer pays the rider at Send out, and its own reasons', () => {
-    editing(CHANGED, { ...DIFF, added: [], removed: [], discountChanged: true, freeOrder: true, totalAfterCents: 0 } as OrderEditDiff, {
-      pin: true,
-      why: ['A Free order'],
-      reason: true,
-    });
-    const words = text(render(<EditSaveDialog onClose={noop} onSaved={noop} />));
+  it('a Free order: nothing to pay, the drawer pays the rider at Send out, its own reasons, and its reason already in (not asked twice)', () => {
+    editing(
+      CHANGED,
+      { ...DIFF, added: [], removed: [], discountChanged: true, freeOrder: true, totalAfterCents: 0 } as OrderEditDiff,
+      { pin: true, why: ['A Free order'], reason: true },
+      [{ op: 'discount', discountType: 'percent', value: 100, reason: 'Complaint', free: true }],
+    );
+    const out = render(<EditSaveDialog onClose={noop} onSaved={noop} />);
+    const words = text(out);
     expect(words).toContain('Free order: nothing to pay. At Send out the drawer pays an outside rider his delivery charge.');
     expect(words).toContain('Staff meal');
     expect(words).not.toContain('Customer changed order');
+    expect(out).toMatch(/<input id="edit-reason"[^>]*value="Complaint"/);
   });
 });
 
@@ -252,6 +260,11 @@ describe('the Discount dialog’s Free order', () => {
     const out = render(<DiscountDialog onClose={noop} />);
     const words = text(out);
     expect(words).toContain('now Free order (Staff meal)');
+    // The whole bill, not what a discount is worked on, and no 10% limit line.
+    // Rs 2,000 of lines at 16%.
+    expect(words).toContain('The whole order: Rs 2,320 with tax');
+    expect(words).not.toContain('not discounted');
+    expect(words).not.toContain('without a manager');
     expect(words).toContain('Everything on this order is free: the food, the value deals and the delivery charge.');
     expect(words).toContain('A manager’s PIN or password is asked when you save the change.');
     expect(words).not.toContain('Manager PIN or password');

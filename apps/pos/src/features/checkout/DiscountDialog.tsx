@@ -347,7 +347,8 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
             <div>
               <Dialog.Title className="text-xl font-bold">{removingDeal ? 'Take the foodpanda deal off?' : 'Discount'}</Dialog.Title>
               <Dialog.Description className="text-sm text-stone-500 dark:text-stone-400">
-                {discountBaseText(base, subtotal, basis)}
+                {/* A Free order is the whole bill (the food, the value deals and the delivery charge), not what a discount is worked on. */}
+                {free ? `The whole order: ${formatCents(before.totalCents)} with tax` : discountBaseText(base, subtotal, basis)}
                 {currentWords && (
                   <>
                     {' · '}
@@ -359,7 +360,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
               {/* The limit in words, on what it is checked on: the food, when the delivery charge is left
                   out; the food without the value deals, when they are (the food and delivery charge
                   without them, with the owner's switch on). None when only value deals are left. */}
-              {!dealOn && !onlyValueDeals && (
+              {!dealOn && !onlyValueDeals && !free && (
                 <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{approvalRuleText(limits, basis)}</p>
               )}
               {offerOn && (

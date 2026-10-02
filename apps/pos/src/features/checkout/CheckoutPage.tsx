@@ -194,6 +194,8 @@ export function CheckoutPage() {
     if (!editChangesNothing(e.diff) && !(await askConfirm(`Leave #${short} as the kitchen has it? The changes made here are dropped.`))) return;
     try {
       await useCheckoutStore.getState().cancelEdit();
+      // The order may have changed meanwhile (the other till): the lists read it again.
+      void qc.invalidateQueries({ queryKey: ['orders'] });
       void goTo(e.returnTo);
     } catch (err) {
       toast({ title: 'Could not cancel the change', description: err instanceof Error ? err.message : 'Unknown error', variant: 'error' });
@@ -213,6 +215,8 @@ export function CheckoutPage() {
       saved.diff.freeOrder ? 'Free order: nothing to pay.' : `New total ${formatCents(saved.snapshot.order.totalCents)}.`,
     ].filter(Boolean);
     toast({ title: `#${short} changed`, description: parts.join(' '), variant: 'success' });
+    // Live Orders and the order lists show the order as saved at once, not after their next poll.
+    void qc.invalidateQueries({ queryKey: ['orders'] });
     void goTo(session.returnTo);
   }
 
