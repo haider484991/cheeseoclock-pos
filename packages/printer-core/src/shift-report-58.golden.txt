@@ -1,0 +1,274 @@
+SHIFT REPORT
+Cheese O'Clock
+Till: DESKTOP-7Q2M1KD
+--------------------------------
+Opened 01/10 16:02      Ali Raza
+Closed 02/10 01:48     Imran Ali
+  PIN on Ali Raza's login
+================================
+SALES             62 orders paid
+Food                  168,760.00
+Delivery charges (18)   4,000.00
+Discounts (16)         -7,620.00
+  foodpanda deal (9)   -4,860.00
+  Staff discounts (3)  -1,640.00
+  Pick-up discount (2)   -560.00
+  Automatic offers (2)   -560.00
+Sales tax 15%          24,771.00
+TOTAL (with tax)      189,911.00
+Refunds (1)            -1,725.00
+NET SALES             188,186.00
+Average bill            3,063.08
+--------------------------------
+MONEY TAKEN
+Cash (38)              96,350.00
+Card (12)              35,260.00
+EasyPaisa (6)          17,430.00
+JazzCash (3)            9,200.00
+foodpanda (9)          31,671.00
+Cash refunds (1)       -1,725.00
+TOTAL                 188,186.00
+--------------------------------
+BY CHANNEL
+Takeaway (33)          94,370.00
+Delivery (17)          55,130.00
+  own riders (9)       29,600.00
+  outside riders (8)   25,530.00
+Website pick-up (2)     5,796.00
+Website delivery (1)    2,944.00
+foodpanda (9)          31,671.00
+--------------------------------
+CANCELLED AND REFUNDED
+Cancelled (2)           3,450.00
+  1 made, 1 not made
+  #0021 21:14 made      2,070.00
+    Customer left
+  #0047 23:40 not made  1,380.00
+    Wrong item rung
+Refunded (1)            1,725.00
+  #0033 22:05 cash      1,725.00
+    Cold pizza
+--------------------------------
+CASH DRAWER
+Opening float           5,000.00
+Cash sales             96,350.00
+Cash refunds           -1,725.00
+Cash put in (1)         2,000.00
+Cash taken out (5)     -3,750.00
+  rider tips (3)         -600.00
+To outside riders (8)  -1,800.00
+  8 delivery charges kept
+EXPECTED CASH          96,075.00
+--------------------------------
+CASH COUNTED
+Rs 5,000 x 12          60,000.00
+Rs 1,000 x 24          24,000.00
+Rs 500 x 15             7,500.00
+Rs 100 x 31             3,100.00
+Rs 50 x 14                700.00
+Rs 20 x 18                360.00
+Rs 10 x 23                230.00
+Coins and other            85.00
+COUNTED                95,975.00
+SHORT                    -100.00
+--------------------------------
+UNPAID - CARRIED OVER (2)
+                        4,060.00
+#0064 01:12 Ali Raza    2,470.00
+#0066 01:30 Website     1,590.00
+Reason: Rider still out
+--------------------------------
+ITEMS SOLD (158)      168,760.00
+SIGNATURE PIZZAS (22)  48,400.00
+8x Shawarma Pizza - Large
+                       17,600.00
+5x Crown Crust - Large 11,000.00
+4x Cheesy Star - Large  8,800.00
+3x Meat Lovers - Large  6,600.00
+2x Cheetos - Large      4,400.00
+PIZZA (26)             45,500.00
+5x Fajita Pizza - Medium
+                        7,500.00
+4x Chicken Tikka Pizza - Large
+                        8,000.00
+4x Fajita Pizza - Large 8,000.00
+4x Malai Supreme - Medium
+                        6,000.00
+3x Classic Pepperoni - Large
+                        6,000.00
+3x Cheesalious - Medium 4,500.00
+2x Chicken Tikka Malai - Large
+                        4,000.00
+1x Veggie Lovers - Medium
+                        1,500.00
+BURGERS (19)           16,050.00
+7x Crispy Signature     5,600.00
+5x Nashville Authentic (Hot)
+                        4,750.00
+4x Signature Cheese Dipped
+                        3,600.00
+3x Classic Crispy Chicken
+                        2,100.00
+FRIES & SIDES (23)     13,410.00
+8x Fries - Large        3,600.00
+6x Signature Loaded Fries
+                        4,200.00
+4x Signature Mayo Masala Fries -
+Large
+                        2,200.00
+3x Nuggets              2,010.00
+2x Baked Wings          1,400.00
+DIPS (29)               2,900.00
+14x Signature Orange Dip
+                        1,400.00
+9x Garlic Mayo Dip        900.00
+6x Ranch Dip              600.00
+VALUE DEALS (12)       37,700.00
+5x Big Two             18,000.00
+4x Perfect Pair        10,400.00
+3x Family Feast         9,300.00
+DRINKS (27)             4,800.00
+15x Soft Drink - 345 ml 1,800.00
+12x Soft Drink - 1 litre
+                        3,000.00
+--------------------------------
+ORDERS (62)           189,911.00
+#0001 16:20             2,530.00
+  Takeaway, Cash
+#0002 16:41             4,370.00
+  Delivery, Cash
+#0003 17:05             2,645.00
+  foodpanda, foodpanda
+#0004 17:22             1,725.00
+  Takeaway, Card
+#0005 17:48             2,898.00
+  Website pick-up, Cash
+#0006 18:02             4,370.00
+  Delivery, EasyPaisa + Cash
+#0007 18:15             1,725.00
+  Takeaway, Cash
+#0008 18:31             3,565.00
+  Takeaway, JazzCash
+#0009 18:44             3,680.00
+  Takeaway, Card
+#0010 18:52             3,312.00
+  foodpanda, foodpanda
+#0011 19:03             1,725.00
+  Takeaway, Cash
+#0013 19:12             2,898.00
+  Takeaway, Card
+#0012 19:20             1,667.50
+  Delivery, Cash
+#0015 19:26             2,783.00
+  Takeaway, Card
+#0016 19:34             2,530.00
+  Takeaway, JazzCash
+#0017 19:38             3,116.50
+  foodpanda, foodpanda
+#0014 19:41             2,932.50
+  Delivery, EasyPaisa + Cash
+#0018 19:50             3,646.50
+  Takeaway, Cash
+#0020 20:02             2,587.50
+  Takeaway, Cash
+#0019 20:15             6,411.25
+  Delivery, Cash
+#0022 20:20             3,105.00
+  Takeaway, JazzCash
+#0024 20:31             4,266.50
+  foodpanda, foodpanda
+#0025 20:39             2,702.50
+  Takeaway, Card
+#0026 20:47             3,967.50
+  Takeaway, Cash
+#0028 20:55             2,530.00
+  Takeaway, Card
+#0023 20:58             1,610.00
+  Delivery, Cash
+#0030 21:05             2,415.00
+  Takeaway, Card
+#0027 21:12             2,875.00
+  Delivery, EasyPaisa
+#0032 21:18             3,254.50
+  foodpanda, foodpanda
+#0029 21:20             2,944.00
+  Website delivery, Cash
+#0033 21:31             1,725.00
+  Takeaway, Cash (refunded)
+#0034 21:36             2,300.00
+  Takeaway, Cash
+#0031 21:40             2,300.00
+  Delivery, EasyPaisa + Cash
+#0036 21:47             2,898.00
+  Takeaway, Card
+#0037 21:55             2,530.00
+  Takeaway, Card
+#0038 22:00             4,577.00
+  foodpanda, foodpanda
+#0035 22:02             2,403.50
+  Delivery, Cash
+#0039 22:09             3,300.50
+  Takeaway, Cash
+#0041 22:16             2,748.50
+  Takeaway, Card
+#0043 22:24             1,725.00
+  Takeaway, Cash
+#0044 22:31             6,382.50
+  Takeaway, Card
+#0042 22:41             2,760.00
+  Delivery, Cash
+#0046 22:44             2,829.00
+  foodpanda, foodpanda
+#0040 22:50             5,117.50
+  Delivery, Cash
+#0045 22:50             2,817.50
+  Delivery, EasyPaisa + Cash
+#0048 22:58             2,530.00
+  Takeaway, Cash
+#0050 23:07             2,438.00
+  Takeaway, Cash
+#0051 23:14             2,898.00
+  Website pick-up, Cash
+#0052 23:19             5,405.00
+  Takeaway, Cash
+#0054 23:26             2,656.50
+  foodpanda, foodpanda
+#0049 23:30             3,070.50
+  Delivery, Cash
+#0055 23:35             1,840.00
+  Takeaway, Cash
+#0057 23:46             3,105.00
+  Takeaway, Cash
+#0058 23:52             3,105.00
+  Takeaway, Cash
+#0053 23:58             3,047.50
+  Delivery, Cash
+#0060 00:05             1,725.00
+  Takeaway, Cash
+#0056 00:12             3,224.75
+  Delivery, Cash
+#0061 00:18             5,014.00
+  foodpanda, foodpanda
+#0059 00:31             3,335.00
+  Delivery, EasyPaisa + Cash
+#0062 00:40             3,967.50
+  Takeaway, Cash + Card
+#0063 01:08             2,817.50
+  Delivery, Cash
+#0065 01:25             2,530.00
+  Takeaway, Cash
+================================
+Printed 02/10/2026 01:48 by
+Imran Ali
+Sales = orders paid on this till
+this shift.
+Figures as saved when the shift
+closed.
+-- END OF SHIFT REPORT --
+
+
+
+
+
+
+[cut]

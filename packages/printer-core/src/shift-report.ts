@@ -29,13 +29,28 @@
  *      ...                                                   when it is switched on
  *      ------------------------------------------------
  *      MONEY TAKEN / BY CHANNEL / CANCELLED AND REFUNDED /
- *      CASH DRAWER / CASH COUNTED / UNPAID - CARRIED OVER, a '-' rule between
+ *      CASH DRAWER / CASH COUNTED / UNPAID - CARRIED OVER /
+ *      ITEMS SOLD / ORDERS, a '-' rule between
  *      ================================================
  *      Printed 02/10/2026 01:48 by Imran Ali
+ *      Some sections are off.                    <- only when the owner
+ *      See Settings > Printers.                     switched one off
  *      Sales = orders paid on this till this shift.
  *      Figures as saved when the shift closed.
  *                -- END OF SHIFT REPORT --
  *              ** DUPLICATE - Reprint #2 **        <- a reprint only
+ *
+ * ITEMS SOLD lists every item under its category (bold, in capitals), or
+ * the category rows only (opts.items 'categories'). ORDERS, printed last,
+ * lists every order paid (the same orders as SALES), one row each at 80 mm:
+ *
+ *      ORDERS (62)                           189,911.00
+ *      #0001 16:20 Takeaway, Cash              2,530.00
+ *      #0006 18:02 Delivery, EasyPaisa + Cash  4,370.00
+ *      #0033 21:31 Takeaway, Cash (refunded)   1,725.00
+ *
+ * and two rows each at 58 mm ('#0001 16:20' with the total, then
+ * '  Takeaway, Cash'). It has no cap: the owner asked for every order.
  *
  * At 58 mm (32 cols) the times are dd/mm hh:mm (the full date is in the
  * 'Printed' line), a cancel or refund whose reason does not fit prints the
@@ -52,11 +67,9 @@
  * right-aligned under it — never a row the printer has to break, and never
  * an indent lost (EscPosBuilder.line alone would drop it). All text goes
  * through toPrinterAscii ('—' prints '-', '×' prints 'x').
- *
- * ITEMS SOLD and ORDERS print from step 19e-3; until then their switches
- * print nothing.
  */
 import {
+  SHIFT_REPORT_SECTIONS,
   paperClock,
   paperDateTime,
   paperDayMonthClock,
@@ -66,6 +79,7 @@ import {
   type ShiftReport,
   type ShiftReportCancelled,
   type ShiftReportDiscountKind,
+  type ShiftReportOrder,
   type ShiftReportRefund,
   type ShiftReportSection,
 } from '@cheeseoclock/shared-types';
@@ -87,10 +101,11 @@ export interface RenderShiftReportOpts {
   width: PrinterWidth;
   /**
    * The owner's switches (Settings → Printers → Shift report): a section
-   * prints unless its switch is false. They change only what prints.
+   * prints unless its switch is false. They change only what prints; when
+   * any is off the footer says so.
    */
   sections: Record<ShiftReportSection, boolean>;
-  /** ITEMS SOLD: every item, or the category totals only (prints from step 19e-3). */
+  /** ITEMS SOLD: every item under its category, or the category totals only. */
   items: 'items' | 'categories';
   printedAt: ShiftReportPaperTime;
   printedByName: string;
@@ -103,10 +118,16 @@ export interface RenderShiftReportOpts {
   sinceClose?: { testDeletedCashCents: number } | null;
 }
 
-/** At most this many cancels, refunds or unpaid orders are listed; then 'and N more'. */
+/**
+ * At most this many cancels, refunds or unpaid orders are listed; then 'and
+ * N more'. ITEMS SOLD and ORDERS have no cap.
+ */
 export const SHIFT_REPORT_LIST_MAX = 10;
 
-/** The sections this version prints, in the paper's order. */
+/** The two footer rows when the owner switched a section off (each fits 32 columns). */
+const SECTIONS_OFF_ROWS = ['Some sections are off.', 'See Settings > Printers.'] as const;
+
+/** The sections in the paper's order (SHIFT_REPORT_SECTIONS' order): ORDERS last, before the footer. */
 const PRINTED_SECTIONS: ReadonlyArray<readonly [ShiftReportSection, (p: Paper, r: ShiftReport) => void]> = [
   ['sales', appendSales],
   ['moneyTaken', appendMoneyTaken],
@@ -115,6 +136,8 @@ const PRINTED_SECTIONS: ReadonlyArray<readonly [ShiftReportSection, (p: Paper, r
   ['drawer', appendDrawer],
   ['counted', appendCounted],
   ['unpaid', appendUnpaid],
+  ['items', appendItems],
+  ['orders', appendOrders],
 ];
 
 /** The payment methods in the paper's words: MONEY TAKEN and the orders list. */
@@ -156,10 +179,11 @@ const DISCOUNT_LABEL: Record<ShiftReportDiscountKind, string> = {
   offer: 'Automatic offers',
 };
 
-/** The paper being printed: the builder and its width. */
+/** The paper being printed: the builder, its width and how ITEMS SOLD prints. */
 interface Paper {
   b: EscPosBuilder;
   width: PrinterWidth;
+  items: 'items' | 'categories';
 }
 
 /**
@@ -168,7 +192,7 @@ interface Paper {
  */
 export function renderShiftReport(report: ShiftReport, opts: RenderShiftReportOpts): Uint8Array {
   const width: PrinterWidth = opts.width === 32 ? 32 : 48;
-  const p: Paper = { b: new EscPosBuilder(width), width };
+  const p: Paper = { b: new EscPosBuilder(width), width, items: opts.items === 'categories' ? 'categories' : 'items' };
   const { b } = p;
   const stamp = opts.stamp ?? null;
 
@@ -285,6 +309,10 @@ function appendFooter(p: Paper, opts: RenderShiftReportOpts, stamp: ShiftReportS
   const { b, width } = p;
   const by = opts.printedByName.trim() ? ` by ${opts.printedByName.trim()}` : '';
   b.wrappedText(`Printed ${paperDateTime(opts.printedAt)}${by}`, width);
+  // Right under 'Printed', as on the sample the owner was sent: this paper is not all of the report.
+  if (SHIFT_REPORT_SECTIONS.some((s) => opts.sections[s.key] === false)) {
+    for (const r of SECTIONS_OFF_ROWS) b.text(r).newline();
+  }
   b.wrappedText('Sales = orders paid on this till this shift.', width);
   b.wrappedText('Figures as saved when the shift closed.', width);
   const deleted = opts.sinceClose?.testDeletedCashCents ?? 0;
@@ -509,4 +537,56 @@ function appendUnpaid(p: Paper, r: ShiftReport): void {
   }
   andMore(p, u.orders.length, 0);
   if (u.reason?.trim()) row(p, `Reason: ${u.reason.trim()}`);
+}
+
+/**
+ * ITEMS SOLD: how many and for how much (the line totals, before discounts
+ * and tax, so it equals Food), then each category in bold capitals in the
+ * saved order ('PIZZA (26)'), and under it, with 'items', every item most
+ * sold first ('5x Fajita Pizza - Medium'). No cap.
+ */
+function appendItems(p: Paper, r: ShiftReport): void {
+  if (r.items.length === 0) {
+    strongRow(p, 'ITEMS SOLD: none');
+    return;
+  }
+  strongRow(p, `ITEMS SOLD (${sum(r.items.map((c) => c.quantity))})`, money(sum(r.items.map((c) => c.cents))));
+  for (const c of r.items) {
+    strongRow(p, `${c.category.toUpperCase()} (${c.quantity})`, money(c.cents));
+    if (p.items === 'categories') continue;
+    for (const i of c.items) row(p, `${i.quantity}x ${i.name}`, money(i.cents));
+  }
+}
+
+/** "Takeaway, Cash", "Delivery, EasyPaisa + Cash (refunded)", "foodpanda, no payment". */
+function orderWords(o: ShiftReportOrder): string {
+  const methods = o.methods.length > 0 ? o.methods.map((m) => METHOD_LABEL[m] ?? m).join(' + ') : 'no payment';
+  const refunded = o.refunded === 'full' ? ' (refunded)' : o.refunded === 'part' ? ' (part refunded)' : '';
+  return `${CHANNEL_LABEL[o.channel] ?? o.channel}, ${methods}${refunded}`;
+}
+
+/**
+ * ORDERS (the owner's 'All orders'): every order paid, in the order paid —
+ * the same orders as SALES, so the heading's count and money are '<n>
+ * orders paid' and TOTAL (with tax). Each order's number (as the cancel and
+ * unpaid rows print it), when it was paid, its channel and how it was paid,
+ * flagged when it was refunded, with its total. One row at 80 mm (a label
+ * too long wraps, the total under it); two at 58 mm, the words indented 2.
+ * No cap.
+ */
+function appendOrders(p: Paper, r: ShiftReport): void {
+  if (r.orders.length === 0) {
+    strongRow(p, 'ORDERS: none');
+    return;
+  }
+  strongRow(p, `ORDERS (${r.orders.length})`, money(sum(r.orders.map((o) => o.totalCents))));
+  for (const o of r.orders) {
+    const head = `${shortOrderNumber(o.orderNumber)} ${paperClock(o.paidAt)}`;
+    if (p.width >= 48) {
+      row(p, `${head} ${orderWords(o)}`, money(o.totalCents));
+    } else {
+      row(p, head, money(o.totalCents));
+      row(p, orderWords(o), '', 2);
+    }
+  }
 }

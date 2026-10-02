@@ -1,0 +1,49 @@
+SHIFT REPORT
+Cheese O'Clock
+Till: DESKTOP-7Q2M1KD
+------------------------------------------------
+Opened 01/10/2026 16:02                 Ali Raza
+Closed 02/10/2026 01:48                Imran Ali
+  PIN on Ali Raza's login
+================================================
+CASH DRAWER
+Opening float                           5,000.00
+Cash sales                             96,350.00
+Cash refunds                           -1,725.00
+Cash put in (1)                         2,000.00
+Cash taken out (5)                     -3,750.00
+  rider tips (3)                         -600.00
+Paid to outside riders (8)             -1,800.00
+  8 delivery charges kept
+EXPECTED CASH                          96,075.00
+------------------------------------------------
+CASH COUNTED
+Rs 5,000 x 12                          60,000.00
+Rs 1,000 x 24                          24,000.00
+Rs 500 x 15                             7,500.00
+Rs 100 x 31                             3,100.00
+Rs 50 x 14                                700.00
+Rs 20 x 18                                360.00
+Rs 10 x 23                                230.00
+Coins and other                            85.00
+COUNTED                                95,975.00
+SHORT                                    -100.00
+------------------------------------------------
+UNPAID - CARRIED OVER (2)               4,060.00
+#0064 01:12 Ali Raza                    2,470.00
+#0066 01:30 Website                     1,590.00
+Reason: Rider still out
+================================================
+Printed 02/10/2026 01:48 by Imran Ali
+Some sections are off.
+See Settings > Printers.
+Sales = orders paid on this till this shift.
+Figures as saved when the shift closed.
+-- END OF SHIFT REPORT --
+
+
+
+
+
+
+[cut]

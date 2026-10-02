@@ -1,18 +1,28 @@
 /**
- * The shift report on paper (step 19e-2): the sample night against the
- * owner's sample papers at 80 mm (48 columns) and 58 mm (32), every row
- * within the paper, Pakistan time whatever the PC's zone, and the rules of
- * each section. ITEMS SOLD, ORDERS and the goldens come in step 19e-3.
+ * The shift report on paper (steps 19e-2 and 19e-3): the sample night
+ * against the owner's sample papers at 80 mm (48 columns) and 58 mm (32) —
+ * ITEMS SOLD and the ORDERS list included — every row within the paper,
+ * Pakistan time whatever the PC's zone, the rules of each section and the
+ * owner's switches.
+ *
+ * Four whole papers are pinned as goldens next to this file
+ * (shift-report-*.golden.txt, the mock printer's text). A golden changes
+ * only on purpose: run
+ *   SHIFT_REPORT_GOLDENS=write npx vitest run src/shift-report.test.ts
+ * in packages/printer-core, then read the diff (git diff) before committing.
  *
  * Every name, number and amount here is made up (the menu's item names are
  * the shop's own, public on its website).
  */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   SHIFT_REPORT_SECTIONS,
   type PrinterWidth,
   type ShiftReport,
   type ShiftReportCancelled,
+  type ShiftReportOrder,
   type ShiftReportSection,
 } from '@cheeseoclock/shared-types';
 import { CUT_MARKER, QR_MARKER, decodeEscPos, escPosToText } from './escpos-decode.js';
@@ -57,6 +67,15 @@ function blocks(rows: readonly string[]): string[][] {
     else out[out.length - 1]!.push(r);
   }
   return out;
+}
+
+/**
+ * The paper's blocks with the ORDERS block taken out (the owner's sample
+ * paper has none; it came on its own excerpt): { rest, orders }.
+ */
+function withoutOrders(all: readonly string[][]): { rest: string[][]; orders: string[] } {
+  const at = all.findIndex((b) => b[0]?.startsWith('ORDERS') === true);
+  return { rest: all.filter((_, i) => i !== at), orders: at < 0 ? [] : all[at]! };
 }
 
 /** The rows of the section whose first row starts with `heading`, up to the next rule. */
@@ -130,8 +149,81 @@ function cancels(n: number, made: (i: number) => ShiftReportCancelled['made'] = 
 //  - the riders row is the close result's since v0.7.34, 'Paid to outside
 //    riders (8)' with '8 delivery charges kept' under it, not 'Delivery charges
 //    kept by riders (8)' ('To outside riders (8)' at 58 mm, not 'Kept by riders').
+// The ORDERS list is not on that paper: its rows are the ORDERS excerpt's
+// (C:\Projects\coc-till-awake-notes\Sample-Shift-Report-v2-orders.txt), but for
+// #0007, which the excerpt flagged '(refunded)': the night's one refund is
+// #0033 (CANCELLED AND REFUNDED says so), and #0033 is the row flagged here.
 
 const TITLE = ['SHIFT REPORT', "Cheese O'Clock", 'Till: DESKTOP-7Q2M1KD'];
+
+/** The sample paper's ITEMS SOLD at 80 mm, row for row. */
+const ITEMS_80 = [
+  'ITEMS SOLD (158)                      168,760.00',
+  'SIGNATURE PIZZAS (22)                  48,400.00',
+  '8x Shawarma Pizza - Large              17,600.00',
+  '5x Crown Crust - Large                 11,000.00',
+  '4x Cheesy Star - Large                  8,800.00',
+  '3x Meat Lovers - Large                  6,600.00',
+  '2x Cheetos - Large                      4,400.00',
+  'PIZZA (26)                             45,500.00',
+  '5x Fajita Pizza - Medium                7,500.00',
+  '4x Chicken Tikka Pizza - Large          8,000.00',
+  '4x Fajita Pizza - Large                 8,000.00',
+  '4x Malai Supreme - Medium               6,000.00',
+  '3x Classic Pepperoni - Large            6,000.00',
+  '3x Cheesalious - Medium                 4,500.00',
+  '2x Chicken Tikka Malai - Large          4,000.00',
+  '1x Veggie Lovers - Medium               1,500.00',
+  'BURGERS (19)                           16,050.00',
+  '7x Crispy Signature                     5,600.00',
+  '5x Nashville Authentic (Hot)            4,750.00',
+  '4x Signature Cheese Dipped              3,600.00',
+  '3x Classic Crispy Chicken               2,100.00',
+  'FRIES & SIDES (23)                     13,410.00',
+  '8x Fries - Large                        3,600.00',
+  '6x Signature Loaded Fries               4,200.00',
+  '4x Signature Mayo Masala Fries - Large  2,200.00',
+  '3x Nuggets                              2,010.00',
+  '2x Baked Wings                          1,400.00',
+  'DIPS (29)                               2,900.00',
+  '14x Signature Orange Dip                1,400.00',
+  '9x Garlic Mayo Dip                        900.00',
+  '6x Ranch Dip                              600.00',
+  'VALUE DEALS (12)                       37,700.00',
+  '5x Big Two                             18,000.00',
+  '4x Perfect Pair                        10,400.00',
+  '3x Family Feast                         9,300.00',
+  'DRINKS (27)                             4,800.00',
+  '15x Soft Drink - 345 ml                 1,800.00',
+  '12x Soft Drink - 1 litre                3,000.00',
+];
+
+/** The ORDERS excerpt's first rows at 80 mm (#0007 not refunded, see above). */
+const ORDERS_80_HEAD = [
+  'ORDERS (62)                           189,911.00',
+  '#0001 16:20 Takeaway, Cash              2,530.00',
+  '#0002 16:41 Delivery, Cash              4,370.00',
+  '#0003 17:05 foodpanda, foodpanda        2,645.00',
+  '#0004 17:22 Takeaway, Card              1,725.00',
+  '#0005 17:48 Website pick-up, Cash       2,898.00',
+  '#0006 18:02 Delivery, EasyPaisa + Cash  4,370.00',
+  '#0007 18:15 Takeaway, Cash              1,725.00',
+  '#0008 18:31 Takeaway, JazzCash          3,565.00',
+];
+
+/** The ORDERS excerpt's rows at 58 mm: #0001 to #0004 in a row (the excerpt then skipped #0005). */
+const ORDERS_58_HEAD = [
+  'ORDERS (62)           189,911.00',
+  '#0001 16:20             2,530.00',
+  '  Takeaway, Cash',
+  '#0002 16:41             4,370.00',
+  '  Delivery, Cash',
+  '#0003 17:05             2,645.00',
+  '  foodpanda, foodpanda',
+  '#0004 17:22             1,725.00',
+  '  Takeaway, Card',
+];
+const ORDERS_58_0006 = ['#0006 18:02             4,370.00', '  Delivery, EasyPaisa + Cash', '#0007 18:15             1,725.00', '  Takeaway, Cash'];
 
 const SAMPLE_80: string[][] = [
   TITLE,
@@ -211,6 +303,7 @@ const SAMPLE_80: string[][] = [
     '#0066 01:30 Website                     1,590.00',
     'Reason: Rider still out',
   ],
+  ITEMS_80,
   [
     'Printed 02/10/2026 01:48 by Imran Ali',
     'Sales = orders paid on this till this shift.',
@@ -310,6 +403,62 @@ const SAMPLE_58: string[][] = [
     'Reason: Rider still out',
   ],
   [
+    // An item and its amount that cannot share 32 columns: the amount sits right-aligned under it.
+    'ITEMS SOLD (158)      168,760.00',
+    'SIGNATURE PIZZAS (22)  48,400.00',
+    '8x Shawarma Pizza - Large',
+    '                       17,600.00',
+    '5x Crown Crust - Large 11,000.00',
+    '4x Cheesy Star - Large  8,800.00',
+    '3x Meat Lovers - Large  6,600.00',
+    '2x Cheetos - Large      4,400.00',
+    'PIZZA (26)             45,500.00',
+    '5x Fajita Pizza - Medium',
+    '                        7,500.00',
+    '4x Chicken Tikka Pizza - Large',
+    '                        8,000.00',
+    '4x Fajita Pizza - Large 8,000.00',
+    '4x Malai Supreme - Medium',
+    '                        6,000.00',
+    '3x Classic Pepperoni - Large',
+    '                        6,000.00',
+    '3x Cheesalious - Medium 4,500.00',
+    '2x Chicken Tikka Malai - Large',
+    '                        4,000.00',
+    '1x Veggie Lovers - Medium',
+    '                        1,500.00',
+    'BURGERS (19)           16,050.00',
+    '7x Crispy Signature     5,600.00',
+    '5x Nashville Authentic (Hot)',
+    '                        4,750.00',
+    '4x Signature Cheese Dipped',
+    '                        3,600.00',
+    '3x Classic Crispy Chicken',
+    '                        2,100.00',
+    'FRIES & SIDES (23)     13,410.00',
+    '8x Fries - Large        3,600.00',
+    '6x Signature Loaded Fries',
+    '                        4,200.00',
+    '4x Signature Mayo Masala Fries -',
+    'Large',
+    '                        2,200.00',
+    '3x Nuggets              2,010.00',
+    '2x Baked Wings          1,400.00',
+    'DIPS (29)               2,900.00',
+    '14x Signature Orange Dip',
+    '                        1,400.00',
+    '9x Garlic Mayo Dip        900.00',
+    '6x Ranch Dip              600.00',
+    'VALUE DEALS (12)       37,700.00',
+    '5x Big Two             18,000.00',
+    '4x Perfect Pair        10,400.00',
+    '3x Family Feast         9,300.00',
+    'DRINKS (27)             4,800.00',
+    '15x Soft Drink - 345 ml 1,800.00',
+    '12x Soft Drink - 1 litre',
+    '                        3,000.00',
+  ],
+  [
     'Printed 02/10/2026 01:48 by',
     'Imran Ali',
     'Sales = orders paid on this till',
@@ -327,7 +476,8 @@ const SAMPLE_58: string[][] = [
   ],
 ];
 
-const SECTION_HEADING: Partial<Record<ShiftReportSection, string>> = {
+/** Each switch's section, by the heading it starts with. */
+const SECTION_HEADING: Record<ShiftReportSection, string> = {
   sales: 'SALES',
   moneyTaken: 'MONEY TAKEN',
   channels: 'BY CHANNEL',
@@ -335,7 +485,33 @@ const SECTION_HEADING: Partial<Record<ShiftReportSection, string>> = {
   drawer: 'CASH DRAWER',
   counted: 'CASH COUNTED',
   unpaid: 'UNPAID - CARRIED OVER',
+  items: 'ITEMS SOLD',
+  orders: 'ORDERS',
 };
+
+const ALL_OFF = Object.fromEntries(SHIFT_REPORT_SECTIONS.map((s) => [s.key, false])) as Record<ShiftReportSection, boolean>;
+
+/** Only these switches on. */
+function onlyOn(...keys: ShiftReportSection[]): Record<ShiftReportSection, boolean> {
+  return Object.fromEntries(SHIFT_REPORT_SECTIONS.map((s) => [s.key, keys.includes(s.key)])) as Record<ShiftReportSection, boolean>;
+}
+
+/** The footer's two rows when a switch is off. */
+const SECTIONS_OFF = ['Some sections are off.', 'See Settings > Printers.'];
+
+/** One order of the list. */
+function order(n: number, more: Partial<ShiftReportOrder> = {}): ShiftReportOrder {
+  return {
+    orderNumber: sampleNightOrderNumber(n),
+    paidAt: sampleNightAt('20:00'),
+    channel: 'takeaway',
+    outside: false,
+    methods: ['cash'],
+    totalCents: 100_000,
+    refunded: 'no',
+    ...more,
+  };
+}
 
 /** A night that pushes every row: long names and reasons, big money, long lists, every guard row. */
 function stressReport(): ShiftReport {
@@ -372,6 +548,20 @@ function stressReport(): ShiftReport {
       cents: 99_999_999,
     }));
     r.unpaid.reason = 'The rider is still out with these orders and the customers will pay him at the door';
+    r.items.push({
+      category: 'Deals of the Week for the Whole Family — Bring Everyone Along',
+      quantity: 99_999,
+      cents: 9_999_999_999,
+      items: [
+        { name: 'Super Supreme Stuffed Crust Pizza with Extra Cheese — Family Size', quantity: 12_345, cents: 9_999_999_999 },
+        { name: 'Kids meal', quantity: 1, cents: 0 },
+      ],
+    });
+    r.orders.push(
+      order(400, { channel: 'web_delivery', outside: true, methods: ['easypaisa', 'cash', 'a_payment_method_this_version_does_not_know'], totalCents: 9_999_999_999, refunded: 'part' }),
+      order(401, { methods: [], totalCents: 0 }),
+      order(402, { channel: 'a_channel_this_version_does_not_know' as unknown as ShiftReportOrder['channel'], refunded: 'full' }),
+    );
   });
 }
 
@@ -414,12 +604,20 @@ describe('the sample night (shift-report.fixture.ts)', () => {
 describe('renderShiftReport: the sample night at 80 mm (48 columns)', () => {
   const rows = rowsOf(SAMPLE_SHIFT_REPORT, 48);
 
-  it("every block between the rules is the owner's sample paper's (ITEMS SOLD comes in 19e-3)", () => {
-    expect(blocks(rows)).toEqual(SAMPLE_80);
+  it("every block between the rules is the owner's sample paper's, ITEMS SOLD included; then ORDERS, last, as the excerpt", () => {
+    const { rest, orders } = withoutOrders(blocks(rows));
+    expect(rest).toEqual(SAMPLE_80);
+    // ORDERS is the last section, right before the footer.
+    expect(blocks(rows).at(-2)).toEqual(orders);
+    expect(orders.slice(0, ORDERS_80_HEAD.length)).toEqual(ORDERS_80_HEAD);
+    // The heading and one row per order paid: 63 rows, no cap.
+    expect(orders).toHaveLength(1 + SAMPLE_SHIFT_REPORT.orders.length);
+    expect(orders).toContain('#0033 21:31 Takeaway, Cash (refunded)   1,725.00');
+    expect(orders.at(-1)).toBe('#0065 01:25 Takeaway, Cash              2,530.00');
   });
 
   it("the rules: '-' under the title, '=' after the times, '-' between sections, '=' before the footer", () => {
-    expect(rows.filter(isRule)).toEqual(['-', '=', '-', '-', '-', '-', '-', '-', '='].map((c) => c.repeat(48)));
+    expect(rows.filter(isRule)).toEqual(['-', '=', '-', '-', '-', '-', '-', '-', '-', '-', '='].map((c) => c.repeat(48)));
   });
 
   it("the title is bold double size: 'SHIFT REPORT' takes 24 columns", () => {
@@ -432,11 +630,21 @@ describe('renderShiftReport: the sample night at 58 mm (32 columns)', () => {
   const rows = rowsOf(SAMPLE_SHIFT_REPORT, 32);
 
   it("every block between the rules is the 58 mm sample's: dd/mm times, short made/not made, reasons under their order indented 4", () => {
-    expect(blocks(rows)).toEqual(SAMPLE_58);
+    const { rest, orders } = withoutOrders(blocks(rows));
+    expect(rest).toEqual(SAMPLE_58);
+    expect(blocks(rows).at(-2)).toEqual(orders);
+    // Two rows per order: the number and time with the total, then the words indented 2.
+    expect(orders.slice(0, ORDERS_58_HEAD.length)).toEqual(ORDERS_58_HEAD);
+    const at = orders.indexOf(ORDERS_58_0006[0]!);
+    expect(orders.slice(at, at + ORDERS_58_0006.length)).toEqual(ORDERS_58_0006);
+    expect(orders).toHaveLength(1 + 2 * SAMPLE_SHIFT_REPORT.orders.length);
+    const flagged = orders.indexOf('#0033 21:31             1,725.00');
+    expect(orders[flagged + 1]).toBe('  Takeaway, Cash (refunded)');
+    expect(orders.slice(-2)).toEqual(['#0065 01:25             2,530.00', '  Takeaway, Cash']);
   });
 
   it('the same rules, 32 wide', () => {
-    expect(rows.filter(isRule)).toEqual(['-', '=', '-', '-', '-', '-', '-', '-', '='].map((c) => c.repeat(32)));
+    expect(rows.filter(isRule)).toEqual(['-', '=', '-', '-', '-', '-', '-', '-', '-', '-', '='].map((c) => c.repeat(32)));
   });
 });
 
@@ -448,7 +656,9 @@ describe('every paper', () => {
   const variants: Array<[string, Partial<RenderShiftReportOpts>]> = [
     ['original', {}],
     ['reprint', REPRINT],
-    ['every section off', { sections: Object.fromEntries(SHIFT_REPORT_SECTIONS.map((s) => [s.key, false])) as Record<ShiftReportSection, boolean> }],
+    ['category totals', { items: 'categories' }],
+    ['only the drawer, the count and unpaid', { sections: onlyOn('drawer', 'counted', 'unpaid') }],
+    ['every section off', { sections: ALL_OFF }],
   ];
 
   for (const width of [48, 32] as const) {
@@ -478,7 +688,7 @@ describe('every paper', () => {
   it('the same bytes whatever the PC’s zone: UTC, Asia/Karachi and America/New_York', () => {
     const papers = () =>
       [48, 32].flatMap((w) =>
-        [{}, REPRINT].flatMap((more) =>
+        [{}, REPRINT, { items: 'categories' as const }].flatMap((more) =>
           [SAMPLE_SHIFT_REPORT, stressReport()].map((r) => fingerprint(renderShiftReport(r, opts(w as PrinterWidth, more)))),
         ),
       );
@@ -491,6 +701,8 @@ describe('every paper', () => {
     // And the times are Pakistan's: opened 16:02 on 1 Oct, closed 01:48 on 2 Oct.
     process.env.TZ = 'America/New_York';
     expect(rowsOf(SAMPLE_SHIFT_REPORT, 48)).toContain('Closed 02/10/2026 01:48                Imran Ali');
+    // An order paid five minutes after midnight in Pakistan (19:05 on 1 Oct in UTC).
+    expect(rowsOf(SAMPLE_SHIFT_REPORT, 48)).toContain('#0060 00:05 Takeaway, Cash              1,725.00');
   });
 
   it('pure: the same report gives the same bytes, and the report is left as it was', () => {
@@ -834,37 +1046,257 @@ describe('UNPAID - CARRIED OVER', () => {
   });
 });
 
+/** The amount of the first row of `rows` that starts with `label`. */
+function amountOf(rows: readonly string[], label: string): number {
+  const found = rows.find((r) => r.startsWith(label));
+  const parsed = found === undefined ? null : amountRow(found);
+  if (!parsed) throw new Error(`No amount row: ${label}`);
+  return parsed.cents;
+}
+
+const isItemRow = (r: string) => /^\d+x /.test(r);
+
+describe('ITEMS SOLD', () => {
+  it("80 mm, every item: the items add up to their category, the categories to ITEMS SOLD, and ITEMS SOLD is Food", () => {
+    const rows = rowsOf(SAMPLE_SHIFT_REPORT, 48);
+    const block = sectionRows(rows, 'ITEMS SOLD');
+    const head = amountRow(block[0]!)!;
+    expect(head.cents).toBe(amountOf(sectionRows(rows, 'SALES'), 'Food'));
+    const groups: Array<{ label: string; cents: number; items: Array<{ label: string; cents: number }> }> = [];
+    for (const r of block.slice(1)) {
+      const parsed = amountRow(r)!;
+      if (isItemRow(r)) groups.at(-1)!.items.push(parsed);
+      else groups.push({ ...parsed, items: [] });
+    }
+    expect(groups.map((g) => g.label)).toEqual(SAMPLE_SHIFT_REPORT.items.map((c) => `${c.category.toUpperCase()} (${c.quantity})`));
+    for (const g of groups) {
+      expect(sum(g.items.map((i) => i.cents))).toBe(g.cents);
+      const quantity = Number(/\((\d+)\)$/.exec(g.label)![1]);
+      expect(sum(g.items.map((i) => Number(/^(\d+)x /.exec(i.label)![1])))).toBe(quantity);
+    }
+    expect(sum(groups.map((g) => g.cents))).toBe(head.cents);
+    expect(head.label).toBe(`ITEMS SOLD (${sum(SAMPLE_SHIFT_REPORT.items.map((c) => c.quantity))})`);
+  });
+
+  it('the categories print bold, the items do not', () => {
+    const bytes = renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48));
+    const enc = (s: string) => Array.from(new TextEncoder().encode(s));
+    expect(containsBytes(bytes, [0x1b, 0x45, 0x01, ...enc('ITEMS SOLD (158)')])).toBe(true);
+    expect(containsBytes(bytes, [0x1b, 0x45, 0x01, ...enc('PIZZA (26)')])).toBe(true);
+    expect(containsBytes(bytes, [0x1b, 0x45, 0x01, ...enc('5x Fajita')])).toBe(false);
+    expect(containsBytes(bytes, enc('5x Fajita Pizza - Medium'))).toBe(true);
+  });
+
+  it("'categories': the category rows only, no '5x ' rows, adding up to ITEMS SOLD, at 80 and 58 mm", () => {
+    for (const width of [48, 32] as const) {
+      const block = sectionRows(rowsOf(SAMPLE_SHIFT_REPORT, width, { items: 'categories' }), 'ITEMS SOLD');
+      expect(block.some(isItemRow)).toBe(false);
+      const cats = block.slice(1).map((r) => amountRow(r)!);
+      expect(cats.map((c) => c.label)).toEqual(SAMPLE_SHIFT_REPORT.items.map((c) => `${c.category.toUpperCase()} (${c.quantity})`));
+      expect(sum(cats.map((c) => c.cents))).toBe(amountRow(block[0]!)!.cents);
+    }
+    // Nothing else on the paper changes: it is the every-item paper without the item rows.
+    const every = rowsOf(SAMPLE_SHIFT_REPORT, 48);
+    expect(rowsOf(SAMPLE_SHIFT_REPORT, 48, { items: 'categories' })).toEqual(every.filter((r) => !isItemRow(r)));
+  });
+
+  it("none: 'ITEMS SOLD: none'; a line with no category prints under NO CATEGORY", () => {
+    const none = withReport((x) => {
+      x.items = [];
+    });
+    expect(sectionRows(rowsOf(none, 48), 'ITEMS SOLD')).toEqual(['ITEMS SOLD: none']);
+    const other = withReport((x) => {
+      x.items = [{ category: 'No category', quantity: 2, cents: 60_000, items: [{ name: 'Old menu item — Large', quantity: 2, cents: 60_000 }] }];
+    });
+    expect(sectionRows(rowsOf(other, 48), 'ITEMS SOLD')).toEqual([
+      'ITEMS SOLD (2)                            600.00',
+      'NO CATEGORY (2)                           600.00',
+      '2x Old menu item - Large                  600.00',
+    ]);
+  });
+});
+
+describe('ORDERS', () => {
+  it("80 mm: one row per order paid, in the order paid; the rows add up to TOTAL (with tax) and count '<n> orders paid'", () => {
+    const rows = rowsOf(SAMPLE_SHIFT_REPORT, 48);
+    const sales = sectionRows(rows, 'SALES');
+    const paid = Number(/(\d+) orders paid$/.exec(sales[0]!)![1]);
+    const total = amountOf(sales, 'TOTAL (with tax)');
+    const block = sectionRows(rows, 'ORDERS');
+    expect(amountRow(block[0]!)).toEqual({ label: `ORDERS (${paid})`, cents: total });
+    const body = block.slice(1).map((r) => amountRow(r)!);
+    expect(body).toHaveLength(paid);
+    expect(sum(body.map((x) => x.cents))).toBe(total);
+    for (const x of body) expect(x.label).toMatch(/^#\d{4} \d{2}:\d{2} \S/);
+    // In the order paid, as saved: #0013 (paid 19:12) before #0012 (19:20).
+    expect(body.map((x) => x.label.slice(0, 5))).toEqual(SAMPLE_SHIFT_REPORT.orders.map((o) => `#${o.orderNumber.slice(-4)}`));
+    expect(body.findIndex((x) => x.label.startsWith('#0013 19:12'))).toBeLessThan(body.findIndex((x) => x.label.startsWith('#0012 19:20')));
+    // A split payment, and two outside riders paid at the same minute.
+    expect(block).toContain('#0062 00:40 Takeaway, Cash + Card       3,967.50');
+    expect(block).toContain('#0040 22:50 Delivery, Cash              5,117.50');
+    expect(block).toContain('#0045 22:50 Delivery, EasyPaisa + Cash  2,817.50');
+  });
+
+  it("58 mm: two rows per order, '#0012 16:20' with the total, then the words indented 2; the same sums", () => {
+    const rows = rowsOf(SAMPLE_SHIFT_REPORT, 32);
+    const block = sectionRows(rows, 'ORDERS');
+    const total = amountOf(sectionRows(rows, 'SALES'), 'TOTAL (with tax)');
+    expect(amountRow(block[0]!)).toEqual({ label: 'ORDERS (62)', cents: total });
+    const body = block.slice(1);
+    expect(body).toHaveLength(2 * 62);
+    const heads: number[] = [];
+    for (let i = 0; i < body.length; i += 2) {
+      const head = amountRow(body[i]!)!;
+      expect(head.label).toMatch(/^#\d{4} \d{2}:\d{2}$/);
+      expect(body[i + 1]).toMatch(/^ {2}\S/);
+      heads.push(head.cents);
+    }
+    expect(sum(heads)).toBe(total);
+  });
+
+  it("refunded in full '(refunded)', in part '(part refunded)'; methods in words joined ' + '; 'no payment'; unknown ones as stored", () => {
+    const r = withReport((x) => {
+      x.orders = [
+        order(1, { refunded: 'full' }),
+        order(2, { methods: ['card'], refunded: 'part' }),
+        order(3, { channel: 'web_pickup', methods: ['bank_transfer'] }),
+        order(4, { methods: [], totalCents: 0 }),
+        order(5, { channel: 'foodpanda', methods: ['foodpanda'] }),
+        order(6, { channel: 'dine_in', methods: ['voucher', 'jazzcash'] }),
+      ];
+    });
+    expect(sectionRows(rowsOf(r, 48), 'ORDERS')).toEqual([
+      'ORDERS (6)                              5,000.00',
+      '#0001 20:00 Takeaway, Cash (refunded)   1,000.00',
+      // The label alone fits 48 columns, but not with its total: the total goes under it.
+      '#0002 20:00 Takeaway, Card (part refunded)',
+      '                                        1,000.00',
+      '#0003 20:00 Website pick-up, Bank transfer',
+      '                                        1,000.00',
+      '#0004 20:00 Takeaway, no payment            0.00',
+      '#0005 20:00 foodpanda, foodpanda        1,000.00',
+      '#0006 20:00 Dine-in (old), voucher + JazzCash',
+      '                                        1,000.00',
+    ]);
+    expect(sectionRows(rowsOf(r, 32), 'ORDERS').slice(0, 5)).toEqual([
+      'ORDERS (6)              5,000.00',
+      '#0001 20:00             1,000.00',
+      '  Takeaway, Cash (refunded)',
+      '#0002 20:00             1,000.00',
+      '  Takeaway, Card (part refunded)',
+    ]);
+  });
+
+  it('a label too long for 80 mm wraps, the total under it; at 58 mm the words wrap keeping their indent of 2', () => {
+    const r = withReport((x) => {
+      x.orders = [order(7, { channel: 'web_delivery', outside: true, methods: ['easypaisa', 'cash'], refunded: 'part', totalCents: 1_234_567 })];
+    });
+    expect(sectionRows(rowsOf(r, 48), 'ORDERS').slice(1)).toEqual([
+      '#0007 20:00 Website delivery, EasyPaisa + Cash',
+      '(part refunded)',
+      '                                       12,345.67',
+    ]);
+    expect(sectionRows(rowsOf(r, 32), 'ORDERS').slice(1)).toEqual([
+      '#0007 20:00            12,345.67',
+      '  Website delivery, EasyPaisa +',
+      '  Cash (part refunded)',
+    ]);
+  });
+
+  it('no cap: 150 orders print 150 orders', () => {
+    const r = withReport((x) => {
+      x.orders = Array.from({ length: 150 }, (_, i) => order(1000 + i));
+    });
+    expect(sectionRows(rowsOf(r, 48), 'ORDERS')).toHaveLength(1 + 150);
+    expect(sectionRows(rowsOf(r, 32), 'ORDERS')).toHaveLength(1 + 2 * 150);
+    expect(sectionRows(rowsOf(r, 48), 'ORDERS').some((x) => x.includes('more'))).toBe(false);
+  });
+
+  it("none: 'ORDERS: none'", () => {
+    const r = withReport((x) => {
+      x.orders = [];
+    });
+    expect(sectionRows(rowsOf(r, 32), 'ORDERS')).toEqual(['ORDERS: none']);
+  });
+});
+
+/** The footer block of a paper whose sections are all on, with the two 'sections off' rows under 'Printed'. */
+function footerWithOff(footer: readonly string[]): string[] {
+  const at = footer.findIndex((r) => r.startsWith('Printed'));
+  // At 58 mm the 'Printed ... by NAME' row wraps over two rows.
+  const end = footer[at]!.endsWith('Imran Ali') ? at + 1 : at + 2;
+  return [...footer.slice(0, end), ...SECTIONS_OFF, ...footer.slice(end)];
+}
+
 describe("the owner's switches change only what prints", () => {
+  it('the nine switches are the nine sections, in the order they print', () => {
+    const rows = rowsOf(SAMPLE_SHIFT_REPORT, 48);
+    const starts = SHIFT_REPORT_SECTIONS.map((s) => rows.findIndex((r) => r.startsWith(SECTION_HEADING[s.key])));
+    expect(starts.every((i) => i > 0)).toBe(true);
+    expect([...starts].sort((a, z) => a - z)).toEqual(starts);
+  });
+
   for (const [key, heading] of Object.entries(SECTION_HEADING) as Array<[ShiftReportSection, string]>) {
-    it(`'${key}' off leaves out exactly ${heading}`, () => {
+    it(`'${key}' off leaves out exactly ${heading}, and the footer says some sections are off`, () => {
       const all = rowsOf(SAMPLE_SHIFT_REPORT, 48);
       const off = rowsOf(SAMPLE_SHIFT_REPORT, 48, { sections: { ...ALL_ON, [key]: false } });
       expect(off.some((x) => x.startsWith(heading))).toBe(false);
       for (const other of Object.values(SECTION_HEADING).filter((h) => h !== heading)) {
-        expect(off.some((x) => x.startsWith(other!))).toBe(true);
+        expect(off.some((x) => x.startsWith(other))).toBe(true);
       }
-      // The rest of the paper is unchanged: exactly that section and one rule fewer.
+      // The rest of the paper is unchanged: exactly that section and one rule fewer, and the footer's two rows.
       const gone = sectionRows(all, heading);
-      expect(off.length).toBe(all.length - gone.length - 1);
+      expect(off.length).toBe(all.length - gone.length - 1 + SECTIONS_OFF.length);
+      expect(blocks(off).at(-1)).toEqual(footerWithOff(SAMPLE_80.at(-1)!));
+      expect(off.filter((x) => !SECTIONS_OFF.includes(x))).toEqual(
+        all.filter((_, i) => {
+          const start = all.indexOf(gone[0]!);
+          // The section and the rule before it (after it, for the first section).
+          const rule = start === all.findIndex((r) => r.startsWith('SALES')) ? start + gone.length : start - 1;
+          return !(i >= start && i < start + gone.length) && i !== rule;
+        }),
+      );
     });
   }
 
-  it("'items' and 'orders' print nothing yet (ITEMS SOLD and ORDERS come in 19e-3)", () => {
-    const on = renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48));
-    const off = renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48, { sections: { ...ALL_ON, items: false, orders: false } }));
-    expect(fingerprint(off)).toBe(fingerprint(on));
+  it("all on: no 'Some sections are off'", () => {
+    for (const width of [48, 32] as const) {
+      expect(rowsOf(SAMPLE_SHIFT_REPORT, width).some((x) => SECTIONS_OFF.includes(x))).toBe(false);
+    }
   });
 
-  it('every section off: the header and the footer only', () => {
-    const none = Object.fromEntries(SHIFT_REPORT_SECTIONS.map((s) => [s.key, false])) as Record<ShiftReportSection, boolean>;
-    expect(blocks(rowsOf(SAMPLE_SHIFT_REPORT, 48, { sections: none }))).toEqual([SAMPLE_80[0], SAMPLE_80[1], SAMPLE_80.at(-1)]);
+  it("ITEMS SOLD off: ORDERS still prints last; ORDERS off: ITEMS SOLD is last, right before the footer's '=' rule", () => {
+    const noItems = blocks(rowsOf(SAMPLE_SHIFT_REPORT, 48, { sections: { ...ALL_ON, items: false } }));
+    expect(noItems.at(-2)?.[0]).toBe(ORDERS_80_HEAD[0]);
+    expect(noItems.at(-3)?.[0]).toBe('UNPAID - CARRIED OVER (2)               4,060.00');
+    const noOrders = blocks(rowsOf(SAMPLE_SHIFT_REPORT, 48, { sections: { ...ALL_ON, orders: false } }));
+    expect(noOrders.at(-2)).toEqual(ITEMS_80);
   });
 
-  it('a switch the options leave out counts as on (the owner’s default)', () => {
+  it('every section off: the header and the footer only, the footer saying so (80 and 58 mm)', () => {
+    expect(blocks(rowsOf(SAMPLE_SHIFT_REPORT, 48, { sections: ALL_OFF }))).toEqual([SAMPLE_80[0], SAMPLE_80[1], footerWithOff(SAMPLE_80.at(-1)!)]);
+    const at58 = blocks(rowsOf(SAMPLE_SHIFT_REPORT, 32, { sections: ALL_OFF }));
+    expect(at58).toEqual([SAMPLE_58[0], SAMPLE_58[1], footerWithOff(SAMPLE_58.at(-1)!)]);
+    expect(at58.at(-1)!.slice(0, 4)).toEqual(['Printed 02/10/2026 01:48 by', 'Imran Ali', 'Some sections are off.', 'See Settings > Printers.']);
+  });
+
+  it('a switch the options leave out counts as on (the owner’s default); a key the paper does not know changes nothing', () => {
     const partial = { sales: false } as unknown as Record<ShiftReportSection, boolean>;
     const rows = rowsOf(SAMPLE_SHIFT_REPORT, 48, { sections: partial });
     expect(rows.some((x) => x.startsWith('SALES'))).toBe(false);
     expect(rows.some((x) => x.startsWith('CASH DRAWER'))).toBe(true);
+    expect(rows.some((x) => x.startsWith('ORDERS'))).toBe(true);
+    expect(rows).toContain(SECTIONS_OFF[0]);
+    const unknown = { ...ALL_ON, aSectionFromANewerTill: false } as unknown as Record<ShiftReportSection, boolean>;
+    expect(fingerprint(renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48, { sections: unknown })))).toBe(
+      fingerprint(renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48))),
+    );
+  });
+
+  it('switched off and on again: the same paper, from the same saved report', () => {
+    const before = fingerprint(renderShiftReport(SAMPLE_SHIFT_REPORT, opts(32)));
+    renderShiftReport(SAMPLE_SHIFT_REPORT, opts(32, { sections: ALL_OFF }));
+    expect(fingerprint(renderShiftReport(SAMPLE_SHIFT_REPORT, opts(32)))).toBe(before);
   });
 });
 
@@ -874,8 +1306,10 @@ describe('a reprint', () => {
     const rows = lines.map((l) => l.text);
     expect(rows.slice(0, 5)).toEqual(['*'.repeat(48), 'DUPLICATE', 'Reprint #2 | 02/10/2026 09:15 | by Imran Ali', '*'.repeat(48), 'SHIFT REPORT']);
     expect(lines[1]?.scale).toBe(2);
-    // Every figure as the first paper printed them.
-    expect(blocks(rows.slice(4)).slice(0, -1)).toEqual(SAMPLE_80.slice(0, -1));
+    // Every figure as the first paper printed them, the orders list included.
+    const { rest, orders } = withoutOrders(blocks(rows.slice(4)));
+    expect(rest.slice(0, -1)).toEqual(SAMPLE_80.slice(0, -1));
+    expect(orders).toEqual(withoutOrders(blocks(rowsOf(SAMPLE_SHIFT_REPORT, 48))).orders);
     expect(blocks(rows).at(-1)).toEqual([
       'Printed 02/10/2026 09:15 by Imran Ali',
       'Sales = orders paid on this till this shift.',
@@ -924,5 +1358,70 @@ describe('a reprint', () => {
 
   it('the first paper has no band and no DUPLICATE', () => {
     expect(rowsOf(SAMPLE_SHIFT_REPORT, 48).some((x) => x.includes('DUPLICATE'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The goldens: four whole papers of the sample night, row for row, as the
+// mock printer writes them (escPosToText; centred rows lose their spaces).
+
+/** The golden papers: file name next to this test, and the paper. */
+const GOLDENS: ReadonlyArray<readonly [string, () => Uint8Array]> = [
+  // Every section and every item, 80 mm.
+  ['shift-report-80.golden.txt', () => renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48))],
+  // Every section and every item, 58 mm.
+  ['shift-report-58.golden.txt', () => renderShiftReport(SAMPLE_SHIFT_REPORT, opts(32))],
+  // Only the drawer, the count and the unpaid orders on, 80 mm.
+  ['shift-report-80-sections.golden.txt', () => renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48, { sections: onlyOn('drawer', 'counted', 'unpaid') }))],
+  // Reprint #2 the next morning, Rs 1,200 of test orders deleted since the close, 80 mm.
+  ['shift-report-80-reprint.golden.txt', () => renderShiftReport(SAMPLE_SHIFT_REPORT, opts(48, REPRINT))],
+];
+
+const goldenPath = (file: string) => fileURLToPath(new URL(`./${file}`, import.meta.url));
+
+/** A golden as saved (a Windows checkout may have turned its line ends into CRLF). */
+const readGolden = (file: string) => readFileSync(goldenPath(file), 'utf8').replace(/\r\n/g, '\n');
+
+describe('the goldens', () => {
+  for (const [file, paper] of GOLDENS) {
+    it(`${file} is the paper, row for row`, () => {
+      const text = `${escPosToText(paper())}\n`;
+      // Only on purpose (see the top of this file), and the diff read before it is committed.
+      if (process.env.SHIFT_REPORT_GOLDENS === 'write') writeFileSync(goldenPath(file), text);
+      expect(readGolden(file)).toBe(text);
+    });
+  }
+
+  /** The golden's rows on paper: the feed before the cut and the cut left out. */
+  const paperRows = (file: string) => readGolden(file).split('\n').slice(0, -1 - 1 - 6);
+
+  it("80 mm: the sample paper's 118 rows (one more for the riders' words), then the ORDERS rule, heading and 62 orders", () => {
+    const rows = paperRows('shift-report-80.golden.txt');
+    expect(rows.at(-1)).toBe('-- END OF SHIFT REPORT --');
+    expect(rows).toHaveLength(118 + 1 + 1 + 63);
+    expect(sectionRows(rows, 'ITEMS SOLD')).toHaveLength(38);
+    expect(sectionRows(rows, 'ORDERS')).toHaveLength(63);
+  });
+
+  it('58 mm: 140 rows (one more for the riders’ words), then the ORDERS rule, heading and two rows for each of the 62 orders', () => {
+    const rows = paperRows('shift-report-58.golden.txt');
+    expect(rows.at(-1)).toBe('-- END OF SHIFT REPORT --');
+    expect(rows).toHaveLength(140 + 1 + 1 + 125);
+    expect(sectionRows(rows, 'ORDERS')).toHaveLength(125);
+  });
+
+  it('only the drawer, the count and unpaid: those three sections, and the footer says some are off', () => {
+    const rows = paperRows('shift-report-80-sections.golden.txt');
+    const headings = Object.values(SECTION_HEADING).filter((h) => rows.some((r) => r.startsWith(h)));
+    expect(headings).toEqual(['CASH DRAWER', 'CASH COUNTED', 'UNPAID - CARRIED OVER']);
+    expect(rows).toContain(SECTIONS_OFF[0]);
+    expect(rows).toContain(SECTIONS_OFF[1]);
+  });
+
+  it('the reprint: DUPLICATE at the top and the bottom, and what changed since the close', () => {
+    const rows = paperRows('shift-report-80-reprint.golden.txt');
+    expect(rows.slice(0, 3)).toEqual(['*'.repeat(48), 'DUPLICATE', 'Reprint #2 | 02/10/2026 09:15 | by Imran Ali']);
+    expect(rows.at(-1)).toBe('** DUPLICATE - Reprint #2 **');
+    expect(rows).toContain('Since the close: test orders deleted, cash');
   });
 });
