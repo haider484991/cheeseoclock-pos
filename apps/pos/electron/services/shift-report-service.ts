@@ -359,10 +359,13 @@ export function readShiftReportFacts(db: AppDatabase, ctx: ShiftCloseContext): S
     method: p.method,
     cents: Number(p.cents),
   }));
-  // Each refund row says what that row did: 'full' only when it alone handed
-  // back the order's whole total. An order refunded in two parts (or back
-  // through two methods) has two rows of less, and the paper says ', part'
-  // on each; the order's own state is in ORDERS ('(refunded)').
+  // Each refund row says what that row did. 'full' when it was part of one
+  // refund of the whole order (refundOrder's full path writes 'refund-of:<id>'
+  // for every leg the customer paid, so cash + card, or a rider's EasyPaisa +
+  // cash fee, all read full), or when it alone handed back the order's whole
+  // total. An order refunded in two parts has two rows of less ('partial-refund',
+  // then 'refund-rest'), and the paper says ', part' on each; the order's own
+  // state is in ORDERS ('(refunded)').
   const refunds: ShiftReportFactsRefund[] = paymentRows
     .filter((p) => Number(p.cents) < 0)
     .map((p) => ({
@@ -371,7 +374,7 @@ export function readShiftReportFacts(db: AppDatabase, ctx: ShiftCloseContext): S
       at: p.paidAt,
       method: p.method,
       cents: -Number(p.cents),
-      full: -Number(p.cents) >= Number(p.orderTotal),
+      full: (p.referenceNo ?? '').startsWith('refund-of:') || -Number(p.cents) >= Number(p.orderTotal),
       reason: refundReason(p.referenceNo, p.orderReason),
     }));
 

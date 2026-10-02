@@ -44,7 +44,8 @@
  *   (12) and reads by index;
  *   (13) each refund row says what it did (v0.7.35 review): ', part' on a
  *       row of less than the order's total, so two parts of one order both
- *       say part, and a refund of the whole order by itself does not;
+ *       say part; one refund of the whole order does not, even when it went
+ *       back through each method the customer paid (cash + card);
  *   (14) two orders that share a number (one from each till) are two
  *       refunded orders on the paper, as SALES counts them.
  *
@@ -1280,7 +1281,8 @@ live('the shift report made at the close (shift-report-service, step 19d-3)', ()
     // 'Part of it' typed as the whole bill.
     const partOfAll = await paidTakeaway(db, menu, 'card');
     r.refundOrder(db, { orderId: partOfAll.id, reason: 'Test all of it', approverUserId, amountCents: partOfAll.total, foodMade: 'not_made' }, A.manager);
-    // Paid Rs 500 cash + the rest by card, all of it back: a row per method, each less than the bill.
+    // Paid Rs 500 cash + the rest by card, all of it back in one refund: a row per method, each less
+    // than the bill, but together the whole order, so neither says part.
     const split = await paidBy(db, menu, (t) => [
       { method: 'cash', amountCents: 50_000, tenderedCents: 50_000 },
       { method: 'card', amountCents: t - 50_000 },
@@ -1301,8 +1303,8 @@ live('the shift report made at the close (shift-report-service, step 19d-3)', ()
     expect(await rowsOf(whole.id)).toEqual([{ method: 'cash', cents: BURGER_TOTAL, full: true }]);
     expect(await rowsOf(partOfAll.id)).toEqual([{ method: 'card', cents: BURGER_TOTAL, full: true }]);
     expect(await rowsOf(split.id)).toEqual([
-      { method: 'cash', cents: 50_000, full: false },
-      { method: 'card', cents: BURGER_TOTAL - 50_000, full: false },
+      { method: 'cash', cents: 50_000, full: true },
+      { method: 'card', cents: BURGER_TOTAL - 50_000, full: true },
     ]);
     // Every one of them ended refunded in full (ORDERS says so); the money is unchanged.
     expect(report.orders.map((o) => o.refunded)).toEqual(['full', 'full', 'full', 'full']);
@@ -1317,6 +1319,11 @@ live('the shift report made at the close (shift-report-service, step 19d-3)', ()
       expect.stringMatching(new RegExp(`^  ${short} \\d\\d:\\d\\d card, part: Test one part +500\\.00$`)),
       expect.stringMatching(new RegExp(`^  ${short} \\d\\d:\\d\\d card, part: Test rest of it +650\\.00$`)),
     ]);
+    // The split order refunded whole in one go: no ', part' on either method's row.
+    const splitShort = shortNumber(await numberOf(db, split.id));
+    const splitRows = paper.filter((x) => x.startsWith(`  ${splitShort} `));
+    expect(splitRows).toHaveLength(2);
+    expect(splitRows.every((x) => !x.includes(', part'))).toBe(true);
     expect(paper).toContain('Refunded (4)                            4,600.00');
   });
 

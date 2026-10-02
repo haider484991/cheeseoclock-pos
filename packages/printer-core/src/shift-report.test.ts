@@ -1553,7 +1553,7 @@ describe('the goldens', () => {
       const rows = paperRows(file);
       const counted = sectionRows(rows, 'CASH COUNTED');
       expect(counted.slice(-2).map((x) => x.replace(/ +/g, ' '))).toEqual(['MATCHES EXPECTED +0.50', 'Paisa difference Rs 0.50']);
-      expect(rows.some((x) => /^(SHORT|OVER)/.test(x))).toBe(false);
+      expect(rows.some((x) => /^(SHORT|OVER)\b/.test(x))).toBe(false);
       const channels = sectionRows(rows, 'BY CHANNEL');
       expect(channels.map((x) => x.replace(/ +/g, ' '))).toEqual([
         'BY CHANNEL',
