@@ -487,7 +487,12 @@ function HistoryRow({
           <div className="leading-tight">
             {o.customerName && <div className="font-medium">{o.customerName}</div>}
             {o.customerPhone && <div className="font-mono text-xs text-stone-500">{o.customerPhone}</div>}
-            {o.riderName && <div className="text-xs text-violet-700 dark:text-violet-300">Rider: {o.riderName}</div>}
+            {/* An own rider by name; an order sent out with an outside rider (0049) says so. */}
+            {o.riderName ? (
+              <div className="text-xs text-violet-700 dark:text-violet-300">Rider: {o.riderName}</div>
+            ) : o.outsideRider ? (
+              <div className="text-xs text-violet-700 dark:text-violet-300">Rider: outside</div>
+            ) : null}
           </div>
         ) : o.tableLabel ? (
           <span className="text-stone-600 dark:text-stone-300">Table {o.tableLabel}</span>

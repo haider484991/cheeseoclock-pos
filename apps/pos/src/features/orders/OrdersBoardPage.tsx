@@ -38,15 +38,18 @@ import {
   ageMinutes,
   ageTitle,
   ageTone,
+  ASSIGN_RIDER_LINK_TITLE,
   cardFlags,
   compareOrderClock,
   cardLineDetails,
   cardItemCount,
   cardLines,
+  isOutWithOutsideRider,
   matchesBoardSearch,
   nextBoardAction,
   offersKitchenReprint,
   orderClockFrom,
+  outsideRiderKeepsText,
   boardColoursText,
   lateCountText,
   type AgeTone,
@@ -64,6 +67,11 @@ import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
  * was sent to the kitchen (the owner, 2 Oct 2026; from when it was started,
  * for an order from before 0.7.34), by default 15 and 30 (Settings → Staff &
  * kitchen timing). Polls every 5 seconds.
+ *
+ * A Ready delivery's button is "Send out" (the owner, 2 Oct 2026): an outside
+ * rider takes it, keeps its delivery charge, and the bill prints. "Assign
+ * rider" is the card's small link, for one of the shop's own riders (they
+ * bring back the full bill).
  */
 
 type ColumnKey = 'new' | 'preparing' | 'ready' | 'out';
@@ -141,6 +149,13 @@ export function OrdersBoardPage() {
     onSettled: () => void refresh(),
     onError: failed('Could not move the order'),
   });
+  // Send out (the owner, 2 Oct 2026): an outside rider takes a Ready delivery
+  // and the bill prints. No success toast either: the card moves to Out.
+  const sendOut = useMutation({
+    mutationFn: (orderId: string) => ipc.orders.sendOut(orderId),
+    onSettled: () => void refresh(),
+    onError: failed('Could not send out'),
+  });
   const reprint = useMutation({
     mutationFn: (orderId: string) => reprintReceipt(orderId),
     onSuccess: (r) => toast({ title: reprintToast(r) }),
@@ -176,7 +191,8 @@ export function OrdersBoardPage() {
   }, [visible]);
 
   const lateCount = all.filter((s) => ageTone(ageMinutes(orderClockFrom(s.order), now), timing) === 'late').length;
-  const pendingId = step.isPending ? step.variables?.orderId : undefined;
+  // A card waiting on its one-tap step or its Send out reads "Saving…".
+  const pendingIds = new Set([step.isPending ? step.variables?.orderId : undefined, sendOut.isPending ? sendOut.variables : undefined]);
 
   return (
     <div className="flex h-full flex-col gap-4">
@@ -276,7 +292,7 @@ export function OrdersBoardPage() {
                         snap={snap}
                         now={now}
                         timing={timing}
-                        busy={pendingId === snap.order.id}
+                        busy={pendingIds.has(snap.order.id)}
                         onPrimary={() => {
                           switch (action.kind) {
                             case 'preparing':
@@ -285,8 +301,8 @@ export function OrdersBoardPage() {
                             case 'delivered':
                               step.mutate({ orderId: snap.order.id, kind: action.kind });
                               return;
-                            case 'assign_rider':
-                              setAssignFor(snap);
+                            case 'send_out':
+                              sendOut.mutate(snap.order.id);
                               return;
                             case 'hand_over':
                               setDeliverFor(snap);
@@ -368,7 +384,7 @@ const CARD_RING: Record<AgeTone, string> = {
 const PRIMARY_VARIANT: Record<ReturnType<typeof nextBoardAction>['kind'], 'primary' | 'success'> = {
   preparing: 'primary',
   ready: 'success',
-  assign_rider: 'primary',
+  send_out: 'primary',
   hand_over: 'success',
   served: 'success',
   delivered: 'success',
@@ -378,7 +394,7 @@ const PRIMARY_VARIANT: Record<ReturnType<typeof nextBoardAction>['kind'], 'prima
 const PRIMARY_ICON: Record<ReturnType<typeof nextBoardAction>['kind'], typeof ChefHat> = {
   preparing: ChefHat,
   ready: CheckCircle2,
-  assign_rider: Bike,
+  send_out: Truck,
   hand_over: CheckCircle2,
   served: CheckCircle2,
   delivered: CheckCircle2,
@@ -423,7 +439,13 @@ function OrderCard({
   // From when it was sent to the kitchen (started, for an order from before 0.7.34).
   const minutes = ageMinutes(orderClockFrom(order), now);
   const tone = ageTone(minutes, timing);
+  // How long it has been out, from when it left (dispatchedAt): on an own
+  // rider's row and on an outside rider's row alike.
   const outMinutes = order.status === 'out_for_delivery' && order.dispatchedAt ? ageMinutes(order.dispatchedAt, now) : null;
+  // Sent out with an outside rider: he keeps the delivery charge frozen at Send out.
+  const outside = isOutWithOutsideRider(snap);
+  // A Ready delivery goes out with Send out; one of the shop's own riders is this small link.
+  const offersAssignLink = order.status === 'ready' && order.mode === 'delivery' && !snap.rider;
   const PrimaryIcon = PRIMARY_ICON[primaryKind];
 
   return (
@@ -540,6 +562,35 @@ function OrderCard({
                 </button>
               )}
             </div>
+          )}
+          {outside && (
+            <div className="flex items-center justify-between gap-1.5 rounded-md bg-violet-50 p-1.5 text-violet-800 dark:bg-violet-950/40 dark:text-violet-200">
+              <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+                <Truck className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate font-semibold">Outside rider</span>
+                {outMinutes !== null && <span className="whitespace-nowrap text-[10px]">· out {ageLabel(outMinutes)}</span>}
+                <span className="whitespace-nowrap text-[10px]">· {outsideRiderKeepsText(order.riderKeepsCents ?? 0)}</span>
+              </span>
+              <button
+                type="button"
+                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300"
+                onClick={onChangeRider}
+                title={ASSIGN_RIDER_LINK_TITLE}
+              >
+                Assign rider
+              </button>
+            </div>
+          )}
+          {offersAssignLink && (
+            <button
+              type="button"
+              className="flex items-center gap-1.5 rounded px-0.5 py-0.5 text-[11px] font-semibold text-violet-700 underline-offset-2 hover:underline dark:text-violet-300"
+              onClick={onChangeRider}
+              title={ASSIGN_RIDER_LINK_TITLE}
+            >
+              <Bike className="h-3.5 w-3.5 shrink-0" />
+              Assign rider
+            </button>
           )}
         </div>
       )}

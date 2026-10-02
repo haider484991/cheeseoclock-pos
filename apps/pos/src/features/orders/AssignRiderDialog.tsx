@@ -6,6 +6,7 @@ import { Bike, Phone, Plus, Undo2, X } from 'lucide-react';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
+import { isOutWithOutsideRider } from './boardLogic';
 
 interface Props {
   snap: OrderSnapshot;
@@ -13,11 +14,19 @@ interface Props {
   onAssigned: () => void;
 }
 
+/** "Back to Ready" on an order sent out with no rider named: its hover words. */
+export const BACK_TO_READY_TITLE =
+  'Only if the rider has not left. If he went and came back, cancel the order instead: it asks about his trip.';
+
 /**
- * Pick the rider for a delivery (or change the one it has). Free riders come
- * first; a rider already out shows which orders they are carrying. A new
- * rider can be added and assigned in one go. An order already out can also
- * be taken back off its rider (it returns to Ready).
+ * Optional: one of the shop's own riders, before or after Send out (they
+ * bring back the full bill); an outside rider needs nothing here. Pick the
+ * rider for a delivery (or change the one it has). Free riders come first; a
+ * rider already out shows which orders they are carrying. A new rider can be
+ * added and assigned in one go. An order out with an own rider can be taken
+ * back off them, and one sent out with no rider named can go Back to Ready —
+ * only while the rider has not left: Back to Ready forgets what an outside
+ * rider keeps, so a cancel after it could no longer pay him for his trip.
  */
 export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
   const [addingNew, setAddingNew] = useState(false);
@@ -26,6 +35,9 @@ export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
   const { toast } = useToast();
   const currentRiderId = snap.rider?.id ?? null;
   const isOut = snap.order.status === 'out_for_delivery';
+  const shortNo = snap.order.orderNumber.split('-').pop();
+  // Sent out with an outside rider (Send out): he keeps the delivery charge.
+  const sentOut = isOutWithOutsideRider(snap);
 
   const ridersQ = useQuery({
     queryKey: ['riders', 'active'],
@@ -67,14 +79,19 @@ export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
       toast({ title: 'Could not assign', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
   });
 
+  // 'take_off': an own rider's order; 'back': one sent out with no rider named (Back to Ready).
   const unassignMut = useMutation({
-    mutationFn: () => ipc.orders.unassignRider(snap.order.id),
-    onSuccess: () => {
-      toast({ title: 'Rider taken off — order is back in Ready' });
+    mutationFn: (_how: 'take_off' | 'back') => ipc.orders.unassignRider(snap.order.id),
+    onSuccess: (_next, how) => {
+      toast({ title: how === 'back' ? `Order #${shortNo} is back in Ready` : 'Rider taken off — order is back in Ready' });
       onAssigned();
     },
-    onError: (e) =>
-      toast({ title: 'Could not take the rider off', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
+    onError: (e, how) =>
+      toast({
+        title: how === 'back' ? 'Could not bring it back to Ready' : 'Could not take the rider off',
+        description: e instanceof Error ? e.message : 'Unknown error',
+        variant: 'error',
+      }),
   });
 
   const createMut = useMutation({
@@ -106,8 +123,9 @@ export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
                 {currentRiderId ? 'Change rider' : 'Assign a rider'}
               </Dialog.Title>
               <Dialog.Description className="mt-0.5 text-xs text-stone-500">
-                Order #{snap.order.orderNumber.split('-').pop()} · {snap.customerName ?? 'Walk-in'}
+                Order #{shortNo} · {snap.customerName ?? 'Walk-in'}
                 {snap.rider && ` · now with ${snap.rider.name}`}
+                {sentOut && ' · sent out with an outside rider'}
               </Dialog.Description>
             </div>
             <button
@@ -183,12 +201,25 @@ export function AssignRiderDialog({ snap, onClose, onAssigned }: Props) {
                     variant="ghost"
                     size="sm"
                     className="flex-1 text-violet-700 dark:text-violet-300"
-                    onClick={() => unassignMut.mutate()}
+                    onClick={() => unassignMut.mutate('take_off')}
                     disabled={busy}
                     title="The order goes back to Ready"
                   >
                     <Undo2 className="h-3.5 w-3.5" />
                     Take rider off
+                  </Button>
+                )}
+                {isOut && !currentRiderId && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="flex-1 text-violet-700 dark:text-violet-300"
+                    onClick={() => unassignMut.mutate('back')}
+                    disabled={busy}
+                    title={BACK_TO_READY_TITLE}
+                  >
+                    <Undo2 className="h-3.5 w-3.5" />
+                    Back to Ready
                   </Button>
                 )}
               </div>

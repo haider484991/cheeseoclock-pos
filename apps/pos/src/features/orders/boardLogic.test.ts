@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
 import { KITCHEN_TICKET_STATUSES } from '@cheeseoclock/pos-domain';
 import {
+  ASSIGN_RIDER_LINK_TITLE,
   ageLabel,
   ageMinutes,
   ageTitle,
@@ -12,10 +13,13 @@ import {
   cardLineDetails,
   cardLines,
   compareOrderClock,
+  isOutWithOutsideRider,
   matchesBoardSearch,
   nextBoardAction,
   offersKitchenReprint,
   orderClockFrom,
+  outsideRiderChipText,
+  outsideRiderKeepsText,
   parseRupeesToCents,
   sentStepAt,
 } from './boardLogic';
@@ -115,8 +119,25 @@ describe('next action', () => {
     expect(nextBoardAction('preparing', 'delivery', true).kind).toBe('ready');
   });
 
-  it('a ready delivery gets a rider', () => {
-    expect(nextBoardAction('ready', 'delivery', false)).toEqual({ kind: 'assign_rider', label: 'Assign rider' });
+  // Changed on purpose in v0.7.34 (step 16-3; the owner, 2 Oct 2026: "Ready
+  // delivery -> Send out", "Assign rider" optional and smaller): this was
+  // { kind: 'assign_rider', label: 'Assign rider' }.
+  it('a ready delivery is sent out, paid or not', () => {
+    expect(nextBoardAction('ready', 'delivery', false)).toEqual({ kind: 'send_out', label: 'Send out' });
+    expect(nextBoardAction('ready', 'delivery', true)).toEqual({ kind: 'send_out', label: 'Send out' });
+  });
+
+  it('no step offers "Assign rider" as the big button any more', () => {
+    const statuses: OrderStatus[] = ['open', 'sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'served', 'paid', 'void', 'refunded'];
+    for (const status of statuses) {
+      for (const mode of ['dine_in', 'takeaway', 'delivery', 'online', 'foodpanda'] as const) {
+        for (const paid of [false, true]) {
+          const a = nextBoardAction(status, mode, paid);
+          expect({ status, mode, paid, label: a.label }).not.toEqual({ status, mode, paid, label: 'Assign rider' });
+          if (a.kind === 'send_out') expect({ status, mode }).toEqual({ status: 'ready', mode: 'delivery' });
+        }
+      }
+    }
   });
 
   it('an unpaid order never closes without its payment', () => {
@@ -138,6 +159,38 @@ describe('next action', () => {
     for (const s of ['paid', 'served', 'delivered', 'void', 'refunded'] as const) {
       expect(nextBoardAction(s, 'takeaway', true).kind).toBe('none');
     }
+  });
+});
+
+describe('an outside rider on the board (Send out, v0.7.34)', () => {
+  const out = (riderKeepsCents: number | null | undefined, rider: { id: string } | null = null, status: OrderStatus = 'out_for_delivery') =>
+    ({
+      order: { status, ...(riderKeepsCents === undefined ? {} : { riderKeepsCents }) },
+      rider,
+    }) as Parameters<typeof isOutWithOutsideRider>[0];
+
+  it('out for delivery, what he keeps frozen on it (0 too), and no own rider named', () => {
+    expect(isOutWithOutsideRider(out(20_000))).toBe(true);
+    expect(isOutWithOutsideRider(out(0))).toBe(true);
+    // One of the shop's own riders, an order from before 0.7.34, or not out yet.
+    expect(isOutWithOutsideRider(out(undefined))).toBe(false);
+    expect(isOutWithOutsideRider(out(null))).toBe(false);
+    expect(isOutWithOutsideRider(out(20_000, null, 'ready'))).toBe(false);
+    expect(isOutWithOutsideRider(out(20_000, null, 'delivered'))).toBe(false);
+    // An older till named a rider and left the keep: his row, not the outside one.
+    expect(isOutWithOutsideRider(out(20_000, { id: 'r1' }))).toBe(false);
+  });
+
+  it('the Out card says what he keeps; the order panel what he kept', () => {
+    expect(outsideRiderKeepsText(20_000)).toBe('keeps Rs 200');
+    expect(outsideRiderKeepsText(25_000)).toBe('keeps Rs 250');
+    expect(outsideRiderKeepsText(0)).toBe('no delivery charge');
+    expect(outsideRiderChipText(20_000)).toBe('Outside rider · kept Rs 200 delivery charge');
+    expect(outsideRiderChipText(0)).toBe('Outside rider · no delivery charge');
+  });
+
+  it('the "Assign rider" link says it is optional and for the shop’s own riders', () => {
+    expect(ASSIGN_RIDER_LINK_TITLE).toBe('Optional — one of your own riders (they bring back the full bill)');
   });
 });
 

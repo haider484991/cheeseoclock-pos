@@ -4,8 +4,8 @@
  * quick search. Tested in boardLogic.test.ts.
  */
 import type { KitchenTiming, Order, OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
-import { DEFAULT_KITCHEN_TIMING, isLeaveOutChoice } from '@cheeseoclock/shared-types';
-import { KITCHEN_TICKET_STATUSES } from '@cheeseoclock/pos-domain';
+import { DEFAULT_KITCHEN_TIMING, isLeaveOutChoice, isOutsideRiderOrder } from '@cheeseoclock/shared-types';
+import { KITCHEN_TICKET_STATUSES, formatCents } from '@cheeseoclock/pos-domain';
 import { orderTimeLabel } from './historyFilters';
 
 /**
@@ -110,7 +110,12 @@ export function ageLabel(minutes: number): string {
 export type BoardAction =
   | { kind: 'preparing'; label: string }
   | { kind: 'ready'; label: string }
-  | { kind: 'assign_rider'; label: string }
+  /**
+   * A Ready delivery goes out with an outside rider and its bill prints (the
+   * owner, 2 Oct 2026: "Ready delivery -> Send out"). One of the shop's own
+   * riders is the card's small "Assign rider" link.
+   */
+  | { kind: 'send_out'; label: string }
   /** Opens the hand-over dialog (takes the payment when one is due). */
   | { kind: 'hand_over'; label: string }
   /** Paid and not a delivery: closes the order with no dialog. */
@@ -128,7 +133,8 @@ export function nextBoardAction(status: OrderStatus, mode: OrderMode, paid: bool
     case 'preparing':
       return { kind: 'ready', label: 'Mark ready' };
     case 'ready':
-      if (mode === 'delivery') return { kind: 'assign_rider', label: 'Assign rider' };
+      // Paid or not: the money is settled when he comes back (Delivered + Pay).
+      if (mode === 'delivery') return { kind: 'send_out', label: 'Send out' };
       // Unpaid must not close without its payment: the dialog takes it.
       if (!paid) return { kind: 'hand_over', label: 'Picked up + Pay' };
       return { kind: 'served', label: 'Picked up' };
@@ -139,6 +145,31 @@ export function nextBoardAction(status: OrderStatus, mode: OrderMode, paid: bool
     default:
       return { kind: 'none', label: '' };
   }
+}
+
+/** The small "Assign rider" link's title on a Ready delivery and an outside rider's Out card. */
+export const ASSIGN_RIDER_LINK_TITLE = 'Optional — one of your own riders (they bring back the full bill)';
+
+/**
+ * The order is out now with an outside rider (Send out): out for delivery,
+ * what he keeps frozen on it, and none of the shop's own riders named. An
+ * own rider's order, and one an older till changed, read as before.
+ */
+export function isOutWithOutsideRider(snap: {
+  order: Pick<Order, 'status' | 'riderKeepsCents'>;
+  rider: OrderSnapshot['rider'];
+}): boolean {
+  return snap.order.status === 'out_for_delivery' && isOutsideRiderOrder(snap.order) && !snap.rider;
+}
+
+/** What the outside rider keeps, in the Out card's words: "keeps Rs 200", or "no delivery charge" for 0. */
+export function outsideRiderKeepsText(keepCents: number): string {
+  return keepCents > 0 ? `keeps ${formatCents(keepCents)}` : 'no delivery charge';
+}
+
+/** Order History's panel chip for an order sent out with an outside rider: what he kept of the bill. */
+export function outsideRiderChipText(keptCents: number): string {
+  return keptCents > 0 ? `Outside rider · kept ${formatCents(keptCents)} delivery charge` : 'Outside rider · no delivery charge';
 }
 
 /**

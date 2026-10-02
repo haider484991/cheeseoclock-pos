@@ -9,13 +9,20 @@ import {
   Phone,
   Printer,
   Trash2,
+  Truck,
   Undo2,
   UserRound,
   X,
   XCircle,
 } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { discountLeavesDeliveryCharge, discountLeavesNoDiscountItems, isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
+import {
+  discountLeavesDeliveryCharge,
+  discountLeavesNoDiscountItems,
+  isLeaveOutChoice,
+  isOutsideRiderOrder,
+  orderNotesOf,
+} from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
 import { paperButtonLabel } from '../printing/paperLabels';
@@ -32,7 +39,7 @@ import { CameByRow } from './CameByRow';
 import { ModeBadge, PaidChip, StatusBadge } from './OrderBadges';
 import { PAYMENT_LABELS, isOwed, orderTimeLabel, shortOrderNumber } from './historyFilters';
 import { historyStockStep } from './stockCopy';
-import { offersKitchenReprint, sentStepAt } from './boardLogic';
+import { offersKitchenReprint, outsideRiderChipText, sentStepAt } from './boardLogic';
 
 interface DrawerProps {
   orderId: string;
@@ -155,6 +162,9 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
   // shows in history, but the guard stays in case one is opened directly).
   const canCancel = !!o && owed && o.status !== 'open';
   const inKitchen = !!o && offersKitchenReprint(o.status);
+  // Sent out with an outside rider (Send out, 0049): he kept the delivery
+  // charge frozen then. One of the shop's own riders reads as before.
+  const outside = !!o && !!snap && isOutsideRiderOrder(o) && !snap.rider;
   const canDeleteTest = mayDeleteTestOrder(role, o?.status);
 
   // A deleted test order is gone from every list, shift, stock figure and
@@ -210,7 +220,7 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
         ) : (
           <>
             <div className="flex-1 space-y-4 overflow-y-auto p-5">
-              {(snap.customerName || snap.customerPhone || snap.deliveryAddress || snap.rider) && (
+              {(snap.customerName || snap.customerPhone || snap.deliveryAddress || snap.rider || outside) && (
                 <section className="space-y-1 rounded-xl bg-stone-50 p-3 text-sm dark:bg-stone-800/60">
                   {snap.customerName && (
                     <div className="flex items-center gap-1.5 font-semibold">
@@ -234,6 +244,12 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                     <div className="mt-1 flex items-center gap-1.5 rounded-md bg-violet-100 px-2 py-1 text-xs text-violet-800 dark:bg-violet-950 dark:text-violet-200">
                       <Bike className="h-3 w-3" />
                       Rider <strong>{snap.rider.name}</strong> · <span className="font-mono">{snap.rider.phone}</span>
+                    </div>
+                  )}
+                  {outside && (
+                    <div className="mt-1 flex items-center gap-1.5 rounded-md bg-violet-100 px-2 py-1 text-xs text-violet-800 dark:bg-violet-950 dark:text-violet-200">
+                      <Truck className="h-3 w-3" />
+                      {outsideRiderChipText(o.riderKeepsCents ?? 0)}
                     </div>
                   )}
                 </section>
@@ -354,7 +370,11 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                       starting, so a quick Pay does not show the same time twice. */}
                   {sentAt && <Step label="Sent" at={sentAt} />}
                   {o.dispatchedAt && (
-                    <Step label="Out with rider" at={o.dispatchedAt} extra={snap.rider ? snap.rider.name : undefined} />
+                    <Step
+                      label={outside ? 'Sent out (outside rider)' : 'Out with rider'}
+                      at={o.dispatchedAt}
+                      extra={snap.rider ? snap.rider.name : undefined}
+                    />
                   )}
                   {o.deliveredAt && <Step label="Delivered" at={o.deliveredAt} />}
                   {o.paidAt && <Step label="Paid" at={o.paidAt} />}
