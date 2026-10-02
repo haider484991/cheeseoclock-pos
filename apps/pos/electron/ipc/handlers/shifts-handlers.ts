@@ -1,8 +1,9 @@
+import log from 'electron-log/main';
 import type { HandlerContext } from '../registry.js';
 import { defineHandler, IpcGuardError } from '../registry.js';
 import { ok, hasCapability } from '@cheeseoclock/shared-types';
 import { openingFloatPrefill } from '@cheeseoclock/pos-domain';
-import type { AuthenticatedUser } from '@cheeseoclock/shared-types';
+import type { AuthenticatedUser, ShiftSummary } from '@cheeseoclock/shared-types';
 import { getCurrentSession, verifyManagerPin } from '../../services/auth-service.js';
 import {
   closeShift,
@@ -23,7 +24,7 @@ import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-servi
 import { closeWouldPauseWebOrders, followShiftForWebOrders } from '../../services/web-orders-shift-pause.js';
 import { requireCapability, REFUSED } from '../guards.js';
 import { readOpeningFloat } from '../../services/till-settings.js';
-import { makeShiftReport } from '../../services/shift-report-service.js';
+import { makeShiftReport, shiftReportAtClose } from '../../services/shift-report-service.js';
 
 /**
  * Shifts IPC. Open/close are gated on the `shift.open` / `shift.close`
@@ -98,6 +99,23 @@ export async function shiftCloser(
   }
 }
 
+/**
+ * The shift's takings read straight after its close, for the close result.
+ * Null (and logged) when they cannot be read: the close is already saved,
+ * so this never turns it into an error.
+ */
+function closedShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary | null {
+  try {
+    return getShiftSummary(db, shiftId);
+  } catch (e) {
+    log.warn('Close shift: the takings could not be read after the close', {
+      shiftId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return null;
+  }
+}
+
 export function registerShiftsHandlers(ctx: HandlerContext): void {
   defineHandler('shifts:current', ctx, () => {
     requireSession();
@@ -156,18 +174,28 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
         closer.tillSignedInUserId ? { via: 'manager_pin', tillSignedInUserId: closer.tillSignedInUserId } : null,
         // The shift report, made and saved inside the close from its own
         // figures, every section in it (owner, 2 Oct 2026). It only reads;
-        // one that cannot be made never stops the close. Printing it is not
-        // here yet.
+        // one that cannot be made never stops the close.
         { makeReport: makeShiftReport(ctx.db, ctx.deviceId) },
       );
       // The till's last shift closed: website orders pause until one opens
       // (owner, 2026-09-27). Never throws: the close is already saved.
       followShiftForWebOrders(ctx.db, ctx.deviceId, 'closed', closer.userId);
+      // The shift report's paper, now that the close is saved (the count
+      // stayed blind): the full paper for every closer, this till's
+      // switches. It never throws and never waits for the printer; a paper
+      // that does not print comes back as a 'printer:failed' note.
+      const reportPrint = shiftReportAtClose(ctx.db, shift.id, closer);
       // Closed with a manager's PIN on a cashier's login: the manager sees
       // Counted and Over / Short there, but the expected cash never goes to
       // a cashier's screen (the shift's totals are refused to that login,
-      // shifts:summary). The row keeps it; Shift history shows it the owner.
-      return ok(closer.tillSignedInUserId ? { ...shift, expectedCashCents: null } : shift);
+      // shifts:summary), so no summary either. The row keeps it; Shift
+      // history shows it the owner.
+      if (closer.tillSignedInUserId) return ok({ ...shift, expectedCashCents: null, reportPrint });
+      // The manager or owner signed in: the takings as the close saved them
+      // (nothing can be paid into a closed shift), not those the close box
+      // read before the count.
+      const summary = closedShiftSummary(ctx.db, shift.id);
+      return ok({ ...shift, reportPrint, ...(summary ? { summary } : {}) });
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',

@@ -2,10 +2,22 @@ import { createHash } from 'node:crypto';
 import log from 'electron-log/main';
 import {
   NO_DISCOUNT_REASON_LABEL,
+  SHIFT_REPORT_SECTIONS,
   isDeliveryChargeLine,
   isDeliveryChargeName,
+  shiftReportRules,
 } from '@cheeseoclock/shared-types';
-import type { OrderStatus, ShiftReportCancelled } from '@cheeseoclock/shared-types';
+import type {
+  OrderStatus,
+  PrintResult,
+  PrinterWidth,
+  ShiftReport,
+  ShiftReportAtClose,
+  ShiftReportCancelled,
+  ShiftReportRules,
+} from '@cheeseoclock/shared-types';
+import { parseShiftReportJson } from '@cheeseoclock/shared-schemas';
+import { renderShiftReport } from '@cheeseoclock/printer-core';
 import {
   buildShiftReport,
   shiftReportDiscountKind,
@@ -20,8 +32,11 @@ import type { AppDatabase } from '../db/connection.js';
 import { readDeliveryFeeItemIds } from '../db/business-settings-read.js';
 import {
   SETTLED_IN_SHIFT_SQL,
+  getShiftCloseReport,
+  recordShiftReportPrint,
   type ShiftCloseContext,
   type ShiftCloseReport,
+  type ShiftReportPrintOutcome,
 } from '../db/repositories/shift-repo.js';
 import { channelOf } from './analytics/sql.js';
 import {
@@ -29,7 +44,13 @@ import {
   getOrderStockAnswers,
   refundReason,
 } from './business-report.js';
-import { getReceiptBranding } from './printer-config.js';
+import {
+  DEFAULT_RECEIPT_CONFIG,
+  getPrintPolicy,
+  getReceiptBranding,
+  getReceiptPrinterConfig,
+} from './printer-config.js';
+import { printSpooler } from './print-spooler.js';
 
 /**
  * The shift report's figures, read at Close shift (final plan step 19d-3;
@@ -47,6 +68,9 @@ import { getReceiptBranding } from './printer-config.js';
  * Read-only: nothing here writes (the repositories own every write). It
  * reads no food cost, waste value, commission or profit — no ingredient,
  * recipe, price or cost table — so the close never loads costing data.
+ * Printing the saved report once the close is done (shiftReportAtClose,
+ * step 19f-2) puts each try on record through shift-repo's
+ * recordShiftReportPrint.
  *
  * The bases (shared-types shift-report.ts):
  *  - the orders SETTLED on this till in this shift (shift-repo
@@ -400,4 +424,180 @@ export function testDeletedSinceClose(db: AppDatabase, shiftId: string): number 
     .prepare(`SELECT ${SHIFT_TEST_DELETED_CASH_SQL} AS cents FROM shifts s WHERE s.id = ?`)
     .get(shiftId) as { cents: number | null } | undefined;
   return Number(row?.cents ?? 0);
+}
+
+// ---------------------------------------------------------------------------
+// Printing at the close
+
+/** Who closed the shift, as 'shifts:close' worked it out (shifts-handlers ShiftCloser). */
+export interface ShiftReportCloser {
+  /** The manager or owner who closed it (on a cashier's login, the one whose PIN or password was typed). */
+  userId: string;
+  name: string;
+  /** Set when a manager's PIN or password closed it on a cashier's login: who was signed in. */
+  tillSignedInUserId: string | null;
+}
+
+/** One paper of a shift's saved report, and who it is printed for. */
+interface FrozenPrint {
+  db: AppDatabase;
+  shiftId: string;
+  /** The report as saved at the close (shifts.close_report_json), never worked out again. */
+  report: ShiftReport;
+  /** This till's switches (Settings → Printers → Shift report), read when it was asked for. */
+  rules: ShiftReportRules;
+  /** The 'Printed ... by' name. */
+  printedByName: string;
+  byUserId: string;
+  approvedByUserId: string | null;
+}
+
+/**
+ * The shift report at Close shift (final plan step 19f-2; the owner, 2 Oct
+ * 2026: the FULL paper at every close, whoever closes — owner, manager, or a
+ * manager's PIN on a cashier's login). 'shifts:close' calls it once the
+ * close is saved, so the count stays blind: nothing of it prints before.
+ *
+ * It answers at once and NEVER throws: a print problem can never turn a
+ * saved close into an error. Everything it reads (the saved report, the
+ * owner's switches, the printer setup) sits in one try; any throw is logged
+ * and answered 'not_made'. In order:
+ *  - 'not_made': no report was saved with the close (another till's shift,
+ *    or the maker failed: the close logged why), or it cannot be read;
+ *  - 'off': the owner switched printing at close off on this till;
+ *  - 'no_printer': the "No printer" setup. Its papers go to a file
+ *    (userData/printer-mock), and so does this one, like every receipt
+ *    there; nobody holds a paper, so nothing is put in the print log and no
+ *    failure is shown;
+ *  - 'printing': sent to the receipt printer WITHOUT waiting (printFrozen).
+ *    A paper that does not print comes back as a 'printer:failed' note
+ *    naming the shift.
+ * The sections and ITEMS SOLD are this till's switches, the same for every
+ * closer; they change only what prints (the saved report keeps every
+ * section).
+ */
+export function shiftReportAtClose(db: AppDatabase, shiftId: string, closer: ShiftReportCloser): ShiftReportAtClose {
+  try {
+    const parsed = parseShiftReportJson(getShiftCloseReport(db, shiftId)?.json);
+    if (!parsed || !('report' in parsed)) {
+      log.warn('Shift report not printed: none saved with the close', { shiftId });
+      return 'not_made';
+    }
+    const rules = shiftReportRules(getPrintPolicy(db));
+    if (!rules.onClose) {
+      log.info('Shift report not printed: printing at close is off on this till', { shiftId });
+      return 'off';
+    }
+    const job: FrozenPrint = {
+      db,
+      shiftId,
+      report: parsed.report,
+      rules,
+      printedByName: closer.name,
+      byUserId: closer.userId,
+      // The manager's PIN or password closed it on a cashier's login.
+      approvedByUserId: closer.tillSignedInUserId ? closer.userId : null,
+    };
+    if (!printSpooler.hasReceiptPrinter()) {
+      void toNoPrinterFile(job);
+      return 'no_printer';
+    }
+    void printFrozen(job);
+    return 'printing';
+  } catch (e) {
+    log.error('Shift report not printed at the close', { shiftId, error: e instanceof Error ? e.message : String(e) });
+    return 'not_made';
+  }
+}
+
+/** The paper's bytes at the printer's width: the saved report, this till's switches, printed now. */
+function renderFrozen(job: FrozenPrint, width: PrinterWidth): Uint8Array {
+  return renderShiftReport(job.report, {
+    width,
+    sections: job.rules.sections,
+    items: job.rules.items,
+    printedAt: new Date(),
+    printedByName: job.printedByName,
+  });
+}
+
+/** The receipt printer's paper width as set (48 when it cannot be read): for the print log when the paper was never drawn. */
+function receiptWidth(db: AppDatabase): PrinterWidth {
+  try {
+    return (getReceiptPrinterConfig(db) ?? DEFAULT_RECEIPT_CONFIG).width === 32 ? 32 : 48;
+  } catch {
+    return 48;
+  }
+}
+
+/**
+ * The ORIGINAL at the close, on the receipt printer (printDocumentNow: in
+ * turn with the queue, no print_queue row, no drawer pulse). Nothing waits
+ * for it. One 'shift_report_printed' row puts the try on record ('maybe'
+ * when the printer failed after the bytes may have gone out); a paper that
+ * did not print is then told to the till windows (notifyShiftReportFailure),
+ * so Try again finds the failed original. Never throws: every error is
+ * caught and logged.
+ */
+async function printFrozen(job: FrozenPrint): Promise<void> {
+  const { db, shiftId, rules } = job;
+  try {
+    const drawn: { width: PrinterWidth | null } = { width: null };
+    let result: PrintResult;
+    try {
+      result = await printSpooler.printDocumentNow((width) => {
+        drawn.width = width;
+        return renderFrozen(job, width);
+      });
+    } catch (e) {
+      // printDocumentNow never throws; should it ever, it is a failure like any other.
+      result = {
+        ok: false,
+        durationMs: 0,
+        error: { code: 'spooler_exception', message: e instanceof Error ? e.message : String(e), recoverable: true },
+      };
+    }
+    const outcome: ShiftReportPrintOutcome = result.ok ? 'ok' : result.error?.maybeSent ? 'maybe' : 'failed';
+    try {
+      recordShiftReportPrint(db, {
+        shiftId,
+        copy: 'original',
+        reprintNo: 0,
+        sections: SHIFT_REPORT_SECTIONS.map((s) => s.key).filter((k) => rules.sections[k]),
+        items: rules.items,
+        width: drawn.width ?? receiptWidth(db),
+        outcome,
+        errorCode: result.ok ? null : (result.error?.code ?? 'unknown'),
+        byUserId: job.byUserId,
+        approvedByUserId: job.approvedByUserId,
+      });
+    } catch (e) {
+      log.error('Shift report print not put on record', { shiftId, error: e instanceof Error ? e.message : String(e) });
+    }
+    if (result.ok) {
+      log.info('Shift report printed', { shiftId, width: drawn.width });
+    } else {
+      printSpooler.notifyShiftReportFailure(shiftId, result.error);
+    }
+  } catch (e) {
+    log.error('Shift report not printed', { shiftId, error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+/**
+ * The "No printer" setup: the report goes to its file like every paper there
+ * (the mock printer, userData/printer-mock), so it can still be read. Not a
+ * paper anyone holds: no print-log row, no failure note. Never throws.
+ */
+async function toNoPrinterFile(job: FrozenPrint): Promise<void> {
+  try {
+    const result = await printSpooler.printDocumentNow((width) => renderFrozen(job, width));
+    if (result.ok) log.info('Shift report written to the No printer file', { shiftId: job.shiftId });
+    else log.warn('Shift report not written to the No printer file', { shiftId: job.shiftId, error: result.error });
+  } catch (e) {
+    log.warn('Shift report not written to the No printer file', {
+      shiftId: job.shiftId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
 }

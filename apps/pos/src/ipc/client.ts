@@ -628,6 +628,8 @@ export interface PrinterFailedPayload {
   orderId?: string;
   /** Which paper of which order, e.g. "Receipt for Order #0041" (absent: not known). */
   what?: string;
+  /** The shift whose report did not print (jobKind 'shift_report': no jobId, no orderId). */
+  shiftId?: string;
   error?: { code: string; message: string };
   /** First miss: the till keeps trying on its own. Absent/false: it gave up. */
   retrying?: boolean;

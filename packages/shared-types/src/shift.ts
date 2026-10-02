@@ -181,6 +181,32 @@ export interface ShiftSummary {
   }>;
 }
 
+/**
+ * What became of the shift report when the shift closed (v0.7.35). The
+ * close is saved in every case; the paper never holds it up.
+ *  - 'printing': sent to this till's receipt printer. If it does not print,
+ *    'printer:failed' follows with jobKind 'shift_report' and the shiftId.
+ *  - 'off': the owner switched printing at close off on this till
+ *    (Settings → Printers → Shift report).
+ *  - 'no_printer': this till has no receipt printer (the "No printer"
+ *    setup): no paper came out.
+ *  - 'not_made': no report was saved with the close, or the till could not
+ *    start printing it.
+ */
+export type ShiftReportAtClose = 'printing' | 'off' | 'no_printer' | 'not_made';
+
+/**
+ * The reply to Close shift: the closed shift, what became of its report and,
+ * for the manager or owner signed in, the shift's takings as the close saved
+ * them (read after the close, so a payment taken while the drawer was being
+ * counted is in them). A close made with a manager's PIN on a cashier's
+ * login gets no summary and no expected cash: the count stays blind there.
+ */
+export type ClosedShift = Shift & {
+  reportPrint?: ShiftReportAtClose;
+  summary?: ShiftSummary;
+};
+
 export type CashMovementType = 'payout' | 'payin' | 'tip_out';
 
 export interface CashMovement {

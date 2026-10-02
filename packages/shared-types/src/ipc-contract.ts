@@ -78,6 +78,7 @@ import type {
   CashCount,
   CashMovement,
   CashMovementType,
+  ClosedShift,
   DrawerOpenResult,
   Shift,
   ShiftCloseCheck,
@@ -964,6 +965,10 @@ export interface IpcContract {
    * `countedNotes`: the drawer counted note by note (Close shift's note
    * counter). When it is sent, `countedCashCents` must equal its sum, or the
    * close is refused; it is kept on the shift (migration 0050).
+   * The reply also says what became of the shift report (`reportPrint`: it
+   * prints after the close is saved and never holds it up) and, for the
+   * manager or owner signed in only, `summary`: the takings as the close
+   * saved them. A manager's PIN close gets no summary.
    */
   'shifts:close': {
     request: {
@@ -975,7 +980,7 @@ export interface IpcContract {
       carryOverOrderIds?: string[];
       countedNotes?: CashCount | null;
     };
-    response: ApiResult<Shift>;
+    response: ApiResult<ClosedShift>;
   };
   /**
    * Before the count: who closes (a cashier's login needs `approverPin`),

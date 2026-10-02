@@ -341,6 +341,8 @@ type PrinterFailedEvent = {
   jobKind: string;
   orderId?: string;
   what?: string;
+  /** jobKind 'shift_report': the shift whose report did not print. */
+  shiftId?: string;
   error?: { code: string; message: string };
   retrying?: boolean;
 };
