@@ -13,10 +13,13 @@
  *   - the owner's automatic offers are worked on, and their minimum measured
  *     on, the food without the deals;
  *   - a foodpanda order still covers the deals (the deal, and a manager's
- *     discount matching the tablet);
+ *     discount matching the tablet); switched to a counter order, its till
+ *     discount is frozen again leaving them out (a rupee amount lowered to
+ *     the cashier's limit on the smaller base, never taken off);
  *   - after payment the snapshot, the FBR invoice, food cost and profit split
  *     it the same way, part refunds by each line's net; a discount a v0.7.33
- *     till re-worked over the deals is read back from the stored bill;
+ *     till re-worked over the deals is read back from the stored bill, by
+ *     its own terms when every line has the one tax rate;
  *   - a website order (the bridge's own import, the site's API stood in for)
  *     follows the website: a pick-up with flagged lines takes its flags and a
  *     % that leaves them alone; a pick-up of deals only gets no discount row;
@@ -32,7 +35,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthenticatedUser, ChannelOffer, OrderSnapshot, UUID, WebOrder } from '@cheeseoclock/shared-types';
+import { discountBillLabel, type AuthenticatedUser, type ChannelOffer, type OrderSnapshot, type UUID, type WebOrder } from '@cheeseoclock/shared-types';
 import { mapOrderToFbrPayload, mapRefundToFbrDebitNote, type FbrSellerInfo } from '@cheeseoclock/fbr-core';
 import { DatabaseSync, openMigrated } from '../../db/costing-shop.fixture.js';
 
@@ -469,6 +472,160 @@ live('a foodpanda order still covers the deals (it must match the tablet)', () =
   });
 });
 
+live('an order that stops being foodpanda: its till discount leaves the value deals alone from then on', () => {
+  const refreezeAudits = (orderId: string) =>
+    (db.prepare(`SELECT action, before_json, after_json FROM audit_log WHERE action = 'leave_value_deals_out' AND after_json LIKE ?`).all(`%${orderId}%`) as Row[]).map(
+      (r) => ({ before: JSON.parse(String(r['before_json'])) as Row, after: JSON.parse(String(r['after_json'])) as Row }),
+    );
+  const discountImages = (orderId: string) =>
+    (db.prepare(`SELECT payload_json FROM sync_queue WHERE entity_type = 'order_discounts' AND payload_json LIKE ?`).all(`%${orderId}%`) as Row[]).map((r) =>
+      String(r['payload_json']),
+    );
+  const SKIPS = { kind: 'discount_base', v: 1, alsoOffDeliveryCharge: false, from: 'till', skipsNoDiscountLines: true };
+  const COVERS = { kind: 'discount_base', v: 1, alsoOffDeliveryCharge: false, from: 'till' };
+
+  it('a cashier’s 10% on a foodpanda order, switched to takeaway, then fries added and paid: the deal pays in full — the same bill as a takeaway rung from the start', async () => {
+    const orderId = await counterOrder('foodpanda', [
+      ['pizza', 1],
+      ['bigTwo', 1],
+    ]);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 10, reason: 'Staff' });
+    // On foodpanda it covers Big Two, as the tablet does: 10% of Rs 5,100.
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: null, value: 10, amount_cents: 51_000, approved_by_user_id: null }]);
+    expect(ruleOf(liveDiscounts(orderId)[0])).toEqual(COVERS);
+    const imagesBefore = discountImages(orderId).length;
+
+    await data('orders:setMode', { orderId, mode: 'takeaway' });
+    // Frozen again leaving the deals out, in the repositories' way: the row, its sync image and an audit row.
+    const [row] = liveDiscounts(orderId);
+    expect(row).toMatchObject({ source: null, value: 10, amount_cents: 15_000, approved_by_user_id: null });
+    expect(ruleOf(row)).toEqual(SKIPS);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 510_000, discount_cents: 15_000, tax_cents: 74_250, total_cents: 569_250 });
+    expect(refreezeAudits(orderId)).toEqual([
+      { before: expect.objectContaining({ value: 10, amountCents: 51_000, rule: COVERS }), after: expect.objectContaining({ value: 10, rule: SKIPS }) },
+    ]);
+    expect(discountImages(orderId).length).toBeGreaterThan(imagesBefore);
+    expect(discountImages(orderId).some((p) => p.includes('skipsNoDiscountLines'))).toBe(true);
+
+    await data('orders:addItem', { orderId, menuItemId: menu.fries, quantity: 1 });
+    // 10% of Rs 2,000 of pizza and fries; tax 15% of (Rs 1,350 + Rs 450 + Rs 3,600).
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 560_000, discount_cents: 20_000, tax_cents: 81_000, total_cents: 621_000 });
+    // The control: the same cart rung as a takeaway from the start.
+    const control = await counterOrder('takeaway', [
+      ['pizza', 1],
+      ['bigTwo', 1],
+      ['fries', 1],
+    ]);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId: control, discountType: 'percent', value: 10, reason: 'Staff' });
+    expect(orderRow(control)).toEqual(orderRow(orderId));
+    expect(h.pinChecks).toBe(0);
+
+    await pay(orderId);
+    const s = await snap(orderId);
+    expect(s.order.mode).toBe('takeaway');
+    expect(s.discounts).toMatchObject([{ alsoOffDeliveryCharge: false, skipsNoDiscountLines: true }]);
+    expect(discountBillLabel(s.discounts[0]!, s.items)).toBe('Discount 10% (Staff, not on value deals)');
+    expect(fbrLines(s)).toEqual({
+      'Test Fajita Pizza': { net: 1_350, tax: 202.5, discount: 150 },
+      'Big Two': { net: 3_600, tax: 540, discount: undefined },
+      'Test Fries': { net: 450, tax: 67.5, discount: 50 },
+    });
+    expect(fbrTax(s)).toBe(81_000);
+    expect((await reportsSay()).profit).toEqual({ 'Test Fajita Pizza': 135_000, 'Big Two': 360_000, 'Test Fries': 45_000 });
+  });
+
+  it('a manager’s discount matching the tablet in place of an active foodpanda deal: switched to delivery, it keeps its approval but leaves the deal alone', async () => {
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    setBusinessSetting(
+      db as never,
+      'foodpanda.deal',
+      { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null },
+      OWNER_ACTOR,
+    );
+    const orderId = await counterOrder('foodpanda', [
+      ['pizza', 1],
+      ['bigTwo', 1],
+    ]);
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: 'foodpanda', amount_cents: 102_000 }]);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 10, reason: 'Match the tablet', approverPin: MANAGER_SECRET });
+    expect(liveDiscounts(orderId)).toMatchObject([{ source: null, amount_cents: 51_000, approved_by_user_id: 'u_mgr' }]);
+
+    await data('orders:setMode', { orderId, mode: 'delivery' });
+    const [row] = liveDiscounts(orderId);
+    expect(liveDiscounts(orderId)).toHaveLength(1);
+    expect(row).toMatchObject({ source: null, value: 10, amount_cents: 15_000, approved_by_user_id: 'u_mgr' });
+    expect(ruleOf(row)).toEqual(SKIPS);
+    await data('orders:addItem', { orderId, menuItemId: menu.fries, quantity: 1 });
+    expect(orderRow(orderId)).toMatchObject({ discount_cents: 20_000 });
+    // Collected after all (a delivery needs the customer's details to be paid): already frozen leaving the deal out.
+    await data('orders:setMode', { orderId, mode: 'takeaway' });
+    expect(refreezeAudits(orderId)).toHaveLength(1);
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 560_000, discount_cents: 20_000, tax_cents: 81_000, total_cents: 621_000 });
+    expect(h.pinChecks).toBe(1);
+
+    await pay(orderId);
+    const s = await snap(orderId);
+    expect(fbrLines(s)['Big Two']).toEqual({ net: 3_600, tax: 540, discount: undefined });
+    expect((await reportsSay()).profit['Big Two']).toBe(360_000);
+  });
+
+  it('the approval limit: a rupee amount a cashier gave without a PIN, over the limit once the deal is left out, is lowered to the most a cashier may give — it stays on and nothing asks for a PIN', async () => {
+    // Rs 300 off Rs 5,100 is within 10% on foodpanda; on the Rs 1,500 pizza alone it would be 20%.
+    const big = await counterOrder('foodpanda', [
+      ['pizza', 1],
+      ['bigTwo', 1],
+    ]);
+    // Rs 100 off is within 10% of the pizza too: left as it is.
+    const small = await counterOrder('foodpanda', [
+      ['pizza', 1],
+      ['bigTwo', 1],
+    ]);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId: big, discountType: 'flat', value: 30_000, reason: 'Staff' });
+    await data('orders:applyDiscount', { orderId: small, discountType: 'flat', value: 10_000, reason: 'Staff' });
+    expect([liveDiscounts(big)[0]?.['amount_cents'], liveDiscounts(small)[0]?.['amount_cents']]).toEqual([30_000, 10_000]);
+
+    await data('orders:setMode', { orderId: big, mode: 'takeaway' });
+    await data('orders:setMode', { orderId: small, mode: 'takeaway' });
+    expect(liveDiscounts(big)).toMatchObject([{ value: 15_000, amount_cents: 15_000, approved_by_user_id: null }]);
+    expect(ruleOf(liveDiscounts(big)[0])).toEqual(SKIPS);
+    expect(refreezeAudits(big)).toEqual([
+      { before: expect.objectContaining({ discountType: 'flat', value: 30_000 }), after: expect.objectContaining({ discountType: 'flat', value: 15_000 }) },
+    ]);
+    expect(liveDiscounts(small)).toMatchObject([{ value: 10_000, amount_cents: 10_000 }]);
+    expect(ruleOf(liveDiscounts(small)[0])).toEqual(SKIPS);
+    // Never taken off by the approval re-check, then or at the next cart change.
+    await data('orders:addItem', { orderId: big, menuItemId: menu.fries, quantity: 1 });
+    expect(liveDiscounts(big)).toMatchObject([{ value: 15_000, amount_cents: 15_000 }]);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action = 'auto_clear_needs_approval'`).get()).toEqual({ n: 0 });
+    expect(h.pinChecks).toBe(0);
+  });
+
+  it('a takeaway switched to delivery (never foodpanda), or a foodpanda order that stays foodpanda: nothing is frozen again', async () => {
+    const takeaway = await counterOrder('takeaway', [
+      ['pizza', 1],
+      ['bigTwo', 1],
+    ]);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId: takeaway, discountType: 'percent', value: 10, reason: 'Staff' });
+    await data('orders:setMode', { orderId: takeaway, mode: 'delivery' });
+    expect(liveDiscounts(takeaway)).toMatchObject([{ value: 10, amount_cents: 15_000 }]);
+    expect(refreezeAudits(takeaway)).toEqual([]);
+    const fp = await counterOrder('foodpanda', [
+      ['pizza', 1],
+      ['bigTwo', 1],
+    ]);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId: fp, discountType: 'percent', value: 10, reason: 'Staff' });
+    await data('orders:setMode', { orderId: fp, mode: 'foodpanda' });
+    expect(ruleOf(liveDiscounts(fp)[0])).toEqual(COVERS);
+    expect(refreezeAudits(fp)).toEqual([]);
+  });
+});
+
 live('after payment: Reports, FBR and refunds split it as the till did', () => {
   it('profit and food cost: the deal line takes none of the discount; a part refund is spread by each line’s net', async () => {
     const orderId = await counterOrder('takeaway', [
@@ -525,6 +682,43 @@ live('after payment: Reports, FBR and refunds split it as the till did', () => {
       'Big Two': { net: 3_240, tax: 162, discount: 360 },
     });
     expect(fbrTax(s)).toBe(36_450);
+    expect(await reportsSay()).toEqual({
+      profit: { 'Test Fajita Pizza': 135_000, 'Big Two': 324_000 },
+      foodCost: { 'Test Fajita Pizza': 135_000, 'Big Two': 324_000 },
+      foodSales: 510_000 - 51_000,
+    });
+  });
+
+  it('the same re-work with every line at the shop’s one rate (15%), where the tax can’t tell: read by the row’s own 10% — the bill’s words, the invoice, the debit note and profit all follow it', async () => {
+    const orderId = await counterOrder('takeaway', [
+      ['pizza', 1],
+      ['bigTwo', 1],
+    ]);
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId, discountType: 'percent', value: 10, reason: 'Staff' });
+    expect(orderRow(orderId)).toEqual({ subtotal_cents: 510_000, discount_cents: 15_000, tax_cents: 74_250, total_cents: 569_250 });
+    // The v0.7.33 till re-works it over pizza and deal: Rs 510, split Rs 150 / Rs 360; tax 15% of
+    // Rs 1,350 + Rs 3,240 — the same Rs 688.50 the split over the pizza alone would give.
+    db.prepare(`UPDATE order_discounts SET amount_cents = 51000, version = version + 1 WHERE order_id = ? AND deleted_at IS NULL`).run(orderId);
+    db.prepare(`UPDATE orders SET discount_cents = 51000, tax_cents = 68850, total_cents = 527850, version = version + 1 WHERE id = ?`).run(orderId);
+    expect(ruleOf(liveDiscounts(orderId)[0])).toMatchObject({ skipsNoDiscountLines: true });
+    await pay(orderId);
+
+    const s = await snap(orderId);
+    expect(s.discounts).toMatchObject([{ alsoOffDeliveryCharge: false, skipsNoDiscountLines: false }]);
+    // It came off the deal too: the bill does not say "not on value deals".
+    expect(discountBillLabel(s.discounts[0]!, s.items)).toBe('Discount (Staff)');
+    expect(fbrLines(s)).toEqual({
+      'Test Fajita Pizza': { net: 1_350, tax: 202.5, discount: 150 },
+      'Big Two': { net: 3_240, tax: 486, discount: 360 },
+    });
+    expect(fbrTax(s)).toBe(68_850);
+    // The whole bill back: each line's own share of the discount, as sold.
+    const note = mapRefundToFbrDebitNote(s, SELLER, { originalIrn: 'IRN-TEST-2', refundedCents: 527_850, refundedAt: new Date().toISOString() });
+    expect(note.items.map((i) => [i.productDescription, i.valueSalesExcludingST, i.discount, i.salesTaxApplicable])).toEqual([
+      ['Test Fajita Pizza', 1_350, 150, 202.5],
+      ['Big Two', 3_240, 360, 486],
+    ]);
     expect(await reportsSay()).toEqual({
       profit: { 'Test Fajita Pizza': 135_000, 'Big Two': 324_000 },
       foodCost: { 'Test Fajita Pizza': 135_000, 'Big Two': 324_000 },

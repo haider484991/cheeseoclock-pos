@@ -37,9 +37,11 @@ import {
   foodpandaDealRule,
   foodpandaTerms,
   matchOffer,
+  mostOffWithoutManagerCents,
   normalizePhone,
   offerAmount,
   offerCanApplyTo,
+  parseDiscountBaseRule,
   parseFoodpandaDealRule,
   parseOfferRule,
   declinedOfferRule,
@@ -730,6 +732,95 @@ function takeOffFoodpandaDeal(db: AppDatabase, orderId: string, actor: Actor & {
   return true;
 }
 
+/** The audit action when an order stops being foodpanda and its till discount stops coming off the value deals. */
+const LEAVE_VALUE_DEALS_OUT_ACTION = 'leave_value_deals_out';
+
+/**
+ * An order that stopped being foodpanda (setOrderMode): a till discount
+ * given on it — a cashier's, or a manager's matching the tablet in place of
+ * the deal — was frozen covering the value deals, as foodpanda's tablet
+ * does. A counter order never discounts them (owner, 2 Oct 2026: value
+ * deals never get any discount; no override, even a manager's), so its rule
+ * is frozen again leaving them out (skipsNoDiscountLines), everything else
+ * kept as it was given: its delivery-charge answer, its reason, who gave
+ * and who approved it. Its rupees are then worked again by the caller
+ * (recomputeOrderTotals) on the food without the deals. Only a till's own
+ * rule is touched: not the website's, an automatic offer's (they already
+ * skip), the foodpanda deal's (taken off by takeOffFoodpandaDeal) or a row
+ * with no rule (an older till's).
+ *
+ * The approval limit: a % (every F3 preset) needs the same answer on any
+ * base, and a manager's discount is never checked again. A rupee amount a
+ * cashier gave without a PIN was within the limit on the food WITH the
+ * deals; on the smaller base it may be more than the % limit, and the
+ * cart-change re-check would then take it off, asking for a manager after
+ * the fact. Instead it is lowered here, in the same audited change, to the
+ * most a cashier may give without one on that base
+ * (mostOffWithoutManagerCents): it stays on, nothing asks for a PIN, and the
+ * order never carries more off than a cashier may give. One already over
+ * the limit before the switch (the owner lowered it since) is left to the
+ * re-check, as on any cart change. Returns whether a row changed. Inside
+ * the caller's transaction.
+ */
+function leaveValueDealsOut(db: AppDatabase, orderId: string, actor: Actor & { userId: string }): boolean {
+  const rows = db
+    .prepare(
+      `SELECT id, discount_type, value, reason, amount_cents, approved_by_user_id, rule_json FROM order_discounts
+        WHERE order_id = ? AND source IS NULL AND deleted_at IS NULL
+        ORDER BY created_at, id`,
+    )
+    .all(orderId) as Array<{
+    id: string;
+    discount_type: 'percent' | 'flat';
+    value: number;
+    reason: string | null;
+    amount_cents: number;
+    approved_by_user_id: string | null;
+    rule_json: string | null;
+  }>;
+  let changed = false;
+  for (const r of rows) {
+    const rule = parseDiscountBaseRule(r.rule_json);
+    if (!rule || rule.from !== 'till' || rule.skipsNoDiscountLines === true) continue;
+    const refrozen = tillDiscountRule(rule.alsoOffDeliveryCharge, true);
+    let value = r.value;
+    if (r.discount_type === 'flat' && !r.approved_by_user_id) {
+      const lines = discountLinesOf(db, orderId);
+      // The one rule with the live limit (Settings → Money & discounts), on each base.
+      const needsManager = (skipsNoDiscountLines: boolean): boolean =>
+        requiresManagerApproval(
+          { type: 'flat', value: r.value },
+          discountBaseCents(lines, { alsoOffDeliveryCharge: rule.alsoOffDeliveryCharge, skipsNoDiscountLines }),
+          readApprovalLimits(db),
+        );
+      if (!needsManager(false) && needsManager(true)) {
+        const base = discountBaseCents(lines, { alsoOffDeliveryCharge: rule.alsoOffDeliveryCharge, skipsNoDiscountLines: true });
+        value = Math.min(r.value, mostOffWithoutManagerCents(readApprovalLimits(db), base));
+      }
+    }
+    const now = nowIso();
+    db.prepare(
+      `UPDATE order_discounts SET rule_json = ?, value = ?, updated_at = ?, version = version + 1 WHERE id = ?`,
+    ).run(JSON.stringify(refrozen), value, now, r.id);
+    enqueueSync(db, {
+      entityType: 'order_discounts',
+      entityId: r.id,
+      op: 'upsert',
+      payload: { id: r.id, rule: refrozen, value },
+    });
+    writeAudit(db, {
+      entityType: 'order_discounts',
+      entityId: r.id,
+      action: LEAVE_VALUE_DEALS_OUT_ACTION,
+      actorUserId: actor.userId,
+      before: { orderId, discountType: r.discount_type, value: r.value, reason: r.reason, amountCents: r.amount_cents, rule },
+      after: { orderId, discountType: r.discount_type, value, reason: r.reason, rule: refrozen },
+    });
+    changed = true;
+  }
+  return changed;
+}
+
 // -----------------------------------------------------------------------------
 // The owner's automatic offers (Settings → Money & discounts, 'discounts.offers')
 // -----------------------------------------------------------------------------
@@ -1052,12 +1143,15 @@ export function setOrderMode(
     });
 
     // The foodpanda deal follows the order type: put on when it becomes
-    // foodpanda (the terms of NOW, frozen), taken off when it leaves.
+    // foodpanda (the terms of NOW, frozen), taken off when it leaves — and a
+    // till discount given on it stops coming off the value deals then.
     const wasFoodpanda = order.mode === 'foodpanda';
     const isFoodpanda = mode === 'foodpanda';
     let discountChanged = false;
-    if (wasFoodpanda && !isFoodpanda) discountChanged = takeOffFoodpandaDeal(db, orderId, actor);
-    else if (!wasFoodpanda && isFoodpanda && order.source === 'pos') discountChanged = putOnFoodpandaDeal(db, updated, actor);
+    if (wasFoodpanda && !isFoodpanda) {
+      discountChanged = takeOffFoodpandaDeal(db, orderId, actor);
+      if (leaveValueDealsOut(db, orderId, actor)) discountChanged = true;
+    } else if (!wasFoodpanda && isFoodpanda && order.source === 'pos') discountChanged = putOnFoodpandaDeal(db, updated, actor);
     // The owner's automatic offers depend on the order type: worked out again
     // on every change (a foodpanda order never carries one).
     if (applyOfferStep(db, orderId, actor)) discountChanged = true;
@@ -2584,31 +2678,34 @@ function writeFoodpandaTerms(db: AppDatabase, order: Order, tabletTotalCents: nu
   if (db.prepare(`SELECT 1 AS x FROM order_channel_terms WHERE id = ?`).get(id) !== undefined) return;
   const dealRow = db
     .prepare(
-      `SELECT rule_json FROM order_discounts
+      `SELECT discount_type, value, rule_json FROM order_discounts
         WHERE order_id = ? AND source = 'foodpanda' AND deleted_at IS NULL
         ORDER BY created_at DESC LIMIT 1`,
     )
-    .get(order.id) as { rule_json: string | null } | undefined;
+    .get(order.id) as { discount_type: 'percent' | 'flat'; value: number; rule_json: string | null } | undefined;
   const rule = parseFoodpandaDealRule(dealRow?.rule_json);
   // On what the deal was worked: the food, when its frozen rule left the
   // delivery charge alone — read against the stored bill (an older till
-  // re-works it over every line: pos-domain storedDiscountAlsoOffDeliveryCharge).
+  // re-works it over every line: pos-domain storedDiscountAlsoOffDeliveryCharge,
+  // by the deal's own terms first, then the tax).
   // The value deals always count: the deal matches the tablet, which covers them.
   const lines = discountLinesOf(db, order.id);
-  const share = rule
-    ? dealAmount(
-        rule,
-        discountBaseCents(lines, {
-          alsoOffDeliveryCharge: storedDiscountAlsoOffDeliveryCharge(
-            rule.alsoOffDeliveryCharge !== false,
-            lines,
-            order.discountCents,
-            order.taxCents,
-          ),
-          skipsNoDiscountLines: false,
-        }),
-      )
-    : null;
+  const share =
+    rule && dealRow
+      ? dealAmount(
+          rule,
+          discountBaseCents(lines, {
+            alsoOffDeliveryCharge: storedDiscountAlsoOffDeliveryCharge(
+              rule.alsoOffDeliveryCharge !== false,
+              lines,
+              order.discountCents,
+              order.taxCents,
+              { discountType: dealRow.discount_type, value: dealRow.value, source: 'foodpanda', ruleJson: dealRow.rule_json },
+            ),
+            skipsNoDiscountLines: false,
+          }),
+        )
+      : null;
   const fees = readShopSetting(db, 'foodpanda.fees');
   const t = foodpandaTerms(
     { subtotalCents: order.subtotalCents, shopDiscountCents: order.discountCents, totalCents: order.totalCents },
@@ -3210,10 +3307,19 @@ export function getOrderSnapshot(
     // discount (its newest row, the one its totals are worked from) is read
     // against the STORED bill: one a till older than the rule re-worked over
     // more lines reads that way, so the invoice, the debit note and the words
-    // add up to what was stored.
+    // add up to what was stored. Read by the row's own terms first (its type
+    // and value, the deal's or the offer's frozen terms: the amount each
+    // scope gives), then the tax — one tax rate can't tell the splits apart.
     const frozen = discountRuleScope(d.rule_json);
     const { alsoOffDeliveryCharge, skipsNoDiscountLines } =
-      i === discountRows.length - 1 ? storedDiscountScope(frozen, items, order.discountCents, order.taxCents) : frozen;
+      i === discountRows.length - 1
+        ? storedDiscountScope(frozen, items, order.discountCents, order.taxCents, {
+            discountType: d.discount_type,
+            value: d.value,
+            source: d.source,
+            ruleJson: d.rule_json,
+          })
+        : frozen;
     // The foodpanda deal's figures on this order, from its frozen terms and
     // the lines it was worked on (the food, when it left the delivery charge
     // alone; else the stored subtotal): the whole deal, and foodpanda's part

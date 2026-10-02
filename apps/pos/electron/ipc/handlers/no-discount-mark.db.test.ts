@@ -8,6 +8,9 @@
  *   - only the owner (settings.manage) changes what a category does; a
  *     manager is refused in plain words and nothing is written, but may
  *     rename it, recolour it, or send the answer it already has;
+ *   - the same for moving an item to a category that answers differently
+ *     (a deal in with the pizzas): the owner's; a move between categories
+ *     that answer alike is a manager's;
  *   - each change is the repositories': the row, its sync image and an audit
  *     row; a rename never changes discounts (Value Deals → Bundles stays
  *     never discounted, now set);
@@ -312,6 +315,55 @@ live('a rename never changes discounts', () => {
     h.session = MANAGER;
     await data('menu:updateCategory', { id: menu.deals, name: 'Test Deal of the Day' });
     expect(categoryRow(menu.deals)).toMatchObject({ name: 'Test Deal of the Day', no_discount: 0 });
+  });
+});
+
+live('moving an item to another category (Menu → Items) that answers differently is the owner’s too', () => {
+  const itemId = (name: string) => String((db.prepare(`SELECT id FROM menu_items WHERE name = ?`).get(name) as { id: string }).id);
+  const itemRow = (id: string) => db.prepare(`SELECT category_id, name, version FROM menu_items WHERE id = ?`).get(id);
+
+  it('a manager moving a value deal in with the pizzas, a pizza in with the deals, or a deal into a new category named otherwise: refused with the exact words, nothing written', async () => {
+    h.session = MANAGER;
+    // A new category is a manager's to make: by its name it takes discounts.
+    const bundles = await data<Category>('menu:createCategory', { name: 'Test Bundles', displayOrder: 5, colorHex: '#123456' });
+    expect(categoryNeverDiscounted(bundles)).toBe(false);
+    const deal = itemId('Test Big Deal');
+    const pizza = itemId('Test Pizza');
+    const before = { deal: itemRow(deal), pizza: itemRow(pizza), ...ledgers() };
+    for (const payload of [
+      { id: deal, categoryId: menu.food },
+      { id: deal, categoryId: bundles.id, name: 'Test Big Deal for Two' },
+      { id: pizza, categoryId: menu.deals },
+    ]) {
+      expect({ payload, o: await call('menu:updateItem', payload) }).toEqual({
+        payload,
+        o: { ok: false, code: 'forbidden', message: OWNER_ONLY },
+      });
+    }
+    expect({ deal: itemRow(deal), pizza: itemRow(pizza), ...ledgers() }).toEqual(before);
+  });
+
+  it('a manager may move an item between categories that answer alike, or edit it in its own category; the owner may move it anywhere', async () => {
+    h.session = MANAGER;
+    const deal = itemId('Test Big Deal');
+    const pizza = itemId('Test Pizza');
+    // Food → drinks: both take discounts.
+    await data('menu:updateItem', { id: pizza, categoryId: menu.drinks });
+    expect(itemRow(pizza)).toMatchObject({ category_id: menu.drinks });
+    // Its own category sent back with a new name (the editor sends the category every time).
+    await data('menu:updateItem', { id: deal, categoryId: menu.deals, name: 'Test Big Deal for Two' });
+    expect(itemRow(deal)).toMatchObject({ category_id: menu.deals, name: 'Test Big Deal for Two' });
+    // The owner marks drinks never discounted: a deal may then go there, a pizza may not.
+    h.session = OWNER;
+    await data('menu:updateCategory', { id: menu.drinks, noDiscount: true });
+    h.session = MANAGER;
+    expect(await call('menu:updateItem', { id: pizza, categoryId: menu.food })).toEqual({ ok: false, code: 'forbidden', message: OWNER_ONLY });
+    await data('menu:updateItem', { id: deal, categoryId: menu.drinks });
+    expect(itemRow(deal)).toMatchObject({ category_id: menu.drinks });
+    // The owner moves the deal in with the pizzas: done.
+    h.session = OWNER;
+    await data('menu:updateItem', { id: deal, categoryId: menu.food });
+    expect(itemRow(deal)).toMatchObject({ category_id: menu.food });
   });
 });
 

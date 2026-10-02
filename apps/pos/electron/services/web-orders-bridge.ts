@@ -185,6 +185,13 @@ const SETTINGS_CONFIRMED_KEY = 'webBridge.settingsConfirmed';
  * the owner's Publish. Survives a restart, so a restart does not push the menu again either.
  */
 const SETTINGS_NOTE_KEY = 'webBridge.settingsNote';
+/**
+ * The publish found the website older than v0.7.34 (OLDER_WEBSITE_KEEPS_DEALS): it dropped the
+ * value-deals mark. Its own key, not tied to the settings block's stamp: a till that never saved the
+ * website settings says it too, and it never hides a refusal of the block (both are said). Cleared by
+ * a Publish whose website keeps the mark, or whose menu marks nothing.
+ */
+const DEALS_NOTE_KEY = 'webBridge.dealsNote';
 /** Settings → Online orders, when the website is older than the settings block (no /api/bridge/settings, or it dropped the block). */
 const UNSUPPORTED_WEBSITE =
   'The website doesn’t take the delivery areas yet — it needs its update; then save the delivery areas again (Publish also works, and sends the menu too).';
@@ -743,8 +750,24 @@ class WebOrdersBridge {
     this.menuTimer.unref?.();
   }
 
-  /** Where this till's settings stand with the website, for Settings → Online orders. */
+  /**
+   * Where this till's settings stand with the website, for Settings → Online orders: the settings
+   * block's own status (settingsBlockStatus), and — whatever it is, a till that never saved the
+   * website settings too — that the website still takes its pick-up % off value deals
+   * (DEALS_NOTE_KEY). A refusal of the block stays said, with the deals sentence after it; any
+   * other status gives way to the deals note, as before.
+   */
   private settingsPublishStatus(ready: boolean): SettingsPublishStatus {
+    const status = this.settingsBlockStatus(ready);
+    if (!this.keepsDealsNoted()) return status;
+    if (status.state === 'refused') {
+      return { ...status, message: status.message ? `${status.message} ${OLDER_WEBSITE_KEEPS_DEALS}` : OLDER_WEBSITE_KEEPS_DEALS };
+    }
+    return { state: 'unsupported', at: status.at, message: OLDER_WEBSITE_KEEPS_DEALS };
+  }
+
+  /** Where this till's settings block stands with the website. */
+  private settingsBlockStatus(ready: boolean): SettingsPublishStatus {
     if (!this.db) return { state: 'none', at: null, message: null };
     const local = localSettingsStamp(this.db);
     const known = this.websiteHeld();
@@ -2261,10 +2284,10 @@ class WebOrdersBridge {
         data?.websiteMessages !== true && carriesWebsiteMessages(sentBlock ? sb.block : null, menu);
       if (olderWebsite) this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_DROPS);
       // …and one older than v0.7.34 dropped the items no discount comes off: its pick-up % still
-      // comes off value deals. Said last, over the note above: the same update and Publish fix both.
-      if (data?.noDiscountItems !== true && carriesNoDiscount(menu)) {
-        this.noteSettings(sb.stamp, 'unsupported', OLDER_WEBSITE_KEEPS_DEALS);
-      }
+      // comes off value deals. Noted under its own key (DEALS_NOTE_KEY), whatever the settings
+      // block: Settings says it over the note above (the same update and Publish fix both), and
+      // after a refusal of the block. A website that keeps the mark, or a menu with none, clears it.
+      this.noteKeepsDeals(data?.noDiscountItems !== true && carriesNoDiscount(menu));
 
       log.info('Menu published to website', {
         categories: menu.categories.length,
@@ -2538,6 +2561,22 @@ class WebOrdersBridge {
 
   private clearSettingsNote(): void {
     if (this.db && getSettingRaw(this.db, SETTINGS_NOTE_KEY) !== null) deleteSetting(this.db, SETTINGS_NOTE_KEY);
+  }
+
+  /** Note (or clear) that the website dropped the value-deals mark (DEALS_NOTE_KEY). */
+  private noteKeepsDeals(keeps: boolean): void {
+    if (!this.db) return;
+    if (keeps) {
+      setSetting(this.db, DEALS_NOTE_KEY, { at: nowIso() });
+      log.warn('The website is older than this till: it still takes the pick-up discount off value deals');
+    } else if (getSettingRaw(this.db, DEALS_NOTE_KEY) !== null) {
+      deleteSetting(this.db, DEALS_NOTE_KEY);
+    }
+  }
+
+  /** Did the last Publish find the website dropping the value-deals mark? */
+  private keepsDealsNoted(): boolean {
+    return !!this.db && getSettingRaw(this.db, DEALS_NOTE_KEY) !== null;
   }
 }
 

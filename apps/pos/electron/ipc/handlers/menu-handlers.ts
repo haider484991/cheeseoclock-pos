@@ -9,9 +9,11 @@ import {
   createCategory,
   updateCategory,
   deleteCategory,
+  categoryIdNeverDiscounted,
 } from '../../db/repositories/category-repo.js';
 import {
   listMenuItems,
+  findMenuItem,
   createMenuItem,
   updateMenuItem,
   deleteMenuItem,
@@ -95,7 +97,29 @@ function checkNoDiscount(payload: { noDiscount?: unknown }, now: boolean | undef
     throw new IpcGuardError({ code: 'validation_failed', message: 'Say whether its items are never discounted: yes or no' });
   }
   if (now !== undefined && v !== now) {
-    requireCapability('settings.manage', 'Only the owner can change which items are never discounted.');
+    requireCapability('settings.manage', NEVER_DISCOUNTED_OWNER_ONLY);
+  }
+}
+
+/** The refusal when a manager changes which items are never discounted (a category's box, or an item moved across). */
+const NEVER_DISCOUNTED_OWNER_ONLY = 'Only the owner can change which items are never discounted.';
+
+/**
+ * Moving an item to another category (Menu → Items, `categoryId`) changes
+ * whether it is never discounted when the two categories answer
+ * differently (a value deal moved in with the pizzas, or a pizza moved in
+ * with the deals): the owner's alone (settings.manage), as the category's
+ * own box is — a manager may edit the menu, but must not put the discounts
+ * back on the value deals. A move between two categories that answer the
+ * same, or no move, needs no one more. A new item has no answer yet to
+ * change: it takes its category's, like any item added to it.
+ */
+function checkItemMove(ctx: HandlerContext, payload: { id: string; categoryId?: unknown }): void {
+  if (typeof payload.categoryId !== 'string') return;
+  const item = findMenuItem(ctx.db, payload.id);
+  if (!item || item.categoryId === payload.categoryId) return;
+  if (categoryIdNeverDiscounted(ctx.db, item.categoryId) !== categoryIdNeverDiscounted(ctx.db, payload.categoryId)) {
+    requireCapability('settings.manage', NEVER_DISCOUNTED_OWNER_ONLY);
   }
 }
 
@@ -194,6 +218,7 @@ export function registerMenuHandlers(ctx: HandlerContext): void {
   defineHandler('menu:updateItem', ctx, (_ctx, payload) => {
     const s = requireMenuManage();
     checkWebsiteFields(payload);
+    checkItemMove(ctx, payload);
     refuseIf(menuItemEditProblem(ctx.db, payload.id, payload));
     const out = updateMenuItem(ctx.db, payload, { userId: s.id, deviceId: ctx.deviceId });
     menuChanged();

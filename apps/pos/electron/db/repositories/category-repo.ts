@@ -40,6 +40,19 @@ export function noDiscountOf(raw: unknown): boolean | null {
   return raw === 1 ? true : raw === 0 ? false : null;
 }
 
+/**
+ * Whether no discount comes off the items of this category, as a new order
+ * line reads it (order-repo addOrderItem: categoryNeverDiscounted on the
+ * item's category row, a deleted one too; no row = discounted). Menu's
+ * owner-only check on moving an item between categories asks it.
+ */
+export function categoryIdNeverDiscounted(db: AppDatabase, categoryId: string): boolean {
+  const row = db.prepare(`SELECT name, no_discount FROM categories WHERE id = ?`).get(categoryId) as
+    | { name: string; no_discount: unknown }
+    | undefined;
+  return categoryNeverDiscounted({ name: row?.name ?? '', noDiscount: noDiscountOf(row?.no_discount) });
+}
+
 export function listCategories(db: AppDatabase, opts?: { activeOnly?: boolean }): Category[] {
   const where = opts?.activeOnly
     ? 'WHERE deleted_at IS NULL AND is_active = 1'

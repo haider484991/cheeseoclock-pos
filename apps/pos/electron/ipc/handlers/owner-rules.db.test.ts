@@ -631,8 +631,10 @@ describe.skipIf(!Sqlite)('one approval rule in all three places', () => {
     }
     const rule = calls.filter((c) => c.fn === 'requiresManagerApproval');
     // The IPC check, the repository's save and cart re-check, the F3 screen's preview, and the
-    // locks Settings → Money & discounts shows on its example buttons.
+    // locks Settings → Money & discounts shows on its example buttons — and (v0.7.34) the
+    // repository's check of a rupee amount when an order stops being foodpanda.
     expect(rule.map((c) => c.file).sort()).toEqual([
+      'electron/db/repositories/order-repo.ts',
       'electron/db/repositories/order-repo.ts',
       'electron/db/repositories/order-repo.ts',
       'electron/ipc/handlers/orders-handlers.ts',
@@ -641,7 +643,11 @@ describe.skipIf(!Sqlite)('one approval rule in all three places', () => {
       'src/features/settings/shop-rules/discountRules.ts',
     ]);
     for (const c of rule) expect({ ...c, limitPassed: c.args.length === 3 }).toMatchObject({ limitPassed: true });
-    expect(rule.filter((c) => c.file.startsWith('electron/db')).map((c) => c.args[2])).toEqual(['readApprovalLimits(db)', 'readApprovalLimits(db)']);
+    expect(rule.filter((c) => c.file.startsWith('electron/db')).map((c) => c.args[2])).toEqual([
+      'readApprovalLimits(db)',
+      'readApprovalLimits(db)',
+      'readApprovalLimits(db)',
+    ]);
     // The screen's previews all carry the limit from checkout:getRules — and (v0.7.34) the order's
     // mode, so the lock is checked on the food without the value deals, as the main process does.
     const previews = calls.filter((c) => c.fn === 'previewDiscount');

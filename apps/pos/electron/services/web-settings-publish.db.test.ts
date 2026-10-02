@@ -17,7 +17,8 @@
  *     without the block, and Settings says why;
  *   - "Publish the menu by itself" (off by default) sends it 5 s after a change;
  *   - a website older than v0.7.34 that drops the value-deals mark: Settings
- *     says it needs its update.
+ *     says it needs its update — on a till that never saved the website
+ *     settings too, and next to a refusal of the block, never over it.
  *
  * A real database built from every migration (node:sqlite; skipped where it
  * is missing), the real repositories and the real bridge, with `fetch`
@@ -913,6 +914,62 @@ live('a website older than the tills (its deploy failed or was rolled back): the
     };
     await bridge().publishMenu();
     expect(publishStatus()).toMatchObject({ state: 'published' });
+  });
+
+  /** Value Deals with Big Two on today's menu: a never-discounted item for the publish to mark. */
+  async function addValueDeals(db: Db): Promise<{ dealsCategoryId: string; bigTwo: string }> {
+    const { createCategory } = await import('../db/repositories/category-repo.js');
+    const tax = String((db.prepare(`SELECT id FROM tax_categories WHERE deleted_at IS NULL`).get() as Row)['id']);
+    const deals = createCategory(db as AppDatabase, { name: 'Value Deals', displayOrder: 3, colorHex: '#aa0055' }, OWNER);
+    const bigTwo = menuRepo.createMenuItem(db as AppDatabase, { categoryId: deals.id, name: 'Big Two', basePriceCents: 360_000, taxCategoryId: tax }, OWNER).id;
+    return { dealsCategoryId: deals.id, bigTwo };
+  }
+  /** A website of v0.7.34: it says it keeps the value-deals mark. */
+  const keepsDealsAnswer = (body: Row) => {
+    const a = storedAnswer(body);
+    return { status: a.status, json: { ok: true, data: { ...(a.json as { data: Row }).data, noDiscountItems: true } } };
+  };
+
+  it('a till that never saved the website settings: a Publish with value deals to a website older than v0.7.34 says so all the same; a menu marking nothing, or an updated website, clears it', async () => {
+    const db = await till();
+    const { dealsCategoryId } = await addValueDeals(db);
+    await bridge().publishMenu();
+    // No settings saved: the menu goes as before, with no block — and the note still shows.
+    expect(menus()[0]).not.toHaveProperty('settings');
+    expect(publishStatus()).toMatchObject({ state: 'unsupported', message: bridgeMod.OLDER_WEBSITE_KEEPS_DEALS });
+    // The owner lets discounts come off Value Deals: the menu marks nothing, so the older website agrees with the till.
+    const { updateCategory } = await import('../db/repositories/category-repo.js');
+    updateCategory(db as AppDatabase, { id: dealsCategoryId, noDiscount: false }, OWNER);
+    await bridge().publishMenu();
+    expect(publishStatus()).toMatchObject({ state: 'none', message: null });
+    // Marked again, still the older website: said again; the website updated and Publish pressed: cleared.
+    updateCategory(db as AppDatabase, { id: dealsCategoryId, noDiscount: true }, OWNER);
+    await bridge().publishMenu();
+    expect(publishStatus()).toMatchObject({ state: 'unsupported', message: bridgeMod.OLDER_WEBSITE_KEEPS_DEALS });
+    answerMenu = keepsDealsAnswer;
+    await bridge().publishMenu();
+    expect(publishStatus()).toMatchObject({ state: 'none', message: null });
+  });
+
+  it('a block the till refuses (a fee item an older till hid) stays said next to the value-deals note — neither hides the other', async () => {
+    const db = await till();
+    zonesRepo.saveDeliveryZones(db as AppDatabase, { zones: zones() }, OWNER);
+    db.prepare(`UPDATE menu_items SET is_active = 0 WHERE id = ?`).run(items.d250);
+    await addValueDeals(db);
+    await bridge().publishMenu();
+    expect(menus()).toHaveLength(1);
+    expect(menus()[0]).not.toHaveProperty('settings');
+    const both = publishStatus();
+    expect(both.state).toBe('refused');
+    expect(both.message).toMatch(/DHA Phase 8|Emaar|Creek|Clifton/);
+    expect(both.message?.endsWith(` ${bridgeMod.OLDER_WEBSITE_KEEPS_DEALS}`)).toBe(true);
+    // The website updated: only the refusal is left to put right.
+    answerMenu = keepsDealsAnswer;
+    await bridge().publishMenu();
+    const refusalOnly = publishStatus();
+    expect(refusalOnly.state).toBe('refused');
+    expect(refusalOnly.message).toMatch(/DHA Phase 8|Emaar|Creek|Clifton/);
+    expect(refusalOnly.message).not.toContain(bridgeMod.OLDER_WEBSITE_KEEPS_DEALS);
   });
 
   it('what only v0.7.34 keeps: an item no discount comes off (`noDiscount: true`) — nothing else', () => {

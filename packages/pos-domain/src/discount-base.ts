@@ -33,8 +33,9 @@
  * over every line.
  */
 import { isDeliveryChargeLine, type DiscountBaseRule } from '@cheeseoclock/shared-types';
-import { allocateDiscount, weightsThatCarry } from './discount.js';
-import { parseFoodpandaDealRule } from './foodpanda.js';
+import { allocateDiscount, computeDiscountCents, weightsThatCarry } from './discount.js';
+import { dealAmount, parseFoodpandaDealRule } from './foodpanda.js';
+import { offerAmount, parseOfferRule } from './offers.js';
 import { computeTax } from './tax.js';
 
 /** An order line as a discount sees it: what it came to, the name it was sold under, and its never-discounted mark. */
@@ -244,6 +245,55 @@ export function discountRuleAlsoOffDeliveryCharge(ruleJson: string | null | unde
 }
 
 /**
+ * A discount row's own terms, as stored (order_discounts): what a till works
+ * its rupees out of again at every cart change (recomputeOrderTotals). The
+ * readers after the fact pass them so the stored bill can be read by its
+ * AMOUNT (storedDiscountScope), not only by its tax: the shop has one tax
+ * rate, so the tax alone can't tell the splits apart.
+ */
+export interface StoredDiscountTerms {
+  /** order_discounts.discount_type: a % of the base, or rupees (capped at the base). */
+  discountType: 'percent' | 'flat';
+  /** order_discounts.value: the % (0-100), or the rupees in paisa. */
+  value: number;
+  /** order_discounts.source: 'foodpanda' (the deal), 'offer' (an automatic offer), else null (staff or website). */
+  source: string | null;
+  /** order_discounts.rule_json: the foodpanda deal's or the offer's frozen terms (their rupees come from these). */
+  ruleJson: string | null;
+}
+
+/**
+ * The rupees a till works out of a discount row's terms over these lines
+ * when the discount comes off the lines of `scope` — recomputeOrderTotals'
+ * maths, one scope at a time:
+ *  - the foodpanda deal: its frozen terms on the base (dealAmount, the
+ *    shop's part);
+ *  - an automatic offer: its frozen terms on the base, its minimum measured
+ *    on the food (without the value deals when the scope skips them); one
+ *    the cashier took off is Rs 0;
+ *  - a staff or website discount, or a rule this version can't read: its %
+ *    of the base, or its rupees capped at the base (computeDiscountCents).
+ */
+export function reworkedDiscountCents(
+  terms: StoredDiscountTerms,
+  lines: ReadonlyArray<DiscountLine>,
+  scope: DiscountScope,
+): number {
+  const base = discountBaseCents(lines, scope);
+  if (terms.source === 'foodpanda') {
+    const deal = parseFoodpandaDealRule(terms.ruleJson);
+    if (deal) return dealAmount(deal, base).shopCents;
+  } else if (terms.source === 'offer') {
+    const offer = parseOfferRule(terms.ruleJson);
+    if (offer) {
+      if (offer.offer.declined) return 0;
+      return offerAmount(offer.offer, base, discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: scope.skipsNoDiscountLines }));
+    }
+  }
+  return computeDiscountCents(base, { type: terms.discountType, value: terms.value }) as number;
+}
+
+/**
  * Which lines the discount on an order's STORED bill came off: the scope
  * frozen on its row (`frozen`: discountRuleScope), unless the stored figures
  * can only have been worked over more lines. Only a till older than the rule
@@ -253,26 +303,38 @@ export function discountRuleAlsoOffDeliveryCharge(ruleJson: string | null | unde
  * (0.7.33 or before) — and leaves the row's rule as it found it. That shows
  * as:
  *  - a discount more than the lines the frozen scope lets it come off (one
- *    worked on them never is), or
+ *    worked on them never is);
+ *  - a stored discount that the row's own terms (`terms`: its type and
+ *    value, the deal's or the offer's frozen terms) give over wider lines,
+ *    and not over the frozen ones (reworkedDiscountCents). It tells a 10%
+ *    re-worked over the deals (Rs 510) from one worked without them
+ *    (Rs 150) whatever the tax rates — the shop has one rate, 15%, so the
+ *    tax check below alone can't;
  *  - a stored tax that a wider split gives, and the frozen one does not
- *    (`taxCents`; absent = the first check only).
+ *    (`taxCents`; absent = not checked). It decides between scopes the
+ *    amount can't tell apart (a rupee amount is the same over any lines that
+ *    carry it), and is the only check when no `terms` are passed.
  * The scopes are tried narrowest first — as frozen; the value deals in too;
  * the delivery charge in too; every line — and two that split these lines
  * alike count once (the first): an order with no delivery charge, or no
- * value deal, can't tell them apart, so the frozen answer stands. The first
- * that carries the discount and gives the stored tax wins; else the first
+ * value deal, can't tell them apart, so the frozen answer stands. Of those
+ * that carry the discount: the first whose re-worked amount is the stored
+ * one and that gives the stored tax wins, else the first whose re-worked
+ * amount is the stored one; when none is (an older till's maths this
+ * version doesn't know), the first that gives the stored tax; else the first
  * that carries it; else every line (weightsThatCarry splits it so anyway).
  * The readers after the fact (the snapshot: the FBR sale invoice and debit
  * note, the bill's words; Reports' food cost and profit) then split it as
  * that till did, so they add up to the stored bill. Stored totals are never
  * recomputed here. `lines` in the till's order, with their tax rates for the
- * second check.
+ * tax check.
  */
 export function storedDiscountScope(
   frozen: DiscountScope,
   lines: ReadonlyArray<TaxedDiscountLine>,
   discountCents: number,
   taxCents?: number,
+  terms?: StoredDiscountTerms | null,
 ): DiscountScope {
   if (!(discountCents > 0)) return frozen;
   const candidates: DiscountScope[] = [];
@@ -291,35 +353,42 @@ export function storedDiscountScope(
     splits.add(split);
     candidates.push(scope);
   }
-  const carries = (scope: DiscountScope): boolean => discountCents <= discountBaseCents(lines, scope);
-  const withTax = candidates.find(
-    (scope) => carries(scope) && (taxCents === undefined || taxAfterDiscount(lines, discountCents, scope).taxCents === taxCents),
-  );
-  if (withTax) return withTax;
-  return candidates.find(carries) ?? candidates[candidates.length - 1] ?? everyLine();
+  const carrying = candidates.filter((scope) => discountCents <= discountBaseCents(lines, scope));
+  const givesTax = (scope: DiscountScope): boolean =>
+    taxCents === undefined || taxAfterDiscount(lines, discountCents, scope).taxCents === taxCents;
+  if (terms) {
+    const reworked = carrying.filter((scope) => reworkedDiscountCents(terms, lines, scope) === discountCents);
+    const byAmount = reworked.find(givesTax) ?? reworked[0];
+    if (byAmount) return byAmount;
+  }
+  return carrying.find(givesTax) ?? carrying[0] ?? candidates[candidates.length - 1] ?? everyLine();
 }
 
 /**
  * Did the discount on an order's STORED bill also come off its delivery
  * charge? storedDiscountScope's answer for a rule that does not skip value
  * deals (the delivery-charge readers since 0.7.26: the foodpanda deal's
- * base, Reports' foodpanda money), the same answer, case for case, as
- * before 0.7.34.
+ * base, Reports' foodpanda money). Without `terms`, the same answer, case
+ * for case, as before 0.7.34; with the row's terms the stored amount
+ * decides first (storedDiscountScope), so one tax rate on the food and the
+ * charge no longer hides an older till's re-work over every line.
  */
 export function storedDiscountAlsoOffDeliveryCharge(
   frozen: boolean,
   lines: ReadonlyArray<TaxedDiscountLine>,
   discountCents: number,
   taxCents?: number,
+  terms?: StoredDiscountTerms | null,
 ): boolean {
-  return storedDiscountScope({ alsoOffDeliveryCharge: frozen, skipsNoDiscountLines: false }, lines, discountCents, taxCents)
+  return storedDiscountScope({ alsoOffDeliveryCharge: frozen, skipsNoDiscountLines: false }, lines, discountCents, taxCents, terms)
     .alsoOffDeliveryCharge;
 }
 
 /**
  * Reports' readers of an order's lines (food cost, profit): which lines took
  * none of its discount — the rule frozen on the discount row (`ruleJson`,
- * null = none), read against the stored bill (storedDiscountScope).
+ * null = none), read against the stored bill (storedDiscountScope, by the
+ * row's `terms` — its type, value and source — when the reader has them).
  * `lines` in the till's order, with the names they were sold under, their
  * never-discounted marks and their tax rates.
  */
@@ -328,6 +397,8 @@ export function storedDiscountSkips(
   lines: ReadonlyArray<TaxedDiscountLine>,
   discountCents: number,
   taxCents: number,
+  terms?: Omit<StoredDiscountTerms, 'ruleJson'> | null,
 ): boolean[] {
-  return discountSkipMask(lines, storedDiscountScope(discountRuleScope(ruleJson), lines, discountCents, taxCents));
+  const rowTerms = terms ? { ...terms, ruleJson: ruleJson ?? null } : null;
+  return discountSkipMask(lines, storedDiscountScope(discountRuleScope(ruleJson), lines, discountCents, taxCents, rowTerms));
 }

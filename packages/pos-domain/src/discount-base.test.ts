@@ -9,6 +9,7 @@ import {
   discountWeights,
   lineTakesDiscount,
   parseDiscountBaseRule,
+  reworkedDiscountCents,
   splitDiscount,
   splitDiscountByMask,
   storedDiscountAlsoOffDeliveryCharge,
@@ -518,6 +519,9 @@ describe('storedDiscountScope: the stored bill against the frozen rule', () => {
         const { taxCents } = taxAfterDiscount(lines, discountCents, FOOD_NO_DEALS);
         expect({ d, scope: storedDiscountScope(FOOD_NO_DEALS, lines, discountCents, taxCents) }).toEqual({ d, scope: FOOD_NO_DEALS });
         expect(storedDiscountSkips(JSON.stringify(tillDiscountRule(false, true)), lines, discountCents, taxCents)).toEqual([false, true, true]);
+        // …and by its own terms too.
+        const terms = { discountType: d.type, value: d.value, source: null, ruleJson: JSON.stringify(tillDiscountRule(false, true)) };
+        expect({ d, scope: storedDiscountScope(FOOD_NO_DEALS, lines, discountCents, taxCents, terms) }).toEqual({ d, scope: FOOD_NO_DEALS });
       }
     }
   });
@@ -547,6 +551,106 @@ describe('storedDiscountScope: the stored bill against the frozen rule', () => {
     expect(storedDiscountScope(FOOD_NO_DEALS, lines, discountCents, taxCents)).toEqual(FOOD_ONLY);
     // Without the tax to go by, the frozen rule stands (Rs 510 is under the pizza).
     expect(storedDiscountScope(FOOD_NO_DEALS, lines, discountCents)).toEqual(FOOD_NO_DEALS);
+  });
+
+  /** A till discount's own terms as stored (order_discounts): 10% off. */
+  const TEN_PERCENT = { discountType: 'percent' as const, value: 10, source: null };
+  const skipsJson = JSON.stringify(tillDiscountRule(false, true));
+
+  it('one tax rate on every line (the shop’s 15%): a 0.7.33 re-work over the deal is told by its amount, not its tax', () => {
+    for (const rateBps of [1500, 0, 1600]) {
+      const pizza = { ...PIZZA_15, taxRateBps: rateBps };
+      const deal = { ...DEAL, taxRateBps: rateBps };
+      const charge = { ...CHARGE_15, taxRateBps: rateBps };
+      for (const lines of [[pizza, deal], [pizza, deal, charge]] as TaxedDiscountLine[][]) {
+        // The 0.7.33 till: 10% over the pizza and the deal (Rs 510), the row's rule left saying "not on value deals".
+        const reworked = computeDiscountCents(discountBaseCents(lines, FOOD_ONLY), { type: 'percent', value: 10 }) as number;
+        const { taxCents } = taxAfterDiscount(lines, reworked, FOOD_ONLY);
+        expect(reworked).toBe(51_000);
+        // The tax can't tell: both splits give the same tax at one rate.
+        expect(taxAfterDiscount(lines, reworked, FOOD_NO_DEALS).taxCents).toBe(taxCents);
+        expect({ rateBps, n: lines.length, scope: storedDiscountScope(FOOD_NO_DEALS, lines, reworked, taxCents) }).toEqual({ rateBps, n: lines.length, scope: FOOD_NO_DEALS });
+        // The row's terms can: 10% of the pizza alone is Rs 150, not Rs 510.
+        const terms = { ...TEN_PERCENT, ruleJson: skipsJson };
+        expect(storedDiscountScope(FOOD_NO_DEALS, lines, reworked, taxCents, terms)).toEqual(FOOD_ONLY);
+        expect(storedDiscountScope(FOOD_NO_DEALS, lines, reworked, undefined, terms)).toEqual(FOOD_ONLY);
+        expect(storedDiscountSkips(skipsJson, lines, reworked, taxCents, TEN_PERCENT)).toEqual(lines.map((l) => isDeliveryChargeLine(l)));
+        expect(splitDiscount(lines, reworked, FOOD_ONLY).slice(0, 2)).toEqual([15_000, 36_000]);
+        // What this version stores (Rs 150 off the pizza) still reads by its frozen scope.
+        const own = computeDiscountCents(discountBaseCents(lines, FOOD_NO_DEALS), { type: 'percent', value: 10 }) as number;
+        const ownTax = taxAfterDiscount(lines, own, FOOD_NO_DEALS).taxCents;
+        expect(own).toBe(15_000);
+        expect(storedDiscountScope(FOOD_NO_DEALS, lines, own, ownTax, terms)).toEqual(FOOD_NO_DEALS);
+        expect(storedDiscountSkips(skipsJson, lines, own, ownTax, TEN_PERCENT)).toEqual(lines.map((l) => l.noDiscount === true || isDeliveryChargeLine(l)));
+      }
+    }
+  });
+
+  it('a rupee amount is the same over any lines that carry it: the tax decides, else the frozen scope stands (the stored totals are the same either way)', () => {
+    const lines = [PIZZA_15, DEAL];
+    const flat = { discountType: 'flat' as const, value: 10_000, source: null, ruleJson: skipsJson };
+    const { taxCents } = taxAfterDiscount(lines, 10_000, FOOD_ONLY);
+    expect(taxAfterDiscount(lines, 10_000, FOOD_NO_DEALS).taxCents).toBe(taxCents);
+    expect(storedDiscountScope(FOOD_NO_DEALS, lines, 10_000, taxCents, flat)).toEqual(FOOD_NO_DEALS);
+    // Rs 2,000 is capped at the Rs 1,500 of pizza here; an older till's Rs 2,000 is more than the pizza carries.
+    const big = { ...flat, value: 200_000 };
+    expect(storedDiscountScope(FOOD_NO_DEALS, lines, 150_000, taxAfterDiscount(lines, 150_000, FOOD_NO_DEALS).taxCents, big)).toEqual(FOOD_NO_DEALS);
+    expect(storedDiscountScope(FOOD_NO_DEALS, lines, 200_000, taxAfterDiscount(lines, 200_000, FOOD_ONLY).taxCents, big)).toEqual(FOOD_ONLY);
+  });
+
+  it('an automatic offer and the foodpanda deal are re-worked from their own frozen terms', () => {
+    const terms = {
+      v: 1 as const,
+      id: 'test-offer',
+      name: 'Test offer 10% off',
+      type: 'percent' as const,
+      value: 10,
+      minOrderCents: null,
+      maxOffCents: null,
+      cameBy: 'any' as const,
+      orderTypes: ['takeaway' as const, 'delivery' as const],
+      oncePerCustomerPerDay: false,
+      settingsAt: null,
+    };
+    const offerJson = JSON.stringify({ kind: 'discount_base', v: 1, alsoOffDeliveryCharge: false, from: 'till', skipsNoDiscountLines: true, offer: terms });
+    const offer = { discountType: 'percent' as const, value: 10, source: 'offer', ruleJson: offerJson };
+    const lines = [PIZZA_15, DEAL, CHARGE_15];
+    // A 0.7.33 till re-works the offer over the deal too: Rs 510.
+    expect(storedDiscountScope(FOOD_NO_DEALS, lines, 51_000, taxAfterDiscount(lines, 51_000, FOOD_ONLY).taxCents, offer)).toEqual(FOOD_ONLY);
+    expect(storedDiscountScope(FOOD_NO_DEALS, lines, 15_000, taxAfterDiscount(lines, 15_000, FOOD_NO_DEALS).taxCents, offer)).toEqual(FOOD_NO_DEALS);
+    // Its minimum is measured on the food the scope leaves: "from Rs 2,000" is not reached on Rs 1,500 of pizza.
+    const fromTwoThousand = { ...offer, ruleJson: JSON.stringify({ ...JSON.parse(offerJson), offer: { ...terms, minOrderCents: 200_000 } }) };
+    expect(reworkedDiscountCents(fromTwoThousand, lines, FOOD_NO_DEALS)).toBe(0);
+    expect(reworkedDiscountCents(fromTwoThousand, lines, FOOD_ONLY)).toBe(51_000);
+    // Taken off by the cashier: Rs 0 under any scope.
+    const declined = { ...offer, discountType: 'flat' as const, value: 0, ruleJson: JSON.stringify({ ...JSON.parse(offerJson), offer: { ...terms, declined: true } }) };
+    expect(reworkedDiscountCents(declined, lines, EVERY_LINE)).toBe(0);
+
+    // The foodpanda deal (20%, food only) a 0.7.25 till re-worked over every line, the charge at the food's 15%.
+    const deal = { v: 1, percent: 20, shopPercent: 20, minOrderCents: null, maxOffCents: null, startsOn: null, endsOn: null };
+    const dealJson = JSON.stringify(foodpandaDealRule(deal, null, 0, false));
+    const dealTerms = { discountType: 'percent' as const, value: 20, source: 'foodpanda', ruleJson: dealJson };
+    const pizzaAndCharge = [PIZZA_15, CHARGE_15];
+    const overEvery = dealAmount(parseFoodpandaDealRule(dealJson)!, discountBaseCents(pizzaAndCharge, EVERY_LINE)).shopCents;
+    const tax = taxAfterDiscount(pizzaAndCharge, overEvery, EVERY_LINE).taxCents;
+    expect(overEvery).toBe(34_000);
+    expect(taxAfterDiscount(pizzaAndCharge, overEvery, FOOD_ONLY).taxCents).toBe(tax);
+    expect(storedDiscountAlsoOffDeliveryCharge(false, pizzaAndCharge, overEvery, tax)).toBe(false);
+    expect(storedDiscountAlsoOffDeliveryCharge(false, pizzaAndCharge, overEvery, tax, dealTerms)).toBe(true);
+    // The deal as this version works it (on the food): read as frozen.
+    expect(storedDiscountAlsoOffDeliveryCharge(false, pizzaAndCharge, 30_000, taxAfterDiscount(pizzaAndCharge, 30_000, FOOD_ONLY).taxCents, dealTerms)).toBe(false);
+  });
+
+  it('reworkedDiscountCents: recomputeOrderTotals’ maths for each kind of row, one scope at a time', () => {
+    expect(reworkedDiscountCents({ ...TEN_PERCENT, ruleJson: skipsJson }, MIXED, FOOD_NO_DEALS)).toBe(15_000);
+    expect(reworkedDiscountCents({ ...TEN_PERCENT, ruleJson: skipsJson }, MIXED, FOOD_ONLY)).toBe(51_000);
+    expect(reworkedDiscountCents({ ...TEN_PERCENT, ruleJson: skipsJson }, MIXED, EVERY_LINE)).toBe(53_000);
+    // Rupees: capped at the base.
+    expect(reworkedDiscountCents({ discountType: 'flat', value: 300_000, source: null, ruleJson: null }, MIXED, FOOD_NO_DEALS)).toBe(150_000);
+    expect(reworkedDiscountCents({ discountType: 'flat', value: 300_000, source: null, ruleJson: null }, MIXED, FOOD_ONLY)).toBe(300_000);
+    // A deal or offer row whose rule this version can't read: its type and value on the base.
+    expect(reworkedDiscountCents({ discountType: 'percent', value: 10, source: 'foodpanda', ruleJson: 'not json' }, MIXED, FOOD_ONLY)).toBe(51_000);
+    expect(reworkedDiscountCents({ discountType: 'percent', value: 10, source: 'offer', ruleJson: '{}' }, MIXED, FOOD_NO_DEALS)).toBe(15_000);
   });
 
   it('no deal on the order, or no discount: the frozen scope stands', () => {
