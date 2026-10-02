@@ -642,10 +642,13 @@ describe.skipIf(!Sqlite)('one approval rule in all three places', () => {
     ]);
     for (const c of rule) expect({ ...c, limitPassed: c.args.length === 3 }).toMatchObject({ limitPassed: true });
     expect(rule.filter((c) => c.file.startsWith('electron/db')).map((c) => c.args[2])).toEqual(['readApprovalLimits(db)', 'readApprovalLimits(db)']);
-    // The screen's previews all carry the limit from checkout:getRules.
+    // The screen's previews all carry the limit from checkout:getRules — and (v0.7.34) the order's
+    // mode, so the lock is checked on the food without the value deals, as the main process does.
     const previews = calls.filter((c) => c.fn === 'previewDiscount');
     expect(previews.length).toBeGreaterThan(0);
-    for (const c of previews) expect({ ...c, limitPassed: c.args.length === 4 }).toMatchObject({ limitPassed: true });
+    for (const c of previews) {
+      expect({ ...c, limitPassed: c.args.length === 5 && c.args[3] === 'rules' && c.args[4] === 'mode' }).toMatchObject({ limitPassed: true });
+    }
   });
 });
 

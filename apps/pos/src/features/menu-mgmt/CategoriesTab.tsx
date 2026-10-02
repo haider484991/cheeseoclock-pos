@@ -6,15 +6,24 @@ import { ipc, IpcError } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import {
   FEE_ITEM_LOCKED_NOTE,
+  categoryNeverDiscounted,
   chargedFeeItemIds,
   deliveryZoneFeeItemIds,
   isDeliveryChargeMenuItem,
   type Category,
+  type IpcRequest,
 } from '@cheeseoclock/shared-types';
 import { useDeliveryAreas } from '../settings/shop-rules/useShopSetting';
 import { Plus, Edit, Trash2, X, Globe } from 'lucide-react';
 import { askConfirm } from '../../components/confirm/ConfirmHost';
-import { CATEGORY_WEBSITE_WORDS, WEBSITE_CHANGE_NOTE, categoryWebsiteState } from '../settings/shop-rules/publishWords';
+import { useSessionStore } from '../../stores/sessionStore';
+import {
+  CATEGORY_DISCOUNT_WORDS,
+  CATEGORY_WEBSITE_WORDS,
+  WEBSITE_CHANGE_NOTE,
+  categoryWebsiteState,
+  noDiscountChange,
+} from '../settings/shop-rules/publishWords';
 
 const PALETTE = [
   '#dc2626', '#f59e0b', '#16a34a', '#2563eb',
@@ -102,7 +111,15 @@ export function CategoriesTab() {
               <td className="py-2">
                 <span className="inline-block h-5 w-8 rounded" style={{ background: c.colorHex }} />
               </td>
-              <td className="py-2 font-medium">{c.name}</td>
+              <td className="py-2 font-medium">
+                {c.name}
+                {/* The owner's "Never discounted" (Value Deals by its name, until he changes it). */}
+                {categoryNeverDiscounted(c) && (
+                  <span className="ml-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-normal text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                    {CATEGORY_DISCOUNT_WORDS.badge}
+                  </span>
+                )}
+              </td>
               <td className="py-2 text-right font-mono">
                 {itemCounts.get(c.id)?.active ?? 0}
                 {(itemCounts.get(c.id)?.all ?? 0) > (itemCounts.get(c.id)?.active ?? 0) && (
@@ -187,7 +204,45 @@ export function CategoriesTab() {
   );
 }
 
-function CategoryDialog({
+/** What the category dialog holds when Save is pressed. */
+export interface CategoryForm {
+  name: string;
+  displayOrder: number;
+  colorHex: string;
+  isActive: boolean;
+  isOnWebsite: boolean;
+  /** The "Never discounted" box as it shows. */
+  neverDiscounted: boolean;
+}
+
+/** What Save sends for a category being edited. */
+export function categoryUpdateRequest(existing: Category, f: CategoryForm): IpcRequest<'menu:updateCategory'> {
+  return {
+    id: existing.id,
+    name: f.name,
+    displayOrder: f.displayOrder,
+    colorHex: f.colorHex,
+    isActive: f.isActive,
+    // Sent only when changed: a rename leaves the website setting as it is.
+    ...(f.isOnWebsite !== existing.isOnWebsite ? { isOnWebsite: f.isOnWebsite } : {}),
+    // Sent only when changed: a rename, or anyone's Save that leaves the box as it was, keeps
+    // what the category does (only the owner may change it).
+    ...noDiscountChange(categoryNeverDiscounted(existing), f.neverDiscounted),
+  };
+}
+
+/** What Save sends for a new category: "Never discounted" only when it says other than its name. */
+export function categoryCreateRequest(f: CategoryForm): IpcRequest<'menu:createCategory'> {
+  return {
+    name: f.name,
+    displayOrder: f.displayOrder,
+    colorHex: f.colorHex,
+    isOnWebsite: f.isOnWebsite,
+    ...noDiscountChange(categoryNeverDiscounted({ name: f.name }), f.neverDiscounted),
+  };
+}
+
+export function CategoryDialog({
   existing,
   holdsDeliveryCharges = false,
   onClose,
@@ -199,25 +254,22 @@ function CategoryDialog({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  // "Never discounted" is the owner's: anyone else sees it, the box off.
+  const canSetDiscounts = useSessionStore((s) => s.can('settings.manage'));
   const [name, setName] = useState(existing?.name ?? '');
   const [displayOrder, setDisplayOrder] = useState(existing?.displayOrder ?? 0);
   const [colorHex, setColorHex] = useState(existing?.colorHex ?? PALETTE[1]!);
   const [isActive, setIsActive] = useState(existing?.isActive ?? true);
   const [isOnWebsite, setIsOnWebsite] = useState(existing?.isOnWebsite ?? true);
+  // null = not touched: what the category does now (a new one: what the name typed says).
+  const [noDiscountPick, setNoDiscountPick] = useState<boolean | null>(null);
+  const neverDiscounted = noDiscountPick ?? (existing ? categoryNeverDiscounted(existing) : categoryNeverDiscounted({ name }));
+  const decidedByName = noDiscountPick === null && (existing?.noDiscount ?? null) === null;
+  const form: CategoryForm = { name, displayOrder, colorHex, isActive, isOnWebsite, neverDiscounted };
 
   const mut = useMutation({
     mutationFn: () =>
-      existing
-        ? ipc.menu.updateCategory({
-            id: existing.id,
-            name,
-            displayOrder,
-            colorHex,
-            isActive,
-            // Sent only when changed: a rename leaves the website setting as it is.
-            ...(isOnWebsite !== existing.isOnWebsite ? { isOnWebsite } : {}),
-          })
-        : ipc.menu.createCategory({ name, displayOrder, colorHex, isOnWebsite }),
+      existing ? ipc.menu.updateCategory(categoryUpdateRequest(existing, form)) : ipc.menu.createCategory(categoryCreateRequest(form)),
     onSuccess: () => {
       toast({ title: existing ? 'Category updated' : 'Category created', variant: 'success' });
       void qc.invalidateQueries({ queryKey: ['menu'] });
@@ -235,7 +287,7 @@ function CategoryDialog({
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[440px] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-white p-5 shadow-xl dark:bg-stone-900">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-24px)] w-[440px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl bg-white p-5 shadow-xl dark:bg-stone-900">
           <header className="mb-4 flex items-center justify-between">
             <Dialog.Title className="text-lg font-bold">
               {existing ? `Edit ${existing.name}` : 'Add category'}
@@ -295,6 +347,23 @@ function CategoryDialog({
                 Off: none of its items are on the website{holdsDeliveryCharges ? ' — the delivery charges in it still go (the website adds them to the bill)' : ''}. Each item can also be set on its own (Items → the item).{' '}
                 {WEBSITE_CHANGE_NOTE}
               </p>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">{CATEGORY_DISCOUNT_WORDS.label}</label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={neverDiscounted}
+                  disabled={!canSetDiscounts}
+                  onChange={(e) => setNoDiscountPick(e.target.checked)}
+                />
+                {CATEGORY_DISCOUNT_WORDS.box}
+              </label>
+              <p className="mt-1 text-xs text-stone-500">
+                {CATEGORY_DISCOUNT_WORDS.hint}
+                {decidedByName ? ` ${CATEGORY_DISCOUNT_WORDS.byName}` : ''} {CATEGORY_DISCOUNT_WORDS.kept} {WEBSITE_CHANGE_NOTE}
+              </p>
+              {!canSetDiscounts && <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">{CATEGORY_DISCOUNT_WORDS.ownerOnly}</p>}
             </div>
             <div>
               <label className="mb-1 block text-xs uppercase tracking-wider text-stone-500">Color</label>

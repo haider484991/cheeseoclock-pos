@@ -29,6 +29,7 @@
  * when a road crosses phases or we are not sure — the till then asks which.
  * Never guess a single zone: the zone decides the fee and where the rider goes.
  */
+import { NOT_ON_VALUE_DEALS } from './web-bridge.js';
 
 export type ZoneGroup = 'DHA' | 'Clifton';
 
@@ -360,13 +361,46 @@ export function discountLeavesDeliveryCharge(
 }
 
 /**
+ * The order's discount left its value deals alone: the discount's frozen rule
+ * says so (OrderDiscount.skipsNoDiscountLines true) and there is a line
+ * marked never discounted on the order (OrderItem.noDiscount). The bill, the
+ * cart, Pay and the order drawer then say NOT_ON_VALUE_DEALS. False for
+ * every discount given before 0.7.34, the foodpanda deal and a discount on a
+ * foodpanda order (they came off the deals too), so a reprint of an old order
+ * never changes.
+ */
+export function discountLeavesNoDiscountItems(
+  discount: { readonly skipsNoDiscountLines?: boolean } | null | undefined,
+  items: ReadonlyArray<{ readonly noDiscount?: boolean }>,
+): boolean {
+  return discount?.skipsNoDiscountLines === true && items.some((l) => l.noDiscount === true);
+}
+
+/**
+ * The words in brackets that say what a discount left alone, from its own
+ * frozen rule: [] (as every discount before the rules), ['food only'],
+ * [NOT_ON_VALUE_DEALS], or both, in that order.
+ */
+export function discountLeftAloneTags(
+  d: { readonly alsoOffDeliveryCharge?: boolean; readonly skipsNoDiscountLines?: boolean } | null | undefined,
+  items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly noDiscount?: boolean }>,
+): string[] {
+  const tags: string[] = [];
+  if (discountLeavesDeliveryCharge(d, items)) tags.push('food only');
+  if (discountLeavesNoDiscountItems(d, items)) tags.push(NOT_ON_VALUE_DEALS);
+  return tags;
+}
+
+/**
  * A discount's words on the printed bill: "Discount (Staff)", "Discount", or
  * the foodpanda deal's own label, as before, or an automatic offer's name
- * ("WhatsApp 10% off") — and, when it left the order's
- * delivery charge alone, "Discount 10% (Staff, food only)" / "Discount (food
- * only)" / "Foodpanda deal 20% off (food only)". Built from the discount's
- * frozen rule (discountLeavesDeliveryCharge), never the live setting, so a
- * DUPLICATE of an old order prints exactly what the first copy did.
+ * ("WhatsApp 10% off") — and, when it left the order's delivery charge or
+ * its value deals alone, "Discount 10% (Staff, food only)", "Discount 10%
+ * (Staff, not on value deals)", "Discount 10% (Staff, food only, not on
+ * value deals)", "Discount (Website pick-up 10% off, not on value deals)",
+ * "WhatsApp 10% off (not on value deals)". Built from the discount's frozen
+ * rule (discountLeftAloneTags), never the live setting, so a DUPLICATE of an
+ * old order prints exactly what the first copy did.
  */
 export function discountBillLabel(
   d: {
@@ -375,15 +409,20 @@ export function discountBillLabel(
     readonly reason?: string | null;
     readonly source?: string | null;
     readonly alsoOffDeliveryCharge?: boolean;
+    readonly skipsNoDiscountLines?: boolean;
   },
-  items: ReadonlyArray<{ readonly menuItemName?: string | null }>,
+  items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly noDiscount?: boolean }>,
 ): string {
-  const foodOnly = discountLeavesDeliveryCharge(d, items);
+  const tags = discountLeftAloneTags(d, items);
+  const said = tags.join(', ');
   // The foodpanda deal's label, and an automatic offer's NAME (its reason), print as themselves.
-  if ((d.source === 'foodpanda' || d.source === 'offer') && d.reason) return foodOnly ? `${d.reason} (food only)` : d.reason;
-  if (!foodOnly) return d.reason ? `Discount (${d.reason})` : 'Discount';
-  const percent = d.discountType === 'percent' ? ` ${d.value}%` : '';
-  return `Discount${percent} (${d.reason ? `${d.reason}, ` : ''}food only)`;
+  if ((d.source === 'foodpanda' || d.source === 'offer') && d.reason) return said ? `${d.reason} (${said})` : d.reason;
+  if (!said) return d.reason ? `Discount (${d.reason})` : 'Discount';
+  // The % beside "Discount", so a smaller amount than 10% of the bill reads right —
+  // unless the reason already says it ("Website pick-up 10% off").
+  const saysPercent = tags.includes(NOT_ON_VALUE_DEALS) && (d.reason ?? '').includes('%');
+  const percent = d.discountType === 'percent' && !saysPercent ? ` ${d.value}%` : '';
+  return `Discount${percent} (${d.reason ? `${d.reason}, ` : ''}${said})`;
 }
 
 /**

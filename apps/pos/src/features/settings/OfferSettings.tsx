@@ -30,7 +30,7 @@ import {
 import { askConfirm } from '../../components/confirm/ConfirmHost';
 import { SettingCard } from './shop-rules/SettingCard';
 import { useDraft } from './shop-rules/useDraft';
-import { useShopSetting } from './shop-rules/useShopSetting';
+import { useShopSetting, useValueDealsMarked } from './shop-rules/useShopSetting';
 import { sameValue } from './shop-rules/foodpandaForm';
 import {
   ALL_DAYS,
@@ -73,6 +73,8 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
   const dirty = draft.touched && (parsed.value === null || !sameValue(parsed.value, card.value));
   // The example follows "A discount also comes off the delivery charge" (its own card, below).
   const alsoOff = useShopSetting('discounts.delivery').q.data?.value.alsoOffDeliveryCharge ?? false;
+  // A category never discounted (Menu → Categories): each offer's line says it never comes off value deals.
+  const valueDealsMarked = useValueDealsMarked();
   const [open, setOpen] = useState<string | null>(null);
   const saving = s.save.isPending || s.putBack.isPending;
 
@@ -168,7 +170,7 @@ function OffersFields({ s }: { s: ReturnType<typeof useShopSetting<'discounts.of
               <div className="flex flex-wrap items-center gap-2 p-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{f.name.trim() || `Offer ${i + 1} (new)`}</div>
-                  <div className="text-xs text-stone-500">{one ? offerSummary(one) : 'Not finished yet'}</div>
+                  <div className="text-xs text-stone-500">{one ? offerSummary(one, valueDealsMarked) : 'Not finished yet'}</div>
                 </div>
                 {saved && (
                   <button

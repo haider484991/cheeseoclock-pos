@@ -10,6 +10,7 @@ import { formatCents, offerAmount } from '@cheeseoclock/pos-domain';
 import {
   CAME_BY_CHOICES,
   CAME_BY_LABEL,
+  NOT_ON_VALUE_DEALS,
   OFFER_ID_RE,
   OFFER_MAX_FLAT_CENTS,
   OFFER_MAX_ORDER_CENTS,
@@ -248,11 +249,13 @@ export function hourWords(h: ChannelOffer['hours']): string {
 /**
  * One offer in a line (its card row, History): "10% off the food ·
  * deliveries · came by WhatsApp · every day, all day · from Rs 1,500 ·
- * at most Rs 500 · once a customer a day · 1–31 Oct".
+ * at most Rs 500 · once a customer a day · 1–31 Oct". "10% off the food,
+ * not on value deals · …" while a category is never discounted
+ * (`notOnValueDeals`, Menu → Categories): an offer never comes off them.
  */
-export function offerSummary(o: ChannelOffer): string {
+export function offerSummary(o: ChannelOffer, notOnValueDeals = false): string {
   const parts: string[] = [];
-  parts.push(`${offerAmountWords(o)} the food`);
+  parts.push(`${offerAmountWords(o)} the food${notOnValueDeals ? `, ${NOT_ON_VALUE_DEALS}` : ''}`);
   parts.push(o.orderTypes.length === 2 ? 'takeaway and delivery' : o.orderTypes[0] === 'delivery' ? 'deliveries' : 'takeaways');
   parts.push(o.cameBy === 'any' ? 'any way it came in' : `came by ${cameByWords(o.cameBy)}`);
   parts.push(`${dayWords(o.days)}, ${hourWords(o.hours)}`);

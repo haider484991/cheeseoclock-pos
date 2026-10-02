@@ -14,6 +14,7 @@ import {
   type CounterDiscountRules,
   type CounterKitchenTiming,
 } from './counterRules';
+import { someCategoryNeverDiscounted } from './publishWords';
 
 /** Every shop-rule query (Settings cards, the counter's rules) is under this key. */
 export const SHOP_SETTINGS_KEY = ['shop-settings'] as const;
@@ -91,6 +92,17 @@ export function useDeliveryAreas(): DeliveryAreas {
  */
 export function useOrderReasons(): CounterOrderReasons {
   return orderReasonsOf(useCheckoutRules().data);
+}
+
+/**
+ * Whether any category is never discounted (Menu → Categories: Value Deals
+ * by its name, unless the owner changed it): the Money & discounts words say
+ * "not on value deals" while one is. The Menu tabs' own cache; false until
+ * the till has answered.
+ */
+export function useValueDealsMarked(): boolean {
+  const q = useQuery({ queryKey: ['menu', 'categories', 'all'], queryFn: () => ipc.menu.listCategories() });
+  return someCategoryNeverDiscounted(q.data);
 }
 
 /**

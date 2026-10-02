@@ -15,7 +15,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
-import { discountLeavesDeliveryCharge, isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
+import { discountLeavesDeliveryCharge, discountLeavesNoDiscountItems, isLeaveOutChoice, orderNotesOf } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
 import { paperButtonLabel } from '../printing/paperLabels';
@@ -295,6 +295,8 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                       discountLeavesDeliveryCharge(snap.discounts[snap.discounts.length - 1], snap.items),
                       // One of the owner's automatic offers: by its name, as the bill prints it.
                       snap.discounts[snap.discounts.length - 1]?.source === 'offer' ? snap.discounts[snap.discounts.length - 1]?.reason : null,
+                      // "not on value deals": its own frozen rule left the deals on this order alone.
+                      discountLeavesNoDiscountItems(snap.discounts[snap.discounts.length - 1], snap.items),
                     )}
                     v={`− ${formatCents(o.discountCents)}`}
                     tone="emerald"

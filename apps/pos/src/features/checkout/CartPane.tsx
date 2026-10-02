@@ -80,7 +80,9 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
   // One of the owner's automatic offers (Settings → Money & discounts): put on by the till itself.
   const offerOn = offerOnOrder(discount);
   const rules = useCheckoutRules();
+  const alsoOffDeliveryCharge = rules.data?.discounts.alsoOffDeliveryCharge ?? false;
   // No discount yet: an offer that would go on once the phone is saved, or from how much food.
+  // Worked, and its minimum measured, as the main process does: never on the value deals.
   const hint =
     !discount && order && order.status === 'open'
       ? offerHint(
@@ -91,13 +93,20 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
             // A Pakistani number, as the main process counts it (any text is not a phone).
             hasPhone: normalizePhone(snapshot?.customerPhone) !== null,
             createdAt: order.createdAt,
-            foodCents: discountBaseCents(items, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: false }),
-            subtotalCents,
+            foodCents: discountBaseCents(items, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true }),
+            subtotalCents: discountBaseCents(items, { alsoOffDeliveryCharge: true, skipsNoDiscountLines: true }),
           },
           rules.data?.offers,
-          rules.data?.discounts.alsoOffDeliveryCharge ?? false,
+          alsoOffDeliveryCharge,
         )
       : null;
+  // Every line a discount could come off is a value deal (never discounted, except on a foodpanda
+  // order): the till refuses one, so "Add discount" says so instead. F3 still opens the dialog.
+  const onlyValueDeals =
+    !!order &&
+    order.mode !== 'foodpanda' &&
+    items.some((i) => i.noDiscount === true) &&
+    discountBaseCents(items, { alsoOffDeliveryCharge, skipsNoDiscountLines: true }) === 0;
 
   // Cash on delivery / pay at pickup is the norm here, so "Send to kitchen"
   // leads for takeaway and delivery. Foodpanda is settled by the platform:
@@ -341,12 +350,13 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
                 <button
                   type="button"
                   className="ticket-link"
-                  disabled={items.length === 0}
+                  disabled={items.length === 0 || onlyValueDeals}
                   onClick={onDiscount}
                   title="Apply a discount (F3)"
                 >
                   <Percent className="h-3 w-3" aria-hidden="true" />
-                  Add discount
+                  {/* Said on the button itself: a tooltip never shows on a touch till. */}
+                  {onlyValueDeals ? 'No discount on value deals' : 'Add discount'}
                 </button>
               </dt>
               <dd />

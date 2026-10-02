@@ -5,7 +5,9 @@
  *  - With no extra lines (none saved, or []) every paper is byte-for-byte
  *    what the till printed before (receipt-goldens.json: 80 papers — every
  *    kind, both widths, with and without the shop's lines, FBR, DUPLICATE,
- *    late, shop copy, kitchen tickets), in any time zone.
+ *    late, shop copy, kitchen tickets — and 16 added with v0.7.34's value
+ *    deals: a discount that left them alone, and one at Rs 0), in any time
+ *    zone.
  *  - The lines print under the thank-you line on the customer's receipt and
  *    bill only: never on a kitchen ticket, a shop copy, a refund slip, a
  *    cancelled order, or a receipt refunded in full (no thank-you there).
@@ -54,7 +56,8 @@ describe('no extra lines: every paper is byte-for-byte what it was', () => {
 
   it('the golden list covers every paper (and nothing was dropped from it)', () => {
     expect(cases.map((c) => c.name).sort()).toEqual(Object.keys(GOLDEN).sort());
-    expect(cases.length).toBe(80);
+    // 80 papers + 4 value-deals papers × 2 brandings × 2 widths (v0.7.34).
+    expect(cases.length).toBe(80 + 16);
   });
 
   it('none saved (the default)', () => {

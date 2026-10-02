@@ -47,7 +47,10 @@ interface Props {
  * 10% of the order), the same rule the till checks when it saves the
  * discount. Any other amount can still be typed. By default a discount is
  * worked on the food only (Settings → Money & discounts: the delivery charge
- * is paid in full), and the dialog says so on an order that has one. When the
+ * is paid in full), and the dialog says so on an order that has one. Value
+ * deals never get a discount (except on a foodpanda order, matching the
+ * tablet): the header says what they come to, and with nothing else on the
+ * order the buttons and Apply are off (Remove still works). When the
  * owner has made a reason required, the Reason row says "needed" and Apply
  * waits for one (a reason button is still one tap); the main process refuses
  * a discount without one in any case.
@@ -92,14 +95,19 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
 
   const lines = snapshot?.items ?? [];
   const subtotal = snapshot?.order.subtotalCents ?? 0;
+  // The order's mode: value deals are never discounted, except on a foodpanda order (matching the tablet).
+  const mode = snapshot?.order.mode;
   const typing = customText.trim() !== '';
   const typed = parseDiscountEntry(customKind, customText);
   const choice = typing ? typed : picked;
 
-  const before = previewDiscount(lines, subtotal, null, rules);
-  const after = previewDiscount(lines, subtotal, choice, rules);
-  // What a discount given now is worked on: the food only, unless the owner's switch says every line.
-  const base = discountBaseNow(lines, subtotal, rules);
+  const before = previewDiscount(lines, subtotal, null, rules, mode);
+  const after = previewDiscount(lines, subtotal, choice, rules, mode);
+  // What a discount given now is worked on: the food only, unless the owner's switch says every line;
+  // never the value deals.
+  const base = discountBaseNow(lines, subtotal, rules, mode);
+  // Every line it could come off is a value deal: nothing to pick, nothing to apply (Remove still works).
+  const onlyValueDeals = base.baseCents === 0 && base.dealsCents > 0;
   // The discount already on the order, by its OWN frozen rule (the header's first part follows the switch now).
   const currentWords = current ? currentDiscountWords(current, lines, rules) : null;
   const needsPin = after.needsApproval || dealOn;
@@ -108,6 +116,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const reasonProblem = discountReasonProblem(rules.reasonRequired, reason);
   // The button is on exactly when Apply would send it (Enter and a second tap decide the same way, in apply()).
   const applyNow = discountApplyStep({
+    onlyValueDeals,
     choice,
     typing,
     discountCents: after.discountCents,
@@ -138,15 +147,16 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
     setPicked(next);
     setArmed(true);
     setCustomText('');
-    if ((previewDiscount(lines, subtotal, next, rules).needsApproval || dealOn) && !pinOk) focusPinSoon();
+    if ((previewDiscount(lines, subtotal, next, rules, mode).needsApproval || dealOn) && !pinOk) focusPinSoon();
   }
 
   async function apply(which: DiscountChoice | null = choice) {
     if (saving || busy) return;
-    const preview = which ? previewDiscount(lines, subtotal, which, rules) : null;
-    // Something picked, something to take off, the reason (said before the PIN, as the main
-    // process does), then the manager's PIN: the same decision as the button's.
+    const preview = which ? previewDiscount(lines, subtotal, which, rules, mode) : null;
+    // Something to work it on, something picked, something to take off, the reason (said before
+    // the PIN, as the main process does), then the manager's PIN: the same decision as the button's.
     const step = discountApplyStep({
+      onlyValueDeals,
       choice: which,
       typing,
       discountCents: preview?.discountCents ?? 0,
@@ -217,19 +227,20 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
 
   const presetClass = (selected: boolean) =>
     cn(
-      'flex min-h-[60px] flex-col items-center justify-center gap-0.5 rounded-xl border-2 px-2 py-1.5 transition-colors',
+      'flex min-h-[60px] flex-col items-center justify-center gap-0.5 rounded-xl border-2 px-2 py-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50',
       selected
         ? 'border-amber-500 bg-amber-50 text-stone-900 dark:bg-amber-950 dark:text-amber-50'
         : 'border-stone-200 bg-white hover:border-stone-400 dark:border-stone-700 dark:bg-stone-800',
     );
 
   function presetButton(key: string, label: string, preset: DiscountChoice) {
-    const p = previewDiscount(lines, subtotal, preset, rules);
+    const p = previewDiscount(lines, subtotal, preset, rules, mode);
     const selected = !typing && sameChoice(picked, preset);
     return (
       <button
         key={key}
         type="button"
+        disabled={onlyValueDeals}
         onClick={() => pick(preset)}
         aria-pressed={selected}
         aria-label={`${describeDiscount(preset)}, takes ${formatCents(p.discountCents)} off${p.needsApproval || dealOn ? ", needs a manager's PIN or password" : ''}`}
@@ -270,10 +281,11 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                 )}
               </Dialog.Description>
               {currentWords?.ruleNote && <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">{currentWords.ruleNote}</p>}
-              {/* The limit in words, on what it is checked on: the food, when the delivery charge is left out. */}
-              {!dealOn && (
+              {/* The limit in words, on what it is checked on: the food, when the delivery charge is left
+                  out; the food without the value deals, when they are. None when only value deals are left. */}
+              {!dealOn && !onlyValueDeals && (
                 <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-                  {approvalRuleText(limits, base.untouchedCents > 0 ? 'food' : 'order')}
+                  {approvalRuleText(limits, base.dealsCents > 0 ? 'food_no_deals' : base.untouchedCents > 0 ? 'food' : 'order')}
                 </p>
               )}
               {offerOn && (
@@ -327,6 +339,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                   <input
                     ref={customRef}
                     data-field="custom"
+                    disabled={onlyValueDeals}
                     inputMode="decimal"
                     aria-label={customKind === 'percent' ? 'Other percent off' : 'Other amount off in rupees'}
                     placeholder="Other"
@@ -343,6 +356,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                         key={k}
                         type="button"
                         aria-pressed={customKind === k}
+                        disabled={onlyValueDeals}
                         onClick={() => setCustomKind(k)}
                         className={cn(
                           'h-10 min-w-[40px] rounded-md px-2 text-sm font-bold',
@@ -445,7 +459,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
               ) : (
                 <div className="flex items-baseline justify-between">
                   <span className="text-sm text-stone-500 dark:text-stone-400">
-                    {typing ? 'Type a number' : 'Tap a discount to see the new total'}
+                    {onlyValueDeals ? 'No discount on value deals' : typing ? 'Type a number' : 'Tap a discount to see the new total'}
                   </span>
                   <span className="font-mono text-2xl font-bold">{formatCents(before.totalCents)}</span>
                 </div>

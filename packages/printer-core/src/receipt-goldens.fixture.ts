@@ -7,7 +7,9 @@
  * fingerprint of each one's bytes as the renderer printed them before the
  * receipt's extra lines existed (v0.7.26, plus "Cashier: Website" on a
  * website order), so a change that moves a single byte of a paper with no
- * extra lines fails receipt-extra-lines.test.ts.
+ * extra lines fails receipt-extra-lines.test.ts. Papers that did not exist
+ * before a version are added with it, never regenerated: v0.7.34's value
+ * deals (the receipt-deals-* papers).
  *
  * Times are Pakistan wall-clock instants: papers print Pakistan time, so the
  * bytes are the same in any time zone.
@@ -224,6 +226,105 @@ function freeTable(): OrderSnapshot {
   return s;
 }
 
+/**
+ * NO DISCOUNT ON VALUE DEALS (v0.7.34): a paid takeaway of a value deal (its
+ * line marked noDiscount, Rs 3,600) and a pizza (Rs 1,500), and a discount
+ * whose frozen rule left the deal alone: 10% of the pizza = Rs 150 off; tax
+ * 16% of 3,600 + 1,350 = Rs 792; Rs 5,742. No delivery charge on these, so
+ * the delivery bill's layout never moves them.
+ */
+function dealsPaid(discount: { reason: string; source?: 'offer'; alsoOffDeliveryCharge: boolean }): OrderSnapshot {
+  const s = paid();
+  s.order.subtotalCents = cents(510_000);
+  s.order.discountCents = cents(15_000);
+  s.order.taxCents = cents(79_200);
+  s.order.totalCents = cents(574_200);
+  s.items = [
+    {
+      ...s.items[1]!,
+      id: id('i3'),
+      menuItemId: id('m3'),
+      quantity: 1,
+      unitPriceCents: cents(360_000),
+      lineTotalCents: cents(360_000),
+      menuItemName: 'Test Big Deal',
+      categoryName: 'Value Deals',
+      prepStation: 'kitchen',
+      noDiscount: true,
+      modifiers: [],
+    },
+    {
+      ...s.items[1]!,
+      id: id('i4'),
+      menuItemId: id('m4'),
+      quantity: 1,
+      unitPriceCents: cents(150_000),
+      lineTotalCents: cents(150_000),
+      menuItemName: 'Test Fajita Pizza - Medium',
+      categoryName: 'Pizza',
+      prepStation: 'kitchen',
+      noDiscount: false,
+      modifiers: [],
+    },
+  ];
+  s.discounts = [
+    {
+      id: id('d3'),
+      orderId: id('o1'),
+      discountType: 'percent',
+      value: 10,
+      reason: discount.reason,
+      amountCents: cents(15_000),
+      appliedByUserId: id('u1'),
+      approvedByUserId: null,
+      source: discount.source ?? null,
+      ...(discount.source === 'offer'
+        ? {
+            offer: { id: 'test-wa', name: discount.reason, type: 'percent' as const, value: 10, minOrderCents: null, maxOffCents: null, declined: false },
+          }
+        : {}),
+      alsoOffDeliveryCharge: discount.alsoOffDeliveryCharge,
+      skipsNoDiscountLines: true,
+    },
+  ];
+  s.payments = [{ ...s.payments[0]!, amountCents: cents(574_200), tenderedCents: cents(600_000) }];
+  return s;
+}
+
+/** A staff discount at the counter: "Discount 10% (Test staff, not on value deals)". */
+const dealsStaff = () => dealsPaid({ reason: 'Test staff', alsoOffDeliveryCharge: false });
+
+/** A website pick-up worked on the lines the site priced: "Discount (Website pick-up 10% off, not on value deals)". */
+function dealsWebPickup(): OrderSnapshot {
+  const s = dealsPaid({ reason: 'Website pick-up 10% off', alsoOffDeliveryCharge: true });
+  s.order.source = 'web';
+  s.order.notes = '[web pick-up] Test note';
+  s.payments = [{ ...s.payments[0]!, method: 'card', tenderedCents: null }];
+  s.customerName = 'Test Web Customer';
+  s.customerPhone = '0300 0000003';
+  return s;
+}
+
+/** One of the owner's automatic offers, by its name: "Test WhatsApp 10% off (not on value deals)". */
+const dealsOffer = () => dealsPaid({ reason: 'Test WhatsApp 10% off', source: 'offer', alsoOffDeliveryCharge: false });
+
+/**
+ * Only the deal is left: the pizza was taken off after a staff discount, so
+ * the discount stays on the order at Rs 0 (its rule skips the deal) and
+ * prints no line, never "- 0.00". Rs 3,600 + 16% = Rs 4,176.
+ */
+function dealsOnly(): OrderSnapshot {
+  const s = dealsStaff();
+  s.items = [s.items[0]!];
+  s.order.subtotalCents = cents(360_000);
+  s.order.discountCents = cents(0);
+  s.order.taxCents = cents(57_600);
+  s.order.totalCents = cents(417_600);
+  s.discounts = [{ ...s.discounts[0]!, amountCents: cents(0) }];
+  s.payments = [{ ...s.payments[0]!, amountCents: cents(417_600), tenderedCents: cents(500_000) }];
+  return s;
+}
+
 const refundInfo = (): RefundSlipInfo => ({
   refundedAt: at(19, 50),
   rows: [{ method: 'cash', amountCents: 30_000 }],
@@ -283,6 +384,11 @@ function receiptCases(): GoldenCase[] {
     ['refund-slip-shop-copy', partRefunded, { document: 'refund', refund: refundInfo(), copy: 'shop' }],
     ['cancelled-order', cancelled, { cancelled: { at: at(19, 58), byName: 'Test Manager', reason: 'Test cancel reason' } }],
     ['cancelled-order-shop-copy', cancelled, { copy: 'shop' }],
+    // NO DISCOUNT ON VALUE DEALS (v0.7.34): papers that did not exist before, added (never regenerated).
+    ['receipt-deals-staff', dealsStaff, {}],
+    ['receipt-deals-web-pickup', dealsWebPickup, {}],
+    ['receipt-deals-offer', dealsOffer, {}],
+    ['receipt-deals-only', dealsOnly, {}],
   ];
   for (const [paper, snap, opts] of papers) {
     for (const [brandName, branding] of [

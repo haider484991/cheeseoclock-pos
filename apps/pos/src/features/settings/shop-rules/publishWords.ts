@@ -7,6 +7,7 @@
  */
 import {
   PUBLISHED_IMAGE_MAX_CHARS,
+  categoryNeverDiscounted,
   type PublishMenuSummary,
   type SettingsPublishStatus,
   type WebAvailability,
@@ -164,6 +165,43 @@ export const CATEGORY_WEBSITE_WORDS: Record<CategoryWebsiteState, string> = {
 /** When a change here reaches the website. */
 export const WEBSITE_CHANGE_NOTE =
   'The website changes at the next “Publish menu” (Settings → Online orders) — or a few seconds after Save when “Publish the menu to the website by itself” is on.';
+
+/**
+ * Menu → Categories: "Never discounted" (migration 0047
+ * categories.no_discount; the owner, 2026-10-02: value deals never get a
+ * discount). The owner's alone (settings.manage): the main process refuses
+ * anyone else, and the box is off for them.
+ */
+export const CATEGORY_DISCOUNT_WORDS = {
+  label: 'Discounts',
+  box: 'Never discounted',
+  hint: 'No discount comes off its items: not the website’s pick-up discount, not the discount button, not an automatic offer. The rest of the order still gets its discount.',
+  byName: 'Set by its name: Value Deals, Deals and Combos are never discounted.',
+  kept: 'Orders already rung up keep what they had.',
+  ownerOnly: 'Only the owner can change this.',
+  badge: 'Never discounted',
+} as const;
+
+/**
+ * What a category's Save sends about "Never discounted": the box, only when
+ * it says something other than what the category does `now` (a new one:
+ * what its name says). A box left as it was sends nothing, so a rename keeps
+ * the category's answer (the repository stores the old name's) and a
+ * manager's Save never needs the owner.
+ */
+export function noDiscountChange(now: boolean, box: boolean): { noDiscount?: boolean } {
+  return box === now ? {} : { noDiscount: box };
+}
+
+/** Is any category never discounted? Settings then says so beside the discounts. */
+export function someCategoryNeverDiscounted(categories: ReadonlyArray<{ name: string; noDiscount?: boolean | null }> | undefined): boolean {
+  return (categories ?? []).some((c) => categoryNeverDiscounted(c));
+}
+
+/** The item editor's line when its category is never discounted. */
+export function itemNeverDiscountedNote(categoryName: string): string {
+  return `Never discounted — it is in “${categoryName}” (Menu → Categories).`;
+}
 
 /** An item whose description says "pick-up only" is pick-up only on the website whatever this says (the website's older rule). */
 export function saysPickupOnly(description: string | null | undefined): boolean {

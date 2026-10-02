@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { NOTHING_TO_DISCOUNT } from '@cheeseoclock/pos-domain';
 import {
   FLAT_PRESETS_RUPEES,
   PERCENT_PRESETS,
+  currentDiscountWords,
   describeDiscount,
   describePreview,
   discountApplyStep,
@@ -352,5 +354,112 @@ describe('Apply, decided in one place: the button, Enter and a second tap on a p
     expect(apply).not.toContain('`Discount not applied');
     // Enter and a second tap call apply() — never applyDiscount directly.
     expect(src.match(/applyDiscount\(/g)?.length).toBe(1);
+  });
+});
+
+/**
+ * NO DISCOUNT ON VALUE DEALS (the owner, 2026-10-02): F3 works a discount as
+ * orders:applyDiscount does — on everything but the value deals (the lines
+ * marked noDiscount), except on a foodpanda order, which must match the
+ * tablet — and says so. Made-up: a Rs 1,500 pizza and a Rs 3,600 deal, 16%.
+ */
+describe('F3 on an order with a value deal', () => {
+  const PIZZA = { lineTotalCents: 150_000, taxRateBps: 1600, menuItemName: 'Test Pizza', noDiscount: false };
+  const DEAL = { lineTotalCents: 360_000, taxRateBps: 1600, menuItemName: 'Test Big Deal', noDiscount: true };
+  const CHARGE = { lineTotalCents: 20_000, taxRateBps: 1600, menuItemName: 'Delivery Charge (Rs 200)' };
+  const lines = [DEAL, PIZZA];
+  const sub = 510_000;
+  const rules = { approval: { percentOver: 10, flatOverCents: 50_000 }, alsoOffDeliveryCharge: false };
+
+  it('the header says what is worked on and what is not, in three ways', () => {
+    expect(discountBaseText(discountBaseNow(lines, sub, rules, 'takeaway'), sub)).toBe('Food Rs 1,500 before tax · value deals Rs 3,600 not discounted');
+    expect(discountBaseText(discountBaseNow([...lines, CHARGE], sub + 20_000, rules, 'delivery'), sub + 20_000)).toBe(
+      'Food Rs 1,500 before tax · value deals Rs 3,600 and delivery charge Rs 200 not discounted',
+    );
+    expect(discountBaseText(discountBaseNow([DEAL], 360_000, rules, 'takeaway'), 360_000)).toBe(NOTHING_TO_DISCOUNT);
+    // A deal with only a delivery charge beside it: nothing either (the charge is paid in full).
+    expect(discountBaseText(discountBaseNow([DEAL, CHARGE], 380_000, rules, 'delivery'), 380_000)).toBe(NOTHING_TO_DISCOUNT);
+  });
+
+  it('10% of the pizza: Rs 150 off, the deal taxed in full', () => {
+    // Tax: 16% of 3,600 + 16% of (1,500 − 150) = 576 + 216.
+    expect(previewDiscount(lines, sub, percentChoice(10), rules, 'takeaway')).toEqual({
+      discountCents: 15_000,
+      taxCents: 79_200,
+      totalCents: 574_200,
+      needsApproval: false,
+      capped: false,
+    });
+    // No mode given (a counter order): the same.
+    expect(previewDiscount(lines, sub, percentChoice(10), rules)).toMatchObject({ discountCents: 15_000 });
+    // With the owner's switch on (the delivery charge too): still never the deal.
+    expect(previewDiscount([...lines, CHARGE], sub + 20_000, percentChoice(10), { ...rules, alsoOffDeliveryCharge: true }, 'delivery')).toMatchObject({
+      discountCents: 17_000,
+    });
+    expect(discountBaseNow([...lines, CHARGE], sub + 20_000, { alsoOffDeliveryCharge: true }, 'delivery')).toEqual({
+      baseCents: 170_000,
+      untouchedCents: 0,
+      dealsCents: 360_000,
+    });
+  });
+
+  it('the lock is on the food without the deal: Rs 200 off is over 10% of Rs 1,500', () => {
+    expect(previewDiscount(lines, sub, flatChoiceRupees(200), rules, 'takeaway').needsApproval).toBe(true);
+    expect(previewDiscount(lines, sub, flatChoiceRupees(200), rules, 'foodpanda').needsApproval).toBe(false);
+  });
+
+  it('the preview’s words; rupees are capped at what is not a deal, and it says so', () => {
+    const base = discountBaseNow(lines, sub, rules, 'takeaway');
+    expect(describePreview(percentChoice(10), previewDiscount(lines, sub, percentChoice(10), rules, 'takeaway'), base)).toBe(
+      '10% off, not on value deals',
+    );
+    const capped = previewDiscount(lines, sub, flatChoiceRupees(2_000), rules, 'takeaway');
+    expect(capped).toMatchObject({ discountCents: 150_000, capped: true });
+    expect(describePreview(flatChoiceRupees(2_000), capped, base)).toBe('Rs 2,000 off (all but the value deals)');
+    const withCharge = discountBaseNow([...lines, CHARGE], sub + 20_000, rules, 'delivery');
+    expect(describePreview(percentChoice(10), { capped: false }, withCharge)).toBe('10% off food, not on value deals');
+  });
+
+  it('only value deals on the order: nothing to take off — Apply stays off and says why, before anything else', () => {
+    const base = discountBaseNow([DEAL], 360_000, rules, 'takeaway');
+    expect(base).toEqual({ baseCents: 0, untouchedCents: 0, dealsCents: 360_000 });
+    expect(previewDiscount([DEAL], 360_000, percentChoice(10), rules, 'takeaway')).toMatchObject({ discountCents: 0, totalCents: 417_600 });
+    const step = (choice: ReturnType<typeof percentChoice> | null) =>
+      discountApplyStep({
+        onlyValueDeals: base.baseCents === 0 && base.dealsCents > 0,
+        choice,
+        typing: false,
+        discountCents: 0,
+        needsApproval: false,
+        reasonRequired: true,
+        reason: '',
+        pin: '',
+      });
+    expect(step(percentChoice(10))).toEqual({ kind: 'refuse', message: NOTHING_TO_DISCOUNT, focus: null });
+    expect(step(null)).toEqual({ kind: 'refuse', message: NOTHING_TO_DISCOUNT, focus: null });
+  });
+
+  it('a foodpanda order: the deal is discounted too, as the tablet does', () => {
+    // 10% of Rs 5,100 = Rs 510, split 360 / 150 over the deal and the pizza: tax 16% of (3,240 + 1,350).
+    expect(previewDiscount(lines, sub, percentChoice(10), rules, 'foodpanda')).toEqual({
+      discountCents: 51_000,
+      taxCents: 73_440,
+      totalCents: 532_440,
+      needsApproval: false,
+      capped: false,
+    });
+    expect(discountBaseNow(lines, sub, rules, 'foodpanda')).toEqual({ baseCents: 510_000, untouchedCents: 0, dealsCents: 0 });
+    expect(discountBaseText(discountBaseNow(lines, sub, rules, 'foodpanda'), sub)).toBe('Order Rs 5,100 before tax');
+  });
+
+  it('the discount already on the order says it left the deals alone, from its own frozen rule', () => {
+    const staff = { discountType: 'percent' as const, value: 10, reason: 'Staff', source: null, alsoOffDeliveryCharge: false, skipsNoDiscountLines: true };
+    expect(currentDiscountWords(staff, lines, rules).now).toBe('10% off, not on value deals');
+    expect(currentDiscountWords(staff, [...lines, CHARGE], rules).now).toBe('10% off food, not on value deals');
+    // Given before 0.7.34 (no field) or on a foodpanda order: as before.
+    expect(currentDiscountWords({ ...staff, skipsNoDiscountLines: undefined }, lines, rules).now).toBe('10% off');
+    expect(currentDiscountWords({ ...staff, skipsNoDiscountLines: false }, lines, rules).now).toBe('10% off');
+    // No deal on the order: nothing to say.
+    expect(currentDiscountWords(staff, [PIZZA], rules).now).toBe('10% off');
   });
 });

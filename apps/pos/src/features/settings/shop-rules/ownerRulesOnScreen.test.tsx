@@ -368,6 +368,47 @@ describe('the owner’s cards', () => {
     );
   });
 
+  it('Money & discounts: "Value deals never get a discount" under the buttons, and on each offer — only while a category is never discounted', () => {
+    signIn('admin');
+    const testOffer = {
+      id: 'test-wa',
+      name: 'Test WhatsApp 10%',
+      on: true,
+      cameBy: ['whatsapp'],
+      orderTypes: ['delivery'],
+      type: 'percent',
+      value: 10,
+      minOrderCents: null,
+      maxOffCents: null,
+      days: [0, 1, 2, 3, 4, 5, 6],
+      hours: null,
+      startsOn: null,
+      endsOn: null,
+      oncePerCustomerPerDay: false,
+    } as const;
+    const seed = (categories: Array<{ name: string; noDiscount: boolean | null }>): Array<[readonly unknown[], unknown]> => [
+      [[...SHOP_SETTINGS_KEY, 'discounts.approval'], card('discounts.approval', { v: 2, percentOver: 10, flatOverCents: 50_000, reasonRequired: false })],
+      [[...SHOP_SETTINGS_KEY, 'discounts.presets'], card('discounts.presets', { v: 1, percents: [10], flatCents: [10_000], reasons: ['Staff'] })],
+      [
+        [...SHOP_SETTINGS_KEY, 'discounts.offers'],
+        card('discounts.offers', { v: 1, askCameBy: false, offers: [testOffer] } as unknown as ShopSettingCard<'discounts.offers'>['value']),
+      ],
+      [
+        ['menu', 'categories', 'all'],
+        categories.map((c, i) => ({ id: `c${i}`, displayOrder: i, colorHex: '#000000', isActive: true, isOnWebsite: true, ...c })),
+      ],
+    ];
+    // Value Deals by its name (nothing set): both sentences.
+    const marked = text(render(<MoneySettings />, seed([{ name: 'Pizza', noDiscount: null }, { name: 'Value Deals', noDiscount: null }])));
+    expect(marked).toContain('Value deals never get a discount (Menu → Categories).');
+    expect(marked).toContain('10% off the food, not on value deals · deliveries');
+    // The owner said discounts come off it: neither.
+    const unmarked = text(render(<MoneySettings />, seed([{ name: 'Pizza', noDiscount: null }, { name: 'Value Deals', noDiscount: false }])));
+    expect(unmarked).not.toContain('Value deals never get a discount');
+    expect(unmarked).not.toContain('not on value deals');
+    expect(unmarked).toContain('10% off the food · deliveries');
+  });
+
   it('Staff & kitchen timing: both cards, with examples built from the saved values', () => {
     signIn('admin');
     const words = text(

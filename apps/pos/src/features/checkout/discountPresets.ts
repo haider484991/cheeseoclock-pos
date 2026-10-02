@@ -4,14 +4,18 @@ import {
   discountReasonMissing,
   DISCOUNT_REASON_REQUIRED,
   formatCents,
+  NOTHING_TO_DISCOUNT,
   requiresManagerApproval,
   taxAfterDiscount,
+  type DiscountScope,
   type TaxedDiscountLine,
 } from '@cheeseoclock/pos-domain';
 import {
   DEFAULT_DISCOUNT_APPROVAL,
   DEFAULT_DISCOUNT_DELIVERY,
   DEFAULT_DISCOUNT_PRESETS,
+  NOT_ON_VALUE_DEALS,
+  discountLeavesNoDiscountItems,
   isDeliveryChargeLine,
   type CheckoutRules,
   type DiscountPresets,
@@ -163,12 +167,19 @@ export type DiscountApplyStep =
  * Apply, decided in one place: the button is on exactly when this says
  * 'save' (DiscountDialog canApply), and Enter or a second tap on a preset —
  * which do not go through the button — are refused by the same words. In
- * order: something picked; something to take off; the owner's "a discount
+ * order: something on the order a discount may come off (not only value
+ * deals); something picked; something to take off; the owner's "a discount
  * needs a reason" (said before the PIN, as the main process does, so a PIN
  * typed is never lost to it); the manager's PIN when the discount needs one.
  * The main process decides every one again when it saves.
  */
 export function discountApplyStep(p: {
+  /**
+   * Every line a discount could come off is a value deal (DiscountBaseNow:
+   * nothing to work it on, value deals on the order): the main process
+   * refuses it with NOTHING_TO_DISCOUNT, and so does this.
+   */
+  onlyValueDeals?: boolean;
   choice: DiscountChoice | null;
   /** The "Other" box has something in it (it says "check it" rather than "pick one"). */
   typing: boolean;
@@ -180,6 +191,7 @@ export function discountApplyStep(p: {
   reason: string;
   pin: string;
 }): DiscountApplyStep {
+  if (p.onlyValueDeals) return { kind: 'refuse', message: NOTHING_TO_DISCOUNT, focus: null };
   if (!p.choice) {
     return { kind: 'refuse', message: p.typing ? 'That amount does not work — check it.' : 'Pick a discount or type an amount.', focus: null };
   }
@@ -223,19 +235,29 @@ export function describeDiscount(d: DiscountChoice): string {
 
 /**
  * The preview's words for a choice: "10% off", or "10% off food" when the
- * order has a delivery charge the discount leaves alone; a rupee amount
- * bigger than what it is worked on says so ("(the whole order)", "(all the
- * food)").
+ * order has a delivery charge the discount leaves alone, and ", not on value
+ * deals" when it has value deals it leaves alone; a rupee amount bigger than
+ * what it is worked on says so ("(the whole order)", "(all the food)", "(all
+ * but the value deals)").
  */
-export function describePreview(d: DiscountChoice, p: Pick<DiscountPreview, 'capped'>, base: Pick<DiscountBaseNow, 'untouchedCents'>): string {
+export function describePreview(
+  d: DiscountChoice,
+  p: Pick<DiscountPreview, 'capped'>,
+  base: Pick<DiscountBaseNow, 'untouchedCents'> & Partial<Pick<DiscountBaseNow, 'dealsCents'>>,
+): string {
   const foodOnly = base.untouchedCents > 0;
+  const food = foodOnly ? ' food' : '';
+  if ((base.dealsCents ?? 0) > 0) {
+    return p.capped ? `${describeDiscount(d)}${food} (all but the value deals)` : `${describeDiscount(d)}${food}, ${NOT_ON_VALUE_DEALS}`;
+  }
   const capped = p.capped ? (foodOnly ? ' (all the food)' : ' (the whole order)') : '';
-  return `${describeDiscount(d)}${foodOnly ? ' food' : ''}${capped}`;
+  return `${describeDiscount(d)}${food}${capped}`;
 }
 
 /** The order's discount as the dialog's header reads it: its choice and reason, and the rule frozen on it (the snapshot's). */
 export interface CurrentDiscountOnOrder extends CurrentDiscount {
   alsoOffDeliveryCharge?: boolean;
+  skipsNoDiscountLines?: boolean;
 }
 
 /**
@@ -250,11 +272,12 @@ export interface CurrentDiscountOnOrder extends CurrentDiscount {
  *  - "10% off, delivery charge too": it came off the charge, while a
  *    discount given now would not;
  *  - "10% off": no delivery charge on the order, or both rules agree.
- * The owner's foodpanda deal keeps its own words.
+ * Each adds ", not on value deals" when its own frozen rule left the value
+ * deals on this order alone. The owner's foodpanda deal keeps its own words.
  */
 export function currentDiscountWords(
   current: CurrentDiscountOnOrder,
-  lines: ReadonlyArray<{ readonly menuItemName?: string | null }>,
+  lines: ReadonlyArray<{ readonly menuItemName?: string | null; readonly noDiscount?: boolean }>,
   rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'>,
 ): { now: string; ruleNote: string | null } {
   if (current.source === 'foodpanda' && current.reason) return { now: `${current.reason} (set by the owner)`, ruleNote: null };
@@ -265,22 +288,34 @@ export function currentDiscountWords(
     };
   }
   const choice = describeDiscount({ type: current.discountType, value: current.value });
-  if (!lines.some((l) => isDeliveryChargeLine(l))) return { now: choice, ruleNote: null };
+  const deals = discountLeavesNoDiscountItems(current, lines) ? `, ${NOT_ON_VALUE_DEALS}` : '';
+  if (!lines.some((l) => isDeliveryChargeLine(l))) return { now: `${choice}${deals}`, ruleNote: null };
   const itCovers = current.alsoOffDeliveryCharge !== false;
-  if (itCovers === rules.alsoOffDeliveryCharge) return { now: itCovers ? choice : `${choice} food`, ruleNote: null };
+  if (itCovers === rules.alsoOffDeliveryCharge) return { now: `${itCovers ? choice : `${choice} food`}${deals}`, ruleNote: null };
   return itCovers
     ? {
-        now: `${choice}, delivery charge too`,
+        now: `${choice}, delivery charge too${deals}`,
         ruleNote: 'Given when a discount also came off the delivery charge. Apply it again to take it off the food only.',
       }
     : {
-        now: `${choice} food`,
+        now: `${choice} food${deals}`,
         ruleNote: 'Given when a discount was on the food only. Apply it again to take it off the delivery charge too.',
       };
 }
 
-/** The dialog's header: "Order Rs 2,000 before tax", or "Food Rs 2,000 before tax · delivery charge Rs 200 not discounted". */
+/**
+ * The dialog's header: "Order Rs 2,000 before tax", "Food Rs 2,000 before
+ * tax · delivery charge Rs 200 not discounted", "Food Rs 1,500 before tax ·
+ * value deals Rs 3,600 not discounted", "Food Rs 1,500 before tax · value
+ * deals Rs 3,600 and delivery charge Rs 200 not discounted" — and, when only
+ * value deals are left for it, NOTHING_TO_DISCOUNT (the main process's words).
+ */
 export function discountBaseText(p: DiscountBaseNow, subtotalCents: number): string {
+  if (p.dealsCents > 0) {
+    if (p.baseCents === 0) return NOTHING_TO_DISCOUNT;
+    const charge = p.untouchedCents > 0 ? ` and delivery charge ${formatCents(p.untouchedCents)}` : '';
+    return `Food ${formatCents(p.baseCents)} before tax · value deals ${formatCents(p.dealsCents)}${charge} not discounted`;
+  }
   if (p.untouchedCents > 0) {
     return `Food ${formatCents(p.baseCents)} before tax · delivery charge ${formatCents(p.untouchedCents)} not discounted`;
   }
@@ -299,10 +334,20 @@ export interface DiscountPreview {
 
 /** What a discount given now is worked on, for the dialog's words. */
 export interface DiscountBaseNow {
-  /** Before tax: the food only, or (the owner's switch on) every line — the order's subtotal. */
+  /**
+   * Before tax: the food only, or (the owner's switch on) every line — the
+   * order's subtotal; the value deals left out of either (not on a foodpanda
+   * order).
+   */
   baseCents: number;
   /** The delivery charge on this order that a discount leaves alone (0 when there is none, or the switch is on). */
   untouchedCents: number;
+  /**
+   * The value deals on this order a discount leaves alone (the lines marked
+   * noDiscount; 0 when there are none, or on a foodpanda order, where a
+   * manager's discount covers them to match the tablet).
+   */
+  dealsCents: number;
 }
 
 /** The F3 screen's rules (checkout:getRules): the approval limit and whether a discount also comes off the delivery charge. */
@@ -315,27 +360,41 @@ export const RELEASED_SCREEN_RULES: DiscountScreenRules = {
 };
 
 /**
+ * What a discount given now may come off, exactly as orders:applyDiscount
+ * works it: the delivery charge only with the owner's switch on; the value
+ * deals never, except on a foodpanda order (a manager matching the tablet,
+ * which covers them).
+ */
+export function discountScopeNow(
+  rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'>,
+  mode: string | null | undefined,
+): DiscountScope {
+  return { alsoOffDeliveryCharge: rules.alsoOffDeliveryCharge, skipsNoDiscountLines: mode !== 'foodpanda' };
+}
+
+/**
  * The bill if `choice` were applied now, worked out exactly as the till does
  * when the discount is saved (order-repo applyDiscount / recomputeOrderTotals,
  * pos-domain discount-base.ts): a % of the food (every line with the owner's
- * switch on), a rupee amount at most that, split over the lines in whole
- * paisa with a delivery charge the discount leaves alone taking none, tax on
- * what is left of each line; the lock on the same base. `lines` are the
- * order's lines in ticket order (their totals, tax rates and the names they
- * were sold under); `subtotalCents` is their sum. With no choice it is the
- * bill with no discount. `rules` are the owner's (checkout:getRules); the
- * released ones when absent.
+ * switch on) without the value deals (not on a foodpanda order), a rupee
+ * amount at most that, split over the lines in whole paisa with a delivery
+ * charge or a value deal the discount leaves alone taking none, tax on what
+ * is left of each line; the lock on the same base. `lines` are the order's
+ * lines in ticket order (their totals, tax rates, the names they were sold
+ * under and their value-deal mark); `subtotalCents` is their sum. With no
+ * choice it is the bill with no discount. `rules` are the owner's
+ * (checkout:getRules); the released ones when absent. `mode` is the order's.
  */
 export function previewDiscount(
   lines: ReadonlyArray<TaxedDiscountLine>,
   subtotalCents: number,
   choice: DiscountChoice | null,
   rules: DiscountScreenRules = RELEASED_SCREEN_RULES,
+  mode?: string | null,
 ): DiscountPreview {
-  const alsoOff = rules.alsoOffDeliveryCharge;
-  const { baseCents } = discountBaseNow(lines, subtotalCents, rules);
+  const { baseCents } = discountBaseNow(lines, subtotalCents, rules, mode);
   const discountCents = choice ? computeDiscountCents(baseCents, choice) : 0;
-  const scope = { alsoOffDeliveryCharge: alsoOff, skipsNoDiscountLines: false };
+  const scope = discountScopeNow(rules, mode);
   const taxCents = subtotalCents > 0 ? taxAfterDiscount(lines, discountCents, scope).taxCents : 0;
   return {
     discountCents,
@@ -349,14 +408,20 @@ export function previewDiscount(
 /**
  * What a discount given now is worked on (pos-domain discountBaseCents): with
  * the switch on, every line — the order's subtotal, exactly as before; else
- * the food only, and the delivery charge it leaves alone.
+ * the food only, and the delivery charge it leaves alone. The value deals
+ * are left out of either and counted on their own (not on a foodpanda order).
  */
 export function discountBaseNow(
   lines: ReadonlyArray<TaxedDiscountLine>,
   subtotalCents: number,
   rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'> = RELEASED_SCREEN_RULES,
+  mode?: string | null,
 ): DiscountBaseNow {
-  if (rules.alsoOffDeliveryCharge) return { baseCents: subtotalCents, untouchedCents: 0 };
-  const baseCents = discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: false });
-  return { baseCents, untouchedCents: Math.max(0, subtotalCents - baseCents) };
+  const scope = discountScopeNow(rules, mode);
+  const dealsCents = scope.skipsNoDiscountLines
+    ? lines.reduce((s, l) => s + (l.noDiscount === true ? Math.max(0, l.lineTotalCents) : 0), 0)
+    : 0;
+  if (rules.alsoOffDeliveryCharge) return { baseCents: Math.max(0, subtotalCents - dealsCents), untouchedCents: 0, dealsCents };
+  const baseCents = discountBaseCents(lines, scope);
+  return { baseCents, untouchedCents: Math.max(0, subtotalCents - baseCents - dealsCents), dealsCents };
 }

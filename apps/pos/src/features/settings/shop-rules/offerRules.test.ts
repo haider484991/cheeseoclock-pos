@@ -16,6 +16,7 @@ import {
   withOfferSwitched,
 } from './offerRules';
 import { withCameByNeeded, CAME_BY_NEEDED } from '../../checkout/useTenderGate';
+import { someCategoryNeverDiscounted } from './publishWords';
 
 /**
  * Settings → Money & discounts → "Automatic offers": what the owner types ↔
@@ -116,6 +117,22 @@ describe('the words', () => {
       'A takeaway, Rs 2,000 of food: Rs 300 off takes Rs 300 off the food.',
     );
     expect(OFFER_RULES_NOTE.join(' ')).toMatch(/never on a website or foodpanda order/);
+  });
+});
+
+describe('value deals (the owner, 2026-10-02: never discounted)', () => {
+  it('an offer’s line says it never comes off them only while a category is never discounted', () => {
+    expect(offerSummary(offer(), true)).toBe('10% off the food, not on value deals · deliveries · came by WhatsApp · every day, all day');
+    expect(offerSummary(offer({ type: 'flat', value: 30_000 }), true)).toMatch(/^Rs 300 off the food, not on value deals · /);
+    // Nothing marked: the line as before.
+    expect(offerSummary(offer(), false)).toBe('10% off the food · deliveries · came by WhatsApp · every day, all day');
+    // Marked by its name (Value Deals, Combos), or by the owner; not when he said discounts come off it.
+    expect(someCategoryNeverDiscounted([{ name: 'Pizza' }, { name: 'Value Deals', noDiscount: null }])).toBe(true);
+    expect(someCategoryNeverDiscounted([{ name: 'Test Combos' }])).toBe(true);
+    expect(someCategoryNeverDiscounted([{ name: 'Test Specials', noDiscount: true }])).toBe(true);
+    expect(someCategoryNeverDiscounted([{ name: 'Pizza' }, { name: 'Value Deals', noDiscount: false }])).toBe(false);
+    expect(someCategoryNeverDiscounted([{ name: 'Delivery Charges' }, { name: 'Test Dealers' }])).toBe(false);
+    expect(someCategoryNeverDiscounted(undefined)).toBe(false);
   });
 });
 

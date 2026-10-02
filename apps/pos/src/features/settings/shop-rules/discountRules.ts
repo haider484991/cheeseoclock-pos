@@ -166,7 +166,8 @@ const EXAMPLE_LINES = [
  */
 export function deliveryExample(d: Pick<DiscountDelivery, 'alsoOffDeliveryCharge'>): string {
   const also = d.alsoOffDeliveryCharge;
-  const base = discountBaseCents(EXAMPLE_LINES, { alsoOffDeliveryCharge: also, skipsNoDiscountLines: false });
+  // The scope a discount given at the counter freezes (the example has no value deal in it).
+  const base = discountBaseCents(EXAMPLE_LINES, { alsoOffDeliveryCharge: also, skipsNoDiscountLines: true });
   const subtotal = EXAMPLE_FOOD_CENTS + EXAMPLE_DELIVERY_CHARGE_CENTS;
   const tenOff = computeDiscountCents(base, { type: 'percent', value: 10 });
   const leftAtAll = subtotal - computeDiscountCents(base, { type: 'percent', value: 100 });
@@ -205,6 +206,13 @@ export const DELIVERY_NEVER_CHANGED =
   'Never changed: a discount is on the food only (your rule of 28 Sep 2026). Before this setting, discounts came off the delivery charge too.';
 
 // -------------------------------------------------------------- buttons --
+
+/**
+ * Under Discount buttons, while a category is never discounted (Menu →
+ * Categories: Value Deals by its name, unless the owner changed it): no
+ * button, typed amount or automatic offer comes off those items.
+ */
+export const VALUE_DEALS_DISCOUNT_NOTE = 'Value deals never get a discount (Menu → Categories).';
 
 /** One box per button; an empty box drops that button. */
 export interface PresetsForm {

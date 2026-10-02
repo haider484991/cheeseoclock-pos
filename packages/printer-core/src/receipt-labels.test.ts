@@ -783,3 +783,108 @@ describe('DUPLICATE and the order note, on the same paper', () => {
     expect(count(t, '!! ORDER NOTE:')).toBe(1);
   });
 });
+
+/**
+ * NO DISCOUNT ON VALUE DEALS (the owner, 2026-10-02): a discount whose
+ * frozen rule left the order's value deals alone says so in brackets, in the
+ * one phrase the cart, Pay, the website and the printed coupon use, and the
+ * words wrap cleanly on both papers. One that found nothing else to come off
+ * (Rs 0: the food was taken off, the deals stayed) prints no line at all.
+ */
+describe('a discount that left the value deals alone', () => {
+  /** Rs 1,000 of pizza and a Rs 3,600 value deal (never discounted), Rs 100 off the pizza. */
+  function withDeal(d: Partial<OrderSnapshot['discounts'][number]>, opts: { charge?: boolean } = {}): OrderSnapshot {
+    const s = paid();
+    const base = s.items[0]!;
+    s.items.push({
+      ...base,
+      id: id('i_deal'),
+      menuItemName: 'Test Big Deal',
+      categoryName: 'Value Deals',
+      quantity: 1,
+      unitPriceCents: cents(360_000),
+      lineTotalCents: cents(360_000),
+      noDiscount: true,
+      modifiers: [],
+    });
+    if (opts.charge) {
+      s.items.push({
+        ...base,
+        id: id('i_fee'),
+        menuItemName: 'Delivery Charge (Rs 200)',
+        categoryName: 'Delivery Charges',
+        quantity: 1,
+        unitPriceCents: cents(20_000),
+        lineTotalCents: cents(20_000),
+        noDiscount: false,
+        modifiers: [],
+      });
+    }
+    s.discounts = [
+      {
+        id: id('d1'),
+        orderId: id('o1'),
+        discountType: 'percent',
+        value: 10,
+        reason: null,
+        appliedByUserId: id('u1'),
+        approvedByUserId: null,
+        amountCents: cents(10_000),
+        source: null,
+        alsoOffDeliveryCharge: false,
+        skipsNoDiscountLines: true,
+        ...d,
+      },
+    ];
+    return s;
+  }
+  const offer = { id: 'test-wa', name: 'WhatsApp 10% off', type: 'percent' as const, value: 10, minOrderCents: null, maxOffCents: null, declined: false };
+
+  /** The rows between Subtotal and the tax line: the discount's. */
+  const discountRows = (s: OrderSnapshot, width: 48 | 32) => {
+    const rows = text(renderReceipt(s, { branding, width }));
+    return rows.slice(rows.findIndex((r) => r.startsWith('Subtotal')) + 1, rows.findIndex((r) => r.startsWith('Tax')));
+  };
+
+  const cases: Array<[string, OrderSnapshot]> = [
+    ['Discount 10% (Staff, not on value deals)', withDeal({ reason: 'Staff' })],
+    ['Discount 10% (Staff, food only, not on value deals)', withDeal({ reason: 'Staff' }, { charge: true })],
+    ['Discount 10% (not on value deals)', withDeal({})],
+    ['Discount (Website pick-up 10% off, not on value deals)', withDeal({ reason: 'Website pick-up 10% off', alsoOffDeliveryCharge: true })],
+    ['WhatsApp 10% off (not on value deals)', withDeal({ reason: 'WhatsApp 10% off', source: 'offer', offer })],
+  ];
+
+  for (const width of [48, 32] as const) {
+    it(`says so in words that wrap cleanly at ${width} columns, the amount at the right`, () => {
+      for (const [label, s] of cases) {
+        const rows = discountRows(s, width);
+        for (const r of rows) expect(r.length, `${label}: ${JSON.stringify(r)}`).toBeLessThanOrEqual(width);
+        // Wrapped on spaces only: the rows read back as the words, then the amount.
+        expect(rows.map((r) => r.trim()).join(' ').replace(/\s+/g, ' ')).toBe(`${label} - 100.00`);
+        expect(rows[rows.length - 1]!.endsWith('- 100.00')).toBe(true);
+      }
+    });
+  }
+
+  it('given before 0.7.34, or one that covered the deals (a foodpanda order): exactly as before', () => {
+    for (const skips of [undefined, false]) {
+      expect(discountRows(withDeal({ reason: 'Staff', skipsNoDiscountLines: skips }), 48)).toEqual([
+        'Discount (Staff)                        - 100.00',
+      ]);
+    }
+  });
+
+  it('at Rs 0 (only the deals left) it prints no line — never "- 0.00"; the total reads as the bill', () => {
+    for (const width of [48, 32] as const) {
+      const s = withDeal({ reason: 'Staff', amountCents: cents(0) });
+      s.items = s.items.filter((i) => i.noDiscount === true);
+      expect(discountRows(s, width)).toEqual([]);
+      const all = text(renderReceipt(s, { branding, width })).join('\n');
+      expect(all).not.toContain('Discount');
+      expect(all).not.toContain('- 0.00');
+    }
+    // A Rs 0 discount whose rule did not skip the deals is not this one: it prints as before.
+    const old = withDeal({ reason: 'Staff', amountCents: cents(0), skipsNoDiscountLines: undefined });
+    expect(discountRows(old, 48)).toEqual(['Discount (Staff)                          - 0.00']);
+  });
+});

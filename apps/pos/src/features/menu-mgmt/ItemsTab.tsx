@@ -9,6 +9,7 @@ import {
   FEE_ITEM_LOCKED_NOTE,
   FEE_ITEM_UNUSED_NOTE,
   WEB_AVAILABILITIES,
+  categoryNeverDiscounted,
   chargedFeeItemIds,
   deliveryZoneFeeItemIds,
   isDeliveryChargeMenuItem,
@@ -23,6 +24,7 @@ import {
   WEBSITE_DEAL_CHOICE_NOTE,
   WEB_AVAILABILITY_WORDS,
   goesToWebsite,
+  itemNeverDiscountedNote,
   itemWebsiteLabel,
   itemWebsiteState,
   photoTooBigForWebsite,
@@ -412,6 +414,8 @@ function ItemDialog({
 
   const price = Number(priceRupees);
   const priceValid = priceRupees.trim() !== '' && Number.isFinite(price) && price >= 0;
+  // The chosen category, when no discount ever comes off its items (Value Deals).
+  const neverDiscountedIn = catQ.data?.find((c) => c.id === categoryId && categoryNeverDiscounted(c)) ?? null;
 
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -666,6 +670,11 @@ function ItemDialog({
                 </>
               )}
             </Field>
+
+            {/* Its category's "Never discounted" (the owner's, Menu → Categories): read-only here. */}
+            {!feeFixed && neverDiscountedIn && (
+              <p className="text-sm text-amber-800 dark:text-amber-300">{itemNeverDiscountedNote(neverDiscountedIn.name)}</p>
+            )}
 
             <Field label={`Choices (${attachedGroupIds.size} on this item)`}>
               <div className="rounded-lg border border-stone-200 p-2 dark:border-stone-700">

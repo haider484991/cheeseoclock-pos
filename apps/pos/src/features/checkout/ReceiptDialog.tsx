@@ -10,7 +10,7 @@ import { ipc, onFbrQueueChanged } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
 import { failedRetryToast, reprintReceipt, reprintToast } from '../printing/reprint';
 import { paperButtonLabel } from '../printing/paperLabels';
-import { isOfferTakenOff, receiptDiscountLabel } from './discountWords';
+import { billLeavesOut, receiptDiscountLabel } from './discountWords';
 import { receiptDialogShop } from './receiptDialogShop';
 
 interface Props {
@@ -181,10 +181,12 @@ export function ReceiptDialog({ snapshot, onClose }: Props) {
                 <span>Subtotal</span>
                 <span>{formatCents(order.subtotalCents, { showSymbol: false })}</span>
               </div>
-              {/* An automatic offer the cashier took off takes nothing off: no line (as on the printed bill). */}
-              {discounts.filter((d) => !isOfferTakenOff(d)).map((d) => (
+              {/* An automatic offer the cashier took off, or a discount at Rs 0 that left the value deals
+                  alone, takes nothing off: no line (as on the printed bill). */}
+              {discounts.filter((d) => !billLeavesOut(d)).map((d) => (
                 <div key={d.id} className="flex justify-between text-emerald-700 dark:text-emerald-300">
-                  {/* "(10%, food only)" when the discount's own frozen rule left the delivery charge alone. */}
+                  {/* "(10%, food only)" / "(10%, not on value deals)" when the discount's own frozen rule left
+                      the delivery charge or the value deals alone. */}
                   <span>{receiptDiscountLabel(d, items)}</span>
                   <span>−{formatCents(d.amountCents, { showSymbol: false })}</span>
                 </div>

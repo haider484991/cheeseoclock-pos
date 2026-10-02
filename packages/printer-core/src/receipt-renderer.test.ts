@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Cents, OrderNumber, OrderSnapshot, UUID } from '@cheeseoclock/shared-types';
+import { NOT_ON_VALUE_DEALS, discountBillLabel, type Cents, type OrderNumber, type OrderSnapshot, type UUID } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, LINES_BEFORE_CUT } from './escpos.js';
 import { CUT_MARKER, QR_MARKER, decodeEscPos } from './escpos-decode.js';
 import type { MonoRaster } from './logo-raster.js';
@@ -190,6 +190,46 @@ describe('renderReceipt', () => {
     const noCharge = snapshot();
     noCharge.discounts[0] = { ...noCharge.discounts[0]!, alsoOffDeliveryCharge: false };
     expect(textOf(noCharge)).not.toContain('food only');
+  });
+
+  it('a discount that left the value deals alone says "not on value deals", from its own frozen rule and only with a deal on the order; one that covered them prints as before', () => {
+    const DEAL = { menuItemName: 'Test Big Deal', noDiscount: true };
+    const PIZZA = { menuItemName: 'Test Pizza', noDiscount: false };
+    const CHARGE = { menuItemName: 'Delivery Charge (Rs 200)' };
+    const d = (over: Partial<Parameters<typeof discountBillLabel>[0]> = {}): Parameters<typeof discountBillLabel>[0] => ({
+      discountType: 'percent',
+      value: 10,
+      reason: null,
+      source: null,
+      alsoOffDeliveryCharge: false,
+      skipsNoDiscountLines: true,
+      ...over,
+    });
+    expect(discountBillLabel(d({ reason: 'Staff' }), [DEAL, PIZZA])).toBe('Discount 10% (Staff, not on value deals)');
+    expect(discountBillLabel(d({ reason: 'Staff' }), [DEAL, PIZZA, CHARGE])).toBe('Discount 10% (Staff, food only, not on value deals)');
+    expect(discountBillLabel(d(), [DEAL, PIZZA])).toBe('Discount 10% (not on value deals)');
+    expect(discountBillLabel(d({ discountType: 'flat', value: 20_000, reason: 'Staff' }), [DEAL, PIZZA])).toBe('Discount (Staff, not on value deals)');
+    // The reason says the % already: not twice.
+    expect(discountBillLabel(d({ reason: 'Website pick-up 10% off', alsoOffDeliveryCharge: true }), [DEAL, PIZZA])).toBe(
+      'Discount (Website pick-up 10% off, not on value deals)',
+    );
+    expect(discountBillLabel(d({ reason: 'WhatsApp 10% off', source: 'offer' }), [DEAL, PIZZA])).toBe('WhatsApp 10% off (not on value deals)');
+    expect(discountBillLabel(d({ reason: 'WhatsApp 10% off', source: 'offer' }), [DEAL, PIZZA, CHARGE])).toBe(
+      'WhatsApp 10% off (food only, not on value deals)',
+    );
+    // Given before 0.7.34 (no field), the foodpanda deal or a discount on a foodpanda order (false): as before.
+    for (const skips of [undefined, false]) {
+      expect(discountBillLabel(d({ reason: 'Staff', skipsNoDiscountLines: skips }), [DEAL, PIZZA])).toBe('Discount (Staff)');
+      expect(discountBillLabel(d({ reason: 'Staff', skipsNoDiscountLines: skips }), [DEAL, PIZZA, CHARGE])).toBe('Discount 10% (Staff, food only)');
+    }
+    expect(discountBillLabel(d({ reason: 'Foodpanda deal 20% off', source: 'foodpanda', skipsNoDiscountLines: undefined }), [DEAL, PIZZA])).toBe(
+      'Foodpanda deal 20% off',
+    );
+    // No value deal on the order: nothing to say.
+    expect(discountBillLabel(d({ reason: 'Staff' }), [PIZZA])).toBe('Discount (Staff)');
+    expect(discountBillLabel(d({ reason: 'Staff' }), [{ menuItemName: 'Test Pizza' }])).toBe('Discount (Staff)');
+    // One shared phrase, as the website and the printed coupon say it.
+    expect(discountBillLabel(d(), [DEAL])).toContain(NOT_ON_VALUE_DEALS);
   });
 
   it('one of the owner’s automatic offers prints by its NAME (and "food only" when it left the delivery charge alone); one the cashier took off prints nothing', () => {

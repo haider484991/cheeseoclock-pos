@@ -44,7 +44,7 @@ import {
 import { SettingCard } from './shop-rules/SettingCard';
 import { OffersCard } from './OfferSettings';
 import { useDraft } from './shop-rules/useDraft';
-import { useShopSetting, useShopSettingsLive } from './shop-rules/useShopSetting';
+import { useShopSetting, useShopSettingsLive, useValueDealsMarked } from './shop-rules/useShopSetting';
 import { sameValue } from './shop-rules/foodpandaForm';
 import {
   DELIVERY_NEVER_CHANGED,
@@ -54,6 +54,7 @@ import {
   LOWERED_LIMIT_NOTE,
   REASON_QUESTION,
   REASON_RULE_NOTE,
+  VALUE_DEALS_DISCOUNT_NOTE,
   approvalDeliveryNote,
   approvalExample,
   approvalFromForm,
@@ -110,6 +111,8 @@ function MoneyCards({
   // "A discount also comes off the delivery charge" (its own card, below): what the limit's % is of on a delivery order.
   // Not waited for: the note shows once it has loaded.
   const delivery = useShopSetting('discounts.delivery').q.data?.value ?? null;
+  // A category never discounted (Menu → Categories): the buttons never come off its items, and the card says so.
+  const valueDealsMarked = useValueDealsMarked();
 
   const approvalD = useDraft(approvalCard.value, approvalToForm);
   const presetsD = useDraft(presetsCard.value, presetsToForm);
@@ -251,6 +254,7 @@ function MoneyCards({
               ))}
             </div>
             <p className="mt-2 text-xs">Reasons: {buttons.reasons.join(' · ')}. The reason prints on the bill and groups discounts in Reports → Team &amp; leakage.</p>
+            {valueDealsMarked && <p className="mt-1 text-xs">{VALUE_DEALS_DISCOUNT_NOTE}</p>}
           </div>
         }
       >

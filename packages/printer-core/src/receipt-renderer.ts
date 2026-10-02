@@ -568,8 +568,12 @@ function appendSaleBody(
     }
     // One of the owner's automatic offers the cashier took off: nothing off, no line.
     if (d.source === 'offer' && d.amountCents === 0) continue;
+    // A discount that leaves the value deals alone and found nothing else to
+    // come off (the food was taken off, the deals stayed): no "- 0.00" line.
+    if (d.amountCents === 0 && d.skipsNoDiscountLines === true) continue;
     // "Discount (Staff)" — or, when its frozen rule left the delivery charge
-    // alone, "Discount 10% (Staff, food only)"; an automatic offer by its name.
+    // or the value deals alone, "Discount 10% (Staff, food only)", "Discount
+    // 10% (Staff, not on value deals)"; an automatic offer by its name.
     const tag = discountBillLabel(d, snapshot.items);
     b.line(tag, `- ${money(d.amountCents)}`);
     if (d.foodpanda && d.foodpanda.platformCents > 0) {
