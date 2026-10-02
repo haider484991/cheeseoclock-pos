@@ -1249,9 +1249,11 @@ export type DeliveryAreaEvent =
   /** "Put it back" on the till's delivery-charge row: the area's charge, whatever was taken off by hand. */
   | 'put_back'
   /**
-   * The order's phone was saved or taken off: the add-on rule is settled again
-   * for the area the charge last followed. Nothing is written when the order
-   * goes with the same live delivery as before (or still with none).
+   * The order's phone was saved or taken off (snapshotCustomerOntoOrder:
+   * Send's and Pay's customer save; detachCustomerFromOrder): the add-on rule
+   * is settled again for the area the charge last followed. Nothing is
+   * written when the order goes with the same live delivery as before (or
+   * still with none).
    */
   | 'phone';
 
@@ -1368,6 +1370,21 @@ function liveDeliveryNotOutFor(
     )
     .get(orderId, phones[0], phones[1]) as { id: string; order_number: string } | undefined;
   return row ? { orderId: row.id, orderNumber: String(row.order_number) } : null;
+}
+
+type AddOnTo = NonNullable<OrderSnapshot['addOnTo']>;
+
+/**
+ * OrderSnapshot.addOnTo: the delivery this order goes with, while its last
+ * DELIVERY_AREA_ACTION row recorded the charge left off for it (charged
+ * 'add_on_off'); null otherwise (charged as usual, put back, never told).
+ * What the main process last settled — the next area, phone or customer
+ * save settles it again.
+ */
+function addOnToOf(db: AppDatabase, orderId: string): AddOnTo | null {
+  const recorded = recordedDeliveryArea(db, orderId);
+  const g = recorded?.charged === 'add_on_off' ? recorded.goesWith : null;
+  return g ? { orderId: g.orderId as AddOnTo['orderId'], orderNumber: g.orderNumber as AddOnTo['orderNumber'] } : null;
 }
 
 /** The area of the address saved on the order (delivery_address_snapshot), or null. */
@@ -3694,6 +3711,10 @@ export function getOrderSnapshot(
     (order.status === 'sent_to_kitchen' || order.status === 'preparing' || order.status === 'ready') &&
     typedPhone !== null;
 
+  // Add-on delivery: an open counter delivery says which delivery of the same phone it goes with,
+  // as deliveryChargeForArea last settled it (its charge left off). Every other snapshot reads as before.
+  const asksAddOn = order.mode === 'delivery' && order.status === 'open' && order.source === 'pos';
+
   return {
     order,
     items,
@@ -3714,6 +3735,7 @@ export function getOrderSnapshot(
         ? { deliveryChargeToRider: null }
         : {}),
     ...(asksRiderPaidEarlier ? { riderPaidEarlier: riderPaidEarlierFor(db, orderId, typedPhone) } : {}),
+    ...(asksAddOn ? { addOnTo: addOnToOf(db, orderId) } : {}),
   };
 }
 

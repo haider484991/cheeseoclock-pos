@@ -823,6 +823,11 @@ export function snapshotCustomerOntoOrder(
     // transaction — the owner's rule never waits on the screen (order-repo deliveryChargeForArea;
     // only an area CHANGE, so a charge taken off by hand stays off).
     if (addressArea !== undefined) deliveryChargeForArea(db, input.orderId, addressArea, 'area', actor);
+    // The customer's phone is on the order now: the add-on rule (no second delivery charge while
+    // the same customer's delivery is still in the shop; once it is out, a new trip) is settled
+    // here too, with or without an address, before the order is sent or paid. Nothing is written
+    // when it goes with the same delivery as before (or still with none).
+    deliveryChargeForArea(db, input.orderId, null, 'phone', actor);
   });
   tx();
 }
@@ -900,6 +905,8 @@ export function detachCustomerFromOrder(db: AppDatabase, orderId: string, actor:
     refreshOrderOffer(db, orderId, actor);
     // No address, no area: the charge the till put on for it comes off (deliveryChargeForArea).
     deliveryChargeForArea(db, orderId, null, 'area', actor);
+    // No phone either: no delivery to go with (the add-on rule), settled with the area.
+    deliveryChargeForArea(db, orderId, null, 'phone', actor);
   });
   tx();
 }

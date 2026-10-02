@@ -19,17 +19,35 @@
  *     touched, and one still in the kitchen is a first delivery too;
  *   - every line change has its sync and audit rows; a 'phone' event that
  *     goes with the same delivery writes nothing.
+ * Wired to the phone (18-10b):
+ *   - Send's and Pay's customer save (snapshotCustomerOntoOrder), with or
+ *     without an address, settles the rule before the order is sent or
+ *     paid: the charge comes off while #A is in the kitchen, and goes on
+ *     when #A went out first; taking the customer off
+ *     (detachCustomerFromOrder) clears the add-on with the address;
+ *   - the snapshot's addOnTo names #A only while the charge is left off for
+ *     it, and only on an open counter delivery;
+ *   - 'orders:setDeliveryArea' carries the panel's phone (trimmed, at most
+ *     30 characters); 'customers:attachToOrder' answers with addOnTo;
+ *   - the add-on sent out freezes rider_keeps_cents 0 while #A keeps Rs 200.
  *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for
- * Electron); skipped where it is missing. Every name, number and amount is
- * made up.
+ * Electron); skipped where it is missing. Only `defineHandler` (captured),
+ * the signed-in session, the printer spooler, the FBR worker and the order
+ * alerts are stood in for. Every name, number and amount is made up.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AuthenticatedUser, OrderSnapshot, UUID } from '@cheeseoclock/shared-types';
 import type { AppDatabase } from './connection.js';
 import { DatabaseSync } from './costing-shop.fixture.js';
 import { openTill, push } from './two-tills.fixture.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
+
+const h = vi.hoisted(() => ({
+  handlers: new Map<string, (ctx: unknown, payload: unknown) => Promise<unknown>>(),
+  session: null as AuthenticatedUser | null,
+}));
 
 vi.mock('electron-log/main', () => ({
   default: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -44,6 +62,44 @@ vi.mock('electron', () => ({
       return false;
     }
   },
+}));
+// The orders and customers handlers, captured instead of registered with Electron.
+vi.mock('../ipc/registry.js', () => {
+  class IpcGuardError extends Error {
+    readonly apiError: { code: string; message: string };
+    constructor(apiError: { code: string; message: string }) {
+      super(apiError.message);
+      this.apiError = apiError;
+      this.name = 'IpcGuardError';
+    }
+  }
+  return {
+    IpcGuardError,
+    defineHandler: (
+      channel: string,
+      _ctx: unknown,
+      fn: (ctx: unknown, payload: unknown) => Promise<unknown>,
+    ) => {
+      h.handlers.set(channel, async (ctx, payload) => fn(ctx, payload));
+    },
+  };
+});
+// Who is signed in: auth-service's job, stood in for here.
+vi.mock('../services/auth-service.js', () => ({
+  getCurrentSession: () => h.session,
+  verifyManagerPin: async () => {
+    throw new Error("That is not a manager's PIN or password");
+  },
+}));
+vi.mock('../services/print-spooler.js', () => ({
+  printSpooler: new Proxy({}, { get: () => () => undefined }),
+  drawerFailureText: () => '',
+}));
+vi.mock('../services/fbr-worker.js', () => ({
+  fbrWorker: { kick: () => {}, resetAdapter: () => {} },
+}));
+vi.mock('../services/order-alerts-hub.js', () => ({
+  orderAlerts: { orderReceived: () => {}, importFailed: () => {} },
 }));
 
 const live = describe.skipIf(!DatabaseSync);
@@ -768,5 +824,451 @@ live('two tills and the website', () => {
       goesWith: { orderId: web.id, orderNumber: web.orderNumber },
       charged: 'add_on_off',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 18-10b: the add-on rule wired to the phone.
+// ---------------------------------------------------------------------------
+
+/**
+ * Send's or Pay's customer save (snapshotCustomerOntoOrder, as
+ * customers:attachToOrder runs it): the made-up customer with `phone`, and an
+ * address in `area` when given (none: the area the panel told stays).
+ */
+async function saveCustomer(shop: Shop, orderId: string, phone: string, area?: string) {
+  const c = await customers();
+  const customer = c.createCustomer(shop.db, { name: 'Test Add-on Customer', phone }, CASHIER);
+  const address = area
+    ? c.createAddress(
+        shop.db,
+        { customerId: customer.id, addressLine: 'House 12, Test Lane', area },
+        CASHIER,
+      )
+    : null;
+  c.snapshotCustomerOntoOrder(
+    shop.db,
+    { orderId, customerId: customer.id, addressId: address ? address.id : null },
+    CASHIER,
+  );
+  return customer.id;
+}
+
+const areaRows = (db: AppDatabase) => count(db, "audit_log WHERE action = 'delivery_area'");
+const keeps = (db: AppDatabase, orderId: string) =>
+  (db.prepare(`SELECT rider_keeps_cents FROM orders WHERE id = ?`).get(orderId) as Row)[
+    'rider_keeps_cents'
+  ];
+const goesWith = (o: { id: string; orderNumber: string }) => ({
+  orderId: o.id,
+  orderNumber: o.orderNumber,
+});
+const CHARGE_200: Array<[string, number, number]> = [['Delivery Charge (Rs 200)', 20_000, 1]];
+
+type Outcome = { ok: true; data: unknown } | { ok: false; code: string; message: string };
+
+/** The orders and customers handlers on this till, a cashier signed in; `call` runs one as the IPC would. */
+async function tillIpc(shop: Shop) {
+  h.handlers.clear();
+  const ctx = { db: shop.db, deviceId: TILL_A } as never;
+  (await import('../ipc/handlers/orders-handlers.js')).registerOrdersHandlers(ctx);
+  (await import('../ipc/handlers/customers-handlers.js')).registerCustomersHandlers(ctx);
+  h.session = {
+    id: CASHIER.userId as UUID,
+    fullName: 'Test Cashier',
+    role: 'cashier',
+    sessionId: 'sess' as UUID,
+  };
+  return async (channel: string, payload: unknown): Promise<Outcome> => {
+    const fn = h.handlers.get(channel);
+    if (!fn) throw new Error(`No handler for ${channel}`);
+    try {
+      const r = (await fn({ db: shop.db, deviceId: TILL_A }, payload)) as
+        | { ok: true; data: unknown }
+        | { ok: false; error: { code: string; message: string } };
+      return r.ok
+        ? { ok: true, data: r.data }
+        : { ok: false, code: r.error.code, message: r.error.message };
+    } catch (e) {
+      const api = (e as { apiError?: { code: string; message: string } }).apiError;
+      if (api) return { ok: false, code: api.code, message: api.message };
+      throw e;
+    }
+  };
+}
+
+/** A new counter cart at 19:40 with the pizza (a Delivery unless asked), nothing told yet. */
+async function cart(shop: Shop, mode: 'delivery' | 'takeaway' = 'delivery') {
+  const r = await repo();
+  at('19:40');
+  const o = r.createOrder(shop.db, { mode }, CASHIER);
+  r.addOrderItem(
+    shop.db,
+    { orderId: o.id, menuItemId: shop.pizza, quantity: 1, modifierIds: [] },
+    CASHIER,
+  );
+  return o.id;
+}
+
+live("Send's and Pay's customer save, and taking the customer off (18-10b)", () => {
+  it("Send's save with no address (the panel told the area before any phone): the charge comes off while #A is in the kitchen, and the order is sent without it", async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'sent_to_kitchen');
+    const id = await addOn(shop, null);
+    expect(charges(shop.db, id)).toEqual(CHARGE_200);
+    expect(r.getOrderSnapshot(shop.db, id)?.addOnTo).toBeNull();
+    const [line] = lineIds(shop.db, id, false);
+    const sync0 = count(shop.db, 'sync_queue');
+    const audit0 = count(shop.db, 'audit_log');
+
+    await saveCustomer(shop, id, '03001234567');
+
+    expect(charges(shop.db, id)).toEqual([]);
+    expect(lineIds(shop.db, id, true)).toEqual([line]);
+    expect(totalOf(shop.db, id)).toBe(FOOD_ONLY);
+    expect(lastAreaAudit(shop.db, id)).toEqual({
+      before: { area: AREA, goesWith: null, charged: 'normal' },
+      after: {
+        area: AREA,
+        event: 'phone',
+        mode: 'delivery',
+        target: 'fee',
+        feeCents: 20_000,
+        added: null,
+        removed: 1,
+        goesWith: goesWith(a),
+        charged: 'add_on_off',
+      },
+    });
+    // In the save's own transaction: the customer, the line taken off (synced and audited), one area row.
+    const written = writtenAfter(shop.db, sync0, audit0);
+    expect(written.sync).toContainEqual({ entityType: 'order_items', entityId: line, op: 'delete' });
+    expect(written.audit).toContainEqual({
+      entityType: 'order_items',
+      entityId: line,
+      action: 'delete',
+    });
+    expect(written.audit.filter((x) => x.action === 'attach_customer')).toHaveLength(1);
+    expect(written.audit.filter((x) => x.action === 'delivery_area')).toHaveLength(1);
+    expect(r.getOrderSnapshot(shop.db, id)?.addOnTo).toEqual(goesWith(a));
+
+    // Send: the kitchen gets it with no second delivery charge.
+    r.sendOrderToKitchen(shop.db, id, CASHIER);
+    expect(r.findOrder(shop.db, id)).toMatchObject({
+      status: 'sent_to_kitchen',
+      totalCents: FOOD_ONLY,
+    });
+    expect(charges(shop.db, id)).toEqual([]);
+  });
+
+  it("Send's save when #A went out first: the charge goes back on before the order is sent (a new trip); #A out before the cart was rung, nothing to settle", async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'ready');
+    const id = await addOn(shop, '03001234567');
+    expect(charges(shop.db, id)).toEqual([]);
+    at('19:50');
+    r.sendOutOrder(shop.db, a.id, CASHIER);
+    // Until the next event the cart reads what the main process last settled.
+    expect(r.getOrderSnapshot(shop.db, id)?.addOnTo).toEqual(goesWith(a));
+
+    await saveCustomer(shop, id, '03001234567');
+    expect(charges(shop.db, id)).toEqual(CHARGE_200);
+    expect(lastAreaAudit(shop.db, id)).toMatchObject({
+      before: { area: AREA, goesWith: { orderId: a.id }, charged: 'add_on_off' },
+      after: {
+        area: AREA,
+        event: 'phone',
+        added: shop.charge200,
+        removed: 0,
+        goesWith: null,
+        charged: 'normal',
+      },
+    });
+    expect(r.getOrderSnapshot(shop.db, id)?.addOnTo).toBeNull();
+    r.sendOrderToKitchen(shop.db, id, CASHIER);
+    expect(r.findOrder(shop.db, id)?.totalCents).toBe(WITH_CHARGE);
+
+    // #A already out when the cart was rung: charged from the start; the save writes no area row.
+    const shop2 = await till();
+    await first(shop2, 'out_for_delivery');
+    const id2 = await addOn(shop2, null);
+    const rows0 = areaRows(shop2.db);
+    await saveCustomer(shop2, id2, '03001234567');
+    expect(charges(shop2.db, id2)).toEqual(CHARGE_200);
+    expect(areaRows(shop2.db)).toBe(rows0);
+  });
+
+  it("Pay's save (with the address) does the same: paid with no second charge while #A is in the kitchen; with its charge once #A is out", async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'preparing');
+    const id = await addOn(shop, null);
+    expect(charges(shop.db, id)).toEqual(CHARGE_200);
+    await saveCustomer(shop, id, '+92 300 1234567', AREA);
+    expect(charges(shop.db, id)).toEqual([]);
+    expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+      goesWith: goesWith(a),
+      charged: 'add_on_off',
+    });
+    r.tenderOrder(
+      shop.db,
+      {
+        orderId: id,
+        payments: [{ method: 'cash', amountCents: FOOD_ONLY, tenderedCents: FOOD_ONLY }],
+      },
+      CASHIER,
+    );
+    expect(r.findOrder(shop.db, id)).toMatchObject({
+      status: 'sent_to_kitchen',
+      totalCents: FOOD_ONLY,
+    });
+    expect(charges(shop.db, id)).toEqual([]);
+
+    // #A out before Pay: the save puts the charge on, so the payment takes the bill with it.
+    const shop2 = await till();
+    const a2 = await first(shop2, 'ready');
+    const id2 = await addOn(shop2, '03001234567');
+    expect(charges(shop2.db, id2)).toEqual([]);
+    at('19:50');
+    r.sendOutOrder(shop2.db, a2.id, CASHIER);
+    await saveCustomer(shop2, id2, '03001234567', AREA);
+    expect(charges(shop2.db, id2)).toEqual(CHARGE_200);
+    r.tenderOrder(
+      shop2.db,
+      {
+        orderId: id2,
+        payments: [{ method: 'cash', amountCents: WITH_CHARGE, tenderedCents: WITH_CHARGE }],
+      },
+      CASHIER,
+    );
+    expect(r.findOrder(shop2.db, id2)).toMatchObject({
+      status: 'sent_to_kitchen',
+      totalCents: WITH_CHARGE,
+    });
+  });
+
+  it('taking the customer off (detachCustomerFromOrder): the add-on is cleared with the address (no area, no charge), and the next area told charges it', async () => {
+    const shop = await till();
+    const r = await repo();
+    const c = await customers();
+    const a = await first(shop, 'ready');
+    const id = await addOn(shop, '03001234567');
+    await saveCustomer(shop, id, '03001234567');
+    expect(charges(shop.db, id)).toEqual([]);
+    expect(r.getOrderSnapshot(shop.db, id)?.addOnTo).toEqual(goesWith(a));
+    const rows0 = areaRows(shop.db);
+
+    c.detachCustomerFromOrder(shop.db, id, CASHIER);
+    expect(charges(shop.db, id)).toEqual([]);
+    expect(lastAreaAudit(shop.db, id)).toMatchObject({
+      before: { area: AREA, goesWith: goesWith(a), charged: 'add_on_off' },
+      after: {
+        area: null,
+        event: 'area',
+        added: null,
+        removed: 0,
+        goesWith: null,
+        charged: 'normal',
+      },
+    });
+    // One row: the 'phone' call after it finds nothing more to settle.
+    expect(areaRows(shop.db)).toBe(rows0 + 1);
+    const s = r.getOrderSnapshot(shop.db, id);
+    expect(s?.customerPhone).toBeNull();
+    expect(s?.addOnTo).toBeNull();
+
+    // The panel tells the area again with no phone: a delivery like any other, charged.
+    r.syncOrderDeliveryCharge(shop.db, id, AREA, CASHIER, { phone: null });
+    expect(charges(shop.db, id)).toEqual(CHARGE_200);
+    expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+      event: 'area',
+      added: shop.charge200,
+      goesWith: null,
+      charged: 'normal',
+    });
+  });
+
+  it('the add-on sent out freezes rider_keeps_cents 0 while #A keeps Rs 200; paid first, no payout and no drawer for it', async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'ready');
+    // Two add-ons of the same customer, both going with #A: one sent unpaid, one paid at Pay.
+    const unpaid = await addOn(shop, '03001234567');
+    await saveCustomer(shop, unpaid, '03001234567', AREA);
+    r.sendOrderToKitchen(shop.db, unpaid, CASHIER);
+    const paid = await addOn(shop, '03001234567');
+    await saveCustomer(shop, paid, '03001234567', AREA);
+    r.tenderOrder(
+      shop.db,
+      {
+        orderId: paid,
+        payments: [{ method: 'cash', amountCents: FOOD_ONLY, tenderedCents: FOOD_ONLY }],
+      },
+      CASHIER,
+    );
+    for (const id of [unpaid, paid]) {
+      expect(charges(shop.db, id)).toEqual([]);
+      expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+        goesWith: goesWith(a),
+        charged: 'add_on_off',
+      });
+      r.markOrderReady(shop.db, id, CASHIER);
+    }
+
+    at('19:50');
+    r.sendOutOrder(shop.db, a.id, CASHIER);
+    const sentUnpaid = r.sendOutOrder(shop.db, unpaid, CASHIER);
+    const sentPaid = r.sendOutOrder(shop.db, paid, CASHIER);
+    expect(keeps(shop.db, a.id)).toBe(20_000);
+    expect(keeps(shop.db, unpaid)).toBe(0);
+    expect(keeps(shop.db, paid)).toBe(0);
+    expect(sentUnpaid.drawerOpenId).toBeNull();
+    expect(sentPaid.drawerOpenId).toBeNull();
+    // Nothing paid out of the drawer to the rider for any of them yet (#A settles when he is back):
+    // the only drawer rows are the cash sale's at Pay.
+    expect(count(shop.db, 'cash_movements WHERE order_id IS NOT NULL')).toBe(0);
+    expect(count(shop.db, "drawer_opens WHERE kind = 'payout'")).toBe(0);
+  });
+});
+
+live('the snapshot says which delivery the add-on goes with (18-10b)', () => {
+  it('addOnTo is #A only while the charge is left off for it: null with no area told, once put back, or for another phone', async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'sent_to_kitchen');
+    const addOnTo = (id: string) => r.getOrderSnapshot(shop.db, id)?.addOnTo;
+
+    // A delivery cart with no area told yet: null (present).
+    const empty = await cart(shop);
+    expect(r.getOrderSnapshot(shop.db, empty)).toHaveProperty('addOnTo', null);
+
+    const id = await addOn(shop, '03001234567');
+    expect(addOnTo(id)).toEqual(goesWith(a));
+
+    r.syncOrderDeliveryCharge(shop.db, id, AREA, CASHIER, { putBack: true, phone: '03001234567' });
+    expect(charges(shop.db, id)).toEqual(CHARGE_200);
+    expect(addOnTo(id)).toBeNull();
+
+    // Another phone: no delivery to go with (the put-back charge stays on).
+    r.syncOrderDeliveryCharge(shop.db, id, AREA, CASHIER, { phone: '0301 7654321' });
+    expect(charges(shop.db, id)).toEqual(CHARGE_200);
+    expect(addOnTo(id)).toBeNull();
+
+    // #A's phone again: the charge comes off, and the snapshot names #A again.
+    r.syncOrderDeliveryCharge(shop.db, id, AREA, CASHIER, { phone: '03001234567' });
+    expect(charges(shop.db, id)).toEqual([]);
+    expect(addOnTo(id)).toEqual(goesWith(a));
+
+    // A delivery for another customer: charged, null.
+    const other = await addOn(shop, '0301 7654321');
+    expect(charges(shop.db, other)).toEqual(CHARGE_200);
+    expect(addOnTo(other)).toBeNull();
+  });
+
+  it('only on an open counter delivery: none on a takeaway, on the add-on once sent, on #A itself or on a website cart', async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'ready');
+
+    const take = await cart(shop, 'takeaway');
+    r.syncOrderDeliveryCharge(shop.db, take, AREA, CASHIER, { phone: '03001234567' });
+    expect(r.getOrderSnapshot(shop.db, take)).not.toHaveProperty('addOnTo');
+
+    const id = await addOn(shop, '03001234567');
+    expect(r.getOrderSnapshot(shop.db, id)?.addOnTo).toEqual(goesWith(a));
+    r.sendOrderToKitchen(shop.db, id, CASHIER);
+    expect(r.getOrderSnapshot(shop.db, id)).not.toHaveProperty('addOnTo');
+    expect(r.getOrderSnapshot(shop.db, a.id)).not.toHaveProperty('addOnTo');
+
+    at('19:40');
+    const web = r.createOrder(shop.db, { mode: 'delivery', source: 'web' }, CASHIER);
+    expect(r.getOrderSnapshot(shop.db, web.id)).not.toHaveProperty('addOnTo');
+  });
+});
+
+live("'orders:setDeliveryArea' carries the panel's phone; 'customers:attachToOrder' answers with addOnTo (18-10b)", () => {
+  it("the panel's phone, trimmed, links the add-on: the reply names #A and has no second charge; left out, null or blank, charged as usual", async () => {
+    const shop = await till();
+    const a = await first(shop, 'ready');
+    const call = await tillIpc(shop);
+
+    const id = await cart(shop);
+    const typed = `${' '.repeat(10)}+92 300 1234567${' '.repeat(10)}`;
+    expect(typed.length).toBeGreaterThan(30);
+    const res = await call('orders:setDeliveryArea', { orderId: id, area: AREA, phone: typed });
+    expect(res.ok).toBe(true);
+    const s = (res as { ok: true; data: OrderSnapshot }).data;
+    expect(s.addOnTo).toEqual(goesWith(a));
+    expect(s.items.map((i) => i.menuItemName)).toEqual(['Test Pizza']);
+    expect(s.order.totalCents).toBe(FOOD_ONLY);
+
+    for (const phone of [undefined, null, '   ']) {
+      const other = await cart(shop);
+      const out = await call('orders:setDeliveryArea', {
+        orderId: other,
+        area: AREA,
+        ...(phone === undefined ? {} : { phone }),
+      });
+      expect(out).toMatchObject({ ok: true, data: { addOnTo: null } });
+      expect(charges(shop.db, other)).toEqual(CHARGE_200);
+    }
+  });
+
+  it('a phone over 30 characters once trimmed, or one that is not text, is refused and nothing is written; 30 is taken', async () => {
+    const shop = await till();
+    await first(shop, 'ready');
+    const call = await tillIpc(shop);
+    const id = await cart(shop);
+    const ledger = () => ({
+      sync: count(shop.db, 'sync_queue'),
+      audit: count(shop.db, 'audit_log'),
+      lines: count(shop.db, 'order_items'),
+    });
+    const before = ledger();
+    expect(
+      await call('orders:setDeliveryArea', { orderId: id, area: AREA, phone: '0'.repeat(31) }),
+    ).toEqual({ ok: false, code: 'validation_failed', message: 'The phone number is too long' });
+    expect(
+      await call('orders:setDeliveryArea', { orderId: id, area: AREA, phone: 3_001_234_567 }),
+    ).toEqual({ ok: false, code: 'validation_failed', message: 'The phone number is not valid' });
+    expect(ledger()).toEqual(before);
+    expect(lastAreaAudit(shop.db, id)).toBeNull();
+
+    // 30 characters is taken (not a Pakistani number: charged as usual).
+    expect(
+      await call('orders:setDeliveryArea', { orderId: id, area: AREA, phone: '0'.repeat(30) }),
+    ).toMatchObject({ ok: true, data: { addOnTo: null } });
+    expect(charges(shop.db, id)).toEqual(CHARGE_200);
+  });
+
+  it("Pay's save on the IPC ('customers:attachToOrder') takes the charge off and answers with addOnTo #A", async () => {
+    const shop = await till();
+    const c = await customers();
+    const a = await first(shop, 'sent_to_kitchen');
+    const call = await tillIpc(shop);
+    const id = await cart(shop);
+    expect(await call('orders:setDeliveryArea', { orderId: id, area: AREA })).toMatchObject({
+      ok: true,
+      data: { addOnTo: null },
+    });
+    expect(charges(shop.db, id)).toEqual(CHARGE_200);
+
+    const customer = c.createCustomer(
+      shop.db,
+      { name: 'Test Add-on Customer', phone: '03001234567' },
+      CASHIER,
+    );
+    const res = await call('customers:attachToOrder', {
+      orderId: id,
+      customerId: customer.id,
+      addressId: null,
+    });
+    expect(res.ok).toBe(true);
+    const s = (res as { ok: true; data: OrderSnapshot }).data;
+    expect(s.addOnTo).toEqual(goesWith(a));
+    expect(s.items.map((i) => i.menuItemName)).toEqual(['Test Pizza']);
+    expect(s.order.totalCents).toBe(FOOD_ONLY);
   });
 });

@@ -691,9 +691,14 @@ export interface IpcContract {
    * off); `putBack` = the row's "Put it back": the area's charge whatever.
    * The customer save at Send and Pay (customers:attachToOrder) does the
    * same with the saved address's area, in its own transaction.
+   * `phone`: the phone typed on the panel (trimmed, at most 30 characters),
+   * for the add-on rule while the order has no phone of its own yet: a
+   * counter delivery whose phone has another delivery still in the shop
+   * (sent to the kitchen, being made or Ready) goes with it, and no second
+   * charge goes on (OrderSnapshot.addOnTo). Null or left out = none typed.
    */
   'orders:setDeliveryArea': {
-    request: { orderId: string; area: string | null; putBack?: boolean };
+    request: { orderId: string; area: string | null; putBack?: boolean; phone?: string | null };
     response: ApiResult<OrderSnapshot>;
   };
   'orders:tender': {

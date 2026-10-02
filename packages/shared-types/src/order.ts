@@ -266,6 +266,18 @@ export interface OrderSnapshot {
    */
   riderPaidEarlier?: { orderId: UUID; orderNumber: OrderNumber; amountCents: Cents } | null;
   /**
+   * Add-on delivery (the owner, 2 Oct 2026: "if its out then it should
+   * charge if the rider is not out"): the delivery of the same phone that this
+   * order goes with on one trip, so the till left its area's delivery charge
+   * off ('Goes with #0042: no second delivery charge'; "Put it back" puts it
+   * on). As the main process last settled it (the order's delivery_area
+   * audit row recorded charged 'add_on_off'); null when the charge follows
+   * the area as usual, or was put back. The next area, phone or customer
+   * save settles it again (a first delivery gone out by then is a new trip).
+   * Filled on an open counter delivery; absent on every other order.
+   */
+  addOnTo?: { orderId: UUID; orderNumber: OrderNumber } | null;
+  /**
    * Only on orders:listActive, from this till's print queue: the kitchen
    * ticket did not print and nothing has printed it since (Live Orders'
    * "Ticket not printed"). Absent everywhere else.

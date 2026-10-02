@@ -171,6 +171,23 @@ function stockAnswer(payload: { foodMade?: unknown; putBack?: unknown; expectSta
   return out;
 }
 
+/** The longest phone 'orders:setDeliveryArea' takes from the panel (trimmed). */
+const DELIVERY_AREA_PHONE_MAX = 30;
+
+/**
+ * The panel's phone on 'orders:setDeliveryArea', checked at the boundary:
+ * trimmed, at most 30 characters; left out, null or blank = none typed.
+ */
+function deliveryAreaPhone(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'string') throw new IpcGuardError({ code: 'validation_failed', message: 'The phone number is not valid' });
+  const phone = raw.trim();
+  if (phone.length > DELIVERY_AREA_PHONE_MAX) {
+    throw new IpcGuardError({ code: 'validation_failed', message: 'The phone number is too long' });
+  }
+  return phone || null;
+}
+
 export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:create', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
@@ -492,15 +509,18 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   // the area changes, off when it is cleared; only on a CHANGE (a charge taken off by hand stays
   // off) unless putBack; never twice, never foodpanda or a website order. The customer save at
   // Send and Pay does the same inside its own transaction (snapshotCustomerOntoOrder).
+  // `phone`: the panel's phone, for the add-on rule (no second charge while the same customer's
+  // delivery is still in the shop) until the order has a phone of its own.
   defineHandler('orders:setDeliveryArea', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
     const area = typeof payload?.area === 'string' ? payload.area.slice(0, 200) : null;
     if (typeof payload?.orderId !== 'string') throw new IpcGuardError({ code: 'validation_failed', message: 'Which order?' });
     const putBack = payload?.putBack === true;
+    const phone = deliveryAreaPhone(payload?.phone);
     // The repository's own refusals ("…inactive", "A foodpanda order never carries…") reach the
     // cashier through defineHandler as they are; a database error stays hidden behind a reference.
     try {
-      syncOrderDeliveryCharge(ctx.db, payload.orderId, area, { userId: s.id, deviceId: ctx.deviceId }, { putBack });
+      syncOrderDeliveryCharge(ctx.db, payload.orderId, area, { userId: s.id, deviceId: ctx.deviceId }, { putBack, phone });
     } catch (e) {
       if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.message === 'Order not found') {
         throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
