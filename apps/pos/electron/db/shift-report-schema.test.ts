@@ -10,6 +10,8 @@
  *     can say so instead of printing figures it may not understand;
  *   - nothing, empty, not JSON, a bare { v: 1 } or a figure of the wrong
  *     kind reads as null, and nothing throws;
+ *   - the one writer (pos-domain shiftReportJson) writes the sample as the
+ *     text that reads back as it was;
  *   - SHIFT_REPORT_SECTIONS holds the nine sections in the owner's order with
  *     his words.
  *
@@ -18,6 +20,7 @@
  * are made up and add up (the repository is public).
  */
 import { describe, expect, it } from 'vitest';
+import { shiftReportJson } from '@cheeseoclock/pos-domain';
 import { parseShiftReportJson, SHIFT_REPORT_MAX_ROWS, shiftReportSchema } from '@cheeseoclock/shared-schemas';
 import { SHIFT_REPORT_SECTIONS, SHIFT_REPORT_VERSION, type ShiftReport } from '@cheeseoclock/shared-types';
 
@@ -303,6 +306,25 @@ describe('parseShiftReportJson (reads the saved report, never throws)', () => {
     });
     const json = JSON.stringify(parseShiftReportJson(text));
     expect(/cost|profit|commission|waste/i.test(json)).toBe(false);
+  });
+});
+
+describe('the writer and the reader agree (pos-domain shiftReportJson, the only writer)', () => {
+  it('the stored text of the sample is the sample as JSON, and it reads back as it was, keys in the same order', () => {
+    expect(shiftReportJson(REPORT)).toBe(TEXT);
+    const read = parseShiftReportJson(shiftReportJson(REPORT));
+    expect(read).toEqual({ report: REPORT });
+    expect(read && 'report' in read ? shiftReportJson(read.report) : null).toBe(TEXT);
+  });
+
+  it('a report read back with a newer till’s extra keys is written again without them', () => {
+    const read = parseShiftReportJson(
+      edited((r) => {
+        (r as Record<string, unknown>)['dayReport'] = { tills: 2 };
+        (r.drawer as unknown as Record<string, unknown>)['floatTopUpCents'] = 1_000;
+      }),
+    );
+    expect(read && 'report' in read ? shiftReportJson(read.report) : null).toBe(TEXT);
   });
 });
 
