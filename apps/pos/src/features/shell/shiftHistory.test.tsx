@@ -8,7 +8,10 @@
  *     Reports link, the same one a finished stock take uses), aimed at the
  *     shift history panel;
  *   - the panel's words: its name, a shift still open, the drawer banner,
- *     and an empty period.
+ *     and an empty period;
+ *   - (v0.7.35) "Print shift report" on a closed shift whose close saved
+ *     its report: it asks the till for a DUPLICATE ('shifts:printReport',
+ *     again: true) and a toast says what came out, or why not.
  * Every name and amount is made up.
  */
 import type { ReactNode } from 'react';
@@ -24,9 +27,61 @@ import { openShiftHistory, openStockVariance, REPORTS_DEEP_LINK } from '../costi
 import { ReportsPage } from '../reports/ReportsPage';
 import { SHIFT_HISTORY_ANCHOR } from '../reports/reportTabs';
 import { periodFor } from '../reports/dateRange';
-import { shiftDrawerBanner, shiftHistoryNote, TeamLeakageTab } from '../reports/tabs/TeamLeakageTab';
+import { canPrintShiftReport, PRINT_SHIFT_REPORT, shiftDrawerBanner, shiftHistoryNote, TeamLeakageTab } from '../reports/tabs/TeamLeakageTab';
 import { shiftCarryOverText, shiftDetailLines } from '../reports/reportFormat';
 import { ShiftWidget } from './ShiftWidget';
+import { SHIFT_REPORT_SENT_DUPLICATE } from './shiftReportPrint';
+import { IpcError } from '../../ipc/client';
+
+// The shift report printed again from Shift history (v0.7.35): what was
+// asked of the till, and its answer (a reply, or a refusal); each Button as
+// rendered, with its words and its tap; and every toast.
+const printing = vi.hoisted(() => ({
+  requests: [] as unknown[],
+  reply: null as unknown,
+  refuse: null as Error | null,
+  buttons: [] as Array<{ words: string; tap: (() => void) | undefined; disabled: boolean; className: string }>,
+  toasts: [] as Array<{ title: string; description?: string; variant?: string }>,
+}));
+vi.mock('../../ipc/client', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../ipc/client')>();
+  const printReport = (request: unknown) => {
+    printing.requests.push(request);
+    return printing.refuse ? Promise.reject(printing.refuse) : Promise.resolve(printing.reply);
+  };
+  return { ...real, ipc: { ...real.ipc, shifts: { ...real.ipc.shifts, printReport } } };
+});
+vi.mock('@cheeseoclock/ui', async (importOriginal) => {
+  const ui = await importOriginal<typeof import('@cheeseoclock/ui')>();
+  const React = await import('react');
+  const words = (n: unknown): string =>
+    typeof n === 'string' || typeof n === 'number'
+      ? String(n)
+      : Array.isArray(n)
+        ? n.map(words).join('')
+        : React.isValidElement(n)
+          ? words((n.props as { children?: unknown }).children)
+          : '';
+  type Props = React.ComponentProps<typeof ui.Button>;
+  const Button = React.forwardRef<HTMLButtonElement, Props>(function Button(props, ref) {
+    const onClick = props.onClick;
+    printing.buttons.push({
+      words: words(props.children).trim(),
+      tap: onClick ? () => onClick({ preventDefault() {}, stopPropagation() {} } as never) : undefined,
+      disabled: props.disabled === true,
+      className: props.className ?? '',
+    });
+    return React.createElement(ui.Button, { ...props, ref });
+  });
+  return { ...ui, Button };
+});
+vi.mock('../../components/toast/ToastProvider', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../components/toast/ToastProvider')>();
+  const toast = (t: { title: string; description?: string; variant?: string }) => {
+    printing.toasts.push(t);
+  };
+  return { ...real, useToast: () => ({ toast }) };
+});
 
 function signIn(role: AuthenticatedUser['role']) {
   useSessionStore.setState({ user: { id: 'u1' as UUID, fullName: 'Test', role, sessionId: 's1' as UUID }, status: 'authenticated' });
@@ -406,5 +461,128 @@ describe('the shift history panel', () => {
         closedLine('b', '2026-09-24T07:00:00.000Z', '2026-09-24T20:00:00.000Z', 2_500),
       ]),
     ).toEqual({ text: 'Over Rs 75 in all, over 2 closed shifts. 1 shift still open: counted when it closes.', tone: 'over' });
+  });
+});
+
+// ------------------------------------------- Print shift report (v0.7.35) --
+
+describe('Shift history: Print shift report (v0.7.35)', () => {
+  const NOW = new Date('2026-09-26T10:00:00.000Z');
+  const reported = (id: string, openedAt: string, closedAt: string) => line({ ...closedLine(id, openedAt, closedAt, 0), hasCloseReport: true });
+  const printButtons = () => printing.buttons.filter((b) => b.words === PRINT_SHIFT_REPORT);
+
+  afterEach(() => {
+    printing.requests.length = 0;
+    printing.reply = null;
+    printing.refuse = null;
+    printing.buttons.length = 0;
+    printing.toasts.length = 0;
+  });
+
+  it('is on a closed shift whose close saved its report, beside Drawer log; not on one closed before 0.7.35, nor one still open', () => {
+    const out = render(
+      <TeamLeakageTab
+        now={NOW}
+        data={team([
+          line({ id: 's4', openedAt: '2026-09-26T07:00:00.000Z' }),
+          reported('s3', '2026-09-25T07:00:00.000Z', '2026-09-25T20:00:00.000Z'),
+          // Closed on a till that saved no report (before 0.7.35).
+          line({ ...closedLine('s2', '2026-09-24T07:00:00.000Z', '2026-09-24T20:00:00.000Z', 0), hasCloseReport: false }),
+          // A shift line from a till before 0051: no key at all.
+          closedLine('s1', '2026-09-23T07:00:00.000Z', '2026-09-23T20:00:00.000Z', 0),
+        ])}
+      />,
+    );
+    const words = text(out);
+    expect(words.match(/Print shift report/g)).toHaveLength(1);
+    expect(out.match(/Drawer log<\/button>/g)).toHaveLength(4);
+    // On s3's row (closed 26 Sep, 1:00 am), right after its Drawer log, before the next shift's row.
+    const at = (s: string, from = 0) => {
+      const i = words.indexOf(s, from);
+      if (i < 0) throw new Error(`Not on screen: ${s}`);
+      return i;
+    };
+    const s3 = at('to 26 Sep, 1:00 am · closed by Sara');
+    expect(at('Drawer log Print shift report', s3)).toBeLessThan(at('to 25 Sep, 1:00 am · closed by Sara'));
+    // The two sit side by side, and the button's words never wrap.
+    expect(out).toMatch(
+      /<div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1"><button type="button" class="[^"]*">Drawer log<\/button><button type="button" class="[^"]*whitespace-nowrap[^"]*"><svg[^>]*>.*?<\/svg>Print shift report<\/button><\/div>/,
+    );
+    expect(printButtons()).toEqual([expect.objectContaining({ disabled: false, className: expect.stringContaining('whitespace-nowrap') })]);
+    // Nothing was printed by showing it.
+    expect(printing.requests).toEqual([]);
+  });
+
+  it('only a closed shift with a saved report offers it', () => {
+    expect(canPrintShiftReport({ closedAt: '2026-09-25T20:00:00.000Z', hasCloseReport: true })).toBe(true);
+    expect(canPrintShiftReport({ closedAt: '2026-09-25T20:00:00.000Z', hasCloseReport: false })).toBe(false);
+    expect(canPrintShiftReport({ closedAt: '2026-09-25T20:00:00.000Z' })).toBe(false);
+    expect(canPrintShiftReport({ closedAt: null, hasCloseReport: true })).toBe(false);
+  });
+
+  it('a tap prints that shift again as a DUPLICATE (again: true), and the toast says DUPLICATE', async () => {
+    signIn('admin');
+    printing.reply = { printed: true, copy: 'reprint', reprintNo: 2, error: null };
+    render(
+      <TeamLeakageTab
+        now={NOW}
+        data={team([
+          reported('s3', '2026-09-25T07:00:00.000Z', '2026-09-25T20:00:00.000Z'),
+          reported('s2', '2026-09-24T07:00:00.000Z', '2026-09-24T20:00:00.000Z'),
+        ])}
+      />,
+    );
+    // Each row's button prints its own shift: the second row's is s2's.
+    const buttons = printButtons();
+    expect(buttons).toHaveLength(2);
+    buttons[1]!.tap!();
+    await vi.waitFor(() => expect(printing.toasts).toHaveLength(1));
+    expect(printing.requests).toEqual([{ shiftId: 's2', again: true }]);
+    expect(printing.toasts[0]).toEqual({ title: SHIFT_REPORT_SENT_DUPLICATE, variant: 'success' });
+    expect(SHIFT_REPORT_SENT_DUPLICATE).toBe('Shift report sent to the printer - it says DUPLICATE.');
+
+    buttons[0]!.tap!();
+    await vi.waitFor(() => expect(printing.toasts).toHaveLength(2));
+    expect(printing.requests).toEqual([
+      { shiftId: 's2', again: true },
+      { shiftId: 's3', again: true },
+    ]);
+  });
+
+  it('a paper that did not come out, or a refusal, is said in a toast; nothing is thrown', async () => {
+    signIn('admin');
+    const shifts = [reported('s3', '2026-09-25T07:00:00.000Z', '2026-09-25T20:00:00.000Z')];
+
+    // No receipt printer on this till: not a printer to check.
+    printing.reply = { printed: false, copy: 'reprint', reprintNo: 0, error: { code: 'no_printer', message: 'No receipt printer is set up on this till' } };
+    render(<TeamLeakageTab now={NOW} data={team(shifts)} />);
+    printButtons()[0]!.tap!();
+    await vi.waitFor(() => expect(printing.toasts).toHaveLength(1));
+    expect(printing.toasts[0]).toEqual({ title: 'The shift report did not print', description: 'No receipt printer is set up on this till.', variant: 'error' });
+
+    // The printer's lid is open: check it, then try again.
+    printing.reply = { printed: false, copy: 'reprint', reprintNo: 3, error: { code: 'printer_error', message: 'The printer lid is open' } };
+    printButtons()[0]!.tap!();
+    await vi.waitFor(() => expect(printing.toasts).toHaveLength(2));
+    expect(printing.toasts[1]).toEqual({
+      title: 'The shift report did not print',
+      description: 'The printer lid is open. Check the receipt printer, then try again.',
+      variant: 'error',
+    });
+
+    // Refused by the till (a report made by a newer till): its words, as they are.
+    printing.refuse = new IpcError({ code: 'precondition_failed', message: 'This shift report was made by a newer till - update this till to print it' });
+    printButtons()[0]!.tap!();
+    await vi.waitFor(() => expect(printing.toasts).toHaveLength(3));
+    expect(printing.toasts[2]).toEqual({
+      title: 'Shift report not printed',
+      description: 'This shift report was made by a newer till - update this till to print it',
+      variant: 'error',
+    });
+    expect(printing.requests).toEqual([
+      { shiftId: 's3', again: true },
+      { shiftId: 's3', again: true },
+      { shiftId: 's3', again: true },
+    ]);
   });
 });

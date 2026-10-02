@@ -4,7 +4,13 @@
  * values — shared-types kitchenTicketRules, the same reading the print
  * spooler does — never typed into the text.
  */
-import { kitchenTicketRules, type KitchenTicketRules, type PrintPolicy } from '@cheeseoclock/shared-types';
+import {
+  kitchenTicketRules,
+  SHIFT_REPORT_SECTIONS,
+  shiftReportRules,
+  type KitchenTicketRules,
+  type PrintPolicy,
+} from '@cheeseoclock/shared-types';
 
 const TIMES = ['never', 'once', 'twice', 'three times'] as const;
 
@@ -35,10 +41,16 @@ function drinksLine(r: KitchenTicketRules): string {
     : 'Drinks (a Drinks or Beverages category, or sent to the bar) are left off, with one line saying how many the counter hands out; an order of only drinks prints no ticket.';
 }
 
-/** Whether two policies differ in anything this card saves (the kitchen fields read with their defaults). */
+/**
+ * Whether two policies differ in anything this card saves (the kitchen and
+ * shift report fields read with their defaults, so a policy from before
+ * them and one saying the same thing are the same).
+ */
 export function printPolicyDiffers(a: PrintPolicy, b: PrintPolicy): boolean {
   const ka = kitchenTicketRules(a);
   const kb = kitchenTicketRules(b);
+  const sa = shiftReportRules(a);
+  const sb = shiftReportRules(b);
   return (
     a.kitchenTicket !== b.kitchenTicket ||
     a.deliveryBillOnDispatch !== b.deliveryBillOnDispatch ||
@@ -46,6 +58,9 @@ export function printPolicyDiffers(a: PrintPolicy, b: PrintPolicy): boolean {
     a.logoOnReceipt !== b.logoOnReceipt ||
     ka.copies !== kb.copies ||
     ka.phone !== kb.phone ||
-    ka.drinks !== kb.drinks
+    ka.drinks !== kb.drinks ||
+    sa.onClose !== sb.onClose ||
+    sa.items !== sb.items ||
+    SHIFT_REPORT_SECTIONS.some(({ key }) => sa.sections[key] !== sb.sections[key])
   );
 }

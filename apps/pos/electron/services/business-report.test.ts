@@ -564,6 +564,8 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         carriedTestDeletedCount: 0,
         // Closed on one typed figure: no count by note (v0.7.35, 0050).
         countedNotes: null,
+        // Closed with no shift report saved (as before 0.7.35, 0051): nothing to print from Shift history.
+        hasCloseReport: false,
       },
       // Opened the day before and never closed: still open through this day
       // too (it used to be left out, as not OPENED in the period).
@@ -590,6 +592,7 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         carryOverReason: null,
         carriedTestDeletedCount: 0,
         countedNotes: null,
+        hasCloseReport: false,
       },
     ]);
   });

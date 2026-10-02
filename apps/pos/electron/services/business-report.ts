@@ -906,6 +906,12 @@ export const SHIFT_TEST_DELETED_CASH_SQL = `(
  * repository reads it), null for a close typed as one figure, a shift still
  * open or text that cannot be read. countedCashCents stays the figure saved
  * at close; the notes are never added up again here.
+ *
+ * The shift report (v0.7.35, 0051 shifts.close_report_json): hasCloseReport
+ * says only whether the close saved one, so Shift history offers "Print
+ * shift report" on that row. The report itself never leaves the main
+ * process here: 'shifts:printReport' reads and prints it (and says so when
+ * it was made by a newer till or cannot be read).
  */
 function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'] {
   const rows = db
@@ -947,7 +953,9 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
                     AND a.action = 'carried_over_unpaid' AND json_valid(a.after_json)
                     AND json_extract(a.after_json, '$.shiftId') = s.id)
               ELSE 0 END AS carriedTestDeletedCount,
-              s.counted_notes_json AS countedNotesJson
+              s.counted_notes_json AS countedNotesJson,
+              -- The close saved its shift report (0051): Shift history's Print shift report.
+              s.close_report_json IS NOT NULL AS hasCloseReport
          FROM shifts s
          LEFT JOIN users uo ON uo.id = s.opened_by_user_id
          LEFT JOIN users uc ON uc.id = s.closed_by_user_id
@@ -955,9 +963,16 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
         ORDER BY s.opened_at DESC, s.id DESC
         LIMIT ${REPORT_LIST_CAP}`,
     )
-    .all(range.untilIso, range.sinceIso) as Array<Omit<BusinessReport['shifts'][number], 'countedNotes'> & { countedNotesJson: string | null }>;
-  // The stored text stays here: the screens get the count itself.
-  return rows.map(({ countedNotesJson, ...line }) => ({ ...line, countedNotes: parseCashCountJson(countedNotesJson) }));
+    .all(range.untilIso, range.sinceIso) as Array<
+    Omit<BusinessReport['shifts'][number], 'countedNotes' | 'hasCloseReport'> & { countedNotesJson: string | null; hasCloseReport: number }
+  >;
+  // The stored text stays here: the screens get the count itself, and only
+  // whether a report was saved (SQLite answers 0 / 1).
+  return rows.map(({ countedNotesJson, hasCloseReport, ...line }) => ({
+    ...line,
+    countedNotes: parseCashCountJson(countedNotesJson),
+    hasCloseReport: hasCloseReport === 1,
+  }));
 }
 
 /**

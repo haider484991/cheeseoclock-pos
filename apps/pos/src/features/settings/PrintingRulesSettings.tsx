@@ -1,10 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../../ipc/client';
 import { Button, Card, cn } from '@cheeseoclock/ui';
 import { useToast } from '../../components/toast/ToastProvider';
-import { KITCHEN_COPIES_MAX, kitchenTicketRules, type PrintPolicy, type ReceiptLogoStatus, type ShopCopyRule } from '@cheeseoclock/shared-types';
-import { Bike, ChefHat, Copy, CupSoda, Image as ImageIcon, Phone, Receipt, RotateCcw, ScrollText } from 'lucide-react';
+import {
+  KITCHEN_COPIES_MAX,
+  kitchenTicketRules,
+  SHIFT_REPORT_SECTIONS,
+  shiftReportRules,
+  type PrintPolicy,
+  type ReceiptLogoStatus,
+  type ShiftReportItemsShown,
+  type ShiftReportRules,
+  type ShiftReportSection,
+  type ShopCopyRule,
+} from '@cheeseoclock/shared-types';
+import { Bike, ChefHat, ClipboardList, Copy, CupSoda, Image as ImageIcon, Phone, Receipt, RotateCcw, ScrollText } from 'lucide-react';
 import { darkLogoFix } from './receiptLogo';
 import { reprintRuleText } from './shop-rules/timingWords';
 import { SHOP_SETTINGS_KEY, useShopSettingsLive } from './shop-rules/useShopSetting';
@@ -38,6 +49,23 @@ const SHOP_COPY_OPTIONS: Array<{ id: ShopCopyRule; label: string }> = [
   { id: 'never', label: 'Never' },
   { id: 'delivery', label: 'With delivery bills' },
   { id: 'always', label: 'With every receipt' },
+];
+
+// The shift report (v0.7.35; the owner, 2 Oct 2026: "all orders and totals
+// also add seetngs so we can customize"). This till only, the owner's alone
+// (printer.manage); the paper's footer points back here.
+export const SHIFT_REPORT_RULE_BODY =
+  "Prints on this till's receipt printer when a shift closes, after the count is saved. Set it on each till. The till always saves every section; switching one off only leaves it off the paper. Print any shift again from Reports → Team & leakage → Shift history. Food cost and profit never print.";
+export const SHIFT_REPORT_SWITCH = 'Print the shift report when a shift closes';
+export const SHIFT_REPORT_SECTIONS_TITLE = 'Sections on the paper';
+export const SHIFT_REPORT_SECTIONS_NOTE =
+  'All on at first. Every print follows them, at the close or from Shift history. When one is off, the paper ends with "Some sections are off. See Settings > Printers."';
+/** The radiogroup beside the "Items sold" switch. */
+export const SHIFT_REPORT_ITEMS_GROUP = 'Items sold';
+
+const SHIFT_REPORT_ITEMS_OPTIONS: Array<{ id: ShiftReportItemsShown; label: string }> = [
+  { id: 'items', label: 'Every item' },
+  { id: 'categories', label: 'Category totals' },
 ];
 
 /**
@@ -90,6 +118,13 @@ export function PrintingRulesSettings() {
   const logoUrl = cfgQ.data?.branding.logoUrl;
   // This till's kitchen-ticket rules, the released ones (1 ticket, phone and drinks on) where none is saved.
   const kitchen = kitchenTicketRules(policy);
+  // This till's shift report rules: on, every section, every item where none is saved (a policy from before 0.7.35).
+  const shiftReport = shiftReportRules(policy);
+  // A section switched writes all nine, so what is saved is what the switches
+  // show. Each change builds on the rules as they are by then (two quick taps keep both).
+  const setShiftReportSection = (key: ShiftReportSection, on: boolean) =>
+    setPolicy((p) => ({ ...p, shiftReportSections: { ...shiftReportRules(p).sections, [key]: on } }));
+  const shiftReportIds = useId();
 
   return (
     <Card>
@@ -243,6 +278,25 @@ export function PrintingRulesSettings() {
           body={`Every paper says what it is. A paid receipt says RECEIPT and PAID - CASH (or the method); a bill before payment says BILL - NOT PAID, and a delivery bill says CASH ON DELIVERY and what the rider collects. A refund prints a REFUND slip (the drawer opens when cash goes back out, and a cash refund also prints a SHOP COPY for the customer to sign, unless shop copies are set to Never); a cancelled order only ever prints as CANCELLED ORDER - nothing to pay. Any second copy of a receipt or bill says DUPLICATE at the top, in the middle and at the bottom, with the reprint number, time and who asked; a printer retry says so too. The till prints a customer paper by itself only when money moves or the rider leaves: the receipt at Pay, the receipt when an order is paid as it is served or handed over, the delivery bill when the rider leaves (when that is on), and the refund slip. That paper is the original. Any paper printed with a print button (Order History, Recent Orders, Live Orders, the order panel, the payment screen) says DUPLICATE, even the first one of its kind. So a bill asked for before payment, for a table or a website order waiting for pick-up, always says DUPLICATE: the till never prints one by itself at Send or when a website order comes in. Only “Try again” on a failed print, or “Print the receipt that failed” in the order panel, sends that original again. A bill and the paid receipt are different papers. ${reprintRuleText(staffQ.data?.value ?? null)} A reprinted kitchen ticket says REPRINT - SAME ORDER, DO NOT COOK TWICE, and a cancelled one CANCELLED - DO NOT MAKE. Reprints never open the drawer and never go to FBR again; every paper is kept in the audit trail.`}
           control={<span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Always</span>}
         />
+        <Rule
+          icon={ClipboardList}
+          title="Shift report"
+          body={SHIFT_REPORT_RULE_BODY}
+          control={
+            <Toggle
+              checked={shiftReport.onClose}
+              onChange={(v) => setPolicy((p) => ({ ...p, shiftReportOnClose: v }))}
+              label={SHIFT_REPORT_SWITCH}
+            />
+          }
+        >
+          {shiftReportSections({
+            rules: shiftReport,
+            idBase: shiftReportIds,
+            onSection: setShiftReportSection,
+            onItems: (items) => setPolicy((p) => ({ ...p, shiftReportItems: items })),
+          })}
+        </Rule>
       </ul>
 
       <div className="mt-4 flex items-center justify-end gap-2 border-t border-stone-200 pt-4 dark:border-stone-700">
@@ -269,15 +323,21 @@ function copyMarks(n: number): string {
   return marks.length <= 1 ? (marks[0] ?? '') : `${marks.slice(0, -1).join(', ')} and ${marks[marks.length - 1]}`;
 }
 
+/**
+ * One printing rule: its icon, title and words, and its control. `children`
+ * (more controls that belong to it) go under the whole row, lined up with
+ * the words, after its control.
+ */
 function Rule(props: {
   icon: typeof ChefHat;
   title: string;
   body: string;
   control: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   const Icon = props.icon;
-  return (
-    <li className="flex flex-col gap-3 py-4 md:flex-row md:items-start md:justify-between">
+  const row = (
+    <>
       <div className="flex min-w-0 gap-3">
         <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300">
           <Icon className="h-4 w-4" />
@@ -288,13 +348,83 @@ function Rule(props: {
         </div>
       </div>
       <div className="shrink-0 md:pl-4">{props.control}</div>
+    </>
+  );
+  if (props.children === undefined) {
+    return <li className="flex flex-col gap-3 py-4 md:flex-row md:items-start md:justify-between">{row}</li>;
+  }
+  return (
+    <li className="py-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">{row}</div>
+      <div className="mt-3 pl-11">{props.children}</div>
     </li>
   );
 }
 
-function Toggle(props: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+/**
+ * The shift report's nine sections, one switch each in the order they print
+ * (SHIFT_REPORT_SECTIONS), all on at first; "Items sold" carries its choice
+ * of every item or the category totals, which waits while that section is
+ * off. A switch changes only what prints: the close saves every section.
+ * Under the "Shift report" rule's words. Made in the card's own render, as
+ * the kitchen rules are (a plain function, not a component of its own).
+ */
+function shiftReportSections(props: {
+  rules: ShiftReportRules;
+  /** The card's useId(): each switch's id, for the label beside it. */
+  idBase: string;
+  onSection: (key: ShiftReportSection, on: boolean) => void;
+  onItems: (items: ShiftReportItemsShown) => void;
+}): React.ReactNode {
+  const { rules, idBase } = props;
+  const itemsOn = rules.sections.items;
+  return (
+    <div role="group" aria-label={SHIFT_REPORT_SECTIONS_TITLE}>
+      <div className="text-sm font-semibold">{SHIFT_REPORT_SECTIONS_TITLE}</div>
+      <p className="mt-0.5 text-xs leading-relaxed text-stone-500">{SHIFT_REPORT_SECTIONS_NOTE}</p>
+      <ul className="mt-2 space-y-1">
+        {SHIFT_REPORT_SECTIONS.map((s) => {
+          const id = `${idBase}-${s.key}`;
+          return (
+            <li key={s.key} className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1">
+              <Toggle id={id} checked={rules.sections[s.key]} onChange={(v) => props.onSection(s.key, v)} label={s.label} />
+              <label htmlFor={id} className="cursor-pointer text-sm">
+                {s.label}
+              </label>
+              {s.key === 'items' && (
+                <div className="flex gap-1 sm:ml-3" role="radiogroup" aria-label={SHIFT_REPORT_ITEMS_GROUP} aria-disabled={!itemsOn}>
+                  {SHIFT_REPORT_ITEMS_OPTIONS.map((o) => (
+                    <button
+                      key={o.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={rules.items === o.id}
+                      disabled={!itemsOn}
+                      onClick={() => props.onItems(o.id)}
+                      className={cn(
+                        'rounded-lg border-2 px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                        rules.items === o.id
+                          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950'
+                          : 'border-stone-200 hover:border-stone-300 dark:border-stone-700',
+                      )}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function Toggle(props: { checked: boolean; onChange: (v: boolean) => void; label: string; id?: string }) {
   return (
     <button
+      id={props.id}
       type="button"
       role="switch"
       aria-checked={props.checked}

@@ -160,6 +160,8 @@ live('shift history: every shift that overlaps the period', () => {
       carriedTestDeletedCount: 0,
       // Closed on one typed figure: no count by note (v0.7.35, 0050); the stored text itself is not handed over.
       countedNotes: null,
+      // No shift report saved at its close (0051): only whether there is one is handed over.
+      hasCloseReport: false,
     });
     expect(byId.get('s_old_open')).toEqual({
       id: 's_old_open',
@@ -184,8 +186,9 @@ live('shift history: every shift that overlaps the period', () => {
       carriedUnpaidCount: 0,
       carryOverReason: null,
       carriedTestDeletedCount: 0,
-      // Still open: not counted yet.
+      // Still open: not counted yet, and no report yet.
       countedNotes: null,
+      hasCloseReport: false,
     });
     expect(byId.get('s_inside')).toMatchObject({ closedBy: 'Owner', varianceCents: 5_000 });
   });

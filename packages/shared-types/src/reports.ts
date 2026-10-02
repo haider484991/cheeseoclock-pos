@@ -221,6 +221,13 @@ export interface ReportShiftLine {
    * stays the figure saved at close. Absent from a till before 0050.
    */
   countedNotes?: CashCount | null;
+  /**
+   * The close saved its shift report (v0.7.35, 0051
+   * shifts.close_report_json is there), so the owner can print it from Shift
+   * history ('shifts:printReport', a DUPLICATE). False for a shift still
+   * open or closed before 0.7.35. Absent from a till before 0051.
+   */
+  hasCloseReport?: boolean;
 }
 
 /**

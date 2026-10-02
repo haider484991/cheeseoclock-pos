@@ -6,10 +6,12 @@
  * Exceptions list here.
  */
 import { useState } from 'react';
-import { cn } from '@cheeseoclock/ui';
+import { Button, cn } from '@cheeseoclock/ui';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
-import { Percent, Receipt, Trash2, UsersRound } from 'lucide-react';
+import { Percent, Printer, Receipt, Trash2, UsersRound } from 'lucide-react';
+import { useToast } from '../../../components/toast/ToastProvider';
+import { printShiftReportAndSay } from '../../shell/shiftReportPrint';
 import { DataTable, Panel, Section, useShowAll } from '../reportUi';
 import {
   COUNTED_BY_NOTE,
@@ -87,6 +89,41 @@ function CountedByNoteLine({ notes }: { notes: string | null }) {
   );
 }
 
+/** The words on a shift's print button in Shift history (v0.7.35). */
+export const PRINT_SHIFT_REPORT = 'Print shift report';
+
+/** Whether a shift history row offers its shift report: a closed shift whose close saved one (0051). */
+export function canPrintShiftReport(s: Pick<ReportShiftLine, 'closedAt' | 'hasCloseReport'>): boolean {
+  return s.closedAt !== null && s.hasCloseReport === true;
+}
+
+/**
+ * "Print shift report" on a closed shift's row (v0.7.35; the owner, who
+ * alone sees Shift history). It prints the figures saved at that close with
+ * this till's section switches, as a DUPLICATE, on this till's receipt
+ * printer — a shift from the other till too. The till decides and the toast
+ * says what came out, or why not.
+ */
+function PrintShiftReportButton({ shiftId }: { shiftId: string }) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const press = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await printShiftReportAndSay(shiftId, true, toast);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button variant="secondary" size="sm" className="shrink-0 whitespace-nowrap" disabled={busy} onClick={() => void press()}>
+      <Printer className="h-4 w-4 shrink-0" aria-hidden="true" />
+      {busy ? 'Printing…' : PRINT_SHIFT_REPORT}
+    </Button>
+  );
+}
+
 /** The period the shift history covers, as the page names it. */
 export type ShiftHistoryPeriod = Pick<ReportPeriod, 'dates' | 'isCurrent'>;
 
@@ -120,8 +157,9 @@ export function shiftDrawerBanner(shifts: readonly ReportShiftLine[]): { text: s
  * Staff and cash drawer: who took the orders; the shift history (0039: its
  * notes and carried-over orders; 0042/0043: each shift's own drawer log, one
  * tap from its row, and the cash of test orders deleted after it closed;
- * 0050: the drawer counted note by note at its close); and the period's
- * whole drawer log under both.
+ * 0050: the drawer counted note by note at its close; 0051: its shift report
+ * printed again, one tap from its row); and the period's whole drawer log
+ * under both.
  */
 export function StaffSection({
   report,
@@ -192,6 +230,16 @@ export function StaffSection({
             columns={[{ label: 'Shift' }, { label: 'Float', right: true }, { label: 'Taken out', right: true }, { label: 'To riders', right: true }, { label: 'Expected', right: true }, { label: 'Counted', right: true }, { label: 'Result', right: true }]}
             rows={report.shifts.map((s) => {
               const out = shiftCashOutParts(s);
+              // This shift's own drawer log (0042): every opening, who, why, the result.
+              const drawerLog = (
+                <button
+                  type="button"
+                  onClick={() => setLogShift(s)}
+                  className="mt-0.5 text-xs font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-400"
+                >
+                  Drawer log
+                </button>
+              );
               return [
                 <div key="w">
                   <div className="font-medium">{fmtWhen(s.openedAt)}</div>
@@ -226,14 +274,15 @@ export function StaffSection({
                       {shiftTestDeletedNote(s)}
                     </div>
                   )}
-                  {/* This shift's own drawer log (0042): every opening, who, why, the result. */}
-                  <button
-                    type="button"
-                    onClick={() => setLogShift(s)}
-                    className="mt-0.5 text-xs font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-400"
-                  >
-                    Drawer log
-                  </button>
+                  {/* Its drawer log; and, when its close saved one, its shift report to print again (v0.7.35), side by side. */}
+                  {canPrintShiftReport(s) ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {drawerLog}
+                      <PrintShiftReportButton shiftId={s.id} />
+                    </div>
+                  ) : (
+                    drawerLog
+                  )}
                 </div>,
                 formatCents(s.openingCashCents),
                 // Cash out typed by hand and rider tips; the outside riders' payouts have their own column (v0.7.34).

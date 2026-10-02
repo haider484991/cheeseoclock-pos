@@ -49,13 +49,18 @@
  * one came out, and the highest reprint number used; till B never counts
  * till A's; a try that cannot be is refused; the history reads by index.
  *
+ * Shift history (step 19g-2): each line says only whether its close saved a
+ * report (hasCloseReport), through the Reports worker too; a shift closed
+ * on the other till with its report has it there, one heard of only from
+ * an older till does not.
+ *
  * node's own `node:sqlite` stands in for better-sqlite3 (built for
  * Electron); skipped where it is missing. Every name, number and amount is
  * made up (the repository is public).
  */
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CashCount, ChannelOffer, Shift, ShiftReport } from '@cheeseoclock/shared-types';
+import type { CashCount, ChannelOffer, ReportShiftLine, Shift, ShiftReport } from '@cheeseoclock/shared-types';
 import { parseCashCountJson, parseShiftReportJson } from '@cheeseoclock/shared-schemas';
 import { shiftReportDrawerAddsUp, shiftReportJson } from '@cheeseoclock/pos-domain';
 import type { SyncChange } from '@cheeseoclock/sync-core';
@@ -1679,5 +1684,51 @@ live('every try at printing the shift report goes on record (audit only, this ti
     const plan = (db.prepare(`EXPLAIN QUERY PLAN ${read[0]!}`).all(shiftId) as Row[]).map((p) => String(p['detail']));
     expect(plan.some((p) => /USING INDEX idx_audit_entity/.test(p))).toBe(true);
     expect(plan.filter((p) => /\bSCAN\b/.test(p))).toEqual([]);
+  });
+});
+
+// ------------------------------------- Shift history's "Print shift report" (step 19g-2)
+
+/** The shift history's lines as the Reports worker hands them over (copied, as from its thread). */
+async function historyLinesViaWorker(db: AppDatabase): Promise<Map<string, ReportShiftLine>> {
+  const worker = await import('../services/analytics/worker.js');
+  const reply = worker.handleRunRequest(db, { type: 'run', id: 1, kind: 'team', request: ALL_TIME, nowIso: new Date().toISOString() });
+  if (reply.type !== 'result' || !reply.ok) throw new Error(`worker said no: ${JSON.stringify(reply)}`);
+  return new Map(structuredClone(reply.data as { shifts: ReportShiftLine[] }).shifts.map((s) => [s.id, s]));
+}
+
+live('Shift history says which shifts saved a shift report (hasCloseReport, step 19g-2)', () => {
+  it('true for a close that saved one; false for a close that saved none and a shift still open; the same through the Reports worker; the report itself never leaves', async () => {
+    const repo = await shiftRepo();
+    const { db, shiftId: reported } = await till();
+    await closeEvenReported(db, reported);
+    // Closed with no report made (no maker: as a close before 0.7.35 left the column NULL).
+    const none = repo.openShift(db, { openingCashCents: FLOAT }, A.cashier).id;
+    repo.closeShift(db, plainClose(none, FLOAT), A.manager);
+    expect(storedShift(db, none)).toMatchObject({ close_report_json: null });
+    const open = repo.openShift(db, { openingCashCents: FLOAT }, A.cashier).id;
+
+    expect(await historyLine(db, reported)).toMatchObject({ hasCloseReport: true });
+    expect(await historyLine(db, none)).toMatchObject({ hasCloseReport: false });
+    expect(await historyLine(db, open)).toMatchObject({ closedAt: null, hasCloseReport: false });
+    const viaWorker = await historyLinesViaWorker(db);
+    expect([reported, none, open].map((id) => viaWorker.get(id)?.hasCloseReport)).toEqual([true, false, false]);
+    for (const line of viaWorker.values()) {
+      expect(line).not.toHaveProperty('closeReportJson');
+      expect(line).not.toHaveProperty('close_report_json');
+      expect(JSON.stringify(line)).not.toContain('SHIFT REPORT');
+    }
+  });
+
+  it('the other till: a shift closed on till A with its report shows it on till B; heard of only from an older till (no report), it does not', async () => {
+    const { a, shiftId } = await closedOnA();
+    const changes = await queued(a, TILL_A);
+    const b = openTill('till-b', { usersFrom: TILL_A });
+    await applyAll(b, changes);
+    expect(await historyLine(b, shiftId)).toMatchObject({ hasCloseReport: true });
+    const c = openTill('till-c', { usersFrom: TILL_A });
+    await applyAll(c, changes.map(withoutReport));
+    expect(await historyLine(c, shiftId)).toMatchObject({ hasCloseReport: false });
+    expect((await historyLine(c, shiftId)).closedAt).not.toBeNull();
   });
 });
