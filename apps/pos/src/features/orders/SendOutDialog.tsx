@@ -1,12 +1,18 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useMutation } from '@tanstack/react-query';
 import { Button } from '@cheeseoclock/ui';
-import { Bike, Truck, X } from 'lucide-react';
+import { Bike, Truck, Users, X } from 'lucide-react';
 import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { ASSIGN_RIDER_LINK_TITLE, riderPaidEarlierChoice, sendOutSplit } from './boardLogic';
+import {
+  ASSIGN_RIDER_LINK_TITLE,
+  riderPaidEarlierChoice,
+  sameCustomerLine,
+  sendOutSplit,
+  type SamePhoneDelivery,
+} from './boardLogic';
 
 /** Which answer sent it out: the rider paid now, pays after delivery, or the customer paid already. */
 type Answer = 'paid_now' | 'after' | 'prepaid';
@@ -31,6 +37,11 @@ interface Props {
   chargeAgain: boolean;
   /** "Charge again": show the box again with chargeAgain. */
   onChargeAgain: () => void;
+  /**
+   * The same customer's other delivery on Live Orders (samePhoneDelivery),
+   * read by the board as it is now; null or left out for none.
+   */
+  sameCustomer?: SamePhoneDelivery | null;
 }
 
 /**
@@ -55,14 +66,30 @@ interface Props {
  * delivery charge for him this time": he keeps Rs 0 and gives the shop the
  * whole bill, and Send out says riderAlreadyPaid. "Charge again" switches
  * to the order's own figures ("He keeps Rs 200 on this order too.").
+ *
+ * Add-on delivery (the owner, 2 Oct 2026: "if its out then it should charge
+ * if the rider is not out"; sameCustomerLine): another delivery of the same
+ * phone still in the kitchen or Ready — "Same customer as #0042 — send them
+ * together."; one already out while this bill has no delivery charge — amber
+ * "No delivery charge on this order: #0042 has already gone out.". Nothing
+ * when it is out and this order is charged (a new trip).
  */
-export function SendOutDialog({ snap, onClose, onSent, onAssignInstead, chargeAgain, onChargeAgain }: Props) {
+export function SendOutDialog({
+  snap,
+  onClose,
+  onSent,
+  onAssignInstead,
+  chargeAgain,
+  onChargeAgain,
+  sameCustomer = null,
+}: Props) {
   const { order } = snap;
   const short = order.orderNumber.split('-').pop();
   const prepaid = order.paidAt !== null;
   const earlier = riderPaidEarlierChoice(snap);
   const riderAlreadyPaid = earlier !== null && !chargeAgain;
   const { customerPaysCents, keepsCents, givesCents } = sendOutSplit(snap, { riderAlreadyPaid });
+  const together = sameCustomerLine(sameCustomer, snap);
   const { toast } = useToast();
 
   const send = useMutation({
@@ -96,6 +123,20 @@ export function SendOutDialog({ snap, onClose, onSent, onAssignInstead, chargeAg
               <X className="h-4 w-4" />
             </button>
           </header>
+
+          {together && (
+            // The same customer's other delivery: one trip while it is still here; gone out with no charge on this bill.
+            <p
+              className={
+                together.kind === 'together'
+                  ? 'mb-3 flex items-center gap-2 rounded-xl bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-900 dark:bg-sky-950/30 dark:text-sky-100'
+                  : 'mb-3 flex items-center gap-2 rounded-xl bg-amber-100 px-4 py-3 text-sm font-semibold text-amber-900 ring-1 ring-amber-300 dark:bg-amber-950/50 dark:text-amber-100 dark:ring-amber-800'
+              }
+            >
+              <Users className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {together.text}
+            </p>
+          )}
 
           {earlier && (
             // One trip, one fee: he was paid on the refunded order; by default nothing more now.

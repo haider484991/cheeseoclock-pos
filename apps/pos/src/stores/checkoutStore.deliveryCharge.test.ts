@@ -116,3 +116,36 @@ describe('the area’s delivery charge needs nothing from Send or Pay (the main 
     expect(made('orders.setDeliveryArea')).toEqual([{ orderId: 'o2', area: 'DHA Phase 6' }]);
   });
 });
+
+/**
+ * Add-on delivery (v0.7.34, step 18-11; the owner, 2 Oct 2026: "if its out
+ * then it should charge if the rider is not out"): the panel tells its phone
+ * with the area, and the main process leaves the second charge off while the
+ * same phone has a delivery still in the shop. Made-up phones.
+ */
+describe('the panel’s phone goes with the area (the add-on rule)', () => {
+  it('a phone change tells the area again with the phone; no phone sends null', async () => {
+    deliveryWithArea('DHA Phase 6');
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, forOrderId: 'o1', phone: '0300 1234567' });
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, forOrderId: 'o1', phone: '0301 7654321' });
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { mayStartOrder: true, forOrderId: 'o1', phone: null });
+    expect(made('orders.setDeliveryArea')).toEqual([
+      { orderId: 'o1', area: 'DHA Phase 6', phone: '0300 1234567' },
+      { orderId: 'o1', area: 'DHA Phase 6', phone: '0301 7654321' },
+      { orderId: 'o1', area: 'DHA Phase 6', phone: null },
+    ]);
+  });
+
+  it('“Put it back” carries the phone too, so it holds while the order goes with the same delivery', async () => {
+    deliveryWithArea('DHA Phase 6');
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { putBack: true, forOrderId: 'o1', phone: '03001234567' });
+    expect(made('orders.setDeliveryArea')).toEqual([{ orderId: 'o1', area: 'DHA Phase 6', putBack: true, phone: '03001234567' }]);
+  });
+
+  it('the late ask for an order already sent still does nothing, phone or not', async () => {
+    deliveryWithArea('DHA Phase 6');
+    await useCheckoutStore.getState().sendToKitchen();
+    await useCheckoutStore.getState().setDeliveryArea('DHA Phase 6', { forOrderId: 'o1', phone: '03001234567' });
+    expect(made('orders.setDeliveryArea')).toEqual([]);
+  });
+});

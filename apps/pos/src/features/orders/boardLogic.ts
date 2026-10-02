@@ -5,7 +5,7 @@
  */
 import type { KitchenTiming, Order, OrderMode, OrderSnapshot, OrderStatus } from '@cheeseoclock/shared-types';
 import { DEFAULT_KITCHEN_TIMING, deliveryChargeLinesCents, isLeaveOutChoice, isOutsideRiderOrder } from '@cheeseoclock/shared-types';
-import { KITCHEN_TICKET_STATUSES, formatCents } from '@cheeseoclock/pos-domain';
+import { KITCHEN_TICKET_STATUSES, formatCents, normalizePhone } from '@cheeseoclock/pos-domain';
 import { orderTimeLabel } from './historyFilters';
 
 /**
@@ -238,14 +238,102 @@ export function riderPaidEarlierChoice(
 }
 
 /**
+ * Another delivery of the same customer on Live Orders (samePhoneDelivery):
+ * `out` once it has gone out for delivery.
+ */
+export interface SamePhoneDelivery {
+  orderId: string;
+  orderNumber: string;
+  out: boolean;
+}
+
+/** A delivery the shop still has: the add-on rule's (order-repo liveDeliveryNotOutFor), the same three. */
+const NOT_OUT_YET: readonly OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready'];
+
+/**
+ * Add-on delivery (the owner, 2 Oct 2026: "if its out then it should charge
+ * if the rider is not out"): another live delivery on the board — not this
+ * order — with the same phone (pos-domain normalizePhone: "0300 1234567" and
+ * "+92 300 1234567" are one customer), whatever its source. One still in the
+ * kitchen or Ready (sent to the kitchen, being made or Ready, as the till's
+ * add-on rule reads it) comes first: the two can go on one trip. Otherwise
+ * one already out for delivery (`out` true). Null with no phone, or none:
+ * closed orders and other phones never count. The first sent first when
+ * there are several.
+ */
+export function samePhoneDelivery(
+  all: ReadonlyArray<{ order: Pick<Order, 'id' | 'orderNumber' | 'mode' | 'status' | 'sentAt' | 'createdAt'>; customerPhone?: string | null }>,
+  snap: { order: Pick<Order, 'id'>; customerPhone?: string | null },
+): SamePhoneDelivery | null {
+  const phone = normalizePhone(snap.customerPhone);
+  if (!phone) return null;
+  const same = all
+    .filter(
+      (o) =>
+        o.order.id !== snap.order.id &&
+        o.order.mode === 'delivery' &&
+        (NOT_OUT_YET.includes(o.order.status) || o.order.status === 'out_for_delivery') &&
+        normalizePhone(o.customerPhone) === phone,
+    )
+    .sort((a, b) => compareOrderClock(a.order, b.order));
+  const pick = same.find((o) => o.order.status !== 'out_for_delivery') ?? same[0];
+  return pick ? { orderId: pick.order.id, orderNumber: pick.order.orderNumber, out: pick.order.status === 'out_for_delivery' } : null;
+}
+
+/** What Send out says about the same customer's other delivery (sameCustomerLine). */
+export interface SameCustomerLine {
+  /** 'together': it can go on this trip; 'gone': it went out, and this bill has no delivery charge. */
+  kind: 'together' | 'gone';
+  text: string;
+}
+
+/**
+ * The Send out box's line about the same customer's other delivery
+ * (samePhoneDelivery):
+ *  - still in the kitchen or Ready: "Same customer as #0042 — send them
+ *    together." (one trip);
+ *  - already out, and this bill has no delivery charge (an add-on rung while
+ *    #0042 was still in the shop, counter or website): "No delivery charge on
+ *    this order: #0042 has already gone out." — he goes again for nothing;
+ *  - already out and this bill is charged: nothing (a new trip, as the owner
+ *    said). Null with no other delivery.
+ */
+export function sameCustomerLine(
+  other: SamePhoneDelivery | null,
+  snap: { readonly items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly lineTotalCents: number }> },
+): SameCustomerLine | null {
+  if (!other) return null;
+  const n = other.orderNumber.split('-').pop() ?? other.orderNumber;
+  if (!other.out) return { kind: 'together', text: `Same customer as #${n} — send them together.` };
+  if (deliveryChargeLinesCents(snap) === 0) {
+    return { kind: 'gone', text: `No delivery charge on this order: #${n} has already gone out.` };
+  }
+  return null;
+}
+
+/**
  * Whether a Ready delivery's Send out asks first (SendOutDialog: "Has the
  * rider paid the shop?", or the drawer paying a prepaid order's rider).
  * Only an order already paid whose rider keeps nothing goes in one tap:
- * nothing to ask, and no money moves. An order the rider was already paid
- * for (riderPaidEarlierChoice) has a charge, so its box always opens.
+ * nothing to ask, and no money moves — and only when the box would have no
+ * line about the same customer's other delivery (`sameCustomer`,
+ * samePhoneDelivery; sameCustomerLine) and none about a rider already paid
+ * for this trip (riderPaidEarlierChoice: that bill has a charge, so its box
+ * always opens anyway).
  */
-export function sendOutAsks(snap: Parameters<typeof sendOutSplit>[0] & { order: Pick<Order, 'paidAt'> }): boolean {
-  return snap.order.paidAt === null || sendOutSplit(snap).keepsCents > 0;
+export function sendOutAsks(
+  snap: Parameters<typeof sendOutSplit>[0] & {
+    order: Pick<Order, 'paidAt'>;
+    riderPaidEarlier?: OrderSnapshot['riderPaidEarlier'];
+  },
+  sameCustomer: SamePhoneDelivery | null = null,
+): boolean {
+  return (
+    snap.order.paidAt === null ||
+    sendOutSplit(snap).keepsCents > 0 ||
+    riderPaidEarlierChoice(snap) !== null ||
+    sameCustomerLine(sameCustomer, snap) !== null
+  );
 }
 
 /** The small "Assign rider" link's title on a Ready delivery and an outside rider's Out card. */

@@ -82,11 +82,14 @@ interface CheckoutState {
    * to carry the charge (only when there is a charge to put on).
    * `forOrderId`: the order the panel asked about — a late ask for an order
    * that has since been sent (or cleared) does nothing, and never starts a
-   * new order. `putBack`: the row's "Put it back".
+   * new order. `putBack`: the row's "Put it back". `phone`: the phone typed
+   * on the panel, for the add-on rule (no second delivery charge while the
+   * same customer's delivery is still in the shop; OrderSnapshot.addOnTo):
+   * sent as it is, null for none; left out, the request carries none.
    */
   setDeliveryArea: (
     area: string,
-    opts?: { mayStartOrder?: boolean; forOrderId?: string | null; putBack?: boolean },
+    opts?: { mayStartOrder?: boolean; forOrderId?: string | null; putBack?: boolean; phone?: string | null },
   ) => Promise<void>;
   applyDiscount: (
     discountType: 'percent' | 'flat',
@@ -401,6 +404,8 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
           orderId,
           area: area.trim() || null,
           ...(opts.putBack ? { putBack: true } : {}),
+          // The panel's phone (null: none typed): the main process matches it while the order has none of its own.
+          ...(opts.phone !== undefined ? { phone: opts.phone } : {}),
         });
         if (get().snapshot?.order.id === next.order.id) set({ snapshot: next });
       });

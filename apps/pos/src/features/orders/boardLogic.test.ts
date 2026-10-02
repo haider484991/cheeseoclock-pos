@@ -24,6 +24,8 @@ import {
   riderOwesCents,
   riderOwesText,
   riderPaidEarlierChoice,
+  sameCustomerLine,
+  samePhoneDelivery,
   secondaryBoardAction,
   sendOutAsks,
   sendOutSplit,
@@ -327,6 +329,116 @@ describe('Rider owes / Rider paid on an outside rider’s Out card (v0.7.34, ste
     expect(riderPaidEarlierChoice(snap(471_500, lines))).toBeNull();
     // Its box always opens: the bill has a charge.
     expect(sendOutAsks({ ...snap(471_500, lines, '2026-10-02T14:00:00.000Z'), riderPaidEarlier: earlier } as Parameters<typeof sendOutAsks>[0])).toBe(true);
+  });
+});
+
+/**
+ * Add-on delivery (v0.7.34, step 18-11; the owner, 2 Oct 2026: "if its out
+ * then it should charge if the rider is not out"): Send out names the same
+ * customer's other delivery on Live Orders. Made-up orders and phones.
+ */
+describe('the same customer’s other delivery on Live Orders (step 18-11)', () => {
+  type Live = Parameters<typeof samePhoneDelivery>[0][number];
+  const live = (n: number, status: OrderStatus, customerPhone: string | null, over: Record<string, unknown> = {}): Live =>
+    ({
+      order: {
+        id: `o${n}`,
+        orderNumber: `20261002-00${n}`,
+        mode: 'delivery',
+        status,
+        sentAt: `2026-10-02T14:${String(n).padStart(2, '0')}:00.000Z`,
+        createdAt: `2026-10-02T14:${String(n).padStart(2, '0')}:00.000Z`,
+        ...over,
+      },
+      customerPhone,
+    }) as unknown as Live;
+  const ADD_ON = live(45, 'ready', '03001234567');
+  /** The add-on with its phone typed another way (or none). */
+  const addOnWith = (customerPhone: string | null): Live => ({ ...ADD_ON, customerPhone });
+
+  it('samePhoneDelivery: the same phone however it was typed — "0300…" and "+92 300…" are one customer', () => {
+    for (const phone of ['+92 300 1234567', '0300-1234567', '923001234567', '+923001234567']) {
+      expect(samePhoneDelivery([live(42, 'preparing', phone), ADD_ON], ADD_ON)).toEqual({
+        orderId: 'o42',
+        orderNumber: '20261002-0042',
+        out: false,
+      });
+    }
+    // This order's own phone typed the other way round.
+    expect(samePhoneDelivery([live(42, 'ready', '03001234567')], addOnWith('+92 300 1234567'))).toMatchObject({
+      orderId: 'o42',
+    });
+  });
+
+  it('reports out false while the kitchen has it or it is Ready, true once it went out', () => {
+    for (const status of ['sent_to_kitchen', 'preparing', 'ready'] as const) {
+      expect(samePhoneDelivery([live(42, status, '03001234567'), ADD_ON], ADD_ON)).toMatchObject({ orderNumber: '20261002-0042', out: false });
+    }
+    expect(samePhoneDelivery([live(42, 'out_for_delivery', '03001234567'), ADD_ON], ADD_ON)).toMatchObject({
+      orderNumber: '20261002-0042',
+      out: true,
+    });
+    // A website delivery of the same customer counts too.
+    expect(samePhoneDelivery([live(42, 'preparing', '+923001234567', { orderNumber: 'CO-20261002-0042' }), ADD_ON], ADD_ON)).toMatchObject({
+      orderNumber: 'CO-20261002-0042',
+      out: false,
+    });
+  });
+
+  it('ignores itself, closed orders, other phones, other order types and orders with no phone', () => {
+    expect(samePhoneDelivery([ADD_ON], ADD_ON)).toBeNull();
+    for (const status of ['open', 'delivered', 'served', 'paid', 'void', 'refunded'] as const) {
+      expect(samePhoneDelivery([live(42, status, '03001234567'), ADD_ON], ADD_ON)).toBeNull();
+    }
+    expect(samePhoneDelivery([live(42, 'preparing', '03017654321'), ADD_ON], ADD_ON)).toBeNull();
+    expect(samePhoneDelivery([live(42, 'preparing', null), ADD_ON], ADD_ON)).toBeNull();
+    expect(samePhoneDelivery([live(42, 'preparing', '03001234567', { mode: 'takeaway' }), ADD_ON], ADD_ON)).toBeNull();
+    // This order with no phone (a walk-in), or not a Pakistani number: no add-on rule.
+    expect(samePhoneDelivery([live(42, 'preparing', '03001234567')], addOnWith(null))).toBeNull();
+    expect(samePhoneDelivery([live(42, 'preparing', '12345')], addOnWith('12345'))).toBeNull();
+  });
+
+  it('one still in the shop comes first; then the one sent first', () => {
+    const out = live(40, 'out_for_delivery', '03001234567');
+    const kitchen = live(43, 'sent_to_kitchen', '03001234567');
+    const ready = live(41, 'ready', '03001234567');
+    expect(samePhoneDelivery([out, kitchen, ready, ADD_ON], ADD_ON)).toMatchObject({ orderId: 'o41', out: false });
+    expect(samePhoneDelivery([out, live(44, 'out_for_delivery', '03001234567'), ADD_ON], ADD_ON)).toMatchObject({ orderId: 'o40', out: true });
+  });
+
+  const items = (charge: boolean) => [
+    { menuItemName: 'Test Fries', lineTotalCents: 50_000 },
+    ...(charge ? [{ menuItemName: 'Delivery Charge (Rs 200)', lineTotalCents: 20_000 }] : []),
+  ];
+
+  it('sameCustomerLine: "send them together" while #0042 is still here, charged or not', () => {
+    for (const charge of [false, true]) {
+      expect(sameCustomerLine({ orderId: 'o42', orderNumber: '20261002-0042', out: false }, { items: items(charge) })).toEqual({
+        kind: 'together',
+        text: 'Same customer as #0042 — send them together.',
+      });
+    }
+  });
+
+  it('sameCustomerLine: #0042 out and no charge on this bill — "has already gone out"; charged — nothing (a new trip); none — nothing', () => {
+    const gone = { orderId: 'o42', orderNumber: '20261002-0042', out: true };
+    expect(sameCustomerLine(gone, { items: items(false) })).toEqual({
+      kind: 'gone',
+      text: 'No delivery charge on this order: #0042 has already gone out.',
+    });
+    expect(sameCustomerLine(gone, { items: items(true) })).toBeNull();
+    expect(sameCustomerLine(null, { items: items(false) })).toBeNull();
+  });
+
+  it('sendOutAsks: the paid one-tap only when the box would say nothing about the other delivery', () => {
+    const paidNoCharge = { order: { totalCents: 57_500, paidAt: '2026-10-02T14:00:00.000Z' }, items: items(false) };
+    expect(sendOutAsks(paidNoCharge)).toBe(false);
+    expect(sendOutAsks(paidNoCharge, null)).toBe(false);
+    expect(sendOutAsks(paidNoCharge, { orderId: 'o42', orderNumber: '20261002-0042', out: false })).toBe(true);
+    expect(sendOutAsks(paidNoCharge, { orderId: 'o42', orderNumber: '20261002-0042', out: true })).toBe(true);
+    // Charged: its box opens anyway (the drawer pays the rider).
+    const paidCharged = { order: { totalCents: 80_500, paidAt: '2026-10-02T14:00:00.000Z' }, items: items(true) };
+    expect(sendOutAsks(paidCharged, { orderId: 'o42', orderNumber: '20261002-0042', out: true })).toBe(true);
   });
 });
 

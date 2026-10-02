@@ -53,6 +53,7 @@ import {
   outsideRiderKeepsText,
   riderOwesCents,
   riderOwesText,
+  samePhoneDelivery,
   secondaryBoardAction,
   sendOutAsks,
   boardColoursText,
@@ -81,7 +82,10 @@ import { useKitchenTiming } from '../settings/shop-rules/useShopSetting';
  *
  * Send out asks "Has the rider paid the shop?" first (SendOutDialog; a paid
  * order: the drawer pays the rider his charge); only a paid order whose
- * rider keeps nothing goes in one tap. While an outside rider owes, his Out
+ * rider keeps nothing goes in one tap, and not even that when the same
+ * customer has another delivery to say something about ("send them
+ * together", or "#0042 has already gone out" on a bill with no charge;
+ * samePhoneDelivery, from this board's own list). While an outside rider owes, his Out
  * card says "Rider owes Rs …" beside the total and has "Rider paid" next to
  * "Delivered + Pay"; once paid it has the PAID chip and "Delivered".
  */
@@ -169,7 +173,8 @@ export function OrdersBoardPage() {
     onError: failed('Could not move the order'),
   });
   // Send out in one tap (the owner, 2 Oct 2026): a paid Ready delivery whose
-  // rider keeps nothing; the rest ask first (SendOutDialog). No success toast
+  // rider keeps nothing and whose box would say nothing about the same
+  // customer's other delivery; the rest ask first (SendOutDialog). No success toast
   // either: the card moves to Out.
   const sendOut = useMutation({
     mutationFn: (orderId: string) => ipc.orders.sendOut({ orderId }),
@@ -325,8 +330,9 @@ export function OrdersBoardPage() {
                               step.mutate({ orderId: snap.order.id, kind: action.kind });
                               return;
                             case 'send_out':
-                              // "Has the rider paid the shop?" (or the drawer pays a prepaid order's rider) first.
-                              if (sendOutAsks(snap)) setSendOutFor({ snap, chargeAgain: false });
+                              // "Has the rider paid the shop?" (or the drawer pays a prepaid order's rider) first;
+                              // the same customer's other delivery is said there too.
+                              if (sendOutAsks(snap, samePhoneDelivery(all, snap))) setSendOutFor({ snap, chargeAgain: false });
                               else sendOut.mutate(snap.order.id);
                               return;
                             case 'hand_over':
@@ -367,6 +373,8 @@ export function OrdersBoardPage() {
       {sendOutFor && (
         <SendOutDialog
           snap={sendOutFor.snap}
+          // Read from the board as it is now: the other delivery may go out while the box is open.
+          sameCustomer={samePhoneDelivery(all, sendOutFor.snap)}
           chargeAgain={sendOutFor.chargeAgain}
           onChargeAgain={() => setSendOutFor({ snap: sendOutFor.snap, chargeAgain: true })}
           onClose={() => setSendOutFor(null)}

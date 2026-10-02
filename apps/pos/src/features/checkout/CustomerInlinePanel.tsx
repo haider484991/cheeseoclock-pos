@@ -8,6 +8,7 @@ import {
   isDeliveryChargeLine,
   type CustomerAddress,
   type CustomerAddressMatch,
+  type OrderSnapshot,
 } from '@cheeseoclock/shared-types';
 import {
   counterPhoneLookup,
@@ -15,6 +16,7 @@ import {
   deliveryChargeTarget,
   deliveryChargeWords,
   makeDeliveryAreaTeller,
+  normalizePhone,
   type DeliveryAreaTeller,
 } from '@cheeseoclock/pos-domain';
 import { Phone, User, MapPin, Check, UserPlus, History, Bike, Plus, PauseCircle, RefreshCw, X } from 'lucide-react';
@@ -424,7 +426,7 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
               />
             </div>
           </div>
-          <DeliveryChargeRow area={form.area} />
+          <DeliveryChargeRow area={form.area} phone={form.phone} />
           {savedAddresses.length > 0 && (
             <div className="mt-1 flex flex-wrap items-center gap-1">
               <span className="text-[10px] text-stone-500">Saved:</span>
@@ -573,8 +575,16 @@ export function CustomerInlinePanel({ mode, form, setForm }: PanelProps) {
  * "Take it off" / "Put it back". It never tells "no area" for an empty form
  * it did not see filled (pos-domain makeDeliveryAreaTeller): an order-type switch and a
  * restart empty the form, not the order's area.
+ *
+ * Add-on delivery (the owner, 2 Oct 2026: "if its out then it should charge
+ * if the rider is not out"): the row tells the panel's phone with the area
+ * (deliveryTellPhone), and the main process leaves the area's charge off
+ * while the same phone has another delivery still in the shop. The row then
+ * says so in green — "Goes with #0042: no second delivery charge" — with
+ * "Put it back" (OrderSnapshot.addOnTo). No phone simply means no add-on
+ * rule: the phone stays optional.
  */
-function DeliveryChargeRow({ area }: { area: string }) {
+function DeliveryChargeRow({ area, phone }: { area: string; phone: string }) {
   const A = useDeliveryAreas();
   const snapshot = useCheckoutStore((s) => s.snapshot);
   const mode = useCheckoutStore((s) => s.mode);
@@ -591,8 +601,13 @@ function DeliveryChargeRow({ area }: { area: string }) {
   const target = useMemo(() => deliveryChargeTarget(A, mode, area, itemsQ.data ?? []), [A, mode, area, itemsQ.data]);
   const wouldAdd = target.kind === 'fee' && target.itemId !== null;
   const orderId = snapshot && snapshot.order.status === 'open' ? snapshot.order.id : null;
-  // What the row last told the main process (order · type · area): until then the bill may not show it yet.
-  const key = `${orderId ?? ''}|${mode}|${area.trim()}`;
+  // The phone told with the area (the add-on rule): a whole number, none once emptied, and the one
+  // told before while a digit is being typed or fixed (deliveryTellPhone).
+  const tellPhoneRef = useRef<string | null>(null);
+  const tellPhone = deliveryTellPhone(tellPhoneRef.current, phone);
+  tellPhoneRef.current = tellPhone;
+  // What the row last told the main process (order · type · area · phone): until then the bill may not show it yet.
+  const key = `${orderId ?? ''}|${mode}|${area.trim()}|${normalizePhone(tellPhone) ?? ''}`;
   const [settledKey, setSettledKey] = useState<string | null>(null);
   // What this row has told the main process: an empty form it never saw filled (an order-type
   // switch or a restart empties it) is not "no area" — the order keeps its area and charge.
@@ -607,7 +622,7 @@ function DeliveryChargeRow({ area }: { area: string }) {
     }
     const t = setTimeout(() => {
       teller.told(orderId, area);
-      setDeliveryArea(area, { mayStartOrder: wouldAdd, forOrderId: orderId }).then(
+      setDeliveryArea(area, { mayStartOrder: wouldAdd, forOrderId: orderId, phone: tellPhone }).then(
         () => setSettledKey(key),
         (e: unknown) => {
           setSettledKey(key);
@@ -620,7 +635,7 @@ function DeliveryChargeRow({ area }: { area: string }) {
       );
     }, 250);
     return () => clearTimeout(t);
-    // wouldAdd follows area/mode/menu; the key decides what the main process is told.
+    // wouldAdd follows area/mode/menu, tellPhone the key's phone; the key decides what the main process is told.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, wouldAdd, setDeliveryArea, toast]);
 
@@ -662,12 +677,24 @@ function DeliveryChargeRow({ area }: { area: string }) {
     );
   }
 
+  // "Put it back" with the phone told: it then holds while the area and the delivery it goes with stay the same.
+  const putBack = () =>
+    void setDeliveryArea(area, { putBack: true, forOrderId: orderId, phone: tellPhone }).catch(
+      failed('Could not put the delivery charge on'),
+    );
+
+  // An add-on: the till left the area's charge off because the same customer's delivery has not
+  // gone out yet (as the main process last settled it). A charge on the bill anyway (tapped on by
+  // hand) reads as the bill has it, below.
+  const addOnTo = snapshot?.addOnTo ?? null;
+  if (addOnTo && orderId && lines.length === 0) {
+    return <AddOnChargeRow addOnTo={addOnTo} onPutBack={busy ? null : putBack} />;
+  }
+
   // Still being told the area (a moment after it changed), the bill may not show its charge yet;
   // once the till has answered, none on the bill means it was taken off by hand.
   const settling = busy || !orderId || settledKey !== key;
   const row = deliveryChargeRowState(target.feeCents, lines, !settling);
-  const putBack = () =>
-    void setDeliveryArea(area, { putBack: true, forOrderId: orderId }).catch(failed('Could not put the delivery charge on'));
 
   if (row.kind === 'on') {
     return (
@@ -724,6 +751,61 @@ function DeliveryChargeRow({ area }: { area: string }) {
       )}
     </div>
   );
+}
+
+/** "Goes with #0042: no second delivery charge" — the add-on row's words (OrderSnapshot.addOnTo). */
+export function addOnChargeWords(addOnTo: NonNullable<OrderSnapshot['addOnTo']>): string {
+  const n = addOnTo.orderNumber.split('-').pop() ?? addOnTo.orderNumber;
+  return `Goes with #${n}: no second delivery charge`;
+}
+
+/**
+ * The delivery-charge row of an add-on (the owner, 2 Oct 2026: "if its out
+ * then it should charge if the rider is not out"): green, the delivery it
+ * goes with, and "Put it back" (the area's charge on; it stays on while the
+ * area and that delivery stay the same). `onPutBack` null: no button for
+ * now (a change on its way to the till).
+ */
+export function AddOnChargeRow({
+  addOnTo,
+  onPutBack,
+}: {
+  addOnTo: NonNullable<OrderSnapshot['addOnTo']>;
+  onPutBack: (() => void) | null;
+}) {
+  return (
+    <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+      <span className="inline-flex items-center gap-1">
+        <Bike className="h-3.5 w-3.5" aria-hidden="true" />
+        {addOnChargeWords(addOnTo)}
+      </span>
+      {onPutBack && (
+        <button
+          type="button"
+          onClick={onPutBack}
+          className="inline-flex min-h-[32px] items-center gap-1 rounded-full bg-white/70 px-3 font-semibold text-emerald-900 hover:bg-white dark:bg-stone-800 dark:text-emerald-100"
+        >
+          <Plus className="h-3.5 w-3.5" /> Put it back
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The phone the delivery-charge row tells with the area (the add-on rule,
+ * OrderSnapshot.addOnTo), from the one it told before (`told`) and what is
+ * in the phone box now (`typed`):
+ *  - a whole number (pos-domain normalizePhone): that number, as typed;
+ *  - the box emptied: none (null) — no phone, no add-on rule;
+ *  - anything else (a digit being typed, deleted or fixed): the one told
+ *    before. One digit short is not another customer: telling it would put
+ *    the charge back on, and lose a "Put it back", at every keystroke.
+ */
+export function deliveryTellPhone(told: string | null, typed: string): string | null {
+  const t = typed.trim();
+  if (!t) return null;
+  return normalizePhone(t) ? t : told;
 }
 
 /**

@@ -1210,6 +1210,130 @@ describe('one trip, one fee (step 18-9): the rider was already paid on a refunde
   });
 });
 
+describe('add-on delivery (step 18-11): Send out names the same customer’s other delivery', () => {
+  /** #0042, the first delivery of the same customer (the same made-up phone), sent before the add-on. */
+  const first = (status: OrderStatus, over: Partial<OrderSnapshot['order']> = {}) =>
+    delivery(42, status, { sentAt: minsAgo(45), createdAt: minsAgo(46), ...over });
+  /** #0045, the add-on: rung while #0042 was still in the shop, so the till left its delivery charge off. */
+  const addOn = (over: Partial<OrderSnapshot['order']> = {}) =>
+    noCharge(delivery(45, 'ready', { subtotalCents: toCents(390_000), taxCents: toCents(58_500), totalCents: toCents(448_500), ...over }));
+
+  function box(snap: OrderSnapshot, sameCustomer?: Parameters<typeof SendOutDialog>[0]['sameCustomer']): string {
+    signIn('cashier');
+    return text(
+      render(
+        <SendOutDialog
+          snap={snap}
+          chargeAgain={false}
+          onChargeAgain={() => seen.events.push('charge again')}
+          onClose={() => seen.events.push('closed')}
+          onSent={(_next, riderPaidNow) => seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent')}
+          onAssignInstead={() => seen.events.push('assign instead')}
+          {...(sameCustomer !== undefined ? { sameCustomer } : {})}
+        />,
+      ),
+    );
+  }
+  const STILL_HERE = { orderId: 'o42', orderNumber: '20261001-0042', out: false };
+  const GONE = { orderId: 'o42', orderNumber: '20261001-0042', out: true };
+
+  it('#0042 still in the shop: "Same customer as #0042 — send them together." above the money, word for word', () => {
+    expect(box(addOn(), STILL_HERE)).toBe(
+      'Send out #0045 The bill prints now · Test Customer ' +
+        'Same customer as #0042 — send them together. ' +
+        'Customer pays the rider Rs 4,485 No delivery charge on this bill Rider gives the shop Rs 4,485 ' +
+        'Has the rider paid the shop? Paid now · Rs 4,485 Pays after delivery ' +
+        'One of your own riders? Assign rider instead',
+    );
+    // A charged order of the same customer (a website one keeps its fee): the same line.
+    expect(box(ownerExample(43, 'ready'), STILL_HERE)).toContain(
+      'Same customer as #0042 — send them together. Customer pays the rider Rs 4,715 Rider keeps (delivery charge) Rs 200',
+    );
+  });
+
+  it('#0042 already out, and no delivery charge on this one: the amber “has already gone out” line', () => {
+    const markup = render(
+      <SendOutDialog snap={addOn()} sameCustomer={GONE} chargeAgain={false} onChargeAgain={() => {}} onClose={() => {}} onSent={() => {}} onAssignInstead={() => {}} />,
+    );
+    expect(text(markup)).toBe(
+      'Send out #0045 The bill prints now · Test Customer ' +
+        'No delivery charge on this order: #0042 has already gone out. ' +
+        'Customer pays the rider Rs 4,485 No delivery charge on this bill Rider gives the shop Rs 4,485 ' +
+        'Has the rider paid the shop? Paid now · Rs 4,485 Pays after delivery ' +
+        'One of your own riders? Assign rider instead',
+    );
+    expect(markup).toContain('ring-amber-300');
+  });
+
+  it('#0042 already out and this order is charged: no line (a new trip); none at all: the box as before', () => {
+    const charged = ownerExample(43, 'ready');
+    expect(box(charged, GONE)).toBe(box(charged));
+    expect(box(charged, null)).toBe(box(charged));
+    expect(box(addOn(), null)).toBe(box(addOn()));
+    expect(box(charged)).not.toContain('Same customer');
+  });
+
+  it('the answers send it out as before: the line changes nothing in the request', async () => {
+    box(addOn(), STILL_HERE);
+    tap('Pays after delivery');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45' }]]);
+  });
+
+  it('on Live Orders: "send them together" only while #0042 is New, Preparing or Ready', () => {
+    for (const status of ['sent_to_kitchen', 'preparing', 'ready'] as const) {
+      const b = liveOrders([first(status), addOn()]);
+      b.press('Send out');
+      expect(b.words).toContain('Send out #0045 The bill prints now · Test Customer Same customer as #0042 — send them together.');
+      b.esc();
+    }
+    // Out for delivery: the add-on with no charge says it has gone out; nothing about sending them together.
+    const out = liveOrders([first('out_for_delivery', { riderKeepsCents: 20_000 as never }), addOn()]);
+    out.press('Send out');
+    expect(out.words).toContain('Send out #0045 The bill prints now · Test Customer No delivery charge on this order: #0042 has already gone out.');
+    expect(out.words).not.toContain('send them together');
+    expect(seen.calls).toEqual([]);
+  });
+
+  it('on Live Orders: a charged order whose first is out shows no line; another customer’s delivery never counts', () => {
+    const charged = liveOrders([first('out_for_delivery', { riderKeepsCents: 20_000 as never }), ownerExample(43, 'ready')]);
+    charged.press('Send out');
+    expect(charged.words).toContain('Send out #0043 The bill prints now · Test Customer Customer pays the rider Rs 4,715');
+    expect(charged.words).not.toContain('Same customer');
+    expect(charged.words).not.toContain('already gone out');
+
+    const other = { ...first('preparing'), customerPhone: '03017654321' } as OrderSnapshot;
+    const b = liveOrders([other, addOn()]);
+    b.press('Send out');
+    expect(b.words).toContain('Send out #0045 The bill prints now · Test Customer Customer pays the rider Rs 4,485');
+    expect(b.words).not.toContain('Same customer');
+  });
+
+  it('a prepaid add-on with no charge opens the box instead of going in one tap; with no other delivery it is still one tap', async () => {
+    const paid = addOn({ paidAt: minsAgo(30) });
+    const b = liveOrders([first('preparing'), paid]);
+    b.press('Send out');
+    await settle();
+    expect(seen.calls).toEqual([]);
+    expect(b.words).toContain(
+      'Send out #0045 The bill prints now · Test Customer Same customer as #0042 — send them together. ' +
+        'Paid already, and no delivery charge: nothing comes out of the drawer. Send out',
+    );
+    // #0042 gone out: the box opens on the amber line too.
+    const gone = liveOrders([first('out_for_delivery', { riderKeepsCents: 20_000 as never }), paid]);
+    gone.press('Send out');
+    await settle();
+    expect(seen.calls).toEqual([]);
+    expect(gone.words).toContain('No delivery charge on this order: #0042 has already gone out. Paid already, and no delivery charge');
+
+    // Alone on the board: one tap, as before.
+    const alone = liveOrders([paid]);
+    alone.press('Send out');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45' }]]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The cards of the build before this step (23e7c86, v0.7.34 step 16-2),
 // rendered from the same made-up orders at the same "now". An own rider's Out
