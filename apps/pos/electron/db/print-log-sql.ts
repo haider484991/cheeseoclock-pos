@@ -6,8 +6,12 @@
  * writes nor Electron.
  */
 
-/** Why a paper printed: a receipt job's reason, or for the kitchen auto / reprint / cancel. */
-export type PrintReason = 'payment' | 'dispatch' | 'refund' | 'reprint' | 'auto' | 'cancel';
+/**
+ * Why a paper printed: a receipt job's reason, or for the kitchen auto /
+ * reprint / cancel; 'edited' (v0.7.36) for an Edit order's CHANGE slip and
+ * the bill printed again after it.
+ */
+export type PrintReason = 'payment' | 'dispatch' | 'refund' | 'reprint' | 'auto' | 'cancel' | 'edited';
 
 /** The Reprint button (and the chef-hat button): printed by hand. */
 export const MANUAL_REASON: PrintReason = 'reprint';

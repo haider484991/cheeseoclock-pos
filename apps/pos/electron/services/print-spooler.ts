@@ -786,29 +786,53 @@ class PrintSpooler {
   }
 
   /**
-   * Edit order (v0.7.36): the kitchen's CHANGE slip for an edit just saved
-   * (orders:saveEdit, after its commit) — only what it added and took off,
-   * frozen in the job, when this till prints kitchen tickets. Not when the
-   * order's own ticket is still waiting to print: that ticket prints the
-   * order as it is when its turn comes, edit included, so a slip would make
-   * the kitchen add it twice. Not when every line it changed is a drink and
-   * this till leaves drinks off its tickets. Never throws: print failure never
-   * blocks the edit.
+   * Edit order (v0.7.36), after orders:saveEdit's commit. Never throws: print
+   * failure never blocks the edit.
+   *
+   * The kitchen's CHANGE slip — only what the edit added and took off, frozen
+   * in the job — when this till prints kitchen tickets. Not when the order's
+   * own ticket is still waiting to print: that ticket prints the order as it
+   * is when its turn comes, edit included, so a slip would make the kitchen
+   * add it twice. Not when every line it changed is a drink and this till
+   * leaves drinks off its tickets.
+   *
+   * The bill again, marked ORDER CHANGED, when a bill already went out for
+   * the order (on either till: a rider's bill before Back to Ready, one
+   * printed by hand): the one the customer or rider holds is wrong now. Not
+   * while a bill is still waiting to print (it prints the order as it is).
    */
   onOrderEdited(orderId: string, change: KitchenChange): void {
     if (!this.db) return;
     const db = this.db;
     try {
       const policy = getPrintPolicy(db);
-      if (!policy.kitchenTicket) return;
       const rules = kitchenTicketRules(policy);
       const lines = [...change.added, ...change.removed];
-      if (lines.length === 0 || (!rules.drinks && lines.every((l) => l.drink))) return;
-      const ticket = findOpenJob(db, orderId, 'kitchen');
-      if (ticket?.status === 'pending') return;
-      this.enqueue({ kind: 'kitchen', orderId, reprint: false, change, requestedByUserId: change.byUserId ?? this.whoIsSignedIn() });
+      const slip = policy.kitchenTicket && lines.length > 0 && (rules.drinks || !lines.every((l) => l.drink));
+      if (slip && findOpenJob(db, orderId, 'kitchen')?.status !== 'pending') {
+        this.enqueue({ kind: 'kitchen', orderId, reprint: false, change, requestedByUserId: change.byUserId ?? this.whoIsSignedIn() });
+      }
     } catch (e) {
       log.error('Could not queue the kitchen change slip', { orderId, error: String(e) });
+    }
+    try {
+      const snap = getOrderSnapshot(db, orderId);
+      if (!snap || findOpenJob(db, orderId, 'receipt', 'customer') !== null) return;
+      if (this.series(snap, 'bill', 'bill', 'customer').prior === 0) return;
+      const policy = getPrintPolicy(db);
+      const copies: ReceiptCopy[] =
+        policy.shopCopy === 'always' || (policy.shopCopy === 'delivery' && snap.order.mode === 'delivery') ? ['customer', 'shop'] : ['customer'];
+      this.enqueue({
+        kind: 'receipt',
+        orderId,
+        openDrawer: false,
+        copies,
+        reason: 'edited',
+        editNo: change.editNo,
+        requestedByUserId: change.byUserId ?? this.whoIsSignedIn(),
+      });
+    } catch (e) {
+      log.error('Could not queue the bill after an edit', { orderId, error: String(e) });
     }
   }
 
@@ -1398,7 +1422,7 @@ class PrintSpooler {
     if (Date.now() >= Date.parse(job.createdAt) + FBR_IRN_GRACE_MS) return false;
     const db = this.db;
     const reason = job.payload.reason;
-    if (reason === 'payment' || reason === 'dispatch') {
+    if (reason === 'payment' || reason === 'dispatch' || reason === 'edited') {
       if (receiptDocumentFor(snap) !== 'receipt') return false;
       const row = getFbrRowByOrder(db, job.payload.orderId);
       if (row) return row.modeAtEnqueue !== 'noop' && row.status === 'pending';
@@ -1600,7 +1624,7 @@ class PrintSpooler {
           docKey,
           copy: 'kitchen',
           printNo,
-          reason: 'auto',
+          reason: 'edited',
           requestedByUserId: requestedBy,
           approvedByUserId: null,
           fbrIrn: null,
@@ -1718,7 +1742,9 @@ class PrintSpooler {
         const refundAt = payload.reason === 'refund' ? (payload.refundAt ?? latestRefundAt(snap)) : null;
         const thisRefund = refundAt ? refundRows(snap, refundAt) : [];
         const document: ReceiptDocument = payload.reason === 'refund' && thisRefund.length > 0 ? 'refund' : receiptDocumentFor(snap);
-        const docKey = docKeyFor(document, refundAt);
+        // The bill after an edit (ORDER CHANGED on it) is a series of its own: the original of the changed order.
+        const edited = payload.reason === 'edited' && document !== 'void';
+        const docKey = edited ? `${docKeyFor(document, refundAt)}:edit${payload.editNo ?? 0}` : docKeyFor(document, refundAt);
         const manual = payload.reason === MANUAL_REASON;
         const requestedBy = payload.requestedByUserId ?? null;
         const approvedBy = payload.approvedByUserId ?? null;
@@ -1809,6 +1835,7 @@ class PrintSpooler {
             stamp,
             openDrawer: false,
             cutPaper: true,
+            ...(edited ? { orderChanged: true } : {}),
             ...(fbrSale.fbr ? { fbr: fbrSale.fbr } : {}),
             ...(fbrSale.missing ? { fbrMissing: fbrSale.missing } : {}),
             ...(refund ? { refund } : {}),
@@ -1906,7 +1933,7 @@ function refundReason(rows: OrderSnapshot['payments'], snap: OrderSnapshot): str
 function cancelledMeanwhile(payload: PrintJobPayload, snap: OrderSnapshot): boolean {
   const status = snap.order.status;
   if (payload.kind === 'kitchen') return payload.cancelled !== true && (status === 'void' || status === 'refunded');
-  if (payload.kind === 'receipt') return status === 'void' && (payload.reason === 'payment' || payload.reason === 'dispatch');
+  if (payload.kind === 'receipt') return status === 'void' && (payload.reason === 'payment' || payload.reason === 'dispatch' || payload.reason === 'edited');
   return false;
 }
 

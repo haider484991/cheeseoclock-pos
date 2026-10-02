@@ -57,6 +57,7 @@ const REASON_WORDS: Record<string, string> = {
   reprint: 'by hand',
   auto: 'when sent to the kitchen',
   cancel: 'when cancelled',
+  edited: 'after the order was changed',
 };
 
 const TIME_24 = new Intl.DateTimeFormat('en-GB', {

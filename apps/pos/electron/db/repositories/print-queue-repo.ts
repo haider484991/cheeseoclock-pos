@@ -15,8 +15,12 @@ import { nowIso } from './base.js';
 export type PrintJobKind = 'receipt' | 'kitchen' | 'drawer';
 export type PrintJobStatus = 'pending' | 'in_flight' | 'done' | 'failed';
 
-/** Why a receipt was printed — lets the spooler tell "the bill already went out with the rider". */
-export type ReceiptJobReason = 'payment' | 'dispatch' | 'refund' | 'reprint';
+/**
+ * Why a receipt was printed — lets the spooler tell "the bill already went
+ * out with the rider". 'edited' (v0.7.36): the bill printed again after an
+ * Edit order, because one had already gone out (ORDER CHANGED on it).
+ */
+export type ReceiptJobReason = 'payment' | 'dispatch' | 'refund' | 'reprint' | 'edited';
 
 export interface ReceiptJobPayload {
   kind: 'receipt';
@@ -27,6 +31,8 @@ export interface ReceiptJobPayload {
   reason: ReceiptJobReason;
   /** A refund slip: the paid_at shared by that refund's rows (which refund it is for). */
   refundAt?: string;
+  /** reason 'edited': which edit of the order (its paper series is `<document>:edit<n>`). */
+  editNo?: number;
   /** Who was signed in when it was queued, or who pressed Reprint. */
   requestedByUserId?: string | null;
   /** The manager whose PIN or password allowed a reprint. */
@@ -105,6 +111,8 @@ interface RawPayload {
   requestedByUserId?: unknown;
   approvedByUserId?: unknown;
   drawerOpenId?: unknown;
+  change?: unknown;
+  editNo?: unknown;
 }
 
 /** A user id kept only when it is one (a string); anything else is dropped. */
@@ -112,13 +120,24 @@ function optId(v: unknown): { requestedByUserId?: string } | Record<string, neve
   return typeof v === 'string' && v ? { requestedByUserId: v } : {};
 }
 
+/** An edit's CHANGE slip as frozen in its job, when it has that shape; anything else is dropped. */
+function asKitchenChange(v: unknown): KitchenChange | null {
+  if (!v || typeof v !== 'object') return null;
+  const c = v as Partial<KitchenChange>;
+  const ok = typeof c.editNo === 'number' && Number.isInteger(c.editNo) && c.editNo >= 1 && Array.isArray(c.added) && Array.isArray(c.removed) && typeof c.at === 'string';
+  return ok ? (c as KitchenChange) : null;
+}
+
 function parsePayload(kind: PrintJobKind, json: string): PrintJobPayload {
   const raw = JSON.parse(json) as RawPayload;
   switch (kind) {
-    case 'kitchen':
-      return raw.cancelled === true
-        ? { kind, orderId: raw.orderId, reprint: false, cancelled: true, ...optId(raw.requestedByUserId) }
+    case 'kitchen': {
+      if (raw.cancelled === true) return { kind, orderId: raw.orderId, reprint: false, cancelled: true, ...optId(raw.requestedByUserId) };
+      const change = asKitchenChange(raw.change);
+      return change
+        ? { kind, orderId: raw.orderId, reprint: false, change, ...optId(raw.requestedByUserId) }
         : { kind, orderId: raw.orderId, reprint: raw.reprint === true, ...optId(raw.requestedByUserId) };
+    }
     case 'drawer':
       return typeof raw.drawerOpenId === 'string' && raw.drawerOpenId
         ? { kind, orderId: raw.orderId, drawerOpenId: raw.drawerOpenId }
@@ -132,6 +151,7 @@ function parsePayload(kind: PrintJobKind, json: string): PrintJobPayload {
         copies: Array.isArray(raw.copies) && raw.copies.length > 0 ? raw.copies : ['customer'],
         reason: raw.reason ?? 'payment',
         ...(typeof raw.refundAt === 'string' && raw.refundAt ? { refundAt: raw.refundAt } : {}),
+        ...(typeof raw.editNo === 'number' && Number.isInteger(raw.editNo) && raw.editNo >= 1 ? { editNo: raw.editNo } : {}),
         ...optId(raw.requestedByUserId),
         ...(typeof raw.approvedByUserId === 'string' && raw.approvedByUserId
           ? { approvedByUserId: raw.approvedByUserId }
@@ -441,7 +461,7 @@ export function listInFlightWithPlan(db: AppDatabase): Array<{ job: PrintJobRow;
 /**
  * Jobs for an order that must not print any more because it was cancelled:
  * its kitchen tickets still waiting (never a CANCELLED slip), and on a void
- * its bills too (a dispatch bill or a reprint not yet out). Refund slips and
+ * its bills too (a dispatch bill, a reprint or an edit's new bill not yet out). Refund slips and
  * drawer pulses are never touched. Marked done with `note`; returns how many.
  * A job being sent right now is left alone.
  */
@@ -458,7 +478,7 @@ export function cancelPendingJobs(
     const p = rowToJob(r).payload;
     const stop =
       (p.kind === 'kitchen' && p.cancelled !== true) ||
-      (opts.bills && p.kind === 'receipt' && (p.reason === 'dispatch' || p.reason === 'reprint'));
+      (opts.bills && p.kind === 'receipt' && (p.reason === 'dispatch' || p.reason === 'reprint' || p.reason === 'edited'));
     if (!stop) continue;
     markJobDone(db, r.id, opts.note);
     n += 1;

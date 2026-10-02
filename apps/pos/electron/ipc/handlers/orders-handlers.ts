@@ -596,9 +596,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     } catch (e) {
       throw new IpcGuardError({ code: 'precondition_failed', message: e instanceof Error ? e.message : 'The edit was not saved' });
     }
-    // After the commit: the kitchen's CHANGE slip (what was added, what not to make).
-    printSpooler.onOrderEdited(input.orderId, kitchenChangeOf(ctx.db, input.orderId, saved, base, s.id, input.reason ?? null));
-    // A Free order paid at Rs 0: its FBR invoice queued, as Pay's is (never blocks the edit).
+    // A Free order paid at Rs 0: its FBR invoice queued, as Pay's is (never blocks the edit) —
+    // first, so a receipt printed for it below waits for the number as Pay's does.
     if (saved.completedFree) {
       try {
         const cfg = getFbrConfig(ctx.db);
@@ -608,6 +607,9 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
         log.warn('FBR enqueue failed for a Free order (edit saved)', { orderId: input.orderId, error: e instanceof Error ? e.message : String(e) });
       }
     }
+    // After the commit: the kitchen's CHANGE slip (what was added, what not to make), and the
+    // bill again when one already went out.
+    printSpooler.onOrderEdited(input.orderId, kitchenChangeOf(ctx.db, input.orderId, saved, base, s.id, input.reason ?? null));
     return ok({ snapshot: saved.snapshot, diff: saved.diff });
   });
 

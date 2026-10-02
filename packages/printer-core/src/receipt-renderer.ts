@@ -346,6 +346,12 @@ export interface RenderReceiptOpts {
   /** Who cancelled the order, when and why (document 'void'). */
   cancelled?: CancelInfo | null;
   /**
+   * The bill printed again after an Edit order (v0.7.36): ORDER CHANGED and
+   * "This replaces the earlier bill" under the title, so the paper the
+   * customer or rider already holds is not the one they go by.
+   */
+  orderChanged?: boolean;
+  /**
    * FBR is live but this receipt has no invoice number: 'pending' prints
    * "not yet issued", 'failed' prints "not issued". Leave both this and `fbr`
    * out in noop mode: then nothing about FBR is printed at all.
@@ -492,6 +498,10 @@ export function renderReceipt(
     const who = stamp.byName ? ` by ${stamp.byName}` : '';
     b.bold(true).wrappedText(`Printed later: ${formatDateTime(stamp.printedAt)}${who}`).bold(false);
     if (stamp.approvedByName) b.wrappedText(`Approved by: ${stamp.approvedByName}`);
+  }
+  if (opts.orderChanged && doc !== 'void' && doc !== 'refund') {
+    b.bold(true).doubleHeight(true).text('ORDER CHANGED').newline();
+    b.doubleHeight(false).wrappedText('This replaces the earlier bill').bold(false);
   }
   if (shopCopy) {
     b.bold(true).doubleHeight(true).text('SHOP COPY').newline();
