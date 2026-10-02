@@ -610,5 +610,210 @@ export function decrementForOrder(
   return crossed;
 }
 
+// ---------------------------------------------------------------------------
+// Edit order (v0.7.36): the lines an edit changed
+// ---------------------------------------------------------------------------
+
+/** One order line as the stock sees it: its item, how many, and the choices picked on it. */
+export type StockLine = OrderLine;
+
+/** The order's live lines with their picks (read before an edit takes any off). */
+export function readOrderStockLines(db: AppDatabase, orderId: string): StockLine[] {
+  return readOrderLines(db, orderId);
+}
+
+/**
+ * What these quantities of these lines take from stock, per ingredient, in
+ * each ingredient's unit: the same expansion (pos-domain expandRecipe) the
+ * order's take at Send uses — the line's recipe, its picks, its leave-outs.
+ */
+export function ingredientTakesOf(
+  db: AppDatabase,
+  lines: ReadonlyArray<{ line: StockLine; quantity: number }>,
+): Map<string, number> {
+  const recipes = readRecipes(db, [...new Set(lines.map((l) => l.line.menuItemId).filter((id): id is string => id !== null))]);
+  return totalsByIngredient(
+    lines.flatMap(({ line, quantity }) =>
+      line.menuItemId && quantity > 0 ? expandRecipe(recipes.get(line.menuItemId) ?? [], line.picks, quantity) : [],
+    ),
+  );
+}
+
+/** What an edit adds to the stock taken: it says so in the stock history. */
+export const EDIT_TAKE_NOTE = 'Added to the order after it was sent';
+
+/**
+ * Edit order (v0.7.36): what an order the kitchen has now has MORE of goes
+ * off stock now — `added` = by line, how many more (a new line whole, a line
+ * that went up by the difference). One 'sale' row per ingredient, valued at
+ * today's prices like the take at Send, and the cost kept with those lines
+ * worked out again (recostLines). An order that took no stock yet (nothing on
+ * it had a recipe, or the take at Send failed) takes ALL of it now, as Send
+ * does (decrementForOrder). Inside the caller's transaction (a savepoint);
+ * a costing error never blocks the edit. Returns the ingredients that went
+ * below their threshold.
+ */
+export function takeStockForEdit(
+  db: AppDatabase,
+  orderId: string,
+  added: ReadonlyArray<{ lineId: string; quantity: number }>,
+  actor: Actor,
+): Array<{ ingredientId: string; name: string; unit: string; resultingQty: number; threshold: number }> {
+  if (!db.prepare(HAS_STOCK_ROWS).get(orderId)) return decrementForOrder(db, orderId, actor);
+  const byId = new Map(readOrderLines(db, orderId).map((l) => [l.id, l]));
+  const wanted = added.flatMap((a) => {
+    const line = byId.get(a.lineId);
+    return line && a.quantity > 0 ? [{ line, quantity: a.quantity }] : [];
+  });
+  const takes = ingredientTakesOf(db, wanted);
+  const crossed: Array<{ ingredientId: string; name: string; unit: string; resultingQty: number; threshold: number }> = [];
+  db.transaction(() => {
+    if (takes.size > 0) {
+      let book: PriceBook | null = null;
+      try {
+        book = loadPriceBook(db);
+      } catch (e) {
+        log.warn('Price book not read; the added stock is not valued', { orderId, error: String(e) });
+      }
+      const priceOf: PriceOf = book ? priceOfBook(book) : () => undefined;
+      const meta = new Map(
+        (
+          db
+            .prepare(
+              `SELECT id, name, unit, low_threshold FROM ingredients
+                WHERE id IN (SELECT value FROM json_each(?)) AND deleted_at IS NULL`,
+            )
+            .all(JSON.stringify([...takes.keys()])) as Array<{ id: string; name: string; unit: string; low_threshold: number }>
+        ).map((m) => [m.id, m]),
+      );
+      for (const [ingredientId, qty] of takes) {
+        const m = meta.get(ingredientId);
+        if (!m || !(qty > 0)) continue;
+        const result = recordStockMovement(
+          db,
+          {
+            ingredientId,
+            deltaQty: -qty,
+            reason: 'sale',
+            refOrderId: orderId,
+            notes: EDIT_TAKE_NOTE,
+            value: book ? safeStockValue(-qty, priceOf(ingredientId)) : NOT_VALUED,
+          },
+          actor,
+        );
+        const before = result.resultingQty + qty;
+        if (result.resultingQty <= m.low_threshold && before > m.low_threshold) {
+          crossed.push({ ingredientId, name: m.name, unit: m.unit, resultingQty: result.resultingQty, threshold: m.low_threshold });
+        }
+      }
+    }
+    try {
+      db.transaction(() => recostLines(db, orderId, added.map((a) => a.lineId), actor))();
+    } catch (e) {
+      log.warn('Keeping the cost of the added items failed (edit still saved)', { orderId, error: String(e) });
+    }
+  })();
+  if (crossed.length > 0) {
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.send('inventory:low-stock', crossed);
+  }
+  return crossed;
+}
+
+/**
+ * Edit order (v0.7.36): the cost kept with these lines of the order, worked
+ * out again for what each line is now (a new line, or one that went up or
+ * down) at today's prices. Each (line, part) keeps its id (saleCostId): an
+ * existing row is updated (brought back if it was deleted), a part the line
+ * did not have is written, a part it no longer has is deleted. A line that
+ * is gone, or an order that took its stock before costing started, is left
+ * alone. Inside the caller's transaction; returns how many rows it wrote.
+ */
+export function recostLines(db: AppDatabase, orderId: string, lineIds: ReadonlyArray<string>, actor: Actor): number {
+  if (lineIds.length === 0 || db.prepare(TAKEN_BEFORE_COSTING).get(orderId)) return 0;
+  const want = new Set(lineIds);
+  const lines = readOrderLines(db, orderId).filter((l) => want.has(l.id));
+  if (lines.length === 0) return 0;
+  const recipes = readRecipes(db, [...new Set(lines.map((l) => l.menuItemId).filter((id): id is string => id !== null))]);
+  let costs: LineCost[];
+  try {
+    const priceOf = priceOfBook(loadPriceBook(db));
+    costs = lines.map((line): LineCost => {
+      try {
+        const recipe = line.menuItemId ? (recipes.get(line.menuItemId) ?? []) : [];
+        return { line, parts: costSaleLine(recipe, line.picks, line.quantity, priceOf).parts, error: null };
+      } catch (e) {
+        return failedCosts([line], String(e))[0]!;
+      }
+    });
+  } catch (e) {
+    costs = failedCosts(lines, String(e));
+  }
+  const now = nowIso();
+  const find = db.prepare(`SELECT id FROM order_item_costs WHERE id = ?`);
+  const update = db.prepare(
+    `UPDATE order_item_costs
+        SET modifier_id = ?, line_qty = ?, cost_cents = ?, status = ?, missing_lines = ?, estimate_lines = ?,
+            costed_at = ?, deleted_at = NULL, updated_at = ?, version = version + 1
+      WHERE id = ?`,
+  );
+  const insert = db.prepare(
+    `INSERT INTO order_item_costs
+       (id, order_id, order_item_id, part, modifier_id, line_qty, cost_cents, status,
+        missing_lines, estimate_lines, costed_at, created_at, updated_at, device_id, version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+  );
+  let written = 0;
+  let costCents = 0;
+  for (const c of costs) {
+    const keep = new Set<string>();
+    for (const p of c.parts) {
+      const id = saleCostId(c.line.id, p.part);
+      keep.add(id);
+      if (find.get(id)) {
+        update.run(p.modifierId, c.line.quantity, p.costCents, p.status, p.missingLines, p.estimateLines, now, now, id);
+      } else {
+        insert.run(
+          id,
+          orderId,
+          c.line.id,
+          p.part,
+          p.modifierId,
+          c.line.quantity,
+          p.costCents,
+          p.status,
+          p.missingLines,
+          p.estimateLines,
+          now,
+          now,
+          now,
+          actor.deviceId,
+        );
+      }
+      enqueueSync(db, { entityType: 'order_item_costs', entityId: id, op: 'upsert', payload: { id } });
+      written += 1;
+      costCents += p.costCents;
+    }
+    // A part the line no longer has (its choices changed in the edit): deleted.
+    for (const old of db
+      .prepare(`SELECT id FROM order_item_costs WHERE order_item_id = ? AND deleted_at IS NULL`)
+      .all(c.line.id) as Array<{ id: string }>) {
+      if (keep.has(old.id)) continue;
+      db.prepare(`UPDATE order_item_costs SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?`).run(now, now, old.id);
+      enqueueSync(db, { entityType: 'order_item_costs', entityId: old.id, op: 'delete', payload: { id: old.id, deletedAt: now } });
+    }
+  }
+  if (written > 0) {
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: orderId,
+      action: 'cost_snapshot',
+      actorUserId: actor.userId,
+      before: null,
+      after: { rows: written, costCents, edit: true, lines: lines.map((l) => l.id) },
+    });
+  }
+  return written;
+}
+
 // Putting an order's stock back (or booking it as waste) when it is cancelled
 // or refunded lives in order-stock-repo.ts: settleOrderStock.

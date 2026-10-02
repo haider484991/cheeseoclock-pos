@@ -160,10 +160,20 @@ export type OrderStockNoteKind =
  * read it back. A test order the owner deleted (0043) reads "Test order
  * deleted, not made — put back" / "Test order deleted after cooking — counted
  * as waste": the endings are the same, so orderStockNoteKind (and an older
- * till's applyOtherTillReturn) still read them.
+ * till's applyOtherTillReturn) still read them. An item taken off an order
+ * the kitchen has (Edit order, v0.7.36) reads "Taken off the order, not made
+ * — put back" — the same endings again; EDIT_SETTLE_NOTE_START tells it from
+ * a cancel.
  */
 export function orderStockNote(kind: OrderStockNoteKind, how: OrderStockHow): string {
-  const verb = how === 'refunded' ? 'Refunded' : how === 'test_deleted' ? 'Test order deleted' : 'Cancelled';
+  const verb =
+    how === 'refunded'
+      ? 'Refunded'
+      : how === 'test_deleted'
+        ? 'Test order deleted'
+        : how === 'edited'
+          ? EDIT_SETTLE_NOTE_START
+          : 'Cancelled';
   switch (kind) {
     case 'put_back':
       return `${verb}, not made — put back`;
@@ -180,6 +190,20 @@ export function orderStockNote(kind: OrderStockNoteKind, how: OrderStockHow): st
     case 'drink_back_other_till':
       return `${verb} — sealed drink put back on the till that sent it`;
   }
+}
+
+/**
+ * How the note of a stock row that settled ONE ITEM taken off a live order
+ * starts (Edit order, v0.7.36). Such a row settles part of what the order
+ * holds: the order is not settled by it (a cancel later still asks "Was the
+ * food made?" for the rest), so the readers of "is this order settled?" skip
+ * these rows (isEditSettleNote).
+ */
+export const EDIT_SETTLE_NOTE_START = 'Taken off the order';
+
+/** A settle row written for an item taken off a live order (Edit order), not by a cancel, refund or test delete. */
+export function isEditSettleNote(note: string | null | undefined): boolean {
+  return (note ?? '').trim().startsWith(EDIT_SETTLE_NOTE_START);
 }
 
 /**

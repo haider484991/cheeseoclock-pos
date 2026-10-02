@@ -60,6 +60,13 @@ import {
   discountReasonMissing,
   DISCOUNT_REASON_REQUIRED,
   NOTHING_TO_DISCOUNT,
+  freeOrderRule,
+  isFreeOrderRule,
+  orderEditBlock,
+  FREE_ORDER_IS_ALL,
+  FREE_ORDER_NEEDS_MANAGER,
+  FREE_ORDER_NEEDS_REASON,
+  FREE_ORDER_NOT_FOODPANDA,
 } from '@cheeseoclock/pos-domain';
 import {
   readApprovalLimits,
@@ -1859,7 +1866,34 @@ export interface AddItemInput {
    * passes it, so the renderer can't set it.
    */
   noDiscount?: boolean;
+  /**
+   * EDIT-ORDER-ONLY (v0.7.36, order-edit-repo.ts): the new line's id, made
+   * by the screen (a UUID v7) so an edit's preview and its save give the line
+   * the same id. Only with { editing: true }; orders:addItem never passes it.
+   */
+  itemId?: string;
 }
+
+/**
+ * Edit order (v0.7.36): a change made inside an Edit-order transaction
+ * (order-edit-repo.ts). It may touch an order the kitchen already has while
+ * pos-domain orderEditBlock allows it (in the kitchen, unpaid, not out, not
+ * foodpanda); without it every item and discount write still refuses
+ * anything past 'open'. The IPC handlers never pass it.
+ */
+export interface OrderEditing {
+  editing?: boolean;
+}
+
+/** The order takes item / discount changes: still being rung up, or (in an edit) one orderEditBlock lets through. */
+function assertOrderTakesChanges(order: Order, opts: OrderEditing | undefined, refusal: string): void {
+  if (order.status === 'open') return;
+  if (opts?.editing === true && orderEditBlock(order) === null) return;
+  throw new Error(refusal);
+}
+
+/** A UUID (the line id an edit's screen made): 8-4-4-4-12 hex. */
+const EDIT_LINE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * A line's chosen choices in the order the choices popup asks them (owner
@@ -1902,12 +1936,19 @@ export function addOrderItem(
   db: AppDatabase,
   input: AddItemInput,
   actor: Actor & { userId: string },
+  opts: OrderEditing = {},
 ): OrderItem {
   let inserted!: OrderItem;
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be added now`);
+    assertOrderTakesChanges(order, opts, `This order is ${said(order.status)} — items can't be added now`);
+    // An edit's line id, made by its screen: only inside an edit, a UUID, and never one already used.
+    if (input.itemId !== undefined) {
+      if (opts.editing !== true) throw new Error('A line id is only given inside an edit');
+      if (!EDIT_LINE_ID.test(input.itemId)) throw new Error('That line id is not valid');
+      if (db.prepare(`SELECT 1 AS x FROM order_items WHERE id = ?`).get(input.itemId)) throw new Error('That line id is already used');
+    }
     if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 999) {
       throw new Error('Quantity must be a whole number between 1 and 999');
     }
@@ -1989,7 +2030,7 @@ export function addOrderItem(
     const lineTotal = (unitPrice + modSum) * input.quantity;
 
     const now = nowIso();
-    const itemId = uuidv7();
+    const itemId = input.itemId ?? uuidv7();
 
     const newItem: OrderItem = {
       id: itemId as OrderItem['id'],
@@ -2096,11 +2137,12 @@ export function updateOrderItemOptions(
   db: AppDatabase,
   input: { orderId: string; orderItemId: string; modifierIds: string[]; notes: string | null },
   actor: Actor & { userId: string },
+  opts: OrderEditing = {},
 ): void {
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be changed now`);
+    assertOrderTakesChanges(order, opts, `This order is ${said(order.status)} — items can't be changed now`);
     const line = db
       .prepare(
         `SELECT id, menu_item_id, unit_price_cents, quantity, notes FROM order_items
@@ -2202,11 +2244,12 @@ export function removeOrderItem(
   orderId: string,
   orderItemId: string,
   actor: Actor & { userId: string },
+  opts: OrderEditing = {},
 ): void {
   const tx = db.transaction(() => {
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be removed now`);
+    assertOrderTakesChanges(order, opts, `This order is ${said(order.status)} — items can't be removed now`);
 
     const item = db
       .prepare(`SELECT id FROM order_items WHERE id = ? AND order_id = ? AND deleted_at IS NULL`)
@@ -2282,20 +2325,22 @@ export function updateOrderItemQuantity(
   orderItemId: string,
   quantity: number,
   actor: Actor & { userId: string },
+  opts: OrderEditing = {},
 ): void {
   if (quantity <= 0) {
-    removeOrderItem(db, orderId, orderItemId, actor);
+    removeOrderItem(db, orderId, orderItemId, actor, opts);
     return;
   }
   if (!Number.isInteger(quantity) || quantity > 999) {
     throw new Error('Quantity must be a whole number between 1 and 999');
   }
   const tx = db.transaction(() => {
-    // Same gate as add/remove: only a draft can change shape. Without this a
-    // paid order's totals could be rewritten after the money was taken.
+    // Same gate as add/remove: only a draft can change shape (or an order an
+    // Edit order may change). Without this a paid order's totals could be
+    // rewritten after the money was taken.
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — items can't be changed now`);
+    assertOrderTakesChanges(order, opts, `This order is ${said(order.status)} — items can't be changed now`);
     const row = db
       .prepare(
         `SELECT unit_price_cents, quantity FROM order_items
@@ -2349,13 +2394,20 @@ export interface ApplyDiscountInput {
   value: number;
   reason?: string | null;
   approverUserId?: string | null;
+  /**
+   * A Free order (v0.7.36): percent 100 on every line, the value deals and
+   * the delivery charge included (pos-domain freeOrderRule). Needs
+   * `approverUserId` and a reason, whatever the settings say; never on a
+   * foodpanda order.
+   */
+  free?: boolean;
 }
 
 /**
  * Repository-only options of applyDiscount (never through the IPC contract:
  * the screen can't choose the rule).
  */
-export interface ApplyDiscountOptions {
+export interface ApplyDiscountOptions extends OrderEditing {
   /**
    * The rule to freeze on the discount instead of the till's Settings switch
    * ('discounts.delivery'): the web bridge passes the website's own
@@ -2401,11 +2453,20 @@ export function applyDiscount(
   const tx = db.transaction(() => {
     const order = findOrder(db, input.orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — a discount can't be added now`);
+    assertOrderTakesChanges(order, opts, `This order is ${said(order.status)} — a discount can't be added now`);
 
     // Validate the discount input shape (percent 0-100, value >= 0).
     const v = validateDiscountInput({ discountType: input.discountType, value: input.value });
     if (!v.ok) throw new Error(v.missing.join('; '));
+
+    // A Free order (v0.7.36): 100% off the whole order, with a manager and a reason — always.
+    const free = input.free === true;
+    if (free) {
+      if (input.discountType !== 'percent' || input.value !== 100) throw new Error(FREE_ORDER_IS_ALL);
+      if (order.mode === 'foodpanda') throw new Error(FREE_ORDER_NOT_FOODPANDA);
+      if (discountReasonMissing(input.reason)) throw new Error(FREE_ORDER_NEEDS_REASON);
+      if (!input.approverUserId) throw new Error(FREE_ORDER_NEEDS_MANAGER);
+    }
 
     // The rule this discount is given under, FROZEN on its row below: does it
     // also come off the delivery charge, and does it leave the value deals
@@ -2415,7 +2476,8 @@ export function applyDiscount(
     // them; or the website's own for a web order. Everything after — each
     // cart change, the tax, the FBR invoice, profit, a reprint — follows the
     // row, never the live setting.
-    const rule = opts.rule ?? tillDiscountRule(readDiscountAlsoOffDeliveryCharge(db), order.mode !== 'foodpanda');
+    // A Free order's own rule: every line, the value deals and the delivery charge included.
+    const rule = free ? freeOrderRule() : (opts.rule ?? tillDiscountRule(readDiscountAlsoOffDeliveryCharge(db), order.mode !== 'foodpanda'));
     // The owner's "a discount needs a reason" (Settings → Money & discounts), read live —
     // defense in depth behind the IPC handler. Every discount the till gives by hand; not the
     // website's pick-up % (its rule is the website's and it carries its own name), and never
@@ -2565,14 +2627,14 @@ export function clearDiscount(
   db: AppDatabase,
   orderId: string,
   actor: Actor & { userId: string },
-  opts: { approverUserId?: string | null } = {},
+  opts: { approverUserId?: string | null } & OrderEditing = {},
 ): void {
   const tx = db.transaction(() => {
     // Same gate as applying one: taking a discount off a paid order would
     // rewrite a total the customer has already paid.
     const order = findOrder(db, orderId);
     if (!order) throw new Error('Order not found');
-    if (order.status !== 'open') throw new Error(`This order is ${said(order.status)} — its discount can't be changed now`);
+    assertOrderTakesChanges(order, opts, `This order is ${said(order.status)} — its discount can't be changed now`);
     const now = nowIso();
     const existing = db
       .prepare(
@@ -3012,6 +3074,51 @@ export function tenderOrder(
   log.info('Order tendered', { id: input.orderId, total: result.totalCents });
   return result;
 }
+
+/** The order's discount (its newest live row) is a Free order (pos-domain freeOrderRule). */
+export function hasFreeOrder(db: AppDatabase, orderId: string): boolean {
+  const row = db
+    .prepare(`SELECT rule_json FROM order_discounts WHERE order_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1`)
+    .get(orderId) as { rule_json: string | null } | undefined;
+  return !!row && isFreeOrderRule(row.rule_json);
+}
+
+/**
+ * A Free order the kitchen already has (made free in an Edit order, v0.7.36):
+ * there is nothing to collect, so it is paid now — Rs 0, no payment rows, no
+ * drawer — as Pay's "Nothing to pay — complete order" does for a cart. From
+ * then on it is a prepaid order: Send out pays an outside rider his delivery
+ * charge from the drawer, and the hand-over takes no money. Refused unless
+ * it is still unpaid, sent, Rs 0 and carries a Free order. Inside the
+ * caller's transaction (a savepoint); one sync row and audit 'tender'
+ * (freeOrder: true). The caller queues the FBR invoice after the commit, as
+ * Pay does.
+ */
+export function completeFreeOrder(db: AppDatabase, orderId: string, actor: Actor & { userId: string }): Order {
+  let result!: Order;
+  db.transaction(() => {
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.paidAt !== null) throw new Error('Order is already paid');
+    if (order.status === 'open' || !EDITABLE_AFTER_SEND.includes(order.status)) {
+      throw new Error(`This order is ${said(order.status)} — it can't be completed here`);
+    }
+    if (order.totalCents !== 0 || !hasFreeOrder(db, orderId)) throw new Error('Only a Free order with nothing to pay is completed this way');
+    const now = nowIso();
+    const upd = db
+      .prepare(`UPDATE orders SET paid_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND paid_at IS NULL AND deleted_at IS NULL`)
+      .run(now, now, orderId);
+    if (upd.changes === 0) throw new Error('Order changed state before this action could complete. Refresh and try again.');
+    const after = findOrder(db, orderId)!;
+    enqueueSync(db, { entityType: 'orders', entityId: orderId, op: 'upsert', payload: after });
+    writeAudit(db, { entityType: 'orders', entityId: orderId, action: 'tender', actorUserId: actor.userId, before: order, after: { ...after, freeOrder: true } });
+    result = after;
+  })();
+  return result;
+}
+
+/** The kitchen's states a Free order made in an edit is completed from (pos-domain EDITABLE_STATUSES). */
+const EDITABLE_AFTER_SEND: OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready'];
 
 /** foodpanda's order number as typed: trimmed, no leading '#', at most FOODPANDA_ORDER_CODE_MAX letters; empty = null. */
 export function foodpandaOrderCode(raw: string | null | undefined): string | null {
@@ -3811,6 +3918,8 @@ export function getOrderSnapshot(
         : {}),
       alsoOffDeliveryCharge,
       skipsNoDiscountLines,
+      // A Free order (v0.7.36): the screens and papers say "Free order · <reason>".
+      ...(isFreeOrderRule(d.rule_json) ? { freeOrder: true } : {}),
     };
   });
 
@@ -4245,7 +4354,18 @@ export function sendOutOrder(
     // owner's Q1, the charge keeps its 15% tax, and that tax is in the FOOD
     // TOTAL he hands over), and never more than the customer pays. Nothing
     // when he was already paid for this trip.
-    const keeps = paidEarlier ? 0 : Math.min(deliveryChargeLinesCents(snapshot), order.totalCents);
+    //
+    // A Free order (v0.7.36; the user, 3 Oct 2026: "I will pay for delivery
+    // but not charge from customer"): the customer pays nothing, so it is
+    // never capped by the Rs 0 total — he keeps the charge as sold, and as
+    // the order is already paid (Rs 0, completed when it was made free) the
+    // drawer pays it to him right here, like any prepaid order.
+    const freeOrder = snapshot.discounts.some((d) => d.freeOrder === true);
+    const keeps = paidEarlier
+      ? 0
+      : freeOrder
+        ? deliveryChargeLinesCents(snapshot)
+        : Math.min(deliveryChargeLinesCents(snapshot), order.totalCents);
     // Prepaid: the drawer pays his fee now, so a shift must be open here.
     // Checked before anything is written; an order Send out can't take at
     // all (cancelled, refunded, closed) gets setOrderStatus's own words.
@@ -4458,7 +4578,11 @@ export function markOrderServed(
     if (input.payment) {
       const p = input.payment;
       assertMethodFitsOrder(order.mode, p.method);
-      if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
+      // Nothing to pay (a 100% discount): handed over and closed with no
+      // payment row (payments has CHECK amount_cents != 0), as Pay's
+      // "Nothing to pay — complete order" does for a cart.
+      const nothingToPay = p.amountCents === 0 && order.totalCents === 0;
+      if (p.amountCents <= 0 && !nothingToPay) throw new Error('Payment amount must be positive');
       if (p.amountCents !== order.totalCents) {
         throw new Error(
           `Payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
@@ -4469,38 +4593,40 @@ export function markOrderServed(
       if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
         throw new Error('Cash tendered cannot be less than the cash amount');
       }
-      const pid = uuidv7();
-      db.prepare(
-        `INSERT INTO payments
-           (id, order_id, method, amount_cents, tendered_cents, reference_no,
-            received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-      ).run(
-        pid,
-        input.orderId,
-        p.method,
-        p.amountCents,
-        p.tenderedCents ?? null,
-        p.referenceNo ?? null,
-        actor.userId,
-        now,
-        now,
-        now,
-        actor.deviceId,
-        shiftId,
-      );
-      enqueuePaymentSyncAndAudit(db, {
-        entityType: 'payments',
-        entityId: pid,
-        op: 'upsert',
-        payload: {
-          id: pid,
-          orderId: input.orderId,
-          ...p,
-          paidAt: now,
-          receivedByUserId: actor.userId,
-        },
-      }, actor.userId);
+      if (!nothingToPay) {
+        const pid = uuidv7();
+        db.prepare(
+          `INSERT INTO payments
+             (id, order_id, method, amount_cents, tendered_cents, reference_no,
+              received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        ).run(
+          pid,
+          input.orderId,
+          p.method,
+          p.amountCents,
+          p.tenderedCents ?? null,
+          p.referenceNo ?? null,
+          actor.userId,
+          now,
+          now,
+          now,
+          actor.deviceId,
+          shiftId,
+        );
+        enqueuePaymentSyncAndAudit(db, {
+          entityType: 'payments',
+          entityId: pid,
+          op: 'upsert',
+          payload: {
+            id: pid,
+            orderId: input.orderId,
+            ...p,
+            paidAt: now,
+            receivedByUserId: actor.userId,
+          },
+        }, actor.userId);
+      }
       finalStatus = 'paid';
     }
 
@@ -5041,7 +5167,8 @@ export function markOrderDelivered(
       if (!isOutsideRiderOrder(order) || input.riderKeepsCents !== order.riderKeepsCents) {
         throw new Error(RIDER_WINDOW_CHANGED);
       }
-      if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
+      // Nothing to pay (a 100% discount): he keeps nothing and hands in nothing (settleOutsideRider writes no row).
+      if (p.amountCents < 0 || (p.amountCents === 0 && order.totalCents !== 0)) throw new Error('Payment amount must be positive');
       if (p.amountCents !== order.totalCents) {
         throw new Error(
           `COD payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
@@ -5054,7 +5181,9 @@ export function markOrderDelivered(
     } else if (input.payment) {
       const p = input.payment;
       assertMethodFitsOrder(order.mode, p.method);
-      if (p.amountCents <= 0) throw new Error('Payment amount must be positive');
+      // Nothing to pay (a 100% discount): delivered and closed with no payment row.
+      const nothingToPay = p.amountCents === 0 && order.totalCents === 0;
+      if (p.amountCents <= 0 && !nothingToPay) throw new Error('Payment amount must be positive');
       if (p.amountCents !== order.totalCents) {
         throw new Error(
           `COD payment (Rs ${p.amountCents / 100}) must equal the total (Rs ${
@@ -5065,38 +5194,40 @@ export function markOrderDelivered(
       if (p.method === 'cash' && p.tenderedCents != null && p.tenderedCents < p.amountCents) {
         throw new Error('Cash tendered cannot be less than the cash amount');
       }
-      const pid = uuidv7();
-      db.prepare(
-        `INSERT INTO payments
-           (id, order_id, method, amount_cents, tendered_cents, reference_no,
-            received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-      ).run(
-        pid,
-        input.orderId,
-        p.method,
-        p.amountCents,
-        p.tenderedCents ?? null,
-        p.referenceNo ?? null,
-        actor.userId,
-        now,
-        now,
-        now,
-        actor.deviceId,
-        shiftId,
-      );
-      enqueuePaymentSyncAndAudit(db, {
-        entityType: 'payments',
-        entityId: pid,
-        op: 'upsert',
-        payload: {
-          id: pid,
-          orderId: input.orderId,
-          ...p,
-          paidAt: now,
-          receivedByUserId: actor.userId,
-        },
-      }, actor.userId);
+      if (!nothingToPay) {
+        const pid = uuidv7();
+        db.prepare(
+          `INSERT INTO payments
+             (id, order_id, method, amount_cents, tendered_cents, reference_no,
+              received_by_user_id, paid_at, created_at, updated_at, device_id, version, shift_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        ).run(
+          pid,
+          input.orderId,
+          p.method,
+          p.amountCents,
+          p.tenderedCents ?? null,
+          p.referenceNo ?? null,
+          actor.userId,
+          now,
+          now,
+          now,
+          actor.deviceId,
+          shiftId,
+        );
+        enqueuePaymentSyncAndAudit(db, {
+          entityType: 'payments',
+          entityId: pid,
+          op: 'upsert',
+          payload: {
+            id: pid,
+            orderId: input.orderId,
+            ...p,
+            paidAt: now,
+            receivedByUserId: actor.userId,
+          },
+        }, actor.userId);
+      }
       finalStatus = 'paid';
     }
 

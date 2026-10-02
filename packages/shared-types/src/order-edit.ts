@@ -68,14 +68,18 @@ export interface OrderEditPreview {
   snapshot: OrderSnapshot;
   diff: OrderEditDiff;
   needs: OrderEditNeeds;
-  /** The order's version the edit was worked on (orders.version): Save is refused if it moved. */
-  baseVersion: number;
+  /**
+   * The order as the edit was worked on, as a key over its lines and its
+   * discount (not its status: the kitchen moving it to Preparing or Ready
+   * is no reason to start again). Save is refused if it no longer matches.
+   */
+  baseKey: string;
 }
 
-/** orders:saveEdit — the edit, the version it was worked on, and Save's answers. */
+/** orders:saveEdit — the edit, the order it was worked on (baseKey), and Save's answers. */
 export interface OrderEditSaveInput {
   orderId: string;
-  baseVersion: number;
+  baseKey: string;
   ops: OrderEditOp[];
   approverPin?: string;
   reason?: string | null;

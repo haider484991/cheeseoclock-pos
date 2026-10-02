@@ -632,8 +632,10 @@ describe.skipIf(!Sqlite)('one approval rule in all three places', () => {
     const rule = calls.filter((c) => c.fn === 'requiresManagerApproval');
     // The IPC check, the repository's save and cart re-check, the F3 screen's preview, and the
     // locks Settings → Money & discounts shows on its example buttons — and (v0.7.34) the
-    // repository's check of a rupee amount when an order stops being foodpanda.
+    // repository's check of a rupee amount when an order stops being foodpanda, and (v0.7.36)
+    // what an Edit order's Save asks for (a discount given in the edit, over the limit).
     expect(rule.map((c) => c.file).sort()).toEqual([
+      'electron/db/repositories/order-edit-repo.ts',
       'electron/db/repositories/order-repo.ts',
       'electron/db/repositories/order-repo.ts',
       'electron/db/repositories/order-repo.ts',
@@ -644,6 +646,7 @@ describe.skipIf(!Sqlite)('one approval rule in all three places', () => {
     ]);
     for (const c of rule) expect({ ...c, limitPassed: c.args.length === 3 }).toMatchObject({ limitPassed: true });
     expect(rule.filter((c) => c.file.startsWith('electron/db')).map((c) => c.args[2])).toEqual([
+      'readApprovalLimits(db)',
       'readApprovalLimits(db)',
       'readApprovalLimits(db)',
       'readApprovalLimits(db)',

@@ -59,6 +59,7 @@ import {
   foodLeftShop,
   foodMadeQuestion,
   handedOver,
+  isEditSettleNote,
   isSealedDrink,
   noteKindAnswer,
   orderStockNote,
@@ -397,7 +398,9 @@ export function getOrderStockStatus(
   const prices = lazyPrices(db);
   // Settled when a settle row exists (written here, or arrived from the other
   // till) — or, when every line was skipped (all deleted from Inventory),
-  // when this till's order-level audit row says so.
+  // when this till's order-level audit row says so. A row that settled one
+  // item taken off the live order (Edit order, isEditSettleNote) does not
+  // settle the order: it still holds the rest, and a cancel asks about that.
   const audited = db
     .prepare(
       `SELECT action, after_json FROM audit_log
@@ -405,7 +408,8 @@ export function getOrderStockStatus(
         ORDER BY rowid DESC LIMIT 1`,
     )
     .get(orderId) as { action: string; after_json: string | null } | undefined;
-  const settled = ledger.settleRows.length > 0 || audited !== undefined;
+  const settleRows = ledger.settleRows.filter((r) => !isEditSettleNote(r.notes));
+  const settled = settleRows.length > 0 || audited !== undefined;
   const lines: OrderStockLine[] = [];
   let wasteCents = 0;
   for (const h of ledger.holdings) {
@@ -431,7 +435,7 @@ export function getOrderStockStatus(
   }
   lines.sort(byName);
 
-  const answer = settled ? settledAnswer(audited, ledger.settleRows) : null;
+  const answer = settled ? settledAnswer(audited, settleRows) : null;
   const holds = lines.some(
     (l) => l.qty > 0 && (l.putBack ?? 0) + (l.alreadyCounted ?? 0) + (l.putBackThere ?? 0) + (l.wasted ?? 0) < l.qty,
   );
@@ -440,7 +444,7 @@ export function getOrderStockStatus(
   // one where nothing could be booked (every ingredient deleted) still reads
   // as the food being gone.
   const state: OrderStockStatus['state'] = settled
-    ? ledger.settleRows.some((r) => r.reason === 'waste') || (ledger.settleRows.length === 0 && answer === 'made')
+    ? settleRows.some((r) => r.reason === 'waste') || (settleRows.length === 0 && answer === 'made')
       ? 'wasted'
       : 'returned'
     : holds
@@ -449,7 +453,7 @@ export function getOrderStockStatus(
         : 'out'
       : 'none';
 
-  const last = ledger.settleRows.reduce<LedgerRow | null>((m, r) => (!m || r.occurred_at >= m.occurred_at ? r : m), null);
+  const last = settleRows.reduce<LedgerRow | null>((m, r) => (!m || r.occurred_at >= m.occurred_at ? r : m), null);
   const settledBy = last?.actor_user_id
     ? ((db.prepare(`SELECT full_name AS n FROM users WHERE id = ?`).get(last.actor_user_id) as { n: string } | undefined)?.n ??
       null)
@@ -524,6 +528,13 @@ export interface SettleOrderStockInput {
   putBack?: string[];
   /** The manager who approved the cancel / refund. */
   approverUserId: string | null;
+  /**
+   * Edit order (v0.7.36, how 'edited'): settle at most this much of each
+   * ingredient (in the ingredient's unit) — what the item taken off took —
+   * and leave the rest with the order. Required with 'edited', never used
+   * otherwise.
+   */
+  limitTo?: ReadonlyMap<string, number>;
 }
 
 /** The till's refusals, as the cashier reads them. */
@@ -543,10 +554,24 @@ export function settleOrderStock(
   actor: Actor,
 ): StockSettlement | null {
   let result: StockSettlement | null = null;
+  const edited = input.how === 'edited';
+  if (edited !== (input.limitTo !== undefined)) throw new Error('An item taken off an order settles what that item took, and only then');
+  /**
+   * What is still held of one ingredient, as this settle may take it: all of
+   * it, or (an item taken off) at most what that item took — this till's
+   * share first, then the other till's.
+   */
+  const heldHere = (h: Holding): { need: number; mine: number; theirs: number } => {
+    const all = held(h);
+    if (!input.limitTo) return all;
+    const need = Math.min(all.need, Math.max(0, input.limitTo.get(h.ingredientId) ?? 0));
+    const mine = Math.min(all.mine, need);
+    return { need, mine, theirs: need - mine };
+  };
   db.transaction(() => {
     const ledger = readOrderLedger(db, input.orderId, actor.deviceId);
-    const holding = ledger.holdings.filter((h) => held(h).need > 0 || h.unconvertible);
-    if (!holding.some((h) => held(h).need > 0)) return;
+    const holding = ledger.holdings.filter((h) => heldHere(h).need > 0 || (h.unconvertible && !edited));
+    if (!holding.some((h) => heldHere(h).need > 0)) return;
 
     const question = foodMadeQuestion({
       status: input.statusBefore,
@@ -579,7 +604,7 @@ export function settleOrderStock(
     // over); staff change it drink by drink.
     const mode = (db.prepare(`SELECT mode FROM orders WHERE id = ?`).get(input.orderId) as { mode: OrderMode } | undefined)
       ?.mode;
-    const drinkIds = new Set(holding.filter((h) => isDrink(h.ing) && held(h).need > 0).map((h) => h.ingredientId));
+    const drinkIds = new Set(holding.filter((h) => isDrink(h.ing) && heldHere(h).need > 0).map((h) => h.ingredientId));
     let drinksBack: Set<string>;
     if (outcome !== 'made') drinksBack = new Set();
     else if (input.putBack === undefined) {
@@ -633,16 +658,23 @@ export function settleOrderStock(
     let wasteCents = 0;
     let skipped = 0;
     for (const h of holding) {
-      const { need, mine, theirs } = held(h);
+      const { need, mine, theirs } = heldHere(h);
       const ln = lineNote(h, counted);
       const line = baseLine(h, need, ln, prices);
       // What is still held is worth what the take cost, less anything already
       // put back: split over this till's share and the other till's, the
       // remainder on the last, so the pieces add up to it exactly. A take from
       // before costing has no value to split: each row is valued on its own
-      // (move), at today's price.
+      // (move), at today's price. An item taken off (Edit order) settles its
+      // share of that, by quantity: the rest stays with the order, and the
+      // order's last settle takes exactly what is left.
       const fromTake = h.valued && h.takeQty > 0;
-      const heldValue = fromTake ? -h.saleValue : valueOf(h, need, prices);
+      const allHeld = held(h).need;
+      const heldValue = fromTake
+        ? need === allHeld || allHeld <= 0
+          ? -h.saleValue
+          : Math.round((-h.saleValue * need) / allHeld)
+        : valueOf(h, need, prices);
       const [vMine = 0, vTheirs = 0] = fromTake ? splitByQty(heldValue, [mine, theirs]) : [0, 0];
       line.putBack = 0;
       line.alreadyCounted = 0;
@@ -716,10 +748,19 @@ export function settleOrderStock(
     };
 
     // Who decided what — the order's own trail (each row above also has its own).
+    // An item taken off a live order (Edit order) has its own actions: the
+    // readers of "is this order settled?" (getOrderStockStatus) look for the
+    // cancel's two only, so the order still asks for the rest when cancelled.
     writeAudit(db, {
       entityType: 'orders',
       entityId: input.orderId,
-      action: outcome === 'made' ? 'stock_to_waste' : 'stock_put_back',
+      action: edited
+        ? outcome === 'made'
+          ? 'stock_edit_to_waste'
+          : 'stock_edit_put_back'
+        : outcome === 'made'
+          ? 'stock_to_waste'
+          : 'stock_put_back',
       actorUserId: actor.userId,
       before: { status: input.statusBefore, takenAt: ledger.takenAt },
       after: {

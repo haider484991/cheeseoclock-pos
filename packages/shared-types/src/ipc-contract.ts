@@ -672,8 +672,8 @@ export interface IpcContract {
   };
   /**
    * Save an edit (v0.7.36): the same ops for real, in one transaction, only
-   * while the order is still at `baseVersion` (else "it was changed on the
-   * other till"). A manager's PIN when something the kitchen has comes off,
+   * while the order's lines and discount are still as `baseKey` says (else
+   * "it was changed while you were editing"). A manager's PIN when something the kitchen has comes off,
    * the discount is over the limit, or for a Free order; a reason when
    * something comes off or for a Free order; "Was the food made?" for each
    * line the kitchen had that goes down or comes off. The kitchen gets an

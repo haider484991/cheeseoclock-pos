@@ -47,6 +47,15 @@ export const ORDER_EDIT_REFUSED: Readonly<Record<OrderEditBlock, string>> = {
   foodpanda: 'A foodpanda order is changed on the foodpanda tablet.',
 };
 
+/** A Free order is given with a manager's PIN or password, whoever is signed in. */
+export const FREE_ORDER_NEEDS_MANAGER = "A Free order needs a manager's PIN or password.";
+/** …and with a reason, whatever the shop's "a discount needs a reason" setting says. */
+export const FREE_ORDER_NEEDS_REASON = 'Say why this order is free (for example: staff meal, complaint, owner’s guest).';
+/** A Free order is 100% off, nothing else. */
+export const FREE_ORDER_IS_ALL = 'A Free order is 100% off the whole order.';
+/** foodpanda's orders are priced by foodpanda. */
+export const FREE_ORDER_NOT_FOODPANDA = 'A foodpanda order can’t be made free on the till.';
+
 /** An order line as an edit compares it. */
 export interface EditableLine {
   readonly id: string;
