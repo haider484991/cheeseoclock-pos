@@ -335,6 +335,7 @@ export function OrderDetailDrawer({ orderId, onClose }: DrawerProps) {
                       snap.discounts[snap.discounts.length - 1]?.source === 'offer' ? snap.discounts[snap.discounts.length - 1]?.reason : null,
                       // "not on value deals": its own frozen rule left the deals on this order alone.
                       discountLeavesNoDiscountItems(snap.discounts[snap.discounts.length - 1], snap.items),
+                      snap.discounts[snap.discounts.length - 1]?.freeOrder === true,
                     )}
                     v={`− ${formatCents(o.discountCents)}`}
                     tone="emerald"

@@ -143,3 +143,16 @@ describe('a discount that left the value deals alone', () => {
     expect(receiptDiscountLabel(skips(), [PIZZA, CHARGE])).toBe('Discount (10%, food only)');
   });
 });
+
+describe('a Free order (v0.7.36) on every screen', () => {
+  const free = { discountType: 'percent' as const, value: 100, reason: 'Staff meal', alsoOffDeliveryCharge: true, skipsNoDiscountLines: false, freeOrder: true };
+  const deal = [{ menuItemName: 'Test Deal', noDiscount: true }, ...WITH_CHARGE];
+
+  it('reads "Free order" with its reason, never as a 100% discount', () => {
+    expect(cartDiscountDetail(free, deal)).toBe(' · Staff meal');
+    expect(payDiscountLabel(null, free, deal, 300_000)).toBe('Free order (Staff meal)');
+    expect(drawerDiscountLabel('Staff meal', false, null, false, true)).toBe('Free order (Staff meal)');
+    expect(receiptDiscountLabel(free, deal)).toBe('Free order (Staff meal)');
+    expect(receiptDiscountLabel({ ...free, reason: null }, deal)).toBe('Free order');
+  });
+});

@@ -205,21 +205,25 @@ export interface SendOutSplit {
 /**
  * What Send out will freeze, worked out the way the till does it
  * (sendOutOrder): the delivery-charge lines as sold
- * (deliveryChargeLinesCents), never more than the total; nothing when the
- * rider was already paid for this trip (`riderAlreadyPaid`, one trip, one
- * fee). Shown in the Send out box before it is sent; everything after reads
- * the frozen value.
+ * (deliveryChargeLinesCents), never more than the total — except on a Free
+ * order (v0.7.36), where the shop pays his charge itself (the drawer, at
+ * Send out: it is paid at Rs 0 already); nothing when the rider was already
+ * paid for this trip (`riderAlreadyPaid`, one trip, one fee). Shown in the
+ * Send out box before it is sent; everything after reads the frozen value.
  */
 export function sendOutSplit(
   snap: {
     order: { readonly totalCents: number };
     items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly lineTotalCents: number }>;
+    discounts?: ReadonlyArray<{ readonly freeOrder?: boolean }>;
   },
   opts: { riderAlreadyPaid?: boolean } = {},
 ): SendOutSplit {
   const total = snap.order.totalCents;
-  const keeps = opts.riderAlreadyPaid === true ? 0 : Math.min(deliveryChargeLinesCents(snap), total);
-  return { customerPaysCents: total, keepsCents: keeps, givesCents: total - keeps };
+  const free = snap.discounts?.some((d) => d.freeOrder === true) === true;
+  const charge = deliveryChargeLinesCents(snap);
+  const keeps = opts.riderAlreadyPaid === true ? 0 : free ? charge : Math.min(charge, total);
+  return { customerPaysCents: total, keepsCents: keeps, givesCents: Math.max(0, total - keeps) };
 }
 
 /** Send out's request as the box sends it (orders:sendOut, without the rider's payment). */

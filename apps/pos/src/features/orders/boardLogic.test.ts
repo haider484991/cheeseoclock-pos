@@ -585,3 +585,22 @@ describe('the chef-hat button', () => {
     expect(all.filter(offersKitchenReprint)).toEqual([...KITCHEN_TICKET_STATUSES]);
   });
 });
+
+describe('Send out of a Free order (v0.7.36)', () => {
+  const order = (free: boolean) => ({
+    order: { totalCents: 0 },
+    items: [
+      { menuItemName: 'Test Pizza', lineTotalCents: 120_000 },
+      { menuItemName: 'Delivery Charge (Rs 200)', lineTotalCents: 20_000 },
+    ],
+    discounts: [{ freeOrder: free }],
+  });
+
+  it('the rider keeps his charge as sold (the shop pays it), not the Rs 0 the customer pays', () => {
+    expect(sendOutSplit(order(true))).toEqual({ customerPaysCents: 0, keepsCents: 20_000, givesCents: 0 });
+    // An ordinary 100% off: nothing to keep out of nothing, as before.
+    expect(sendOutSplit(order(false))).toEqual({ customerPaysCents: 0, keepsCents: 0, givesCents: 0 });
+    // Paid for this trip already: nothing again.
+    expect(sendOutSplit(order(true), { riderAlreadyPaid: true }).keepsCents).toBe(0);
+  });
+});

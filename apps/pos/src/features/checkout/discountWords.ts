@@ -23,8 +23,11 @@ import {
  */
 
 type Discount = Pick<OrderDiscount, 'discountType' | 'value' | 'reason'> &
-  Partial<Pick<OrderDiscount, 'source' | 'alsoOffDeliveryCharge' | 'skipsNoDiscountLines' | 'offer'>>;
+  Partial<Pick<OrderDiscount, 'source' | 'alsoOffDeliveryCharge' | 'skipsNoDiscountLines' | 'offer' | 'freeOrder'>>;
 type Line = { readonly menuItemName?: string | null; readonly noDiscount?: boolean };
+
+/** A Free order's name on every screen (v0.7.36: 100% off everything, with a manager's PIN), as the bill prints it. */
+export const FREE_ORDER_LABEL = 'Free order';
 
 /** "10%" or "Rs 200". */
 function amountWords(d: Pick<Discount, 'discountType' | 'value'>): string {
@@ -34,8 +37,10 @@ function amountWords(d: Pick<Discount, 'discountType' | 'value'>): string {
 /**
  * The cart's words after "Discount": " · 10%", " · 10% off food · Staff",
  * " · 10% off, not on value deals · Staff", " · 10% off food, not on value deals · Staff".
+ * After "Free order": its reason alone (" · Staff meal").
  */
 export function cartDiscountDetail(d: Discount, items: ReadonlyArray<Line>): string {
+  if (d.freeOrder === true) return d.reason ? ` · ${d.reason}` : '';
   const food = discountLeavesDeliveryCharge(d, items) ? ' off food' : '';
   const off = discountLeavesNoDiscountItems(d, items) ? `${food || ' off'}, ${NOT_ON_VALUE_DEALS}` : food;
   return ` · ${amountWords(d)}${off}${d.reason ? ` · ${d.reason}` : ''}`;
@@ -54,6 +59,7 @@ export function payDiscountLabel(
   items: ReadonlyArray<Line>,
   discountCents: number,
 ): string {
+  if (d?.freeOrder === true) return d.reason ? `${FREE_ORDER_LABEL} (${d.reason})` : FREE_ORDER_LABEL;
   const label = dealLabel ?? 'Discount';
   const tags = discountLeftAloneTags(d, items);
   return discountCents > 0 && tags.length > 0 ? `${label} (${tags.join(', ')})` : label;
@@ -64,14 +70,16 @@ export function payDiscountLabel(
  * food only)", "Discount (food only)", "Discount (Staff, not on value
  * deals)" — or one of the owner's automatic offers by its name
  * (`offerName`): "WhatsApp 10% off", "WhatsApp 10% off (food only)",
- * "WhatsApp 10% off (not on value deals)".
+ * "WhatsApp 10% off (not on value deals)". A Free order: "Free order (Staff meal)".
  */
 export function drawerDiscountLabel(
   reason: string | null | undefined,
   foodOnly: boolean,
   offerName?: string | null,
   notOnValueDeals = false,
+  freeOrder = false,
 ): string {
+  if (freeOrder) return reason ? `${FREE_ORDER_LABEL} (${reason})` : FREE_ORDER_LABEL;
   const tags = [...(foodOnly ? ['food only'] : []), ...(notOnValueDeals ? [NOT_ON_VALUE_DEALS] : [])].join(', ');
   if (offerName) return tags ? `${offerName} (${tags})` : offerName;
   if (tags) return `Discount (${reason ? `${reason}, ` : ''}${tags})`;
@@ -85,6 +93,7 @@ export function drawerDiscountLabel(
  * printed bill says it.
  */
 export function receiptDiscountLabel(d: Discount, items: ReadonlyArray<Line>): string {
+  if (d.freeOrder === true) return d.reason ? `${FREE_ORDER_LABEL} (${d.reason})` : FREE_ORDER_LABEL;
   const tags = discountLeftAloneTags(d, items).join(', ');
   if (d.source === 'offer' && d.reason) return tags ? `${d.reason} (${tags})` : d.reason;
   const what = d.reason ?? amountWords(d);
