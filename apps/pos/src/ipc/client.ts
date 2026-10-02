@@ -176,8 +176,11 @@ export const ipc = {
     markPreparing: (orderId: string) =>
       unwrap(window.api.orders.markPreparing({ orderId })),
     markReady: (orderId: string) => unwrap(window.api.orders.markReady({ orderId })),
-    /** Send out: an outside rider takes the order; the customer's bill prints with it. */
-    sendOut: (orderId: string) => unwrap(window.api.orders.sendOut({ orderId })),
+    /**
+     * Send out: an outside rider takes the order; the customer's bill prints with it.
+     * riderAlreadyPaid: he was already paid for this trip on a refunded order of the customer (keeps nothing here).
+     */
+    sendOut: (input: IpcRequest<'orders:sendOut'>) => unwrap(window.api.orders.sendOut(input)),
     assignRider: (input: IpcRequest<'orders:assignRider'>) =>
       unwrap(window.api.orders.assignRider(input)),
     unassignRider: (orderId: string) =>

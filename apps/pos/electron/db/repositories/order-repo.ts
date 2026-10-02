@@ -3530,6 +3530,15 @@ export function getOrderSnapshot(
   // is paid), so every other snapshot reads exactly as before.
   const riderPayout = deliveryChargeToRiderOf(db, orderId);
 
+  // One trip, one fee: a delivery the kitchen still has (Send out is next)
+  // with a phone says whether the rider was already paid for this trip on a
+  // refunded order of the same customer. Every other snapshot reads as before.
+  const typedPhone = orderRow.customer_phone_snapshot?.trim() || null;
+  const asksRiderPaidEarlier =
+    order.mode === 'delivery' &&
+    (order.status === 'sent_to_kitchen' || order.status === 'preparing' || order.status === 'ready') &&
+    typedPhone !== null;
+
   return {
     order,
     items,
@@ -3549,6 +3558,7 @@ export function getOrderSnapshot(
       : isOutsideRiderOrder(order)
         ? { deliveryChargeToRider: null }
         : {}),
+    ...(asksRiderPaidEarlier ? { riderPaidEarlier: riderPaidEarlierFor(db, orderId, typedPhone) } : {}),
   };
 }
 
@@ -3620,6 +3630,10 @@ export function listActiveOrders(
   return snaps;
 }
 
+/**
+ * `auditExtra`: facts for the audit row's after-image only (never the sync
+ * image): Send out names the order the rider was already paid on.
+ */
 function setOrderStatus(
   db: AppDatabase,
   orderId: string,
@@ -3628,6 +3642,7 @@ function setOrderStatus(
   extraSet: { col: string; value: string | number | null }[],
   actor: Actor & { userId: string },
   action: string,
+  auditExtra?: Record<string, string | number>,
 ): Order {
   let result!: Order;
   const tx = db.transaction(() => {
@@ -3681,7 +3696,7 @@ function setOrderStatus(
       action,
       actorUserId: actor.userId,
       before: order,
-      after,
+      after: auditExtra ? { ...after, ...auditExtra } : after,
     });
     result = after;
   });
@@ -3787,11 +3802,23 @@ export function markOrderReady(
  * with none it is refused in its own words and nothing is written. Nothing
  * is paid out when he keeps 0. Returns the order with that drawer row's id
  * (the caller opens the drawer after the commit), null when no money moved.
+ *
+ * One trip, one fee (the owner, 2 Oct 2026: "If the order is refunded and
+ * sent again on the same trip, he gets one Rs 200, not two"):
+ * `riderAlreadyPaid` says the box showed the rider was already paid on
+ * another order of this customer today (riderPaidEarlierFor) and nobody
+ * tapped 'Charge again'. It is checked again here, in this transaction: with
+ * no such order Send out is refused (RIDER_NOT_PAID_EARLIER) and nothing is
+ * written; with one, he keeps 0 on this order (no payout now, even prepaid,
+ * and none at Delivered) and the 'send_out' audit row names that order
+ * (riderAlreadyPaidOn). The bill still carries its charge: the customer got
+ * the first one back with the refund.
  */
 export function sendOutOrder(
   db: AppDatabase,
   orderId: string,
   actor: Actor & { userId: string },
+  opts: { riderAlreadyPaid?: boolean } = {},
 ): OrderWithDrawer {
   let result!: OrderWithDrawer;
   const from: OrderStatus[] = ['sent_to_kitchen', 'preparing', 'ready'];
@@ -3802,10 +3829,18 @@ export function sendOutOrder(
     if (order.status === 'out_for_delivery') throw new Error('This order is already out for delivery');
     const snapshot = getOrderSnapshot(db, orderId);
     if (!snapshot) throw new Error('Order not found');
+    // Already paid for this trip on a refunded order of the same customer:
+    // checked only on an order Send out can take (else setOrderStatus's words).
+    let paidEarlier: RiderPaidEarlier | null = null;
+    if (opts.riderAlreadyPaid === true && from.includes(order.status)) {
+      paidEarlier = riderPaidEarlierFor(db, order.id, snapshot.customerPhone);
+      if (paidEarlier === null) throw new Error(RIDER_NOT_PAID_EARLIER);
+    }
     // What the rider keeps: the charge as sold (Rs 200, not Rs 230: the
     // owner's Q1, the charge keeps its 15% tax, and that tax is in the FOOD
-    // TOTAL he hands over), and never more than the customer pays.
-    const keeps = Math.min(deliveryChargeLinesCents(snapshot), order.totalCents);
+    // TOTAL he hands over), and never more than the customer pays. Nothing
+    // when he was already paid for this trip.
+    const keeps = paidEarlier ? 0 : Math.min(deliveryChargeLinesCents(snapshot), order.totalCents);
     // Prepaid: the drawer pays his fee now, so a shift must be open here.
     // Checked before anything is written; an order Send out can't take at
     // all (cancelled, refunded, closed) gets setOrderStatus's own words.
@@ -3825,6 +3860,7 @@ export function sendOutOrder(
       ],
       actor,
       'send_out',
+      paidEarlier ? { riderAlreadyPaidOn: paidEarlier.orderNumber } : undefined,
     );
     // settleOutsideRider reads the frozen keep from the order as it is now.
     const drawerOpenId = prepaid ? settleOutsideRider(db, sent, null, actor) : null;
@@ -4136,6 +4172,69 @@ function deliveryChargeToRiderOf(db: AppDatabase, orderId: string): NonNullable<
     amountCents: Number(p.amount_cents) as Order['totalCents'],
     at: p.created_at,
     why: (p.reason ?? '').startsWith(TRIP_PAYOUT_REASON_START) ? 'trip' : 'kept',
+  };
+}
+
+/** Send out with riderAlreadyPaid, when no order of this customer qualifies (the words the screens show). */
+export const RIDER_NOT_PAID_EARLIER =
+  'The rider was not paid on another order of this customer today — send it out normally';
+
+type RiderPaidEarlier = NonNullable<OrderSnapshot['riderPaidEarlier']>;
+
+/**
+ * One trip, one fee (the owner, 2 Oct 2026: "If the order is refunded and
+ * sent again on the same trip, he gets one Rs 200, not two"): the newest
+ * other delivery of this customer's phone that an outside rider took out
+ * and that was refunded in full WHILE STILL ON ITS TRIP, with the drawer's
+ * payout to him for it still standing (a refund never takes it back).
+ *
+ * The phone is a Pakistani number (normalizePhone), matched as normalised
+ * and as typed (an older row may hold either), as offersUsedToday does; no
+ * such phone, no match. Today = the trading day of `now` (offersUsedToday's
+ * window; idx_orders_status_created). On its trip = sent out (dispatched_at
+ * and rider_keeps_cents set) and never delivered (delivered_at NULL).
+ * Never counted: an order delivered and refunded later (a past trip: a new
+ * trip earns a new fee), a cancelled order paid for a wasted trip (he went
+ * and came back), a refund with no payout to him, a deleted order. Either
+ * till's rows. amountCents = the payout (oldest live one, as
+ * deliveryChargeToRiderOf reads it).
+ */
+function riderPaidEarlierFor(
+  db: AppDatabase,
+  orderId: string,
+  typedPhone: string | null,
+  now: string = nowIso(),
+): RiderPaidEarlier | null {
+  const typed = typedPhone?.trim() || null;
+  const phone = normalizePhone(typed);
+  if (!phone) return null;
+  const day = tradingDayOfInstant(now);
+  if (!day) return null;
+  const from = `${day}T00:00:00.000Z`;
+  const until = new Date(Date.parse(from) + 86_400_000).toISOString();
+  const row = db
+    .prepare(
+      `SELECT id, order_number, paid_cents FROM (
+         SELECT o.id, o.order_number, o.created_at,
+                (SELECT m.amount_cents FROM cash_movements m
+                  WHERE m.order_id = o.id AND m.type = 'payout' AND m.deleted_at IS NULL
+                  ORDER BY m.created_at, m.id LIMIT 1) AS paid_cents
+           FROM orders o
+          WHERE o.status = 'refunded' AND o.created_at >= ? AND o.created_at < ?
+            AND o.id != ? AND o.deleted_at IS NULL AND o.mode = 'delivery'
+            AND o.customer_phone_snapshot IN (?, ?)
+            AND o.dispatched_at IS NOT NULL AND o.delivered_at IS NULL AND o.rider_keeps_cents IS NOT NULL
+       )
+        WHERE paid_cents IS NOT NULL
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1`,
+    )
+    .get(from, until, orderId, phone, typed ?? phone) as { id: string; order_number: string; paid_cents: number } | undefined;
+  if (!row) return null;
+  return {
+    orderId: row.id as RiderPaidEarlier['orderId'],
+    orderNumber: row.order_number as RiderPaidEarlier['orderNumber'],
+    amountCents: Number(row.paid_cents) as RiderPaidEarlier['amountCents'],
   };
 }
 

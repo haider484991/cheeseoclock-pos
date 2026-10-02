@@ -205,23 +205,44 @@ export interface SendOutSplit {
 /**
  * What Send out will freeze, worked out the way the till does it
  * (sendOutOrder): the delivery-charge lines as sold
- * (deliveryChargeLinesCents), never more than the total. Shown in the Send
- * out box before it is sent; everything after reads the frozen value.
+ * (deliveryChargeLinesCents), never more than the total; nothing when the
+ * rider was already paid for this trip (`riderAlreadyPaid`, one trip, one
+ * fee). Shown in the Send out box before it is sent; everything after reads
+ * the frozen value.
  */
-export function sendOutSplit(snap: {
-  order: { readonly totalCents: number };
-  items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly lineTotalCents: number }>;
-}): SendOutSplit {
+export function sendOutSplit(
+  snap: {
+    order: { readonly totalCents: number };
+    items: ReadonlyArray<{ readonly menuItemName?: string | null; readonly lineTotalCents: number }>;
+  },
+  opts: { riderAlreadyPaid?: boolean } = {},
+): SendOutSplit {
   const total = snap.order.totalCents;
-  const keeps = Math.min(deliveryChargeLinesCents(snap), total);
+  const keeps = opts.riderAlreadyPaid === true ? 0 : Math.min(deliveryChargeLinesCents(snap), total);
   return { customerPaysCents: total, keepsCents: keeps, givesCents: total - keeps };
+}
+
+/**
+ * One trip, one fee (the owner, 2 Oct 2026: refunded and sent again on the
+ * same trip, the rider gets one Rs 200, not two): the order the rider was
+ * already paid on (OrderSnapshot.riderPaidEarlier) when this order has a
+ * delivery charge for him to keep — the Send out box then starts on "No
+ * delivery charge for him this time" with "Charge again". Null otherwise:
+ * with no charge on this bill there is nothing to choose.
+ */
+export function riderPaidEarlierChoice(
+  snap: Parameters<typeof sendOutSplit>[0] & { riderPaidEarlier?: OrderSnapshot['riderPaidEarlier'] },
+): NonNullable<OrderSnapshot['riderPaidEarlier']> | null {
+  const earlier = snap.riderPaidEarlier ?? null;
+  return earlier && sendOutSplit(snap).keepsCents > 0 ? earlier : null;
 }
 
 /**
  * Whether a Ready delivery's Send out asks first (SendOutDialog: "Has the
  * rider paid the shop?", or the drawer paying a prepaid order's rider).
  * Only an order already paid whose rider keeps nothing goes in one tap:
- * nothing to ask, and no money moves.
+ * nothing to ask, and no money moves. An order the rider was already paid
+ * for (riderPaidEarlierChoice) has a charge, so its box always opens.
  */
 export function sendOutAsks(snap: Parameters<typeof sendOutSplit>[0] & { order: Pick<Order, 'paidAt'> }): boolean {
   return snap.order.paidAt === null || sendOutSplit(snap).keepsCents > 0;

@@ -6,7 +6,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { OrderSnapshot } from '@cheeseoclock/shared-types';
 import { ipc } from '../../ipc/client';
 import { useToast } from '../../components/toast/ToastProvider';
-import { ASSIGN_RIDER_LINK_TITLE, sendOutSplit } from './boardLogic';
+import { ASSIGN_RIDER_LINK_TITLE, riderPaidEarlierChoice, sendOutSplit } from './boardLogic';
 
 /** Which answer sent it out: the rider paid now, pays after delivery, or the customer paid already. */
 type Answer = 'paid_now' | 'after' | 'prepaid';
@@ -22,6 +22,15 @@ interface Props {
   onSent: (next: OrderSnapshot, riderPaidNow: boolean) => void;
   /** "One of your own riders? Assign rider instead": the Assign rider box, nothing sent. */
   onAssignInstead: () => void;
+  /**
+   * One trip, one fee: "Charge again" was tapped, so the rider keeps this
+   * order's charge too. Only read when the rider was already paid for this
+   * trip (riderPaidEarlierChoice). The board keeps it with the open box, so
+   * the box itself keeps no state.
+   */
+  chargeAgain: boolean;
+  /** "Charge again": show the box again with chargeAgain. */
+  onChargeAgain: () => void;
 }
 
 /**
@@ -39,16 +48,26 @@ interface Props {
  * that has left; "Paid now" then opens Rider paid on the order as the till
  * answered. Esc or the X closes with nothing changed. A refusal keeps the
  * box open and says "Could not send out" in the till's own words.
+ *
+ * One trip, one fee (the owner, 2 Oct 2026): when the rider was already paid
+ * on a refunded order of this customer (riderPaidEarlierChoice), the box
+ * says so ("The rider already kept Rs 200 on #0042.") and starts on "No
+ * delivery charge for him this time": he keeps Rs 0 and gives the shop the
+ * whole bill, and Send out says riderAlreadyPaid. "Charge again" switches
+ * to the order's own figures ("He keeps Rs 200 on this order too.").
  */
-export function SendOutDialog({ snap, onClose, onSent, onAssignInstead }: Props) {
+export function SendOutDialog({ snap, onClose, onSent, onAssignInstead, chargeAgain, onChargeAgain }: Props) {
   const { order } = snap;
   const short = order.orderNumber.split('-').pop();
   const prepaid = order.paidAt !== null;
-  const { customerPaysCents, keepsCents, givesCents } = sendOutSplit(snap);
+  const earlier = riderPaidEarlierChoice(snap);
+  const riderAlreadyPaid = earlier !== null && !chargeAgain;
+  const { customerPaysCents, keepsCents, givesCents } = sendOutSplit(snap, { riderAlreadyPaid });
   const { toast } = useToast();
 
   const send = useMutation({
-    mutationFn: (_answer: Answer) => ipc.orders.sendOut(order.id),
+    mutationFn: (_answer: Answer) =>
+      ipc.orders.sendOut(earlier ? { orderId: order.id, riderAlreadyPaid } : { orderId: order.id }),
     onSuccess: (next, answer) => onSent(next, answer === 'paid_now'),
     onError: (e) =>
       toast({ title: 'Could not send out', description: e instanceof Error ? e.message : 'Unknown error', variant: 'error' }),
@@ -78,12 +97,33 @@ export function SendOutDialog({ snap, onClose, onSent, onAssignInstead }: Props)
             </button>
           </header>
 
+          {earlier && (
+            // One trip, one fee: he was paid on the refunded order; by default nothing more now.
+            <div className="mb-3 space-y-1.5 rounded-xl bg-sky-50 px-4 py-3 text-sm text-sky-900 dark:bg-sky-950/30 dark:text-sky-100">
+              <p className="font-semibold">
+                The rider already kept {formatCents(earlier.amountCents)} on #{earlier.orderNumber.split('-').pop()}.
+              </p>
+              {riderAlreadyPaid ? (
+                <div className="flex items-center justify-between gap-3">
+                  <span>No delivery charge for him this time</span>
+                  <Button variant="ghost" size="sm" className="shrink-0" onClick={onChargeAgain} disabled={busy}>
+                    Charge again
+                  </Button>
+                </div>
+              ) : (
+                <p>He keeps {formatCents(keepsCents)} on this order too.</p>
+              )}
+            </div>
+          )}
+
           {prepaid ? (
             <>
               <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
                 {keepsCents > 0
                   ? `Paid already — give the rider ${formatCents(keepsCents)} from the drawer (his delivery charge). The drawer opens.`
-                  : 'Paid already, and no delivery charge: nothing comes out of the drawer.'}
+                  : riderAlreadyPaid
+                    ? 'Paid already — nothing comes out of the drawer this time.'
+                    : 'Paid already, and no delivery charge: nothing comes out of the drawer.'}
               </p>
               <Button
                 variant="primary"
@@ -109,6 +149,12 @@ export function SendOutDialog({ snap, onClose, onSent, onAssignInstead }: Props)
                   <div className="flex justify-between gap-3">
                     <span>Rider keeps (delivery charge)</span>
                     <span className="font-mono">{formatCents(keepsCents)}</span>
+                  </div>
+                ) : riderAlreadyPaid ? (
+                  // The bill has its charge; he was paid for this trip already.
+                  <div className="flex justify-between gap-3">
+                    <span>Rider keeps</span>
+                    <span className="font-mono">{formatCents(0)}</span>
                   </div>
                 ) : (
                   <div>No delivery charge on this bill</div>

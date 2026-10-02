@@ -36,6 +36,14 @@
  *       one drawer 'payout' row, the drawer opens after the commit; No =
  *       nothing; refused with no answer, with no shift open, on an order with
  *       no trip to pay, on a double tap and once he has paid the shop;
+ *   (9) one trip, one fee (the owner: "If the order is refunded and sent
+ *       again on the same trip, he gets one Rs 200, not two"): an order
+ *       refunded in full while still on its trip, rung again for the same
+ *       phone and sent out with riderAlreadyPaid -> he keeps 0, no payout at
+ *       Send out (prepaid too) or Delivered; 'Charge again' pays him again;
+ *       refused with no such order; the snapshot's riderPaidEarlier is null
+ *       for yesterday, no payout, a wasted-trip cancel, an order delivered
+ *       then refunded, and another phone;
  *   and the snapshot's deliveryChargeToRider.
  *
  * Every figure is worked out from the order and deliveryBillOf, never copied
@@ -1256,5 +1264,340 @@ live("(8) a wasted trip: the cancel says whether the outside rider is paid for i
     expect(h.kicks).toHaveLength(1);
     expect(payoutsOf(shop.db, paid.id)).toHaveLength(1);
     h.managerPins.clear();
+  });
+});
+
+live('(9) one trip, one fee: an order refunded on the trip and rung again does not pay the rider twice', () => {
+  /** The made-up customer's phone, typed two ways, and another customer's. */
+  const PHONE = '03004445555';
+  const PHONE_AS_TYPED_AGAIN = '+92 300 4445555';
+  const OTHER_PHONE = '03007778888';
+  const NOT_PAID_EARLIER = 'The rider was not paid on another order of this customer today — send it out normally';
+
+  /** HH:MM in Pakistan (UTC+5) on 2 Oct 2026, or on 1 Oct (the trading day before). */
+  const pk = (hhmm: string, day: 1 | 2 = 2): string => {
+    const [hh, mm] = hhmm.split(':').map(Number) as [number, number];
+    const iso = new Date(Date.UTC(2026, 9, day, hh - 5, mm)).toISOString();
+    vi.setSystemTime(new Date(iso));
+    return iso;
+  };
+  /** Five minutes after HH:MM (never past the hour in these tests). */
+  const fiveLater = (hhmm: string): string => {
+    const [hh, mm] = hhmm.split(':').map(Number) as [number, number];
+    return `${hh}:${String(mm + 5).padStart(2, '0')}`;
+  };
+
+  /**
+   * A counter delivery for `phone` and a made-up address (a walk-in with
+   * null): Big Two + Fries (+ the
+   * delivery charge unless `charge` is false), started at `start`, sent to
+   * the kitchen (or paid at the counter in cash, `paid`), and Ready five
+   * minutes later. Not sent out.
+   */
+  async function rung(
+    shop: Shop,
+    start: string,
+    opts: { phone?: string | null; charge?: boolean; paid?: boolean; day?: 1 | 2 } = {},
+  ) {
+    const r = await repo();
+    const c = await import('./repositories/customer-repo.js');
+    pk(start, opts.day);
+    const o = r.createOrder(shop.db, { mode: 'delivery' }, CASHIER);
+    if (opts.phone !== null) {
+      const customer = c.createCustomer(shop.db, { name: 'Test One Trip Customer', phone: opts.phone ?? PHONE }, CASHIER);
+      const address = c.createAddress(shop.db, { customerId: customer.id, addressLine: 'House 9, Test Street', area: 'Test Block' }, CASHIER);
+      c.snapshotCustomerOntoOrder(shop.db, { orderId: o.id, customerId: customer.id, addressId: address.id }, CASHIER);
+    }
+    r.addOrderItem(shop.db, { orderId: o.id, menuItemId: shop.bigTwo, quantity: 1, modifierIds: [] }, CASHIER);
+    r.addOrderItem(shop.db, { orderId: o.id, menuItemId: shop.fries, quantity: 1, modifierIds: [] }, CASHIER);
+    if (opts.charge !== false) r.addOrderItem(shop.db, { orderId: o.id, menuItemId: shop.charge, quantity: 1, modifierIds: [] }, CASHIER);
+    const total = r.findOrder(shop.db, o.id)!.totalCents as number;
+    if (opts.paid) {
+      r.tenderOrder(shop.db, { orderId: o.id, payments: [{ method: 'cash', amountCents: total, tenderedCents: total }] }, CASHIER);
+    } else {
+      r.sendOrderToKitchen(shop.db, o.id, CASHIER);
+    }
+    pk(fiveLater(start), opts.day);
+    r.markOrderReady(shop.db, o.id, CASHIER);
+    return { id: o.id, orderNumber: o.orderNumber, total };
+  }
+
+  /** The customer refuses the whole order at the door while the rider is still out: refunded in full, on his trip. */
+  async function refundedOnTheTrip(shop: Shop, orderId: string, when: string, day: 1 | 2 = 2) {
+    const r = await repo();
+    pk(when, day);
+    return r.refundOrder(
+      shop.db,
+      { orderId, reason: 'Customer refused it at the door', approverUserId: MANAGER.userId, foodMade: 'made' },
+      MANAGER,
+    );
+  }
+
+  /**
+   * The first order for PHONE: sent out at 19:10, the rider pays the shop at
+   * 19:15 ('Paid now', cash; the drawer pays him his Rs 200), and the
+   * customer refuses it at 19:30 while he is still out.
+   */
+  async function firstTripRefunded(shop: Shop) {
+    const r = await repo();
+    const first = await rung(shop, '19:00');
+    pk('19:10');
+    const sent = r.sendOutOrder(shop.db, first.id, CASHIER);
+    expect(sent.riderKeepsCents).toBe(20_000);
+    pk('19:15');
+    r.takeRiderPayment(shop.db, { orderId: first.id, method: 'cash', riderKeepsCents: 20_000 }, CASHIER);
+    await refundedOnTheTrip(shop, first.id, '19:30');
+    expect(r.findOrder(shop.db, first.id)).toMatchObject({ status: 'refunded', deliveredAt: null, riderKeepsCents: 20_000 });
+    // A refund never takes his payout back.
+    expect(payoutsOf(shop.db, first.id)).toEqual([expect.objectContaining({ amount_cents: 20_000 })]);
+    return first;
+  }
+
+  const sendOutAudit = (db: AppDatabase, orderId: string) =>
+    JSON.parse(
+      String(
+        (
+          db
+            .prepare(`SELECT after_json FROM audit_log WHERE entity_type = 'orders' AND entity_id = ? AND action = 'send_out'`)
+            .get(orderId) as Row
+        )['after_json'],
+      ),
+    ) as Row;
+  const lastOrderSync = (db: AppDatabase, orderId: string) =>
+    JSON.parse(
+      String(
+        (
+          db
+            .prepare(`SELECT payload_json FROM sync_queue WHERE entity_type = 'orders' AND entity_id = ? ORDER BY rowid DESC LIMIT 1`)
+            .get(orderId) as Row
+        )['payload_json'],
+      ),
+    ) as Row;
+
+  it('re-rung for the same phone and sent with riderAlreadyPaid: he keeps 0, no payout at Send out or Delivered, he gives the shop the whole bill; the shift pays him once', async () => {
+    const shop = await till();
+    const r = await repo();
+    const { getShiftSummary } = await shiftRepo();
+    const first = await firstTripRefunded(shop);
+
+    // Rung again for the same customer (typed another way): Ready, and the snapshot says he was paid on the first.
+    const again = await rung(shop, '19:35', { phone: PHONE_AS_TYPED_AGAIN });
+    expect(r.getOrderSnapshot(shop.db, again.id)!.riderPaidEarlier).toEqual({
+      orderId: first.id,
+      orderNumber: first.orderNumber,
+      amountCents: 20_000,
+    });
+    const before = ledger(shop.db, again.id);
+
+    pk('19:45');
+    const sent = r.sendOutOrder(shop.db, again.id, CASHIER, { riderAlreadyPaid: true });
+    expect(sent).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 0, drawerOpenId: null });
+    expect(payoutsOf(shop.db, again.id)).toEqual([]);
+    expect(ledger(shop.db, again.id)).toMatchObject({ payments: before.payments, movements: before.movements, drawer: before.drawer });
+    // The audit row names the order he was paid on; the order's sync image does not carry it.
+    expect(sendOutAudit(shop.db, again.id)).toMatchObject({
+      status: 'out_for_delivery',
+      riderKeepsCents: 0,
+      riderAlreadyPaidOn: first.orderNumber,
+    });
+    expect(lastOrderSync(shop.db, again.id)).toMatchObject({ riderKeepsCents: 0 });
+    expect(lastOrderSync(shop.db, again.id)).not.toHaveProperty('riderAlreadyPaidOn');
+    // Out now: the snapshot no longer asks.
+    const out = r.getOrderSnapshot(shop.db, again.id)!;
+    expect(out).not.toHaveProperty('riderPaidEarlier');
+    // The bill still has its charge: the customer got the first one back with the refund.
+    expect(deliveryBillOf(out)?.deliveryChargeCents).toBe(20_000);
+
+    pk('20:00');
+    const done = r.markOrderDelivered(
+      shop.db,
+      { orderId: again.id, payment: { method: 'cash', amountCents: again.total }, riderKeepsCents: 0 },
+      CASHIER,
+    );
+    expect(done.status).toBe('paid');
+    expect(payoutsOf(shop.db, again.id)).toEqual([]);
+    // He hands over the whole bill.
+    expect(drawerOf(shop.db, done.drawerOpenId!)).toMatchObject({ kind: 'sale', amount_cents: again.total, reason: null, cash_movement_id: null });
+
+    // One trip, one Rs 200: the first order's cash in and back out, his Rs 200 once, the second order in full.
+    const s = getShiftSummary(shop.db, shop.shiftId);
+    expect(s).toMatchObject({ riderChargesCents: 20_000, riderChargeCount: 1 });
+    expect(s.expectedCashCents).toBe(FLOAT + first.total - 20_000 - first.total + again.total);
+    expect(chainOk(shop.db)).toBe(true);
+  });
+
+  it("'Charge again' (sent with riderAlreadyPaid false, or without it): he keeps Rs 200 again and a second payout is written when he settles", async () => {
+    const shop = await till();
+    const r = await repo();
+    const { getShiftSummary } = await shiftRepo();
+    const first = await firstTripRefunded(shop);
+    const again = await rung(shop, '19:35');
+    expect(r.getOrderSnapshot(shop.db, again.id)!.riderPaidEarlier).toMatchObject({ orderId: first.id });
+
+    pk('19:45');
+    const sent = r.sendOutOrder(shop.db, again.id, CASHIER, { riderAlreadyPaid: false });
+    expect(sent).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 20_000 });
+    expect(sendOutAudit(shop.db, again.id)).not.toHaveProperty('riderAlreadyPaidOn');
+    pk('20:00');
+    r.markOrderDelivered(shop.db, { orderId: again.id, payment: { method: 'cash', amountCents: again.total }, riderKeepsCents: 20_000 }, CASHIER);
+    expect(payoutsOf(shop.db, again.id)).toEqual([expect.objectContaining({ amount_cents: 20_000, order_id: again.id })]);
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({ riderChargesCents: 40_000, riderChargeCount: 2 });
+
+    // Left out altogether (Live Orders' one tap, an older screen): the order's own charge, as before.
+    const third = await rung(shop, '20:05');
+    pk('20:15');
+    expect(r.getOrderSnapshot(shop.db, third.id)!.riderPaidEarlier).toMatchObject({ orderId: first.id });
+    expect(r.sendOutOrder(shop.db, third.id, CASHIER).riderKeepsCents).toBe(20_000);
+  });
+
+  it('riderAlreadyPaid with no such order: refused in the words, the order is still Ready and nothing is written', async () => {
+    const shop = await till();
+    const r = await repo();
+    // Another customer's order refunded on its trip does not count for this one.
+    const other = await rung(shop, '18:30', { phone: OTHER_PHONE });
+    pk('18:40');
+    r.sendOutOrder(shop.db, other.id, CASHIER);
+    pk('18:45');
+    r.takeRiderPayment(shop.db, { orderId: other.id, method: 'cash', riderKeepsCents: 20_000 }, CASHIER);
+    await refundedOnTheTrip(shop, other.id, '18:50');
+
+    const mine = await rung(shop, '19:00');
+    const walkIn = await rung(shop, '19:10', { phone: null });
+    for (const o of [mine, walkIn]) {
+      const before = ledger(shop.db, o.id);
+      pk('19:30');
+      expect(() => r.sendOutOrder(shop.db, o.id, CASHIER, { riderAlreadyPaid: true })).toThrow(NOT_PAID_EARLIER);
+      expect(ledger(shop.db, o.id)).toEqual(before);
+      expect(before.order).toMatchObject({ status: 'ready', rider_keeps_cents: null });
+    }
+    // An order Send out can't take at all keeps its own words.
+    pk('19:35');
+    r.sendOutOrder(shop.db, mine.id, CASHIER);
+    expect(() => r.sendOutOrder(shop.db, mine.id, CASHIER, { riderAlreadyPaid: true })).toThrow('This order is already out for delivery');
+  });
+
+  it('riderPaidEarlier is null for yesterday’s refund, a refund with no payout, a cancelled order paid for its trip, an order delivered earlier today then refunded, and another phone', async () => {
+    const shop = await till();
+    const r = await repo();
+
+    // Yesterday evening (the trading day before): out, the rider paid, refunded on the trip.
+    const yesterday = await rung(shop, '20:00', { day: 1 });
+    pk('20:10', 1);
+    r.sendOutOrder(shop.db, yesterday.id, CASHIER);
+    pk('20:15', 1);
+    r.takeRiderPayment(shop.db, { orderId: yesterday.id, method: 'cash', riderKeepsCents: 20_000 }, CASHIER);
+    await refundedOnTheTrip(shop, yesterday.id, '20:30', 1);
+    expect(payoutsOf(shop.db, yesterday.id)).toHaveLength(1);
+
+    // Today: no delivery charge on the bill, so he kept nothing (no payout); refunded on the trip.
+    const free = await rung(shop, '18:05', { charge: false });
+    pk('18:15');
+    expect(r.sendOutOrder(shop.db, free.id, CASHIER).riderKeepsCents).toBe(0);
+    pk('18:20');
+    r.takeRiderPayment(shop.db, { orderId: free.id, method: 'cash', riderKeepsCents: 0 }, CASHIER);
+    await refundedOnTheTrip(shop, free.id, '18:25');
+    expect(payoutsOf(shop.db, free.id)).toEqual([]);
+
+    // Cancelled while out, the rider paid for the wasted trip (he went and came back).
+    const wasted = await rung(shop, '18:30');
+    pk('18:40');
+    r.sendOutOrder(shop.db, wasted.id, CASHIER);
+    pk('18:45');
+    r.voidOrder(
+      shop.db,
+      { orderId: wasted.id, reason: 'Customer refused at the door', approverUserId: MANAGER.userId, payRiderForTrip: true, foodMade: 'made' },
+      CASHIER,
+    );
+    expect(payoutsOf(shop.db, wasted.id)).toEqual([expect.objectContaining({ amount_cents: 20_000 })]);
+
+    // Delivered and paid (a past trip), then refunded in full later.
+    const delivered = await rung(shop, '18:50');
+    pk('18:56');
+    r.sendOutOrder(shop.db, delivered.id, CASHIER);
+    pk('19:00');
+    r.markOrderDelivered(
+      shop.db,
+      { orderId: delivered.id, payment: { method: 'cash', amountCents: delivered.total }, riderKeepsCents: 20_000 },
+      CASHIER,
+    );
+    await refundedOnTheTrip(shop, delivered.id, '19:05');
+    expect(r.findOrder(shop.db, delivered.id)).toMatchObject({ status: 'refunded', deliveredAt: expect.any(String) });
+    expect(payoutsOf(shop.db, delivered.id)).toHaveLength(1);
+
+    // The customer orders again: none of those was this trip's fee.
+    const again = await rung(shop, '19:10');
+    expect(r.getOrderSnapshot(shop.db, again.id)!.riderPaidEarlier).toBeNull();
+    pk('19:20');
+    expect(() => r.sendOutOrder(shop.db, again.id, CASHIER, { riderAlreadyPaid: true })).toThrow(NOT_PAID_EARLIER);
+
+    // A refund on the trip for this customer (19:00 to 19:30) is not someone else's.
+    await firstTripRefunded(shop);
+    const someoneElse = await rung(shop, '19:40', { phone: OTHER_PHONE });
+    expect(r.getOrderSnapshot(shop.db, someoneElse.id)!.riderPaidEarlier).toBeNull();
+    // ...while this customer's next order finds it.
+    const mine = await rung(shop, '19:50');
+    expect(r.getOrderSnapshot(shop.db, mine.id)!.riderPaidEarlier).toMatchObject({ amountCents: 20_000 });
+  });
+
+  it('the snapshot asks only for a delivery in the kitchen or Ready with a phone: a walk-in, a takeaway, an order out have no such key', async () => {
+    const shop = await till();
+    const r = await repo();
+    const ready = await rung(shop, '19:00');
+    expect(r.getOrderSnapshot(shop.db, ready.id)).toHaveProperty('riderPaidEarlier', null);
+    const walkIn = await rung(shop, '19:10', { phone: null });
+    expect(r.getOrderSnapshot(shop.db, walkIn.id)).not.toHaveProperty('riderPaidEarlier');
+    pk('19:20');
+    r.sendOutOrder(shop.db, ready.id, CASHIER);
+    expect(r.getOrderSnapshot(shop.db, ready.id)).not.toHaveProperty('riderPaidEarlier');
+    pk('19:25');
+    const takeaway = r.createOrder(shop.db, { mode: 'takeaway' }, CASHIER);
+    r.addOrderItem(shop.db, { orderId: takeaway.id, menuItemId: shop.fries, quantity: 1, modifierIds: [] }, CASHIER);
+    r.sendOrderToKitchen(shop.db, takeaway.id, CASHIER);
+    expect(r.getOrderSnapshot(shop.db, takeaway.id)).not.toHaveProperty('riderPaidEarlier');
+  });
+
+  it("prepaid, through 'orders:sendOut': the first trip opened the drawer for his Rs 200; the re-rung one sent with riderAlreadyPaid pays nothing and opens nothing; Delivered closes it with no payout", async () => {
+    const shop = await till();
+    const r = await repo();
+    const { getShiftSummary } = await shiftRepo();
+    const call = await ordersIpc(shop);
+
+    const first = await rung(shop, '19:00', { paid: true });
+    pk('19:10');
+    await call('orders:sendOut', { orderId: first.id });
+    expect(h.kicks).toHaveLength(1);
+    await refundedOnTheTrip(shop, first.id, '19:30');
+
+    const again = await rung(shop, '19:35', { paid: true });
+    h.kicks.length = 0;
+    pk('19:45');
+    const snap = (await call('orders:sendOut', { orderId: again.id, riderAlreadyPaid: true })).data as {
+      order: { status: string; riderKeepsCents?: number | null };
+    };
+    expect(snap.order).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 0 });
+    expect(snap).not.toHaveProperty('riderPaidEarlier');
+    expect(h.kicks).toEqual([]);
+    expect(payoutsOf(shop.db, again.id)).toEqual([]);
+    pk('20:00');
+    expect(r.markOrderDelivered(shop.db, { orderId: again.id }, CASHIER)).toMatchObject({ status: 'paid', drawerOpenId: null });
+    expect(payoutsOf(shop.db, again.id)).toEqual([]);
+    expect(getShiftSummary(shop.db, shop.shiftId)).toMatchObject({
+      riderChargesCents: 20_000,
+      riderChargeCount: 1,
+      expectedCashCents: FLOAT + first.total - 20_000 - first.total + again.total,
+    });
+
+    // With no such order the IPC refuses in the repository's words and nothing is written.
+    const stranger = await rung(shop, '20:05', { phone: OTHER_PHONE, paid: true });
+    const before = ledger(shop.db, stranger.id);
+    pk('20:15');
+    await expect(call('orders:sendOut', { orderId: stranger.id, riderAlreadyPaid: true })).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: NOT_PAID_EARLIER },
+    });
+    expect(ledger(shop.db, stranger.id)).toEqual(before);
+    // Only a true is a yes: anything else sends it out with its own charge, the drawer paying him.
+    await call('orders:sendOut', { orderId: stranger.id, riderAlreadyPaid: 'yes' });
+    expect(r.findOrder(shop.db, stranger.id)!.riderKeepsCents).toBe(20_000);
+    expect(h.kicks).toHaveLength(1);
   });
 });

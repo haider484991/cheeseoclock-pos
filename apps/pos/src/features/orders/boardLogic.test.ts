@@ -23,6 +23,7 @@ import {
   parseRupeesToCents,
   riderOwesCents,
   riderOwesText,
+  riderPaidEarlierChoice,
   secondaryBoardAction,
   sendOutAsks,
   sendOutSplit,
@@ -298,6 +299,34 @@ describe('Rider owes / Rider paid on an outside rider’s Out card (v0.7.34, ste
     // Paid: the drawer gives him his charge, so it asks first.
     expect(sendOutAsks(snap(471_500, lines, '2026-10-02T14:00:00.000Z'))).toBe(true);
     expect(sendOutAsks(snap(448_500, food, '2026-10-02T14:00:00.000Z'))).toBe(false);
+  });
+
+  it('one trip, one fee: riderAlreadyPaid freezes nothing for him, and he hands over the whole bill', () => {
+    const owner = snap(471_500, [
+      ['Test Family Pizza', 390_000],
+      ['Delivery Charge (Rs 200)', 20_000],
+    ]);
+    expect(sendOutSplit(owner, { riderAlreadyPaid: true })).toEqual({ customerPaysCents: 471_500, keepsCents: 0, givesCents: 471_500 });
+    expect(sendOutSplit(owner, { riderAlreadyPaid: false })).toEqual(sendOutSplit(owner));
+    expect(sendOutSplit(owner, {})).toEqual({ customerPaysCents: 471_500, keepsCents: 20_000, givesCents: 451_500 });
+  });
+
+  it('riderPaidEarlierChoice: the order he was paid on, only when this bill has a charge for him to keep', () => {
+    const earlier = { orderId: 'o41', orderNumber: '20261002-0041', amountCents: 20_000 } as unknown as NonNullable<
+      OrderSnapshot['riderPaidEarlier']
+    >;
+    const lines: Array<[string, number]> = [['Test Family Pizza', 390_000], ['Delivery Charge (Rs 200)', 20_000]];
+    const food: Array<[string, number]> = [['Test Family Pizza', 390_000]];
+    expect(riderPaidEarlierChoice({ ...snap(471_500, lines), riderPaidEarlier: earlier })).toBe(earlier);
+    // Prepaid too: the drawer would pay him again.
+    expect(riderPaidEarlierChoice({ ...snap(471_500, lines, '2026-10-02T14:00:00.000Z'), riderPaidEarlier: earlier })).toBe(earlier);
+    // No charge on this bill: nothing to choose.
+    expect(riderPaidEarlierChoice({ ...snap(448_500, food), riderPaidEarlier: earlier })).toBeNull();
+    // None found, or not asked (not a delivery in the kitchen or Ready).
+    expect(riderPaidEarlierChoice({ ...snap(471_500, lines), riderPaidEarlier: null })).toBeNull();
+    expect(riderPaidEarlierChoice(snap(471_500, lines))).toBeNull();
+    // Its box always opens: the bill has a charge.
+    expect(sendOutAsks({ ...snap(471_500, lines, '2026-10-02T14:00:00.000Z'), riderPaidEarlier: earlier } as Parameters<typeof sendOutAsks>[0])).toBe(true);
   });
 });
 

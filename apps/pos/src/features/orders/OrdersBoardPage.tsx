@@ -124,8 +124,9 @@ export function OrdersBoardPage() {
   const [search, setSearch] = useState('');
   const [assignFor, setAssignFor] = useState<OrderSnapshot | null>(null);
   const [deliverFor, setDeliverFor] = useState<OrderSnapshot | null>(null);
-  // Send out's question, on a Ready delivery.
-  const [sendOutFor, setSendOutFor] = useState<OrderSnapshot | null>(null);
+  // Send out's question, on a Ready delivery. chargeAgain: the rider was
+  // already paid for this trip (one trip, one fee) and "Charge again" was tapped.
+  const [sendOutFor, setSendOutFor] = useState<{ snap: OrderSnapshot; chargeAgain: boolean } | null>(null);
   // Rider paid: the outside rider pays the shop while the order stays out
   // (the Out card's button, or Send out's "Paid now" on the order as sent).
   const [riderPaidFor, setRiderPaidFor] = useState<OrderSnapshot | null>(null);
@@ -171,7 +172,7 @@ export function OrdersBoardPage() {
   // rider keeps nothing; the rest ask first (SendOutDialog). No success toast
   // either: the card moves to Out.
   const sendOut = useMutation({
-    mutationFn: (orderId: string) => ipc.orders.sendOut(orderId),
+    mutationFn: (orderId: string) => ipc.orders.sendOut({ orderId }),
     onSettled: () => void refresh(),
     onError: failed('Could not send out'),
   });
@@ -325,7 +326,7 @@ export function OrdersBoardPage() {
                               return;
                             case 'send_out':
                               // "Has the rider paid the shop?" (or the drawer pays a prepaid order's rider) first.
-                              if (sendOutAsks(snap)) setSendOutFor(snap);
+                              if (sendOutAsks(snap)) setSendOutFor({ snap, chargeAgain: false });
                               else sendOut.mutate(snap.order.id);
                               return;
                             case 'hand_over':
@@ -365,7 +366,9 @@ export function OrdersBoardPage() {
       )}
       {sendOutFor && (
         <SendOutDialog
-          snap={sendOutFor}
+          snap={sendOutFor.snap}
+          chargeAgain={sendOutFor.chargeAgain}
+          onChargeAgain={() => setSendOutFor({ snap: sendOutFor.snap, chargeAgain: true })}
           onClose={() => setSendOutFor(null)}
           onSent={(next, riderPaidNow) => {
             setSendOutFor(null);
@@ -374,7 +377,7 @@ export function OrdersBoardPage() {
             if (riderPaidNow) setRiderPaidFor(next);
           }}
           onAssignInstead={() => {
-            const snap = sendOutFor;
+            const { snap } = sendOutFor;
             setSendOutFor(null);
             setAssignFor(snap);
           }}

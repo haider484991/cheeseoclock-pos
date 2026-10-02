@@ -685,8 +685,16 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
   defineHandler('orders:sendOut', ctx, (_ctx, payload) => {
     const s = requireOrderCreate();
     let drawerOpenId: string | null;
+    // One trip, one fee: only a true says the rider was already paid on another
+    // order of this customer (the repository checks it again).
+    const riderAlreadyPaid = payload.riderAlreadyPaid === true;
     try {
-      drawerOpenId = sendOutOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId }).drawerOpenId;
+      drawerOpenId = sendOutOrder(
+        ctx.db,
+        payload.orderId,
+        { userId: s.id, deviceId: ctx.deviceId },
+        riderAlreadyPaid ? { riderAlreadyPaid } : {},
+      ).drawerOpenId;
     } catch (e) {
       throw new IpcGuardError({
         code: 'precondition_failed',

@@ -37,6 +37,13 @@
  *  in slots between renders (as in markDeliveredOutside.test.tsx), and the
  *  Rider paid and Assign rider boxes stood in by stubs that record what they
  *  were opened with.
+ *
+ * Step 18-9 (one trip, one fee: the rider was already paid on an order of
+ * this customer refunded while still on its trip): the box says "The rider
+ * already kept Rs 200 on #0041." and starts on "No delivery charge for him
+ * this time" (Rider keeps Rs 0, he gives the shop the whole bill), with
+ * "Charge again" back to the order's own figures; Send out's request says
+ * riderAlreadyPaid accordingly (every request is now { orderId, ... }).
  */
 import { createHash } from 'node:crypto';
 import type { ReactNode } from 'react';
@@ -499,7 +506,7 @@ describe('a Ready delivery card: "Send out", and "Assign rider" as a small link'
     card(noCharge(delivery(42, 'ready', { paidAt: minsAgo(30) })));
     tap('Send out');
     await settle();
-    expect(seen.calls).toEqual([['orders.sendOut', 'o42']]);
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42' }]]);
     expect(seen.toasts).toEqual([]);
   });
 
@@ -508,7 +515,7 @@ describe('a Ready delivery card: "Send out", and "Assign rider" as a small link'
     card(noCharge(delivery(42, 'ready', { paidAt: minsAgo(30) })));
     tap('Send out');
     await settle();
-    expect(seen.calls).toEqual([['orders.sendOut', 'o42']]);
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42' }]]);
     expect(seen.toasts).toEqual([
       { title: 'Could not send out', description: 'This order is already out for delivery', variant: 'error' },
     ]);
@@ -744,12 +751,14 @@ describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
     sent.length = 0;
   });
 
-  function box(snap: OrderSnapshot): string {
+  function box(snap: OrderSnapshot, chargeAgain = false): string {
     signIn('cashier');
     return text(
       render(
         <SendOutDialog
           snap={snap}
+          chargeAgain={chargeAgain}
+          onChargeAgain={() => seen.events.push('charge again')}
           onClose={() => seen.events.push('closed')}
           onSent={(next, riderPaidNow) => {
             seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent');
@@ -836,7 +845,7 @@ describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
       box(ownerExample(42, 'ready'));
       tap(words);
       await settle();
-      expect(seen.calls).toEqual([['orders.sendOut', 'o42']]);
+      expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42' }]]);
       expect(seen.events).toEqual(['orders.sendOut', heard]);
       expect(sent).toHaveLength(1);
       expect(sent[0]).toBe(out);
@@ -847,7 +856,7 @@ describe('the Send out box (step 18-6): "Has the rider paid the shop?"', () => {
     box(ownerExample(43, 'ready', { paidAt: minsAgo(30) }));
     tap('Send out · drawer opens');
     await settle();
-    expect(seen.calls).toEqual([['orders.sendOut', 'o43']]);
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o43' }]]);
     expect(seen.events).toEqual(['orders.sendOut', 'sent']);
     expect(seen.toasts).toEqual([]);
   });
@@ -899,7 +908,7 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
     b.view();
     // Sent out first, then Rider paid: the rider can only pay for an order that has left.
     expect(seen.events).toEqual(['orders.sendOut', 'opened Rider paid']);
-    expect(seen.calls).toEqual([['orders.sendOut', 'o42']]);
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42' }]]);
     expect(b.words).not.toContain('Has the rider paid the shop?');
     const riderPaid = stubs.deliver.at(-1) as DeliverProps;
     expect(riderPaid.snap).toBe(out);
@@ -951,7 +960,7 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
     one.press('Send out');
     await settle();
     one.view();
-    expect(seen.calls).toEqual([['orders.sendOut', 'o45']]);
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o45' }]]);
     expect(one.words).not.toContain('Send out #0045');
 
     seen.calls.length = 0;
@@ -962,7 +971,7 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
     two.press('Send out · drawer opens');
     await settle();
     two.view();
-    expect(seen.calls).toEqual([['orders.sendOut', 'o43']]);
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o43' }]]);
     expect(stubs.deliver).toEqual([]);
     expect(two.words).not.toContain('Paid already');
   });
@@ -1041,6 +1050,163 @@ describe('Live Orders: Send out asks, then Rider owes / Rider paid (step 18-6)',
     expect(text(c)).toContain('Test Rider 03000000001 · out 12m Change');
     expect(text(c)).toContain('Rs 4,715 Rider owes Rs 4,515');
     expect(buttonsWith(c, 'Rider paid')).toHaveLength(1);
+  });
+});
+
+describe('one trip, one fee (step 18-9): the rider was already paid on a refunded order of this customer', () => {
+  /** The order refunded in full while still on its trip: the drawer paid the rider Rs 200 on it. */
+  const EARLIER = { orderId: 'o41', orderNumber: '20261001-0041', amountCents: 20_000 } as unknown as NonNullable<
+    OrderSnapshot['riderPaidEarlier']
+  >;
+  /** The owner's example rung again and Ready, for the same customer. */
+  const reRung = (n: number, over: Partial<OrderSnapshot['order']> = {}): OrderSnapshot =>
+    ({ ...ownerExample(n, 'ready', over), riderPaidEarlier: EARLIER }) as OrderSnapshot;
+
+  function box(snap: OrderSnapshot, chargeAgain = false): string {
+    signIn('cashier');
+    return text(
+      render(
+        <SendOutDialog
+          snap={snap}
+          chargeAgain={chargeAgain}
+          onChargeAgain={() => seen.events.push('charge again')}
+          onClose={() => seen.events.push('closed')}
+          onSent={(_next, riderPaidNow) => seen.events.push(riderPaidNow ? 'sent, Paid now' : 'sent')}
+          onAssignInstead={() => seen.events.push('assign instead')}
+        />,
+      ),
+    );
+  }
+  const button = (words: string) => seen.buttons.find((b) => b.words === words);
+
+  it('not paid: "The rider already kept Rs 200 on #0041." and, by default, no delivery charge for him: Rs 0, he gives the shop the whole bill', () => {
+    expect(box(reRung(42))).toBe(
+      'Send out #0042 The bill prints now · Test Customer ' +
+        'The rider already kept Rs 200 on #0041. No delivery charge for him this time Charge again ' +
+        'Customer pays the rider Rs 4,715 Rider keeps Rs 0 Rider gives the shop Rs 4,715 ' +
+        'Has the rider paid the shop? Paid now · Rs 4,715 Pays after delivery ' +
+        'One of your own riders? Assign rider instead',
+    );
+    expect(seen.buttons.map((b) => b.words)).toEqual(['Charge again', 'Paid now · Rs 4,715', 'Pays after delivery']);
+    expect(button('Charge again')).toMatchObject({ variant: 'ghost', autoFocus: undefined });
+    // Enter still means "Pays after delivery".
+    expect(button('Pays after delivery')).toMatchObject({ autoFocus: true });
+  });
+
+  it('"Charge again" only tells the board (nothing is sent); then the order’s own figures and "He keeps Rs 200 on this order too."', () => {
+    box(reRung(42));
+    tap('Charge again');
+    expect(seen.events).toEqual(['charge again']);
+    expect(seen.calls).toEqual([]);
+    expect(box(reRung(42), true)).toBe(
+      'Send out #0042 The bill prints now · Test Customer ' +
+        'The rider already kept Rs 200 on #0041. He keeps Rs 200 on this order too. ' +
+        'Customer pays the rider Rs 4,715 Rider keeps (delivery charge) Rs 200 Rider gives the shop Rs 4,515 ' +
+        'Has the rider paid the shop? Paid now · Rs 4,515 Pays after delivery ' +
+        'One of your own riders? Assign rider instead',
+    );
+    expect(seen.buttons.map((b) => b.words)).toEqual(['Paid now · Rs 4,515', 'Pays after delivery']);
+  });
+
+  it('paid already: nothing comes out of the drawer this time; after Charge again the drawer gives him Rs 200 and opens', () => {
+    const paid = reRung(43, { paidAt: minsAgo(30) });
+    expect(box(paid)).toBe(
+      'Send out #0043 The bill prints now · Test Customer ' +
+        'The rider already kept Rs 200 on #0041. No delivery charge for him this time Charge again ' +
+        'Paid already — nothing comes out of the drawer this time. Send out ' +
+        'One of your own riders? Assign rider instead',
+    );
+    expect(seen.buttons.map((b) => b.words)).toEqual(['Charge again', 'Send out']);
+    expect(button('Send out')).toMatchObject({ autoFocus: true });
+    expect(box(paid, true)).toBe(
+      'Send out #0043 The bill prints now · Test Customer ' +
+        'The rider already kept Rs 200 on #0041. He keeps Rs 200 on this order too. ' +
+        'Paid already — give the rider Rs 200 from the drawer (his delivery charge). The drawer opens. Send out · drawer opens ' +
+        'One of your own riders? Assign rider instead',
+    );
+  });
+
+  it('the request says riderAlreadyPaid true by default and false after Charge again, for every answer', async () => {
+    for (const [snap, chargeAgain, words] of [
+      [reRung(42), false, 'Pays after delivery'],
+      [reRung(42), false, 'Paid now · Rs 4,715'],
+      [reRung(42), true, 'Pays after delivery'],
+      [reRung(42), true, 'Paid now · Rs 4,515'],
+      [reRung(43, { paidAt: minsAgo(30) }), false, 'Send out'],
+      [reRung(43, { paidAt: minsAgo(30) }), true, 'Send out · drawer opens'],
+    ] as const) {
+      seen.calls.length = 0;
+      box(snap, chargeAgain);
+      tap(words);
+      await settle();
+      expect(seen.calls).toEqual([['orders.sendOut', { orderId: snap.order.id, riderAlreadyPaid: !chargeAgain }]]);
+    }
+  });
+
+  it('a bill with no delivery charge: nothing to choose — the box and the request read exactly as before', async () => {
+    const plain = noCharge(delivery(44, 'ready', { subtotalCents: toCents(390_000), taxCents: toCents(58_500), totalCents: toCents(448_500) }));
+    const before = box(plain);
+    const withEarlier = { ...plain, riderPaidEarlier: EARLIER } as OrderSnapshot;
+    expect(box(withEarlier)).toBe(before);
+    expect(box(withEarlier)).not.toContain('already kept');
+    tap('Pays after delivery');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o44' }]]);
+    // None found (null): as before too.
+    expect(box({ ...ownerExample(42, 'ready'), riderPaidEarlier: null } as OrderSnapshot)).toBe(box(ownerExample(42, 'ready')));
+  });
+
+  it('on Live Orders: Send out opens on no charge; Charge again switches the figures; closed and opened again it starts on no charge; Paid now sends riderAlreadyPaid false, then Rider paid', async () => {
+    const out = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 20_000 as never });
+    seen.answer = out;
+    const b = liveOrders([reRung(42)]);
+    b.press('Send out');
+    expect(b.words).toContain(
+      'The rider already kept Rs 200 on #0041. No delivery charge for him this time Charge again ' +
+        'Customer pays the rider Rs 4,715 Rider keeps Rs 0 Rider gives the shop Rs 4,715',
+    );
+    b.press('Charge again');
+    expect(seen.calls).toEqual([]);
+    expect(b.words).toContain(
+      'The rider already kept Rs 200 on #0041. He keeps Rs 200 on this order too. ' +
+        'Customer pays the rider Rs 4,715 Rider keeps (delivery charge) Rs 200 Rider gives the shop Rs 4,515',
+    );
+    b.esc();
+    expect(b.words).not.toContain('already kept');
+    b.press('Send out');
+    expect(b.words).toContain('No delivery charge for him this time Charge again');
+    b.press('Charge again');
+    b.press('Paid now · Rs 4,515');
+    await settle();
+    b.view();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42', riderAlreadyPaid: false }]]);
+    expect(seen.events).toEqual(['orders.sendOut', 'opened Rider paid']);
+    expect((stubs.deliver.at(-1) as DeliverProps).snap).toBe(out);
+  });
+
+  it('on Live Orders, the default: "Paid now · Rs 4,715" sends riderAlreadyPaid true and opens Rider paid for the whole bill; a paid one asks too and opens no drawer', async () => {
+    const out = ownerExample(42, 'out_for_delivery', { riderKeepsCents: 0 as never });
+    seen.answer = out;
+    const b = liveOrders([reRung(42)]);
+    b.press('Send out');
+    b.press('Paid now · Rs 4,715');
+    await settle();
+    b.view();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o42', riderAlreadyPaid: true }]]);
+    const riderPaid = stubs.deliver.at(-1) as DeliverProps;
+    expect(riderPaid).toMatchObject({ snap: out, riderPaidOnly: true });
+    // The real Rider paid box on the order as sent: he hands over the whole bill.
+    stubs.on = false;
+    expect(text(render(<MarkDeliveredDialog {...riderPaid} />))).toContain('Take from the rider Rs 4,715');
+
+    seen.calls.length = 0;
+    const p = liveOrders([reRung(43, { paidAt: minsAgo(30) })]);
+    p.press('Send out');
+    expect(seen.calls).toEqual([]);
+    expect(p.words).toContain('Paid already — nothing comes out of the drawer this time.');
+    p.press('Send out');
+    await settle();
+    expect(seen.calls).toEqual([['orders.sendOut', { orderId: 'o43', riderAlreadyPaid: true }]]);
   });
 });
 

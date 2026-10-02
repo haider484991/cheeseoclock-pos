@@ -253,6 +253,19 @@ export interface OrderSnapshot {
    */
   deliveryChargeToRider?: { amountCents: Cents; at: string; why: 'kept' | 'trip' } | null;
   /**
+   * One trip, one fee (the owner, 2 Oct 2026: an order refunded and sent
+   * again on the same trip pays the rider one Rs 200, not two): another
+   * delivery of this customer's phone, started today, that an outside rider
+   * took out and that was refunded in full WHILE STILL ON ITS TRIP (sent
+   * out, never delivered) — the drawer already paid him its charge
+   * (amountCents, the live payout). Send out then defaults to no delivery
+   * charge for him on this order ('Charge again' puts it back). Filled on a
+   * delivery still in the kitchen or Ready that has a phone (null when there
+   * is none); absent on every other order. An order delivered and refunded
+   * later, or a cancelled one paid for a wasted trip, never counts.
+   */
+  riderPaidEarlier?: { orderId: UUID; orderNumber: OrderNumber; amountCents: Cents } | null;
+  /**
    * Only on orders:listActive, from this till's print queue: the kitchen
    * ticket did not print and nothing has printed it since (Live Orders'
    * "Ticket not printed"). Absent everywhere else.

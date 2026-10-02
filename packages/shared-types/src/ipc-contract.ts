@@ -823,9 +823,16 @@ export interface IpcContract {
    * (order.riderKeepsCents). Any login that takes orders; no manager PIN. The
    * customer's bill prints with it (Settings → Printers), once per order
    * across both tills.
+   *
+   * `riderAlreadyPaid` (one trip, one fee): true when the box showed the
+   * rider was already paid on another order of this customer today
+   * (OrderSnapshot.riderPaidEarlier) and nobody tapped 'Charge again'. He
+   * then keeps nothing on this order (no payout at Send out, none at
+   * Delivered). The till checks it again; with no such order it refuses
+   * and nothing is sent. Absent or false: the order's own charge, as before.
    */
   'orders:sendOut': {
-    request: { orderId: string };
+    request: { orderId: string; riderAlreadyPaid?: boolean };
     response: ApiResult<OrderSnapshot>;
   };
   'orders:assignRider': {
