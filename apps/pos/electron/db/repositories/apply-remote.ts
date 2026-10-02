@@ -15,7 +15,10 @@
  * Conflict resolution: last-write-wins by (version, updated_at). The remote
  * row replaces the local row only when its version is higher OR its version
  * is equal AND its updated_at is newer. Otherwise we drop the change (this
- * device's local copy is newer).
+ * device's local copy is newer). Two exceptions, whatever the versions say:
+ * deletion wins for orders and payments (DELETE_WINS), and on an order a
+ * cancel or refund is never undone by the other till's status tap, while
+ * money taken beats a cancel (orderRace).
  *
  * A change that cannot be saved (a parent row not here yet, a clash with a
  * row made on this till) is kept aside, retried on every pull and counted in
@@ -76,6 +79,72 @@ const DELETE_COLUMNS = ['deleted_at', 'deleted_by', 'delete_reason', 'delete_kin
 function deleteColumnsOf(table: { columns: ReadonlyArray<{ name: string }> }): string[] {
   const have = new Set(table.columns.map((c) => c.name));
   return DELETE_COLUMNS.filter((c) => have.has(c));
+}
+
+/**
+ * A cancel or a refund, and the other till (orders only; order-edit finding
+ * #9, v0.7.34). Rows settle by last write, so a status tap on one till (Send
+ * out, Preparing, Delivered) could bring back an order the other till had
+ * cancelled, and a cancel — validateVoid sees only its own till's unpaid
+ * copy — could land on an order the other till had just taken money for
+ * (Rider paid, Delivered + Pay), leaving a payment, the rider's payout and a
+ * drawer row on a cancelled order. Checked after DELETE_WINS, whatever the
+ * versions say, in this order:
+ *  (1) money beats a cancel:
+ *      - a cancel ('void') for an order paid here: nothing of it is written
+ *        ('remote_cancel_refused_paid');
+ *      - a paid image for an order cancelled here with nothing paid: applied
+ *        in full, the cancel's columns cleared as the image has them
+ *        ('remote_payment_overrode_cancel', listing this till's live cash
+ *        movements for the order — a trip paid at the cancel — and the
+ *        cancel's stock answer). Nothing is reversed: the money already left
+ *        the drawer, and the owner sees it in the drawer log;
+ *  (2) an older image that is cancelled or refunded, for an order still live
+ *      here: only its status and cancel columns are written, the version and
+ *      every other column stay ('remote_cancel_applied');
+ *  (3) a newer image with a live status, for an order cancelled or refunded
+ *      here: applied, but the status and cancel columns stay
+ *      ('remote_change_kept_cancelled');
+ *  (4) cancelled or refunded on both: last write wins, as for any row.
+ * A cancelled order may so keep a racing rider_keeps_cents or dispatched_at;
+ * every reader of those skips cancelled and refunded orders.
+ */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['void', 'refunded']);
+const CANCEL_COLUMNS = ['status', 'voided_at', 'voided_by', 'void_reason'] as const;
+
+/** What this till holds of an order, for orderRace. */
+interface LocalOrder {
+  status: string;
+  paid_at: string | null;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
+}
+
+type OrderRace =
+  | { kind: 'refuse_cancel'; local: LocalOrder; incoming: string }
+  | { kind: 'payment_over_cancel'; local: LocalOrder; incoming: string }
+  | { kind: 'cancel_wins'; local: LocalOrder; incoming: string }
+  | { kind: 'keep_cancelled'; local: LocalOrder; incoming: string };
+
+/** Which of the rules above an order image meets here, or null for plain last-write-wins. */
+function orderRace(db: AppDatabase, id: string, image: RowImage, stale: boolean): OrderRace | null {
+  const incoming = image['status'];
+  if (typeof incoming !== 'string') return null;
+  const local = db
+    .prepare(`SELECT status, paid_at, voided_at, voided_by, void_reason FROM orders WHERE id = ?`)
+    .get(id) as LocalOrder | undefined;
+  if (!local) return null;
+  const incomingPaid = typeof image['paidAt'] === 'string' && image['paidAt'] !== '';
+  const incomingTerminal = TERMINAL_STATUSES.has(incoming);
+  const localTerminal = TERMINAL_STATUSES.has(local.status);
+  if (incoming === 'void' && local.paid_at !== null) return { kind: 'refuse_cancel', local, incoming };
+  if (incoming !== 'void' && incomingPaid && local.status === 'void' && local.paid_at === null) {
+    return { kind: 'payment_over_cancel', local, incoming };
+  }
+  if (stale && incomingTerminal && !localTerminal) return { kind: 'cancel_wins', local, incoming };
+  if (!stale && !incomingTerminal && localTerminal) return { kind: 'keep_cancelled', local, incoming };
+  return null;
 }
 
 export function applyRemoteChange(db: AppDatabase, change: SyncChange): ApplyResult {
@@ -155,19 +224,27 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
         | { deleted_at: string | null }
         | undefined) ?? null)
     : null;
-  if (isStale(db, table.name, change.entityId, change.version, change.updatedAt)) {
-    const incomingDeleted = typeof image['deletedAt'] === 'string' && image['deletedAt'] !== '';
-    if (deleteWins && incomingDeleted && localRow !== null && localRow.deleted_at === null) {
+  const incomingDeleted = typeof image['deletedAt'] === 'string' && image['deletedAt'] !== '';
+  const stale = isStale(db, table.name, change.entityId, change.version, change.updatedAt);
+  if (stale && deleteWins && incomingDeleted && localRow !== null && localRow.deleted_at === null) {
+    return applyRemoteDelete(db, table, change, image);
+  }
+  // A cancel or refund and the other till's status tap or money (orders only).
+  const race = table.name === 'orders' ? orderRace(db, change.entityId, image, stale) : null;
+  if (race?.kind === 'refuse_cancel') {
+    // A delete that comes with the cancel is still DELETE_WINS's: only its
+    // delete columns, as when it arrives stale. The status stays as paid here.
+    if (incomingDeleted && localRow !== null && localRow.deleted_at === null) {
       return applyRemoteDelete(db, table, change, image);
     }
-    return { applied: false, reason: 'stale' };
+    return refuseRemoteCancel(db, change, image, race);
   }
+  if (stale && race?.kind === 'cancel_wins') return applyRemoteCancel(db, change, image, race);
+  if (stale && race?.kind !== 'payment_over_cancel') return { applied: false, reason: 'stale' };
   // A newer change for a row deleted here: applied, but it stays deleted.
-  const keepDeleted =
-    deleteWins &&
-    localRow !== null &&
-    localRow.deleted_at !== null &&
-    !(typeof image['deletedAt'] === 'string' && image['deletedAt'] !== '');
+  const keepDeleted = deleteWins && localRow !== null && localRow.deleted_at !== null && !incomingDeleted;
+  // A newer live change for an order cancelled or refunded here: applied, but it stays so.
+  const keepCancelled = race?.kind === 'keep_cancelled';
 
   const cols: string[] = [];
   const vals: Array<string | number | null> = [];
@@ -190,6 +267,18 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
     if (typeof v === 'number' && !Number.isFinite(v)) return { applied: false, reason: 'malformed' };
     cols.push(col.name);
     vals.push(v);
+  }
+  // Money beats a cancel: a live order paid on the other till is not
+  // cancelled here any more, even when its image does not carry the columns.
+  if (race?.kind === 'payment_over_cancel' && !TERMINAL_STATUSES.has(race.incoming)) {
+    for (const c of CANCEL_COLUMNS) {
+      if (c === 'status') continue;
+      const i = cols.indexOf(c);
+      if (i === -1) {
+        cols.push(c);
+        vals.push(null);
+      } else vals[i] = null;
+    }
   }
 
   // Tables whose remote changes go into this till's own audit trail: who can
@@ -225,6 +314,7 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
       'created_at',
       ...(RECEIVER_KEEPS_ON_UPDATE[table.name] ?? []),
       ...(keepDeleted ? deleteColumnsOf(table) : []),
+      ...(keepCancelled ? CANCEL_COLUMNS : []),
     ]);
     const set = cols.map((c, i) => ({ c, v: vals[i] })).filter(({ c }) => !keepHere.has(c));
     if (table.name === 'ingredients') {
@@ -249,6 +339,23 @@ function applyRowImage(db: AppDatabase, change: SyncChange, image: RowImage): Ap
       after: { version: change.version, updatedAt: change.updatedAt, fromDeviceId: change.deviceId },
     });
   }
+  if (race?.kind === 'keep_cancelled') {
+    writeAudit(db, {
+      entityType: 'orders',
+      entityId: change.entityId,
+      action: 'remote_change_kept_cancelled',
+      actorUserId: null,
+      before: { status: race.local.status },
+      after: {
+        status: race.local.status,
+        remoteStatus: race.incoming,
+        version: change.version,
+        updatedAt: change.updatedAt,
+        fromDeviceId: change.deviceId,
+      },
+    });
+  }
+  if (race?.kind === 'payment_over_cancel') notePaymentOverCancel(db, change, image, race);
 
   if (table.name === 'users') {
     // Who can sign in, and as what, changed from another till: keep that in
@@ -336,6 +443,140 @@ function applyRemoteDelete(
     },
   });
   return { applied: true };
+}
+
+/**
+ * Money beats a cancel (orderRace (1)): the other till cancelled an order
+ * this till has taken money for. Nothing of the image is written — the
+ * order, its payment, the rider's payout and the drawer row stay as they are
+ * here — and the refusal goes into this till's own audit trail. Nothing to
+ * retry, so it is reported as stale.
+ */
+function refuseRemoteCancel(
+  db: AppDatabase,
+  change: SyncChange,
+  image: RowImage,
+  race: Extract<OrderRace, { kind: 'refuse_cancel' }>,
+): ApplyResult {
+  writeAudit(db, {
+    entityType: 'orders',
+    entityId: change.entityId,
+    action: 'remote_cancel_refused_paid',
+    actorUserId: null,
+    before: { status: race.local.status, paidAt: race.local.paid_at },
+    after: {
+      voidedAt: image['voidedAt'] ?? null,
+      voidedBy: image['voidedBy'] ?? null,
+      voidReason: image['voidReason'] ?? null,
+      fromDeviceId: change.deviceId,
+    },
+  });
+  return { applied: false, reason: 'stale' };
+}
+
+/**
+ * A cancel or refund wins (orderRace (2)): an older image that cancelled or
+ * refunded an order still live here. Only its status and cancel columns are
+ * written (who, when, why); the version and every other column stay, so a
+ * Send out made here keeps its rider_keeps_cents and dispatched_at.
+ */
+function applyRemoteCancel(
+  db: AppDatabase,
+  change: SyncChange,
+  image: RowImage,
+  race: Extract<OrderRace, { kind: 'cancel_wins' }>,
+): ApplyResult {
+  const set: Array<{ c: string; v: string | null }> = [{ c: 'status', v: race.incoming }];
+  for (const c of CANCEL_COLUMNS) {
+    if (c === 'status') continue;
+    const key = columnKey(c);
+    if (!Object.hasOwn(image, key)) continue;
+    const v = image[key];
+    if (v !== null && typeof v !== 'string') return { applied: false, reason: 'malformed' };
+    set.push({ c, v });
+  }
+  db.prepare(`UPDATE orders SET ${set.map(({ c }) => `${quoteIdent(c)} = ?`).join(', ')} WHERE id = ?`).run(
+    ...set.map(({ v }) => v),
+    change.entityId,
+  );
+  writeAudit(db, {
+    entityType: 'orders',
+    entityId: change.entityId,
+    action: 'remote_cancel_applied',
+    actorUserId: null,
+    before: { status: race.local.status },
+    after: { status: race.incoming, fromDeviceId: change.deviceId },
+  });
+  return { applied: true };
+}
+
+/**
+ * Money beats a cancel (orderRace (1)), the other way: this till cancelled
+ * an order the other till has taken money for, and the paid image was
+ * applied over the cancel. The audit row names what the cancel left here
+ * that nobody reverses: this till's live cash movements for the order (a
+ * trip paid to the outside rider at the cancel — the money already left the
+ * drawer, and the drawer log shows it) and the cancel's answer about the
+ * stock ('made' | 'not_made', null when it held none).
+ */
+function notePaymentOverCancel(
+  db: AppDatabase,
+  change: SyncChange,
+  image: RowImage,
+  race: Extract<OrderRace, { kind: 'payment_over_cancel' }>,
+): void {
+  const here = localDeviceId(db);
+  const moves = (
+    here !== null
+      ? db
+          .prepare(
+            `SELECT id FROM cash_movements WHERE order_id = ? AND deleted_at IS NULL AND device_id = ? ORDER BY created_at, id`,
+          )
+          .all(change.entityId, here)
+      : db
+          .prepare(
+            `SELECT id FROM cash_movements WHERE order_id = ? AND deleted_at IS NULL AND device_id != ? ORDER BY created_at, id`,
+          )
+          .all(change.entityId, change.deviceId)
+  ) as Array<{ id: string }>;
+  writeAudit(db, {
+    entityType: 'orders',
+    entityId: change.entityId,
+    action: 'remote_payment_overrode_cancel',
+    actorUserId: null,
+    before: {
+      status: race.local.status,
+      voidedAt: race.local.voided_at,
+      voidedBy: race.local.voided_by,
+      voidReason: race.local.void_reason,
+    },
+    after: {
+      status: race.incoming,
+      paidAt: image['paidAt'] ?? null,
+      fromDeviceId: change.deviceId,
+      cashMovementIds: moves.map((m) => m.id),
+      stockAnswer: cancelStockAnswer(db, change.entityId),
+    },
+  });
+}
+
+/**
+ * The answer about the stock this till's cancel gave: its own order-level
+ * audit row ('stock_to_waste' / 'stock_put_back', settleOrderStock), or null
+ * when the order held none.
+ */
+function cancelStockAnswer(db: AppDatabase, orderId: string): 'made' | 'not_made' | null {
+  const row = db
+    .prepare(
+      `SELECT action, after_json FROM audit_log
+        WHERE entity_type = 'orders' AND entity_id = ? AND action IN ('stock_put_back', 'stock_to_waste')
+        ORDER BY rowid DESC LIMIT 1`,
+    )
+    .get(orderId) as { action: string; after_json: string | null } | undefined;
+  if (!row) return null;
+  const outcome = (parseJsonOr(row.after_json) as { outcome?: unknown } | null)?.outcome;
+  if (outcome === 'made' || outcome === 'not_made') return outcome;
+  return row.action === 'stock_to_waste' ? 'made' : 'not_made';
 }
 
 /**
