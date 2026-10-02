@@ -19,6 +19,9 @@
  *      gets an audit row (order, reason, approving manager, shift), and the
  *      shift row — synced like the rest — says how many and why. Without a
  *      reason the close is refused, as before.
+ *   D. Every close through the handler saves its shift report (step 19d-3:
+ *      the service's makeShiftReport, inside the close), saying who closed
+ *      it and on whose login, with the drawer as the shift row has it.
  *
  * Only `defineHandler` is replaced (it captures the handler instead of
  * registering it with Electron); the session and the manager check are
@@ -27,8 +30,10 @@
  * behind better-sqlite3's shape; skipped where it is missing. Every name and
  * amount is made up.
  */
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedUser, BusinessReportRequest, CashCount, Shift, ShiftCloseCheck, UUID } from '@cheeseoclock/shared-types';
+import { parseShiftReportJson } from '@cheeseoclock/shared-schemas';
 import { DatabaseSync, openMigrated } from '../../db/costing-shop.fixture.js';
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
@@ -546,5 +551,50 @@ live('C. unpaid orders are carried over to the next shift with a manager’s rea
       openingNote: 'Evening shift, Ali on register',
       closingNote: 'All good',
     });
+  });
+});
+
+live('D. every close saves its shift report (step 19d-3)', () => {
+  it('closed with a manager’s PIN on the cashier’s till, or by the manager signed in: the report says who, with the drawer as the shift row has it; the audit keeps its SHA-256', async () => {
+    const viaPin = await openShiftAs(CASHIER);
+    h.session = CASHIER;
+    await call<Shift>('shifts:close', { shiftId: viaPin.id, countedCashCents: 490_000, countedNotes: COUNT_4900, approverPin: PIN });
+    const own = await openShiftAs(MANAGER);
+    await call<Shift>('shifts:close', { shiftId: own.id, countedCashCents: 500_000 });
+
+    for (const [shift, openedBy, pinOnLoginOf, counted, countedNotes] of [
+      [viaPin, 'Ali Cashier', 'Ali Cashier', 490_000, COUNT_4900],
+      [own, 'Sara Manager', null, 500_000, null],
+    ] as const) {
+      const stored = row<{ close_report_json: string | null; closed_at: string }>(
+        `SELECT close_report_json, closed_at FROM shifts WHERE id = ?`,
+        shift.id,
+      );
+      expect(stored.close_report_json).not.toBeNull();
+      expect(parseShiftReportJson(stored.close_report_json)).toEqual({
+        report: expect.objectContaining({
+          shiftId: shift.id,
+          deviceId: DEV,
+          // This test till has no device name: its id.
+          tillName: DEV,
+          closedAt: stored.closed_at,
+          openedBy,
+          closedBy: 'Sara Manager',
+          pinOnLoginOf,
+          drawer: expect.objectContaining({
+            openingCents: 500_000,
+            expectedCents: 500_000,
+            countedCents: counted,
+            varianceCents: counted - 500_000,
+            countedNotes,
+            otherCents: 0,
+          }),
+        }),
+      });
+      const audit = row<{ after_json: string }>(`SELECT after_json FROM audit_log WHERE action = 'shift_close' AND entity_id = ?`, shift.id);
+      expect(JSON.parse(audit.after_json)).toMatchObject({
+        closeReport: { v: 1, sha256: createHash('sha256').update(stored.close_report_json!, 'utf8').digest('hex') },
+      });
+    }
   });
 });

@@ -23,6 +23,7 @@ import { DrawerOpenRefused, openDrawerNoSale } from '../../services/drawer-servi
 import { closeWouldPauseWebOrders, followShiftForWebOrders } from '../../services/web-orders-shift-pause.js';
 import { requireCapability, REFUSED } from '../guards.js';
 import { readOpeningFloat } from '../../services/till-settings.js';
+import { makeShiftReport } from '../../services/shift-report-service.js';
 
 /**
  * Shifts IPC. Open/close are gated on the `shift.open` / `shift.close`
@@ -153,6 +154,11 @@ export function registerShiftsHandlers(ctx: HandlerContext): void {
         },
         { userId: closer.userId, deviceId: ctx.deviceId },
         closer.tillSignedInUserId ? { via: 'manager_pin', tillSignedInUserId: closer.tillSignedInUserId } : null,
+        // The shift report, made and saved inside the close from its own
+        // figures, every section in it (owner, 2 Oct 2026). It only reads;
+        // one that cannot be made never stops the close. Printing it is not
+        // here yet.
+        { makeReport: makeShiftReport(ctx.db, ctx.deviceId) },
       );
       // The till's last shift closed: website orders pause until one opens
       // (owner, 2026-09-27). Never throws: the close is already saved.

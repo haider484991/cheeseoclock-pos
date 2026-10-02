@@ -857,6 +857,27 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
 }
 
 /**
+ * The cash of a shift's test orders the owner deleted AFTER it closed (0043),
+ * signed (alias `s`, the shift; no params): its cash sales less cash refunds,
+ * less what the drawer paid an outside rider for them (0049). The saved
+ * expected / counted / short-over are never rewritten, so the cash is noted
+ * instead. Shift history's testDeletedCashCents; the shift report's reprint
+ * reads the same figure for one shift (shift-report-service
+ * testDeletedSinceClose).
+ */
+export const SHIFT_TEST_DELETED_CASH_SQL = `(
+                COALESCE((SELECT SUM(p.amount_cents) FROM payments p
+                            JOIN orders o ON o.id = p.order_id
+                           WHERE COALESCE(p.shift_id, o.shift_id) = s.id AND p.method = 'cash'
+                             AND p.deleted_at IS NOT NULL AND s.closed_at IS NOT NULL AND p.deleted_at > s.closed_at
+                             AND o.delete_kind = 'test'), 0)
+                - COALESCE((SELECT SUM(m.amount_cents) FROM cash_movements m
+                              JOIN orders o ON o.id = m.order_id
+                             WHERE m.shift_id = s.id AND m.type = 'payout' AND m.order_id IS NOT NULL
+                               AND m.deleted_at IS NOT NULL AND s.closed_at IS NOT NULL AND m.deleted_at > s.closed_at
+                               AND o.delete_kind = 'test'), 0))`;
+
+/**
  * Shift history: every shift that was open at some time in the period —
  * opened before the period ends, and still open or closed at or after it
  * starts — newest first, capped. So Today shows the shift opened last night
@@ -909,20 +930,7 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
                 WHERE d.shift_id = s.id AND d.deleted_at IS NULL AND d.kind IN ${NO_SALE_KINDS}) AS noSaleOpens,
               (SELECT COUNT(*) FROM drawer_opens d
                 WHERE d.shift_id = s.id AND d.deleted_at IS NULL) AS drawerOpenCount,
-              -- Test orders deleted AFTER the shift closed (0043): the saved
-              -- expected / counted / short-over are never rewritten, so the
-              -- cash is noted instead (signed: sales less refunds, less what
-              -- the drawer paid an outside rider for them, 0049).
-              COALESCE((SELECT SUM(p.amount_cents) FROM payments p
-                          JOIN orders o ON o.id = p.order_id
-                         WHERE COALESCE(p.shift_id, o.shift_id) = s.id AND p.method = 'cash'
-                           AND p.deleted_at IS NOT NULL AND s.closed_at IS NOT NULL AND p.deleted_at > s.closed_at
-                           AND o.delete_kind = 'test'), 0)
-              - COALESCE((SELECT SUM(m.amount_cents) FROM cash_movements m
-                            JOIN orders o ON o.id = m.order_id
-                           WHERE m.shift_id = s.id AND m.type = 'payout' AND m.order_id IS NOT NULL
-                             AND m.deleted_at IS NOT NULL AND s.closed_at IS NOT NULL AND m.deleted_at > s.closed_at
-                             AND o.delete_kind = 'test'), 0) AS testDeletedCashCents,
+              ${SHIFT_TEST_DELETED_CASH_SQL} AS testDeletedCashCents,
               NULLIF(TRIM(s.notes), '') AS openingNote,
               NULLIF(TRIM(s.close_notes), '') AS closingNote,
               COALESCE(s.carried_unpaid_count, 0) AS carriedUnpaidCount,
