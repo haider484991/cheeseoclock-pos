@@ -107,6 +107,7 @@ import {
   salesTaxLabel,
 } from '@cheeseoclock/shared-types';
 import { EscPosBuilder, wrap, qrCode, toPrinterAscii } from './escpos.js';
+import { paperMoney } from './paper-money.js';
 import {
   centreOnPaper,
   isPrintableLogo,
@@ -1433,18 +1434,9 @@ function formatTicketTime(d: Date): string {
   return paperDayMonthClock(d);
 }
 
-/** Format cents into "1,234.56" with thousands separators, no currency symbol. */
-function formatCentsForReceipt(cents: number): string {
-  const sign = cents < 0 ? '-' : '';
-  const n = Math.abs(cents);
-  const rupees = Math.floor(n / 100);
-  const paisa = n % 100;
-  const r = rupees.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${sign}${r}.${paisa.toString().padStart(2, '0')}`;
-}
-
+/** "1,234.56" with thousands separators, no currency symbol: every paper's money (paper-money.ts). */
 function money(cents: number): string {
-  return formatCentsForReceipt(cents);
+  return paperMoney(cents);
 }
 
 /** "26/09/2026 19:35" — the one date format on every paper (Pakistan writes the day first). */

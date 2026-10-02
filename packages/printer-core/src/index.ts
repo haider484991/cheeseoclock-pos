@@ -121,6 +121,7 @@ export {
   LOGO_GAP_DOTS,
   KITCHEN_LATE_MS,
 } from './receipt-renderer.js';
+export { paperMoney, paperSignedMoney, paperRupees } from './paper-money.js';
 export {
   LOGO_RASTER_ALGO,
   LOGO_BOX,
