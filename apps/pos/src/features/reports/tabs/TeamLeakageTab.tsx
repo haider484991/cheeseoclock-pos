@@ -11,7 +11,7 @@ import { formatCents } from '@cheeseoclock/pos-domain';
 import type { ReportOrderStock, ReportShiftLine, ReportTeamTab } from '@cheeseoclock/shared-types';
 import { Percent, Receipt, Trash2, UsersRound } from 'lucide-react';
 import { DataTable, Panel, Section, useShowAll } from '../reportUi';
-import { fmtAgo, fmtWhen, methodLabel, percentOf, shiftCarryOverText, shiftNoteLines, stockCellText } from '../reportFormat';
+import { fmtAgo, fmtWhen, methodLabel, percentOf, shiftCarryOverText, shiftCashOutParts, shiftNoteLines, stockCellText } from '../reportFormat';
 import { SHIFT_HISTORY_ANCHOR } from '../reportTabs';
 import type { ReportPeriod } from '../dateRange';
 import { shiftDrawerUseNote, shiftTestDeletedNote } from '../drawerLogFormat';
@@ -58,10 +58,14 @@ function shiftDrawerNote(s: ReportShiftLine): string {
 /** The period the shift history covers, as the page names it. */
 export type ShiftHistoryPeriod = Pick<ReportPeriod, 'dates' | 'isCurrent'>;
 
-/** The shift history's note: which shifts it lists (and for which dates, when known), and how Expected is worked out. */
+/**
+ * The shift history's note: which shifts it lists (and for which dates, when
+ * known), how Expected is worked out, and (v0.7.34) that the cash taken out
+ * is its two columns, Taken out and To riders.
+ */
 export function shiftHistoryNote(period?: ShiftHistoryPeriod): string {
   const dates = period ? ` (${period.dates}${period.isCurrent ? ', so far' : ''})` : '';
-  return `Every shift that was open at any time in this period${dates}, newest first. Expected = float + cash sales − cash refunds + cash put in − cash taken out. Figures are the ones saved when the shift was closed.`;
+  return `Every shift that was open at any time in this period${dates}, newest first. Expected = float + cash sales − cash refunds + cash put in − cash taken out. Cash taken out = Taken out + To riders (delivery charges kept by outside riders, and trips paid for cancelled orders). Figures are the ones saved when the shift was closed.`;
 }
 
 /** The shift history's banner: what the closed drawers came to. A shift still open is not counted until it closes. */
@@ -152,62 +156,67 @@ export function StaffSection({
             </div>
           )}
           <DataTable
-            columns={[{ label: 'Shift' }, { label: 'Float', right: true }, { label: 'Taken out', right: true }, { label: 'Expected', right: true }, { label: 'Counted', right: true }, { label: 'Result', right: true }]}
-            rows={report.shifts.map((s) => [
-              <div key="w">
-                <div className="font-medium">{fmtWhen(s.openedAt)}</div>
-                <div className="text-xs text-stone-500">
-                  {s.closedAt ? (
-                    `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}`
-                  ) : (
-                    <>
-                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">still open</span>
-                      {` · opened by ${s.openedBy}, ${fmtAgo(s.openedAt, now)}`}
-                    </>
+            columns={[{ label: 'Shift' }, { label: 'Float', right: true }, { label: 'Taken out', right: true }, { label: 'To riders', right: true }, { label: 'Expected', right: true }, { label: 'Counted', right: true }, { label: 'Result', right: true }]}
+            rows={report.shifts.map((s) => {
+              const out = shiftCashOutParts(s);
+              return [
+                <div key="w">
+                  <div className="font-medium">{fmtWhen(s.openedAt)}</div>
+                  <div className="text-xs text-stone-500">
+                    {s.closedAt ? (
+                      `to ${fmtWhen(s.closedAt)} · closed by ${s.closedBy ?? 'unknown'}`
+                    ) : (
+                      <>
+                        <span className="font-semibold text-emerald-700 dark:text-emerald-400">still open</span>
+                        {` · opened by ${s.openedBy}, ${fmtAgo(s.openedAt, now)}`}
+                      </>
+                    )}
+                    {shiftDrawerNote(s)}
+                  </div>
+                  {/* What was typed at opening and at closing, each on its own line. */}
+                  {shiftNoteLines(s).map((note) => (
+                    <div key={note} className="mt-0.5 whitespace-normal break-words text-xs text-stone-700 dark:text-stone-300">
+                      {note}
+                    </div>
+                  ))}
+                  {/* Unpaid orders the close left for the next shift, why, and who approved it. */}
+                  {shiftCarryOverText(s) && (
+                    <div className="mt-0.5 whitespace-normal break-words text-xs font-semibold text-amber-800 dark:text-amber-300">
+                      {shiftCarryOverText(s)}
+                    </div>
                   )}
-                  {shiftDrawerNote(s)}
-                </div>
-                {/* What was typed at opening and at closing, each on its own line. */}
-                {shiftNoteLines(s).map((note) => (
-                  <div key={note} className="mt-0.5 whitespace-normal break-words text-xs text-stone-700 dark:text-stone-300">
-                    {note}
-                  </div>
-                ))}
-                {/* Unpaid orders the close left for the next shift, why, and who approved it. */}
-                {shiftCarryOverText(s) && (
-                  <div className="mt-0.5 whitespace-normal break-words text-xs font-semibold text-amber-800 dark:text-amber-300">
-                    {shiftCarryOverText(s)}
-                  </div>
-                )}
-                {/* A test order of this shift deleted after it closed: the saved figures stay, the cash is noted (0043). */}
-                {shiftTestDeletedNote(s) && (
-                  <div className="mt-0.5 whitespace-normal break-words text-xs font-medium text-amber-700 dark:text-amber-400">
-                    {shiftTestDeletedNote(s)}
-                  </div>
-                )}
-                {/* This shift's own drawer log (0042): every opening, who, why, the result. */}
-                <button
-                  type="button"
-                  onClick={() => setLogShift(s)}
-                  className="mt-0.5 text-xs font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-400"
-                >
-                  Drawer log
-                </button>
-              </div>,
-              formatCents(s.openingCashCents),
-              s.cashOutCents > 0 ? formatCents(s.cashOutCents) : '—',
-              s.expectedCashCents === null ? '—' : formatCents(s.expectedCashCents),
-              s.countedCashCents === null ? '—' : formatCents(s.countedCashCents),
-              s.varianceCents === null ? (
-                '—'
-              ) : s.varianceCents === 0 ? (
-                <span key="r" className="font-semibold text-emerald-700 dark:text-emerald-400">Matched</span>
-              ) : (
-                <span key="r" className={cn('font-semibold', s.varianceCents > 0 ? 'text-amber-700 dark:text-amber-400' : 'text-red-700 dark:text-red-400')}>
-                  {s.varianceCents > 0 ? 'Over' : 'Short'} {formatCents(Math.abs(s.varianceCents))}
-                </span>
-              ),
-            ])}
+                  {/* A test order of this shift deleted after it closed: the saved figures stay, the cash is noted (0043). */}
+                  {shiftTestDeletedNote(s) && (
+                    <div className="mt-0.5 whitespace-normal break-words text-xs font-medium text-amber-700 dark:text-amber-400">
+                      {shiftTestDeletedNote(s)}
+                    </div>
+                  )}
+                  {/* This shift's own drawer log (0042): every opening, who, why, the result. */}
+                  <button
+                    type="button"
+                    onClick={() => setLogShift(s)}
+                    className="mt-0.5 text-xs font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-400"
+                  >
+                    Drawer log
+                  </button>
+                </div>,
+                formatCents(s.openingCashCents),
+                // Cash out typed by hand and rider tips; the outside riders' payouts have their own column (v0.7.34).
+                out.takenOutCents > 0 ? formatCents(out.takenOutCents) : '—',
+                out.toRidersCents > 0 ? formatCents(out.toRidersCents) : '—',
+                s.expectedCashCents === null ? '—' : formatCents(s.expectedCashCents),
+                s.countedCashCents === null ? '—' : formatCents(s.countedCashCents),
+                s.varianceCents === null ? (
+                  '—'
+                ) : s.varianceCents === 0 ? (
+                  <span key="r" className="font-semibold text-emerald-700 dark:text-emerald-400">Matched</span>
+                ) : (
+                  <span key="r" className={cn('font-semibold', s.varianceCents > 0 ? 'text-amber-700 dark:text-amber-400' : 'text-red-700 dark:text-red-400')}>
+                    {s.varianceCents > 0 ? 'Over' : 'Short'} {formatCents(Math.abs(s.varianceCents))}
+                  </span>
+                ),
+              ];
+            })}
             empty="No shifts in this period."
           />
         </Panel>

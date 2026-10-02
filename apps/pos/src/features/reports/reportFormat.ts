@@ -331,6 +331,22 @@ export function shiftCarryOverText(
   return `${text} (${deleted} of them later deleted as ${deleted === 1 ? 'a test order' : 'test orders'})`;
 }
 
+/**
+ * A shift's cash taken out, in two parts (v0.7.34), as the shift history and
+ * the file show them: To riders — what the drawer paid outside riders for an
+ * order (delivery charges they kept, trips paid) — and Taken out, the rest
+ * (cash out typed by hand and rider tips), which means what it always did.
+ * Together they are all the cash taken out the expected cash took. A shift
+ * from before 0.7.34 (no rider figure) has everything under Taken out.
+ */
+export function shiftCashOutParts(s: Pick<ReportShiftLine, 'cashOutCents' | 'riderChargesCents'>): {
+  takenOutCents: number;
+  toRidersCents: number;
+} {
+  const toRidersCents = Math.max(0, s.riderChargesCents ?? 0);
+  return { takenOutCents: Math.max(0, s.cashOutCents - toRidersCents), toRidersCents };
+}
+
 /** Everything written on a shift, one line each: its notes, then any unpaid orders carried over (print and CSV). */
 export function shiftDetailLines(
   s: Pick<ReportShiftLine, 'openingNote' | 'closingNote' | 'carriedUnpaidCount' | 'carryOverReason' | 'closedBy' | 'carriedTestDeletedCount'>,

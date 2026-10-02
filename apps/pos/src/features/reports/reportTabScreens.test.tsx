@@ -263,6 +263,33 @@ describe('the Reports tabs render their own figures', () => {
     expect(channels).toContain('Bilal');
   });
 
+  it('Channels & delivery: the deliveries say they cover own riders and outside riders sent out, and list them on their own line (v0.7.34)', () => {
+    const out = html(
+      <ChannelsTab
+        data={{
+          ...base,
+          kpis: { orderCount: 3, netSalesCents: 300_000, avgOrderCents: 100_000 },
+          channels: [{ channel: 'delivery', orderCount: 3, netSalesCents: 300_000 }],
+          deliveries: {
+            byRider: [
+              { riderId: null, name: 'Outside riders (sent out)', deliveries: 2, netSalesCents: 200_000, avgMinutesOut: 30 },
+              { riderId: 'r1', name: 'Bilal', deliveries: 1, netSalesCents: 100_000, avgMinutesOut: 25 },
+            ],
+            byArea: [],
+          },
+          areas: [],
+          noRateDeliveries: [],
+          noRateCount: 0,
+          profit: null,
+        }}
+      />,
+    );
+    expect(out).toContain('Phone and website deliveries — your own riders and outside riders you sent out. Foodpanda brings its own.');
+    expect(out).not.toContain('Your own riders — phone and website deliveries.');
+    expect(out).toContain('Outside riders (sent out)');
+    expect(out).toContain('Bilal');
+  });
+
   it('Food cost & stock, and the ingredients running low', () => {
     const out = html(<FoodCostStockTab data={{ ...base, kpis: { partialRefundCents: 0 }, foodCost: food, purchases: NO_PURCHASES }} lowStockCount={2} />);
     expect(out).toContain('Food cost');

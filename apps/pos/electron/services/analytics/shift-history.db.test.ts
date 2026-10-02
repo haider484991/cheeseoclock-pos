@@ -144,6 +144,8 @@ live('shift history: every shift that overlaps the period', () => {
       varianceCents: -10_000,
       cashInCents: 0,
       cashOutCents: 20_000,
+      // Typed by hand: none of it went to an outside rider (v0.7.34).
+      riderChargesCents: 0,
       cashMovementCount: 1,
       // The count at close is not a no-sale open.
       noSaleOpens: 1,
@@ -170,6 +172,7 @@ live('shift history: every shift that overlaps the period', () => {
       // Every cash in / out on the shift, whenever it was, as before.
       cashInCents: 10_000,
       cashOutCents: 3_000,
+      riderChargesCents: 0,
       cashMovementCount: 2,
       noSaleOpens: 1,
       drawerOpenCount: 1,
@@ -206,5 +209,111 @@ live('shift history: every shift that overlaps the period', () => {
 
   it('the whole page (the other tests’ reconciliations, the bench) lists the same shifts', () => {
     expect(report.getBusinessReport(db, TODAY, NOW).shifts).toEqual(tabs.buildReportTab(db, 'team', TODAY, NOW).shifts);
+  });
+});
+
+/**
+ * Outside riders in the shift history (v0.7.34, step 19-1): the payouts linked
+ * to an order (cash_movements.order_id, 0049) — a delivery charge an outside
+ * rider kept, or a trip paid for an order then cancelled — stay in the cash
+ * taken out (the expected cash took them) and are also riderChargesCents, the
+ * screen's and the file's "To riders". The cash in / out count is the entries
+ * typed by hand only. A test order deleted after the close takes its payout
+ * off the cash noted for it. Read from the payouts, never from the orders'
+ * frozen keep: a cancelled order whose rider was not paid adds nothing. A
+ * fresh database of its own; every name and amount is made up.
+ */
+live('shift history: what the drawer paid outside riders', () => {
+  let rdb: ReturnType<typeof openMigrated>;
+  const at = (hhmm: string) => `2026-09-26T${hhmm}:00.000Z`;
+  let line: ReportShiftLine;
+  let other: ReportShiftLine;
+
+  beforeAll(() => {
+    rdb = openMigrated();
+    rdb.prepare(`INSERT INTO users (id, full_name, pin_hash, role, created_at, updated_at, device_id) VALUES ('u_sara', 'Sara', 'x', 'manager', ?, ?, 'till-1')`).run(T0, T0);
+    const shift = rdb.prepare(
+      `INSERT INTO shifts (id, device_id, opened_by_user_id, opened_at, opening_cash_cents, closed_by_user_id, closed_at,
+         expected_cash_cents, counted_cash_cents, variance_cents, created_at, updated_at)
+       VALUES (?, ?, 'u_sara', ?, 500000, 'u_sara', ?, 900000, 900000, 0, ?, ?)`,
+    );
+    shift.run('s_riders', 'till-1', at('07:00'), at('20:00'), T0, T0);
+    // The other till's shift (the race 18-13 lets through: money beats a cancel, so one trip was paid twice).
+    shift.run('s_other', 'till-2', at('07:30'), at('20:30'), T0, T0);
+
+    const order = rdb.prepare(
+      `INSERT INTO orders (id, order_number, mode, status, cashier_id, source, subtotal_cents, tax_cents, total_cents, paid_at,
+         rider_keeps_cents, dispatched_at, shift_id, deleted_at, delete_kind, created_at, updated_at, device_id)
+       VALUES (?, ?, 'delivery', ?, 'u_sara', 'pos', 100000, 16000, 116000, ?, 20000, ?, 's_riders', ?, ?, ?, ?, 'till-1')`,
+    );
+    // Rider paid: he kept Rs 200 of a cash order.
+    order.run('o_kept', '20260926-0001', 'paid', at('10:00'), at('09:30'), null, null, at('09:00'), at('09:00'));
+    // Sent out, cancelled, the rider paid Rs 200 for the trip.
+    order.run('o_trip', '20260926-0002', 'void', null, at('10:30'), null, null, at('10:00'), at('10:00'));
+    // Sent out, cancelled, the rider NOT paid: its frozen keep moved no money.
+    order.run('o_void_unpaid', '20260926-0003', 'void', null, at('11:30'), null, null, at('11:00'), at('11:00'));
+    // A test order, deleted by the owner AFTER the shift closed, and one deleted before it closed.
+    order.run('o_test_after', '20260926-0004', 'paid', at('12:30'), at('12:10'), at('21:00'), 'test', at('12:00'), at('12:00'));
+    order.run('o_test_before', '20260926-0005', 'paid', at('13:30'), at('13:10'), at('19:00'), 'test', at('13:00'), at('13:00'));
+
+    const pay = rdb.prepare(
+      `INSERT INTO payments (id, order_id, method, amount_cents, received_by_user_id, paid_at, shift_id, deleted_at, created_at, updated_at, device_id)
+       VALUES (?, ?, 'cash', ?, 'u_sara', ?, 's_riders', ?, ?, ?, 'till-1')`,
+    );
+    pay.run('p_kept', 'o_kept', 116000, at('10:00'), null, at('10:00'), at('10:00'));
+    pay.run('p_test_after', 'o_test_after', 116000, at('12:30'), at('21:00'), at('12:30'), at('12:30'));
+    pay.run('p_test_before', 'o_test_before', 116000, at('13:30'), at('19:00'), at('13:30'), at('13:30'));
+
+    const move = rdb.prepare(
+      `INSERT INTO cash_movements (id, shift_id, type, amount_cents, reason, user_id, order_id, deleted_at, created_at, updated_at, device_id)
+       VALUES (?, ?, ?, ?, 'Test', 'u_sara', ?, ?, ?, ?, ?)`,
+    );
+    // Typed by hand: a cash out, a rider tip and a cash in.
+    move.run('cm_gas', 's_riders', 'payout', 5_000, null, null, at('08:00'), at('08:00'), 'till-1');
+    move.run('cm_tip', 's_riders', 'tip_out', 3_000, null, null, at('08:10'), at('08:10'), 'till-1');
+    move.run('cm_in', 's_riders', 'payin', 10_000, null, null, at('08:20'), at('08:20'), 'till-1');
+    // To outside riders: the kept charge and the trip.
+    move.run('cm_kept', 's_riders', 'payout', 20_000, 'o_kept', null, at('10:00'), at('10:00'), 'till-1');
+    move.run('cm_trip', 's_riders', 'payout', 20_000, 'o_trip', null, at('10:40'), at('10:40'), 'till-1');
+    // The test orders' payouts, deleted with them (after the close, and before it).
+    move.run('cm_test_after', 's_riders', 'payout', 20_000, 'o_test_after', at('21:00'), at('12:30'), at('21:00'), 'till-1');
+    move.run('cm_test_before', 's_riders', 'payout', 20_000, 'o_test_before', at('19:00'), at('13:30'), at('19:00'), 'till-1');
+    // The other till paid the rider for the same trip as o_kept (a cancel there raced Rider paid here).
+    move.run('cm_other_trip', 's_other', 'payout', 20_000, 'o_kept', null, at('10:05'), at('10:05'), 'till-2');
+
+    const byId = new Map(tabs.buildReportTab(rdb, 'team', TODAY, NOW).shifts.map((s) => [s.id, s]));
+    line = byId.get('s_riders')!;
+    other = byId.get('s_other')!;
+  });
+
+  it('the cash taken out keeps the riders’ payouts; To riders is that part of it (kept charge + trip)', () => {
+    expect(line).toMatchObject({
+      cashInCents: 10_000,
+      // Rs 50 cash out + Rs 30 rider tip + Rs 200 kept + Rs 200 trip; the test orders' payouts are deleted.
+      cashOutCents: 48_000,
+      riderChargesCents: 40_000,
+    });
+  });
+
+  it('the cash in / out count is the entries typed by hand only', () => {
+    expect(line.cashMovementCount).toBe(3);
+  });
+
+  it('a test order deleted after the close takes its payout off the cash noted for it; one deleted before the close is not noted', () => {
+    // Rs 1,160 taken for it, Rs 200 of that paid to the rider: Rs 960 of the saved expected cash was the test.
+    expect(line.testDeletedCashCents).toBe(96_000);
+  });
+
+  it('each till’s shift counts its own payout: one trip paid twice shows on both', () => {
+    expect(other).toMatchObject({ cashOutCents: 20_000, riderChargesCents: 20_000, cashMovementCount: 0, testDeletedCashCents: 0 });
+  });
+
+  it('the Reports worker and the whole page say the same', () => {
+    const msg: RunRequest = { type: 'run', id: 2, kind: 'team', request: TODAY, nowIso: NOW.toISOString() };
+    const reply = worker.handleRunRequest(rdb, structuredClone(msg));
+    if (reply.type !== 'result' || !reply.ok) throw new Error(`worker said no: ${JSON.stringify(reply)}`);
+    const viaThread = structuredClone(reply.data as { shifts: ReportShiftLine[] }).shifts;
+    expect(viaThread).toEqual(tabs.buildReportTab(rdb, 'team', TODAY, NOW).shifts);
+    expect(report.getBusinessReport(rdb, TODAY, NOW).shifts).toEqual(viaThread);
   });
 });

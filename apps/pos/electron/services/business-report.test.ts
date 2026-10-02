@@ -17,9 +17,12 @@ import {
   HAND_WASTE_SQL,
   ORDERS_THAT_TOOK_STOCK_SQL,
   ORDER_WASTE_SQL,
+  OUTSIDE_RIDERS_NAME,
   REPORT_LIST_CAP,
+  buildChannelsTab,
   channelOf,
   getBusinessReport,
+  getOfferRepeats,
   ingredientCostCents,
   pakistanHourOf,
   paymentGroup,
@@ -144,6 +147,10 @@ interface SeedOrder {
   dispatchedAt?: string | null;
   deliveredAt?: string | null;
   address?: string | null;
+  /** orders.rider_keeps_cents (0049): sent out with an outside rider; null/absent = not. */
+  riderKeeps?: number | null;
+  /** orders.customer_phone_snapshot. */
+  phone?: string | null;
 }
 
 let seq = 0;
@@ -152,8 +159,9 @@ function seedOrder(raw: NodeDatabase, o: SeedOrder): void {
     .prepare(
       `INSERT INTO orders (id, order_number, mode, status, cashier_id, source, subtotal_cents, discount_cents,
          tax_cents, total_cents, paid_at, voided_at, voided_by, void_reason, assigned_rider_id, dispatched_at,
-         delivered_at, delivery_address_snapshot, created_at, updated_at, deleted_at, device_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         delivered_at, delivery_address_snapshot, created_at, updated_at, deleted_at, device_id, rider_keeps_cents,
+         customer_phone_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       o.id,
@@ -178,6 +186,8 @@ function seedOrder(raw: NodeDatabase, o: SeedOrder): void {
       o.createdAt,
       o.deletedAt ?? null,
       DEV,
+      o.riderKeeps ?? null,
+      o.phone ?? null,
     );
   for (const it of o.items ?? []) {
     seq += 1;
@@ -535,6 +545,8 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         varianceCents: -10000,
         cashInCents: 0,
         cashOutCents: 20000,
+        // The Rs 200 for gas was typed by hand: none of it went to an outside rider.
+        riderChargesCents: 0,
         cashMovementCount: 1,
         // Two no-sale opens and a test; the count at close is not one.
         noSaleOpens: 3,
@@ -563,6 +575,7 @@ describe.skipIf(!DatabaseSync)('business report (real SQL on the real migrations
         varianceCents: null,
         cashInCents: 0,
         cashOutCents: 0,
+        riderChargesCents: 0,
         cashMovementCount: 0,
         noSaleOpens: 0,
         drawerOpenCount: 0,
@@ -953,5 +966,204 @@ describe('report helpers', () => {
     expect(s.recent.map((l) => l.orderId)).toEqual(['s1']);
     // Why still lists every reason (the deal is a reason like any other).
     expect(s.byReason.map((r) => r.reason)).toEqual(['Foodpanda deal 20% off', 'Regular']);
+  });
+});
+
+/**
+ * Outside riders in Reports (v0.7.34, step 19-1): a delivery sent out with an
+ * outside rider (Send out freezes orders.rider_keeps_cents, no rider of the
+ * shop's named) is under 'Outside riders (sent out)' in Channels & delivery →
+ * By rider; an older delivery with no rider stays under 'No rider recorded'.
+ * Only counted orders are read: a cancelled sent-out order (even one whose
+ * rider was paid for the trip) and one refunded in full are in no rider's
+ * line (order-edit #3: every reader of rider_keeps_cents skips void and
+ * refunded orders). Every amount is made up.
+ */
+describe.skipIf(!DatabaseSync)('outside riders in Reports (v0.7.34)', () => {
+  const at = (hhmm: string) => `2026-09-25T${hhmm}:00.000Z`;
+  const delivery = (o: Partial<SeedOrder> & Pick<SeedOrder, 'id' | 'createdAt'>): SeedOrder => ({
+    mode: 'delivery',
+    subtotal: 100000,
+    tax: 16000,
+    total: 116000,
+    items: [burger(2)],
+    payments: [{ method: 'cash', amount: 116000 }],
+    ...o,
+  });
+  let report: BusinessReport;
+  let channels: ReturnType<typeof buildChannelsTab>;
+
+  beforeAll(() => {
+    const { raw, db } = openMigrated();
+    seedBasics(raw);
+    // One of the shop's own riders (Assign rider): by his name, as before.
+    seedOrder(raw, delivery({ id: 'own', createdAt: at('08:00'), rider: 'r_bilal', dispatchedAt: at('08:30'), deliveredAt: at('08:50') }));
+    // From before 0.7.34, or collected straight from Ready: no rider, nothing kept.
+    seedOrder(
+      raw,
+      delivery({ id: 'old', source: 'web', createdAt: at('09:00'), subtotal: 50000, tax: 8000, total: 58000, items: [burger(1)], payments: [{ method: 'cash', amount: 58000 }] }),
+    );
+    // Sent out with an outside rider who kept Rs 200, paid when he came back (30 min out).
+    seedOrder(raw, delivery({ id: 'out1', createdAt: at('10:00'), riderKeeps: 20000, dispatchedAt: at('10:30'), deliveredAt: at('11:00') }));
+    // Sent out with no delivery charge to keep (keep 0): still an outside rider (50 min out).
+    seedOrder(raw, delivery({ id: 'out2', createdAt: at('11:00'), riderKeeps: 0, dispatchedAt: at('11:10'), deliveredAt: at('12:00') }));
+    // Sent out, Rs 100 handed back to the customer afterwards: in, less the part refund (not timed).
+    seedOrder(
+      raw,
+      delivery({
+        id: 'out3',
+        createdAt: at('12:00'),
+        riderKeeps: 20000,
+        dispatchedAt: at('12:20'),
+        payments: [
+          { method: 'cash', amount: 116000 },
+          { method: 'cash', amount: -10000, at: at('13:00'), ref: 'partial-refund: cold fries' },
+        ],
+      }),
+    );
+    // Sent out, then CANCELLED (unpaid) with the rider paid for the trip: never counted.
+    seedOrder(
+      raw,
+      delivery({
+        id: 'voided',
+        status: 'void',
+        paidAt: null,
+        payments: [],
+        createdAt: at('13:00'),
+        riderKeeps: 20000,
+        dispatchedAt: at('13:20'),
+        voidedBy: 'u_sara',
+        voidReason: 'Customer refused',
+      }),
+    );
+    raw
+      .prepare(
+        `INSERT INTO shifts (id, device_id, opened_by_user_id, opened_at, opening_cash_cents, created_at, updated_at)
+         VALUES ('s_out', ?, 'u_sara', ?, 0, ?, ?)`,
+      )
+      .run(DEV, at('07:00'), T0, T0);
+    raw
+      .prepare(
+        `INSERT INTO cash_movements (id, shift_id, type, amount_cents, reason, user_id, order_id, created_at, updated_at, device_id)
+         VALUES ('cm_trip', 's_out', 'payout', 20000, 'Trip paid to the outside rider — Order #voided cancelled', 'u_sara', 'voided', ?, ?, ?)`,
+      )
+      .run(at('13:40'), at('13:40'), DEV);
+    // Sent out prepaid, then REFUNDED in full while still out: never counted.
+    seedOrder(
+      raw,
+      delivery({
+        id: 'refunded',
+        status: 'refunded',
+        createdAt: at('14:00'),
+        riderKeeps: 20000,
+        dispatchedAt: at('14:20'),
+        voidedBy: 'u_sara',
+        voidReason: 'Wrong order',
+        payments: [
+          { method: 'cash', amount: 116000 },
+          { method: 'cash', amount: -116000, at: at('14:40'), ref: 'refund-of:p-x' },
+        ],
+      }),
+    );
+    // A takeaway is no delivery at all.
+    seedOrder(raw, { id: 'take', createdAt: at('15:00'), subtotal: 10000, tax: 1600, total: 11600, items: [drink(1)], payments: [{ method: 'cash', amount: 11600 }] });
+
+    report = getBusinessReport(db, DAY);
+    channels = buildChannelsTab(db, DAY);
+    raw.close();
+  });
+
+  it('an outside order goes under "Outside riders (sent out)"; an own rider by name; an old rider-less one under "No rider recorded"', () => {
+    expect(OUTSIDE_RIDERS_NAME).toBe('Outside riders (sent out)');
+    expect(report.deliveries.byRider).toEqual([
+      // out1 + out2 + out3: Rs 1,160 + Rs 1,160 + Rs 1,060; out1 30 min and out2 50 min out, out3 not timed.
+      { riderId: null, name: 'Outside riders (sent out)', deliveries: 3, netSalesCents: 338000, avgMinutesOut: 40 },
+      { riderId: 'r_bilal', name: 'Bilal', deliveries: 1, netSalesCents: 116000, avgMinutesOut: 20 },
+      { riderId: null, name: 'No rider recorded', deliveries: 1, netSalesCents: 58000, avgMinutesOut: null },
+    ]);
+    // Channels & delivery reads the very same lines.
+    expect(channels.deliveries).toEqual(report.deliveries);
+  });
+
+  it('the rider lines add up to the deliveries counted in the sales', () => {
+    const deliveryChannels = report.channels.filter((c) => c.channel === 'delivery' || c.channel === 'web_delivery');
+    expect(sum(report.deliveries.byRider.map((r) => r.deliveries))).toBe(sum(deliveryChannels.map((c) => c.orderCount)));
+    expect(sum(report.deliveries.byRider.map((r) => r.netSalesCents))).toBe(sum(deliveryChannels.map((c) => c.netSalesCents)));
+    expect(sum(report.deliveries.byArea.map((a) => a.orderCount))).toBe(5);
+    expectReconciles(report);
+  });
+
+  it('a cancelled sent-out order (rider paid for the trip) and one refunded in full are in no rider line (order-edit #3)', () => {
+    // They are in the data: the cancel and the full refund are counted as such…
+    expect(report.kpis).toMatchObject({ voidCount: 1, voidCents: 116000, fullRefundCount: 1, fullRefundCents: 116000 });
+    // …but the outside riders' line holds out1, out2 and out3 only.
+    expect(report.deliveries.byRider.find((r) => r.name === OUTSIDE_RIDERS_NAME)?.deliveries).toBe(3);
+    expect(sum(report.deliveries.byRider.map((r) => r.deliveries))).toBe(5);
+    // The trip payout is the drawer's (shift history's To riders), not a sale; not a cash out typed by hand.
+    expect(report.shifts.find((s) => s.id === 's_out')).toMatchObject({ cashOutCents: 20000, riderChargesCents: 20000, cashMovementCount: 0 });
+  });
+});
+
+/**
+ * "Once a customer a day" given more than once (Team & leakage): an order
+ * refunded in full gives the offer back (order-edit #12, v0.7.34), so the
+ * order rung again for the same phone that day is not a repeat. A cancelled
+ * one never was. Two live orders with it still are.
+ */
+describe.skipIf(!DatabaseSync)('offer repeats skip an order refunded in full (v0.7.34)', () => {
+  const at = (hhmm: string) => `2026-09-25T${hhmm}:00.000Z`;
+  const RULE = JSON.stringify({ offer: { id: 'test-wa', name: 'Test WhatsApp 10%', oncePerCustomerPerDay: true } });
+  const withOffer = (raw: NodeDatabase, o: SeedOrder) => {
+    seedOrder(raw, o);
+    raw
+      .prepare(
+        `INSERT INTO order_discounts (id, order_id, discount_type, value, reason, applied_by_user_id, amount_cents, source, rule_json,
+           created_at, updated_at, device_id)
+         VALUES (?, ?, 'percent', 10, 'Test WhatsApp 10%', 'u_ali', ?, 'offer', ?, ?, ?, ?)`,
+      )
+      .run(`d_${o.id}`, o.id, o.discount ?? 0, RULE, o.createdAt, o.createdAt, DEV);
+  };
+  const paidWithOffer = (id: string, hhmm: string, more: Partial<SeedOrder> = {}): SeedOrder => ({
+    id,
+    createdAt: at(hhmm),
+    subtotal: 100000,
+    discount: 10000,
+    tax: 14400,
+    total: 104400,
+    items: [burger(2)],
+    payments: [{ method: 'cash', amount: 104400 }],
+    phone: '03001234567',
+    ...more,
+  });
+
+  it('refunded in full and rung again: no repeat; cancelled: no repeat; two live orders: one repeat', () => {
+    const { raw, db } = openMigrated();
+    seedBasics(raw);
+    // Phone A: paid, refunded in full, rung again and paid with the offer.
+    withOffer(
+      raw,
+      paidWithOffer('a1', '08:00', {
+        status: 'refunded',
+        voidedBy: 'u_sara',
+        voidReason: 'Customer changed order',
+        payments: [
+          { method: 'cash', amount: 104400 },
+          { method: 'cash', amount: -104400, at: at('08:20'), ref: 'refund-of:p-x' },
+        ],
+      }),
+    );
+    withOffer(raw, paidWithOffer('a2', '08:30'));
+    // Phone B: sent and cancelled, rung again.
+    withOffer(
+      raw,
+      paidWithOffer('b1', '09:00', { phone: '03007654321', status: 'void', paidAt: null, payments: [], voidedBy: 'u_sara', voidReason: 'Customer changed order' }),
+    );
+    withOffer(raw, paidWithOffer('b2', '09:30', { phone: '03007654321' }));
+    // Phone C: two live orders, both with it (the link between the tills was down).
+    withOffer(raw, paidWithOffer('c1', '10:00', { phone: '03111111111' }));
+    withOffer(raw, paidWithOffer('c2', '10:30', { phone: '03111111111' }));
+    const repeats = getOfferRepeats(db, DAY);
+    raw.close();
+    expect(repeats).toEqual([{ day: '2026-09-25', offerName: 'Test WhatsApp 10%', phoneEnds: '1111', orderNumbers: ['N-c1', 'N-c2'], amountCents: 20000 }]);
   });
 });

@@ -33,6 +33,7 @@ import {
   percentOf,
   purchaseBillsText,
   purchaseHeadline,
+  shiftCashOutParts,
   stockCellText,
   unpaidFoodText,
   websiteVsTill,
@@ -658,6 +659,59 @@ describe('printout', () => {
     // Each shift's figures under them, in the same order.
     expect(rows).toContainEqual(expect.stringMatching(/,2,Rider still out,7,1250\.00,1$/));
     expect(rows).toContainEqual(expect.stringMatching(/,2,Rider still out,,,$/));
+  });
+
+  it('the shift CSV has "To riders Rs" right after "Cash taken out Rs", which is the rest of the cash taken out (v0.7.34)', () => {
+    const shift = (id: string, more: Record<string, unknown>) => ({
+      id,
+      openedAt: '2026-09-26T04:00:00.000Z',
+      closedAt: '2026-09-26T16:00:00.000Z',
+      openedBy: 'Sara',
+      closedBy: 'Sara',
+      openingCashCents: 500000,
+      expectedCashCents: 600000,
+      countedCashCents: 600000,
+      varianceCents: 0,
+      cashInCents: 10_000,
+      // All the cash taken out: Rs 50 typed by hand, Rs 30 of rider tips, and (s1) Rs 400 to outside riders.
+      cashOutCents: 48_000,
+      cashMovementCount: 2,
+      noSaleOpens: 0,
+      openingNote: null,
+      closingNote: null,
+      carriedUnpaidCount: 0,
+      carryOverReason: null,
+      ...more,
+    });
+    const csv = tabCsv(
+      'team',
+      report({
+        shifts: [
+          // Rs 200 kept by an outside rider and a Rs 200 trip paid.
+          shift('s1', { riderChargesCents: 40_000 }),
+          // A shift with no rider figure (before 0.7.34): all of it stays under Cash taken out.
+          shift('s2', {}),
+        ],
+      } as never),
+    );
+    const rows = csv.split(/\r?\n/);
+    // The header: the new column straight after the cash taken out, the rest as before.
+    expect(rows).toContainEqual(
+      expect.stringMatching(/,Float Rs,Cash put in Rs,Cash taken out Rs,To riders Rs,Expected Rs,Counted Rs,Short \(-\) \/ over \(\+\) Rs,Cash in\/out entries,/),
+    );
+    // s1: Rs 80 taken out (Rs 480 less the Rs 400 to riders), then Rs 400.
+    expect(rows).toContainEqual(expect.stringMatching(/,5000\.00,100\.00,80\.00,400\.00,6000\.00,6000\.00,0\.00,2,0,/));
+    // s2: Rs 480 taken out, nothing to riders.
+    expect(rows).toContainEqual(expect.stringMatching(/,5000\.00,100\.00,480\.00,0\.00,6000\.00,6000\.00,0\.00,2,0,/));
+  });
+
+  it('a shift’s cash taken out in two parts: To riders, and Taken out = the rest (v0.7.34)', () => {
+    expect(shiftCashOutParts({ cashOutCents: 48_000, riderChargesCents: 40_000 })).toEqual({ takenOutCents: 8_000, toRidersCents: 40_000 });
+    // Only riders: nothing else was taken out.
+    expect(shiftCashOutParts({ cashOutCents: 20_000, riderChargesCents: 20_000 })).toEqual({ takenOutCents: 0, toRidersCents: 20_000 });
+    // No rider figure (a shift line from before 0.7.34), or none paid: everything under Taken out.
+    expect(shiftCashOutParts({ cashOutCents: 20_000 })).toEqual({ takenOutCents: 20_000, toRidersCents: 0 });
+    expect(shiftCashOutParts({ cashOutCents: 20_000, riderChargesCents: 0 })).toEqual({ takenOutCents: 20_000, toRidersCents: 0 });
   });
 
   it('says how many hand opens there were in all when it prints only some', () => {

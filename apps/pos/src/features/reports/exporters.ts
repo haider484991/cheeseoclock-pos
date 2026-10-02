@@ -47,6 +47,7 @@ import {
   hourSeries,
   methodLabel,
   percentOf,
+  shiftCashOutParts,
   shiftDetailLines,
   stockCellText,
   unpaidFoodText,
@@ -419,8 +420,12 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
     }
 
     sheet.heading('Shifts (cash drawer)');
-    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason', 'Drawer used (all)', 'Test orders deleted after close Rs', 'Carried over, later deleted as tests']);
+    sheet.push(['Opened', 'Closed', 'Opened by', 'Closed by', 'Float Rs', 'Cash put in Rs', 'Cash taken out Rs', 'To riders Rs', 'Expected Rs', 'Counted Rs', 'Short (-) / over (+) Rs', 'Cash in/out entries', 'Drawer opened with no sale', 'Opening note', 'Closing note', 'Unpaid orders carried over', 'Carry-over reason', 'Drawer used (all)', 'Test orders deleted after close Rs', 'Carried over, later deleted as tests']);
     for (const s of r.shifts) {
+      // v0.7.34: what the drawer paid outside riders for an order has its own
+      // column, right after the cash taken out, which is now the rest (cash
+      // out typed by hand and rider tips) — as Shift history shows them.
+      const out = shiftCashOutParts(s);
       sheet.push([
         fmtWhen(s.openedAt),
         s.closedAt ? fmtWhen(s.closedAt) : 'Still open',
@@ -428,7 +433,8 @@ const CSV_PARTS: { [K in ReportTab]: CsvPart<K> } = {
         s.closedBy,
         rs(s.openingCashCents),
         rs(s.cashInCents),
-        rs(s.cashOutCents),
+        rs(out.takenOutCents),
+        rs(out.toRidersCents),
         s.expectedCashCents === null ? null : rs(s.expectedCashCents),
         s.countedCashCents === null ? null : rs(s.countedCashCents),
         s.varianceCents === null ? null : rs(s.varianceCents),

@@ -162,8 +162,24 @@ export interface ReportShiftLine {
   /** counted − expected, stored at close. Negative = short. */
   varianceCents: number | null;
   cashInCents: number;
+  /**
+   * ALL the cash taken out (payouts and rider tips), as the expected cash
+   * took it — the outside riders' payouts below included.
+   */
   cashOutCents: number;
-  /** How many cash in / cash out / rider tip entries — each one opened the drawer. */
+  /**
+   * Of cashOutCents, what the drawer paid outside riders for an order
+   * (v0.7.34, cash payouts linked to an order, 0049): delivery charges they
+   * kept, and trips paid for orders then cancelled. Read from the payouts
+   * themselves, so a cancelled order whose rider was not paid adds nothing.
+   * Shift history shows it as "To riders" and "Taken out" as the rest
+   * (cashOutCents − this). Absent counts as 0.
+   */
+  riderChargesCents?: number;
+  /**
+   * How many cash in / cash out / rider tip entries were typed by hand —
+   * each one opened the drawer. Not the payouts to outside riders.
+   */
   cashMovementCount: number;
   /** Times the drawer was opened by hand with no sale (not the one count at close). */
   noSaleOpens: number;
@@ -172,7 +188,8 @@ export interface ReportShiftLine {
   /**
    * Cash of test orders deleted AFTER this shift closed (0043): its saved
    * expected / counted / short-over are never rewritten, so Reports notes it
-   * instead. Signed paisa (a test's cash less its cash refunds).
+   * instead. Signed paisa (a test's cash less its cash refunds, less what the
+   * drawer paid an outside rider for it).
    */
   testDeletedCashCents?: number;
   /**
@@ -567,7 +584,15 @@ export interface ReportPurchases {
 }
 
 export interface ReportDeliveries {
+  /**
+   * Phone and website deliveries by rider: the shop's own riders by name;
+   * the deliveries sent out with an outside rider (Send out, v0.7.34) on one
+   * line, 'Outside riders (sent out)'; and 'No rider recorded' (before
+   * 0.7.34, or collected straight from Ready). Counted orders only: a
+   * cancelled or fully refunded order is in none of them.
+   */
   byRider: Array<{
+    /** The rider in the Riders list; null for the outside riders' line and 'No rider recorded'. */
     riderId: string | null;
     name: string;
     deliveries: number;

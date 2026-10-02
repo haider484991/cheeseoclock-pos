@@ -138,6 +138,17 @@ export { COUNTED, channelOf, pakistanHourOf, paymentGroup, tradingDayOf };
 /** Caps on the detail lists sent to the screen (the totals always cover everything). */
 export const REPORT_LIST_CAP = 300;
 
+/**
+ * Channels & delivery → By rider: the deliveries sent out with an outside
+ * rider (Send out, v0.7.34: orders.rider_keeps_cents frozen, no rider of the
+ * shop's named). One line for all of them, with no rider id: they are not
+ * in the Riders list. 'No rider recorded' stays for orders from before
+ * 0.7.34 and for deliveries collected straight from Ready.
+ */
+export const OUTSIDE_RIDERS_NAME = 'Outside riders (sent out)';
+/** Their key while the orders are added up; no UUID can equal it. */
+const OUTSIDE_RIDERS = '~outside';
+
 export interface ReportRange {
   sinceIso: string;
   untilIso: string;
@@ -164,6 +175,13 @@ export interface SaleRow {
   total: number;
   refunded: number;
   riderId: string | null;
+  /**
+   * What an outside rider kept of it (orders.rider_keeps_cents, frozen at
+   * Send out, 0049); null = one of the shop's own riders, no rider, or an
+   * order from before 0.7.34. Only a counted order is read, so a cancelled
+   * or fully refunded order sent out is never here.
+   */
+  riderKeeps?: number | null;
   /** Dispatched → delivered, when both were marked. */
   minutesOut: number | null;
   /** From the delivery address snapshot (deliveries only). */
@@ -420,9 +438,12 @@ export function aggregateSales(
       w.offerCents += offerCents;
     } else cameBy.set(way, { orderCount: 1, netSalesCents: net, offerCount: offerCents > 0 ? 1 : 0, offerCents });
 
-    // Own-rider deliveries (phone and website). Foodpanda brings its own riders.
+    // Phone and website deliveries: the shop's own riders by name, the
+    // outside riders sent out (v0.7.34) together on one line. Foodpanda
+    // brings its own riders.
     if (r.mode === 'delivery') {
-      const rd = riders.get(r.riderId);
+      const riderKey = r.riderId ?? (typeof r.riderKeeps === 'number' ? OUTSIDE_RIDERS : null);
+      const rd = riders.get(riderKey);
       const timed = r.minutesOut !== null ? 1 : 0;
       const minutes = r.minutesOut ?? 0;
       if (rd) {
@@ -430,7 +451,7 @@ export function aggregateSales(
         rd.netSalesCents += net;
         rd.minutes += minutes;
         rd.timed += timed;
-      } else riders.set(r.riderId, { orderCount: 1, netSalesCents: net, minutes, timed });
+      } else riders.set(riderKey, { orderCount: 1, netSalesCents: net, minutes, timed });
 
       const area = (r.area ?? '').trim();
       const areaKey = area.toLowerCase();
@@ -461,9 +482,14 @@ export function aggregateSales(
       .sort(bySales),
     deliveries: {
       byRider: [...riders]
-        .map(([riderId, t]) => ({
-          riderId,
-          name: riderId === null ? 'No rider recorded' : (names.rider(riderId) ?? 'Unknown rider'),
+        .map(([riderKey, t]) => ({
+          riderId: riderKey === OUTSIDE_RIDERS ? null : riderKey,
+          name:
+            riderKey === OUTSIDE_RIDERS
+              ? OUTSIDE_RIDERS_NAME
+              : riderKey === null
+                ? 'No rider recorded'
+                : (names.rider(riderKey) ?? 'Unknown rider'),
           deliveries: t.orderCount,
           netSalesCents: t.netSalesCents,
           avgMinutesOut: t.timed > 0 ? Math.round(t.minutes / t.timed) : null,
@@ -538,7 +564,7 @@ function getSaleRows(db: AppDatabase, range: ReportRange): SaleRow[] {
                  ORDER BY d.created_at DESC, d.id DESC LIMIT 1) END AS discountSource,
               o.came_by AS cameBy,
               o.total_cents AS total, ${REFUNDED} AS refunded,
-              o.assigned_rider_id AS riderId,
+              o.assigned_rider_id AS riderId, o.rider_keeps_cents AS riderKeeps,
               CASE WHEN o.dispatched_at IS NOT NULL AND o.delivered_at >= o.dispatched_at
                    THEN (julianday(o.delivered_at) - julianday(o.dispatched_at)) * 1440.0 END AS minutesOut,
               CASE WHEN o.mode = 'delivery' AND json_valid(o.delivery_address_snapshot)
@@ -842,6 +868,16 @@ function getDrawerOpens(db: AppDatabase, range: ReportRange): ReportDrawerOpenLi
  * opening of its drawer (0042); and, never rewriting what was saved, the
  * cash of its test orders the owner deleted after it closed and how many of
  * the orders it carried over were later deleted as tests (0043).
+ *
+ * Outside riders (v0.7.34): the payouts linked to an order (cash_movements.
+ * order_id, 0049) — a delivery charge an outside rider kept, or a trip paid
+ * for an order then cancelled — stay in cashOutCents (all the cash taken
+ * out, as the expected cash took it) and are also riderChargesCents, so the
+ * screen and the file can show them apart. They are read from the payouts,
+ * never from orders.rider_keeps_cents: a cancelled order's frozen keep with
+ * no trip paid moved no money. cashMovementCount counts the cash in / out
+ * typed by hand and rider tips only. A deleted test order's payouts come off
+ * its cash noted after the close (each was taken out of that drawer).
  */
 function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'] {
   return db
@@ -856,20 +892,30 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
                          WHERE m.shift_id = s.id AND m.deleted_at IS NULL AND m.type = 'payin'), 0) AS cashInCents,
               COALESCE((SELECT SUM(m.amount_cents) FROM cash_movements m
                          WHERE m.shift_id = s.id AND m.deleted_at IS NULL AND m.type IN ('payout', 'tip_out')), 0) AS cashOutCents,
+              -- Of that, paid to outside riders for an order (0049): kept charges and trips.
+              COALESCE((SELECT SUM(m.amount_cents) FROM cash_movements m
+                         WHERE m.shift_id = s.id AND m.deleted_at IS NULL AND m.type = 'payout'
+                           AND m.order_id IS NOT NULL), 0) AS riderChargesCents,
               (SELECT COUNT(*) FROM cash_movements m
-                WHERE m.shift_id = s.id AND m.deleted_at IS NULL) AS cashMovementCount,
+                WHERE m.shift_id = s.id AND m.deleted_at IS NULL AND m.order_id IS NULL) AS cashMovementCount,
               (SELECT COUNT(*) FROM drawer_opens d
                 WHERE d.shift_id = s.id AND d.deleted_at IS NULL AND d.kind IN ${NO_SALE_KINDS}) AS noSaleOpens,
               (SELECT COUNT(*) FROM drawer_opens d
                 WHERE d.shift_id = s.id AND d.deleted_at IS NULL) AS drawerOpenCount,
               -- Test orders deleted AFTER the shift closed (0043): the saved
               -- expected / counted / short-over are never rewritten, so the
-              -- cash is noted instead (signed: sales less refunds).
+              -- cash is noted instead (signed: sales less refunds, less what
+              -- the drawer paid an outside rider for them, 0049).
               COALESCE((SELECT SUM(p.amount_cents) FROM payments p
                           JOIN orders o ON o.id = p.order_id
                          WHERE COALESCE(p.shift_id, o.shift_id) = s.id AND p.method = 'cash'
                            AND p.deleted_at IS NOT NULL AND s.closed_at IS NOT NULL AND p.deleted_at > s.closed_at
-                           AND o.delete_kind = 'test'), 0) AS testDeletedCashCents,
+                           AND o.delete_kind = 'test'), 0)
+              - COALESCE((SELECT SUM(m.amount_cents) FROM cash_movements m
+                            JOIN orders o ON o.id = m.order_id
+                           WHERE m.shift_id = s.id AND m.type = 'payout' AND m.order_id IS NOT NULL
+                             AND m.deleted_at IS NOT NULL AND s.closed_at IS NOT NULL AND m.deleted_at > s.closed_at
+                             AND o.delete_kind = 'test'), 0) AS testDeletedCashCents,
               NULLIF(TRIM(s.notes), '') AS openingNote,
               NULLIF(TRIM(s.close_notes), '') AS closingNote,
               COALESCE(s.carried_unpaid_count, 0) AS carriedUnpaidCount,
@@ -902,8 +948,10 @@ function getShifts(db: AppDatabase, range: ReportRange): BusinessReport['shifts'
  * on, but with the link between the tills down each can give it once (the
  * owner's design accepts that, provided Reports show it): listed here from
  * both tills' orders once they have arrived. Sent or paid orders only (one
- * still being rung up can still lose it), never cancelled or deleted ones.
- * The phone is shown by its last four digits.
+ * still being rung up can still lose it), never cancelled or deleted ones,
+ * nor one refunded in full: that gives the offer back, and the order rung
+ * again for the customer gets it (order-edit #12, v0.7.34), so it is no
+ * repeat. The phone is shown by its last four digits.
  */
 export function getOfferRepeats(db: AppDatabase, range: ReportRange): ReportOfferRepeat[] {
   const rows = db
@@ -914,7 +962,7 @@ export function getOfferRepeats(db: AppDatabase, range: ReportRange): ReportOffe
          FROM orders o
          JOIN order_discounts d ON d.order_id = o.id
         WHERE o.created_at >= ? AND o.created_at < ?
-          AND o.deleted_at IS NULL AND o.status NOT IN ('open', 'void')
+          AND o.deleted_at IS NULL AND o.status NOT IN ('open', 'void', 'refunded')
           AND o.customer_phone_snapshot IS NOT NULL
           AND d.deleted_at IS NULL AND d.source = 'offer' AND d.amount_cents > 0
           AND json_valid(d.rule_json)
@@ -2403,8 +2451,10 @@ export function buildMenuTab(db: AppDatabase, req: BusinessReportRequest): Omit<
 }
 
 /**
- * Channels & delivery: order types, and own-rider deliveries by rider and by
- * area (Phase 9's delivery areas and profit: analytics/profit.ts channelsExtras).
+ * Channels & delivery: order types, and phone and website deliveries by
+ * rider (the shop's own riders by name, the outside riders sent out on one
+ * line, v0.7.34) and by area (Phase 9's delivery areas and profit:
+ * analytics/profit.ts channelsExtras).
  */
 export function buildChannelsTab(
   db: AppDatabase,

@@ -301,6 +301,32 @@ describe('the shift history panel', () => {
     expect(shiftDetailLines(carried(2, 1))).toEqual(['2 unpaid orders carried over — Rider still out — approved by Sara (1 of them later deleted as a test order)']);
   });
 
+  it('shows To riders right after Taken out, and Taken out as the rest of the cash taken out (v0.7.34)', () => {
+    const out = render(
+      <TeamLeakageTab
+        now={NOW}
+        data={team([
+          // Rs 480 taken out in all: Rs 400 to outside riders (a kept charge and a trip), Rs 80 typed by hand and rider tips.
+          line({ ...closedLine('s5', '2026-09-25T07:00:00.000Z', '2026-09-25T20:00:00.000Z', 0), cashOutCents: 48_000, riderChargesCents: 40_000, cashMovementCount: 2 }),
+          // Only riders: nothing else was taken out.
+          line({ ...closedLine('s4', '2026-09-24T07:00:00.000Z', '2026-09-24T20:00:00.000Z', 0), cashOutCents: 20_000, riderChargesCents: 20_000 }),
+          // A shift line with no rider figure (before 0.7.34): all of it under Taken out.
+          line({ ...closedLine('s3', '2026-09-23T07:00:00.000Z', '2026-09-23T20:00:00.000Z', 0), cashOutCents: 20_000 }),
+        ])}
+      />,
+    );
+    const words = text(out);
+    expect(words).toContain('Shift Float Taken out To riders Expected Counted Result');
+    // Float, Taken out, To riders, Expected, Counted, Result — row by row.
+    expect(words).toContain('Rs 5,000 Rs 80 Rs 400 Rs 6,000 Rs 6,000 Matched');
+    expect(words).toContain('Rs 5,000 — Rs 200 Rs 6,000 Rs 6,000 Matched');
+    expect(words).toContain('Rs 5,000 Rs 200 — Rs 6,000 Rs 6,000 Matched');
+    // The cash in / out count is the entries typed by hand (the till sends it so).
+    expect(words).toContain('closed by Sara · cash in/out 2×');
+    // The note says what the two columns are.
+    expect(words).toContain('Cash taken out = Taken out + To riders (delivery charges kept by outside riders, and trips paid for cancelled orders).');
+  });
+
   it('an empty period says so plainly', () => {
     const out = text(render(<TeamLeakageTab now={NOW} data={team([])} />));
     expect(out).toContain('No shifts in this period.');

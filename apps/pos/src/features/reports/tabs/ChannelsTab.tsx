@@ -1,8 +1,10 @@
 /**
  * Reports → Channels & delivery (costing spec Phase 3): where orders come
- * from, and own-rider deliveries by rider and by area. Both sections moved
- * here unchanged from ReportSections.tsx; the tab loads only these figures
- * (reports:channels).
+ * from, and phone and website deliveries by rider and by area. Both
+ * sections moved here unchanged from ReportSections.tsx; the tab loads only
+ * these figures (reports:channels). By rider: the shop's own riders by name,
+ * and the deliveries sent out with an outside rider on one line, 'Outside
+ * riders (sent out)' (v0.7.34).
  *
  * Phase 9 adds, for profit.view, what each order type earns after its food,
  * foodpanda's commission, fees and the rider; and delivery areas (costing
@@ -115,7 +117,7 @@ export function CameBySection({ report }: { report: Pick<ReportChannelsTab, 'kpi
 export function DeliveriesSection({ report }: { report: Pick<ReportChannelsTab, 'deliveries' | 'areas' | 'noRateDeliveries' | 'noRateCount'> }) {
   const riders = report.deliveries.byRider;
   return (
-    <Section id="deliveries" icon={Bike} title="Deliveries" subtitle="Your own riders — phone and website deliveries. Foodpanda brings its own.">
+    <Section id="deliveries" icon={Bike} title="Deliveries" subtitle="Phone and website deliveries — your own riders and outside riders you sent out. Foodpanda brings its own.">
       {riders.length === 0 ? (
         <Panel>
           <p className="py-4 text-center text-sm text-stone-500">No deliveries in this period.</p>
