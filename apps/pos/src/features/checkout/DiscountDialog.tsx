@@ -16,11 +16,13 @@ import {
   discountApplyStep,
   discountBaseNow,
   discountBaseText,
+  discountDialogOpenFocus,
   discountDialogPrimary,
   discountDialogStart,
   discountReasonHint,
   discountReasonProblem,
   discountRefused,
+  discountRuleBasisNow,
   parseDiscountEntry,
   presetButtons,
   previewDiscount,
@@ -50,7 +52,8 @@ interface Props {
  * is paid in full), and the dialog says so on an order that has one. Value
  * deals never get a discount (except on a foodpanda order, matching the
  * tablet): the header says what they come to, and with nothing else on the
- * order the buttons and Apply are off (Remove still works). When the
+ * order the buttons and Apply are off (Remove still works), no choice shows
+ * and the dialog itself has the cursor (Enter says why, Esc closes). When the
  * owner has made a reason required, the Reason row says "needed" and Apply
  * waits for one (a reason button is still one tap); the main process refuses
  * a discount without one in any case.
@@ -85,7 +88,6 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   /** A preset was tapped in this dialog: tapping it again applies it. */
   const [armed, setArmed] = useState(false);
   const pinRef = useRef<HTMLInputElement>(null);
-  const customRef = useRef<HTMLInputElement>(null);
   const reasonRef = useRef<HTMLInputElement>(null);
   /** A reason picked or typed: a "reason needed" message has been answered. */
   function setReason(next: string) {
@@ -97,17 +99,22 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
   const subtotal = snapshot?.order.subtotalCents ?? 0;
   // The order's mode: value deals are never discounted, except on a foodpanda order (matching the tablet).
   const mode = snapshot?.order.mode;
-  const typing = customText.trim() !== '';
-  const typed = parseDiscountEntry(customKind, customText);
-  const choice = typing ? typed : picked;
-
-  const before = previewDiscount(lines, subtotal, null, rules, mode);
-  const after = previewDiscount(lines, subtotal, choice, rules, mode);
   // What a discount given now is worked on: the food only, unless the owner's switch says every line;
   // never the value deals.
   const base = discountBaseNow(lines, subtotal, rules, mode);
+  // What the header and the limit line call it (the main process's refusal says the same).
+  const basis = discountRuleBasisNow(lines, rules, mode);
   // Every line it could come off is a value deal: nothing to pick, nothing to apply (Remove still works).
   const onlyValueDeals = base.baseCents === 0 && base.dealsCents > 0;
+  const typing = customText.trim() !== '';
+  const typed = parseDiscountEntry(customKind, customText);
+  // Only value deals: no choice to show, not even the discount already on the order (a staff
+  // discount left at Rs 0 when the food was taken off) — no preset pressed, no preview.
+  const pickedNow = onlyValueDeals ? null : picked;
+  const choice = typing && !onlyValueDeals ? typed : pickedNow;
+
+  const before = previewDiscount(lines, subtotal, null, rules, mode);
+  const after = previewDiscount(lines, subtotal, choice, rules, mode);
   // The discount already on the order, by its OWN frozen rule (the header's first part follows the switch now).
   const currentWords = current ? currentDiscountWords(current, lines, rules) : null;
   const needsPin = after.needsApproval || dealOn;
@@ -235,7 +242,7 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
 
   function presetButton(key: string, label: string, preset: DiscountChoice) {
     const p = previewDiscount(lines, subtotal, preset, rules, mode);
-    const selected = !typing && sameChoice(picked, preset);
+    const selected = !typing && sameChoice(pickedNow, preset);
     return (
       <button
         key={key}
@@ -261,18 +268,26 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
         <Dialog.Content
           onKeyDown={onKeyDown}
           // Keys first: F3, type 15, Enter. Taps on the presets work the same.
-          // From the deal's ×: straight to the manager's PIN, then Enter.
+          // From the deal's ×: straight to the manager's PIN, then Enter. Only
+          // value deals: the dialog itself (the amount box is off), so Enter
+          // says why and never reaches the page behind it.
           onOpenAutoFocus={(e) => {
             e.preventDefault();
-            (removingDeal ? pinRef.current : customRef.current)?.focus();
+            const dialog = e.currentTarget as HTMLElement;
+            const where = discountDialogOpenFocus({ removingDeal, onlyValueDeals });
+            const target =
+              where === 'pin' ? pinRef.current : where === 'custom' ? dialog.querySelector<HTMLElement>('[data-field="custom"]') : dialog;
+            target?.focus();
+            // A box that is off takes no cursor: then the dialog does, never whatever had it before F3.
+            if (!dialog.contains(dialog.ownerDocument.activeElement)) dialog.focus();
           }}
-          className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-24px)] w-[560px] max-w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-xl bg-white p-5 shadow-xl dark:bg-stone-900 dark:text-stone-100"
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-24px)] w-[560px] max-w-[calc(100vw-24px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-xl bg-white p-5 shadow-xl outline-none dark:bg-stone-900 dark:text-stone-100"
         >
           <header className="mb-3 flex items-start justify-between gap-3">
             <div>
               <Dialog.Title className="text-xl font-bold">{removingDeal ? 'Take the foodpanda deal off?' : 'Discount'}</Dialog.Title>
               <Dialog.Description className="text-sm text-stone-500 dark:text-stone-400">
-                {discountBaseText(base, subtotal)}
+                {discountBaseText(base, subtotal, basis)}
                 {currentWords && (
                   <>
                     {' · '}
@@ -282,11 +297,10 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
               </Dialog.Description>
               {currentWords?.ruleNote && <p className="mt-1 text-xs font-medium text-amber-800 dark:text-amber-300">{currentWords.ruleNote}</p>}
               {/* The limit in words, on what it is checked on: the food, when the delivery charge is left
-                  out; the food without the value deals, when they are. None when only value deals are left. */}
+                  out; the food without the value deals, when they are (the food and delivery charge
+                  without them, with the owner's switch on). None when only value deals are left. */}
               {!dealOn && !onlyValueDeals && (
-                <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-                  {approvalRuleText(limits, base.dealsCents > 0 ? 'food_no_deals' : base.untouchedCents > 0 ? 'food' : 'order')}
-                </p>
+                <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{approvalRuleText(limits, basis)}</p>
               )}
               {offerOn && (
                 <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
@@ -337,7 +351,6 @@ export function DiscountDialog({ onClose, intent = 'change' }: Props) {
                   )}
                 >
                   <input
-                    ref={customRef}
                     data-field="custom"
                     disabled={onlyValueDeals}
                     inputMode="decimal"

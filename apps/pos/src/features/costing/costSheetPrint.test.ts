@@ -144,3 +144,20 @@ describe('the printed cost sheet', () => {
     expect(html).toContain('Test garlic has no price yet, so this is costed at its saved price (Rs 8) until every input has one; the inputs with a price come to Rs 7.50.');
   });
 });
+
+describe('the printed cost sheet’s time', () => {
+  it('Pakistan time, in the one date format of every paper, whatever zone the PC is set to', () => {
+    const was = process.env.TZ;
+    try {
+      for (const zone of ['UTC', 'America/New_York', 'Asia/Karachi']) {
+        process.env.TZ = zone;
+        // 10:00 UTC is 15:00 in Pakistan; 19:30 UTC is already the next day there.
+        expect(costSheetPrintHtml(SHEET, new Date('2026-09-27T10:00:00Z')), zone).toContain('Printed 27/09/2026 15:00.</div>');
+        expect(costSheetPrintHtml(SHEET, new Date('2026-10-01T19:30:00Z')), zone).toContain('Printed 02/10/2026 00:30.</div>');
+      }
+    } finally {
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+    }
+  });
+});

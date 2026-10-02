@@ -33,7 +33,7 @@
  * over every line.
  */
 import { isDeliveryChargeLine, type DiscountBaseRule } from '@cheeseoclock/shared-types';
-import { allocateDiscount, computeDiscountCents, weightsThatCarry } from './discount.js';
+import { allocateDiscount, computeDiscountCents, weightsThatCarry, type ApprovalRuleBasis } from './discount.js';
 import { dealAmount, parseFoodpandaDealRule } from './foodpanda.js';
 import { offerAmount, parseOfferRule } from './offers.js';
 import { computeTax } from './tax.js';
@@ -101,6 +101,31 @@ export function discountBaseCents(
   feeItemIds?: ReadonlySet<string> | null,
 ): number {
   return discountWeights(lines, scope, feeItemIds).reduce((s, w) => s + Math.max(0, w), 0);
+}
+
+/**
+ * What the approval limit's words (approvalRuleText) say it is checked on,
+ * for a discount worked on `scope` over these lines — the same base as
+ * discountBaseCents, so the F3 screen's limit line and the main process's
+ * refusal name what the lock measured:
+ *  - 'food_no_deals': value deals on the order are left out (and a delivery
+ *    charge too, or there is none);
+ *  - 'food_and_charge_no_deals': value deals are left out, and a delivery
+ *    charge on the order is counted in (the owner's switch on);
+ *  - 'food': only a delivery charge is left out;
+ *  - 'order': every line.
+ * A line worth Rs 0 changes nothing, so it is not counted.
+ */
+export function approvalRuleBasis(
+  lines: ReadonlyArray<DiscountLine>,
+  scope: DiscountScope,
+  feeItemIds?: ReadonlySet<string> | null,
+): ApprovalRuleBasis {
+  const skipped = (l: DiscountLine) => scope.skipsNoDiscountLines && l.noDiscount === true;
+  const leavesDeals = lines.some((l) => skipped(l) && l.lineTotalCents > 0);
+  const charge = lines.some((l) => !skipped(l) && l.lineTotalCents > 0 && isDeliveryChargeLine(l, feeItemIds));
+  if (leavesDeals) return scope.alsoOffDeliveryCharge && charge ? 'food_and_charge_no_deals' : 'food_no_deals';
+  return !scope.alsoOffDeliveryCharge && charge ? 'food' : 'order';
 }
 
 /**

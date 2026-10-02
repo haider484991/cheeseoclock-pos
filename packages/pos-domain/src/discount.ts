@@ -103,12 +103,22 @@ export function discountReasonMissing(reason: string | null | undefined): boolea
  * the lock — Rs 210 off Rs 2,000 of food and a Rs 200 charge is over 10% of
  * the food, though under 10% of the order. 'food_no_deals' when value deals
  * were left out of it too: Rs 499 off Rs 600 of pizza and a Rs 3,600 deal is
- * over 10% of the food it can come off.
+ * over 10% of the food it can come off. 'food_and_charge_no_deals' when
+ * value deals were left out but the delivery charge was counted in (the
+ * owner's switch "A discount also comes off the delivery charge" on): the
+ * words name both. discount-base approvalRuleBasis picks it from the lines.
  */
-export function approvalRuleText(limits: ApprovalLimits, of: 'order' | 'food' | 'food_no_deals' = 'order'): string {
+export type ApprovalRuleBasis = 'order' | 'food' | 'food_no_deals' | 'food_and_charge_no_deals';
+
+export function approvalRuleText(limits: ApprovalLimits, of: ApprovalRuleBasis = 'order'): string {
   const p = limits.percentOver;
   if (p === 0) return "Every discount needs a manager's PIN or password.";
-  const what = of === 'food_no_deals' ? 'the food (value deals not counted)' : `the ${of}`;
+  const what =
+    of === 'food_no_deals'
+      ? 'the food (value deals not counted)'
+      : of === 'food_and_charge_no_deals'
+        ? 'the food and delivery charge (value deals not counted)'
+        : `the ${of}`;
   if (limits.flatOverCents === 0) {
     return `Up to ${p}% off${of === 'order' ? '' : ` ${what}`} without a manager. More, or any amount off in rupees, needs a manager's PIN or password.`;
   }

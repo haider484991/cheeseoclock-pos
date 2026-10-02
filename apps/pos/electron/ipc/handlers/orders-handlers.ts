@@ -55,6 +55,7 @@ import {
   CAME_BY_LOCKED,
 } from '../../db/repositories/order-repo.js';
 import {
+  approvalRuleBasis,
   approvalRuleText,
   checkChoicePicks,
   discountBaseCents,
@@ -373,10 +374,8 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     // except on a foodpanda order (a manager matching the tablet, which covers
     // them). The repository freezes the same on the row, and checks again.
     const skipsDeals = current.order.mode !== 'foodpanda';
-    const base = discountBaseCents(current.items, {
-      alsoOffDeliveryCharge: readDiscountAlsoOffDeliveryCharge(ctx.db),
-      skipsNoDiscountLines: skipsDeals,
-    });
+    const scope = { alsoOffDeliveryCharge: readDiscountAlsoOffDeliveryCharge(ctx.db), skipsNoDiscountLines: skipsDeals };
+    const base = discountBaseCents(current.items, scope);
     const leavesDeals = skipsDeals && current.items.some((i) => i.noDiscount === true);
     // Every line it could come off is a value deal: refused BEFORE the manager's PIN is
     // checked, so it never uses up a PIN attempt. The repository refuses too.
@@ -389,12 +388,11 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
           code: 'precondition_failed',
           message: replacesDeal
             ? FOODPANDA_DEAL_NEEDS_MANAGER
-            : // The rule in words, on what it was checked on: the food without the value deals when
-              // they were left out of it; the food, when only a delivery charge is.
-              `Manager approval required for this discount. ${approvalRuleText(
-                limits,
-                leavesDeals ? 'food_no_deals' : base < current.order.subtotalCents ? 'food' : 'order',
-              )}`,
+            : // The rule in words, on what it was checked on (the F3 screen's limit line, the same
+              // test): the food without the value deals when they were left out of it (with the
+              // delivery charge named when the owner's switch counts it in); the food, when only a
+              // delivery charge is.
+              `Manager approval required for this discount. ${approvalRuleText(limits, approvalRuleBasis(current.items, scope))}`,
         });
       }
       try {

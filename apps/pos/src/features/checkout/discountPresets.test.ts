@@ -11,11 +11,13 @@ import {
   discountApplyStep,
   discountBaseNow,
   discountBaseText,
+  discountDialogOpenFocus,
   discountDialogPrimary,
   discountDialogStart,
   discountReasonHint,
   discountReasonProblem,
   discountRefused,
+  discountRuleBasisNow,
   flatChoiceRupees,
   parseDiscountEntry,
   percentChoice,
@@ -379,6 +381,40 @@ describe('F3 on an order with a value deal', () => {
     expect(discountBaseText(discountBaseNow([DEAL], 360_000, rules, 'takeaway'), 360_000)).toBe(NOTHING_TO_DISCOUNT);
     // A deal with only a delivery charge beside it: nothing either (the charge is paid in full).
     expect(discountBaseText(discountBaseNow([DEAL, CHARGE], 380_000, rules, 'delivery'), 380_000)).toBe(NOTHING_TO_DISCOUNT);
+  });
+
+  it('the owner’s switch on: the charge counted in is named, as the limit line names it; off, as before', () => {
+    const on = { ...rules, alsoOffDeliveryCharge: true };
+    const withCharge = [...lines, CHARGE];
+    const subWith = sub + 20_000;
+    const basisOn = discountRuleBasisNow(withCharge, on, 'delivery');
+    expect(basisOn).toBe('food_and_charge_no_deals');
+    expect(discountBaseText(discountBaseNow(withCharge, subWith, on, 'delivery'), subWith, basisOn)).toBe(
+      'Food and delivery charge Rs 1,700 before tax · value deals Rs 3,600 not discounted',
+    );
+    const basisOff = discountRuleBasisNow(withCharge, rules, 'delivery');
+    expect(basisOff).toBe('food_no_deals');
+    expect(discountBaseText(discountBaseNow(withCharge, subWith, rules, 'delivery'), subWith, basisOff)).toBe(
+      'Food Rs 1,500 before tax · value deals Rs 3,600 and delivery charge Rs 200 not discounted',
+    );
+    // No charge on the order: "Food" under either switch.
+    expect(discountRuleBasisNow(lines, on, 'takeaway')).toBe('food_no_deals');
+    expect(discountBaseText(discountBaseNow(lines, sub, on, 'takeaway'), sub, discountRuleBasisNow(lines, on, 'takeaway'))).toBe(
+      'Food Rs 1,500 before tax · value deals Rs 3,600 not discounted',
+    );
+    // Only value deals beside the charge, switch on: Rs 200 to work on, and it says what that is.
+    expect(discountBaseText(discountBaseNow([DEAL, CHARGE], 380_000, on, 'delivery'), 380_000, discountRuleBasisNow([DEAL, CHARGE], on, 'delivery'))).toBe(
+      'Food and delivery charge Rs 200 before tax · value deals Rs 3,600 not discounted',
+    );
+    // A foodpanda order covers the deals: the words of an order without them.
+    expect(discountRuleBasisNow(withCharge, on, 'foodpanda')).toBe('order');
+    expect(discountRuleBasisNow(withCharge, rules, 'foodpanda')).toBe('food');
+  });
+
+  it('where the cursor goes when F3 opens: the amount box; the PIN from the deal’s ×; the dialog itself with only value deals', () => {
+    expect(discountDialogOpenFocus({ removingDeal: false, onlyValueDeals: false })).toBe('custom');
+    expect(discountDialogOpenFocus({ removingDeal: true, onlyValueDeals: false })).toBe('pin');
+    expect(discountDialogOpenFocus({ removingDeal: false, onlyValueDeals: true })).toBe('dialog');
   });
 
   it('10% of the pizza: Rs 150 off, the deal taxed in full', () => {

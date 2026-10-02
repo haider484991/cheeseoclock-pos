@@ -4,7 +4,9 @@
  * deals alone — the cart, Pay, the receipt after Pay and the order drawer —
  * from the discount's OWN frozen rule (the snapshot's skipsNoDiscountLines)
  * and the deal lines on the order (noDiscount); F3 says what it is worked on
- * and, with only deals on the order, that there is nothing to take off; and
+ * (under either setting of the owner's delivery-charge switch) and, with only
+ * deals on the order, that there is nothing to take off, shows no choice and
+ * keeps the cursor (and so Enter) in the dialog; and
  * "Add discount" says so on the button itself. A foodpanda order covers its
  * deals, as the tablet does. Static renders (react-dom/server, no browser;
  * nothing calls the till); Radix's dialog is stood in for by plain elements.
@@ -27,6 +29,9 @@ import { TenderDialog } from './TenderDialog';
 import { ReceiptDialog } from './ReceiptDialog';
 import { OrderDetailDrawer } from '../orders/OrderDetailDrawer';
 
+/** The props the last dialog rendered gave Radix's Content: the handlers Radix would call (on open, on a key). */
+const radix = vi.hoisted(() => ({ content: null as Record<string, unknown> | null }));
+
 // A server render has no portal: the dialog's parts render in place.
 vi.mock('@radix-ui/react-dialog', async () => {
   const React = await import('react');
@@ -41,7 +46,10 @@ vi.mock('@radix-ui/react-dialog', async () => {
     Root: pass,
     Portal: pass,
     Overlay: () => null,
-    Content: tag('div', { role: 'dialog' }),
+    Content: (props: P & Record<string, unknown>) => {
+      radix.content = props;
+      return h('div', { className: props.className, role: 'dialog' }, props.children);
+    },
     Title: tag('h2'),
     Description: tag('p'),
     Close: pass,
@@ -88,6 +96,38 @@ const tagOf = (markup: string, needle: string, tag = 'button'): string => {
 /** Every button's opening tag. */
 const buttons = (markup: string) => markup.match(/<button[^>]*>/g) ?? [];
 
+/**
+ * Radix opening the last dialog rendered: its onOpenAutoFocus, with the few
+ * DOM bits it touches as plain objects. The cursor starts in the menu search
+ * behind the dialog (where it is after "big" + Enter); the "Other" amount box
+ * takes it only when `boxTakesCursor` (a box that is off takes none, as in a
+ * browser). Says where the cursor ended up.
+ */
+function openDialog(boxTakesCursor: boolean): 'menu search' | 'amount box' | 'dialog' {
+  type Doc = { activeElement: unknown };
+  type El = { focus: () => void };
+  type Dialog = El & { ownerDocument: Doc; querySelector: (sel: string) => El | null; contains: (el: unknown) => boolean };
+  const doc: Doc = { activeElement: 'menu search' };
+  const box: El = {
+    focus: () => {
+      if (boxTakesCursor) doc.activeElement = box;
+    },
+  };
+  const dialog: Dialog = {
+    ownerDocument: doc,
+    querySelector: (sel) => (sel === '[data-field="custom"]' ? box : null),
+    contains: (el) => el === dialog || el === box,
+    focus: () => {
+      doc.activeElement = dialog;
+    },
+  };
+  const preventDefault = vi.fn();
+  const onOpenAutoFocus = radix.content?.['onOpenAutoFocus'] as (e: { preventDefault: () => void; currentTarget: Dialog }) => void;
+  onOpenAutoFocus({ preventDefault, currentTarget: dialog });
+  expect(preventDefault).toHaveBeenCalledOnce();
+  return doc.activeElement === dialog ? 'dialog' : doc.activeElement === box ? 'amount box' : 'menu search';
+}
+
 const RULES: CheckoutRules = {
   discounts: {
     approval: { percentOver: 10, flatOverCents: 50_000 },
@@ -119,22 +159,29 @@ const line = (id: string, name: string, cents: number, noDiscount: boolean) => (
 /**
  * A takeaway of a Rs 3,600 value deal and a Rs 1,500 pizza with a staff 10%
  * whose rule left the deal alone (Rs 150), or — `dealsOnly` — the deal alone,
- * with no discount; `mode` 'foodpanda' for a foodpanda order.
+ * with no discount (with `discount`, the staff 10% left at Rs 0 when the
+ * pizza was taken off); `mode` 'foodpanda' for a foodpanda order. `charge`:
+ * a delivery with the area's Rs 200 "Delivery Charge (Rs 200)" line;
+ * `noDeal`: without the value deal.
  */
-function order(opts: { status?: 'open' | 'paid'; dealsOnly?: boolean; discount?: boolean; mode?: string; skips?: boolean } = {}): OrderSnapshot {
+function order(
+  opts: { status?: 'open' | 'paid'; dealsOnly?: boolean; noDeal?: boolean; charge?: boolean; discount?: boolean; mode?: string; skips?: boolean } = {},
+): OrderSnapshot {
   const status = opts.status ?? 'open';
-  const items = opts.dealsOnly
-    ? [line('l1', 'Test Big Deal', 360_000, true)]
-    : [line('l1', 'Test Big Deal', 360_000, true), line('l2', 'Test Pizza', 150_000, false)];
+  const items = [
+    ...(opts.noDeal ? [] : [line('l1', 'Test Big Deal', 360_000, true)]),
+    ...(opts.dealsOnly ? [] : [line('l2', 'Test Pizza', 150_000, false)]),
+    ...(opts.charge ? [line('l3', 'Delivery Charge (Rs 200)', 20_000, false)] : []),
+  ];
   const subtotalCents = items.reduce((s, i) => s + i.lineTotalCents, 0);
-  const discountCents = opts.discount ? 15_000 : 0;
+  const discountCents = opts.discount && !opts.dealsOnly ? 15_000 : 0;
   const taxCents = Math.round(((subtotalCents - discountCents) * 16) / 100);
   const totalCents = subtotalCents - discountCents + taxCents;
   return {
     order: {
       id: 'o1',
       orderNumber: '20261002-0007',
-      mode: opts.mode ?? 'takeaway',
+      mode: opts.mode ?? (opts.charge ? 'delivery' : 'takeaway'),
       status,
       source: 'pos',
       notes: null,
@@ -261,6 +308,83 @@ describe('only value deals on the order', () => {
     expect(tagOf(out, 'aria-label="Other percent off"', 'input')).toContain('disabled');
     expect(tagOf(out, '>Apply<')).toContain('disabled');
   });
+
+  it('F3: the dialog itself takes the cursor (the amount box is off), so Enter stays in it and applies nothing', async () => {
+    signIn('cashier');
+    const real = useCheckoutStore.getState().applyDiscount;
+    const applyDiscount = vi.fn(async () => {});
+    useCheckoutStore.setState({ snapshot: order({ dealsOnly: true }), busy: false, applyDiscount });
+    try {
+      const out = render(<DiscountDialog onClose={noop} />, RULES_SEED);
+      expect(tagOf(out, 'aria-label="Other percent off"', 'input')).toContain('disabled=""');
+      // Never left in the menu search behind it, where Enter would send the order to the kitchen.
+      expect(openDialog(false)).toBe('dialog');
+      // Enter on the dialog: its own key handler takes it, and Apply refuses (NOTHING_TO_DISCOUNT).
+      const preventDefault = vi.fn();
+      const onKeyDown = radix.content?.['onKeyDown'] as (e: { key: string; target: unknown; preventDefault: () => void }) => void;
+      onKeyDown({ key: 'Enter', target: { tagName: 'DIV', dataset: {} }, preventDefault });
+      expect(preventDefault).toHaveBeenCalledOnce();
+      await Promise.resolve();
+      expect(applyDiscount).not.toHaveBeenCalled();
+    } finally {
+      useCheckoutStore.setState({ applyDiscount: real });
+    }
+  });
+
+  it('F3 with a staff 10% left on at Rs 0 (its pizza taken off): still "No discount on value deals", no preset pressed; Remove still works', () => {
+    signIn('cashier');
+    useCheckoutStore.setState({ snapshot: order({ dealsOnly: true, discount: true }), busy: false });
+    const out = render(<DiscountDialog onClose={noop} />, RULES_SEED);
+    const words = text(out);
+    expect(words).toContain(NOTHING_TO_DISCOUNT);
+    expect(words).toContain('No discount on value deals');
+    // Not the old choice: no "10% off, not on value deals −Rs 0", no new total.
+    expect(words).not.toContain('New total');
+    expect(words).not.toContain('Apply 10% off');
+    const presets = buttons(out).filter((b) => b.includes(' off, takes '));
+    expect(presets.length).toBe(3);
+    for (const b of presets) {
+      expect(b).toContain('aria-pressed="false"');
+      expect(b).toContain('disabled=""');
+    }
+    expect(tagOf(out, '>Apply<')).toContain('disabled=""');
+    expect(tagOf(out, '>Remove discount<')).not.toContain('disabled=""');
+    expect(openDialog(false)).toBe('dialog');
+  });
+});
+
+describe('F3 on a delivery with a deal: the header and the limit name what is counted, under either switch', () => {
+  const ON = { ...RULES, discounts: { ...RULES.discounts, alsoOffDeliveryCharge: true } } as CheckoutRules;
+
+  it('the switch off (released): the food; the deal and the delivery charge are not discounted', () => {
+    signIn('cashier');
+    useCheckoutStore.setState({ snapshot: order({ charge: true }), busy: false });
+    const out = render(<DiscountDialog onClose={noop} />, RULES_SEED);
+    const words = text(out);
+    expect(words).toContain('Food Rs 1,500 before tax · value deals Rs 3,600 and delivery charge Rs 200 not discounted');
+    expect(words).toContain(
+      "Up to 10% off, or up to Rs 500 off if that is no more than 10% of the food (value deals not counted), without a manager. More needs a manager's PIN or password.",
+    );
+    expect(ariaLabels(out)).toContain('10% off, takes Rs 150 off');
+  });
+
+  it('the switch on: the food and delivery charge (Rs 1,700), and the limit line says the same; without the deal, the order', () => {
+    signIn('cashier');
+    useCheckoutStore.setState({ snapshot: order({ charge: true }), busy: false });
+    const out = render(<DiscountDialog onClose={noop} />, [[CHECKOUT_RULES_KEY, ON]]);
+    const words = text(out);
+    expect(words).toContain('Food and delivery charge Rs 1,700 before tax · value deals Rs 3,600 not discounted');
+    expect(words).toContain(
+      "Up to 10% off, or up to Rs 500 off if that is no more than 10% of the food and delivery charge (value deals not counted), without a manager. More needs a manager's PIN or password.",
+    );
+    expect(words).not.toContain('Food Rs 1,700');
+    expect(ariaLabels(out)).toContain('10% off, takes Rs 170 off');
+    // The same delivery without the deal: the whole order, as before.
+    useCheckoutStore.setState({ snapshot: order({ charge: true, noDeal: true }), busy: false });
+    const plain = text(render(<DiscountDialog onClose={noop} />, [[CHECKOUT_RULES_KEY, ON]]));
+    expect(plain).toContain('Order Rs 1,700 before tax');
+    expect(plain).toContain('no more than 10% of the order, without a manager');
+  });
 });
 
 describe('F3 on a deal and a pizza', () => {
@@ -274,6 +398,10 @@ describe('F3 on a deal and a pizza', () => {
       "Up to 10% off, or up to Rs 500 off if that is no more than 10% of the food (value deals not counted), without a manager. More needs a manager's PIN or password.",
     );
     expect(ariaLabels(out)).toContain('10% off, takes Rs 150 off');
+    // The cursor goes to the "Other" amount box (keys first: F3, type 15, Enter).
+    expect(openDialog(true)).toBe('amount box');
+    // Should a box ever refuse it, the dialog takes it, never the page behind.
+    expect(openDialog(false)).toBe('dialog');
     // Rs 100 is under 10% of Rs 1,500 (the food without the deal): no lock.
     expect(ariaLabels(out)).toContain('Rs 100 off, takes Rs 100 off');
     // Rs 200 would be over it, though under 10% of the whole Rs 5,100.

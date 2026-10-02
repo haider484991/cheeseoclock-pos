@@ -97,6 +97,16 @@ describe('value deals never get a discount: the words and the lock', () => {
     expect(approvalRuleText({ percentOver: 0, flatOverCents: 50_000 }, 'food_no_deals')).toBe("Every discount needs a manager's PIN or password.");
   });
 
+  it('with the owner’s switch on, the delivery charge counted in is named too', () => {
+    expect(approvalRuleText({ percentOver: 10, flatOverCents: 50_000 }, 'food_and_charge_no_deals')).toBe(
+      "Up to 10% off, or up to Rs 500 off if that is no more than 10% of the food and delivery charge (value deals not counted), without a manager. More needs a manager's PIN or password.",
+    );
+    expect(approvalRuleText({ percentOver: 10, flatOverCents: 0 }, 'food_and_charge_no_deals')).toBe(
+      "Up to 10% off the food and delivery charge (value deals not counted) without a manager. More, or any amount off in rupees, needs a manager's PIN or password.",
+    );
+    expect(approvalRuleText({ percentOver: 0, flatOverCents: 50_000 }, 'food_and_charge_no_deals')).toBe("Every discount needs a manager's PIN or password.");
+  });
+
   it('Rs 499 off Rs 600 of pizza needs a manager, though a made-up Rs 3,600 deal is on the order too', () => {
     const lines = [
       { lineTotalCents: 60_000, menuItemName: 'Test Pizza' },

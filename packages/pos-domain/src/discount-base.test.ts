@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_DISCOUNT_APPROVAL, isDeliveryChargeLine } from '@cheeseoclock/shared-types';
 import { allocateDiscount, computeDiscountCents, requiresManagerApproval, weightsThatCarry } from './discount.js';
 import {
+  approvalRuleBasis,
   discountBaseCents,
   discountRuleAlsoOffDeliveryCharge,
   discountRuleScope,
@@ -392,6 +393,30 @@ describe('value deals never get a discount', () => {
       expect(splitDiscount(MIXED, disc, FOOD_ONLY)).toEqual(splitDiscount(unmarked, disc, FOOD_ONLY));
       expect(taxAfterDiscount(MIXED, disc, EVERY_LINE)).toEqual(taxAfterDiscount(unmarked, disc, EVERY_LINE));
     }
+  });
+
+  it('approvalRuleBasis: the limit’s words name what the base counts, under either switch', () => {
+    // The owner's switch off: the deal and the charge are both left out; the food it measures is the pizza.
+    expect(approvalRuleBasis(MIXED, FOOD_NO_DEALS)).toBe('food_no_deals');
+    // The switch on: the charge is counted in with the pizza (Rs 1,700), the deal still left out.
+    expect(approvalRuleBasis(MIXED, ALL_BUT_DEALS)).toBe('food_and_charge_no_deals');
+    // No charge on the order: the switch changes nothing.
+    expect(approvalRuleBasis([PIZZA_15, DEAL], FOOD_NO_DEALS)).toBe('food_no_deals');
+    expect(approvalRuleBasis([PIZZA_15, DEAL], ALL_BUT_DEALS)).toBe('food_no_deals');
+    // No deal: as before 0.7.34 ('food' only while a charge is left out).
+    expect(approvalRuleBasis([PIZZA_15, CHARGE_15], FOOD_NO_DEALS)).toBe('food');
+    expect(approvalRuleBasis([PIZZA_15, CHARGE_15], ALL_BUT_DEALS)).toBe('order');
+    expect(approvalRuleBasis([PIZZA_15], FOOD_NO_DEALS)).toBe('order');
+    // A foodpanda order covers its deals: they are counted in.
+    expect(approvalRuleBasis(MIXED, FOOD_ONLY)).toBe('food');
+    expect(approvalRuleBasis(MIXED, EVERY_LINE)).toBe('order');
+    // A Rs 0 line changes no base, so it changes no words.
+    expect(approvalRuleBasis([PIZZA_15, { ...DEAL, lineTotalCents: 0 }], FOOD_NO_DEALS)).toBe('order');
+    expect(approvalRuleBasis([PIZZA_15, DEAL, { ...CHARGE_15, lineTotalCents: 0 }], ALL_BUT_DEALS)).toBe('food_no_deals');
+    // The areas' fee item by id counts as a charge, as discountBaseCents counts it.
+    const feeLine = { lineTotalCents: 25_000, menuItemName: 'Test Area Fee', menuItemId: 'm_fee' };
+    expect(approvalRuleBasis([PIZZA_15, DEAL, feeLine], ALL_BUT_DEALS, new Set(['m_fee']))).toBe('food_and_charge_no_deals');
+    expect(approvalRuleBasis([PIZZA_15, DEAL, feeLine], ALL_BUT_DEALS)).toBe('food_no_deals');
   });
 
   it('the rule: skipsNoDiscountLines is written only when true, and reads back', () => {

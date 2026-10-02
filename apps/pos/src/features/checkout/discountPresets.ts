@@ -1,4 +1,5 @@
 import {
+  approvalRuleBasis,
   computeDiscountCents,
   discountBaseCents,
   discountReasonMissing,
@@ -7,6 +8,8 @@ import {
   NOTHING_TO_DISCOUNT,
   requiresManagerApproval,
   taxAfterDiscount,
+  type ApprovalRuleBasis,
+  type DiscountLine,
   type DiscountScope,
   type TaxedDiscountLine,
 } from '@cheeseoclock/pos-domain';
@@ -155,6 +158,20 @@ export function discountReasonProblem(reasonRequired: boolean, reason: string): 
 
 /** Where the dialog puts the cursor after saying why it did not apply. */
 export type DiscountDialogFocus = 'reason' | 'pin' | null;
+
+/**
+ * Where the cursor goes when the dialog opens: the manager's PIN when it was
+ * opened from the foodpanda deal's ×; the "Other" amount box (keys first: F3,
+ * type 15, Enter); and — with only value deals on the order, where that box
+ * is off and cannot take the cursor — the dialog itself. Never left behind
+ * the dialog: there Enter would send the order to the kitchen, or a typed
+ * 15 land in the menu search. On the dialog, Enter says why nothing comes
+ * off (NOTHING_TO_DISCOUNT) and Esc closes it.
+ */
+export function discountDialogOpenFocus(p: { removingDeal: boolean; onlyValueDeals: boolean }): 'pin' | 'custom' | 'dialog' {
+  if (p.removingDeal) return 'pin';
+  return p.onlyValueDeals ? 'dialog' : 'custom';
+}
 
 /** What Apply does — the big button, Enter, or a preset tapped a second time. */
 export type DiscountApplyStep =
@@ -309,12 +326,17 @@ export function currentDiscountWords(
  * value deals Rs 3,600 not discounted", "Food Rs 1,500 before tax · value
  * deals Rs 3,600 and delivery charge Rs 200 not discounted" — and, when only
  * value deals are left for it, NOTHING_TO_DISCOUNT (the main process's words).
+ * With the owner's switch on, a delivery charge counted in beside value deals
+ * is named: "Food and delivery charge Rs 1,700 before tax · value deals Rs
+ * 3,600 not discounted". `basis` is discountRuleBasisNow for the same order —
+ * what the limit line under it says (approvalRuleText), so the two agree.
  */
-export function discountBaseText(p: DiscountBaseNow, subtotalCents: number): string {
+export function discountBaseText(p: DiscountBaseNow, subtotalCents: number, basis?: ApprovalRuleBasis): string {
   if (p.dealsCents > 0) {
     if (p.baseCents === 0) return NOTHING_TO_DISCOUNT;
     const charge = p.untouchedCents > 0 ? ` and delivery charge ${formatCents(p.untouchedCents)}` : '';
-    return `Food ${formatCents(p.baseCents)} before tax · value deals ${formatCents(p.dealsCents)}${charge} not discounted`;
+    const what = basis === 'food_and_charge_no_deals' ? 'Food and delivery charge' : 'Food';
+    return `${what} ${formatCents(p.baseCents)} before tax · value deals ${formatCents(p.dealsCents)}${charge} not discounted`;
   }
   if (p.untouchedCents > 0) {
     return `Food ${formatCents(p.baseCents)} before tax · delivery charge ${formatCents(p.untouchedCents)} not discounted`;
@@ -370,6 +392,22 @@ export function discountScopeNow(
   mode: string | null | undefined,
 ): DiscountScope {
   return { alsoOffDeliveryCharge: rules.alsoOffDeliveryCharge, skipsNoDiscountLines: mode !== 'foodpanda' };
+}
+
+/**
+ * What the limit line says a discount given now is checked on (pos-domain
+ * approvalRuleBasis on discountScopeNow — the main process's refusal names
+ * the same): the order, the food, the food without the value deals, or —
+ * the owner's switch on — the food and delivery charge without them. The
+ * header (discountBaseText) takes it too, so the two never name different
+ * things.
+ */
+export function discountRuleBasisNow(
+  lines: ReadonlyArray<DiscountLine>,
+  rules: Pick<DiscountScreenRules, 'alsoOffDeliveryCharge'>,
+  mode: string | null | undefined,
+): ApprovalRuleBasis {
+  return approvalRuleBasis(lines, discountScopeNow(rules, mode));
 }
 
 /**

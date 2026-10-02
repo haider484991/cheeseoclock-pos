@@ -302,6 +302,38 @@ live('a till discount leaves the value deals alone', () => {
     expect(orderRow(ipcOrder)).toEqual({ subtotal_cents: 780_000, discount_cents: 49_900, tax_cents: 109_515, total_cents: 839_615 });
   });
 
+  it('the refusal names what the limit counted under either switch: the food, or — the owner’s switch on — the food and delivery charge (the deals never)', async () => {
+    const lines: Array<[keyof typeof menu, number]> = [
+      ['smallPizza', 1],
+      ['bigTwo', 1],
+      ['charge', 1],
+    ];
+    const refusal = (what: string) =>
+      `Manager approval required for this discount. Up to 10% off, or up to Rs 500 off if that is no more than 10% of ${what} (value deals not counted), without a manager. More needs a manager's PIN or password.`;
+    // Switch off (released): Rs 100 is over 10% of the Rs 600 pizza.
+    const off = await counterOrder('delivery', lines);
+    h.session = CASHIER;
+    expect(await call('orders:applyDiscount', { orderId: off, discountType: 'flat', value: 10_000, reason: 'Staff' })).toEqual({
+      ok: false,
+      code: 'precondition_failed',
+      message: refusal('the food'),
+    });
+    // Switch on: Rs 100 is over 10% of the pizza and the Rs 200 charge (Rs 800), and the words say both.
+    const { setBusinessSetting } = await import('../../db/repositories/business-settings-repo.js');
+    setBusinessSetting(db as never, 'discounts.delivery', { v: 1, alsoOffDeliveryCharge: true }, OWNER_ACTOR);
+    const on = await counterOrder('delivery', lines);
+    h.session = CASHIER;
+    expect(await call('orders:applyDiscount', { orderId: on, discountType: 'flat', value: 10_000, reason: 'Staff' })).toEqual({
+      ok: false,
+      code: 'precondition_failed',
+      message: refusal('the food and delivery charge'),
+    });
+    // Rs 80 is 10% of Rs 800: no manager, and it comes off the pizza and the charge, never the deal.
+    await data('orders:applyDiscount', { orderId: on, discountType: 'flat', value: 8_000, reason: 'Staff' });
+    expect(liveDiscounts(on)).toMatchObject([{ amount_cents: 8_000, approved_by_user_id: null }]);
+    expect(h.pinChecks).toBe(0);
+  });
+
   it('an order of deals only: refused before any manager’s PIN is checked, in the IPC handler and the repository, and nothing is written', async () => {
     const takeaway = await counterOrder('takeaway', [['bigTwo', 2]]);
     // A delivery: the charge is left alone by the owner's switch, so nothing is left either.

@@ -8,9 +8,11 @@
  * priced lines prints "—", and a sum with an unpriced part says "at least".
  * What you keep is printed only when the sheet carries it (profit.view, the
  * owner's: the main process leaves it out for anyone else).
+ * Its "Printed …" time is Pakistan time, as on every paper (shared-types
+ * paperDateTime), whatever zone the PC is set to.
  */
 import { formatCents } from '@cheeseoclock/pos-domain';
-import type { BatchCalc, CostLineView, ItemCostSheet, MenuCostRow } from '@cheeseoclock/shared-types';
+import { paperDateTime, type BatchCalc, type CostLineView, type ItemCostSheet, type MenuCostRow } from '@cheeseoclock/shared-types';
 import { escapeHtml } from '../reports/exporters';
 import {
   FLAG_LABEL,
@@ -85,7 +87,7 @@ export function costSheetPrintHtml(sheet: ItemCostSheet, printedAt: Date = new D
   parts.push(
     `<header><h1>Cost sheet — ${esc(r.name)}</h1>` +
       `<div>${headline(r)}</div>` +
-      `<div class="muted">At today's prices on this till, menu price before tax. Sold in the last 28 days: ${r.soldLast28}. Printed ${esc(printedAt.toLocaleString('en-PK'))}.</div></header>`,
+      `<div class="muted">At today's prices on this till, menu price before tax. Sold in the last 28 days: ${r.soldLast28}. Printed ${esc(paperDateTime(printedAt))}.</div></header>`,
   );
   parts.push(
     `<section><h2>Always in it — ${esc(atLeast(sheet.alwaysCostCents, hasMissing(sheet.always)))}</h2><table>${HEAD('Of the plate')}<tbody>${lineRows(sheet.always)}</tbody></table></section>`,
