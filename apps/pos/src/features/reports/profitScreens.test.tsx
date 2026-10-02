@@ -161,7 +161,14 @@ describe('profit in plain words (costing spec D15)', () => {
     // foodpanda's fee on the total (Settings → foodpanda; v0.7.20's "Foodpanda" payment fee) is said with the rest.
     expect(commissionText({ foodpanda: { ...typed, paymentFeeBps: 200 } })).toContain("plus Rs 25 an order, 16% tax on the commission and 2% of each order's total.");
     expect(riderText({ mode: 'zone_rate', fixedCents: 0 })).toContain("the rider service's rate for each area");
-    expect(riderText({ mode: 'fixed', fixedCents: 15_000 })).toBe('Rider cost: Rs 150 a trip.');
+    // v0.7.34 (19-2): every setting is followed by what an outside rider sent out costs.
+    expect(riderText({ mode: 'fixed', fixedCents: 15_000 })).toBe('Rider cost: Rs 150 a trip. An outside rider (Send out) costs what he kept: the delivery charge.');
+    for (const mode of ['zone_rate', 'fixed', 'none'] as const) {
+      expect(riderText({ mode, fixedCents: 15_000 })).toMatch(/\. An outside rider \(Send out\) costs what he kept: the delivery charge\.$/);
+    }
+    expect(riderText({ mode: 'none', fixedCents: 0 })).toBe(
+      'Rider cost: none per trip (your own riders on a salary). An outside rider (Send out) costs what he kept: the delivery charge.',
+    );
   });
 
   it('break-even and per week (costing spec 4.8, 4.9)', () => {

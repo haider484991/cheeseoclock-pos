@@ -8,6 +8,9 @@
  *     own line — the stored order totals never change;
  *   - rider cost: the zone's rate even with a discount on the order,
  *     the charge at menu price with no area, neither: Rs 0 and listed;
+ *   - an outside rider sent out with the order (Send out, v0.7.34) costs
+ *     what he kept, whatever the setting; a cancelled or refunded one is in
+ *     no figure; a shop with no Send out gives the figures it gave before;
  *   - a foodpanda order against the same food delivered by the shop;
  *   - the stock-loss step only between two FULL stock takes;
  *   - Menu's cost and profit per item and per category, on fully costed sales;
@@ -566,5 +569,237 @@ live('test orders the owner deleted (0043): in no profit figure; their food is W
     expect((viaWorker('menuMap', s.period) as { categories: Array<{ categoryId: string; units: number }> }).categories.find((c) => c.categoryId === s.cat.pizza)).toMatchObject({ units: 2 });
     expect((viaWorker('whatIf', { ingredients: [], items: [] }) as typeof whatIf).rows.find((r) => r.menuItemId === s.item.fajitaM)).toMatchObject({ soldLast28: 2 });
     expect((viaWorker('channels', s.period) as typeof ch).areas).toEqual([]);
+  });
+});
+
+type Shop = Awaited<ReturnType<typeof shop>>;
+
+/**
+ * A delivery sent out with an outside rider, the till's own way (v0.7.34):
+ * rung as a Delivery, sent to the kitchen, Send out (what he keeps frozen on
+ * the order: its delivery-charge lines as sold), then — unless `unpaid` —
+ * Delivered + Pay in cash (the payment of the total, and the drawer's
+ * payout of what he kept, linked to the order).
+ */
+function sentOut(s: Shop, lines: Line[], area: string | null, o: { phone?: string; unpaid?: boolean } = {}): string {
+  const order = s.r.createOrder(s.db, { mode: 'delivery' }, CASHIER);
+  for (const [it, quantity, picks = []] of lines) {
+    s.r.addOrderItem(s.db, { orderId: order.id, menuItemId: s.item[it], quantity, modifierIds: picks.map((p) => s.choice[p]), notes: null }, CASHIER);
+  }
+  const address = area === null ? null : JSON.stringify({ label: 'Home', addressLine: 'House 2', area, city: 'Karachi', notes: null });
+  s.db.prepare(`UPDATE orders SET delivery_address_snapshot = ?, customer_phone_snapshot = ? WHERE id = ?`).run(address, o.phone ?? null, order.id);
+  s.r.sendOrderToKitchen(s.db, order.id, CASHIER);
+  const sent = s.r.sendOutOrder(s.db, order.id, CASHIER);
+  if (!o.unpaid) {
+    s.r.markOrderDelivered(
+      s.db,
+      { orderId: order.id, payment: { method: 'cash', amountCents: sent.totalCents }, riderKeepsCents: sent.riderKeepsCents ?? null },
+      CASHIER,
+    );
+  }
+  return order.id;
+}
+
+const keptOf = (s: Shop, id: string) => (s.db.prepare(`SELECT rider_keeps_cents AS k FROM orders WHERE id = ?`).get(id) as { k: number | null }).k;
+/** The drawer's live payouts to the outside rider linked to an order (kept charge or trip). */
+const payoutsOf = (s: Shop, id: string) =>
+  Number(
+    (s.db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM cash_movements WHERE order_id = ? AND type = 'payout' AND deleted_at IS NULL`).get(id) as { c: number })
+      .c,
+  );
+
+live('outside riders (Send out, v0.7.34): an outside rider costs what he kept', () => {
+  it('kept Rs 200 → rider Rs 200 and the delivery charge adds nothing, whatever the setting; an own-rider order keeps the zone rate', async () => {
+    const s = await shop();
+    // DHA Phase 8 is a Rs 250 zone: two Rs 100 charge lines on the bill, so he keeps Rs 200 (not the zone's Rs 250).
+    const out = sentOut(s, [['fajitaM', 1], ['delivery', 2]], 'DHA Phase 8', { phone: '03000000021' });
+    // One of the shop's own riders in DHA Phase 6 (a Rs 200 zone) with a Rs 100 charge on the bill.
+    const own = s.sale([['fajitaM', 1], ['delivery', 1]], { mode: 'delivery', area: 'DHA Phase 6', phone: '03000000022' });
+    expect(keptOf(s, out)).toBe(20_000);
+    expect(keptOf(s, own)).toBeNull();
+    // The drawer paid him his Rs 200 when he settled: cash, never a Profit cost on top (nothing counts twice).
+    expect(payoutsOf(s, out)).toBe(20_000);
+
+    const t = s.tab();
+    expect(s.step(t, 'rider')).toBe(-(20_000 + 20_000));
+    expect(t.noRateCount).toBe(0);
+    expect(t.steps.reduce((a, x) => a + x.cents, 0)).toBe(t.profitCents);
+    const delivery = t.channels.find((c) => c.channel === 'delivery')!;
+    expect(delivery).toMatchObject({ orderCount: 2, feeSalesCents: 30_000, riderCents: 40_000, setAsideCents: 0 });
+    // The outside order earns its food alone (Rs 200 charge − Rs 200 kept = 0); the own one its food + Rs 100 − Rs 200.
+    expect(delivery.contributionCents).toBe(120_000 - s.keptCost(out) + (120_000 - s.keptCost(own) + 10_000 - 20_000));
+
+    // By area: the outside order alone in DHA Phase 8 — rider Rs 200, and per order its food alone.
+    const area = (key: string) => s.r.buildReportTab(s.db, 'channels', s.period).areas.find((a) => a.key === key)!;
+    expect(area('zone:dha-8')).toMatchObject({ orderCount: 1, feesCollectedCents: 20_000, riderCents: 20_000, contributionPerOrderCents: 120_000 - s.keptCost(out) });
+    expect(area('zone:dha-6')).toMatchObject({ orderCount: 1, riderCents: 20_000, contributionPerOrderCents: 120_000 - s.keptCost(own) + 10_000 - 20_000 });
+
+    // A fixed rate per trip: the own rider's trip changes, the outside rider's does not.
+    s.r.setBusinessSetting(s.db, 'delivery.riderCost', { mode: 'fixed', fixedCents: 15_000 }, MANAGER);
+    expect(s.step(s.tab(), 'rider')).toBe(-(20_000 + 15_000));
+    expect(area('zone:dha-8').riderCents).toBe(20_000);
+    expect(area('zone:dha-6').riderCents).toBe(15_000);
+    // Salaried riders: nothing for the own rider, still what the outside rider kept.
+    s.r.setBusinessSetting(s.db, 'delivery.riderCost', { mode: 'none', fixedCents: 15_000 }, MANAGER);
+    const none = s.tab();
+    expect(s.step(none, 'rider')).toBe(-20_000);
+    expect(none.channels.find((c) => c.channel === 'delivery')).toMatchObject({ riderCents: 20_000 });
+    expect(area('zone:dha-8').riderCents).toBe(20_000);
+    expect(area('zone:dha-6').riderCents).toBe(0);
+  });
+
+  it('kept 0 (sent out with no delivery charge for him) costs Rs 0 under every setting, and is not a delivery with no rate', async () => {
+    const s = await shop();
+    // No zone and no charge on the bill: under the setting alone it would be "no area or delivery charge".
+    const addOn = sentOut(s, [['fajitaM', 1]], 'Gulshan Block 5', { phone: '03000000031' });
+    expect(keptOf(s, addOn)).toBe(0);
+    expect(payoutsOf(s, addOn)).toBe(0);
+    for (const setting of [
+      { mode: 'zone_rate' as const, fixedCents: 0 },
+      { mode: 'fixed' as const, fixedCents: 15_000 },
+      { mode: 'none' as const, fixedCents: 0 },
+    ]) {
+      s.r.setBusinessSetting(s.db, 'delivery.riderCost', setting, MANAGER);
+      const t = s.tab();
+      expect(s.step(t, 'rider')).toBe(0);
+      expect(t.noRateCount).toBe(0);
+      const ch = s.r.buildReportTab(s.db, 'channels', s.period);
+      expect(ch.noRateDeliveries).toEqual([]);
+      expect(ch.areas.map((a) => [a.key, a.riderCents])).toEqual([['text:gulshan block 5', 0]]);
+    }
+  });
+
+  it('a cancelled or fully refunded outside order is in no profit figure — its frozen keep and its payout included', async () => {
+    const s = await shop();
+    s.sale([['fajitaM', 2]]);
+    s.sale([['fajitaM', 1], ['delivery', 1]], { mode: 'delivery', area: 'DHA Phase 6', phone: '03000000041' });
+    const before = s.tab();
+    const channelsBefore = s.r.buildReportTab(s.db, 'channels', s.period);
+
+    // Refunded in full after he settled: his Rs 200 payout stays his. The food left the shop, so it is waste.
+    const refunded = sentOut(s, [['fajitaM', 1], ['delivery', 2]], 'DHA Phase 8', { phone: '03000000042' });
+    s.r.refundOrder(s.db, { orderId: refunded, reason: 'Customer changed order', approverUserId: MANAGER.userId, foodMade: 'made' }, MANAGER);
+    // Cancelled at the door, the rider paid for the wasted trip.
+    const cancelled = sentOut(s, [['fajitaM', 1], ['delivery', 2]], 'DHA Phase 8', { phone: '03000000043', unpaid: true });
+    s.r.voidOrder(
+      s.db,
+      { orderId: cancelled, reason: 'Customer refused at the door', approverUserId: MANAGER.userId, payRiderForTrip: true, foodMade: 'made' },
+      MANAGER,
+    );
+    // A cancel that raced Rider paid on the other till (18-13): void, yet holding paid_at, the frozen keep and the payout.
+    const raced = sentOut(s, [['fajitaM', 1], ['delivery', 2]], 'DHA Phase 8', { phone: '03000000044' });
+    s.db.prepare(`UPDATE orders SET status = 'void' WHERE id = ?`).run(raced);
+    expect(s.r.findOrder(s.db, refunded)!.status).toBe('refunded');
+    expect(s.r.findOrder(s.db, cancelled)!.status).toBe('void');
+    expect(s.r.findOrder(s.db, raced)!.paidAt).not.toBeNull();
+    for (const id of [refunded, cancelled, raced]) {
+      expect(keptOf(s, id)).toBe(20_000);
+      expect(payoutsOf(s, id)).toBe(20_000);
+    }
+
+    // Not one rupee of them anywhere in Profit — their sales, rider, charges, per order — nor in Channels &
+    // delivery's areas or what each order type earns. Only Waste moves: the food of the two that left
+    // and came to nothing (the drawer's payouts to the rider are cash, never a Profit cost).
+    const after = s.tab();
+    const butWaste = (t: typeof before) => {
+      const { steps, profitCents, wasteByReason: _byReason, wasteLabels: _labels, ...rest } = t;
+      const waste = steps.find((x) => x.key === 'waste')?.cents ?? 0;
+      return { ...rest, steps: steps.filter((x) => x.key !== 'waste'), profitCents: profitCents - waste };
+    };
+    expect(butWaste(after)).toEqual(butWaste(before));
+    expect(s.step(after, 'waste')!).toBeLessThan(s.step(before, 'waste')!);
+    expect(s.step(after, 'rider')).toBe(-20_000);
+    const channelsAfter = s.r.buildReportTab(s.db, 'channels', s.period);
+    expect(channelsAfter.areas).toEqual(channelsBefore.areas);
+    expect(channelsAfter.noRateDeliveries).toEqual(channelsBefore.noRateDeliveries);
+    expect(channelsAfter.profit).toEqual(channelsBefore.profit);
+  });
+
+  it('a shop with no Send out (rider_keeps_cents NULL, every order before 0.7.34) gives the figures it gave before 19-2, in every setting', async () => {
+    const s = await shop();
+    s.sale([['fajitaM', 2]]);
+    s.sale([['fajitaM', 1], ['delivery', 1]], { mode: 'delivery', area: 'DHA Phase 6', discountPct: 10, phone: '03000000011' });
+    s.sale([['fajitaM', 1], ['delivery', 1]], { mode: 'delivery', area: 'DHA Phase 8', phone: '03000000012' });
+    s.sale([['fajitaM', 1], ['delivery', 1]], { mode: 'delivery', area: null });
+    s.sale([['fajitaM', 1]], { mode: 'delivery', area: 'Gulshan Block 5', phone: '03000000011' });
+    s.sale([['bakedWings', 1], ['delivery', 1]], { mode: 'delivery', area: 'DHA Phase 6' });
+    s.sale([['fajitaM', 1], ['bakedWings', 1]], { mode: 'delivery', area: 'phase 8' });
+    const web = s.sale([['fajitaM', 1], ['delivery', 1]], { mode: 'delivery', area: 'DHA Phase 6', phone: '03000000013' });
+    s.db.prepare(`UPDATE orders SET source = 'web' WHERE id = ?`).run(web);
+    s.sale([['fajitaM', 1]], { mode: 'foodpanda' });
+    s.sale([['bakedWings', 1]], { mode: 'foodpanda' });
+    s.sale([['veggieL', 1, ['pickOnion', 'pickPepper', 'pickOlive', 'pickMushroom', 'pickCorn', 'dipChili']], ['cola', 2]]);
+    expect((s.db.prepare(`SELECT COUNT(*) AS n FROM orders WHERE rider_keeps_cents IS NOT NULL`).get() as { n: number }).n).toBe(0);
+    const figures = () => {
+      const t = s.tab();
+      const ch = s.r.buildReportTab(s.db, 'channels', s.period);
+      return {
+        steps: t.steps.map((x) => [x.key, x.cents]),
+        profit: t.profitCents,
+        unknown: t.unknownSalesCents,
+        noRate: [t.noRateCount, ch.noRateCount],
+        channels: t.channels.map((c) => [c.channel, c.orderCount, c.salesCents, c.feeSalesCents, c.riderCents, c.setAsideCents, c.contributionCents, c.contributionPerOrderCents]),
+        areas: ch.areas.map((a) => [a.key, a.orderCount, a.feesCollectedCents, a.riderCents, a.contributionPerOrderCents]),
+      };
+    };
+    // The golden: recorded from the code before 19-2 on this same made-up shop. Channels are
+    // [channel, orders, sales, fee sales, rider, set aside, earns, per order]; areas
+    // [area, orders, charges collected, rider, per order].
+    expect(figures()).toEqual({
+      steps: [['sales', 1_538_000], ['food_cost', -181_798], ['unknown_cost', -230_000], ['waste', 0], ['sent_not_paid', 0], ['commission', -50_000], ['payment_fees', 0], ['rider', -120_000]],
+      profit: 956_202,
+      unknown: 270_000,
+      noRate: [1, 1],
+      channels: [
+        ['delivery', 6, 788_000, 40_000, 100_000, -20_000, 459_795, 99_955],
+        ['takeaway', 2, 420_000, 0, 0, 0, 331_689, 180_954],
+        ['foodpanda', 2, 200_000, 0, 0, -20_000, 72_359, 72_359],
+        ['web_delivery', 1, 130_000, 10_000, 20_000, 0, 92_359, 92_359],
+      ],
+      areas: [
+        ['zone:dha-6', 3, 30_000, 60_000, 86_359],
+        ['zone:dha-8', 2, 10_000, 50_000, 109_199],
+        ['none', 1, 10_000, 10_000, 102_359],
+        ['text:gulshan block 5', 1, 0, 0, 102_359],
+      ],
+    });
+    s.r.setBusinessSetting(s.db, 'delivery.riderCost', { mode: 'fixed', fixedCents: 15_000 }, MANAGER);
+    expect(figures()).toEqual({
+      steps: [['sales', 1_538_000], ['food_cost', -181_798], ['unknown_cost', -239_000], ['waste', 0], ['sent_not_paid', 0], ['commission', -50_000], ['payment_fees', 0], ['rider', -105_000]],
+      profit: 962_202,
+      unknown: 270_000,
+      noRate: [1, 1],
+      channels: [
+        ['delivery', 6, 788_000, 40_000, 90_000, -11_000, 460_795, 100_173],
+        ['takeaway', 2, 420_000, 0, 0, 0, 331_689, 180_954],
+        ['foodpanda', 2, 200_000, 0, 0, -20_000, 72_359, 72_359],
+        ['web_delivery', 1, 130_000, 10_000, 15_000, 0, 97_359, 97_359],
+      ],
+      areas: [
+        ['zone:dha-6', 3, 30_000, 45_000, 91_359],
+        ['zone:dha-8', 2, 10_000, 30_000, 119_199],
+        ['none', 1, 10_000, 15_000, 97_359],
+        ['text:gulshan block 5', 1, 0, 15_000, 87_359],
+      ],
+    });
+    s.r.setBusinessSetting(s.db, 'delivery.riderCost', { mode: 'none', fixedCents: 15_000 }, MANAGER);
+    expect(figures()).toEqual({
+      steps: [['sales', 1_538_000], ['food_cost', -181_798], ['unknown_cost', -260_000], ['waste', 0], ['sent_not_paid', 0], ['commission', -50_000], ['payment_fees', 0], ['rider', 0]],
+      profit: 1_046_202,
+      unknown: 270_000,
+      noRate: [1, 1],
+      channels: [
+        ['delivery', 6, 788_000, 40_000, 0, 10_000, 529_795, 115_173],
+        ['takeaway', 2, 420_000, 0, 0, 0, 331_689, 180_954],
+        ['foodpanda', 2, 200_000, 0, 0, -20_000, 72_359, 72_359],
+        ['web_delivery', 1, 130_000, 10_000, 0, 0, 112_359, 112_359],
+      ],
+      areas: [
+        ['zone:dha-6', 3, 30_000, 0, 106_359],
+        ['zone:dha-8', 2, 10_000, 0, 134_199],
+        ['none', 1, 10_000, 0, 112_359],
+        ['text:gulshan block 5', 1, 0, 0, 102_359],
+      ],
+    });
   });
 });

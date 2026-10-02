@@ -11,7 +11,15 @@
  *    they cost (item and category profit start the day costing started);
  * and one read of the orders themselves (readOrders) for what the lines
  * don't say: foodpanda's commission and price uplift, payment fees, and the
- * rider (the zone's rate, else the delivery charge at menu price).
+ * rider (the zone's rate, else the delivery charge at menu price; an outside
+ * rider sent out with the order, v0.7.34, costs what he kept).
+ *
+ * Outside riders: what one kept (orders.rider_keeps_cents, frozen at Send
+ * out) is the order's rider cost whatever 'delivery.riderCost' says, so the
+ * delivery charge he took adds nothing to what the order earns. The drawer's
+ * payouts to him (cash_movements.order_id) are cash, never a Profit cost, so
+ * nothing counts twice; a cancelled or fully refunded order is not counted
+ * (COUNTED), even when it still holds a frozen keep or a trip payout.
  *
  * foodpanda's money per order is pos-domain foodpandaOrderMoney — THE rule
  * Reports → Channels' foodpanda block uses too (business-report
@@ -566,18 +574,20 @@ export function readSales(db: AppDatabase, range: ReportRange, opts: { estimates
 // ---------------------------------------------------------------- the orders --
 
 /**
- * The period's own-rider deliveries and foodpanda orders, one row each (by
- * the orders' date index) — the only orders with a commission or a rider:
- * their stored money, for a delivery the area and the delivery-charge lines
- * at menu price, for a foodpanda order the terms it kept at payment
- * (order_channel_terms: one live row per order at most). Params:
- * delivery-charge items (JSON), since, until.
+ * The period's phone and website deliveries and foodpanda orders, one row
+ * each (by the orders' date index) — the only orders with a commission or a
+ * rider: their stored money, for a delivery the area, the delivery-charge
+ * lines at menu price and what an outside rider kept (rider_keeps_cents,
+ * frozen at Send out; NULL for the shop's own riders and before 0.7.34), for
+ * a foodpanda order the terms it kept at payment (order_channel_terms: one
+ * live row per order at most). Params: delivery-charge items (JSON), since,
+ * until.
  */
 export const PROFIT_ORDERS_SQL = `
   SELECT o.rowid AS oid, o.id AS id, o.order_number AS number, o.created_at AS createdAt, o.mode AS mode, o.source AS source,
          o.subtotal_cents AS sub, o.discount_cents AS disc, o.total_cents AS tot, ${REFUNDED} AS ref,
          ${KEPT_TERMS_COLUMNS},
-         ${AREA} AS area,
+         ${AREA} AS area, o.rider_keeps_cents AS kept,
          CASE WHEN o.mode = 'delivery' THEN
            (SELECT SUM(x.line_total_cents) FROM order_items x
              WHERE x.order_id = o.id AND x.deleted_at IS NULL
@@ -696,6 +706,7 @@ export function readOrderCosts(db: AppDatabase, range: ReportRange, menu: MenuLo
     upliftBps: number | null;
     payout: number | null;
     area: string | null;
+    kept: number | null;
     charge: number | null;
     minutesOut: number | null;
   }>) {
@@ -705,7 +716,13 @@ export function readOrderCosts(db: AppDatabase, range: ReportRange, menu: MenuLo
     const fpMoney = foodpanda ? foodpandaOrderMoney(money, keptTermsOf(r), fp) : null;
     const delivery = r.mode === 'delivery';
     const where = delivery ? areaOf(r.area) : null;
-    const rider = { delivery, zoneFeeCents: where?.zoneFeeCents ?? null, chargeCents: r.charge === null ? null : Number(r.charge) };
+    // An outside rider (Send out) costs what he kept, frozen on the order; the shop's own riders the owner's setting.
+    const rider = {
+      delivery,
+      zoneFeeCents: where?.zoneFeeCents ?? null,
+      chargeCents: r.charge === null ? null : Number(r.charge),
+      keptCents: r.kept === null ? null : Number(r.kept),
+    };
     out.push({
       oid: Number(r.oid),
       id: r.id,

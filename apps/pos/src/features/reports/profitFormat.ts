@@ -113,8 +113,15 @@ export function commissionText(fees: Pick<ProfitFees, 'foodpanda'>): string {
   return `foodpanda commission: ${formatBps(f.commissionBps)}${confirmed} of ${COMMISSION_BASE_WORDS[f.base]}${plus}.${prices} Orders paid with a confirmed commission keep the terms they were paid with; the rest use these (Settings → foodpanda).`;
 }
 
-/** How a delivery's rider cost is worked out, in a sentence. */
+/** After the rider sentence, whatever the setting: a delivery sent out with an outside rider costs what he kept (pos-domain riderCost, 'kept'). */
+export const OUTSIDE_RIDER_COST_WORDS = 'An outside rider (Send out) costs what he kept: the delivery charge.';
+
+/** How a delivery's rider cost is worked out, in a sentence, then what an outside rider costs. */
 export function riderText(r: RiderCostSetting): string {
+  return `${ownRiderText(r)} ${OUTSIDE_RIDER_COST_WORDS}`;
+}
+
+function ownRiderText(r: RiderCostSetting): string {
   switch (r.mode) {
     case 'zone_rate':
       return "Rider cost: the rider service's rate for each area (the delivery fee of its zone); with no area, the delivery charge on the bill.";

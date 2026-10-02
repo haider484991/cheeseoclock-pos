@@ -67,6 +67,10 @@ export interface ChannelFees extends PaymentFees {
  *    area or delivery charge";
  *  - 'fixed': the same amount for every trip;
  *  - 'none': the shop's own salaried riders, nothing per trip.
+ * A delivery sent out with an outside rider (Send out, v0.7.34) is not
+ * priced by this setting: it costs what he kept (orders.rider_keeps_cents,
+ * the delivery charge frozen at Send out), whichever mode is chosen
+ * (pos-domain riderCost, source 'kept').
  */
 export const RIDER_COST_MODES = ['zone_rate', 'fixed', 'none'] as const;
 export type RiderCostMode = (typeof RIDER_COST_MODES)[number];

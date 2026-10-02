@@ -198,6 +198,8 @@ describe('who sees What-if and the fees', () => {
     const manager = render(<ChannelFeesCard canEdit={false} />, [[[...COSTING_KEY, 'channelFees'], view]]);
     expect(manager).toContain('Nothing is saved yet: no card fees');
     expect(manager).toContain('Only the owner can change these.');
+    // v0.7.34 (19-2): an outside rider sent out costs what he kept, whichever is chosen.
+    expect(manager).toContain('Deliveries sent out with an outside rider: the delivery charge he kept counts, whatever is chosen here.');
     expect(manager).not.toContain('Save the fees');
     // A manager's view has no foodpanda part (the main process leaves it out): no commission at all.
     expect(manager).not.toMatch(/commission/i);

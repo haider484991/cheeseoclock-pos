@@ -43,6 +43,13 @@ const RIDER_LABEL: Record<RiderCostMode, string> = {
   none: 'Nothing per trip (riders on a salary)',
 };
 
+/**
+ * Under 'Your riders', whichever is chosen: a delivery sent out with an
+ * outside rider (Send out, v0.7.34) costs what he kept — the delivery
+ * charge frozen at Send out — not this setting (pos-domain riderCost, 'kept').
+ */
+export const OUTSIDE_RIDER_FEES_NOTE = 'Deliveries sent out with an outside rider: the delivery charge he kept counts, whatever is chosen here.';
+
 const pct = (bps: number) => new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2, useGrouping: false }).format(bps / 100);
 
 export function ChannelFeesCard({ canEdit }: { canEdit: boolean }) {
@@ -213,6 +220,7 @@ function ChannelFeesForm({ view, canEdit }: { view: ChannelFeesView; canEdit: bo
             </label>
           )}
           {riderMode === 'zone_rate' && <p className="pl-6 text-xs text-stone-500">With no area on the address, the delivery charge on the bill.</p>}
+          <p className="text-xs text-stone-500">{OUTSIDE_RIDER_FEES_NOTE}</p>
         </fieldset>
       </div>
 

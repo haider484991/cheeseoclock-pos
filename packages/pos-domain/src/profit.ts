@@ -125,30 +125,44 @@ export function paymentFeeCents(
 
 /**
  * Where a delivery's rider cost came from:
+ *  - 'kept':    an outside rider kept the delivery charge (Send out): what
+ *               he kept, frozen on the order (orders.rider_keeps_cents);
  *  - 'zone':    the rider service's rate for the order's area;
  *  - 'charge':  no area recognised: the delivery charge on the bill, at menu price;
  *  - 'fixed':   the owner's fixed amount per trip;
  *  - 'none':    not a delivery, or the shop's own salaried riders;
  *  - 'no_rate': no area and no delivery charge: Rs 0, and listed.
  */
-export type RiderCostSource = 'zone' | 'charge' | 'fixed' | 'none' | 'no_rate';
+export type RiderCostSource = 'kept' | 'zone' | 'charge' | 'fixed' | 'none' | 'no_rate';
 
 export interface RiderCostInput {
-  /** An own-rider delivery (phone or website); foodpanda brings its own. */
+  /** A phone or website delivery (the shop's own rider or an outside one); foodpanda brings its own. */
   delivery: boolean;
   /** The fee of the delivery zone the order's area is in; null when it names none (or zones that differ). */
   zoneFeeCents: number | null;
   /** The delivery-charge lines on the bill at menu price (never the discounted fee); null when there is none. */
   chargeCents: number | null;
+  /**
+   * What an outside rider kept of this order (orders.rider_keeps_cents,
+   * frozen at Send out, v0.7.34; 0 = sent out with no charge for him to
+   * keep, such as an add-on that went with another order). Null or absent:
+   * one of the shop's own riders, an order not sent out, or one from before
+   * 0.7.34 — priced by the owner's setting, as before.
+   */
+  keptCents?: number | null;
 }
 
 /**
- * A delivery's rider cost (costing spec 4.7): by default the zone's rate —
- * even when the delivery charge was discounted or left off — else the
- * delivery charge at menu price, else Rs 0 ('no_rate', listed for the owner).
+ * A delivery's rider cost (costing spec 4.7). An outside rider sent out with
+ * the order (Send out) costs what he kept — whatever the owner chose for his
+ * own riders, 'none' and 'fixed' included: the delivery charge left the
+ * shop with him. Otherwise by default the zone's rate — even when the
+ * delivery charge was discounted or left off — else the delivery charge at
+ * menu price, else Rs 0 ('no_rate', listed for the owner).
  */
 export function riderCost(setting: RiderCostSetting, o: RiderCostInput): { cents: number; source: RiderCostSource } {
   if (!o.delivery) return { cents: 0, source: 'none' };
+  if (typeof o.keptCents === 'number') return { cents: o.keptCents, source: 'kept' };
   switch (setting.mode) {
     case 'none':
       return { cents: 0, source: 'none' };
@@ -161,9 +175,13 @@ export function riderCost(setting: RiderCostSetting, o: RiderCostInput): { cents
   }
 }
 
-/** A delivery with no area recognised and no delivery charge on the bill (costing spec 4.14), whatever the rider mode. */
+/**
+ * A delivery with no area recognised and no delivery charge on the bill
+ * (costing spec 4.14), whatever the rider mode. Never one an outside rider
+ * took out: what he kept (even 0) is its rider cost.
+ */
 export function isNoRateDelivery(o: RiderCostInput): boolean {
-  return o.delivery && o.zoneFeeCents === null && o.chargeCents === null;
+  return o.delivery && typeof o.keptCents !== 'number' && o.zoneFeeCents === null && o.chargeCents === null;
 }
 
 // --------------------------------------------------------- contribution --

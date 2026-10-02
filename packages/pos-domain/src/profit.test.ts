@@ -128,6 +128,60 @@ describe('rider cost (costing spec 4.7)', () => {
     expect(riderCost({ mode: 'none', fixedCents: 15_000 }, o)).toEqual({ cents: 0, source: 'none' });
     expect(riderCost(zone, { ...o, delivery: false })).toEqual({ cents: 0, source: 'none' });
   });
+
+  describe('an outside rider sent out with the order (Send out, v0.7.34): what he kept', () => {
+    // A Rs 250 zone, a Rs 200 delivery charge on the bill, and he kept the Rs 200.
+    const out = { delivery: true, zoneFeeCents: 25_000, chargeCents: 20_000, keptCents: 20_000 };
+
+    it("wins under every setting — 'zone_rate', 'fixed' and 'none' — with source 'kept'", () => {
+      expect(riderCost(zone, out)).toEqual({ cents: 20_000, source: 'kept' });
+      expect(riderCost({ mode: 'fixed', fixedCents: 15_000 }, out)).toEqual({ cents: 20_000, source: 'kept' });
+      expect(riderCost({ mode: 'none', fixedCents: 15_000 }, out)).toEqual({ cents: 20_000, source: 'kept' });
+      // With no area and no charge on the bill it is still what he kept, and the order is not listed.
+      const bare = { delivery: true, zoneFeeCents: null, chargeCents: null, keptCents: 20_000 };
+      expect(riderCost(zone, bare)).toEqual({ cents: 20_000, source: 'kept' });
+      expect(isNoRateDelivery(bare)).toBe(false);
+    });
+
+    it('kept 0 (sent out with no charge for him to keep) costs Rs 0, under every setting, and is not a delivery with no rate', () => {
+      const addOn = { delivery: true, zoneFeeCents: null, chargeCents: null, keptCents: 0 };
+      for (const s of [zone, { mode: 'fixed' as const, fixedCents: 15_000 }, { mode: 'none' as const, fixedCents: 0 }]) {
+        expect(riderCost(s, addOn)).toEqual({ cents: 0, source: 'kept' });
+        expect(riderCost(s, { ...addOn, zoneFeeCents: 25_000, chargeCents: 20_000 })).toEqual({ cents: 0, source: 'kept' });
+      }
+      expect(isNoRateDelivery(addOn)).toBe(false);
+    });
+
+    it("kept null or absent (the shop's own rider, or an order from before 0.7.34) keeps today's results", () => {
+      const settings = [zone, { mode: 'fixed' as const, fixedCents: 15_000 }, { mode: 'none' as const, fixedCents: 15_000 }];
+      const orders = [
+        { delivery: true, zoneFeeCents: 25_000, chargeCents: 20_000 },
+        { delivery: true, zoneFeeCents: null, chargeCents: 20_000 },
+        { delivery: true, zoneFeeCents: null, chargeCents: null },
+        { delivery: false, zoneFeeCents: 25_000, chargeCents: 20_000 },
+      ];
+      for (const s of settings) {
+        for (const o of orders) {
+          expect(riderCost(s, { ...o, keptCents: null })).toEqual(riderCost(s, o));
+          expect(isNoRateDelivery({ ...o, keptCents: null })).toBe(isNoRateDelivery(o));
+        }
+      }
+      expect(riderCost(zone, { ...orders[0]!, keptCents: null })).toEqual({ cents: 25_000, source: 'zone' });
+      expect(riderCost(zone, { ...orders[2]!, keptCents: null })).toEqual({ cents: 0, source: 'no_rate' });
+      expect(isNoRateDelivery({ ...orders[2]!, keptCents: null })).toBe(true);
+    });
+
+    it('never on an order that is not a delivery (foodpanda, a counter order)', () => {
+      expect(riderCost(zone, { ...out, delivery: false })).toEqual({ cents: 0, source: 'none' });
+      expect(isNoRateDelivery({ delivery: false, zoneFeeCents: null, chargeCents: null, keptCents: 20_000 })).toBe(false);
+    });
+
+    it('a delivery sent out with him: the charge less what he kept adds nothing to what the order earns', () => {
+      const food = { knownFoodSalesCents: 100_000, foodCostCents: 30_000, commissionCents: 0, paymentFeeCents: 0, upliftCents: 0 };
+      const kept = riderCost(zone, out).cents;
+      expect(contributionCents({ ...food, feeSalesCents: 20_000, riderCents: kept })).toBe(100_000 - 30_000);
+    });
+  });
 });
 
 describe('contribution: a foodpanda order against the same food delivered by the shop', () => {
