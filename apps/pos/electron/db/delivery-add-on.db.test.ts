@@ -1,0 +1,772 @@
+/**
+ * Add-on delivery for the same phone (the owner, 2 Oct 2026: "if its out then
+ * it should charge if the rider is not out"; order-edit finding #7, the
+ * owner's version): a counter delivery whose phone has another delivery the
+ * shop still has goes with it on one trip, so the area's charge stays off.
+ * On a real database built from every migration, driven through the
+ * repositories (syncOrderDeliveryCharge, the customer save, the order type,
+ * and deliveryChargeForArea's 'phone' event):
+ *   - the first delivery #A sent to the kitchen (paid or not), being made or
+ *     Ready: a new Delivery cart for the same phone, typed '03001234567' or
+ *     '+92 300 1234567', in DHA Phase 6 gets no 'Delivery Charge (Rs 200)';
+ *     the 'delivery_area' row records goesWith #A and charged 'add_on_off';
+ *   - #A out for delivery, delivered, paid, cancelled, refunded or still a
+ *     cart, another phone, or no Pakistani number: charged (a new trip);
+ *   - 'Put it back' charges it and holds through later saves, a 'phone'
+ *     event and the order type switched back to Delivery; the phone changed
+ *     to another, or #A gone out before the next event, puts the charge on;
+ *   - #A on the other till (its synced row) counts; a website order is never
+ *     touched, and one still in the kitchen is a first delivery too;
+ *   - every line change has its sync and audit rows; a 'phone' event that
+ *     goes with the same delivery writes nothing.
+ *
+ * node's own `node:sqlite` stands in for better-sqlite3 (built for
+ * Electron); skipped where it is missing. Every name, number and amount is
+ * made up.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppDatabase } from './connection.js';
+import { DatabaseSync } from './costing-shop.fixture.js';
+import { openTill, push } from './two-tills.fixture.js';
+
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });
+
+vi.mock('electron-log/main', () => ({
+  default: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+}));
+vi.mock('electron', () => ({
+  BrowserWindow: { getAllWindows: () => [] },
+  app: { getPath: () => '', getVersion: () => '0.0.0-test' },
+  dialog: {},
+  safeStorage: { isEncryptionAvailable: () => false },
+  Notification: class {
+    static isSupported() {
+      return false;
+    }
+  },
+}));
+
+const live = describe.skipIf(!DatabaseSync);
+
+const TILL_A = 'till-a';
+const TILL_B = 'till-b';
+const CASHIER = { userId: 'u_cash', deviceId: TILL_A };
+const MANAGER = { userId: 'u_mgr', deviceId: TILL_A };
+
+/** The made-up customer, as the first order's cashier typed it. */
+const PHONE = '0300 1234567';
+const AREA = 'DHA Phase 6';
+
+/** Evening times in Pakistan (UTC+5), as instants. */
+const PK = {
+  '18:00': '2026-10-02T13:00:00.000Z',
+  '19:00': '2026-10-02T14:00:00.000Z',
+  '19:10': '2026-10-02T14:10:00.000Z',
+  '19:20': '2026-10-02T14:20:00.000Z',
+  '19:30': '2026-10-02T14:30:00.000Z',
+  '19:40': '2026-10-02T14:40:00.000Z',
+  '19:50': '2026-10-02T14:50:00.000Z',
+} as const;
+type Clock = keyof typeof PK;
+const at = (t: Clock) => vi.setSystemTime(new Date(PK[t]));
+
+const repo = () => import('./repositories/order-repo.js');
+const customers = () => import('./repositories/customer-repo.js');
+type Row = Record<string, unknown>;
+
+interface Shop {
+  db: AppDatabase;
+  pizza: string;
+  charge200: string;
+  charge250: string;
+  rider: string;
+}
+
+/**
+ * A till: the made-up users, a 15% tax, a Rs 1,000 'Test Pizza', the areas'
+ * 'Delivery Charge (Rs 200)' and 'Delivery Charge (Rs 250)' (DHA Phase 6 and
+ * DHA Phase 8 on the released list), one of the shop's own riders and a
+ * shift opened at 18:00.
+ */
+async function till(deviceId: string = TILL_A): Promise<Shop> {
+  const db = openTill(deviceId);
+  const actor = { userId: 'u_mgr', deviceId };
+  const { createTaxCategory } = await import('./repositories/tax-category-repo.js');
+  const { createCategory } = await import('./repositories/category-repo.js');
+  const { createMenuItem } = await import('./repositories/menu-item-repo.js');
+  const { createRider } = await import('./repositories/rider-repo.js');
+  const { openShift } = await import('./repositories/shift-repo.js');
+  at('18:00');
+  const tax = createTaxCategory(db, { name: 'Test GST', rateBps: 1_500 }, actor);
+  const food = createCategory(
+    db,
+    { name: 'Test Pizzas', displayOrder: 1, colorHex: '#aa5500' },
+    actor,
+  );
+  const fees = createCategory(
+    db,
+    { name: 'Delivery Charges', displayOrder: 2, colorHex: '#555555' },
+    actor,
+  );
+  const item = (categoryId: string, name: string, basePriceCents: number) =>
+    createMenuItem(db, { categoryId, name, basePriceCents, taxCategoryId: tax.id }, actor).id;
+  const pizza = item(food.id, 'Test Pizza', 100_000);
+  const charge200 = item(fees.id, 'Delivery Charge (Rs 200)', 20_000);
+  const charge250 = item(fees.id, 'Delivery Charge (Rs 250)', 25_000);
+  const rider = createRider(db, { name: 'Test Own Rider', phone: '03001112222' }, actor).id;
+  openShift(db, { openingCashCents: 0 }, actor);
+  return { db, pizza, charge200, charge250, rider };
+}
+
+/** Where the first delivery is when the add-on is rung. */
+type FirstAt =
+  | 'open'
+  | 'sent_to_kitchen'
+  | 'paid_in_kitchen'
+  | 'preparing'
+  | 'ready'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'paid'
+  | 'void'
+  | 'refunded';
+
+/**
+ * The first delivery #A for the made-up customer (`phone`, else PHONE) in
+ * DHA Phase 6: started at 19:00 with the customer and address saved (its own
+ * charge goes on), the pizza, then taken to `where` by 19:20.
+ */
+async function first(shop: Shop, where: FirstAt, opts: { phone?: string; deviceId?: string } = {}) {
+  const r = await repo();
+  const c = await customers();
+  const who = { ...CASHIER, deviceId: opts.deviceId ?? TILL_A };
+  const mgr = { ...MANAGER, deviceId: opts.deviceId ?? TILL_A };
+  at('19:00');
+  const o = r.createOrder(shop.db, { mode: 'delivery' }, who);
+  const customer = c.createCustomer(
+    shop.db,
+    { name: 'Test Add-on Customer', phone: opts.phone ?? PHONE },
+    who,
+  );
+  const address = c.createAddress(
+    shop.db,
+    { customerId: customer.id, addressLine: 'House 12, Test Lane', area: AREA },
+    who,
+  );
+  c.snapshotCustomerOntoOrder(
+    shop.db,
+    { orderId: o.id, customerId: customer.id, addressId: address.id },
+    who,
+  );
+  r.addOrderItem(
+    shop.db,
+    { orderId: o.id, menuItemId: shop.pizza, quantity: 1, modifierIds: [] },
+    who,
+  );
+  expect(charges(shop.db, o.id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+  if (where === 'open') return { id: o.id, orderNumber: o.orderNumber as string };
+  const prepaid = where === 'paid_in_kitchen' || where === 'paid' || where === 'refunded';
+  at('19:10');
+  if (prepaid) {
+    const total = r.findOrder(shop.db, o.id)!.totalCents as number;
+    r.tenderOrder(
+      shop.db,
+      { orderId: o.id, payments: [{ method: 'cash', amountCents: total, tenderedCents: total }] },
+      who,
+    );
+  } else {
+    r.sendOrderToKitchen(shop.db, o.id, who);
+  }
+  at('19:20');
+  if (where === 'preparing') r.markOrderPreparing(shop.db, o.id, who);
+  if (
+    where === 'ready' ||
+    where === 'out_for_delivery' ||
+    where === 'delivered' ||
+    where === 'paid'
+  )
+    r.markOrderReady(shop.db, o.id, who);
+  if (where === 'out_for_delivery') r.sendOutOrder(shop.db, o.id, who);
+  if (where === 'delivered' || where === 'paid') {
+    r.assignRiderToOrder(shop.db, o.id, shop.rider, who);
+    r.markOrderDelivered(shop.db, { orderId: o.id }, who);
+  }
+  if (where === 'void') {
+    r.voidOrder(
+      shop.db,
+      {
+        orderId: o.id,
+        reason: 'Customer changed order',
+        approverUserId: mgr.userId,
+        foodMade: 'not_made',
+      },
+      mgr,
+    );
+  }
+  if (where === 'refunded') {
+    r.refundOrder(
+      shop.db,
+      {
+        orderId: o.id,
+        reason: 'Customer changed order',
+        approverUserId: mgr.userId,
+        foodMade: 'not_made',
+      },
+      mgr,
+    );
+  }
+  const status = where === 'paid_in_kitchen' ? 'sent_to_kitchen' : where;
+  expect(r.findOrder(shop.db, o.id)?.status).toBe(status);
+  return { id: o.id, orderNumber: o.orderNumber as string };
+}
+
+/** A new counter Delivery cart at 19:40 with the pizza; its area told by the panel with `phone` (the add-on). */
+async function addOn(
+  shop: Shop,
+  phone: string | null,
+  opts: { deviceId?: string; area?: string } = {},
+) {
+  const r = await repo();
+  const who = { ...CASHIER, deviceId: opts.deviceId ?? TILL_A };
+  at('19:40');
+  const o = r.createOrder(shop.db, { mode: 'delivery' }, who);
+  r.addOrderItem(
+    shop.db,
+    { orderId: o.id, menuItemId: shop.pizza, quantity: 1, modifierIds: [] },
+    who,
+  );
+  r.syncOrderDeliveryCharge(shop.db, o.id, opts.area ?? AREA, who, { phone });
+  return o.id;
+}
+
+/** The order's live delivery charge lines: [name, price, quantity]. */
+function charges(db: AppDatabase, orderId: string): Array<[string, number, number]> {
+  return (
+    db
+      .prepare(
+        `SELECT menu_item_name, unit_price_cents, quantity FROM order_items
+          WHERE order_id = ? AND deleted_at IS NULL AND menu_item_name LIKE 'Delivery Charge%' ORDER BY created_at, id`,
+      )
+      .all(orderId) as Row[]
+  ).map((l) => [String(l['menu_item_name']), Number(l['unit_price_cents']), Number(l['quantity'])]);
+}
+
+/** The order's last 'delivery_area' audit row, parsed. */
+function lastAreaAudit(db: AppDatabase, orderId: string): { before: Row; after: Row } | null {
+  const row = db
+    .prepare(
+      `SELECT before_json, after_json FROM audit_log
+        WHERE entity_type = 'orders' AND entity_id = ? AND action = 'delivery_area' ORDER BY rowid DESC LIMIT 1`,
+    )
+    .get(orderId) as Row | undefined;
+  if (!row) return null;
+  return {
+    before: JSON.parse(String(row['before_json'])) as Row,
+    after: JSON.parse(String(row['after_json'])) as Row,
+  };
+}
+
+const count = (db: AppDatabase, table: string) =>
+  Number((db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
+const totalOf = (db: AppDatabase, orderId: string) =>
+  Number(
+    (
+      db.prepare(`SELECT total_cents FROM orders WHERE id = ?`).get(orderId) as {
+        total_cents: number;
+      }
+    ).total_cents,
+  );
+const lineIds = (db: AppDatabase, orderId: string, deleted: boolean) =>
+  (
+    db
+      .prepare(
+        `SELECT id FROM order_items WHERE order_id = ? AND menu_item_name LIKE 'Delivery Charge%' AND deleted_at IS ${deleted ? 'NOT ' : ''}NULL`,
+      )
+      .all(orderId) as Row[]
+  ).map((l) => String(l['id']));
+
+/** The sync rows and audit rows written after `sinceSync` / `sinceAudit` rows. */
+function writtenAfter(db: AppDatabase, sinceSync: number, sinceAudit: number) {
+  const sync = (
+    db.prepare(`SELECT entity_type, entity_id, op FROM sync_queue ORDER BY rowid`).all() as Row[]
+  )
+    .slice(sinceSync)
+    .map((q) => ({ entityType: q['entity_type'], entityId: q['entity_id'], op: q['op'] }));
+  const audit = (
+    db.prepare(`SELECT entity_type, entity_id, action FROM audit_log ORDER BY rowid`).all() as Row[]
+  )
+    .slice(sinceAudit)
+    .map((a) => ({ entityType: a['entity_type'], entityId: a['entity_id'], action: a['action'] }));
+  return { sync, audit };
+}
+
+/** deliveryChargeForArea's 'phone' event, inside its own transaction as its callers run it. */
+async function phoneEvent(db: AppDatabase, orderId: string, deviceId: string = TILL_A) {
+  const r = await repo();
+  return db.transaction(() =>
+    r.deliveryChargeForArea(db, orderId, null, 'phone', { ...CASHIER, deviceId }),
+  )();
+}
+
+/** Pizza Rs 1,000 + 15%: the add-on's bill with no delivery charge. */
+const FOOD_ONLY = 115_000;
+/** With Delivery Charge (Rs 200) at 15%. */
+const WITH_CHARGE = 138_000;
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+live(
+  'the first delivery is still in the shop: the add-on goes with it, no second delivery charge',
+  () => {
+    const inTheShop: FirstAt[] = ['sent_to_kitchen', 'paid_in_kitchen', 'preparing', 'ready'];
+    for (const where of inTheShop) {
+      for (const typed of ['03001234567', '+92 300 1234567']) {
+        it(`#A ${where.replace(/_/g, ' ')}, the add-on typed '${typed}': no 'Delivery Charge (Rs 200)', goesWith #A, charged 'add_on_off'`, async () => {
+          const shop = await till();
+          const a = await first(shop, where);
+          const id = await addOn(shop, typed);
+          expect(charges(shop.db, id)).toEqual([]);
+          expect(totalOf(shop.db, id)).toBe(FOOD_ONLY);
+          expect(lastAreaAudit(shop.db, id)).toEqual({
+            before: { area: null, goesWith: null, charged: null },
+            after: {
+              area: AREA,
+              event: 'area',
+              mode: 'delivery',
+              target: 'fee',
+              feeCents: 20_000,
+              added: null,
+              removed: 0,
+              goesWith: { orderId: a.id, orderNumber: a.orderNumber },
+              charged: 'add_on_off',
+            },
+          });
+          // #A keeps its own charge: only the second trip's is left off.
+          expect(charges(shop.db, a.id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+        });
+      }
+    }
+
+    it('the phone saved on the order after the area (the customer save): the charge already on comes off, the line removal synced and audited', async () => {
+      const shop = await till();
+      const r = await repo();
+      const c = await customers();
+      const a = await first(shop, 'ready');
+      // The panel told the area with no phone yet: charged.
+      const id = await addOn(shop, null);
+      expect(charges(shop.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+      expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+        goesWith: null,
+        charged: 'normal',
+        added: shop.charge200,
+      });
+      const [line] = lineIds(shop.db, id, false);
+      const sync0 = count(shop.db, 'sync_queue');
+      const audit0 = count(shop.db, 'audit_log');
+
+      // The customer typed again with the same phone and address (the same area): goes with #A.
+      const customer = c.createCustomer(
+        shop.db,
+        { name: 'Test Add-on Customer', phone: '03001234567' },
+        CASHIER,
+      );
+      const address = c.createAddress(
+        shop.db,
+        { customerId: customer.id, addressLine: 'House 12, Test Lane', area: AREA },
+        CASHIER,
+      );
+      c.snapshotCustomerOntoOrder(
+        shop.db,
+        { orderId: id, customerId: customer.id, addressId: address.id },
+        CASHIER,
+      );
+
+      expect(charges(shop.db, id)).toEqual([]);
+      expect(lineIds(shop.db, id, true)).toEqual([line]);
+      expect(totalOf(shop.db, id)).toBe(FOOD_ONLY);
+      expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+        event: 'area',
+        removed: 1,
+        added: null,
+        goesWith: { orderId: a.id, orderNumber: a.orderNumber },
+        charged: 'add_on_off',
+      });
+      const written = writtenAfter(shop.db, sync0, audit0);
+      expect(written.sync).toContainEqual({
+        entityType: 'order_items',
+        entityId: line,
+        op: 'delete',
+      });
+      expect(written.sync).toContainEqual(
+        expect.objectContaining({ entityType: 'orders', entityId: id }),
+      );
+      expect(written.audit).toContainEqual({
+        entityType: 'order_items',
+        entityId: line,
+        action: 'delete',
+      });
+      expect(written.audit.filter((x) => x.action === 'delivery_area')).toEqual([
+        { entityType: 'orders', entityId: id, action: 'delivery_area' },
+      ]);
+      expect(r.findOrder(shop.db, id)?.status).toBe('open');
+    });
+
+    it('the area changed while #A is still in the kitchen (DHA Phase 8, Rs 250): still no charge', async () => {
+      const shop = await till();
+      const r = await repo();
+      const a = await first(shop, 'sent_to_kitchen');
+      const id = await addOn(shop, '03001234567');
+      r.syncOrderDeliveryCharge(shop.db, id, 'DHA Phase 8', CASHIER, { phone: '03001234567' });
+      expect(charges(shop.db, id)).toEqual([]);
+      expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+        area: 'DHA Phase 8',
+        feeCents: 25_000,
+        goesWith: { orderId: a.id },
+        charged: 'add_on_off',
+      });
+    });
+
+    it('becoming a Delivery (a takeaway with the phone and area): the charge stays off', async () => {
+      const shop = await till();
+      const r = await repo();
+      const a = await first(shop, 'preparing');
+      at('19:40');
+      const o = r.createOrder(shop.db, { mode: 'takeaway' }, CASHIER);
+      r.addOrderItem(
+        shop.db,
+        { orderId: o.id, menuItemId: shop.pizza, quantity: 1, modifierIds: [] },
+        CASHIER,
+      );
+      r.syncOrderDeliveryCharge(shop.db, o.id, AREA, CASHIER, { phone: '03001234567' });
+      expect(lastAreaAudit(shop.db, o.id)?.after).toMatchObject({
+        mode: 'takeaway',
+        goesWith: null,
+        charged: 'normal',
+      });
+      // The customer's phone is on the order before it becomes a delivery (Pay's or Send's save).
+      const c = await customers();
+      const customer = c.createCustomer(
+        shop.db,
+        { name: 'Test Add-on Customer', phone: '03001234567' },
+        CASHIER,
+      );
+      c.snapshotCustomerOntoOrder(
+        shop.db,
+        { orderId: o.id, customerId: customer.id, addressId: null },
+        CASHIER,
+      );
+      r.setOrderMode(shop.db, o.id, 'delivery', CASHIER);
+      expect(charges(shop.db, o.id)).toEqual([]);
+      expect(lastAreaAudit(shop.db, o.id)?.after).toMatchObject({
+        event: 'mode',
+        goesWith: { orderId: a.id },
+        charged: 'add_on_off',
+      });
+    });
+  },
+);
+
+live('a new trip: charged as usual', () => {
+  const newTrip: FirstAt[] = ['out_for_delivery', 'delivered', 'paid', 'void', 'refunded', 'open'];
+  for (const where of newTrip) {
+    it(`#A ${where === 'open' ? 'still a cart' : where.replace(/_/g, ' ')}: the add-on pays its own Delivery Charge (Rs 200)`, async () => {
+      const shop = await till();
+      await first(shop, where);
+      const id = await addOn(shop, '03001234567');
+      expect(charges(shop.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+      expect(totalOf(shop.db, id)).toBe(WITH_CHARGE);
+      expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+        target: 'fee',
+        added: shop.charge200,
+        goesWith: null,
+        charged: 'normal',
+      });
+    });
+  }
+
+  it('another phone, no phone, or a number that is not a Pakistani phone: charged', async () => {
+    const shop = await till();
+    await first(shop, 'ready');
+    for (const phone of ['0301 7654321', null, '']) {
+      const id = await addOn(shop, phone);
+      expect(charges(shop.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+    }
+    // A customer saved with '12345' (not a Pakistani number) never matches another '12345'.
+    const odd = await till();
+    await first(odd, 'ready', { phone: '12345' });
+    const id = await addOn(odd, '12345');
+    expect(charges(odd.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+  });
+});
+
+live("'Put it back', a changed phone, and #A going out", () => {
+  it("'Put it back' charges it and it stays charged: the area again (in other words), a 'phone' event, Takeaway and back to Delivery", async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'ready');
+    const id = await addOn(shop, '03001234567');
+    expect(charges(shop.db, id)).toEqual([]);
+
+    r.syncOrderDeliveryCharge(shop.db, id, AREA, CASHIER, { putBack: true, phone: '03001234567' });
+    expect(charges(shop.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+    expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+      event: 'put_back',
+      added: shop.charge200,
+      goesWith: { orderId: a.id, orderNumber: a.orderNumber },
+      charged: 'put_back',
+    });
+
+    const areaRows = () => count(shop.db, "audit_log WHERE action = 'delivery_area'");
+    const rows0 = areaRows();
+    r.syncOrderDeliveryCharge(shop.db, id, AREA, CASHIER, { phone: '03001234567' });
+    r.syncOrderDeliveryCharge(shop.db, id, 'Phase 6, DHA', CASHIER, { phone: '+92 300 1234567' });
+    // The customer saved on the order (Send's or Pay's save), then its 'phone' event.
+    const c = await customers();
+    const customer = c.createCustomer(
+      shop.db,
+      { name: 'Test Add-on Customer', phone: '03001234567' },
+      CASHIER,
+    );
+    c.snapshotCustomerOntoOrder(
+      shop.db,
+      { orderId: id, customerId: customer.id, addressId: null },
+      CASHIER,
+    );
+    await phoneEvent(shop.db, id);
+    expect(charges(shop.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+    expect(areaRows()).toBe(rows0);
+
+    // Takeaway takes its charge off; back to Delivery puts it on again (the put-back holds).
+    r.setOrderMode(shop.db, id, 'takeaway', CASHIER);
+    expect(charges(shop.db, id)).toEqual([]);
+    r.setOrderMode(shop.db, id, 'delivery', CASHIER);
+    expect(charges(shop.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+    expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+      event: 'mode',
+      goesWith: { orderId: a.id },
+      charged: 'put_back',
+    });
+  });
+
+  it('the phone changed to another: the charge comes back; changed back: off again', async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'sent_to_kitchen');
+    const id = await addOn(shop, '03001234567');
+    expect(charges(shop.db, id)).toEqual([]);
+
+    r.syncOrderDeliveryCharge(shop.db, id, AREA, CASHIER, { phone: '0301 7654321' });
+    expect(charges(shop.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+    expect(lastAreaAudit(shop.db, id)).toMatchObject({
+      before: { area: AREA, goesWith: { orderId: a.id }, charged: 'add_on_off' },
+      after: { event: 'area', added: shop.charge200, goesWith: null, charged: 'normal' },
+    });
+
+    r.syncOrderDeliveryCharge(shop.db, id, AREA, CASHIER, { phone: '03001234567' });
+    expect(charges(shop.db, id)).toEqual([]);
+    expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+      removed: 1,
+      goesWith: { orderId: a.id },
+      charged: 'add_on_off',
+    });
+  });
+
+  it('#A goes out before the next event: the charge goes on (a new trip); the same with the panel asking again', async () => {
+    const shop = await till();
+    const r = await repo();
+    const a = await first(shop, 'ready');
+    const id = await addOn(shop, '03001234567');
+    const c = await customers();
+    const customer = c.createCustomer(
+      shop.db,
+      { name: 'Test Add-on Customer', phone: '03001234567' },
+      CASHIER,
+    );
+    c.snapshotCustomerOntoOrder(
+      shop.db,
+      { orderId: id, customerId: customer.id, addressId: null },
+      CASHIER,
+    );
+    expect(charges(shop.db, id)).toEqual([]);
+
+    at('19:50');
+    r.sendOutOrder(shop.db, a.id, CASHIER);
+    await phoneEvent(shop.db, id);
+    expect(charges(shop.db, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+    expect(totalOf(shop.db, id)).toBe(WITH_CHARGE);
+    expect(lastAreaAudit(shop.db, id)).toMatchObject({
+      before: { area: AREA, goesWith: { orderId: a.id }, charged: 'add_on_off' },
+      after: {
+        area: AREA,
+        event: 'phone',
+        added: shop.charge200,
+        goesWith: null,
+        charged: 'normal',
+      },
+    });
+
+    // Another add-on whose first went out: the panel's next ask (same area, same phone) charges it.
+    const shop2 = await till();
+    const a2 = await first(shop2, 'preparing');
+    const id2 = await addOn(shop2, '03001234567');
+    expect(charges(shop2.db, id2)).toEqual([]);
+    r.markOrderReady(shop2.db, a2.id, CASHIER);
+    r.sendOutOrder(shop2.db, a2.id, CASHIER);
+    r.syncOrderDeliveryCharge(shop2.db, id2, AREA, CASHIER, { phone: '03001234567' });
+    expect(charges(shop2.db, id2)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+  });
+
+  it("a 'phone' event that goes with the same delivery (or still none) writes nothing", async () => {
+    const shop = await till();
+    const r = await repo();
+    await first(shop, 'ready');
+    const id = await addOn(shop, '03001234567');
+    const c = await customers();
+    const customer = c.createCustomer(
+      shop.db,
+      { name: 'Test Add-on Customer', phone: '03001234567' },
+      CASHIER,
+    );
+    c.snapshotCustomerOntoOrder(
+      shop.db,
+      { orderId: id, customerId: customer.id, addressId: null },
+      CASHIER,
+    );
+    const ledger = () => ({
+      sync: count(shop.db, 'sync_queue'),
+      audit: count(shop.db, 'audit_log'),
+      lines: count(shop.db, 'order_items'),
+      version: (shop.db.prepare(`SELECT version FROM orders WHERE id = ?`).get(id) as Row)[
+        'version'
+      ],
+    });
+    const before = ledger();
+    expect(await phoneEvent(shop.db, id)).toEqual({ added: null, removed: 0 });
+    expect(ledger()).toEqual(before);
+
+    // A delivery with no live delivery to go with: still nothing.
+    const other = await addOn(shop, '0301 7654321');
+    const before2 = ledger();
+    await phoneEvent(shop.db, other);
+    expect(ledger()).toEqual(before2);
+    // A takeaway: nothing.
+    at('19:40');
+    const take = r.createOrder(shop.db, { mode: 'takeaway' }, CASHIER);
+    c.snapshotCustomerOntoOrder(
+      shop.db,
+      { orderId: take.id, customerId: customer.id, addressId: null },
+      CASHIER,
+    );
+    const before3 = ledger();
+    await phoneEvent(shop.db, take.id);
+    expect(ledger()).toEqual(before3);
+  });
+});
+
+live('two tills and the website', () => {
+  it('#A rung on the other till (its synced row) counts; once it goes out there, the next event here charges', async () => {
+    const a = await till(TILL_A);
+    const b = openTill(TILL_B, { usersFrom: TILL_A });
+    const r = await repo();
+    const first1 = await first(a, 'sent_to_kitchen');
+    await push(a.db, TILL_A, b);
+
+    const shopB: Shop = { ...a, db: b };
+    const id = await addOn(shopB, '+92 300 1234567', { deviceId: TILL_B });
+    expect(charges(b, id)).toEqual([]);
+    expect(lastAreaAudit(b, id)?.after).toMatchObject({
+      goesWith: { orderId: first1.id, orderNumber: first1.orderNumber },
+      charged: 'add_on_off',
+    });
+
+    at('19:50');
+    r.markOrderReady(a.db, first1.id, CASHIER);
+    r.sendOutOrder(a.db, first1.id, CASHIER);
+    await push(a.db, TILL_A, b);
+    r.syncOrderDeliveryCharge(
+      b,
+      id,
+      AREA,
+      { ...CASHIER, deviceId: TILL_B },
+      { phone: '+92 300 1234567' },
+    );
+    expect(charges(b, id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+  });
+
+  it('a website order is never touched; one still in the kitchen is a first delivery too', async () => {
+    const shop = await till();
+    const r = await repo();
+    const c = await customers();
+    const customer = c.createCustomer(
+      shop.db,
+      { name: 'Test Web Customer', phone: PHONE },
+      CASHIER,
+    );
+    const address = c.createAddress(
+      shop.db,
+      { customerId: customer.id, addressLine: 'Flat 3, Test Road', area: AREA },
+      CASHIER,
+    );
+    at('19:00');
+    const web = r.createOrder(shop.db, { mode: 'delivery', source: 'web' }, CASHIER);
+    r.addOrderItem(
+      shop.db,
+      { orderId: web.id, menuItemId: shop.pizza, quantity: 1, modifierIds: [] },
+      CASHIER,
+    );
+    r.addOrderItem(
+      shop.db,
+      { orderId: web.id, menuItemId: shop.charge200, quantity: 1, modifierIds: [] },
+      CASHIER,
+    );
+    c.snapshotCustomerOntoOrder(
+      shop.db,
+      { orderId: web.id, customerId: customer.id, addressId: address.id },
+      CASHIER,
+    );
+    at('19:10');
+    r.sendOrderToKitchen(shop.db, web.id, CASHIER);
+
+    // A second website order for the same phone: its fee line is its own, whatever the till is told.
+    at('19:30');
+    const web2 = r.createOrder(shop.db, { mode: 'delivery', source: 'web' }, CASHIER);
+    r.addOrderItem(
+      shop.db,
+      { orderId: web2.id, menuItemId: shop.pizza, quantity: 1, modifierIds: [] },
+      CASHIER,
+    );
+    r.addOrderItem(
+      shop.db,
+      { orderId: web2.id, menuItemId: shop.charge200, quantity: 1, modifierIds: [] },
+      CASHIER,
+    );
+    const sync0 = count(shop.db, 'sync_queue');
+    const audit0 = count(shop.db, 'audit_log');
+    c.snapshotCustomerOntoOrder(
+      shop.db,
+      { orderId: web2.id, customerId: customer.id, addressId: address.id },
+      CASHIER,
+    );
+    r.syncOrderDeliveryCharge(shop.db, web2.id, AREA, CASHIER, { phone: PHONE });
+    await phoneEvent(shop.db, web2.id);
+    expect(charges(shop.db, web2.id)).toEqual([['Delivery Charge (Rs 200)', 20_000, 1]]);
+    expect(lastAreaAudit(shop.db, web2.id)).toBeNull();
+    // Only the customer save itself was written (its row, sync and audit).
+    expect(writtenAfter(shop.db, sync0, audit0).audit.map((x) => x.action)).toEqual([
+      'attach_customer',
+    ]);
+
+    // A counter add-on for the same phone goes with the website order still in the kitchen.
+    const id = await addOn(shop, '03001234567');
+    expect(charges(shop.db, id)).toEqual([]);
+    expect(lastAreaAudit(shop.db, id)?.after).toMatchObject({
+      goesWith: { orderId: web.id, orderNumber: web.orderNumber },
+      charged: 'add_on_off',
+    });
+  });
+});

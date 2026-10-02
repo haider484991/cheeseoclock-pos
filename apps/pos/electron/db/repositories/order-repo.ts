@@ -1247,7 +1247,42 @@ export type DeliveryAreaEvent =
   /** The order became a delivery (setOrderMode): the area it has decides the charge again. */
   | 'mode'
   /** "Put it back" on the till's delivery-charge row: the area's charge, whatever was taken off by hand. */
-  | 'put_back';
+  | 'put_back'
+  /**
+   * The order's phone was saved or taken off: the add-on rule is settled again
+   * for the area the charge last followed. Nothing is written when the order
+   * goes with the same live delivery as before (or still with none).
+   */
+  | 'phone';
+
+/**
+ * A live delivery of the same customer that has not gone out yet: an add-on
+ * goes with it (deliveryChargeForArea's add-on rule, liveDeliveryNotOutFor).
+ */
+export interface DeliveryGoesWith {
+  orderId: string;
+  orderNumber: string;
+}
+
+/**
+ * Why the order's delivery charge is what it is, as recorded in the
+ * DELIVERY_AREA_ACTION after-image:
+ *  - 'normal': the area's own rule (charged, swapped or taken off by area);
+ *  - 'add_on_off': an add-on — the charge was left off because the same
+ *    customer's delivery `goesWith` has not gone out yet;
+ *  - 'put_back': "Put it back" on the till's row: the area's charge, add-on
+ *    or not, while the area and the delivery it goes with stay the same.
+ */
+export type DeliveryCharged = 'normal' | 'add_on_off' | 'put_back';
+
+/** What the order's last DELIVERY_AREA_ACTION row recorded (recordedDeliveryArea). */
+interface RecordedDeliveryArea {
+  area: string | null;
+  /** The live delivery of the same phone that had not gone out then; null for none (and in rows before v0.7.34). */
+  goesWith: DeliveryGoesWith | null;
+  /** 'normal' in rows before v0.7.34. */
+  charged: DeliveryCharged;
+}
 
 /** The area as recorded: trimmed, inner spaces collapsed, at most 200 characters; null for none. */
 function cleanArea(area: string | null | undefined): string | null {
@@ -1255,8 +1290,21 @@ function cleanArea(area: string | null | undefined): string | null {
   return a || null;
 }
 
-/** The area the order's charge last followed (its last DELIVERY_AREA_ACTION row), or null when it never had one. */
-function recordedDeliveryArea(db: AppDatabase, orderId: string): { area: string | null } | null {
+/** A recorded goesWith, read leniently (anything else is none). */
+function readGoesWith(v: unknown): DeliveryGoesWith | null {
+  if (!v || typeof v !== 'object') return null;
+  const g = v as { orderId?: unknown; orderNumber?: unknown };
+  return typeof g.orderId === 'string' && g.orderId && typeof g.orderNumber === 'string'
+    ? { orderId: g.orderId, orderNumber: g.orderNumber }
+    : null;
+}
+
+/**
+ * The area the order's charge last followed, the delivery it went with and
+ * why it was charged (its last DELIVERY_AREA_ACTION row), or null when it
+ * never had one.
+ */
+function recordedDeliveryArea(db: AppDatabase, orderId: string): RecordedDeliveryArea | null {
   const row = db
     .prepare(
       `SELECT after_json FROM audit_log
@@ -1266,11 +1314,60 @@ function recordedDeliveryArea(db: AppDatabase, orderId: string): { area: string 
     .get(orderId, DELIVERY_AREA_ACTION) as { after_json: string | null } | undefined;
   if (!row) return null;
   try {
-    const after = JSON.parse(row.after_json ?? 'null') as { area?: unknown } | null;
-    return { area: typeof after?.area === 'string' ? after.area : null };
+    const after = JSON.parse(row.after_json ?? 'null') as { area?: unknown; goesWith?: unknown; charged?: unknown } | null;
+    const charged = after?.charged;
+    return {
+      area: typeof after?.area === 'string' ? after.area : null,
+      goesWith: readGoesWith(after?.goesWith),
+      charged: charged === 'add_on_off' || charged === 'put_back' ? charged : 'normal',
+    };
   } catch {
-    return { area: null };
+    return { area: null, goesWith: null, charged: 'normal' };
   }
+}
+
+/**
+ * The phone the add-on rule matches on: the order's own (customer_phone_snapshot),
+ * else the one the till's panel typed; as normalised and as typed (an older
+ * row may hold either, as offersUsedToday reads them). Not a Pakistani number
+ * (pos-domain normalizePhone), or none: null — no phone, no add-on.
+ */
+function addOnPhones(db: AppDatabase, orderId: string, typedPhone: string | null | undefined): [string, string] | null {
+  const row = db.prepare(`SELECT customer_phone_snapshot AS phone FROM orders WHERE id = ?`).get(orderId) as
+    | { phone: string | null }
+    | undefined;
+  const typed = row?.phone?.trim() || typedPhone?.trim() || null;
+  const phone = normalizePhone(typed);
+  return phone ? [phone, typed ?? phone] : null;
+}
+
+/**
+ * The add-on rule's first delivery (the owner, 2 Oct 2026: "if its out then
+ * it should charge if the rider is not out"): another delivery of this phone
+ * that the shop still has — sent to the kitchen, being made or Ready, a
+ * prepaid one too (Pay leaves a delivery sent to the kitchen, paid) — the
+ * first sent. One already out for delivery is a new trip, and so is one
+ * delivered, paid, cancelled, refunded or still a cart: none. Either till's
+ * rows (the other till's arrive by the link), whatever the source (a website
+ * order still in the kitchen is a first delivery too). idx_orders_status_sent.
+ */
+function liveDeliveryNotOutFor(
+  db: AppDatabase,
+  orderId: string,
+  phones: readonly [string, string] | null,
+): DeliveryGoesWith | null {
+  if (!phones) return null;
+  const row = db
+    .prepare(
+      `SELECT o.id, o.order_number FROM orders o
+        WHERE o.id != ? AND o.deleted_at IS NULL AND o.mode = 'delivery'
+          AND o.status IN ('sent_to_kitchen', 'preparing', 'ready')
+          AND o.customer_phone_snapshot IN (?, ?)
+        ORDER BY COALESCE(o.sent_at, o.created_at), o.id
+        LIMIT 1`,
+    )
+    .get(orderId, phones[0], phones[1]) as { id: string; order_number: string } | undefined;
+  return row ? { orderId: row.id, orderNumber: String(row.order_number) } : null;
 }
 
 /** The area of the address saved on the order (delivery_address_snapshot), or null. */
@@ -1312,7 +1409,29 @@ function snapshotArea(db: AppDatabase, orderId: string): string | null {
  * website order (it arrives with the fee the customer paid) or a foodpanda
  * one (foodpanda delivers it). Each line change is synced and audited
  * (addOrderItem / removeOrderItem), and the event is audited on the order.
- * `area` for 'mode' is ignored: the recorded area, else the saved address's.
+ * `area` for 'mode' and 'phone' is ignored: the recorded area, else the
+ * saved address's.
+ *
+ * The add-on rule (the owner, 2 Oct 2026: "if its out then it should charge
+ * if the rider is not out"): a counter delivery whose phone (the order's,
+ * else `opts.phone`, the one the panel typed; addOnPhones) has another
+ * delivery the shop still has — sent to the kitchen, being made or Ready
+ * (liveDeliveryNotOutFor) — goes with it on one trip: while the area's
+ * target is a fee, every charge line comes off and none goes on (recorded
+ * charged 'add_on_off', goesWith that order). Once the first is out for
+ * delivery (or closed, or still a cart) it is a new trip: charged as usual.
+ *  - "Put it back" puts the area's charge on as always (recorded 'put_back'
+ *    with the delivery it goes with), and it holds while the area and that
+ *    delivery stay the same — through saves, phone events and the order
+ *    type switched back to Delivery.
+ *  - No delivery to go with any more while the charge was left off (the
+ *    first went out, was cancelled, the phone changed): the area's charge
+ *    goes on as "Put it back" would (recorded 'normal').
+ *  - Only the delivery it goes with changed ('area' with the same place, or
+ *    'phone') otherwise: the bill is left as it is, as a save that does not
+ *    change the area always left it.
+ * Not a change, nothing written: 'area' with the same place AND the same
+ * delivery to go with; 'phone' with the same delivery to go with.
  */
 export function deliveryChargeForArea(
   db: AppDatabase,
@@ -1320,6 +1439,7 @@ export function deliveryChargeForArea(
   area: string | null,
   event: DeliveryAreaEvent,
   actor: Actor,
+  opts: { phone?: string | null } = {},
 ): { added: string | null; removed: number } {
   const none = { added: null, removed: 0 };
   const order = findOrder(db, orderId);
@@ -1328,15 +1448,24 @@ export function deliveryChargeForArea(
   const who = { ...actor, userId: actor.userId };
   const recorded = recordedDeliveryArea(db, orderId);
   const was = recorded ? recorded.area : null;
-  const now = event === 'mode' ? (recorded ? recorded.area : snapshotArea(db, orderId)) : cleanArea(area);
+  const followsRecorded = event === 'mode' || event === 'phone';
+  const now = followsRecorded ? (recorded ? recorded.area : snapshotArea(db, orderId)) : cleanArea(area);
   const areas = deliveryAreas(readDeliveryZones(db));
+  const sameArea = sameDeliveryArea(areas, was, now);
+  // The add-on rule: only a delivery goes with another (a takeaway records none).
+  const goesWith = order.mode === 'delivery' ? liveDeliveryNotOutFor(db, orderId, addOnPhones(db, orderId, opts.phone)) : null;
+  const wasWith = recorded ? recorded.goesWith : null;
+  const sameLink = (goesWith?.orderId ?? null) === (wasWith?.orderId ?? null);
   // Not a change: nothing (a charge taken off by hand stays off) — the same words, or the same
-  // place in other words ("DHA Phase 6" / "Phase 6, DHA": a customer's two saved addresses).
-  if (event === 'area' && sameDeliveryArea(areas, was, now)) return none;
+  // place in other words ("DHA Phase 6" / "Phase 6, DHA": a customer's two saved addresses),
+  // going with the same delivery as before (or still with none).
+  if (event === 'area' && sameArea && sameLink) return none;
+  if (event === 'phone' && sameLink) return none;
   if (event !== 'area' && order.mode !== 'delivery') return none;
 
   let out: { added: string | null; removed: number } = none;
   let target: DeliveryChargeTarget | null = null;
+  let charged: DeliveryCharged = 'normal';
   if (order.mode === 'delivery') {
     const items = (
       db
@@ -1344,8 +1473,30 @@ export function deliveryChargeForArea(
         .all() as Array<{ id: string; name: string; base_price_cents: number }>
     ).map((i) => ({ id: i.id, name: i.name, basePriceCents: i.base_price_cents }));
     target = deliveryChargeTarget(areas, order.mode, now, items);
-    const previous = event === 'area' && was ? deliveryChargeTarget(areas, 'delivery', was, items) : null;
-    const plan = planDeliveryChargeOnAreaChange(previous, target, deliveryChargeLinesOf(db, orderId));
+    const lines = deliveryChargeLinesOf(db, orderId);
+    // "Put it back" still holds: the same place, going with the same delivery.
+    const putBackHeld = recorded?.charged === 'put_back' && sameArea && sameLink;
+    let plan: { remove: string[]; add: string | null };
+    if (event === 'put_back') {
+      // The area's charge, add-on or not (as before this rule).
+      plan = planDeliveryChargeOnAreaChange(null, target, lines);
+      charged = 'put_back';
+    } else if (target.kind === 'fee' && goesWith && !putBackHeld) {
+      // Goes with a delivery that has not gone out: one trip, no second charge.
+      plan = { remove: lines.map((l) => l.id), add: null };
+      charged = 'add_on_off';
+    } else if (!goesWith && recorded?.charged === 'add_on_off') {
+      // Left off for a delivery it no longer goes with: the area's charge, as "Put it back" would.
+      plan = planDeliveryChargeOnAreaChange(null, target, lines);
+    } else if (event === 'mode' || (event === 'area' && !sameArea)) {
+      // The area's own rule (an area change swaps the charge; a new delivery takes its area's).
+      const previous = event === 'area' && was ? deliveryChargeTarget(areas, 'delivery', was, items) : null;
+      plan = planDeliveryChargeOnAreaChange(previous, target, lines);
+      if (putBackHeld) charged = 'put_back';
+    } else {
+      // Only the delivery it goes with changed: the bill is left as it is.
+      plan = { remove: [], add: null };
+    }
     for (const id of plan.remove) removeOrderItem(db, orderId, id, who);
     if (plan.add) addOrderItem(db, { orderId, menuItemId: plan.add, quantity: 1, modifierIds: [] }, who);
     out = { added: plan.add, removed: plan.remove.length };
@@ -1355,7 +1506,7 @@ export function deliveryChargeForArea(
     entityId: orderId,
     action: DELIVERY_AREA_ACTION,
     actorUserId: actor.userId,
-    before: { area: was },
+    before: { area: was, goesWith: wasWith, charged: recorded ? recorded.charged : null },
     after: {
       area: now,
       event,
@@ -1364,6 +1515,8 @@ export function deliveryChargeForArea(
       feeCents: target?.kind === 'fee' ? target.feeCents : null,
       added: out.added,
       removed: out.removed,
+      goesWith,
+      charged,
     },
   });
   return out;
@@ -1372,18 +1525,20 @@ export function deliveryChargeForArea(
 /**
  * orders:setDeliveryArea — the customer panel's area, or its "Put it back",
  * on an open counter order, in one transaction (deliveryChargeForArea).
+ * `opts.phone`: the phone typed on the panel (the add-on rule's, when the
+ * order has none of its own yet).
  */
 export function syncOrderDeliveryCharge(
   db: AppDatabase,
   orderId: string,
   area: string | null,
   actor: Actor & { userId: string },
-  opts: { putBack?: boolean } = {},
+  opts: { putBack?: boolean; phone?: string | null } = {},
 ): { added: boolean; removed: number } {
   let out = { added: false, removed: 0 };
   const tx = db.transaction(() => {
     if (!findOrder(db, orderId)) throw new Error('Order not found');
-    const r = deliveryChargeForArea(db, orderId, area, opts.putBack ? 'put_back' : 'area', actor);
+    const r = deliveryChargeForArea(db, orderId, area, opts.putBack ? 'put_back' : 'area', actor, { phone: opts.phone ?? null });
     out = { added: r.added !== null, removed: r.removed };
   });
   tx();
