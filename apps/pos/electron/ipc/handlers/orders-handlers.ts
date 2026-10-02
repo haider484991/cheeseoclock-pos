@@ -41,6 +41,7 @@ import {
   sendOrderToKitchen,
   markOrderPreparing,
   markOrderReady,
+  sendOutOrder,
   assignRiderToOrder,
   unassignRiderFromOrder,
   markOrderServed,
@@ -670,6 +671,26 @@ export function registerOrdersHandlers(ctx: HandlerContext): void {
     }
     const snap = getOrderSnapshot(ctx.db, payload.orderId);
     if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    return ok(snap);
+  });
+
+  // Send out (owner, 2 Oct 2026): an outside rider takes the order. Like
+  // Assign rider, any login that takes orders and no manager PIN (the drawer
+  // log and the close's riders row are the check). The repository freezes
+  // what he keeps; the bill goes with the food, once per order on either till.
+  defineHandler('orders:sendOut', ctx, (_ctx, payload) => {
+    const s = requireOrderCreate();
+    try {
+      sendOutOrder(ctx.db, payload.orderId, { userId: s.id, deviceId: ctx.deviceId });
+    } catch (e) {
+      throw new IpcGuardError({
+        code: 'precondition_failed',
+        message: e instanceof Error ? e.message : 'Send out failed',
+      });
+    }
+    const snap = getOrderSnapshot(ctx.db, payload.orderId);
+    if (!snap) throw new IpcGuardError({ code: 'not_found', message: 'Order not found' });
+    printSpooler.onOrderEvent(payload.orderId, 'dispatched');
     return ok(snap);
   });
 

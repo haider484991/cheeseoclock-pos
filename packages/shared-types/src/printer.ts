@@ -172,7 +172,8 @@ export type ShopCopyRule = 'never' | 'delivery' | 'always';
  *    cash-on-delivery order marked served / delivered with its payment. A
  *    cash payment pops the drawer.
  *  - Delivery bill: for delivery orders, the bill prints when the rider is
- *    assigned so it travels with the food, showing the amount to collect (or
+ *    assigned or the order is sent out (once per order, on either till) so
+ *    it travels with the food, showing the amount to collect (or
  *    PAID). When the rider brings the cash back, only the drawer opens — the
  *    customer already has the bill (BILL - NOT PAID, pay the rider Rs X).
  *  - Shop copy: a second copy marked SHOP COPY with a "Received by" line,

@@ -580,3 +580,220 @@ describe.skipIf(!DatabaseSync)('orders:create drops this till’s emptied cart, 
     expect(row(first.id).deletedAt).not.toBeNull();
   });
 });
+
+describe.skipIf(!DatabaseSync)('orders:sendOut: the bill goes with the food, once across both tills (owner 2026-10-02)', () => {
+  const OTHER_TILL = 'dev-till-2';
+  let chargeId = '';
+  beforeEach(async () => {
+    if (!DatabaseSync) return;
+    const MGR = { userId: 'u_mgr', deviceId: DEV };
+    const tax = await import('../../db/repositories/tax-category-repo.js');
+    const cat = await import('../../db/repositories/category-repo.js');
+    const menu = await import('../../db/repositories/menu-item-repo.js');
+    const t = tax.createTaxCategory(db as never, { name: 'Test no tax', rateBps: 0 }, MGR);
+    const fees = cat.createCategory(db as never, { name: 'Delivery Charges', displayOrder: 2, colorHex: '#555555' }, MGR);
+    chargeId = menu.createMenuItem(
+      db as never,
+      { categoryId: fees.id, name: 'Delivery Charge (Rs 200)', basePriceCents: 20_000, taxCategoryId: t.id },
+      MGR,
+    ).id;
+  });
+
+  const idle = async () => (await import('../../services/print-spooler.js')).printSpooler.whenIdle();
+  /** A cash-on-delivery order (the pizza and the area's Rs 200 charge: Rs 1,200), sent, made and ready on the pass, its kitchen ticket printed. */
+  async function readyDelivery(): Promise<string> {
+    const r = await import('../../db/repositories/order-repo.js');
+    const c = await import('../../db/repositories/customer-repo.js');
+    const o = r.createOrder(db as never, { mode: 'delivery' }, ACTOR);
+    c.snapshotCustomerOntoOrder(db as never, { orderId: o.id, customerId, addressId }, ACTOR);
+    r.addOrderItem(db as never, { orderId: o.id, menuItemId: pizzaId, quantity: 1, modifierIds: [], notes: null }, ACTOR);
+    r.addOrderItem(db as never, { orderId: o.id, menuItemId: chargeId, quantity: 1, modifierIds: [], notes: null }, ACTOR);
+    await call('orders:sendToKitchen', { orderId: o.id });
+    await call('orders:markPreparing', { orderId: o.id });
+    await call('orders:markReady', { orderId: o.id });
+    await idle();
+    return o.id;
+  }
+  const sendOut = async (orderId: string) => (await call('orders:sendOut', { orderId })).data as OrderSnapshot;
+  /** This till's receipt jobs for the order: [reason, copies]. */
+  const receiptJobs = (orderId: string) =>
+    db
+      .prepare(`SELECT payload_json AS p FROM print_queue WHERE order_id = ? AND job_kind = 'receipt' ORDER BY rowid`)
+      .all(orderId)
+      .map((r) => {
+        const p = JSON.parse(String(r['p'])) as { reason: string; copies: string[] };
+        return [p.reason, p.copies];
+      });
+  const drawerJobs = (orderId: string) =>
+    Number(db.prepare(`SELECT COUNT(*) AS n FROM print_queue WHERE order_id = ? AND job_kind = 'drawer'`).get(orderId)?.['n']);
+  /** The order's papers in the print log, both tills': what, which copy, and which till ('here' or 'other till'). */
+  const papers = (orderId: string) =>
+    db
+      .prepare(
+        `SELECT reason, document, copy, device_id AS device FROM document_prints
+          WHERE order_id = ? AND deleted_at IS NULL AND copy <> 'kitchen' ORDER BY created_at, rowid`,
+      )
+      .all(orderId)
+      .map((p) => ({
+        reason: p['reason'],
+        document: p['document'],
+        copy: p['copy'],
+        till: p['device'] === OTHER_TILL ? 'other till' : 'here',
+      }));
+  /** A paper the other till printed for the order, as sync brings it here (by default: its bill for the trip). */
+  const fromOtherTill = (
+    orderId: string,
+    p: { reason?: string; outcome?: 'printed' | 'unsure'; deletedAt?: string | null } = {},
+  ) => {
+    const at = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO document_prints
+         (id, order_id, document, doc_key, copy, print_no, outcome, reason, print_job_id,
+          created_at, updated_at, synced_at, deleted_at, device_id, version)
+       VALUES (?, ?, 'bill', 'bill', 'customer', 0, ?, ?, 'job-on-till-2', ?, ?, ?, ?, ?, 1)`,
+    ).run(`dp-${orderId}-${p.reason ?? 'dispatch'}-${p.deletedAt ? 'gone' : 'kept'}`, orderId, p.outcome ?? 'printed', p.reason ?? 'dispatch', at, at, at, p.deletedAt ?? null, OTHER_TILL);
+  };
+
+  it('Send out: out for delivery with no rider, what he keeps on the reply; one bill and its SHOP COPY, reason dispatch, no drawer', async () => {
+    const o = await readyDelivery();
+    const sendsBefore = h.sends.length;
+    const snap = await sendOut(o);
+    expect(snap.order).toMatchObject({ status: 'out_for_delivery', assignedRiderId: null, riderKeepsCents: 20_000, totalCents: 120_000 });
+    expect(snap.order.dispatchedAt).toEqual(expect.any(String));
+    await idle();
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    expect(papers(o)).toEqual([
+      { reason: 'dispatch', document: 'bill', copy: 'customer', till: 'here' },
+      { reason: 'dispatch', document: 'bill', copy: 'shop', till: 'here' },
+    ]);
+    const { escPosToText } = await import('@cheeseoclock/printer-core');
+    const out = h.sends.slice(sendsBefore).map((b) => escPosToText(b));
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('SHOP COPY');
+    // No money moved: no drawer.
+    expect(drawerJobs(o)).toBe(0);
+  });
+
+  it('Send out, then Assign rider: an own rider now (nothing kept), and no second bill', async () => {
+    const o = await readyDelivery();
+    await sendOut(o);
+    await idle();
+    const sendsBefore = h.sends.length;
+    const assigned = (await call('orders:assignRider', { orderId: o, riderId })).data as OrderSnapshot;
+    expect(assigned.order).toMatchObject({ status: 'out_for_delivery', assignedRiderId: riderId });
+    expect(assigned.order).not.toHaveProperty('riderKeepsCents');
+    await idle();
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    expect(h.sends.length).toBe(sendsBefore);
+  });
+
+  it('Send out, Back to Ready, Send out again: still one bill', async () => {
+    const o = await readyDelivery();
+    await sendOut(o);
+    await idle();
+    const sendsBefore = h.sends.length;
+    const back = (await call('orders:unassignRider', { orderId: o })).data as OrderSnapshot;
+    expect(back.order).toMatchObject({ status: 'ready', assignedRiderId: null });
+    expect(back.order).not.toHaveProperty('riderKeepsCents');
+    expect((await sendOut(o)).order).toMatchObject({ status: 'out_for_delivery', assignedRiderId: null, riderKeepsCents: 20_000 });
+    await idle();
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    expect(papers(o).map((p) => p['reason'])).toEqual(['dispatch', 'dispatch']);
+    expect(h.sends.length).toBe(sendsBefore);
+  });
+
+  it('with "Print the delivery bill when it leaves" off, Send out prints nothing', async () => {
+    const { getPrintPolicy, setPrintPolicy } = await import('../../services/printer-config.js');
+    setPrintPolicy(db as never, { ...getPrintPolicy(db as never), deliveryBillOnDispatch: false });
+    const o = await readyDelivery();
+    const sendsBefore = h.sends.length;
+    expect((await sendOut(o)).order).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 20_000 });
+    await idle();
+    expect(receiptJobs(o)).toEqual([]);
+    expect(papers(o)).toEqual([]);
+    expect(h.sends.length).toBe(sendsBefore);
+  });
+
+  it("the other till's bill for the trip stops the bill here, and the receipt when the rider brings the money back", async () => {
+    // Sent out on the other till, which printed the bill: Send out here prints nothing.
+    const a = await readyDelivery();
+    fromOtherTill(a);
+    const sendsBefore = h.sends.length;
+    expect((await sendOut(a)).order.status).toBe('out_for_delivery');
+    await idle();
+    expect(receiptJobs(a)).toEqual([]);
+    expect(h.sends.length).toBe(sendsBefore);
+
+    // The other till's bill left with the food; here a rider is assigned and
+    // brings the cash back: the drawer opens, and that is all.
+    const b = await readyDelivery();
+    fromOtherTill(b);
+    await call('orders:assignRider', { orderId: b, riderId });
+    await idle();
+    expect(receiptJobs(b)).toEqual([]);
+    const sendsBeforeCash = h.sends.length;
+    const paid = (
+      await call('orders:markDelivered', { orderId: b, payment: { method: 'cash', amountCents: 120_000, tenderedCents: 120_000 } })
+    ).data as OrderSnapshot;
+    expect(paid.order.status).toBe('paid');
+    await idle();
+    expect(drawerJobs(b)).toBe(1);
+    expect(receiptJobs(b)).toEqual([]);
+    expect(h.sends.length).toBe(sendsBeforeCash + 1);
+    expect(papers(b)).toEqual([{ reason: 'dispatch', document: 'bill', copy: 'customer', till: 'other till' }]);
+  });
+
+  it("only the other till's bill for the trip counts: one that may have printed does; a reprint or a deleted row does not", async () => {
+    const { hasLoggedPaper } = await import('../../db/repositories/document-print-repo.js');
+    // It may have printed there (the printer failed mid-way): no second bill here.
+    const unsure = await readyDelivery();
+    fromOtherTill(unsure, { outcome: 'unsure' });
+    expect(hasLoggedPaper(db as never, unsure, 'dispatch')).toBe(true);
+    await sendOut(unsure);
+    await idle();
+    expect(receiptJobs(unsure)).toEqual([]);
+
+    // A copy printed there by hand, and a bill row since deleted: the bill still goes with the food here.
+    const other = await readyDelivery();
+    fromOtherTill(other, { reason: 'reprint' });
+    fromOtherTill(other, { deletedAt: T0 });
+    expect(hasLoggedPaper(db as never, other, 'dispatch')).toBe(false);
+    expect(hasLoggedPaper(db as never, other, 'reprint')).toBe(true);
+    await sendOut(other);
+    await idle();
+    expect(receiptJobs(other)).toEqual([['dispatch', ['customer', 'shop']]]);
+  });
+
+  it('a print log that cannot be read never stops Send out: this till decides the bill by itself, and says so in the log', async () => {
+    const log = (await import('electron-log/main')).default;
+    const warn = vi.spyOn(log, 'warn');
+    const o = await readyDelivery();
+    db.exec('DROP TABLE document_prints');
+    expect((await sendOut(o)).order).toMatchObject({ status: 'out_for_delivery', riderKeepsCents: 20_000 });
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+    expect(warn).toHaveBeenCalledWith(
+      'Print log unreadable; the delivery bill decided by this till alone',
+      expect.objectContaining({ orderId: o, error: expect.any(String) }),
+    );
+    await idle();
+  });
+
+  it('refusals come back as "precondition_failed" with the repository\'s words, and print nothing', async () => {
+    const takeaway = await sentOrder();
+    await expect(call('orders:sendOut', { orderId: takeaway })).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: 'Only delivery orders can be sent out' },
+    });
+    const o = await readyDelivery();
+    await sendOut(o);
+    await idle();
+    await expect(call('orders:sendOut', { orderId: o })).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: 'This order is already out for delivery' },
+    });
+    await expect(call('orders:sendOut', { orderId: 'no-such-order' })).rejects.toMatchObject({
+      apiError: { code: 'precondition_failed', message: 'Order not found' },
+    });
+    await idle();
+    expect(receiptJobs(takeaway)).toEqual([]);
+    expect(receiptJobs(o)).toEqual([['dispatch', ['customer', 'shop']]]);
+  });
+});

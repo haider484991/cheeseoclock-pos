@@ -705,6 +705,8 @@ const COUNTER_ALLOWED = (): Record<string, unknown> => ({
   'orders:listActive': undefined,
   'orders:markPreparing': { orderId: s.kitchenNow },
   'orders:markReady': { orderId: s.kitchenNow },
+  // Send out (v0.7.34): an outside rider takes it, no manager PIN (owner, 2 Oct 2026). A paid order: refused, nothing moves.
+  'orders:sendOut': { orderId: s.paidNow },
   'orders:assignRider': { orderId: s.kitchenNow, riderId: 'no-such-rider' },
   'orders:unassignRider': { orderId: s.kitchenNow },
   'orders:markServed': { orderId: s.kitchenNow },
@@ -1450,6 +1452,21 @@ describe.skipIf(!Sqlite)('the counter still takes orders', () => {
       if (why) lockedOut.push(`${channel} — ${why}`);
     }
     expect(lockedOut).toEqual([]);
+  });
+
+  it('Send out (v0.7.34): a cashier sends a delivery out with no PIN and the bill is asked for; nobody signed in is "Not logged in" and nothing moves', async () => {
+    const status = () => db.prepare(`SELECT status, rider_keeps_cents AS keeps FROM orders WHERE id = ?`).get(s.kitchenNow);
+    const spooled = h.spool.length;
+    h.session = null;
+    expect(await call('orders:sendOut', { orderId: s.kitchenNow })).toEqual({ ok: false, code: 'unauthenticated', message: 'Not logged in' });
+    expect(status()).toEqual({ status: 'preparing', keeps: null });
+    expect(h.spool.length).toBe(spooled);
+
+    h.session = CASHIER;
+    const o = await call('orders:sendOut', { orderId: s.kitchenNow });
+    expect(o).toMatchObject({ ok: true, data: { order: { id: s.kitchenNow, status: 'out_for_delivery', assignedRiderId: null, riderKeepsCents: 0 } } });
+    expect(status()).toEqual({ status: 'out_for_delivery', keeps: 0 });
+    expect(h.spool.slice(spooled)).toEqual([{ method: 'onOrderEvent', args: [s.kitchenNow, 'dispatched'] }]);
   });
 
   it('the sweep counts a guard with its own wording as a lock-out', () => {

@@ -176,6 +176,8 @@ export const ipc = {
     markPreparing: (orderId: string) =>
       unwrap(window.api.orders.markPreparing({ orderId })),
     markReady: (orderId: string) => unwrap(window.api.orders.markReady({ orderId })),
+    /** Send out: an outside rider takes the order; the customer's bill prints with it. */
+    sendOut: (orderId: string) => unwrap(window.api.orders.sendOut({ orderId })),
     assignRider: (input: IpcRequest<'orders:assignRider'>) =>
       unwrap(window.api.orders.assignRider(input)),
     unassignRider: (orderId: string) =>

@@ -75,6 +75,7 @@ import {
 import {
   MANUAL_REASON,
   docKeyFor,
+  hasLoggedPaper,
   latestLoggedSaleFbr,
   legacyPrintCount,
   listOrderPapers,
@@ -132,7 +133,7 @@ export type OrderPrintEvent =
   | 'paid'
   /** Cash-on-delivery money taken on the board: served / delivered with a payment. */
   | 'payment_captured'
-  /** A rider was assigned: the food is leaving. */
+  /** A rider was assigned or the order was sent out: the food is leaving. */
   | 'dispatched'
   | 'refunded'
   /** Cancelled or refunded in full while the kitchen still had it. */
@@ -352,21 +353,21 @@ class PrintSpooler {
         break;
 
       case 'dispatched':
-        // Once per order — re-assigning a rider must not print a second bill.
-        if (
-          delivery &&
-          policy.deliveryBillOnDispatch &&
-          !hasPrintJob(db, orderId, 'receipt', 'dispatch')
-        ) {
+        // A rider was assigned or the order was sent out: the food is leaving.
+        // Once per order, on either till — re-assigning a rider, Back to
+        // Ready and Send out again, or the other till sending it out must
+        // not print a second bill.
+        if (delivery && policy.deliveryBillOnDispatch && !this.dispatchBillOut(db, orderId)) {
           receipt('dispatch');
         }
         break;
 
       case 'payment_captured':
         drawer();
-        // The customer already holds the bill that left with the food when
-        // the rider brings the money back: then the drawer is all.
-        if (!hasPrintJob(db, orderId, 'receipt', 'dispatch')) receipt('payment');
+        // The customer already holds the bill that left with the food (from
+        // this till or the other one) when the rider brings the money back:
+        // then the drawer is all.
+        if (!this.dispatchBillOut(db, orderId)) receipt('payment');
         break;
 
       case 'refunded': {
@@ -384,6 +385,25 @@ class PrintSpooler {
       case 'cancelled':
         this.kitchenCancelSlip(snap, policy);
         break;
+    }
+  }
+
+  /**
+   * The bill that leaves with the food is already out for this order: a
+   * 'dispatch' receipt job on this till (waiting, printing or done; a job
+   * that gave up does not count), or a 'dispatch' paper in the print log,
+   * which syncs, so the other till's bill counts too (print_queue is this
+   * till's alone). A log that can't be read leaves this till's own queue to
+   * decide, as before the log was asked: the order is already saved, and the
+   * worst is a second bill.
+   */
+  private dispatchBillOut(db: AppDatabase, orderId: string): boolean {
+    if (hasPrintJob(db, orderId, 'receipt', 'dispatch')) return true;
+    try {
+      return hasLoggedPaper(db, orderId, 'dispatch');
+    } catch (e) {
+      log.warn('Print log unreadable; the delivery bill decided by this till alone', { orderId, error: String(e) });
+      return false;
     }
   }
 

@@ -807,6 +807,18 @@ export interface IpcContract {
     request: { orderId: string };
     response: ApiResult<OrderSnapshot>;
   };
+  /**
+   * Send out (owner, 2 Oct 2026: "Ready delivery -> Send out"): a delivery
+   * the kitchen has goes out with an outside rider: out for delivery, no
+   * rider named, and what the rider keeps frozen on the order
+   * (order.riderKeepsCents). Any login that takes orders; no manager PIN. The
+   * customer's bill prints with it (Settings → Printers), once per order
+   * across both tills.
+   */
+  'orders:sendOut': {
+    request: { orderId: string };
+    response: ApiResult<OrderSnapshot>;
+  };
   'orders:assignRider': {
     request: { orderId: string; riderId: string };
     response: ApiResult<OrderSnapshot>;

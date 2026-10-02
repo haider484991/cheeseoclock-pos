@@ -254,6 +254,26 @@ export function latestLoggedSaleFbr(db: AppDatabase, orderId: string): LoggedFbr
   return { irn: r.irn, qrPayload: r.qr ?? null, mode: r.mode === 'sandbox' ? 'sandbox' : 'production' };
 }
 
+/**
+ * Whether a paper of this order printed for this reason (or may have:
+ * 'unsure' counts), on this till or the other one: the log syncs, print_queue
+ * does not. The spooler asks it for the bill that leaves with the food
+ * ('dispatch'), so Send out on one till and Assign rider on the other print
+ * one bill between them. A deleted row does not count. Reads by
+ * idx_document_prints_order (the `+` keeps SQLite off the reason index,
+ * which grows with every delivery).
+ */
+export function hasLoggedPaper(db: AppDatabase, orderId: string, reason: PrintReason): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS hit FROM document_prints
+        WHERE order_id = ? AND +reason = ? AND deleted_at IS NULL
+        LIMIT 1`,
+    )
+    .get(orderId, reason);
+  return row !== undefined;
+}
+
 /** When the print log started on this till (null on a database that never ran 0030). */
 export function printLogSince(db: AppDatabase): string | null {
   const v = getSettingRaw(db, PRINT_LOG_SINCE_KEY);

@@ -14,7 +14,9 @@
  *     answers it cancelled an order the kitchen has raises ONE loud
  *     'cancelled_on_site' card with the order number; any other answer (a
  *     404 included) counts as confirmed;
- *   - the status push raises the same card, once.
+ *   - the status push raises the same card, once;
+ *   - and (v0.7.34) it follows Send out ('out_for_delivery') and Back to
+ *     Ready ('ready') on a website delivery.
  *
  * A real database built from every migration (node:sqlite behind
  * better-sqlite3's shape — costing-shop.fixture.ts), the real order import,
@@ -142,16 +144,16 @@ async function till(opts: { enabled?: boolean } = {}) {
     return { ok: a.status >= 200 && a.status < 300, status: a.status, json: async () => a.body };
   };
 
-  /** A website order for one Baked Wings (Rs 800), as the website sends it. */
-  const webOrder = (id: string, createdAt = new Date().toISOString()): WebOrder => ({
+  /** A website order for one Baked Wings (Rs 800), as the website sends it: a pick-up, or a delivery. */
+  const webOrder = (id: string, createdAt = new Date().toISOString(), delivery = false): WebOrder => ({
     id,
     status: 'new',
     customerName: 'Made-up Customer',
     customerPhone: PHONE,
-    addressLine: 'Collect from the shop',
-    area: null,
+    addressLine: delivery ? 'House 7, Made-up Street' : 'Collect from the shop',
+    area: delivery ? 'Made-up Area' : null,
     notes: null,
-    fulfilment: 'pickup',
+    fulfilment: delivery ? 'delivery' : 'pickup',
     items: [{ posItemId: shop.item.bakedWings, name: 'Baked Wings', quantity: 1, unitPriceCents: 80_000, modifiers: [], notes: null }],
     subtotalCents: 80_000,
     discountCents: 0,
@@ -167,9 +169,9 @@ async function till(opts: { enabled?: boolean } = {}) {
    * Import a website order, the website answering `ack` to its ack (and
    * `status` to a status push, when the till checks one); returns the till's order.
    */
-  const importWeb = async (id: string, ack: Answer, opts: { status?: Answer; createdAt?: string } = {}) => {
+  const importWeb = async (id: string, ack: Answer, opts: { status?: Answer; createdAt?: string; delivery?: boolean } = {}) => {
     answer = (c) => (isAck(c) ? ack : (opts.status ?? UPDATED));
-    await bridge.importOne({}, webOrder(id, opts.createdAt));
+    await bridge.importOne({}, webOrder(id, opts.createdAt, opts.delivery));
     const r = row(id);
     expect(r['pos_order_id']).toBeTruthy();
     const o = db.prepare(`SELECT id, order_number FROM orders WHERE id = ?`).get(r['pos_order_id']) as Row;
@@ -535,6 +537,39 @@ live('the status push and a website cancel', () => {
     const r = t.row('web-1');
     expect(r['last_pushed_status']).toBe('preparing');
     expect(r['acked_at']).toEqual(expect.any(String));
+    expect(t.cancelCards()).toEqual([]);
+  });
+});
+
+live('the status push follows Send out and Back to Ready (v0.7.34)', () => {
+  it("Send out pushes 'out_for_delivery'; Back to Ready pushes 'ready'; sent out again, 'out_for_delivery' again", async () => {
+    const t = await till();
+    const o = await t.importWeb('web-1', ACKED, { delivery: true });
+    t.orderRepo.markOrderReady(t.db, o.orderId, CASHIER);
+    t.setSite(() => UPDATED);
+    await t.bridge.pushStatusUpdates({});
+    expect(t.row('web-1')['last_pushed_status']).toBe('ready');
+
+    const pushed = async () => {
+      t.calls.length = 0;
+      await t.bridge.pushStatusUpdates({});
+      return t.calls.filter(isStatus);
+    };
+    // Send out: an outside rider took it, no rider named; the customer's tracker says it is on its way.
+    expect(t.orderRepo.sendOutOrder(t.db, o.orderId, CASHIER)).toMatchObject({ status: 'out_for_delivery', assignedRiderId: null });
+    expect(await pushed()).toEqual([{ path: '/api/bridge/orders/web-1/status', body: { status: 'out_for_delivery' } }]);
+    expect(t.row('web-1')['last_pushed_status']).toBe('out_for_delivery');
+    // Nothing new: nothing pushed.
+    expect(await pushed()).toEqual([]);
+
+    // Back to Ready (the rider had not left).
+    expect(t.orderRepo.unassignRiderFromOrder(t.db, o.orderId, CASHIER).status).toBe('ready');
+    expect(await pushed()).toEqual([{ path: '/api/bridge/orders/web-1/status', body: { status: 'ready' } }]);
+    expect(t.row('web-1')['last_pushed_status']).toBe('ready');
+
+    // Sent out again.
+    t.orderRepo.sendOutOrder(t.db, o.orderId, CASHIER);
+    expect(await pushed()).toEqual([{ path: '/api/bridge/orders/web-1/status', body: { status: 'out_for_delivery' } }]);
     expect(t.cancelCards()).toEqual([]);
   });
 });
