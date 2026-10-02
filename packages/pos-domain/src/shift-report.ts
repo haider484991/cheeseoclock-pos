@@ -10,9 +10,10 @@
  * tests pin every figure.
  *
  * The bases (see the type's header):
- *  - SALES and BY CHANNEL count the orders SETTLED on this till in this
- *    shift, GROSS: an order refunded later, or in this shift, stays in them,
- *    and its money comes off at Refunds.
+ *  - SALES, BY CHANNEL, ITEMS SOLD and ORDERS count the orders SETTLED on
+ *    this till in this shift, GROSS: an order refunded later, or in this
+ *    shift, stays in them (ORDERS flags it), and its money comes off at
+ *    Refunds.
  *  - MONEY TAKEN counts the payment rows of this shift on this till (money
  *    in, money handed back). NET SALES and MONEY TAKEN are the same figure
  *    in every flow today, because every order's money comes in at one time
@@ -33,12 +34,14 @@ import type {
   ReportChannel,
   ShiftReport,
   ShiftReportCancelled,
+  ShiftReportCategory,
   ShiftReportChannelLine,
   ShiftReportCountCents,
   ShiftReportDiscountKind,
   ShiftReportDiscountLine,
   ShiftReportDrawer,
   ShiftReportMoneyLine,
+  ShiftReportOrder,
   ShiftReportRefund,
   ShiftReportSales,
   ShiftReportUnpaid,
@@ -345,11 +348,118 @@ function unpaidOf(u: ShiftReportUnpaidFacts): ShiftReportUnpaid {
   };
 }
 
+/** The category ITEMS SOLD gives a line that has none; it prints last. */
+export const SHIFT_REPORT_NO_CATEGORY = 'No category';
+
 /**
- * The shift report from the facts read at the close. The items and the
- * orders list come in the next step of the build (empty until then; nothing
- * makes a report yet).
+ * ITEMS SOLD: every line of the settled orders (the facts never carry a
+ * delivery-charge line), so the items add up to SALES' Food. The categories
+ * in the till's own order (their rank, then name), a category the rank does
+ * not place after them, and 'No category' last. An item is its menu item, or
+ * the name it was sold under when the line has no menu item; its quantity
+ * and its line totals (before discounts and tax) are summed. Items most sold
+ * first: quantity, then money, then name.
  */
+function itemsOf(f: ShiftReportFacts): ShiftReportCategory[] {
+  interface Item {
+    name: string;
+    quantity: number;
+    cents: number;
+  }
+  interface Category {
+    name: string | null;
+    rank: number | null;
+    quantity: number;
+    cents: number;
+    items: Map<string, Item>;
+  }
+  const settledIds = new Set(f.settled.map((o) => o.id));
+  const categories = new Map<string, Category>();
+  for (const l of f.lines) {
+    if (!settledIds.has(l.orderId)) continue;
+    const rank = l.categoryName === null ? null : l.categoryRank;
+    const catKey = l.categoryName === null ? 'none' : `${rank ?? ''}|${l.categoryName}`;
+    const c = categories.get(catKey) ?? { name: l.categoryName, rank, quantity: 0, cents: 0, items: new Map<string, Item>() };
+    const itemKey = l.menuItemId !== null ? `id|${l.menuItemId}` : `name|${l.name}`;
+    const i = c.items.get(itemKey) ?? { name: l.name, quantity: 0, cents: 0 };
+    // One name for an item whatever order its lines came in.
+    if (byName(l.name, i.name) < 0) i.name = l.name;
+    i.quantity += l.quantity;
+    i.cents += l.lineTotalCents;
+    c.items.set(itemKey, i);
+    c.quantity += l.quantity;
+    c.cents += l.lineTotalCents;
+    categories.set(catKey, c);
+  }
+  const place = (c: Category): number => (c.name === null ? 2 : c.rank === null ? 1 : 0);
+  return [...categories.entries()]
+    .sort(
+      ([ka, a], [kb, b]) =>
+        place(a) - place(b) || (a.rank ?? 0) - (b.rank ?? 0) || byName(a.name ?? '', b.name ?? '') || byName(ka, kb),
+    )
+    .map(([, c]) => ({
+      category: c.name ?? SHIFT_REPORT_NO_CATEGORY,
+      quantity: c.quantity,
+      cents: c.cents,
+      items: [...c.items.entries()]
+        .sort(([ka, a], [kb, b]) => b.quantity - a.quantity || b.cents - a.cents || byName(a.name, b.name) || byName(ka, kb))
+        .map(([, i]) => ({ name: i.name, quantity: i.quantity, cents: i.cents })),
+    }));
+}
+
+/**
+ * The list's order: by when the order was paid (by the clock, so the same
+ * moment written two ways is one time; a time that will not read goes after
+ * every other), then by order number, then by id.
+ */
+function byPaid(a: ShiftReportFactsOrder, b: ShiftReportFactsOrder): number {
+  const parsed = (iso: string): number => {
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+  };
+  const ta = parsed(a.paidAt);
+  const tb = parsed(b.paidAt);
+  if (ta !== tb) return ta < tb ? -1 : 1;
+  if (ta === Number.POSITIVE_INFINITY && a.paidAt !== b.paidAt) return byName(a.paidAt, b.paidAt);
+  return byName(a.orderNumber, b.orderNumber) || byName(a.id, b.id);
+}
+
+/**
+ * ORDERS: one entry per settled order — the same set as SALES, so there are
+ * sales.orderCount of them and their totals add up to TOTAL (with tax) — in
+ * the order they were paid, then by order number (the id last, as two tills
+ * number their orders apart). Its payment methods biggest first, as the
+ * receipt and Orders history show them ('EasyPaisa + Cash' for an outside
+ * rider's EasyPaisa settlement), from the money this shift took for it; a tie
+ * in the MONEY TAKEN order. 'full' when the order was refunded in full by the
+ * close, 'part' when it has any other refund, else 'no'.
+ */
+function ordersOf(f: ShiftReportFacts): ShiftReportOrder[] {
+  const taken = new Map<string, Map<string, number>>();
+  for (const p of f.payments) {
+    if (!(p.cents > 0)) continue;
+    const byMethod = taken.get(p.orderId) ?? new Map<string, number>();
+    byMethod.set(p.method, (byMethod.get(p.method) ?? 0) + p.cents);
+    taken.set(p.orderId, byMethod);
+  }
+  return [...f.settled]
+    .sort(byPaid)
+    .map((o) => {
+      const amounts = taken.get(o.id);
+      const amount = (m: string): number => amounts?.get(m) ?? 0;
+      return {
+        orderNumber: o.orderNumber,
+        paidAt: o.paidAt,
+        channel: o.channel,
+        outside: o.outside,
+        methods: [...new Set(o.methods)].sort((a, b) => amount(b) - amount(a) || inOrder(METHOD_ORDER, a, b)),
+        totalCents: o.totalCents,
+        refunded: o.status === 'refunded' ? 'full' : o.hasRefund ? 'part' : 'no',
+      };
+    });
+}
+
+/** The shift report from the facts read at the close. */
 export function buildShiftReport(f: ShiftReportFacts): ShiftReport {
   const sales = salesOf(f);
   const moneyTakenCents = sum(f.payments.map((p) => p.cents));
@@ -381,8 +491,8 @@ export function buildShiftReport(f: ShiftReportFacts): ShiftReport {
     })),
     drawer: drawerOf(f.drawer),
     unpaid: unpaidOf(f.unpaid),
-    items: [],
-    orders: [],
+    items: itemsOf(f),
+    orders: ordersOf(f),
   };
 }
 

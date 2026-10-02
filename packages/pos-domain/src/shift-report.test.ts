@@ -12,12 +12,14 @@ import {
   type ShiftReportFactsPayment,
   type ShiftReportFactsRefund,
 } from './shift-report.js';
+import { SAMPLE_NIGHT, SAMPLE_NIGHT_CATEGORIES } from './shift-report.fixture.js';
 
 /**
- * The shift report's builder (step 19c-2): SALES, MONEY TAKEN, BY CHANNEL,
- * the cancels and refunds, the CASH DRAWER and the unpaid list, worked out
- * from the facts the till reads at the close; and the one writer of the
- * stored text. ITEMS SOLD and the orders list come in the next step.
+ * The shift report's builder: SALES, MONEY TAKEN, BY CHANNEL, the cancels
+ * and refunds, the CASH DRAWER and the unpaid list (step 19c-2), ITEMS SOLD
+ * and the ORDERS list (step 19c-3), worked out from the facts the till reads
+ * at the close; and the one writer of the stored text. The busy night of the
+ * sample paper is shift-report.fixture.ts.
  * Made-up names and figures (the repository is public); 15% tax throughout.
  */
 
@@ -263,8 +265,33 @@ const NIGHT_REPORT: ShiftReport = {
     orders: [{ orderNumber: '20261001-0010', at: '2026-10-01T20:12:00.000Z', takenBy: 'Website', cents: 159_000 }],
     reason: 'Rider still out',
   },
-  items: [],
-  orders: [],
+  // Every line of the eight orders: the items add up to Food (13,100.00).
+  items: [
+    {
+      category: 'Pizza',
+      quantity: 9,
+      cents: 1_310_000,
+      items: [
+        { name: 'Test Burger', quantity: 4, cents: 450_000 },
+        { name: 'Test Pizza - Large', quantity: 3, cents: 600_000 },
+        { name: 'Test Pizza - Medium', quantity: 1, cents: 150_000 },
+        { name: 'Test Fries', quantity: 1, cents: 110_000 },
+      ],
+    },
+  ],
+  // All paid at the same moment, so in number order; they add up to TOTAL (with tax).
+  orders: [
+    { orderNumber: '20261001-0001', paidAt: '2026-10-01T12:00:00.000Z', channel: 'takeaway', outside: false, methods: ['cash'], totalCents: 230_000, refunded: 'no' },
+    { orderNumber: '20261001-0002', paidAt: '2026-10-01T12:00:00.000Z', channel: 'delivery', outside: false, methods: ['cash'], totalCents: 345_000, refunded: 'no' },
+    // The wallet's Rs 2,330 before his Rs 200 in cash: biggest first.
+    { orderNumber: '20261001-0003', paidAt: '2026-10-01T12:00:00.000Z', channel: 'delivery', outside: true, methods: ['easypaisa', 'cash'], totalCents: 253_000, refunded: 'no' },
+    { orderNumber: '20261001-0004', paidAt: '2026-10-01T12:00:00.000Z', channel: 'web_delivery', outside: true, methods: ['cash'], totalCents: 138_000, refunded: 'no' },
+    { orderNumber: '20261001-0005', paidAt: '2026-10-01T12:00:00.000Z', channel: 'web_pickup', outside: false, methods: ['card'], totalCents: 103_500, refunded: 'no' },
+    { orderNumber: '20261001-0006', paidAt: '2026-10-01T12:00:00.000Z', channel: 'foodpanda', outside: false, methods: ['foodpanda'], totalCents: 184_000, refunded: 'no' },
+    { orderNumber: '20261001-0007', paidAt: '2026-10-01T12:00:00.000Z', channel: 'takeaway', outside: false, methods: ['cash'], totalCents: 115_000, refunded: 'full' },
+    // Rs 650 card and Rs 500 cash: the card first.
+    { orderNumber: '20261001-0008', paidAt: '2026-10-01T12:00:00.000Z', channel: 'takeaway', outside: false, methods: ['card', 'cash'], totalCents: 115_000, refunded: 'part' },
+  ],
 };
 
 describe('buildShiftReport: a small night', () => {
@@ -653,7 +680,7 @@ describe('shiftReportJson (the only writer of shifts.close_report_json)', () => 
     expect(text.startsWith('{"v":1,"shiftId":"s_test_1","deviceId":"till-test-1","tillName":"Front till"')).toBe(true);
   });
 
-  it('writes the count by note in its own stored order, and the lists still to come (items, orders) in full', () => {
+  it('writes the count by note in its own stored order, and the items and orders lists in full', () => {
     const full: ShiftReport = {
       ...NIGHT_REPORT,
       items: [{ category: 'Pizza', quantity: 2, cents: 400_000, items: [{ name: 'Test Pizza - Large', quantity: 2, cents: 400_000 }] }],
@@ -803,6 +830,16 @@ describe('a long busy shift (2,000 made-up orders)', () => {
     expect(r.drawer.otherCents).toBe(0);
     expect(shiftReportDrawerAddsUp(r)).toBe(true);
     expect(JSON.parse(shiftReportJson(r))).toEqual(r);
+
+    // ITEMS SOLD always adds up to Food, every line counted once.
+    expect(sum(r.items.map((c) => c.cents))).toBe(s.foodCents);
+    expect(sum(r.items.flatMap((c) => c.items.map((i) => i.cents)))).toBe(s.foodCents);
+    expect(sum(r.items.map((c) => c.quantity))).toBe(lines.length);
+    // ORDERS is the SALES set: one entry each, adding up to TOTAL (with tax).
+    expect(r.orders).toHaveLength(s.orderCount);
+    expect(sum(r.orders.map((o) => o.totalCents))).toBe(s.billedCents);
+    expect(r.orders.filter((o) => o.refunded === 'full')).toHaveLength(settled.filter((o) => o.status === 'refunded').length);
+    expect(r.orders.filter((o) => o.refunded === 'part')).toHaveLength(settled.filter((o) => o.hasRefund && o.status !== 'refunded').length);
   });
 });
 
@@ -811,6 +848,495 @@ describe('the facts', () => {
     const l: ShiftReportFactsLine = { ...line('0001', 'Test Dip', 10_000), menuItemId: null, categoryName: null, categoryRank: null };
     const r = buildShiftReport(facts({ settled: [sale('0001', 10_000)], lines: [l] }));
     expect(r.sales.foodCents).toBe(10_000);
-    expect(r.items).toEqual([]);
+    expect(r.items).toEqual([{ category: 'No category', quantity: 1, cents: 10_000, items: [{ name: 'Test Dip', quantity: 1, cents: 10_000 }] }]);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// ITEMS SOLD
+// -----------------------------------------------------------------------------
+
+/** A line of a given category and menu item. */
+function sold(
+  orderId: string,
+  name: string,
+  lineTotalCents: number,
+  o: { quantity?: number; menuItemId?: string | null; category?: string | null; rank?: number | null } = {},
+): ShiftReportFactsLine {
+  const category = o.category === undefined ? 'Pizza' : o.category;
+  return {
+    orderId,
+    menuItemId: o.menuItemId === undefined ? `mi_${name}` : o.menuItemId,
+    name,
+    categoryName: category,
+    categoryRank: o.rank === undefined ? 0 : o.rank,
+    quantity: o.quantity ?? 1,
+    lineTotalCents,
+    taxRateBps: 1500,
+  };
+}
+
+describe('ITEMS SOLD', () => {
+  /** The report of one settled order '0001' carrying these lines (its food is theirs). */
+  function itemsOf(lines: ShiftReportFactsLine[]): ShiftReport['items'] {
+    const food = sum(lines.filter((l) => l.orderId === '0001').map((l) => l.lineTotalCents));
+    return buildShiftReport(facts({ settled: [sale('0001', food)], lines })).items;
+  }
+
+  it('categories in the till’s own order (rank, then name), one the rank does not place after them, and No category last', () => {
+    const items = itemsOf([
+      sold('0001', 'Test Water', 5_000, { menuItemId: null, category: null, rank: null }),
+      sold('0001', 'Test Cola', 12_000, { category: 'Drinks', rank: 6 }),
+      sold('0001', 'Test Special', 50_000, { category: 'Specials', rank: null }),
+      sold('0001', 'Test Burger', 80_000, { category: 'Burgers', rank: 2 }),
+      sold('0001', 'Test Pizza', 200_000, { category: 'Pizza', rank: 1 }),
+      sold('0001', 'Test Star', 220_000, { category: 'Signature Pizzas', rank: 0 }),
+      // Two categories at one rank: by name.
+      sold('0001', 'Test Fries', 45_000, { category: 'Fries & Sides', rank: 2 }),
+    ]);
+    expect(items.map((c) => c.category)).toEqual(['Signature Pizzas', 'Pizza', 'Burgers', 'Fries & Sides', 'Drinks', 'Specials', 'No category']);
+  });
+
+  it('an item is its menu item: its lines are added up, quantities included, under one name whatever order they came in', () => {
+    const lines = [
+      sold('0001', 'Test Pizza — Large', 200_000),
+      sold('0001', 'Test Pizza — Large', 400_000, { quantity: 2 }),
+      // The same menu item under the name it was sold with before a rename (the menu item since deleted).
+      sold('0001', 'Old Test Pizza', 200_000, { menuItemId: 'mi_Test Pizza — Large' }),
+      sold('0001', 'Test Pizza — Medium', 150_000),
+    ];
+    const expected = [
+      {
+        category: 'Pizza',
+        quantity: 5,
+        cents: 950_000,
+        items: [
+          { name: 'Old Test Pizza', quantity: 4, cents: 800_000 },
+          { name: 'Test Pizza — Medium', quantity: 1, cents: 150_000 },
+        ],
+      },
+    ];
+    expect(itemsOf(lines)).toEqual(expected);
+    expect(itemsOf([...lines].reverse())).toEqual(expected);
+  });
+
+  it('a line with no menu item is its name as sold; it never joins a menu item of the same name', () => {
+    const items = itemsOf([
+      sold('0001', 'Test Dip', 10_000, { menuItemId: null }),
+      sold('0001', 'Test Dip', 20_000, { menuItemId: null, quantity: 2 }),
+      sold('0001', 'Test Dip', 10_000),
+    ]);
+    expect(items[0]?.items).toEqual([
+      { name: 'Test Dip', quantity: 3, cents: 30_000 },
+      { name: 'Test Dip', quantity: 1, cents: 10_000 },
+    ]);
+  });
+
+  it('most sold first: quantity, then money, then name', () => {
+    const items = itemsOf([
+      sold('0001', 'Test C', 30_000, { quantity: 3 }),
+      sold('0001', 'Test B', 80_000, { quantity: 4 }),
+      sold('0001', 'Test A', 60_000, { quantity: 4 }),
+      sold('0001', 'Test D', 80_000, { quantity: 4 }),
+      sold('0001', 'Test E', 900_000, { quantity: 1 }),
+    ]);
+    expect(items[0]?.items.map((i) => i.name)).toEqual(['Test B', 'Test D', 'Test A', 'Test C', 'Test E']);
+  });
+
+  it('only the lines of orders settled in this shift; a fully refunded order’s items stay', () => {
+    const refunded = sale('0002', 100_000, { status: 'refunded', hasRefund: true });
+    const r = buildShiftReport(
+      facts({
+        settled: [sale('0001', 200_000), refunded],
+        lines: [sold('0001', 'Test Pizza', 200_000), sold('0002', 'Test Burger', 100_000), sold('0099', 'Test Fries', 45_000)],
+      }),
+    );
+    expect(r.items).toEqual([
+      {
+        category: 'Pizza',
+        quantity: 2,
+        cents: 300_000,
+        items: [
+          { name: 'Test Pizza', quantity: 1, cents: 200_000 },
+          { name: 'Test Burger', quantity: 1, cents: 100_000 },
+        ],
+      },
+    ]);
+    expect(sum(r.items.map((c) => c.cents))).toBe(r.sales.foodCents);
+  });
+
+  it('the delivery charge is never an item: items add up to Food, which leaves the charges out', () => {
+    const o = sale('0001', 200_000, { channel: 'delivery', chargeCents: 20_000 });
+    const r = buildShiftReport(facts({ settled: [o], lines: [sold('0001', 'Test Pizza', 200_000)] }));
+    expect(r.items.flatMap((c) => c.items.map((i) => i.name))).toEqual(['Test Pizza']);
+    expect(sum(r.items.map((c) => c.cents))).toBe(r.sales.foodCents);
+    expect(r.sales.foodCents).toBe(o.subtotalCents - o.deliveryChargeCents);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// ORDERS
+// -----------------------------------------------------------------------------
+
+describe('ORDERS', () => {
+  it('in the order they were paid, then by number, then by id; the same moment written two ways is one time', () => {
+    const at = (id: string, paidAt: string, orderNumber = `20261001-${id}`) => sale(id, 100_000, { paidAt, orderNumber });
+    const r = buildShiftReport(
+      facts({
+        settled: [
+          at('0005', '2026-10-01T13:00:00.000Z'),
+          at('0004', '2026-10-01T12:30:00Z'),
+          at('0002', '2026-10-01T12:30:00.000Z'),
+          at('0001', '2026-10-01T14:00:00.000Z'),
+          // Two tills number their orders apart: the same number, told apart by id.
+          at('0007', '2026-10-01T12:00:00.000Z', '20261001-0003'),
+          at('0003', '2026-10-01T12:00:00.000Z'),
+          // A time that does not read goes last.
+          at('0006', 'not a time'),
+        ],
+      }),
+    );
+    expect(r.orders.map((o) => `${o.orderNumber} ${o.paidAt}`)).toEqual([
+      '20261001-0003 2026-10-01T12:00:00.000Z',
+      '20261001-0003 2026-10-01T12:00:00.000Z',
+      '20261001-0002 2026-10-01T12:30:00.000Z',
+      '20261001-0004 2026-10-01T12:30:00Z',
+      '20261001-0005 2026-10-01T13:00:00.000Z',
+      '20261001-0001 2026-10-01T14:00:00.000Z',
+      '20261001-0006 not a time',
+    ]);
+    // The id breaks the tie: '0003' before '0007', whatever order they came in.
+    const twins = (settled: ShiftReportFactsOrder[]) => buildShiftReport(facts({ settled })).orders.map((o) => o.totalCents);
+    const a = at('0003', '2026-10-01T12:00:00.000Z', '20261001-0003');
+    const b = { ...at('0007', '2026-10-01T12:00:00.000Z', '20261001-0003'), totalCents: 999 };
+    expect(twins([b, a])).toEqual([a.totalCents, 999]);
+    expect(twins([a, b])).toEqual([a.totalCents, 999]);
+  });
+
+  it('methods biggest first from the money this shift took; a tie in the MONEY TAKEN order; each once', () => {
+    const o = (id: string, methods: string[]) => sale(id, 100_000, { methods });
+    const r = buildShiftReport(
+      facts({
+        settled: [
+          o('0001', ['cash', 'easypaisa']),
+          o('0002', ['card', 'cash']),
+          o('0003', ['card', 'cash']),
+          o('0004', ['jazzcash', 'cash', 'cash']),
+          o('0005', ['voucher', 'card']),
+          o('0006', []),
+        ],
+        payments: [
+          // An outside rider's EasyPaisa settlement: the wallet, then his charge in cash.
+          pay('0001', 'easypaisa', 95_000),
+          pay('0001', 'cash', 20_000),
+          // Rs 600 cash and Rs 550 card; a refund on the cash does not change the order.
+          pay('0002', 'cash', 60_000),
+          pay('0002', 'card', 55_000),
+          pay('0002', 'cash', -30_000),
+          // A tie.
+          pay('0003', 'card', 57_500),
+          pay('0003', 'cash', 57_500),
+          // Two cash rows add up.
+          pay('0004', 'jazzcash', 60_000),
+          pay('0004', 'cash', 30_000),
+          pay('0004', 'cash', 40_000),
+          // A method with no money in this shift's rows goes after.
+          pay('0005', 'card', 115_000),
+        ],
+      }),
+    );
+    expect(r.orders.map((x) => x.methods)).toEqual([
+      ['easypaisa', 'cash'],
+      ['cash', 'card'],
+      ['cash', 'card'],
+      ['cash', 'jazzcash'],
+      ['card', 'voucher'],
+      [],
+    ]);
+  });
+
+  it('refunded in full, in part, or not; channel and outside rider as the order says', () => {
+    const r = buildShiftReport(
+      facts({
+        settled: [
+          sale('0001', 100_000, { status: 'refunded', hasRefund: true }),
+          sale('0002', 100_000, { hasRefund: true, channel: 'delivery', chargeCents: 20_000, outside: true }),
+          sale('0003', 100_000, { channel: 'web_delivery', chargeCents: 25_000, status: 'delivered' }),
+        ],
+      }),
+    );
+    expect(r.orders.map((x) => [x.refunded, x.channel, x.outside])).toEqual([
+      ['full', 'takeaway', false],
+      ['part', 'delivery', true],
+      ['no', 'web_delivery', false],
+    ]);
+  });
+
+  it('items and orders carry only the report’s keys, in the type’s order', () => {
+    const r = buildShiftReport(facts({ settled: [sale('0001', 100_000, { methods: ['cash'] })], lines: [sold('0001', 'Test Pizza', 100_000)] }));
+    expect(Object.keys(r.orders[0]!)).toEqual(['orderNumber', 'paidAt', 'channel', 'outside', 'methods', 'totalCents', 'refunded']);
+    expect(Object.keys(r.items[0]!)).toEqual(['category', 'quantity', 'cents', 'items']);
+    expect(Object.keys(r.items[0]!.items[0]!)).toEqual(['name', 'quantity', 'cents']);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The sample night (shift-report.fixture.ts): the corrected sample paper
+// -----------------------------------------------------------------------------
+
+/** The sample paper's figures, as printed (Sample-Shift-Report-80mm.txt), in cents. */
+const SAMPLE_SALES = {
+  orderCount: 62,
+  foodCents: 16_876_000,
+  delivery: { orderCount: 18, cents: 400_000 },
+  discounts: [
+    { kind: 'foodpanda', orderCount: 9, cents: 486_000 },
+    { kind: 'staff', orderCount: 3, cents: 164_000 },
+    { kind: 'website', orderCount: 2, cents: 56_000 },
+    { kind: 'offer', orderCount: 2, cents: 56_000 },
+  ],
+  taxCents: 2_477_100,
+  taxRateBps: 1500,
+  billedCents: 18_991_100,
+  refunds: { orderCount: 1, cents: 172_500 },
+  netCents: 18_818_600,
+  averageCents: 306_308,
+};
+
+const SAMPLE_CHANNELS = [
+  { channel: 'takeaway', orderCount: 33, billedCents: 9_437_000, outside: null },
+  { channel: 'delivery', orderCount: 17, billedCents: 5_513_000, outside: { orderCount: 8, billedCents: 2_553_000 } },
+  { channel: 'web_pickup', orderCount: 2, billedCents: 579_600, outside: null },
+  { channel: 'web_delivery', orderCount: 1, billedCents: 294_400, outside: null },
+  { channel: 'foodpanda', orderCount: 9, billedCents: 3_167_100, outside: null },
+];
+
+/** ITEMS SOLD (158), as the sample prints it (the till's names keep the menu's '—'; the paper prints '-'). */
+const SAMPLE_ITEMS: ReadonlyArray<readonly [string, number, number, ReadonlyArray<readonly [string, number, number]>]> = [
+  ['Signature Pizzas', 22, 4_840_000, [
+    ['Shawarma Pizza — Large', 8, 1_760_000],
+    ['Crown Crust — Large', 5, 1_100_000],
+    ['Cheesy Star — Large', 4, 880_000],
+    ['Meat Lovers — Large', 3, 660_000],
+    ['Cheetos — Large', 2, 440_000],
+  ]],
+  ['Pizza', 26, 4_550_000, [
+    ['Fajita Pizza — Medium', 5, 750_000],
+    ['Chicken Tikka Pizza — Large', 4, 800_000],
+    ['Fajita Pizza — Large', 4, 800_000],
+    ['Malai Supreme — Medium', 4, 600_000],
+    ['Classic Pepperoni — Large', 3, 600_000],
+    ['Cheesalious — Medium', 3, 450_000],
+    ['Chicken Tikka Malai — Large', 2, 400_000],
+    ['Veggie Lovers — Medium', 1, 150_000],
+  ]],
+  ['Burgers', 19, 1_605_000, [
+    ['Crispy Signature', 7, 560_000],
+    ['Nashville Authentic (Hot)', 5, 475_000],
+    ['Signature Cheese Dipped', 4, 360_000],
+    ['Classic Crispy Chicken', 3, 210_000],
+  ]],
+  ['Fries & Sides', 23, 1_341_000, [
+    ['Fries — Large', 8, 360_000],
+    ['Signature Loaded Fries', 6, 420_000],
+    ['Signature Mayo Masala Fries — Large', 4, 220_000],
+    ['Nuggets', 3, 201_000],
+    ['Baked Wings', 2, 140_000],
+  ]],
+  ['Dips', 29, 290_000, [
+    ['Signature Orange Dip', 14, 140_000],
+    ['Garlic Mayo Dip', 9, 90_000],
+    ['Ranch Dip', 6, 60_000],
+  ]],
+  ['Value Deals', 12, 3_770_000, [
+    ['Big Two', 5, 1_800_000],
+    ['Perfect Pair', 4, 1_040_000],
+    ['Family Feast', 3, 930_000],
+  ]],
+  ['Drinks', 27, 480_000, [
+    ['Soft Drink — 345 ml', 15, 180_000],
+    ['Soft Drink — 1 litre', 12, 300_000],
+  ]],
+];
+
+describe('the sample night (62 orders): every figure of the sample paper', () => {
+  const r = buildShiftReport(SAMPLE_NIGHT);
+
+  it('the header', () => {
+    expect([r.tillName, r.shopName, r.openedBy, r.closedBy, r.pinOnLoginOf]).toEqual([
+      'DESKTOP-7Q2M1KD',
+      "Cheese O'Clock",
+      'Ali Raza',
+      'Imran Ali',
+      'Ali Raza',
+    ]);
+    // Opened 01/10/2026 16:02 and closed 02/10/2026 01:48, Pakistan time.
+    expect([r.openedAt, r.closedAt]).toEqual(['2026-10-01T11:02:00.000Z', '2026-10-01T20:48:00.000Z']);
+  });
+
+  it('SALES: food, delivery, the four kinds of discount, tax, TOTAL, refunds, NET SALES and the average bill', () => {
+    expect(r.sales).toEqual(SAMPLE_SALES);
+    const s = r.sales;
+    expect(s.foodCents + s.delivery.cents - sum(s.discounts.map((d) => d.cents)) + s.taxCents).toBe(s.billedCents);
+  });
+
+  it('MONEY TAKEN: each method’s money as the sample, refunds off; NET SALES = MONEY TAKEN, no part payments', () => {
+    // A split cash + card order and five outside riders' EasyPaisa + cash settlements count under both methods.
+    expect(r.payments).toEqual([
+      { method: 'cash', orderCount: 38, cents: 9_635_000 },
+      { method: 'card', orderCount: 12, cents: 3_526_000 },
+      { method: 'easypaisa', orderCount: 6, cents: 1_743_000 },
+      { method: 'jazzcash', orderCount: 3, cents: 920_000 },
+      { method: 'foodpanda', orderCount: 9, cents: 3_167_100 },
+    ]);
+    expect(r.paymentRefunds).toEqual([{ method: 'cash', orderCount: 1, cents: 172_500 }]);
+    expect(r.moneyTakenCents).toBe(18_818_600);
+    expect(r.moneyTakenCents).toBe(r.sales.netCents);
+    expect(r.partPaymentsCents).toBe(0);
+  });
+
+  it('BY CHANNEL: the own and outside riders under Delivery, and the channels add up to TOTAL (with tax)', () => {
+    expect(r.channels).toEqual(SAMPLE_CHANNELS);
+    expect(sum(r.channels.map((c) => c.billedCents))).toBe(r.sales.billedCents);
+    expect(sum(r.channels.map((c) => c.orderCount))).toBe(r.sales.orderCount);
+    // Own riders 29,600.00 + outside riders 25,530.00 = Delivery 55,130.00.
+    const delivery = r.channels.find((c) => c.channel === 'delivery')!;
+    expect(delivery.billedCents - delivery.outside!.billedCents).toBe(2_960_000);
+  });
+
+  it('CANCELLED AND REFUNDED, and UNPAID - CARRIED OVER', () => {
+    expect(r.cancelled).toEqual([
+      { orderNumber: '20261001-0021', at: '2026-10-01T16:14:00.000Z', cents: 207_000, made: 'made', reason: 'Customer left' },
+      { orderNumber: '20261001-0047', at: '2026-10-01T18:40:00.000Z', cents: 138_000, made: 'not_made', reason: 'Wrong item rung' },
+    ]);
+    expect(r.refunds).toEqual([
+      { orderNumber: '20261001-0033', at: '2026-10-01T17:05:00.000Z', method: 'cash', cents: 172_500, full: true, reason: 'Cold pizza' },
+    ]);
+    expect(r.unpaid).toEqual({
+      orders: [
+        { orderNumber: '20261001-0064', at: '2026-10-01T20:12:00.000Z', takenBy: 'Ali Raza', cents: 247_000 },
+        { orderNumber: '20261001-0066', at: '2026-10-01T20:30:00.000Z', takenBy: 'Website', cents: 159_000 },
+      ],
+      reason: 'Rider still out',
+    });
+  });
+
+  it('CASH DRAWER and CASH COUNTED: cash taken out 5 / 3,750.00 with the rider tips a part of it, riders 8 / 1,800.00, SHORT 100.00', () => {
+    expect(r.drawer).toEqual({
+      openingCents: 500_000,
+      cashSalesCents: 9_635_000,
+      cashRefundsCents: 172_500,
+      cashIn: { count: 1, cents: 200_000 },
+      cashOut: { count: 5, cents: 375_000 },
+      riderTips: { count: 3, cents: 60_000 },
+      riderKept: { count: 8, cents: 180_000, tripCount: 0 },
+      otherCents: 0,
+      expectedCents: 9_607_500,
+      countedCents: 9_597_500,
+      varianceCents: -10_000,
+      countedNotes: SAMPLE_NIGHT.drawer.countedNotes,
+    });
+    expect(shiftReportDrawerAddsUp(r)).toBe(true);
+    const notes = r.drawer.countedNotes!;
+    expect(sum(notes.notes.map((n) => n.faceCents * n.count)) + notes.otherCents).toBe(r.drawer.countedCents);
+    // The fixture's own money agrees with its drawer: the cash in and out of the payment rows, the riders' charges.
+    expect(sum(SAMPLE_NIGHT.payments.filter((p) => p.method === 'cash' && p.cents > 0).map((p) => p.cents))).toBe(r.drawer.cashSalesCents);
+    expect(-sum(SAMPLE_NIGHT.payments.filter((p) => p.method === 'cash' && p.cents < 0).map((p) => p.cents))).toBe(r.drawer.cashRefundsCents);
+    const outside = SAMPLE_NIGHT.settled.filter((o) => o.outside);
+    expect([outside.length, sum(outside.map((o) => o.deliveryChargeCents))]).toEqual([8, 180_000]);
+  });
+
+  it('ITEMS SOLD (158): seven categories in the menu’s order, every item most sold first, adding up to Food', () => {
+    expect(r.items).toEqual(
+      SAMPLE_ITEMS.map(([category, quantity, cents, items]) => ({
+        category,
+        quantity,
+        cents,
+        items: items.map(([name, q, c]) => ({ name, quantity: q, cents: c })),
+      })),
+    );
+    expect(r.items.map((c) => c.category)).toEqual([...SAMPLE_NIGHT_CATEGORIES]);
+    expect(r.items[1]?.items[0]).toEqual({ name: 'Fajita Pizza — Medium', quantity: 5, cents: 750_000 });
+    expect(sum(r.items.map((c) => c.quantity))).toBe(158);
+    expect(sum(r.items.map((c) => c.cents))).toBe(r.sales.foodCents);
+    for (const c of r.items) {
+      expect(sum(c.items.map((i) => i.quantity))).toBe(c.quantity);
+      expect(sum(c.items.map((i) => i.cents))).toBe(c.cents);
+    }
+    // #0033 was refunded in full: its Malai Supreme stays in the four sold.
+    expect(SAMPLE_NIGHT.lines.filter((l) => l.orderId === 'ord-0033').map((l) => l.name)).toEqual(['Malai Supreme — Medium']);
+    // The delivery charges are never items.
+    expect(r.items.some((c) => c.items.some((i) => /delivery/i.test(i.name)))).toBe(false);
+  });
+
+  it('ORDERS (62): every order paid, in the order paid, adding up to TOTAL (with tax)', () => {
+    expect(r.orders).toHaveLength(62);
+    expect(r.orders).toHaveLength(r.sales.orderCount);
+    expect(sum(r.orders.map((o) => o.totalCents))).toBe(18_991_100);
+    expect(new Set(r.orders.map((o) => o.orderNumber)).size).toBe(62);
+    for (let i = 1; i < r.orders.length; i += 1) expect(r.orders[i]!.paidAt >= r.orders[i - 1]!.paidAt).toBe(true);
+    // #0001 to #0008 as the ORDERS sample shows them (#0007 not refunded here: the night's refund is #0033).
+    const row = (o: ShiftReport['orders'][number]) => [o.orderNumber.slice(-4), o.paidAt.slice(11, 16), o.channel, o.outside, o.methods.join(' + '), o.totalCents, o.refunded];
+    expect(r.orders.slice(0, 8).map(row)).toEqual([
+      ['0001', '11:20', 'takeaway', false, 'cash', 253_000, 'no'],
+      ['0002', '11:41', 'delivery', false, 'cash', 437_000, 'no'],
+      ['0003', '12:05', 'foodpanda', false, 'foodpanda', 264_500, 'no'],
+      ['0004', '12:22', 'takeaway', false, 'card', 172_500, 'no'],
+      ['0005', '12:48', 'web_pickup', false, 'cash', 289_800, 'no'],
+      ['0006', '13:02', 'delivery', true, 'easypaisa + cash', 437_000, 'no'],
+      ['0007', '13:15', 'takeaway', false, 'cash', 172_500, 'no'],
+      ['0008', '13:31', 'takeaway', false, 'jazzcash', 356_500, 'no'],
+    ]);
+    const byNumber = (n: string) => r.orders.find((o) => o.orderNumber === `20261001-${n}`)!;
+    const place = (n: string) => r.orders.indexOf(byNumber(n));
+    // Refunded in full; the split payment; an outside rider's EasyPaisa settlement.
+    expect(byNumber('0033').refunded).toBe('full');
+    expect(r.orders.filter((o) => o.refunded !== 'no').map((o) => o.orderNumber)).toEqual(['20261001-0033']);
+    expect(byNumber('0062').methods).toEqual(['cash', 'card']);
+    expect(byNumber('0059')).toMatchObject({ channel: 'delivery', outside: true, methods: ['easypaisa', 'cash'] });
+    // Paid order, not number order: #0013 (19:12) before #0012, whose rider came back at 19:20;
+    // #0040 and #0045 came back together at 22:50, in number order.
+    expect(place('0013')).toBeLessThan(place('0012'));
+    expect(place('0045')).toBe(place('0040') + 1);
+    expect(byNumber('0040').paidAt).toBe(byNumber('0045').paidAt);
+    // The night ends with the orders paid after midnight.
+    expect(r.orders[r.orders.length - 1]?.orderNumber).toBe('20261001-0065');
+  });
+
+  it('a part refund flags its order part; the full one stays full', () => {
+    const o44 = SAMPLE_NIGHT.settled.find((o) => o.orderNumber === '20261001-0044')!;
+    const partly: ShiftReportFacts = {
+      ...SAMPLE_NIGHT,
+      settled: SAMPLE_NIGHT.settled.map((o) => (o === o44 ? { ...o, hasRefund: true } : o)),
+      payments: [...SAMPLE_NIGHT.payments, pay(o44.id, 'card', -50_000)],
+      refunds: [...SAMPLE_NIGHT.refunds, { ...refund(o44, 'card', 50_000, false, 'Missing dip'), at: '2026-10-01T18:10:00.000Z' }],
+    };
+    const p = buildShiftReport(partly);
+    expect(p.orders.filter((o) => o.refunded !== 'no').map((o) => [o.orderNumber, o.refunded])).toEqual([
+      ['20261001-0033', 'full'],
+      ['20261001-0044', 'part'],
+    ]);
+    expect(p.sales.refunds).toEqual({ orderCount: 2, cents: 222_500 });
+    // Gross: the order stays in SALES, the items and the list.
+    expect([p.sales.billedCents, p.orders.length, sum(p.items.map((c) => c.cents))]).toEqual([18_991_100, 62, 16_876_000]);
+    expect(p.moneyTakenCents).toBe(p.sales.netCents);
+  });
+
+  it('the facts in any order (orders, lines, payments, each order’s methods) give the same report', () => {
+    const reversed: ShiftReportFacts = {
+      ...SAMPLE_NIGHT,
+      settled: [...SAMPLE_NIGHT.settled].reverse().map((o) => ({ ...o, methods: [...o.methods].reverse() })),
+      lines: [...SAMPLE_NIGHT.lines].reverse(),
+      payments: [...SAMPLE_NIGHT.payments].reverse(),
+    };
+    expect(buildShiftReport(reversed)).toEqual(r);
+    expect(shiftReportJson(buildShiftReport(reversed))).toBe(shiftReportJson(r));
+  });
+
+  it('the stored text is the report; no cost, waste, commission or profit in it', () => {
+    const text = shiftReportJson(r);
+    expect(JSON.parse(text)).toEqual(r);
+    expect(Object.keys(JSON.parse(text) as object)).toEqual(Object.keys(NIGHT_REPORT));
+    expect(/cost|waste|commission|profit/i.test(text)).toBe(false);
   });
 });
