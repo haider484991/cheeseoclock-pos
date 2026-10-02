@@ -55,6 +55,12 @@ export interface OrderHistoryRow {
   tableLabel: string | null;
   cashierName: string;
   riderName: string | null;
+  /**
+   * Sent out with an outside rider (orders.rider_keeps_cents set, 0049):
+   * true only then; absent for one of the shop's own riders and every other
+   * order.
+   */
+  outsideRider?: boolean;
   /** Items on the order (quantities added up; deal parts not counted twice). */
   itemCount: number;
   totalCents: number;

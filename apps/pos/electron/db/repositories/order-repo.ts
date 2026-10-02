@@ -69,6 +69,7 @@ import {
   FOODPANDA_ORDER_CODE_MAX,
   categoryNeverDiscounted,
   deliveryChargeItemName,
+  deliveryChargeLinesCents,
   isDeliveryChargeLine,
   isDeliveryChargeMenuItem,
 } from '@cheeseoclock/shared-types';
@@ -144,6 +145,8 @@ interface OrderRow {
   came_by?: string | null;
   /** When it first left 'open' (0048); null = before 0.7.34, or never sent. */
   sent_at?: string | null;
+  /** What an outside rider keeps, frozen at Send out (0049); null = own rider, not out, or before 0.7.34. */
+  rider_keeps_cents?: number | null;
 }
 
 const ORDER_CAME_BY: readonly string[] = ['walk_in', 'phone', 'whatsapp', 'website', 'foodpanda'];
@@ -197,6 +200,10 @@ function rowToOrder(row: OrderRow): Order {
     assignedRiderId: (row.assigned_rider_id ?? null) as Order['assignedRiderId'],
     dispatchedAt: row.dispatched_at,
     deliveredAt: row.delivered_at,
+    // What an outside rider keeps (0049), only on an order sent out with one
+    // (0 included): one of the shop's own riders, an order not out yet and
+    // any order from before 0.7.34 read exactly as before.
+    ...(typeof row.rider_keeps_cents === 'number' ? { riderKeepsCents: row.rider_keeps_cents as Order['totalCents'] } : {}),
     // How it came in (0044), only when it was said: an order nobody asked
     // about reads exactly as before.
     ...(isOrderCameBy(row.came_by) ? { cameBy: row.came_by } : {}),
@@ -224,7 +231,7 @@ const ORDER_SELECT = `
   customer_name_snapshot, customer_phone_snapshot, delivery_address_snapshot, delivery_notes,
   assigned_rider_id, dispatched_at, delivered_at,
   created_at, updated_at, device_id, version,
-  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock, came_by, sent_at
+  deleted_at, deleted_by, delete_reason, delete_kind, delete_stock, came_by, sent_at, rider_keeps_cents
 `;
 
 /**
@@ -288,6 +295,7 @@ export function listOrderHistory(
          u.full_name AS cashier_name,
          t.label AS table_label,
          r.name AS rider_name,
+         o.rider_keeps_cents IS NOT NULL AS outside_rider,
          (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi
             WHERE oi.order_id = o.id AND oi.deleted_at IS NULL
               AND oi.parent_order_item_id IS NULL) AS item_count,
@@ -317,6 +325,7 @@ export function listOrderHistory(
     cashier_name: string | null;
     table_label: string | null;
     rider_name: string | null;
+    outside_rider: number;
     item_count: number;
     refunded_cents: number;
     pay_legs: string | null;
@@ -379,6 +388,8 @@ export function listOrderHistory(
     tableLabel: r.table_label,
     cashierName: r.cashier_name ?? 'Unknown',
     riderName: r.rider_name,
+    // Sent out with an outside rider (0049): only then, so every other row reads as before.
+    ...(r.outside_rider === 1 ? { outsideRider: true } : {}),
     itemCount: r.item_count,
     totalCents: r.total_cents,
     refundedCents: r.refunded_cents,
@@ -3522,7 +3533,7 @@ function setOrderStatus(
   orderId: string,
   next: OrderStatus,
   legalFrom: OrderStatus[],
-  extraSet: { col: string; value: string | null }[],
+  extraSet: { col: string; value: string | number | null }[],
   actor: Actor & { userId: string },
   action: string,
 ): Order {
@@ -3658,10 +3669,70 @@ export function markOrderReady(
 }
 
 /**
- * Assign a rider to a delivery order. Moves the status to `out_for_delivery`
+ * Send out (the owner, 2 Oct 2026: "Ready delivery -> Send out"; "Third-party
+ * rider keeps the delivery charge: the drawer expects the food total from the
+ * rider"): a delivery order the kitchen has goes out with an outside rider.
+ * Moves it to `out_for_delivery` with no rider named, stamps `dispatched_at`
+ * and freezes what the rider keeps (orders.rider_keeps_cents, 0049): the
+ * order's delivery-charge lines as sold, before tax, never more than the
+ * total (deliveryChargeLinesCents; 0 with no charge line). Everything after
+ * reads the frozen value, never the lines again. Allowed from the kitchen's
+ * states (`sent_to_kitchen`, `preparing`, `ready`) on a delivery only: never
+ * a takeaway or a foodpanda order, never a cart that was not sent (it would
+ * skip the stock), never twice. No money moves here.
+ *
+ * One transaction: the order is read, the charge worked out from its lines
+ * and the status moved together, so a line can't change in between (a sent
+ * order's lines are locked anyway: addOrderItem and the discounts refuse
+ * anything past 'open'). One sync row (the image carries riderKeepsCents) and
+ * one audit row 'send_out'.
+ */
+export function sendOutOrder(
+  db: AppDatabase,
+  orderId: string,
+  actor: Actor & { userId: string },
+): Order {
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.mode !== 'delivery') throw new Error('Only delivery orders can be sent out');
+    if (order.status === 'out_for_delivery') throw new Error('This order is already out for delivery');
+    const snapshot = getOrderSnapshot(db, orderId);
+    if (!snapshot) throw new Error('Order not found');
+    // What the rider keeps: the charge as sold (Rs 200, not Rs 230: the
+    // owner's Q1, the charge keeps its 15% tax, and that tax is in the FOOD
+    // TOTAL he hands over), and never more than the customer pays.
+    const keeps = Math.min(deliveryChargeLinesCents(snapshot), order.totalCents);
+    result = setOrderStatus(
+      db,
+      orderId,
+      'out_for_delivery',
+      ['sent_to_kitchen', 'preparing', 'ready'],
+      [
+        { col: 'assigned_rider_id', value: null },
+        { col: 'dispatched_at', value: nowIso() },
+        { col: 'rider_keeps_cents', value: keeps },
+      ],
+      actor,
+      'send_out',
+    );
+  });
+  tx();
+  return result;
+}
+
+/**
+ * Assign one of the shop's own riders to a delivery order (owner, 2 Oct 2026,
+ * Q3: he brings back the full bill). Moves the status to `out_for_delivery`
  * and stamps `dispatched_at`. Allowed from `ready` (the usual path), but also
  * from earlier kitchen states if the dispatcher wants to pre-assign — never
  * from a draft that was not sent (it would skip the stock).
+ *
+ * It clears what an outside rider would keep (rider_keeps_cents): the order
+ * is now an own rider's. On an order already sent out (out for delivery, no
+ * rider named) it keeps `dispatched_at`: the food left when it was sent out.
+ * From Ready, or from one own rider to another, exactly as v0.7.33 did.
  */
 export function assignRiderToOrder(
   db: AppDatabase,
@@ -3669,58 +3740,78 @@ export function assignRiderToOrder(
   riderId: string,
   actor: Actor & { userId: string },
 ): Order {
-  // Verify the rider exists + is active.
-  const rider = db
-    .prepare(
-      `SELECT id, is_active FROM riders WHERE id = ? AND deleted_at IS NULL`,
-    )
-    .get(riderId) as { id: string; is_active: number } | undefined;
-  if (!rider) throw new Error('Rider not found');
-  if (rider.is_active !== 1) throw new Error('Rider is inactive');
+  let result!: Order;
+  const tx = db.transaction(() => {
+    // Verify the rider exists + is active.
+    const rider = db
+      .prepare(
+        `SELECT id, is_active FROM riders WHERE id = ? AND deleted_at IS NULL`,
+      )
+      .get(riderId) as { id: string; is_active: number } | undefined;
+    if (!rider) throw new Error('Rider not found');
+    if (rider.is_active !== 1) throw new Error('Rider is inactive');
 
-  const order = findOrder(db, orderId);
-  if (!order) throw new Error('Order not found');
-  if (order.mode !== 'delivery') {
-    throw new Error('Only delivery orders can be assigned to a rider');
-  }
-  return setOrderStatus(
-    db,
-    orderId,
-    'out_for_delivery',
-    ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'],
-    [
-      { col: 'assigned_rider_id', value: riderId },
-      { col: 'dispatched_at', value: nowIso() },
-    ],
-    actor,
-    'assign_rider',
-  );
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.mode !== 'delivery') {
+      throw new Error('Only delivery orders can be assigned to a rider');
+    }
+    const alreadySentOut =
+      order.status === 'out_for_delivery' && order.assignedRiderId === null && order.dispatchedAt !== null;
+    result = setOrderStatus(
+      db,
+      orderId,
+      'out_for_delivery',
+      ['sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery'],
+      [
+        { col: 'assigned_rider_id', value: riderId },
+        ...(alreadySentOut ? [] : [{ col: 'dispatched_at', value: nowIso() }]),
+        { col: 'rider_keeps_cents', value: null },
+      ],
+      actor,
+      'assign_rider',
+    );
+  });
+  tx();
+  return result;
 }
 
 /**
- * Clear a rider assignment (mistakes happen). Reverts to `ready` so the
- * dispatcher can re-assign. Does not clear `dispatched_at` — that's a
- * historical fact even if it gets re-set.
+ * Back to Ready: take an order that is out for delivery off its rider
+ * (mistakes happen), or bring back one that was sent out with an outside
+ * rider who has not left. Reverts to `ready` with no rider and nothing kept
+ * (rider_keeps_cents NULL), so it can be sent out or assigned again. Audited
+ * 'undo_send_out' when no rider was named (it was sent out), 'unassign_rider'
+ * otherwise, as before. Does not clear `dispatched_at` — that's a historical
+ * fact even if it gets re-set.
  */
 export function unassignRiderFromOrder(
   db: AppDatabase,
   orderId: string,
   actor: Actor & { userId: string },
 ): Order {
-  const order = findOrder(db, orderId);
-  if (!order) throw new Error('Order not found');
-  if (order.status !== 'out_for_delivery') {
-    throw new Error('Only out-for-delivery orders can be unassigned');
-  }
-  return setOrderStatus(
-    db,
-    orderId,
-    'ready',
-    ['out_for_delivery'],
-    [{ col: 'assigned_rider_id', value: null }],
-    actor,
-    'unassign_rider',
-  );
+  let result!: Order;
+  const tx = db.transaction(() => {
+    const order = findOrder(db, orderId);
+    if (!order) throw new Error('Order not found');
+    if (order.status !== 'out_for_delivery') {
+      throw new Error('Only out-for-delivery orders can be taken off a rider or brought back');
+    }
+    result = setOrderStatus(
+      db,
+      orderId,
+      'ready',
+      ['out_for_delivery'],
+      [
+        { col: 'assigned_rider_id', value: null },
+        { col: 'rider_keeps_cents', value: null },
+      ],
+      actor,
+      order.assignedRiderId === null ? 'undo_send_out' : 'unassign_rider',
+    );
+  });
+  tx();
+  return result;
 }
 
 /**

@@ -252,4 +252,24 @@ describe.skipIf(!raw)('Order History on a real database', () => {
     expect(p2.rows).toHaveLength(3);
     expect([...idSet(p1)].some((id) => idSet(p2).has(id))).toBe(false);
   });
+
+  // Last, and taken out again: the counts above are of the orders set up in beforeAll.
+  it('flags an order sent out with an outside rider (0049 rider_keeps_cents set, Rs 0 included), never one of the shop’s own riders', async () => {
+    const outside = order('out_for_delivery', { mode: 'delivery', dispatched_at: at('10:30'), rider_keeps_cents: 20_000 });
+    const outsideNoCharge = order('out_for_delivery', { mode: 'delivery', dispatched_at: at('10:31'), rider_keeps_cents: 0 });
+    try {
+      const rows = (await history({ channel: 'delivery' })).rows;
+      expect(rows.map((r) => [r.id, r.riderName, r.outsideRider])).toEqual([
+        [outsideNoCharge, null, true],
+        [outside, null, true],
+        [ids.cod, 'Bilal', undefined],
+      ]);
+      // An own rider's row reads exactly as before: no key at all.
+      expect(rows.find((r) => r.id === ids.cod)).not.toHaveProperty('outsideRider');
+      // Every other order too.
+      expect((await history()).rows.filter((r) => r.outsideRider === true).map((r) => r.id).sort()).toEqual([outside, outsideNoCharge].sort());
+    } finally {
+      raw!.prepare(`DELETE FROM orders WHERE id IN (?, ?)`).run(outside, outsideNoCharge);
+    }
+  });
 });

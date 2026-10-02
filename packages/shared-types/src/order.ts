@@ -80,6 +80,14 @@ export interface Order {
   dispatchedAt: string | null;
   deliveredAt: string | null;
   /**
+   * What an outside rider keeps of this order (orders.rider_keeps_cents,
+   * migration 0049), frozen when it was sent out: its delivery-charge lines
+   * as sold, never more than the total; 0 = sent out with no charge to keep.
+   * Absent = one of the shop's own riders (Assign rider), not out yet, or an
+   * order from before 0.7.34. Read it through isOutsideRiderOrder.
+   */
+  riderKeepsCents?: Cents | null;
+  /**
    * Set only on an order read with its deleted ones (getOrderSnapshot
    * includeDeleted): when and by whom it was deleted, why, and how
    * (migration 0043: 'test' — deleted by the owner as a test order; a
@@ -285,4 +293,14 @@ export const WEBSITE_CASHIER_NAME = 'Website';
  */
 export function paperCashierName(s: { order: Pick<Order, 'source'>; cashierName: string }): string {
   return s.order.source === 'web' ? WEBSITE_CASHIER_NAME : s.cashierName;
+}
+
+/**
+ * The order went out with an outside rider (Send out): it carries what he
+ * keeps (Order.riderKeepsCents, 0 included). False for one of the shop's own
+ * riders (Assign rider: he brings back the full bill), an order not out yet,
+ * and every order from before 0.7.34.
+ */
+export function isOutsideRiderOrder(o: { readonly riderKeepsCents?: number | null }): boolean {
+  return typeof o.riderKeepsCents === 'number';
 }
