@@ -5,6 +5,7 @@ import { writeWithSync, nowIso, type Actor } from './base.js';
 import { enqueueSync } from './sync-repo.js';
 import { writeAudit } from './audit-repo.js';
 import { recordDrawerOpen } from './drawer-open-repo.js';
+import { shortOrderNumber } from '@cheeseoclock/shared-types';
 import type {
   CashMovement,
   CashMovementType,
@@ -495,6 +496,9 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
   const cashSalesCents = cashLine?.salesCents ?? 0;
   const cashRefundsCents = cashLine?.refundCents ?? 0;
   const moves = cashMovementTotals(db, shiftId);
+  // The outside riders' payouts are already in outCents: the formula is the
+  // one closeShift uses, unchanged; riderChargesCents only says how much of
+  // the cash taken out went to them.
   const expectedCashCents =
     shift.openingCashCents + cashSalesCents - cashRefundsCents + moves.inCents - moves.outCents;
 
@@ -512,6 +516,8 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
     cashRefundsCents: cashRefundsCents as ShiftSummary['cashRefundsCents'],
     cashInCents: moves.inCents as ShiftSummary['cashInCents'],
     cashOutCents: moves.outCents as ShiftSummary['cashOutCents'],
+    riderChargesCents: moves.riderCents as ShiftSummary['riderChargesCents'],
+    riderChargeCount: moves.riderCount,
     expectedCashCents: expectedCashCents as ShiftSummary['expectedCashCents'],
     byMethod,
   };
@@ -521,20 +527,33 @@ export function getShiftSummary(db: AppDatabase, shiftId: string): ShiftSummary 
 // Cash in / out of the drawer (not sales) — migrations/0021_cash_movements.sql
 // -----------------------------------------------------------------------------
 
-/** Pay-ins and pay-outs (tip-outs count as out) recorded against a shift. */
+/**
+ * Pay-ins and pay-outs (tip-outs count as out) recorded against a shift.
+ * riderCents / riderCount: the payouts linked to an order (migration 0049) —
+ * a delivery charge an outside rider kept, or a trip paid for an order then
+ * cancelled. They are a part of outCents, which stays ALL the cash taken out,
+ * so the expected-cash formulas built on in / out do not change.
+ */
 export function cashMovementTotals(
   db: AppDatabase,
   shiftId: string,
-): { inCents: number; outCents: number } {
+): { inCents: number; outCents: number; riderCents: number; riderCount: number } {
   const row = db
     .prepare(
       `SELECT
          COALESCE(SUM(CASE WHEN type = 'payin' THEN amount_cents ELSE 0 END), 0) AS inCents,
-         COALESCE(SUM(CASE WHEN type IN ('payout', 'tip_out') THEN amount_cents ELSE 0 END), 0) AS outCents
+         COALESCE(SUM(CASE WHEN type IN ('payout', 'tip_out') THEN amount_cents ELSE 0 END), 0) AS outCents,
+         COALESCE(SUM(CASE WHEN type = 'payout' AND order_id IS NOT NULL THEN amount_cents ELSE 0 END), 0) AS riderCents,
+         COALESCE(SUM(CASE WHEN type = 'payout' AND order_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS riderCount
         FROM cash_movements WHERE shift_id = ? AND deleted_at IS NULL`,
     )
-    .get(shiftId) as { inCents: number; outCents: number };
-  return row;
+    .get(shiftId) as { inCents: number; outCents: number; riderCents: number; riderCount: number };
+  return {
+    inCents: Number(row.inCents),
+    outCents: Number(row.outCents),
+    riderCents: Number(row.riderCents),
+    riderCount: Number(row.riderCount),
+  };
 }
 
 interface CashMovementRow {
@@ -548,6 +567,8 @@ interface CashMovementRow {
   approved_by_user_id: string | null;
   created_at: string;
   ref_purchase_order_id: string | null;
+  order_id: string | null;
+  order_number: string | null;
 }
 
 function rowToCashMovement(r: CashMovementRow): CashMovement {
@@ -562,12 +583,16 @@ function rowToCashMovement(r: CashMovementRow): CashMovement {
     approvedByUserId: r.approved_by_user_id as CashMovement['approvedByUserId'],
     createdAt: r.created_at,
     refPurchaseOrderId: (r.ref_purchase_order_id ?? null) as CashMovement['refPurchaseOrderId'],
+    orderId: (r.order_id ?? null) as CashMovement['orderId'],
+    orderNumber: r.order_id ? (r.order_number ?? null) : null,
   };
 }
 
+/** Read with `FROM cash_movements m LEFT JOIN users u … LEFT JOIN orders o ON o.id = m.order_id`. */
 const CASH_MOVEMENT_SELECT = `
   m.id, m.shift_id, m.type, m.amount_cents, m.reason, m.user_id,
-  u.full_name AS user_name, m.approved_by_user_id, m.created_at, m.ref_purchase_order_id
+  u.full_name AS user_name, m.approved_by_user_id, m.created_at, m.ref_purchase_order_id,
+  m.order_id, o.order_number
 `;
 
 export function listCashMovements(db: AppDatabase, shiftId: string): CashMovement[] {
@@ -576,6 +601,7 @@ export function listCashMovements(db: AppDatabase, shiftId: string): CashMovemen
       `SELECT ${CASH_MOVEMENT_SELECT}
          FROM cash_movements m
          LEFT JOIN users u ON u.id = m.user_id
+         LEFT JOIN orders o ON o.id = m.order_id
         WHERE m.shift_id = ? AND m.deleted_at IS NULL
         ORDER BY m.created_at`,
     )
@@ -590,6 +616,7 @@ export function findCashMovement(db: AppDatabase, id: string): CashMovement | nu
       `SELECT ${CASH_MOVEMENT_SELECT}
          FROM cash_movements m
          LEFT JOIN users u ON u.id = m.user_id
+         LEFT JOIN orders o ON o.id = m.order_id
         WHERE m.id = ? AND m.deleted_at IS NULL`,
     )
     .get(id) as CashMovementRow | undefined;
@@ -600,7 +627,8 @@ export function findCashMovement(db: AppDatabase, id: string): CashMovement | nu
  * Cash paid out of THIS till's drawer (payouts; not cash in, not rider
  * tips), newest first, with the purchase each is linked to — for "Turn this
  * payout into a purchase" (costing spec Phase 5). The shifts' own history on
- * this till: the other till's payouts are its own.
+ * this till: the other till's payouts are its own. A payout to an outside
+ * rider for an order (migration 0049) is not on the list: it bought nothing.
  */
 export function listDrawerPayouts(
   db: AppDatabase,
@@ -617,7 +645,8 @@ export function listDrawerPayouts(
          JOIN shifts s ON s.id = m.shift_id
          LEFT JOIN users u ON u.id = m.user_id
          LEFT JOIN users a ON a.id = m.approved_by_user_id
-        WHERE m.type = 'payout' AND m.deleted_at IS NULL AND s.device_id = ? AND m.created_at >= ?
+        WHERE m.type = 'payout' AND m.deleted_at IS NULL AND m.order_id IS NULL
+          AND s.device_id = ? AND m.created_at >= ?
         ORDER BY m.created_at DESC LIMIT ?`,
     )
     .all(deviceId, since, limit) as Array<{
@@ -642,12 +671,18 @@ export function listDrawerPayouts(
   }));
 }
 
+/** Why a payout to an outside rider can't become a purchase. */
+export const RIDER_PAYOUT_NOT_A_PURCHASE = "A delivery charge kept by a rider can't be turned into a purchase";
+
 /**
  * Link a free-text payout to the purchase it paid for ("Turn this payout
  * into a purchase", costing spec Phase 5): ONCE — a payout already linked
  * is refused. Only the link changes: the amount, and so the shift's expected
  * cash, stays exactly as it was. Synced and audited, in the caller's
- * transaction when there is one.
+ * transaction when there is one. A payout to an outside rider for an order
+ * (migration 0049) is refused: it bought nothing. procurement-repo's
+ * payoutToPurchase links through here, so it is refused there too, and the
+ * purchase it was writing goes with the refusal.
  */
 export function linkPayoutToPurchase(
   db: AppDatabase,
@@ -659,11 +694,12 @@ export function linkPayoutToPurchase(
     const before = findCashMovement(db, cashMovementId);
     if (!before) throw new Error('That cash payout was not found');
     if (before.type !== 'payout') throw new Error('Only cash taken out of the drawer can be turned into a purchase');
+    if (before.orderId) throw new Error(RIDER_PAYOUT_NOT_A_PURCHASE);
     if (before.refPurchaseOrderId) throw new Error('That payout is already a purchase');
     const now = nowIso();
     db.prepare(
       `UPDATE cash_movements SET ref_purchase_order_id = ?, updated_at = ?, version = version + 1
-        WHERE id = ? AND ref_purchase_order_id IS NULL`,
+        WHERE id = ? AND ref_purchase_order_id IS NULL AND order_id IS NULL`,
     ).run(purchaseOrderId, now, cashMovementId);
     const after = findCashMovement(db, cashMovementId)!;
     enqueueSync(db, { entityType: 'cash_movements', entityId: cashMovementId, op: 'upsert', payload: after });
@@ -720,10 +756,25 @@ export function recordCashMovement(
   })();
 }
 
+/**
+ * What only this file passes to recordCashMovementRow — never the
+ * 'shifts:recordCashMovement' path, so cash typed by hand is never linked to
+ * an order and is always audited `cash_<type>`.
+ */
+interface CashMovementRowOptions {
+  /** The order an outside rider is paid for (cash_movements.order_id, migration 0049). */
+  orderId?: string | null;
+  /** The audit action in place of `cash_<type>`. */
+  auditAction?: string;
+  /** Said in the audit after-image as well (never in the row). */
+  auditExtra?: Readonly<Record<string, unknown>>;
+}
+
 function recordCashMovementRow(
   db: AppDatabase,
   input: RecordCashMovementInput,
   actor: Actor & { userId: string },
+  opts: CashMovementRowOptions = {},
 ): CashMovement {
   const amount = Math.round(input.amountCents);
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter an amount above zero');
@@ -736,6 +787,7 @@ function recordCashMovementRow(
   const shift = getCurrentShift(db, actor.deviceId);
   if (!shift) throw new Error('No shift is open on this till — open a shift first');
 
+  const orderId = opts.orderId ?? null;
   const id = uuidv7();
   const now = nowIso();
   const after = {
@@ -748,13 +800,16 @@ function recordCashMovementRow(
     approvedByUserId: input.approvedByUserId ?? null,
     createdAt: now,
     refPurchaseOrderId: input.type === 'payout' ? (input.refPurchaseOrderId ?? null) : null,
+    // Cash typed by hand keeps the after-image it always had.
+    ...(orderId !== null ? { orderId } : {}),
+    ...(opts.auditExtra ?? {}),
   };
   writeWithSync({
     db,
     entityType: 'cash_movements',
     entityId: id,
     op: 'upsert',
-    action: `cash_${input.type}`,
+    action: opts.auditAction ?? `cash_${input.type}`,
     actor,
     before: null,
     after,
@@ -762,8 +817,8 @@ function recordCashMovementRow(
       db.prepare(
         `INSERT INTO cash_movements
            (id, shift_id, type, amount_cents, reason, user_id, approved_by_user_id, ref_purchase_order_id,
-            created_at, updated_at, device_id, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            order_id, created_at, updated_at, device_id, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       ).run(
         id,
         shift.id,
@@ -773,14 +828,77 @@ function recordCashMovementRow(
         actor.userId,
         input.approvedByUserId ?? null,
         after.refPurchaseOrderId,
+        orderId,
         now,
         now,
         actor.deviceId,
       );
     },
   });
-  log.info('Cash movement', { id, type: input.type, amount, shiftId: shift.id });
+  log.info('Cash movement', { id, type: input.type, amount, shiftId: shift.id, ...(orderId !== null ? { orderId } : {}) });
   return listCashMovements(db, shift.id).find((m) => m.id === id)!;
+}
+
+/** What an outside rider is paid from the drawer for one order. */
+export interface DeliveryChargeToRiderInput {
+  /** The order he was sent out with (cash_movements.order_id). */
+  orderId: string;
+  /** Its number ("20261002-0042"): the payout's reason says "Order #0042". */
+  orderNumber: string;
+  /** What he is paid, in paisa: the order's frozen rider_keeps_cents (above zero). */
+  amountCents: number;
+  /**
+   * kept: he kept the delivery charge out of the customer's money (the
+   * owner, 2 Oct 2026: "the drawer expects the food total from the rider");
+   * trip: he went, and the order was then cancelled or refused at the door
+   * ("pay the rider's fee if they went").
+   */
+  why: 'kept' | 'trip';
+  /** The manager whose PIN let a cashier do it (a cancel); null when the actor is a manager. */
+  approvedByUserId?: string | null;
+}
+
+/**
+ * Pay an outside rider his delivery charge for one order: ONE cash payout
+ * linked to the order (migration 0049), in this till's open shift, synced and
+ * audited 'delivery_charge_to_rider' (never 'cash_payout') with `why` in the
+ * after-image. It writes NO drawer row: the caller writes that event's one
+ * drawer row (the cash sale less his fee, or the payout itself) and points it
+ * at this movement. With no shift open on this till it is refused and
+ * nothing is written — callers check first and refuse in their own words.
+ * In the caller's transaction when there is one. Returns the movement's id.
+ *
+ * The payout is a part of the shift's cash taken out (cashMovementTotals
+ * outCents), so the expected cash is the food total he hands over, and the
+ * close box can say how much of the cash out went to riders (riderCents).
+ */
+export function recordDeliveryChargeToRider(
+  db: AppDatabase,
+  input: DeliveryChargeToRiderInput,
+  actor: Actor & { userId: string },
+): string {
+  return db.transaction((): string => {
+    if (!input.orderId) throw new Error('Say which order the rider is paid for');
+    if (input.why !== 'kept' && input.why !== 'trip') throw new Error('Say why the rider is paid');
+    if (!getCurrentShift(db, actor.deviceId)) throw new Error('No shift is open on this till — open a shift first');
+    const order = shortOrderNumber(input.orderNumber);
+    const reason =
+      input.why === 'kept'
+        ? `Delivery charge kept by the outside rider — Order ${order}`
+        : `Trip paid to the outside rider — Order ${order} cancelled`;
+    const movement = recordCashMovementRow(
+      db,
+      {
+        type: 'payout',
+        amountCents: input.amountCents,
+        reason,
+        approvedByUserId: input.approvedByUserId ?? null,
+      },
+      actor,
+      { orderId: input.orderId, auditAction: 'delivery_charge_to_rider', auditExtra: { why: input.why } },
+    );
+    return movement.id;
+  })();
 }
 
 /** The drawer count this till's last closed shift ended on — tonight's float. */

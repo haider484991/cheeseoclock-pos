@@ -82,8 +82,19 @@ export interface ShiftSummary {
   cashRefundsCents: Cents;
   /** Cash put into the drawer that is not a sale (change top-ups). */
   cashInCents: Cents;
-  /** Cash taken out that is not a refund (suppliers, expenses, rider tips). */
+  /**
+   * Cash taken out that is not a refund (suppliers, expenses, rider tips,
+   * and the payouts to outside riders below).
+   */
   cashOutCents: Cents;
+  /**
+   * Payouts to outside riders — kept delivery charges and wasted trips — a
+   * subset of cashOutCents (cash payouts linked to an order, migration
+   * 0049). Already taken out in expectedCashCents: never subtract it twice.
+   */
+  riderChargesCents: Cents;
+  /** How many payouts riderChargesCents is (one per order, as a rule). */
+  riderChargeCount: number;
   /** opening + cashSales − cashRefunds + cashIn − cashOut. */
   expectedCashCents: Cents;
   byMethod: Array<{
@@ -113,6 +124,15 @@ export interface CashMovement {
    * a free-text payout (and for cash in and rider tips).
    */
   refPurchaseOrderId?: UUID | null;
+  /**
+   * The order an outside rider was paid for (migration 0049): the delivery
+   * charge he kept, or a trip for an order that was then cancelled. Null for
+   * every cash in, cash out and rider tip typed by hand. Such a payout is
+   * never a purchase.
+   */
+  orderId?: UUID | null;
+  /** That order's number ("20261002-0042"); null when there is no order. */
+  orderNumber?: string | null;
 }
 
 /**
