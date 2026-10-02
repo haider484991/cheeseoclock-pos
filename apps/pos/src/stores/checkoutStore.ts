@@ -138,6 +138,17 @@ function touch(lineId: string | null | undefined): LineTouch | null {
   return lineId ? { lineId, seq: ++touchSeq } : null;
 }
 
+/**
+ * The cart said a live order of this phone holds the once-a-day offer
+ * ('Cancel #0042 first to keep the offer'). That order may have been
+ * cancelled or refunded since, with no cart change after it to put the offer
+ * on: Pay and Send save the customer again, and the save works the offer out
+ * again. Not at the payment itself: the bill Pay showed must not move.
+ */
+function heldOfferMayBeFree(snap: OrderSnapshot): boolean {
+  return snap.order.status === 'open' && !!snap.offerHeldBy;
+}
+
 /** The chip an order shows: its own came-by when it is one of the counter's three. */
 function chipOf(snap: OrderSnapshot | null | undefined): CameBy | null {
   const c = snap?.order.cameBy;
@@ -188,15 +199,17 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
   /**
    * Commit any inline customer fields onto the order before it is handed off.
    * Runs inside a queued job: nothing it calls may itself wait on `run`.
+   * `again`: save it even when nothing changed since the last save, so the
+   * main process works the owner's offer out again (each save does).
    */
-  async function commitCustomer(orderId: string, purpose: string): Promise<void> {
+  async function commitCustomer(orderId: string, purpose: string, opts: { again?: boolean } = {}): Promise<void> {
     // Lazy-imported to avoid a circular dep with the checkout feature.
     const { commitCustomerToOrder, formAfterCommit } = await import('../features/checkout/CustomerInlinePanel');
     const { getCustomerFormSnapshot, setCustomerForm } = await import('../features/checkout/useCustomerForm');
     const form = getCustomerFormSnapshot();
     const mode = get().mode;
     const sig = JSON.stringify({ orderId, mode, form });
-    if (sig === committed) return;
+    if (sig === committed && !opts.again) return;
     try {
       const saved = await commitCustomerToOrder(orderId, mode, form);
       // The form now points at the customer and address it saved, so a later
@@ -441,7 +454,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
         if (!snap || snap.order.status !== 'open') return snap;
         // The saved address brings its area's delivery charge with it (the main process, in the
         // same transaction): Pay shows the final bill.
-        await commitCustomer(snap.order.id, 'pay');
+        await commitCustomer(snap.order.id, 'pay', { again: heldOfferMayBeFree(snap) });
         const next = await ipc.orders.get(snap.order.id);
         if (next) set({ snapshot: next });
         return next ?? snap;
@@ -467,7 +480,7 @@ export const useCheckoutStore = create<CheckoutState>((set, get) => {
       return run(async () => {
         const snap = get().snapshot;
         if (!snap) throw new Error('No open order to send');
-        await commitCustomer(snap.order.id, 'send to kitchen');
+        await commitCustomer(snap.order.id, 'send to kitchen', { again: heldOfferMayBeFree(snap) });
         const next = await ipc.orders.sendToKitchen(snap.order.id);
         set({ snapshot: next });
         return next;

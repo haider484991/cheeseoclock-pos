@@ -304,6 +304,48 @@ describe('the order screen', () => {
     resetCustomerForm();
   });
 
+  it('a live order of the same phone holds the once-a-day offer: the cart says to cancel it first, or refund it when it is paid (order-edit #12)', () => {
+    signIn('cashier');
+    const seed: Array<[readonly unknown[], unknown]> = [
+      [CHECKOUT_RULES_KEY, RULES({ askCameBy: false, offers: [offer({ cameBy: 'any', oncePerCustomerPerDay: true })] })],
+    ];
+    const held = (paid: boolean) => ({ orderId: 'o0', orderNumber: '20260928-0042', paid });
+    useCheckoutStore.setState({ snapshot: { ...order({ discount: null }), offerHeldBy: held(false) } as OrderSnapshot, mode: 'delivery', busy: false });
+    const unpaid = cart(seed);
+    expect(text(unpaid)).toContain('Cancel #0042 first to keep the offer');
+    // Amber, as the cart's other warnings, and said once.
+    expect(unpaid).toMatch(/class="ticket-gate" role="status">[\s\S]*?Cancel #0042 first to keep the offer/);
+    expect(text(unpaid).match(/first to keep the offer/g)).toHaveLength(1);
+    expect(text(unpaid)).not.toContain('goes on when');
+
+    useCheckoutStore.setState({ snapshot: { ...order({ discount: null }), offerHeldBy: held(true) } as OrderSnapshot });
+    const paid = text(cart(seed));
+    expect(paid).toContain('Refund #0042 first to keep the offer');
+    expect(paid).not.toContain('Cancel #0042');
+
+    // Nobody holds it: nothing to say.
+    useCheckoutStore.setState({ snapshot: { ...order({ discount: null }), offerHeldBy: null } as OrderSnapshot });
+    expect(text(cart(seed))).not.toContain('first to keep the offer');
+  });
+
+  it('no such words with an offer or a discount on the cart, or once the order is sent', () => {
+    signIn('cashier');
+    const seed: Array<[readonly unknown[], unknown]> = [[CHECKOUT_RULES_KEY, RULES({ askCameBy: false, offers: [offer()] })]];
+    const offerHeldBy = { orderId: 'o0', orderNumber: '20260928-0042', paid: false };
+    const words = (snapshot: OrderSnapshot) => {
+      useCheckoutStore.setState({ snapshot: { ...snapshot, offerHeldBy } as OrderSnapshot, mode: 'delivery', busy: false });
+      return text(cart(seed));
+    };
+    expect(words(order({ discount: 'on' }))).not.toContain('first to keep the offer');
+    expect(words(order({ discount: 'declined' }))).not.toContain('first to keep the offer');
+    // A staff (F3) discount.
+    const withOffer = order({ discount: 'on' });
+    const staff = { ...withOffer, discounts: withOffer.discounts.map((d) => ({ ...d, source: null, offer: undefined, reason: 'Test staff' })) } as OrderSnapshot;
+    expect(words(staff)).toContain('Discount');
+    expect(words(staff)).not.toContain('first to keep the offer');
+    expect(words(order({ status: 'sent_to_kitchen', discount: null }))).not.toContain('first to keep the offer');
+  });
+
   it('asked how every order came in: Send and Pay wait for Walk-in, Phone or WhatsApp, and say so', () => {
     signIn('cashier');
     const base = order({ discount: null });

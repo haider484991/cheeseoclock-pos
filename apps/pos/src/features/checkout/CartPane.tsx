@@ -51,6 +51,15 @@ function removeLabel(deal: boolean, offer: { declined: boolean } | null): string
   return 'Remove discount';
 }
 
+/**
+ * The cart's words while a live order of the same phone holds today's
+ * once-a-day offer (order-edit #12): cancel it, or refund it when it is paid,
+ * before this order goes, and the offer goes on here.
+ */
+export function offerHeldByWords(held: { orderNumber: string; paid: boolean }): string {
+  return `${held.paid ? 'Refund' : 'Cancel'} #${held.orderNumber.split('-').pop()} first to keep the offer`;
+}
+
 /** The ticket contains items, totals and checkout actions. */
 export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemoveDeal, onSendToKitchen, onCustomize }: Props) {
   const snapshot = useCheckoutStore((s) => s.snapshot);
@@ -100,6 +109,10 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
           alsoOffDeliveryCharge,
         )
       : null;
+  // Once a day per phone: a live order of this customer (still in the kitchen, Ready or out) holds
+  // the offer this cart would get. Cancelled, or refunded when paid, it goes on here at the next
+  // cart change, or when Pay or Send saves the customer again.
+  const heldBy = !discount && order?.status === 'open' ? (snapshot?.offerHeldBy ?? null) : null;
   // Every line a discount could come off is a value deal (never discounted, except on a foodpanda
   // order): the till refuses one, so "Add discount" says so instead. F3 still opens the dialog.
   const onlyValueDeals =
@@ -372,16 +385,23 @@ export function CartPane({ step, onContinue, onBack, onPay, onDiscount, onRemove
           </div>
         </dl>
 
-        {hint && (
-          <p className="ticket-next" role="status">
-            {hint.needs === 'phone'
-              ? normalizePhone(form.phone) !== null
-                ? hint.oncePerDay
-                  ? `${hint.name} goes on when Pay or Send saves the customer’s phone, if that phone has not had it today`
-                  : `${hint.name} goes on when Pay or Send saves the customer’s phone`
-                : `${hint.name} needs the customer’s phone on the order`
-              : `${hint.name} from ${formatCents(hint.fromCents ?? 0)} of food`}
-          </p>
+        {heldBy ? (
+          <div className="ticket-gate" role="status">
+            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{offerHeldByWords(heldBy)}</span>
+          </div>
+        ) : (
+          hint && (
+            <p className="ticket-next" role="status">
+              {hint.needs === 'phone'
+                ? normalizePhone(form.phone) !== null
+                  ? hint.oncePerDay
+                    ? `${hint.name} goes on when Pay or Send saves the customer’s phone, if that phone has not had it today`
+                    : `${hint.name} goes on when Pay or Send saves the customer’s phone`
+                  : `${hint.name} needs the customer’s phone on the order`
+                : `${hint.name} from ${formatCents(hint.fromCents ?? 0)} of food`}
+            </p>
+          )
         )}
 
         {items.length > 0 && !gate.ok && (!needsCustomer || showDetails) && (

@@ -1055,3 +1055,164 @@ describe.skipIf(!Sqlite)('the automatic delivery charge and the offers', () => {
     expect(orderRow(orderId)).toMatchObject({ subtotal_cents: 220_000, discount_cents: 20_000, tax_cents: 32_000, total_cents: 232_000 });
   });
 });
+
+/**
+ * Once a day per phone, when the customer changes an order (order-edit #12):
+ * the till changes an order by cancelling it (or refunding it, when paid)
+ * and ringing it again. An order refunded in full gives the offer back, as a
+ * cancelled one always did; one part refunded still has it. While the order
+ * holding it is still live (in the kitchen, Ready or out), the cart of the
+ * same phone says which one to cancel or refund first (snapshot
+ * offerHeldBy); the offer then goes on at its next change. Made-up figures.
+ */
+describe.skipIf(!Sqlite)('once a day per phone: cancel or refund first, then ring again', () => {
+  const ONCE = (over: Partial<ChannelOffer> = {}) =>
+    offer({ id: 'test-once', name: 'Test once a day 10%', cameBy: 'any', orderTypes: ['takeaway', 'delivery'], oncePerCustomerPerDay: true, ...over });
+  const numberOf = (orderId: string) => String(db.prepare(`SELECT order_number FROM orders WHERE id = ?`).get(orderId)?.['order_number']);
+  const heldBy = async (orderId: string) => (await snap(orderId)).offerHeldBy;
+  const takeaway = (phone?: string) => counterOrder({ mode: 'takeaway', ...(phone ? { phone } : {}) });
+  async function send(orderId: string): Promise<void> {
+    h.session = CASHIER;
+    await data('orders:sendToKitchen', { orderId });
+  }
+  async function moreFood(orderId: string): Promise<void> {
+    h.session = CASHIER;
+    await data('orders:addItem', { orderId, menuItemId: menu.side, quantity: 1 });
+  }
+
+  it('a paid order refunded in full gives the offer back: the order rung again gets it at its next change; a part refund keeps it used', async () => {
+    await saveOffers([ONCE()]);
+    const first = await takeaway(PHONE_A);
+    expect(orderRow(first)).toMatchObject({ discount_cents: 20_000 });
+    await pay(first);
+    // A part refund (a cold side): the order stays paid, in the kitchen, and still has the offer.
+    h.session = CASHIER;
+    await data('orders:refund', { orderId: first, reason: 'Test cold side', approverPin: MANAGER_SECRET, amountCents: 5_000, method: 'cash' });
+    expect(orderRow(first)).toMatchObject({ status: 'sent_to_kitchen' });
+
+    const again = await takeaway(PHONE_A);
+    expect(orderRow(again)).toMatchObject({ discount_cents: 0 });
+    expect(liveDiscounts(again)).toEqual([]);
+    expect(await heldBy(again)).toEqual({ orderId: first, orderNumber: numberOf(first), paid: true });
+
+    // Refunded in full: it lets the offer go. Nothing moves on the cart until its next change…
+    h.session = CASHIER;
+    await data('orders:refund', { orderId: first, reason: 'Test changed order', approverPin: MANAGER_SECRET, foodMade: 'not_made' });
+    expect(orderRow(first)).toMatchObject({ status: 'refunded' });
+    expect(await heldBy(again)).toBeNull();
+    expect(orderRow(again)).toMatchObject({ discount_cents: 0 });
+    // …then it goes on: 10% of the Rs 2,500 of food.
+    await moreFood(again);
+    expect(orderRow(again)).toMatchObject({ subtotal_cents: 250_000, discount_cents: 25_000 });
+    expect(liveDiscounts(again)).toMatchObject([{ source: 'offer', reason: 'Test once a day 10%', amount_cents: 25_000 }]);
+    expect(await heldBy(again)).toBeNull();
+    expect(chainOk()).toBe(true);
+  });
+
+  it('a cancelled order gives it back, as before: cancel the live order holding it, then an item tap or the phone saved again puts the offer on', async () => {
+    await saveOffers([ONCE()]);
+    const first = await takeaway(PHONE_A);
+    await send(first);
+    expect(orderRow(first)).toMatchObject({ status: 'sent_to_kitchen', discount_cents: 20_000 });
+
+    const again = await takeaway(PHONE_A);
+    expect(orderRow(again)).toMatchObject({ discount_cents: 0 });
+    expect(await heldBy(again)).toEqual({ orderId: first, orderNumber: numberOf(first), paid: false });
+
+    h.session = CASHIER;
+    await data('orders:void', { orderId: first, reason: 'Customer changed order', approverPin: MANAGER_SECRET, foodMade: 'not_made' });
+    expect(await heldBy(again)).toBeNull();
+    await moreFood(again);
+    expect(orderRow(again)).toMatchObject({ discount_cents: 25_000 });
+
+    // The phone saved again (Send's or Pay's customer save) does it too, with no item tapped.
+    const third = await takeaway(PHONE_B);
+    await send(third);
+    const fourth = await takeaway(PHONE_B);
+    expect(orderRow(fourth)).toMatchObject({ discount_cents: 0 });
+    h.session = CASHIER;
+    await data('orders:void', { orderId: third, reason: 'Customer changed order', approverPin: MANAGER_SECRET, foodMade: 'not_made' });
+    await savePhone(fourth, PHONE_B);
+    expect(orderRow(fourth)).toMatchObject({ discount_cents: 20_000 });
+  });
+
+  it('who holds it: unpaid in the kitchen, Ready or out says cancel; paid says refund; collected, deleted, another phone or no phone: nobody', async () => {
+    await saveOffers([ONCE()]);
+    // A delivery holding it, through the kitchen and out with an outside rider.
+    const out = await counterOrder({ phone: PHONE_A });
+    expect(orderRow(out)).toMatchObject({ discount_cents: 20_000 });
+    await send(out);
+    const cart = await takeaway(PHONE_A);
+    const unpaid = { orderId: out, orderNumber: numberOf(out), paid: false };
+    expect(await heldBy(cart)).toEqual(unpaid);
+    h.session = CASHIER;
+    await data('orders:markReady', { orderId: out });
+    expect(await heldBy(cart)).toEqual(unpaid);
+    await data('orders:sendOut', { orderId: out });
+    expect(orderRow(out)).toMatchObject({ status: 'out_for_delivery' });
+    expect(await heldBy(cart)).toEqual(unpaid);
+    // Another phone, or none saved: nothing to say.
+    expect(await heldBy(await takeaway(PHONE_B))).toBeNull();
+    expect(await heldBy(await takeaway())).toBeNull();
+
+    // Paid with Pay now: refund it first.
+    const phoneC = '03211234567';
+    const paid = await takeaway(phoneC);
+    await pay(paid);
+    const paidCart = await takeaway(phoneC);
+    expect(await heldBy(paidCart)).toEqual({ orderId: paid, orderNumber: numberOf(paid), paid: true });
+    // Collected: a past order, not a change — the offer stays used and the cart says nothing.
+    h.session = CASHIER;
+    await data('orders:markReady', { orderId: paid });
+    await data('orders:markServed', { orderId: paid });
+    expect(['open', 'sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery']).not.toContain(orderRow(paid)?.['status']);
+    expect(await heldBy(paidCart)).toBeNull();
+    await moreFood(paidCart);
+    expect(orderRow(paidCart)).toMatchObject({ discount_cents: 0 });
+
+    // Deleted by the owner as a test order: it holds nothing, and the cart gets the offer.
+    const phoneD = '03331234567';
+    const test = await takeaway(phoneD);
+    await send(test);
+    const testCart = await takeaway(phoneD);
+    expect(await heldBy(testCart)).toMatchObject({ orderId: test });
+    (await repos()).deleteTestOrder(
+      db as never,
+      { orderId: test, reason: 'Test order', restock: null, expectStatus: 'sent_to_kitchen', ownerUserId: 'u_admin' },
+      { userId: 'u_admin', deviceId: DEV },
+    );
+    expect(await heldBy(testCart)).toBeNull();
+    await moreFood(testCart);
+    expect(orderRow(testCart)).toMatchObject({ discount_cents: 25_000 });
+  });
+
+  it('only when the offer held is the one this cart would get: not on an order type it does not run on, nor under its minimum; never with a discount on the cart', async () => {
+    await saveOffers([ONCE({ orderTypes: ['delivery'], minOrderCents: 210_000 })]);
+    const first = await counterOrder({ phone: PHONE_A });
+    await moreFood(first);
+    expect(orderRow(first)).toMatchObject({ discount_cents: 25_000 });
+    await send(first);
+    // A takeaway never gets a delivery offer: cancelling the delivery would not give it one.
+    expect(await heldBy(await takeaway(PHONE_A))).toBeNull();
+    // A delivery under the Rs 2,100 minimum of food: not yet; Rs 2,500 of food: yes.
+    const again = await counterOrder({ phone: PHONE_A });
+    expect(await heldBy(again)).toBeNull();
+    await moreFood(again);
+    expect(orderRow(again)).toMatchObject({ discount_cents: 0 });
+    expect(await heldBy(again)).toEqual({ orderId: first, orderNumber: numberOf(first), paid: false });
+    // A staff discount on the cart: one discount per order, so the offer could not go on anyway.
+    h.session = CASHIER;
+    await data('orders:applyDiscount', { orderId: again, discountType: 'percent', value: 5, reason: 'Test staff' });
+    expect(liveDiscounts(again)).toMatchObject([{ source: null, value: 5 }]);
+    expect(await heldBy(again)).toBeNull();
+  });
+
+  it('only an open counter order carries it: absent once sent, and on a foodpanda order', async () => {
+    await saveOffers([ONCE()]);
+    const first = await takeaway(PHONE_A);
+    await send(first);
+    expect('offerHeldBy' in (await snap(first))).toBe(false);
+    expect('offerHeldBy' in (await snap(await takeaway(PHONE_A)))).toBe(true);
+    expect('offerHeldBy' in (await snap(await counterOrder({ mode: 'foodpanda' })))).toBe(false);
+  });
+});

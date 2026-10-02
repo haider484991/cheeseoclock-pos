@@ -278,6 +278,18 @@ export interface OrderSnapshot {
    */
   addOnTo?: { orderId: UUID; orderNumber: OrderNumber } | null;
   /**
+   * Once a day per phone (order-edit #12: cancel first, then ring again):
+   * the order of this customer's phone, started today and still in the
+   * kitchen, Ready or out for delivery, that holds the once-a-day offer this
+   * order would get. Cancelled (unpaid) or refunded in full (`paid`), it
+   * lets the offer go, and the offer goes on here at the next cart change:
+   * the cart says 'Cancel #0042 first to keep the offer' / 'Refund #0042
+   * first to keep the offer'. Null when there is none, or the order has no
+   * phone saved or already has a discount. Filled on an open counter order;
+   * absent on every other order.
+   */
+  offerHeldBy?: { orderId: UUID; orderNumber: OrderNumber; paid: boolean } | null;
+  /**
    * Only on orders:listActive, from this till's print queue: the kitchen
    * ticket did not print and nothing has printed it since (Live Orders'
    * "Ticket not printed"). Absent everywhere else.

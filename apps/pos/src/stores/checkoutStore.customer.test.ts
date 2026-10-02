@@ -7,6 +7,8 @@
  *   - a typed delivery address is not added to the customer a second time;
  *   - a customer with a name and no phone is not created a second time
  *     (the first left orphaned).
+ * With nothing changed nothing is saved again — except at Pay and Send while
+ * the cart says a live order holds the once-a-day offer (order-edit #12).
  * Review, 28 Sep 2026 (screens). Nothing calls the till: the IPC client is a
  * stand-in that records the calls. Every name and address is made up.
  */
@@ -24,7 +26,12 @@ vi.mock('../ipc/client', () => {
   const snap = { order: { id: 'o1', status: 'open', mode: 'delivery', source: 'pos', tableId: null }, items: [], discounts: [] };
   return {
     ipc: {
-      orders: { setNote: record('orders.setNote'), get: record('orders.get', () => snap) },
+      orders: {
+        setNote: record('orders.setNote'),
+        get: record('orders.get', () => snap),
+        tender: record('orders.tender', () => snap),
+        sendToKitchen: record('orders.sendToKitchen', () => snap),
+      },
       customers: {
         get: record('customers.get', (id) => ({ id, name: 'Test Customer', addresses: [] })),
         findByPhone: record('customers.findByPhone', () => null),
@@ -86,6 +93,34 @@ describe('Pay saves the customer first; a second save reuses what the first made
     expect(made('customers.create')).toHaveLength(1);
     const [first, second] = made('customers.attachToOrder') as Array<{ customerId: string }>;
     expect(second?.customerId).toBe(first?.customerId);
+  });
+
+  it('the cart said a live order holds the once-a-day offer: Pay and Send save the customer again with nothing changed, so the offer can go on; the payment itself never does (order-edit #12)', async () => {
+    const held = () =>
+      ({ ...openOrder('takeaway'), offerHeldBy: { orderId: 'o0', orderNumber: '20261002-0042', paid: false } }) as unknown as OrderSnapshot;
+    useCheckoutStore.setState({ snapshot: openOrder('takeaway'), mode: 'takeaway' });
+    setCustomerForm({ ...makeEmptyCustomerForm(), name: 'Test Customer', phone: '03001234567' });
+    await useCheckoutStore.getState().prepareToPay();
+    await useCheckoutStore.getState().prepareToPay();
+    expect(made('customers.attachToOrder')).toHaveLength(1);
+
+    // #0042 may have been cancelled since: Pay saves again (the save works the offer out again).
+    useCheckoutStore.setState({ snapshot: held() });
+    await useCheckoutStore.getState().prepareToPay();
+    expect(made('customers.attachToOrder')).toHaveLength(2);
+    // The payment: the bill Pay showed must not move, so no second save there.
+    useCheckoutStore.setState({ snapshot: held() });
+    await useCheckoutStore.getState().tender([{ method: 'cash', amountCents: 100_000, tenderedCents: 100_000 }]);
+    expect(made('customers.attachToOrder')).toHaveLength(2);
+    expect(made('orders.tender')).toHaveLength(1);
+    // Send saves again too, before it sends.
+    useCheckoutStore.setState({ snapshot: held() });
+    await useCheckoutStore.getState().sendToKitchen();
+    expect(made('customers.attachToOrder')).toHaveLength(3);
+    expect(calls.list.map(([n]) => n).slice(-2)).toEqual(['customers.attachToOrder', 'orders.sendToKitchen']);
+    // One customer the whole time.
+    expect(made('customers.create')).toHaveLength(1);
+    expect(new Set((made('customers.attachToOrder') as Array<{ customerId: string }>).map((a) => a.customerId)).size).toBe(1);
   });
 
   it('a new phone typed after the first save is a new customer, as before', async () => {

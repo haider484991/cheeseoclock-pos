@@ -934,42 +934,131 @@ function insertOfferRow(
   return id;
 }
 
+/** The trading day an order was started in, as the instants it runs between; null for a date that does not read. */
+function offerDayOf(createdAt: string): { from: string; until: string } | null {
+  const day = tradingDayOfInstant(createdAt);
+  if (!day) return null;
+  const from = `${day}T00:00:00.000Z`;
+  return { from, until: new Date(Date.parse(from) + 86_400_000).toISOString() };
+}
+
 /**
  * The ids of the automatic offers this customer's phone already had today
  * (the trading day the order was started in) on ANOTHER order that is not
- * cancelled or deleted: "once per customer per day". Only this till's
- * orders, and the other till's that have arrived (with the link down it can
- * repeat once there, which Reports → Team & leakage lists).
+ * cancelled, refunded in full or deleted: "once per customer per day". An
+ * order refunded in full gives the offer back, so it is rung again at the
+ * same price (order-edit #12); one part refunded still has it. Only this
+ * till's orders, and the other till's that have arrived (with the link down
+ * it can repeat once there, which Reports → Team & leakage lists).
  *
  * Which order keeps it: one already sent or paid always counts; of two
  * still being rung up (the link came back with both on screen), the one
  * started first keeps it and only the later one loses it — each till seeing
  * the other's used to take it off both. `phones`: the phone as normalised
  * and as it was typed (an older customer row may hold either).
+ * `leavingOut`: orders not counted (offerHeldByFor: as if they let it go).
  */
 function offersUsedToday(
   db: AppDatabase,
   order: { id: string; createdAt: string },
   phones: readonly [string, string],
+  opts: { leavingOut?: ReadonlySet<string> } = {},
 ): Set<string> {
-  const day = tradingDayOfInstant(order.createdAt);
+  const day = offerDayOf(order.createdAt);
   if (!day) return new Set();
-  const from = `${day}T00:00:00.000Z`;
-  const until = new Date(Date.parse(from) + 86_400_000).toISOString();
   const rows = db
     .prepare(
-      `SELECT DISTINCT json_extract(d.rule_json, '$.offer.id') AS offerId
+      `SELECT o.id AS orderId, json_extract(d.rule_json, '$.offer.id') AS offerId
          FROM orders o
          JOIN order_discounts d ON d.order_id = o.id
         WHERE o.created_at >= ? AND o.created_at < ? AND o.id != ?
-          AND o.deleted_at IS NULL AND o.status != 'void'
+          AND o.deleted_at IS NULL AND o.status NOT IN ('void', 'refunded')
           AND o.customer_phone_snapshot IN (?, ?)
           AND (o.status != 'open' OR o.created_at < ? OR (o.created_at = ? AND o.id < ?))
           AND d.deleted_at IS NULL AND d.source = 'offer' AND d.amount_cents > 0
           AND json_valid(d.rule_json)`,
     )
-    .all(from, until, order.id, phones[0], phones[1], order.createdAt, order.createdAt, order.id) as Array<{ offerId: unknown }>;
-  return new Set(rows.map((r) => r.offerId).filter((x): x is string => typeof x === 'string'));
+    .all(day.from, day.until, order.id, phones[0], phones[1], order.createdAt, order.createdAt, order.id) as Array<{
+    orderId: string;
+    offerId: unknown;
+  }>;
+  const used = new Set<string>();
+  for (const r of rows) if (typeof r.offerId === 'string' && !opts.leavingOut?.has(r.orderId)) used.add(r.offerId);
+  return used;
+}
+
+type OfferHeldBy = NonNullable<OrderSnapshot['offerHeldBy']>;
+
+/**
+ * OrderSnapshot.offerHeldBy (order-edit #12: cancel first, then ring again):
+ * the order of this customer's phone, started today, that holds the
+ * once-a-day offer this cart would get — still in the kitchen, Ready or out
+ * for delivery, so the customer is changing it rather than ordering again.
+ * Cancelled (unpaid) or refunded in full (paid), it lets the offer go, and
+ * the offer goes on here at the next cart change. Only when that offer is
+ * the one this order would get (its type, how it came in, its hours, its
+ * minimum): the cart's words never promise an offer it would not get. An
+ * open counter order with the customer's phone saved on it (a Pakistani
+ * number) and no discount on it (one per order); null otherwise. Either
+ * till's orders, the first sent first. `typedPhone`: customer_phone_snapshot.
+ */
+function offerHeldByFor(db: AppDatabase, order: Order, typedPhone: string | null, hasDiscount: boolean): OfferHeldBy | null {
+  if (order.status !== 'open' || !offerCanApplyTo(order) || hasDiscount) return null;
+  const phone = normalizePhone(typedPhone);
+  const day = offerDayOf(order.createdAt);
+  if (!phone || !day) return null;
+  const phones: [string, string] = [phone, typedPhone ?? phone];
+  const holders = db
+    .prepare(
+      `SELECT o.id, o.order_number, o.paid_at, json_extract(d.rule_json, '$.offer.id') AS offer_id
+         FROM orders o
+         JOIN order_discounts d ON d.order_id = o.id
+        WHERE o.created_at >= ? AND o.created_at < ? AND o.id != ?
+          AND o.deleted_at IS NULL
+          AND o.status IN ('sent_to_kitchen', 'preparing', 'ready', 'out_for_delivery')
+          AND o.customer_phone_snapshot IN (?, ?)
+          AND d.deleted_at IS NULL AND d.source = 'offer' AND d.amount_cents > 0
+          AND json_valid(d.rule_json) AND json_extract(d.rule_json, '$.offer.oncePerCustomerPerDay') = 1
+        ORDER BY COALESCE(o.sent_at, o.created_at), o.id`,
+    )
+    .all(day.from, day.until, order.id, phones[0], phones[1]) as Array<{
+    id: string;
+    order_number: string;
+    paid_at: string | null;
+    offer_id: unknown;
+  }>;
+  if (holders.length === 0) return null;
+  // The offer this order would get were those orders to let theirs go: the
+  // offer step's own match, with the live setting.
+  const setting = readShopSetting(db, 'discounts.offers');
+  if (setting.newerFormat) return null;
+  const lines = discountLinesOf(db, order.id);
+  const pick = matchOffer(
+    {
+      source: order.source,
+      mode: order.mode,
+      cameBy: order.cameBy ?? null,
+      hasPhone: true,
+      createdAt: order.createdAt,
+      foodCents: discountBaseCents(lines, { alsoOffDeliveryCharge: false, skipsNoDiscountLines: true }),
+      subtotalCents: discountBaseCents(lines, { alsoOffDeliveryCharge: true, skipsNoDiscountLines: true }),
+    },
+    setting.value.offers,
+    {
+      alsoOffDeliveryCharge: readDiscountAlsoOffDeliveryCharge(db),
+      settingsAt: setting.savedAt,
+      usedToday: offersUsedToday(db, order, phones, { leavingOut: new Set(holders.map((h) => h.id)) }),
+      current: null,
+    },
+  );
+  const holder = pick ? holders.find((h) => h.offer_id === pick.rule.offer.id) : undefined;
+  return holder
+    ? {
+        orderId: holder.id as OfferHeldBy['orderId'],
+        orderNumber: String(holder.order_number) as OfferHeldBy['orderNumber'],
+        paid: holder.paid_at !== null,
+      }
+    : null;
 }
 
 /**
@@ -3715,6 +3804,10 @@ export function getOrderSnapshot(
   // as deliveryChargeForArea last settled it (its charge left off). Every other snapshot reads as before.
   const asksAddOn = order.mode === 'delivery' && order.status === 'open' && order.source === 'pos';
 
+  // Once a day per phone: an open counter order says which live order of the same phone holds the
+  // offer it would get ('Cancel #0042 first to keep the offer'). Every other snapshot reads as before.
+  const asksOfferHeld = order.status === 'open' && offerCanApplyTo(order);
+
   return {
     order,
     items,
@@ -3736,6 +3829,7 @@ export function getOrderSnapshot(
         : {}),
     ...(asksRiderPaidEarlier ? { riderPaidEarlier: riderPaidEarlierFor(db, orderId, typedPhone) } : {}),
     ...(asksAddOn ? { addOnTo: addOnToOf(db, orderId) } : {}),
+    ...(asksOfferHeld ? { offerHeldBy: offerHeldByFor(db, order, typedPhone, discountRows.length > 0) } : {}),
   };
 }
 
